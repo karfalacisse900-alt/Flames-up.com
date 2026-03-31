@@ -1,6 +1,6 @@
-import React, { useEffect } from 'react';
-import { View, Text, StyleSheet, ActivityIndicator } from 'react-native';
-import { useRouter, Redirect } from 'expo-router';
+import React from 'react';
+import { View, StyleSheet, ActivityIndicator } from 'react-native';
+import { Redirect } from 'expo-router';
 import { useAuthStore } from '../src/store/authStore';
 import { colors } from '../src/utils/theme';
 
@@ -10,7 +10,7 @@ export default function Index() {
   if (isLoading) {
     return (
       <View style={styles.container}>
-        <ActivityIndicator size="large" color={colors.primary} />
+        <ActivityIndicator size="large" color={colors.accentPrimary} />
       </View>
     );
   }
@@ -27,6 +27,6 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: colors.background,
+    backgroundColor: colors.bgApp,
   },
 });

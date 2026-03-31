@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -6,82 +6,132 @@ import {
   FlatList,
   TouchableOpacity,
   Image,
-  ActivityIndicator,
   RefreshControl,
+  ActivityIndicator,
+  TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, spacing, borderRadius } from '../../src/utils/theme';
+import { colors, spacing, borderRadius, shadows } from '../../src/utils/theme';
 import api from '../../src/api/client';
-import * as Location from 'expo-location';
 
-const CATEGORIES = [
-  { id: 'all', name: 'All', icon: 'apps' },
-  { id: 'restaurant', name: 'Food', icon: 'restaurant' },
-  { id: 'cafe', name: 'Cafe', icon: 'cafe' },
-  { id: 'park', name: 'Parks', icon: 'leaf' },
-  { id: 'shopping', name: 'Shopping', icon: 'bag' },
-  { id: 'entertainment', name: 'Fun', icon: 'game-controller' },
-];
+const CATEGORIES = ['All', 'Restaurant', 'Cafe', 'Bar', 'Park', 'Shop', 'Gallery', 'Gym', 'Club'];
+
+function PlaceCard({ place, onPress }: { place: any; onPress: () => void }) {
+  return (
+    <TouchableOpacity style={cardStyles.card} onPress={onPress} activeOpacity={0.9}>
+      {place.image_url ? (
+        <Image source={{ uri: place.image_url }} style={cardStyles.image} />
+      ) : (
+        <View style={cardStyles.imagePlaceholder}>
+          <Ionicons name="location" size={32} color={colors.textHint} />
+        </View>
+      )}
+      <View style={cardStyles.content}>
+        <Text style={cardStyles.name} numberOfLines={1}>{place.name}</Text>
+        <Text style={cardStyles.address} numberOfLines={1}>{place.address}</Text>
+        <View style={cardStyles.metaRow}>
+          {place.category && (
+            <View style={cardStyles.categoryPill}>
+              <Text style={cardStyles.categoryText}>{place.category}</Text>
+            </View>
+          )}
+          {place.rating > 0 && (
+            <View style={cardStyles.ratingRow}>
+              <Ionicons name="star" size={12} color="#F59E0B" />
+              <Text style={cardStyles.ratingText}>{place.rating.toFixed(1)}</Text>
+            </View>
+          )}
+        </View>
+      </View>
+    </TouchableOpacity>
+  );
+}
+
+const cardStyles = StyleSheet.create({
+  card: {
+    flexDirection: 'row',
+    backgroundColor: colors.bgCard,
+    borderRadius: 20,
+    overflow: 'hidden',
+    marginHorizontal: 16,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    ...shadows.elevation1,
+  },
+  image: {
+    width: 100,
+    height: 100,
+  },
+  imagePlaceholder: {
+    width: 100,
+    height: 100,
+    backgroundColor: colors.bgSubtle,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  content: {
+    flex: 1,
+    padding: 12,
+    justifyContent: 'center',
+  },
+  name: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: colors.textPrimary,
+    marginBottom: 4,
+  },
+  address: {
+    fontSize: 12,
+    color: colors.textHint,
+    marginBottom: 8,
+  },
+  metaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  categoryPill: {
+    backgroundColor: colors.accentPrimaryLight,
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+    borderRadius: 10,
+  },
+  categoryText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: colors.accentPrimary,
+  },
+  ratingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+  },
+  ratingText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: colors.textSecondary,
+  },
+});
 
 export default function PlacesScreen() {
   const router = useRouter();
   const [places, setPlaces] = useState<any[]>([]);
-  const [selectedCategory, setSelectedCategory] = useState('all');
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [location, setLocation] = useState<Location.LocationObject | null>(null);
-  const [locationError, setLocationError] = useState<string | null>(null);
-
-  useEffect(() => {
-    requestLocation();
-  }, []);
-
-  useEffect(() => {
-    loadPlaces();
-  }, [selectedCategory, location]);
-
-  const requestLocation = async () => {
-    try {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') {
-        setLocationError('Location permission denied');
-        loadPlaces();
-        return;
-      }
-
-      const loc = await Location.getCurrentPositionAsync({});
-      setLocation(loc);
-    } catch (error) {
-      setLocationError('Could not get location');
-      loadPlaces();
-    }
-  };
+  const [search, setSearch] = useState('');
+  const [category, setCategory] = useState('All');
 
   const loadPlaces = async () => {
     try {
-      let url = '/places';
-      if (selectedCategory !== 'all') {
-        url += `?category=${selectedCategory}`;
-      }
-      
-      if (location) {
-        const separator = url.includes('?') ? '&' : '?';
-        url = `/places/nearby?latitude=${location.coords.latitude}&longitude=${location.coords.longitude}&radius=50`;
-        if (selectedCategory !== 'all') {
-          // Filter nearby places by category on client side
-        }
-      }
-
-      const response = await api.get(url);
-      let placesData = response.data;
-      
-      if (selectedCategory !== 'all' && location) {
-        placesData = placesData.filter((p: any) => p.category === selectedCategory);
-      }
-      
-      setPlaces(placesData);
+      const response = await api.get('/places', {
+        params: {
+          category: category !== 'All' ? category : undefined,
+        },
+      });
+      setPlaces(response.data);
     } catch (error) {
       console.log('Error loading places:', error);
     } finally {
@@ -89,126 +139,102 @@ export default function PlacesScreen() {
     }
   };
 
-  const onRefresh = async () => {
+  useEffect(() => {
+    loadPlaces();
+  }, [category]);
+
+  const onRefresh = useCallback(async () => {
     setIsRefreshing(true);
     await loadPlaces();
     setIsRefreshing(false);
-  };
+  }, [category]);
 
-  const renderCategory = ({ item }: { item: typeof CATEGORIES[0] }) => (
-    <TouchableOpacity
-      style={[
-        styles.categoryItem,
-        selectedCategory === item.id && styles.categoryItemActive,
-      ]}
-      onPress={() => setSelectedCategory(item.id)}
-    >
-      <Ionicons
-        name={item.icon as any}
-        size={20}
-        color={selectedCategory === item.id ? colors.textInverse : colors.textSecondary}
-      />
-      <Text
-        style={[
-          styles.categoryText,
-          selectedCategory === item.id && styles.categoryTextActive,
-        ]}
-      >
-        {item.name}
-      </Text>
-    </TouchableOpacity>
-  );
-
-  const renderPlace = ({ item }: { item: any }) => (
-    <TouchableOpacity
-      style={styles.placeCard}
-      onPress={() => router.push(`/place/${item.id}`)}
-    >
-      {item.image ? (
-        <Image source={{ uri: item.image }} style={styles.placeImage} />
-      ) : (
-        <View style={styles.placeImagePlaceholder}>
-          <Ionicons name="image-outline" size={40} color={colors.textTertiary} />
-        </View>
-      )}
-      <View style={styles.placeInfo}>
-        <View style={styles.placeHeader}>
-          <Text style={styles.placeName} numberOfLines={1}>{item.name}</Text>
-          {item.rating > 0 && (
-            <View style={styles.ratingBadge}>
-              <Ionicons name="star" size={12} color={colors.warning} />
-              <Text style={styles.ratingText}>{item.rating.toFixed(1)}</Text>
-            </View>
-          )}
-        </View>
-        <Text style={styles.placeAddress} numberOfLines={1}>{item.address}</Text>
-        <View style={styles.placeFooter}>
-          <View style={styles.categoryBadge}>
-            <Text style={styles.categoryBadgeText}>{item.category}</Text>
-          </View>
-          {item.distance !== undefined && (
-            <Text style={styles.distanceText}>{item.distance} km away</Text>
-          )}
-        </View>
-      </View>
-    </TouchableOpacity>
-  );
-
-  if (isLoading) {
-    return (
-      <SafeAreaView style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color={colors.primary} />
-      </SafeAreaView>
-    );
-  }
+  const filteredPlaces = search
+    ? places.filter(
+        (p) =>
+          p.name?.toLowerCase().includes(search.toLowerCase()) ||
+          p.address?.toLowerCase().includes(search.toLowerCase())
+      )
+    : places;
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       {/* Header */}
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Places</Text>
-        {location && (
-          <View style={styles.locationBadge}>
-            <Ionicons name="location" size={14} color={colors.success} />
-            <Text style={styles.locationText}>Near you</Text>
-          </View>
+        <TouchableOpacity style={styles.mapBtn}>
+          <Ionicons name="map-outline" size={20} color={colors.accentPrimary} />
+        </TouchableOpacity>
+      </View>
+
+      {/* Search */}
+      <View style={styles.searchBar}>
+        <Ionicons name="search" size={18} color={colors.textHint} />
+        <TextInput
+          style={styles.searchInput}
+          placeholder="Search places..."
+          placeholderTextColor={colors.textHint}
+          value={search}
+          onChangeText={setSearch}
+        />
+        {search.length > 0 && (
+          <TouchableOpacity onPress={() => setSearch('')}>
+            <Ionicons name="close-circle" size={18} color={colors.textHint} />
+          </TouchableOpacity>
         )}
       </View>
 
-      {/* Categories */}
+      {/* Category chips */}
       <FlatList
-        data={CATEGORIES}
-        renderItem={renderCategory}
-        keyExtractor={(item) => item.id}
         horizontal
+        data={CATEGORIES}
+        keyExtractor={(item) => item}
         showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.categoriesList}
+        contentContainerStyle={styles.chipRow}
+        renderItem={({ item }) => (
+          <TouchableOpacity
+            style={[styles.chip, category === item && styles.chipActive]}
+            onPress={() => setCategory(item)}
+          >
+            <Text style={[styles.chipText, category === item && styles.chipTextActive]}>
+              {item}
+            </Text>
+          </TouchableOpacity>
+        )}
       />
 
-      {/* Places List */}
-      <FlatList
-        data={places}
-        renderItem={renderPlace}
-        keyExtractor={(item) => item.id}
-        contentContainerStyle={styles.placesList}
-        refreshControl={
-          <RefreshControl
-            refreshing={isRefreshing}
-            onRefresh={onRefresh}
-            tintColor={colors.primary}
-          />
-        }
-        ListEmptyComponent={
-          <View style={styles.emptyContainer}>
-            <Ionicons name="location-outline" size={64} color={colors.textTertiary} />
-            <Text style={styles.emptyTitle}>No places found</Text>
-            <Text style={styles.emptyText}>
-              {locationError || 'Try a different category'}
-            </Text>
-          </View>
-        }
-        showsVerticalScrollIndicator={false}
-      />
+      {isLoading ? (
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={colors.accentPrimary} />
+        </View>
+      ) : (
+        <FlatList
+          data={filteredPlaces}
+          keyExtractor={(item) => item.id}
+          renderItem={({ item }) => (
+            <PlaceCard
+              place={item}
+              onPress={() => router.push(`/place/${item.id}`)}
+            />
+          )}
+          refreshControl={
+            <RefreshControl
+              refreshing={isRefreshing}
+              onRefresh={onRefresh}
+              tintColor={colors.accentPrimary}
+            />
+          }
+          contentContainerStyle={{ paddingBottom: 100, paddingTop: 4 }}
+          ListEmptyComponent={
+            <View style={styles.emptyState}>
+              <Ionicons name="location-outline" size={48} color={colors.textHint} />
+              <Text style={styles.emptyTitle}>No places found</Text>
+              <Text style={styles.emptyText}>Try a different category or location</Text>
+            </View>
+          }
+          showsVerticalScrollIndicator={false}
+        />
+      )}
     </SafeAreaView>
   );
 }
@@ -216,160 +242,92 @@ export default function PlacesScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: colors.background,
+    backgroundColor: colors.bgApp,
   },
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: colors.background,
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
   },
   headerTitle: {
-    fontSize: 28,
+    fontSize: 24,
     fontWeight: '700',
     color: colors.textPrimary,
+    fontStyle: 'italic',
   },
-  locationBadge: {
+  mapBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: colors.accentPrimaryLight,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: colors.accentPrimary,
+  },
+  searchBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.backgroundSecondary,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.xs,
-    borderRadius: borderRadius.full,
+    marginHorizontal: 16,
+    marginBottom: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 16,
+    backgroundColor: colors.bgCard,
+    borderWidth: 1,
+    borderColor: colors.borderLight,
+    gap: 12,
   },
-  locationText: {
-    fontSize: 12,
-    color: colors.success,
-    marginLeft: 4,
-    fontWeight: '500',
+  searchInput: {
+    flex: 1,
+    fontSize: 15,
+    color: colors.textPrimary,
   },
-  categoriesList: {
-    paddingHorizontal: spacing.md,
-    paddingBottom: spacing.md,
+  chipRow: {
+    paddingHorizontal: 16,
+    gap: 6,
+    marginBottom: 12,
   },
-  categoryItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.backgroundSecondary,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    borderRadius: borderRadius.full,
-    marginRight: spacing.sm,
-  },
-  categoryItemActive: {
-    backgroundColor: colors.primary,
-  },
-  categoryText: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: colors.textSecondary,
-    marginLeft: spacing.xs,
-  },
-  categoryTextActive: {
-    color: colors.textInverse,
-  },
-  placesList: {
-    paddingHorizontal: spacing.md,
-    paddingBottom: spacing.xl,
-  },
-  placeCard: {
-    backgroundColor: colors.background,
-    borderRadius: borderRadius.lg,
-    overflow: 'hidden',
-    marginBottom: spacing.md,
+  chip: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 18,
+    backgroundColor: colors.bgCard,
     borderWidth: 1,
     borderColor: colors.borderLight,
   },
-  placeImage: {
-    width: '100%',
-    height: 160,
+  chipActive: {
+    backgroundColor: colors.accentPrimary,
+    borderColor: colors.accentPrimary,
   },
-  placeImagePlaceholder: {
-    width: '100%',
-    height: 160,
-    backgroundColor: colors.backgroundSecondary,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  placeInfo: {
-    padding: spacing.md,
-  },
-  placeHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: spacing.xs,
-  },
-  placeName: {
-    fontSize: 17,
+  chipText: {
+    fontSize: 13,
     fontWeight: '600',
-    color: colors.textPrimary,
-    flex: 1,
-  },
-  ratingBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.backgroundSecondary,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 4,
-    borderRadius: borderRadius.sm,
-    marginLeft: spacing.sm,
-  },
-  ratingText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: colors.textPrimary,
-    marginLeft: 4,
-  },
-  placeAddress: {
-    fontSize: 14,
     color: colors.textSecondary,
-    marginBottom: spacing.sm,
   },
-  placeFooter: {
-    flexDirection: 'row',
+  chipTextActive: {
+    color: '#FFFFFF',
+  },
+  emptyState: {
     alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  categoryBadge: {
-    backgroundColor: colors.primaryLight,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 4,
-    borderRadius: borderRadius.sm,
-  },
-  categoryBadgeText: {
-    fontSize: 12,
-    fontWeight: '500',
-    color: colors.primaryDark,
-    textTransform: 'capitalize',
-  },
-  distanceText: {
-    fontSize: 12,
-    color: colors.textTertiary,
-  },
-  emptyContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingVertical: 80,
+    paddingVertical: 60,
   },
   emptyTitle: {
-    fontSize: 18,
-    fontWeight: '600',
+    fontSize: 16,
+    fontWeight: '700',
     color: colors.textPrimary,
-    marginTop: spacing.md,
+    marginTop: 12,
   },
   emptyText: {
-    fontSize: 14,
-    color: colors.textSecondary,
-    marginTop: spacing.xs,
-    textAlign: 'center',
+    fontSize: 13,
+    color: colors.textHint,
+    marginTop: 4,
   },
 });

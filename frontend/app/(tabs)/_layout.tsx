@@ -2,7 +2,7 @@ import React from 'react';
 import { Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../../src/utils/theme';
-import { Platform, View, StyleSheet } from 'react-native';
+import { Platform } from 'react-native';
 
 export default function TabsLayout() {
   return (
@@ -10,18 +10,19 @@ export default function TabsLayout() {
       screenOptions={{
         headerShown: false,
         tabBarStyle: {
-          backgroundColor: colors.background,
+          backgroundColor: colors.bgCard,
           borderTopColor: colors.borderLight,
           borderTopWidth: 1,
           height: Platform.OS === 'ios' ? 88 : 64,
           paddingTop: 8,
           paddingBottom: Platform.OS === 'ios' ? 28 : 8,
         },
-        tabBarActiveTintColor: colors.primary,
-        tabBarInactiveTintColor: colors.textTertiary,
+        tabBarActiveTintColor: colors.accentPrimary,
+        tabBarInactiveTintColor: colors.textHint,
         tabBarLabelStyle: {
           fontSize: 11,
           fontWeight: '600',
+          letterSpacing: 0.3,
         },
       }}
     >
@@ -29,17 +30,8 @@ export default function TabsLayout() {
         name="home"
         options={{
           title: 'Home',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="home" size={22} color={color} />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="discover"
-        options={{
-          title: 'Discover',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="search" size={22} color={color} />
+          tabBarIcon: ({ color, focused }) => (
+            <Ionicons name={focused ? 'home' : 'home-outline'} size={22} color={color} />
           ),
         }}
       />
@@ -47,17 +39,26 @@ export default function TabsLayout() {
         name="places"
         options={{
           title: 'Places',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="location" size={22} color={color} />
+          tabBarIcon: ({ color, focused }) => (
+            <Ionicons name={focused ? 'location' : 'location-outline'} size={22} color={color} />
           ),
         }}
       />
       <Tabs.Screen
-        name="messages"
+        name="discover"
         options={{
-          title: 'Messages',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="chatbubble" size={22} color={color} />
+          title: 'Discover',
+          tabBarIcon: ({ color, focused }) => (
+            <Ionicons name={focused ? 'compass' : 'compass-outline'} size={22} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="fashion"
+        options={{
+          title: 'Fashion',
+          tabBarIcon: ({ color, focused }) => (
+            <Ionicons name={focused ? 'shirt' : 'shirt-outline'} size={22} color={color} />
           ),
         }}
       />
@@ -65,9 +66,15 @@ export default function TabsLayout() {
         name="profile"
         options={{
           title: 'Profile',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="person" size={22} color={color} />
+          tabBarIcon: ({ color, focused }) => (
+            <Ionicons name={focused ? 'person' : 'person-outline'} size={22} color={color} />
           ),
+        }}
+      />
+      <Tabs.Screen
+        name="messages"
+        options={{
+          href: null,
         }}
       />
     </Tabs>

@@ -11,40 +11,80 @@ import {
   Platform,
   ActivityIndicator,
   Alert,
+  FlatList,
+  Dimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
-import { colors, spacing, borderRadius } from '../src/utils/theme';
+import { colors, spacing, borderRadius, shadows } from '../src/utils/theme';
 import { useAuthStore } from '../src/store/authStore';
 import api from '../src/api/client';
+
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const MAX_MEDIA = 10;
 
 export default function CreatePostScreen() {
   const router = useRouter();
   const { user } = useAuthStore();
   const [content, setContent] = useState('');
-  const [image, setImage] = useState<string | null>(null);
+  const [media, setMedia] = useState<{ uri: string; type: string; base64?: string }[]>([]);
   const [location, setLocation] = useState('');
   const [isPosting, setIsPosting] = useState(false);
+  const [visibility, setVisibility] = useState('Everyone');
 
-  const pickImage = async () => {
+  const pickImages = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
-      aspect: [4, 3],
+      mediaTypes: ['images', 'videos'],
+      allowsMultipleSelection: true,
+      quality: 0.7,
+      base64: true,
+      selectionLimit: MAX_MEDIA - media.length,
+    });
+
+    if (!result.canceled && result.assets) {
+      const newMedia = result.assets.map((asset) => ({
+        uri: asset.uri,
+        type: asset.type || 'image',
+        base64: asset.base64 ? `data:image/jpeg;base64,${asset.base64}` : undefined,
+      }));
+      setMedia((prev) => [...prev, ...newMedia].slice(0, MAX_MEDIA));
+    }
+  };
+
+  const takePhoto = async () => {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission needed', 'Camera access is required to take photos');
+      return;
+    }
+
+    const result = await ImagePicker.launchCameraAsync({
       quality: 0.7,
       base64: true,
     });
 
-    if (!result.canceled && result.assets[0].base64) {
-      setImage(`data:image/jpeg;base64,${result.assets[0].base64}`);
+    if (!result.canceled && result.assets[0]) {
+      const asset = result.assets[0];
+      setMedia((prev) => [
+        ...prev,
+        {
+          uri: asset.uri,
+          type: 'image',
+          base64: asset.base64 ? `data:image/jpeg;base64,${asset.base64}` : undefined,
+        },
+      ].slice(0, MAX_MEDIA));
     }
   };
 
+  const removeMedia = (index: number) => {
+    setMedia((prev) => prev.filter((_, i) => i !== index));
+  };
+
   const handlePost = async () => {
-    if (!content.trim()) {
-      Alert.alert('Error', 'Please write something');
+    if (!content.trim() && media.length === 0) {
+      Alert.alert('Error', 'Please write something or add media');
       return;
     }
 
@@ -52,7 +92,7 @@ export default function CreatePostScreen() {
     try {
       await api.post('/posts', {
         content: content.trim(),
-        image: image,
+        image: media[0]?.base64 || media[0]?.uri || null,
         location: location.trim() || null,
       });
       router.back();
@@ -67,88 +107,120 @@ export default function CreatePostScreen() {
     <SafeAreaView style={styles.container}>
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={styles.keyboardView}
+        style={{ flex: 1 }}
       >
         {/* Header */}
         <View style={styles.header}>
-          <TouchableOpacity onPress={() => router.back()}>
-            <Text style={styles.cancelText}>Cancel</Text>
+          <TouchableOpacity onPress={() => router.back()} style={styles.headerLeft}>
+            <Ionicons name="close" size={24} color={colors.textPrimary} />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>New Post</Text>
+          <Text style={styles.headerTitle}>Create Post</Text>
           <TouchableOpacity
-            style={[styles.postButton, (!content.trim() || isPosting) && styles.postButtonDisabled]}
+            style={[styles.postButton, (!content.trim() && media.length === 0 || isPosting) && styles.postButtonDisabled]}
             onPress={handlePost}
-            disabled={!content.trim() || isPosting}
+            disabled={(!content.trim() && media.length === 0) || isPosting}
           >
             {isPosting ? (
-              <ActivityIndicator size="small" color={colors.textInverse} />
+              <ActivityIndicator size="small" color="#FFFFFF" />
             ) : (
               <Text style={styles.postButtonText}>Post</Text>
             )}
           </TouchableOpacity>
         </View>
 
-        <ScrollView style={styles.content} keyboardShouldPersistTaps="handled">
-          {/* User Info */}
+        <ScrollView style={styles.scrollContent} keyboardShouldPersistTaps="handled">
+          {/* User row */}
           <View style={styles.userRow}>
-            {user?.profile_image ? (
-              <Image source={{ uri: user.profile_image }} style={styles.avatar} />
-            ) : (
-              <View style={styles.avatarPlaceholder}>
-                <Text style={styles.avatarText}>{user?.username[0].toUpperCase()}</Text>
-              </View>
-            )}
+            <View style={styles.avatar}>
+              {user?.profile_image ? (
+                <Image source={{ uri: user.profile_image }} style={{ width: '100%', height: '100%' }} />
+              ) : (
+                <View style={styles.avatarFallback}>
+                  <Text style={styles.avatarFallbackText}>
+                    {(user?.full_name || 'U')[0].toUpperCase()}
+                  </Text>
+                </View>
+              )}
+            </View>
             <View>
               <Text style={styles.userName}>{user?.full_name}</Text>
-              <Text style={styles.userHandle}>@{user?.username}</Text>
+              <TouchableOpacity style={styles.visibilityRow}>
+                <Ionicons name="globe-outline" size={12} color={colors.textSecondary} />
+                <Text style={styles.visibilityText}>{visibility}</Text>
+                <Ionicons name="chevron-down" size={12} color={colors.textSecondary} />
+              </TouchableOpacity>
             </View>
           </View>
 
           {/* Content Input */}
           <TextInput
-            style={styles.input}
-            placeholder="What's on your mind?"
-            placeholderTextColor={colors.textTertiary}
+            style={styles.contentInput}
+            placeholder="Share a tip, thought or update with the community..."
+            placeholderTextColor={colors.textHint}
             value={content}
             onChangeText={setContent}
             multiline
-            maxLength={500}
+            maxLength={2000}
             autoFocus
           />
 
-          {/* Image Preview */}
-          {image && (
-            <View style={styles.imagePreview}>
-              <Image source={{ uri: image }} style={styles.previewImage} />
-              <TouchableOpacity
-                style={styles.removeImageButton}
-                onPress={() => setImage(null)}
-              >
-                <Ionicons name="close-circle" size={28} color={colors.textInverse} />
-              </TouchableOpacity>
+          {/* Media Preview Grid */}
+          {media.length > 0 && (
+            <View style={styles.mediaGrid}>
+              {media.map((item, index) => (
+                <View key={index} style={styles.mediaItem}>
+                  <Image source={{ uri: item.uri }} style={styles.mediaImage} />
+                  {item.type === 'video' && (
+                    <View style={styles.videoOverlay}>
+                      <Ionicons name="play" size={24} color="#FFFFFF" />
+                    </View>
+                  )}
+                  <TouchableOpacity
+                    style={styles.removeMedia}
+                    onPress={() => removeMedia(index)}
+                  >
+                    <Ionicons name="close" size={14} color="#FFFFFF" />
+                  </TouchableOpacity>
+                </View>
+              ))}
+              {media.length < MAX_MEDIA && (
+                <TouchableOpacity style={styles.addMoreMedia} onPress={pickImages}>
+                  <Ionicons name="add" size={24} color={colors.fashionHint} />
+                  <Text style={styles.addMoreText}>+More</Text>
+                </TouchableOpacity>
+              )}
             </View>
           )}
 
-          {/* Location Input */}
-          <View style={styles.locationContainer}>
-            <Ionicons name="location-outline" size={20} color={colors.textTertiary} />
+          {/* Location */}
+          <View style={styles.locationRow}>
+            <Ionicons name="location-outline" size={20} color={colors.textHint} />
             <TextInput
               style={styles.locationInput}
               placeholder="Add location (optional)"
-              placeholderTextColor={colors.textTertiary}
+              placeholderTextColor={colors.textHint}
               value={location}
               onChangeText={setLocation}
             />
           </View>
         </ScrollView>
 
-        {/* Bottom Actions */}
-        <View style={styles.bottomActions}>
-          <TouchableOpacity style={styles.actionButton} onPress={pickImage}>
-            <Ionicons name="image-outline" size={24} color={colors.primary} />
-            <Text style={styles.actionText}>Photo</Text>
+        {/* Bottom Action Bar */}
+        <View style={styles.bottomBar}>
+          <TouchableOpacity style={styles.actionBtn} onPress={pickImages}>
+            <Ionicons name="image-outline" size={24} color={colors.accentSecondary} />
           </TouchableOpacity>
-          <Text style={styles.charCount}>{content.length}/500</Text>
+          <TouchableOpacity style={styles.actionBtn} onPress={takePhoto}>
+            <Ionicons name="camera-outline" size={24} color={colors.info} />
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.actionBtn}>
+            <Ionicons name="document-outline" size={24} color={colors.warning} />
+          </TouchableOpacity>
+          <View style={{ flex: 1 }} />
+          <Text style={styles.charCount}>{content.length}/2000</Text>
+          <TouchableOpacity>
+            <Ionicons name="ellipsis-horizontal" size={22} color={colors.textHint} />
+          </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -158,23 +230,20 @@ export default function CreatePostScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: colors.background,
+    backgroundColor: colors.bgCard,
   },
-  keyboardView: {
-    flex: 1,
-  },
+  // Header
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: colors.borderLight,
+    borderBottomColor: colors.borderSubtle,
   },
-  cancelText: {
-    fontSize: 16,
-    color: colors.textSecondary,
+  headerLeft: {
+    padding: 4,
   },
   headerTitle: {
     fontSize: 17,
@@ -182,117 +251,158 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
   },
   postButton: {
-    backgroundColor: colors.primary,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs,
-    borderRadius: borderRadius.full,
-    minWidth: 60,
+    backgroundColor: colors.accentPrimary,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 20,
+    minWidth: 70,
     alignItems: 'center',
   },
   postButtonDisabled: {
-    opacity: 0.5,
+    opacity: 0.4,
   },
   postButtonText: {
-    color: colors.textInverse,
-    fontSize: 15,
-    fontWeight: '600',
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '700',
   },
-  content: {
+  // Content
+  scrollContent: {
     flex: 1,
-    padding: spacing.md,
+    padding: 16,
   },
   userRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: spacing.md,
+    marginBottom: 20,
   },
   avatar: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    marginRight: spacing.sm,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    overflow: 'hidden',
+    marginRight: 12,
   },
-  avatarPlaceholder: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: colors.primary,
+  avatarFallback: {
+    width: '100%',
+    height: '100%',
+    backgroundColor: colors.avatarTeal,
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: spacing.sm,
   },
-  avatarText: {
-    color: colors.textInverse,
-    fontSize: 18,
-    fontWeight: '600',
+  avatarFallbackText: {
+    color: '#FFFFFF',
+    fontSize: 20,
+    fontWeight: '700',
   },
   userName: {
-    fontSize: 15,
-    fontWeight: '600',
+    fontSize: 16,
+    fontWeight: '700',
     color: colors.textPrimary,
   },
-  userHandle: {
-    fontSize: 13,
-    color: colors.textSecondary,
-  },
-  input: {
-    fontSize: 17,
-    color: colors.textPrimary,
-    lineHeight: 24,
-    minHeight: 100,
-    textAlignVertical: 'top',
-  },
-  imagePreview: {
-    marginTop: spacing.md,
-    borderRadius: borderRadius.md,
-    overflow: 'hidden',
-    position: 'relative',
-  },
-  previewImage: {
-    width: '100%',
-    height: 200,
-    borderRadius: borderRadius.md,
-  },
-  removeImageButton: {
-    position: 'absolute',
-    top: spacing.sm,
-    right: spacing.sm,
-  },
-  locationContainer: {
+  visibilityRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: spacing.md,
-    paddingTop: spacing.md,
+    gap: 4,
+    marginTop: 2,
+  },
+  visibilityText: {
+    fontSize: 12,
+    color: colors.textSecondary,
+    fontWeight: '500',
+  },
+  contentInput: {
+    fontSize: 17,
+    color: colors.textPrimary,
+    lineHeight: 26,
+    minHeight: 120,
+    textAlignVertical: 'top',
+  },
+  // Media Grid
+  mediaGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 16,
+  },
+  mediaItem: {
+    width: (SCREEN_WIDTH - 32 - 16) / 3,
+    aspectRatio: 1,
+    borderRadius: 16,
+    overflow: 'hidden',
+  },
+  mediaImage: {
+    width: '100%',
+    height: '100%',
+  },
+  videoOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.3)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  removeMedia: {
+    position: 'absolute',
+    top: 4,
+    right: 4,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  addMoreMedia: {
+    width: (SCREEN_WIDTH - 32 - 16) / 3,
+    aspectRatio: 1,
+    borderRadius: 16,
+    borderWidth: 2,
+    borderStyle: 'dashed',
+    borderColor: colors.fashionBorder,
+    backgroundColor: colors.fashionCard,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  addMoreText: {
+    fontSize: 10,
+    color: colors.fashionHint,
+    marginTop: 4,
+  },
+  // Location
+  locationRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 20,
+    paddingTop: 16,
     borderTopWidth: 1,
-    borderTopColor: colors.borderLight,
+    borderTopColor: colors.borderSubtle,
   },
   locationInput: {
     flex: 1,
     fontSize: 15,
     color: colors.textPrimary,
-    marginLeft: spacing.sm,
+    marginLeft: 8,
   },
-  bottomActions: {
+  // Bottom Bar
+  bottomBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
     borderTopWidth: 1,
-    borderTopColor: colors.borderLight,
+    borderTopColor: colors.borderSubtle,
+    gap: 8,
   },
-  actionButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  actionText: {
-    fontSize: 14,
-    color: colors.primary,
-    marginLeft: spacing.xs,
-    fontWeight: '500',
+  actionBtn: {
+    padding: 8,
   },
   charCount: {
     fontSize: 13,
-    color: colors.textTertiary,
+    color: colors.textHint,
+    marginRight: 8,
   },
 });

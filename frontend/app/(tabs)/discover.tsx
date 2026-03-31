@@ -3,249 +3,222 @@ import {
   View,
   Text,
   StyleSheet,
-  TextInput,
+  ScrollView,
   TouchableOpacity,
-  FlatList,
   Image,
   ActivityIndicator,
+  FlatList,
+  RefreshControl,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, spacing, borderRadius } from '../../src/utils/theme';
-import api from '../../src/api/client';
-import PostCard from '../../src/components/PostCard';
+import { colors, spacing, borderRadius, shadows } from '../../src/utils/theme';
 import { useAuthStore } from '../../src/store/authStore';
+import api from '../../src/api/client';
 
-type Tab = 'trending' | 'users' | 'places';
+const TABS = [
+  { id: 'foryou', label: 'For you' },
+  { id: 'culture', label: 'Culture' },
+  { id: 'science', label: 'Science' },
+  { id: 'featured', label: 'Featured', badge: 'New' },
+  { id: 'daily', label: 'Daily' },
+];
+
+// Mock discover articles
+const MOCK_ARTICLES = [
+  { id: '1', title: 'The Rise of Sustainable Fashion in NYC', category: 'Culture', summary: 'How New York\'s fashion scene is embracing eco-friendly materials and ethical production.', image: 'https://images.unsplash.com/photo-1558618666-fcd25c85f82e?w=400', author: 'StyleWatch', date: 'Jun 15' },
+  { id: '2', title: 'Understanding Urban Architecture', category: 'Science', summary: 'Modern buildings are not just structures — they are living, breathing ecosystems.', image: 'https://images.unsplash.com/photo-1486325212027-8081e485255e?w=400', author: 'ArchDigest', date: 'Jun 14' },
+  { id: '3', title: 'Local Music Scene Thriving in Brooklyn', category: 'Culture', summary: 'From jazz clubs to underground hip-hop, Brooklyn\'s music scene is exploding.', image: 'https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=400', author: 'BKMusic', date: 'Jun 13' },
+  { id: '4', title: 'Tech Startups Changing the Bronx', category: 'Featured', summary: 'Young entrepreneurs are building the next big thing right from their neighborhoods.', image: 'https://images.unsplash.com/photo-1519389950473-47ba0277781c?w=400', author: 'TechBX', date: 'Jun 12' },
+  { id: '5', title: 'Best Coffee Spots This Week', category: 'Daily', summary: 'Our curated list of the top coffee experiences in your area.', image: 'https://images.unsplash.com/photo-1495474472287-4d71bcdd2085?w=400', author: 'CoffeeGuide', date: 'Today' },
+];
+
+function ArticleCard({ article }: { article: any }) {
+  return (
+    <TouchableOpacity style={articleStyles.card} activeOpacity={0.9}>
+      <View style={articleStyles.textContent}>
+        <Text style={articleStyles.category}>{article.category}</Text>
+        <Text style={articleStyles.title} numberOfLines={2}>{article.title}</Text>
+        <Text style={articleStyles.summary} numberOfLines={2}>{article.summary}</Text>
+        <View style={articleStyles.meta}>
+          <Text style={articleStyles.author}>{article.author}</Text>
+          <Text style={articleStyles.dot}>·</Text>
+          <Text style={articleStyles.date}>{article.date}</Text>
+        </View>
+      </View>
+      {article.image && (
+        <Image source={{ uri: article.image }} style={articleStyles.image} />
+      )}
+    </TouchableOpacity>
+  );
+}
+
+const articleStyles = StyleSheet.create({
+  card: {
+    flexDirection: 'row',
+    backgroundColor: colors.bgCard,
+    borderRadius: 20,
+    padding: 16,
+    marginHorizontal: 16,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    ...shadows.elevation1,
+  },
+  textContent: {
+    flex: 1,
+    paddingRight: 12,
+  },
+  category: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: colors.accentSecondary,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 6,
+  },
+  title: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: colors.textPrimary,
+    lineHeight: 22,
+    marginBottom: 6,
+  },
+  summary: {
+    fontSize: 13,
+    color: colors.textSecondary,
+    lineHeight: 18,
+    marginBottom: 8,
+  },
+  meta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  author: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: colors.textHint,
+  },
+  dot: {
+    fontSize: 12,
+    color: colors.textHint,
+    marginHorizontal: 6,
+  },
+  date: {
+    fontSize: 12,
+    color: colors.textHint,
+  },
+  image: {
+    width: 90,
+    height: 90,
+    borderRadius: 14,
+  },
+});
 
 export default function DiscoverScreen() {
   const router = useRouter();
   const { user } = useAuthStore();
-  const [activeTab, setActiveTab] = useState<Tab>('trending');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [isSearching, setIsSearching] = useState(false);
-  const [trendingPosts, setTrendingPosts] = useState<any[]>([]);
-  const [suggestedUsers, setSuggestedUsers] = useState<any[]>([]);
-  const [searchResults, setSearchResults] = useState<any>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState('foryou');
+  const [neighborhood, setNeighborhood] = useState('Your Area');
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
-  useEffect(() => {
-    loadInitialData();
-  }, []);
+  const filtered = activeTab === 'foryou'
+    ? MOCK_ARTICLES
+    : MOCK_ARTICLES.filter(a => a.category.toLowerCase() === activeTab);
 
-  const loadInitialData = async () => {
-    try {
-      const [trendingRes, usersRes] = await Promise.all([
-        api.get('/discover/trending'),
-        api.get('/discover/suggested-users'),
-      ]);
-      setTrendingPosts(trendingRes.data);
-      setSuggestedUsers(usersRes.data);
-    } catch (error) {
-      console.log('Error loading discover data:', error);
-    } finally {
-      setIsLoading(false);
-    }
+  const onRefresh = async () => {
+    setIsRefreshing(true);
+    await new Promise(r => setTimeout(r, 1000));
+    setIsRefreshing(false);
   };
-
-  const handleSearch = async () => {
-    if (!searchQuery.trim()) return;
-    
-    setIsSearching(true);
-    try {
-      const response = await api.get(`/discover/search?query=${encodeURIComponent(searchQuery)}`);
-      setSearchResults(response.data);
-    } catch (error) {
-      console.log('Error searching:', error);
-    } finally {
-      setIsSearching(false);
-    }
-  };
-
-  const clearSearch = () => {
-    setSearchQuery('');
-    setSearchResults(null);
-  };
-
-  const renderUserItem = ({ item }: { item: any }) => (
-    <TouchableOpacity
-      style={styles.userItem}
-      onPress={() => router.push(`/user/${item.id}`)}
-    >
-      {item.profile_image ? (
-        <Image source={{ uri: item.profile_image }} style={styles.userAvatar} />
-      ) : (
-        <View style={styles.userAvatarPlaceholder}>
-          <Text style={styles.userAvatarText}>{item.username[0].toUpperCase()}</Text>
-        </View>
-      )}
-      <View style={styles.userInfo}>
-        <Text style={styles.userName}>{item.full_name}</Text>
-        <Text style={styles.userHandle}>@{item.username}</Text>
-      </View>
-      <TouchableOpacity style={styles.followButton}>
-        <Text style={styles.followButtonText}>Follow</Text>
-      </TouchableOpacity>
-    </TouchableOpacity>
-  );
-
-  const renderSearchResults = () => {
-    if (!searchResults) return null;
-
-    return (
-      <View style={styles.searchResults}>
-        {searchResults.users?.length > 0 && (
-          <View style={styles.searchSection}>
-            <Text style={styles.searchSectionTitle}>Users</Text>
-            {searchResults.users.map((item: any) => (
-              <TouchableOpacity
-                key={item.id}
-                style={styles.userItem}
-                onPress={() => router.push(`/user/${item.id}`)}
-              >
-                {item.profile_image ? (
-                  <Image source={{ uri: item.profile_image }} style={styles.userAvatar} />
-                ) : (
-                  <View style={styles.userAvatarPlaceholder}>
-                    <Text style={styles.userAvatarText}>{item.username[0].toUpperCase()}</Text>
-                  </View>
-                )}
-                <View style={styles.userInfo}>
-                  <Text style={styles.userName}>{item.full_name}</Text>
-                  <Text style={styles.userHandle}>@{item.username}</Text>
-                </View>
-              </TouchableOpacity>
-            ))}
-          </View>
-        )}
-
-        {searchResults.posts?.length > 0 && (
-          <View style={styles.searchSection}>
-            <Text style={styles.searchSectionTitle}>Posts</Text>
-            {searchResults.posts.map((post: any) => (
-              <PostCard
-                key={post.id}
-                post={post}
-                currentUserId={user?.id || ''}
-                onPress={() => router.push(`/post/${post.id}`)}
-                onUserPress={() => router.push(`/user/${post.user_id}`)}
-              />
-            ))}
-          </View>
-        )}
-
-        {searchResults.places?.length > 0 && (
-          <View style={styles.searchSection}>
-            <Text style={styles.searchSectionTitle}>Places</Text>
-            {searchResults.places.map((place: any) => (
-              <TouchableOpacity
-                key={place.id}
-                style={styles.placeItem}
-                onPress={() => router.push(`/place/${place.id}`)}
-              >
-                <Ionicons name="location" size={24} color={colors.primary} />
-                <View style={styles.placeInfo}>
-                  <Text style={styles.placeName}>{place.name}</Text>
-                  <Text style={styles.placeAddress}>{place.address}</Text>
-                </View>
-              </TouchableOpacity>
-            ))}
-          </View>
-        )}
-      </View>
-    );
-  };
-
-  if (isLoading) {
-    return (
-      <SafeAreaView style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color={colors.primary} />
-      </SafeAreaView>
-    );
-  }
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Discover</Text>
-      </View>
-
-      {/* Search Bar */}
-      <View style={styles.searchContainer}>
-        <View style={styles.searchBar}>
-          <Ionicons name="search" size={20} color={colors.textTertiary} />
-          <TextInput
-            style={styles.searchInput}
-            placeholder="Search users, posts, places..."
-            placeholderTextColor={colors.textTertiary}
-            value={searchQuery}
-            onChangeText={setSearchQuery}
-            onSubmitEditing={handleSearch}
-            returnKeyType="search"
-          />
-          {searchQuery.length > 0 && (
-            <TouchableOpacity onPress={clearSearch}>
-              <Ionicons name="close-circle" size={20} color={colors.textTertiary} />
+        <View style={styles.topRow}>
+          <TouchableOpacity style={styles.locationBtn}>
+            <View style={styles.locationIcon}>
+              <Ionicons name="location" size={14} color={colors.accentPrimary} />
+            </View>
+            <Text style={styles.locationText}>{neighborhood}</Text>
+            <Ionicons name="chevron-down" size={16} color={colors.textSecondary} />
+          </TouchableOpacity>
+          <View style={styles.headerActions}>
+            <TouchableOpacity style={styles.iconBtn}>
+              <Ionicons name="notifications-outline" size={20} color={colors.textSecondary} />
             </TouchableOpacity>
-          )}
+            <TouchableOpacity style={styles.iconBtn}>
+              <Ionicons name="chatbubble-outline" size={20} color={colors.textSecondary} />
+            </TouchableOpacity>
+            {user && (
+              <View style={styles.avatarSmall}>
+                {user.profile_image ? (
+                  <Image source={{ uri: user.profile_image }} style={{ width: '100%', height: '100%' }} />
+                ) : (
+                  <Text style={styles.avatarSmallText}>
+                    {(user.full_name || 'U')[0].toUpperCase()}
+                  </Text>
+                )}
+              </View>
+            )}
+          </View>
         </View>
+
+        {/* Tabs */}
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.tabsRow}
+        >
+          {TABS.map((tab) => (
+            <TouchableOpacity
+              key={tab.id}
+              style={[
+                styles.tab,
+                activeTab === tab.id && styles.tabActive,
+              ]}
+              onPress={() => setActiveTab(tab.id)}
+            >
+              <Text style={[
+                styles.tabText,
+                activeTab === tab.id && styles.tabTextActive,
+              ]}>
+                {tab.label}
+              </Text>
+              {tab.badge && (
+                <View style={styles.tabBadge}>
+                  <Text style={styles.tabBadgeText}>{tab.badge}</Text>
+                </View>
+              )}
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
       </View>
 
-      {isSearching ? (
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={colors.primary} />
-        </View>
-      ) : searchResults ? (
-        <FlatList
-          data={[]}
-          renderItem={() => null}
-          ListHeaderComponent={renderSearchResults}
-          showsVerticalScrollIndicator={false}
-        />
-      ) : (
-        <FlatList
-          data={activeTab === 'users' ? suggestedUsers : trendingPosts}
-          renderItem={activeTab === 'users' ? renderUserItem : ({ item }) => (
-            <PostCard
-              post={item}
-              currentUserId={user?.id || ''}
-              onPress={() => router.push(`/post/${item.id}`)}
-              onUserPress={() => router.push(`/user/${item.user_id}`)}
-            />
-          )}
-          keyExtractor={(item) => item.id}
-          ListHeaderComponent={
-            <View style={styles.tabs}>
-              <TouchableOpacity
-                style={[styles.tab, activeTab === 'trending' && styles.activeTab]}
-                onPress={() => setActiveTab('trending')}
-              >
-                <Text style={[styles.tabText, activeTab === 'trending' && styles.activeTabText]}>
-                  Trending
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.tab, activeTab === 'users' && styles.activeTab]}
-                onPress={() => setActiveTab('users')}
-              >
-                <Text style={[styles.tabText, activeTab === 'users' && styles.activeTabText]}>
-                  Suggested
-                </Text>
-              </TouchableOpacity>
-            </View>
-          }
-          ListEmptyComponent={
-            <View style={styles.emptyContainer}>
-              <Ionicons name="search-outline" size={64} color={colors.textTertiary} />
-              <Text style={styles.emptyTitle}>Nothing to show</Text>
-              <Text style={styles.emptyText}>Try searching for something</Text>
-            </View>
-          }
-          showsVerticalScrollIndicator={false}
-        />
-      )}
+      {/* Feed */}
+      <FlatList
+        data={filtered}
+        keyExtractor={(item) => item.id}
+        renderItem={({ item }) => <ArticleCard article={item} />}
+        contentContainerStyle={{ paddingTop: 12, paddingBottom: 100 }}
+        refreshControl={
+          <RefreshControl
+            refreshing={isRefreshing}
+            onRefresh={onRefresh}
+            tintColor={colors.accentPrimary}
+          />
+        }
+        ListEmptyComponent={
+          <View style={styles.emptyState}>
+            <Text style={{ fontSize: 48, marginBottom: 12 }}>📰</Text>
+            <Text style={styles.emptyTitle}>No articles yet</Text>
+            <Text style={styles.emptyText}>Check back soon for updates</Text>
+          </View>
+        }
+        showsVerticalScrollIndicator={false}
+      />
     </SafeAreaView>
   );
 }
@@ -253,161 +226,113 @@ export default function DiscoverScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: colors.background,
-  },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: colors.background,
+    backgroundColor: colors.bgApp,
   },
   header: {
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
+    backgroundColor: colors.bgCard,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.borderLight,
   },
-  headerTitle: {
-    fontSize: 28,
+  topRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  locationBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  locationIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: colors.accentPrimaryLight,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  locationText: {
+    fontSize: 16,
     fontWeight: '700',
     color: colors.textPrimary,
   },
-  searchContainer: {
-    paddingHorizontal: spacing.md,
-    paddingBottom: spacing.md,
-  },
-  searchBar: {
+  headerActions: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.backgroundSecondary,
-    borderRadius: borderRadius.md,
-    paddingHorizontal: spacing.md,
-    height: 44,
+    gap: 8,
   },
-  searchInput: {
-    flex: 1,
-    fontSize: 15,
-    color: colors.textPrimary,
-    marginLeft: spacing.sm,
+  iconBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: colors.bgSubtle,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
-  tabs: {
-    flexDirection: 'row',
-    paddingHorizontal: spacing.md,
-    marginBottom: spacing.md,
+  avatarSmall: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: colors.accentPrimary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    overflow: 'hidden',
+  },
+  avatarSmallText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  tabsRow: {
+    paddingHorizontal: 12,
+    gap: 0,
   },
   tab: {
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.md,
-    borderRadius: borderRadius.full,
-    marginRight: spacing.sm,
-    backgroundColor: colors.backgroundSecondary,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderBottomWidth: 2,
+    borderBottomColor: 'transparent',
   },
-  activeTab: {
-    backgroundColor: colors.primary,
+  tabActive: {
+    borderBottomColor: colors.textPrimary,
   },
   tabText: {
     fontSize: 14,
-    fontWeight: '600',
-    color: colors.textSecondary,
+    fontWeight: '500',
+    color: colors.textHint,
   },
-  activeTabText: {
-    color: colors.textInverse,
-  },
-  userItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-  },
-  userAvatar: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-  },
-  userAvatarPlaceholder: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    backgroundColor: colors.primary,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  userAvatarText: {
-    color: colors.textInverse,
-    fontSize: 20,
-    fontWeight: '600',
-  },
-  userInfo: {
-    flex: 1,
-    marginLeft: spacing.md,
-  },
-  userName: {
-    fontSize: 15,
-    fontWeight: '600',
+  tabTextActive: {
+    fontWeight: '700',
     color: colors.textPrimary,
   },
-  userHandle: {
-    fontSize: 13,
-    color: colors.textSecondary,
-    marginTop: 2,
+  tabBadge: {
+    backgroundColor: '#16A34A',
+    borderRadius: 8,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
   },
-  followButton: {
-    backgroundColor: colors.primary,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs,
-    borderRadius: borderRadius.full,
+  tabBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#FFFFFF',
   },
-  followButtonText: {
-    color: colors.textInverse,
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  searchResults: {
-    paddingBottom: spacing.xl,
-  },
-  searchSection: {
-    marginBottom: spacing.lg,
-  },
-  searchSectionTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: colors.textPrimary,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-  },
-  placeItem: {
-    flexDirection: 'row',
+  emptyState: {
     alignItems: 'center',
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-  },
-  placeInfo: {
-    flex: 1,
-    marginLeft: spacing.md,
-  },
-  placeName: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: colors.textPrimary,
-  },
-  placeAddress: {
-    fontSize: 13,
-    color: colors.textSecondary,
-    marginTop: 2,
-  },
-  emptyContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingVertical: 80,
+    paddingVertical: 60,
   },
   emptyTitle: {
-    fontSize: 18,
-    fontWeight: '600',
+    fontSize: 16,
+    fontWeight: '700',
     color: colors.textPrimary,
-    marginTop: spacing.md,
   },
   emptyText: {
-    fontSize: 14,
-    color: colors.textSecondary,
-    marginTop: spacing.xs,
+    fontSize: 13,
+    color: colors.textHint,
+    marginTop: 4,
   },
 });
