@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   View,
   Text,
@@ -6,65 +6,101 @@ import {
   TextInput,
   TouchableOpacity,
   Image,
-  ScrollView,
+  Dimensions,
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
   Alert,
+  ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
-import { colors, spacing, borderRadius } from '../src/utils/theme';
+import { colors } from '../src/utils/theme';
 import { useAuthStore } from '../src/store/authStore';
 import api from '../src/api/client';
 
-const COLORS = [
-  '#6366f1',
-  '#8b5cf6',
-  '#ec4899',
-  '#ef4444',
-  '#f59e0b',
-  '#10b981',
-  '#3b82f6',
-  '#1f2937',
+const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
+
+const BG_COLORS = [
+  '#6366f1', '#8b5cf6', '#ec4899', '#ef4444',
+  '#f59e0b', '#10b981', '#0ea5e9', '#1f2937',
+  '#059669', '#7c3aed', '#be185d', '#0284c7',
 ];
+
+const FONT_SIZES = [20, 28, 36];
 
 export default function CreateStatusScreen() {
   const router = useRouter();
   const { user } = useAuthStore();
   const [content, setContent] = useState('');
   const [image, setImage] = useState<string | null>(null);
-  const [backgroundColor, setBackgroundColor] = useState(COLORS[0]);
+  const [imageUri, setImageUri] = useState<string | null>(null);
+  const [bgColor, setBgColor] = useState(BG_COLORS[0]);
   const [isPosting, setIsPosting] = useState(false);
+  const [fontSizeIdx, setFontSizeIdx] = useState(1);
+  const [textAlign, setTextAlign] = useState<'left' | 'center' | 'right'>('center');
+  const [showColorPicker, setShowColorPicker] = useState(false);
+  const inputRef = useRef<TextInput>(null);
 
   const pickImage = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ['images'],
       allowsEditing: true,
       aspect: [9, 16],
       quality: 0.7,
       base64: true,
     });
-
-    if (!result.canceled && result.assets[0].base64) {
-      setImage(`data:image/jpeg;base64,${result.assets[0].base64}`);
+    if (!result.canceled && result.assets[0]) {
+      setImageUri(result.assets[0].uri);
+      if (result.assets[0].base64) {
+        setImage(`data:image/jpeg;base64,${result.assets[0].base64}`);
+      }
     }
+  };
+
+  const takePhoto = async () => {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission needed', 'Camera access is required');
+      return;
+    }
+    const result = await ImagePicker.launchCameraAsync({
+      allowsEditing: true,
+      aspect: [9, 16],
+      quality: 0.7,
+      base64: true,
+    });
+    if (!result.canceled && result.assets[0]) {
+      setImageUri(result.assets[0].uri);
+      if (result.assets[0].base64) {
+        setImage(`data:image/jpeg;base64,${result.assets[0].base64}`);
+      }
+    }
+  };
+
+  const cycleFontSize = () => {
+    setFontSizeIdx((prev) => (prev + 1) % FONT_SIZES.length);
+  };
+
+  const cycleAlign = () => {
+    const aligns: ('left' | 'center' | 'right')[] = ['left', 'center', 'right'];
+    const idx = aligns.indexOf(textAlign);
+    setTextAlign(aligns[(idx + 1) % aligns.length]);
   };
 
   const handlePost = async () => {
     if (!content.trim() && !image) {
-      Alert.alert('Error', 'Please add content or an image');
+      Alert.alert('Error', 'Add text or a photo to your story');
       return;
     }
-
     setIsPosting(true);
     try {
       await api.post('/statuses', {
         content: content.trim(),
         image: image,
-        background_color: backgroundColor,
+        background_color: bgColor,
       });
       router.back();
     } catch (error: any) {
@@ -74,180 +110,272 @@ export default function CreateStatusScreen() {
     }
   };
 
+  const hasImage = !!imageUri;
+  const bgStyle = hasImage ? { backgroundColor: '#000' } : { backgroundColor: bgColor };
+  const fontSize = FONT_SIZES[fontSizeIdx];
+
   return (
-    <SafeAreaView style={styles.container}>
+    <View style={[styles.container, bgStyle]}>
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={styles.keyboardView}
+        style={{ flex: 1 }}
       >
-        {/* Header */}
-        <View style={styles.header}>
-          <TouchableOpacity onPress={() => router.back()}>
-            <Ionicons name="close" size={28} color={colors.textPrimary} />
+        {/* Background image */}
+        {hasImage && (
+          <Image
+            source={{ uri: imageUri! }}
+            style={styles.bgImage}
+            resizeMode="cover"
+          />
+        )}
+
+        {/* Top bar */}
+        <SafeAreaView edges={['top']} style={styles.topBar}>
+          <TouchableOpacity onPress={() => router.back()} style={styles.topBtn}>
+            <Ionicons name="close" size={28} color="#FFFFFF" />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>Add Status</Text>
+
+          <View style={styles.topCenter}>
+            {!hasImage && (
+              <TouchableOpacity onPress={cycleFontSize} style={styles.toolBtn}>
+                <Ionicons name="text" size={20} color="#FFFFFF" />
+                <Text style={styles.toolLabel}>Aa</Text>
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity onPress={cycleAlign} style={styles.toolBtn}>
+              <Ionicons
+                name={textAlign === 'left' ? 'reorder-two' : textAlign === 'center' ? 'reorder-three' : 'reorder-four'}
+                size={20}
+                color="#FFFFFF"
+              />
+            </TouchableOpacity>
+          </View>
+
           <TouchableOpacity
-            style={[styles.postButton, ((!content.trim() && !image) || isPosting) && styles.postButtonDisabled]}
+            style={[styles.shareBtn, ((!content.trim() && !image) || isPosting) && { opacity: 0.4 }]}
             onPress={handlePost}
             disabled={(!content.trim() && !image) || isPosting}
           >
             {isPosting ? (
-              <ActivityIndicator size="small" color={colors.textInverse} />
+              <ActivityIndicator size="small" color="#FFFFFF" />
             ) : (
-              <Text style={styles.postButtonText}>Share</Text>
+              <View style={styles.shareBtnInner}>
+                <Ionicons name="paper-plane" size={16} color="#FFFFFF" />
+                <Text style={styles.shareBtnText}>Share</Text>
+              </View>
             )}
           </TouchableOpacity>
+        </SafeAreaView>
+
+        {/* Center text input */}
+        <View style={styles.centerContent}>
+          <TextInput
+            ref={inputRef}
+            style={[
+              styles.storyInput,
+              { fontSize, textAlign },
+              hasImage && styles.storyInputWithImage,
+            ]}
+            placeholder="Type your story..."
+            placeholderTextColor="rgba(255,255,255,0.5)"
+            value={content}
+            onChangeText={setContent}
+            multiline
+            maxLength={300}
+            autoFocus={!hasImage}
+          />
         </View>
 
-        {/* Preview */}
-        <View style={[styles.preview, { backgroundColor: image ? '#000' : backgroundColor }]}>
-          {image ? (
-            <Image source={{ uri: image }} style={styles.previewImage} resizeMode="contain" />
-          ) : (
-            <TextInput
-              style={styles.previewText}
-              placeholder="Type something..."
-              placeholderTextColor="rgba(255,255,255,0.5)"
-              value={content}
-              onChangeText={setContent}
-              multiline
-              textAlign="center"
-              maxLength={200}
-            />
-          )}
-        </View>
-
-        {/* Bottom Controls */}
-        <View style={styles.bottomControls}>
-          {!image && (
-            <View style={styles.colorPicker}>
-              <Text style={styles.colorLabel}>Background</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                {COLORS.map((color) => (
+        {/* Bottom toolbar */}
+        <SafeAreaView edges={['bottom']} style={styles.bottomBar}>
+          {/* Color picker row */}
+          {showColorPicker && !hasImage && (
+            <View style={styles.colorPickerRow}>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingHorizontal: 16, paddingBottom: 12 }}>
+                {BG_COLORS.map((c) => (
                   <TouchableOpacity
-                    key={color}
+                    key={c}
                     style={[
-                      styles.colorOption,
-                      { backgroundColor: color },
-                      backgroundColor === color && styles.colorOptionSelected,
+                      styles.colorDot,
+                      { backgroundColor: c },
+                      bgColor === c && styles.colorDotActive,
                     ]}
-                    onPress={() => setBackgroundColor(color)}
+                    onPress={() => setBgColor(c)}
                   />
                 ))}
               </ScrollView>
             </View>
           )}
 
-          <View style={styles.actions}>
-            <TouchableOpacity style={styles.actionButton} onPress={pickImage}>
-              <Ionicons name="image-outline" size={24} color={colors.textPrimary} />
-              <Text style={styles.actionText}>{image ? 'Change' : 'Add'} Photo</Text>
+          <View style={styles.toolRow}>
+            <TouchableOpacity style={styles.bottomBtn} onPress={pickImage}>
+              <Ionicons name="image-outline" size={26} color="#FFFFFF" />
+              <Text style={styles.bottomLabel}>Gallery</Text>
             </TouchableOpacity>
-            {image && (
-              <TouchableOpacity style={styles.actionButton} onPress={() => setImage(null)}>
-                <Ionicons name="trash-outline" size={24} color={colors.error} />
-                <Text style={[styles.actionText, { color: colors.error }]}>Remove</Text>
+
+            <TouchableOpacity style={styles.bottomBtn} onPress={takePhoto}>
+              <Ionicons name="camera-outline" size={26} color="#FFFFFF" />
+              <Text style={styles.bottomLabel}>Camera</Text>
+            </TouchableOpacity>
+
+            {!hasImage && (
+              <TouchableOpacity
+                style={styles.bottomBtn}
+                onPress={() => setShowColorPicker(!showColorPicker)}
+              >
+                <View style={[styles.colorPreview, { backgroundColor: bgColor }]} />
+                <Text style={styles.bottomLabel}>Color</Text>
               </TouchableOpacity>
             )}
+
+            {hasImage && (
+              <TouchableOpacity
+                style={styles.bottomBtn}
+                onPress={() => { setImage(null); setImageUri(null); }}
+              >
+                <Ionicons name="trash-outline" size={26} color="#FF6B6B" />
+                <Text style={[styles.bottomLabel, { color: '#FF6B6B' }]}>Remove</Text>
+              </TouchableOpacity>
+            )}
+
+            <TouchableOpacity
+              style={styles.bottomBtn}
+              onPress={() => inputRef.current?.focus()}
+            >
+              <Ionicons name="text-outline" size={26} color="#FFFFFF" />
+              <Text style={styles.bottomLabel}>Text</Text>
+            </TouchableOpacity>
           </View>
-        </View>
+
+          {/* Char count */}
+          <Text style={styles.charCount}>{content.length}/300</Text>
+        </SafeAreaView>
       </KeyboardAvoidingView>
-    </SafeAreaView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: colors.background,
   },
-  keyboardView: {
-    flex: 1,
+  bgImage: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
   },
-  header: {
+  // Top bar
+  topBar: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
+    paddingHorizontal: 16,
+    paddingBottom: 8,
   },
-  headerTitle: {
-    fontSize: 17,
-    fontWeight: '600',
-    color: colors.textPrimary,
-  },
-  postButton: {
-    backgroundColor: colors.primary,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs,
-    borderRadius: borderRadius.full,
-    minWidth: 70,
+  topBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    justifyContent: 'center',
     alignItems: 'center',
   },
-  postButtonDisabled: {
-    opacity: 0.5,
+  topCenter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
-  postButtonText: {
-    color: colors.textInverse,
-    fontSize: 15,
-    fontWeight: '600',
+  toolBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    borderRadius: 20,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
   },
-  preview: {
+  toolLabel: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  shareBtn: {
+    backgroundColor: colors.accentPrimary,
+    borderRadius: 24,
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+  },
+  shareBtnInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  shareBtnText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  // Center
+  centerContent: {
     flex: 1,
-    margin: spacing.md,
-    borderRadius: borderRadius.xl,
     justifyContent: 'center',
-    alignItems: 'center',
-    overflow: 'hidden',
+    paddingHorizontal: 24,
   },
-  previewImage: {
-    width: '100%',
-    height: '100%',
+  storyInput: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+    lineHeight: 44,
+    padding: 16,
   },
-  previewText: {
-    color: 'white',
-    fontSize: 24,
-    fontWeight: '600',
-    textAlign: 'center',
-    padding: spacing.xl,
-    width: '100%',
+  storyInputWithImage: {
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    borderRadius: 16,
   },
-  bottomControls: {
-    padding: spacing.md,
+  // Bottom bar
+  bottomBar: {
+    paddingBottom: 8,
   },
-  colorPicker: {
-    marginBottom: spacing.md,
+  colorPickerRow: {
+    marginBottom: 4,
   },
-  colorLabel: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: colors.textSecondary,
-    marginBottom: spacing.sm,
+  colorDot: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    borderWidth: 2,
+    borderColor: 'transparent',
   },
-  colorOption: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    marginRight: spacing.sm,
-  },
-  colorOptionSelected: {
+  colorDotActive: {
+    borderColor: '#FFFFFF',
     borderWidth: 3,
-    borderColor: colors.textPrimary,
   },
-  actions: {
+  toolRow: {
     flexDirection: 'row',
-    justifyContent: 'center',
+    justifyContent: 'space-around',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
   },
-  actionButton: {
-    flexDirection: 'row',
+  bottomBtn: {
     alignItems: 'center',
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
+    gap: 4,
   },
-  actionText: {
-    fontSize: 14,
-    color: colors.textPrimary,
-    marginLeft: spacing.xs,
-    fontWeight: '500',
+  bottomLabel: {
+    color: 'rgba(255,255,255,0.7)',
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  colorPreview: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
+  },
+  charCount: {
+    textAlign: 'center',
+    color: 'rgba(255,255,255,0.4)',
+    fontSize: 12,
+    paddingBottom: 4,
   },
 });

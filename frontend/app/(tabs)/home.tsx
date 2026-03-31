@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -10,10 +10,17 @@ import {
   ScrollView,
   Image,
   Dimensions,
+  Modal,
+  TextInput,
+  Alert,
+  Clipboard,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import * as ImagePicker from 'expo-image-picker';
 import { colors, shadows } from '../../src/utils/theme';
 import { useAuthStore } from '../../src/store/authStore';
 import api from '../../src/api/client';
@@ -29,6 +36,7 @@ function PostCard({ post, currentUserId, onPress, onUserPress }: any) {
   const [likesCount, setLikesCount] = useState(post.likes_count || 0);
   const [saved, setSaved] = useState(false);
   const [captionExpanded, setCaptionExpanded] = useState(false);
+  const [showMenu, setShowMenu] = useState(false);
 
   const handleLike = async () => {
     setLiked(!liked);
@@ -82,10 +90,68 @@ function PostCard({ post, currentUserId, onPress, onUserPress }: any) {
             ) : null}
           </View>
         </TouchableOpacity>
-        <TouchableOpacity style={postStyles.moreBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+        <TouchableOpacity
+          style={postStyles.moreBtn}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          onPress={() => setShowMenu(true)}
+        >
           <Ionicons name="ellipsis-horizontal" size={20} color={colors.textPrimary} />
         </TouchableOpacity>
       </View>
+
+      {/* ── 3-dot Menu Modal ── */}
+      <Modal
+        visible={showMenu}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowMenu(false)}
+      >
+        <TouchableOpacity
+          style={postStyles.menuOverlay}
+          activeOpacity={1}
+          onPress={() => setShowMenu(false)}
+        >
+          <View style={postStyles.menuSheet}>
+            <View style={postStyles.menuHandle} />
+            <TouchableOpacity
+              style={postStyles.menuItem}
+              onPress={() => {
+                setShowMenu(false);
+                Alert.alert('Reported', 'This post has been reported.');
+              }}
+            >
+              <Ionicons name="flag-outline" size={22} color={colors.error} />
+              <Text style={[postStyles.menuItemText, { color: colors.error }]}>Report</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={postStyles.menuItem}
+              onPress={() => {
+                setShowMenu(false);
+                Alert.alert('Hidden', 'You will see fewer posts like this.');
+              }}
+            >
+              <Ionicons name="eye-off-outline" size={22} color={colors.textPrimary} />
+              <Text style={postStyles.menuItemText}>Not Interested</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[postStyles.menuItem, { borderBottomWidth: 0 }]}
+              onPress={() => {
+                setShowMenu(false);
+                Alert.alert('Copied', 'Link copied to clipboard.');
+              }}
+            >
+              <Ionicons name="link-outline" size={22} color={colors.textPrimary} />
+              <Text style={postStyles.menuItemText}>Copy Link</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={postStyles.menuCancel}
+              onPress={() => setShowMenu(false)}
+            >
+              <Text style={postStyles.menuCancelText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
 
       {/* ── Media (Photo 4:5 / Video 1:1) ── */}
       {hasMedia && (
@@ -290,21 +356,116 @@ const postStyles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.3,
   },
+  // Menu
+  menuOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    justifyContent: 'flex-end',
+  },
+  menuSheet: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingTop: 8,
+    paddingBottom: 24,
+  },
+  menuHandle: {
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: colors.borderLight,
+    alignSelf: 'center',
+    marginBottom: 12,
+  },
+  menuItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.borderSubtle,
+  },
+  menuItemText: {
+    fontSize: 16,
+    fontWeight: '500',
+    color: colors.textPrimary,
+  },
+  menuCancel: {
+    alignItems: 'center',
+    paddingVertical: 16,
+    marginTop: 4,
+  },
+  menuCancelText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: colors.textHint,
+  },
 });
 
-// ─── Quick Tip Composer ──────────────────────────────────────────────────────
-function QuickTipComposer({
+// ─── Inline Composer ─────────────────────────────────────────────────────────
+function InlineComposer({
   user,
   visible,
   onClose,
+  onPostCreated,
 }: {
   user: any;
   visible: boolean;
   onClose: () => void;
+  onPostCreated: () => void;
 }) {
-  const router = useRouter();
+  const [content, setContent] = useState('');
+  const [media, setMedia] = useState<{ uri: string; base64?: string }[]>([]);
+  const [isPosting, setIsPosting] = useState(false);
 
   if (!visible) return null;
+
+  const pickImages = async () => {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images', 'videos'],
+      allowsMultipleSelection: true,
+      quality: 0.7,
+      base64: true,
+      selectionLimit: 10 - media.length,
+    });
+    if (!result.canceled && result.assets) {
+      const newMedia = result.assets.map((a) => ({
+        uri: a.uri,
+        base64: a.base64 ? `data:image/jpeg;base64,${a.base64}` : undefined,
+      }));
+      setMedia((prev) => [...prev, ...newMedia].slice(0, 10));
+    }
+  };
+
+  const takePhoto = async () => {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== 'granted') { Alert.alert('Permission needed', 'Camera access required'); return; }
+    const result = await ImagePicker.launchCameraAsync({ quality: 0.7, base64: true });
+    if (!result.canceled && result.assets[0]) {
+      const a = result.assets[0];
+      setMedia((prev) => [...prev, { uri: a.uri, base64: a.base64 ? `data:image/jpeg;base64,${a.base64}` : undefined }].slice(0, 10));
+    }
+  };
+
+  const handlePost = async () => {
+    if (!content.trim() && media.length === 0) return;
+    setIsPosting(true);
+    try {
+      await api.post('/posts', {
+        content: content.trim(),
+        image: media[0]?.base64 || media[0]?.uri || null,
+      });
+      setContent('');
+      setMedia([]);
+      onClose();
+      onPostCreated();
+    } catch (error: any) {
+      Alert.alert('Error', error.response?.data?.detail || 'Could not create post');
+    } finally {
+      setIsPosting(false);
+    }
+  };
 
   return (
     <View style={composerStyles.container}>
@@ -312,13 +473,15 @@ function QuickTipComposer({
         <Text style={composerStyles.title}>Start post</Text>
         <View style={{ flex: 1 }} />
         <TouchableOpacity
-          style={composerStyles.postBtnSmall}
-          onPress={() => {
-            onClose();
-            router.push('/create-post');
-          }}
+          style={[composerStyles.postBtnSmall, (!content.trim() && media.length === 0) && { opacity: 0.4 }]}
+          onPress={handlePost}
+          disabled={(!content.trim() && media.length === 0) || isPosting}
         >
-          <Text style={composerStyles.postBtnSmallText}>Post</Text>
+          {isPosting ? (
+            <ActivityIndicator size="small" color={colors.accentPrimary} />
+          ) : (
+            <Text style={composerStyles.postBtnSmallText}>Post</Text>
+          )}
         </TouchableOpacity>
         <TouchableOpacity onPress={onClose} style={composerStyles.closeBtn}>
           <Ionicons name="close" size={20} color={colors.textPrimary} />
@@ -327,64 +490,67 @@ function QuickTipComposer({
 
       {/* User row */}
       <View style={composerStyles.userRow}>
-        <View style={composerStyles.avatar}>
+        <View style={composerStyles.cAvatar}>
           {user?.profile_image ? (
-            <Image
-              source={{ uri: user.profile_image }}
-              style={composerStyles.avatarImg}
-            />
+            <Image source={{ uri: user.profile_image }} style={composerStyles.cAvatarImg} />
           ) : (
-            <View style={composerStyles.avatarFallback}>
-              <Text style={composerStyles.avatarFallbackText}>
-                {(user?.full_name || user?.username || 'U')[0].toUpperCase()}
+            <View style={composerStyles.cAvatarFallback}>
+              <Text style={composerStyles.cAvatarText}>
+                {(user?.full_name || 'U')[0].toUpperCase()}
               </Text>
             </View>
           )}
         </View>
         <View>
           <Text style={composerStyles.userName}>{user?.full_name}</Text>
-          <TouchableOpacity style={composerStyles.visibilityRow}>
+          <View style={composerStyles.visibilityRow}>
             <Ionicons name="globe-outline" size={12} color={colors.textSecondary} />
             <Text style={composerStyles.visibilityText}>Everyone</Text>
-            <Ionicons name="chevron-down" size={12} color={colors.textSecondary} />
-          </TouchableOpacity>
+          </View>
         </View>
       </View>
 
-      {/* Placeholder input */}
-      <TouchableOpacity
-        onPress={() => {
-          onClose();
-          router.push('/create-post');
-        }}
-        activeOpacity={0.7}
-      >
-        <Text style={composerStyles.placeholder}>
-          Share a tip, thought or update with the community...
-        </Text>
-      </TouchableOpacity>
+      {/* Text input - inline, no navigation */}
+      <TextInput
+        style={composerStyles.textInput}
+        placeholder="Share a tip, thought or update with the community..."
+        placeholderTextColor={colors.textHint}
+        value={content}
+        onChangeText={setContent}
+        multiline
+        maxLength={2000}
+      />
+
+      {/* Media thumbnails */}
+      {media.length > 0 && (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={composerStyles.mediaRow}>
+          {media.map((m, i) => (
+            <View key={i} style={composerStyles.mediaThumbnail}>
+              <Image source={{ uri: m.uri }} style={composerStyles.mediaThumbnailImg} />
+              <TouchableOpacity
+                style={composerStyles.mediaRemove}
+                onPress={() => setMedia((prev) => prev.filter((_, idx) => idx !== i))}
+              >
+                <Ionicons name="close" size={12} color="#FFFFFF" />
+              </TouchableOpacity>
+            </View>
+          ))}
+        </ScrollView>
+      )}
 
       {/* Action buttons */}
       <View style={composerStyles.actionsRow}>
-        <TouchableOpacity
-          style={composerStyles.actionBtn}
-          onPress={() => {
-            onClose();
-            router.push('/create-post');
-          }}
-        >
+        <TouchableOpacity style={composerStyles.actionBtn} onPress={pickImages}>
           <Ionicons name="image-outline" size={22} color={colors.accentSecondary} />
         </TouchableOpacity>
-        <TouchableOpacity style={composerStyles.actionBtn}>
+        <TouchableOpacity style={composerStyles.actionBtn} onPress={takePhoto}>
           <Ionicons name="camera-outline" size={22} color={colors.info} />
         </TouchableOpacity>
         <TouchableOpacity style={composerStyles.actionBtn}>
           <Ionicons name="document-outline" size={22} color={colors.warning} />
         </TouchableOpacity>
         <View style={{ flex: 1 }} />
-        <TouchableOpacity>
-          <Ionicons name="ellipsis-horizontal" size={22} color={colors.textHint} />
-        </TouchableOpacity>
+        <Text style={composerStyles.charCount}>{content.length}/2000</Text>
       </View>
     </View>
   );
@@ -417,6 +583,8 @@ const composerStyles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 8,
     marginRight: 8,
+    minWidth: 60,
+    alignItems: 'center',
   },
   postBtnSmallText: {
     fontSize: 13,
@@ -429,27 +597,27 @@ const composerStyles = StyleSheet.create({
   userRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 16,
+    marginBottom: 12,
   },
-  avatar: {
+  cAvatar: {
     width: 44,
     height: 44,
     borderRadius: 22,
     overflow: 'hidden',
     marginRight: 12,
   },
-  avatarImg: {
+  cAvatarImg: {
     width: '100%',
     height: '100%',
   },
-  avatarFallback: {
+  cAvatarFallback: {
     width: '100%',
     height: '100%',
     backgroundColor: colors.avatarTeal,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  avatarFallbackText: {
+  cAvatarText: {
     color: '#FFFFFF',
     fontSize: 18,
     fontWeight: '700',
@@ -470,11 +638,39 @@ const composerStyles = StyleSheet.create({
     color: colors.textSecondary,
     fontWeight: '500',
   },
-  placeholder: {
+  textInput: {
     fontSize: 16,
-    color: colors.textHint,
+    color: colors.textPrimary,
     lineHeight: 24,
-    marginBottom: 24,
+    minHeight: 60,
+    textAlignVertical: 'top',
+    marginBottom: 12,
+  },
+  mediaRow: {
+    flexDirection: 'row',
+    marginBottom: 12,
+  },
+  mediaThumbnail: {
+    width: 64,
+    height: 64,
+    borderRadius: 12,
+    overflow: 'hidden',
+    marginRight: 8,
+  },
+  mediaThumbnailImg: {
+    width: '100%',
+    height: '100%',
+  },
+  mediaRemove: {
+    position: 'absolute',
+    top: 2,
+    right: 2,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   actionsRow: {
     flexDirection: 'row',
@@ -486,6 +682,10 @@ const composerStyles = StyleSheet.create({
   actionBtn: {
     padding: 8,
     marginRight: 8,
+  },
+  charCount: {
+    fontSize: 12,
+    color: colors.textHint,
   },
 });
 
@@ -682,11 +882,12 @@ export default function HomeScreen() {
         )}
       </View>
 
-      {/* Quick Tip Composer */}
-      <QuickTipComposer
+      {/* Inline Composer */}
+      <InlineComposer
         user={user}
         visible={showComposer}
         onClose={() => setShowComposer(false)}
+        onPostCreated={() => loadFeed()}
       />
     </View>
   );

@@ -121,7 +121,23 @@ export default function ProfileScreen() {
               <Ionicons name="create-outline" size={18} color={colors.accentPrimary} />
               <Text style={styles.moreItemText}>Edit Profile</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.moreItem} onPress={() => { setShowMore(false); handleLogout(); }}>
+            <TouchableOpacity style={styles.moreItem} onPress={() => { setShowMore(false); }}>
+              <Ionicons name="library-outline" size={18} color={colors.textSecondary} />
+              <Text style={styles.moreItemText}>My Library</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.moreItem} onPress={() => { setShowMore(false); }}>
+              <Ionicons name="newspaper-outline" size={18} color={colors.textSecondary} />
+              <Text style={styles.moreItemText}>Apply: Local Publisher</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.moreItem} onPress={() => { setShowMore(false); }}>
+              <Ionicons name="shield-outline" size={18} color={colors.textSecondary} />
+              <Text style={styles.moreItemText}>Admin Panel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.moreItem} onPress={() => { setShowMore(false); }}>
+              <Ionicons name="settings-outline" size={18} color={colors.textSecondary} />
+              <Text style={styles.moreItemText}>Settings</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.moreItem, { borderBottomWidth: 0 }]} onPress={() => { setShowMore(false); handleLogout(); }}>
               <Ionicons name="log-out-outline" size={18} color={colors.error} />
               <Text style={[styles.moreItemText, { color: colors.error }]}>Logout</Text>
             </TouchableOpacity>

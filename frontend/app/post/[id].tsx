@@ -9,14 +9,21 @@ import {
   ActivityIndicator,
   TextInput,
   FlatList,
+  Dimensions,
+  KeyboardAvoidingView,
+  Platform,
+  Share,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, spacing, borderRadius } from '../../src/utils/theme';
+import { colors, spacing, borderRadius, shadows } from '../../src/utils/theme';
 import { useAuthStore } from '../../src/store/authStore';
 import api from '../../src/api/client';
 import { formatDistanceToNow } from 'date-fns';
+
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const PHOTO_RATIO = 4 / 5;
 
 export default function PostDetailScreen() {
   const router = useRouter();
@@ -29,6 +36,7 @@ export default function PostDetailScreen() {
   const [isCommenting, setIsCommenting] = useState(false);
   const [liked, setLiked] = useState(false);
   const [likesCount, setLikesCount] = useState(0);
+  const [saved, setSaved] = useState(false);
 
   useEffect(() => {
     loadPostData();
@@ -54,10 +62,9 @@ export default function PostDetailScreen() {
   const handleLike = async () => {
     setLiked(!liked);
     setLikesCount(liked ? likesCount - 1 : likesCount + 1);
-
     try {
       await api.post(`/posts/${postId}/like`);
-    } catch (error) {
+    } catch {
       setLiked(liked);
       setLikesCount(likesCount);
     }
@@ -65,7 +72,6 @@ export default function PostDetailScreen() {
 
   const handleComment = async () => {
     if (!newComment.trim() || isCommenting) return;
-
     setIsCommenting(true);
     try {
       const response = await api.post(`/posts/${postId}/comments`, {
@@ -80,35 +86,16 @@ export default function PostDetailScreen() {
     }
   };
 
-  const renderComment = ({ item }: { item: any }) => (
-    <View style={styles.commentItem}>
-      <TouchableOpacity onPress={() => router.push(`/user/${item.user_id}`)}>
-        {item.user_profile_image ? (
-          <Image source={{ uri: item.user_profile_image }} style={styles.commentAvatar} />
-        ) : (
-          <View style={styles.commentAvatarPlaceholder}>
-            <Text style={styles.commentAvatarText}>{item.user_username[0].toUpperCase()}</Text>
-          </View>
-        )}
-      </TouchableOpacity>
-      <View style={styles.commentContent}>
-        <View style={styles.commentBubble}>
-          <TouchableOpacity onPress={() => router.push(`/user/${item.user_id}`)}>
-            <Text style={styles.commentUsername}>{item.user_full_name}</Text>
-          </TouchableOpacity>
-          <Text style={styles.commentText}>{item.content}</Text>
-        </View>
-        <Text style={styles.commentTime}>
-          {formatDistanceToNow(new Date(item.created_at), { addSuffix: true })}
-        </Text>
-      </View>
-    </View>
-  );
+  const handleShare = async () => {
+    try {
+      await Share.share({ message: post?.content || 'Check out this post on Flames-Up!' });
+    } catch {}
+  };
 
   if (isLoading) {
     return (
       <SafeAreaView style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color={colors.primary} />
+        <ActivityIndicator size="large" color={colors.accentPrimary} />
       </SafeAreaView>
     );
   }
@@ -117,321 +104,454 @@ export default function PostDetailScreen() {
     return (
       <SafeAreaView style={styles.loadingContainer}>
         <Text style={styles.errorText}>Post not found</Text>
+        <TouchableOpacity onPress={() => router.back()} style={{ marginTop: 16 }}>
+          <Text style={{ color: colors.accentPrimary, fontWeight: '600' }}>Go Back</Text>
+        </TouchableOpacity>
       </SafeAreaView>
     );
   }
 
   const timeAgo = formatDistanceToNow(new Date(post.created_at), { addSuffix: true });
+  const authorName = post.user_full_name || post.user_username || 'User';
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
-      {/* Header */}
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()}>
-          <Ionicons name="arrow-back" size={24} color={colors.textPrimary} />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>Post</Text>
-        <View style={{ width: 24 }} />
-      </View>
+    <View style={styles.container}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={{ flex: 1 }}
+        keyboardVerticalOffset={0}
+      >
+        <FlatList
+          data={comments}
+          keyExtractor={(item) => item.id}
+          ListHeaderComponent={
+            <View>
+              {/* Full-bleed image with back button overlay */}
+              {post.image ? (
+                <View style={styles.imageContainer}>
+                  <Image
+                    source={{ uri: post.image }}
+                    style={styles.heroImage}
+                    resizeMode="cover"
+                  />
+                  <TouchableOpacity style={styles.backBtnOverlay} onPress={() => router.back()}>
+                    <Ionicons name="arrow-back" size={22} color="#FFFFFF" />
+                  </TouchableOpacity>
+                </View>
+              ) : (
+                <SafeAreaView edges={['top']}>
+                  <View style={styles.headerNoImage}>
+                    <TouchableOpacity onPress={() => router.back()} style={styles.backBtnFlat}>
+                      <Ionicons name="arrow-back" size={22} color={colors.textPrimary} />
+                    </TouchableOpacity>
+                  </View>
+                </SafeAreaView>
+              )}
 
-      <FlatList
-        data={comments}
-        renderItem={renderComment}
-        keyExtractor={(item) => item.id}
-        ListHeaderComponent={
-          <View>
-            {/* Post Content */}
-            <View style={styles.postSection}>
-              <TouchableOpacity
-                style={styles.postHeader}
-                onPress={() => router.push(`/user/${post.user_id}`)}
-              >
-                {post.user_profile_image ? (
-                  <Image source={{ uri: post.user_profile_image }} style={styles.avatar} />
-                ) : (
-                  <View style={styles.avatarPlaceholder}>
-                    <Text style={styles.avatarText}>{post.user_username[0].toUpperCase()}</Text>
+              {/* Content Section */}
+              <View style={styles.contentSection}>
+                {/* Author Row */}
+                <TouchableOpacity
+                  style={styles.authorRow}
+                  onPress={() => router.push(`/user/${post.user_id}`)}
+                  activeOpacity={0.7}
+                >
+                  <View style={styles.authorAvatar}>
+                    {post.user_profile_image ? (
+                      <Image source={{ uri: post.user_profile_image }} style={styles.authorAvatarImg} />
+                    ) : (
+                      <View style={styles.authorAvatarFallback}>
+                        <Text style={styles.authorAvatarText}>
+                          {authorName[0].toUpperCase()}
+                        </Text>
+                      </View>
+                    )}
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.authorName}>{authorName}</Text>
+                    <Text style={styles.timeText}>{timeAgo}</Text>
+                  </View>
+                  <TouchableOpacity style={styles.followBtn}>
+                    <Text style={styles.followBtnText}>Follow</Text>
+                  </TouchableOpacity>
+                </TouchableOpacity>
+
+                {/* Caption */}
+                <Text style={styles.caption}>{post.content}</Text>
+
+                {/* Location */}
+                {post.location && (
+                  <View style={styles.locationRow}>
+                    <Ionicons name="location-outline" size={14} color={colors.textHint} />
+                    <Text style={styles.locationText}>{post.location}</Text>
                   </View>
                 )}
-                <View>
-                  <Text style={styles.userName}>{post.user_full_name}</Text>
-                  <Text style={styles.userHandle}>@{post.user_username} · {timeAgo}</Text>
+
+                {/* Action Row */}
+                <View style={styles.actionsRow}>
+                  <View style={styles.actionsLeft}>
+                    <TouchableOpacity onPress={handleLike} style={styles.actionBtn}>
+                      <Ionicons
+                        name={liked ? 'heart' : 'heart-outline'}
+                        size={26}
+                        color={liked ? '#ED4956' : colors.textPrimary}
+                      />
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.actionBtn}>
+                      <Ionicons name="chatbubble-outline" size={24} color={colors.textPrimary} />
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.actionBtn} onPress={handleShare}>
+                      <Ionicons name="paper-plane-outline" size={24} color={colors.textPrimary} />
+                    </TouchableOpacity>
+                  </View>
+                  <TouchableOpacity onPress={() => setSaved(!saved)} style={styles.actionBtn}>
+                    <Ionicons
+                      name={saved ? 'bookmark' : 'bookmark-outline'}
+                      size={24}
+                      color={colors.textPrimary}
+                    />
+                  </TouchableOpacity>
                 </View>
-              </TouchableOpacity>
 
-              <Text style={styles.postContent}>{post.content}</Text>
+                {/* Like count */}
+                {likesCount > 0 && (
+                  <Text style={styles.likesText}>
+                    {likesCount} {likesCount === 1 ? 'like' : 'likes'}
+                  </Text>
+                )}
 
-              {post.image && (
-                <Image source={{ uri: post.image }} style={styles.postImage} resizeMode="cover" />
-              )}
-
-              {post.location && (
-                <View style={styles.locationRow}>
-                  <Ionicons name="location-outline" size={14} color={colors.textTertiary} />
-                  <Text style={styles.locationText}>{post.location}</Text>
-                </View>
-              )}
-
-              {/* Actions */}
-              <View style={styles.actions}>
-                <TouchableOpacity style={styles.actionButton} onPress={handleLike}>
-                  <Ionicons
-                    name={liked ? 'heart' : 'heart-outline'}
-                    size={24}
-                    color={liked ? colors.error : colors.textSecondary}
-                  />
-                  <Text style={[styles.actionText, liked && styles.likedText]}>{likesCount}</Text>
-                </TouchableOpacity>
-                <View style={styles.actionButton}>
-                  <Ionicons name="chatbubble-outline" size={22} color={colors.textSecondary} />
-                  <Text style={styles.actionText}>{comments.length}</Text>
+                {/* Comments header */}
+                <View style={styles.commentsHeader}>
+                  <Text style={styles.commentsTitle}>Comments ({comments.length})</Text>
                 </View>
               </View>
             </View>
-
-            {/* Comments Header */}
-            <View style={styles.commentsHeader}>
-              <Text style={styles.commentsTitle}>Comments</Text>
+          }
+          renderItem={({ item }) => (
+            <View style={styles.commentItem}>
+              <TouchableOpacity onPress={() => router.push(`/user/${item.user_id}`)}>
+                {item.user_profile_image ? (
+                  <Image source={{ uri: item.user_profile_image }} style={styles.commentAvatar} />
+                ) : (
+                  <View style={styles.commentAvatarFallback}>
+                    <Text style={styles.commentAvatarText}>
+                      {(item.user_username || 'U')[0].toUpperCase()}
+                    </Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+              <View style={styles.commentBody}>
+                <Text style={styles.commentText}>
+                  <Text style={styles.commentUsername}>{item.user_full_name} </Text>
+                  {item.content}
+                </Text>
+                <Text style={styles.commentTime}>
+                  {formatDistanceToNow(new Date(item.created_at), { addSuffix: true })}
+                </Text>
+              </View>
             </View>
-          </View>
-        }
-        ListEmptyComponent={
-          <View style={styles.emptyComments}>
-            <Text style={styles.emptyText}>No comments yet. Be the first!</Text>
-          </View>
-        }
-        showsVerticalScrollIndicator={false}
-      />
-
-      {/* Comment Input */}
-      <View style={styles.inputContainer}>
-        <TextInput
-          style={styles.input}
-          placeholder="Write a comment..."
-          placeholderTextColor={colors.textTertiary}
-          value={newComment}
-          onChangeText={setNewComment}
-          multiline
-          maxLength={500}
-        />
-        <TouchableOpacity
-          style={[styles.sendButton, (!newComment.trim() || isCommenting) && styles.sendButtonDisabled]}
-          onPress={handleComment}
-          disabled={!newComment.trim() || isCommenting}
-        >
-          {isCommenting ? (
-            <ActivityIndicator size="small" color={colors.textInverse} />
-          ) : (
-            <Ionicons name="send" size={18} color={colors.textInverse} />
           )}
-        </TouchableOpacity>
-      </View>
-    </SafeAreaView>
+          ListEmptyComponent={
+            <View style={styles.emptyComments}>
+              <Ionicons name="chatbubble-outline" size={36} color={colors.textHint} />
+              <Text style={styles.emptyText}>No comments yet</Text>
+              <Text style={styles.emptySubtext}>Start the conversation</Text>
+            </View>
+          }
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={{ paddingBottom: 80 }}
+        />
+
+        {/* Comment Input */}
+        <View style={styles.inputBar}>
+          <View style={styles.inputAvatar}>
+            {user?.profile_image ? (
+              <Image source={{ uri: user.profile_image }} style={{ width: '100%', height: '100%' }} />
+            ) : (
+              <Text style={styles.inputAvatarText}>
+                {(user?.full_name || 'U')[0].toUpperCase()}
+              </Text>
+            )}
+          </View>
+          <TextInput
+            style={styles.commentInput}
+            placeholder="Add a comment..."
+            placeholderTextColor={colors.textHint}
+            value={newComment}
+            onChangeText={setNewComment}
+            multiline
+            maxLength={500}
+          />
+          <TouchableOpacity
+            onPress={handleComment}
+            disabled={!newComment.trim() || isCommenting}
+            style={{ padding: 8 }}
+          >
+            {isCommenting ? (
+              <ActivityIndicator size="small" color={colors.accentPrimary} />
+            ) : (
+              <Text
+                style={[
+                  styles.postCommentBtn,
+                  !newComment.trim() && { opacity: 0.3 },
+                ]}
+              >
+                Post
+              </Text>
+            )}
+          </TouchableOpacity>
+        </View>
+      </KeyboardAvoidingView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: colors.background,
+    backgroundColor: '#FFFFFF',
   },
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: colors.background,
+    backgroundColor: colors.bgApp,
   },
   errorText: {
     fontSize: 16,
     color: colors.textSecondary,
   },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.borderLight,
+  // Image hero
+  imageContainer: {
+    width: SCREEN_WIDTH,
+    height: SCREEN_WIDTH / PHOTO_RATIO,
   },
-  headerTitle: {
-    fontSize: 17,
-    fontWeight: '600',
-    color: colors.textPrimary,
+  heroImage: {
+    width: '100%',
+    height: '100%',
   },
-  postSection: {
-    padding: spacing.md,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.borderLight,
-  },
-  postHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: spacing.md,
-  },
-  avatar: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    marginRight: spacing.sm,
-  },
-  avatarPlaceholder: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: colors.primary,
+  backBtnOverlay: {
+    position: 'absolute',
+    top: 50,
+    left: 16,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(0,0,0,0.45)',
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: spacing.sm,
   },
-  avatarText: {
-    color: colors.textInverse,
-    fontSize: 20,
-    fontWeight: '600',
+  headerNoImage: {
+    flexDirection: 'row',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.borderSubtle,
   },
-  userName: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: colors.textPrimary,
+  backBtnFlat: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
-  userHandle: {
-    fontSize: 13,
-    color: colors.textSecondary,
+  // Content
+  contentSection: {
+    paddingHorizontal: 16,
+    paddingTop: 16,
   },
-  postContent: {
-    fontSize: 17,
-    lineHeight: 24,
-    color: colors.textPrimary,
-    marginBottom: spacing.md,
+  authorRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 14,
   },
-  postImage: {
+  authorAvatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    overflow: 'hidden',
+    marginRight: 12,
+    borderWidth: 1,
+    borderColor: colors.borderLight,
+  },
+  authorAvatarImg: {
     width: '100%',
-    height: 300,
-    borderRadius: borderRadius.md,
-    marginBottom: spacing.md,
+    height: '100%',
+  },
+  authorAvatarFallback: {
+    width: '100%',
+    height: '100%',
+    backgroundColor: colors.avatarTeal,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  authorAvatarText: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  authorName: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: colors.textPrimary,
+  },
+  timeText: {
+    fontSize: 12,
+    color: colors.textHint,
+    marginTop: 2,
+  },
+  followBtn: {
+    backgroundColor: colors.accentPrimary,
+    paddingHorizontal: 18,
+    paddingVertical: 8,
+    borderRadius: 18,
+  },
+  followBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  caption: {
+    fontSize: 16,
+    color: colors.textPrimary,
+    lineHeight: 24,
+    marginBottom: 12,
   },
   locationRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: spacing.md,
+    marginBottom: 12,
+    gap: 4,
   },
   locationText: {
     fontSize: 13,
-    color: colors.textTertiary,
-    marginLeft: 4,
+    color: colors.textHint,
   },
-  actions: {
-    flexDirection: 'row',
-    paddingTop: spacing.sm,
-    borderTopWidth: 1,
-    borderTopColor: colors.borderLight,
-  },
-  actionButton: {
+  // Actions
+  actionsRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginRight: spacing.xl,
+    justifyContent: 'space-between',
+    paddingVertical: 8,
+    borderTopWidth: 1,
+    borderTopColor: colors.borderSubtle,
   },
-  actionText: {
+  actionsLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  actionBtn: {
+    paddingRight: 16,
+    paddingVertical: 4,
+  },
+  likesText: {
     fontSize: 14,
-    color: colors.textSecondary,
-    marginLeft: 6,
+    fontWeight: '700',
+    color: colors.textPrimary,
+    marginBottom: 12,
   },
-  likedText: {
-    color: colors.error,
-  },
+  // Comments
   commentsHeader: {
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
+    paddingTop: 8,
+    paddingBottom: 8,
+    borderTopWidth: 1,
+    borderTopColor: colors.borderSubtle,
   },
   commentsTitle: {
-    fontSize: 16,
-    fontWeight: '600',
+    fontSize: 15,
+    fontWeight: '700',
     color: colors.textPrimary,
   },
   commentItem: {
     flexDirection: 'row',
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
   },
   commentAvatar: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
   },
-  commentAvatarPlaceholder: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: colors.primary,
+  commentAvatarFallback: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: colors.avatarTeal,
     justifyContent: 'center',
     alignItems: 'center',
   },
   commentAvatarText: {
-    color: colors.textInverse,
-    fontSize: 14,
-    fontWeight: '600',
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '700',
   },
-  commentContent: {
+  commentBody: {
     flex: 1,
-    marginLeft: spacing.sm,
-  },
-  commentBubble: {
-    backgroundColor: colors.backgroundSecondary,
-    borderRadius: borderRadius.md,
-    padding: spacing.sm,
-  },
-  commentUsername: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: colors.textPrimary,
-    marginBottom: 2,
+    marginLeft: 10,
   },
   commentText: {
     fontSize: 14,
     color: colors.textPrimary,
     lineHeight: 20,
   },
+  commentUsername: {
+    fontWeight: '700',
+  },
   commentTime: {
     fontSize: 11,
-    color: colors.textTertiary,
+    color: colors.textHint,
     marginTop: 4,
-    marginLeft: spacing.sm,
   },
   emptyComments: {
-    paddingVertical: spacing.xl,
     alignItems: 'center',
+    paddingVertical: 40,
   },
   emptyText: {
-    fontSize: 14,
-    color: colors.textTertiary,
-  },
-  inputContainer: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    padding: spacing.md,
-    borderTopWidth: 1,
-    borderTopColor: colors.borderLight,
-  },
-  input: {
-    flex: 1,
-    backgroundColor: colors.backgroundSecondary,
-    borderRadius: borderRadius.lg,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
     fontSize: 15,
+    fontWeight: '600',
     color: colors.textPrimary,
-    maxHeight: 80,
+    marginTop: 10,
   },
-  sendButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: colors.primary,
+  emptySubtext: {
+    fontSize: 13,
+    color: colors.textHint,
+    marginTop: 4,
+  },
+  // Input bar
+  inputBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderTopWidth: 1,
+    borderTopColor: colors.borderSubtle,
+    backgroundColor: '#FFFFFF',
+  },
+  inputAvatar: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    overflow: 'hidden',
+    backgroundColor: colors.avatarTeal,
     justifyContent: 'center',
     alignItems: 'center',
-    marginLeft: spacing.sm,
+    marginRight: 10,
   },
-  sendButtonDisabled: {
-    opacity: 0.5,
+  inputAvatarText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  commentInput: {
+    flex: 1,
+    fontSize: 14,
+    color: colors.textPrimary,
+    maxHeight: 80,
+    paddingVertical: 8,
+  },
+  postCommentBtn: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.accentPrimary,
   },
 });
