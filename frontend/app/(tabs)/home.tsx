@@ -10,26 +10,25 @@ import {
   ScrollView,
   Image,
   Dimensions,
-  Modal,
-  TextInput,
-  KeyboardAvoidingView,
-  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
-import { colors, spacing, borderRadius, shadows } from '../../src/utils/theme';
+import { colors, shadows } from '../../src/utils/theme';
 import { useAuthStore } from '../../src/store/authStore';
 import api from '../../src/api/client';
 import { formatDistanceToNow } from 'date-fns';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const PHOTO_RATIO = 4 / 5;  // 4:5 for photos
+const VIDEO_RATIO = 1;       // 1:1 for videos
 
-// ─── Community Post Card ─────────────────────────────────────────────────────
-function CommunityPostCard({ post, currentUserId, onPress, onUserPress }: any) {
+// ─── Instagram-style Post Card ───────────────────────────────────────────────
+function PostCard({ post, currentUserId, onPress, onUserPress }: any) {
   const [liked, setLiked] = useState(post.liked_by?.includes(currentUserId));
   const [likesCount, setLikesCount] = useState(post.likes_count || 0);
+  const [saved, setSaved] = useState(false);
+  const [captionExpanded, setCaptionExpanded] = useState(false);
 
   const handleLike = async () => {
     setLiked(!liked);
@@ -46,226 +45,250 @@ function CommunityPostCard({ post, currentUserId, onPress, onUserPress }: any) {
     ? formatDistanceToNow(new Date(post.created_at), { addSuffix: false })
     : '';
 
-  const title = post.content?.split('\n')[0] || '';
-  const body = post.content?.split('\n').slice(1).join('\n') || '';
+  const isVideo = post.media_type === 'video';
+  const hasMedia = !!post.image;
+  const mediaAspect = isVideo ? VIDEO_RATIO : PHOTO_RATIO;
+  const authorName = post.user_full_name || post.user_username || 'User';
 
   return (
-    <TouchableOpacity
-      style={cardStyles.container}
-      onPress={onPress}
-      activeOpacity={0.9}
-    >
-      {/* Header */}
-      <TouchableOpacity
-        style={cardStyles.header}
-        onPress={onUserPress}
-        activeOpacity={0.7}
-      >
-        <View style={cardStyles.avatarRing}>
-          {post.user_profile_image ? (
-            <Image
-              source={{ uri: post.user_profile_image }}
-              style={cardStyles.avatarImage}
-            />
-          ) : (
-            <View style={cardStyles.avatarPlaceholder}>
-              <Text style={cardStyles.avatarText}>
-                {(post.user_full_name || post.user_username || 'U')[0].toUpperCase()}
+    <View style={postStyles.container}>
+      {/* ── Header: avatar + name + location + more ── */}
+      <View style={postStyles.header}>
+        <TouchableOpacity
+          style={postStyles.headerLeft}
+          onPress={onUserPress}
+          activeOpacity={0.7}
+        >
+          <View style={postStyles.avatar}>
+            {post.user_profile_image ? (
+              <Image
+                source={{ uri: post.user_profile_image }}
+                style={postStyles.avatarImg}
+              />
+            ) : (
+              <View style={postStyles.avatarFallback}>
+                <Text style={postStyles.avatarInitial}>
+                  {authorName[0].toUpperCase()}
+                </Text>
+              </View>
+            )}
+          </View>
+          <View>
+            <Text style={postStyles.username}>{authorName}</Text>
+            {post.location ? (
+              <Text style={postStyles.location} numberOfLines={1}>
+                {post.location}
               </Text>
-            </View>
-          )}
-        </View>
-        <Text style={cardStyles.authorName}>
-          {post.user_full_name || post.user_username}
-        </Text>
-        <Text style={cardStyles.dotSeparator}> · </Text>
-        <Text style={cardStyles.categoryLabel}>Community</Text>
-      </TouchableOpacity>
+            ) : null}
+          </View>
+        </TouchableOpacity>
+        <TouchableOpacity style={postStyles.moreBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+          <Ionicons name="ellipsis-horizontal" size={20} color={colors.textPrimary} />
+        </TouchableOpacity>
+      </View>
 
-      {/* Content area */}
-      <View style={cardStyles.contentRow}>
-        <View style={cardStyles.textContent}>
-          {title ? (
-            <Text style={cardStyles.postTitle} numberOfLines={2}>
-              {title}
-            </Text>
-          ) : null}
-          {body ? (
-            <Text style={cardStyles.postBody} numberOfLines={3}>
-              {body}
-            </Text>
-          ) : (
-            <Text style={cardStyles.postBody} numberOfLines={4}>
-              {post.content}
-            </Text>
-          )}
-        </View>
-        {post.image && (
+      {/* ── Media (Photo 4:5 / Video 1:1) ── */}
+      {hasMedia && (
+        <TouchableOpacity activeOpacity={0.95} onPress={onPress}>
           <Image
             source={{ uri: post.image }}
-            style={cardStyles.thumbnail}
+            style={[
+              postStyles.media,
+              { width: SCREEN_WIDTH, height: SCREEN_WIDTH / mediaAspect },
+            ]}
+            resizeMode="cover"
           />
-        )}
+        </TouchableOpacity>
+      )}
+
+      {/* ── Action Row ── */}
+      <View style={postStyles.actionsRow}>
+        <View style={postStyles.actionsLeft}>
+          <TouchableOpacity onPress={handleLike} style={postStyles.actionBtn}>
+            <Ionicons
+              name={liked ? 'heart' : 'heart-outline'}
+              size={26}
+              color={liked ? '#ED4956' : colors.textPrimary}
+            />
+          </TouchableOpacity>
+          <TouchableOpacity onPress={onPress} style={postStyles.actionBtn}>
+            <Ionicons name="chatbubble-outline" size={24} color={colors.textPrimary} />
+          </TouchableOpacity>
+          <TouchableOpacity style={postStyles.actionBtn}>
+            <Ionicons name="paper-plane-outline" size={24} color={colors.textPrimary} />
+          </TouchableOpacity>
+        </View>
+        <TouchableOpacity onPress={() => setSaved(!saved)} style={postStyles.actionBtn}>
+          <Ionicons
+            name={saved ? 'bookmark' : 'bookmark-outline'}
+            size={24}
+            color={colors.textPrimary}
+          />
+        </TouchableOpacity>
       </View>
 
-      {/* Footer */}
-      <View style={cardStyles.footer}>
-        <Text style={cardStyles.dateText}>{timeAgo}</Text>
-        <TouchableOpacity
-          style={cardStyles.footerAction}
-          onPress={handleLike}
-        >
-          <Ionicons
-            name={liked ? 'heart' : 'heart-outline'}
-            size={16}
-            color={liked ? colors.error : colors.textHint}
-          />
-          {likesCount > 0 && (
-            <Text
-              style={[
-                cardStyles.footerCount,
-                liked && { color: colors.error },
-              ]}
-            >
-              {likesCount}
-            </Text>
+      {/* ── Likes ── */}
+      {likesCount > 0 && (
+        <Text style={postStyles.likesText}>
+          {likesCount} {likesCount === 1 ? 'like' : 'likes'}
+        </Text>
+      )}
+
+      {/* ── Caption ── */}
+      {post.content ? (
+        <View style={postStyles.captionContainer}>
+          <Text
+            style={postStyles.captionText}
+            numberOfLines={captionExpanded ? undefined : 2}
+          >
+            <Text style={postStyles.captionUsername}>{authorName}</Text>
+            {'  '}
+            {post.content}
+          </Text>
+          {!captionExpanded && post.content.length > 100 && (
+            <TouchableOpacity onPress={() => setCaptionExpanded(true)}>
+              <Text style={postStyles.moreText}>more</Text>
+            </TouchableOpacity>
           )}
+        </View>
+      ) : null}
+
+      {/* ── View comments ── */}
+      {post.comments_count > 0 && (
+        <TouchableOpacity onPress={onPress} style={postStyles.commentsBtn}>
+          <Text style={postStyles.commentsText}>
+            View all {post.comments_count} comment{post.comments_count !== 1 ? 's' : ''}
+          </Text>
         </TouchableOpacity>
-        <TouchableOpacity style={cardStyles.footerAction} onPress={onPress}>
-          <Ionicons
-            name="chatbubble-outline"
-            size={15}
-            color={colors.textHint}
-          />
-          {post.comments_count > 0 && (
-            <Text style={cardStyles.footerCount}>{post.comments_count}</Text>
-          )}
-        </TouchableOpacity>
-        <TouchableOpacity style={cardStyles.footerAction}>
-          <Ionicons name="link-outline" size={15} color={colors.textHint} />
-          <Text style={cardStyles.footerCount}>Source</Text>
-        </TouchableOpacity>
-        <View style={{ flex: 1 }} />
-        <TouchableOpacity style={cardStyles.footerAction}>
-          <Ionicons
-            name="remove-outline"
-            size={18}
-            color={colors.textHint}
-          />
-        </TouchableOpacity>
-        <TouchableOpacity style={cardStyles.footerAction}>
-          <Ionicons
-            name="ellipsis-horizontal"
-            size={18}
-            color={colors.textHint}
-          />
-        </TouchableOpacity>
-      </View>
-    </TouchableOpacity>
+      )}
+
+      {/* ── Timestamp ── */}
+      <Text style={postStyles.timeAgo}>{timeAgo} ago</Text>
+    </View>
   );
 }
 
-const cardStyles = StyleSheet.create({
+const postStyles = StyleSheet.create({
   container: {
-    backgroundColor: colors.bgCard,
-    borderRadius: 24,
-    marginHorizontal: 16,
-    marginBottom: 12,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: colors.borderSubtle,
-    ...shadows.elevation1,
+    backgroundColor: '#FFFFFF',
+    marginBottom: 8,
   },
+  // Header
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 12,
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
   },
-  avatarRing: {
+  headerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  avatar: {
     width: 36,
     height: 36,
     borderRadius: 18,
     overflow: 'hidden',
-    marginRight: 8,
+    marginRight: 10,
+    borderWidth: 1,
+    borderColor: colors.borderLight,
   },
-  avatarImage: {
+  avatarImg: {
     width: '100%',
     height: '100%',
   },
-  avatarPlaceholder: {
+  avatarFallback: {
     width: '100%',
     height: '100%',
     backgroundColor: colors.avatarTeal,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  avatarText: {
+  avatarInitial: {
     color: '#FFFFFF',
-    fontSize: 14,
+    fontSize: 15,
     fontWeight: '700',
   },
-  authorName: {
+  username: {
     fontSize: 14,
-    fontWeight: '700',
+    fontWeight: '600',
     color: colors.textPrimary,
   },
-  dotSeparator: {
-    fontSize: 14,
-    color: colors.textHint,
-  },
-  categoryLabel: {
-    fontSize: 14,
-    color: colors.textHint,
-    fontWeight: '500',
-  },
-  contentRow: {
-    flexDirection: 'row',
-    marginBottom: 12,
-  },
-  textContent: {
-    flex: 1,
-    paddingRight: 12,
-  },
-  postTitle: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: colors.textPrimary,
-    lineHeight: 22,
-    marginBottom: 6,
-    textTransform: 'uppercase',
-  },
-  postBody: {
-    fontSize: 14,
-    color: colors.textSecondary,
-    lineHeight: 20,
-  },
-  thumbnail: {
-    width: 80,
-    height: 80,
-    borderRadius: 12,
-  },
-  footer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: colors.borderSubtle,
-  },
-  dateText: {
+  location: {
     fontSize: 12,
     color: colors.textHint,
-    marginRight: 16,
+    marginTop: 1,
   },
-  footerAction: {
+  moreBtn: {
+    padding: 4,
+  },
+  // Media
+  media: {
+    backgroundColor: colors.bgSubtle,
+  },
+  // Actions
+  actionsRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginRight: 14,
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    paddingTop: 10,
+    paddingBottom: 4,
+  },
+  actionsLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  actionBtn: {
+    paddingRight: 16,
     paddingVertical: 4,
   },
-  footerCount: {
-    fontSize: 12,
+  // Likes
+  likesText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.textPrimary,
+    paddingHorizontal: 14,
+    marginTop: 2,
+  },
+  // Caption
+  captionContainer: {
+    paddingHorizontal: 14,
+    marginTop: 4,
+  },
+  captionText: {
+    fontSize: 14,
+    color: colors.textPrimary,
+    lineHeight: 20,
+  },
+  captionUsername: {
+    fontWeight: '700',
+  },
+  moreText: {
+    fontSize: 14,
     color: colors.textHint,
-    marginLeft: 4,
+    marginTop: 2,
+  },
+  // Comments
+  commentsBtn: {
+    paddingHorizontal: 14,
+    marginTop: 4,
+  },
+  commentsText: {
+    fontSize: 14,
+    color: colors.textHint,
+  },
+  // Time
+  timeAgo: {
+    fontSize: 11,
+    color: colors.textHint,
+    paddingHorizontal: 14,
+    marginTop: 4,
+    marginBottom: 4,
+    textTransform: 'uppercase',
+    letterSpacing: 0.3,
   },
 });
 
@@ -360,11 +383,7 @@ function QuickTipComposer({
         </TouchableOpacity>
         <View style={{ flex: 1 }} />
         <TouchableOpacity>
-          <Ionicons
-            name="ellipsis-horizontal"
-            size={22}
-            color={colors.textHint}
-          />
+          <Ionicons name="ellipsis-horizontal" size={22} color={colors.textHint} />
         </TouchableOpacity>
       </View>
     </View>
@@ -479,7 +498,6 @@ export default function HomeScreen() {
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [showComposer, setShowComposer] = useState(false);
-  const [feedFilter, setFeedFilter] = useState('global');
 
   const loadFeed = async () => {
     try {
@@ -598,7 +616,7 @@ export default function HomeScreen() {
               </View>
             )}
             <View style={styles.storyPlusBadge}>
-              <Ionicons name="add" size={12} color="#FFFFFF" strokeWidth={3} />
+              <Ionicons name="add" size={12} color="#FFFFFF" />
             </View>
           </View>
           <Text style={styles.storyName}>Your Story</Text>
@@ -638,35 +656,6 @@ export default function HomeScreen() {
       {/* Divider */}
       <View style={styles.divider} />
 
-      {/* Listen, Don't Judge Banner */}
-      <TouchableOpacity
-        style={styles.bannerContainer}
-        activeOpacity={0.9}
-      >
-        <LinearGradient
-          colors={[colors.gradientStart, colors.gradientEnd]}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.bannerGradient}
-        >
-          <View style={styles.bannerIconCircle}>
-            <Text style={{ fontSize: 24 }}>🤍</Text>
-          </View>
-          <View style={styles.bannerTextContent}>
-            <Text style={styles.bannerTitle}>Listen, Don't Judge</Text>
-            <Text style={styles.bannerSubtitle}>
-              Share openly in a judgment-free space
-            </Text>
-          </View>
-          <View style={styles.bannerArrow}>
-            <Ionicons name="chevron-forward" size={16} color="#FFFFFF" />
-          </View>
-        </LinearGradient>
-      </TouchableOpacity>
-
-      {/* Divider */}
-      <View style={styles.divider} />
-
       {/* Feed Header */}
       <View style={styles.feedHeader}>
         <TouchableOpacity style={styles.menuBtn}>
@@ -677,7 +666,7 @@ export default function HomeScreen() {
 
         {/* Global / Location Filter */}
         <TouchableOpacity style={styles.filterPill}>
-          <Ionicons name="globe-outline" size={14} color={feedFilter === 'global' ? colors.textSecondary : '#FFFFFF'} />
+          <Ionicons name="globe-outline" size={14} color={colors.textSecondary} />
           <Text style={styles.filterText}>Global</Text>
           <Ionicons name="chevron-down" size={14} color={colors.textSecondary} />
         </TouchableOpacity>
@@ -703,7 +692,7 @@ export default function HomeScreen() {
   );
 
   const renderPost = ({ item }: { item: any }) => (
-    <CommunityPostCard
+    <PostCard
       post={item}
       currentUserId={user?.id || ''}
       onPress={() => router.push(`/post/${item.id}`)}
@@ -728,16 +717,16 @@ export default function HomeScreen() {
         ListHeaderComponent={renderHeader}
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
-            <Text style={{ fontSize: 48, marginBottom: 12 }}>💬</Text>
-            <Text style={styles.emptyTitle}>Start the conversation</Text>
+            <Ionicons name="camera-outline" size={56} color={colors.textHint} />
+            <Text style={styles.emptyTitle}>Share Your First Moment</Text>
             <Text style={styles.emptyText}>
-              Be the first to share something here!
+              Posts from you and your friends will show up here.
             </Text>
             <TouchableOpacity
               style={styles.createFirstBtn}
               onPress={() => router.push('/create-post')}
             >
-              <Text style={styles.createFirstBtnText}>Create First Post</Text>
+              <Text style={styles.createFirstBtnText}>Create Post</Text>
             </TouchableOpacity>
           </View>
         }
@@ -750,6 +739,7 @@ export default function HomeScreen() {
         }
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{ paddingBottom: 100 }}
+        ItemSeparatorComponent={() => <View style={styles.postSeparator} />}
       />
     </SafeAreaView>
   );
@@ -913,50 +903,6 @@ const styles = StyleSheet.create({
     height: 1,
     backgroundColor: colors.borderSubtle,
   },
-  // Banner
-  bannerContainer: {
-    paddingHorizontal: 16,
-    paddingVertical: 16,
-  },
-  bannerGradient: {
-    borderRadius: 24,
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 20,
-  },
-  bannerIconCircle: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 16,
-  },
-  bannerTextContent: {
-    flex: 1,
-  },
-  bannerTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#FFFFFF',
-    fontStyle: 'italic',
-    marginBottom: 4,
-  },
-  bannerSubtitle: {
-    fontSize: 12,
-    color: 'rgba(255,255,255,0.8)',
-    lineHeight: 16,
-  },
-  bannerArrow: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
   // Feed Header
   feedHeader: {
     flexDirection: 'row',
@@ -1004,6 +950,11 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#FFFFFF',
   },
+  // Post separator
+  postSeparator: {
+    height: 1,
+    backgroundColor: colors.borderSubtle,
+  },
   // Empty state
   emptyContainer: {
     alignItems: 'center',
@@ -1011,17 +962,18 @@ const styles = StyleSheet.create({
     paddingHorizontal: 32,
   },
   emptyTitle: {
-    fontSize: 18,
+    fontSize: 20,
     fontWeight: '700',
     color: colors.textPrimary,
-    fontStyle: 'italic',
-    marginBottom: 6,
+    marginTop: 16,
+    marginBottom: 8,
   },
   emptyText: {
     fontSize: 14,
     color: colors.textHint,
-    marginBottom: 20,
+    marginBottom: 24,
     textAlign: 'center',
+    lineHeight: 20,
   },
   createFirstBtn: {
     paddingHorizontal: 24,
