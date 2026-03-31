@@ -10,6 +10,8 @@ import {
   RefreshControl,
   Alert,
   Dimensions,
+  Modal,
+  Pressable,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -114,35 +116,31 @@ export default function ProfileScreen() {
           </View>
         </View>
 
-        {/* More menu */}
-        {showMore && (
-          <View style={styles.moreMenu}>
-            <TouchableOpacity style={styles.moreItem} onPress={() => { setShowMore(false); router.push('/edit-profile'); }}>
-              <Ionicons name="create-outline" size={18} color={colors.accentPrimary} />
-              <Text style={styles.moreItemText}>Edit Profile</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.moreItem} onPress={() => { setShowMore(false); }}>
-              <Ionicons name="library-outline" size={18} color={colors.textSecondary} />
-              <Text style={styles.moreItemText}>My Library</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.moreItem} onPress={() => { setShowMore(false); }}>
-              <Ionicons name="newspaper-outline" size={18} color={colors.textSecondary} />
-              <Text style={styles.moreItemText}>Apply: Local Publisher</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.moreItem} onPress={() => { setShowMore(false); }}>
-              <Ionicons name="shield-outline" size={18} color={colors.textSecondary} />
-              <Text style={styles.moreItemText}>Admin Panel</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.moreItem} onPress={() => { setShowMore(false); }}>
-              <Ionicons name="settings-outline" size={18} color={colors.textSecondary} />
-              <Text style={styles.moreItemText}>Settings</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={[styles.moreItem, { borderBottomWidth: 0 }]} onPress={() => { setShowMore(false); handleLogout(); }}>
-              <Ionicons name="log-out-outline" size={18} color={colors.error} />
-              <Text style={[styles.moreItemText, { color: colors.error }]}>Logout</Text>
-            </TouchableOpacity>
-          </View>
-        )}
+        {/* More menu - floating dropdown */}
+        <Modal visible={showMore} transparent animationType="fade" onRequestClose={() => setShowMore(false)}>
+          <Pressable style={styles.menuOverlay} onPress={() => setShowMore(false)}>
+            <View style={styles.floatingMenu}>
+              {[
+                { icon: 'library-outline', label: 'My Library', color: colors.textPrimary, route: '/my-library' },
+                { icon: 'gift-outline', label: 'Referrals', color: '#F97316', route: '/referrals' },
+                { icon: 'star-outline', label: 'Creator Hub', color: '#EF4444', route: '/creator-hub' },
+                { icon: 'document-text-outline', label: 'Apply: Local Publisher', color: '#3B82F6', route: '/apply-publisher' },
+                { icon: 'shield-outline', label: 'Admin Panel', color: '#8B5CF6', route: '/admin-panel' },
+                { icon: 'bar-chart-outline', label: 'Content Manager', color: '#0EA5E9', route: '/content-manager' },
+                { icon: 'settings-outline', label: 'Settings', color: colors.textSecondary, route: '/settings' },
+              ].map((item, idx) => (
+                <TouchableOpacity
+                  key={item.label}
+                  style={[styles.floatingMenuItem, idx === 6 && { borderBottomWidth: 0 }]}
+                  onPress={() => { setShowMore(false); router.push(item.route as any); }}
+                >
+                  <Ionicons name={item.icon as any} size={20} color={item.color} />
+                  <Text style={styles.floatingMenuText}>{item.label}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </Pressable>
+        </Modal>
 
         {/* Profile Card */}
         <View style={styles.profileCard}>
@@ -353,7 +351,7 @@ const styles = StyleSheet.create({
     borderColor: colors.borderLight,
     ...shadows.elevation1,
   },
-  // More menu
+  // More menu - old styles kept for compatibility, new floating styles added
   moreMenu: {
     backgroundColor: '#FFFFFF',
     borderRadius: 16,
@@ -375,6 +373,41 @@ const styles = StyleSheet.create({
   },
   moreItemText: {
     fontSize: 14,
+    fontWeight: '500',
+    color: colors.textPrimary,
+  },
+  // Floating popup menu
+  menuOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.15)',
+  },
+  floatingMenu: {
+    position: 'absolute',
+    top: 56,
+    right: 16,
+    width: 220,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    paddingVertical: 6,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.15,
+    shadowRadius: 24,
+    elevation: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.06)',
+  },
+  floatingMenuItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 13,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(0,0,0,0.05)',
+  },
+  floatingMenuText: {
+    fontSize: 15,
     fontWeight: '500',
     color: colors.textPrimary,
   },

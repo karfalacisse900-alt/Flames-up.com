@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -6,16 +6,23 @@ import {
   ScrollView,
   TouchableOpacity,
   Image,
-  ActivityIndicator,
   FlatList,
   RefreshControl,
+  TextInput,
+  Alert,
+  ActivityIndicator,
+  Dimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import * as ImagePicker from 'expo-image-picker';
 import { colors, spacing, borderRadius, shadows } from '../../src/utils/theme';
 import { useAuthStore } from '../../src/store/authStore';
 import api from '../../src/api/client';
+import { formatDistanceToNow } from 'date-fns';
+
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 const TABS = [
   { id: 'foryou', label: 'For you' },
@@ -25,113 +32,325 @@ const TABS = [
   { id: 'daily', label: 'Daily' },
 ];
 
-// Mock discover articles
-const MOCK_ARTICLES = [
-  { id: '1', title: 'The Rise of Sustainable Fashion in NYC', category: 'Culture', summary: 'How New York\'s fashion scene is embracing eco-friendly materials and ethical production.', image: 'https://images.unsplash.com/photo-1558618666-fcd25c85f82e?w=400', author: 'StyleWatch', date: 'Jun 15' },
-  { id: '2', title: 'Understanding Urban Architecture', category: 'Science', summary: 'Modern buildings are not just structures — they are living, breathing ecosystems.', image: 'https://images.unsplash.com/photo-1486325212027-8081e485255e?w=400', author: 'ArchDigest', date: 'Jun 14' },
-  { id: '3', title: 'Local Music Scene Thriving in Brooklyn', category: 'Culture', summary: 'From jazz clubs to underground hip-hop, Brooklyn\'s music scene is exploding.', image: 'https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=400', author: 'BKMusic', date: 'Jun 13' },
-  { id: '4', title: 'Tech Startups Changing the Bronx', category: 'Featured', summary: 'Young entrepreneurs are building the next big thing right from their neighborhoods.', image: 'https://images.unsplash.com/photo-1519389950473-47ba0277781c?w=400', author: 'TechBX', date: 'Jun 12' },
-  { id: '5', title: 'Best Coffee Spots This Week', category: 'Daily', summary: 'Our curated list of the top coffee experiences in your area.', image: 'https://images.unsplash.com/photo-1495474472287-4d71bcdd2085?w=400', author: 'CoffeeGuide', date: 'Today' },
-];
+function DiscoverPostCard({ post, onPress }: { post: any; onPress: () => void }) {
+  const authorName = post.user_full_name || post.user_username || 'User';
+  const timeAgo = post.created_at
+    ? formatDistanceToNow(new Date(post.created_at), { addSuffix: true })
+    : '';
 
-function ArticleCard({ article }: { article: any }) {
   return (
-    <TouchableOpacity style={articleStyles.card} activeOpacity={0.9}>
-      <View style={articleStyles.textContent}>
-        <Text style={articleStyles.category}>{article.category}</Text>
-        <Text style={articleStyles.title} numberOfLines={2}>{article.title}</Text>
-        <Text style={articleStyles.summary} numberOfLines={2}>{article.summary}</Text>
-        <View style={articleStyles.meta}>
-          <Text style={articleStyles.author}>{article.author}</Text>
-          <Text style={articleStyles.dot}>·</Text>
-          <Text style={articleStyles.date}>{article.date}</Text>
+    <TouchableOpacity style={dCardStyles.card} onPress={onPress} activeOpacity={0.9}>
+      {post.image ? (
+        <Image source={{ uri: post.image }} style={dCardStyles.image} />
+      ) : null}
+      <View style={dCardStyles.content}>
+        <View style={dCardStyles.authorRow}>
+          <View style={dCardStyles.avatar}>
+            {post.user_profile_image ? (
+              <Image source={{ uri: post.user_profile_image }} style={{ width: '100%', height: '100%' }} />
+            ) : (
+              <Text style={dCardStyles.avatarText}>{authorName[0].toUpperCase()}</Text>
+            )}
+          </View>
+          <Text style={dCardStyles.authorName}>{authorName}</Text>
+          <Text style={dCardStyles.dot}>·</Text>
+          <Text style={dCardStyles.time}>{timeAgo}</Text>
+        </View>
+        <Text style={dCardStyles.postContent} numberOfLines={3}>{post.content}</Text>
+        {post.location && (
+          <View style={dCardStyles.locationRow}>
+            <Ionicons name="location-outline" size={12} color={colors.textHint} />
+            <Text style={dCardStyles.locationText}>{post.location}</Text>
+          </View>
+        )}
+        <View style={dCardStyles.footer}>
+          <View style={dCardStyles.footerItem}>
+            <Ionicons name="heart-outline" size={16} color={colors.textHint} />
+            <Text style={dCardStyles.footerText}>{post.likes_count || 0}</Text>
+          </View>
+          <View style={dCardStyles.footerItem}>
+            <Ionicons name="chatbubble-outline" size={15} color={colors.textHint} />
+            <Text style={dCardStyles.footerText}>{post.comments_count || 0}</Text>
+          </View>
         </View>
       </View>
-      {article.image && (
-        <Image source={{ uri: article.image }} style={articleStyles.image} />
-      )}
     </TouchableOpacity>
   );
 }
 
-const articleStyles = StyleSheet.create({
+const dCardStyles = StyleSheet.create({
   card: {
-    flexDirection: 'row',
     backgroundColor: colors.bgCard,
     borderRadius: 20,
-    padding: 16,
     marginHorizontal: 16,
     marginBottom: 12,
     borderWidth: 1,
     borderColor: colors.borderSubtle,
+    overflow: 'hidden',
     ...shadows.elevation1,
   },
-  textContent: {
-    flex: 1,
-    paddingRight: 12,
+  image: {
+    width: '100%',
+    height: SCREEN_WIDTH * 0.55,
   },
-  category: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: colors.accentSecondary,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-    marginBottom: 6,
+  content: {
+    padding: 14,
   },
-  title: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: colors.textPrimary,
-    lineHeight: 22,
-    marginBottom: 6,
-  },
-  summary: {
-    fontSize: 13,
-    color: colors.textSecondary,
-    lineHeight: 18,
-    marginBottom: 8,
-  },
-  meta: {
+  authorRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    marginBottom: 8,
   },
-  author: {
+  avatar: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: colors.avatarTeal,
+    justifyContent: 'center',
+    alignItems: 'center',
+    overflow: 'hidden',
+    marginRight: 8,
+  },
+  avatarText: {
+    color: '#FFFFFF',
     fontSize: 12,
-    fontWeight: '600',
-    color: colors.textHint,
+    fontWeight: '700',
+  },
+  authorName: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.textPrimary,
   },
   dot: {
+    fontSize: 13,
+    color: colors.textHint,
+    marginHorizontal: 4,
+  },
+  time: {
     fontSize: 12,
     color: colors.textHint,
-    marginHorizontal: 6,
   },
-  date: {
+  postContent: {
+    fontSize: 15,
+    color: colors.textPrimary,
+    lineHeight: 22,
+  },
+  locationRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 6,
+  },
+  locationText: {
     fontSize: 12,
     color: colors.textHint,
   },
-  image: {
-    width: 90,
-    height: 90,
-    borderRadius: 14,
+  footer: {
+    flexDirection: 'row',
+    gap: 16,
+    marginTop: 10,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: colors.borderSubtle,
+  },
+  footerItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  footerText: {
+    fontSize: 12,
+    color: colors.textHint,
+    fontWeight: '600',
   },
 });
 
+// ── Inline Quick Composer ─────────────────────────────────────
+function DiscoverComposer({ user, visible, onClose, onCreated }: any) {
+  const [content, setContent] = useState('');
+  const [media, setMedia] = useState<{ uri: string; base64?: string }[]>([]);
+  const [isPosting, setIsPosting] = useState(false);
+
+  if (!visible) return null;
+
+  const pickImage = async () => {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      quality: 0.7,
+      base64: true,
+    });
+    if (!result.canceled && result.assets[0]) {
+      const a = result.assets[0];
+      setMedia([{ uri: a.uri, base64: a.base64 ? `data:image/jpeg;base64,${a.base64}` : undefined }]);
+    }
+  };
+
+  const handlePost = async () => {
+    if (!content.trim() && media.length === 0) return;
+    setIsPosting(true);
+    try {
+      await api.post('/posts', {
+        content: content.trim(),
+        image: media[0]?.base64 || media[0]?.uri || null,
+      });
+      setContent('');
+      setMedia([]);
+      onClose();
+      onCreated();
+    } catch (error: any) {
+      Alert.alert('Error', error.response?.data?.detail || 'Could not create post');
+    } finally {
+      setIsPosting(false);
+    }
+  };
+
+  return (
+    <View style={compStyles.container}>
+      <View style={compStyles.header}>
+        <Text style={compStyles.title}>Share on Discover</Text>
+        <TouchableOpacity
+          style={[compStyles.postBtn, (!content.trim() && media.length === 0) && { opacity: 0.4 }]}
+          onPress={handlePost}
+          disabled={(!content.trim() && media.length === 0) || isPosting}
+        >
+          {isPosting ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Text style={compStyles.postBtnText}>Post</Text>}
+        </TouchableOpacity>
+        <TouchableOpacity onPress={onClose} style={{ padding: 4 }}>
+          <Ionicons name="close" size={20} color={colors.textPrimary} />
+        </TouchableOpacity>
+      </View>
+      <TextInput
+        style={compStyles.input}
+        placeholder="What's happening in your area?"
+        placeholderTextColor={colors.textHint}
+        value={content}
+        onChangeText={setContent}
+        multiline
+        maxLength={2000}
+      />
+      {media.length > 0 && (
+        <View style={compStyles.mediaPreview}>
+          <Image source={{ uri: media[0].uri }} style={compStyles.previewImg} />
+          <TouchableOpacity style={compStyles.removeBtn} onPress={() => setMedia([])}>
+            <Ionicons name="close" size={14} color="#FFFFFF" />
+          </TouchableOpacity>
+        </View>
+      )}
+      <View style={compStyles.actions}>
+        <TouchableOpacity onPress={pickImage} style={{ padding: 8 }}>
+          <Ionicons name="image-outline" size={22} color={colors.accentSecondary} />
+        </TouchableOpacity>
+        <TouchableOpacity style={{ padding: 8 }}>
+          <Ionicons name="camera-outline" size={22} color={colors.info} />
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
+
+const compStyles = StyleSheet.create({
+  container: {
+    backgroundColor: colors.bgCard,
+    borderRadius: 20,
+    marginHorizontal: 16,
+    marginBottom: 12,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    ...shadows.elevation2,
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 10,
+  },
+  title: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '700',
+    color: colors.textPrimary,
+  },
+  postBtn: {
+    backgroundColor: colors.accentPrimary,
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+  },
+  postBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  input: {
+    fontSize: 15,
+    color: colors.textPrimary,
+    lineHeight: 22,
+    minHeight: 50,
+    textAlignVertical: 'top',
+  },
+  mediaPreview: {
+    width: 80,
+    height: 80,
+    borderRadius: 12,
+    overflow: 'hidden',
+    marginTop: 8,
+  },
+  previewImg: {
+    width: '100%',
+    height: '100%',
+  },
+  removeBtn: {
+    position: 'absolute',
+    top: 2,
+    right: 2,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  actions: {
+    flexDirection: 'row',
+    borderTopWidth: 1,
+    borderTopColor: colors.borderSubtle,
+    paddingTop: 8,
+    marginTop: 8,
+  },
+});
+
+// ── Main Discover Screen ──────────────────────────────────────
 export default function DiscoverScreen() {
   const router = useRouter();
   const { user } = useAuthStore();
   const [activeTab, setActiveTab] = useState('foryou');
-  const [neighborhood, setNeighborhood] = useState('Your Area');
+  const [neighborhood] = useState('Your Area');
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [posts, setPosts] = useState<any[]>([]);
+  const [showComposer, setShowComposer] = useState(false);
 
-  const filtered = activeTab === 'foryou'
-    ? MOCK_ARTICLES
-    : MOCK_ARTICLES.filter(a => a.category.toLowerCase() === activeTab);
-
-  const onRefresh = async () => {
-    setIsRefreshing(true);
-    await new Promise(r => setTimeout(r, 1000));
-    setIsRefreshing(false);
+  const loadPosts = async () => {
+    try {
+      const response = await api.get('/posts/feed');
+      setPosts(response.data);
+    } catch (error) {
+      console.log('Error loading discover posts:', error);
+    } finally {
+      setIsLoading(false);
+    }
   };
+
+  useEffect(() => {
+    loadPosts();
+  }, []);
+
+  const onRefresh = useCallback(async () => {
+    setIsRefreshing(true);
+    await loadPosts();
+    setIsRefreshing(false);
+  }, []);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -146,11 +365,11 @@ export default function DiscoverScreen() {
             <Ionicons name="chevron-down" size={16} color={colors.textSecondary} />
           </TouchableOpacity>
           <View style={styles.headerActions}>
-            <TouchableOpacity style={styles.iconBtn}>
-              <Ionicons name="notifications-outline" size={20} color={colors.textSecondary} />
+            <TouchableOpacity style={styles.iconBtn} onPress={() => setShowComposer(!showComposer)}>
+              <Ionicons name="add-circle-outline" size={22} color={colors.accentPrimary} />
             </TouchableOpacity>
             <TouchableOpacity style={styles.iconBtn}>
-              <Ionicons name="chatbubble-outline" size={20} color={colors.textSecondary} />
+              <Ionicons name="notifications-outline" size={20} color={colors.textSecondary} />
             </TouchableOpacity>
             {user && (
               <View style={styles.avatarSmall}>
@@ -199,9 +418,22 @@ export default function DiscoverScreen() {
 
       {/* Feed */}
       <FlatList
-        data={filtered}
+        data={posts}
         keyExtractor={(item) => item.id}
-        renderItem={({ item }) => <ArticleCard article={item} />}
+        renderItem={({ item }) => (
+          <DiscoverPostCard
+            post={item}
+            onPress={() => router.push(`/post/${item.id}`)}
+          />
+        )}
+        ListHeaderComponent={
+          <DiscoverComposer
+            user={user}
+            visible={showComposer}
+            onClose={() => setShowComposer(false)}
+            onCreated={() => loadPosts()}
+          />
+        }
         contentContainerStyle={{ paddingTop: 12, paddingBottom: 100 }}
         refreshControl={
           <RefreshControl
@@ -211,11 +443,23 @@ export default function DiscoverScreen() {
           />
         }
         ListEmptyComponent={
-          <View style={styles.emptyState}>
-            <Text style={{ fontSize: 48, marginBottom: 12 }}>📰</Text>
-            <Text style={styles.emptyTitle}>No articles yet</Text>
-            <Text style={styles.emptyText}>Check back soon for updates</Text>
-          </View>
+          isLoading ? (
+            <View style={styles.emptyState}>
+              <ActivityIndicator size="large" color={colors.accentPrimary} />
+            </View>
+          ) : (
+            <View style={styles.emptyState}>
+              <Ionicons name="compass-outline" size={56} color={colors.textHint} />
+              <Text style={styles.emptyTitle}>Nothing to discover yet</Text>
+              <Text style={styles.emptyText}>Be the first to share something!</Text>
+              <TouchableOpacity
+                style={styles.emptyBtn}
+                onPress={() => setShowComposer(true)}
+              >
+                <Text style={styles.emptyBtnText}>Create Post</Text>
+              </TouchableOpacity>
+            </View>
+          )
         }
         showsVerticalScrollIndicator={false}
       />
@@ -329,10 +573,23 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '700',
     color: colors.textPrimary,
+    marginTop: 16,
   },
   emptyText: {
     fontSize: 13,
     color: colors.textHint,
     marginTop: 4,
+  },
+  emptyBtn: {
+    backgroundColor: colors.accentPrimary,
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 20,
+    marginTop: 20,
+  },
+  emptyBtnText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#FFFFFF',
   },
 });

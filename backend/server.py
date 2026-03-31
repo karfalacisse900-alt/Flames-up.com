@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, UploadFile, File, Query
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, UploadFile, File, Query, Form
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 from passlib.context import CryptContext
 from jose import JWTError, jwt
 import base64
+import httpx
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -797,6 +798,154 @@ async def root():
 @api_router.get("/health")
 async def health_check():
     return {"status": "healthy"}
+
+# Cloudflare configuration
+CF_ACCOUNT_ID = os.environ.get("CLOUDFLARE_ACCOUNT_ID", "")
+CF_API_TOKEN = os.environ.get("CLOUDFLARE_API_TOKEN", "")
+CF_IMAGES_URL = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/images/v1"
+CF_STREAM_URL = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/stream"
+
+# ===================== CLOUDFLARE UPLOAD ENDPOINTS =====================
+
+@api_router.post("/upload/image")
+async def upload_image(
+    file: UploadFile = File(...),
+    folder: str = Form("uploads"),
+    current_user: dict = Depends(get_current_user)
+):
+    """Upload an image to Cloudflare Images"""
+    if not CF_ACCOUNT_ID or not CF_API_TOKEN:
+        raise HTTPException(status_code=500, detail="Cloudflare not configured")
+
+    content = await file.read()
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client_http:
+            response = await client_http.post(
+                CF_IMAGES_URL,
+                headers={"Authorization": f"Bearer {CF_API_TOKEN}"},
+                files={"file": (file.filename or "image.jpg", content, file.content_type or "image/jpeg")},
+                data={"metadata": f'{{"folder":"{folder}","user_id":"{current_user["id"]}"}}'}
+            )
+            data = response.json()
+
+            if not data.get("success"):
+                errors = data.get("errors", [])
+                error_msg = errors[0].get("message", "Upload failed") if errors else "Upload failed"
+                raise HTTPException(status_code=400, detail=error_msg)
+
+            image_data = data["result"]
+            # Cloudflare returns variants - use the public one
+            variants = image_data.get("variants", [])
+            public_url = variants[0] if variants else ""
+
+            return {
+                "file_url": public_url,
+                "image_id": image_data.get("id"),
+                "variants": variants,
+            }
+    except httpx.RequestError as e:
+        logger.error(f"Cloudflare image upload error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to upload to Cloudflare")
+
+@api_router.post("/upload/video")
+async def upload_video(
+    file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user)
+):
+    """Get a direct upload URL for Cloudflare Stream, then upload the video"""
+    if not CF_ACCOUNT_ID or not CF_API_TOKEN:
+        raise HTTPException(status_code=500, detail="Cloudflare not configured")
+
+    try:
+        content = await file.read()
+        file_size = len(content)
+
+        async with httpx.AsyncClient(timeout=60.0) as client_http:
+            # Step 1: Get direct upload URL
+            upload_res = await client_http.post(
+                f"{CF_STREAM_URL}/direct_upload",
+                headers={"Authorization": f"Bearer {CF_API_TOKEN}"},
+                json={"maxDurationSeconds": 300}
+            )
+            upload_data = upload_res.json()
+
+            if not upload_data.get("success"):
+                errors = upload_data.get("errors", [])
+                error_msg = errors[0].get("message", "Failed to get upload URL") if errors else "Failed"
+                raise HTTPException(status_code=400, detail=error_msg)
+
+            video_id = upload_data["result"]["uid"]
+            upload_url = upload_data["result"]["uploadURL"]
+
+            # Step 2: Upload file to the direct upload URL
+            upload_response = await client_http.post(
+                upload_url,
+                files={"file": (file.filename or "video.mp4", content, file.content_type or "video/mp4")}
+            )
+
+            thumbnail_url = f"https://customer-{CF_ACCOUNT_ID[:8]}.cloudflarestream.com/{video_id}/thumbnails/thumbnail.jpg"
+            stream_url = f"https://customer-{CF_ACCOUNT_ID[:8]}.cloudflarestream.com/{video_id}/manifest/video.m3u8"
+
+            return {
+                "video_id": video_id,
+                "stream_url": stream_url,
+                "thumbnail_url": thumbnail_url,
+            }
+    except httpx.RequestError as e:
+        logger.error(f"Cloudflare video upload error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to upload video to Cloudflare")
+
+@api_router.post("/upload/base64-image")
+async def upload_base64_image(
+    data: dict,
+    current_user: dict = Depends(get_current_user)
+):
+    """Upload a base64 image to Cloudflare Images"""
+    if not CF_ACCOUNT_ID or not CF_API_TOKEN:
+        raise HTTPException(status_code=500, detail="Cloudflare not configured")
+
+    base64_str = data.get("image", "")
+    folder = data.get("folder", "uploads")
+
+    if not base64_str:
+        raise HTTPException(status_code=400, detail="No image data provided")
+
+    # Strip data URL prefix if present
+    if "," in base64_str:
+        base64_str = base64_str.split(",")[1]
+
+    try:
+        image_bytes = base64.b64decode(base64_str)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid base64 data")
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client_http:
+            response = await client_http.post(
+                CF_IMAGES_URL,
+                headers={"Authorization": f"Bearer {CF_API_TOKEN}"},
+                files={"file": ("image.jpg", image_bytes, "image/jpeg")},
+                data={"metadata": f'{{"folder":"{folder}","user_id":"{current_user["id"]}"}}'}
+            )
+            data_resp = response.json()
+
+            if not data_resp.get("success"):
+                errors = data_resp.get("errors", [])
+                error_msg = errors[0].get("message", "Upload failed") if errors else "Upload failed"
+                raise HTTPException(status_code=400, detail=error_msg)
+
+            image_data = data_resp["result"]
+            variants = image_data.get("variants", [])
+            public_url = variants[0] if variants else ""
+
+            return {
+                "file_url": public_url,
+                "image_id": image_data.get("id"),
+            }
+    except httpx.RequestError as e:
+        logger.error(f"Cloudflare base64 upload error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to upload to Cloudflare")
+
 
 # Include the router
 app.include_router(api_router)

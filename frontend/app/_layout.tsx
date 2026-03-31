@@ -34,6 +34,13 @@ export default function RootLayout() {
         <Stack.Screen name="create-post" options={{ presentation: 'modal' }} />
         <Stack.Screen name="create-status" options={{ presentation: 'modal' }} />
         <Stack.Screen name="edit-profile" options={{ presentation: 'modal' }} />
+        <Stack.Screen name="settings" options={{ presentation: 'card' }} />
+        <Stack.Screen name="my-library" options={{ presentation: 'card' }} />
+        <Stack.Screen name="referrals" options={{ presentation: 'card' }} />
+        <Stack.Screen name="creator-hub" options={{ presentation: 'card' }} />
+        <Stack.Screen name="admin-panel" options={{ presentation: 'card' }} />
+        <Stack.Screen name="content-manager" options={{ presentation: 'card' }} />
+        <Stack.Screen name="apply-publisher" options={{ presentation: 'card' }} />
       </Stack>
     </>
   );
