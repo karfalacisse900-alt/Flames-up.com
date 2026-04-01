@@ -942,6 +942,32 @@ async def upload_video(
         logger.error(f"Cloudflare video upload error: {e}")
         raise HTTPException(status_code=500, detail="Failed to upload video")
 
+
+# ===================== REPORTS =====================
+
+class ReportCreate(BaseModel):
+    target_type: str  # "post" or "user"
+    target_id: str
+    reason: str
+    details: Optional[str] = None
+
+@api_router.post("/reports")
+async def create_report(report: ReportCreate, current_user: dict = Depends(get_current_user)):
+    """Report a post or user"""
+    report_doc = {
+        "id": str(uuid.uuid4()),
+        "reporter_id": current_user["id"],
+        "target_type": report.target_type,
+        "target_id": report.target_id,
+        "reason": report.reason,
+        "details": report.details,
+        "status": "pending",
+        "created_at": datetime.utcnow().isoformat(),
+    }
+    db.reports.insert_one(report_doc)
+    return {"message": "Report submitted successfully", "report_id": report_doc["id"]}
+
+
 # ===================== GOOGLE MAPS PLACES API =====================
 
 @api_router.get("/google-places/nearby")

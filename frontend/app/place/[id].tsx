@@ -19,7 +19,7 @@ import { colors, spacing, borderRadius, shadows } from '../../src/utils/theme';
 import api from '../../src/api/client';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
-const HERO_HEIGHT = SCREEN_WIDTH * 0.65;
+const HERO_HEIGHT = SCREEN_WIDTH * 0.85;
 
 // Price level helper
 function priceLabel(level?: number) {

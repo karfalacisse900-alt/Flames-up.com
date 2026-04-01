@@ -30,13 +30,25 @@ const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const PHOTO_RATIO = 4 / 5;  // 4:5 for photos
 const VIDEO_RATIO = 1;       // 1:1 for videos
 
-// ─── Instagram-style Post Card ───────────────────────────────────────────────
+// ─── Report Reasons ──────────────────────────────────────────────────────────
+const REPORT_REASONS = [
+  { id: 'spam', label: 'Spam', icon: 'mail-outline' },
+  { id: 'harassment', label: 'Harassment or bullying', icon: 'hand-left-outline' },
+  { id: 'hate_speech', label: 'Hate speech', icon: 'megaphone-outline' },
+  { id: 'violence', label: 'Violence or threats', icon: 'warning-outline' },
+  { id: 'nudity', label: 'Nudity or sexual content', icon: 'eye-off-outline' },
+  { id: 'misinformation', label: 'Misinformation', icon: 'newspaper-outline' },
+  { id: 'other', label: 'Other', icon: 'ellipsis-horizontal-outline' },
+];
+
+// ─── Flames-Up Post Card (unique social feed style) ──────────────────────────
 function PostCard({ post, currentUserId, onPress, onUserPress }: any) {
   const [liked, setLiked] = useState(post.liked_by?.includes(currentUserId));
   const [likesCount, setLikesCount] = useState(post.likes_count || 0);
   const [saved, setSaved] = useState(false);
   const [captionExpanded, setCaptionExpanded] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
+  const [showReport, setShowReport] = useState(false);
 
   const handleLike = async () => {
     setLiked(!liked);
@@ -47,6 +59,20 @@ function PostCard({ post, currentUserId, onPress, onUserPress }: any) {
       setLiked(liked);
       setLikesCount(likesCount);
     }
+  };
+
+  const handleReport = async (reason: string) => {
+    try {
+      await api.post('/reports', {
+        target_type: 'post',
+        target_id: post.id,
+        reason,
+      });
+      Alert.alert('Report Submitted', 'Thank you for helping keep our community safe.');
+    } catch {
+      Alert.alert('Error', 'Could not submit report. Please try again.');
+    }
+    setShowReport(false);
   };
 
   const timeAgo = post.created_at
@@ -60,7 +86,7 @@ function PostCard({ post, currentUserId, onPress, onUserPress }: any) {
 
   return (
     <View style={postStyles.container}>
-      {/* ── Header: avatar + name + location + more ── */}
+      {/* ── Header: avatar + name + flame badge + location + more ── */}
       <View style={postStyles.header}>
         <TouchableOpacity
           style={postStyles.headerLeft}
@@ -69,25 +95,26 @@ function PostCard({ post, currentUserId, onPress, onUserPress }: any) {
         >
           <View style={postStyles.avatar}>
             {post.user_profile_image ? (
-              <Image
-                source={{ uri: post.user_profile_image }}
-                style={postStyles.avatarImg}
-              />
+              <Image source={{ uri: post.user_profile_image }} style={postStyles.avatarImg} />
             ) : (
               <View style={postStyles.avatarFallback}>
-                <Text style={postStyles.avatarInitial}>
-                  {authorName[0].toUpperCase()}
-                </Text>
+                <Text style={postStyles.avatarInitial}>{authorName[0].toUpperCase()}</Text>
               </View>
             )}
           </View>
-          <View>
-            <Text style={postStyles.username}>{authorName}</Text>
+          <View style={{ flex: 1 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+              <Text style={postStyles.username}>{authorName}</Text>
+              <Ionicons name="flame" size={13} color={colors.flameGold} />
+            </View>
             {post.location ? (
-              <Text style={postStyles.location} numberOfLines={1}>
-                {post.location}
-              </Text>
-            ) : null}
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3, marginTop: 1 }}>
+                <Ionicons name="location" size={10} color={colors.accentPrimary} />
+                <Text style={postStyles.location} numberOfLines={1}>{post.location}</Text>
+              </View>
+            ) : (
+              <Text style={postStyles.timeLabel}>{timeAgo} ago</Text>
+            )}
           </View>
         </TouchableOpacity>
         <TouchableOpacity
@@ -95,157 +122,122 @@ function PostCard({ post, currentUserId, onPress, onUserPress }: any) {
           hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           onPress={() => setShowMenu(true)}
         >
-          <Ionicons name="ellipsis-horizontal" size={20} color={colors.textPrimary} />
+          <Ionicons name="ellipsis-vertical" size={18} color={colors.textSecondary} />
         </TouchableOpacity>
       </View>
 
-      {/* ── 3-dot Menu Modal ── */}
-      <Modal
-        visible={showMenu}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShowMenu(false)}
-      >
-        <TouchableOpacity
-          style={postStyles.menuOverlay}
-          activeOpacity={1}
-          onPress={() => setShowMenu(false)}
-        >
+      {/* ── 3-dot Action Sheet ── */}
+      <Modal visible={showMenu} transparent animationType="fade" onRequestClose={() => setShowMenu(false)}>
+        <TouchableOpacity style={postStyles.menuOverlay} activeOpacity={1} onPress={() => setShowMenu(false)}>
           <View style={postStyles.menuSheet}>
             <View style={postStyles.menuHandle} />
-            <TouchableOpacity
-              style={postStyles.menuItem}
-              onPress={() => {
-                setShowMenu(false);
-                Alert.alert('Reported', 'This post has been reported.');
-              }}
-            >
+            <TouchableOpacity style={postStyles.menuItem} onPress={() => { setShowMenu(false); setShowReport(true); }}>
               <Ionicons name="flag-outline" size={22} color={colors.error} />
               <Text style={[postStyles.menuItemText, { color: colors.error }]}>Report</Text>
             </TouchableOpacity>
-            <TouchableOpacity
-              style={postStyles.menuItem}
-              onPress={() => {
-                setShowMenu(false);
-                Alert.alert('Hidden', 'You will see fewer posts like this.');
-              }}
-            >
+            <TouchableOpacity style={postStyles.menuItem} onPress={() => { setShowMenu(false); Alert.alert('Blocked', 'You won\'t see posts from this user.'); }}>
+              <Ionicons name="ban-outline" size={22} color={colors.textPrimary} />
+              <Text style={postStyles.menuItemText}>Block User</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={postStyles.menuItem} onPress={() => { setShowMenu(false); Alert.alert('Hidden', 'You will see fewer posts like this.'); }}>
               <Ionicons name="eye-off-outline" size={22} color={colors.textPrimary} />
               <Text style={postStyles.menuItemText}>Not Interested</Text>
             </TouchableOpacity>
-            <TouchableOpacity
-              style={[postStyles.menuItem, { borderBottomWidth: 0 }]}
-              onPress={() => {
-                setShowMenu(false);
-                Alert.alert('Copied', 'Link copied to clipboard.');
-              }}
-            >
+            <TouchableOpacity style={[postStyles.menuItem, { borderBottomWidth: 0 }]} onPress={() => { setShowMenu(false); Alert.alert('Copied', 'Link copied to clipboard.'); }}>
               <Ionicons name="link-outline" size={22} color={colors.textPrimary} />
               <Text style={postStyles.menuItemText}>Copy Link</Text>
             </TouchableOpacity>
-            <TouchableOpacity
-              style={postStyles.menuCancel}
-              onPress={() => setShowMenu(false)}
-            >
+            <TouchableOpacity style={postStyles.menuCancel} onPress={() => setShowMenu(false)}>
               <Text style={postStyles.menuCancelText}>Cancel</Text>
             </TouchableOpacity>
           </View>
         </TouchableOpacity>
       </Modal>
 
-      {/* ── Media (Photo 4:5 / Video 1:1) ── */}
+      {/* ── Report Modal ── */}
+      <Modal visible={showReport} transparent animationType="slide" onRequestClose={() => setShowReport(false)}>
+        <TouchableOpacity style={postStyles.menuOverlay} activeOpacity={1} onPress={() => setShowReport(false)}>
+          <View style={postStyles.reportSheet}>
+            <View style={postStyles.menuHandle} />
+            <Text style={postStyles.reportTitle}>Why are you reporting this?</Text>
+            <Text style={postStyles.reportSubtitle}>Your report is anonymous and helps keep our community safe.</Text>
+            {REPORT_REASONS.map((reason) => (
+              <TouchableOpacity key={reason.id} style={postStyles.reportItem} onPress={() => handleReport(reason.id)}>
+                <Ionicons name={reason.icon as any} size={20} color={colors.textSecondary} />
+                <Text style={postStyles.reportItemText}>{reason.label}</Text>
+                <Ionicons name="chevron-forward" size={16} color={colors.textHint} />
+              </TouchableOpacity>
+            ))}
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* ── Media (Photo 4:5 / Video 1:1) with rounded corners ── */}
       {hasMedia && (
         <TouchableOpacity activeOpacity={0.95} onPress={onPress}>
-          <Image
-            source={{ uri: post.image }}
-            style={[
-              postStyles.media,
-              { width: SCREEN_WIDTH, height: SCREEN_WIDTH / mediaAspect },
-            ]}
-            resizeMode="cover"
-          />
-        </TouchableOpacity>
-      )}
-
-      {/* ── Action Row ── */}
-      <View style={postStyles.actionsRow}>
-        <View style={postStyles.actionsLeft}>
-          <TouchableOpacity onPress={handleLike} style={postStyles.actionBtn}>
-            <Ionicons
-              name={liked ? 'heart' : 'heart-outline'}
-              size={26}
-              color={liked ? '#ED4956' : colors.textPrimary}
+          <View style={postStyles.mediaWrap}>
+            <Image
+              source={{ uri: post.image }}
+              style={[postStyles.media, { width: SCREEN_WIDTH - 32, height: (SCREEN_WIDTH - 32) / mediaAspect }]}
+              resizeMode="cover"
             />
-          </TouchableOpacity>
-          <TouchableOpacity onPress={onPress} style={postStyles.actionBtn}>
-            <Ionicons name="chatbubble-outline" size={24} color={colors.textPrimary} />
-          </TouchableOpacity>
-          <TouchableOpacity style={postStyles.actionBtn}>
-            <Ionicons name="paper-plane-outline" size={24} color={colors.textPrimary} />
-          </TouchableOpacity>
-        </View>
-        <TouchableOpacity onPress={() => setSaved(!saved)} style={postStyles.actionBtn}>
-          <Ionicons
-            name={saved ? 'bookmark' : 'bookmark-outline'}
-            size={24}
-            color={colors.textPrimary}
-          />
+          </View>
         </TouchableOpacity>
-      </View>
-
-      {/* ── Likes ── */}
-      {likesCount > 0 && (
-        <Text style={postStyles.likesText}>
-          {likesCount} {likesCount === 1 ? 'like' : 'likes'}
-        </Text>
       )}
 
-      {/* ── Caption ── */}
+      {/* ── Caption (above actions for Flames-Up style) ── */}
       {post.content ? (
         <View style={postStyles.captionContainer}>
-          <Text
-            style={postStyles.captionText}
-            numberOfLines={captionExpanded ? undefined : 2}
-          >
-            <Text style={postStyles.captionUsername}>{authorName}</Text>
-            {'  '}
+          <Text style={postStyles.captionText} numberOfLines={captionExpanded ? undefined : 3}>
             {post.content}
           </Text>
-          {!captionExpanded && post.content.length > 100 && (
+          {!captionExpanded && post.content.length > 120 && (
             <TouchableOpacity onPress={() => setCaptionExpanded(true)}>
-              <Text style={postStyles.moreText}>more</Text>
+              <Text style={postStyles.moreText}>Read more</Text>
             </TouchableOpacity>
           )}
         </View>
       ) : null}
 
-      {/* ── View comments ── */}
-      {post.comments_count > 0 && (
-        <TouchableOpacity onPress={onPress} style={postStyles.commentsBtn}>
-          <Text style={postStyles.commentsText}>
-            View all {post.comments_count} comment{post.comments_count !== 1 ? 's' : ''}
-          </Text>
+      {/* ── Action Row ── */}
+      <View style={postStyles.actionsRow}>
+        <TouchableOpacity onPress={handleLike} style={postStyles.actionBtn}>
+          <Ionicons name={liked ? 'heart' : 'heart-outline'} size={22} color={liked ? '#ED4956' : colors.textSecondary} />
+          {likesCount > 0 && <Text style={[postStyles.actionCount, liked && { color: '#ED4956' }]}>{likesCount}</Text>}
         </TouchableOpacity>
-      )}
-
-      {/* ── Timestamp ── */}
-      <Text style={postStyles.timeAgo}>{timeAgo} ago</Text>
+        <TouchableOpacity onPress={onPress} style={postStyles.actionBtn}>
+          <Ionicons name="chatbubble-outline" size={20} color={colors.textSecondary} />
+          {post.comments_count > 0 && <Text style={postStyles.actionCount}>{post.comments_count}</Text>}
+        </TouchableOpacity>
+        <TouchableOpacity style={postStyles.actionBtn}>
+          <Ionicons name="repeat-outline" size={22} color={colors.textSecondary} />
+        </TouchableOpacity>
+        <TouchableOpacity style={postStyles.actionBtn}>
+          <Ionicons name="paper-plane-outline" size={20} color={colors.textSecondary} />
+        </TouchableOpacity>
+        <View style={{ flex: 1 }} />
+        <TouchableOpacity onPress={() => setSaved(!saved)} style={postStyles.actionBtn}>
+          <Ionicons name={saved ? 'bookmark' : 'bookmark-outline'} size={20} color={saved ? colors.accentPrimary : colors.textSecondary} />
+        </TouchableOpacity>
+      </View>
     </View>
   );
 }
 
 const postStyles = StyleSheet.create({
   container: {
-    backgroundColor: '#FFFFFF',
-    marginBottom: 8,
+    backgroundColor: colors.bgApp,
+    paddingBottom: 8,
+    marginBottom: 4,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.borderSubtle,
   },
-  // Header
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
   },
   headerLeft: {
     flexDirection: 'row',
@@ -253,18 +245,15 @@ const postStyles = StyleSheet.create({
     flex: 1,
   },
   avatar: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
     overflow: 'hidden',
-    marginRight: 10,
-    borderWidth: 1,
-    borderColor: colors.borderLight,
+    marginRight: 12,
+    borderWidth: 2,
+    borderColor: colors.accentPrimary + '30',
   },
-  avatarImg: {
-    width: '100%',
-    height: '100%',
-  },
+  avatarImg: { width: '100%', height: '100%' },
   avatarFallback: {
     width: '100%',
     height: '100%',
@@ -272,102 +261,46 @@ const postStyles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  avatarInitial: {
-    color: '#FFFFFF',
-    fontSize: 15,
-    fontWeight: '700',
-  },
-  username: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: colors.textPrimary,
-  },
-  location: {
-    fontSize: 12,
-    color: colors.textHint,
-    marginTop: 1,
-  },
-  moreBtn: {
-    padding: 4,
-  },
-  // Media
-  media: {
+  avatarInitial: { color: '#FFFFFF', fontSize: 16, fontWeight: '700' },
+  username: { fontSize: 15, fontWeight: '700', color: colors.textPrimary },
+  location: { fontSize: 12, color: colors.accentPrimary, fontWeight: '500' },
+  timeLabel: { fontSize: 12, color: colors.textHint, marginTop: 1 },
+  moreBtn: { padding: 6 },
+  // Media – rounded card style
+  mediaWrap: {
+    marginHorizontal: 16,
+    borderRadius: 20,
+    overflow: 'hidden',
     backgroundColor: colors.bgSubtle,
   },
-  // Actions
+  media: {},
+  // Caption
+  captionContainer: { paddingHorizontal: 16, marginTop: 10 },
+  captionText: { fontSize: 15, color: colors.textPrimary, lineHeight: 22 },
+  moreText: { fontSize: 14, color: colors.accentPrimary, fontWeight: '600', marginTop: 2 },
+  // Actions – horizontal icon row with counts
   actionsRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 12,
+    paddingHorizontal: 16,
     paddingTop: 10,
-    paddingBottom: 4,
-  },
-  actionsLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
   },
   actionBtn: {
-    paddingRight: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingRight: 20,
     paddingVertical: 4,
   },
-  // Likes
-  likesText: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: colors.textPrimary,
-    paddingHorizontal: 14,
-    marginTop: 2,
-  },
-  // Caption
-  captionContainer: {
-    paddingHorizontal: 14,
-    marginTop: 4,
-  },
-  captionText: {
-    fontSize: 14,
-    color: colors.textPrimary,
-    lineHeight: 20,
-  },
-  captionUsername: {
-    fontWeight: '700',
-  },
-  moreText: {
-    fontSize: 14,
-    color: colors.textHint,
-    marginTop: 2,
-  },
-  // Comments
-  commentsBtn: {
-    paddingHorizontal: 14,
-    marginTop: 4,
-  },
-  commentsText: {
-    fontSize: 14,
-    color: colors.textHint,
-  },
-  // Time
-  timeAgo: {
-    fontSize: 11,
-    color: colors.textHint,
-    paddingHorizontal: 14,
-    marginTop: 4,
-    marginBottom: 4,
-    textTransform: 'uppercase',
-    letterSpacing: 0.3,
-  },
-  // Menu
-  menuOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-    justifyContent: 'flex-end',
-  },
+  actionCount: { fontSize: 13, fontWeight: '600', color: colors.textSecondary },
+  // Menu Sheet
+  menuOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
   menuSheet: {
     backgroundColor: '#FFFFFF',
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     paddingTop: 8,
-    paddingBottom: 24,
+    paddingBottom: 34,
   },
   menuHandle: {
     width: 40,
@@ -386,21 +319,42 @@ const postStyles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: colors.borderSubtle,
   },
-  menuItemText: {
-    fontSize: 16,
-    fontWeight: '500',
+  menuItemText: { fontSize: 16, fontWeight: '500', color: colors.textPrimary },
+  menuCancel: { alignItems: 'center', paddingVertical: 16, marginTop: 4 },
+  menuCancelText: { fontSize: 16, fontWeight: '600', color: colors.textHint },
+  // Report Sheet
+  reportSheet: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingTop: 8,
+    paddingBottom: 34,
+    maxHeight: '80%',
+  },
+  reportTitle: {
+    fontSize: 18,
+    fontWeight: '700',
     color: colors.textPrimary,
+    paddingHorizontal: 20,
+    marginBottom: 4,
   },
-  menuCancel: {
-    alignItems: 'center',
-    paddingVertical: 16,
-    marginTop: 4,
-  },
-  menuCancelText: {
-    fontSize: 16,
-    fontWeight: '600',
+  reportSubtitle: {
+    fontSize: 13,
     color: colors.textHint,
+    paddingHorizontal: 20,
+    marginBottom: 16,
+    lineHeight: 18,
   },
+  reportItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    paddingHorizontal: 20,
+    paddingVertical: 15,
+    borderTopWidth: 1,
+    borderTopColor: colors.borderSubtle,
+  },
+  reportItemText: { flex: 1, fontSize: 15, fontWeight: '500', color: colors.textPrimary },
 });
 
 // ─── Inline Composer ─────────────────────────────────────────────────────────

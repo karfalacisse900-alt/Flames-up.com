@@ -56,10 +56,7 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="fashion"
         options={{
-          title: 'Fashion',
-          tabBarIcon: ({ color, focused }) => (
-            <Ionicons name={focused ? 'shirt' : 'shirt-outline'} size={22} color={color} />
-          ),
+          href: null,
         }}
       />
       <Tabs.Screen
