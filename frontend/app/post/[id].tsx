@@ -37,6 +37,7 @@ export default function PostDetailScreen() {
   const [liked, setLiked] = useState(false);
   const [likesCount, setLikesCount] = useState(0);
   const [saved, setSaved] = useState(false);
+  const [activeImgIdx, setActiveImgIdx] = useState(0);
 
   useEffect(() => {
     loadPostData();
@@ -113,6 +114,7 @@ export default function PostDetailScreen() {
 
   const timeAgo = formatDistanceToNow(new Date(post.created_at), { addSuffix: true });
   const authorName = post.user_full_name || post.user_username || 'User';
+  const allImages: string[] = post.images?.length > 0 ? post.images : post.image ? [post.image] : [];
 
   return (
     <View style={styles.container}>
@@ -126,17 +128,52 @@ export default function PostDetailScreen() {
           keyExtractor={(item) => item.id}
           ListHeaderComponent={
             <View>
-              {/* Full-bleed image with back button overlay */}
-              {post.image ? (
+              {/* Full-bleed image or carousel with back button overlay */}
+              {allImages.length > 0 ? (
                 <View style={styles.imageContainer}>
-                  <Image
-                    source={{ uri: post.image }}
-                    style={styles.heroImage}
-                    resizeMode="cover"
-                  />
+                  {allImages.length > 1 ? (
+                    <View>
+                      <FlatList
+                        data={allImages}
+                        horizontal
+                        pagingEnabled
+                        showsHorizontalScrollIndicator={false}
+                        onMomentumScrollEnd={(e) => {
+                          setActiveImgIdx(Math.round(e.nativeEvent.contentOffset.x / SCREEN_WIDTH));
+                        }}
+                        keyExtractor={(_, i) => `detail-img-${i}`}
+                        renderItem={({ item: imgUri }) => (
+                          <Image
+                            source={{ uri: imgUri }}
+                            style={styles.heroImage}
+                            resizeMode="cover"
+                          />
+                        )}
+                      />
+                      <View style={styles.carouselDotsContainer}>
+                        {allImages.map((_: string, i: number) => (
+                          <View
+                            key={i}
+                            style={[styles.carouselDot, activeImgIdx === i && styles.carouselDotActive]}
+                          />
+                        ))}
+                      </View>
+                    </View>
+                  ) : (
+                    <Image
+                      source={{ uri: allImages[0] }}
+                      style={styles.heroImage}
+                      resizeMode="cover"
+                    />
+                  )}
                   <TouchableOpacity style={styles.backBtnOverlay} onPress={() => router.back()}>
                     <Ionicons name="arrow-back" size={22} color="#FFFFFF" />
                   </TouchableOpacity>
+                  {allImages.length > 1 && (
+                    <View style={styles.imageCounter}>
+                      <Text style={styles.imageCounterText}>{activeImgIdx + 1}/{allImages.length}</Text>
+                    </View>
+                  )}
                 </View>
               ) : (
                 <SafeAreaView edges={['top']}>
@@ -327,8 +364,8 @@ const styles = StyleSheet.create({
     height: SCREEN_WIDTH / PHOTO_RATIO,
   },
   heroImage: {
-    width: '100%',
-    height: '100%',
+    width: SCREEN_WIDTH,
+    height: SCREEN_WIDTH / PHOTO_RATIO,
   },
   backBtnOverlay: {
     position: 'absolute',
@@ -340,6 +377,41 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.45)',
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  carouselDotsContainer: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 5,
+    paddingVertical: 10,
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+  },
+  carouselDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: 'rgba(255,255,255,0.5)',
+  },
+  carouselDotActive: {
+    backgroundColor: '#FFFFFF',
+    width: 18,
+    borderRadius: 3,
+  },
+  imageCounter: {
+    position: 'absolute',
+    top: 56,
+    right: 16,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  imageCounterText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '700',
   },
   headerNoImage: {
     flexDirection: 'row',

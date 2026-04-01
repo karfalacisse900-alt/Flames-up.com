@@ -266,7 +266,7 @@ export default function PlacesScreen() {
             <Text style={pStyles.locationLabel}>{locationName}</Text>
           </View>
         </View>
-        <TouchableOpacity style={pStyles.mapBtn}>
+        <TouchableOpacity style={pStyles.mapBtn} onPress={() => router.push(`/map-view?type=${activeType}` as any)}>
           <Ionicons name="map-outline" size={20} color={colors.accentPrimary} />
         </TouchableOpacity>
       </View>
@@ -399,10 +399,10 @@ const pStyles = StyleSheet.create({
   chip: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 7,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 20,
+    gap: 8,
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+    borderRadius: 24,
     backgroundColor: colors.bgSubtle,
     borderWidth: 1,
     borderColor: colors.borderLight,
@@ -411,7 +411,7 @@ const pStyles = StyleSheet.create({
     backgroundColor: colors.accentPrimary,
     borderColor: colors.accentPrimary,
   },
-  chipText: { fontSize: 13, fontWeight: '600', color: colors.textSecondary },
+  chipText: { fontSize: 15, fontWeight: '600', color: colors.textSecondary },
   chipTextActive: { color: '#FFFFFF' },
   gridRow: { flexDirection: 'row', gap: GRID_GAP },
   stackedCol: { gap: GRID_GAP },

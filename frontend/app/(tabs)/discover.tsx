@@ -41,185 +41,238 @@ function getAvatarColor(name: string) {
   return avatarColors[(name || 'U').charCodeAt(0) % avatarColors.length];
 }
 
-// ── Article-style Post Card (matching original web design) ────────────
-function DiscoverPostCard({ post, onPress }: { post: any; onPress: () => void }) {
+// ── Discover Post Card (improved visual layout) ────────────
+function DiscoverPostCard({ post, onPress, featured = false }: { post: any; onPress: () => void; featured?: boolean }) {
   const authorName = post.user_full_name || post.user_username || 'User';
   const avatarColor = getAvatarColor(authorName);
   const dateStr = post.created_at
     ? formatDistanceToNow(new Date(post.created_at), { addSuffix: false })
     : '';
 
+  if (featured && post.image) {
+    // Featured card: large image with overlay
+    return (
+      <TouchableOpacity style={cardStyles.featuredContainer} onPress={onPress} activeOpacity={0.9}>
+        <Image source={{ uri: post.image }} style={cardStyles.featuredImage} />
+        <View style={cardStyles.featuredOverlay} />
+        <View style={cardStyles.featuredContent}>
+          <View style={cardStyles.featuredBadge}>
+            <Ionicons name="flame" size={10} color="#FFFFFF" />
+            <Text style={cardStyles.featuredBadgeText}>Trending</Text>
+          </View>
+          <Text style={cardStyles.featuredTitle} numberOfLines={2}>{post.content}</Text>
+          <View style={cardStyles.featuredAuthor}>
+            <View style={[cardStyles.avatar, { borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.4)' }]}>
+              {post.user_profile_image ? (
+                <Image source={{ uri: post.user_profile_image }} style={{ width: '100%', height: '100%' }} />
+              ) : (
+                <Text style={[cardStyles.avatarLetter, { color: '#FFFFFF' }]}>{authorName[0].toUpperCase()}</Text>
+              )}
+            </View>
+            <Text style={cardStyles.featuredAuthorName}>{authorName}</Text>
+            <View style={{ flex: 1 }} />
+            <Text style={cardStyles.featuredDate}>{dateStr}</Text>
+          </View>
+        </View>
+      </TouchableOpacity>
+    );
+  }
+
   return (
-    <TouchableOpacity
-      style={cardStyles.container}
-      onPress={onPress}
-      activeOpacity={0.8}
-    >
+    <TouchableOpacity style={cardStyles.container} onPress={onPress} activeOpacity={0.8}>
+      {/* Large thumbnail if available */}
+      {post.image && (
+        <Image source={{ uri: post.image }} style={cardStyles.cardImage} />
+      )}
       {/* Author row */}
       <View style={cardStyles.authorRow}>
         {post.user_profile_image ? (
           <Image source={{ uri: post.user_profile_image }} style={cardStyles.avatar} />
         ) : (
-          <View style={[cardStyles.avatar, { backgroundColor: `${avatarColor}44` }]}>
+          <View style={[cardStyles.avatar, { backgroundColor: `${avatarColor}22` }]}>
             <Text style={[cardStyles.avatarLetter, { color: avatarColor }]}>
               {authorName[0].toUpperCase()}
             </Text>
           </View>
         )}
-        <Text style={cardStyles.authorText}>
-          {authorName}
-        </Text>
-        <Text style={cardStyles.authorHint}> · Community</Text>
+        <Text style={cardStyles.authorText}>{authorName}</Text>
+        <View style={{ flex: 1 }} />
+        <Text style={cardStyles.authorHint}>{dateStr} ago</Text>
       </View>
 
-      {/* Main content row: text left, thumbnail right */}
-      <View style={cardStyles.contentRow}>
-        <View style={cardStyles.textColumn}>
-          {/* Use content as title if it's short enough, otherwise truncate */}
-          <Text style={cardStyles.title} numberOfLines={2}>
-            {post.content}
-          </Text>
-          {post.location && (
-            <View style={cardStyles.locationRow}>
-              <Ionicons name="location-outline" size={11} color={colors.textHint} />
-              <Text style={cardStyles.locationText}>{post.location}</Text>
-            </View>
-          )}
+      {/* Content */}
+      <Text style={cardStyles.title} numberOfLines={3}>{post.content}</Text>
+
+      {post.location && (
+        <View style={cardStyles.locationRow}>
+          <Ionicons name="location" size={11} color={colors.accentPrimary} />
+          <Text style={cardStyles.locationText}>{post.location}</Text>
         </View>
-        {post.image && (
-          <Image source={{ uri: post.image }} style={cardStyles.thumbnail} />
-        )}
-      </View>
+      )}
 
-      {/* Footer row */}
+      {/* Footer */}
       <View style={cardStyles.footer}>
-        <View style={cardStyles.footerLeft}>
-          <Text style={cardStyles.footerDate}>{dateStr}</Text>
-          <View style={cardStyles.footerStat}>
-            <Ionicons name="heart" size={13} color={colors.textHint} />
-            <Text style={cardStyles.footerStatText}>{post.likes_count || 0}</Text>
-          </View>
-          <View style={cardStyles.footerStat}>
-            <Ionicons name="chatbubble-outline" size={12} color={colors.textHint} />
-            <Text style={cardStyles.footerStatText}>{post.comments_count || 0}</Text>
-          </View>
+        <View style={cardStyles.footerStat}>
+          <Ionicons name="heart" size={14} color={colors.textHint} />
+          <Text style={cardStyles.footerStatText}>{post.likes_count || 0}</Text>
         </View>
-        <View style={cardStyles.footerRight}>
-          <TouchableOpacity style={cardStyles.footerAction} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-            <Ionicons name="remove-outline" size={16} color={colors.textHint} />
-          </TouchableOpacity>
-          <TouchableOpacity style={cardStyles.footerAction} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-            <Ionicons name="ellipsis-horizontal" size={16} color={colors.textHint} />
-          </TouchableOpacity>
+        <View style={cardStyles.footerStat}>
+          <Ionicons name="chatbubble-outline" size={13} color={colors.textHint} />
+          <Text style={cardStyles.footerStatText}>{post.comments_count || 0}</Text>
         </View>
+        <View style={{ flex: 1 }} />
+        <TouchableOpacity hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+          <Ionicons name="bookmark-outline" size={16} color={colors.textHint} />
+        </TouchableOpacity>
+        <TouchableOpacity style={{ marginLeft: 16 }} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+          <Ionicons name="share-outline" size={16} color={colors.textHint} />
+        </TouchableOpacity>
       </View>
     </TouchableOpacity>
   );
 }
 
 const cardStyles = StyleSheet.create({
+  // Standard card
   container: {
-    paddingHorizontal: 16,
-    paddingVertical: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.borderLight,
-    backgroundColor: colors.bgApp,
+    marginHorizontal: 16,
+    marginBottom: 12,
+    backgroundColor: colors.bgCard,
+    borderRadius: 20,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: colors.borderLight,
+  },
+  cardImage: {
+    width: '100%',
+    height: 180,
+    resizeMode: 'cover',
   },
   authorRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 10,
+    paddingHorizontal: 14,
+    paddingTop: 12,
+    gap: 8,
   },
   avatar: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
+    width: 26,
+    height: 26,
+    borderRadius: 13,
     justifyContent: 'center',
     alignItems: 'center',
     overflow: 'hidden',
-    marginRight: 8,
   },
   avatarLetter: {
-    fontSize: 10,
+    fontSize: 11,
     fontWeight: '700',
   },
   authorText: {
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: '600',
-    color: colors.textSecondary,
+    color: colors.textPrimary,
   },
   authorHint: {
-    fontSize: 12,
+    fontSize: 11,
     color: colors.textHint,
   },
-  contentRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 12,
-    marginBottom: 10,
-  },
-  textColumn: {
-    flex: 1,
-    minWidth: 0,
-  },
   title: {
-    fontSize: 16,
-    fontWeight: '700',
+    fontSize: 15,
+    fontWeight: '600',
     color: colors.textPrimary,
-    lineHeight: 22,
-    fontStyle: 'italic',
+    lineHeight: 21,
+    paddingHorizontal: 14,
+    paddingTop: 8,
   },
   locationRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 3,
-    marginTop: 4,
+    paddingHorizontal: 14,
+    marginTop: 6,
   },
   locationText: {
     fontSize: 12,
-    color: colors.textHint,
-  },
-  thumbnail: {
-    width: 80,
-    height: 64,
-    borderRadius: 8,
-    flexShrink: 0,
-    resizeMode: 'cover',
+    color: colors.accentPrimary,
+    fontWeight: '500',
   },
   footer: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  footerLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  footerDate: {
-    fontSize: 12,
-    color: colors.textHint,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    gap: 14,
   },
   footerStat: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 3,
+    gap: 4,
   },
   footerStatText: {
     fontSize: 12,
+    fontWeight: '600',
     color: colors.textHint,
   },
-  footerRight: {
+  // Featured card
+  featuredContainer: {
+    marginHorizontal: 16,
+    marginBottom: 16,
+    borderRadius: 24,
+    overflow: 'hidden',
+    height: 220,
+  },
+  featuredImage: {
+    width: '100%',
+    height: '100%',
+    resizeMode: 'cover',
+  },
+  featuredOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+  },
+  featuredContent: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    padding: 18,
+  },
+  featuredBadge: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
+    backgroundColor: 'rgba(255,120,50,0.85)',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 10,
+    alignSelf: 'flex-start',
+    marginBottom: 8,
   },
-  footerAction: {
-    width: 32,
-    height: 32,
-    justifyContent: 'center',
+  featuredBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  featuredTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    lineHeight: 24,
+    marginBottom: 10,
+  },
+  featuredAuthor: {
+    flexDirection: 'row',
     alignItems: 'center',
-    borderRadius: 16,
+    gap: 8,
+  },
+  featuredAuthorName: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: 'rgba(255,255,255,0.9)',
+  },
+  featuredDate: {
+    fontSize: 11,
+    color: 'rgba(255,255,255,0.7)',
   },
 });
 
@@ -712,10 +765,11 @@ export default function DiscoverScreen() {
       <FlatList
         data={posts}
         keyExtractor={(item) => item.id}
-        renderItem={({ item }) => (
+        renderItem={({ item, index }) => (
           <DiscoverPostCard
             post={item}
             onPress={() => router.push(`/post/${item.id}`)}
+            featured={index === 0}
           />
         )}
         contentContainerStyle={{ paddingBottom: 100 }}

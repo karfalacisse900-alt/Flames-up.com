@@ -50,6 +50,16 @@ function PostCard({ post, currentUserId, onPress, onUserPress }: any) {
   const [showMenu, setShowMenu] = useState(false);
   const [showReport, setShowReport] = useState(false);
   const [activeImageIdx, setActiveImageIdx] = useState(0);
+  const [showSaveMenu, setShowSaveMenu] = useState(false);
+  const [savedCollection, setSavedCollection] = useState<string | null>(null);
+
+  const SAVE_COLLECTIONS = [
+    { id: 'all', label: 'All Saved', icon: 'bookmark' },
+    { id: 'funny', label: 'Funny', icon: 'happy-outline' },
+    { id: 'inspirational', label: 'Inspirational', icon: 'sparkles-outline' },
+    { id: 'ideas', label: 'Ideas', icon: 'bulb-outline' },
+    { id: 'travel', label: 'Travel', icon: 'airplane-outline' },
+  ];
 
   // Collect all images (from both old single image and new images array)
   const allImages: string[] = post.images?.length > 0
@@ -179,47 +189,43 @@ function PostCard({ post, currentUserId, onPress, onUserPress }: any) {
       </Modal>
 
       {/* ── Media (Photo 4:5 / Video 1:1) full-width + carousel ── */}
-      {hasMedia && (
-        <TouchableOpacity activeOpacity={0.95} onPress={onPress}>
-          {allImages.length > 1 ? (
-            <View>
-              <FlatList
-                data={allImages}
-                horizontal
-                pagingEnabled
-                showsHorizontalScrollIndicator={false}
-                onMomentumScrollEnd={(e) => {
-                  setActiveImageIdx(Math.round(e.nativeEvent.contentOffset.x / SCREEN_WIDTH));
-                }}
-                keyExtractor={(_, i) => `img-${i}`}
-                renderItem={({ item: imgUri }) => (
-                  <Image
-                    source={{ uri: imgUri }}
-                    style={{ width: SCREEN_WIDTH, height: SCREEN_WIDTH / mediaAspect }}
-                    resizeMode="cover"
-                  />
-                )}
+      {hasMedia && allImages.length > 1 ? (
+        <View>
+          <FlatList
+            data={allImages}
+            horizontal
+            pagingEnabled
+            showsHorizontalScrollIndicator={false}
+            onMomentumScrollEnd={(e) => {
+              setActiveImageIdx(Math.round(e.nativeEvent.contentOffset.x / SCREEN_WIDTH));
+            }}
+            keyExtractor={(_, i) => `img-${i}`}
+            renderItem={({ item: imgUri }) => (
+              <Image
+                source={{ uri: imgUri }}
+                style={{ width: SCREEN_WIDTH, height: SCREEN_WIDTH / mediaAspect, backgroundColor: colors.bgSubtle }}
+                resizeMode="cover"
               />
-              {allImages.length > 1 && (
-                <View style={postStyles.carouselDots}>
-                  {allImages.map((_: string, i: number) => (
-                    <View
-                      key={i}
-                      style={[postStyles.dot, activeImageIdx === i && postStyles.dotActive]}
-                    />
-                  ))}
-                </View>
-              )}
-            </View>
-          ) : (
-            <Image
-              source={{ uri: post.image }}
-              style={{ width: SCREEN_WIDTH, height: SCREEN_WIDTH / mediaAspect, backgroundColor: colors.bgSubtle }}
-              resizeMode="cover"
-            />
-          )}
+            )}
+          />
+          <View style={postStyles.carouselDots}>
+            {allImages.map((_: string, i: number) => (
+              <View
+                key={i}
+                style={[postStyles.dot, activeImageIdx === i && postStyles.dotActive]}
+              />
+            ))}
+          </View>
+        </View>
+      ) : hasMedia ? (
+        <TouchableOpacity activeOpacity={0.95} onPress={onPress}>
+          <Image
+            source={{ uri: post.image }}
+            style={{ width: SCREEN_WIDTH, height: SCREEN_WIDTH / mediaAspect, backgroundColor: colors.bgSubtle }}
+            resizeMode="cover"
+          />
         </TouchableOpacity>
-      )}
+      ) : null}
 
       {/* ── Caption (above actions for Flames-Up style) ── */}
       {post.content ? (
@@ -252,9 +258,43 @@ function PostCard({ post, currentUserId, onPress, onUserPress }: any) {
           <Ionicons name="paper-plane-outline" size={20} color={colors.textSecondary} />
         </TouchableOpacity>
         <View style={{ flex: 1 }} />
-        <TouchableOpacity onPress={() => setSaved(!saved)} style={postStyles.actionBtn}>
-          <Ionicons name={saved ? 'bookmark' : 'bookmark-outline'} size={20} color={saved ? colors.accentPrimary : colors.textSecondary} />
-        </TouchableOpacity>
+        <View>
+          <TouchableOpacity onPress={() => setShowSaveMenu(!showSaveMenu)} style={postStyles.actionBtn}>
+            <Ionicons name={saved ? 'bookmark' : 'bookmark-outline'} size={20} color={saved ? colors.accentPrimary : colors.textSecondary} />
+          </TouchableOpacity>
+          {showSaveMenu && (
+            <View style={postStyles.saveFloating}>
+              {SAVE_COLLECTIONS.map((col) => (
+                <TouchableOpacity
+                  key={col.id}
+                  style={[postStyles.saveItem, savedCollection === col.id && postStyles.saveItemActive]}
+                  onPress={() => {
+                    setSaved(true);
+                    setSavedCollection(col.id);
+                    setShowSaveMenu(false);
+                  }}
+                >
+                  <Ionicons name={col.icon as any} size={16} color={savedCollection === col.id ? colors.accentPrimary : colors.textSecondary} />
+                  <Text style={[postStyles.saveItemText, savedCollection === col.id && { color: colors.accentPrimary, fontWeight: '700' }]}>{col.label}</Text>
+                </TouchableOpacity>
+              ))}
+              <View style={postStyles.saveDivider} />
+              <TouchableOpacity
+                style={postStyles.saveItem}
+                onPress={() => {
+                  setShowSaveMenu(false);
+                  Alert.alert('New Collection', 'Enter a name for your new collection', [
+                    { text: 'Cancel', style: 'cancel' },
+                    { text: 'Create', onPress: () => { setSaved(true); setSavedCollection('custom'); } },
+                  ]);
+                }}
+              >
+                <Ionicons name="add-circle-outline" size={16} color={colors.accentPrimary} />
+                <Text style={[postStyles.saveItemText, { color: colors.accentPrimary, fontWeight: '600' }]}>Create New</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
       </View>
     </View>
   );
@@ -339,6 +379,44 @@ const postStyles = StyleSheet.create({
     paddingVertical: 4,
   },
   actionCount: { fontSize: 13, fontWeight: '600', color: colors.textSecondary },
+  // Save Floating Menu
+  saveFloating: {
+    position: 'absolute',
+    bottom: 44,
+    right: 0,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.borderLight,
+    paddingVertical: 4,
+    minWidth: 180,
+    zIndex: 100,
+    elevation: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+  },
+  saveItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  saveItemActive: {
+    backgroundColor: colors.accentPrimaryLight,
+  },
+  saveItemText: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: colors.textPrimary,
+  },
+  saveDivider: {
+    height: 1,
+    backgroundColor: colors.borderSubtle,
+    marginVertical: 2,
+  },
   // Menu Sheet
   menuOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
   menuSheet: {
