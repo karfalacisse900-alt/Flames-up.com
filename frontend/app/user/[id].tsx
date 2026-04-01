@@ -41,6 +41,9 @@ export default function UserProfileScreen() {
   const [isFollowLoading, setIsFollowLoading] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
   const [showReport, setShowReport] = useState(false);
+  const [friendStatus, setFriendStatus] = useState<string>('none');
+  const [friendRequestId, setFriendRequestId] = useState<string | null>(null);
+  const [friendLoading, setFriendLoading] = useState(false);
 
   useEffect(() => {
     loadUserData();
@@ -55,6 +58,13 @@ export default function UserProfileScreen() {
       setUserProfile(userRes.data);
       setPosts(postsRes.data);
       setIsFollowing(userRes.data.is_following);
+      
+      // Load friendship status
+      try {
+        const friendRes = await api.get(`/friends/status/${userId}`);
+        setFriendStatus(friendRes.data.status);
+        if (friendRes.data.request_id) setFriendRequestId(friendRes.data.request_id);
+      } catch {}
     } catch (error) {
       console.log('Error loading user data:', error);
     } finally {
@@ -97,6 +107,47 @@ export default function UserProfileScreen() {
       Alert.alert('Error', 'Could not submit report. Please try again.');
     }
     setShowReport(false);
+  };
+
+  const handleFriendRequest = async () => {
+    if (friendLoading) return;
+    setFriendLoading(true);
+    try {
+      if (friendStatus === 'none') {
+        const res = await api.post(`/friends/request/${userId}`);
+        if (res.data.status === 'accepted') {
+          setFriendStatus('friends');
+          Alert.alert('Friends!', 'You are now friends!');
+        } else {
+          setFriendStatus('pending_sent');
+          setFriendRequestId(res.data.request_id);
+        }
+      } else if (friendStatus === 'pending_received' && friendRequestId) {
+        await api.post(`/friends/accept/${friendRequestId}`);
+        setFriendStatus('friends');
+        Alert.alert('Friends!', 'You are now friends!');
+      } else if (friendStatus === 'friends') {
+        Alert.alert(
+          'Remove Friend',
+          'Are you sure you want to remove this friend?',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            {
+              text: 'Remove',
+              style: 'destructive',
+              onPress: async () => {
+                await api.delete(`/friends/${userId}`);
+                setFriendStatus('none');
+              },
+            },
+          ]
+        );
+      }
+    } catch (error: any) {
+      Alert.alert('Error', error.response?.data?.detail || 'Something went wrong');
+    } finally {
+      setFriendLoading(false);
+    }
   };
 
   if (isLoading) {
@@ -323,6 +374,45 @@ export default function UserProfileScreen() {
               )}
             </TouchableOpacity>
             <TouchableOpacity
+              style={[
+                s.friendBtn,
+                friendStatus === 'friends' && s.friendBtnActive,
+                friendStatus === 'pending_sent' && s.friendBtnPending,
+              ]}
+              onPress={handleFriendRequest}
+              disabled={friendLoading}
+            >
+              {friendLoading ? (
+                <ActivityIndicator size="small" color={colors.accentPrimary} />
+              ) : (
+                <>
+                  <Ionicons
+                    name={
+                      friendStatus === 'friends' ? 'people' :
+                      friendStatus === 'pending_sent' ? 'hourglass-outline' :
+                      friendStatus === 'pending_received' ? 'checkmark-circle-outline' :
+                      'person-add-outline'
+                    }
+                    size={18}
+                    color={friendStatus === 'friends' ? '#22C55E' : colors.accentPrimary}
+                  />
+                  <Text style={[
+                    s.friendBtnText,
+                    friendStatus === 'friends' && { color: '#22C55E' },
+                  ]}>
+                    {friendStatus === 'friends' ? 'Friends' :
+                     friendStatus === 'pending_sent' ? 'Pending' :
+                     friendStatus === 'pending_received' ? 'Accept' :
+                     'Add Friend'}
+                  </Text>
+                </>
+              )}
+            </TouchableOpacity>
+          </View>
+        )}
+        {!isOwnProfile && (
+          <View style={[s.actionRow, { marginTop: 8 }]}>
+            <TouchableOpacity
               style={s.messageBtn}
               onPress={() => router.push(`/conversation/${userId}` as any)}
             >
@@ -516,6 +606,18 @@ const s = StyleSheet.create({
   },
   followBtnText: { fontSize: 15, fontWeight: '700', color: '#FFFFFF' },
   followingBtnText: { color: colors.accentPrimary },
+  friendBtn: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: 8, backgroundColor: colors.accentPrimaryLight, paddingVertical: 14, borderRadius: 20,
+    borderWidth: 1, borderColor: colors.accentPrimary + '30',
+  },
+  friendBtnActive: {
+    backgroundColor: '#DCFCE7', borderColor: '#22C55E30',
+  },
+  friendBtnPending: {
+    backgroundColor: '#FEF3C7', borderColor: '#F59E0B30',
+  },
+  friendBtnText: { fontSize: 15, fontWeight: '700', color: colors.accentPrimary },
   messageBtn: {
     flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
     gap: 8, backgroundColor: colors.accentPrimaryLight, paddingVertical: 14,

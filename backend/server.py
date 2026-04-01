@@ -76,7 +76,9 @@ class User(BaseModel):
 
 class PostCreate(BaseModel):
     content: str
-    image: Optional[str] = None  # Base64 image
+    image: Optional[str] = None  # Single image (backward compat)
+    images: Optional[List[str]] = None  # Multiple images/videos
+    media_types: Optional[List[str]] = None  # "image" or "video" per item
     location: Optional[str] = None
 
 class PostUpdate(BaseModel):
@@ -90,6 +92,8 @@ class Post(BaseModel):
     user_profile_image: str = ""
     content: str
     image: Optional[str] = None
+    images: List[str] = []
+    media_types: List[str] = []
     location: Optional[str] = None
     likes_count: int = 0
     comments_count: int = 0
@@ -362,13 +366,25 @@ async def follow_user(user_id: str, current_user: dict = Depends(get_current_use
 
 @api_router.post("/posts")
 async def create_post(post_data: PostCreate, current_user: dict = Depends(get_current_user)):
+    # Build images list from both old and new fields
+    images_list = []
+    media_types_list = []
+    if post_data.images:
+        images_list = post_data.images
+        media_types_list = post_data.media_types or ["image"] * len(images_list)
+    elif post_data.image:
+        images_list = [post_data.image]
+        media_types_list = ["image"]
+
     post = Post(
         user_id=current_user["id"],
         user_username=current_user["username"],
         user_full_name=current_user["full_name"],
         user_profile_image=current_user.get("profile_image", ""),
         content=post_data.content,
-        image=post_data.image,
+        image=images_list[0] if images_list else None,
+        images=images_list,
+        media_types=media_types_list,
         location=post_data.location
     )
     await db.posts.insert_one(post.dict())
@@ -381,18 +397,31 @@ async def get_posts(skip: int = 0, limit: int = 20, current_user: dict = Depends
     return [{k: v for k, v in p.items() if k != "_id"} for p in posts]
 
 @api_router.get("/posts/feed")
-async def get_feed(skip: int = 0, limit: int = 20, current_user: dict = Depends(get_current_user)):
-    # Get posts from followed users + own posts
-    following = await db.follows.find({"follower_id": current_user["id"]}).to_list(1000)
-    following_ids = [f["following_id"] for f in following]
-    following_ids.append(current_user["id"])
+async def get_feed(
+    skip: int = 0,
+    limit: int = 20,
+    location: Optional[str] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    query: dict = {}
     
-    posts = await db.posts.find({"user_id": {"$in": following_ids}}).sort("created_at", -1).skip(skip).limit(limit).to_list(limit)
+    if location and location not in ("global", "Global"):
+        # Filter by location (case-insensitive partial match)
+        query["location"] = {"$regex": location, "$options": "i"}
     
-    if len(posts) < limit:
-        # Get more posts from others
-        other_posts = await db.posts.find({"user_id": {"$nin": following_ids}}).sort("created_at", -1).limit(limit - len(posts)).to_list(limit - len(posts))
-        posts.extend(other_posts)
+    if not query:
+        # Default feed: followed users + own + others
+        following = await db.follows.find({"follower_id": current_user["id"]}).to_list(1000)
+        following_ids = [f["following_id"] for f in following]
+        following_ids.append(current_user["id"])
+        
+        posts = await db.posts.find({"user_id": {"$in": following_ids}}).sort("created_at", -1).skip(skip).limit(limit).to_list(limit)
+        
+        if len(posts) < limit:
+            other_posts = await db.posts.find({"user_id": {"$nin": following_ids}}).sort("created_at", -1).limit(limit - len(posts)).to_list(limit - len(posts))
+            posts.extend(other_posts)
+    else:
+        posts = await db.posts.find(query).sort("created_at", -1).skip(skip).limit(limit).to_list(limit)
     
     return [{k: v for k, v in p.items() if k != "_id"} for p in posts]
 
@@ -966,6 +995,166 @@ async def create_report(report: ReportCreate, current_user: dict = Depends(get_c
     }
     db.reports.insert_one(report_doc)
     return {"message": "Report submitted successfully", "report_id": report_doc["id"]}
+
+
+
+# ===================== FRIEND REQUESTS =====================
+
+@api_router.post("/friends/request/{user_id}")
+async def send_friend_request(user_id: str, current_user: dict = Depends(get_current_user)):
+    """Send a friend request"""
+    if user_id == current_user["id"]:
+        raise HTTPException(status_code=400, detail="Cannot send friend request to yourself")
+    
+    target = await db.users.find_one({"id": user_id})
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Check if already friends
+    existing = await db.friends.find_one({
+        "$or": [
+            {"user_a": current_user["id"], "user_b": user_id},
+            {"user_a": user_id, "user_b": current_user["id"]}
+        ]
+    })
+    if existing:
+        raise HTTPException(status_code=400, detail="Already friends")
+    
+    # Check if request already sent
+    existing_req = await db.friend_requests.find_one({
+        "from_id": current_user["id"],
+        "to_id": user_id,
+        "status": "pending"
+    })
+    if existing_req:
+        raise HTTPException(status_code=400, detail="Friend request already sent")
+    
+    # Check if they sent us a request (auto-accept)
+    reverse_req = await db.friend_requests.find_one({
+        "from_id": user_id,
+        "to_id": current_user["id"],
+        "status": "pending"
+    })
+    if reverse_req:
+        # Auto accept
+        await db.friend_requests.update_one({"id": reverse_req["id"]}, {"$set": {"status": "accepted"}})
+        await db.friends.insert_one({
+            "id": str(uuid.uuid4()),
+            "user_a": current_user["id"],
+            "user_b": user_id,
+            "created_at": datetime.utcnow().isoformat()
+        })
+        await create_notification(user_id, "friend_accepted", "Friend Request Accepted",
+                                  f"{current_user['username']} accepted your friend request", {})
+        return {"status": "accepted", "message": "You are now friends!"}
+    
+    req_doc = {
+        "id": str(uuid.uuid4()),
+        "from_id": current_user["id"],
+        "from_username": current_user["username"],
+        "from_full_name": current_user["full_name"],
+        "from_profile_image": current_user.get("profile_image", ""),
+        "to_id": user_id,
+        "status": "pending",
+        "created_at": datetime.utcnow().isoformat()
+    }
+    await db.friend_requests.insert_one(req_doc)
+    
+    await create_notification(user_id, "friend_request", "Friend Request",
+                              f"{current_user['username']} sent you a friend request", {"request_id": req_doc["id"]})
+    
+    return {"status": "pending", "request_id": req_doc["id"]}
+
+@api_router.post("/friends/accept/{request_id}")
+async def accept_friend_request(request_id: str, current_user: dict = Depends(get_current_user)):
+    req = await db.friend_requests.find_one({"id": request_id, "to_id": current_user["id"], "status": "pending"})
+    if not req:
+        raise HTTPException(status_code=404, detail="Friend request not found")
+    
+    await db.friend_requests.update_one({"id": request_id}, {"$set": {"status": "accepted"}})
+    await db.friends.insert_one({
+        "id": str(uuid.uuid4()),
+        "user_a": req["from_id"],
+        "user_b": current_user["id"],
+        "created_at": datetime.utcnow().isoformat()
+    })
+    
+    await create_notification(req["from_id"], "friend_accepted", "Friend Request Accepted",
+                              f"{current_user['username']} accepted your friend request", {})
+    
+    return {"status": "accepted"}
+
+@api_router.post("/friends/reject/{request_id}")
+async def reject_friend_request(request_id: str, current_user: dict = Depends(get_current_user)):
+    req = await db.friend_requests.find_one({"id": request_id, "to_id": current_user["id"], "status": "pending"})
+    if not req:
+        raise HTTPException(status_code=404, detail="Friend request not found")
+    
+    await db.friend_requests.update_one({"id": request_id}, {"$set": {"status": "rejected"}})
+    return {"status": "rejected"}
+
+@api_router.get("/friends/requests")
+async def get_friend_requests(current_user: dict = Depends(get_current_user)):
+    """Get pending friend requests for current user"""
+    requests = await db.friend_requests.find({"to_id": current_user["id"], "status": "pending"}).sort("created_at", -1).to_list(100)
+    return [{k: v for k, v in r.items() if k != "_id"} for r in requests]
+
+@api_router.get("/friends")
+async def get_friends(current_user: dict = Depends(get_current_user)):
+    """Get current user's friends list"""
+    friendships = await db.friends.find({
+        "$or": [{"user_a": current_user["id"]}, {"user_b": current_user["id"]}]
+    }).to_list(500)
+    
+    friend_ids = []
+    for f in friendships:
+        fid = f["user_b"] if f["user_a"] == current_user["id"] else f["user_a"]
+        friend_ids.append(fid)
+    
+    friends = await db.users.find({"id": {"$in": friend_ids}}).to_list(500)
+    return [{k: v for k, v in u.items() if k not in ("_id", "hashed_password")} for u in friends]
+
+@api_router.get("/friends/status/{user_id}")
+async def get_friendship_status(user_id: str, current_user: dict = Depends(get_current_user)):
+    """Check friendship status with another user"""
+    # Check if already friends
+    friendship = await db.friends.find_one({
+        "$or": [
+            {"user_a": current_user["id"], "user_b": user_id},
+            {"user_a": user_id, "user_b": current_user["id"]}
+        ]
+    })
+    if friendship:
+        return {"status": "friends"}
+    
+    # Check if request pending (I sent)
+    sent = await db.friend_requests.find_one({
+        "from_id": current_user["id"], "to_id": user_id, "status": "pending"
+    })
+    if sent:
+        return {"status": "pending_sent", "request_id": sent["id"]}
+    
+    # Check if request pending (they sent)
+    received = await db.friend_requests.find_one({
+        "from_id": user_id, "to_id": current_user["id"], "status": "pending"
+    })
+    if received:
+        return {"status": "pending_received", "request_id": received["id"]}
+    
+    return {"status": "none"}
+
+@api_router.delete("/friends/{user_id}")
+async def remove_friend(user_id: str, current_user: dict = Depends(get_current_user)):
+    """Remove a friend"""
+    result = await db.friends.delete_one({
+        "$or": [
+            {"user_a": current_user["id"], "user_b": user_id},
+            {"user_a": user_id, "user_b": current_user["id"]}
+        ]
+    })
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Friendship not found")
+    return {"status": "removed"}
 
 
 # ===================== GOOGLE MAPS PLACES API =====================

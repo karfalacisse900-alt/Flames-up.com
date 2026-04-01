@@ -49,6 +49,12 @@ function PostCard({ post, currentUserId, onPress, onUserPress }: any) {
   const [captionExpanded, setCaptionExpanded] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
   const [showReport, setShowReport] = useState(false);
+  const [activeImageIdx, setActiveImageIdx] = useState(0);
+
+  // Collect all images (from both old single image and new images array)
+  const allImages: string[] = post.images?.length > 0
+    ? post.images
+    : post.image ? [post.image] : [];
 
   const handleLike = async () => {
     setLiked(!liked);
@@ -172,16 +178,46 @@ function PostCard({ post, currentUserId, onPress, onUserPress }: any) {
         </TouchableOpacity>
       </Modal>
 
-      {/* ── Media (Photo 4:5 / Video 1:1) with rounded corners ── */}
+      {/* ── Media (Photo 4:5 / Video 1:1) full-width + carousel ── */}
       {hasMedia && (
         <TouchableOpacity activeOpacity={0.95} onPress={onPress}>
-          <View style={postStyles.mediaWrap}>
+          {allImages.length > 1 ? (
+            <View>
+              <FlatList
+                data={allImages}
+                horizontal
+                pagingEnabled
+                showsHorizontalScrollIndicator={false}
+                onMomentumScrollEnd={(e) => {
+                  setActiveImageIdx(Math.round(e.nativeEvent.contentOffset.x / SCREEN_WIDTH));
+                }}
+                keyExtractor={(_, i) => `img-${i}`}
+                renderItem={({ item: imgUri }) => (
+                  <Image
+                    source={{ uri: imgUri }}
+                    style={{ width: SCREEN_WIDTH, height: SCREEN_WIDTH / mediaAspect }}
+                    resizeMode="cover"
+                  />
+                )}
+              />
+              {allImages.length > 1 && (
+                <View style={postStyles.carouselDots}>
+                  {allImages.map((_: string, i: number) => (
+                    <View
+                      key={i}
+                      style={[postStyles.dot, activeImageIdx === i && postStyles.dotActive]}
+                    />
+                  ))}
+                </View>
+              )}
+            </View>
+          ) : (
             <Image
               source={{ uri: post.image }}
-              style={[postStyles.media, { width: SCREEN_WIDTH - 32, height: (SCREEN_WIDTH - 32) / mediaAspect }]}
+              style={{ width: SCREEN_WIDTH, height: SCREEN_WIDTH / mediaAspect, backgroundColor: colors.bgSubtle }}
               resizeMode="cover"
             />
-          </View>
+          )}
         </TouchableOpacity>
       )}
 
@@ -266,14 +302,24 @@ const postStyles = StyleSheet.create({
   location: { fontSize: 12, color: colors.accentPrimary, fontWeight: '500' },
   timeLabel: { fontSize: 12, color: colors.textHint, marginTop: 1 },
   moreBtn: { padding: 6 },
-  // Media – rounded card style
-  mediaWrap: {
-    marginHorizontal: 16,
-    borderRadius: 20,
-    overflow: 'hidden',
-    backgroundColor: colors.bgSubtle,
+  // Media – full-width
+  carouselDots: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 5,
+    paddingVertical: 10,
   },
-  media: {},
+  dot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: colors.borderLight,
+  },
+  dotActive: {
+    backgroundColor: colors.accentPrimary,
+    width: 18,
+    borderRadius: 3,
+  },
   // Caption
   captionContainer: { paddingHorizontal: 16, marginTop: 10 },
   captionText: { fontSize: 15, color: colors.textPrimary, lineHeight: 22 },
@@ -406,9 +452,11 @@ function InlineComposer({
     if (!content.trim() && media.length === 0) return;
     setIsPosting(true);
     try {
+      const imagesList = media.map(m => m.base64 || m.uri).filter(Boolean);
       await api.post('/posts', {
         content: content.trim(),
-        image: media[0]?.base64 || media[0]?.uri || null,
+        image: imagesList[0] || null,
+        images: imagesList.length > 0 ? imagesList : undefined,
       });
       setContent('');
       setMedia([]);
@@ -652,10 +700,29 @@ export default function HomeScreen() {
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [showComposer, setShowComposer] = useState(false);
+  const [activeCity, setActiveCity] = useState('global');
 
-  const loadFeed = async () => {
+  const CITIES = [
+    { id: 'global', label: 'Global', icon: 'globe-outline' },
+    { id: 'nearby', label: 'Nearby', icon: 'navigate-outline' },
+    { id: 'New York', label: 'New York', icon: 'business-outline' },
+    { id: 'Miami', label: 'Miami', icon: 'sunny-outline' },
+    { id: 'Los Angeles', label: 'LA', icon: 'car-outline' },
+    { id: 'Paris', label: 'Paris', icon: 'heart-outline' },
+    { id: 'London', label: 'London', icon: 'rainy-outline' },
+    { id: 'Tokyo', label: 'Tokyo', icon: 'train-outline' },
+    { id: 'Shanghai', label: 'Shanghai', icon: 'earth-outline' },
+    { id: 'Dubai', label: 'Dubai', icon: 'diamond-outline' },
+    { id: 'Berlin', label: 'Berlin', icon: 'beer-outline' },
+    { id: 'Toronto', label: 'Toronto', icon: 'snow-outline' },
+  ];
+
+  const loadFeed = async (city?: string) => {
     try {
-      const response = await api.get('/posts/feed');
+      const c = city || activeCity;
+      const params: any = {};
+      if (c !== 'global' && c !== 'nearby') params.location = c;
+      const response = await api.get('/posts/feed', { params });
       setPosts(response.data);
     } catch (error) {
       console.log('Error loading feed:', error);
@@ -712,12 +779,6 @@ export default function HomeScreen() {
         <View style={styles.headerActions}>
           <TouchableOpacity
             style={styles.headerBtn}
-            onPress={() => router.push('/(tabs)/discover')}
-          >
-            <Ionicons name="search" size={18} color={colors.accentPrimary} />
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.headerBtn}
             onPress={() => router.push('/notifications')}
           >
             <Ionicons
@@ -726,22 +787,6 @@ export default function HomeScreen() {
               color={colors.accentPrimary}
             />
           </TouchableOpacity>
-          {user && (
-            <TouchableOpacity onPress={() => router.push('/(tabs)/profile')}>
-              <View style={styles.headerAvatar}>
-                {user.profile_image ? (
-                  <Image
-                    source={{ uri: user.profile_image }}
-                    style={{ width: '100%', height: '100%' }}
-                  />
-                ) : (
-                  <Text style={styles.headerAvatarText}>
-                    {(user.full_name || 'U')[0].toUpperCase()}
-                  </Text>
-                )}
-              </View>
-            </TouchableOpacity>
-          )}
         </View>
       </View>
 
@@ -810,31 +855,46 @@ export default function HomeScreen() {
       {/* Divider */}
       <View style={styles.divider} />
 
-      {/* Feed Header */}
-      <View style={styles.feedHeader}>
-        <TouchableOpacity style={styles.menuBtn}>
-          <Ionicons name="menu" size={18} color={colors.textSecondary} />
-        </TouchableOpacity>
+      {/* City Location Selector */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.cityRow}
+      >
+        {CITIES.map((city) => (
+          <TouchableOpacity
+            key={city.id}
+            style={[styles.cityChip, activeCity === city.id && styles.cityChipActive]}
+            onPress={() => {
+              setActiveCity(city.id);
+              setIsLoading(true);
+              loadFeed(city.id);
+            }}
+          >
+            <Ionicons
+              name={city.icon as any}
+              size={14}
+              color={activeCity === city.id ? '#FFFFFF' : colors.textSecondary}
+            />
+            <Text style={[styles.cityChipText, activeCity === city.id && styles.cityChipTextActive]}>
+              {city.label}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </ScrollView>
 
-        <View style={{ flex: 1 }} />
-
-        {/* Global / Location Filter */}
-        <TouchableOpacity style={styles.filterPill}>
-          <Ionicons name="globe-outline" size={14} color={colors.textSecondary} />
-          <Text style={styles.filterText}>Global</Text>
-          <Ionicons name="chevron-down" size={14} color={colors.textSecondary} />
-        </TouchableOpacity>
-
-        {/* Post Button */}
-        {user && (
+      {/* Post Button */}
+      {user && (
+        <View style={styles.postRow}>
           <TouchableOpacity
             style={styles.postBtn}
             onPress={() => setShowComposer(!showComposer)}
           >
-            <Text style={styles.postBtnText}>Post</Text>
+            <Ionicons name="create-outline" size={16} color="#FFFFFF" />
+            <Text style={styles.postBtnText}>Create Post</Text>
           </TouchableOpacity>
-        )}
-      </View>
+        </View>
+      )}
 
       {/* Inline Composer */}
       <InlineComposer
@@ -1058,50 +1118,51 @@ const styles = StyleSheet.create({
     height: 1,
     backgroundColor: colors.borderSubtle,
   },
-  // Feed Header
-  feedHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
+  // City Selector
+  cityRow: {
+    paddingHorizontal: 12,
     paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.borderSubtle,
+    gap: 8,
   },
-  menuBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 14,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: colors.bgSubtle,
-    borderWidth: 1,
-    borderColor: colors.borderLight,
-  },
-  filterPill: {
+  cityChip: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    paddingHorizontal: 12,
+    paddingHorizontal: 14,
     paddingVertical: 8,
     borderRadius: 20,
     backgroundColor: colors.bgSubtle,
     borderWidth: 1,
     borderColor: colors.borderLight,
-    marginRight: 8,
   },
-  filterText: {
+  cityChipActive: {
+    backgroundColor: colors.accentPrimary,
+    borderColor: colors.accentPrimary,
+  },
+  cityChipText: {
     fontSize: 12,
     fontWeight: '600',
     color: colors.textSecondary,
   },
-  postBtn: {
+  cityChipTextActive: {
+    color: '#FFFFFF',
+  },
+  // Post row
+  postRow: {
     paddingHorizontal: 16,
-    paddingVertical: 8,
+    paddingBottom: 8,
+  },
+  postBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 12,
     borderRadius: 20,
     backgroundColor: colors.accentPrimary,
   },
   postBtnText: {
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: '700',
     color: '#FFFFFF',
   },
