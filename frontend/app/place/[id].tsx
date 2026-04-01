@@ -282,6 +282,26 @@ export default function PlaceDetailScreen() {
           </TouchableOpacity>
         </View>
 
+        {/* Check In & Post Button */}
+        <TouchableOpacity
+          style={s.checkinBtn}
+          onPress={() => {
+            router.push({
+              pathname: '/checkin-post',
+              params: {
+                placeId: placeId,
+                placeName: place.name,
+                placeLat: String(place.lat || 0),
+                placeLng: String(place.lng || 0),
+                placePhoto: photos[0] || '',
+              },
+            } as any);
+          }}
+        >
+          <Ionicons name="location" size={18} color="#FFFFFF" />
+          <Text style={s.checkinBtnText}>Check In & Post</Text>
+        </TouchableOpacity>
+
         {/* Divider */}
         <View style={s.divider} />
 
@@ -590,6 +610,24 @@ const s = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
     color: colors.textSecondary,
+  },
+
+  // Check In Button
+  checkinBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginHorizontal: 20,
+    marginBottom: 8,
+    paddingVertical: 14,
+    borderRadius: 20,
+    backgroundColor: '#10B981',
+  },
+  checkinBtnText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#FFFFFF',
   },
 
   // Divider

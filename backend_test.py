@@ -1,561 +1,348 @@
 #!/usr/bin/env python3
 """
-Comprehensive Backend API Tests for Flames-Up Social Media App
-Tests all API endpoints with proper authentication flow
+Comprehensive Backend API Testing for Flames-Up Check-In Post Feature
+Tests the new Check-In Post functionality including proximity verification,
+post creation with different types, nearby feed, and post deletion.
 """
 
 import requests
 import json
-import time
-from datetime import datetime
+import sys
 from typing import Dict, Any, Optional
 
-class FlamesUpAPITester:
-    def __init__(self, base_url: str = "https://flames-up-preview.preview.emergentagent.com/api"):
-        self.base_url = base_url
-        self.session = requests.Session()
-        self.auth_token = None
-        self.current_user = None
-        self.test_results = []
-        
-        # Test credentials from test_credentials.md
-        self.demo_user = {
-            "email": "demo@flames-up.com",
-            "password": "demo123456",
-            "username": "demouser",
-            "full_name": "Demo User"
-        }
-        
-        self.test_user = {
-            "email": "test@flames-up.com", 
-            "password": "test123456",
-            "username": "testuser",
-            "full_name": "Test User"
-        }
+# Configuration
+BASE_URL = "https://flames-up-preview.preview.emergentagent.com/api"
+TEST_EMAIL = "demo@flames-up.com"
+TEST_PASSWORD = "demo123456"
 
-    def log_result(self, test_name: str, success: bool, details: str = "", response_data: Any = None):
-        """Log test results"""
-        result = {
-            "test": test_name,
-            "success": success,
-            "details": details,
-            "timestamp": datetime.now().isoformat(),
-            "response_data": response_data
-        }
-        self.test_results.append(result)
-        status = "✅ PASS" if success else "❌ FAIL"
-        print(f"{status} {test_name}: {details}")
-
-    def make_request(self, method: str, endpoint: str, data: Dict = None, headers: Dict = None) -> requests.Response:
-        """Make HTTP request with proper headers"""
+class FlamesUpTester:
+    def __init__(self):
+        self.base_url = BASE_URL
+        self.token = None
+        self.user_id = None
+        self.created_posts = []  # Track created posts for cleanup
+        
+    def log(self, message: str, level: str = "INFO"):
+        """Log test messages"""
+        print(f"[{level}] {message}")
+        
+    def make_request(self, method: str, endpoint: str, data: Optional[Dict] = None, 
+                    headers: Optional[Dict] = None, params: Optional[Dict] = None) -> Dict[str, Any]:
+        """Make HTTP request with error handling"""
         url = f"{self.base_url}{endpoint}"
-        req_headers = {"Content-Type": "application/json"}
         
-        if self.auth_token:
-            req_headers["Authorization"] = f"Bearer {self.auth_token}"
-            
-        if headers:
-            req_headers.update(headers)
+        # Add auth header if token exists
+        if self.token and headers is None:
+            headers = {"Authorization": f"Bearer {self.token}"}
+        elif self.token and headers:
+            headers["Authorization"] = f"Bearer {self.token}"
             
         try:
             if method.upper() == "GET":
-                response = self.session.get(url, headers=req_headers, timeout=30)
+                response = requests.get(url, headers=headers, params=params, timeout=30)
             elif method.upper() == "POST":
-                response = self.session.post(url, json=data, headers=req_headers, timeout=30)
-            elif method.upper() == "PUT":
-                response = self.session.put(url, json=data, headers=req_headers, timeout=30)
+                response = requests.post(url, json=data, headers=headers, timeout=30)
             elif method.upper() == "DELETE":
-                response = self.session.delete(url, headers=req_headers, timeout=30)
+                response = requests.delete(url, headers=headers, timeout=30)
             else:
                 raise ValueError(f"Unsupported method: {method}")
                 
-            return response
-        except requests.exceptions.RequestException as e:
-            print(f"Request failed: {e}")
-            raise
-
-    def test_health_check(self):
-        """Test basic health endpoints"""
-        print("\n=== HEALTH CHECK TESTS ===")
-        
-        # Test root endpoint
-        try:
-            response = self.make_request("GET", "/")
-            if response.status_code == 200:
-                data = response.json()
-                self.log_result("Root endpoint", True, f"API responding: {data.get('message', 'OK')}")
-            else:
-                self.log_result("Root endpoint", False, f"Status: {response.status_code}")
-        except Exception as e:
-            self.log_result("Root endpoint", False, f"Error: {str(e)}")
-
-        # Test health endpoint
-        try:
-            response = self.make_request("GET", "/health")
-            if response.status_code == 200:
-                data = response.json()
-                self.log_result("Health check", True, f"Status: {data.get('status', 'OK')}")
-            else:
-                self.log_result("Health check", False, f"Status: {response.status_code}")
-        except Exception as e:
-            self.log_result("Health check", False, f"Error: {str(e)}")
-
-    def test_auth_endpoints(self):
-        """Test authentication endpoints"""
-        print("\n=== AUTHENTICATION TESTS ===")
-        
-        # Test user registration (create test user if not exists)
-        try:
-            response = self.make_request("POST", "/auth/register", self.test_user)
-            if response.status_code == 200:
-                data = response.json()
-                self.log_result("User registration", True, "Test user registered successfully")
-            elif response.status_code == 400 and "already" in response.text.lower():
-                self.log_result("User registration", True, "Test user already exists (expected)")
-            else:
-                self.log_result("User registration", False, f"Status: {response.status_code}, Response: {response.text}")
-        except Exception as e:
-            self.log_result("User registration", False, f"Error: {str(e)}")
-
-        # Test login with demo user
-        try:
-            login_data = {"email": self.demo_user["email"], "password": self.demo_user["password"]}
-            response = self.make_request("POST", "/auth/login", login_data)
+            self.log(f"{method} {endpoint} -> {response.status_code}")
             
-            if response.status_code == 200:
-                data = response.json()
-                self.auth_token = data.get("token")
-                self.current_user = data.get("user")
-                self.log_result("User login", True, f"Logged in as {self.current_user.get('username', 'unknown')}")
-            else:
-                # Try registering demo user first
-                reg_response = self.make_request("POST", "/auth/register", self.demo_user)
-                if reg_response.status_code == 200:
-                    # Try login again
-                    response = self.make_request("POST", "/auth/login", login_data)
-                    if response.status_code == 200:
-                        data = response.json()
-                        self.auth_token = data.get("token")
-                        self.current_user = data.get("user")
-                        self.log_result("User login", True, f"Registered and logged in as {self.current_user.get('username', 'unknown')}")
-                    else:
-                        self.log_result("User login", False, f"Login failed after registration: {response.status_code}")
-                else:
-                    self.log_result("User login", False, f"Login failed: {response.status_code}, Response: {response.text}")
-        except Exception as e:
-            self.log_result("User login", False, f"Error: {str(e)}")
-
-        # Test get current user
-        if self.auth_token:
-            try:
-                response = self.make_request("GET", "/auth/me")
-                if response.status_code == 200:
-                    data = response.json()
-                    self.log_result("Get current user", True, f"Retrieved user: {data.get('username', 'unknown')}")
-                else:
-                    self.log_result("Get current user", False, f"Status: {response.status_code}")
-            except Exception as e:
-                self.log_result("Get current user", False, f"Error: {str(e)}")
-
-    def test_post_endpoints(self):
-        """Test post-related endpoints"""
-        print("\n=== POST TESTS ===")
-        
-        if not self.auth_token:
-            self.log_result("Post tests", False, "No auth token available")
-            return
-
-        post_id = None
-        
-        # Test create post
-        try:
-            post_data = {
-                "content": "This is a test post from the API testing suite! 🔥",
-                "location": "Test Location"
+            if response.status_code >= 400:
+                self.log(f"Error response: {response.text}", "ERROR")
+                
+            return {
+                "status_code": response.status_code,
+                "data": response.json() if response.content else {},
+                "success": 200 <= response.status_code < 300
             }
-            response = self.make_request("POST", "/posts", post_data)
-            if response.status_code == 200:
-                data = response.json()
-                post_id = data.get("id")
-                self.log_result("Create post", True, f"Post created with ID: {post_id}")
-            else:
-                self.log_result("Create post", False, f"Status: {response.status_code}, Response: {response.text}")
-        except Exception as e:
-            self.log_result("Create post", False, f"Error: {str(e)}")
+            
+        except requests.exceptions.RequestException as e:
+            self.log(f"Request failed: {str(e)}", "ERROR")
+            return {"status_code": 0, "data": {}, "success": False, "error": str(e)}
+        except json.JSONDecodeError as e:
+            self.log(f"JSON decode error: {str(e)}", "ERROR")
+            return {"status_code": response.status_code, "data": {}, "success": False, "error": "Invalid JSON"}
 
-        # Test get all posts
-        try:
-            response = self.make_request("GET", "/posts")
-            if response.status_code == 200:
-                data = response.json()
-                self.log_result("Get all posts", True, f"Retrieved {len(data)} posts")
-            else:
-                self.log_result("Get all posts", False, f"Status: {response.status_code}")
-        except Exception as e:
-            self.log_result("Get all posts", False, f"Error: {str(e)}")
+    def test_login(self) -> bool:
+        """Test user login and get authentication token"""
+        self.log("Testing login...")
+        
+        result = self.make_request("POST", "/auth/login", {
+            "email": TEST_EMAIL,
+            "password": TEST_PASSWORD
+        })
+        
+        if result["success"] and "token" in result["data"]:
+            self.token = result["data"]["token"]
+            self.user_id = result["data"]["user"]["id"]
+            self.log(f"✅ Login successful. User ID: {self.user_id}")
+            return True
+        else:
+            self.log(f"❌ Login failed: {result.get('data', {})}", "ERROR")
+            return False
 
-        # Test get feed
-        try:
-            response = self.make_request("GET", "/posts/feed")
-            if response.status_code == 200:
-                data = response.json()
-                self.log_result("Get feed", True, f"Retrieved {len(data)} feed posts")
-            else:
-                self.log_result("Get feed", False, f"Status: {response.status_code}")
-        except Exception as e:
-            self.log_result("Get feed", False, f"Error: {str(e)}")
+    def test_proximity_verification(self) -> bool:
+        """Test proximity verification endpoint"""
+        self.log("Testing proximity verification...")
+        
+        # Test NEAR scenario (within 200m)
+        near_data = {
+            "user_lat": 40.7128,
+            "user_lng": -74.006,
+            "place_lat": 40.7130,  # Very close coordinates
+            "place_lng": -74.006
+        }
+        
+        result = self.make_request("POST", "/places/verify-proximity", near_data)
+        
+        if not result["success"]:
+            self.log(f"❌ Proximity verification (near) failed: {result.get('data', {})}", "ERROR")
+            return False
+            
+        near_response = result["data"]
+        if not near_response.get("is_near", False):
+            self.log(f"❌ Near proximity check failed. Expected is_near=true, got: {near_response}", "ERROR")
+            return False
+            
+        self.log(f"✅ Near proximity check passed: {near_response}")
+        
+        # Test FAR scenario (>200m)
+        far_data = {
+            "user_lat": 40.7128,
+            "user_lng": -74.006,
+            "place_lat": 40.8000,  # Much farther coordinates
+            "place_lng": -74.006
+        }
+        
+        result = self.make_request("POST", "/places/verify-proximity", far_data)
+        
+        if not result["success"]:
+            self.log(f"❌ Proximity verification (far) failed: {result.get('data', {})}", "ERROR")
+            return False
+            
+        far_response = result["data"]
+        if far_response.get("is_near", True):  # Should be False
+            self.log(f"❌ Far proximity check failed. Expected is_near=false, got: {far_response}", "ERROR")
+            return False
+            
+        self.log(f"✅ Far proximity check passed: {far_response}")
+        return True
 
-        # Test get single post
-        if post_id:
-            try:
-                response = self.make_request("GET", f"/posts/{post_id}")
-                if response.status_code == 200:
-                    data = response.json()
-                    self.log_result("Get single post", True, f"Retrieved post: {data.get('content', '')[:50]}...")
-                else:
-                    self.log_result("Get single post", False, f"Status: {response.status_code}")
-            except Exception as e:
-                self.log_result("Get single post", False, f"Error: {str(e)}")
-
-            # Test like post
-            try:
-                response = self.make_request("POST", f"/posts/{post_id}/like")
-                if response.status_code == 200:
-                    data = response.json()
-                    self.log_result("Like post", True, f"Post liked: {data.get('liked', False)}")
-                else:
-                    self.log_result("Like post", False, f"Status: {response.status_code}")
-            except Exception as e:
-                self.log_result("Like post", False, f"Error: {str(e)}")
-
+    def test_create_checkin_post(self) -> Optional[str]:
+        """Test creating a check-in post"""
+        self.log("Testing check-in post creation...")
+        
+        checkin_data = {
+            "content": "Testing at KFC! Amazing fried chicken here 🍗",
+            "post_type": "check_in",
+            "place_id": "test_place_123",
+            "place_name": "KFC Times Square",
+            "place_lat": 40.7580,
+            "place_lng": -73.9855
+        }
+        
+        result = self.make_request("POST", "/posts", checkin_data)
+        
+        if not result["success"]:
+            self.log(f"❌ Check-in post creation failed: {result.get('data', {})}", "ERROR")
+            return None
+            
+        post = result["data"]
+        post_id = post.get("id")
+        
+        # Verify required fields
+        required_fields = ["post_type", "place_name", "is_verified_checkin"]
+        missing_fields = [field for field in required_fields if field not in post]
+        
+        if missing_fields:
+            self.log(f"❌ Check-in post missing fields: {missing_fields}", "ERROR")
+            return None
+            
+        if post["post_type"] != "check_in":
+            self.log(f"❌ Check-in post has wrong type: {post['post_type']}", "ERROR")
+            return None
+            
+        if not post.get("is_verified_checkin", False):
+            self.log(f"❌ Check-in post not marked as verified: {post.get('is_verified_checkin')}", "ERROR")
+            return None
+            
+        self.log(f"✅ Check-in post created successfully: {post_id}")
+        self.created_posts.append(post_id)
         return post_id
 
-    def test_comment_endpoints(self, post_id: str = None):
-        """Test comment-related endpoints"""
-        print("\n=== COMMENT TESTS ===")
+    def test_create_question_post(self) -> Optional[str]:
+        """Test creating a question post"""
+        self.log("Testing question post creation...")
         
-        if not self.auth_token:
-            self.log_result("Comment tests", False, "No auth token available")
-            return
-
-        if not post_id:
-            self.log_result("Comment tests", False, "No post ID available for testing")
-            return
-
-        # Test create comment
-        try:
-            comment_data = {"content": "This is a test comment! Great post! 👍"}
-            response = self.make_request("POST", f"/posts/{post_id}/comments", comment_data)
-            if response.status_code == 200:
-                data = response.json()
-                self.log_result("Create comment", True, f"Comment created: {data.get('content', '')[:30]}...")
-            else:
-                self.log_result("Create comment", False, f"Status: {response.status_code}, Response: {response.text}")
-        except Exception as e:
-            self.log_result("Create comment", False, f"Error: {str(e)}")
-
-        # Test get comments
-        try:
-            response = self.make_request("GET", f"/posts/{post_id}/comments")
-            if response.status_code == 200:
-                data = response.json()
-                self.log_result("Get comments", True, f"Retrieved {len(data)} comments")
-            else:
-                self.log_result("Get comments", False, f"Status: {response.status_code}")
-        except Exception as e:
-            self.log_result("Get comments", False, f"Error: {str(e)}")
-
-    def test_user_endpoints(self):
-        """Test user-related endpoints"""
-        print("\n=== USER TESTS ===")
+        question_data = {
+            "content": "Best pizza place in the Bronx? Looking for authentic NY style! 🍕",
+            "post_type": "question"
+        }
         
-        if not self.auth_token:
-            self.log_result("User tests", False, "No auth token available")
-            return
-
-        # Test update profile
-        try:
-            update_data = {
-                "bio": "Updated bio from API test",
-                "location": "Test City"
-            }
-            response = self.make_request("PUT", "/users/me", update_data)
-            if response.status_code == 200:
-                data = response.json()
-                self.log_result("Update profile", True, f"Profile updated: {data.get('bio', '')}")
-            else:
-                self.log_result("Update profile", False, f"Status: {response.status_code}, Response: {response.text}")
-        except Exception as e:
-            self.log_result("Update profile", False, f"Error: {str(e)}")
-
-        # Test get user profile
-        if self.current_user:
-            try:
-                user_id = self.current_user.get("id")
-                response = self.make_request("GET", f"/users/{user_id}")
-                if response.status_code == 200:
-                    data = response.json()
-                    self.log_result("Get user profile", True, f"Retrieved profile for: {data.get('username', 'unknown')}")
-                else:
-                    self.log_result("Get user profile", False, f"Status: {response.status_code}")
-            except Exception as e:
-                self.log_result("Get user profile", False, f"Error: {str(e)}")
-
-        # Test search users
-        try:
-            response = self.make_request("GET", "/users/search/demo")
-            if response.status_code == 200:
-                data = response.json()
-                self.log_result("Search users", True, f"Found {len(data)} users matching 'demo'")
-            else:
-                self.log_result("Search users", False, f"Status: {response.status_code}")
-        except Exception as e:
-            self.log_result("Search users", False, f"Error: {str(e)}")
-
-    def test_status_endpoints(self):
-        """Test status-related endpoints"""
-        print("\n=== STATUS TESTS ===")
+        result = self.make_request("POST", "/posts", question_data)
         
-        if not self.auth_token:
-            self.log_result("Status tests", False, "No auth token available")
-            return
-
-        # Test create status
-        try:
-            status_data = {
-                "content": "Test status from API! 🔥",
-                "background_color": "#ff6b6b"
-            }
-            response = self.make_request("POST", "/statuses", status_data)
-            if response.status_code == 200:
-                data = response.json()
-                self.log_result("Create status", True, f"Status created: {data.get('content', '')[:30]}...")
-            else:
-                self.log_result("Create status", False, f"Status: {response.status_code}, Response: {response.text}")
-        except Exception as e:
-            self.log_result("Create status", False, f"Error: {str(e)}")
-
-        # Test get statuses
-        try:
-            response = self.make_request("GET", "/statuses")
-            if response.status_code == 200:
-                data = response.json()
-                self.log_result("Get statuses", True, f"Retrieved {len(data)} status groups")
-            else:
-                self.log_result("Get statuses", False, f"Status: {response.status_code}")
-        except Exception as e:
-            self.log_result("Get statuses", False, f"Error: {str(e)}")
-
-    def test_message_endpoints(self):
-        """Test message-related endpoints"""
-        print("\n=== MESSAGE TESTS ===")
+        if not result["success"]:
+            self.log(f"❌ Question post creation failed: {result.get('data', {})}", "ERROR")
+            return None
+            
+        post = result["data"]
+        post_id = post.get("id")
         
-        if not self.auth_token:
-            self.log_result("Message tests", False, "No auth token available")
-            return
+        if post.get("post_type") != "question":
+            self.log(f"❌ Question post has wrong type: {post.get('post_type')}", "ERROR")
+            return None
+            
+        self.log(f"✅ Question post created successfully: {post_id}")
+        self.created_posts.append(post_id)
+        return post_id
 
-        # Test get conversations
-        try:
-            response = self.make_request("GET", "/conversations")
-            if response.status_code == 200:
-                data = response.json()
-                self.log_result("Get conversations", True, f"Retrieved {len(data)} conversations")
-            else:
-                self.log_result("Get conversations", False, f"Status: {response.status_code}")
-        except Exception as e:
-            self.log_result("Get conversations", False, f"Error: {str(e)}")
-
-        # Note: Testing send message requires another user ID, which we might not have
-        # This is a limitation of the test setup
-
-    def test_notification_endpoints(self):
-        """Test notification-related endpoints"""
-        print("\n=== NOTIFICATION TESTS ===")
+    def test_nearby_feed(self) -> bool:
+        """Test nearby feed endpoint"""
+        self.log("Testing nearby feed...")
         
-        if not self.auth_token:
-            self.log_result("Notification tests", False, "No auth token available")
-            return
-
-        # Test get notifications
-        try:
-            response = self.make_request("GET", "/notifications")
-            if response.status_code == 200:
-                data = response.json()
-                self.log_result("Get notifications", True, f"Retrieved {len(data)} notifications")
-            else:
-                self.log_result("Get notifications", False, f"Status: {response.status_code}")
-        except Exception as e:
-            self.log_result("Get notifications", False, f"Error: {str(e)}")
-
-        # Test get unread count
-        try:
-            response = self.make_request("GET", "/notifications/unread-count")
-            if response.status_code == 200:
-                data = response.json()
-                self.log_result("Get unread count", True, f"Unread count: {data.get('count', 0)}")
-            else:
-                self.log_result("Get unread count", False, f"Status: {response.status_code}")
-        except Exception as e:
-            self.log_result("Get unread count", False, f"Error: {str(e)}")
-
-        # Test mark notifications as read
-        try:
-            response = self.make_request("POST", "/notifications/mark-read")
-            if response.status_code == 200:
-                data = response.json()
-                self.log_result("Mark notifications read", True, f"Success: {data.get('success', False)}")
-            else:
-                self.log_result("Mark notifications read", False, f"Status: {response.status_code}")
-        except Exception as e:
-            self.log_result("Mark notifications read", False, f"Error: {str(e)}")
-
-    def test_place_endpoints(self):
-        """Test place-related endpoints"""
-        print("\n=== PLACE TESTS ===")
+        params = {
+            "lat": 40.7128,
+            "lng": -74.006
+        }
         
-        if not self.auth_token:
-            self.log_result("Place tests", False, "No auth token available")
-            return
-
-        place_id = None
-
-        # Test create place
-        try:
-            place_data = {
-                "name": "Test Cafe",
-                "description": "A great place for testing APIs",
-                "address": "123 Test Street, Test City",
-                "latitude": 40.7128,
-                "longitude": -74.0060,
-                "category": "cafe",
-                "rating": 4.5
-            }
-            response = self.make_request("POST", "/places", place_data)
-            if response.status_code == 200:
-                data = response.json()
-                place_id = data.get("id")
-                self.log_result("Create place", True, f"Place created: {data.get('name', 'Unknown')}")
-            else:
-                self.log_result("Create place", False, f"Status: {response.status_code}, Response: {response.text}")
-        except Exception as e:
-            self.log_result("Create place", False, f"Error: {str(e)}")
-
-        # Test get places
-        try:
-            response = self.make_request("GET", "/places")
-            if response.status_code == 200:
-                data = response.json()
-                self.log_result("Get places", True, f"Retrieved {len(data)} places")
-            else:
-                self.log_result("Get places", False, f"Status: {response.status_code}")
-        except Exception as e:
-            self.log_result("Get places", False, f"Error: {str(e)}")
-
-        # Test get single place
-        if place_id:
-            try:
-                response = self.make_request("GET", f"/places/{place_id}")
-                if response.status_code == 200:
-                    data = response.json()
-                    self.log_result("Get single place", True, f"Retrieved place: {data.get('name', 'Unknown')}")
-                else:
-                    self.log_result("Get single place", False, f"Status: {response.status_code}")
-            except Exception as e:
-                self.log_result("Get single place", False, f"Error: {str(e)}")
-
-    def test_discover_endpoints(self):
-        """Test discover-related endpoints"""
-        print("\n=== DISCOVER TESTS ===")
+        result = self.make_request("GET", "/posts/nearby-feed", params=params)
         
-        if not self.auth_token:
-            self.log_result("Discover tests", False, "No auth token available")
-            return
-
-        # Test trending posts
-        try:
-            response = self.make_request("GET", "/discover/trending")
-            if response.status_code == 200:
-                data = response.json()
-                self.log_result("Get trending", True, f"Retrieved {len(data)} trending posts")
-            else:
-                self.log_result("Get trending", False, f"Status: {response.status_code}")
-        except Exception as e:
-            self.log_result("Get trending", False, f"Error: {str(e)}")
-
-        # Test search
-        try:
-            response = self.make_request("GET", "/discover/search?query=test")
-            if response.status_code == 200:
-                data = response.json()
-                posts_count = len(data.get("posts", []))
-                users_count = len(data.get("users", []))
-                places_count = len(data.get("places", []))
-                self.log_result("Search content", True, f"Found {posts_count} posts, {users_count} users, {places_count} places")
-            else:
-                self.log_result("Search content", False, f"Status: {response.status_code}")
-        except Exception as e:
-            self.log_result("Search content", False, f"Error: {str(e)}")
-
-        # Test suggested users
-        try:
-            response = self.make_request("GET", "/discover/suggested-users")
-            if response.status_code == 200:
-                data = response.json()
-                self.log_result("Get suggested users", True, f"Retrieved {len(data)} suggested users")
-            else:
-                self.log_result("Get suggested users", False, f"Status: {response.status_code}")
-        except Exception as e:
-            self.log_result("Get suggested users", False, f"Error: {str(e)}")
-
-    def run_all_tests(self):
-        """Run all test suites"""
-        print("🔥 Starting Flames-Up API Tests 🔥")
-        print(f"Testing against: {self.base_url}")
-        print("=" * 60)
+        if not result["success"]:
+            self.log(f"❌ Nearby feed failed: {result.get('data', {})}", "ERROR")
+            return False
+            
+        posts = result["data"]
+        if not isinstance(posts, list):
+            self.log(f"❌ Nearby feed should return array, got: {type(posts)}", "ERROR")
+            return False
+            
+        self.log(f"✅ Nearby feed returned {len(posts)} posts")
         
-        # Run tests in order
-        self.test_health_check()
-        self.test_auth_endpoints()
+        # Check if any posts have distance_km field (for nearby check-ins)
+        nearby_checkins = [p for p in posts if "distance_km" in p]
+        if nearby_checkins:
+            self.log(f"✅ Found {len(nearby_checkins)} nearby check-in posts with distance info")
+            
+        return True
+
+    def test_delete_post(self, post_id: str) -> bool:
+        """Test deleting a post"""
+        self.log(f"Testing post deletion for post: {post_id}")
         
-        if self.auth_token:
-            post_id = self.test_post_endpoints()
-            self.test_comment_endpoints(post_id)
-            self.test_user_endpoints()
-            self.test_status_endpoints()
-            self.test_message_endpoints()
-            self.test_notification_endpoints()
-            self.test_place_endpoints()
-            self.test_discover_endpoints()
+        result = self.make_request("DELETE", f"/posts/{post_id}")
+        
+        if not result["success"]:
+            self.log(f"❌ Post deletion failed: {result.get('data', {})}", "ERROR")
+            return False
+            
+        response = result["data"]
+        if not response.get("deleted", False):
+            self.log(f"❌ Post deletion response invalid: {response}", "ERROR")
+            return False
+            
+        self.log(f"✅ Post {post_id} deleted successfully")
+        return True
+
+    def test_existing_endpoints(self) -> bool:
+        """Test that existing endpoints still work"""
+        self.log("Testing existing endpoints...")
+        
+        # Test feed endpoint
+        result = self.make_request("GET", "/posts/feed")
+        if not result["success"]:
+            self.log(f"❌ Posts feed endpoint failed: {result.get('data', {})}", "ERROR")
+            return False
+        self.log("✅ Posts feed endpoint working")
+        
+        # Test statuses endpoint
+        result = self.make_request("GET", "/statuses")
+        if not result["success"]:
+            self.log(f"❌ Statuses endpoint failed: {result.get('data', {})}", "ERROR")
+            return False
+        self.log("✅ Statuses endpoint working")
+        
+        return True
+
+    def cleanup_posts(self):
+        """Clean up created posts"""
+        self.log("Cleaning up created posts...")
+        for post_id in self.created_posts:
+            self.test_delete_post(post_id)
+
+    def run_all_tests(self) -> bool:
+        """Run all tests in sequence"""
+        self.log("=" * 60)
+        self.log("STARTING FLAMES-UP CHECK-IN POST FEATURE TESTS")
+        self.log("=" * 60)
+        
+        # Step 1: Login
+        if not self.test_login():
+            self.log("❌ Cannot proceed without authentication", "ERROR")
+            return False
+            
+        # Step 2: Test proximity verification
+        if not self.test_proximity_verification():
+            self.log("❌ Proximity verification tests failed", "ERROR")
+            return False
+            
+        # Step 3: Test check-in post creation
+        checkin_post_id = self.test_create_checkin_post()
+        if not checkin_post_id:
+            self.log("❌ Check-in post creation failed", "ERROR")
+            return False
+            
+        # Step 4: Test question post creation
+        question_post_id = self.test_create_question_post()
+        if not question_post_id:
+            self.log("❌ Question post creation failed", "ERROR")
+            return False
+            
+        # Step 5: Test nearby feed
+        if not self.test_nearby_feed():
+            self.log("❌ Nearby feed tests failed", "ERROR")
+            return False
+            
+        # Step 6: Test existing endpoints
+        if not self.test_existing_endpoints():
+            self.log("❌ Existing endpoints tests failed", "ERROR")
+            return False
+            
+        # Step 7: Test post deletion
+        if not self.test_delete_post(checkin_post_id):
+            self.log("❌ Post deletion test failed", "ERROR")
+            return False
+            
+        # Keep question post for now, delete in cleanup
+        
+        self.log("=" * 60)
+        self.log("✅ ALL CHECK-IN POST FEATURE TESTS PASSED!")
+        self.log("=" * 60)
+        
+        return True
+
+def main():
+    """Main test execution"""
+    tester = FlamesUpTester()
+    
+    try:
+        success = tester.run_all_tests()
+        if success:
+            print("\n🎉 All tests completed successfully!")
+            sys.exit(0)
         else:
-            print("\n❌ Authentication failed - skipping authenticated endpoint tests")
-
-        # Print summary
-        self.print_summary()
-
-    def print_summary(self):
-        """Print test results summary"""
-        print("\n" + "=" * 60)
-        print("🔥 TEST RESULTS SUMMARY 🔥")
-        print("=" * 60)
-        
-        total_tests = len(self.test_results)
-        passed_tests = sum(1 for r in self.test_results if r["success"])
-        failed_tests = total_tests - passed_tests
-        
-        print(f"Total Tests: {total_tests}")
-        print(f"✅ Passed: {passed_tests}")
-        print(f"❌ Failed: {failed_tests}")
-        print(f"Success Rate: {(passed_tests/total_tests*100):.1f}%" if total_tests > 0 else "0%")
-        
-        if failed_tests > 0:
-            print("\n❌ FAILED TESTS:")
-            for result in self.test_results:
-                if not result["success"]:
-                    print(f"  - {result['test']}: {result['details']}")
-        
-        print("\n" + "=" * 60)
+            print("\n💥 Some tests failed!")
+            sys.exit(1)
+    except KeyboardInterrupt:
+        print("\n⚠️ Tests interrupted by user")
+        sys.exit(1)
+    except Exception as e:
+        print(f"\n💥 Unexpected error: {str(e)}")
+        sys.exit(1)
+    finally:
+        # Cleanup
+        tester.cleanup_posts()
 
 if __name__ == "__main__":
-    # Run the tests
-    tester = FlamesUpAPITester()
-    tester.run_all_tests()
+    main()

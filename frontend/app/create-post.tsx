@@ -33,6 +33,13 @@ export default function CreatePostScreen() {
   const [location, setLocation] = useState('');
   const [isPosting, setIsPosting] = useState(false);
   const [visibility, setVisibility] = useState('Everyone');
+  const [postType, setPostType] = useState<'lifestyle' | 'check_in' | 'question'>('lifestyle');
+
+  const POST_TYPES = [
+    { id: 'lifestyle' as const, label: 'Lifestyle', icon: 'sparkles' as const, color: '#6366F1' },
+    { id: 'check_in' as const, label: 'Check-In', icon: 'location' as const, color: '#10B981' },
+    { id: 'question' as const, label: 'Question', icon: 'help-circle' as const, color: '#F59E0B' },
+  ];
 
   const pickImages = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -90,16 +97,30 @@ export default function CreatePostScreen() {
 
     setIsPosting(true);
     try {
+      const imagesList = media.map((m) => m.base64 || m.uri).filter(Boolean);
+      const mediaTypesList = media.map((m) => m.type || 'image');
+      
       await api.post('/posts', {
         content: content.trim(),
-        image: media[0]?.base64 || media[0]?.uri || null,
+        image: imagesList[0] || null,
+        images: imagesList.length > 0 ? imagesList : undefined,
+        media_types: mediaTypesList.length > 0 ? mediaTypesList : undefined,
         location: location.trim() || null,
+        post_type: postType,
       });
       router.back();
     } catch (error: any) {
       Alert.alert('Error', error.response?.data?.detail || 'Could not create post');
     } finally {
       setIsPosting(false);
+    }
+  };
+
+  const getPlaceholder = () => {
+    switch (postType) {
+      case 'question': return 'Ask a question or request a recommendation...';
+      case 'check_in': return 'What\'s happening at this spot?';
+      default: return 'Share a tip, thought or update with the community...';
     }
   };
 
@@ -129,6 +150,37 @@ export default function CreatePostScreen() {
         </View>
 
         <ScrollView style={styles.scrollContent} keyboardShouldPersistTaps="handled">
+          {/* Post Type Selector */}
+          <View style={styles.typeRow}>
+            {POST_TYPES.map((type) => (
+              <TouchableOpacity
+                key={type.id}
+                style={[
+                  styles.typeChip,
+                  postType === type.id && { backgroundColor: type.color + '18', borderColor: type.color + '50' },
+                ]}
+                onPress={() => setPostType(type.id)}
+              >
+                <Ionicons
+                  name={type.icon}
+                  size={15}
+                  color={postType === type.id ? type.color : colors.textHint}
+                />
+                <Text style={[styles.typeChipText, postType === type.id && { color: type.color, fontWeight: '700' }]}>
+                  {type.label}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          {/* Question hint */}
+          {postType === 'question' && (
+            <View style={styles.hintBanner}>
+              <Ionicons name="help-circle" size={18} color="#F59E0B" />
+              <Text style={styles.hintBannerText}>Ask the community for recommendations or tips</Text>
+            </View>
+          )}
+
           {/* User row */}
           <View style={styles.userRow}>
             <View style={styles.avatar}>
@@ -155,7 +207,7 @@ export default function CreatePostScreen() {
           {/* Content Input */}
           <TextInput
             style={styles.contentInput}
-            placeholder="Share a tip, thought or update with the community..."
+            placeholder={getPlaceholder()}
             placeholderTextColor={colors.textHint}
             value={content}
             onChangeText={setContent}
@@ -270,6 +322,45 @@ const styles = StyleSheet.create({
   scrollContent: {
     flex: 1,
     padding: 16,
+  },
+  typeRow: {
+    flexDirection: 'row' as const,
+    gap: 8,
+    marginBottom: 16,
+  },
+  typeChip: {
+    flex: 1,
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+    gap: 5,
+    paddingVertical: 10,
+    borderRadius: 16,
+    backgroundColor: colors.bgSubtle,
+    borderWidth: 1.5,
+    borderColor: colors.borderLight,
+  },
+  typeChipText: {
+    fontSize: 12,
+    fontWeight: '600' as const,
+    color: colors.textHint,
+  },
+  hintBanner: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 8,
+    marginBottom: 12,
+    padding: 10,
+    backgroundColor: '#FEF3C7',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+  },
+  hintBannerText: {
+    fontSize: 12,
+    color: '#92400E',
+    flex: 1,
+    lineHeight: 17,
   },
   userRow: {
     flexDirection: 'row',

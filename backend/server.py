@@ -80,6 +80,11 @@ class PostCreate(BaseModel):
     images: Optional[List[str]] = None  # Multiple images/videos
     media_types: Optional[List[str]] = None  # "image" or "video" per item
     location: Optional[str] = None
+    post_type: str = "lifestyle"  # "lifestyle", "check_in", "question"
+    place_id: Optional[str] = None  # Google place_id for check-ins
+    place_name: Optional[str] = None  # Place name for check-ins
+    place_lat: Optional[float] = None  # Place latitude
+    place_lng: Optional[float] = None  # Place longitude
 
 class PostUpdate(BaseModel):
     content: Optional[str] = None
@@ -95,6 +100,12 @@ class Post(BaseModel):
     images: List[str] = []
     media_types: List[str] = []
     location: Optional[str] = None
+    post_type: str = "lifestyle"  # "lifestyle", "check_in", "question"
+    place_id: Optional[str] = None
+    place_name: Optional[str] = None
+    place_lat: Optional[float] = None
+    place_lng: Optional[float] = None
+    is_verified_checkin: bool = False  # True when proximity was verified
     likes_count: int = 0
     comments_count: int = 0
     liked_by: List[str] = []
@@ -376,6 +387,11 @@ async def create_post(post_data: PostCreate, current_user: dict = Depends(get_cu
         images_list = [post_data.image]
         media_types_list = ["image"]
 
+    # For check-in posts, set location to place name
+    location = post_data.location
+    if post_data.post_type == "check_in" and post_data.place_name:
+        location = post_data.place_name
+
     post = Post(
         user_id=current_user["id"],
         user_username=current_user["username"],
@@ -385,7 +401,13 @@ async def create_post(post_data: PostCreate, current_user: dict = Depends(get_cu
         image=images_list[0] if images_list else None,
         images=images_list,
         media_types=media_types_list,
-        location=post_data.location
+        location=location,
+        post_type=post_data.post_type,
+        place_id=post_data.place_id,
+        place_name=post_data.place_name,
+        place_lat=post_data.place_lat,
+        place_lng=post_data.place_lng,
+        is_verified_checkin=post_data.post_type == "check_in" and post_data.place_id is not None,
     )
     await db.posts.insert_one(post.dict())
     await db.users.update_one({"id": current_user["id"]}, {"$inc": {"posts_count": 1}})
@@ -424,6 +446,55 @@ async def get_feed(
         posts = await db.posts.find(query).sort("created_at", -1).skip(skip).limit(limit).to_list(limit)
     
     return [{k: v for k, v in p.items() if k != "_id"} for p in posts]
+
+@api_router.get("/posts/nearby-feed")
+async def get_nearby_feed(
+    lat: float = Query(40.7128),
+    lng: float = Query(-74.006),
+    radius: float = Query(5.0),  # km
+    skip: int = 0,
+    limit: int = 20,
+    current_user: dict = Depends(get_current_user)
+):
+    """Feed prioritizing check-in posts near user location, then place-tagged, then trending"""
+    from math import radians, sin, cos, sqrt, atan2
+    
+    all_posts = await db.posts.find().sort("created_at", -1).limit(200).to_list(200)
+    
+    nearby_checkins = []
+    place_tagged = []
+    regular = []
+    
+    for p in all_posts:
+        post_dict = {k: v for k, v in p.items() if k != "_id"}
+        
+        if p.get("post_type") == "check_in" and p.get("place_lat") and p.get("place_lng"):
+            # Calculate distance
+            R = 6371  # km
+            lat1, lon1, lat2, lon2 = map(radians, [lat, lng, p["place_lat"], p["place_lng"]])
+            dlat = lat2 - lat1
+            dlon = lon2 - lon1
+            a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
+            c = 2 * atan2(sqrt(a), sqrt(1-a))
+            dist = R * c
+            
+            if dist <= radius:
+                post_dict["distance_km"] = round(dist, 2)
+                nearby_checkins.append(post_dict)
+            else:
+                place_tagged.append(post_dict)
+        elif p.get("place_id") or p.get("location"):
+            place_tagged.append(post_dict)
+        else:
+            regular.append(post_dict)
+    
+    # Sort nearby by distance
+    nearby_checkins.sort(key=lambda x: x.get("distance_km", 999))
+    
+    # Combine: nearby check-ins first, then place-tagged, then regular
+    combined = nearby_checkins + place_tagged + regular
+    
+    return combined[skip:skip + limit]
 
 @api_router.get("/posts/{post_id}")
 async def get_post(post_id: str, current_user: dict = Depends(get_current_user)):
@@ -817,6 +888,32 @@ async def get_suggested_users(current_user: dict = Depends(get_current_user)):
     
     users = await db.users.find({"id": {"$nin": following_ids}}).sort("followers_count", -1).limit(10).to_list(10)
     return [{k: v for k, v in u.items() if k not in ["password_hash", "_id"]} for u in users]
+
+# ===================== PROXIMITY VERIFICATION =====================
+
+class ProximityCheck(BaseModel):
+    user_lat: float
+    user_lng: float
+    place_lat: float
+    place_lng: float
+
+@api_router.post("/places/verify-proximity")
+async def verify_proximity(data: ProximityCheck, current_user: dict = Depends(get_current_user)):
+    """Check if user is within 200 meters of a place"""
+    from math import radians, sin, cos, sqrt, atan2
+    R = 6371000  # Earth's radius in meters
+    lat1, lon1, lat2, lon2 = map(radians, [data.user_lat, data.user_lng, data.place_lat, data.place_lng])
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
+    c = 2 * atan2(sqrt(a), sqrt(1-a))
+    distance = R * c
+    
+    return {
+        "is_near": distance <= 200,
+        "distance_meters": round(distance, 1),
+        "max_distance": 200,
+    }
 
 # ===================== HEALTH CHECK =====================
 

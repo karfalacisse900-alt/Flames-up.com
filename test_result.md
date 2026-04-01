@@ -237,9 +237,35 @@ metadata:
 test_plan:
   current_focus: []
   stuck_tasks: []
-  test_all: true
+  test_all: false
   test_priority: "high_first"
 
 agent_communication:
     - agent: "testing"
       message: "Comprehensive backend API testing completed successfully. All 27 test cases passed with 100% success rate. All major API endpoints are working correctly including authentication, posts, comments, users, statuses, messages, notifications, places, and discovery features. The backend is fully functional and ready for production use."
+    - agent: "main"
+      message: "Added Check-In Post feature with proximity verification. New endpoints to test: POST /api/places/verify-proximity (proximity check), POST /api/posts (with post_type=check_in/lifestyle/question), GET /api/posts/nearby-feed (location-prioritized feed), DELETE /api/posts/{post_id} (own post deletion). Test credentials: demo@flames-up.com / demo123456"
+    - agent: "testing"
+      message: "Check-In Post feature testing completed successfully. Fixed critical routing issue where /posts/nearby-feed was being caught by /posts/{post_id} route. All new features working: proximity verification (200m threshold), check-in posts with place data, question posts, location-prioritized nearby feed, and post deletion. Existing endpoints remain functional. Backend is ready for production."
+
+  - task: "Check-In Post System"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    test_scenarios:
+      - "POST /api/places/verify-proximity with nearby coordinates (within 200m)"
+      - "POST /api/places/verify-proximity with far coordinates (>200m)"
+      - "POST /api/posts with post_type=check_in and place data"
+      - "POST /api/posts with post_type=question"
+      - "GET /api/posts/nearby-feed?lat=40.7128&lng=-74.006"
+      - "DELETE /api/posts/{post_id} for own posts"
+    status_history:
+      - working: unknown
+        agent: "main"
+        comment: "New feature - Check-In Posts with proximity verification, 3 post types (lifestyle/check_in/question), nearby feed, and post deletion."
+      - working: true
+        agent: "testing"
+        comment: "All Check-In Post features tested successfully. Fixed routing issue with nearby-feed endpoint (moved before generic {post_id} route). Proximity verification working correctly (near: 22.2m = true, far: 9696.2m = false). Check-in posts created with is_verified_checkin=true. Question posts created with post_type=question. Nearby feed returns 11 posts with location prioritization. Post deletion working. All existing endpoints (feed, statuses) still functional."

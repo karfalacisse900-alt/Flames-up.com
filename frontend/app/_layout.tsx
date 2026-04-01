@@ -32,6 +32,7 @@ export default function RootLayout() {
         <Stack.Screen name="conversation/[id]" options={{ presentation: 'card' }} />
         <Stack.Screen name="place/[id]" options={{ presentation: 'card' }} />
         <Stack.Screen name="create-post" options={{ presentation: 'modal' }} />
+        <Stack.Screen name="checkin-post" options={{ presentation: 'modal' }} />
         <Stack.Screen name="create-status" options={{ presentation: 'modal' }} />
         <Stack.Screen name="edit-profile" options={{ presentation: 'modal' }} />
         <Stack.Screen name="settings" options={{ presentation: 'card' }} />

@@ -121,16 +121,34 @@ function PostCard({ post, currentUserId, onPress, onUserPress }: any) {
           <View style={{ flex: 1 }}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
               <Text style={postStyles.username}>{authorName}</Text>
+              {post.is_verified_checkin && (
+                <View style={postStyles.verifiedBadge}>
+                  <Ionicons name="checkmark-circle" size={11} color="#10B981" />
+                </View>
+              )}
               <Ionicons name="flame" size={13} color={colors.flameGold} />
             </View>
-            {post.location ? (
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3, marginTop: 1 }}>
-                <Ionicons name="location" size={10} color={colors.accentPrimary} />
-                <Text style={postStyles.location} numberOfLines={1}>{post.location}</Text>
-              </View>
-            ) : (
-              <Text style={postStyles.timeLabel}>{timeAgo} ago</Text>
-            )}
+            {/* Post type badge + location */}
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 1 }}>
+              {post.post_type === 'check_in' && post.place_name ? (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
+                  <Ionicons name="location" size={10} color="#10B981" />
+                  <Text style={[postStyles.location, { color: '#10B981' }]} numberOfLines={1}>At {post.place_name}</Text>
+                </View>
+              ) : post.post_type === 'question' ? (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
+                  <Ionicons name="help-circle" size={10} color="#F59E0B" />
+                  <Text style={[postStyles.location, { color: '#F59E0B' }]}>Question</Text>
+                </View>
+              ) : post.location ? (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
+                  <Ionicons name="location" size={10} color={colors.accentPrimary} />
+                  <Text style={postStyles.location} numberOfLines={1}>{post.location}</Text>
+                </View>
+              ) : (
+                <Text style={postStyles.timeLabel}>{timeAgo} ago</Text>
+              )}
+            </View>
           </View>
         </TouchableOpacity>
         <TouchableOpacity
@@ -147,6 +165,23 @@ function PostCard({ post, currentUserId, onPress, onUserPress }: any) {
         <TouchableOpacity style={postStyles.menuOverlay} activeOpacity={1} onPress={() => setShowMenu(false)}>
           <View style={postStyles.menuSheet}>
             <View style={postStyles.menuHandle} />
+            {post.user_id === currentUserId && (
+              <TouchableOpacity style={postStyles.menuItem} onPress={async () => {
+                setShowMenu(false);
+                Alert.alert('Delete Post', 'Are you sure you want to delete this post?', [
+                  { text: 'Cancel', style: 'cancel' },
+                  { text: 'Delete', style: 'destructive', onPress: async () => {
+                    try {
+                      await api.delete(`/posts/${post.id}`);
+                      Alert.alert('Deleted', 'Your post has been deleted.');
+                    } catch { Alert.alert('Error', 'Could not delete post.'); }
+                  }},
+                ]);
+              }}>
+                <Ionicons name="trash-outline" size={22} color={colors.error} />
+                <Text style={[postStyles.menuItemText, { color: colors.error }]}>Delete Post</Text>
+              </TouchableOpacity>
+            )}
             <TouchableOpacity style={postStyles.menuItem} onPress={() => { setShowMenu(false); setShowReport(true); }}>
               <Ionicons name="flag-outline" size={22} color={colors.error} />
               <Text style={[postStyles.menuItemText, { color: colors.error }]}>Report</Text>
@@ -339,6 +374,7 @@ const postStyles = StyleSheet.create({
   },
   avatarInitial: { color: '#FFFFFF', fontSize: 16, fontWeight: '700' },
   username: { fontSize: 15, fontWeight: '700', color: colors.textPrimary },
+  verifiedBadge: { marginLeft: -2 },
   location: { fontSize: 12, color: colors.accentPrimary, fontWeight: '500' },
   timeLabel: { fontSize: 12, color: colors.textHint, marginTop: 1 },
   moreBtn: { padding: 6 },
@@ -496,6 +532,12 @@ function InlineComposer({
   const [content, setContent] = useState('');
   const [media, setMedia] = useState<{ uri: string; base64?: string }[]>([]);
   const [isPosting, setIsPosting] = useState(false);
+  const [inlinePostType, setInlinePostType] = useState<'lifestyle' | 'question'>('lifestyle');
+
+  const QUICK_TYPES = [
+    { id: 'lifestyle' as const, label: 'Lifestyle', icon: 'sparkles' as const, color: '#6366F1' },
+    { id: 'question' as const, label: 'Question', icon: 'help-circle' as const, color: '#F59E0B' },
+  ];
 
   if (!visible) return null;
 
@@ -535,6 +577,7 @@ function InlineComposer({
         content: content.trim(),
         image: imagesList[0] || null,
         images: imagesList.length > 0 ? imagesList : undefined,
+        post_type: inlinePostType,
       });
       setContent('');
       setMedia([]);
@@ -591,6 +634,23 @@ function InlineComposer({
       </View>
 
       {/* Text input - inline, no navigation */}
+      <View style={{ flexDirection: 'row', gap: 6, marginBottom: 10 }}>
+        {QUICK_TYPES.map((type) => (
+          <TouchableOpacity
+            key={type.id}
+            style={[
+              composerStyles.quickTypeChip,
+              inlinePostType === type.id && { backgroundColor: type.color + '18', borderColor: type.color + '50' },
+            ]}
+            onPress={() => setInlinePostType(type.id)}
+          >
+            <Ionicons name={type.icon} size={13} color={inlinePostType === type.id ? type.color : colors.textHint} />
+            <Text style={[composerStyles.quickTypeText, inlinePostType === type.id && { color: type.color, fontWeight: '700' }]}>
+              {type.label}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
       <TextInput
         style={composerStyles.textInput}
         placeholder="Share a tip, thought or update with the community..."
@@ -765,6 +825,22 @@ const composerStyles = StyleSheet.create({
   },
   charCount: {
     fontSize: 12,
+    color: colors.textHint,
+  },
+  quickTypeChip: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 14,
+    backgroundColor: colors.bgSubtle,
+    borderWidth: 1,
+    borderColor: colors.borderLight,
+  },
+  quickTypeText: {
+    fontSize: 11,
+    fontWeight: '600' as const,
     color: colors.textHint,
   },
 });
