@@ -802,10 +802,19 @@ async def health_check():
 # Cloudflare configuration
 CF_ACCOUNT_ID = os.environ.get("CLOUDFLARE_ACCOUNT_ID", "")
 CF_API_TOKEN = os.environ.get("CLOUDFLARE_API_TOKEN", "")
+CF_ACCOUNT_HASH = os.environ.get("CLOUDFLARE_ACCOUNT_HASH", "")
+CF_DELIVERY_URL = os.environ.get("CLOUDFLARE_IMAGE_DELIVERY_URL", "")
 CF_IMAGES_URL = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/images/v1"
 CF_STREAM_URL = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/stream"
 
-# ===================== CLOUDFLARE UPLOAD ENDPOINTS =====================
+# Google Maps configuration
+GOOGLE_MAPS_API_KEY = os.environ.get("GOOGLE_MAPS_API_KEY", "")
+
+def cf_delivery(image_id: str, variant: str = "public") -> str:
+    """Build Cloudflare image delivery URL"""
+    return f"{CF_DELIVERY_URL}/{image_id}/{variant}"
+
+# ===================== CLOUDFLARE IMAGE PIPELINE =====================
 
 @api_router.post("/upload/image")
 async def upload_image(
@@ -813,7 +822,7 @@ async def upload_image(
     folder: str = Form("uploads"),
     current_user: dict = Depends(get_current_user)
 ):
-    """Upload an image to Cloudflare Images"""
+    """Upload image to Cloudflare Images → returns delivery URL"""
     if not CF_ACCOUNT_ID or not CF_API_TOKEN:
         raise HTTPException(status_code=500, detail="Cloudflare not configured")
 
@@ -827,6 +836,7 @@ async def upload_image(
                 data={"metadata": f'{{"folder":"{folder}","user_id":"{current_user["id"]}"}}'}
             )
             data = response.json()
+            logger.info(f"Cloudflare upload response: {data}")
 
             if not data.get("success"):
                 errors = data.get("errors", [])
@@ -834,73 +844,26 @@ async def upload_image(
                 raise HTTPException(status_code=400, detail=error_msg)
 
             image_data = data["result"]
-            # Cloudflare returns variants - use the public one
+            image_id = image_data.get("id", "")
             variants = image_data.get("variants", [])
-            public_url = variants[0] if variants else ""
 
             return {
-                "file_url": public_url,
-                "image_id": image_data.get("id"),
+                "file_url": cf_delivery(image_id, "public"),
+                "thumbnail_url": cf_delivery(image_id, "thumbnail") if "thumbnail" in str(variants) else cf_delivery(image_id, "public"),
+                "image_id": image_id,
                 "variants": variants,
+                "delivery_base": CF_DELIVERY_URL,
             }
     except httpx.RequestError as e:
         logger.error(f"Cloudflare image upload error: {e}")
         raise HTTPException(status_code=500, detail="Failed to upload to Cloudflare")
-
-@api_router.post("/upload/video")
-async def upload_video(
-    file: UploadFile = File(...),
-    current_user: dict = Depends(get_current_user)
-):
-    """Get a direct upload URL for Cloudflare Stream, then upload the video"""
-    if not CF_ACCOUNT_ID or not CF_API_TOKEN:
-        raise HTTPException(status_code=500, detail="Cloudflare not configured")
-
-    try:
-        content = await file.read()
-        file_size = len(content)
-
-        async with httpx.AsyncClient(timeout=60.0) as client_http:
-            # Step 1: Get direct upload URL
-            upload_res = await client_http.post(
-                f"{CF_STREAM_URL}/direct_upload",
-                headers={"Authorization": f"Bearer {CF_API_TOKEN}"},
-                json={"maxDurationSeconds": 300}
-            )
-            upload_data = upload_res.json()
-
-            if not upload_data.get("success"):
-                errors = upload_data.get("errors", [])
-                error_msg = errors[0].get("message", "Failed to get upload URL") if errors else "Failed"
-                raise HTTPException(status_code=400, detail=error_msg)
-
-            video_id = upload_data["result"]["uid"]
-            upload_url = upload_data["result"]["uploadURL"]
-
-            # Step 2: Upload file to the direct upload URL
-            upload_response = await client_http.post(
-                upload_url,
-                files={"file": (file.filename or "video.mp4", content, file.content_type or "video/mp4")}
-            )
-
-            thumbnail_url = f"https://customer-{CF_ACCOUNT_ID[:8]}.cloudflarestream.com/{video_id}/thumbnails/thumbnail.jpg"
-            stream_url = f"https://customer-{CF_ACCOUNT_ID[:8]}.cloudflarestream.com/{video_id}/manifest/video.m3u8"
-
-            return {
-                "video_id": video_id,
-                "stream_url": stream_url,
-                "thumbnail_url": thumbnail_url,
-            }
-    except httpx.RequestError as e:
-        logger.error(f"Cloudflare video upload error: {e}")
-        raise HTTPException(status_code=500, detail="Failed to upload video to Cloudflare")
 
 @api_router.post("/upload/base64-image")
 async def upload_base64_image(
     data: dict,
     current_user: dict = Depends(get_current_user)
 ):
-    """Upload a base64 image to Cloudflare Images"""
+    """Upload base64 image to Cloudflare Images → returns delivery URL"""
     if not CF_ACCOUNT_ID or not CF_API_TOKEN:
         raise HTTPException(status_code=500, detail="Cloudflare not configured")
 
@@ -910,7 +873,6 @@ async def upload_base64_image(
     if not base64_str:
         raise HTTPException(status_code=400, detail="No image data provided")
 
-    # Strip data URL prefix if present
     if "," in base64_str:
         base64_str = base64_str.split(",")[1]
 
@@ -928,6 +890,7 @@ async def upload_base64_image(
                 data={"metadata": f'{{"folder":"{folder}","user_id":"{current_user["id"]}"}}'}
             )
             data_resp = response.json()
+            logger.info(f"Cloudflare base64 upload response: {data_resp}")
 
             if not data_resp.get("success"):
                 errors = data_resp.get("errors", [])
@@ -935,16 +898,173 @@ async def upload_base64_image(
                 raise HTTPException(status_code=400, detail=error_msg)
 
             image_data = data_resp["result"]
-            variants = image_data.get("variants", [])
-            public_url = variants[0] if variants else ""
+            image_id = image_data.get("id", "")
 
             return {
-                "file_url": public_url,
-                "image_id": image_data.get("id"),
+                "file_url": cf_delivery(image_id, "public"),
+                "image_id": image_id,
             }
     except httpx.RequestError as e:
         logger.error(f"Cloudflare base64 upload error: {e}")
         raise HTTPException(status_code=500, detail="Failed to upload to Cloudflare")
+
+@api_router.post("/upload/video")
+async def upload_video(
+    file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user)
+):
+    """Upload video to Cloudflare Stream"""
+    if not CF_ACCOUNT_ID or not CF_API_TOKEN:
+        raise HTTPException(status_code=500, detail="Cloudflare not configured")
+    try:
+        content = await file.read()
+        async with httpx.AsyncClient(timeout=60.0) as client_http:
+            upload_res = await client_http.post(
+                f"{CF_STREAM_URL}/direct_upload",
+                headers={"Authorization": f"Bearer {CF_API_TOKEN}"},
+                json={"maxDurationSeconds": 300}
+            )
+            upload_data = upload_res.json()
+            if not upload_data.get("success"):
+                errors = upload_data.get("errors", [])
+                raise HTTPException(status_code=400, detail=errors[0].get("message", "Failed") if errors else "Failed")
+
+            video_id = upload_data["result"]["uid"]
+            upload_url = upload_data["result"]["uploadURL"]
+            await client_http.post(upload_url, files={"file": (file.filename or "video.mp4", content, file.content_type or "video/mp4")})
+
+            return {
+                "video_id": video_id,
+                "stream_url": f"https://customer-{CF_ACCOUNT_ID[:8]}.cloudflarestream.com/{video_id}/manifest/video.m3u8",
+                "thumbnail_url": f"https://customer-{CF_ACCOUNT_ID[:8]}.cloudflarestream.com/{video_id}/thumbnails/thumbnail.jpg",
+            }
+    except httpx.RequestError as e:
+        logger.error(f"Cloudflare video upload error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to upload video")
+
+# ===================== GOOGLE MAPS PLACES API =====================
+
+@api_router.get("/google-places/nearby")
+async def google_places_nearby(
+    lat: float = Query(40.7128),
+    lng: float = Query(-74.0060),
+    radius: int = Query(5000),
+    type: str = Query("restaurant"),
+    keyword: str = Query(""),
+):
+    """Fetch nearby places from Google Places API with photos"""
+    if not GOOGLE_MAPS_API_KEY:
+        raise HTTPException(status_code=500, detail="Google Maps API not configured")
+
+    url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
+    params = {
+        "location": f"{lat},{lng}",
+        "radius": radius,
+        "type": type,
+        "key": GOOGLE_MAPS_API_KEY,
+    }
+    if keyword:
+        params["keyword"] = keyword
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client_http:
+            response = await client_http.get(url, params=params)
+            data = response.json()
+
+            if data.get("status") not in ("OK", "ZERO_RESULTS"):
+                raise HTTPException(status_code=400, detail=data.get("error_message", "Places API error"))
+
+            results = []
+            for place in data.get("results", []):
+                photo_url = None
+                if place.get("photos"):
+                    photo_ref = place["photos"][0].get("photo_reference")
+                    if photo_ref:
+                        photo_url = f"https://maps.googleapis.com/maps/api/place/photo?maxwidth=800&photoreference={photo_ref}&key={GOOGLE_MAPS_API_KEY}"
+
+                results.append({
+                    "place_id": place.get("place_id"),
+                    "name": place.get("name"),
+                    "address": place.get("vicinity", ""),
+                    "rating": place.get("rating", 0),
+                    "user_ratings_total": place.get("user_ratings_total", 0),
+                    "price_level": place.get("price_level"),
+                    "types": place.get("types", []),
+                    "lat": place["geometry"]["location"]["lat"],
+                    "lng": place["geometry"]["location"]["lng"],
+                    "photo_url": photo_url,
+                    "open_now": place.get("opening_hours", {}).get("open_now"),
+                    "business_status": place.get("business_status"),
+                })
+
+            return results
+    except httpx.RequestError as e:
+        logger.error(f"Google Places API error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch places")
+
+@api_router.get("/google-places/{place_id}")
+async def google_place_detail(place_id: str):
+    """Fetch place detail from Google Places API"""
+    if not GOOGLE_MAPS_API_KEY:
+        raise HTTPException(status_code=500, detail="Google Maps API not configured")
+
+    url = "https://maps.googleapis.com/maps/api/place/details/json"
+    params = {
+        "place_id": place_id,
+        "fields": "name,formatted_address,formatted_phone_number,rating,user_ratings_total,reviews,photos,opening_hours,website,price_level,types,geometry,url",
+        "key": GOOGLE_MAPS_API_KEY,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client_http:
+            response = await client_http.get(url, params=params)
+            data = response.json()
+
+            if data.get("status") != "OK":
+                raise HTTPException(status_code=400, detail=data.get("error_message", "Place not found"))
+
+            place = data["result"]
+            photos = []
+            for p in place.get("photos", [])[:6]:
+                photo_ref = p.get("photo_reference")
+                if photo_ref:
+                    photos.append(f"https://maps.googleapis.com/maps/api/place/photo?maxwidth=800&photoreference={photo_ref}&key={GOOGLE_MAPS_API_KEY}")
+
+            reviews = []
+            for r in place.get("reviews", [])[:5]:
+                reviews.append({
+                    "author": r.get("author_name"),
+                    "rating": r.get("rating"),
+                    "text": r.get("text"),
+                    "time": r.get("relative_time_description"),
+                    "profile_photo": r.get("profile_photo_url"),
+                })
+
+            hours = []
+            if place.get("opening_hours"):
+                hours = place["opening_hours"].get("weekday_text", [])
+
+            return {
+                "place_id": place_id,
+                "name": place.get("name"),
+                "address": place.get("formatted_address"),
+                "phone": place.get("formatted_phone_number"),
+                "rating": place.get("rating", 0),
+                "user_ratings_total": place.get("user_ratings_total", 0),
+                "website": place.get("website"),
+                "google_maps_url": place.get("url"),
+                "price_level": place.get("price_level"),
+                "types": place.get("types", []),
+                "lat": place.get("geometry", {}).get("location", {}).get("lat"),
+                "lng": place.get("geometry", {}).get("location", {}).get("lng"),
+                "photos": photos,
+                "reviews": reviews,
+                "hours": hours,
+                "open_now": place.get("opening_hours", {}).get("open_now"),
+            }
+    except httpx.RequestError as e:
+        logger.error(f"Google Places detail error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch place details")
 
 
 # Include the router

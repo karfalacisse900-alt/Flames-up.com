@@ -3,45 +3,62 @@ import {
   View,
   Text,
   StyleSheet,
-  FlatList,
   TouchableOpacity,
   Image,
+  ScrollView,
   RefreshControl,
   ActivityIndicator,
+  Dimensions,
   TextInput,
+  FlatList,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, spacing, borderRadius, shadows } from '../../src/utils/theme';
+import { colors, shadows } from '../../src/utils/theme';
 import api from '../../src/api/client';
 
-const CATEGORIES = ['All', 'Restaurant', 'Cafe', 'Bar', 'Park', 'Shop', 'Gallery', 'Gym', 'Club'];
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const GRID_GAP = 4;
+const COL3_WIDTH = (SCREEN_WIDTH - GRID_GAP * 2) / 3;
 
-function PlaceCard({ place, onPress }: { place: any; onPress: () => void }) {
+const PLACE_TYPES = [
+  { id: 'restaurant', label: 'Restaurants', icon: 'restaurant-outline' },
+  { id: 'cafe', label: 'Cafes', icon: 'cafe-outline' },
+  { id: 'bar', label: 'Bars', icon: 'wine-outline' },
+  { id: 'park', label: 'Parks', icon: 'leaf-outline' },
+  { id: 'museum', label: 'Museums', icon: 'business-outline' },
+  { id: 'gym', label: 'Gyms', icon: 'barbell-outline' },
+  { id: 'shopping_mall', label: 'Shopping', icon: 'bag-outline' },
+  { id: 'night_club', label: 'Nightlife', icon: 'musical-notes-outline' },
+];
+
+function PlaceGridItem({ place, size, onPress }: { place: any; size: 'large' | 'small'; onPress: () => void }) {
+  const isLarge = size === 'large';
+  const w = isLarge ? COL3_WIDTH * 2 + GRID_GAP : COL3_WIDTH;
+  const h = isLarge ? COL3_WIDTH * 2 + GRID_GAP : COL3_WIDTH;
+
   return (
-    <TouchableOpacity style={cardStyles.card} onPress={onPress} activeOpacity={0.9}>
-      {place.image_url ? (
-        <Image source={{ uri: place.image_url }} style={cardStyles.image} />
+    <TouchableOpacity
+      style={[gridStyles.item, { width: w, height: h }]}
+      onPress={onPress}
+      activeOpacity={0.9}
+    >
+      {place.photo_url ? (
+        <Image source={{ uri: place.photo_url }} style={gridStyles.image} />
       ) : (
-        <View style={cardStyles.imagePlaceholder}>
-          <Ionicons name="location" size={32} color={colors.textHint} />
+        <View style={gridStyles.placeholder}>
+          <Ionicons name="image-outline" size={32} color={colors.textHint} />
         </View>
       )}
-      <View style={cardStyles.content}>
-        <Text style={cardStyles.name} numberOfLines={1}>{place.name}</Text>
-        <Text style={cardStyles.address} numberOfLines={1}>{place.address}</Text>
-        <View style={cardStyles.metaRow}>
-          {place.category && (
-            <View style={cardStyles.categoryPill}>
-              <Text style={cardStyles.categoryText}>{place.category}</Text>
-            </View>
-          )}
-          {place.rating > 0 && (
-            <View style={cardStyles.ratingRow}>
-              <Ionicons name="star" size={12} color="#F59E0B" />
-              <Text style={cardStyles.ratingText}>{place.rating.toFixed(1)}</Text>
-            </View>
+      <View style={gridStyles.overlay} />
+      <View style={gridStyles.info}>
+        <Text style={gridStyles.name} numberOfLines={1}>{place.name}</Text>
+        <View style={gridStyles.ratingRow}>
+          <Ionicons name="star" size={11} color="#FCD34D" />
+          <Text style={gridStyles.rating}>{place.rating?.toFixed(1) || '–'}</Text>
+          {place.open_now !== undefined && (
+            <View style={[gridStyles.statusDot, { backgroundColor: place.open_now ? '#22C55E' : '#EF4444' }]} />
           )}
         </View>
       </View>
@@ -49,70 +66,60 @@ function PlaceCard({ place, onPress }: { place: any; onPress: () => void }) {
   );
 }
 
-const cardStyles = StyleSheet.create({
-  card: {
-    flexDirection: 'row',
-    backgroundColor: colors.bgCard,
-    borderRadius: 20,
+const gridStyles = StyleSheet.create({
+  item: {
+    borderRadius: 6,
     overflow: 'hidden',
-    marginHorizontal: 16,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: colors.borderSubtle,
-    ...shadows.elevation1,
+    backgroundColor: colors.bgSubtle,
   },
   image: {
-    width: 100,
-    height: 100,
+    width: '100%',
+    height: '100%',
   },
-  imagePlaceholder: {
-    width: 100,
-    height: 100,
-    backgroundColor: colors.bgSubtle,
+  placeholder: {
+    width: '100%',
+    height: '100%',
     justifyContent: 'center',
     alignItems: 'center',
+    backgroundColor: colors.bgSubtle,
   },
-  content: {
-    flex: 1,
-    padding: 12,
-    justifyContent: 'center',
+  overlay: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: '45%',
+    backgroundColor: 'rgba(0,0,0,0.45)',
+  },
+  info: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    padding: 8,
   },
   name: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: colors.textPrimary,
-    marginBottom: 4,
-  },
-  address: {
+    color: '#FFFFFF',
     fontSize: 12,
-    color: colors.textHint,
-    marginBottom: 8,
-  },
-  metaRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  categoryPill: {
-    backgroundColor: colors.accentPrimaryLight,
-    paddingHorizontal: 10,
-    paddingVertical: 3,
-    borderRadius: 10,
-  },
-  categoryText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: colors.accentPrimary,
+    fontWeight: '700',
+    lineHeight: 16,
   },
   ratingRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 3,
+    marginTop: 2,
   },
-  ratingText: {
-    fontSize: 12,
+  rating: {
+    color: 'rgba(255,255,255,0.85)',
+    fontSize: 11,
     fontWeight: '600',
-    color: colors.textSecondary,
+  },
+  statusDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    marginLeft: 4,
   },
 });
 
@@ -122,15 +129,13 @@ export default function PlacesScreen() {
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [search, setSearch] = useState('');
-  const [category, setCategory] = useState('All');
+  const [activeType, setActiveType] = useState('restaurant');
 
-  const loadPlaces = async () => {
+  const loadPlaces = async (type: string, keyword?: string) => {
     try {
-      const response = await api.get('/places', {
-        params: {
-          category: category !== 'All' ? category : undefined,
-        },
-      });
+      const params: any = { type, lat: 40.7128, lng: -74.006, radius: 5000 };
+      if (keyword) params.keyword = keyword;
+      const response = await api.get('/google-places/nearby', { params });
       setPlaces(response.data);
     } catch (error) {
       console.log('Error loading places:', error);
@@ -140,194 +145,216 @@ export default function PlacesScreen() {
   };
 
   useEffect(() => {
-    loadPlaces();
-  }, [category]);
+    setIsLoading(true);
+    loadPlaces(activeType);
+  }, [activeType]);
 
   const onRefresh = useCallback(async () => {
     setIsRefreshing(true);
-    await loadPlaces();
+    await loadPlaces(activeType, search || undefined);
     setIsRefreshing(false);
-  }, [category]);
+  }, [activeType, search]);
 
-  const filteredPlaces = search
-    ? places.filter(
-        (p) =>
-          p.name?.toLowerCase().includes(search.toLowerCase()) ||
-          p.address?.toLowerCase().includes(search.toLowerCase())
-      )
-    : places;
+  const handleSearch = () => {
+    if (search.trim()) {
+      setIsLoading(true);
+      loadPlaces(activeType, search.trim());
+    }
+  };
+
+  // Build Lemon8-style grid pattern: [large + 2 small stacked], [3 small], repeat
+  const renderGrid = () => {
+    const rows: React.ReactNode[] = [];
+    let i = 0;
+    let rowIdx = 0;
+
+    while (i < places.length) {
+      if (rowIdx % 2 === 0 && i + 2 < places.length) {
+        // Pattern: 1 large (2x2) + 2 small stacked
+        const leftLarge = rowIdx % 4 === 0;
+        // Capture local references to avoid closure issues with mutable `i`
+        const p0 = places[i];
+        const p1 = places[i + 1];
+        const p2 = places[i + 2];
+        rows.push(
+          <View key={`row-${rowIdx}`} style={pStyles.gridRow}>
+            {leftLarge ? (
+              <>
+                <PlaceGridItem
+                  place={p0}
+                  size="large"
+                  onPress={() => router.push(`/place/${p0.place_id}`)}
+                />
+                <View style={pStyles.stackedCol}>
+                  <PlaceGridItem
+                    place={p1}
+                    size="small"
+                    onPress={() => router.push(`/place/${p1.place_id}`)}
+                  />
+                  <PlaceGridItem
+                    place={p2}
+                    size="small"
+                    onPress={() => router.push(`/place/${p2.place_id}`)}
+                  />
+                </View>
+              </>
+            ) : (
+              <>
+                <View style={pStyles.stackedCol}>
+                  <PlaceGridItem
+                    place={p1}
+                    size="small"
+                    onPress={() => router.push(`/place/${p1.place_id}`)}
+                  />
+                  <PlaceGridItem
+                    place={p2}
+                    size="small"
+                    onPress={() => router.push(`/place/${p2.place_id}`)}
+                  />
+                </View>
+                <PlaceGridItem
+                  place={p0}
+                  size="large"
+                  onPress={() => router.push(`/place/${p0.place_id}`)}
+                />
+              </>
+            )}
+          </View>
+        );
+        i += 3;
+      } else {
+        // Pattern: 3 small in a row
+        const rowItems = places.slice(i, i + 3);
+        rows.push(
+          <View key={`row-${rowIdx}`} style={pStyles.gridRow}>
+            {rowItems.map((place) => (
+              <PlaceGridItem
+                key={place.place_id}
+                place={place}
+                size="small"
+                onPress={() => router.push(`/place/${place.place_id}`)}
+              />
+            ))}
+          </View>
+        );
+        i += rowItems.length;
+      }
+      rowIdx++;
+    }
+    return rows;
+  };
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeAreaView style={pStyles.container} edges={['top']}>
       {/* Header */}
-      <View style={styles.header}>
-        <Text style={styles.headerTitle}>Places</Text>
-        <TouchableOpacity style={styles.mapBtn}>
+      <View style={pStyles.header}>
+        <Text style={pStyles.headerTitle}>Places</Text>
+        <TouchableOpacity style={pStyles.mapBtn}>
           <Ionicons name="map-outline" size={20} color={colors.accentPrimary} />
         </TouchableOpacity>
       </View>
 
       {/* Search */}
-      <View style={styles.searchBar}>
+      <View style={pStyles.searchBar}>
         <Ionicons name="search" size={18} color={colors.textHint} />
         <TextInput
-          style={styles.searchInput}
+          style={pStyles.searchInput}
           placeholder="Search places..."
           placeholderTextColor={colors.textHint}
           value={search}
           onChangeText={setSearch}
+          onSubmitEditing={handleSearch}
+          returnKeyType="search"
         />
         {search.length > 0 && (
-          <TouchableOpacity onPress={() => setSearch('')}>
+          <TouchableOpacity onPress={() => { setSearch(''); setIsLoading(true); loadPlaces(activeType); }}>
             <Ionicons name="close-circle" size={18} color={colors.textHint} />
           </TouchableOpacity>
         )}
       </View>
 
       {/* Category chips */}
-      <FlatList
+      <ScrollView
         horizontal
-        data={CATEGORIES}
-        keyExtractor={(item) => item}
         showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.chipRow}
-        renderItem={({ item }) => (
+        contentContainerStyle={pStyles.chipRow}
+      >
+        {PLACE_TYPES.map((t) => (
           <TouchableOpacity
-            style={[styles.chip, category === item && styles.chipActive]}
-            onPress={() => setCategory(item)}
+            key={t.id}
+            style={[pStyles.chip, activeType === t.id && pStyles.chipActive]}
+            onPress={() => setActiveType(t.id)}
           >
-            <Text style={[styles.chipText, category === item && styles.chipTextActive]}>
-              {item}
+            <Ionicons
+              name={t.icon as any}
+              size={16}
+              color={activeType === t.id ? '#FFFFFF' : colors.textSecondary}
+            />
+            <Text style={[pStyles.chipText, activeType === t.id && pStyles.chipTextActive]}>
+              {t.label}
             </Text>
           </TouchableOpacity>
-        )}
-      />
+        ))}
+      </ScrollView>
 
+      {/* Grid */}
       {isLoading ? (
-        <View style={styles.loadingContainer}>
+        <View style={pStyles.loadingCenter}>
           <ActivityIndicator size="large" color={colors.accentPrimary} />
         </View>
       ) : (
-        <FlatList
-          data={filteredPlaces}
-          keyExtractor={(item) => item.id}
-          renderItem={({ item }) => (
-            <PlaceCard
-              place={item}
-              onPress={() => router.push(`/place/${item.id}`)}
-            />
-          )}
-          refreshControl={
-            <RefreshControl
-              refreshing={isRefreshing}
-              onRefresh={onRefresh}
-              tintColor={colors.accentPrimary}
-            />
-          }
-          contentContainerStyle={{ paddingBottom: 100, paddingTop: 4 }}
-          ListEmptyComponent={
-            <View style={styles.emptyState}>
-              <Ionicons name="location-outline" size={48} color={colors.textHint} />
-              <Text style={styles.emptyTitle}>No places found</Text>
-              <Text style={styles.emptyText}>Try a different category or location</Text>
-            </View>
-          }
+        <ScrollView
           showsVerticalScrollIndicator={false}
-        />
+          refreshControl={
+            <RefreshControl refreshing={isRefreshing} onRefresh={onRefresh} tintColor={colors.accentPrimary} />
+          }
+          contentContainerStyle={{ paddingBottom: 100, gap: GRID_GAP }}
+        >
+          {places.length === 0 ? (
+            <View style={pStyles.emptyState}>
+              <Ionicons name="location-outline" size={56} color={colors.textHint} />
+              <Text style={pStyles.emptyTitle}>No places found</Text>
+              <Text style={pStyles.emptyText}>Try a different category or search</Text>
+            </View>
+          ) : (
+            renderGrid()
+          )}
+        </ScrollView>
       )}
     </SafeAreaView>
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.bgApp,
-  },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
+const pStyles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#FFFFFF' },
   header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingVertical: 12,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 20, paddingVertical: 12,
   },
-  headerTitle: {
-    fontSize: 24,
-    fontWeight: '700',
-    color: colors.textPrimary,
-    fontStyle: 'italic',
-  },
+  headerTitle: { fontSize: 24, fontWeight: '700', color: colors.textPrimary, fontStyle: 'italic' },
   mapBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: colors.accentPrimaryLight,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: colors.accentPrimary,
+    width: 44, height: 44, borderRadius: 22, backgroundColor: colors.accentPrimaryLight,
+    justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: colors.accentPrimary,
   },
   searchBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginHorizontal: 16,
-    marginBottom: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderRadius: 16,
-    backgroundColor: colors.bgCard,
-    borderWidth: 1,
-    borderColor: colors.borderLight,
-    gap: 12,
+    flexDirection: 'row', alignItems: 'center', marginHorizontal: 16, marginBottom: 12,
+    paddingHorizontal: 14, paddingVertical: 10, borderRadius: 14,
+    backgroundColor: colors.bgSubtle, gap: 10,
   },
-  searchInput: {
-    flex: 1,
-    fontSize: 15,
-    color: colors.textPrimary,
-  },
-  chipRow: {
-    paddingHorizontal: 16,
-    gap: 6,
-    marginBottom: 12,
-  },
+  searchInput: { flex: 1, fontSize: 15, color: colors.textPrimary },
+  chipRow: { paddingHorizontal: 16, gap: 8, marginBottom: 12 },
   chip: {
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 18,
-    backgroundColor: colors.bgCard,
-    borderWidth: 1,
-    borderColor: colors.borderLight,
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 14, paddingVertical: 8, borderRadius: 18,
+    backgroundColor: colors.bgSubtle, borderWidth: 1, borderColor: colors.borderLight,
   },
-  chipActive: {
-    backgroundColor: colors.accentPrimary,
-    borderColor: colors.accentPrimary,
-  },
-  chipText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: colors.textSecondary,
-  },
-  chipTextActive: {
-    color: '#FFFFFF',
-  },
-  emptyState: {
-    alignItems: 'center',
-    paddingVertical: 60,
-  },
-  emptyTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: colors.textPrimary,
-    marginTop: 12,
-  },
-  emptyText: {
-    fontSize: 13,
-    color: colors.textHint,
-    marginTop: 4,
-  },
+  chipActive: { backgroundColor: colors.accentPrimary, borderColor: colors.accentPrimary },
+  chipText: { fontSize: 13, fontWeight: '600', color: colors.textSecondary },
+  chipTextActive: { color: '#FFFFFF' },
+  gridRow: { flexDirection: 'row', gap: GRID_GAP },
+  stackedCol: { gap: GRID_GAP },
+  loadingCenter: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  emptyState: { alignItems: 'center', paddingVertical: 60 },
+  emptyTitle: { fontSize: 16, fontWeight: '700', color: colors.textPrimary, marginTop: 12 },
+  emptyText: { fontSize: 13, color: colors.textHint, marginTop: 4 },
 });
