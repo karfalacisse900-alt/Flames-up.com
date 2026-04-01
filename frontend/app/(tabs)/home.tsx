@@ -899,10 +899,16 @@ export default function HomeScreen() {
           <Text style={styles.storyName}>Your Story</Text>
         </TouchableOpacity>
 
-        {/* Other stories */}
-        {statuses.map((status: any, idx: number) => (
-          <TouchableOpacity key={status.id || idx} style={styles.storyItem}>
-            <View style={styles.storyRing}>
+        {/* Other stories - filter out current user */}
+        {statuses
+          .filter((s: any) => s.user_id !== user?.id)
+          .map((status: any, idx: number) => (
+          <TouchableOpacity
+            key={status.user_id || idx}
+            style={styles.storyItem}
+            onPress={() => router.push(`/story-viewer?userId=${status.user_id}` as any)}
+          >
+            <View style={[styles.storyRing, status.has_unviewed && styles.storyRingUnviewed]}>
               <View style={styles.storyRingInner}>
                 {status.user_profile_image ? (
                   <Image
@@ -1174,6 +1180,9 @@ const styles = StyleSheet.create({
     padding: 2.5,
     backgroundColor: colors.storyRingMid,
     overflow: 'hidden',
+  },
+  storyRingUnviewed: {
+    backgroundColor: '#ED4956',
   },
   storyRingInner: {
     width: '100%',

@@ -1,0 +1,22 @@
+name = "flames-up-api"
+main = "src/index.ts"
+compatibility_date = "2025-06-01"
+
+[vars]
+ENVIRONMENT = "production"
+CF_ACCOUNT_HASH = "DY-IgVdOm-0zb0K5ZFnpKA"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "flames-up-db"
+database_id = "YOUR_D1_DATABASE_ID"
+
+[[kv_namespaces]]
+binding = "KV"
+id = "YOUR_KV_NAMESPACE_ID"
+
+# Secrets (set via `wrangler secret put`):
+# JWT_SECRET
+# CF_API_TOKEN
+# CF_ACCOUNT_ID
+# GOOGLE_MAPS_API_KEY

@@ -121,7 +121,7 @@ export default function ProfileScreen() {
           <Pressable style={styles.menuOverlay} onPress={() => setShowMore(false)}>
             <View style={styles.floatingMenu}>
               {[
-                { icon: 'library-outline', label: 'My Library', color: colors.textPrimary, route: '/my-library' },
+                { icon: 'library-outline', label: 'My Library', color: colors.textPrimary, route: '/library' },
                 { icon: 'gift-outline', label: 'Referrals', color: '#F97316', route: '/referrals' },
                 { icon: 'star-outline', label: 'Creator Hub', color: '#EF4444', route: '/creator-hub' },
                 { icon: 'document-text-outline', label: 'Apply: Local Publisher', color: '#3B82F6', route: '/apply-publisher' },

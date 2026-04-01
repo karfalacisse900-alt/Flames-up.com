@@ -997,6 +997,60 @@ async def create_report(report: ReportCreate, current_user: dict = Depends(get_c
     return {"message": "Report submitted successfully", "report_id": report_doc["id"]}
 
 
+# ===================== LIBRARY (Liked/Saved Posts) =====================
+
+@api_router.get("/library/liked")
+async def get_liked_posts(current_user: dict = Depends(get_current_user)):
+    """Get posts the user has liked"""
+    posts = await db.posts.find({"liked_by": current_user["id"]}).sort("created_at", -1).to_list(100)
+    return [{k: v for k, v in p.items() if k != "_id"} for p in posts]
+
+@api_router.get("/library/saved")
+async def get_saved_posts(current_user: dict = Depends(get_current_user)):
+    """Get posts the user has saved"""
+    saved = await db.saved_posts.find({"user_id": current_user["id"]}).sort("created_at", -1).to_list(100)
+    post_ids = [s["post_id"] for s in saved]
+    if not post_ids:
+        return []
+    posts = await db.posts.find({"id": {"$in": post_ids}}).to_list(100)
+    return [{k: v for k, v in p.items() if k != "_id"} for p in posts]
+
+@api_router.post("/library/save/{post_id}")
+async def save_post(post_id: str, collection: str = "all", current_user: dict = Depends(get_current_user)):
+    """Save a post to collection"""
+    existing = await db.saved_posts.find_one({"user_id": current_user["id"], "post_id": post_id})
+    if existing:
+        await db.saved_posts.update_one({"_id": existing["_id"]}, {"$set": {"collection": collection}})
+        return {"status": "updated"}
+    doc = {
+        "id": str(uuid.uuid4()),
+        "user_id": current_user["id"],
+        "post_id": post_id,
+        "collection": collection,
+        "created_at": datetime.utcnow().isoformat(),
+    }
+    await db.saved_posts.insert_one(doc)
+    return {"status": "saved"}
+
+@api_router.delete("/library/save/{post_id}")
+async def unsave_post(post_id: str, current_user: dict = Depends(get_current_user)):
+    """Unsave a post"""
+    await db.saved_posts.delete_one({"user_id": current_user["id"], "post_id": post_id})
+    return {"status": "removed"}
+
+@api_router.get("/library/collections")
+async def get_collections(current_user: dict = Depends(get_current_user)):
+    """Get user's save collections with counts"""
+    pipeline = [
+        {"$match": {"user_id": current_user["id"]}},
+        {"$group": {"_id": "$collection", "count": {"$sum": 1}}},
+        {"$sort": {"count": -1}},
+    ]
+    results = await db.saved_posts.aggregate(pipeline).to_list(50)
+    return [{"name": r["_id"], "count": r["count"]} for r in results]
+
+
+
 
 # ===================== FRIEND REQUESTS =====================
 
