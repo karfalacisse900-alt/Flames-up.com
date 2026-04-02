@@ -15,7 +15,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { WebView } from 'react-native-webview';
+let WebViewComp: any = null;
+try { WebViewComp = require('react-native-webview').WebView; } catch {}
 import { colors, spacing, borderRadius, shadows } from '../../src/utils/theme';
 import api from '../../src/api/client';
 
@@ -338,13 +339,21 @@ export default function PlaceDetailScreen() {
           <>
             <View style={s.divider} />
             <View style={s.inlineMapContainer}>
-              <WebView
-                source={{ html: `<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"><style>*{margin:0;padding:0}html,body,#map{width:100%;height:100%}</style></head><body><div id="map"></div><script>function initMap(){var map=new google.maps.Map(document.getElementById('map'),{center:{lat:${place.lat},lng:${place.lng}},zoom:16,mapTypeControl:false,streetViewControl:false,fullscreenControl:false,zoomControl:true,styles:[{featureType:'poi',elementType:'labels',stylers:[{visibility:'off'}]}]});new google.maps.Marker({position:{lat:${place.lat},lng:${place.lng}},map:map,title:"${(place.name || '').replace(/"/g, '\\"')}",icon:{path:google.maps.SymbolPath.CIRCLE,scale:12,fillColor:'#10B981',fillOpacity:1,strokeWeight:3,strokeColor:'#FFFFFF'}});}</script><script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCEY8QKlhF-Kxlo8Sxv8Z0bnTVVzTBTEIw&callback=initMap" async defer></script></body></html>` }}
-                style={{ flex: 1 }}
-                javaScriptEnabled
-                domStorageEnabled
-                scrollEnabled={false}
-              />
+              {Platform.OS === 'web' ? (
+                <iframe
+                  srcDoc={`<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"><style>*{margin:0;padding:0}html,body,#map{width:100%;height:100%}</style></head><body><div id="map"></div><script>function initMap(){var map=new google.maps.Map(document.getElementById('map'),{center:{lat:${place.lat},lng:${place.lng}},zoom:16,mapTypeControl:false,streetViewControl:false,fullscreenControl:false,zoomControl:true,styles:[{"featureType":"all","elementType":"geometry","stylers":[{"color":"#F5F0EB"}]},{"featureType":"water","elementType":"geometry","stylers":[{"color":"#C5DAE8"}]},{"featureType":"poi","elementType":"labels","stylers":[{"visibility":"off"}]},{"featureType":"transit","stylers":[{"visibility":"off"}]}]});new google.maps.Marker({position:{lat:${place.lat},lng:${place.lng}},map:map,title:"${(place.name || '').replace(/"/g, '')}",icon:{path:google.maps.SymbolPath.CIRCLE,scale:12,fillColor:'#2D6A4F',fillOpacity:1,strokeWeight:3,strokeColor:'#FFFFFF'}});}</script><script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCEY8QKlhF-Kxlo8Sxv8Z0bnTVVzTBTEIw&callback=initMap" async defer></script></body></html>`}
+                  style={{ width: '100%', height: '100%', border: 'none' } as any}
+                  title="Place Map"
+                />
+              ) : WebViewComp ? (
+                <WebViewComp
+                  source={{ html: `<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"><style>*{margin:0;padding:0}html,body,#map{width:100%;height:100%}</style></head><body><div id="map"></div><script>function initMap(){var map=new google.maps.Map(document.getElementById('map'),{center:{lat:${place.lat},lng:${place.lng}},zoom:16,mapTypeControl:false,streetViewControl:false,fullscreenControl:false,zoomControl:true,styles:[{"featureType":"all","elementType":"geometry","stylers":[{"color":"#F5F0EB"}]},{"featureType":"water","elementType":"geometry","stylers":[{"color":"#C5DAE8"}]},{"featureType":"poi","elementType":"labels","stylers":[{"visibility":"off"}]},{"featureType":"transit","stylers":[{"visibility":"off"}]}]});new google.maps.Marker({position:{lat:${place.lat},lng:${place.lng}},map:map,title:"${(place.name || '').replace(/"/g, '')}",icon:{path:google.maps.SymbolPath.CIRCLE,scale:12,fillColor:'#2D6A4F',fillOpacity:1,strokeWeight:3,strokeColor:'#FFFFFF'}});}</script><script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCEY8QKlhF-Kxlo8Sxv8Z0bnTVVzTBTEIw&callback=initMap" async defer></script></body></html>` }}
+                  style={{ flex: 1 }}
+                  javaScriptEnabled
+                  domStorageEnabled
+                  scrollEnabled={false}
+                />
+              ) : null}
               <TouchableOpacity style={s.mapOverlayBtn} onPress={openDirections}>
                 <Ionicons name="navigate" size={14} color="#FFFFFF" />
                 <Text style={s.mapOverlayText}>Get Directions</Text>

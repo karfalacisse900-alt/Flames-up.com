@@ -15,10 +15,13 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { WebView } from 'react-native-webview';
 import * as Location from 'expo-location';
 import { colors } from '../src/utils/theme';
 import api from '../src/api/client';
+
+let WebView: any = null;
+try { WebView = require('react-native-webview').WebView; } catch {}
+
 
 const { width: SW, height: SH } = Dimensions.get('window');
 const GKEY = 'AIzaSyCEY8QKlhF-Kxlo8Sxv8Z0bnTVVzTBTEIw';
@@ -231,7 +234,13 @@ export default function MapViewScreen() {
             <ActivityIndicator size="large" color="#2D6A4F" />
             <Text style={s.loadText}>Finding places...</Text>
           </View>
-        ) : (
+        ) : Platform.OS === 'web' ? (
+          <iframe
+            srcDoc={mapHTML()}
+            style={{ width: '100%', height: '100%', border: 'none' } as any}
+            title="Map"
+          />
+        ) : WebView ? (
           <WebView
             ref={wvRef}
             source={{ html: mapHTML() }}
@@ -244,6 +253,11 @@ export default function MapViewScreen() {
               <View style={s.loadCenter}><ActivityIndicator size="large" color="#2D6A4F" /></View>
             )}
           />
+        ) : (
+          <View style={s.loadCenter}>
+            <Ionicons name="map-outline" size={48} color="#2D6A4F" />
+            <Text style={s.loadText}>Map loading...</Text>
+          </View>
         )}
 
         {/* Zoom controls */}
