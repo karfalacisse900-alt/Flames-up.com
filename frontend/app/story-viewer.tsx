@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { Video, ResizeMode } from 'expo-av';
 import { colors } from '../src/utils/theme';
 import api from '../src/api/client';
 
@@ -90,7 +91,16 @@ export default function StoryViewerScreen() {
       <StatusBar barStyle="light-content" />
 
       {/* Background */}
-      {current?.image ? (
+      {current?.media_type === 'video' && current?.image ? (
+        <Video
+          source={{ uri: current.image }}
+          style={s.bgImage}
+          resizeMode={ResizeMode.COVER}
+          shouldPlay
+          isLooping
+          isMuted={false}
+        />
+      ) : current?.image ? (
         <Image source={{ uri: current.image }} style={s.bgImage} />
       ) : (
         <View style={[s.bgColor, { backgroundColor: current?.background_color || '#6366f1' }]} />

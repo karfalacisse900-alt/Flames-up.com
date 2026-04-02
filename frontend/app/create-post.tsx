@@ -21,6 +21,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { colors, spacing, borderRadius, shadows } from '../src/utils/theme';
 import { useAuthStore } from '../src/store/authStore';
 import api from '../src/api/client';
+import { uploadImage, getVideoUploadUrl, uploadVideoToStream } from '../src/utils/mediaUpload';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const MAX_MEDIA = 10;
@@ -97,20 +98,37 @@ export default function CreatePostScreen() {
 
     setIsPosting(true);
     try {
-      // Upload images to Cloudflare Images
+      // Upload media to Cloudflare (Images for photos, Stream for videos)
       const uploadedUrls: string[] = [];
       const mediaTypesList: string[] = [];
       for (const m of media) {
-        const imageData = m.base64 || m.uri;
-        if (imageData) {
+        const mediaType = m.type || 'image';
+        if (mediaType === 'video') {
+          // For videos, try CF Stream direct upload
           try {
-            const res = await api.post('/upload/image', { image: imageData });
-            uploadedUrls.push(res.data?.url || imageData);
+            const uploadInfo = await getVideoUploadUrl();
+            if (uploadInfo) {
+              const success = await uploadVideoToStream(uploadInfo.uploadUrl, m.uri);
+              if (success) {
+                uploadedUrls.push(`cfstream:${uploadInfo.videoUid}`);
+              } else {
+                uploadedUrls.push(m.uri); // fallback
+              }
+            } else {
+              uploadedUrls.push(m.uri); // fallback
+            }
           } catch {
-            uploadedUrls.push(imageData); // fallback to base64
+            uploadedUrls.push(m.uri); // fallback
+          }
+        } else {
+          // For images, upload to CF Images
+          const imageData = m.base64 || m.uri;
+          if (imageData) {
+            const cfUrl = await uploadImage(imageData);
+            uploadedUrls.push(cfUrl);
           }
         }
-        mediaTypesList.push(m.type || 'image');
+        mediaTypesList.push(mediaType);
       }
       
       await api.post('/posts', {

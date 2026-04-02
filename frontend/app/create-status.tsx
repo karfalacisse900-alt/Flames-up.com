@@ -23,6 +23,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { colors } from '../src/utils/theme';
 import { useAuthStore } from '../src/store/authStore';
 import api from '../src/api/client';
+import { uploadImage } from '../src/utils/mediaUpload';
 
 const { width: SW, height: SH } = Dimensions.get('window');
 
@@ -120,10 +121,7 @@ export default function CreateStatusScreen() {
     try {
       let uploadedImage = image;
       if (image) {
-        try {
-          const res = await api.post('/upload/image', { image });
-          uploadedImage = res.data?.url || image;
-        } catch { /* fallback */ }
+        uploadedImage = await uploadImage(image);
       }
       const gradient = useGradient ? GRADIENTS[bgColorIdx] : null;
       await api.post('/statuses', {

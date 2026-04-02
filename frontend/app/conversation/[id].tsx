@@ -11,7 +11,8 @@ import { useAuthStore } from '../../src/store/authStore';
 import api from '../../src/api/client';
 import { format } from 'date-fns';
 import * as ImagePicker from 'expo-image-picker';
-import { Audio } from 'expo-av';
+import { Audio, Video, ResizeMode } from 'expo-av';
+import { uploadImage } from '../../src/utils/mediaUpload';
 
 const { width: SW } = Dimensions.get('window');
 
@@ -191,12 +192,9 @@ export default function ConversationScreen() {
       const payload: any = { receiver_id: userId, content: msgText || '' };
       if (media) {
         if (media.type === 'image' && (media as any).base64) {
-          // Upload image to CF Images
-          try {
-            const imgData = `data:image/jpeg;base64,${(media as any).base64}`;
-            const res = await api.post('/upload/image', { image: imgData });
-            payload.media_url = res.data?.url || imgData;
-          } catch { payload.media_url = media.uri; }
+          // Upload image to CF Images using shared utility
+          const imgData = `data:image/jpeg;base64,${(media as any).base64}`;
+          payload.media_url = await uploadImage(imgData);
         } else {
           payload.media_url = media.uri;
         }
@@ -230,10 +228,16 @@ export default function ConversationScreen() {
           )}
           {/* Video */}
           {hasMedia && mediaType === 'video' && (
-            <TouchableOpacity style={st.videoBox} onPress={() => setViewingMedia(mediaSource)}>
-              <View style={st.playCircle}><Ionicons name="play" size={28} color="#FFF" /></View>
-              <Text style={st.videoLabel}>Video</Text>
-            </TouchableOpacity>
+            <View style={st.videoBox}>
+              <Video
+                source={{ uri: mediaSource }}
+                style={{ width: SW * 0.55, height: SW * 0.55 * 0.75, borderRadius: 12 }}
+                resizeMode={ResizeMode.CONTAIN}
+                useNativeControls
+                shouldPlay={false}
+                isLooping={false}
+              />
+            </View>
           )}
           {/* Voice message */}
           {isVoice && (

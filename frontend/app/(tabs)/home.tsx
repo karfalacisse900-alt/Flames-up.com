@@ -24,7 +24,9 @@ import * as ImagePicker from 'expo-image-picker';
 import { colors, shadows } from '../../src/utils/theme';
 import { useAuthStore } from '../../src/store/authStore';
 import api from '../../src/api/client';
+import { uploadImage } from '../../src/utils/mediaUpload';
 import { formatDistanceToNow } from 'date-fns';
+import { Video, ResizeMode } from 'expo-av';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const PHOTO_RATIO = 4 / 5;  // 4:5 for photos
@@ -236,13 +238,30 @@ function PostCard({ post, currentUserId, onPress, onUserPress }: any) {
               setActiveImageIdx(Math.round(e.nativeEvent.contentOffset.x / SCREEN_WIDTH));
             }}
             keyExtractor={(_, i) => `img-${i}`}
-            renderItem={({ item: imgUri }) => (
-              <Image
-                source={{ uri: imgUri }}
-                style={{ width: SCREEN_WIDTH, height: SCREEN_WIDTH / mediaAspect, backgroundColor: colors.bgSubtle }}
-                resizeMode="cover"
-              />
-            )}
+            renderItem={({ item: imgUri, index }) => {
+              const itemIsVideo = post.media_types?.[index] === 'video';
+              if (itemIsVideo) {
+                return (
+                  <View style={{ width: SCREEN_WIDTH, height: SCREEN_WIDTH / VIDEO_RATIO, backgroundColor: '#000' }}>
+                    <Video
+                      source={{ uri: imgUri }}
+                      style={{ width: '100%', height: '100%' }}
+                      resizeMode={ResizeMode.CONTAIN}
+                      useNativeControls
+                      isLooping={false}
+                      shouldPlay={false}
+                    />
+                  </View>
+                );
+              }
+              return (
+                <Image
+                  source={{ uri: imgUri }}
+                  style={{ width: SCREEN_WIDTH, height: SCREEN_WIDTH / mediaAspect, backgroundColor: colors.bgSubtle }}
+                  resizeMode="cover"
+                />
+              );
+            }}
           />
           <View style={postStyles.carouselDots}>
             {allImages.map((_: string, i: number) => (
@@ -252,6 +271,19 @@ function PostCard({ post, currentUserId, onPress, onUserPress }: any) {
               />
             ))}
           </View>
+        </View>
+      ) : hasMedia && isVideo ? (
+        <View style={{ width: SCREEN_WIDTH, height: SCREEN_WIDTH / VIDEO_RATIO, backgroundColor: '#000' }}>
+          <Video
+            source={{ uri: post.image }}
+            style={{ width: '100%', height: '100%' }}
+            resizeMode={ResizeMode.CONTAIN}
+            useNativeControls
+            isLooping={false}
+            shouldPlay={false}
+            posterSource={post.video_thumbnail ? { uri: post.video_thumbnail } : undefined}
+            usePoster={!!post.video_thumbnail}
+          />
         </View>
       ) : hasMedia ? (
         <TouchableOpacity activeOpacity={0.95} onPress={onPress}>
@@ -643,11 +675,19 @@ function InlineComposer({
     if (!content.trim() && media.length === 0) return;
     setIsPosting(true);
     try {
-      const imagesList = media.map(m => m.base64 || m.uri).filter(Boolean);
+      // Upload images to Cloudflare Images first
+      const uploadedUrls: string[] = [];
+      for (const m of media) {
+        const imageData = m.base64 || m.uri;
+        if (imageData) {
+          const cfUrl = await uploadImage(imageData);
+          uploadedUrls.push(cfUrl);
+        }
+      }
       await api.post('/posts', {
         content: content.trim(),
-        image: imagesList[0] || null,
-        images: imagesList.length > 0 ? imagesList : undefined,
+        image: uploadedUrls[0] || null,
+        images: uploadedUrls.length > 0 ? uploadedUrls : undefined,
         post_type: inlinePostType,
       });
       setContent('');
