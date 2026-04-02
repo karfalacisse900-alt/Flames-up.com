@@ -26,17 +26,23 @@ export default function StoryViewerScreen() {
   const [userInfo, setUserInfo] = useState<any>(null);
   const progress = useRef(new Animated.Value(0)).current;
   const timerRef = useRef<any>(null);
+  const statusesRef = useRef<any[]>([]);
 
   useEffect(() => {
     loadStatuses();
-    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+      progress.stopAnimation();
+    };
   }, []);
 
   const loadStatuses = async () => {
     try {
       const res = await api.get('/statuses');
-      const userGroup = res.data.find((g: any) => g.user_id === userId);
-      if (userGroup) {
+      const allStatuses = Array.isArray(res.data) ? res.data : [];
+      const userGroup = allStatuses.find((g: any) => g.user_id === userId);
+      if (userGroup && Array.isArray(userGroup.statuses) && userGroup.statuses.length > 0) {
+        statusesRef.current = userGroup.statuses;
         setStatuses(userGroup.statuses);
         setUserInfo(userGroup);
         startProgress(0);
@@ -44,6 +50,8 @@ export default function StoryViewerScreen() {
         for (const s of userGroup.statuses) {
           try { await api.post(`/statuses/${s.id}/view`); } catch {}
         }
+      } else {
+        router.back();
       }
     } catch (error) {
       console.log('Error loading statuses:', error);
@@ -63,7 +71,12 @@ export default function StoryViewerScreen() {
   };
 
   const goNext = (idx: number) => {
-    if (idx < statuses.length - 1) {
+    const items = statusesRef.current;
+    if (!items || items.length === 0) {
+      router.back();
+      return;
+    }
+    if (idx < items.length - 1) {
       setCurrentIdx(idx + 1);
       startProgress(idx + 1);
     } else {

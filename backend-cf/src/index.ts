@@ -633,6 +633,271 @@ api.get('/google-places/:placeId', async (c) => {
 api.get('/', (c) => c.json({ message: 'Flames-Up API', version: '2.0', runtime: 'Cloudflare Workers + Hono + D1' }));
 api.get('/health', (c) => c.json({ status: 'healthy', timestamp: now() }));
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// CREATOR HUB
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// DB Setup — run once to create creator tables
+api.post('/creators/setup-db', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const user: any = await c.env.DB.prepare('SELECT is_admin FROM users WHERE id = ?').bind(userId).first();
+  if (!user?.is_admin) return c.json({ detail: 'Admin only' }, 403);
+  try {
+    await c.env.DB.exec(`
+      CREATE TABLE IF NOT EXISTS creators (
+        id TEXT PRIMARY KEY, user_id TEXT NOT NULL UNIQUE, category TEXT NOT NULL,
+        skills TEXT DEFAULT '[]', portfolio_links TEXT DEFAULT '[]', short_bio TEXT DEFAULT '',
+        city TEXT DEFAULT '', borough TEXT DEFAULT '', availability_status TEXT DEFAULT 'available',
+        pricing_range TEXT DEFAULT '', contact_link TEXT DEFAULT '', example_work TEXT DEFAULT '[]',
+        status TEXT DEFAULT 'pending', is_verified INTEGER DEFAULT 0,
+        created_at TEXT DEFAULT (datetime('now')), updated_at TEXT DEFAULT (datetime('now')),
+        FOREIGN KEY (user_id) REFERENCES users(id)
+      );
+      CREATE TABLE IF NOT EXISTS creator_portfolio_items (
+        id TEXT PRIMARY KEY, creator_id TEXT NOT NULL, post_id TEXT NOT NULL,
+        display_order INTEGER DEFAULT 0, created_at TEXT DEFAULT (datetime('now')),
+        UNIQUE(creator_id, post_id),
+        FOREIGN KEY (creator_id) REFERENCES creators(id), FOREIGN KEY (post_id) REFERENCES posts(id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_creators_user ON creators(user_id);
+      CREATE INDEX IF NOT EXISTS idx_creators_status ON creators(status);
+      CREATE INDEX IF NOT EXISTS idx_creators_category ON creators(category);
+      CREATE INDEX IF NOT EXISTS idx_creators_city ON creators(city);
+      CREATE INDEX IF NOT EXISTS idx_portfolio_creator ON creator_portfolio_items(creator_id);
+    `);
+    // Add is_creator column if not exists
+    try { await c.env.DB.exec(`ALTER TABLE users ADD COLUMN is_creator INTEGER DEFAULT 0;`); } catch {}
+    return c.json({ success: true, message: 'Creator Hub tables created' });
+  } catch (e: any) { return c.json({ success: true, message: 'Tables already exist or created', detail: e?.message }); }
+});
+
+// Apply for Creator status
+api.post('/creators/apply', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const body = await c.req.json();
+  const { category, portfolio_links, short_bio, city, example_work } = body;
+  if (!category) return c.json({ detail: 'Category is required' }, 400);
+
+  // Check if already applied
+  try {
+    const existing: any = await c.env.DB.prepare('SELECT id, status FROM creators WHERE user_id = ?').bind(userId).first();
+    if (existing) {
+      if (existing.status === 'approved') return c.json({ detail: 'You are already an approved creator' }, 400);
+      if (existing.status === 'pending') return c.json({ detail: 'You already have a pending application' }, 400);
+      // If rejected, allow re-application by updating
+      await c.env.DB.prepare(
+        'UPDATE creators SET category = ?, portfolio_links = ?, short_bio = ?, city = ?, example_work = ?, status = ?, updated_at = ? WHERE user_id = ?'
+      ).bind(category, JSON.stringify(portfolio_links || []), short_bio || '', city || '', JSON.stringify(example_work || []), 'pending', now(), userId).run();
+      return c.json({ message: 'Creator application re-submitted', status: 'pending' });
+    }
+  } catch {}
+
+  const id = uuid();
+  try {
+    await c.env.DB.prepare(
+      'INSERT INTO creators (id, user_id, category, portfolio_links, short_bio, city, example_work, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+    ).bind(id, userId, category, JSON.stringify(portfolio_links || []), short_bio || '', city || '', JSON.stringify(example_work || []), 'pending').run();
+  } catch (e: any) {
+    return c.json({ detail: 'Failed to submit application. Run /api/creators/setup-db first.', error: e?.message }, 500);
+  }
+  return c.json({ message: 'Creator application submitted', creator_id: id, status: 'pending' });
+});
+
+// Get own creator status
+api.get('/creators/me', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  try {
+    const creator: any = await c.env.DB.prepare('SELECT * FROM creators WHERE user_id = ?').bind(userId).first();
+    if (!creator) return c.json({ is_creator: false, status: null });
+    return c.json({
+      ...creator, is_creator: creator.status === 'approved',
+      portfolio_links: JSON.parse(creator.portfolio_links || '[]'),
+      skills: JSON.parse(creator.skills || '[]'),
+      example_work: JSON.parse(creator.example_work || '[]'),
+    });
+  } catch { return c.json({ is_creator: false, status: null }); }
+});
+
+// Update creator profile
+api.put('/creators/me', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const body = await c.req.json();
+  try {
+    const creator: any = await c.env.DB.prepare('SELECT id, status FROM creators WHERE user_id = ?').bind(userId).first();
+    if (!creator || creator.status !== 'approved') return c.json({ detail: 'Not an approved creator' }, 403);
+    const fields: string[] = []; const vals: any[] = [];
+    if (body.availability_status !== undefined) { fields.push('availability_status = ?'); vals.push(body.availability_status); }
+    if (body.pricing_range !== undefined) { fields.push('pricing_range = ?'); vals.push(body.pricing_range); }
+    if (body.contact_link !== undefined) { fields.push('contact_link = ?'); vals.push(body.contact_link); }
+    if (body.short_bio !== undefined) { fields.push('short_bio = ?'); vals.push(body.short_bio); }
+    if (body.skills !== undefined) { fields.push('skills = ?'); vals.push(JSON.stringify(body.skills)); }
+    if (body.portfolio_links !== undefined) { fields.push('portfolio_links = ?'); vals.push(JSON.stringify(body.portfolio_links)); }
+    if (body.city !== undefined) { fields.push('city = ?'); vals.push(body.city); }
+    if (body.borough !== undefined) { fields.push('borough = ?'); vals.push(body.borough); }
+    if (fields.length === 0) return c.json({ detail: 'No fields to update' }, 400);
+    fields.push('updated_at = ?'); vals.push(now()); vals.push(userId);
+    await c.env.DB.prepare(`UPDATE creators SET ${fields.join(', ')} WHERE user_id = ?`).bind(...vals).run();
+    return c.json({ message: 'Creator profile updated' });
+  } catch (e: any) { return c.json({ detail: 'Update failed', error: e?.message }, 500); }
+});
+
+// List creators (with optional filters: category, city, availability)
+api.get('/creators', async (c) => {
+  const category = c.req.query('category');
+  const city = c.req.query('city');
+  const availability = c.req.query('availability');
+  const search = c.req.query('search');
+  const limit = parseInt(c.req.query('limit') || '20');
+  const offset = parseInt(c.req.query('offset') || '0');
+
+  let where = "c.status = 'approved'";
+  const binds: any[] = [];
+  if (category) { where += ' AND c.category = ?'; binds.push(category); }
+  if (city) { where += ' AND c.city = ?'; binds.push(city); }
+  if (availability) { where += ' AND c.availability_status = ?'; binds.push(availability); }
+  if (search) { where += ' AND (u.full_name LIKE ? OR u.username LIKE ? OR c.category LIKE ?)'; binds.push(`%${search}%`, `%${search}%`, `%${search}%`); }
+  binds.push(limit, offset);
+
+  try {
+    const { results } = await c.env.DB.prepare(`
+      SELECT c.*, u.full_name, u.username, u.profile_image, u.followers_count, u.posts_count
+      FROM creators c JOIN users u ON c.user_id = u.id
+      WHERE ${where} ORDER BY u.followers_count DESC, c.created_at DESC LIMIT ? OFFSET ?
+    `).bind(...binds).all();
+    const creators = (results || []).map((cr: any) => ({
+      ...cr, portfolio_links: JSON.parse(cr.portfolio_links || '[]'),
+      skills: JSON.parse(cr.skills || '[]'),
+    }));
+    return c.json({ creators, count: creators.length });
+  } catch (e: any) { return c.json({ creators: [], count: 0, error: e?.message }); }
+});
+
+// Get creator categories
+api.get('/creators/categories', async (c) => {
+  return c.json({
+    categories: [
+      { id: 'photographer', name: 'Photographer', icon: 'camera' },
+      { id: 'artist', name: 'Artist', icon: 'color-palette' },
+      { id: 'musician', name: 'Musician', icon: 'musical-notes' },
+      { id: 'model', name: 'Model', icon: 'body' },
+      { id: 'stylist', name: 'Stylist', icon: 'cut' },
+      { id: 'dancer', name: 'Dancer', icon: 'walk' },
+      { id: 'influencer', name: 'Influencer', icon: 'star' },
+      { id: 'chef', name: 'Chef', icon: 'restaurant' },
+      { id: 'filmmaker', name: 'Filmmaker', icon: 'videocam' },
+      { id: 'designer', name: 'Designer', icon: 'brush' },
+      { id: 'writer', name: 'Writer', icon: 'pencil' },
+      { id: 'dj', name: 'DJ', icon: 'headset' },
+    ],
+  });
+});
+
+// Get single creator profile
+api.get('/creators/:creatorId', async (c) => {
+  const creatorId = c.req.param('creatorId');
+  try {
+    const creator: any = await c.env.DB.prepare(`
+      SELECT c.*, u.full_name, u.username, u.profile_image, u.bio, u.followers_count, u.following_count, u.posts_count, u.city as user_city
+      FROM creators c JOIN users u ON c.user_id = u.id WHERE c.id = ?
+    `).bind(creatorId).first();
+    if (!creator) return c.json({ detail: 'Creator not found' }, 404);
+    // Get portfolio items
+    const { results: portfolio } = await c.env.DB.prepare(`
+      SELECT cpi.*, p.content, p.image, p.images, p.likes_count, p.created_at as post_created_at
+      FROM creator_portfolio_items cpi JOIN posts p ON cpi.post_id = p.id
+      WHERE cpi.creator_id = ? ORDER BY cpi.display_order ASC LIMIT 20
+    `).bind(creatorId).all();
+    return c.json({
+      ...creator, portfolio_links: JSON.parse(creator.portfolio_links || '[]'),
+      skills: JSON.parse(creator.skills || '[]'), portfolio: portfolio || [],
+    });
+  } catch (e: any) { return c.json({ detail: 'Error fetching creator', error: e?.message }, 500); }
+});
+
+// Portfolio management
+api.post('/creators/portfolio', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const { post_id, display_order } = await c.req.json();
+  if (!post_id) return c.json({ detail: 'post_id is required' }, 400);
+  try {
+    const creator: any = await c.env.DB.prepare('SELECT id FROM creators WHERE user_id = ? AND status = ?').bind(userId, 'approved').first();
+    if (!creator) return c.json({ detail: 'Not an approved creator' }, 403);
+    const id = uuid();
+    await c.env.DB.prepare(
+      'INSERT INTO creator_portfolio_items (id, creator_id, post_id, display_order) VALUES (?, ?, ?, ?)'
+    ).bind(id, creator.id, post_id, display_order || 0).run();
+    return c.json({ message: 'Portfolio item added', id });
+  } catch (e: any) { return c.json({ detail: 'Failed to add portfolio item', error: e?.message }, 500); }
+});
+
+api.delete('/creators/portfolio/:itemId', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const itemId = c.req.param('itemId');
+  try {
+    const creator: any = await c.env.DB.prepare('SELECT id FROM creators WHERE user_id = ?').bind(userId).first();
+    if (!creator) return c.json({ detail: 'Not a creator' }, 403);
+    await c.env.DB.prepare('DELETE FROM creator_portfolio_items WHERE id = ? AND creator_id = ?').bind(itemId, creator.id).run();
+    return c.json({ message: 'Portfolio item removed' });
+  } catch (e: any) { return c.json({ detail: 'Delete failed', error: e?.message }, 500); }
+});
+
+// Admin: Creator applications
+api.get('/admin/creator-applications', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const admin: any = await c.env.DB.prepare('SELECT is_admin FROM users WHERE id = ?').bind(userId).first();
+  if (!admin?.is_admin) return c.json({ detail: 'Admin only' }, 403);
+  const status = c.req.query('status') || 'pending';
+  try {
+    const { results } = await c.env.DB.prepare(`
+      SELECT c.*, u.full_name, u.username, u.profile_image, u.email
+      FROM creators c JOIN users u ON c.user_id = u.id WHERE c.status = ? ORDER BY c.created_at DESC
+    `).bind(status).all();
+    return c.json({ applications: results || [] });
+  } catch (e: any) { return c.json({ applications: [], error: e?.message }); }
+});
+
+// Admin: Approve creator
+api.post('/admin/creators/:creatorId/approve', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const admin: any = await c.env.DB.prepare('SELECT is_admin FROM users WHERE id = ?').bind(userId).first();
+  if (!admin?.is_admin) return c.json({ detail: 'Admin only' }, 403);
+  const creatorId = c.req.param('creatorId');
+  try {
+    const creator: any = await c.env.DB.prepare('SELECT user_id FROM creators WHERE id = ?').bind(creatorId).first();
+    if (!creator) return c.json({ detail: 'Creator not found' }, 404);
+    await c.env.DB.prepare('UPDATE creators SET status = ?, is_verified = 1, updated_at = ? WHERE id = ?').bind('approved', now(), creatorId).run();
+    try { await c.env.DB.prepare('UPDATE users SET is_creator = 1 WHERE id = ?').bind(creator.user_id).run(); } catch {}
+    return c.json({ message: 'Creator approved' });
+  } catch (e: any) { return c.json({ detail: 'Approve failed', error: e?.message }, 500); }
+});
+
+// Admin: Reject creator
+api.post('/admin/creators/:creatorId/reject', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const admin: any = await c.env.DB.prepare('SELECT is_admin FROM users WHERE id = ?').bind(userId).first();
+  if (!admin?.is_admin) return c.json({ detail: 'Admin only' }, 403);
+  const creatorId = c.req.param('creatorId');
+  try {
+    await c.env.DB.prepare('UPDATE creators SET status = ?, updated_at = ? WHERE id = ?').bind('rejected', now(), creatorId).run();
+    return c.json({ message: 'Creator rejected' });
+  } catch (e: any) { return c.json({ detail: 'Reject failed', error: e?.message }, 500); }
+});
+
+// Admin: Remove creator badge
+api.delete('/admin/creators/:creatorId/badge', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const admin: any = await c.env.DB.prepare('SELECT is_admin FROM users WHERE id = ?').bind(userId).first();
+  if (!admin?.is_admin) return c.json({ detail: 'Admin only' }, 403);
+  const creatorId = c.req.param('creatorId');
+  try {
+    const creator: any = await c.env.DB.prepare('SELECT user_id FROM creators WHERE id = ?').bind(creatorId).first();
+    if (!creator) return c.json({ detail: 'Creator not found' }, 404);
+    await c.env.DB.prepare('UPDATE creators SET status = ?, is_verified = 0, updated_at = ? WHERE id = ?').bind('revoked', now(), creatorId).run();
+    try { await c.env.DB.prepare('UPDATE users SET is_creator = 0 WHERE id = ?').bind(creator.user_id).run(); } catch {}
+    return c.json({ message: 'Creator badge removed' });
+  } catch (e: any) { return c.json({ detail: 'Remove badge failed', error: e?.message }, 500); }
+});
+
 // Mount API routes on app
 app.route('/api', api);
 

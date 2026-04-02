@@ -111,7 +111,7 @@ export default function SettingsScreen() {
         {/* Privacy & Security */}
         <Text style={s.sectionTitle}>PRIVACY & SECURITY</Text>
         <View style={s.sectionCard}>
-          <SettingRow icon="shield-outline" label="Security" onPress={() => Alert.alert('Security', 'Two-factor authentication and login activity settings coming soon.')} />
+          <SettingRow icon="shield-outline" label="Security" onPress={() => router.push('/security' as any)} />
           <SettingRow icon="eye-off-outline" label="Privacy" onPress={() => Alert.alert('Privacy', 'Control who can see your profile, posts, and stories.')} />
           <SettingRow icon="people-outline" label="Blocked Users" onPress={() => Alert.alert('Blocked Users', 'No blocked users.')} />
           <SettingRow icon="hand-left-outline" label="Content Preferences" onPress={() => Alert.alert('Content Preferences', 'Manage sensitive content display.')} />
@@ -120,10 +120,11 @@ export default function SettingsScreen() {
         {/* Legal */}
         <Text style={s.sectionTitle}>LEGAL</Text>
         <View style={s.sectionCard}>
-          <SettingRow icon="document-text-outline" label="Terms of Service" onPress={() => Linking.openURL('https://flames-up.com/terms')} />
-          <SettingRow icon="shield-checkmark-outline" label="Privacy Policy" onPress={() => Linking.openURL('https://flames-up.com/privacy')} />
-          <SettingRow icon="information-circle-outline" label="About Flames-Up" onPress={() => Alert.alert('Flames-Up', 'Version 1.0.0\n\nFlames-Up is a social platform built for authentic connections and community.\n\n\u00a9 2025 Flames-Up')} />
-          <SettingRow icon="help-circle-outline" label="Help & Support" onPress={() => Linking.openURL('https://flames-up.com/support')} />
+          <SettingRow icon="document-text-outline" label="Terms of Service" onPress={() => router.push('/terms-of-service' as any)} />
+          <SettingRow icon="shield-checkmark-outline" label="Privacy Policy" onPress={() => router.push('/privacy-policy' as any)} />
+          <SettingRow icon="book-outline" label="Community Guidelines" onPress={() => router.push('/community-guidelines' as any)} />
+          <SettingRow icon="information-circle-outline" label="About Flames-Up" onPress={() => router.push('/about' as any)} />
+          <SettingRow icon="help-circle-outline" label="Help & Support" onPress={() => router.push('/help-support' as any)} />
         </View>
 
         {/* Data */}
@@ -131,6 +132,7 @@ export default function SettingsScreen() {
         <View style={s.sectionCard}>
           <SettingRow icon="download-outline" label="Download My Data" onPress={() => Alert.alert('Data Download', 'Your data export will be emailed to you within 48 hours.')} />
           <SettingRow icon="cloud-outline" label="Storage & Cache" onPress={() => Alert.alert('Cache Cleared', 'App cache has been cleared.')} />
+          <SettingRow icon="trash-bin-outline" label="Account Deletion" onPress={() => router.push('/data-deletion' as any)} />
         </View>
 
         {/* Danger Zone */}

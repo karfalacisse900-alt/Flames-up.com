@@ -123,6 +123,7 @@ export default function ProfileScreen() {
               {(() => {
                 const items = [
                   { icon: 'library-outline', label: 'My Library', color: colors.textPrimary, route: '/library' },
+                  { icon: 'flame-outline', label: 'Creator Hub', color: '#F97316', route: '/creators' },
                   ...(!user?.is_publisher ? [{ icon: 'document-text-outline', label: 'Apply: Local Publisher', color: '#3B82F6', route: '/publisher-apply' }] : []),
                   ...(user?.is_admin ? [
                     { icon: 'shield-checkmark-outline', label: 'Admin Panel', color: '#EF4444', route: '/admin-panel' },
