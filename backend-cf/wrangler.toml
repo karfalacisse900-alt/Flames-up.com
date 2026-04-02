@@ -5,9 +5,9 @@ compatibility_flags = ["nodejs_compat"]
 
 [vars]
 JWT_SECRET = "flames-up-super-secret-jwt-key-2024"
-CLOUDFLARE_ACCOUNT_ID = ""
-CLOUDFLARE_IMAGES_TOKEN = ""
-CLOUDFLARE_STREAM_TOKEN = ""
+CLOUDFLARE_ACCOUNT_ID = "2ca88b3551321681a5f9434814f38ec8"
+CLOUDFLARE_IMAGES_TOKEN = "cfut_MXsqGuOrmVgQhTWTHRCDIAI2qXehcf90dQ3xf8Sif7c52058"
+CLOUDFLARE_STREAM_TOKEN = "cfut_MXsqGuOrmVgQhTWTHRCDIAI2qXehcf90dQ3xf8Sif7c52058"
 GOOGLE_MAPS_API_KEY = ""
 FRONTEND_URL = "https://flames-up.com"
 

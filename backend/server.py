@@ -1078,6 +1078,139 @@ async def root():
 async def health_check():
     return {"status": "healthy"}
 
+# ===================== ADMIN SYSTEM =====================
+
+@api_router.post("/admin/make-admin/{user_id}")
+async def make_admin(user_id: str, current_user: dict = Depends(get_current_user)):
+    current = await db.users.find_one({"id": current_user["id"]})
+    if not current.get("is_admin"):
+        admin_count = await db.users.count_documents({"is_admin": True})
+        if admin_count > 0:
+            raise HTTPException(status_code=403, detail="Only admins can promote users")
+    await db.users.update_one({"id": user_id}, {"$set": {"is_admin": True}})
+    return {"admin": True}
+
+@api_router.get("/admin/status")
+async def admin_status(current_user: dict = Depends(get_current_user)):
+    user = await db.users.find_one({"id": current_user["id"]})
+    return {"is_admin": user.get("is_admin", False)}
+
+@api_router.get("/admin/reports")
+async def admin_get_reports(current_user: dict = Depends(get_current_user)):
+    user = await db.users.find_one({"id": current_user["id"]})
+    if not user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    reports = await db.reports.find().sort("created_at", -1).to_list(100)
+    result = []
+    for r in reports:
+        r_dict = {k: v for k, v in r.items() if k != "_id"}
+        reporter = await db.users.find_one({"id": r.get("reporter_id")})
+        r_dict["reporter_name"] = reporter.get("full_name", "Unknown") if reporter else "Unknown"
+        if r.get("content_id"):
+            post = await db.posts.find_one({"id": r["content_id"]})
+            if post:
+                r_dict["content_preview"] = post.get("content", "")[:100]
+        result.append(r_dict)
+    return result
+
+@api_router.post("/admin/reports/{report_id}/action")
+async def admin_report_action(report_id: str, current_user: dict = Depends(get_current_user)):
+    user = await db.users.find_one({"id": current_user["id"]})
+    if not user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    body = await request.json() if hasattr(request, 'json') else {}
+    return {"resolved": True}
+
+@api_router.get("/admin/reported-posts")
+async def admin_reported_posts(current_user: dict = Depends(get_current_user)):
+    user = await db.users.find_one({"id": current_user["id"]})
+    if not user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    reports = await db.reports.find().sort("created_at", -1).to_list(100)
+    enriched = []
+    for r in reports:
+        r_dict = {k: v for k, v in r.items() if k != "_id"}
+        if r.get("content_id"):
+            post = await db.posts.find_one({"id": r["content_id"]})
+            if not post:
+                post = await db.discover_posts.find_one({"id": r["content_id"]})
+            if post:
+                r_dict["post"] = {k: v for k, v in post.items() if k != "_id"}
+        reporter = await db.users.find_one({"id": r.get("reporter_id")})
+        if reporter:
+            r_dict["reporter"] = {"full_name": reporter.get("full_name"), "username": reporter.get("username")}
+        enriched.append(r_dict)
+    return enriched
+
+@api_router.get("/admin/reported-accounts")
+async def admin_reported_accounts(current_user: dict = Depends(get_current_user)):
+    user = await db.users.find_one({"id": current_user["id"]})
+    if not user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    reports = await db.reports.find({"report_type": "user"}).sort("created_at", -1).to_list(100)
+    enriched = []
+    for r in reports:
+        r_dict = {k: v for k, v in r.items() if k != "_id"}
+        reported_user = await db.users.find_one({"id": r.get("reported_id")})
+        if reported_user:
+            r_dict["reported_user"] = {k: v for k, v in reported_user.items() if k not in ("_id", "password")}
+        enriched.append(r_dict)
+    return enriched
+
+@api_router.get("/admin/publisher-applications")
+async def admin_publisher_applications(current_user: dict = Depends(get_current_user)):
+    user = await db.users.find_one({"id": current_user["id"]})
+    if not user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    apps = await db.publisher_applications.find().sort("created_at", -1).to_list(100)
+    enriched = []
+    for a in apps:
+        a_dict = {k: v for k, v in a.items() if k != "_id"}
+        u = await db.users.find_one({"id": a.get("user_id")})
+        if u:
+            a_dict["user_profile_image"] = u.get("profile_image", "")
+        enriched.append(a_dict)
+    return enriched
+
+@api_router.post("/admin/publisher-applications/{app_id}/decide")
+async def admin_decide_publisher(app_id: str, decision: dict, current_user: dict = Depends(get_current_user)):
+    user = await db.users.find_one({"id": current_user["id"]})
+    if not user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    action = decision.get("action", "approve")
+    app = await db.publisher_applications.find_one({"id": app_id})
+    if not app:
+        raise HTTPException(status_code=404, detail="Application not found")
+    if action == "approve":
+        await db.publisher_applications.update_one({"id": app_id}, {"$set": {"status": "approved", "approved_by": current_user["id"], "approved_at": datetime.utcnow()}})
+        await db.users.update_one({"id": app["user_id"]}, {"$set": {"is_publisher": True}})
+    else:
+        await db.publisher_applications.update_one({"id": app_id}, {"$set": {"status": "declined", "declined_by": current_user["id"]}})
+    return {"action": action, "resolved": True}
+
+@api_router.get("/admin/stats")
+async def admin_stats(current_user: dict = Depends(get_current_user)):
+    user = await db.users.find_one({"id": current_user["id"]})
+    if not user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return {
+        "total_users": await db.users.count_documents({}),
+        "total_posts": await db.posts.count_documents({}),
+        "total_reports": await db.reports.count_documents({}),
+        "pending_reports": await db.reports.count_documents({"status": {"$exists": False}}),
+        "pending_publisher_apps": await db.publisher_applications.count_documents({"status": "pending"}),
+        "total_publishers": await db.publisher_applications.count_documents({"status": "approved"}),
+    }
+
+@api_router.post("/admin/remove-post/{post_id}")
+async def admin_remove_post(post_id: str, current_user: dict = Depends(get_current_user)):
+    user = await db.users.find_one({"id": current_user["id"]})
+    if not user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    await db.posts.delete_one({"id": post_id})
+    await db.discover_posts.delete_one({"id": post_id})
+    return {"removed": True}
+
 # Cloudflare configuration
 CF_ACCOUNT_ID = os.environ.get("CLOUDFLARE_ACCOUNT_ID", "")
 CF_API_TOKEN = os.environ.get("CLOUDFLARE_API_TOKEN", "")
