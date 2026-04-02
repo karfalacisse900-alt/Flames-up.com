@@ -97,13 +97,26 @@ export default function CreatePostScreen() {
 
     setIsPosting(true);
     try {
-      const imagesList = media.map((m) => m.base64 || m.uri).filter(Boolean);
-      const mediaTypesList = media.map((m) => m.type || 'image');
+      // Upload images to Cloudflare Images
+      const uploadedUrls: string[] = [];
+      const mediaTypesList: string[] = [];
+      for (const m of media) {
+        const imageData = m.base64 || m.uri;
+        if (imageData) {
+          try {
+            const res = await api.post('/upload/image', { image: imageData });
+            uploadedUrls.push(res.data?.url || imageData);
+          } catch {
+            uploadedUrls.push(imageData); // fallback to base64
+          }
+        }
+        mediaTypesList.push(m.type || 'image');
+      }
       
       await api.post('/posts', {
         content: content.trim(),
-        image: imagesList[0] || null,
-        images: imagesList.length > 0 ? imagesList : undefined,
+        image: uploadedUrls[0] || null,
+        images: uploadedUrls.length > 0 ? uploadedUrls : undefined,
         media_types: mediaTypesList.length > 0 ? mediaTypesList : undefined,
         location: location.trim() || null,
         post_type: postType,
