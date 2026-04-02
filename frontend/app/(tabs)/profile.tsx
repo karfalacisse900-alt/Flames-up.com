@@ -120,24 +120,35 @@ export default function ProfileScreen() {
         <Modal visible={showMore} transparent animationType="fade" onRequestClose={() => setShowMore(false)}>
           <Pressable style={styles.menuOverlay} onPress={() => setShowMore(false)}>
             <View style={styles.floatingMenu}>
-              {[
-                { icon: 'library-outline', label: 'My Library', color: colors.textPrimary, route: '/library' },
-                { icon: 'gift-outline', label: 'Referrals', color: '#F97316', route: '/referrals' },
-                { icon: 'star-outline', label: 'Creator Hub', color: '#EF4444', route: '/creator-hub' },
-                { icon: 'document-text-outline', label: 'Apply: Local Publisher', color: '#3B82F6', route: '/apply-publisher' },
-                { icon: 'shield-outline', label: 'Admin Panel', color: '#8B5CF6', route: '/admin-panel' },
-                { icon: 'bar-chart-outline', label: 'Content Manager', color: '#0EA5E9', route: '/content-manager' },
-                { icon: 'settings-outline', label: 'Settings', color: colors.textSecondary, route: '/settings' },
-              ].map((item, idx) => (
-                <TouchableOpacity
-                  key={item.label}
-                  style={[styles.floatingMenuItem, idx === 6 && { borderBottomWidth: 0 }]}
-                  onPress={() => { setShowMore(false); router.push(item.route as any); }}
-                >
-                  <Ionicons name={item.icon as any} size={20} color={item.color} />
-                  <Text style={styles.floatingMenuText}>{item.label}</Text>
-                </TouchableOpacity>
-              ))}
+              {(() => {
+                const items = [
+                  { icon: 'library-outline', label: 'My Library', color: colors.textPrimary, route: '/library' },
+                  ...(!user?.is_publisher ? [{ icon: 'document-text-outline', label: 'Apply: Local Publisher', color: '#3B82F6', route: '/publisher-apply' }] : []),
+                  ...(user?.is_admin ? [
+                    { icon: 'shield-checkmark-outline', label: 'Admin Panel', color: '#EF4444', route: '/admin-panel' },
+                    { icon: 'folder-open-outline', label: 'Content Manager', color: '#F59E0B', route: '/content-manager' },
+                  ] : []),
+                  { icon: 'settings-outline', label: 'Settings', color: colors.textSecondary, route: '/settings' },
+                  { icon: 'log-out-outline', label: 'Logout', color: '#EF4444', route: '__logout__' },
+                ];
+                return items.map((item, idx) => (
+                  <TouchableOpacity
+                    key={item.label}
+                    style={[styles.floatingMenuItem, idx === items.length - 1 && { borderBottomWidth: 0 }]}
+                    onPress={() => {
+                      setShowMore(false);
+                      if (item.route === '__logout__') {
+                        handleLogout();
+                      } else {
+                        router.push(item.route as any);
+                      }
+                    }}
+                  >
+                    <Ionicons name={item.icon as any} size={20} color={item.color} />
+                    <Text style={[styles.floatingMenuText, item.route === '__logout__' && { color: '#EF4444' }]}>{item.label}</Text>
+                  </TouchableOpacity>
+                ));
+              })()}
             </View>
           </Pressable>
         </Modal>

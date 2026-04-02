@@ -10,6 +10,10 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
+  Alert,
+  Modal,
+  Pressable,
+  Dimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
@@ -18,6 +22,9 @@ import { colors, spacing, borderRadius } from '../../src/utils/theme';
 import { useAuthStore } from '../../src/store/authStore';
 import api from '../../src/api/client';
 import { format } from 'date-fns';
+import * as ImagePicker from 'expo-image-picker';
+
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 export default function ConversationScreen() {
   const router = useRouter();
@@ -28,11 +35,14 @@ export default function ConversationScreen() {
   const [newMessage, setNewMessage] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [isSending, setIsSending] = useState(false);
+  const [selectedMedia, setSelectedMedia] = useState<{ uri: string; type: 'image' | 'video'; base64?: string } | null>(null);
+  const [showAttachMenu, setShowAttachMenu] = useState(false);
+  const [viewingMedia, setViewingMedia] = useState<string | null>(null);
   const flatListRef = useRef<FlatList>(null);
 
   useEffect(() => {
     loadData();
-    const interval = setInterval(loadMessages, 5000); // Poll for new messages
+    const interval = setInterval(loadMessages, 5000);
     return () => clearInterval(interval);
   }, [userId]);
 
@@ -60,23 +70,111 @@ export default function ConversationScreen() {
     }
   };
 
+  const pickImage = async () => {
+    setShowAttachMenu(false);
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission needed', 'Please allow access to your photo library.');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsEditing: true,
+      quality: 0.7,
+      base64: true,
+    });
+    if (!result.canceled && result.assets[0]) {
+      const asset = result.assets[0];
+      setSelectedMedia({
+        uri: asset.uri,
+        type: 'image',
+        base64: asset.base64 || undefined,
+      });
+    }
+  };
+
+  const pickVideo = async () => {
+    setShowAttachMenu(false);
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission needed', 'Please allow access to your photo library.');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['videos'],
+      allowsEditing: true,
+      quality: 0.5,
+      videoMaxDuration: 60,
+      base64: true,
+    });
+    if (!result.canceled && result.assets[0]) {
+      const asset = result.assets[0];
+      setSelectedMedia({
+        uri: asset.uri,
+        type: 'video',
+        base64: asset.base64 || undefined,
+      });
+    }
+  };
+
+  const takePhoto = async () => {
+    setShowAttachMenu(false);
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission needed', 'Please allow camera access.');
+      return;
+    }
+    const result = await ImagePicker.launchCameraAsync({
+      allowsEditing: true,
+      quality: 0.7,
+      base64: true,
+    });
+    if (!result.canceled && result.assets[0]) {
+      const asset = result.assets[0];
+      setSelectedMedia({
+        uri: asset.uri,
+        type: 'image',
+        base64: asset.base64 || undefined,
+      });
+    }
+  };
+
+  const clearMedia = () => {
+    setSelectedMedia(null);
+  };
+
   const sendMessage = async () => {
-    if (!newMessage.trim() || isSending) return;
+    if ((!newMessage.trim() && !selectedMedia) || isSending) return;
 
     setIsSending(true);
     const messageText = newMessage.trim();
     setNewMessage('');
+    const media = selectedMedia;
+    setSelectedMedia(null);
 
     try {
-      await api.post('/messages', {
+      const payload: any = {
         receiver_id: userId,
         content: messageText,
-      });
+      };
+
+      if (media) {
+        if (media.base64) {
+          payload.media_url = `data:${media.type === 'video' ? 'video/mp4' : 'image/jpeg'};base64,${media.base64}`;
+        } else {
+          payload.media_url = media.uri;
+        }
+        payload.media_type = media.type;
+      }
+
+      await api.post('/messages', payload);
       await loadMessages();
       flatListRef.current?.scrollToEnd({ animated: true });
     } catch (error) {
       console.log('Error sending message:', error);
       setNewMessage(messageText);
+      if (media) setSelectedMedia(media);
+      Alert.alert('Error', 'Failed to send message. Try again.');
     } finally {
       setIsSending(false);
     }
@@ -84,13 +182,43 @@ export default function ConversationScreen() {
 
   const renderMessage = ({ item }: { item: any }) => {
     const isOwn = item.sender_id === user?.id;
+    const hasMedia = item.media_url || item.image;
+    const mediaType = item.media_type || (item.image ? 'image' : null);
+    const mediaSource = item.media_url || item.image;
 
     return (
       <View style={[styles.messageContainer, isOwn && styles.messageContainerOwn]}>
-        <View style={[styles.messageBubble, isOwn ? styles.messageBubbleOwn : styles.messageBubbleOther]}>
-          <Text style={[styles.messageText, isOwn && styles.messageTextOwn]}>
-            {item.content}
-          </Text>
+        <View style={[
+          styles.messageBubble,
+          isOwn ? styles.messageBubbleOwn : styles.messageBubbleOther,
+          hasMedia && styles.mediaBubble,
+        ]}>
+          {/* Media content */}
+          {hasMedia && mediaType === 'image' && (
+            <TouchableOpacity onPress={() => setViewingMedia(mediaSource)} activeOpacity={0.9}>
+              <Image
+                source={{ uri: mediaSource }}
+                style={styles.messageImage}
+                resizeMode="cover"
+              />
+            </TouchableOpacity>
+          )}
+          {hasMedia && mediaType === 'video' && (
+            <TouchableOpacity style={styles.videoContainer} onPress={() => setViewingMedia(mediaSource)}>
+              <View style={styles.videoOverlay}>
+                <View style={styles.playButton}>
+                  <Ionicons name="play" size={28} color="#FFF" />
+                </View>
+                <Text style={styles.videoLabel}>Video</Text>
+              </View>
+            </TouchableOpacity>
+          )}
+          {/* Text content */}
+          {item.content ? (
+            <Text style={[styles.messageText, isOwn && styles.messageTextOwn]}>
+              {item.content}
+            </Text>
+          ) : null}
           <Text style={[styles.messageTime, isOwn && styles.messageTimeOwn]}>
             {format(new Date(item.created_at), 'HH:mm')}
           </Text>
@@ -123,7 +251,7 @@ export default function ConversationScreen() {
           ) : (
             <View style={styles.headerAvatarPlaceholder}>
               <Text style={styles.headerAvatarText}>
-                {otherUser?.username[0].toUpperCase()}
+                {otherUser?.username?.[0]?.toUpperCase() || '?'}
               </Text>
             </View>
           )}
@@ -149,13 +277,37 @@ export default function ConversationScreen() {
           onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: false })}
           ListEmptyComponent={
             <View style={styles.emptyContainer}>
+              <Ionicons name="chatbubble-outline" size={48} color={colors.textTertiary} />
               <Text style={styles.emptyText}>No messages yet. Say hi!</Text>
             </View>
           }
         />
 
-        {/* Input */}
+        {/* Media Preview */}
+        {selectedMedia && (
+          <View style={styles.mediaPreview}>
+            {selectedMedia.type === 'image' ? (
+              <Image source={{ uri: selectedMedia.uri }} style={styles.previewImage} />
+            ) : (
+              <View style={styles.previewVideo}>
+                <Ionicons name="videocam" size={24} color="#FFF" />
+                <Text style={styles.previewVideoText}>Video selected</Text>
+              </View>
+            )}
+            <TouchableOpacity style={styles.removeMedia} onPress={clearMedia}>
+              <Ionicons name="close-circle" size={24} color="#EF4444" />
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* Input Area */}
         <View style={styles.inputContainer}>
+          <TouchableOpacity
+            style={styles.attachBtn}
+            onPress={() => setShowAttachMenu(true)}
+          >
+            <Ionicons name="add-circle" size={28} color={colors.primary || '#2D6A4F'} />
+          </TouchableOpacity>
           <TextInput
             style={styles.input}
             placeholder="Type a message..."
@@ -166,18 +318,67 @@ export default function ConversationScreen() {
             maxLength={1000}
           />
           <TouchableOpacity
-            style={[styles.sendButton, (!newMessage.trim() || isSending) && styles.sendButtonDisabled]}
+            style={[
+              styles.sendButton,
+              (!newMessage.trim() && !selectedMedia || isSending) && styles.sendButtonDisabled,
+            ]}
             onPress={sendMessage}
-            disabled={!newMessage.trim() || isSending}
+            disabled={(!newMessage.trim() && !selectedMedia) || isSending}
           >
             {isSending ? (
-              <ActivityIndicator size="small" color={colors.textInverse} />
+              <ActivityIndicator size="small" color="#FFF" />
             ) : (
-              <Ionicons name="send" size={20} color={colors.textInverse} />
+              <Ionicons name="send" size={18} color="#FFF" />
             )}
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
+
+      {/* Attach Menu Modal */}
+      <Modal visible={showAttachMenu} transparent animationType="fade" onRequestClose={() => setShowAttachMenu(false)}>
+        <Pressable style={styles.attachOverlay} onPress={() => setShowAttachMenu(false)}>
+          <View style={styles.attachSheet}>
+            <View style={styles.attachHandle} />
+            <Text style={styles.attachTitle}>Share Media</Text>
+            <View style={styles.attachOptions}>
+              <TouchableOpacity style={styles.attachOption} onPress={pickImage}>
+                <View style={[styles.attachIconBox, { backgroundColor: '#DCFCE7' }]}>
+                  <Ionicons name="image" size={26} color="#16A34A" />
+                </View>
+                <Text style={styles.attachLabel}>Photo</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.attachOption} onPress={pickVideo}>
+                <View style={[styles.attachIconBox, { backgroundColor: '#DBEAFE' }]}>
+                  <Ionicons name="videocam" size={26} color="#2563EB" />
+                </View>
+                <Text style={styles.attachLabel}>Video</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.attachOption} onPress={takePhoto}>
+                <View style={[styles.attachIconBox, { backgroundColor: '#FEF3C7' }]}>
+                  <Ionicons name="camera" size={26} color="#D97706" />
+                </View>
+                <Text style={styles.attachLabel}>Camera</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Pressable>
+      </Modal>
+
+      {/* Full Image Viewer */}
+      <Modal visible={!!viewingMedia} transparent animationType="fade" onRequestClose={() => setViewingMedia(null)}>
+        <Pressable style={styles.imageViewerOverlay} onPress={() => setViewingMedia(null)}>
+          <TouchableOpacity style={styles.closeViewer} onPress={() => setViewingMedia(null)}>
+            <Ionicons name="close" size={28} color="#FFF" />
+          </TouchableOpacity>
+          {viewingMedia && (
+            <Image
+              source={{ uri: viewingMedia }}
+              style={styles.fullImage}
+              resizeMode="contain"
+            />
+          )}
+        </Pressable>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -185,68 +386,73 @@ export default function ConversationScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: colors.background,
+    backgroundColor: '#FAFAF8',
   },
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: colors.background,
+    backgroundColor: '#FAFAF8',
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
     borderBottomWidth: 1,
-    borderBottomColor: colors.borderLight,
+    borderBottomColor: '#F0ECE5',
+    backgroundColor: '#FFF',
   },
   backButton: {
-    marginRight: spacing.sm,
+    width: 44,
+    height: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   headerUser: {
     flexDirection: 'row',
     alignItems: 'center',
     flex: 1,
+    marginLeft: 4,
   },
   headerAvatar: {
     width: 40,
     height: 40,
     borderRadius: 20,
-    marginRight: spacing.sm,
+    marginRight: 10,
   },
   headerAvatarPlaceholder: {
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: colors.primary,
+    backgroundColor: '#2D6A4F',
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: spacing.sm,
+    marginRight: 10,
   },
   headerAvatarText: {
-    color: colors.textInverse,
+    color: '#FFF',
     fontSize: 16,
-    fontWeight: '600',
+    fontWeight: '700',
   },
   headerName: {
     fontSize: 16,
-    fontWeight: '600',
-    color: colors.textPrimary,
+    fontWeight: '700',
+    color: '#1B4332',
   },
   headerHandle: {
-    fontSize: 13,
-    color: colors.textSecondary,
+    fontSize: 12,
+    color: '#9CA3AF',
   },
   keyboardView: {
     flex: 1,
   },
   messagesList: {
-    padding: spacing.md,
+    padding: 16,
     flexGrow: 1,
   },
   messageContainer: {
-    marginBottom: spacing.sm,
+    marginBottom: 8,
     alignItems: 'flex-start',
   },
   messageContainerOwn: {
@@ -254,71 +460,221 @@ const styles = StyleSheet.create({
   },
   messageBubble: {
     maxWidth: '80%',
-    padding: spacing.sm,
-    borderRadius: borderRadius.lg,
+    padding: 10,
+    borderRadius: 18,
+  },
+  mediaBubble: {
+    padding: 4,
+    overflow: 'hidden',
   },
   messageBubbleOwn: {
-    backgroundColor: colors.primary,
+    backgroundColor: '#2D6A4F',
     borderBottomRightRadius: 4,
   },
   messageBubbleOther: {
-    backgroundColor: colors.backgroundSecondary,
+    backgroundColor: '#F3F0EB',
     borderBottomLeftRadius: 4,
+  },
+  messageImage: {
+    width: SCREEN_WIDTH * 0.6,
+    height: SCREEN_WIDTH * 0.45,
+    borderRadius: 14,
+  },
+  videoContainer: {
+    width: SCREEN_WIDTH * 0.6,
+    height: SCREEN_WIDTH * 0.35,
+    borderRadius: 14,
+    backgroundColor: '#1B4332',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  videoOverlay: {
+    alignItems: 'center',
+    gap: 6,
+  },
+  playButton: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  videoLabel: {
+    fontSize: 12,
+    color: 'rgba(255,255,255,0.7)',
+    fontWeight: '500',
   },
   messageText: {
     fontSize: 15,
-    color: colors.textPrimary,
+    color: '#1B4332',
     lineHeight: 20,
+    paddingHorizontal: 6,
+    paddingTop: 4,
   },
   messageTextOwn: {
-    color: colors.textInverse,
+    color: '#FFF',
   },
   messageTime: {
-    fontSize: 11,
-    color: colors.textTertiary,
-    marginTop: 4,
+    fontSize: 10,
+    color: '#9CA3AF',
+    marginTop: 3,
     alignSelf: 'flex-end',
+    paddingHorizontal: 6,
+    paddingBottom: 2,
   },
   messageTimeOwn: {
-    color: 'rgba(255,255,255,0.7)',
+    color: 'rgba(255,255,255,0.6)',
   },
   emptyContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    paddingVertical: 40,
+    paddingVertical: 60,
+    gap: 8,
   },
   emptyText: {
     fontSize: 14,
-    color: colors.textTertiary,
+    color: '#9CA3AF',
   },
+  // Media preview above input
+  mediaPreview: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    backgroundColor: '#FFF',
+    borderTopWidth: 1,
+    borderTopColor: '#F0ECE5',
+  },
+  previewImage: {
+    width: 60,
+    height: 60,
+    borderRadius: 10,
+  },
+  previewVideo: {
+    width: 60,
+    height: 60,
+    borderRadius: 10,
+    backgroundColor: '#1B4332',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  previewVideoText: {
+    fontSize: 8,
+    color: '#FFF',
+    marginTop: 2,
+  },
+  removeMedia: {
+    marginLeft: 8,
+    padding: 4,
+  },
+  // Input area
   inputContainer: {
     flexDirection: 'row',
     alignItems: 'flex-end',
-    padding: spacing.md,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
     borderTopWidth: 1,
-    borderTopColor: colors.borderLight,
+    borderTopColor: '#F0ECE5',
+    backgroundColor: '#FFF',
+    gap: 6,
+  },
+  attachBtn: {
+    width: 44,
+    height: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   input: {
     flex: 1,
-    backgroundColor: colors.backgroundSecondary,
-    borderRadius: borderRadius.lg,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
+    backgroundColor: '#F3F0EB',
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
     fontSize: 15,
-    color: colors.textPrimary,
+    color: '#1B4332',
     maxHeight: 100,
   },
   sendButton: {
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: colors.primary,
+    backgroundColor: '#2D6A4F',
     justifyContent: 'center',
     alignItems: 'center',
-    marginLeft: spacing.sm,
   },
   sendButtonDisabled: {
-    opacity: 0.5,
+    opacity: 0.4,
+  },
+  // Attach menu
+  attachOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.3)',
+    justifyContent: 'flex-end',
+  },
+  attachSheet: {
+    backgroundColor: '#FFF',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingHorizontal: 24,
+    paddingBottom: 40,
+    paddingTop: 12,
+  },
+  attachHandle: {
+    width: 40,
+    height: 4,
+    backgroundColor: '#D1D5DB',
+    borderRadius: 2,
+    alignSelf: 'center',
+    marginBottom: 16,
+  },
+  attachTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#1B4332',
+    marginBottom: 20,
+    textAlign: 'center',
+  },
+  attachOptions: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+  },
+  attachOption: {
+    alignItems: 'center',
+    gap: 8,
+  },
+  attachIconBox: {
+    width: 60,
+    height: 60,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  attachLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#374151',
+  },
+  // Full image viewer
+  imageViewerOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.95)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  closeViewer: {
+    position: 'absolute',
+    top: 50,
+    right: 20,
+    zIndex: 10,
+    width: 44,
+    height: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  fullImage: {
+    width: SCREEN_WIDTH,
+    height: SCREEN_WIDTH,
   },
 });
