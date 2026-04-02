@@ -38,7 +38,15 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   login: async (email: string, password: string) => {
     const response = await api.post('/auth/login', { email, password });
-    const { token, user } = response.data;
+    const token = response.data.access_token || response.data.token;
+    const rawUser = response.data.user;
+    // Normalize boolean fields from D1 (integers) to JS booleans
+    const user = {
+      ...rawUser,
+      is_verified: !!rawUser.is_verified,
+      is_admin: !!rawUser.is_admin,
+      is_publisher: !!rawUser.is_publisher,
+    };
     await AsyncStorage.setItem('auth_token', token);
     await AsyncStorage.setItem('user', JSON.stringify(user));
     set({ user, token, isAuthenticated: true });
@@ -51,7 +59,14 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       username,
       full_name: fullName,
     });
-    const { token, user } = response.data;
+    const token = response.data.access_token || response.data.token;
+    const rawUser = response.data.user;
+    const user = {
+      ...rawUser,
+      is_verified: !!rawUser.is_verified,
+      is_admin: !!rawUser.is_admin,
+      is_publisher: !!rawUser.is_publisher,
+    };
     await AsyncStorage.setItem('auth_token', token);
     await AsyncStorage.setItem('user', JSON.stringify(user));
     set({ user, token, isAuthenticated: true });
@@ -69,11 +84,17 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       const userStr = await AsyncStorage.getItem('user');
       
       if (token && userStr) {
-        const user = JSON.parse(userStr);
         // Verify token is still valid
         try {
           const response = await api.get('/auth/me');
-          set({ user: response.data, token, isAuthenticated: true, isLoading: false });
+          const rawUser = response.data;
+          const user = {
+            ...rawUser,
+            is_verified: !!rawUser.is_verified,
+            is_admin: !!rawUser.is_admin,
+            is_publisher: !!rawUser.is_publisher,
+          };
+          set({ user, token, isAuthenticated: true, isLoading: false });
         } catch {
           await AsyncStorage.removeItem('auth_token');
           await AsyncStorage.removeItem('user');

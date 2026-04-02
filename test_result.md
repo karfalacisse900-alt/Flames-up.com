@@ -238,8 +238,10 @@ metadata:
   run_ui: false
 
 test_plan:
-  current_focus: []
-  stuck_tasks: []
+  current_focus: 
+    - "Cloudflare Workers Backend Migration"
+  stuck_tasks: 
+    - "Cloudflare Workers Backend Migration"
   test_all: false
   test_priority: "high_first"
 
@@ -266,6 +268,10 @@ agent_communication:
       message: "Updated messaging system to support media (photo/video) attachments. MessageCreate and Message models now include media_url and media_type fields. Send message endpoint updated with smart notification text. Test sending a message with media_url and media_type='image' or 'video'. Test credentials: demo@flames-up.com / demo123456. Also added admin endpoints for content moderation."
     - agent: "testing"
       message: "Media messaging system and admin endpoints testing completed successfully. All messaging features working: text messages, image messages (base64), video messages (URL), mixed content messages. Messages properly store and retrieve media_url and media_type fields. All admin endpoints working: stats, reported posts/accounts, publisher applications. Known issue identified: GET /api/conversations has IndexError when user messages themselves (backend limitation that needs fixing)."
+    - agent: "main"
+      message: "IMPORTANT: Backend has been MIGRATED from Python/FastAPI to Cloudflare Workers (Hono + D1). The new backend URL is https://flames-up-api.karfalacisse900.workers.dev. All API endpoints are prefixed with /api. Test credentials: demo@flames-up.com / demo123456. Test ALL core endpoints: auth (login/register/me), posts (create/feed/like/comment), users (get/update/follow), messages (send with media_url/media_type), admin (stats/reported-posts/publisher-applications), google-places (nearby), discover (categories/feed), publisher (apply/status), places (create/nearby)."
+    - agent: "testing"
+      message: "Cloudflare Workers backend testing completed with 95% success rate (19/20 tests passed). All core functionality working: auth (login/register/me), posts (create/feed/like/comment), users (get/update), messages (send/get with media support), admin (stats/reported-posts/publisher-applications), google-places (nearby), discover (categories/posts/feed), publisher status. CRITICAL ISSUE: POST /api/publisher/apply returns Internal Server Error (HTTP 500) - this endpoint needs fixing. All other endpoints fully functional on new Cloudflare Workers backend."
 
   - task: "Check-In Post System"
     implemented: true
@@ -288,3 +294,39 @@ agent_communication:
       - working: true
         agent: "testing"
         comment: "All Check-In Post features tested successfully. Fixed routing issue with nearby-feed endpoint (moved before generic {post_id} route). Proximity verification working correctly (near: 22.2m = true, far: 9696.2m = false). Check-in posts created with is_verified_checkin=true. Question posts created with post_type=question. Nearby feed returns 11 posts with location prioritization. Post deletion working. All existing endpoints (feed, statuses) still functional."
+
+  - task: "Cloudflare Workers Backend Migration"
+    implemented: true
+    working: false
+    file: "https://flames-up-api.karfalacisse900.workers.dev"
+    stuck_count: 1
+    priority: "high"
+    needs_retesting: false
+    test_scenarios:
+      - "POST /api/auth/login → should return access_token and user object"
+      - "GET /api/auth/me (with Bearer token) → should return user with is_admin=1, is_publisher=1"
+      - "POST /api/auth/register → register a new user"
+      - "POST /api/posts (with content, post_type) → create a post"
+      - "GET /api/posts/feed → get feed"
+      - "POST /api/posts/{postId}/like → like a post"
+      - "POST /api/posts/{postId}/comments → add comment"
+      - "GET /api/users/{userId} → get user profile"
+      - "PUT /api/users/me → update profile"
+      - "POST /api/messages (with receiver_id, content, media_url, media_type) → send message"
+      - "GET /api/messages/{userId} → get conversation"
+      - "GET /api/admin/stats → should show total_users, total_posts"
+      - "GET /api/admin/reported-posts"
+      - "GET /api/admin/publisher-applications"
+      - "GET /api/google-places/nearby?type=restaurant&lat=40.7128&lng=-74.006&radius=3000"
+      - "GET /api/discover/categories"
+      - "POST /api/discover/posts (publisher post)"
+      - "GET /api/discover/feed"
+      - "GET /api/publisher/status"
+      - "POST /api/publisher/apply (test with new user who isn't publisher yet)"
+    status_history:
+      - working: unknown
+        agent: "main"
+        comment: "Backend migrated from Python/FastAPI to Cloudflare Workers (Hono + D1). New URL: https://flames-up-api.karfalacisse900.workers.dev. All API endpoints prefixed with /api. Test credentials: demo@flames-up.com / demo123456."
+      - working: false
+        agent: "testing"
+        comment: "Comprehensive testing completed with 95% success rate (19/20 tests passed). All core functionality working: auth (login/register/me), posts (create/feed/like/comment), users (get/update), messages (send/get with media support), admin (stats/reported-posts/publisher-applications), google-places (nearby), discover (categories/posts/feed), publisher status. CRITICAL ISSUE: POST /api/publisher/apply returns Internal Server Error (HTTP 500) - this endpoint has a server-side bug that needs fixing. All other endpoints fully functional."

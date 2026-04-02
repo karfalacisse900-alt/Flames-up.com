@@ -1,8 +1,15 @@
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
+import { Platform } from 'react-native';
 
-const API_URL = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://localhost:8001';
+// Cloudflare Workers backend (production)
+const CF_API_URL = 'https://flames-up-api.karfalacisse900.workers.dev';
+// Local fallback for development
+const LOCAL_API_URL = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://localhost:8001';
+
+// Use Cloudflare Workers as the primary backend
+const API_URL = CF_API_URL;
 
 const api = axios.create({
   baseURL: `${API_URL}/api`,
