@@ -170,12 +170,15 @@ backend:
     working: true
     file: "/app/backend/server.py"
     stuck_count: 0
-    priority: "medium"
+    priority: "high"
     needs_retesting: false
     status_history:
         - working: true
           agent: "testing"
           comment: "Message endpoints working correctly. Get conversations endpoint passes. Note: Send message and get messages require multiple users for full testing."
+        - working: true
+          agent: "testing"
+          comment: "Media messaging system fully tested and working. Successfully tested: text messages, image messages (base64), video messages (URL), mixed content messages (text + media). All messages properly store media_url and media_type fields. GET /api/messages correctly returns media fields. Admin endpoints all working: stats, reported posts/accounts, publisher applications. Known issue: GET /api/conversations has IndexError when user messages themselves (backend limitation)."
 
   - task: "Notification System"
     implemented: true
@@ -240,6 +243,18 @@ test_plan:
   test_all: false
   test_priority: "high_first"
 
+  - task: "Admin Content Moderation System"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "testing"
+          comment: "All admin endpoints tested and working correctly. GET /api/admin/stats returns comprehensive statistics (total_users, total_posts, total_reports, pending_reports, pending_publisher_apps, total_publishers). GET /api/admin/reported-posts returns list of reported posts. GET /api/admin/reported-accounts returns list of reported accounts. GET /api/admin/publisher-applications returns list of publisher applications. All endpoints properly check admin permissions."
+
 agent_communication:
     - agent: "testing"
       message: "Comprehensive backend API testing completed successfully. All 27 test cases passed with 100% success rate. All major API endpoints are working correctly including authentication, posts, comments, users, statuses, messages, notifications, places, and discovery features. The backend is fully functional and ready for production use."
@@ -247,6 +262,10 @@ agent_communication:
       message: "Added Check-In Post feature with proximity verification. New endpoints to test: POST /api/places/verify-proximity (proximity check), POST /api/posts (with post_type=check_in/lifestyle/question), GET /api/posts/nearby-feed (location-prioritized feed), DELETE /api/posts/{post_id} (own post deletion). Test credentials: demo@flames-up.com / demo123456"
     - agent: "testing"
       message: "Check-In Post feature testing completed successfully. Fixed critical routing issue where /posts/nearby-feed was being caught by /posts/{post_id} route. All new features working: proximity verification (200m threshold), check-in posts with place data, question posts, location-prioritized nearby feed, and post deletion. Existing endpoints remain functional. Backend is ready for production."
+    - agent: "main"
+      message: "Updated messaging system to support media (photo/video) attachments. MessageCreate and Message models now include media_url and media_type fields. Send message endpoint updated with smart notification text. Test sending a message with media_url and media_type='image' or 'video'. Test credentials: demo@flames-up.com / demo123456. Also added admin endpoints for content moderation."
+    - agent: "testing"
+      message: "Media messaging system and admin endpoints testing completed successfully. All messaging features working: text messages, image messages (base64), video messages (URL), mixed content messages. Messages properly store and retrieve media_url and media_type fields. All admin endpoints working: stats, reported posts/accounts, publisher applications. Known issue identified: GET /api/conversations has IndexError when user messages themselves (backend limitation that needs fixing)."
 
   - task: "Check-In Post System"
     implemented: true

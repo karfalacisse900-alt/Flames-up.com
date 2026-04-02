@@ -44,6 +44,13 @@
           "resizeMode": "contain",
           "backgroundColor": "#000"
         }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Share photos from your gallery in chat",
+          "cameraPermission": "Take photos to send in messages"
+        }
       ]
     ],
     "experiments": {

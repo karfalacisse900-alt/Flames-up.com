@@ -14,6 +14,8 @@ interface User {
   following_count: number;
   posts_count: number;
   is_verified: boolean;
+  is_admin?: boolean;
+  is_publisher?: boolean;
 }
 
 interface AuthState {

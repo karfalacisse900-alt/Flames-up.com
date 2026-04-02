@@ -144,15 +144,19 @@ class Status(BaseModel):
 
 class MessageCreate(BaseModel):
     receiver_id: str
-    content: str
+    content: str = ""
     image: Optional[str] = None
+    media_url: Optional[str] = None  # Base64 or URL of media
+    media_type: Optional[str] = None  # "image" or "video"
 
 class Message(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     sender_id: str
     receiver_id: str
-    content: str
+    content: str = ""
     image: Optional[str] = None
+    media_url: Optional[str] = None
+    media_type: Optional[str] = None  # "image" or "video"
     is_read: bool = False
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -680,9 +684,18 @@ async def send_message(message_data: MessageCreate, current_user: dict = Depends
         sender_id=current_user["id"],
         receiver_id=message_data.receiver_id,
         content=message_data.content,
-        image=message_data.image
+        image=message_data.image,
+        media_url=message_data.media_url,
+        media_type=message_data.media_type,
     )
     await db.messages.insert_one(message.dict())
+    
+    # Build last_message preview
+    last_msg_preview = message_data.content[:100] if message_data.content else ""
+    if not last_msg_preview and message_data.media_type == "video":
+        last_msg_preview = "Sent a video"
+    elif not last_msg_preview and (message_data.media_url or message_data.image):
+        last_msg_preview = "Sent a photo"
     
     # Update or create conversation
     participants = sorted([current_user["id"], message_data.receiver_id])
@@ -694,7 +707,7 @@ async def send_message(message_data: MessageCreate, current_user: dict = Depends
         await db.conversations.update_one(
             {"id": conversation["id"]},
             {"$set": {
-                "last_message": message_data.content[:100],
+                "last_message": last_msg_preview,
                 "last_message_time": datetime.utcnow(),
                 "unread_count": unread
             }}
@@ -702,18 +715,19 @@ async def send_message(message_data: MessageCreate, current_user: dict = Depends
     else:
         conv = Conversation(
             participants=participants,
-            last_message=message_data.content[:100],
+            last_message=last_msg_preview,
             last_message_time=datetime.utcnow(),
             unread_count={message_data.receiver_id: 1}
         )
         await db.conversations.insert_one(conv.dict())
     
     # Create notification
+    notif_body = f"{current_user['username']}: {message_data.content[:50]}" if message_data.content else f"{current_user['username']} sent a {'video' if message_data.media_type == 'video' else 'photo'}"
     await create_notification(
         user_id=message_data.receiver_id,
         type="message",
         title="New Message",
-        body=f"{current_user['username']}: {message_data.content[:50]}",
+        body=notif_body,
         data={"sender_id": current_user["id"]}
     )
     
