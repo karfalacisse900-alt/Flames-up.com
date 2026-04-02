@@ -185,12 +185,15 @@ export default function ProfileScreen() {
           </View>
 
           {/* Bio */}
-          {(user.bio || true) && (
+          {user.bio ? (
             <View style={styles.bioCard}>
-              <Text style={styles.bioText}>
-                {user.bio || `Hey! I'm building a new social app called flames-up and I'm inviting a few people to try it early before everyone else.`}
-              </Text>
+              <Text style={styles.bioText}>{user.bio}</Text>
             </View>
+          ) : (
+            <TouchableOpacity style={styles.bioCardEmpty} onPress={() => router.push('/edit-profile')}>
+              <Ionicons name="create-outline" size={16} color="#9CA3AF" />
+              <Text style={styles.bioEmptyText}>Tap to add your bio</Text>
+            </TouchableOpacity>
           )}
 
           {/* Stats row */}
@@ -517,6 +520,25 @@ const styles = StyleSheet.create({
     marginBottom: 16,
     borderWidth: 1,
     borderColor: colors.borderSubtle,
+  },
+  bioCardEmpty: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: colors.bgSubtle,
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    borderStyle: 'dashed',
+  },
+  bioEmptyText: {
+    fontSize: 13,
+    color: '#9CA3AF',
+    fontWeight: '500',
   },
   bioText: {
     fontSize: 14,

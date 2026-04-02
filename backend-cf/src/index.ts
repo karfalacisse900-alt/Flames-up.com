@@ -544,10 +544,15 @@ api.post('/upload/image', authMiddleware, async (c) => {
     const binaryStr = atob(base64Content);
     const bytes = new Uint8Array(binaryStr.length);
     for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
-    const blob = new Blob([bytes], { type: 'image/jpeg' });
 
+    // Detect mime type
+    let mimeType = 'image/jpeg';
+    if (base64Data.includes('data:image/png')) mimeType = 'image/png';
+    else if (base64Data.includes('data:image/webp')) mimeType = 'image/webp';
+
+    const blob = new Blob([bytes], { type: mimeType });
     const formData = new FormData();
-    formData.append('file', blob, `upload-${Date.now()}.jpg`);
+    formData.append('file', blob, `upload-${Date.now()}.${mimeType.split('/')[1]}`);
 
     const cfRes = await fetch(`https://api.cloudflare.com/client/v4/accounts/${c.env.CLOUDFLARE_ACCOUNT_ID}/images/v1`, {
       method: 'POST',
@@ -557,13 +562,13 @@ api.post('/upload/image', authMiddleware, async (c) => {
     const cfData: any = await cfRes.json();
     if (!cfData.success) {
       console.log('CF Images error:', JSON.stringify(cfData.errors));
-      // Fallback: return base64 as-is
       return c.json({ url: base64Data, source: 'base64_fallback' });
     }
-    // Return the Cloudflare Images URL
-    const variants = cfData.result.variants || [];
-    const publicUrl = variants.find((v: string) => v.includes('/public')) || variants[0] || '';
-    return c.json({ url: publicUrl, id: cfData.result.id, source: 'cloudflare_images' });
+    // Build proper delivery URL with account hash
+    const imageId = cfData.result.id;
+    const ACCOUNT_HASH = 'DY-IgVdOm-0zb0K5ZFnpKA';
+    const deliveryUrl = `https://imagedelivery.net/${ACCOUNT_HASH}/${imageId}/public`;
+    return c.json({ url: deliveryUrl, id: imageId, source: 'cloudflare_images' });
   } catch (e: any) {
     return c.json({ detail: 'Upload failed: ' + e.message }, 500);
   }

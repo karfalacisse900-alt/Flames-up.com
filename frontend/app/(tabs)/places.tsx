@@ -141,15 +141,20 @@ export default function PlacesScreen() {
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [locationName, setLocationName] = useState('Nearby');
 
-  // Request real-time location on mount
+  // Request real-time location on mount + load places immediately
   useEffect(() => {
+    // Start loading places RIGHT AWAY with fallback location (no waiting for GPS)
+    loadPlaces(activeType, undefined, { lat: 40.7128, lng: -74.006 });
+    
     (async () => {
       try {
         const { status } = await Location.requestForegroundPermissionsAsync();
         if (status === 'granted') {
           const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-          setUserLocation({ lat: loc.coords.latitude, lng: loc.coords.longitude });
-          // Reverse geocode for location name
+          const coords = { lat: loc.coords.latitude, lng: loc.coords.longitude };
+          setUserLocation(coords);
+          // Reload with real GPS location
+          loadPlaces(activeType, undefined, coords);
           try {
             const geo = await Location.reverseGeocodeAsync({
               latitude: loc.coords.latitude,
@@ -159,18 +164,20 @@ export default function PlacesScreen() {
               setLocationName(geo[0].city || geo[0].district || geo[0].subregion || 'Nearby');
             }
           } catch {}
+        } else {
+          setUserLocation({ lat: 40.7128, lng: -74.006 });
+          setLocationName('New York');
         }
       } catch {
-        // Fallback to NYC
         setUserLocation({ lat: 40.7128, lng: -74.006 });
         setLocationName('New York');
       }
     })();
   }, []);
 
-  const loadPlaces = async (type: string, keyword?: string) => {
+  const loadPlaces = async (type: string, keyword?: string, overrideLoc?: { lat: number; lng: number }) => {
     try {
-      const loc = userLocation || { lat: 40.7128, lng: -74.006 };
+      const loc = overrideLoc || userLocation || { lat: 40.7128, lng: -74.006 };
       const params: any = { type, lat: loc.lat, lng: loc.lng, radius: 5000 };
       if (keyword) params.keyword = keyword;
       const response = await api.get('/google-places/nearby', { params });
@@ -182,21 +189,24 @@ export default function PlacesScreen() {
     }
   };
 
+  // Reload when category changes
   useEffect(() => {
-    setIsLoading(true);
-    loadPlaces(activeType);
-  }, [activeType, userLocation]);
+    if (userLocation) {
+      setIsLoading(true);
+      loadPlaces(activeType, undefined, userLocation);
+    }
+  }, [activeType]);
 
   const onRefresh = useCallback(async () => {
     setIsRefreshing(true);
-    await loadPlaces(activeType, search || undefined);
+    await loadPlaces(activeType, search || undefined, userLocation || undefined);
     setIsRefreshing(false);
   }, [activeType, search, userLocation]);
 
   const handleSearch = () => {
     if (search.trim()) {
       setIsLoading(true);
-      loadPlaces(activeType, search.trim());
+      loadPlaces(activeType, search.trim(), userLocation || undefined);
     }
   };
 
