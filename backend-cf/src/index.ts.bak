@@ -25,7 +25,6 @@ app.get('/', (c) => c.json({ name: 'Flames-Up API', version: '2.0', status: 'liv
 const api = new Hono<HonoApp>();
 
 // ─── CORS ────────────────────────────────────────────────────────────────────
-app.use('*', cors({ origin: '*', allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'] }));
 api.use('*', cors({ origin: '*', allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'] }));
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -74,7 +73,7 @@ async function createToken(userId: string, secret: string): Promise<string> {
 // ═══════════════════════════════════════════════════════════════════════════════
 // AUTH
 // ═══════════════════════════════════════════════════════════════════════════════
-api.post('/auth/register', async (c) => {
+app.post('/auth/register', async (c) => {
   const { email, password, username, full_name } = await c.req.json();
   if (!email || !password || !username || !full_name)
     return c.json({ detail: 'All fields required' }, 400);
@@ -90,7 +89,7 @@ api.post('/auth/register', async (c) => {
   return c.json({ access_token: token, token_type: 'bearer', user: { id, email, username, full_name } });
 });
 
-api.post('/auth/login', async (c) => {
+app.post('/auth/login', async (c) => {
   const { email, password } = await c.req.json();
   const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
   if (!user || !(await verifyPassword(password, user.password_hash)))
@@ -104,7 +103,7 @@ api.post('/auth/login', async (c) => {
   });
 });
 
-api.get('/auth/me', authMiddleware, async (c) => {
+app.get('/auth/me', authMiddleware, async (c) => {
   const userId = getUserId(c);
   const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
   if (!user) return c.json({ detail: 'User not found' }, 404);
@@ -115,7 +114,7 @@ api.get('/auth/me', authMiddleware, async (c) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 // USERS
 // ═══════════════════════════════════════════════════════════════════════════════
-api.put('/users/me', authMiddleware, async (c) => {
+app.put('/users/me', authMiddleware, async (c) => {
   const userId = getUserId(c);
   const body = await c.req.json();
   const fields = ['full_name', 'bio', 'profile_image', 'cover_image', 'city', 'username'];
@@ -129,20 +128,20 @@ api.put('/users/me', authMiddleware, async (c) => {
   return c.json(safe);
 });
 
-api.get('/users/search/:query', authMiddleware, async (c) => {
+app.get('/users/search/:query', authMiddleware, async (c) => {
   const q = c.req.param('query');
   const r = await c.env.DB.prepare('SELECT id, username, full_name, profile_image, bio FROM users WHERE username LIKE ? OR full_name LIKE ? LIMIT 20').bind(`%${q}%`, `%${q}%`).all();
   return c.json(r.results);
 });
 
-api.get('/users/:userId', authMiddleware, async (c) => {
+app.get('/users/:userId', authMiddleware, async (c) => {
   const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(c.req.param('userId')).first();
   if (!user) return c.json({ detail: 'User not found' }, 404);
   const { password_hash, ...safe } = user;
   return c.json(safe);
 });
 
-api.post('/users/:userId/follow', authMiddleware, async (c) => {
+app.post('/users/:userId/follow', authMiddleware, async (c) => {
   const userId = getUserId(c); const targetId = c.req.param('userId');
   if (userId === targetId) return c.json({ detail: 'Cannot follow yourself' }, 400);
   const ex = await c.env.DB.prepare('SELECT id FROM follows WHERE follower_id = ? AND following_id = ?').bind(userId, targetId).first();
@@ -161,7 +160,7 @@ api.post('/users/:userId/follow', authMiddleware, async (c) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 // POSTS (with Check-In support)
 // ═══════════════════════════════════════════════════════════════════════════════
-api.post('/posts', authMiddleware, async (c) => {
+app.post('/posts', authMiddleware, async (c) => {
   const userId = getUserId(c);
   const user: any = await c.env.DB.prepare('SELECT username, full_name, profile_image FROM users WHERE id = ?').bind(userId).first();
   const b = await c.req.json();
@@ -181,7 +180,7 @@ api.post('/posts', authMiddleware, async (c) => {
     likes_count: 0, comments_count: 0, liked_by: [], created_at: now() });
 });
 
-api.get('/posts/feed', authMiddleware, async (c) => {
+app.get('/posts/feed', authMiddleware, async (c) => {
   const skip = parseInt(c.req.query('skip') || '0'); const limit = parseInt(c.req.query('limit') || '20');
   const posts = await c.env.DB.prepare(
     `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
@@ -196,7 +195,7 @@ api.get('/posts/feed', authMiddleware, async (c) => {
   return c.json(results);
 });
 
-api.get('/posts/nearby-feed', authMiddleware, async (c) => {
+app.get('/posts/nearby-feed', authMiddleware, async (c) => {
   const posts = await c.env.DB.prepare(
     `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
      FROM posts p JOIN users u ON p.user_id = u.id ORDER BY p.created_at DESC LIMIT 50`
@@ -204,7 +203,7 @@ api.get('/posts/nearby-feed', authMiddleware, async (c) => {
   return c.json((posts.results as any[]).map(p => ({ ...p, images: JSON.parse(p.images || '[]'), media_types: JSON.parse(p.media_types || '[]'), is_verified_checkin: !!p.is_verified_checkin })));
 });
 
-api.get('/posts/:postId', authMiddleware, async (c) => {
+app.get('/posts/:postId', authMiddleware, async (c) => {
   const postId = c.req.param('postId');
   const p: any = await c.env.DB.prepare(
     `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
@@ -215,7 +214,7 @@ api.get('/posts/:postId', authMiddleware, async (c) => {
     liked_by: likes.results.map((l: any) => l.user_id), is_verified_checkin: !!p.is_verified_checkin });
 });
 
-api.post('/posts/:postId/like', authMiddleware, async (c) => {
+app.post('/posts/:postId/like', authMiddleware, async (c) => {
   const userId = getUserId(c); const postId = c.req.param('postId');
   const ex = await c.env.DB.prepare('SELECT id FROM likes WHERE user_id = ? AND post_id = ?').bind(userId, postId).first();
   if (ex) {
@@ -228,7 +227,7 @@ api.post('/posts/:postId/like', authMiddleware, async (c) => {
   return c.json({ liked: true });
 });
 
-api.delete('/posts/:postId', authMiddleware, async (c) => {
+app.delete('/posts/:postId', authMiddleware, async (c) => {
   const userId = getUserId(c); const postId = c.req.param('postId');
   const post: any = await c.env.DB.prepare('SELECT user_id FROM posts WHERE id = ?').bind(postId).first();
   if (!post) return c.json({ detail: 'Post not found' }, 404);
@@ -240,7 +239,7 @@ api.delete('/posts/:postId', authMiddleware, async (c) => {
   return c.json({ deleted: true });
 });
 
-api.get('/users/:userId/posts', authMiddleware, async (c) => {
+app.get('/users/:userId/posts', authMiddleware, async (c) => {
   const posts = await c.env.DB.prepare(
     `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
      FROM posts p JOIN users u ON p.user_id = u.id WHERE p.user_id = ? ORDER BY p.created_at DESC`
@@ -249,7 +248,7 @@ api.get('/users/:userId/posts', authMiddleware, async (c) => {
 });
 
 // Comments
-api.post('/posts/:postId/comments', authMiddleware, async (c) => {
+app.post('/posts/:postId/comments', authMiddleware, async (c) => {
   const userId = getUserId(c); const postId = c.req.param('postId');
   const { content } = await c.req.json();
   const user: any = await c.env.DB.prepare('SELECT username, full_name, profile_image FROM users WHERE id = ?').bind(userId).first();
@@ -259,7 +258,7 @@ api.post('/posts/:postId/comments', authMiddleware, async (c) => {
   return c.json({ id, user_id: userId, post_id: postId, content, user_username: user?.username, user_full_name: user?.full_name, user_profile_image: user?.profile_image, created_at: now() });
 });
 
-api.get('/posts/:postId/comments', authMiddleware, async (c) => {
+app.get('/posts/:postId/comments', authMiddleware, async (c) => {
   const r = await c.env.DB.prepare(
     `SELECT c.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
      FROM comments c JOIN users u ON c.user_id = u.id WHERE c.post_id = ? ORDER BY c.created_at ASC`
@@ -268,7 +267,7 @@ api.get('/posts/:postId/comments', authMiddleware, async (c) => {
 });
 
 // Statuses
-api.post('/statuses', authMiddleware, async (c) => {
+app.post('/statuses', authMiddleware, async (c) => {
   const userId = getUserId(c); const b = await c.req.json();
   const user: any = await c.env.DB.prepare('SELECT username, full_name, profile_image FROM users WHERE id = ?').bind(userId).first();
   const id = uuid(); const expiresAt = new Date(Date.now() + 86400000).toISOString();
@@ -276,12 +275,12 @@ api.post('/statuses', authMiddleware, async (c) => {
   return c.json({ id, user_id: userId, content: b.content, image: b.image, background_color: b.background_color, text_color: b.text_color, user_username: user?.username, user_full_name: user?.full_name, user_profile_image: user?.profile_image, viewed_by: [], created_at: now(), expires_at: expiresAt });
 });
 
-api.get('/statuses', authMiddleware, async (c) => {
+app.get('/statuses', authMiddleware, async (c) => {
   const r = await c.env.DB.prepare(`SELECT s.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image FROM statuses s JOIN users u ON s.user_id = u.id WHERE s.expires_at > datetime('now') ORDER BY s.created_at DESC`).all();
   return c.json((r.results as any[]).map(s => ({ ...s, viewed_by: JSON.parse(s.viewed_by || '[]') })));
 });
 
-api.post('/statuses/:statusId/view', authMiddleware, async (c) => {
+app.post('/statuses/:statusId/view', authMiddleware, async (c) => {
   const userId = getUserId(c); const statusId = c.req.param('statusId');
   const s: any = await c.env.DB.prepare('SELECT viewed_by FROM statuses WHERE id = ?').bind(statusId).first();
   if (!s) return c.json({ detail: 'Not found' }, 404);
@@ -291,7 +290,7 @@ api.post('/statuses/:statusId/view', authMiddleware, async (c) => {
 });
 
 // Messages (with media support)
-api.get('/conversations', authMiddleware, async (c) => {
+app.get('/conversations', authMiddleware, async (c) => {
   const userId = getUserId(c);
   const msgs = await c.env.DB.prepare(`SELECT m.*, u.username, u.full_name, u.profile_image FROM messages m JOIN users u ON (CASE WHEN m.sender_id = ? THEN m.receiver_id ELSE m.sender_id END) = u.id WHERE m.sender_id = ? OR m.receiver_id = ? ORDER BY m.created_at DESC`).bind(userId, userId, userId).all();
   const map = new Map<string, any>();
@@ -307,13 +306,13 @@ api.get('/conversations', authMiddleware, async (c) => {
   return c.json(Array.from(map.values()));
 });
 
-api.post('/messages', authMiddleware, async (c) => {
+app.post('/messages', authMiddleware, async (c) => {
   const userId = getUserId(c); const b = await c.req.json(); const id = uuid();
   await c.env.DB.prepare('INSERT INTO messages (id, sender_id, receiver_id, content, media_url, media_type) VALUES (?, ?, ?, ?, ?, ?)').bind(id, userId, b.receiver_id, b.content || '', b.media_url || null, b.media_type || null).run();
   return c.json({ id, sender_id: userId, receiver_id: b.receiver_id, content: b.content || '', media_url: b.media_url, media_type: b.media_type, created_at: now() });
 });
 
-api.get('/messages/:userId', authMiddleware, async (c) => {
+app.get('/messages/:userId', authMiddleware, async (c) => {
   const myId = getUserId(c); const oid = c.req.param('userId');
   await c.env.DB.prepare('UPDATE messages SET is_read = 1 WHERE sender_id = ? AND receiver_id = ? AND is_read = 0').bind(oid, myId).run();
   const r = await c.env.DB.prepare('SELECT * FROM messages WHERE (sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?) ORDER BY created_at ASC').bind(myId, oid, oid, myId).all();
@@ -321,40 +320,40 @@ api.get('/messages/:userId', authMiddleware, async (c) => {
 });
 
 // Notifications
-api.get('/notifications', authMiddleware, async (c) => { const r = await c.env.DB.prepare('SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 50').bind(getUserId(c)).all(); return c.json(r.results); });
-api.get('/notifications/unread-count', authMiddleware, async (c) => { const r = await c.env.DB.prepare('SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND is_read = 0').bind(getUserId(c)).first(); return c.json({ count: (r as any)?.count || 0 }); });
-api.post('/notifications/mark-read', authMiddleware, async (c) => { await c.env.DB.prepare('UPDATE notifications SET is_read = 1 WHERE user_id = ?').bind(getUserId(c)).run(); return c.json({ marked: true }); });
+app.get('/notifications', authMiddleware, async (c) => { const r = await c.env.DB.prepare('SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 50').bind(getUserId(c)).all(); return c.json(r.results); });
+app.get('/notifications/unread-count', authMiddleware, async (c) => { const r = await c.env.DB.prepare('SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND is_read = 0').bind(getUserId(c)).first(); return c.json({ count: (r as any)?.count || 0 }); });
+app.post('/notifications/mark-read', authMiddleware, async (c) => { await c.env.DB.prepare('UPDATE notifications SET is_read = 1 WHERE user_id = ?').bind(getUserId(c)).run(); return c.json({ marked: true }); });
 
 // Library
-api.get('/library/liked', authMiddleware, async (c) => { const r = await c.env.DB.prepare(`SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image FROM likes l JOIN posts p ON l.post_id = p.id JOIN users u ON p.user_id = u.id WHERE l.user_id = ? ORDER BY l.created_at DESC`).bind(getUserId(c)).all(); return c.json(r.results); });
-api.get('/library/saved', authMiddleware, async (c) => { const r = await c.env.DB.prepare(`SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image, sp.collection FROM saved_posts sp JOIN posts p ON sp.post_id = p.id JOIN users u ON p.user_id = u.id WHERE sp.user_id = ? ORDER BY sp.created_at DESC`).bind(getUserId(c)).all(); return c.json(r.results); });
-api.post('/library/save/:postId', authMiddleware, async (c) => { const b = await c.req.json().catch(() => ({})); await c.env.DB.prepare('INSERT OR IGNORE INTO saved_posts (id, user_id, post_id, collection) VALUES (?, ?, ?, ?)').bind(uuid(), getUserId(c), c.req.param('postId'), (b as any).collection || 'default').run(); return c.json({ saved: true }); });
-api.delete('/library/save/:postId', authMiddleware, async (c) => { await c.env.DB.prepare('DELETE FROM saved_posts WHERE user_id = ? AND post_id = ?').bind(getUserId(c), c.req.param('postId')).run(); return c.json({ unsaved: true }); });
-api.get('/library/collections', authMiddleware, async (c) => { const r = await c.env.DB.prepare('SELECT collection, COUNT(*) as count FROM saved_posts WHERE user_id = ? GROUP BY collection').bind(getUserId(c)).all(); return c.json(r.results); });
+app.get('/library/liked', authMiddleware, async (c) => { const r = await c.env.DB.prepare(`SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image FROM likes l JOIN posts p ON l.post_id = p.id JOIN users u ON p.user_id = u.id WHERE l.user_id = ? ORDER BY l.created_at DESC`).bind(getUserId(c)).all(); return c.json(r.results); });
+app.get('/library/saved', authMiddleware, async (c) => { const r = await c.env.DB.prepare(`SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image, sp.collection FROM saved_posts sp JOIN posts p ON sp.post_id = p.id JOIN users u ON p.user_id = u.id WHERE sp.user_id = ? ORDER BY sp.created_at DESC`).bind(getUserId(c)).all(); return c.json(r.results); });
+app.post('/library/save/:postId', authMiddleware, async (c) => { const b = await c.req.json().catch(() => ({})); await c.env.DB.prepare('INSERT OR IGNORE INTO saved_posts (id, user_id, post_id, collection) VALUES (?, ?, ?, ?)').bind(uuid(), getUserId(c), c.req.param('postId'), (b as any).collection || 'default').run(); return c.json({ saved: true }); });
+app.delete('/library/save/:postId', authMiddleware, async (c) => { await c.env.DB.prepare('DELETE FROM saved_posts WHERE user_id = ? AND post_id = ?').bind(getUserId(c), c.req.param('postId')).run(); return c.json({ unsaved: true }); });
+app.get('/library/collections', authMiddleware, async (c) => { const r = await c.env.DB.prepare('SELECT collection, COUNT(*) as count FROM saved_posts WHERE user_id = ? GROUP BY collection').bind(getUserId(c)).all(); return c.json(r.results); });
 
 // Friends
-api.post('/friends/request/:userId', authMiddleware, async (c) => { const fid = getUserId(c); const tid = c.req.param('userId'); if (fid === tid) return c.json({ detail: 'Cannot friend yourself' }, 400); const ex = await c.env.DB.prepare('SELECT id, status FROM friend_requests WHERE from_user_id = ? AND to_user_id = ?').bind(fid, tid).first(); if (ex) return c.json({ detail: 'Already sent', status: (ex as any).status }, 400); const id = uuid(); await c.env.DB.prepare('INSERT INTO friend_requests (id, from_user_id, to_user_id) VALUES (?, ?, ?)').bind(id, fid, tid).run(); return c.json({ id, status: 'pending' }); });
-api.post('/friends/accept/:requestId', authMiddleware, async (c) => { const uid = getUserId(c); const rid = c.req.param('requestId'); const r: any = await c.env.DB.prepare('SELECT * FROM friend_requests WHERE id = ? AND to_user_id = ?').bind(rid, uid).first(); if (!r) return c.json({ detail: 'Not found' }, 404); await c.env.DB.prepare("UPDATE friend_requests SET status = 'accepted' WHERE id = ?").bind(rid).run(); await c.env.DB.prepare('INSERT OR IGNORE INTO friendships (id, user_id, friend_id) VALUES (?, ?, ?)').bind(uuid(), uid, r.from_user_id).run(); await c.env.DB.prepare('INSERT OR IGNORE INTO friendships (id, user_id, friend_id) VALUES (?, ?, ?)').bind(uuid(), r.from_user_id, uid).run(); return c.json({ accepted: true }); });
-api.post('/friends/reject/:requestId', authMiddleware, async (c) => { await c.env.DB.prepare("UPDATE friend_requests SET status = 'rejected' WHERE id = ?").bind(c.req.param('requestId')).run(); return c.json({ rejected: true }); });
-api.get('/friends/requests', authMiddleware, async (c) => { const r = await c.env.DB.prepare(`SELECT fr.*, u.username, u.full_name, u.profile_image FROM friend_requests fr JOIN users u ON fr.from_user_id = u.id WHERE fr.to_user_id = ? AND fr.status = 'pending'`).bind(getUserId(c)).all(); return c.json(r.results); });
-api.get('/friends', authMiddleware, async (c) => { const r = await c.env.DB.prepare('SELECT u.id, u.username, u.full_name, u.profile_image, u.bio FROM friendships f JOIN users u ON f.friend_id = u.id WHERE f.user_id = ?').bind(getUserId(c)).all(); return c.json(r.results); });
-api.get('/friends/status/:userId', authMiddleware, async (c) => { const mid = getUserId(c); const oid = c.req.param('userId'); const f = await c.env.DB.prepare('SELECT id FROM friendships WHERE user_id = ? AND friend_id = ?').bind(mid, oid).first(); if (f) return c.json({ status: 'friends' }); const sr: any = await c.env.DB.prepare("SELECT id FROM friend_requests WHERE from_user_id = ? AND to_user_id = ? AND status = 'pending'").bind(mid, oid).first(); if (sr) return c.json({ status: 'request_sent', request_id: sr.id }); const rr: any = await c.env.DB.prepare("SELECT id FROM friend_requests WHERE from_user_id = ? AND to_user_id = ? AND status = 'pending'").bind(oid, mid).first(); if (rr) return c.json({ status: 'request_received', request_id: rr.id }); return c.json({ status: 'none' }); });
-api.delete('/friends/:userId', authMiddleware, async (c) => { const mid = getUserId(c); const oid = c.req.param('userId'); await c.env.DB.prepare('DELETE FROM friendships WHERE (user_id = ? AND friend_id = ?) OR (user_id = ? AND friend_id = ?)').bind(mid, oid, oid, mid).run(); return c.json({ removed: true }); });
+app.post('/friends/request/:userId', authMiddleware, async (c) => { const fid = getUserId(c); const tid = c.req.param('userId'); if (fid === tid) return c.json({ detail: 'Cannot friend yourself' }, 400); const ex = await c.env.DB.prepare('SELECT id, status FROM friend_requests WHERE from_user_id = ? AND to_user_id = ?').bind(fid, tid).first(); if (ex) return c.json({ detail: 'Already sent', status: (ex as any).status }, 400); const id = uuid(); await c.env.DB.prepare('INSERT INTO friend_requests (id, from_user_id, to_user_id) VALUES (?, ?, ?)').bind(id, fid, tid).run(); return c.json({ id, status: 'pending' }); });
+app.post('/friends/accept/:requestId', authMiddleware, async (c) => { const uid = getUserId(c); const rid = c.req.param('requestId'); const r: any = await c.env.DB.prepare('SELECT * FROM friend_requests WHERE id = ? AND to_user_id = ?').bind(rid, uid).first(); if (!r) return c.json({ detail: 'Not found' }, 404); await c.env.DB.prepare("UPDATE friend_requests SET status = 'accepted' WHERE id = ?").bind(rid).run(); await c.env.DB.prepare('INSERT OR IGNORE INTO friendships (id, user_id, friend_id) VALUES (?, ?, ?)').bind(uuid(), uid, r.from_user_id).run(); await c.env.DB.prepare('INSERT OR IGNORE INTO friendships (id, user_id, friend_id) VALUES (?, ?, ?)').bind(uuid(), r.from_user_id, uid).run(); return c.json({ accepted: true }); });
+app.post('/friends/reject/:requestId', authMiddleware, async (c) => { await c.env.DB.prepare("UPDATE friend_requests SET status = 'rejected' WHERE id = ?").bind(c.req.param('requestId')).run(); return c.json({ rejected: true }); });
+app.get('/friends/requests', authMiddleware, async (c) => { const r = await c.env.DB.prepare(`SELECT fr.*, u.username, u.full_name, u.profile_image FROM friend_requests fr JOIN users u ON fr.from_user_id = u.id WHERE fr.to_user_id = ? AND fr.status = 'pending'`).bind(getUserId(c)).all(); return c.json(r.results); });
+app.get('/friends', authMiddleware, async (c) => { const r = await c.env.DB.prepare('SELECT u.id, u.username, u.full_name, u.profile_image, u.bio FROM friendships f JOIN users u ON f.friend_id = u.id WHERE f.user_id = ?').bind(getUserId(c)).all(); return c.json(r.results); });
+app.get('/friends/status/:userId', authMiddleware, async (c) => { const mid = getUserId(c); const oid = c.req.param('userId'); const f = await c.env.DB.prepare('SELECT id FROM friendships WHERE user_id = ? AND friend_id = ?').bind(mid, oid).first(); if (f) return c.json({ status: 'friends' }); const sr: any = await c.env.DB.prepare("SELECT id FROM friend_requests WHERE from_user_id = ? AND to_user_id = ? AND status = 'pending'").bind(mid, oid).first(); if (sr) return c.json({ status: 'request_sent', request_id: sr.id }); const rr: any = await c.env.DB.prepare("SELECT id FROM friend_requests WHERE from_user_id = ? AND to_user_id = ? AND status = 'pending'").bind(oid, mid).first(); if (rr) return c.json({ status: 'request_received', request_id: rr.id }); return c.json({ status: 'none' }); });
+app.delete('/friends/:userId', authMiddleware, async (c) => { const mid = getUserId(c); const oid = c.req.param('userId'); await c.env.DB.prepare('DELETE FROM friendships WHERE (user_id = ? AND friend_id = ?) OR (user_id = ? AND friend_id = ?)').bind(mid, oid, oid, mid).run(); return c.json({ removed: true }); });
 
 // Discover
-api.get('/discover/trending', authMiddleware, async (c) => { const r = await c.env.DB.prepare(`SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image FROM posts p JOIN users u ON p.user_id = u.id ORDER BY p.likes_count DESC, p.created_at DESC LIMIT 20`).all(); return c.json((r.results as any[]).map(p => ({ ...p, images: JSON.parse(p.images || '[]'), media_types: JSON.parse(p.media_types || '[]') }))); });
-api.get('/discover/search', authMiddleware, async (c) => { const q = c.req.query('q') || ''; const posts = await c.env.DB.prepare(`SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image FROM posts p JOIN users u ON p.user_id = u.id WHERE p.content LIKE ? LIMIT 20`).bind(`%${q}%`).all(); const users = await c.env.DB.prepare('SELECT id, username, full_name, profile_image, bio FROM users WHERE username LIKE ? OR full_name LIKE ? LIMIT 10').bind(`%${q}%`, `%${q}%`).all(); return c.json({ posts: posts.results, users: users.results }); });
-api.get('/discover/suggested-users', authMiddleware, async (c) => { const r = await c.env.DB.prepare('SELECT id, username, full_name, profile_image, bio, followers_count FROM users WHERE id != ? ORDER BY followers_count DESC LIMIT 10').bind(getUserId(c)).all(); return c.json(r.results); });
+app.get('/discover/trending', authMiddleware, async (c) => { const r = await c.env.DB.prepare(`SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image FROM posts p JOIN users u ON p.user_id = u.id ORDER BY p.likes_count DESC, p.created_at DESC LIMIT 20`).all(); return c.json((r.results as any[]).map(p => ({ ...p, images: JSON.parse(p.images || '[]'), media_types: JSON.parse(p.media_types || '[]') }))); });
+app.get('/discover/search', authMiddleware, async (c) => { const q = c.req.query('q') || ''; const posts = await c.env.DB.prepare(`SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image FROM posts p JOIN users u ON p.user_id = u.id WHERE p.content LIKE ? LIMIT 20`).bind(`%${q}%`).all(); const users = await c.env.DB.prepare('SELECT id, username, full_name, profile_image, bio FROM users WHERE username LIKE ? OR full_name LIKE ? LIMIT 10').bind(`%${q}%`, `%${q}%`).all(); return c.json({ posts: posts.results, users: users.results }); });
+app.get('/discover/suggested-users', authMiddleware, async (c) => { const r = await c.env.DB.prepare('SELECT id, username, full_name, profile_image, bio, followers_count FROM users WHERE id != ? ORDER BY followers_count DESC LIMIT 10').bind(getUserId(c)).all(); return c.json(r.results); });
 
 // Uploads (Cloudflare Images + Stream direct upload)
-api.post('/upload/image-direct', authMiddleware, async (c) => {
+app.post('/upload/image-direct', authMiddleware, async (c) => {
   const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${c.env.CLOUDFLARE_ACCOUNT_ID}/images/v2/direct_upload`, { method: 'POST', headers: { Authorization: `Bearer ${c.env.CLOUDFLARE_IMAGES_TOKEN}` } });
   const data: any = await res.json();
   if (!data.success) return c.json({ detail: 'Failed to get upload URL' }, 500);
   return c.json({ upload_url: data.result.uploadURL, image_id: data.result.id });
 });
 
-api.post('/upload/video-direct', authMiddleware, async (c) => {
+app.post('/upload/video-direct', authMiddleware, async (c) => {
   const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${c.env.CLOUDFLARE_ACCOUNT_ID}/stream/direct_upload`, { method: 'POST', headers: { Authorization: `Bearer ${c.env.CLOUDFLARE_STREAM_TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ maxDurationSeconds: 300, creator: getUserId(c) }) });
   const data: any = await res.json();
   if (!data.success) return c.json({ detail: 'Failed to get upload URL' }, 500);
@@ -362,12 +361,12 @@ api.post('/upload/video-direct', authMiddleware, async (c) => {
 });
 
 // Reports
-api.post('/reports', authMiddleware, async (c) => { const b = await c.req.json(); const id = uuid(); await c.env.DB.prepare('INSERT INTO reports (id, reporter_id, reported_id, report_type, reason, content_id) VALUES (?, ?, ?, ?, ?, ?)').bind(id, getUserId(c), b.reported_id || '', b.report_type || 'other', b.reason || '', b.content_id || null).run(); return c.json({ id, reported: true }); });
+app.post('/reports', authMiddleware, async (c) => { const b = await c.req.json(); const id = uuid(); await c.env.DB.prepare('INSERT INTO reports (id, reporter_id, reported_id, report_type, reason, content_id) VALUES (?, ?, ?, ?, ?, ?)').bind(id, getUserId(c), b.reported_id || '', b.report_type || 'other', b.reason || '', b.content_id || null).run(); return c.json({ id, reported: true }); });
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // PUBLISHER
 // ═══════════════════════════════════════════════════════════════════════════════
-api.post('/publisher/apply', authMiddleware, async (c) => {
+app.post('/publisher/apply', authMiddleware, async (c) => {
   try {
     const userId = getUserId(c); const b = await c.req.json();
     if (!b.business_name || !b.category || !b.about || !b.phone || !b.why_publish) {
@@ -387,13 +386,13 @@ api.post('/publisher/apply', authMiddleware, async (c) => {
   }
 });
 
-api.get('/publisher/status', authMiddleware, async (c) => {
+app.get('/publisher/status', authMiddleware, async (c) => {
   const app: any = await c.env.DB.prepare('SELECT status FROM publisher_applications WHERE user_id = ? ORDER BY created_at DESC LIMIT 1').bind(getUserId(c)).first();
   return c.json({ status: app?.status || 'none' });
 });
 
 // Discover posts (publisher content)
-api.post('/discover/posts', authMiddleware, async (c) => {
+app.post('/discover/posts', authMiddleware, async (c) => {
   const userId = getUserId(c); const b = await c.req.json();
   const user: any = await c.env.DB.prepare('SELECT username, full_name, profile_image, is_publisher FROM users WHERE id = ?').bind(userId).first();
   if (!user?.is_publisher) return c.json({ detail: 'Publishers only' }, 403);
@@ -402,7 +401,7 @@ api.post('/discover/posts', authMiddleware, async (c) => {
   return c.json({ id, user_id: userId, user_username: user.username, user_full_name: user.full_name, user_profile_image: user.profile_image, content: b.content, category: b.category, created_at: now() });
 });
 
-api.get('/discover/feed', authMiddleware, async (c) => {
+app.get('/discover/feed', authMiddleware, async (c) => {
   const category = c.req.query('category') || 'all';
   let sql = `SELECT dp.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image FROM discover_posts dp JOIN users u ON dp.user_id = u.id`;
   if (category !== 'all') sql += ` WHERE dp.category = '${category}'`;
@@ -411,7 +410,7 @@ api.get('/discover/feed', authMiddleware, async (c) => {
   return c.json((r.results as any[]).map(p => ({ ...p, images: JSON.parse(p.images || '[]') })));
 });
 
-api.post('/discover/posts/:postId/like', authMiddleware, async (c) => {
+app.post('/discover/posts/:postId/like', authMiddleware, async (c) => {
   const userId = getUserId(c); const postId = c.req.param('postId');
   const ex = await c.env.DB.prepare('SELECT id FROM discover_likes WHERE user_id = ? AND post_id = ?').bind(userId, postId).first();
   if (ex) {
@@ -424,7 +423,7 @@ api.post('/discover/posts/:postId/like', authMiddleware, async (c) => {
   return c.json({ liked: true });
 });
 
-api.get('/discover/categories', async (c) => {
+app.get('/discover/categories', async (c) => {
   return c.json([
     { id: 'local_news', name: 'Local News', icon: 'newspaper' },
     { id: 'events', name: 'Events', icon: 'calendar' },
@@ -436,29 +435,29 @@ api.get('/discover/categories', async (c) => {
 });
 
 // Places (user-created)
-api.post('/places', authMiddleware, async (c) => {
+app.post('/places', authMiddleware, async (c) => {
   const userId = getUserId(c); const b = await c.req.json(); const id = uuid();
   await c.env.DB.prepare('INSERT INTO places (id, name, description, category, lat, lng, address, image, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(id, b.name, b.description || '', b.category || '', b.lat || null, b.lng || null, b.address || '', b.image || null, userId).run();
   return c.json({ id, name: b.name, created_at: now() });
 });
 
-api.get('/places', authMiddleware, async (c) => {
+app.get('/places', authMiddleware, async (c) => {
   const r = await c.env.DB.prepare('SELECT * FROM places ORDER BY created_at DESC LIMIT 50').all();
   return c.json(r.results);
 });
 
-api.get('/places/nearby', authMiddleware, async (c) => {
+app.get('/places/nearby', authMiddleware, async (c) => {
   const r = await c.env.DB.prepare('SELECT * FROM places ORDER BY created_at DESC LIMIT 50').all();
   return c.json(r.results);
 });
 
-api.get('/places/:placeId', authMiddleware, async (c) => {
+app.get('/places/:placeId', authMiddleware, async (c) => {
   const p = await c.env.DB.prepare('SELECT * FROM places WHERE id = ?').bind(c.req.param('placeId')).first();
   if (!p) return c.json({ detail: 'Not found' }, 404);
   return c.json(p);
 });
 
-api.post('/places/verify-proximity', authMiddleware, async (c) => {
+app.post('/places/verify-proximity', authMiddleware, async (c) => {
   const b = await c.req.json();
   const distance = Math.sqrt(Math.pow((b.user_lat - b.place_lat) * 111320, 2) + Math.pow((b.user_lng - b.place_lng) * 111320 * Math.cos(b.user_lat * Math.PI / 180), 2));
   return c.json({ verified: distance <= 200, distance: Math.round(distance) });
@@ -474,7 +473,7 @@ const adminGuard = async (c: any, next: () => Promise<void>) => {
   await next();
 };
 
-api.get('/admin/stats', authMiddleware, adminGuard, async (c) => {
+app.get('/admin/stats', authMiddleware, adminGuard, async (c) => {
   const users = await c.env.DB.prepare('SELECT COUNT(*) as c FROM users').first() as any;
   const posts = await c.env.DB.prepare('SELECT COUNT(*) as c FROM posts').first() as any;
   const reports = await c.env.DB.prepare('SELECT COUNT(*) as c FROM reports').first() as any;
@@ -482,17 +481,17 @@ api.get('/admin/stats', authMiddleware, adminGuard, async (c) => {
   return c.json({ total_users: users?.c || 0, total_posts: posts?.c || 0, total_reports: reports?.c || 0, pending_applications: apps?.c || 0 });
 });
 
-api.get('/admin/reported-posts', authMiddleware, adminGuard, async (c) => {
+app.get('/admin/reported-posts', authMiddleware, adminGuard, async (c) => {
   const r = await c.env.DB.prepare(`SELECT r.*, p.content AS post_content, p.image AS post_image, u.username AS reporter_name FROM reports r LEFT JOIN posts p ON r.content_id = p.id LEFT JOIN users u ON r.reporter_id = u.id WHERE r.report_type = 'post' ORDER BY r.created_at DESC`).all();
   return c.json(r.results);
 });
 
-api.get('/admin/reported-accounts', authMiddleware, adminGuard, async (c) => {
+app.get('/admin/reported-accounts', authMiddleware, adminGuard, async (c) => {
   const r = await c.env.DB.prepare(`SELECT r.reported_id, u.username, u.full_name, u.profile_image, COUNT(*) as report_count FROM reports r JOIN users u ON r.reported_id = u.id WHERE r.report_type = 'user' GROUP BY r.reported_id`).all();
   return c.json(r.results);
 });
 
-api.post('/admin/remove-post/:postId', authMiddleware, adminGuard, async (c) => {
+app.post('/admin/remove-post/:postId', authMiddleware, adminGuard, async (c) => {
   const postId = c.req.param('postId');
   await c.env.DB.prepare('DELETE FROM likes WHERE post_id = ?').bind(postId).run();
   await c.env.DB.prepare('DELETE FROM comments WHERE post_id = ?').bind(postId).run();
@@ -500,12 +499,12 @@ api.post('/admin/remove-post/:postId', authMiddleware, adminGuard, async (c) => 
   return c.json({ removed: true });
 });
 
-api.get('/admin/publisher-applications', authMiddleware, adminGuard, async (c) => {
+app.get('/admin/publisher-applications', authMiddleware, adminGuard, async (c) => {
   const r = await c.env.DB.prepare('SELECT * FROM publisher_applications ORDER BY created_at DESC').all();
   return c.json(r.results);
 });
 
-api.post('/admin/publisher-applications/:appId/decide', authMiddleware, adminGuard, async (c) => {
+app.post('/admin/publisher-applications/:appId/decide', authMiddleware, adminGuard, async (c) => {
   const appId = c.req.param('appId'); const { decision } = await c.req.json();
   const app: any = await c.env.DB.prepare('SELECT user_id FROM publisher_applications WHERE id = ?').bind(appId).first();
   if (!app) return c.json({ detail: 'Not found' }, 404);
@@ -516,24 +515,24 @@ api.post('/admin/publisher-applications/:appId/decide', authMiddleware, adminGua
   return c.json({ decided: true, status: decision });
 });
 
-api.post('/admin/make-admin/:userId', authMiddleware, adminGuard, async (c) => {
+app.post('/admin/make-admin/:userId', authMiddleware, adminGuard, async (c) => {
   await c.env.DB.prepare('UPDATE users SET is_admin = 1 WHERE id = ?').bind(c.req.param('userId')).run();
   return c.json({ success: true });
 });
 
-api.get('/admin/reports', authMiddleware, adminGuard, async (c) => {
+app.get('/admin/reports', authMiddleware, adminGuard, async (c) => {
   const r = await c.env.DB.prepare('SELECT * FROM reports ORDER BY created_at DESC LIMIT 50').all();
   return c.json(r.results);
 });
 
-api.post('/admin/reports/:reportId/action', authMiddleware, adminGuard, async (c) => {
+app.post('/admin/reports/:reportId/action', authMiddleware, adminGuard, async (c) => {
   const { action } = await c.req.json();
   await c.env.DB.prepare('DELETE FROM reports WHERE id = ?').bind(c.req.param('reportId')).run();
   return c.json({ action, done: true });
 });
 
 // Upload (Cloudflare Images)
-api.post('/upload/image', authMiddleware, async (c) => {
+app.post('/upload/image', authMiddleware, async (c) => {
   try {
     const body = await c.req.json();
     const base64Data = body.image || body.base64;
@@ -569,7 +568,7 @@ api.post('/upload/image', authMiddleware, async (c) => {
   }
 });
 
-api.post('/upload/base64-image', authMiddleware, async (c) => {
+app.post('/upload/base64-image', authMiddleware, async (c) => {
   // Alias for /upload/image
   const body = await c.req.json();
   const newReq = new Request(c.req.url.replace('base64-image', 'image'), {
@@ -577,10 +576,10 @@ api.post('/upload/base64-image', authMiddleware, async (c) => {
     headers: c.req.raw.headers,
     body: JSON.stringify(body),
   });
-  return api.fetch(newReq, c.env);
+  return app.fetch(newReq, c.env);
 });
 
-api.post('/upload/video', authMiddleware, async (c) => {
+app.post('/upload/video', authMiddleware, async (c) => {
   try {
     // Get a direct upload URL from Cloudflare Stream
     const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${c.env.CLOUDFLARE_ACCOUNT_ID}/stream/direct_upload`, {
@@ -600,7 +599,7 @@ api.post('/upload/video', authMiddleware, async (c) => {
 });
 
 // Google Places proxy
-api.get('/google-places/nearby', async (c) => {
+app.get('/google-places/nearby', async (c) => {
   const key = c.env.GOOGLE_MAPS_API_KEY;
   const url = `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${c.req.query('lat') || '40.7128'},${c.req.query('lng') || '-74.006'}&radius=${c.req.query('radius') || '5000'}&type=${c.req.query('type') || 'restaurant'}&key=${key}`;
   const res = await fetch(url); const data: any = await res.json();
@@ -612,7 +611,7 @@ api.get('/google-places/nearby', async (c) => {
   })));
 });
 
-api.get('/google-places/:placeId', async (c) => {
+app.get('/google-places/:placeId', async (c) => {
   const key = c.env.GOOGLE_MAPS_API_KEY; const pid = c.req.param('placeId');
   const url = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${pid}&fields=name,formatted_address,formatted_phone_number,rating,user_ratings_total,reviews,photos,opening_hours,website,price_level,types,geometry,url&key=${key}`;
   const res = await fetch(url); const data: any = await res.json(); const p = data.result || {};
@@ -625,10 +624,7 @@ api.get('/google-places/:placeId', async (c) => {
 });
 
 // Health
-api.get('/', (c) => c.json({ message: 'Flames-Up API', version: '2.0', runtime: 'Cloudflare Workers + Hono + D1' }));
-api.get('/health', (c) => c.json({ status: 'healthy', timestamp: now() }));
+app.get('/', (c) => c.json({ message: 'Flames-Up API', version: '2.0', runtime: 'Cloudflare Workers + Hono + D1' }));
+app.get('/health', (c) => c.json({ status: 'healthy', timestamp: now() }));
 
-// Mount API routes on app
-app.route('/api', api);
-
-export default app;
+export default rootApp;
