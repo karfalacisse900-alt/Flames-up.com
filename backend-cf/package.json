@@ -1,18 +1,20 @@
 {
   "name": "flames-up-api",
   "version": "1.0.0",
+  "private": true,
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "migrate": "wrangler d1 execute flames-up-db --file=./migrations/0001_init.sql"
+    "db:migrate": "wrangler d1 execute flames-up-db --file=./migrations/0001_init.sql",
+    "db:migrate:prod": "wrangler d1 execute flames-up-db --file=./migrations/0001_init.sql --remote"
   },
   "dependencies": {
-    "hono": "^4.7.0",
-    "@hono/zod-validator": "^0.4.0"
+    "hono": "^4.6.0",
+    "jose": "^5.9.0"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20250601.0",
-    "typescript": "^5.7.0",
-    "wrangler": "^4.0.0"
+    "@cloudflare/workers-types": "^4.20241205.0",
+    "typescript": "^5.6.0",
+    "wrangler": "^3.99.0"
   }
 }

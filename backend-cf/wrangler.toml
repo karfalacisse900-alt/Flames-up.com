@@ -1,22 +1,28 @@
 name = "flames-up-api"
 main = "src/index.ts"
-compatibility_date = "2025-06-01"
+compatibility_date = "2024-12-01"
+compatibility_flags = ["nodejs_compat"]
 
 [vars]
-ENVIRONMENT = "production"
-CF_ACCOUNT_HASH = "DY-IgVdOm-0zb0K5ZFnpKA"
+JWT_SECRET = "flames-up-super-secret-jwt-key-2024"
+CLOUDFLARE_ACCOUNT_ID = ""
+CLOUDFLARE_IMAGES_TOKEN = ""
+CLOUDFLARE_STREAM_TOKEN = ""
+GOOGLE_MAPS_API_KEY = ""
+FRONTEND_URL = "https://flames-up.com"
 
 [[d1_databases]]
 binding = "DB"
 database_name = "flames-up-db"
-database_id = "YOUR_D1_DATABASE_ID"
+database_id = "<YOUR_D1_DATABASE_ID>"
 
 [[kv_namespaces]]
 binding = "KV"
-id = "YOUR_KV_NAMESPACE_ID"
+id = "<YOUR_KV_NAMESPACE_ID>"
 
-# Secrets (set via `wrangler secret put`):
-# JWT_SECRET
-# CF_API_TOKEN
-# CF_ACCOUNT_ID
-# GOOGLE_MAPS_API_KEY
+[env.production]
+name = "flames-up-api"
+
+[env.production.vars]
+JWT_SECRET = ""
+FRONTEND_URL = "https://flames-up.com"
