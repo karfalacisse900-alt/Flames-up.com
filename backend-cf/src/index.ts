@@ -362,16 +362,23 @@ app.post('/reports', authMiddleware, async (c) => { const b = await c.req.json()
 // PUBLISHER
 // ═══════════════════════════════════════════════════════════════════════════════
 app.post('/publisher/apply', authMiddleware, async (c) => {
-  const userId = getUserId(c); const b = await c.req.json();
-  const existing: any = await c.env.DB.prepare('SELECT id, status FROM publisher_applications WHERE user_id = ?').bind(userId).first();
-  if (existing) return c.json({ detail: 'Application already exists', status: existing.status });
-  const user: any = await c.env.DB.prepare('SELECT username, full_name, profile_image FROM users WHERE id = ?').bind(userId).first();
-  const id = uuid();
-  await c.env.DB.prepare(
-    `INSERT INTO publisher_applications (id, user_id, user_username, user_full_name, user_profile_image, business_name, category, about, phone, website, social_instagram, social_twitter, social_tiktok, address, city, why_publish)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).bind(id, userId, user?.username || '', user?.full_name || '', user?.profile_image || '', b.business_name, b.category, b.about, b.phone, b.website || '', b.social_instagram || '', b.social_twitter || '', b.social_tiktok || '', b.address || '', b.city || '', b.why_publish).run();
-  return c.json({ id, status: 'pending', submitted: true });
+  try {
+    const userId = getUserId(c); const b = await c.req.json();
+    if (!b.business_name || !b.category || !b.about || !b.phone || !b.why_publish) {
+      return c.json({ detail: 'Missing required fields' }, 400);
+    }
+    const existing: any = await c.env.DB.prepare('SELECT id, status FROM publisher_applications WHERE user_id = ?').bind(userId).first();
+    if (existing) return c.json({ detail: 'Application already exists', status: existing.status });
+    const user: any = await c.env.DB.prepare('SELECT username, full_name, profile_image FROM users WHERE id = ?').bind(userId).first();
+    const id = uuid();
+    await c.env.DB.prepare(
+      `INSERT INTO publisher_applications (id, user_id, user_username, user_full_name, user_profile_image, business_name, category, about, phone, website, social_instagram, social_twitter, social_tiktok, address, city, why_publish)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(id, userId, user?.username || '', user?.full_name || '', user?.profile_image || '', b.business_name || '', b.category || '', b.about || '', b.phone || '', b.website || '', b.social_instagram || '', b.social_twitter || '', b.social_tiktok || '', b.address || '', b.city || '', b.why_publish || '').run();
+    return c.json({ id, status: 'pending', submitted: true });
+  } catch (e: any) {
+    return c.json({ detail: 'Application failed: ' + (e.message || 'unknown error') }, 500);
+  }
 });
 
 app.get('/publisher/status', authMiddleware, async (c) => {
