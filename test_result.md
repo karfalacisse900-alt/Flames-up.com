@@ -239,9 +239,9 @@ metadata:
 
 test_plan:
   current_focus: 
-    - "Cloudflare Workers Backend Migration"
+    []
   stuck_tasks: 
-    - "Cloudflare Workers Backend Migration"
+    []
   test_all: false
   test_priority: "high_first"
 
@@ -272,6 +272,10 @@ agent_communication:
       message: "IMPORTANT: Backend has been MIGRATED from Python/FastAPI to Cloudflare Workers (Hono + D1). The new backend URL is https://flames-up-api.karfalacisse900.workers.dev. All API endpoints are prefixed with /api. Test credentials: demo@flames-up.com / demo123456. Test ALL core endpoints: auth (login/register/me), posts (create/feed/like/comment), users (get/update/follow), messages (send with media_url/media_type), admin (stats/reported-posts/publisher-applications), google-places (nearby), discover (categories/feed), publisher (apply/status), places (create/nearby)."
     - agent: "testing"
       message: "Cloudflare Workers backend testing completed with 95% success rate (19/20 tests passed). All core functionality working: auth (login/register/me), posts (create/feed/like/comment), users (get/update), messages (send/get with media support), admin (stats/reported-posts/publisher-applications), google-places (nearby), discover (categories/posts/feed), publisher status. CRITICAL ISSUE: POST /api/publisher/apply returns Internal Server Error (HTTP 500) - this endpoint needs fixing. All other endpoints fully functional on new Cloudflare Workers backend."
+    - agent: "main"
+      message: "RETEST REQUIRED: Previous session fixed publisher/apply endpoint (added error handling + field validation). Also fixed CF Image upload endpoint to use correct account hash DY-IgVdOm-0zb0K5ZFnpKA and return proper delivery URL. Test the same endpoints as before, specifically: 1) POST /api/publisher/apply should now work with proper fields, 2) POST /api/upload/image should accept base64 image and return cloudflare_images URL, 3) All other previously passing endpoints should still work. Test credentials: demo@flames-up.com / demo123456. CF Worker URL: https://flames-up-api.karfalacisse900.workers.dev"
+    - agent: "testing"
+      message: "FINAL CLOUDFLARE WORKERS TESTING COMPLETE: 100% success rate achieved (20/20 tests passed). All endpoints now working perfectly including the previously failing publisher/apply endpoint. Comprehensive test coverage: ✅ Authentication (login/me with admin+publisher verification), ✅ Posts (create/feed/like/comment), ✅ Users (profile get/update), ✅ Messages (send with media support/get conversations), ✅ Admin (stats/reported-posts/publisher-applications), ✅ Google Places (nearby search with 20 results), ✅ Discovery (categories/feed), ✅ Publisher (apply with new user registration flow), ✅ File Upload (image upload to Cloudflare Images), ✅ Statuses (get/create with background colors). The Cloudflare Workers backend migration is complete and fully functional. Ready for production deployment."
 
   - task: "Check-In Post System"
     implemented: true
@@ -297,9 +301,9 @@ agent_communication:
 
   - task: "Cloudflare Workers Backend Migration"
     implemented: true
-    working: false
+    working: true
     file: "https://flames-up-api.karfalacisse900.workers.dev"
-    stuck_count: 1
+    stuck_count: 0
     priority: "high"
     needs_retesting: false
     test_scenarios:
@@ -323,6 +327,9 @@ agent_communication:
       - "GET /api/discover/feed"
       - "GET /api/publisher/status"
       - "POST /api/publisher/apply (test with new user who isn't publisher yet)"
+      - "POST /api/upload/image → upload base64 image and get cloudflare URL"
+      - "GET /api/statuses → get statuses list"
+      - "POST /api/statuses → create status with content and background_color"
     status_history:
       - working: unknown
         agent: "main"
@@ -330,3 +337,6 @@ agent_communication:
       - working: false
         agent: "testing"
         comment: "Comprehensive testing completed with 95% success rate (19/20 tests passed). All core functionality working: auth (login/register/me), posts (create/feed/like/comment), users (get/update), messages (send/get with media support), admin (stats/reported-posts/publisher-applications), google-places (nearby), discover (categories/posts/feed), publisher status. CRITICAL ISSUE: POST /api/publisher/apply returns Internal Server Error (HTTP 500) - this endpoint has a server-side bug that needs fixing. All other endpoints fully functional."
+      - working: true
+        agent: "testing"
+        comment: "COMPREHENSIVE TESTING COMPLETED: 100% success rate (20/20 tests passed). All endpoints working perfectly: ✅ Auth (login/me with admin+publisher flags), ✅ Posts (create/feed/like/comment), ✅ Users (get profile/update), ✅ Messages (send with media/get conversation), ✅ Admin (stats/reported-posts/publisher-applications), ✅ Google Places (nearby search), ✅ Discovery (categories/feed), ✅ Publisher (apply with new user registration), ✅ File Upload (image upload to Cloudflare Images), ✅ Statuses (get/create with background colors). Previously failing publisher/apply endpoint now working correctly. Cloudflare Workers backend is fully functional and production-ready."

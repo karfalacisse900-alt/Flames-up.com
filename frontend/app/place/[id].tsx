@@ -15,8 +15,6 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-let WebViewComp: any = null;
-try { WebViewComp = require('react-native-webview').WebView; } catch {}
 import { colors, spacing, borderRadius, shadows } from '../../src/utils/theme';
 import api from '../../src/api/client';
 
@@ -628,34 +626,6 @@ const s = StyleSheet.create({
   },
   checkinBtnText: {
     fontSize: 15,
-    fontWeight: '700',
-    color: '#FFFFFF',
-  },
-
-  // Inline Map
-  inlineMapContainer: {
-    height: 180,
-    marginHorizontal: 20,
-    marginVertical: 8,
-    borderRadius: 16,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: colors.borderLight,
-  },
-  mapOverlayBtn: {
-    position: 'absolute',
-    bottom: 10,
-    right: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 20,
-    backgroundColor: colors.accentPrimary,
-  },
-  mapOverlayText: {
-    fontSize: 12,
     fontWeight: '700',
     color: '#FFFFFF',
   },
