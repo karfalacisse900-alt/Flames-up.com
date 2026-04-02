@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -9,954 +9,484 @@ import {
   FlatList,
   RefreshControl,
   TextInput,
-  Alert,
   ActivityIndicator,
   Dimensions,
-  KeyboardAvoidingView,
   Platform,
-  Modal,
+  Animated,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import * as ImagePicker from 'expo-image-picker';
-import { colors, spacing, shadows } from '../../src/utils/theme';
+import { colors, shadows } from '../../src/utils/theme';
 import { useAuthStore } from '../../src/store/authStore';
 import api from '../../src/api/client';
 import { formatDistanceToNow } from 'date-fns';
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const { width: SW } = Dimensions.get('window');
 
-const TABS = [
-  { id: 'foryou', label: 'For you' },
-  { id: 'culture', label: 'Culture' },
-  { id: 'science', label: 'Science' },
-  { id: 'featured', label: 'Featured', badge: 'New' },
-  { id: 'daily', label: 'Daily' },
+const CATEGORIES = [
+  { id: 'all', label: 'For You', icon: 'sparkles' },
+  { id: 'news', label: 'Local News', icon: 'newspaper' },
+  { id: 'events', label: 'Events', icon: 'calendar' },
+  { id: 'culture', label: 'Culture', icon: 'color-palette' },
+  { id: 'food', label: 'Food', icon: 'restaurant' },
+  { id: 'lifestyle', label: 'Lifestyle', icon: 'heart' },
+  { id: 'tech', label: 'Tech', icon: 'phone-portrait' },
+  { id: 'tips', label: 'Tips', icon: 'bulb' },
+  { id: 'spotlight', label: 'Spotlights', icon: 'flash' },
 ];
 
-// Avatar color generator (matches original)
-const avatarColors = ['#7C69C4', '#D98B62', '#3C6E5A', '#E05C7A', '#4A7FC1'];
-function getAvatarColor(name: string) {
-  return avatarColors[(name || 'U').charCodeAt(0) % avatarColors.length];
-}
-
-// ── Discover Post Card (improved visual layout) ────────────
-function DiscoverPostCard({ post, onPress, featured = false }: { post: any; onPress: () => void; featured?: boolean }) {
-  const authorName = post.user_full_name || post.user_username || 'User';
-  const avatarColor = getAvatarColor(authorName);
-  const dateStr = post.created_at
-    ? formatDistanceToNow(new Date(post.created_at), { addSuffix: false })
-    : '';
-
-  if (featured && post.image) {
-    // Featured card: large image with overlay
-    return (
-      <TouchableOpacity style={cardStyles.featuredContainer} onPress={onPress} activeOpacity={0.9}>
-        <Image source={{ uri: post.image }} style={cardStyles.featuredImage} />
-        <View style={cardStyles.featuredOverlay} />
-        <View style={cardStyles.featuredContent}>
-          <View style={cardStyles.featuredBadge}>
-            <Ionicons name="flame" size={10} color="#FFFFFF" />
-            <Text style={cardStyles.featuredBadgeText}>Trending</Text>
-          </View>
-          <Text style={cardStyles.featuredTitle} numberOfLines={2}>{post.content}</Text>
-          <View style={cardStyles.featuredAuthor}>
-            <View style={[cardStyles.avatar, { borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.4)' }]}>
-              {post.user_profile_image ? (
-                <Image source={{ uri: post.user_profile_image }} style={{ width: '100%', height: '100%' }} />
-              ) : (
-                <Text style={[cardStyles.avatarLetter, { color: '#FFFFFF' }]}>{authorName[0].toUpperCase()}</Text>
-              )}
-            </View>
-            <Text style={cardStyles.featuredAuthorName}>{authorName}</Text>
-            <View style={{ flex: 1 }} />
-            <Text style={cardStyles.featuredDate}>{dateStr}</Text>
-          </View>
-        </View>
-      </TouchableOpacity>
-    );
-  }
-
-  return (
-    <TouchableOpacity style={cardStyles.container} onPress={onPress} activeOpacity={0.8}>
-      {/* Large thumbnail if available */}
-      {post.image && (
-        <Image source={{ uri: post.image }} style={cardStyles.cardImage} />
-      )}
-      {/* Author row */}
-      <View style={cardStyles.authorRow}>
-        {post.user_profile_image ? (
-          <Image source={{ uri: post.user_profile_image }} style={cardStyles.avatar} />
-        ) : (
-          <View style={[cardStyles.avatar, { backgroundColor: `${avatarColor}22` }]}>
-            <Text style={[cardStyles.avatarLetter, { color: avatarColor }]}>
-              {authorName[0].toUpperCase()}
-            </Text>
-          </View>
-        )}
-        <Text style={cardStyles.authorText}>{authorName}</Text>
-        <View style={{ flex: 1 }} />
-        <Text style={cardStyles.authorHint}>{dateStr} ago</Text>
-      </View>
-
-      {/* Content */}
-      <Text style={cardStyles.title} numberOfLines={3}>{post.content}</Text>
-
-      {post.location && (
-        <View style={cardStyles.locationRow}>
-          <Ionicons name="location" size={11} color={colors.accentPrimary} />
-          <Text style={cardStyles.locationText}>{post.location}</Text>
-        </View>
-      )}
-
-      {/* Footer */}
-      <View style={cardStyles.footer}>
-        <View style={cardStyles.footerStat}>
-          <Ionicons name="heart" size={14} color={colors.textHint} />
-          <Text style={cardStyles.footerStatText}>{post.likes_count || 0}</Text>
-        </View>
-        <View style={cardStyles.footerStat}>
-          <Ionicons name="chatbubble-outline" size={13} color={colors.textHint} />
-          <Text style={cardStyles.footerStatText}>{post.comments_count || 0}</Text>
-        </View>
-        <View style={{ flex: 1 }} />
-        <TouchableOpacity hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-          <Ionicons name="bookmark-outline" size={16} color={colors.textHint} />
-        </TouchableOpacity>
-        <TouchableOpacity style={{ marginLeft: 16 }} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-          <Ionicons name="share-outline" size={16} color={colors.textHint} />
-        </TouchableOpacity>
-      </View>
-    </TouchableOpacity>
-  );
-}
-
-const cardStyles = StyleSheet.create({
-  // Standard card
-  container: {
-    marginHorizontal: 16,
-    marginBottom: 12,
-    backgroundColor: colors.bgCard,
-    borderRadius: 20,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: colors.borderLight,
-  },
-  cardImage: {
-    width: '100%',
-    height: 180,
-    resizeMode: 'cover',
-  },
-  authorRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 14,
-    paddingTop: 12,
-    gap: 8,
-  },
-  avatar: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
-    justifyContent: 'center',
-    alignItems: 'center',
-    overflow: 'hidden',
-  },
-  avatarLetter: {
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  authorText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: colors.textPrimary,
-  },
-  authorHint: {
-    fontSize: 11,
-    color: colors.textHint,
-  },
-  title: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: colors.textPrimary,
-    lineHeight: 21,
-    paddingHorizontal: 14,
-    paddingTop: 8,
-  },
-  locationRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-    paddingHorizontal: 14,
-    marginTop: 6,
-  },
-  locationText: {
-    fontSize: 12,
-    color: colors.accentPrimary,
-    fontWeight: '500',
-  },
-  footer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    gap: 14,
-  },
-  footerStat: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  footerStatText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: colors.textHint,
-  },
-  // Featured card
-  featuredContainer: {
-    marginHorizontal: 16,
-    marginBottom: 16,
-    borderRadius: 24,
-    overflow: 'hidden',
-    height: 220,
-  },
-  featuredImage: {
-    width: '100%',
-    height: '100%',
-    resizeMode: 'cover',
-  },
-  featuredOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.35)',
-  },
-  featuredContent: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    padding: 18,
-  },
-  featuredBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: 'rgba(255,120,50,0.85)',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 10,
-    alignSelf: 'flex-start',
-    marginBottom: 8,
-  },
-  featuredBadgeText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#FFFFFF',
-  },
-  featuredTitle: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: '#FFFFFF',
-    lineHeight: 24,
-    marginBottom: 10,
-  },
-  featuredAuthor: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  featuredAuthorName: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: 'rgba(255,255,255,0.9)',
-  },
-  featuredDate: {
-    fontSize: 11,
-    color: 'rgba(255,255,255,0.7)',
-  },
-});
-
-// ── Full Screen Post Composer (matching original web design) ──────────
-function FullScreenComposer({
-  visible,
-  user,
-  onClose,
-  onCreated,
-}: {
-  visible: boolean;
-  user: any;
-  onClose: () => void;
-  onCreated: () => void;
-}) {
-  const [title, setTitle] = useState('');
-  const [body, setBody] = useState('');
-  const [selectedTab, setSelectedTab] = useState('foryou');
-  const [media, setMedia] = useState<{ uri: string; base64?: string }[]>([]);
-  const [isPosting, setIsPosting] = useState(false);
-  const [showTabPicker, setShowTabPicker] = useState(false);
-
-  const pickMedia = async () => {
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      quality: 0.7,
-      base64: true,
-      allowsMultipleSelection: true,
-      selectionLimit: 4,
-    });
-    if (!result.canceled && result.assets) {
-      const newMedia = result.assets.map((a) => ({
-        uri: a.uri,
-        base64: a.base64 ? `data:image/jpeg;base64,${a.base64}` : undefined,
-      }));
-      setMedia((prev) => [...prev, ...newMedia].slice(0, 4));
-    }
-  };
-
-  const removeMedia = (idx: number) => {
-    setMedia((prev) => prev.filter((_, i) => i !== idx));
-  };
-
-  const handlePost = async () => {
-    if (!body.trim() || isPosting) return;
-    setIsPosting(true);
-    try {
-      await api.post('/posts', {
-        content: title.trim() ? `${title.trim()}\n\n${body.trim()}` : body.trim(),
-        image: media[0]?.base64 || media[0]?.uri || null,
-      });
-      setTitle('');
-      setBody('');
-      setMedia([]);
-      onClose();
-      onCreated();
-    } catch (error: any) {
-      Alert.alert('Error', error.response?.data?.detail || 'Could not create post');
-    } finally {
-      setIsPosting(false);
-    }
-  };
-
-  if (!visible) return null;
-
-  const authorName = user?.full_name || user?.username || 'User';
-  const currentTabLabel = TABS.find((t) => t.id === selectedTab)?.label || 'For you';
-
-  return (
-    <Modal visible={visible} animationType="slide" presentationStyle="fullScreen">
-      <SafeAreaView style={compStyles.container} edges={['top', 'bottom']}>
-        <KeyboardAvoidingView
-          style={{ flex: 1 }}
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        >
-          {/* Header */}
-          <View style={compStyles.header}>
-            <TouchableOpacity style={compStyles.closeBtn} onPress={onClose}>
-              <Ionicons name="close" size={18} color={colors.textSecondary} />
-            </TouchableOpacity>
-            <Text style={compStyles.headerTitle}>New Post</Text>
-            <TouchableOpacity
-              style={[
-                compStyles.publishBtn,
-                (!body.trim() || isPosting) && { opacity: 0.4 },
-              ]}
-              onPress={handlePost}
-              disabled={!body.trim() || isPosting}
-            >
-              {isPosting ? (
-                <ActivityIndicator size="small" color="#FFFFFF" />
-              ) : (
-                <Text style={compStyles.publishBtnText}>Publish</Text>
-              )}
-            </TouchableOpacity>
-          </View>
-
-          <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 16 }}>
-            {/* Author */}
-            <View style={compStyles.authorRow}>
-              <View style={compStyles.authorAvatar}>
-                {user?.profile_image ? (
-                  <Image
-                    source={{ uri: user.profile_image }}
-                    style={{ width: '100%', height: '100%' }}
-                  />
-                ) : (
-                  <Text style={compStyles.authorAvatarText}>
-                    {authorName[0].toUpperCase()}
-                  </Text>
-                )}
-              </View>
-              <View>
-                <Text style={compStyles.authorName}>{authorName}</Text>
-                <TouchableOpacity
-                  style={compStyles.tabPickerBtn}
-                  onPress={() => setShowTabPicker(!showTabPicker)}
-                >
-                  <Text style={compStyles.tabPickerText}>{currentTabLabel}</Text>
-                  <Ionicons
-                    name="chevron-down"
-                    size={12}
-                    color={colors.accentPrimary}
-                  />
-                </TouchableOpacity>
-              </View>
-            </View>
-
-            {/* Tab picker dropdown */}
-            {showTabPicker && (
-              <View style={compStyles.tabDropdown}>
-                {TABS.map((tab) => (
-                  <TouchableOpacity
-                    key={tab.id}
-                    style={[
-                      compStyles.tabDropdownItem,
-                      selectedTab === tab.id && compStyles.tabDropdownItemActive,
-                    ]}
-                    onPress={() => {
-                      setSelectedTab(tab.id);
-                      setShowTabPicker(false);
-                    }}
-                  >
-                    <Text
-                      style={[
-                        compStyles.tabDropdownText,
-                        selectedTab === tab.id && compStyles.tabDropdownTextActive,
-                      ]}
-                    >
-                      {tab.label}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            )}
-
-            {/* Title */}
-            <TextInput
-              style={compStyles.titleInput}
-              placeholder="Add a title (optional)"
-              placeholderTextColor={colors.textHint}
-              value={title}
-              onChangeText={setTitle}
-            />
-
-            {/* Upload button */}
-            <View style={compStyles.uploadRow}>
-              <TouchableOpacity style={compStyles.uploadBtn} onPress={pickMedia}>
-                <Ionicons name="image" size={16} color="#FFFFFF" />
-                <Text style={compStyles.uploadBtnText}>Photo / Video</Text>
-              </TouchableOpacity>
-              {media.length > 0 && (
-                <Text style={compStyles.mediaCount}>{media.length} added</Text>
-              )}
-            </View>
-
-            {/* Body */}
-            <TextInput
-              style={compStyles.bodyInput}
-              placeholder="Share what you learned, discovered, or want to discuss..."
-              placeholderTextColor={colors.textHint}
-              value={body}
-              onChangeText={setBody}
-              multiline
-              maxLength={5000}
-              textAlignVertical="top"
-            />
-
-            {/* Media previews */}
-            {media.length > 0 && (
-              <View style={compStyles.mediaGrid}>
-                {media.map((m, idx) => (
-                  <View key={idx} style={compStyles.mediaItem}>
-                    <Image source={{ uri: m.uri }} style={compStyles.mediaImage} />
-                    <TouchableOpacity
-                      style={compStyles.mediaRemove}
-                      onPress={() => removeMedia(idx)}
-                    >
-                      <Ionicons name="close" size={12} color="#FFFFFF" />
-                    </TouchableOpacity>
-                  </View>
-                ))}
-              </View>
-            )}
-          </ScrollView>
-        </KeyboardAvoidingView>
-      </SafeAreaView>
-    </Modal>
-  );
-}
-
-const compStyles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.bgApp,
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.borderLight,
-  },
-  closeBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: colors.bgSubtle,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  headerTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: colors.textPrimary,
-    fontStyle: 'italic',
-  },
-  publishBtn: {
-    paddingHorizontal: 18,
-    paddingVertical: 8,
-    borderRadius: 20,
-    backgroundColor: colors.accentPrimary,
-  },
-  publishBtnText: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#FFFFFF',
-  },
-  authorRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    marginBottom: 16,
-  },
-  authorAvatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: colors.accentPrimaryLight,
-    justifyContent: 'center',
-    alignItems: 'center',
-    overflow: 'hidden',
-  },
-  authorAvatarText: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: colors.accentPrimary,
-  },
-  authorName: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: colors.textPrimary,
-  },
-  tabPickerBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: colors.accentPrimaryLight,
-    paddingHorizontal: 10,
-    paddingVertical: 3,
-    borderRadius: 12,
-    marginTop: 2,
-  },
-  tabPickerText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: colors.accentPrimary,
-  },
-  tabDropdown: {
-    backgroundColor: colors.bgCard,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: colors.borderLight,
-    overflow: 'hidden',
-    marginBottom: 12,
-    ...shadows.elevation2,
-  },
-  tabDropdownItem: {
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-  },
-  tabDropdownItemActive: {
-    backgroundColor: colors.accentPrimaryLight,
-  },
-  tabDropdownText: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: colors.textPrimary,
-  },
-  tabDropdownTextActive: {
-    fontWeight: '700',
-    color: colors.accentPrimary,
-  },
-  titleInput: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: colors.textPrimary,
-    fontStyle: 'italic',
-    marginBottom: 12,
-  },
-  uploadRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    marginBottom: 16,
-  },
-  uploadBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: colors.accentPrimary,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 20,
-  },
-  uploadBtnText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#FFFFFF',
-  },
-  mediaCount: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: colors.accentSecondary,
-  },
-  bodyInput: {
-    fontSize: 15,
-    color: colors.textPrimary,
-    lineHeight: 24,
-    minHeight: 120,
-  },
-  mediaGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginTop: 16,
-  },
-  mediaItem: {
-    width: (SCREEN_WIDTH - 48) / 2,
-    aspectRatio: 1,
-    borderRadius: 16,
-    overflow: 'hidden',
-  },
-  mediaImage: {
-    width: '100%',
-    height: '100%',
-    resizeMode: 'cover',
-  },
-  mediaRemove: {
-    position: 'absolute',
-    top: 8,
-    right: 8,
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: 'rgba(0,0,0,0.6)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-});
-
-// ── Main Discover Screen ──────────────────────────────────────
 export default function DiscoverScreen() {
   const router = useRouter();
   const { user } = useAuthStore();
-  const [activeTab, setActiveTab] = useState('foryou');
-  const [neighborhood] = useState('Your Area');
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
+  const [activeCategory, setActiveCategory] = useState('all');
   const [posts, setPosts] = useState<any[]>([]);
-  const [showComposer, setShowComposer] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [publisherStatus, setPublisherStatus] = useState<any>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [showSearch, setShowSearch] = useState(false);
+  const [suggestedUsers, setSuggestedUsers] = useState<any[]>([]);
+  const scrollRef = useRef<ScrollView>(null);
 
-  const loadPosts = async () => {
+  useEffect(() => { loadAll(); }, [activeCategory]);
+
+  const loadAll = async () => {
+    setIsLoading(true);
     try {
-      const response = await api.get('/posts/feed');
-      setPosts(response.data);
-    } catch (error) {
-      console.log('Error loading discover posts:', error);
-    } finally {
-      setIsLoading(false);
-    }
+      const [feedRes, pubRes, suggestedRes] = await Promise.allSettled([
+        api.get('/discover/feed', { params: { category: activeCategory } }),
+        api.get('/publisher/status'),
+        api.get('/discover/suggested-users'),
+      ]);
+      if (feedRes.status === 'fulfilled') setPosts(feedRes.value.data);
+      if (pubRes.status === 'fulfilled') setPublisherStatus(pubRes.value.data);
+      if (suggestedRes.status === 'fulfilled') setSuggestedUsers(suggestedRes.value.data);
+    } catch {} finally { setIsLoading(false); }
   };
 
-  useEffect(() => {
-    loadPosts();
-  }, []);
-
   const onRefresh = useCallback(async () => {
-    setIsRefreshing(true);
-    await loadPosts();
-    setIsRefreshing(false);
-  }, []);
+    setRefreshing(true);
+    await loadAll();
+    setRefreshing(false);
+  }, [activeCategory]);
 
-  return (
-    <SafeAreaView style={styles.container} edges={['top']}>
-      {/* Header – matches original web design exactly */}
-      <View style={styles.header}>
-        {/* Top row: location + actions */}
-        <View style={styles.topRow}>
-          <TouchableOpacity style={styles.locationBtn}>
-            <View style={styles.locationIcon}>
-              <Ionicons name="location" size={14} color={colors.accentPrimary} />
+  const handleLike = async (postId: string) => {
+    try {
+      const res = await api.post(`/discover/posts/${postId}/like`);
+      setPosts(prev => prev.map(p => p.id === postId ? { ...p, likes_count: res.data.liked ? p.likes_count + 1 : p.likes_count - 1, liked: res.data.liked } : p));
+    } catch {}
+  };
+
+  const timeAgo = (d: string) => {
+    try { return formatDistanceToNow(new Date(d), { addSuffix: false }) + ' ago'; }
+    catch { return ''; }
+  };
+
+  const getCategoryColor = (cat: string) => {
+    const map: any = { news: '#3B82F6', events: '#8B5CF6', culture: '#EC4899', food: '#F59E0B', lifestyle: '#EF4444', tech: '#06B6D4', tips: '#10B981', spotlight: '#F97316' };
+    return map[cat] || colors.accentPrimary;
+  };
+
+  // ─── Render Featured Card (first post, big) ─────────────────────
+  const renderFeatured = (post: any) => (
+    <TouchableOpacity
+      key={post.id}
+      style={ds.featuredCard}
+      onPress={() => {}}
+      activeOpacity={0.9}
+    >
+      {post.image ? (
+        <Image source={{ uri: post.image }} style={ds.featuredImage} />
+      ) : (
+        <View style={[ds.featuredImage, { backgroundColor: getCategoryColor(post.category) + '15' }]}>
+          <Ionicons name="newspaper-outline" size={48} color={getCategoryColor(post.category)} />
+        </View>
+      )}
+      <View style={ds.featuredOverlay}>
+        <View style={[ds.categoryBadge, { backgroundColor: getCategoryColor(post.category) }]}>
+          <Text style={ds.categoryBadgeText}>{post.category?.toUpperCase()}</Text>
+        </View>
+        <Text style={ds.featuredTitle} numberOfLines={2}>{post.title}</Text>
+        <View style={ds.featuredMeta}>
+          <Text style={ds.featuredPublisher}>{post.publisher_name || post.user_full_name}</Text>
+          <Text style={ds.featuredDot}>·</Text>
+          <Text style={ds.featuredTime}>{timeAgo(post.created_at)}</Text>
+        </View>
+      </View>
+    </TouchableOpacity>
+  );
+
+  // ─── Render Content Card ────────────────────────────────────────
+  const renderCard = (post: any) => (
+    <TouchableOpacity key={post.id} style={ds.card} activeOpacity={0.85}>
+      <View style={ds.cardContent}>
+        <View style={ds.cardHeader}>
+          <View style={[ds.cardCatDot, { backgroundColor: getCategoryColor(post.category) }]} />
+          <Text style={[ds.cardCatLabel, { color: getCategoryColor(post.category) }]}>
+            {post.category?.charAt(0).toUpperCase() + post.category?.slice(1)}
+          </Text>
+          {post.event_date && (
+            <View style={ds.eventDatePill}>
+              <Ionicons name="calendar" size={11} color="#8B5CF6" />
+              <Text style={ds.eventDateText}>
+                {new Date(post.event_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+              </Text>
             </View>
-            <Text style={styles.locationText}>{neighborhood}</Text>
-            <Ionicons name="chevron-down" size={16} color={colors.textSecondary} />
-          </TouchableOpacity>
-          <View style={styles.headerActions}>
-            <TouchableOpacity
-              style={styles.iconBtn}
-              onPress={() => router.push('/notifications' as any)}
-            >
-              <Ionicons name="notifications-outline" size={20} color={colors.textSecondary} />
+          )}
+        </View>
+        <Text style={ds.cardTitle} numberOfLines={2}>{post.title}</Text>
+        <Text style={ds.cardBody} numberOfLines={2}>{post.content}</Text>
+        <View style={ds.cardFooter}>
+          <View style={ds.publisherRow}>
+            <View style={ds.publisherAvatar}>
+              {post.user_profile_image ? (
+                <Image source={{ uri: post.user_profile_image }} style={{ width: '100%', height: '100%' }} />
+              ) : (
+                <Text style={ds.publisherInitial}>{(post.publisher_name || 'P')[0]}</Text>
+              )}
+            </View>
+            <Text style={ds.publisherName} numberOfLines={1}>{post.publisher_name || post.user_full_name}</Text>
+          </View>
+          <View style={ds.cardActions}>
+            <TouchableOpacity style={ds.cardAction} onPress={() => handleLike(post.id)}>
+              <Ionicons name={post.liked ? 'heart' : 'heart-outline'} size={16} color={post.liked ? '#EF4444' : '#9CA3AF'} />
+              {post.likes_count > 0 && <Text style={ds.cardActionCount}>{post.likes_count}</Text>}
             </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.iconBtn}
-              onPress={() => router.push('/(tabs)/messages' as any)}
-            >
-              <Ionicons name="chatbubble-outline" size={19} color={colors.textSecondary} />
+            <TouchableOpacity style={ds.cardAction}>
+              <Ionicons name="share-social-outline" size={16} color="#9CA3AF" />
             </TouchableOpacity>
-            {user && (
-              <View style={styles.avatarSmall}>
-                {user.profile_image ? (
-                  <Image
-                    source={{ uri: user.profile_image }}
-                    style={{ width: '100%', height: '100%' }}
-                  />
-                ) : (
-                  <Text style={styles.avatarSmallText}>
-                    {(user.full_name || 'U')[0].toUpperCase()}
-                  </Text>
-                )}
-              </View>
-            )}
+            <TouchableOpacity style={ds.cardAction}>
+              <Ionicons name="bookmark-outline" size={16} color="#9CA3AF" />
+            </TouchableOpacity>
           </View>
         </View>
+      </View>
+      {post.image && <Image source={{ uri: post.image }} style={ds.cardImage} />}
+    </TouchableOpacity>
+  );
 
-        {/* Tabs – exactly matches original */}
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.tabsRow}
-        >
-          {TABS.map((tab) => (
-            <TouchableOpacity
-              key={tab.id}
-              style={[styles.tab, activeTab === tab.id && styles.tabActive]}
-              onPress={() => setActiveTab(tab.id)}
-            >
-              <Text
-                style={[
-                  styles.tabText,
-                  activeTab === tab.id && styles.tabTextActive,
-                ]}
-              >
-                {tab.label}
-              </Text>
-              {tab.badge && (
-                <View style={styles.tabBadge}>
-                  <Text style={styles.tabBadgeText}>{tab.badge}</Text>
-                </View>
+  // ─── Render Event Card ──────────────────────────────────────────
+  const renderEventCard = (post: any) => (
+    <TouchableOpacity key={post.id} style={ds.eventCard} activeOpacity={0.85}>
+      {post.image && <Image source={{ uri: post.image }} style={ds.eventImage} />}
+      <View style={ds.eventBody}>
+        <Text style={ds.eventDate}>
+          {post.event_date ? new Date(post.event_date).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : 'Upcoming'}
+        </Text>
+        <Text style={ds.eventTitle} numberOfLines={2}>{post.title}</Text>
+        {post.event_location && (
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4 }}>
+            <Ionicons name="location" size={12} color="#6B7280" />
+            <Text style={ds.eventLocation} numberOfLines={1}>{post.event_location}</Text>
+          </View>
+        )}
+        <View style={ds.eventFooter}>
+          <Text style={ds.eventPublisher}>{post.publisher_name}</Text>
+          <TouchableOpacity style={ds.rsvpBtn}>
+            <Text style={ds.rsvpText}>Interested</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </TouchableOpacity>
+  );
+
+  // ─── Render Suggested People ────────────────────────────────────
+  const renderSuggested = () => (
+    <View style={ds.suggestedSection}>
+      <View style={ds.sectionHeader}>
+        <Text style={ds.sectionTitle}>People to Follow</Text>
+        <TouchableOpacity><Text style={ds.seeAll}>See all</Text></TouchableOpacity>
+      </View>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 16, gap: 12 }}>
+        {suggestedUsers.slice(0, 6).map((u: any) => (
+          <TouchableOpacity key={u.id} style={ds.suggestedCard} onPress={() => router.push(`/user/${u.id}`)}>
+            <View style={ds.suggestedAvatar}>
+              {u.profile_image ? (
+                <Image source={{ uri: u.profile_image }} style={{ width: '100%', height: '100%' }} />
+              ) : (
+                <Text style={ds.suggestedInitial}>{(u.full_name || 'U')[0].toUpperCase()}</Text>
               )}
+            </View>
+            <Text style={ds.suggestedName} numberOfLines={1}>{u.full_name || u.username}</Text>
+            <Text style={ds.suggestedBio} numberOfLines={2}>{u.bio || 'Flames-Up member'}</Text>
+            <TouchableOpacity style={ds.followBtn}>
+              <Text style={ds.followText}>Follow</Text>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        ))}
+      </ScrollView>
+    </View>
+  );
+
+  return (
+    <SafeAreaView style={ds.container} edges={['top']}>
+      {/* Header */}
+      <View style={ds.header}>
+        <Text style={ds.headerTitle}>Discover</Text>
+        <View style={ds.headerActions}>
+          <TouchableOpacity style={ds.headerBtn} onPress={() => setShowSearch(!showSearch)}>
+            <Ionicons name={showSearch ? 'close' : 'search'} size={20} color="#1B4332" />
+          </TouchableOpacity>
+          {publisherStatus?.is_publisher ? (
+            <TouchableOpacity style={ds.publishBtn} onPress={() => router.push('/create-discover-post' as any)}>
+              <Ionicons name="add" size={18} color="#FFF" />
+              <Text style={ds.publishBtnText}>Publish</Text>
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity style={ds.applyBtn} onPress={() => router.push('/publisher-apply' as any)}>
+              <Ionicons name="megaphone-outline" size={16} color="#2D6A4F" />
+              <Text style={ds.applyBtnText}>
+                {publisherStatus?.status === 'pending' ? 'Pending' : 'Become Publisher'}
+              </Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      </View>
+
+      {/* Search */}
+      {showSearch && (
+        <View style={ds.searchBar}>
+          <Ionicons name="search" size={18} color="#9CA3AF" />
+          <TextInput
+            style={ds.searchInput}
+            placeholder="Search articles, events, topics..."
+            placeholderTextColor="#9CA3AF"
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            autoFocus
+          />
+        </View>
+      )}
+
+      {/* Category Chips */}
+      <View style={ds.chipBar}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 16, gap: 8 }}>
+          {CATEGORIES.map((cat) => (
+            <TouchableOpacity
+              key={cat.id}
+              style={[ds.chip, activeCategory === cat.id && ds.chipActive]}
+              onPress={() => setActiveCategory(cat.id)}
+            >
+              <Ionicons name={cat.icon as any} size={14} color={activeCategory === cat.id ? '#FFF' : '#5C4033'} />
+              <Text style={[ds.chipText, activeCategory === cat.id && ds.chipTextActive]}>{cat.label}</Text>
             </TouchableOpacity>
           ))}
         </ScrollView>
       </View>
 
-      {/* Feed – article-style list matching original web design */}
-      <FlatList
-        data={posts}
-        keyExtractor={(item) => item.id}
-        renderItem={({ item, index }) => (
-          <DiscoverPostCard
-            post={item}
-            onPress={() => router.push(`/post/${item.id}`)}
-            featured={index === 0}
-          />
-        )}
-        contentContainerStyle={{ paddingBottom: 100 }}
-        refreshControl={
-          <RefreshControl
-            refreshing={isRefreshing}
-            onRefresh={onRefresh}
-            tintColor={colors.accentPrimary}
-          />
-        }
-        ListEmptyComponent={
-          isLoading ? (
-            <View style={styles.emptyState}>
-              <ActivityIndicator size="large" color={colors.accentPrimary} />
+      {/* Content Feed */}
+      {isLoading ? (
+        <View style={ds.loadCenter}><ActivityIndicator size="large" color="#2D6A4F" /></View>
+      ) : (
+        <ScrollView
+          ref={scrollRef}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#2D6A4F" />}
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={{ paddingBottom: 80 }}
+        >
+          {posts.length === 0 ? (
+            <View style={ds.emptyFeed}>
+              {/* Show welcome + CTA when no discover content exists yet */}
+              <View style={ds.welcomeCard}>
+                <View style={ds.welcomeIcon}>
+                  <Ionicons name="telescope-outline" size={40} color="#2D6A4F" />
+                </View>
+                <Text style={ds.welcomeTitle}>Welcome to Discover</Text>
+                <Text style={ds.welcomeText}>
+                  This is where local publishers share news, events, culture, food reviews, tips and more about your community.
+                </Text>
+                {!publisherStatus?.is_publisher && publisherStatus?.status !== 'pending' && (
+                  <TouchableOpacity style={ds.welcomeCTA} onPress={() => router.push('/publisher-apply' as any)}>
+                    <Ionicons name="megaphone" size={16} color="#FFF" />
+                    <Text style={ds.welcomeCTAText}>Apply to Become a Local Publisher</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+
+              {/* Suggested People */}
+              {suggestedUsers.length > 0 && renderSuggested()}
+
+              {/* Content Tips */}
+              <View style={ds.tipsSection}>
+                <Text style={ds.sectionTitle}>What publishers share</Text>
+                <View style={ds.tipsGrid}>
+                  {[
+                    { icon: 'newspaper', label: 'Local News', desc: 'What\'s happening nearby' },
+                    { icon: 'calendar', label: 'Events', desc: 'Community gatherings' },
+                    { icon: 'restaurant', label: 'Food Reviews', desc: 'Best eats in town' },
+                    { icon: 'color-palette', label: 'Culture', desc: 'Art, music, traditions' },
+                    { icon: 'bulb', label: 'Tips & Recs', desc: 'Hidden gems & advice' },
+                    { icon: 'flash', label: 'Spotlights', desc: 'People & business stories' },
+                  ].map((t, i) => (
+                    <View key={i} style={ds.tipCard}>
+                      <Ionicons name={t.icon as any} size={22} color="#2D6A4F" />
+                      <Text style={ds.tipLabel}>{t.label}</Text>
+                      <Text style={ds.tipDesc}>{t.desc}</Text>
+                    </View>
+                  ))}
+                </View>
+              </View>
             </View>
           ) : (
-            <View style={styles.emptyState}>
-              <Ionicons name="compass-outline" size={56} color={colors.textHint} />
-              <Text style={styles.emptyTitle}>Nothing to discover yet</Text>
-              <Text style={styles.emptyText}>Be the first to share something!</Text>
-              <TouchableOpacity
-                style={styles.emptyBtn}
-                onPress={() => setShowComposer(true)}
-              >
-                <Text style={styles.emptyBtnText}>Create Post</Text>
-              </TouchableOpacity>
-            </View>
-          )
-        }
-        showsVerticalScrollIndicator={false}
-      />
+            <>
+              {/* Featured post */}
+              {posts[0] && renderFeatured(posts[0])}
 
-      {/* FAB to compose */}
-      <TouchableOpacity
-        style={styles.fab}
-        onPress={() => setShowComposer(true)}
-        activeOpacity={0.85}
-      >
-        <Ionicons name="pencil" size={22} color="#FFFFFF" />
-      </TouchableOpacity>
+              {/* Suggested People */}
+              {suggestedUsers.length > 0 && renderSuggested()}
 
-      {/* Full-screen composer modal */}
-      <FullScreenComposer
-        visible={showComposer}
-        user={user}
-        onClose={() => setShowComposer(false)}
-        onCreated={() => loadPosts()}
-      />
+              {/* Content cards */}
+              <View style={{ paddingHorizontal: 16, gap: 12 }}>
+                {posts.slice(1).map((p) =>
+                  p.category === 'events' ? renderEventCard(p) : renderCard(p)
+                )}
+              </View>
+            </>
+          )}
+        </ScrollView>
+      )}
     </SafeAreaView>
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.bgApp,
-  },
+const ds = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#FAFAF8' },
+  // Header
   header: {
-    backgroundColor: colors.bgCard,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.borderLight,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 16, paddingVertical: 12,
   },
-  topRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
+  headerTitle: { fontSize: 28, fontWeight: '800', color: '#1B4332', letterSpacing: -0.8, fontStyle: 'italic' },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  headerBtn: {
+    width: 40, height: 40, borderRadius: 20, backgroundColor: '#E8F5E9',
+    justifyContent: 'center', alignItems: 'center',
   },
-  locationBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
+  publishBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20, backgroundColor: '#2D6A4F',
   },
-  locationIcon: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: colors.accentPrimaryLight,
-    justifyContent: 'center',
-    alignItems: 'center',
+  publishBtnText: { fontSize: 13, fontWeight: '700', color: '#FFF' },
+  applyBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingHorizontal: 12, paddingVertical: 8, borderRadius: 20,
+    backgroundColor: '#E8F5E9', borderWidth: 1, borderColor: '#A5D6A7',
   },
-  locationText: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: colors.textPrimary,
+  applyBtnText: { fontSize: 12, fontWeight: '600', color: '#2D6A4F' },
+  // Search
+  searchBar: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    marginHorizontal: 16, marginBottom: 10, paddingHorizontal: 14, paddingVertical: 10,
+    backgroundColor: '#F3F0EB', borderRadius: 14,
   },
-  headerActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
+  searchInput: { flex: 1, fontSize: 15, color: '#1B4332' },
+  // Chips
+  chipBar: { paddingVertical: 6, marginBottom: 4 },
+  chip: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20,
+    backgroundColor: '#F3F0EB', borderWidth: 1, borderColor: '#E0D5C5',
   },
-  iconBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: colors.bgSubtle,
-    justifyContent: 'center',
-    alignItems: 'center',
+  chipActive: { backgroundColor: '#2D6A4F', borderColor: '#2D6A4F' },
+  chipText: { fontSize: 13, fontWeight: '600', color: '#5C4033' },
+  chipTextActive: { color: '#FFF' },
+  loadCenter: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingTop: 60 },
+  // Featured
+  featuredCard: {
+    marginHorizontal: 16, marginVertical: 8, borderRadius: 20, overflow: 'hidden',
+    backgroundColor: '#FFF', height: 220,
   },
-  avatarSmall: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: colors.accentPrimary,
-    justifyContent: 'center',
-    alignItems: 'center',
-    overflow: 'hidden',
+  featuredImage: { width: '100%', height: '100%', justifyContent: 'center', alignItems: 'center' },
+  featuredOverlay: {
+    position: 'absolute', bottom: 0, left: 0, right: 0, padding: 16,
+    backgroundColor: 'rgba(0,0,0,0.45)',
   },
-  avatarSmallText: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: '700',
+  categoryBadge: { alignSelf: 'flex-start', paddingHorizontal: 10, paddingVertical: 3, borderRadius: 8, marginBottom: 6 },
+  categoryBadgeText: { fontSize: 10, fontWeight: '800', color: '#FFF', letterSpacing: 1 },
+  featuredTitle: { fontSize: 18, fontWeight: '800', color: '#FFF', lineHeight: 24 },
+  featuredMeta: { flexDirection: 'row', alignItems: 'center', marginTop: 6, gap: 6 },
+  featuredPublisher: { fontSize: 12, fontWeight: '600', color: '#E8E8E8' },
+  featuredDot: { color: '#E8E8E8' },
+  featuredTime: { fontSize: 12, color: '#D4D4D4' },
+  // Content Card
+  card: {
+    flexDirection: 'row', backgroundColor: '#FFF', borderRadius: 16, overflow: 'hidden',
+    borderWidth: 1, borderColor: '#F0ECE5',
   },
-  tabsRow: {
-    paddingHorizontal: 12,
-    gap: 0,
+  cardContent: { flex: 1, padding: 14 },
+  cardImage: { width: 100, height: '100%' },
+  cardHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6 },
+  cardCatDot: { width: 8, height: 8, borderRadius: 4 },
+  cardCatLabel: { fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5 },
+  eventDatePill: {
+    flexDirection: 'row', alignItems: 'center', gap: 3, marginLeft: 'auto',
+    paddingHorizontal: 8, paddingVertical: 2, borderRadius: 8, backgroundColor: '#EDE9FE',
   },
-  tab: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderBottomWidth: 2,
-    borderBottomColor: 'transparent',
+  eventDateText: { fontSize: 10, fontWeight: '600', color: '#7C3AED' },
+  cardTitle: { fontSize: 16, fontWeight: '700', color: '#1B4332', lineHeight: 22, marginBottom: 4 },
+  cardBody: { fontSize: 13, color: '#6B7280', lineHeight: 18 },
+  cardFooter: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 10 },
+  publisherRow: { flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 },
+  publisherAvatar: { width: 22, height: 22, borderRadius: 11, overflow: 'hidden', backgroundColor: '#E8F5E9', justifyContent: 'center', alignItems: 'center' },
+  publisherInitial: { fontSize: 10, fontWeight: '700', color: '#2D6A4F' },
+  publisherName: { fontSize: 12, fontWeight: '600', color: '#6B7280', flex: 1 },
+  cardActions: { flexDirection: 'row', gap: 12 },
+  cardAction: { flexDirection: 'row', alignItems: 'center', gap: 3 },
+  cardActionCount: { fontSize: 11, color: '#9CA3AF' },
+  // Event Card
+  eventCard: {
+    backgroundColor: '#FFF', borderRadius: 16, overflow: 'hidden',
+    borderWidth: 1, borderColor: '#F0ECE5',
   },
-  tabActive: {
-    borderBottomColor: colors.textPrimary,
+  eventImage: { width: '100%', height: 140 },
+  eventBody: { padding: 14 },
+  eventDate: { fontSize: 13, fontWeight: '700', color: '#8B5CF6', marginBottom: 4 },
+  eventTitle: { fontSize: 17, fontWeight: '800', color: '#1B4332', lineHeight: 22 },
+  eventLocation: { fontSize: 12, color: '#6B7280' },
+  eventFooter: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 10 },
+  eventPublisher: { fontSize: 12, fontWeight: '600', color: '#6B7280' },
+  rsvpBtn: { paddingHorizontal: 14, paddingVertical: 6, borderRadius: 14, backgroundColor: '#EDE9FE' },
+  rsvpText: { fontSize: 12, fontWeight: '700', color: '#7C3AED' },
+  // Suggested
+  suggestedSection: { marginVertical: 16 },
+  sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, marginBottom: 12 },
+  sectionTitle: { fontSize: 18, fontWeight: '800', color: '#1B4332' },
+  seeAll: { fontSize: 13, fontWeight: '600', color: '#2D6A4F' },
+  suggestedCard: {
+    width: 140, backgroundColor: '#FFF', borderRadius: 16, padding: 14, alignItems: 'center',
+    borderWidth: 1, borderColor: '#F0ECE5',
   },
-  tabText: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: colors.textHint,
+  suggestedAvatar: { width: 52, height: 52, borderRadius: 26, overflow: 'hidden', backgroundColor: '#E8F5E9', justifyContent: 'center', alignItems: 'center', marginBottom: 8 },
+  suggestedInitial: { fontSize: 20, fontWeight: '700', color: '#2D6A4F' },
+  suggestedName: { fontSize: 14, fontWeight: '700', color: '#1B4332', textAlign: 'center' },
+  suggestedBio: { fontSize: 11, color: '#6B7280', textAlign: 'center', marginTop: 2, lineHeight: 15 },
+  followBtn: { marginTop: 8, paddingHorizontal: 20, paddingVertical: 6, borderRadius: 14, backgroundColor: '#2D6A4F' },
+  followText: { fontSize: 12, fontWeight: '700', color: '#FFF' },
+  // Empty / Welcome
+  emptyFeed: { paddingBottom: 40 },
+  welcomeCard: {
+    marginHorizontal: 16, marginVertical: 16, padding: 24, backgroundColor: '#FFF',
+    borderRadius: 20, alignItems: 'center', borderWidth: 1, borderColor: '#E8F5E9',
   },
-  tabTextActive: {
-    fontWeight: '700',
-    color: colors.textPrimary,
+  welcomeIcon: {
+    width: 72, height: 72, borderRadius: 36, backgroundColor: '#E8F5E9',
+    justifyContent: 'center', alignItems: 'center', marginBottom: 16,
   },
-  tabBadge: {
-    backgroundColor: '#16A34A',
-    borderRadius: 8,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
+  welcomeTitle: { fontSize: 22, fontWeight: '800', color: '#1B4332', marginBottom: 8 },
+  welcomeText: { fontSize: 14, color: '#6B7280', textAlign: 'center', lineHeight: 20, paddingHorizontal: 12 },
+  welcomeCTA: {
+    flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 20,
+    paddingHorizontal: 20, paddingVertical: 12, borderRadius: 20, backgroundColor: '#2D6A4F',
   },
-  tabBadgeText: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: '#FFFFFF',
+  welcomeCTAText: { fontSize: 14, fontWeight: '700', color: '#FFF' },
+  // Tips
+  tipsSection: { paddingHorizontal: 16, marginTop: 8 },
+  tipsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 12 },
+  tipCard: {
+    width: (SW - 42) / 2, backgroundColor: '#FFF', borderRadius: 16, padding: 16,
+    borderWidth: 1, borderColor: '#F0ECE5',
   },
-  emptyState: {
-    alignItems: 'center',
-    paddingVertical: 60,
-  },
-  emptyTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: colors.textPrimary,
-    marginTop: 16,
-  },
-  emptyText: {
-    fontSize: 13,
-    color: colors.textHint,
-    marginTop: 4,
-  },
-  emptyBtn: {
-    backgroundColor: colors.accentPrimary,
-    paddingHorizontal: 24,
-    paddingVertical: 12,
-    borderRadius: 20,
-    marginTop: 20,
-  },
-  emptyBtnText: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#FFFFFF',
-  },
-  fab: {
-    position: 'absolute',
-    bottom: 100,
-    right: 20,
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: colors.accentPrimary,
-    justifyContent: 'center',
-    alignItems: 'center',
-    ...shadows.elevation3,
-  },
+  tipLabel: { fontSize: 14, fontWeight: '700', color: '#1B4332', marginTop: 8 },
+  tipDesc: { fontSize: 12, color: '#6B7280', marginTop: 2 },
 });

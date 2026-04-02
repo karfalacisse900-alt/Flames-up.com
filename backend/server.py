@@ -891,6 +891,159 @@ async def get_suggested_users(current_user: dict = Depends(get_current_user)):
 
 # ===================== PROXIMITY VERIFICATION =====================
 
+# ===================== LOCAL PUBLISHER SYSTEM =====================
+
+class PublisherApplication(BaseModel):
+    business_name: str
+    category: str  # "food", "culture", "news", "events", "lifestyle", "tech", "health", "education"
+    about: str
+    phone: str
+    website: Optional[str] = None
+    social_instagram: Optional[str] = None
+    social_twitter: Optional[str] = None
+    social_tiktok: Optional[str] = None
+    address: Optional[str] = None
+    city: str = ""
+    why_publish: str
+
+class DiscoverPost(BaseModel):
+    title: str
+    content: str
+    category: str  # "news", "events", "culture", "food", "lifestyle", "tech", "tips", "spotlight"
+    image: Optional[str] = None
+    images: Optional[List[str]] = None
+    event_date: Optional[str] = None  # ISO date for events
+    event_location: Optional[str] = None
+    event_address: Optional[str] = None
+    link_url: Optional[str] = None
+    link_title: Optional[str] = None
+
+@api_router.post("/publisher/apply")
+async def apply_publisher(data: PublisherApplication, current_user: dict = Depends(get_current_user)):
+    """Submit an application to become a local publisher"""
+    existing = await db.publisher_applications.find_one({"user_id": current_user["id"], "status": {"$in": ["pending", "approved"]}})
+    if existing:
+        return {"detail": "Application already exists", "status": existing["status"]}
+    
+    application = {
+        "id": str(uuid.uuid4()),
+        "user_id": current_user["id"],
+        "user_username": current_user["username"],
+        "user_full_name": current_user["full_name"],
+        "business_name": data.business_name,
+        "category": data.category,
+        "about": data.about,
+        "phone": data.phone,
+        "website": data.website,
+        "social_instagram": data.social_instagram,
+        "social_twitter": data.social_twitter,
+        "social_tiktok": data.social_tiktok,
+        "address": data.address,
+        "city": data.city,
+        "why_publish": data.why_publish,
+        "status": "pending",
+        "created_at": datetime.utcnow(),
+    }
+    await db.publisher_applications.insert_one(application)
+    return {"id": application["id"], "status": "pending", "message": "Your application has been submitted for review."}
+
+@api_router.get("/publisher/status")
+async def get_publisher_status(current_user: dict = Depends(get_current_user)):
+    """Check if user is an approved publisher"""
+    app = await db.publisher_applications.find_one({"user_id": current_user["id"]}, sort=[("created_at", -1)])
+    if not app:
+        return {"is_publisher": False, "status": "none"}
+    return {"is_publisher": app["status"] == "approved", "status": app["status"], "business_name": app.get("business_name")}
+
+@api_router.post("/publisher/approve/{user_id}")
+async def approve_publisher(user_id: str, current_user: dict = Depends(get_current_user)):
+    """Approve a publisher application (admin only - for now any user can approve for testing)"""
+    await db.publisher_applications.update_one(
+        {"user_id": user_id, "status": "pending"},
+        {"$set": {"status": "approved", "approved_at": datetime.utcnow()}}
+    )
+    await db.users.update_one({"id": user_id}, {"$set": {"is_publisher": True}})
+    return {"approved": True}
+
+# ===================== DISCOVER CONTENT =====================
+
+@api_router.post("/discover/posts")
+async def create_discover_post(data: DiscoverPost, current_user: dict = Depends(get_current_user)):
+    """Create a discover post (publishers only)"""
+    pub = await db.publisher_applications.find_one({"user_id": current_user["id"], "status": "approved"})
+    if not pub:
+        raise HTTPException(status_code=403, detail="Only approved local publishers can post on Discover")
+    
+    post = {
+        "id": str(uuid.uuid4()),
+        "user_id": current_user["id"],
+        "user_username": current_user["username"],
+        "user_full_name": current_user["full_name"],
+        "user_profile_image": current_user.get("profile_image", ""),
+        "publisher_name": pub.get("business_name", current_user["full_name"]),
+        "publisher_category": pub.get("category", "general"),
+        "title": data.title,
+        "content": data.content,
+        "category": data.category,
+        "image": data.image,
+        "images": data.images or [],
+        "event_date": data.event_date,
+        "event_location": data.event_location,
+        "event_address": data.event_address,
+        "link_url": data.link_url,
+        "link_title": data.link_title,
+        "likes_count": 0,
+        "comments_count": 0,
+        "views_count": 0,
+        "created_at": datetime.utcnow(),
+    }
+    await db.discover_posts.insert_one(post)
+    return {k: v for k, v in post.items() if k != "_id"}
+
+@api_router.get("/discover/feed")
+async def get_discover_feed(
+    category: Optional[str] = None,
+    skip: int = 0,
+    limit: int = 20,
+    current_user: dict = Depends(get_current_user)
+):
+    """Get discover feed — filtered by category"""
+    query = {}
+    if category and category != "all":
+        query["category"] = category
+    
+    posts = await db.discover_posts.find(query).sort("created_at", -1).skip(skip).limit(limit).to_list(limit)
+    return [{k: v for k, v in p.items() if k != "_id"} for p in posts]
+
+@api_router.post("/discover/posts/{post_id}/like")
+async def like_discover_post(post_id: str, current_user: dict = Depends(get_current_user)):
+    """Like a discover post"""
+    existing = await db.discover_likes.find_one({"user_id": current_user["id"], "post_id": post_id})
+    if existing:
+        await db.discover_likes.delete_one({"_id": existing["_id"]})
+        await db.discover_posts.update_one({"id": post_id}, {"$inc": {"likes_count": -1}})
+        return {"liked": False}
+    await db.discover_likes.insert_one({"user_id": current_user["id"], "post_id": post_id, "created_at": datetime.utcnow()})
+    await db.discover_posts.update_one({"id": post_id}, {"$inc": {"likes_count": 1}})
+    return {"liked": True}
+
+@api_router.get("/discover/categories")
+async def get_discover_categories(current_user: dict = Depends(get_current_user)):
+    """Get available discover categories"""
+    return [
+        {"id": "all", "label": "For You", "icon": "sparkles"},
+        {"id": "news", "label": "Local News", "icon": "newspaper"},
+        {"id": "events", "label": "Events", "icon": "calendar"},
+        {"id": "culture", "label": "Culture", "icon": "color-palette"},
+        {"id": "food", "label": "Food & Drink", "icon": "restaurant"},
+        {"id": "lifestyle", "label": "Lifestyle", "icon": "heart"},
+        {"id": "tech", "label": "Tech & Apps", "icon": "phone-portrait"},
+        {"id": "tips", "label": "Tips & Recs", "icon": "bulb"},
+        {"id": "spotlight", "label": "Spotlights", "icon": "flash"},
+    ]
+
+# ===================== PROXIMITY VERIFICATION =====================
+
 class ProximityCheck(BaseModel):
     user_lat: float
     user_lng: float
