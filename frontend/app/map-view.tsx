@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -10,6 +10,7 @@ import {
   Platform,
   Dimensions,
   ScrollView,
+  Animated,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
@@ -19,20 +20,49 @@ import * as Location from 'expo-location';
 import { colors } from '../src/utils/theme';
 import api from '../src/api/client';
 
-const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
-const GOOGLE_MAPS_KEY = 'AIzaSyCEY8QKlhF-Kxlo8Sxv8Z0bnTVVzTBTEIw';
+const { width: SW, height: SH } = Dimensions.get('window');
+const GKEY = 'AIzaSyCEY8QKlhF-Kxlo8Sxv8Z0bnTVVzTBTEIw';
+
+const PLACE_TYPES = [
+  { id: 'restaurant', label: 'Restaurants', icon: 'restaurant' },
+  { id: 'cafe', label: 'Cafes', icon: 'cafe' },
+  { id: 'bar', label: 'Bars', icon: 'wine' },
+  { id: 'store', label: 'Shops', icon: 'bag-handle' },
+  { id: 'gym', label: 'Gyms', icon: 'barbell' },
+  { id: 'park', label: 'Parks', icon: 'leaf' },
+];
+
+// Warm modern map style (Popeyes/Chick-fil-A inspired)
+const MAP_STYLE = JSON.stringify([
+  {"featureType":"all","elementType":"geometry","stylers":[{"color":"#F5F0EB"}]},
+  {"featureType":"all","elementType":"labels.text.fill","stylers":[{"color":"#5C4033"}]},
+  {"featureType":"all","elementType":"labels.text.stroke","stylers":[{"color":"#FFFFFF"},{"weight":3}]},
+  {"featureType":"water","elementType":"geometry","stylers":[{"color":"#C5DAE8"}]},
+  {"featureType":"road.highway","elementType":"geometry.fill","stylers":[{"color":"#FFF3E0"}]},
+  {"featureType":"road.highway","elementType":"geometry.stroke","stylers":[{"color":"#E8D5B7"}]},
+  {"featureType":"road.arterial","elementType":"geometry.fill","stylers":[{"color":"#FFFFFF"}]},
+  {"featureType":"road.local","elementType":"geometry.fill","stylers":[{"color":"#FFFFFF"}]},
+  {"featureType":"landscape.natural","elementType":"geometry","stylers":[{"color":"#EDE8E0"}]},
+  {"featureType":"landscape.man_made","elementType":"geometry","stylers":[{"color":"#F0ECE5"}]},
+  {"featureType":"poi","elementType":"geometry","stylers":[{"color":"#E5DED3"}]},
+  {"featureType":"poi","elementType":"labels","stylers":[{"visibility":"off"}]},
+  {"featureType":"poi.park","elementType":"geometry","stylers":[{"color":"#D4E6C3"}]},
+  {"featureType":"transit","stylers":[{"visibility":"off"}]},
+  {"featureType":"administrative","elementType":"geometry.stroke","stylers":[{"color":"#D4C8B8"}]}
+]);
 
 export default function MapViewScreen() {
   const router = useRouter();
-  const { type } = useLocalSearchParams<{ type: string }>();
+  const params = useLocalSearchParams<{ type: string }>();
   const [places, setPlaces] = useState<any[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [userLat, setUserLat] = useState(40.7128);
-  const [userLng, setUserLng] = useState(-74.006);
-  const [locationName, setLocationName] = useState('New York');
-  const [selectedPlace, setSelectedPlace] = useState<any>(null);
-  const [mapExpanded, setMapExpanded] = useState(false);
-  const webViewRef = useRef<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [lat, setLat] = useState(40.7128);
+  const [lng, setLng] = useState(-74.006);
+  const [cityName, setCityName] = useState('New York');
+  const [selected, setSelected] = useState<any>(null);
+  const [activeType, setActiveType] = useState(params.type || 'restaurant');
+  const cardAnim = useRef(new Animated.Value(200)).current;
+  const wvRef = useRef<any>(null);
 
   useEffect(() => {
     (async () => {
@@ -40,360 +70,340 @@ export default function MapViewScreen() {
         const { status } = await Location.requestForegroundPermissionsAsync();
         if (status === 'granted') {
           const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-          setUserLat(loc.coords.latitude);
-          setUserLng(loc.coords.longitude);
+          setLat(loc.coords.latitude);
+          setLng(loc.coords.longitude);
           try {
-            const geo = await Location.reverseGeocodeAsync({
-              latitude: loc.coords.latitude,
-              longitude: loc.coords.longitude,
-            });
-            if (geo[0]) setLocationName(geo[0].city || geo[0].district || 'Your Area');
+            const geo = await Location.reverseGeocodeAsync({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
+            if (geo[0]) setCityName(geo[0].city || geo[0].district || 'Your Area');
           } catch {}
         }
       } catch {}
     })();
   }, []);
 
+  useEffect(() => { loadPlaces(); }, [lat, lng, activeType]);
+
   useEffect(() => {
-    loadPlaces();
-  }, [userLat, userLng]);
+    if (selected) {
+      Animated.spring(cardAnim, { toValue: 0, useNativeDriver: true, friction: 8 }).start();
+    } else {
+      Animated.timing(cardAnim, { toValue: 200, duration: 200, useNativeDriver: true }).start();
+    }
+  }, [selected]);
 
   const loadPlaces = async () => {
+    setLoading(true);
     try {
-      const response = await api.get('/google-places/nearby', {
-        params: { type: type || 'restaurant', lat: userLat, lng: userLng, radius: 5000 },
-      });
-      setPlaces(response.data);
-    } catch (error) {
-      console.log('Error loading places:', error);
-    } finally {
-      setIsLoading(false);
-    }
+      const r = await api.get('/google-places/nearby', { params: { type: activeType, lat, lng, radius: 5000 } });
+      setPlaces(r.data);
+    } catch (e) { console.log('Places error', e); }
+    finally { setLoading(false); }
   };
 
-  const openInMaps = (place: any) => {
-    const lat = place.lat || userLat;
-    const lng = place.lng || userLng;
-    const label = encodeURIComponent(place.name);
-    const url = Platform.select({
-      ios: `maps:0,0?q=${label}@${lat},${lng}`,
-      android: `geo:${lat},${lng}?q=${lat},${lng}(${label})`,
-      default: `https://www.google.com/maps/search/?api=1&query=${lat},${lng}&query_place_id=${place.place_id}`,
+  const openNav = (p: any) => {
+    const u = Platform.select({
+      ios: `maps:0,0?q=${encodeURIComponent(p.name)}@${p.lat},${p.lng}`,
+      android: `geo:${p.lat},${p.lng}?q=${p.lat},${p.lng}(${encodeURIComponent(p.name)})`,
+      default: `https://www.google.com/maps/dir/?api=1&destination=${p.lat},${p.lng}`,
     });
-    if (url) Linking.openURL(url);
+    if (u) Linking.openURL(u);
   };
 
-  const generateMapHTML = () => {
-    const markersJS = places.map((p, i) => `
-      var marker${i} = new google.maps.Marker({
-        position: { lat: ${p.lat || userLat}, lng: ${p.lng || userLng} },
-        map: map,
-        title: "${(p.name || '').replace(/"/g, '\\"')}",
-        icon: {
-          path: google.maps.SymbolPath.CIRCLE,
-          scale: 10,
-          fillColor: "${p.open_now === false ? '#EF4444' : '#10B981'}",
-          fillOpacity: 1,
-          strokeWeight: 2.5,
-          strokeColor: '#FFFFFF',
-        },
-        label: {
-          text: "${i + 1}",
-          color: "#FFFFFF",
-          fontSize: "10px",
-          fontWeight: "bold"
-        }
-      });
-
-      var info${i} = new google.maps.InfoWindow({
-        content: '<div style="font-family:-apple-system,BlinkMacSystemFont,sans-serif;padding:4px;min-width:160px">' +
-          '<div style="font-weight:700;font-size:14px;margin-bottom:4px">${(p.name || '').replace(/'/g, "\\'").replace(/"/g, '\\"')}</div>' +
-          '<div style="display:flex;align-items:center;gap:4px;margin-bottom:4px">' +
-            '<span style="color:#F59E0B;font-weight:600">${p.rating ? p.rating.toFixed(1) : '—'} ★</span>' +
-            '<span style="color:${p.open_now === false ? '#EF4444' : '#10B981'};font-size:12px;font-weight:600">${p.open_now === false ? 'Closed' : 'Open'}</span>' +
-          '</div>' +
-          '${p.vicinity ? '<div style="font-size:12px;color:#6B7280">' + (p.vicinity || '').replace(/'/g, "\\'").replace(/"/g, '\\"') + '</div>' : ''}' +
-        '</div>'
-      });
-
-      marker${i}.addListener('click', function() {
-        ${places.map((_, j) => `info${j}.close();`).join('\n')}
-        info${i}.open(map, marker${i});
-        window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'markerClick', index: ${i} }));
-      });
-    `).join('\n');
-
-    return `
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-      <style>
-        * { margin: 0; padding: 0; }
-        html, body, #map { width: 100%; height: 100%; }
-      </style>
-    </head>
-    <body>
-      <div id="map"></div>
-      <script>
-        function initMap() {
-          var map = new google.maps.Map(document.getElementById('map'), {
-            center: { lat: ${userLat}, lng: ${userLng} },
-            zoom: 14,
-            mapTypeControl: false,
-            streetViewControl: false,
-            fullscreenControl: false,
-            zoomControl: true,
-            styles: [
-              { featureType: 'poi', elementType: 'labels', stylers: [{ visibility: 'off' }] },
-              { featureType: 'transit', stylers: [{ visibility: 'off' }] }
-            ]
-          });
-
-          // User location marker
-          new google.maps.Marker({
-            position: { lat: ${userLat}, lng: ${userLng} },
-            map: map,
-            icon: {
-              path: google.maps.SymbolPath.CIRCLE,
-              scale: 8,
-              fillColor: '#3B82F6',
-              fillOpacity: 1,
-              strokeWeight: 3,
-              strokeColor: '#FFFFFF',
-            },
-            title: 'You',
-            zIndex: 999,
-          });
-
-          // User accuracy circle
-          new google.maps.Circle({
-            map: map,
-            center: { lat: ${userLat}, lng: ${userLng} },
-            radius: 50,
-            fillColor: '#3B82F6',
-            fillOpacity: 0.1,
-            strokeColor: '#3B82F6',
-            strokeOpacity: 0.3,
-            strokeWeight: 1,
-          });
-
-          ${markersJS}
-        }
-      </script>
-      <script src="https://maps.googleapis.com/maps/api/js?key=${GOOGLE_MAPS_KEY}&callback=initMap" async defer></script>
-    </body>
-    </html>
-    `;
-  };
-
-  const handleWebViewMessage = (event: any) => {
+  const handleMsg = (e: any) => {
     try {
-      const data = JSON.parse(event.nativeEvent.data);
-      if (data.type === 'markerClick' && places[data.index]) {
-        setSelectedPlace(places[data.index]);
-      }
+      const d = JSON.parse(e.nativeEvent.data);
+      if (d.type === 'select' && d.idx !== undefined) setSelected(places[d.idx]);
+      if (d.type === 'deselect') setSelected(null);
     } catch {}
   };
 
-  const mapHeight = mapExpanded ? SCREEN_HEIGHT * 0.65 : SCREEN_HEIGHT * 0.4;
+  const mapHTML = useCallback(() => {
+    const markerColor = '#2D6A4F';
+    const markers = places.map((p, i) => `
+      (function(){
+        var el = document.createElement('div');
+        el.className = 'pin';
+        el.innerHTML = '<div class="pin-body" style="background:${p.open_now === false ? '#B91C1C' : markerColor}"><span>${i+1}</span></div><div class="pin-tail" style="border-top-color:${p.open_now === false ? '#B91C1C' : markerColor}"></div>';
+        var ov = new google.maps.OverlayView();
+        ov.pos = new google.maps.LatLng(${p.lat||lat},${p.lng||lng});
+        ov.onAdd = function(){ this.getPanes().floatPane.appendChild(el); };
+        ov.draw = function(){ var pt = this.getProjection().fromLatLngToDivPixel(this.pos); if(pt){el.style.left=(pt.x-16)+'px';el.style.top=(pt.y-44)+'px';} };
+        ov.onRemove = function(){ el.remove(); };
+        ov.setMap(map);
+        el.onclick = function(e){
+          e.stopPropagation();
+          map.panTo(ov.pos);
+          window.ReactNativeWebView.postMessage(JSON.stringify({type:'select',idx:${i}}));
+          document.querySelectorAll('.pin-body').forEach(function(p){p.style.transform='scale(1)';});
+          el.querySelector('.pin-body').style.transform='scale(1.3)';
+        };
+      })();
+    `).join('\n');
+
+    return `<!DOCTYPE html><html><head>
+    <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+    <style>
+    *{margin:0;padding:0;box-sizing:border-box}
+    html,body,#map{width:100%;height:100%}
+    .pin{position:absolute;cursor:pointer;z-index:10;transition:transform .15s}
+    .pin-body{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+      box-shadow:0 2px 8px rgba(0,0,0,.25);border:2.5px solid #fff;transition:transform .2s cubic-bezier(.175,.885,.32,1.275)}
+    .pin-body span{color:#fff;font-size:12px;font-weight:800;font-family:-apple-system,sans-serif}
+    .pin-tail{width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-top:8px solid;margin:auto;margin-top:-2px}
+    .user-dot{width:16px;height:16px;border-radius:50%;background:#3B82F6;border:3px solid #fff;box-shadow:0 0 0 4px rgba(59,130,246,.25);position:absolute;z-index:999}
+    .pulse{position:absolute;width:60px;height:60px;border-radius:50%;background:rgba(59,130,246,.12);animation:pulse 2s infinite;z-index:998}
+    @keyframes pulse{0%{transform:scale(.5);opacity:1}100%{transform:scale(2);opacity:0}}
+    </style></head><body>
+    <div id="map"></div>
+    <script>
+    function initMap(){
+      var map = new google.maps.Map(document.getElementById('map'),{
+        center:{lat:${lat},lng:${lng}},zoom:14,
+        mapTypeControl:false,streetViewControl:false,fullscreenControl:false,
+        zoomControl:false,
+        gestureHandling:'greedy',
+        styles:${MAP_STYLE}
+      });
+
+      // User location with pulse
+      var userOv = new google.maps.OverlayView();
+      userOv.onAdd = function(){
+        var d = document.createElement('div');
+        d.style.position='relative';
+        d.innerHTML='<div class="pulse"></div><div class="user-dot"></div>';
+        this.el = d; this.getPanes().floatPane.appendChild(d);
+      };
+      userOv.draw = function(){
+        var pt = this.getProjection().fromLatLngToDivPixel(new google.maps.LatLng(${lat},${lng}));
+        if(pt){this.el.style.position='absolute';this.el.style.left=(pt.x-30)+'px';this.el.style.top=(pt.y-30)+'px';}
+      };
+      userOv.onRemove = function(){this.el.remove();};
+      userOv.setMap(map);
+
+      ${markers}
+
+      map.addListener('click',function(){
+        window.ReactNativeWebView.postMessage(JSON.stringify({type:'deselect'}));
+        document.querySelectorAll('.pin-body').forEach(function(p){p.style.transform='scale(1)';});
+      });
+    }
+    </script>
+    <script src="https://maps.googleapis.com/maps/api/js?key=${GKEY}&callback=initMap" async defer></script>
+    </body></html>`;
+  }, [places, lat, lng]);
 
   return (
     <SafeAreaView style={s.container} edges={['top']}>
-      {/* Header */}
+      {/* Minimal Header */}
       <View style={s.header}>
         <TouchableOpacity style={s.backBtn} onPress={() => router.back()}>
-          <Ionicons name="arrow-back" size={22} color={colors.textPrimary} />
+          <Ionicons name="arrow-back" size={22} color="#1B4332" />
         </TouchableOpacity>
         <View style={{ flex: 1 }}>
-          <Text style={s.headerTitle}>Map View</Text>
-          <Text style={s.headerSubtitle}>{locationName} · {places.length} places</Text>
+          <Text style={s.cityName}>{cityName}</Text>
+          <Text style={s.subtitle}>{places.length} places nearby</Text>
         </View>
-        <TouchableOpacity
-          style={s.expandBtn}
-          onPress={() => setMapExpanded(!mapExpanded)}
-        >
-          <Ionicons name={mapExpanded ? 'contract' : 'expand'} size={18} color={colors.accentPrimary} />
+        <TouchableOpacity style={s.locateBtn} onPress={loadPlaces}>
+          <Ionicons name="locate" size={20} color="#2D6A4F" />
         </TouchableOpacity>
       </View>
 
-      {/* Real Google Map */}
-      <View style={[s.mapContainer, { height: mapHeight }]}>
-        {isLoading ? (
-          <View style={s.loadingCenter}>
-            <ActivityIndicator size="large" color={colors.accentPrimary} />
-            <Text style={s.loadingText}>Loading map...</Text>
+      {/* Filter Chips - scrollable on top of map */}
+      <View style={s.chipBar}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 16, gap: 8 }}>
+          {PLACE_TYPES.map((t) => (
+            <TouchableOpacity
+              key={t.id}
+              style={[s.chip, activeType === t.id && s.chipActive]}
+              onPress={() => { setActiveType(t.id); setSelected(null); }}
+            >
+              <Ionicons name={t.icon as any} size={14} color={activeType === t.id ? '#FFF' : '#5C4033'} />
+              <Text style={[s.chipText, activeType === t.id && s.chipTextActive]}>{t.label}</Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+      </View>
+
+      {/* Full-screen Map */}
+      <View style={s.mapWrap}>
+        {loading && places.length === 0 ? (
+          <View style={s.loadCenter}>
+            <ActivityIndicator size="large" color="#2D6A4F" />
+            <Text style={s.loadText}>Finding places...</Text>
           </View>
         ) : (
           <WebView
-            ref={webViewRef}
-            source={{ html: generateMapHTML() }}
+            ref={wvRef}
+            source={{ html: mapHTML() }}
             style={{ flex: 1 }}
-            onMessage={handleWebViewMessage}
+            onMessage={handleMsg}
             javaScriptEnabled
             domStorageEnabled
             startInLoadingState
             renderLoading={() => (
-              <View style={s.loadingCenter}>
-                <ActivityIndicator size="large" color={colors.accentPrimary} />
-              </View>
+              <View style={s.loadCenter}><ActivityIndicator size="large" color="#2D6A4F" /></View>
             )}
           />
         )}
+
+        {/* Zoom controls */}
+        <View style={s.zoomBtns}>
+          <TouchableOpacity style={s.zoomBtn} onPress={() => wvRef.current?.injectJavaScript('map.setZoom(map.getZoom()+1);true;')}>
+            <Ionicons name="add" size={20} color="#1B4332" />
+          </TouchableOpacity>
+          <View style={s.zoomDivider} />
+          <TouchableOpacity style={s.zoomBtn} onPress={() => wvRef.current?.injectJavaScript('map.setZoom(map.getZoom()-1);true;')}>
+            <Ionicons name="remove" size={20} color="#1B4332" />
+          </TouchableOpacity>
+        </View>
       </View>
 
-      {/* Selected Place Preview */}
-      {selectedPlace && (
-        <TouchableOpacity
-          style={s.selectedCard}
-          onPress={() => router.push(`/place/${selectedPlace.place_id}`)}
-          activeOpacity={0.8}
-        >
-          {selectedPlace.photo_url ? (
-            <Image source={{ uri: selectedPlace.photo_url }} style={s.selectedImage} />
-          ) : (
-            <View style={[s.selectedImage, s.selectedImagePlaceholder]}>
-              <Ionicons name="image-outline" size={24} color={colors.textHint} />
-            </View>
-          )}
-          <View style={s.selectedInfo}>
-            <Text style={s.selectedName} numberOfLines={1}>{selectedPlace.name}</Text>
-            <View style={s.selectedMeta}>
-              <Ionicons name="star" size={12} color="#FCD34D" />
-              <Text style={s.selectedRating}>{selectedPlace.rating?.toFixed(1) || '—'}</Text>
-              {selectedPlace.open_now !== undefined && (
-                <View style={[s.statusBadge, { backgroundColor: selectedPlace.open_now ? '#DCFCE7' : '#FEE2E2' }]}>
-                  <Text style={[s.statusText, { color: selectedPlace.open_now ? '#16A34A' : '#DC2626' }]}>
-                    {selectedPlace.open_now ? 'Open' : 'Closed'}
-                  </Text>
+      {/* Bottom Place Card — animated slide up */}
+      <Animated.View style={[s.bottomCard, { transform: [{ translateY: cardAnim }] }]}>
+        {selected && (
+          <TouchableOpacity
+            activeOpacity={0.9}
+            onPress={() => router.push(`/place/${selected.place_id}`)}
+            style={s.cardInner}
+          >
+            {/* Drag Handle */}
+            <View style={s.dragHandle} />
+
+            <View style={s.cardRow}>
+              {selected.photo_url ? (
+                <Image source={{ uri: selected.photo_url }} style={s.cardImg} />
+              ) : (
+                <View style={[s.cardImg, s.cardImgFallback]}>
+                  <Ionicons name="image-outline" size={28} color="#A8A29E" />
                 </View>
               )}
-            </View>
-            {selectedPlace.vicinity && (
-              <Text style={s.selectedAddress} numberOfLines={1}>{selectedPlace.vicinity}</Text>
-            )}
-          </View>
-          <TouchableOpacity style={s.navigateBtn} onPress={() => openInMaps(selectedPlace)}>
-            <Ionicons name="navigate" size={20} color={colors.accentPrimary} />
-          </TouchableOpacity>
-        </TouchableOpacity>
-      )}
-
-      {/* Places List */}
-      <ScrollView
-        style={s.list}
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingBottom: 60 }}
-      >
-        {places.map((place, idx) => (
-          <TouchableOpacity
-            key={place.place_id}
-            style={[s.placeCard, selectedPlace?.place_id === place.place_id && s.placeCardSelected]}
-            onPress={() => {
-              setSelectedPlace(place);
-              router.push(`/place/${place.place_id}`);
-            }}
-          >
-            <View style={s.placeIndex}>
-              <Text style={s.placeIndexText}>{idx + 1}</Text>
-            </View>
-            {place.photo_url ? (
-              <Image source={{ uri: place.photo_url }} style={s.placeImage} />
-            ) : (
-              <View style={[s.placeImage, s.placeImagePlaceholder]}>
-                <Ionicons name="image-outline" size={20} color={colors.textHint} />
-              </View>
-            )}
-            <View style={s.placeInfo}>
-              <Text style={s.placeName} numberOfLines={1}>{place.name}</Text>
-              <View style={s.placeRatingRow}>
-                <Ionicons name="star" size={12} color="#FCD34D" />
-                <Text style={s.placeRating}>{place.rating?.toFixed(1) || '—'}</Text>
-                {place.open_now !== undefined && (
-                  <View style={[s.statusBadge, { backgroundColor: place.open_now ? '#DCFCE7' : '#FEE2E2' }]}>
-                    <Text style={[s.statusText, { color: place.open_now ? '#16A34A' : '#DC2626' }]}>
-                      {place.open_now ? 'Open' : 'Closed'}
+              <View style={s.cardInfo}>
+                <Text style={s.cardName} numberOfLines={1}>{selected.name}</Text>
+                <View style={s.cardMeta}>
+                  <View style={s.ratingPill}>
+                    <Ionicons name="star" size={12} color="#FCD34D" />
+                    <Text style={s.ratingText}>{selected.rating?.toFixed(1) || '—'}</Text>
+                  </View>
+                  <View style={[s.statusPill, { backgroundColor: selected.open_now !== false ? '#DCFCE7' : '#FEE2E2' }]}>
+                    <View style={[s.statusDot, { backgroundColor: selected.open_now !== false ? '#16A34A' : '#DC2626' }]} />
+                    <Text style={[s.statusLabel, { color: selected.open_now !== false ? '#16A34A' : '#DC2626' }]}>
+                      {selected.open_now !== false ? 'Open' : 'Closed'}
                     </Text>
                   </View>
+                  {selected.user_ratings_total && (
+                    <Text style={s.reviewCount}>({selected.user_ratings_total})</Text>
+                  )}
+                </View>
+                {selected.vicinity && (
+                  <Text style={s.cardAddress} numberOfLines={1}>{selected.vicinity}</Text>
                 )}
               </View>
-              {place.vicinity && (
-                <Text style={s.placeAddress} numberOfLines={1}>{place.vicinity}</Text>
-              )}
             </View>
-            <TouchableOpacity
-              style={s.dirNavBtn}
-              onPress={() => openInMaps(place)}
-            >
-              <Ionicons name="navigate" size={18} color={colors.accentPrimary} />
-            </TouchableOpacity>
+
+            <View style={s.cardActions}>
+              <TouchableOpacity style={s.actionPrimary} onPress={() => openNav(selected)}>
+                <Ionicons name="navigate" size={16} color="#FFF" />
+                <Text style={s.actionPrimaryText}>Directions</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={s.actionSecondary}
+                onPress={() => router.push({
+                  pathname: '/checkin-post',
+                  params: { placeId: selected.place_id, placeName: selected.name, placeLat: String(selected.lat), placeLng: String(selected.lng) },
+                } as any)}
+              >
+                <Ionicons name="location" size={16} color="#2D6A4F" />
+                <Text style={s.actionSecondaryText}>Check In</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={s.actionSecondary} onPress={() => router.push(`/place/${selected.place_id}`)}>
+                <Ionicons name="information-circle" size={16} color="#2D6A4F" />
+                <Text style={s.actionSecondaryText}>Details</Text>
+              </TouchableOpacity>
+            </View>
           </TouchableOpacity>
-        ))}
-      </ScrollView>
+        )}
+      </Animated.View>
     </SafeAreaView>
   );
 }
 
 const s = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.bgApp },
+  container: { flex: 1, backgroundColor: '#F5F0EB' },
+  // Header
   header: {
-    flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12,
-    borderBottomWidth: 1, borderBottomColor: colors.borderSubtle, gap: 12,
+    flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 10,
+    backgroundColor: '#FFFFFF', borderBottomWidth: 1, borderBottomColor: '#E8E0D5', gap: 12, zIndex: 10,
   },
-  backBtn: { width: 44, height: 44, justifyContent: 'center', alignItems: 'center' },
-  headerTitle: { fontSize: 18, fontWeight: '700', color: colors.textPrimary },
-  headerSubtitle: { fontSize: 12, color: colors.textHint, marginTop: 1 },
-  expandBtn: {
-    width: 40, height: 40, borderRadius: 20, backgroundColor: colors.accentPrimaryLight,
-    justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: colors.accentPrimary + '30',
+  backBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#F5F0EB', justifyContent: 'center', alignItems: 'center' },
+  cityName: { fontSize: 20, fontWeight: '800', color: '#1B4332', letterSpacing: -0.5 },
+  subtitle: { fontSize: 12, color: '#8B7355', marginTop: 1, fontWeight: '500' },
+  locateBtn: {
+    width: 40, height: 40, borderRadius: 20, backgroundColor: '#E8F5E9',
+    justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#A5D6A7',
   },
-
-  mapContainer: {
-    borderBottomWidth: 1, borderBottomColor: colors.borderSubtle,
-    overflow: 'hidden',
+  // Chips
+  chipBar: { backgroundColor: '#FFFFFF', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#E8E0D5', zIndex: 10 },
+  chip: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20,
+    backgroundColor: '#F5F0EB', borderWidth: 1.5, borderColor: '#E0D5C5',
   },
-  loadingCenter: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#F3F4F6' },
-  loadingText: { marginTop: 8, fontSize: 13, color: colors.textHint },
-
-  selectedCard: {
-    flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12,
-    backgroundColor: colors.accentPrimaryLight, borderBottomWidth: 1, borderBottomColor: colors.accentPrimary + '30',
-    gap: 12,
+  chipActive: { backgroundColor: '#2D6A4F', borderColor: '#2D6A4F' },
+  chipText: { fontSize: 13, fontWeight: '600', color: '#5C4033' },
+  chipTextActive: { color: '#FFFFFF' },
+  // Map
+  mapWrap: { flex: 1, position: 'relative' },
+  loadCenter: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#F5F0EB' },
+  loadText: { marginTop: 10, fontSize: 14, color: '#8B7355', fontWeight: '500' },
+  // Zoom
+  zoomBtns: {
+    position: 'absolute', right: 16, top: 16,
+    backgroundColor: '#FFFFFF', borderRadius: 14, overflow: 'hidden',
+    ...Platform.select({ ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.12, shadowRadius: 6 }, android: { elevation: 4 }, default: {} }),
   },
-  selectedImage: { width: 50, height: 50, borderRadius: 12, overflow: 'hidden' },
-  selectedImagePlaceholder: { backgroundColor: colors.bgSubtle, justifyContent: 'center', alignItems: 'center' },
-  selectedInfo: { flex: 1 },
-  selectedName: { fontSize: 15, fontWeight: '700', color: colors.textPrimary },
-  selectedMeta: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 3 },
-  selectedRating: { fontSize: 13, fontWeight: '600', color: colors.textSecondary },
-  selectedAddress: { fontSize: 12, color: colors.textHint, marginTop: 2 },
-  navigateBtn: {
-    width: 44, height: 44, borderRadius: 22, backgroundColor: '#FFFFFF',
-    justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: colors.accentPrimary + '30',
+  zoomBtn: { width: 44, height: 44, justifyContent: 'center', alignItems: 'center' },
+  zoomDivider: { height: 1, backgroundColor: '#E8E0D5', marginHorizontal: 8 },
+  // Bottom Card
+  bottomCard: {
+    position: 'absolute', bottom: 0, left: 0, right: 0,
+    backgroundColor: '#FFFFFF', borderTopLeftRadius: 24, borderTopRightRadius: 24,
+    paddingBottom: Platform.OS === 'ios' ? 34 : 16,
+    ...Platform.select({ ios: { shadowColor: '#000', shadowOffset: { width: 0, height: -4 }, shadowOpacity: 0.1, shadowRadius: 12 }, android: { elevation: 12 }, default: {} }),
   },
-
-  list: { flex: 1 },
-  placeCard: {
-    flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14,
-    borderBottomWidth: 1, borderBottomColor: colors.borderSubtle, gap: 12,
+  cardInner: { padding: 16 },
+  dragHandle: {
+    width: 36, height: 4, borderRadius: 2, backgroundColor: '#D4C8B8',
+    alignSelf: 'center', marginBottom: 14,
   },
-  placeCardSelected: { backgroundColor: colors.accentPrimaryLight },
-  placeIndex: {
-    width: 24, height: 24, borderRadius: 12, backgroundColor: colors.accentPrimaryLight,
-    justifyContent: 'center', alignItems: 'center',
+  cardRow: { flexDirection: 'row', gap: 14 },
+  cardImg: { width: 72, height: 72, borderRadius: 16, overflow: 'hidden' },
+  cardImgFallback: { backgroundColor: '#F5F0EB', justifyContent: 'center', alignItems: 'center' },
+  cardInfo: { flex: 1, justifyContent: 'center' },
+  cardName: { fontSize: 18, fontWeight: '800', color: '#1B4332', letterSpacing: -0.3 },
+  cardMeta: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6 },
+  ratingPill: {
+    flexDirection: 'row', alignItems: 'center', gap: 3,
+    paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10, backgroundColor: '#FEF3C7',
   },
-  placeIndexText: { fontSize: 11, fontWeight: '700', color: colors.accentPrimary },
-  placeImage: { width: 56, height: 56, borderRadius: 14, overflow: 'hidden' },
-  placeImagePlaceholder: { backgroundColor: colors.bgSubtle, justifyContent: 'center', alignItems: 'center' },
-  placeInfo: { flex: 1 },
-  placeName: { fontSize: 15, fontWeight: '700', color: colors.textPrimary },
-  placeRatingRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4 },
-  placeRating: { fontSize: 13, fontWeight: '600', color: colors.textSecondary },
-  statusBadge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 8, marginLeft: 4 },
-  statusText: { fontSize: 11, fontWeight: '700' },
-  placeAddress: { fontSize: 12, color: colors.textHint, marginTop: 2 },
-  dirNavBtn: {
-    width: 44, height: 44, borderRadius: 22, backgroundColor: colors.accentPrimaryLight,
-    justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: colors.accentPrimary + '30',
+  ratingText: { fontSize: 13, fontWeight: '700', color: '#92400E' },
+  statusPill: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10,
   },
+  statusDot: { width: 6, height: 6, borderRadius: 3 },
+  statusLabel: { fontSize: 12, fontWeight: '700' },
+  reviewCount: { fontSize: 12, color: '#8B7355' },
+  cardAddress: { fontSize: 13, color: '#8B7355', marginTop: 4 },
+  // Actions
+  cardActions: { flexDirection: 'row', gap: 10, marginTop: 16 },
+  actionPrimary: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    paddingVertical: 12, borderRadius: 16, backgroundColor: '#2D6A4F',
+  },
+  actionPrimaryText: { fontSize: 14, fontWeight: '700', color: '#FFFFFF' },
+  actionSecondary: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5,
+    paddingVertical: 12, borderRadius: 16, backgroundColor: '#E8F5E9', borderWidth: 1, borderColor: '#A5D6A7',
+  },
+  actionSecondaryText: { fontSize: 13, fontWeight: '700', color: '#2D6A4F' },
 });
