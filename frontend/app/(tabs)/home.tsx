@@ -342,9 +342,12 @@ function PostCard({ post, currentUserId, onPress, onUserPress }: any) {
                 <TouchableOpacity
                   key={col.id}
                   style={[postStyles.saveItem, savedCollection === col.id && postStyles.saveItemActive]}
-                  onPress={() => {
-                    setSaved(true);
-                    setSavedCollection(col.id);
+                  onPress={async () => {
+                    try {
+                      await api.post(`/library/save/${post.id}`, { collection: col.id });
+                      setSaved(true);
+                      setSavedCollection(col.id);
+                    } catch (e) { console.log('Save error:', e); }
                     setShowSaveMenu(false);
                   }}
                 >
@@ -359,7 +362,13 @@ function PostCard({ post, currentUserId, onPress, onUserPress }: any) {
                   setShowSaveMenu(false);
                   Alert.alert('New Collection', 'Enter a name for your new collection', [
                     { text: 'Cancel', style: 'cancel' },
-                    { text: 'Create', onPress: () => { setSaved(true); setSavedCollection('custom'); } },
+                    { text: 'Create', onPress: async () => {
+                      try {
+                        await api.post(`/library/save/${post.id}`, { collection: 'custom' });
+                        setSaved(true);
+                        setSavedCollection('custom');
+                      } catch (e) { console.log('Save error:', e); }
+                    }},
                   ]);
                 }}
               >
