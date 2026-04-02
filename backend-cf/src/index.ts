@@ -284,26 +284,32 @@ app.post('/statuses/:statusId/view', authMiddleware, async (c) => {
   return c.json({ viewed: true });
 });
 
-// Messages
+// Messages (with media support)
 app.get('/conversations', authMiddleware, async (c) => {
   const userId = getUserId(c);
   const msgs = await c.env.DB.prepare(`SELECT m.*, u.username, u.full_name, u.profile_image FROM messages m JOIN users u ON (CASE WHEN m.sender_id = ? THEN m.receiver_id ELSE m.sender_id END) = u.id WHERE m.sender_id = ? OR m.receiver_id = ? ORDER BY m.created_at DESC`).bind(userId, userId, userId).all();
   const map = new Map<string, any>();
   for (const m of msgs.results as any[]) {
     const oid = m.sender_id === userId ? m.receiver_id : m.sender_id;
-    if (!map.has(oid)) map.set(oid, { user_id: oid, username: m.username, full_name: m.full_name, profile_image: m.profile_image, last_message: m.content, last_message_time: m.created_at, unread_count: (!m.is_read && m.receiver_id === userId) ? 1 : 0 });
+    if (!map.has(oid)) {
+      let preview = m.content || '';
+      if (!preview && m.media_type === 'video') preview = 'Sent a video';
+      else if (!preview && (m.media_url || m.image)) preview = 'Sent a photo';
+      map.set(oid, { id: `conv-${oid}`, participants: [userId, oid], other_user: { id: oid, username: m.username, full_name: m.full_name, profile_image: m.profile_image }, last_message: preview, last_message_time: m.created_at, unread_count: (!m.is_read && m.receiver_id === userId) ? 1 : 0 });
+    }
   }
   return c.json(Array.from(map.values()));
 });
 
 app.post('/messages', authMiddleware, async (c) => {
-  const userId = getUserId(c); const { receiver_id, content } = await c.req.json(); const id = uuid();
-  await c.env.DB.prepare('INSERT INTO messages (id, sender_id, receiver_id, content) VALUES (?, ?, ?, ?)').bind(id, userId, receiver_id, content).run();
-  return c.json({ id, sender_id: userId, receiver_id, content, created_at: now() });
+  const userId = getUserId(c); const b = await c.req.json(); const id = uuid();
+  await c.env.DB.prepare('INSERT INTO messages (id, sender_id, receiver_id, content, media_url, media_type) VALUES (?, ?, ?, ?, ?, ?)').bind(id, userId, b.receiver_id, b.content || '', b.media_url || null, b.media_type || null).run();
+  return c.json({ id, sender_id: userId, receiver_id: b.receiver_id, content: b.content || '', media_url: b.media_url, media_type: b.media_type, created_at: now() });
 });
 
 app.get('/messages/:userId', authMiddleware, async (c) => {
   const myId = getUserId(c); const oid = c.req.param('userId');
+  await c.env.DB.prepare('UPDATE messages SET is_read = 1 WHERE sender_id = ? AND receiver_id = ? AND is_read = 0').bind(oid, myId).run();
   const r = await c.env.DB.prepare('SELECT * FROM messages WHERE (sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?) ORDER BY created_at ASC').bind(myId, oid, oid, myId).all();
   return c.json(r.results);
 });
@@ -351,6 +357,179 @@ app.post('/upload/video-direct', authMiddleware, async (c) => {
 
 // Reports
 app.post('/reports', authMiddleware, async (c) => { const b = await c.req.json(); const id = uuid(); await c.env.DB.prepare('INSERT INTO reports (id, reporter_id, reported_id, report_type, reason, content_id) VALUES (?, ?, ?, ?, ?, ?)').bind(id, getUserId(c), b.reported_id || '', b.report_type || 'other', b.reason || '', b.content_id || null).run(); return c.json({ id, reported: true }); });
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PUBLISHER
+// ═══════════════════════════════════════════════════════════════════════════════
+app.post('/publisher/apply', authMiddleware, async (c) => {
+  const userId = getUserId(c); const b = await c.req.json();
+  const existing: any = await c.env.DB.prepare('SELECT id, status FROM publisher_applications WHERE user_id = ?').bind(userId).first();
+  if (existing) return c.json({ detail: 'Application already exists', status: existing.status });
+  const user: any = await c.env.DB.prepare('SELECT username, full_name, profile_image FROM users WHERE id = ?').bind(userId).first();
+  const id = uuid();
+  await c.env.DB.prepare(
+    `INSERT INTO publisher_applications (id, user_id, user_username, user_full_name, user_profile_image, business_name, category, about, phone, website, social_instagram, social_twitter, social_tiktok, address, city, why_publish)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(id, userId, user?.username || '', user?.full_name || '', user?.profile_image || '', b.business_name, b.category, b.about, b.phone, b.website || '', b.social_instagram || '', b.social_twitter || '', b.social_tiktok || '', b.address || '', b.city || '', b.why_publish).run();
+  return c.json({ id, status: 'pending', submitted: true });
+});
+
+app.get('/publisher/status', authMiddleware, async (c) => {
+  const app: any = await c.env.DB.prepare('SELECT status FROM publisher_applications WHERE user_id = ? ORDER BY created_at DESC LIMIT 1').bind(getUserId(c)).first();
+  return c.json({ status: app?.status || 'none' });
+});
+
+// Discover posts (publisher content)
+app.post('/discover/posts', authMiddleware, async (c) => {
+  const userId = getUserId(c); const b = await c.req.json();
+  const user: any = await c.env.DB.prepare('SELECT username, full_name, profile_image, is_publisher FROM users WHERE id = ?').bind(userId).first();
+  if (!user?.is_publisher) return c.json({ detail: 'Publishers only' }, 403);
+  const id = uuid();
+  await c.env.DB.prepare('INSERT INTO discover_posts (id, user_id, content, image, images, category, location) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(id, userId, b.content || '', b.image || null, JSON.stringify(b.images || []), b.category || 'local_news', b.location || '').run();
+  return c.json({ id, user_id: userId, user_username: user.username, user_full_name: user.full_name, user_profile_image: user.profile_image, content: b.content, category: b.category, created_at: now() });
+});
+
+app.get('/discover/feed', authMiddleware, async (c) => {
+  const category = c.req.query('category') || 'all';
+  let sql = `SELECT dp.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image FROM discover_posts dp JOIN users u ON dp.user_id = u.id`;
+  if (category !== 'all') sql += ` WHERE dp.category = '${category}'`;
+  sql += ' ORDER BY dp.created_at DESC LIMIT 50';
+  const r = await c.env.DB.prepare(sql).all();
+  return c.json((r.results as any[]).map(p => ({ ...p, images: JSON.parse(p.images || '[]') })));
+});
+
+app.post('/discover/posts/:postId/like', authMiddleware, async (c) => {
+  const userId = getUserId(c); const postId = c.req.param('postId');
+  const ex = await c.env.DB.prepare('SELECT id FROM discover_likes WHERE user_id = ? AND post_id = ?').bind(userId, postId).first();
+  if (ex) {
+    await c.env.DB.prepare('DELETE FROM discover_likes WHERE user_id = ? AND post_id = ?').bind(userId, postId).run();
+    await c.env.DB.prepare('UPDATE discover_posts SET likes_count = MAX(0, likes_count - 1) WHERE id = ?').bind(postId).run();
+    return c.json({ liked: false });
+  }
+  await c.env.DB.prepare('INSERT INTO discover_likes (id, user_id, post_id) VALUES (?, ?, ?)').bind(uuid(), userId, postId).run();
+  await c.env.DB.prepare('UPDATE discover_posts SET likes_count = likes_count + 1 WHERE id = ?').bind(postId).run();
+  return c.json({ liked: true });
+});
+
+app.get('/discover/categories', async (c) => {
+  return c.json([
+    { id: 'local_news', name: 'Local News', icon: 'newspaper' },
+    { id: 'events', name: 'Events', icon: 'calendar' },
+    { id: 'food_reviews', name: 'Food Reviews', icon: 'restaurant' },
+    { id: 'culture', name: 'Culture', icon: 'color-palette' },
+    { id: 'tips', name: 'Tips & Recs', icon: 'bulb' },
+    { id: 'spotlights', name: 'Spotlights', icon: 'flash' },
+  ]);
+});
+
+// Places (user-created)
+app.post('/places', authMiddleware, async (c) => {
+  const userId = getUserId(c); const b = await c.req.json(); const id = uuid();
+  await c.env.DB.prepare('INSERT INTO places (id, name, description, category, lat, lng, address, image, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(id, b.name, b.description || '', b.category || '', b.lat || null, b.lng || null, b.address || '', b.image || null, userId).run();
+  return c.json({ id, name: b.name, created_at: now() });
+});
+
+app.get('/places', authMiddleware, async (c) => {
+  const r = await c.env.DB.prepare('SELECT * FROM places ORDER BY created_at DESC LIMIT 50').all();
+  return c.json(r.results);
+});
+
+app.get('/places/nearby', authMiddleware, async (c) => {
+  const r = await c.env.DB.prepare('SELECT * FROM places ORDER BY created_at DESC LIMIT 50').all();
+  return c.json(r.results);
+});
+
+app.get('/places/:placeId', authMiddleware, async (c) => {
+  const p = await c.env.DB.prepare('SELECT * FROM places WHERE id = ?').bind(c.req.param('placeId')).first();
+  if (!p) return c.json({ detail: 'Not found' }, 404);
+  return c.json(p);
+});
+
+app.post('/places/verify-proximity', authMiddleware, async (c) => {
+  const b = await c.req.json();
+  const distance = Math.sqrt(Math.pow((b.user_lat - b.place_lat) * 111320, 2) + Math.pow((b.user_lng - b.place_lng) * 111320 * Math.cos(b.user_lat * Math.PI / 180), 2));
+  return c.json({ verified: distance <= 200, distance: Math.round(distance) });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ADMIN
+// ═══════════════════════════════════════════════════════════════════════════════
+const adminGuard = async (c: any, next: () => Promise<void>) => {
+  const userId = getUserId(c);
+  const user: any = await c.env.DB.prepare('SELECT is_admin FROM users WHERE id = ?').bind(userId).first();
+  if (!user?.is_admin) return c.json({ detail: 'Admin access required' }, 403);
+  await next();
+};
+
+app.get('/admin/stats', authMiddleware, adminGuard, async (c) => {
+  const users = await c.env.DB.prepare('SELECT COUNT(*) as c FROM users').first() as any;
+  const posts = await c.env.DB.prepare('SELECT COUNT(*) as c FROM posts').first() as any;
+  const reports = await c.env.DB.prepare('SELECT COUNT(*) as c FROM reports').first() as any;
+  const apps = await c.env.DB.prepare("SELECT COUNT(*) as c FROM publisher_applications WHERE status = 'pending'").first() as any;
+  return c.json({ total_users: users?.c || 0, total_posts: posts?.c || 0, total_reports: reports?.c || 0, pending_applications: apps?.c || 0 });
+});
+
+app.get('/admin/reported-posts', authMiddleware, adminGuard, async (c) => {
+  const r = await c.env.DB.prepare(`SELECT r.*, p.content AS post_content, p.image AS post_image, u.username AS reporter_name FROM reports r LEFT JOIN posts p ON r.content_id = p.id LEFT JOIN users u ON r.reporter_id = u.id WHERE r.report_type = 'post' ORDER BY r.created_at DESC`).all();
+  return c.json(r.results);
+});
+
+app.get('/admin/reported-accounts', authMiddleware, adminGuard, async (c) => {
+  const r = await c.env.DB.prepare(`SELECT r.reported_id, u.username, u.full_name, u.profile_image, COUNT(*) as report_count FROM reports r JOIN users u ON r.reported_id = u.id WHERE r.report_type = 'user' GROUP BY r.reported_id`).all();
+  return c.json(r.results);
+});
+
+app.post('/admin/remove-post/:postId', authMiddleware, adminGuard, async (c) => {
+  const postId = c.req.param('postId');
+  await c.env.DB.prepare('DELETE FROM likes WHERE post_id = ?').bind(postId).run();
+  await c.env.DB.prepare('DELETE FROM comments WHERE post_id = ?').bind(postId).run();
+  await c.env.DB.prepare('DELETE FROM posts WHERE id = ?').bind(postId).run();
+  return c.json({ removed: true });
+});
+
+app.get('/admin/publisher-applications', authMiddleware, adminGuard, async (c) => {
+  const r = await c.env.DB.prepare('SELECT * FROM publisher_applications ORDER BY created_at DESC').all();
+  return c.json(r.results);
+});
+
+app.post('/admin/publisher-applications/:appId/decide', authMiddleware, adminGuard, async (c) => {
+  const appId = c.req.param('appId'); const { decision } = await c.req.json();
+  const app: any = await c.env.DB.prepare('SELECT user_id FROM publisher_applications WHERE id = ?').bind(appId).first();
+  if (!app) return c.json({ detail: 'Not found' }, 404);
+  await c.env.DB.prepare('UPDATE publisher_applications SET status = ? WHERE id = ?').bind(decision, appId).run();
+  if (decision === 'approved') {
+    await c.env.DB.prepare('UPDATE users SET is_publisher = 1 WHERE id = ?').bind(app.user_id).run();
+  }
+  return c.json({ decided: true, status: decision });
+});
+
+app.post('/admin/make-admin/:userId', authMiddleware, adminGuard, async (c) => {
+  await c.env.DB.prepare('UPDATE users SET is_admin = 1 WHERE id = ?').bind(c.req.param('userId')).run();
+  return c.json({ success: true });
+});
+
+app.get('/admin/reports', authMiddleware, adminGuard, async (c) => {
+  const r = await c.env.DB.prepare('SELECT * FROM reports ORDER BY created_at DESC LIMIT 50').all();
+  return c.json(r.results);
+});
+
+app.post('/admin/reports/:reportId/action', authMiddleware, adminGuard, async (c) => {
+  const { action } = await c.req.json();
+  await c.env.DB.prepare('DELETE FROM reports WHERE id = ?').bind(c.req.param('reportId')).run();
+  return c.json({ action, done: true });
+});
+
+// Upload (base64 image support)
+app.post('/upload/image', authMiddleware, async (c) => {
+  return c.json({ detail: 'Use base64 images inline for now' }, 200);
+});
+app.post('/upload/base64-image', authMiddleware, async (c) => {
+  const { image } = await c.req.json();
+  return c.json({ url: image }); // Return as-is, stored inline
+});
+app.post('/upload/video', authMiddleware, async (c) => {
+  return c.json({ detail: 'Use direct upload for videos' }, 200);
+});
 
 // Google Places proxy
 app.get('/google-places/nearby', async (c) => {
