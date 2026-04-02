@@ -43,6 +43,7 @@ const REPORT_REASONS = [
 
 // ─── Flames-Up Post Card (unique social feed style) ──────────────────────────
 function PostCard({ post, currentUserId, onPress, onUserPress }: any) {
+  const router = useRouter();
   const [liked, setLiked] = useState(post.liked_by?.includes(currentUserId));
   const [likesCount, setLikesCount] = useState(post.likes_count || 0);
   const [saved, setSaved] = useState(false);
@@ -276,6 +277,44 @@ function PostCard({ post, currentUserId, onPress, onUserPress }: any) {
         </View>
       ) : null}
 
+      {/* ── Check-In Place Card (shows on check_in posts) ── */}
+      {post.post_type === 'check_in' && post.place_name && (
+        <TouchableOpacity
+          style={postStyles.checkinCard}
+          onPress={() => post.place_id && router.push(`/place/${post.place_id}`)}
+          activeOpacity={0.8}
+        >
+          <View style={postStyles.checkinLeft}>
+            <View style={postStyles.checkinIcon}>
+              <Ionicons name="location" size={16} color="#FFFFFF" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={postStyles.checkinName} numberOfLines={1}>{post.place_name}</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 }}>
+                {post.is_verified_checkin && (
+                  <>
+                    <Ionicons name="checkmark-circle" size={11} color="#16A34A" />
+                    <Text style={postStyles.checkinVerified}>Verified check-in</Text>
+                  </>
+                )}
+              </View>
+            </View>
+          </View>
+          <View style={postStyles.checkinViewBtn}>
+            <Text style={postStyles.checkinViewText}>View Place</Text>
+            <Ionicons name="chevron-forward" size={14} color="#2D6A4F" />
+          </View>
+        </TouchableOpacity>
+      )}
+
+      {/* ── Question Badge ── */}
+      {post.post_type === 'question' && (
+        <View style={postStyles.questionCard}>
+          <Ionicons name="help-circle" size={16} color="#D97706" />
+          <Text style={postStyles.questionLabel}>Community Question — share your recommendations below</Text>
+        </View>
+      )}
+
       {/* ── Action Row ── */}
       <View style={postStyles.actionsRow}>
         <TouchableOpacity onPress={handleLike} style={postStyles.actionBtn}>
@@ -400,6 +439,29 @@ const postStyles = StyleSheet.create({
   captionContainer: { paddingHorizontal: 16, marginTop: 10 },
   captionText: { fontSize: 15, color: colors.textPrimary, lineHeight: 22 },
   moreText: { fontSize: 14, color: colors.accentPrimary, fontWeight: '600', marginTop: 2 },
+  // Check-In Place Card
+  checkinCard: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    marginHorizontal: 14, marginTop: 6, marginBottom: 4, padding: 12,
+    backgroundColor: '#E8F5E9', borderRadius: 14, borderWidth: 1, borderColor: '#A5D6A7',
+  },
+  checkinLeft: { flexDirection: 'row', alignItems: 'center', flex: 1, gap: 10 },
+  checkinIcon: { width: 32, height: 32, borderRadius: 10, backgroundColor: '#2D6A4F', justifyContent: 'center', alignItems: 'center' },
+  checkinName: { fontSize: 14, fontWeight: '700', color: '#1B5E20' },
+  checkinVerified: { fontSize: 11, color: '#16A34A', fontWeight: '600' },
+  checkinViewBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 2,
+    paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12,
+    backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#A5D6A7',
+  },
+  checkinViewText: { fontSize: 12, fontWeight: '700', color: '#2D6A4F' },
+  // Question Card
+  questionCard: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    marginHorizontal: 14, marginTop: 6, marginBottom: 4, padding: 10,
+    backgroundColor: '#FEF3C7', borderRadius: 12, borderWidth: 1, borderColor: '#FDE68A',
+  },
+  questionLabel: { fontSize: 12, color: '#92400E', flex: 1, fontWeight: '500', lineHeight: 16 },
   // Actions – horizontal icon row with counts
   actionsRow: {
     flexDirection: 'row',
