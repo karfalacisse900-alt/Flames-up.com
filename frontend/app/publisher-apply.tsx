@@ -38,10 +38,16 @@ export default function PublisherApplyScreen() {
     }
     setLoading(true);
     try {
-      await api.post('/publisher/apply', form);
-      Alert.alert('Application Submitted!', 'We will review your application and notify you once approved.', [
-        { text: 'OK', onPress: () => router.back() },
-      ]);
+      const res = await api.post('/publisher/apply', form);
+      if (res.data?.detail && res.data.detail.includes('already exists')) {
+        Alert.alert('Already Applied', `You already have a ${res.data.status} application.`, [
+          { text: 'OK', onPress: () => router.back() },
+        ]);
+      } else {
+        Alert.alert('Application Submitted!', 'We will review your application and notify you once approved.', [
+          { text: 'OK', onPress: () => router.back() },
+        ]);
+      }
     } catch (e: any) {
       Alert.alert('Error', e.response?.data?.detail || 'Could not submit application.');
     } finally { setLoading(false); }

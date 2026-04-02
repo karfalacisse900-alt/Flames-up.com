@@ -658,7 +658,10 @@ async def get_conversations(current_user: dict = Depends(get_current_user)):
     
     result = []
     for conv in conversations:
-        other_id = [p for p in conv["participants"] if p != current_user["id"]][0]
+        other_ids = [p for p in conv["participants"] if p != current_user["id"]]
+        if not other_ids:
+            continue  # Skip self-conversations
+        other_id = other_ids[0]
         other_user = await db.users.find_one({"id": other_id})
         if other_user:
             conv_data = {k: v for k, v in conv.items() if k != "_id"}
@@ -944,6 +947,7 @@ async def apply_publisher(data: PublisherApplication, current_user: dict = Depen
         "user_id": current_user["id"],
         "user_username": current_user["username"],
         "user_full_name": current_user["full_name"],
+        "user_profile_image": current_user.get("profile_image", ""),
         "business_name": data.business_name,
         "category": data.category,
         "about": data.about,
