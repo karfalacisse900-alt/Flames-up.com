@@ -277,8 +277,29 @@ api.post('/statuses', authMiddleware, async (c) => {
 });
 
 api.get('/statuses', authMiddleware, async (c) => {
+  const userId = getUserId(c);
   const r = await c.env.DB.prepare(`SELECT s.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image FROM statuses s JOIN users u ON s.user_id = u.id WHERE s.expires_at > datetime('now') ORDER BY s.created_at DESC`).all();
-  return c.json((r.results as any[]).map(s => ({ ...s, viewed_by: JSON.parse(s.viewed_by || '[]') })));
+  // Group statuses by user_id for the frontend story bar
+  const grouped = new Map<string, any>();
+  for (const s of r.results as any[]) {
+    const uid = s.user_id;
+    if (!grouped.has(uid)) {
+      grouped.set(uid, {
+        user_id: uid,
+        user_username: s.user_username,
+        user_full_name: s.user_full_name,
+        user_profile_image: s.user_profile_image,
+        statuses: [],
+        has_unviewed: false,
+      });
+    }
+    const parsed = { ...s, viewed_by: JSON.parse(s.viewed_by || '[]') };
+    grouped.get(uid)!.statuses.push(parsed);
+    if (!parsed.viewed_by.includes(userId)) {
+      grouped.get(uid)!.has_unviewed = true;
+    }
+  }
+  return c.json(Array.from(grouped.values()));
 });
 
 api.post('/statuses/:statusId/view', authMiddleware, async (c) => {
@@ -607,8 +628,14 @@ api.post('/upload/video', authMiddleware, async (c) => {
 // Google Places proxy
 api.get('/google-places/nearby', async (c) => {
   const key = c.env.GOOGLE_MAPS_API_KEY;
-  const url = `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${c.req.query('lat') || '40.7128'},${c.req.query('lng') || '-74.006'}&radius=${c.req.query('radius') || '5000'}&type=${c.req.query('type') || 'restaurant'}&key=${key}`;
+  if (!key) return c.json({ error: 'Google Maps API key not configured', places: [] });
+  const keyword = c.req.query('keyword') || '';
+  let url = `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${c.req.query('lat') || '40.7128'},${c.req.query('lng') || '-74.006'}&radius=${c.req.query('radius') || '5000'}&type=${c.req.query('type') || 'restaurant'}&key=${key}`;
+  if (keyword) url += `&keyword=${encodeURIComponent(keyword)}`;
   const res = await fetch(url); const data: any = await res.json();
+  if (data.status !== 'OK' && data.status !== 'ZERO_RESULTS') {
+    return c.json({ error: data.error_message || data.status, places: [] });
+  }
   return c.json((data.results || []).map((p: any) => ({
     place_id: p.place_id, name: p.name, vicinity: p.vicinity, rating: p.rating,
     user_ratings_total: p.user_ratings_total, open_now: p.opening_hours?.open_now,
@@ -632,6 +659,108 @@ api.get('/google-places/:placeId', async (c) => {
 // Health
 api.get('/', (c) => c.json({ message: 'Flames-Up API', version: '2.0', runtime: 'Cloudflare Workers + Hono + D1' }));
 api.get('/health', (c) => c.json({ status: 'healthy', timestamp: now() }));
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// BOOKMARKS / SAVE SYSTEM
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Setup bookmarks table
+api.post('/bookmarks/setup-db', authMiddleware, async (c) => {
+  try {
+    await c.env.DB.exec(`
+      CREATE TABLE IF NOT EXISTS bookmarks (
+        id TEXT PRIMARY KEY, user_id TEXT NOT NULL, post_id TEXT NOT NULL,
+        collection TEXT DEFAULT 'saved', created_at TEXT DEFAULT (datetime('now')),
+        UNIQUE(user_id, post_id), FOREIGN KEY (user_id) REFERENCES users(id), FOREIGN KEY (post_id) REFERENCES posts(id)
+      );
+      CREATE TABLE IF NOT EXISTS saved_places (
+        id TEXT PRIMARY KEY, user_id TEXT NOT NULL, place_id TEXT NOT NULL,
+        place_name TEXT DEFAULT '', place_type TEXT DEFAULT '',
+        save_type TEXT DEFAULT 'want_to_go', created_at TEXT DEFAULT (datetime('now')),
+        UNIQUE(user_id, place_id), FOREIGN KEY (user_id) REFERENCES users(id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_bookmarks_user ON bookmarks(user_id);
+      CREATE INDEX IF NOT EXISTS idx_bookmarks_post ON bookmarks(post_id);
+      CREATE INDEX IF NOT EXISTS idx_saved_places_user ON saved_places(user_id);
+    `);
+    // Add category column to posts if not exists
+    try { await c.env.DB.exec(`ALTER TABLE posts ADD COLUMN category TEXT DEFAULT 'all';`); } catch {}
+    try { await c.env.DB.exec(`ALTER TABLE posts ADD COLUMN place_id TEXT DEFAULT NULL;`); } catch {}
+    try { await c.env.DB.exec(`ALTER TABLE posts ADD COLUMN place_name TEXT DEFAULT NULL;`); } catch {}
+    return c.json({ success: true, message: 'Bookmarks + Saved Places tables created' });
+  } catch (e: any) { return c.json({ success: true, message: 'Tables exist', detail: e?.message }); }
+});
+
+// Save/Bookmark a post
+api.post('/bookmarks', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const { post_id, collection } = await c.req.json();
+  if (!post_id) return c.json({ detail: 'post_id required' }, 400);
+  const id = uuid();
+  try {
+    await c.env.DB.prepare('INSERT INTO bookmarks (id, user_id, post_id, collection) VALUES (?, ?, ?, ?) ON CONFLICT(user_id, post_id) DO UPDATE SET collection = ?')
+      .bind(id, userId, post_id, collection || 'saved', collection || 'saved').run();
+    return c.json({ saved: true, collection: collection || 'saved' });
+  } catch (e: any) { return c.json({ detail: 'Save failed', error: e?.message }, 500); }
+});
+
+// Unsave/Remove bookmark
+api.delete('/bookmarks/:postId', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  await c.env.DB.prepare('DELETE FROM bookmarks WHERE user_id = ? AND post_id = ?').bind(userId, c.req.param('postId')).run();
+  return c.json({ saved: false });
+});
+
+// Get saved posts by collection
+api.get('/bookmarks', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const collection = c.req.query('collection');
+  let q = 'SELECT b.*, p.content, p.image, p.images, p.likes_count, p.post_type, p.created_at as post_date, u.full_name, u.username, u.profile_image FROM bookmarks b JOIN posts p ON b.post_id = p.id JOIN users u ON p.user_id = u.id WHERE b.user_id = ?';
+  const binds: any[] = [userId];
+  if (collection) { q += ' AND b.collection = ?'; binds.push(collection); }
+  q += ' ORDER BY b.created_at DESC';
+  const { results } = await c.env.DB.prepare(q).bind(...binds).all();
+  return c.json({ bookmarks: results || [] });
+});
+
+// Check if post is saved
+api.get('/bookmarks/check/:postId', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const r: any = await c.env.DB.prepare('SELECT collection FROM bookmarks WHERE user_id = ? AND post_id = ?').bind(userId, c.req.param('postId')).first();
+  return c.json({ saved: !!r, collection: r?.collection || null });
+});
+
+// Save a place (My Spots)
+api.post('/saved-places', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const { place_id, place_name, place_type, save_type } = await c.req.json();
+  if (!place_id) return c.json({ detail: 'place_id required' }, 400);
+  const id = uuid();
+  try {
+    await c.env.DB.prepare('INSERT INTO saved_places (id, user_id, place_id, place_name, place_type, save_type) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(user_id, place_id) DO UPDATE SET save_type = ?')
+      .bind(id, userId, place_id, place_name || '', place_type || '', save_type || 'want_to_go', save_type || 'want_to_go').run();
+    return c.json({ saved: true });
+  } catch (e: any) { return c.json({ detail: 'Save failed', error: e?.message }, 500); }
+});
+
+// Get saved places (My Spots)
+api.get('/saved-places', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const save_type = c.req.query('type');
+  let q = 'SELECT * FROM saved_places WHERE user_id = ?';
+  const binds: any[] = [userId];
+  if (save_type) { q += ' AND save_type = ?'; binds.push(save_type); }
+  q += ' ORDER BY created_at DESC';
+  const { results } = await c.env.DB.prepare(q).bind(...binds).all();
+  return c.json({ places: results || [] });
+});
+
+// Remove saved place
+api.delete('/saved-places/:placeId', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  await c.env.DB.prepare('DELETE FROM saved_places WHERE user_id = ? AND place_id = ?').bind(userId, c.req.param('placeId')).run();
+  return c.json({ saved: false });
+});
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // CREATOR HUB

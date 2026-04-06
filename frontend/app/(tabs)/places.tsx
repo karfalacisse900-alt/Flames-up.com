@@ -141,6 +141,8 @@ export default function PlacesScreen() {
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [locationName, setLocationName] = useState('Nearby');
 
+  const [error, setError] = useState<string | null>(null);
+
   // Request real-time location on mount + load places immediately
   useEffect(() => {
     // Start loading places RIGHT AWAY with fallback location (no waiting for GPS)
@@ -176,14 +178,24 @@ export default function PlacesScreen() {
   }, []);
 
   const loadPlaces = async (type: string, keyword?: string, overrideLoc?: { lat: number; lng: number }) => {
+    setIsLoading(true);
+    setError(null);
     try {
       const loc = overrideLoc || userLocation || { lat: 40.7128, lng: -74.006 };
       const params: any = { type, lat: loc.lat, lng: loc.lng, radius: 5000 };
       if (keyword) params.keyword = keyword;
       const response = await api.get('/google-places/nearby', { params });
-      setPlaces(response.data);
-    } catch (error) {
-      console.log('Error loading places:', error);
+      const data = response.data;
+      if (data?.error) {
+        setError(data.error);
+        setPlaces([]);
+      } else {
+        const list = Array.isArray(data) ? data : data?.places || [];
+        setPlaces(list);
+      }
+    } catch (err: any) {
+      setError('Failed to load places');
+      setPlaces([]);
     } finally {
       setIsLoading(false);
     }
@@ -341,7 +353,13 @@ export default function PlacesScreen() {
             <View style={pStyles.emptyState}>
               <Ionicons name="location-outline" size={56} color={colors.textHint} />
               <Text style={pStyles.emptyTitle}>No places found</Text>
-              <Text style={pStyles.emptyText}>Try a different category or search</Text>
+              {error ? (
+                <Text style={{ fontSize: 13, color: '#DC2626', marginTop: 8, textAlign: 'center', paddingHorizontal: 20 }}>
+                  {error.includes('Billing') ? 'Enable Google Maps Billing on your Google Cloud Console to see places.' : error}
+                </Text>
+              ) : (
+                <Text style={pStyles.emptyText}>Try a different category or search</Text>
+              )}
             </View>
           ) : (
             renderGrid()

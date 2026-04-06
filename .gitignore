@@ -84,3 +84,5 @@ android-sdk/-e
 *.env
 *.env.*
 backend-cf/node_modules/@cloudflare/workerd-linux-arm64/bin/workerd
+frontend/.metro-cache/
+frontend/node_modules/

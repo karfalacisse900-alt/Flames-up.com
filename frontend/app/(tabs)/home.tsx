@@ -1,994 +1,167 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
-  FlatList,
-  RefreshControl,
-  TouchableOpacity,
-  ActivityIndicator,
-  ScrollView,
-  Image,
-  Dimensions,
-  Modal,
-  TextInput,
-  Alert,
-  Clipboard,
-  KeyboardAvoidingView,
-  Platform,
+  View, Text, StyleSheet, TouchableOpacity, Image, ScrollView, RefreshControl,
+  ActivityIndicator, Dimensions, TextInput, Alert, FlatList, Platform,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
-import { colors, shadows } from '../../src/utils/theme';
+import * as Location from 'expo-location';
+import { Video, ResizeMode } from 'expo-av';
+import { colors } from '../../src/utils/theme';
 import { useAuthStore } from '../../src/store/authStore';
 import api from '../../src/api/client';
 import { uploadImage } from '../../src/utils/mediaUpload';
-import { formatDistanceToNow } from 'date-fns';
-import { Video, ResizeMode } from 'expo-av';
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
-const PHOTO_RATIO = 4 / 5;  // 4:5 for photos
-const VIDEO_RATIO = 1;       // 1:1 for videos
+const { width: SW } = Dimensions.get('window');
+const COL_GAP = 3;
+const NUM_COLS = 2;
+const COL_W = (SW - COL_GAP * 3) / NUM_COLS;
 
-// ─── Report Reasons ──────────────────────────────────────────────────────────
-const REPORT_REASONS = [
-  { id: 'spam', label: 'Spam', icon: 'mail-outline' },
-  { id: 'harassment', label: 'Harassment or bullying', icon: 'hand-left-outline' },
-  { id: 'hate_speech', label: 'Hate speech', icon: 'megaphone-outline' },
-  { id: 'violence', label: 'Violence or threats', icon: 'warning-outline' },
-  { id: 'nudity', label: 'Nudity or sexual content', icon: 'eye-off-outline' },
-  { id: 'misinformation', label: 'Misinformation', icon: 'newspaper-outline' },
-  { id: 'other', label: 'Other', icon: 'ellipsis-horizontal-outline' },
+// ─── Category Tabs ─────────────────────────────────────────────
+const CATEGORIES = ['All', 'Fashion', 'Food', 'Culture', 'Street', 'Nightlife'];
+
+// ─── Location Presets ──────────────────────────────────────────
+const LOCATIONS = [
+  { id: 'global', label: 'Global', icon: 'globe-outline' },
+  { id: 'near', label: 'Near You', icon: 'location-outline' },
+  { id: 'nyc', label: 'NYC', icon: 'business-outline' },
+  { id: 'miami', label: 'Miami', icon: 'sunny-outline' },
+  { id: 'la', label: 'LA', icon: 'film-outline' },
+  { id: 'london', label: 'London', icon: 'umbrella-outline' },
 ];
 
-// ─── Flames-Up Post Card (unique social feed style) ──────────────────────────
-function PostCard({ post, currentUserId, onPress, onUserPress }: any) {
-  const router = useRouter();
-  const [liked, setLiked] = useState(post.liked_by?.includes(currentUserId));
-  const [likesCount, setLikesCount] = useState(post.likes_count || 0);
-  const [saved, setSaved] = useState(false);
-  const [captionExpanded, setCaptionExpanded] = useState(false);
-  const [showMenu, setShowMenu] = useState(false);
-  const [showReport, setShowReport] = useState(false);
-  const [activeImageIdx, setActiveImageIdx] = useState(0);
-  const [showSaveMenu, setShowSaveMenu] = useState(false);
-  const [savedCollection, setSavedCollection] = useState<string | null>(null);
+// ─── Masonry Item Heights (visual variation) ───────────────────
+const HEIGHTS = [COL_W * 1.0, COL_W * 1.25, COL_W * 1.5, COL_W * 1.1, COL_W * 1.35];
+const getItemHeight = (idx: number) => HEIGHTS[idx % HEIGHTS.length];
 
-  const SAVE_COLLECTIONS = [
-    { id: 'all', label: 'All Saved', icon: 'bookmark' },
-    { id: 'funny', label: 'Funny', icon: 'happy-outline' },
-    { id: 'inspirational', label: 'Inspirational', icon: 'sparkles-outline' },
-    { id: 'ideas', label: 'Ideas', icon: 'bulb-outline' },
-    { id: 'travel', label: 'Travel', icon: 'airplane-outline' },
-  ];
-
-  // Collect all images (from both old single image and new images array)
-  const allImages: string[] = post.images?.length > 0
-    ? post.images
-    : post.image ? [post.image] : [];
-
-  const handleLike = async () => {
-    setLiked(!liked);
-    setLikesCount(liked ? likesCount - 1 : likesCount + 1);
-    try {
-      await api.post(`/posts/${post.id}/like`);
-    } catch {
-      setLiked(liked);
-      setLikesCount(likesCount);
-    }
-  };
-
-  const handleReport = async (reason: string) => {
-    try {
-      await api.post('/reports', {
-        target_type: 'post',
-        target_id: post.id,
-        reason,
-      });
-      Alert.alert('Report Submitted', 'Thank you for helping keep our community safe.');
-    } catch {
-      Alert.alert('Error', 'Could not submit report. Please try again.');
-    }
-    setShowReport(false);
-  };
-
-  const timeAgo = post.created_at
-    ? formatDistanceToNow(new Date(post.created_at), { addSuffix: false })
-    : '';
-
-  const isVideo = post.media_type === 'video';
-  const hasMedia = !!post.image;
-  const mediaAspect = isVideo ? VIDEO_RATIO : PHOTO_RATIO;
-  const authorName = post.user_full_name || post.user_username || 'User';
+// ═══════════════════════════════════════════════════════════════════
+// MASONRY CARD
+// ═══════════════════════════════════════════════════════════════════
+function MasonryCard({
+  post, height, onPress, onLike, onSave, isLiked, isSaved,
+}: {
+  post: any; height: number; onPress: () => void;
+  onLike: () => void; onSave: () => void; isLiked: boolean; isSaved: boolean;
+}) {
+  const isVideo = post.media_type === 'video' || (post.media_types && post.media_types[0] === 'video');
+  const hasImage = post.image || (post.images && post.images.length > 0);
+  const imageUri = post.image || (post.images && post.images[0]) || null;
+  const isCheckIn = post.post_type === 'check_in';
 
   return (
-    <View style={postStyles.container}>
-      {/* ── Header: avatar + name + flame badge + location + more ── */}
-      <View style={postStyles.header}>
-        <TouchableOpacity
-          style={postStyles.headerLeft}
-          onPress={onUserPress}
-          activeOpacity={0.7}
-        >
-          <View style={postStyles.avatar}>
-            {post.user_profile_image ? (
-              <Image source={{ uri: post.user_profile_image }} style={postStyles.avatarImg} />
-            ) : (
-              <View style={postStyles.avatarFallback}>
-                <Text style={postStyles.avatarInitial}>{authorName[0].toUpperCase()}</Text>
-              </View>
-            )}
-          </View>
-          <View style={{ flex: 1 }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
-              <Text style={postStyles.username}>{authorName}</Text>
-              {post.is_verified_checkin && (
-                <View style={postStyles.verifiedBadge}>
-                  <Ionicons name="checkmark-circle" size={11} color="#10B981" />
-                </View>
-              )}
-              <Ionicons name="flame" size={13} color={colors.flameGold} />
-            </View>
-            {/* Post type badge + location */}
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 1 }}>
-              {post.post_type === 'check_in' && post.place_name ? (
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
-                  <Ionicons name="location" size={10} color="#10B981" />
-                  <Text style={[postStyles.location, { color: '#10B981' }]} numberOfLines={1}>At {post.place_name}</Text>
-                </View>
-              ) : post.post_type === 'question' ? (
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
-                  <Ionicons name="help-circle" size={10} color="#F59E0B" />
-                  <Text style={[postStyles.location, { color: '#F59E0B' }]}>Question</Text>
-                </View>
-              ) : post.location ? (
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
-                  <Ionicons name="location" size={10} color={colors.accentPrimary} />
-                  <Text style={postStyles.location} numberOfLines={1}>{post.location}</Text>
-                </View>
-              ) : (
-                <Text style={postStyles.timeLabel}>{timeAgo} ago</Text>
-              )}
-            </View>
-          </View>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={postStyles.moreBtn}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          onPress={() => setShowMenu(true)}
-        >
-          <Ionicons name="ellipsis-vertical" size={18} color={colors.textSecondary} />
-        </TouchableOpacity>
-      </View>
-
-      {/* ── 3-dot Action Sheet ── */}
-      <Modal visible={showMenu} transparent animationType="fade" onRequestClose={() => setShowMenu(false)}>
-        <TouchableOpacity style={postStyles.menuOverlay} activeOpacity={1} onPress={() => setShowMenu(false)}>
-          <View style={postStyles.menuSheet}>
-            <View style={postStyles.menuHandle} />
-            {post.user_id === currentUserId && (
-              <TouchableOpacity style={postStyles.menuItem} onPress={async () => {
-                setShowMenu(false);
-                Alert.alert('Delete Post', 'Are you sure you want to delete this post?', [
-                  { text: 'Cancel', style: 'cancel' },
-                  { text: 'Delete', style: 'destructive', onPress: async () => {
-                    try {
-                      await api.delete(`/posts/${post.id}`);
-                      Alert.alert('Deleted', 'Your post has been deleted.');
-                    } catch { Alert.alert('Error', 'Could not delete post.'); }
-                  }},
-                ]);
-              }}>
-                <Ionicons name="trash-outline" size={22} color={colors.error} />
-                <Text style={[postStyles.menuItemText, { color: colors.error }]}>Delete Post</Text>
-              </TouchableOpacity>
-            )}
-            <TouchableOpacity style={postStyles.menuItem} onPress={() => { setShowMenu(false); setShowReport(true); }}>
-              <Ionicons name="flag-outline" size={22} color={colors.error} />
-              <Text style={[postStyles.menuItemText, { color: colors.error }]}>Report</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={postStyles.menuItem} onPress={() => { setShowMenu(false); Alert.alert('Blocked', 'You won\'t see posts from this user.'); }}>
-              <Ionicons name="ban-outline" size={22} color={colors.textPrimary} />
-              <Text style={postStyles.menuItemText}>Block User</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={postStyles.menuItem} onPress={() => { setShowMenu(false); Alert.alert('Hidden', 'You will see fewer posts like this.'); }}>
-              <Ionicons name="eye-off-outline" size={22} color={colors.textPrimary} />
-              <Text style={postStyles.menuItemText}>Not Interested</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={[postStyles.menuItem, { borderBottomWidth: 0 }]} onPress={() => { setShowMenu(false); Alert.alert('Copied', 'Link copied to clipboard.'); }}>
-              <Ionicons name="link-outline" size={22} color={colors.textPrimary} />
-              <Text style={postStyles.menuItemText}>Copy Link</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={postStyles.menuCancel} onPress={() => setShowMenu(false)}>
-              <Text style={postStyles.menuCancelText}>Cancel</Text>
-            </TouchableOpacity>
-          </View>
-        </TouchableOpacity>
-      </Modal>
-
-      {/* ── Report Modal ── */}
-      <Modal visible={showReport} transparent animationType="slide" onRequestClose={() => setShowReport(false)}>
-        <TouchableOpacity style={postStyles.menuOverlay} activeOpacity={1} onPress={() => setShowReport(false)}>
-          <View style={postStyles.reportSheet}>
-            <View style={postStyles.menuHandle} />
-            <Text style={postStyles.reportTitle}>Why are you reporting this?</Text>
-            <Text style={postStyles.reportSubtitle}>Your report is anonymous and helps keep our community safe.</Text>
-            {REPORT_REASONS.map((reason) => (
-              <TouchableOpacity key={reason.id} style={postStyles.reportItem} onPress={() => handleReport(reason.id)}>
-                <Ionicons name={reason.icon as any} size={20} color={colors.textSecondary} />
-                <Text style={postStyles.reportItemText}>{reason.label}</Text>
-                <Ionicons name="chevron-forward" size={16} color={colors.textHint} />
-              </TouchableOpacity>
-            ))}
-          </View>
-        </TouchableOpacity>
-      </Modal>
-
-      {/* ── Media (Photo 4:5 / Video 1:1) full-width + carousel ── */}
-      {hasMedia && allImages.length > 1 ? (
-        <View>
-          <FlatList
-            data={allImages}
-            horizontal
-            pagingEnabled
-            showsHorizontalScrollIndicator={false}
-            onMomentumScrollEnd={(e) => {
-              setActiveImageIdx(Math.round(e.nativeEvent.contentOffset.x / SCREEN_WIDTH));
-            }}
-            keyExtractor={(_, i) => `img-${i}`}
-            renderItem={({ item: imgUri, index }) => {
-              const itemIsVideo = post.media_types?.[index] === 'video';
-              if (itemIsVideo) {
-                return (
-                  <View style={{ width: SCREEN_WIDTH, height: SCREEN_WIDTH / VIDEO_RATIO, backgroundColor: '#000' }}>
-                    <Video
-                      source={{ uri: imgUri }}
-                      style={{ width: '100%', height: '100%' }}
-                      resizeMode={ResizeMode.CONTAIN}
-                      useNativeControls
-                      isLooping={false}
-                      shouldPlay={false}
-                    />
-                  </View>
-                );
-              }
-              return (
-                <Image
-                  source={{ uri: imgUri }}
-                  style={{ width: SCREEN_WIDTH, height: SCREEN_WIDTH / mediaAspect, backgroundColor: colors.bgSubtle }}
-                  resizeMode="cover"
-                />
-              );
-            }}
-          />
-          <View style={postStyles.carouselDots}>
-            {allImages.map((_: string, i: number) => (
-              <View
-                key={i}
-                style={[postStyles.dot, activeImageIdx === i && postStyles.dotActive]}
-              />
-            ))}
-          </View>
-        </View>
-      ) : hasMedia && isVideo ? (
-        <View style={{ width: SCREEN_WIDTH, height: SCREEN_WIDTH / VIDEO_RATIO, backgroundColor: '#000' }}>
-          <Video
-            source={{ uri: post.image }}
-            style={{ width: '100%', height: '100%' }}
-            resizeMode={ResizeMode.CONTAIN}
-            useNativeControls
-            isLooping={false}
-            shouldPlay={false}
-            posterSource={post.video_thumbnail ? { uri: post.video_thumbnail } : undefined}
-            usePoster={!!post.video_thumbnail}
-          />
-        </View>
-      ) : hasMedia ? (
-        <TouchableOpacity activeOpacity={0.95} onPress={onPress}>
-          <Image
-            source={{ uri: post.image }}
-            style={{ width: SCREEN_WIDTH, height: SCREEN_WIDTH / mediaAspect, backgroundColor: colors.bgSubtle }}
-            resizeMode="cover"
-          />
-        </TouchableOpacity>
-      ) : null}
-
-      {/* ── Caption (above actions for Flames-Up style) ── */}
-      {post.content ? (
-        <View style={postStyles.captionContainer}>
-          <Text style={postStyles.captionText} numberOfLines={captionExpanded ? undefined : 3}>
+    <TouchableOpacity
+      style={[ms.card, { height }]}
+      activeOpacity={0.92}
+      onPress={onPress}
+    >
+      {/* Media */}
+      {isVideo && imageUri ? (
+        <Video
+          source={{ uri: imageUri }}
+          style={ms.cardMedia}
+          resizeMode={ResizeMode.COVER}
+          shouldPlay={false}
+          isMuted
+          isLooping
+        />
+      ) : hasImage ? (
+        <Image source={{ uri: imageUri }} style={ms.cardMedia} />
+      ) : (
+        <View style={[ms.cardMedia, ms.textOnlyBg, { backgroundColor: post.background_color || colors.accentPrimary }]}>
+          <Text style={ms.textOnlyContent} numberOfLines={5}>
             {post.content}
           </Text>
-          {!captionExpanded && post.content.length > 120 && (
-            <TouchableOpacity onPress={() => setCaptionExpanded(true)}>
-              <Text style={postStyles.moreText}>Read more</Text>
-            </TouchableOpacity>
-          )}
-        </View>
-      ) : null}
-
-      {/* ── Check-In Place Card (shows on check_in posts) ── */}
-      {post.post_type === 'check_in' && post.place_name && (
-        <TouchableOpacity
-          style={postStyles.checkinCard}
-          onPress={() => post.place_id && router.push(`/place/${post.place_id}`)}
-          activeOpacity={0.8}
-        >
-          <View style={postStyles.checkinLeft}>
-            <View style={postStyles.checkinIcon}>
-              <Ionicons name="location" size={16} color="#FFFFFF" />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={postStyles.checkinName} numberOfLines={1}>{post.place_name}</Text>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 }}>
-                {post.is_verified_checkin && (
-                  <>
-                    <Ionicons name="checkmark-circle" size={11} color="#16A34A" />
-                    <Text style={postStyles.checkinVerified}>Verified check-in</Text>
-                  </>
-                )}
-              </View>
-            </View>
-          </View>
-          <View style={postStyles.checkinViewBtn}>
-            <Text style={postStyles.checkinViewText}>View Place</Text>
-            <Ionicons name="chevron-forward" size={14} color="#2D6A4F" />
-          </View>
-        </TouchableOpacity>
-      )}
-
-      {/* ── Question Badge ── */}
-      {post.post_type === 'question' && (
-        <View style={postStyles.questionCard}>
-          <Ionicons name="help-circle" size={16} color="#D97706" />
-          <Text style={postStyles.questionLabel}>Community Question — share your recommendations below</Text>
         </View>
       )}
 
-      {/* ── Action Row ── */}
-      <View style={postStyles.actionsRow}>
-        <TouchableOpacity onPress={handleLike} style={postStyles.actionBtn}>
-          <Ionicons name={liked ? 'heart' : 'heart-outline'} size={22} color={liked ? '#ED4956' : colors.textSecondary} />
-          {likesCount > 0 && <Text style={[postStyles.actionCount, liked && { color: '#ED4956' }]}>{likesCount}</Text>}
-        </TouchableOpacity>
-        <TouchableOpacity onPress={onPress} style={postStyles.actionBtn}>
-          <Ionicons name="chatbubble-outline" size={20} color={colors.textSecondary} />
-          {post.comments_count > 0 && <Text style={postStyles.actionCount}>{post.comments_count}</Text>}
-        </TouchableOpacity>
-        <TouchableOpacity style={postStyles.actionBtn}>
-          <Ionicons name="repeat-outline" size={22} color={colors.textSecondary} />
-        </TouchableOpacity>
-        <TouchableOpacity style={postStyles.actionBtn}>
-          <Ionicons name="paper-plane-outline" size={20} color={colors.textSecondary} />
-        </TouchableOpacity>
-        <View style={{ flex: 1 }} />
-        <View>
-          <TouchableOpacity onPress={() => setShowSaveMenu(!showSaveMenu)} style={postStyles.actionBtn}>
-            <Ionicons name={saved ? 'bookmark' : 'bookmark-outline'} size={20} color={saved ? colors.accentPrimary : colors.textSecondary} />
+      {/* Gradient overlay at bottom */}
+      <View style={ms.gradient} />
+
+      {/* Video badge */}
+      {isVideo && (
+        <View style={ms.videoBadge}>
+          <Ionicons name="play" size={10} color="#FFF" />
+        </View>
+      )}
+
+      {/* Check-in place tag */}
+      {isCheckIn && post.place_name && (
+        <View style={ms.placeBadge}>
+          <Ionicons name="location" size={10} color="#FFF" />
+          <Text style={ms.placeText} numberOfLines={1}>{post.place_name}</Text>
+        </View>
+      )}
+
+      {/* Bottom info */}
+      <View style={ms.cardBottom}>
+        {hasImage && post.content ? (
+          <Text style={ms.cardCaption} numberOfLines={2}>{post.content}</Text>
+        ) : null}
+        <View style={ms.cardActions}>
+          <TouchableOpacity onPress={onLike} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <Ionicons name={isLiked ? 'heart' : 'heart-outline'} size={18} color={isLiked ? '#EF4444' : 'rgba(255,255,255,0.9)'} />
           </TouchableOpacity>
-          {showSaveMenu && (
-            <View style={postStyles.saveFloating}>
-              {SAVE_COLLECTIONS.map((col) => (
-                <TouchableOpacity
-                  key={col.id}
-                  style={[postStyles.saveItem, savedCollection === col.id && postStyles.saveItemActive]}
-                  onPress={async () => {
-                    try {
-                      await api.post(`/library/save/${post.id}`, { collection: col.id });
-                      setSaved(true);
-                      setSavedCollection(col.id);
-                    } catch (e) { console.log('Save error:', e); }
-                    setShowSaveMenu(false);
-                  }}
-                >
-                  <Ionicons name={col.icon as any} size={16} color={savedCollection === col.id ? colors.accentPrimary : colors.textSecondary} />
-                  <Text style={[postStyles.saveItemText, savedCollection === col.id && { color: colors.accentPrimary, fontWeight: '700' }]}>{col.label}</Text>
-                </TouchableOpacity>
-              ))}
-              <View style={postStyles.saveDivider} />
-              <TouchableOpacity
-                style={postStyles.saveItem}
-                onPress={() => {
-                  setShowSaveMenu(false);
-                  Alert.alert('New Collection', 'Enter a name for your new collection', [
-                    { text: 'Cancel', style: 'cancel' },
-                    { text: 'Create', onPress: async () => {
-                      try {
-                        await api.post(`/library/save/${post.id}`, { collection: 'custom' });
-                        setSaved(true);
-                        setSavedCollection('custom');
-                      } catch (e) { console.log('Save error:', e); }
-                    }},
-                  ]);
-                }}
-              >
-                <Ionicons name="add-circle-outline" size={16} color={colors.accentPrimary} />
-                <Text style={[postStyles.saveItemText, { color: colors.accentPrimary, fontWeight: '600' }]}>Create New</Text>
-              </TouchableOpacity>
-            </View>
-          )}
+          <TouchableOpacity onPress={onSave} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <Ionicons name={isSaved ? 'bookmark' : 'bookmark-outline'} size={17} color={isSaved ? '#F59E0B' : 'rgba(255,255,255,0.9)'} />
+          </TouchableOpacity>
         </View>
       </View>
-    </View>
+    </TouchableOpacity>
   );
 }
 
-const postStyles = StyleSheet.create({
-  container: {
-    backgroundColor: colors.bgApp,
-    paddingBottom: 8,
-    marginBottom: 4,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.borderSubtle,
+const ms = StyleSheet.create({
+  card: { width: COL_W, borderRadius: 12, overflow: 'hidden', backgroundColor: colors.bgSubtle, marginBottom: COL_GAP },
+  cardMedia: { width: '100%', height: '100%', backgroundColor: colors.bgSubtle },
+  textOnlyBg: { justifyContent: 'center', alignItems: 'center', paddingHorizontal: 16 },
+  textOnlyContent: { color: '#FFF', fontSize: 15, fontWeight: '700', textAlign: 'center', lineHeight: 22 },
+  gradient: { position: 'absolute', bottom: 0, left: 0, right: 0, height: '40%', backgroundColor: 'transparent', 
+    // Using a simple semi-transparent overlay since LinearGradient isn't available
   },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-  },
-  headerLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1,
-  },
-  avatar: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    overflow: 'hidden',
-    marginRight: 12,
-    borderWidth: 2,
-    borderColor: colors.accentPrimary + '30',
-  },
-  avatarImg: { width: '100%', height: '100%' },
-  avatarFallback: {
-    width: '100%',
-    height: '100%',
-    backgroundColor: colors.avatarTeal,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  avatarInitial: { color: '#FFFFFF', fontSize: 16, fontWeight: '700' },
-  username: { fontSize: 15, fontWeight: '700', color: colors.textPrimary },
-  verifiedBadge: { marginLeft: -2 },
-  location: { fontSize: 12, color: colors.accentPrimary, fontWeight: '500' },
-  timeLabel: { fontSize: 12, color: colors.textHint, marginTop: 1 },
-  moreBtn: { padding: 6 },
-  // Media – full-width
-  carouselDots: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 5,
-    paddingVertical: 10,
-  },
-  dot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: colors.borderLight,
-  },
-  dotActive: {
-    backgroundColor: colors.accentPrimary,
-    width: 18,
-    borderRadius: 3,
-  },
-  // Caption
-  captionContainer: { paddingHorizontal: 16, marginTop: 10 },
-  captionText: { fontSize: 15, color: colors.textPrimary, lineHeight: 22 },
-  moreText: { fontSize: 14, color: colors.accentPrimary, fontWeight: '600', marginTop: 2 },
-  // Check-In Place Card
-  checkinCard: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    marginHorizontal: 14, marginTop: 6, marginBottom: 4, padding: 12,
-    backgroundColor: '#E8F5E9', borderRadius: 14, borderWidth: 1, borderColor: '#A5D6A7',
-  },
-  checkinLeft: { flexDirection: 'row', alignItems: 'center', flex: 1, gap: 10 },
-  checkinIcon: { width: 32, height: 32, borderRadius: 10, backgroundColor: '#2D6A4F', justifyContent: 'center', alignItems: 'center' },
-  checkinName: { fontSize: 14, fontWeight: '700', color: '#1B5E20' },
-  checkinVerified: { fontSize: 11, color: '#16A34A', fontWeight: '600' },
-  checkinViewBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 2,
-    paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12,
-    backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#A5D6A7',
-  },
-  checkinViewText: { fontSize: 12, fontWeight: '700', color: '#2D6A4F' },
-  // Question Card
-  questionCard: {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-    marginHorizontal: 14, marginTop: 6, marginBottom: 4, padding: 10,
-    backgroundColor: '#FEF3C7', borderRadius: 12, borderWidth: 1, borderColor: '#FDE68A',
-  },
-  questionLabel: { fontSize: 12, color: '#92400E', flex: 1, fontWeight: '500', lineHeight: 16 },
-  // Actions – horizontal icon row with counts
-  actionsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingTop: 10,
-  },
-  actionBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingRight: 20,
-    paddingVertical: 4,
-  },
-  actionCount: { fontSize: 13, fontWeight: '600', color: colors.textSecondary },
-  // Save Floating Menu
-  saveFloating: {
-    position: 'absolute',
-    bottom: 44,
-    right: 0,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: colors.borderLight,
-    paddingVertical: 4,
-    minWidth: 180,
-    zIndex: 100,
-    elevation: 10,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.15,
-    shadowRadius: 12,
-  },
-  saveItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-  },
-  saveItemActive: {
-    backgroundColor: colors.accentPrimaryLight,
-  },
-  saveItemText: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: colors.textPrimary,
-  },
-  saveDivider: {
-    height: 1,
-    backgroundColor: colors.borderSubtle,
-    marginVertical: 2,
-  },
-  // Menu Sheet
-  menuOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
-  menuSheet: {
-    backgroundColor: '#FFFFFF',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    paddingTop: 8,
-    paddingBottom: 34,
-  },
-  menuHandle: {
-    width: 40,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: colors.borderLight,
-    alignSelf: 'center',
-    marginBottom: 12,
-  },
-  menuItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 14,
-    paddingHorizontal: 20,
-    paddingVertical: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.borderSubtle,
-  },
-  menuItemText: { fontSize: 16, fontWeight: '500', color: colors.textPrimary },
-  menuCancel: { alignItems: 'center', paddingVertical: 16, marginTop: 4 },
-  menuCancelText: { fontSize: 16, fontWeight: '600', color: colors.textHint },
-  // Report Sheet
-  reportSheet: {
-    backgroundColor: '#FFFFFF',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    paddingTop: 8,
-    paddingBottom: 34,
-    maxHeight: '80%',
-  },
-  reportTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: colors.textPrimary,
-    paddingHorizontal: 20,
-    marginBottom: 4,
-  },
-  reportSubtitle: {
-    fontSize: 13,
-    color: colors.textHint,
-    paddingHorizontal: 20,
-    marginBottom: 16,
-    lineHeight: 18,
-  },
-  reportItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 14,
-    paddingHorizontal: 20,
-    paddingVertical: 15,
-    borderTopWidth: 1,
-    borderTopColor: colors.borderSubtle,
-  },
-  reportItemText: { flex: 1, fontSize: 15, fontWeight: '500', color: colors.textPrimary },
+  videoBadge: { position: 'absolute', top: 8, right: 8, backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 10, width: 24, height: 24, justifyContent: 'center', alignItems: 'center' },
+  placeBadge: { position: 'absolute', top: 8, left: 8, flexDirection: 'row', alignItems: 'center', gap: 3, backgroundColor: 'rgba(0,0,0,0.5)', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 10, maxWidth: COL_W - 48 },
+  placeText: { color: '#FFF', fontSize: 10, fontWeight: '600' },
+  cardBottom: { position: 'absolute', bottom: 0, left: 0, right: 0, padding: 10, backgroundColor: 'rgba(0,0,0,0.25)' },
+  cardCaption: { color: '#FFF', fontSize: 12, fontWeight: '500', lineHeight: 16, marginBottom: 6 },
+  cardActions: { flexDirection: 'row', alignItems: 'center', gap: 12 },
 });
 
-// ─── Inline Composer ─────────────────────────────────────────────────────────
-function InlineComposer({
-  user,
-  visible,
-  onClose,
-  onPostCreated,
-}: {
-  user: any;
-  visible: boolean;
-  onClose: () => void;
-  onPostCreated: () => void;
-}) {
-  const [content, setContent] = useState('');
-  const [media, setMedia] = useState<{ uri: string; base64?: string }[]>([]);
-  const [isPosting, setIsPosting] = useState(false);
-  const [inlinePostType, setInlinePostType] = useState<'lifestyle' | 'question'>('lifestyle');
 
-  const QUICK_TYPES = [
-    { id: 'lifestyle' as const, label: 'Lifestyle', icon: 'sparkles' as const, color: '#6366F1' },
-    { id: 'question' as const, label: 'Question', icon: 'help-circle' as const, color: '#F59E0B' },
-  ];
-
-  if (!visible) return null;
-
-  const pickImages = async () => {
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images', 'videos'],
-      allowsMultipleSelection: true,
-      quality: 0.7,
-      base64: true,
-      selectionLimit: 10 - media.length,
-    });
-    if (!result.canceled && result.assets) {
-      const newMedia = result.assets.map((a) => ({
-        uri: a.uri,
-        base64: a.base64 ? `data:image/jpeg;base64,${a.base64}` : undefined,
-      }));
-      setMedia((prev) => [...prev, ...newMedia].slice(0, 10));
-    }
-  };
-
-  const takePhoto = async () => {
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') { Alert.alert('Permission needed', 'Camera access required'); return; }
-    const result = await ImagePicker.launchCameraAsync({ quality: 0.7, base64: true });
-    if (!result.canceled && result.assets[0]) {
-      const a = result.assets[0];
-      setMedia((prev) => [...prev, { uri: a.uri, base64: a.base64 ? `data:image/jpeg;base64,${a.base64}` : undefined }].slice(0, 10));
-    }
-  };
-
-  const handlePost = async () => {
-    if (!content.trim() && media.length === 0) return;
-    setIsPosting(true);
-    try {
-      // Upload images to Cloudflare Images first
-      const uploadedUrls: string[] = [];
-      for (const m of media) {
-        const imageData = m.base64 || m.uri;
-        if (imageData) {
-          const cfUrl = await uploadImage(imageData);
-          uploadedUrls.push(cfUrl);
-        }
-      }
-      await api.post('/posts', {
-        content: content.trim(),
-        image: uploadedUrls[0] || null,
-        images: uploadedUrls.length > 0 ? uploadedUrls : undefined,
-        post_type: inlinePostType,
-      });
-      setContent('');
-      setMedia([]);
-      onClose();
-      onPostCreated();
-    } catch (error: any) {
-      Alert.alert('Error', error.response?.data?.detail || 'Could not create post');
-    } finally {
-      setIsPosting(false);
-    }
-  };
-
-  return (
-    <View style={composerStyles.container}>
-      <View style={composerStyles.headerRow}>
-        <Text style={composerStyles.title}>Start post</Text>
-        <View style={{ flex: 1 }} />
-        <TouchableOpacity
-          style={[composerStyles.postBtnSmall, (!content.trim() && media.length === 0) && { opacity: 0.4 }]}
-          onPress={handlePost}
-          disabled={(!content.trim() && media.length === 0) || isPosting}
-        >
-          {isPosting ? (
-            <ActivityIndicator size="small" color={colors.accentPrimary} />
-          ) : (
-            <Text style={composerStyles.postBtnSmallText}>Post</Text>
-          )}
-        </TouchableOpacity>
-        <TouchableOpacity onPress={onClose} style={composerStyles.closeBtn}>
-          <Ionicons name="close" size={20} color={colors.textPrimary} />
-        </TouchableOpacity>
-      </View>
-
-      {/* User row */}
-      <View style={composerStyles.userRow}>
-        <View style={composerStyles.cAvatar}>
-          {user?.profile_image ? (
-            <Image source={{ uri: user.profile_image }} style={composerStyles.cAvatarImg} />
-          ) : (
-            <View style={composerStyles.cAvatarFallback}>
-              <Text style={composerStyles.cAvatarText}>
-                {(user?.full_name || 'U')[0].toUpperCase()}
-              </Text>
-            </View>
-          )}
-        </View>
-        <View>
-          <Text style={composerStyles.userName}>{user?.full_name}</Text>
-          <View style={composerStyles.visibilityRow}>
-            <Ionicons name="globe-outline" size={12} color={colors.textSecondary} />
-            <Text style={composerStyles.visibilityText}>Everyone</Text>
-          </View>
-        </View>
-      </View>
-
-      {/* Text input - inline, no navigation */}
-      <View style={{ flexDirection: 'row', gap: 6, marginBottom: 10 }}>
-        {QUICK_TYPES.map((type) => (
-          <TouchableOpacity
-            key={type.id}
-            style={[
-              composerStyles.quickTypeChip,
-              inlinePostType === type.id && { backgroundColor: type.color + '18', borderColor: type.color + '50' },
-            ]}
-            onPress={() => setInlinePostType(type.id)}
-          >
-            <Ionicons name={type.icon} size={13} color={inlinePostType === type.id ? type.color : colors.textHint} />
-            <Text style={[composerStyles.quickTypeText, inlinePostType === type.id && { color: type.color, fontWeight: '700' }]}>
-              {type.label}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-      <TextInput
-        style={composerStyles.textInput}
-        placeholder="Share a tip, thought or update with the community..."
-        placeholderTextColor={colors.textHint}
-        value={content}
-        onChangeText={setContent}
-        multiline
-        maxLength={2000}
-      />
-
-      {/* Media thumbnails */}
-      {media.length > 0 && (
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={composerStyles.mediaRow}>
-          {media.map((m, i) => (
-            <View key={i} style={composerStyles.mediaThumbnail}>
-              <Image source={{ uri: m.uri }} style={composerStyles.mediaThumbnailImg} />
-              <TouchableOpacity
-                style={composerStyles.mediaRemove}
-                onPress={() => setMedia((prev) => prev.filter((_, idx) => idx !== i))}
-              >
-                <Ionicons name="close" size={12} color="#FFFFFF" />
-              </TouchableOpacity>
-            </View>
-          ))}
-        </ScrollView>
-      )}
-
-      {/* Action buttons */}
-      <View style={composerStyles.actionsRow}>
-        <TouchableOpacity style={composerStyles.actionBtn} onPress={pickImages}>
-          <Ionicons name="image-outline" size={22} color={colors.accentSecondary} />
-        </TouchableOpacity>
-        <TouchableOpacity style={composerStyles.actionBtn} onPress={takePhoto}>
-          <Ionicons name="camera-outline" size={22} color={colors.info} />
-        </TouchableOpacity>
-        <TouchableOpacity style={composerStyles.actionBtn}>
-          <Ionicons name="document-outline" size={22} color={colors.warning} />
-        </TouchableOpacity>
-        <View style={{ flex: 1 }} />
-        <Text style={composerStyles.charCount}>{content.length}/2000</Text>
-      </View>
-    </View>
-  );
-}
-
-const composerStyles = StyleSheet.create({
-  container: {
-    backgroundColor: colors.bgCard,
-    borderRadius: 24,
-    marginHorizontal: 16,
-    marginBottom: 12,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: colors.borderSubtle,
-    ...shadows.elevation2,
-  },
-  headerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  title: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: colors.textPrimary,
-  },
-  postBtnSmall: {
-    backgroundColor: colors.accentPrimaryLight,
-    borderRadius: 20,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    marginRight: 8,
-    minWidth: 60,
-    alignItems: 'center',
-  },
-  postBtnSmallText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: colors.accentPrimary,
-  },
-  closeBtn: {
-    padding: 4,
-  },
-  userRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  cAvatar: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    overflow: 'hidden',
-    marginRight: 12,
-  },
-  cAvatarImg: {
-    width: '100%',
-    height: '100%',
-  },
-  cAvatarFallback: {
-    width: '100%',
-    height: '100%',
-    backgroundColor: colors.avatarTeal,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  cAvatarText: {
-    color: '#FFFFFF',
-    fontSize: 18,
-    fontWeight: '700',
-  },
-  userName: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: colors.textPrimary,
-  },
-  visibilityRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    marginTop: 2,
-  },
-  visibilityText: {
-    fontSize: 12,
-    color: colors.textSecondary,
-    fontWeight: '500',
-  },
-  textInput: {
-    fontSize: 16,
-    color: colors.textPrimary,
-    lineHeight: 24,
-    minHeight: 60,
-    textAlignVertical: 'top',
-    marginBottom: 12,
-  },
-  mediaRow: {
-    flexDirection: 'row',
-    marginBottom: 12,
-  },
-  mediaThumbnail: {
-    width: 64,
-    height: 64,
-    borderRadius: 12,
-    overflow: 'hidden',
-    marginRight: 8,
-  },
-  mediaThumbnailImg: {
-    width: '100%',
-    height: '100%',
-  },
-  mediaRemove: {
-    position: 'absolute',
-    top: 2,
-    right: 2,
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: 'rgba(0,0,0,0.6)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  actionsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderTopWidth: 1,
-    borderTopColor: colors.borderSubtle,
-    paddingTop: 12,
-  },
-  actionBtn: {
-    padding: 8,
-    marginRight: 8,
-  },
-  charCount: {
-    fontSize: 12,
-    color: colors.textHint,
-  },
-  quickTypeChip: {
-    flexDirection: 'row' as const,
-    alignItems: 'center' as const,
-    gap: 4,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 14,
-    backgroundColor: colors.bgSubtle,
-    borderWidth: 1,
-    borderColor: colors.borderLight,
-  },
-  quickTypeText: {
-    fontSize: 11,
-    fontWeight: '600' as const,
-    color: colors.textHint,
-  },
-});
-
-// ─── Main Home Screen ────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════
+// HOME SCREEN
+// ═══════════════════════════════════════════════════════════════════
 export default function HomeScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { user } = useAuthStore();
+
   const [posts, setPosts] = useState<any[]>([]);
   const [statuses, setStatuses] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [showComposer, setShowComposer] = useState(false);
-  const [activeCity, setActiveCity] = useState('global');
+  const [activeCategory, setActiveCategory] = useState('All');
+  const [activeLocation, setActiveLocation] = useState('global');
+  const [tonightMode, setTonightMode] = useState(false);
+  const [likedPosts, setLikedPosts] = useState<Set<string>>(new Set());
+  const [savedPosts, setSavedPosts] = useState<Set<string>>(new Set());
 
-  const CITIES = [
-    { id: 'global', label: 'Global', icon: 'globe-outline' },
-    { id: 'nearby', label: 'Nearby', icon: 'navigate-outline' },
-    { id: 'New York', label: 'New York', icon: 'business-outline' },
-    { id: 'Miami', label: 'Miami', icon: 'sunny-outline' },
-    { id: 'Los Angeles', label: 'LA', icon: 'car-outline' },
-    { id: 'Paris', label: 'Paris', icon: 'heart-outline' },
-    { id: 'London', label: 'London', icon: 'rainy-outline' },
-    { id: 'Tokyo', label: 'Tokyo', icon: 'train-outline' },
-    { id: 'Shanghai', label: 'Shanghai', icon: 'earth-outline' },
-    { id: 'Dubai', label: 'Dubai', icon: 'diamond-outline' },
-    { id: 'Berlin', label: 'Berlin', icon: 'beer-outline' },
-    { id: 'Toronto', label: 'Toronto', icon: 'snow-outline' },
-  ];
+  useEffect(() => { loadFeed(); loadStatuses(); }, [activeCategory, activeLocation]);
 
-  const loadFeed = async (city?: string) => {
+  const loadFeed = async () => {
     try {
-      const c = city || activeCity;
       const params: any = {};
-      if (c !== 'global' && c !== 'nearby') params.location = c;
+      if (activeCategory !== 'All') params.category = activeCategory.toLowerCase();
+      if (activeLocation === 'near') params.nearby = true;
+      if (activeLocation !== 'global' && activeLocation !== 'near') params.city = activeLocation;
       const response = await api.get('/posts/feed', { params });
-      setPosts(response.data);
+      const feedPosts = Array.isArray(response.data) ? response.data : [];
+      setPosts(feedPosts);
+      // Track liked posts
+      const liked = new Set<string>();
+      feedPosts.forEach((p: any) => { if (p.user_liked) liked.add(p.id); });
+      setLikedPosts(liked);
     } catch (error) {
       console.log('Error loading feed:', error);
     } finally {
@@ -999,481 +172,313 @@ export default function HomeScreen() {
   const loadStatuses = async () => {
     try {
       const response = await api.get('/statuses');
-      setStatuses(response.data);
+      setStatuses(Array.isArray(response.data) ? response.data : []);
     } catch (error) {
       console.log('Error loading statuses:', error);
     }
   };
 
-  useEffect(() => {
-    loadFeed();
-    loadStatuses();
-  }, []);
-
   const onRefresh = useCallback(async () => {
     setIsRefreshing(true);
     await Promise.all([loadFeed(), loadStatuses()]);
     setIsRefreshing(false);
-  }, []);
+  }, [activeCategory, activeLocation]);
+
+  const handleLike = async (postId: string) => {
+    try {
+      await api.post(`/posts/${postId}/like`);
+      setLikedPosts(prev => {
+        const next = new Set(prev);
+        if (next.has(postId)) next.delete(postId); else next.add(postId);
+        return next;
+      });
+    } catch {}
+  };
+
+  const handleSave = async (postId: string) => {
+    try {
+      if (savedPosts.has(postId)) {
+        await api.delete(`/bookmarks/${postId}`);
+        setSavedPosts(prev => { const n = new Set(prev); n.delete(postId); return n; });
+      } else {
+        await api.post('/bookmarks', { post_id: postId, collection: 'saved' });
+        setSavedPosts(prev => new Set(prev).add(postId));
+      }
+    } catch {}
+  };
+
+  // ─── Drop a Moment ─────────────────────────────────────
+  const dropMoment = async () => {
+    try {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== 'granted') { Alert.alert('Permission needed', 'Camera access required'); return; }
+      const result = await ImagePicker.launchCameraAsync({
+        quality: 0.8, base64: true, allowsEditing: false,
+      });
+      if (!result.canceled && result.assets[0]) {
+        const asset = result.assets[0];
+        const imageData = asset.base64 ? `data:image/jpeg;base64,${asset.base64}` : asset.uri;
+        // Upload to CF Images
+        const cfUrl = await uploadImage(imageData);
+        // Auto-detect location
+        let locationText = '';
+        try {
+          const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Low });
+          const geo = await Location.reverseGeocodeAsync({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
+          if (geo[0]) locationText = geo[0].city || geo[0].district || '';
+        } catch {}
+        // Post immediately
+        await api.post('/posts', {
+          content: locationText ? `Moment in ${locationText}` : 'Dropped a moment',
+          image: cfUrl,
+          post_type: 'lifestyle',
+        });
+        Alert.alert('Moment dropped!', 'Your moment is now live.');
+        loadFeed();
+      }
+    } catch (error: any) {
+      Alert.alert('Error', 'Could not drop moment');
+    }
+  };
+
+  // ─── Build 2-column masonry ────────────────────────────
+  const buildMasonry = () => {
+    const left: { post: any; h: number }[] = [];
+    const right: { post: any; h: number }[] = [];
+    let leftH = 0, rightH = 0;
+
+    posts.forEach((post, idx) => {
+      const h = getItemHeight(idx);
+      if (leftH <= rightH) {
+        left.push({ post, h });
+        leftH += h + COL_GAP;
+      } else {
+        right.push({ post, h });
+        rightH += h + COL_GAP;
+      }
+    });
+    return { left, right };
+  };
+
+  const { left, right } = buildMasonry();
 
   const greeting = () => {
     const h = new Date().getHours();
     if (h < 12) return 'Good morning';
-    if (h < 17) return 'Good afternoon';
+    if (h < 18) return 'Good afternoon';
     return 'Good evening';
   };
 
-  const firstName = user?.full_name?.split(' ')[0] || '';
-
-  const renderHeader = () => (
-    <View>
-      {/* App Header */}
-      <View style={styles.header}>
-        <View>
-          <View style={styles.logoRow}>
-            <View style={styles.logoIcon}>
-              <Ionicons name="flame" size={14} color={colors.flameGold} />
-            </View>
-            <Text style={styles.logoText}>flames-up</Text>
-          </View>
-          <Text style={styles.greeting}>
-            {greeting().toUpperCase()}
-            {firstName ? `, ${firstName.toUpperCase()}` : ''}
-          </Text>
-        </View>
-        <View style={styles.headerActions}>
-          <TouchableOpacity
-            style={styles.headerBtn}
-            onPress={() => router.push('/notifications')}
-          >
-            <Ionicons
-              name="notifications-outline"
-              size={18}
-              color={colors.accentPrimary}
-            />
-          </TouchableOpacity>
-        </View>
-      </View>
-
-      {/* Status/Story Bar */}
+  return (
+    <View style={s.container}>
       <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.statusBar}
+        showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={onRefresh} tintColor={colors.accentPrimary} />}
+        contentContainerStyle={{ paddingBottom: 100 }}
       >
-        {/* Your Story button */}
-        <TouchableOpacity
-          style={styles.storyItem}
-          onPress={() => router.push('/create-status')}
-        >
-          <View style={styles.storyAvatarAdd}>
-            {user?.profile_image ? (
-              <Image
-                source={{ uri: user.profile_image }}
-                style={styles.storyAvatarImg}
-              />
-            ) : (
-              <View style={styles.storyAvatarFallback}>
-                <Text style={styles.storyAvatarFallbackText}>
-                  {(user?.full_name || 'U')[0].toUpperCase()}
-                </Text>
-              </View>
-            )}
-            <View style={styles.storyPlusBadge}>
-              <Ionicons name="add" size={12} color="#FFFFFF" />
-            </View>
+        {/* ── Header ── */}
+        <View style={[s.header, { paddingTop: insets.top + 8 }]}>
+          <View>
+            <Text style={s.logo}>Flames-Up</Text>
+            <Text style={s.greeting}>{greeting()}, {user?.full_name?.split(' ')[0] || 'there'}</Text>
           </View>
-          <Text style={styles.storyName}>Your Story</Text>
-        </TouchableOpacity>
+          <View style={s.headerRight}>
+            <TouchableOpacity
+              style={[s.tonightBtn, tonightMode && s.tonightBtnActive]}
+              onPress={() => setTonightMode(!tonightMode)}
+            >
+              <Ionicons name="moon" size={16} color={tonightMode ? '#FFF' : colors.textPrimary} />
+              <Text style={[s.tonightText, tonightMode && { color: '#FFF' }]}>Tonight</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={s.iconBtn} onPress={() => router.push('/notifications' as any)}>
+              <Ionicons name="notifications-outline" size={22} color={colors.textPrimary} />
+            </TouchableOpacity>
+          </View>
+        </View>
 
-        {/* Other stories - filter out current user */}
-        {statuses
-          .filter((s: any) => s.user_id !== user?.id)
-          .map((status: any, idx: number) => (
-          <TouchableOpacity
-            key={status.user_id || idx}
-            style={styles.storyItem}
-            onPress={() => router.push(`/story-viewer?userId=${status.user_id}` as any)}
-          >
-            <View style={[styles.storyRing, status.has_unviewed && styles.storyRingUnviewed]}>
-              <View style={styles.storyRingInner}>
-                {status.user_profile_image ? (
-                  <Image
-                    source={{ uri: status.user_profile_image }}
-                    style={styles.storyAvatarImg}
-                  />
+        {/* ── Stories Bar ── */}
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.storiesBar}>
+          <TouchableOpacity style={s.storyItem} onPress={() => router.push('/create-status')}>
+            <View style={s.storyAdd}>
+              {user?.profile_image ? (
+                <Image source={{ uri: user.profile_image }} style={s.storyImg} />
+              ) : (
+                <View style={s.storyPlaceholder}>
+                  <Text style={s.storyPlaceholderText}>{(user?.full_name || 'U')[0]}</Text>
+                </View>
+              )}
+              <View style={s.plusBadge}><Ionicons name="add" size={12} color="#FFF" /></View>
+            </View>
+            <Text style={s.storyName}>Your Story</Text>
+          </TouchableOpacity>
+          {statuses.filter((g: any) => g.user_id !== user?.id).map((group: any, idx: number) => (
+            <TouchableOpacity
+              key={group.user_id || idx}
+              style={s.storyItem}
+              onPress={() => router.push(`/story-viewer?userId=${group.user_id}` as any)}
+            >
+              <View style={[s.storyRing, group.has_unviewed && s.storyRingActive]}>
+                {group.user_profile_image ? (
+                  <Image source={{ uri: group.user_profile_image }} style={s.storyImg} />
                 ) : (
-                  <View
-                    style={[
-                      styles.storyAvatarFallback,
-                      { backgroundColor: colors.avatarPurple },
-                    ]}
-                  >
-                    <Text style={styles.storyAvatarFallbackText}>
-                      {(status.user_full_name || 'U')[0].toUpperCase()}
-                    </Text>
+                  <View style={s.storyPlaceholder}>
+                    <Text style={s.storyPlaceholderText}>{(group.user_full_name || 'U')[0]}</Text>
                   </View>
                 )}
               </View>
-            </View>
-            <Text style={styles.storyName} numberOfLines={1}>
-              {status.user_full_name?.split(' ')[0] || 'User'}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </ScrollView>
-
-      {/* Divider */}
-      <View style={styles.divider} />
-
-      {/* City Location Selector */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.cityRow}
-      >
-        {CITIES.map((city) => (
-          <TouchableOpacity
-            key={city.id}
-            style={[styles.cityChip, activeCity === city.id && styles.cityChipActive]}
-            onPress={() => {
-              setActiveCity(city.id);
-              setIsLoading(true);
-              loadFeed(city.id);
-            }}
-          >
-            <Ionicons
-              name={city.icon as any}
-              size={14}
-              color={activeCity === city.id ? '#FFFFFF' : colors.textSecondary}
-            />
-            <Text style={[styles.cityChipText, activeCity === city.id && styles.cityChipTextActive]}>
-              {city.label}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </ScrollView>
-
-      {/* Post Button */}
-      {user && (
-        <View style={styles.postRow}>
-          <TouchableOpacity
-            style={styles.postBtn}
-            onPress={() => setShowComposer(!showComposer)}
-          >
-            <Ionicons name="create-outline" size={16} color="#FFFFFF" />
-            <Text style={styles.postBtnText}>Create Post</Text>
-          </TouchableOpacity>
-        </View>
-      )}
-
-      {/* Inline Composer */}
-      <InlineComposer
-        user={user}
-        visible={showComposer}
-        onClose={() => setShowComposer(false)}
-        onPostCreated={() => loadFeed()}
-      />
-    </View>
-  );
-
-  const renderPost = ({ item }: { item: any }) => (
-    <PostCard
-      post={item}
-      currentUserId={user?.id || ''}
-      onPress={() => router.push(`/post/${item.id}`)}
-      onUserPress={() => router.push(`/user/${item.user_id}`)}
-    />
-  );
-
-  if (isLoading) {
-    return (
-      <SafeAreaView style={styles.loadingContainer} edges={['top']}>
-        <ActivityIndicator size="large" color={colors.accentPrimary} />
-      </SafeAreaView>
-    );
-  }
-
-  return (
-    <SafeAreaView style={styles.container} edges={['top']}>
-      <FlatList
-        data={posts}
-        renderItem={renderPost}
-        keyExtractor={(item) => item.id}
-        ListHeaderComponent={renderHeader}
-        ListEmptyComponent={
-          <View style={styles.emptyContainer}>
-            <Ionicons name="camera-outline" size={56} color={colors.textHint} />
-            <Text style={styles.emptyTitle}>Share Your First Moment</Text>
-            <Text style={styles.emptyText}>
-              Posts from you and your friends will show up here.
-            </Text>
-            <TouchableOpacity
-              style={styles.createFirstBtn}
-              onPress={() => router.push('/create-post')}
-            >
-              <Text style={styles.createFirstBtnText}>Create Post</Text>
+              <Text style={s.storyName} numberOfLines={1}>{group.user_full_name?.split(' ')[0] || 'User'}</Text>
             </TouchableOpacity>
+          ))}
+        </ScrollView>
+
+        {/* ── Location Toggle ── */}
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.locRow}>
+          {LOCATIONS.map(loc => (
+            <TouchableOpacity
+              key={loc.id}
+              style={[s.locChip, activeLocation === loc.id && s.locChipActive]}
+              onPress={() => setActiveLocation(loc.id)}
+            >
+              <Ionicons name={loc.icon as any} size={14} color={activeLocation === loc.id ? '#FFF' : colors.textSecondary} />
+              <Text style={[s.locText, activeLocation === loc.id && { color: '#FFF' }]}>{loc.label}</Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+
+        {/* ── Category Tabs ── */}
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.catRow}>
+          {CATEGORIES.map(cat => (
+            <TouchableOpacity
+              key={cat}
+              style={[s.catTab, activeCategory === cat && s.catTabActive]}
+              onPress={() => setActiveCategory(cat)}
+            >
+              <Text style={[s.catText, activeCategory === cat && s.catTextActive]}>{cat}</Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+
+        {/* ── Tonight Mode Banner ── */}
+        {tonightMode && (
+          <View style={s.tonightBanner}>
+            <Text style={s.tonightBannerIcon}>🌙</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={s.tonightBannerTitle}>Tonight Mode</Text>
+              <Text style={s.tonightBannerSub}>Active spots, places open now, recent check-ins</Text>
+            </View>
           </View>
-        }
-        refreshControl={
-          <RefreshControl
-            refreshing={isRefreshing}
-            onRefresh={onRefresh}
-            tintColor={colors.accentPrimary}
-          />
-        }
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingBottom: 100 }}
-        ItemSeparatorComponent={() => <View style={styles.postSeparator} />}
-      />
-    </SafeAreaView>
+        )}
+
+        {/* ── Masonry Grid ── */}
+        {isLoading ? (
+          <View style={s.loadingWrap}>
+            <ActivityIndicator size="large" color={colors.accentPrimary} />
+          </View>
+        ) : posts.length === 0 ? (
+          <View style={s.emptyWrap}>
+            <Ionicons name="images-outline" size={48} color={colors.textHint} />
+            <Text style={s.emptyTitle}>No posts yet</Text>
+            <Text style={s.emptyBody}>Be the first to drop a moment</Text>
+          </View>
+        ) : (
+          <View style={s.masonry}>
+            <View style={s.column}>
+              {left.map(({ post, h }) => (
+                <MasonryCard
+                  key={post.id}
+                  post={post}
+                  height={h}
+                  onPress={() => router.push(`/post/${post.id}` as any)}
+                  onLike={() => handleLike(post.id)}
+                  onSave={() => handleSave(post.id)}
+                  isLiked={likedPosts.has(post.id)}
+                  isSaved={savedPosts.has(post.id)}
+                />
+              ))}
+            </View>
+            <View style={s.column}>
+              {right.map(({ post, h }) => (
+                <MasonryCard
+                  key={post.id}
+                  post={post}
+                  height={h}
+                  onPress={() => router.push(`/post/${post.id}` as any)}
+                  onLike={() => handleLike(post.id)}
+                  onSave={() => handleSave(post.id)}
+                  isLiked={likedPosts.has(post.id)}
+                  isSaved={savedPosts.has(post.id)}
+                />
+              ))}
+            </View>
+          </View>
+        )}
+      </ScrollView>
+
+      {/* ── Floating Action Button: Drop a Moment ── */}
+      <TouchableOpacity style={[s.fab, { bottom: insets.bottom + 80 }]} onPress={dropMoment} activeOpacity={0.85}>
+        <Ionicons name="add" size={26} color="#FFF" />
+      </TouchableOpacity>
+    </View>
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#FFFFFF',
-  },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: colors.bgApp,
-  },
+// ═══════════════════════════════════════════════════════════════════
+// STYLES
+// ═══════════════════════════════════════════════════════════════════
+const s = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#FAFAF8' },
+
   // Header
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.borderSubtle,
-  },
-  logoRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 2,
-  },
-  logoIcon: {
-    width: 28,
-    height: 28,
-    borderRadius: 10,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 8,
-    backgroundColor: colors.flameDark,
-  },
-  logoText: {
-    fontSize: 18,
-    fontWeight: '700',
-    fontStyle: 'italic',
-    color: colors.textPrimary,
-    letterSpacing: -0.5,
-  },
-  greeting: {
-    fontSize: 11,
-    fontWeight: '500',
-    color: colors.textHint,
-    letterSpacing: 0.8,
-    marginLeft: 2,
-  },
-  headerActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  headerBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 14,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: colors.bgCard,
-    borderWidth: 1.5,
-    borderColor: colors.borderLight,
-  },
-  headerAvatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 14,
-    overflow: 'hidden',
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: colors.accentSecondary,
-  },
-  headerAvatarText: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: '800',
-  },
-  // Status Bar
-  statusBar: {
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    gap: 12,
-  },
-  storyItem: {
-    alignItems: 'center',
-    width: 68,
-  },
-  storyAvatarAdd: {
-    width: 62,
-    height: 62,
-    borderRadius: 31,
-    borderWidth: 2.5,
-    borderColor: colors.borderLight,
-    overflow: 'visible',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  storyAvatarImg: {
-    width: '100%',
-    height: '100%',
-    borderRadius: 31,
-  },
-  storyAvatarFallback: {
-    width: '100%',
-    height: '100%',
-    borderRadius: 31,
-    backgroundColor: colors.avatarTeal,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  storyAvatarFallbackText: {
-    color: '#FFFFFF',
-    fontSize: 18,
-    fontWeight: '700',
-  },
-  storyPlusBadge: {
-    position: 'absolute',
-    bottom: -2,
-    right: -2,
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: colors.accentPrimary,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 2,
-    borderColor: '#FFFFFF',
-  },
-  storyRing: {
-    width: 62,
-    height: 62,
-    borderRadius: 31,
-    padding: 2.5,
-    backgroundColor: colors.storyRingMid,
-    overflow: 'hidden',
-  },
-  storyRingUnviewed: {
-    backgroundColor: '#ED4956',
-  },
-  storyRingInner: {
-    width: '100%',
-    height: '100%',
-    borderRadius: 28,
-    borderWidth: 2,
-    borderColor: '#FFFFFF',
-    overflow: 'hidden',
-  },
-  storyName: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: colors.textSecondary,
-    marginTop: 6,
-    textAlign: 'center',
-    maxWidth: 64,
-  },
-  // Divider
-  divider: {
-    height: 1,
-    backgroundColor: colors.borderSubtle,
-  },
-  // City Selector
-  cityRow: {
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    gap: 8,
-  },
-  cityChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 20,
-    backgroundColor: colors.bgSubtle,
-    borderWidth: 1,
-    borderColor: colors.borderLight,
-  },
-  cityChipActive: {
-    backgroundColor: colors.accentPrimary,
-    borderColor: colors.accentPrimary,
-  },
-  cityChipText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: colors.textSecondary,
-  },
-  cityChipTextActive: {
-    color: '#FFFFFF',
-  },
-  // Post row
-  postRow: {
-    paddingHorizontal: 16,
-    paddingBottom: 8,
-  },
-  postBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    paddingVertical: 12,
-    borderRadius: 20,
-    backgroundColor: colors.accentPrimary,
-  },
-  postBtnText: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#FFFFFF',
-  },
-  // Post separator
-  postSeparator: {
-    height: 1,
-    backgroundColor: colors.borderSubtle,
-  },
-  // Empty state
-  emptyContainer: {
-    alignItems: 'center',
-    paddingVertical: 60,
-    paddingHorizontal: 32,
-  },
-  emptyTitle: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: colors.textPrimary,
-    marginTop: 16,
-    marginBottom: 8,
-  },
-  emptyText: {
-    fontSize: 14,
-    color: colors.textHint,
-    marginBottom: 24,
-    textAlign: 'center',
-    lineHeight: 20,
-  },
-  createFirstBtn: {
-    paddingHorizontal: 24,
-    paddingVertical: 14,
-    borderRadius: 20,
-    backgroundColor: colors.accentPrimary,
-  },
-  createFirstBtnText: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#FFFFFF',
-  },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', paddingHorizontal: 16, paddingBottom: 6 },
+  logo: { fontSize: 22, fontWeight: '800', color: colors.textPrimary, fontStyle: 'italic' },
+  greeting: { fontSize: 13, color: colors.textHint, marginTop: 1 },
+  headerRight: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingTop: 4 },
+  tonightBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 12, paddingVertical: 7, borderRadius: 20, backgroundColor: colors.bgSubtle, borderWidth: 1, borderColor: colors.borderLight },
+  tonightBtnActive: { backgroundColor: '#1B1B1B', borderColor: '#1B1B1B' },
+  tonightText: { fontSize: 13, fontWeight: '600', color: colors.textPrimary },
+  iconBtn: { width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center' },
+
+  // Stories
+  storiesBar: { paddingHorizontal: 12, paddingVertical: 10, gap: 12 },
+  storyItem: { alignItems: 'center', width: 64 },
+  storyAdd: { position: 'relative' },
+  storyImg: { width: 56, height: 56, borderRadius: 28 },
+  storyPlaceholder: { width: 56, height: 56, borderRadius: 28, backgroundColor: colors.bgSubtle, justifyContent: 'center', alignItems: 'center' },
+  storyPlaceholderText: { fontSize: 18, fontWeight: '700', color: colors.textHint },
+  plusBadge: { position: 'absolute', bottom: -1, right: -1, width: 20, height: 20, borderRadius: 10, backgroundColor: colors.accentPrimary, justifyContent: 'center', alignItems: 'center', borderWidth: 2, borderColor: '#FAFAF8' },
+  storyRing: { width: 60, height: 60, borderRadius: 30, borderWidth: 2, borderColor: colors.borderLight, justifyContent: 'center', alignItems: 'center' },
+  storyRingActive: { borderColor: colors.accentPrimary },
+  storyName: { fontSize: 11, color: colors.textSecondary, marginTop: 4, textAlign: 'center' },
+
+  // Location toggle
+  locRow: { paddingHorizontal: 12, gap: 6, paddingBottom: 8 },
+  locChip: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 12, paddingVertical: 7, borderRadius: 18, backgroundColor: '#FFF', borderWidth: 1, borderColor: colors.borderLight },
+  locChipActive: { backgroundColor: '#1B4332', borderColor: '#1B4332' },
+  locText: { fontSize: 12, fontWeight: '600', color: colors.textSecondary },
+
+  // Category tabs
+  catRow: { paddingHorizontal: 12, gap: 6, paddingBottom: 10 },
+  catTab: { paddingHorizontal: 14, paddingVertical: 7, borderRadius: 16, backgroundColor: 'transparent' },
+  catTabActive: { backgroundColor: '#1B1B1B' },
+  catText: { fontSize: 14, fontWeight: '600', color: colors.textHint },
+  catTextActive: { color: '#FFF' },
+
+  // Tonight banner
+  tonightBanner: { flexDirection: 'row', alignItems: 'center', gap: 10, marginHorizontal: 12, marginBottom: 10, padding: 14, borderRadius: 16, backgroundColor: '#1B1B1B' },
+  tonightBannerIcon: { fontSize: 20 },
+  tonightBannerTitle: { fontSize: 15, fontWeight: '700', color: '#FFF' },
+  tonightBannerSub: { fontSize: 12, color: 'rgba(255,255,255,0.6)', marginTop: 1 },
+
+  // Masonry
+  masonry: { flexDirection: 'row', paddingHorizontal: COL_GAP, gap: COL_GAP },
+  column: { flex: 1 },
+
+  // Loading / Empty
+  loadingWrap: { paddingTop: 60, alignItems: 'center' },
+  emptyWrap: { paddingTop: 60, alignItems: 'center' },
+  emptyTitle: { fontSize: 18, fontWeight: '700', color: colors.textPrimary, marginTop: 12 },
+  emptyBody: { fontSize: 14, color: colors.textHint, marginTop: 4 },
+
+  // FAB
+  fab: { position: 'absolute', right: 16, width: 56, height: 56, borderRadius: 28, backgroundColor: colors.accentPrimary, justifyContent: 'center', alignItems: 'center', elevation: 8, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.25, shadowRadius: 8 },
 });
