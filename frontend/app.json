@@ -52,7 +52,8 @@
           "photosPermission": "Share photos from your gallery in chat",
           "cameraPermission": "Take photos to send in messages"
         }
-      ]
+      ],
+      "expo-video"
     ],
     "experiments": {
       "typedRoutes": true

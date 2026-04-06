@@ -3,12 +3,9 @@ import api from '../api/client';
 /**
  * Upload an image to Cloudflare Images via the backend.
  * Falls back to returning base64 data if upload fails.
- * @param base64Image - The base64 image data (with or without data URI prefix)
- * @returns The Cloudflare Images URL or the original base64 string
  */
 export async function uploadImage(base64Image: string): Promise<string> {
   if (!base64Image) return '';
-  
   try {
     const response = await api.post('/upload/image', { image: base64Image });
     return response.data?.url || base64Image;
@@ -20,7 +17,6 @@ export async function uploadImage(base64Image: string): Promise<string> {
 
 /**
  * Get a direct video upload URL from Cloudflare Stream
- * @returns Upload URL and video UID
  */
 export async function getVideoUploadUrl(): Promise<{ uploadUrl: string; videoUid: string } | null> {
   try {
@@ -40,9 +36,6 @@ export async function getVideoUploadUrl(): Promise<{ uploadUrl: string; videoUid
 
 /**
  * Upload a video file to Cloudflare Stream using the direct upload URL
- * @param uploadUrl - The direct upload URL from getVideoUploadUrl
- * @param videoUri - Local URI of the video file
- * @returns true if successful
  */
 export async function uploadVideoToStream(uploadUrl: string, videoUri: string): Promise<boolean> {
   try {
@@ -65,19 +58,42 @@ export async function uploadVideoToStream(uploadUrl: string, videoUri: string): 
 }
 
 /**
- * Get the Cloudflare Stream video playback URL
- * @param videoUid - The video UID from Cloudflare Stream
- * @returns HLS playback URL
+ * Detect if a URI is a Cloudflare Stream video (prefixed with cfstream:)
  */
-export function getStreamPlaybackUrl(videoUid: string): string {
-  return `https://customer-${videoUid}.cloudflarestream.com/${videoUid}/manifest/video.m3u8`;
+export function isCFStreamVideo(uri: string): boolean {
+  return uri?.startsWith('cfstream:') || false;
 }
 
 /**
- * Get the Cloudflare Stream video thumbnail URL
- * @param videoUid - The video UID
- * @returns Thumbnail URL
+ * Extract the video UID from a cfstream: prefixed URI
  */
-export function getStreamThumbnailUrl(videoUid: string): string {
-  return `https://customer-${videoUid}.cloudflarestream.com/${videoUid}/thumbnails/thumbnail.jpg`;
+export function extractStreamUid(uri: string): string {
+  return uri.replace('cfstream:', '');
+}
+
+/**
+ * Get the Cloudflare Stream video playback URL from the backend
+ */
+export async function getStreamPlaybackInfo(videoUid: string): Promise<{
+  hls: string | null;
+  thumbnail: string | null;
+  ready: boolean;
+} | null> {
+  try {
+    const response = await api.get(`/stream/video/${videoUid}`);
+    return {
+      hls: response.data?.hls || null,
+      thumbnail: response.data?.thumbnail || null,
+      ready: response.data?.ready || false,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Get the Cloudflare Stream iframe embed URL (works universally)
+ */
+export function getStreamEmbedUrl(videoUid: string): string {
+  return `https://iframe.cloudflarestream.com/${videoUid}`;
 }

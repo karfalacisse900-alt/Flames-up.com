@@ -625,6 +625,32 @@ api.post('/upload/video', authMiddleware, async (c) => {
   }
 });
 
+// Get video playback info from Cloudflare Stream
+api.get('/stream/video/:videoUid', async (c) => {
+  const uid = c.req.param('videoUid');
+  try {
+    const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${c.env.CLOUDFLARE_ACCOUNT_ID}/stream/${uid}`, {
+      headers: { 'Authorization': `Bearer ${c.env.CLOUDFLARE_STREAM_TOKEN}` },
+    });
+    const data: any = await res.json();
+    if (!data.success || !data.result) return c.json({ detail: 'Video not found' }, 404);
+    const v = data.result;
+    return c.json({
+      uid: v.uid,
+      status: v.status?.state || 'unknown',
+      duration: v.duration,
+      thumbnail: v.thumbnail,
+      preview: v.preview,
+      playback: v.playback || {},
+      hls: v.playback?.hls || null,
+      dash: v.playback?.dash || null,
+      ready: v.readyToStream || false,
+    });
+  } catch (e: any) {
+    return c.json({ detail: 'Stream fetch failed: ' + e.message }, 500);
+  }
+});
+
 // Google Places proxy
 api.get('/google-places/nearby', async (c) => {
   const key = c.env.GOOGLE_MAPS_API_KEY;

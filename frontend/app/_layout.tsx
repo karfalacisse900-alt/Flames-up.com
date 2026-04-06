@@ -44,6 +44,7 @@ export default function RootLayout() {
         <Stack.Screen name="admin-panel" options={{ presentation: 'card' }} />
         <Stack.Screen name="content-manager" options={{ presentation: 'card' }} />
         <Stack.Screen name="my-spots" options={{ presentation: 'card' }} />
+        <Stack.Screen name="drop-moment" options={{ presentation: 'modal' }} />
         <Stack.Screen name="scene/[context]/[category]" options={{ presentation: 'card' }} />
       </Stack>
     </>

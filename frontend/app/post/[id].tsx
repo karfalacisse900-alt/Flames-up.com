@@ -1,34 +1,26 @@
 import React, { useState, useEffect } from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
-  Image,
-  ActivityIndicator,
-  TextInput,
-  FlatList,
-  Dimensions,
-  KeyboardAvoidingView,
-  Platform,
-  Share,
+  View, Text, StyleSheet, TouchableOpacity, Image, ActivityIndicator,
+  TextInput, FlatList, Dimensions, KeyboardAvoidingView, Platform, Share,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, spacing, borderRadius, shadows } from '../../src/utils/theme';
+import { useVideoPlayer, VideoView } from 'expo-video';
+import { colors } from '../../src/utils/theme';
 import { useAuthStore } from '../../src/store/authStore';
 import api from '../../src/api/client';
+import { isCFStreamVideo, extractStreamUid, getStreamPlaybackInfo } from '../../src/utils/mediaUpload';
 import { formatDistanceToNow } from 'date-fns';
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
-const PHOTO_RATIO = 4 / 5;
+const { width: SW } = Dimensions.get('window');
 
 export default function PostDetailScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { id: postId } = useLocalSearchParams<{ id: string }>();
   const { user } = useAuthStore();
+
   const [post, setPost] = useState<any>(null);
   const [comments, setComments] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -38,10 +30,9 @@ export default function PostDetailScreen() {
   const [likesCount, setLikesCount] = useState(0);
   const [saved, setSaved] = useState(false);
   const [activeImgIdx, setActiveImgIdx] = useState(0);
+  const [videoHlsUrl, setVideoHlsUrl] = useState<string | null>(null);
 
-  useEffect(() => {
-    loadPostData();
-  }, [postId]);
+  useEffect(() => { loadPostData(); }, [postId]);
 
   const loadPostData = async () => {
     try {
@@ -49,10 +40,30 @@ export default function PostDetailScreen() {
         api.get(`/posts/${postId}`),
         api.get(`/posts/${postId}/comments`),
       ]);
-      setPost(postRes.data);
-      setComments(commentsRes.data);
-      setLiked(postRes.data.liked_by?.includes(user?.id));
-      setLikesCount(postRes.data.likes_count);
+      const p = postRes.data;
+      setPost(p);
+      setComments(commentsRes.data || []);
+      setLiked(p.liked_by?.includes(user?.id));
+      setLikesCount(p.likes_count || 0);
+
+      // Check bookmark status
+      try {
+        const bm = await api.get(`/bookmarks/check/${postId}`);
+        setSaved(bm.data?.saved || false);
+      } catch {}
+
+      // Resolve CF Stream video URLs
+      const allMedia: string[] = p.images?.length > 0 ? p.images : p.image ? [p.image] : [];
+      const mediaTypes: string[] = p.media_types || [];
+      for (let i = 0; i < allMedia.length; i++) {
+        if (isCFStreamVideo(allMedia[i]) || mediaTypes[i] === 'video') {
+          const uid = extractStreamUid(allMedia[i]);
+          if (uid) {
+            const info = await getStreamPlaybackInfo(uid);
+            if (info?.hls) setVideoHlsUrl(info.hls);
+          }
+        }
+      }
     } catch (error) {
       console.log('Error loading post:', error);
     } finally {
@@ -63,61 +74,65 @@ export default function PostDetailScreen() {
   const handleLike = async () => {
     setLiked(!liked);
     setLikesCount(liked ? likesCount - 1 : likesCount + 1);
+    try { await api.post(`/posts/${postId}/like`); }
+    catch { setLiked(liked); setLikesCount(likesCount); }
+  };
+
+  const handleSave = async () => {
+    const newSaved = !saved;
+    setSaved(newSaved);
     try {
-      await api.post(`/posts/${postId}/like`);
-    } catch {
-      setLiked(liked);
-      setLikesCount(likesCount);
-    }
+      if (newSaved) {
+        await api.post('/bookmarks', { post_id: postId, collection: 'saved' });
+      } else {
+        await api.delete(`/bookmarks/${postId}`);
+      }
+    } catch { setSaved(!newSaved); }
   };
 
   const handleComment = async () => {
     if (!newComment.trim() || isCommenting) return;
     setIsCommenting(true);
     try {
-      const response = await api.post(`/posts/${postId}/comments`, {
-        content: newComment.trim(),
-      });
+      const response = await api.post(`/posts/${postId}/comments`, { content: newComment.trim() });
       setComments([...comments, response.data]);
       setNewComment('');
-    } catch (error) {
-      console.log('Error posting comment:', error);
-    } finally {
-      setIsCommenting(false);
-    }
+    } catch {} finally { setIsCommenting(false); }
   };
 
   const handleShare = async () => {
-    try {
-      await Share.share({ message: post?.content || 'Check out this post on Flames-Up!' });
-    } catch {}
+    try { await Share.share({ message: post?.content || 'Check this out on Flames-Up!' }); } catch {}
   };
 
   if (isLoading) {
     return (
-      <SafeAreaView style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color={colors.accentPrimary} />
-      </SafeAreaView>
+      <View style={s.loadWrap}>
+        <ActivityIndicator size="large" color="#1A1A1A" />
+      </View>
     );
   }
-
   if (!post) {
     return (
-      <SafeAreaView style={styles.loadingContainer}>
-        <Text style={styles.errorText}>Post not found</Text>
+      <View style={s.loadWrap}>
+        <Text style={s.errorText}>Post not found</Text>
         <TouchableOpacity onPress={() => router.back()} style={{ marginTop: 16 }}>
           <Text style={{ color: colors.accentPrimary, fontWeight: '600' }}>Go Back</Text>
         </TouchableOpacity>
-      </SafeAreaView>
+      </View>
     );
   }
 
   const timeAgo = formatDistanceToNow(new Date(post.created_at), { addSuffix: true });
   const authorName = post.user_full_name || post.user_username || 'User';
-  const allImages: string[] = post.images?.length > 0 ? post.images : post.image ? [post.image] : [];
+  const allImages: string[] = post.images?.length > 0
+    ? post.images.filter((u: string) => !isCFStreamVideo(u))
+    : post.image && !isCFStreamVideo(post.image) ? [post.image] : [];
+  const mediaTypes: string[] = post.media_types || [];
+  const hasVideo = videoHlsUrl || mediaTypes.includes('video');
+  const isCheckin = post.is_verified_checkin || post.post_type === 'check_in';
 
   return (
-    <View style={styles.container}>
+    <View style={s.container}>
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={{ flex: 1 }}
@@ -126,215 +141,218 @@ export default function PostDetailScreen() {
         <FlatList
           data={comments}
           keyExtractor={(item) => item.id}
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={{ paddingBottom: 90 }}
           ListHeaderComponent={
             <View>
-              {/* Full-bleed image or carousel with back button overlay */}
+              {/* Hero Media Area */}
               {allImages.length > 0 ? (
-                <View style={styles.imageContainer}>
+                <View style={s.heroWrap}>
                   {allImages.length > 1 ? (
-                    <View>
-                      <FlatList
-                        data={allImages}
-                        horizontal
-                        pagingEnabled
-                        showsHorizontalScrollIndicator={false}
-                        onMomentumScrollEnd={(e) => {
-                          setActiveImgIdx(Math.round(e.nativeEvent.contentOffset.x / SCREEN_WIDTH));
-                        }}
-                        keyExtractor={(_, i) => `detail-img-${i}`}
-                        renderItem={({ item: imgUri }) => (
-                          <Image
-                            source={{ uri: imgUri }}
-                            style={styles.heroImage}
-                            resizeMode="cover"
-                          />
-                        )}
-                      />
-                      <View style={styles.carouselDotsContainer}>
-                        {allImages.map((_: string, i: number) => (
-                          <View
-                            key={i}
-                            style={[styles.carouselDot, activeImgIdx === i && styles.carouselDotActive]}
-                          />
-                        ))}
-                      </View>
-                    </View>
-                  ) : (
-                    <Image
-                      source={{ uri: allImages[0] }}
-                      style={styles.heroImage}
-                      resizeMode="cover"
+                    <FlatList
+                      data={allImages}
+                      horizontal
+                      pagingEnabled
+                      showsHorizontalScrollIndicator={false}
+                      onMomentumScrollEnd={(e) => setActiveImgIdx(Math.round(e.nativeEvent.contentOffset.x / SW))}
+                      keyExtractor={(_, i) => `img-${i}`}
+                      renderItem={({ item: imgUri }) => (
+                        <Image source={{ uri: imgUri }} style={s.heroImage} resizeMode="cover" />
+                      )}
                     />
+                  ) : (
+                    <Image source={{ uri: allImages[0] }} style={s.heroImage} resizeMode="cover" />
                   )}
-                  <TouchableOpacity style={styles.backBtnOverlay} onPress={() => router.back()}>
-                    <Ionicons name="arrow-back" size={22} color="#FFFFFF" />
+
+                  {/* Gradient overlay at top for buttons */}
+                  <View style={s.heroGradientTop} />
+
+                  {/* Back button */}
+                  <TouchableOpacity style={[s.navBtn, { top: insets.top + 8, left: 16 }]} onPress={() => router.back()}>
+                    <Ionicons name="arrow-back" size={20} color="#FFF" />
                   </TouchableOpacity>
+
+                  {/* Share button */}
+                  <TouchableOpacity style={[s.navBtn, { top: insets.top + 8, right: 16 }]} onPress={handleShare}>
+                    <Ionicons name="share-outline" size={18} color="#FFF" />
+                  </TouchableOpacity>
+
+                  {/* Carousel dots */}
                   {allImages.length > 1 && (
-                    <View style={styles.imageCounter}>
-                      <Text style={styles.imageCounterText}>{activeImgIdx + 1}/{allImages.length}</Text>
+                    <View style={s.dotsRow}>
+                      {allImages.map((_: string, i: number) => (
+                        <View key={i} style={[s.dot, activeImgIdx === i && s.dotActive]} />
+                      ))}
+                    </View>
+                  )}
+
+                  {/* Image counter */}
+                  {allImages.length > 1 && (
+                    <View style={s.counter}>
+                      <Text style={s.counterText}>{activeImgIdx + 1}/{allImages.length}</Text>
                     </View>
                   )}
                 </View>
+              ) : hasVideo && videoHlsUrl ? (
+                <View style={s.heroWrap}>
+                  <StreamVideoPlayer hlsUrl={videoHlsUrl} />
+                  <View style={s.heroGradientTop} />
+                  <TouchableOpacity style={[s.navBtn, { top: insets.top + 8, left: 16 }]} onPress={() => router.back()}>
+                    <Ionicons name="arrow-back" size={20} color="#FFF" />
+                  </TouchableOpacity>
+                </View>
               ) : (
                 <SafeAreaView edges={['top']}>
-                  <View style={styles.headerNoImage}>
-                    <TouchableOpacity onPress={() => router.back()} style={styles.backBtnFlat}>
-                      <Ionicons name="arrow-back" size={22} color={colors.textPrimary} />
+                  <View style={s.headerFlat}>
+                    <TouchableOpacity onPress={() => router.back()} style={s.backBtnFlat}>
+                      <Ionicons name="arrow-back" size={22} color="#1A1A1A" />
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={handleShare} style={s.backBtnFlat}>
+                      <Ionicons name="share-outline" size={20} color="#1A1A1A" />
                     </TouchableOpacity>
                   </View>
                 </SafeAreaView>
               )}
 
               {/* Content Section */}
-              <View style={styles.contentSection}>
+              <View style={s.content}>
                 {/* Author Row */}
-                <TouchableOpacity
-                  style={styles.authorRow}
-                  onPress={() => router.push(`/user/${post.user_id}`)}
-                  activeOpacity={0.7}
-                >
-                  <View style={styles.authorAvatar}>
+                <TouchableOpacity style={s.authorRow} onPress={() => router.push(`/user/${post.user_id}` as any)} activeOpacity={0.7}>
+                  <View style={s.avatarWrap}>
                     {post.user_profile_image ? (
-                      <Image source={{ uri: post.user_profile_image }} style={styles.authorAvatarImg} />
+                      <Image source={{ uri: post.user_profile_image }} style={s.avatarImg} />
                     ) : (
-                      <View style={styles.authorAvatarFallback}>
-                        <Text style={styles.authorAvatarText}>
-                          {authorName[0].toUpperCase()}
-                        </Text>
+                      <View style={s.avatarFallback}>
+                        <Text style={s.avatarInit}>{authorName[0].toUpperCase()}</Text>
                       </View>
                     )}
                   </View>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.authorName}>{authorName}</Text>
-                    <Text style={styles.timeText}>{timeAgo}</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                      <Text style={s.authorName}>{authorName}</Text>
+                      {post.is_creator ? (
+                        <View style={s.creatorBadge}>
+                          <Ionicons name="flame" size={10} color="#F97316" />
+                        </View>
+                      ) : null}
+                    </View>
+                    <Text style={s.timeText}>{timeAgo}</Text>
                   </View>
-                  <TouchableOpacity style={styles.followBtn}>
-                    <Text style={styles.followBtnText}>Follow</Text>
+                  <TouchableOpacity style={s.followBtn}>
+                    <Text style={s.followBtnText}>Follow</Text>
                   </TouchableOpacity>
                 </TouchableOpacity>
 
-                {/* Caption */}
-                <Text style={styles.caption}>{post.content}</Text>
-
-                {/* Location */}
-                {post.location && (
-                  <View style={styles.locationRow}>
-                    <Ionicons name="location-outline" size={14} color={colors.textHint} />
-                    <Text style={styles.locationText}>{post.location}</Text>
+                {/* Post type badge */}
+                {isCheckin && (
+                  <View style={s.checkinBadge}>
+                    <Ionicons name="checkmark-circle" size={14} color="#10B981" />
+                    <Text style={s.checkinText}>Verified Check-In</Text>
+                    {post.place_name ? <Text style={s.checkinPlace}>{post.place_name}</Text> : null}
+                  </View>
+                )}
+                {post.post_type === 'question' && (
+                  <View style={[s.checkinBadge, { backgroundColor: '#FEF3C7', borderColor: '#FDE68A' }]}>
+                    <Ionicons name="help-circle" size={14} color="#D97706" />
+                    <Text style={[s.checkinText, { color: '#D97706' }]}>Question</Text>
                   </View>
                 )}
 
-                {/* Action Row */}
-                <View style={styles.actionsRow}>
-                  <View style={styles.actionsLeft}>
-                    <TouchableOpacity onPress={handleLike} style={styles.actionBtn}>
-                      <Ionicons
-                        name={liked ? 'heart' : 'heart-outline'}
-                        size={26}
-                        color={liked ? '#ED4956' : colors.textPrimary}
-                      />
+                {/* Caption */}
+                <Text style={s.caption}>{post.content}</Text>
+
+                {/* Location */}
+                {post.location ? (
+                  <View style={s.locRow}>
+                    <Ionicons name="location" size={13} color="#DC2626" />
+                    <Text style={s.locText}>{post.location}</Text>
+                  </View>
+                ) : null}
+
+                {/* Engagement Row */}
+                <View style={s.engageRow}>
+                  <View style={s.engageLeft}>
+                    <TouchableOpacity onPress={handleLike} style={s.engageBtn}>
+                      <Ionicons name={liked ? 'heart' : 'heart-outline'} size={24} color={liked ? '#ED4956' : '#1A1A1A'} />
+                      {likesCount > 0 && <Text style={s.engageCount}>{likesCount}</Text>}
                     </TouchableOpacity>
-                    <TouchableOpacity style={styles.actionBtn}>
-                      <Ionicons name="chatbubble-outline" size={24} color={colors.textPrimary} />
+                    <TouchableOpacity style={s.engageBtn}>
+                      <Ionicons name="chatbubble-outline" size={22} color="#1A1A1A" />
+                      {comments.length > 0 && <Text style={s.engageCount}>{comments.length}</Text>}
                     </TouchableOpacity>
-                    <TouchableOpacity style={styles.actionBtn} onPress={handleShare}>
-                      <Ionicons name="paper-plane-outline" size={24} color={colors.textPrimary} />
+                    <TouchableOpacity style={s.engageBtn} onPress={handleShare}>
+                      <Ionicons name="paper-plane-outline" size={22} color="#1A1A1A" />
                     </TouchableOpacity>
                   </View>
-                  <TouchableOpacity onPress={() => setSaved(!saved)} style={styles.actionBtn}>
-                    <Ionicons
-                      name={saved ? 'bookmark' : 'bookmark-outline'}
-                      size={24}
-                      color={colors.textPrimary}
-                    />
+                  <TouchableOpacity onPress={handleSave} style={s.engageBtn}>
+                    <Ionicons name={saved ? 'bookmark' : 'bookmark-outline'} size={22} color={saved ? '#D97706' : '#1A1A1A'} />
                   </TouchableOpacity>
                 </View>
 
-                {/* Like count */}
-                {likesCount > 0 && (
-                  <Text style={styles.likesText}>
-                    {likesCount} {likesCount === 1 ? 'like' : 'likes'}
-                  </Text>
-                )}
-
                 {/* Comments header */}
-                <View style={styles.commentsHeader}>
-                  <Text style={styles.commentsTitle}>Comments ({comments.length})</Text>
+                <View style={s.commentsHeader}>
+                  <Text style={s.commentsTitle}>Comments</Text>
+                  <Text style={s.commentsCount}>{comments.length}</Text>
                 </View>
               </View>
             </View>
           }
           renderItem={({ item }) => (
-            <View style={styles.commentItem}>
-              <TouchableOpacity onPress={() => router.push(`/user/${item.user_id}`)}>
+            <View style={s.commentItem}>
+              <TouchableOpacity onPress={() => router.push(`/user/${item.user_id}` as any)}>
                 {item.user_profile_image ? (
-                  <Image source={{ uri: item.user_profile_image }} style={styles.commentAvatar} />
+                  <Image source={{ uri: item.user_profile_image }} style={s.commentAv} />
                 ) : (
-                  <View style={styles.commentAvatarFallback}>
-                    <Text style={styles.commentAvatarText}>
-                      {(item.user_username || 'U')[0].toUpperCase()}
-                    </Text>
+                  <View style={[s.commentAv, s.commentAvFb]}>
+                    <Text style={s.commentAvInit}>{(item.user_username || 'U')[0].toUpperCase()}</Text>
                   </View>
                 )}
               </TouchableOpacity>
-              <View style={styles.commentBody}>
-                <Text style={styles.commentText}>
-                  <Text style={styles.commentUsername}>{item.user_full_name} </Text>
-                  {item.content}
-                </Text>
-                <Text style={styles.commentTime}>
+              <View style={s.commentBody}>
+                <View style={s.commentBubble}>
+                  <Text style={s.commentUsername}>{item.user_full_name}</Text>
+                  <Text style={s.commentText}>{item.content}</Text>
+                </View>
+                <Text style={s.commentTime}>
                   {formatDistanceToNow(new Date(item.created_at), { addSuffix: true })}
                 </Text>
               </View>
             </View>
           )}
           ListEmptyComponent={
-            <View style={styles.emptyComments}>
-              <Ionicons name="chatbubble-outline" size={36} color={colors.textHint} />
-              <Text style={styles.emptyText}>No comments yet</Text>
-              <Text style={styles.emptySubtext}>Start the conversation</Text>
+            <View style={s.emptyComments}>
+              <Ionicons name="chatbubble-outline" size={32} color="#DDD" />
+              <Text style={s.emptyTitle}>No comments yet</Text>
+              <Text style={s.emptySub}>Start the conversation</Text>
             </View>
           }
-          showsVerticalScrollIndicator={false}
-          contentContainerStyle={{ paddingBottom: 80 }}
         />
 
-        {/* Comment Input */}
-        <View style={styles.inputBar}>
-          <View style={styles.inputAvatar}>
+        {/* Comment Input Bar */}
+        <View style={[s.inputBar, { paddingBottom: Math.max(insets.bottom, 12) }]}>
+          <View style={s.inputAvatar}>
             {user?.profile_image ? (
-              <Image source={{ uri: user.profile_image }} style={{ width: '100%', height: '100%' }} />
+              <Image source={{ uri: user.profile_image }} style={{ width: '100%', height: '100%', borderRadius: 16 }} />
             ) : (
-              <Text style={styles.inputAvatarText}>
-                {(user?.full_name || 'U')[0].toUpperCase()}
-              </Text>
+              <Text style={s.inputAvatarText}>{(user?.full_name || 'U')[0].toUpperCase()}</Text>
             )}
           </View>
-          <TextInput
-            style={styles.commentInput}
-            placeholder="Add a comment..."
-            placeholderTextColor={colors.textHint}
-            value={newComment}
-            onChangeText={setNewComment}
-            multiline
-            maxLength={500}
-          />
-          <TouchableOpacity
-            onPress={handleComment}
-            disabled={!newComment.trim() || isCommenting}
-            style={{ padding: 8 }}
-          >
+          <View style={s.inputWrap}>
+            <TextInput
+              style={s.commentInput}
+              placeholder="Write a comment..."
+              placeholderTextColor="#BBB"
+              value={newComment}
+              onChangeText={setNewComment}
+              multiline
+              maxLength={500}
+            />
+          </View>
+          <TouchableOpacity onPress={handleComment} disabled={!newComment.trim() || isCommenting} style={s.sendBtn}>
             {isCommenting ? (
-              <ActivityIndicator size="small" color={colors.accentPrimary} />
+              <ActivityIndicator size="small" color="#FFF" />
             ) : (
-              <Text
-                style={[
-                  styles.postCommentBtn,
-                  !newComment.trim() && { opacity: 0.3 },
-                ]}
-              >
-                Post
-              </Text>
+              <Ionicons name="send" size={16} color={newComment.trim() ? '#FFF' : 'rgba(255,255,255,0.4)'} />
             )}
           </TouchableOpacity>
         </View>
@@ -343,287 +361,155 @@ export default function PostDetailScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#FFFFFF',
+// Stream Video Player Component
+function StreamVideoPlayer({ hlsUrl }: { hlsUrl: string }) {
+  const player = useVideoPlayer(hlsUrl, (p) => {
+    p.loop = false;
+  });
+
+  return (
+    <VideoView
+      player={player}
+      style={s.heroImage}
+      allowsFullscreen
+      allowsPictureInPicture
+    />
+  );
+}
+
+const s = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#FFFFFF' },
+  loadWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#FAFAF8' },
+  errorText: { fontSize: 16, color: '#999' },
+
+  // Hero
+  heroWrap: { width: SW, height: SW * 1.1, backgroundColor: '#0A0A0A', position: 'relative' },
+  heroImage: { width: SW, height: SW * 1.1 },
+  heroGradientTop: {
+    position: 'absolute', top: 0, left: 0, right: 0, height: 120,
+    backgroundColor: 'transparent',
   },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: colors.bgApp,
+  navBtn: {
+    position: 'absolute', width: 40, height: 40, borderRadius: 20,
+    backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'center', alignItems: 'center',
   },
-  errorText: {
-    fontSize: 16,
-    color: colors.textSecondary,
+  dotsRow: {
+    position: 'absolute', bottom: 16, left: 0, right: 0,
+    flexDirection: 'row', justifyContent: 'center', gap: 5,
   },
-  // Image hero
-  imageContainer: {
-    width: SCREEN_WIDTH,
-    height: SCREEN_WIDTH / PHOTO_RATIO,
+  dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: 'rgba(255,255,255,0.4)' },
+  dotActive: { backgroundColor: '#FFF', width: 20, borderRadius: 3 },
+  counter: {
+    position: 'absolute', top: 56, right: 16,
+    backgroundColor: 'rgba(0,0,0,0.5)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12,
   },
-  heroImage: {
-    width: SCREEN_WIDTH,
-    height: SCREEN_WIDTH / PHOTO_RATIO,
+  counterText: { color: '#FFF', fontSize: 12, fontWeight: '700' },
+
+  // Flat header (no image)
+  headerFlat: {
+    flexDirection: 'row', justifyContent: 'space-between',
+    paddingHorizontal: 16, paddingVertical: 8,
+    borderBottomWidth: 1, borderBottomColor: '#ECEAE3',
   },
-  backBtnOverlay: {
-    position: 'absolute',
-    top: 50,
-    left: 16,
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(0,0,0,0.45)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  carouselDotsContainer: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 5,
-    paddingVertical: 10,
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-  },
-  carouselDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: 'rgba(255,255,255,0.5)',
-  },
-  carouselDotActive: {
-    backgroundColor: '#FFFFFF',
-    width: 18,
-    borderRadius: 3,
-  },
-  imageCounter: {
-    position: 'absolute',
-    top: 56,
-    right: 16,
-    backgroundColor: 'rgba(0,0,0,0.55)',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
-  },
-  imageCounterText: {
-    color: '#FFFFFF',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  headerNoImage: {
-    flexDirection: 'row',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.borderSubtle,
-  },
-  backBtnFlat: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
+  backBtnFlat: { width: 44, height: 44, borderRadius: 22, justifyContent: 'center', alignItems: 'center' },
+
   // Content
-  contentSection: {
-    paddingHorizontal: 16,
-    paddingTop: 16,
+  content: { paddingHorizontal: 20, paddingTop: 20 },
+
+  // Author
+  authorRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 16 },
+  avatarWrap: {
+    width: 48, height: 48, borderRadius: 24, overflow: 'hidden', marginRight: 12,
+    borderWidth: 2, borderColor: '#F0EDE7',
   },
-  authorRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 14,
+  avatarImg: { width: '100%', height: '100%' },
+  avatarFallback: {
+    width: '100%', height: '100%', backgroundColor: '#50C8A8',
+    justifyContent: 'center', alignItems: 'center',
   },
-  authorAvatar: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    overflow: 'hidden',
-    marginRight: 12,
-    borderWidth: 1,
-    borderColor: colors.borderLight,
+  avatarInit: { color: '#FFF', fontSize: 18, fontWeight: '700' },
+  authorName: { fontSize: 16, fontWeight: '800', color: '#1A1A1A', letterSpacing: -0.3 },
+  creatorBadge: {
+    width: 18, height: 18, borderRadius: 9,
+    backgroundColor: '#FFF7ED', justifyContent: 'center', alignItems: 'center',
   },
-  authorAvatarImg: {
-    width: '100%',
-    height: '100%',
-  },
-  authorAvatarFallback: {
-    width: '100%',
-    height: '100%',
-    backgroundColor: colors.avatarTeal,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  authorAvatarText: {
-    color: '#FFFFFF',
-    fontSize: 18,
-    fontWeight: '700',
-  },
-  authorName: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: colors.textPrimary,
-  },
-  timeText: {
-    fontSize: 12,
-    color: colors.textHint,
-    marginTop: 2,
-  },
+  timeText: { fontSize: 12, color: '#AAA', marginTop: 2 },
   followBtn: {
-    backgroundColor: colors.accentPrimary,
-    paddingHorizontal: 18,
-    paddingVertical: 8,
-    borderRadius: 18,
+    backgroundColor: '#1A1A1A', paddingHorizontal: 20, paddingVertical: 9, borderRadius: 20,
   },
-  followBtnText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#FFFFFF',
+  followBtnText: { fontSize: 13, fontWeight: '700', color: '#FFF' },
+
+  // Post type badges
+  checkinBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: '#ECFDF5', borderWidth: 1, borderColor: '#D1FAE5',
+    paddingHorizontal: 12, paddingVertical: 6, borderRadius: 12,
+    alignSelf: 'flex-start', marginBottom: 14,
   },
-  caption: {
-    fontSize: 16,
-    color: colors.textPrimary,
-    lineHeight: 24,
-    marginBottom: 12,
+  checkinText: { fontSize: 12, fontWeight: '700', color: '#10B981' },
+  checkinPlace: { fontSize: 12, color: '#059669', marginLeft: 4 },
+
+  // Caption
+  caption: { fontSize: 17, color: '#1A1A1A', lineHeight: 26, letterSpacing: -0.2, marginBottom: 14 },
+
+  // Location
+  locRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 16 },
+  locText: { fontSize: 13, color: '#999', fontWeight: '500' },
+
+  // Engagement
+  engageRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingVertical: 14, borderTopWidth: 1, borderBottomWidth: 1,
+    borderColor: '#F0EDE7',
   },
-  locationRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 12,
-    gap: 4,
-  },
-  locationText: {
-    fontSize: 13,
-    color: colors.textHint,
-  },
-  // Actions
-  actionsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 8,
-    borderTopWidth: 1,
-    borderTopColor: colors.borderSubtle,
-  },
-  actionsLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  actionBtn: {
-    paddingRight: 16,
-    paddingVertical: 4,
-  },
-  likesText: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: colors.textPrimary,
-    marginBottom: 12,
-  },
+  engageLeft: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  engageBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 4 },
+  engageCount: { fontSize: 13, fontWeight: '700', color: '#1A1A1A' },
+
   // Comments
   commentsHeader: {
-    paddingTop: 8,
-    paddingBottom: 8,
-    borderTopWidth: 1,
-    borderTopColor: colors.borderSubtle,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingTop: 16, paddingBottom: 8,
   },
-  commentsTitle: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: colors.textPrimary,
+  commentsTitle: { fontSize: 16, fontWeight: '800', color: '#1A1A1A' },
+  commentsCount: {
+    fontSize: 12, fontWeight: '700', color: '#999',
+    backgroundColor: '#F5F0EB', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10,
   },
-  commentItem: {
-    flexDirection: 'row',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
+  commentItem: { flexDirection: 'row', paddingHorizontal: 20, paddingVertical: 6 },
+  commentAv: { width: 32, height: 32, borderRadius: 16 },
+  commentAvFb: { backgroundColor: '#50C8A8', justifyContent: 'center', alignItems: 'center' },
+  commentAvInit: { color: '#FFF', fontSize: 12, fontWeight: '700' },
+  commentBody: { flex: 1, marginLeft: 10 },
+  commentBubble: {
+    backgroundColor: '#F5F2EC', borderRadius: 14, paddingHorizontal: 12, paddingVertical: 8,
+    borderTopLeftRadius: 4,
   },
-  commentAvatar: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-  },
-  commentAvatarFallback: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: colors.avatarTeal,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  commentAvatarText: {
-    color: '#FFFFFF',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  commentBody: {
-    flex: 1,
-    marginLeft: 10,
-  },
-  commentText: {
-    fontSize: 14,
-    color: colors.textPrimary,
-    lineHeight: 20,
-  },
-  commentUsername: {
-    fontWeight: '700',
-  },
-  commentTime: {
-    fontSize: 11,
-    color: colors.textHint,
-    marginTop: 4,
-  },
-  emptyComments: {
-    alignItems: 'center',
-    paddingVertical: 40,
-  },
-  emptyText: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: colors.textPrimary,
-    marginTop: 10,
-  },
-  emptySubtext: {
-    fontSize: 13,
-    color: colors.textHint,
-    marginTop: 4,
-  },
+  commentUsername: { fontSize: 13, fontWeight: '700', color: '#1A1A1A', marginBottom: 2 },
+  commentText: { fontSize: 14, color: '#333', lineHeight: 20 },
+  commentTime: { fontSize: 11, color: '#BBB', marginTop: 4, marginLeft: 4 },
+  emptyComments: { alignItems: 'center', paddingVertical: 40 },
+  emptyTitle: { fontSize: 15, fontWeight: '700', color: '#1A1A1A', marginTop: 10 },
+  emptySub: { fontSize: 13, color: '#AAA', marginTop: 4 },
+
   // Input bar
   inputBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderTopWidth: 1,
-    borderTopColor: colors.borderSubtle,
-    backgroundColor: '#FFFFFF',
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 16, paddingTop: 10,
+    backgroundColor: '#FFF', borderTopWidth: 1, borderTopColor: '#F0EDE7',
   },
   inputAvatar: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    overflow: 'hidden',
-    backgroundColor: colors.avatarTeal,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 10,
+    width: 32, height: 32, borderRadius: 16, overflow: 'hidden',
+    backgroundColor: '#50C8A8', justifyContent: 'center', alignItems: 'center', marginRight: 10,
   },
-  inputAvatarText: {
-    color: '#FFFFFF',
-    fontSize: 12,
-    fontWeight: '700',
+  inputAvatarText: { color: '#FFF', fontSize: 12, fontWeight: '700' },
+  inputWrap: {
+    flex: 1, backgroundColor: '#F5F2EC', borderRadius: 20,
+    paddingHorizontal: 14, minHeight: 38, justifyContent: 'center',
   },
-  commentInput: {
-    flex: 1,
-    fontSize: 14,
-    color: colors.textPrimary,
-    maxHeight: 80,
-    paddingVertical: 8,
-  },
-  postCommentBtn: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: colors.accentPrimary,
+  commentInput: { fontSize: 14, color: '#1A1A1A', maxHeight: 80, paddingVertical: 8 },
+  sendBtn: {
+    width: 36, height: 36, borderRadius: 18,
+    backgroundColor: '#1A1A1A', justifyContent: 'center', alignItems: 'center', marginLeft: 8,
   },
 });

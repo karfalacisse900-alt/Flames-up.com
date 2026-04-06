@@ -17,10 +17,6 @@ binding = "DB"
 database_name = "flames-up"
 database_id = "ce387f44-33eb-42ac-85cb-46b6009b49f5"
 
-[[kv_namespaces]]
-binding = "KV"
-id = "5e80db5c3abd4f049905c5cf29331bf9"
-
 [env.production]
 name = "flames-up-api"
 
