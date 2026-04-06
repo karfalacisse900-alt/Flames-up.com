@@ -36,10 +36,19 @@ function SceneCard({
   post: any; width: number; height: number; onPress: () => void;
   onLike: () => void; onSave: () => void; isLiked: boolean; isSaved: boolean;
 }) {
+  const [imageError, setImageError] = React.useState(false);
   const isVideo = post.media_type === 'video' || (post.media_types?.[0] === 'video');
-  const hasImage = post.image || (post.images?.length > 0);
-  const imageUri = post.image || post.images?.[0] || null;
+  const rawUri = post.image || post.images?.[0] || null;
+  // Filter broken URIs: local file paths won't work on web/other devices
+  const isValidUri = rawUri && !rawUri.startsWith('file://') && rawUri.length > 10;
+  const hasImage = !imageError && isValidUri;
+  const imageUri = isValidUri ? rawUri : null;
   const location = post.place_name || post.location || post.user_city || '';
+  const username = post.user_full_name || post.username || '';
+
+  // Color palette for text-only or fallback cards
+  const CARD_COLORS = ['#2D2D2D', '#1B4332', '#4A1942', '#3B1E08', '#0C2340', '#3A1C1C'];
+  const bgColor = CARD_COLORS[Math.abs(post.id?.charCodeAt(0) || 0) % CARD_COLORS.length];
 
   return (
     <TouchableOpacity
@@ -47,8 +56,8 @@ function SceneCard({
       activeOpacity={0.95}
       onPress={onPress}
     >
-      {/* Media */}
-      {isVideo && imageUri ? (
+      {/* Media or Fallback */}
+      {isVideo && imageUri && hasImage ? (
         <Video
           source={{ uri: imageUri }}
           style={cs.media}
@@ -56,29 +65,40 @@ function SceneCard({
           shouldPlay={false}
           isMuted
         />
-      ) : hasImage ? (
-        <Image source={{ uri: imageUri }} style={cs.media} />
+      ) : hasImage && imageUri ? (
+        <Image
+          source={{ uri: imageUri }}
+          style={cs.media}
+          onError={() => setImageError(true)}
+        />
       ) : (
-        <View style={[cs.media, cs.textCard]}>
-          <Text style={cs.textContent} numberOfLines={6}>{post.content}</Text>
+        <View style={[cs.media, { backgroundColor: bgColor, justifyContent: 'flex-end', padding: 16 }]}>
+          {post.content ? (
+            <Text style={cs.fallbackText} numberOfLines={height > 200 ? 8 : 4}>
+              {post.content}
+            </Text>
+          ) : null}
+          {username ? (
+            <Text style={cs.fallbackAuthor}>— {username}</Text>
+          ) : null}
         </View>
       )}
 
-      {/* Gradient overlay */}
-      <View style={cs.overlay} />
+      {/* Gradient overlay for image cards */}
+      {hasImage && <View style={cs.overlay} />}
 
-      {/* Video indicator */}
+      {/* Video badge */}
       {isVideo && (
         <View style={cs.videoDot}>
           <Ionicons name="play" size={8} color="#FFF" />
         </View>
       )}
 
-      {/* Bottom: location + caption + actions */}
+      {/* Bottom info */}
       <View style={cs.bottom}>
         {location ? (
           <View style={cs.locRow}>
-            <Ionicons name="location" size={10} color="rgba(255,255,255,0.8)" />
+            <Ionicons name="location" size={10} color={hasImage ? 'rgba(255,255,255,0.85)' : 'rgba(255,255,255,0.6)'} />
             <Text style={cs.locText} numberOfLines={1}>{location}</Text>
           </View>
         ) : null}
@@ -103,6 +123,8 @@ const cs = StyleSheet.create({
   media: { width: '100%', height: '100%' },
   textCard: { justifyContent: 'center', alignItems: 'center', paddingHorizontal: 16, backgroundColor: '#F5F0EB' },
   textContent: { fontSize: 14, fontWeight: '600', color: '#2D2D2D', textAlign: 'center', lineHeight: 20, fontStyle: 'italic', letterSpacing: 0.5 },
+  fallbackText: { fontSize: 16, fontWeight: '600', color: '#FFF', lineHeight: 22, letterSpacing: 0.3 },
+  fallbackAuthor: { fontSize: 11, color: 'rgba(255,255,255,0.5)', marginTop: 8 },
   overlay: { position: 'absolute', bottom: 0, left: 0, right: 0, height: '35%', backgroundColor: 'rgba(0,0,0,0.15)' },
   videoDot: { position: 'absolute', top: 8, right: 8, width: 20, height: 20, borderRadius: 10, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center' },
   bottom: { position: 'absolute', bottom: 0, left: 0, right: 0, padding: 8 },
