@@ -380,6 +380,10 @@ export default function HomeScreen() {
             <View style={[s.quickIcon, { backgroundColor: '#FEE2E2' }]}><Ionicons name="flash-outline" size={18} color="#DC2626" /></View>
             <Text style={s.quickLabel}>Moment</Text>
           </TouchableOpacity>
+          <TouchableOpacity style={s.quickBtn} onPress={() => router.push('/tonight' as any)}>
+            <View style={[s.quickIcon, { backgroundColor: '#EDE9FE' }]}><Ionicons name="moon-outline" size={18} color="#7C3AED" /></View>
+            <Text style={s.quickLabel}>Tonight</Text>
+          </TouchableOpacity>
           <TouchableOpacity style={s.quickBtn} onPress={() => router.push('/my-spots' as any)}>
             <View style={[s.quickIcon, { backgroundColor: '#FEF3C7' }]}><Ionicons name="bookmark-outline" size={18} color="#D97706" /></View>
             <Text style={s.quickLabel}>My Spots</Text>
@@ -391,10 +395,6 @@ export default function HomeScreen() {
           <TouchableOpacity style={s.quickBtn} onPress={() => router.push('/creators' as any)}>
             <View style={[s.quickIcon, { backgroundColor: '#FFF7ED' }]}><Ionicons name="flame-outline" size={18} color="#F97316" /></View>
             <Text style={s.quickLabel}>Creators</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={s.quickBtn} onPress={() => router.push('/settings' as any)}>
-            <View style={[s.quickIcon, { backgroundColor: '#F1F5F9' }]}><Ionicons name="settings-outline" size={18} color="#64748B" /></View>
-            <Text style={s.quickLabel}>Settings</Text>
           </TouchableOpacity>
         </View>
       </ScrollView>
