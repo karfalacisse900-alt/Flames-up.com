@@ -43,7 +43,8 @@ export default function RootLayout() {
         <Stack.Screen name="creator-hub" options={{ presentation: 'card' }} />
         <Stack.Screen name="admin-panel" options={{ presentation: 'card' }} />
         <Stack.Screen name="content-manager" options={{ presentation: 'card' }} />
-        <Stack.Screen name="apply-publisher" options={{ presentation: 'card' }} />
+        <Stack.Screen name="my-spots" options={{ presentation: 'card' }} />
+        <Stack.Screen name="scene/[context]/[category]" options={{ presentation: 'card' }} />
       </Stack>
     </>
   );
