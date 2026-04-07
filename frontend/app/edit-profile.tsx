@@ -50,15 +50,27 @@ export default function EditProfileScreen() {
 
   const pickProfileImage = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
-      allowsEditing: true, aspect: [1, 1], quality: 0.8, base64: true,
+      allowsEditing: true, aspect: [1, 1], quality: 0.6, base64: true,
     });
     if (!result.canceled && result.assets?.[0]) {
       const asset = result.assets[0];
+      // Show local preview immediately
       setProfileImage(asset.uri);
+      
       if (asset.base64) {
         const b64 = asset.base64.startsWith('data:') ? asset.base64 : `data:image/jpeg;base64,${asset.base64}`;
-        const url = await uploadImage(b64);
-        if (url) setProfileImage(url);
+        try {
+          const url = await uploadImage(b64);
+          if (url && url.startsWith('http')) {
+            setProfileImage(url);
+          } else {
+            // Upload returned base64 fallback - keep local URI instead
+            console.log('Image upload fell back to base64, using local URI');
+          }
+        } catch (e) {
+          console.log('Profile image upload error:', e);
+          Alert.alert('Upload Issue', 'Image will be saved locally. Upload may fail for large images.');
+        }
       }
     }
   };
@@ -67,24 +79,31 @@ export default function EditProfileScreen() {
     if (isSaving) return;
     setIsSaving(true);
     try {
-      const res = await api.put('/users/me', {
+      const payload: any = {
         full_name: fullName,
         username,
         bio,
         city,
-        age,
         profile_image: profileImage,
         looking_for: JSON.stringify(lookingFor),
         interests: JSON.stringify(interests),
         social_website: socialWebsite,
         social_tiktok: socialTiktok,
         social_instagram: socialInstagram,
-      });
-      setUser({ ...user, ...res.data });
-      Alert.alert('Saved', 'Profile updated successfully');
-      router.back();
-    } catch (error) {
-      Alert.alert('Error', 'Failed to update profile');
+      };
+      // Only include age if it's a valid number
+      if (age && !isNaN(Number(age))) payload.age = age;
+      
+      const res = await api.put('/users/me', payload);
+      if (res.data) {
+        setUser(res.data);
+        Alert.alert('Saved', 'Profile updated successfully');
+        router.back();
+      }
+    } catch (error: any) {
+      const msg = error?.response?.data?.detail || error?.message || 'Failed to update profile';
+      console.log('Profile update error:', msg, error?.response?.status);
+      Alert.alert('Error', msg);
     } finally {
       setIsSaving(false);
     }

@@ -27,6 +27,7 @@ interface AuthState {
   register: (email: string, password: string, username: string, fullName: string) => Promise<void>;
   logout: () => Promise<void>;
   loadUser: () => Promise<void>;
+  setUser: (user: any) => void;
   updateProfile: (data: Partial<User>) => Promise<void>;
 }
 
@@ -113,5 +114,16 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     const updatedUser = response.data;
     await AsyncStorage.setItem('user', JSON.stringify(updatedUser));
     set({ user: updatedUser });
+  },
+
+  setUser: (userData: any) => {
+    const user = {
+      ...userData,
+      is_verified: !!userData.is_verified,
+      is_admin: !!userData.is_admin,
+      is_publisher: !!userData.is_publisher,
+    };
+    AsyncStorage.setItem('user', JSON.stringify(user));
+    set({ user });
   },
 }));

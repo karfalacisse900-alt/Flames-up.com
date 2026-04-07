@@ -23,15 +23,44 @@ const CATEGORIES = [
   { id: 'city_life', label: 'City Life', icon: 'business-outline',   color: '#0EA5E9' },
 ];
 
+const FORMATS = [
+  { id: 'auto', label: 'Auto', ratio: 0, icon: 'sparkles-outline' },
+  { id: '1:1',  label: 'Square', ratio: 1,      icon: 'square-outline' },
+  { id: '4:5',  label: '4:5',    ratio: 5 / 4,  icon: 'phone-portrait-outline' },
+  { id: '2:3',  label: '2:3',    ratio: 3 / 2,  icon: 'tablet-portrait-outline' },
+  { id: '9:16', label: '9:16',   ratio: 16 / 9, icon: 'resize-outline' },
+];
+
+// Detect best format from image dimensions
+function detectFormat(width: number, height: number): string {
+  if (width <= 0 || height <= 0) return 'auto';
+  const ratio = height / width;
+  const formats = [
+    { id: '1:1',  ratio: 1 },
+    { id: '4:5',  ratio: 5 / 4 },
+    { id: '2:3',  ratio: 3 / 2 },
+    { id: '9:16', ratio: 16 / 9 },
+  ];
+  let bestMatch = formats[0];
+  let bestDiff = Math.abs(ratio - formats[0].ratio);
+  for (const f of formats) {
+    const diff = Math.abs(ratio - f.ratio);
+    if (diff < bestDiff) { bestDiff = diff; bestMatch = f; }
+  }
+  return bestMatch.id;
+}
+
 export default function CreatePostScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { user } = useAuthStore();
   const params = useLocalSearchParams<{ place_id?: string; place_name?: string }>();
 
-  const [media, setMedia] = useState<{ uri: string; type: 'image' | 'video'; base64?: string }[]>([]);
+  const [media, setMedia] = useState<{ uri: string; type: 'image' | 'video'; base64?: string; width?: number; height?: number }[]>([]);
   const [caption, setCaption] = useState('');
   const [category, setCategory] = useState<string | null>(null);
+  const [format, setFormat] = useState('auto');
+  const [detectedFormat, setDetectedFormat] = useState('');
   const [placeTag, setPlaceTag] = useState(params.place_name || '');
   const [placeId, setPlaceId] = useState(params.place_id || '');
   const [isPosting, setIsPosting] = useState(false);
@@ -53,8 +82,21 @@ export default function CreatePostScreen() {
         uri: a.uri,
         type: (a.type === 'video' ? 'video' : 'image') as 'image' | 'video',
         base64: a.base64 || undefined,
+        width: a.width || 0,
+        height: a.height || 0,
       }));
-      setMedia(prev => [...prev, ...newMedia].slice(0, 6));
+      const updated = [...media, ...newMedia].slice(0, 6);
+      setMedia(updated);
+
+      // Auto-detect format from first image
+      const firstImg = updated.find(m => m.type === 'image' && m.width && m.height);
+      if (firstImg && firstImg.width && firstImg.height) {
+        const detected = detectFormat(firstImg.width, firstImg.height);
+        setDetectedFormat(detected);
+        if (format === 'auto') {
+          // Keep auto mode, detected format will be used during post creation
+        }
+      }
     }
   };
 
@@ -67,11 +109,20 @@ export default function CreatePostScreen() {
     });
     if (!result.canceled && result.assets?.[0]) {
       const a = result.assets[0];
-      setMedia(prev => [...prev, {
+      const newItem = {
         uri: a.uri,
         type: (a.type === 'video' ? 'video' : 'image') as 'image' | 'video',
         base64: a.base64 || undefined,
-      }].slice(0, 6));
+        width: a.width || 0,
+        height: a.height || 0,
+      };
+      const updated = [...media, newItem].slice(0, 6);
+      setMedia(updated);
+
+      // Auto-detect format
+      if (newItem.type === 'image' && newItem.width && newItem.height && !detectedFormat) {
+        setDetectedFormat(detectFormat(newItem.width, newItem.height));
+      }
     }
   };
 
@@ -95,7 +146,7 @@ export default function CreatePostScreen() {
     } catch {}
   };
 
-  const canPost = media.length > 0 && category;
+  const canPost = media.length > 0;
 
   const handlePost = async () => {
     if (!canPost || isPosting) return;
@@ -134,12 +185,15 @@ export default function CreatePostScreen() {
       }
 
       setUploadStep('Creating post...');
+      const finalFormat = format === 'auto' ? (detectedFormat || '1:1') : format;
       await api.post('/posts', {
         content: caption || '',
         image: uploadedUrls[0],
         images: uploadedUrls,
         media_types: mediaTypes,
-        post_type: category,
+        post_type: category || 'general',
+        category: category || '',
+        format: finalFormat,
         location: placeTag || '',
         place_id: placeId || '',
         place_name: placeTag || '',
@@ -233,9 +287,9 @@ export default function CreatePostScreen() {
             )}
           </View>
 
-          {/* Category Selection (Required) */}
+          {/* Category Selection (Optional) */}
           <View style={s.section}>
-            <Text style={s.sectionLabel}>Category <Text style={s.required}>*</Text></Text>
+            <Text style={s.sectionLabel}>Category <Text style={s.optional}>(optional)</Text></Text>
             <View style={s.catGrid}>
               {CATEGORIES.map(cat => {
                 const active = category === cat.id;
@@ -252,6 +306,38 @@ export default function CreatePostScreen() {
               })}
             </View>
           </View>
+
+          {/* Format Selection (Optional — auto by default) */}
+          {media.length > 0 && (
+            <View style={s.section}>
+              <Text style={s.sectionLabel}>
+                Format <Text style={s.optional}>(optional)</Text>
+                {format === 'auto' && detectedFormat ? (
+                  <Text style={s.detectedHint}> — detected: {detectedFormat}</Text>
+                ) : null}
+              </Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+                {FORMATS.map(f => {
+                  const active = format === f.id;
+                  const isDetected = format === 'auto' && detectedFormat === f.id;
+                  return (
+                    <TouchableOpacity
+                      key={f.id}
+                      style={[
+                        s.formatChip,
+                        active && s.formatChipActive,
+                        isDetected && !active && s.formatChipDetected,
+                      ]}
+                      onPress={() => setFormat(f.id)}
+                    >
+                      <Ionicons name={f.icon as any} size={16} color={active ? '#FFF' : '#666'} />
+                      <Text style={[s.formatLabel, active && { color: '#FFF' }]}>{f.label}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            </View>
+          )}
 
           {/* Caption (Optional) */}
           <View style={s.section}>
@@ -354,6 +440,18 @@ const s = StyleSheet.create({
   sectionLabel: { fontSize: 14, fontWeight: '700', color: '#1A1A1A', marginBottom: 10 },
   required: { color: '#DC2626', fontWeight: '600' },
   optional: { color: '#BBB', fontWeight: '400', fontSize: 12 },
+  detectedHint: { color: '#059669', fontWeight: '500', fontSize: 12 },
+
+  // Format
+  formatChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 14, paddingVertical: 10,
+    borderRadius: 16, borderWidth: 1.5, borderColor: '#E8E4DF',
+    backgroundColor: '#FFF',
+  },
+  formatChipActive: { backgroundColor: '#111', borderColor: '#111' },
+  formatChipDetected: { borderColor: '#059669', borderWidth: 2 },
+  formatLabel: { fontSize: 13, fontWeight: '600', color: '#666' },
 
   // Category
   catGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
