@@ -100,6 +100,8 @@ api.post('/auth/login', async (c) => {
     access_token: token, token_type: 'bearer',
     user: { id: user.id, email: user.email, username: user.username, full_name: user.full_name,
       profile_image: user.profile_image, bio: user.bio, city: user.city,
+      age: user.age, looking_for: user.looking_for, interests: user.interests,
+      social_website: user.social_website, social_tiktok: user.social_tiktok, social_instagram: user.social_instagram,
       followers_count: user.followers_count, following_count: user.following_count, posts_count: user.posts_count },
   });
 });
@@ -118,7 +120,7 @@ api.get('/auth/me', authMiddleware, async (c) => {
 api.put('/users/me', authMiddleware, async (c) => {
   const userId = getUserId(c);
   const body = await c.req.json();
-  const fields = ['full_name', 'bio', 'profile_image', 'cover_image', 'city', 'username'];
+  const fields = ['full_name', 'bio', 'profile_image', 'cover_image', 'city', 'username', 'age', 'looking_for', 'interests', 'social_website', 'social_tiktok', 'social_instagram'];
   const updates: string[] = []; const values: any[] = [];
   for (const f of fields) { if (body[f] !== undefined) { updates.push(`${f} = ?`); values.push(body[f]); } }
   if (updates.length === 0) return c.json({ detail: 'Nothing to update' }, 400);

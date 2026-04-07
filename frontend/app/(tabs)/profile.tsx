@@ -12,6 +12,7 @@ import {
   Dimensions,
   Modal,
   Pressable,
+  Linking,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -82,12 +83,16 @@ export default function ProfileScreen() {
     );
   }
 
-  // Mock data for interests/looking-for that match the original screenshots
-  const interests = user.interests || ['Startups', 'Music', 'Tech', 'Fashion'];
-  const lookingFor = user.looking_for || ['Creative collaboration', 'Networking', 'Friends'];
+  // Parse real user data
+  const interests: string[] = (() => {
+    try { return JSON.parse(user.interests || '[]'); } catch { return []; }
+  })();
+  const lookingFor: string[] = (() => {
+    try { return JSON.parse(user.looking_for || '[]'); } catch { return []; }
+  })();
   const personalInfo = {
-    age: user.age || '20',
-    borough: user.location || 'Bronx',
+    age: user.age || '',
+    borough: user.city || '',
   };
 
   return (
@@ -215,61 +220,80 @@ export default function ProfileScreen() {
         </View>
 
         {/* Personal Info Section */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>PERSONAL INFO</Text>
-          <View style={styles.infoCard}>
-            <View style={styles.infoRow}>
-              <Text style={styles.infoLabel}>Age</Text>
-              <Text style={styles.infoValue}>{personalInfo.age}</Text>
-            </View>
-            <View style={[styles.infoRow, { borderBottomWidth: 0 }]}>
-              <Text style={styles.infoLabel}>Borough</Text>
-              <Text style={styles.infoValue}>{personalInfo.borough}</Text>
+        {(personalInfo.age || personalInfo.borough) ? (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>PERSONAL INFO</Text>
+            <View style={styles.infoCard}>
+              {personalInfo.age ? (
+                <View style={styles.infoRow}>
+                  <Text style={styles.infoLabel}>Age</Text>
+                  <Text style={styles.infoValue}>{personalInfo.age}</Text>
+                </View>
+              ) : null}
+              {personalInfo.borough ? (
+                <View style={[styles.infoRow, { borderBottomWidth: 0 }]}>
+                  <Text style={styles.infoLabel}>Location</Text>
+                  <Text style={styles.infoValue}>{personalInfo.borough}</Text>
+                </View>
+              ) : null}
             </View>
           </View>
-        </View>
+        ) : null}
 
         {/* Looking For Section */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>LOOKING FOR</Text>
-          <View style={styles.chipContainer}>
-            {lookingFor.map((item: string) => (
-              <View key={item} style={styles.chipLight}>
-                <Text style={styles.chipLightText}>{item}</Text>
-              </View>
-            ))}
+        {lookingFor.length > 0 ? (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>LOOKING FOR</Text>
+            <View style={styles.chipContainer}>
+              {lookingFor.map((item: string) => (
+                <View key={item} style={styles.chipLight}>
+                  <Text style={styles.chipLightText}>{item}</Text>
+                </View>
+              ))}
+            </View>
           </View>
-        </View>
+        ) : null}
 
         {/* Interests Section */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>INTERESTS</Text>
-          <View style={styles.chipContainer}>
-            {interests.map((item: string) => (
-              <View key={item} style={styles.interestChip}>
-                <Text style={styles.interestChipText}>{item}</Text>
-              </View>
-            ))}
+        {interests.length > 0 ? (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>INTERESTS</Text>
+            <View style={styles.chipContainer}>
+              {interests.map((item: string) => (
+                <View key={item} style={styles.interestChip}>
+                  <Text style={styles.interestChipText}>{item}</Text>
+                </View>
+              ))}
+            </View>
           </View>
-        </View>
+        ) : null}
 
         {/* Social Links */}
-        <View style={styles.section}>
-          <View style={styles.socialLinks}>
-            <TouchableOpacity style={styles.socialLink}>
-              <Ionicons name="globe-outline" size={16} color={colors.accentPrimary} />
-              <Text style={styles.socialLinkText}>Website</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.socialLink}>
-              <Ionicons name="musical-notes-outline" size={16} color={colors.error} />
-              <Text style={styles.socialLinkText}>TikTok</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.socialLink}>
-              <Ionicons name="camera-outline" size={16} color={colors.avatarPurple} />
-              <Text style={styles.socialLinkText}>Instagram</Text>
-            </TouchableOpacity>
+        {(user.social_website || user.social_tiktok || user.social_instagram) ? (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>SOCIAL</Text>
+            <View style={styles.socialLinks}>
+              {user.social_website ? (
+                <TouchableOpacity style={styles.socialLink} onPress={() => Linking.openURL(user.social_website.startsWith('http') ? user.social_website : `https://${user.social_website}`)}>
+                  <Ionicons name="globe-outline" size={16} color="#0EA5E9" />
+                  <Text style={styles.socialLinkText}>{user.social_website}</Text>
+                </TouchableOpacity>
+              ) : null}
+              {user.social_tiktok ? (
+                <TouchableOpacity style={styles.socialLink} onPress={() => Linking.openURL(`https://tiktok.com/@${user.social_tiktok}`)}>
+                  <Ionicons name="logo-tiktok" size={16} color="#1A1A1A" />
+                  <Text style={styles.socialLinkText}>@{user.social_tiktok}</Text>
+                </TouchableOpacity>
+              ) : null}
+              {user.social_instagram ? (
+                <TouchableOpacity style={styles.socialLink} onPress={() => Linking.openURL(`https://instagram.com/${user.social_instagram}`)}>
+                  <Ionicons name="logo-instagram" size={16} color="#E1306C" />
+                  <Text style={styles.socialLinkText}>@{user.social_instagram}</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
           </View>
-        </View>
+        ) : null}
 
         {/* Action Buttons */}
         <View style={styles.actionRow}>
