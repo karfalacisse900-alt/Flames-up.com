@@ -9,6 +9,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { formatDistanceToNow } from 'date-fns';
 import { colors } from '../../../src/utils/theme';
 import { useAuthStore } from '../../../src/store/authStore';
+import { isCFStreamVideo, extractStreamUid, getStreamPlaybackInfo } from '../../../src/utils/mediaUpload';
 import api from '../../../src/api/client';
 
 const { width: SW } = Dimensions.get('window');
@@ -57,17 +58,40 @@ function PostCard({ post, onPress, wide }: { post: any; onPress: () => void; wid
   const w = wide ? SW - GAP * 2 : COL_W;
   const h = wide ? SW * 0.55 : COL_W * 1.3;
   const imageUri = post.image || post.images?.[0];
-  const hasImage = imageUri && (imageUri.startsWith('http') || imageUri.startsWith('data:'));
+  const isVideo = isCFStreamVideo(imageUri || '') || post.media_types?.includes('video');
+  
+  // For video posts, resolve thumbnail
+  const [thumbnailUri, setThumbnailUri] = React.useState<string | null>(null);
+  
+  React.useEffect(() => {
+    if (isVideo && imageUri && isCFStreamVideo(imageUri)) {
+      const uid = extractStreamUid(imageUri);
+      if (uid) {
+        getStreamPlaybackInfo(uid).then((info) => {
+          if (info?.thumbnail) setThumbnailUri(info.thumbnail);
+        }).catch(() => {});
+      }
+    }
+  }, [imageUri, isVideo]);
+  
+  const displayImage = isVideo ? thumbnailUri : imageUri;
+  const hasImage = displayImage && (displayImage.startsWith('http') || displayImage.startsWith('data:'));
   const authorName = post.user_full_name || post.user_username || 'User';
 
   return (
     <TouchableOpacity style={[pc.card, { width: w, height: h }]} activeOpacity={0.92} onPress={onPress}>
       {hasImage ? (
-        <Image source={{ uri: imageUri }} style={pc.image} />
+        <Image source={{ uri: displayImage }} style={pc.image} />
       ) : (
         <View style={[pc.image, { backgroundColor: '#1A1A1A' }]} />
       )}
       <View style={pc.overlay} />
+      {/* Video play indicator */}
+      {isVideo && (
+        <View style={pc.videoIndicator}>
+          <Ionicons name="play-circle" size={36} color="rgba(255,255,255,0.85)" />
+        </View>
+      )}
       <View style={pc.content}>
         <View style={pc.authorRow}>
           {post.user_profile_image ? (
@@ -105,6 +129,10 @@ const pc = StyleSheet.create({
   overlay: {
     position: 'absolute', width: '100%', height: '100%',
     backgroundColor: 'rgba(0,0,0,0.35)',
+  },
+  videoIndicator: {
+    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+    justifyContent: 'center', alignItems: 'center', zIndex: 2,
   },
   content: { position: 'absolute', bottom: 12, left: 12, right: 12 },
   authorRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 6 },
