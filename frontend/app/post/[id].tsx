@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, Image, ActivityIndicator,
   TextInput, Dimensions, KeyboardAvoidingView, Platform, Share, Modal,
-  ScrollView, StatusBar, PanResponder, Animated as RNAnimated,
+  ScrollView, StatusBar, FlatList, Animated as RNAnimated,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
@@ -17,197 +17,101 @@ const { width: SW, height: SH } = Dimensions.get('window');
 const PAD = 4;
 const IMG_W = SW - PAD * 2;
 const R = 20;
-const EDGE_ZONE = 22; // px from screen edge triggers post navigation
-const SWIPE_THRESHOLD = SW * 0.3; // 30% of screen width to commit navigation
-const EDGE_INDICATOR_W = 4; // width of the edge indicator bar
 
 /* ════════════════════════════════════════════════════════════════════════
-   MAIN SCREEN — wraps PostContent with edge-swipe post navigation
+   MAIN SCREEN — Horizontal FlatList for post-to-post navigation
+   Each page is a full-width PostContent
    ════════════════════════════════════════════════════════════════════════ */
 export default function PostDetailScreen() {
-  const router = useRouter();
   const insets = useSafeAreaInsets();
   const { id: postId } = useLocalSearchParams<{ id: string }>();
+  const router = useRouter();
   const { user } = useAuthStore();
 
-  // Feed context for post-to-post navigation
-  const [feedIds, setFeedIds] = useState<string[]>([]);
-  const [currentId, setCurrentId] = useState(postId || '');
-  const [prevPostData, setPrevPostData] = useState<any>(null);
-  const [nextPostData, setNextPostData] = useState<any>(null);
-  const [isTransitioning, setIsTransitioning] = useState(false);
+  const [feedPosts, setFeedPosts] = useState<any[]>([]);
+  const [initialIdx, setInitialIdx] = useState(0);
+  const [isReady, setIsReady] = useState(false);
+  const [activeIdx, setActiveIdx] = useState(0);
+  const flatListRef = useRef<FlatList>(null);
 
-  // Edge swipe animation
-  const translateX = useRef(new RNAnimated.Value(0)).current;
-  const [edgeSwipeActive, setEdgeSwipeActive] = useState<'left' | 'right' | null>(null);
-  const edgeIndicatorOpacity = useRef(new RNAnimated.Value(0)).current;
-
-  // Load feed to know prev/next posts
   useEffect(() => {
-    loadFeedContext();
+    loadFeed();
   }, []);
 
-  useEffect(() => {
-    setCurrentId(postId || '');
-  }, [postId]);
-
-  // Preload adjacent posts whenever currentId changes
-  useEffect(() => {
-    if (feedIds.length > 0 && currentId) {
-      preloadAdjacentPosts();
-    }
-  }, [currentId, feedIds]);
-
-  const loadFeedContext = async () => {
+  const loadFeed = async () => {
     try {
       const res = await api.get('/posts/feed?limit=50');
-      const ids = (res.data || []).map((p: any) => p.id);
-      setFeedIds(ids);
-    } catch { }
+      const posts = res.data || [];
+      setFeedPosts(posts);
+      const idx = posts.findIndex((p: any) => p.id === postId);
+      const startIdx = idx >= 0 ? idx : 0;
+      setInitialIdx(startIdx);
+      setActiveIdx(startIdx);
+      setIsReady(true);
+    } catch {
+      // Fallback: just load the single post
+      try {
+        const res = await api.get(`/posts/${postId}`);
+        setFeedPosts([res.data]);
+        setInitialIdx(0);
+        setActiveIdx(0);
+      } catch { }
+      setIsReady(true);
+    }
   };
 
-  const preloadAdjacentPosts = async () => {
-    const idx = feedIds.indexOf(currentId);
-    if (idx === -1) return;
-    const prevId = idx > 0 ? feedIds[idx - 1] : null;
-    const nextId = idx < feedIds.length - 1 ? feedIds[idx + 1] : null;
-    try {
-      if (prevId) {
-        const r = await api.get(`/posts/${prevId}`);
-        setPrevPostData(r.data);
-      } else { setPrevPostData(null); }
-      if (nextId) {
-        const r = await api.get(`/posts/${nextId}`);
-        setNextPostData(r.data);
-      } else { setNextPostData(null); }
-    } catch { }
-  };
+  const onViewRef = useRef(({ viewableItems }: any) => {
+    if (viewableItems?.[0]) {
+      setActiveIdx(viewableItems[0].index || 0);
+    }
+  });
+  const viewConfigRef = useRef({ viewAreaCoveragePercentThreshold: 50 });
 
-  const navigateToPost = useCallback((id: string) => {
-    setIsTransitioning(true);
-    setCurrentId(id);
-    // Animate in from the swipe direction
-    RNAnimated.spring(translateX, {
-      toValue: 0,
-      useNativeDriver: true,
-      tension: 80,
-      friction: 12,
-    }).start(() => setIsTransitioning(false));
-  }, [translateX]);
-
-  const currentIdx = feedIds.indexOf(currentId);
-  const hasPrev = currentIdx > 0;
-  const hasNext = currentIdx >= 0 && currentIdx < feedIds.length - 1;
-
-  // ── Edge-swipe PanResponder ──
-  const panResponder = useMemo(() => PanResponder.create({
-    onStartShouldSetPanResponder: (evt) => {
-      const x = evt.nativeEvent.locationX;
-      // Only capture if touch starts in edge zone
-      return x <= EDGE_ZONE || x >= SW - EDGE_ZONE;
-    },
-    onMoveShouldSetPanResponder: (evt, gs) => {
-      const x = evt.nativeEvent.locationX;
-      // Require horizontal movement from edge zone
-      return (x <= EDGE_ZONE || x >= SW - EDGE_ZONE) && Math.abs(gs.dx) > Math.abs(gs.dy) * 1.5;
-    },
-    onPanResponderGrant: (evt) => {
-      const x = evt.nativeEvent.locationX;
-      const side = x <= EDGE_ZONE ? 'left' : 'right';
-      setEdgeSwipeActive(side);
-      RNAnimated.timing(edgeIndicatorOpacity, {
-        toValue: 1,
-        duration: 150,
-        useNativeDriver: true,
-      }).start();
-    },
-    onPanResponderMove: (_, gs) => {
-      // Clamp movement based on whether there's a prev/next post
-      let dx = gs.dx;
-      if (dx > 0 && !hasPrev) dx = dx * 0.2; // resistance
-      if (dx < 0 && !hasNext) dx = dx * 0.2; // resistance
-      translateX.setValue(dx);
-    },
-    onPanResponderRelease: (_, gs) => {
-      setEdgeSwipeActive(null);
-      RNAnimated.timing(edgeIndicatorOpacity, {
-        toValue: 0,
-        duration: 200,
-        useNativeDriver: true,
-      }).start();
-
-      if (gs.dx > SWIPE_THRESHOLD && hasPrev) {
-        // Swiped right → go to previous post
-        RNAnimated.timing(translateX, {
-          toValue: SW,
-          duration: 200,
-          useNativeDriver: true,
-        }).start(() => {
-          translateX.setValue(-SW);
-          navigateToPost(feedIds[currentIdx - 1]);
-        });
-      } else if (gs.dx < -SWIPE_THRESHOLD && hasNext) {
-        // Swiped left → go to next post
-        RNAnimated.timing(translateX, {
-          toValue: -SW,
-          duration: 200,
-          useNativeDriver: true,
-        }).start(() => {
-          translateX.setValue(SW);
-          navigateToPost(feedIds[currentIdx + 1]);
-        });
-      } else {
-        // Snap back
-        RNAnimated.spring(translateX, {
-          toValue: 0,
-          useNativeDriver: true,
-          tension: 100,
-          friction: 12,
-        }).start();
-      }
-    },
-    onPanResponderTerminate: () => {
-      setEdgeSwipeActive(null);
-      RNAnimated.spring(translateX, {
-        toValue: 0,
-        useNativeDriver: true,
-      }).start();
-    },
-  }), [currentIdx, feedIds, hasPrev, hasNext, translateX, navigateToPost, edgeIndicatorOpacity]);
+  if (!isReady) {
+    return (
+      <View style={[s.loadCenter, { paddingTop: insets.top }]}>
+        <StatusBar barStyle="dark-content" />
+        <ActivityIndicator size="large" color="#111" />
+      </View>
+    );
+  }
 
   return (
-    <View style={[s.root, { paddingTop: insets.top }]} {...panResponder.panHandlers}>
+    <View style={[s.root, { paddingTop: insets.top }]}>
       <StatusBar barStyle="dark-content" />
 
-      {/* ── Left edge indicator ── */}
-      {hasPrev && (
-        <RNAnimated.View style={[s.edgeIndicator, s.edgeIndicatorLeft, {
-          opacity: edgeSwipeActive === 'left' ? edgeIndicatorOpacity : 0,
-        }]} pointerEvents="none" />
-      )}
-      {/* ── Right edge indicator ── */}
-      {hasNext && (
-        <RNAnimated.View style={[s.edgeIndicator, s.edgeIndicatorRight, {
-          opacity: edgeSwipeActive === 'right' ? edgeIndicatorOpacity : 0,
-        }]} pointerEvents="none" />
-      )}
+      {/* Horizontal FlatList for post-to-post swiping */}
+      <FlatList
+        ref={flatListRef}
+        data={feedPosts}
+        keyExtractor={(item) => item.id}
+        horizontal
+        pagingEnabled
+        showsHorizontalScrollIndicator={false}
+        initialScrollIndex={initialIdx}
+        getItemLayout={(_, index) => ({ length: SW, offset: SW * index, index })}
+        onViewableItemsChanged={onViewRef.current}
+        viewabilityConfig={viewConfigRef.current}
+        decelerationRate="fast"
+        snapToInterval={SW}
+        snapToAlignment="start"
+        renderItem={({ item, index }) => (
+          <View style={{ width: SW }}>
+            <PostContent
+              postData={item}
+              postId={item.id}
+              user={user}
+              router={router}
+              insets={insets}
+            />
+          </View>
+        )}
+      />
 
-      {/* ── Animated post content ── */}
-      <RNAnimated.View style={{ flex: 1, transform: [{ translateX }] }}>
-        <PostContent
-          postId={currentId}
-          user={user}
-          router={router}
-          insets={insets}
-        />
-      </RNAnimated.View>
-
-      {/* ── Post position indicator (subtle dots) ── */}
-      {feedIds.length > 1 && currentIdx >= 0 && (
-        <View style={[s.postNavHint, { bottom: insets.bottom + 6 }]}>
-          <Text style={s.postNavText}>
-            {currentIdx + 1} / {feedIds.length}
-          </Text>
+      {/* Post position indicator */}
+      {feedPosts.length > 1 && (
+        <View style={[s.posIndicator, { bottom: insets.bottom + 8 }]}>
+          <Text style={s.posText}>{activeIdx + 1} / {feedPosts.length}</Text>
         </View>
       )}
     </View>
@@ -215,18 +119,17 @@ export default function PostDetailScreen() {
 }
 
 /* ════════════════════════════════════════════════════════════════════════
-   POST CONTENT — the actual post detail view (reusable per-post)
+   POST CONTENT — Single post detail view
    ════════════════════════════════════════════════════════════════════════ */
-function PostContent({ postId, user, router, insets }: {
-  postId: string; user: any; router: any; insets: any;
+function PostContent({ postData, postId, user, router, insets }: {
+  postData: any; postId: string; user: any; router: any; insets: any;
 }) {
-  const [post, setPost] = useState<any>(null);
+  const [post, setPost] = useState<any>(postData);
   const [comments, setComments] = useState<any[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
   const [newComment, setNewComment] = useState('');
   const [isCommenting, setIsCommenting] = useState(false);
-  const [liked, setLiked] = useState(false);
-  const [likesCount, setLikesCount] = useState(0);
+  const [liked, setLiked] = useState(postData.liked_by?.includes(user?.id));
+  const [likesCount, setLikesCount] = useState(postData.likes_count || 0);
   const [saved, setSaved] = useState(false);
   const [savedCollection, setSavedCollection] = useState('');
   const [activeImgIdx, setActiveImgIdx] = useState(0);
@@ -240,125 +143,87 @@ function PostContent({ postId, user, router, insets }: {
   const [newCollectionName, setNewCollectionName] = useState('');
   const [isCreatingCollection, setIsCreatingCollection] = useState(false);
 
-  // Reset state when postId changes (post-to-post navigation)
   useEffect(() => {
-    setPost(null);
-    setComments([]);
-    setIsLoading(true);
-    setActiveImgIdx(0);
-    setVideoHlsUrl(null);
-    setShowComments(false);
-    setImgAspect(1.25);
-    setCaptionExpanded(false);
-    setLiked(false);
-    setLikesCount(0);
-    setSaved(false);
-    if (postId) loadPostData();
+    loadExtraData();
   }, [postId]);
 
-  const loadPostData = async () => {
+  const loadExtraData = async () => {
     try {
-      const [postRes, commentsRes] = await Promise.all([
-        api.get(`/posts/${postId}`),
-        api.get(`/posts/${postId}/comments`),
-      ]);
-      const p = postRes.data;
-      setPost(p);
-      setComments(commentsRes.data || []);
-      setLiked(p.liked_by?.includes(user?.id));
-      setLikesCount(p.likes_count || 0);
+      // Load comments
+      const commRes = await api.get(`/posts/${postId}/comments`);
+      setComments(commRes.data || []);
+    } catch { }
 
-      try {
-        const bm = await api.get(`/bookmarks/check/${postId}`);
-        setSaved(bm.data?.saved || false);
-        setSavedCollection(bm.data?.collection || '');
-      } catch { }
-      try {
-        const colRes = await api.get('/library/collections');
-        setCollections(colRes.data || []);
-      } catch { }
+    try {
+      const bm = await api.get(`/bookmarks/check/${postId}`);
+      setSaved(bm.data?.saved || false);
+      setSavedCollection(bm.data?.collection || '');
+    } catch { }
 
-      // Resolve video
-      const allMedia: string[] = p.images?.length > 0 ? p.images : p.image ? [p.image] : [];
-      const mediaTypes: string[] = p.media_types || [];
-      let hasVid = false;
-      for (let i = 0; i < allMedia.length; i++) {
-        if (isCFStreamVideo(allMedia[i]) || mediaTypes[i] === 'video') {
-          hasVid = true;
-          const uid = extractStreamUid(allMedia[i]);
-          if (uid) {
-            try {
-              const info = await getStreamPlaybackInfo(uid);
-              if (info?.hls) setVideoHlsUrl(info.hls);
-            } catch { }
-          }
+    try {
+      const colRes = await api.get('/library/collections');
+      setCollections(colRes.data || []);
+    } catch { }
+
+    // Resolve video
+    const allMedia: string[] = post.images?.length > 0 ? post.images : post.image ? [post.image] : [];
+    const mediaTypes: string[] = post.media_types || [];
+    let hasVid = false;
+    for (let i = 0; i < allMedia.length; i++) {
+      if (isCFStreamVideo(allMedia[i]) || mediaTypes[i] === 'video') {
+        hasVid = true;
+        const uid = extractStreamUid(allMedia[i]);
+        if (uid) {
+          try {
+            const info = await getStreamPlaybackInfo(uid);
+            if (info?.hls) setVideoHlsUrl(info.hls);
+          } catch { }
         }
       }
+    }
 
-      // Image aspect ratio
-      const imgUrls = allMedia.filter((u: string) => !isCFStreamVideo(u) && (u.startsWith('http') || u.startsWith('data:')));
-      if (imgUrls.length > 0) {
-        Image.getSize(imgUrls[0], (w, h) => {
-          if (w > 0 && h > 0) setImgAspect(Math.min(Math.max(h / w, 0.6), 1.8));
-        }, () => { });
-      } else if (hasVid) {
-        setImgAspect(1.0);
-      }
-    } catch (error) {
-      console.log('Error loading post:', error);
-    } finally {
-      setIsLoading(false);
+    // Image aspect
+    const imgUrls = allMedia.filter((u: string) => !isCFStreamVideo(u) && (u.startsWith('http') || u.startsWith('data:')));
+    if (imgUrls.length > 0) {
+      Image.getSize(imgUrls[0], (w, h) => {
+        if (w > 0 && h > 0) setImgAspect(Math.min(Math.max(h / w, 0.6), 1.8));
+      }, () => { });
+    } else if (hasVid) {
+      setImgAspect(1.0);
     }
   };
 
   // ── Actions ──
   const handleLike = async () => {
-    setLiked(!liked);
-    setLikesCount(liked ? likesCount - 1 : likesCount + 1);
+    setLiked(!liked); setLikesCount(liked ? likesCount - 1 : likesCount + 1);
     try { await api.post(`/posts/${postId}/like`); }
     catch { setLiked(liked); setLikesCount(likesCount); }
   };
-
   const handleSaveToCollection = async (collection: string) => {
     setSaved(true); setSavedCollection(collection); setSaveModalVisible(false);
     try { await api.post('/bookmarks', { post_id: postId, collection }); }
     catch { try { await api.post(`/library/save/${postId}`, { collection }); } catch { setSaved(false); } }
   };
-
   const handleUnsave = async () => {
     setSaved(false); setSavedCollection(''); setSaveModalVisible(false);
     try { await api.delete(`/bookmarks/${postId}`); }
     catch { try { await api.delete(`/library/save/${postId}`); } catch { setSaved(true); } }
   };
-
   const handleComment = async () => {
     if (!newComment.trim() || isCommenting) return;
     setIsCommenting(true);
     try {
       const res = await api.post(`/posts/${postId}/comments`, { content: newComment.trim() });
-      setComments([...comments, res.data]);
-      setNewComment('');
+      setComments([...comments, res.data]); setNewComment('');
     } catch { } finally { setIsCommenting(false); }
   };
-
   const handleShare = async () => {
     try { await Share.share({ message: post?.content || 'Check this out!' }); } catch { }
   };
-
   const fmtCount = (n: number) => !n ? '' : n >= 1000 ? (n / 1000).toFixed(1).replace('.0', '') + 'k' : String(n);
 
-  // ── Loading / Not Found ──
-  if (isLoading) return <View style={s.center}><ActivityIndicator size="large" color="#111" /></View>;
-  if (!post) return (
-    <View style={s.center}>
-      <Text style={{ color: '#999', fontSize: 16, marginBottom: 16 }}>Post not found</Text>
-      <TouchableOpacity onPress={() => router.back()} style={s.goBackBtn}>
-        <Text style={{ color: '#FFF', fontWeight: '700' }}>Go Back</Text>
-      </TouchableOpacity>
-    </View>
-  );
+  if (!post) return <View style={s.loadCenter}><Text style={{ color: '#999' }}>Post not found</Text></View>;
 
-  // ── Derived values ──
   const authorName = post.user_full_name || post.user_username || 'User';
   const allImages: string[] = post.images?.length > 0
     ? post.images.filter((u: string) => !isCFStreamVideo(u) && (u.startsWith('http') || u.startsWith('data:')))
@@ -374,9 +239,10 @@ function PostContent({ postId, user, router, insets }: {
     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingBottom: insets.bottom + 30 }}
+        contentContainerStyle={{ paddingBottom: insets.bottom + 40 }}
         bounces
         keyboardShouldPersistTaps="handled"
+        nestedScrollEnabled
       >
         {/* ═══ IMAGE / VIDEO CARD ═══ */}
         <View style={[s.imageCard, { borderRadius: R }]}>
@@ -384,6 +250,7 @@ function PostContent({ postId, user, router, insets }: {
             allImages.length > 1 ? (
               <ScrollView
                 horizontal pagingEnabled showsHorizontalScrollIndicator={false}
+                nestedScrollEnabled
                 onMomentumScrollEnd={(e) => setActiveImgIdx(Math.round(e.nativeEvent.contentOffset.x / IMG_W))}
                 scrollEventThrottle={16}
               >
@@ -403,20 +270,12 @@ function PostContent({ postId, user, router, insets }: {
           )}
 
           {/* Floating Back */}
-          <TouchableOpacity
-            style={[s.floatingBtn, { top: 12, left: 12 }]}
-            onPress={() => router.back()}
-            activeOpacity={0.8}
-          >
+          <TouchableOpacity style={[s.floatingBtn, { top: 12, left: 12 }]} onPress={() => router.back()} activeOpacity={0.8}>
             <Ionicons name="chevron-back" size={22} color="#111" />
           </TouchableOpacity>
 
           {/* Fullscreen toggle */}
-          <TouchableOpacity
-            style={[s.floatingBtn, { bottom: 14, right: 14 }]}
-            onPress={() => setFullscreenVisible(true)}
-            activeOpacity={0.8}
-          >
+          <TouchableOpacity style={[s.floatingBtn, { bottom: 14, right: 14 }]} onPress={() => setFullscreenVisible(true)} activeOpacity={0.8}>
             <Ionicons name="expand-outline" size={20} color="#111" />
           </TouchableOpacity>
 
@@ -440,7 +299,7 @@ function PostContent({ postId, user, router, insets }: {
 
         {/* ═══ TAGS ═══ */}
         {tags.length > 0 && (
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.tagsRow}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.tagsRow} nestedScrollEnabled>
             {tags.map((tag, i) => (
               <View key={i} style={s.tagPill}><Text style={s.tagText}>{tag}</Text></View>
             ))}
@@ -454,26 +313,18 @@ function PostContent({ postId, user, router, insets }: {
               <Ionicons name={liked ? 'heart' : 'heart-outline'} size={26} color={liked ? '#E60023' : '#111'} />
             </TouchableOpacity>
             {likesCount > 0 && <Text style={s.engageCount}>{fmtCount(likesCount)}</Text>}
-
             <TouchableOpacity style={[s.engageIcon, { marginLeft: 14 }]} onPress={() => setShowComments(!showComments)}>
               <Ionicons name="chatbubble-outline" size={22} color="#111" />
             </TouchableOpacity>
             {comments.length > 0 && <Text style={s.engageCount}>{comments.length}</Text>}
-
             <TouchableOpacity style={[s.engageIcon, { marginLeft: 14 }]} onPress={handleShare}>
               <Ionicons name="arrow-up-outline" size={24} color="#111" />
             </TouchableOpacity>
-
             <TouchableOpacity style={[s.engageIcon, { marginLeft: 14 }]}>
               <Ionicons name="ellipsis-horizontal" size={24} color="#111" />
             </TouchableOpacity>
           </View>
-
-          <TouchableOpacity
-            style={[s.saveBtn, saved && s.saveBtnSaved]}
-            onPress={() => setSaveModalVisible(true)}
-            activeOpacity={0.85}
-          >
+          <TouchableOpacity style={[s.saveBtn, saved && s.saveBtnSaved]} onPress={() => setSaveModalVisible(true)} activeOpacity={0.85}>
             <Text style={s.saveBtnText}>{saved ? 'Saved' : 'Save'}</Text>
           </TouchableOpacity>
         </View>
@@ -582,13 +433,10 @@ function PostContent({ postId, user, router, insets }: {
 
       {/* ═══ SAVE MODAL ═══ */}
       <Modal visible={saveModalVisible} transparent animationType="slide">
-        <TouchableOpacity style={s.modalOverlay} activeOpacity={1} onPress={() => setSaveModalVisible(false)}>
-          <View />
-        </TouchableOpacity>
+        <TouchableOpacity style={s.modalOverlay} activeOpacity={1} onPress={() => setSaveModalVisible(false)}><View /></TouchableOpacity>
         <View style={[s.saveModal, { paddingBottom: insets.bottom + 16 }]}>
           <View style={s.modalHandle} />
           <Text style={s.modalTitle}>{saved ? 'Saved to collection' : 'Save to collection'}</Text>
-
           {!saved && (
             <TouchableOpacity style={s.quickSaveRow} onPress={() => handleSaveToCollection('My Library')}>
               <View style={s.quickSaveIcon}><Ionicons name="bookmark" size={20} color="#FFF" /></View>
@@ -599,7 +447,6 @@ function PostContent({ postId, user, router, insets }: {
               <Ionicons name="chevron-forward" size={20} color="#CCC" />
             </TouchableOpacity>
           )}
-
           {collections.length > 0 && (
             <View style={s.colSection}>
               <Text style={s.colSectionTitle}>Your Collections</Text>
@@ -617,7 +464,6 @@ function PostContent({ postId, user, router, insets }: {
               ))}
             </View>
           )}
-
           {isCreatingCollection ? (
             <View style={s.newColRow}>
               <TextInput style={s.newColInput} placeholder="Collection name" placeholderTextColor="#CCC" value={newCollectionName} onChangeText={setNewCollectionName} autoFocus />
@@ -631,7 +477,6 @@ function PostContent({ postId, user, router, insets }: {
               <Text style={s.createColText}>Create collection</Text>
             </TouchableOpacity>
           )}
-
           {saved && (
             <TouchableOpacity style={s.unsaveBtn} onPress={handleUnsave}>
               <Ionicons name="bookmark-outline" size={20} color="#DC2626" />
@@ -661,24 +506,15 @@ function VideoPlayer({ hlsUrl, width, height }: { hlsUrl: string; width: number;
    ════════════════════════════════════════════════════════════════════════ */
 const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#FFF' },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#FFF' },
-  goBackBtn: { backgroundColor: '#111', paddingHorizontal: 24, paddingVertical: 12, borderRadius: 24 },
+  loadCenter: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#FFF' },
 
-  // Edge indicators
-  edgeIndicator: {
-    position: 'absolute', top: 0, bottom: 0, width: EDGE_INDICATOR_W,
-    zIndex: 50, borderRadius: 2,
-  },
-  edgeIndicatorLeft: { left: 0, backgroundColor: '#E60023' },
-  edgeIndicatorRight: { right: 0, backgroundColor: '#E60023' },
-
-  // Post nav hint
-  postNavHint: {
+  // Post position
+  posIndicator: {
     position: 'absolute', alignSelf: 'center',
     backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 10,
     paddingHorizontal: 10, paddingVertical: 4, zIndex: 20,
   },
-  postNavText: { fontSize: 11, fontWeight: '600', color: '#FFF' },
+  posText: { fontSize: 11, fontWeight: '600', color: '#FFF' },
 
   // Image card
   imageCard: { marginHorizontal: PAD, overflow: 'hidden', backgroundColor: '#F0ECE4', position: 'relative' },
@@ -759,19 +595,16 @@ const s = StyleSheet.create({
   },
   modalHandle: { width: 40, height: 4, borderRadius: 2, backgroundColor: '#E0DDD8', alignSelf: 'center', marginBottom: 16 },
   modalTitle: { fontSize: 18, fontWeight: '800', color: '#111', marginBottom: 16 },
-
   quickSaveRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 14, gap: 12, borderBottomWidth: 1, borderBottomColor: '#F0EDE7' },
   quickSaveIcon: { width: 44, height: 44, borderRadius: 14, backgroundColor: '#E60023', justifyContent: 'center', alignItems: 'center' },
   quickSaveTitle: { fontSize: 16, fontWeight: '700', color: '#111' },
   quickSaveDesc: { fontSize: 13, color: '#999', marginTop: 1 },
-
   colSection: { paddingTop: 12 },
   colSectionTitle: { fontSize: 12, fontWeight: '700', color: '#999', letterSpacing: 1, textTransform: 'uppercase', marginBottom: 10 },
   colItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, gap: 12, borderBottomWidth: 1, borderBottomColor: '#F5F2EC' },
   colIcon: { width: 40, height: 40, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
   colName: { fontSize: 15, fontWeight: '600', color: '#111' },
   colCount: { fontSize: 12, color: '#999', marginTop: 1 },
-
   newColRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 12 },
   newColInput: { flex: 1, backgroundColor: '#F5F2EC', borderRadius: 14, paddingHorizontal: 14, paddingVertical: 12, fontSize: 15, color: '#111' },
   createBtn: { backgroundColor: '#E60023', paddingHorizontal: 20, paddingVertical: 12, borderRadius: 20 },
