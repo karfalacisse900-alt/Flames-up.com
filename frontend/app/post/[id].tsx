@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, Image, ActivityIndicator,
-  TextInput, FlatList, Dimensions, KeyboardAvoidingView, Platform, Share, Linking,
+  TextInput, FlatList, Dimensions, KeyboardAvoidingView, Platform, Share,
+  ScrollView,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
@@ -13,7 +14,9 @@ import { isCFStreamVideo, extractStreamUid, getStreamPlaybackInfo } from '../../
 import { formatDistanceToNow } from 'date-fns';
 
 const { width: SW } = Dimensions.get('window');
-const IMG_RADIUS = 20;
+const IMG_W = SW - 8;
+const IMG_H = SW * 1.2;
+const RADIUS = 24;
 
 export default function PostDetailScreen() {
   const router = useRouter();
@@ -23,7 +26,6 @@ export default function PostDetailScreen() {
 
   const [post, setPost] = useState<any>(null);
   const [comments, setComments] = useState<any[]>([]);
-  const [relatedPosts, setRelatedPosts] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [newComment, setNewComment] = useState('');
   const [isCommenting, setIsCommenting] = useState(false);
@@ -32,7 +34,7 @@ export default function PostDetailScreen() {
   const [saved, setSaved] = useState(false);
   const [activeImgIdx, setActiveImgIdx] = useState(0);
   const [videoHlsUrl, setVideoHlsUrl] = useState<string | null>(null);
-  const [showComments, setShowComments] = useState(false);
+  const [showAllComments, setShowAllComments] = useState(false);
 
   useEffect(() => { loadPostData(); }, [postId]);
 
@@ -53,14 +55,7 @@ export default function PostDetailScreen() {
         setSaved(bm.data?.saved || false);
       } catch {}
 
-      // Load related posts
-      try {
-        const feed = await api.get('/posts/feed', { params: { limit: 12 } });
-        const all = Array.isArray(feed.data) ? feed.data : [];
-        setRelatedPosts(all.filter((fp: any) => fp.id !== postId && (fp.image || fp.images?.[0])).slice(0, 6));
-      } catch {}
-
-      // Resolve CF Stream video
+      // Resolve video
       const allMedia: string[] = p.images?.length > 0 ? p.images : p.image ? [p.image] : [];
       const mediaTypes: string[] = p.media_types || [];
       for (let i = 0; i < allMedia.length; i++) {
@@ -109,324 +104,369 @@ export default function PostDetailScreen() {
     try { await Share.share({ message: post?.content || 'Check this out on Flames-Up!' }); } catch {}
   };
 
-  if (isLoading) return <View style={s.loadWrap}><ActivityIndicator size="large" color="#1A1A1A" /></View>;
-  if (!post) return (
-    <View style={s.loadWrap}>
-      <Text style={{ color: '#999', fontSize: 16 }}>Post not found</Text>
-      <TouchableOpacity onPress={() => router.back()} style={{ marginTop: 16 }}>
-        <Text style={{ color: '#DC2626', fontWeight: '600' }}>Go Back</Text>
-      </TouchableOpacity>
-    </View>
-  );
+  if (isLoading) {
+    return <View style={s.center}><ActivityIndicator size="large" color="#000" /></View>;
+  }
+  if (!post) {
+    return (
+      <View style={s.center}>
+        <Text style={{ color: '#999', fontSize: 16, marginBottom: 16 }}>Post not found</Text>
+        <TouchableOpacity onPress={() => router.back()} style={s.goBackBtn}>
+          <Text style={{ color: '#FFF', fontWeight: '700', fontSize: 14 }}>Go Back</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
 
-  const timeAgo = formatDistanceToNow(new Date(post.created_at), { addSuffix: true });
   const authorName = post.user_full_name || post.user_username || 'User';
   const allImages: string[] = post.images?.length > 0
     ? post.images.filter((u: string) => !isCFStreamVideo(u))
     : post.image && !isCFStreamVideo(post.image) ? [post.image] : [];
-  const hasVideo = videoHlsUrl || (post.media_types || []).includes('video');
-  const postTags = [post.post_type, post.location].filter(Boolean);
+  const hasVideo = videoHlsUrl;
+  const tags = [post.post_type, post.location].filter(Boolean);
+
+  const formatCount = (n: number) => {
+    if (n >= 1000) return (n / 1000).toFixed(1).replace('.0', '') + 'k';
+    return String(n);
+  };
 
   return (
-    <View style={[s.container, { paddingTop: insets.top }]}>
-      <FlatList
-        data={showComments ? comments : []}
-        keyExtractor={(item) => item.id}
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingBottom: 100 }}
-        ListHeaderComponent={
-          <View>
-            {/* === HERO IMAGE === */}
-            <View style={s.imageWrap}>
-              {allImages.length > 0 ? (
-                allImages.length > 1 ? (
-                  <FlatList
-                    data={allImages}
-                    horizontal pagingEnabled
-                    showsHorizontalScrollIndicator={false}
-                    onMomentumScrollEnd={(e) => setActiveImgIdx(Math.round(e.nativeEvent.contentOffset.x / (SW - 24)))}
-                    keyExtractor={(_, i) => `img-${i}`}
-                    renderItem={({ item: uri }) => (
-                      <Image source={{ uri }} style={s.heroImg} resizeMode="cover" />
-                    )}
-                  />
-                ) : (
-                  <Image source={{ uri: allImages[0] }} style={s.heroImg} resizeMode="cover" />
-                )
-              ) : hasVideo && videoHlsUrl ? (
-                <StreamVideoPlayer hlsUrl={videoHlsUrl} />
+    <View style={[s.root, { paddingTop: insets.top }]}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <ScrollView
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={{ paddingBottom: 30 }}
+          bounces
+        >
+          {/* ═══ IMAGE CARD ═══ */}
+          <View style={s.imageCard}>
+            {allImages.length > 0 ? (
+              allImages.length > 1 ? (
+                <FlatList
+                  data={allImages}
+                  horizontal
+                  pagingEnabled
+                  showsHorizontalScrollIndicator={false}
+                  onMomentumScrollEnd={(e) => setActiveImgIdx(Math.round(e.nativeEvent.contentOffset.x / IMG_W))}
+                  keyExtractor={(_, i) => `img-${i}`}
+                  renderItem={({ item: uri }) => (
+                    <Image source={{ uri }} style={s.heroImg} resizeMode="cover" />
+                  )}
+                />
               ) : (
-                <View style={[s.heroImg, { backgroundColor: '#E8E4DF', justifyContent: 'center', alignItems: 'center' }]}>
-                  <Ionicons name="image-outline" size={48} color="#CCC" />
-                </View>
-              )}
+                <Image source={{ uri: allImages[0] }} style={s.heroImg} resizeMode="cover" />
+              )
+            ) : hasVideo ? (
+              <StreamPlayer hlsUrl={videoHlsUrl!} />
+            ) : (
+              <View style={[s.heroImg, s.noImgBg]}>
+                <Ionicons name="image-outline" size={56} color="#D4D0C8" />
+              </View>
+            )}
 
-              {/* Back button */}
-              <TouchableOpacity style={s.backBtn} onPress={() => router.back()}>
-                <Ionicons name="chevron-back" size={20} color="#1A1A1A" />
-              </TouchableOpacity>
+            {/* Back button - white circle */}
+            <TouchableOpacity
+              style={[s.backBtn, { top: 14, left: 14 }]}
+              onPress={() => router.back()}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="chevron-back" size={22} color="#000" />
+            </TouchableOpacity>
 
-              {/* Image dots */}
-              {allImages.length > 1 && (
-                <View style={s.dotsRow}>
-                  {allImages.map((_: string, i: number) => (
-                    <View key={i} style={[s.dot, activeImgIdx === i && s.dotActive]} />
-                  ))}
-                </View>
-              )}
-            </View>
-
-            {/* === TAG PILLS === */}
-            {postTags.length > 0 && (
-              <View style={s.tagsRow}>
-                {postTags.map((tag, i) => (
-                  <View key={i} style={s.tagPill}>
-                    <Text style={s.tagText}>{tag}</Text>
-                  </View>
+            {/* Carousel dots */}
+            {allImages.length > 1 && (
+              <View style={s.dots}>
+                {allImages.map((_: string, i: number) => (
+                  <View key={i} style={[s.dot, activeImgIdx === i && s.dotOn]} />
                 ))}
               </View>
             )}
+          </View>
 
-            {/* === ENGAGEMENT BAR === */}
-            <View style={s.engageBar}>
-              <View style={s.engageLeft}>
-                <TouchableOpacity onPress={handleLike} style={s.engageBtn}>
-                  <Ionicons name={liked ? 'heart' : 'heart-outline'} size={22} color={liked ? '#ED4956' : '#1A1A1A'} />
-                  {likesCount > 0 && <Text style={s.engageCount}>{likesCount}</Text>}
-                </TouchableOpacity>
-                <TouchableOpacity style={s.engageBtn} onPress={() => setShowComments(!showComments)}>
-                  <Ionicons name="chatbubble-outline" size={20} color="#1A1A1A" />
-                  {comments.length > 0 && <Text style={s.engageCount}>{comments.length}</Text>}
-                </TouchableOpacity>
-                <TouchableOpacity style={s.engageBtn} onPress={handleShare}>
-                  <Ionicons name="arrow-up-outline" size={22} color="#1A1A1A" />
-                </TouchableOpacity>
-                <TouchableOpacity style={s.engageBtn}>
-                  <Ionicons name="ellipsis-horizontal" size={20} color="#1A1A1A" />
-                </TouchableOpacity>
-              </View>
-              <TouchableOpacity style={[s.saveBtn, saved && s.saveBtnActive]} onPress={handleSave}>
-                <Ionicons name={saved ? 'bookmark' : 'bookmark-outline'} size={16} color={saved ? '#FFF' : '#FFF'} />
-                <Text style={s.saveBtnText}>{saved ? 'Saved' : 'Save'}</Text>
+          {/* ═══ TAG PILLS ═══ */}
+          {tags.length > 0 && (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={s.tagsScroll}
+            >
+              {tags.map((tag, i) => (
+                <View key={i} style={s.tagPill}>
+                  <Text style={s.tagText}>{tag}</Text>
+                </View>
+              ))}
+            </ScrollView>
+          )}
+
+          {/* ═══ ENGAGEMENT ROW ═══ */}
+          <View style={s.engageRow}>
+            <View style={s.engageLeft}>
+              <TouchableOpacity onPress={handleLike} style={s.iconBtn} activeOpacity={0.7}>
+                <Ionicons
+                  name={liked ? 'heart' : 'heart-outline'}
+                  size={24}
+                  color={liked ? '#ED4956' : '#111'}
+                />
+              </TouchableOpacity>
+              {likesCount > 0 && <Text style={s.countText}>{formatCount(likesCount)}</Text>}
+
+              <TouchableOpacity style={[s.iconBtn, { marginLeft: 12 }]} onPress={() => setShowAllComments(!showAllComments)} activeOpacity={0.7}>
+                <Ionicons name="chatbubble-outline" size={21} color="#111" />
+              </TouchableOpacity>
+              {comments.length > 0 && <Text style={s.countText}>{comments.length}</Text>}
+
+              <TouchableOpacity style={[s.iconBtn, { marginLeft: 12 }]} onPress={handleShare} activeOpacity={0.7}>
+                <Ionicons name="arrow-up-outline" size={24} color="#111" />
+              </TouchableOpacity>
+
+              <TouchableOpacity style={[s.iconBtn, { marginLeft: 12 }]} activeOpacity={0.7}>
+                <Ionicons name="ellipsis-horizontal" size={22} color="#111" />
               </TouchableOpacity>
             </View>
 
-            {/* === CAPTION === */}
-            {post.content ? (
-              <View style={s.captionWrap}>
-                <Text style={s.captionText}>{post.content}</Text>
-              </View>
-            ) : null}
-
-            {/* === AUTHOR ROW === */}
-            <TouchableOpacity style={s.authorRow} onPress={() => router.push(`/user/${post.user_id}` as any)} activeOpacity={0.7}>
-              {post.user_profile_image ? (
-                <Image source={{ uri: post.user_profile_image }} style={s.authorAvatar} />
-              ) : (
-                <View style={[s.authorAvatar, s.authorAvatarFb]}>
-                  <Text style={s.authorAvatarInit}>{authorName[0].toUpperCase()}</Text>
-                </View>
-              )}
-              <View style={{ flex: 1 }}>
-                <Text style={s.authorName}>{authorName}</Text>
-                <Text style={s.authorTime}>{timeAgo}</Text>
-              </View>
-              <TouchableOpacity style={s.followBtn}>
-                <Text style={s.followBtnText}>Follow</Text>
-              </TouchableOpacity>
+            <TouchableOpacity
+              style={[s.saveBtn, saved && s.saveBtnSaved]}
+              onPress={handleSave}
+              activeOpacity={0.85}
+            >
+              <Text style={s.saveBtnText}>{saved ? 'Saved' : 'Save'}</Text>
             </TouchableOpacity>
-
-            {/* === LOCATION === */}
-            {post.location ? (
-              <View style={s.locationRow}>
-                <Ionicons name="location" size={14} color="#DC2626" />
-                <Text style={s.locationText}>{post.location}</Text>
-              </View>
-            ) : null}
-
-            {/* === COMMENT INPUT === */}
-            <View style={s.commentInput}>
-              <View style={s.commentAvatar}>
-                {user?.profile_image ? (
-                  <Image source={{ uri: user.profile_image }} style={{ width: '100%', height: '100%', borderRadius: 14 }} />
-                ) : (
-                  <Text style={s.commentAvatarText}>{(user?.full_name || 'U')[0]}</Text>
-                )}
-              </View>
-              <TextInput
-                style={s.commentTextInput}
-                placeholder="Add a comment..."
-                placeholderTextColor="#CCC"
-                value={newComment}
-                onChangeText={setNewComment}
-              />
-              {newComment.trim() ? (
-                <TouchableOpacity onPress={handleComment} disabled={isCommenting}>
-                  {isCommenting ? (
-                    <ActivityIndicator size="small" color="#DC2626" />
-                  ) : (
-                    <Ionicons name="send" size={18} color="#DC2626" />
-                  )}
-                </TouchableOpacity>
-              ) : null}
-            </View>
-
-            {/* === COMMENTS TOGGLE === */}
-            {comments.length > 0 && !showComments && (
-              <TouchableOpacity style={s.showComments} onPress={() => setShowComments(true)}>
-                <Text style={s.showCommentsText}>View all {comments.length} comments</Text>
-              </TouchableOpacity>
-            )}
-
-            {/* === MORE TO EXPLORE === */}
-            {relatedPosts.length > 0 && !showComments && (
-              <View style={s.relatedSection}>
-                <Text style={s.relatedTitle}>More to explore</Text>
-                <View style={s.relatedGrid}>
-                  {relatedPosts.map((rp: any) => (
-                    <TouchableOpacity
-                      key={rp.id}
-                      style={s.relatedCard}
-                      activeOpacity={0.9}
-                      onPress={() => router.push(`/post/${rp.id}` as any)}
-                    >
-                      <Image source={{ uri: rp.image || rp.images?.[0] }} style={s.relatedImg} />
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              </View>
-            )}
           </View>
-        }
-        renderItem={({ item }) => (
-          <View style={s.commentItem}>
-            {item.user_profile_image ? (
-              <Image source={{ uri: item.user_profile_image }} style={s.commentItemAvatar} />
+
+          {/* ═══ CAPTION ═══ */}
+          {post.content ? (
+            <Text style={s.caption}>{post.content}</Text>
+          ) : null}
+
+          {/* ═══ AUTHOR ROW ═══ */}
+          <TouchableOpacity
+            style={s.authorRow}
+            onPress={() => router.push(`/user/${post.user_id}` as any)}
+            activeOpacity={0.7}
+          >
+            {post.user_profile_image ? (
+              <Image source={{ uri: post.user_profile_image }} style={s.authorAv} />
             ) : (
-              <View style={[s.commentItemAvatar, { backgroundColor: '#50C8A8', justifyContent: 'center', alignItems: 'center' }]}>
-                <Text style={{ color: '#FFF', fontSize: 10, fontWeight: '700' }}>{(item.user_full_name || 'U')[0]}</Text>
+              <View style={[s.authorAv, s.authorAvFb]}>
+                <Text style={s.authorAvInit}>{authorName[0].toUpperCase()}</Text>
               </View>
             )}
-            <View style={s.commentBubble}>
-              <Text style={s.commentAuthor}>{item.user_full_name}</Text>
-              <Text style={s.commentContent}>{item.content}</Text>
-              <Text style={s.commentTime}>{formatDistanceToNow(new Date(item.created_at), { addSuffix: true })}</Text>
+            <Text style={s.authorName}>{authorName}</Text>
+          </TouchableOpacity>
+
+          {/* ═══ COMMENT INPUT ═══ */}
+          <View style={s.commentInputRow}>
+            <View style={s.commentInputAv}>
+              {user?.profile_image ? (
+                <Image source={{ uri: user.profile_image }} style={{ width: 32, height: 32, borderRadius: 16 }} />
+              ) : (
+                <Text style={s.commentInputAvText}>{(user?.full_name || 'U')[0]}</Text>
+              )}
             </View>
+            <TextInput
+              style={s.commentInput}
+              placeholder="Add a comment"
+              placeholderTextColor="#B0B0B0"
+              value={newComment}
+              onChangeText={setNewComment}
+              returnKeyType="send"
+              onSubmitEditing={handleComment}
+            />
+            {newComment.trim() ? (
+              <TouchableOpacity onPress={handleComment} disabled={isCommenting} style={s.sendBtn}>
+                {isCommenting ? (
+                  <ActivityIndicator size="small" color="#E60023" />
+                ) : (
+                  <Ionicons name="arrow-up-circle" size={28} color="#E60023" />
+                )}
+              </TouchableOpacity>
+            ) : null}
           </View>
-        )}
-      />
+
+          {/* ═══ COMMENTS LIST ═══ */}
+          {showAllComments && comments.length > 0 && (
+            <View style={s.commentsList}>
+              {comments.map((c) => (
+                <View key={c.id} style={s.commentRow}>
+                  {c.user_profile_image ? (
+                    <Image source={{ uri: c.user_profile_image }} style={s.commentAv} />
+                  ) : (
+                    <View style={[s.commentAv, { backgroundColor: '#DDD', justifyContent: 'center', alignItems: 'center' }]}>
+                      <Text style={{ fontSize: 10, fontWeight: '700', color: '#888' }}>{(c.user_full_name || 'U')[0]}</Text>
+                    </View>
+                  )}
+                  <View style={{ flex: 1 }}>
+                    <Text style={s.commentName}>{c.user_full_name}</Text>
+                    <Text style={s.commentBody}>{c.content}</Text>
+                    <Text style={s.commentAge}>
+                      {formatDistanceToNow(new Date(c.created_at), { addSuffix: true })}
+                    </Text>
+                  </View>
+                </View>
+              ))}
+            </View>
+          )}
+
+          {!showAllComments && comments.length > 0 && (
+            <TouchableOpacity style={s.viewAll} onPress={() => setShowAllComments(true)}>
+              <Text style={s.viewAllText}>View all {comments.length} comment{comments.length !== 1 ? 's' : ''}</Text>
+            </TouchableOpacity>
+          )}
+        </ScrollView>
+      </KeyboardAvoidingView>
     </View>
   );
 }
 
-function StreamVideoPlayer({ hlsUrl }: { hlsUrl: string }) {
+function StreamPlayer({ hlsUrl }: { hlsUrl: string }) {
   const player = useVideoPlayer(hlsUrl, (p) => { p.loop = false; });
-  return <VideoView player={player} style={s.heroImg} allowsFullscreen allowsPictureInPicture />;
+  return <VideoView player={player} style={s.heroImg} nativeControls />;
 }
 
-const RELATED_W = (SW - 36 - 8) / 3;
-
 const s = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#FFF' },
-  loadWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#FFF' },
+  root: { flex: 1, backgroundColor: '#FFFFFF' },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#FFF' },
+  goBackBtn: { backgroundColor: '#111', paddingHorizontal: 24, paddingVertical: 12, borderRadius: 24 },
 
-  // Hero image
-  imageWrap: {
-    marginHorizontal: 12, borderRadius: IMG_RADIUS, overflow: 'hidden',
-    position: 'relative', backgroundColor: '#F5F0EB',
+  /* ── Image Card ── */
+  imageCard: {
+    marginHorizontal: 4,
+    borderRadius: RADIUS,
+    overflow: 'hidden',
+    backgroundColor: '#F0ECE4',
   },
-  heroImg: { width: SW - 24, height: SW * 1.15, borderRadius: IMG_RADIUS },
+  heroImg: {
+    width: IMG_W,
+    height: IMG_H,
+  },
+  noImgBg: { backgroundColor: '#F0ECE4', justifyContent: 'center', alignItems: 'center' },
+
   backBtn: {
-    position: 'absolute', top: 12, left: 12,
-    width: 38, height: 38, borderRadius: 19,
-    backgroundColor: 'rgba(255,255,255,0.92)',
-    justifyContent: 'center', alignItems: 'center',
+    position: 'absolute',
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#FFFFFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.10,
+    shadowRadius: 6,
+    elevation: 4,
   },
-  dotsRow: {
-    position: 'absolute', bottom: 14, left: 0, right: 0,
-    flexDirection: 'row', justifyContent: 'center', gap: 5,
-  },
-  dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: 'rgba(255,255,255,0.4)' },
-  dotActive: { backgroundColor: '#FFF', width: 18, borderRadius: 3 },
 
-  // Tags
-  tagsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, paddingHorizontal: 16, paddingTop: 14 },
+  dots: {
+    position: 'absolute', bottom: 16, left: 0, right: 0,
+    flexDirection: 'row', justifyContent: 'center', gap: 6,
+  },
+  dot: { width: 7, height: 7, borderRadius: 4, backgroundColor: 'rgba(255,255,255,0.45)' },
+  dotOn: { backgroundColor: '#FFF', width: 20, borderRadius: 4 },
+
+  /* ── Tag pills ── */
+  tagsScroll: { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 4, gap: 8 },
   tagPill: {
-    backgroundColor: '#F5F0EB', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16,
+    backgroundColor: '#F0ECE4',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 24,
   },
-  tagText: { fontSize: 12, fontWeight: '600', color: '#666' },
+  tagText: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#111',
+  },
 
-  // Engagement
-  engageBar: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 16, paddingTop: 12, paddingBottom: 6,
+  /* ── Engagement row ── */
+  engageRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    paddingBottom: 8,
   },
-  engageLeft: { flexDirection: 'row', alignItems: 'center', gap: 2 },
-  engageBtn: { flexDirection: 'row', alignItems: 'center', gap: 3, paddingHorizontal: 8, paddingVertical: 6 },
-  engageCount: { fontSize: 13, fontWeight: '700', color: '#1A1A1A' },
+  engageLeft: { flexDirection: 'row', alignItems: 'center' },
+  iconBtn: { padding: 4 },
+  countText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#111',
+    marginLeft: 3,
+  },
+
   saveBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 5,
-    backgroundColor: '#1A1A1A', paddingHorizontal: 16, paddingVertical: 9, borderRadius: 20,
-  },
-  saveBtnActive: { backgroundColor: '#DC2626' },
-  saveBtnText: { fontSize: 13, fontWeight: '700', color: '#FFF' },
-
-  // Caption
-  captionWrap: { paddingHorizontal: 16, paddingTop: 6, paddingBottom: 2 },
-  captionText: { fontSize: 15, color: '#1A1A1A', lineHeight: 22 },
-
-  // Author
-  authorRow: {
-    flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16,
+    backgroundColor: '#E60023',
+    paddingHorizontal: 22,
     paddingVertical: 12,
+    borderRadius: 24,
   },
-  authorAvatar: { width: 40, height: 40, borderRadius: 20, marginRight: 10 },
-  authorAvatarFb: { backgroundColor: '#50C8A8', justifyContent: 'center', alignItems: 'center' },
-  authorAvatarInit: { color: '#FFF', fontSize: 16, fontWeight: '700' },
-  authorName: { fontSize: 14, fontWeight: '700', color: '#1A1A1A' },
-  authorTime: { fontSize: 12, color: '#AAA', marginTop: 1 },
-  followBtn: {
-    backgroundColor: '#F5F0EB', paddingHorizontal: 18, paddingVertical: 8, borderRadius: 18,
+  saveBtnSaved: { backgroundColor: '#111' },
+  saveBtnText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#FFFFFF',
   },
-  followBtnText: { fontSize: 13, fontWeight: '700', color: '#1A1A1A' },
 
-  // Location
-  locationRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 5,
-    paddingHorizontal: 16, paddingBottom: 10,
+  /* ── Caption ── */
+  caption: {
+    fontSize: 15,
+    color: '#111',
+    lineHeight: 22,
+    paddingHorizontal: 18,
+    paddingTop: 4,
+    paddingBottom: 6,
   },
-  locationText: { fontSize: 13, color: '#999', fontWeight: '500' },
 
-  // Comment input
+  /* ── Author row ── */
+  authorRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 18,
+    paddingVertical: 8,
+  },
+  authorAv: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    marginRight: 10,
+  },
+  authorAvFb: { backgroundColor: '#9370DB', justifyContent: 'center', alignItems: 'center' },
+  authorAvInit: { color: '#FFF', fontSize: 14, fontWeight: '700' },
+  authorName: { fontSize: 14, fontWeight: '600', color: '#111' },
+
+  /* ── Comment input ── */
+  commentInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginHorizontal: 16,
+    marginTop: 6,
+    backgroundColor: '#F5F2EC',
+    borderRadius: 28,
+    paddingHorizontal: 6,
+    paddingVertical: 4,
+  },
+  commentInputAv: {
+    width: 32, height: 32, borderRadius: 16,
+    backgroundColor: '#9370DB', justifyContent: 'center', alignItems: 'center',
+    overflow: 'hidden',
+  },
+  commentInputAvText: { color: '#FFF', fontSize: 12, fontWeight: '700' },
   commentInput: {
-    flexDirection: 'row', alignItems: 'center', gap: 10,
-    marginHorizontal: 16, marginTop: 4, marginBottom: 8,
-    backgroundColor: '#F8F6F2', borderRadius: 24,
-    paddingHorizontal: 6, paddingVertical: 4,
+    flex: 1, fontSize: 14, color: '#111',
+    paddingHorizontal: 10, paddingVertical: 10,
   },
-  commentAvatar: {
-    width: 28, height: 28, borderRadius: 14, overflow: 'hidden',
-    backgroundColor: '#50C8A8', justifyContent: 'center', alignItems: 'center',
-  },
-  commentAvatarText: { color: '#FFF', fontSize: 11, fontWeight: '700' },
-  commentTextInput: { flex: 1, fontSize: 14, color: '#1A1A1A', paddingVertical: 8 },
+  sendBtn: { paddingRight: 4 },
 
-  // Show comments
-  showComments: { paddingHorizontal: 16, paddingBottom: 12 },
-  showCommentsText: { fontSize: 13, fontWeight: '600', color: '#999' },
+  /* ── View all ── */
+  viewAll: { paddingHorizontal: 18, paddingTop: 4, paddingBottom: 10 },
+  viewAllText: { fontSize: 13, color: '#999', fontWeight: '500' },
 
-  // Comments
-  commentItem: { flexDirection: 'row', paddingHorizontal: 16, paddingVertical: 6 },
-  commentItemAvatar: { width: 28, height: 28, borderRadius: 14, marginRight: 8 },
-  commentBubble: { flex: 1, backgroundColor: '#F8F6F2', borderRadius: 14, paddingHorizontal: 12, paddingVertical: 8, borderTopLeftRadius: 4 },
-  commentAuthor: { fontSize: 12, fontWeight: '700', color: '#1A1A1A', marginBottom: 2 },
-  commentContent: { fontSize: 14, color: '#333', lineHeight: 19 },
-  commentTime: { fontSize: 10, color: '#BBB', marginTop: 4 },
-
-  // Related
-  relatedSection: { paddingHorizontal: 16, paddingTop: 16 },
-  relatedTitle: { fontSize: 16, fontWeight: '800', color: '#1A1A1A', marginBottom: 12 },
-  relatedGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 4 },
-  relatedCard: { width: RELATED_W, height: RELATED_W * 1.3, borderRadius: 12, overflow: 'hidden' },
-  relatedImg: { width: '100%', height: '100%' },
+  /* ── Comments list ── */
+  commentsList: { paddingHorizontal: 18, paddingTop: 4 },
+  commentRow: { flexDirection: 'row', marginBottom: 14 },
+  commentAv: { width: 28, height: 28, borderRadius: 14, marginRight: 10, marginTop: 2 },
+  commentName: { fontSize: 13, fontWeight: '700', color: '#111' },
+  commentBody: { fontSize: 14, color: '#333', lineHeight: 19, marginTop: 1 },
+  commentAge: { fontSize: 11, color: '#B0B0B0', marginTop: 3 },
 });
