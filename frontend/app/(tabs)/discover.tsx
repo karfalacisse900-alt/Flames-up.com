@@ -17,12 +17,14 @@ const { width: SW } = Dimensions.get('window');
 const GAP = 12;
 
 const CATEGORIES = [
-  { id: 'all',       label: 'All',       icon: 'sparkles-outline' },
-  { id: 'culture',   label: 'Culture',   icon: 'color-palette-outline' },
-  { id: 'food',      label: 'Food',      icon: 'restaurant-outline' },
-  { id: 'style',     label: 'Style',     icon: 'shirt-outline' },
-  { id: 'nightlife', label: 'Nightlife', icon: 'moon-outline' },
-  { id: 'city_life', label: 'City Life', icon: 'business-outline' },
+  { id: 'all',       label: 'All',          icon: 'sparkles-outline' },
+  { id: 'events',    label: 'Events',       icon: 'calendar-outline' },
+  { id: 'food',      label: 'Food & Drink', icon: 'restaurant-outline' },
+  { id: 'things',    label: 'Things to Do', icon: 'compass-outline' },
+  { id: 'culture',   label: 'Culture',      icon: 'color-palette-outline' },
+  { id: 'style',     label: 'Style',        icon: 'shirt-outline' },
+  { id: 'nightlife', label: 'Nightlife',    icon: 'moon-outline' },
+  { id: 'city_life', label: 'City Life',    icon: 'business-outline' },
 ];
 
 // ========== COMPONENTS ==========

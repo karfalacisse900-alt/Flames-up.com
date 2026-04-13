@@ -1055,6 +1055,289 @@ api.delete('/admin/creators/:creatorId/badge', authMiddleware, async (c) => {
   } catch (e: any) { return c.json({ detail: 'Remove badge failed', error: e?.message }, 500); }
 });
 
+// ═══════════════════════════════════════════════════════════════
+// ADMIN GOVERNANCE ENDPOINTS
+// ═══════════════════════════════════════════════════════════════
+
+// Helper: check admin
+const requireAdmin = async (c: any) => {
+  const userId = getUserId(c);
+  const admin: any = await c.env.DB.prepare('SELECT is_admin FROM users WHERE id = ?').bind(userId).first();
+  if (!admin?.is_admin) throw new Error('FORBIDDEN');
+  return userId;
+};
+
+// Create tables for governance (run once)
+api.post('/admin/init-governance', authMiddleware, async (c) => {
+  try {
+    const adminId = await requireAdmin(c);
+    await c.env.DB.exec(`
+      CREATE TABLE IF NOT EXISTS applications (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        type TEXT NOT NULL,
+        status TEXT DEFAULT 'pending',
+        details TEXT DEFAULT '{}',
+        admin_notes TEXT DEFAULT '',
+        reviewed_by TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (user_id) REFERENCES users(id)
+      );
+      CREATE TABLE IF NOT EXISTS reports (
+        id TEXT PRIMARY KEY,
+        reporter_id TEXT NOT NULL,
+        reported_type TEXT NOT NULL,
+        reported_id TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        details TEXT DEFAULT '',
+        status TEXT DEFAULT 'pending',
+        admin_notes TEXT DEFAULT '',
+        reviewed_by TEXT,
+        action_taken TEXT DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (reporter_id) REFERENCES users(id)
+      );
+      CREATE TABLE IF NOT EXISTS admin_actions (
+        id TEXT PRIMARY KEY,
+        admin_id TEXT NOT NULL,
+        action_type TEXT NOT NULL,
+        target_type TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        details TEXT DEFAULT '',
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (admin_id) REFERENCES users(id)
+      );
+    `);
+    return c.json({ message: 'Governance tables created' });
+  } catch (e: any) { return c.json({ detail: e?.message }, e?.message === 'FORBIDDEN' ? 403 : 500); }
+});
+
+// ── Applications ──
+
+// Submit application (from main app)
+api.post('/applications', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const body = await c.req.json();
+  const { type, details } = body; // type: 'creator' | 'publisher'
+  if (!type || !['creator', 'publisher'].includes(type)) return c.json({ detail: 'Invalid type' }, 400);
+  const id = crypto.randomUUID();
+  const ts = now();
+  await c.env.DB.prepare(
+    'INSERT INTO applications (id, user_id, type, status, details, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  ).bind(id, userId, type, 'pending', JSON.stringify(details || {}), ts, ts).run();
+  return c.json({ id, status: 'pending', message: 'Application submitted' });
+});
+
+// List applications (admin)
+api.get('/admin/applications', authMiddleware, async (c) => {
+  try {
+    await requireAdmin(c);
+    const type = c.req.query('type') || '';
+    const status = c.req.query('status') || '';
+    let q = 'SELECT a.*, u.full_name, u.email, u.username, u.profile_image FROM applications a LEFT JOIN users u ON a.user_id = u.id';
+    const conditions: string[] = [];
+    const binds: string[] = [];
+    if (type) { conditions.push('a.type = ?'); binds.push(type); }
+    if (status) { conditions.push('a.status = ?'); binds.push(status); }
+    if (conditions.length > 0) q += ' WHERE ' + conditions.join(' AND ');
+    q += ' ORDER BY a.created_at DESC LIMIT 100';
+    let stmt = c.env.DB.prepare(q);
+    for (let i = 0; i < binds.length; i++) stmt = stmt.bind(...binds);
+    // Manual binding
+    const r = binds.length === 0 ? await c.env.DB.prepare(q).all()
+      : binds.length === 1 ? await c.env.DB.prepare(q).bind(binds[0]).all()
+      : await c.env.DB.prepare(q).bind(binds[0], binds[1]).all();
+    return c.json(r.results);
+  } catch (e: any) { return c.json({ detail: e?.message }, e?.message === 'FORBIDDEN' ? 403 : 500); }
+});
+
+// Review application (admin)
+api.put('/admin/applications/:id', authMiddleware, async (c) => {
+  try {
+    const adminId = await requireAdmin(c);
+    const appId = c.req.param('id');
+    const body = await c.req.json();
+    const { status, admin_notes } = body;
+    if (!['approved', 'declined'].includes(status)) return c.json({ detail: 'Invalid status' }, 400);
+    const ts = now();
+    await c.env.DB.prepare(
+      'UPDATE applications SET status = ?, admin_notes = ?, reviewed_by = ?, updated_at = ? WHERE id = ?'
+    ).bind(status, admin_notes || '', adminId, ts, appId).run();
+
+    // If approved, update user role
+    if (status === 'approved') {
+      const app: any = await c.env.DB.prepare('SELECT * FROM applications WHERE id = ?').bind(appId).first();
+      if (app) {
+        if (app.type === 'creator') {
+          await c.env.DB.prepare('UPDATE users SET is_creator = 1 WHERE id = ?').bind(app.user_id).run();
+        } else if (app.type === 'publisher') {
+          await c.env.DB.prepare('UPDATE users SET is_publisher = 1 WHERE id = ?').bind(app.user_id).run();
+        }
+      }
+    }
+
+    // Log admin action
+    await c.env.DB.prepare(
+      'INSERT INTO admin_actions (id, admin_id, action_type, target_type, target_id, details, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).bind(crypto.randomUUID(), adminId, `application_${status}`, 'application', appId, JSON.stringify({ admin_notes }), ts).run();
+
+    return c.json({ message: `Application ${status}` });
+  } catch (e: any) { return c.json({ detail: e?.message }, e?.message === 'FORBIDDEN' ? 403 : 500); }
+});
+
+// ── Reports ──
+
+// Submit report (from main app)
+api.post('/reports', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const body = await c.req.json();
+  const { reported_type, reported_id, reason, details } = body;
+  if (!reported_type || !reported_id || !reason) return c.json({ detail: 'Missing fields' }, 400);
+  const id = crypto.randomUUID();
+  const ts = now();
+  await c.env.DB.prepare(
+    'INSERT INTO reports (id, reporter_id, reported_type, reported_id, reason, details, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  ).bind(id, userId, reported_type, reported_id, reason, details || '', 'pending', ts, ts).run();
+  return c.json({ id, message: 'Report submitted' });
+});
+
+// List reports (admin)
+api.get('/admin/reports', authMiddleware, async (c) => {
+  try {
+    await requireAdmin(c);
+    const status = c.req.query('status') || '';
+    let q = 'SELECT r.*, u.full_name as reporter_name, u.email as reporter_email FROM reports r LEFT JOIN users u ON r.reporter_id = u.id';
+    if (status) q += ' WHERE r.status = ?';
+    q += ' ORDER BY r.created_at DESC LIMIT 100';
+    const r = status
+      ? await c.env.DB.prepare(q).bind(status).all()
+      : await c.env.DB.prepare(q).all();
+    return c.json(r.results);
+  } catch (e: any) { return c.json({ detail: e?.message }, e?.message === 'FORBIDDEN' ? 403 : 500); }
+});
+
+// Review report (admin)
+api.put('/admin/reports/:id', authMiddleware, async (c) => {
+  try {
+    const adminId = await requireAdmin(c);
+    const reportId = c.req.param('id');
+    const body = await c.req.json();
+    const { status, admin_notes, action_taken } = body;
+    const ts = now();
+    await c.env.DB.prepare(
+      'UPDATE reports SET status = ?, admin_notes = ?, action_taken = ?, reviewed_by = ?, updated_at = ? WHERE id = ?'
+    ).bind(status || 'resolved', admin_notes || '', action_taken || '', adminId, ts, reportId).run();
+
+    await c.env.DB.prepare(
+      'INSERT INTO admin_actions (id, admin_id, action_type, target_type, target_id, details, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).bind(crypto.randomUUID(), adminId, `report_${status}`, 'report', reportId, JSON.stringify({ admin_notes, action_taken }), ts).run();
+
+    return c.json({ message: 'Report updated' });
+  } catch (e: any) { return c.json({ detail: e?.message }, e?.message === 'FORBIDDEN' ? 403 : 500); }
+});
+
+// ── Content Moderation ──
+
+// Admin: Remove post
+api.delete('/admin/posts/:postId', authMiddleware, async (c) => {
+  try {
+    const adminId = await requireAdmin(c);
+    const postId = c.req.param('postId');
+    const ts = now();
+    await c.env.DB.prepare('DELETE FROM posts WHERE id = ?').bind(postId).run();
+
+    await c.env.DB.prepare(
+      'INSERT INTO admin_actions (id, admin_id, action_type, target_type, target_id, details, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).bind(crypto.randomUUID(), adminId, 'remove_post', 'post', postId, '{}', ts).run();
+
+    return c.json({ message: 'Post removed' });
+  } catch (e: any) { return c.json({ detail: e?.message }, e?.message === 'FORBIDDEN' ? 403 : 500); }
+});
+
+// Admin: Get all posts for moderation
+api.get('/admin/posts', authMiddleware, async (c) => {
+  try {
+    await requireAdmin(c);
+    const page = parseInt(c.req.query('page') || '1');
+    const limit = 20;
+    const offset = (page - 1) * limit;
+    const r = await c.env.DB.prepare(
+      'SELECT p.*, u.full_name as user_full_name, u.email as user_email FROM posts p LEFT JOIN users u ON p.user_id = u.id ORDER BY p.created_at DESC LIMIT ? OFFSET ?'
+    ).bind(limit, offset).all();
+    return c.json(r.results);
+  } catch (e: any) { return c.json({ detail: e?.message }, e?.message === 'FORBIDDEN' ? 403 : 500); }
+});
+
+// Admin: Get all users
+api.get('/admin/users', authMiddleware, async (c) => {
+  try {
+    await requireAdmin(c);
+    const r = await c.env.DB.prepare(
+      'SELECT id, email, full_name, username, profile_image, is_admin, is_creator, is_publisher, is_verified, created_at FROM users ORDER BY created_at DESC LIMIT 200'
+    ).all();
+    return c.json(r.results);
+  } catch (e: any) { return c.json({ detail: e?.message }, e?.message === 'FORBIDDEN' ? 403 : 500); }
+});
+
+// Admin: Update user role
+api.put('/admin/users/:userId', authMiddleware, async (c) => {
+  try {
+    const adminId = await requireAdmin(c);
+    const targetUserId = c.req.param('userId');
+    const body = await c.req.json();
+    const { is_admin, is_creator, is_publisher, is_verified } = body;
+    const ts = now();
+    const fields: string[] = [];
+    const vals: any[] = [];
+    if (is_admin !== undefined) { fields.push('is_admin = ?'); vals.push(is_admin ? 1 : 0); }
+    if (is_creator !== undefined) { fields.push('is_creator = ?'); vals.push(is_creator ? 1 : 0); }
+    if (is_publisher !== undefined) { fields.push('is_publisher = ?'); vals.push(is_publisher ? 1 : 0); }
+    if (is_verified !== undefined) { fields.push('is_verified = ?'); vals.push(is_verified ? 1 : 0); }
+    if (fields.length === 0) return c.json({ detail: 'No fields to update' }, 400);
+    vals.push(targetUserId);
+    await c.env.DB.prepare(`UPDATE users SET ${fields.join(', ')} WHERE id = ?`).bind(...vals).run();
+
+    await c.env.DB.prepare(
+      'INSERT INTO admin_actions (id, admin_id, action_type, target_type, target_id, details, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).bind(crypto.randomUUID(), adminId, 'update_user', 'user', targetUserId, JSON.stringify(body), ts).run();
+
+    return c.json({ message: 'User updated' });
+  } catch (e: any) { return c.json({ detail: e?.message }, e?.message === 'FORBIDDEN' ? 403 : 500); }
+});
+
+// Admin: Action log
+api.get('/admin/actions', authMiddleware, async (c) => {
+  try {
+    await requireAdmin(c);
+    const r = await c.env.DB.prepare(
+      'SELECT a.*, u.full_name as admin_name FROM admin_actions a LEFT JOIN users u ON a.admin_id = u.id ORDER BY a.created_at DESC LIMIT 100'
+    ).all();
+    return c.json(r.results);
+  } catch (e: any) { return c.json({ detail: e?.message }, e?.message === 'FORBIDDEN' ? 403 : 500); }
+});
+
+// Admin: Dashboard stats
+api.get('/admin/stats', authMiddleware, async (c) => {
+  try {
+    await requireAdmin(c);
+    const [users, posts, pendingApps, pendingReports] = await Promise.all([
+      c.env.DB.prepare('SELECT COUNT(*) as count FROM users').first(),
+      c.env.DB.prepare('SELECT COUNT(*) as count FROM posts').first(),
+      c.env.DB.prepare("SELECT COUNT(*) as count FROM applications WHERE status = 'pending'").first().catch(() => ({ count: 0 })),
+      c.env.DB.prepare("SELECT COUNT(*) as count FROM reports WHERE status = 'pending'").first().catch(() => ({ count: 0 })),
+    ]);
+    return c.json({
+      total_users: (users as any)?.count || 0,
+      total_posts: (posts as any)?.count || 0,
+      pending_applications: (pendingApps as any)?.count || 0,
+      pending_reports: (pendingReports as any)?.count || 0,
+    });
+  } catch (e: any) { return c.json({ detail: e?.message }, e?.message === 'FORBIDDEN' ? 403 : 500); }
+});
+
+
 // Mount API routes on app
 app.route('/api', api);
 
