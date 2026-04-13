@@ -131,8 +131,7 @@ export default function ProfileScreen() {
                   { icon: 'flame-outline', label: 'Creator Hub', color: '#F97316', route: '/creators' },
                   ...(!user?.is_publisher ? [{ icon: 'document-text-outline', label: 'Apply: Local Publisher', color: '#3B82F6', route: '/publisher-apply' }] : []),
                   ...(user?.is_admin ? [
-                    { icon: 'shield-checkmark-outline', label: 'Admin Panel', color: '#EF4444', route: '/admin-panel' },
-                    { icon: 'folder-open-outline', label: 'Content Manager', color: '#F59E0B', route: '/content-manager' },
+                    { icon: 'shield-checkmark-outline', label: 'Governance Dashboard', color: '#EF4444', route: '__governance__' },
                   ] : []),
                   { icon: 'settings-outline', label: 'Settings', color: colors.textSecondary, route: '/settings' },
                   { icon: 'log-out-outline', label: 'Logout', color: '#EF4444', route: '__logout__' },
@@ -145,6 +144,9 @@ export default function ProfileScreen() {
                       setShowMore(false);
                       if (item.route === '__logout__') {
                         handleLogout();
+                      } else if (item.route === '__governance__') {
+                        const baseUrl = process.env.EXPO_PUBLIC_BACKEND_URL || 'https://flames-up-preview.preview.emergentagent.com';
+                        Linking.openURL(`${baseUrl}/api/gov/`);
                       } else {
                         router.push(item.route as any);
                       }
@@ -152,6 +154,9 @@ export default function ProfileScreen() {
                   >
                     <Ionicons name={item.icon as any} size={20} color={item.color} />
                     <Text style={[styles.floatingMenuText, item.route === '__logout__' && { color: '#EF4444' }]}>{item.label}</Text>
+                    {item.route === '__governance__' && (
+                      <Ionicons name="open-outline" size={14} color="#999" style={{ marginLeft: 'auto' }} />
+                    )}
                   </TouchableOpacity>
                 ));
               })()}
@@ -272,23 +277,29 @@ export default function ProfileScreen() {
         {(user.social_website || user.social_tiktok || user.social_instagram) ? (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>SOCIAL</Text>
-            <View style={styles.socialLinks}>
-              {user.social_website ? (
-                <TouchableOpacity style={styles.socialLink} onPress={() => Linking.openURL(user.social_website.startsWith('http') ? user.social_website : `https://${user.social_website}`)}>
-                  <Ionicons name="globe-outline" size={16} color="#0EA5E9" />
-                  <Text style={styles.socialLinkText}>{user.social_website}</Text>
+            <View style={styles.socialIcons}>
+              {user.social_instagram ? (
+                <TouchableOpacity style={styles.socialIconBtn} onPress={() => Linking.openURL(`https://instagram.com/${user.social_instagram}`)}>
+                  <View style={[styles.socialIconCircle, { backgroundColor: '#FCEEF3' }]}>
+                    <Ionicons name="logo-instagram" size={22} color="#E1306C" />
+                  </View>
+                  <Text style={styles.socialIconLabel}>Instagram</Text>
                 </TouchableOpacity>
               ) : null}
               {user.social_tiktok ? (
-                <TouchableOpacity style={styles.socialLink} onPress={() => Linking.openURL(`https://tiktok.com/@${user.social_tiktok}`)}>
-                  <Ionicons name="logo-tiktok" size={16} color="#1A1A1A" />
-                  <Text style={styles.socialLinkText}>@{user.social_tiktok}</Text>
+                <TouchableOpacity style={styles.socialIconBtn} onPress={() => Linking.openURL(`https://tiktok.com/@${user.social_tiktok}`)}>
+                  <View style={[styles.socialIconCircle, { backgroundColor: '#F0F0F0' }]}>
+                    <Ionicons name="logo-tiktok" size={22} color="#1A1A1A" />
+                  </View>
+                  <Text style={styles.socialIconLabel}>TikTok</Text>
                 </TouchableOpacity>
               ) : null}
-              {user.social_instagram ? (
-                <TouchableOpacity style={styles.socialLink} onPress={() => Linking.openURL(`https://instagram.com/${user.social_instagram}`)}>
-                  <Ionicons name="logo-instagram" size={16} color="#E1306C" />
-                  <Text style={styles.socialLinkText}>@{user.social_instagram}</Text>
+              {user.social_website ? (
+                <TouchableOpacity style={styles.socialIconBtn} onPress={() => Linking.openURL(user.social_website.startsWith('http') ? user.social_website : `https://${user.social_website}`)}>
+                  <View style={[styles.socialIconCircle, { backgroundColor: '#E8F4FD' }]}>
+                    <Ionicons name="globe-outline" size={22} color="#0EA5E9" />
+                  </View>
+                  <Text style={styles.socialIconLabel}>Website</Text>
                 </TouchableOpacity>
               ) : null}
             </View>
@@ -658,20 +669,27 @@ const styles = StyleSheet.create({
     color: '#2d5b7c',
   },
   // Social links
-  socialLinks: {
+  socialIcons: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 16,
+    gap: 20,
   },
-  socialLink: {
-    flexDirection: 'row',
+  socialIconBtn: {
     alignItems: 'center',
     gap: 6,
   },
-  socialLinkText: {
-    fontSize: 14,
-    color: colors.textPrimary,
-    fontWeight: '500',
+  socialIconCircle: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+  },
+  socialIconLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: colors.textHint,
   },
   // Actions
   actionRow: {

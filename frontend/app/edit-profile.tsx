@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View, Text, StyleSheet, TextInput, TouchableOpacity, Image, ScrollView,
   KeyboardAvoidingView, Platform, ActivityIndicator, Alert,
@@ -21,6 +21,8 @@ export default function EditProfileScreen() {
 
   const [fullName, setFullName] = useState(user?.full_name || '');
   const [username, setUsername] = useState(user?.username || '');
+  const [usernameStatus, setUsernameStatus] = useState<'idle'|'checking'|'available'|'taken'|'invalid'>('idle');
+  const usernameTimer = useRef<any>(null);
   const [bio, setBio] = useState(user?.bio || '');
   const [city, setCity] = useState(user?.city || '');
   const [age, setAge] = useState(user?.age || '');
@@ -35,6 +37,29 @@ export default function EditProfileScreen() {
   const [socialInstagram, setSocialInstagram] = useState(user?.social_instagram || '');
   const [profileImage, setProfileImage] = useState(user?.profile_image || '');
   const [isSaving, setIsSaving] = useState(false);
+
+  // Username validation
+  const sanitizeUsername = (text: string) => {
+    return text.toLowerCase().replace(/[^a-z0-9_]/g, '').substring(0, 30);
+  };
+
+  const handleUsernameChange = (text: string) => {
+    const clean = sanitizeUsername(text);
+    setUsername(clean);
+    if (clean === user?.username) { setUsernameStatus('idle'); return; }
+    if (clean.length < 3) { setUsernameStatus('invalid'); return; }
+    setUsernameStatus('checking');
+    if (usernameTimer.current) clearTimeout(usernameTimer.current);
+    usernameTimer.current = setTimeout(async () => {
+      try {
+        const res = await api.get(`/users/search/${clean}`);
+        const taken = (res.data || []).some((u: any) => u.username?.toLowerCase() === clean && u.id !== user?.id);
+        setUsernameStatus(taken ? 'taken' : 'available');
+      } catch {
+        setUsernameStatus('available'); // assume available if search fails
+      }
+    }, 500);
+  };
 
   const toggleLookingFor = (item: string) => {
     setLookingFor(prev =>
@@ -77,6 +102,14 @@ export default function EditProfileScreen() {
 
   const handleSave = async () => {
     if (isSaving) return;
+    if (usernameStatus === 'taken') {
+      Alert.alert('Username Taken', 'Please choose a different username.');
+      return;
+    }
+    if (usernameStatus === 'invalid') {
+      Alert.alert('Invalid Username', 'Username must be at least 3 characters (letters, numbers, underscores only).');
+      return;
+    }
     setIsSaving(true);
     try {
       const payload: any = {
@@ -153,7 +186,18 @@ export default function EditProfileScreen() {
             </View>
             <View style={s.field}>
               <Text style={s.fieldLabel}>Username</Text>
-              <TextInput style={s.fieldInput} value={username} onChangeText={setUsername} placeholder="@username" placeholderTextColor="#CCC" autoCapitalize="none" />
+              <View style={s.usernameFieldWrap}>
+                <TextInput style={[s.fieldInput, s.usernameInput, usernameStatus === 'taken' && s.fieldInputError, usernameStatus === 'available' && s.fieldInputSuccess]} value={username} onChangeText={handleUsernameChange} placeholder="@username" placeholderTextColor="#CCC" autoCapitalize="none" />
+                <View style={s.usernameStatusIcon}>
+                  {usernameStatus === 'checking' && <ActivityIndicator size="small" color="#999" />}
+                  {usernameStatus === 'available' && <Ionicons name="checkmark-circle" size={20} color="#10B981" />}
+                  {usernameStatus === 'taken' && <Ionicons name="close-circle" size={20} color="#EF4444" />}
+                  {usernameStatus === 'invalid' && <Ionicons name="alert-circle" size={20} color="#F59E0B" />}
+                </View>
+              </View>
+              {usernameStatus === 'taken' && <Text style={s.fieldHintError}>Username already taken</Text>}
+              {usernameStatus === 'invalid' && <Text style={s.fieldHintWarn}>Min 3 characters, lowercase letters, numbers, underscores</Text>}
+              {usernameStatus === 'available' && <Text style={s.fieldHintSuccess}>Username is available</Text>}
             </View>
             <View style={s.field}>
               <Text style={s.fieldLabel}>Bio</Text>
@@ -268,10 +312,18 @@ const s = StyleSheet.create({
   field: { marginBottom: 14 },
   fieldLabel: { fontSize: 13, fontWeight: '600', color: '#666', marginBottom: 6 },
   fieldInput: {
-    backgroundColor: '#FFF', borderRadius: 14, borderWidth: 1, borderColor: '#F0EDE7',
+    backgroundColor: '#FFF', borderRadius: 14, borderWidth: 1.5, borderColor: '#F0EDE7',
     paddingHorizontal: 14, paddingVertical: 12, fontSize: 15, color: '#1A1A1A',
   },
+  fieldInputError: { borderColor: '#FCA5A5' },
+  fieldInputSuccess: { borderColor: '#6EE7B7' },
   fieldRow: { flexDirection: 'row', gap: 10 },
+  usernameFieldWrap: { position: 'relative' },
+  usernameInput: { paddingRight: 40 },
+  usernameStatusIcon: { position: 'absolute', right: 12, top: 0, bottom: 0, justifyContent: 'center' },
+  fieldHintError: { fontSize: 12, color: '#EF4444', marginTop: 4, fontWeight: '500' },
+  fieldHintWarn: { fontSize: 12, color: '#F59E0B', marginTop: 4, fontWeight: '500' },
+  fieldHintSuccess: { fontSize: 12, color: '#10B981', marginTop: 4, fontWeight: '500' },
 
   // Chips
   chipGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   View,
   Text,
@@ -16,21 +16,55 @@ import { useRouter, Link } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuthStore } from '../../src/store/authStore';
 import { colors, spacing, borderRadius } from '../../src/utils/theme';
+import api from '../../src/api/client';
 
 export default function RegisterScreen() {
   const router = useRouter();
   const { register } = useAuthStore();
   const [fullName, setFullName] = useState('');
   const [username, setUsername] = useState('');
+  const [usernameStatus, setUsernameStatus] = useState<'idle'|'checking'|'available'|'taken'|'invalid'>('idle');
+  const usernameTimer = useRef<any>(null);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
+  const sanitizeUsername = (text: string) => {
+    return text.toLowerCase().replace(/[^a-z0-9_]/g, '').substring(0, 30);
+  };
+
+  const handleUsernameChange = (text: string) => {
+    const clean = sanitizeUsername(text);
+    setUsername(clean);
+    if (clean.length < 3) { setUsernameStatus(clean.length > 0 ? 'invalid' : 'idle'); return; }
+    setUsernameStatus('checking');
+    if (usernameTimer.current) clearTimeout(usernameTimer.current);
+    usernameTimer.current = setTimeout(async () => {
+      try {
+        const res = await api.get(`/users/search/${clean}`);
+        const taken = (res.data || []).some((u: any) => u.username?.toLowerCase() === clean);
+        setUsernameStatus(taken ? 'taken' : 'available');
+      } catch {
+        setUsernameStatus('available');
+      }
+    }, 500);
+  };
+
   const handleRegister = async () => {
     if (!fullName || !username || !email || !password) {
       Alert.alert('Error', 'Please fill in all fields');
+      return;
+    }
+
+    if (usernameStatus === 'taken') {
+      Alert.alert('Username Taken', 'Please choose a different username.');
+      return;
+    }
+
+    if (username.length < 3) {
+      Alert.alert('Invalid Username', 'Username must be at least 3 characters.');
       return;
     }
 
@@ -97,11 +131,17 @@ export default function RegisterScreen() {
                 placeholder="Username"
                 placeholderTextColor={colors.textTertiary}
                 value={username}
-                onChangeText={setUsername}
+                onChangeText={handleUsernameChange}
                 autoCapitalize="none"
                 autoCorrect={false}
               />
+              {usernameStatus === 'checking' && <ActivityIndicator size="small" color="#999" />}
+              {usernameStatus === 'available' && <Ionicons name="checkmark-circle" size={20} color="#10B981" />}
+              {usernameStatus === 'taken' && <Ionicons name="close-circle" size={20} color="#EF4444" />}
+              {usernameStatus === 'invalid' && <Ionicons name="alert-circle" size={20} color="#F59E0B" />}
             </View>
+            {usernameStatus === 'taken' && <Text style={styles.fieldHint}>Username already taken</Text>}
+            {usernameStatus === 'invalid' && <Text style={[styles.fieldHint, { color: '#F59E0B' }]}>Min 3 chars, lowercase letters, numbers, underscores</Text>}
 
             <View style={styles.inputContainer}>
               <Ionicons name="mail-outline" size={20} color={colors.textTertiary} style={styles.inputIcon} />
@@ -242,6 +282,14 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     color: colors.textInverse,
+  },
+  fieldHint: {
+    fontSize: 12,
+    color: '#EF4444',
+    fontWeight: '500',
+    marginTop: -8,
+    marginBottom: 8,
+    marginLeft: 4,
   },
   loginContainer: {
     flexDirection: 'row',
