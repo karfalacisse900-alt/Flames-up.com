@@ -544,6 +544,59 @@ api.post('/admin/make-admin/:userId', authMiddleware, adminGuard, async (c) => {
   return c.json({ success: true });
 });
 
+// Admin: List all users
+api.get('/admin/users', authMiddleware, adminGuard, async (c) => {
+  const search = c.req.query('search') || '';
+  const role = c.req.query('role') || '';
+  let sql = 'SELECT id, email, username, full_name, profile_image, bio, city, is_admin, is_creator, is_publisher, is_verified, followers_count, posts_count, created_at FROM users';
+  const conditions: string[] = [];
+  const binds: any[] = [];
+  if (search) { conditions.push('(username LIKE ? OR full_name LIKE ? OR email LIKE ?)'); binds.push(`%${search}%`, `%${search}%`, `%${search}%`); }
+  if (role === 'admin') { conditions.push('is_admin = 1'); }
+  else if (role === 'creator') { conditions.push('is_creator = 1'); }
+  else if (role === 'publisher') { conditions.push('is_publisher = 1'); }
+  if (conditions.length) sql += ' WHERE ' + conditions.join(' AND ');
+  sql += ' ORDER BY created_at DESC LIMIT 100';
+  const r = await c.env.DB.prepare(sql).bind(...binds).all();
+  return c.json(r.results);
+});
+
+// Admin: Update user roles
+api.put('/admin/users/:userId', authMiddleware, adminGuard, async (c) => {
+  const userId = c.req.param('userId');
+  const body = await c.req.json();
+  const fields: string[] = []; const vals: any[] = [];
+  if (body.is_admin !== undefined) { fields.push('is_admin = ?'); vals.push(body.is_admin ? 1 : 0); }
+  if (body.is_creator !== undefined) { fields.push('is_creator = ?'); vals.push(body.is_creator ? 1 : 0); }
+  if (body.is_publisher !== undefined) { fields.push('is_publisher = ?'); vals.push(body.is_publisher ? 1 : 0); }
+  if (body.is_verified !== undefined) { fields.push('is_verified = ?'); vals.push(body.is_verified ? 1 : 0); }
+  if (fields.length === 0) return c.json({ detail: 'No fields to update' }, 400);
+  vals.push(userId);
+  await c.env.DB.prepare(`UPDATE users SET ${fields.join(', ')}, updated_at = datetime('now') WHERE id = ?`).bind(...vals).run();
+  return c.json({ success: true, message: 'User roles updated' });
+});
+
+// Admin: List all posts (for moderation)
+api.get('/admin/posts', authMiddleware, adminGuard, async (c) => {
+  const search = c.req.query('search') || '';
+  let sql = `SELECT p.id, p.user_id, p.content, p.image, p.images, p.post_type, p.likes_count, p.comments_count, p.created_at,
+             u.username AS user_username, u.full_name AS user_full_name, u.email AS user_email, u.profile_image AS user_profile_image
+             FROM posts p JOIN users u ON p.user_id = u.id`;
+  const binds: any[] = [];
+  if (search) { sql += ' WHERE p.content LIKE ?'; binds.push(`%${search}%`); }
+  sql += ' ORDER BY p.created_at DESC LIMIT 100';
+  const r = await c.env.DB.prepare(sql).bind(...binds).all();
+  return c.json(r.results);
+});
+
+// Admin: Ban/Unban user
+api.post('/admin/users/:userId/ban', authMiddleware, adminGuard, async (c) => {
+  const userId = c.req.param('userId');
+  const { banned } = await c.req.json();
+  await c.env.DB.prepare('UPDATE users SET is_banned = ? WHERE id = ?').bind(banned ? 1 : 0, userId).run();
+  return c.json({ success: true, banned: !!banned });
+});
+
 api.get('/admin/reports', authMiddleware, adminGuard, async (c) => {
   const r = await c.env.DB.prepare('SELECT * FROM reports ORDER BY created_at DESC LIMIT 50').all();
   return c.json(r.results);

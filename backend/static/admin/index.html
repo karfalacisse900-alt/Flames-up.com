@@ -1,0 +1,735 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Flames-Up Governance</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--bg:#0f0f0f;--card:#1a1a1a;--card2:#222;--text:#f0f0f0;--sub:#888;--border:#2a2a2a;--accent:#e60023;--accent-hover:#cc001f;--green:#10b981;--blue:#3b82f6;--purple:#8b5cf6;--orange:#f59e0b;--red:#ef4444;--input-bg:#1e1e1e;--hover:#252525}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Inter',Roboto,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;-webkit-font-smoothing:antialiased}
+a{color:inherit;text-decoration:none}
+button{cursor:pointer;border:none;font-family:inherit}
+input,select,textarea{font-family:inherit;font-size:14px;color:var(--text);background:var(--input-bg);border:1px solid var(--border)}
+::selection{background:var(--accent);color:#fff}
+::-webkit-scrollbar{width:6px}
+::-webkit-scrollbar-track{background:var(--bg)}
+::-webkit-scrollbar-thumb{background:#333;border-radius:3px}
+
+/* ── Login ── */
+#login-screen{display:flex;justify-content:center;align-items:center;min-height:100vh;background:linear-gradient(135deg,#0a0a0a 0%,#1a0a0a 50%,#0a0a0a 100%)}
+.login-card{background:var(--card);border:1px solid var(--border);border-radius:24px;padding:48px 40px;width:400px;max-width:92vw}
+.login-logo{font-size:28px;font-weight:800;letter-spacing:-1px;margin-bottom:4px}
+.login-logo span{color:var(--accent)}
+.login-card p{color:var(--sub);font-size:14px;margin-bottom:32px}
+.login-card input{width:100%;padding:14px 16px;border-radius:12px;font-size:15px;margin-bottom:14px;outline:none;transition:border .2s}
+.login-card input:focus{border-color:var(--accent)}
+.login-card .btn{width:100%;padding:15px;background:var(--accent);color:#fff;border-radius:12px;font-size:15px;font-weight:700;margin-top:8px;transition:background .2s}
+.login-card .btn:hover{background:var(--accent-hover)}
+.login-card .btn:disabled{opacity:.5;cursor:not-allowed}
+.error-msg{color:var(--red);font-size:13px;margin-top:10px;display:none;padding:10px;background:rgba(239,68,68,.1);border-radius:8px}
+
+/* ── App Layout ── */
+#app{display:none}
+.sidebar{position:fixed;left:0;top:0;bottom:0;width:250px;background:var(--card);border-right:1px solid var(--border);padding:24px 0;overflow-y:auto;z-index:100;display:flex;flex-direction:column}
+.sidebar .logo{padding:0 24px 28px;font-size:20px;font-weight:800;letter-spacing:-0.5px}
+.sidebar .logo span{color:var(--accent)}
+.sidebar .logo small{display:block;font-size:11px;font-weight:500;color:var(--sub);letter-spacing:1px;text-transform:uppercase;margin-top:2px}
+.sidebar nav{flex:1;display:flex;flex-direction:column;gap:2px;padding:0 12px}
+.sidebar nav a{display:flex;align-items:center;gap:12px;padding:11px 14px;font-size:14px;font-weight:500;color:var(--sub);border-radius:10px;transition:all .15s}
+.sidebar nav a:hover{color:var(--text);background:var(--hover)}
+.sidebar nav a.active{color:#fff;background:rgba(230,0,35,0.12)}
+.sidebar nav a.active svg{color:var(--accent)}
+.sidebar nav a svg{width:20px;height:20px;flex-shrink:0}
+.sidebar .user-box{padding:16px 20px;border-top:1px solid var(--border);margin-top:auto}
+.sidebar .user-box .user-name{font-weight:700;font-size:14px}
+.sidebar .user-box .user-role{font-size:11px;color:var(--accent);font-weight:600;text-transform:uppercase;letter-spacing:0.5px}
+.sidebar .user-box .logout-btn{margin-top:10px;font-size:12px;color:var(--sub);background:none;padding:6px 0;transition:color .15s}
+.sidebar .user-box .logout-btn:hover{color:var(--red)}
+
+.main{margin-left:250px;padding:32px 36px;min-height:100vh}
+.page-header{margin-bottom:28px;display:flex;align-items:center;justify-content:space-between}
+.page-header div h2{font-size:26px;font-weight:800;letter-spacing:-0.5px}
+.page-header div p{color:var(--sub);font-size:14px;margin-top:2px}
+.page-header .search-box{display:flex;gap:8px}
+.page-header .search-box input{padding:10px 16px;border-radius:10px;font-size:14px;width:260px}
+.page-header .search-box select{padding:10px 14px;border-radius:10px;font-size:13px}
+
+/* ── Stats ── */
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;margin-bottom:32px}
+.stat-card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:24px;transition:border-color .2s}
+.stat-card:hover{border-color:#444}
+.stat-card .stat-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+.stat-card .stat-icon{width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:20px}
+.stat-card .stat-val{font-size:32px;font-weight:800;letter-spacing:-1px}
+.stat-card .stat-label{font-size:13px;color:var(--sub);margin-top:2px}
+
+/* ── Tables ── */
+.table-wrap{background:var(--card);border:1px solid var(--border);border-radius:16px;overflow:hidden;margin-bottom:24px}
+.table-top{display:flex;justify-content:space-between;align-items:center;padding:20px 24px;border-bottom:1px solid var(--border)}
+.table-top h3{font-size:16px;font-weight:700}
+.table-top .tab-btns{display:flex;gap:4px}
+.table-top .tab-btn{padding:7px 16px;border-radius:8px;font-size:13px;font-weight:600;background:var(--input-bg);color:var(--sub);transition:all .15s}
+.table-top .tab-btn.active{background:var(--accent);color:#fff}
+.table-top .tab-btn:hover:not(.active){color:var(--text);background:var(--hover)}
+.table-top .filters{display:flex;gap:8px}
+.table-top .filters select{padding:7px 12px;border-radius:8px;font-size:13px}
+table{width:100%;border-collapse:collapse}
+th{text-align:left;padding:12px 24px;font-size:11px;font-weight:700;color:var(--sub);text-transform:uppercase;letter-spacing:.8px;border-bottom:1px solid var(--border)}
+td{padding:14px 24px;font-size:14px;border-bottom:1px solid var(--border)}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:var(--hover)}
+
+.badge{display:inline-block;padding:4px 10px;border-radius:8px;font-size:12px;font-weight:600}
+.badge-pending{background:rgba(245,158,11,.15);color:#f59e0b}
+.badge-approved,.badge-resolved,.badge-active{background:rgba(16,185,129,.15);color:#10b981}
+.badge-declined,.badge-rejected,.badge-banned{background:rgba(239,68,68,.15);color:#ef4444}
+.badge-admin{background:rgba(139,92,246,.15);color:#8b5cf6}
+.badge-creator{background:rgba(59,130,246,.15);color:#3b82f6}
+.badge-publisher{background:rgba(16,185,129,.15);color:#10b981}
+.badge-verified{background:rgba(245,158,11,.15);color:#f59e0b}
+.badge-owner{background:rgba(230,0,35,.15);color:var(--accent)}
+
+.btn-sm{padding:7px 14px;border-radius:8px;font-size:13px;font-weight:600;transition:all .12s}
+.btn-approve{background:rgba(16,185,129,.15);color:#10b981}.btn-approve:hover{background:rgba(16,185,129,.25)}
+.btn-decline{background:rgba(239,68,68,.15);color:#ef4444}.btn-decline:hover{background:rgba(239,68,68,.25)}
+.btn-remove{background:rgba(239,68,68,.15);color:#ef4444}.btn-remove:hover{background:rgba(239,68,68,.25)}
+.btn-action{background:var(--card2);color:var(--text)}.btn-action:hover{background:#333}
+.btn-edit{background:rgba(59,130,246,.15);color:#3b82f6}.btn-edit:hover{background:rgba(59,130,246,.25)}
+.action-btns{display:flex;gap:6px;flex-wrap:wrap}
+
+.user-cell{display:flex;align-items:center;gap:10px}
+.avatar{width:34px;height:34px;border-radius:50%;background:#333;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:#666;overflow:hidden;flex-shrink:0}
+.avatar img{width:100%;height:100%;object-fit:cover}
+.user-cell .name{font-weight:600;font-size:14px}
+.user-cell .email{font-size:12px;color:var(--sub)}
+
+.empty-row{text-align:center;padding:48px 24px !important;color:var(--sub);font-size:14px}
+.loading-row{text-align:center;padding:32px !important;color:var(--sub)}
+
+/* ── Modal ── */
+.modal-bg{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.6);display:none;justify-content:center;align-items:center;z-index:300;backdrop-filter:blur(4px)}
+.modal-bg.open{display:flex}
+.modal{background:var(--card);border:1px solid var(--border);border-radius:20px;padding:32px;width:480px;max-width:92vw;max-height:85vh;overflow-y:auto}
+.modal h3{font-size:18px;font-weight:700;margin-bottom:20px}
+.modal label{display:block;font-size:12px;font-weight:700;color:var(--sub);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;margin-top:16px}
+.modal label:first-of-type{margin-top:0}
+.modal textarea,.modal input[type=text],.modal select{width:100%;padding:12px 14px;border-radius:10px;font-size:14px;outline:none}
+.modal textarea{min-height:80px;resize:vertical}
+.modal-btns{display:flex;gap:10px;margin-top:24px;justify-content:flex-end}
+.modal-btns button{padding:11px 24px;border-radius:10px;font-size:14px;font-weight:600}
+.modal .btn-cancel{background:var(--card2);color:var(--sub)}.modal .btn-cancel:hover{background:#333}
+.modal .btn-confirm{background:var(--accent);color:#fff}.modal .btn-confirm:hover{background:var(--accent-hover)}
+.modal .detail-row{display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border);font-size:14px}
+.modal .detail-row .label{color:var(--sub)}
+.modal .detail-row .value{font-weight:600;text-align:right;max-width:60%}
+
+/* ── Toast ── */
+.toast{position:fixed;bottom:24px;right:24px;background:#fff;color:#111;padding:14px 22px;border-radius:12px;font-size:14px;font-weight:600;z-index:400;display:none;box-shadow:0 8px 32px rgba(0,0,0,.3);animation:toastIn .3s ease}
+@keyframes toastIn{from{transform:translateY(20px);opacity:0}to{transform:translateY(0);opacity:1}}
+
+/* ── Responsive ── */
+@media(max-width:900px){
+  .sidebar{width:64px;padding:16px 0}
+  .sidebar .logo span,.sidebar .logo small,.sidebar nav a span,.sidebar .user-box .user-name,.sidebar .user-box .user-role,.sidebar .user-box .logout-btn{display:none}
+  .sidebar .logo{padding:0 0 20px;text-align:center;font-size:16px}
+  .sidebar nav a{justify-content:center;padding:12px}
+  .sidebar nav{padding:0 8px}
+  .main{margin-left:64px;padding:20px 16px}
+  .stats-grid{grid-template-columns:1fr 1fr}
+  .page-header{flex-direction:column;align-items:flex-start;gap:16px}
+  td,th{padding:10px 14px;font-size:13px}
+}
+</style>
+</head>
+<body>
+
+<!-- LOGIN SCREEN -->
+<div id="login-screen">
+  <div class="login-card">
+    <div class="login-logo">Flames<span>-Up</span></div>
+    <p>Governance Dashboard &mdash; Admin Access Only</p>
+    <input type="email" id="login-email" placeholder="Admin email" autocomplete="email" />
+    <input type="password" id="login-pass" placeholder="Password" autocomplete="current-password" />
+    <button class="btn" id="login-btn" onclick="doLogin()">Sign In</button>
+    <div class="error-msg" id="login-error"></div>
+  </div>
+</div>
+
+<!-- APP SHELL -->
+<div id="app">
+  <aside class="sidebar">
+    <div class="logo">F<span>-Up</span><small>Governance</small></div>
+    <nav id="nav-links">
+      <a href="#" data-page="dashboard" class="active" onclick="showPage('dashboard',event)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+        <span>Dashboard</span>
+      </a>
+      <a href="#" data-page="applications" onclick="showPage('applications',event)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12h6m-3-3v6"/><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
+        <span>Applications</span>
+      </a>
+      <a href="#" data-page="reports" onclick="showPage('reports',event)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v2m0 4h.01M5.07 19h13.86a2 2 0 001.74-2.99L13.74 4a2 2 0 00-3.48 0L3.33 16.01A2 2 0 005.07 19z"/></svg>
+        <span>Reports</span>
+      </a>
+      <a href="#" data-page="posts" onclick="showPage('posts',event)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+        <span>Posts</span>
+      </a>
+      <a href="#" data-page="users" onclick="showPage('users',event)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg>
+        <span>Users</span>
+      </a>
+    </nav>
+    <div class="user-box">
+      <div class="user-name" id="admin-name">Admin</div>
+      <div class="user-role" id="admin-role">Owner</div>
+      <button class="logout-btn" onclick="doLogout()">Sign Out</button>
+    </div>
+  </aside>
+
+  <div class="main">
+    <!-- ═══ DASHBOARD ═══ -->
+    <div id="page-dashboard" class="page">
+      <div class="page-header"><div><h2>Dashboard</h2><p>Platform overview and activity</p></div></div>
+      <div class="stats-grid" id="stats-grid"></div>
+      <div class="table-wrap">
+        <div class="table-top"><h3>Recent Reports</h3></div>
+        <table><thead><tr><th>Reporter</th><th>Type</th><th>Reason</th><th>Date</th></tr></thead><tbody id="recent-reports-body"><tr><td class="loading-row" colspan="4">Loading...</td></tr></tbody></table>
+      </div>
+    </div>
+
+    <!-- ═══ APPLICATIONS ═══ -->
+    <div id="page-applications" class="page" style="display:none">
+      <div class="page-header"><div><h2>Applications</h2><p>Review publisher & creator applications</p></div></div>
+      <div class="table-wrap">
+        <div class="table-top">
+          <div class="tab-btns">
+            <button class="tab-btn active" onclick="switchAppTab('publisher',this)">Publisher</button>
+            <button class="tab-btn" onclick="switchAppTab('creator',this)">Creator</button>
+          </div>
+          <div class="filters">
+            <select id="app-status-filter" onchange="loadApplications()"><option value="">All Status</option><option value="pending">Pending</option><option value="approved">Approved</option><option value="declined">Declined</option></select>
+          </div>
+        </div>
+        <table><thead><tr><th>Applicant</th><th>Details</th><th>Status</th><th>Date</th><th>Actions</th></tr></thead><tbody id="apps-body"><tr><td class="loading-row" colspan="5">Loading...</td></tr></tbody></table>
+      </div>
+    </div>
+
+    <!-- ═══ REPORTS ═══ -->
+    <div id="page-reports" class="page" style="display:none">
+      <div class="page-header"><div><h2>Reports</h2><p>Manage user reports and flagged content</p></div></div>
+      <div class="table-wrap">
+        <div class="table-top">
+          <div class="tab-btns">
+            <button class="tab-btn active" onclick="switchReportTab('all',this)">All</button>
+            <button class="tab-btn" onclick="switchReportTab('post',this)">Posts</button>
+            <button class="tab-btn" onclick="switchReportTab('user',this)">Users</button>
+          </div>
+        </div>
+        <table><thead><tr><th>Reporter</th><th>Type</th><th>Reason</th><th>Target</th><th>Date</th><th>Actions</th></tr></thead><tbody id="reports-body"><tr><td class="loading-row" colspan="6">Loading...</td></tr></tbody></table>
+      </div>
+    </div>
+
+    <!-- ═══ POSTS ═══ -->
+    <div id="page-posts" class="page" style="display:none">
+      <div class="page-header">
+        <div><h2>Posts</h2><p>Content moderation</p></div>
+        <div class="search-box"><input type="text" id="posts-search" placeholder="Search posts..." onkeydown="if(event.key==='Enter')loadPosts()" /></div>
+      </div>
+      <div class="table-wrap">
+        <table><thead><tr><th>Author</th><th>Content</th><th>Type</th><th>Likes</th><th>Date</th><th>Actions</th></tr></thead><tbody id="posts-body"><tr><td class="loading-row" colspan="6">Loading...</td></tr></tbody></table>
+      </div>
+    </div>
+
+    <!-- ═══ USERS ═══ -->
+    <div id="page-users" class="page" style="display:none">
+      <div class="page-header">
+        <div><h2>Users</h2><p>Manage users and roles</p></div>
+        <div class="search-box">
+          <input type="text" id="users-search" placeholder="Search users..." onkeydown="if(event.key==='Enter')loadUsers()" />
+          <select id="users-role-filter" onchange="loadUsers()"><option value="">All Roles</option><option value="admin">Admins</option><option value="creator">Creators</option><option value="publisher">Publishers</option></select>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table><thead><tr><th>User</th><th>Email</th><th>Roles</th><th>Posts</th><th>Joined</th><th>Actions</th></tr></thead><tbody id="users-body"><tr><td class="loading-row" colspan="6">Loading...</td></tr></tbody></table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL -->
+<div class="modal-bg" id="modal-bg" onclick="if(event.target===this)closeModal()">
+  <div class="modal" id="modal-content"></div>
+</div>
+
+<!-- TOAST -->
+<div class="toast" id="toast"></div>
+
+<script>
+// ═════════════════════════════════════════════════════════════════════════════
+// CONFIG
+// ═════════════════════════════════════════════════════════════════════════════
+const API = 'https://flames-up-api.karfalacisse900.workers.dev/api';
+let TOKEN = localStorage.getItem('fgov_token') || '';
+let ADMIN_USER = JSON.parse(localStorage.getItem('fgov_user') || 'null');
+let currentAppTab = 'publisher';
+let currentReportTab = 'all';
+
+// ═════════════════════════════════════════════════════════════════════════════
+// AUTH
+// ═════════════════════════════════════════════════════════════════════════════
+async function doLogin() {
+  const email = document.getElementById('login-email').value.trim();
+  const pass = document.getElementById('login-pass').value;
+  const errEl = document.getElementById('login-error');
+  const btn = document.getElementById('login-btn');
+  errEl.style.display = 'none';
+  if (!email || !pass) { showError(errEl, 'Please enter email and password'); return; }
+  btn.disabled = true; btn.textContent = 'Signing in...';
+  try {
+    const r = await fetch(`${API}/auth/login`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({email,password:pass}) });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || 'Invalid credentials');
+    TOKEN = d.access_token;
+    ADMIN_USER = d.user;
+    // Verify admin access
+    const sr = await apiFetch('/admin/stats');
+    if (sr.detail) { showError(errEl, 'This account does not have admin privileges'); TOKEN=''; btn.disabled=false; btn.textContent='Sign In'; return; }
+    localStorage.setItem('fgov_token', TOKEN);
+    localStorage.setItem('fgov_user', JSON.stringify(ADMIN_USER));
+    enterApp();
+  } catch(e) { showError(errEl, e.message); }
+  btn.disabled = false; btn.textContent = 'Sign In';
+}
+
+function showError(el, msg) { el.textContent = msg; el.style.display = 'block'; }
+
+function enterApp() {
+  document.getElementById('login-screen').style.display = 'none';
+  document.getElementById('app').style.display = 'block';
+  if (ADMIN_USER) {
+    document.getElementById('admin-name').textContent = ADMIN_USER.full_name || ADMIN_USER.email;
+    document.getElementById('admin-role').textContent = 'Owner / Super Admin';
+  }
+  loadDashboard();
+}
+
+function doLogout() {
+  TOKEN = ''; ADMIN_USER = null;
+  localStorage.removeItem('fgov_token');
+  localStorage.removeItem('fgov_user');
+  document.getElementById('app').style.display = 'none';
+  document.getElementById('login-screen').style.display = 'flex';
+  document.getElementById('login-email').value = '';
+  document.getElementById('login-pass').value = '';
+}
+
+async function checkAuth() {
+  if (!TOKEN) return;
+  try {
+    const r = await apiFetch('/admin/stats');
+    if (!r.detail && r.total_users !== undefined) {
+      // Try to get user info
+      try {
+        const me = await apiFetch('/auth/me');
+        if (me && me.id) ADMIN_USER = me;
+      } catch {}
+      enterApp();
+    } else { doLogout(); }
+  } catch { doLogout(); }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// API HELPER
+// ═════════════════════════════════════════════════════════════════════════════
+async function apiFetch(path, opts = {}) {
+  try {
+    const r = await fetch(`${API}${path}`, {
+      ...opts,
+      headers: { 'Authorization': `Bearer ${TOKEN}`, 'Content-Type': 'application/json', ...(opts.headers||{}) }
+    });
+    if (r.status === 401) { doLogout(); return { detail: 'Session expired' }; }
+    return await r.json();
+  } catch(e) { console.error('API Error:', path, e); return { detail: e.message }; }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// NAVIGATION
+// ═════════════════════════════════════════════════════════════════════════════
+function showPage(page, e) {
+  if (e) e.preventDefault();
+  document.querySelectorAll('.page').forEach(p => p.style.display = 'none');
+  document.getElementById(`page-${page}`).style.display = 'block';
+  document.querySelectorAll('#nav-links a').forEach(a => a.classList.toggle('active', a.dataset.page === page));
+  const loaders = { dashboard: loadDashboard, applications: loadApplications, reports: loadReports, posts: loadPosts, users: loadUsers };
+  if (loaders[page]) loaders[page]();
+}
+
+function toast(msg, type='success') {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.style.background = type === 'error' ? '#ef4444' : '#fff';
+  t.style.color = type === 'error' ? '#fff' : '#111';
+  t.style.display = 'block';
+  setTimeout(() => t.style.display = 'none', 3000);
+}
+
+function openModal(html) {
+  document.getElementById('modal-content').innerHTML = html;
+  document.getElementById('modal-bg').classList.add('open');
+}
+function closeModal() { document.getElementById('modal-bg').classList.remove('open'); }
+
+function timeAgo(d) {
+  if (!d) return '—';
+  const s = Math.floor((Date.now() - new Date(d).getTime()) / 1000);
+  if (s < 60) return 'just now';
+  if (s < 3600) return Math.floor(s/60) + 'm ago';
+  if (s < 86400) return Math.floor(s/3600) + 'h ago';
+  if (s < 604800) return Math.floor(s/86400) + 'd ago';
+  return new Date(d).toLocaleDateString();
+}
+
+function avatarHTML(img, name) {
+  if (img && img.startsWith('http')) return `<div class="avatar"><img src="${img}" alt="" /></div>`;
+  const initial = (name||'?')[0].toUpperCase();
+  return `<div class="avatar">${initial}</div>`;
+}
+
+function esc(s) { const d = document.createElement('div'); d.textContent = s||''; return d.innerHTML; }
+
+// ═════════════════════════════════════════════════════════════════════════════
+// DASHBOARD
+// ═════════════════════════════════════════════════════════════════════════════
+async function loadDashboard() {
+  const stats = await apiFetch('/admin/stats');
+  if (stats.detail) { document.getElementById('stats-grid').innerHTML = `<div class="stat-card"><div class="stat-val">Error</div><div class="stat-label">${esc(stats.detail)}</div></div>`; return; }
+  document.getElementById('stats-grid').innerHTML = `
+    <div class="stat-card">
+      <div class="stat-top"><div class="stat-icon" style="background:rgba(59,130,246,.15);color:#3b82f6">&#128101;</div></div>
+      <div class="stat-val">${stats.total_users||0}</div><div class="stat-label">Total Users</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-top"><div class="stat-icon" style="background:rgba(245,158,11,.15);color:#f59e0b">&#128196;</div></div>
+      <div class="stat-val">${stats.total_posts||0}</div><div class="stat-label">Total Posts</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-top"><div class="stat-icon" style="background:rgba(139,92,246,.15);color:#8b5cf6">&#128221;</div></div>
+      <div class="stat-val">${stats.pending_applications||0}</div><div class="stat-label">Pending Applications</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-top"><div class="stat-icon" style="background:rgba(239,68,68,.15);color:#ef4444">&#128680;</div></div>
+      <div class="stat-val">${stats.total_reports||stats.pending_reports||0}</div><div class="stat-label">Total Reports</div>
+    </div>
+  `;
+  // Load recent reports
+  const reports = await apiFetch('/admin/reports');
+  const tbody = document.getElementById('recent-reports-body');
+  if (!Array.isArray(reports) || !reports.length) { tbody.innerHTML = '<tr><td class="empty-row" colspan="4">No reports yet</td></tr>'; return; }
+  tbody.innerHTML = reports.slice(0,5).map(r => `
+    <tr>
+      <td>${esc(r.reporter_name || r.reporter_id?.substring(0,8) || '—')}</td>
+      <td><span class="badge badge-${r.report_type==='post'?'publisher':'admin'}">${esc(r.report_type||'other')}</span></td>
+      <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.reason||'—')}</td>
+      <td>${timeAgo(r.created_at)}</td>
+    </tr>
+  `).join('');
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// APPLICATIONS
+// ═════════════════════════════════════════════════════════════════════════════
+function switchAppTab(tab, btn) {
+  currentAppTab = tab;
+  document.querySelectorAll('.table-top .tab-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  loadApplications();
+}
+
+async function loadApplications() {
+  const tbody = document.getElementById('apps-body');
+  tbody.innerHTML = '<tr><td class="loading-row" colspan="5">Loading...</td></tr>';
+
+  if (currentAppTab === 'publisher') {
+    const apps = await apiFetch('/admin/publisher-applications');
+    const list = Array.isArray(apps) ? apps : (apps.results || []);
+    const statusFilter = document.getElementById('app-status-filter').value;
+    const filtered = statusFilter ? list.filter(a => a.status === statusFilter) : list;
+    if (!filtered.length) { tbody.innerHTML = '<tr><td class="empty-row" colspan="5">No publisher applications</td></tr>'; return; }
+    tbody.innerHTML = filtered.map(a => `
+      <tr>
+        <td><div class="user-cell">${avatarHTML(a.user_profile_image, a.user_full_name||a.full_name)}<div><div class="name">${esc(a.user_full_name||a.full_name||'—')}</div><div class="email">${esc(a.user_username||a.email||'')}</div></div></div></td>
+        <td><div style="font-size:13px"><strong>${esc(a.business_name||'—')}</strong><br/><span style="color:var(--sub)">${esc(a.category||'')} &bull; ${esc(a.city||'')}</span></div></td>
+        <td><span class="badge badge-${a.status}">${a.status}</span></td>
+        <td>${timeAgo(a.created_at)}</td>
+        <td><div class="action-btns">
+          ${a.status==='pending'?`
+            <button class="btn-sm btn-approve" onclick="decidePublisherApp('${a.id}','approved')">Approve</button>
+            <button class="btn-sm btn-decline" onclick="decidePublisherApp('${a.id}','declined')">Decline</button>
+          `:`<button class="btn-sm btn-action" onclick="viewPublisherApp('${a.id}')">Details</button>`}
+        </div></td>
+      </tr>
+    `).join('');
+  } else {
+    // Creator applications
+    const statusFilter = document.getElementById('app-status-filter').value || 'pending';
+    const data = await apiFetch(`/admin/creator-applications?status=${statusFilter}`);
+    const list = data.applications || [];
+    if (!list.length) { tbody.innerHTML = '<tr><td class="empty-row" colspan="5">No creator applications</td></tr>'; return; }
+    tbody.innerHTML = list.map(a => `
+      <tr>
+        <td><div class="user-cell">${avatarHTML(a.profile_image, a.full_name)}<div><div class="name">${esc(a.full_name||'—')}</div><div class="email">@${esc(a.username||'')}</div></div></div></td>
+        <td><div style="font-size:13px"><strong>${esc(a.category||'—')}</strong><br/><span style="color:var(--sub)">${esc(a.city||'')} ${a.short_bio?'&bull; '+esc(a.short_bio.substring(0,50)):''}</span></div></td>
+        <td><span class="badge badge-${a.status}">${a.status}</span></td>
+        <td>${timeAgo(a.created_at)}</td>
+        <td><div class="action-btns">
+          ${a.status==='pending'?`
+            <button class="btn-sm btn-approve" onclick="approveCreator('${a.id}')">Approve</button>
+            <button class="btn-sm btn-decline" onclick="rejectCreator('${a.id}')">Reject</button>
+          `:`<span class="badge badge-${a.status}">${a.status}</span>`}
+        </div></td>
+      </tr>
+    `).join('');
+  }
+}
+
+async function decidePublisherApp(id, decision) {
+  openModal(`
+    <h3>${decision==='approved'?'Approve':'Decline'} Publisher Application</h3>
+    <p style="color:var(--sub);font-size:14px;margin-bottom:16px">${decision==='approved'?'This will grant the user publisher privileges.':'This will decline the publisher application.'}</p>
+    <div class="modal-btns">
+      <button class="btn-cancel" onclick="closeModal()">Cancel</button>
+      <button class="btn-confirm" onclick="confirmPublisherDecision('${id}','${decision}')">Confirm ${decision==='approved'?'Approval':'Decline'}</button>
+    </div>
+  `);
+}
+
+async function confirmPublisherDecision(id, decision) {
+  await apiFetch(`/admin/publisher-applications/${id}/decide`, { method:'POST', body:JSON.stringify({decision}) });
+  closeModal();
+  toast(`Publisher application ${decision}`);
+  loadApplications();
+}
+
+async function approveCreator(id) {
+  openModal(`
+    <h3>Approve Creator</h3>
+    <p style="color:var(--sub);font-size:14px;margin-bottom:16px">This will grant verified creator status to this user.</p>
+    <div class="modal-btns">
+      <button class="btn-cancel" onclick="closeModal()">Cancel</button>
+      <button class="btn-confirm" onclick="confirmCreatorApprove('${id}')">Approve</button>
+    </div>
+  `);
+}
+
+async function confirmCreatorApprove(id) {
+  await apiFetch(`/admin/creators/${id}/approve`, { method:'POST' });
+  closeModal();
+  toast('Creator approved');
+  loadApplications();
+}
+
+async function rejectCreator(id) {
+  await apiFetch(`/admin/creators/${id}/reject`, { method:'POST' });
+  toast('Creator rejected');
+  loadApplications();
+}
+
+function viewPublisherApp(id) {
+  // Find app data (from DOM isn't ideal but works for now)
+  toast('Viewing details...', 'info');
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// REPORTS
+// ═════════════════════════════════════════════════════════════════════════════
+function switchReportTab(tab, btn) {
+  currentReportTab = tab;
+  document.querySelectorAll('#page-reports .tab-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  loadReports();
+}
+
+async function loadReports() {
+  const tbody = document.getElementById('reports-body');
+  tbody.innerHTML = '<tr><td class="loading-row" colspan="6">Loading...</td></tr>';
+
+  if (currentReportTab === 'all' || currentReportTab === 'post') {
+    const reports = await apiFetch('/admin/reports');
+    let list = Array.isArray(reports) ? reports : [];
+    if (currentReportTab === 'post') list = list.filter(r => r.report_type === 'post');
+    if (currentReportTab === 'user') list = list.filter(r => r.report_type === 'user');
+    if (!list.length) { tbody.innerHTML = '<tr><td class="empty-row" colspan="6">No reports</td></tr>'; return; }
+    tbody.innerHTML = list.map(r => `
+      <tr>
+        <td>${esc(r.reporter_name || r.reporter_id?.substring(0,8) || '—')}</td>
+        <td><span class="badge badge-${r.report_type==='post'?'publisher':'admin'}">${esc(r.report_type||'other')}</span></td>
+        <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.reason||'No reason given')}</td>
+        <td style="font-size:12px;color:var(--sub)">${esc((r.reported_id||r.content_id||'').substring(0,12))}...</td>
+        <td>${timeAgo(r.created_at)}</td>
+        <td><div class="action-btns">
+          <button class="btn-sm btn-approve" onclick="resolveReport('${r.id}','dismiss')">Dismiss</button>
+          <button class="btn-sm btn-decline" onclick="resolveReport('${r.id}','remove')">Remove Content</button>
+        </div></td>
+      </tr>
+    `).join('');
+  } else {
+    // User reports
+    const reported = await apiFetch('/admin/reported-accounts');
+    const list = Array.isArray(reported) ? reported : [];
+    if (!list.length) { tbody.innerHTML = '<tr><td class="empty-row" colspan="6">No reported accounts</td></tr>'; return; }
+    tbody.innerHTML = list.map(r => `
+      <tr>
+        <td>—</td>
+        <td><span class="badge badge-admin">user</span></td>
+        <td>${r.report_count} report(s)</td>
+        <td><div class="user-cell">${avatarHTML(r.profile_image, r.full_name)}<div><div class="name">${esc(r.full_name||'—')}</div><div class="email">@${esc(r.username||'')}</div></div></div></td>
+        <td>—</td>
+        <td><button class="btn-sm btn-decline" onclick="warnUser('${r.reported_id}')">Warn</button></td>
+      </tr>
+    `).join('');
+  }
+}
+
+async function resolveReport(id, action) {
+  await apiFetch(`/admin/reports/${id}/action`, { method:'POST', body:JSON.stringify({action}) });
+  toast(`Report ${action === 'dismiss' ? 'dismissed' : 'resolved — content removed'}`);
+  loadReports();
+}
+
+function warnUser(id) {
+  toast('User warning sent (placeholder)');
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// POSTS
+// ═════════════════════════════════════════════════════════════════════════════
+async function loadPosts() {
+  const tbody = document.getElementById('posts-body');
+  tbody.innerHTML = '<tr><td class="loading-row" colspan="6">Loading...</td></tr>';
+  const search = document.getElementById('posts-search')?.value || '';
+  const posts = await apiFetch(`/admin/posts${search ? '?search='+encodeURIComponent(search) : ''}`);
+  const list = Array.isArray(posts) ? posts : [];
+  if (!list.length) { tbody.innerHTML = '<tr><td class="empty-row" colspan="6">No posts found</td></tr>'; return; }
+  tbody.innerHTML = list.map(p => {
+    const images = typeof p.images === 'string' ? JSON.parse(p.images || '[]') : (p.images || []);
+    const thumb = images[0] || p.image;
+    return `
+    <tr>
+      <td><div class="user-cell">${avatarHTML(p.user_profile_image, p.user_full_name)}<div><div class="name">${esc(p.user_full_name||'—')}</div><div class="email">${esc(p.user_email||'')}</div></div></div></td>
+      <td style="max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+        ${thumb?`<img src="${thumb}" style="width:32px;height:32px;border-radius:6px;object-fit:cover;vertical-align:middle;margin-right:8px" onerror="this.style.display='none'" />`:''}
+        ${esc(p.content||'No caption')}
+      </td>
+      <td><span class="badge badge-${p.post_type==='check_in'?'publisher':(p.post_type==='question'?'admin':'active')}">${esc(p.post_type||'lifestyle')}</span></td>
+      <td>${p.likes_count||0}</td>
+      <td>${timeAgo(p.created_at)}</td>
+      <td><div class="action-btns"><button class="btn-sm btn-remove" onclick="removePost('${p.id}')">Remove</button></div></td>
+    </tr>
+  `}).join('');
+}
+
+function removePost(id) {
+  openModal(`
+    <h3>Remove Post</h3>
+    <p style="color:var(--sub);font-size:14px;margin-bottom:8px">This will permanently delete the post and all its likes/comments. This cannot be undone.</p>
+    <div class="modal-btns">
+      <button class="btn-cancel" onclick="closeModal()">Cancel</button>
+      <button class="btn-confirm" onclick="confirmRemovePost('${id}')">Remove Post</button>
+    </div>
+  `);
+}
+
+async function confirmRemovePost(id) {
+  await apiFetch(`/admin/remove-post/${id}`, { method:'POST' });
+  closeModal();
+  toast('Post removed');
+  loadPosts();
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// USERS
+// ═════════════════════════════════════════════════════════════════════════════
+async function loadUsers() {
+  const tbody = document.getElementById('users-body');
+  tbody.innerHTML = '<tr><td class="loading-row" colspan="6">Loading...</td></tr>';
+  const search = document.getElementById('users-search')?.value || '';
+  const role = document.getElementById('users-role-filter')?.value || '';
+  let url = '/admin/users?';
+  if (search) url += `search=${encodeURIComponent(search)}&`;
+  if (role) url += `role=${role}&`;
+  const users = await apiFetch(url);
+  const list = Array.isArray(users) ? users : [];
+  if (!list.length) { tbody.innerHTML = '<tr><td class="empty-row" colspan="6">No users found</td></tr>'; return; }
+  tbody.innerHTML = list.map(u => {
+    const roles = [];
+    if (u.is_admin) roles.push('<span class="badge badge-admin">Admin</span>');
+    if (u.is_creator) roles.push('<span class="badge badge-creator">Creator</span>');
+    if (u.is_publisher) roles.push('<span class="badge badge-publisher">Publisher</span>');
+    if (u.is_verified) roles.push('<span class="badge badge-verified">Verified</span>');
+    if (!roles.length) roles.push('<span class="badge" style="background:#222;color:#666">User</span>');
+    const safeName = (u.full_name||'').replace(/'/g, "\\'");
+    return `
+      <tr>
+        <td><div class="user-cell">${avatarHTML(u.profile_image, u.full_name)}<div><div class="name">${esc(u.full_name||'—')}</div><div class="email">@${esc(u.username||'—')}</div></div></div></td>
+        <td style="font-size:13px;color:var(--sub)">${esc(u.email)}</td>
+        <td><div style="display:flex;gap:4px;flex-wrap:wrap">${roles.join('')}</div></td>
+        <td>${u.posts_count||0}</td>
+        <td>${timeAgo(u.created_at)}</td>
+        <td><button class="btn-sm btn-edit" onclick="editUser('${u.id}','${safeName}',${u.is_admin?1:0},${u.is_creator?1:0},${u.is_publisher?1:0},${u.is_verified?1:0})">Edit Roles</button></td>
+      </tr>
+    `;
+  }).join('');
+}
+
+function editUser(id, name, admin, creator, publisher, verified) {
+  openModal(`
+    <h3>Edit Roles — ${esc(name)}</h3>
+    <div style="display:grid;gap:14px;margin-top:16px">
+      <label style="display:flex;align-items:center;gap:10px;cursor:pointer;margin:0;text-transform:none;font-size:14px;font-weight:500;color:var(--text)">
+        <input type="checkbox" id="r-admin" ${admin?'checked':''} style="width:18px;height:18px;accent-color:var(--accent)" /> Admin
+      </label>
+      <label style="display:flex;align-items:center;gap:10px;cursor:pointer;margin:0;text-transform:none;font-size:14px;font-weight:500;color:var(--text)">
+        <input type="checkbox" id="r-creator" ${creator?'checked':''} style="width:18px;height:18px;accent-color:var(--blue)" /> Creator
+      </label>
+      <label style="display:flex;align-items:center;gap:10px;cursor:pointer;margin:0;text-transform:none;font-size:14px;font-weight:500;color:var(--text)">
+        <input type="checkbox" id="r-publisher" ${publisher?'checked':''} style="width:18px;height:18px;accent-color:var(--green)" /> Publisher
+      </label>
+      <label style="display:flex;align-items:center;gap:10px;cursor:pointer;margin:0;text-transform:none;font-size:14px;font-weight:500;color:var(--text)">
+        <input type="checkbox" id="r-verified" ${verified?'checked':''} style="width:18px;height:18px;accent-color:var(--orange)" /> Verified
+      </label>
+    </div>
+    <div class="modal-btns">
+      <button class="btn-cancel" onclick="closeModal()">Cancel</button>
+      <button class="btn-confirm" onclick="saveUserRoles('${id}')">Save Roles</button>
+    </div>
+  `);
+}
+
+async function saveUserRoles(id) {
+  const body = {
+    is_admin: document.getElementById('r-admin').checked,
+    is_creator: document.getElementById('r-creator').checked,
+    is_publisher: document.getElementById('r-publisher').checked,
+    is_verified: document.getElementById('r-verified').checked,
+  };
+  const r = await apiFetch(`/admin/users/${id}`, { method:'PUT', body:JSON.stringify(body) });
+  closeModal();
+  if (r.success) {
+    toast('User roles updated');
+  } else {
+    toast(r.detail || 'Failed to update roles', 'error');
+  }
+  loadUsers();
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// INIT
+// ═════════════════════════════════════════════════════════════════════════════
+document.addEventListener('keydown', (e) => { if (e.key === 'Enter' && document.getElementById('login-screen').style.display !== 'none') doLogin(); });
+checkAuth();
+</script>
+</body>
+</html>
