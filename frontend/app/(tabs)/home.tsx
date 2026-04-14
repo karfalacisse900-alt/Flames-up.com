@@ -98,12 +98,6 @@ export default function HomeScreen() {
     return img && img.startsWith('http');
   })?.image || feedPosts[0]?.images?.[0];
 
-  // Recent posts with images for grid
-  const recentImagePosts = feedPosts.filter((p: any) => {
-    const img = p.image || p.images?.[0];
-    return img && (img.startsWith('http') || img.startsWith('data:'));
-  }).slice(0, 6);
-
   return (
     <View style={s.container}>
       <ScrollView
@@ -193,46 +187,21 @@ export default function HomeScreen() {
           </View>
         </TouchableOpacity>
 
-        {/* ── Near You special blocks ── */}
-        {activeCity === 'near' && (
-          <View style={s.nearBlocks}>
-            {[
-              { id: 'around', title: 'Around You', sub: 'Active spots nearby', icon: 'navigate-outline', color: '#0F766E' },
-              { id: 'nearby', title: 'Nearby Spots', sub: 'Places to check out', icon: 'location-outline', color: '#1E40AF' },
-              { id: 'people', title: 'People Out Now', sub: 'Recent check-ins', icon: 'people-outline', color: '#9333EA' },
-            ].map(item => (
-              <TouchableOpacity key={item.id} style={[s.nearCard, { backgroundColor: item.color }]} activeOpacity={0.88}>
-                <View style={s.nearIcon}><Ionicons name={item.icon as any} size={18} color="#FFF" /></View>
-                <Text style={s.nearTitle}>{item.title}</Text>
-                <Text style={s.nearSub}>{item.sub}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        )}
-
-        {/* ── Recent Posts Grid ── */}
-        {recentImagePosts.length > 0 && (
-          <View style={s.postsSection}>
-            <Text style={s.sectionTitle}>Recent Posts</Text>
-            <View style={s.postsGrid}>
-              {recentImagePosts.map((post: any) => (
-                <TouchableOpacity
-                  key={post.id}
-                  style={s.postCard}
-                  activeOpacity={0.9}
-                  onPress={() => router.push(`/post/${post.id}` as any)}
-                >
-                  <Image source={{ uri: post.image || post.images?.[0] }} style={s.postImg} />
-                  <View style={s.postOverlay} />
-                  <View style={s.postInfo}>
-                    <Text style={s.postAuthor} numberOfLines={1}>{post.user_full_name}</Text>
-                    {post.content ? <Text style={s.postCaption} numberOfLines={1}>{post.content}</Text> : null}
-                  </View>
-                </TouchableOpacity>
-              ))}
+        {/* ── Second Block: People Out Now ── */}
+        <TouchableOpacity
+          style={[s.secondBlock]}
+          activeOpacity={0.88}
+          onPress={() => router.push(`/scene/${activeCity}/people` as any)}
+        >
+          <View style={s.secondBlockInner}>
+            <View style={s.secondIcon}><Ionicons name="people-outline" size={18} color="#FFF" /></View>
+            <View style={{ flex: 1 }}>
+              <Text style={s.secondTitle}>People Out Now</Text>
+              <Text style={s.secondSub}>See what's happening in {city.label}</Text>
             </View>
+            <Ionicons name="chevron-forward" size={18} color="rgba(255,255,255,0.5)" />
           </View>
-        )}
+        </TouchableOpacity>
 
         {/* ── Quick Actions ── */}
         <View style={s.quickRow}>
@@ -294,23 +263,12 @@ const s = StyleSheet.create({
   heroSub: { fontSize: 14, color: 'rgba(255,255,255,0.65)', marginTop: 4 },
   heroArrow: { position: 'absolute', top: 20, right: 20, width: 32, height: 32, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.1)', justifyContent: 'center', alignItems: 'center' },
 
-  // Near You special blocks
-  nearBlocks: { flexDirection: 'row', paddingHorizontal: GAP, gap: GAP, marginBottom: 16 },
-  nearCard: { flex: 1, borderRadius: 18, padding: 16, minHeight: 110 },
-  nearIcon: { width: 32, height: 32, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.2)', justifyContent: 'center', alignItems: 'center', marginBottom: 10 },
-  nearTitle: { fontSize: 14, fontWeight: '700', color: '#FFF' },
-  nearSub: { fontSize: 11, color: 'rgba(255,255,255,0.6)', marginTop: 3 },
-
-  // Posts grid
-  postsSection: { paddingHorizontal: GAP, marginBottom: 16 },
-  sectionTitle: { fontSize: 18, fontWeight: '700', color: '#1A1A1A', marginBottom: 12, paddingHorizontal: 6 },
-  postsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: GAP },
-  postCard: { width: (SW - GAP * 3) / 2, height: (SW - GAP * 3) / 2 * 1.2, borderRadius: 18, overflow: 'hidden', position: 'relative', backgroundColor: '#E8E4DF' },
-  postImg: { width: '100%', height: '100%' },
-  postOverlay: { position: 'absolute', bottom: 0, left: 0, right: 0, height: '50%', backgroundColor: 'rgba(0,0,0,0.4)' },
-  postInfo: { position: 'absolute', bottom: 12, left: 12, right: 12 },
-  postAuthor: { fontSize: 12, fontWeight: '700', color: '#FFF' },
-  postCaption: { fontSize: 11, color: 'rgba(255,255,255,0.7)', marginTop: 2 },
+  // Second block - People Out Now
+  secondBlock: { marginHorizontal: GAP, marginBottom: 16, borderRadius: 18, backgroundColor: '#2D2D2D', overflow: 'hidden' },
+  secondBlockInner: { flexDirection: 'row', alignItems: 'center', padding: 18, gap: 14 },
+  secondIcon: { width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.15)', justifyContent: 'center', alignItems: 'center' },
+  secondTitle: { fontSize: 16, fontWeight: '700', color: '#FFF' },
+  secondSub: { fontSize: 12, color: 'rgba(255,255,255,0.5)', marginTop: 2 },
 
   quickRow: { flexDirection: 'row', justifyContent: 'space-around', paddingHorizontal: 20, paddingVertical: 16, marginHorizontal: GAP, backgroundColor: '#FFF', borderRadius: 20, borderWidth: 1, borderColor: '#E8E4DF' },
   quickBtn: { alignItems: 'center', gap: 6 },

@@ -30,8 +30,8 @@ const CATEGORIES = [
   { id: 'culture',  label: 'Culture' },
 ];
 
-// Variable heights for Pinterest masonry effect
-const HEIGHTS = [COL_W * 1.3, COL_W * 1.0, COL_W * 1.5, COL_W * 1.2, COL_W * 1.4, COL_W * 1.1];
+// Staggered heights for true masonry look — alternating pattern
+const H_RATIOS = [1.35, 1.0, 1.5, 1.15, 1.25, 1.05, 1.4, 1.1];
 
 export default function DiscoverScreen() {
   const router = useRouter();
@@ -81,13 +81,13 @@ export default function DiscoverScreen() {
   let leftH = 0, rightH = 0;
 
   imagePosts.forEach((post, idx) => {
-    const h = HEIGHTS[idx % HEIGHTS.length];
+    const h = COL_W * H_RATIOS[idx % H_RATIOS.length];
     if (leftH <= rightH) {
       leftCol.push({ ...post, _h: h });
-      leftH += h;
+      leftH += h + COL_GAP;
     } else {
       rightCol.push({ ...post, _h: h });
-      rightH += h;
+      rightH += h + COL_GAP;
     }
   });
 

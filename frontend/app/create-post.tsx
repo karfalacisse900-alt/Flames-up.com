@@ -407,8 +407,8 @@ const s = StyleSheet.create({
   // Media
   mediaSection: { paddingVertical: 16 },
   mediaScroll: { paddingHorizontal: 16, gap: 10 },
-  mediaThumb: { width: 120, height: 120, borderRadius: 14, overflow: 'hidden', position: 'relative' },
-  mediaImage: { width: '100%', height: '100%' },
+  mediaThumb: { width: 120, height: 160, borderRadius: 14, overflow: 'hidden', position: 'relative', backgroundColor: '#000' },
+  mediaImage: { width: '100%', height: '100%', resizeMode: 'contain' },
   videoBadge: {
     position: 'absolute', top: 8, left: 8,
     backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: 8,
@@ -420,7 +420,7 @@ const s = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center',
   },
   addMore: {
-    width: 120, height: 120, borderRadius: 14,
+    width: 120, height: 160, borderRadius: 14,
     borderWidth: 2, borderColor: '#E8E4DF', borderStyle: 'dashed',
     justifyContent: 'center', alignItems: 'center',
   },
