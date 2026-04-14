@@ -17,9 +17,9 @@ const { width: SW, height: SH } = Dimensions.get('window');
 const PAD = 4;
 const IMG_W = SW - PAD * 2;
 const R = 20;
-const EDGE_ZONE = 22; // px from screen edge triggers post navigation
-const SWIPE_THRESHOLD = SW * 0.3; // 30% of screen width to commit navigation
-const EDGE_INDICATOR_W = 4; // width of the edge indicator bar
+const EDGE_ZONE = 50; // px from screen edge triggers post navigation
+const SWIPE_THRESHOLD = SW * 0.2; // 20% of screen width to commit navigation
+const EDGE_INDICATOR_W = 5; // width of the edge indicator bar
 
 /* ════════════════════════════════════════════════════════════════════════
    MAIN SCREEN — wraps PostContent with edge-swipe post navigation
@@ -102,17 +102,21 @@ export default function PostDetailScreen() {
   // ── Edge-swipe PanResponder ──
   const panResponder = useMemo(() => PanResponder.create({
     onStartShouldSetPanResponder: (evt) => {
-      const x = evt.nativeEvent.locationX;
-      // Only capture if touch starts in edge zone
+      const x = evt.nativeEvent.pageX;
       return x <= EDGE_ZONE || x >= SW - EDGE_ZONE;
     },
     onMoveShouldSetPanResponder: (evt, gs) => {
-      const x = evt.nativeEvent.locationX;
-      // Require horizontal movement from edge zone
-      return (x <= EDGE_ZONE || x >= SW - EDGE_ZONE) && Math.abs(gs.dx) > Math.abs(gs.dy) * 1.5;
+      const x = evt.nativeEvent.pageX;
+      const inEdge = x <= EDGE_ZONE || x >= SW - EDGE_ZONE;
+      const isHorizontal = Math.abs(gs.dx) > 10 && Math.abs(gs.dx) > Math.abs(gs.dy) * 1.2;
+      // Left edge: only capture if swiping right (to go back)
+      if (x <= EDGE_ZONE && gs.dx > 0 && hasPrev && isHorizontal) return true;
+      // Right edge: only capture if swiping left (to go next)
+      if (x >= SW - EDGE_ZONE && gs.dx < 0 && hasNext && isHorizontal) return true;
+      return false;
     },
     onPanResponderGrant: (evt) => {
-      const x = evt.nativeEvent.locationX;
+      const x = evt.nativeEvent.pageX;
       const side = x <= EDGE_ZONE ? 'left' : 'right';
       setEdgeSwipeActive(side);
       RNAnimated.timing(edgeIndicatorOpacity, {

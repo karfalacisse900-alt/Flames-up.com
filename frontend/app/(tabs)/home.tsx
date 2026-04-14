@@ -203,6 +203,22 @@ export default function HomeScreen() {
           </View>
         </TouchableOpacity>
 
+        {/* ── Third Block: Nearby Spots (Near You only) or City Trends ── */}
+        <TouchableOpacity
+          style={[s.thirdBlock]}
+          activeOpacity={0.88}
+          onPress={() => router.push(`/scene/${activeCity}/spots` as any)}
+        >
+          <View style={s.thirdBlockInner}>
+            <View style={[s.thirdIcon]}><Ionicons name={activeCity === 'near' ? 'navigate-outline' : 'trending-up-outline'} size={18} color="#1A1A1A" /></View>
+            <View style={{ flex: 1 }}>
+              <Text style={s.thirdTitle}>{activeCity === 'near' ? 'Nearby Spots' : `Trending in ${city.label}`}</Text>
+              <Text style={s.thirdSub}>{activeCity === 'near' ? 'Places to check out around you' : 'Popular posts and places'}</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color="#CCC" />
+          </View>
+        </TouchableOpacity>
+
         {/* ── Quick Actions ── */}
         <View style={s.quickRow}>
           <TouchableOpacity style={s.quickBtn} onPress={() => router.push('/create-post' as any)}>
@@ -269,6 +285,13 @@ const s = StyleSheet.create({
   secondIcon: { width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.15)', justifyContent: 'center', alignItems: 'center' },
   secondTitle: { fontSize: 16, fontWeight: '700', color: '#FFF' },
   secondSub: { fontSize: 12, color: 'rgba(255,255,255,0.5)', marginTop: 2 },
+
+  // Third block - Nearby Spots / Trending
+  thirdBlock: { marginHorizontal: GAP, marginBottom: 16, borderRadius: 18, backgroundColor: '#FFF', borderWidth: 1, borderColor: '#E8E4DF', overflow: 'hidden' },
+  thirdBlockInner: { flexDirection: 'row', alignItems: 'center', padding: 18, gap: 14 },
+  thirdIcon: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#F5F0EB', justifyContent: 'center', alignItems: 'center' },
+  thirdTitle: { fontSize: 16, fontWeight: '700', color: '#1A1A1A' },
+  thirdSub: { fontSize: 12, color: '#999', marginTop: 2 },
 
   quickRow: { flexDirection: 'row', justifyContent: 'space-around', paddingHorizontal: 20, paddingVertical: 16, marginHorizontal: GAP, backgroundColor: '#FFF', borderRadius: 20, borderWidth: 1, borderColor: '#E8E4DF' },
   quickBtn: { alignItems: 'center', gap: 6 },

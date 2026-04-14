@@ -7,14 +7,12 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import api from '../../src/api/client';
-import { useAuthStore } from '../../src/store/authStore';
 
 const { width: SW } = Dimensions.get('window');
 const COL_GAP = 8;
-const H_PAD = 12;
+const H_PAD = 8;
 const COL_W = (SW - H_PAD * 2 - COL_GAP) / 2;
 
-// Lemon8-style category filters
 const CATEGORIES = [
   { id: 'all',      label: 'All' },
   { id: 'outfits',  label: 'Outfits' },
@@ -30,14 +28,13 @@ const CATEGORIES = [
   { id: 'culture',  label: 'Culture' },
 ];
 
-// Staggered heights for true masonry look — alternating pattern
-const H_RATIOS = [1.35, 1.0, 1.5, 1.15, 1.25, 1.05, 1.4, 1.1];
+// Staggered image heights for masonry
+const IMG_HEIGHTS = [COL_W * 1.4, COL_W * 1.1, COL_W * 1.55, COL_W * 1.2, COL_W * 1.35, COL_W * 1.0, COL_W * 1.45, COL_W * 1.15];
+const INFO_H = 62; // height of the white info area below image
 
 export default function DiscoverScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { user } = useAuthStore();
-
   const [activeCategory, setActiveCategory] = useState('all');
   const [posts, setPosts] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -59,17 +56,15 @@ export default function DiscoverScreen() {
     setRefreshing(false);
   }, []);
 
-  // Filter posts by category (match against content or post_type)
   const filteredPosts = activeCategory === 'all'
     ? posts
     : posts.filter((p: any) => {
         const content = (p.content || '').toLowerCase();
         const type = (p.post_type || '').toLowerCase();
         const cat = activeCategory.toLowerCase();
-        return content.includes(cat) || type.includes(cat) || type === cat;
+        return content.includes(cat) || type.includes(cat);
       });
 
-  // Only posts with images for the grid
   const imagePosts = filteredPosts.filter((p: any) => {
     const img = p.image || p.images?.[0];
     return img && (img.startsWith('http') || img.startsWith('data:'));
@@ -81,42 +76,41 @@ export default function DiscoverScreen() {
   let leftH = 0, rightH = 0;
 
   imagePosts.forEach((post, idx) => {
-    const h = COL_W * H_RATIOS[idx % H_RATIOS.length];
+    const imgH = IMG_HEIGHTS[idx % IMG_HEIGHTS.length];
+    const totalH = imgH + INFO_H + COL_GAP;
     if (leftH <= rightH) {
-      leftCol.push({ ...post, _h: h });
-      leftH += h + COL_GAP;
+      leftCol.push({ ...post, _imgH: imgH });
+      leftH += totalH;
     } else {
-      rightCol.push({ ...post, _h: h });
-      rightH += h + COL_GAP;
+      rightCol.push({ ...post, _imgH: imgH });
+      rightH += totalH;
     }
   });
 
-  const renderCard = (post: any, idx: number) => {
+  const renderCard = (post: any) => {
     const img = post.image || post.images?.[0];
     return (
       <TouchableOpacity
         key={post.id}
-        style={[s.card, { height: post._h }]}
-        activeOpacity={0.92}
+        style={s.card}
+        activeOpacity={0.95}
         onPress={() => router.push(`/post/${post.id}` as any)}
       >
-        <Image source={{ uri: img }} style={s.cardImg} resizeMode="cover" />
-        <View style={s.cardBottom}>
-          <Text style={s.cardCaption} numberOfLines={2}>{post.content || ''}</Text>
-          <View style={s.cardMeta}>
+        <Image source={{ uri: img }} style={[s.cardImg, { height: post._imgH }]} resizeMode="cover" />
+        <View style={s.cardInfo}>
+          {post.content ? <Text style={s.cardCaption} numberOfLines={2}>{post.content}</Text> : null}
+          <View style={s.cardFooter}>
             <View style={s.cardAuthorRow}>
               {post.user_profile_image ? (
                 <Image source={{ uri: post.user_profile_image }} style={s.cardAvatar} />
               ) : (
-                <View style={s.cardAvatarFallback}>
-                  <Text style={s.cardAvatarText}>{(post.user_full_name || 'U')[0]}</Text>
-                </View>
+                <View style={s.cardAvatarFb}><Text style={s.cardAvatarTxt}>{(post.user_full_name || 'U')[0]}</Text></View>
               )}
               <Text style={s.cardAuthor} numberOfLines={1}>{post.user_full_name || post.user_username}</Text>
             </View>
             <View style={s.cardLikes}>
-              <Ionicons name="heart-outline" size={12} color="#999" />
-              <Text style={s.cardLikesText}>{post.likes_count || 0}</Text>
+              <Ionicons name="heart-outline" size={13} color="#BBB" />
+              <Text style={s.cardLikesTxt}>{post.likes_count || 0}</Text>
             </View>
           </View>
         </View>
@@ -126,56 +120,44 @@ export default function DiscoverScreen() {
 
   return (
     <View style={s.container}>
-      {/* Header */}
       <View style={[s.header, { paddingTop: insets.top + 4 }]}>
         <Text style={s.headerTitle}>Discover</Text>
-        <TouchableOpacity style={s.searchBtn} onPress={() => {}}>
+        <TouchableOpacity style={s.searchBtn}>
           <Ionicons name="search-outline" size={20} color="#1A1A1A" />
         </TouchableOpacity>
       </View>
 
-      {/* Lemon8-style Category Tabs */}
-      <View style={s.tabBar}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.tabContent}>
-          {CATEGORIES.map(cat => {
-            const active = activeCategory === cat.id;
-            return (
-              <TouchableOpacity
-                key={cat.id}
-                style={[s.tab, active && s.tabActive]}
-                onPress={() => setActiveCategory(cat.id)}
-              >
-                <Text style={[s.tabText, active && s.tabTextActive]}>{cat.label}</Text>
-              </TouchableOpacity>
-            );
-          })}
-        </ScrollView>
-      </View>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.tabRow}>
+        {CATEGORIES.map(cat => {
+          const active = activeCategory === cat.id;
+          return (
+            <TouchableOpacity
+              key={cat.id}
+              style={[s.tab, active && s.tabActive]}
+              onPress={() => setActiveCategory(cat.id)}
+            >
+              <Text style={[s.tabText, active && s.tabTextActive]}>{cat.label}</Text>
+            </TouchableOpacity>
+          );
+        })}
+      </ScrollView>
 
-      {/* Pinterest Masonry Grid */}
       <ScrollView
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#1A1A1A" />}
-        contentContainerStyle={s.gridContainer}
+        contentContainerStyle={{ paddingBottom: 100 }}
       >
         {isLoading ? (
-          <View style={s.loadingWrap}>
-            <ActivityIndicator size="large" color="#1A1A1A" />
-          </View>
+          <View style={s.center}><ActivityIndicator size="large" color="#1A1A1A" /></View>
         ) : imagePosts.length === 0 ? (
-          <View style={s.emptyWrap}>
-            <Ionicons name="images-outline" size={48} color="#CCC" />
-            <Text style={s.emptyText}>No posts in this category yet</Text>
-            <Text style={s.emptySub}>Be the first to share something!</Text>
+          <View style={s.center}>
+            <Ionicons name="images-outline" size={48} color="#DDD" />
+            <Text style={s.emptyText}>No posts yet</Text>
           </View>
         ) : (
           <View style={s.masonry}>
-            <View style={s.masonryCol}>
-              {leftCol.map((post, i) => renderCard(post, i))}
-            </View>
-            <View style={s.masonryCol}>
-              {rightCol.map((post, i) => renderCard(post, i))}
-            </View>
+            <View style={s.col}>{leftCol.map(p => renderCard(p))}</View>
+            <View style={s.col}>{rightCol.map(p => renderCard(p))}</View>
           </View>
         )}
       </ScrollView>
@@ -184,38 +166,33 @@ export default function DiscoverScreen() {
 }
 
 const s = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#FAFAF8' },
+  container: { flex: 1, backgroundColor: '#FFF' },
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingBottom: 8 },
+  headerTitle: { fontSize: 24, fontWeight: '800', color: '#1A1A1A', letterSpacing: -0.5 },
+  searchBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#F5F5F5', justifyContent: 'center', alignItems: 'center' },
 
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingBottom: 4 },
-  headerTitle: { fontSize: 26, fontWeight: '800', color: '#1A1A1A', letterSpacing: -0.5 },
-  searchBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#F5F0EB', justifyContent: 'center', alignItems: 'center' },
-
-  tabBar: { borderBottomWidth: 1, borderBottomColor: '#F0EDE7' },
-  tabContent: { paddingHorizontal: 14, paddingVertical: 10, gap: 4 },
-  tab: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20 },
+  tabRow: { paddingHorizontal: 12, paddingBottom: 10, gap: 4 },
+  tab: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, backgroundColor: '#F5F5F5' },
   tabActive: { backgroundColor: '#1A1A1A' },
   tabText: { fontSize: 14, fontWeight: '600', color: '#999' },
   tabTextActive: { color: '#FFF' },
 
-  gridContainer: { paddingBottom: 100 },
-  masonry: { flexDirection: 'row', paddingHorizontal: H_PAD, paddingTop: 10, gap: COL_GAP },
-  masonryCol: { flex: 1, gap: COL_GAP },
+  masonry: { flexDirection: 'row', paddingHorizontal: H_PAD, gap: COL_GAP },
+  col: { flex: 1, gap: COL_GAP },
 
-  card: { borderRadius: 16, overflow: 'hidden', backgroundColor: '#F0EDE7' },
-  cardImg: { width: '100%', height: '100%', position: 'absolute' },
-  cardBottom: { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: '#FFF', paddingHorizontal: 10, paddingVertical: 8 },
+  card: { borderRadius: 14, overflow: 'hidden', backgroundColor: '#FFF', borderWidth: 0.5, borderColor: '#F0F0F0' },
+  cardImg: { width: '100%' },
+  cardInfo: { paddingHorizontal: 10, paddingTop: 8, paddingBottom: 10 },
   cardCaption: { fontSize: 13, fontWeight: '600', color: '#1A1A1A', lineHeight: 17, marginBottom: 6 },
-  cardMeta: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  cardFooter: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   cardAuthorRow: { flexDirection: 'row', alignItems: 'center', gap: 5, flex: 1 },
   cardAvatar: { width: 18, height: 18, borderRadius: 9 },
-  cardAvatarFallback: { width: 18, height: 18, borderRadius: 9, backgroundColor: '#E8E4DF', justifyContent: 'center', alignItems: 'center' },
-  cardAvatarText: { fontSize: 9, fontWeight: '700', color: '#AAA' },
-  cardAuthor: { fontSize: 11, color: '#999', fontWeight: '500', flex: 1 },
+  cardAvatarFb: { width: 18, height: 18, borderRadius: 9, backgroundColor: '#F0F0F0', justifyContent: 'center', alignItems: 'center' },
+  cardAvatarTxt: { fontSize: 9, fontWeight: '700', color: '#BBB' },
+  cardAuthor: { fontSize: 11, color: '#AAA', fontWeight: '500', flex: 1 },
   cardLikes: { flexDirection: 'row', alignItems: 'center', gap: 3 },
-  cardLikesText: { fontSize: 11, color: '#999' },
+  cardLikesTxt: { fontSize: 11, color: '#BBB' },
 
-  loadingWrap: { paddingTop: 80, alignItems: 'center' },
-  emptyWrap: { paddingTop: 80, alignItems: 'center' },
-  emptyText: { fontSize: 16, fontWeight: '600', color: '#999', marginTop: 16 },
-  emptySub: { fontSize: 13, color: '#CCC', marginTop: 4 },
+  center: { paddingTop: 100, alignItems: 'center' },
+  emptyText: { fontSize: 15, color: '#BBB', marginTop: 12 },
 });

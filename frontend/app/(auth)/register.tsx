@@ -30,26 +30,47 @@ export default function RegisterScreen() {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [suggestions, setSuggestions] = useState<string[]>([]);
 
   const sanitizeUsername = (text: string) => {
     return text.toLowerCase().replace(/[^a-z0-9_]/g, '').substring(0, 30);
   };
 
+  const generateSuggestions = (base: string): string[] => {
+    const year = new Date().getFullYear().toString().slice(-2);
+    const rand = Math.floor(Math.random() * 99);
+    return [
+      `${base}${year}`,
+      `${base}_${rand}`,
+      `${base}${Math.floor(Math.random() * 999)}`,
+      `the_${base}`,
+      `${base}_official`,
+    ].slice(0, 3);
+  };
+
   const handleUsernameChange = (text: string) => {
     const clean = sanitizeUsername(text);
     setUsername(clean);
+    setSuggestions([]);
     if (clean.length < 3) { setUsernameStatus(clean.length > 0 ? 'invalid' : 'idle'); return; }
     setUsernameStatus('checking');
     if (usernameTimer.current) clearTimeout(usernameTimer.current);
     usernameTimer.current = setTimeout(async () => {
       try {
         const res = await api.get(`/users/search/${clean}`);
-        const taken = (res.data || []).some((u: any) => u.username?.toLowerCase() === clean);
-        setUsernameStatus(taken ? 'taken' : 'available');
+        const results = res.data || [];
+        const exactMatch = results.some((u: any) => u.username?.toLowerCase() === clean.toLowerCase());
+        if (exactMatch) {
+          setUsernameStatus('taken');
+          setSuggestions(generateSuggestions(clean));
+        } else {
+          setUsernameStatus('available');
+          setSuggestions([]);
+        }
       } catch {
         setUsernameStatus('available');
       }
-    }, 500);
+    }, 400);
   };
 
   const handleRegister = async () => {
@@ -142,6 +163,16 @@ export default function RegisterScreen() {
             </View>
             {usernameStatus === 'taken' && <Text style={styles.fieldHint}>Username already taken</Text>}
             {usernameStatus === 'invalid' && <Text style={[styles.fieldHint, { color: '#F59E0B' }]}>Min 3 chars, lowercase letters, numbers, underscores</Text>}
+            {usernameStatus === 'taken' && suggestions.length > 0 && (
+              <View style={styles.suggestRow}>
+                <Text style={styles.suggestLabel}>Try: </Text>
+                {suggestions.map(s => (
+                  <TouchableOpacity key={s} onPress={() => { setUsername(s); setUsernameStatus('checking'); handleUsernameChange(s); }} style={styles.suggestChip}>
+                    <Text style={styles.suggestText}>{s}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
 
             <View style={styles.inputContainer}>
               <Ionicons name="mail-outline" size={20} color={colors.textTertiary} style={styles.inputIcon} />
@@ -291,6 +322,18 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     marginLeft: 4,
   },
+  suggestRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: -4,
+    marginBottom: 8,
+    marginLeft: 4,
+  },
+  suggestLabel: { fontSize: 12, color: '#999', fontWeight: '500' },
+  suggestChip: { backgroundColor: '#F0F0F0', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 12 },
+  suggestText: { fontSize: 12, color: '#3B82F6', fontWeight: '600' },
   loginContainer: {
     flexDirection: 'row',
     justifyContent: 'center',
