@@ -157,6 +157,12 @@ api.post('/users/:userId/follow', authMiddleware, async (c) => {
   await c.env.DB.prepare('INSERT INTO follows (id, follower_id, following_id) VALUES (?, ?, ?)').bind(uuid(), userId, targetId).run();
   await c.env.DB.prepare('UPDATE users SET following_count = following_count + 1 WHERE id = ?').bind(userId).run();
   await c.env.DB.prepare('UPDATE users SET followers_count = followers_count + 1 WHERE id = ?').bind(targetId).run();
+  // Create notification for followed user
+  try {
+    const me: any = await c.env.DB.prepare('SELECT full_name FROM users WHERE id = ?').bind(userId).first();
+    await c.env.DB.prepare('INSERT INTO notifications (id, user_id, type, title, body, data, is_read, created_at) VALUES (?, ?, ?, ?, ?, ?, 0, datetime(\'now\'))')
+      .bind(uuid(), targetId, 'follow', 'New Follower', `${me?.full_name || 'Someone'} started following you`, JSON.stringify({ from_user_id: userId })).run();
+  } catch {}
   return c.json({ following: true });
 });
 
@@ -227,6 +233,15 @@ api.post('/posts/:postId/like', authMiddleware, async (c) => {
   }
   await c.env.DB.prepare('INSERT INTO likes (id, user_id, post_id) VALUES (?, ?, ?)').bind(uuid(), userId, postId).run();
   await c.env.DB.prepare('UPDATE posts SET likes_count = likes_count + 1 WHERE id = ?').bind(postId).run();
+  // Create notification for post owner
+  try {
+    const post: any = await c.env.DB.prepare('SELECT user_id FROM posts WHERE id = ?').bind(postId).first();
+    if (post && post.user_id !== userId) {
+      const me: any = await c.env.DB.prepare('SELECT full_name FROM users WHERE id = ?').bind(userId).first();
+      await c.env.DB.prepare('INSERT INTO notifications (id, user_id, type, title, body, data, is_read, created_at) VALUES (?, ?, ?, ?, ?, ?, 0, datetime(\'now\'))')
+        .bind(uuid(), post.user_id, 'like', 'New Like', `${me?.full_name || 'Someone'} liked your post`, JSON.stringify({ post_id: postId, from_user_id: userId })).run();
+    }
+  } catch {}
   return c.json({ liked: true });
 });
 
@@ -258,6 +273,14 @@ api.post('/posts/:postId/comments', authMiddleware, async (c) => {
   const id = uuid();
   await c.env.DB.prepare('INSERT INTO comments (id, user_id, post_id, content) VALUES (?, ?, ?, ?)').bind(id, userId, postId, content).run();
   await c.env.DB.prepare('UPDATE posts SET comments_count = comments_count + 1 WHERE id = ?').bind(postId).run();
+  // Create notification for post owner
+  try {
+    const post: any = await c.env.DB.prepare('SELECT user_id FROM posts WHERE id = ?').bind(postId).first();
+    if (post && post.user_id !== userId) {
+      await c.env.DB.prepare('INSERT INTO notifications (id, user_id, type, title, body, data, is_read, created_at) VALUES (?, ?, ?, ?, ?, ?, 0, datetime(\'now\'))')
+        .bind(uuid(), post.user_id, 'comment', 'New Comment', `${user?.full_name || 'Someone'} commented on your post`, JSON.stringify({ post_id: postId, from_user_id: userId })).run();
+    }
+  } catch {}
   return c.json({ id, user_id: userId, post_id: postId, content, user_username: user?.username, user_full_name: user?.full_name, user_profile_image: user?.profile_image, created_at: now() });
 });
 
@@ -344,8 +367,22 @@ api.get('/messages/:userId', authMiddleware, async (c) => {
 });
 
 // Notifications
-api.get('/notifications', authMiddleware, async (c) => { const r = await c.env.DB.prepare('SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 50').bind(getUserId(c)).all(); return c.json(r.results); });
-api.get('/notifications/unread-count', authMiddleware, async (c) => { const r = await c.env.DB.prepare('SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND is_read = 0').bind(getUserId(c)).first(); return c.json({ count: (r as any)?.count || 0 }); });
+api.get('/notifications', authMiddleware, async (c) => {
+  try {
+    const r = await c.env.DB.prepare('SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 50').bind(getUserId(c)).all();
+    return c.json(r.results);
+  } catch {
+    // Auto-create table if missing
+    await c.env.DB.prepare('CREATE TABLE IF NOT EXISTS notifications (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, type TEXT DEFAULT \'general\', title TEXT DEFAULT \'\', body TEXT DEFAULT \'\', data TEXT DEFAULT \'{}\', is_read INTEGER DEFAULT 0, created_at TEXT DEFAULT (datetime(\'now\')))').run();
+    return c.json([]);
+  }
+});
+api.get('/notifications/unread-count', authMiddleware, async (c) => {
+  try {
+    const r = await c.env.DB.prepare('SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND is_read = 0').bind(getUserId(c)).first();
+    return c.json({ count: (r as any)?.count || 0 });
+  } catch { return c.json({ count: 0 }); }
+});
 api.post('/notifications/mark-read', authMiddleware, async (c) => { await c.env.DB.prepare('UPDATE notifications SET is_read = 1 WHERE user_id = ?').bind(getUserId(c)).run(); return c.json({ marked: true }); });
 
 // Library
@@ -1161,6 +1198,17 @@ api.post('/admin/init-governance', authMiddleware, async (c) => {
         details TEXT DEFAULT '',
         created_at TEXT NOT NULL,
         FOREIGN KEY (admin_id) REFERENCES users(id)
+      );
+      CREATE TABLE IF NOT EXISTS notifications (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        type TEXT NOT NULL DEFAULT 'general',
+        title TEXT NOT NULL DEFAULT '',
+        body TEXT NOT NULL DEFAULT '',
+        data TEXT DEFAULT '{}',
+        is_read INTEGER DEFAULT 0,
+        created_at TEXT DEFAULT (datetime('now')),
+        FOREIGN KEY (user_id) REFERENCES users(id)
       );
     `);
     return c.json({ message: 'Governance tables created' });
