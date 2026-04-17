@@ -191,7 +191,12 @@ export default function MapViewScreen() {
       });
     }
     </script>
-    <script src="https://maps.googleapis.com/maps/api/js?key=${GKEY}&callback=initMap" async defer></script>
+    <script src="https://maps.googleapis.com/maps/api/js?key=${GKEY}&libraries=places&callback=initMap" async defer></script>
+    <script>
+    window.onerror = function(msg) {
+      document.getElementById('map').innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;font-family:-apple-system,sans-serif;color:#999"><p style="font-size:16px;font-weight:600">Maps API Loading</p><p style="font-size:13px;margin-top:8px;text-align:center;padding:0 20px">Please enable Maps JavaScript API and Places API in your Google Cloud Console for this key.</p></div>';
+    };
+    </script>
     </body></html>`;
   }, [places, lat, lng]);
 

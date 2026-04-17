@@ -100,28 +100,18 @@ export default function HomeScreen() {
   let lh = 0, rh = 0;
   items.forEach((p, i) => {
     const h = COL_W * RATIOS[i % RATIOS.length];
-    if (lh <= rh) { L.push({ ...p, _h: h }); lh += h + GAP + 48; }
-    else { R.push({ ...p, _h: h }); rh += h + GAP + 48; }
+    if (lh <= rh) { L.push({ ...p, _h: h }); lh += h + GAP; }
+    else { R.push({ ...p, _h: h }); rh += h + GAP; }
   });
 
   const PinCard = ({ p }: { p: any }) => {
     const img = p.image || (p.images && p.images[0]);
-    const name = p.user_full_name || p.user_username || '';
     return (
-      <TouchableOpacity style={s.pin} activeOpacity={0.96} onPress={() => router.push(`/post/${p.id}` as any)}>
-        <Image source={{ uri: img }} style={[s.pinImg, { height: p._h }]} resizeMode="cover" />
-        <View style={s.pinBot}>
-          {p.content ? <Text style={s.pinCap} numberOfLines={2}>{p.content}</Text> : null}
-          <View style={s.pinRow}>
-            {p.user_profile_image ? (
-              <Image source={{ uri: p.user_profile_image }} style={s.pinAv} />
-            ) : (
-              <View style={s.pinAvFb}><Text style={s.pinAvTx}>{(name || 'U')[0]}</Text></View>
-            )}
-            <Text style={s.pinName} numberOfLines={1}>{name}</Text>
-            <TouchableOpacity><Ionicons name="ellipsis-horizontal" size={14} color="#CCC" /></TouchableOpacity>
-          </View>
-        </View>
+      <TouchableOpacity style={[s.pin, { height: p._h }]} activeOpacity={0.96} onPress={() => router.push(`/post/${p.id}` as any)}>
+        <Image source={{ uri: img }} style={s.pinImg} resizeMode="cover" />
+        <TouchableOpacity style={s.pinMore}>
+          <Ionicons name="ellipsis-horizontal" size={16} color="#FFF" />
+        </TouchableOpacity>
       </TouchableOpacity>
     );
   };
@@ -196,15 +186,9 @@ const s = StyleSheet.create({
   grid: { flexDirection: 'row', paddingHorizontal: PAD, gap: GAP, paddingTop: 6 },
   col: { flex: 1, gap: GAP },
 
-  pin: { borderRadius: 16, overflow: 'hidden', backgroundColor: '#FFF' },
-  pinImg: { width: '100%', borderTopLeftRadius: 16, borderTopRightRadius: 16 },
-  pinBot: { paddingHorizontal: 10, paddingTop: 8, paddingBottom: 10 },
-  pinCap: { fontSize: 13, fontWeight: '600', color: '#1A1A1A', lineHeight: 17, marginBottom: 6 },
-  pinRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  pinAv: { width: 20, height: 20, borderRadius: 10 },
-  pinAvFb: { width: 20, height: 20, borderRadius: 10, backgroundColor: '#F0F0F0', justifyContent: 'center', alignItems: 'center' },
-  pinAvTx: { fontSize: 9, fontWeight: '700', color: '#BBB' },
-  pinName: { fontSize: 12, color: '#999', fontWeight: '500', flex: 1 },
+  pin: { borderRadius: 16, overflow: 'hidden', backgroundColor: '#F0F0F0' },
+  pinImg: { width: '100%', height: '100%' },
+  pinMore: { position: 'absolute', bottom: 8, right: 8, width: 28, height: 28, borderRadius: 14, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center' },
 
   empty: { paddingTop: 100, alignItems: 'center' },
   emptyTx: { fontSize: 14, color: '#CCC', marginTop: 10 },
