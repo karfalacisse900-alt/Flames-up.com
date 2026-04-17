@@ -6,6 +6,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import * as Location from 'expo-location';
 import { useAuthStore } from '../../src/store/authStore';
 import api from '../../src/api/client';
 
@@ -16,7 +17,7 @@ const COL_W = (SW - PAD * 2 - GAP) / 2;
 const RATIOS = [1.4, 1.05, 1.55, 1.2, 1.35, 1.0, 1.45, 1.1];
 
 const FILTERS = [
-  { id: 'all', label: 'For You' },
+  { id: 'near', label: 'Near You' },
   { id: 'global', label: 'Global' },
   { id: 'nyc', label: 'NYC' },
   { id: 'miami', label: 'Miami' },
@@ -39,9 +40,22 @@ export default function HomeScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { user } = useAuthStore();
-  const [filter, setFilter] = useState('all');
+  const [filter, setFilter] = useState('near');
   const [posts, setPosts] = useState<any[]>([]);
   const [refreshing, setRefreshing] = useState(false);
+  const [userCity, setUserCity] = useState('');
+
+  useEffect(() => { loadData(); detectCity(); }, []);
+
+  const detectCity = async () => {
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') return;
+      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Low });
+      const [addr] = await Location.reverseGeocodeAsync({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
+      if (addr?.city) setUserCity(addr.city.toLowerCase());
+    } catch {}
+  };
 
   useEffect(() => { loadData(); }, []);
 
@@ -57,13 +71,23 @@ export default function HomeScreen() {
   }, []);
 
   const filtered = (() => {
-    if (filter === 'all' || filter === 'global') return posts;
+    if (filter === 'global') return posts; // Show ALL posts from everywhere
+    if (filter === 'near') {
+      // Near You: filter by user's detected city (within ~15mi means same city area)
+      if (!userCity) return posts; // if no city detected, show all
+      const f = posts.filter((p: any) => {
+        const loc = ((p.location || '') + ' ' + (p.content || '')).toLowerCase();
+        return loc.includes(userCity);
+      });
+      return f.length > 0 ? f : posts;
+    }
+    // City-specific filter
     const kw = CITY_KW[filter] || [];
     const f = posts.filter((p: any) => {
       const t = ((p.location || '') + ' ' + (p.content || '')).toLowerCase();
       return kw.some(k => t.includes(k));
     });
-    return f.length > 0 ? f : posts;
+    return f.length > 2 ? f : f.length > 0 ? f : []; // Show empty if no city matches (strict)
   })();
 
   const items = filtered.filter((p: any) => {

@@ -130,17 +130,21 @@ export default function CreatePostScreen() {
     setMedia(prev => prev.filter((_, i) => i !== idx));
   };
 
+  // Auto-detect location on mount
+  useEffect(() => { detectLocation(); }, []);
+
   const detectLocation = async () => {
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') return;
-      const loc = await Location.getCurrentPositionAsync({});
+      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
       const [addr] = await Location.reverseGeocodeAsync({
         latitude: loc.coords.latitude,
         longitude: loc.coords.longitude,
       });
       if (addr) {
-        const parts = [addr.name, addr.city].filter(Boolean);
+        const city = addr.city || addr.subregion || '';
+        const parts = [addr.name, city].filter(Boolean);
         setPlaceTag(parts.join(', '));
       }
     } catch {}

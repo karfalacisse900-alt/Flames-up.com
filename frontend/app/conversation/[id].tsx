@@ -378,27 +378,27 @@ export default function ConversationScreen() {
       </KeyboardAvoidingView>
 
       {/* Attach menu */}
-      <Modal visible={showAttachMenu} transparent animationType="fade" onRequestClose={() => setShowAttachMenu(false)}>
-        <Pressable style={st.attachOverlay} onPress={() => setShowAttachMenu(false)}>
-          <View style={st.attachSheet}>
+      <Modal visible={showAttachMenu} transparent animationType="slide" onRequestClose={() => setShowAttachMenu(false)}>
+        <TouchableOpacity style={st.attachOverlay} activeOpacity={1} onPress={() => setShowAttachMenu(false)}>
+          <View style={st.attachSheet} onStartShouldSetResponder={() => true}>
             <View style={st.attachHandle} />
             <Text style={st.attachTitle}>Share Media</Text>
             <View style={st.attachOpts}>
-              <TouchableOpacity style={st.attachOpt} onPress={pickImage}>
+              <TouchableOpacity style={st.attachOpt} activeOpacity={0.7} onPress={() => { setShowAttachMenu(false); setTimeout(pickImage, 300); }}>
                 <View style={[st.attachIconBox, { backgroundColor: '#DCFCE7' }]}><Ionicons name="image" size={26} color="#16A34A" /></View>
                 <Text style={st.attachLabel}>Photo</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={st.attachOpt} onPress={pickVideo}>
+              <TouchableOpacity style={st.attachOpt} activeOpacity={0.7} onPress={() => { setShowAttachMenu(false); setTimeout(pickVideo, 300); }}>
                 <View style={[st.attachIconBox, { backgroundColor: '#DBEAFE' }]}><Ionicons name="videocam" size={26} color="#2563EB" /></View>
                 <Text style={st.attachLabel}>Video</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={st.attachOpt} onPress={takePhoto}>
+              <TouchableOpacity style={st.attachOpt} activeOpacity={0.7} onPress={() => { setShowAttachMenu(false); setTimeout(takePhoto, 300); }}>
                 <View style={[st.attachIconBox, { backgroundColor: '#FEF3C7' }]}><Ionicons name="camera" size={26} color="#D97706" /></View>
                 <Text style={st.attachLabel}>Camera</Text>
               </TouchableOpacity>
             </View>
           </View>
-        </Pressable>
+        </TouchableOpacity>
       </Modal>
 
       {/* Image viewer */}
