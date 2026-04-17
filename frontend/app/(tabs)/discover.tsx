@@ -130,26 +130,6 @@ export default function DiscoverScreen() {
           <View style={s.center}><ActivityIndicator size="large" color="#1A1A1A" /></View>
         ) : (
           <>
-            {/* Featured */}
-            {featured && (
-              <TouchableOpacity style={s.feat} activeOpacity={0.95} onPress={() => router.push(`/post/${featured.id}` as any)}>
-                <Text style={s.featTitle} numberOfLines={3}>{featured.content || 'Discover'}</Text>
-                <Image source={{ uri: featured.image || featured.images?.[0] }} style={s.featImg} resizeMode="cover" />
-              </TouchableOpacity>
-            )}
-
-            {/* 2 post cards */}
-            {row1.length > 0 && (
-              <View style={s.row2}>
-                {row1.map((p: any) => (
-                  <TouchableOpacity key={p.id} style={s.row2Card} activeOpacity={0.95} onPress={() => router.push(`/post/${p.id}` as any)}>
-                    <Image source={{ uri: p.image || p.images?.[0] }} style={s.row2Img} resizeMode="cover" />
-                    <Text style={s.row2Tx} numberOfLines={2}>{p.content || ''}</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            )}
-
             {/* Search */}
             <View style={s.searchWrap}>
               <View style={s.searchBar}>

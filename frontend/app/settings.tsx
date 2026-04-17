@@ -61,6 +61,19 @@ export default function SettingsScreen() {
     ]);
   };
 
+  const handleDeleteAccount = () => {
+    Alert.alert('Delete Account', 'This will permanently delete your account and all your data. This cannot be undone.', [
+      { text: 'Cancel' },
+      { text: 'Delete', style: 'destructive', onPress: async () => {
+        try {
+          await api.delete('/users/me');
+          logout();
+          router.replace('/(auth)/login');
+        } catch { Alert.alert('Error', 'Could not delete account'); }
+      }},
+    ]);
+  };
+
   return (
     <View style={s.root}>
       <View style={[s.header, { paddingTop: insets.top }]}>
@@ -141,6 +154,12 @@ export default function SettingsScreen() {
           <Ionicons name="log-out-outline" size={20} color="#EF4444" />
           <Text style={s.logoutTx}>Sign Out</Text>
         </TouchableOpacity>
+
+        {/* Delete Account */}
+        <TouchableOpacity style={s.deleteBtn} onPress={handleDeleteAccount}>
+          <Ionicons name="trash-outline" size={18} color="#999" />
+          <Text style={s.deleteTx}>Delete Account</Text>
+        </TouchableOpacity>
       </ScrollView>
     </View>
   );
@@ -166,6 +185,8 @@ const s = StyleSheet.create({
   saveBtn: { backgroundColor: '#1A1A1A', borderRadius: 12, paddingVertical: 14, alignItems: 'center' },
   saveTx: { fontSize: 15, fontWeight: '700', color: '#FFF' },
 
-  logoutBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 20, marginBottom: 40, paddingVertical: 16, borderRadius: 12, backgroundColor: '#FEF2F2' },
+  logoutBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 20, paddingVertical: 16, borderRadius: 12, backgroundColor: '#FEF2F2' },
   logoutTx: { fontSize: 16, fontWeight: '600', color: '#EF4444' },
+  deleteBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 12, marginBottom: 40, paddingVertical: 14 },
+  deleteTx: { fontSize: 14, color: '#999' },
 });

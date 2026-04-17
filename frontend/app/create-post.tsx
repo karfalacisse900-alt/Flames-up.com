@@ -149,8 +149,16 @@ export default function CreatePostScreen() {
       });
       if (addr) {
         const city = addr.city || addr.subregion || '';
-        const parts = [addr.name, city].filter(Boolean);
-        setPlaceTag(parts.join(', '));
+        const region = addr.region || '';
+        const parts = [city, region].filter(Boolean);
+        // Also add state/area context for filtering (e.g. "Bronx, New York")
+        const nycBoroughs = ['bronx', 'brooklyn', 'queens', 'manhattan', 'staten island'];
+        const cityLower = city.toLowerCase();
+        let tag = parts.join(', ');
+        if (nycBoroughs.some(b => cityLower.includes(b)) || region.toLowerCase().includes('new york')) {
+          tag = `${city}, NYC, New York`;
+        }
+        setPlaceTag(tag);
       }
     } catch {}
   };
