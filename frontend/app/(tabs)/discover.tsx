@@ -150,30 +150,37 @@ export default function DiscoverScreen() {
 
             {/* Category Blocks */}
             <View style={s.catBlocks}>
-              <TouchableOpacity style={s.catBlockBig} activeOpacity={0.9} onPress={() => router.push('/category/things-to-do' as any)}>
-                <View style={s.catBlockBigContent}>
-                  <Ionicons name="compass" size={28} color="#FFF" />
-                  <Text style={s.catBlockBigTitle}>Things to Do</Text>
-                  <Text style={s.catBlockBigSub}>Attractions, parks & museums</Text>
+              {/* Things to Do - Hero Block */}
+              <TouchableOpacity style={s.heroBlock} activeOpacity={0.9} onPress={() => router.push('/category/things-to-do' as any)}>
+                <View style={s.heroBlockContent}>
+                  <Ionicons name="compass" size={32} color="#FFF" />
+                  <Text style={s.heroBlockTitle}>Things to Do</Text>
+                  <Text style={s.heroBlockSub}>Parks, museums, art, restaurants & more</Text>
                 </View>
               </TouchableOpacity>
-              <View style={s.catBlockRow}>
-                <TouchableOpacity style={[s.catBlockHalf, { backgroundColor: '#2563EB' }]} activeOpacity={0.9} onPress={() => router.push('/category/events' as any)}>
-                  <Ionicons name="calendar" size={24} color="#FFF" />
-                  <Text style={s.catBlockHalfTitle}>Events</Text>
-                  <Text style={s.catBlockHalfSub}>Markets, meetups</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={[s.catBlockHalf, { backgroundColor: '#1A1A1A' }]} activeOpacity={0.9} onPress={() => router.push('/category/nightlife' as any)}>
-                  <Ionicons name="moon" size={24} color="#FFF" />
-                  <Text style={s.catBlockHalfTitle}>Nightlife</Text>
-                  <Text style={s.catBlockHalfSub}>Bars, clubs</Text>
-                </TouchableOpacity>
-              </View>
-              <TouchableOpacity style={[s.catBlockBig, { backgroundColor: '#D97706' }]} activeOpacity={0.9} onPress={() => router.push('/category/groups' as any)}>
-                <View style={s.catBlockBigContent}>
-                  <Ionicons name="people" size={28} color="#FFF" />
-                  <Text style={s.catBlockBigTitle}>Groups to Join</Text>
-                  <Text style={s.catBlockBigSub}>Communities, fitness & social</Text>
+
+              {/* Horizontal scrollable row */}
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.catScrollRow}>
+                {[
+                  { id: 'events', label: 'Events', icon: 'calendar', color: '#2563EB' },
+                  { id: 'groups', label: 'Groups', icon: 'people', color: '#D97706' },
+                  { id: 'nightlife', label: 'Nightlife', icon: 'moon', color: '#1A1A1A' },
+                  { id: 'activity', label: 'Activity', icon: 'fitness', color: '#0F766E' },
+                ].map(cat => (
+                  <TouchableOpacity key={cat.id} style={[s.catScrollCard, { backgroundColor: cat.color }]} activeOpacity={0.9}
+                    onPress={() => router.push(`/category/${cat.id}` as any)}>
+                    <Ionicons name={cat.icon as any} size={24} color="#FFF" />
+                    <Text style={s.catScrollLabel}>{cat.label}</Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+
+              {/* World Board Block */}
+              <TouchableOpacity style={s.worldBlock} activeOpacity={0.9} onPress={() => router.push('/category/world-board' as any)}>
+                <View style={s.worldBlockContent}>
+                  <Ionicons name="globe" size={32} color="#FFF" />
+                  <Text style={s.heroBlockTitle}>World Board</Text>
+                  <Text style={s.heroBlockSub}>Discover places around the world</Text>
                 </View>
               </TouchableOpacity>
             </View>
@@ -242,15 +249,16 @@ const s = StyleSheet.create({
   searchBar: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#F5F5F5', borderRadius: 24, paddingHorizontal: 16, paddingVertical: 12 },
   searchPlaceholder: { fontSize: 14, color: '#AAA' },
 
-  catBlocks: { paddingHorizontal: 16, gap: 10, marginBottom: 16 },
-  catBlockBig: { backgroundColor: '#7C3AED', borderRadius: 20, overflow: 'hidden', height: 130 },
-  catBlockBigContent: { flex: 1, padding: 20, justifyContent: 'flex-end' },
-  catBlockBigTitle: { fontSize: 22, fontWeight: '800', color: '#FFF', marginTop: 8 },
-  catBlockBigSub: { fontSize: 13, color: 'rgba(255,255,255,0.7)', marginTop: 2 },
-  catBlockRow: { flexDirection: 'row', gap: 10 },
-  catBlockHalf: { flex: 1, borderRadius: 20, padding: 20, height: 110, justifyContent: 'flex-end' },
-  catBlockHalfTitle: { fontSize: 18, fontWeight: '800', color: '#FFF', marginTop: 8 },
-  catBlockHalfSub: { fontSize: 12, color: 'rgba(255,255,255,0.6)', marginTop: 2 },
+  catBlocks: { paddingHorizontal: 16, gap: 12, marginBottom: 16 },
+  heroBlock: { backgroundColor: '#7C3AED', borderRadius: 20, overflow: 'hidden', height: 150 },
+  heroBlockContent: { flex: 1, padding: 24, justifyContent: 'flex-end' },
+  heroBlockTitle: { fontSize: 24, fontWeight: '900', color: '#FFF', marginTop: 8 },
+  heroBlockSub: { fontSize: 13, color: 'rgba(255,255,255,0.7)', marginTop: 4 },
+  catScrollRow: { gap: 10, paddingRight: 16 },
+  catScrollCard: { width: 100, height: 100, borderRadius: 18, padding: 14, justifyContent: 'flex-end', gap: 6 },
+  catScrollLabel: { fontSize: 14, fontWeight: '700', color: '#FFF' },
+  worldBlock: { backgroundColor: '#0C2340', borderRadius: 20, overflow: 'hidden', height: 130 },
+  worldBlockContent: { flex: 1, padding: 24, justifyContent: 'flex-end' },
 
   fullCard: { paddingHorizontal: 16, marginBottom: 20 },
   fullCardImg: { width: '100%', height: SW * 0.5, borderRadius: 12 },
