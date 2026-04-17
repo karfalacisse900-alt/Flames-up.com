@@ -122,37 +122,42 @@ export default function MapViewScreen() {
 
   const mapHTML = useCallback(() => {
     const markerColor = '#2D6A4F';
-    const markers = places.map((p, i) => `
+    const markers = places.map((p, i) => {
+      const photoUrl = p.photo_url || '';
+      return `
       (function(){
         var el = document.createElement('div');
         el.className = 'pin';
-        el.innerHTML = '<div class="pin-body" style="background:${p.open_now === false ? '#B91C1C' : markerColor}"><span>${i+1}</span></div><div class="pin-tail" style="border-top-color:${p.open_now === false ? '#B91C1C' : markerColor}"></div>';
+        el.innerHTML = '<div class="photo-pin">${photoUrl ? '<img src="'+photoUrl+'" />' : '<span>'+(i+1)+'</span>'}<div class="pin-badge">${p.rating ? p.rating.toFixed(1) : (i+1)}</div></div>';
         var ov = new google.maps.OverlayView();
         ov.pos = new google.maps.LatLng(${p.lat||lat},${p.lng||lng});
         ov.onAdd = function(){ this.getPanes().floatPane.appendChild(el); };
-        ov.draw = function(){ var pt = this.getProjection().fromLatLngToDivPixel(this.pos); if(pt){el.style.left=(pt.x-16)+'px';el.style.top=(pt.y-44)+'px';} };
+        ov.draw = function(){ var pt = this.getProjection().fromLatLngToDivPixel(this.pos); if(pt){el.style.left=(pt.x-24)+'px';el.style.top=(pt.y-24)+'px';} };
         ov.onRemove = function(){ el.remove(); };
         ov.setMap(map);
         el.onclick = function(e){
           e.stopPropagation();
           map.panTo(ov.pos);
           window.ReactNativeWebView.postMessage(JSON.stringify({type:'select',idx:${i}}));
-          document.querySelectorAll('.pin-body').forEach(function(p){p.style.transform='scale(1)';});
-          el.querySelector('.pin-body').style.transform='scale(1.3)';
+          document.querySelectorAll('.photo-pin').forEach(function(p){p.style.transform='scale(1)';p.style.boxShadow='0 2px 8px rgba(0,0,0,.2)';});
+          el.querySelector('.photo-pin').style.transform='scale(1.2)';
+          el.querySelector('.photo-pin').style.boxShadow='0 4px 16px rgba(0,0,0,.35)';
         };
       })();
-    `).join('\n');
+    `}).join('\n');
 
     return `<!DOCTYPE html><html><head>
     <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
     <style>
     *{margin:0;padding:0;box-sizing:border-box}
     html,body,#map{width:100%;height:100%}
-    .pin{position:absolute;cursor:pointer;z-index:10;transition:transform .15s}
-    .pin-body{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;
-      box-shadow:0 2px 8px rgba(0,0,0,.25);border:2.5px solid #fff;transition:transform .2s cubic-bezier(.175,.885,.32,1.275)}
-    .pin-body span{color:#fff;font-size:12px;font-weight:800;font-family:-apple-system,sans-serif}
-    .pin-tail{width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-top:8px solid;margin:auto;margin-top:-2px}
+    .pin{position:absolute;cursor:pointer;z-index:10}
+    .photo-pin{width:48px;height:48px;border-radius:50%;overflow:hidden;border:3px solid #fff;
+      box-shadow:0 2px 8px rgba(0,0,0,.2);position:relative;transition:transform .2s cubic-bezier(.175,.885,.32,1.275)}
+    .photo-pin img{width:100%;height:100%;object-fit:cover}
+    .photo-pin span{display:flex;width:100%;height:100%;align-items:center;justify-content:center;background:#2D6A4F;color:#fff;font-size:14px;font-weight:800;font-family:-apple-system,sans-serif}
+    .pin-badge{position:absolute;bottom:-2px;right:-2px;background:#1A1A1A;color:#fff;font-size:9px;font-weight:800;
+      padding:2px 5px;border-radius:8px;font-family:-apple-system,sans-serif;border:1.5px solid #fff}
     .user-dot{width:16px;height:16px;border-radius:50%;background:#3B82F6;border:3px solid #fff;box-shadow:0 0 0 4px rgba(59,130,246,.25);position:absolute;z-index:999}
     .pulse{position:absolute;width:60px;height:60px;border-radius:50%;background:rgba(59,130,246,.12);animation:pulse 2s infinite;z-index:998}
     @keyframes pulse{0%{transform:scale(.5);opacity:1}100%{transform:scale(2);opacity:0}}

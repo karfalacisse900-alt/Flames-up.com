@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, Image, ScrollView,
-  RefreshControl, Dimensions, ActivityIndicator, TextInput,
+  RefreshControl, Dimensions, ActivityIndicator, TextInput, Modal,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -36,6 +36,7 @@ export default function DiscoverScreen() {
   const [posts, setPosts] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [showMenu, setShowMenu] = useState(false);
 
   useEffect(() => { load(); }, []);
 
@@ -81,7 +82,7 @@ export default function DiscoverScreen() {
     <View style={s.root}>
       {/* Header */}
       <View style={[s.header, { paddingTop: insets.top + 4 }]}>
-        <TouchableOpacity><Ionicons name="menu" size={24} color="#1A1A1A" /></TouchableOpacity>
+        <TouchableOpacity onPress={() => setShowMenu(true)}><Ionicons name="menu" size={24} color="#1A1A1A" /></TouchableOpacity>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.tabs}>
           {CITY_TABS.map(c => (
             <TouchableOpacity key={c.id} onPress={() => setTab(c.id)}>
@@ -89,10 +90,31 @@ export default function DiscoverScreen() {
             </TouchableOpacity>
           ))}
         </ScrollView>
-        <TouchableOpacity style={s.avatarBtn}>
-          <Ionicons name="person-outline" size={16} color="#1A1A1A" />
-        </TouchableOpacity>
+        <TouchableOpacity style={s.searchBtn}><Ionicons name="search" size={18} color="#1A1A1A" /></TouchableOpacity>
       </View>
+
+      {/* Menu Modal */}
+      <Modal visible={showMenu} transparent animationType="fade" onRequestClose={() => setShowMenu(false)}>
+        <TouchableOpacity style={s.menuOverlay} activeOpacity={1} onPress={() => setShowMenu(false)}>
+          <View style={s.menuSheet} onStartShouldSetResponder={() => true}>
+            <TouchableOpacity style={s.menuItem} onPress={() => { setShowMenu(false); router.push('/map-view' as any); }}>
+              <Ionicons name="map-outline" size={22} color="#1A1A1A" />
+              <Text style={s.menuItemTx}>Places & Map</Text>
+              <Ionicons name="chevron-forward" size={16} color="#CCC" />
+            </TouchableOpacity>
+            <TouchableOpacity style={s.menuItem} onPress={() => { setShowMenu(false); router.push('/creators' as any); }}>
+              <Ionicons name="flame-outline" size={22} color="#F97316" />
+              <Text style={s.menuItemTx}>Creators</Text>
+              <Ionicons name="chevron-forward" size={16} color="#CCC" />
+            </TouchableOpacity>
+            <TouchableOpacity style={s.menuItem} onPress={() => { setShowMenu(false); }}>
+              <Ionicons name="options-outline" size={22} color="#1A1A1A" />
+              <Text style={s.menuItemTx}>Filters</Text>
+              <Ionicons name="chevron-forward" size={16} color="#CCC" />
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
 
       <ScrollView
         showsVerticalScrollIndicator={false}
@@ -180,7 +202,12 @@ const s = StyleSheet.create({
   tabs: { gap: 20, alignItems: 'center' },
   tabTx: { fontSize: 13, fontWeight: '600', color: '#BBB', letterSpacing: 0.5 },
   tabTxOn: { color: '#1A1A1A', fontWeight: '800', textDecorationLine: 'underline' },
-  avatarBtn: { width: 34, height: 34, borderRadius: 17, borderWidth: 1.5, borderColor: '#1A1A1A', justifyContent: 'center', alignItems: 'center' },
+  searchBtn: { width: 38, height: 38, borderRadius: 19, backgroundColor: '#F0F0F0', justifyContent: 'center', alignItems: 'center' },
+
+  menuOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.3)', justifyContent: 'flex-start' },
+  menuSheet: { backgroundColor: '#FFF', marginTop: 100, marginHorizontal: 20, borderRadius: 16, paddingVertical: 8, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.15, shadowRadius: 12, elevation: 8 },
+  menuItem: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingHorizontal: 20, paddingVertical: 16, borderBottomWidth: 0.5, borderBottomColor: '#F0F0F0' },
+  menuItemTx: { fontSize: 16, fontWeight: '600', color: '#1A1A1A', flex: 1 },
 
   featured: { paddingHorizontal: 16, marginBottom: 16 },
   featTitle: { fontSize: 28, fontWeight: '900', color: '#1A1A1A', letterSpacing: -0.5, lineHeight: 34, marginBottom: 16 },

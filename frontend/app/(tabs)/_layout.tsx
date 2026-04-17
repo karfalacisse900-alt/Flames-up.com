@@ -38,10 +38,7 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="places"
         options={{
-          title: 'Places',
-          tabBarIcon: ({ color, focused }) => (
-            <Ionicons name={focused ? 'location' : 'location-outline'} size={22} color={color} />
-          ),
+          href: null,
         }}
       />
       <Tabs.Screen
