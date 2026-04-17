@@ -11,8 +11,8 @@ import { useAuthStore } from '../../src/store/authStore';
 import api from '../../src/api/client';
 
 const { width: SW } = Dimensions.get('window');
-const GAP = 8;
-const PAD = 10;
+const GAP = 3;
+const PAD = 6;
 const COL_W = (SW - PAD * 2 - GAP) / 2;
 const RATIOS = [1.4, 1.05, 1.55, 1.2, 1.35, 1.0, 1.45, 1.1];
 
@@ -245,7 +245,7 @@ const s = StyleSheet.create({
   grid: { flexDirection: 'row', paddingHorizontal: PAD, gap: GAP, paddingTop: 6 },
   col: { flex: 1, gap: GAP },
 
-  pin: { borderRadius: 16, overflow: 'hidden', backgroundColor: '#F0F0F0' },
+  pin: { borderRadius: 12, overflow: 'hidden', backgroundColor: '#F0F0F0' },
   pinImg: { width: '100%', height: '100%' },
   pinMore: { position: 'absolute', bottom: 8, right: 8, width: 28, height: 28, borderRadius: 14, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center' },
 
