@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, Image, ScrollView,
-  RefreshControl, Dimensions, ActivityIndicator, TextInput, Modal,
+  RefreshControl, Dimensions, ActivityIndicator, Modal,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -9,6 +9,7 @@ import { Ionicons } from '@expo/vector-icons';
 import api from '../../src/api/client';
 
 const { width: SW } = Dimensions.get('window');
+const HALF = (SW - 40) / 2;
 
 const CITY_TABS = [
   { id: 'all', label: 'For You' },
@@ -20,13 +21,22 @@ const CITY_TABS = [
   { id: 'paris', label: 'Paris' },
 ];
 
+const BLOCKS = [
+  { id: 'things-to-do', label: 'Things to Do', sub: 'Parks, museums, restaurants & more', type: 'tourist_attraction', big: true },
+  { id: 'events', label: 'Events', sub: 'Venues & meetups', type: 'stadium' },
+  { id: 'nightlife', label: 'Nightlife', sub: 'Clubs, bars & parties', type: 'night_club' },
+  { id: 'groups', label: 'Groups to Join', sub: 'Fitness & community', type: 'gym', big: true },
+  { id: 'activity', label: 'Activity', sub: 'Outdoor & wellness', type: 'park' },
+  { id: 'world-board', label: 'World Board', sub: 'Discover everywhere', type: 'museum' },
+];
+
 const CITY_KEYWORDS: Record<string, string[]> = {
   nyc: ['new york', 'nyc', 'brooklyn', 'manhattan', 'queens'],
-  miami: ['miami', 'south beach', 'wynwood', 'brickell'],
-  la: ['los angeles', 'la', 'hollywood', 'venice', 'santa monica'],
-  london: ['london', 'soho', 'shoreditch', 'camden'],
-  tokyo: ['tokyo', 'shibuya', 'shinjuku', 'harajuku'],
-  paris: ['paris', 'montmartre', 'le marais'],
+  miami: ['miami', 'south beach', 'wynwood'],
+  la: ['los angeles', 'la', 'hollywood', 'venice'],
+  london: ['london', 'soho', 'shoreditch'],
+  tokyo: ['tokyo', 'shibuya', 'shinjuku'],
+  paris: ['paris', 'montmartre'],
 };
 
 export default function DiscoverScreen() {
@@ -34,11 +44,12 @@ export default function DiscoverScreen() {
   const insets = useSafeAreaInsets();
   const [tab, setTab] = useState('all');
   const [posts, setPosts] = useState<any[]>([]);
+  const [blockImages, setBlockImages] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); loadBlockImages(); }, []);
 
   const load = async () => {
     try {
@@ -48,35 +59,39 @@ export default function DiscoverScreen() {
     } catch {} finally { setLoading(false); }
   };
 
+  const loadBlockImages = async () => {
+    const imgs: Record<string, string> = {};
+    for (const b of BLOCKS) {
+      try {
+        const r = await api.get('/google-places/nearby', { params: { lat: 40.7128, lng: -74.006, radius: 40000, type: b.type } });
+        const places = Array.isArray(r.data) ? r.data : [];
+        const withPhoto = places.find((p: any) => p.photo_url);
+        if (withPhoto?.photo_url) imgs[b.id] = withPhoto.photo_url;
+      } catch {}
+    }
+    setBlockImages(imgs);
+  };
+
   const onRefresh = useCallback(async () => {
     setRefreshing(true); await load(); setRefreshing(false);
   }, []);
 
-  // Filter by city tab
   const filtered = tab === 'all' ? posts : (() => {
     const kw = CITY_KEYWORDS[tab] || [];
-    const cityPosts = posts.filter((p: any) => {
+    const f = posts.filter((p: any) => {
       const t = ((p.location || '') + ' ' + (p.content || '')).toLowerCase();
       return kw.some(k => t.includes(k));
     });
-    return cityPosts.length > 0 ? cityPosts : posts; // fallback to all if no city matches
+    return f.length > 0 ? f : posts;
   })();
 
-  // Posts with images
   const imgPosts = filtered.filter((p: any) => {
     const img = p.image || (p.images && p.images[0]);
     return img && typeof img === 'string' && img.startsWith('http');
   });
 
-  // Featured post (first)
   const featured = imgPosts[0];
-  // Rest for horizontal rows & smaller cards
-  const rest = imgPosts.slice(1);
-  const row1 = rest.slice(0, 4);
-  const row2 = rest.slice(4, 8);
-  const remaining = rest.slice(8);
-
-  const cityLabel = CITY_TABS.find(c => c.id === tab)?.label || 'For You';
+  const row1 = imgPosts.slice(1, 3);
 
   return (
     <View style={s.root}>
@@ -90,12 +105,12 @@ export default function DiscoverScreen() {
             </TouchableOpacity>
           ))}
         </ScrollView>
-        <TouchableOpacity style={s.searchBtn}><Ionicons name="search" size={18} color="#1A1A1A" /></TouchableOpacity>
+        <TouchableOpacity style={s.searchIcon}><Ionicons name="search" size={18} color="#1A1A1A" /></TouchableOpacity>
       </View>
 
-      {/* Menu Modal */}
+      {/* Menu */}
       <Modal visible={showMenu} transparent animationType="fade" onRequestClose={() => setShowMenu(false)}>
-        <TouchableOpacity style={s.menuOverlay} activeOpacity={1} onPress={() => setShowMenu(false)}>
+        <TouchableOpacity style={s.menuOv} activeOpacity={1} onPress={() => setShowMenu(false)}>
           <View style={s.menuSheet} onStartShouldSetResponder={() => true}>
             <TouchableOpacity style={s.menuItem} onPress={() => { setShowMenu(false); router.push('/map-view' as any); }}>
               <Ionicons name="map-outline" size={22} color="#1A1A1A" />
@@ -115,107 +130,86 @@ export default function DiscoverScreen() {
           <View style={s.center}><ActivityIndicator size="large" color="#1A1A1A" /></View>
         ) : (
           <>
-            {/* Featured Card */}
+            {/* Featured */}
             {featured && (
-              <TouchableOpacity style={s.featured} activeOpacity={0.95} onPress={() => router.push(`/post/${featured.id}` as any)}>
-                <Text style={s.featTitle} numberOfLines={3}>
-                  {featured.content || `Discover ${cityLabel}`}
-                </Text>
+              <TouchableOpacity style={s.feat} activeOpacity={0.95} onPress={() => router.push(`/post/${featured.id}` as any)}>
+                <Text style={s.featTitle} numberOfLines={3}>{featured.content || 'Discover'}</Text>
                 <Image source={{ uri: featured.image || featured.images?.[0] }} style={s.featImg} resizeMode="cover" />
               </TouchableOpacity>
             )}
 
-            {/* Horizontal scroll row 1 */}
+            {/* 2 post cards */}
             {row1.length > 0 && (
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.hRow}>
-                {row1.map((p: any) => {
-                  const img = p.image || p.images?.[0];
-                  return (
-                    <TouchableOpacity key={p.id} style={s.hCard} activeOpacity={0.95} onPress={() => router.push(`/post/${p.id}` as any)}>
-                      <Image source={{ uri: img }} style={s.hCardImg} resizeMode="cover" />
-                      <Text style={s.hCardTx} numberOfLines={2}>{p.content || ''}</Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </ScrollView>
+              <View style={s.row2}>
+                {row1.map((p: any) => (
+                  <TouchableOpacity key={p.id} style={s.row2Card} activeOpacity={0.95} onPress={() => router.push(`/post/${p.id}` as any)}>
+                    <Image source={{ uri: p.image || p.images?.[0] }} style={s.row2Img} resizeMode="cover" />
+                    <Text style={s.row2Tx} numberOfLines={2}>{p.content || ''}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
             )}
 
-            {/* Search Bar */}
+            {/* Search */}
             <View style={s.searchWrap}>
               <View style={s.searchBar}>
                 <Ionicons name="search" size={18} color="#999" />
-                <Text style={s.searchPlaceholder}>What are you looking for?</Text>
+                <Text style={s.searchPh}>What are you looking for?</Text>
               </View>
             </View>
 
-            {/* Category Blocks */}
-            <View style={s.catBlocks}>
-              {/* Things to Do - Hero Block */}
-              <TouchableOpacity style={s.heroBlock} activeOpacity={0.9} onPress={() => router.push('/category/things-to-do' as any)}>
-                <View style={s.heroBlockContent}>
-                  <Ionicons name="compass" size={32} color="#FFF" />
-                  <Text style={s.heroBlockTitle}>Things to Do</Text>
-                  <Text style={s.heroBlockSub}>Parks, museums, art, restaurants & more</Text>
-                </View>
-              </TouchableOpacity>
-
-              {/* Horizontal scrollable row */}
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.catScrollRow}>
-                {[
-                  { id: 'events', label: 'Events', icon: 'calendar', color: '#2563EB' },
-                  { id: 'groups', label: 'Groups', icon: 'people', color: '#D97706' },
-                  { id: 'nightlife', label: 'Nightlife', icon: 'moon', color: '#1A1A1A' },
-                  { id: 'activity', label: 'Activity', icon: 'fitness', color: '#0F766E' },
-                ].map(cat => (
-                  <TouchableOpacity key={cat.id} style={[s.catScrollCard, { backgroundColor: cat.color }]} activeOpacity={0.9}
-                    onPress={() => router.push(`/category/${cat.id}` as any)}>
-                    <Ionicons name={cat.icon as any} size={24} color="#FFF" />
-                    <Text style={s.catScrollLabel}>{cat.label}</Text>
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
-
-              {/* World Board Block */}
-              <TouchableOpacity style={s.worldBlock} activeOpacity={0.9} onPress={() => router.push('/category/world-board' as any)}>
-                <View style={s.worldBlockContent}>
-                  <Ionicons name="globe" size={32} color="#FFF" />
-                  <Text style={s.heroBlockTitle}>World Board</Text>
-                  <Text style={s.heroBlockSub}>Discover places around the world</Text>
-                </View>
-              </TouchableOpacity>
-            </View>
-
-            {/* Full-width cards */}
-            {row2.map((p: any) => {
-              const img = p.image || p.images?.[0];
-              return (
-                <TouchableOpacity key={p.id} style={s.fullCard} activeOpacity={0.95} onPress={() => router.push(`/post/${p.id}` as any)}>
-                  <Image source={{ uri: img }} style={s.fullCardImg} resizeMode="cover" />
-                  <Text style={s.fullCardTx} numberOfLines={2}>{p.content || ''}</Text>
-                  <View style={s.fullCardMeta}>
-                    {p.user_profile_image ? (
-                      <Image source={{ uri: p.user_profile_image }} style={s.metaAv} />
-                    ) : null}
-                    <Text style={s.metaName}>{p.user_full_name || ''}</Text>
-                  </View>
-                </TouchableOpacity>
-              );
-            })}
-
-            {/* Horizontal scroll row 2 */}
-            {remaining.length > 0 && (
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.hRow}>
-                {remaining.map((p: any) => {
-                  const img = p.image || p.images?.[0];
+            {/* Category Blocks with Google Places Images */}
+            <View style={s.blocks}>
+              {BLOCKS.map((b, idx) => {
+                const img = blockImages[b.id];
+                const isBig = idx === 0 || idx === 3;
+                if (isBig) {
                   return (
-                    <TouchableOpacity key={p.id} style={s.hCard} activeOpacity={0.95} onPress={() => router.push(`/post/${p.id}` as any)}>
-                      <Image source={{ uri: img }} style={s.hCardImg} resizeMode="cover" />
-                      <Text style={s.hCardTx} numberOfLines={2}>{p.content || ''}</Text>
+                    <TouchableOpacity key={b.id} style={s.blockBig} activeOpacity={0.9} onPress={() => router.push(`/category/${b.id}` as any)}>
+                      {img ? <Image source={{ uri: img }} style={s.blockBigImg} resizeMode="cover" /> : <View style={[s.blockBigImg, { backgroundColor: '#E0DCD7' }]} />}
+                      <View style={s.blockBigOverlay} />
+                      <View style={s.blockBigContent}>
+                        <Text style={s.blockBigTitle}>{b.label}</Text>
+                        <Text style={s.blockBigSub}>{b.sub}</Text>
+                      </View>
+                    </TouchableOpacity>
+                  );
+                }
+                return null;
+              })}
+
+              {/* Pair rows */}
+              <View style={s.blockRow}>
+                {BLOCKS.filter((_, i) => i === 1 || i === 2).map(b => {
+                  const img = blockImages[b.id];
+                  return (
+                    <TouchableOpacity key={b.id} style={s.blockHalf} activeOpacity={0.9} onPress={() => router.push(`/category/${b.id}` as any)}>
+                      {img ? <Image source={{ uri: img }} style={s.blockHalfImg} resizeMode="cover" /> : <View style={[s.blockHalfImg, { backgroundColor: '#E0DCD7' }]} />}
+                      <View style={s.blockHalfOverlay} />
+                      <View style={s.blockHalfContent}>
+                        <Text style={s.blockHalfTitle}>{b.label}</Text>
+                        <Text style={s.blockHalfSub}>{b.sub}</Text>
+                      </View>
                     </TouchableOpacity>
                   );
                 })}
-              </ScrollView>
-            )}
+              </View>
+              <View style={s.blockRow}>
+                {BLOCKS.filter((_, i) => i === 4 || i === 5).map(b => {
+                  const img = blockImages[b.id];
+                  return (
+                    <TouchableOpacity key={b.id} style={s.blockHalf} activeOpacity={0.9} onPress={() => router.push(`/category/${b.id}` as any)}>
+                      {img ? <Image source={{ uri: img }} style={s.blockHalfImg} resizeMode="cover" /> : <View style={[s.blockHalfImg, { backgroundColor: '#E0DCD7' }]} />}
+                      <View style={s.blockHalfOverlay} />
+                      <View style={s.blockHalfContent}>
+                        <Text style={s.blockHalfTitle}>{b.label}</Text>
+                        <Text style={s.blockHalfSub}>{b.sub}</Text>
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </View>
           </>
         )}
       </ScrollView>
@@ -225,47 +219,45 @@ export default function DiscoverScreen() {
 
 const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#FFF' },
-  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingBottom: 12, gap: 12 },
+  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingBottom: 10, gap: 12 },
   tabs: { gap: 20, alignItems: 'center' },
   tabTx: { fontSize: 13, fontWeight: '600', color: '#BBB', letterSpacing: 0.5 },
   tabTxOn: { color: '#1A1A1A', fontWeight: '800', textDecorationLine: 'underline' },
-  searchBtn: { width: 38, height: 38, borderRadius: 19, backgroundColor: '#F0F0F0', justifyContent: 'center', alignItems: 'center' },
+  searchIcon: { width: 38, height: 38, borderRadius: 19, backgroundColor: '#F0F0F0', justifyContent: 'center', alignItems: 'center' },
 
-  menuOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.3)', justifyContent: 'flex-start' },
-  menuSheet: { backgroundColor: '#FFF', marginTop: 100, marginHorizontal: 20, borderRadius: 16, paddingVertical: 8, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.15, shadowRadius: 12, elevation: 8 },
-  menuItem: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingHorizontal: 20, paddingVertical: 16, borderBottomWidth: 0.5, borderBottomColor: '#F0F0F0' },
+  menuOv: { flex: 1, backgroundColor: 'rgba(0,0,0,0.3)', justifyContent: 'flex-start' },
+  menuSheet: { backgroundColor: '#FFF', marginTop: 100, marginHorizontal: 20, borderRadius: 16, paddingVertical: 8 },
+  menuItem: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingHorizontal: 20, paddingVertical: 16 },
   menuItemTx: { fontSize: 16, fontWeight: '600', color: '#1A1A1A', flex: 1 },
 
-  featured: { paddingHorizontal: 16, marginBottom: 16 },
-  featTitle: { fontSize: 28, fontWeight: '900', color: '#1A1A1A', letterSpacing: -0.5, lineHeight: 34, marginBottom: 16 },
-  featImg: { width: '100%', height: SW * 0.55, borderRadius: 12 },
+  feat: { paddingHorizontal: 16, marginBottom: 16 },
+  featTitle: { fontSize: 26, fontWeight: '900', color: '#1A1A1A', letterSpacing: -0.5, lineHeight: 32, marginBottom: 14 },
+  featImg: { width: '100%', height: SW * 0.5, borderRadius: 14 },
 
-  hRow: { paddingLeft: 16, gap: 10, paddingVertical: 8 },
-  hCard: { width: SW * 0.55, borderRadius: 12, overflow: 'hidden' },
-  hCardImg: { width: '100%', height: SW * 0.4, borderRadius: 12 },
-  hCardTx: { fontSize: 13, fontWeight: '600', color: '#1A1A1A', marginTop: 8, paddingRight: 8 },
+  row2: { flexDirection: 'row', paddingHorizontal: 16, gap: 10, marginBottom: 16 },
+  row2Card: { flex: 1 },
+  row2Img: { width: '100%', height: HALF * 0.85, borderRadius: 14 },
+  row2Tx: { fontSize: 14, fontWeight: '600', color: '#1A1A1A', marginTop: 8 },
 
-  searchWrap: { paddingHorizontal: 16, paddingVertical: 12 },
+  searchWrap: { paddingHorizontal: 16, paddingBottom: 16 },
   searchBar: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#F5F5F5', borderRadius: 24, paddingHorizontal: 16, paddingVertical: 12 },
-  searchPlaceholder: { fontSize: 14, color: '#AAA' },
+  searchPh: { fontSize: 14, color: '#AAA' },
 
-  catBlocks: { paddingHorizontal: 16, gap: 12, marginBottom: 16 },
-  heroBlock: { backgroundColor: '#7C3AED', borderRadius: 20, overflow: 'hidden', height: 150 },
-  heroBlockContent: { flex: 1, padding: 24, justifyContent: 'flex-end' },
-  heroBlockTitle: { fontSize: 24, fontWeight: '900', color: '#FFF', marginTop: 8 },
-  heroBlockSub: { fontSize: 13, color: 'rgba(255,255,255,0.7)', marginTop: 4 },
-  catScrollRow: { gap: 10, paddingRight: 16 },
-  catScrollCard: { width: 100, height: 100, borderRadius: 18, padding: 14, justifyContent: 'flex-end', gap: 6 },
-  catScrollLabel: { fontSize: 14, fontWeight: '700', color: '#FFF' },
-  worldBlock: { backgroundColor: '#0C2340', borderRadius: 20, overflow: 'hidden', height: 130 },
-  worldBlockContent: { flex: 1, padding: 24, justifyContent: 'flex-end' },
+  blocks: { paddingHorizontal: 16, gap: 10 },
+  blockBig: { borderRadius: 20, overflow: 'hidden', height: 180, position: 'relative' },
+  blockBigImg: { position: 'absolute', width: '100%', height: '100%' },
+  blockBigOverlay: { position: 'absolute', width: '100%', height: '100%', backgroundColor: 'rgba(0,0,0,0.35)' },
+  blockBigContent: { position: 'absolute', bottom: 20, left: 20, right: 20 },
+  blockBigTitle: { fontSize: 24, fontWeight: '900', color: '#FFF' },
+  blockBigSub: { fontSize: 13, color: 'rgba(255,255,255,0.7)', marginTop: 4 },
 
-  fullCard: { paddingHorizontal: 16, marginBottom: 20 },
-  fullCardImg: { width: '100%', height: SW * 0.5, borderRadius: 12 },
-  fullCardTx: { fontSize: 16, fontWeight: '700', color: '#1A1A1A', marginTop: 10, lineHeight: 22 },
-  fullCardMeta: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6 },
-  metaAv: { width: 20, height: 20, borderRadius: 10 },
-  metaName: { fontSize: 12, color: '#999' },
+  blockRow: { flexDirection: 'row', gap: 10 },
+  blockHalf: { flex: 1, borderRadius: 16, overflow: 'hidden', height: 140, position: 'relative' },
+  blockHalfImg: { position: 'absolute', width: '100%', height: '100%' },
+  blockHalfOverlay: { position: 'absolute', width: '100%', height: '100%', backgroundColor: 'rgba(0,0,0,0.35)' },
+  blockHalfContent: { position: 'absolute', bottom: 14, left: 14, right: 14 },
+  blockHalfTitle: { fontSize: 18, fontWeight: '800', color: '#FFF' },
+  blockHalfSub: { fontSize: 11, color: 'rgba(255,255,255,0.65)', marginTop: 2 },
 
   center: { paddingTop: 100, alignItems: 'center' },
 });

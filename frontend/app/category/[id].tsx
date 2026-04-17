@@ -86,7 +86,8 @@ export default function CategoryScreen() {
   const [sections, setSections] = useState<Record<string, any[]>>({});
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [coords, setCoords] = useState({ lat: 0, lng: 0 });
+  const [coords, setCoords] = useState({ lat: 40.7128, lng: -74.006 }); // Default NYC
+  const [locReady, setLocReady] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -97,10 +98,11 @@ export default function CategoryScreen() {
           setCoords({ lat: loc.coords.latitude, lng: loc.coords.longitude });
         }
       } catch {}
+      setLocReady(true);
     })();
   }, []);
 
-  useEffect(() => { if (coords.lat) loadData(); }, [coords]);
+  useEffect(() => { if (locReady) loadData(); }, [locReady]);
 
   const loadData = async () => {
     setLoading(true);
