@@ -150,22 +150,32 @@ export default function DiscoverScreen() {
 
             {/* Category Blocks */}
             <View style={s.catBlocks}>
-              {[
-                { id: 'nearby', label: 'Nearby', icon: 'location', color: '#0F766E' },
-                { id: 'restaurants', label: 'Restaurants', icon: 'restaurant', color: '#B91C1C' },
-                { id: 'things-to-do', label: 'Things to Do', icon: 'compass', color: '#7C3AED' },
-                { id: 'events', label: 'Events', icon: 'calendar', color: '#2563EB' },
-                { id: 'groups', label: 'Groups to Join', icon: 'people', color: '#D97706' },
-                { id: 'nightlife', label: 'Nightlife', icon: 'moon', color: '#1A1A1A' },
-              ].map(cat => (
-                <TouchableOpacity key={cat.id} style={s.catBlock} activeOpacity={0.9} onPress={() => router.push(`/category/${cat.id}` as any)}>
-                  <View style={[s.catBlockIcon, { backgroundColor: cat.color }]}>
-                    <Ionicons name={cat.icon as any} size={20} color="#FFF" />
-                  </View>
-                  <Text style={s.catBlockLabel}>{cat.label}</Text>
-                  <Ionicons name="chevron-forward" size={14} color="#CCC" />
+              <TouchableOpacity style={s.catBlockBig} activeOpacity={0.9} onPress={() => router.push('/category/things-to-do' as any)}>
+                <View style={s.catBlockBigContent}>
+                  <Ionicons name="compass" size={28} color="#FFF" />
+                  <Text style={s.catBlockBigTitle}>Things to Do</Text>
+                  <Text style={s.catBlockBigSub}>Attractions, parks & museums</Text>
+                </View>
+              </TouchableOpacity>
+              <View style={s.catBlockRow}>
+                <TouchableOpacity style={[s.catBlockHalf, { backgroundColor: '#2563EB' }]} activeOpacity={0.9} onPress={() => router.push('/category/events' as any)}>
+                  <Ionicons name="calendar" size={24} color="#FFF" />
+                  <Text style={s.catBlockHalfTitle}>Events</Text>
+                  <Text style={s.catBlockHalfSub}>Markets, meetups</Text>
                 </TouchableOpacity>
-              ))}
+                <TouchableOpacity style={[s.catBlockHalf, { backgroundColor: '#1A1A1A' }]} activeOpacity={0.9} onPress={() => router.push('/category/nightlife' as any)}>
+                  <Ionicons name="moon" size={24} color="#FFF" />
+                  <Text style={s.catBlockHalfTitle}>Nightlife</Text>
+                  <Text style={s.catBlockHalfSub}>Bars, clubs</Text>
+                </TouchableOpacity>
+              </View>
+              <TouchableOpacity style={[s.catBlockBig, { backgroundColor: '#D97706' }]} activeOpacity={0.9} onPress={() => router.push('/category/groups' as any)}>
+                <View style={s.catBlockBigContent}>
+                  <Ionicons name="people" size={28} color="#FFF" />
+                  <Text style={s.catBlockBigTitle}>Groups to Join</Text>
+                  <Text style={s.catBlockBigSub}>Communities, fitness & social</Text>
+                </View>
+              </TouchableOpacity>
             </View>
 
             {/* Full-width cards */}
@@ -232,10 +242,15 @@ const s = StyleSheet.create({
   searchBar: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#F5F5F5', borderRadius: 24, paddingHorizontal: 16, paddingVertical: 12 },
   searchPlaceholder: { fontSize: 14, color: '#AAA' },
 
-  catBlocks: { paddingHorizontal: 16, gap: 6, marginBottom: 16 },
-  catBlock: { flexDirection: 'row', alignItems: 'center', gap: 14, backgroundColor: '#FFF', borderRadius: 14, paddingHorizontal: 16, paddingVertical: 14, borderWidth: 0.5, borderColor: '#F0F0F0' },
-  catBlockIcon: { width: 36, height: 36, borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
-  catBlockLabel: { fontSize: 15, fontWeight: '600', color: '#1A1A1A', flex: 1 },
+  catBlocks: { paddingHorizontal: 16, gap: 10, marginBottom: 16 },
+  catBlockBig: { backgroundColor: '#7C3AED', borderRadius: 20, overflow: 'hidden', height: 130 },
+  catBlockBigContent: { flex: 1, padding: 20, justifyContent: 'flex-end' },
+  catBlockBigTitle: { fontSize: 22, fontWeight: '800', color: '#FFF', marginTop: 8 },
+  catBlockBigSub: { fontSize: 13, color: 'rgba(255,255,255,0.7)', marginTop: 2 },
+  catBlockRow: { flexDirection: 'row', gap: 10 },
+  catBlockHalf: { flex: 1, borderRadius: 20, padding: 20, height: 110, justifyContent: 'flex-end' },
+  catBlockHalfTitle: { fontSize: 18, fontWeight: '800', color: '#FFF', marginTop: 8 },
+  catBlockHalfSub: { fontSize: 12, color: 'rgba(255,255,255,0.6)', marginTop: 2 },
 
   fullCard: { paddingHorizontal: 16, marginBottom: 20 },
   fullCardImg: { width: '100%', height: SW * 0.5, borderRadius: 12 },

@@ -11,8 +11,8 @@ import { useAuthStore } from '../../src/store/authStore';
 import api from '../../src/api/client';
 
 const { width: SW } = Dimensions.get('window');
-const GAP = 3;
-const PAD = 6;
+const GAP = 6;
+const PAD = 8;
 const COL_W = (SW - PAD * 2 - GAP) / 2;
 const RATIOS = [1.4, 1.05, 1.55, 1.2, 1.35, 1.0, 1.45, 1.1];
 
