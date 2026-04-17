@@ -148,6 +148,26 @@ export default function DiscoverScreen() {
               </View>
             </View>
 
+            {/* Category Blocks */}
+            <View style={s.catBlocks}>
+              {[
+                { id: 'nearby', label: 'Nearby', icon: 'location', color: '#0F766E' },
+                { id: 'restaurants', label: 'Restaurants', icon: 'restaurant', color: '#B91C1C' },
+                { id: 'things-to-do', label: 'Things to Do', icon: 'compass', color: '#7C3AED' },
+                { id: 'events', label: 'Events', icon: 'calendar', color: '#2563EB' },
+                { id: 'groups', label: 'Groups to Join', icon: 'people', color: '#D97706' },
+                { id: 'nightlife', label: 'Nightlife', icon: 'moon', color: '#1A1A1A' },
+              ].map(cat => (
+                <TouchableOpacity key={cat.id} style={s.catBlock} activeOpacity={0.9} onPress={() => router.push(`/category/${cat.id}` as any)}>
+                  <View style={[s.catBlockIcon, { backgroundColor: cat.color }]}>
+                    <Ionicons name={cat.icon as any} size={20} color="#FFF" />
+                  </View>
+                  <Text style={s.catBlockLabel}>{cat.label}</Text>
+                  <Ionicons name="chevron-forward" size={14} color="#CCC" />
+                </TouchableOpacity>
+              ))}
+            </View>
+
             {/* Full-width cards */}
             {row2.map((p: any) => {
               const img = p.image || p.images?.[0];
@@ -211,6 +231,11 @@ const s = StyleSheet.create({
   searchWrap: { paddingHorizontal: 16, paddingVertical: 12 },
   searchBar: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#F5F5F5', borderRadius: 24, paddingHorizontal: 16, paddingVertical: 12 },
   searchPlaceholder: { fontSize: 14, color: '#AAA' },
+
+  catBlocks: { paddingHorizontal: 16, gap: 6, marginBottom: 16 },
+  catBlock: { flexDirection: 'row', alignItems: 'center', gap: 14, backgroundColor: '#FFF', borderRadius: 14, paddingHorizontal: 16, paddingVertical: 14, borderWidth: 0.5, borderColor: '#F0F0F0' },
+  catBlockIcon: { width: 36, height: 36, borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
+  catBlockLabel: { fontSize: 15, fontWeight: '600', color: '#1A1A1A', flex: 1 },
 
   fullCard: { paddingHorizontal: 16, marginBottom: 20 },
   fullCardImg: { width: '100%', height: SW * 0.5, borderRadius: 12 },
