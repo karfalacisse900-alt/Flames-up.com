@@ -72,7 +72,11 @@ export default function MapViewScreen() {
       try {
         const { status } = await Location.requestForegroundPermissionsAsync();
         if (status === 'granted') {
-          const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Highest });
+          const loc = await Location.getCurrentPositionAsync({
+            accuracy: Location.Accuracy.BestForNavigation,
+            maximumAge: 0,
+            timeout: 10000,
+          } as any);
           setLat(loc.coords.latitude);
           setLng(loc.coords.longitude);
           try {

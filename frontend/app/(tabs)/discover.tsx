@@ -30,13 +30,14 @@ const BLOCKS = [
   { id: 'world-board', label: 'World Board', sub: 'Discover everywhere', type: 'museum' },
 ];
 
-const CITY_KEYWORDS: Record<string, string[]> = {
-  nyc: ['new york', 'nyc', 'brooklyn', 'manhattan', 'queens'],
-  miami: ['miami', 'south beach', 'wynwood'],
-  la: ['los angeles', 'la', 'hollywood', 'venice'],
-  london: ['london', 'soho', 'shoreditch'],
-  tokyo: ['tokyo', 'shibuya', 'shinjuku'],
-  paris: ['paris', 'montmartre'],
+const CITY_COORDS: Record<string, { lat: number; lng: number }> = {
+  all: { lat: 40.7128, lng: -74.006 },
+  nyc: { lat: 40.7128, lng: -74.006 },
+  miami: { lat: 25.7617, lng: -80.1918 },
+  la: { lat: 34.0522, lng: -118.2437 },
+  london: { lat: 51.5074, lng: -0.1278 },
+  tokyo: { lat: 35.6762, lng: 139.6503 },
+  paris: { lat: 48.8566, lng: 2.3522 },
 };
 
 export default function DiscoverScreen() {
@@ -49,7 +50,8 @@ export default function DiscoverScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
 
-  useEffect(() => { load(); loadBlockImages(); }, []);
+  useEffect(() => { load(); }, []);
+  useEffect(() => { loadBlockImages(); }, [tab]);
 
   const load = async () => {
     try {
@@ -60,10 +62,11 @@ export default function DiscoverScreen() {
   };
 
   const loadBlockImages = async () => {
+    const coords = CITY_COORDS[tab] || CITY_COORDS.all;
     const imgs: Record<string, string> = {};
     for (const b of BLOCKS) {
       try {
-        const r = await api.get('/google-places/nearby', { params: { lat: 40.7128, lng: -74.006, radius: 40000, type: b.type } });
+        const r = await api.get('/google-places/nearby', { params: { lat: coords.lat, lng: coords.lng, radius: 40000, type: b.type } });
         const places = Array.isArray(r.data) ? r.data : [];
         const withPhoto = places.find((p: any) => p.photo_url);
         if (withPhoto?.photo_url) imgs[b.id] = withPhoto.photo_url;
@@ -75,23 +78,6 @@ export default function DiscoverScreen() {
   const onRefresh = useCallback(async () => {
     setRefreshing(true); await load(); setRefreshing(false);
   }, []);
-
-  const filtered = tab === 'all' ? posts : (() => {
-    const kw = CITY_KEYWORDS[tab] || [];
-    const f = posts.filter((p: any) => {
-      const t = ((p.location || '') + ' ' + (p.content || '')).toLowerCase();
-      return kw.some(k => t.includes(k));
-    });
-    return f.length > 0 ? f : posts;
-  })();
-
-  const imgPosts = filtered.filter((p: any) => {
-    const img = p.image || (p.images && p.images[0]);
-    return img && typeof img === 'string' && img.startsWith('http');
-  });
-
-  const featured = imgPosts[0];
-  const row1 = imgPosts.slice(1, 3);
 
   return (
     <View style={s.root}>

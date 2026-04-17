@@ -117,7 +117,21 @@ export default function HomeScreen() {
     return img && typeof img === 'string' && (img.startsWith('http') || img.startsWith('data:'));
   });
 
-  const TILE_SIZE = (SW - 4) / 3; // 3 columns, 2px gaps
+  const TILE_SIZE = (SW - 4) / 3;
+  const M_COL = (SW - 6) / 2; // masonry column width
+  const M_RATIOS = [1.4, 1.05, 1.55, 1.15, 1.35, 1.0, 1.45, 1.1];
+  const isWorldBoard = filter === 'world';
+
+  // Build masonry for World Board
+  const mL: any[] = [], mR: any[] = [];
+  if (isWorldBoard) {
+    let lh = 0, rh = 0;
+    items.forEach((p: any, i: number) => {
+      const h = M_COL * M_RATIOS[i % M_RATIOS.length];
+      if (lh <= rh) { mL.push({ ...p, _h: h }); lh += h + 2; }
+      else { mR.push({ ...p, _h: h }); rh += h + 2; }
+    });
+  }
 
   return (
     <View style={s.root}>
@@ -170,16 +184,37 @@ export default function HomeScreen() {
                 ))}
               </View>
             )}
-            {/* Posts 3-column gallery */}
+            {/* Posts grid */}
             {items.length > 0 ? (
-              <View style={s.gallery}>
-                {items.map((p: any) => (
-                  <TouchableOpacity key={p.id} style={[s.gTile, { width: TILE_SIZE, height: TILE_SIZE }]} activeOpacity={0.95}
-                    onPress={() => router.push(`/post/${p.id}` as any)}>
-                    <Image source={{ uri: p.image || p.images?.[0] }} style={s.gImg} resizeMode="cover" />
-                  </TouchableOpacity>
-                ))}
-              </View>
+              isWorldBoard ? (
+                <View style={s.masonry}>
+                  <View style={s.mCol}>
+                    {mL.map((p: any) => (
+                      <TouchableOpacity key={p.id} style={[s.mTile, { height: p._h }]} activeOpacity={0.95}
+                        onPress={() => router.push(`/post/${p.id}` as any)}>
+                        <Image source={{ uri: p.image || p.images?.[0] }} style={s.gImg} resizeMode="cover" />
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                  <View style={s.mCol}>
+                    {mR.map((p: any) => (
+                      <TouchableOpacity key={p.id} style={[s.mTile, { height: p._h }]} activeOpacity={0.95}
+                        onPress={() => router.push(`/post/${p.id}` as any)}>
+                        <Image source={{ uri: p.image || p.images?.[0] }} style={s.gImg} resizeMode="cover" />
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </View>
+              ) : (
+                <View style={s.gallery}>
+                  {items.map((p: any) => (
+                    <TouchableOpacity key={p.id} style={[s.gTile, { width: TILE_SIZE, height: TILE_SIZE }]} activeOpacity={0.95}
+                      onPress={() => router.push(`/post/${p.id}` as any)}>
+                      <Image source={{ uri: p.image || p.images?.[0] }} style={s.gImg} resizeMode="cover" />
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )
             ) : filter !== 'near' ? (
               <View style={s.empty}>
                 <Ionicons name="images-outline" size={40} color="#DDD" />
@@ -214,6 +249,9 @@ const s = StyleSheet.create({
   gallery: { flexDirection: 'row', flexWrap: 'wrap', gap: 2 },
   gTile: { overflow: 'hidden' },
   gImg: { width: '100%', height: '100%' },
+  masonry: { flexDirection: 'row', paddingHorizontal: 2, gap: 2 },
+  mCol: { flex: 1, gap: 2 },
+  mTile: { borderRadius: 8, overflow: 'hidden' },
   sectionLabel: { fontSize: 20, fontWeight: '900', color: '#1A1A1A', fontStyle: 'italic', paddingHorizontal: 12, paddingVertical: 10 },
 
   empty: { paddingTop: 100, alignItems: 'center' },
