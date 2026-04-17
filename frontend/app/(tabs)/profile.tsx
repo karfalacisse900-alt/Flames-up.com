@@ -85,10 +85,18 @@ export default function ProfileScreen() {
 
   // Parse real user data
   const interests: string[] = (() => {
-    try { return JSON.parse(user.interests || '[]'); } catch { return []; }
+    try {
+      const raw = user.interests;
+      if (Array.isArray(raw)) return raw;
+      return JSON.parse(raw || '[]');
+    } catch { return []; }
   })();
   const lookingFor: string[] = (() => {
-    try { return JSON.parse(user.looking_for || '[]'); } catch { return []; }
+    try {
+      const raw = user.looking_for;
+      if (Array.isArray(raw)) return raw;
+      return JSON.parse(raw || '[]');
+    } catch { return []; }
   })();
   const personalInfo = {
     age: user.age || '',

@@ -171,8 +171,22 @@ export default function UserProfileScreen() {
   }
 
   const isOwnProfile = userId === currentUser?.id;
-  const interests = userProfile.interests || ['Music', 'Tech', 'Art', 'Travel'];
-  const lookingFor = userProfile.looking_for || ['Networking', 'Friends', 'Collaborations'];
+  const interests: string[] = (() => {
+    try {
+      const raw = userProfile.interests;
+      if (Array.isArray(raw)) return raw;
+      if (typeof raw === 'string') return JSON.parse(raw);
+      return [];
+    } catch { return []; }
+  })();
+  const lookingFor: string[] = (() => {
+    try {
+      const raw = userProfile.looking_for;
+      if (Array.isArray(raw)) return raw;
+      if (typeof raw === 'string') return JSON.parse(raw);
+      return [];
+    } catch { return []; }
+  })();
   const personalInfo = {
     age: userProfile.age || '—',
     borough: userProfile.location || '—',
