@@ -24,7 +24,7 @@ try { WebView = require('react-native-webview').WebView; } catch {}
 
 
 const { width: SW, height: SH } = Dimensions.get('window');
-const GKEY = 'AIzaSyCEY8QKlhF-Kxlo8Sxv8Z0bnTVVzTBTEIw';
+const GKEY = 'AIzaSyC2o8RvjURwDSbOTOs2ynynAR7fSQUMjwU';
 
 const PLACE_TYPES = [
   { id: 'restaurant', label: 'Restaurants', icon: 'restaurant' },

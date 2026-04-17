@@ -12,7 +12,7 @@ import api from '../../src/api/client';
 import { format } from 'date-fns';
 import * as ImagePicker from 'expo-image-picker';
 import { Audio, Video, ResizeMode } from 'expo-av';
-import { uploadImage } from '../../src/utils/mediaUpload';
+import { uploadImage, getVideoUploadUrl, uploadVideoToStream } from '../../src/utils/mediaUpload';
 
 const { width: SW } = Dimensions.get('window');
 
@@ -179,7 +179,7 @@ export default function ConversationScreen() {
 
   const sendMessage = async (text?: string, mediaUri?: string, mediaType?: string) => {
     const msgText = text ?? newMessage.trim();
-    const media = mediaUri ? { uri: mediaUri, type: (mediaType || 'image') as 'image' | 'video' } : selectedMedia;
+    const media = mediaUri ? { uri: mediaUri, type: (mediaType || 'image') as 'image' | 'video' | 'voice' } : selectedMedia;
 
     if (!msgText && !media) return;
     if (isSending) return;
@@ -192,10 +192,23 @@ export default function ConversationScreen() {
       const payload: any = { receiver_id: userId, content: msgText || '' };
       if (media) {
         if (media.type === 'image' && (media as any).base64) {
-          // Upload image to CF Images using shared utility
           const imgData = `data:image/jpeg;base64,${(media as any).base64}`;
           payload.media_url = await uploadImage(imgData);
+        } else if (media.type === 'video') {
+          // For video, upload to Cloudflare Stream
+          try {
+            const uploadInfo = await getVideoUploadUrl();
+            if (uploadInfo) {
+              await uploadVideoToStream(uploadInfo.uploadUrl, media.uri);
+              payload.media_url = `https://customer-${uploadInfo.videoUid}.cloudflarestream.com/watch`;
+            } else {
+              payload.media_url = media.uri;
+            }
+          } catch {
+            payload.media_url = media.uri;
+          }
         } else {
+          // Voice or other — send URI directly (works for local playback)
           payload.media_url = media.uri;
         }
         payload.media_type = mediaType || media.type;

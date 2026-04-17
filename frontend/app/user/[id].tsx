@@ -307,45 +307,6 @@ export default function UserProfileScreen() {
           </View>
         </View>
 
-        {/* Personal Info */}
-        <View style={s.section}>
-          <Text style={s.sectionTitle}>PERSONAL INFO</Text>
-          <View style={s.infoCard}>
-            <View style={s.infoRow}>
-              <Text style={s.infoLabel}>Age</Text>
-              <Text style={s.infoValue}>{personalInfo.age}</Text>
-            </View>
-            <View style={[s.infoRow, { borderBottomWidth: 0 }]}>
-              <Text style={s.infoLabel}>Borough</Text>
-              <Text style={s.infoValue}>{personalInfo.borough}</Text>
-            </View>
-          </View>
-        </View>
-
-        {/* Looking For */}
-        <View style={s.section}>
-          <Text style={s.sectionTitle}>LOOKING FOR</Text>
-          <View style={s.chipContainer}>
-            {lookingFor.map((item: string) => (
-              <View key={item} style={s.chipLight}>
-                <Text style={s.chipLightText}>{item}</Text>
-              </View>
-            ))}
-          </View>
-        </View>
-
-        {/* Interests */}
-        <View style={s.section}>
-          <Text style={s.sectionTitle}>INTERESTS</Text>
-          <View style={s.chipContainer}>
-            {interests.map((item: string) => (
-              <View key={item} style={s.interestChip}>
-                <Text style={s.interestChipText}>{item}</Text>
-              </View>
-            ))}
-          </View>
-        </View>
-
         {/* Social Links */}
         <View style={s.section}>
           <View style={s.socialLinks}>
