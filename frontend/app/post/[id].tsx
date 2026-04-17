@@ -654,8 +654,8 @@ function PostContent({ postId, user, router, insets }: {
 function VideoPlayer({ hlsUrl, width, height }: { hlsUrl: string; width: number; height: number }) {
   const player = useVideoPlayer(hlsUrl, (p) => { p.loop = false; });
   return (
-    <View style={{ width, height, backgroundColor: '#000' }}>
-      <VideoView player={player} style={{ width, height }} nativeControls />
+    <View style={{ width, height, overflow: 'hidden' }}>
+      <VideoView player={player} style={{ width, height }} contentFit="cover" nativeControls />
     </View>
   );
 }
