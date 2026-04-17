@@ -37,21 +37,21 @@ const PLACE_TYPES = [
 
 // Warm modern map style (Popeyes/Chick-fil-A inspired)
 const MAP_STYLE = JSON.stringify([
-  {"featureType":"all","elementType":"geometry","stylers":[{"color":"#F5F0EB"}]},
-  {"featureType":"all","elementType":"labels.text.fill","stylers":[{"color":"#5C4033"}]},
+  {"featureType":"all","elementType":"geometry","stylers":[{"color":"#FFFFFF"}]},
+  {"featureType":"all","elementType":"labels.text.fill","stylers":[{"color":"#333333"}]},
   {"featureType":"all","elementType":"labels.text.stroke","stylers":[{"color":"#FFFFFF"},{"weight":3}]},
-  {"featureType":"water","elementType":"geometry","stylers":[{"color":"#C5DAE8"}]},
-  {"featureType":"road.highway","elementType":"geometry.fill","stylers":[{"color":"#FFF3E0"}]},
-  {"featureType":"road.highway","elementType":"geometry.stroke","stylers":[{"color":"#E8D5B7"}]},
-  {"featureType":"road.arterial","elementType":"geometry.fill","stylers":[{"color":"#FFFFFF"}]},
-  {"featureType":"road.local","elementType":"geometry.fill","stylers":[{"color":"#FFFFFF"}]},
-  {"featureType":"landscape.natural","elementType":"geometry","stylers":[{"color":"#EDE8E0"}]},
-  {"featureType":"landscape.man_made","elementType":"geometry","stylers":[{"color":"#F0ECE5"}]},
-  {"featureType":"poi","elementType":"geometry","stylers":[{"color":"#E5DED3"}]},
+  {"featureType":"water","elementType":"geometry","stylers":[{"color":"#B8D4E3"}]},
+  {"featureType":"road.highway","elementType":"geometry.fill","stylers":[{"color":"#F0F0F0"}]},
+  {"featureType":"road.highway","elementType":"geometry.stroke","stylers":[{"color":"#E0E0E0"}]},
+  {"featureType":"road.arterial","elementType":"geometry.fill","stylers":[{"color":"#F5F5F5"}]},
+  {"featureType":"road.local","elementType":"geometry.fill","stylers":[{"color":"#FAFAFA"}]},
+  {"featureType":"landscape.natural","elementType":"geometry","stylers":[{"color":"#F0F0F0"}]},
+  {"featureType":"landscape.man_made","elementType":"geometry","stylers":[{"color":"#F5F5F5"}]},
+  {"featureType":"poi","elementType":"geometry","stylers":[{"color":"#E8E8E8"}]},
   {"featureType":"poi","elementType":"labels","stylers":[{"visibility":"off"}]},
-  {"featureType":"poi.park","elementType":"geometry","stylers":[{"color":"#D4E6C3"}]},
+  {"featureType":"poi.park","elementType":"geometry","stylers":[{"color":"#D4E8D0"}]},
   {"featureType":"transit","stylers":[{"visibility":"off"}]},
-  {"featureType":"administrative","elementType":"geometry.stroke","stylers":[{"color":"#D4C8B8"}]}
+  {"featureType":"administrative","elementType":"geometry.stroke","stylers":[{"color":"#DDD"}]}
 ]);
 
 export default function MapViewScreen() {
@@ -72,7 +72,7 @@ export default function MapViewScreen() {
       try {
         const { status } = await Location.requestForegroundPermissionsAsync();
         if (status === 'granted') {
-          const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+          const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Highest });
           setLat(loc.coords.latitude);
           setLng(loc.coords.longitude);
           try {

@@ -102,16 +102,6 @@ export default function DiscoverScreen() {
               <Text style={s.menuItemTx}>Places & Map</Text>
               <Ionicons name="chevron-forward" size={16} color="#CCC" />
             </TouchableOpacity>
-            <TouchableOpacity style={s.menuItem} onPress={() => { setShowMenu(false); router.push('/creators' as any); }}>
-              <Ionicons name="flame-outline" size={22} color="#F97316" />
-              <Text style={s.menuItemTx}>Creators</Text>
-              <Ionicons name="chevron-forward" size={16} color="#CCC" />
-            </TouchableOpacity>
-            <TouchableOpacity style={s.menuItem} onPress={() => { setShowMenu(false); }}>
-              <Ionicons name="options-outline" size={22} color="#1A1A1A" />
-              <Text style={s.menuItemTx}>Filters</Text>
-              <Ionicons name="chevron-forward" size={16} color="#CCC" />
-            </TouchableOpacity>
           </View>
         </TouchableOpacity>
       </Modal>

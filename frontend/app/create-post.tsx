@@ -70,10 +70,15 @@ export default function CreatePostScreen() {
   const hasPlacePreset = !!(params.place_name);
 
   const pickMedia = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission needed', 'Please allow access to your photo library');
+      return;
+    }
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images', 'videos'],
       allowsMultipleSelection: true,
-      quality: 0.8,
+      quality: 0.7,
       base64: true,
       selectionLimit: 6,
     });

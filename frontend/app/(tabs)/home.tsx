@@ -42,19 +42,34 @@ export default function HomeScreen() {
   const { user } = useAuthStore();
   const [filter, setFilter] = useState('near');
   const [posts, setPosts] = useState<any[]>([]);
+  const [nearbyPlaces, setNearbyPlaces] = useState<any[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [userCity, setUserCity] = useState('');
+  const [userLat, setUserLat] = useState(0);
+  const [userLng, setUserLng] = useState(0);
 
   useEffect(() => { loadData(); detectCity(); }, []);
+
+  // Reload nearby places when filter changes to 'near'
+  useEffect(() => { if (filter === 'near' && userLat) loadNearbyPlaces(); }, [filter, userLat]);
 
   const detectCity = async () => {
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') return;
-      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Low });
+      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Highest });
+      setUserLat(loc.coords.latitude);
+      setUserLng(loc.coords.longitude);
       const [addr] = await Location.reverseGeocodeAsync({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
       if (addr?.city) setUserCity(addr.city.toLowerCase());
     } catch {}
+  };
+
+  const loadNearbyPlaces = async () => {
+    try {
+      const r = await api.get('/google-places/nearby', { params: { lat: userLat, lng: userLng, radius: 3000, type: 'restaurant' } });
+      setNearbyPlaces(Array.isArray(r.data) ? r.data.slice(0, 12) : []);
+    } catch { setNearbyPlaces([]); }
   };
 
   useEffect(() => { loadData(); }, []);
@@ -149,17 +164,61 @@ export default function HomeScreen() {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#1A1A1A" />}
         contentContainerStyle={{ paddingBottom: 100 }}
         renderItem={() => (
-          items.length > 0 ? (
-            <View style={s.grid}>
-              <View style={s.col}>{L.map(p => <PinCard key={p.id} p={p} />)}</View>
-              <View style={s.col}>{R.map(p => <PinCard key={p.id} p={p} />)}</View>
-            </View>
-          ) : (
-            <View style={s.empty}>
-              <Ionicons name="images-outline" size={40} color="#DDD" />
-              <Text style={s.emptyTx}>No posts yet</Text>
-            </View>
-          )
+          <>
+            {/* Near You: Show nearby places as cards */}
+            {filter === 'near' && nearbyPlaces.length > 0 && (
+              <View style={s.grid}>
+                <View style={s.col}>
+                  {nearbyPlaces.filter((_, i) => i % 2 === 0).map((place, i) => (
+                    <TouchableOpacity key={place.place_id || i} style={[s.pin, { height: COL_W * RATIOS[i % RATIOS.length] }]} activeOpacity={0.96}
+                      onPress={() => router.push(`/place/${place.place_id}` as any)}>
+                      {place.photo_url ? (
+                        <Image source={{ uri: place.photo_url }} style={s.pinImg} resizeMode="cover" />
+                      ) : (
+                        <View style={[s.pinImg, { backgroundColor: '#F0F0F0', justifyContent: 'center', alignItems: 'center' }]}>
+                          <Ionicons name="location" size={24} color="#DDD" />
+                        </View>
+                      )}
+                      <View style={s.placeInfo}>
+                        <Text style={s.placeName} numberOfLines={1}>{place.name}</Text>
+                        {place.rating ? <Text style={s.placeRating}>⭐ {place.rating}</Text> : null}
+                      </View>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                <View style={s.col}>
+                  {nearbyPlaces.filter((_, i) => i % 2 === 1).map((place, i) => (
+                    <TouchableOpacity key={place.place_id || i} style={[s.pin, { height: COL_W * RATIOS[(i + 1) % RATIOS.length] }]} activeOpacity={0.96}
+                      onPress={() => router.push(`/place/${place.place_id}` as any)}>
+                      {place.photo_url ? (
+                        <Image source={{ uri: place.photo_url }} style={s.pinImg} resizeMode="cover" />
+                      ) : (
+                        <View style={[s.pinImg, { backgroundColor: '#F0F0F0', justifyContent: 'center', alignItems: 'center' }]}>
+                          <Ionicons name="location" size={24} color="#DDD" />
+                        </View>
+                      )}
+                      <View style={s.placeInfo}>
+                        <Text style={s.placeName} numberOfLines={1}>{place.name}</Text>
+                        {place.rating ? <Text style={s.placeRating}>⭐ {place.rating}</Text> : null}
+                      </View>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+            )}
+            {/* Regular posts grid */}
+            {items.length > 0 ? (
+              <View style={s.grid}>
+                <View style={s.col}>{L.map(p => <PinCard key={p.id} p={p} />)}</View>
+                <View style={s.col}>{R.map(p => <PinCard key={p.id} p={p} />)}</View>
+              </View>
+            ) : filter !== 'near' ? (
+              <View style={s.empty}>
+                <Ionicons name="images-outline" size={40} color="#DDD" />
+                <Text style={s.emptyTx}>No posts in this city yet</Text>
+              </View>
+            ) : null}
+          </>
         )}
       />
     </View>
@@ -189,6 +248,11 @@ const s = StyleSheet.create({
   pin: { borderRadius: 16, overflow: 'hidden', backgroundColor: '#F0F0F0' },
   pinImg: { width: '100%', height: '100%' },
   pinMore: { position: 'absolute', bottom: 8, right: 8, width: 28, height: 28, borderRadius: 14, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center' },
+
+  // Place cards (Near You)
+  placeInfo: { position: 'absolute', bottom: 0, left: 0, right: 0, padding: 8, backgroundColor: 'rgba(0,0,0,0.5)' },
+  placeName: { fontSize: 13, fontWeight: '700', color: '#FFF' },
+  placeRating: { fontSize: 11, color: '#FFF', marginTop: 2 },
 
   empty: { paddingTop: 100, alignItems: 'center' },
   emptyTx: { fontSize: 14, color: '#CCC', marginTop: 10 },
