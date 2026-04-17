@@ -316,23 +316,17 @@ export default function ProfileScreen() {
 
         {/* Action Buttons */}
         <View style={styles.actionRow}>
-          <TouchableOpacity style={styles.friendsBtn}>
-            <Ionicons name="people-outline" size={18} color={colors.accentPrimary} />
-            <Text style={styles.friendsBtnText}>Friends</Text>
+          <TouchableOpacity
+            style={styles.editBtn}
+            onPress={() => router.push('/edit-profile')}
+          >
+            <Ionicons name="create-outline" size={16} color="#1A1A1A" />
+            <Text style={styles.editBtnText}>Edit Profile</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.moreBtn}>
-            <Ionicons name="ellipsis-horizontal" size={20} color={colors.textSecondary} />
+          <TouchableOpacity style={styles.shareBtn}>
+            <Ionicons name="share-outline" size={16} color="#1A1A1A" />
           </TouchableOpacity>
         </View>
-
-        {/* Edit Profile Button */}
-        <TouchableOpacity
-          style={styles.editBtn}
-          onPress={() => router.push('/edit-profile')}
-        >
-          <Ionicons name="create-outline" size={18} color={colors.accentPrimary} />
-          <Text style={styles.editBtnText}>Edit Profile</Text>
-        </TouchableOpacity>
 
         {/* Posts Grid */}
         <View style={styles.postsSection}>
@@ -702,53 +696,32 @@ const styles = StyleSheet.create({
   // Actions
   actionRow: {
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
+    gap: 10,
     marginHorizontal: 16,
     marginTop: 20,
-    justifyContent: 'center',
-  },
-  friendsBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: colors.accentPrimaryLight,
-    paddingHorizontal: 24,
-    paddingVertical: 12,
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: colors.accentPrimary,
-  },
-  friendsBtnText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: colors.accentPrimary,
-  },
-  moreBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: colors.bgCard,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: colors.borderLight,
   },
   editBtn: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    marginHorizontal: 16,
-    marginTop: 12,
-    backgroundColor: colors.bgSubtle,
+    backgroundColor: '#F5F5F5',
     paddingVertical: 12,
-    borderRadius: 16,
+    borderRadius: 12,
   },
   editBtnText: {
     fontSize: 14,
     fontWeight: '600',
-    color: colors.accentPrimary,
+    color: '#1A1A1A',
+  },
+  shareBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: '#F5F5F5',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   // Posts Grid
   postsSection: {
