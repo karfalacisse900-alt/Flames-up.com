@@ -117,26 +117,75 @@ export default function HomeScreen() {
     return img && typeof img === 'string' && (img.startsWith('http') || img.startsWith('data:'));
   });
 
-  // Build masonry
-  const L: any[] = [], R: any[] = [];
-  let lh = 0, rh = 0;
-  items.forEach((p, i) => {
-    const h = COL_W * RATIOS[i % RATIOS.length];
-    if (lh <= rh) { L.push({ ...p, _h: h }); lh += h + GAP; }
-    else { R.push({ ...p, _h: h }); rh += h + GAP; }
-  });
+  // Build collage layout groups
+  const Img = ({ uri, h, w, onPress }: { uri: string; h: number; w?: any; onPress?: () => void }) => (
+    <TouchableOpacity style={[s.tile, { height: h, width: w || '100%' }]} activeOpacity={0.95} onPress={onPress}>
+      <Image source={{ uri }} style={s.tileImg} resizeMode="cover" />
+    </TouchableOpacity>
+  );
 
-  const PinCard = ({ p }: { p: any }) => {
-    const img = p.image || (p.images && p.images[0]);
-    return (
-      <TouchableOpacity style={[s.pin, { height: p._h }]} activeOpacity={0.96} onPress={() => router.push(`/post/${p.id}` as any)}>
-        <Image source={{ uri: img }} style={s.pinImg} resizeMode="cover" />
-        <TouchableOpacity style={s.pinMore}>
-          <Ionicons name="ellipsis-horizontal" size={16} color="#FFF" />
-        </TouchableOpacity>
-      </TouchableOpacity>
-    );
-  };
+  const collageGroups: React.ReactNode[] = [];
+  let idx = 0;
+  const BIG = COL_W * 1.3;
+  const SMALL = (BIG - GAP) / 2;
+  const ROW4 = COL_W * 0.95;
+
+  while (idx < items.length) {
+    const g = items.slice(idx, idx + 6);
+    if (g.length >= 3) {
+      // Row 1: 1 big left + 2 stacked right
+      collageGroups.push(
+        <View key={`c${idx}`} style={s.collageRow}>
+          <Img uri={g[0].image || g[0].images?.[0]} h={BIG} w={COL_W} onPress={() => router.push(`/post/${g[0].id}` as any)} />
+          <View style={s.collageStack}>
+            <Img uri={g[1].image || g[1].images?.[0]} h={SMALL} onPress={() => router.push(`/post/${g[1].id}` as any)} />
+            {g[2] && <Img uri={g[2].image || g[2].images?.[0]} h={SMALL} onPress={() => router.push(`/post/${g[2].id}` as any)} />}
+          </View>
+        </View>
+      );
+    }
+    if (g.length >= 4) {
+      // Row 2: 4 equal
+      const row4 = g.slice(3, 7);
+      if (row4.length > 0) {
+        collageGroups.push(
+          <View key={`r${idx}`} style={s.collageRow4}>
+            {row4.map((p: any, i: number) => (
+              <Img key={p.id || i} uri={p.image || p.images?.[0]} h={ROW4} w={(SW - PAD * 2 - GAP * 3) / 4} onPress={() => router.push(`/post/${p.id}` as any)} />
+            ))}
+          </View>
+        );
+      }
+    }
+    idx += Math.min(g.length, 7);
+  }
+
+  // Near You collage for places
+  const nearCollage: React.ReactNode[] = [];
+  Object.entries(nearbyPlaces).forEach(([label, places], sIdx) => {
+    nearCollage.push(<Text key={`t${sIdx}`} style={s.nearSectionTitle}>{label}</Text>);
+    const pp = places.slice(0, 6);
+    if (pp.length >= 3) {
+      nearCollage.push(
+        <View key={`nr${sIdx}`} style={s.collageRow}>
+          {pp[0]?.photo_url ? <Img uri={pp[0].photo_url} h={BIG} w={COL_W} /> : <View style={[s.tile, { height: BIG, width: COL_W, backgroundColor: '#E0DCD7' }]} />}
+          <View style={s.collageStack}>
+            {pp[1]?.photo_url ? <Img uri={pp[1].photo_url} h={SMALL} /> : <View style={[s.tile, { height: SMALL, backgroundColor: '#E0DCD7' }]} />}
+            {pp[2]?.photo_url ? <Img uri={pp[2].photo_url} h={SMALL} /> : null}
+          </View>
+        </View>
+      );
+    }
+    if (pp.length > 3) {
+      nearCollage.push(
+        <View key={`nr4${sIdx}`} style={s.collageRow4}>
+          {pp.slice(3, 7).map((p: any, i: number) => (
+            p.photo_url ? <Img key={i} uri={p.photo_url} h={ROW4} w={(SW - PAD * 2 - GAP * 3) / 4} /> : <View key={i} style={[s.tile, { height: ROW4, width: (SW - PAD * 2 - GAP * 3) / 4, backgroundColor: '#E0DCD7' }]} />
+          ))}
+        </View>
+      );
+    }
+  });
 
   return (
     <View style={s.root}>
@@ -172,35 +221,13 @@ export default function HomeScreen() {
         contentContainerStyle={{ paddingBottom: 100 }}
         renderItem={() => (
           <>
-            {/* Near You: Show nearby places in sections */}
+            {/* Near You: Show nearby places in collage */}
             {filter === 'near' && Object.keys(nearbyPlaces).length > 0 && (
-              <View style={s.nearSections}>
-                {Object.entries(nearbyPlaces).map(([label, places]) => (
-                  <View key={label} style={s.nearSection}>
-                    <Text style={s.nearSectionTitle}>{label}</Text>
-                    <View style={s.nearGrid}>
-                      {places.slice(0, 8).map((place: any, i: number) => (
-                        <TouchableOpacity key={place.place_id || i} style={s.nearTile} activeOpacity={0.92}>
-                          {place.photo_url ? (
-                            <Image source={{ uri: place.photo_url }} style={s.nearTileImg} resizeMode="cover" />
-                          ) : (
-                            <View style={[s.nearTileImg, { backgroundColor: '#E0DCD7', justifyContent: 'center', alignItems: 'center' }]}>
-                              <Ionicons name="image-outline" size={16} color="#BBB" />
-                            </View>
-                          )}
-                        </TouchableOpacity>
-                      ))}
-                    </View>
-                  </View>
-                ))}
-              </View>
+              <View style={s.collageWrap}>{nearCollage}</View>
             )}
-            {/* Regular posts grid */}
+            {/* Posts collage */}
             {items.length > 0 ? (
-              <View style={s.grid}>
-                <View style={s.col}>{L.map(p => <PinCard key={p.id} p={p} />)}</View>
-                <View style={s.col}>{R.map(p => <PinCard key={p.id} p={p} />)}</View>
-              </View>
+              <View style={s.collageWrap}>{collageGroups}</View>
             ) : filter !== 'near' ? (
               <View style={s.empty}>
                 <Ionicons name="images-outline" size={40} color="#DDD" />
@@ -231,20 +258,14 @@ const s = StyleSheet.create({
   chipTxOn: { color: '#FFF' },
 
   // Grid
-  grid: { flexDirection: 'row', paddingHorizontal: PAD, gap: GAP, paddingTop: 6 },
-  col: { flex: 1, gap: GAP },
-
-  pin: { borderRadius: 12, overflow: 'hidden', backgroundColor: '#F0F0F0' },
-  pinImg: { width: '100%', height: '100%' },
-  pinMore: { position: 'absolute', bottom: 8, right: 8, width: 28, height: 28, borderRadius: 14, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center' },
-
-  // Near You sections (Things to Do style)
-  nearSections: { paddingHorizontal: 10, marginBottom: 16 },
-  nearSection: { marginBottom: 20 },
-  nearSectionTitle: { fontSize: 22, fontWeight: '900', color: '#1A1A1A', fontStyle: 'italic', marginBottom: 8 },
-  nearGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 3 },
-  nearTile: { width: (SW - 20 - 9) / 4, height: (SW - 20 - 9) / 4, borderRadius: 8, overflow: 'hidden' },
-  nearTileImg: { width: '100%', height: '100%' },
+  // Collage grid
+  collageWrap: { paddingHorizontal: PAD, gap: GAP },
+  collageRow: { flexDirection: 'row', gap: GAP },
+  collageStack: { flex: 1, gap: GAP },
+  collageRow4: { flexDirection: 'row', gap: GAP },
+  tile: { borderRadius: 10, overflow: 'hidden', backgroundColor: '#E0DCD7' },
+  tileImg: { width: '100%', height: '100%' },
+  nearSectionTitle: { fontSize: 22, fontWeight: '900', color: '#1A1A1A', fontStyle: 'italic', marginTop: 16, marginBottom: 8 },
 
   empty: { paddingTop: 100, alignItems: 'center' },
   emptyTx: { fontSize: 14, color: '#CCC', marginTop: 10 },
