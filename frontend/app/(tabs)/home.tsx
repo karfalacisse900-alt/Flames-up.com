@@ -18,7 +18,7 @@ const RATIOS = [1.4, 1.05, 1.55, 1.2, 1.35, 1.0, 1.45, 1.1];
 
 const FILTERS = [
   { id: 'near', label: 'Near You' },
-  { id: 'global', label: 'Global' },
+  { id: 'world', label: 'World Board' },
   { id: 'nyc', label: 'NYC' },
   { id: 'miami', label: 'Miami' },
   { id: 'la', label: 'LA' },
@@ -42,16 +42,14 @@ export default function HomeScreen() {
   const { user } = useAuthStore();
   const [filter, setFilter] = useState('near');
   const [posts, setPosts] = useState<any[]>([]);
-  const [nearbyPlaces, setNearbyPlaces] = useState<any[]>([]);
+  const [nearbyPlaces, setNearbyPlaces] = useState<Record<string, any[]>>({});
   const [refreshing, setRefreshing] = useState(false);
   const [userCity, setUserCity] = useState('');
-  const [userLat, setUserLat] = useState(0);
-  const [userLng, setUserLng] = useState(0);
+  const [userLat, setUserLat] = useState(40.7128);
+  const [userLng, setUserLng] = useState(-74.006);
 
   useEffect(() => { loadData(); detectCity(); }, []);
-
-  // Reload nearby places when filter changes to 'near'
-  useEffect(() => { if (filter === 'near' && userLat) loadNearbyPlaces(); }, [filter, userLat]);
+  useEffect(() => { if (filter === 'near') loadNearby(); }, [filter, userLat]);
 
   const detectCity = async () => {
     try {
@@ -65,11 +63,22 @@ export default function HomeScreen() {
     } catch {}
   };
 
-  const loadNearbyPlaces = async () => {
-    try {
-      const r = await api.get('/google-places/nearby', { params: { lat: userLat, lng: userLng, radius: 3000, type: 'restaurant' } });
-      setNearbyPlaces(Array.isArray(r.data) ? r.data.slice(0, 12) : []);
-    } catch { setNearbyPlaces([]); }
+  const loadNearby = async () => {
+    const types = [
+      { key: 'park', label: 'Parks' },
+      { key: 'restaurant', label: 'Restaurants' },
+      { key: 'art_gallery', label: 'Art' },
+      { key: 'cafe', label: 'Cafes' },
+      { key: 'tourist_attraction', label: 'Places' },
+    ];
+    const result: Record<string, any[]> = {};
+    for (const t of types) {
+      try {
+        const r = await api.get('/google-places/nearby', { params: { lat: userLat, lng: userLng, radius: 8000, type: t.key } });
+        if (Array.isArray(r.data) && r.data.length > 0) result[t.label] = r.data;
+      } catch {}
+    }
+    setNearbyPlaces(result);
   };
 
   useEffect(() => { loadData(); }, []);
@@ -86,23 +95,21 @@ export default function HomeScreen() {
   }, []);
 
   const filtered = (() => {
-    if (filter === 'global') return posts; // Show ALL posts from everywhere
+    if (filter === 'world') return posts; // World Board = all posts
     if (filter === 'near') {
-      // Near You: filter by user's detected city (within ~15mi means same city area)
-      if (!userCity) return posts; // if no city detected, show all
+      if (!userCity) return posts;
       const f = posts.filter((p: any) => {
         const loc = ((p.location || '') + ' ' + (p.content || '')).toLowerCase();
         return loc.includes(userCity);
       });
       return f.length > 0 ? f : posts;
     }
-    // City-specific filter
     const kw = CITY_KW[filter] || [];
     const f = posts.filter((p: any) => {
       const t = ((p.location || '') + ' ' + (p.content || '')).toLowerCase();
       return kw.some(k => t.includes(k));
     });
-    return f.length > 2 ? f : f.length > 0 ? f : []; // Show empty if no city matches (strict)
+    return f.length > 0 ? f : [];
   })();
 
   const items = filtered.filter((p: any) => {
@@ -165,45 +172,27 @@ export default function HomeScreen() {
         contentContainerStyle={{ paddingBottom: 100 }}
         renderItem={() => (
           <>
-            {/* Near You: Show nearby places as cards */}
-            {filter === 'near' && nearbyPlaces.length > 0 && (
-              <View style={s.grid}>
-                <View style={s.col}>
-                  {nearbyPlaces.filter((_, i) => i % 2 === 0).map((place, i) => (
-                    <TouchableOpacity key={place.place_id || i} style={[s.pin, { height: COL_W * RATIOS[i % RATIOS.length] }]} activeOpacity={0.96}
-                      onPress={() => router.push(`/place/${place.place_id}` as any)}>
-                      {place.photo_url ? (
-                        <Image source={{ uri: place.photo_url }} style={s.pinImg} resizeMode="cover" />
-                      ) : (
-                        <View style={[s.pinImg, { backgroundColor: '#F0F0F0', justifyContent: 'center', alignItems: 'center' }]}>
-                          <Ionicons name="location" size={24} color="#DDD" />
-                        </View>
-                      )}
-                      <View style={s.placeInfo}>
-                        <Text style={s.placeName} numberOfLines={1}>{place.name}</Text>
-                        {place.rating ? <Text style={s.placeRating}>⭐ {place.rating}</Text> : null}
-                      </View>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-                <View style={s.col}>
-                  {nearbyPlaces.filter((_, i) => i % 2 === 1).map((place, i) => (
-                    <TouchableOpacity key={place.place_id || i} style={[s.pin, { height: COL_W * RATIOS[(i + 1) % RATIOS.length] }]} activeOpacity={0.96}
-                      onPress={() => router.push(`/place/${place.place_id}` as any)}>
-                      {place.photo_url ? (
-                        <Image source={{ uri: place.photo_url }} style={s.pinImg} resizeMode="cover" />
-                      ) : (
-                        <View style={[s.pinImg, { backgroundColor: '#F0F0F0', justifyContent: 'center', alignItems: 'center' }]}>
-                          <Ionicons name="location" size={24} color="#DDD" />
-                        </View>
-                      )}
-                      <View style={s.placeInfo}>
-                        <Text style={s.placeName} numberOfLines={1}>{place.name}</Text>
-                        {place.rating ? <Text style={s.placeRating}>⭐ {place.rating}</Text> : null}
-                      </View>
-                    </TouchableOpacity>
-                  ))}
-                </View>
+            {/* Near You: Show nearby places in sections */}
+            {filter === 'near' && Object.keys(nearbyPlaces).length > 0 && (
+              <View style={s.nearSections}>
+                {Object.entries(nearbyPlaces).map(([label, places]) => (
+                  <View key={label} style={s.nearSection}>
+                    <Text style={s.nearSectionTitle}>{label}</Text>
+                    <View style={s.nearGrid}>
+                      {places.slice(0, 8).map((place: any, i: number) => (
+                        <TouchableOpacity key={place.place_id || i} style={s.nearTile} activeOpacity={0.92}>
+                          {place.photo_url ? (
+                            <Image source={{ uri: place.photo_url }} style={s.nearTileImg} resizeMode="cover" />
+                          ) : (
+                            <View style={[s.nearTileImg, { backgroundColor: '#E0DCD7', justifyContent: 'center', alignItems: 'center' }]}>
+                              <Ionicons name="image-outline" size={16} color="#BBB" />
+                            </View>
+                          )}
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  </View>
+                ))}
               </View>
             )}
             {/* Regular posts grid */}
@@ -249,10 +238,13 @@ const s = StyleSheet.create({
   pinImg: { width: '100%', height: '100%' },
   pinMore: { position: 'absolute', bottom: 8, right: 8, width: 28, height: 28, borderRadius: 14, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center' },
 
-  // Place cards (Near You)
-  placeInfo: { position: 'absolute', bottom: 0, left: 0, right: 0, padding: 8, backgroundColor: 'rgba(0,0,0,0.5)' },
-  placeName: { fontSize: 13, fontWeight: '700', color: '#FFF' },
-  placeRating: { fontSize: 11, color: '#FFF', marginTop: 2 },
+  // Near You sections (Things to Do style)
+  nearSections: { paddingHorizontal: 10, marginBottom: 16 },
+  nearSection: { marginBottom: 20 },
+  nearSectionTitle: { fontSize: 22, fontWeight: '900', color: '#1A1A1A', fontStyle: 'italic', marginBottom: 8 },
+  nearGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 3 },
+  nearTile: { width: (SW - 20 - 9) / 4, height: (SW - 20 - 9) / 4, borderRadius: 8, overflow: 'hidden' },
+  nearTileImg: { width: '100%', height: '100%' },
 
   empty: { paddingTop: 100, alignItems: 'center' },
   emptyTx: { fontSize: 14, color: '#CCC', marginTop: 10 },

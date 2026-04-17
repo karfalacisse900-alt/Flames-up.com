@@ -163,6 +163,12 @@ export default function MapViewScreen() {
     @keyframes pulse{0%{transform:scale(.5);opacity:1}100%{transform:scale(2);opacity:0}}
     </style></head><body>
     <div id="map"></div>
+    <div id="map-ui" style="position:absolute;top:0;left:0;right:0;padding:12px 16px;display:flex;gap:8px;z-index:100;pointer-events:none">
+      <div style="pointer-events:auto;background:#333;color:#fff;padding:8px 16px;border-radius:20px;font-size:13px;font-weight:600;font-family:-apple-system,sans-serif">Suggested ▾</div>
+      <div style="pointer-events:auto;background:#333;color:#fff;padding:8px 16px;border-radius:20px;font-size:13px;font-weight:600;font-family:-apple-system,sans-serif;display:flex;align-items:center;gap:4px"><span style="width:6px;height:6px;border-radius:50%;background:#22C55E"></span> Open Now</div>
+    </div>
+    <div id="explore-btn" style="position:absolute;top:60px;left:50%;transform:translateX(-50%);background:#333;color:#fff;padding:8px 20px;border-radius:20px;font-size:13px;font-weight:600;font-family:-apple-system,sans-serif;z-index:100;cursor:pointer;display:none"
+      onclick="window.ReactNativeWebView.postMessage(JSON.stringify({type:'explore'}))">Explore This Area</div>
     <script>
     function initMap(){
       var map = new google.maps.Map(document.getElementById('map'),{
@@ -192,8 +198,9 @@ export default function MapViewScreen() {
 
       map.addListener('click',function(){
         window.ReactNativeWebView.postMessage(JSON.stringify({type:'deselect'}));
-        document.querySelectorAll('.pin-body').forEach(function(p){p.style.transform='scale(1)';});
+        document.querySelectorAll('.photo-pin').forEach(function(p){p.style.transform='scale(1)';});
       });
+      map.addListener('dragend',function(){ document.getElementById('explore-btn').style.display='block'; });
     }
     </script>
     <script src="https://maps.googleapis.com/maps/api/js?key=${GKEY}&libraries=places&callback=initMap" async defer></script>
