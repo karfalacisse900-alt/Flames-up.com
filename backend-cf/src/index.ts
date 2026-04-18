@@ -111,6 +111,13 @@ api.post('/auth/login', async (c) => {
   const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
   if (!user || !(await verifyPassword(password, user.password_hash)))
     return c.json({ detail: 'Invalid credentials' }, 401);
+  // Auto-migrate legacy SHA-256 hash to bcrypt on successful login
+  if (!user.password_hash.startsWith('$2')) {
+    try {
+      const bcryptHash = await hashPassword(password);
+      await c.env.DB.prepare('UPDATE users SET password_hash = ? WHERE id = ?').bind(bcryptHash, user.id).run();
+    } catch {}
+  }
   const token = await createToken(user.id, c.env.JWT_SECRET);
   return c.json({
     access_token: token, token_type: 'bearer',
@@ -118,7 +125,8 @@ api.post('/auth/login', async (c) => {
       profile_image: user.profile_image, bio: user.bio, city: user.city,
       age: user.age, looking_for: user.looking_for, interests: user.interests,
       social_website: user.social_website, social_tiktok: user.social_tiktok, social_instagram: user.social_instagram,
-      followers_count: user.followers_count, following_count: user.following_count, posts_count: user.posts_count },
+      followers_count: user.followers_count, following_count: user.following_count, posts_count: user.posts_count,
+      is_admin: user.is_admin, is_creator: user.is_creator, is_publisher: user.is_publisher, is_verified: user.is_verified },
   });
 });
 
