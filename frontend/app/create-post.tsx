@@ -425,7 +425,7 @@ const s = StyleSheet.create({
   mediaSection: { paddingVertical: 16 },
   mediaScroll: { paddingHorizontal: 16, gap: 10 },
   mediaThumb: { width: 120, height: 160, borderRadius: 14, overflow: 'hidden', position: 'relative', backgroundColor: '#000' },
-  mediaImage: { width: '100%', height: '100%', resizeMode: 'contain' },
+  mediaImage: { width: '100%', height: '100%', resizeMode: 'cover' },
   videoBadge: {
     position: 'absolute', top: 8, left: 8,
     backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: 8,

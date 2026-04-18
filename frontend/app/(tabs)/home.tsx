@@ -118,19 +118,82 @@ export default function HomeScreen() {
   });
 
   const TILE_SIZE = (SW - 4) / 3;
-  const M_COL = (SW - 6) / 2; // masonry column width
-  const M_RATIOS = [1.4, 1.05, 1.55, 1.15, 1.35, 1.0, 1.45, 1.1];
+  const G = 3;
+  const C1 = (SW - G * 3) / 3; // single column width
+  const C2 = C1 * 2 + G; // double column width
   const isWorldBoard = filter === 'world';
 
-  // Build masonry for World Board
-  const mL: any[] = [], mR: any[] = [];
-  if (isWorldBoard) {
-    let lh = 0, rh = 0;
-    items.forEach((p: any, i: number) => {
-      const h = M_COL * M_RATIOS[i % M_RATIOS.length];
-      if (lh <= rh) { mL.push({ ...p, _h: h }); lh += h + 2; }
-      else { mR.push({ ...p, _h: h }); rh += h + 2; }
-    });
+  // Build organic masonry rows for World Board
+  const wbRows: React.ReactNode[] = [];
+  if (isWorldBoard && items.length > 0) {
+    let i = 0;
+    let rowKey = 0;
+    while (i < items.length) {
+      const pattern = rowKey % 4;
+      if (pattern === 0 && items[i + 2]) {
+        // Row: 1 tall-left (2 rows) + 2 small right stacked
+        wbRows.push(
+          <View key={`wb${rowKey}`} style={{ flexDirection: 'row', gap: G, marginBottom: G }}>
+            <TouchableOpacity style={{ width: C1, height: C1 * 2 + G, borderRadius: 10, overflow: 'hidden' }} onPress={() => router.push(`/post/${items[i].id}` as any)}>
+              <Image source={{ uri: items[i].image || items[i].images?.[0] }} style={{ width: '100%', height: '100%' }} resizeMode="cover" />
+            </TouchableOpacity>
+            <View style={{ gap: G }}>
+              <TouchableOpacity style={{ width: C2, height: C1, borderRadius: 10, overflow: 'hidden' }} onPress={() => router.push(`/post/${items[i+1].id}` as any)}>
+                <Image source={{ uri: items[i+1].image || items[i+1].images?.[0] }} style={{ width: '100%', height: '100%' }} resizeMode="cover" />
+              </TouchableOpacity>
+              {items[i+2] && <TouchableOpacity style={{ width: C2, height: C1, borderRadius: 10, overflow: 'hidden' }} onPress={() => router.push(`/post/${items[i+2].id}` as any)}>
+                <Image source={{ uri: items[i+2].image || items[i+2].images?.[0] }} style={{ width: '100%', height: '100%' }} resizeMode="cover" />
+              </TouchableOpacity>}
+            </View>
+          </View>
+        );
+        i += 3;
+      } else if (pattern === 1 && items[i + 2]) {
+        // Row: 3 equal squares
+        wbRows.push(
+          <View key={`wb${rowKey}`} style={{ flexDirection: 'row', gap: G, marginBottom: G }}>
+            {[0,1,2].map(j => items[i+j] ? (
+              <TouchableOpacity key={j} style={{ width: C1, height: C1, borderRadius: 10, overflow: 'hidden' }} onPress={() => router.push(`/post/${items[i+j].id}` as any)}>
+                <Image source={{ uri: items[i+j].image || items[i+j].images?.[0] }} style={{ width: '100%', height: '100%' }} resizeMode="cover" />
+              </TouchableOpacity>
+            ) : null)}
+          </View>
+        );
+        i += 3;
+      } else if (pattern === 2 && items[i + 2]) {
+        // Row: 2 small left stacked + 1 tall right
+        wbRows.push(
+          <View key={`wb${rowKey}`} style={{ flexDirection: 'row', gap: G, marginBottom: G }}>
+            <View style={{ gap: G }}>
+              <TouchableOpacity style={{ width: C2, height: C1, borderRadius: 10, overflow: 'hidden' }} onPress={() => router.push(`/post/${items[i].id}` as any)}>
+                <Image source={{ uri: items[i].image || items[i].images?.[0] }} style={{ width: '100%', height: '100%' }} resizeMode="cover" />
+              </TouchableOpacity>
+              {items[i+1] && <TouchableOpacity style={{ width: C2, height: C1, borderRadius: 10, overflow: 'hidden' }} onPress={() => router.push(`/post/${items[i+1].id}` as any)}>
+                <Image source={{ uri: items[i+1].image || items[i+1].images?.[0] }} style={{ width: '100%', height: '100%' }} resizeMode="cover" />
+              </TouchableOpacity>}
+            </View>
+            <TouchableOpacity style={{ width: C1, height: C1 * 2 + G, borderRadius: 10, overflow: 'hidden' }} onPress={() => router.push(`/post/${items[i+2].id}` as any)}>
+              <Image source={{ uri: items[i+2].image || items[i+2].images?.[0] }} style={{ width: '100%', height: '100%' }} resizeMode="cover" />
+            </TouchableOpacity>
+          </View>
+        );
+        i += 3;
+      } else {
+        // Fallback: 3 equal
+        const row = items.slice(i, i + 3);
+        wbRows.push(
+          <View key={`wb${rowKey}`} style={{ flexDirection: 'row', gap: G, marginBottom: G }}>
+            {row.map((p: any, j: number) => (
+              <TouchableOpacity key={j} style={{ width: C1, height: C1 * 1.2, borderRadius: 10, overflow: 'hidden' }} onPress={() => router.push(`/post/${p.id}` as any)}>
+                <Image source={{ uri: p.image || p.images?.[0] }} style={{ width: '100%', height: '100%' }} resizeMode="cover" />
+              </TouchableOpacity>
+            ))}
+          </View>
+        );
+        i += row.length;
+      }
+      rowKey++;
+    }
   }
 
   return (
@@ -187,24 +250,7 @@ export default function HomeScreen() {
             {/* Posts grid */}
             {items.length > 0 ? (
               isWorldBoard ? (
-                <View style={s.masonry}>
-                  <View style={s.mCol}>
-                    {mL.map((p: any) => (
-                      <TouchableOpacity key={p.id} style={[s.mTile, { height: p._h }]} activeOpacity={0.95}
-                        onPress={() => router.push(`/post/${p.id}` as any)}>
-                        <Image source={{ uri: p.image || p.images?.[0] }} style={s.gImg} resizeMode="cover" />
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                  <View style={s.mCol}>
-                    {mR.map((p: any) => (
-                      <TouchableOpacity key={p.id} style={[s.mTile, { height: p._h }]} activeOpacity={0.95}
-                        onPress={() => router.push(`/post/${p.id}` as any)}>
-                        <Image source={{ uri: p.image || p.images?.[0] }} style={s.gImg} resizeMode="cover" />
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                </View>
+                <View style={{ paddingHorizontal: 1 }}>{wbRows}</View>
               ) : (
                 <View style={s.gallery}>
                   {items.map((p: any) => (
@@ -249,9 +295,6 @@ const s = StyleSheet.create({
   gallery: { flexDirection: 'row', flexWrap: 'wrap', gap: 2 },
   gTile: { overflow: 'hidden' },
   gImg: { width: '100%', height: '100%' },
-  masonry: { flexDirection: 'row', paddingHorizontal: 2, gap: 2 },
-  mCol: { flex: 1, gap: 2 },
-  mTile: { borderRadius: 8, overflow: 'hidden' },
   sectionLabel: { fontSize: 20, fontWeight: '900', color: '#1A1A1A', fontStyle: 'italic', paddingHorizontal: 12, paddingVertical: 10 },
 
   empty: { paddingTop: 100, alignItems: 'center' },

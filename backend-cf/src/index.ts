@@ -2,6 +2,7 @@
 // Deploy: wrangler deploy
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
+import bcrypt from 'bcryptjs';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 interface Env {
@@ -25,22 +26,37 @@ app.get('/', (c) => c.json({ name: 'Flames-Up API', version: '2.0', status: 'liv
 const api = new Hono<HonoApp>();
 
 // ─── CORS ────────────────────────────────────────────────────────────────────
-app.use('*', cors({ origin: '*', allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'] }));
-api.use('*', cors({ origin: '*', allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'] }));
+const ALLOWED_ORIGINS = [
+  'https://flames-up.com',
+  'https://www.flames-up.com',
+  'https://flames-up-preview.preview.emergentagent.com',
+  'http://localhost:3000',
+  'http://localhost:8081',
+  'exp://localhost:8081',
+];
+const corsOpts = { origin: (o: string) => ALLOWED_ORIGINS.includes(o) ? o : ALLOWED_ORIGINS[0], allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'] };
+app.use('*', cors(corsOpts));
+api.use('*', cors(corsOpts));
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 const uuid = () => crypto.randomUUID();
 const now = () => new Date().toISOString();
 
 async function hashPassword(password: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const data = encoder.encode(password + 'flames-up-salt');
-  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-  return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+  return bcrypt.hashSync(password, 10);
 }
 
 async function verifyPassword(password: string, hash: string): Promise<boolean> {
-  return (await hashPassword(password)) === hash;
+  // Support both bcrypt hashes (starts with $2) and legacy SHA-256
+  if (hash.startsWith('$2')) {
+    return bcrypt.compareSync(password, hash);
+  }
+  // Legacy SHA-256 fallback for existing users
+  const encoder = new TextEncoder();
+  const data = encoder.encode(password + 'flames-up-salt');
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  const legacyHash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+  return legacyHash === hash;
 }
 
 function getUserId(c: any): string {
@@ -135,6 +151,13 @@ api.get('/users/search/:query', authMiddleware, async (c) => {
   const q = c.req.param('query');
   const r = await c.env.DB.prepare('SELECT id, username, full_name, profile_image, bio FROM users WHERE username LIKE ? OR full_name LIKE ? LIMIT 20').bind(`%${q}%`, `%${q}%`).all();
   return c.json(r.results);
+});
+
+// Exact username check (no auth required for registration flow)
+api.get('/users/check-username/:username', async (c) => {
+  const username = c.req.param('username').toLowerCase();
+  const user: any = await c.env.DB.prepare('SELECT id FROM users WHERE LOWER(username) = ?').bind(username).first();
+  return c.json({ available: !user, username });
 });
 
 api.get('/users/:userId', authMiddleware, async (c) => {

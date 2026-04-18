@@ -24,7 +24,7 @@ try { WebView = require('react-native-webview').WebView; } catch {}
 
 
 const { width: SW, height: SH } = Dimensions.get('window');
-const GKEY = 'AIzaSyC2o8RvjURwDSbOTOs2ynynAR7fSQUMjwU';
+const GKEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_KEY || '';
 
 const PLACE_TYPES = [
   { id: 'restaurant', label: 'Restaurants', icon: 'restaurant' },

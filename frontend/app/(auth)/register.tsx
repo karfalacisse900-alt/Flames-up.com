@@ -57,18 +57,17 @@ export default function RegisterScreen() {
     if (usernameTimer.current) clearTimeout(usernameTimer.current);
     usernameTimer.current = setTimeout(async () => {
       try {
-        const res = await api.get(`/users/search/${clean}`);
-        const results = res.data || [];
-        const exactMatch = results.some((u: any) => u.username?.toLowerCase() === clean.toLowerCase());
-        if (exactMatch) {
-          setUsernameStatus('taken');
-          setSuggestions(generateSuggestions(clean));
-        } else {
+        const res = await api.get(`/users/check-username/${clean}`);
+        if (res.data?.available) {
           setUsernameStatus('available');
           setSuggestions([]);
+        } else {
+          setUsernameStatus('taken');
+          setSuggestions(generateSuggestions(clean));
         }
-      } catch {
-        setUsernameStatus('available');
+      } catch (e) {
+        setUsernameStatus('taken');
+        setSuggestions(generateSuggestions(clean));
       }
     }, 400);
   };
