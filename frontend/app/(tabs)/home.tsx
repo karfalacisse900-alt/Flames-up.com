@@ -117,28 +117,20 @@ export default function HomeScreen() {
     return img && typeof img === 'string' && (img.startsWith('http') || img.startsWith('data:'));
   });
 
-  const TILE_SIZE = (SW - 4) / 3;
+  const TILE_SIZE = Math.floor((SW - 8) / 3); // 3 cols, 2 gaps of 2px, 4px padding
   const isNearYou = filter === 'near';
 
-  // Post categories for World Board / City filters
-  const POST_CATS = ['Fashion', 'Outfits', 'Photography', 'Food', 'Travel', 'Art', 'Nightlife', 'Street Style', 'Music', 'Fitness'];
-
-  // Group posts by category keyword
+  // For World Board / City filters: distribute ALL posts into sections
   const postSections: Record<string, any[]> = {};
   if (!isNearYou && items.length > 0) {
-    for (const cat of POST_CATS) {
-      const catLower = cat.toLowerCase();
-      const matching = items.filter((p: any) => {
-        const text = ((p.content || '') + ' ' + (p.post_type || '')).toLowerCase();
-        return text.includes(catLower);
-      });
-      if (matching.length > 0) postSections[cat] = matching;
-    }
-    // If no categories matched, show all as "Trending"
-    if (Object.keys(postSections).length === 0) {
-      postSections['Trending'] = items.slice(0, 12);
-      postSections['Latest'] = items.slice(12, 24);
-      postSections['For You'] = items.slice(24, 36);
+    const SECTION_SIZE = 9; // 9 images per section (3x3 grid)
+    const SECTION_NAMES = ['Trending', 'Latest', 'Fresh', 'Picked For You', 'Explore More'];
+    let idx = 0;
+    for (const name of SECTION_NAMES) {
+      const chunk = items.slice(idx, idx + SECTION_SIZE);
+      if (chunk.length > 0) postSections[name] = chunk;
+      idx += SECTION_SIZE;
+      if (idx >= items.length) break;
     }
   }
 
@@ -243,7 +235,7 @@ const s = StyleSheet.create({
 
   // Grid
   // 3-column gallery
-  gallery: { flexDirection: 'row', flexWrap: 'wrap', gap: 2 },
+  gallery: { flexDirection: 'row', flexWrap: 'wrap', gap: 2, paddingHorizontal: 2 },
   gTile: { overflow: 'hidden' },
   gImg: { width: '100%', height: '100%' },
   sectionLabel: { fontSize: 20, fontWeight: '900', color: '#1A1A1A', fontStyle: 'italic', paddingHorizontal: 12, paddingVertical: 10 },

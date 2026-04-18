@@ -206,7 +206,7 @@ api.post('/posts', authMiddleware, async (c) => {
   const b = await c.req.json();
   const id = uuid(); const postType = b.post_type || 'lifestyle';
   const isCheckin = postType === 'check_in' && b.place_id ? 1 : 0;
-  const location = postType === 'check_in' && b.place_name ? b.place_name : (b.location || null);
+  const location = b.location || b.place_name || null;
   await c.env.DB.prepare(
     `INSERT INTO posts (id, user_id, content, image, images, media_types, location, post_type, place_id, place_name, place_lat, place_lng, is_verified_checkin)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
