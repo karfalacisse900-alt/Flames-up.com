@@ -64,7 +64,7 @@ export default function DiscoverScreen() {
 
   const loadPeople = async () => {
     try {
-      const r = await api.get('/users/suggested');
+      const r = await api.get('/discover/suggested-users');
       setPeople(Array.isArray(r.data) ? r.data : []);
     } catch {}
   };

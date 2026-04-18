@@ -114,7 +114,7 @@ export default function HomeScreen() {
 
   const items = filtered.filter((p: any) => {
     const img = p.image || (p.images && p.images[0]);
-    return img && typeof img === 'string' && (img.startsWith('http') || img.startsWith('data:'));
+    return img && typeof img === 'string' && (img.startsWith('http') || img.startsWith('data:') || img.startsWith('cfstream:'));
   });
 
   const G = 2;
