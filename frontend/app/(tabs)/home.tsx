@@ -117,7 +117,8 @@ export default function HomeScreen() {
     return img && typeof img === 'string' && (img.startsWith('http') || img.startsWith('data:'));
   });
 
-  const TILE_SIZE = Math.floor((SW - 8) / 3); // 3 cols, 2 gaps of 2px, 4px padding
+  const G = 2;
+  const TILE_SIZE = Math.floor((SW - G * 2) / 3); // 3 cols exactly
   const isNearYou = filter === 'near';
 
   // For World Board / City filters: distribute ALL posts into sections
@@ -170,7 +171,7 @@ export default function HomeScreen() {
           <>
             {/* Near You: places sections (Parks, Restaurants, Art, etc.) */}
             {isNearYou && Object.keys(nearbyPlaces).length > 0 && (
-              <View style={{ paddingHorizontal: 2 }}>
+              <View>
                 {Object.entries(nearbyPlaces).map(([label, places]) => (
                   <View key={label}>
                     <Text style={s.sectionLabel}>{label}</Text>
@@ -188,7 +189,7 @@ export default function HomeScreen() {
             )}
             {/* World Board / Cities: post sections (Fashion, Outfits, etc.) */}
             {!isNearYou && Object.keys(postSections).length > 0 && (
-              <View style={{ paddingHorizontal: 2 }}>
+              <View>
                 {Object.entries(postSections).map(([label, sectionPosts]) => (
                   <View key={label}>
                     <Text style={s.sectionLabel}>{label}</Text>
@@ -235,7 +236,7 @@ const s = StyleSheet.create({
 
   // Grid
   // 3-column gallery
-  gallery: { flexDirection: 'row', flexWrap: 'wrap', gap: 2, paddingHorizontal: 2 },
+  gallery: { flexDirection: 'row', flexWrap: 'wrap', gap: 2 },
   gTile: { overflow: 'hidden' },
   gImg: { width: '100%', height: '100%' },
   sectionLabel: { fontSize: 20, fontWeight: '900', color: '#1A1A1A', fontStyle: 'italic', paddingHorizontal: 12, paddingVertical: 10 },

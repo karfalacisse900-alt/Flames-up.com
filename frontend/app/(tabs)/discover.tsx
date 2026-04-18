@@ -49,8 +49,9 @@ export default function DiscoverScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
+  const [people, setPeople] = useState<any[]>([]);
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); loadPeople(); }, []);
   useEffect(() => { loadBlockImages(); }, [tab]);
 
   const load = async () => {
@@ -59,6 +60,13 @@ export default function DiscoverScreen() {
       const r = await api.get('/posts/feed', { params: { limit: 50 } });
       setPosts(Array.isArray(r.data) ? r.data : []);
     } catch {} finally { setLoading(false); }
+  };
+
+  const loadPeople = async () => {
+    try {
+      const r = await api.get('/users/suggested');
+      setPeople(Array.isArray(r.data) ? r.data : []);
+    } catch {}
   };
 
   const loadBlockImages = async () => {
@@ -123,6 +131,29 @@ export default function DiscoverScreen() {
                 <Text style={s.searchPh}>What are you looking for?</Text>
               </View>
             </View>
+
+            {/* People Profiles */}
+            {people.length > 0 && (
+              <View style={s.peopleSection}>
+                <Text style={s.peopleSectionTitle}>People</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.peopleScroll}>
+                  {people.map((u: any) => (
+                    <TouchableOpacity key={u.id} style={s.personCard} activeOpacity={0.9}
+                      onPress={() => router.push(`/user/${u.id}` as any)}>
+                      {u.profile_image ? (
+                        <Image source={{ uri: u.profile_image }} style={s.personImg} />
+                      ) : (
+                        <View style={[s.personImg, { backgroundColor: '#F0F0F0', justifyContent: 'center', alignItems: 'center' }]}>
+                          <Text style={s.personInit}>{(u.full_name || 'U')[0]}</Text>
+                        </View>
+                      )}
+                      <Text style={s.personName} numberOfLines={1}>{u.full_name}</Text>
+                      <Text style={s.personBio} numberOfLines={2}>{u.bio || u.city || ''}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              </View>
+            )}
 
             {/* Category Blocks with Google Places Images */}
             <View style={s.blocks}>
@@ -208,6 +239,15 @@ const s = StyleSheet.create({
   searchWrap: { paddingHorizontal: 16, paddingBottom: 16 },
   searchBar: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#F5F5F5', borderRadius: 24, paddingHorizontal: 16, paddingVertical: 12 },
   searchPh: { fontSize: 14, color: '#AAA' },
+
+  peopleSection: { paddingLeft: 16, marginBottom: 20 },
+  peopleSectionTitle: { fontSize: 18, fontWeight: '800', color: '#1A1A1A', marginBottom: 12 },
+  peopleScroll: { gap: 12, paddingRight: 16 },
+  personCard: { width: 130, alignItems: 'center' },
+  personImg: { width: 100, height: 100, borderRadius: 50 },
+  personInit: { fontSize: 28, fontWeight: '800', color: '#CCC' },
+  personName: { fontSize: 14, fontWeight: '700', color: '#1A1A1A', marginTop: 8, textAlign: 'center' },
+  personBio: { fontSize: 11, color: '#999', textAlign: 'center', marginTop: 2 },
 
   blocks: { paddingHorizontal: 16, gap: 10 },
   blockBig: { borderRadius: 20, overflow: 'hidden', height: 180, position: 'relative' },
