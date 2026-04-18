@@ -118,76 +118,27 @@ export default function HomeScreen() {
   });
 
   const TILE_SIZE = (SW - 4) / 3;
-  const G = 4;
-  const C1 = (SW - G * 2) / 3;
-  const TALL = C1 * 1.6;
-  const SHORT = (TALL - G) / 2;
-  const isWorldBoard = filter === 'world';
   const isNearYou = filter === 'near';
 
-  // World Board: 3-col mosaic — tall tile rotates position
-  const wbRows: React.ReactNode[] = [];
-  if (isWorldBoard && items.length > 0) {
-    let i = 0;
-    let rowKey = 0;
-    while (i < items.length && items[i + 2]) {
-      const p0 = items[i], p1 = items[i+1], p2 = items[i+2];
-      const img = (p: any) => p.image || p.images?.[0];
-      const go = (p: any) => () => router.push(`/post/${p.id}` as any);
-      const tallPos = rowKey % 3; // 0=left, 1=center, 2=right
-      
-      const TileSmall = ({ p, w }: { p: any; w?: number }) => (
-        <TouchableOpacity style={{ width: w || C1, height: SHORT, borderRadius: 8, overflow: 'hidden' }} onPress={go(p)}>
-          <Image source={{ uri: img(p) }} style={{ width: '100%', height: '100%' }} resizeMode="cover" />
-        </TouchableOpacity>
-      );
-      const TileTall = ({ p }: { p: any }) => (
-        <TouchableOpacity style={{ width: C1, height: TALL, borderRadius: 8, overflow: 'hidden' }} onPress={go(p)}>
-          <Image source={{ uri: img(p) }} style={{ width: '100%', height: '100%' }} resizeMode="cover" />
-        </TouchableOpacity>
-      );
+  // Post categories for World Board / City filters
+  const POST_CATS = ['Fashion', 'Outfits', 'Photography', 'Food', 'Travel', 'Art', 'Nightlife', 'Street Style', 'Music', 'Fitness'];
 
-      if (tallPos === 0) {
-        wbRows.push(
-          <View key={`wb${rowKey}`} style={{ flexDirection: 'row', gap: G, marginBottom: G }}>
-            <TileTall p={p0} />
-            <View style={{ gap: G, flex: 1 }}><TileSmall p={p1} /><TileSmall p={p2} /></View>
-          </View>
-        );
-      } else if (tallPos === 1) {
-        wbRows.push(
-          <View key={`wb${rowKey}`} style={{ flexDirection: 'row', gap: G, marginBottom: G }}>
-            <View style={{ gap: G, width: C1 }}><TileSmall p={p0} /><TileSmall p={p2} /></View>
-            <TileTall p={p1} />
-            {items[i+3] ? (
-              <View style={{ gap: G, width: C1 }}><TileSmall p={items[i+3]} />{items[i+4] ? <TileSmall p={items[i+4]} /> : <View style={{ height: SHORT }} />}</View>
-            ) : <View style={{ width: C1 }} />}
-          </View>
-        );
-        i += 2; // extra consumed
-      } else {
-        wbRows.push(
-          <View key={`wb${rowKey}`} style={{ flexDirection: 'row', gap: G, marginBottom: G }}>
-            <View style={{ gap: G, flex: 1 }}><TileSmall p={p0} /><TileSmall p={p1} /></View>
-            <TileTall p={p2} />
-          </View>
-        );
-      }
-      i += 3;
-      rowKey++;
+  // Group posts by category keyword
+  const postSections: Record<string, any[]> = {};
+  if (!isNearYou && items.length > 0) {
+    for (const cat of POST_CATS) {
+      const catLower = cat.toLowerCase();
+      const matching = items.filter((p: any) => {
+        const text = ((p.content || '') + ' ' + (p.post_type || '')).toLowerCase();
+        return text.includes(catLower);
+      });
+      if (matching.length > 0) postSections[cat] = matching;
     }
-    // Remaining items as equal row
-    const leftover = items.slice(i);
-    if (leftover.length > 0) {
-      wbRows.push(
-        <View key="wbx" style={{ flexDirection: 'row', gap: G, marginBottom: G }}>
-          {leftover.map((p: any, j: number) => (
-            <TouchableOpacity key={j} style={{ width: C1, height: C1, borderRadius: 8, overflow: 'hidden' }} onPress={() => router.push(`/post/${p.id}` as any)}>
-              <Image source={{ uri: p.image || p.images?.[0] }} style={{ width: '100%', height: '100%' }} resizeMode="cover" />
-            </TouchableOpacity>
-          ))}
-        </View>
-      );
+    // If no categories matched, show all as "Trending"
+    if (Object.keys(postSections).length === 0) {
+      postSections['Trending'] = items.slice(0, 12);
+      postSections['Latest'] = items.slice(12, 24);
+      postSections['For You'] = items.slice(24, 36);
     }
   }
 
@@ -225,7 +176,7 @@ export default function HomeScreen() {
         contentContainerStyle={{ paddingBottom: 100 }}
         renderItem={() => (
           <>
-            {/* Near You: ONLY places, no posts */}
+            {/* Near You: places sections (Parks, Restaurants, Art, etc.) */}
             {isNearYou && Object.keys(nearbyPlaces).length > 0 && (
               <View style={{ paddingHorizontal: 2 }}>
                 {Object.entries(nearbyPlaces).map(([label, places]) => (
@@ -233,7 +184,8 @@ export default function HomeScreen() {
                     <Text style={s.sectionLabel}>{label}</Text>
                     <View style={s.gallery}>
                       {places.slice(0, 9).map((p: any, i: number) => (
-                        <TouchableOpacity key={p.place_id || i} style={[s.gTile, { width: TILE_SIZE, height: TILE_SIZE }]} activeOpacity={0.95}>
+                        <TouchableOpacity key={p.place_id || i} style={[s.gTile, { width: TILE_SIZE, height: TILE_SIZE }]} activeOpacity={0.95}
+                          onPress={() => router.push(`/place/${p.place_id}` as any)}>
                           {p.photo_url ? <Image source={{ uri: p.photo_url }} style={s.gImg} resizeMode="cover" /> : <View style={[s.gImg, { backgroundColor: '#E0DCD7' }]} />}
                         </TouchableOpacity>
                       ))}
@@ -242,22 +194,25 @@ export default function HomeScreen() {
                 ))}
               </View>
             )}
-            {/* World Board: organic mosaic */}
-            {isWorldBoard && items.length > 0 && (
-              <View style={{ paddingHorizontal: 2 }}>{wbRows}</View>
-            )}
-            {/* City filters: 3-col grid (no near you, no world board) */}
-            {!isNearYou && !isWorldBoard && items.length > 0 && (
-              <View style={s.gallery}>
-                {items.map((p: any) => (
-                  <TouchableOpacity key={p.id} style={[s.gTile, { width: TILE_SIZE, height: TILE_SIZE }]} activeOpacity={0.95}
-                    onPress={() => router.push(`/post/${p.id}` as any)}>
-                    <Image source={{ uri: p.image || p.images?.[0] }} style={s.gImg} resizeMode="cover" />
-                  </TouchableOpacity>
+            {/* World Board / Cities: post sections (Fashion, Outfits, etc.) */}
+            {!isNearYou && Object.keys(postSections).length > 0 && (
+              <View style={{ paddingHorizontal: 2 }}>
+                {Object.entries(postSections).map(([label, sectionPosts]) => (
+                  <View key={label}>
+                    <Text style={s.sectionLabel}>{label}</Text>
+                    <View style={s.gallery}>
+                      {sectionPosts.slice(0, 9).map((p: any) => (
+                        <TouchableOpacity key={p.id} style={[s.gTile, { width: TILE_SIZE, height: TILE_SIZE }]} activeOpacity={0.95}
+                          onPress={() => router.push(`/post/${p.id}` as any)}>
+                          <Image source={{ uri: p.image || p.images?.[0] }} style={s.gImg} resizeMode="cover" />
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  </View>
                 ))}
               </View>
             )}
-            {!isNearYou && !isWorldBoard && items.length === 0 && (
+            {!isNearYou && items.length === 0 && (
               <View style={s.empty}>
                 <Ionicons name="images-outline" size={40} color="#DDD" />
                 <Text style={s.emptyTx}>No posts in this city yet</Text>
