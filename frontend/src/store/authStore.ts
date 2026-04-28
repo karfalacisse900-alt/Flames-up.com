@@ -24,6 +24,7 @@ interface AuthState {
   isLoading: boolean;
   isAuthenticated: boolean;
   login: (email: string, password: string) => Promise<void>;
+  loginWithOAuth: (provider: 'google' | 'apple', idToken: string) => Promise<void>;
   register: (email: string, password: string, username: string, fullName: string) => Promise<void>;
   logout: () => Promise<void>;
   loadUser: () => Promise<void>;
@@ -42,6 +43,21 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     const token = response.data.access_token || response.data.token;
     const rawUser = response.data.user;
     // Normalize boolean fields from D1 (integers) to JS booleans
+    const user = {
+      ...rawUser,
+      is_verified: !!rawUser.is_verified,
+      is_admin: !!rawUser.is_admin,
+      is_publisher: !!rawUser.is_publisher,
+    };
+    await AsyncStorage.setItem('auth_token', token);
+    await AsyncStorage.setItem('user', JSON.stringify(user));
+    set({ user, token, isAuthenticated: true });
+  },
+
+  loginWithOAuth: async (provider: 'google' | 'apple', idToken: string) => {
+    const response = await api.post(`/auth/oauth/${provider}`, { id_token: idToken });
+    const token = response.data.access_token || response.data.token;
+    const rawUser = response.data.user;
     const user = {
       ...rawUser,
       is_verified: !!rawUser.is_verified,

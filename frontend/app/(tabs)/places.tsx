@@ -17,6 +17,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { colors, shadows } from '../../src/utils/theme';
 import api from '../../src/api/client';
+import { rankPlacesByQuery } from '../../src/utils/geoSpatial';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const GRID_GAP = 6;
@@ -134,6 +135,7 @@ const gridStyles = StyleSheet.create({
 export default function PlacesScreen() {
   const router = useRouter();
   const [places, setPlaces] = useState<any[]>([]);
+  const [allPlaces, setAllPlaces] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [search, setSearch] = useState('');
@@ -191,10 +193,16 @@ export default function PlacesScreen() {
         setPlaces([]);
       } else {
         const list = Array.isArray(data) ? data : data?.places || [];
-        setPlaces(list);
+        setAllPlaces(list);
+        if (keyword && keyword.trim()) {
+          setPlaces(rankPlacesByQuery(list, keyword, loc, 140));
+        } else {
+          setPlaces(list);
+        }
       }
     } catch (err: any) {
       setError('Failed to load places');
+      setAllPlaces([]);
       setPlaces([]);
     } finally {
       setIsLoading(false);
@@ -208,6 +216,15 @@ export default function PlacesScreen() {
       loadPlaces(activeType, undefined, userLocation);
     }
   }, [activeType]);
+
+  useEffect(() => {
+    const query = search.trim();
+    if (!query) {
+      setPlaces(allPlaces);
+      return;
+    }
+    setPlaces(rankPlacesByQuery(allPlaces, query, userLocation || undefined, 140));
+  }, [search, allPlaces, userLocation]);
 
   const onRefresh = useCallback(async () => {
     setIsRefreshing(true);

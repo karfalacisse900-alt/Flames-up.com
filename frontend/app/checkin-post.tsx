@@ -21,6 +21,7 @@ import * as Location from 'expo-location';
 import { colors, shadows } from '../src/utils/theme';
 import { useAuthStore } from '../src/store/authStore';
 import api from '../src/api/client';
+import { processMediaBatch } from '../src/utils/mediaProcessing';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const MAX_MEDIA = 10;
@@ -96,16 +97,20 @@ export default function CheckInPostScreen() {
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images', 'videos'],
       allowsMultipleSelection: true,
-      quality: 0.7,
-      base64: true,
+      quality: 0.85,
+      base64: false,
       selectionLimit: MAX_MEDIA - media.length,
+      videoExportPreset: ImagePicker.VideoExportPreset.H264_1280x720,
+      videoQuality: ImagePicker.UIImagePickerControllerQualityType.Medium,
+      preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
     });
 
     if (!result.canceled && result.assets) {
-      const newMedia = result.assets.map((asset) => ({
+      const processedAssets = await processMediaBatch(result.assets, 'balanced');
+      const newMedia = processedAssets.map((asset) => ({
         uri: asset.uri,
-        type: asset.type || 'image',
-        base64: asset.base64 ? `data:image/jpeg;base64,${asset.base64}` : undefined,
+        type: asset.type,
+        base64: asset.base64,
       }));
       setMedia((prev) => [...prev, ...newMedia].slice(0, MAX_MEDIA));
     }
@@ -117,12 +122,18 @@ export default function CheckInPostScreen() {
       Alert.alert('Permission needed', 'Camera access is required to take photos');
       return;
     }
-    const result = await ImagePicker.launchCameraAsync({ quality: 0.7, base64: true });
+    const result = await ImagePicker.launchCameraAsync({
+      quality: 0.85,
+      base64: false,
+      mediaTypes: ['images', 'videos'],
+      videoQuality: ImagePicker.UIImagePickerControllerQualityType.Medium,
+      videoMaxDuration: 45,
+    });
     if (!result.canceled && result.assets[0]) {
-      const asset = result.assets[0];
+      const [asset] = await processMediaBatch([result.assets[0]], 'balanced');
       setMedia((prev) => [
         ...prev,
-        { uri: asset.uri, type: 'image', base64: asset.base64 ? `data:image/jpeg;base64,${asset.base64}` : undefined },
+        { uri: asset.uri, type: asset.type, base64: asset.base64 },
       ].slice(0, MAX_MEDIA));
     }
   };

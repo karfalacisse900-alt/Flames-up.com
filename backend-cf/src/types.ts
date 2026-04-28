@@ -7,6 +7,10 @@ export interface Env {
   CF_ACCOUNT_HASH: string;
   GOOGLE_MAPS_API_KEY: string;
   ENVIRONMENT: string;
+  GOOGLE_OAUTH_CLIENT_ID?: string;
+  GOOGLE_OAUTH_CLIENT_IDS?: string;
+  APPLE_OAUTH_AUDIENCE?: string;
+  APPLE_OAUTH_AUDIENCES?: string;
 }
 
 export interface User {

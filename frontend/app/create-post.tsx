@@ -11,6 +11,7 @@ import * as Location from 'expo-location';
 import { useAuthStore } from '../src/store/authStore';
 import api from '../src/api/client';
 import { uploadImage, getVideoUploadUrl, uploadVideoToStream } from '../src/utils/mediaUpload';
+import { processMediaBatch } from '../src/utils/mediaProcessing';
 
 const { width: SW } = Dimensions.get('window');
 
@@ -56,7 +57,15 @@ export default function CreatePostScreen() {
   const { user } = useAuthStore();
   const params = useLocalSearchParams<{ place_id?: string; place_name?: string }>();
 
-  const [media, setMedia] = useState<{ uri: string; type: 'image' | 'video'; base64?: string; width?: number; height?: number }[]>([]);
+  const [media, setMedia] = useState<{
+    uri: string;
+    type: 'image' | 'video';
+    base64?: string;
+    width?: number;
+    height?: number;
+    mimeType?: string;
+    fileSize?: number;
+  }[]>([]);
   const [caption, setCaption] = useState('');
   const [category, setCategory] = useState<string | null>(null);
   const [format, setFormat] = useState('auto');
@@ -70,64 +79,91 @@ export default function CreatePostScreen() {
   const hasPlacePreset = !!(params.place_name);
 
   const pickMedia = async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permission needed', 'Please allow access to your photo library');
-      return;
-    }
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images', 'videos'],
-      allowsMultipleSelection: true,
-      quality: 0.7,
-      base64: true,
-      selectionLimit: 6,
-    });
-    if (!result.canceled && result.assets) {
-      const newMedia = result.assets.map(a => ({
-        uri: a.uri,
-        type: (a.type === 'video' ? 'video' : 'image') as 'image' | 'video',
-        base64: a.base64 || undefined,
-        width: a.width || 0,
-        height: a.height || 0,
-      }));
-      const updated = [...media, ...newMedia].slice(0, 6);
-      setMedia(updated);
+    try {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission needed', 'Please allow access to your photo library');
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images', 'videos'],
+        allowsMultipleSelection: true,
+        quality: 0.9,
+        base64: false,
+        selectionLimit: 6,
+        videoExportPreset: ImagePicker.VideoExportPreset.H264_1280x720,
+        videoQuality: ImagePicker.UIImagePickerControllerQualityType.Medium,
+        preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
+      });
+      if (!result.canceled && result.assets) {
+        setUploadStep('Optimizing media...');
+        const processedAssets = await processMediaBatch(result.assets, 'balanced');
+        const newMedia = processedAssets.map((a) => ({
+          uri: a.uri,
+          type: a.type,
+          base64: a.base64,
+          width: a.width || 0,
+          height: a.height || 0,
+          mimeType: a.mimeType,
+          fileSize: a.fileSize,
+        }));
+        const updated = [...media, ...newMedia].slice(0, 6);
+        setMedia(updated);
 
-      // Auto-detect format from first image
-      const firstImg = updated.find(m => m.type === 'image' && m.width && m.height);
-      if (firstImg && firstImg.width && firstImg.height) {
-        const detected = detectFormat(firstImg.width, firstImg.height);
-        setDetectedFormat(detected);
-        if (format === 'auto') {
-          // Keep auto mode, detected format will be used during post creation
+        // Auto-detect format from first image
+        const firstImg = updated.find(m => m.type === 'image' && m.width && m.height);
+        if (firstImg && firstImg.width && firstImg.height) {
+          const detected = detectFormat(firstImg.width, firstImg.height);
+          setDetectedFormat(detected);
+          if (format === 'auto') {
+            // Keep auto mode, detected format will be used during post creation
+          }
         }
       }
+    } catch (error) {
+      console.log('Media picker error:', error);
+      Alert.alert('Media processing failed', 'Please try selecting media again.');
+    } finally {
+      setUploadStep('');
     }
   };
 
   const takePhoto = async () => {
-    const perm = await ImagePicker.requestCameraPermissionsAsync();
-    if (!perm.granted) return;
-    const result = await ImagePicker.launchCameraAsync({
-      quality: 0.8,
-      base64: true,
-    });
-    if (!result.canceled && result.assets?.[0]) {
-      const a = result.assets[0];
-      const newItem = {
-        uri: a.uri,
-        type: (a.type === 'video' ? 'video' : 'image') as 'image' | 'video',
-        base64: a.base64 || undefined,
-        width: a.width || 0,
-        height: a.height || 0,
-      };
-      const updated = [...media, newItem].slice(0, 6);
-      setMedia(updated);
+    try {
+      const perm = await ImagePicker.requestCameraPermissionsAsync();
+      if (!perm.granted) return;
+      const result = await ImagePicker.launchCameraAsync({
+        quality: 0.85,
+        base64: false,
+        mediaTypes: ['images', 'videos'],
+        videoQuality: ImagePicker.UIImagePickerControllerQualityType.Medium,
+        videoMaxDuration: 45,
+      });
+      if (!result.canceled && result.assets?.[0]) {
+        setUploadStep('Optimizing media...');
+        const [processedAsset] = await processMediaBatch([result.assets[0]], 'balanced');
+        const newItem = {
+          uri: processedAsset.uri,
+          type: processedAsset.type,
+          base64: processedAsset.base64,
+          width: processedAsset.width || 0,
+          height: processedAsset.height || 0,
+          mimeType: processedAsset.mimeType,
+          fileSize: processedAsset.fileSize,
+        };
+        const updated = [...media, newItem].slice(0, 6);
+        setMedia(updated);
 
-      // Auto-detect format
-      if (newItem.type === 'image' && newItem.width && newItem.height && !detectedFormat) {
-        setDetectedFormat(detectFormat(newItem.width, newItem.height));
+        // Auto-detect format
+        if (newItem.type === 'image' && newItem.width && newItem.height && !detectedFormat) {
+          setDetectedFormat(detectFormat(newItem.width, newItem.height));
+        }
       }
+    } catch (error) {
+      console.log('Camera capture error:', error);
+      Alert.alert('Camera processing failed', 'Please try again.');
+    } finally {
+      setUploadStep('');
     }
   };
 

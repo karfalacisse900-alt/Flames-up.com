@@ -9,6 +9,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { colors } from '../src/utils/theme';
 import api from '../src/api/client';
+import { processMediaBatch } from '../src/utils/mediaProcessing';
 
 const CATEGORIES = [
   { id: 'news', label: 'Local News', icon: 'newspaper' },
@@ -33,9 +34,15 @@ export default function CreateDiscoverPostScreen() {
   const [posting, setPosting] = useState(false);
 
   const pickImage = async () => {
-    const result = await ImagePicker.launchImageLibraryAsync({ quality: 0.7, base64: true });
+    const result = await ImagePicker.launchImageLibraryAsync({
+      quality: 0.9,
+      base64: false,
+      mediaTypes: ['images'],
+      preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
+    });
     if (!result.canceled && result.assets[0]) {
-      setImage(result.assets[0].base64 ? `data:image/jpeg;base64,${result.assets[0].base64}` : result.assets[0].uri);
+      const [processed] = await processMediaBatch([result.assets[0]], 'balanced');
+      setImage(processed.base64 || processed.uri);
     }
   };
 

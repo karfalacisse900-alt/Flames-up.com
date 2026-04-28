@@ -2,7 +2,7 @@ name = "flames-up-api"
 main = "src/index.ts"
 compatibility_date = "2024-12-01"
 compatibility_flags = ["nodejs_compat"]
-account_id = "REPLACE_WITH_YOUR_ACCOUNT_ID"
+account_id = "2ca88b3551321681a5f9434814f38ec8"
 
 [vars]
 JWT_SECRET = "REPLACE_WITH_YOUR_JWT_SECRET"
@@ -11,6 +11,8 @@ CLOUDFLARE_IMAGES_TOKEN = "REPLACE_WITH_YOUR_CF_TOKEN"
 CLOUDFLARE_STREAM_TOKEN = "REPLACE_WITH_YOUR_CF_TOKEN"
 GOOGLE_MAPS_API_KEY = "REPLACE_WITH_YOUR_MAPS_KEY"
 FRONTEND_URL = "https://flames-up.com"
+GOOGLE_OAUTH_CLIENT_IDS = ""
+APPLE_OAUTH_AUDIENCES = ""
 
 [[d1_databases]]
 binding = "DB"
@@ -23,3 +25,5 @@ name = "flames-up-api"
 [env.production.vars]
 JWT_SECRET = "REPLACE_WITH_YOUR_JWT_SECRET"
 FRONTEND_URL = "https://flames-up.com"
+GOOGLE_OAUTH_CLIENT_IDS = ""
+APPLE_OAUTH_AUDIENCES = ""

@@ -9,6 +9,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { useAuthStore } from '../../src/store/authStore';
 import api from '../../src/api/client';
+import { rankFeed, RecommendationItem } from '../../src/recommendation';
 
 const { width: SW } = Dimensions.get('window');
 const GAP = 6;
@@ -83,10 +84,49 @@ export default function HomeScreen() {
 
   useEffect(() => { loadData(); }, []);
 
+  const rankPosts = (rawPosts: any[]) => {
+    const interestTokens = String(user?.interests || '')
+      .split(',')
+      .map((s: string) => s.trim().toLowerCase())
+      .filter(Boolean);
+
+    const items: RecommendationItem[] = rawPosts.map((p: any) => ({
+      id: String(p.id),
+      authorId: p.user_id ? String(p.user_id) : '',
+      category: String(p.category || p.post_type || ''),
+      content: String(p.content || ''),
+      location: String(p.location || p.place_name || ''),
+      createdAtMs: Number(Date.parse(p.created_at || '') || Date.now()),
+      likes: Number(p.likes_count || 0),
+      comments: Number(p.comments_count || 0),
+      shares: Number(p.shares_count || 0),
+      saves: Number(p.saves_count || 0),
+      impressions: Number(p.views_count || 0),
+      lat: p.place_lat !== undefined && p.place_lat !== null ? Number(p.place_lat) : undefined,
+      lng: p.place_lng !== undefined && p.place_lng !== null ? Number(p.place_lng) : undefined,
+      original: p,
+    }));
+
+    const ranked = rankFeed(
+      items,
+      {
+        userId: user?.id,
+        interests: interestTokens,
+        nowMs: Date.now(),
+        userLat,
+        userLng,
+      },
+      { maxItems: items.length, lambda: 0.82, halfLifeHours: 40 }
+    );
+
+    return ranked.map((r) => r.original);
+  };
+
   const loadData = async () => {
     try {
       const r = await api.get('/posts/feed', { params: { limit: 40 } });
-      setPosts(Array.isArray(r.data) ? r.data : []);
+      const raw = Array.isArray(r.data) ? r.data : [];
+      setPosts(rankPosts(raw));
     } catch {}
   };
 

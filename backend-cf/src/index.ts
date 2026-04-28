@@ -14,6 +14,10 @@ interface Env {
   CLOUDFLARE_STREAM_TOKEN: string;
   GOOGLE_MAPS_API_KEY: string;
   FRONTEND_URL: string;
+  GOOGLE_OAUTH_CLIENT_ID?: string;
+  GOOGLE_OAUTH_CLIENT_IDS?: string;
+  APPLE_OAUTH_AUDIENCE?: string;
+  APPLE_OAUTH_AUDIENCES?: string;
 }
 
 type HonoApp = { Bindings: Env; Variables: { userId: string } };
@@ -87,6 +91,161 @@ async function createToken(userId: string, secret: string): Promise<string> {
     .sign(new TextEncoder().encode(secret));
 }
 
+function parseAudiences(...values: Array<string | undefined>): string[] {
+  return values
+    .filter(Boolean)
+    .flatMap((value) => String(value).split(','))
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+}
+
+function usernameSlug(input: string): string {
+  const base = input
+    .toLowerCase()
+    .replace(/[^a-z0-9_]/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  return base || `user_${Math.floor(Math.random() * 100000)}`;
+}
+
+async function ensureUniqueUsername(db: D1Database, desired: string): Promise<string> {
+  const base = usernameSlug(desired).slice(0, 24);
+  let candidate = base;
+  let attempt = 0;
+
+  while (attempt < 100) {
+    const existing = await db.prepare('SELECT id FROM users WHERE LOWER(username) = ?').bind(candidate.toLowerCase()).first();
+    if (!existing) return candidate;
+    attempt += 1;
+    candidate = `${base}_${Math.floor(Math.random() * 9999)}`.slice(0, 30);
+  }
+
+  return `${base}_${Date.now().toString().slice(-6)}`.slice(0, 30);
+}
+
+function authUserPayload(user: any) {
+  return {
+    id: user.id,
+    email: user.email,
+    username: user.username,
+    full_name: user.full_name,
+    profile_image: user.profile_image,
+    bio: user.bio,
+    city: user.city,
+    age: user.age,
+    looking_for: user.looking_for,
+    interests: user.interests,
+    social_website: user.social_website,
+    social_tiktok: user.social_tiktok,
+    social_instagram: user.social_instagram,
+    followers_count: user.followers_count,
+    following_count: user.following_count,
+    posts_count: user.posts_count,
+    is_admin: !!user.is_admin,
+    is_creator: !!user.is_creator,
+    is_publisher: !!user.is_publisher,
+    is_verified: !!user.is_verified,
+  };
+}
+
+async function verifyGoogleIdToken(c: any, idToken: string) {
+  const response = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(idToken)}`);
+  if (!response.ok) {
+    throw new Error('GOOGLE_TOKEN_INVALID');
+  }
+
+  const data: any = await response.json();
+  const allowedAudiences = parseAudiences(c.env.GOOGLE_OAUTH_CLIENT_IDS, c.env.GOOGLE_OAUTH_CLIENT_ID);
+  if (allowedAudiences.length > 0 && !allowedAudiences.includes(String(data.aud || ''))) {
+    throw new Error('GOOGLE_AUDIENCE_INVALID');
+  }
+
+  const issuer = String(data.iss || '');
+  if (!['accounts.google.com', 'https://accounts.google.com'].includes(issuer)) {
+    throw new Error('GOOGLE_ISSUER_INVALID');
+  }
+  if (!data.sub || !data.email) {
+    throw new Error('GOOGLE_PROFILE_INVALID');
+  }
+  if (String(data.email_verified) !== 'true') {
+    throw new Error('GOOGLE_EMAIL_UNVERIFIED');
+  }
+
+  return {
+    subject: String(data.sub),
+    email: String(data.email).toLowerCase(),
+    fullName: String(data.name || data.email.split('@')[0]),
+    profileImage: data.picture ? String(data.picture) : '',
+  };
+}
+
+async function verifyAppleIdToken(c: any, idToken: string) {
+  const { createRemoteJWKSet, jwtVerify } = await import('jose');
+  const jwks = createRemoteJWKSet(new URL('https://appleid.apple.com/auth/keys'));
+  const verifyOptions: any = { issuer: 'https://appleid.apple.com' };
+  const allowedAudiences = parseAudiences(c.env.APPLE_OAUTH_AUDIENCES, c.env.APPLE_OAUTH_AUDIENCE);
+  if (allowedAudiences.length > 0) {
+    verifyOptions.audience = allowedAudiences;
+  }
+
+  const { payload } = await jwtVerify(idToken, jwks, verifyOptions);
+  if (!payload.sub) {
+    throw new Error('APPLE_SUBJECT_MISSING');
+  }
+
+  const email = payload.email ? String(payload.email).toLowerCase() : '';
+  const emailVerified = payload.email_verified === true || payload.email_verified === 'true' || !email;
+  if (!emailVerified) {
+    throw new Error('APPLE_EMAIL_UNVERIFIED');
+  }
+
+  return {
+    subject: String(payload.sub),
+    email,
+    fullName: email ? email.split('@')[0] : 'Apple User',
+    profileImage: '',
+  };
+}
+
+async function findOrCreateOAuthUser(
+  c: any,
+  provider: 'google' | 'apple',
+  subject: string,
+  email: string,
+  fullName: string,
+  profileImage: string
+) {
+  let user: any = await c.env.DB.prepare(
+    'SELECT * FROM users WHERE oauth_provider = ? AND oauth_subject = ?'
+  ).bind(provider, subject).first();
+
+  if (user) return user;
+
+  if (!email) {
+    throw new Error('EMAIL_REQUIRED');
+  }
+
+  user = await c.env.DB.prepare('SELECT * FROM users WHERE LOWER(email) = ?').bind(email.toLowerCase()).first();
+  if (user) {
+    await c.env.DB.prepare(
+      'UPDATE users SET oauth_provider = ?, oauth_subject = ?, profile_image = CASE WHEN profile_image = \'\' OR profile_image IS NULL THEN ? ELSE profile_image END, updated_at = datetime(\'now\') WHERE id = ?'
+    ).bind(provider, subject, profileImage || '', user.id).run();
+    const refreshed = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(user.id).first();
+    return refreshed;
+  }
+
+  const id = uuid();
+  const username = await ensureUniqueUsername(c.env.DB, email.split('@')[0] || `${provider}_user`);
+  const generatedPasswordHash = await hashPassword(`${provider}_${subject}_${uuid()}`);
+  const safeName = fullName?.trim() || username;
+
+  await c.env.DB.prepare(
+    'INSERT INTO users (id, email, username, full_name, password_hash, profile_image, oauth_provider, oauth_subject) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+  ).bind(id, email.toLowerCase(), username, safeName, generatedPasswordHash, profileImage || '', provider, subject).run();
+
+  return c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(id).first();
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // AUTH
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -102,8 +261,9 @@ api.post('/auth/register', async (c) => {
   await c.env.DB.prepare(
     'INSERT INTO users (id, email, username, full_name, password_hash) VALUES (?, ?, ?, ?, ?)'
   ).bind(id, email, username, full_name, hash).run();
+  const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(id).first();
   const token = await createToken(id, c.env.JWT_SECRET);
-  return c.json({ access_token: token, token_type: 'bearer', user: { id, email, username, full_name } });
+  return c.json({ access_token: token, token_type: 'bearer', user: authUserPayload(user) });
 });
 
 api.post('/auth/login', async (c) => {
@@ -119,23 +279,66 @@ api.post('/auth/login', async (c) => {
     } catch {}
   }
   const token = await createToken(user.id, c.env.JWT_SECRET);
-  return c.json({
-    access_token: token, token_type: 'bearer',
-    user: { id: user.id, email: user.email, username: user.username, full_name: user.full_name,
-      profile_image: user.profile_image, bio: user.bio, city: user.city,
-      age: user.age, looking_for: user.looking_for, interests: user.interests,
-      social_website: user.social_website, social_tiktok: user.social_tiktok, social_instagram: user.social_instagram,
-      followers_count: user.followers_count, following_count: user.following_count, posts_count: user.posts_count,
-      is_admin: user.is_admin, is_creator: user.is_creator, is_publisher: user.is_publisher, is_verified: user.is_verified },
-  });
+  return c.json({ access_token: token, token_type: 'bearer', user: authUserPayload(user) });
+});
+
+api.post('/auth/oauth/google', async (c) => {
+  try {
+    const { id_token } = await c.req.json();
+    if (!id_token) return c.json({ detail: 'id_token is required' }, 400);
+
+    const googleProfile = await verifyGoogleIdToken(c, id_token);
+    const user = await findOrCreateOAuthUser(
+      c,
+      'google',
+      googleProfile.subject,
+      googleProfile.email,
+      googleProfile.fullName,
+      googleProfile.profileImage
+    );
+    const token = await createToken(user.id, c.env.JWT_SECRET);
+    return c.json({ access_token: token, token_type: 'bearer', user: authUserPayload(user) });
+  } catch (error: any) {
+    const code = String(error?.message || '');
+    if (code === 'GOOGLE_AUDIENCE_INVALID') return c.json({ detail: 'Google client audience mismatch' }, 401);
+    if (code === 'GOOGLE_EMAIL_UNVERIFIED') return c.json({ detail: 'Google account email is not verified' }, 401);
+    if (code.startsWith('GOOGLE_')) return c.json({ detail: 'Invalid Google token' }, 401);
+    if (code === 'EMAIL_REQUIRED') return c.json({ detail: 'Google account email is required' }, 400);
+    return c.json({ detail: 'Google OAuth login failed' }, 401);
+  }
+});
+
+api.post('/auth/oauth/apple', async (c) => {
+  try {
+    const { id_token } = await c.req.json();
+    if (!id_token) return c.json({ detail: 'id_token is required' }, 400);
+
+    const appleProfile = await verifyAppleIdToken(c, id_token);
+    const user = await findOrCreateOAuthUser(
+      c,
+      'apple',
+      appleProfile.subject,
+      appleProfile.email,
+      appleProfile.fullName,
+      appleProfile.profileImage
+    );
+    const token = await createToken(user.id, c.env.JWT_SECRET);
+    return c.json({ access_token: token, token_type: 'bearer', user: authUserPayload(user) });
+  } catch (error: any) {
+    const code = String(error?.message || '');
+    if (code === 'EMAIL_REQUIRED') return c.json({ detail: 'Apple account email is required on first sign-in' }, 400);
+    if (code === 'ERR_JWT_CLAIM_VALIDATION_FAILED') return c.json({ detail: 'Apple audience mismatch' }, 401);
+    if (code === 'ERR_JWS_SIGNATURE_VERIFICATION_FAILED') return c.json({ detail: 'Invalid Apple token signature' }, 401);
+    if (code.startsWith('APPLE_')) return c.json({ detail: 'Invalid Apple token' }, 401);
+    return c.json({ detail: 'Apple OAuth login failed' }, 401);
+  }
 });
 
 api.get('/auth/me', authMiddleware, async (c) => {
   const userId = getUserId(c);
   const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
   if (!user) return c.json({ detail: 'User not found' }, 404);
-  const { password_hash, ...safe } = user;
-  return c.json(safe);
+  return c.json(authUserPayload(user));
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
