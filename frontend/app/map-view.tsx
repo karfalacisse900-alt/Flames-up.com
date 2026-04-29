@@ -55,12 +55,26 @@ const MAP_STYLE = JSON.stringify([
 
 export default function MapViewScreen() {
   const router = useRouter();
-  const params = useLocalSearchParams<{ type: string }>();
+  const params = useLocalSearchParams<{
+    type: string;
+    board?: string;
+    lat?: string;
+    lng?: string;
+    city?: string;
+  }>();
+  const routeLat = Number(params.lat);
+  const routeLng = Number(params.lng);
+  const hasRouteCoords = Number.isFinite(routeLat) && Number.isFinite(routeLng);
+  const routeCity =
+    typeof params.city === 'string' && params.city.length > 0
+      ? decodeURIComponent(params.city)
+      : '';
+  const boardRadius = params.board === 'world' ? 45000 : 15000;
   const [places, setPlaces] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [lat, setLat] = useState(40.7128);
-  const [lng, setLng] = useState(-74.006);
-  const [cityName, setCityName] = useState('New York');
+  const [lat, setLat] = useState(hasRouteCoords ? routeLat : 40.7128);
+  const [lng, setLng] = useState(hasRouteCoords ? routeLng : -74.006);
+  const [cityName, setCityName] = useState(routeCity || 'New York');
   const [selected, setSelected] = useState<any>(null);
   const [activeType, setActiveType] = useState(params.type || 'restaurant');
   const [searchQuery, setSearchQuery] = useState('');
@@ -68,6 +82,11 @@ export default function MapViewScreen() {
   const wvRef = useRef<any>(null);
 
   useEffect(() => {
+    if (hasRouteCoords) {
+      if (routeCity) setCityName(routeCity);
+      return;
+    }
+
     (async () => {
       try {
         const { status } = await Location.requestForegroundPermissionsAsync();
@@ -89,13 +108,13 @@ export default function MapViewScreen() {
         }
       } catch {}
     })();
-  }, []);
+  }, [hasRouteCoords, routeCity]);
 
   const loadPlaces = useCallback(async () => {
     setLoading(true);
     try {
       const r = await api.get('/google-places/nearby', {
-        params: { type: activeType, lat, lng, radius: 5000 },
+        params: { type: activeType, lat, lng, radius: boardRadius },
       });
       const list = Array.isArray(r.data) ? r.data : r.data?.places || [];
       setPlaces(list);
@@ -105,7 +124,7 @@ export default function MapViewScreen() {
     } finally {
       setLoading(false);
     }
-  }, [activeType, lat, lng]);
+  }, [activeType, lat, lng, boardRadius]);
 
   useEffect(() => {
     loadPlaces();
@@ -652,4 +671,3 @@ const s = StyleSheet.create({
   },
   actionSecondaryText: { fontSize: 13, fontWeight: '700', color: '#2D6A4F' },
 });
-

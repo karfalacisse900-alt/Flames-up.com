@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -14,8 +14,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import * as Location from 'expo-location';
-import { colors, shadows } from '../../src/utils/theme';
+import { colors } from '../../src/utils/theme';
 import api from '../../src/api/client';
 import { rankPlacesByQuery } from '../../src/utils/geoSpatial';
 
@@ -34,17 +33,30 @@ const PLACE_TYPES = [
   { id: 'night_club', label: 'Nightlife', icon: 'musical-notes-outline' },
 ];
 
-function PlaceGridItem({ place, size, onPress }: { place: any; size: 'large' | 'small'; onPress: () => void }) {
+const CITY_BOARDS = [
+  { id: 'world', label: 'World Board', lat: 20.0, lng: 0.0, radius: 45000 },
+  { id: 'nyc', label: 'NYC', lat: 40.7128, lng: -74.006, radius: 15000 },
+  { id: 'miami', label: 'Miami', lat: 25.7617, lng: -80.1918, radius: 15000 },
+  { id: 'la', label: 'Los Angeles', lat: 34.0522, lng: -118.2437, radius: 16000 },
+  { id: 'london', label: 'London', lat: 51.5072, lng: -0.1276, radius: 16000 },
+  { id: 'tokyo', label: 'Tokyo', lat: 35.6762, lng: 139.6503, radius: 16000 },
+];
+
+function PlaceGridItem({
+  place,
+  size,
+  onPress,
+}: {
+  place: any;
+  size: 'large' | 'small';
+  onPress: () => void;
+}) {
   const isLarge = size === 'large';
   const w = isLarge ? COL3_WIDTH * 2 + GRID_GAP : COL3_WIDTH;
   const h = isLarge ? COL3_WIDTH * 2 + GRID_GAP : COL3_WIDTH;
 
   return (
-    <TouchableOpacity
-      style={[gridStyles.item, { width: w, height: h }]}
-      onPress={onPress}
-      activeOpacity={0.9}
-    >
+    <TouchableOpacity style={[gridStyles.item, { width: w, height: h }]} onPress={onPress} activeOpacity={0.9}>
       {place.photo_url ? (
         <Image source={{ uri: place.photo_url }} style={gridStyles.image} />
       ) : (
@@ -52,13 +64,14 @@ function PlaceGridItem({ place, size, onPress }: { place: any; size: 'large' | '
           <Ionicons name="image-outline" size={32} color={colors.textHint} />
         </View>
       )}
-      {/* Light bottom gradient only – no heavy dark overlay */}
       <View style={gridStyles.bottomGradient} />
       <View style={gridStyles.info}>
-        <Text style={gridStyles.name} numberOfLines={isLarge ? 2 : 1}>{place.name}</Text>
+        <Text style={gridStyles.name} numberOfLines={isLarge ? 2 : 1}>
+          {place.name}
+        </Text>
         <View style={gridStyles.ratingRow}>
           <Ionicons name="star" size={11} color="#FCD34D" />
-          <Text style={gridStyles.rating}>{place.rating?.toFixed(1) || '–'}</Text>
+          <Text style={gridStyles.rating}>{place.rating?.toFixed(1) || '-'}</Text>
           {place.open_now !== undefined && (
             <View style={[gridStyles.statusDot, { backgroundColor: place.open_now ? '#22C55E' : '#EF4444' }]} />
           )}
@@ -140,82 +153,63 @@ export default function PlacesScreen() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [search, setSearch] = useState('');
   const [activeType, setActiveType] = useState('restaurant');
-  const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
-  const [locationName, setLocationName] = useState('Nearby');
-
+  const [activeBoard, setActiveBoard] = useState(CITY_BOARDS[0].id);
   const [error, setError] = useState<string | null>(null);
 
-  // Request real-time location on mount + load places immediately
-  useEffect(() => {
-    // Start loading places RIGHT AWAY with fallback location (no waiting for GPS)
-    loadPlaces(activeType, undefined, { lat: 40.7128, lng: -74.006 });
-    
-    (async () => {
+  const selectedBoard = useMemo(
+    () => CITY_BOARDS.find((b) => b.id === activeBoard) || CITY_BOARDS[0],
+    [activeBoard]
+  );
+
+  const loadPlaces = useCallback(
+    async (type: string, keyword?: string) => {
+      setIsLoading(true);
+      setError(null);
       try {
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status === 'granted') {
-          const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-          const coords = { lat: loc.coords.latitude, lng: loc.coords.longitude };
-          setUserLocation(coords);
-          // Reload with real GPS location
-          loadPlaces(activeType, undefined, coords);
-          try {
-            const geo = await Location.reverseGeocodeAsync({
-              latitude: loc.coords.latitude,
-              longitude: loc.coords.longitude,
-            });
-            if (geo[0]) {
-              setLocationName(geo[0].city || geo[0].district || geo[0].subregion || 'Nearby');
-            }
-          } catch {}
+        const params: any = {
+          type,
+          lat: selectedBoard.lat,
+          lng: selectedBoard.lng,
+          radius: selectedBoard.radius,
+        };
+        if (keyword?.trim()) params.keyword = keyword.trim();
+
+        const response = await api.get('/google-places/nearby', { params });
+        const data = response.data;
+        if (data?.error) {
+          setError(data.error);
+          setAllPlaces([]);
+          setPlaces([]);
         } else {
-          setUserLocation({ lat: 40.7128, lng: -74.006 });
-          setLocationName('New York');
+          const list = Array.isArray(data) ? data : data?.places || [];
+          setAllPlaces(list);
+          if (keyword?.trim()) {
+            setPlaces(
+              rankPlacesByQuery(
+                list,
+                keyword.trim(),
+                { lat: selectedBoard.lat, lng: selectedBoard.lng },
+                180
+              )
+            );
+          } else {
+            setPlaces(list);
+          }
         }
       } catch {
-        setUserLocation({ lat: 40.7128, lng: -74.006 });
-        setLocationName('New York');
-      }
-    })();
-  }, []);
-
-  const loadPlaces = async (type: string, keyword?: string, overrideLoc?: { lat: number; lng: number }) => {
-    setIsLoading(true);
-    setError(null);
-    try {
-      const loc = overrideLoc || userLocation || { lat: 40.7128, lng: -74.006 };
-      const params: any = { type, lat: loc.lat, lng: loc.lng, radius: 5000 };
-      if (keyword) params.keyword = keyword;
-      const response = await api.get('/google-places/nearby', { params });
-      const data = response.data;
-      if (data?.error) {
-        setError(data.error);
+        setError('Failed to load places');
+        setAllPlaces([]);
         setPlaces([]);
-      } else {
-        const list = Array.isArray(data) ? data : data?.places || [];
-        setAllPlaces(list);
-        if (keyword && keyword.trim()) {
-          setPlaces(rankPlacesByQuery(list, keyword, loc, 140));
-        } else {
-          setPlaces(list);
-        }
+      } finally {
+        setIsLoading(false);
       }
-    } catch (err: any) {
-      setError('Failed to load places');
-      setAllPlaces([]);
-      setPlaces([]);
-    } finally {
-      setIsLoading(false);
-    }
-  };
+    },
+    [selectedBoard]
+  );
 
-  // Reload when category changes
   useEffect(() => {
-    if (userLocation) {
-      setIsLoading(true);
-      loadPlaces(activeType, undefined, userLocation);
-    }
-  }, [activeType]);
+    loadPlaces(activeType);
+  }, [activeType, activeBoard, loadPlaces]);
 
   useEffect(() => {
     const query = search.trim();
@@ -223,23 +217,29 @@ export default function PlacesScreen() {
       setPlaces(allPlaces);
       return;
     }
-    setPlaces(rankPlacesByQuery(allPlaces, query, userLocation || undefined, 140));
-  }, [search, allPlaces, userLocation]);
+    setPlaces(
+      rankPlacesByQuery(
+        allPlaces,
+        query,
+        { lat: selectedBoard.lat, lng: selectedBoard.lng },
+        180
+      )
+    );
+  }, [search, allPlaces, selectedBoard]);
 
   const onRefresh = useCallback(async () => {
     setIsRefreshing(true);
-    await loadPlaces(activeType, search || undefined, userLocation || undefined);
+    await loadPlaces(activeType, search || undefined);
     setIsRefreshing(false);
-  }, [activeType, search, userLocation]);
+  }, [activeType, search, loadPlaces]);
 
   const handleSearch = () => {
     if (search.trim()) {
       setIsLoading(true);
-      loadPlaces(activeType, search.trim(), userLocation || undefined);
+      loadPlaces(activeType, search.trim());
     }
   };
 
-  // Lemon8-style grid: [large + 2 small stacked] alternating sides, then [3 small]
   const renderGrid = () => {
     const rows: React.ReactNode[] = [];
     let i = 0;
@@ -296,26 +296,45 @@ export default function PlacesScreen() {
 
   return (
     <SafeAreaView style={pStyles.container} edges={['top']}>
-      {/* Header */}
       <View style={pStyles.header}>
         <View>
-          <Text style={pStyles.headerTitle}>Places</Text>
+          <Text style={pStyles.headerTitle}>City Boards</Text>
           <View style={pStyles.locationRow}>
-            <Ionicons name="location" size={12} color={colors.accentPrimary} />
-            <Text style={pStyles.locationLabel}>{locationName}</Text>
+            <Ionicons name="globe-outline" size={12} color={colors.accentPrimary} />
+            <Text style={pStyles.locationLabel}>{selectedBoard.label}</Text>
           </View>
         </View>
-        <TouchableOpacity style={pStyles.mapBtn} onPress={() => router.push(`/map-view?type=${activeType}` as any)}>
+        <TouchableOpacity
+          style={pStyles.mapBtn}
+          onPress={() =>
+            router.push(
+              `/map-view?type=${activeType}&board=${selectedBoard.id}&lat=${selectedBoard.lat}&lng=${selectedBoard.lng}&city=${encodeURIComponent(selectedBoard.label)}` as any
+            )
+          }
+        >
           <Ionicons name="map-outline" size={20} color={colors.accentPrimary} />
         </TouchableOpacity>
       </View>
 
-      {/* Search */}
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={pStyles.boardRow}>
+        {CITY_BOARDS.map((board) => (
+          <TouchableOpacity
+            key={board.id}
+            style={[pStyles.boardChip, activeBoard === board.id && pStyles.boardChipActive]}
+            onPress={() => setActiveBoard(board.id)}
+          >
+            <Text style={[pStyles.boardText, activeBoard === board.id && pStyles.boardTextActive]}>
+              {board.label}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </ScrollView>
+
       <View style={pStyles.searchBar}>
         <Ionicons name="search" size={18} color={colors.textHint} />
         <TextInput
           style={pStyles.searchInput}
-          placeholder="Search places..."
+          placeholder="Search in this board..."
           placeholderTextColor={colors.textHint}
           value={search}
           onChangeText={setSearch}
@@ -323,18 +342,19 @@ export default function PlacesScreen() {
           returnKeyType="search"
         />
         {search.length > 0 && (
-          <TouchableOpacity onPress={() => { setSearch(''); setIsLoading(true); loadPlaces(activeType); }}>
+          <TouchableOpacity
+            onPress={() => {
+              setSearch('');
+              setIsLoading(true);
+              loadPlaces(activeType);
+            }}
+          >
             <Ionicons name="close-circle" size={18} color={colors.textHint} />
           </TouchableOpacity>
         )}
       </View>
 
-      {/* Category chips – wider spacing */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={pStyles.chipRow}
-      >
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={pStyles.chipRow}>
         {PLACE_TYPES.map((t) => (
           <TouchableOpacity
             key={t.id}
@@ -346,14 +366,11 @@ export default function PlacesScreen() {
               size={16}
               color={activeType === t.id ? '#FFFFFF' : colors.textSecondary}
             />
-            <Text style={[pStyles.chipText, activeType === t.id && pStyles.chipTextActive]}>
-              {t.label}
-            </Text>
+            <Text style={[pStyles.chipText, activeType === t.id && pStyles.chipTextActive]}>{t.label}</Text>
           </TouchableOpacity>
         ))}
       </ScrollView>
 
-      {/* Grid */}
       {isLoading ? (
         <View style={pStyles.loadingCenter}>
           <ActivityIndicator size="large" color={colors.accentPrimary} />
@@ -361,21 +378,21 @@ export default function PlacesScreen() {
       ) : (
         <ScrollView
           showsVerticalScrollIndicator={false}
-          refreshControl={
-            <RefreshControl refreshing={isRefreshing} onRefresh={onRefresh} tintColor={colors.accentPrimary} />
-          }
+          refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={onRefresh} tintColor={colors.accentPrimary} />}
           contentContainerStyle={{ paddingHorizontal: GRID_GAP, paddingBottom: 100, gap: GRID_GAP }}
         >
           {places.length === 0 ? (
             <View style={pStyles.emptyState}>
-              <Ionicons name="location-outline" size={56} color={colors.textHint} />
+              <Ionicons name="earth-outline" size={56} color={colors.textHint} />
               <Text style={pStyles.emptyTitle}>No places found</Text>
               {error ? (
                 <Text style={{ fontSize: 13, color: '#DC2626', marginTop: 8, textAlign: 'center', paddingHorizontal: 20 }}>
-                  {error.includes('Billing') ? 'Enable Google Maps Billing on your Google Cloud Console to see places.' : error}
+                  {error.includes('Billing')
+                    ? 'Enable Google Maps Billing on your Google Cloud Console to see places.'
+                    : error}
                 </Text>
               ) : (
-                <Text style={pStyles.emptyText}>Try a different category or search</Text>
+                <Text style={pStyles.emptyText}>Try another board or category</Text>
               )}
             </View>
           ) : (
@@ -423,6 +440,31 @@ const pStyles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.accentPrimary + '40',
   },
+  boardRow: {
+    paddingHorizontal: 16,
+    gap: 8,
+    marginBottom: 10,
+  },
+  boardChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    borderRadius: 20,
+    backgroundColor: '#F4F1EC',
+    borderWidth: 1,
+    borderColor: '#E2DBCF',
+  },
+  boardChipActive: {
+    backgroundColor: '#1F2937',
+    borderColor: '#1F2937',
+  },
+  boardText: {
+    fontSize: 13,
+    color: '#4B5563',
+    fontWeight: '700',
+  },
+  boardTextActive: {
+    color: '#FFFFFF',
+  },
   searchBar: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -465,3 +507,4 @@ const pStyles = StyleSheet.create({
   emptyTitle: { fontSize: 16, fontWeight: '700', color: colors.textPrimary, marginTop: 12 },
   emptyText: { fontSize: 13, color: colors.textHint, marginTop: 4 },
 });
+
