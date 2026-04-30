@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, FlatList,
-  RefreshControl, Dimensions, ScrollView,
+  RefreshControl, Dimensions, ScrollView, Image, Alert,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -12,29 +12,14 @@ import { rankFeed, RecommendationItem } from '../../src/recommendation';
 import { requireVerifiedPhone } from '../../src/utils/phoneVerification';
 import MediaPreview from '../../src/components/MediaPreview';
 
-const { width: SW } = Dimensions.get('window');
+const { width: SW, height: SH } = Dimensions.get('window');
 
-const FILTERS = [
+const HOME_TABS = [
   { id: 'world', label: 'World Board' },
-  { id: 'nyc', label: 'NYC' },
-  { id: 'miami', label: 'Miami' },
-  { id: 'la', label: 'LA' },
-  { id: 'tokyo', label: 'Tokyo' },
-  { id: 'london', label: 'London' },
-  { id: 'paris', label: 'Paris' },
-];
-
-const CITY_KW: Record<string, string[]> = {
-  nyc: ['new york', 'nyc', 'brooklyn', 'manhattan'],
-  miami: ['miami', 'south beach', 'wynwood'],
-  la: ['los angeles', 'la', 'hollywood', 'venice'],
-  tokyo: ['tokyo', 'shibuya', 'shinjuku'],
-  london: ['london', 'soho', 'shoreditch'],
-  paris: ['paris', 'montmartre'],
-};
+  { id: 'foryou', label: 'For You' },
+] as const;
 
 const WORLD_BOARD_SECTIONS = [
-  { label: 'For You', kind: 'ranked' },
   { label: 'Trending', kind: 'trending' },
   { label: 'Latest', kind: 'latest' },
   { label: 'Fresh', kind: 'fresh' },
@@ -85,6 +70,18 @@ function getPrimaryMediaUri(post: any): string {
 
 function hasBoardContent(post: any): boolean {
   return !!getPrimaryMediaUri(post) || String(post?.content || '').trim().length > 0;
+}
+
+function postTitle(post: any): string {
+  const content = String(post?.content || '').trim();
+  if (content) return content;
+  if (post?.place_name) return String(post.place_name);
+  return 'New post';
+}
+
+function avatarInitial(post: any): string {
+  const source = String(post?.user_full_name || post?.user_username || 'F');
+  return source.trim().slice(0, 1).toUpperCase() || 'F';
 }
 
 export default function HomeScreen() {
@@ -168,15 +165,7 @@ export default function HomeScreen() {
     setRefreshing(true); await loadData(); setRefreshing(false);
   }, [loadData]);
 
-  const filtered = useMemo(() => {
-    if (filter === 'world') return posts;
-    const kw = CITY_KW[filter] || [];
-    const f = posts.filter((p: any) => {
-      const t = ((p.location || '') + ' ' + (p.content || '')).toLowerCase();
-      return kw.some(k => t.includes(k));
-    });
-    return f.length > 0 ? f : [];
-  }, [filter, posts]);
+  const filtered = useMemo(() => posts, [posts]);
 
   const items = useMemo(() => filtered.filter(hasBoardContent), [filtered]);
 
@@ -214,6 +203,96 @@ export default function HomeScreen() {
     router.push('/create-post' as any);
   };
 
+  const followUser = async (post: any) => {
+    if (!user) {
+      router.push('/(auth)/login' as any);
+      return;
+    }
+    if (!post?.user_id || post.user_id === user.id) return;
+
+    try {
+      await api.post(`/users/${post.user_id}/follow`);
+    } catch (error: any) {
+      Alert.alert('Follow failed', error?.response?.data?.detail || 'Could not follow this user.');
+    }
+  };
+
+  const renderForYouCard = ({ item: p }: { item: any }) => {
+    const mediaUri = getPrimaryMediaUri(p);
+    const cardHeight = Math.max(520, SH - insets.top - 175);
+    const creatorName = p.user_full_name || p.user_username || 'Flames creator';
+
+    return (
+      <TouchableOpacity
+        style={[s.feedCard, { height: cardHeight }]}
+        activeOpacity={0.96}
+        onPress={() => router.push(`/post/${p.id}` as any)}
+      >
+        {mediaUri ? (
+          <MediaPreview uri={mediaUri} mediaTypes={p.media_types} style={s.feedMedia} showVideoBadge={false} />
+        ) : (
+          <View style={s.feedTextBackdrop}>
+            <Text style={s.feedTextBackdropContent}>{postTitle(p)}</Text>
+          </View>
+        )}
+        <View style={s.feedScrim} />
+
+        <View style={s.feedCopy}>
+          <Text style={s.feedEyebrow} numberOfLines={1}>{String(p.location || p.place_name || 'For You').toUpperCase()}</Text>
+          <Text style={s.feedTitle} numberOfLines={3}>{postTitle(p)}</Text>
+          <TouchableOpacity style={s.feedCta} activeOpacity={0.86} onPress={() => router.push(`/post/${p.id}` as any)}>
+            <Text style={s.feedCtaText}>Open post</Text>
+          </TouchableOpacity>
+        </View>
+
+        <View style={s.feedRail}>
+          <TouchableOpacity style={s.creatorButton} activeOpacity={0.88} onPress={() => router.push(`/profile/${p.user_id}` as any)}>
+            {p.user_profile_image ? (
+              <Image source={{ uri: p.user_profile_image }} style={s.creatorImage} />
+            ) : (
+              <View style={s.creatorFallback}>
+                <Text style={s.creatorFallbackText}>{avatarInitial(p)}</Text>
+              </View>
+            )}
+            {p.user_id !== user?.id ? (
+              <TouchableOpacity style={s.followPlus} activeOpacity={0.9} onPress={() => followUser(p)}>
+                <Ionicons name="add" size={16} color="#101010" />
+              </TouchableOpacity>
+            ) : null}
+          </TouchableOpacity>
+          <TouchableOpacity style={s.roundAction} activeOpacity={0.86}>
+            <Ionicons name="heart-outline" size={31} color="#101010" />
+          </TouchableOpacity>
+          <TouchableOpacity style={s.roundAction} activeOpacity={0.86}>
+            <Ionicons name="chatbubble-outline" size={28} color="#101010" />
+          </TouchableOpacity>
+          <TouchableOpacity style={s.roundAction} activeOpacity={0.86}>
+            <Ionicons name="paper-plane-outline" size={27} color="#101010" />
+          </TouchableOpacity>
+        </View>
+
+        <View style={s.creatorPill}>
+          {p.user_profile_image ? (
+            <Image source={{ uri: p.user_profile_image }} style={s.creatorPillImage} />
+          ) : (
+            <View style={s.creatorPillFallback}>
+              <Text style={s.creatorPillFallbackText}>{avatarInitial(p)}</Text>
+            </View>
+          )}
+          <View style={s.creatorPillText}>
+            <Text style={s.creatorPillName} numberOfLines={1}>{creatorName}</Text>
+            <Text style={s.creatorPillHandle} numberOfLines={1}>@{p.user_username || 'flames'}</Text>
+          </View>
+          {p.user_id !== user?.id ? (
+            <TouchableOpacity style={s.creatorPillFollow} activeOpacity={0.86} onPress={() => followUser(p)}>
+              <Text style={s.creatorPillFollowText}>Follow</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
+      </TouchableOpacity>
+    );
+  };
+
   return (
     <View style={s.root}>
       {/* STICKY HEADER — stays fixed at top */}
@@ -228,9 +307,9 @@ export default function HomeScreen() {
             </TouchableOpacity>
           </View>
         </View>
-        {/* Filter tabs */}
+        {/* Page tabs */}
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.filters}>
-          {FILTERS.map(f => (
+          {HOME_TABS.map(f => (
             <TouchableOpacity key={f.id} style={[s.chip, filter === f.id && s.chipOn]} onPress={() => setFilter(f.id)}>
               <Text style={[s.chipTx, filter === f.id && s.chipTxOn]}>{f.label}</Text>
             </TouchableOpacity>
@@ -238,53 +317,70 @@ export default function HomeScreen() {
         </ScrollView>
       </View>
 
-      {/* SCROLLABLE GRID */}
-      <FlatList
-        data={[1]}
-        keyExtractor={() => 'grid'}
-        showsVerticalScrollIndicator={false}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#1A1A1A" />}
-        contentContainerStyle={{ paddingBottom: 100 }}
-        renderItem={() => (
-          <>
-            {/* World Board / Cities: ranked post sections */}
-            {Object.keys(postSections).length > 0 && (
-              <View>
-                {Object.entries(postSections).map(([label, sectionPosts]) => (
-                  <View key={label}>
-                    <Text style={s.sectionLabel}>{label}</Text>
-                    <View style={s.gallery}>
-                      {sectionPosts.slice(0, 9).map((p: any) => (
-                        <TouchableOpacity key={p.id} style={[s.gTile, { width: TILE_SIZE, height: TILE_SIZE }]} activeOpacity={0.95}
-                          onPress={() => router.push(`/post/${p.id}` as any)}>
-                          {getPrimaryMediaUri(p) ? (
-                            <MediaPreview
-                              uri={getPrimaryMediaUri(p)}
-                              mediaTypes={p.media_types}
-                              style={s.gImg}
-                            />
-                          ) : (
-                            <View style={s.textTile}>
-                              <Text style={s.textTileAuthor} numberOfLines={1}>@{p.user_username || 'flames'}</Text>
-                              <Text style={s.textTileContent} numberOfLines={5}>{p.content}</Text>
-                            </View>
-                          )}
-                        </TouchableOpacity>
-                      ))}
+      {filter === 'foryou' ? (
+        <FlatList
+          data={items}
+          keyExtractor={(p) => `foryou-${p.id}`}
+          renderItem={renderForYouCard}
+          showsVerticalScrollIndicator={false}
+          snapToAlignment="start"
+          decelerationRate="fast"
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#1A1A1A" />}
+          contentContainerStyle={items.length === 0 ? s.emptyFeedContent : { paddingBottom: 92 }}
+          ListEmptyComponent={(
+            <View style={s.empty}>
+              <Ionicons name="sparkles-outline" size={40} color="#DDD" />
+              <Text style={s.emptyTx}>No posts here yet</Text>
+            </View>
+          )}
+        />
+      ) : (
+        <FlatList
+          data={[1]}
+          keyExtractor={() => 'grid'}
+          showsVerticalScrollIndicator={false}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#1A1A1A" />}
+          contentContainerStyle={{ paddingBottom: 100 }}
+          renderItem={() => (
+            <>
+              {Object.keys(postSections).length > 0 && (
+                <View>
+                  {Object.entries(postSections).map(([label, sectionPosts]) => (
+                    <View key={label}>
+                      <Text style={s.sectionLabel}>{label}</Text>
+                      <View style={s.gallery}>
+                        {sectionPosts.slice(0, 9).map((p: any) => (
+                          <TouchableOpacity key={p.id} style={[s.gTile, { width: TILE_SIZE, height: TILE_SIZE }]} activeOpacity={0.95}
+                            onPress={() => router.push(`/post/${p.id}` as any)}>
+                            {getPrimaryMediaUri(p) ? (
+                              <MediaPreview
+                                uri={getPrimaryMediaUri(p)}
+                                mediaTypes={p.media_types}
+                                style={s.gImg}
+                              />
+                            ) : (
+                              <View style={s.textTile}>
+                                <Text style={s.textTileAuthor} numberOfLines={1}>@{p.user_username || 'flames'}</Text>
+                                <Text style={s.textTileContent} numberOfLines={5}>{p.content}</Text>
+                              </View>
+                            )}
+                          </TouchableOpacity>
+                        ))}
+                      </View>
                     </View>
-                  </View>
-                ))}
-              </View>
-            )}
-            {items.length === 0 && (
-              <View style={s.empty}>
-                <Ionicons name="images-outline" size={40} color="#DDD" />
-                <Text style={s.emptyTx}>No posts here yet</Text>
-              </View>
-            )}
-          </>
-        )}
-      />
+                  ))}
+                </View>
+              )}
+              {items.length === 0 && (
+                <View style={s.empty}>
+                  <Ionicons name="images-outline" size={40} color="#DDD" />
+                  <Text style={s.emptyTx}>No posts here yet</Text>
+                </View>
+              )}
+            </>
+          )}
+        />
+      )}
     </View>
   );
 }
@@ -315,6 +411,33 @@ const s = StyleSheet.create({
   textTileContent: { fontSize: 15, lineHeight: 19, fontWeight: '800', color: '#1A1A1A' },
   sectionLabel: { fontSize: 20, fontWeight: '900', color: '#1A1A1A', fontStyle: 'italic', paddingHorizontal: 12, paddingVertical: 10 },
 
+  feedCard: { width: SW, backgroundColor: '#111', overflow: 'hidden', position: 'relative' },
+  feedMedia: { ...StyleSheet.absoluteFillObject, width: '100%', height: '100%' },
+  feedTextBackdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: '#1D1D1B', justifyContent: 'center', padding: 30 },
+  feedTextBackdropContent: { color: '#FFF', fontSize: 38, lineHeight: 42, fontWeight: '900' },
+  feedScrim: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.22)' },
+  feedCopy: { position: 'absolute', top: 42, left: 22, right: 100 },
+  feedEyebrow: { color: '#FFF', fontSize: 23, fontWeight: '500', letterSpacing: 0 },
+  feedTitle: { marginTop: 10, color: '#FFF', fontSize: 40, lineHeight: 45, fontWeight: '900', letterSpacing: 0 },
+  feedCta: { marginTop: 22, alignSelf: 'flex-start', minHeight: 49, paddingHorizontal: 23, borderRadius: 26, borderWidth: 2, borderColor: '#101010', backgroundColor: '#DFFF32', justifyContent: 'center' },
+  feedCtaText: { color: '#111', fontSize: 22, fontWeight: '500' },
+  feedRail: { position: 'absolute', top: 36, right: 18, gap: 17, alignItems: 'center' },
+  creatorButton: { width: 64, height: 64, borderRadius: 32, backgroundColor: '#FFF', alignItems: 'center', justifyContent: 'center', borderWidth: 3, borderColor: '#111' },
+  creatorImage: { width: 54, height: 54, borderRadius: 27 },
+  creatorFallback: { width: 54, height: 54, borderRadius: 27, backgroundColor: '#F5F2EA', alignItems: 'center', justifyContent: 'center' },
+  creatorFallbackText: { color: '#111', fontSize: 25, fontWeight: '900' },
+  followPlus: { position: 'absolute', bottom: -7, right: -4, width: 26, height: 26, borderRadius: 13, backgroundColor: '#DFFF32', borderWidth: 2, borderColor: '#111', alignItems: 'center', justifyContent: 'center' },
+  roundAction: { width: 61, height: 61, borderRadius: 31, backgroundColor: 'rgba(255,255,255,0.94)', alignItems: 'center', justifyContent: 'center' },
+  creatorPill: { position: 'absolute', left: 22, right: 22, bottom: 28, minHeight: 75, borderRadius: 38, backgroundColor: 'rgba(255,255,255,0.94)', flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 13, paddingVertical: 10 },
+  creatorPillImage: { width: 51, height: 51, borderRadius: 25.5 },
+  creatorPillFallback: { width: 51, height: 51, borderRadius: 25.5, backgroundColor: '#DFFF32', alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#111' },
+  creatorPillFallbackText: { color: '#111', fontSize: 20, fontWeight: '900' },
+  creatorPillText: { flex: 1, minWidth: 0 },
+  creatorPillName: { color: '#111', fontSize: 22, fontWeight: '900' },
+  creatorPillHandle: { color: '#575757', fontSize: 13, fontWeight: '700', marginTop: 2 },
+  creatorPillFollow: { height: 42, borderRadius: 22, paddingHorizontal: 18, backgroundColor: '#111', alignItems: 'center', justifyContent: 'center' },
+  creatorPillFollowText: { color: '#FFF', fontSize: 14, fontWeight: '900' },
+  emptyFeedContent: { flexGrow: 1, paddingBottom: 100 },
   empty: { paddingTop: 100, alignItems: 'center' },
   emptyTx: { fontSize: 14, color: '#CCC', marginTop: 10 },
 });
