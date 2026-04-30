@@ -23,7 +23,7 @@ import { useAuthStore } from '../../src/store/authStore';
 
 WebBrowser.maybeCompleteAuthSession();
 
-type AuthMethod = 'apple' | 'google' | 'phone' | 'email';
+type AuthMethod = 'apple' | 'google' | 'email';
 
 function MethodButton({
   icon,
@@ -35,7 +35,7 @@ function MethodButton({
 }: {
   icon: keyof typeof Ionicons.glyphMap;
   label: string;
-  variant: 'light' | 'phone' | 'email';
+  variant: 'light' | 'email';
   loading?: boolean;
   disabled?: boolean;
   onPress: () => void;
@@ -44,7 +44,6 @@ function MethodButton({
     <TouchableOpacity
       style={[
         styles.methodButton,
-        variant === 'phone' && styles.phoneButton,
         variant === 'email' && styles.emailButton,
         disabled && styles.methodButtonDisabled,
       ]}
@@ -64,22 +63,18 @@ function MethodButton({
 
 export default function LoginScreen() {
   const router = useRouter();
-  const { login, loginWithOAuth, startPhoneLogin, verifyPhoneLogin } = useAuthStore();
+  const { login, loginWithOAuth } = useAuthStore();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [phone, setPhone] = useState('');
-  const [phoneCode, setPhoneCode] = useState('');
-  const [phoneStep, setPhoneStep] = useState<'phone' | 'code'>('phone');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const [isPhoneLoading, setIsPhoneLoading] = useState(false);
   const [showEmailForm, setShowEmailForm] = useState(false);
-  const [showPhoneForm, setShowPhoneForm] = useState(false);
   const [activeSocialMethod, setActiveSocialMethod] = useState<AuthMethod | null>(null);
 
   const googleWebClientId = (process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || '').trim();
   const googleIosClientId = (process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID || '').trim();
   const googleAndroidClientId = (process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID || '').trim();
+  const googleRedirectUri = makeRedirectUri({ scheme: 'frontend' });
   const activeGoogleClientId = Platform.select({
     ios: googleIosClientId || googleWebClientId,
     android: googleAndroidClientId || googleWebClientId,
@@ -98,7 +93,7 @@ export default function LoginScreen() {
     webClientId: safeGoogleWebClientId,
     iosClientId: safeGoogleIosClientId,
     androidClientId: safeGoogleAndroidClientId,
-    redirectUri: makeRedirectUri({ scheme: 'frontend' }),
+    redirectUri: googleRedirectUri,
   });
 
   useEffect(() => {
@@ -145,7 +140,7 @@ export default function LoginScreen() {
     if (!hasGoogleClientId) {
       Alert.alert(
         'Google sign in not configured',
-        'Set EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID for Expo Go, and add EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID / EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID for production builds.'
+        `Set EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID in frontend/.env and set GOOGLE_OAUTH_CLIENT_IDS in Cloudflare to the same Google client ID. Redirect URI: ${googleRedirectUri}`
       );
       return;
     }
@@ -201,52 +196,9 @@ export default function LoginScreen() {
     }
   };
 
-  const handlePhoneStart = async () => {
-    const trimmedPhone = phone.trim();
-    if (!trimmedPhone) {
-      Alert.alert('Phone number required', 'Enter your phone number with country code, for example +15555550100.');
-      return;
-    }
-
-    setIsPhoneLoading(true);
-    try {
-      const result = await startPhoneLogin(trimmedPhone);
-      setPhoneStep('code');
-      const devCode = result.dev_code ? `\n\nDev code: ${result.dev_code}` : '';
-      Alert.alert('Code sent', `${result.detail || 'Enter the code we sent to your phone.'}${devCode}`);
-    } catch (error: any) {
-      Alert.alert('Phone sign in failed', error?.response?.data?.detail || 'Could not start phone sign in.');
-    } finally {
-      setIsPhoneLoading(false);
-    }
-  };
-
-  const handlePhoneVerify = async () => {
-    if (!phoneCode.trim()) {
-      Alert.alert('Code required', 'Enter the verification code.');
-      return;
-    }
-
-    setIsPhoneLoading(true);
-    try {
-      await verifyPhoneLogin(phone.trim(), phoneCode.trim());
-      router.replace('/(tabs)/home');
-    } catch (error: any) {
-      Alert.alert('Phone sign in failed', error?.response?.data?.detail || 'Invalid or expired code.');
-    } finally {
-      setIsPhoneLoading(false);
-    }
-  };
-
   const handleMethodPress = async (method: AuthMethod) => {
     if (method === 'email') {
       setShowEmailForm(true);
-      setShowPhoneForm(false);
-      return;
-    }
-    if (method === 'phone') {
-      setShowEmailForm(false);
-      setShowPhoneForm(true);
       return;
     }
     if (method === 'google') {
@@ -297,13 +249,6 @@ export default function LoginScreen() {
               onPress={() => handleMethodPress('google')}
             />
             <MethodButton
-              icon="call-outline"
-              label="Continue with Phone"
-              variant="phone"
-              disabled={!!activeSocialMethod}
-              onPress={() => handleMethodPress('phone')}
-            />
-            <MethodButton
               icon="mail-outline"
               label="Log in with Email"
               variant="email"
@@ -311,78 +256,6 @@ export default function LoginScreen() {
               onPress={() => handleMethodPress('email')}
             />
           </View>
-
-          {showPhoneForm ? (
-            <View style={styles.emailForm}>
-              <Text style={styles.phoneFormTitle}>
-                {phoneStep === 'phone' ? 'Sign in with phone' : 'Enter your code'}
-              </Text>
-              <View style={styles.inputWrap}>
-                <Ionicons name="call-outline" size={20} color="#5E5E5E" />
-                <TextInput
-                  style={styles.input}
-                  placeholder="+1 555 555 0100"
-                  placeholderTextColor="#6D6D6D"
-                  value={phone}
-                  onChangeText={setPhone}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  keyboardType="phone-pad"
-                  editable={phoneStep === 'phone'}
-                />
-              </View>
-
-              {phoneStep === 'code' ? (
-                <View style={styles.inputWrap}>
-                  <Ionicons name="keypad-outline" size={20} color="#5E5E5E" />
-                  <TextInput
-                    style={styles.input}
-                    placeholder="6-digit code"
-                    placeholderTextColor="#6D6D6D"
-                    value={phoneCode}
-                    onChangeText={(value) => setPhoneCode(value.replace(/[^0-9]/g, '').slice(0, 6))}
-                    keyboardType="number-pad"
-                    maxLength={6}
-                  />
-                </View>
-              ) : null}
-
-              <TouchableOpacity
-                style={[styles.signInButton, isPhoneLoading && styles.signInButtonDisabled]}
-                onPress={phoneStep === 'phone' ? handlePhoneStart : handlePhoneVerify}
-                disabled={isPhoneLoading}
-              >
-                {isPhoneLoading ? (
-                  <ActivityIndicator color="#FFFFFF" />
-                ) : (
-                  <Text style={styles.signInButtonText}>{phoneStep === 'phone' ? 'Send Code' : 'Verify Code'}</Text>
-                )}
-              </TouchableOpacity>
-
-              {phoneStep === 'code' ? (
-                <TouchableOpacity
-                  style={styles.backToMethods}
-                  onPress={() => {
-                    setPhoneStep('phone');
-                    setPhoneCode('');
-                  }}
-                >
-                  <Text style={styles.backToMethodsText}>Use a different number</Text>
-                </TouchableOpacity>
-              ) : null}
-
-              <TouchableOpacity
-                style={styles.backToMethods}
-                onPress={() => {
-                  setShowPhoneForm(false);
-                  setPhoneStep('phone');
-                  setPhoneCode('');
-                }}
-              >
-                <Text style={styles.backToMethodsText}>Back to all sign-in options</Text>
-              </TouchableOpacity>
-            </View>
-          ) : null}
 
           {showEmailForm ? (
             <View style={styles.emailForm}>
@@ -509,9 +382,6 @@ const styles = StyleSheet.create({
   methodButtonDisabled: {
     opacity: 0.7,
   },
-  phoneButton: {
-    backgroundColor: '#4ED862',
-  },
   emailButton: {
     backgroundColor: '#ECF259',
   },
@@ -528,13 +398,6 @@ const styles = StyleSheet.create({
     borderColor: '#1E1E1E',
     padding: 14,
     gap: 10,
-  },
-  phoneFormTitle: {
-    color: '#151515',
-    fontSize: 18,
-    fontWeight: '800',
-    marginBottom: 4,
-    textAlign: 'center',
   },
   inputWrap: {
     height: 54,

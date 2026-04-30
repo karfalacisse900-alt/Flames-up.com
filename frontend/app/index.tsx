@@ -32,13 +32,13 @@ export default function Index() {
     );
   }
 
-  // Show welcome page on first launch
-  if (!onboardingSeen) {
-    return <Redirect href="/welcome" />;
-  }
-
   if (isAuthenticated) {
     return <Redirect href="/(tabs)/home" />;
+  }
+
+  // Show welcome page on first launch for signed-out users only.
+  if (!onboardingSeen) {
+    return <Redirect href="/welcome" />;
   }
 
   return <Redirect href="/(auth)/login" />;

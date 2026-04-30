@@ -11,6 +11,7 @@ import * as Location from 'expo-location';
 import { useAuthStore } from '../src/store/authStore';
 import api from '../src/api/client';
 import { uploadImage, getVideoUploadUrl, uploadVideoToStream } from '../src/utils/mediaUpload';
+import { isPhoneVerificationError, requireVerifiedPhone } from '../src/utils/phoneVerification';
 
 const { width: SW } = Dimensions.get('window');
 
@@ -89,6 +90,7 @@ export default function DropMomentScreen() {
 
   const handlePost = async () => {
     if (!media || isPosting) return;
+    if (!requireVerifiedPhone(user, router, 'create posts')) return;
     setIsPosting(true);
     try {
       let imageUrl = '';
@@ -129,7 +131,11 @@ export default function DropMomentScreen() {
       router.replace('/(tabs)/home' as any);
     } catch (error) {
       console.log('Post error:', error);
-      Alert.alert('Error', 'Failed to create post');
+      if (isPhoneVerificationError(error)) {
+        requireVerifiedPhone(null, router, 'create posts');
+      } else {
+        Alert.alert('Error', 'Failed to create post');
+      }
     } finally {
       setIsPosting(false);
       setUploadProgress('');
@@ -154,7 +160,7 @@ export default function DropMomentScreen() {
           <View style={s.captureIcon}>
             <Ionicons name="flame" size={48} color="#F97316" />
           </View>
-          <Text style={s.captureHeadline}>What's happening?</Text>
+          <Text style={s.captureHeadline}>What is happening?</Text>
           <Text style={s.captureSub}>Capture this moment and share it with the world</Text>
         </View>
 

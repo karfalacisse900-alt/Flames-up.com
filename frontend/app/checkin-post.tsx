@@ -22,6 +22,7 @@ import { colors, shadows } from '../src/utils/theme';
 import { useAuthStore } from '../src/store/authStore';
 import api from '../src/api/client';
 import { processMediaBatch } from '../src/utils/mediaProcessing';
+import { isPhoneVerificationError, requireVerifiedPhone } from '../src/utils/phoneVerification';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const MAX_MEDIA = 10;
@@ -166,6 +167,7 @@ export default function CheckInPostScreen() {
   };
 
   const submitPost = async (type: string) => {
+    if (!requireVerifiedPhone(user, router, 'create posts')) return;
     setIsPosting(true);
     try {
       const imagesList = media.map((m) => m.base64 || m.uri).filter(Boolean);
@@ -188,7 +190,11 @@ export default function CheckInPostScreen() {
       await api.post('/posts', postData);
       router.back();
     } catch (error: any) {
-      Alert.alert('Error', error.response?.data?.detail || 'Could not create post');
+      if (isPhoneVerificationError(error)) {
+        requireVerifiedPhone(null, router, 'create posts');
+      } else {
+        Alert.alert('Error', error.response?.data?.detail || 'Could not create post');
+      }
     } finally {
       setIsPosting(false);
     }
@@ -279,7 +285,7 @@ export default function CheckInPostScreen() {
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 }}>
                       <Ionicons name="checkmark-circle" size={14} color="#10B981" />
                       <Text style={[styles.placeCardStatus, { color: '#10B981' }]}>
-                        Verified! You're here ({distance ? `${Math.round(distance)}m` : 'nearby'})
+                        Verified! You are here ({distance ? `${Math.round(distance)}m` : 'nearby'})
                       </Text>
                     </View>
                   ) : distance !== null ? (
@@ -287,7 +293,7 @@ export default function CheckInPostScreen() {
                       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
                         <Ionicons name="alert-circle" size={14} color="#F59E0B" />
                         <Text style={[styles.placeCardStatus, { color: '#F59E0B' }]}>
-                          You're {distance >= 1000 ? `${(distance / 1000).toFixed(1)}km` : `${Math.round(distance)}m`} away
+                          You are {distance >= 1000 ? `${(distance / 1000).toFixed(1)}km` : `${Math.round(distance)}m`} away
                         </Text>
                       </View>
                       <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>

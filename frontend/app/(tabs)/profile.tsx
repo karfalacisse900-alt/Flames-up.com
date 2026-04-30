@@ -17,9 +17,10 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, spacing, borderRadius, shadows } from '../../src/utils/theme';
+import { colors, shadows } from '../../src/utils/theme';
 import { useAuthStore } from '../../src/store/authStore';
 import api from '../../src/api/client';
+import MediaPreview from '../../src/components/MediaPreview';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -136,8 +137,6 @@ export default function ProfileScreen() {
               {(() => {
                 const items = [
                   { icon: 'library-outline', label: 'My Library', color: colors.textPrimary, route: '/library' },
-                  { icon: 'flame-outline', label: 'Creator Hub', color: '#F97316', route: '/creators' },
-                  ...(!user?.is_publisher ? [{ icon: 'document-text-outline', label: 'Apply: Local Publisher', color: '#3B82F6', route: '/publisher-apply' }] : []),
                   ...(user?.is_admin ? [
                     { icon: 'shield-checkmark-outline', label: 'Governance Dashboard', color: '#EF4444', route: '__governance__' },
                   ] : []),
@@ -345,7 +344,11 @@ export default function ProfileScreen() {
                   onPress={() => router.push(`/post/${post.id}`)}
                 >
                   {post.image ? (
-                    <Image source={{ uri: post.image }} style={styles.thumbnailImage} />
+                    <MediaPreview
+                      uri={post.image}
+                      mediaTypes={post.media_types}
+                      style={styles.thumbnailImage}
+                    />
                   ) : (
                     <View style={styles.textThumbnail}>
                       <Text style={styles.textThumbnailContent} numberOfLines={3}>

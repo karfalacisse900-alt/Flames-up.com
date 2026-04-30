@@ -30,17 +30,18 @@ export default function RootLayout() {
         <Stack.Screen name="post/[id]" options={{ presentation: 'card' }} />
         <Stack.Screen name="user/[id]" options={{ presentation: 'card' }} />
         <Stack.Screen name="conversation/[id]" options={{ presentation: 'card' }} />
+        <Stack.Screen name="call/[channel]" options={{ presentation: 'fullScreenModal' }} />
         <Stack.Screen name="place/[id]" options={{ presentation: 'card' }} />
+        <Stack.Screen name="event/[id]" options={{ presentation: 'card' }} />
         <Stack.Screen name="create-post" options={{ presentation: 'modal' }} />
         <Stack.Screen name="checkin-post" options={{ presentation: 'modal' }} />
         <Stack.Screen name="create-discover-post" options={{ presentation: 'modal' }} />
-        <Stack.Screen name="publisher-apply" options={{ presentation: 'modal' }} />
         <Stack.Screen name="create-status" options={{ presentation: 'modal' }} />
+        <Stack.Screen name="verify-phone" options={{ presentation: 'modal' }} />
         <Stack.Screen name="edit-profile" options={{ presentation: 'modal' }} />
         <Stack.Screen name="settings" options={{ presentation: 'card' }} />
         <Stack.Screen name="my-library" options={{ presentation: 'card' }} />
         <Stack.Screen name="referrals" options={{ presentation: 'card' }} />
-        <Stack.Screen name="creator-hub" options={{ presentation: 'card' }} />
         <Stack.Screen name="admin-panel" options={{ presentation: 'card' }} />
         <Stack.Screen name="content-manager" options={{ presentation: 'card' }} />
         <Stack.Screen name="my-spots" options={{ presentation: 'card' }} />

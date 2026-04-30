@@ -3,6 +3,7 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import bcrypt from 'bcryptjs';
+import { RtcRole, RtcTokenBuilder } from 'agora-token';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 interface Env {
@@ -13,6 +14,8 @@ interface Env {
   CLOUDFLARE_IMAGES_TOKEN: string;
   CLOUDFLARE_STREAM_TOKEN: string;
   GOOGLE_MAPS_API_KEY: string;
+  EVENTBRITE_API_TOKEN?: string;
+  EVENTS_PREVIEW?: string;
   FRONTEND_URL: string;
   GOOGLE_OAUTH_CLIENT_ID?: string;
   GOOGLE_OAUTH_CLIENT_IDS?: string;
@@ -20,7 +23,12 @@ interface Env {
   APPLE_OAUTH_AUDIENCES?: string;
   TWILIO_ACCOUNT_SID?: string;
   TWILIO_AUTH_TOKEN?: string;
+  TWILIO_VERIFY_SERVICE_SID?: string;
+  TWILIO_SERVICE_SID?: string;
   TWILIO_FROM_PHONE?: string;
+  AGORA_APP_ID?: string;
+  AGORA_APP_CERTIFICATE?: string;
+  AGORA_TOKEN_TTL_SECONDS?: string;
 }
 
 type HonoApp = { Bindings: Env; Variables: { userId: string } };
@@ -39,11 +47,27 @@ const ALLOWED_ORIGINS = [
   'https://flames-up-preview.preview.emergentagent.com',
   'http://localhost:3000',
   'http://localhost:8081',
+  'http://localhost:8083',
+  'http://localhost:8084',
+  'http://localhost:8085',
   'exp://localhost:8081',
 ];
 const corsOpts = { origin: (o: string) => ALLOWED_ORIGINS.includes(o) ? o : ALLOWED_ORIGINS[0], allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'] };
 app.use('*', cors(corsOpts));
 api.use('*', cors(corsOpts));
+
+const retiredFeature = (feature: string) => (c: any) => c.json({
+  detail: `${feature} has been removed from Flames Up.`,
+}, 410);
+
+api.all('/publisher/*', retiredFeature('Publisher tools'));
+api.all('/admin/publisher-applications', retiredFeature('Publisher applications'));
+api.all('/admin/publisher-applications/*', retiredFeature('Publisher applications'));
+api.all('/creators', retiredFeature('Creator Hub'));
+api.all('/creators/*', retiredFeature('Creator Hub'));
+api.all('/admin/creator-applications', retiredFeature('Creator applications'));
+api.all('/admin/creator-applications/*', retiredFeature('Creator applications'));
+api.all('/admin/creators/*', retiredFeature('Creator admin tools'));
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 const uuid = () => crypto.randomUUID();
@@ -81,6 +105,7 @@ const authMiddleware = async (c: any, next: () => Promise<void>) => {
     const { jwtVerify } = await import('jose');
     const { payload } = await jwtVerify(token, new TextEncoder().encode(getJwtSecret(c)));
     c.set('jwtPayload', payload);
+    await ensurePrivacySchema(c.env.DB);
     await next();
   } catch {
     return c.json({ detail: 'Invalid token' }, 401);
@@ -129,6 +154,7 @@ async function ensureUniqueUsername(db: D1Database, desired: string): Promise<st
 
 let phoneAuthSchemaReady = false;
 let oauthSchemaReady = false;
+let privacySchemaReady = false;
 
 async function ensureOAuthSchema(db: D1Database) {
   if (oauthSchemaReady) return;
@@ -152,14 +178,87 @@ async function ensureOAuthSchema(db: D1Database) {
   oauthSchemaReady = true;
 }
 
+async function ensurePrivacySchema(db: D1Database) {
+  if (privacySchemaReady) return;
+
+  const statements = [
+    'ALTER TABLE users ADD COLUMN is_private INTEGER DEFAULT 0',
+    "ALTER TABLE users ADD COLUMN language TEXT DEFAULT 'en'",
+    "ALTER TABLE posts ADD COLUMN visibility TEXT DEFAULT 'public'",
+    "ALTER TABLE statuses ADD COLUMN visibility TEXT DEFAULT 'public'",
+    'CREATE INDEX IF NOT EXISTS idx_users_private ON users(is_private)',
+    'CREATE INDEX IF NOT EXISTS idx_posts_visibility ON posts(visibility)',
+    'CREATE INDEX IF NOT EXISTS idx_statuses_visibility ON statuses(visibility)',
+  ];
+
+  for (const statement of statements) {
+    try {
+      await db.exec(statement);
+    } catch (error: any) {
+      const message = String(error?.message || '');
+      if (!message.includes('duplicate column name') && !message.includes('already exists')) {
+        throw error;
+      }
+    }
+  }
+
+  privacySchemaReady = true;
+}
+
+function normalizeLanguage(value: unknown): 'en' | 'fr' | 'es' {
+  return value === 'fr' || value === 'es' ? value : 'en';
+}
+
+function normalizeSqlBoolean(value: unknown): number {
+  return value === true || value === 1 || value === '1' || value === 'true' ? 1 : 0;
+}
+
+function normalizeVisibility(value: unknown): 'public' | 'friends' {
+  return value === 'friends' ? 'friends' : 'public';
+}
+
+function visibleAuthorWhere(alias = 'u'): string {
+  return `(${alias}.id = ? OR COALESCE(${alias}.is_private, 0) = 0 OR EXISTS (SELECT 1 FROM friendships f WHERE f.user_id = ? AND f.friend_id = ${alias}.id))`;
+}
+
+function visibleStatusWhere(userAlias = 'u', statusAlias = 's'): string {
+  return `(${statusAlias}.user_id = ? OR (COALESCE(${statusAlias}.visibility, 'public') = 'public' AND COALESCE(${userAlias}.is_private, 0) = 0) OR EXISTS (SELECT 1 FROM friendships f WHERE f.user_id = ? AND f.friend_id = ${statusAlias}.user_id))`;
+}
+
+function visiblePostWhere(userAlias = 'u', postAlias = 'p'): string {
+  return `${visibleAuthorWhere(userAlias)} AND (COALESCE(${postAlias}.visibility, 'public') = 'public' OR ${postAlias}.user_id = ? OR EXISTS (SELECT 1 FROM friendships f2 WHERE f2.user_id = ? AND f2.friend_id = ${postAlias}.user_id))`;
+}
+
+async function isFriend(db: D1Database, userId: string, targetId: string): Promise<boolean> {
+  const friendship = await db.prepare('SELECT id FROM friendships WHERE user_id = ? AND friend_id = ?').bind(userId, targetId).first();
+  return !!friendship;
+}
+
+async function canViewUserContent(db: D1Database, viewerId: string, owner: any): Promise<boolean> {
+  if (!owner) return false;
+  if (viewerId === owner.id) return true;
+  if (!owner.is_private) return true;
+  return isFriend(db, viewerId, owner.id);
+}
+
+function safeUserPayload(user: any) {
+  const { password_hash, ...safe } = user;
+  return {
+    ...safe,
+    is_private: !!safe.is_private,
+    language: normalizeLanguage(safe.language),
+  };
+}
+
 function normalizePhone(input: string): string {
   const trimmed = String(input || '').trim();
-  const plus = trimmed.startsWith('+') ? '+' : '';
   const digits = trimmed.replace(/\D/g, '');
   if (digits.length < 10 || digits.length > 15) {
     throw new Error('PHONE_INVALID');
   }
-  return `${plus}${digits}`;
+  if (trimmed.startsWith('+')) return `+${digits}`;
+  if (digits.length === 10) return `+1${digits}`;
+  return `+${digits}`;
 }
 
 async function sha256Hex(value: string): Promise<string> {
@@ -202,16 +301,538 @@ function getJwtSecret(c: any): string {
   return secret;
 }
 
+function getAgoraConfig(c: any) {
+  const appId = String(c.env.AGORA_APP_ID || '').trim();
+  const appCertificate = String(c.env.AGORA_APP_CERTIFICATE || '').trim();
+  if (!appId || !appCertificate) {
+    throw new Error('AGORA_NOT_CONFIGURED');
+  }
+  return { appId, appCertificate };
+}
+
+function normalizeAgoraChannel(value: unknown): string {
+  const channel = String(value || '')
+    .trim()
+    .replace(/[^a-zA-Z0-9_ -]/g, '_')
+    .replace(/\s+/g, '_')
+    .slice(0, 63);
+
+  if (!channel || new TextEncoder().encode(channel).length >= 64) {
+    throw new Error('AGORA_INVALID_CHANNEL');
+  }
+  return channel;
+}
+
+function normalizeAgoraRole(value: unknown): { label: 'host' | 'audience'; rtcRole: number } {
+  const role = String(value || '').trim().toLowerCase();
+  if (role === 'audience' || role === 'subscriber') {
+    return { label: 'audience', rtcRole: RtcRole.SUBSCRIBER };
+  }
+  return { label: 'host', rtcRole: RtcRole.PUBLISHER };
+}
+
+function getAgoraTokenTtl(c: any): number {
+  const raw = Number.parseInt(String(c.env.AGORA_TOKEN_TTL_SECONDS || '3600'), 10);
+  if (!Number.isFinite(raw)) return 3600;
+  return Math.min(Math.max(raw, 60), 24 * 60 * 60);
+}
+
+async function numericAgoraUid(userId: string): Promise<number> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(userId));
+  const view = new DataView(digest);
+  return (view.getUint32(0) % 2147483646) + 1;
+}
+
+const EVENTBRITE_API_BASE = 'https://www.eventbriteapi.com/v3';
+const NYC_OPEN_DATA_EVENTS_URL = 'https://data.cityofnewyork.us/resource/tvpp-9vvx.json';
+const GOOGLE_PLACES_API_BASE = 'https://maps.googleapis.com/maps/api/place';
+const EVENT_LOOKAHEAD_DAYS = 45;
+const EVENTBRITE_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const EVENTBRITE_WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+const EVENT_INTEREST_MAP: Record<string, { queries: string[]; categories?: string[] }> = {
+  fashion: { queries: ['fashion show', 'style', 'beauty'], categories: ['106'] },
+  beauty: { queries: ['beauty', 'makeup', 'fashion'], categories: ['106'] },
+  sport: { queries: ['sports', 'fitness', 'basketball'], categories: ['108'] },
+  sports: { queries: ['sports', 'fitness', 'basketball'], categories: ['108'] },
+  fitness: { queries: ['fitness', 'workout', 'wellness'], categories: ['108', '107'] },
+  club: { queries: ['club', 'nightlife', 'party', 'dance'] },
+  nightlife: { queries: ['nightlife', 'club', 'party', 'dance'] },
+  party: { queries: ['party', 'club', 'nightlife'] },
+  movie: { queries: ['movie', 'film screening', 'cinema'], categories: ['104'] },
+  film: { queries: ['film screening', 'movie', 'cinema'], categories: ['104'] },
+  music: { queries: ['live music', 'concert', 'dj'], categories: ['103'] },
+  food: { queries: ['food festival', 'tasting', 'farmers market'], categories: ['110'] },
+  art: { queries: ['art', 'gallery', 'creative'], categories: ['105'] },
+  culture: { queries: ['culture', 'community', 'festival'], categories: ['113'] },
+  tech: { queries: ['technology', 'startup', 'tech meetup'], categories: ['102'] },
+  business: { queries: ['business', 'networking', 'entrepreneur'], categories: ['101'] },
+  wellness: { queries: ['wellness', 'yoga', 'health'], categories: ['107'] },
+};
+
+const GOOGLE_EVENT_PLANS = [
+  {
+    id: 'tonight-clubs',
+    title: 'Night events tonight',
+    host: 'Flames nightlife guide',
+    type: 'night_club',
+    keyword: 'club party nightlife',
+    weekday: null as number | null,
+    startHour: 20,
+    endHour: 2,
+    description: 'A nightlife pick shaped by your event preferences. Check the venue page for the exact lineup before you go.',
+  },
+  {
+    id: 'live-music',
+    title: 'Live music tonight',
+    host: 'Flames music guide',
+    type: 'bar',
+    keyword: 'live music',
+    weekday: null as number | null,
+    startHour: 19,
+    endHour: 23,
+    description: 'A live night plan picked from your music and going-out signals.',
+  },
+  {
+    id: 'movie-night',
+    title: 'Movie night',
+    host: 'Flames movie guide',
+    type: 'movie_theater',
+    keyword: 'movie film cinema',
+    weekday: null as number | null,
+    startHour: 19,
+    endHour: 22,
+    description: 'A movie plan picked from your entertainment and culture signals.',
+  },
+  {
+    id: 'weekend-parks',
+    title: 'Park happenings',
+    host: 'Flames park guide',
+    type: 'park',
+    keyword: 'events',
+    weekday: 6 as number | null,
+    startHour: 11,
+    endHour: 19,
+    description: 'A park-based plan for public programming, markets, or seasonal pop-ups.',
+  },
+  {
+    id: 'sports-weekend',
+    title: 'Sports nearby',
+    host: 'Flames sports guide',
+    type: 'stadium',
+    keyword: 'sports game',
+    weekday: 6 as number | null,
+    startHour: 15,
+    endHour: 18,
+    description: 'A nearby sports venue pick shaped by your activity and fan interests.',
+  },
+];
+
+function uniq(values: string[]): string[] {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+}
+
+function parsePreferenceList(value: unknown): string[] {
+  if (!value) return [];
+  if (Array.isArray(value)) return uniq(value.map((item) => String(item).toLowerCase()));
+
+  const text = String(value).trim();
+  if (!text) return [];
+
+  try {
+    const parsed = JSON.parse(text);
+    if (Array.isArray(parsed)) return uniq(parsed.map((item) => String(item).toLowerCase()));
+  } catch {}
+
+  return uniq(text.split(/[,|/]+/).map((item) => item.toLowerCase()));
+}
+
+function buildEventPreference(user: any, explicitQuery?: string) {
+  const rawTerms = uniq([
+    ...parsePreferenceList(user?.interests),
+    ...parsePreferenceList(user?.looking_for),
+    ...(explicitQuery ? [explicitQuery.toLowerCase()] : []),
+  ]);
+  const queries: string[] = [];
+  const categories: string[] = [];
+
+  for (const term of rawTerms) {
+    const normalized = term.replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!normalized) continue;
+    let mapped = false;
+
+    for (const [key, config] of Object.entries(EVENT_INTEREST_MAP)) {
+      if (normalized.includes(key)) {
+        queries.push(...config.queries);
+        if (config.categories) categories.push(...config.categories);
+        mapped = true;
+      }
+    }
+
+    if (!mapped) queries.push(normalized);
+  }
+
+  const fallbackQueries = ['events tonight', 'live music', 'food festival', 'art', 'fitness'];
+
+  return {
+    terms: rawTerms,
+    queries: uniq(queries.length > 0 ? queries : fallbackQueries).slice(0, 6),
+    categories: uniq(categories).slice(0, 4),
+  };
+}
+
+function stripHtml(value: unknown): string {
+  return String(value || '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function eventbriteClock(date: Date): string {
+  let hour = date.getHours();
+  const minute = `${date.getMinutes()}`.padStart(2, '0');
+  const suffix = hour >= 12 ? 'PM' : 'AM';
+  hour = hour % 12 || 12;
+  return `${`${hour}`.padStart(2, '0')}:${minute}${suffix}`;
+}
+
+function eventbriteDateParts(startLocal: string, endLocal?: string) {
+  const start = startLocal ? new Date(startLocal) : new Date();
+  const end = endLocal ? new Date(endLocal) : null;
+  const weekday = EVENTBRITE_WEEKDAYS[start.getDay()];
+  const month = EVENTBRITE_MONTHS[start.getMonth()];
+  const day = `${start.getDate()}`.padStart(2, '0');
+  const dateLabel = `${weekday}, ${month} ${start.getDate()} at ${eventbriteClock(start)}`;
+  const schedule = end ? `${dateLabel} - ${eventbriteClock(end)}` : dateLabel;
+  const today = new Date();
+  const isToday =
+    start.getFullYear() === today.getFullYear() &&
+    start.getMonth() === today.getMonth() &&
+    start.getDate() === today.getDate();
+  const isWeekend = start.getDay() === 0 || start.getDay() === 6;
+
+  return {
+    weekday,
+    month,
+    day,
+    schedule,
+    shortTime: isToday ? 'Tonight' : isWeekend ? 'This weekend' : weekday,
+  };
+}
+
+function eventbriteAddress(venue: any): string {
+  const address = venue?.address || {};
+  return address.localized_address_display || address.address_1 || address.city || venue?.name || 'Eventbrite venue';
+}
+
+function eventbriteEventToCard(event: any, reason: string, rank: number) {
+  const date = eventbriteDateParts(event?.start?.local, event?.end?.local);
+  const venue = event?.venue || {};
+  const image = event?.logo?.original?.url || event?.logo?.url || '';
+  const description = stripHtml(event?.summary || event?.description?.text);
+  const category = event?.category?.short_name || event?.category?.name || reason;
+
+  return {
+    event: true,
+    event_source: 'eventbrite',
+    event_id: `eventbrite-${event.id}`,
+    place_id: `eventbrite-${event.id}`,
+    eventbrite_id: event.id,
+    event_url: event.url || '',
+    name: event?.name?.text || 'Eventbrite event',
+    event_title: event?.name?.text || 'Eventbrite event',
+    event_host: 'Eventbrite',
+    event_venue: venue?.name || (event?.online_event ? 'Online event' : 'Eventbrite venue'),
+    event_address: event?.online_event ? 'Online event' : eventbriteAddress(venue),
+    event_description: description || `A ${category.toLowerCase()} event picked from your Flames preferences.`,
+    event_time_label: date.shortTime,
+    event_schedule: date.schedule,
+    event_start: event?.start?.utc || event?.start?.local || '',
+    event_weekday: date.weekday,
+    event_month: date.month,
+    event_day: date.day,
+    attendees: 3 + ((Number(event?.id || rank) || rank) % 8),
+    category,
+    preference_reason: reason,
+    photo_url: image,
+    lat: venue?.latitude ? Number(venue.latitude) : null,
+    lng: venue?.longitude ? Number(venue.longitude) : null,
+    source_rank: rank,
+  };
+}
+
+function nycBoroughFromLocation(location: { address: string; lat?: string; lng?: string }): string | null {
+  const address = String(location.address || '').toLowerCase();
+  if (address.includes('brooklyn')) return 'Brooklyn';
+  if (address.includes('queens')) return 'Queens';
+  if (address.includes('bronx')) return 'Bronx';
+  if (address.includes('staten island')) return 'Staten Island';
+  if (address.includes('manhattan') || address.includes('new york') || address.includes('nyc')) return 'Manhattan';
+
+  const lat = Number(location.lat);
+  const lng = Number(location.lng);
+  if (Number.isFinite(lat) && Number.isFinite(lng) && lat > 40.45 && lat < 40.95 && lng > -74.3 && lng < -73.65) {
+    return 'Manhattan';
+  }
+
+  return null;
+}
+
+function nycOpenDataEventToCard(event: any, rank: number) {
+  const start = String(event.start_date_time || '');
+  const end = String(event.end_date_time || '');
+  const validEnd = Date.parse(end) > Date.parse(start) ? end : undefined;
+  const date = eventbriteDateParts(start, validEnd);
+  const eventType = event.event_type || 'City event';
+  const venue = event.event_location || `${event.event_borough || 'NYC'} event`;
+
+  return {
+    event: true,
+    event_source: 'nyc_open_data',
+    event_id: `nyc-${event.event_id || rank}`,
+    place_id: `nyc-${event.event_id || rank}`,
+    eventbrite_id: '',
+    event_url: '',
+    name: event.event_name || eventType,
+    event_title: event.event_name || eventType,
+    event_host: event.event_agency || 'City of New York',
+    event_venue: venue,
+    event_address: venue,
+    event_description: `${eventType} from NYC Open Data, matched to your local event preferences.`,
+    event_time_label: date.shortTime,
+    event_schedule: date.schedule,
+    event_start: start,
+    event_weekday: date.weekday,
+    event_month: date.month,
+    event_day: date.day,
+    attendees: 3 + ((Number(event.event_id || rank) || rank) % 8),
+    category: eventType,
+    source_rank: rank,
+  };
+}
+
+async function fetchNycOpenDataEvents(location: { address: string; lat?: string; lng?: string }) {
+  const borough = nycBoroughFromLocation(location);
+  if (!borough) return [];
+
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(start);
+  end.setDate(end.getDate() + EVENT_LOOKAHEAD_DAYS);
+
+  const where = [
+    `start_date_time >= '${start.toISOString().slice(0, 19)}'`,
+    `start_date_time <= '${end.toISOString().slice(0, 19)}'`,
+    `event_borough = '${borough.replace(/'/g, "''")}'`,
+  ].join(' AND ');
+  const params = new URLSearchParams({
+    '$select': 'event_id,event_name,start_date_time,end_date_time,event_agency,event_type,event_borough,event_location',
+    '$where': where,
+    '$order': 'start_date_time ASC',
+    '$limit': '80',
+  });
+
+  const response = await fetch(`${NYC_OPEN_DATA_EVENTS_URL}?${params.toString()}`);
+  if (!response.ok) throw new Error(`NYC_OPEN_DATA_FAILED:${response.status}`);
+
+  const data: any = await response.json();
+  return Array.isArray(data) ? data : [];
+}
+
+async function fetchEventbriteEvents(c: any, query: string, category: string | undefined, location: { address: string; lat?: string; lng?: string }) {
+  const token = String(c.env.EVENTBRITE_API_TOKEN || '').trim();
+  if (!token) throw new Error('EVENTBRITE_TOKEN_MISSING');
+
+  const start = new Date();
+  const end = new Date(start);
+  end.setDate(end.getDate() + EVENT_LOOKAHEAD_DAYS);
+
+  const params = new URLSearchParams({
+    q: query,
+    sort_by: 'date',
+    expand: 'venue,logo,category',
+    page_size: '12',
+    'start_date.range_start': start.toISOString(),
+    'start_date.range_end': end.toISOString(),
+  });
+
+  if (category) params.set('categories', category);
+  if (location.lat && location.lng) {
+    params.set('location.latitude', location.lat);
+    params.set('location.longitude', location.lng);
+  } else {
+    params.set('location.address', location.address);
+  }
+  params.set('location.within', '25mi');
+
+  const response = await fetch(`${EVENTBRITE_API_BASE}/events/search/?${params.toString()}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  if (!response.ok) {
+    if (response.status === 404) throw new Error('EVENTBRITE_PUBLIC_SEARCH_UNAVAILABLE');
+    throw new Error(`EVENTBRITE_SEARCH_FAILED:${response.status}`);
+  }
+
+  const data: any = await response.json();
+  return Array.isArray(data.events) ? data.events : [];
+}
+
+async function fetchOwnedEventbriteEvents(c: any) {
+  const token = String(c.env.EVENTBRITE_API_TOKEN || '').trim();
+  if (!token) throw new Error('EVENTBRITE_TOKEN_MISSING');
+
+  const headers = { Authorization: `Bearer ${token}` };
+  const orgResponse = await fetch(`${EVENTBRITE_API_BASE}/users/me/organizations/`, { headers });
+  if (!orgResponse.ok) throw new Error(`EVENTBRITE_ORGS_FAILED:${orgResponse.status}`);
+
+  const orgData: any = await orgResponse.json();
+  const organizations = Array.isArray(orgData.organizations) ? orgData.organizations : [];
+  const events: any[] = [];
+
+  for (const org of organizations.slice(0, 5)) {
+    const params = new URLSearchParams({
+      status: 'live,started',
+      expand: 'venue,logo,category',
+      page_size: '25',
+    });
+    const response = await fetch(`${EVENTBRITE_API_BASE}/organizations/${org.id}/events/?${params.toString()}`, { headers });
+    if (!response.ok) continue;
+
+    const data: any = await response.json();
+    if (Array.isArray(data.events)) events.push(...data.events);
+  }
+
+  return events;
+}
+
+function googleEventWindow(plan: typeof GOOGLE_EVENT_PLANS[number]) {
+  const start = new Date();
+  if (plan.weekday !== null) {
+    const today = start.getDay();
+    const delta = (plan.weekday - today + 7) % 7 || 7;
+    start.setDate(start.getDate() + delta);
+  }
+  start.setHours(plan.startHour, 0, 0, 0);
+  const end = new Date(start);
+  end.setHours(plan.endHour, 0, 0, 0);
+  if (plan.endHour <= plan.startHour) end.setDate(end.getDate() + 1);
+  return eventbriteDateParts(start.toISOString(), end.toISOString());
+}
+
+function googlePlaceToEventCard(place: any, plan: typeof GOOGLE_EVENT_PLANS[number], rank: number, key: string) {
+  const date = googleEventWindow(plan);
+  const venue = place?.name || plan.title;
+  const address = place?.vicinity || place?.formatted_address || venue;
+  const photoRef = place?.photos?.[0]?.photo_reference;
+
+  return {
+    event: true,
+    event_source: 'google_places',
+    event_id: `google-${plan.id}-${place?.place_id || rank}`.replace(/[^a-zA-Z0-9_-]/g, '-'),
+    place_id: place?.place_id || `google-${plan.id}-${rank}`,
+    eventbrite_id: '',
+    event_url: '',
+    name: plan.title,
+    event_title: plan.title,
+    event_host: plan.host,
+    event_venue: venue,
+    event_address: address,
+    event_description: plan.description,
+    event_time_label: date.shortTime,
+    event_schedule: date.schedule,
+    event_start: '',
+    event_weekday: date.weekday,
+    event_month: date.month,
+    event_day: date.day,
+    attendees: 3 + (rank % 8),
+    category: plan.keyword,
+    rating: place?.rating,
+    user_ratings_total: place?.user_ratings_total,
+    open_now: place?.opening_hours?.open_now,
+    lat: place?.geometry?.location?.lat,
+    lng: place?.geometry?.location?.lng,
+    types: place?.types || [],
+    photo_url: photoRef ? `${GOOGLE_PLACES_API_BASE}/photo?maxwidth=500&photoreference=${photoRef}&key=${key}` : null,
+    source_rank: rank,
+  };
+}
+
+async function fetchGoogleEventPlaces(c: any, location: { address: string; lat?: string; lng?: string }) {
+  const key = String(c.env.GOOGLE_MAPS_API_KEY || '').trim();
+  if (!key) throw new Error('GOOGLE_MAPS_API_KEY_MISSING');
+
+  const lat = location.lat || '40.7128';
+  const lng = location.lng || '-74.006';
+  const cards: any[] = [];
+  const seen = new Set<string>();
+
+  for (const plan of GOOGLE_EVENT_PLANS) {
+    const params = new URLSearchParams({
+      location: `${lat},${lng}`,
+      radius: '40000',
+      type: plan.type,
+      keyword: plan.keyword,
+      key,
+    });
+    const response = await fetch(`${GOOGLE_PLACES_API_BASE}/nearbysearch/json?${params.toString()}`);
+    const data: any = await response.json();
+    if (data.status !== 'OK' && data.status !== 'ZERO_RESULTS') {
+      throw new Error(`GOOGLE_PLACES_FAILED:${data.status || response.status}`);
+    }
+
+    const places = Array.isArray(data.results) ? data.results : [];
+    for (const place of places.slice(0, 2)) {
+      const placeId = place?.place_id || `${plan.id}-${cards.length}`;
+      if (seen.has(placeId)) continue;
+      seen.add(placeId);
+      cards.push(googlePlaceToEventCard(place, plan, cards.length, key));
+    }
+  }
+
+  return cards;
+}
+
+function eventCardScore(card: any, preferenceTerms: string[], query: string): number {
+  const corpus = `${card.event_title || ''} ${card.event_description || ''} ${card.category || ''}`.toLowerCase();
+  let score = 0;
+
+  for (const term of preferenceTerms) {
+    const normalized = term.toLowerCase().trim();
+    if (normalized && corpus.includes(normalized)) score += 8;
+  }
+
+  for (const part of query.toLowerCase().split(/\s+/)) {
+    if (part.length > 2 && corpus.includes(part)) score += 2;
+  }
+
+  if (card.photo_url) score += 2;
+  if (card.event_venue && card.event_venue !== 'Eventbrite venue') score += 1;
+
+  const startMs = Date.parse(card.event_start || '');
+  if (Number.isFinite(startMs)) {
+    const hoursAway = Math.max(0, (startMs - Date.now()) / (1000 * 60 * 60));
+    score += Math.max(0, 8 - hoursAway / 24);
+  }
+
+  return score;
+}
+
+function eventbriteEmptyDetail(errors: string[]): string {
+  if (errors.includes('EVENTBRITE_TOKEN_MISSING')) return 'Eventbrite API token is not configured.';
+  if (errors.includes('EVENTBRITE_PUBLIC_SEARCH_UNAVAILABLE') && errors.includes('owned_events_empty')) {
+    return 'Eventbrite public event search is unavailable for this token, and the connected Eventbrite organizer has no live events yet.';
+  }
+  if (errors.includes('owned_events_empty')) return 'The connected Eventbrite organizer has no live events yet.';
+  if (errors.includes('EVENTBRITE_PUBLIC_SEARCH_UNAVAILABLE')) return 'Eventbrite public event search is unavailable for this token.';
+  return 'Eventbrite did not return live events for these preferences.';
+}
+
 async function ensurePhoneAuthSchema(db: D1Database) {
   if (phoneAuthSchemaReady) return;
-
-  const existingTable = await db.prepare(
-    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'phone_login_codes'"
-  ).first().catch(() => null);
-  if (existingTable) {
-    phoneAuthSchemaReady = true;
-    return;
-  }
 
   const statements = [
     'ALTER TABLE users ADD COLUMN phone TEXT',
@@ -233,7 +854,8 @@ async function ensurePhoneAuthSchema(db: D1Database) {
     try {
       await db.exec(statement);
     } catch (error: any) {
-      if (!String(error?.message || '').includes('duplicate column name')) {
+      const message = String(error?.message || '');
+      if (!message.includes('duplicate column name') && !message.includes('already exists')) {
         throw error;
       }
     }
@@ -243,10 +865,76 @@ async function ensurePhoneAuthSchema(db: D1Database) {
 }
 
 function createPhoneCode(): string {
-  return Math.floor(100000 + Math.random() * 900000).toString();
+  const values = new Uint32Array(1);
+  crypto.getRandomValues(values);
+  return (100000 + (values[0] % 900000)).toString();
 }
 
-async function sendPhoneCode(c: any, phone: string, code: string): Promise<'sms' | 'development'> {
+function getTwilioVerifyConfig(c: any) {
+  const accountSid = String(c.env.TWILIO_ACCOUNT_SID || '').trim();
+  const authToken = String(c.env.TWILIO_AUTH_TOKEN || '').trim();
+  const serviceSid = String(c.env.TWILIO_VERIFY_SERVICE_SID || c.env.TWILIO_SERVICE_SID || '').trim();
+  if (!accountSid || !authToken || !serviceSid) return null;
+  return { accountSid, authToken, serviceSid };
+}
+
+async function startTwilioVerification(c: any, phone: string): Promise<boolean> {
+  const config = getTwilioVerifyConfig(c);
+  if (!config) return false;
+
+  const body = new URLSearchParams({
+    To: phone,
+    Channel: 'sms',
+  });
+
+  const response = await fetch(`https://verify.twilio.com/v2/Services/${encodeURIComponent(config.serviceSid)}/Verifications`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Basic ${btoa(`${config.accountSid}:${config.authToken}`)}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body,
+  });
+
+  if (!response.ok) {
+    const data: any = await response.json().catch(() => ({}));
+    throw new Error(`PHONE_VERIFY_START_FAILED:${response.status}:${data.code || 'unknown'}`);
+  }
+
+  return true;
+}
+
+async function checkTwilioVerification(c: any, phone: string, code: string): Promise<boolean> {
+  const config = getTwilioVerifyConfig(c);
+  if (!config) return false;
+
+  const body = new URLSearchParams({
+    To: phone,
+    Code: code,
+  });
+
+  const response = await fetch(`https://verify.twilio.com/v2/Services/${encodeURIComponent(config.serviceSid)}/VerificationCheck`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Basic ${btoa(`${config.accountSid}:${config.authToken}`)}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body,
+  });
+
+  if (!response.ok) {
+    if (response.status >= 500) {
+      const data: any = await response.json().catch(() => ({}));
+      throw new Error(`PHONE_VERIFY_CHECK_FAILED:${response.status}:${data.code || 'unknown'}`);
+    }
+    return false;
+  }
+
+  const data: any = await response.json().catch(() => ({}));
+  return data.valid === true || data.status === 'approved';
+}
+
+async function sendLegacyPhoneCode(c: any, phone: string, code: string): Promise<'legacy_sms' | 'development'> {
   const sid = c.env.TWILIO_ACCOUNT_SID;
   const token = c.env.TWILIO_AUTH_TOKEN;
   const from = c.env.TWILIO_FROM_PHONE;
@@ -271,7 +959,29 @@ async function sendPhoneCode(c: any, phone: string, code: string): Promise<'sms'
     throw new Error('PHONE_SMS_FAILED');
   }
 
-  return 'sms';
+  return 'legacy_sms';
+}
+
+async function findOrCreatePhoneUser(c: any, phone: string, fullName?: string) {
+  let user: any = await c.env.DB.prepare('SELECT * FROM users WHERE phone = ?').bind(phone).first();
+  if (!user) {
+    const id = uuid();
+    const digits = phone.replace(/\D/g, '');
+    const username = await ensureUniqueUsername(c.env.DB, `phone_${digits.slice(-6)}`);
+    const safeName = String(fullName || '').trim() || 'Flames User';
+    const email = `${digits}@phone.flames-up.local`;
+    const generatedPasswordHash = await hashPassword(`phone_${phone}_${uuid()}`);
+
+    await c.env.DB.prepare(
+      'INSERT INTO users (id, email, username, full_name, password_hash, phone, phone_verified) VALUES (?, ?, ?, ?, ?, ?, 1)'
+    ).bind(id, email, username, safeName, generatedPasswordHash, phone).run();
+    user = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(id).first();
+  } else if (!user.phone_verified) {
+    await c.env.DB.prepare('UPDATE users SET phone_verified = 1, updated_at = datetime(\'now\') WHERE id = ?').bind(user.id).run();
+    user = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(user.id).first();
+  }
+
+  return user;
 }
 
 function authUserPayload(user: any) {
@@ -298,7 +1008,23 @@ function authUserPayload(user: any) {
     is_creator: !!user.is_creator,
     is_publisher: !!user.is_publisher,
     is_verified: !!user.is_verified,
+    is_private: !!user.is_private,
+    language: normalizeLanguage(user.language),
   };
+}
+
+async function requirePhoneVerified(c: any, action = 'continue') {
+  const userId = getUserId(c);
+  await ensurePhoneAuthSchema(c.env.DB);
+  const user: any = await c.env.DB.prepare('SELECT phone_verified FROM users WHERE id = ?').bind(userId).first();
+  if (!user) return c.json({ detail: 'User not found' }, 404);
+  if (!user.phone_verified) {
+    return c.json({
+      detail: `Verify your phone number to ${action}.`,
+      code: 'PHONE_VERIFICATION_REQUIRED',
+    }, 403);
+  }
+  return null;
 }
 
 async function verifyGoogleIdToken(c: any, idToken: string) {
@@ -484,6 +1210,15 @@ api.post('/auth/phone/start', async (c) => {
     const normalizedPhone = normalizePhone(body.phone);
     if (!normalizedPhone) return c.json({ detail: 'Enter a valid phone number with country code.' }, 400);
     await ensurePhoneAuthSchema(c.env.DB);
+
+    const startedWithVerify = await startTwilioVerification(c, normalizedPhone);
+    if (startedWithVerify) {
+      return c.json({
+        detail: 'We sent a sign-in code to your phone.',
+        delivery: 'twilio_verify',
+      });
+    }
+
     const code = createPhoneCode();
     const jwtSecret = getJwtSecret(c);
     const codeHash = await sha256Hex(`${normalizedPhone}:${code}:${jwtSecret}`);
@@ -493,11 +1228,11 @@ api.post('/auth/phone/start', async (c) => {
       'INSERT INTO phone_login_codes (id, phone, code_hash, expires_at) VALUES (?, ?, ?, ?)'
     ).bind(uuid(), normalizedPhone, codeHash, expiresAt).run();
 
-    const delivery = await sendPhoneCode(c, normalizedPhone, code);
+    const delivery = await sendLegacyPhoneCode(c, normalizedPhone, code);
     const payload: any = {
-      detail: delivery === 'sms'
+      detail: delivery === 'legacy_sms'
         ? 'We sent a sign-in code to your phone.'
-        : 'SMS is not configured yet, so use the development code shown here.',
+        : 'Twilio Verify is not configured yet, so use the development code shown here.',
       delivery,
     };
 
@@ -510,6 +1245,7 @@ api.post('/auth/phone/start', async (c) => {
     const code = String(error?.message || '');
     if (code === 'PHONE_INVALID') return c.json({ detail: 'Enter a valid phone number with country code.' }, 400);
     if (code === 'JWT_SECRET_MISSING') return c.json({ detail: 'Auth service is not configured.' }, 503);
+    if (code.startsWith('PHONE_VERIFY_START_FAILED')) return c.json({ detail: 'Could not send verification code. Check Twilio Verify settings.', code }, 502);
     if (code === 'PHONE_SMS_FAILED') return c.json({ detail: 'Could not send SMS code. Check Twilio settings.' }, 502);
     return c.json({ detail: 'Could not start phone sign in.' }, 500);
   }
@@ -526,6 +1262,17 @@ api.post('/auth/phone/verify', async (c) => {
       return c.json({ detail: 'Enter the 6-digit verification code.' }, 400);
     }
     await ensurePhoneAuthSchema(c.env.DB);
+
+    if (getTwilioVerifyConfig(c)) {
+      const verified = await checkTwilioVerification(c, normalizedPhone, normalizedCode);
+      if (!verified) {
+        return c.json({ detail: 'Invalid or expired verification code.' }, 401);
+      }
+
+      const user = await findOrCreatePhoneUser(c, normalizedPhone, body.full_name);
+      const token = await createToken(user.id, getJwtSecret(c));
+      return c.json({ access_token: token, token_type: 'bearer', user: authUserPayload(user) });
+    }
 
     const challenge: any = await c.env.DB.prepare(
       'SELECT * FROM phone_login_codes WHERE phone = ? AND consumed_at IS NULL ORDER BY created_at DESC LIMIT 1'
@@ -544,23 +1291,7 @@ api.post('/auth/phone/verify', async (c) => {
 
     await c.env.DB.prepare('UPDATE phone_login_codes SET consumed_at = datetime(\'now\') WHERE id = ?').bind(challenge.id).run();
 
-    let user: any = await c.env.DB.prepare('SELECT * FROM users WHERE phone = ?').bind(normalizedPhone).first();
-    if (!user) {
-      const id = uuid();
-      const digits = normalizedPhone.replace(/\D/g, '');
-      const username = await ensureUniqueUsername(c.env.DB, `phone_${digits.slice(-6)}`);
-      const safeName = String(body.full_name || '').trim() || 'Flames User';
-      const email = `${digits}@phone.flames-up.local`;
-      const generatedPasswordHash = await hashPassword(`phone_${normalizedPhone}_${uuid()}`);
-
-      await c.env.DB.prepare(
-        'INSERT INTO users (id, email, username, full_name, password_hash, phone, phone_verified) VALUES (?, ?, ?, ?, ?, ?, 1)'
-      ).bind(id, email, username, safeName, generatedPasswordHash, normalizedPhone).run();
-      user = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(id).first();
-    } else if (!user.phone_verified) {
-      await c.env.DB.prepare('UPDATE users SET phone_verified = 1, updated_at = datetime(\'now\') WHERE id = ?').bind(user.id).run();
-      user = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(user.id).first();
-    }
+    const user = await findOrCreatePhoneUser(c, normalizedPhone, body.full_name);
 
     const token = await createToken(user.id, jwtSecret);
     return c.json({ access_token: token, token_type: 'bearer', user: authUserPayload(user) });
@@ -568,6 +1299,7 @@ api.post('/auth/phone/verify', async (c) => {
     const code = String(error?.message || '');
     if (code === 'PHONE_INVALID') return c.json({ detail: 'Enter a valid phone number with country code.' }, 400);
     if (code === 'JWT_SECRET_MISSING') return c.json({ detail: 'Auth service is not configured.' }, 503);
+    if (code.startsWith('PHONE_VERIFY_CHECK_FAILED')) return c.json({ detail: 'Could not check verification code. Try again.', code }, 502);
     return c.json({ detail: 'Could not verify phone sign in.' }, 500);
   }
 });
@@ -651,15 +1383,122 @@ api.get('/auth/me', authMiddleware, async (c) => {
 api.put('/users/me', authMiddleware, async (c) => {
   const userId = getUserId(c);
   const body = await c.req.json();
-  const fields = ['full_name', 'bio', 'profile_image', 'cover_image', 'city', 'username', 'age', 'looking_for', 'interests', 'social_website', 'social_tiktok', 'social_instagram'];
+  const fields = ['full_name', 'bio', 'profile_image', 'cover_image', 'city', 'username', 'age', 'looking_for', 'interests', 'social_website', 'social_tiktok', 'social_instagram', 'is_private', 'language'];
   const updates: string[] = []; const values: any[] = [];
-  for (const f of fields) { if (body[f] !== undefined) { updates.push(`${f} = ?`); values.push(body[f]); } }
+  for (const f of fields) {
+    if (body[f] !== undefined) {
+      updates.push(`${f} = ?`);
+      if (f === 'is_private') values.push(normalizeSqlBoolean(body[f]));
+      else if (f === 'language') values.push(normalizeLanguage(body[f]));
+      else values.push(body[f]);
+    }
+  }
   if (updates.length === 0) return c.json({ detail: 'Nothing to update' }, 400);
   values.push(userId);
   await c.env.DB.prepare(`UPDATE users SET ${updates.join(', ')}, updated_at = datetime('now') WHERE id = ?`).bind(...values).run();
   const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
-  const { password_hash, ...safe } = user;
-  return c.json(safe);
+  return c.json(safeUserPayload(user));
+});
+
+api.post('/users/me/phone/start', authMiddleware, async (c) => {
+  try {
+    const userId = getUserId(c);
+    const body: any = await c.req.json().catch(() => ({}));
+    const normalizedPhone = normalizePhone(body.phone);
+    await ensurePhoneAuthSchema(c.env.DB);
+
+    const owner: any = await c.env.DB.prepare('SELECT id FROM users WHERE phone = ? AND id != ?')
+      .bind(normalizedPhone, userId)
+      .first();
+    if (owner) return c.json({ detail: 'That phone number is already verified on another account.' }, 409);
+
+    const startedWithVerify = await startTwilioVerification(c, normalizedPhone);
+    if (startedWithVerify) {
+      return c.json({
+        detail: 'We sent a verification code to your phone.',
+        delivery: 'twilio_verify',
+      });
+    }
+
+    const code = createPhoneCode();
+    const jwtSecret = getJwtSecret(c);
+    const codeHash = await sha256Hex(`${normalizedPhone}:${code}:${jwtSecret}`);
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+
+    await c.env.DB.prepare(
+      'INSERT INTO phone_login_codes (id, phone, code_hash, expires_at) VALUES (?, ?, ?, ?)'
+    ).bind(uuid(), normalizedPhone, codeHash, expiresAt).run();
+
+    const delivery = await sendLegacyPhoneCode(c, normalizedPhone, code);
+    const payload: any = {
+      detail: delivery === 'legacy_sms'
+        ? 'We sent a verification code to your phone.'
+        : 'Twilio Verify is not configured yet, so use the development code shown here.',
+      delivery,
+    };
+    if (delivery === 'development') payload.dev_code = code;
+
+    return c.json(payload);
+  } catch (error: any) {
+    const code = String(error?.message || '');
+    if (code === 'PHONE_INVALID') return c.json({ detail: 'Enter a valid phone number with country code.' }, 400);
+    if (code === 'JWT_SECRET_MISSING') return c.json({ detail: 'Auth service is not configured.' }, 503);
+    if (code.startsWith('PHONE_VERIFY_START_FAILED')) return c.json({ detail: 'Could not send verification code. Check Twilio Verify settings.', code }, 502);
+    if (code === 'PHONE_SMS_FAILED') return c.json({ detail: 'Could not send SMS code. Check Twilio settings.' }, 502);
+    return c.json({ detail: 'Could not start phone verification.' }, 500);
+  }
+});
+
+api.post('/users/me/phone/verify', authMiddleware, async (c) => {
+  try {
+    const userId = getUserId(c);
+    const body: any = await c.req.json().catch(() => ({}));
+    const normalizedPhone = normalizePhone(body.phone);
+    const normalizedCode = String(body.code || '').replace(/\D/g, '');
+    if (normalizedCode.length !== 6) {
+      return c.json({ detail: 'Enter the 6-digit verification code.' }, 400);
+    }
+    await ensurePhoneAuthSchema(c.env.DB);
+
+    const owner: any = await c.env.DB.prepare('SELECT id FROM users WHERE phone = ? AND id != ?')
+      .bind(normalizedPhone, userId)
+      .first();
+    if (owner) return c.json({ detail: 'That phone number is already verified on another account.' }, 409);
+
+    if (getTwilioVerifyConfig(c)) {
+      const verified = await checkTwilioVerification(c, normalizedPhone, normalizedCode);
+      if (!verified) return c.json({ detail: 'Invalid or expired verification code.' }, 401);
+    } else {
+      const challenge: any = await c.env.DB.prepare(
+        'SELECT * FROM phone_login_codes WHERE phone = ? AND consumed_at IS NULL ORDER BY created_at DESC LIMIT 1'
+      ).bind(normalizedPhone).first();
+
+      if (!challenge) return c.json({ detail: 'No active code for this phone number.' }, 401);
+      if ((challenge.attempts || 0) >= 5) return c.json({ detail: 'Too many attempts. Request a new code.' }, 429);
+      if (Date.parse(challenge.expires_at) < Date.now()) return c.json({ detail: 'Code expired. Request a new code.' }, 401);
+
+      const jwtSecret = getJwtSecret(c);
+      const expectedHash = await sha256Hex(`${normalizedPhone}:${normalizedCode}:${jwtSecret}`);
+      if (expectedHash !== challenge.code_hash) {
+        await c.env.DB.prepare('UPDATE phone_login_codes SET attempts = attempts + 1 WHERE id = ?').bind(challenge.id).run();
+        return c.json({ detail: 'Invalid verification code.' }, 401);
+      }
+
+      await c.env.DB.prepare('UPDATE phone_login_codes SET consumed_at = datetime(\'now\') WHERE id = ?').bind(challenge.id).run();
+    }
+
+    await c.env.DB.prepare('UPDATE users SET phone = ?, phone_verified = 1, updated_at = datetime(\'now\') WHERE id = ?')
+      .bind(normalizedPhone, userId)
+      .run();
+    const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
+    return c.json(authUserPayload(user));
+  } catch (error: any) {
+    const code = String(error?.message || '');
+    if (code === 'PHONE_INVALID') return c.json({ detail: 'Enter a valid phone number with country code.' }, 400);
+    if (code === 'JWT_SECRET_MISSING') return c.json({ detail: 'Auth service is not configured.' }, 503);
+    if (code.startsWith('PHONE_VERIFY_CHECK_FAILED')) return c.json({ detail: 'Could not check verification code. Try again.', code }, 502);
+    return c.json({ detail: 'Could not verify phone number.' }, 500);
+  }
 });
 
 api.get('/users/search/:query', authMiddleware, async (c) => {
@@ -676,9 +1515,24 @@ api.get('/users/check-username/:username', async (c) => {
 });
 
 api.get('/users/:userId', authMiddleware, async (c) => {
+  const viewerId = getUserId(c);
   const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(c.req.param('userId')).first();
   if (!user) return c.json({ detail: 'User not found' }, 404);
-  const { password_hash, ...safe } = user;
+  const safe = safeUserPayload(user);
+  const canView = await canViewUserContent(c.env.DB, viewerId, user);
+  if (!canView) {
+    return c.json({
+      id: safe.id,
+      username: safe.username,
+      full_name: safe.full_name,
+      profile_image: safe.profile_image,
+      followers_count: safe.followers_count,
+      following_count: safe.following_count,
+      posts_count: safe.posts_count,
+      is_private: true,
+      privacy_locked: true,
+    });
+  }
   return c.json(safe);
 });
 
@@ -708,31 +1562,37 @@ api.post('/users/:userId/follow', authMiddleware, async (c) => {
 // POSTS (with Check-In support)
 // ═══════════════════════════════════════════════════════════════════════════════
 api.post('/posts', authMiddleware, async (c) => {
+  const phoneGate = await requirePhoneVerified(c, 'create posts');
+  if (phoneGate) return phoneGate;
   const userId = getUserId(c);
   const user: any = await c.env.DB.prepare('SELECT username, full_name, profile_image FROM users WHERE id = ?').bind(userId).first();
   const b = await c.req.json();
   const id = uuid(); const postType = b.post_type || 'lifestyle';
   const isCheckin = postType === 'check_in' && b.place_id ? 1 : 0;
   const location = b.location || b.place_name || null;
+  const visibility = normalizeVisibility(b.visibility);
   await c.env.DB.prepare(
-    `INSERT INTO posts (id, user_id, content, image, images, media_types, location, post_type, place_id, place_name, place_lat, place_lng, is_verified_checkin)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO posts (id, user_id, content, image, images, media_types, location, post_type, place_id, place_name, place_lat, place_lng, is_verified_checkin, visibility)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(id, userId, b.content || '', b.image || null, JSON.stringify(b.images || []), JSON.stringify(b.media_types || []),
-    location, postType, b.place_id || null, b.place_name || null, b.place_lat || null, b.place_lng || null, isCheckin).run();
+    location, postType, b.place_id || null, b.place_name || null, b.place_lat || null, b.place_lng || null, isCheckin, visibility).run();
   await c.env.DB.prepare('UPDATE users SET posts_count = posts_count + 1 WHERE id = ?').bind(userId).run();
   return c.json({ id, user_id: userId, user_username: user?.username, user_full_name: user?.full_name,
     user_profile_image: user?.profile_image, content: b.content, image: b.image, images: b.images || [],
     media_types: b.media_types || [], location, post_type: postType, place_id: b.place_id, place_name: b.place_name,
     place_lat: b.place_lat, place_lng: b.place_lng, is_verified_checkin: !!isCheckin,
-    likes_count: 0, comments_count: 0, liked_by: [], created_at: now() });
+    visibility, likes_count: 0, comments_count: 0, liked_by: [], created_at: now() });
 });
 
 api.get('/posts/feed', authMiddleware, async (c) => {
+  const userId = getUserId(c);
   const skip = parseInt(c.req.query('skip') || '0'); const limit = parseInt(c.req.query('limit') || '20');
   const posts = await c.env.DB.prepare(
     `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
-     FROM posts p JOIN users u ON p.user_id = u.id ORDER BY p.created_at DESC LIMIT ? OFFSET ?`
-  ).bind(limit, skip).all();
+     FROM posts p JOIN users u ON p.user_id = u.id
+     WHERE ${visiblePostWhere('u', 'p')}
+     ORDER BY p.created_at DESC LIMIT ? OFFSET ?`
+  ).bind(userId, userId, userId, userId, limit, skip).all();
   const results = [];
   for (const p of posts.results as any[]) {
     const likes = await c.env.DB.prepare('SELECT user_id FROM likes WHERE post_id = ?').bind(p.id).all();
@@ -743,18 +1603,23 @@ api.get('/posts/feed', authMiddleware, async (c) => {
 });
 
 api.get('/posts/nearby-feed', authMiddleware, async (c) => {
+  const userId = getUserId(c);
   const posts = await c.env.DB.prepare(
     `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
-     FROM posts p JOIN users u ON p.user_id = u.id ORDER BY p.created_at DESC LIMIT 50`
-  ).all();
+     FROM posts p JOIN users u ON p.user_id = u.id
+     WHERE ${visiblePostWhere('u', 'p')}
+     ORDER BY p.created_at DESC LIMIT 50`
+  ).bind(userId, userId, userId, userId).all();
   return c.json((posts.results as any[]).map(p => ({ ...p, images: JSON.parse(p.images || '[]'), media_types: JSON.parse(p.media_types || '[]'), is_verified_checkin: !!p.is_verified_checkin })));
 });
 
 api.get('/posts/:postId', authMiddleware, async (c) => {
+  const userId = getUserId(c);
   const postId = c.req.param('postId');
   const p: any = await c.env.DB.prepare(
     `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
-     FROM posts p JOIN users u ON p.user_id = u.id WHERE p.id = ?`).bind(postId).first();
+     FROM posts p JOIN users u ON p.user_id = u.id
+     WHERE p.id = ? AND ${visiblePostWhere('u', 'p')}`).bind(postId, userId, userId, userId, userId).first();
   if (!p) return c.json({ detail: 'Post not found' }, 404);
   const likes = await c.env.DB.prepare('SELECT user_id FROM likes WHERE post_id = ?').bind(postId).all();
   return c.json({ ...p, images: JSON.parse(p.images || '[]'), media_types: JSON.parse(p.media_types || '[]'),
@@ -763,6 +1628,10 @@ api.get('/posts/:postId', authMiddleware, async (c) => {
 
 api.post('/posts/:postId/like', authMiddleware, async (c) => {
   const userId = getUserId(c); const postId = c.req.param('postId');
+  const visiblePost = await c.env.DB.prepare(
+    `SELECT p.id FROM posts p JOIN users u ON p.user_id = u.id WHERE p.id = ? AND ${visiblePostWhere('u', 'p')}`
+  ).bind(postId, userId, userId, userId, userId).first();
+  if (!visiblePost) return c.json({ detail: 'Post not found' }, 404);
   const ex = await c.env.DB.prepare('SELECT id FROM likes WHERE user_id = ? AND post_id = ?').bind(userId, postId).first();
   if (ex) {
     await c.env.DB.prepare('DELETE FROM likes WHERE user_id = ? AND post_id = ?').bind(userId, postId).run();
@@ -796,10 +1665,17 @@ api.delete('/posts/:postId', authMiddleware, async (c) => {
 });
 
 api.get('/users/:userId/posts', authMiddleware, async (c) => {
+  const viewerId = getUserId(c);
+  const targetId = c.req.param('userId');
+  const owner: any = await c.env.DB.prepare('SELECT id, is_private FROM users WHERE id = ?').bind(targetId).first();
+  if (!owner) return c.json({ detail: 'User not found' }, 404);
+  if (!(await canViewUserContent(c.env.DB, viewerId, owner))) return c.json([]);
   const posts = await c.env.DB.prepare(
     `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
-     FROM posts p JOIN users u ON p.user_id = u.id WHERE p.user_id = ? ORDER BY p.created_at DESC`
-  ).bind(c.req.param('userId')).all();
+     FROM posts p JOIN users u ON p.user_id = u.id
+     WHERE p.user_id = ? AND (COALESCE(p.visibility, 'public') = 'public' OR p.user_id = ? OR EXISTS (SELECT 1 FROM friendships f2 WHERE f2.user_id = ? AND f2.friend_id = p.user_id))
+     ORDER BY p.created_at DESC`
+  ).bind(targetId, viewerId, viewerId).all();
   return c.json((posts.results as any[]).map(p => ({ ...p, images: JSON.parse(p.images || '[]'), media_types: JSON.parse(p.media_types || '[]'), is_verified_checkin: !!p.is_verified_checkin })));
 });
 
@@ -807,6 +1683,10 @@ api.get('/users/:userId/posts', authMiddleware, async (c) => {
 api.post('/posts/:postId/comments', authMiddleware, async (c) => {
   const userId = getUserId(c); const postId = c.req.param('postId');
   const { content } = await c.req.json();
+  const visiblePost = await c.env.DB.prepare(
+    `SELECT p.id FROM posts p JOIN users u ON p.user_id = u.id WHERE p.id = ? AND ${visiblePostWhere('u', 'p')}`
+  ).bind(postId, userId, userId, userId, userId).first();
+  if (!visiblePost) return c.json({ detail: 'Post not found' }, 404);
   const user: any = await c.env.DB.prepare('SELECT username, full_name, profile_image FROM users WHERE id = ?').bind(userId).first();
   const id = uuid();
   await c.env.DB.prepare('INSERT INTO comments (id, user_id, post_id, content) VALUES (?, ?, ?, ?)').bind(id, userId, postId, content).run();
@@ -823,25 +1703,40 @@ api.post('/posts/:postId/comments', authMiddleware, async (c) => {
 });
 
 api.get('/posts/:postId/comments', authMiddleware, async (c) => {
+  const userId = getUserId(c);
   const r = await c.env.DB.prepare(
     `SELECT c.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
-     FROM comments c JOIN users u ON c.user_id = u.id WHERE c.post_id = ? ORDER BY c.created_at ASC`
-  ).bind(c.req.param('postId')).all();
+     FROM comments c
+     JOIN posts p ON c.post_id = p.id
+     JOIN users owner ON p.user_id = owner.id
+     JOIN users u ON c.user_id = u.id
+     WHERE c.post_id = ? AND ${visiblePostWhere('owner', 'p')}
+     ORDER BY c.created_at ASC`
+  ).bind(c.req.param('postId'), userId, userId, userId, userId).all();
   return c.json(r.results);
 });
 
 // Statuses
 api.post('/statuses', authMiddleware, async (c) => {
+  const phoneGate = await requirePhoneVerified(c, 'share stories');
+  if (phoneGate) return phoneGate;
   const userId = getUserId(c); const b = await c.req.json();
   const user: any = await c.env.DB.prepare('SELECT username, full_name, profile_image FROM users WHERE id = ?').bind(userId).first();
   const id = uuid(); const expiresAt = new Date(Date.now() + 86400000).toISOString();
-  await c.env.DB.prepare('INSERT INTO statuses (id, user_id, content, image, background_color, text_color, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(id, userId, b.content || '', b.image || null, b.background_color || '#1B4332', b.text_color || '#FFFFFF', expiresAt).run();
-  return c.json({ id, user_id: userId, content: b.content, image: b.image, background_color: b.background_color, text_color: b.text_color, user_username: user?.username, user_full_name: user?.full_name, user_profile_image: user?.profile_image, viewed_by: [], created_at: now(), expires_at: expiresAt });
+  const visibility = normalizeVisibility(b.visibility);
+  await c.env.DB.prepare('INSERT INTO statuses (id, user_id, content, image, background_color, text_color, visibility, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+    .bind(id, userId, b.content || '', b.image || null, b.background_color || '#1B4332', b.text_color || '#FFFFFF', visibility, expiresAt).run();
+  return c.json({ id, user_id: userId, content: b.content, image: b.image, background_color: b.background_color, text_color: b.text_color, visibility, user_username: user?.username, user_full_name: user?.full_name, user_profile_image: user?.profile_image, viewed_by: [], created_at: now(), expires_at: expiresAt });
 });
 
 api.get('/statuses', authMiddleware, async (c) => {
   const userId = getUserId(c);
-  const r = await c.env.DB.prepare(`SELECT s.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image FROM statuses s JOIN users u ON s.user_id = u.id WHERE s.expires_at > datetime('now') ORDER BY s.created_at DESC`).all();
+  const r = await c.env.DB.prepare(
+    `SELECT s.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
+     FROM statuses s JOIN users u ON s.user_id = u.id
+     WHERE s.expires_at > datetime('now') AND ${visibleStatusWhere('u', 's')}
+     ORDER BY s.created_at DESC`
+  ).bind(userId, userId).all();
   // Group statuses by user_id for the frontend story bar
   const grouped = new Map<string, any>();
   for (const s of r.results as any[]) {
@@ -867,7 +1762,10 @@ api.get('/statuses', authMiddleware, async (c) => {
 
 api.post('/statuses/:statusId/view', authMiddleware, async (c) => {
   const userId = getUserId(c); const statusId = c.req.param('statusId');
-  const s: any = await c.env.DB.prepare('SELECT viewed_by FROM statuses WHERE id = ?').bind(statusId).first();
+  const s: any = await c.env.DB.prepare(
+    `SELECT s.viewed_by FROM statuses s JOIN users u ON s.user_id = u.id
+     WHERE s.id = ? AND ${visibleStatusWhere('u', 's')}`
+  ).bind(statusId, userId, userId).first();
   if (!s) return c.json({ detail: 'Not found' }, 404);
   const vb: string[] = JSON.parse(s.viewed_by || '[]');
   if (!vb.includes(userId)) { vb.push(userId); await c.env.DB.prepare('UPDATE statuses SET viewed_by = ? WHERE id = ?').bind(JSON.stringify(vb), statusId).run(); }
@@ -892,6 +1790,8 @@ api.get('/conversations', authMiddleware, async (c) => {
 });
 
 api.post('/messages', authMiddleware, async (c) => {
+  const phoneGate = await requirePhoneVerified(c, 'send messages');
+  if (phoneGate) return phoneGate;
   const userId = getUserId(c); const b = await c.req.json(); const id = uuid();
   await c.env.DB.prepare('INSERT INTO messages (id, sender_id, receiver_id, content, media_url, media_type) VALUES (?, ?, ?, ?, ?, ?)').bind(id, userId, b.receiver_id, b.content || '', b.media_url || null, b.media_type || null).run();
   return c.json({ id, sender_id: userId, receiver_id: b.receiver_id, content: b.content || '', media_url: b.media_url, media_type: b.media_type, created_at: now() });
@@ -902,6 +1802,46 @@ api.get('/messages/:userId', authMiddleware, async (c) => {
   await c.env.DB.prepare('UPDATE messages SET is_read = 1 WHERE sender_id = ? AND receiver_id = ? AND is_read = 0').bind(oid, myId).run();
   const r = await c.env.DB.prepare('SELECT * FROM messages WHERE (sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?) ORDER BY created_at ASC').bind(myId, oid, oid, myId).all();
   return c.json(r.results);
+});
+
+// Calls
+api.post('/calls/agora/token', authMiddleware, async (c) => {
+  try {
+    const phoneGate = await requirePhoneVerified(c, 'start video calls');
+    if (phoneGate) return phoneGate;
+    const userId = getUserId(c);
+    const body: any = await c.req.json().catch(() => ({}));
+    const { appId, appCertificate } = getAgoraConfig(c);
+    const channel = normalizeAgoraChannel(body.channel);
+    const role = normalizeAgoraRole(body.role);
+    const uid = await numericAgoraUid(userId);
+    const expiresIn = getAgoraTokenTtl(c);
+    const token = RtcTokenBuilder.buildTokenWithUid(
+      appId,
+      appCertificate,
+      channel,
+      uid,
+      role.rtcRole,
+      expiresIn,
+      expiresIn
+    );
+
+    return c.json({
+      appId,
+      channel,
+      uid,
+      role: role.label,
+      mode: body.mode === 'live' ? 'live' : 'call',
+      token,
+      expires_in: expiresIn,
+      expires_at: new Date(Date.now() + expiresIn * 1000).toISOString(),
+    });
+  } catch (error: any) {
+    const code = getErrorCode(error);
+    if (code === 'AGORA_NOT_CONFIGURED') return c.json({ detail: 'Agora calling is not configured.' }, 503);
+    if (code === 'AGORA_INVALID_CHANNEL') return c.json({ detail: 'Invalid call channel.' }, 400);
+    return c.json({ detail: 'Could not create call token.' }, 500);
+  }
 });
 
 // Notifications
@@ -940,9 +1880,152 @@ api.get('/friends/status/:userId', authMiddleware, async (c) => { const mid = ge
 api.delete('/friends/:userId', authMiddleware, async (c) => { const mid = getUserId(c); const oid = c.req.param('userId'); await c.env.DB.prepare('DELETE FROM friendships WHERE (user_id = ? AND friend_id = ?) OR (user_id = ? AND friend_id = ?)').bind(mid, oid, oid, mid).run(); return c.json({ removed: true }); });
 
 // Discover
-api.get('/discover/trending', authMiddleware, async (c) => { const r = await c.env.DB.prepare(`SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image FROM posts p JOIN users u ON p.user_id = u.id ORDER BY p.likes_count DESC, p.created_at DESC LIMIT 20`).all(); return c.json((r.results as any[]).map(p => ({ ...p, images: JSON.parse(p.images || '[]'), media_types: JSON.parse(p.media_types || '[]') }))); });
-api.get('/discover/search', authMiddleware, async (c) => { const q = c.req.query('q') || ''; const posts = await c.env.DB.prepare(`SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image FROM posts p JOIN users u ON p.user_id = u.id WHERE p.content LIKE ? LIMIT 20`).bind(`%${q}%`).all(); const users = await c.env.DB.prepare('SELECT id, username, full_name, profile_image, bio FROM users WHERE username LIKE ? OR full_name LIKE ? LIMIT 10').bind(`%${q}%`, `%${q}%`).all(); return c.json({ posts: posts.results, users: users.results }); });
+api.get('/discover/trending', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const r = await c.env.DB.prepare(
+    `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
+     FROM posts p JOIN users u ON p.user_id = u.id
+     WHERE ${visiblePostWhere('u', 'p')}
+     ORDER BY p.likes_count DESC, p.created_at DESC LIMIT 20`
+  ).bind(userId, userId, userId, userId).all();
+  return c.json((r.results as any[]).map(p => ({ ...p, images: JSON.parse(p.images || '[]'), media_types: JSON.parse(p.media_types || '[]') })));
+});
+api.get('/discover/search', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const q = c.req.query('q') || '';
+  const posts = await c.env.DB.prepare(
+    `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
+     FROM posts p JOIN users u ON p.user_id = u.id
+     WHERE p.content LIKE ? AND ${visiblePostWhere('u', 'p')}
+     LIMIT 20`
+  ).bind(`%${q}%`, userId, userId, userId, userId).all();
+  const users = await c.env.DB.prepare('SELECT id, username, full_name, profile_image, bio, is_private FROM users WHERE username LIKE ? OR full_name LIKE ? LIMIT 10').bind(`%${q}%`, `%${q}%`).all();
+  return c.json({ posts: posts.results, users: users.results });
+});
 api.get('/discover/suggested-users', authMiddleware, async (c) => { const r = await c.env.DB.prepare('SELECT id, username, full_name, profile_image, bio, followers_count FROM users WHERE id != ? ORDER BY followers_count DESC LIMIT 10').bind(getUserId(c)).all(); return c.json(r.results); });
+
+api.get('/events/personalized', async (c) => {
+  const previewMode = String(c.env.EVENTS_PREVIEW || '') === '1';
+  let user: any = {
+    city: c.req.query('city') || c.req.query('location') || '',
+    looking_for: c.req.query('looking_for') || '',
+    interests: c.req.query('interests') || '',
+  };
+
+  if (!previewMode) {
+    const authHeader = c.req.header('Authorization');
+    if (!authHeader?.startsWith('Bearer ')) return c.json({ detail: 'Not authenticated' }, 401);
+
+    try {
+      const token = authHeader.slice(7);
+      const { jwtVerify } = await import('jose');
+      const { payload } = await jwtVerify(token, new TextEncoder().encode(getJwtSecret(c)));
+      const userId = String(payload?.sub || payload?.userId || '');
+      const dbUser: any = await c.env.DB.prepare('SELECT id, city, looking_for, interests FROM users WHERE id = ?').bind(userId).first();
+      if (!dbUser) return c.json({ detail: 'User not found' }, 404);
+      user = {
+        ...dbUser,
+        city: user.city || dbUser.city,
+        looking_for: user.looking_for || dbUser.looking_for,
+        interests: user.interests || dbUser.interests,
+      };
+    } catch {
+      return c.json({ detail: 'Invalid token' }, 401);
+    }
+  }
+
+  const token = String(c.env.EVENTBRITE_API_TOKEN || '').trim();
+  if (!token) {
+    return c.json({ detail: 'Eventbrite API token is not configured', events: [] }, 503);
+  }
+
+  const limit = Math.min(Number(c.req.query('limit') || 12), 24);
+  const explicitQuery = c.req.query('q') || '';
+  const preference = buildEventPreference(user, explicitQuery);
+  const location = {
+    address: c.req.query('location') || user.city || 'New York, NY',
+    lat: c.req.query('lat') || undefined,
+    lng: c.req.query('lng') || undefined,
+  };
+
+  const searchPlans = preference.queries.slice(0, 6).map((query, index) => ({
+    query,
+    category: preference.categories.length > 0 ? preference.categories[index % preference.categories.length] : undefined,
+  }));
+
+  const scored = new Map<string, { card: any; score: number }>();
+  const errors: string[] = [];
+
+  for (const plan of searchPlans) {
+    try {
+      const events = await fetchEventbriteEvents(c, plan.query, plan.category, location);
+      events.forEach((event: any, index: number) => {
+        const card = eventbriteEventToCard(event, plan.query, scored.size + index);
+        const score = eventCardScore(card, preference.terms, plan.query);
+        const existing = scored.get(card.event_id);
+        if (!existing || score > existing.score) scored.set(card.event_id, { card, score });
+      });
+    } catch (error: any) {
+      const message = String(error?.message || error || '');
+      const code = message.startsWith('EVENTBRITE_SEARCH_FAILED') ? 'search_failed' : message;
+      if (!errors.includes(code)) errors.push(code);
+      if (code === 'EVENTBRITE_PUBLIC_SEARCH_UNAVAILABLE') break;
+    }
+  }
+
+  if (scored.size === 0) {
+    try {
+      const ownedEvents = await fetchOwnedEventbriteEvents(c);
+      ownedEvents.forEach((event: any, index: number) => {
+        const card = eventbriteEventToCard(event, 'your Eventbrite organization', index);
+        scored.set(card.event_id, { card, score: eventCardScore(card, preference.terms, 'your Eventbrite organization') });
+      });
+      if (ownedEvents.length === 0) errors.push('owned_events_empty');
+    } catch (error: any) {
+      errors.push(String(error?.message || error || 'owned_events_failed'));
+    }
+  }
+
+  if (scored.size === 0) {
+    try {
+      const googleEvents = await fetchGoogleEventPlaces(c, location);
+      googleEvents.forEach((card: any) => {
+        scored.set(card.event_id, { card, score: eventCardScore(card, preference.terms, 'google places') + 4 });
+      });
+      if (googleEvents.length === 0) errors.push('google_places_empty');
+    } catch (error: any) {
+      errors.push(String(error?.message || error || 'google_places_failed'));
+    }
+  }
+
+  if (scored.size === 0) {
+    try {
+      const nycEvents = await fetchNycOpenDataEvents(location);
+      nycEvents.forEach((event: any, index: number) => {
+        const card = nycOpenDataEventToCard(event, index);
+        scored.set(card.event_id, { card, score: eventCardScore(card, preference.terms, 'nyc open data') + 2 });
+      });
+      if (nycEvents.length === 0) errors.push('nyc_events_empty');
+    } catch (error: any) {
+      errors.push(String(error?.message || error || 'nyc_events_failed'));
+    }
+  }
+
+  const events = [...scored.values()]
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map(({ card, score }) => ({ ...card, preference_score: Number(score.toFixed(2)) }));
+
+  return c.json({
+    source: 'eventbrite',
+    location,
+    preferences: preference.terms,
+    queries: preference.queries,
+    events,
+    detail: events.length === 0 ? eventbriteEmptyDetail(errors) : '',
+    errors: errors.length > 0 && events.length === 0 ? errors.slice(0, 5) : [],
+  });
+});
 
 // Uploads (Cloudflare Images + Stream direct upload)
 api.post('/upload/image-direct', authMiddleware, async (c) => {
@@ -1757,16 +2840,10 @@ api.post('/admin/init-governance', authMiddleware, async (c) => {
 
 // Submit application (from main app)
 api.post('/applications', authMiddleware, async (c) => {
-  const userId = getUserId(c);
   const body = await c.req.json();
-  const { type, details } = body; // type: 'creator' | 'publisher'
+  const { type } = body; // type: 'creator' | 'publisher'
   if (!type || !['creator', 'publisher'].includes(type)) return c.json({ detail: 'Invalid type' }, 400);
-  const id = crypto.randomUUID();
-  const ts = now();
-  await c.env.DB.prepare(
-    'INSERT INTO applications (id, user_id, type, status, details, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
-  ).bind(id, userId, type, 'pending', JSON.stringify(details || {}), ts, ts).run();
-  return c.json({ id, status: 'pending', message: 'Application submitted' });
+  return c.json({ detail: 'Creator and publisher applications have been removed from Flames Up.' }, 410);
 });
 
 // List applications (admin)

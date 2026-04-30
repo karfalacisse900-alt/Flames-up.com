@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, Image, ScrollView,
-  RefreshControl, Dimensions, ActivityIndicator,
+  RefreshControl, Dimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import api from '../src/api/client';
+import MediaPreview from '../src/components/MediaPreview';
 
 const { width: SW } = Dimensions.get('window');
 
@@ -64,14 +65,12 @@ export default function TonightScreen() {
   const insets = useSafeAreaInsets();
   const [activeCat, setActiveCat] = useState('all');
   const [feedPosts, setFeedPosts] = useState<any[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => { loadNightPosts(); }, []);
 
   const loadNightPosts = async () => {
     try {
-      setIsLoading(true);
       const res = await api.get('/posts/feed', { params: { limit: 20 } });
       const all = Array.isArray(res.data) ? res.data : [];
       // Filter for nightlife-related posts
@@ -81,7 +80,7 @@ export default function TonightScreen() {
         return nightKeywords.some(k => text.includes(k));
       });
       setFeedPosts(nightPosts.length > 0 ? nightPosts : all.slice(0, 6));
-    } catch {} finally { setIsLoading(false); }
+    } catch {}
   };
 
   const onRefresh = useCallback(async () => {
@@ -107,7 +106,7 @@ export default function TonightScreen() {
         </TouchableOpacity>
         <View>
           <Text style={s.headerTitle}>{greeting}</Text>
-          <Text style={s.headerSub}>What's happening after dark</Text>
+          <Text style={s.headerSub}>What&apos;s happening after dark</Text>
         </View>
         <View style={s.liveDot}>
           <View style={s.liveDotInner} />
@@ -136,9 +135,9 @@ export default function TonightScreen() {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#F97316" />}
         contentContainerStyle={{ paddingBottom: 60 }}
       >
-        {/* Tonight's Picks */}
+        {/* Tonight picks */}
         <View style={s.sectionHeader}>
-          <Text style={s.sectionTitle}>Tonight's Picks</Text>
+          <Text style={s.sectionTitle}>Tonight&apos;s Picks</Text>
         </View>
 
         {/* Hero pick */}
@@ -187,7 +186,12 @@ export default function TonightScreen() {
                   activeOpacity={0.9}
                   onPress={() => router.push(`/post/${post.id}` as any)}
                 >
-                  <Image source={{ uri: post.image || post.images?.[0] }} style={s.activeImage} />
+                  <MediaPreview
+                    uri={post.image || post.images?.[0]}
+                    mediaTypes={post.media_types}
+                    style={s.activeImage}
+                    showVideoBadge={false}
+                  />
                   <View style={s.activeOverlay} />
                   <View style={s.activeContent}>
                     <Text style={s.activeName} numberOfLines={1}>{post.user_full_name}</Text>

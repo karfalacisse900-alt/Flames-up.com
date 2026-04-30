@@ -14,8 +14,11 @@
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "Verify you're at a place to check in",
         "NSCameraUsageDescription": "Take photos for your posts",
-        "NSPhotoLibraryUsageDescription": "Share photos from your gallery"
-      }
+        "NSMicrophoneUsageDescription": "Use your microphone during video calls and voice messages",
+        "NSPhotoLibraryUsageDescription": "Share photos from your gallery",
+        "ITSAppUsesNonExemptEncryption": false
+      },
+      "bundleIdentifier": "com.karfala90.frontend"
     },
     "android": {
       "adaptiveIcon": {
@@ -24,12 +27,13 @@
       },
       "edgeToEdgeEnabled": true,
       "permissions": [
-        "ACCESS_FINE_LOCATION",
-        "ACCESS_COARSE_LOCATION",
-        "CAMERA",
-        "READ_EXTERNAL_STORAGE",
-        "RECORD_AUDIO"
-      ]
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.CAMERA",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.RECORD_AUDIO"
+      ],
+      "package": "com.karfala90.frontend"
     },
     "web": {
       "bundler": "metro",
@@ -59,6 +63,12 @@
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "a7165416-7750-44ea-a708-e11d70d0b1e5"
+      }
     }
   }
 }

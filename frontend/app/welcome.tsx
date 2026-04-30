@@ -8,9 +8,11 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import * as Notifications from 'expo-notifications';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const { width: SW } = Dimensions.get('window');
 const STEPS = 5;
+const ONBOARDING_KEY = 'flames_up_onboarding_seen';
 
 const GENDERS = ['Female', 'Male', 'Non-binary', 'Prefer not to say'];
 const CATEGORIES = [
@@ -58,7 +60,8 @@ export default function WelcomeScreen() {
     setSelectedCats(prev => prev.includes(id) ? prev.filter(c => c !== id) : [...prev, id]);
   };
 
-  const finish = () => {
+  const finish = async () => {
+    await AsyncStorage.setItem(ONBOARDING_KEY, 'true');
     router.replace('/(auth)/login' as any);
   };
 
@@ -66,7 +69,7 @@ export default function WelcomeScreen() {
   const renderGender = () => (
     <View style={s.stepContainer}>
       <Text style={s.questionLight}>What is your gender?</Text>
-      <Text style={s.subLight}>This helps us find you more relevant content.{'\n'}We won't show this on your profile.</Text>
+      <Text style={s.subLight}>This helps us find you more relevant content.{'\n'}We will not show this on your profile.</Text>
       <View style={s.optionsList}>
         {GENDERS.map(g => (
           <TouchableOpacity key={g} style={[s.optionRow, gender === g && s.optionRowActive]} onPress={() => setGender(g)}>

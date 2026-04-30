@@ -24,6 +24,8 @@ import { colors } from '../src/utils/theme';
 import { useAuthStore } from '../src/store/authStore';
 import api from '../src/api/client';
 import { uploadImage } from '../src/utils/mediaUpload';
+import { useI18n } from '../src/utils/i18n';
+import { isPhoneVerificationError, requireVerifiedPhone } from '../src/utils/phoneVerification';
 
 const { width: SW, height: SH } = Dimensions.get('window');
 
@@ -67,6 +69,7 @@ type ToolMode = 'none' | 'text' | 'color' | 'font' | 'sticker' | 'textColor';
 export default function CreateStatusScreen() {
   const router = useRouter();
   const { user } = useAuthStore();
+  const { t } = useI18n();
   const [content, setContent] = useState('');
   const [image, setImage] = useState<string | null>(null);
   const [imageUri, setImageUri] = useState<string | null>(null);
@@ -93,7 +96,7 @@ export default function CreateStatusScreen() {
 
   const takePhoto = async () => {
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') { Alert.alert('Permission needed', 'Camera access required'); return; }
+    if (status !== 'granted') { Alert.alert(t('permissionNeeded'), t('cameraAccessRequired')); return; }
     const result = await ImagePicker.launchCameraAsync({
       allowsEditing: true, aspect: [9, 16], quality: 0.7, base64: true,
     });
@@ -114,9 +117,10 @@ export default function CreateStatusScreen() {
 
   const handlePost = async () => {
     if (!content.trim() && !image && placedStickers.length === 0) {
-      Alert.alert('Error', 'Add text, a photo, or stickers to your story');
+      Alert.alert(t('error'), t('statusEmptyMessage'));
       return;
     }
+    if (!requireVerifiedPhone(user, router, 'share stories')) return;
     setIsPosting(true);
     try {
       let uploadedImage = image;
@@ -136,7 +140,11 @@ export default function CreateStatusScreen() {
       });
       router.back();
     } catch (error: any) {
-      Alert.alert('Error', error.response?.data?.detail || 'Could not create status');
+      if (isPhoneVerificationError(error)) {
+        requireVerifiedPhone(null, router, 'share stories');
+      } else {
+        Alert.alert(t('error'), error.response?.data?.detail || t('couldNotCreateStatus'));
+      }
     } finally {
       setIsPosting(false);
     }
@@ -202,7 +210,7 @@ export default function CreateStatusScreen() {
             {isPosting ? <ActivityIndicator size="small" color="#FFF" /> : (
               <View style={s.shareBtnInner}>
                 <Ionicons name="paper-plane" size={14} color="#FFF" />
-                <Text style={s.shareBtnText}>Share</Text>
+                <Text style={s.shareBtnText}>{t('share')}</Text>
               </View>
             )}
           </TouchableOpacity>
@@ -217,7 +225,7 @@ export default function CreateStatusScreen() {
               { fontSize, textAlign, color: textColor, fontWeight: font.weight, fontStyle: font.style },
               hasImage && s.storyInputWithImage,
             ]}
-            placeholder="Type your story..."
+            placeholder={t('typeYourStory')}
             placeholderTextColor="rgba(255,255,255,0.4)"
             value={content}
             onChangeText={setContent}
@@ -234,10 +242,10 @@ export default function CreateStatusScreen() {
             <View style={s.panel}>
               <View style={s.panelHeader}>
                 <TouchableOpacity onPress={() => setUseGradient(true)} style={[s.panelTab, useGradient && s.panelTabActive]}>
-                  <Text style={[s.panelTabText, useGradient && { color: '#FFF' }]}>Gradients</Text>
+                  <Text style={[s.panelTabText, useGradient && { color: '#FFF' }]}>{t('gradients')}</Text>
                 </TouchableOpacity>
                 <TouchableOpacity onPress={() => setUseGradient(false)} style={[s.panelTab, !useGradient && s.panelTabActive]}>
-                  <Text style={[s.panelTabText, !useGradient && { color: '#FFF' }]}>Solid</Text>
+                  <Text style={[s.panelTabText, !useGradient && { color: '#FFF' }]}>{t('solid')}</Text>
                 </TouchableOpacity>
               </View>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.colorRow}>
@@ -302,26 +310,26 @@ export default function CreateStatusScreen() {
           <View style={s.toolRow}>
             <TouchableOpacity style={s.bottomBtn} onPress={pickImage}>
               <Ionicons name="image-outline" size={24} color="#FFF" />
-              <Text style={s.bottomLabel}>Gallery</Text>
+              <Text style={s.bottomLabel}>{t('gallery')}</Text>
             </TouchableOpacity>
             <TouchableOpacity style={s.bottomBtn} onPress={takePhoto}>
               <Ionicons name="camera-outline" size={24} color="#FFF" />
-              <Text style={s.bottomLabel}>Camera</Text>
+              <Text style={s.bottomLabel}>{t('camera')}</Text>
             </TouchableOpacity>
             {!hasImage && (
               <TouchableOpacity style={s.bottomBtn} onPress={() => toggleTool('color')}>
                 <View style={[s.colorPreview, { backgroundColor: useGradient ? GRADIENTS[bgColorIdx][0] : SOLID_COLORS[bgColorIdx] }]} />
-                <Text style={s.bottomLabel}>Color</Text>
+                <Text style={s.bottomLabel}>{t('color')}</Text>
               </TouchableOpacity>
             )}
             <TouchableOpacity style={s.bottomBtn} onPress={() => toggleTool('sticker')}>
               <Text style={{ fontSize: 22 }}>😊</Text>
-              <Text style={s.bottomLabel}>Sticker</Text>
+              <Text style={s.bottomLabel}>{t('sticker')}</Text>
             </TouchableOpacity>
             {hasImage && (
               <TouchableOpacity style={s.bottomBtn} onPress={() => { setImage(null); setImageUri(null); }}>
                 <Ionicons name="trash-outline" size={24} color="#FF6B6B" />
-                <Text style={[s.bottomLabel, { color: '#FF6B6B' }]}>Remove</Text>
+                <Text style={[s.bottomLabel, { color: '#FF6B6B' }]}>{t('remove')}</Text>
               </TouchableOpacity>
             )}
           </View>

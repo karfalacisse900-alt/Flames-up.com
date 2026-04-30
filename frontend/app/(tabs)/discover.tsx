@@ -1,15 +1,20 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, Image, ScrollView,
-  RefreshControl, Dimensions, ActivityIndicator, Modal,
+  RefreshControl, Dimensions, ActivityIndicator,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import * as Location from 'expo-location';
 import api from '../../src/api/client';
+import { useAuthStore } from '../../src/store/authStore';
+import { colors } from '../../src/utils/theme';
+import { useI18n } from '../../src/utils/i18n';
+import { requireVerifiedPhone } from '../../src/utils/phoneVerification';
 
 const { width: SW } = Dimensions.get('window');
-const HALF = (SW - 40) / 2;
+const SHELF_CARD = Math.min(138, Math.max(118, (SW - 54) / 2.35));
 
 const CITY_TABS = [
   { id: 'all', label: 'For You' },
@@ -21,14 +26,95 @@ const CITY_TABS = [
   { id: 'paris', label: 'Paris' },
 ];
 
-const BLOCKS = [
-  { id: 'things-to-do', label: 'Things to Do', sub: 'Parks, museums, restaurants & more', type: 'tourist_attraction', big: true },
-  { id: 'events', label: 'Events', sub: 'Venues & meetups', type: 'stadium' },
-  { id: 'nightlife', label: 'Nightlife', sub: 'Clubs, bars & parties', type: 'night_club' },
-  { id: 'groups', label: 'Groups to Join', sub: 'Fitness & community', type: 'gym', big: true },
-  { id: 'activity', label: 'Activity', sub: 'Outdoor & wellness', type: 'park' },
-  { id: 'world-board', label: 'World Board', sub: 'Discover everywhere', type: 'museum' },
-];
+const DISCOVER_SHELVES = [
+  {
+    id: 'groups',
+    label: 'Groups to Join',
+    sub: 'Find people moving together.',
+    type: 'gym',
+    icon: 'people-outline',
+    fallbackColor: '#DCEDE3',
+    fallbackItems: ['Fitness Crew', 'Book Circle', 'Local Club'],
+  },
+  {
+    id: 'events',
+    label: 'Events',
+    sub: 'Tonight, weekend, parks, markets, and venues.',
+    type: 'stadium',
+    icon: 'calendar-outline',
+    fallbackColor: '#E1F3DF',
+    fallbackItems: ['Night events tonight', 'Local farmers market', 'Bryant Park happenings'],
+  },
+] as const;
+
+const EVENT_SEARCHES = [
+  {
+    id: 'tonight-clubs',
+    title: 'Night events tonight',
+    host: 'Flames nightlife guide',
+    timing: { weekday: null, startHour: 20, endHour: 2 },
+    shortTime: 'Tonight',
+    fallbackVenue: 'Manhattan nightlife',
+    placeType: 'night_club',
+    keyword: 'club party nightlife',
+    description: 'A nightlife pick shaped by your event preferences. Check tickets for the exact lineup before you go.',
+  },
+  {
+    id: 'farmers-market',
+    title: 'Local farmers market',
+    host: 'Flames local guide',
+    timing: { weekday: 1, startHour: 9, endHour: 14 },
+    shortTime: 'Every Monday',
+    fallbackVenue: 'Union Square area',
+    placeType: 'tourist_attraction',
+    keyword: 'farmers market',
+    description: 'Fresh produce, neighborhood vendors, and a low-key city walk picked for local weekend and market interests.',
+  },
+  {
+    id: 'bryant-park',
+    title: 'Bryant Park happenings',
+    host: 'Flames park guide',
+    timing: { weekday: 6, startHour: 11, endHour: 19 },
+    shortTime: 'This weekend',
+    fallbackVenue: 'Bryant Park',
+    placeType: 'park',
+    keyword: 'Bryant Park events',
+    description: 'A Bryant Park based plan for markets, public programming, or seasonal pop-ups.',
+  },
+  {
+    id: 'live-music',
+    title: 'Live music tonight',
+    host: 'Flames music guide',
+    timing: { weekday: null, startHour: 19, endHour: 23 },
+    shortTime: 'Tonight',
+    fallbackVenue: 'Lower Manhattan',
+    placeType: 'bar',
+    keyword: 'live music',
+    description: 'A live night plan picked from your music and going-out signals.',
+  },
+  {
+    id: 'movie-night',
+    title: 'Movie night',
+    host: 'Flames movie guide',
+    timing: { weekday: null, startHour: 19, endHour: 22 },
+    shortTime: 'Tonight',
+    fallbackVenue: 'Manhattan cinema',
+    placeType: 'movie_theater',
+    keyword: 'movie film cinema',
+    description: 'A movie plan picked from your entertainment and culture signals.',
+  },
+  {
+    id: 'sports-night',
+    title: 'Sports nearby',
+    host: 'Flames sports guide',
+    timing: { weekday: 6, startHour: 15, endHour: 18 },
+    shortTime: 'This weekend',
+    fallbackVenue: 'New York sports venue',
+    placeType: 'stadium',
+    keyword: 'sports game',
+    description: 'A nearby sports venue pick shaped by your activity and fan interests.',
+  },
+] as const;
 
 const CITY_COORDS: Record<string, { lat: number; lng: number }> = {
   all: { lat: 40.7128, lng: -74.006 },
@@ -40,58 +126,225 @@ const CITY_COORDS: Record<string, { lat: number; lng: number }> = {
   paris: { lat: 48.8566, lng: 2.3522 },
 };
 
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+type EventTiming = { weekday: number | null; startHour: number; endHour: number };
+
+const routeParam = (value: any) => (value === undefined || value === null ? '' : String(value));
+
+function getEventDate(targetWeekday: number | null) {
+  const date = new Date();
+  if (targetWeekday !== null) {
+    const today = date.getDay();
+    const delta = (targetWeekday - today + 7) % 7 || 7;
+    date.setDate(date.getDate() + delta);
+  }
+  return date;
+}
+
+function clockLabel(date: Date) {
+  let hour = date.getHours();
+  const minute = `${date.getMinutes()}`.padStart(2, '0');
+  const suffix = hour >= 12 ? 'PM' : 'AM';
+  hour = hour % 12 || 12;
+  return `${`${hour}`.padStart(2, '0')}:${minute}${suffix}`;
+}
+
+function buildEventTiming(template: EventTiming) {
+  const start = getEventDate(template.weekday);
+  start.setHours(template.startHour, 0, 0, 0);
+  const end = new Date(start);
+  end.setHours(template.endHour, 0, 0, 0);
+  if (template.endHour <= template.startHour) end.setDate(end.getDate() + 1);
+
+  return {
+    weekday: WEEKDAYS[start.getDay()],
+    month: MONTHS[start.getMonth()],
+    day: `${start.getDate()}`.padStart(2, '0'),
+    schedule: `${WEEKDAYS[start.getDay()]}, ${MONTHS[start.getMonth()]} ${start.getDate()} at ${clockLabel(start)} - ${clockLabel(end)}`,
+  };
+}
+
+function buildEventCard(place: any, search: typeof EVENT_SEARCHES[number], index: number) {
+  const timing = buildEventTiming(search.timing);
+  const placeName = place?.name || search.fallbackVenue;
+  const address = place?.vicinity || place?.formatted_address || search.fallbackVenue;
+
+  return {
+    ...place,
+    event: true,
+    event_source: 'google_places',
+    event_id: `${search.id}-${place?.place_id || index}`.replace(/[^a-zA-Z0-9_-]/g, '-'),
+    event_title: search.title,
+    event_host: search.host,
+    event_venue: placeName,
+    event_address: address,
+    event_description: search.description,
+    event_time_label: search.shortTime,
+    event_schedule: timing.schedule,
+    event_weekday: timing.weekday,
+    event_month: timing.month,
+    event_day: timing.day,
+    attendees: 3 + (index % 6),
+  };
+}
+
+async function loadGoogleEventFallback(coords: { lat: number; lng: number }) {
+  const batches = await Promise.all(
+    EVENT_SEARCHES.map(async (search, searchIndex) => {
+      try {
+        const r = await api.get('/google-places/nearby', {
+          params: {
+            lat: coords.lat,
+            lng: coords.lng,
+            radius: 40000,
+            type: search.placeType,
+            keyword: search.keyword,
+          },
+        });
+        const places = Array.isArray(r.data) ? r.data : [];
+        return places.slice(0, 2).map((place: any, placeIndex: number) =>
+          buildEventCard(place, search, searchIndex * 10 + placeIndex)
+        );
+      } catch {
+        return [];
+      }
+    })
+  );
+
+  const seen = new Set<string>();
+  return batches.flat().filter((event) => {
+    const key = event.place_id || event.event_id;
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).slice(0, 8);
+}
+
+function eventbriteEmptyCard(detail?: string) {
+  const now = buildEventTiming({ weekday: null, startHour: 20, endHour: 22 });
+  return {
+    event: true,
+    empty: true,
+    fallback: true,
+    event_source: 'eventbrite',
+    event_id: 'eventbrite-empty',
+    place_id: 'eventbrite-empty',
+    event_title: 'No live Eventbrite events',
+    event_host: 'Eventbrite',
+    event_venue: 'No live results for this account',
+    event_address: 'Eventbrite did not return local events',
+    event_description: detail || 'Eventbrite is connected, but it did not return live local events for this account.',
+    event_time_label: 'No events',
+    event_schedule: now.schedule,
+    event_weekday: now.weekday,
+    event_month: now.month,
+    event_day: now.day,
+    attendees: 0,
+  };
+}
+
 export default function DiscoverScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { user } = useAuthStore();
+  const { t } = useI18n();
   const [tab, setTab] = useState('all');
-  const [posts, setPosts] = useState<any[]>([]);
-  const [blockImages, setBlockImages] = useState<Record<string, string>>({});
+  const [shelfPlaces, setShelfPlaces] = useState<Record<string, any[]>>({});
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [showMenu, setShowMenu] = useState(false);
   const [people, setPeople] = useState<any[]>([]);
+  const [userCoords, setUserCoords] = useState<{ lat: number; lng: number } | null>(null);
 
-  useEffect(() => { load(); loadPeople(); }, []);
-  useEffect(() => { loadBlockImages(); }, [tab]);
-
-  const load = async () => {
-    try {
-      setLoading(true);
-      const r = await api.get('/posts/feed', { params: { limit: 50 } });
-      setPosts(Array.isArray(r.data) ? r.data : []);
-    } catch {} finally { setLoading(false); }
-  };
-
-  const loadPeople = async () => {
+  const loadPeople = useCallback(async () => {
     try {
       const r = await api.get('/discover/suggested-users');
       setPeople(Array.isArray(r.data) ? r.data : []);
     } catch {}
-  };
+  }, []);
 
-  const loadBlockImages = async () => {
-    const coords = CITY_COORDS[tab] || CITY_COORDS.all;
-    const imgs: Record<string, string> = {};
-    for (const b of BLOCKS) {
-      try {
-        const r = await api.get('/google-places/nearby', { params: { lat: coords.lat, lng: coords.lng, radius: 40000, type: b.type } });
-        const places = Array.isArray(r.data) ? r.data : [];
-        const withPhoto = places.find((p: any) => p.photo_url);
-        if (withPhoto?.photo_url) imgs[b.id] = withPhoto.photo_url;
-      } catch {}
+  const loadUserCoords = useCallback(async () => {
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') return;
+      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      setUserCoords({ lat: loc.coords.latitude, lng: loc.coords.longitude });
+    } catch {}
+  }, []);
+
+  const activeCoords = useCallback(
+    () => (tab === 'all' && userCoords ? userCoords : (CITY_COORDS[tab] || CITY_COORDS.all)),
+    [tab, userCoords]
+  );
+
+  const loadEventPlaces = useCallback(async (coords: { lat: number; lng: number }) => {
+    const location = CITY_TABS.find((c) => c.id === tab)?.label || 'New York';
+    let emptyDetail = '';
+    try {
+      const r = await api.get('/events/personalized', {
+        params: {
+          lat: coords.lat,
+          lng: coords.lng,
+          location: user?.city || location,
+          city: user?.city || location,
+          interests: user?.interests || '',
+          looking_for: user?.looking_for || '',
+          limit: 12,
+        },
+      });
+      const events = Array.isArray(r.data?.events) ? r.data.events : [];
+      if (events.length > 0) return events.slice(0, 8);
+      const detail = typeof r.data?.detail === 'string' ? r.data.detail : '';
+      const errors = Array.isArray(r.data?.errors) ? r.data.errors.join(', ') : '';
+      emptyDetail = detail || (errors ? `Eventbrite returned no events. Status: ${errors}.` : '');
+    } catch {
+      emptyDetail = 'Eventbrite events could not load from the backend preview.';
     }
-    setBlockImages(imgs);
-  };
+
+    const googleEvents = await loadGoogleEventFallback(coords);
+    return googleEvents.length > 0 ? googleEvents : [eventbriteEmptyCard(emptyDetail)];
+  }, [tab, user?.city, user?.interests, user?.looking_for]);
+
+  const loadShelfPlaces = useCallback(async () => {
+    const coords = activeCoords();
+    const entries = await Promise.all(DISCOVER_SHELVES.map(async (b) => {
+      try {
+        if (b.id === 'events') {
+          return [b.id, await loadEventPlaces(coords)] as const;
+        } else {
+          const r = await api.get('/google-places/nearby', { params: { lat: coords.lat, lng: coords.lng, radius: 40000, type: b.type } });
+          const places = Array.isArray(r.data) ? r.data : [];
+          return [b.id, places.slice(0, 8)] as const;
+        }
+      } catch {
+        return [b.id, []] as const;
+      }
+    }));
+    setShelfPlaces(Object.fromEntries(entries));
+  }, [activeCoords, loadEventPlaces]);
+
+  useEffect(() => {
+    let mounted = true;
+    async function bootstrap() {
+      setLoading(true);
+      await Promise.all([loadPeople(), loadUserCoords()]);
+      if (mounted) setLoading(false);
+    }
+    bootstrap();
+    return () => { mounted = false; };
+  }, [loadPeople, loadUserCoords]);
+
+  useEffect(() => { loadShelfPlaces(); }, [loadShelfPlaces]);
 
   const onRefresh = useCallback(async () => {
-    setRefreshing(true); await load(); setRefreshing(false);
-  }, []);
+    setRefreshing(true); await Promise.all([loadPeople(), loadShelfPlaces()]); setRefreshing(false);
+  }, [loadPeople, loadShelfPlaces]);
 
   return (
     <View style={s.root}>
       {/* Header */}
       <View style={[s.header, { paddingTop: insets.top + 4 }]}>
-        <TouchableOpacity onPress={() => setShowMenu(true)}><Ionicons name="menu" size={24} color="#1A1A1A" /></TouchableOpacity>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.tabs}>
           {CITY_TABS.map(c => (
             <TouchableOpacity key={c.id} onPress={() => setTab(c.id)}>
@@ -101,19 +354,6 @@ export default function DiscoverScreen() {
         </ScrollView>
         <TouchableOpacity style={s.searchIcon}><Ionicons name="search" size={18} color="#1A1A1A" /></TouchableOpacity>
       </View>
-
-      {/* Menu */}
-      <Modal visible={showMenu} transparent animationType="fade" onRequestClose={() => setShowMenu(false)}>
-        <TouchableOpacity style={s.menuOv} activeOpacity={1} onPress={() => setShowMenu(false)}>
-          <View style={s.menuSheet} onStartShouldSetResponder={() => true}>
-            <TouchableOpacity style={s.menuItem} onPress={() => { setShowMenu(false); router.push('/map-view' as any); }}>
-              <Ionicons name="map-outline" size={22} color="#1A1A1A" />
-              <Text style={s.menuItemTx}>Places & Map</Text>
-              <Ionicons name="chevron-forward" size={16} color="#CCC" />
-            </TouchableOpacity>
-          </View>
-        </TouchableOpacity>
-      </Modal>
 
       <ScrollView
         showsVerticalScrollIndicator={false}
@@ -128,15 +368,40 @@ export default function DiscoverScreen() {
             <View style={s.searchWrap}>
               <View style={s.searchBar}>
                 <Ionicons name="search" size={18} color="#999" />
-                <Text style={s.searchPh}>What are you looking for?</Text>
+                <Text style={s.searchPh}>{t('searchPrompt')}</Text>
               </View>
             </View>
 
             {/* People Profiles */}
-            {people.length > 0 && (
-              <View style={s.peopleSection}>
-                <Text style={s.peopleSectionTitle}>People</Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.peopleScroll}>
+            <View style={s.peopleSection}>
+              <Text style={s.peopleSectionTitle}>{t('people')}</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.peopleScroll}>
+                <TouchableOpacity
+                  key="your-story"
+                  style={s.personCard}
+                  activeOpacity={0.9}
+                  onPress={() => {
+                    if (!requireVerifiedPhone(user, router, 'share stories')) return;
+                    router.push('/create-status' as any);
+                  }}
+                >
+                  <View style={s.yourStoryImageWrap}>
+                    {user?.profile_image ? (
+                      <Image source={{ uri: user.profile_image }} style={s.personImg} />
+                    ) : (
+                      <View style={[s.personImg, s.yourStoryFallback]}>
+                        <Text style={s.yourStoryInitial}>
+                          {(user?.full_name || user?.username || 'Y')[0].toUpperCase()}
+                        </Text>
+                      </View>
+                    )}
+                    <View style={s.yourStoryPlus}>
+                      <Ionicons name="add" size={16} color="#FFF" />
+                    </View>
+                  </View>
+                  <Text style={s.personName} numberOfLines={1}>{t('yourStory')}</Text>
+                  <Text style={s.personBio} numberOfLines={1}>{user?.username || user?.full_name || ''}</Text>
+                </TouchableOpacity>
                   {people.map((u: any) => (
                     <TouchableOpacity key={u.id} style={s.personCard} activeOpacity={0.9}
                       onPress={() => router.push(`/user/${u.id}` as any)}>
@@ -151,61 +416,95 @@ export default function DiscoverScreen() {
                       <Text style={s.personBio} numberOfLines={2}>{u.bio || u.city || ''}</Text>
                     </TouchableOpacity>
                   ))}
-                </ScrollView>
-              </View>
-            )}
+              </ScrollView>
+            </View>
 
-            {/* Category Blocks with Google Places Images */}
-            <View style={s.blocks}>
-              {BLOCKS.map((b, idx) => {
-                const img = blockImages[b.id];
-                const isBig = idx === 0 || idx === 3;
-                if (isBig) {
-                  return (
-                    <TouchableOpacity key={b.id} style={s.blockBig} activeOpacity={0.9} onPress={() => router.push(`/category/${b.id}` as any)}>
-                      {img ? <Image source={{ uri: img }} style={s.blockBigImg} resizeMode="cover" /> : <View style={[s.blockBigImg, { backgroundColor: '#E0DCD7' }]} />}
-                      <View style={s.blockBigOverlay} />
-                      <View style={s.blockBigContent}>
-                        <Text style={s.blockBigTitle}>{b.label}</Text>
-                        <Text style={s.blockBigSub}>{b.sub}</Text>
-                      </View>
+            {/* Discover shelves */}
+            <View style={s.shelfRegion}>
+              {DISCOVER_SHELVES.map((section) => {
+                const places = shelfPlaces[section.id] || [];
+                const cards = places.length > 0
+                  ? places
+                  : section.fallbackItems.map((name, index) => ({ place_id: `${section.id}-${index}`, name, fallback: true }));
+
+                return (
+                  <View key={section.id} style={s.shelfSection}>
+                    <TouchableOpacity
+                      style={s.shelfHeader}
+                      activeOpacity={0.75}
+                      onPress={() => router.push(`/category/${section.id}` as any)}
+                    >
+                      <Text style={s.shelfTitle}>{section.label}</Text>
+                      <Ionicons name="chevron-forward" size={20} color="#5D5D5D" />
                     </TouchableOpacity>
-                  );
-                }
-                return null;
+                    <Text style={s.shelfSub}>{section.sub}</Text>
+
+                    <ScrollView
+                      horizontal
+                      showsHorizontalScrollIndicator={false}
+                      contentContainerStyle={s.shelfScroll}
+                    >
+                      {cards.map((item: any, index: number) => {
+                        const hasPhoto = !!item.photo_url;
+                        const isEvent = section.id === 'events';
+                        const title = isEvent ? (item.event_title || item.name || section.label) : (item.name || section.label);
+                        const meta = isEvent
+                          ? `${item.event_time_label || 'Nearby'} - ${item.event_venue || item.name || item.vicinity || 'Local'}`
+                          : item.vicinity || item.formatted_address || (item.rating ? `${item.rating} stars` : section.label);
+
+                        return (
+                          <TouchableOpacity
+                            key={item.place_id || `${section.id}-${index}`}
+                            style={s.shelfCard}
+                            activeOpacity={0.88}
+                            onPress={() => {
+                              if (item.empty) return;
+                              if (isEvent) {
+                                router.push({
+                                  pathname: '/event/[id]',
+                                  params: {
+                                    id: routeParam(item.event_id || item.place_id || `${section.id}-${index}`),
+                                    placeId: item.fallback ? '' : routeParam(item.place_id),
+                                    title: routeParam(item.event_title || item.name || 'Event'),
+                                    host: routeParam(item.event_host || 'Flames local guide'),
+                                    venue: routeParam(item.event_venue || item.name),
+                                    address: routeParam(item.event_address || item.vicinity || item.formatted_address),
+                                    image: routeParam(item.photo_url),
+                                    schedule: routeParam(item.event_schedule),
+                                    weekday: routeParam(item.event_weekday),
+                                    month: routeParam(item.event_month),
+                                    day: routeParam(item.event_day),
+                                    description: routeParam(item.event_description),
+                                    attendees: routeParam(item.attendees || 3),
+                                    lat: routeParam(item.lat),
+                                    lng: routeParam(item.lng),
+                                    eventUrl: routeParam(item.event_url || item.url),
+                                    source: routeParam(item.event_source || 'eventbrite'),
+                                  },
+                                } as any);
+                              } else if (item.fallback || !item.place_id) {
+                                router.push(`/category/${section.id}` as any);
+                              } else {
+                                router.push(`/place/${item.place_id}` as any);
+                              }
+                            }}
+                          >
+                            <View style={[s.shelfImage, s.shelfFallback, { backgroundColor: section.fallbackColor }]}>
+                              <Ionicons name={section.icon as keyof typeof Ionicons.glyphMap} size={28} color="#181818" />
+                              {isEvent && <Text style={s.eventFallbackLabel}>{item.event_time_label || 'Event'}</Text>}
+                              {hasPhoto && (
+                                <Image source={{ uri: item.photo_url }} style={s.shelfImageOverlay} resizeMode="cover" />
+                              )}
+                            </View>
+                            <Text style={s.shelfCardTitle} numberOfLines={2}>{title}</Text>
+                            <Text style={s.shelfCardMeta} numberOfLines={1}>{meta}</Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </ScrollView>
+                  </View>
+                );
               })}
-
-              {/* Pair rows */}
-              <View style={s.blockRow}>
-                {BLOCKS.filter((_, i) => i === 1 || i === 2).map(b => {
-                  const img = blockImages[b.id];
-                  return (
-                    <TouchableOpacity key={b.id} style={s.blockHalf} activeOpacity={0.9} onPress={() => router.push(`/category/${b.id}` as any)}>
-                      {img ? <Image source={{ uri: img }} style={s.blockHalfImg} resizeMode="cover" /> : <View style={[s.blockHalfImg, { backgroundColor: '#E0DCD7' }]} />}
-                      <View style={s.blockHalfOverlay} />
-                      <View style={s.blockHalfContent}>
-                        <Text style={s.blockHalfTitle}>{b.label}</Text>
-                        <Text style={s.blockHalfSub}>{b.sub}</Text>
-                      </View>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-              <View style={s.blockRow}>
-                {BLOCKS.filter((_, i) => i === 4 || i === 5).map(b => {
-                  const img = blockImages[b.id];
-                  return (
-                    <TouchableOpacity key={b.id} style={s.blockHalf} activeOpacity={0.9} onPress={() => router.push(`/category/${b.id}` as any)}>
-                      {img ? <Image source={{ uri: img }} style={s.blockHalfImg} resizeMode="cover" /> : <View style={[s.blockHalfImg, { backgroundColor: '#E0DCD7' }]} />}
-                      <View style={s.blockHalfOverlay} />
-                      <View style={s.blockHalfContent}>
-                        <Text style={s.blockHalfTitle}>{b.label}</Text>
-                        <Text style={s.blockHalfSub}>{b.sub}</Text>
-                      </View>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
             </View>
           </>
         )}
@@ -215,26 +514,12 @@ export default function DiscoverScreen() {
 }
 
 const s = StyleSheet.create({
-  root: { flex: 1, backgroundColor: '#FFF' },
+  root: { flex: 1, backgroundColor: colors.white },
   header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingBottom: 10, gap: 12 },
   tabs: { gap: 20, alignItems: 'center' },
   tabTx: { fontSize: 13, fontWeight: '600', color: '#BBB', letterSpacing: 0.5 },
   tabTxOn: { color: '#1A1A1A', fontWeight: '800', textDecorationLine: 'underline' },
   searchIcon: { width: 38, height: 38, borderRadius: 19, backgroundColor: '#F0F0F0', justifyContent: 'center', alignItems: 'center' },
-
-  menuOv: { flex: 1, backgroundColor: 'rgba(0,0,0,0.3)', justifyContent: 'flex-start' },
-  menuSheet: { backgroundColor: '#FFF', marginTop: 100, marginHorizontal: 20, borderRadius: 16, paddingVertical: 8 },
-  menuItem: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingHorizontal: 20, paddingVertical: 16 },
-  menuItemTx: { fontSize: 16, fontWeight: '600', color: '#1A1A1A', flex: 1 },
-
-  feat: { paddingHorizontal: 16, marginBottom: 16 },
-  featTitle: { fontSize: 26, fontWeight: '900', color: '#1A1A1A', letterSpacing: -0.5, lineHeight: 32, marginBottom: 14 },
-  featImg: { width: '100%', height: SW * 0.5, borderRadius: 14 },
-
-  row2: { flexDirection: 'row', paddingHorizontal: 16, gap: 10, marginBottom: 16 },
-  row2Card: { flex: 1 },
-  row2Img: { width: '100%', height: HALF * 0.85, borderRadius: 14 },
-  row2Tx: { fontSize: 14, fontWeight: '600', color: '#1A1A1A', marginTop: 8 },
 
   searchWrap: { paddingHorizontal: 16, paddingBottom: 16 },
   searchBar: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#F5F5F5', borderRadius: 24, paddingHorizontal: 16, paddingVertical: 12 },
@@ -248,22 +533,36 @@ const s = StyleSheet.create({
   personInit: { fontSize: 28, fontWeight: '800', color: '#CCC' },
   personName: { fontSize: 14, fontWeight: '700', color: '#1A1A1A', marginTop: 8, textAlign: 'center' },
   personBio: { fontSize: 11, color: '#999', textAlign: 'center', marginTop: 2 },
+  yourStoryImageWrap: { width: 100, height: 100, position: 'relative' },
+  yourStoryFallback: { backgroundColor: '#F5F2EC', borderWidth: 2, borderColor: '#DDD8CC', justifyContent: 'center', alignItems: 'center' },
+  yourStoryInitial: { fontSize: 30, fontWeight: '900', color: colors.accentPrimary },
+  yourStoryPlus: {
+    position: 'absolute',
+    right: 4,
+    bottom: 4,
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: colors.accentPrimary,
+    borderWidth: 2,
+    borderColor: colors.white,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
 
-  blocks: { paddingHorizontal: 16, gap: 10 },
-  blockBig: { borderRadius: 20, overflow: 'hidden', height: 180, position: 'relative' },
-  blockBigImg: { position: 'absolute', width: '100%', height: '100%' },
-  blockBigOverlay: { position: 'absolute', width: '100%', height: '100%', backgroundColor: 'rgba(0,0,0,0.35)' },
-  blockBigContent: { position: 'absolute', bottom: 20, left: 20, right: 20 },
-  blockBigTitle: { fontSize: 24, fontWeight: '900', color: '#FFF' },
-  blockBigSub: { fontSize: 13, color: 'rgba(255,255,255,0.7)', marginTop: 4 },
-
-  blockRow: { flexDirection: 'row', gap: 10 },
-  blockHalf: { flex: 1, borderRadius: 16, overflow: 'hidden', height: 140, position: 'relative' },
-  blockHalfImg: { position: 'absolute', width: '100%', height: '100%' },
-  blockHalfOverlay: { position: 'absolute', width: '100%', height: '100%', backgroundColor: 'rgba(0,0,0,0.35)' },
-  blockHalfContent: { position: 'absolute', bottom: 14, left: 14, right: 14 },
-  blockHalfTitle: { fontSize: 18, fontWeight: '800', color: '#FFF' },
-  blockHalfSub: { fontSize: 11, color: 'rgba(255,255,255,0.65)', marginTop: 2 },
+  shelfRegion: { backgroundColor: colors.white, paddingTop: 8, paddingBottom: 18 },
+  shelfSection: { paddingTop: 12, paddingBottom: 4 },
+  shelfHeader: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16 },
+  shelfTitle: { fontSize: 20, fontWeight: '900', color: '#050505', lineHeight: 24 },
+  shelfSub: { fontSize: 12, color: '#6E6E6E', paddingHorizontal: 16, marginTop: 2, marginBottom: 10 },
+  shelfScroll: { gap: 10, paddingHorizontal: 16, paddingRight: 24 },
+  shelfCard: { width: SHELF_CARD },
+  shelfImage: { width: SHELF_CARD, height: SHELF_CARD, borderRadius: 6 },
+  shelfImageOverlay: { position: 'absolute', width: SHELF_CARD, height: SHELF_CARD, borderRadius: 6 },
+  shelfFallback: { justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: colors.borderSubtle },
+  eventFallbackLabel: { marginTop: 8, fontSize: 11, fontWeight: '800', color: colors.accentPrimary },
+  shelfCardTitle: { fontSize: 13, fontWeight: '700', color: '#050505', lineHeight: 16, marginTop: 7 },
+  shelfCardMeta: { fontSize: 11, color: '#777', lineHeight: 14, marginTop: 2 },
 
   center: { paddingTop: 100, alignItems: 'center' },
 });

@@ -2,6 +2,12 @@ import { create } from 'zustand';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import api from '../api/client';
 
+type AppLanguage = 'en' | 'fr' | 'es';
+
+function normalizeStoredLanguage(value?: string | null): AppLanguage {
+  return value === 'fr' || value === 'es' ? value : 'en';
+}
+
 interface User {
   id: string;
   email: string;
@@ -26,6 +32,7 @@ interface User {
   is_admin?: boolean;
   is_publisher?: boolean;
   is_private?: boolean;
+  language?: AppLanguage;
 }
 
 interface AuthState {
@@ -37,6 +44,8 @@ interface AuthState {
   loginWithOAuth: (provider: 'google' | 'apple', idToken: string, extras?: Record<string, unknown>) => Promise<void>;
   startPhoneLogin: (phone: string) => Promise<{ detail: string; delivery?: string; dev_code?: string }>;
   verifyPhoneLogin: (phone: string, code: string, fullName?: string) => Promise<void>;
+  startPhoneVerification: (phone: string) => Promise<{ detail: string; delivery?: string; dev_code?: string }>;
+  verifyPhoneVerification: (phone: string, code: string) => Promise<void>;
   register: (email: string, password: string, username: string, fullName: string) => Promise<void>;
   logout: () => Promise<void>;
   loadUser: () => Promise<void>;
@@ -61,6 +70,7 @@ function normalizeUser(rawUser: any): User {
     is_admin: !!rawUser.is_admin,
     is_publisher: !!rawUser.is_publisher,
     is_private: !!rawUser.is_private,
+    language: normalizeStoredLanguage(rawUser.language),
     phone_verified: !!rawUser.phone_verified,
   };
 }
@@ -99,6 +109,18 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     await persistSession(set, response.data);
   },
 
+  startPhoneVerification: async (phone: string) => {
+    const response = await api.post('/users/me/phone/start', { phone });
+    return response.data;
+  },
+
+  verifyPhoneVerification: async (phone: string, code: string) => {
+    const response = await api.post('/users/me/phone/verify', { phone, code });
+    const user = normalizeUser(response.data);
+    await AsyncStorage.setItem('user', JSON.stringify(user));
+    set({ user });
+  },
+
   register: async (email: string, password: string, username: string, fullName: string) => {
     const response = await api.post('/auth/register', {
       email,
@@ -121,15 +143,21 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       const userStr = await AsyncStorage.getItem('user');
       
       if (token && userStr) {
-        // Verify token is still valid
+        const cachedUser = normalizeUser(JSON.parse(userStr));
+        set({ user: cachedUser, token, isAuthenticated: true, isLoading: false });
+
         try {
           const response = await api.get('/auth/me');
           const user = normalizeUser(response.data);
+          await AsyncStorage.setItem('user', JSON.stringify(user));
           set({ user, token, isAuthenticated: true, isLoading: false });
-        } catch {
-          await AsyncStorage.removeItem('auth_token');
-          await AsyncStorage.removeItem('user');
-          set({ user: null, token: null, isAuthenticated: false, isLoading: false });
+        } catch (error: any) {
+          const status = error?.response?.status;
+          if (status === 401 || status === 403) {
+            await AsyncStorage.removeItem('auth_token');
+            await AsyncStorage.removeItem('user');
+            set({ user: null, token: null, isAuthenticated: false, isLoading: false });
+          }
         }
       } else {
         set({ isLoading: false });
@@ -141,7 +169,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   updateProfile: async (data: Partial<User>) => {
     const response = await api.put('/users/me', data);
-    const updatedUser = response.data;
+    const updatedUser = normalizeUser(response.data);
     await AsyncStorage.setItem('user', JSON.stringify(updatedUser));
     set({ user: updatedUser });
   },

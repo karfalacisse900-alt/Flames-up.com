@@ -15,9 +15,14 @@ import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing, borderRadius } from '../../src/utils/theme';
 import api from '../../src/api/client';
 import { formatDistanceToNow } from 'date-fns';
+import { useAuthStore } from '../../src/store/authStore';
+import { buildAgoraCallHref } from '../../src/utils/calls';
+import { requireVerifiedPhone } from '../../src/utils/phoneVerification';
 
 export default function MessagesScreen() {
   const router = useRouter();
+  const user = useAuthStore((state) => state.user);
+  const currentUserId = user?.id;
   const [conversations, setConversations] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -41,6 +46,16 @@ export default function MessagesScreen() {
     setIsRefreshing(true);
     await loadConversations();
     setIsRefreshing(false);
+  };
+
+  const startVideoCall = (otherUser: any) => {
+    if (!requireVerifiedPhone(user, router, 'start video calls')) return;
+    router.push(buildAgoraCallHref({
+      currentUserId,
+      peerId: otherUser?.id,
+      peerName: otherUser?.full_name || otherUser?.username || 'Video call',
+      peerAvatar: otherUser?.profile_image || '',
+    }) as any);
   };
 
   const renderConversation = ({ item }: { item: any }) => {
@@ -82,6 +97,13 @@ export default function MessagesScreen() {
             )}
           </View>
         </View>
+        <TouchableOpacity
+          style={styles.videoButton}
+          onPress={() => startVideoCall(otherUser)}
+          activeOpacity={0.75}
+        >
+          <Ionicons name="videocam-outline" size={23} color={colors.primary} />
+        </TouchableOpacity>
       </TouchableOpacity>
     );
   };
@@ -186,6 +208,14 @@ const styles = StyleSheet.create({
   conversationInfo: {
     flex: 1,
     marginLeft: spacing.md,
+  },
+  videoButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginLeft: spacing.sm,
   },
   conversationHeader: {
     flexDirection: 'row',

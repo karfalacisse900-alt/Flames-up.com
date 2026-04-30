@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, Switch, TextInput, Alert, ScrollView,
 } from 'react-native';
@@ -7,13 +7,16 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuthStore } from '../src/store/authStore';
 import api from '../src/api/client';
+import { AppLanguage, LANGUAGE_OPTIONS, useI18n } from '../src/utils/i18n';
 
 export default function SettingsScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { user, setUser, logout } = useAuthStore();
+  const { user, setUser, logout, updateProfile } = useAuthStore();
+  const { language, t } = useI18n();
 
   const [isPrivate, setIsPrivate] = useState(user?.is_private || false);
+  const [selectedLanguage, setSelectedLanguage] = useState<AppLanguage>(language);
   const [showPasswordForm, setShowPasswordForm] = useState(false);
   const [showEmailForm, setShowEmailForm] = useState(false);
   const [oldPassword, setOldPassword] = useState('');
@@ -21,12 +24,34 @@ export default function SettingsScreen() {
   const [newEmail, setNewEmail] = useState(user?.email || '');
   const [saving, setSaving] = useState(false);
 
+  useEffect(() => {
+    setIsPrivate(!!user?.is_private);
+  }, [user?.is_private]);
+
+  useEffect(() => {
+    setSelectedLanguage(language);
+  }, [language]);
+
   const togglePrivacy = async (val: boolean) => {
+    const previous = isPrivate;
     setIsPrivate(val);
     try {
-      await api.put('/users/me', { is_private: val });
-      if (user) setUser({ ...user, is_private: val });
-    } catch {}
+      await updateProfile({ is_private: val });
+    } catch {
+      setIsPrivate(previous);
+      Alert.alert(t('error'), t('couldNotUpdatePrivacy'));
+    }
+  };
+
+  const changeLanguage = async (nextLanguage: AppLanguage) => {
+    const previous = selectedLanguage;
+    setSelectedLanguage(nextLanguage);
+    try {
+      await updateProfile({ language: nextLanguage });
+    } catch {
+      setSelectedLanguage(previous);
+      Alert.alert(t('error'), t('couldNotUpdateLanguage'));
+    }
   };
 
   const changePassword = async () => {
@@ -80,18 +105,21 @@ export default function SettingsScreen() {
         <TouchableOpacity style={s.backBtn} onPress={() => router.back()}>
           <Ionicons name="chevron-back" size={20} color="#1A1A1A" />
         </TouchableOpacity>
-        <Text style={s.headerTitle}>Settings</Text>
+        <Text style={s.headerTitle}>{t('settings')}</Text>
         <View style={{ width: 40 }} />
       </View>
 
       <ScrollView style={s.content} showsVerticalScrollIndicator={false}>
         {/* Privacy */}
         <View style={s.section}>
-          <Text style={s.sectionTitle}>Privacy</Text>
+          <Text style={s.sectionTitle}>{t('privacy')}</Text>
           <View style={s.row}>
             <View style={s.rowLeft}>
               <Ionicons name="lock-closed-outline" size={20} color="#1A1A1A" />
-              <Text style={s.rowLabel}>Private Account</Text>
+              <View style={s.rowText}>
+                <Text style={s.rowLabel}>{t('privateAccount')}</Text>
+                <Text style={s.rowSub}>{t('privateAccountDescription')}</Text>
+              </View>
             </View>
             <Switch value={isPrivate} onValueChange={togglePrivacy} trackColor={{ false: '#E0E0E0', true: '#1A1A1A' }} thumbColor="#FFF" />
           </View>
@@ -99,12 +127,12 @@ export default function SettingsScreen() {
 
         {/* Email */}
         <View style={s.section}>
-          <Text style={s.sectionTitle}>Account</Text>
+          <Text style={s.sectionTitle}>{t('account')}</Text>
           <TouchableOpacity style={s.row} onPress={() => setShowEmailForm(!showEmailForm)}>
             <View style={s.rowLeft}>
               <Ionicons name="mail-outline" size={20} color="#1A1A1A" />
               <View>
-                <Text style={s.rowLabel}>Email</Text>
+                <Text style={s.rowLabel}>{t('email')}</Text>
                 <Text style={s.rowSub}>{user?.email}</Text>
               </View>
             </View>
@@ -112,9 +140,9 @@ export default function SettingsScreen() {
           </TouchableOpacity>
           {showEmailForm && (
             <View style={s.form}>
-              <TextInput style={s.input} value={newEmail} onChangeText={setNewEmail} placeholder="New email" keyboardType="email-address" autoCapitalize="none" placeholderTextColor="#BBB" />
+              <TextInput style={s.input} value={newEmail} onChangeText={setNewEmail} placeholder={t('newEmail')} keyboardType="email-address" autoCapitalize="none" placeholderTextColor="#BBB" />
               <TouchableOpacity style={s.saveBtn} onPress={changeEmail} disabled={saving}>
-                <Text style={s.saveTx}>{saving ? 'Saving...' : 'Update Email'}</Text>
+                <Text style={s.saveTx}>{saving ? t('saving') : t('updateEmail')}</Text>
               </TouchableOpacity>
             </View>
           )}
@@ -122,7 +150,7 @@ export default function SettingsScreen() {
           <TouchableOpacity style={s.row} onPress={() => setShowPasswordForm(!showPasswordForm)}>
             <View style={s.rowLeft}>
               <Ionicons name="key-outline" size={20} color="#1A1A1A" />
-              <Text style={s.rowLabel}>Password</Text>
+              <Text style={s.rowLabel}>{t('password')}</Text>
             </View>
             <Ionicons name="chevron-forward" size={16} color="#CCC" />
           </TouchableOpacity>
@@ -139,26 +167,39 @@ export default function SettingsScreen() {
 
         {/* Language */}
         <View style={s.section}>
-          <Text style={s.sectionTitle}>Preferences</Text>
-          <View style={s.row}>
+          <Text style={s.sectionTitle}>{t('preferences')}</Text>
+          <View style={[s.row, s.languageRow]}>
             <View style={s.rowLeft}>
               <Ionicons name="language-outline" size={20} color="#1A1A1A" />
-              <Text style={s.rowLabel}>Language</Text>
+              <Text style={s.rowLabel}>{t('language')}</Text>
             </View>
-            <Text style={s.rowValue}>English</Text>
+            <View style={s.languageOptions}>
+              {LANGUAGE_OPTIONS.map((option) => (
+                <TouchableOpacity
+                  key={option.code}
+                  style={[s.languageChip, selectedLanguage === option.code && s.languageChipOn]}
+                  onPress={() => changeLanguage(option.code)}
+                  activeOpacity={0.8}
+                >
+                  <Text style={[s.languageChipText, selectedLanguage === option.code && s.languageChipTextOn]}>
+                    {option.nativeLabel}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
           </View>
         </View>
 
         {/* Sign Out */}
         <TouchableOpacity style={s.logoutBtn} onPress={handleLogout}>
           <Ionicons name="log-out-outline" size={20} color="#EF4444" />
-          <Text style={s.logoutTx}>Sign Out</Text>
+          <Text style={s.logoutTx}>{t('signOut')}</Text>
         </TouchableOpacity>
 
         {/* Delete Account */}
         <TouchableOpacity style={s.deleteBtn} onPress={handleDeleteAccount}>
           <Ionicons name="trash-outline" size={18} color="#999" />
-          <Text style={s.deleteTx}>Delete Account</Text>
+          <Text style={s.deleteTx}>{t('deleteAccount')}</Text>
         </TouchableOpacity>
       </ScrollView>
     </View>
@@ -174,11 +215,18 @@ const s = StyleSheet.create({
 
   section: { marginBottom: 24 },
   sectionTitle: { fontSize: 12, fontWeight: '700', color: '#999', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 },
-  row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 14, borderBottomWidth: 0.5, borderBottomColor: '#F0F0F0' },
-  rowLeft: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 14, borderBottomWidth: 0.5, borderBottomColor: '#F0F0F0', gap: 12 },
+  rowLeft: { flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 },
+  rowText: { flex: 1 },
   rowLabel: { fontSize: 16, fontWeight: '500', color: '#1A1A1A' },
   rowSub: { fontSize: 13, color: '#999', marginTop: 1 },
   rowValue: { fontSize: 14, color: '#999' },
+  languageRow: { alignItems: 'flex-start' },
+  languageOptions: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 8, flex: 1 },
+  languageChip: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 14, backgroundColor: '#F5F5F5', borderWidth: 1, borderColor: '#E8E8E8' },
+  languageChipOn: { backgroundColor: '#1A1A1A', borderColor: '#1A1A1A' },
+  languageChipText: { fontSize: 13, fontWeight: '700', color: '#666' },
+  languageChipTextOn: { color: '#FFF' },
 
   form: { paddingVertical: 12, gap: 10 },
   input: { backgroundColor: '#F5F5F5', borderRadius: 12, paddingHorizontal: 16, paddingVertical: 12, fontSize: 15, color: '#1A1A1A' },

@@ -5,16 +5,15 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  Image,
-  FlatList,
   ActivityIndicator,
   Dimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, shadows } from '../src/utils/theme';
+import { colors } from '../src/utils/theme';
 import api from '../src/api/client';
+import MediaPreview from '../src/components/MediaPreview';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const THUMB_SIZE = (SCREEN_WIDTH - 48) / 3;
@@ -57,7 +56,7 @@ export default function LibraryScreen() {
       {posts.map((post) => (
         <TouchableOpacity key={post.id} style={s.thumb} onPress={() => router.push(`/post/${post.id}`)}>
           {post.image ? (
-            <Image source={{ uri: post.image }} style={s.thumbImage} />
+            <MediaPreview uri={post.image} mediaTypes={post.media_types} style={s.thumbImage} />
           ) : (
             <View style={s.thumbText}>
               <Text style={s.thumbTextContent} numberOfLines={4}>{post.content}</Text>

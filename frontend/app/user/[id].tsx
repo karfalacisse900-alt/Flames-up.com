@@ -18,6 +18,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { colors, shadows } from '../../src/utils/theme';
 import { useAuthStore } from '../../src/store/authStore';
 import api from '../../src/api/client';
+import MediaPreview from '../../src/components/MediaPreview';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -414,7 +415,7 @@ export default function UserProfileScreen() {
                   onPress={() => router.push(`/post/${post.id}`)}
                 >
                   {post.image ? (
-                    <Image source={{ uri: post.image }} style={s.thumbnailImage} />
+                    <MediaPreview uri={post.image} mediaTypes={post.media_types} style={s.thumbnailImage} />
                   ) : (
                     <View style={s.textThumbnail}>
                       <Text style={s.textThumbnailContent} numberOfLines={3}>

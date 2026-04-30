@@ -1,24 +1,20 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, Image, FlatList,
+  View, Text, StyleSheet, TouchableOpacity, FlatList,
   RefreshControl, Dimensions, ScrollView,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import * as Location from 'expo-location';
 import { useAuthStore } from '../../src/store/authStore';
 import api from '../../src/api/client';
 import { rankFeed, RecommendationItem } from '../../src/recommendation';
+import { requireVerifiedPhone } from '../../src/utils/phoneVerification';
+import MediaPreview from '../../src/components/MediaPreview';
 
 const { width: SW } = Dimensions.get('window');
-const GAP = 6;
-const PAD = 8;
-const COL_W = (SW - PAD * 2 - GAP) / 2;
-const RATIOS = [1.4, 1.05, 1.55, 1.2, 1.35, 1.0, 1.45, 1.1];
 
 const FILTERS = [
-  { id: 'near', label: 'Near You' },
   { id: 'world', label: 'World Board' },
   { id: 'nyc', label: 'NYC' },
   { id: 'miami', label: 'Miami' },
@@ -37,54 +33,43 @@ const CITY_KW: Record<string, string[]> = {
   paris: ['paris', 'montmartre'],
 };
 
+const WORLD_BOARD_SECTIONS = [
+  { label: 'For You', kind: 'ranked' },
+  { label: 'Trending', kind: 'trending' },
+  { label: 'Latest', kind: 'latest' },
+  { label: 'Fresh', kind: 'fresh' },
+  { label: 'Explore More', kind: 'explore' },
+] as const;
+
+function engagementScore(post: any): number {
+  return Number(post.likes_count || 0) * 4
+    + Number(post.comments_count || 0) * 6
+    + Number(post.shares_count || 0) * 7
+    + Number(post.saves_count || 0) * 5
+    + Number(post.views_count || 0);
+}
+
+function uniquePosts(posts: any[]): any[] {
+  const seen = new Set<string>();
+  return posts.filter((post) => {
+    const id = String(post.id || '');
+    if (!id || seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+}
+
 export default function HomeScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { user } = useAuthStore();
-  const [filter, setFilter] = useState('near');
+  const [filter, setFilter] = useState('world');
   const [posts, setPosts] = useState<any[]>([]);
-  const [nearbyPlaces, setNearbyPlaces] = useState<Record<string, any[]>>({});
   const [refreshing, setRefreshing] = useState(false);
-  const [userCity, setUserCity] = useState('');
-  const [userLat, setUserLat] = useState(40.7128);
-  const [userLng, setUserLng] = useState(-74.006);
+  const userLat = 40.7128;
+  const userLng = -74.006;
 
-  useEffect(() => { loadData(); detectCity(); }, []);
-  useEffect(() => { if (filter === 'near') loadNearby(); }, [filter, userLat]);
-
-  const detectCity = async () => {
-    try {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') return;
-      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Highest });
-      setUserLat(loc.coords.latitude);
-      setUserLng(loc.coords.longitude);
-      const [addr] = await Location.reverseGeocodeAsync({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
-      if (addr?.city) setUserCity(addr.city.toLowerCase());
-    } catch {}
-  };
-
-  const loadNearby = async () => {
-    const types = [
-      { key: 'park', label: 'Parks' },
-      { key: 'restaurant', label: 'Restaurants' },
-      { key: 'art_gallery', label: 'Art' },
-      { key: 'cafe', label: 'Cafes' },
-      { key: 'tourist_attraction', label: 'Places' },
-    ];
-    const result: Record<string, any[]> = {};
-    for (const t of types) {
-      try {
-        const r = await api.get('/google-places/nearby', { params: { lat: userLat, lng: userLng, radius: 8000, type: t.key } });
-        if (Array.isArray(r.data) && r.data.length > 0) result[t.label] = r.data;
-      } catch {}
-    }
-    setNearbyPlaces(result);
-  };
-
-  useEffect(() => { loadData(); }, []);
-
-  const rankPosts = (rawPosts: any[]) => {
+  const rankPosts = useCallback((rawPosts: any[]) => {
     const interestTokens = String(user?.interests || '')
       .split(',')
       .map((s: string) => s.trim().toLowerCase())
@@ -120,69 +105,78 @@ export default function HomeScreen() {
     );
 
     return ranked.map((r) => r.original);
-  };
+  }, [user?.id, user?.interests, userLat, userLng]);
 
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     try {
       const r = await api.get('/posts/feed', { params: { limit: 40 } });
       const raw = Array.isArray(r.data) ? r.data : [];
       setPosts(rankPosts(raw));
     } catch {}
-  };
+  }, [rankPosts]);
+
+  useEffect(() => { loadData(); }, [loadData]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true); await loadData(); setRefreshing(false);
-  }, []);
+  }, [loadData]);
 
-  const filtered = (() => {
-    if (filter === 'world') return posts; // World Board = all posts
-    if (filter === 'near') {
-      if (!userCity) return posts;
-      const f = posts.filter((p: any) => {
-        const loc = ((p.location || '') + ' ' + (p.content || '')).toLowerCase();
-        return loc.includes(userCity);
-      });
-      return f.length > 0 ? f : posts;
-    }
+  const filtered = useMemo(() => {
+    if (filter === 'world') return posts;
     const kw = CITY_KW[filter] || [];
     const f = posts.filter((p: any) => {
       const t = ((p.location || '') + ' ' + (p.content || '')).toLowerCase();
       return kw.some(k => t.includes(k));
     });
     return f.length > 0 ? f : [];
-  })();
+  }, [filter, posts]);
 
-  const items = filtered.filter((p: any) => {
+  const items = useMemo(() => filtered.filter((p: any) => {
     const img = p.image || (p.images && p.images[0]);
     return img && typeof img === 'string' && (img.startsWith('http') || img.startsWith('data:') || img.startsWith('cfstream:'));
-  });
+  }), [filtered]);
 
   const G = 2;
   const TILE_SIZE = Math.floor((SW - G * 2) / 3); // 3 cols exactly
-  const isNearYou = filter === 'near';
 
-  // For World Board / City filters: distribute ALL posts into sections
-  const postSections: Record<string, any[]> = {};
-  if (!isNearYou && items.length > 0) {
-    const SECTION_SIZE = 9; // 9 images per section (3x3 grid)
-    const SECTION_NAMES = ['Trending', 'Latest', 'Fresh', 'Picked For You', 'Explore More'];
-    let idx = 0;
-    for (const name of SECTION_NAMES) {
-      const chunk = items.slice(idx, idx + SECTION_SIZE);
-      if (chunk.length > 0) postSections[name] = chunk;
-      idx += SECTION_SIZE;
-      if (idx >= items.length) break;
+  const postSections = useMemo(() => {
+    const sections: Record<string, any[]> = {};
+    if (items.length === 0) return sections;
+
+    const newest = [...items].sort((a, b) => Date.parse(b.created_at || '') - Date.parse(a.created_at || ''));
+    const trending = [...items].sort((a, b) => {
+      const recencyA = Math.max(0, 72 - ((Date.now() - Date.parse(a.created_at || '')) / 3600000));
+      const recencyB = Math.max(0, 72 - ((Date.now() - Date.parse(b.created_at || '')) / 3600000));
+      return (engagementScore(b) + recencyB) - (engagementScore(a) + recencyA);
+    });
+    const fresh = newest.filter((post) => Date.now() - Date.parse(post.created_at || '') < 1000 * 60 * 60 * 72);
+
+    for (const section of WORLD_BOARD_SECTIONS) {
+      let source = items;
+      if ('kind' in section && section.kind === 'trending') source = trending;
+      if ('kind' in section && section.kind === 'latest') source = newest;
+      if ('kind' in section && section.kind === 'fresh') source = fresh.length > 0 ? fresh : newest;
+      if ('kind' in section && section.kind === 'explore') source = [...items].reverse();
+
+      const slice = uniquePosts(source).slice(0, 9);
+      if (slice.length > 0) sections[section.label] = slice;
     }
-  }
+
+    return sections;
+  }, [items]);
+
+  const openCreatePost = () => {
+    if (!requireVerifiedPhone(user, router, 'create posts')) return;
+    router.push('/create-post' as any);
+  };
 
   return (
     <View style={s.root}>
       {/* STICKY HEADER — stays fixed at top */}
       <View style={[s.stickyHeader, { paddingTop: insets.top + 6 }]}>
-        {/* Top row: buttons */}
         <View style={s.topRow}>
           <View style={s.headerR}>
-            <TouchableOpacity style={s.hBtn} onPress={() => router.push('/create-post' as any)}>
+            <TouchableOpacity style={s.hBtn} onPress={openCreatePost}>
               <Ionicons name="add" size={20} color="#FFF" />
             </TouchableOpacity>
             <TouchableOpacity style={s.hBtnLight} onPress={() => router.push('/notifications' as any)}>
@@ -209,26 +203,8 @@ export default function HomeScreen() {
         contentContainerStyle={{ paddingBottom: 100 }}
         renderItem={() => (
           <>
-            {/* Near You: places sections (Parks, Restaurants, Art, etc.) */}
-            {isNearYou && Object.keys(nearbyPlaces).length > 0 && (
-              <View>
-                {Object.entries(nearbyPlaces).map(([label, places]) => (
-                  <View key={label}>
-                    <Text style={s.sectionLabel}>{label}</Text>
-                    <View style={s.gallery}>
-                      {places.slice(0, 9).map((p: any, i: number) => (
-                        <TouchableOpacity key={p.place_id || i} style={[s.gTile, { width: TILE_SIZE, height: TILE_SIZE }]} activeOpacity={0.95}
-                          onPress={() => router.push(`/place/${p.place_id}` as any)}>
-                          {p.photo_url ? <Image source={{ uri: p.photo_url }} style={s.gImg} resizeMode="cover" /> : <View style={[s.gImg, { backgroundColor: '#E0DCD7' }]} />}
-                        </TouchableOpacity>
-                      ))}
-                    </View>
-                  </View>
-                ))}
-              </View>
-            )}
-            {/* World Board / Cities: post sections (Fashion, Outfits, etc.) */}
-            {!isNearYou && Object.keys(postSections).length > 0 && (
+            {/* World Board / Cities: ranked post sections */}
+            {Object.keys(postSections).length > 0 && (
               <View>
                 {Object.entries(postSections).map(([label, sectionPosts]) => (
                   <View key={label}>
@@ -237,7 +213,11 @@ export default function HomeScreen() {
                       {sectionPosts.slice(0, 9).map((p: any) => (
                         <TouchableOpacity key={p.id} style={[s.gTile, { width: TILE_SIZE, height: TILE_SIZE }]} activeOpacity={0.95}
                           onPress={() => router.push(`/post/${p.id}` as any)}>
-                          <Image source={{ uri: p.image || p.images?.[0] }} style={s.gImg} resizeMode="cover" />
+                          <MediaPreview
+                            uri={p.image || p.images?.[0]}
+                            mediaTypes={p.media_types}
+                            style={s.gImg}
+                          />
                         </TouchableOpacity>
                       ))}
                     </View>
@@ -245,10 +225,10 @@ export default function HomeScreen() {
                 ))}
               </View>
             )}
-            {!isNearYou && items.length === 0 && (
+            {items.length === 0 && (
               <View style={s.empty}>
                 <Ionicons name="images-outline" size={40} color="#DDD" />
-                <Text style={s.emptyTx}>No posts in this city yet</Text>
+                <Text style={s.emptyTx}>No posts here yet</Text>
               </View>
             )}
           </>

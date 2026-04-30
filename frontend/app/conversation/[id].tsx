@@ -13,6 +13,8 @@ import { format } from 'date-fns';
 import * as ImagePicker from 'expo-image-picker';
 import { Audio, Video, ResizeMode } from 'expo-av';
 import { uploadImage, getVideoUploadUrl, uploadVideoToStream } from '../../src/utils/mediaUpload';
+import { buildAgoraCallHref } from '../../src/utils/calls';
+import { isPhoneVerificationError, requireVerifiedPhone } from '../../src/utils/phoneVerification';
 
 const { width: SW } = Dimensions.get('window');
 
@@ -76,6 +78,16 @@ export default function ConversationScreen() {
     } catch {}
   };
 
+  const startVideoCall = () => {
+    if (!requireVerifiedPhone(user, router, 'start video calls')) return;
+    router.push(buildAgoraCallHref({
+      currentUserId: user?.id,
+      peerId: userId,
+      peerName: otherUser?.full_name || otherUser?.username || 'Video call',
+      peerAvatar: otherUser?.profile_image || '',
+    }) as any);
+  };
+
   const handleTextChange = (text: string) => {
     setNewMessage(text);
     // Typing indicator logic
@@ -124,6 +136,7 @@ export default function ConversationScreen() {
 
   // Voice recording
   const startRecording = async () => {
+    if (!requireVerifiedPhone(user, router, 'send messages')) return;
     try {
       const perm = await Audio.requestPermissionsAsync();
       if (!perm.granted) { Alert.alert('Permission needed', 'Microphone access required'); return; }
@@ -183,6 +196,7 @@ export default function ConversationScreen() {
 
     if (!msgText && !media) return;
     if (isSending) return;
+    if (!requireVerifiedPhone(user, router, 'send messages')) return;
 
     setIsSending(true);
     setNewMessage('');
@@ -217,7 +231,11 @@ export default function ConversationScreen() {
       await loadMessages();
       flatListRef.current?.scrollToEnd({ animated: true });
     } catch (e) {
-      Alert.alert('Error', 'Failed to send message');
+      if (isPhoneVerificationError(e)) {
+        requireVerifiedPhone(null, router, 'send messages');
+      } else {
+        Alert.alert('Error', 'Failed to send message');
+      }
     } finally { setIsSending(false); }
   };
 
@@ -304,6 +322,9 @@ export default function ConversationScreen() {
             <Text style={st.headerName}>{otherUser?.full_name}</Text>
             <Text style={st.headerHandle}>@{otherUser?.username}</Text>
           </View>
+        </TouchableOpacity>
+        <TouchableOpacity style={st.headerCallBtn} onPress={startVideoCall} activeOpacity={0.75}>
+          <Ionicons name="videocam-outline" size={24} color="#1B4332" />
         </TouchableOpacity>
       </View>
 
@@ -418,6 +439,7 @@ const st = StyleSheet.create({
   header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#F0ECE5', backgroundColor: '#FFF' },
   backBtn: { width: 44, height: 44, justifyContent: 'center', alignItems: 'center' },
   headerUser: { flexDirection: 'row', alignItems: 'center', flex: 1, marginLeft: 4 },
+  headerCallBtn: { width: 44, height: 44, borderRadius: 22, justifyContent: 'center', alignItems: 'center', marginLeft: 8 },
   avatar: { width: 40, height: 40, borderRadius: 20, marginRight: 10 },
   avatarFallback: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#2D6A4F', justifyContent: 'center', alignItems: 'center', marginRight: 10 },
   avatarText: { color: '#FFF', fontSize: 16, fontWeight: '700' },

@@ -11,6 +11,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing, borderRadius } from '../utils/theme';
 import { formatDistanceToNow } from 'date-fns';
 import api from '../api/client';
+import MediaPreview from './MediaPreview';
 
 const { width } = Dimensions.get('window');
 
@@ -22,6 +23,7 @@ interface Post {
   user_profile_image?: string;
   content: string;
   image?: string;
+  media_types?: string[] | string;
   location?: string;
   likes_count: number;
   comments_count: number;
@@ -101,7 +103,7 @@ export default function PostCard({
         
         {post.image && (
           <View style={styles.imageContainer}>
-            <Image source={{ uri: post.image }} style={styles.postImage} resizeMode="cover" />
+            <MediaPreview uri={post.image} mediaTypes={post.media_types} style={styles.postImage} />
           </View>
         )}
         

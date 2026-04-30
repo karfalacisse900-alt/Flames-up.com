@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import {
   View, Text, StyleSheet, TextInput, TouchableOpacity, Image, ScrollView,
   KeyboardAvoidingView, Platform, ActivityIndicator, Alert, Dimensions,
@@ -12,6 +12,7 @@ import { useAuthStore } from '../src/store/authStore';
 import api from '../src/api/client';
 import { uploadImage, getVideoUploadUrl, uploadVideoToStream } from '../src/utils/mediaUpload';
 import { processMediaBatch } from '../src/utils/mediaProcessing';
+import { isPhoneVerificationError, requireVerifiedPhone } from '../src/utils/phoneVerification';
 
 const { width: SW } = Dimensions.get('window');
 
@@ -171,9 +172,6 @@ export default function CreatePostScreen() {
     setMedia(prev => prev.filter((_, i) => i !== idx));
   };
 
-  // Auto-detect location on mount
-  useEffect(() => { detectLocation(); }, []);
-
   const detectLocation = async () => {
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
@@ -203,6 +201,7 @@ export default function CreatePostScreen() {
 
   const handlePost = async () => {
     if (!canPost || isPosting) return;
+    if (!requireVerifiedPhone(user, router, 'create posts')) return;
     setIsPosting(true);
     try {
       const uploadedUrls: string[] = [];
@@ -255,7 +254,11 @@ export default function CreatePostScreen() {
       router.replace('/(tabs)/home' as any);
     } catch (error) {
       console.log('Post error:', error);
-      Alert.alert('Error', 'Failed to create post');
+      if (isPhoneVerificationError(error)) {
+        requireVerifiedPhone(null, router, 'create posts');
+      } else {
+        Alert.alert('Error', 'Failed to create post');
+      }
     } finally {
       setIsPosting(false);
       setUploadStep('');

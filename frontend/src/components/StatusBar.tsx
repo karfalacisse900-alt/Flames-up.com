@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useCallback, useState } from 'react';
 import {
   View,
   Text,
@@ -9,9 +9,11 @@ import {
   Modal,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, spacing, borderRadius } from '../utils/theme';
+import { useFocusEffect } from 'expo-router';
+import { colors, spacing } from '../utils/theme';
 import api from '../api/client';
-import { LinearGradient } from 'expo-linear-gradient';
+import { useI18n } from '../utils/i18n';
+import { useAuthStore } from '../store/authStore';
 
 interface UserStatus {
   user_id: string;
@@ -28,22 +30,29 @@ interface StatusBarProps {
 }
 
 export default function StatusBar({ currentUserId, onAddStatus }: StatusBarProps) {
+  const { t } = useI18n();
+  const currentUser = useAuthStore((state) => state.user);
   const [userStatuses, setUserStatuses] = useState<UserStatus[]>([]);
   const [selectedStatus, setSelectedStatus] = useState<UserStatus | null>(null);
   const [currentStatusIndex, setCurrentStatusIndex] = useState(0);
+  const ownStoryName = currentUser?.username || currentUser?.full_name || 'You';
+  const ownStoryInitial = ownStoryName.trim().charAt(0).toUpperCase() || 'U';
+  const otherStatuses = userStatuses.filter((userStatus) => userStatus.user_id !== currentUserId);
 
-  useEffect(() => {
-    loadStatuses();
-  }, []);
-
-  const loadStatuses = async () => {
+  const loadStatuses = useCallback(async () => {
     try {
       const response = await api.get('/statuses');
       setUserStatuses(response.data);
     } catch (error) {
       console.log('Error loading statuses:', error);
     }
-  };
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadStatuses();
+    }, [loadStatuses])
+  );
 
   const viewStatus = async (userStatus: UserStatus) => {
     setSelectedStatus(userStatus);
@@ -82,16 +91,28 @@ export default function StatusBar({ currentUserId, onAddStatus }: StatusBarProps
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.scrollContent}
       >
-        {/* Add Status Button */}
-        <TouchableOpacity style={styles.addStatus} onPress={onAddStatus}>
-          <View style={styles.addButton}>
-            <Ionicons name="add" size={24} color={colors.primary} />
+        <TouchableOpacity style={styles.statusItem} onPress={onAddStatus} activeOpacity={0.85}>
+          <View style={styles.ownStoryWrap}>
+            <View style={styles.ownStoryRing}>
+              {currentUser?.profile_image ? (
+                <Image
+                  source={{ uri: currentUser.profile_image }}
+                  style={styles.ownStoryAvatar}
+                />
+              ) : (
+                <View style={styles.ownStoryAvatarPlaceholder}>
+                  <Text style={styles.ownStoryAvatarText}>{ownStoryInitial}</Text>
+                </View>
+              )}
+            </View>
+            <View style={styles.plusBadge}>
+              <Ionicons name="add" size={15} color={colors.white} />
+            </View>
           </View>
-          <Text style={styles.statusLabel}>Your Story</Text>
+          <Text style={styles.statusLabel}>{t('yourStory')}</Text>
         </TouchableOpacity>
 
-        {/* User Statuses */}
-        {userStatuses.map((userStatus) => (
+        {otherStatuses.map((userStatus) => (
           <TouchableOpacity
             key={userStatus.user_id}
             style={styles.statusItem}
@@ -109,13 +130,13 @@ export default function StatusBar({ currentUserId, onAddStatus }: StatusBarProps
               ) : (
                 <View style={styles.statusAvatarPlaceholder}>
                   <Text style={styles.statusAvatarText}>
-                    {userStatus.user_username[0].toUpperCase()}
+                    {(userStatus.user_username || userStatus.user_full_name || 'U')[0].toUpperCase()}
                   </Text>
                 </View>
               )}
             </View>
             <Text style={styles.statusLabel} numberOfLines={1}>
-              {userStatus.user_id === currentUserId ? 'Your Story' : userStatus.user_username}
+              {userStatus.user_username || userStatus.user_full_name || 'Story'}
             </Text>
           </TouchableOpacity>
         ))}
@@ -193,30 +214,64 @@ export default function StatusBar({ currentUserId, onAddStatus }: StatusBarProps
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: colors.background,
+    backgroundColor: colors.white,
     paddingVertical: spacing.sm,
   },
   scrollContent: {
     paddingHorizontal: spacing.md,
   },
-  addStatus: {
-    alignItems: 'center',
-    marginRight: spacing.md,
-  },
-  addButton: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    borderWidth: 2,
-    borderColor: colors.primary,
-    borderStyle: 'dashed',
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: colors.backgroundSecondary,
-  },
   statusItem: {
     alignItems: 'center',
     marginRight: spacing.md,
+  },
+  ownStoryWrap: {
+    width: 68,
+    height: 68,
+    position: 'relative',
+  },
+  ownStoryRing: {
+    width: 68,
+    height: 68,
+    borderRadius: 34,
+    padding: 3,
+    borderWidth: 2,
+    borderColor: colors.borderLight,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: colors.white,
+  },
+  ownStoryAvatar: {
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+  },
+  ownStoryAvatarPlaceholder: {
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+    backgroundColor: colors.backgroundSecondary,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  ownStoryAvatarText: {
+    color: colors.primary,
+    fontSize: 22,
+    fontWeight: '700',
+  },
+  plusBadge: {
+    position: 'absolute',
+    right: 0,
+    bottom: 0,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: colors.white,
+    backgroundColor: colors.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   statusRing: {
     width: 68,

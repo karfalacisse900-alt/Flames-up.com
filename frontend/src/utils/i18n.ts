@@ -1,0 +1,130 @@
+import { useAuthStore } from '../store/authStore';
+
+export type AppLanguage = 'en' | 'fr' | 'es';
+
+export const LANGUAGE_OPTIONS: Array<{ code: AppLanguage; label: string; nativeLabel: string }> = [
+  { code: 'en', label: 'English', nativeLabel: 'English' },
+  { code: 'fr', label: 'French', nativeLabel: 'Français' },
+  { code: 'es', label: 'Spanish', nativeLabel: 'Español' },
+];
+
+export function normalizeAppLanguage(value?: string | null): AppLanguage {
+  return value === 'fr' || value === 'es' ? value : 'en';
+}
+
+const translations = {
+  en: {
+    account: 'Account',
+    camera: 'Camera',
+    cameraAccessRequired: 'Camera access required',
+    color: 'Color',
+    couldNotCreateStatus: 'Could not create status',
+    couldNotUpdateLanguage: 'Could not update language',
+    couldNotUpdatePrivacy: 'Could not update privacy',
+    deleteAccount: 'Delete Account',
+    email: 'Email',
+    error: 'Error',
+    gallery: 'Gallery',
+    gradients: 'Gradients',
+    language: 'Language',
+    newEmail: 'New email',
+    password: 'Password',
+    people: 'People',
+    permissionNeeded: 'Permission needed',
+    preferences: 'Preferences',
+    privacy: 'Privacy',
+    privateAccount: 'Private Account',
+    privateAccountDescription: 'Only accepted friends can see your stories and posts.',
+    remove: 'Remove',
+    saving: 'Saving...',
+    settings: 'Settings',
+    share: 'Share',
+    signOut: 'Sign Out',
+    solid: 'Solid',
+    statusEmptyMessage: 'Add text, a photo, or stickers to your story',
+    sticker: 'Sticker',
+    searchPrompt: 'What are you looking for?',
+    typeYourStory: 'Type your story...',
+    updateEmail: 'Update Email',
+    yourStory: 'Your Story',
+  },
+  fr: {
+    account: 'Compte',
+    camera: 'Caméra',
+    cameraAccessRequired: 'Accès à la caméra requis',
+    color: 'Couleur',
+    couldNotCreateStatus: 'Impossible de créer le statut',
+    couldNotUpdateLanguage: 'Impossible de modifier la langue',
+    couldNotUpdatePrivacy: 'Impossible de modifier la confidentialité',
+    deleteAccount: 'Supprimer le compte',
+    email: 'E-mail',
+    error: 'Erreur',
+    gallery: 'Galerie',
+    gradients: 'Dégradés',
+    language: 'Langue',
+    newEmail: 'Nouvel e-mail',
+    password: 'Mot de passe',
+    people: 'Personnes',
+    permissionNeeded: 'Autorisation requise',
+    preferences: 'Préférences',
+    privacy: 'Confidentialité',
+    privateAccount: 'Compte privé',
+    privateAccountDescription: 'Seuls les amis acceptés peuvent voir vos stories et publications.',
+    remove: 'Supprimer',
+    saving: 'Enregistrement...',
+    settings: 'Paramètres',
+    share: 'Partager',
+    signOut: 'Se déconnecter',
+    solid: 'Uni',
+    statusEmptyMessage: 'Ajoutez du texte, une photo ou des stickers à votre story',
+    sticker: 'Sticker',
+    searchPrompt: 'Que recherchez-vous ?',
+    typeYourStory: 'Écrivez votre story...',
+    updateEmail: "Mettre à jour l'e-mail",
+    yourStory: 'Votre story',
+  },
+  es: {
+    account: 'Cuenta',
+    camera: 'Cámara',
+    cameraAccessRequired: 'Se requiere acceso a la cámara',
+    color: 'Color',
+    couldNotCreateStatus: 'No se pudo crear el estado',
+    couldNotUpdateLanguage: 'No se pudo actualizar el idioma',
+    couldNotUpdatePrivacy: 'No se pudo actualizar la privacidad',
+    deleteAccount: 'Eliminar cuenta',
+    email: 'Correo',
+    error: 'Error',
+    gallery: 'Galería',
+    gradients: 'Degradados',
+    language: 'Idioma',
+    newEmail: 'Nuevo correo',
+    password: 'Contraseña',
+    people: 'Personas',
+    permissionNeeded: 'Permiso necesario',
+    preferences: 'Preferencias',
+    privacy: 'Privacidad',
+    privateAccount: 'Cuenta privada',
+    privateAccountDescription: 'Solo tus amigos aceptados pueden ver tus stories y publicaciones.',
+    remove: 'Eliminar',
+    saving: 'Guardando...',
+    settings: 'Ajustes',
+    share: 'Compartir',
+    signOut: 'Cerrar sesión',
+    solid: 'Sólido',
+    statusEmptyMessage: 'Agrega texto, una foto o stickers a tu story',
+    sticker: 'Sticker',
+    searchPrompt: '¿Qué estás buscando?',
+    typeYourStory: 'Escribe tu story...',
+    updateEmail: 'Actualizar correo',
+    yourStory: 'Tu story',
+  },
+};
+
+type TranslationKey = keyof typeof translations.en;
+
+export function useI18n() {
+  const language = useAuthStore((state) => normalizeAppLanguage(state.user?.language));
+  const t = (key: TranslationKey) => translations[language][key] || translations.en[key] || key;
+
+  return { language, t };
+}

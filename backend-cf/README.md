@@ -20,9 +20,11 @@ Backend stack: Hono + D1 + Cloudflare Images/Stream.
    - `CLOUDFLARE_IMAGES_TOKEN`
    - `CLOUDFLARE_STREAM_TOKEN`
    - `GOOGLE_MAPS_API_KEY`
+   - `EVENTBRITE_API_TOKEN` (set with `wrangler secret put EVENTBRITE_API_TOKEN`; do not commit the token)
    - `GOOGLE_OAUTH_CLIENT_IDS` (comma-separated Google client IDs)
    - `APPLE_OAUTH_AUDIENCES` (comma-separated Apple audiences, bundle/service IDs)
-   - `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_PHONE` for real SMS phone codes
+   - `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_VERIFY_SERVICE_SID` for Twilio Verify phone codes
+   - `TWILIO_FROM_PHONE` is only used by the legacy SMS fallback if Verify is not configured
 
 4. Deploy:
    `wrangler deploy`
