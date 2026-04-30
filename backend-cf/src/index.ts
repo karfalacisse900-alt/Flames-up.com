@@ -1073,14 +1073,18 @@ async function requirePhoneVerified(c: any, action = 'continue') {
 }
 
 async function verifyGoogleIdToken(c: any, idToken: string) {
+  const allowedAudiences = parseAudiences(c.env.GOOGLE_OAUTH_CLIENT_IDS, c.env.GOOGLE_OAUTH_CLIENT_ID);
+  if (allowedAudiences.length === 0) {
+    throw new Error('GOOGLE_OAUTH_NOT_CONFIGURED');
+  }
+
   const response = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(idToken)}`);
   if (!response.ok) {
     throw new Error('GOOGLE_TOKEN_INVALID');
   }
 
   const data: any = await response.json();
-  const allowedAudiences = parseAudiences(c.env.GOOGLE_OAUTH_CLIENT_IDS, c.env.GOOGLE_OAUTH_CLIENT_ID);
-  if (allowedAudiences.length > 0 && !allowedAudiences.includes(String(data.aud || ''))) {
+  if (!allowedAudiences.includes(String(data.aud || ''))) {
     throw new Error('GOOGLE_AUDIENCE_INVALID');
   }
 
@@ -1349,6 +1353,21 @@ api.post('/auth/phone/verify', async (c) => {
   }
 });
 
+api.get('/auth/oauth/config', async (c) => {
+  const googleAudiences = parseAudiences(c.env.GOOGLE_OAUTH_CLIENT_IDS, c.env.GOOGLE_OAUTH_CLIENT_ID);
+  const appleAudiences = parseAudiences(c.env.APPLE_OAUTH_AUDIENCES, c.env.APPLE_OAUTH_AUDIENCE);
+  return c.json({
+    google: {
+      backend_configured: googleAudiences.length > 0,
+      required_secret: 'GOOGLE_OAUTH_CLIENT_IDS',
+    },
+    apple: {
+      audience_configured: appleAudiences.length > 0,
+      required_secret: 'APPLE_OAUTH_AUDIENCES',
+    },
+  });
+});
+
 api.post('/auth/oauth/google', async (c) => {
   try {
     await ensureOAuthSchema(c.env.DB);
@@ -1368,6 +1387,9 @@ api.post('/auth/oauth/google', async (c) => {
     return c.json({ access_token: token, token_type: 'bearer', user: authUserPayload(user) });
   } catch (error: any) {
     const code = String(error?.message || '');
+    if (code === 'GOOGLE_OAUTH_NOT_CONFIGURED') {
+      return c.json({ detail: 'Google sign in is not configured on the backend. Set GOOGLE_OAUTH_CLIENT_IDS in Cloudflare to your Google OAuth client ID.' }, 503);
+    }
     if (code === 'GOOGLE_AUDIENCE_INVALID') return c.json({ detail: 'Google client audience mismatch' }, 401);
     if (code === 'GOOGLE_EMAIL_UNVERIFIED') return c.json({ detail: 'Google account email is not verified' }, 401);
     if (code.startsWith('GOOGLE_')) return c.json({ detail: 'Invalid Google token' }, 401);

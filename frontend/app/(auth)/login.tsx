@@ -15,15 +15,22 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Link, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import Constants from 'expo-constants';
 import * as AppleAuthentication from 'expo-apple-authentication';
 import * as Google from 'expo-auth-session/providers/google';
 import { makeRedirectUri } from 'expo-auth-session';
 import * as WebBrowser from 'expo-web-browser';
 import { useAuthStore } from '../../src/store/authStore';
+import { API_URL } from '../../src/api/client';
 
 WebBrowser.maybeCompleteAuthSession();
 
 type AuthMethod = 'apple' | 'google' | 'email';
+
+type OAuthConfig = {
+  google?: { backend_configured?: boolean };
+  apple?: { audience_configured?: boolean };
+};
 
 function MethodButton({
   icon,
@@ -70,11 +77,13 @@ export default function LoginScreen() {
   const [isLoading, setIsLoading] = useState(false);
   const [showEmailForm, setShowEmailForm] = useState(false);
   const [activeSocialMethod, setActiveSocialMethod] = useState<AuthMethod | null>(null);
+  const [oauthConfig, setOauthConfig] = useState<OAuthConfig | null>(null);
 
   const googleWebClientId = (process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || '').trim();
   const googleIosClientId = (process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID || '').trim();
   const googleAndroidClientId = (process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID || '').trim();
-  const googleRedirectUri = makeRedirectUri({ scheme: 'frontend' });
+  const googleRedirectUri = makeRedirectUri({ scheme: 'frontend', path: 'oauth' });
+  const isExpoGo = Constants.appOwnership === 'expo';
   const activeGoogleClientId = Platform.select({
     ios: googleIosClientId || googleWebClientId,
     android: googleAndroidClientId || googleWebClientId,
@@ -97,8 +106,32 @@ export default function LoginScreen() {
   });
 
   useEffect(() => {
+    let mounted = true;
+
+    fetch(`${API_URL}/api/auth/oauth/config`)
+      .then((response) => response.ok ? response.json() : null)
+      .then((config) => {
+        if (mounted && config) setOauthConfig(config);
+      })
+      .catch(() => {});
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
     const handleGoogleResponse = async () => {
-      if (googleResponse?.type !== 'success') return;
+      if (!googleResponse) return;
+      if (googleResponse.type !== 'success') {
+        if (googleResponse.type === 'error') {
+          const message = googleResponse.error?.message || googleResponse.params?.error_description || 'Google did not complete sign in.';
+          Alert.alert('Google sign in failed', message);
+        }
+        setActiveSocialMethod(null);
+        return;
+      }
+
       const idToken = googleResponse.params?.id_token;
       if (!idToken) {
         Alert.alert('Google sign in failed', 'No token was returned from Google.');
@@ -140,7 +173,21 @@ export default function LoginScreen() {
     if (!hasGoogleClientId) {
       Alert.alert(
         'Google sign in not configured',
-        `Set EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID in frontend/.env and set GOOGLE_OAUTH_CLIENT_IDS in Cloudflare to the same Google client ID. Redirect URI: ${googleRedirectUri}`
+        `Create a Google OAuth client ID, then set EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID in frontend/.env and GOOGLE_OAUTH_CLIENT_IDS in Cloudflare. Redirect URI: ${googleRedirectUri}`
+      );
+      return;
+    }
+    if (oauthConfig?.google && !oauthConfig.google.backend_configured) {
+      Alert.alert(
+        'Google backend not configured',
+        'Cloudflare is missing GOOGLE_OAUTH_CLIENT_IDS. Set it to the same Google OAuth client ID used by the app.'
+      );
+      return;
+    }
+    if (isExpoGo) {
+      Alert.alert(
+        'Google needs a development build',
+        'Google OAuth redirects do not work reliably in Expo Go. Use an Expo development build for Google sign in.'
       );
       return;
     }
@@ -148,8 +195,13 @@ export default function LoginScreen() {
       Alert.alert('Google sign in', 'Google auth request is not ready yet. Please try again.');
       return;
     }
-    setActiveSocialMethod('google');
-    await promptGoogleAsync();
+    try {
+      setActiveSocialMethod('google');
+      await promptGoogleAsync();
+    } catch (error: any) {
+      Alert.alert('Google sign in failed', error?.message || 'Could not open Google sign in.');
+      setActiveSocialMethod(null);
+    }
   };
 
   const handleApplePress = async () => {
@@ -189,7 +241,9 @@ export default function LoginScreen() {
     } catch (error: any) {
       const isCanceled = error?.code === 'ERR_REQUEST_CANCELED';
       if (!isCanceled) {
-        Alert.alert('Apple sign in failed', error?.response?.data?.detail || 'Could not sign in with Apple.');
+        const detail = error?.response?.data?.detail || error?.message || 'Could not sign in with Apple.';
+        const code = error?.code ? `\n\nCode: ${error.code}` : '';
+        Alert.alert('Apple sign in failed', `${detail}${code}`);
       }
     } finally {
       setActiveSocialMethod(null);
