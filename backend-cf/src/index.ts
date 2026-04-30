@@ -79,7 +79,7 @@ const authMiddleware = async (c: any, next: () => Promise<void>) => {
   const token = authHeader.slice(7);
   try {
     const { jwtVerify } = await import('jose');
-    const { payload } = await jwtVerify(token, new TextEncoder().encode(c.env.JWT_SECRET));
+    const { payload } = await jwtVerify(token, new TextEncoder().encode(getJwtSecret(c)));
     c.set('jwtPayload', payload);
     await next();
   } catch {
@@ -192,6 +192,14 @@ function publicUserEmail(email: unknown): string {
 
 function getErrorCode(error: any): string {
   return String(error?.code || error?.message || '');
+}
+
+function getJwtSecret(c: any): string {
+  const secret = String(c.env.JWT_SECRET || '').trim();
+  if (!secret || secret === 'REPLACE_WITH_YOUR_JWT_SECRET') {
+    throw new Error('JWT_SECRET_MISSING');
+  }
+  return secret;
 }
 
 async function ensurePhoneAuthSchema(db: D1Database) {
@@ -418,20 +426,30 @@ async function findOrCreateOAuthUser(
 // AUTH
 // ═══════════════════════════════════════════════════════════════════════════════
 api.post('/auth/register', async (c) => {
-  const { email, password, username, full_name } = await c.req.json();
-  if (!email || !password || !username || !full_name)
-    return c.json({ detail: 'All fields required' }, 400);
-  const existing = await c.env.DB.prepare('SELECT id FROM users WHERE email = ? OR username = ?')
-    .bind(email, username).first();
-  if (existing) return c.json({ detail: 'Email or username already exists' }, 400);
-  const id = uuid();
-  const hash = await hashPassword(password);
-  await c.env.DB.prepare(
-    'INSERT INTO users (id, email, username, full_name, password_hash) VALUES (?, ?, ?, ?, ?)'
-  ).bind(id, email, username, full_name, hash).run();
-  const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(id).first();
-  const token = await createToken(id, c.env.JWT_SECRET);
-  return c.json({ access_token: token, token_type: 'bearer', user: authUserPayload(user) });
+  try {
+    const jwtSecret = getJwtSecret(c);
+    const body: any = await c.req.json().catch(() => ({}));
+    const email = normalizeOptionalEmail(body.email);
+    const password = String(body.password || '');
+    const username = normalizeOptionalName(body.username);
+    const fullName = normalizeOptionalName(body.full_name);
+    if (!email || !password || !username || !fullName)
+      return c.json({ detail: 'All fields required' }, 400);
+    const existing = await c.env.DB.prepare('SELECT id FROM users WHERE LOWER(email) = ? OR LOWER(username) = ?')
+      .bind(email, username.toLowerCase()).first();
+    if (existing) return c.json({ detail: 'Email or username already exists' }, 400);
+    const id = uuid();
+    const hash = await hashPassword(password);
+    await c.env.DB.prepare(
+      'INSERT INTO users (id, email, username, full_name, password_hash) VALUES (?, ?, ?, ?, ?)'
+    ).bind(id, email, username, fullName, hash).run();
+    const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(id).first();
+    const token = await createToken(id, jwtSecret);
+    return c.json({ access_token: token, token_type: 'bearer', user: authUserPayload(user) });
+  } catch (error: any) {
+    if (getErrorCode(error) === 'JWT_SECRET_MISSING') return c.json({ detail: 'Auth service is not configured.' }, 503);
+    return c.json({ detail: 'Could not create account.' }, 500);
+  }
 });
 
 api.post('/auth/login', async (c) => {
@@ -441,6 +459,7 @@ api.post('/auth/login', async (c) => {
     const password = String(body.password || '');
     if (!email || !password) return c.json({ detail: 'Email and password are required' }, 400);
 
+    const jwtSecret = getJwtSecret(c);
     const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
     if (!user || !(await verifyPassword(password, user.password_hash)))
       return c.json({ detail: 'Invalid credentials' }, 401);
@@ -451,9 +470,10 @@ api.post('/auth/login', async (c) => {
         await c.env.DB.prepare('UPDATE users SET password_hash = ? WHERE id = ?').bind(bcryptHash, user.id).run();
       } catch {}
     }
-    const token = await createToken(user.id, c.env.JWT_SECRET);
+    const token = await createToken(user.id, jwtSecret);
     return c.json({ access_token: token, token_type: 'bearer', user: authUserPayload(user) });
-  } catch {
+  } catch (error: any) {
+    if (getErrorCode(error) === 'JWT_SECRET_MISSING') return c.json({ detail: 'Auth service is not configured.' }, 503);
     return c.json({ detail: 'Could not log in' }, 500);
   }
 });
@@ -465,7 +485,8 @@ api.post('/auth/phone/start', async (c) => {
     if (!normalizedPhone) return c.json({ detail: 'Enter a valid phone number with country code.' }, 400);
     await ensurePhoneAuthSchema(c.env.DB);
     const code = createPhoneCode();
-    const codeHash = await sha256Hex(`${normalizedPhone}:${code}:${c.env.JWT_SECRET}`);
+    const jwtSecret = getJwtSecret(c);
+    const codeHash = await sha256Hex(`${normalizedPhone}:${code}:${jwtSecret}`);
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
 
     await c.env.DB.prepare(
@@ -488,6 +509,7 @@ api.post('/auth/phone/start', async (c) => {
   } catch (error: any) {
     const code = String(error?.message || '');
     if (code === 'PHONE_INVALID') return c.json({ detail: 'Enter a valid phone number with country code.' }, 400);
+    if (code === 'JWT_SECRET_MISSING') return c.json({ detail: 'Auth service is not configured.' }, 503);
     if (code === 'PHONE_SMS_FAILED') return c.json({ detail: 'Could not send SMS code. Check Twilio settings.' }, 502);
     return c.json({ detail: 'Could not start phone sign in.' }, 500);
   }
@@ -513,7 +535,8 @@ api.post('/auth/phone/verify', async (c) => {
     if ((challenge.attempts || 0) >= 5) return c.json({ detail: 'Too many attempts. Request a new code.' }, 429);
     if (Date.parse(challenge.expires_at) < Date.now()) return c.json({ detail: 'Code expired. Request a new code.' }, 401);
 
-    const expectedHash = await sha256Hex(`${normalizedPhone}:${normalizedCode}:${c.env.JWT_SECRET}`);
+    const jwtSecret = getJwtSecret(c);
+    const expectedHash = await sha256Hex(`${normalizedPhone}:${normalizedCode}:${jwtSecret}`);
     if (expectedHash !== challenge.code_hash) {
       await c.env.DB.prepare('UPDATE phone_login_codes SET attempts = attempts + 1 WHERE id = ?').bind(challenge.id).run();
       return c.json({ detail: 'Invalid verification code.' }, 401);
@@ -539,11 +562,12 @@ api.post('/auth/phone/verify', async (c) => {
       user = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(user.id).first();
     }
 
-    const token = await createToken(user.id, c.env.JWT_SECRET);
+    const token = await createToken(user.id, jwtSecret);
     return c.json({ access_token: token, token_type: 'bearer', user: authUserPayload(user) });
   } catch (error: any) {
     const code = String(error?.message || '');
     if (code === 'PHONE_INVALID') return c.json({ detail: 'Enter a valid phone number with country code.' }, 400);
+    if (code === 'JWT_SECRET_MISSING') return c.json({ detail: 'Auth service is not configured.' }, 503);
     return c.json({ detail: 'Could not verify phone sign in.' }, 500);
   }
 });
@@ -563,7 +587,7 @@ api.post('/auth/oauth/google', async (c) => {
       googleProfile.fullName,
       googleProfile.profileImage
     );
-    const token = await createToken(user.id, c.env.JWT_SECRET);
+    const token = await createToken(user.id, getJwtSecret(c));
     return c.json({ access_token: token, token_type: 'bearer', user: authUserPayload(user) });
   } catch (error: any) {
     const code = String(error?.message || '');
@@ -571,6 +595,7 @@ api.post('/auth/oauth/google', async (c) => {
     if (code === 'GOOGLE_EMAIL_UNVERIFIED') return c.json({ detail: 'Google account email is not verified' }, 401);
     if (code.startsWith('GOOGLE_')) return c.json({ detail: 'Invalid Google token' }, 401);
     if (code === 'EMAIL_REQUIRED') return c.json({ detail: 'Google account email is required' }, 400);
+    if (code === 'JWT_SECRET_MISSING') return c.json({ detail: 'Auth service is not configured.' }, 503);
     return c.json({ detail: 'Google OAuth login failed' }, 401);
   }
 });
@@ -594,12 +619,13 @@ api.post('/auth/oauth/apple', async (c) => {
       clientFullName || appleProfile.fullName || 'Apple User',
       appleProfile.profileImage
     );
-    const token = await createToken(user.id, c.env.JWT_SECRET);
+    const token = await createToken(user.id, getJwtSecret(c));
     return c.json({ access_token: token, token_type: 'bearer', user: authUserPayload(user) });
   } catch (error: any) {
     const code = getErrorCode(error);
     if (code === 'EMAIL_REQUIRED') return c.json({ detail: 'Apple account email is required on first sign-in' }, 400);
     if (code === 'OAUTH_SUBJECT_REQUIRED') return c.json({ detail: 'Apple account identifier was missing' }, 400);
+    if (code === 'JWT_SECRET_MISSING') return c.json({ detail: 'Auth service is not configured.' }, 503);
     if (code === 'ERR_JWT_CLAIM_VALIDATION_FAILED' && error?.claim === 'aud') return c.json({ detail: 'Apple audience mismatch' }, 401);
     if (code === 'ERR_JWT_CLAIM_VALIDATION_FAILED') return c.json({ detail: 'Invalid Apple token claims' }, 401);
     if (code === 'ERR_JWS_SIGNATURE_VERIFICATION_FAILED') return c.json({ detail: 'Invalid Apple token signature' }, 401);
