@@ -88,3 +88,12 @@ frontend/.metro-cache/
 frontend/node_modules/
 frontend/.metro-cache*
 frontend/.env
+-e 
+# Environment and credential files
+.env
+.env.*
+*.env
+credentials.json
+*.pem
+*.key
+.credentials
