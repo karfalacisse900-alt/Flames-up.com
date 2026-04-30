@@ -54,6 +54,7 @@ export const colors = {
   // Backward-compatible aliases
   background: '#F5F2EC',
   primary: '#263F2A',
+  accent: '#263F2A',
   primaryLight: '#E0EDE2',
   primaryDark: '#182B1C',
   textInverse: '#FFFFFF',

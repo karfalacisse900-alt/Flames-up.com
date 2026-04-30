@@ -11,11 +11,16 @@ export interface Env {
   GOOGLE_OAUTH_CLIENT_IDS?: string;
   APPLE_OAUTH_AUDIENCE?: string;
   APPLE_OAUTH_AUDIENCES?: string;
+  TWILIO_ACCOUNT_SID?: string;
+  TWILIO_AUTH_TOKEN?: string;
+  TWILIO_FROM_PHONE?: string;
 }
 
 export interface User {
   id: string;
   email: string;
+  phone?: string;
+  phone_verified?: number;
   username: string;
   full_name: string;
   hashed_password: string;

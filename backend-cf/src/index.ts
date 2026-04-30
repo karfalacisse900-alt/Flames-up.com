@@ -18,6 +18,9 @@ interface Env {
   GOOGLE_OAUTH_CLIENT_IDS?: string;
   APPLE_OAUTH_AUDIENCE?: string;
   APPLE_OAUTH_AUDIENCES?: string;
+  TWILIO_ACCOUNT_SID?: string;
+  TWILIO_AUTH_TOKEN?: string;
+  TWILIO_FROM_PHONE?: string;
 }
 
 type HonoApp = { Bindings: Env; Variables: { userId: string } };
@@ -51,6 +54,7 @@ async function hashPassword(password: string): Promise<string> {
 }
 
 async function verifyPassword(password: string, hash: string): Promise<boolean> {
+  if (!hash) return false;
   // Support both bcrypt hashes (starts with $2) and legacy SHA-256
   if (hash.startsWith('$2')) {
     return bcrypt.compareSync(password, hash);
@@ -123,10 +127,151 @@ async function ensureUniqueUsername(db: D1Database, desired: string): Promise<st
   return `${base}_${Date.now().toString().slice(-6)}`.slice(0, 30);
 }
 
+let phoneAuthSchemaReady = false;
+let oauthSchemaReady = false;
+
+async function ensureOAuthSchema(db: D1Database) {
+  if (oauthSchemaReady) return;
+
+  const statements = [
+    'ALTER TABLE users ADD COLUMN oauth_provider TEXT',
+    'ALTER TABLE users ADD COLUMN oauth_subject TEXT',
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_users_oauth_identity ON users(oauth_provider, oauth_subject)',
+  ];
+
+  for (const statement of statements) {
+    try {
+      await db.exec(statement);
+    } catch (error: any) {
+      if (!String(error?.message || '').includes('duplicate column name')) {
+        throw error;
+      }
+    }
+  }
+
+  oauthSchemaReady = true;
+}
+
+function normalizePhone(input: string): string {
+  const trimmed = String(input || '').trim();
+  const plus = trimmed.startsWith('+') ? '+' : '';
+  const digits = trimmed.replace(/\D/g, '');
+  if (digits.length < 10 || digits.length > 15) {
+    throw new Error('PHONE_INVALID');
+  }
+  return `${plus}${digits}`;
+}
+
+async function sha256Hex(value: string): Promise<string> {
+  const data = new TextEncoder().encode(value);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  return Array.from(new Uint8Array(hashBuffer)).map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function normalizeOptionalEmail(value: unknown): string {
+  const email = String(value || '').trim().toLowerCase();
+  return email.includes('@') ? email : '';
+}
+
+function normalizeOptionalName(value: unknown): string {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function internalOAuthEmail(provider: 'google' | 'apple', subject: string): string {
+  const safeSubject = subject.replace(/[^a-z0-9]/gi, '').toLowerCase().slice(0, 48) || 'user';
+  return `${provider}_${safeSubject}@oauth.flames-up.local`;
+}
+
+function isInternalOAuthEmail(email: unknown): boolean {
+  return String(email || '').toLowerCase().endsWith('@oauth.flames-up.local');
+}
+
+function publicUserEmail(email: unknown): string {
+  return isInternalOAuthEmail(email) ? '' : String(email || '');
+}
+
+function getErrorCode(error: any): string {
+  return String(error?.code || error?.message || '');
+}
+
+async function ensurePhoneAuthSchema(db: D1Database) {
+  if (phoneAuthSchemaReady) return;
+
+  const existingTable = await db.prepare(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'phone_login_codes'"
+  ).first().catch(() => null);
+  if (existingTable) {
+    phoneAuthSchemaReady = true;
+    return;
+  }
+
+  const statements = [
+    'ALTER TABLE users ADD COLUMN phone TEXT',
+    'ALTER TABLE users ADD COLUMN phone_verified INTEGER DEFAULT 0',
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_users_phone ON users(phone) WHERE phone IS NOT NULL',
+    `CREATE TABLE IF NOT EXISTS phone_login_codes (
+      id TEXT PRIMARY KEY,
+      phone TEXT NOT NULL,
+      code_hash TEXT NOT NULL,
+      attempts INTEGER DEFAULT 0,
+      expires_at TEXT NOT NULL,
+      consumed_at TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    )`,
+    'CREATE INDEX IF NOT EXISTS idx_phone_login_codes_phone ON phone_login_codes(phone, created_at DESC)',
+  ];
+
+  for (const statement of statements) {
+    try {
+      await db.exec(statement);
+    } catch (error: any) {
+      if (!String(error?.message || '').includes('duplicate column name')) {
+        throw error;
+      }
+    }
+  }
+
+  phoneAuthSchemaReady = true;
+}
+
+function createPhoneCode(): string {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+}
+
+async function sendPhoneCode(c: any, phone: string, code: string): Promise<'sms' | 'development'> {
+  const sid = c.env.TWILIO_ACCOUNT_SID;
+  const token = c.env.TWILIO_AUTH_TOKEN;
+  const from = c.env.TWILIO_FROM_PHONE;
+  if (!sid || !token || !from) return 'development';
+
+  const body = new URLSearchParams({
+    To: phone,
+    From: from,
+    Body: `Your Flames-Up sign-in code is ${code}. It expires in 10 minutes.`,
+  });
+
+  const response = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Basic ${btoa(`${sid}:${token}`)}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body,
+  });
+
+  if (!response.ok) {
+    throw new Error('PHONE_SMS_FAILED');
+  }
+
+  return 'sms';
+}
+
 function authUserPayload(user: any) {
   return {
     id: user.id,
-    email: user.email,
+    email: publicUserEmail(user.email),
+    phone: user.phone,
+    phone_verified: !!user.phone_verified,
     username: user.username,
     full_name: user.full_name,
     profile_image: user.profile_image,
@@ -193,7 +338,7 @@ async function verifyAppleIdToken(c: any, idToken: string) {
     throw new Error('APPLE_SUBJECT_MISSING');
   }
 
-  const email = payload.email ? String(payload.email).toLowerCase() : '';
+  const email = normalizeOptionalEmail(payload.email);
   const emailVerified = payload.email_verified === true || payload.email_verified === 'true' || !email;
   if (!emailVerified) {
     throw new Error('APPLE_EMAIL_UNVERIFIED');
@@ -202,7 +347,7 @@ async function verifyAppleIdToken(c: any, idToken: string) {
   return {
     subject: String(payload.sub),
     email,
-    fullName: email ? email.split('@')[0] : 'Apple User',
+    fullName: email ? email.split('@')[0] : '',
     profileImage: '',
   };
 }
@@ -215,33 +360,56 @@ async function findOrCreateOAuthUser(
   fullName: string,
   profileImage: string
 ) {
+  const normalizedSubject = String(subject || '').trim();
+  const providedEmail = normalizeOptionalEmail(email);
+  const normalizedEmail = providedEmail || (provider === 'apple' ? internalOAuthEmail(provider, normalizedSubject) : '');
+  const safeFullName = normalizeOptionalName(fullName);
+
+  if (!normalizedSubject) {
+    throw new Error('OAUTH_SUBJECT_REQUIRED');
+  }
+
   let user: any = await c.env.DB.prepare(
     'SELECT * FROM users WHERE oauth_provider = ? AND oauth_subject = ?'
-  ).bind(provider, subject).first();
+  ).bind(provider, normalizedSubject).first();
 
-  if (user) return user;
+  if (user) {
+    if (providedEmail && isInternalOAuthEmail(user.email)) {
+      const emailOwner: any = await c.env.DB.prepare('SELECT id FROM users WHERE LOWER(email) = ? AND id != ?')
+        .bind(providedEmail, user.id)
+        .first();
+      if (!emailOwner) {
+        await c.env.DB.prepare('UPDATE users SET email = ?, updated_at = datetime(\'now\') WHERE id = ?')
+          .bind(providedEmail, user.id)
+          .run();
+        user = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(user.id).first();
+      }
+    }
+    return user;
+  }
 
-  if (!email) {
+  if (!normalizedEmail) {
     throw new Error('EMAIL_REQUIRED');
   }
 
-  user = await c.env.DB.prepare('SELECT * FROM users WHERE LOWER(email) = ?').bind(email.toLowerCase()).first();
+  user = await c.env.DB.prepare('SELECT * FROM users WHERE LOWER(email) = ?').bind(normalizedEmail).first();
   if (user) {
     await c.env.DB.prepare(
-      'UPDATE users SET oauth_provider = ?, oauth_subject = ?, profile_image = CASE WHEN profile_image = \'\' OR profile_image IS NULL THEN ? ELSE profile_image END, updated_at = datetime(\'now\') WHERE id = ?'
-    ).bind(provider, subject, profileImage || '', user.id).run();
+      'UPDATE users SET oauth_provider = ?, oauth_subject = ?, full_name = CASE WHEN full_name = \'\' OR full_name IS NULL THEN ? ELSE full_name END, profile_image = CASE WHEN profile_image = \'\' OR profile_image IS NULL THEN ? ELSE profile_image END, updated_at = datetime(\'now\') WHERE id = ?'
+    ).bind(provider, normalizedSubject, safeFullName || user.full_name || `${provider} user`, profileImage || '', user.id).run();
     const refreshed = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(user.id).first();
     return refreshed;
   }
 
   const id = uuid();
-  const username = await ensureUniqueUsername(c.env.DB, email.split('@')[0] || `${provider}_user`);
-  const generatedPasswordHash = await hashPassword(`${provider}_${subject}_${uuid()}`);
-  const safeName = fullName?.trim() || username;
+  const usernameSeed = providedEmail ? providedEmail.split('@')[0] : `${provider}_${normalizedSubject.replace(/[^a-z0-9]/gi, '').slice(-8) || 'user'}`;
+  const username = await ensureUniqueUsername(c.env.DB, usernameSeed);
+  const generatedPasswordHash = await hashPassword(`${provider}_${normalizedSubject}_${uuid()}`);
+  const safeName = safeFullName || (providedEmail ? providedEmail.split('@')[0] : 'Apple User');
 
   await c.env.DB.prepare(
     'INSERT INTO users (id, email, username, full_name, password_hash, profile_image, oauth_provider, oauth_subject) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-  ).bind(id, email.toLowerCase(), username, safeName, generatedPasswordHash, profileImage || '', provider, subject).run();
+  ).bind(id, normalizedEmail, username, safeName, generatedPasswordHash, profileImage || '', provider, normalizedSubject).run();
 
   return c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(id).first();
 }
@@ -267,23 +435,122 @@ api.post('/auth/register', async (c) => {
 });
 
 api.post('/auth/login', async (c) => {
-  const { email, password } = await c.req.json();
-  const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
-  if (!user || !(await verifyPassword(password, user.password_hash)))
-    return c.json({ detail: 'Invalid credentials' }, 401);
-  // Auto-migrate legacy SHA-256 hash to bcrypt on successful login
-  if (!user.password_hash.startsWith('$2')) {
-    try {
-      const bcryptHash = await hashPassword(password);
-      await c.env.DB.prepare('UPDATE users SET password_hash = ? WHERE id = ?').bind(bcryptHash, user.id).run();
-    } catch {}
+  try {
+    const body: any = await c.req.json().catch(() => ({}));
+    const email = String(body.email || '').trim().toLowerCase();
+    const password = String(body.password || '');
+    if (!email || !password) return c.json({ detail: 'Email and password are required' }, 400);
+
+    const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
+    if (!user || !(await verifyPassword(password, user.password_hash)))
+      return c.json({ detail: 'Invalid credentials' }, 401);
+    // Auto-migrate legacy SHA-256 hash to bcrypt on successful login
+    if (user.password_hash && !user.password_hash.startsWith('$2')) {
+      try {
+        const bcryptHash = await hashPassword(password);
+        await c.env.DB.prepare('UPDATE users SET password_hash = ? WHERE id = ?').bind(bcryptHash, user.id).run();
+      } catch {}
+    }
+    const token = await createToken(user.id, c.env.JWT_SECRET);
+    return c.json({ access_token: token, token_type: 'bearer', user: authUserPayload(user) });
+  } catch {
+    return c.json({ detail: 'Could not log in' }, 500);
   }
-  const token = await createToken(user.id, c.env.JWT_SECRET);
-  return c.json({ access_token: token, token_type: 'bearer', user: authUserPayload(user) });
+});
+
+api.post('/auth/phone/start', async (c) => {
+  try {
+    const body: any = await c.req.json().catch(() => ({}));
+    const normalizedPhone = normalizePhone(body.phone);
+    if (!normalizedPhone) return c.json({ detail: 'Enter a valid phone number with country code.' }, 400);
+    await ensurePhoneAuthSchema(c.env.DB);
+    const code = createPhoneCode();
+    const codeHash = await sha256Hex(`${normalizedPhone}:${code}:${c.env.JWT_SECRET}`);
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+
+    await c.env.DB.prepare(
+      'INSERT INTO phone_login_codes (id, phone, code_hash, expires_at) VALUES (?, ?, ?, ?)'
+    ).bind(uuid(), normalizedPhone, codeHash, expiresAt).run();
+
+    const delivery = await sendPhoneCode(c, normalizedPhone, code);
+    const payload: any = {
+      detail: delivery === 'sms'
+        ? 'We sent a sign-in code to your phone.'
+        : 'SMS is not configured yet, so use the development code shown here.',
+      delivery,
+    };
+
+    if (delivery === 'development') {
+      payload.dev_code = code;
+    }
+
+    return c.json(payload);
+  } catch (error: any) {
+    const code = String(error?.message || '');
+    if (code === 'PHONE_INVALID') return c.json({ detail: 'Enter a valid phone number with country code.' }, 400);
+    if (code === 'PHONE_SMS_FAILED') return c.json({ detail: 'Could not send SMS code. Check Twilio settings.' }, 502);
+    return c.json({ detail: 'Could not start phone sign in.' }, 500);
+  }
+});
+
+api.post('/auth/phone/verify', async (c) => {
+  try {
+    const body: any = await c.req.json().catch(() => ({}));
+    const normalizedPhone = normalizePhone(body.phone);
+    if (!normalizedPhone) return c.json({ detail: 'Enter a valid phone number with country code.' }, 400);
+    const code = body.code;
+    const normalizedCode = String(code || '').replace(/\D/g, '');
+    if (normalizedCode.length !== 6) {
+      return c.json({ detail: 'Enter the 6-digit verification code.' }, 400);
+    }
+    await ensurePhoneAuthSchema(c.env.DB);
+
+    const challenge: any = await c.env.DB.prepare(
+      'SELECT * FROM phone_login_codes WHERE phone = ? AND consumed_at IS NULL ORDER BY created_at DESC LIMIT 1'
+    ).bind(normalizedPhone).first();
+
+    if (!challenge) return c.json({ detail: 'No active code for this phone number.' }, 401);
+    if ((challenge.attempts || 0) >= 5) return c.json({ detail: 'Too many attempts. Request a new code.' }, 429);
+    if (Date.parse(challenge.expires_at) < Date.now()) return c.json({ detail: 'Code expired. Request a new code.' }, 401);
+
+    const expectedHash = await sha256Hex(`${normalizedPhone}:${normalizedCode}:${c.env.JWT_SECRET}`);
+    if (expectedHash !== challenge.code_hash) {
+      await c.env.DB.prepare('UPDATE phone_login_codes SET attempts = attempts + 1 WHERE id = ?').bind(challenge.id).run();
+      return c.json({ detail: 'Invalid verification code.' }, 401);
+    }
+
+    await c.env.DB.prepare('UPDATE phone_login_codes SET consumed_at = datetime(\'now\') WHERE id = ?').bind(challenge.id).run();
+
+    let user: any = await c.env.DB.prepare('SELECT * FROM users WHERE phone = ?').bind(normalizedPhone).first();
+    if (!user) {
+      const id = uuid();
+      const digits = normalizedPhone.replace(/\D/g, '');
+      const username = await ensureUniqueUsername(c.env.DB, `phone_${digits.slice(-6)}`);
+      const safeName = String(body.full_name || '').trim() || 'Flames User';
+      const email = `${digits}@phone.flames-up.local`;
+      const generatedPasswordHash = await hashPassword(`phone_${normalizedPhone}_${uuid()}`);
+
+      await c.env.DB.prepare(
+        'INSERT INTO users (id, email, username, full_name, password_hash, phone, phone_verified) VALUES (?, ?, ?, ?, ?, ?, 1)'
+      ).bind(id, email, username, safeName, generatedPasswordHash, normalizedPhone).run();
+      user = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(id).first();
+    } else if (!user.phone_verified) {
+      await c.env.DB.prepare('UPDATE users SET phone_verified = 1, updated_at = datetime(\'now\') WHERE id = ?').bind(user.id).run();
+      user = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(user.id).first();
+    }
+
+    const token = await createToken(user.id, c.env.JWT_SECRET);
+    return c.json({ access_token: token, token_type: 'bearer', user: authUserPayload(user) });
+  } catch (error: any) {
+    const code = String(error?.message || '');
+    if (code === 'PHONE_INVALID') return c.json({ detail: 'Enter a valid phone number with country code.' }, 400);
+    return c.json({ detail: 'Could not verify phone sign in.' }, 500);
+  }
 });
 
 api.post('/auth/oauth/google', async (c) => {
   try {
+    await ensureOAuthSchema(c.env.DB);
     const { id_token } = await c.req.json();
     if (!id_token) return c.json({ detail: 'id_token is required' }, 400);
 
@@ -310,25 +577,36 @@ api.post('/auth/oauth/google', async (c) => {
 
 api.post('/auth/oauth/apple', async (c) => {
   try {
-    const { id_token } = await c.req.json();
-    if (!id_token) return c.json({ detail: 'id_token is required' }, 400);
+    await ensureOAuthSchema(c.env.DB);
+    const body: any = await c.req.json().catch(() => ({}));
+    const idToken = String(body.id_token || '');
+    if (!idToken) return c.json({ detail: 'id_token is required' }, 400);
 
-    const appleProfile = await verifyAppleIdToken(c, id_token);
+    const appleProfile = await verifyAppleIdToken(c, idToken);
+    const clientEmail = normalizeOptionalEmail(body.email);
+    const clientFullName = normalizeOptionalName(body.full_name);
+    const appleSubject = String(appleProfile.subject || body.apple_user || '').trim();
     const user = await findOrCreateOAuthUser(
       c,
       'apple',
-      appleProfile.subject,
-      appleProfile.email,
-      appleProfile.fullName,
+      appleSubject,
+      appleProfile.email || clientEmail,
+      clientFullName || appleProfile.fullName || 'Apple User',
       appleProfile.profileImage
     );
     const token = await createToken(user.id, c.env.JWT_SECRET);
     return c.json({ access_token: token, token_type: 'bearer', user: authUserPayload(user) });
   } catch (error: any) {
-    const code = String(error?.message || '');
+    const code = getErrorCode(error);
     if (code === 'EMAIL_REQUIRED') return c.json({ detail: 'Apple account email is required on first sign-in' }, 400);
-    if (code === 'ERR_JWT_CLAIM_VALIDATION_FAILED') return c.json({ detail: 'Apple audience mismatch' }, 401);
+    if (code === 'OAUTH_SUBJECT_REQUIRED') return c.json({ detail: 'Apple account identifier was missing' }, 400);
+    if (code === 'ERR_JWT_CLAIM_VALIDATION_FAILED' && error?.claim === 'aud') return c.json({ detail: 'Apple audience mismatch' }, 401);
+    if (code === 'ERR_JWT_CLAIM_VALIDATION_FAILED') return c.json({ detail: 'Invalid Apple token claims' }, 401);
     if (code === 'ERR_JWS_SIGNATURE_VERIFICATION_FAILED') return c.json({ detail: 'Invalid Apple token signature' }, 401);
+    if (code === 'ERR_JWT_EXPIRED') return c.json({ detail: 'Apple token expired. Please try again.' }, 401);
+    if (code.startsWith('ERR_JWS_') || code.startsWith('ERR_JWT_') || code.startsWith('ERR_JWKS_')) {
+      return c.json({ detail: 'Invalid Apple token' }, 401);
+    }
     if (code.startsWith('APPLE_')) return c.json({ detail: 'Invalid Apple token' }, 401);
     return c.json({ detail: 'Apple OAuth login failed' }, 401);
   }
