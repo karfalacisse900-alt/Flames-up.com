@@ -22,11 +22,17 @@ export default function SettingsScreen() {
   const [oldPassword, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [newEmail, setNewEmail] = useState(user?.email || '');
-  const [saving, setSaving] = useState(false);
+  const [emailPassword, setEmailPassword] = useState('');
+  const [savingEmail, setSavingEmail] = useState(false);
+  const [savingPassword, setSavingPassword] = useState(false);
 
   useEffect(() => {
     setIsPrivate(!!user?.is_private);
   }, [user?.is_private]);
+
+  useEffect(() => {
+    setNewEmail(user?.email || '');
+  }, [user?.email]);
 
   useEffect(() => {
     setSelectedLanguage(language);
@@ -56,27 +62,35 @@ export default function SettingsScreen() {
 
   const changePassword = async () => {
     if (!oldPassword || !newPassword) { Alert.alert('Error', 'Fill in both fields'); return; }
-    if (newPassword.length < 6) { Alert.alert('Error', 'New password must be at least 6 characters'); return; }
-    setSaving(true);
+    if (newPassword.length < 8) { Alert.alert('Error', 'New password must be at least 8 characters'); return; }
+    setSavingPassword(true);
     try {
       await api.put('/users/me/password', { old_password: oldPassword, new_password: newPassword });
       Alert.alert('Done', 'Password updated');
       setShowPasswordForm(false);
       setOldPassword(''); setNewPassword('');
-    } catch { Alert.alert('Error', 'Could not update password'); }
-    setSaving(false);
+    } catch (error: any) {
+      Alert.alert('Error', error?.response?.data?.detail || 'Could not update password');
+    } finally {
+      setSavingPassword(false);
+    }
   };
 
   const changeEmail = async () => {
     if (!newEmail || !newEmail.includes('@')) { Alert.alert('Error', 'Enter a valid email'); return; }
-    setSaving(true);
+    if (!emailPassword) { Alert.alert('Verification required', 'Enter your current password to change email.'); return; }
+    setSavingEmail(true);
     try {
-      await api.put('/users/me', { email: newEmail });
-      if (user) setUser({ ...user, email: newEmail });
+      const response = await api.put('/users/me/email', { email: newEmail, password: emailPassword });
+      setUser(response.data);
       Alert.alert('Done', 'Email updated');
       setShowEmailForm(false);
-    } catch { Alert.alert('Error', 'Could not update email'); }
-    setSaving(false);
+      setEmailPassword('');
+    } catch (error: any) {
+      Alert.alert('Error', error?.response?.data?.detail || 'Could not update email');
+    } finally {
+      setSavingEmail(false);
+    }
   };
 
   const handleLogout = () => {
@@ -141,11 +155,26 @@ export default function SettingsScreen() {
           {showEmailForm && (
             <View style={s.form}>
               <TextInput style={s.input} value={newEmail} onChangeText={setNewEmail} placeholder={t('newEmail')} keyboardType="email-address" autoCapitalize="none" placeholderTextColor="#BBB" />
-              <TouchableOpacity style={s.saveBtn} onPress={changeEmail} disabled={saving}>
-                <Text style={s.saveTx}>{saving ? t('saving') : t('updateEmail')}</Text>
+              <TextInput style={s.input} value={emailPassword} onChangeText={setEmailPassword} placeholder="Current password" secureTextEntry placeholderTextColor="#BBB" />
+              <Text style={s.formHelp}>We verify this change with your current password.</Text>
+              <TouchableOpacity style={s.saveBtn} onPress={changeEmail} disabled={savingEmail}>
+                <Text style={s.saveTx}>{savingEmail ? t('saving') : t('updateEmail')}</Text>
               </TouchableOpacity>
             </View>
           )}
+
+          <TouchableOpacity style={s.row} onPress={() => router.push('/verify-phone' as any)}>
+            <View style={s.rowLeft}>
+              <Ionicons name="call-outline" size={20} color="#1A1A1A" />
+              <View>
+                <Text style={s.rowLabel}>Phone</Text>
+                <Text style={s.rowSub}>
+                  {user?.phone_verified ? `${user?.phone || 'Verified phone'} verified` : 'Verify to post, story, message, and call'}
+                </Text>
+              </View>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color="#CCC" />
+          </TouchableOpacity>
 
           <TouchableOpacity style={s.row} onPress={() => setShowPasswordForm(!showPasswordForm)}>
             <View style={s.rowLeft}>
@@ -158,8 +187,8 @@ export default function SettingsScreen() {
             <View style={s.form}>
               <TextInput style={s.input} value={oldPassword} onChangeText={setOldPassword} placeholder="Current password" secureTextEntry placeholderTextColor="#BBB" />
               <TextInput style={s.input} value={newPassword} onChangeText={setNewPassword} placeholder="New password" secureTextEntry placeholderTextColor="#BBB" />
-              <TouchableOpacity style={s.saveBtn} onPress={changePassword} disabled={saving}>
-                <Text style={s.saveTx}>{saving ? 'Saving...' : 'Update Password'}</Text>
+              <TouchableOpacity style={s.saveBtn} onPress={changePassword} disabled={savingPassword}>
+                <Text style={s.saveTx}>{savingPassword ? 'Saving...' : 'Update Password'}</Text>
               </TouchableOpacity>
             </View>
           )}
@@ -230,6 +259,7 @@ const s = StyleSheet.create({
 
   form: { paddingVertical: 12, gap: 10 },
   input: { backgroundColor: '#F5F5F5', borderRadius: 12, paddingHorizontal: 16, paddingVertical: 12, fontSize: 15, color: '#1A1A1A' },
+  formHelp: { fontSize: 12, lineHeight: 17, color: '#8A8A8A' },
   saveBtn: { backgroundColor: '#1A1A1A', borderRadius: 12, paddingVertical: 14, alignItems: 'center' },
   saveTx: { fontSize: 15, fontWeight: '700', color: '#FFF' },
 

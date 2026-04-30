@@ -52,7 +52,11 @@ const ALLOWED_ORIGINS = [
   'http://localhost:8085',
   'exp://localhost:8081',
 ];
-const corsOpts = { origin: (o: string) => ALLOWED_ORIGINS.includes(o) ? o : ALLOWED_ORIGINS[0], allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'] };
+const corsOpts = {
+  origin: (o: string) => ALLOWED_ORIGINS.includes(o) ? o : ALLOWED_ORIGINS[0],
+  allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowHeaders: ['Authorization', 'Content-Type'],
+};
 app.use('*', cors(corsOpts));
 api.use('*', cors(corsOpts));
 
@@ -227,6 +231,32 @@ function visibleStatusWhere(userAlias = 'u', statusAlias = 's'): string {
 
 function visiblePostWhere(userAlias = 'u', postAlias = 'p'): string {
   return `${visibleAuthorWhere(userAlias)} AND (COALESCE(${postAlias}.visibility, 'public') = 'public' OR ${postAlias}.user_id = ? OR EXISTS (SELECT 1 FROM friendships f2 WHERE f2.user_id = ? AND f2.friend_id = ${postAlias}.user_id))`;
+}
+
+function publicPostWhere(userAlias = 'u', postAlias = 'p'): string {
+  return `COALESCE(${userAlias}.is_private, 0) = 0 AND COALESCE(${postAlias}.visibility, 'public') = 'public'`;
+}
+
+function parseJsonArray(value: unknown): any[] {
+  if (Array.isArray(value)) return value;
+  const text = String(value || '').trim();
+  if (!text) return [];
+  try {
+    const parsed = JSON.parse(text);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function postPayload(post: any, likedBy: string[] = []) {
+  return {
+    ...post,
+    images: parseJsonArray(post.images),
+    media_types: parseJsonArray(post.media_types),
+    liked_by: likedBy,
+    is_verified_checkin: !!post.is_verified_checkin,
+  };
 }
 
 async function isFriend(db: D1Database, userId: string, targetId: string): Promise<boolean> {
@@ -855,7 +885,11 @@ async function ensurePhoneAuthSchema(db: D1Database) {
       await db.exec(statement);
     } catch (error: any) {
       const message = String(error?.message || '');
-      if (!message.includes('duplicate column name') && !message.includes('already exists')) {
+      const canContinue =
+        message.includes('duplicate column name')
+        || message.includes('already exists')
+        || (statement.includes('idx_users_phone') && message.includes('UNIQUE constraint failed'));
+      if (!canContinue) {
         throw error;
       }
     }
@@ -887,14 +921,19 @@ async function startTwilioVerification(c: any, phone: string): Promise<boolean> 
     Channel: 'sms',
   });
 
-  const response = await fetch(`https://verify.twilio.com/v2/Services/${encodeURIComponent(config.serviceSid)}/Verifications`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Basic ${btoa(`${config.accountSid}:${config.authToken}`)}`,
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
-    body,
-  });
+  let response: Response;
+  try {
+    response = await fetch(`https://verify.twilio.com/v2/Services/${encodeURIComponent(config.serviceSid)}/Verifications`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Basic ${btoa(`${config.accountSid}:${config.authToken}`)}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body,
+    });
+  } catch {
+    throw new Error('PHONE_VERIFY_START_FAILED:network');
+  }
 
   if (!response.ok) {
     const data: any = await response.json().catch(() => ({}));
@@ -913,14 +952,19 @@ async function checkTwilioVerification(c: any, phone: string, code: string): Pro
     Code: code,
   });
 
-  const response = await fetch(`https://verify.twilio.com/v2/Services/${encodeURIComponent(config.serviceSid)}/VerificationCheck`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Basic ${btoa(`${config.accountSid}:${config.authToken}`)}`,
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
-    body,
-  });
+  let response: Response;
+  try {
+    response = await fetch(`https://verify.twilio.com/v2/Services/${encodeURIComponent(config.serviceSid)}/VerificationCheck`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Basic ${btoa(`${config.accountSid}:${config.authToken}`)}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body,
+    });
+  } catch {
+    throw new Error('PHONE_VERIFY_CHECK_FAILED:network');
+  }
 
   if (!response.ok) {
     if (response.status >= 500) {
@@ -993,6 +1037,7 @@ function authUserPayload(user: any) {
     username: user.username,
     full_name: user.full_name,
     profile_image: user.profile_image,
+    cover_image: user.cover_image,
     bio: user.bio,
     city: user.city,
     age: user.age,
@@ -1400,6 +1445,63 @@ api.put('/users/me', authMiddleware, async (c) => {
   return c.json(safeUserPayload(user));
 });
 
+api.put('/users/me/email', authMiddleware, async (c) => {
+  try {
+    const userId = getUserId(c);
+    const body: any = await c.req.json().catch(() => ({}));
+    const email = normalizeOptionalEmail(body.email || body.new_email);
+    const password = String(body.password || body.current_password || '');
+
+    if (!email) return c.json({ detail: 'Enter a valid email address.' }, 400);
+    if (!password) return c.json({ detail: 'Enter your current password to change email.' }, 400);
+
+    const currentUser: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
+    if (!currentUser) return c.json({ detail: 'User not found' }, 404);
+    if (!(await verifyPassword(password, currentUser.password_hash))) {
+      return c.json({ detail: 'Current password is incorrect.' }, 401);
+    }
+
+    const owner: any = await c.env.DB.prepare('SELECT id FROM users WHERE LOWER(email) = ? AND id != ?')
+      .bind(email, userId)
+      .first();
+    if (owner) return c.json({ detail: 'That email is already used by another account.' }, 409);
+
+    await c.env.DB.prepare('UPDATE users SET email = ?, updated_at = datetime(\'now\') WHERE id = ?')
+      .bind(email, userId)
+      .run();
+    const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
+    return c.json(authUserPayload(user));
+  } catch {
+    return c.json({ detail: 'Could not update email.' }, 500);
+  }
+});
+
+api.put('/users/me/password', authMiddleware, async (c) => {
+  try {
+    const userId = getUserId(c);
+    const body: any = await c.req.json().catch(() => ({}));
+    const currentPassword = String(body.old_password || body.current_password || '');
+    const newPassword = String(body.new_password || '');
+
+    if (!currentPassword || !newPassword) return c.json({ detail: 'Current password and new password are required.' }, 400);
+    if (newPassword.length < 8) return c.json({ detail: 'New password must be at least 8 characters.' }, 400);
+
+    const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
+    if (!user) return c.json({ detail: 'User not found' }, 404);
+    if (!(await verifyPassword(currentPassword, user.password_hash))) {
+      return c.json({ detail: 'Current password is incorrect.' }, 401);
+    }
+
+    const newHash = await hashPassword(newPassword);
+    await c.env.DB.prepare('UPDATE users SET password_hash = ?, updated_at = datetime(\'now\') WHERE id = ?')
+      .bind(newHash, userId)
+      .run();
+    return c.json({ detail: 'Password updated.' });
+  } catch {
+    return c.json({ detail: 'Could not update password.' }, 500);
+  }
+});
+
 api.post('/users/me/phone/start', authMiddleware, async (c) => {
   try {
     const userId = getUserId(c);
@@ -1596,10 +1698,26 @@ api.get('/posts/feed', authMiddleware, async (c) => {
   const results = [];
   for (const p of posts.results as any[]) {
     const likes = await c.env.DB.prepare('SELECT user_id FROM likes WHERE post_id = ?').bind(p.id).all();
-    results.push({ ...p, images: JSON.parse(p.images || '[]'), media_types: JSON.parse(p.media_types || '[]'),
-      liked_by: likes.results.map((l: any) => l.user_id), is_verified_checkin: !!p.is_verified_checkin });
+    results.push(postPayload(p, likes.results.map((l: any) => l.user_id)));
   }
   return c.json(results);
+});
+
+api.get('/posts/world-board', async (c) => {
+  try {
+    await ensurePrivacySchema(c.env.DB);
+    const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
+    const limit = Math.min(80, Math.max(1, parseInt(c.req.query('limit') || '40', 10) || 40));
+    const posts = await c.env.DB.prepare(
+      `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
+       FROM posts p JOIN users u ON p.user_id = u.id
+       WHERE ${publicPostWhere('u', 'p')}
+       ORDER BY p.created_at DESC LIMIT ? OFFSET ?`
+    ).bind(limit, skip).all();
+    return c.json((posts.results as any[]).map((p) => postPayload(p)));
+  } catch {
+    return c.json({ detail: 'Could not load world board.' }, 500);
+  }
 });
 
 api.get('/posts/nearby-feed', authMiddleware, async (c) => {
@@ -1610,7 +1728,7 @@ api.get('/posts/nearby-feed', authMiddleware, async (c) => {
      WHERE ${visiblePostWhere('u', 'p')}
      ORDER BY p.created_at DESC LIMIT 50`
   ).bind(userId, userId, userId, userId).all();
-  return c.json((posts.results as any[]).map(p => ({ ...p, images: JSON.parse(p.images || '[]'), media_types: JSON.parse(p.media_types || '[]'), is_verified_checkin: !!p.is_verified_checkin })));
+  return c.json((posts.results as any[]).map((p) => postPayload(p)));
 });
 
 api.get('/posts/:postId', authMiddleware, async (c) => {
@@ -1622,8 +1740,7 @@ api.get('/posts/:postId', authMiddleware, async (c) => {
      WHERE p.id = ? AND ${visiblePostWhere('u', 'p')}`).bind(postId, userId, userId, userId, userId).first();
   if (!p) return c.json({ detail: 'Post not found' }, 404);
   const likes = await c.env.DB.prepare('SELECT user_id FROM likes WHERE post_id = ?').bind(postId).all();
-  return c.json({ ...p, images: JSON.parse(p.images || '[]'), media_types: JSON.parse(p.media_types || '[]'),
-    liked_by: likes.results.map((l: any) => l.user_id), is_verified_checkin: !!p.is_verified_checkin });
+  return c.json(postPayload(p, likes.results.map((l: any) => l.user_id)));
 });
 
 api.post('/posts/:postId/like', authMiddleware, async (c) => {
@@ -1676,7 +1793,7 @@ api.get('/users/:userId/posts', authMiddleware, async (c) => {
      WHERE p.user_id = ? AND (COALESCE(p.visibility, 'public') = 'public' OR p.user_id = ? OR EXISTS (SELECT 1 FROM friendships f2 WHERE f2.user_id = ? AND f2.friend_id = p.user_id))
      ORDER BY p.created_at DESC`
   ).bind(targetId, viewerId, viewerId).all();
-  return c.json((posts.results as any[]).map(p => ({ ...p, images: JSON.parse(p.images || '[]'), media_types: JSON.parse(p.media_types || '[]'), is_verified_checkin: !!p.is_verified_checkin })));
+  return c.json((posts.results as any[]).map((p) => postPayload(p)));
 });
 
 // Comments

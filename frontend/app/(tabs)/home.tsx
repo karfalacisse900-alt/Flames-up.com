@@ -7,7 +7,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuthStore } from '../../src/store/authStore';
-import api from '../../src/api/client';
+import api, { API_URL } from '../../src/api/client';
 import { rankFeed, RecommendationItem } from '../../src/recommendation';
 import { requireVerifiedPhone } from '../../src/utils/phoneVerification';
 import MediaPreview from '../../src/components/MediaPreview';
@@ -59,6 +59,34 @@ function uniquePosts(posts: any[]): any[] {
   });
 }
 
+function parsePostImages(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map((item) => String(item)).filter(Boolean);
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) return parsed.map((item) => String(item)).filter(Boolean);
+    } catch {}
+    return value ? [value] : [];
+  }
+  return [];
+}
+
+function getPrimaryMediaUri(post: any): string {
+  const candidates = [
+    typeof post?.image === 'string' ? post.image : '',
+    ...parsePostImages(post?.images),
+  ];
+  return candidates.find((uri) => (
+    uri.startsWith('http')
+    || uri.startsWith('data:')
+    || uri.startsWith('cfstream:')
+  )) || '';
+}
+
+function hasBoardContent(post: any): boolean {
+  return !!getPrimaryMediaUri(post) || String(post?.content || '').trim().length > 0;
+}
+
 export default function HomeScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -107,13 +135,32 @@ export default function HomeScreen() {
     return ranked.map((r) => r.original);
   }, [user?.id, user?.interests, userLat, userLng]);
 
+  const loadPublicWorldBoard = useCallback(async () => {
+    const response = await fetch(`${API_URL}/api/posts/world-board?limit=60`);
+    if (!response.ok) return [];
+    const data = await response.json();
+    return Array.isArray(data) ? data : [];
+  }, []);
+
   const loadData = useCallback(async () => {
+    let raw: any[] = [];
     try {
-      const r = await api.get('/posts/feed', { params: { limit: 40 } });
-      const raw = Array.isArray(r.data) ? r.data : [];
-      setPosts(rankPosts(raw));
-    } catch {}
-  }, [rankPosts]);
+      const r = await api.get('/posts/feed', { params: { limit: 60 } });
+      raw = Array.isArray(r.data) ? r.data : [];
+    } catch {
+      try {
+        raw = await loadPublicWorldBoard();
+      } catch {}
+    }
+
+    if (raw.length === 0) {
+      try {
+        raw = await loadPublicWorldBoard();
+      } catch {}
+    }
+
+    setPosts(rankPosts(raw));
+  }, [loadPublicWorldBoard, rankPosts]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
@@ -131,10 +178,7 @@ export default function HomeScreen() {
     return f.length > 0 ? f : [];
   }, [filter, posts]);
 
-  const items = useMemo(() => filtered.filter((p: any) => {
-    const img = p.image || (p.images && p.images[0]);
-    return img && typeof img === 'string' && (img.startsWith('http') || img.startsWith('data:') || img.startsWith('cfstream:'));
-  }), [filtered]);
+  const items = useMemo(() => filtered.filter(hasBoardContent), [filtered]);
 
   const G = 2;
   const TILE_SIZE = Math.floor((SW - G * 2) / 3); // 3 cols exactly
@@ -213,11 +257,18 @@ export default function HomeScreen() {
                       {sectionPosts.slice(0, 9).map((p: any) => (
                         <TouchableOpacity key={p.id} style={[s.gTile, { width: TILE_SIZE, height: TILE_SIZE }]} activeOpacity={0.95}
                           onPress={() => router.push(`/post/${p.id}` as any)}>
-                          <MediaPreview
-                            uri={p.image || p.images?.[0]}
-                            mediaTypes={p.media_types}
-                            style={s.gImg}
-                          />
+                          {getPrimaryMediaUri(p) ? (
+                            <MediaPreview
+                              uri={getPrimaryMediaUri(p)}
+                              mediaTypes={p.media_types}
+                              style={s.gImg}
+                            />
+                          ) : (
+                            <View style={s.textTile}>
+                              <Text style={s.textTileAuthor} numberOfLines={1}>@{p.user_username || 'flames'}</Text>
+                              <Text style={s.textTileContent} numberOfLines={5}>{p.content}</Text>
+                            </View>
+                          )}
                         </TouchableOpacity>
                       ))}
                     </View>
@@ -259,6 +310,9 @@ const s = StyleSheet.create({
   gallery: { flexDirection: 'row', flexWrap: 'wrap', gap: 2 },
   gTile: { overflow: 'hidden' },
   gImg: { width: '100%', height: '100%' },
+  textTile: { flex: 1, backgroundColor: '#F7F4EE', padding: 10, justifyContent: 'space-between' },
+  textTileAuthor: { fontSize: 11, fontWeight: '800', color: '#6F6A60' },
+  textTileContent: { fontSize: 15, lineHeight: 19, fontWeight: '800', color: '#1A1A1A' },
   sectionLabel: { fontSize: 20, fontWeight: '900', color: '#1A1A1A', fontStyle: 'italic', paddingHorizontal: 12, paddingVertical: 10 },
 
   empty: { paddingTop: 100, alignItems: 'center' },
