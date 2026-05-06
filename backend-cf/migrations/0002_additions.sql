@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS discover_posts (
   content TEXT NOT NULL,
   image TEXT,
   images TEXT DEFAULT '[]',
-  category TEXT DEFAULT 'local_news',
+  category TEXT DEFAULT 'culture',
   location TEXT DEFAULT '',
   likes_count INTEGER DEFAULT 0,
   comments_count INTEGER DEFAULT 0,

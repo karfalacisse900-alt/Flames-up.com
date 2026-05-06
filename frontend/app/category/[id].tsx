@@ -109,7 +109,7 @@ export default function CategoryScreen() {
     const result: Record<string, any[]> = {};
     for (const t of config.types) {
       try {
-        const r = await api.get('/google-places/nearby', { params: { lat: coords.lat, lng: coords.lng, radius: RADIUS, type: t.key } });
+        const r = await api.get('/mapbox-places/nearby', { params: { lat: coords.lat, lng: coords.lng, radius: RADIUS, type: t.key } });
         if (Array.isArray(r.data) && r.data.length > 0) result[t.label] = r.data;
       } catch {}
     }

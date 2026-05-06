@@ -8,6 +8,7 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import api from '../src/api/client';
 import MediaPreview from '../src/components/MediaPreview';
+import { cachePostForDetail, setPostDetailFeedContext } from '../src/store/postDetailCache';
 
 const { width: SW } = Dimensions.get('window');
 
@@ -184,7 +185,11 @@ export default function TonightScreen() {
                   key={post.id}
                   style={s.activeCard}
                   activeOpacity={0.9}
-                  onPress={() => router.push(`/post/${post.id}` as any)}
+                  onPress={() => {
+                    cachePostForDetail(post);
+                    setPostDetailFeedContext(feedPosts.map((item) => item.id));
+                    router.push(`/post/${post.id}` as any);
+                  }}
                 >
                   <MediaPreview
                     uri={post.image || post.images?.[0]}

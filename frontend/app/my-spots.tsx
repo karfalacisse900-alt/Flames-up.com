@@ -1,16 +1,13 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, Image, ScrollView,
-  RefreshControl, Dimensions, ActivityIndicator, Alert,
+  RefreshControl, ActivityIndicator, Alert,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { colors } from '../src/utils/theme';
-import { useAuthStore } from '../src/store/authStore';
 import api from '../src/api/client';
-
-const { width: SW } = Dimensions.get('window');
+import { cachePostForDetail } from '../src/store/postDetailCache';
 
 type SaveType = 'all' | 'want_to_go' | 'favorite' | 'been_there';
 
@@ -48,7 +45,6 @@ type SavedPost = {
 export default function MySpotsScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { user } = useAuthStore();
 
   const [activeTab, setActiveTab] = useState<SaveType>('all');
   const [savedPlaces, setSavedPlaces] = useState<SavedPlace[]>([]);
@@ -297,7 +293,10 @@ export default function MySpotsScreen() {
                     key={post.id}
                     style={s.postCard}
                     activeOpacity={0.85}
-                    onPress={() => router.push(`/post/${post.post_id}` as any)}
+                    onPress={() => {
+                      cachePostForDetail(post);
+                      router.push(`/post/${post.post_id}` as any);
+                    }}
                   >
                     {postImg ? (
                       <Image source={{ uri: postImg }} style={s.postThumb} />

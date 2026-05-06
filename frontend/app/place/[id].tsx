@@ -29,7 +29,7 @@ export default function PlaceDetailScreen() {
   const loadPlace = useCallback(async () => {
     setIsLoading(true);
     try {
-      const response = await api.get(`/google-places/${placeId}`);
+      const response = await api.get(`/mapbox-places/${placeId}`);
       setPlace(response.data);
     } catch (error) {
       console.log('Error loading place:', error);
@@ -46,8 +46,8 @@ export default function PlaceDetailScreen() {
   const openDirections = () => {
     if (!place) return;
 
-    if (place.google_maps_url) {
-      Linking.openURL(place.google_maps_url);
+    if (place.mapbox_url) {
+      Linking.openURL(place.mapbox_url);
       return;
     }
 

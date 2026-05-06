@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  ActivityIndicator,
   Image,
   ImageResizeMode,
   StyleProp,
@@ -43,7 +42,7 @@ export function getStreamThumbnailFallback(videoUid: string) {
   return `https://videodelivery.net/${videoUid}/thumbnails/thumbnail.jpg?time=1s&height=720`;
 }
 
-export default function MediaPreview({
+function MediaPreview({
   uri,
   mediaTypes,
   style,
@@ -57,12 +56,10 @@ export default function MediaPreview({
   const isVideo = isVideoUri(cleanUri, mediaTypes);
   const fallbackUri = streamUid ? getStreamThumbnailFallback(streamUid) : cleanUri;
   const [previewUri, setPreviewUri] = useState(fallbackUri);
-  const [loadingStreamInfo, setLoadingStreamInfo] = useState(!!streamUid);
 
   useEffect(() => {
     let mounted = true;
     setPreviewUri(fallbackUri);
-    setLoadingStreamInfo(!!streamUid);
 
     if (!streamUid) return () => { mounted = false; };
 
@@ -71,9 +68,7 @@ export default function MediaPreview({
         if (!mounted) return;
         if (info?.thumbnail) setPreviewUri(info.thumbnail);
       })
-      .finally(() => {
-        if (mounted) setLoadingStreamInfo(false);
-      });
+      .catch(() => undefined);
 
     return () => {
       mounted = false;
@@ -83,17 +78,18 @@ export default function MediaPreview({
   return (
     <View style={[styles.wrap, style]}>
       {previewUri ? (
-        <Image source={{ uri: previewUri }} style={styles.image} resizeMode={resizeMode} />
+        isVideo && !streamUid && !/\.(jpe?g|png|webp|gif|heic|heif|avif)(\?.*)?$/i.test(previewUri) ? (
+          <View style={styles.empty}>
+            <Ionicons name="videocam-outline" size={24} color="#9CA3AF" />
+          </View>
+        ) : (
+          <Image source={{ uri: previewUri }} style={styles.image} resizeMode={resizeMode} />
+        )
       ) : (
         <View style={styles.empty}>
           <Ionicons name={isVideo ? 'videocam-outline' : 'image-outline'} size={24} color="#9CA3AF" />
         </View>
       )}
-      {loadingStreamInfo ? (
-        <View style={styles.loading}>
-          <ActivityIndicator color="#FFFFFF" />
-        </View>
-      ) : null}
       {isVideo && showVideoBadge ? (
         <View style={styles.badge}>
           <Ionicons name="play" size={13} color="#FFFFFF" />
@@ -102,6 +98,8 @@ export default function MediaPreview({
     </View>
   );
 }
+
+export default React.memo(MediaPreview);
 
 const styles = StyleSheet.create({
   wrap: {
@@ -118,12 +116,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#F3F4F6',
-  },
-  loading: {
-    ...StyleSheet.absoluteFillObject,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(0,0,0,0.18)',
   },
   badge: {
     position: 'absolute',

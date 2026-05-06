@@ -27,6 +27,16 @@ export default function NotificationsScreen() {
     markAsRead();
   }, []);
 
+  const getNotificationData = (notification: any) => {
+    if (!notification?.data) return {};
+    if (typeof notification.data === 'object') return notification.data;
+    try {
+      return JSON.parse(notification.data);
+    } catch {
+      return {};
+    }
+  };
+
   const loadNotifications = async () => {
     try {
       const response = await api.get('/notifications');
@@ -68,21 +78,22 @@ export default function NotificationsScreen() {
   };
 
   const handleNotificationPress = (notification: any) => {
+    const data = getNotificationData(notification);
     switch (notification.type) {
       case 'like':
       case 'comment':
-        if (notification.data?.post_id) {
-          router.push(`/post/${notification.data.post_id}`);
+        if (data?.post_id) {
+          router.push(`/post/${data.post_id}`);
         }
         break;
       case 'follow':
-        if (notification.data?.follower_id) {
-          router.push(`/user/${notification.data.follower_id}`);
+        if (data?.follower_id || data?.from_user_id) {
+          router.push(`/user/${data.follower_id || data.from_user_id}`);
         }
         break;
       case 'message':
-        if (notification.data?.sender_id) {
-          router.push(`/conversation/${notification.data.sender_id}`);
+        if (data?.sender_id) {
+          router.push(`/conversation/${data.sender_id}`);
         }
         break;
     }
@@ -90,7 +101,8 @@ export default function NotificationsScreen() {
 
   const renderNotification = ({ item }: { item: any }) => {
     const icon = getNotificationIcon(item.type);
-    const timeAgo = formatDistanceToNow(new Date(item.created_at), { addSuffix: true });
+    const createdAt = new Date(item.created_at || Date.now());
+    const timeAgo = formatDistanceToNow(Number.isNaN(createdAt.getTime()) ? new Date() : createdAt, { addSuffix: true });
 
     return (
       <TouchableOpacity

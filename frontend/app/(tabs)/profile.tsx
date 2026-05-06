@@ -1,60 +1,92 @@
-import React, { useState, useEffect } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
-  Image,
   ActivityIndicator,
-  RefreshControl,
   Alert,
   Dimensions,
+  Image,
+  Linking,
   Modal,
   Pressable,
-  Linking,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, shadows } from '../../src/utils/theme';
-import { useAuthStore } from '../../src/store/authStore';
-import api from '../../src/api/client';
+
 import MediaPreview from '../../src/components/MediaPreview';
+import api from '../../src/api/client';
+import { useAuthStore } from '../../src/store/authStore';
+import { cachePostForDetail, cachePostsForDetail, setPostDetailFeedContext } from '../../src/store/postDetailCache';
+import { colors } from '../../src/utils/theme';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const GRID_GAP = 2;
+const TILE_SIZE = Math.floor((SCREEN_WIDTH - GRID_GAP * 2) / 3);
+
+function parseImages(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map((item) => String(item)).filter(Boolean);
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) return parsed.map((item) => String(item)).filter(Boolean);
+    } catch {}
+    return value ? [value] : [];
+  }
+  return [];
+}
+
+function getPostMedia(post: any) {
+  return [post?.image, ...parseImages(post?.images)]
+    .map((item) => String(item || '').trim())
+    .find(Boolean) || '';
+}
+
+function compact(value: unknown) {
+  const count = Math.max(0, Number(value || 0));
+  if (count >= 1000000) return `${(count / 1000000).toFixed(1).replace(/\.0$/, '')}M`;
+  if (count >= 1000) return `${(count / 1000).toFixed(1).replace(/\.0$/, '')}K`;
+  return String(Math.round(count));
+}
 
 export default function ProfileScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { user, logout } = useAuthStore();
   const [posts, setPosts] = useState<any[]>([]);
+  const [stats, setStats] = useState({ posts: 0, followers: 0, following: 0 });
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [stats, setStats] = useState({ posts: 0, followers: 0, following: 0 });
   const [showMore, setShowMore] = useState(false);
 
-  useEffect(() => {
-    if (user) loadUserData();
-  }, [user]);
-
-  const loadUserData = async () => {
+  const loadUserData = useCallback(async () => {
+    if (!user?.id) return;
     try {
       const [postsRes, userRes] = await Promise.all([
-        api.get(`/users/${user?.id}/posts`),
-        api.get(`/users/${user?.id}`),
+        api.get(`/users/${user.id}/posts`),
+        api.get(`/users/${user.id}`),
       ]);
-      setPosts(postsRes.data);
+      const nextPosts = Array.isArray(postsRes.data) ? postsRes.data : [];
+      cachePostsForDetail(nextPosts);
+      setPosts(nextPosts);
       setStats({
-        posts: userRes.data.posts_count,
-        followers: userRes.data.followers_count,
-        following: userRes.data.following_count,
+        posts: Number(userRes.data?.posts_count || nextPosts.length || 0),
+        followers: Number(userRes.data?.followers_count || 0),
+        following: Number(userRes.data?.following_count || 0),
       });
-    } catch (error) {
-      console.log('Error loading user data:', error);
+    } catch {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (user?.id) void loadUserData();
+  }, [loadUserData, user?.id]);
 
   const onRefresh = async () => {
     setIsRefreshing(true);
@@ -76,705 +108,223 @@ export default function ProfileScreen() {
     ]);
   };
 
+  const coverMedia = useMemo(() => (
+    (user as any)?.cover_image || getPostMedia(posts[0]) || user?.profile_image || ''
+  ), [posts, user]);
+
   if (isLoading || !user) {
     return (
-      <SafeAreaView style={styles.loadingContainer}>
+      <SafeAreaView style={s.loadingContainer}>
         <ActivityIndicator size="large" color={colors.accentPrimary} />
       </SafeAreaView>
     );
   }
 
-  // Parse real user data
-  const interests: string[] = (() => {
-    try {
-      const raw = user.interests;
-      if (Array.isArray(raw)) return raw;
-      return JSON.parse(raw || '[]');
-    } catch { return []; }
-  })();
-  const lookingFor: string[] = (() => {
-    try {
-      const raw = user.looking_for;
-      if (Array.isArray(raw)) return raw;
-      return JSON.parse(raw || '[]');
-    } catch { return []; }
-  })();
-  const personalInfo = {
-    age: user.age || '',
-    borough: user.city || '',
-  };
+  const displayName = user.full_name || user.username || 'Flames';
+  const username = user.username || user.email?.split('@')[0] || 'profile';
+  const location = user.city || 'Flames-Up';
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <View style={s.root}>
       <ScrollView
-        refreshControl={
-          <RefreshControl
-            refreshing={isRefreshing}
-            onRefresh={onRefresh}
-            tintColor={colors.accentPrimary}
-          />
-        }
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingBottom: 100 }}
+        refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={onRefresh} tintColor="#FFFFFF" />}
+        contentContainerStyle={{ paddingBottom: 122 }}
       >
-        {/* Header */}
-        <View style={styles.header}>
-          <Text style={styles.headerTitle}>Profile</Text>
-          <View style={styles.headerActions}>
-            <TouchableOpacity style={styles.headerBtn} onPress={() => router.push('/(tabs)/messages')}>
-              <Ionicons name="chatbubble-outline" size={18} color={colors.textPrimary} />
+        <View style={s.hero}>
+          {coverMedia ? (
+            <MediaPreview uri={coverMedia} mediaTypes={posts[0]?.media_types} style={s.heroMedia} showVideoBadge={false} />
+          ) : (
+            <View style={s.heroFallback} />
+          )}
+          <View style={s.heroDim} />
+
+          <View style={[s.topbar, { paddingTop: insets.top + 8 }]}>
+            <TouchableOpacity style={s.roundNav} onPress={() => router.push('/(tabs)/home' as any)}>
+              <Ionicons name="chevron-back" size={22} color="#FFFFFF" />
             </TouchableOpacity>
-            <TouchableOpacity style={styles.headerBtn} onPress={() => setShowMore(!showMore)}>
-              <Ionicons name="ellipsis-horizontal" size={18} color={colors.textPrimary} />
-            </TouchableOpacity>
+            <View style={s.topActions}>
+              <TouchableOpacity style={s.roundNav} onPress={() => router.push('/(tabs)/messages' as any)}>
+                <Ionicons name="chatbubble-outline" size={20} color="#FFFFFF" />
+              </TouchableOpacity>
+              <TouchableOpacity style={s.roundNav} onPress={() => setShowMore(true)}>
+                <Ionicons name="ellipsis-horizontal" size={22} color="#FFFFFF" />
+              </TouchableOpacity>
+            </View>
           </View>
-        </View>
 
-        {/* More menu - floating dropdown */}
-        <Modal visible={showMore} transparent animationType="fade" onRequestClose={() => setShowMore(false)}>
-          <Pressable style={styles.menuOverlay} onPress={() => setShowMore(false)}>
-            <View style={styles.floatingMenu}>
-              {(() => {
-                const items = [
-                  { icon: 'library-outline', label: 'My Library', color: colors.textPrimary, route: '/library' },
-                  ...(user?.is_admin ? [
-                    { icon: 'shield-checkmark-outline', label: 'Governance Dashboard', color: '#EF4444', route: '__governance__' },
-                  ] : []),
-                  { icon: 'settings-outline', label: 'Settings', color: colors.textSecondary, route: '/settings' },
-                  { icon: 'log-out-outline', label: 'Logout', color: '#EF4444', route: '__logout__' },
-                ];
-                return items.map((item, idx) => (
-                  <TouchableOpacity
-                    key={item.label}
-                    style={[styles.floatingMenuItem, idx === items.length - 1 && { borderBottomWidth: 0 }]}
-                    onPress={() => {
-                      setShowMore(false);
-                      if (item.route === '__logout__') {
-                        handleLogout();
-                      } else if (item.route === '__governance__') {
-                        const baseUrl = process.env.EXPO_PUBLIC_BACKEND_URL || 'https://flames-up-preview.preview.emergentagent.com';
-                        Linking.openURL(`${baseUrl}/api/gov/`);
-                      } else {
-                        router.push(item.route as any);
-                      }
-                    }}
-                  >
-                    <Ionicons name={item.icon as any} size={20} color={item.color} />
-                    <Text style={[styles.floatingMenuText, item.route === '__logout__' && { color: '#EF4444' }]}>{item.label}</Text>
-                    {item.route === '__governance__' && (
-                      <Ionicons name="open-outline" size={14} color="#999" style={{ marginLeft: 'auto' }} />
-                    )}
-                  </TouchableOpacity>
-                ));
-              })()}
-            </View>
-          </Pressable>
-        </Modal>
-
-        {/* Profile Card */}
-        <View style={styles.profileCard}>
-          {/* Banner overlay */}
-          <View style={styles.bannerOverlay} />
-
-          {/* Avatar + Info */}
-          <View style={styles.profileRow}>
-            <View style={styles.avatarContainer}>
-              {user.profile_image ? (
-                <Image source={{ uri: user.profile_image }} style={styles.avatar} />
-              ) : (
-                <View style={styles.avatarPlaceholder}>
-                  <Text style={styles.avatarText}>
-                    {(user.full_name || 'U')[0].toUpperCase()}
-                  </Text>
-                </View>
-              )}
-            </View>
-            <View style={styles.profileInfo}>
-              <Text style={styles.fullName}>{user.full_name}</Text>
-              <Text style={styles.username}>{user.username ? `@${user.username}` : `@${user.email?.split('@')[0]}`}</Text>
-              <View style={styles.tagRow}>
-                {interests.slice(0, 2).map((item: string) => (
-                  <View key={item} style={styles.tag}>
-                    <Text style={styles.tagText}>{item}</Text>
-                  </View>
-                ))}
+          <View style={s.identityBlock}>
+            <View style={s.avatarRow}>
+              <View style={s.avatar}>
+                {user.profile_image ? (
+                  <Image source={{ uri: user.profile_image }} style={s.avatarImage} />
+                ) : (
+                  <Text style={s.avatarInitial}>{displayName[0]?.toUpperCase() || 'F'}</Text>
+                )}
+              </View>
+              <View style={s.smallBadge}>
+                <Text style={s.smallBadgeText}>🌍</Text>
               </View>
             </View>
-          </View>
 
-          {/* Bio */}
-          {user.bio ? (
-            <View style={styles.bioCard}>
-              <Text style={styles.bioText}>{user.bio}</Text>
-            </View>
-          ) : (
-            <TouchableOpacity style={styles.bioCardEmpty} onPress={() => router.push('/edit-profile')}>
-              <Ionicons name="create-outline" size={16} color="#9CA3AF" />
-              <Text style={styles.bioEmptyText}>Tap to add your bio</Text>
-            </TouchableOpacity>
-          )}
+            <Text style={s.name}>{displayName}</Text>
+            <Text style={s.meta}>iAm  @{username}  ·  {location}</Text>
 
-          {/* Stats row */}
-          <View style={styles.statsRow}>
-            <TouchableOpacity style={styles.statItem}>
-              <Text style={styles.statValue}>{stats.posts}</Text>
-              <Text style={styles.statLabel}>Posts</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.statItem}>
-              <Text style={styles.statValue}>{stats.followers}</Text>
-              <Text style={styles.statLabel}>Followers</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.statItem}>
-              <Text style={styles.statValue}>{stats.following}</Text>
-              <Text style={styles.statLabel}>Following</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-
-        {/* Personal Info Section */}
-        {(personalInfo.age || personalInfo.borough) ? (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>PERSONAL INFO</Text>
-            <View style={styles.infoCard}>
-              {personalInfo.age ? (
-                <View style={styles.infoRow}>
-                  <Text style={styles.infoLabel}>Age</Text>
-                  <Text style={styles.infoValue}>{personalInfo.age}</Text>
-                </View>
-              ) : null}
-              {personalInfo.borough ? (
-                <View style={[styles.infoRow, { borderBottomWidth: 0 }]}>
-                  <Text style={styles.infoLabel}>Location</Text>
-                  <Text style={styles.infoValue}>{personalInfo.borough}</Text>
-                </View>
-              ) : null}
-            </View>
-          </View>
-        ) : null}
-
-        {/* Looking For Section */}
-        {lookingFor.length > 0 ? (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>LOOKING FOR</Text>
-            <View style={styles.chipContainer}>
-              {lookingFor.map((item: string) => (
-                <View key={item} style={styles.chipLight}>
-                  <Text style={styles.chipLightText}>{item}</Text>
-                </View>
-              ))}
-            </View>
-          </View>
-        ) : null}
-
-        {/* Interests Section */}
-        {interests.length > 0 ? (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>INTERESTS</Text>
-            <View style={styles.chipContainer}>
-              {interests.map((item: string) => (
-                <View key={item} style={styles.interestChip}>
-                  <Text style={styles.interestChipText}>{item}</Text>
-                </View>
-              ))}
-            </View>
-          </View>
-        ) : null}
-
-        {/* Social Links */}
-        {(user.social_website || user.social_tiktok || user.social_instagram) ? (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>SOCIAL</Text>
-            <View style={styles.socialIcons}>
-              {user.social_instagram ? (
-                <TouchableOpacity style={styles.socialIconBtn} onPress={() => Linking.openURL(`https://instagram.com/${user.social_instagram}`)}>
-                  <View style={[styles.socialIconCircle, { backgroundColor: '#FCEEF3' }]}>
-                    <Ionicons name="logo-instagram" size={22} color="#E1306C" />
-                  </View>
-                  <Text style={styles.socialIconLabel}>Instagram</Text>
-                </TouchableOpacity>
-              ) : null}
-              {user.social_tiktok ? (
-                <TouchableOpacity style={styles.socialIconBtn} onPress={() => Linking.openURL(`https://tiktok.com/@${user.social_tiktok}`)}>
-                  <View style={[styles.socialIconCircle, { backgroundColor: '#F0F0F0' }]}>
-                    <Ionicons name="logo-tiktok" size={22} color="#1A1A1A" />
-                  </View>
-                  <Text style={styles.socialIconLabel}>TikTok</Text>
-                </TouchableOpacity>
-              ) : null}
-              {user.social_website ? (
-                <TouchableOpacity style={styles.socialIconBtn} onPress={() => Linking.openURL(user.social_website.startsWith('http') ? user.social_website : `https://${user.social_website}`)}>
-                  <View style={[styles.socialIconCircle, { backgroundColor: '#E8F4FD' }]}>
-                    <Ionicons name="globe-outline" size={22} color="#0EA5E9" />
-                  </View>
-                  <Text style={styles.socialIconLabel}>Website</Text>
-                </TouchableOpacity>
-              ) : null}
-            </View>
-          </View>
-        ) : null}
-
-        {/* Action Buttons */}
-        <View style={styles.actionRow}>
-          <TouchableOpacity
-            style={styles.editBtn}
-            onPress={() => router.push('/edit-profile')}
-          >
-            <Ionicons name="create-outline" size={16} color="#1A1A1A" />
-            <Text style={styles.editBtnText}>Edit Profile</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.shareBtn}>
-            <Ionicons name="share-outline" size={16} color="#1A1A1A" />
-          </TouchableOpacity>
-        </View>
-
-        {/* Posts Grid */}
-        <View style={styles.postsSection}>
-          <Text style={styles.postsSectionTitle}>Posts</Text>
-          {posts.length === 0 ? (
-            <View style={styles.emptyPosts}>
-              <Ionicons name="camera-outline" size={48} color={colors.textHint} />
-              <Text style={styles.emptyText}>No posts yet</Text>
-            </View>
-          ) : (
-            <View style={styles.postsGrid}>
-              {posts.map((post) => (
-                <TouchableOpacity
-                  key={post.id}
-                  style={styles.postThumbnail}
-                  onPress={() => router.push(`/post/${post.id}`)}
-                >
-                  {post.image ? (
-                    <MediaPreview
-                      uri={post.image}
-                      mediaTypes={post.media_types}
-                      style={styles.thumbnailImage}
-                    />
-                  ) : (
-                    <View style={styles.textThumbnail}>
-                      <Text style={styles.textThumbnailContent} numberOfLines={3}>
-                        {post.content}
-                      </Text>
+            <View style={s.supportRow}>
+              <View style={s.supportAvatars}>
+                {posts.slice(0, 3).map((post, index) => {
+                  const media = getPostMedia(post);
+                  return (
+                    <View key={post.id || index} style={[s.supportAvatar, { marginLeft: index === 0 ? 0 : -10 }]}>
+                      {media ? <MediaPreview uri={media} mediaTypes={post.media_types} style={s.supportAvatarMedia} /> : <Text style={s.supportInitial}>{index + 1}</Text>}
                     </View>
-                  )}
-                </TouchableOpacity>
-              ))}
+                  );
+                })}
+              </View>
+              <View>
+                <Text style={s.supportCount}>{compact(stats.followers)}</Text>
+                <Text style={s.supportLabel}>Supporters</Text>
+              </View>
+              <TouchableOpacity style={s.primaryAction} onPress={() => router.push('/edit-profile' as any)}>
+                <Text style={s.primaryActionText}>Edit</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={s.secondaryAction}>
+                <Text style={s.secondaryActionText}>Share</Text>
+              </TouchableOpacity>
             </View>
-          )}
+          </View>
+        </View>
+
+        <View style={s.profileTabs}>
+          <TouchableOpacity style={[s.profileTab, s.profileTabOn]}>
+            <Ionicons name="bag-outline" size={22} color="#DFFF32" />
+          </TouchableOpacity>
+          <TouchableOpacity style={s.profileTab} onPress={() => router.push('/(tabs)/messages' as any)}>
+            <Ionicons name="chatbubbles-outline" size={22} color="rgba(255,255,255,0.74)" />
+          </TouchableOpacity>
+          <TouchableOpacity style={s.profileTab}>
+            <Ionicons name="grid-outline" size={22} color="rgba(255,255,255,0.74)" />
+          </TouchableOpacity>
+        </View>
+
+        {user.bio ? (
+          <Text style={s.bio}>{user.bio}</Text>
+        ) : null}
+
+        <View style={s.grid}>
+          {posts.length === 0 ? (
+            <View style={s.emptyPosts}>
+              <Ionicons name="camera-outline" size={42} color="rgba(255,255,255,0.42)" />
+              <Text style={s.emptyText}>No posts yet</Text>
+            </View>
+          ) : posts.map((post) => {
+            const media = getPostMedia(post);
+            return (
+              <TouchableOpacity
+                key={post.id}
+                style={s.tile}
+                activeOpacity={0.9}
+                onPress={() => {
+                  cachePostForDetail(post);
+                  setPostDetailFeedContext(posts.map((item) => item.id));
+                  router.push(`/post/${post.id}` as any);
+                }}
+              >
+                {media ? (
+                  <MediaPreview uri={media} mediaTypes={post.media_types} style={s.tileMedia} />
+                ) : (
+                  <View style={s.textTile}>
+                    <Text style={s.textTileText} numberOfLines={5}>{post.content || 'Post'}</Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+            );
+          })}
         </View>
       </ScrollView>
-    </SafeAreaView>
+
+      <Modal visible={showMore} transparent animationType="fade" onRequestClose={() => setShowMore(false)}>
+        <Pressable style={s.menuOverlay} onPress={() => setShowMore(false)}>
+          <View style={[s.menu, { top: insets.top + 54 }]}>
+            <MenuItem icon="library-outline" label="My Library" onPress={() => router.push('/library' as any)} />
+            {user?.is_admin ? (
+              <MenuItem icon="shield-checkmark-outline" label="Governance Mobile" onPress={() => Alert.alert('Governance Mobile', 'Open the separate Governance Mobile app for moderation.')} />
+            ) : null}
+            <MenuItem icon="settings-outline" label="Settings" onPress={() => router.push('/settings' as any)} />
+            {user.social_website ? (
+              <MenuItem icon="globe-outline" label="Open website" onPress={() => Linking.openURL(user.social_website!.startsWith('http') ? user.social_website! : `https://${user.social_website}`)} />
+            ) : null}
+            <MenuItem danger icon="log-out-outline" label="Logout" onPress={handleLogout} />
+          </View>
+        </Pressable>
+      </Modal>
+    </View>
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.bgApp,
-  },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: colors.bgApp,
-  },
-  // Header
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-  },
-  headerTitle: {
-    fontSize: 24,
-    fontWeight: '600',
-    color: colors.textPrimary,
-    fontStyle: 'italic',
-  },
-  headerActions: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  headerBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: 'rgba(255,255,255,0.9)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: colors.borderLight,
-    ...shadows.elevation1,
-  },
-  // More menu - old styles kept for compatibility, new floating styles added
-  moreMenu: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    marginHorizontal: 16,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: colors.borderLight,
-    overflow: 'hidden',
-    ...shadows.elevation2,
-  },
-  moreItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.borderLight,
-  },
-  moreItemText: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: colors.textPrimary,
-  },
-  // Floating popup menu
-  menuOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.15)',
-  },
-  floatingMenu: {
-    position: 'absolute',
-    top: 56,
-    right: 16,
-    width: 220,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    paddingVertical: 6,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.15,
-    shadowRadius: 24,
-    elevation: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(0,0,0,0.06)',
-  },
-  floatingMenuItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 13,
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(0,0,0,0.05)',
-  },
-  floatingMenuText: {
-    fontSize: 15,
-    fontWeight: '500',
-    color: colors.textPrimary,
-  },
-  // Profile Card
-  profileCard: {
-    marginHorizontal: 16,
-    borderRadius: 28,
-    backgroundColor: colors.bgCard,
-    borderWidth: 1,
-    borderColor: colors.borderLight,
-    padding: 16,
-    overflow: 'hidden',
-    ...shadows.elevation2,
-  },
-  bannerOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: 100,
-    backgroundColor: colors.accentPrimaryLight,
-    opacity: 0.3,
-  },
-  profileRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 16,
-    paddingTop: 8,
-    marginBottom: 16,
-  },
-  avatarContainer: {
-    width: 96,
-    height: 96,
-    borderRadius: 48,
-    borderWidth: 3,
-    borderColor: colors.bgCard,
-    overflow: 'hidden',
-    ...shadows.elevation2,
-  },
-  avatar: {
-    width: '100%',
-    height: '100%',
-  },
-  avatarPlaceholder: {
-    width: '100%',
-    height: '100%',
-    backgroundColor: colors.bgSubtle,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  avatarText: {
-    fontSize: 36,
-    fontWeight: '700',
-    color: colors.accentPrimary,
-  },
-  profileInfo: {
-    flex: 1,
-    paddingTop: 8,
-  },
-  fullName: {
-    fontSize: 26,
-    fontWeight: '700',
-    color: colors.textPrimary,
-    fontStyle: 'italic',
-    lineHeight: 32,
-  },
-  username: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: colors.textHint,
-    marginTop: 2,
-  },
-  tagRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginTop: 8,
-  },
-  tag: {
-    backgroundColor: '#d9eef7',
-    paddingHorizontal: 12,
-    paddingVertical: 4,
-    borderRadius: 12,
-  },
-  tagText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#2d5b7c',
-  },
-  // Bio
-  bioCard: {
-    backgroundColor: colors.bgSubtle,
-    borderRadius: 20,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: colors.borderSubtle,
-  },
-  bioCardEmpty: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    backgroundColor: colors.bgSubtle,
-    borderRadius: 20,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: colors.borderSubtle,
-    borderStyle: 'dashed',
-  },
-  bioEmptyText: {
-    fontSize: 13,
-    color: '#9CA3AF',
-    fontWeight: '500',
-  },
-  bioText: {
-    fontSize: 14,
-    color: colors.textPrimary,
-    lineHeight: 20,
-    fontWeight: '500',
-  },
-  // Stats
-  statsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    paddingTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: colors.borderSubtle,
-  },
-  statItem: {
-    alignItems: 'center',
-  },
-  statValue: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: colors.textPrimary,
-  },
-  statLabel: {
-    fontSize: 12,
-    color: colors.textHint,
-    marginTop: 2,
-  },
-  // Sections
-  section: {
-    marginHorizontal: 16,
-    marginTop: 20,
-  },
-  sectionTitle: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: colors.textPrimary,
-    letterSpacing: 0.5,
-    marginBottom: 12,
-  },
-  infoCard: {
-    backgroundColor: colors.bgCard,
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: colors.borderSubtle,
-    overflow: 'hidden',
-  },
-  infoRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.borderSubtle,
-  },
-  infoLabel: {
-    fontSize: 15,
-    color: colors.textSecondary,
-  },
-  infoValue: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: colors.textPrimary,
-  },
-  chipContainer: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  chipLight: {
-    backgroundColor: colors.bgCard,
-    borderWidth: 1,
-    borderColor: colors.borderLight,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 16,
-  },
-  chipLightText: {
-    fontSize: 13,
-    color: colors.textSecondary,
-    fontWeight: '500',
-  },
-  interestChip: {
-    backgroundColor: '#d9eef7',
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 16,
-  },
-  interestChipText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#2d5b7c',
-  },
-  // Social links
-  socialIcons: {
-    flexDirection: 'row',
-    gap: 20,
-  },
-  socialIconBtn: {
-    alignItems: 'center',
-    gap: 6,
-  },
-  socialIconCircle: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: colors.borderSubtle,
-  },
-  socialIconLabel: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: colors.textHint,
-  },
-  // Actions
-  actionRow: {
-    flexDirection: 'row',
-    gap: 10,
-    marginHorizontal: 16,
-    marginTop: 20,
-  },
-  editBtn: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    backgroundColor: '#F5F5F5',
-    paddingVertical: 12,
-    borderRadius: 12,
-  },
-  editBtnText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#1A1A1A',
-  },
-  shareBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 12,
-    backgroundColor: '#F5F5F5',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  // Posts Grid
-  postsSection: {
-    paddingHorizontal: 16,
-    marginTop: 24,
-  },
-  postsSectionTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: colors.textPrimary,
-    fontStyle: 'italic',
-    marginBottom: 16,
-  },
-  emptyPosts: {
-    alignItems: 'center',
-    paddingVertical: 40,
-  },
-  emptyText: {
-    fontSize: 14,
-    color: colors.textHint,
-    marginTop: 8,
-  },
-  postsGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 12,
-  },
-  postThumbnail: {
-    width: (SCREEN_WIDTH - 32 - 12) / 2,
-    aspectRatio: 1,
-    borderRadius: 20,
-    overflow: 'hidden',
-    backgroundColor: colors.bgCard,
-    borderWidth: 1,
-    borderColor: colors.borderLight,
-    ...shadows.elevation1,
-  },
-  thumbnailImage: {
-    width: '100%',
-    height: '100%',
-  },
-  textThumbnail: {
-    flex: 1,
-    backgroundColor: colors.bgSubtle,
-    padding: 12,
-    justifyContent: 'center',
-  },
-  textThumbnailContent: {
-    fontSize: 11,
-    color: colors.textSecondary,
-    lineHeight: 15,
-  },
+function MenuItem({
+  danger,
+  icon,
+  label,
+  onPress,
+}: {
+  danger?: boolean;
+  icon: keyof typeof Ionicons.glyphMap;
+  label: string;
+  onPress: () => void;
+}) {
+  return (
+    <TouchableOpacity style={s.menuItem} onPress={onPress}>
+      <Ionicons name={icon} size={20} color={danger ? '#FF5A5F' : '#FFFFFF'} />
+      <Text style={[s.menuItemText, danger && s.menuItemTextDanger]}>{label}</Text>
+    </TouchableOpacity>
+  );
+}
+
+const s = StyleSheet.create({
+  root: { flex: 1, backgroundColor: '#050505' },
+  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#050505' },
+  hero: { height: Math.max(520, SCREEN_WIDTH * 1.52), backgroundColor: '#111111', overflow: 'hidden' },
+  heroMedia: { ...StyleSheet.absoluteFillObject },
+  heroFallback: { ...StyleSheet.absoluteFillObject, backgroundColor: '#171717' },
+  heroDim: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.42)' },
+  topbar: { position: 'absolute', left: 18, right: 18, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  topActions: { flexDirection: 'row', gap: 10 },
+  roundNav: { width: 42, height: 42, borderRadius: 21, backgroundColor: 'rgba(0,0,0,0.32)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.16)', alignItems: 'center', justifyContent: 'center' },
+  identityBlock: { position: 'absolute', left: 22, right: 22, bottom: 30 },
+  avatarRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
+  avatar: { width: 62, height: 62, borderRadius: 31, borderWidth: 2, borderColor: '#FFFFFF', backgroundColor: '#FFFFFF', overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
+  avatarImage: { width: '100%', height: '100%' },
+  avatarInitial: { color: '#111111', fontSize: 26, fontWeight: '900' },
+  smallBadge: { width: 54, height: 54, borderRadius: 27, marginLeft: -8, backgroundColor: '#6ED3FF', borderWidth: 2, borderColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center' },
+  smallBadgeText: { fontSize: 28 },
+  name: { color: '#FFFFFF', fontSize: 47, lineHeight: 49, fontWeight: '900', letterSpacing: 0 },
+  meta: { color: 'rgba(255,255,255,0.78)', fontSize: 14, lineHeight: 18, fontWeight: '800', marginTop: 6 },
+  supportRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 20 },
+  supportAvatars: { flexDirection: 'row', minWidth: 66 },
+  supportAvatar: { width: 32, height: 32, borderRadius: 16, borderWidth: 1.5, borderColor: '#FFFFFF', backgroundColor: '#222222', overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
+  supportAvatarMedia: { width: '100%', height: '100%' },
+  supportInitial: { color: '#FFFFFF', fontSize: 12, fontWeight: '900' },
+  supportCount: { color: '#FFFFFF', fontSize: 21, lineHeight: 23, fontWeight: '900', fontVariant: ['tabular-nums'] },
+  supportLabel: { color: 'rgba(255,255,255,0.72)', fontSize: 11, fontWeight: '700' },
+  primaryAction: { marginLeft: 'auto', width: 70, height: 70, borderRadius: 35, backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center' },
+  primaryActionText: { color: '#111111', fontSize: 12, fontWeight: '900' },
+  secondaryAction: { width: 70, height: 70, borderRadius: 35, borderWidth: 1.4, borderColor: 'rgba(255,255,255,0.26)', backgroundColor: 'rgba(0,0,0,0.22)', alignItems: 'center', justifyContent: 'center' },
+  secondaryActionText: { color: '#FFFFFF', fontSize: 12, fontWeight: '900' },
+  profileTabs: { height: 58, marginTop: -1, flexDirection: 'row', backgroundColor: '#080808', borderTopWidth: 1, borderBottomWidth: 1, borderColor: 'rgba(255,255,255,0.08)' },
+  profileTab: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  profileTabOn: { backgroundColor: '#171717' },
+  bio: { color: 'rgba(255,255,255,0.78)', fontSize: 14, lineHeight: 20, fontWeight: '700', paddingHorizontal: 16, paddingVertical: 16 },
+  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: GRID_GAP, backgroundColor: '#050505' },
+  tile: { width: TILE_SIZE, height: TILE_SIZE, overflow: 'hidden', backgroundColor: '#161616' },
+  tileMedia: { width: '100%', height: '100%' },
+  textTile: { flex: 1, padding: 10, justifyContent: 'center', backgroundColor: '#191919' },
+  textTileText: { color: '#FFFFFF', fontSize: 12, lineHeight: 16, fontWeight: '800' },
+  emptyPosts: { width: SCREEN_WIDTH, minHeight: 170, alignItems: 'center', justifyContent: 'center', gap: 8 },
+  emptyText: { color: 'rgba(255,255,255,0.56)', fontSize: 14, fontWeight: '800' },
+  menuOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.36)' },
+  menu: { position: 'absolute', right: 14, width: 236, borderRadius: 18, backgroundColor: 'rgba(16,16,16,0.96)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.12)', overflow: 'hidden' },
+  menuItem: { minHeight: 52, flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.08)' },
+  menuItemText: { color: '#FFFFFF', fontSize: 15, fontWeight: '800' },
+  menuItemTextDanger: { color: '#FF5A5F' },
 });

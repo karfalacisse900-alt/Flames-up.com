@@ -65,7 +65,7 @@ export default function EventDetailScreen() {
     if (!placeId) return;
     setLoadingPlace(true);
     try {
-      const response = await api.get(`/google-places/${encodeURIComponent(placeId)}`);
+      const response = await api.get(`/mapbox-places/${encodeURIComponent(placeId)}`);
       setPlace(response.data);
     } catch (error) {
       console.log('Error loading event place:', error);

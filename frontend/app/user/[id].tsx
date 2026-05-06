@@ -1,26 +1,29 @@
-import React, { useState, useEffect } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
-  Image,
   ActivityIndicator,
-  RefreshControl,
-  Dimensions,
   Alert,
+  Dimensions,
   Modal,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter, useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, shadows } from '../../src/utils/theme';
-import { useAuthStore } from '../../src/store/authStore';
-import api from '../../src/api/client';
+
 import MediaPreview from '../../src/components/MediaPreview';
+import api from '../../src/api/client';
+import { useAuthStore } from '../../src/store/authStore';
+import { cachePostForDetail, cachePostsForDetail, setPostDetailFeedContext } from '../../src/store/postDetailCache';
+import { colors } from '../../src/utils/theme';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const TILE_SIZE = Math.floor((SCREEN_WIDTH - 4) / 3);
 
 const REPORT_REASONS = [
   { id: 'spam', label: 'Spam' },
@@ -30,8 +33,34 @@ const REPORT_REASONS = [
   { id: 'other', label: 'Other' },
 ];
 
+function parseImages(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map(String).filter(Boolean);
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) return parsed.map(String).filter(Boolean);
+    } catch {}
+    return value ? [value] : [];
+  }
+  return [];
+}
+
+function getPostMedia(post: any) {
+  return [post?.image, ...parseImages(post?.images)]
+    .map((item) => String(item || '').trim())
+    .find(Boolean) || '';
+}
+
+function compact(value: unknown) {
+  const count = Math.max(0, Number(value || 0));
+  if (count >= 1000000) return `${(count / 1000000).toFixed(1).replace(/\.0$/, '')}M`;
+  if (count >= 1000) return `${(count / 1000).toFixed(1).replace(/\.0$/, '')}K`;
+  return String(Math.round(count));
+}
+
 export default function UserProfileScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { id: userId } = useLocalSearchParams<{ id: string }>();
   const { user: currentUser } = useAuthStore();
   const [userProfile, setUserProfile] = useState<any>(null);
@@ -42,36 +71,37 @@ export default function UserProfileScreen() {
   const [isFollowLoading, setIsFollowLoading] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
   const [showReport, setShowReport] = useState(false);
-  const [friendStatus, setFriendStatus] = useState<string>('none');
+  const [friendStatus, setFriendStatus] = useState('none');
   const [friendRequestId, setFriendRequestId] = useState<string | null>(null);
   const [friendLoading, setFriendLoading] = useState(false);
 
-  useEffect(() => {
-    loadUserData();
-  }, [userId]);
-
-  const loadUserData = async () => {
+  const loadUserData = useCallback(async () => {
     try {
       const [userRes, postsRes] = await Promise.all([
         api.get(`/users/${userId}`),
         api.get(`/users/${userId}/posts`),
       ]);
+      const nextPosts = Array.isArray(postsRes.data) ? postsRes.data : [];
+      cachePostsForDetail(nextPosts);
       setUserProfile(userRes.data);
-      setPosts(postsRes.data);
-      setIsFollowing(userRes.data.is_following);
-      
-      // Load friendship status
+      setPosts(nextPosts);
+      setIsFollowing(!!userRes.data?.is_following);
+
       try {
         const friendRes = await api.get(`/friends/status/${userId}`);
-        setFriendStatus(friendRes.data.status);
-        if (friendRes.data.request_id) setFriendRequestId(friendRes.data.request_id);
+        setFriendStatus(friendRes.data.status || 'none');
+        setFriendRequestId(friendRes.data.request_id || null);
       } catch {}
-    } catch (error) {
-      console.log('Error loading user data:', error);
+    } catch {
+      setUserProfile(null);
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [userId]);
+
+  useEffect(() => {
+    void loadUserData();
+  }, [loadUserData]);
 
   const onRefresh = async () => {
     setIsRefreshing(true);
@@ -87,27 +117,11 @@ export default function UserProfileScreen() {
       setIsFollowing(response.data.following);
       setUserProfile((prev: any) => ({
         ...prev,
-        followers_count: prev.followers_count + (response.data.following ? 1 : -1),
+        followers_count: Math.max(0, Number(prev?.followers_count || 0) + (response.data.following ? 1 : -1)),
       }));
-    } catch (error) {
-      console.log('Error following user:', error);
     } finally {
       setIsFollowLoading(false);
     }
-  };
-
-  const handleReport = async (reason: string) => {
-    try {
-      await api.post('/reports', {
-        target_type: 'user',
-        target_id: userId,
-        reason,
-      });
-      Alert.alert('Report Submitted', 'Thank you for helping keep our community safe.');
-    } catch {
-      Alert.alert('Error', 'Could not submit report. Please try again.');
-    }
-    setShowReport(false);
   };
 
   const handleFriendRequest = async () => {
@@ -116,33 +130,23 @@ export default function UserProfileScreen() {
     try {
       if (friendStatus === 'none') {
         const res = await api.post(`/friends/request/${userId}`);
-        if (res.data.status === 'accepted') {
-          setFriendStatus('friends');
-          Alert.alert('Friends!', 'You are now friends!');
-        } else {
-          setFriendStatus('pending_sent');
-          setFriendRequestId(res.data.request_id);
-        }
-      } else if (friendStatus === 'pending_received' && friendRequestId) {
+        setFriendStatus(res.data.status || 'request_sent');
+        setFriendRequestId(res.data.request_id || res.data.id || null);
+      } else if ((friendStatus === 'request_received' || friendStatus === 'pending_received') && friendRequestId) {
         await api.post(`/friends/accept/${friendRequestId}`);
         setFriendStatus('friends');
-        Alert.alert('Friends!', 'You are now friends!');
       } else if (friendStatus === 'friends') {
-        Alert.alert(
-          'Remove Friend',
-          'Are you sure you want to remove this friend?',
-          [
-            { text: 'Cancel', style: 'cancel' },
-            {
-              text: 'Remove',
-              style: 'destructive',
-              onPress: async () => {
-                await api.delete(`/friends/${userId}`);
-                setFriendStatus('none');
-              },
+        Alert.alert('Remove Friend', 'Are you sure you want to remove this friend?', [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Remove',
+            style: 'destructive',
+            onPress: async () => {
+              await api.delete(`/friends/${userId}`);
+              setFriendStatus('none');
             },
-          ]
-        );
+          },
+        ]);
       }
     } catch (error: any) {
       Alert.alert('Error', error.response?.data?.detail || 'Something went wrong');
@@ -151,9 +155,30 @@ export default function UserProfileScreen() {
     }
   };
 
+  const handleReport = async (reason: string) => {
+    try {
+      await api.post('/reports', {
+        reported_type: 'user',
+        reported_id: userId,
+        report_type: 'user',
+        reason,
+        details: 'Reported from user profile.',
+      });
+      Alert.alert('Report Submitted', 'Thank you for helping keep the community safe.');
+    } catch {
+      Alert.alert('Error', 'Could not submit report. Please try again.');
+    } finally {
+      setShowReport(false);
+    }
+  };
+
+  const coverMedia = useMemo(() => (
+    userProfile?.cover_image || getPostMedia(posts[0]) || userProfile?.profile_image || ''
+  ), [posts, userProfile]);
+
   if (isLoading) {
     return (
-      <SafeAreaView style={s.loadingContainer}>
+      <SafeAreaView style={s.center}>
         <ActivityIndicator size="large" color={colors.accentPrimary} />
       </SafeAreaView>
     );
@@ -161,460 +186,272 @@ export default function UserProfileScreen() {
 
   if (!userProfile) {
     return (
-      <SafeAreaView style={s.loadingContainer}>
-        <Ionicons name="person-outline" size={56} color={colors.textHint} />
-        <Text style={{ fontSize: 16, color: colors.textHint, marginTop: 12 }}>User not found</Text>
-        <TouchableOpacity style={s.goBackBtn} onPress={() => router.back()}>
-          <Text style={s.goBackBtnText}>Go Back</Text>
+      <SafeAreaView style={s.center}>
+        <Ionicons name="person-outline" size={56} color="rgba(255,255,255,0.42)" />
+        <Text style={s.notFound}>User not found</Text>
+        <TouchableOpacity style={s.backPill} onPress={() => router.back()}>
+          <Text style={s.backPillText}>Go Back</Text>
         </TouchableOpacity>
       </SafeAreaView>
     );
   }
 
   const isOwnProfile = userId === currentUser?.id;
-  const interests: string[] = (() => {
-    try {
-      const raw = userProfile.interests;
-      if (Array.isArray(raw)) return raw;
-      if (typeof raw === 'string') return JSON.parse(raw);
-      return [];
-    } catch { return []; }
-  })();
-  const lookingFor: string[] = (() => {
-    try {
-      const raw = userProfile.looking_for;
-      if (Array.isArray(raw)) return raw;
-      if (typeof raw === 'string') return JSON.parse(raw);
-      return [];
-    } catch { return []; }
-  })();
-  const personalInfo = {
-    age: userProfile.age || '—',
-    borough: userProfile.location || '—',
-  };
+  const displayName = userProfile.full_name || userProfile.username || 'Flames';
+  const username = userProfile.username || userProfile.email?.split('@')[0] || 'profile';
+  const location = userProfile.city || userProfile.location || 'Flames-Up';
+  const isFriendPending = friendStatus === 'request_sent' || friendStatus === 'pending_sent';
+  const isFriendReceived = friendStatus === 'request_received' || friendStatus === 'pending_received';
 
   return (
-    <SafeAreaView style={s.container} edges={['top']}>
-      {/* Nav Header */}
-      <View style={s.header}>
-        <TouchableOpacity style={s.backBtn} onPress={() => router.back()}>
-          <Ionicons name="arrow-back" size={22} color={colors.textPrimary} />
-        </TouchableOpacity>
-        <Text style={s.headerTitle}>{userProfile.username || userProfile.full_name}</Text>
-        <TouchableOpacity style={s.menuBtn} onPress={() => setShowMenu(true)}>
-          <Ionicons name="ellipsis-horizontal" size={20} color={colors.textPrimary} />
-        </TouchableOpacity>
-      </View>
-
-      {/* Action Sheet */}
-      <Modal visible={showMenu} transparent animationType="fade" onRequestClose={() => setShowMenu(false)}>
-        <TouchableOpacity style={s.overlay} activeOpacity={1} onPress={() => setShowMenu(false)}>
-          <View style={s.sheet}>
-            <View style={s.sheetHandle} />
-            <TouchableOpacity style={s.sheetItem} onPress={() => { setShowMenu(false); setShowReport(true); }}>
-              <Ionicons name="flag-outline" size={22} color={colors.error} />
-              <Text style={[s.sheetItemText, { color: colors.error }]}>Report User</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={s.sheetItem} onPress={() => { setShowMenu(false); Alert.alert('Blocked', 'This user has been blocked.'); }}>
-              <Ionicons name="ban-outline" size={22} color={colors.textPrimary} />
-              <Text style={s.sheetItemText}>Block User</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={[s.sheetItem, { borderBottomWidth: 0 }]} onPress={() => { setShowMenu(false); }}>
-              <Ionicons name="share-outline" size={22} color={colors.textPrimary} />
-              <Text style={s.sheetItemText}>Share Profile</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={s.sheetCancel} onPress={() => setShowMenu(false)}>
-              <Text style={s.sheetCancelText}>Cancel</Text>
-            </TouchableOpacity>
-          </View>
-        </TouchableOpacity>
-      </Modal>
-
-      {/* Report Modal */}
-      <Modal visible={showReport} transparent animationType="slide" onRequestClose={() => setShowReport(false)}>
-        <TouchableOpacity style={s.overlay} activeOpacity={1} onPress={() => setShowReport(false)}>
-          <View style={s.reportSheet}>
-            <View style={s.sheetHandle} />
-            <Text style={s.reportTitle}>Report this user</Text>
-            <Text style={s.reportSubtitle}>Your report is anonymous.</Text>
-            {REPORT_REASONS.map((r) => (
-              <TouchableOpacity key={r.id} style={s.reportItem} onPress={() => handleReport(r.id)}>
-                <Text style={s.reportItemText}>{r.label}</Text>
-                <Ionicons name="chevron-forward" size={16} color={colors.textHint} />
-              </TouchableOpacity>
-            ))}
-          </View>
-        </TouchableOpacity>
-      </Modal>
-
+    <View style={s.root}>
       <ScrollView
-        refreshControl={
-          <RefreshControl refreshing={isRefreshing} onRefresh={onRefresh} tintColor={colors.accentPrimary} />
-        }
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingBottom: 100 }}
+        refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={onRefresh} tintColor="#FFFFFF" />}
+        contentContainerStyle={{ paddingBottom: 90 }}
       >
-        {/* Profile Card – matching own profile style */}
-        <View style={s.profileCard}>
-          <View style={s.bannerOverlay} />
-          <View style={s.profileRow}>
-            <View style={s.avatarContainer}>
-              {userProfile.profile_image ? (
-                <Image source={{ uri: userProfile.profile_image }} style={s.avatar} />
-              ) : (
-                <View style={s.avatarPlaceholder}>
-                  <Text style={s.avatarText}>
-                    {(userProfile.full_name || 'U')[0].toUpperCase()}
-                  </Text>
-                </View>
-              )}
+        <View style={s.hero}>
+          {coverMedia ? (
+            <MediaPreview uri={coverMedia} mediaTypes={posts[0]?.media_types} style={s.heroMedia} showVideoBadge={false} />
+          ) : (
+            <View style={s.heroFallback} />
+          )}
+          <View style={s.heroDim} />
+
+          <View style={[s.nav, { paddingTop: insets.top + 8 }]}>
+            <TouchableOpacity style={s.navBtn} onPress={() => router.back()}>
+              <Ionicons name="chevron-back" size={22} color="#FFFFFF" />
+            </TouchableOpacity>
+            <View style={s.navRight}>
+              <TouchableOpacity style={s.navBtn} onPress={() => router.push(`/conversation/${userId}` as any)}>
+                <Ionicons name="paper-plane-outline" size={20} color="#FFFFFF" />
+              </TouchableOpacity>
+              <TouchableOpacity style={s.navBtn} onPress={() => setShowMenu(true)}>
+                <Ionicons name="ellipsis-horizontal" size={22} color="#FFFFFF" />
+              </TouchableOpacity>
             </View>
-            <View style={s.profileInfo}>
-              <Text style={s.fullName}>{userProfile.full_name}</Text>
-              <Text style={s.username}>@{userProfile.username || userProfile.email?.split('@')[0]}</Text>
-              <View style={s.tagRow}>
-                {interests.slice(0, 2).map((item: string) => (
-                  <View key={item} style={s.tag}>
-                    <Text style={s.tagText}>{item}</Text>
-                  </View>
-                ))}
+          </View>
+
+          <View style={s.profileLanding}>
+            <View style={s.profileActionGrid}>
+              <TouchableOpacity
+                style={[s.profileActionTile, s.messageTile]}
+                activeOpacity={0.86}
+                onPress={() => router.push(`/conversation/${userId}` as any)}
+              >
+                <Ionicons name="chatbubble" size={23} color="#FFFFFF" />
+                <View>
+                  <Text style={s.messageTileText}>Send</Text>
+                  <Text style={s.messageTileText}>Message</Text>
+                </View>
+              </TouchableOpacity>
+              <View style={s.profileSmallGrid}>
+                <TouchableOpacity style={[s.profileActionTile, s.profileSmallTile]} activeOpacity={0.86}>
+                  <Ionicons name="logo-instagram" size={23} color="#FFFFFF" />
+                </TouchableOpacity>
+                <TouchableOpacity style={[s.profileActionTile, s.profileSmallTile]} activeOpacity={0.86}>
+                  <Ionicons name="logo-youtube" size={24} color="#FFFFFF" />
+                </TouchableOpacity>
+                <TouchableOpacity style={[s.profileActionTile, s.profileSmallTile]} activeOpacity={0.86}>
+                  <Ionicons name="logo-twitch" size={23} color="#FFFFFF" />
+                </TouchableOpacity>
+                <TouchableOpacity style={[s.profileActionTile, s.profileSmallTile]} activeOpacity={0.86}>
+                  <Text style={s.xIcon}>X</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            <View style={s.profileInfoCard}>
+              <View style={s.profileNameBlock}>
+                <Text style={s.profileFirstName} numberOfLines={1}>{displayName.split(' ')[0] || displayName}</Text>
+                <Text style={s.profileLastName} numberOfLines={1}>{displayName.split(' ').slice(1).join(' ') || `@${username}`}</Text>
+              </View>
+              <View style={s.profileAboutBlock}>
+                <Text style={s.profileAboutLabel}>About:</Text>
+                <Text style={s.profileAboutText} numberOfLines={4}>
+                  {userProfile.bio || `${location} creator sharing moments, sounds, and stories with the Flames community.`}
+                </Text>
+              </View>
+            </View>
+
+            <View style={s.profileBottomActions}>
+              {!isOwnProfile ? (
+                <>
+                  <TouchableOpacity style={[s.followMiniButton, isFollowing && s.followMiniButtonOn]} onPress={handleFollow} disabled={isFollowLoading}>
+                    {isFollowLoading ? <ActivityIndicator color="#111111" /> : <Text style={s.followMiniText}>{isFollowing ? 'Following' : 'Follow'}</Text>}
+                  </TouchableOpacity>
+                  <TouchableOpacity style={s.statsMiniPill} onPress={handleFriendRequest} disabled={friendLoading}>
+                    <Ionicons
+                      name={friendStatus === 'friends' ? 'people' : isFriendReceived ? 'checkmark-circle-outline' : isFriendPending ? 'hourglass-outline' : 'person-add-outline'}
+                      size={16}
+                      color="#FFFFFF"
+                    />
+                    <Text style={s.statsMiniText}>{friendStatus === 'friends' ? 'Friends' : isFriendReceived ? 'Accept' : isFriendPending ? 'Pending' : 'Friend'}</Text>
+                  </TouchableOpacity>
+                </>
+              ) : (
+                <TouchableOpacity style={s.followMiniButton} onPress={() => router.push('/edit-profile' as any)}>
+                  <Text style={s.followMiniText}>Edit profile</Text>
+                </TouchableOpacity>
+              )}
+              <View style={s.statsMiniPill}>
+                <Text style={s.statsMiniText}>{compact(userProfile.followers_count)} supporters</Text>
               </View>
             </View>
           </View>
-
-          {/* Bio */}
-          {(userProfile.bio || true) && (
-            <View style={s.bioCard}>
-              <Text style={s.bioText}>
-                {userProfile.bio || 'No bio yet.'}
-              </Text>
-            </View>
-          )}
-
-          {/* Stats */}
-          <View style={s.statsRow}>
-            <View style={s.statItem}>
-              <Text style={s.statValue}>{userProfile.posts_count || 0}</Text>
-              <Text style={s.statLabel}>Posts</Text>
-            </View>
-            <View style={s.statItem}>
-              <Text style={s.statValue}>{userProfile.followers_count || 0}</Text>
-              <Text style={s.statLabel}>Followers</Text>
-            </View>
-            <View style={s.statItem}>
-              <Text style={s.statValue}>{userProfile.following_count || 0}</Text>
-              <Text style={s.statLabel}>Following</Text>
-            </View>
-          </View>
         </View>
 
-        {/* Social Links */}
-        <View style={s.section}>
-          <View style={s.socialLinks}>
-            <TouchableOpacity style={s.socialLink}>
-              <Ionicons name="globe-outline" size={16} color={colors.accentPrimary} />
-              <Text style={s.socialLinkText}>Website</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={s.socialLink}>
-              <Ionicons name="musical-notes-outline" size={16} color={colors.error} />
-              <Text style={s.socialLinkText}>TikTok</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={s.socialLink}>
-              <Ionicons name="camera-outline" size={16} color={colors.avatarPurple} />
-              <Text style={s.socialLinkText}>Instagram</Text>
-            </TouchableOpacity>
-          </View>
+        <View style={s.tabs}>
+          <View style={[s.tab, s.tabOn]}><Ionicons name="bag-outline" size={22} color="#DFFF32" /></View>
+          <View style={s.tab}><Ionicons name="chatbubbles-outline" size={22} color="rgba(255,255,255,0.72)" /></View>
+          <View style={s.tab}><Ionicons name="grid-outline" size={22} color="rgba(255,255,255,0.72)" /></View>
         </View>
 
-        {/* Action Buttons */}
-        {!isOwnProfile && (
-          <View style={s.actionRow}>
-            <TouchableOpacity
-              style={[s.followBtn, isFollowing && s.followingBtn]}
-              onPress={handleFollow}
-              disabled={isFollowLoading}
-            >
-              {isFollowLoading ? (
-                <ActivityIndicator size="small" color={isFollowing ? colors.accentPrimary : '#FFFFFF'} />
-              ) : (
-                <>
-                  <Ionicons
-                    name={isFollowing ? 'checkmark-outline' : 'person-add-outline'}
-                    size={18}
-                    color={isFollowing ? colors.accentPrimary : '#FFFFFF'}
-                  />
-                  <Text style={[s.followBtnText, isFollowing && s.followingBtnText]}>
-                    {isFollowing ? 'Following' : 'Follow'}
-                  </Text>
-                </>
-              )}
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[
-                s.friendBtn,
-                friendStatus === 'friends' && s.friendBtnActive,
-                friendStatus === 'pending_sent' && s.friendBtnPending,
-              ]}
-              onPress={handleFriendRequest}
-              disabled={friendLoading}
-            >
-              {friendLoading ? (
-                <ActivityIndicator size="small" color={colors.accentPrimary} />
-              ) : (
-                <>
-                  <Ionicons
-                    name={
-                      friendStatus === 'friends' ? 'people' :
-                      friendStatus === 'pending_sent' ? 'hourglass-outline' :
-                      friendStatus === 'pending_received' ? 'checkmark-circle-outline' :
-                      'person-add-outline'
-                    }
-                    size={18}
-                    color={friendStatus === 'friends' ? '#22C55E' : colors.accentPrimary}
-                  />
-                  <Text style={[
-                    s.friendBtnText,
-                    friendStatus === 'friends' && { color: '#22C55E' },
-                  ]}>
-                    {friendStatus === 'friends' ? 'Friends' :
-                     friendStatus === 'pending_sent' ? 'Pending' :
-                     friendStatus === 'pending_received' ? 'Accept' :
-                     'Add Friend'}
-                  </Text>
-                </>
-              )}
-            </TouchableOpacity>
-          </View>
-        )}
-        {!isOwnProfile && (
-          <View style={[s.actionRow, { marginTop: 8 }]}>
-            <TouchableOpacity
-              style={s.messageBtn}
-              onPress={() => router.push(`/conversation/${userId}` as any)}
-            >
-              <Ionicons name="chatbubble-outline" size={18} color={colors.accentPrimary} />
-              <Text style={s.messageBtnText}>Message</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {/* Posts Grid */}
-        <View style={s.postsSection}>
-          <Text style={s.postsSectionTitle}>Posts</Text>
+        <View style={s.grid}>
           {posts.length === 0 ? (
             <View style={s.emptyPosts}>
-              <Ionicons name="camera-outline" size={48} color={colors.textHint} />
+              <Ionicons name="camera-outline" size={44} color="rgba(255,255,255,0.42)" />
               <Text style={s.emptyText}>No posts yet</Text>
             </View>
-          ) : (
-            <View style={s.postsGrid}>
-              {posts.map((post) => (
-                <TouchableOpacity
-                  key={post.id}
-                  style={s.postThumbnail}
-                  onPress={() => router.push(`/post/${post.id}`)}
-                >
-                  {post.image ? (
-                    <MediaPreview uri={post.image} mediaTypes={post.media_types} style={s.thumbnailImage} />
-                  ) : (
-                    <View style={s.textThumbnail}>
-                      <Text style={s.textThumbnailContent} numberOfLines={3}>
-                        {post.content}
-                      </Text>
-                    </View>
-                  )}
-                </TouchableOpacity>
-              ))}
-            </View>
-          )}
+          ) : posts.map((post) => {
+            const media = getPostMedia(post);
+            return (
+              <TouchableOpacity
+                key={post.id}
+                style={s.tile}
+                activeOpacity={0.9}
+                onPress={() => {
+                  cachePostForDetail(post);
+                  setPostDetailFeedContext(posts.map((item) => item.id));
+                  router.push(`/post/${post.id}` as any);
+                }}
+              >
+                {media ? (
+                  <MediaPreview uri={media} mediaTypes={post.media_types} style={s.tileMedia} />
+                ) : (
+                  <View style={s.textTile}>
+                    <Text style={s.textTileText} numberOfLines={5}>{post.content || 'Post'}</Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+            );
+          })}
         </View>
       </ScrollView>
-    </SafeAreaView>
+
+      <Modal visible={showMenu} transparent animationType="fade" onRequestClose={() => setShowMenu(false)}>
+        <Pressable style={s.overlay} onPress={() => setShowMenu(false)}>
+          <View style={[s.menu, { top: insets.top + 54 }]}>
+            <MenuItem icon="flag-outline" label="Report User" danger onPress={() => { setShowMenu(false); setShowReport(true); }} />
+            <MenuItem icon="ban-outline" label="Block User" onPress={() => { setShowMenu(false); Alert.alert('Blocked', 'This user has been blocked.'); }} />
+            <MenuItem icon="share-outline" label="Share Profile" onPress={() => setShowMenu(false)} />
+          </View>
+        </Pressable>
+      </Modal>
+
+      <Modal visible={showReport} transparent animationType="slide" onRequestClose={() => setShowReport(false)}>
+        <Pressable style={s.reportOverlay} onPress={() => setShowReport(false)}>
+          <Pressable style={[s.reportSheet, { paddingBottom: insets.bottom + 18 }]}>
+            <View style={s.sheetHandle} />
+            <Text style={s.reportTitle}>Report this user</Text>
+            <Text style={s.reportSubtitle}>Your report is anonymous.</Text>
+            {REPORT_REASONS.map((reason) => (
+              <TouchableOpacity key={reason.id} style={s.reportItem} onPress={() => handleReport(reason.id)}>
+                <Text style={s.reportItemText}>{reason.label}</Text>
+                <Ionicons name="chevron-forward" size={16} color="rgba(255,255,255,0.42)" />
+              </TouchableOpacity>
+            ))}
+          </Pressable>
+        </Pressable>
+      </Modal>
+    </View>
+  );
+}
+
+function MenuItem({ danger, icon, label, onPress }: { danger?: boolean; icon: keyof typeof Ionicons.glyphMap; label: string; onPress: () => void }) {
+  return (
+    <TouchableOpacity style={s.menuItem} onPress={onPress}>
+      <Ionicons name={icon} size={20} color={danger ? '#FF5A5F' : '#FFFFFF'} />
+      <Text style={[s.menuText, danger && s.menuTextDanger]}>{label}</Text>
+    </TouchableOpacity>
   );
 }
 
 const s = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.bgApp },
-  loadingContainer: {
-    flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.bgApp,
-  },
-  goBackBtn: {
-    marginTop: 16, paddingHorizontal: 20, paddingVertical: 10,
-    backgroundColor: colors.accentPrimary, borderRadius: 20,
-  },
-  goBackBtnText: { color: '#FFFFFF', fontSize: 14, fontWeight: '600' },
-
-  // Header
-  header: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 16, paddingVertical: 8,
-    borderBottomWidth: 1, borderBottomColor: colors.borderSubtle,
-  },
-  backBtn: { width: 44, height: 44, justifyContent: 'center', alignItems: 'center' },
-  headerTitle: { fontSize: 17, fontWeight: '700', color: colors.textPrimary, fontStyle: 'italic' },
-  menuBtn: {
-    width: 44, height: 44, borderRadius: 22, backgroundColor: colors.bgSubtle,
-    justifyContent: 'center', alignItems: 'center',
-  },
-
-  // Action Sheets
-  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
-  sheet: {
-    backgroundColor: '#FFFFFF', borderTopLeftRadius: 20, borderTopRightRadius: 20,
-    paddingTop: 8, paddingBottom: 34,
-  },
-  sheetHandle: {
-    width: 40, height: 4, borderRadius: 2, backgroundColor: colors.borderLight,
-    alignSelf: 'center', marginBottom: 12,
-  },
-  sheetItem: {
-    flexDirection: 'row', alignItems: 'center', gap: 14,
-    paddingHorizontal: 20, paddingVertical: 16,
-    borderBottomWidth: 1, borderBottomColor: colors.borderSubtle,
-  },
-  sheetItemText: { fontSize: 16, fontWeight: '500', color: colors.textPrimary },
-  sheetCancel: { alignItems: 'center', paddingVertical: 16, marginTop: 4 },
-  sheetCancelText: { fontSize: 16, fontWeight: '600', color: colors.textHint },
-  reportSheet: {
-    backgroundColor: '#FFFFFF', borderTopLeftRadius: 20, borderTopRightRadius: 20,
-    paddingTop: 8, paddingBottom: 34,
-  },
-  reportTitle: {
-    fontSize: 18, fontWeight: '700', color: colors.textPrimary,
-    paddingHorizontal: 20, marginBottom: 4,
-  },
-  reportSubtitle: {
-    fontSize: 13, color: colors.textHint, paddingHorizontal: 20, marginBottom: 16,
-  },
-  reportItem: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 20, paddingVertical: 15,
-    borderTopWidth: 1, borderTopColor: colors.borderSubtle,
-  },
-  reportItemText: { fontSize: 15, fontWeight: '500', color: colors.textPrimary },
-
-  // Profile Card
-  profileCard: {
-    marginHorizontal: 16, marginTop: 8, borderRadius: 28,
-    backgroundColor: colors.bgCard, borderWidth: 1, borderColor: colors.borderLight,
-    padding: 16, overflow: 'hidden', ...shadows.elevation2,
-  },
-  bannerOverlay: {
-    position: 'absolute', top: 0, left: 0, right: 0, height: 100,
-    backgroundColor: colors.accentPrimaryLight, opacity: 0.3,
-  },
-  profileRow: {
-    flexDirection: 'row', alignItems: 'flex-start', gap: 16, paddingTop: 8, marginBottom: 16,
-  },
-  avatarContainer: {
-    width: 96, height: 96, borderRadius: 48, borderWidth: 3,
-    borderColor: colors.bgCard, overflow: 'hidden', ...shadows.elevation2,
-  },
-  avatar: { width: '100%', height: '100%' },
-  avatarPlaceholder: {
-    width: '100%', height: '100%', backgroundColor: colors.bgSubtle,
-    justifyContent: 'center', alignItems: 'center',
-  },
-  avatarText: { fontSize: 36, fontWeight: '700', color: colors.accentPrimary },
-  profileInfo: { flex: 1, paddingTop: 8 },
-  fullName: {
-    fontSize: 24, fontWeight: '700', color: colors.textPrimary, fontStyle: 'italic', lineHeight: 30,
-  },
-  username: { fontSize: 14, fontWeight: '600', color: colors.textHint, marginTop: 2 },
-  tagRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 },
-  tag: { backgroundColor: '#d9eef7', paddingHorizontal: 12, paddingVertical: 4, borderRadius: 12 },
-  tagText: { fontSize: 12, fontWeight: '600', color: '#2d5b7c' },
-
-  // Bio
-  bioCard: {
-    backgroundColor: colors.bgSubtle, borderRadius: 20, paddingHorizontal: 16,
-    paddingVertical: 12, marginBottom: 16, borderWidth: 1, borderColor: colors.borderSubtle,
-  },
-  bioText: { fontSize: 14, color: colors.textPrimary, lineHeight: 20, fontWeight: '500' },
-
-  // Stats
-  statsRow: {
-    flexDirection: 'row', justifyContent: 'space-around', paddingTop: 12,
-    borderTopWidth: 1, borderTopColor: colors.borderSubtle,
-  },
-  statItem: { alignItems: 'center' },
-  statValue: { fontSize: 18, fontWeight: '700', color: colors.textPrimary },
-  statLabel: { fontSize: 12, color: colors.textHint, marginTop: 2 },
-
-  // Sections
-  section: { marginHorizontal: 16, marginTop: 20 },
-  sectionTitle: {
-    fontSize: 13, fontWeight: '800', color: colors.textPrimary, letterSpacing: 0.5, marginBottom: 12,
-  },
-  infoCard: {
-    backgroundColor: colors.bgCard, borderRadius: 20, borderWidth: 1,
-    borderColor: colors.borderSubtle, overflow: 'hidden',
-  },
-  infoRow: {
-    flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 16,
-    paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: colors.borderSubtle,
-  },
-  infoLabel: { fontSize: 15, color: colors.textSecondary },
-  infoValue: { fontSize: 15, fontWeight: '700', color: colors.textPrimary },
-  chipContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  chipLight: {
-    backgroundColor: colors.bgCard, borderWidth: 1, borderColor: colors.borderLight,
-    paddingHorizontal: 14, paddingVertical: 8, borderRadius: 16,
-  },
-  chipLightText: { fontSize: 13, color: colors.textSecondary, fontWeight: '500' },
-  interestChip: { backgroundColor: '#d9eef7', paddingHorizontal: 14, paddingVertical: 8, borderRadius: 16 },
-  interestChipText: { fontSize: 13, fontWeight: '600', color: '#2d5b7c' },
-  socialLinks: { flexDirection: 'row', flexWrap: 'wrap', gap: 16 },
-  socialLink: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  socialLinkText: { fontSize: 14, color: colors.textPrimary, fontWeight: '500' },
-
-  // Actions
-  actionRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 12,
-    marginHorizontal: 16, marginTop: 20,
-  },
-  followBtn: {
-    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    gap: 8, backgroundColor: colors.accentPrimary, paddingVertical: 14, borderRadius: 20,
-  },
-  followingBtn: {
-    backgroundColor: 'transparent', borderWidth: 1.5, borderColor: colors.accentPrimary,
-  },
-  followBtnText: { fontSize: 15, fontWeight: '700', color: '#FFFFFF' },
-  followingBtnText: { color: colors.accentPrimary },
-  friendBtn: {
-    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    gap: 8, backgroundColor: colors.accentPrimaryLight, paddingVertical: 14, borderRadius: 20,
-    borderWidth: 1, borderColor: colors.accentPrimary + '30',
-  },
-  friendBtnActive: {
-    backgroundColor: '#DCFCE7', borderColor: '#22C55E30',
-  },
-  friendBtnPending: {
-    backgroundColor: '#FEF3C7', borderColor: '#F59E0B30',
-  },
-  friendBtnText: { fontSize: 15, fontWeight: '700', color: colors.accentPrimary },
-  messageBtn: {
-    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    gap: 8, backgroundColor: colors.accentPrimaryLight, paddingVertical: 14,
-    borderRadius: 20, borderWidth: 1, borderColor: colors.accentPrimary + '30',
-  },
-  messageBtnText: { fontSize: 15, fontWeight: '700', color: colors.accentPrimary },
-
-  // Posts Grid
-  postsSection: { paddingHorizontal: 16, marginTop: 24 },
-  postsSectionTitle: {
-    fontSize: 18, fontWeight: '700', color: colors.textPrimary, fontStyle: 'italic', marginBottom: 16,
-  },
-  emptyPosts: { alignItems: 'center', paddingVertical: 40 },
-  emptyText: { fontSize: 14, color: colors.textHint, marginTop: 8 },
-  postsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
-  postThumbnail: {
-    width: (SCREEN_WIDTH - 32 - 12) / 2, aspectRatio: 1, borderRadius: 20,
-    overflow: 'hidden', backgroundColor: colors.bgCard, borderWidth: 1,
-    borderColor: colors.borderLight, ...shadows.elevation1,
-  },
-  thumbnailImage: { width: '100%', height: '100%' },
-  textThumbnail: { flex: 1, backgroundColor: colors.bgSubtle, padding: 12, justifyContent: 'center' },
-  textThumbnailContent: { fontSize: 11, color: colors.textSecondary, lineHeight: 15 },
+  root: { flex: 1, backgroundColor: '#050505' },
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#050505' },
+  notFound: { color: 'rgba(255,255,255,0.72)', fontSize: 16, fontWeight: '800', marginTop: 12 },
+  backPill: { marginTop: 16, minHeight: 42, borderRadius: 21, backgroundColor: '#FFFFFF', paddingHorizontal: 20, justifyContent: 'center' },
+  backPillText: { color: '#111111', fontSize: 14, fontWeight: '900' },
+  hero: { height: Math.max(650, SCREEN_WIDTH * 1.82), overflow: 'hidden', backgroundColor: '#111111' },
+  heroMedia: { ...StyleSheet.absoluteFillObject },
+  heroFallback: { ...StyleSheet.absoluteFillObject, backgroundColor: '#171717' },
+  heroDim: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.22)' },
+  nav: { position: 'absolute', left: 16, right: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  navRight: { flexDirection: 'row', gap: 10 },
+  navBtn: { width: 42, height: 42, borderRadius: 21, backgroundColor: 'rgba(0,0,0,0.32)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.16)', alignItems: 'center', justifyContent: 'center' },
+  profileLanding: { position: 'absolute', left: 12, right: 12, bottom: 14, gap: 5 },
+  profileActionGrid: { height: 136, flexDirection: 'row', gap: 5 },
+  profileActionTile: { flex: 1, borderRadius: 9, backgroundColor: 'rgba(45,45,43,0.92)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+  messageTile: { flex: 1.08, alignItems: 'flex-start', justifyContent: 'space-between', padding: 15 },
+  messageTileText: { color: '#FFFFFF', fontSize: 16, lineHeight: 17, fontWeight: '800' },
+  profileSmallGrid: { flex: 1, flexDirection: 'row', flexWrap: 'wrap', gap: 5 },
+  profileSmallTile: { flex: 0, width: '48.4%', height: 65 },
+  xIcon: { color: '#FFFFFF', fontSize: 24, fontWeight: '800' },
+  profileInfoCard: { minHeight: 112, borderRadius: 9, backgroundColor: 'rgba(45,45,43,0.94)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', flexDirection: 'row', padding: 15, gap: 12 },
+  profileNameBlock: { flex: 0.88, justifyContent: 'flex-start' },
+  profileFirstName: { color: '#FFFFFF', fontSize: 23, lineHeight: 25, fontWeight: '900' },
+  profileLastName: { color: '#FFFFFF', fontSize: 23, lineHeight: 25, fontWeight: '900' },
+  profileAboutBlock: { flex: 1, gap: 12 },
+  profileAboutLabel: { color: '#FFFFFF', fontSize: 12, fontWeight: '700' },
+  profileAboutText: { color: 'rgba(255,255,255,0.44)', fontSize: 13, lineHeight: 16, fontWeight: '700' },
+  profileBottomActions: { flexDirection: 'row', alignItems: 'center', gap: 7, paddingTop: 2 },
+  followMiniButton: { minHeight: 38, borderRadius: 19, backgroundColor: '#DFFF32', borderWidth: 1.3, borderColor: '#111111', justifyContent: 'center', paddingHorizontal: 16 },
+  followMiniButtonOn: { backgroundColor: '#FFFFFF' },
+  followMiniText: { color: '#111111', fontSize: 13, fontWeight: '900' },
+  statsMiniPill: { minHeight: 38, borderRadius: 19, backgroundColor: 'rgba(45,45,43,0.88)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.10)', flexDirection: 'row', alignItems: 'center', gap: 6, justifyContent: 'center', paddingHorizontal: 13 },
+  statsMiniText: { color: '#FFFFFF', fontSize: 12, fontWeight: '900' },
+  identity: { position: 'absolute', left: 22, right: 22, bottom: 30 },
+  avatarRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
+  avatar: { width: 62, height: 62, borderRadius: 31, borderWidth: 2, borderColor: '#FFFFFF', backgroundColor: '#FFFFFF', overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
+  avatarImage: { width: '100%', height: '100%' },
+  avatarInitial: { color: '#111111', fontSize: 26, fontWeight: '900' },
+  globeBadge: { width: 54, height: 54, borderRadius: 27, marginLeft: -8, backgroundColor: '#6ED3FF', borderWidth: 2, borderColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center' },
+  globeText: { fontSize: 28 },
+  name: { color: '#FFFFFF', fontSize: 47, lineHeight: 49, fontWeight: '900', letterSpacing: 0 },
+  meta: { color: 'rgba(255,255,255,0.78)', fontSize: 14, lineHeight: 18, fontWeight: '800', marginTop: 6 },
+  statsRow: { flexDirection: 'row', alignItems: 'center', gap: 14, marginTop: 20 },
+  statValue: { color: '#FFFFFF', fontSize: 21, fontWeight: '900', fontVariant: ['tabular-nums'] },
+  statLabel: { color: 'rgba(255,255,255,0.72)', fontSize: 11, fontWeight: '700' },
+  supportBtn: { marginLeft: 'auto', width: 72, height: 72, borderRadius: 36, backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 6 },
+  supportBtnText: { color: '#111111', fontSize: 11, fontWeight: '900', textAlign: 'center' },
+  chatBtn: { width: 72, height: 72, borderRadius: 36, borderWidth: 1.4, borderColor: 'rgba(255,255,255,0.26)', backgroundColor: 'rgba(0,0,0,0.22)', alignItems: 'center', justifyContent: 'center' },
+  chatBtnText: { color: '#FFFFFF', fontSize: 12, fontWeight: '900' },
+  friendStrip: { paddingHorizontal: 16, paddingVertical: 12, backgroundColor: '#080808' },
+  friendButton: { minHeight: 46, borderRadius: 23, backgroundColor: 'rgba(255,255,255,0.12)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.14)', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
+  friendButtonOn: { backgroundColor: 'rgba(34,197,94,0.22)', borderColor: 'rgba(34,197,94,0.32)' },
+  friendButtonText: { color: '#FFFFFF', fontSize: 14, fontWeight: '900' },
+  bio: { color: 'rgba(255,255,255,0.78)', fontSize: 14, lineHeight: 20, fontWeight: '700', paddingHorizontal: 16, paddingVertical: 14 },
+  tabs: { height: 58, flexDirection: 'row', backgroundColor: '#080808', borderTopWidth: 1, borderBottomWidth: 1, borderColor: 'rgba(255,255,255,0.08)' },
+  tab: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  tabOn: { backgroundColor: '#171717' },
+  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 2, backgroundColor: '#050505' },
+  tile: { width: TILE_SIZE, height: TILE_SIZE, overflow: 'hidden', backgroundColor: '#161616' },
+  tileMedia: { width: '100%', height: '100%' },
+  textTile: { flex: 1, padding: 10, justifyContent: 'center', backgroundColor: '#191919' },
+  textTileText: { color: '#FFFFFF', fontSize: 12, lineHeight: 16, fontWeight: '800' },
+  emptyPosts: { width: SCREEN_WIDTH, minHeight: 170, alignItems: 'center', justifyContent: 'center', gap: 8 },
+  emptyText: { color: 'rgba(255,255,255,0.56)', fontSize: 14, fontWeight: '800' },
+  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.36)' },
+  menu: { position: 'absolute', right: 14, width: 230, borderRadius: 18, backgroundColor: 'rgba(16,16,16,0.96)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.12)', overflow: 'hidden' },
+  menuItem: { minHeight: 52, flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.08)' },
+  menuText: { color: '#FFFFFF', fontSize: 15, fontWeight: '800' },
+  menuTextDanger: { color: '#FF5A5F' },
+  reportOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.42)', justifyContent: 'flex-end' },
+  reportSheet: { backgroundColor: '#101010', borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingTop: 10, borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' },
+  sheetHandle: { width: 42, height: 5, borderRadius: 3, backgroundColor: 'rgba(255,255,255,0.22)', alignSelf: 'center', marginBottom: 14 },
+  reportTitle: { color: '#FFFFFF', fontSize: 20, fontWeight: '900', paddingHorizontal: 20 },
+  reportSubtitle: { color: 'rgba(255,255,255,0.62)', fontSize: 13, fontWeight: '700', paddingHorizontal: 20, marginTop: 4, marginBottom: 10 },
+  reportItem: { minHeight: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.08)' },
+  reportItemText: { color: '#FFFFFF', fontSize: 15, fontWeight: '800' },
 });

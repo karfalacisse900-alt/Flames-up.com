@@ -1,248 +1,82 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, Image, ScrollView,
-  RefreshControl, Dimensions, ActivityIndicator,
+  RefreshControl, ActivityIndicator, Alert, TextInput,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import * as Location from 'expo-location';
+import { Audio } from 'expo-av';
 import api from '../../src/api/client';
 import { useAuthStore } from '../../src/store/authStore';
 import { colors } from '../../src/utils/theme';
 import { useI18n } from '../../src/utils/i18n';
 import { requireVerifiedPhone } from '../../src/utils/phoneVerification';
-
-const { width: SW } = Dimensions.get('window');
-const SHELF_CARD = Math.min(138, Math.max(118, (SW - 54) / 2.35));
+import NoteCard from '../../src/components/NoteCard';
+import {
+  AudiusTrack,
+  getAudiusTrackStream,
+  getAudiusTrendingTracks,
+  getFavoriteAudiusTracks,
+  searchAudiusTracks,
+  toggleFavoriteAudiusTrack,
+} from '../../src/utils/music';
+import {
+  NotePost,
+  loadNotes,
+} from '../../src/utils/recommendFeatures';
 
 const CITY_TABS = [
   { id: 'all', label: 'For You' },
-  { id: 'nyc', label: 'New York' },
-  { id: 'miami', label: 'Miami' },
-  { id: 'la', label: 'LA' },
-  { id: 'london', label: 'London' },
-  { id: 'tokyo', label: 'Tokyo' },
-  { id: 'paris', label: 'Paris' },
+  { id: 'notes', label: 'Notes' },
+  { id: 'music', label: 'Music' },
 ];
 
-const DISCOVER_SHELVES = [
-  {
-    id: 'groups',
-    label: 'Groups to Join',
-    sub: 'Find people moving together.',
-    type: 'gym',
-    icon: 'people-outline',
-    fallbackColor: '#DCEDE3',
-    fallbackItems: ['Fitness Crew', 'Book Circle', 'Local Club'],
-  },
-  {
-    id: 'events',
-    label: 'Events',
-    sub: 'Tonight, weekend, parks, markets, and venues.',
-    type: 'stadium',
-    icon: 'calendar-outline',
-    fallbackColor: '#E1F3DF',
-    fallbackItems: ['Night events tonight', 'Local farmers market', 'Bryant Park happenings'],
-  },
-] as const;
+const RECOMMEND_CATEGORIES = [
+  { id: 'notes', label: 'Notes' },
+  { id: 'music', label: 'Music' },
+];
 
-const EVENT_SEARCHES = [
-  {
-    id: 'tonight-clubs',
-    title: 'Night events tonight',
-    host: 'Flames nightlife guide',
-    timing: { weekday: null, startHour: 20, endHour: 2 },
-    shortTime: 'Tonight',
-    fallbackVenue: 'Manhattan nightlife',
-    placeType: 'night_club',
-    keyword: 'club party nightlife',
-    description: 'A nightlife pick shaped by your event preferences. Check tickets for the exact lineup before you go.',
-  },
-  {
-    id: 'farmers-market',
-    title: 'Local farmers market',
-    host: 'Flames local guide',
-    timing: { weekday: 1, startHour: 9, endHour: 14 },
-    shortTime: 'Every Monday',
-    fallbackVenue: 'Union Square area',
-    placeType: 'tourist_attraction',
-    keyword: 'farmers market',
-    description: 'Fresh produce, neighborhood vendors, and a low-key city walk picked for local weekend and market interests.',
-  },
-  {
-    id: 'bryant-park',
-    title: 'Bryant Park happenings',
-    host: 'Flames park guide',
-    timing: { weekday: 6, startHour: 11, endHour: 19 },
-    shortTime: 'This weekend',
-    fallbackVenue: 'Bryant Park',
-    placeType: 'park',
-    keyword: 'Bryant Park events',
-    description: 'A Bryant Park based plan for markets, public programming, or seasonal pop-ups.',
-  },
-  {
-    id: 'live-music',
-    title: 'Live music tonight',
-    host: 'Flames music guide',
-    timing: { weekday: null, startHour: 19, endHour: 23 },
-    shortTime: 'Tonight',
-    fallbackVenue: 'Lower Manhattan',
-    placeType: 'bar',
-    keyword: 'live music',
-    description: 'A live night plan picked from your music and going-out signals.',
-  },
-  {
-    id: 'movie-night',
-    title: 'Movie night',
-    host: 'Flames movie guide',
-    timing: { weekday: null, startHour: 19, endHour: 22 },
-    shortTime: 'Tonight',
-    fallbackVenue: 'Manhattan cinema',
-    placeType: 'movie_theater',
-    keyword: 'movie film cinema',
-    description: 'A movie plan picked from your entertainment and culture signals.',
-  },
-  {
-    id: 'sports-night',
-    title: 'Sports nearby',
-    host: 'Flames sports guide',
-    timing: { weekday: 6, startHour: 15, endHour: 18 },
-    shortTime: 'This weekend',
-    fallbackVenue: 'New York sports venue',
-    placeType: 'stadium',
-    keyword: 'sports game',
-    description: 'A nearby sports venue pick shaped by your activity and fan interests.',
-  },
-] as const;
+const RECOMMEND_PAGE_IDS = new Set(RECOMMEND_CATEGORIES.map((category) => category.id));
 
-const CITY_COORDS: Record<string, { lat: number; lng: number }> = {
-  all: { lat: 40.7128, lng: -74.006 },
-  nyc: { lat: 40.7128, lng: -74.006 },
-  miami: { lat: 25.7617, lng: -80.1918 },
-  la: { lat: 34.0522, lng: -118.2437 },
-  london: { lat: 51.5074, lng: -0.1278 },
-  tokyo: { lat: 35.6762, lng: 139.6503 },
-  paris: { lat: 48.8566, lng: 2.3522 },
+type Recommendation = {
+  id: string;
+  title: string;
+  description?: string;
+  category?: string;
+  tags?: string[];
+  external_url?: string;
+  provider?: string;
+  embed_url?: string;
+  thumbnail_url?: string;
+  creator_name?: string;
+  user?: {
+    username?: string;
+    full_name?: string;
+    profile_image?: string;
+  };
 };
 
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-
-type EventTiming = { weekday: number | null; startHour: number; endHour: number };
-
-const routeParam = (value: any) => (value === undefined || value === null ? '' : String(value));
-
-function getEventDate(targetWeekday: number | null) {
-  const date = new Date();
-  if (targetWeekday !== null) {
-    const today = date.getDay();
-    const delta = (targetWeekday - today + 7) % 7 || 7;
-    date.setDate(date.getDate() + delta);
-  }
-  return date;
+function formatDuration(seconds: unknown) {
+  const total = Math.max(0, Math.round(Number(seconds || 0)));
+  const minutes = Math.floor(total / 60);
+  const rest = `${total % 60}`.padStart(2, '0');
+  return `${minutes}:${rest}`;
 }
 
-function clockLabel(date: Date) {
-  let hour = date.getHours();
-  const minute = `${date.getMinutes()}`.padStart(2, '0');
-  const suffix = hour >= 12 ? 'PM' : 'AM';
-  hour = hour % 12 || 12;
-  return `${`${hour}`.padStart(2, '0')}:${minute}${suffix}`;
+function recommendationCardColor(item: Recommendation, index: number) {
+  if (item.thumbnail_url) return '#F3F4F0';
+  const palette = ['#C9E7F8', '#C7353E', '#D8C0A8', '#E6D9BF', '#BFD8C2', '#F4D4C8', '#E9E8E1'];
+  return palette[index % palette.length];
 }
 
-function buildEventTiming(template: EventTiming) {
-  const start = getEventDate(template.weekday);
-  start.setHours(template.startHour, 0, 0, 0);
-  const end = new Date(start);
-  end.setHours(template.endHour, 0, 0, 0);
-  if (template.endHour <= template.startHour) end.setDate(end.getDate() + 1);
-
-  return {
-    weekday: WEEKDAYS[start.getDay()],
-    month: MONTHS[start.getMonth()],
-    day: `${start.getDate()}`.padStart(2, '0'),
-    schedule: `${WEEKDAYS[start.getDay()]}, ${MONTHS[start.getMonth()]} ${start.getDate()} at ${clockLabel(start)} - ${clockLabel(end)}`,
-  };
+function recommendationProviderLabel(item: Recommendation) {
+  const provider = String(item.provider || item.category || 'link').replace(/_/g, ' ');
+  return provider.charAt(0).toUpperCase() + provider.slice(1);
 }
 
-function buildEventCard(place: any, search: typeof EVENT_SEARCHES[number], index: number) {
-  const timing = buildEventTiming(search.timing);
-  const placeName = place?.name || search.fallbackVenue;
-  const address = place?.vicinity || place?.formatted_address || search.fallbackVenue;
-
-  return {
-    ...place,
-    event: true,
-    event_source: 'google_places',
-    event_id: `${search.id}-${place?.place_id || index}`.replace(/[^a-zA-Z0-9_-]/g, '-'),
-    event_title: search.title,
-    event_host: search.host,
-    event_venue: placeName,
-    event_address: address,
-    event_description: search.description,
-    event_time_label: search.shortTime,
-    event_schedule: timing.schedule,
-    event_weekday: timing.weekday,
-    event_month: timing.month,
-    event_day: timing.day,
-    attendees: 3 + (index % 6),
-  };
-}
-
-async function loadGoogleEventFallback(coords: { lat: number; lng: number }) {
-  const batches = await Promise.all(
-    EVENT_SEARCHES.map(async (search, searchIndex) => {
-      try {
-        const r = await api.get('/google-places/nearby', {
-          params: {
-            lat: coords.lat,
-            lng: coords.lng,
-            radius: 40000,
-            type: search.placeType,
-            keyword: search.keyword,
-          },
-        });
-        const places = Array.isArray(r.data) ? r.data : [];
-        return places.slice(0, 2).map((place: any, placeIndex: number) =>
-          buildEventCard(place, search, searchIndex * 10 + placeIndex)
-        );
-      } catch {
-        return [];
-      }
-    })
-  );
-
-  const seen = new Set<string>();
-  return batches.flat().filter((event) => {
-    const key = event.place_id || event.event_id;
-    if (!key || seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  }).slice(0, 8);
-}
-
-function eventbriteEmptyCard(detail?: string) {
-  const now = buildEventTiming({ weekday: null, startHour: 20, endHour: 22 });
-  return {
-    event: true,
-    empty: true,
-    fallback: true,
-    event_source: 'eventbrite',
-    event_id: 'eventbrite-empty',
-    place_id: 'eventbrite-empty',
-    event_title: 'No live Eventbrite events',
-    event_host: 'Eventbrite',
-    event_venue: 'No live results for this account',
-    event_address: 'Eventbrite did not return local events',
-    event_description: detail || 'Eventbrite is connected, but it did not return live local events for this account.',
-    event_time_label: 'No events',
-    event_schedule: now.schedule,
-    event_weekday: now.weekday,
-    event_month: now.month,
-    event_day: now.day,
-    attendees: 0,
-  };
+function recommendationAuthor(item: Recommendation) {
+  return item.creator_name || item.user?.full_name || item.user?.username || 'Community pick';
 }
 
 export default function DiscoverScreen() {
@@ -251,95 +85,466 @@ export default function DiscoverScreen() {
   const { user } = useAuthStore();
   const { t } = useI18n();
   const [tab, setTab] = useState('all');
-  const [shelfPlaces, setShelfPlaces] = useState<Record<string, any[]>>({});
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [people, setPeople] = useState<any[]>([]);
-  const [userCoords, setUserCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [statusGroups, setStatusGroups] = useState<any[]>([]);
+  const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
+  const [recommendCategory, setRecommendCategory] = useState('music');
+  const [recommendLoading, setRecommendLoading] = useState(false);
+  const [audiusTracks, setAudiusTracks] = useState<AudiusTrack[]>([]);
+  const [audiusFavorites, setAudiusFavorites] = useState<AudiusTrack[]>([]);
+  const [audiusQuery, setAudiusQuery] = useState('');
+  const [audiusLoading, setAudiusLoading] = useState(false);
+  const [audiusPlayingId, setAudiusPlayingId] = useState('');
+  const [audiusLoadingId, setAudiusLoadingId] = useState('');
+  const [notes, setNotes] = useState<NotePost[]>([]);
+  const [notesLoading, setNotesLoading] = useState(false);
+  const audiusSoundRef = useRef<Audio.Sound | null>(null);
+  const audiusQueryRef = useRef('');
 
-  const loadPeople = useCallback(async () => {
+  const loadStatusGroups = useCallback(async () => {
     try {
-      const r = await api.get('/discover/suggested-users');
-      setPeople(Array.isArray(r.data) ? r.data : []);
-    } catch {}
-  }, []);
+      const r = await api.get('/statuses');
+      const groups = Array.isArray(r.data) ? r.data : [];
+      setStatusGroups(groups.filter((group: any) => (
+        group?.user_id
+        && group.user_id !== user?.id
+        && Array.isArray(group.statuses)
+        && group.statuses.length > 0
+      )));
+    } catch (error: any) {
+      console.log('Could not load public stories', error?.response?.data?.detail || error?.message);
+      setStatusGroups([]);
+    }
+  }, [user?.id]);
 
-  const loadUserCoords = useCallback(async () => {
+  const loadRecommendations = useCallback(async (category = 'all') => {
+    setRecommendLoading(true);
     try {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') return;
-      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-      setUserCoords({ lat: loc.coords.latitude, lng: loc.coords.longitude });
-    } catch {}
-  }, []);
-
-  const activeCoords = useCallback(
-    () => (tab === 'all' && userCoords ? userCoords : (CITY_COORDS[tab] || CITY_COORDS.all)),
-    [tab, userCoords]
-  );
-
-  const loadEventPlaces = useCallback(async (coords: { lat: number; lng: number }) => {
-    const location = CITY_TABS.find((c) => c.id === tab)?.label || 'New York';
-    let emptyDetail = '';
-    try {
-      const r = await api.get('/events/personalized', {
+      const r = await api.get('/recommendations', {
         params: {
-          lat: coords.lat,
-          lng: coords.lng,
-          location: user?.city || location,
-          city: user?.city || location,
-          interests: user?.interests || '',
-          looking_for: user?.looking_for || '',
-          limit: 12,
+          category,
+          limit: 48,
         },
       });
-      const events = Array.isArray(r.data?.events) ? r.data.events : [];
-      if (events.length > 0) return events.slice(0, 8);
-      const detail = typeof r.data?.detail === 'string' ? r.data.detail : '';
-      const errors = Array.isArray(r.data?.errors) ? r.data.errors.join(', ') : '';
-      emptyDetail = detail || (errors ? `Eventbrite returned no events. Status: ${errors}.` : '');
-    } catch {
-      emptyDetail = 'Eventbrite events could not load from the backend preview.';
+      setRecommendations(Array.isArray(r.data) ? r.data : []);
+    } catch (error: any) {
+      console.log('Could not load recommendations', error?.response?.data?.detail || error?.message);
+      setRecommendations([]);
+    } finally {
+      setRecommendLoading(false);
     }
+  }, []);
 
-    const googleEvents = await loadGoogleEventFallback(coords);
-    return googleEvents.length > 0 ? googleEvents : [eventbriteEmptyCard(emptyDetail)];
-  }, [tab, user?.city, user?.interests, user?.looking_for]);
+  const loadAudiusDiscovery = useCallback(async (queryOverride?: string) => {
+    setAudiusLoading(true);
+    try {
+      const query = (queryOverride ?? audiusQueryRef.current).trim();
+      const [tracks, favorites] = await Promise.all([
+        query.length >= 2 ? searchAudiusTracks(query, 50) : getAudiusTrendingTracks(50),
+        getFavoriteAudiusTracks().catch(() => []),
+      ]);
+      setAudiusTracks(tracks);
+      setAudiusFavorites(favorites);
+    } catch (error: any) {
+      console.log('Could not load Audius music', error?.response?.data?.detail || error?.message);
+      setAudiusTracks([]);
+    } finally {
+      setAudiusLoading(false);
+    }
+  }, []);
 
-  const loadShelfPlaces = useCallback(async () => {
-    const coords = activeCoords();
-    const entries = await Promise.all(DISCOVER_SHELVES.map(async (b) => {
-      try {
-        if (b.id === 'events') {
-          return [b.id, await loadEventPlaces(coords)] as const;
-        } else {
-          const r = await api.get('/google-places/nearby', { params: { lat: coords.lat, lng: coords.lng, radius: 40000, type: b.type } });
-          const places = Array.isArray(r.data) ? r.data : [];
-          return [b.id, places.slice(0, 8)] as const;
-        }
-      } catch {
-        return [b.id, []] as const;
+  const loadNotePosts = useCallback(async () => {
+    setNotesLoading(true);
+    try {
+      setNotes(await loadNotes(36));
+    } catch (error: any) {
+      console.log('Could not load notes', error?.response?.data?.detail || error?.message);
+      setNotes([]);
+    } finally {
+      setNotesLoading(false);
+    }
+  }, []);
+
+  const stopAudiusPreview = useCallback(async () => {
+    const sound = audiusSoundRef.current;
+    audiusSoundRef.current = null;
+    setAudiusPlayingId('');
+    setAudiusLoadingId('');
+    if (sound) {
+      await sound.stopAsync().catch(() => undefined);
+      await sound.unloadAsync().catch(() => undefined);
+    }
+  }, []);
+
+  useEffect(() => () => {
+    void stopAudiusPreview();
+  }, [stopAudiusPreview]);
+
+  const playAudiusTrack = useCallback(async (track: AudiusTrack) => {
+    const trackId = track.track_id || track.id;
+    if (!trackId) return;
+    if (audiusPlayingId === trackId) {
+      await stopAudiusPreview();
+      return;
+    }
+    setAudiusLoadingId(trackId);
+    try {
+      await stopAudiusPreview();
+      const streamTrack = track.stream_url ? track : await getAudiusTrackStream(trackId);
+      if (!streamTrack.stream_url) {
+        Alert.alert('Audio unavailable', 'Audius did not return a stream for this track.');
+        return;
       }
-    }));
-    setShelfPlaces(Object.fromEntries(entries));
-  }, [activeCoords, loadEventPlaces]);
+      await Audio.setAudioModeAsync({ playsInSilentModeIOS: true }).catch(() => undefined);
+      const { sound } = await Audio.Sound.createAsync(
+        { uri: streamTrack.stream_url },
+        { shouldPlay: true, volume: 1 }
+      );
+      sound.setOnPlaybackStatusUpdate((status: any) => {
+        if (status?.didJustFinish) void stopAudiusPreview();
+      });
+      audiusSoundRef.current = sound;
+      setAudiusPlayingId(trackId);
+    } catch (error: any) {
+      Alert.alert('Playback failed', error?.response?.data?.detail || error?.message || 'Could not play this Audius track.');
+    } finally {
+      setAudiusLoadingId('');
+    }
+  }, [audiusPlayingId, stopAudiusPreview]);
+
+  const toggleAudiusFavorite = useCallback(async (track: AudiusTrack) => {
+    try {
+      const result = await toggleFavoriteAudiusTrack(track);
+      setAudiusFavorites(result.favorites);
+    } catch (error: any) {
+      Alert.alert('Could not save sound', error?.response?.data?.detail || 'Try again in a moment.');
+    }
+  }, []);
+
+  const handleUseAudiusSound = useCallback(async (track: AudiusTrack) => {
+    try {
+      const trackId = track.track_id || track.id;
+      const streamTrack = track.stream_url ? track : await getAudiusTrackStream(trackId);
+      router.push({
+        pathname: '/create-post',
+        params: {
+          audio_provider: 'audius',
+          audio_track_id: streamTrack.track_id || streamTrack.id,
+          audio_title: streamTrack.title,
+          audio_artist: streamTrack.artist,
+          audio_artwork_url: streamTrack.artwork_url,
+          audio_stream_url: streamTrack.stream_url || '',
+          audio_start_time: '0',
+          audio_duration: '15',
+        },
+      } as any);
+    } catch (error: any) {
+      Alert.alert('Could not use sound', error?.response?.data?.detail || 'Try another Audius track.');
+    }
+  }, [router]);
 
   useEffect(() => {
     let mounted = true;
     async function bootstrap() {
       setLoading(true);
-      await Promise.all([loadPeople(), loadUserCoords()]);
+      await Promise.all([loadStatusGroups(), loadAudiusDiscovery()]);
       if (mounted) setLoading(false);
     }
     bootstrap();
     return () => { mounted = false; };
-  }, [loadPeople, loadUserCoords]);
+  }, [loadStatusGroups, loadAudiusDiscovery]);
 
-  useEffect(() => { loadShelfPlaces(); }, [loadShelfPlaces]);
+  useEffect(() => {
+    const activeCategory = RECOMMEND_PAGE_IDS.has(tab) ? tab : recommendCategory;
+    if (!RECOMMEND_PAGE_IDS.has(activeCategory)) return;
+    if (activeCategory === 'music') {
+      loadAudiusDiscovery();
+    } else if (activeCategory === 'notes') {
+      loadNotePosts();
+    } else {
+      loadRecommendations(activeCategory);
+    }
+  }, [loadAudiusDiscovery, loadNotePosts, loadRecommendations, recommendCategory, tab]);
 
   const onRefresh = useCallback(async () => {
-    setRefreshing(true); await Promise.all([loadPeople(), loadShelfPlaces()]); setRefreshing(false);
-  }, [loadPeople, loadShelfPlaces]);
+    setRefreshing(true);
+    const activeCategory = RECOMMEND_PAGE_IDS.has(tab) ? tab : recommendCategory;
+    await Promise.all([
+      loadStatusGroups(),
+      activeCategory === 'music'
+        ? loadAudiusDiscovery()
+        : activeCategory === 'notes'
+          ? loadNotePosts()
+          : RECOMMEND_PAGE_IDS.has(activeCategory)
+            ? loadRecommendations(activeCategory)
+            : Promise.resolve(),
+    ]);
+    setRefreshing(false);
+  }, [loadAudiusDiscovery, loadNotePosts, loadRecommendations, loadStatusGroups, recommendCategory, tab]);
+
+  const renderRecommendationCard = (item: Recommendation, index: number) => {
+    const tall = index % 5 === 0 || index % 5 === 3;
+    const bg = recommendationCardColor(item, index);
+    return (
+      <TouchableOpacity
+        key={item.id}
+        style={[s.recommendCard, { minHeight: tall ? 228 : 184, backgroundColor: bg }]}
+        activeOpacity={0.88}
+        onPress={() => router.push(`/recommendation/${item.id}` as any)}
+      >
+        {item.thumbnail_url ? (
+          <Image source={{ uri: item.thumbnail_url }} style={s.recommendCardImage} resizeMode="cover" />
+        ) : null}
+        <View style={[s.recommendCardShade, item.thumbnail_url ? s.recommendCardShadeOnImage : null]} />
+        <View style={s.recommendCardCopy}>
+          <Text style={[s.recommendSmall, item.thumbnail_url && s.recommendTextOnImage]} numberOfLines={1}>
+            {recommendationProviderLabel(item)}
+          </Text>
+          <Text style={[s.recommendCardTitle, item.thumbnail_url && s.recommendTextOnImage]} numberOfLines={3}>
+            {item.title}
+          </Text>
+          <Text style={[s.recommendCardMeta, item.thumbnail_url && s.recommendTextOnImage]} numberOfLines={1}>
+            {recommendationAuthor(item)}
+          </Text>
+        </View>
+        <View style={s.recommendReadMore}>
+          <Text style={[s.recommendReadText, item.thumbnail_url && s.recommendReadTextOnImage]}>READ MORE</Text>
+          <Ionicons name="arrow-forward" size={12} color={item.thumbnail_url ? '#FFFFFF' : '#111111'} />
+        </View>
+      </TouchableOpacity>
+    );
+  };
+
+  const renderAudiusTrackCard = (track: AudiusTrack, index: number) => {
+    const trackId = track.track_id || track.id;
+    const favorite = audiusFavorites.some((item) => (item.track_id || item.id) === trackId);
+    const playing = audiusPlayingId === trackId;
+    const loadingTrack = audiusLoadingId === trackId;
+    return (
+      <TouchableOpacity
+        key={trackId || `${track.title}-${index}`}
+        style={s.audiusCard}
+        activeOpacity={0.9}
+        onPress={() => router.push({
+          pathname: '/music/[id]',
+          params: {
+            id: trackId,
+            title: track.title,
+            artist: track.artist,
+            artwork: track.artwork_url,
+            duration: String(track.duration || 0),
+          },
+        } as any)}
+      >
+        <View style={s.audiusArtworkWrap}>
+          {track.artwork_url ? (
+            <Image source={{ uri: track.artwork_url }} style={s.audiusArtwork} resizeMode="cover" />
+          ) : (
+            <View style={s.audiusArtworkFallback}>
+              <Ionicons name="musical-notes-outline" size={34} color="#111111" />
+            </View>
+          )}
+          <TouchableOpacity style={s.audiusPlayButton} onPress={() => playAudiusTrack(track)} activeOpacity={0.86}>
+            {loadingTrack ? (
+              <ActivityIndicator size="small" color="#111111" />
+            ) : (
+              <Ionicons name={playing ? 'pause' : 'play'} size={18} color="#111111" />
+            )}
+          </TouchableOpacity>
+        </View>
+        <View style={s.audiusCopy}>
+          <View style={s.audiusMetaRow}>
+            <Text style={s.audiusSource}>AUDIUS</Text>
+            <Text style={s.audiusDot}>•</Text>
+            <Text style={s.audiusDuration}>{formatDuration(track.duration)}</Text>
+          </View>
+          <Text style={s.audiusTitle} numberOfLines={2}>{track.title}</Text>
+          <Text style={s.audiusArtist} numberOfLines={1}>{track.artist}</Text>
+          <View style={s.audiusActions}>
+            <TouchableOpacity style={s.audiusPrimaryAction} onPress={() => handleUseAudiusSound(track)} activeOpacity={0.86}>
+              <Ionicons name="add-circle-outline" size={16} color="#111111" />
+              <Text style={s.audiusPrimaryActionText}>Use sound</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[s.audiusIconAction, favorite && s.audiusIconActionOn]} onPress={() => toggleAudiusFavorite(track)} activeOpacity={0.82}>
+              <Ionicons name={favorite ? 'bookmark' : 'bookmark-outline'} size={17} color="#111111" />
+            </TouchableOpacity>
+          </View>
+        </View>
+      </TouchableOpacity>
+    );
+  };
+
+  const renderRecommendTab = () => {
+    const activeCategory = RECOMMEND_PAGE_IDS.has(tab) ? tab : recommendCategory;
+    const directPage = RECOMMEND_PAGE_IDS.has(tab);
+    const left = recommendations.filter((_, index) => index % 2 === 0);
+    const right = recommendations.filter((_, index) => index % 2 === 1);
+    const isMusicPage = activeCategory === 'music';
+    const isNotesPage = activeCategory === 'notes';
+    const showCreate = isNotesPage;
+    const createRoute = isNotesPage ? '/create-note' : '/create-recommendation';
+    const brandIcon = isMusicPage ? 'radio-outline' : isNotesPage ? 'moon-outline' : 'albums-outline';
+    const brandText = isMusicPage ? 'AUDIUS DISCOVERY' : isNotesPage ? 'NOTES' : 'FLAMES RECS';
+
+    return (
+      <View style={s.recommendRoot}>
+        <View style={s.recommendTopBar}>
+          <View style={s.recommendBrandPill}>
+            <Ionicons name={brandIcon as any} size={17} color="#111111" />
+            <Text style={s.recommendBrandText}>{brandText}</Text>
+          </View>
+          {showCreate ? (
+            <TouchableOpacity style={s.recommendMenuBtn} onPress={() => router.push(createRoute as any)}>
+              <Ionicons name="add" size={24} color="#111111" />
+            </TouchableOpacity>
+          ) : <View style={s.recommendMenuSpacer} />}
+        </View>
+
+        {!directPage ? (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.recommendCategoryRail}>
+            {RECOMMEND_CATEGORIES.map((category, index) => {
+              const active = category.id === activeCategory;
+              return (
+                <TouchableOpacity
+                  key={category.id}
+                  style={[
+                    s.recommendCategoryPill,
+                    { backgroundColor: ['#E7CFB7', '#D87A86', '#D7EFF7', '#DDF0CA', '#F2DFBE', '#E8E2F3', '#F6D3C9'][index % 7] },
+                    active && s.recommendCategoryPillOn,
+                  ]}
+                  onPress={() => setRecommendCategory(category.id)}
+                >
+                  <Text style={[s.recommendCategoryText, active && s.recommendCategoryTextOn]}>{category.label}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        ) : null}
+
+        {(!isMusicPage && !isNotesPage) ? (
+          <TouchableOpacity style={s.submitRecommendButton} activeOpacity={0.85} onPress={() => router.push('/create-recommendation' as any)}>
+            <View>
+              <Text style={s.submitRecommendTitle}>Submit recommend</Text>
+              <Text style={s.submitRecommendSub}>Share a note, music find, video, podcast, or link.</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={22} color="#111111" />
+          </TouchableOpacity>
+        ) : null}
+
+        {isMusicPage ? (
+          <>
+            <View style={s.audiusHero}>
+              <Text style={s.audiusHeroTitle}>Underground sounds</Text>
+              <Text style={s.audiusHeroText}>Discover independent artists and tracks from Audius. Search a sound, preview it, save it, or use it in a post.</Text>
+              <View style={s.audiusSearchBox}>
+                <Ionicons name="search" size={18} color="#777777" />
+                <TextInput
+                  value={audiusQuery}
+                  onChangeText={(text) => {
+                    audiusQueryRef.current = text;
+                    setAudiusQuery(text);
+                  }}
+                  onSubmitEditing={() => loadAudiusDiscovery()}
+                  placeholder="Search artists, songs, underground..."
+                  placeholderTextColor="#8A8A8A"
+                  style={s.audiusSearchInput}
+                  returnKeyType="search"
+                />
+                {audiusQuery.trim() ? (
+                  <TouchableOpacity
+                    onPress={() => {
+                      audiusQueryRef.current = '';
+                      setAudiusQuery('');
+                      loadAudiusDiscovery('');
+                    }}
+                    style={s.audiusSearchClear}
+                  >
+                    <Ionicons name="close" size={16} color="#111111" />
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.audiusChipRail}>
+                {['underground', 'indie', 'lofi', 'afrobeats', 'jersey club', 'bedroom pop'].map((query) => (
+                  <TouchableOpacity
+                    key={query}
+                    style={s.audiusChip}
+                    onPress={() => {
+                      audiusQueryRef.current = query;
+                      setAudiusQuery(query);
+                      loadAudiusDiscovery(query);
+                    }}
+                  >
+                    <Text style={s.audiusChipText}>{query}</Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </View>
+            {audiusLoading && audiusTracks.length === 0 ? (
+              <View style={s.recommendLoading}>
+                <ActivityIndicator color="#111111" />
+              </View>
+            ) : audiusTracks.length > 0 ? (
+              <View style={s.audiusList}>
+                {audiusTracks.map(renderAudiusTrackCard)}
+              </View>
+            ) : (
+              <View style={s.recommendEmpty}>
+                <Ionicons name="radio-outline" size={34} color="#888888" />
+                <Text style={s.recommendEmptyTitle}>No Audius tracks found</Text>
+                <Text style={s.recommendEmptyText}>Try another artist, genre, or underground sound keyword.</Text>
+              </View>
+            )}
+          </>
+        ) : isNotesPage ? (
+          notesLoading && notes.length === 0 ? (
+            <View style={s.recommendLoading}><ActivityIndicator color="#111111" /></View>
+          ) : notes.length > 0 ? (
+            <View style={s.noteList}>
+              {notes.map((note) => (
+                <NoteCard
+                  key={note.id}
+                  note={note}
+                  onChanged={(next) => setNotes((current) => current.map((item) => item.id === next.id ? next : item))}
+                />
+              ))}
+            </View>
+          ) : (
+            <View style={s.recommendEmpty}>
+              <Ionicons name="moon-outline" size={34} color="#888888" />
+              <Text style={s.recommendEmptyTitle}>No notes yet</Text>
+              <Text style={s.recommendEmptyText}>Share a thought, confession, question, mood, or mini journal post.</Text>
+              <TouchableOpacity style={s.recommendEmptyButton} onPress={() => router.push('/create-note' as any)}>
+                <Text style={s.recommendEmptyButtonText}>Write note</Text>
+              </TouchableOpacity>
+            </View>
+          )
+        ) : recommendLoading && recommendations.length === 0 ? (
+          <View style={s.recommendLoading}>
+            <ActivityIndicator color="#111111" />
+          </View>
+        ) : recommendations.length > 0 ? (
+          <View style={s.recommendGrid}>
+            <View style={s.recommendColumn}>
+              {left.map((item, index) => renderRecommendationCard(item, index * 2))}
+            </View>
+            <View style={s.recommendColumn}>
+              {right.map((item, index) => renderRecommendationCard(item, index * 2 + 1))}
+            </View>
+          </View>
+        ) : (
+          <View style={s.recommendEmpty}>
+            <Ionicons name="sparkles-outline" size={34} color="#888888" />
+            <Text style={s.recommendEmptyTitle}>No recommendations yet</Text>
+            <Text style={s.recommendEmptyText}>Be the first to share something worth watching, reading, or listening to.</Text>
+            <TouchableOpacity style={s.recommendEmptyButton} onPress={() => router.push('/create-recommendation' as any)}>
+              <Text style={s.recommendEmptyButtonText}>Add one</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+      </View>
+    );
+  };
 
   return (
     <View style={s.root}>
@@ -362,6 +567,8 @@ export default function DiscoverScreen() {
       >
         {loading ? (
           <View style={s.center}><ActivityIndicator size="large" color="#1A1A1A" /></View>
+        ) : RECOMMEND_PAGE_IDS.has(tab) ? (
+          renderRecommendTab()
         ) : (
           <>
             {/* Search */}
@@ -372,9 +579,9 @@ export default function DiscoverScreen() {
               </View>
             </View>
 
-            {/* People Profiles */}
+            {/* Story statuses */}
             <View style={s.peopleSection}>
-              <Text style={s.peopleSectionTitle}>{t('people')}</Text>
+              <Text style={s.peopleSectionTitle}>Stories</Text>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.peopleScroll}>
                 <TouchableOpacity
                   key="your-story"
@@ -402,110 +609,37 @@ export default function DiscoverScreen() {
                   <Text style={s.personName} numberOfLines={1}>{t('yourStory')}</Text>
                   <Text style={s.personBio} numberOfLines={1}>{user?.username || user?.full_name || ''}</Text>
                 </TouchableOpacity>
-                  {people.map((u: any) => (
-                    <TouchableOpacity key={u.id} style={s.personCard} activeOpacity={0.9}
-                      onPress={() => router.push(`/user/${u.id}` as any)}>
-                      {u.profile_image ? (
-                        <Image source={{ uri: u.profile_image }} style={s.personImg} />
-                      ) : (
-                        <View style={[s.personImg, { backgroundColor: '#F0F0F0', justifyContent: 'center', alignItems: 'center' }]}>
-                          <Text style={s.personInit}>{(u.full_name || 'U')[0]}</Text>
-                        </View>
-                      )}
-                      <Text style={s.personName} numberOfLines={1}>{u.full_name}</Text>
-                      <Text style={s.personBio} numberOfLines={2}>{u.bio || u.city || ''}</Text>
+                  {statusGroups.map((group: any) => (
+                    <TouchableOpacity
+                      key={group.user_id}
+                      style={s.personCard}
+                      activeOpacity={0.9}
+                      onPress={() => router.push({ pathname: '/story-viewer', params: { userId: group.user_id } } as any)}
+                    >
+                      <View style={[s.statusRing, group.has_unviewed && s.statusRingActive]}>
+                        {group.user_profile_image ? (
+                          <Image source={{ uri: group.user_profile_image }} style={s.personImg} />
+                        ) : (
+                          <View style={[s.personImg, { backgroundColor: '#F0F0F0', justifyContent: 'center', alignItems: 'center' }]}>
+                            <Text style={s.personInit}>{(group.user_full_name || group.user_username || 'U')[0]}</Text>
+                          </View>
+                        )}
+                      </View>
+                      <Text style={s.personName} numberOfLines={1}>{group.user_full_name || group.user_username || 'Story'}</Text>
+                      <Text style={s.personBio} numberOfLines={1}>
+                        {group.statuses?.length || 1} update{group.statuses?.length === 1 ? '' : 's'}
+                      </Text>
                     </TouchableOpacity>
                   ))}
+                  {statusGroups.length === 0 ? (
+                    <View style={s.emptyStoryCard}>
+                      <Ionicons name="sparkles-outline" size={22} color="#9B9B9B" />
+                      <Text style={s.emptyStoryText}>Public stories will appear here.</Text>
+                    </View>
+                  ) : null}
               </ScrollView>
             </View>
 
-            {/* Discover shelves */}
-            <View style={s.shelfRegion}>
-              {DISCOVER_SHELVES.map((section) => {
-                const places = shelfPlaces[section.id] || [];
-                const cards = places.length > 0
-                  ? places
-                  : section.fallbackItems.map((name, index) => ({ place_id: `${section.id}-${index}`, name, fallback: true }));
-
-                return (
-                  <View key={section.id} style={s.shelfSection}>
-                    <TouchableOpacity
-                      style={s.shelfHeader}
-                      activeOpacity={0.75}
-                      onPress={() => router.push(`/category/${section.id}` as any)}
-                    >
-                      <Text style={s.shelfTitle}>{section.label}</Text>
-                      <Ionicons name="chevron-forward" size={20} color="#5D5D5D" />
-                    </TouchableOpacity>
-                    <Text style={s.shelfSub}>{section.sub}</Text>
-
-                    <ScrollView
-                      horizontal
-                      showsHorizontalScrollIndicator={false}
-                      contentContainerStyle={s.shelfScroll}
-                    >
-                      {cards.map((item: any, index: number) => {
-                        const hasPhoto = !!item.photo_url;
-                        const isEvent = section.id === 'events';
-                        const title = isEvent ? (item.event_title || item.name || section.label) : (item.name || section.label);
-                        const meta = isEvent
-                          ? `${item.event_time_label || 'Nearby'} - ${item.event_venue || item.name || item.vicinity || 'Local'}`
-                          : item.vicinity || item.formatted_address || (item.rating ? `${item.rating} stars` : section.label);
-
-                        return (
-                          <TouchableOpacity
-                            key={item.place_id || `${section.id}-${index}`}
-                            style={s.shelfCard}
-                            activeOpacity={0.88}
-                            onPress={() => {
-                              if (item.empty) return;
-                              if (isEvent) {
-                                router.push({
-                                  pathname: '/event/[id]',
-                                  params: {
-                                    id: routeParam(item.event_id || item.place_id || `${section.id}-${index}`),
-                                    placeId: item.fallback ? '' : routeParam(item.place_id),
-                                    title: routeParam(item.event_title || item.name || 'Event'),
-                                    host: routeParam(item.event_host || 'Flames local guide'),
-                                    venue: routeParam(item.event_venue || item.name),
-                                    address: routeParam(item.event_address || item.vicinity || item.formatted_address),
-                                    image: routeParam(item.photo_url),
-                                    schedule: routeParam(item.event_schedule),
-                                    weekday: routeParam(item.event_weekday),
-                                    month: routeParam(item.event_month),
-                                    day: routeParam(item.event_day),
-                                    description: routeParam(item.event_description),
-                                    attendees: routeParam(item.attendees || 3),
-                                    lat: routeParam(item.lat),
-                                    lng: routeParam(item.lng),
-                                    eventUrl: routeParam(item.event_url || item.url),
-                                    source: routeParam(item.event_source || 'eventbrite'),
-                                  },
-                                } as any);
-                              } else if (item.fallback || !item.place_id) {
-                                router.push(`/category/${section.id}` as any);
-                              } else {
-                                router.push(`/place/${item.place_id}` as any);
-                              }
-                            }}
-                          >
-                            <View style={[s.shelfImage, s.shelfFallback, { backgroundColor: section.fallbackColor }]}>
-                              <Ionicons name={section.icon as keyof typeof Ionicons.glyphMap} size={28} color="#181818" />
-                              {isEvent && <Text style={s.eventFallbackLabel}>{item.event_time_label || 'Event'}</Text>}
-                              {hasPhoto && (
-                                <Image source={{ uri: item.photo_url }} style={s.shelfImageOverlay} resizeMode="cover" />
-                              )}
-                            </View>
-                            <Text style={s.shelfCardTitle} numberOfLines={2}>{title}</Text>
-                            <Text style={s.shelfCardMeta} numberOfLines={1}>{meta}</Text>
-                          </TouchableOpacity>
-                        );
-                      })}
-                    </ScrollView>
-                  </View>
-                );
-              })}
-            </View>
           </>
         )}
       </ScrollView>
@@ -533,6 +667,8 @@ const s = StyleSheet.create({
   personInit: { fontSize: 28, fontWeight: '800', color: '#CCC' },
   personName: { fontSize: 14, fontWeight: '700', color: '#1A1A1A', marginTop: 8, textAlign: 'center' },
   personBio: { fontSize: 11, color: '#999', textAlign: 'center', marginTop: 2 },
+  statusRing: { width: 106, height: 106, borderRadius: 53, justifyContent: 'center', alignItems: 'center', borderWidth: 2, borderColor: '#E6E6E6' },
+  statusRingActive: { borderColor: colors.accentPrimary },
   yourStoryImageWrap: { width: 100, height: 100, position: 'relative' },
   yourStoryFallback: { backgroundColor: '#F5F2EC', borderWidth: 2, borderColor: '#DDD8CC', justifyContent: 'center', alignItems: 'center' },
   yourStoryInitial: { fontSize: 30, fontWeight: '900', color: colors.accentPrimary },
@@ -549,20 +685,81 @@ const s = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  emptyStoryCard: {
+    width: 178,
+    height: 124,
+    borderRadius: 18,
+    backgroundColor: '#F5F5F5',
+    borderWidth: 1,
+    borderColor: '#ECECEC',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+  },
+  emptyStoryText: { marginTop: 8, fontSize: 12, lineHeight: 16, color: '#777', textAlign: 'center', fontWeight: '700' },
 
-  shelfRegion: { backgroundColor: colors.white, paddingTop: 8, paddingBottom: 18 },
-  shelfSection: { paddingTop: 12, paddingBottom: 4 },
-  shelfHeader: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16 },
-  shelfTitle: { fontSize: 20, fontWeight: '900', color: '#050505', lineHeight: 24 },
-  shelfSub: { fontSize: 12, color: '#6E6E6E', paddingHorizontal: 16, marginTop: 2, marginBottom: 10 },
-  shelfScroll: { gap: 10, paddingHorizontal: 16, paddingRight: 24 },
-  shelfCard: { width: SHELF_CARD },
-  shelfImage: { width: SHELF_CARD, height: SHELF_CARD, borderRadius: 6 },
-  shelfImageOverlay: { position: 'absolute', width: SHELF_CARD, height: SHELF_CARD, borderRadius: 6 },
-  shelfFallback: { justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: colors.borderSubtle },
-  eventFallbackLabel: { marginTop: 8, fontSize: 11, fontWeight: '800', color: colors.accentPrimary },
-  shelfCardTitle: { fontSize: 13, fontWeight: '700', color: '#050505', lineHeight: 16, marginTop: 7 },
-  shelfCardMeta: { fontSize: 11, color: '#777', lineHeight: 14, marginTop: 2 },
+  recommendRoot: { paddingHorizontal: 14, paddingTop: 6, paddingBottom: 36 },
+  recommendTopBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingBottom: 18 },
+  recommendBrandPill: { minHeight: 36, borderRadius: 18, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#ECECEC', flexDirection: 'row', alignItems: 'center', gap: 7, paddingHorizontal: 13 },
+  recommendBrandText: { color: '#111111', fontSize: 12, fontWeight: '900', letterSpacing: 0.2 },
+  recommendMenuBtn: { width: 42, height: 42, borderRadius: 21, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#ECECEC', alignItems: 'center', justifyContent: 'center' },
+  recommendMenuSpacer: { width: 42, height: 42 },
+  recommendCategoryRail: { gap: 8, paddingBottom: 14 },
+  recommendCategoryPill: { minHeight: 34, borderRadius: 17, justifyContent: 'center', paddingHorizontal: 12 },
+  recommendCategoryPillOn: { borderWidth: 1.3, borderColor: '#111111' },
+  recommendCategoryText: { color: '#333333', fontSize: 12, fontWeight: '700' },
+  recommendCategoryTextOn: { color: '#111111', fontWeight: '900' },
+  submitRecommendButton: { minHeight: 68, borderRadius: 18, backgroundColor: '#F4F2EA', borderWidth: 1, borderColor: '#E8E2D5', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, paddingHorizontal: 16, marginBottom: 14 },
+  submitRecommendTitle: { color: '#111111', fontSize: 17, fontWeight: '900' },
+  submitRecommendSub: { color: '#6E6A62', fontSize: 12, lineHeight: 16, fontWeight: '700', marginTop: 3 },
+  audiusHero: { borderRadius: 26, backgroundColor: '#F4F6EE', borderWidth: 1, borderColor: '#E6EAD8', padding: 16, marginBottom: 14, gap: 12 },
+  audiusHeroTitle: { color: '#111111', fontSize: 28, lineHeight: 31, fontWeight: '900' },
+  audiusHeroText: { color: '#5F6459', fontSize: 13, lineHeight: 18, fontWeight: '700' },
+  audiusSearchBox: { minHeight: 48, borderRadius: 24, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E3E3E3', flexDirection: 'row', alignItems: 'center', gap: 9, paddingHorizontal: 13 },
+  audiusSearchInput: { flex: 1, minWidth: 0, color: '#111111', fontSize: 14, fontWeight: '800', paddingVertical: 0 },
+  audiusSearchClear: { width: 28, height: 28, borderRadius: 14, backgroundColor: '#F1F1F1', alignItems: 'center', justifyContent: 'center' },
+  audiusChipRail: { gap: 8, paddingRight: 4 },
+  audiusChip: { minHeight: 34, borderRadius: 17, backgroundColor: '#111111', justifyContent: 'center', paddingHorizontal: 12 },
+  audiusChipText: { color: '#FFFFFF', fontSize: 12, fontWeight: '900' },
+  audiusList: { gap: 12 },
+  audiusCard: { minHeight: 126, borderRadius: 22, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E9E9E9', flexDirection: 'row', gap: 12, padding: 10 },
+  audiusArtworkWrap: { width: 104, height: 104, borderRadius: 18, overflow: 'hidden', backgroundColor: '#EFF2E8', position: 'relative' },
+  audiusArtwork: { width: '100%', height: '100%' },
+  audiusArtworkFallback: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  audiusPlayButton: { position: 'absolute', right: 8, bottom: 8, width: 38, height: 38, borderRadius: 19, backgroundColor: '#DFFF32', borderWidth: 1.2, borderColor: '#111111', alignItems: 'center', justifyContent: 'center' },
+  audiusCopy: { flex: 1, minWidth: 0, justifyContent: 'center' },
+  audiusMetaRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 5 },
+  audiusSource: { color: '#56724C', fontSize: 10, fontWeight: '900', letterSpacing: 0.7 },
+  audiusDot: { color: '#9A9A9A', fontSize: 10, fontWeight: '900' },
+  audiusDuration: { color: '#777777', fontSize: 11, fontWeight: '800' },
+  audiusTitle: { color: '#111111', fontSize: 17, lineHeight: 20, fontWeight: '900' },
+  audiusArtist: { color: '#6F6F6F', fontSize: 13, fontWeight: '800', marginTop: 4 },
+  audiusActions: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 12 },
+  audiusPrimaryAction: { flex: 1, minHeight: 38, borderRadius: 19, backgroundColor: '#DFFF32', borderWidth: 1.2, borderColor: '#111111', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingHorizontal: 10 },
+  audiusPrimaryActionText: { color: '#111111', fontSize: 12, fontWeight: '900' },
+  audiusIconAction: { width: 38, height: 38, borderRadius: 19, backgroundColor: '#F2F2F2', alignItems: 'center', justifyContent: 'center' },
+  audiusIconActionOn: { backgroundColor: '#DFFF32', borderWidth: 1.2, borderColor: '#111111' },
+  noteList: { gap: 14 },
+  recommendGrid: { flexDirection: 'row', gap: 3, alignItems: 'flex-start' },
+  recommendColumn: { flex: 1, gap: 3 },
+  recommendCard: { borderRadius: 18, overflow: 'hidden', position: 'relative', padding: 15, justifyContent: 'space-between' },
+  recommendCardImage: { ...StyleSheet.absoluteFillObject, width: '100%', height: '100%' },
+  recommendCardShade: { ...StyleSheet.absoluteFillObject, backgroundColor: 'transparent' },
+  recommendCardShadeOnImage: { backgroundColor: 'rgba(0,0,0,0.20)' },
+  recommendCardCopy: { gap: 6 },
+  recommendSmall: { color: '#2D2D2D', fontSize: 11, fontWeight: '700' },
+  recommendCardTitle: { color: '#111111', fontSize: 24, lineHeight: 25, fontWeight: '500', letterSpacing: 0 },
+  recommendCardMeta: { color: '#2D2D2D', fontSize: 11, fontWeight: '700' },
+  recommendTextOnImage: { color: '#FFFFFF', textShadowColor: 'rgba(0,0,0,0.32)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 4 },
+  recommendReadMore: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 18 },
+  recommendReadText: { color: '#111111', fontSize: 11, fontWeight: '900' },
+  recommendReadTextOnImage: { color: '#FFFFFF' },
+  recommendLoading: { minHeight: 260, alignItems: 'center', justifyContent: 'center' },
+  recommendEmpty: { minHeight: 280, borderRadius: 22, backgroundColor: '#F7F7F7', alignItems: 'center', justifyContent: 'center', padding: 24 },
+  recommendEmptyTitle: { color: '#111111', fontSize: 19, fontWeight: '900', marginTop: 10 },
+  recommendEmptyText: { color: '#777777', fontSize: 13, lineHeight: 18, textAlign: 'center', marginTop: 6, fontWeight: '700' },
+  recommendEmptyButton: { marginTop: 16, minHeight: 44, borderRadius: 22, backgroundColor: '#111111', justifyContent: 'center', paddingHorizontal: 18 },
+  recommendEmptyButtonText: { color: '#FFFFFF', fontSize: 13, fontWeight: '900' },
 
   center: { paddingTop: 100, alignItems: 'center' },
 });

@@ -174,7 +174,7 @@ export default function PlacesScreen() {
         };
         if (keyword?.trim()) params.keyword = keyword.trim();
 
-        const response = await api.get('/google-places/nearby', { params });
+        const response = await api.get('/mapbox-places/nearby', { params });
         const data = response.data;
         if (data?.error) {
           setError(data.error);
@@ -387,8 +387,8 @@ export default function PlacesScreen() {
               <Text style={pStyles.emptyTitle}>No places found</Text>
               {error ? (
                 <Text style={{ fontSize: 13, color: '#DC2626', marginTop: 8, textAlign: 'center', paddingHorizontal: 20 }}>
-                  {error.includes('Billing')
-                    ? 'Enable Google Maps Billing on your Google Cloud Console to see places.'
+                  {error.includes('Mapbox')
+                    ? 'Check the Mapbox access token to see places.'
                     : error}
                 </Text>
               ) : (

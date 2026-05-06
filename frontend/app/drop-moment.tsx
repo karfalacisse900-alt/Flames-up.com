@@ -10,7 +10,7 @@ import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
 import { useAuthStore } from '../src/store/authStore';
 import api from '../src/api/client';
-import { uploadImage, getVideoUploadUrl, uploadVideoToStream } from '../src/utils/mediaUpload';
+import { uploadImageWithBackup, uploadVideoWithBackup } from '../src/utils/mediaUpload';
 import { isPhoneVerificationError, requireVerifiedPhone } from '../src/utils/phoneVerification';
 
 const { width: SW } = Dimensions.get('window');
@@ -20,7 +20,7 @@ export default function DropMomentScreen() {
   const insets = useSafeAreaInsets();
   const { user } = useAuthStore();
 
-  const [media, setMedia] = useState<{ uri: string; type: 'image' | 'video'; base64?: string } | null>(null);
+  const [media, setMedia] = useState<{ uri: string; type: 'image' | 'video'; base64?: string; mimeType?: string; fileName?: string | null } | null>(null);
   const [caption, setCaption] = useState('');
   const [location, setLocation] = useState('');
   const [isPosting, setIsPosting] = useState(false);
@@ -45,6 +45,8 @@ export default function DropMomentScreen() {
         uri: asset.uri,
         type: asset.type === 'video' ? 'video' : 'image',
         base64: asset.base64 || undefined,
+        mimeType: asset.mimeType,
+        fileName: asset.fileName || null,
       });
       setStep('compose');
     }
@@ -65,6 +67,8 @@ export default function DropMomentScreen() {
         uri: asset.uri,
         type: asset.type === 'video' ? 'video' : 'image',
         base64: asset.base64 || undefined,
+        mimeType: asset.mimeType,
+        fileName: asset.fileName || null,
       });
       setStep('compose');
     }
@@ -94,22 +98,20 @@ export default function DropMomentScreen() {
     setIsPosting(true);
     try {
       let imageUrl = '';
-      let videoUid = '';
+      let backupId: string | undefined;
 
       if (media.type === 'video') {
-        setUploadProgress('Getting upload URL...');
-        const uploadInfo = await getVideoUploadUrl();
-        if (uploadInfo) {
-          setUploadProgress('Uploading video to Stream...');
-          const success = await uploadVideoToStream(uploadInfo.uploadUrl, media.uri);
-          if (success) {
-            videoUid = uploadInfo.videoUid;
-            imageUrl = `cfstream:${videoUid}`;
-          }
+        setUploadProgress('Uploading and backing up video...');
+        const uploaded = await uploadVideoWithBackup(media.uri, media.mimeType || 'video/mp4', media.fileName || 'moment.mp4');
+        if (uploaded?.url) {
+          imageUrl = uploaded.url;
+          backupId = uploaded.backupId;
         }
       } else if (media.base64) {
-        setUploadProgress('Uploading image...');
-        imageUrl = await uploadImage(media.base64.startsWith('data:') ? media.base64 : `data:image/jpeg;base64,${media.base64}`);
+        setUploadProgress('Uploading and backing up image...');
+        const uploaded = await uploadImageWithBackup(media.base64.startsWith('data:') ? media.base64 : `data:image/jpeg;base64,${media.base64}`, media.fileName || 'moment.jpg');
+        imageUrl = uploaded.url;
+        backupId = uploaded.backupId;
       }
 
       if (!imageUrl) {
@@ -124,6 +126,7 @@ export default function DropMomentScreen() {
         image: imageUrl,
         images: [imageUrl],
         media_types: [media.type],
+        media_backup_ids: backupId ? [backupId] : [],
         post_type: 'moment',
         location: location || '',
       });

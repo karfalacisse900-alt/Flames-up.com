@@ -19,8 +19,9 @@ Backend stack: Hono + D1 + Cloudflare Images/Stream.
    - `CLOUDFLARE_ACCOUNT_ID`
    - `CLOUDFLARE_IMAGES_TOKEN`
    - `CLOUDFLARE_STREAM_TOKEN`
-   - `GOOGLE_MAPS_API_KEY`
+   - `MAPBOX_ACCESS_TOKEN`
    - `EVENTBRITE_API_TOKEN` (set with `wrangler secret put EVENTBRITE_API_TOKEN`; do not commit the token)
+   - `OWNER_USERNAMES` (comma-separated usernames that can use creator actions before phone verification)
    - `GOOGLE_OAUTH_CLIENT_IDS` (comma-separated Google client IDs)
    - `APPLE_OAUTH_AUDIENCES` (comma-separated Apple audiences, bundle/service IDs)
    - `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_VERIFY_SERVICE_SID` for Twilio Verify phone codes
@@ -28,6 +29,14 @@ Backend stack: Hono + D1 + Cloudflare Images/Stream.
 
 4. Deploy:
    `wrangler deploy`
+
+Google OAuth requires the same client IDs used by the Expo app:
+
+```powershell
+$ids = "your-web-client-id.apps.googleusercontent.com,your-ios-client-id.apps.googleusercontent.com,your-android-client-id.apps.googleusercontent.com"
+$ids | npx wrangler secret put GOOGLE_OAUTH_CLIENT_IDS --env production
+npx wrangler deploy --env production
+```
 
 ## Auth Endpoints
 

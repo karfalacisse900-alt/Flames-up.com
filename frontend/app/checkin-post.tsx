@@ -22,6 +22,7 @@ import { colors, shadows } from '../src/utils/theme';
 import { useAuthStore } from '../src/store/authStore';
 import api from '../src/api/client';
 import { processMediaBatch } from '../src/utils/mediaProcessing';
+import { uploadImageWithBackup, uploadVideoWithBackup } from '../src/utils/mediaUpload';
 import { isPhoneVerificationError, requireVerifiedPhone } from '../src/utils/phoneVerification';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
@@ -45,7 +46,7 @@ export default function CheckInPostScreen() {
 
   const { user } = useAuthStore();
   const [content, setContent] = useState('');
-  const [media, setMedia] = useState<{ uri: string; type: string; base64?: string }[]>([]);
+  const [media, setMedia] = useState<{ uri: string; type: string; base64?: string; mimeType?: string; fileName?: string | null }[]>([]);
   const [isPosting, setIsPosting] = useState(false);
   const [postType, setPostType] = useState<string>(params.placeId ? 'check_in' : 'lifestyle');
   const [isCheckingLocation, setIsCheckingLocation] = useState(false);
@@ -112,6 +113,8 @@ export default function CheckInPostScreen() {
         uri: asset.uri,
         type: asset.type,
         base64: asset.base64,
+        mimeType: asset.mimeType,
+        fileName: asset.fileName,
       }));
       setMedia((prev) => [...prev, ...newMedia].slice(0, MAX_MEDIA));
     }
@@ -134,7 +137,7 @@ export default function CheckInPostScreen() {
       const [asset] = await processMediaBatch([result.assets[0]], 'balanced');
       setMedia((prev) => [
         ...prev,
-        { uri: asset.uri, type: asset.type, base64: asset.base64 },
+        { uri: asset.uri, type: asset.type, base64: asset.base64, mimeType: asset.mimeType, fileName: asset.fileName },
       ].slice(0, MAX_MEDIA));
     }
   };
@@ -170,11 +173,36 @@ export default function CheckInPostScreen() {
     if (!requireVerifiedPhone(user, router, 'create posts')) return;
     setIsPosting(true);
     try {
-      const imagesList = media.map((m) => m.base64 || m.uri).filter(Boolean);
+      const imagesList: string[] = [];
+      const mediaTypes: string[] = [];
+      const mediaBackupIds: string[] = [];
+      for (let i = 0; i < media.length; i++) {
+        const item = media[i];
+        if (item.type === 'video') {
+          const uploaded = await uploadVideoWithBackup(item.uri, item.mimeType || 'video/mp4', item.fileName || `checkin-video-${i + 1}.mp4`);
+          if (uploaded?.url) {
+            imagesList.push(uploaded.url);
+            mediaTypes.push('video');
+            if (uploaded.backupId) mediaBackupIds.push(uploaded.backupId);
+          }
+        } else if (item.base64) {
+          const uploaded = await uploadImageWithBackup(item.base64.startsWith('data:') ? item.base64 : `data:image/jpeg;base64,${item.base64}`, item.fileName || `checkin-image-${i + 1}.jpg`);
+          if (uploaded.url) {
+            imagesList.push(uploaded.url);
+            mediaTypes.push('image');
+            if (uploaded.backupId) mediaBackupIds.push(uploaded.backupId);
+          }
+        } else if (item.uri) {
+          imagesList.push(item.uri);
+          mediaTypes.push('image');
+        }
+      }
       const postData: any = {
         content: content.trim(),
         image: imagesList[0] || null,
         images: imagesList.length > 0 ? imagesList : undefined,
+        media_types: mediaTypes.length > 0 ? mediaTypes : undefined,
+        media_backup_ids: mediaBackupIds,
         post_type: type,
       };
 

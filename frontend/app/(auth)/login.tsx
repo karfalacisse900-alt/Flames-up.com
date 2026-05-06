@@ -32,6 +32,8 @@ type OAuthConfig = {
   apple?: { audience_configured?: boolean };
 };
 
+const GOOGLE_REDIRECT_OPTIONS = { scheme: 'frontend', path: 'oauth' } as const;
+
 function MethodButton({
   icon,
   label,
@@ -82,28 +84,33 @@ export default function LoginScreen() {
   const googleWebClientId = (process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || '').trim();
   const googleIosClientId = (process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID || '').trim();
   const googleAndroidClientId = (process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID || '').trim();
-  const googleRedirectUri = makeRedirectUri({ scheme: 'frontend', path: 'oauth' });
-  const isExpoGo = Constants.appOwnership === 'expo';
-  const activeGoogleClientId = Platform.select({
-    ios: googleIosClientId || googleWebClientId,
-    android: googleAndroidClientId || googleWebClientId,
+  const googleRedirectUri = makeRedirectUri(GOOGLE_REDIRECT_OPTIONS);
+  const isExpoGo = Constants.appOwnership === 'expo' && Platform.OS !== 'web';
+  const requiredGoogleClientId = Platform.select({
+    ios: googleIosClientId,
+    android: googleAndroidClientId,
     default: googleWebClientId,
   });
-  const hasGoogleClientId = !!activeGoogleClientId;
+  const requiredGoogleEnvName = Platform.select({
+    ios: 'EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID',
+    android: 'EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID',
+    default: 'EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID',
+  }) || 'EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID';
+  const hasGoogleClientId = !!requiredGoogleClientId;
 
   // expo-auth-session requires platform client IDs to be defined at hook init time.
   // Keep them as non-empty placeholders so the screen can render even before env setup.
   const placeholderGoogleClientId = 'missing-google-client-id.apps.googleusercontent.com';
   const safeGoogleWebClientId = googleWebClientId || placeholderGoogleClientId;
-  const safeGoogleIosClientId = googleIosClientId || googleWebClientId || placeholderGoogleClientId;
-  const safeGoogleAndroidClientId = googleAndroidClientId || googleWebClientId || placeholderGoogleClientId;
+  const safeGoogleIosClientId = googleIosClientId || placeholderGoogleClientId;
+  const safeGoogleAndroidClientId = googleAndroidClientId || placeholderGoogleClientId;
 
   const [googleRequest, googleResponse, promptGoogleAsync] = Google.useIdTokenAuthRequest({
     webClientId: safeGoogleWebClientId,
     iosClientId: safeGoogleIosClientId,
     androidClientId: safeGoogleAndroidClientId,
-    redirectUri: googleRedirectUri,
-  });
+    selectAccount: true,
+  }, GOOGLE_REDIRECT_OPTIONS);
 
   useEffect(() => {
     let mounted = true;
@@ -143,7 +150,11 @@ export default function LoginScreen() {
         await loginWithOAuth('google', idToken);
         router.replace('/(tabs)/home');
       } catch (error: any) {
-        Alert.alert('Google sign in failed', error?.response?.data?.detail || 'Could not sign in with Google.');
+        const detail = error?.response?.data?.detail || 'Could not sign in with Google.';
+        const setupHint = detail === 'Google client audience mismatch'
+          ? ' Add this app client ID to GOOGLE_OAUTH_CLIENT_IDS on Cloudflare.'
+          : '';
+        Alert.alert('Google sign in failed', `${detail}${setupHint}`);
       } finally {
         setActiveSocialMethod(null);
       }
@@ -170,24 +181,25 @@ export default function LoginScreen() {
   };
 
   const handleGooglePress = async () => {
+    const resolvedRedirectUri = googleRequest?.redirectUri || googleRedirectUri;
+    if (isExpoGo) {
+      Alert.alert(
+        'Google needs a development build',
+        `Expo Go cannot finish Google OAuth redirects. Use the development build command for Google sign in.\n\nRedirect URI for this run: ${resolvedRedirectUri}`
+      );
+      return;
+    }
     if (!hasGoogleClientId) {
       Alert.alert(
         'Google sign in not configured',
-        `Create a Google OAuth client ID, then set EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID in frontend/.env and GOOGLE_OAUTH_CLIENT_IDS in Cloudflare. Redirect URI: ${googleRedirectUri}`
+        `Set ${requiredGoogleEnvName} in frontend/.env, then restart Expo. Redirect URI: ${resolvedRedirectUri}`
       );
       return;
     }
     if (oauthConfig?.google && !oauthConfig.google.backend_configured) {
       Alert.alert(
         'Google backend not configured',
-        'Cloudflare is missing GOOGLE_OAUTH_CLIENT_IDS. Set it to the same Google OAuth client ID used by the app.'
-      );
-      return;
-    }
-    if (isExpoGo) {
-      Alert.alert(
-        'Google needs a development build',
-        'Google OAuth redirects do not work reliably in Expo Go. Use an Expo development build for Google sign in.'
+        'Cloudflare is missing GOOGLE_OAUTH_CLIENT_IDS. Set it to a comma-separated list of the Google web, iOS, and Android client IDs used by the app.'
       );
       return;
     }

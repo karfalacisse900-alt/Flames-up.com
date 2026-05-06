@@ -30,14 +30,24 @@ export default function RootLayout() {
         <Stack.Screen name="post/[id]" options={{ presentation: 'card' }} />
         <Stack.Screen name="user/[id]" options={{ presentation: 'card' }} />
         <Stack.Screen name="conversation/[id]" options={{ presentation: 'card' }} />
+        <Stack.Screen name="group-conversation/[id]" options={{ presentation: 'card' }} />
         <Stack.Screen name="call/[channel]" options={{ presentation: 'fullScreenModal' }} />
         <Stack.Screen name="place/[id]" options={{ presentation: 'card' }} />
         <Stack.Screen name="event/[id]" options={{ presentation: 'card' }} />
-        <Stack.Screen name="create-post" options={{ presentation: 'modal' }} />
+        <Stack.Screen name="recommendation/[id]" options={{ presentation: 'card' }} />
+        <Stack.Screen name="music/[id]" options={{ presentation: 'card' }} />
+        <Stack.Screen name="music-post/[id]" options={{ presentation: 'card' }} />
+        <Stack.Screen name="note/[id]" options={{ presentation: 'card' }} />
+        <Stack.Screen name="people/[id]" options={{ presentation: 'card' }} />
+        <Stack.Screen name="create-post" options={{ presentation: 'card' }} />
+        <Stack.Screen name="create-recommendation" options={{ presentation: 'card' }} />
+        <Stack.Screen name="create-music-post" options={{ presentation: 'card' }} />
+        <Stack.Screen name="create-note" options={{ presentation: 'card' }} />
         <Stack.Screen name="checkin-post" options={{ presentation: 'modal' }} />
         <Stack.Screen name="create-discover-post" options={{ presentation: 'modal' }} />
         <Stack.Screen name="create-status" options={{ presentation: 'modal' }} />
         <Stack.Screen name="verify-phone" options={{ presentation: 'modal' }} />
+        <Stack.Screen name="notifications" options={{ presentation: 'card' }} />
         <Stack.Screen name="edit-profile" options={{ presentation: 'modal' }} />
         <Stack.Screen name="settings" options={{ presentation: 'card' }} />
         <Stack.Screen name="my-library" options={{ presentation: 'card' }} />

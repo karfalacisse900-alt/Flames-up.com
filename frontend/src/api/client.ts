@@ -12,6 +12,13 @@ export const API_URL = normalizeApiURL(
   process.env.EXPO_PUBLIC_API_URL || process.env.EXPO_PUBLIC_BACKEND_URL
 );
 
+type SessionInvalidHandler = () => void | Promise<void>;
+let sessionInvalidHandler: SessionInvalidHandler | null = null;
+
+export function setSessionInvalidHandler(handler: SessionInvalidHandler | null) {
+  sessionInvalidHandler = handler;
+}
+
 const api = axios.create({
   baseURL: `${API_URL}/api`,
   timeout: 30000,
@@ -35,7 +42,18 @@ api.interceptors.request.use(
 // Response interceptor for error handling
 api.interceptors.response.use(
   (response) => response,
-  (error) => Promise.reject(error)
+  async (error) => {
+    const status = error?.response?.status;
+    const detail = error?.response?.data?.detail;
+    const code = error?.response?.data?.code;
+
+    if (status === 401 && (detail === 'Invalid token' || detail === 'Not authenticated' || code === 'INVALID_TOKEN' || code === 'USER_NOT_FOUND')) {
+      await AsyncStorage.multiRemove(['auth_token', 'user']);
+      await sessionInvalidHandler?.();
+    }
+
+    return Promise.reject(error);
+  }
 );
 
 export default api;

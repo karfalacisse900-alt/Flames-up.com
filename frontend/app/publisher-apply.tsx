@@ -6,13 +6,11 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { colors } from '../src/utils/theme';
 import api from '../src/api/client';
 
 const CATEGORIES = [
   { id: 'food', label: 'Food & Drink', icon: 'restaurant' },
   { id: 'culture', label: 'Culture & Arts', icon: 'color-palette' },
-  { id: 'news', label: 'Local News', icon: 'newspaper' },
   { id: 'events', label: 'Events', icon: 'calendar' },
   { id: 'lifestyle', label: 'Lifestyle', icon: 'heart' },
   { id: 'tech', label: 'Tech & Digital', icon: 'phone-portrait' },
@@ -141,7 +139,7 @@ export default function PublisherApplyScreen() {
           {step === 3 && (
             <>
               <Text style={s.stepTitle}>Location & Motivation</Text>
-              <Text style={s.stepDesc}>Last step — tell us where you're based and why you want to publish.</Text>
+              <Text style={s.stepDesc}>Last step - tell us where you are based and why you want to publish.</Text>
               {renderInput('Address (optional)', 'address', 'Street address...')}
               {renderInput('City', 'city', 'New York, NY')}
               {renderInput('Why do you want to publish?', 'why_publish', 'What kind of content will you share? Why should the community trust you?', { required: true, multiline: true })}

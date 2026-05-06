@@ -57,7 +57,6 @@ export default function AdminPanelScreen() {
       }},
     ]);
   };
-
   const StatCard = ({ label, value, icon, color }: any) => (
     <View style={[s.statCard, { borderLeftColor: color }]}>
       <View style={[s.statIcon, { backgroundColor: color + '15' }]}>
@@ -168,6 +167,7 @@ export default function AdminPanelScreen() {
                 </View>
               ))
             )}
+
           </>
         )}
       </ScrollView>

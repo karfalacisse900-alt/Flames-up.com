@@ -24,7 +24,7 @@ try {
   WebView = require('react-native-webview').WebView;
 } catch {}
 
-const GKEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_KEY || '';
+const MAPBOX_TOKEN = process.env.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN || '';
 
 const PLACE_TYPES = [
   { id: 'restaurant', label: 'Restaurants', icon: 'restaurant' },
@@ -34,24 +34,6 @@ const PLACE_TYPES = [
   { id: 'gym', label: 'Gyms', icon: 'barbell' },
   { id: 'park', label: 'Parks', icon: 'leaf' },
 ];
-
-const MAP_STYLE = JSON.stringify([
-  { featureType: 'all', elementType: 'geometry', stylers: [{ color: '#FFFFFF' }] },
-  { featureType: 'all', elementType: 'labels.text.fill', stylers: [{ color: '#333333' }] },
-  { featureType: 'all', elementType: 'labels.text.stroke', stylers: [{ color: '#FFFFFF' }, { weight: 3 }] },
-  { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#B8D4E3' }] },
-  { featureType: 'road.highway', elementType: 'geometry.fill', stylers: [{ color: '#F0F0F0' }] },
-  { featureType: 'road.highway', elementType: 'geometry.stroke', stylers: [{ color: '#E0E0E0' }] },
-  { featureType: 'road.arterial', elementType: 'geometry.fill', stylers: [{ color: '#F5F5F5' }] },
-  { featureType: 'road.local', elementType: 'geometry.fill', stylers: [{ color: '#FAFAFA' }] },
-  { featureType: 'landscape.natural', elementType: 'geometry', stylers: [{ color: '#F0F0F0' }] },
-  { featureType: 'landscape.man_made', elementType: 'geometry', stylers: [{ color: '#F5F5F5' }] },
-  { featureType: 'poi', elementType: 'geometry', stylers: [{ color: '#E8E8E8' }] },
-  { featureType: 'poi', elementType: 'labels', stylers: [{ visibility: 'off' }] },
-  { featureType: 'poi.park', elementType: 'geometry', stylers: [{ color: '#D4E8D0' }] },
-  { featureType: 'transit', stylers: [{ visibility: 'off' }] },
-  { featureType: 'administrative', elementType: 'geometry.stroke', stylers: [{ color: '#DDD' }] },
-]);
 
 export default function MapViewScreen() {
   const router = useRouter();
@@ -113,7 +95,7 @@ export default function MapViewScreen() {
   const loadPlaces = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await api.get('/google-places/nearby', {
+      const r = await api.get('/mapbox-places/nearby', {
         params: { type: activeType, lat, lng, radius: boardRadius },
       });
       const list = Array.isArray(r.data) ? r.data : r.data?.places || [];
@@ -206,11 +188,14 @@ export default function MapViewScreen() {
 
   const mapHTML = useCallback(() => {
     const nodesJson = JSON.stringify(clusteredNodes);
+    const tokenJson = JSON.stringify(MAPBOX_TOKEN);
     return `<!DOCTYPE html><html><head>
     <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+    <link href="https://api.mapbox.com/mapbox-gl-js/v3.9.4/mapbox-gl.css" rel="stylesheet">
     <style>
     *{margin:0;padding:0;box-sizing:border-box}
     html,body,#map{width:100%;height:100%}
+    body{background:#f8f6f1}
     .pin{position:absolute;cursor:pointer;z-index:10}
     .photo-pin{width:48px;height:48px;border-radius:50%;overflow:hidden;border:3px solid #fff;
       box-shadow:0 2px 8px rgba(0,0,0,.2);position:relative;transition:transform .2s cubic-bezier(.175,.885,.32,1.275)}
@@ -223,29 +208,30 @@ export default function MapViewScreen() {
     @keyframes pulse{0%{transform:scale(.5);opacity:1}100%{transform:scale(2);opacity:0}}
     </style></head><body>
     <div id="map"></div>
+    <script src="https://api.mapbox.com/mapbox-gl-js/v3.9.4/mapbox-gl.js"></script>
     <script>
     function initMap(){
-      var map = new google.maps.Map(document.getElementById('map'),{
-        center:{lat:${lat},lng:${lng}},zoom:14,
-        mapTypeControl:false,streetViewControl:false,fullscreenControl:false,zoomControl:false,
-        gestureHandling:'greedy',styles:${MAP_STYLE}
+      var token = ${tokenJson};
+      if(!token){
+        document.getElementById('map').innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;font-family:-apple-system,sans-serif;color:#777"><p style="font-size:16px;font-weight:700">Mapbox token missing</p><p style="font-size:13px;margin-top:8px;text-align:center;padding:0 20px">Add EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN and restart Expo.</p></div>';
+        return;
+      }
+      mapboxgl.accessToken = token;
+      var map = new mapboxgl.Map({
+        container:'map',
+        style:'mapbox://styles/mapbox/light-v11',
+        center:[${lng},${lat}],
+        zoom:14,
+        attributionControl:false
       });
+      map.addControl(new mapboxgl.AttributionControl({compact:true}));
       window.__mapRef = map;
       var nodes = ${nodesJson};
 
-      var userOv = new google.maps.OverlayView();
-      userOv.onAdd = function(){
-        var d = document.createElement('div');
-        d.style.position='relative';
-        d.innerHTML='<div class="pulse"></div><div class="user-dot"></div>';
-        this.el = d; this.getPanes().floatPane.appendChild(d);
-      };
-      userOv.draw = function(){
-        var pt = this.getProjection().fromLatLngToDivPixel(new google.maps.LatLng(${lat},${lng}));
-        if(pt){this.el.style.position='absolute';this.el.style.left=(pt.x-30)+'px';this.el.style.top=(pt.y-30)+'px';}
-      };
-      userOv.onRemove = function(){this.el.remove();};
-      userOv.setMap(map);
+      var userEl = document.createElement('div');
+      userEl.style.position='relative';
+      userEl.innerHTML='<div class="pulse"></div><div class="user-dot"></div>';
+      new mapboxgl.Marker(userEl).setLngLat([${lng},${lat}]).addTo(map);
 
       nodes.forEach(function(node){
         var el = document.createElement('div');
@@ -258,37 +244,32 @@ export default function MapViewScreen() {
           el.innerHTML = '<div class="cluster-pin">' + node.count + '</div>';
         }
 
-        var ov = new google.maps.OverlayView();
-        ov.pos = new google.maps.LatLng(node.lat,node.lng);
-        ov.onAdd = function(){ this.getPanes().floatPane.appendChild(el); };
-        ov.draw = function(){ var pt = this.getProjection().fromLatLngToDivPixel(this.pos); if(pt){el.style.left=(pt.x-24)+'px';el.style.top=(pt.y-24)+'px';} };
-        ov.onRemove = function(){ el.remove(); };
-        ov.setMap(map);
+        var marker = new mapboxgl.Marker(el).setLngLat([node.lng,node.lat]).addTo(map);
 
         el.onclick = function(e){
           e.stopPropagation();
-          map.panTo(ov.pos);
+          map.easeTo({center:[node.lng,node.lat],duration:350});
           if(node.kind === 'place'){
             window.ReactNativeWebView.postMessage(JSON.stringify({type:'select',idx:node.idx}));
             document.querySelectorAll('.photo-pin').forEach(function(p){p.style.transform='scale(1)';p.style.boxShadow='0 2px 8px rgba(0,0,0,.2)';});
             var pin = el.querySelector('.photo-pin');
             if(pin){ pin.style.transform='scale(1.2)'; pin.style.boxShadow='0 4px 16px rgba(0,0,0,.35)'; }
           } else {
-            map.setZoom(Math.min(map.getZoom()+2, 19));
+            map.easeTo({zoom:Math.min(map.getZoom()+2, 19),center:[node.lng,node.lat],duration:300});
           }
         };
       });
 
-      map.addListener('click',function(){
+      map.on('click',function(){
         window.ReactNativeWebView.postMessage(JSON.stringify({type:'deselect'}));
         document.querySelectorAll('.photo-pin').forEach(function(p){p.style.transform='scale(1)';});
       });
     }
+    initMap();
     </script>
-    <script src="https://maps.googleapis.com/maps/api/js?key=${GKEY}&libraries=places&callback=initMap" async defer></script>
     <script>
     window.onerror = function(){
-      document.getElementById('map').innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;font-family:-apple-system,sans-serif;color:#999"><p style="font-size:16px;font-weight:600">Maps API Loading</p><p style="font-size:13px;margin-top:8px;text-align:center;padding:0 20px">Please enable Maps JavaScript API and Places API in your Google Cloud Console for this key.</p></div>';
+      document.getElementById('map').innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;font-family:-apple-system,sans-serif;color:#999"><p style="font-size:16px;font-weight:600">Mapbox is loading</p><p style="font-size:13px;margin-top:8px;text-align:center;padding:0 20px">Check the Mapbox access token and network connection.</p></div>';
     };
     </script>
     </body></html>`;

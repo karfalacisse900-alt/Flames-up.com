@@ -8,6 +8,7 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { isCFStreamVideo, extractStreamUid, getStreamPlaybackInfo } from '../../../src/utils/mediaUpload';
 import api from '../../../src/api/client';
+import { cachePostsForDetail, cachePostForDetail, setPostDetailFeedContext } from '../../../src/store/postDetailCache';
 
 const { width: SW } = Dimensions.get('window');
 const COL_GAP = 8;
@@ -95,9 +96,7 @@ export default function SceneScreen() {
   const ctxMeta = CONTEXT_META[context || 'global'] || CONTEXT_META.global;
   const catLabel = CATEGORY_LABELS[category || 'all'] || 'All Posts';
 
-  useEffect(() => { loadPosts(); }, [context, category]);
-
-  const loadPosts = async () => {
+  const loadPosts = useCallback(async () => {
     try {
       setIsLoading(true);
       const res = await api.get('/posts/feed', { params: { limit: 50 } });
@@ -119,13 +118,17 @@ export default function SceneScreen() {
           if (f.length > 0) all = f;
         }
       }
+      cachePostsForDetail(all);
+      setPostDetailFeedContext(all.map((post: any) => post.id));
       setPosts(all);
     } catch { setPosts([]); } finally { setIsLoading(false); }
-  };
+  }, [context]);
+
+  useEffect(() => { void loadPosts(); }, [loadPosts]);
 
   const onRefresh = useCallback(async () => {
     setIsRefreshing(true); await loadPosts(); setIsRefreshing(false);
-  }, [context, category]);
+  }, [loadPosts]);
 
   // Only posts with images
   const imagePosts = posts.filter((p: any) => {
@@ -176,8 +179,8 @@ export default function SceneScreen() {
           </View>
         ) : (
           <View style={s.masonry}>
-            <View style={s.col}>{leftCol.map(p => <PinCard key={p.id} post={p} imgH={p._h} onPress={() => router.push(`/post/${p.id}` as any)} />)}</View>
-            <View style={s.col}>{rightCol.map(p => <PinCard key={p.id} post={p} imgH={p._h} onPress={() => router.push(`/post/${p.id}` as any)} />)}</View>
+            <View style={s.col}>{leftCol.map(p => <PinCard key={p.id} post={p} imgH={p._h} onPress={() => { cachePostForDetail(p); router.push(`/post/${p.id}` as any); }} />)}</View>
+            <View style={s.col}>{rightCol.map(p => <PinCard key={p.id} post={p} imgH={p._h} onPress={() => { cachePostForDetail(p); router.push(`/post/${p.id}` as any); }} />)}</View>
           </View>
         )}
       </ScrollView>

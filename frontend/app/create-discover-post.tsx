@@ -7,12 +7,11 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
-import { colors } from '../src/utils/theme';
 import api from '../src/api/client';
 import { processMediaBatch } from '../src/utils/mediaProcessing';
+import { uploadImageWithBackup } from '../src/utils/mediaUpload';
 
 const CATEGORIES = [
-  { id: 'news', label: 'Local News', icon: 'newspaper' },
   { id: 'events', label: 'Event', icon: 'calendar' },
   { id: 'culture', label: 'Culture', icon: 'color-palette' },
   { id: 'food', label: 'Food', icon: 'restaurant' },
@@ -52,9 +51,14 @@ export default function CreateDiscoverPostScreen() {
     }
     setPosting(true);
     try {
+      let uploadedImage = image;
+      if (image) {
+        const uploaded = await uploadImageWithBackup(image.startsWith('data:') ? image : `data:image/jpeg;base64,${image}`, 'discover-cover.jpg');
+        uploadedImage = uploaded.url;
+      }
       await api.post('/discover/posts', {
         title: title.trim(), content: content.trim(), category,
-        image, event_date: eventDate || null, event_location: eventLocation || null,
+        image: uploadedImage, event_date: eventDate || null, event_location: eventLocation || null,
         link_url: linkUrl || null,
       });
       Alert.alert('Published!', 'Your content is now live on Discover.', [{ text: 'OK', onPress: () => router.back() }]);
@@ -104,7 +108,7 @@ export default function CreateDiscoverPostScreen() {
           </TouchableOpacity>
 
           {/* Content */}
-          <TextInput style={s.contentInput} placeholder="Write your article, news, review, or announcement..." placeholderTextColor="#9CA3AF" value={content} onChangeText={setContent} multiline maxLength={5000} />
+          <TextInput style={s.contentInput} placeholder="Write your post, review, or announcement..." placeholderTextColor="#9CA3AF" value={content} onChangeText={setContent} multiline maxLength={5000} />
 
           {/* Event Fields (show when events category) */}
           {category === 'events' && (

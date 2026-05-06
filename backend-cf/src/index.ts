@@ -6,17 +6,25 @@ import bcrypt from 'bcryptjs';
 import { RtcRole, RtcTokenBuilder } from 'agora-token';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
+type WorkersAiBinding = {
+  run: (model: string, input: unknown, options?: unknown) => Promise<unknown>;
+};
+
 interface Env {
   DB: D1Database;
-  KV: KVNamespace;
+  KV?: KVNamespace;
+  MEDIA_BACKUP?: R2Bucket;
+  AI?: WorkersAiBinding;
   JWT_SECRET: string;
   CLOUDFLARE_ACCOUNT_ID: string;
+  CLOUDFLARE_IMAGES_ACCOUNT_HASH?: string;
   CLOUDFLARE_IMAGES_TOKEN: string;
   CLOUDFLARE_STREAM_TOKEN: string;
-  GOOGLE_MAPS_API_KEY: string;
+  MAPBOX_ACCESS_TOKEN?: string;
   EVENTBRITE_API_TOKEN?: string;
   EVENTS_PREVIEW?: string;
   FRONTEND_URL: string;
+  OWNER_USERNAMES?: string;
   GOOGLE_OAUTH_CLIENT_ID?: string;
   GOOGLE_OAUTH_CLIENT_IDS?: string;
   APPLE_OAUTH_AUDIENCE?: string;
@@ -29,6 +37,12 @@ interface Env {
   AGORA_APP_ID?: string;
   AGORA_APP_CERTIFICATE?: string;
   AGORA_TOKEN_TTL_SECONDS?: string;
+  MEDIA_AI_ENHANCEMENT?: string;
+  MEDIA_AI_MODEL?: string;
+  MEDIA_BACKUP_MAX_VIDEO_BYTES?: string;
+  ELEVENLABS_API_KEY?: string;
+  MUSIC_DAILY_GENERATION_LIMIT?: string;
+  MUSIC_GENERATION_COOLDOWN_SECONDS?: string;
 }
 
 type HonoApp = { Bindings: Env; Variables: { userId: string } };
@@ -54,8 +68,9 @@ const ALLOWED_ORIGINS = [
 ];
 const corsOpts = {
   origin: (o: string) => ALLOWED_ORIGINS.includes(o) ? o : ALLOWED_ORIGINS[0],
-  allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowHeaders: ['Authorization', 'Content-Type'],
+  allowMethods: ['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowHeaders: ['Authorization', 'Content-Type', 'Range'],
+  exposeHeaders: ['Accept-Ranges', 'Content-Length', 'Content-Range', 'Content-Type', 'ETag'],
 };
 app.use('*', cors(corsOpts));
 api.use('*', cors(corsOpts));
@@ -72,6 +87,11 @@ api.all('/creators/*', retiredFeature('Creator Hub'));
 api.all('/admin/creator-applications', retiredFeature('Creator applications'));
 api.all('/admin/creator-applications/*', retiredFeature('Creator applications'));
 api.all('/admin/creators/*', retiredFeature('Creator admin tools'));
+api.all('/challenges', retiredFeature('Challenges'));
+api.all('/challenges/*', retiredFeature('Challenges'));
+api.all('/challenge-entries/*', retiredFeature('Challenge entries'));
+api.all('/admin/challenges', retiredFeature('Challenge admin tools'));
+api.all('/admin/challenges/*', retiredFeature('Challenge admin tools'));
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 const uuid = () => crypto.randomUUID();
@@ -105,16 +125,77 @@ const authMiddleware = async (c: any, next: () => Promise<void>) => {
   const authHeader = c.req.header('Authorization');
   if (!authHeader?.startsWith('Bearer ')) return c.json({ detail: 'Not authenticated' }, 401);
   const token = authHeader.slice(7);
+  let payload: any;
+
   try {
     const { jwtVerify } = await import('jose');
-    const { payload } = await jwtVerify(token, new TextEncoder().encode(getJwtSecret(c)));
+    const verified = await jwtVerify(token, new TextEncoder().encode(getJwtSecret(c)));
+    payload = verified.payload;
     c.set('jwtPayload', payload);
-    await ensurePrivacySchema(c.env.DB);
+  } catch (error: any) {
+    if (getErrorCode(error).includes('JWT_SECRET_MISSING')) {
+      return c.json({ detail: 'Auth service is not configured.', code: 'JWT_SECRET_MISSING' }, 503);
+    }
+    return c.json({ detail: 'Invalid token', code: 'INVALID_TOKEN' }, 401);
+  }
+
+  const userId = String(payload?.sub || payload?.userId || '');
+  if (!userId) return c.json({ detail: 'Invalid token', code: 'INVALID_TOKEN' }, 401);
+
+  try {
+    let user: any;
+    try {
+      user = await c.env.DB.prepare('SELECT id, status FROM users WHERE id = ?').bind(userId).first();
+    } catch (error: any) {
+      const message = String(error?.message || '');
+      if (!message.includes('no such column: status')) throw error;
+      user = await c.env.DB.prepare("SELECT id, 'active' AS status FROM users WHERE id = ?").bind(userId).first();
+    }
+
+    if (!user) return c.json({ detail: 'Session user was not found.', code: 'USER_NOT_FOUND' }, 401);
+
+    if (String(user?.status || 'active') === 'banned') {
+      return c.json({ detail: 'This account has been banned.' }, 403);
+    }
     await next();
-  } catch {
-    return c.json({ detail: 'Invalid token' }, 401);
+  } catch (error: any) {
+    console.error(JSON.stringify({
+      event: 'auth_context_failed',
+      code: getErrorCode(error),
+      message: String(error?.message || '').slice(0, 200),
+    }));
+    return c.json({ detail: 'Could not load your account session. Please try again.', code: 'AUTH_CONTEXT_FAILED' }, 503);
   }
 };
+
+async function getOptionalUserId(c: any): Promise<string> {
+  const authHeader = c.req.header('Authorization');
+  if (!authHeader?.startsWith('Bearer ')) return '';
+
+  try {
+    const token = authHeader.slice(7);
+    const { jwtVerify } = await import('jose');
+    const verified = await jwtVerify(token, new TextEncoder().encode(getJwtSecret(c)));
+    const payload: any = verified.payload;
+    const userId = String(payload?.sub || payload?.userId || '');
+    if (!userId) return '';
+
+    let user: any;
+    try {
+      user = await c.env.DB.prepare('SELECT id, status FROM users WHERE id = ?').bind(userId).first();
+    } catch (error: any) {
+      const message = String(error?.message || '');
+      if (!message.includes('no such column: status')) throw error;
+      user = await c.env.DB.prepare("SELECT id, 'active' AS status FROM users WHERE id = ?").bind(userId).first();
+    }
+
+    if (!user || String(user?.status || 'active') === 'banned') return '';
+    c.set('jwtPayload', payload);
+    return userId;
+  } catch {
+    return '';
+  }
+}
 
 async function createToken(userId: string, secret: string): Promise<string> {
   const { SignJWT } = await import('jose');
@@ -159,6 +240,30 @@ async function ensureUniqueUsername(db: D1Database, desired: string): Promise<st
 let phoneAuthSchemaReady = false;
 let oauthSchemaReady = false;
 let privacySchemaReady = false;
+let governanceSchemaReady = false;
+let commentSchemaReady = false;
+let mediaBackupSchemaReady = false;
+let audioSchemaReady = false;
+let postEditorSchemaReady = false;
+let recommendationSchemaReady = false;
+let aiMusicSchemaReady = false;
+let notesSchemaReady = false;
+let peopleSchemaReady = false;
+
+function normalizeSchemaSql(statement: string): string {
+  return statement.replace(/\s+/g, ' ').trim().replace(/;$/, '');
+}
+
+async function runSchemaStatement(db: D1Database, statement: string) {
+  await db.exec(normalizeSchemaSql(statement));
+}
+
+function isIgnorableSchemaError(error: any, statement = ''): boolean {
+  const message = String(error?.message || '').toLowerCase();
+  return message.includes('duplicate column name')
+    || message.includes('already exists')
+    || (statement.includes('idx_users_phone') && message.includes('unique constraint failed'));
+}
 
 async function ensureOAuthSchema(db: D1Database) {
   if (oauthSchemaReady) return;
@@ -171,9 +276,9 @@ async function ensureOAuthSchema(db: D1Database) {
 
   for (const statement of statements) {
     try {
-      await db.exec(statement);
+      await runSchemaStatement(db, statement);
     } catch (error: any) {
-      if (!String(error?.message || '').includes('duplicate column name')) {
+      if (!isIgnorableSchemaError(error, statement)) {
         throw error;
       }
     }
@@ -197,16 +302,516 @@ async function ensurePrivacySchema(db: D1Database) {
 
   for (const statement of statements) {
     try {
-      await db.exec(statement);
+      await runSchemaStatement(db, statement);
     } catch (error: any) {
-      const message = String(error?.message || '');
-      if (!message.includes('duplicate column name') && !message.includes('already exists')) {
+      if (!isIgnorableSchemaError(error, statement)) {
         throw error;
       }
     }
   }
 
   privacySchemaReady = true;
+}
+
+async function ensurePostEditorSchema(db: D1Database) {
+  if (postEditorSchemaReady) return;
+
+  const statements = [
+    "ALTER TABLE posts ADD COLUMN editor_overlays TEXT DEFAULT '[]'",
+  ];
+
+  for (const statement of statements) {
+    try {
+      await runSchemaStatement(db, statement);
+    } catch (error: any) {
+      if (!isIgnorableSchemaError(error, statement)) {
+        throw error;
+      }
+    }
+  }
+
+  postEditorSchemaReady = true;
+}
+
+async function ensureRecommendationSchema(db: D1Database) {
+  if (recommendationSchemaReady) return;
+
+  const statements = [
+    `CREATE TABLE IF NOT EXISTS recommendations (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      description TEXT DEFAULT '',
+      category TEXT DEFAULT 'watch',
+      tags TEXT DEFAULT '[]',
+      external_url TEXT NOT NULL,
+      provider TEXT DEFAULT 'link',
+      external_id TEXT DEFAULT '',
+      embed_url TEXT DEFAULT '',
+      thumbnail_url TEXT DEFAULT '',
+      creator_name TEXT DEFAULT '',
+      status TEXT DEFAULT 'active',
+      reports_count INTEGER DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
+    `CREATE TABLE IF NOT EXISTS recommendation_reports (
+      id TEXT PRIMARY KEY,
+      recommendation_id TEXT NOT NULL,
+      reporter_id TEXT NOT NULL,
+      reason TEXT DEFAULT '',
+      created_at TEXT NOT NULL,
+      UNIQUE(recommendation_id, reporter_id)
+    )`,
+    'CREATE INDEX IF NOT EXISTS idx_recommendations_status_created ON recommendations(status, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_recommendations_category ON recommendations(category, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_recommendations_user ON recommendations(user_id, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_recommendation_reports_rec ON recommendation_reports(recommendation_id, created_at)',
+  ];
+
+  for (const statement of statements) {
+    try {
+      await runSchemaStatement(db, statement);
+    } catch (error: any) {
+      if (!isIgnorableSchemaError(error, statement)) {
+        throw error;
+      }
+    }
+  }
+
+  const count: any = await db.prepare('SELECT COUNT(*) AS count FROM recommendations').first();
+  if (Number(count?.count || 0) === 0) {
+    const ts = now();
+    const samples = [
+      {
+        id: 'rec-gatsby-book',
+        title: 'The Great Gatsby',
+        description: 'A sharp, stylish classic about status, desire, and reinvention. Good for anyone who likes beautiful writing with a little social heat.',
+        category: 'books',
+        tags: ['classic', 'novel', 'style'],
+        external_url: 'https://www.gutenberg.org/ebooks/64317',
+        provider: 'book',
+        thumbnail_url: 'https://www.gutenberg.org/cache/epub/64317/pg64317.cover.medium.jpg',
+        creator_name: 'F. Scott Fitzgerald',
+      },
+      {
+        id: 'rec-arrival-trailer',
+        title: 'Arrival',
+        description: 'A quiet sci-fi movie recommendation for people who like mystery, language, emotion, and beautiful slow tension.',
+        category: 'movies',
+        tags: ['film', 'sci-fi', 'mood'],
+        external_url: 'https://www.youtube.com/watch?v=tFMo3UJ4B4g',
+        provider: 'youtube',
+        external_id: 'tFMo3UJ4B4g',
+        embed_url: 'https://www.youtube.com/embed/tFMo3UJ4B4g',
+        thumbnail_url: 'https://img.youtube.com/vi/tFMo3UJ4B4g/hqdefault.jpg',
+        creator_name: 'Paramount Pictures',
+      },
+      {
+        id: 'rec-tiny-desk',
+        title: 'Tiny Desk: soulful live sets',
+        description: 'For discovering artists through live performance instead of scrolling random clips.',
+        category: 'music',
+        tags: ['music', 'live', 'artist'],
+        external_url: 'https://www.youtube.com/watch?v=ferZnZ0_rSM',
+        provider: 'youtube',
+        external_id: 'ferZnZ0_rSM',
+        embed_url: 'https://www.youtube.com/embed/ferZnZ0_rSM',
+        thumbnail_url: 'https://img.youtube.com/vi/ferZnZ0_rSM/hqdefault.jpg',
+        creator_name: 'NPR Music',
+      },
+      {
+        id: 'rec-sherlock',
+        title: 'Sherlock Holmes',
+        description: 'A good pick when someone wants something smart, readable, and detective-story comfortable.',
+        category: 'books',
+        tags: ['mystery', 'classic', 'detective'],
+        external_url: 'https://www.gutenberg.org/ebooks/1661',
+        provider: 'book',
+        thumbnail_url: '',
+        creator_name: 'Arthur Conan Doyle',
+      },
+    ];
+
+    for (const sample of samples) {
+      await db.prepare(
+        `INSERT OR IGNORE INTO recommendations
+         (id, user_id, title, description, category, tags, external_url, provider, external_id, embed_url, thumbnail_url, creator_name, status, created_at, updated_at)
+         VALUES (?, 'system', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`
+      ).bind(
+        sample.id,
+        sample.title,
+        sample.description,
+        sample.category,
+        JSON.stringify(sample.tags),
+        sample.external_url,
+        sample.provider,
+        sample.external_id || '',
+        sample.embed_url || '',
+        sample.thumbnail_url || '',
+        sample.creator_name || '',
+        ts,
+        ts
+      ).run();
+    }
+  }
+
+  recommendationSchemaReady = true;
+}
+
+async function ensureAiMusicSchema(db: D1Database) {
+  if (aiMusicSchemaReady) return;
+
+  const statements = [
+    `CREATE TABLE IF NOT EXISTS ai_music_posts (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      provider TEXT DEFAULT 'elevenlabs',
+      prompt_text TEXT NOT NULL,
+      lyrics_text TEXT DEFAULT '',
+      mood TEXT NOT NULL,
+      style TEXT NOT NULL,
+      audio_url TEXT DEFAULT '',
+      audio_r2_key TEXT DEFAULT '',
+      audio_duration INTEGER DEFAULT 0,
+      waveform_data TEXT DEFAULT '[]',
+      status TEXT DEFAULT 'pending',
+      is_public INTEGER DEFAULT 0,
+      likes_count INTEGER DEFAULT 0,
+      comments_count INTEGER DEFAULT 0,
+      saves_count INTEGER DEFAULT 0,
+      reposts_count INTEGER DEFAULT 0,
+      reports_count INTEGER DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
+    `CREATE TABLE IF NOT EXISTS ai_music_interactions (
+      id TEXT PRIMARY KEY,
+      music_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(music_id, user_id, kind)
+    )`,
+    `CREATE TABLE IF NOT EXISTS ai_music_reports (
+      id TEXT PRIMARY KEY,
+      music_id TEXT NOT NULL,
+      reporter_id TEXT NOT NULL,
+      reason TEXT DEFAULT '',
+      created_at TEXT NOT NULL,
+      UNIQUE(music_id, reporter_id)
+    )`,
+    `CREATE TABLE IF NOT EXISTS ai_music_comments (
+      id TEXT PRIMARY KEY,
+      music_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      parent_id TEXT DEFAULT '',
+      body TEXT NOT NULL,
+      likes_count INTEGER DEFAULT 0,
+      status TEXT DEFAULT 'active',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
+    `CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
+    'CREATE INDEX IF NOT EXISTS idx_ai_music_posts_public_created ON ai_music_posts(is_public, status, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_ai_music_posts_user_created ON ai_music_posts(user_id, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_ai_music_interactions_user ON ai_music_interactions(user_id, kind, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_ai_music_reports_music ON ai_music_reports(music_id, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_ai_music_comments_music ON ai_music_comments(music_id, created_at)',
+  ];
+
+  for (const statement of statements) {
+    try {
+      await runSchemaStatement(db, statement);
+    } catch (error: any) {
+      if (!isIgnorableSchemaError(error, statement)) {
+        throw error;
+      }
+    }
+  }
+
+  aiMusicSchemaReady = true;
+}
+
+async function ensureNotesSchema(db: D1Database) {
+  if (notesSchemaReady) return;
+
+  const statements = [
+    `CREATE TABLE IF NOT EXISTS notes (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      body TEXT NOT NULL,
+      note_type TEXT DEFAULT 'thought',
+      mood TEXT DEFAULT 'soft',
+      color TEXT DEFAULT '#F6E7D7',
+      anonymous INTEGER DEFAULT 0,
+      status TEXT DEFAULT 'active',
+      reactions_count INTEGER DEFAULT 0,
+      comments_count INTEGER DEFAULT 0,
+      saves_count INTEGER DEFAULT 0,
+      shares_count INTEGER DEFAULT 0,
+      reports_count INTEGER DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
+    `CREATE TABLE IF NOT EXISTS note_interactions (
+      id TEXT PRIMARY KEY,
+      note_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      value TEXT DEFAULT '',
+      created_at TEXT NOT NULL,
+      UNIQUE(note_id, user_id, kind)
+    )`,
+    `CREATE TABLE IF NOT EXISTS note_comments (
+      id TEXT PRIMARY KEY,
+      note_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      parent_id TEXT DEFAULT '',
+      body TEXT NOT NULL,
+      likes_count INTEGER DEFAULT 0,
+      status TEXT DEFAULT 'active',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
+    `CREATE TABLE IF NOT EXISTS note_reports (
+      id TEXT PRIMARY KEY,
+      note_id TEXT NOT NULL,
+      reporter_id TEXT NOT NULL,
+      reason TEXT DEFAULT '',
+      details TEXT DEFAULT '',
+      created_at TEXT NOT NULL,
+      UNIQUE(note_id, reporter_id)
+    )`,
+    'CREATE INDEX IF NOT EXISTS idx_notes_status_created ON notes(status, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_notes_user_created ON notes(user_id, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_note_interactions_user ON note_interactions(user_id, kind, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_note_comments_note ON note_comments(note_id, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_note_reports_note ON note_reports(note_id, created_at)',
+  ];
+
+  for (const statement of statements) {
+    try {
+      await runSchemaStatement(db, statement);
+    } catch (error: any) {
+      if (!isIgnorableSchemaError(error, statement)) throw error;
+    }
+  }
+
+  notesSchemaReady = true;
+}
+
+async function ensurePeopleSchema(db: D1Database) {
+  if (peopleSchemaReady) return;
+
+  const statements = [
+    `CREATE TABLE IF NOT EXISTS people_profiles (
+      id TEXT PRIMARY KEY,
+      owner_user_id TEXT DEFAULT '',
+      name TEXT NOT NULL,
+      role TEXT DEFAULT 'creator',
+      category TEXT DEFAULT 'creator',
+      bio TEXT DEFAULT '',
+      known_for TEXT DEFAULT '',
+      city TEXT DEFAULT '',
+      profile_image TEXT DEFAULT '',
+      instagram_url TEXT DEFAULT '',
+      tiktok_url TEXT DEFAULT '',
+      youtube_url TEXT DEFAULT '',
+      website_url TEXT DEFAULT '',
+      source_url TEXT DEFAULT '',
+      claim_status TEXT DEFAULT 'unclaimed',
+      status TEXT DEFAULT 'active',
+      followers_count INTEGER DEFAULT 0,
+      saves_count INTEGER DEFAULT 0,
+      reports_count INTEGER DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
+    `CREATE TABLE IF NOT EXISTS people_interactions (
+      id TEXT PRIMARY KEY,
+      profile_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(profile_id, user_id, kind)
+    )`,
+    `CREATE TABLE IF NOT EXISTS people_claims (
+      id TEXT PRIMARY KEY,
+      profile_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      message TEXT DEFAULT '',
+      evidence_url TEXT DEFAULT '',
+      status TEXT DEFAULT 'pending',
+      admin_notes TEXT DEFAULT '',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
+    `CREATE TABLE IF NOT EXISTS people_reports (
+      id TEXT PRIMARY KEY,
+      profile_id TEXT NOT NULL,
+      reporter_id TEXT NOT NULL,
+      reason TEXT DEFAULT '',
+      details TEXT DEFAULT '',
+      created_at TEXT NOT NULL,
+      UNIQUE(profile_id, reporter_id)
+    )`,
+    'CREATE INDEX IF NOT EXISTS idx_people_profiles_status ON people_profiles(status, updated_at)',
+    'CREATE INDEX IF NOT EXISTS idx_people_profiles_category ON people_profiles(category, updated_at)',
+    'CREATE INDEX IF NOT EXISTS idx_people_interactions_user ON people_interactions(user_id, kind, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_people_claims_status ON people_claims(status, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_people_reports_profile ON people_reports(profile_id, created_at)',
+  ];
+
+  for (const statement of statements) {
+    try {
+      await runSchemaStatement(db, statement);
+    } catch (error: any) {
+      if (!isIgnorableSchemaError(error, statement)) throw error;
+    }
+  }
+
+  peopleSchemaReady = true;
+}
+
+async function ensureGovernanceSchema(db: D1Database) {
+  if (governanceSchemaReady) return;
+
+  const statements = [
+    "ALTER TABLE users ADD COLUMN status TEXT DEFAULT 'active'",
+    'ALTER TABLE users ADD COLUMN banned_at TEXT',
+    'ALTER TABLE users ADD COLUMN ban_reason TEXT',
+    "ALTER TABLE posts ADD COLUMN status TEXT DEFAULT 'active'",
+    'ALTER TABLE posts ADD COLUMN removed_at TEXT',
+    'ALTER TABLE posts ADD COLUMN removed_reason TEXT',
+    "ALTER TABLE reports ADD COLUMN reported_type TEXT DEFAULT ''",
+    "ALTER TABLE reports ADD COLUMN details TEXT DEFAULT ''",
+    "ALTER TABLE reports ADD COLUMN status TEXT DEFAULT 'pending'",
+    "ALTER TABLE reports ADD COLUMN admin_notes TEXT DEFAULT ''",
+    'ALTER TABLE reports ADD COLUMN reviewed_by TEXT',
+    "ALTER TABLE reports ADD COLUMN action_taken TEXT DEFAULT ''",
+    'ALTER TABLE reports ADD COLUMN updated_at TEXT',
+    `CREATE TABLE IF NOT EXISTS admin_actions (
+      id TEXT PRIMARY KEY,
+      admin_id TEXT NOT NULL,
+      action_type TEXT NOT NULL,
+      target_type TEXT NOT NULL,
+      target_id TEXT NOT NULL,
+      details TEXT DEFAULT '',
+      created_at TEXT NOT NULL
+    )`,
+    'CREATE INDEX IF NOT EXISTS idx_users_status ON users(status)',
+    'CREATE INDEX IF NOT EXISTS idx_posts_status ON posts(status)',
+    'CREATE INDEX IF NOT EXISTS idx_reports_status ON reports(status)',
+    'CREATE INDEX IF NOT EXISTS idx_admin_actions_created ON admin_actions(created_at)',
+  ];
+
+  for (const statement of statements) {
+    try {
+      await runSchemaStatement(db, statement);
+    } catch (error: any) {
+      if (!isIgnorableSchemaError(error, statement)) {
+        throw error;
+      }
+    }
+  }
+
+  governanceSchemaReady = true;
+}
+
+async function ensureMediaBackupSchema(db: D1Database) {
+  if (mediaBackupSchemaReady) return;
+
+  const statements = [
+    "ALTER TABLE posts ADD COLUMN media_backup_ids TEXT DEFAULT '[]'",
+    `CREATE TABLE IF NOT EXISTS media_backups (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      post_id TEXT,
+      media_kind TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      provider_id TEXT DEFAULT '',
+      delivery_url TEXT DEFAULT '',
+      r2_key TEXT NOT NULL,
+      content_type TEXT DEFAULT '',
+      size_bytes INTEGER DEFAULT 0,
+      checksum_sha256 TEXT DEFAULT '',
+      original_filename TEXT DEFAULT '',
+      backup_status TEXT DEFAULT 'stored',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
+    'CREATE INDEX IF NOT EXISTS idx_media_backups_user ON media_backups(user_id, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_media_backups_post ON media_backups(post_id)',
+    'CREATE INDEX IF NOT EXISTS idx_media_backups_r2_key ON media_backups(r2_key)',
+  ];
+
+  for (const statement of statements) {
+    try {
+      await runSchemaStatement(db, statement);
+    } catch (error: any) {
+      if (!isIgnorableSchemaError(error, statement)) {
+        throw error;
+      }
+    }
+  }
+
+  mediaBackupSchemaReady = true;
+}
+
+async function ensureAudioSchema(db: D1Database) {
+  if (audioSchemaReady) return;
+
+  const statements = [
+    "ALTER TABLE posts ADD COLUMN audio_provider TEXT DEFAULT ''",
+    "ALTER TABLE posts ADD COLUMN audio_track_id TEXT DEFAULT ''",
+    "ALTER TABLE posts ADD COLUMN audio_title TEXT DEFAULT ''",
+    "ALTER TABLE posts ADD COLUMN audio_artist TEXT DEFAULT ''",
+    "ALTER TABLE posts ADD COLUMN audio_artwork_url TEXT DEFAULT ''",
+    "ALTER TABLE posts ADD COLUMN audio_stream_url TEXT DEFAULT ''",
+    'ALTER TABLE posts ADD COLUMN audio_start_time INTEGER DEFAULT 0',
+    'ALTER TABLE posts ADD COLUMN audio_duration INTEGER DEFAULT 0',
+    'ALTER TABLE posts ADD COLUMN audio_hidden INTEGER DEFAULT 0',
+    `CREATE TABLE IF NOT EXISTS hidden_sounds (
+      track_id TEXT PRIMARY KEY,
+      provider TEXT DEFAULT 'audius',
+      reason TEXT DEFAULT '',
+      hidden_by TEXT,
+      created_at TEXT NOT NULL
+    )`,
+    `CREATE TABLE IF NOT EXISTS favorite_sounds (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      provider TEXT DEFAULT 'audius',
+      track_id TEXT NOT NULL,
+      title TEXT DEFAULT '',
+      artist TEXT DEFAULT '',
+      artwork_url TEXT DEFAULT '',
+      duration INTEGER DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(user_id, provider, track_id)
+    )`,
+    'CREATE INDEX IF NOT EXISTS idx_posts_audio_track ON posts(audio_provider, audio_track_id)',
+    'CREATE INDEX IF NOT EXISTS idx_hidden_sounds_provider ON hidden_sounds(provider, track_id)',
+    'CREATE INDEX IF NOT EXISTS idx_favorite_sounds_user ON favorite_sounds(user_id, provider, created_at)',
+  ];
+
+  for (const statement of statements) {
+    try {
+      await runSchemaStatement(db, statement);
+    } catch (error: any) {
+      if (!isIgnorableSchemaError(error, statement)) {
+        throw error;
+      }
+    }
+  }
+
+  audioSchemaReady = true;
 }
 
 function normalizeLanguage(value: unknown): 'en' | 'fr' | 'es' {
@@ -217,8 +822,10 @@ function normalizeSqlBoolean(value: unknown): number {
   return value === true || value === 1 || value === '1' || value === 'true' ? 1 : 0;
 }
 
-function normalizeVisibility(value: unknown): 'public' | 'friends' {
-  return value === 'friends' ? 'friends' : 'public';
+type PostVisibility = 'public' | 'followers' | 'friends' | 'private';
+
+function normalizeVisibility(value: unknown): PostVisibility {
+  return value === 'followers' || value === 'friends' || value === 'private' ? value : 'public';
 }
 
 function visibleAuthorWhere(alias = 'u'): string {
@@ -230,11 +837,23 @@ function visibleStatusWhere(userAlias = 'u', statusAlias = 's'): string {
 }
 
 function visiblePostWhere(userAlias = 'u', postAlias = 'p'): string {
-  return `${visibleAuthorWhere(userAlias)} AND (COALESCE(${postAlias}.visibility, 'public') = 'public' OR ${postAlias}.user_id = ? OR EXISTS (SELECT 1 FROM friendships f2 WHERE f2.user_id = ? AND f2.friend_id = ${postAlias}.user_id))`;
+  return `COALESCE(${postAlias}.status, 'active') != 'removed' AND ${visibleAuthorWhere(userAlias)} AND (
+    COALESCE(${postAlias}.visibility, 'public') = 'public'
+    OR ${postAlias}.user_id = ?
+    OR (COALESCE(${postAlias}.visibility, 'public') = 'followers' AND (
+      EXISTS (SELECT 1 FROM follows fl WHERE fl.follower_id = ? AND fl.following_id = ${postAlias}.user_id)
+      OR EXISTS (SELECT 1 FROM friendships f2 WHERE f2.user_id = ? AND f2.friend_id = ${postAlias}.user_id)
+    ))
+    OR (COALESCE(${postAlias}.visibility, 'public') = 'friends' AND EXISTS (SELECT 1 FROM friendships f3 WHERE f3.user_id = ? AND f3.friend_id = ${postAlias}.user_id))
+  )`;
+}
+
+function visiblePostBindValues(userId: string): string[] {
+  return [userId, userId, userId, userId, userId, userId];
 }
 
 function publicPostWhere(userAlias = 'u', postAlias = 'p'): string {
-  return `COALESCE(${userAlias}.is_private, 0) = 0 AND COALESCE(${postAlias}.visibility, 'public') = 'public'`;
+  return `COALESCE(${postAlias}.status, 'active') != 'removed' AND COALESCE(${userAlias}.is_private, 0) = 0 AND COALESCE(${postAlias}.visibility, 'public') = 'public'`;
 }
 
 function parseJsonArray(value: unknown): any[] {
@@ -249,14 +868,660 @@ function parseJsonArray(value: unknown): any[] {
   }
 }
 
-function postPayload(post: any, likedBy: string[] = []) {
+function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.max(min, Math.min(max, Math.round(numeric)));
+}
+
+function cleanText(value: unknown, max = 500): string {
+  return String(value || '').trim().slice(0, max);
+}
+
+function normalizeRecommendationCategory(value: unknown): string {
+  const clean = String(value || '').trim().toLowerCase().replace(/[^a-z0-9 _-]/g, '').replace(/\s+/g, ' ');
+  const allowed = new Set(['notes', 'vibe', 'music', 'people', 'artist', 'movies', 'books', 'artists', 'videos', 'podcasts', 'places', 'apps', 'other']);
+  if (clean === 'note' || clean === 'thought' || clean === 'poem') return 'notes';
+  if (clean === 'vibes' || clean === 'mood') return 'vibe';
+  if (clean === 'new' || clean === 'article' || clean === 'articles') return 'other';
+  if (clean === 'movie' || clean === 'film') return 'movies';
+  if (clean === 'book' || clean === 'novel') return 'books';
+  if (clean === 'artist' || clean === 'art' || clean === 'artists' || clean === 'person' || clean === 'people') return 'people';
+  if (clean === 'video' || clean === 'youtube') return 'videos';
+  if (clean === 'podcast') return 'podcasts';
+  return allowed.has(clean) ? clean : 'other';
+}
+
+function normalizeRecommendationTags(value: unknown, fallback: string[] = []): string[] {
+  const raw = Array.isArray(value)
+    ? value
+    : typeof value === 'string'
+      ? value.startsWith('[')
+        ? parseJsonArray(value)
+        : value.split(',')
+      : fallback;
+  const seen = new Set<string>();
+  return raw
+    .map((item) => String(item || '').trim().toLowerCase().replace(/[^a-z0-9 _-]/g, '').replace(/\s+/g, ' '))
+    .filter(Boolean)
+    .filter((item) => {
+      if (seen.has(item)) return false;
+      seen.add(item);
+      return true;
+    })
+    .slice(0, 3);
+}
+
+function safeExternalUrl(value: unknown): string {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  try {
+    const url = new URL(raw.startsWith('http://') || raw.startsWith('https://') ? raw : `https://${raw}`);
+    if (!['http:', 'https:'].includes(url.protocol)) return '';
+    return url.toString();
+  } catch {
+    return '';
+  }
+}
+
+function recommendationLinkMetadata(externalUrl: string, explicitThumbnail = '') {
+  const result = {
+    provider: 'link',
+    external_id: '',
+    embed_url: '',
+    thumbnail_url: cleanText(explicitThumbnail, 1200),
+  };
+
+  try {
+    const url = new URL(externalUrl);
+    const host = url.hostname.replace(/^www\./, '').toLowerCase();
+
+    if (host === 'youtu.be') {
+      const id = url.pathname.split('/').filter(Boolean)[0] || '';
+      if (id) {
+        result.provider = 'youtube';
+        result.external_id = id;
+        result.embed_url = `https://www.youtube.com/embed/${encodeURIComponent(id)}`;
+        result.thumbnail_url ||= `https://img.youtube.com/vi/${encodeURIComponent(id)}/hqdefault.jpg`;
+      }
+    } else if (host.includes('youtube.com')) {
+      const id = url.searchParams.get('v') || url.pathname.match(/\/(?:shorts|embed)\/([^/?#]+)/)?.[1] || '';
+      if (id) {
+        result.provider = 'youtube';
+        result.external_id = id;
+        result.embed_url = `https://www.youtube.com/embed/${encodeURIComponent(id)}`;
+        result.thumbnail_url ||= `https://img.youtube.com/vi/${encodeURIComponent(id)}/hqdefault.jpg`;
+      }
+    } else if (host.includes('vimeo.com')) {
+      const id = url.pathname.match(/(\d+)/)?.[1] || '';
+      if (id) {
+        result.provider = 'vimeo';
+        result.external_id = id;
+        result.embed_url = `https://player.vimeo.com/video/${encodeURIComponent(id)}`;
+      }
+    } else if (host === 'open.spotify.com') {
+      const parts = url.pathname.split('/').filter(Boolean);
+      if (parts.length >= 2) {
+        result.provider = 'spotify';
+        result.external_id = `${parts[0]}:${parts[1]}`;
+        result.embed_url = `https://open.spotify.com/embed/${encodeURIComponent(parts[0])}/${encodeURIComponent(parts[1])}`;
+      }
+    } else if (host === 'music.apple.com') {
+      result.provider = 'apple_music';
+      result.embed_url = externalUrl.replace('https://music.apple.com/', 'https://embed.music.apple.com/');
+    } else if (host.includes('goodreads.com')) {
+      result.provider = 'book';
+    } else if (host.includes('letterboxd.com') || host.includes('imdb.com')) {
+      result.provider = 'movie';
+    }
+  } catch {}
+
+  return result;
+}
+
+function publicRecommendationPayload(recommendation: any) {
   return {
+    ...recommendation,
+    tags: normalizeRecommendationTags(recommendation?.tags),
+    reports_count: Number(recommendation?.reports_count || 0),
+    user: recommendation.user_id === 'system' ? {
+      id: 'system',
+      username: 'flames',
+      full_name: 'Flames Picks',
+      profile_image: '',
+    } : {
+      id: recommendation.user_id,
+      username: recommendation.user_username || '',
+      full_name: recommendation.user_full_name || '',
+      profile_image: recommendation.user_profile_image || '',
+    },
+  };
+}
+
+const NOTE_TYPES = new Set(['thought', 'feeling', 'advice', 'confession', 'question', 'quote', 'memory', 'mood', 'journal']);
+const NOTE_MOODS: Record<string, string> = {
+  soft: '#F6E7D7',
+  calm: '#E7F1DF',
+  blue: '#DCEAF8',
+  love: '#F8DDE7',
+  night: '#E7E1F5',
+  gold: '#F7E7B7',
+  green: '#DFF0D8',
+  gray: '#ECEBE6',
+};
+
+function normalizeNoteType(value: unknown): string {
+  const clean = String(value || '').trim().toLowerCase().replace(/[^a-z0-9 _-]/g, '').replace(/\s+/g, ' ');
+  if (clean === 'late night thoughts') return 'thought';
+  if (clean === 'anonymous feelings') return 'feeling';
+  if (clean === 'daily mood') return 'mood';
+  return NOTE_TYPES.has(clean) ? clean : 'thought';
+}
+
+function normalizeNoteMood(value: unknown): { mood: string; color: string } {
+  const clean = String(value || '').trim().toLowerCase().replace(/[^a-z0-9 _-]/g, '').replace(/\s+/g, ' ');
+  const mood = NOTE_MOODS[clean] ? clean : 'soft';
+  return { mood, color: NOTE_MOODS[mood] };
+}
+
+function moderateCommunityText(value: string): { ok: boolean; detail?: string } {
+  const text = String(value || '').trim();
+  if (!text) return { ok: false, detail: 'Write something first.' };
+  const blockedPatterns = [
+    /\b(kill yourself|hurt yourself|suicide method|self harm instructions)\b/i,
+    /\b(i will kill|i am going to kill|shoot up|bomb threat|stab them)\b/i,
+    /\b(how to make a bomb|build a bomb|poison someone|make a weapon)\b/i,
+    /\b(doxx|home address is|ssn|social security number|credit card number|private phone number)\b/i,
+    /\b(child porn|minor sexual|underage sexual|sexual minor)\b/i,
+    /\b(scamming|phishing|wire me money|guaranteed crypto profit)\b/i,
+    /\b(nazi praise|exterminate all|racial slur)\b/i,
+  ];
+  if (blockedPatterns.some((pattern) => pattern.test(text))) {
+    return { ok: false, detail: 'That needs moderation review before it can be posted.' };
+  }
+  return { ok: true };
+}
+
+function publicNotePayload(row: any, opts: { reacted?: boolean; saved?: boolean } = {}) {
+  const anonymous = Number(row.anonymous || 0) === 1;
+  return {
+    id: row.id,
+    body: row.body || '',
+    note_type: row.note_type || 'thought',
+    mood: row.mood || 'soft',
+    color: row.color || NOTE_MOODS.soft,
+    anonymous,
+    status: row.status || 'active',
+    reactions_count: Number(row.reactions_count || 0),
+    comments_count: Number(row.comments_count || 0),
+    saves_count: Number(row.saves_count || 0),
+    shares_count: Number(row.shares_count || 0),
+    reports_count: Number(row.reports_count || 0),
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    reacted: !!opts.reacted || Number(row.reacted || 0) === 1,
+    saved: !!opts.saved || Number(row.saved || 0) === 1,
+    user: anonymous ? {
+      id: '',
+      username: 'anonymous',
+      full_name: 'Anonymous',
+      profile_image: '',
+    } : {
+      id: row.user_id,
+      username: row.user_username || '',
+      full_name: row.user_full_name || '',
+      profile_image: row.user_profile_image || '',
+    },
+  };
+}
+
+function publicPeoplePayload(row: any, opts: { followed?: boolean; saved?: boolean } = {}) {
+  return {
+    id: row.id,
+    owner_user_id: row.owner_user_id || '',
+    name: row.name || 'Creator',
+    role: row.role || row.category || 'creator',
+    category: row.category || 'creator',
+    bio: row.bio || '',
+    known_for: row.known_for || '',
+    city: row.city || '',
+    profile_image: row.profile_image || '',
+    instagram_url: row.instagram_url || '',
+    tiktok_url: row.tiktok_url || '',
+    youtube_url: row.youtube_url || '',
+    website_url: row.website_url || '',
+    source_url: row.source_url || '',
+    claim_status: row.claim_status || 'unclaimed',
+    followers_count: Number(row.followers_count || 0),
+    saves_count: Number(row.saves_count || 0),
+    reports_count: Number(row.reports_count || 0),
+    followed: !!opts.followed || Number(row.followed || 0) === 1,
+    saved: !!opts.saved || Number(row.saved || 0) === 1,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+function normalizePeopleRole(value: unknown): string {
+  const clean = String(value || '').trim().toLowerCase().replace(/[^a-z0-9 _-]/g, '').replace(/\s+/g, ' ');
+  const allowed = new Set(['creator', 'actor', 'musician', 'model', 'influencer', 'athlete', 'photographer', 'business owner', 'public figure', 'local creator']);
+  return allowed.has(clean) ? clean : 'creator';
+}
+
+function safeOptionalUrl(value: unknown): string {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  return safeExternalUrl(raw);
+}
+
+function parseInterestValues(value: unknown): string[] {
+  const raw = parsePreferenceList(value);
+  const seen = new Set<string>();
+  return raw
+    .map((item) => String(item || '').trim())
+    .filter(Boolean)
+    .filter((item) => {
+      const key = item.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 18);
+}
+
+const AI_MUSIC_MOODS = new Set([
+  'chill',
+  'sad',
+  'love',
+  'hype',
+  'dreamy',
+  'motivational',
+  'late night',
+  'soft',
+  'cinematic',
+  'spiritual',
+  'afro vibe',
+  'rap vibe',
+]);
+
+const AI_MUSIC_STYLES = new Set([
+  'spoken word',
+  'singing',
+  'rap',
+  'ambient',
+  'melodic',
+  'soft female voice',
+  'soft male voice',
+  'ambient voice',
+]);
+
+function normalizeAiMusicMood(value: unknown): string {
+  const clean = String(value || '').trim().toLowerCase().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ');
+  return AI_MUSIC_MOODS.has(clean) ? clean : 'chill';
+}
+
+function normalizeAiMusicStyle(value: unknown): string {
+  const clean = String(value || '').trim().toLowerCase().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ');
+  return AI_MUSIC_STYLES.has(clean) ? clean : 'spoken word';
+}
+
+function normalizeAiMusicPrompt(value: unknown) {
+  const raw = String(value || '').replace(/\r/g, '').trim();
+  const lines = raw
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 6);
+  const text = lines.join('\n').slice(0, 480).trim();
+  return { text, lines };
+}
+
+function moderateAiMusicPrompt(promptText: string): { ok: boolean; detail?: string } {
+  const lower = promptText.toLowerCase();
+  if (!promptText.trim()) return { ok: false, detail: 'Write a few original lines first.' };
+  if (promptText.length > 480) return { ok: false, detail: 'Keep music posts short: 1 to 6 lines.' };
+
+  const blockedPatterns = [
+    /\b(kill yourself|hurt yourself|suicide method|self harm instructions)\b/i,
+    /\b(i will kill|i am going to kill|shoot up|bomb threat|stab them)\b/i,
+    /\b(how to make a bomb|build a bomb|poison someone|make a weapon)\b/i,
+    /\b(doxx|home address is|ssn|social security number|credit card number)\b/i,
+    /\b(child porn|minor sexual|underage sexual|sexual minor)\b/i,
+    /\b(scamming|phishing|crypto giveaway|wire me money)\b/i,
+    /\b(slur|nazi praise|exterminate)\b/i,
+  ];
+
+  if (blockedPatterns.some((pattern) => pattern.test(promptText))) {
+    return { ok: false, detail: 'That text needs review before it can become music. Try original, non-harmful words.' };
+  }
+
+  const copyrightSignals = [
+    'lyrics from',
+    'copy the lyrics',
+    'sing the lyrics',
+    'chorus from',
+    'verse from',
+    'make it sound exactly like',
+    'in the style of',
+    'like drake',
+    'like taylor swift',
+    'like beyonce',
+    'like bad bunny',
+  ];
+  if (copyrightSignals.some((signal) => lower.includes(signal))) {
+    return { ok: false, detail: 'Use your own words and avoid copying lyrics or imitating a real artist.' };
+  }
+
+  return { ok: true };
+}
+
+function buildAiMusicPrompt(promptText: string, mood: string, style: string) {
+  return [
+    `Create a short original social music clip from these original user words:`,
+    promptText,
+    '',
+    `Mood: ${mood}.`,
+    `Vocal style: ${style}.`,
+    'Length: about 20 seconds.',
+    'Use a tasteful background beat, clear voice, and keep the words understandable.',
+    'Do not use copyrighted lyrics, real artist imitation, or famous melodies.',
+  ].join('\n');
+}
+
+function buildWaveformData(seed: string, bars = 48): number[] {
+  const source = seed || 'flames-up-ai-music';
+  const values: number[] = [];
+  for (let index = 0; index < bars; index += 1) {
+    const char = source.charCodeAt(index % source.length) || 37;
+    const mixed = (char * (index + 17) + index * 31) % 100;
+    values.push(Number((0.22 + (mixed / 100) * 0.76).toFixed(2)));
+  }
+  return values;
+}
+
+function aiMusicAudioUrl(c: any, musicId: string) {
+  const url = new URL(c.req.url);
+  return `${url.origin}/api/music/audio/${encodeURIComponent(musicId)}`;
+}
+
+async function aiMusicSettingNumber(db: D1Database, key: string, envValue: unknown, min: number, max: number, fallback: number) {
+  const row: any = await db.prepare('SELECT value FROM app_settings WHERE key = ?').bind(key).first().catch(() => null);
+  return clampNumber(row?.value ?? envValue, min, max, fallback);
+}
+
+function publicAiMusicPayload(row: any, opts: { liked?: boolean; saved?: boolean; reposted?: boolean } = {}) {
+  return {
+    id: row.id,
+    user_id: row.user_id,
+    provider: row.provider || 'elevenlabs',
+    prompt_text: row.prompt_text || '',
+    lyrics_text: row.lyrics_text || row.prompt_text || '',
+    mood: row.mood || 'chill',
+    style: row.style || 'spoken word',
+    audio_url: row.audio_url || '',
+    audio_duration: Number(row.audio_duration || 0),
+    waveform_data: parseJsonArray(row.waveform_data),
+    status: row.status || 'pending',
+    is_public: Number(row.is_public || 0) === 1,
+    likes_count: Number(row.likes_count || 0),
+    comments_count: Number(row.comments_count || 0),
+    saves_count: Number(row.saves_count || 0),
+    reposts_count: Number(row.reposts_count || 0),
+    reports_count: Number(row.reports_count || 0),
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    liked: !!opts.liked,
+    saved: !!opts.saved,
+    reposted: !!opts.reposted,
+    user: {
+      id: row.user_id,
+      username: row.user_username || '',
+      full_name: row.user_full_name || '',
+      profile_image: row.user_profile_image || '',
+    },
+  };
+}
+
+const AUDIUS_APP_NAME = 'Flames Up';
+const AUDIUS_BASE_URL = 'https://discoveryprovider.audius.co/v1';
+
+function audiusUrl(path: string, params: Record<string, string | number | undefined>) {
+  const url = new URL(`${AUDIUS_BASE_URL}${path}`);
+  url.searchParams.set('app_name', AUDIUS_APP_NAME);
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== '') url.searchParams.set(key, String(value));
+  });
+  return url.toString();
+}
+
+function normalizeAudiusTrack(track: any) {
+  const artwork = track?.artwork || track?.cover_art || {};
+  const stream = track?.stream || {};
+  const user = track?.user || {};
+  const id = String(track?.id || track?.track_id || '');
+  return {
+    id,
+    track_id: id,
+    numeric_track_id: track?.track_id || null,
+    title: cleanText(track?.title || 'Untitled track', 180),
+    artist: cleanText(user?.name || user?.handle || 'Audius artist', 120),
+    artwork_url: artwork?.['480x480'] || artwork?.['1000x1000'] || artwork?.['150x150'] || '',
+    duration: clampNumber(track?.duration, 0, 60 * 60 * 6, 0),
+    stream_url: typeof stream?.url === 'string' ? stream.url : '',
+  };
+}
+
+async function fetchAudiusTracks(path: string, params: Record<string, string | number | undefined>) {
+  const response = await fetch(audiusUrl(path, params), {
+    headers: { Accept: 'application/json' },
+  });
+  if (!response.ok) {
+    throw new Error(`Audius returned ${response.status}`);
+  }
+  const data: any = await response.json();
+  const tracks = Array.isArray(data?.data) ? data.data : [];
+  return tracks.map(normalizeAudiusTrack).filter((track: any) => track.id);
+}
+
+async function cachedJson<T>(c: any, key: string, ttlSeconds: number, loader: () => Promise<T>): Promise<T> {
+  if (c.env.KV) {
+    const cached = await c.env.KV.get(key, 'json').catch(() => null);
+    if (cached) return cached as T;
+  }
+  const fresh = await loader();
+  if (c.env.KV) {
+    await c.env.KV.put(key, JSON.stringify(fresh), { expirationTtl: ttlSeconds }).catch(() => undefined);
+  }
+  return fresh;
+}
+
+function sanitizeMediaName(value: unknown, fallback = 'upload'): string {
+  const clean = String(value || fallback)
+    .replace(/\.[a-z0-9]+$/i, '')
+    .replace(/[^a-z0-9_-]+/gi, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80);
+  return clean || fallback;
+}
+
+function contentTypeExtension(contentType: string, fallback = 'bin'): string {
+  const normalized = contentType.toLowerCase().split(';')[0].trim();
+  const map: Record<string, string> = {
+    'image/jpeg': 'jpg',
+    'image/jpg': 'jpg',
+    'image/png': 'png',
+    'image/webp': 'webp',
+    'image/gif': 'gif',
+    'video/mp4': 'mp4',
+    'video/quicktime': 'mov',
+    'video/webm': 'webm',
+  };
+  return map[normalized] || fallback;
+}
+
+function bytesToArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const buffer = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(buffer).set(bytes);
+  return buffer;
+}
+
+function dataUriToBytes(data: string, defaultContentType = 'image/jpeg'): { bytes: Uint8Array; contentType: string } {
+  const text = String(data || '');
+  const match = /^data:([^;,]+);base64,(.*)$/i.exec(text);
+  const contentType = match?.[1] || defaultContentType;
+  const base64Content = match?.[2] || (text.includes(',') ? text.split(',').pop() || '' : text);
+  const binaryStr = atob(base64Content);
+  const bytes = new Uint8Array(binaryStr.length);
+  for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
+  return { bytes, contentType };
+}
+
+async function sha256BinaryHex(input: ArrayBuffer | Uint8Array): Promise<string> {
+  const buffer = input instanceof Uint8Array ? bytesToArrayBuffer(input) : input;
+  const hash = await crypto.subtle.digest('SHA-256', buffer);
+  return Array.from(new Uint8Array(hash)).map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+function maxBackupVideoBytes(c: any): number {
+  const raw = Number(c.env.MEDIA_BACKUP_MAX_VIDEO_BYTES || 95_000_000);
+  return Number.isFinite(raw) && raw > 0 ? raw : 95_000_000;
+}
+
+function mediaDeliveryUrl(c: any, backupId: string): string {
+  const origin = new URL(c.req.url).origin;
+  return `${origin}/api/media/${encodeURIComponent(backupId)}`;
+}
+
+async function maybeEnhanceImage(c: any, bytes: Uint8Array, contentType: string) {
+  const mode = String(c.env.MEDIA_AI_ENHANCEMENT || 'off').toLowerCase();
+  if (mode !== 'on' && mode !== 'flux2') {
+    return { bytes, contentType, status: 'disabled' };
+  }
+  if (!c.env.AI) {
+    return { bytes, contentType, status: 'missing_ai_binding' };
+  }
+
+  try {
+    const form = new FormData();
+    const ext = contentTypeExtension(contentType, 'jpg');
+    form.append('prompt', 'Enhance this user-uploaded social media photo. Preserve the original subject, composition, people, identity, and text. Improve clarity, exposure, and detail naturally.');
+    form.append('input_image_0', new Blob([bytesToArrayBuffer(bytes)], { type: contentType }), `source.${ext}`);
+    form.append('width', '1024');
+    form.append('height', '1024');
+
+    const formResponse = new Response(form);
+    const model = String(c.env.MEDIA_AI_MODEL || '@cf/black-forest-labs/flux-2-klein-9b');
+    const result = await c.env.AI.run(model, {
+      multipart: {
+        body: formResponse.body,
+        contentType: formResponse.headers.get('content-type') || 'multipart/form-data',
+      },
+    }) as { image?: string };
+
+    if (!result?.image) {
+      return { bytes, contentType, status: 'no_ai_output' };
+    }
+
+    const enhanced = dataUriToBytes(result.image, 'image/png');
+    return { bytes: enhanced.bytes, contentType: enhanced.contentType, status: 'enhanced' };
+  } catch (error: any) {
+    console.log('Workers AI enhancement failed:', error?.message || error);
+    return { bytes, contentType, status: 'failed' };
+  }
+}
+
+async function storeMediaBackup(c: any, opts: {
+  userId: string;
+  postId?: string | null;
+  mediaKind: 'image' | 'video';
+  provider: string;
+  providerId?: string;
+  deliveryUrl?: string;
+  contentType: string;
+  bytes: ArrayBuffer | Uint8Array;
+  originalFilename?: string;
+}) {
+  if (!c.env.MEDIA_BACKUP) return null;
+  await ensureMediaBackupSchema(c.env.DB);
+
+  const id = uuid();
+  const date = new Date().toISOString().slice(0, 10);
+  const ext = contentTypeExtension(opts.contentType, opts.mediaKind === 'image' ? 'jpg' : 'mp4');
+  const filename = sanitizeMediaName(opts.originalFilename || opts.providerId || id, opts.mediaKind);
+  const key = `users/${opts.userId}/${date}/${id}-${filename}.${ext}`;
+  const buffer = opts.bytes instanceof Uint8Array ? bytesToArrayBuffer(opts.bytes) : opts.bytes;
+  const checksum = await sha256BinaryHex(buffer);
+  const createdAt = now();
+  const deliveryUrl = opts.deliveryUrl || mediaDeliveryUrl(c, id);
+
+  await c.env.MEDIA_BACKUP.put(key, buffer, {
+    httpMetadata: { contentType: opts.contentType },
+    customMetadata: {
+      userId: opts.userId,
+      postId: opts.postId || '',
+      mediaKind: opts.mediaKind,
+      provider: opts.provider,
+      providerId: opts.providerId || '',
+    },
+  });
+
+  await c.env.DB.prepare(
+    `INSERT INTO media_backups (id, user_id, post_id, media_kind, provider, provider_id, delivery_url, r2_key, content_type, size_bytes, checksum_sha256, original_filename, backup_status, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'stored', ?, ?)`
+  ).bind(
+    id,
+    opts.userId,
+    opts.postId || null,
+    opts.mediaKind,
+    opts.provider,
+    opts.providerId || '',
+    deliveryUrl,
+    key,
+    opts.contentType,
+    buffer.byteLength,
+    checksum,
+    opts.originalFilename || '',
+    createdAt,
+    createdAt,
+  ).run();
+
+  return { id, r2_key: key, delivery_url: deliveryUrl, size_bytes: buffer.byteLength, checksum_sha256: checksum };
+}
+
+async function attachMediaBackupsToPost(db: D1Database, userId: string, postId: string, backupIds: string[]) {
+  const ids = backupIds.map(String).filter(Boolean);
+  if (!ids.length) return;
+  await ensureMediaBackupSchema(db);
+
+  for (const backupId of ids) {
+    await db.prepare('UPDATE media_backups SET post_id = ?, updated_at = ? WHERE id = ? AND user_id = ?')
+      .bind(postId, now(), backupId, userId)
+      .run();
+  }
+}
+
+function postPayload(post: any, likedBy: string[] = []) {
+  const audioHidden = Number(post.audio_hidden || 0) === 1;
+  const payload = {
     ...post,
     images: parseJsonArray(post.images),
     media_types: parseJsonArray(post.media_types),
+    media_backup_ids: parseJsonArray(post.media_backup_ids),
+    editor_overlays: parseJsonArray(post.editor_overlays),
     liked_by: likedBy,
     is_verified_checkin: !!post.is_verified_checkin,
   };
+  if (audioHidden) {
+    payload.audio_provider = '';
+    payload.audio_track_id = '';
+    payload.audio_title = '';
+    payload.audio_artist = '';
+    payload.audio_artwork_url = '';
+    payload.audio_stream_url = '';
+    payload.audio_start_time = 0;
+    payload.audio_duration = 0;
+  }
+  return payload;
 }
 
 async function isFriend(db: D1Database, userId: string, targetId: string): Promise<boolean> {
@@ -375,7 +1640,7 @@ async function numericAgoraUid(userId: string): Promise<number> {
 
 const EVENTBRITE_API_BASE = 'https://www.eventbriteapi.com/v3';
 const NYC_OPEN_DATA_EVENTS_URL = 'https://data.cityofnewyork.us/resource/tvpp-9vvx.json';
-const GOOGLE_PLACES_API_BASE = 'https://maps.googleapis.com/maps/api/place';
+const MAPBOX_SEARCH_BOX_API_BASE = 'https://api.mapbox.com/search/searchbox/v1';
 const EVENT_LOOKAHEAD_DAYS = 45;
 const EVENTBRITE_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const EVENTBRITE_WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -400,12 +1665,11 @@ const EVENT_INTEREST_MAP: Record<string, { queries: string[]; categories?: strin
   wellness: { queries: ['wellness', 'yoga', 'health'], categories: ['107'] },
 };
 
-const GOOGLE_EVENT_PLANS = [
+const MAPBOX_EVENT_PLANS = [
   {
     id: 'tonight-clubs',
     title: 'Night events tonight',
     host: 'Flames nightlife guide',
-    type: 'night_club',
     keyword: 'club party nightlife',
     weekday: null as number | null,
     startHour: 20,
@@ -416,7 +1680,6 @@ const GOOGLE_EVENT_PLANS = [
     id: 'live-music',
     title: 'Live music tonight',
     host: 'Flames music guide',
-    type: 'bar',
     keyword: 'live music',
     weekday: null as number | null,
     startHour: 19,
@@ -427,7 +1690,6 @@ const GOOGLE_EVENT_PLANS = [
     id: 'movie-night',
     title: 'Movie night',
     host: 'Flames movie guide',
-    type: 'movie_theater',
     keyword: 'movie film cinema',
     weekday: null as number | null,
     startHour: 19,
@@ -438,7 +1700,6 @@ const GOOGLE_EVENT_PLANS = [
     id: 'weekend-parks',
     title: 'Park happenings',
     host: 'Flames park guide',
-    type: 'park',
     keyword: 'events',
     weekday: 6 as number | null,
     startHour: 11,
@@ -449,7 +1710,6 @@ const GOOGLE_EVENT_PLANS = [
     id: 'sports-weekend',
     title: 'Sports nearby',
     host: 'Flames sports guide',
-    type: 'stadium',
     keyword: 'sports game',
     weekday: 6 as number | null,
     startHour: 15,
@@ -739,7 +1999,58 @@ async function fetchOwnedEventbriteEvents(c: any) {
   return events;
 }
 
-function googleEventWindow(plan: typeof GOOGLE_EVENT_PLANS[number]) {
+function getMapboxAccessToken(c: any): string {
+  const token = String(c.env.MAPBOX_ACCESS_TOKEN || '').trim();
+  if (!token) throw new Error('MAPBOX_ACCESS_TOKEN_MISSING');
+  return token;
+}
+
+function mapboxProximity(location: { lat?: string; lng?: string }): string {
+  const lat = Number(location.lat);
+  const lng = Number(location.lng);
+  if (Number.isFinite(lat) && Number.isFinite(lng)) return `${lng},${lat}`;
+  return '-74.006,40.7128';
+}
+
+function mapboxFeatureAddress(properties: any): string {
+  return properties?.full_address || [properties?.address, properties?.place_formatted].filter(Boolean).join(', ') || properties?.place_formatted || properties?.name || 'Mapbox place';
+}
+
+function mapboxCoordinates(feature: any) {
+  const properties = feature?.properties || {};
+  const coordinates = properties?.coordinates || {};
+  const geometry = Array.isArray(feature?.geometry?.coordinates) ? feature.geometry.coordinates : [];
+  const lng = Number(coordinates.longitude ?? geometry[0]);
+  const lat = Number(coordinates.latitude ?? geometry[1]);
+  return {
+    lat: Number.isFinite(lat) ? lat : null,
+    lng: Number.isFinite(lng) ? lng : null,
+  };
+}
+
+function mapboxFeatureToPlace(feature: any, fallbackId: string) {
+  const properties = feature?.properties || {};
+  const coords = mapboxCoordinates(feature);
+  const address = mapboxFeatureAddress(properties);
+
+  return {
+    place_id: properties.mapbox_id || fallbackId,
+    name: properties.name || properties.name_preferred || 'Mapbox place',
+    vicinity: address,
+    formatted_address: address,
+    rating: null,
+    user_ratings_total: null,
+    open_now: null,
+    lat: coords.lat,
+    lng: coords.lng,
+    types: properties.poi_category || properties.poi_category_ids || [],
+    photo_url: null,
+    mapbox_id: properties.mapbox_id || fallbackId,
+    mapbox_url: coords.lat !== null && coords.lng !== null ? `https://www.mapbox.com/search?query=${encodeURIComponent(properties.name || address)}&center=${coords.lng},${coords.lat}` : '',
+  };
+}
+
+function mapboxEventWindow(plan: typeof MAPBOX_EVENT_PLANS[number]) {
   const start = new Date();
   if (plan.weekday !== null) {
     const today = start.getDay();
@@ -753,19 +2064,18 @@ function googleEventWindow(plan: typeof GOOGLE_EVENT_PLANS[number]) {
   return eventbriteDateParts(start.toISOString(), end.toISOString());
 }
 
-function googlePlaceToEventCard(place: any, plan: typeof GOOGLE_EVENT_PLANS[number], rank: number, key: string) {
-  const date = googleEventWindow(plan);
+function mapboxPlaceToEventCard(place: any, plan: typeof MAPBOX_EVENT_PLANS[number], rank: number) {
+  const date = mapboxEventWindow(plan);
   const venue = place?.name || plan.title;
   const address = place?.vicinity || place?.formatted_address || venue;
-  const photoRef = place?.photos?.[0]?.photo_reference;
 
   return {
     event: true,
-    event_source: 'google_places',
-    event_id: `google-${plan.id}-${place?.place_id || rank}`.replace(/[^a-zA-Z0-9_-]/g, '-'),
-    place_id: place?.place_id || `google-${plan.id}-${rank}`,
+    event_source: 'mapbox_search',
+    event_id: `mapbox-${plan.id}-${place?.place_id || rank}`.replace(/[^a-zA-Z0-9_-]/g, '-'),
+    place_id: place?.place_id || `mapbox-${plan.id}-${rank}`,
     eventbrite_id: '',
-    event_url: '',
+    event_url: place?.mapbox_url || '',
     name: plan.title,
     event_title: plan.title,
     event_host: plan.host,
@@ -782,44 +2092,43 @@ function googlePlaceToEventCard(place: any, plan: typeof GOOGLE_EVENT_PLANS[numb
     category: plan.keyword,
     rating: place?.rating,
     user_ratings_total: place?.user_ratings_total,
-    open_now: place?.opening_hours?.open_now,
-    lat: place?.geometry?.location?.lat,
-    lng: place?.geometry?.location?.lng,
+    open_now: place?.open_now,
+    lat: place?.lat,
+    lng: place?.lng,
     types: place?.types || [],
-    photo_url: photoRef ? `${GOOGLE_PLACES_API_BASE}/photo?maxwidth=500&photoreference=${photoRef}&key=${key}` : null,
+    photo_url: place?.photo_url || null,
     source_rank: rank,
   };
 }
 
-async function fetchGoogleEventPlaces(c: any, location: { address: string; lat?: string; lng?: string }) {
-  const key = String(c.env.GOOGLE_MAPS_API_KEY || '').trim();
-  if (!key) throw new Error('GOOGLE_MAPS_API_KEY_MISSING');
-
-  const lat = location.lat || '40.7128';
-  const lng = location.lng || '-74.006';
+async function fetchMapboxEventPlaces(c: any, location: { address: string; lat?: string; lng?: string }) {
+  const token = getMapboxAccessToken(c);
   const cards: any[] = [];
   const seen = new Set<string>();
+  const proximity = mapboxProximity(location);
 
-  for (const plan of GOOGLE_EVENT_PLANS) {
+  for (const plan of MAPBOX_EVENT_PLANS) {
     const params = new URLSearchParams({
-      location: `${lat},${lng}`,
-      radius: '40000',
-      type: plan.type,
-      keyword: plan.keyword,
-      key,
+      q: `${plan.keyword} ${location.address || 'New York, NY'}`,
+      language: 'en',
+      limit: '5',
+      country: 'US',
+      types: 'poi',
+      proximity,
+      access_token: token,
     });
-    const response = await fetch(`${GOOGLE_PLACES_API_BASE}/nearbysearch/json?${params.toString()}`);
+    const response = await fetch(`${MAPBOX_SEARCH_BOX_API_BASE}/forward?${params.toString()}`);
+    if (!response.ok) throw new Error(`MAPBOX_SEARCH_FAILED:${response.status}`);
     const data: any = await response.json();
-    if (data.status !== 'OK' && data.status !== 'ZERO_RESULTS') {
-      throw new Error(`GOOGLE_PLACES_FAILED:${data.status || response.status}`);
-    }
 
-    const places = Array.isArray(data.results) ? data.results : [];
+    const places = Array.isArray(data.features)
+      ? data.features.map((feature: any, index: number) => mapboxFeatureToPlace(feature, `mapbox-${plan.id}-${index}`))
+      : [];
     for (const place of places.slice(0, 2)) {
-      const placeId = place?.place_id || `${plan.id}-${cards.length}`;
+      const placeId = place?.place_id || place?.mapbox_id || `${plan.id}-${cards.length}`;
       if (seen.has(placeId)) continue;
       seen.add(placeId);
-      cards.push(googlePlaceToEventCard(place, plan, cards.length, key));
+      cards.push(mapboxPlaceToEventCard(place, plan, cards.length));
     }
   }
 
@@ -862,8 +2171,6 @@ function eventbriteEmptyDetail(errors: string[]): string {
 }
 
 async function ensurePhoneAuthSchema(db: D1Database) {
-  if (phoneAuthSchemaReady) return;
-
   const statements = [
     'ALTER TABLE users ADD COLUMN phone TEXT',
     'ALTER TABLE users ADD COLUMN phone_verified INTEGER DEFAULT 0',
@@ -882,20 +2189,46 @@ async function ensurePhoneAuthSchema(db: D1Database) {
 
   for (const statement of statements) {
     try {
-      await db.exec(statement);
+      await runSchemaStatement(db, statement);
     } catch (error: any) {
-      const message = String(error?.message || '');
-      const canContinue =
-        message.includes('duplicate column name')
-        || message.includes('already exists')
-        || (statement.includes('idx_users_phone') && message.includes('UNIQUE constraint failed'));
-      if (!canContinue) {
+      if (!isIgnorableSchemaError(error, statement)) {
         throw error;
       }
     }
   }
 
   phoneAuthSchemaReady = true;
+}
+
+async function ensureCommentSchema(db: D1Database) {
+  if (commentSchemaReady) return;
+
+  const statements = [
+    'ALTER TABLE comments ADD COLUMN parent_id TEXT',
+    'ALTER TABLE comments ADD COLUMN likes_count INTEGER DEFAULT 0',
+    `CREATE TABLE IF NOT EXISTS comment_likes (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      comment_id TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(user_id, comment_id)
+    )`,
+    'CREATE INDEX IF NOT EXISTS idx_comments_parent ON comments(parent_id, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_comment_likes_comment ON comment_likes(comment_id)',
+    'CREATE INDEX IF NOT EXISTS idx_comment_likes_user ON comment_likes(user_id)',
+  ];
+
+  for (const statement of statements) {
+    try {
+      await runSchemaStatement(db, statement);
+    } catch (error: any) {
+      if (!isIgnorableSchemaError(error, statement)) {
+        throw error;
+      }
+    }
+  }
+
+  commentSchemaReady = true;
 }
 
 function createPhoneCode(): string {
@@ -910,6 +2243,64 @@ function getTwilioVerifyConfig(c: any) {
   const serviceSid = String(c.env.TWILIO_VERIFY_SERVICE_SID || c.env.TWILIO_SERVICE_SID || '').trim();
   if (!accountSid || !authToken || !serviceSid) return null;
   return { accountSid, authToken, serviceSid };
+}
+
+function parseRetryAfterSeconds(value: string | null): number | undefined {
+  const raw = String(value || '').trim();
+  if (!raw) return undefined;
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds) && seconds > 0) return Math.min(Math.ceil(seconds), 300);
+
+  const retryAt = Date.parse(raw);
+  if (!Number.isNaN(retryAt)) {
+    return Math.min(Math.max(1, Math.ceil((retryAt - Date.now()) / 1000)), 300);
+  }
+  return undefined;
+}
+
+function parseTwilioVerifyFailure(message: string) {
+  const [, rawStatus, twilioCode, rawRetryAfter] = message.split(':');
+  const status = Number(rawStatus);
+  const retryAfter = Number(rawRetryAfter);
+  return {
+    status: Number.isFinite(status) ? status : 0,
+    twilioCode: twilioCode && twilioCode !== 'unknown' ? twilioCode : '',
+    retryAfter: Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : undefined,
+  };
+}
+
+function isTwilioVerifyRateLimited(failure: ReturnType<typeof parseTwilioVerifyFailure>) {
+  return failure.status === 429 || failure.twilioCode === '60203' || failure.twilioCode === '20429';
+}
+
+function twilioVerifyStartErrorResponse(c: any, errorMessage: string) {
+  const failure = parseTwilioVerifyFailure(errorMessage);
+  if (isTwilioVerifyRateLimited(failure)) {
+    return c.json({
+      detail: 'A verification code was already sent. Enter that code or wait before requesting a new one.',
+      code: 'PHONE_VERIFICATION_RATE_LIMITED',
+      retry_after: failure.retryAfter || 60,
+    }, 429);
+  }
+
+  if (failure.status === 400) {
+    return c.json({
+      detail: 'Twilio could not send a code to that phone number. Check the number and try again.',
+      code: 'PHONE_VERIFY_SEND_REJECTED',
+    }, 400);
+  }
+
+  if (failure.status === 401 || failure.status === 403 || failure.status === 404) {
+    return c.json({
+      detail: 'Phone verification provider is not configured correctly. Check the Twilio Verify Service SID and auth settings.',
+      code: 'PHONE_PROVIDER_CONFIG',
+    }, 502);
+  }
+
+  return c.json({
+    detail: 'Could not send verification code. Check Twilio Verify settings.',
+    code: 'PHONE_VERIFY_START_FAILED',
+  }, 502);
 }
 
 async function startTwilioVerification(c: any, phone: string): Promise<boolean> {
@@ -937,7 +2328,8 @@ async function startTwilioVerification(c: any, phone: string): Promise<boolean> 
 
   if (!response.ok) {
     const data: any = await response.json().catch(() => ({}));
-    throw new Error(`PHONE_VERIFY_START_FAILED:${response.status}:${data.code || 'unknown'}`);
+    const retryAfter = parseRetryAfterSeconds(response.headers.get('Retry-After'));
+    throw new Error(`PHONE_VERIFY_START_FAILED:${response.status}:${data.code || 'unknown'}:${retryAfter || ''}`);
   }
 
   return true;
@@ -1061,8 +2453,9 @@ function authUserPayload(user: any) {
 async function requirePhoneVerified(c: any, action = 'continue') {
   const userId = getUserId(c);
   await ensurePhoneAuthSchema(c.env.DB);
-  const user: any = await c.env.DB.prepare('SELECT phone_verified FROM users WHERE id = ?').bind(userId).first();
+  const user: any = await c.env.DB.prepare('SELECT username, phone_verified FROM users WHERE id = ?').bind(userId).first();
   if (!user) return c.json({ detail: 'User not found' }, 404);
+  if (isOwnerUsername(c, user.username)) return null;
   if (!user.phone_verified) {
     return c.json({
       detail: `Verify your phone number to ${action}.`,
@@ -1070,6 +2463,18 @@ async function requirePhoneVerified(c: any, action = 'continue') {
     }, 403);
   }
   return null;
+}
+
+function ownerUsernames(c: any): string[] {
+  return String(c.env.OWNER_USERNAMES || 'dxhfqhsd5c')
+    .split(',')
+    .map((value) => value.replace(/^@/, '').trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function isOwnerUsername(c: any, username: unknown): boolean {
+  const clean = String(username || '').replace(/^@/, '').trim().toLowerCase();
+  return !!clean && ownerUsernames(c).includes(clean);
 }
 
 async function verifyGoogleIdToken(c: any, idToken: string) {
@@ -1238,6 +2643,9 @@ api.post('/auth/login', async (c) => {
     const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
     if (!user || !(await verifyPassword(password, user.password_hash)))
       return c.json({ detail: 'Invalid credentials' }, 401);
+    if (String(user.status || 'active') === 'banned') {
+      return c.json({ detail: 'This account has been banned.' }, 403);
+    }
     // Auto-migrate legacy SHA-256 hash to bcrypt on successful login
     if (user.password_hash && !user.password_hash.startsWith('$2')) {
       try {
@@ -1294,9 +2702,10 @@ api.post('/auth/phone/start', async (c) => {
     const code = String(error?.message || '');
     if (code === 'PHONE_INVALID') return c.json({ detail: 'Enter a valid phone number with country code.' }, 400);
     if (code === 'JWT_SECRET_MISSING') return c.json({ detail: 'Auth service is not configured.' }, 503);
-    if (code.startsWith('PHONE_VERIFY_START_FAILED')) return c.json({ detail: 'Could not send verification code. Check Twilio Verify settings.', code }, 502);
+    if (code.startsWith('PHONE_VERIFY_START_FAILED')) return twilioVerifyStartErrorResponse(c, code);
     if (code === 'PHONE_SMS_FAILED') return c.json({ detail: 'Could not send SMS code. Check Twilio settings.' }, 502);
-    return c.json({ detail: 'Could not start phone sign in.' }, 500);
+    console.error(JSON.stringify({ event: 'phone_login_start_failed', error: code.slice(0, 180) }));
+    return c.json({ detail: 'Could not start phone sign in. Please try again in a moment.', code: 'PHONE_START_FAILED' }, 500);
   }
 });
 
@@ -1323,22 +2732,22 @@ api.post('/auth/phone/verify', async (c) => {
       return c.json({ access_token: token, token_type: 'bearer', user: authUserPayload(user) });
     }
 
-    const challenge: any = await c.env.DB.prepare(
+    const phoneCode: any = await c.env.DB.prepare(
       'SELECT * FROM phone_login_codes WHERE phone = ? AND consumed_at IS NULL ORDER BY created_at DESC LIMIT 1'
     ).bind(normalizedPhone).first();
 
-    if (!challenge) return c.json({ detail: 'No active code for this phone number.' }, 401);
-    if ((challenge.attempts || 0) >= 5) return c.json({ detail: 'Too many attempts. Request a new code.' }, 429);
-    if (Date.parse(challenge.expires_at) < Date.now()) return c.json({ detail: 'Code expired. Request a new code.' }, 401);
+    if (!phoneCode) return c.json({ detail: 'No active code for this phone number.' }, 401);
+    if ((phoneCode.attempts || 0) >= 5) return c.json({ detail: 'Too many attempts. Request a new code.' }, 429);
+    if (Date.parse(phoneCode.expires_at) < Date.now()) return c.json({ detail: 'Code expired. Request a new code.' }, 401);
 
     const jwtSecret = getJwtSecret(c);
     const expectedHash = await sha256Hex(`${normalizedPhone}:${normalizedCode}:${jwtSecret}`);
-    if (expectedHash !== challenge.code_hash) {
-      await c.env.DB.prepare('UPDATE phone_login_codes SET attempts = attempts + 1 WHERE id = ?').bind(challenge.id).run();
+    if (expectedHash !== phoneCode.code_hash) {
+      await c.env.DB.prepare('UPDATE phone_login_codes SET attempts = attempts + 1 WHERE id = ?').bind(phoneCode.id).run();
       return c.json({ detail: 'Invalid verification code.' }, 401);
     }
 
-    await c.env.DB.prepare('UPDATE phone_login_codes SET consumed_at = datetime(\'now\') WHERE id = ?').bind(challenge.id).run();
+    await c.env.DB.prepare('UPDATE phone_login_codes SET consumed_at = datetime(\'now\') WHERE id = ?').bind(phoneCode.id).run();
 
     const user = await findOrCreatePhoneUser(c, normalizedPhone, body.full_name);
 
@@ -1567,9 +2976,10 @@ api.post('/users/me/phone/start', authMiddleware, async (c) => {
     const code = String(error?.message || '');
     if (code === 'PHONE_INVALID') return c.json({ detail: 'Enter a valid phone number with country code.' }, 400);
     if (code === 'JWT_SECRET_MISSING') return c.json({ detail: 'Auth service is not configured.' }, 503);
-    if (code.startsWith('PHONE_VERIFY_START_FAILED')) return c.json({ detail: 'Could not send verification code. Check Twilio Verify settings.', code }, 502);
+    if (code.startsWith('PHONE_VERIFY_START_FAILED')) return twilioVerifyStartErrorResponse(c, code);
     if (code === 'PHONE_SMS_FAILED') return c.json({ detail: 'Could not send SMS code. Check Twilio settings.' }, 502);
-    return c.json({ detail: 'Could not start phone verification.' }, 500);
+    console.error(JSON.stringify({ event: 'phone_verification_start_failed', error: code.slice(0, 180) }));
+    return c.json({ detail: 'Could not start phone verification. Please try again in a moment.', code: 'PHONE_START_FAILED' }, 500);
   }
 });
 
@@ -1593,22 +3003,22 @@ api.post('/users/me/phone/verify', authMiddleware, async (c) => {
       const verified = await checkTwilioVerification(c, normalizedPhone, normalizedCode);
       if (!verified) return c.json({ detail: 'Invalid or expired verification code.' }, 401);
     } else {
-      const challenge: any = await c.env.DB.prepare(
+      const phoneCode: any = await c.env.DB.prepare(
         'SELECT * FROM phone_login_codes WHERE phone = ? AND consumed_at IS NULL ORDER BY created_at DESC LIMIT 1'
       ).bind(normalizedPhone).first();
 
-      if (!challenge) return c.json({ detail: 'No active code for this phone number.' }, 401);
-      if ((challenge.attempts || 0) >= 5) return c.json({ detail: 'Too many attempts. Request a new code.' }, 429);
-      if (Date.parse(challenge.expires_at) < Date.now()) return c.json({ detail: 'Code expired. Request a new code.' }, 401);
+      if (!phoneCode) return c.json({ detail: 'No active code for this phone number.' }, 401);
+      if ((phoneCode.attempts || 0) >= 5) return c.json({ detail: 'Too many attempts. Request a new code.' }, 429);
+      if (Date.parse(phoneCode.expires_at) < Date.now()) return c.json({ detail: 'Code expired. Request a new code.' }, 401);
 
       const jwtSecret = getJwtSecret(c);
       const expectedHash = await sha256Hex(`${normalizedPhone}:${normalizedCode}:${jwtSecret}`);
-      if (expectedHash !== challenge.code_hash) {
-        await c.env.DB.prepare('UPDATE phone_login_codes SET attempts = attempts + 1 WHERE id = ?').bind(challenge.id).run();
+      if (expectedHash !== phoneCode.code_hash) {
+        await c.env.DB.prepare('UPDATE phone_login_codes SET attempts = attempts + 1 WHERE id = ?').bind(phoneCode.id).run();
         return c.json({ detail: 'Invalid verification code.' }, 401);
       }
 
-      await c.env.DB.prepare('UPDATE phone_login_codes SET consumed_at = datetime(\'now\') WHERE id = ?').bind(challenge.id).run();
+      await c.env.DB.prepare('UPDATE phone_login_codes SET consumed_at = datetime(\'now\') WHERE id = ?').bind(phoneCode.id).run();
     }
 
     await c.env.DB.prepare('UPDATE users SET phone = ?, phone_verified = 1, updated_at = datetime(\'now\') WHERE id = ?')
@@ -1685,9 +3095,559 @@ api.post('/users/:userId/follow', authMiddleware, async (c) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 // POSTS (with Check-In support)
 // ═══════════════════════════════════════════════════════════════════════════════
+// Music proxy: Audius powers the post creation sound picker without exposing provider internals.
+api.get('/music/audius/trending', async (c) => {
+  try {
+    await ensureAudioSchema(c.env.DB);
+    const limit = clampNumber(c.req.query('limit'), 1, 50, 50);
+    const time = ['week', 'month', 'allTime'].includes(String(c.req.query('time') || ''))
+      ? String(c.req.query('time'))
+      : 'week';
+    const tracks = await cachedJson(
+      c,
+      `audius:trending:${time}:${limit}`,
+      600,
+      () => fetchAudiusTracks('/tracks/trending', { time, limit })
+    );
+    const hidden = await c.env.DB.prepare("SELECT track_id FROM hidden_sounds WHERE provider = 'audius'").all();
+    const hiddenIds = new Set((hidden.results as any[]).map((row) => String(row.track_id)));
+    return c.json({ tracks: (tracks as any[]).filter((track) => !hiddenIds.has(String(track.track_id))) });
+  } catch (error: any) {
+    console.log('Audius trending failed:', error?.message || error);
+    return c.json({ detail: 'Music is temporarily unavailable.', tracks: [] }, 503);
+  }
+});
+
+api.get('/music/audius/search', async (c) => {
+  try {
+    await ensureAudioSchema(c.env.DB);
+    const q = cleanText(c.req.query('q') || c.req.query('query'), 90);
+    if (q.length < 2) return c.json({ tracks: [] });
+    const limit = clampNumber(c.req.query('limit'), 1, 50, 50);
+    const cacheKey = `audius:search:${q.toLowerCase()}:${limit}`;
+    const tracks = await cachedJson(
+      c,
+      cacheKey,
+      300,
+      () => fetchAudiusTracks('/tracks/search', { query: q, limit })
+    );
+    const hidden = await c.env.DB.prepare("SELECT track_id FROM hidden_sounds WHERE provider = 'audius'").all();
+    const hiddenIds = new Set((hidden.results as any[]).map((row) => String(row.track_id)));
+    return c.json({ tracks: (tracks as any[]).filter((track) => !hiddenIds.has(String(track.track_id))) });
+  } catch (error: any) {
+    console.log('Audius search failed:', error?.message || error);
+    return c.json({ detail: 'Music search is temporarily unavailable.', tracks: [] }, 503);
+  }
+});
+
+api.get('/music/audius/stream/:trackId', async (c) => {
+  try {
+    await ensureAudioSchema(c.env.DB);
+    const trackId = cleanText(c.req.param('trackId'), 80);
+    if (!trackId) return c.json({ detail: 'Track id is required.' }, 400);
+    const hidden = await c.env.DB.prepare("SELECT track_id FROM hidden_sounds WHERE provider = 'audius' AND track_id = ?")
+      .bind(trackId)
+      .first();
+    if (hidden) return c.json({ detail: 'This sound is unavailable.' }, 404);
+
+    const response = await fetch(audiusUrl(`/tracks/${encodeURIComponent(trackId)}`, {}), {
+      headers: { Accept: 'application/json' },
+    });
+    if (!response.ok) throw new Error(`Audius returned ${response.status}`);
+    const data: any = await response.json();
+    const track = normalizeAudiusTrack(data?.data || {});
+    if (!track.stream_url) return c.json({ detail: 'Track stream is unavailable.' }, 404);
+    return c.json(track);
+  } catch (error: any) {
+    console.log('Audius stream failed:', error?.message || error);
+    return c.json({ detail: 'Could not load this sound.' }, 503);
+  }
+});
+
+api.get('/music/audius/favorites', authMiddleware, async (c) => {
+  try {
+    await ensureAudioSchema(c.env.DB);
+    const userId = getUserId(c);
+    const rows = await c.env.DB.prepare(
+      `SELECT fs.track_id, fs.title, fs.artist, fs.artwork_url, fs.duration
+       FROM favorite_sounds fs
+       LEFT JOIN hidden_sounds hs ON hs.provider = fs.provider AND hs.track_id = fs.track_id
+       WHERE fs.user_id = ? AND fs.provider = 'audius' AND hs.track_id IS NULL
+       ORDER BY fs.created_at DESC
+       LIMIT 100`
+    ).bind(userId).all();
+    const tracks = (rows.results as any[]).map((row) => ({
+      id: String(row.track_id || ''),
+      track_id: String(row.track_id || ''),
+      title: String(row.title || 'Untitled track'),
+      artist: String(row.artist || 'Audius artist'),
+      artwork_url: String(row.artwork_url || ''),
+      duration: Number(row.duration || 0),
+    })).filter((track) => track.id);
+    return c.json({ tracks });
+  } catch (error: any) {
+    console.log('Audius favorites failed:', error?.message || error);
+    return c.json({ detail: 'Could not load favorite sounds.', tracks: [] }, 500);
+  }
+});
+
+api.post('/music/audius/favorites', authMiddleware, async (c) => {
+  try {
+    await ensureAudioSchema(c.env.DB);
+    const userId = getUserId(c);
+    const body: any = await c.req.json().catch(() => ({}));
+    const trackId = cleanText(body.track_id || body.id || body.audio_track_id, 80);
+    if (!trackId) return c.json({ detail: 'Track id is required.' }, 400);
+
+    const hidden = await c.env.DB.prepare("SELECT track_id FROM hidden_sounds WHERE provider = 'audius' AND track_id = ?")
+      .bind(trackId)
+      .first();
+    if (hidden) return c.json({ detail: 'This sound is unavailable.' }, 400);
+
+    const title = cleanText(body.title || body.audio_title || 'Untitled track', 180);
+    const artist = cleanText(body.artist || body.audio_artist || 'Audius artist', 120);
+    const artworkUrl = cleanText(body.artwork_url || body.audio_artwork_url || '', 1000);
+    const duration = clampNumber(body.duration || body.audio_duration, 0, 60 * 60 * 6, 0);
+    const ts = now();
+
+    await c.env.DB.prepare(
+      `INSERT INTO favorite_sounds (id, user_id, provider, track_id, title, artist, artwork_url, duration, created_at, updated_at)
+       VALUES (?, ?, 'audius', ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(user_id, provider, track_id) DO UPDATE SET
+         title = excluded.title,
+         artist = excluded.artist,
+         artwork_url = excluded.artwork_url,
+         duration = excluded.duration,
+         updated_at = excluded.updated_at`
+    ).bind(uuid(), userId, trackId, title, artist, artworkUrl, duration, ts, ts).run();
+
+    return c.json({
+      favorite: true,
+      track: { id: trackId, track_id: trackId, title, artist, artwork_url: artworkUrl, duration },
+    });
+  } catch (error: any) {
+    console.log('Audius favorite save failed:', error?.message || error);
+    return c.json({ detail: 'Could not save this sound.' }, 500);
+  }
+});
+
+api.delete('/music/audius/favorites/:trackId', authMiddleware, async (c) => {
+  try {
+    await ensureAudioSchema(c.env.DB);
+    const userId = getUserId(c);
+    const trackId = cleanText(c.req.param('trackId'), 80);
+    if (!trackId) return c.json({ detail: 'Track id is required.' }, 400);
+    await c.env.DB.prepare("DELETE FROM favorite_sounds WHERE user_id = ? AND provider = 'audius' AND track_id = ?")
+      .bind(userId, trackId)
+      .run();
+    return c.json({ favorite: false, track_id: trackId });
+  } catch (error: any) {
+    console.log('Audius favorite remove failed:', error?.message || error);
+    return c.json({ detail: 'Could not remove this sound.' }, 500);
+  }
+});
+
+api.get('/music/feed', authMiddleware, async (c) => {
+  try {
+    await ensureAiMusicSchema(c.env.DB);
+    const userId = getUserId(c);
+    const limit = clampNumber(c.req.query('limit'), 1, 60, 30);
+    const rows = await c.env.DB.prepare(`
+      SELECT m.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
+        EXISTS(SELECT 1 FROM ai_music_interactions i WHERE i.music_id = m.id AND i.user_id = ? AND i.kind = 'like') AS liked,
+        EXISTS(SELECT 1 FROM ai_music_interactions i WHERE i.music_id = m.id AND i.user_id = ? AND i.kind = 'save') AS saved,
+        EXISTS(SELECT 1 FROM ai_music_interactions i WHERE i.music_id = m.id AND i.user_id = ? AND i.kind = 'repost') AS reposted
+      FROM ai_music_posts m
+      LEFT JOIN users u ON u.id = m.user_id
+      WHERE COALESCE(m.status, 'pending') = 'generated' AND COALESCE(m.is_public, 0) = 1
+      ORDER BY m.created_at DESC
+      LIMIT ?
+    `).bind(userId, userId, userId, limit).all();
+    return c.json({ posts: (rows.results as any[]).map((row) => publicAiMusicPayload(row, row)) });
+  } catch (error: any) {
+    console.log('AI music feed failed:', error?.message || error);
+    return c.json({ detail: 'Could not load music posts.', posts: [] }, 500);
+  }
+});
+
+async function serveAiMusicAudio(c: any) {
+  if (!c.env.MEDIA_BACKUP) return c.json({ detail: 'Music storage is not configured.' }, 503);
+  try {
+    await ensureAiMusicSchema(c.env.DB);
+    const musicId = cleanText(c.req.param('musicId'), 80);
+    const music: any = await c.env.DB.prepare(
+      "SELECT * FROM ai_music_posts WHERE id = ? AND COALESCE(status, 'pending') = 'generated'"
+    ).bind(musicId).first();
+    if (!music || !music.audio_r2_key) return c.json({ detail: 'Music not found.' }, 404);
+
+    const head = await c.env.MEDIA_BACKUP.head(music.audio_r2_key);
+    if (!head) return c.json({ detail: 'Music file not found.' }, 404);
+
+    const range = parseByteRange(c.req.header('range'), head.size || 0);
+    if (range === 'invalid') {
+      return new Response(null, {
+        status: 416,
+        headers: {
+          'accept-ranges': 'bytes',
+          'content-range': `bytes */${head.size || 0}`,
+        },
+      });
+    }
+
+    const object = range
+      ? await c.env.MEDIA_BACKUP.get(music.audio_r2_key, { range: { offset: range.offset, length: range.length } })
+      : await c.env.MEDIA_BACKUP.get(music.audio_r2_key);
+    if (!object) return c.json({ detail: 'Music file not found.' }, 404);
+
+    const headers = new Headers();
+    object.writeHttpMetadata(headers);
+    headers.set('content-type', headers.get('content-type') || 'audio/mpeg');
+    headers.set('etag', head.httpEtag || object.httpEtag);
+    headers.set('accept-ranges', 'bytes');
+    headers.set('cache-control', 'public, max-age=86400');
+    headers.set('x-content-type-options', 'nosniff');
+    headers.set('content-length', String(range ? range.length : head.size || object.size || 0));
+    if (range) headers.set('content-range', `bytes ${range.offset}-${range.end}/${head.size}`);
+
+    return new Response(c.req.method === 'HEAD' ? null : object.body, { status: range ? 206 : 200, headers });
+  } catch (error: any) {
+    console.log('AI music audio failed:', error?.message || error);
+    return c.json({ detail: 'Could not load audio.' }, 500);
+  }
+}
+
+api.get('/music/audio/:musicId', serveAiMusicAudio);
+api.on('HEAD', '/music/audio/:musicId', serveAiMusicAudio);
+
+api.post('/music/generate', authMiddleware, async (c) => {
+  try {
+    await ensureAiMusicSchema(c.env.DB);
+    const userId = getUserId(c);
+    const body: any = await c.req.json().catch(() => ({}));
+    const { text: promptText, lines } = normalizeAiMusicPrompt(body.prompt_text || body.lyrics_text || body.text || body.prompt);
+    const mood = normalizeAiMusicMood(body.mood);
+    const style = normalizeAiMusicStyle(body.style);
+
+    if (lines.length < 1) return c.json({ detail: 'Write 1 to 6 original lines first.' }, 400);
+    if (lines.length > 6) return c.json({ detail: 'Keep it short: 1 to 6 lines.' }, 400);
+    const moderation = moderateAiMusicPrompt(promptText);
+    if (!moderation.ok) return c.json({ detail: moderation.detail || 'That text cannot be generated right now.' }, 400);
+    if (!c.env.ELEVENLABS_API_KEY) return c.json({ detail: 'Music generation is not configured yet.' }, 503);
+    if (!c.env.MEDIA_BACKUP) return c.json({ detail: 'Music storage is not configured yet.' }, 503);
+
+    const dailyLimit = await aiMusicSettingNumber(c.env.DB, 'music_daily_generation_limit', c.env.MUSIC_DAILY_GENERATION_LIMIT, 1, 50, 5);
+    const cooldownSeconds = await aiMusicSettingNumber(c.env.DB, 'music_generation_cooldown_seconds', c.env.MUSIC_GENERATION_COOLDOWN_SECONDS, 0, 3600, 60);
+    const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const generatedToday: any = await c.env.DB.prepare(
+      'SELECT COUNT(*) AS count FROM ai_music_posts WHERE user_id = ? AND created_at >= ?'
+    ).bind(userId, cutoff).first();
+    if (Number(generatedToday?.count || 0) >= dailyLimit) {
+      return c.json({ detail: `Daily music limit reached. Try again tomorrow.` }, 429);
+    }
+
+    const latest: any = await c.env.DB.prepare(
+      'SELECT created_at FROM ai_music_posts WHERE user_id = ? ORDER BY created_at DESC LIMIT 1'
+    ).bind(userId).first();
+    const latestTime = latest?.created_at ? Date.parse(latest.created_at) : 0;
+    if (cooldownSeconds > 0 && latestTime && Date.now() - latestTime < cooldownSeconds * 1000) {
+      const wait = Math.ceil((cooldownSeconds * 1000 - (Date.now() - latestTime)) / 1000);
+      return c.json({ detail: `Wait ${wait}s before generating another music post.` }, 429);
+    }
+
+    const id = uuid();
+    const ts = now();
+    await c.env.DB.prepare(
+      `INSERT INTO ai_music_posts
+       (id, user_id, provider, prompt_text, lyrics_text, mood, style, audio_duration, waveform_data, status, is_public, created_at, updated_at)
+       VALUES (?, ?, 'elevenlabs', ?, ?, ?, ?, 20, ?, 'pending', 0, ?, ?)`
+    ).bind(id, userId, promptText, promptText, mood, style, JSON.stringify(buildWaveformData(promptText)), ts, ts).run();
+
+    const prompt = buildAiMusicPrompt(promptText, mood, style);
+    const response = await fetch('https://api.elevenlabs.io/v1/music?output_format=mp3_44100_128', {
+      method: 'POST',
+      headers: {
+        'xi-api-key': c.env.ELEVENLABS_API_KEY,
+        'Content-Type': 'application/json',
+        'Accept': 'audio/mpeg',
+      },
+      body: JSON.stringify({
+        model_id: 'music_v1',
+        prompt,
+        music_length_ms: 20000,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => '');
+      await c.env.DB.prepare("UPDATE ai_music_posts SET status = 'failed', updated_at = ? WHERE id = ?")
+        .bind(now(), id)
+        .run();
+      const providerError = errorText.toLowerCase();
+      let safeDetail = `Music generation failed at ElevenLabs (HTTP ${response.status}).`;
+      let clientStatus: 400 | 429 | 502 | 503 = 502;
+      if (response.status === 401) {
+        safeDetail = 'ElevenLabs API key was rejected. Re-save ELEVENLABS_API_KEY in Cloudflare.';
+        clientStatus = 503;
+      } else if (response.status === 403) {
+        safeDetail = 'ElevenLabs Music API is not enabled for this key or workspace.';
+        clientStatus = 503;
+      } else if (response.status === 402) {
+        safeDetail = 'ElevenLabs needs enough credits or a plan that supports music generation.';
+        clientStatus = 503;
+      } else if (response.status === 422 || providerError.includes('bad_prompt')) {
+        safeDetail = 'That text could not be generated. Use safer original words and avoid copied lyrics or real-artist imitation.';
+        clientStatus = 400;
+      } else if (response.status === 429) {
+        safeDetail = 'ElevenLabs is rate limiting music generation. Try again in a moment.';
+        clientStatus = 429;
+      }
+      console.log('ElevenLabs music failed:', response.status, errorText.slice(0, 280));
+      return c.json({ detail: safeDetail }, clientStatus);
+    }
+
+    const audioBuffer = await response.arrayBuffer();
+    if (!audioBuffer.byteLength) {
+      await c.env.DB.prepare("UPDATE ai_music_posts SET status = 'failed', updated_at = ? WHERE id = ?")
+        .bind(now(), id)
+        .run();
+      return c.json({ detail: 'Music generation returned an empty file.' }, 502);
+    }
+
+    const key = `ai-music/${userId}/${id}.mp3`;
+    await c.env.MEDIA_BACKUP.put(key, audioBuffer, {
+      httpMetadata: { contentType: 'audio/mpeg' },
+      customMetadata: {
+        userId,
+        provider: 'elevenlabs',
+        mood,
+        style,
+      },
+    });
+
+    const audioUrl = aiMusicAudioUrl(c, id);
+    const updatedAt = now();
+    await c.env.DB.prepare(
+      "UPDATE ai_music_posts SET audio_url = ?, audio_r2_key = ?, status = 'generated', updated_at = ? WHERE id = ?"
+    ).bind(audioUrl, key, updatedAt, id).run();
+
+    const row: any = await c.env.DB.prepare(`
+      SELECT m.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
+      FROM ai_music_posts m
+      LEFT JOIN users u ON u.id = m.user_id
+      WHERE m.id = ?
+    `).bind(id).first();
+    return c.json({ post: publicAiMusicPayload(row) }, 201);
+  } catch (error: any) {
+    console.log('AI music generate failed:', getErrorCode(error), error?.message || error);
+    return c.json({ detail: 'Could not generate music right now.' }, 500);
+  }
+});
+
+api.post('/music/:musicId/publish', authMiddleware, async (c) => {
+  try {
+    await ensureAiMusicSchema(c.env.DB);
+    const userId = getUserId(c);
+    const musicId = cleanText(c.req.param('musicId'), 80);
+    const row: any = await c.env.DB.prepare('SELECT * FROM ai_music_posts WHERE id = ?').bind(musicId).first();
+    if (!row) return c.json({ detail: 'Music post not found.' }, 404);
+    if (row.user_id !== userId) return c.json({ detail: 'You can only publish your own music.' }, 403);
+    if (row.status !== 'generated') return c.json({ detail: 'Music is not ready yet.' }, 400);
+    await c.env.DB.prepare('UPDATE ai_music_posts SET is_public = 1, updated_at = ? WHERE id = ?')
+      .bind(now(), musicId)
+      .run();
+    return c.json({ published: true, id: musicId });
+  } catch (error: any) {
+    console.log('AI music publish failed:', error?.message || error);
+    return c.json({ detail: 'Could not publish music post.' }, 500);
+  }
+});
+
+api.post('/music/:musicId/interactions', authMiddleware, async (c) => {
+  try {
+    await ensureAiMusicSchema(c.env.DB);
+    const userId = getUserId(c);
+    const musicId = cleanText(c.req.param('musicId'), 80);
+    const body: any = await c.req.json().catch(() => ({}));
+    const kind = ['like', 'save', 'repost', 'use_sound'].includes(String(body.kind)) ? String(body.kind) : 'like';
+    const music: any = await c.env.DB.prepare("SELECT id FROM ai_music_posts WHERE id = ? AND COALESCE(status, 'pending') = 'generated'")
+      .bind(musicId)
+      .first();
+    if (!music) return c.json({ detail: 'Music post not found.' }, 404);
+
+    const existing: any = await c.env.DB.prepare('SELECT id FROM ai_music_interactions WHERE music_id = ? AND user_id = ? AND kind = ?')
+      .bind(musicId, userId, kind)
+      .first();
+    const ts = now();
+    let active = true;
+    if (existing && kind !== 'use_sound') {
+      await c.env.DB.prepare('DELETE FROM ai_music_interactions WHERE id = ?').bind(existing.id).run();
+      active = false;
+    } else if (!existing) {
+      await c.env.DB.prepare('INSERT INTO ai_music_interactions (id, music_id, user_id, kind, created_at) VALUES (?, ?, ?, ?, ?)')
+        .bind(uuid(), musicId, userId, kind, ts)
+        .run();
+    }
+
+    const column = kind === 'save' ? 'saves_count' : kind === 'repost' ? 'reposts_count' : kind === 'like' ? 'likes_count' : '';
+    if (column) {
+      const delta = active ? 1 : -1;
+      await c.env.DB.prepare(`UPDATE ai_music_posts SET ${column} = MAX(0, COALESCE(${column}, 0) + ?), updated_at = ? WHERE id = ?`)
+        .bind(delta, ts, musicId)
+        .run();
+    }
+    return c.json({ active, kind, id: musicId });
+  } catch (error: any) {
+    console.log('AI music interaction failed:', error?.message || error);
+    return c.json({ detail: 'Could not update this music post.' }, 500);
+  }
+});
+
+api.post('/music/:musicId/report', authMiddleware, async (c) => {
+  try {
+    await ensureAiMusicSchema(c.env.DB);
+    await ensureGovernanceSchema(c.env.DB);
+    const userId = getUserId(c);
+    const musicId = cleanText(c.req.param('musicId'), 80);
+    const body: any = await c.req.json().catch(() => ({}));
+    const music: any = await c.env.DB.prepare('SELECT * FROM ai_music_posts WHERE id = ?').bind(musicId).first();
+    if (!music) return c.json({ detail: 'Music post not found.' }, 404);
+    if (music.user_id === userId) return c.json({ detail: 'You cannot report your own music post.' }, 400);
+    const reason = cleanText(body.reason || 'AI music report', 240);
+    const ts = now();
+    await c.env.DB.prepare('INSERT OR IGNORE INTO ai_music_reports (id, music_id, reporter_id, reason, created_at) VALUES (?, ?, ?, ?, ?)')
+      .bind(uuid(), musicId, userId, reason, ts)
+      .run();
+    await c.env.DB.prepare('UPDATE ai_music_posts SET reports_count = COALESCE(reports_count, 0) + 1, updated_at = ? WHERE id = ?')
+      .bind(ts, musicId)
+      .run();
+    await c.env.DB.prepare(
+      `INSERT INTO reports
+       (id, reporter_id, reported_id, report_type, reported_type, reason, details, content_id, status, created_at, updated_at)
+       VALUES (?, ?, ?, 'sound', 'ai_music', ?, ?, ?, 'pending', ?, ?)`
+    ).bind(uuid(), userId, music.user_id, reason, cleanText(body.details || music.prompt_text || '', 1000), musicId, ts, ts).run();
+    return c.json({ reported: true });
+  } catch (error: any) {
+    console.log('AI music report failed:', error?.message || error);
+    return c.json({ detail: 'Could not report music post.' }, 500);
+  }
+});
+
+api.get('/music/:musicId/comments', authMiddleware, async (c) => {
+  try {
+    await ensureAiMusicSchema(c.env.DB);
+    const musicId = cleanText(c.req.param('musicId'), 80);
+    const exists = await c.env.DB.prepare("SELECT id FROM ai_music_posts WHERE id = ? AND COALESCE(status, 'pending') = 'generated'")
+      .bind(musicId)
+      .first();
+    if (!exists) return c.json({ detail: 'Music post not found.' }, 404);
+    const rows = await c.env.DB.prepare(`
+      SELECT ac.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
+      FROM ai_music_comments ac
+      LEFT JOIN users u ON u.id = ac.user_id
+      WHERE ac.music_id = ? AND COALESCE(ac.status, 'active') = 'active'
+      ORDER BY ac.created_at ASC
+      LIMIT 120
+    `).bind(musicId).all();
+    return c.json({
+      comments: (rows.results as any[]).map((row) => ({
+        id: row.id,
+        music_id: row.music_id,
+        user_id: row.user_id,
+        parent_id: row.parent_id || '',
+        body: row.body || '',
+        likes_count: Number(row.likes_count || 0),
+        created_at: row.created_at,
+        user: {
+          id: row.user_id,
+          username: row.user_username || '',
+          full_name: row.user_full_name || '',
+          profile_image: row.user_profile_image || '',
+        },
+      })),
+    });
+  } catch (error: any) {
+    console.log('AI music comments failed:', error?.message || error);
+    return c.json({ detail: 'Could not load comments.', comments: [] }, 500);
+  }
+});
+
+api.post('/music/:musicId/comments', authMiddleware, async (c) => {
+  try {
+    await ensureAiMusicSchema(c.env.DB);
+    const userId = getUserId(c);
+    const musicId = cleanText(c.req.param('musicId'), 80);
+    const body: any = await c.req.json().catch(() => ({}));
+    const text = cleanText(body.body || body.text || body.comment, 500);
+    if (text.length < 1) return c.json({ detail: 'Write a comment first.' }, 400);
+    const exists = await c.env.DB.prepare("SELECT id FROM ai_music_posts WHERE id = ? AND COALESCE(status, 'pending') = 'generated'")
+      .bind(musicId)
+      .first();
+    if (!exists) return c.json({ detail: 'Music post not found.' }, 404);
+    const id = uuid();
+    const ts = now();
+    await c.env.DB.prepare(
+      "INSERT INTO ai_music_comments (id, music_id, user_id, parent_id, body, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'active', ?, ?)"
+    ).bind(id, musicId, userId, cleanText(body.parent_id, 80), text, ts, ts).run();
+    await c.env.DB.prepare('UPDATE ai_music_posts SET comments_count = COALESCE(comments_count, 0) + 1, updated_at = ? WHERE id = ?')
+      .bind(ts, musicId)
+      .run();
+    const row: any = await c.env.DB.prepare(`
+      SELECT ac.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
+      FROM ai_music_comments ac
+      LEFT JOIN users u ON u.id = ac.user_id
+      WHERE ac.id = ?
+    `).bind(id).first();
+    return c.json({
+      comment: {
+        id: row.id,
+        music_id: row.music_id,
+        user_id: row.user_id,
+        parent_id: row.parent_id || '',
+        body: row.body || '',
+        likes_count: Number(row.likes_count || 0),
+        created_at: row.created_at,
+        user: {
+          id: row.user_id,
+          username: row.user_username || '',
+          full_name: row.user_full_name || '',
+          profile_image: row.user_profile_image || '',
+        },
+      },
+    }, 201);
+  } catch (error: any) {
+    console.log('AI music comment create failed:', error?.message || error);
+    return c.json({ detail: 'Could not post comment.' }, 500);
+  }
+});
+
+api.get('/music/:musicId', authMiddleware, async (c) => {
+  try {
+    await ensureAiMusicSchema(c.env.DB);
+    const userId = getUserId(c);
+    const musicId = cleanText(c.req.param('musicId'), 80);
+    const row: any = await c.env.DB.prepare(`
+      SELECT m.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
+        EXISTS(SELECT 1 FROM ai_music_interactions i WHERE i.music_id = m.id AND i.user_id = ? AND i.kind = 'like') AS liked,
+        EXISTS(SELECT 1 FROM ai_music_interactions i WHERE i.music_id = m.id AND i.user_id = ? AND i.kind = 'save') AS saved,
+        EXISTS(SELECT 1 FROM ai_music_interactions i WHERE i.music_id = m.id AND i.user_id = ? AND i.kind = 'repost') AS reposted
+      FROM ai_music_posts m
+      LEFT JOIN users u ON u.id = m.user_id
+      WHERE m.id = ? AND (COALESCE(m.is_public, 0) = 1 OR m.user_id = ?)
+    `).bind(userId, userId, userId, musicId, userId).first();
+    if (!row) return c.json({ detail: 'Music post not found.' }, 404);
+    return c.json({ post: publicAiMusicPayload(row, row) });
+  } catch (error: any) {
+    console.log('AI music detail failed:', error?.message || error);
+    return c.json({ detail: 'Could not load music post.' }, 500);
+  }
+});
+
 api.post('/posts', authMiddleware, async (c) => {
   const phoneGate = await requirePhoneVerified(c, 'create posts');
   if (phoneGate) return phoneGate;
+  await ensureMediaBackupSchema(c.env.DB);
+  await ensureAudioSchema(c.env.DB);
+  await ensurePostEditorSchema(c.env.DB);
   const userId = getUserId(c);
   const user: any = await c.env.DB.prepare('SELECT username, full_name, profile_image FROM users WHERE id = ?').bind(userId).first();
   const b = await c.req.json();
@@ -1695,16 +3655,47 @@ api.post('/posts', authMiddleware, async (c) => {
   const isCheckin = postType === 'check_in' && b.place_id ? 1 : 0;
   const location = b.location || b.place_name || null;
   const visibility = normalizeVisibility(b.visibility);
+  const backupIds = parseJsonArray(b.media_backup_ids).map(String).filter(Boolean);
+  const editorOverlays = parseJsonArray(b.editor_overlays).slice(0, 8);
+  const audioProvider = b.audio_provider === 'audius' ? 'audius' : '';
+  const audioTrackId = audioProvider ? cleanText(b.audio_track_id, 80) : '';
+  const audioTitle = audioProvider ? cleanText(b.audio_title, 180) : '';
+  const audioArtist = audioProvider ? cleanText(b.audio_artist, 120) : '';
+  const audioArtworkUrl = audioProvider ? cleanText(b.audio_artwork_url, 1000) : '';
+  const audioStreamUrl = audioProvider ? cleanText(b.audio_stream_url, 2200) : '';
+  const audioStartTime = audioProvider ? clampNumber(b.audio_start_time, 0, 60 * 60 * 6, 0) : 0;
+  const audioDuration = audioProvider ? clampNumber(b.audio_duration, 5, 30, 15) : 0;
+
+  if (audioProvider && !audioTrackId) {
+    return c.json({ detail: 'Audio track id is required.' }, 400);
+  }
+  if (audioProvider) {
+    const hidden = await c.env.DB.prepare("SELECT track_id FROM hidden_sounds WHERE provider = 'audius' AND track_id = ?")
+      .bind(audioTrackId)
+      .first();
+    if (hidden) return c.json({ detail: 'This sound is unavailable.' }, 400);
+  }
   await c.env.DB.prepare(
-    `INSERT INTO posts (id, user_id, content, image, images, media_types, location, post_type, place_id, place_name, place_lat, place_lng, is_verified_checkin, visibility)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO posts (
+       id, user_id, content, image, images, media_types, media_backup_ids, location, post_type,
+       place_id, place_name, place_lat, place_lng, is_verified_checkin, visibility,
+       editor_overlays,
+       audio_provider, audio_track_id, audio_title, audio_artist, audio_artwork_url, audio_stream_url,
+       audio_start_time, audio_duration
+     )
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(id, userId, b.content || '', b.image || null, JSON.stringify(b.images || []), JSON.stringify(b.media_types || []),
-    location, postType, b.place_id || null, b.place_name || null, b.place_lat || null, b.place_lng || null, isCheckin, visibility).run();
+    JSON.stringify(backupIds), location, postType, b.place_id || null, b.place_name || null, b.place_lat || null, b.place_lng || null, isCheckin, visibility,
+    JSON.stringify(editorOverlays),
+    audioProvider, audioTrackId, audioTitle, audioArtist, audioArtworkUrl, audioStreamUrl, audioStartTime, audioDuration).run();
+  await attachMediaBackupsToPost(c.env.DB, userId, id, backupIds);
   await c.env.DB.prepare('UPDATE users SET posts_count = posts_count + 1 WHERE id = ?').bind(userId).run();
   return c.json({ id, user_id: userId, user_username: user?.username, user_full_name: user?.full_name,
     user_profile_image: user?.profile_image, content: b.content, image: b.image, images: b.images || [],
-    media_types: b.media_types || [], location, post_type: postType, place_id: b.place_id, place_name: b.place_name,
+    media_types: b.media_types || [], media_backup_ids: backupIds, editor_overlays: editorOverlays, location, post_type: postType, place_id: b.place_id, place_name: b.place_name,
     place_lat: b.place_lat, place_lng: b.place_lng, is_verified_checkin: !!isCheckin,
+    audio_provider: audioProvider, audio_track_id: audioTrackId, audio_title: audioTitle, audio_artist: audioArtist,
+    audio_artwork_url: audioArtworkUrl, audio_stream_url: audioStreamUrl, audio_start_time: audioStartTime, audio_duration: audioDuration,
     visibility, likes_count: 0, comments_count: 0, liked_by: [], created_at: now() });
 });
 
@@ -1716,7 +3707,7 @@ api.get('/posts/feed', authMiddleware, async (c) => {
      FROM posts p JOIN users u ON p.user_id = u.id
      WHERE ${visiblePostWhere('u', 'p')}
      ORDER BY p.created_at DESC LIMIT ? OFFSET ?`
-  ).bind(userId, userId, userId, userId, limit, skip).all();
+  ).bind(...visiblePostBindValues(userId), limit, skip).all();
   const results = [];
   for (const p of posts.results as any[]) {
     const likes = await c.env.DB.prepare('SELECT user_id FROM likes WHERE post_id = ?').bind(p.id).all();
@@ -1749,7 +3740,7 @@ api.get('/posts/nearby-feed', authMiddleware, async (c) => {
      FROM posts p JOIN users u ON p.user_id = u.id
      WHERE ${visiblePostWhere('u', 'p')}
      ORDER BY p.created_at DESC LIMIT 50`
-  ).bind(userId, userId, userId, userId).all();
+  ).bind(...visiblePostBindValues(userId)).all();
   return c.json((posts.results as any[]).map((p) => postPayload(p)));
 });
 
@@ -1759,7 +3750,7 @@ api.get('/posts/:postId', authMiddleware, async (c) => {
   const p: any = await c.env.DB.prepare(
     `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
      FROM posts p JOIN users u ON p.user_id = u.id
-     WHERE p.id = ? AND ${visiblePostWhere('u', 'p')}`).bind(postId, userId, userId, userId, userId).first();
+     WHERE p.id = ? AND ${visiblePostWhere('u', 'p')}`).bind(postId, ...visiblePostBindValues(userId)).first();
   if (!p) return c.json({ detail: 'Post not found' }, 404);
   const likes = await c.env.DB.prepare('SELECT user_id FROM likes WHERE post_id = ?').bind(postId).all();
   return c.json(postPayload(p, likes.results.map((l: any) => l.user_id)));
@@ -1769,7 +3760,7 @@ api.post('/posts/:postId/like', authMiddleware, async (c) => {
   const userId = getUserId(c); const postId = c.req.param('postId');
   const visiblePost = await c.env.DB.prepare(
     `SELECT p.id FROM posts p JOIN users u ON p.user_id = u.id WHERE p.id = ? AND ${visiblePostWhere('u', 'p')}`
-  ).bind(postId, userId, userId, userId, userId).first();
+  ).bind(postId, ...visiblePostBindValues(userId)).first();
   if (!visiblePost) return c.json({ detail: 'Post not found' }, 404);
   const ex = await c.env.DB.prepare('SELECT id FROM likes WHERE user_id = ? AND post_id = ?').bind(userId, postId).first();
   if (ex) {
@@ -1812,47 +3803,154 @@ api.get('/users/:userId/posts', authMiddleware, async (c) => {
   const posts = await c.env.DB.prepare(
     `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
      FROM posts p JOIN users u ON p.user_id = u.id
-     WHERE p.user_id = ? AND (COALESCE(p.visibility, 'public') = 'public' OR p.user_id = ? OR EXISTS (SELECT 1 FROM friendships f2 WHERE f2.user_id = ? AND f2.friend_id = p.user_id))
+     WHERE p.user_id = ? AND COALESCE(p.status, 'active') != 'removed' AND (
+       COALESCE(p.visibility, 'public') = 'public'
+       OR p.user_id = ?
+       OR (COALESCE(p.visibility, 'public') = 'followers' AND (
+         EXISTS (SELECT 1 FROM follows fl WHERE fl.follower_id = ? AND fl.following_id = p.user_id)
+         OR EXISTS (SELECT 1 FROM friendships f2 WHERE f2.user_id = ? AND f2.friend_id = p.user_id)
+       ))
+       OR (COALESCE(p.visibility, 'public') = 'friends' AND EXISTS (SELECT 1 FROM friendships f3 WHERE f3.user_id = ? AND f3.friend_id = p.user_id))
+     )
      ORDER BY p.created_at DESC`
-  ).bind(targetId, viewerId, viewerId).all();
+  ).bind(targetId, viewerId, viewerId, viewerId, viewerId).all();
   return c.json((posts.results as any[]).map((p) => postPayload(p)));
 });
 
 // Comments
 api.post('/posts/:postId/comments', authMiddleware, async (c) => {
-  const userId = getUserId(c); const postId = c.req.param('postId');
-  const { content } = await c.req.json();
-  const visiblePost = await c.env.DB.prepare(
-    `SELECT p.id FROM posts p JOIN users u ON p.user_id = u.id WHERE p.id = ? AND ${visiblePostWhere('u', 'p')}`
-  ).bind(postId, userId, userId, userId, userId).first();
-  if (!visiblePost) return c.json({ detail: 'Post not found' }, 404);
-  const user: any = await c.env.DB.prepare('SELECT username, full_name, profile_image FROM users WHERE id = ?').bind(userId).first();
-  const id = uuid();
-  await c.env.DB.prepare('INSERT INTO comments (id, user_id, post_id, content) VALUES (?, ?, ?, ?)').bind(id, userId, postId, content).run();
-  await c.env.DB.prepare('UPDATE posts SET comments_count = comments_count + 1 WHERE id = ?').bind(postId).run();
-  // Create notification for post owner
   try {
-    const post: any = await c.env.DB.prepare('SELECT user_id FROM posts WHERE id = ?').bind(postId).first();
-    if (post && post.user_id !== userId) {
-      await c.env.DB.prepare('INSERT INTO notifications (id, user_id, type, title, body, data, is_read, created_at) VALUES (?, ?, ?, ?, ?, ?, 0, datetime(\'now\'))')
-        .bind(uuid(), post.user_id, 'comment', 'New Comment', `${user?.full_name || 'Someone'} commented on your post`, JSON.stringify({ post_id: postId, from_user_id: userId })).run();
+    await ensurePrivacySchema(c.env.DB);
+    await ensureGovernanceSchema(c.env.DB);
+    await ensureCommentSchema(c.env.DB);
+    const userId = getUserId(c);
+    const postId = c.req.param('postId');
+    const body: any = await c.req.json().catch(() => ({}));
+    const content = String(body.content || '').trim();
+    const parentId = body.parent_id ? String(body.parent_id) : null;
+    if (!content) return c.json({ detail: 'Comment cannot be empty.' }, 400);
+    if (content.length > 1200) return c.json({ detail: 'Comment is too long.' }, 400);
+
+    const visiblePost: any = await c.env.DB.prepare(
+      `SELECT p.id, p.user_id FROM posts p JOIN users u ON p.user_id = u.id WHERE p.id = ? AND ${visiblePostWhere('u', 'p')}`
+    ).bind(postId, ...visiblePostBindValues(userId)).first();
+    if (!visiblePost) return c.json({ detail: 'Post not found' }, 404);
+
+    let parent: any = null;
+    if (parentId) {
+      parent = await c.env.DB.prepare('SELECT id, user_id FROM comments WHERE id = ? AND post_id = ?')
+        .bind(parentId, postId)
+        .first();
+      if (!parent) return c.json({ detail: 'Comment to reply to was not found.' }, 404);
     }
-  } catch {}
-  return c.json({ id, user_id: userId, post_id: postId, content, user_username: user?.username, user_full_name: user?.full_name, user_profile_image: user?.profile_image, created_at: now() });
+
+    const user: any = await c.env.DB.prepare('SELECT username, full_name, profile_image FROM users WHERE id = ?').bind(userId).first();
+    const id = uuid();
+    const createdAt = now();
+    await c.env.DB.prepare('INSERT INTO comments (id, user_id, post_id, parent_id, content) VALUES (?, ?, ?, ?, ?)')
+      .bind(id, userId, postId, parentId, content)
+      .run();
+    await c.env.DB.prepare('UPDATE posts SET comments_count = comments_count + 1 WHERE id = ?').bind(postId).run();
+
+    try {
+      const notifyUserId = parent?.user_id && parent.user_id !== userId ? parent.user_id : visiblePost.user_id;
+      if (notifyUserId && notifyUserId !== userId) {
+        await c.env.DB.prepare('INSERT INTO notifications (id, user_id, type, title, body, data, is_read, created_at) VALUES (?, ?, ?, ?, ?, ?, 0, datetime(\'now\'))')
+          .bind(
+            uuid(),
+            notifyUserId,
+            parentId ? 'comment_reply' : 'comment',
+            parentId ? 'New Reply' : 'New Comment',
+            `${user?.full_name || 'Someone'} ${parentId ? 'replied to your comment' : 'commented on your post'}`,
+            JSON.stringify({ post_id: postId, comment_id: id, parent_id: parentId, from_user_id: userId })
+          ).run();
+      }
+    } catch {}
+
+    return c.json({
+      id,
+      user_id: userId,
+      post_id: postId,
+      parent_id: parentId,
+      content,
+      likes_count: 0,
+      liked_by_me: false,
+      user_username: user?.username,
+      user_full_name: user?.full_name,
+      user_profile_image: user?.profile_image,
+      created_at: createdAt,
+    });
+  } catch (error: any) {
+    console.error('Comment create failed:', getErrorCode(error), error?.message || error);
+    return c.json({ detail: 'Could not post comment.', code: 'COMMENT_CREATE_FAILED' }, 500);
+  }
 });
 
 api.get('/posts/:postId/comments', authMiddleware, async (c) => {
-  const userId = getUserId(c);
-  const r = await c.env.DB.prepare(
-    `SELECT c.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
-     FROM comments c
-     JOIN posts p ON c.post_id = p.id
-     JOIN users owner ON p.user_id = owner.id
-     JOIN users u ON c.user_id = u.id
-     WHERE c.post_id = ? AND ${visiblePostWhere('owner', 'p')}
-     ORDER BY c.created_at ASC`
-  ).bind(c.req.param('postId'), userId, userId, userId, userId).all();
-  return c.json(r.results);
+  try {
+    await ensurePrivacySchema(c.env.DB);
+    await ensureGovernanceSchema(c.env.DB);
+    await ensureCommentSchema(c.env.DB);
+    const userId = getUserId(c);
+    const r = await c.env.DB.prepare(
+      `SELECT c.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
+              CASE WHEN cl.id IS NULL THEN 0 ELSE 1 END AS liked_by_me
+       FROM comments c
+       JOIN posts p ON c.post_id = p.id
+       JOIN users owner ON p.user_id = owner.id
+       JOIN users u ON c.user_id = u.id
+       LEFT JOIN comment_likes cl ON cl.comment_id = c.id AND cl.user_id = ?
+       WHERE c.post_id = ? AND ${visiblePostWhere('owner', 'p')}
+       ORDER BY COALESCE(c.parent_id, c.id), c.parent_id IS NOT NULL, c.created_at ASC`
+    ).bind(userId, c.req.param('postId'), ...visiblePostBindValues(userId)).all();
+
+    return c.json((r.results as any[]).map((comment) => ({
+      ...comment,
+      likes_count: Number(comment.likes_count || 0),
+      liked_by_me: !!comment.liked_by_me,
+    })));
+  } catch (error: any) {
+    console.error('Comment load failed:', getErrorCode(error), error?.message || error);
+    return c.json({ detail: 'Could not load comments.' }, 500);
+  }
+});
+
+api.post('/comments/:commentId/like', authMiddleware, async (c) => {
+  try {
+    await ensurePrivacySchema(c.env.DB);
+    await ensureGovernanceSchema(c.env.DB);
+    await ensureCommentSchema(c.env.DB);
+    const userId = getUserId(c);
+    const commentId = c.req.param('commentId');
+    const comment: any = await c.env.DB.prepare(
+      `SELECT c.id, c.likes_count
+       FROM comments c
+       JOIN posts p ON c.post_id = p.id
+       JOIN users owner ON p.user_id = owner.id
+       WHERE c.id = ? AND ${visiblePostWhere('owner', 'p')}`
+    ).bind(commentId, ...visiblePostBindValues(userId)).first();
+    if (!comment) return c.json({ detail: 'Comment not found' }, 404);
+
+    const existing: any = await c.env.DB.prepare('SELECT id FROM comment_likes WHERE user_id = ? AND comment_id = ?')
+      .bind(userId, commentId)
+      .first();
+
+    if (existing) {
+      await c.env.DB.prepare('DELETE FROM comment_likes WHERE id = ?').bind(existing.id).run();
+      await c.env.DB.prepare('UPDATE comments SET likes_count = MAX(0, COALESCE(likes_count, 0) - 1) WHERE id = ?').bind(commentId).run();
+    } else {
+      await c.env.DB.prepare('INSERT INTO comment_likes (id, user_id, comment_id) VALUES (?, ?, ?)')
+        .bind(uuid(), userId, commentId)
+        .run();
+      await c.env.DB.prepare('UPDATE comments SET likes_count = COALESCE(likes_count, 0) + 1 WHERE id = ?').bind(commentId).run();
+    }
+
+    const updated: any = await c.env.DB.prepare('SELECT likes_count FROM comments WHERE id = ?').bind(commentId).first();
+    return c.json({ liked: !existing, likes_count: Number(updated?.likes_count || 0) });
+  } catch (error: any) {
+    console.error('Comment like failed:', getErrorCode(error), error?.message || error);
+    return c.json({ detail: 'Could not update comment like.' }, 500);
+  }
 });
 
 // Statuses
@@ -1912,6 +4010,13 @@ api.post('/statuses/:statusId/view', authMiddleware, async (c) => {
 });
 
 // Messages (with media support)
+async function requireGroupMember(c: any, groupId: string, userId: string) {
+  const member = await c.env.DB.prepare('SELECT id FROM group_chat_members WHERE group_id = ? AND user_id = ?')
+    .bind(groupId, userId)
+    .first();
+  return !!member;
+}
+
 api.get('/conversations', authMiddleware, async (c) => {
   const userId = getUserId(c);
   const msgs = await c.env.DB.prepare(`SELECT m.*, u.username, u.full_name, u.profile_image FROM messages m JOIN users u ON (CASE WHEN m.sender_id = ? THEN m.receiver_id ELSE m.sender_id END) = u.id WHERE m.sender_id = ? OR m.receiver_id = ? ORDER BY m.created_at DESC`).bind(userId, userId, userId).all();
@@ -1925,7 +4030,47 @@ api.get('/conversations', authMiddleware, async (c) => {
       map.set(oid, { id: `conv-${oid}`, participants: [userId, oid], other_user: { id: oid, username: m.username, full_name: m.full_name, profile_image: m.profile_image }, last_message: preview, last_message_time: m.created_at, unread_count: (!m.is_read && m.receiver_id === userId) ? 1 : 0 });
     }
   }
-  return c.json(Array.from(map.values()));
+  const directConversations = Array.from(map.values());
+
+  let groupConversations: any[] = [];
+  try {
+    const groups = await c.env.DB.prepare(`
+      SELECT
+        g.id,
+        g.name,
+        g.created_at,
+        COUNT(all_members.user_id) AS member_count,
+        last_message.content AS last_message,
+        last_message.created_at AS last_message_time,
+        sender.username AS last_sender_username
+      FROM group_chats g
+      JOIN group_chat_members my_membership ON my_membership.group_id = g.id AND my_membership.user_id = ?
+      LEFT JOIN group_chat_members all_members ON all_members.group_id = g.id
+      LEFT JOIN group_messages last_message ON last_message.id = (
+        SELECT id FROM group_messages WHERE group_id = g.id ORDER BY created_at DESC LIMIT 1
+      )
+      LEFT JOIN users sender ON sender.id = last_message.sender_id
+      GROUP BY g.id
+      ORDER BY COALESCE(last_message.created_at, g.created_at) DESC
+    `).bind(userId).all();
+
+    groupConversations = (groups.results as any[]).map((g) => ({
+      id: `group-${g.id}`,
+      type: 'group',
+      group_id: g.id,
+      group_name: g.name,
+      member_count: Number(g.member_count || 0),
+      last_message: g.last_message
+        ? `${g.last_sender_username || 'Someone'}: ${g.last_message}`
+        : 'Group created',
+      last_message_time: g.last_message_time || g.created_at,
+      unread_count: 0,
+    }));
+  } catch {
+    groupConversations = [];
+  }
+
+  return c.json([...directConversations, ...groupConversations].sort((a, b) => Date.parse(b.last_message_time || '') - Date.parse(a.last_message_time || '')));
 });
 
 api.post('/messages', authMiddleware, async (c) => {
@@ -1941,6 +4086,79 @@ api.get('/messages/:userId', authMiddleware, async (c) => {
   await c.env.DB.prepare('UPDATE messages SET is_read = 1 WHERE sender_id = ? AND receiver_id = ? AND is_read = 0').bind(oid, myId).run();
   const r = await c.env.DB.prepare('SELECT * FROM messages WHERE (sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?) ORDER BY created_at ASC').bind(myId, oid, oid, myId).all();
   return c.json(r.results);
+});
+
+api.post('/group-chats', authMiddleware, async (c) => {
+  const phoneGate = await requirePhoneVerified(c, 'create group chats');
+  if (phoneGate) return phoneGate;
+  const userId = getUserId(c);
+  const body: any = await c.req.json().catch(() => ({}));
+  const memberIds = Array.isArray(body.member_ids)
+    ? body.member_ids.map((id: any) => String(id)).filter((id: string) => id && id !== userId)
+    : [];
+  const uniqueMemberIds = Array.from(new Set(memberIds)).slice(0, 50);
+  if (uniqueMemberIds.length < 2) return c.json({ detail: 'Select at least two people for a group chat.' }, 400);
+
+  const groupId = uuid();
+  const name = String(body.name || '').trim().slice(0, 80) || 'New group';
+  await c.env.DB.prepare('INSERT INTO group_chats (id, name, created_by) VALUES (?, ?, ?)').bind(groupId, name, userId).run();
+  await c.env.DB.prepare('INSERT INTO group_chat_members (id, group_id, user_id, role) VALUES (?, ?, ?, ?)')
+    .bind(uuid(), groupId, userId, 'owner')
+    .run();
+
+  for (const memberId of uniqueMemberIds) {
+    await c.env.DB.prepare('INSERT OR IGNORE INTO group_chat_members (id, group_id, user_id, role) VALUES (?, ?, ?, ?)')
+      .bind(uuid(), groupId, memberId, 'member')
+      .run();
+  }
+
+  const messageId = uuid();
+  await c.env.DB.prepare('INSERT INTO group_messages (id, group_id, sender_id, content) VALUES (?, ?, ?, ?)')
+    .bind(messageId, groupId, userId, 'Created the group')
+    .run();
+
+  return c.json({ id: groupId, name, member_count: uniqueMemberIds.length + 1, created_by: userId, created_at: now() });
+});
+
+api.get('/group-chats/:groupId/messages', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const groupId = c.req.param('groupId');
+  if (!await requireGroupMember(c, groupId, userId)) return c.json({ detail: 'Group not found' }, 404);
+
+  const group: any = await c.env.DB.prepare(`
+    SELECT g.*, COUNT(m.user_id) AS member_count
+    FROM group_chats g
+    LEFT JOIN group_chat_members m ON m.group_id = g.id
+    WHERE g.id = ?
+    GROUP BY g.id
+  `).bind(groupId).first();
+  const messages = await c.env.DB.prepare(`
+    SELECT gm.*, u.username, u.full_name, u.profile_image
+    FROM group_messages gm
+    JOIN users u ON u.id = gm.sender_id
+    WHERE gm.group_id = ?
+    ORDER BY gm.created_at ASC
+  `).bind(groupId).all();
+
+  return c.json({ group, messages: messages.results });
+});
+
+api.post('/group-chats/:groupId/messages', authMiddleware, async (c) => {
+  const phoneGate = await requirePhoneVerified(c, 'send group messages');
+  if (phoneGate) return phoneGate;
+  const userId = getUserId(c);
+  const groupId = c.req.param('groupId');
+  if (!await requireGroupMember(c, groupId, userId)) return c.json({ detail: 'Group not found' }, 404);
+  const body: any = await c.req.json().catch(() => ({}));
+  const content = String(body.content || '').trim();
+  if (!content) return c.json({ detail: 'Message is empty' }, 400);
+
+  const id = uuid();
+  await c.env.DB.prepare('INSERT INTO group_messages (id, group_id, sender_id, content, media_url, media_type) VALUES (?, ?, ?, ?, ?, ?)')
+    .bind(id, groupId, userId, content, body.media_url || null, body.media_type || null)
+    .run();
+  await c.env.DB.prepare('UPDATE group_chats SET updated_at = datetime(\'now\') WHERE id = ?').bind(groupId).run();
+  return c.json({ id, group_id: groupId, sender_id: userId, content, media_url: body.media_url, media_type: body.media_type, created_at: now() });
 });
 
 // Calls
@@ -2018,6 +4236,549 @@ api.get('/friends', authMiddleware, async (c) => { const r = await c.env.DB.prep
 api.get('/friends/status/:userId', authMiddleware, async (c) => { const mid = getUserId(c); const oid = c.req.param('userId'); const f = await c.env.DB.prepare('SELECT id FROM friendships WHERE user_id = ? AND friend_id = ?').bind(mid, oid).first(); if (f) return c.json({ status: 'friends' }); const sr: any = await c.env.DB.prepare("SELECT id FROM friend_requests WHERE from_user_id = ? AND to_user_id = ? AND status = 'pending'").bind(mid, oid).first(); if (sr) return c.json({ status: 'request_sent', request_id: sr.id }); const rr: any = await c.env.DB.prepare("SELECT id FROM friend_requests WHERE from_user_id = ? AND to_user_id = ? AND status = 'pending'").bind(oid, mid).first(); if (rr) return c.json({ status: 'request_received', request_id: rr.id }); return c.json({ status: 'none' }); });
 api.delete('/friends/:userId', authMiddleware, async (c) => { const mid = getUserId(c); const oid = c.req.param('userId'); await c.env.DB.prepare('DELETE FROM friendships WHERE (user_id = ? AND friend_id = ?) OR (user_id = ? AND friend_id = ?)').bind(mid, oid, oid, mid).run(); return c.json({ removed: true }); });
 
+// Recommendations
+api.get('/recommendations', authMiddleware, async (c) => {
+  try {
+    await ensureRecommendationSchema(c.env.DB);
+    const category = normalizeRecommendationCategory(c.req.query('category') || '');
+    const rawCategory = cleanText(c.req.query('category'), 80).toLowerCase();
+    const q = cleanText(c.req.query('q'), 120).toLowerCase();
+    const limit = Math.min(80, Math.max(8, Number(c.req.query('limit') || 36)));
+    const binds: any[] = [];
+    let where = "WHERE COALESCE(r.status, 'active') = 'active'";
+    if (rawCategory && rawCategory !== 'all') {
+      where += ' AND r.category = ?';
+      binds.push(category);
+    }
+    if (q) {
+      where += ' AND (LOWER(r.title) LIKE ? OR LOWER(r.description) LIKE ? OR LOWER(r.creator_name) LIKE ? OR LOWER(r.tags) LIKE ?)';
+      binds.push(`%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`);
+    }
+    binds.push(limit);
+
+    const rows = await c.env.DB.prepare(`
+      SELECT r.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
+      FROM recommendations r
+      LEFT JOIN users u ON u.id = r.user_id
+      ${where}
+      ORDER BY r.created_at DESC
+      LIMIT ?
+    `).bind(...binds).all();
+    return c.json((rows.results as any[]).map(publicRecommendationPayload));
+  } catch (error: any) {
+    console.error('Recommendations list failed:', getErrorCode(error), error?.message || error);
+    return c.json({ detail: 'Could not load recommendations.' }, 500);
+  }
+});
+
+api.get('/recommendations/:recommendationId', authMiddleware, async (c) => {
+  try {
+    await ensureRecommendationSchema(c.env.DB);
+    const recommendationId = c.req.param('recommendationId');
+    const row: any = await c.env.DB.prepare(`
+      SELECT r.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
+      FROM recommendations r
+      LEFT JOIN users u ON u.id = r.user_id
+      WHERE r.id = ? AND COALESCE(r.status, 'active') = 'active'
+    `).bind(recommendationId).first();
+    if (!row) return c.json({ detail: 'Recommendation not found.' }, 404);
+    return c.json(publicRecommendationPayload(row));
+  } catch (error: any) {
+    console.error('Recommendation detail failed:', getErrorCode(error), error?.message || error);
+    return c.json({ detail: 'Could not load recommendation.' }, 500);
+  }
+});
+
+api.post('/recommendations', authMiddleware, async (c) => {
+  try {
+    await ensureRecommendationSchema(c.env.DB);
+    const userId = getUserId(c);
+    const body: any = await c.req.json().catch(() => ({}));
+    const title = cleanText(body.title, 120);
+    const description = cleanText(body.description, 1400);
+    const externalUrl = safeExternalUrl(body.external_url || body.url || body.link);
+    if (!title) return c.json({ detail: 'Add a title for your recommendation.' }, 400);
+    if (!externalUrl) return c.json({ detail: 'Add a valid http or https link.' }, 400);
+
+    const category = normalizeRecommendationCategory(body.category || body.type);
+    const tags = normalizeRecommendationTags(body.tags, [category]);
+    const meta = recommendationLinkMetadata(externalUrl, body.thumbnail_url || body.cover_url);
+    const ts = now();
+    const id = uuid();
+    await c.env.DB.prepare(
+      `INSERT INTO recommendations
+       (id, user_id, title, description, category, tags, external_url, provider, external_id, embed_url, thumbnail_url, creator_name, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`
+    ).bind(
+      id,
+      userId,
+      title,
+      description,
+      category,
+      JSON.stringify(tags),
+      externalUrl,
+      meta.provider,
+      meta.external_id,
+      meta.embed_url,
+      meta.thumbnail_url,
+      cleanText(body.creator_name || body.author || body.artist, 120),
+      ts,
+      ts
+    ).run();
+
+    const row: any = await c.env.DB.prepare(`
+      SELECT r.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
+      FROM recommendations r
+      LEFT JOIN users u ON u.id = r.user_id
+      WHERE r.id = ?
+    `).bind(id).first();
+    return c.json(publicRecommendationPayload(row), 201);
+  } catch (error: any) {
+    console.error('Recommendation create failed:', getErrorCode(error), error?.message || error);
+    return c.json({ detail: 'Could not submit recommendation.' }, 500);
+  }
+});
+
+api.post('/recommendations/:recommendationId/report', authMiddleware, async (c) => {
+  try {
+    await ensureRecommendationSchema(c.env.DB);
+    await ensureGovernanceSchema(c.env.DB);
+    const userId = getUserId(c);
+    const recommendationId = c.req.param('recommendationId');
+    const body: any = await c.req.json().catch(() => ({}));
+    const recommendation: any = await c.env.DB.prepare('SELECT * FROM recommendations WHERE id = ?').bind(recommendationId).first();
+    if (!recommendation) return c.json({ detail: 'Recommendation not found.' }, 404);
+    if (recommendation.user_id === userId) return c.json({ detail: 'You cannot report your own recommendation.' }, 400);
+    const ts = now();
+    await c.env.DB.prepare(
+      'INSERT OR IGNORE INTO recommendation_reports (id, recommendation_id, reporter_id, reason, created_at) VALUES (?, ?, ?, ?, ?)'
+    ).bind(uuid(), recommendationId, userId, cleanText(body.reason || 'Recommendation report', 240), ts).run();
+    await c.env.DB.prepare('UPDATE recommendations SET reports_count = COALESCE(reports_count, 0) + 1, updated_at = ? WHERE id = ?').bind(ts, recommendationId).run();
+    await c.env.DB.prepare(
+      `INSERT INTO reports
+       (id, reporter_id, reported_id, report_type, reported_type, reason, details, content_id, status, created_at, updated_at)
+       VALUES (?, ?, ?, 'recommendation', 'recommendation', ?, ?, ?, 'pending', ?, ?)`
+    ).bind(uuid(), userId, recommendation.user_id, cleanText(body.reason || 'Recommendation report', 240), cleanText(body.details || '', 1000), recommendationId, ts, ts).run();
+    return c.json({ reported: true });
+  } catch (error: any) {
+    const message = String(error?.message || '').toLowerCase();
+    if (message.includes('unique constraint')) return c.json({ reported: true });
+    console.error('Recommendation report failed:', getErrorCode(error), error?.message || error);
+    return c.json({ detail: 'Could not report recommendation.' }, 500);
+  }
+});
+
+// Notes
+api.get('/notes', authMiddleware, async (c) => {
+  try {
+    await ensureNotesSchema(c.env.DB);
+    const userId = getUserId(c);
+    const limit = clampNumber(c.req.query('limit'), 5, 80, 36);
+    const type = normalizeNoteType(c.req.query('type') || '');
+    const rawType = cleanText(c.req.query('type'), 80).toLowerCase();
+    const binds: any[] = [userId, userId];
+    let where = "WHERE COALESCE(n.status, 'active') = 'active'";
+    if (rawType && rawType !== 'all') {
+      where += ' AND n.note_type = ?';
+      binds.push(type);
+    }
+    binds.push(limit);
+    const rows = await c.env.DB.prepare(`
+      SELECT n.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
+        EXISTS(SELECT 1 FROM note_interactions i WHERE i.note_id = n.id AND i.user_id = ? AND i.kind = 'reaction') AS reacted,
+        EXISTS(SELECT 1 FROM note_interactions i WHERE i.note_id = n.id AND i.user_id = ? AND i.kind = 'save') AS saved
+      FROM notes n
+      LEFT JOIN users u ON u.id = n.user_id
+      ${where}
+      ORDER BY n.created_at DESC
+      LIMIT ?
+    `).bind(...binds).all();
+    return c.json((rows.results as any[]).map((row) => publicNotePayload(row)));
+  } catch (error: any) {
+    console.error('Notes list failed:', getErrorCode(error), error?.message || error);
+    return c.json({ detail: 'Could not load notes.' }, 500);
+  }
+});
+
+api.get('/notes/:noteId', authMiddleware, async (c) => {
+  try {
+    await ensureNotesSchema(c.env.DB);
+    const userId = getUserId(c);
+    const noteId = cleanText(c.req.param('noteId'), 80);
+    const row: any = await c.env.DB.prepare(`
+      SELECT n.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
+        EXISTS(SELECT 1 FROM note_interactions i WHERE i.note_id = n.id AND i.user_id = ? AND i.kind = 'reaction') AS reacted,
+        EXISTS(SELECT 1 FROM note_interactions i WHERE i.note_id = n.id AND i.user_id = ? AND i.kind = 'save') AS saved
+      FROM notes n
+      LEFT JOIN users u ON u.id = n.user_id
+      WHERE n.id = ? AND COALESCE(n.status, 'active') = 'active'
+    `).bind(userId, userId, noteId).first();
+    if (!row) return c.json({ detail: 'Note not found.' }, 404);
+    return c.json(publicNotePayload(row));
+  } catch (error: any) {
+    console.error('Note detail failed:', getErrorCode(error), error?.message || error);
+    return c.json({ detail: 'Could not load note.' }, 500);
+  }
+});
+
+api.post('/notes', authMiddleware, async (c) => {
+  try {
+    await ensureNotesSchema(c.env.DB);
+    const userId = getUserId(c);
+    const body: any = await c.req.json().catch(() => ({}));
+    const noteBody = cleanText(body.body || body.text || body.content, 420);
+    const moderation = moderateCommunityText(noteBody);
+    if (!moderation.ok) return c.json({ detail: moderation.detail || 'That note cannot be posted.' }, 400);
+    if (noteBody.length < 2) return c.json({ detail: 'Write a little more first.' }, 400);
+    const noteType = normalizeNoteType(body.note_type || body.type);
+    const mood = normalizeNoteMood(body.mood || body.color);
+    const color = /^#[0-9a-f]{6}$/i.test(String(body.color || '')) ? String(body.color) : mood.color;
+    const anonymous = normalizeSqlBoolean(body.anonymous);
+    const ts = now();
+    const id = uuid();
+    await c.env.DB.prepare(
+      `INSERT INTO notes
+       (id, user_id, body, note_type, mood, color, anonymous, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`
+    ).bind(id, userId, noteBody, noteType, mood.mood, color, anonymous, ts, ts).run();
+    const row: any = await c.env.DB.prepare(`
+      SELECT n.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
+      FROM notes n LEFT JOIN users u ON u.id = n.user_id WHERE n.id = ?
+    `).bind(id).first();
+    return c.json(publicNotePayload(row), 201);
+  } catch (error: any) {
+    console.error('Note create failed:', getErrorCode(error), error?.message || error);
+    return c.json({ detail: 'Could not create note.' }, 500);
+  }
+});
+
+api.post('/notes/:noteId/interactions', authMiddleware, async (c) => {
+  try {
+    await ensureNotesSchema(c.env.DB);
+    const userId = getUserId(c);
+    const noteId = cleanText(c.req.param('noteId'), 80);
+    const body: any = await c.req.json().catch(() => ({}));
+    const kind = ['reaction', 'save', 'share'].includes(String(body.kind)) ? String(body.kind) : 'reaction';
+    const value = cleanText(body.value || (kind === 'reaction' ? 'heart' : ''), 40);
+    const note: any = await c.env.DB.prepare("SELECT id FROM notes WHERE id = ? AND COALESCE(status, 'active') = 'active'").bind(noteId).first();
+    if (!note) return c.json({ detail: 'Note not found.' }, 404);
+    const existing: any = await c.env.DB.prepare('SELECT id FROM note_interactions WHERE note_id = ? AND user_id = ? AND kind = ?')
+      .bind(noteId, userId, kind)
+      .first();
+    if (existing && kind !== 'share') {
+      await c.env.DB.prepare('DELETE FROM note_interactions WHERE id = ?').bind(existing.id).run();
+      const column = kind === 'save' ? 'saves_count' : 'reactions_count';
+      await c.env.DB.prepare(`UPDATE notes SET ${column} = MAX(0, COALESCE(${column}, 0) - 1), updated_at = ? WHERE id = ?`).bind(now(), noteId).run();
+      return c.json({ active: false, kind });
+    }
+    if (!existing || kind === 'share') {
+      await c.env.DB.prepare('INSERT OR IGNORE INTO note_interactions (id, note_id, user_id, kind, value, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+        .bind(uuid(), noteId, userId, kind, value, now())
+        .run();
+      const column = kind === 'save' ? 'saves_count' : kind === 'share' ? 'shares_count' : 'reactions_count';
+      await c.env.DB.prepare(`UPDATE notes SET ${column} = COALESCE(${column}, 0) + 1, updated_at = ? WHERE id = ?`).bind(now(), noteId).run();
+    }
+    return c.json({ active: true, kind });
+  } catch (error: any) {
+    console.error('Note interaction failed:', getErrorCode(error), error?.message || error);
+    return c.json({ detail: 'Could not update note.' }, 500);
+  }
+});
+
+api.get('/notes/:noteId/comments', authMiddleware, async (c) => {
+  try {
+    await ensureNotesSchema(c.env.DB);
+    const noteId = cleanText(c.req.param('noteId'), 80);
+    const rows = await c.env.DB.prepare(`
+      SELECT nc.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
+      FROM note_comments nc
+      LEFT JOIN users u ON u.id = nc.user_id
+      WHERE nc.note_id = ? AND COALESCE(nc.status, 'active') = 'active'
+      ORDER BY nc.created_at ASC
+      LIMIT 80
+    `).bind(noteId).all();
+    return c.json((rows.results as any[]).map((comment) => ({
+      id: comment.id,
+      body: comment.body,
+      parent_id: comment.parent_id || '',
+      likes_count: Number(comment.likes_count || 0),
+      created_at: comment.created_at,
+      user: {
+        id: comment.user_id,
+        username: comment.user_username || '',
+        full_name: comment.user_full_name || '',
+        profile_image: comment.user_profile_image || '',
+      },
+    })));
+  } catch (error: any) {
+    console.error('Note comments failed:', getErrorCode(error), error?.message || error);
+    return c.json({ detail: 'Could not load note comments.' }, 500);
+  }
+});
+
+api.post('/notes/:noteId/comments', authMiddleware, async (c) => {
+  try {
+    await ensureNotesSchema(c.env.DB);
+    const userId = getUserId(c);
+    const noteId = cleanText(c.req.param('noteId'), 80);
+    const body: any = await c.req.json().catch(() => ({}));
+    const commentBody = cleanText(body.body || body.text, 500);
+    const moderation = moderateCommunityText(commentBody);
+    if (!moderation.ok) return c.json({ detail: moderation.detail || 'That comment cannot be posted.' }, 400);
+    const note: any = await c.env.DB.prepare("SELECT id FROM notes WHERE id = ? AND COALESCE(status, 'active') = 'active'").bind(noteId).first();
+    if (!note) return c.json({ detail: 'Note not found.' }, 404);
+    const ts = now();
+    const id = uuid();
+    await c.env.DB.prepare('INSERT INTO note_comments (id, note_id, user_id, parent_id, body, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind(id, noteId, userId, cleanText(body.parent_id, 80), commentBody, 'active', ts, ts)
+      .run();
+    await c.env.DB.prepare('UPDATE notes SET comments_count = COALESCE(comments_count, 0) + 1, updated_at = ? WHERE id = ?').bind(ts, noteId).run();
+    return c.json({ id, body: commentBody, created_at: ts }, 201);
+  } catch (error: any) {
+    console.error('Note comment create failed:', getErrorCode(error), error?.message || error);
+    return c.json({ detail: 'Could not add comment.' }, 500);
+  }
+});
+
+api.post('/notes/:noteId/report', authMiddleware, async (c) => {
+  try {
+    await ensureNotesSchema(c.env.DB);
+    await ensureGovernanceSchema(c.env.DB);
+    const userId = getUserId(c);
+    const noteId = cleanText(c.req.param('noteId'), 80);
+    const body: any = await c.req.json().catch(() => ({}));
+    const note: any = await c.env.DB.prepare('SELECT id, user_id FROM notes WHERE id = ?').bind(noteId).first();
+    if (!note) return c.json({ detail: 'Note not found.' }, 404);
+    if (note.user_id === userId) return c.json({ detail: 'You cannot report your own note.' }, 400);
+    const ts = now();
+    await c.env.DB.prepare('INSERT OR IGNORE INTO note_reports (id, note_id, reporter_id, reason, details, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .bind(uuid(), noteId, userId, cleanText(body.reason || 'Note report', 240), cleanText(body.details || '', 1000), ts)
+      .run();
+    await c.env.DB.prepare('UPDATE notes SET reports_count = COALESCE(reports_count, 0) + 1, updated_at = ? WHERE id = ?').bind(ts, noteId).run();
+    await c.env.DB.prepare(
+      `INSERT INTO reports
+       (id, reporter_id, reported_id, report_type, reported_type, reason, details, content_id, status, created_at, updated_at)
+       VALUES (?, ?, ?, 'note', 'note', ?, ?, ?, 'pending', ?, ?)`
+    ).bind(uuid(), userId, note.user_id, cleanText(body.reason || 'Note report', 240), cleanText(body.details || '', 1000), noteId, ts, ts).run();
+    return c.json({ reported: true });
+  } catch (error: any) {
+    const message = String(error?.message || '').toLowerCase();
+    if (message.includes('unique constraint')) return c.json({ reported: true });
+    console.error('Note report failed:', getErrorCode(error), error?.message || error);
+    return c.json({ detail: 'Could not report note.' }, 500);
+  }
+});
+
+// People
+api.get('/people', authMiddleware, async (c) => {
+  try {
+    await ensurePeopleSchema(c.env.DB);
+    const userId = getUserId(c);
+    const q = cleanText(c.req.query('q'), 120).toLowerCase();
+    const limit = clampNumber(c.req.query('limit'), 8, 80, 36);
+    const profileRows = await c.env.DB.prepare(`
+      SELECT p.*,
+        EXISTS(SELECT 1 FROM people_interactions i WHERE i.profile_id = p.id AND i.user_id = ? AND i.kind = 'follow') AS followed,
+        EXISTS(SELECT 1 FROM people_interactions i WHERE i.profile_id = p.id AND i.user_id = ? AND i.kind = 'save') AS saved
+      FROM people_profiles p
+      WHERE COALESCE(p.status, 'active') = 'active'
+        AND (? = '' OR LOWER(p.name) LIKE ? OR LOWER(p.role) LIKE ? OR LOWER(p.bio) LIKE ? OR LOWER(p.known_for) LIKE ?)
+      ORDER BY p.updated_at DESC
+      LIMIT ?
+    `).bind(userId, userId, q, `%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`, limit).all();
+
+    const people = (profileRows.results as any[]).map((row) => publicPeoplePayload(row));
+    if (people.length < limit) {
+      const userRows = await c.env.DB.prepare(`
+        SELECT u.*,
+          EXISTS(SELECT 1 FROM follows f WHERE f.follower_id = ? AND f.following_id = u.id) AS followed
+        FROM users u
+        WHERE u.id != ?
+          AND COALESCE(u.status, 'active') != 'banned'
+          AND COALESCE(u.is_private, 0) = 0
+          AND (COALESCE(u.full_name, '') != '' OR COALESCE(u.username, '') != '')
+          AND (? = '' OR LOWER(u.full_name) LIKE ? OR LOWER(u.username) LIKE ? OR LOWER(u.bio) LIKE ? OR LOWER(u.interests) LIKE ?)
+        ORDER BY COALESCE(u.followers_count, 0) DESC, u.updated_at DESC
+        LIMIT ?
+      `).bind(userId, userId, q, `%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`, limit - people.length).all();
+      people.push(...(userRows.results as any[]).map((u) => ({
+        id: `user:${u.id}`,
+        owner_user_id: u.id,
+        name: u.full_name || u.username || 'Creator',
+        role: u.is_creator ? 'creator' : 'local creator',
+        category: 'creator',
+        bio: u.bio || '',
+        known_for: parseInterestValues(u.interests || u.looking_for).slice(0, 4).join(', '),
+        city: u.city || u.location || '',
+        profile_image: u.profile_image || '',
+        instagram_url: safeOptionalUrl(u.social_instagram),
+        tiktok_url: safeOptionalUrl(u.social_tiktok),
+        youtube_url: '',
+        website_url: safeOptionalUrl(u.social_website),
+        source_url: '',
+        claim_status: 'claimed',
+        followers_count: Number(u.followers_count || 0),
+        saves_count: 0,
+        reports_count: 0,
+        followed: Number(u.followed || 0) === 1,
+        saved: false,
+        created_at: u.created_at,
+        updated_at: u.updated_at,
+      })));
+    }
+    return c.json(people);
+  } catch (error: any) {
+    console.error('People list failed:', getErrorCode(error), error?.message || error);
+    return c.json({ detail: 'Could not load people.' }, 500);
+  }
+});
+
+api.get('/people/:profileId', authMiddleware, async (c) => {
+  try {
+    await ensurePeopleSchema(c.env.DB);
+    const userId = getUserId(c);
+    const profileId = cleanText(c.req.param('profileId'), 120);
+    let profile: any = null;
+    if (profileId.startsWith('user:')) {
+      const targetId = profileId.slice(5);
+      const u: any = await c.env.DB.prepare(`
+        SELECT u.*, EXISTS(SELECT 1 FROM follows f WHERE f.follower_id = ? AND f.following_id = u.id) AS followed
+        FROM users u WHERE u.id = ? AND COALESCE(u.status, 'active') != 'banned'
+      `).bind(userId, targetId).first();
+      if (u) {
+        profile = {
+          id: `user:${u.id}`,
+          owner_user_id: u.id,
+          name: u.full_name || u.username || 'Creator',
+          role: u.is_creator ? 'creator' : 'local creator',
+          category: 'creator',
+          bio: u.bio || '',
+          known_for: parseInterestValues(u.interests || u.looking_for).slice(0, 6).join(', '),
+          city: u.city || u.location || '',
+          profile_image: u.profile_image || '',
+          instagram_url: safeOptionalUrl(u.social_instagram),
+          tiktok_url: safeOptionalUrl(u.social_tiktok),
+          youtube_url: '',
+          website_url: safeOptionalUrl(u.social_website),
+          source_url: '',
+          claim_status: 'claimed',
+          followers_count: Number(u.followers_count || 0),
+          saves_count: 0,
+          reports_count: 0,
+          followed: Number(u.followed || 0) === 1,
+          saved: false,
+          created_at: u.created_at,
+          updated_at: u.updated_at,
+        };
+      }
+    } else {
+      const row: any = await c.env.DB.prepare(`
+        SELECT p.*,
+          EXISTS(SELECT 1 FROM people_interactions i WHERE i.profile_id = p.id AND i.user_id = ? AND i.kind = 'follow') AS followed,
+          EXISTS(SELECT 1 FROM people_interactions i WHERE i.profile_id = p.id AND i.user_id = ? AND i.kind = 'save') AS saved
+        FROM people_profiles p
+        WHERE p.id = ? AND COALESCE(p.status, 'active') = 'active'
+      `).bind(userId, userId, profileId).first();
+      if (row) profile = publicPeoplePayload(row);
+    }
+    if (!profile) return c.json({ detail: 'People profile not found.' }, 404);
+    const similarRows = await c.env.DB.prepare(`
+      SELECT p.* FROM people_profiles p
+      WHERE COALESCE(p.status, 'active') = 'active' AND p.id != ? AND (p.category = ? OR p.role = ?)
+      ORDER BY p.updated_at DESC LIMIT 8
+    `).bind(profileId, profile.category || 'creator', profile.role || 'creator').all();
+    return c.json({ ...profile, similar_people: (similarRows.results as any[]).map((row) => publicPeoplePayload(row)) });
+  } catch (error: any) {
+    console.error('People detail failed:', getErrorCode(error), error?.message || error);
+    return c.json({ detail: 'Could not load People profile.' }, 500);
+  }
+});
+
+api.post('/people/:profileId/interactions', authMiddleware, async (c) => {
+  try {
+    await ensurePeopleSchema(c.env.DB);
+    const userId = getUserId(c);
+    const profileId = cleanText(c.req.param('profileId'), 120);
+    const body: any = await c.req.json().catch(() => ({}));
+    const kind = String(body.kind) === 'save' ? 'save' : 'follow';
+    if (profileId.startsWith('user:') && kind === 'follow') {
+      const targetId = profileId.slice(5);
+      if (targetId === userId) return c.json({ detail: 'Cannot follow yourself.' }, 400);
+      const existing: any = await c.env.DB.prepare('SELECT id FROM follows WHERE follower_id = ? AND following_id = ?').bind(userId, targetId).first();
+      if (existing) {
+        await c.env.DB.prepare('DELETE FROM follows WHERE follower_id = ? AND following_id = ?').bind(userId, targetId).run();
+        await c.env.DB.prepare('UPDATE users SET following_count = MAX(0, following_count - 1) WHERE id = ?').bind(userId).run();
+        await c.env.DB.prepare('UPDATE users SET followers_count = MAX(0, followers_count - 1) WHERE id = ?').bind(targetId).run();
+        return c.json({ active: false, kind });
+      }
+      await c.env.DB.prepare('INSERT INTO follows (id, follower_id, following_id) VALUES (?, ?, ?)').bind(uuid(), userId, targetId).run();
+      await c.env.DB.prepare('UPDATE users SET following_count = COALESCE(following_count, 0) + 1 WHERE id = ?').bind(userId).run();
+      await c.env.DB.prepare('UPDATE users SET followers_count = COALESCE(followers_count, 0) + 1 WHERE id = ?').bind(targetId).run();
+      return c.json({ active: true, kind });
+    }
+    const existing: any = await c.env.DB.prepare('SELECT id FROM people_interactions WHERE profile_id = ? AND user_id = ? AND kind = ?')
+      .bind(profileId, userId, kind)
+      .first();
+    if (existing) {
+      await c.env.DB.prepare('DELETE FROM people_interactions WHERE id = ?').bind(existing.id).run();
+      const column = kind === 'save' ? 'saves_count' : 'followers_count';
+      await c.env.DB.prepare(`UPDATE people_profiles SET ${column} = MAX(0, COALESCE(${column}, 0) - 1), updated_at = ? WHERE id = ?`).bind(now(), profileId).run();
+      return c.json({ active: false, kind });
+    }
+    await c.env.DB.prepare('INSERT INTO people_interactions (id, profile_id, user_id, kind, created_at) VALUES (?, ?, ?, ?, ?)')
+      .bind(uuid(), profileId, userId, kind, now()).run();
+    const column = kind === 'save' ? 'saves_count' : 'followers_count';
+    await c.env.DB.prepare(`UPDATE people_profiles SET ${column} = COALESCE(${column}, 0) + 1, updated_at = ? WHERE id = ?`).bind(now(), profileId).run();
+    return c.json({ active: true, kind });
+  } catch (error: any) {
+    console.error('People interaction failed:', getErrorCode(error), error?.message || error);
+    return c.json({ detail: 'Could not update People profile.' }, 500);
+  }
+});
+
+api.post('/people/:profileId/claim', authMiddleware, async (c) => {
+  try {
+    await ensurePeopleSchema(c.env.DB);
+    const userId = getUserId(c);
+    const profileId = cleanText(c.req.param('profileId'), 120);
+    const body: any = await c.req.json().catch(() => ({}));
+    const ts = now();
+    await c.env.DB.prepare(
+      'INSERT INTO people_claims (id, profile_id, user_id, message, evidence_url, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+    ).bind(uuid(), profileId, userId, cleanText(body.message || 'I want to claim this profile.', 1000), safeOptionalUrl(body.evidence_url), 'pending', ts, ts).run();
+    await c.env.DB.prepare("UPDATE people_profiles SET claim_status = 'pending', updated_at = ? WHERE id = ?").bind(ts, profileId).run();
+    return c.json({ claimed: true, status: 'pending' }, 201);
+  } catch (error: any) {
+    console.error('People claim failed:', getErrorCode(error), error?.message || error);
+    return c.json({ detail: 'Could not submit claim.' }, 500);
+  }
+});
+
+api.post('/people/:profileId/report', authMiddleware, async (c) => {
+  try {
+    await ensurePeopleSchema(c.env.DB);
+    await ensureGovernanceSchema(c.env.DB);
+    const userId = getUserId(c);
+    const profileId = cleanText(c.req.param('profileId'), 120);
+    const body: any = await c.req.json().catch(() => ({}));
+    const ts = now();
+    await c.env.DB.prepare('INSERT OR IGNORE INTO people_reports (id, profile_id, reporter_id, reason, details, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .bind(uuid(), profileId, userId, cleanText(body.reason || 'Wrong info', 240), cleanText(body.details || '', 1000), ts).run();
+    await c.env.DB.prepare('UPDATE people_profiles SET reports_count = COALESCE(reports_count, 0) + 1, updated_at = ? WHERE id = ?').bind(ts, profileId).run();
+    await c.env.DB.prepare(
+      `INSERT INTO reports
+       (id, reporter_id, reported_id, report_type, reported_type, reason, details, content_id, status, created_at, updated_at)
+       VALUES (?, ?, ?, 'people', 'people', ?, ?, ?, 'pending', ?, ?)`
+    ).bind(uuid(), userId, profileId, cleanText(body.reason || 'Wrong People profile info', 240), cleanText(body.details || '', 1000), profileId, ts, ts).run();
+    return c.json({ reported: true });
+  } catch (error: any) {
+    const message = String(error?.message || '').toLowerCase();
+    if (message.includes('unique constraint')) return c.json({ reported: true });
+    console.error('People report failed:', getErrorCode(error), error?.message || error);
+    return c.json({ detail: 'Could not report People profile.' }, 500);
+  }
+});
+
 // Discover
 api.get('/discover/trending', authMiddleware, async (c) => {
   const userId = getUserId(c);
@@ -2026,8 +4787,8 @@ api.get('/discover/trending', authMiddleware, async (c) => {
      FROM posts p JOIN users u ON p.user_id = u.id
      WHERE ${visiblePostWhere('u', 'p')}
      ORDER BY p.likes_count DESC, p.created_at DESC LIMIT 20`
-  ).bind(userId, userId, userId, userId).all();
-  return c.json((r.results as any[]).map(p => ({ ...p, images: JSON.parse(p.images || '[]'), media_types: JSON.parse(p.media_types || '[]') })));
+  ).bind(...visiblePostBindValues(userId)).all();
+  return c.json((r.results as any[]).map((p) => postPayload(p)));
 });
 api.get('/discover/search', authMiddleware, async (c) => {
   const userId = getUserId(c);
@@ -2037,9 +4798,9 @@ api.get('/discover/search', authMiddleware, async (c) => {
      FROM posts p JOIN users u ON p.user_id = u.id
      WHERE p.content LIKE ? AND ${visiblePostWhere('u', 'p')}
      LIMIT 20`
-  ).bind(`%${q}%`, userId, userId, userId, userId).all();
+  ).bind(`%${q}%`, ...visiblePostBindValues(userId)).all();
   const users = await c.env.DB.prepare('SELECT id, username, full_name, profile_image, bio, is_private FROM users WHERE username LIKE ? OR full_name LIKE ? LIMIT 10').bind(`%${q}%`, `%${q}%`).all();
-  return c.json({ posts: posts.results, users: users.results });
+  return c.json({ posts: (posts.results as any[]).map((p) => postPayload(p)), users: users.results });
 });
 api.get('/discover/suggested-users', authMiddleware, async (c) => { const r = await c.env.DB.prepare('SELECT id, username, full_name, profile_image, bio, followers_count FROM users WHERE id != ? ORDER BY followers_count DESC LIMIT 10').bind(getUserId(c)).all(); return c.json(r.results); });
 
@@ -2127,13 +4888,13 @@ api.get('/events/personalized', async (c) => {
 
   if (scored.size === 0) {
     try {
-      const googleEvents = await fetchGoogleEventPlaces(c, location);
-      googleEvents.forEach((card: any) => {
-        scored.set(card.event_id, { card, score: eventCardScore(card, preference.terms, 'google places') + 4 });
+      const mapboxEvents = await fetchMapboxEventPlaces(c, location);
+      mapboxEvents.forEach((card: any) => {
+        scored.set(card.event_id, { card, score: eventCardScore(card, preference.terms, 'mapbox places') + 4 });
       });
-      if (googleEvents.length === 0) errors.push('google_places_empty');
+      if (mapboxEvents.length === 0) errors.push('mapbox_places_empty');
     } catch (error: any) {
-      errors.push(String(error?.message || error || 'google_places_failed'));
+      errors.push(String(error?.message || error || 'mapbox_places_failed'));
     }
   }
 
@@ -2182,7 +4943,29 @@ api.post('/upload/video-direct', authMiddleware, async (c) => {
 });
 
 // Reports
-api.post('/reports', authMiddleware, async (c) => { const b = await c.req.json(); const id = uuid(); await c.env.DB.prepare('INSERT INTO reports (id, reporter_id, reported_id, report_type, reason, content_id) VALUES (?, ?, ?, ?, ?, ?)').bind(id, getUserId(c), b.reported_id || '', b.report_type || 'other', b.reason || '', b.content_id || null).run(); return c.json({ id, reported: true }); });
+api.post('/reports', authMiddleware, async (c) => {
+  try {
+    await ensureGovernanceSchema(c.env.DB);
+    const body: any = await c.req.json().catch(() => ({}));
+    const reportedType = body.reported_type || body.report_type || 'other';
+    const reportedId = body.reported_id || body.post_id || body.user_id || '';
+    const contentId = body.content_id || (reportedType === 'post' ? reportedId : null);
+    const reason = body.reason || 'Reported from app';
+    const details = body.details || body.description || '';
+    const ts = now();
+    const id = uuid();
+
+    await c.env.DB.prepare(
+      `INSERT INTO reports (
+        id, reporter_id, reported_id, report_type, reported_type, reason, details, content_id, status, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`
+    ).bind(id, getUserId(c), reportedId, reportedType, reportedType, reason, details, contentId, ts, ts).run();
+
+    return c.json({ id, reported: true });
+  } catch {
+    return c.json({ detail: 'Could not submit report' }, 500);
+  }
+});
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // PUBLISHER
@@ -2218,7 +5001,7 @@ api.post('/discover/posts', authMiddleware, async (c) => {
   const user: any = await c.env.DB.prepare('SELECT username, full_name, profile_image, is_publisher FROM users WHERE id = ?').bind(userId).first();
   if (!user?.is_publisher) return c.json({ detail: 'Publishers only' }, 403);
   const id = uuid();
-  await c.env.DB.prepare('INSERT INTO discover_posts (id, user_id, content, image, images, category, location) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(id, userId, b.content || '', b.image || null, JSON.stringify(b.images || []), b.category || 'local_news', b.location || '').run();
+  await c.env.DB.prepare('INSERT INTO discover_posts (id, user_id, content, image, images, category, location) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(id, userId, b.content || '', b.image || null, JSON.stringify(b.images || []), b.category || 'culture', b.location || '').run();
   return c.json({ id, user_id: userId, user_username: user.username, user_full_name: user.full_name, user_profile_image: user.profile_image, content: b.content, category: b.category, created_at: now() });
 });
 
@@ -2246,7 +5029,6 @@ api.post('/discover/posts/:postId/like', authMiddleware, async (c) => {
 
 api.get('/discover/categories', async (c) => {
   return c.json([
-    { id: 'local_news', name: 'Local News', icon: 'newspaper' },
     { id: 'events', name: 'Events', icon: 'calendar' },
     { id: 'food_reviews', name: 'Food Reviews', icon: 'restaurant' },
     { id: 'culture', name: 'Culture', icon: 'color-palette' },
@@ -2293,6 +5075,446 @@ const adminGuard = async (c: any, next: () => Promise<void>) => {
   if (!user?.is_admin) return c.json({ detail: 'Admin access required' }, 403);
   await next();
 };
+
+async function requireGovernanceAdmin(c: any): Promise<string> {
+  await ensureGovernanceSchema(c.env.DB);
+  const userId = getUserId(c);
+  const user: any = await c.env.DB.prepare('SELECT is_admin, status FROM users WHERE id = ?').bind(userId).first();
+  if (!user?.is_admin) throw new Error('FORBIDDEN');
+  if (String(user.status || 'active') === 'banned') throw new Error('FORBIDDEN');
+  return userId;
+}
+
+function governanceError(c: any, error: any) {
+  const message = String(error?.message || error || 'Governance request failed');
+  return c.json({ detail: message === 'FORBIDDEN' ? 'Admin access required' : message }, message === 'FORBIDDEN' ? 403 : 500);
+}
+
+async function logGovernanceAction(c: any, adminId: string, actionType: string, targetType: string, targetId: string, details: any = {}) {
+  await c.env.DB.prepare(
+    'INSERT INTO admin_actions (id, admin_id, action_type, target_type, target_id, details, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  ).bind(uuid(), adminId, actionType, targetType, targetId, JSON.stringify(details || {}), now()).run();
+}
+
+api.delete('/admin/notes/:noteId', authMiddleware, async (c) => {
+  try {
+    const adminId = await requireGovernanceAdmin(c);
+    await ensureNotesSchema(c.env.DB);
+    const noteId = cleanText(c.req.param('noteId'), 80);
+    await c.env.DB.prepare("UPDATE notes SET status = 'removed', updated_at = ? WHERE id = ?").bind(now(), noteId).run();
+    await logGovernanceAction(c, adminId, 'remove_note', 'note', noteId);
+    return c.json({ removed: true });
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+api.put('/admin/people/:profileId', authMiddleware, async (c) => {
+  try {
+    const adminId = await requireGovernanceAdmin(c);
+    await ensurePeopleSchema(c.env.DB);
+    const profileId = cleanText(c.req.param('profileId'), 120);
+    const body: any = await c.req.json().catch(() => ({}));
+    const fields = ['name', 'role', 'category', 'bio', 'known_for', 'city', 'profile_image', 'instagram_url', 'tiktok_url', 'youtube_url', 'website_url', 'source_url', 'status'];
+    const updates: string[] = [];
+    const values: any[] = [];
+    for (const field of fields) {
+      if (body[field] === undefined) continue;
+      updates.push(`${field} = ?`);
+      values.push(field.endsWith('_url') || field === 'source_url' ? safeOptionalUrl(body[field]) : cleanText(body[field], field === 'bio' || field === 'known_for' ? 1200 : 240));
+    }
+    if (updates.length === 0) return c.json({ detail: 'No fields to update.' }, 400);
+    updates.push('updated_at = ?');
+    values.push(now(), profileId);
+    await c.env.DB.prepare(`UPDATE people_profiles SET ${updates.join(', ')} WHERE id = ?`).bind(...values).run();
+    await logGovernanceAction(c, adminId, 'edit_people_profile', 'people', profileId, body);
+    return c.json({ updated: true });
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+api.delete('/admin/people/:profileId', authMiddleware, async (c) => {
+  try {
+    const adminId = await requireGovernanceAdmin(c);
+    await ensurePeopleSchema(c.env.DB);
+    const profileId = cleanText(c.req.param('profileId'), 120);
+    await c.env.DB.prepare("UPDATE people_profiles SET status = 'removed', updated_at = ? WHERE id = ?").bind(now(), profileId).run();
+    await logGovernanceAction(c, adminId, 'remove_people_profile', 'people', profileId);
+    return c.json({ removed: true });
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+api.post('/admin/people/claims/:claimId/approve', authMiddleware, async (c) => {
+  try {
+    const adminId = await requireGovernanceAdmin(c);
+    await ensurePeopleSchema(c.env.DB);
+    const claimId = cleanText(c.req.param('claimId'), 120);
+    const claim: any = await c.env.DB.prepare('SELECT * FROM people_claims WHERE id = ?').bind(claimId).first();
+    if (!claim) return c.json({ detail: 'Claim not found.' }, 404);
+    const ts = now();
+    await c.env.DB.prepare("UPDATE people_claims SET status = 'approved', updated_at = ? WHERE id = ?").bind(ts, claimId).run();
+    await c.env.DB.prepare("UPDATE people_profiles SET owner_user_id = ?, claim_status = 'claimed', updated_at = ? WHERE id = ?").bind(claim.user_id, ts, claim.profile_id).run();
+    await logGovernanceAction(c, adminId, 'approve_people_claim', 'people_claim', claimId, claim);
+    return c.json({ approved: true });
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+api.post('/admin/people/claims/:claimId/reject', authMiddleware, async (c) => {
+  try {
+    const adminId = await requireGovernanceAdmin(c);
+    await ensurePeopleSchema(c.env.DB);
+    const claimId = cleanText(c.req.param('claimId'), 120);
+    const body: any = await c.req.json().catch(() => ({}));
+    await c.env.DB.prepare("UPDATE people_claims SET status = 'rejected', admin_notes = ?, updated_at = ? WHERE id = ?")
+      .bind(cleanText(body.admin_notes || body.reason || '', 1000), now(), claimId).run();
+    await logGovernanceAction(c, adminId, 'reject_people_claim', 'people_claim', claimId, body);
+    return c.json({ rejected: true });
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+async function maybeDeleteStreamAssets(c: any, post: any) {
+  const values = [
+    post?.image,
+    ...parseJsonArray(post?.images),
+  ].filter(Boolean).map(String);
+  const streamIds = values
+    .filter((value) => value.startsWith('cfstream:'))
+    .map((value) => value.replace('cfstream:', '').trim())
+    .filter(Boolean);
+
+  if (!c.env.CLOUDFLARE_ACCOUNT_ID || !c.env.CLOUDFLARE_STREAM_TOKEN) {
+    return { attempted: false, deleted: [], failed: streamIds };
+  }
+
+  const deleted: string[] = [];
+  const failed: string[] = [];
+  for (const uid of streamIds) {
+    try {
+      const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${c.env.CLOUDFLARE_ACCOUNT_ID}/stream/${uid}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${c.env.CLOUDFLARE_STREAM_TOKEN}` },
+      });
+      if (response.ok) deleted.push(uid);
+      else failed.push(uid);
+    } catch {
+      failed.push(uid);
+    }
+  }
+  return { attempted: streamIds.length > 0, deleted, failed };
+}
+
+api.post('/admin/music/sounds/:trackId/hide', authMiddleware, async (c) => {
+  try {
+    const adminId = await requireGovernanceAdmin(c);
+    await ensureAudioSchema(c.env.DB);
+    const trackId = cleanText(c.req.param('trackId'), 80);
+    if (!trackId) return c.json({ detail: 'Track id is required.' }, 400);
+    const body: any = await c.req.json().catch(() => ({}));
+    const reason = cleanText(body.reason || 'Hidden by moderation', 300);
+    await c.env.DB.prepare(
+      "INSERT OR REPLACE INTO hidden_sounds (track_id, provider, reason, hidden_by, created_at) VALUES (?, 'audius', ?, ?, ?)"
+    ).bind(trackId, reason, adminId, now()).run();
+    await c.env.DB.prepare("UPDATE posts SET audio_hidden = 1 WHERE audio_provider = 'audius' AND audio_track_id = ?")
+      .bind(trackId)
+      .run();
+    await logGovernanceAction(c, adminId, 'hide_sound', 'sound', trackId, { provider: 'audius', reason });
+    return c.json({ hidden: true, track_id: trackId });
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+api.delete('/admin/music/sounds/:trackId/hide', authMiddleware, async (c) => {
+  try {
+    const adminId = await requireGovernanceAdmin(c);
+    await ensureAudioSchema(c.env.DB);
+    const trackId = cleanText(c.req.param('trackId'), 80);
+    if (!trackId) return c.json({ detail: 'Track id is required.' }, 400);
+    await c.env.DB.prepare("DELETE FROM hidden_sounds WHERE provider = 'audius' AND track_id = ?")
+      .bind(trackId)
+      .run();
+    await c.env.DB.prepare("UPDATE posts SET audio_hidden = 0 WHERE audio_provider = 'audius' AND audio_track_id = ?")
+      .bind(trackId)
+      .run();
+    await logGovernanceAction(c, adminId, 'unhide_sound', 'sound', trackId, { provider: 'audius' });
+    return c.json({ hidden: false, track_id: trackId });
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+api.get('/admin/music/settings', authMiddleware, async (c) => {
+  try {
+    await requireGovernanceAdmin(c);
+    await ensureAiMusicSchema(c.env.DB);
+    const rows = await c.env.DB.prepare(
+      "SELECT key, value FROM app_settings WHERE key IN ('music_daily_generation_limit', 'music_generation_cooldown_seconds')"
+    ).all();
+    const settings = Object.fromEntries((rows.results as any[]).map((row) => [row.key, row.value]));
+    return c.json({
+      daily_generation_limit: Number(settings.music_daily_generation_limit || c.env.MUSIC_DAILY_GENERATION_LIMIT || 5),
+      cooldown_seconds: Number(settings.music_generation_cooldown_seconds || c.env.MUSIC_GENERATION_COOLDOWN_SECONDS || 60),
+    });
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+api.put('/admin/music/settings', authMiddleware, async (c) => {
+  try {
+    const adminId = await requireGovernanceAdmin(c);
+    await ensureAiMusicSchema(c.env.DB);
+    const body: any = await c.req.json().catch(() => ({}));
+    const dailyLimit = clampNumber(body.daily_generation_limit, 1, 50, 5);
+    const cooldown = clampNumber(body.cooldown_seconds, 0, 3600, 60);
+    const ts = now();
+    await c.env.DB.prepare(
+      'INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at'
+    ).bind('music_daily_generation_limit', String(dailyLimit), ts).run();
+    await c.env.DB.prepare(
+      'INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at'
+    ).bind('music_generation_cooldown_seconds', String(cooldown), ts).run();
+    await logGovernanceAction(c, adminId, 'update_ai_music_settings', 'settings', 'ai_music', { dailyLimit, cooldown });
+    return c.json({ daily_generation_limit: dailyLimit, cooldown_seconds: cooldown });
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+api.delete('/admin/music/:musicId', authMiddleware, async (c) => {
+  try {
+    const adminId = await requireGovernanceAdmin(c);
+    await ensureAiMusicSchema(c.env.DB);
+    const musicId = cleanText(c.req.param('musicId'), 80);
+    const music: any = await c.env.DB.prepare('SELECT * FROM ai_music_posts WHERE id = ?').bind(musicId).first();
+    if (!music) return c.json({ detail: 'Music post not found.' }, 404);
+    await c.env.DB.prepare("UPDATE ai_music_posts SET status = 'removed', is_public = 0, updated_at = ? WHERE id = ?")
+      .bind(now(), musicId)
+      .run();
+    await logGovernanceAction(c, adminId, 'remove_ai_music', 'ai_music', musicId, { provider: music.provider, user_id: music.user_id });
+    return c.json({ removed: true, id: musicId });
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+api.post('/admin/governance/posts/:postId/audio/remove', authMiddleware, async (c) => {
+  try {
+    const adminId = await requireGovernanceAdmin(c);
+    await ensureAudioSchema(c.env.DB);
+    const postId = c.req.param('postId');
+    const body: any = await c.req.json().catch(() => ({}));
+    await c.env.DB.prepare(
+      `UPDATE posts
+       SET audio_hidden = 1, audio_provider = '', audio_track_id = '', audio_title = '', audio_artist = '',
+           audio_artwork_url = '', audio_stream_url = '', audio_start_time = 0, audio_duration = 0
+       WHERE id = ?`
+    ).bind(postId).run();
+    await logGovernanceAction(c, adminId, 'remove_post_sound', 'post', postId, { reason: cleanText(body.reason, 300) });
+    return c.json({ removed: true, post_id: postId });
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+api.get('/admin/governance/me', authMiddleware, async (c) => {
+  try {
+    const adminId = await requireGovernanceAdmin(c);
+    const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(adminId).first();
+    return c.json(authUserPayload(user));
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+api.get('/admin/governance/stats', authMiddleware, async (c) => {
+  try {
+    await requireGovernanceAdmin(c);
+    const [pendingReports, bannedUsers, removedPosts, activeUsers] = await Promise.all([
+      c.env.DB.prepare("SELECT COUNT(*) AS count FROM reports WHERE COALESCE(status, 'pending') = 'pending'").first(),
+      c.env.DB.prepare("SELECT COUNT(*) AS count FROM users WHERE COALESCE(status, 'active') = 'banned'").first(),
+      c.env.DB.prepare("SELECT COUNT(*) AS count FROM posts WHERE COALESCE(status, 'active') = 'removed'").first(),
+      c.env.DB.prepare("SELECT COUNT(*) AS count FROM users WHERE COALESCE(status, 'active') != 'banned'").first(),
+    ]);
+    return c.json({
+      pending_reports: (pendingReports as any)?.count || 0,
+      banned_users: (bannedUsers as any)?.count || 0,
+      removed_posts: (removedPosts as any)?.count || 0,
+      active_users: (activeUsers as any)?.count || 0,
+    });
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+api.get('/admin/governance/reports', authMiddleware, async (c) => {
+  try {
+    await requireGovernanceAdmin(c);
+    const status = c.req.query('status') || 'pending';
+    const bindings: string[] = [];
+    let where = '';
+    if (status !== 'all') {
+      where = "WHERE COALESCE(r.status, 'pending') = ?";
+      bindings.push(status);
+    }
+    const query = `
+      SELECT
+        r.id,
+        r.reporter_id,
+        r.reported_id,
+        COALESCE(NULLIF(r.reported_type, ''), r.report_type, 'other') AS reported_type,
+        r.report_type,
+        r.reason,
+        r.details,
+        r.content_id,
+        COALESCE(r.status, 'pending') AS status,
+        r.admin_notes,
+        r.action_taken,
+        r.reviewed_by,
+        r.created_at,
+        r.updated_at,
+        reporter.username AS reporter_username,
+        reporter.full_name AS reporter_full_name,
+        reporter.profile_image AS reporter_profile_image,
+        target_user.username AS target_username,
+        target_user.full_name AS target_full_name,
+        target_user.profile_image AS target_profile_image,
+        target_user.status AS target_status,
+        p.id AS post_id,
+        p.user_id AS post_user_id,
+        p.content AS post_content,
+        p.image AS post_image,
+        p.images AS post_images,
+        p.media_types AS post_media_types,
+        p.status AS post_status,
+        post_author.username AS post_author_username,
+        post_author.full_name AS post_author_full_name
+      FROM reports r
+      LEFT JOIN users reporter ON reporter.id = r.reporter_id
+      LEFT JOIN users target_user ON target_user.id = r.reported_id
+      LEFT JOIN posts p ON p.id = COALESCE(r.content_id, CASE WHEN COALESCE(NULLIF(r.reported_type, ''), r.report_type) = 'post' THEN r.reported_id ELSE NULL END)
+      LEFT JOIN users post_author ON post_author.id = p.user_id
+      ${where}
+      ORDER BY r.created_at DESC
+      LIMIT 100
+    `;
+    const result = bindings.length
+      ? await c.env.DB.prepare(query).bind(...bindings).all()
+      : await c.env.DB.prepare(query).all();
+    return c.json((result.results as any[]).map((report) => ({
+      ...report,
+      post_images: parseJsonArray(report.post_images),
+      post_media_types: parseJsonArray(report.post_media_types),
+    })));
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+api.post('/admin/governance/reports/:reportId/resolve', authMiddleware, async (c) => {
+  try {
+    const adminId = await requireGovernanceAdmin(c);
+    const reportId = c.req.param('reportId');
+    const body: any = await c.req.json().catch(() => ({}));
+    await c.env.DB.prepare(
+      "UPDATE reports SET status = 'resolved', admin_notes = ?, action_taken = ?, reviewed_by = ?, updated_at = ? WHERE id = ?"
+    ).bind(body.admin_notes || '', body.action_taken || 'resolved', adminId, now(), reportId).run();
+    await logGovernanceAction(c, adminId, 'resolve_report', 'report', reportId, body);
+    return c.json({ resolved: true });
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+api.post('/admin/governance/reports/:reportId/dismiss', authMiddleware, async (c) => {
+  try {
+    const adminId = await requireGovernanceAdmin(c);
+    const reportId = c.req.param('reportId');
+    const body: any = await c.req.json().catch(() => ({}));
+    await c.env.DB.prepare(
+      "UPDATE reports SET status = 'dismissed', admin_notes = ?, action_taken = 'dismissed', reviewed_by = ?, updated_at = ? WHERE id = ?"
+    ).bind(body.admin_notes || '', adminId, now(), reportId).run();
+    await logGovernanceAction(c, adminId, 'dismiss_report', 'report', reportId, body);
+    return c.json({ dismissed: true });
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+api.post('/admin/governance/users/:userId/ban', authMiddleware, async (c) => {
+  try {
+    const adminId = await requireGovernanceAdmin(c);
+    const targetUserId = c.req.param('userId');
+    if (targetUserId === adminId) return c.json({ detail: 'Admins cannot ban themselves.' }, 400);
+    const body: any = await c.req.json().catch(() => ({}));
+    await c.env.DB.prepare("UPDATE users SET status = 'banned', banned_at = ?, ban_reason = ?, updated_at = datetime('now') WHERE id = ?")
+      .bind(now(), body.reason || 'Banned by governance', targetUserId)
+      .run();
+    await logGovernanceAction(c, adminId, 'ban_user', 'user', targetUserId, body);
+    return c.json({ banned: true });
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+api.post('/admin/governance/users/:userId/unban', authMiddleware, async (c) => {
+  try {
+    const adminId = await requireGovernanceAdmin(c);
+    const targetUserId = c.req.param('userId');
+    const body: any = await c.req.json().catch(() => ({}));
+    await c.env.DB.prepare("UPDATE users SET status = 'active', banned_at = NULL, ban_reason = '', updated_at = datetime('now') WHERE id = ?")
+      .bind(targetUserId)
+      .run();
+    await logGovernanceAction(c, adminId, 'unban_user', 'user', targetUserId, body);
+    return c.json({ unbanned: true });
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+api.post('/admin/governance/posts/:postId/remove', authMiddleware, async (c) => {
+  try {
+    const adminId = await requireGovernanceAdmin(c);
+    const postId = c.req.param('postId');
+    const body: any = await c.req.json().catch(() => ({}));
+    const post: any = await c.env.DB.prepare('SELECT * FROM posts WHERE id = ?').bind(postId).first();
+    if (!post) return c.json({ detail: 'Post not found' }, 404);
+    const stream = body.delete_stream ? await maybeDeleteStreamAssets(c, post) : { attempted: false, deleted: [], failed: [] };
+    await c.env.DB.prepare("UPDATE posts SET status = 'removed', removed_at = ?, removed_reason = ? WHERE id = ?")
+      .bind(now(), body.reason || 'Removed by governance', postId)
+      .run();
+    await logGovernanceAction(c, adminId, 'remove_post', 'post', postId, { ...body, stream });
+    return c.json({ removed: true, stream });
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+api.get('/admin/governance/actions', authMiddleware, async (c) => {
+  try {
+    await requireGovernanceAdmin(c);
+    const result = await c.env.DB.prepare(`
+      SELECT a.*, u.username AS admin_username, u.full_name AS admin_full_name
+      FROM admin_actions a
+      LEFT JOIN users u ON u.id = a.admin_id
+      ORDER BY a.created_at DESC
+      LIMIT 100
+    `).all();
+    return c.json((result.results as any[]).map((action) => ({
+      ...action,
+      details: action.details ? JSON.parse(action.details) : {},
+    })));
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
 
 api.get('/admin/stats', authMiddleware, adminGuard, async (c) => {
   const users = await c.env.DB.prepare('SELECT COUNT(*) as c FROM users').first() as any;
@@ -2405,6 +5627,109 @@ api.post('/admin/reports/:reportId/action', authMiddleware, adminGuard, async (c
   return c.json({ action, done: true });
 });
 
+api.get('/admin/media-backups', authMiddleware, adminGuard, async (c) => {
+  await ensureMediaBackupSchema(c.env.DB);
+  const limit = Math.min(parseInt(c.req.query('limit') || '100', 10) || 100, 500);
+  const rows = await c.env.DB.prepare(
+    `SELECT mb.*, u.username AS user_username, u.full_name AS user_full_name
+     FROM media_backups mb
+     LEFT JOIN users u ON u.id = mb.user_id
+     ORDER BY mb.created_at DESC
+     LIMIT ?`
+  ).bind(limit).all();
+  return c.json(rows.results || []);
+});
+
+api.get('/admin/media-backups/:backupId/download', authMiddleware, adminGuard, async (c) => {
+  if (!c.env.MEDIA_BACKUP) return c.json({ detail: 'R2 backup bucket is not bound' }, 500);
+  await ensureMediaBackupSchema(c.env.DB);
+  const backup: any = await c.env.DB.prepare('SELECT * FROM media_backups WHERE id = ?').bind(c.req.param('backupId')).first();
+  if (!backup) return c.json({ detail: 'Backup not found' }, 404);
+  const object = await c.env.MEDIA_BACKUP.get(backup.r2_key);
+  if (!object) return c.json({ detail: 'R2 object not found' }, 404);
+  const headers = new Headers();
+  object.writeHttpMetadata(headers);
+  headers.set('etag', object.httpEtag);
+  headers.set('content-disposition', `attachment; filename="${sanitizeMediaName(backup.original_filename || backup.id)}.${contentTypeExtension(backup.content_type || '')}"`);
+  return new Response(object.body, { headers });
+});
+
+function parseByteRange(rangeHeader: string | undefined, size: number): { offset: number; length: number; end: number } | null | 'invalid' {
+  if (!rangeHeader) return null;
+  const match = /^bytes=(\d*)-(\d*)$/i.exec(rangeHeader.trim());
+  if (!match || size <= 0) return 'invalid';
+
+  const startText = match[1];
+  const endText = match[2];
+  if (!startText && !endText) return 'invalid';
+
+  let start: number;
+  let end: number;
+
+  if (!startText) {
+    const suffixLength = Number(endText);
+    if (!Number.isFinite(suffixLength) || suffixLength <= 0) return 'invalid';
+    start = Math.max(size - suffixLength, 0);
+    end = size - 1;
+  } else {
+    start = Number(startText);
+    end = endText ? Number(endText) : size - 1;
+    if (!Number.isFinite(start) || !Number.isFinite(end)) return 'invalid';
+  }
+
+  if (start < 0 || start >= size || end < start) return 'invalid';
+  end = Math.min(end, size - 1);
+  return { offset: start, length: end - start + 1, end };
+}
+
+async function serveMediaBackup(c: any) {
+  if (!c.env.MEDIA_BACKUP) return c.json({ detail: 'Media storage is not configured' }, 503);
+  try {
+    await ensureMediaBackupSchema(c.env.DB);
+    const backup: any = await c.env.DB.prepare('SELECT * FROM media_backups WHERE id = ?')
+      .bind(c.req.param('backupId'))
+      .first();
+    if (!backup) return c.json({ detail: 'Media not found' }, 404);
+
+    const head = await c.env.MEDIA_BACKUP.head(backup.r2_key);
+    if (!head) return c.json({ detail: 'Media file not found' }, 404);
+
+    const range = parseByteRange(c.req.header('range'), head.size || 0);
+    if (range === 'invalid') {
+      return new Response(null, {
+        status: 416,
+        headers: {
+          'accept-ranges': 'bytes',
+          'content-range': `bytes */${head.size || 0}`,
+        },
+      });
+    }
+
+    const object = range
+      ? await c.env.MEDIA_BACKUP.get(backup.r2_key, { range: { offset: range.offset, length: range.length } })
+      : await c.env.MEDIA_BACKUP.get(backup.r2_key);
+    if (!object) return c.json({ detail: 'Media file not found' }, 404);
+
+    const headers = new Headers();
+    object.writeHttpMetadata(headers);
+    headers.set('etag', head.httpEtag || object.httpEtag);
+    headers.set('accept-ranges', 'bytes');
+    headers.set('cache-control', 'public, max-age=31536000, immutable');
+    headers.set('x-content-type-options', 'nosniff');
+    headers.set('content-length', String(range ? range.length : head.size || object.size || 0));
+    if (range) headers.set('content-range', `bytes ${range.offset}-${range.end}/${head.size}`);
+
+    const body = c.req.method === 'HEAD' ? null : object.body;
+    return new Response(body, { status: range ? 206 : 200, headers });
+  } catch (error: any) {
+    console.error('Media fetch failed:', getErrorCode(error), error?.message || error);
+    return c.json({ detail: 'Could not load media' }, 500);
+  }
+}
+
+api.get('/media/:backupId', serveMediaBackup);
+api.on('HEAD', '/media/:backupId', serveMediaBackup);
+
 // Upload (Cloudflare Images)
 api.post('/upload/image', authMiddleware, async (c) => {
   try {
@@ -2412,36 +5737,72 @@ api.post('/upload/image', authMiddleware, async (c) => {
     const base64Data = body.image || body.base64;
     if (!base64Data) return c.json({ detail: 'No image data provided' }, 400);
 
-    // Extract the actual base64 content (remove data:image/...;base64, prefix)
-    const base64Content = base64Data.includes(',') ? base64Data.split(',')[1] : base64Data;
-    const binaryStr = atob(base64Content);
-    const bytes = new Uint8Array(binaryStr.length);
-    for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
+    const userId = getUserId(c);
+    const decoded = dataUriToBytes(base64Data, 'image/jpeg');
+    const processed = await maybeEnhanceImage(c, decoded.bytes, decoded.contentType);
 
-    // Detect mime type
-    let mimeType = 'image/jpeg';
-    if (base64Data.includes('data:image/png')) mimeType = 'image/png';
-    else if (base64Data.includes('data:image/webp')) mimeType = 'image/webp';
-
-    const blob = new Blob([bytes], { type: mimeType });
+    const blob = new Blob([bytesToArrayBuffer(processed.bytes)], { type: processed.contentType });
     const formData = new FormData();
-    formData.append('file', blob, `upload-${Date.now()}.${mimeType.split('/')[1]}`);
+    const fileExt = contentTypeExtension(processed.contentType, 'jpg');
+    formData.append('file', blob, `upload-${Date.now()}.${fileExt}`);
+    formData.append('metadata', JSON.stringify({ userId, backup: true, enhancement: processed.status }));
 
-    const cfRes = await fetch(`https://api.cloudflare.com/client/v4/accounts/${c.env.CLOUDFLARE_ACCOUNT_ID}/images/v1`, {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${c.env.CLOUDFLARE_IMAGES_TOKEN}` },
-      body: formData,
-    });
-    const cfData: any = await cfRes.json();
-    if (!cfData.success) {
+    if (c.env.CLOUDFLARE_ACCOUNT_ID && c.env.CLOUDFLARE_IMAGES_TOKEN) {
+      const cfRes = await fetch(`https://api.cloudflare.com/client/v4/accounts/${c.env.CLOUDFLARE_ACCOUNT_ID}/images/v1`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${c.env.CLOUDFLARE_IMAGES_TOKEN}` },
+        body: formData,
+      });
+      const cfData: any = await cfRes.json();
+      if (cfData.success) {
+        const imageId = cfData.result.id;
+        const ACCOUNT_HASH = c.env.CLOUDFLARE_IMAGES_ACCOUNT_HASH || 'DY-IgVdOm-0zb0K5ZFnpKA';
+        const deliveryUrl = `https://imagedelivery.net/${ACCOUNT_HASH}/${imageId}/public`;
+        const backup = await storeMediaBackup(c, {
+          userId,
+          mediaKind: 'image',
+          provider: 'cloudflare_images',
+          providerId: imageId,
+          deliveryUrl,
+          contentType: processed.contentType,
+          bytes: processed.bytes,
+          originalFilename: body.filename || `upload.${fileExt}`,
+        });
+        return c.json({
+          url: deliveryUrl,
+          id: imageId,
+          source: 'cloudflare_images',
+          backup_id: backup?.id || null,
+          r2_backup_key: backup?.r2_key || null,
+          size_bytes: backup?.size_bytes || processed.bytes.byteLength,
+          checksum_sha256: backup?.checksum_sha256 || null,
+          enhancement_status: processed.status,
+        });
+      }
       console.log('CF Images error:', JSON.stringify(cfData.errors));
-      return c.json({ url: base64Data, source: 'base64_fallback' });
+    } else {
+      console.log('CF Images is not configured; using R2 media storage.');
     }
-    // Build proper delivery URL with account hash
-    const imageId = cfData.result.id;
-    const ACCOUNT_HASH = 'DY-IgVdOm-0zb0K5ZFnpKA';
-    const deliveryUrl = `https://imagedelivery.net/${ACCOUNT_HASH}/${imageId}/public`;
-    return c.json({ url: deliveryUrl, id: imageId, source: 'cloudflare_images' });
+
+    const backup = await storeMediaBackup(c, {
+      userId,
+      mediaKind: 'image',
+      provider: 'r2_image',
+      contentType: processed.contentType,
+      bytes: processed.bytes,
+      originalFilename: body.filename || `upload.${fileExt}`,
+    });
+    if (!backup) return c.json({ url: base64Data, source: 'base64_fallback' });
+    return c.json({
+      url: backup.delivery_url,
+      id: backup.id,
+      source: 'r2_image',
+      backup_id: backup.id,
+      r2_backup_key: backup.r2_key,
+      size_bytes: backup.size_bytes,
+      checksum_sha256: backup.checksum_sha256,
+      enhancement_status: processed.status,
+    });
   } catch (e: any) {
     return c.json({ detail: 'Upload failed: ' + e.message }, 500);
   }
@@ -2460,6 +5821,9 @@ api.post('/upload/base64-image', authMiddleware, async (c) => {
 
 api.post('/upload/video', authMiddleware, async (c) => {
   try {
+    if (!c.env.CLOUDFLARE_ACCOUNT_ID || !c.env.CLOUDFLARE_STREAM_TOKEN) {
+      return c.json({ detail: 'Cloudflare Stream is not configured.' }, 503);
+    }
     // Get a direct upload URL from Cloudflare Stream
     const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${c.env.CLOUDFLARE_ACCOUNT_ID}/stream/direct_upload`, {
       method: 'POST',
@@ -2474,6 +5838,108 @@ api.post('/upload/video', authMiddleware, async (c) => {
     return c.json({ upload_url: data.result.uploadURL, video_uid: data.result.uid, source: 'cloudflare_stream' });
   } catch (e: any) {
     return c.json({ detail: 'Video upload setup failed: ' + e.message }, 500);
+  }
+});
+
+api.post('/upload/video-with-backup', authMiddleware, async (c) => {
+  try {
+    const userId = getUserId(c);
+    const formData = await c.req.raw.formData();
+    const file = formData.get('file') as unknown as {
+      type?: string;
+      size?: number;
+      name?: string;
+      arrayBuffer?: () => Promise<ArrayBuffer>;
+    } | null;
+    if (!file || typeof file !== 'object' || typeof file.arrayBuffer !== 'function') {
+      return c.json({ detail: 'No video file provided' }, 400);
+    }
+    const fileType = file.type || 'video/mp4';
+    const fileSize = Number(file.size || 0);
+    if (!fileType.startsWith('video/')) return c.json({ detail: 'Only video uploads are supported' }, 400);
+    if (fileSize > maxBackupVideoBytes(c)) {
+      return c.json({
+        detail: 'Video is too large for Worker backup upload. Use direct Stream upload for this file.',
+        max_bytes: maxBackupVideoBytes(c),
+      }, 413);
+    }
+
+    const videoBytes = await file.arrayBuffer();
+    const hasStreamConfig = !!(c.env.CLOUDFLARE_ACCOUNT_ID && c.env.CLOUDFLARE_STREAM_TOKEN);
+
+    if (hasStreamConfig) {
+      try {
+        const directRes = await fetch(`https://api.cloudflare.com/client/v4/accounts/${c.env.CLOUDFLARE_ACCOUNT_ID}/stream/direct_upload`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${c.env.CLOUDFLARE_STREAM_TOKEN}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ maxDurationSeconds: 300, creator: userId }),
+        });
+        const directData: any = await directRes.json();
+        if (directData.success) {
+          const streamForm = new FormData();
+          streamForm.append('file', new Blob([videoBytes], { type: fileType }), file.name || 'upload.mp4');
+          const streamRes = await fetch(directData.result.uploadURL, { method: 'POST', body: streamForm });
+          if (streamRes.ok) {
+            const videoUid = directData.result.uid;
+            const deliveryUrl = `cfstream:${videoUid}`;
+            const backup = await storeMediaBackup(c, {
+              userId,
+              mediaKind: 'video',
+              provider: 'cloudflare_stream',
+              providerId: videoUid,
+              deliveryUrl,
+              contentType: fileType,
+              bytes: videoBytes,
+              originalFilename: file.name || 'upload.mp4',
+            });
+
+            return c.json({
+              url: deliveryUrl,
+              video_uid: videoUid,
+              source: 'cloudflare_stream',
+              backup_id: backup?.id || null,
+              r2_backup_key: backup?.r2_key || null,
+              size_bytes: backup?.size_bytes || videoBytes.byteLength,
+              checksum_sha256: backup?.checksum_sha256 || null,
+            });
+          }
+
+          const errorText = await streamRes.text().catch(() => '');
+          console.log('CF Stream upload failed, using R2 media storage:', streamRes.status, errorText.slice(0, 300));
+        } else {
+          console.log('CF Stream direct upload error, using R2 media storage:', JSON.stringify(directData.errors));
+        }
+      } catch (streamError: any) {
+        console.log('CF Stream failed, using R2 media storage:', streamError?.message || streamError);
+      }
+    } else {
+      console.log('CF Stream is not configured; using R2 media storage.');
+    }
+
+    const backup = await storeMediaBackup(c, {
+      userId,
+      mediaKind: 'video',
+      provider: 'r2_video',
+      contentType: fileType,
+      bytes: videoBytes,
+      originalFilename: file.name || 'upload.mp4',
+    });
+    if (!backup) return c.json({ detail: 'Media storage is not configured.' }, 503);
+
+    return c.json({
+      url: backup.delivery_url,
+      video_uid: backup.id,
+      source: 'r2_video',
+      backup_id: backup.id,
+      r2_backup_key: backup.r2_key,
+      size_bytes: backup.size_bytes,
+      checksum_sha256: backup.checksum_sha256,
+    });
+  } catch (e: any) {
+    return c.json({ detail: 'Video upload failed: ' + e.message }, 500);
   }
 });
 
@@ -2503,36 +5969,98 @@ api.get('/stream/video/:videoUid', async (c) => {
   }
 });
 
-// Google Places proxy
-api.get('/google-places/nearby', async (c) => {
-  const key = c.env.GOOGLE_MAPS_API_KEY;
-  if (!key) return c.json({ error: 'Google Maps API key not configured', places: [] });
-  const keyword = c.req.query('keyword') || '';
-  let url = `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${c.req.query('lat') || '40.7128'},${c.req.query('lng') || '-74.006'}&radius=${c.req.query('radius') || '5000'}&type=${c.req.query('type') || 'restaurant'}&key=${key}`;
-  if (keyword) url += `&keyword=${encodeURIComponent(keyword)}`;
-  const res = await fetch(url); const data: any = await res.json();
-  if (data.status !== 'OK' && data.status !== 'ZERO_RESULTS') {
-    return c.json({ error: data.error_message || data.status, places: [] });
-  }
-  return c.json((data.results || []).map((p: any) => ({
-    place_id: p.place_id, name: p.name, vicinity: p.vicinity, rating: p.rating,
-    user_ratings_total: p.user_ratings_total, open_now: p.opening_hours?.open_now,
-    lat: p.geometry?.location?.lat, lng: p.geometry?.location?.lng, types: p.types,
-    photo_url: p.photos?.[0]?.photo_reference ? `https://maps.googleapis.com/maps/api/place/photo?maxwidth=400&photoreference=${p.photos[0].photo_reference}&key=${key}` : null,
-  })));
-});
+// Mapbox Places proxy.
+async function mapboxPlacesNearbyHandler(c: any) {
+  try {
+    const token = getMapboxAccessToken(c);
+    const lat = c.req.query('lat') || '40.7128';
+    const lng = c.req.query('lng') || '-74.006';
+    const type = c.req.query('type') || 'restaurant';
+    const keyword = c.req.query('keyword') || '';
+    const query = keyword || type;
+    const params = new URLSearchParams({
+      q: query,
+      language: 'en',
+      limit: '10',
+      country: 'US',
+      types: 'poi',
+      proximity: `${lng},${lat}`,
+      access_token: token,
+    });
 
-api.get('/google-places/:placeId', async (c) => {
-  const key = c.env.GOOGLE_MAPS_API_KEY; const pid = c.req.param('placeId');
-  const url = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${pid}&fields=name,formatted_address,formatted_phone_number,rating,user_ratings_total,reviews,photos,opening_hours,website,price_level,types,geometry,url&key=${key}`;
-  const res = await fetch(url); const data: any = await res.json(); const p = data.result || {};
-  return c.json({ place_id: pid, name: p.name, address: p.formatted_address, phone: p.formatted_phone_number,
-    rating: p.rating, user_ratings_total: p.user_ratings_total, website: p.website,
-    price_level: p.price_level, types: p.types || [], url: p.url,
-    lat: p.geometry?.location?.lat, lng: p.geometry?.location?.lng,
-    opening_hours: p.opening_hours, reviews: p.reviews || [],
-    photos: (p.photos || []).map((ph: any) => `https://maps.googleapis.com/maps/api/place/photo?maxwidth=800&photoreference=${ph.photo_reference}&key=${key}`) });
-});
+    const res = await fetch(`${MAPBOX_SEARCH_BOX_API_BASE}/forward?${params.toString()}`);
+    if (!res.ok) return c.json({ error: `Mapbox search failed: ${res.status}`, places: [] }, 502);
+
+    const data: any = await res.json();
+    const places = Array.isArray(data.features)
+      ? data.features.map((feature: any, index: number) => mapboxFeatureToPlace(feature, `mapbox-${type}-${index}`))
+      : [];
+    return c.json(places);
+  } catch (error: any) {
+    const code = getErrorCode(error);
+    if (code === 'MAPBOX_ACCESS_TOKEN_MISSING') {
+      return c.json({ error: 'Mapbox access token is not configured', places: [] }, 503);
+    }
+    return c.json({ error: 'Mapbox places could not load', places: [] }, 500);
+  }
+}
+
+async function mapboxPlaceDetailHandler(c: any) {
+  const pid = c.req.param('placeId');
+  try {
+    const token = getMapboxAccessToken(c);
+    const params = new URLSearchParams({
+      session_token: crypto.randomUUID(),
+      access_token: token,
+      language: 'en',
+    });
+    const res = await fetch(`${MAPBOX_SEARCH_BOX_API_BASE}/retrieve/${encodeURIComponent(pid)}?${params.toString()}`);
+    if (res.ok) {
+      const data: any = await res.json();
+      const feature = Array.isArray(data.features) ? data.features[0] : null;
+      if (feature) {
+        const place = mapboxFeatureToPlace(feature, pid);
+        return c.json({
+          ...place,
+          address: place.formatted_address || place.vicinity,
+          phone: '',
+          website: '',
+          price_level: null,
+          url: place.mapbox_url,
+          opening_hours: null,
+          reviews: [],
+          photos: [],
+        });
+      }
+    }
+  } catch {}
+
+  const lat = c.req.query('lat');
+  const lng = c.req.query('lng');
+  return c.json({
+    place_id: pid,
+    mapbox_id: pid,
+    name: c.req.query('name') || 'Mapbox place',
+    address: c.req.query('address') || '',
+    vicinity: c.req.query('address') || '',
+    phone: '',
+    rating: null,
+    user_ratings_total: null,
+    website: '',
+    price_level: null,
+    types: [],
+    url: '',
+    mapbox_url: lat && lng ? `https://www.mapbox.com/search?query=${encodeURIComponent(pid)}&center=${lng},${lat}` : '',
+    lat: lat ? Number(lat) : null,
+    lng: lng ? Number(lng) : null,
+    opening_hours: null,
+    reviews: [],
+    photos: [],
+  });
+}
+
+api.get('/mapbox-places/nearby', mapboxPlacesNearbyHandler);
+api.get('/mapbox-places/:placeId', mapboxPlaceDetailHandler);
 
 // Health
 api.get('/', (c) => c.json({ message: 'Flames-Up API', version: '2.0', runtime: 'Cloudflare Workers + Hono + D1' }));

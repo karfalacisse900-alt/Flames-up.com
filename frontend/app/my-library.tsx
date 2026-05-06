@@ -1,13 +1,14 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, Image, ScrollView,
-  ActivityIndicator, Dimensions, RefreshControl, Alert,
+  View, Text, StyleSheet, TouchableOpacity, ScrollView,
+  ActivityIndicator, Dimensions, RefreshControl,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import api from '../src/api/client';
-import { isCFStreamVideo, extractStreamUid, getStreamPlaybackInfo } from '../src/utils/mediaUpload';
+import MediaPreview from '../src/components/MediaPreview';
+import { cachePostForDetail, cachePostsForDetail, setPostDetailFeedContext } from '../src/store/postDetailCache';
 
 const { width: SW } = Dimensions.get('window');
 const COL_W = (SW - 48) / 2;
@@ -22,17 +23,17 @@ export default function MyLibraryScreen() {
   const [isLoading, setIsLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  useEffect(() => { loadData(); }, [tab]);
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     setIsLoading(true);
     try {
       if (tab === 'Saved') {
         const res = await api.get('/library/saved');
         setSavedPosts(res.data || []);
+        cachePostsForDetail(res.data || []);
       } else if (tab === 'Liked') {
         const res = await api.get('/library/liked');
         setLikedPosts(res.data || []);
+        cachePostsForDetail(res.data || []);
       } else if (tab === 'Collections') {
         const res = await api.get('/library/collections');
         setCollections(res.data || []);
@@ -43,11 +44,17 @@ export default function MyLibraryScreen() {
       setIsLoading(false);
       setRefreshing(false);
     }
-  };
+  }, [tab]);
+
+  useEffect(() => { void loadData(); }, [loadData]);
 
   const onRefresh = () => { setRefreshing(true); loadData(); };
 
-  const navigateToPost = (postId: string) => {
+  const navigateToPost = (post: any) => {
+    const postId = String(post?.id || post?.post_id || '');
+    if (!postId) return;
+    cachePostForDetail(post);
+    setPostDetailFeedContext(posts.map((item) => item.id || item.post_id));
     router.push(`/post/${postId}` as any);
   };
 
@@ -98,7 +105,7 @@ export default function MyLibraryScreen() {
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#111" />}
         >
           {posts.map((post: any, idx: number) => (
-            <PostCard key={post.id || idx} post={post} onPress={() => navigateToPost(post.id)} />
+            <PostCard key={post.id || post.post_id || idx} post={post} onPress={() => navigateToPost(post)} />
           ))}
         </ScrollView>
       )}
@@ -109,37 +116,17 @@ export default function MyLibraryScreen() {
 /* ── Post Card ── */
 function PostCard({ post, onPress }: { post: any; onPress: () => void }) {
   const imageUri = post.image || post.images?.[0];
-  const isVideo = isCFStreamVideo(imageUri || '') || post.media_types?.includes?.('video');
-  const [thumbUri, setThumbUri] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (isVideo && imageUri && isCFStreamVideo(imageUri)) {
-      const uid = extractStreamUid(imageUri);
-      if (uid) {
-        getStreamPlaybackInfo(uid).then(info => {
-          if (info?.thumbnail) setThumbUri(info.thumbnail);
-        }).catch(() => {});
-      }
-    }
-  }, [imageUri, isVideo]);
-
-  const displayImg = isVideo ? thumbUri : imageUri;
-  const hasImg = displayImg && (displayImg.startsWith('http') || displayImg.startsWith('data:'));
+  const hasImg = imageUri && (imageUri.startsWith('http') || imageUri.startsWith('data:') || imageUri.startsWith('cfstream:'));
   const authorName = post.user_full_name || post.user_username || 'User';
 
   return (
     <TouchableOpacity style={s.card} activeOpacity={0.9} onPress={onPress}>
       <View style={s.cardImgWrap}>
         {hasImg ? (
-          <Image source={{ uri: displayImg }} style={s.cardImg} resizeMode="cover" />
+          <MediaPreview uri={imageUri} mediaTypes={post.media_types} style={s.cardImg} />
         ) : (
           <View style={[s.cardImg, { backgroundColor: '#F0ECE4', justifyContent: 'center', alignItems: 'center' }]}>
             <Ionicons name="image-outline" size={28} color="#D4D0C8" />
-          </View>
-        )}
-        {isVideo && (
-          <View style={s.videoOverlay}>
-            <Ionicons name="play-circle" size={28} color="rgba(255,255,255,0.85)" />
           </View>
         )}
         {post.collection && post.collection !== 'default' && post.collection !== 'My Library' && (
@@ -230,10 +217,6 @@ const s = StyleSheet.create({
   card: { width: COL_W, marginBottom: 4 },
   cardImgWrap: { width: COL_W, height: COL_W * 1.3, borderRadius: 16, overflow: 'hidden', position: 'relative' },
   cardImg: { width: '100%', height: '100%' },
-  videoOverlay: {
-    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
-    justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.15)',
-  },
   collectionBadge: {
     position: 'absolute', bottom: 8, left: 8,
     backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: 10,

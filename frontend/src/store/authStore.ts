@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import api from '../api/client';
+import api, { setSessionInvalidHandler } from '../api/client';
 
 type AppLanguage = 'en' | 'fr' | 'es';
 
@@ -180,3 +180,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     set({ user });
   },
 }));
+
+setSessionInvalidHandler(() => {
+  useAuthStore.setState({
+    user: null,
+    token: null,
+    isAuthenticated: false,
+    isLoading: false,
+  });
+});

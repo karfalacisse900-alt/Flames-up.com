@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -14,6 +14,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../src/utils/theme';
 import api from '../src/api/client';
 import MediaPreview from '../src/components/MediaPreview';
+import { cachePostForDetail, cachePostsForDetail, setPostDetailFeedContext } from '../src/store/postDetailCache';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const THUMB_SIZE = (SCREEN_WIDTH - 48) / 3;
@@ -31,30 +32,46 @@ export default function LibraryScreen() {
   const [savedPosts, setSavedPosts] = useState<any[]>([]);
   const [collections, setCollections] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [loadedTabs, setLoadedTabs] = useState<Record<string, boolean>>({});
 
-  useEffect(() => { loadData(); }, []);
-
-  const loadData = async () => {
+  const loadData = useCallback(async (force = true) => {
+    if (!force && loadedTabs[activeTab]) return;
+    setIsLoading(true);
     try {
-      const [liked, saved, cols] = await Promise.all([
-        api.get('/library/liked'),
-        api.get('/library/saved'),
-        api.get('/library/collections'),
-      ]);
-      setLikedPosts(liked.data);
-      setSavedPosts(saved.data);
-      setCollections(cols.data);
+      if (activeTab === 'liked') {
+        const liked = await api.get('/library/liked');
+        setLikedPosts(liked.data || []);
+        cachePostsForDetail(liked.data || []);
+      } else if (activeTab === 'saved') {
+        const saved = await api.get('/library/saved');
+        setSavedPosts(saved.data || []);
+        cachePostsForDetail(saved.data || []);
+      } else if (activeTab === 'collections') {
+        const cols = await api.get('/library/collections');
+        setCollections(cols.data || []);
+      }
+      setLoadedTabs((prev) => ({ ...prev, [activeTab]: true }));
     } catch (error) {
       console.log('Error loading library:', error);
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [activeTab, loadedTabs]);
+
+  useEffect(() => { loadData(false); }, [loadData]);
 
   const renderPostGrid = (posts: any[]) => (
     <View style={s.grid}>
       {posts.map((post) => (
-        <TouchableOpacity key={post.id} style={s.thumb} onPress={() => router.push(`/post/${post.id}`)}>
+        <TouchableOpacity
+          key={post.id}
+          style={s.thumb}
+          onPress={() => {
+            cachePostForDetail(post);
+            setPostDetailFeedContext(posts.map((item) => item.id));
+            router.push(`/post/${post.id}`);
+          }}
+        >
           {post.image ? (
             <MediaPreview uri={post.image} mediaTypes={post.media_types} style={s.thumbImage} />
           ) : (
