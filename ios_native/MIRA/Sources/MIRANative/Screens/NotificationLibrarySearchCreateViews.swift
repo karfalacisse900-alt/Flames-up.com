@@ -1,3 +1,4 @@
+import PhotosUI
 import SwiftUI
 
 @MainActor
@@ -280,8 +281,12 @@ public struct CreatePostNativeView: View {
   @Environment(\.dismiss) private var dismiss
   @State private var title = ""
   @State private var bodyText = ""
-  @State private var mediaURL = ""
+  @State private var mediaItems: [MIRAPickedMedia] = []
+  @State private var pickerItems: [PhotosPickerItem] = []
+  @State private var showCamera = false
+  @State private var showPreview = false
   @State private var isPosting = false
+  @State private var isLoadingMedia = false
   @State private var errorMessage: String?
 
   public init(api: MIRAAPIClient) {
@@ -289,45 +294,132 @@ public struct CreatePostNativeView: View {
   }
 
   public var body: some View {
-    Form {
-      Section("Post") {
-        TextField("Headline", text: $title)
-        TextField("Caption", text: $bodyText, axis: .vertical)
-          .lineLimit(5...9)
-        TextField("Image or video URL", text: $mediaURL)
-          .keyboardType(.URL)
-          .textInputAutocapitalization(.never)
+    ScrollView {
+      VStack(alignment: .leading, spacing: MIRATheme.Space.lg) {
+        composerHeader("Create post")
+        mediaPreview
+        composerTextFields
+        composerToolbar
+        if let errorMessage {
+          Text(errorMessage)
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(.red.opacity(0.85))
+        }
+        MIRAPrimaryButton(isPosting ? "Posting..." : "Post", systemImage: "paperplane.fill") {
+          Task { await submit() }
+        }
+        .disabled(isPosting || !canPost)
       }
-
-      if let errorMessage {
-        Text(errorMessage).foregroundStyle(.red)
+      .padding(MIRATheme.Space.md)
+    }
+    .background(MIRATheme.Color.appBackground)
+    .toolbar(.hidden, for: .navigationBar)
+    .onChange(of: pickerItems) { _, newItems in
+      Task { await loadPickerItems(newItems) }
+    }
+    .sheet(isPresented: $showCamera) {
+      MIRACameraCaptureView(allowsVideo: true) { media in
+        mediaItems.append(media)
       }
+      .ignoresSafeArea()
+    }
+    .sheet(isPresented: $showPreview) {
+      ComposerPreviewSheet(title: title, bodyText: bodyText, mediaItems: mediaItems)
+    }
+  }
 
-      Button {
-        Task { await submit() }
-      } label: {
-        HStack {
-          Spacer()
-          if isPosting { ProgressView() } else { Text("Post").fontWeight(.semibold) }
-          Spacer()
+  private var composerTextFields: some View {
+    VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
+      TextField("Add a catchy headline", text: $title)
+        .font(.system(size: 24, weight: .semibold))
+      Rectangle().fill(MIRATheme.Color.hairline).frame(height: 0.5)
+      TextField("Write caption with details to get more views.", text: $bodyText, axis: .vertical)
+        .font(.system(size: 17, weight: .regular))
+        .lineLimit(5...10)
+    }
+    .padding(MIRATheme.Space.md)
+    .background(MIRATheme.Color.surface)
+    .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.large, style: .continuous))
+  }
+
+  private var mediaPreview: some View {
+    ScrollView(.horizontal, showsIndicators: false) {
+      HStack(spacing: MIRATheme.Space.sm) {
+        ForEach(Array(mediaItems.enumerated()), id: \.offset) { index, item in
+          LocalMediaThumb(media: item)
+            .overlay(alignment: .topTrailing) {
+              Button {
+                mediaItems.remove(at: index)
+              } label: {
+                Image(systemName: "xmark")
+                  .font(.system(size: 10, weight: .bold))
+                  .foregroundStyle(.white)
+                  .frame(width: 22, height: 22)
+                  .background(.black.opacity(0.55))
+                  .clipShape(Circle())
+              }
+              .padding(6)
+            }
+        }
+        PhotosPicker(selection: $pickerItems, maxSelectionCount: 10, matching: .any(of: [.images, .videos])) {
+          addTile
         }
       }
-      .disabled(isPosting || (title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && mediaURL.isEmpty))
+      .padding(.vertical, MIRATheme.Space.xs)
     }
-    .navigationTitle("Create post")
+  }
+
+  private var composerToolbar: some View {
+    HStack(spacing: MIRATheme.Space.sm) {
+      PhotosPicker(selection: $pickerItems, maxSelectionCount: 10, matching: .any(of: [.images, .videos])) {
+        composerTool("Gallery", systemImage: "photo.on.rectangle")
+      }
+      Button { showCamera = true } label: {
+        composerTool("Camera", systemImage: "camera")
+      }
+      Button { showPreview = true } label: {
+        composerTool("Preview", systemImage: "eye")
+      }
+      Spacer()
+      if isLoadingMedia { ProgressView() }
+    }
+    .buttonStyle(.plain)
+  }
+
+  private var addTile: some View {
+    RoundedRectangle(cornerRadius: 18, style: .continuous)
+      .fill(MIRATheme.Color.surfaceSoft)
+      .frame(width: 96, height: 96)
+      .overlay {
+        Image(systemName: "plus")
+          .font(.system(size: 26, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textMuted)
+      }
+  }
+
+  private var canPost: Bool {
+    !mediaItems.isEmpty ||
+      !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+      !bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
   }
 
   private func submit() async {
     isPosting = true
     defer { isPosting = false }
     do {
-      let cleanMedia = mediaURL.trimmingCharacters(in: .whitespacesAndNewlines)
+      let uploader = MIRAMediaUploadService(api: api)
+      var uploaded: [String] = []
+      var mediaTypes: [String] = []
+      for item in mediaItems {
+        uploaded.append(try await uploader.upload(item))
+        mediaTypes.append(item.kind.rawValue)
+      }
       let body = CreatePostBody(
         title: title,
         content: bodyText,
-        image: cleanMedia.isEmpty ? nil : cleanMedia,
-        images: cleanMedia.isEmpty ? [] : [cleanMedia],
-        mediaTypes: cleanMedia.isVideoURL ? ["video"] : (cleanMedia.isEmpty ? [] : ["image"]),
+        image: uploaded.first,
+        images: uploaded,
+        mediaTypes: mediaTypes,
         visibility: "public",
         clientRequestId: UUID().uuidString
       )
@@ -337,13 +429,198 @@ public struct CreatePostNativeView: View {
       errorMessage = "Post could not be created."
     }
   }
+
+  @MainActor
+  private func loadPickerItems(_ items: [PhotosPickerItem]) async {
+    isLoadingMedia = true
+    defer {
+      isLoadingMedia = false
+      pickerItems = []
+    }
+    for item in items {
+      guard let data = try? await item.loadTransferable(type: Data.self) else { continue }
+      let (kind, fileName, mimeType) = pickedMediaKind(from: item.supportedContentTypes, fallbackData: data)
+      mediaItems.append(MIRAPickedMedia(data: data, kind: kind, fileName: fileName, mimeType: mimeType))
+    }
+  }
 }
 
 public struct CreateNoteNativeView: View {
   let api: MIRAAPIClient
   @Environment(\.dismiss) private var dismiss
   @State private var noteText = ""
-  @State private var mediaURL = ""
+  @State private var mediaItem: MIRAPickedMedia?
+  @State private var pickerItem: PhotosPickerItem?
+  @State private var gifURL = ""
+  @State private var showGIFField = false
+  @State private var showCamera = false
+  @State private var isPosting = false
+  @State private var isLoadingMedia = false
+  @State private var errorMessage: String?
+
+  public init(api: MIRAAPIClient) {
+    self.api = api
+  }
+
+  public var body: some View {
+    VStack(spacing: 0) {
+      HStack {
+        Button("Cancel") { dismiss() }
+          .font(.system(size: 21, weight: .semibold))
+        Spacer()
+        Button("Save") {}
+          .font(.system(size: 16, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textMuted)
+          .padding(.horizontal, MIRATheme.Space.md)
+          .frame(height: 40)
+          .background(MIRATheme.Color.surfaceSoft)
+          .clipShape(Capsule())
+      }
+      .padding(MIRATheme.Space.md)
+
+      ScrollView {
+        VStack(alignment: .leading, spacing: MIRATheme.Space.lg) {
+          HStack(alignment: .top, spacing: MIRATheme.Space.md) {
+            RemoteAvatar(url: nil, size: 44)
+            VStack(alignment: .leading, spacing: MIRATheme.Space.xs) {
+              Text("karfala900")
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(MIRATheme.Color.textPrimary)
+              TextField("What's new?", text: $noteText, axis: .vertical)
+                .font(.system(size: 21, weight: .medium))
+                .lineLimit(5...12)
+            }
+          }
+
+          noteMediaPreview
+
+          HStack(spacing: MIRATheme.Space.lg) {
+            PhotosPicker(selection: $pickerItem, matching: .images) {
+              Image(systemName: "photo")
+                .font(.system(size: 26, weight: .regular))
+            }
+            Button { showGIFField.toggle() } label: {
+              Text("GIF")
+                .font(.system(size: 18, weight: .heavy))
+                .padding(.horizontal, 8)
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(lineWidth: 2))
+            }
+            Button { showCamera = true } label: {
+              Image(systemName: "camera")
+                .font(.system(size: 25, weight: .regular))
+            }
+            Spacer()
+            if isLoadingMedia { ProgressView() }
+          }
+          .foregroundStyle(MIRATheme.Color.textSecondary)
+          .buttonStyle(.plain)
+
+          if showGIFField {
+            TextField("Paste GIF URL", text: $gifURL)
+              .keyboardType(.URL)
+              .textInputAutocapitalization(.never)
+              .autocorrectionDisabled()
+              .padding(MIRATheme.Space.md)
+              .background(MIRATheme.Color.surfaceSoft)
+              .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+          }
+
+          if let errorMessage {
+            Text(errorMessage).foregroundStyle(.red)
+          }
+        }
+        .padding(MIRATheme.Space.md)
+      }
+
+      HStack {
+        Spacer()
+        Button {
+          Task { await submit() }
+        } label: {
+          if isPosting {
+            ProgressView().tint(.white)
+          } else {
+            Text("Post").font(.system(size: 18, weight: .semibold))
+          }
+        }
+        .foregroundStyle(.white)
+        .frame(width: 118, height: 50)
+        .background(canPostNote ? MIRATheme.Color.forest : MIRATheme.Color.textMuted.opacity(0.35))
+        .clipShape(Capsule())
+        .disabled(isPosting || !canPostNote)
+      }
+      .padding(MIRATheme.Space.md)
+    }
+    .background(MIRATheme.Color.appBackground)
+    .toolbar(.hidden, for: .navigationBar)
+    .onChange(of: pickerItem) { _, newItem in
+      Task { await loadPickerItem(newItem) }
+    }
+    .sheet(isPresented: $showCamera) {
+      MIRACameraCaptureView(allowsVideo: false) { media in
+        mediaItem = media
+      }
+      .ignoresSafeArea()
+    }
+  }
+
+  private func submit() async {
+    isPosting = true
+    defer { isPosting = false }
+    do {
+      let uploadedURL: String?
+      if let mediaItem {
+        uploadedURL = try await MIRAMediaUploadService(api: api).upload(mediaItem)
+      } else {
+        let cleanGIF = gifURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        uploadedURL = cleanGIF.isEmpty ? nil : cleanGIF
+      }
+      let _: MIRANote = try await api.post("/notes", body: CreateNoteBody(body: noteText, mediaUrl: uploadedURL, color: "#FFFFFF"))
+      dismiss()
+    } catch {
+      errorMessage = "Note could not be created."
+    }
+  }
+
+  private var canPostNote: Bool {
+    noteText.trimmingCharacters(in: .whitespacesAndNewlines).count >= 2 ||
+      mediaItem != nil ||
+      !gifURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+  }
+
+  private var noteMediaPreview: some View {
+    Group {
+      if let mediaItem {
+        LocalMediaThumb(media: mediaItem, width: UIScreen.main.bounds.width - 64, height: 250)
+      } else if !gifURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        RemoteMediaView(url: gifURL, isVideo: false)
+          .frame(height: 250)
+          .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.large, style: .continuous))
+      }
+    }
+  }
+
+  @MainActor
+  private func loadPickerItem(_ item: PhotosPickerItem?) async {
+    guard let item else { return }
+    isLoadingMedia = true
+    defer {
+      isLoadingMedia = false
+      pickerItem = nil
+    }
+    guard let data = try? await item.loadTransferable(type: Data.self) else { return }
+    let (kind, fileName, mimeType) = pickedMediaKind(from: item.supportedContentTypes, fallbackData: data)
+    mediaItem = MIRAPickedMedia(data: data, kind: kind, fileName: fileName, mimeType: mimeType)
+  }
+}
+
+public struct CreateStoryNativeView: View {
+  let api: MIRAAPIClient
+  @Environment(\.dismiss) private var dismiss
+  @State private var text = ""
+  @State private var mediaItem: MIRAPickedMedia?
+  @State private var pickerItem: PhotosPickerItem?
+  @State private var showCamera = false
   @State private var isPosting = false
   @State private var errorMessage: String?
 
@@ -352,58 +629,204 @@ public struct CreateNoteNativeView: View {
   }
 
   public var body: some View {
-    Form {
-      Section {
-        TextField("What's new?", text: $noteText, axis: .vertical)
-          .lineLimit(6...12)
-        TextField("Photo or GIF URL", text: $mediaURL)
-          .keyboardType(.URL)
-          .textInputAutocapitalization(.never)
-      }
-
-      if let media = mediaPreviewURL {
-        RemoteMediaView(url: media, isVideo: media.isVideoURL)
-          .frame(height: 260)
-          .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.large, style: .continuous))
-      }
-
-      if let errorMessage {
-        Text(errorMessage).foregroundStyle(.red)
-      }
-
-      Button {
-        Task { await submit() }
-      } label: {
+    ZStack {
+      MIRATheme.Color.textPrimary.ignoresSafeArea()
+      VStack(spacing: MIRATheme.Space.md) {
         HStack {
+          Button { dismiss() } label: {
+            Image(systemName: "xmark")
+              .font(.system(size: 24, weight: .regular))
+              .foregroundStyle(.white)
+          }
           Spacer()
-          if isPosting { ProgressView() } else { Text("Post note").fontWeight(.semibold) }
+          Button { showCamera = true } label: {
+            Image(systemName: "camera")
+              .font(.system(size: 22, weight: .semibold))
+              .foregroundStyle(.white)
+          }
+        }
+        .padding(MIRATheme.Space.md)
+
+        ZStack(alignment: .bottomLeading) {
+          if let mediaItem {
+            LocalMediaThumb(media: mediaItem, width: UIScreen.main.bounds.width - 28, height: UIScreen.main.bounds.height * 0.70)
+          } else {
+            RoundedRectangle(cornerRadius: 30, style: .continuous)
+              .fill(MIRATheme.Color.forest)
+              .overlay {
+                VStack(spacing: MIRATheme.Space.md) {
+                  Image(systemName: "camera.viewfinder")
+                    .font(.system(size: 44, weight: .light))
+                  Text("Add a story")
+                    .font(.system(size: 24, weight: .semibold))
+                }
+                .foregroundStyle(.white.opacity(0.9))
+              }
+          }
+
+          TextField("Aa", text: $text, axis: .vertical)
+            .font(.system(size: 30, weight: .semibold))
+            .foregroundStyle(.white)
+            .padding(MIRATheme.Space.lg)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 30, style: .continuous))
+
+        HStack(spacing: MIRATheme.Space.lg) {
+          PhotosPicker(selection: $pickerItem, matching: .any(of: [.images, .videos])) {
+            Image(systemName: "photo.on.rectangle")
+          }
+          Button { showCamera = true } label: {
+            Image(systemName: "camera")
+          }
           Spacer()
+          Button {
+            Task { await submit() }
+          } label: {
+            Text(isPosting ? "Posting..." : "Share story")
+              .font(.system(size: 16, weight: .semibold))
+              .foregroundStyle(MIRATheme.Color.textPrimary)
+              .frame(height: 48)
+              .padding(.horizontal, MIRATheme.Space.lg)
+              .background(.white)
+              .clipShape(Capsule())
+          }
+          .disabled(isPosting || (mediaItem == nil && text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
+        }
+        .font(.system(size: 24, weight: .semibold))
+        .foregroundStyle(.white)
+        .padding(.horizontal, MIRATheme.Space.md)
+
+        if let errorMessage {
+          Text(errorMessage)
+            .foregroundStyle(.white)
+            .font(.system(size: 13, weight: .semibold))
         }
       }
-      .disabled(isPosting || (noteText.trimmingCharacters(in: .whitespacesAndNewlines).count < 2 && mediaURL.isEmpty))
     }
-    .navigationTitle("New note")
-  }
-
-  private var mediaPreviewURL: String? {
-    let clean = mediaURL.trimmingCharacters(in: .whitespacesAndNewlines)
-    return clean.isEmpty ? nil : clean
+    .toolbar(.hidden, for: .navigationBar)
+    .onChange(of: pickerItem) { _, newItem in
+      Task { await loadPickerItem(newItem) }
+    }
+    .sheet(isPresented: $showCamera) {
+      MIRACameraCaptureView(allowsVideo: true) { media in
+        mediaItem = media
+      }
+      .ignoresSafeArea()
+    }
   }
 
   private func submit() async {
     isPosting = true
     defer { isPosting = false }
     do {
-      let _: MIRANote = try await api.post("/notes", body: CreateNoteBody(body: noteText, mediaUrl: mediaPreviewURL, color: "#FFFFFF"))
+      let uploaded: String?
+      if let mediaItem {
+        uploaded = try await MIRAMediaUploadService(api: api).upload(mediaItem)
+      } else {
+        uploaded = nil
+      }
+      let _: MIRAStatusPreview = try await api.post(
+        "/statuses",
+        body: CreateStatusBody(content: text, image: uploaded, backgroundColor: "#1B4332", textColor: "#FFFFFF", visibility: "public")
+      )
       dismiss()
     } catch {
-      errorMessage = "Note could not be created."
+      errorMessage = "Story could not be posted."
+    }
+  }
+
+  @MainActor
+  private func loadPickerItem(_ item: PhotosPickerItem?) async {
+    guard let item, let data = try? await item.loadTransferable(type: Data.self) else { return }
+    let (kind, fileName, mimeType) = pickedMediaKind(from: item.supportedContentTypes, fallbackData: data)
+    mediaItem = MIRAPickedMedia(data: data, kind: kind, fileName: fileName, mimeType: mimeType)
+    pickerItem = nil
+  }
+}
+
+private func composerHeader(_ title: String) -> some View {
+  HStack {
+    Text(title)
+      .font(.system(size: 24, weight: .semibold))
+      .foregroundStyle(MIRATheme.Color.textPrimary)
+    Spacer()
+  }
+}
+
+private func composerTool(_ title: String, systemImage: String) -> some View {
+  HStack(spacing: 8) {
+    Image(systemName: systemImage)
+    Text(title)
+  }
+  .font(.system(size: 14, weight: .semibold))
+  .foregroundStyle(MIRATheme.Color.textPrimary)
+  .padding(.horizontal, MIRATheme.Space.md)
+  .frame(height: 42)
+  .background(MIRATheme.Color.surfaceSoft)
+  .clipShape(Capsule())
+}
+
+private struct LocalMediaThumb: View {
+  let media: MIRAPickedMedia
+  var width: CGFloat = 96
+  var height: CGFloat = 96
+
+  var body: some View {
+    ZStack {
+      if media.kind == .image, let image = UIImage(data: media.data) {
+        Image(uiImage: image)
+          .resizable()
+          .scaledToFill()
+      } else {
+        MIRATheme.Color.surfaceSoft
+        Image(systemName: "play.fill")
+          .font(.system(size: 26, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.forest)
+      }
+    }
+    .frame(width: width, height: height)
+    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+  }
+}
+
+private struct ComposerPreviewSheet: View {
+  let title: String
+  let bodyText: String
+  let mediaItems: [MIRAPickedMedia]
+  @Environment(\.dismiss) private var dismiss
+
+  var body: some View {
+    NavigationStack {
+      ScrollView {
+        VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
+          if let first = mediaItems.first {
+            LocalMediaThumb(media: first, width: UIScreen.main.bounds.width - 32, height: 420)
+          }
+          if !title.isEmpty {
+            Text(title)
+              .font(.system(size: 24, weight: .semibold))
+          }
+          if !bodyText.isEmpty {
+            Text(bodyText)
+              .font(.system(size: 16, weight: .regular))
+              .foregroundStyle(MIRATheme.Color.textSecondary)
+          }
+        }
+        .padding(MIRATheme.Space.md)
+      }
+      .background(MIRATheme.Color.appBackground)
+      .navigationTitle("Preview")
+      .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
     }
   }
 }
 
 public struct SettingsNativeView: View {
-  public init() {}
+  private let authSession: MIRAAuthSession?
+
+  public init(authSession: MIRAAuthSession? = nil) {
+    self.authSession = authSession
+  }
 
   public var body: some View {
     List {
@@ -411,6 +834,13 @@ public struct SettingsNativeView: View {
         Label("Privacy", systemImage: "lock")
         Label("Notifications", systemImage: "bell")
         Label("Security", systemImage: "shield")
+        if let authSession {
+          Button(role: .destructive) {
+            authSession.logout()
+          } label: {
+            Label("Log out", systemImage: "rectangle.portrait.and.arrow.right")
+          }
+        }
       }
       Section("Support") {
         Label("Help", systemImage: "questionmark.circle")

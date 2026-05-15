@@ -20,8 +20,10 @@ final class ProfileNativeModel: ObservableObject {
 
 public struct ProfileNativeView: View {
   @StateObject private var model: ProfileNativeModel
+  private let authSession: MIRAAuthSession?
 
-  public init(api: MIRAAPIClient) {
+  public init(api: MIRAAPIClient, authSession: MIRAAuthSession? = nil) {
+    self.authSession = authSession
     _model = StateObject(wrappedValue: ProfileNativeModel(api: api))
   }
 
@@ -52,7 +54,7 @@ public struct ProfileNativeView: View {
           NavigationLink(destination: WalletNativeView(api: model.api)) {
             Image(systemName: "wallet.pass")
           }
-          NavigationLink(destination: SettingsNativeView()) {
+          NavigationLink(destination: SettingsNativeView(authSession: authSession)) {
             Image(systemName: "gearshape")
           }
         }

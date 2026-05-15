@@ -120,7 +120,10 @@ public struct DiscoverNativeView: View {
   private var storyRail: some View {
     ScrollView(.horizontal, showsIndicators: false) {
       HStack(spacing: MIRATheme.Space.md) {
-        StoryBubbleNative(name: "You", avatarURL: nil, hasUnviewed: false, isAdd: true)
+        NavigationLink(destination: CreateStoryNativeView(api: model.api)) {
+          StoryBubbleNative(name: "You", avatarURL: nil, hasUnviewed: false, isAdd: true)
+        }
+        .buttonStyle(.plain)
 
         if model.isLoading && model.stories.isEmpty {
           ForEach(0..<5, id: \.self) { index in

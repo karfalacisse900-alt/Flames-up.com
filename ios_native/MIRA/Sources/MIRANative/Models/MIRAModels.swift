@@ -199,6 +199,52 @@ public struct MIRANotification: Decodable, Identifiable, Hashable {
   public let createdAt: String?
 }
 
+public struct MIRAAuthResponse: Decodable, Hashable {
+  public let accessToken: String
+  public let tokenType: String?
+  public let user: MIRAUser
+}
+
+public struct MIRAAuthLoginBody: Encodable {
+  public let email: String
+  public let password: String
+}
+
+public struct MIRAAuthRegisterBody: Encodable {
+  public let email: String
+  public let password: String
+  public let username: String
+  public let fullName: String
+}
+
+public struct MIRAAppleOAuthBody: Encodable {
+  public let idToken: String
+  public let email: String?
+  public let fullName: String?
+  public let appleUser: String?
+}
+
+public struct MIRAUploadImageBody: Encodable {
+  public let image: String
+  public let filename: String
+}
+
+public struct MIRAMediaUploadResponse: Decodable, Hashable {
+  public let url: String?
+  public let id: String?
+  public let videoUid: String?
+  public let uploadUrl: String?
+  public let source: String?
+}
+
+public struct MIRAStreamPlaybackInfo: Decodable, Hashable {
+  public let uid: String?
+  public let hls: String?
+  public let dash: String?
+  public let thumbnail: String?
+  public let ready: Bool?
+}
+
 public struct MIRALibraryCollection: Decodable, Identifiable, Hashable {
   public var id: String { collection ?? name ?? "collection" }
   public let collection: String?
@@ -228,6 +274,14 @@ public struct CreateNoteBody: Encodable {
   public let body: String
   public let mediaUrl: String?
   public let color: String?
+}
+
+public struct CreateStatusBody: Encodable {
+  public let content: String
+  public let image: String?
+  public let backgroundColor: String
+  public let textColor: String
+  public let visibility: String
 }
 
 public struct SendMessageBody: Encodable {

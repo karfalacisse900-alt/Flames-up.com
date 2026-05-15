@@ -151,8 +151,8 @@ public struct RemoteMediaView: View {
 
   public var body: some View {
     Group {
-      if isVideo, let videoURL = URL(string: url) {
-        VideoPlayer(player: AVPlayer(url: videoURL))
+      if isVideo {
+        MIRAResolvedVideoPlayer(url: url)
       } else {
         AsyncImage(url: URL(string: url)) { phase in
           switch phase {
@@ -175,6 +175,98 @@ public struct RemoteMediaView: View {
       Image(systemName: "photo")
         .font(.system(size: 28, weight: .light))
         .foregroundStyle(MIRATheme.Color.textMuted)
+    }
+  }
+}
+
+private struct MIRAResolvedVideoPlayer: View {
+  let url: String
+  @State private var player: AVPlayer?
+  @State private var thumbnailURL: String?
+  @State private var failed = false
+
+  var body: some View {
+    ZStack {
+      if let player {
+        VideoPlayer(player: player)
+          .onAppear { player.play() }
+          .onDisappear { player.pause() }
+      } else if let thumbnailURL {
+        AsyncImage(url: URL(string: thumbnailURL)) { phase in
+          switch phase {
+          case .success(let image):
+            image.resizable().scaledToFill()
+          default:
+            placeholder
+          }
+        }
+      } else {
+        placeholder
+      }
+
+      if failed {
+        VStack(spacing: 8) {
+          Image(systemName: "play.slash")
+          Text("Video is processing")
+            .font(.system(size: 13, weight: .semibold))
+        }
+        .foregroundStyle(MIRATheme.Color.textSecondary)
+        .padding(12)
+        .background(.ultraThinMaterial)
+        .clipShape(Capsule())
+      }
+    }
+    .task(id: url) { await configurePlayer() }
+  }
+
+  private var placeholder: some View {
+    ZStack {
+      MIRATheme.Color.surfaceSoft
+      ProgressView().tint(MIRATheme.Color.textMuted)
+    }
+  }
+
+  @MainActor
+  private func configurePlayer() async {
+    failed = false
+    thumbnailURL = nil
+    player = nil
+
+    if let directURL = URL(string: url), let scheme = directURL.scheme, scheme.hasPrefix("http") || scheme == "file" {
+      let avPlayer = AVPlayer(url: directURL)
+      player = avPlayer
+      avPlayer.play()
+      return
+    }
+
+    guard url.lowercased().hasPrefix("cfstream:") else {
+      failed = true
+      return
+    }
+
+    let uid = String(url.dropFirst("cfstream:".count))
+    guard let endpoint = URL(string: "https://api.flames-up.com/api/stream/video/\(uid)") else {
+      failed = true
+      return
+    }
+
+    do {
+      let (data, response) = try await URLSession.shared.data(from: endpoint)
+      let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+      guard (200..<300).contains(status) else { throw MIRAAPIError.badStatus(status) }
+      let decoder = JSONDecoder()
+      decoder.keyDecodingStrategy = .convertFromSnakeCase
+      let info = try decoder.decode(MIRAStreamPlaybackInfo.self, from: data)
+      thumbnailURL = info.thumbnail
+      if let hls = info.hls, let hlsURL = URL(string: hls), info.ready != false {
+        let avPlayer = AVPlayer(url: hlsURL)
+        player = avPlayer
+        avPlayer.play()
+      } else {
+        failed = true
+      }
+    } catch {
+      failed = true
     }
   }
 }

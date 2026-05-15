@@ -20,12 +20,14 @@ public enum MIRAAPIError: Error, LocalizedError {
   case badURL
   case badStatus(Int)
   case decodingFailed
+  case emptyResponse
 
   public var errorDescription: String? {
     switch self {
     case .badURL: return "The request URL is not valid."
     case .badStatus: return "The server could not finish this request."
     case .decodingFailed: return "The app could not read the server response."
+    case .emptyResponse: return "The server returned an empty response."
     }
   }
 }
@@ -66,6 +68,49 @@ public final class MIRAAPIClient {
     try await request(path, method: "DELETE", body: Optional<Data>.none)
   }
 
+  public func uploadMultipart<T: Decodable>(
+    _ path: String,
+    fieldName: String = "file",
+    fileName: String,
+    mimeType: String,
+    data: Data
+  ) async throws -> T {
+    let url = try makeURL(path)
+    return try await uploadMultipart(to: url, fieldName: fieldName, fileName: fileName, mimeType: mimeType, data: data, authorize: true)
+  }
+
+  public func uploadMultipart<T: Decodable>(
+    to absoluteURL: URL,
+    fieldName: String = "file",
+    fileName: String,
+    mimeType: String,
+    data: Data,
+    authorize: Bool = false
+  ) async throws -> T {
+    var request = URLRequest(url: absoluteURL)
+    let boundary = "mira-\(UUID().uuidString)"
+    request.httpMethod = "POST"
+    request.timeoutInterval = 120
+    request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+    request.httpBody = multipartBody(boundary: boundary, fieldName: fieldName, fileName: fileName, mimeType: mimeType, data: data)
+    if authorize, let token = await sessionProvider?.accessToken(), !token.isEmpty {
+      request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+    }
+
+    let (responseData, response) = try await session.data(for: request)
+    let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+    guard (200..<300).contains(status) else { throw MIRAAPIError.badStatus(status) }
+    if T.self == EmptyResponse.self {
+      return EmptyResponse() as! T
+    }
+    guard !responseData.isEmpty else { throw MIRAAPIError.emptyResponse }
+    do {
+      return try decoder.decode(T.self, from: responseData)
+    } catch {
+      throw MIRAAPIError.decodingFailed
+    }
+  }
+
   private func request<T: Decodable>(_ path: String, method: String, body: Data?) async throws -> T {
     let url = try makeURL(path)
     var request = URLRequest(url: url)
@@ -100,6 +145,16 @@ public final class MIRAAPIClient {
       throw MIRAAPIError.badURL
     }
     return url
+  }
+
+  private func multipartBody(boundary: String, fieldName: String, fileName: String, mimeType: String, data: Data) -> Data {
+    var body = Data()
+    body.append("--\(boundary)\r\n".data(using: .utf8)!)
+    body.append("Content-Disposition: form-data; name=\"\(fieldName)\"; filename=\"\(fileName)\"\r\n".data(using: .utf8)!)
+    body.append("Content-Type: \(mimeType)\r\n\r\n".data(using: .utf8)!)
+    body.append(data)
+    body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
+    return body
   }
 }
 
