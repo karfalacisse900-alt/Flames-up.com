@@ -16,7 +16,7 @@ env:
 jobs:
   build-testflight:
     name: Build native SwiftUI iOS app and upload to TestFlight
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 60
 
     steps:
