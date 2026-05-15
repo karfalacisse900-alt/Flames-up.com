@@ -35,6 +35,9 @@ public struct MIRAPost: Decodable, Identifiable, Hashable {
   public let isLiked: Bool?
   public let isSaved: Bool?
   public let isFollowing: Bool?
+  public let saved: FlexibleBool?
+  public let following: FlexibleBool?
+  public let followed: FlexibleBool?
 
   public var titleText: String {
     let raw = (caption?.isEmpty == false ? caption : content) ?? ""
@@ -54,6 +57,49 @@ public struct MIRAPost: Decodable, Identifiable, Hashable {
     urls.append(contentsOf: images?.values ?? [])
     var seen = Set<String>()
     return urls.filter { seen.insert($0).inserted }
+  }
+
+  public var viewerSaved: Bool {
+    if let isSaved { return isSaved }
+    return saved?.value == true
+  }
+
+  public var viewerFollowing: Bool {
+    if let isFollowing { return isFollowing }
+    return following?.value == true || followed?.value == true
+  }
+
+  public func updating(
+    liked: Bool? = nil,
+    likesCount: Int? = nil,
+    saved: Bool? = nil,
+    savesCount: Int? = nil,
+    following: Bool? = nil
+  ) -> MIRAPost {
+    MIRAPost(
+      id: id,
+      userId: userId,
+      userUsername: userUsername,
+      userFullName: userFullName,
+      userProfileImage: userProfileImage,
+      content: content,
+      caption: caption,
+      image: image,
+      images: images,
+      mediaTypes: mediaTypes,
+      createdAt: createdAt,
+      likesCount: likesCount ?? self.likesCount,
+      commentsCount: commentsCount,
+      savesCount: savesCount ?? self.savesCount,
+      sharesCount: sharesCount,
+      viewsCount: viewsCount,
+      isLiked: liked ?? isLiked,
+      isSaved: saved ?? isSaved,
+      isFollowing: following ?? isFollowing,
+      saved: self.saved,
+      following: self.following,
+      followed: self.followed
+    )
   }
 }
 
@@ -197,6 +243,34 @@ public struct TypingBody: Encodable {
 public struct NoteInteractionBody: Encodable {
   public let kind: String
   public let value: String?
+}
+
+public struct FollowBody: Encodable {
+  public let following: Bool
+}
+
+public struct LikeBody: Encodable {
+  public let liked: Bool
+}
+
+public struct SaveCollectionBody: Encodable {
+  public let collection: String
+}
+
+public struct FollowResponse: Decodable {
+  public let following: Bool?
+  public let followingCount: Int?
+  public let followersCount: Int?
+}
+
+public struct PostLikeResponse: Decodable {
+  public let liked: Bool?
+  public let likesCount: Int?
+}
+
+public struct PostSaveResponse: Decodable {
+  public let saved: Bool?
+  public let savesCount: Int?
 }
 
 public struct NoteCommentBody: Encodable {

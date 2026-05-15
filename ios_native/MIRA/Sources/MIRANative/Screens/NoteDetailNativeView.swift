@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 @MainActor
 final class NoteDetailNativeModel: ObservableObject {
@@ -25,6 +26,11 @@ final class NoteDetailNativeModel: ObservableObject {
       comments.append(comment)
     }
   }
+
+  func followAuthor() async {
+    guard let userId = note.user?.id, !userId.isEmpty else { return }
+    let _: FollowResponse? = try? await api.post("/users/\(userId)/follow", body: FollowBody(following: true))
+  }
 }
 
 public struct NoteDetailNativeView: View {
@@ -40,24 +46,29 @@ public struct NoteDetailNativeView: View {
       ScrollView {
         VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
           HStack(spacing: MIRATheme.Space.sm) {
-            RemoteAvatar(url: model.note.user?.profileImage, size: 44)
+            Button(action: { Task { await model.followAuthor() } }) {
+              MIRAFollowAvatar(url: model.note.user?.profileImage, size: 44)
+            }
+            .buttonStyle(.plain)
+
             Text(model.note.user?.displayName ?? "mira")
               .font(.system(size: 20, weight: .semibold))
             Spacer()
-            MIRAIconButton(systemImage: "plus") {}
             MIRAIconButton(systemImage: "ellipsis") {}
           }
 
           Text(model.note.body ?? "")
-            .font(.system(size: 22, weight: .semibold))
+            .font(.system(size: 20, weight: .semibold))
             .foregroundStyle(MIRATheme.Color.textPrimary)
             .lineSpacing(2)
 
           if let media = model.note.mediaUrl, !media.isEmpty {
-            RemoteMediaView(url: media, isVideo: media.isVideoURL)
-              .frame(maxWidth: .infinity)
-              .aspectRatio(4.0 / 5.0, contentMode: .fit)
-              .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.large, style: .continuous))
+            MIRAAdaptiveMediaView(
+              urls: [media],
+              cornerRadius: MIRATheme.Radius.large,
+              maxSingleImageHeight: min(UIScreen.main.bounds.width * 1.05, 500),
+              carouselHeight: min(UIScreen.main.bounds.width * 1.05, 500)
+            )
           }
 
           HStack(spacing: MIRATheme.Space.lg) {

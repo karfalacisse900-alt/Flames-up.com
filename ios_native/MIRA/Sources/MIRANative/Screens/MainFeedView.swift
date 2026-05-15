@@ -26,6 +26,71 @@ final class MainFeedModel: ObservableObject {
     }
   }
 
+  func toggleLike(_ post: MIRAPost) async {
+    guard let index = posts.firstIndex(where: { $0.id == post.id }) else { return }
+    let previous = posts[index]
+    let nextLiked = !(previous.isLiked ?? false)
+    let nextCount = max(0, (previous.likesCount ?? 0) + (nextLiked ? 1 : -1))
+    posts[index] = previous.updating(liked: nextLiked, likesCount: nextCount)
+
+    do {
+      let response: PostLikeResponse = try await api.post("/posts/\(post.id)/like", body: LikeBody(liked: nextLiked))
+      if let currentIndex = posts.firstIndex(where: { $0.id == post.id }) {
+        posts[currentIndex] = posts[currentIndex].updating(
+          liked: response.liked ?? nextLiked,
+          likesCount: response.likesCount ?? nextCount
+        )
+      }
+    } catch {
+      if let currentIndex = posts.firstIndex(where: { $0.id == post.id }) {
+        posts[currentIndex] = previous
+      }
+    }
+  }
+
+  func toggleSave(_ post: MIRAPost) async {
+    guard let index = posts.firstIndex(where: { $0.id == post.id }) else { return }
+    let previous = posts[index]
+    let nextSaved = !previous.viewerSaved
+    let nextCount = max(0, (previous.savesCount ?? 0) + (nextSaved ? 1 : -1))
+    posts[index] = previous.updating(saved: nextSaved, savesCount: nextCount)
+
+    do {
+      let response: PostSaveResponse
+      if nextSaved {
+        response = try await api.post("/library/save/\(post.id)", body: SaveCollectionBody(collection: "My Library"))
+      } else {
+        response = try await api.delete("/library/save/\(post.id)")
+      }
+      if let currentIndex = posts.firstIndex(where: { $0.id == post.id }) {
+        posts[currentIndex] = posts[currentIndex].updating(
+          saved: response.saved ?? nextSaved,
+          savesCount: response.savesCount ?? nextCount
+        )
+      }
+    } catch {
+      if let currentIndex = posts.firstIndex(where: { $0.id == post.id }) {
+        posts[currentIndex] = previous
+      }
+    }
+  }
+
+  func toggleFollowAuthor(_ post: MIRAPost) async {
+    guard let userId = post.userId, !userId.isEmpty else { return }
+    let previous = posts
+    let current = posts.first(where: { $0.id == post.id }) ?? post
+    let nextFollowing = !current.viewerFollowing
+    posts = posts.map { $0.userId == userId ? $0.updating(following: nextFollowing) : $0 }
+
+    do {
+      let response: FollowResponse = try await api.post("/users/\(userId)/follow", body: FollowBody(following: nextFollowing))
+      let serverFollowing = response.following ?? nextFollowing
+      posts = posts.map { $0.userId == userId ? $0.updating(following: serverFollowing) : $0 }
+    } catch {
+      posts = previous
+    }
+  }
+
   private func nativeScore(_ post: MIRAPost) -> Double {
     MIRANativeEngine.scoreFeedItem(
       likes: Double(post.likesCount ?? 0),
@@ -47,6 +112,7 @@ final class MainFeedModel: ObservableObject {
 
 public struct MainFeedView: View {
   @StateObject private var model: MainFeedModel
+  @State private var selectedPost: MIRAPost?
 
   public init(api: MIRAAPIClient) {
     _model = StateObject(wrappedValue: MainFeedModel(api: api))
@@ -66,10 +132,13 @@ public struct MainFeedView: View {
                 .padding(.top, 80)
             } else {
               ForEach(model.posts) { post in
-                NavigationLink(value: post) {
-                  MainNativePostCard(post: post)
-                }
-                .buttonStyle(.plain)
+                MainNativePostCard(
+                  post: post,
+                  onOpen: { selectedPost = post },
+                  onLike: { Task { await model.toggleLike(post) } },
+                  onSave: { Task { await model.toggleSave(post) } },
+                  onFollow: { Task { await model.toggleFollowAuthor(post) } }
+                )
               }
             }
           }
@@ -78,7 +147,7 @@ public struct MainFeedView: View {
       }
       .background(MIRATheme.Color.appBackground)
       .toolbar(.hidden, for: .navigationBar)
-      .navigationDestination(for: MIRAPost.self) { post in
+      .navigationDestination(item: $selectedPost) { post in
         PostDetailNativeView(post: post, api: model.api)
       }
       .task { await model.load() }
@@ -110,20 +179,30 @@ public struct MainFeedView: View {
 
 private struct MainNativePostCard: View {
   let post: MIRAPost
+  let onOpen: () -> Void
+  let onLike: () -> Void
+  let onSave: () -> Void
+  let onFollow: () -> Void
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
       postHeader
 
       if !post.mediaURLs.isEmpty {
-        MediaCarouselNative(urls: post.mediaURLs)
+        MIRAAdaptiveMediaView(
+          urls: post.mediaURLs,
+          maxSingleImageHeight: min(UIScreen.main.bounds.width * 1.05, 510),
+          carouselHeight: min(UIScreen.main.bounds.width * 1.06, 520)
+        )
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onOpen)
       }
 
       HStack(spacing: MIRATheme.Space.md) {
-        CompactPostAction(systemImage: post.isLiked == true ? "heart.fill" : "heart", value: post.likesCount ?? 0) {}
-        CompactPostAction(systemImage: post.isSaved == true ? "bookmark.fill" : "bookmark", value: post.savesCount ?? 0) {}
+        CompactPostAction(systemImage: post.isLiked == true ? "heart.fill" : "heart", value: post.likesCount ?? 0, action: onLike)
+        CompactPostAction(systemImage: post.viewerSaved ? "bookmark.fill" : "bookmark", value: post.savesCount ?? 0, action: onSave)
         Spacer()
-        CompactTextAction("View") {}
+        CompactTextAction("View", action: onOpen)
         CompactTextAction("Share", systemImage: "paperplane") {}
       }
       .padding(.horizontal, MIRATheme.Space.md)
@@ -135,6 +214,8 @@ private struct MainNativePostCard: View {
           .font(.system(size: 18, weight: .semibold))
           .foregroundStyle(MIRATheme.Color.textPrimary)
           .lineLimit(2)
+          .contentShape(Rectangle())
+          .onTapGesture(perform: onOpen)
           .padding(.horizontal, MIRATheme.Space.md)
           .padding(.bottom, post.bodyText.isEmpty ? MIRATheme.Space.md : MIRATheme.Space.xs)
       }
@@ -144,6 +225,8 @@ private struct MainNativePostCard: View {
           .font(.system(size: 14, weight: .regular))
           .foregroundStyle(MIRATheme.Color.textSecondary)
           .lineLimit(3)
+          .contentShape(Rectangle())
+          .onTapGesture(perform: onOpen)
           .padding(.horizontal, MIRATheme.Space.md)
           .padding(.bottom, MIRATheme.Space.md)
       }
@@ -156,28 +239,16 @@ private struct MainNativePostCard: View {
 
   private var postHeader: some View {
     HStack(spacing: MIRATheme.Space.sm) {
-      ZStack(alignment: .bottomTrailing) {
-        RemoteAvatar(url: post.userProfileImage, size: 42)
-        Circle()
-          .fill(MIRATheme.Color.forest)
-          .frame(width: 19, height: 19)
-          .overlay(Image(systemName: "plus").font(.system(size: 10, weight: .bold)).foregroundStyle(.white))
-          .overlay(Circle().stroke(MIRATheme.Color.surface, lineWidth: 2))
-          .offset(x: 2, y: 2)
+      Button(action: onFollow) {
+        MIRAFollowAvatar(url: post.userProfileImage, size: 42, isFollowing: post.viewerFollowing)
       }
+      .buttonStyle(.plain)
+
       Text(post.userUsername ?? post.userFullName ?? "mira")
         .font(.system(size: 16, weight: .semibold))
         .foregroundStyle(MIRATheme.Color.textPrimary)
         .lineLimit(1)
       Spacer()
-      Button("Follow") {}
-        .font(.system(size: 14, weight: .semibold))
-        .foregroundStyle(MIRATheme.Color.forest)
-        .frame(height: 36)
-        .padding(.horizontal, MIRATheme.Space.md)
-        .background(MIRATheme.Color.surface)
-        .clipShape(Capsule())
-        .overlay(Capsule().stroke(MIRATheme.Color.hairline, lineWidth: 1))
     }
     .padding(.horizontal, MIRATheme.Space.md)
     .padding(.vertical, MIRATheme.Space.sm)

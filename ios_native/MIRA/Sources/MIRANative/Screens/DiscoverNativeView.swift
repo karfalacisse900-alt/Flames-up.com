@@ -75,8 +75,8 @@ public struct DiscoverNativeView: View {
   }
 
   private var notesSection: some View {
-    let width = min(max(UIScreen.main.bounds.width * 0.76, 250), min(304, UIScreen.main.bounds.width - 56))
-    let height = width * 1.25
+    let width = min(max(UIScreen.main.bounds.width * 0.68, 228), min(278, UIScreen.main.bounds.width - 78))
+    let height = width * 1.18
 
     return VStack(alignment: .leading, spacing: MIRATheme.Space.sm) {
       HStack {
@@ -97,11 +97,6 @@ public struct DiscoverNativeView: View {
 
       ScrollView(.horizontal, showsIndicators: false) {
         HStack(spacing: MIRATheme.Space.md) {
-          NavigationLink(destination: CreateNoteNativeView(api: model.api)) {
-            CreateNoteCardNative(width: width, height: height)
-          }
-          .buttonStyle(.plain)
-
           if model.isLoading && model.notes.isEmpty {
             ForEach(0..<2, id: \.self) { _ in
               NoteCardSkeletonNative(width: width, height: height)
@@ -193,24 +188,17 @@ private struct NoteCardNative: View {
   let height: CGFloat
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 8) {
-      HStack(spacing: 9) {
-        ZStack(alignment: .bottomTrailing) {
-          RemoteAvatar(url: note.user?.profileImage, size: 40)
-          Circle()
-            .fill(MIRATheme.Color.forest)
-            .frame(width: 18, height: 18)
-            .overlay(Image(systemName: "plus").font(.system(size: 9, weight: .bold)).foregroundStyle(.white))
-            .overlay(Circle().stroke(MIRATheme.Color.surfaceRaised, lineWidth: 2))
-            .offset(x: 2, y: 2)
-        }
+    VStack(alignment: .leading, spacing: 7) {
+      HStack(spacing: 8) {
+        MIRAFollowAvatar(url: note.user?.profileImage, size: 36)
         HStack(spacing: 5) {
           Text(note.user?.displayName ?? "mira")
-            .font(.system(size: 16, weight: .semibold))
+            .font(.system(size: 14, weight: .semibold))
             .foregroundStyle(MIRATheme.Color.textPrimary)
             .lineLimit(1)
+            .minimumScaleFactor(0.82)
           Text(noteAge(note.createdAt))
-            .font(.system(size: 14, weight: .semibold))
+            .font(.system(size: 12, weight: .semibold))
             .foregroundStyle(MIRATheme.Color.textMuted)
         }
         Spacer(minLength: 4)
@@ -220,16 +208,16 @@ private struct NoteCardNative: View {
       }
 
       Text(note.body ?? "New note")
-        .font(.system(size: 17, weight: .semibold))
+        .font(.system(size: 15, weight: .semibold))
         .lineSpacing(2)
         .foregroundStyle(MIRATheme.Color.textPrimary)
-        .lineLimit(note.mediaUrl?.isEmpty == false ? 2 : 5)
+        .lineLimit(note.mediaUrl?.isEmpty == false ? 2 : 4)
 
       if let media = note.mediaUrl, !media.isEmpty {
         RemoteMediaView(url: media, isVideo: media.isVideoURL)
           .frame(maxWidth: .infinity)
-          .frame(height: min(width * 0.62, height * 0.46))
-          .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+          .frame(height: min(width * 0.70, height * 0.50))
+          .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
       } else {
         Spacer(minLength: 0)
       }
@@ -242,11 +230,11 @@ private struct NoteCardNative: View {
       }
       .padding(.top, 2)
     }
-    .padding(14)
+    .padding(12)
     .frame(width: width, height: height, alignment: .topLeading)
     .background(MIRATheme.Color.surfaceRaised)
-    .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-    .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).stroke(MIRATheme.Color.hairline, lineWidth: 1))
+    .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+    .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(MIRATheme.Color.hairline, lineWidth: 1))
   }
 }
 
@@ -347,12 +335,12 @@ private struct NoteActionNative: View {
   var body: some View {
     HStack(spacing: 5) {
       Image(systemName: systemImage)
-        .font(.system(size: 20, weight: .regular))
+        .font(.system(size: 18, weight: .regular))
       Text(compact(value))
-        .font(.system(size: 14, weight: .semibold))
+        .font(.system(size: 13, weight: .semibold))
     }
     .foregroundStyle(MIRATheme.Color.textSecondary)
-    .frame(minHeight: 34)
+    .frame(minHeight: 32)
   }
 }
 

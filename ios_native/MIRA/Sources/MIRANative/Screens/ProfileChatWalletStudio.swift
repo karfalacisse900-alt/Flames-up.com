@@ -128,7 +128,7 @@ public struct ChatNativeView: View {
               if let peerId = conversation.otherUserId {
                 NavigationLink(destination: ConversationNativeView(peerId: peerId, title: conversation.displayName, api: model.api)) {
                   HStack(spacing: MIRATheme.Space.sm) {
-                    RemoteAvatar(url: conversation.otherProfileImage, size: 48)
+                    MIRAFollowAvatar(url: conversation.otherProfileImage, size: 48)
                     VStack(alignment: .leading, spacing: 4) {
                       Text(conversation.displayName)
                         .font(.system(size: 16, weight: .semibold))
