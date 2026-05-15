@@ -69,6 +69,24 @@ public struct MIRANote: Decodable, Identifiable, Hashable {
   public let user: MIRAUser?
 }
 
+public struct MIRAStatusPreview: Decodable, Identifiable, Hashable {
+  public let id: String
+}
+
+public struct MIRAStoryGroup: Decodable, Identifiable, Hashable {
+  public var id: String { userId }
+  public let userId: String
+  public let userUsername: String?
+  public let userFullName: String?
+  public let userProfileImage: String?
+  public let hasUnviewed: Bool?
+  public let statuses: [MIRAStatusPreview]?
+
+  public var displayName: String {
+    userFullName?.isEmpty == false ? userFullName! : (userUsername?.isEmpty == false ? userUsername! : "Story")
+  }
+}
+
 public struct MIRAComment: Decodable, Identifiable, Hashable {
   public let id: String
   public let content: String?

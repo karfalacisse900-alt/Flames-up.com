@@ -47,6 +47,23 @@ public struct MIRAIconButton: View {
   }
 }
 
+public struct MIRAHeaderCircleButton: View {
+  let systemImage: String
+
+  public init(systemImage: String) {
+    self.systemImage = systemImage
+  }
+
+  public var body: some View {
+    Image(systemName: systemImage)
+      .font(.system(size: 17, weight: .semibold))
+      .foregroundStyle(MIRATheme.Color.textPrimary)
+      .frame(width: 40, height: 40)
+      .background(MIRATheme.Color.surfaceSoft)
+      .clipShape(Circle())
+  }
+}
+
 public struct MIRAEmptyState: View {
   let title: String
   let message: String

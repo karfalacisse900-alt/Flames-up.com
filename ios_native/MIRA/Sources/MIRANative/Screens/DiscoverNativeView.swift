@@ -1,8 +1,10 @@
 import SwiftUI
+import UIKit
 
 @MainActor
 final class DiscoverNativeModel: ObservableObject {
   @Published var notes: [MIRANote] = []
+  @Published var stories: [MIRAStoryGroup] = []
   @Published var isLoading = false
   let api: MIRAAPIClient
 
@@ -11,13 +13,11 @@ final class DiscoverNativeModel: ObservableObject {
   }
 
   func load() async {
-    isLoading = notes.isEmpty
+    isLoading = notes.isEmpty && stories.isEmpty
     defer { isLoading = false }
-    do {
-      notes = try await api.get("/notes?limit=12")
-    } catch {
-      notes = []
-    }
+    notes = (try? await api.get("/notes?limit=14")) ?? []
+    let loadedStories: [MIRAStoryGroup] = (try? await api.get("/statuses")) ?? []
+    stories = loadedStories.filter { ($0.statuses?.isEmpty == false) }
   }
 }
 
@@ -30,110 +30,344 @@ public struct DiscoverNativeView: View {
 
   public var body: some View {
     NavigationStack {
-      ScrollView {
-        VStack(alignment: .leading, spacing: MIRATheme.Space.xl) {
-          storyRail
+      VStack(spacing: 0) {
+        discoverHeader
 
-          Text("Notes")
-            .font(.system(size: 24, weight: .semibold))
-            .foregroundStyle(MIRATheme.Color.textPrimary)
-            .padding(.horizontal, MIRATheme.Space.md)
+        ScrollView {
+          VStack(alignment: .leading, spacing: MIRATheme.Space.lg) {
+            storyRail
 
-          if model.notes.isEmpty && !model.isLoading {
-            MIRAEmptyState(title: "No notes yet", message: "Short visual notes will show here.", systemImage: "text.bubble")
-          } else {
-            ScrollView(.horizontal, showsIndicators: false) {
-              HStack(spacing: MIRATheme.Space.md) {
-                ForEach(model.notes) { note in
-                  NavigationLink(value: note) {
-                    NoteCardNative(note: note)
-                  }
-                  .buttonStyle(.plain)
-                }
-              }
-              .padding(.horizontal, MIRATheme.Space.md)
-              .padding(.bottom, MIRATheme.Space.md)
-            }
+            notesSection
           }
+          .padding(.top, MIRATheme.Space.xs)
+          .padding(.bottom, MIRATheme.Space.xxl)
         }
       }
       .background(MIRATheme.Color.appBackground)
-      .navigationTitle("Discover")
-      .toolbar {
-        ToolbarItemGroup(placement: .topBarTrailing) {
-          NavigationLink(destination: SearchUsersNativeView(api: model.api)) {
-            Image(systemName: "magnifyingglass")
-          }
-          NavigationLink(destination: CreateNoteNativeView(api: model.api)) {
-            Image(systemName: "plus")
-          }
-        }
-      }
+      .toolbar(.hidden, for: .navigationBar)
       .navigationDestination(for: MIRANote.self) { note in
         NoteDetailNativeView(note: note, api: model.api)
       }
       .task { await model.load() }
-      .refreshable { await model.load() }
+    }
+  }
+
+  private var discoverHeader: some View {
+    HStack(spacing: MIRATheme.Space.sm) {
+      Text("Discover")
+        .font(.system(size: 21, weight: .semibold))
+        .foregroundStyle(MIRATheme.Color.textPrimary)
+      Spacer()
+      NavigationLink(destination: SearchUsersNativeView(api: model.api)) {
+        MIRAHeaderCircleButton(systemImage: "magnifyingglass")
+      }
+      NavigationLink(destination: CreateNoteNativeView(api: model.api)) {
+        MIRAHeaderCircleButton(systemImage: "plus")
+      }
+    }
+    .padding(.horizontal, MIRATheme.Space.md)
+    .padding(.top, MIRATheme.Space.xs)
+    .padding(.bottom, 6)
+    .background(MIRATheme.Color.surface)
+    .overlay(alignment: .bottom) {
+      Rectangle().fill(MIRATheme.Color.hairline).frame(height: 0.5)
+    }
+  }
+
+  private var notesSection: some View {
+    let width = min(max(UIScreen.main.bounds.width * 0.76, 250), min(304, UIScreen.main.bounds.width - 56))
+    let height = width * 1.25
+
+    return VStack(alignment: .leading, spacing: MIRATheme.Space.sm) {
+      HStack {
+        Text("Notes")
+          .font(.system(size: 22, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+        Spacer()
+        NavigationLink(destination: CreateNoteNativeView(api: model.api)) {
+          Image(systemName: "plus")
+            .font(.system(size: 17, weight: .semibold))
+            .foregroundStyle(.white)
+            .frame(width: 38, height: 38)
+            .background(MIRATheme.Color.forest)
+            .clipShape(Circle())
+        }
+      }
+      .padding(.horizontal, MIRATheme.Space.md)
+
+      ScrollView(.horizontal, showsIndicators: false) {
+        HStack(spacing: MIRATheme.Space.md) {
+          NavigationLink(destination: CreateNoteNativeView(api: model.api)) {
+            CreateNoteCardNative(width: width, height: height)
+          }
+          .buttonStyle(.plain)
+
+          if model.isLoading && model.notes.isEmpty {
+            ForEach(0..<2, id: \.self) { _ in
+              NoteCardSkeletonNative(width: width, height: height)
+            }
+          } else if model.notes.isEmpty {
+            EmptyNoteCardNative(width: width, height: height)
+          } else {
+            ForEach(model.notes) { note in
+              NavigationLink(value: note) {
+                NoteCardNative(note: note, width: width, height: height)
+              }
+              .buttonStyle(.plain)
+            }
+          }
+        }
+        .padding(.horizontal, MIRATheme.Space.md)
+      }
     }
   }
 
   private var storyRail: some View {
     ScrollView(.horizontal, showsIndicators: false) {
       HStack(spacing: MIRATheme.Space.md) {
-        ForEach(0..<8, id: \.self) { index in
-          VStack(spacing: 8) {
-            Circle()
-              .stroke(MIRATheme.Color.forest.opacity(0.18), lineWidth: 2)
-              .frame(width: 66, height: 66)
-              .overlay(Circle().fill(MIRATheme.Color.surfaceSoft).padding(4))
-            Text(index == 0 ? "You" : "Story")
-              .font(.system(size: 12, weight: .medium))
-              .foregroundStyle(MIRATheme.Color.textSecondary)
+        StoryBubbleNative(name: "You", avatarURL: nil, hasUnviewed: false, isAdd: true)
+
+        if model.isLoading && model.stories.isEmpty {
+          ForEach(0..<5, id: \.self) { index in
+            StoryBubblePlaceholder(index: index)
+          }
+        } else {
+          ForEach(model.stories) { group in
+            StoryBubbleNative(name: group.displayName, avatarURL: group.userProfileImage, hasUnviewed: group.hasUnviewed == true, isAdd: false)
           }
         }
       }
       .padding(.horizontal, MIRATheme.Space.md)
-      .padding(.top, MIRATheme.Space.md)
+      .padding(.top, MIRATheme.Space.sm)
     }
+  }
+}
+
+private struct StoryBubbleNative: View {
+  let name: String
+  let avatarURL: String?
+  let hasUnviewed: Bool
+  let isAdd: Bool
+
+  var body: some View {
+    VStack(spacing: 5) {
+      ZStack(alignment: .bottomTrailing) {
+        RemoteAvatar(url: avatarURL, size: 58)
+          .overlay(Circle().stroke(hasUnviewed ? MIRATheme.Color.forest : MIRATheme.Color.hairline, lineWidth: hasUnviewed ? 2 : 1))
+        if isAdd {
+          Circle()
+            .fill(MIRATheme.Color.forest)
+            .frame(width: 19, height: 19)
+            .overlay(Image(systemName: "plus").font(.system(size: 10, weight: .bold)).foregroundStyle(.white))
+            .overlay(Circle().stroke(MIRATheme.Color.surface, lineWidth: 2))
+        }
+      }
+      Text(name)
+        .font(.system(size: 11, weight: .medium))
+        .foregroundStyle(MIRATheme.Color.textSecondary)
+        .lineLimit(1)
+        .frame(width: 64)
+    }
+  }
+}
+
+private struct StoryBubblePlaceholder: View {
+  let index: Int
+
+  var body: some View {
+    VStack(spacing: 5) {
+      Circle()
+        .fill(MIRATheme.Color.surfaceSoft)
+        .frame(width: 58, height: 58)
+      RoundedRectangle(cornerRadius: 4)
+        .fill(MIRATheme.Color.surfaceSoft)
+        .frame(width: 40, height: 8)
+    }
+    .redacted(reason: .placeholder)
   }
 }
 
 private struct NoteCardNative: View {
   let note: MIRANote
+  let width: CGFloat
+  let height: CGFloat
 
   var body: some View {
-    VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
-      HStack(spacing: MIRATheme.Space.sm) {
-        RemoteAvatar(url: note.user?.profileImage, size: 44)
-        Text(note.user?.displayName ?? "mira")
-          .font(.system(size: 18, weight: .semibold))
-          .foregroundStyle(MIRATheme.Color.textPrimary)
-          .lineLimit(1)
-        Spacer()
+    VStack(alignment: .leading, spacing: 8) {
+      HStack(spacing: 9) {
+        ZStack(alignment: .bottomTrailing) {
+          RemoteAvatar(url: note.user?.profileImage, size: 40)
+          Circle()
+            .fill(MIRATheme.Color.forest)
+            .frame(width: 18, height: 18)
+            .overlay(Image(systemName: "plus").font(.system(size: 9, weight: .bold)).foregroundStyle(.white))
+            .overlay(Circle().stroke(MIRATheme.Color.surfaceRaised, lineWidth: 2))
+            .offset(x: 2, y: 2)
+        }
+        HStack(spacing: 5) {
+          Text(note.user?.displayName ?? "mira")
+            .font(.system(size: 16, weight: .semibold))
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+            .lineLimit(1)
+          Text(noteAge(note.createdAt))
+            .font(.system(size: 14, weight: .semibold))
+            .foregroundStyle(MIRATheme.Color.textMuted)
+        }
+        Spacer(minLength: 4)
         Image(systemName: "ellipsis")
+          .font(.system(size: 20, weight: .semibold))
           .foregroundStyle(MIRATheme.Color.textMuted)
       }
 
-      Text(note.body ?? "")
-        .font(.system(size: 20, weight: .semibold))
+      Text(note.body ?? "New note")
+        .font(.system(size: 17, weight: .semibold))
+        .lineSpacing(2)
         .foregroundStyle(MIRATheme.Color.textPrimary)
-        .lineLimit(3)
+        .lineLimit(note.mediaUrl?.isEmpty == false ? 2 : 5)
 
       if let media = note.mediaUrl, !media.isEmpty {
         RemoteMediaView(url: media, isVideo: media.isVideoURL)
-          .frame(height: 250)
-          .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.medium, style: .continuous))
+          .frame(maxWidth: .infinity)
+          .frame(height: min(width * 0.62, height * 0.46))
+          .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+      } else {
+        Spacer(minLength: 0)
       }
 
-      HStack(spacing: MIRATheme.Space.lg) {
-        MIRAStatButton(systemImage: "heart", value: note.reactionsCount ?? 0) {}
-        MIRAStatButton(systemImage: "bubble.left", value: note.commentsCount ?? 0) {}
+      HStack(spacing: MIRATheme.Space.sm) {
+        NoteActionNative(systemImage: note.reacted == true ? "heart.fill" : "heart", value: note.reactionsCount ?? 0)
+        NoteActionNative(systemImage: "bubble.left", value: note.commentsCount ?? 0)
         Spacer()
-        MIRAStatButton(systemImage: "paperplane", value: note.sharesCount ?? 0) {}
+        NoteActionNative(systemImage: "paperplane", value: note.sharesCount ?? 0)
       }
+      .padding(.top, 2)
+    }
+    .padding(14)
+    .frame(width: width, height: height, alignment: .topLeading)
+    .background(MIRATheme.Color.surfaceRaised)
+    .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+    .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).stroke(MIRATheme.Color.hairline, lineWidth: 1))
+  }
+}
+
+private struct CreateNoteCardNative: View {
+  let width: CGFloat
+  let height: CGFloat
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
+      HStack(spacing: 9) {
+        RemoteAvatar(url: nil, size: 40)
+        VStack(alignment: .leading, spacing: 2) {
+          Text("Your note")
+            .font(.system(size: 16, weight: .semibold))
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+          Text("Photo or text")
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(MIRATheme.Color.textSecondary)
+        }
+      }
+
+      Spacer()
+      VStack(spacing: 8) {
+        Image(systemName: "plus")
+          .font(.system(size: 24, weight: .semibold))
+          .foregroundStyle(.white)
+          .frame(width: 46, height: 46)
+          .background(MIRATheme.Color.forest)
+          .clipShape(Circle())
+        Text("Create a note")
+          .font(.system(size: 19, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+        Text("Add a photo, GIF, or thought.")
+          .font(.system(size: 12, weight: .medium))
+          .foregroundStyle(MIRATheme.Color.textSecondary)
+          .multilineTextAlignment(.center)
+      }
+      .frame(maxWidth: .infinity)
+      Spacer()
     }
     .padding(MIRATheme.Space.md)
-    .frame(width: 330)
-    .miraCardSurface()
+    .frame(width: width, height: height)
+    .background(MIRATheme.Color.surfaceRaised)
+    .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+    .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).stroke(MIRATheme.Color.hairline, lineWidth: 1))
   }
+}
+
+private struct NoteCardSkeletonNative: View {
+  let width: CGFloat
+  let height: CGFloat
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
+      HStack {
+        Circle().fill(MIRATheme.Color.surfaceSoft).frame(width: 40, height: 40)
+        RoundedRectangle(cornerRadius: 6).fill(MIRATheme.Color.surfaceSoft).frame(width: 120, height: 16)
+      }
+      RoundedRectangle(cornerRadius: 8).fill(MIRATheme.Color.surfaceSoft).frame(height: 18)
+      RoundedRectangle(cornerRadius: 18).fill(MIRATheme.Color.surfaceSoft).frame(height: min(width * 0.62, height * 0.46))
+      Spacer()
+    }
+    .padding(14)
+    .frame(width: width, height: height)
+    .background(MIRATheme.Color.surfaceRaised)
+    .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+    .redacted(reason: .placeholder)
+  }
+}
+
+private struct EmptyNoteCardNative: View {
+  let width: CGFloat
+  let height: CGFloat
+
+  var body: some View {
+    VStack(spacing: MIRATheme.Space.sm) {
+      Image(systemName: "text.bubble")
+        .font(.system(size: 32, weight: .light))
+        .foregroundStyle(MIRATheme.Color.textMuted)
+      Text("No notes yet")
+        .font(.system(size: 18, weight: .semibold))
+        .foregroundStyle(MIRATheme.Color.textPrimary)
+      Text("Be the first to start one.")
+        .font(.system(size: 13, weight: .medium))
+        .foregroundStyle(MIRATheme.Color.textSecondary)
+    }
+    .frame(width: width, height: height)
+    .background(MIRATheme.Color.surfaceRaised)
+    .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+    .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).stroke(MIRATheme.Color.hairline, lineWidth: 1))
+  }
+}
+
+private struct NoteActionNative: View {
+  let systemImage: String
+  let value: Int
+
+  var body: some View {
+    HStack(spacing: 5) {
+      Image(systemName: systemImage)
+        .font(.system(size: 20, weight: .regular))
+      Text(compact(value))
+        .font(.system(size: 14, weight: .semibold))
+    }
+    .foregroundStyle(MIRATheme.Color.textSecondary)
+    .frame(minHeight: 34)
+  }
+}
+
+private func noteAge(_ value: String?) -> String {
+  guard let value, let date = ISO8601DateFormatter().date(from: value) else { return "now" }
+  let minutes = max(0, Int(Date().timeIntervalSince(date) / 60))
+  if minutes < 1 { return "now" }
+  if minutes < 60 { return "\(minutes)m" }
+  let hours = minutes / 60
+  if hours < 24 { return "\(hours)h" }
+  return "\(hours / 24)d"
+}
+
+private func compact(_ value: Int) -> String {
+  if value >= 1_000_000 { return "\(value / 1_000_000)M" }
+  if value >= 1_000 { return "\(value / 1_000)K" }
+  return "\(value)"
 }
