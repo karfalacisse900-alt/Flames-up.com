@@ -49,6 +49,7 @@ targets:
           CODE_SIGN_STYLE: Automatic
         Release:
           CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: Apple Distribution
 
 schemes:
   MIRA:
