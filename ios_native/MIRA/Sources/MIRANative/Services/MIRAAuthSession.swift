@@ -14,7 +14,10 @@ public final class MIRAAuthSession: ObservableObject, MIRASessionProviding {
   }
 
   public func accessToken() async -> String? {
-    token ?? await keychain.accessToken()
+    if let token {
+      return token
+    }
+    return await keychain.accessToken()
   }
 
   @MainActor
