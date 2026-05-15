@@ -75,6 +75,7 @@ agenthub/agents/youtube/db
 
 # Build caches
 .cache/
+**/target/
 
 memory/test_credentials.md
 
@@ -83,8 +84,18 @@ android-sdk/-e
 # Environment files
 *.env
 *.env.*
+!.env.example
+!**/.env.example
 backend-cf/node_modules/@cloudflare/workerd-linux-arm64/bin/workerd
 frontend/.metro-cache/
 frontend/node_modules/
 frontend/.metro-cache*
 frontend/.env
+
+# Local worker/app runtime output
+.wrangler/
+**/.wrangler/
+**/.wrangler-dry-run/
+**/.codex-*.log
+**/.codex-*.err
+*.log

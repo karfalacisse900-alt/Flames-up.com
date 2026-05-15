@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDisplayName</key>
+  <string>MIRA</string>
+  <key>CFBundleIdentifier</key>
+  <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+  <key>CFBundleName</key>
+  <string>MIRA</string>
+  <key>CFBundleShortVersionString</key>
+  <string>1.0.0</string>
+  <key>CFBundleVersion</key>
+  <string>1</string>
+  <key>LSRequiresIPhoneOS</key>
+  <true/>
+  <key>NSCameraUsageDescription</key>
+  <string>Take photos and videos for posts, stories, notes, and chat.</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Record voice messages, story videos, and voice or video calls.</string>
+  <key>NSPhotoLibraryUsageDescription</key>
+  <string>Choose photos and videos from your gallery.</string>
+  <key>NSPhotoLibraryAddUsageDescription</key>
+  <string>Save edited media from MIRA to your photo library.</string>
+  <key>NSLocationWhenInUseUsageDescription</key>
+  <string>Add places and nearby context to posts.</string>
+  <key>ITSAppUsesNonExemptEncryption</key>
+  <false/>
+  <key>UIBackgroundModes</key>
+  <array>
+    <string>audio</string>
+    <string>voip</string>
+  </array>
+  <key>UILaunchScreen</key>
+  <dict>
+    <key>UIColorName</key>
+    <string>MIRALaunchBackground</string>
+  </dict>
+  <key>UISupportedInterfaceOrientations</key>
+  <array>
+    <string>UIInterfaceOrientationPortrait</string>
+  </array>
+  <key>UIApplicationSceneManifest</key>
+  <dict>
+    <key>UIApplicationSupportsMultipleScenes</key>
+    <false/>
+  </dict>
+</dict>
+</plist>
