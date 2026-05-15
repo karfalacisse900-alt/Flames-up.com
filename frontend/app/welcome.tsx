@@ -19,7 +19,6 @@ const CATEGORIES = [
   { id: 'places', label: 'Places', sub: 'Locations, restaurants...', icon: 'location' },
   { id: 'food', label: 'Food & Drink', sub: 'Cuisines, recipes...', icon: 'restaurant' },
   { id: 'fashion', label: 'Fashion', sub: 'Outfits, streetwear...', icon: 'shirt' },
-  { id: 'music', label: 'Music', sub: 'Artists, songs...', icon: 'musical-notes' },
   { id: 'travel', label: 'Travel', sub: 'Trips, adventures...', icon: 'airplane' },
   { id: 'nightlife', label: 'Nightlife', sub: 'Bars, clubs, events...', icon: 'moon' },
   { id: 'fitness', label: 'Fitness', sub: 'Workouts, health...', icon: 'barbell' },
@@ -208,8 +207,8 @@ const s = StyleSheet.create({
   progressFill: { height: '100%', backgroundColor: '#1A1A1A', borderRadius: 2 },
 
   stepContainer: { flex: 1, paddingHorizontal: 24 },
-  questionLight: { fontSize: 28, fontWeight: '900', color: '#1A1A1A', textAlign: 'center', marginTop: 40, letterSpacing: -0.5 },
-  questionDark: { fontSize: 28, fontWeight: '900', color: '#FFF', textAlign: 'center', marginTop: 40, letterSpacing: -0.5 },
+  questionLight: { fontSize: 28, fontWeight: '500', color: '#1A1A1A', textAlign: 'center', marginTop: 40, letterSpacing: -0.5 },
+  questionDark: { fontSize: 28, fontWeight: '500', color: '#FFF', textAlign: 'center', marginTop: 40, letterSpacing: -0.5 },
   subLight: { fontSize: 15, color: '#999', textAlign: 'center', marginTop: 8, lineHeight: 22 },
 
   optionsList: { marginTop: 40, gap: 10 },
@@ -221,7 +220,7 @@ const s = StyleSheet.create({
   radioActive: { backgroundColor: '#1A1A1A', borderColor: '#1A1A1A' },
 
   ageDisplay: { alignItems: 'center', marginTop: 40 },
-  ageInput: { fontSize: 72, fontWeight: '900', color: '#1A1A1A', textAlign: 'center', width: 200 },
+  ageInput: { fontSize: 72, fontWeight: '500', color: '#1A1A1A', textAlign: 'center', width: 200 },
 
   illustrationWrap: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   globeIcon: { opacity: 0.6 },
@@ -233,15 +232,15 @@ const s = StyleSheet.create({
   catGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   catCard: { width: (SW - 58) / 2, backgroundColor: '#FFF', borderRadius: 16, padding: 20, alignItems: 'center', gap: 8, borderWidth: 1.5, borderColor: '#F0EDE7' },
   catCardActive: { borderColor: '#1A1A1A', backgroundColor: '#F8F8F8' },
-  catLabel: { fontSize: 15, fontWeight: '700', color: '#1A1A1A' },
+  catLabel: { fontSize: 15, fontWeight: '500', color: '#1A1A1A' },
   catSub: { fontSize: 12, color: '#999', textAlign: 'center' },
 
   bottomArea: { paddingBottom: 24, gap: 16, marginTop: 'auto' },
   continueBtn: { backgroundColor: '#1A1A1A', borderRadius: 16, paddingVertical: 18, alignItems: 'center' },
   continueBtnDisabled: { opacity: 0.3 },
-  continueTx: { fontSize: 16, fontWeight: '700', color: '#FFF' },
+  continueTx: { fontSize: 16, fontWeight: '500', color: '#FFF' },
   continueBtnWhite: { backgroundColor: '#FFF', borderRadius: 16, paddingVertical: 18, alignItems: 'center' },
-  continueTxDark: { fontSize: 16, fontWeight: '700', color: '#1A1A1A' },
+  continueTxDark: { fontSize: 16, fontWeight: '500', color: '#1A1A1A' },
   skipTx: { fontSize: 14, fontWeight: '500', color: '#666', textAlign: 'center' },
   skipTxLight: { fontSize: 14, fontWeight: '500', color: '#999', textAlign: 'center' },
 });

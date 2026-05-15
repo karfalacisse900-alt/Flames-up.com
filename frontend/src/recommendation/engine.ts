@@ -6,12 +6,16 @@ import {
 import { rankWithFallback } from './fallbackRanker';
 
 type NativeRecommendationEngine = {
-  rankFeed: (payloadJson: string) => string;
+  rankFeed?: (payloadJson: string) => string;
+  rankFeedItems?: (
+    items: RecommendationItem[],
+    context: RecommendationContext,
+    options?: RecommendationOptions
+  ) => string[] | string;
 };
 
 declare global {
   // Installed by native C++ JSI engine when available.
-  // eslint-disable-next-line no-var
   var __FlamesRecommendationEngine: NativeRecommendationEngine | undefined;
 }
 
@@ -21,12 +25,13 @@ function tryNativeRank(
   options?: RecommendationOptions
 ): RecommendationItem[] | null {
   const nativeEngine = global.__FlamesRecommendationEngine;
-  if (!nativeEngine?.rankFeed) return null;
+  if (!nativeEngine?.rankFeedItems && !nativeEngine?.rankFeed) return null;
 
   try {
-    const payload = JSON.stringify({ items, context: ctx, options });
-    const output = nativeEngine.rankFeed(payload);
-    const rankedIds = JSON.parse(output) as string[];
+    const output = nativeEngine.rankFeedItems
+      ? nativeEngine.rankFeedItems(items, ctx, options || {})
+      : nativeEngine.rankFeed?.(JSON.stringify({ items, context: ctx, options }));
+    const rankedIds = Array.isArray(output) ? output : JSON.parse(String(output || '[]')) as string[];
     const map = new Map(items.map((item) => [item.id, item]));
     const ranked = rankedIds.map((id) => map.get(id)).filter(Boolean) as RecommendationItem[];
     if (ranked.length > 0) return ranked;

@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, Image, TextInput,
   ActivityIndicator, KeyboardAvoidingView, Platform, Alert, Dimensions,
@@ -11,6 +11,7 @@ import * as Location from 'expo-location';
 import { useAuthStore } from '../src/store/authStore';
 import api from '../src/api/client';
 import { uploadImageWithBackup, uploadVideoWithBackup } from '../src/utils/mediaUpload';
+import { HD_VIDEO_EXPORT_PRESET, HD_VIDEO_QUALITY, POST_IMAGE_PICKER_QUALITY } from '../src/utils/mediaQuality';
 import { isPhoneVerificationError, requireVerifiedPhone } from '../src/utils/phoneVerification';
 
 const { width: SW } = Dimensions.get('window');
@@ -20,7 +21,7 @@ export default function DropMomentScreen() {
   const insets = useSafeAreaInsets();
   const { user } = useAuthStore();
 
-  const [media, setMedia] = useState<{ uri: string; type: 'image' | 'video'; base64?: string; mimeType?: string; fileName?: string | null } | null>(null);
+  const [media, setMedia] = useState<{ uri: string; type: 'image' | 'video'; base64?: string; mimeType?: string; fileName?: string | null; fileSize?: number } | null>(null);
   const [caption, setCaption] = useState('');
   const [location, setLocation] = useState('');
   const [isPosting, setIsPosting] = useState(false);
@@ -34,7 +35,7 @@ export default function DropMomentScreen() {
       return;
     }
     const result = await ImagePicker.launchCameraAsync({
-      quality: 0.85,
+      quality: POST_IMAGE_PICKER_QUALITY,
       base64: true,
       allowsEditing: true,
       aspect: [4, 5],
@@ -47,6 +48,7 @@ export default function DropMomentScreen() {
         base64: asset.base64 || undefined,
         mimeType: asset.mimeType,
         fileName: asset.fileName || null,
+        fileSize: asset.fileSize,
       });
       setStep('compose');
     }
@@ -57,9 +59,12 @@ export default function DropMomentScreen() {
     if (!perm.granted) return;
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images', 'videos'],
-      quality: 0.85,
+      quality: POST_IMAGE_PICKER_QUALITY,
       base64: true,
       allowsEditing: true,
+      videoExportPreset: HD_VIDEO_EXPORT_PRESET,
+      videoQuality: HD_VIDEO_QUALITY,
+      preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Current,
     });
     if (!result.canceled && result.assets?.[0]) {
       const asset = result.assets[0];
@@ -69,6 +74,7 @@ export default function DropMomentScreen() {
         base64: asset.base64 || undefined,
         mimeType: asset.mimeType,
         fileName: asset.fileName || null,
+        fileSize: asset.fileSize,
       });
       setStep('compose');
     }
@@ -102,7 +108,7 @@ export default function DropMomentScreen() {
 
       if (media.type === 'video') {
         setUploadProgress('Uploading and backing up video...');
-        const uploaded = await uploadVideoWithBackup(media.uri, media.mimeType || 'video/mp4', media.fileName || 'moment.mp4');
+        const uploaded = await uploadVideoWithBackup(media.uri, media.mimeType || 'video/mp4', media.fileName || 'moment.mp4', media.fileSize);
         if (uploaded?.url) {
           imageUrl = uploaded.url;
           backupId = uploaded.backupId;
@@ -122,6 +128,7 @@ export default function DropMomentScreen() {
 
       setUploadProgress('Creating post...');
       await api.post('/posts', {
+        client_request_id: `post_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`,
         content: caption || '📍 Dropped a moment',
         image: imageUrl,
         images: [imageUrl],
@@ -300,14 +307,14 @@ const s = StyleSheet.create({
     paddingHorizontal: 16, paddingVertical: 12,
   },
   closeBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.1)', justifyContent: 'center', alignItems: 'center' },
-  captureTitle: { fontSize: 17, fontWeight: '700', color: '#FFF' },
+  captureTitle: { fontSize: 17, fontWeight: '500', color: '#FFF' },
 
   captureBody: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 40 },
   captureIcon: {
     width: 96, height: 96, borderRadius: 48,
     backgroundColor: 'rgba(249,115,22,0.12)', justifyContent: 'center', alignItems: 'center', marginBottom: 24,
   },
-  captureHeadline: { fontSize: 26, fontWeight: '800', color: '#FFF', marginBottom: 8, textAlign: 'center' },
+  captureHeadline: { fontSize: 26, fontWeight: '600', color: '#FFF', marginBottom: 8, textAlign: 'center' },
   captureSub: { fontSize: 15, color: 'rgba(255,255,255,0.5)', textAlign: 'center', lineHeight: 22 },
 
   captureActions: { flexDirection: 'row', justifyContent: 'space-around', paddingHorizontal: 20 },
@@ -316,7 +323,7 @@ const s = StyleSheet.create({
     width: 64, height: 64, borderRadius: 32,
     backgroundColor: '#F97316', justifyContent: 'center', alignItems: 'center',
   },
-  captureBtnText: { fontSize: 13, fontWeight: '700', color: '#FFF' },
+  captureBtnText: { fontSize: 13, fontWeight: '500', color: '#FFF' },
   captureBtnSub: { fontSize: 11, color: 'rgba(255,255,255,0.4)' },
 
   // Compose step
@@ -325,12 +332,12 @@ const s = StyleSheet.create({
     paddingHorizontal: 16, paddingVertical: 12,
     borderBottomWidth: 1, borderBottomColor: '#ECEAE3',
   },
-  composeTitle: { fontSize: 17, fontWeight: '700', color: '#1A1A1A' },
+  composeTitle: { fontSize: 17, fontWeight: '500', color: '#1A1A1A' },
   postBtn: {
     backgroundColor: '#F97316', paddingHorizontal: 20, paddingVertical: 10, borderRadius: 20, minWidth: 70, alignItems: 'center',
   },
   postBtnDisabled: { opacity: 0.4 },
-  postBtnText: { color: '#FFF', fontSize: 14, fontWeight: '700' },
+  postBtnText: { color: '#FFF', fontSize: 14, fontWeight: '500' },
 
   // Progress
   progressBar: {
@@ -364,7 +371,7 @@ const s = StyleSheet.create({
     width: 40, height: 40, borderRadius: 20, overflow: 'hidden',
     backgroundColor: '#50C8A8', justifyContent: 'center', alignItems: 'center', marginRight: 12,
   },
-  composeAvatarText: { color: '#FFF', fontSize: 16, fontWeight: '700' },
+  composeAvatarText: { color: '#FFF', fontSize: 16, fontWeight: '500' },
   captionInput: {
     flex: 1, fontSize: 17, color: '#1A1A1A', lineHeight: 24,
     minHeight: 80, textAlignVertical: 'top',

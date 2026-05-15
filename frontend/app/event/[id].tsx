@@ -16,6 +16,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import api from '../../src/api/client';
 import { colors } from '../../src/utils/theme';
+import { openSafeUrl } from '../../src/utils/safeLinking';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -95,7 +96,7 @@ export default function EventDetailScreen() {
   const attendees = Number(getParam(params.attendees) || 3);
   const heroImage = place?.photos?.[0] || getParam(params.image);
   const description = getParam(params.description)
-    || 'A local Eventbrite plan picked from your preferences. Confirm the exact time, ticket rules, and lineup before you go.';
+    || 'A local plan picked from your preferences. Confirm the exact time, ticket rules, and lineup before you go.';
   const eventUrl = getParam(params.eventUrl);
 
   const lat = place?.lat ?? Number(getParam(params.lat));
@@ -103,7 +104,7 @@ export default function EventDetailScreen() {
 
   const openDirections = () => {
     if (place?.url) {
-      Linking.openURL(place.url);
+      openSafeUrl(place.url);
       return;
     }
 
@@ -119,11 +120,11 @@ export default function EventDetailScreen() {
 
   const openTickets = () => {
     if (eventUrl) {
-      Linking.openURL(eventUrl);
+      openSafeUrl(eventUrl);
       return;
     }
     if (place?.website) {
-      Linking.openURL(place.website);
+      openSafeUrl(place.website);
       return;
     }
     openDirections();
@@ -325,7 +326,7 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     fontSize: 31,
     lineHeight: 35,
-    fontWeight: '900',
+    fontWeight: '500',
   },
   hostLine: {
     marginTop: 8,
@@ -393,7 +394,7 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     fontSize: 35,
     lineHeight: 42,
-    fontWeight: '900',
+    fontWeight: '500',
     marginBottom: 8,
   },
   actionRow: {
@@ -452,7 +453,7 @@ const styles = StyleSheet.create({
   sectionTitle: {
     color: colors.textPrimary,
     fontSize: 22,
-    fontWeight: '900',
+    fontWeight: '500',
     marginBottom: 22,
   },
   description: {
@@ -481,6 +482,6 @@ const styles = StyleSheet.create({
   rsvpText: {
     color: '#050505',
     fontSize: 22,
-    fontWeight: '900',
+    fontWeight: '500',
   },
 });

@@ -19,7 +19,7 @@ uploadRoutes.post('/image-direct', async (c) => {
   );
   const data: any = await res.json();
   if (!data.success) {
-    return c.json({ error: 'Failed to get upload URL', details: data.errors }, 500);
+    return c.json({ error: 'Failed to get upload URL' }, 500);
   }
 
   // Return the upload URL and image ID to frontend

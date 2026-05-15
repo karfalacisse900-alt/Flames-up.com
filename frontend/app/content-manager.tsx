@@ -8,12 +8,11 @@ import {
   Image,
   ActivityIndicator,
   Alert,
-  RefreshControl,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, shadows } from '../src/utils/theme';
+import { shadows } from '../src/utils/theme';
 import api from '../src/api/client';
 
 type TabId = 'posts' | 'accounts' | 'flagged';
@@ -24,7 +23,6 @@ export default function ContentManagerScreen() {
   const [reportedPosts, setReportedPosts] = useState<any[]>([]);
   const [reportedAccounts, setReportedAccounts] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => { loadData(); }, [tab]);
 
@@ -104,13 +102,6 @@ export default function ContentManagerScreen() {
       </View>
 
       <ScrollView
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={async () => { setRefreshing(true); await loadData(); setRefreshing(false); }}
-            tintColor="#2D6A4F"
-          />
-        }
         contentContainerStyle={{ padding: 16, paddingBottom: 80 }}
       >
         {loading ? (
@@ -242,7 +233,7 @@ const s = StyleSheet.create({
     paddingVertical: 12, gap: 12,
   },
   backBtn: { width: 44, height: 44, justifyContent: 'center', alignItems: 'center' },
-  headerTitle: { flex: 1, fontSize: 22, fontWeight: '800', color: '#1B4332' },
+  headerTitle: { flex: 1, fontSize: 22, fontWeight: '600', color: '#1B4332' },
   cmBadge: {
     width: 28, height: 28, borderRadius: 14, backgroundColor: '#F59E0B',
     justifyContent: 'center', alignItems: 'center',
@@ -257,7 +248,7 @@ const s = StyleSheet.create({
   tabText: { fontSize: 12, fontWeight: '600', color: '#5C4033' },
   tabTextActive: { color: '#FFF' },
   empty: { alignItems: 'center', paddingTop: 60, gap: 8 },
-  emptyTitle: { fontSize: 20, fontWeight: '700', color: '#1B4332' },
+  emptyTitle: { fontSize: 20, fontWeight: '500', color: '#1B4332' },
   emptyText: { fontSize: 14, color: '#9CA3AF' },
   card: {
     backgroundColor: '#FFF', borderRadius: 20, padding: 16, marginBottom: 14,
@@ -270,7 +261,7 @@ const s = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', gap: 4,
     backgroundColor: '#FEF2F2', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8,
   },
-  reportBadgeText: { fontSize: 10, fontWeight: '800', color: '#EF4444', letterSpacing: 0.5 },
+  reportBadgeText: { fontSize: 10, fontWeight: '600', color: '#EF4444', letterSpacing: 0.5 },
   reporterName: { fontSize: 12, color: '#9CA3AF', fontWeight: '500' },
   reasonBox: {
     flexDirection: 'row', alignItems: 'flex-start', gap: 6,
@@ -287,7 +278,7 @@ const s = StyleSheet.create({
     width: 32, height: 32, borderRadius: 16, backgroundColor: '#E8F5E9',
     justifyContent: 'center', alignItems: 'center',
   },
-  postAuthorInitial: { fontSize: 14, fontWeight: '700', color: '#2D6A4F' },
+  postAuthorInitial: { fontSize: 14, fontWeight: '500', color: '#2D6A4F' },
   postAuthorName: { fontSize: 14, fontWeight: '600', color: '#1B4332' },
   postAuthorHandle: { fontSize: 11, color: '#9CA3AF' },
   postContent: { fontSize: 13, color: '#374151', lineHeight: 18, marginBottom: 6 },
@@ -297,13 +288,13 @@ const s = StyleSheet.create({
     flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
     gap: 6, paddingVertical: 11, borderRadius: 14, backgroundColor: '#EF4444',
   },
-  removeBtnText: { fontSize: 14, fontWeight: '700', color: '#FFF' },
+  removeBtnText: { fontSize: 14, fontWeight: '500', color: '#FFF' },
   keepBtn: {
     flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
     gap: 6, paddingVertical: 11, borderRadius: 14, backgroundColor: '#DCFCE7',
     borderWidth: 1, borderColor: '#BBF7D0',
   },
-  keepBtnText: { fontSize: 14, fontWeight: '700', color: '#16A34A' },
+  keepBtnText: { fontSize: 14, fontWeight: '500', color: '#16A34A' },
   // User accounts
   userRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   userAvatar: { width: 48, height: 48, borderRadius: 24 },
@@ -311,14 +302,14 @@ const s = StyleSheet.create({
     width: 48, height: 48, borderRadius: 24, backgroundColor: '#E8F5E9',
     justifyContent: 'center', alignItems: 'center',
   },
-  userInitial: { fontSize: 20, fontWeight: '700', color: '#2D6A4F' },
-  userName: { fontSize: 16, fontWeight: '700', color: '#1B4332' },
+  userInitial: { fontSize: 20, fontWeight: '500', color: '#2D6A4F' },
+  userName: { fontSize: 16, fontWeight: '500', color: '#1B4332' },
   userHandle: { fontSize: 12, color: '#9CA3AF', marginTop: 1 },
   reportCountBadge: {
     marginTop: 4, alignSelf: 'flex-start',
     backgroundColor: '#FEF2F2', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6,
   },
-  reportCountText: { fontSize: 11, fontWeight: '700', color: '#EF4444' },
+  reportCountText: { fontSize: 11, fontWeight: '500', color: '#EF4444' },
   reasonsList: { marginTop: 10, paddingLeft: 4, gap: 2 },
   reasonItem: { fontSize: 12, color: '#6B7280', lineHeight: 18 },
 });

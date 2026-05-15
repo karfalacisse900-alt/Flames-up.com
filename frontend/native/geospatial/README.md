@@ -11,13 +11,11 @@ This folder contains a native high-performance geospatial core and a JSI install
 
 - `GeoSearchJSI.cpp`
   - JSI scaffold exposing:
-    - `global.__FlamesGeoSearch.rankPlaces(payloadJson)`
-    - `global.__FlamesGeoSearch.clusterPlaces(payloadJson)`
+    - `global.__FlamesGeoSearch.rankPlaceIds(places, query, userLat, userLng, limit)`
 
 ## Integration Steps
 
 1. Add these files to your iOS/Android native targets.
 2. Call `flames::InstallGeoSearch(runtime)` during JS runtime initialization.
-3. Implement JSON payload parse/serialize in `GeoSearchJSI.cpp`.
-4. Keep `src/utils/geoSpatial.ts` as fallback for Expo Go and web.
+3. Keep `src/utils/geoSpatial.ts` as fallback for Expo Go and web.
 

@@ -87,7 +87,7 @@ const cardStyles = StyleSheet.create({
   cardTitle: {
     color: '#FFFFFF',
     fontSize: 12,
-    fontWeight: '700',
+    fontWeight: '500',
     lineHeight: 16,
   },
   cardStyle: {
@@ -165,7 +165,7 @@ const trendStyles = StyleSheet.create({
   title: {
     color: '#FFFFFF',
     fontSize: 11,
-    fontWeight: '700',
+    fontWeight: '500',
     lineHeight: 15,
   },
   style: {
@@ -188,7 +188,7 @@ const trendStyles = StyleSheet.create({
   likeCount: {
     color: '#FFFFFF',
     fontSize: 10,
-    fontWeight: '700',
+    fontWeight: '500',
   },
 });
 
@@ -299,7 +299,7 @@ const detailStyles = StyleSheet.create({
   },
   title: {
     fontSize: 22,
-    fontWeight: '900',
+    fontWeight: '500',
     color: colors.fashionText,
     fontStyle: 'italic',
     lineHeight: 28,
@@ -354,7 +354,7 @@ const detailStyles = StyleSheet.create({
   },
   authorInitial: {
     fontSize: 14,
-    fontWeight: '700',
+    fontWeight: '500',
     color: '#6B6355',
   },
   authorName: {
@@ -524,7 +524,7 @@ const styles = StyleSheet.create({
   },
   headerTitle: {
     fontSize: 30,
-    fontWeight: '900',
+    fontWeight: '500',
     color: colors.fashionText,
     fontStyle: 'italic',
     lineHeight: 36,
@@ -565,7 +565,7 @@ const styles = StyleSheet.create({
   },
   chipText: {
     fontSize: 12,
-    fontWeight: '700',
+    fontWeight: '500',
     color: '#6B6355',
   },
   chipTextActive: {
@@ -583,7 +583,7 @@ const styles = StyleSheet.create({
   },
   sectionTitle: {
     fontSize: 18,
-    fontWeight: '900',
+    fontWeight: '500',
     color: colors.fashionText,
     fontStyle: 'italic',
   },
@@ -610,7 +610,7 @@ const styles = StyleSheet.create({
   },
   emptyTitle: {
     fontSize: 14,
-    fontWeight: '700',
+    fontWeight: '500',
     color: colors.fashionText,
   },
   emptyText: {

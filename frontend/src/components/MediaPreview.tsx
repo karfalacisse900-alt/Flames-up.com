@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  Image,
   ImageResizeMode,
   StyleProp,
   StyleSheet,
@@ -9,6 +8,9 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { extractStreamUid, getStreamPlaybackInfo, isCFStreamVideo } from '../utils/mediaUpload';
+import OptimizedImage from './OptimizedImage';
+import { getStreamThumbnailUrl, type OptimizedImagePreset } from '../utils/optimizedMedia';
+import { colors } from '../utils/theme';
 
 type MediaPreviewProps = {
   uri?: string | null;
@@ -16,6 +18,8 @@ type MediaPreviewProps = {
   style?: StyleProp<ViewStyle>;
   resizeMode?: ImageResizeMode;
   showVideoBadge?: boolean;
+  imagePreset?: OptimizedImagePreset;
+  priority?: 'low' | 'normal' | 'high';
 };
 
 function normalizeMediaTypes(mediaTypes?: string[] | string | null): string[] {
@@ -39,7 +43,7 @@ function isVideoUri(uri?: string | null, mediaTypes?: string[] | string | null) 
 }
 
 export function getStreamThumbnailFallback(videoUid: string) {
-  return `https://videodelivery.net/${videoUid}/thumbnails/thumbnail.jpg?time=1s&height=720`;
+  return getStreamThumbnailUrl(videoUid, 'thumb');
 }
 
 function MediaPreview({
@@ -48,6 +52,8 @@ function MediaPreview({
   style,
   resizeMode = 'cover',
   showVideoBadge = true,
+  imagePreset = 'feed',
+  priority = 'normal',
 }: MediaPreviewProps) {
   const cleanUri = typeof uri === 'string' ? uri.trim() : '';
   const streamUid = useMemo(() => (
@@ -83,7 +89,13 @@ function MediaPreview({
             <Ionicons name="videocam-outline" size={24} color="#9CA3AF" />
           </View>
         ) : (
-          <Image source={{ uri: previewUri }} style={styles.image} resizeMode={resizeMode} />
+          <OptimizedImage
+            uri={previewUri}
+            preset={streamUid ? 'thumb' : imagePreset}
+            style={styles.image}
+            resizeMode={resizeMode}
+            priority={priority}
+          />
         )
       ) : (
         <View style={styles.empty}>
@@ -104,7 +116,7 @@ export default React.memo(MediaPreview);
 const styles = StyleSheet.create({
   wrap: {
     overflow: 'hidden',
-    backgroundColor: '#ECECEC',
+    backgroundColor: colors.bgSubtle,
   },
   image: {
     ...StyleSheet.absoluteFillObject,
@@ -115,17 +127,19 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#F3F4F6',
+    backgroundColor: colors.bgSubtle,
   },
   badge: {
     position: 'absolute',
     right: 8,
     top: 8,
-    width: 24,
-    height: 24,
-    borderRadius: 12,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(0,0,0,0.58)',
+    backgroundColor: 'rgba(17,18,14,0.66)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.28)',
   },
 });

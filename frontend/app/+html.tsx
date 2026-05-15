@@ -21,6 +21,8 @@ export default function Root({ children }: PropsWithChildren) {
         <style
           dangerouslySetInnerHTML={{
             __html: `
+              html, body, #root { background: #FAFAF8; overscroll-behavior: none; }
+              * { overscroll-behavior: none; }
               body > div:first-child { position: fixed !important; top: 0; left: 0; right: 0; bottom: 0; }
               [role="tablist"] [role="tab"] * { overflow: visible !important; }
               [role="heading"], [role="heading"] * { overflow: visible !important; }

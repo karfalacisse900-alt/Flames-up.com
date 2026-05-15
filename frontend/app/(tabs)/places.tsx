@@ -6,7 +6,6 @@ import {
   TouchableOpacity,
   Image,
   ScrollView,
-  RefreshControl,
   ActivityIndicator,
   Dimensions,
   TextInput,
@@ -117,7 +116,7 @@ const gridStyles = StyleSheet.create({
   name: {
     color: '#FFFFFF',
     fontSize: 13,
-    fontWeight: '700',
+    fontWeight: '500',
     lineHeight: 17,
     textShadowColor: 'rgba(0,0,0,0.6)',
     textShadowOffset: { width: 0, height: 1 },
@@ -150,7 +149,6 @@ export default function PlacesScreen() {
   const [places, setPlaces] = useState<any[]>([]);
   const [allPlaces, setAllPlaces] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [isRefreshing, setIsRefreshing] = useState(false);
   const [search, setSearch] = useState('');
   const [activeType, setActiveType] = useState('restaurant');
   const [activeBoard, setActiveBoard] = useState(CITY_BOARDS[0].id);
@@ -226,12 +224,6 @@ export default function PlacesScreen() {
       )
     );
   }, [search, allPlaces, selectedBoard]);
-
-  const onRefresh = useCallback(async () => {
-    setIsRefreshing(true);
-    await loadPlaces(activeType, search || undefined);
-    setIsRefreshing(false);
-  }, [activeType, search, loadPlaces]);
 
   const handleSearch = () => {
     if (search.trim()) {
@@ -378,7 +370,6 @@ export default function PlacesScreen() {
       ) : (
         <ScrollView
           showsVerticalScrollIndicator={false}
-          refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={onRefresh} tintColor={colors.accentPrimary} />}
           contentContainerStyle={{ paddingHorizontal: GRID_GAP, paddingBottom: 100, gap: GRID_GAP }}
         >
           {places.length === 0 ? (
@@ -405,17 +396,18 @@ export default function PlacesScreen() {
 }
 
 const pStyles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#FFFFFF' },
+  container: { flex: 1, backgroundColor: colors.bgApp },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 20,
-    paddingVertical: 12,
+    paddingVertical: 6,
+    backgroundColor: colors.bgApp,
   },
   headerTitle: {
     fontSize: 24,
-    fontWeight: '700',
+    fontWeight: '500',
     color: colors.textPrimary,
     fontStyle: 'italic',
   },
@@ -460,7 +452,7 @@ const pStyles = StyleSheet.create({
   boardText: {
     fontSize: 13,
     color: '#4B5563',
-    fontWeight: '700',
+    fontWeight: '500',
   },
   boardTextActive: {
     color: '#FFFFFF',
@@ -504,7 +496,7 @@ const pStyles = StyleSheet.create({
   stackedCol: { gap: GRID_GAP },
   loadingCenter: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingTop: 60 },
   emptyState: { alignItems: 'center', paddingVertical: 60 },
-  emptyTitle: { fontSize: 16, fontWeight: '700', color: colors.textPrimary, marginTop: 12 },
+  emptyTitle: { fontSize: 16, fontWeight: '500', color: colors.textPrimary, marginTop: 12 },
   emptyText: { fontSize: 13, color: colors.textHint, marginTop: 4 },
 });
 

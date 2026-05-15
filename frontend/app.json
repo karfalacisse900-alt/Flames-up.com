@@ -1,11 +1,14 @@
 {
   "expo": {
-    "name": "frontend",
+    "name": "MIRA",
     "slug": "frontend",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "frontend",
+    "scheme": [
+      "frontend",
+      "com.karfala90.frontend"
+    ],
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
@@ -13,9 +16,13 @@
       "usesAppleSignIn": true,
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "Verify you're at a place to check in",
-        "NSCameraUsageDescription": "Take photos for your posts",
-        "NSMicrophoneUsageDescription": "Use your microphone during video calls and voice messages",
-        "NSPhotoLibraryUsageDescription": "Share photos from your gallery",
+        "NSCameraUsageDescription": "Take photos and videos for posts, stories, and chat.",
+        "NSMicrophoneUsageDescription": "Record voice messages, story videos, and join voice or video calls.",
+        "NSPhotoLibraryUsageDescription": "Choose photos and videos from your gallery for posts, stories, and chat.",
+        "NSPhotoLibraryAddUsageDescription": "Save edited photos and videos from MIRA to your photo library.",
+        "UIBackgroundModes": [
+          "audio"
+        ],
         "ITSAppUsesNonExemptEncryption": false
       },
       "bundleIdentifier": "com.karfala90.frontend"
@@ -23,7 +30,7 @@
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
-        "backgroundColor": "#000"
+        "backgroundColor": "#000000"
       },
       "edgeToEdgeEnabled": true,
       "permissions": [
@@ -31,7 +38,10 @@
         "android.permission.ACCESS_COARSE_LOCATION",
         "android.permission.CAMERA",
         "android.permission.READ_EXTERNAL_STORAGE",
-        "android.permission.RECORD_AUDIO"
+        "android.permission.RECORD_AUDIO",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
+        "android.permission.WAKE_LOCK"
       ],
       "package": "com.karfala90.frontend"
     },
@@ -44,12 +54,18 @@
       "expo-router",
       "expo-apple-authentication",
       [
+        "@react-native-google-signin/google-signin",
+        {
+          "iosUrlScheme": "com.googleusercontent.apps.702354172189-9gg83vd92n3s217n5pb4ddqqsnme8ocb"
+        }
+      ],
+      [
         "expo-splash-screen",
         {
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 200,
           "resizeMode": "contain",
-          "backgroundColor": "#000"
+          "backgroundColor": "#000000"
         }
       ],
       [
@@ -67,8 +83,9 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "a7165416-7750-44ea-a708-e11d70d0b1e5"
+        "projectId": "e84e9f46-137c-4e9c-b99a-8b1a72b5c36a"
       }
-    }
+    },
+    "owner": "karfala"
   }
 }

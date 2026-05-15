@@ -1,10 +1,8 @@
 export interface Env {
   DB: D1Database;
   KV: KVNamespace;
+  HYPERDRIVE?: any;
   MEDIA_BACKUP?: R2Bucket;
-  AI?: {
-    run: (model: string, input: unknown, options?: unknown) => Promise<unknown>;
-  };
   JWT_SECRET: string;
   CF_API_TOKEN: string;
   CF_ACCOUNT_ID: string;
@@ -14,8 +12,6 @@ export interface Env {
   CLOUDFLARE_IMAGES_TOKEN?: string;
   CLOUDFLARE_STREAM_TOKEN?: string;
   MAPBOX_ACCESS_TOKEN?: string;
-  EVENTBRITE_API_TOKEN?: string;
-  EVENTS_PREVIEW?: string;
   ENVIRONMENT: string;
   OWNER_USERNAMES?: string;
   GOOGLE_OAUTH_CLIENT_ID?: string;
@@ -30,9 +26,24 @@ export interface Env {
   AGORA_APP_ID?: string;
   AGORA_APP_CERTIFICATE?: string;
   AGORA_TOKEN_TTL_SECONDS?: string;
-  MEDIA_AI_ENHANCEMENT?: string;
-  MEDIA_AI_MODEL?: string;
   MEDIA_BACKUP_MAX_VIDEO_BYTES?: string;
+  STRIPE_SECRET_KEY?: string;
+  STRIPE_PUBLISHABLE_KEY?: string;
+  STRIPE_DEFAULT_PRICE_ID?: string;
+  STRIPE_PREMIUM_PRICE_ID?: string;
+  STRIPE_SUCCESS_URL?: string;
+  STRIPE_CANCEL_URL?: string;
+  STRIPE_WEBHOOK_SECRET?: string;
+  SUPABASE_URL?: string;
+  SUPABASE_JWT_ISSUER?: string;
+  SUPABASE_SERVICE_ROLE_KEY?: string;
+  ABUSE_SIGNAL_SECRET?: string;
+  OWNERSHIP_ANCHOR_PROVIDER?: string;
+  EVM_RPC_URL?: string;
+  EVM_CONTRACT_ADDRESS?: string;
+  SOLANA_RPC_URL?: string;
+  IPFS_API_URL?: string;
+  ARWEAVE_GATEWAY?: string;
 }
 
 export interface User {

@@ -1,0 +1,33 @@
+{
+  "expo": {
+    "name": "Governance Mobile",
+    "slug": "governance-mobile",
+    "scheme": "governance-mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "newArchEnabled": true,
+    "userInterfaceStyle": "light",
+    "splash": {
+      "backgroundColor": "#F6F7F3",
+      "resizeMode": "contain"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.flamesup.governance"
+    },
+    "android": {
+      "package": "com.flamesup.governance"
+    },
+    "web": {
+      "bundler": "metro"
+    },
+    "plugins": [
+      "expo-router"
+    ],
+    "extra": {
+      "router": {
+        "origin": false
+      }
+    }
+  }
+}

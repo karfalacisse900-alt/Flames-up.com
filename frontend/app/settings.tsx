@@ -8,6 +8,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { useAuthStore } from '../src/store/authStore';
 import api from '../src/api/client';
 import { AppLanguage, LANGUAGE_OPTIONS, useI18n } from '../src/utils/i18n';
+import SensitiveScreen from '../src/components/SensitiveScreen';
+import { borderRadius, colors, shadows, spacing } from '../src/utils/theme';
 
 export default function SettingsScreen() {
   const router = useRouter();
@@ -114,10 +116,10 @@ export default function SettingsScreen() {
   };
 
   return (
-    <View style={s.root}>
+    <SensitiveScreen style={s.root} label="Account settings">
       <View style={[s.header, { paddingTop: insets.top }]}>
         <TouchableOpacity style={s.backBtn} onPress={() => router.back()}>
-          <Ionicons name="chevron-back" size={20} color="#1A1A1A" />
+          <Ionicons name="chevron-back" size={20} color={colors.textPrimary} />
         </TouchableOpacity>
         <Text style={s.headerTitle}>{t('settings')}</Text>
         <View style={{ width: 40 }} />
@@ -129,13 +131,13 @@ export default function SettingsScreen() {
           <Text style={s.sectionTitle}>{t('privacy')}</Text>
           <View style={s.row}>
             <View style={s.rowLeft}>
-              <Ionicons name="lock-closed-outline" size={20} color="#1A1A1A" />
+              <Ionicons name="lock-closed-outline" size={20} color={colors.textPrimary} />
               <View style={s.rowText}>
                 <Text style={s.rowLabel}>{t('privateAccount')}</Text>
                 <Text style={s.rowSub}>{t('privateAccountDescription')}</Text>
               </View>
             </View>
-            <Switch value={isPrivate} onValueChange={togglePrivacy} trackColor={{ false: '#E0E0E0', true: '#1A1A1A' }} thumbColor="#FFF" />
+            <Switch value={isPrivate} onValueChange={togglePrivacy} trackColor={{ false: colors.borderMedium, true: colors.accentPrimary }} thumbColor={colors.textInverse} />
           </View>
         </View>
 
@@ -144,18 +146,18 @@ export default function SettingsScreen() {
           <Text style={s.sectionTitle}>{t('account')}</Text>
           <TouchableOpacity style={s.row} onPress={() => setShowEmailForm(!showEmailForm)}>
             <View style={s.rowLeft}>
-              <Ionicons name="mail-outline" size={20} color="#1A1A1A" />
+              <Ionicons name="mail-outline" size={20} color={colors.textPrimary} />
               <View>
                 <Text style={s.rowLabel}>{t('email')}</Text>
                 <Text style={s.rowSub}>{user?.email}</Text>
               </View>
             </View>
-            <Ionicons name="chevron-forward" size={16} color="#CCC" />
+            <Ionicons name="chevron-forward" size={16} color={colors.textHint} />
           </TouchableOpacity>
           {showEmailForm && (
             <View style={s.form}>
-              <TextInput style={s.input} value={newEmail} onChangeText={setNewEmail} placeholder={t('newEmail')} keyboardType="email-address" autoCapitalize="none" placeholderTextColor="#BBB" />
-              <TextInput style={s.input} value={emailPassword} onChangeText={setEmailPassword} placeholder="Current password" secureTextEntry placeholderTextColor="#BBB" />
+              <TextInput style={s.input} value={newEmail} onChangeText={setNewEmail} placeholder={t('newEmail')} keyboardType="email-address" autoCapitalize="none" placeholderTextColor={colors.textDisabled} />
+              <TextInput style={s.input} value={emailPassword} onChangeText={setEmailPassword} placeholder="Current password" secureTextEntry placeholderTextColor={colors.textDisabled} />
               <Text style={s.formHelp}>We verify this change with your current password.</Text>
               <TouchableOpacity style={s.saveBtn} onPress={changeEmail} disabled={savingEmail}>
                 <Text style={s.saveTx}>{savingEmail ? t('saving') : t('updateEmail')}</Text>
@@ -165,7 +167,7 @@ export default function SettingsScreen() {
 
           <TouchableOpacity style={s.row} onPress={() => router.push('/verify-phone' as any)}>
             <View style={s.rowLeft}>
-              <Ionicons name="call-outline" size={20} color="#1A1A1A" />
+              <Ionicons name="call-outline" size={20} color={colors.textPrimary} />
               <View>
                 <Text style={s.rowLabel}>Phone</Text>
                 <Text style={s.rowSub}>
@@ -173,20 +175,20 @@ export default function SettingsScreen() {
                 </Text>
               </View>
             </View>
-            <Ionicons name="chevron-forward" size={16} color="#CCC" />
+            <Ionicons name="chevron-forward" size={16} color={colors.textHint} />
           </TouchableOpacity>
 
           <TouchableOpacity style={s.row} onPress={() => setShowPasswordForm(!showPasswordForm)}>
             <View style={s.rowLeft}>
-              <Ionicons name="key-outline" size={20} color="#1A1A1A" />
+              <Ionicons name="key-outline" size={20} color={colors.textPrimary} />
               <Text style={s.rowLabel}>{t('password')}</Text>
             </View>
-            <Ionicons name="chevron-forward" size={16} color="#CCC" />
+            <Ionicons name="chevron-forward" size={16} color={colors.textHint} />
           </TouchableOpacity>
           {showPasswordForm && (
             <View style={s.form}>
-              <TextInput style={s.input} value={oldPassword} onChangeText={setOldPassword} placeholder="Current password" secureTextEntry placeholderTextColor="#BBB" />
-              <TextInput style={s.input} value={newPassword} onChangeText={setNewPassword} placeholder="New password" secureTextEntry placeholderTextColor="#BBB" />
+              <TextInput style={s.input} value={oldPassword} onChangeText={setOldPassword} placeholder="Current password" secureTextEntry placeholderTextColor={colors.textDisabled} />
+              <TextInput style={s.input} value={newPassword} onChangeText={setNewPassword} placeholder="New password" secureTextEntry placeholderTextColor={colors.textDisabled} />
               <TouchableOpacity style={s.saveBtn} onPress={changePassword} disabled={savingPassword}>
                 <Text style={s.saveTx}>{savingPassword ? 'Saving...' : 'Update Password'}</Text>
               </TouchableOpacity>
@@ -199,7 +201,7 @@ export default function SettingsScreen() {
           <Text style={s.sectionTitle}>{t('preferences')}</Text>
           <View style={[s.row, s.languageRow]}>
             <View style={s.rowLeft}>
-              <Ionicons name="language-outline" size={20} color="#1A1A1A" />
+              <Ionicons name="language-outline" size={20} color={colors.textPrimary} />
               <Text style={s.rowLabel}>{t('language')}</Text>
             </View>
             <View style={s.languageOptions}>
@@ -231,37 +233,55 @@ export default function SettingsScreen() {
           <Text style={s.deleteTx}>{t('deleteAccount')}</Text>
         </TouchableOpacity>
       </ScrollView>
-    </View>
+    </SensitiveScreen>
   );
 }
 
 const s = StyleSheet.create({
-  root: { flex: 1, backgroundColor: '#FFF' },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingBottom: 12 },
-  backBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#F5F5F5', justifyContent: 'center', alignItems: 'center' },
-  headerTitle: { fontSize: 18, fontWeight: '700', color: '#1A1A1A' },
-  content: { flex: 1, paddingHorizontal: 16 },
+  root: { flex: 1, backgroundColor: colors.bgApp },
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.md, paddingBottom: spacing.gutter },
+  backBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: colors.surfaceRaised,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    justifyContent: 'center',
+    alignItems: 'center',
+    ...shadows.elevation1,
+  },
+  headerTitle: { fontSize: 18, fontWeight: '600', color: colors.textPrimary },
+  content: { flex: 1, paddingHorizontal: spacing.md },
 
-  section: { marginBottom: 24 },
-  sectionTitle: { fontSize: 12, fontWeight: '700', color: '#999', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 },
-  row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 14, borderBottomWidth: 0.5, borderBottomColor: '#F0F0F0', gap: 12 },
-  rowLeft: { flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 },
+  section: {
+    marginBottom: spacing.md,
+    padding: spacing.md,
+    borderRadius: borderRadius.card,
+    backgroundColor: colors.surfaceRaised,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    ...shadows.elevation1,
+  },
+  sectionTitle: { fontSize: 12, fontWeight: '600', color: colors.textHint, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: spacing.sm },
+  row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 14, borderBottomWidth: 0.5, borderBottomColor: colors.divider, gap: spacing.gutter },
+  rowLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing.gutter, flex: 1 },
   rowText: { flex: 1 },
-  rowLabel: { fontSize: 16, fontWeight: '500', color: '#1A1A1A' },
-  rowSub: { fontSize: 13, color: '#999', marginTop: 1 },
-  rowValue: { fontSize: 14, color: '#999' },
+  rowLabel: { fontSize: 16, fontWeight: '500', color: colors.textPrimary },
+  rowSub: { fontSize: 13, color: colors.textSecondary, marginTop: 1 },
+  rowValue: { fontSize: 14, color: colors.textSecondary },
   languageRow: { alignItems: 'flex-start' },
-  languageOptions: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 8, flex: 1 },
-  languageChip: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 14, backgroundColor: '#F5F5F5', borderWidth: 1, borderColor: '#E8E8E8' },
-  languageChipOn: { backgroundColor: '#1A1A1A', borderColor: '#1A1A1A' },
-  languageChipText: { fontSize: 13, fontWeight: '700', color: '#666' },
-  languageChipTextOn: { color: '#FFF' },
+  languageOptions: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-end', gap: spacing.sm, flex: 1 },
+  languageChip: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 14, backgroundColor: colors.bgSubtle, borderWidth: 1, borderColor: colors.borderSubtle },
+  languageChipOn: { backgroundColor: colors.accentPrimary, borderColor: colors.accentPrimary },
+  languageChipText: { fontSize: 13, fontWeight: '500', color: colors.textSecondary },
+  languageChipTextOn: { color: colors.textInverse },
 
-  form: { paddingVertical: 12, gap: 10 },
-  input: { backgroundColor: '#F5F5F5', borderRadius: 12, paddingHorizontal: 16, paddingVertical: 12, fontSize: 15, color: '#1A1A1A' },
-  formHelp: { fontSize: 12, lineHeight: 17, color: '#8A8A8A' },
-  saveBtn: { backgroundColor: '#1A1A1A', borderRadius: 12, paddingVertical: 14, alignItems: 'center' },
-  saveTx: { fontSize: 15, fontWeight: '700', color: '#FFF' },
+  form: { paddingVertical: spacing.gutter, gap: 10 },
+  input: { backgroundColor: colors.bgSubtle, borderRadius: borderRadius.md, borderWidth: 1, borderColor: colors.borderSubtle, paddingHorizontal: spacing.md, paddingVertical: 12, fontSize: 15, color: colors.textPrimary },
+  formHelp: { fontSize: 12, lineHeight: 17, color: colors.textHint },
+  saveBtn: { backgroundColor: colors.accentPrimary, borderRadius: borderRadius.md, paddingVertical: 14, alignItems: 'center' },
+  saveTx: { fontSize: 15, fontWeight: '600', color: colors.textInverse },
 
   logoutBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 20, paddingVertical: 16, borderRadius: 12, backgroundColor: '#FEF2F2' },
   logoutTx: { fontSize: 16, fontWeight: '600', color: '#EF4444' },

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -15,24 +15,178 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Link, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import Constants from 'expo-constants';
-import * as AppleAuthentication from 'expo-apple-authentication';
-import * as Google from 'expo-auth-session/providers/google';
-import { makeRedirectUri } from 'expo-auth-session';
 import * as WebBrowser from 'expo-web-browser';
+import * as AppleAuthentication from 'expo-apple-authentication';
 import { useAuthStore } from '../../src/store/authStore';
-import { API_URL } from '../../src/api/client';
+import { getSupabaseRedirectSetupHint } from '../../src/api/supabaseOAuth';
 
 WebBrowser.maybeCompleteAuthSession();
 
 type AuthMethod = 'apple' | 'google' | 'email';
 
-type OAuthConfig = {
-  google?: { backend_configured?: boolean };
-  apple?: { audience_configured?: boolean };
+const SHOW_APPLE_SIGN_IN = process.env.EXPO_PUBLIC_ENABLE_APPLE_SIGN_IN !== '0'
+  && (Platform.OS === 'ios' || Platform.OS === 'web');
+const GOOGLE_WEB_CLIENT_ID = (process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || '').trim();
+const GOOGLE_IOS_CLIENT_ID = (process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID || '').trim();
+const GOOGLE_ANDROID_CLIENT_ID = (process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID || '').trim();
+
+type NativeGoogleSignInModule = typeof import('@react-native-google-signin/google-signin');
+
+type GoogleCredentialResponse = {
+  credential?: string;
+  select_by?: string;
 };
 
-const GOOGLE_REDIRECT_OPTIONS = { scheme: 'frontend', path: 'oauth' } as const;
+async function getNativeGoogleSignIn() {
+  try {
+    return await import('@react-native-google-signin/google-signin') as NativeGoogleSignInModule;
+  } catch {
+    throw new Error('Google sign in needs a development or production build. Expo Go does not include the native Google Sign-In module.');
+  }
+}
+
+let googleIdentityScriptPromise: Promise<void> | null = null;
+
+function getGoogleIdentity() {
+  if (Platform.OS !== 'web' || typeof window === 'undefined') return null;
+  return (window as any).google?.accounts?.id || null;
+}
+
+function loadGoogleIdentityScript() {
+  if (Platform.OS !== 'web' || typeof document === 'undefined') {
+    return Promise.reject(new Error('Google web sign-in is only available in the browser.'));
+  }
+  if (getGoogleIdentity()) return Promise.resolve();
+  if (googleIdentityScriptPromise) return googleIdentityScriptPromise;
+
+  googleIdentityScriptPromise = new Promise((resolve, reject) => {
+    const existing = document.querySelector('script[src="https://accounts.google.com/gsi/client"]');
+    if (existing) {
+      existing.addEventListener('load', () => resolve(), { once: true });
+      existing.addEventListener('error', () => reject(new Error('Could not load Google sign-in.')), { once: true });
+      return;
+    }
+
+    const script = document.createElement('script');
+    script.src = 'https://accounts.google.com/gsi/client';
+    script.async = true;
+    script.defer = true;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error('Could not load Google sign-in.'));
+    document.head.appendChild(script);
+  });
+
+  return googleIdentityScriptPromise;
+}
+
+function formatAppleFullName(fullName?: AppleAuthentication.AppleAuthenticationFullName | null) {
+  if (!fullName) return '';
+  return [
+    fullName.givenName,
+    fullName.middleName,
+    fullName.familyName,
+  ].filter(Boolean).join(' ').trim();
+}
+
+function GoogleIdentityWebButton({
+  disabled,
+  loading,
+  onCredential,
+  onError,
+}: {
+  disabled?: boolean;
+  loading?: boolean;
+  onCredential: (credential: string) => void;
+  onError: (message: string) => void;
+}) {
+  const buttonRef = useRef<any>(null);
+  const credentialRef = useRef(onCredential);
+  const errorRef = useRef(onError);
+  const [isReady, setIsReady] = useState(false);
+
+  useEffect(() => {
+    credentialRef.current = onCredential;
+    errorRef.current = onError;
+  }, [onCredential, onError]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+    if (!GOOGLE_WEB_CLIENT_ID) {
+      errorRef.current('Google web client ID is missing.');
+      return;
+    }
+
+    let cancelled = false;
+    loadGoogleIdentityScript()
+      .then(() => {
+        if (cancelled) return;
+        const googleIdentity = getGoogleIdentity();
+        const container = buttonRef.current;
+        if (!googleIdentity || !container) throw new Error('Google sign-in is not ready.');
+
+        googleIdentity.initialize({
+          client_id: GOOGLE_WEB_CLIENT_ID,
+          callback: (response: GoogleCredentialResponse) => {
+            if (response?.credential) {
+              credentialRef.current(response.credential);
+            } else {
+              errorRef.current('Google did not return a sign-in credential.');
+            }
+          },
+          auto_select: false,
+          cancel_on_tap_outside: true,
+          use_fedcm_for_prompt: true,
+        });
+
+        container.innerHTML = '';
+        googleIdentity.renderButton(container, {
+          type: 'standard',
+          theme: 'outline',
+          size: 'large',
+          text: 'continue_with',
+          shape: 'pill',
+          logo_alignment: 'left',
+          width: Math.min(360, Math.max(280, window.innerWidth - 56)),
+        });
+        setIsReady(true);
+      })
+      .catch((error: any) => {
+        if (!cancelled) errorRef.current(error?.message || 'Google sign-in could not load.');
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return (
+    <View style={[styles.googleCard, disabled && styles.methodButtonDisabled]}>
+      <View style={styles.googleCopy}>
+        <Text style={styles.googleTitle}>Sign in with Google</Text>
+        <Text style={styles.googleSubtitle}>Secure account login with no redirect loop.</Text>
+      </View>
+      <View style={styles.googleButtonShell}>
+        {React.createElement('div', {
+          ref: buttonRef,
+          style: {
+            minHeight: 44,
+            display: loading || disabled ? 'none' : 'flex',
+            justifyContent: 'center',
+            width: '100%',
+          },
+        })}
+        {!isReady || loading || disabled ? (
+          <View style={styles.googleLoadingOverlay}>
+            <ActivityIndicator color="#171717" />
+            <Text style={styles.googleLoadingText}>
+              {loading ? 'Signing you in...' : 'Preparing Google...'}
+            </Text>
+          </View>
+        ) : null}
+      </View>
+    </View>
+  );
+}
 
 function MethodButton({
   icon,
@@ -72,96 +226,14 @@ function MethodButton({
 
 export default function LoginScreen() {
   const router = useRouter();
-  const { login, loginWithOAuth } = useAuthStore();
+  const { login, loginWithOAuth, loginWithOAuthProvider } = useAuthStore();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [showEmailForm, setShowEmailForm] = useState(false);
   const [activeSocialMethod, setActiveSocialMethod] = useState<AuthMethod | null>(null);
-  const [oauthConfig, setOauthConfig] = useState<OAuthConfig | null>(null);
-
-  const googleWebClientId = (process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || '').trim();
-  const googleIosClientId = (process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID || '').trim();
-  const googleAndroidClientId = (process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID || '').trim();
-  const googleRedirectUri = makeRedirectUri(GOOGLE_REDIRECT_OPTIONS);
-  const isExpoGo = Constants.appOwnership === 'expo' && Platform.OS !== 'web';
-  const requiredGoogleClientId = Platform.select({
-    ios: googleIosClientId,
-    android: googleAndroidClientId,
-    default: googleWebClientId,
-  });
-  const requiredGoogleEnvName = Platform.select({
-    ios: 'EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID',
-    android: 'EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID',
-    default: 'EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID',
-  }) || 'EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID';
-  const hasGoogleClientId = !!requiredGoogleClientId;
-
-  // expo-auth-session requires platform client IDs to be defined at hook init time.
-  // Keep them as non-empty placeholders so the screen can render even before env setup.
-  const placeholderGoogleClientId = 'missing-google-client-id.apps.googleusercontent.com';
-  const safeGoogleWebClientId = googleWebClientId || placeholderGoogleClientId;
-  const safeGoogleIosClientId = googleIosClientId || placeholderGoogleClientId;
-  const safeGoogleAndroidClientId = googleAndroidClientId || placeholderGoogleClientId;
-
-  const [googleRequest, googleResponse, promptGoogleAsync] = Google.useIdTokenAuthRequest({
-    webClientId: safeGoogleWebClientId,
-    iosClientId: safeGoogleIosClientId,
-    androidClientId: safeGoogleAndroidClientId,
-    selectAccount: true,
-  }, GOOGLE_REDIRECT_OPTIONS);
-
-  useEffect(() => {
-    let mounted = true;
-
-    fetch(`${API_URL}/api/auth/oauth/config`)
-      .then((response) => response.ok ? response.json() : null)
-      .then((config) => {
-        if (mounted && config) setOauthConfig(config);
-      })
-      .catch(() => {});
-
-    return () => {
-      mounted = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    const handleGoogleResponse = async () => {
-      if (!googleResponse) return;
-      if (googleResponse.type !== 'success') {
-        if (googleResponse.type === 'error') {
-          const message = googleResponse.error?.message || googleResponse.params?.error_description || 'Google did not complete sign in.';
-          Alert.alert('Google sign in failed', message);
-        }
-        setActiveSocialMethod(null);
-        return;
-      }
-
-      const idToken = googleResponse.params?.id_token;
-      if (!idToken) {
-        Alert.alert('Google sign in failed', 'No token was returned from Google.');
-        setActiveSocialMethod(null);
-        return;
-      }
-
-      try {
-        await loginWithOAuth('google', idToken);
-        router.replace('/(tabs)/home');
-      } catch (error: any) {
-        const detail = error?.response?.data?.detail || 'Could not sign in with Google.';
-        const setupHint = detail === 'Google client audience mismatch'
-          ? ' Add this app client ID to GOOGLE_OAUTH_CLIENT_IDS on Cloudflare.'
-          : '';
-        Alert.alert('Google sign in failed', `${detail}${setupHint}`);
-      } finally {
-        setActiveSocialMethod(null);
-      }
-    };
-
-    handleGoogleResponse();
-  }, [googleResponse, loginWithOAuth, router]);
+  const [authError, setAuthError] = useState('');
 
   const handleLogin = async () => {
     if (!email || !password) {
@@ -174,88 +246,126 @@ export default function LoginScreen() {
       await login(email, password);
       router.replace('/(tabs)/home');
     } catch (error: any) {
-      Alert.alert('Login failed', error.response?.data?.detail || 'Invalid email or password.');
+      Alert.alert('Login failed', error.response?.data?.detail || error?.message || 'Invalid email or password.');
     } finally {
       setIsLoading(false);
     }
   };
 
-  const handleGooglePress = async () => {
-    const resolvedRedirectUri = googleRequest?.redirectUri || googleRedirectUri;
-    if (isExpoGo) {
-      Alert.alert(
-        'Google needs a development build',
-        `Expo Go cannot finish Google OAuth redirects. Use the development build command for Google sign in.\n\nRedirect URI for this run: ${resolvedRedirectUri}`
-      );
-      return;
-    }
-    if (!hasGoogleClientId) {
-      Alert.alert(
-        'Google sign in not configured',
-        `Set ${requiredGoogleEnvName} in frontend/.env, then restart Expo. Redirect URI: ${resolvedRedirectUri}`
-      );
-      return;
-    }
-    if (oauthConfig?.google && !oauthConfig.google.backend_configured) {
-      Alert.alert(
-        'Google backend not configured',
-        'Cloudflare is missing GOOGLE_OAUTH_CLIENT_IDS. Set it to a comma-separated list of the Google web, iOS, and Android client IDs used by the app.'
-      );
-      return;
-    }
-    if (!googleRequest) {
-      Alert.alert('Google sign in', 'Google auth request is not ready yet. Please try again.');
-      return;
-    }
+  const finishGoogleIdTokenLogin = useCallback(async (credential: string, authSurface: string) => {
     try {
+      setAuthError('');
       setActiveSocialMethod('google');
-      await promptGoogleAsync();
+      await loginWithOAuth('google', credential, {
+        auth_surface: authSurface,
+      });
+      router.replace('/(tabs)/home');
     } catch (error: any) {
-      Alert.alert('Google sign in failed', error?.message || 'Could not open Google sign in.');
+      const detail = error?.response?.data?.detail || error?.message || 'Could not sign in with Google.';
+      setAuthError(detail);
+      Alert.alert('Google sign in failed', detail);
+    } finally {
+      setActiveSocialMethod(null);
+    }
+  }, [loginWithOAuth, router]);
+
+  const handleGoogleCredential = useCallback(async (credential: string) => {
+    await finishGoogleIdTokenLogin(credential, 'google_identity_services');
+  }, [finishGoogleIdTokenLogin]);
+
+  const handleGooglePress = async () => {
+    try {
+      setAuthError('');
+      setActiveSocialMethod('google');
+      if (Platform.OS === 'web') {
+        throw new Error('Use the Google button on this page to sign in on web.');
+      }
+      if (Platform.OS === 'ios' && !GOOGLE_IOS_CLIENT_ID) {
+        throw new Error('Google iOS client ID is missing. Add EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID from your Google Cloud iOS OAuth client, then rebuild/restart Expo.');
+      }
+      if (Platform.OS === 'android' && !GOOGLE_ANDROID_CLIENT_ID) {
+        throw new Error('Google Android client ID is missing. Add EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID from your Google Cloud Android OAuth client, then rebuild/restart Expo.');
+      }
+      const { GoogleSignin } = await getNativeGoogleSignIn();
+      GoogleSignin.configure({
+        webClientId: GOOGLE_WEB_CLIENT_ID || undefined,
+        iosClientId: GOOGLE_IOS_CLIENT_ID || undefined,
+        offlineAccess: false,
+        scopes: ['profile', 'email'],
+      });
+      if (Platform.OS === 'android') {
+        await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
+      }
+      const result = await GoogleSignin.signIn();
+      if (result.type === 'cancelled') {
+        return;
+      }
+      let idToken = result.data.idToken || '';
+      if (!idToken) idToken = (await GoogleSignin.getTokens()).idToken;
+      if (!idToken) {
+        throw new Error('Google did not return an ID token.');
+      }
+      await loginWithOAuth('google', idToken, {
+        auth_surface: 'native_google_signin',
+      });
+      router.replace('/(tabs)/home');
+    } catch (error: any) {
+      const code = String(error?.code || '');
+      if (code === 'SIGN_IN_CANCELLED' || code === 'cancelled') {
+        return;
+      }
+      const detail = error?.response?.data?.detail || error?.message || 'Could not sign in with Google.';
+      setAuthError(detail);
+      Alert.alert('Google sign in failed', detail);
+    } finally {
       setActiveSocialMethod(null);
     }
   };
 
+  const handleGoogleWebError = useCallback((message: string) => {
+    setAuthError(message);
+  }, []);
+
   const handleApplePress = async () => {
-    if (Platform.OS !== 'ios') {
-      Alert.alert('Apple sign in', 'Apple sign in is supported on iOS devices.');
-      return;
-    }
-
-    setActiveSocialMethod('apple');
     try {
-      const isAvailable = await AppleAuthentication.isAvailableAsync();
-      if (!isAvailable) {
-        Alert.alert('Apple sign in unavailable', 'This device or build does not support Sign in with Apple.');
-        return;
+      setAuthError('');
+      setActiveSocialMethod('apple');
+      if (Platform.OS === 'ios') {
+        const available = await AppleAuthentication.isAvailableAsync();
+        if (!available) throw new Error('Apple sign in is not available on this device.');
+
+        const credential = await AppleAuthentication.signInAsync({
+          requestedScopes: [
+            AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
+            AppleAuthentication.AppleAuthenticationScope.EMAIL,
+          ],
+        });
+        if (!credential.identityToken) {
+          throw new Error('Apple did not return an identity token.');
+        }
+
+        await loginWithOAuth('apple', credential.identityToken, {
+          auth_surface: 'native_apple_authentication',
+          apple_user: credential.user,
+          email: credential.email || undefined,
+          full_name: formatAppleFullName(credential.fullName) || undefined,
+        });
+      } else {
+        await loginWithOAuthProvider('apple');
       }
-
-      const credential = await AppleAuthentication.signInAsync({
-        requestedScopes: [AppleAuthentication.AppleAuthenticationScope.FULL_NAME, AppleAuthentication.AppleAuthenticationScope.EMAIL],
-      });
-
-      if (!credential.identityToken) {
-        Alert.alert('Apple sign in failed', 'No identity token was returned by Apple.');
-        return;
-      }
-
-      const formattedFullName = credential.fullName
-        ? AppleAuthentication.formatFullName(credential.fullName)
-        : '';
-
-      await loginWithOAuth('apple', credential.identityToken, {
-        apple_user: credential.user,
-        email: credential.email,
-        full_name: formattedFullName,
-        authorization_code: credential.authorizationCode,
-      });
       router.replace('/(tabs)/home');
     } catch (error: any) {
-      const isCanceled = error?.code === 'ERR_REQUEST_CANCELED';
-      if (!isCanceled) {
-        const detail = error?.response?.data?.detail || error?.message || 'Could not sign in with Apple.';
-        const code = error?.code ? `\n\nCode: ${error.code}` : '';
-        Alert.alert('Apple sign in failed', `${detail}${code}`);
+      const code = String(error?.code || '');
+      const detail = error?.response?.data?.detail || error?.message || 'Could not sign in with Apple.';
+      const lower = detail.toLowerCase();
+      const setupHint = lower.includes('provider') && lower.includes('disabled')
+        ? '\n\nEnable Apple in Supabase Dashboard > Authentication > Providers > Apple, then add the Apple Service ID, Team ID, Key ID, and private key.'
+        : lower.includes('redirect')
+          ? `\n\n${getSupabaseRedirectSetupHint()}`
+          : '';
+      if (!lower.includes('canceled') && !code.includes('ERR_REQUEST_CANCELED')) {
+        setAuthError(detail);
+        Alert.alert('Apple sign in failed', `${detail}${setupHint}`);
       }
     } finally {
       setActiveSocialMethod(null);
@@ -298,22 +408,33 @@ export default function LoginScreen() {
           </View>
 
           <View style={styles.methodsWrap}>
-            <MethodButton
-              icon="logo-apple"
-              label="Continue with Apple"
-              variant="light"
-              loading={activeSocialMethod === 'apple'}
-              disabled={!!activeSocialMethod}
-              onPress={() => handleMethodPress('apple')}
-            />
-            <MethodButton
-              icon="logo-google"
-              label="Continue with Google"
-              variant="light"
-              loading={activeSocialMethod === 'google'}
-              disabled={!!activeSocialMethod}
-              onPress={() => handleMethodPress('google')}
-            />
+            {SHOW_APPLE_SIGN_IN ? (
+              <MethodButton
+                icon="logo-apple"
+                label="Continue with Apple"
+                variant="light"
+                loading={activeSocialMethod === 'apple'}
+                disabled={!!activeSocialMethod}
+                onPress={() => handleMethodPress('apple')}
+              />
+            ) : null}
+            {Platform.OS === 'web' ? (
+              <GoogleIdentityWebButton
+                loading={activeSocialMethod === 'google'}
+                disabled={!!activeSocialMethod}
+                onCredential={handleGoogleCredential}
+                onError={handleGoogleWebError}
+              />
+            ) : (
+              <MethodButton
+                icon="logo-google"
+                label="Continue with Google"
+                variant="light"
+                loading={activeSocialMethod === 'google'}
+                disabled={!!activeSocialMethod}
+                onPress={() => handleMethodPress('google')}
+              />
+            )}
             <MethodButton
               icon="mail-outline"
               label="Log in with Email"
@@ -322,6 +443,12 @@ export default function LoginScreen() {
               onPress={() => handleMethodPress('email')}
             />
           </View>
+          {authError ? (
+            <View style={styles.authErrorBox}>
+              <Ionicons name="alert-circle-outline" size={18} color="#111111" />
+              <Text style={styles.authErrorText}>{authError}</Text>
+            </View>
+          ) : null}
 
           {showEmailForm ? (
             <View style={styles.emailForm}>
@@ -417,7 +544,7 @@ const styles = StyleSheet.create({
     fontSize: 66,
     lineHeight: 72,
     color: '#171717',
-    fontWeight: '700',
+    fontWeight: '500',
     fontStyle: 'italic',
     textAlign: 'center',
     width: '100%',
@@ -426,7 +553,7 @@ const styles = StyleSheet.create({
     marginTop: 20,
     color: '#151515',
     fontSize: 22,
-    fontWeight: '800',
+    fontWeight: '600',
     textAlign: 'center',
     lineHeight: 28,
   },
@@ -454,7 +581,68 @@ const styles = StyleSheet.create({
   methodButtonText: {
     color: '#131313',
     fontSize: 17,
+    fontWeight: '500',
+  },
+  googleCard: {
+    borderRadius: 24,
+    borderWidth: 2,
+    borderColor: '#161616',
+    backgroundColor: '#F8F8F4',
+    padding: 14,
+    gap: 12,
+  },
+  googleCopy: {
+    gap: 3,
+    alignItems: 'center',
+  },
+  googleTitle: {
+    color: '#111111',
+    fontSize: 18,
+    lineHeight: 22,
     fontWeight: '700',
+  },
+  googleSubtitle: {
+    color: '#4A4A4A',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '500',
+    textAlign: 'center',
+  },
+  googleButtonShell: {
+    minHeight: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  googleLoadingOverlay: {
+    minHeight: 48,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+  },
+  googleLoadingText: {
+    color: '#171717',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  authErrorBox: {
+    marginTop: 12,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#111111',
+    backgroundColor: 'rgba(255,255,255,0.78)',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+  },
+  authErrorText: {
+    flex: 1,
+    color: '#111111',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '600',
   },
   emailForm: {
     marginTop: 20,
@@ -495,7 +683,7 @@ const styles = StyleSheet.create({
   signInButtonText: {
     color: '#FFFFFF',
     fontSize: 16,
-    fontWeight: '700',
+    fontWeight: '500',
   },
   registerRow: {
     marginTop: 4,
@@ -510,7 +698,7 @@ const styles = StyleSheet.create({
   registerLink: {
     color: '#161616',
     fontSize: 14,
-    fontWeight: '700',
+    fontWeight: '500',
   },
   backToMethods: {
     alignItems: 'center',

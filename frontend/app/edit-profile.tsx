@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import {
   View, Text, StyleSheet, TextInput, TouchableOpacity, Image, ScrollView,
   KeyboardAvoidingView, Platform, ActivityIndicator, Alert,
@@ -9,34 +9,36 @@ import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { useAuthStore } from '../src/store/authStore';
 import api from '../src/api/client';
+import { getPremiumStatus } from '../src/api/premium';
 import { uploadImage } from '../src/utils/mediaUpload';
-
-const LOOKING_FOR_OPTIONS = ['Friends', 'Networking', 'Explore', 'Events', 'Collab', 'Dating'];
-const INTEREST_OPTIONS = ['Food', 'Fashion', 'Music', 'Art', 'Travel', 'Nightlife', 'Street Culture', 'Photography', 'Film', 'Tech', 'Fitness', 'Comedy', 'Thrifting', 'Coffee', 'Vinyl', 'Sneakers'];
 
 export default function EditProfileScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { user, setUser } = useAuthStore();
+  const [premiumActive, setPremiumActive] = useState(!!user?.is_premium);
+  const isPremium = premiumActive || !!user?.is_premium;
 
   const [fullName, setFullName] = useState(user?.full_name || '');
   const [username, setUsername] = useState(user?.username || '');
   const [usernameStatus, setUsernameStatus] = useState<'idle'|'checking'|'available'|'taken'|'invalid'>('idle');
   const usernameTimer = useRef<any>(null);
-  const [bio, setBio] = useState(user?.bio || '');
-  const [city, setCity] = useState(user?.city || '');
-  const [age, setAge] = useState(user?.age || '');
-  const [lookingFor, setLookingFor] = useState<string[]>(() => {
-    try { return JSON.parse(user?.looking_for || '[]'); } catch { return []; }
-  });
-  const [interests, setInterests] = useState<string[]>(() => {
-    try { return JSON.parse(user?.interests || '[]'); } catch { return []; }
-  });
   const [socialWebsite, setSocialWebsite] = useState(user?.social_website || '');
   const [socialTiktok, setSocialTiktok] = useState(user?.social_tiktok || '');
   const [socialInstagram, setSocialInstagram] = useState(user?.social_instagram || '');
   const [profileImage, setProfileImage] = useState(user?.profile_image || '');
+  const [profileBackgroundImage, setProfileBackgroundImage] = useState(user?.profile_background_image || user?.cover_image || '');
   const [isSaving, setIsSaving] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+    getPremiumStatus()
+      .then((status) => {
+        if (mounted) setPremiumActive(!!status.is_premium);
+      })
+      .catch(() => undefined);
+    return () => { mounted = false; };
+  }, [user?.is_premium]);
 
   // Username validation
   const sanitizeUsername = (text: string) => {
@@ -59,18 +61,6 @@ export default function EditProfileScreen() {
         setUsernameStatus('available'); // assume available if search fails
       }
     }, 500);
-  };
-
-  const toggleLookingFor = (item: string) => {
-    setLookingFor(prev =>
-      prev.includes(item) ? prev.filter(i => i !== item) : [...prev, item]
-    );
-  };
-
-  const toggleInterest = (item: string) => {
-    setInterests(prev =>
-      prev.includes(item) ? prev.filter(i => i !== item) : [...prev, item]
-    );
   };
 
   const pickProfileImage = async () => {
@@ -100,6 +90,36 @@ export default function EditProfileScreen() {
     }
   };
 
+  const pickBackgroundImage = async () => {
+    if (!isPremium) {
+      Alert.alert('Premium background', 'Custom profile backgrounds are included with Premium.', [
+        { text: 'Not now', style: 'cancel' },
+        { text: 'Open Wallet', onPress: () => router.push('/wallet' as any) },
+      ]);
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      allowsEditing: true, aspect: [16, 9], quality: 0.75, base64: true,
+    });
+    if (!result.canceled && result.assets?.[0]) {
+      const asset = result.assets[0];
+      setProfileBackgroundImage(asset.uri);
+
+      if (asset.base64) {
+        const b64 = asset.base64.startsWith('data:') ? asset.base64 : `data:image/jpeg;base64,${asset.base64}`;
+        try {
+          const url = await uploadImage(b64);
+          if (url && url.startsWith('http')) {
+            setProfileBackgroundImage(url);
+          }
+        } catch (e) {
+          console.log('Profile background upload error:', e);
+          Alert.alert('Upload Issue', 'Background preview is set, but upload may fail for large images.');
+        }
+      }
+    }
+  };
+
   const handleSave = async () => {
     if (isSaving) return;
     if (usernameStatus === 'taken') {
@@ -115,17 +135,15 @@ export default function EditProfileScreen() {
       const payload: any = {
         full_name: fullName,
         username,
-        bio,
-        city,
         profile_image: profileImage,
-        looking_for: JSON.stringify(lookingFor),
-        interests: JSON.stringify(interests),
         social_website: socialWebsite,
         social_tiktok: socialTiktok,
         social_instagram: socialInstagram,
       };
-      // Only include age if it's a valid number
-      if (age && !isNaN(Number(age))) payload.age = age;
+      if (isPremium) {
+        payload.profile_background_image = profileBackgroundImage;
+        payload.cover_image = profileBackgroundImage;
+      }
       
       const res = await api.put('/users/me', payload);
       if (res.data) {
@@ -177,6 +195,32 @@ export default function EditProfileScreen() {
             <Text style={s.changePhotoText}>Change Photo</Text>
           </View>
 
+          <View style={s.section}>
+            <View style={s.sectionHeaderRow}>
+              <Text style={s.sectionTitle}>Profile Background</Text>
+              {isPremium ? (
+                <View style={s.premiumPill}>
+                  <Ionicons name="sparkles" size={12} color="#111111" />
+                  <Text style={s.premiumPillText}>Premium</Text>
+                </View>
+              ) : null}
+            </View>
+            <TouchableOpacity style={s.backgroundCard} onPress={pickBackgroundImage} activeOpacity={0.86}>
+              {profileBackgroundImage ? (
+                <Image source={{ uri: profileBackgroundImage }} style={s.backgroundPreview} />
+              ) : (
+                <View style={s.backgroundEmpty}>
+                  <Ionicons name="image-outline" size={26} color="#8A8A8A" />
+                </View>
+              )}
+              <View style={s.backgroundShade} />
+              <View style={s.backgroundCopy}>
+                <Text style={s.backgroundTitle}>{isPremium ? 'Change background' : 'Unlock custom background'}</Text>
+                <Text style={s.backgroundText}>{isPremium ? 'Use a wide banner image on your profile.' : 'Premium lets you upload a large profile banner.'}</Text>
+              </View>
+            </TouchableOpacity>
+          </View>
+
           {/* Basic Info */}
           <View style={s.section}>
             <Text style={s.sectionTitle}>Basic Info</Text>
@@ -198,63 +242,6 @@ export default function EditProfileScreen() {
               {usernameStatus === 'taken' && <Text style={s.fieldHintError}>Username already taken</Text>}
               {usernameStatus === 'invalid' && <Text style={s.fieldHintWarn}>Min 3 characters, lowercase letters, numbers, underscores</Text>}
               {usernameStatus === 'available' && <Text style={s.fieldHintSuccess}>Username is available</Text>}
-            </View>
-            <View style={s.field}>
-              <Text style={s.fieldLabel}>Bio</Text>
-              <TextInput style={[s.fieldInput, { minHeight: 70, textAlignVertical: 'top' }]} value={bio} onChangeText={setBio} placeholder="Tell us about yourself" placeholderTextColor="#CCC" multiline maxLength={200} />
-            </View>
-          </View>
-
-          {/* Personal Info */}
-          <View style={s.section}>
-            <Text style={s.sectionTitle}>Personal Info</Text>
-            <View style={s.fieldRow}>
-              <View style={[s.field, { flex: 1 }]}>
-                <Text style={s.fieldLabel}>Age</Text>
-                <TextInput style={s.fieldInput} value={age} onChangeText={setAge} placeholder="25" placeholderTextColor="#CCC" keyboardType="numeric" maxLength={3} />
-              </View>
-              <View style={[s.field, { flex: 2 }]}>
-                <Text style={s.fieldLabel}>Location</Text>
-                <TextInput style={s.fieldInput} value={city} onChangeText={setCity} placeholder="Brooklyn, NYC" placeholderTextColor="#CCC" />
-              </View>
-            </View>
-          </View>
-
-          {/* Looking For */}
-          <View style={s.section}>
-            <Text style={s.sectionTitle}>Looking For</Text>
-            <View style={s.chipGrid}>
-              {LOOKING_FOR_OPTIONS.map(item => {
-                const active = lookingFor.includes(item);
-                return (
-                  <TouchableOpacity
-                    key={item}
-                    style={[s.chip, active && s.chipActive]}
-                    onPress={() => toggleLookingFor(item)}
-                  >
-                    <Text style={[s.chipText, active && s.chipTextActive]}>{item}</Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-          </View>
-
-          {/* Interests */}
-          <View style={s.section}>
-            <Text style={s.sectionTitle}>Interests</Text>
-            <View style={s.chipGrid}>
-              {INTEREST_OPTIONS.map(item => {
-                const active = interests.includes(item);
-                return (
-                  <TouchableOpacity
-                    key={item}
-                    style={[s.chip, active && s.chipActiveAlt]}
-                    onPress={() => toggleInterest(item)}
-                  >
-                    <Text style={[s.chipText, active && s.chipTextActive]}>{item}</Text>
-                  </TouchableOpacity>
-                );
-              })}
             </View>
           </View>
 
@@ -287,9 +274,9 @@ const s = StyleSheet.create({
     paddingHorizontal: 16, paddingVertical: 12,
     borderBottomWidth: 1, borderBottomColor: '#F0EDE7',
   },
-  headerTitle: { fontSize: 17, fontWeight: '700', color: '#1A1A1A' },
+  headerTitle: { fontSize: 17, fontWeight: '500', color: '#1A1A1A' },
   saveBtn: { backgroundColor: '#1A1A1A', paddingHorizontal: 20, paddingVertical: 9, borderRadius: 18, minWidth: 64, alignItems: 'center' },
-  saveBtnText: { fontSize: 14, fontWeight: '700', color: '#FFF' },
+  saveBtnText: { fontSize: 14, fontWeight: '500', color: '#FFF' },
 
   // Avatar
   avatarSection: { alignItems: 'center', paddingVertical: 24 },
@@ -306,7 +293,17 @@ const s = StyleSheet.create({
 
   // Section
   section: { paddingHorizontal: 16, paddingTop: 20 },
-  sectionTitle: { fontSize: 12, fontWeight: '700', color: '#999', letterSpacing: 1, marginBottom: 12, textTransform: 'uppercase' },
+  sectionTitle: { fontSize: 12, fontWeight: '500', color: '#999', letterSpacing: 1, marginBottom: 12, textTransform: 'uppercase' },
+  sectionHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  premiumPill: { height: 26, borderRadius: 13, backgroundColor: '#FFF64A', flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, marginBottom: 12 },
+  premiumPillText: { color: '#111111', fontSize: 11, fontWeight: '700' },
+  backgroundCard: { height: 150, borderRadius: 20, overflow: 'hidden', backgroundColor: '#EFEFEB', borderWidth: 1, borderColor: '#E7E3DD' },
+  backgroundPreview: { ...StyleSheet.absoluteFillObject, width: '100%', height: '100%' },
+  backgroundEmpty: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center' },
+  backgroundShade: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.24)' },
+  backgroundCopy: { position: 'absolute', left: 14, right: 14, bottom: 14 },
+  backgroundTitle: { color: '#FFFFFF', fontSize: 16, lineHeight: 20, fontWeight: '700' },
+  backgroundText: { color: 'rgba(255,255,255,0.82)', fontSize: 12, lineHeight: 16, fontWeight: '500', marginTop: 2 },
 
   // Fields
   field: { marginBottom: 14 },

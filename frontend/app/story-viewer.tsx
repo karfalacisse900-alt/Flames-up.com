@@ -139,7 +139,7 @@ export default function StoryViewerScreen() {
   const current = statuses[currentIdx];
   const isOwnStory = userInfo?.user_id === user?.id;
   const location = statusLocation(current);
-  const accent = current?.background_color || '#F25DBB';
+  const accent = current?.background_color || '#20361F';
 
   return (
     <KeyboardAvoidingView
@@ -165,9 +165,6 @@ export default function StoryViewerScreen() {
       )}
 
       <View style={s.dim} />
-      <View pointerEvents="none" style={[s.shapeA, { backgroundColor: accent }]} />
-      <View pointerEvents="none" style={[s.shapeB, { backgroundColor: accent }]} />
-      <View pointerEvents="none" style={[s.shapeC, { backgroundColor: accent }]} />
 
       <View style={[s.progressRow, { top: insets.top + 10 }]}>
         {statuses.map((_, index) => (
@@ -259,9 +256,6 @@ const s = StyleSheet.create({
   bgMedia: { ...StyleSheet.absoluteFillObject, width: W, height: H, resizeMode: 'cover' },
   colorStory: { ...StyleSheet.absoluteFillObject },
   dim: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.24)' },
-  shapeA: { position: 'absolute', width: W * 0.8, height: 86, top: 78, left: -W * 0.25, transform: [{ rotate: '-16deg' }], borderRadius: 42 },
-  shapeB: { position: 'absolute', width: W * 0.64, height: 70, top: H * 0.36, right: -W * 0.2, transform: [{ rotate: '-13deg' }], borderRadius: 35 },
-  shapeC: { position: 'absolute', width: W * 0.9, height: 78, bottom: 128, left: -W * 0.16, transform: [{ rotate: '-8deg' }], borderRadius: 38 },
   progressRow: { position: 'absolute', left: 14, right: 14, zIndex: 20, flexDirection: 'row', gap: 5 },
   progressTrack: { flex: 1, height: 3, borderRadius: 3, overflow: 'hidden', backgroundColor: 'rgba(255,255,255,0.32)' },
   progressFill: { height: '100%', borderRadius: 3, backgroundColor: '#FFFFFF' },
@@ -269,22 +263,22 @@ const s = StyleSheet.create({
   identity: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 },
   avatar: { width: 38, height: 38, borderRadius: 19, overflow: 'hidden', backgroundColor: '#111111', alignItems: 'center', justifyContent: 'center', borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.52)' },
   avatarImage: { width: '100%', height: '100%' },
-  avatarText: { color: '#FFFFFF', fontSize: 14, fontWeight: '900' },
+  avatarText: { color: '#FFFFFF', fontSize: 14, fontWeight: '500' },
   identityCopy: { minWidth: 0, flex: 1 },
-  userName: { color: '#FFFFFF', fontSize: 15, fontWeight: '900' },
-  timeLabel: { color: 'rgba(255,255,255,0.78)', fontSize: 12, fontWeight: '700', marginTop: 1 },
+  userName: { color: '#FFFFFF', fontSize: 15, fontWeight: '500' },
+  timeLabel: { color: 'rgba(255,255,255,0.78)', fontSize: 12, fontWeight: '500', marginTop: 1 },
   closeBtn: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
   tapLayer: { ...StyleSheet.absoluteFillObject, zIndex: 8, flexDirection: 'row' },
   tapLeft: { flex: 1 },
   tapRight: { flex: 2 },
   stickerWrap: { position: 'absolute', zIndex: 18, top: H * 0.34, right: 28, maxWidth: W * 0.62, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 7, backgroundColor: '#FFFFFF', transform: [{ rotate: '-8deg' }] },
-  stickerText: { color: '#111111', fontSize: 15, lineHeight: 20, fontWeight: '900' },
+  stickerText: { color: '#111111', fontSize: 15, lineHeight: 20, fontWeight: '500' },
   caption: { position: 'absolute', zIndex: 18, left: 24, right: 24 },
-  captionTitle: { color: '#FFFFFF', fontSize: 18, lineHeight: 22, fontWeight: '900' },
-  captionSub: { color: 'rgba(255,255,255,0.82)', fontSize: 13, lineHeight: 17, fontWeight: '700', marginTop: 2 },
+  captionTitle: { color: '#FFFFFF', fontSize: 18, lineHeight: 22, fontWeight: '500' },
+  captionSub: { color: 'rgba(255,255,255,0.82)', fontSize: 13, lineHeight: 17, fontWeight: '500', marginTop: 2 },
   replyBar: { position: 'absolute', zIndex: 20, left: 18, right: 18, bottom: 0, flexDirection: 'row', alignItems: 'center', gap: 10 },
   replyInputWrap: { flex: 1, minHeight: 48, borderRadius: 24, borderWidth: 1.4, borderColor: 'rgba(255,255,255,0.82)', justifyContent: 'center', paddingHorizontal: 18, backgroundColor: 'rgba(0,0,0,0.16)' },
-  replyInput: { color: '#FFFFFF', fontSize: 15, fontWeight: '700', paddingVertical: 0 },
+  replyInput: { color: '#FFFFFF', fontSize: 15, fontWeight: '500', paddingVertical: 0 },
   replyIcon: { width: 46, height: 46, borderRadius: 23, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.22)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)' },
   replyIconLiked: { backgroundColor: 'rgba(255,49,88,0.72)' },
 });

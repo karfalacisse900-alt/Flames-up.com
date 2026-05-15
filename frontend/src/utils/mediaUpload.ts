@@ -1,4 +1,6 @@
 import api from '../api/client';
+import { planMedia } from '../../modules/mira-performance';
+import { VIDEO_DIRECT_UPLOAD_THRESHOLD_BYTES } from './mediaQuality';
 
 export type MediaUploadResult = {
   url: string;
@@ -6,11 +8,14 @@ export type MediaUploadResult = {
   source?: string;
   videoUid?: string;
   backupId?: string;
-  r2BackupKey?: string;
   sizeBytes?: number;
   checksumSha256?: string;
-  enhancementStatus?: string;
 };
+
+function estimateBase64Bytes(value: string) {
+  const payload = value.includes(',') ? value.split(',').pop() || '' : value;
+  return Math.floor(payload.length * 0.75);
+}
 
 /**
  * Upload an image to Cloudflare Images via the backend.
@@ -26,6 +31,12 @@ export async function uploadImage(base64Image: string): Promise<string> {
  */
 export async function uploadImageWithBackup(base64Image: string, filename = 'upload.jpg'): Promise<MediaUploadResult> {
   if (!base64Image) return { url: '' };
+  const planningUri = base64Image.startsWith('data:') ? 'data:image/jpeg;base64' : filename;
+  const uploadPlan = planMedia(planningUri, 'image/jpeg', filename, estimateBase64Bytes(base64Image), 0, 0, 'quality');
+  if (!uploadPlan.allowed) {
+    console.warn('Image upload rejected by native media plan:', uploadPlan.reason);
+    return { url: '', source: `rejected_${uploadPlan.reason}` };
+  }
   try {
     const response = await api.post('/upload/image', { image: base64Image, filename, backup: true });
     return {
@@ -33,10 +44,8 @@ export async function uploadImageWithBackup(base64Image: string, filename = 'upl
       id: response.data?.id,
       source: response.data?.source,
       backupId: response.data?.backup_id || undefined,
-      r2BackupKey: response.data?.r2_backup_key || undefined,
       sizeBytes: response.data?.size_bytes,
       checksumSha256: response.data?.checksum_sha256,
-      enhancementStatus: response.data?.enhancement_status,
     };
   } catch (error) {
     console.log('Image upload failed, using base64 fallback:', error);
@@ -93,8 +102,28 @@ export async function uploadVideoToStream(uploadUrl: string, videoUri: string): 
 export async function uploadVideoWithBackup(
   videoUri: string,
   mimeType = 'video/mp4',
-  fileName = 'upload.mp4'
+  fileName = 'upload.mp4',
+  fileSize?: number | null
 ): Promise<MediaUploadResult | null> {
+  const uploadPlan = planMedia(videoUri, mimeType, fileName, Number(fileSize || 0), 0, 0, 'quality');
+  if (!uploadPlan.allowed) {
+    console.warn('Video upload rejected by native media plan:', uploadPlan.reason);
+    return null;
+  }
+
+  if (Number(fileSize || 0) > VIDEO_DIRECT_UPLOAD_THRESHOLD_BYTES) {
+    const direct = await getVideoUploadUrl();
+    if (!direct) return null;
+    const ok = await uploadVideoToStream(direct.uploadUrl, videoUri);
+    if (!ok) return null;
+    return {
+      url: `cfstream:${direct.videoUid}`,
+      source: 'cloudflare_stream_direct_hd',
+      videoUid: direct.videoUid,
+      sizeBytes: Number(fileSize || 0) || undefined,
+    };
+  }
+
   try {
     const formData = new FormData();
     formData.append('file', {
@@ -114,7 +143,6 @@ export async function uploadVideoWithBackup(
         source: response.data.source,
         videoUid: response.data.video_uid,
         backupId: response.data.backup_id || undefined,
-        r2BackupKey: response.data.r2_backup_key || undefined,
         sizeBytes: response.data.size_bytes,
         checksumSha256: response.data.checksum_sha256,
       };
@@ -132,6 +160,40 @@ export async function uploadVideoWithBackup(
     source: 'cloudflare_stream',
     videoUid: direct.videoUid,
   };
+}
+
+export async function uploadAudioWithBackup(
+  audioUri: string,
+  mimeType = 'audio/m4a',
+  fileName = 'voice.m4a'
+): Promise<MediaUploadResult | null> {
+  try {
+    const formData = new FormData();
+    formData.append('file', {
+      uri: audioUri,
+      type: mimeType || 'audio/m4a',
+      name: fileName || 'voice.m4a',
+    } as any);
+
+    const response = await api.post('/upload/audio', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 90000,
+    });
+
+    if (response.data?.url) {
+      return {
+        url: response.data.url,
+        id: response.data.id,
+        source: response.data.source,
+        backupId: response.data.backup_id || undefined,
+        sizeBytes: response.data.size_bytes,
+        checksumSha256: response.data.checksum_sha256,
+      };
+    }
+  } catch (error) {
+    console.log('Audio upload failed:', error);
+  }
+  return null;
 }
 
 /**

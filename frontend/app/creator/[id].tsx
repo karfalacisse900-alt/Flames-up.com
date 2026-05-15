@@ -1,13 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, Image,
-  Dimensions, ActivityIndicator, Linking, FlatList,
+  Dimensions, ActivityIndicator, FlatList,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../../src/utils/theme';
 import api from '../../src/api/client';
+import { openSafeUrl } from '../../src/utils/safeLinking';
 
 const { width: SW } = Dimensions.get('window');
 const PORTFOLIO_SIZE = (SW - 48 - 8) / 3;
@@ -140,7 +141,7 @@ export default function CreatorDetailScreen() {
             {creator.contact_link ? (
               <TouchableOpacity
                 style={s.contactBtn}
-                onPress={() => Linking.openURL(creator.contact_link)}
+                onPress={() => openSafeUrl(creator.contact_link)}
               >
                 <Ionicons name="open-outline" size={18} color={colors.accentPrimary} />
               </TouchableOpacity>
@@ -191,7 +192,7 @@ export default function CreatorDetailScreen() {
               <View style={s.linksCard}>
                 <Text style={s.linksTitle}>Links</Text>
                 {portfolioLinks.map((link: string, idx: number) => (
-                  <TouchableOpacity key={idx} style={s.linkRow} onPress={() => Linking.openURL(link)}>
+                  <TouchableOpacity key={idx} style={s.linkRow} onPress={() => openSafeUrl(link)}>
                     <Ionicons
                       name={link.includes('instagram') ? 'logo-instagram' : link.includes('tiktok') ? 'logo-tiktok' : 'globe-outline'}
                       size={18}
@@ -237,30 +238,30 @@ const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bgApp },
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: colors.borderSubtle },
   backBtn: { width: 44, height: 44, justifyContent: 'center', alignItems: 'center' },
-  headerTitle: { fontSize: 18, fontWeight: '700', color: colors.textPrimary, fontStyle: 'italic' },
+  headerTitle: { fontSize: 18, fontWeight: '500', color: colors.textPrimary, fontStyle: 'italic' },
   loadingWrap: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   heroCard: { backgroundColor: colors.bgCard, margin: 16, borderRadius: 24, padding: 24, alignItems: 'center', borderWidth: 1, borderColor: colors.borderLight },
   avatarWrap: { position: 'relative', marginBottom: 12 },
   avatar: { width: 88, height: 88, borderRadius: 44, backgroundColor: colors.bgSubtle },
   avatarPlaceholder: { justifyContent: 'center', alignItems: 'center' },
-  avatarText: { fontSize: 32, fontWeight: '800', color: colors.textHint },
+  avatarText: { fontSize: 32, fontWeight: '600', color: colors.textHint },
   availDot: { position: 'absolute', bottom: 2, right: 2, width: 18, height: 18, borderRadius: 9, borderWidth: 3, borderColor: colors.bgCard },
   nameWrap: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  name: { fontSize: 22, fontWeight: '800', color: colors.textPrimary },
+  name: { fontSize: 22, fontWeight: '600', color: colors.textPrimary },
   verifiedBadge: { flexDirection: 'row', alignItems: 'center', gap: 3, backgroundColor: colors.accentPrimaryLight, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 12 },
-  verifiedText: { fontSize: 11, fontWeight: '700', color: colors.accentPrimary },
+  verifiedText: { fontSize: 11, fontWeight: '500', color: colors.accentPrimary },
   category: { fontSize: 15, color: colors.accentPrimary, fontWeight: '600', marginTop: 4, textTransform: 'capitalize' },
   availChip: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 14, paddingVertical: 6, borderRadius: 20, marginTop: 10 },
   availCircle: { width: 8, height: 8, borderRadius: 4 },
   availLabel: { fontSize: 13, fontWeight: '600' },
   statsRow: { flexDirection: 'row', alignItems: 'center', marginTop: 20, gap: 4 },
   statItem: { alignItems: 'center', paddingHorizontal: 16 },
-  statNum: { fontSize: 18, fontWeight: '800', color: colors.textPrimary },
+  statNum: { fontSize: 18, fontWeight: '600', color: colors.textPrimary },
   statLabel: { fontSize: 12, color: colors.textHint, marginTop: 2 },
   statDivider: { width: 1, height: 24, backgroundColor: colors.borderLight },
   actionRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 20, width: '100%' },
   msgBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: colors.accentPrimary, borderRadius: 16, paddingVertical: 14 },
-  msgBtnText: { fontSize: 15, fontWeight: '700', color: '#FFFFFF' },
+  msgBtnText: { fontSize: 15, fontWeight: '500', color: '#FFFFFF' },
   contactBtn: { width: 48, height: 48, borderRadius: 16, backgroundColor: colors.accentPrimaryLight, justifyContent: 'center', alignItems: 'center' },
   infoCard: { flexDirection: 'row', alignItems: 'center', gap: 10, marginHorizontal: 16, backgroundColor: colors.bgCard, borderRadius: 16, padding: 16, borderWidth: 1, borderColor: colors.borderLight, marginBottom: 12 },
   infoText: { fontSize: 15, fontWeight: '500', color: colors.textPrimary },
@@ -275,7 +276,7 @@ const s = StyleSheet.create({
   detailRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 },
   detailText: { fontSize: 14, color: colors.textSecondary },
   linksCard: { backgroundColor: colors.bgCard, borderRadius: 20, padding: 16, borderWidth: 1, borderColor: colors.borderLight },
-  linksTitle: { fontSize: 15, fontWeight: '700', color: colors.textPrimary, marginBottom: 8 },
+  linksTitle: { fontSize: 15, fontWeight: '500', color: colors.textPrimary, marginBottom: 8 },
   linkRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 10, borderTopWidth: 1, borderTopColor: colors.borderSubtle },
   linkText: { flex: 1, fontSize: 14, color: colors.accentPrimary },
   emptyPortfolio: { alignItems: 'center', paddingTop: 40 },

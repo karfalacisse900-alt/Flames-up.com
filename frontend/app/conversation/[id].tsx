@@ -9,18 +9,20 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuthStore } from '../../src/store/authStore';
 import api from '../../src/api/client';
-import { format } from 'date-fns';
+import { format, formatDistanceToNow } from 'date-fns';
 import * as ImagePicker from 'expo-image-picker';
 import { Audio, Video, ResizeMode } from 'expo-av';
-import { uploadImage, getVideoUploadUrl, uploadVideoToStream } from '../../src/utils/mediaUpload';
+import { uploadAudioWithBackup, uploadImage, getVideoUploadUrl, uploadVideoToStream } from '../../src/utils/mediaUpload';
 import { buildAgoraCallHref } from '../../src/utils/calls';
 import { isPhoneVerificationError, requireVerifiedPhone } from '../../src/utils/phoneVerification';
+import { colors } from '../../src/utils/theme';
 
 const { width: SW } = Dimensions.get('window');
 
 export default function ConversationScreen() {
   const router = useRouter();
-  const { id: userId } = useLocalSearchParams<{ id: string }>();
+  const { id: userIdParam } = useLocalSearchParams<{ id: string | string[] }>();
+  const peerId = Array.isArray(userIdParam) ? userIdParam[0] : String(userIdParam || '');
   const { user } = useAuthStore();
   const [messages, setMessages] = useState<any[]>([]);
   const [otherUser, setOtherUser] = useState<any>(null);
@@ -30,21 +32,29 @@ export default function ConversationScreen() {
   const [selectedMedia, setSelectedMedia] = useState<{ uri: string; type: 'image' | 'video'; base64?: string } | null>(null);
   const [showAttachMenu, setShowAttachMenu] = useState(false);
   const [viewingMedia, setViewingMedia] = useState<string | null>(null);
-  const [isTyping, setIsTyping] = useState(false);
+  const [peerPresence, setPeerPresence] = useState<{ is_online: boolean; is_typing: boolean; last_seen_at?: string | null }>({ is_online: false, is_typing: false });
   const [isRecording, setIsRecording] = useState(false);
   const [recording, setRecording] = useState<Audio.Recording | null>(null);
   const [recordDuration, setRecordDuration] = useState(0);
   const [playingVoice, setPlayingVoice] = useState<string | null>(null);
   const flatListRef = useRef<FlatList>(null);
   const typingTimeout = useRef<any>(null);
+  const typingActiveRef = useRef(false);
   const recordTimer = useRef<any>(null);
   const pulseAnim = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
     loadData();
-    const interval = setInterval(loadMessages, 4000);
-    return () => { clearInterval(interval); if (typingTimeout.current) clearTimeout(typingTimeout.current); };
-  }, [userId]);
+    const interval = setInterval(() => {
+      loadMessages();
+      loadPresence();
+    }, 4000);
+    return () => {
+      clearInterval(interval);
+      if (typingTimeout.current) clearTimeout(typingTimeout.current);
+      sendTypingState(false);
+    };
+  }, [peerId]);
 
   useEffect(() => {
     if (isRecording) {
@@ -60,21 +70,36 @@ export default function ConversationScreen() {
   }, [isRecording]);
 
   const loadData = async () => {
+    if (!peerId) {
+      setIsLoading(false);
+      return;
+    }
     try {
-      const [messagesRes, userRes] = await Promise.all([
-        api.get(`/messages/${userId}`),
-        api.get(`/users/${userId}`),
+      const [messagesRes, userRes, presenceRes] = await Promise.all([
+        api.get(`/messages/${peerId}`),
+        api.get(`/users/${peerId}`),
+        api.get(`/messages/presence/${peerId}`).catch(() => ({ data: null })),
       ]);
       setMessages(messagesRes.data);
       setOtherUser(userRes.data);
+      if (presenceRes.data) setPeerPresence(presenceRes.data);
     } catch (e) { console.log('Load error:', e); }
     finally { setIsLoading(false); }
   };
 
   const loadMessages = async () => {
+    if (!peerId) return;
     try {
-      const r = await api.get(`/messages/${userId}`);
+      const r = await api.get(`/messages/${peerId}`);
       setMessages(r.data);
+    } catch {}
+  };
+
+  const loadPresence = async () => {
+    if (!peerId) return;
+    try {
+      const r = await api.get(`/messages/presence/${peerId}`);
+      setPeerPresence(r.data);
     } catch {}
   };
 
@@ -82,21 +107,40 @@ export default function ConversationScreen() {
     if (!requireVerifiedPhone(user, router, 'start video calls')) return;
     router.push(buildAgoraCallHref({
       currentUserId: user?.id,
-      peerId: userId,
+      peerId,
       peerName: otherUser?.full_name || otherUser?.username || 'Video call',
       peerAvatar: otherUser?.profile_image || '',
     }) as any);
   };
 
+  const startVoiceCall = () => {
+    if (!requireVerifiedPhone(user, router, 'start voice calls')) return;
+    router.push(buildAgoraCallHref({
+      currentUserId: user?.id,
+      peerId,
+      peerName: otherUser?.full_name || otherUser?.username || 'Voice call',
+      peerAvatar: otherUser?.profile_image || '',
+      mode: 'voice',
+    }) as any);
+  };
+
+  const sendTypingState = async (typing: boolean) => {
+    if (!peerId) return;
+    if (typingActiveRef.current === typing) return;
+    typingActiveRef.current = typing;
+    try {
+      await api.post('/messages/typing', { peer_id: peerId, is_typing: typing });
+    } catch {}
+  };
+
   const handleTextChange = (text: string) => {
     setNewMessage(text);
-    // Typing indicator logic
     if (typingTimeout.current) clearTimeout(typingTimeout.current);
-    if (text.length > 0) {
-      setIsTyping(true);
-      typingTimeout.current = setTimeout(() => setIsTyping(false), 2000);
+    if (text.trim().length > 0) {
+      sendTypingState(true);
+      typingTimeout.current = setTimeout(() => sendTypingState(false), 1800);
     } else {
-      setIsTyping(false);
+      sendTypingState(false);
     }
   };
 
@@ -201,9 +245,10 @@ export default function ConversationScreen() {
     setIsSending(true);
     setNewMessage('');
     setSelectedMedia(null);
+    sendTypingState(false);
 
     try {
-      const payload: any = { receiver_id: userId, content: msgText || '' };
+      const payload: any = { receiver_id: peerId, content: msgText || '' };
       if (media) {
         if (media.type === 'image' && (media as any).base64) {
           const imgData = `data:image/jpeg;base64,${(media as any).base64}`;
@@ -221,8 +266,10 @@ export default function ConversationScreen() {
           } catch {
             payload.media_url = media.uri;
           }
+        } else if (media.type === 'voice') {
+          const uploaded = await uploadAudioWithBackup(media.uri, 'audio/m4a', `voice-${Date.now()}.m4a`);
+          payload.media_url = uploaded?.url || media.uri;
         } else {
-          // Voice or other — send URI directly (works for local playback)
           payload.media_url = media.uri;
         }
         payload.media_type = mediaType || media.type;
@@ -240,6 +287,15 @@ export default function ConversationScreen() {
   };
 
   const formatDuration = (sec: number) => `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+
+  const peerStatusText = () => {
+    if (peerPresence.is_typing) return 'typing...';
+    if (peerPresence.is_online) return 'Online';
+    if (peerPresence.last_seen_at) {
+      return `Last seen ${formatDistanceToNow(new Date(peerPresence.last_seen_at), { addSuffix: true })}`;
+    }
+    return otherUser?.username ? `@${otherUser.username}` : 'Message';
+  };
 
   const renderMessage = ({ item }: { item: any }) => {
     const isOwn = item.sender_id === user?.id;
@@ -312,16 +368,24 @@ export default function ConversationScreen() {
         <TouchableOpacity onPress={() => router.back()} style={st.backBtn}>
           <Ionicons name="arrow-back" size={24} color="#1B4332" />
         </TouchableOpacity>
-        <TouchableOpacity style={st.headerUser} onPress={() => router.push(`/user/${userId}`)}>
-          {otherUser?.profile_image ? (
-            <Image source={{ uri: otherUser.profile_image }} style={st.avatar} />
-          ) : (
-            <View style={st.avatarFallback}><Text style={st.avatarText}>{otherUser?.username?.[0]?.toUpperCase() || '?'}</Text></View>
-          )}
+        <TouchableOpacity style={st.headerUser} onPress={() => router.push(`/user/${peerId}`)}>
+          <View style={st.avatarWrap}>
+            {otherUser?.profile_image ? (
+              <Image source={{ uri: otherUser.profile_image }} style={st.avatar} />
+            ) : (
+              <View style={st.avatarFallback}><Text style={st.avatarText}>{otherUser?.username?.[0]?.toUpperCase() || '?'}</Text></View>
+            )}
+            {peerPresence.is_online ? <View style={st.onlineDot} /> : null}
+          </View>
           <View>
             <Text style={st.headerName}>{otherUser?.full_name}</Text>
-            <Text style={st.headerHandle}>@{otherUser?.username}</Text>
+            <Text style={[st.headerHandle, peerPresence.is_typing && st.headerTyping]}>
+              {peerStatusText()}
+            </Text>
           </View>
+        </TouchableOpacity>
+        <TouchableOpacity style={st.headerCallBtn} onPress={startVoiceCall} activeOpacity={0.75}>
+          <Ionicons name="call-outline" size={22} color="#1B4332" />
         </TouchableOpacity>
         <TouchableOpacity style={st.headerCallBtn} onPress={startVideoCall} activeOpacity={0.75}>
           <Ionicons name="videocam-outline" size={24} color="#1B4332" />
@@ -336,6 +400,9 @@ export default function ConversationScreen() {
           keyExtractor={(item) => item.id}
           contentContainerStyle={st.msgList}
           onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: false })}
+          bounces={false}
+          alwaysBounceVertical={false}
+          overScrollMode="never"
           ListEmptyComponent={
             <View style={st.empty}><Ionicons name="chatbubble-outline" size={48} color="#D1D5DB" /><Text style={st.emptyText}>No messages yet. Say hi!</Text></View>
           }
@@ -436,15 +503,18 @@ export default function ConversationScreen() {
 const st = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#FAFAF8' },
   loading: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#FAFAF8' },
-  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#F0ECE5', backgroundColor: '#FFF' },
+  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#F0ECE5', backgroundColor: '#FAFAF8' },
   backBtn: { width: 44, height: 44, justifyContent: 'center', alignItems: 'center' },
   headerUser: { flexDirection: 'row', alignItems: 'center', flex: 1, marginLeft: 4 },
   headerCallBtn: { width: 44, height: 44, borderRadius: 22, justifyContent: 'center', alignItems: 'center', marginLeft: 8 },
-  avatar: { width: 40, height: 40, borderRadius: 20, marginRight: 10 },
-  avatarFallback: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#2D6A4F', justifyContent: 'center', alignItems: 'center', marginRight: 10 },
-  avatarText: { color: '#FFF', fontSize: 16, fontWeight: '700' },
-  headerName: { fontSize: 16, fontWeight: '700', color: '#1B4332' },
+  avatarWrap: { width: 40, height: 40, marginRight: 10 },
+  avatar: { width: 40, height: 40, borderRadius: 20 },
+  avatarFallback: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#2D6A4F', justifyContent: 'center', alignItems: 'center' },
+  avatarText: { color: '#FFF', fontSize: 16, fontWeight: '500' },
+  onlineDot: { position: 'absolute', right: 0, bottom: 0, width: 11, height: 11, borderRadius: 6, borderWidth: 2, borderColor: '#FAFAF8', backgroundColor: '#36C56B' },
+  headerName: { fontSize: 16, fontWeight: '500', color: '#1B4332' },
   headerHandle: { fontSize: 12, color: '#9CA3AF' },
+  headerTyping: { color: '#2D6A4F', fontWeight: '600' },
   msgList: { padding: 16, flexGrow: 1 },
   msgRow: { marginBottom: 6, alignItems: 'flex-start' },
   msgRowOwn: { alignItems: 'flex-end' },
@@ -476,7 +546,7 @@ const st = StyleSheet.create({
   recordingBar: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 16, paddingVertical: 12, backgroundColor: '#FFF', borderTopWidth: 1, borderTopColor: '#F0ECE5' },
   cancelRecBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#FEF2F2', justifyContent: 'center', alignItems: 'center' },
   recDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#EF4444' },
-  recTime: { fontSize: 15, fontWeight: '700', color: '#1B4332', fontVariant: ['tabular-nums'] },
+  recTime: { fontSize: 15, fontWeight: '500', color: '#1B4332', fontVariant: ['tabular-nums'] },
   recLabel: { flex: 1, fontSize: 13, color: '#9CA3AF' },
   sendRecBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#2D6A4F', justifyContent: 'center', alignItems: 'center' },
   // Input
@@ -486,10 +556,10 @@ const st = StyleSheet.create({
   sendBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#2D6A4F', justifyContent: 'center', alignItems: 'center' },
   micBtn: { width: 44, height: 44, justifyContent: 'center', alignItems: 'center' },
   // Attach
-  attachOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.3)', justifyContent: 'flex-end' },
+  attachOverlay: { flex: 1, backgroundColor: colors.modalScrim, justifyContent: 'flex-end' },
   attachSheet: { backgroundColor: '#FFF', borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingHorizontal: 24, paddingBottom: 40, paddingTop: 12 },
   attachHandle: { width: 40, height: 4, backgroundColor: '#D1D5DB', borderRadius: 2, alignSelf: 'center', marginBottom: 16 },
-  attachTitle: { fontSize: 18, fontWeight: '700', color: '#1B4332', marginBottom: 20, textAlign: 'center' },
+  attachTitle: { fontSize: 18, fontWeight: '500', color: '#1B4332', marginBottom: 20, textAlign: 'center' },
   attachOpts: { flexDirection: 'row', justifyContent: 'space-around' },
   attachOpt: { alignItems: 'center', gap: 8 },
   attachIconBox: { width: 60, height: 60, borderRadius: 20, justifyContent: 'center', alignItems: 'center' },

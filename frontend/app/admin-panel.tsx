@@ -1,12 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, Image,
-  ActivityIndicator, Alert, RefreshControl,
+  ActivityIndicator, Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { colors } from '../src/utils/theme';
 import api from '../src/api/client';
 
 type TabId = 'overview' | 'reports' | 'publishers';
@@ -18,7 +17,6 @@ export default function AdminPanelScreen() {
   const [reports, setReports] = useState<any[]>([]);
   const [publisherApps, setPublisherApps] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => { loadData(); }, [tab]);
 
@@ -91,20 +89,20 @@ export default function AdminPanelScreen() {
       </View>
 
       <ScrollView
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); await loadData(); setRefreshing(false); }} tintColor="#2D6A4F" />}
         contentContainerStyle={{ padding: 16, paddingBottom: 80 }}
       >
         {loading ? <ActivityIndicator size="large" color="#2D6A4F" style={{ marginTop: 40 }} /> : (
           <>
             {tab === 'overview' && stats && (
-              <View style={s.statsGrid}>
-                <StatCard label="Users" value={stats.total_users} icon="people" color="#3B82F6" />
-                <StatCard label="Posts" value={stats.total_posts} icon="document-text" color="#10B981" />
-                <StatCard label="Reports" value={stats.pending_reports} icon="flag" color="#EF4444" />
-                <StatCard label="Publishers" value={stats.total_publishers} icon="megaphone" color="#8B5CF6" />
-                <StatCard label="Pending Apps" value={stats.pending_publisher_apps} icon="time" color="#F59E0B" />
-                <StatCard label="Discover" value={stats.total_discover_posts} icon="newspaper" color="#06B6D4" />
-              </View>
+              <>
+                <View style={s.statsGrid}>
+                  <StatCard label="Users" value={stats.total_users} icon="people" color="#3B82F6" />
+                  <StatCard label="Posts" value={stats.total_posts} icon="document-text" color="#10B981" />
+                  <StatCard label="Reports" value={stats.pending_reports} icon="flag" color="#EF4444" />
+                  <StatCard label="Publishers" value={stats.total_publishers} icon="megaphone" color="#8B5CF6" />
+                  <StatCard label="Pending Apps" value={stats.pending_publisher_apps} icon="time" color="#F59E0B" />
+                </View>
+              </>
             )}
 
             {tab === 'reports' && (
@@ -179,24 +177,48 @@ const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#FAFAF8' },
   header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, gap: 12 },
   backBtn: { width: 44, height: 44, justifyContent: 'center', alignItems: 'center' },
-  headerTitle: { flex: 1, fontSize: 22, fontWeight: '800', color: '#1B4332' },
+  headerTitle: { flex: 1, fontSize: 22, fontWeight: '600', color: '#1B4332' },
   adminBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8, backgroundColor: '#EF4444' },
-  adminBadgeText: { fontSize: 10, fontWeight: '800', color: '#FFF', letterSpacing: 1 },
+  adminBadgeText: { fontSize: 10, fontWeight: '600', color: '#FFF', letterSpacing: 1 },
   tabRow: { flexDirection: 'row', paddingHorizontal: 16, gap: 8, marginBottom: 8 },
   tab: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, paddingVertical: 10, borderRadius: 14, backgroundColor: '#F3F0EB', borderWidth: 1, borderColor: '#E0D5C5' },
   tabActive: { backgroundColor: '#2D6A4F', borderColor: '#2D6A4F' },
   tabText: { fontSize: 12, fontWeight: '600', color: '#5C4033' },
   tabTextActive: { color: '#FFF' },
+  discoverAdminCard: {
+    minHeight: 92,
+    borderRadius: 18,
+    padding: 14,
+    marginBottom: 14,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E4E7DD',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  discoverAdminIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#20361F',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#1B4332',
+  },
+  discoverAdminTitle: { fontSize: 17, fontWeight: '800', color: '#1B4332' },
+  discoverAdminText: { marginTop: 3, fontSize: 12, lineHeight: 17, fontWeight: '500', color: '#596154' },
   statsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
   statCard: { width: '47%' as any, backgroundColor: '#FFF', borderRadius: 16, padding: 16, borderLeftWidth: 4, borderWidth: 1, borderColor: '#F0ECE5' },
   statIcon: { width: 36, height: 36, borderRadius: 12, justifyContent: 'center', alignItems: 'center', marginBottom: 8 },
-  statValue: { fontSize: 28, fontWeight: '800', color: '#1B4332' },
+  statValue: { fontSize: 28, fontWeight: '600', color: '#1B4332' },
   statLabel: { fontSize: 12, color: '#6B7280', marginTop: 2, fontWeight: '500' },
   empty: { alignItems: 'center', paddingTop: 60 },
   emptyText: { fontSize: 16, color: '#9CA3AF', marginTop: 12 },
   reportCard: { backgroundColor: '#FFF', borderRadius: 16, padding: 16, marginBottom: 12, borderWidth: 1, borderColor: '#FEE2E2' },
   reportHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
-  reportType: { fontSize: 13, fontWeight: '700', color: '#EF4444', textTransform: 'capitalize' },
+  reportType: { fontSize: 13, fontWeight: '500', color: '#EF4444', textTransform: 'capitalize' },
   reportTime: { marginLeft: 'auto', fontSize: 12, color: '#9CA3AF' },
   reportReason: { fontSize: 14, color: '#374151', lineHeight: 20, marginBottom: 8 },
   reportContent: { backgroundColor: '#F9FAFB', borderRadius: 10, padding: 10, marginBottom: 10 },
@@ -205,23 +227,23 @@ const s = StyleSheet.create({
   resolvedText: { fontSize: 11, fontWeight: '600', color: '#6B7280' },
   reportActions: { flexDirection: 'row', gap: 10 },
   removeBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, paddingVertical: 10, borderRadius: 12, backgroundColor: '#EF4444' },
-  removeBtnText: { fontSize: 13, fontWeight: '700', color: '#FFF' },
+  removeBtnText: { fontSize: 13, fontWeight: '500', color: '#FFF' },
   dismissBtn: { flex: 1, paddingVertical: 10, borderRadius: 12, backgroundColor: '#F3F4F6', alignItems: 'center' },
   dismissBtnText: { fontSize: 13, fontWeight: '600', color: '#6B7280' },
   pubCard: { backgroundColor: '#FFF', borderRadius: 16, padding: 16, marginBottom: 12, borderWidth: 1, borderColor: '#F0ECE5' },
   pubHeader: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 12 },
   pubAvatar: { width: 44, height: 44, borderRadius: 22, overflow: 'hidden', backgroundColor: '#E8F5E9', justifyContent: 'center', alignItems: 'center' },
-  pubInitial: { fontSize: 18, fontWeight: '700', color: '#2D6A4F' },
-  pubName: { fontSize: 16, fontWeight: '700', color: '#1B4332' },
+  pubInitial: { fontSize: 18, fontWeight: '500', color: '#2D6A4F' },
+  pubName: { fontSize: 16, fontWeight: '500', color: '#1B4332' },
   pubBiz: { fontSize: 12, color: '#6B7280', marginTop: 1 },
   statusPill: { paddingHorizontal: 10, paddingVertical: 3, borderRadius: 8 },
-  statusPillText: { fontSize: 10, fontWeight: '800', letterSpacing: 0.5 },
+  statusPillText: { fontSize: 10, fontWeight: '600', letterSpacing: 0.5 },
   pubDetails: { gap: 4, marginBottom: 4 },
-  pubDetailLabel: { fontSize: 12, fontWeight: '700', color: '#9CA3AF' },
+  pubDetailLabel: { fontSize: 12, fontWeight: '500', color: '#9CA3AF' },
   pubDetailValue: { fontSize: 13, color: '#374151', fontWeight: '400' },
   pubActions: { flexDirection: 'row', gap: 10, marginTop: 12 },
   approveBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, paddingVertical: 10, borderRadius: 14, backgroundColor: '#10B981' },
-  approveBtnText: { fontSize: 14, fontWeight: '700', color: '#FFF' },
+  approveBtnText: { fontSize: 14, fontWeight: '500', color: '#FFF' },
   declineBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, paddingVertical: 10, borderRadius: 14, backgroundColor: '#FEE2E2', borderWidth: 1, borderColor: '#FECACA' },
-  declineBtnText: { fontSize: 14, fontWeight: '700', color: '#DC2626' },
+  declineBtnText: { fontSize: 14, fontWeight: '500', color: '#DC2626' },
 });

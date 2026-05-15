@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, TextInput, TouchableOpacity, Image, ScrollView,
   KeyboardAvoidingView, Platform, ActivityIndicator, Alert, Dimensions,
@@ -9,21 +9,28 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
-import { Audio, ResizeMode, Video } from 'expo-av';
+import { ResizeMode, Video } from 'expo-av';
 import { useAuthStore } from '../src/store/authStore';
 import api from '../src/api/client';
+import { mirrorPostToSupabase } from '../src/api/supabaseData';
 import { uploadImageWithBackup, uploadVideoWithBackup } from '../src/utils/mediaUpload';
-import { processMediaBatch } from '../src/utils/mediaProcessing';
-import { isPhoneVerificationError, requireVerifiedPhone } from '../src/utils/phoneVerification';
+import { processMediaBatch, type ProcessedMediaAsset } from '../src/utils/mediaProcessing';
+import { HD_VIDEO_EXPORT_PRESET, HD_VIDEO_QUALITY, POST_IMAGE_PICKER_QUALITY } from '../src/utils/mediaQuality';
 import {
-  AudiusTrack,
-  SelectedPostSound,
-  getFavoriteAudiusTracks,
-  getAudiusTrackStream,
-  getAudiusTrendingTracks,
-  searchAudiusTracks,
-  toggleFavoriteAudiusTrack,
-} from '../src/utils/music';
+  CREATOR_FILTER_PRESETS,
+  TEXT_COLORS,
+  TEXT_STYLE_PRESETS,
+  buildCreatorEditorOverlays,
+  clampNumber as clampEditorNumber,
+  createTextOverlayFromPreset,
+  filterOverlayFromPreset,
+  sanitizeTextOverlay,
+  type CreatorFilterOverlay,
+  type CreatorTextOverlay,
+  type CreatorTextType,
+} from '../src/utils/creatorEditor';
+import { isPhoneVerificationError, requireVerifiedPhone } from '../src/utils/phoneVerification';
+import { borderRadius, colors, layout, shadows, spacing } from '../src/utils/theme';
 
 const { width: SW, height: SH } = Dimensions.get('window');
 
@@ -36,17 +43,9 @@ const CATEGORIES = [
   { id: 'city_life', label: 'City Life', icon: 'business-outline',   color: '#0EA5E9' },
 ];
 
-const FORMATS = [
-  { id: 'auto', label: 'Auto', ratio: 0, icon: 'sparkles-outline' },
-  { id: '1:1',  label: 'Square', ratio: 1,      icon: 'square-outline' },
-  { id: '4:5',  label: '4:5',    ratio: 5 / 4,  icon: 'phone-portrait-outline' },
-  { id: '2:3',  label: '2:3',    ratio: 3 / 2,  icon: 'tablet-portrait-outline' },
-  { id: '9:16', label: '9:16',   ratio: 16 / 9, icon: 'resize-outline' },
-];
-
-const CLIP_DURATIONS = [5, 10, 15, 30];
-
 type PostAudience = 'public' | 'followers' | 'friends' | 'private';
+type StudioPanel = 'filters' | 'text' | 'tags' | null;
+type FilterPresetId = 'original' | typeof CREATOR_FILTER_PRESETS[number]['id'];
 
 const AUDIENCE_OPTIONS: { id: PostAudience; label: string; sub: string; icon: keyof typeof Ionicons.glyphMap }[] = [
   { id: 'public', label: 'Public', sub: 'Anyone can see this post.', icon: 'earth-outline' },
@@ -64,10 +63,6 @@ function clampUnit(value: number) {
   return clamp(value, 0.04, 0.96);
 }
 
-function paramText(value?: string | string[]) {
-  return Array.isArray(value) ? value[0] : value || '';
-}
-
 // Detect best format from image dimensions
 function detectFormat(width: number, height: number): string {
   if (width <= 0 || height <= 0) return 'auto';
@@ -75,6 +70,7 @@ function detectFormat(width: number, height: number): string {
   const formats = [
     { id: '1:1',  ratio: 1 },
     { id: '4:5',  ratio: 5 / 4 },
+    { id: '3:4',  ratio: 4 / 3 },
     { id: '2:3',  ratio: 3 / 2 },
     { id: '9:16', ratio: 16 / 9 },
   ];
@@ -98,6 +94,14 @@ type StudioMediaItem = {
   fileSize?: number;
 };
 
+type TaggedPostUser = {
+  id: string;
+  username?: string;
+  full_name?: string;
+  profile_image?: string;
+  bio?: string;
+};
+
 export default function CreatePostScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -105,255 +109,97 @@ export default function CreatePostScreen() {
   const params = useLocalSearchParams<{
     place_id?: string;
     place_name?: string;
-    audio_provider?: string;
-    audio_track_id?: string;
-    audio_title?: string;
-    audio_artist?: string;
-    audio_artwork_url?: string;
-    audio_stream_url?: string;
-    audio_start_time?: string;
-    audio_duration?: string;
   }>();
 
   const [media, setMedia] = useState<StudioMediaItem[]>([]);
+  const [headline, setHeadline] = useState('');
   const [caption, setCaption] = useState('');
   const [category, setCategory] = useState<string | null>(null);
-  const [format, setFormat] = useState('auto');
+  const format = 'auto';
   const [detectedFormat, setDetectedFormat] = useState('');
   const [placeTag, setPlaceTag] = useState(params.place_name || '');
-  const [placeId, setPlaceId] = useState(params.place_id || '');
+  const [placeAddress, setPlaceAddress] = useState('');
+  const [placeId] = useState(params.place_id || '');
   const [isPosting, setIsPosting] = useState(false);
   const [uploadStep, setUploadStep] = useState('');
-  const [musicVisible, setMusicVisible] = useState(false);
-  const [musicTab, setMusicTab] = useState<'trending' | 'search' | 'favorites'>('trending');
-  const [musicQuery, setMusicQuery] = useState('');
-  const [musicTracks, setMusicTracks] = useState<AudiusTrack[]>([]);
-  const [favoriteTracks, setFavoriteTracks] = useState<AudiusTrack[]>([]);
-  const [musicLoading, setMusicLoading] = useState(false);
-  const [musicError, setMusicError] = useState('');
-  const [playingTrackId, setPlayingTrackId] = useState('');
-  const [previewSound, setPreviewSound] = useState<Audio.Sound | null>(null);
   const [previewVisible, setPreviewVisible] = useState(false);
-  const [fitMode, setFitMode] = useState<'cover' | 'contain'>('cover');
-  const [editPanelVisible, setEditPanelVisible] = useState(false);
-  const [textOverlay, setTextOverlay] = useState('');
-  const [overlayTextDraft, setOverlayTextDraft] = useState('');
+  const [postPreviewVisible, setPostPreviewVisible] = useState(false);
+  const [studioPanel, setStudioPanel] = useState<StudioPanel>(null);
+  const [activeFilter, setActiveFilter] = useState<FilterPresetId>('original');
+  const [filterIntensity, setFilterIntensity] = useState(75);
+  const [intensityTrackWidth, setIntensityTrackWidth] = useState(1);
+  const [textOverlays, setTextOverlays] = useState<CreatorTextOverlay[]>([]);
+  const [selectedTextId, setSelectedTextId] = useState('');
+  const [overlayTextDraft, setOverlayTextDraft] = useState<CreatorTextOverlay | null>(null);
   const [textOverlayVisible, setTextOverlayVisible] = useState(false);
-  const [textOverlayPosition, setTextOverlayPosition] = useState({ x: 0.5, y: 0.42 });
-  const [overlayMediaPosition, setOverlayMediaPosition] = useState({ x: 0.72, y: 0.62 });
   const [studioFrameSize, setStudioFrameSize] = useState({ width: 0, height: 0 });
   const [audience, setAudience] = useState<PostAudience>('public');
   const [audienceVisible, setAudienceVisible] = useState(false);
-  const [selectedSound, setSelectedSound] = useState<SelectedPostSound | null>(() => {
-    const provider = paramText(params.audio_provider);
-    const trackId = paramText(params.audio_track_id);
-    if (provider !== 'audius' || !trackId) return null;
-    return {
-      audio_provider: 'audius',
-      audio_track_id: trackId,
-      audio_title: paramText(params.audio_title) || 'Original sound',
-      audio_artist: paramText(params.audio_artist) || 'Audius artist',
-      audio_artwork_url: paramText(params.audio_artwork_url),
-      audio_stream_url: paramText(params.audio_stream_url),
-      audio_start_time: Number(paramText(params.audio_start_time) || 0),
-      audio_duration: Number(paramText(params.audio_duration) || 15),
-    };
-  });
+  const [tagUserVisible, setTagUserVisible] = useState(false);
+  const [tagUserQuery, setTagUserQuery] = useState('');
+  const [tagUserResults, setTagUserResults] = useState<TaggedPostUser[]>([]);
+  const [taggedUsers, setTaggedUsers] = useState<Record<string, TaggedPostUser>>({});
+  const [tagUserLoading, setTagUserLoading] = useState(false);
+  const [placePickerVisible, setPlacePickerVisible] = useState(false);
+  const [placeDraftName, setPlaceDraftName] = useState(params.place_name || '');
+  const [placeDraftAddress, setPlaceDraftAddress] = useState('');
 
   // Auto-attach place tag if coming from a place detail page
-  const hasPlacePreset = !!(params.place_name);
   const audienceMeta = AUDIENCE_OPTIONS.find((item) => item.id === audience) || AUDIENCE_OPTIONS[0];
-  const textPositionRef = useRef(textOverlayPosition);
-  const overlayPositionRef = useRef(overlayMediaPosition);
-  const textDragStartRef = useRef(textOverlayPosition);
-  const overlayDragStartRef = useRef(overlayMediaPosition);
+  const taggedUserList = useMemo(() => Object.values(taggedUsers), [taggedUsers]);
+  const placeDisplay = [placeTag, placeAddress]
+    .map((value) => String(value || '').trim())
+    .filter((value, index, arr) => value && arr.indexOf(value) === index)
+    .join(' · ');
+  const pickerOpenedRef = useRef(false);
+  const selectedTextIdRef = useRef(selectedTextId);
+  const textDragStartRef = useRef({ x: 0.5, y: 0.18 });
 
   useEffect(() => {
-    textPositionRef.current = textOverlayPosition;
-  }, [textOverlayPosition]);
-
-  useEffect(() => {
-    overlayPositionRef.current = overlayMediaPosition;
-  }, [overlayMediaPosition]);
+    selectedTextIdRef.current = selectedTextId;
+  }, [selectedTextId]);
 
   const textPanResponder = useMemo(() => PanResponder.create({
     onStartShouldSetPanResponder: () => true,
     onMoveShouldSetPanResponder: (_, gesture) => Math.abs(gesture.dx) > 2 || Math.abs(gesture.dy) > 2,
     onPanResponderGrant: () => {
-      textDragStartRef.current = textPositionRef.current;
+      const active = textOverlays.find((item) => item.id === selectedTextIdRef.current);
+      textDragStartRef.current = active ? { x: active.x, y: active.y } : { x: 0.5, y: 0.18 };
     },
     onPanResponderMove: (_, gesture) => {
       const width = studioFrameSize.width || SW;
       const height = studioFrameSize.height || Math.max(360, SH * 0.58);
-      setTextOverlayPosition({
+      const activeId = selectedTextIdRef.current;
+      setTextOverlays((prev) => prev.map((item) => item.id === activeId ? {
+        ...item,
         x: clampUnit(textDragStartRef.current.x + gesture.dx / width),
         y: clampUnit(textDragStartRef.current.y + gesture.dy / height),
-      });
+      } : item));
     },
-  }), [studioFrameSize.height, studioFrameSize.width]);
+  }), [studioFrameSize.height, studioFrameSize.width, textOverlays]);
 
-  const overlayPanResponder = useMemo(() => PanResponder.create({
-    onStartShouldSetPanResponder: () => true,
-    onMoveShouldSetPanResponder: (_, gesture) => Math.abs(gesture.dx) > 2 || Math.abs(gesture.dy) > 2,
-    onPanResponderGrant: () => {
-      overlayDragStartRef.current = overlayPositionRef.current;
-    },
-    onPanResponderMove: (_, gesture) => {
-      const width = studioFrameSize.width || SW;
-      const height = studioFrameSize.height || Math.max(360, SH * 0.58);
-      setOverlayMediaPosition({
-        x: clampUnit(overlayDragStartRef.current.x + gesture.dx / width),
-        y: clampUnit(overlayDragStartRef.current.y + gesture.dy / height),
-      });
-    },
-  }), [studioFrameSize.height, studioFrameSize.width]);
-
-  const stopPreview = async () => {
-    if (previewSound) {
-      await previewSound.stopAsync().catch(() => undefined);
-      await previewSound.unloadAsync().catch(() => undefined);
-    }
-    setPreviewSound(null);
-    setPlayingTrackId('');
-  };
-
-  const refreshFavoriteTracks = async () => {
-    const tracks = await getFavoriteAudiusTracks();
-    setFavoriteTracks(tracks);
-    return tracks;
-  };
-
-  const loadTrendingMusic = async () => {
-    setMusicLoading(true);
-    setMusicError('');
-    try {
-      const tracks = await getAudiusTrendingTracks(50);
-      setMusicTracks(tracks);
-    } catch (error: any) {
-      setMusicTracks([]);
-      setMusicError(error?.response?.data?.detail || 'Could not load trending music.');
-    } finally {
-      setMusicLoading(false);
-    }
-  };
-
-  const searchMusic = async (query: string) => {
-    setMusicLoading(true);
-    setMusicError('');
-    try {
-      const tracks = await searchAudiusTracks(query, 50);
-      setMusicTracks(tracks);
-    } catch (error: any) {
-      setMusicTracks([]);
-      setMusicError(error?.response?.data?.detail || 'Could not search music right now.');
-    } finally {
-      setMusicLoading(false);
-    }
-  };
-
-  const openMusicPicker = () => {
-    setMusicVisible(true);
-    setMusicTab('trending');
-    if (musicTracks.length === 0) {
-      loadTrendingMusic();
-    }
-  };
-
-  const isFavoriteTrack = (track: AudiusTrack) => favoriteTracks.some((item) => item.id === track.id);
-
-  const toggleFavoriteTrack = async (track: AudiusTrack) => {
-    const result = await toggleFavoriteAudiusTrack(track);
-    setFavoriteTracks(result.favorites);
-    if (musicTab === 'favorites') setMusicTracks(result.favorites);
-  };
-
-  const previewTrack = async (track: AudiusTrack) => {
-    try {
-      if (playingTrackId === track.id) {
-        await stopPreview();
-        return;
+  const addProcessedMediaAssets = useCallback((processedAssets: ProcessedMediaAsset[]) => {
+    const newMedia = processedAssets.map((a) => ({
+      uri: a.uri,
+      type: a.type === 'video' ? 'video' : 'image',
+      base64: a.base64,
+      width: a.width || 0,
+      height: a.height || 0,
+      mimeType: a.mimeType,
+      fileName: a.fileName,
+      fileSize: a.fileSize,
+    })) as StudioMediaItem[];
+    setMedia((prev) => {
+      const updated = [...prev, ...newMedia].slice(0, 6);
+      const firstImg = updated.find(m => m.type === 'image' && m.width && m.height);
+      if (firstImg && firstImg.width && firstImg.height) {
+        setDetectedFormat(detectFormat(firstImg.width, firstImg.height));
       }
-      await stopPreview();
-      await Audio.setAudioModeAsync({ playsInSilentModeIOS: true }).catch(() => undefined);
-      const streamTrack = track.stream_url ? track : await getAudiusTrackStream(track.id);
-      if (!streamTrack.stream_url) throw new Error('No stream URL');
-      const { sound } = await Audio.Sound.createAsync(
-        { uri: streamTrack.stream_url },
-        { shouldPlay: true, positionMillis: 0, volume: 0.85 }
-      );
-      sound.setOnPlaybackStatusUpdate((status: any) => {
-        if (status?.didJustFinish) {
-          setPlayingTrackId('');
-        }
-      });
-      setPreviewSound(sound);
-      setPlayingTrackId(track.id);
-    } catch (error: any) {
-      Alert.alert('Preview failed', error?.response?.data?.detail || 'Could not play this sound.');
-    }
-  };
-
-  const useTrack = async (track: AudiusTrack) => {
-    try {
-      const streamTrack = track.stream_url ? track : await getAudiusTrackStream(track.id);
-      if (!streamTrack.stream_url) throw new Error('No stream URL');
-      setSelectedSound({
-        audio_provider: 'audius',
-        audio_track_id: streamTrack.id,
-        audio_title: streamTrack.title,
-        audio_artist: streamTrack.artist,
-        audio_artwork_url: streamTrack.artwork_url,
-        audio_stream_url: streamTrack.stream_url,
-        audio_start_time: 0,
-        audio_duration: 15,
-      });
-      await stopPreview();
-      setMusicVisible(false);
-    } catch (error: any) {
-      Alert.alert('Sound unavailable', error?.response?.data?.detail || 'Could not attach this sound.');
-    }
-  };
-
-  const setClipDuration = (duration: number) => {
-    setSelectedSound((prev) => prev ? { ...prev, audio_duration: duration } : prev);
-  };
-
-  const setClipStart = (value: string) => {
-    const start = Math.max(0, Math.min(60 * 60 * 6, Math.round(Number(value.replace(/\D/g, '')) || 0)));
-    setSelectedSound((prev) => prev ? { ...prev, audio_start_time: start } : prev);
-  };
-
-  useEffect(() => {
-    return () => {
-      previewSound?.unloadAsync().catch(() => undefined);
-    };
-  }, [previewSound]);
-
-  useEffect(() => {
-    refreshFavoriteTracks();
+      return updated;
+    });
   }, []);
 
-  useEffect(() => {
-    if (!musicVisible) return;
-    if (musicTab === 'trending') {
-      loadTrendingMusic();
-      return;
-    }
-    if (musicTab === 'favorites') {
-      refreshFavoriteTracks().then(setMusicTracks);
-      return;
-    }
-    const q = musicQuery.trim();
-    if (q.length < 2) {
-      setMusicTracks([]);
-      setMusicError('');
-      return;
-    }
-    const handle = setTimeout(() => searchMusic(q), 450);
-    return () => clearTimeout(handle);
-  }, [musicVisible, musicTab, musicQuery]);
-
-  const pickMedia = async () => {
+  const pickMedia = useCallback(async () => {
     try {
       const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (status !== 'granted') {
@@ -363,46 +209,25 @@ export default function CreatePostScreen() {
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ['images', 'videos'],
         allowsMultipleSelection: true,
-        quality: 0.9,
-        base64: false,
+        quality: POST_IMAGE_PICKER_QUALITY,
+        base64: true,
         selectionLimit: 6,
-        videoExportPreset: ImagePicker.VideoExportPreset.H264_1280x720,
-        videoQuality: ImagePicker.UIImagePickerControllerQualityType.Medium,
-        preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
+        videoExportPreset: HD_VIDEO_EXPORT_PRESET,
+        videoQuality: HD_VIDEO_QUALITY,
+        preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Current,
       });
       if (!result.canceled && result.assets) {
-        setUploadStep('Optimizing media...');
-        const processedAssets = await processMediaBatch(result.assets, 'balanced');
-        const newMedia = processedAssets.map((a) => ({
-          uri: a.uri,
-          type: a.type === 'video' ? 'video' : 'image',
-          base64: a.base64,
-          width: a.width || 0,
-          height: a.height || 0,
-          mimeType: a.mimeType,
-          fileName: a.fileName,
-          fileSize: a.fileSize,
-        })) as StudioMediaItem[];
-        const updated = [...media, ...newMedia].slice(0, 6);
-        setMedia(updated);
-
-        // Auto-detect format from first image
-        const firstImg = updated.find(m => m.type === 'image' && m.width && m.height);
-        if (firstImg && firstImg.width && firstImg.height) {
-          const detected = detectFormat(firstImg.width, firstImg.height);
-          setDetectedFormat(detected);
-          if (format === 'auto') {
-            // Keep auto mode, detected format will be used during post creation
-          }
-        }
+        setUploadStep('Preparing media...');
+        const processedAssets = await processMediaBatch(result.assets, 'quality');
+        addProcessedMediaAssets(processedAssets);
       }
     } catch (error) {
       console.log('Media picker error:', error);
-      Alert.alert('Media processing failed', 'Please try selecting media again.');
+      Alert.alert('Media selection failed', 'Please try selecting media again.');
     } finally {
       setUploadStep('');
     }
-  };
+  }, [addProcessedMediaAssets]);
 
   const pickSingleMediaItem = async (): Promise<StudioMediaItem | null> => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -414,17 +239,17 @@ export default function CreatePostScreen() {
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images', 'videos'],
       allowsMultipleSelection: false,
-      quality: 0.9,
-      base64: false,
+      quality: POST_IMAGE_PICKER_QUALITY,
+      base64: true,
       selectionLimit: 1,
-      videoExportPreset: ImagePicker.VideoExportPreset.H264_1280x720,
-      videoQuality: ImagePicker.UIImagePickerControllerQualityType.Medium,
-      preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
+      videoExportPreset: HD_VIDEO_EXPORT_PRESET,
+      videoQuality: HD_VIDEO_QUALITY,
+      preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Current,
     });
 
     if (result.canceled || !result.assets?.[0]) return null;
-    setUploadStep('Optimizing media...');
-    const [asset] = await processMediaBatch([result.assets[0]], 'balanced');
+    setUploadStep('Preparing media...');
+    const [asset] = await processMediaBatch([result.assets[0]], 'quality');
     return {
       uri: asset.uri,
       type: asset.type === 'video' ? 'video' : 'image',
@@ -453,33 +278,95 @@ export default function CreatePostScreen() {
     }
   };
 
-  const addOverlayMedia = async () => {
-    try {
-      const overlay = await pickSingleMediaItem();
-      if (!overlay) return;
-      setMedia((prev) => {
-        if (prev.length === 0) return [overlay];
-        const next = [...prev];
-        next[1] = overlay;
-        return next.slice(0, 6);
-      });
-      setOverlayMediaPosition({ x: 0.72, y: 0.62 });
-    } catch (error) {
-      console.log('Overlay media error:', error);
-      Alert.alert('Overlay failed', 'Please try choosing that media again.');
-    } finally {
-      setUploadStep('');
+  useEffect(() => {
+    if (media.length === 0 && !pickerOpenedRef.current) {
+      pickerOpenedRef.current = true;
+      void pickMedia();
     }
-  };
+  }, [media.length, pickMedia]);
 
-  const openTextOverlay = () => {
-    setOverlayTextDraft(textOverlay);
+  const openTextOverlay = (overlay: CreatorTextOverlay) => {
+    setSelectedTextId(overlay.id);
+    setOverlayTextDraft(overlay);
     setTextOverlayVisible(true);
   };
 
-  const saveTextOverlay = () => {
-    setTextOverlay(overlayTextDraft.trim());
+  const addTextDirectly = (presetId = 'minimal_black') => {
+    const preset = TEXT_STYLE_PRESETS.find((item) => item.id === presetId) || TEXT_STYLE_PRESETS[0];
+    const next = createTextOverlayFromPreset(preset);
+    setTextOverlays((prev) => [...prev, next].slice(-12));
+    setSelectedTextId(next.id);
+    setOverlayTextDraft(next);
     setTextOverlayVisible(false);
+  };
+
+  const saveTextOverlay = () => {
+    const sanitized = sanitizeTextOverlay(overlayTextDraft);
+    if (sanitized) {
+      setTextOverlays((prev) => prev.some((item) => item.id === sanitized.id)
+        ? prev.map((item) => item.id === sanitized.id ? sanitized : item)
+        : [...prev, sanitized]);
+      setSelectedTextId(sanitized.id);
+    }
+    setTextOverlayVisible(false);
+  };
+
+  const updateSelectedText = (updater: (overlay: CreatorTextOverlay) => CreatorTextOverlay | null) => {
+    const activeId = selectedTextId;
+    if (!activeId) return;
+    setTextOverlays((prev) => prev.map((item) => {
+      if (item.id !== activeId) return item;
+      const updated = updater(item);
+      return updated ? sanitizeTextOverlay(updated) || item : item;
+    }));
+  };
+
+  const deleteSelectedText = () => {
+    if (!selectedTextId) return;
+    setTextOverlays((prev) => prev.filter((item) => item.id !== selectedTextId));
+    setSelectedTextId('');
+    setOverlayTextDraft(null);
+    setTextOverlayVisible(false);
+  };
+
+  const loadTagUsers = useCallback(async (query = '') => {
+    setTagUserLoading(true);
+    try {
+      const trimmed = query.trim();
+      const response = trimmed
+        ? await api.get(`/users/search/${encodeURIComponent(trimmed)}`)
+        : await api.get('/discover/suggested-users');
+      const people = Array.isArray(response.data) ? response.data : [];
+      setTagUserResults(people.filter((person: TaggedPostUser) => person.id && person.id !== user?.id));
+    } catch {
+      setTagUserResults([]);
+    } finally {
+      setTagUserLoading(false);
+    }
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!tagUserVisible) return;
+    const timer = setTimeout(() => {
+      void loadTagUsers(tagUserQuery);
+    }, 220);
+    return () => clearTimeout(timer);
+  }, [loadTagUsers, tagUserQuery, tagUserVisible]);
+
+  const openTagUserPicker = () => {
+    setTagUserVisible(true);
+    setTagUserQuery('');
+    void loadTagUsers('');
+  };
+
+  const toggleTaggedUser = (person: TaggedPostUser) => {
+    if (!person.id) return;
+    setTaggedUsers((prev) => {
+      const next = { ...prev };
+      if (next[person.id]) delete next[person.id];
+      else next[person.id] = person;
+      return next;
+    });
   };
 
   const takePhoto = async () => {
@@ -487,15 +374,16 @@ export default function CreatePostScreen() {
       const perm = await ImagePicker.requestCameraPermissionsAsync();
       if (!perm.granted) return;
       const result = await ImagePicker.launchCameraAsync({
-        quality: 0.85,
-        base64: false,
+        quality: POST_IMAGE_PICKER_QUALITY,
+        base64: true,
         mediaTypes: ['images', 'videos'],
-        videoQuality: ImagePicker.UIImagePickerControllerQualityType.Medium,
+        videoExportPreset: HD_VIDEO_EXPORT_PRESET,
+        videoQuality: HD_VIDEO_QUALITY,
         videoMaxDuration: 45,
       });
       if (!result.canceled && result.assets?.[0]) {
-        setUploadStep('Optimizing media...');
-        const [processedAsset] = await processMediaBatch([result.assets[0]], 'balanced');
+        setUploadStep('Preparing media...');
+        const [processedAsset] = await processMediaBatch([result.assets[0]], 'quality');
         const newItem = {
           uri: processedAsset.uri,
           type: processedAsset.type === 'video' ? 'video' : 'image',
@@ -522,8 +410,24 @@ export default function CreatePostScreen() {
     }
   };
 
-  const removeMedia = (idx: number) => {
-    setMedia(prev => prev.filter((_, i) => i !== idx));
+  const openPlacePicker = () => {
+    setPlaceDraftName(placeTag);
+    setPlaceDraftAddress(placeAddress);
+    setPlacePickerVisible(true);
+  };
+
+  const savePlaceDraft = () => {
+    const cleanName = placeDraftName.trim();
+    const cleanAddress = placeDraftAddress.trim();
+    if (!cleanName && !cleanAddress) {
+      setPlaceTag('');
+      setPlaceAddress('');
+      setPlacePickerVisible(false);
+      return;
+    }
+    setPlaceTag(cleanName || cleanAddress);
+    setPlaceAddress(cleanAddress);
+    setPlacePickerVisible(false);
   };
 
   const detectLocation = async () => {
@@ -538,6 +442,9 @@ export default function CreatePostScreen() {
       if (addr) {
         const city = addr.city || addr.subregion || '';
         const region = addr.region || '';
+        const streetParts = [addr.name, addr.street].filter(Boolean);
+        const streetLine = Array.from(new Set(streetParts)).join(' ');
+        const addressLine = [streetLine, city, region, addr.postalCode].filter(Boolean).join(', ');
         const parts = [city, region].filter(Boolean);
         // Also add state/area context for filtering (e.g. "Bronx, New York")
         const nycBoroughs = ['bronx', 'brooklyn', 'queens', 'manhattan', 'staten island'];
@@ -546,14 +453,17 @@ export default function CreatePostScreen() {
         if (nycBoroughs.some(b => cityLower.includes(b)) || region.toLowerCase().includes('new york')) {
           tag = `${city}, NYC, New York`;
         }
-        setPlaceTag(tag);
+        setPlaceDraftName(tag);
+        setPlaceDraftAddress(addressLine || tag);
       }
     } catch {}
   };
 
   const canPost = media.length > 0;
   const primaryMedia = media[0];
-  const overlayMedia = media[1];
+  const selectedFilterPreset = CREATOR_FILTER_PRESETS.find((item) => item.id === activeFilter) || null;
+  const filterData: CreatorFilterOverlay | null = filterOverlayFromPreset(selectedFilterPreset, filterIntensity);
+  const selectedTextOverlay = textOverlays.find((item) => item.id === selectedTextId) || null;
 
   const handlePost = async () => {
     if (!canPost || isPosting) return;
@@ -568,7 +478,7 @@ export default function CreatePostScreen() {
         const m = media[i];
         if (m.type === 'video') {
           setUploadStep(`Uploading and backing up video ${i + 1}...`);
-          const uploaded = await uploadVideoWithBackup(m.uri, m.mimeType || 'video/mp4', m.fileName || `video-${i + 1}.mp4`);
+          const uploaded = await uploadVideoWithBackup(m.uri, m.mimeType || 'video/mp4', m.fileName || `video-${i + 1}.mp4`, m.fileSize);
           if (uploaded?.url) {
             uploadedUrls.push(uploaded.url);
             mediaTypes.push('video');
@@ -594,38 +504,54 @@ export default function CreatePostScreen() {
 
       setUploadStep('Creating post...');
       const finalFormat = format === 'auto' ? (detectedFormat || '1:1') : format;
-      const editorOverlays = [
-        textOverlay.trim() ? {
-          type: 'text',
-          text: textOverlay.trim(),
-          x: Number(textOverlayPosition.x.toFixed(4)),
-          y: Number(textOverlayPosition.y.toFixed(4)),
-          width: 0.78,
-        } : null,
-        overlayMedia ? {
-          type: 'media',
-          media_index: 1,
-          x: Number(overlayMediaPosition.x.toFixed(4)),
-          y: Number(overlayMediaPosition.y.toFixed(4)),
-          width: 0.32,
-        } : null,
-      ].filter(Boolean);
-      await api.post('/posts', {
+      const mediaDimensions = media.map((item) => {
+        const width = Math.max(0, Math.round(Number(item.width || 0)));
+        const height = Math.max(0, Math.round(Number(item.height || 0)));
+        return {
+          width,
+          height,
+          ratio: width > 0 && height > 0 ? Number((width / height).toFixed(4)) : 0,
+          format: detectFormat(width, height),
+          type: item.type,
+        };
+      });
+      // Creator editor data is saved as typed JSON records in posts.editor_overlays.
+      const editorOverlays = buildCreatorEditorOverlays(filterData, textOverlays);
+      const taggedUserPayload = taggedUserList.map((person) => ({
+        id: person.id,
+        username: person.username || '',
+        full_name: person.full_name || '',
+        profile_image: person.profile_image || '',
+      }));
+      const postPayload = {
+        client_request_id: `post_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`,
+        title: headline.trim(),
         content: caption || '',
         image: uploadedUrls[0],
         images: uploadedUrls,
         media_types: mediaTypes,
         media_backup_ids: mediaBackupIds,
+        media_dimensions: mediaDimensions,
         editor_overlays: editorOverlays,
         post_type: category || 'general',
         category: category || '',
         format: finalFormat,
         visibility: audience,
-        location: placeTag || '',
+        location: placeAddress || placeTag || '',
         place_id: placeId || '',
-        place_name: placeTag || '',
-        ...(selectedSound ? selectedSound : {}),
-      });
+        place_name: placeTag || placeAddress || '',
+        tagged_users: taggedUserPayload,
+        audio_provider: '',
+        audio_track_id: '',
+        audio_title: '',
+        audio_artist: '',
+        audio_artwork_url: '',
+        audio_stream_url: '',
+        audio_start_time: 0,
+        audio_duration: 0,
+      };
+      const response = await api.post('/posts', postPayload);
+      await mirrorPostToSupabase(response.data, postPayload).catch(() => undefined);
 
       router.replace('/(tabs)/home' as any);
     } catch (error) {
@@ -642,19 +568,73 @@ export default function CreatePostScreen() {
   };
 
   const renderStudioMedia = (mode: 'editor' | 'preview' = 'editor') => {
+    const previewFrameWidth = Math.min(320, SW - 56);
+    const previewFrameHeight = Math.min(430, SH * 0.56);
     const frameWidth = mode === 'preview'
-      ? Math.min(220, SW * 0.52)
+      ? previewFrameWidth
       : (studioFrameSize.width || SW);
     const frameHeight = mode === 'preview'
-      ? Math.min(180, SW * 0.43)
+      ? previewFrameHeight
       : (studioFrameSize.height || Math.max(360, SH * 0.58));
-    const overlayWidth = Math.min(mode === 'preview' ? 74 : 132, Math.max(66, frameWidth * 0.32));
-    const overlayHeight = Math.round(overlayWidth * 1.34);
-    const textWidth = Math.min(frameWidth - 18, Math.max(140, frameWidth * 0.78));
-    const overlayLeft = clamp((overlayMediaPosition.x * frameWidth) - overlayWidth / 2, 8, Math.max(8, frameWidth - overlayWidth - 8));
-    const overlayTop = clamp((overlayMediaPosition.y * frameHeight) - overlayHeight / 2, 8, Math.max(8, frameHeight - overlayHeight - 8));
-    const textLeft = clamp((textOverlayPosition.x * frameWidth) - textWidth / 2, 8, Math.max(8, frameWidth - textWidth - 8));
-    const textTop = clamp((textOverlayPosition.y * frameHeight) - 28, 8, Math.max(8, frameHeight - 78));
+    const textScale = mode === 'preview' ? 0.62 : 1;
+
+    const renderCreatorFilter = () => filterData ? (
+      <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+        <View style={[s.filterTint, { backgroundColor: filterData.tint, opacity: filterData.tintOpacity }]} />
+        {filterData.fadeOpacity ? <View style={[s.filterFadeLayer, { opacity: filterData.fadeOpacity }]} /> : null}
+        {filterData.vignetteOpacity ? <View style={[s.filterVignetteLayer, { opacity: filterData.vignetteOpacity }]} /> : null}
+        {filterData.grainOpacity ? <View style={[s.filterGrainLayer, { opacity: filterData.grainOpacity }]} /> : null}
+      </View>
+    ) : null;
+
+    const renderTextOverlay = (overlay: CreatorTextOverlay) => {
+      const overlayWidth = frameWidth * overlay.width;
+      const left = clamp((overlay.x * frameWidth) - overlayWidth / 2, 8, Math.max(8, frameWidth - overlayWidth - 8));
+      const top = clamp((overlay.y * frameHeight) - (overlay.fontSize * textScale), 8, Math.max(8, frameHeight - 72));
+      const selected = selectedTextId === overlay.id;
+      return (
+        <TouchableOpacity
+          key={overlay.id}
+          disabled={mode === 'preview'}
+          activeOpacity={0.88}
+          onPressIn={() => setSelectedTextId(overlay.id)}
+          onPress={() => openTextOverlay(overlay)}
+          style={[
+            s.studioTextOverlay,
+            selected && s.studioTextOverlaySelected,
+            {
+              width: overlayWidth,
+              left,
+              top,
+              opacity: overlay.opacity,
+              backgroundColor: overlay.background,
+              borderColor: overlay.borderColor || 'transparent',
+              borderRadius: overlay.radius,
+              paddingHorizontal: overlay.paddingX,
+              paddingVertical: overlay.paddingY,
+            },
+          ]}
+          {...(mode === 'editor' ? textPanResponder.panHandlers : {})}
+        >
+          <Text
+            style={[
+              s.studioTextOverlayText,
+              {
+                color: overlay.color,
+                fontSize: Math.max(10, overlay.fontSize * textScale),
+                lineHeight: Math.max(13, (overlay.fontSize + 5) * textScale),
+                fontWeight: overlay.fontWeight,
+                textShadowColor: overlay.shadow ? 'rgba(0,0,0,0.42)' : 'transparent',
+                textShadowRadius: overlay.shadow ? 8 : 0,
+                textShadowOffset: overlay.shadow ? { width: 0, height: 2 } : { width: 0, height: 0 },
+              },
+            ]}
+          >
+            {overlay.text}
+          </Text>
+        </TouchableOpacity>
+      );
+    };
 
     return (
       <View
@@ -672,50 +652,17 @@ export default function CreatePostScreen() {
               <Video
                 source={{ uri: primaryMedia.uri }}
                 style={s.studioMedia}
-                resizeMode={fitMode === 'contain' ? ResizeMode.CONTAIN : ResizeMode.COVER}
+                resizeMode={ResizeMode.COVER}
                 shouldPlay={mode === 'editor'}
                 isLooping
                 isMuted={mode === 'editor'}
                 useNativeControls={mode === 'preview'}
               />
             ) : (
-              <Image source={{ uri: primaryMedia.uri }} style={s.studioMedia} resizeMode={fitMode} />
+              <Image source={{ uri: primaryMedia.uri }} style={s.studioMedia} resizeMode="cover" />
             )}
-            {overlayMedia ? (
-              <View
-                style={[s.studioOverlayMediaFrame, { width: overlayWidth, height: overlayHeight, left: overlayLeft, top: overlayTop }]}
-                {...(mode === 'editor' ? overlayPanResponder.panHandlers : {})}
-              >
-                {overlayMedia.type === 'video' ? (
-                  <Video
-                    source={{ uri: overlayMedia.uri }}
-                    style={s.studioOverlayMedia}
-                    resizeMode={ResizeMode.COVER}
-                    shouldPlay={mode === 'editor'}
-                    isLooping
-                    isMuted
-                  />
-                ) : (
-                  <Image source={{ uri: overlayMedia.uri }} style={s.studioOverlayMedia} resizeMode="cover" />
-                )}
-                {mode === 'editor' ? (
-                  <TouchableOpacity style={s.studioOverlayRemove} onPress={() => removeMedia(1)}>
-                    <Ionicons name="close" size={14} color="#FFF" />
-                  </TouchableOpacity>
-                ) : null}
-              </View>
-            ) : null}
-            {textOverlay ? (
-              <TouchableOpacity
-                disabled={mode === 'preview'}
-                activeOpacity={0.88}
-                style={[s.studioTextOverlay, { width: textWidth, left: textLeft, top: textTop }]}
-                onPress={openTextOverlay}
-                {...(mode === 'editor' ? textPanResponder.panHandlers : {})}
-              >
-                <Text style={s.studioTextOverlayText}>{textOverlay}</Text>
-              </TouchableOpacity>
-            ) : null}
+            {renderCreatorFilter()}
+            {textOverlays.map(renderTextOverlay)}
             {primaryMedia.type === 'video' ? (
               <View style={s.studioVideoBadge}>
                 <Ionicons name="play" size={13} color="#111" />
@@ -743,170 +690,404 @@ export default function CreatePostScreen() {
     );
   };
 
+  const renderPickerFallbackScreen = () => (
+    <View style={s.pickerRoot}>
+      <View style={[s.pickerHeader, { paddingTop: insets.top + 2 }]}>
+        <TouchableOpacity style={s.pickerIconButton} onPress={() => router.back()} activeOpacity={0.82}>
+          <Ionicons name="close" size={32} color="#FFFFFF" />
+        </TouchableOpacity>
+        <Text style={s.pickerTitle}>Create post</Text>
+        <View style={s.pickerIconButton} />
+      </View>
+
+      <View style={s.pickerBody}>
+        {uploadStep ? (
+          <View style={s.pickerLoading}>
+            <ActivityIndicator color="#FFF93F" />
+            <Text style={s.pickerLoadingText}>{uploadStep}</Text>
+          </View>
+        ) : null}
+        <TouchableOpacity style={s.pickerCameraButton} onPress={takePhoto} activeOpacity={0.86}>
+          <Ionicons name="camera" size={30} color="#FFFFFF" />
+          <Text style={s.pickerCameraText}>Camera</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={s.pickerGalleryButton} onPress={pickMedia} activeOpacity={0.86}>
+          <Text style={s.pickerGalleryText}>Open gallery</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+
+  const renderStudioThumbnails = () => (
+    <View style={s.studioThumbWrap}>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.studioThumbStrip}>
+        {media.map((item, index) => (
+          <TouchableOpacity key={`${item.uri}-${index}`} style={[s.studioThumbTile, index === 0 && s.studioThumbTileOn]} onPress={() => index === 0 ? replaceMedia() : undefined} activeOpacity={0.84}>
+            {item.type === 'video' ? (
+              <Video source={{ uri: item.uri }} style={s.studioThumbMedia} resizeMode={ResizeMode.COVER} shouldPlay={false} isMuted />
+            ) : (
+              <Image source={{ uri: item.uri }} style={s.studioThumbMedia} resizeMode="cover" />
+            )}
+          </TouchableOpacity>
+        ))}
+        <TouchableOpacity style={s.studioAddThumb} onPress={pickMedia} activeOpacity={0.84}>
+          <Ionicons name="add" size={35} color="#FFFFFF" />
+        </TouchableOpacity>
+      </ScrollView>
+    </View>
+  );
+
+  const renderStudioToolsPanel = () => {
+    if (!studioPanel) return null;
+    if (studioPanel === 'filters') {
+      return (
+        <View style={s.creatorPanel}>
+          <View style={s.panelTitleRow}>
+            <Text style={s.panelTitle}>Filters</Text>
+            <TouchableOpacity onPress={() => setActiveFilter('original')} style={s.panelResetBtn} activeOpacity={0.84}>
+              <Text style={s.panelResetText}>Original</Text>
+            </TouchableOpacity>
+          </View>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.filterPresetStrip}>
+            {CREATOR_FILTER_PRESETS.map((item) => {
+              const active = activeFilter === item.id;
+              return (
+                <TouchableOpacity key={item.id} style={s.filterPresetItem} onPress={() => setActiveFilter(item.id)} activeOpacity={0.84}>
+                  <View style={[s.filterPreviewThumb, active && s.filterPreviewThumbOn]}>
+                    {primaryMedia?.type === 'image' ? <Image source={{ uri: primaryMedia.uri }} style={s.filterPreviewImage} resizeMode="cover" /> : null}
+                    <View style={[s.filterTint, { backgroundColor: item.tint, opacity: item.tintOpacity }]} />
+                  </View>
+                  <Text style={[s.filterPresetName, active && s.filterPresetNameOn]} numberOfLines={1}>{item.name}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+          <View style={s.intensityRow}>
+            <Text style={s.intensityLabel}>Intensity</Text>
+            <Text style={s.intensityValue}>{activeFilter === 'original' ? '0%' : `${filterIntensity}%`}</Text>
+          </View>
+          <TouchableOpacity
+            style={s.intensityTrack}
+            activeOpacity={0.9}
+            onLayout={(event) => setIntensityTrackWidth(Math.max(1, event.nativeEvent.layout.width))}
+            onPress={(event) => {
+              const next = Math.round(clampEditorNumber(event.nativeEvent.locationX / intensityTrackWidth, 0, 1, 0.75) * 100);
+              setFilterIntensity(next);
+            }}
+          >
+            <View style={[s.intensityFill, { width: `${activeFilter === 'original' ? 0 : filterIntensity}%` }]} />
+            <View style={[s.intensityKnob, { left: `${activeFilter === 'original' ? 0 : filterIntensity}%` }]} />
+          </TouchableOpacity>
+        </View>
+      );
+    }
+    if (studioPanel === 'text') {
+      return (
+        <View style={s.creatorPanel}>
+          <View style={s.panelTitleRow}>
+            <Text style={s.panelTitle}>Text overlays</Text>
+            <Text style={s.panelSubtle}>{textOverlays.length}/12</Text>
+          </View>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.textPresetStrip}>
+            {TEXT_STYLE_PRESETS.map((item) => (
+              <TouchableOpacity key={item.id} style={s.textPresetChip} onPress={() => addTextDirectly(item.id)} activeOpacity={0.84}>
+                <Text style={s.textPresetName}>{item.name}</Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+          {selectedTextOverlay ? (
+            <View style={s.selectedEditorRow}>
+              <TouchableOpacity style={s.miniActionBtn} onPress={() => updateSelectedText((item) => ({ ...item, fontSize: Math.max(12, item.fontSize - 2) }))}>
+                <Ionicons name="remove" size={18} color="#FFF" />
+              </TouchableOpacity>
+              <TouchableOpacity style={s.selectedEditorMain} onPress={() => openTextOverlay(selectedTextOverlay)} activeOpacity={0.84}>
+                <Text style={s.selectedEditorTitle} numberOfLines={1}>{selectedTextOverlay.text}</Text>
+                <Text style={s.selectedEditorSub}>Tap to edit text, color, card, and shadow</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={s.miniActionBtn} onPress={() => updateSelectedText((item) => ({ ...item, fontSize: Math.min(42, item.fontSize + 2) }))}>
+                <Ionicons name="add" size={18} color="#FFF" />
+              </TouchableOpacity>
+              <TouchableOpacity style={s.miniDangerBtn} onPress={deleteSelectedText}>
+                <Ionicons name="trash-outline" size={18} color="#FFF" />
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <Text style={s.panelHelp}>Choose a text style to add it, then drag it on the photo.</Text>
+          )}
+        </View>
+      );
+    }
+    return (
+      <View style={s.studioToolPanel}>
+        {CATEGORIES.map((item) => {
+          const active = category === item.id;
+          return (
+            <TouchableOpacity key={item.id} style={[s.studioPanelChip, active && s.studioPanelChipOn]} onPress={() => setCategory(active ? null : item.id)} activeOpacity={0.84}>
+              <Ionicons name={item.icon as any} size={18} color={active ? '#111' : '#FFF'} />
+              <Text style={[s.studioPanelChipText, active && s.studioPanelChipTextOn]}>{item.label}</Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+    );
+  };
+
+  if (media.length === 0) {
+    return renderPickerFallbackScreen();
+  }
+
   return (
     <>
       <KeyboardAvoidingView style={s.studioRoot} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-        <View style={[s.studioTopBar, { paddingTop: insets.top + 8 }]}>
-          <TouchableOpacity style={s.studioCircle} onPress={() => router.back()}>
-            <Ionicons name="close" size={26} color="#FFF" />
+        <View style={[s.studioTopBar, { paddingTop: insets.top + 2 }]}>
+          <TouchableOpacity style={s.studioBackButton} onPress={() => { pickerOpenedRef.current = false; setMedia([]); }} activeOpacity={0.82}>
+            <Ionicons name="chevron-back" size={32} color="#FFF" />
           </TouchableOpacity>
-          <TouchableOpacity style={s.studioTopSound} onPress={openMusicPicker} activeOpacity={0.88}>
-            {selectedSound?.audio_artwork_url ? (
-              <Image source={{ uri: selectedSound.audio_artwork_url }} style={s.studioTopSoundArt} />
-            ) : (
-              <View style={s.studioTopSoundArtFallback}>
-                <Ionicons name="musical-notes" size={16} color="#FFF" />
-              </View>
-            )}
-            <View style={s.studioTopSoundCopy}>
-              <Text style={s.studioTopSoundTitle} numberOfLines={1}>{selectedSound ? selectedSound.audio_title : 'Add audio'}</Text>
-              <Text style={s.studioTopSoundSub} numberOfLines={1}>{selectedSound ? selectedSound.audio_artist : 'Suggested sound'}</Text>
-            </View>
-            <View style={s.studioTopSoundPlus}>
-              <Ionicons name={selectedSound ? 'checkmark' : 'add'} size={22} color="#FFF" />
-            </View>
-          </TouchableOpacity>
+          <View style={s.studioTopCenterSpacer} />
           <View style={s.studioCircleGhost} />
         </View>
 
         {isPosting && uploadStep ? (
           <View style={s.studioProgress}>
-            <ActivityIndicator size="small" color="#DFFF32" />
+            <ActivityIndicator size="small" color={colors.accentPrimary} />
             <Text style={s.studioProgressText}>{uploadStep}</Text>
           </View>
         ) : null}
 
         <View style={s.studioStage}>
           {renderStudioMedia()}
-          {selectedSound ? (
-            <TouchableOpacity style={s.studioSoundPill} onPress={openMusicPicker}>
-              {selectedSound.audio_artwork_url ? <Image source={{ uri: selectedSound.audio_artwork_url }} style={s.studioSoundArt} /> : null}
-              <Ionicons name="musical-notes" size={14} color="#111" />
-              <Text style={s.studioSoundText} numberOfLines={1}>{selectedSound.audio_title}</Text>
-            </TouchableOpacity>
-          ) : null}
         </View>
 
-        <View style={[s.studioEditFooter, { paddingBottom: Math.max(14, insets.bottom + 8) }]}>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.studioEditTools}>
-            <TouchableOpacity style={s.studioEditTool} onPress={openMusicPicker}>
-              <Ionicons name="musical-notes-outline" size={24} color="#FFF" />
-              <Text style={s.studioEditToolText}>Audio</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={s.studioEditTool} onPress={openTextOverlay}>
-              <Ionicons name="text-outline" size={24} color="#FFF" />
+          {renderStudioThumbnails()}
+
+          <View style={[s.studioEditFooter, { paddingBottom: Math.max(14, insets.bottom + 8) }]}>
+            <View style={s.studioEditTools}>
+            <TouchableOpacity
+              style={[s.studioEditTool, studioPanel === 'text' && s.studioEditToolOn]}
+              onPress={() => {
+                if (studioPanel !== 'text' && textOverlays.length === 0) addTextDirectly();
+                setStudioPanel((panel) => panel === 'text' ? null : 'text');
+              }}
+            >
+              <Ionicons name="text" size={24} color="#FFF" />
               <Text style={s.studioEditToolText}>Text</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={s.studioEditTool} onPress={addOverlayMedia}>
-              <Ionicons name="copy-outline" size={24} color="#FFF" />
-              <Text style={s.studioEditToolText}>Overlay</Text>
+            <TouchableOpacity style={[s.studioEditTool, studioPanel === 'filters' && s.studioEditToolOn]} onPress={() => setStudioPanel((panel) => panel === 'filters' ? null : 'filters')}>
+              <Ionicons name="aperture" size={24} color="#FFF" />
+              <Text style={s.studioEditToolText}>Filters</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={s.studioEditTool} onPress={replaceMedia}>
-              <Ionicons name="images-outline" size={24} color="#FFF" />
-              <Text style={s.studioEditToolText}>Media</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={[s.studioEditTool, editPanelVisible && s.studioEditToolOn]} onPress={() => setEditPanelVisible((value) => !value)}>
-              <Ionicons name="options-outline" size={24} color="#FFF" />
-              <Text style={s.studioEditToolText}>Edit</Text>
-            </TouchableOpacity>
-          </ScrollView>
+          </View>
 
-          {editPanelVisible ? (
-            <View style={s.studioEditPanel}>
-              <View style={s.studioEditPanelHeader}>
-                <Text style={s.studioEditPanelTitle}>Edit media</Text>
-                <TouchableOpacity style={s.studioEditPanelClose} onPress={() => setEditPanelVisible(false)}>
-                  <Ionicons name="chevron-down" size={18} color="#FFFFFF" />
-                </TouchableOpacity>
-              </View>
-              <View style={s.studioEditModeRow}>
-                <TouchableOpacity style={[s.studioEditModeChip, fitMode === 'cover' && s.studioEditModeChipOn]} onPress={() => setFitMode('cover')}>
-                  <Ionicons name="expand-outline" size={17} color={fitMode === 'cover' ? '#111' : '#FFF'} />
-                  <Text style={[s.studioEditModeText, fitMode === 'cover' && s.studioEditModeTextOn]}>Fill</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={[s.studioEditModeChip, fitMode === 'contain' && s.studioEditModeChipOn]} onPress={() => setFitMode('contain')}>
-                  <Ionicons name="contract-outline" size={17} color={fitMode === 'contain' ? '#111' : '#FFF'} />
-                  <Text style={[s.studioEditModeText, fitMode === 'contain' && s.studioEditModeTextOn]}>Fit</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={s.studioEditModeChip} onPress={replaceMedia}>
-                  <Ionicons name="swap-horizontal-outline" size={17} color="#FFF" />
-                  <Text style={s.studioEditModeText}>Change</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          ) : null}
-
-          {selectedSound ? (
-            <View style={s.studioClipRow}>
-              {CLIP_DURATIONS.map((duration) => (
-                <TouchableOpacity key={duration} style={[s.studioClipChip, selectedSound.audio_duration === duration && s.studioClipChipOn]} onPress={() => setClipDuration(duration)}>
-                  <Text style={[s.studioClipText, selectedSound.audio_duration === duration && s.studioClipTextOn]}>{duration}s</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          ) : null}
+          {renderStudioToolsPanel()}
 
           <TouchableOpacity disabled={!canPost} style={[s.studioNextButton, !canPost && s.studioDisabled]} onPress={() => setPreviewVisible(true)}>
             <Text style={s.studioNextText}>Next</Text>
-            <Ionicons name="arrow-forward" size={22} color="#FFF" />
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
 
       <Modal visible={previewVisible} animationType="fade" onRequestClose={() => setPreviewVisible(false)}>
-        <View style={[s.shareRoot, { paddingTop: insets.top + 8, paddingBottom: Math.max(18, insets.bottom + 10) }]}>
+        <View style={[s.shareRoot, { paddingTop: insets.top + 2, paddingBottom: Math.max(18, insets.bottom + 10) }]}>
           <View style={s.shareHeader}>
             <TouchableOpacity style={s.shareBack} onPress={() => setPreviewVisible(false)}>
-              <Ionicons name="chevron-back" size={28} color="#111" />
+              <Ionicons name="chevron-back" size={32} color="#111" />
             </TouchableOpacity>
-            <Text style={s.shareTitle}>New post</Text>
-            <View style={s.shareBack} />
+            <TouchableOpacity style={s.shareTitleButton} onPress={() => setPostPreviewVisible(true)} activeOpacity={0.84}>
+              <Text style={s.shareTitle}>Preview</Text>
+              <Ionicons name="eye-outline" size={18} color={colors.textHint} />
+            </TouchableOpacity>
           </View>
 
           <ScrollView contentContainerStyle={s.shareContent} showsVerticalScrollIndicator={false}>
-            <View style={s.sharePreviewRow}>
-              <View style={s.shareThumb}>
-                {renderStudioMedia('preview')}
+            <View style={s.shareMediaStrip}>
+              <View style={s.shareCoverTile}>
+                {primaryMedia ? (
+                  primaryMedia.type === 'video' ? (
+                    <Video source={{ uri: primaryMedia.uri }} style={s.shareCoverMedia} resizeMode={ResizeMode.COVER} shouldPlay={false} isMuted />
+                  ) : (
+                    <Image source={{ uri: primaryMedia.uri }} style={s.shareCoverMedia} resizeMode="cover" />
+                  )
+                ) : null}
+                <View style={s.shareCoverBadge}>
+                  <Text style={s.shareCoverBadgeText}>Cover</Text>
+                </View>
               </View>
+              <TouchableOpacity style={s.shareAddTile} onPress={pickMedia} activeOpacity={0.84}>
+                <Ionicons name="add" size={36} color="#8D8D8D" />
+              </TouchableOpacity>
             </View>
 
             <TextInput
+              style={s.shareHeadlineInput}
+              placeholder="Add a catchy headline"
+              placeholderTextColor="#A0A0A0"
+              value={headline}
+              onChangeText={setHeadline}
+              maxLength={80}
+              allowFontScaling={false}
+            />
+
+            <TextInput
               style={s.shareCaptionInput}
-              placeholder="Add a caption..."
-              placeholderTextColor="#757B86"
+              placeholder="Write caption with details to get more views."
+              placeholderTextColor="#A0A0A0"
               value={caption}
               onChangeText={setCaption}
               multiline
               maxLength={500}
+              allowFontScaling={false}
             />
 
-            <TouchableOpacity style={s.shareOption}>
-              <Ionicons name="person-add-outline" size={30} color="#111" />
-              <Text style={s.shareOptionTitle}>Tag people</Text>
-              <Ionicons name="chevron-forward" size={24} color="#71717A" />
-            </TouchableOpacity>
-            <TouchableOpacity style={s.shareOption} onPress={detectLocation}>
-              <Ionicons name="location-outline" size={30} color="#111" />
+            <View style={s.shareSpacer} />
+
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.shareChipRow} keyboardShouldPersistTaps="handled">
+              <TouchableOpacity style={s.shareChip} activeOpacity={0.84} onPress={openPlacePicker}>
+                <Ionicons name="location-outline" size={18} color="#111" />
+                <Text style={s.shareChipText}>Places</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={s.shareIconChip} activeOpacity={0.84} onPress={openTagUserPicker}>
+                <Text style={s.shareAtText}>@</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={s.shareIconChip} activeOpacity={0.84} onPress={() => setCaption((text) => `${text}#`)}>
+                <Text style={s.shareHashText}>#</Text>
+              </TouchableOpacity>
+            </ScrollView>
+
+            {taggedUserList.length ? (
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.taggedUserRail}>
+                {taggedUserList.map((person) => (
+                  <TouchableOpacity key={person.id} style={s.taggedUserChip} onPress={() => toggleTaggedUser(person)} activeOpacity={0.84}>
+                    <Text style={s.taggedUserChipText} numberOfLines={1}>@{person.username || person.full_name || 'user'}</Text>
+                    <Ionicons name="close" size={14} color="#111" />
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            ) : null}
+
+            <TouchableOpacity style={s.shareOption} onPress={openPlacePicker}>
+              <Ionicons name="location-outline" size={26} color="#111" />
               <View style={s.shareOptionCopy}>
-                <Text style={s.shareOptionTitle}>Add location</Text>
-                {placeTag ? <Text style={s.shareOptionSub} numberOfLines={1}>{placeTag}</Text> : null}
+                <Text style={s.shareOptionTitle}>{placeDisplay ? 'Place added' : 'Add Location'}</Text>
+                {placeDisplay ? <Text style={s.shareOptionSub} numberOfLines={1}>{placeDisplay}</Text> : null}
               </View>
-              <Ionicons name="chevron-forward" size={24} color="#71717A" />
+              <Ionicons name="chevron-forward" size={24} color="#9A9A9A" />
             </TouchableOpacity>
-            <View style={s.shareDivider} />
 
             <TouchableOpacity style={s.shareOption} onPress={() => setAudienceVisible(true)}>
-              <Ionicons name={audienceMeta.icon as any} size={30} color="#111" />
-              <Text style={s.shareOptionTitle}>Audience</Text>
-              <Text style={s.shareValue}>{audienceMeta.label}</Text>
-              <Ionicons name="chevron-forward" size={24} color="#71717A" />
+              <Text style={s.shareMoreDots}>...</Text>
+              <View style={s.shareOptionCopy}>
+                <Text style={s.shareOptionTitle}>Who can see this post</Text>
+                <Text style={s.shareOptionSub}>{audienceMeta.label}</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={24} color="#9A9A9A" />
             </TouchableOpacity>
+
           </ScrollView>
 
+          {audienceVisible ? (
+            <View style={s.shareAudienceOverlay}>
+              <TouchableOpacity style={s.audienceDismiss} activeOpacity={1} onPress={() => setAudienceVisible(false)} />
+              <View style={[s.audienceSheet, { paddingBottom: Math.max(18, insets.bottom + 10) }]}>
+                <View style={s.audienceHandle} />
+                <Text style={s.audienceTitle}>Who can see this post</Text>
+                <Text style={s.audienceSub}>Choose the audience before you share.</Text>
+                {AUDIENCE_OPTIONS.map((option) => {
+                  const active = audience === option.id;
+                  return (
+                    <TouchableOpacity key={option.id} style={[s.audienceOption, active && s.audienceOptionOn]} onPress={() => { setAudience(option.id); setAudienceVisible(false); }}>
+                      <View style={[s.audienceIcon, active && s.audienceIconOn]}>
+                        <Ionicons name={option.icon as any} size={22} color={active ? '#111' : '#FFF'} />
+                      </View>
+                      <View style={s.audienceCopy}>
+                        <Text style={s.audienceLabel}>{option.label}</Text>
+                        <Text style={s.audienceOptionSub}>{option.sub}</Text>
+                      </View>
+                      <Ionicons name={active ? 'checkmark-circle' : 'ellipse-outline'} size={22} color={active ? colors.accentPrimary : '#8A8A8A'} />
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </View>
+          ) : null}
+
           <TouchableOpacity style={[s.shareSubmitButton, (!canPost || isPosting) && s.studioDisabled]} disabled={!canPost || isPosting} onPress={handlePost}>
-            {isPosting ? <ActivityIndicator color="#FFF" /> : <Text style={s.shareSubmitText}>Share</Text>}
+            {isPosting ? <ActivityIndicator color="#111" /> : <Text style={s.shareSubmitText}>Post</Text>}
           </TouchableOpacity>
         </View>
+      </Modal>
+
+      <Modal visible={postPreviewVisible} animationType="fade" onRequestClose={() => setPostPreviewVisible(false)}>
+        <View style={[s.postPreviewRoot, { paddingTop: insets.top + 8, paddingBottom: Math.max(16, insets.bottom + 10) }]}>
+          <View style={s.previewTopBar}>
+            <TouchableOpacity style={s.previewClose} onPress={() => setPostPreviewVisible(false)} activeOpacity={0.84}>
+              <Ionicons name="close" size={22} color="#FFFFFF" />
+            </TouchableOpacity>
+            <Text style={s.previewTitle}>Post preview</Text>
+            <TouchableOpacity style={s.previewPostButton} onPress={() => setPostPreviewVisible(false)} activeOpacity={0.84}>
+              <Text style={s.previewPostText}>Done</Text>
+            </TouchableOpacity>
+          </View>
+          <View style={s.previewPhone}>
+            <View style={s.previewMediaCenter}>{renderStudioMedia('preview')}</View>
+            <View style={s.previewOverlay}>
+              <View style={s.previewAuthorRow}>
+                {user?.profile_image ? (
+                  <Image source={{ uri: user.profile_image }} style={s.previewAvatar} />
+                ) : (
+                  <View style={s.previewAvatarFallback}>
+                    <Text style={s.previewAvatarText}>{String(user?.full_name || user?.username || 'F').slice(0, 1).toUpperCase()}</Text>
+                  </View>
+                )}
+                <View style={{ flex: 1 }}>
+                  <Text style={s.previewAuthorName} numberOfLines={1}>{user?.username || user?.full_name || 'You'}</Text>
+                  {placeDisplay ? <Text style={s.previewAuthorSub} numberOfLines={1}>{placeDisplay}</Text> : null}
+                </View>
+              </View>
+              {headline.trim() ? <Text style={s.previewHeadline} numberOfLines={2}>{headline.trim()}</Text> : null}
+              {caption.trim() ? <Text style={s.previewCaption} numberOfLines={4}>{caption.trim()}</Text> : null}
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={placePickerVisible} transparent animationType="slide" onRequestClose={() => setPlacePickerVisible(false)}>
+        <KeyboardAvoidingView style={s.placeBackdrop} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <TouchableOpacity style={s.placeBackdropDismiss} activeOpacity={1} onPress={() => setPlacePickerVisible(false)} />
+          <View style={[s.placeSheet, { paddingBottom: Math.max(18, insets.bottom + 12) }]}>
+            <View style={s.audienceHandle} />
+            <Text style={s.placeTitle}>Add place</Text>
+            <Text style={s.placeSub}>Add a place name and address so it shows on your post details.</Text>
+            <TextInput
+              value={placeDraftName}
+              onChangeText={setPlaceDraftName}
+              placeholder="Place name"
+              placeholderTextColor={colors.textHint}
+              style={s.placeInput}
+              maxLength={120}
+            />
+            <TextInput
+              value={placeDraftAddress}
+              onChangeText={setPlaceDraftAddress}
+              placeholder="Address or neighborhood"
+              placeholderTextColor={colors.textHint}
+              style={[s.placeInput, s.placeAddressInput]}
+              multiline
+              maxLength={180}
+            />
+            <TouchableOpacity style={s.placeDetectButton} onPress={detectLocation} activeOpacity={0.84}>
+              <Ionicons name="navigate-outline" size={18} color={colors.textPrimary} />
+              <Text style={s.placeDetectText}>Use current location</Text>
+            </TouchableOpacity>
+            <View style={s.placeActions}>
+              <TouchableOpacity style={s.placeCancelButton} onPress={() => setPlacePickerVisible(false)} activeOpacity={0.84}>
+                <Text style={s.placeCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={s.placeSaveButton} onPress={savePlaceDraft} activeOpacity={0.84}>
+                <Text style={s.placeSaveText}>Save place</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       <Modal visible={textOverlayVisible} transparent animationType="fade" onRequestClose={() => setTextOverlayVisible(false)}>
@@ -915,18 +1096,73 @@ export default function CreatePostScreen() {
           <View style={s.textOverlaySheet}>
             <Text style={s.textOverlayTitle}>Add text</Text>
             <TextInput
-              value={overlayTextDraft}
-              onChangeText={setOverlayTextDraft}
+              value={overlayTextDraft?.text || ''}
+              onChangeText={(text) => setOverlayTextDraft((prev) => prev ? { ...prev, text } : prev)}
               placeholder="Type on your post"
               placeholderTextColor="rgba(255,255,255,0.45)"
               style={s.textOverlayInput}
               autoFocus
               multiline
-              maxLength={90}
+              maxLength={140}
             />
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.textTypeStrip}>
+              {(['title', 'subtitle', 'label', 'price', 'rating', 'note'] as CreatorTextType[]).map((type) => (
+                <TouchableOpacity
+                  key={type}
+                  style={[s.textTypeChip, overlayTextDraft?.textType === type && s.textTypeChipOn]}
+                  onPress={() => setOverlayTextDraft((prev) => prev ? { ...prev, textType: type } : prev)}
+                  activeOpacity={0.84}
+                >
+                  <Text style={[s.textTypeChipText, overlayTextDraft?.textType === type && s.textTypeChipTextOn]}>{type}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.textTypeStrip}>
+              {TEXT_STYLE_PRESETS.map((preset) => (
+                <TouchableOpacity
+                  key={preset.id}
+                  style={[s.textStyleChip, overlayTextDraft?.presetId === preset.id && s.textStyleChipOn]}
+                  onPress={() => setOverlayTextDraft((prev) => prev ? {
+                    ...prev,
+                    textType: preset.textType,
+                    width: preset.width,
+                    fontSize: preset.fontSize,
+                    fontWeight: preset.fontWeight,
+                    color: preset.color,
+                    background: preset.background,
+                    borderColor: preset.borderColor,
+                    shadow: preset.shadow,
+                    radius: preset.radius,
+                    paddingX: preset.paddingX,
+                    paddingY: preset.paddingY,
+                    presetId: preset.id,
+                  } : prev)}
+                  activeOpacity={0.84}
+                >
+                  <Text style={[s.textStyleChipText, overlayTextDraft?.presetId === preset.id && s.textStyleChipTextOn]}>{preset.name}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+            <View style={s.textColorRow}>
+              {TEXT_COLORS.map((color) => (
+                <TouchableOpacity
+                  key={color}
+                  style={[s.textColorSwatch, { backgroundColor: color }, overlayTextDraft?.color === color && s.textColorSwatchOn]}
+                  onPress={() => setOverlayTextDraft((prev) => prev ? { ...prev, color } : prev)}
+                  activeOpacity={0.84}
+                />
+              ))}
+              <TouchableOpacity
+                style={[s.shadowToggle, overlayTextDraft?.shadow && s.shadowToggleOn]}
+                onPress={() => setOverlayTextDraft((prev) => prev ? { ...prev, shadow: !prev.shadow } : prev)}
+                activeOpacity={0.84}
+              >
+                <Text style={[s.shadowToggleText, overlayTextDraft?.shadow && s.shadowToggleTextOn]}>Shadow</Text>
+              </TouchableOpacity>
+            </View>
             <View style={s.textOverlayActions}>
-              <TouchableOpacity style={s.textOverlayCancel} onPress={() => setTextOverlayVisible(false)}>
-                <Text style={s.textOverlayCancelText}>Cancel</Text>
+              <TouchableOpacity style={s.textOverlayCancel} onPress={deleteSelectedText}>
+                <Text style={s.textOverlayCancelText}>Delete</Text>
               </TouchableOpacity>
               <TouchableOpacity style={s.textOverlayDone} onPress={saveTextOverlay}>
                 <Text style={s.textOverlayDoneText}>Done</Text>
@@ -936,7 +1172,73 @@ export default function CreatePostScreen() {
         </KeyboardAvoidingView>
       </Modal>
 
-      <Modal visible={audienceVisible} transparent animationType="slide" onRequestClose={() => setAudienceVisible(false)}>
+      <Modal visible={tagUserVisible} animationType="slide" onRequestClose={() => setTagUserVisible(false)}>
+        <View style={[s.tagUserRoot, { paddingTop: insets.top + 2 }]}>
+          <View style={s.tagUserHeader}>
+            <TouchableOpacity style={s.tagUserClose} onPress={() => setTagUserVisible(false)} activeOpacity={0.84}>
+              <Ionicons name="chevron-back" size={30} color="#111" />
+            </TouchableOpacity>
+            <Text style={s.tagUserTitle}>Tag people</Text>
+            <TouchableOpacity style={s.tagUserDone} onPress={() => setTagUserVisible(false)} activeOpacity={0.84}>
+              <Text style={s.tagUserDoneText}>Done</Text>
+            </TouchableOpacity>
+          </View>
+          <View style={s.tagUserSearchWrap}>
+            <Ionicons name="search" size={18} color="#777" />
+            <TextInput
+              value={tagUserQuery}
+              onChangeText={setTagUserQuery}
+              placeholder="Search people"
+              placeholderTextColor="#9A9A9A"
+              style={s.tagUserSearchInput}
+              autoCapitalize="none"
+            />
+          </View>
+          {taggedUserList.length ? (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.tagUserSelectedRail}>
+              {taggedUserList.map((person) => (
+                <TouchableOpacity key={person.id} style={s.tagUserSelectedChip} onPress={() => toggleTaggedUser(person)} activeOpacity={0.84}>
+                  <Text style={s.tagUserSelectedText} numberOfLines={1}>{person.full_name || person.username}</Text>
+                  <Ionicons name="close" size={14} color="#111" />
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          ) : null}
+          {tagUserLoading ? (
+            <View style={s.tagUserLoading}>
+              <ActivityIndicator color="#111" />
+            </View>
+          ) : (
+            <ScrollView style={s.tagUserList} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+              {tagUserResults.map((person) => {
+                const selected = !!taggedUsers[person.id];
+                return (
+                  <TouchableOpacity key={person.id} style={s.tagUserRow} onPress={() => toggleTaggedUser(person)} activeOpacity={0.84}>
+                    {person.profile_image ? (
+                      <Image source={{ uri: person.profile_image }} style={s.tagUserAvatar} />
+                    ) : (
+                      <View style={s.tagUserAvatarFallback}>
+                        <Text style={s.tagUserAvatarText}>{String(person.full_name || person.username || 'F').slice(0, 1).toUpperCase()}</Text>
+                      </View>
+                    )}
+                    <View style={s.tagUserInfo}>
+                      <Text style={s.tagUserName} numberOfLines={1}>{person.full_name || person.username}</Text>
+                      <Text style={s.tagUserHandle} numberOfLines={1}>@{person.username || 'flames'}</Text>
+                    </View>
+                    <View style={[s.tagUserPick, selected && s.tagUserPickOn]}>
+                      {selected ? <Ionicons name="checkmark" size={17} color="#111" /> : null}
+                    </View>
+                  </TouchableOpacity>
+                );
+              })}
+              {!tagUserResults.length ? <Text style={s.tagUserEmpty}>No people found</Text> : null}
+            </ScrollView>
+          )}
+          <View style={{ height: Math.max(insets.bottom, 14) }} />
+        </View>
+      </Modal>
+
+      <Modal visible={audienceVisible && !previewVisible} transparent animationType="slide" onRequestClose={() => setAudienceVisible(false)}>
         <View style={s.audienceBackdrop}>
           <TouchableOpacity style={s.audienceDismiss} activeOpacity={1} onPress={() => setAudienceVisible(false)} />
           <View style={[s.audienceSheet, { paddingBottom: Math.max(18, insets.bottom + 10) }]}>
@@ -954,7 +1256,7 @@ export default function CreatePostScreen() {
                     <Text style={s.audienceLabel}>{option.label}</Text>
                     <Text style={s.audienceOptionSub}>{option.sub}</Text>
                   </View>
-                  <Ionicons name={active ? 'checkmark-circle' : 'ellipse-outline'} size={22} color={active ? '#DFFF32' : '#8A8A8A'} />
+                  <Ionicons name={active ? 'checkmark-circle' : 'ellipse-outline'} size={22} color={active ? colors.accentPrimary : '#8A8A8A'} />
                 </TouchableOpacity>
               );
             })}
@@ -962,441 +1264,72 @@ export default function CreatePostScreen() {
         </View>
       </Modal>
 
-      <Modal visible={musicVisible} animationType="slide" onRequestClose={async () => { await stopPreview(); setMusicVisible(false); }}>
-        <View style={[s.musicModal, { paddingTop: insets.top + 8 }]}>
-          <View style={s.musicHeader}>
-            <TouchableOpacity style={s.musicClose} onPress={async () => { await stopPreview(); setMusicVisible(false); }}>
-              <Ionicons name="chevron-down" size={22} color="#111" />
-            </TouchableOpacity>
-            <Text style={s.musicTitle}>Add Music</Text>
-            <View style={s.musicClose} />
-          </View>
-
-          <View style={s.musicSearchWrap}>
-            <Ionicons name="search" size={18} color="#777" />
-            <TextInput
-              value={musicQuery}
-              onChangeText={(text) => { setMusicQuery(text); setMusicTab(text.trim().length > 0 ? 'search' : 'trending'); }}
-              placeholder="Search songs or artists"
-              placeholderTextColor="#9A9A9A"
-              style={s.musicSearchInput}
-              returnKeyType="search"
-              onSubmitEditing={() => musicQuery.trim().length >= 2 && searchMusic(musicQuery)}
-            />
-            {musicQuery ? (
-              <TouchableOpacity onPress={() => { setMusicQuery(''); setMusicTab('trending'); }}>
-                <Ionicons name="close-circle" size={18} color="#AAA" />
-              </TouchableOpacity>
-            ) : null}
-          </View>
-
-          <View style={s.musicTabs}>
-            <TouchableOpacity style={[s.musicTab, musicTab === 'trending' && s.musicTabOn]} onPress={() => { setMusicTab('trending'); setMusicQuery(''); }}>
-              <Text style={[s.musicTabText, musicTab === 'trending' && s.musicTabTextOn]}>Trending</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={[s.musicTab, musicTab === 'search' && s.musicTabOn]} onPress={() => setMusicTab('search')}>
-              <Text style={[s.musicTabText, musicTab === 'search' && s.musicTabTextOn]}>Search</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={[s.musicTab, musicTab === 'favorites' && s.musicTabOn]} onPress={() => setMusicTab('favorites')}>
-              <Text style={[s.musicTabText, musicTab === 'favorites' && s.musicTabTextOn]}>Favorites</Text>
-            </TouchableOpacity>
-          </View>
-
-          {musicLoading ? (
-            <View style={s.musicState}>
-              <ActivityIndicator color="#111" />
-              <Text style={s.musicStateText}>Loading sounds...</Text>
-            </View>
-          ) : musicError ? (
-            <View style={s.musicState}>
-              <Ionicons name="warning-outline" size={26} color="#B42318" />
-              <Text style={s.musicStateText}>{musicError}</Text>
-              <TouchableOpacity style={s.musicRetry} onPress={() => musicTab === 'trending' ? loadTrendingMusic() : searchMusic(musicQuery)}>
-                <Text style={s.musicRetryText}>Try again</Text>
-              </TouchableOpacity>
-            </View>
-          ) : (
-            <ScrollView contentContainerStyle={[s.musicList, { paddingBottom: insets.bottom + 24 }]} showsVerticalScrollIndicator={false}>
-              {musicTracks.length === 0 ? (
-                <View style={s.musicState}>
-                  <Ionicons name="musical-notes-outline" size={30} color="#B0B0B0" />
-                  <Text style={s.musicStateText}>{musicTab === 'favorites' ? 'Favorite sounds will appear here.' : musicTab === 'search' ? 'Search for a song or artist.' : 'No trending sounds found.'}</Text>
-                </View>
-              ) : musicTracks.map((track) => {
-                const favorited = isFavoriteTrack(track);
-                return (
-                  <View key={track.id} style={s.trackRow}>
-                    {track.artwork_url ? (
-                      <Image source={{ uri: track.artwork_url }} style={s.trackArt} />
-                    ) : (
-                      <View style={s.trackArtFallback}>
-                        <Ionicons name="musical-note" size={20} color="#111" />
-                      </View>
-                    )}
-                    <View style={s.trackCopy}>
-                      <Text style={s.trackTitle} numberOfLines={1}>{track.title}</Text>
-                      <Text style={s.trackArtist} numberOfLines={1}>{track.artist}</Text>
-                    </View>
-                    <TouchableOpacity style={[s.favoriteSoundButton, favorited && s.favoriteSoundButtonOn]} onPress={() => toggleFavoriteTrack(track)}>
-                      <Ionicons name={favorited ? 'star' : 'star-outline'} size={17} color={favorited ? '#111' : '#777'} />
-                    </TouchableOpacity>
-                    <TouchableOpacity style={s.previewButton} onPress={() => previewTrack(track)}>
-                      <Ionicons name={playingTrackId === track.id ? 'pause' : 'play'} size={16} color="#111" />
-                    </TouchableOpacity>
-                    <TouchableOpacity style={s.useSoundButton} onPress={() => useTrack(track)}>
-                      <Text style={s.useSoundText}>Use</Text>
-                    </TouchableOpacity>
-                  </View>
-                );
-              })}
-            </ScrollView>
-          )}
-        </View>
-      </Modal>
     </>
   );
 
-  return (
-    <>
-    <KeyboardAvoidingView
-      style={s.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-    >
-      <View style={{ flex: 1, paddingTop: insets.top }}>
-        {/* Header */}
-        <View style={s.header}>
-          <TouchableOpacity onPress={() => router.back()} style={s.closeBtn}>
-            <Ionicons name="close" size={22} color="#1A1A1A" />
-          </TouchableOpacity>
-          <Text style={s.headerTitle}>New Post</Text>
-          <TouchableOpacity
-            style={[s.postBtn, !canPost && s.postBtnDisabled]}
-            disabled={!canPost || isPosting}
-            onPress={handlePost}
-          >
-            {isPosting ? (
-              <ActivityIndicator size="small" color="#FFF" />
-            ) : (
-              <Text style={s.postBtnText}>Post</Text>
-            )}
-          </TouchableOpacity>
-        </View>
-
-        {/* Upload progress */}
-        {isPosting && uploadStep ? (
-          <View style={s.progressBar}>
-            <ActivityIndicator size="small" color="#F97316" />
-            <Text style={s.progressText}>{uploadStep}</Text>
-          </View>
-        ) : null}
-
-        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
-          {/* Media Section */}
-          <View style={s.mediaSection}>
-            {media.length > 0 ? (
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.mediaScroll}>
-                {media.map((m, idx) => (
-                  <View key={idx} style={s.mediaThumb}>
-                    <Image source={{ uri: m.uri }} style={s.mediaImage} />
-                    {m.type === 'video' && (
-                      <View style={s.videoBadge}>
-                        <Ionicons name="videocam" size={12} color="#FFF" />
-                      </View>
-                    )}
-                    <TouchableOpacity style={s.mediaRemove} onPress={() => removeMedia(idx)}>
-                      <Ionicons name="close" size={14} color="#FFF" />
-                    </TouchableOpacity>
-                  </View>
-                ))}
-                {media.length < 6 && (
-                  <TouchableOpacity style={s.addMore} onPress={pickMedia}>
-                    <Ionicons name="add" size={24} color="#999" />
-                  </TouchableOpacity>
-                )}
-              </ScrollView>
-            ) : (
-              <View style={s.mediaEmpty}>
-                <View style={s.mediaActions}>
-                  <TouchableOpacity style={s.mediaActionBtn} onPress={pickMedia}>
-                    <View style={[s.mediaActionIcon, { backgroundColor: '#F3ECFF' }]}>
-                      <Ionicons name="images" size={26} color="#7C3AED" />
-                    </View>
-                    <Text style={s.mediaActionLabel}>Gallery</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={s.mediaActionBtn} onPress={takePhoto}>
-                    <View style={[s.mediaActionIcon, { backgroundColor: '#FEE2E2' }]}>
-                      <Ionicons name="camera" size={26} color="#DC2626" />
-                    </View>
-                    <Text style={s.mediaActionLabel}>Camera</Text>
-                  </TouchableOpacity>
-                </View>
-                <Text style={s.mediaHint}>Add a photo or video to post</Text>
-              </View>
-            )}
-          </View>
-
-          {/* Studio Music */}
-          <View style={s.section}>
-            <View style={s.sectionHeaderRow}>
-              <Text style={s.sectionLabel}>Sound <Text style={s.optional}>(optional)</Text></Text>
-              {selectedSound ? (
-                <TouchableOpacity onPress={() => setSelectedSound(null)}>
-                  <Text style={s.removeSoundText}>Remove</Text>
-                </TouchableOpacity>
-              ) : null}
-            </View>
-            {selectedSound ? (
-              <View style={s.selectedSoundCard}>
-                {selectedSound!.audio_artwork_url ? (
-                  <Image source={{ uri: selectedSound!.audio_artwork_url }} style={s.selectedSoundArt} />
-                ) : (
-                  <View style={s.selectedSoundArtFallback}>
-                    <Ionicons name="musical-notes" size={22} color="#111" />
-                  </View>
-                )}
-                <View style={s.selectedSoundCopy}>
-                  <Text style={s.selectedSoundTitle} numberOfLines={1}>{selectedSound!.audio_title}</Text>
-                  <Text style={s.selectedSoundArtist} numberOfLines={1}>{selectedSound!.audio_artist}</Text>
-                  <View style={s.clipControls}>
-                    <Text style={s.clipLabel}>Start</Text>
-                    <TextInput
-                      value={String(selectedSound!.audio_start_time)}
-                      onChangeText={setClipStart}
-                      keyboardType="number-pad"
-                      style={s.clipInput}
-                    />
-                    <Text style={s.clipLabel}>sec</Text>
-                  </View>
-                </View>
-              </View>
-            ) : (
-              <TouchableOpacity style={s.addMusicButton} onPress={openMusicPicker}>
-                <View style={s.addMusicIcon}>
-                  <Ionicons name="musical-notes" size={20} color="#111" />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={s.addMusicTitle}>Add Music</Text>
-                  <Text style={s.addMusicSubtitle}>Search Audius tracks or use weekly trending sounds</Text>
-                </View>
-                <Ionicons name="chevron-forward" size={18} color="#777" />
-              </TouchableOpacity>
-            )}
-            {selectedSound ? (
-              <View style={s.durationRow}>
-                {CLIP_DURATIONS.map((duration) => {
-                  const active = selectedSound!.audio_duration === duration;
-                  return (
-                    <TouchableOpacity key={duration} style={[s.durationChip, active && s.durationChipOn]} onPress={() => setClipDuration(duration)}>
-                      <Text style={[s.durationText, active && s.durationTextOn]}>{duration}s</Text>
-                    </TouchableOpacity>
-                  );
-                })}
-                <TouchableOpacity style={s.changeSoundButton} onPress={openMusicPicker}>
-                  <Text style={s.changeSoundText}>Change sound</Text>
-                </TouchableOpacity>
-              </View>
-            ) : null}
-          </View>
-
-          {/* Category Selection (Optional) */}
-          <View style={s.section}>
-            <Text style={s.sectionLabel}>Category <Text style={s.optional}>(optional)</Text></Text>
-            <View style={s.catGrid}>
-              {CATEGORIES.map(cat => {
-                const active = category === cat.id;
-                return (
-                  <TouchableOpacity
-                    key={cat.id}
-                    style={[s.catChip, active && { backgroundColor: cat.color, borderColor: cat.color }]}
-                    onPress={() => setCategory(active ? null : cat.id)}
-                  >
-                    <Ionicons name={cat.icon as any} size={16} color={active ? '#FFF' : cat.color} />
-                    <Text style={[s.catLabel, active && { color: '#FFF' }]}>{cat.label}</Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-          </View>
-
-          {/* Format Selection (Optional — auto by default) */}
-          {media.length > 0 && (
-            <View style={s.section}>
-              <Text style={s.sectionLabel}>
-                Format <Text style={s.optional}>(optional)</Text>
-                {format === 'auto' && detectedFormat ? (
-                  <Text style={s.detectedHint}> — detected: {detectedFormat}</Text>
-                ) : null}
-              </Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
-                {FORMATS.map(f => {
-                  const active = format === f.id;
-                  const isDetected = format === 'auto' && detectedFormat === f.id;
-                  return (
-                    <TouchableOpacity
-                      key={f.id}
-                      style={[
-                        s.formatChip,
-                        active && s.formatChipActive,
-                        isDetected && !active && s.formatChipDetected,
-                      ]}
-                      onPress={() => setFormat(f.id)}
-                    >
-                      <Ionicons name={f.icon as any} size={16} color={active ? '#FFF' : '#666'} />
-                      <Text style={[s.formatLabel, active && { color: '#FFF' }]}>{f.label}</Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </ScrollView>
-            </View>
-          )}
-
-          {/* Caption (Optional) */}
-          <View style={s.section}>
-            <Text style={s.sectionLabel}>Caption <Text style={s.optional}>(optional)</Text></Text>
-            <TextInput
-              style={s.captionInput}
-              placeholder="Say something about this..."
-              placeholderTextColor="#CCC"
-              value={caption}
-              onChangeText={setCaption}
-              multiline
-              maxLength={500}
-            />
-          </View>
-
-          {/* Place Tag (Optional) */}
-          <View style={s.section}>
-            <Text style={s.sectionLabel}>
-              Place {hasPlacePreset ? '' : <Text style={s.optional}>(optional)</Text>}
-            </Text>
-            <TouchableOpacity
-              style={[s.placePill, placeTag ? s.placePillActive : null]}
-              onPress={detectLocation}
-            >
-              <Ionicons name="location-outline" size={18} color={placeTag ? '#DC2626' : '#999'} />
-              <Text style={[s.placeText, placeTag && { color: '#1A1A1A' }]}>
-                {placeTag || 'Tap to detect location'}
-              </Text>
-              {placeTag ? (
-                <TouchableOpacity onPress={() => { setPlaceTag(''); setPlaceId(''); }}>
-                  <Ionicons name="close-circle" size={18} color="#CCC" />
-                </TouchableOpacity>
-              ) : null}
-            </TouchableOpacity>
-          </View>
-        </ScrollView>
-      </View>
-    </KeyboardAvoidingView>
-
-    <Modal visible={musicVisible} animationType="slide" onRequestClose={async () => { await stopPreview(); setMusicVisible(false); }}>
-      <View style={[s.musicModal, { paddingTop: insets.top + 8 }]}>
-        <View style={s.musicHeader}>
-          <TouchableOpacity style={s.musicClose} onPress={async () => { await stopPreview(); setMusicVisible(false); }}>
-            <Ionicons name="chevron-down" size={22} color="#111" />
-          </TouchableOpacity>
-          <Text style={s.musicTitle}>Add Music</Text>
-          <View style={s.musicClose} />
-        </View>
-
-        <View style={s.musicSearchWrap}>
-          <Ionicons name="search" size={18} color="#777" />
-          <TextInput
-            value={musicQuery}
-            onChangeText={(text) => { setMusicQuery(text); setMusicTab(text.trim().length > 0 ? 'search' : 'trending'); }}
-            placeholder="Search songs or artists"
-            placeholderTextColor="#9A9A9A"
-            style={s.musicSearchInput}
-            returnKeyType="search"
-            onSubmitEditing={() => musicQuery.trim().length >= 2 && searchMusic(musicQuery)}
-          />
-          {musicQuery ? (
-            <TouchableOpacity onPress={() => { setMusicQuery(''); setMusicTab('trending'); }}>
-              <Ionicons name="close-circle" size={18} color="#AAA" />
-            </TouchableOpacity>
-          ) : null}
-        </View>
-
-        <View style={s.musicTabs}>
-          <TouchableOpacity style={[s.musicTab, musicTab === 'trending' && s.musicTabOn]} onPress={() => { setMusicTab('trending'); setMusicQuery(''); }}>
-            <Text style={[s.musicTabText, musicTab === 'trending' && s.musicTabTextOn]}>Trending</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={[s.musicTab, musicTab === 'search' && s.musicTabOn]} onPress={() => setMusicTab('search')}>
-            <Text style={[s.musicTabText, musicTab === 'search' && s.musicTabTextOn]}>Search</Text>
-          </TouchableOpacity>
-        </View>
-
-        {musicLoading ? (
-          <View style={s.musicState}>
-            <ActivityIndicator color="#111" />
-            <Text style={s.musicStateText}>Loading sounds...</Text>
-          </View>
-        ) : musicError ? (
-          <View style={s.musicState}>
-            <Ionicons name="warning-outline" size={26} color="#B42318" />
-            <Text style={s.musicStateText}>{musicError}</Text>
-            <TouchableOpacity style={s.musicRetry} onPress={() => musicTab === 'trending' ? loadTrendingMusic() : searchMusic(musicQuery)}>
-              <Text style={s.musicRetryText}>Try again</Text>
-            </TouchableOpacity>
-          </View>
-        ) : (
-          <ScrollView contentContainerStyle={[s.musicList, { paddingBottom: insets.bottom + 24 }]} showsVerticalScrollIndicator={false}>
-            {musicTracks.length === 0 ? (
-              <View style={s.musicState}>
-                <Ionicons name="musical-notes-outline" size={30} color="#B0B0B0" />
-                <Text style={s.musicStateText}>{musicTab === 'search' ? 'Search for a song or artist.' : 'No trending sounds found.'}</Text>
-              </View>
-            ) : musicTracks.map((track) => (
-              <View key={track.id} style={s.trackRow}>
-                {track.artwork_url ? (
-                  <Image source={{ uri: track.artwork_url }} style={s.trackArt} />
-                ) : (
-                  <View style={s.trackArtFallback}>
-                    <Ionicons name="musical-note" size={20} color="#111" />
-                  </View>
-                )}
-                <View style={s.trackCopy}>
-                  <Text style={s.trackTitle} numberOfLines={1}>{track.title}</Text>
-                  <Text style={s.trackArtist} numberOfLines={1}>{track.artist}</Text>
-                </View>
-                <TouchableOpacity style={s.previewButton} onPress={() => previewTrack(track)}>
-                  <Ionicons name={playingTrackId === track.id ? 'pause' : 'play'} size={16} color="#111" />
-                </TouchableOpacity>
-                <TouchableOpacity style={s.useSoundButton} onPress={() => useTrack(track)}>
-                  <Text style={s.useSoundText}>Use this sound</Text>
-                </TouchableOpacity>
-              </View>
-            ))}
-          </ScrollView>
-        )}
-      </View>
-    </Modal>
-    </>
-  );
 }
-
 const s = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#FAFAF8' },
-  studioRoot: { flex: 1, backgroundColor: '#050505' },
-  studioTopBar: {
-    minHeight: 66, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 14, gap: 10, zIndex: 20,
+  container: { flex: 1, backgroundColor: colors.bgApp },
+  pickerRoot: { flex: 1, backgroundColor: '#000000' },
+  pickerHeader: {
+    minHeight: 58,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing.md,
   },
+  pickerIconButton: { width: layout.iconButton, height: layout.iconButton, alignItems: 'center', justifyContent: 'center' },
+  pickerTitle: { color: '#FFFFFF', fontSize: 17, lineHeight: 22, fontWeight: '500' },
+  pickerBody: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing.gutter, paddingHorizontal: spacing.lg },
+  pickerLoading: { alignItems: 'center', justifyContent: 'center', gap: 10, marginBottom: 8 },
+  pickerLoadingText: { color: '#FFFFFF', fontSize: 14, lineHeight: 18, fontWeight: '500' },
+  pickerCameraButton: {
+    width: '100%',
+    maxWidth: 260,
+    height: 48,
+    borderRadius: borderRadius.md,
+    backgroundColor: '#191919',
+    borderWidth: 1,
+    borderColor: '#2B2B2B',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  pickerCameraText: { color: '#FFFFFF', fontSize: 16, lineHeight: 20, fontWeight: '500' },
+  pickerGalleryButton: {
+    minWidth: 156,
+    minHeight: 40,
+    borderRadius: 20,
+    backgroundColor: colors.accentPrimary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 18,
+  },
+  pickerGalleryText: { color: colors.textInverse, fontSize: 13, lineHeight: 17, fontWeight: '500' },
+  studioRoot: { flex: 1, backgroundColor: '#070806' },
+  studioTopBar: {
+    minHeight: 54, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: spacing.md, zIndex: 20,
+  },
+  studioBackButton: { width: layout.iconButton, height: layout.iconButton, alignItems: 'flex-start', justifyContent: 'center' },
+  studioTopCenterSpacer: { flex: 1 },
   studioCircle: {
-    width: 42, height: 42, borderRadius: 21, backgroundColor: 'rgba(255,255,255,0.16)',
+    width: 42, height: 42, borderRadius: 21, backgroundColor: 'rgba(255,255,255,0.14)',
     alignItems: 'center', justifyContent: 'center',
   },
-  studioCircleGhost: { width: 42, height: 42 },
+  studioCircleGhost: { width: 40, height: 40 },
   studioTopSound: {
-    flex: 1, maxWidth: 250, minHeight: 54, borderRadius: 27, backgroundColor: 'rgba(255,255,255,0.12)',
+    flex: 1, maxWidth: 188, minHeight: 38, borderRadius: 19, backgroundColor: 'rgba(255,255,255,0.10)',
     borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', flexDirection: 'row', alignItems: 'center',
-    gap: 9, paddingHorizontal: 10,
+    gap: 6, paddingHorizontal: 8,
   },
-  studioTopSoundArt: { width: 36, height: 36, borderRadius: 10, backgroundColor: '#333' },
-  studioTopSoundArtFallback: { width: 36, height: 36, borderRadius: 10, backgroundColor: 'rgba(255,255,255,0.13)', alignItems: 'center', justifyContent: 'center' },
+  studioTopSoundArt: { width: 24, height: 24, borderRadius: 7, backgroundColor: '#333' },
+  studioTopSoundArtFallback: { width: 24, height: 24, borderRadius: 7, backgroundColor: 'rgba(255,255,255,0.13)', alignItems: 'center', justifyContent: 'center' },
   studioTopSoundCopy: { flex: 1, minWidth: 0 },
-  studioTopSoundTitle: { color: '#FFF', fontSize: 14, lineHeight: 17, fontWeight: '900' },
-  studioTopSoundSub: { color: 'rgba(255,255,255,0.55)', fontSize: 12, lineHeight: 15, fontWeight: '800', marginTop: 1 },
-  studioTopSoundPlus: { width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(255,255,255,0.13)', alignItems: 'center', justifyContent: 'center' },
+  studioTopSoundTitle: { color: '#FFF', fontSize: 12, lineHeight: 14, fontWeight: '500' },
+  studioTopSoundSub: { color: 'rgba(255,255,255,0.55)', fontSize: 9, lineHeight: 11, fontWeight: '600', marginTop: 1 },
+  studioTopSoundPlus: { width: 24, height: 24, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.13)', alignItems: 'center', justifyContent: 'center' },
   studioUndoGroup: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   studioSmallCircle: {
     width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(255,255,255,0.14)',
@@ -1404,91 +1337,94 @@ const s = StyleSheet.create({
   },
   studioSmallCircleDisabled: { opacity: 0.36 },
   studioTitleWrap: { flex: 1, minWidth: 0, alignItems: 'center' },
-  studioTitle: { color: '#FFFFFF', fontSize: 17, lineHeight: 21, fontWeight: '900' },
-  studioSubtitle: { color: 'rgba(255,255,255,0.56)', fontSize: 11, lineHeight: 14, fontWeight: '800', marginTop: 1 },
+  studioTitle: { color: '#FFFFFF', fontSize: 17, lineHeight: 21, fontWeight: '500' },
+  studioSubtitle: { color: 'rgba(255,255,255,0.56)', fontSize: 11, lineHeight: 14, fontWeight: '600', marginTop: 1 },
   studioTopActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   studioPreviewButton: {
     height: 38, borderRadius: 19, backgroundColor: '#FFFFFF', flexDirection: 'row',
     alignItems: 'center', gap: 6, paddingHorizontal: 13,
   },
-  studioPreviewText: { color: '#111', fontSize: 12, fontWeight: '900' },
+  studioPreviewText: { color: colors.textPrimary, fontSize: 12, fontWeight: '500' },
   studioPostButton: {
-    minWidth: 62, height: 38, borderRadius: 19, backgroundColor: '#DFFF32',
-    borderWidth: 1.5, borderColor: '#111', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 16,
+    minWidth: 58, height: 36, borderRadius: 18, backgroundColor: colors.accentPrimary,
+    borderWidth: 1, borderColor: colors.accentPrimaryHover, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 14,
   },
-  studioPostText: { color: '#111', fontSize: 13, fontWeight: '900' },
+  studioPostText: { color: colors.textInverse, fontSize: 13, fontWeight: '500' },
   studioShareButton: {
-    minWidth: 72, height: 38, borderRadius: 19, backgroundColor: '#DFFF32',
-    borderWidth: 1.5, borderColor: '#111', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 15,
+    minWidth: 68, height: 36, borderRadius: 18, backgroundColor: colors.accentPrimary,
+    borderWidth: 1, borderColor: colors.accentPrimaryHover, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 14,
   },
-  studioShareText: { color: '#111', fontSize: 13, fontWeight: '900' },
+  studioShareText: { color: colors.textInverse, fontSize: 13, fontWeight: '500' },
   studioDisabled: { opacity: 0.4 },
   studioProgress: {
     marginHorizontal: 14, minHeight: 38, borderRadius: 19, backgroundColor: 'rgba(223,255,50,0.12)',
     borderWidth: 1, borderColor: 'rgba(223,255,50,0.24)', flexDirection: 'row', alignItems: 'center',
     gap: 8, paddingHorizontal: 12,
   },
-  studioProgressText: { color: '#DFFF32', fontSize: 12, fontWeight: '800' },
-  studioStage: { flex: 1, minHeight: 260, justifyContent: 'center', position: 'relative' },
+  studioProgressText: { color: '#FFFFFF', fontSize: 12, fontWeight: '600' },
+  studioStage: { flex: 1, minHeight: 230, justifyContent: 'center', position: 'relative' },
   studioMediaFrame: {
-    flex: 1, minHeight: 260, borderRadius: 24, marginHorizontal: 0, marginTop: 8, marginBottom: 8,
-    overflow: 'hidden', backgroundColor: '#111111', position: 'relative',
+    width: '100%',
+    height: Math.min(SH * 0.66, SW * 1.333),
+    overflow: 'hidden',
+    backgroundColor: '#11120F',
+    position: 'relative',
   },
   studioMedia: { width: '100%', height: '100%' },
-  studioOverlayMediaFrame: {
-    position: 'absolute', borderRadius: 18,
-    overflow: 'hidden', backgroundColor: '#111', borderWidth: 2, borderColor: 'rgba(255,255,255,0.78)',
-  },
-  studioOverlayMedia: { width: '100%', height: '100%' },
-  studioOverlayRemove: {
-    position: 'absolute', right: 6, top: 6, width: 24, height: 24, borderRadius: 12,
-    backgroundColor: 'rgba(0,0,0,0.58)', alignItems: 'center', justifyContent: 'center',
-  },
   studioTextOverlay: {
-    position: 'absolute', alignItems: 'center',
+    position: 'absolute', alignItems: 'center', borderWidth: 1, zIndex: 12,
   },
+  studioTextOverlaySelected: { borderColor: '#FFF93F' },
   studioTextOverlayText: {
-    color: '#FFFFFF', fontSize: 28, lineHeight: 34, fontWeight: '900', textAlign: 'center',
-    textShadowColor: 'rgba(0,0,0,0.62)', textShadowRadius: 10, textShadowOffset: { width: 0, height: 2 },
+    color: '#FFFFFF', fontSize: 28, lineHeight: 34, fontWeight: '500', textAlign: 'center',
   },
   filterTint: { ...StyleSheet.absoluteFillObject },
-  studioVideoBadge: {
+  filterFadeLayer: { ...StyleSheet.absoluteFillObject, backgroundColor: '#F7F1E8' },
+  filterVignetteLayer: {
+    ...StyleSheet.absoluteFillObject,
+    borderWidth: 34,
+    borderColor: 'rgba(0,0,0,0.72)',
+  },
+  filterGrainLayer: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(255,255,255,0.34)',
+  },  studioVideoBadge: {
     position: 'absolute', left: 12, top: 12, minHeight: 30, borderRadius: 15,
     backgroundColor: 'rgba(255,255,255,0.86)', flexDirection: 'row', alignItems: 'center',
     gap: 5, paddingHorizontal: 10,
   },
-  studioVideoText: { color: '#111', fontSize: 12, fontWeight: '900' },
+  studioVideoText: { color: '#111', fontSize: 12, fontWeight: '500' },
   studioEmptyCanvas: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 14, padding: 24 },
-  studioEmptyTitle: { color: '#FFF', fontSize: 17, fontWeight: '900' },
+  studioEmptyTitle: { color: '#FFF', fontSize: 17, fontWeight: '500' },
   studioEmptyActions: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   studioEmptyButton: {
-    height: 42, borderRadius: 21, backgroundColor: '#DFFF32', borderWidth: 1.5, borderColor: '#111',
+    minHeight: 40, borderRadius: 20, backgroundColor: colors.accentPrimary, borderWidth: 1, borderColor: colors.accentPrimaryHover,
     flexDirection: 'row', alignItems: 'center', gap: 7, paddingHorizontal: 15,
   },
   studioEmptyButtonDark: {
     height: 42, borderRadius: 21, backgroundColor: 'rgba(255,255,255,0.14)', borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.18)', flexDirection: 'row', alignItems: 'center', gap: 7, paddingHorizontal: 15,
   },
-  studioEmptyButtonText: { color: '#111', fontSize: 13, fontWeight: '900' },
-  studioEmptyButtonTextDark: { color: '#FFF', fontSize: 13, fontWeight: '900' },
+  studioEmptyButtonText: { color: colors.textInverse, fontSize: 13, fontWeight: '500' },
+  studioEmptyButtonTextDark: { color: '#FFF', fontSize: 13, fontWeight: '500' },
   studioSoundPill: {
     position: 'absolute', left: 14, bottom: 14, right: 84, minHeight: 42, borderRadius: 21,
     backgroundColor: 'rgba(255,255,255,0.86)', flexDirection: 'row', alignItems: 'center',
     gap: 7, paddingHorizontal: 10,
   },
   studioSoundArt: { width: 28, height: 28, borderRadius: 14, backgroundColor: '#DDD' },
-  studioSoundText: { flex: 1, minWidth: 0, color: '#111', fontSize: 12, fontWeight: '900' },
+  studioSoundText: { flex: 1, minWidth: 0, color: '#111', fontSize: 12, fontWeight: '500' },
   studioPanel: {
-    backgroundColor: '#171719', borderTopLeftRadius: 28, borderTopRightRadius: 28,
-    paddingTop: 10, paddingHorizontal: 12, gap: 10,
+    backgroundColor: '#141512', borderTopLeftRadius: borderRadius.sheet, borderTopRightRadius: borderRadius.sheet,
+    paddingTop: 10, paddingHorizontal: spacing.gutter, gap: spacing.gutter,
   },
   studioPanelHandle: { alignSelf: 'center', width: 42, height: 4, borderRadius: 4, backgroundColor: 'rgba(255,255,255,0.24)', marginBottom: 2 },
   studioToolRail: { position: 'absolute', right: 12, top: 18, gap: 12, zIndex: 15 },
   studioToolRailButton: {
-    width: 58, minHeight: 58, borderRadius: 18, backgroundColor: 'rgba(0,0,0,0.42)',
+    width: 52, minHeight: 52, borderRadius: 17, backgroundColor: 'rgba(0,0,0,0.42)',
     borderWidth: 1, borderColor: 'rgba(255,255,255,0.16)', alignItems: 'center', justifyContent: 'center', gap: 4,
   },
-  studioToolRailText: { color: '#FFFFFF', fontSize: 10, lineHeight: 12, fontWeight: '900' },
+  studioToolRailText: { color: '#FFFFFF', fontSize: 10, lineHeight: 12, fontWeight: '500' },
   studioComposerRow: {
     minHeight: 70, borderRadius: 22, backgroundColor: 'rgba(255,255,255,0.08)',
     borderWidth: 1, borderColor: 'rgba(255,255,255,0.10)', flexDirection: 'row', alignItems: 'flex-start',
@@ -1496,70 +1432,142 @@ const s = StyleSheet.create({
   },
   studioComposerAvatar: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#333' },
   studioComposerAvatarFallback: {
-    width: 36, height: 36, borderRadius: 18, backgroundColor: '#DFFF32',
-    borderWidth: 1.4, borderColor: '#111', alignItems: 'center', justifyContent: 'center',
+    width: 36, height: 36, borderRadius: 18, backgroundColor: colors.accentPrimaryLight,
+    borderWidth: 1, borderColor: colors.borderSubtle, alignItems: 'center', justifyContent: 'center',
   },
-  studioComposerAvatarText: { color: '#111', fontSize: 15, fontWeight: '900' },
+  studioComposerAvatarText: { color: '#111', fontSize: 15, fontWeight: '500' },
   studioComposerInput: {
     flex: 1, minHeight: 48, maxHeight: 94, color: '#FFFFFF', fontSize: 14,
-    lineHeight: 19, fontWeight: '700', padding: 0, textAlignVertical: 'top',
+    lineHeight: 19, fontWeight: '500', padding: 0, textAlignVertical: 'top',
   },
-  studioMusicRow: {
-    minHeight: 54, borderRadius: 20, backgroundColor: '#FFFFFF', flexDirection: 'row',
-    alignItems: 'center', gap: 10, paddingHorizontal: 10,
-  },
-  studioMusicIconWrap: {
-    width: 34, height: 34, borderRadius: 17, backgroundColor: '#DFFF32',
-    borderWidth: 1.4, borderColor: '#111', alignItems: 'center', justifyContent: 'center',
-  },
-  studioMusicCopy: { flex: 1, minWidth: 0 },
-  studioMusicTitle: { color: '#111', fontSize: 14, fontWeight: '900' },
-  studioMusicSub: { color: '#666', fontSize: 11, lineHeight: 14, fontWeight: '700', marginTop: 1 },
-  studioMusicAction: { color: '#111', fontSize: 12, fontWeight: '900' },
   studioEditFooter: {
-    backgroundColor: '#080B10', borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.06)',
-    paddingTop: 14, paddingHorizontal: 14, gap: 14,
+    backgroundColor: '#070806',
+    paddingTop: spacing.sm,
+    paddingHorizontal: spacing.gutter,
+    gap: spacing.sm,
   },
-  studioEditTools: { gap: 12, paddingRight: 14 },
+  studioEditTools: { minHeight: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm },
   studioEditTool: {
-    width: 86, height: 78, borderRadius: 18, backgroundColor: '#202024',
-    alignItems: 'center', justifyContent: 'center', gap: 7,
+    flex: 1,
+    minWidth: 54,
+    minHeight: layout.minTouchTarget,
+    borderRadius: borderRadius.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 3,
   },
-  studioEditToolOn: { backgroundColor: '#34343A', borderWidth: 1, borderColor: 'rgba(255,255,255,0.16)' },
-  studioEditToolText: { color: '#FFFFFF', fontSize: 14, lineHeight: 17, fontWeight: '900' },
+  studioEditToolOn: { backgroundColor: 'rgba(255,255,255,0.09)' },
+  studioEditToolText: { color: '#FFFFFF', fontSize: 10, lineHeight: 12, fontWeight: '500', textAlign: 'center' },
   studioEditPanel: {
-    borderRadius: 22, backgroundColor: '#171A20', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)',
-    padding: 12, gap: 12,
+    borderRadius: borderRadius.xl, backgroundColor: '#161915', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)',
+    padding: spacing.gutter, gap: spacing.gutter,
   },
   studioEditPanelHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  studioEditPanelTitle: { color: '#FFFFFF', fontSize: 15, fontWeight: '900' },
+  studioEditPanelTitle: { color: '#FFFFFF', fontSize: 15, fontWeight: '500' },
   studioEditPanelClose: { width: 30, height: 30, borderRadius: 15, backgroundColor: 'rgba(255,255,255,0.08)', alignItems: 'center', justifyContent: 'center' },
   studioEditModeRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   studioEditModeChip: {
-    flex: 1, minHeight: 42, borderRadius: 21, backgroundColor: '#262A31',
+    flex: 1, minHeight: layout.minTouchTarget, borderRadius: 22, backgroundColor: '#242720',
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7,
   },
-  studioEditModeChipOn: { backgroundColor: '#DFFF32' },
-  studioEditModeText: { color: '#FFFFFF', fontSize: 13, fontWeight: '900' },
-  studioEditModeTextOn: { color: '#111111' },
+  studioEditModeChipOn: { backgroundColor: colors.accentPrimary },
+  studioEditModeText: { color: '#FFFFFF', fontSize: 13, fontWeight: '500' },
+  studioEditModeTextOn: { color: '#FFFFFF' },
   studioClipRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   studioClipChip: {
     height: 32, borderRadius: 16, backgroundColor: '#202024', borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.08)', justifyContent: 'center', paddingHorizontal: 13,
   },
   studioClipChipOn: { backgroundColor: '#4B5CF6', borderColor: '#4B5CF6' },
-  studioClipText: { color: 'rgba(255,255,255,0.72)', fontSize: 12, fontWeight: '900' },
+  studioClipText: { color: 'rgba(255,255,255,0.72)', fontSize: 12, fontWeight: '500' },
   studioClipTextOn: { color: '#FFFFFF' },
   studioNextButton: {
-    alignSelf: 'flex-end', minWidth: 150, height: 58, borderRadius: 29, backgroundColor: '#4B5CF6',
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingHorizontal: 22,
+    width: '100%',
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: colors.accentPrimary,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  studioNextText: { color: '#FFFFFF', fontSize: 19, fontWeight: '900' },
+  studioNextText: { color: colors.textInverse, fontSize: 15, lineHeight: 19, fontWeight: '500' },
+  studioThumbWrap: { minHeight: 50, alignItems: 'center', justifyContent: 'center' },
+  studioThumbStrip: { alignItems: 'center', gap: 8, paddingHorizontal: 12 },
+  studioThumbTile: {
+    width: 42,
+    height: 42,
+    borderRadius: 7,
+    overflow: 'hidden',
+    backgroundColor: '#202020',
+    borderWidth: 1.5,
+    borderColor: 'transparent',
+  },
+  studioThumbTileOn: { borderColor: '#FFFFFF' },
+  studioThumbMedia: { width: '100%', height: '100%' },
+  studioAddThumb: {
+    width: 42,
+    height: 42,
+    borderRadius: 7,
+    backgroundColor: '#2A2A2A',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  studioToolPanel: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  creatorPanel: {
+    borderRadius: borderRadius.lg,
+    backgroundColor: '#11130F',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.06)',
+    padding: spacing.sm,
+    gap: spacing.sm,
+  },
+  panelTitleRow: { minHeight: 22, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  panelTitle: { color: '#FFFFFF', fontSize: 12, fontWeight: '500' },
+  panelSubtle: { color: 'rgba(255,255,255,0.54)', fontSize: 10, fontWeight: '600' },
+  panelHelp: { color: 'rgba(255,255,255,0.58)', fontSize: 11, lineHeight: 15, fontWeight: '500' },
+  panelResetBtn: { height: 24, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.10)', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 9 },
+  panelResetText: { color: '#FFFFFF', fontSize: 10, fontWeight: '500' },
+  filterPresetStrip: { gap: 7, paddingRight: 6 },
+  filterPresetItem: { width: 54, gap: 4, alignItems: 'center' },
+  filterPreviewThumb: { width: 50, height: 60, borderRadius: 8, overflow: 'hidden', backgroundColor: '#2A2A2A', borderWidth: 1.2, borderColor: 'transparent' },
+  filterPreviewThumbOn: { borderColor: colors.accentPrimary },
+  filterPreviewImage: { width: '100%', height: '100%' },
+  filterPresetName: { color: 'rgba(255,255,255,0.62)', fontSize: 9, fontWeight: '600', textAlign: 'center' },
+  filterPresetNameOn: { color: '#FFFFFF' },
+  intensityRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  intensityLabel: { color: '#FFFFFF', fontSize: 11, fontWeight: '500' },
+  intensityValue: { color: '#FFFFFF', fontSize: 11, fontWeight: '500' },
+  intensityTrack: { height: 22, borderRadius: 11, backgroundColor: 'rgba(255,255,255,0.12)', justifyContent: 'center', overflow: 'hidden' },
+  intensityFill: { position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: colors.accentPrimary },
+  intensityKnob: { position: 'absolute', width: 14, height: 14, borderRadius: 7, backgroundColor: '#FFFFFF', borderWidth: 1.2, borderColor: colors.textPrimary, marginLeft: -7 },
+  textPresetStrip: { gap: 7, paddingRight: 6 },
+  textPresetChip: { minHeight: 28, borderRadius: 14, backgroundColor: 'rgba(255,255,255,0.10)', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 10 },
+  textPresetName: { color: '#FFFFFF', fontSize: 10, fontWeight: '500' },
+  selectedEditorRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  selectedEditorMain: { flex: 1, minHeight: 38, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.08)', justifyContent: 'center', paddingHorizontal: 10 },
+  selectedEditorTitle: { color: '#FFFFFF', fontSize: 12, fontWeight: '500' },
+  selectedEditorSub: { color: 'rgba(255,255,255,0.54)', fontSize: 9, fontWeight: '500', marginTop: 1 },
+  miniActionBtn: { width: 30, height: 30, borderRadius: 15, backgroundColor: 'rgba(255,255,255,0.12)', alignItems: 'center', justifyContent: 'center' },
+  miniDangerBtn: { width: 30, height: 30, borderRadius: 15, backgroundColor: '#B42318', alignItems: 'center', justifyContent: 'center' },  studioPanelChip: {
+    minHeight: layout.minTouchTarget,
+    borderRadius: 22,
+    backgroundColor: '#1F1F1F',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.10)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+  },
+  studioPanelChipOn: { backgroundColor: colors.accentPrimary, borderColor: colors.accentPrimaryHover },
+  studioPanelChipText: { color: '#FFFFFF', fontSize: 12, lineHeight: 16, fontWeight: '500' },
+  studioPanelChipTextOn: { color: colors.textInverse },
+  filterDot: { width: 16, height: 16, borderRadius: 8, borderWidth: 1, borderColor: 'rgba(0,0,0,0.18)' },
   studioFilterTabs: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   studioFilterTab: { height: 36, borderRadius: 18, backgroundColor: 'rgba(0,0,0,0.28)', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 14 },
   studioFilterTabOn: { height: 36, borderRadius: 18, backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 16 },
-  studioFilterTabText: { color: '#FFFFFF', fontSize: 12, fontWeight: '900', textTransform: 'uppercase' },
-  studioFilterTabTextOn: { color: '#111111', fontSize: 12, fontWeight: '900', textTransform: 'uppercase' },
+  studioFilterTabText: { color: '#FFFFFF', fontSize: 12, fontWeight: '500', textTransform: 'uppercase' },
+  studioFilterTabTextOn: { color: '#111111', fontSize: 12, fontWeight: '500', textTransform: 'uppercase' },
   studioFilterStrip: { gap: 9, paddingRight: 12 },
   filterItem: { width: 58, alignItems: 'center', gap: 5 },
   filterThumb: { width: 56, height: 68, borderRadius: 10, overflow: 'hidden', backgroundColor: '#111', borderWidth: 1.5, borderColor: 'transparent' },
@@ -1570,24 +1578,24 @@ const s = StyleSheet.create({
     width: 56, height: 68, borderRadius: 10, borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.22)',
     borderStyle: 'dashed', alignItems: 'center', justifyContent: 'center',
   },
-  filterName: { color: 'rgba(255,255,255,0.56)', fontSize: 11, fontWeight: '800' },
+  filterName: { color: 'rgba(255,255,255,0.56)', fontSize: 11, fontWeight: '600' },
   filterNameOn: { color: '#FFFFFF' },
   studioQuickRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   studioQuickChip: {
     flex: 1, minHeight: 38, borderRadius: 19, backgroundColor: '#FFFFFF',
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingHorizontal: 9,
   },
-  studioQuickText: { color: '#111', fontSize: 12, fontWeight: '900' },
+  studioQuickText: { color: '#111', fontSize: 12, fontWeight: '500' },
   simpleStudioActions: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   simpleStudioAction: {
     flex: 1, minHeight: 46, borderRadius: 23, backgroundColor: '#FFFFFF',
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7,
     paddingHorizontal: 12,
   },
-  simpleStudioActionText: { color: '#111', fontSize: 13, fontWeight: '900' },
+  simpleStudioActionText: { color: '#111', fontSize: 13, fontWeight: '500' },
   studioCaptionInput: {
     minHeight: 48, maxHeight: 74, borderRadius: 18, backgroundColor: 'rgba(255,255,255,0.08)',
-    color: '#FFFFFF', fontSize: 14, lineHeight: 19, fontWeight: '700', paddingHorizontal: 13, paddingVertical: 10,
+    color: '#FFFFFF', fontSize: 14, lineHeight: 19, fontWeight: '500', paddingHorizontal: 13, paddingVertical: 10,
     textAlignVertical: 'top',
   },
   studioCategoryRow: { gap: 8, paddingRight: 12 },
@@ -1595,16 +1603,16 @@ const s = StyleSheet.create({
     minHeight: 34, borderRadius: 17, backgroundColor: 'rgba(255,255,255,0.08)', flexDirection: 'row',
     alignItems: 'center', gap: 5, paddingHorizontal: 11,
   },
-  studioCategoryText: { color: '#FFF', fontSize: 12, fontWeight: '800' },
+  studioCategoryText: { color: '#FFF', fontSize: 12, fontWeight: '600' },
   studioCategoryTextOn: { color: '#FFF' },
   studioDurationRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   studioDurationChip: {
     height: 32, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.09)',
     alignItems: 'center', justifyContent: 'center', paddingHorizontal: 13,
   },
-  studioDurationChipOn: { backgroundColor: '#DFFF32' },
-  studioDurationText: { color: '#FFF', fontSize: 12, fontWeight: '900' },
-  studioDurationTextOn: { color: '#111' },
+  studioDurationChipOn: { backgroundColor: colors.accentPrimary },
+  studioDurationText: { color: '#FFF', fontSize: 12, fontWeight: '500' },
+  studioDurationTextOn: { color: '#FFF' },
   studioToolBar: { minHeight: 42, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around' },
   studioTool: { width: 44, height: 38, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
   studioToolOn: { backgroundColor: 'rgba(255,255,255,0.12)' },
@@ -1614,111 +1622,352 @@ const s = StyleSheet.create({
     borderWidth: 1, borderColor: 'rgba(255,255,255,0.16)',
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
   },
-  simpleFooterButtonText: { color: '#FFF', fontSize: 14, fontWeight: '900' },
+  simpleFooterButtonText: { color: '#FFF', fontSize: 14, fontWeight: '500' },
   simpleFooterPost: {
-    flex: 1, minHeight: 48, borderRadius: 24, backgroundColor: '#DFFF32',
-    borderWidth: 1.5, borderColor: '#111', alignItems: 'center', justifyContent: 'center',
+    flex: 1, minHeight: 44, borderRadius: 22, backgroundColor: colors.accentPrimary,
+    borderWidth: 1, borderColor: colors.accentPrimaryHover, alignItems: 'center', justifyContent: 'center',
   },
-  simpleFooterPostText: { color: '#111', fontSize: 14, fontWeight: '900' },
+  simpleFooterPostText: { color: '#FFF', fontSize: 14, fontWeight: '500' },
   postPreviewRoot: { flex: 1, backgroundColor: '#050505', paddingHorizontal: 16, gap: 14 },
   previewTopBar: { minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   previewClose: { width: 42, height: 42, borderRadius: 21, backgroundColor: 'rgba(255,255,255,0.12)', alignItems: 'center', justifyContent: 'center' },
-  previewTitle: { color: '#FFFFFF', fontSize: 17, fontWeight: '900' },
-  previewPostButton: { height: 38, borderRadius: 19, backgroundColor: '#DFFF32', borderWidth: 1.5, borderColor: '#111', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 16 },
-  previewPostText: { color: '#111', fontSize: 13, fontWeight: '900' },
+  previewTitle: { color: '#FFFFFF', fontSize: 17, fontWeight: '500' },
+  previewPostButton: { height: 36, borderRadius: 18, backgroundColor: colors.accentPrimary, borderWidth: 1, borderColor: colors.accentPrimaryHover, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 14 },
+  previewPostText: { color: '#FFF', fontSize: 13, fontWeight: '500' },
   previewPhone: { flex: 1, borderRadius: 30, overflow: 'hidden', backgroundColor: '#111', position: 'relative' },
-  previewMediaFrame: { flex: 1, overflow: 'hidden', backgroundColor: '#111', position: 'relative' },
+  previewMediaCenter: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingBottom: 112 },
+  previewMediaFrame: {
+    width: Math.min(320, SW - 56),
+    height: Math.min(430, SH * 0.56),
+    borderRadius: 24,
+    overflow: 'hidden',
+    backgroundColor: '#111',
+    position: 'relative',
+  },
   previewOverlay: { position: 'absolute', left: 16, right: 16, bottom: 18, gap: 10 },
   previewAuthorRow: { flexDirection: 'row', alignItems: 'center', gap: 9 },
   previewAvatar: { width: 42, height: 42, borderRadius: 21 },
-  previewAvatarFallback: { width: 42, height: 42, borderRadius: 21, backgroundColor: '#DFFF32', borderWidth: 1.5, borderColor: '#111', alignItems: 'center', justifyContent: 'center' },
-  previewAvatarText: { color: '#111', fontSize: 18, fontWeight: '900' },
-  previewAuthorName: { color: '#FFF', fontSize: 16, fontWeight: '900' },
-  previewAuthorSub: { color: 'rgba(255,255,255,0.72)', fontSize: 12, fontWeight: '700' },
-  previewCaption: { color: '#FFF', fontSize: 14, lineHeight: 19, fontWeight: '700' },
+  previewAvatarFallback: { width: 42, height: 42, borderRadius: 21, backgroundColor: colors.accentPrimaryLight, borderWidth: 1, borderColor: colors.borderSubtle, alignItems: 'center', justifyContent: 'center' },
+  previewAvatarText: { color: colors.textPrimary, fontSize: 18, fontWeight: '500' },
+  previewAuthorName: { color: '#FFF', fontSize: 16, fontWeight: '500' },
+  previewAuthorSub: { color: 'rgba(255,255,255,0.72)', fontSize: 12, fontWeight: '500' },
+  previewHeadline: { color: '#FFFFFF', fontSize: 20, lineHeight: 25, fontWeight: '700' },
+  previewCaption: { color: '#FFF', fontSize: 14, lineHeight: 19, fontWeight: '500' },
   previewSoundBar: { minHeight: 38, borderRadius: 19, backgroundColor: 'rgba(255,255,255,0.86)', flexDirection: 'row', alignItems: 'center', gap: 7, paddingHorizontal: 11 },
-  previewSoundText: { flex: 1, color: '#111', fontSize: 12, fontWeight: '900' },
+  previewSoundText: { flex: 1, color: '#111', fontSize: 12, fontWeight: '500' },
   previewEditButton: { height: 48, borderRadius: 24, backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center' },
-  previewEditText: { color: '#111', fontSize: 14, fontWeight: '900' },
-  shareRoot: { flex: 1, backgroundColor: '#FFFFFF' },
+  previewEditText: { color: '#111', fontSize: 14, fontWeight: '500' },
+  shareRoot: { flex: 1, backgroundColor: colors.bgCard },
   shareHeader: {
-    minHeight: 64, borderBottomWidth: 1, borderBottomColor: '#ECECF0',
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16,
+    minHeight: 58,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 18,
   },
-  shareBack: { width: 48, height: 48, alignItems: 'center', justifyContent: 'center' },
-  shareTitle: { color: '#0E1018', fontSize: 23, lineHeight: 28, fontWeight: '900' },
-  shareContent: { paddingBottom: 112 },
-  sharePreviewRow: { minHeight: 120, alignItems: 'center', justifyContent: 'center', paddingTop: 14 },
-  shareThumb: {
-    width: Math.min(220, SW * 0.52), height: Math.min(180, SW * 0.43), borderRadius: 20,
-    overflow: 'hidden', backgroundColor: '#050505',
+  shareBack: { width: layout.iconButton, height: layout.iconButton, alignItems: 'flex-start', justifyContent: 'center' },
+  shareTitleButton: { minHeight: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingHorizontal: 8 },
+  shareTitle: { color: colors.textPrimary, fontSize: 19, lineHeight: 25, fontWeight: '600' },
+  shareContent: { minHeight: SH - 140, paddingHorizontal: spacing.md, paddingTop: spacing.md, paddingBottom: 108 },
+  shareMediaStrip: { flexDirection: 'row', alignItems: 'center', gap: spacing.gutter, marginBottom: spacing.lg },
+  shareCoverTile: {
+    width: 88,
+    height: 88,
+    borderRadius: borderRadius.md,
+    overflow: 'hidden',
+    backgroundColor: colors.bgSubtle,
+    position: 'relative',
+  },
+  shareCoverMedia: { width: '100%', height: '100%' },
+  shareCoverBadge: {
+    position: 'absolute',
+    left: 8,
+    bottom: 8,
+    borderRadius: 5,
+    backgroundColor: 'rgba(0,0,0,0.58)',
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+  },
+  shareCoverBadgeText: { color: '#FFFFFF', fontSize: 14, lineHeight: 18, fontWeight: '600' },
+  shareAddTile: {
+    width: 88,
+    height: 88,
+    borderRadius: borderRadius.md,
+    backgroundColor: colors.bgSubtle,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  shareHeadlineInput: {
+    minHeight: 48,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.borderSubtle,
+    color: colors.textPrimary,
+    fontSize: 20,
+    lineHeight: 26,
+    fontWeight: '600',
+    paddingVertical: spacing.sm,
   },
   shareCaptionInput: {
-    minHeight: 138, paddingHorizontal: 20, paddingTop: 22, paddingBottom: 12,
-    color: '#111827', fontSize: 24, lineHeight: 31, fontWeight: '800', textAlignVertical: 'top',
+    minHeight: 112,
+    color: colors.textPrimary,
+    fontSize: 15,
+    lineHeight: 22,
+    fontWeight: '400',
+    textAlignVertical: 'top',
+    paddingTop: spacing.gutter,
+    paddingBottom: spacing.gutter,
   },
+  shareSpacer: { flexGrow: 1, minHeight: Math.max(120, SH * 0.14) },
+  shareChipRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingBottom: spacing.gutter,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.borderSubtle,
+  },
+  shareChip: {
+    minHeight: layout.minTouchTarget,
+    borderRadius: borderRadius.md,
+    backgroundColor: colors.bgSubtle,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: spacing.gutter,
+  },
+  shareChipText: { color: colors.textPrimary, fontSize: 14, lineHeight: 18, fontWeight: '500' },
+  shareIconChip: {
+    width: 44,
+    minHeight: layout.minTouchTarget,
+    borderRadius: borderRadius.md,
+    backgroundColor: colors.bgSubtle,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  shareAtText: { color: colors.textPrimary, fontSize: 22, lineHeight: 27, fontWeight: '600' },
+  shareHashText: { color: colors.textPrimary, fontSize: 23, lineHeight: 28, fontWeight: '600' },
+  taggedUserRail: { gap: 8, paddingTop: 10, paddingBottom: 2 },
+  taggedUserChip: {
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: colors.accentPrimary,
+    borderWidth: 1,
+    borderColor: colors.accentPrimaryHover,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 10,
+  },
+  taggedUserChipText: { maxWidth: 130, color: colors.textInverse, fontSize: 12, lineHeight: 15, fontWeight: '500' },
   sharePillRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 20, paddingBottom: 22 },
   shareMiniPill: {
     minHeight: 44, borderRadius: 15, backgroundColor: '#F1F2F6', flexDirection: 'row',
     alignItems: 'center', gap: 8, paddingHorizontal: 14,
   },
-  shareMiniText: { color: '#111', fontSize: 18, fontWeight: '900' },
+  shareMiniText: { color: '#111', fontSize: 18, fontWeight: '500' },
   shareOption: {
-    minHeight: 76, flexDirection: 'row', alignItems: 'center', gap: 16,
-    paddingHorizontal: 22, borderTopWidth: 1, borderTopColor: '#F2F2F5',
+    minHeight: 60,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.borderSubtle,
   },
   shareOptionCopy: { flex: 1, minWidth: 0 },
-  shareOptionTitle: { flex: 1, color: '#111', fontSize: 23, lineHeight: 28, fontWeight: '900' },
-  shareOptionSub: { color: '#6B7280', fontSize: 16, lineHeight: 20, fontWeight: '700', marginTop: 2 },
-  shareValue: { color: '#6B7280', fontSize: 20, fontWeight: '800' },
-  shareDivider: { height: 12, backgroundColor: '#F2F2F6', marginTop: 4 },
+  shareOptionTitle: { color: colors.textPrimary, fontSize: 16, lineHeight: 21, fontWeight: '500' },
+  shareOptionSub: { color: colors.textHint, fontSize: 12, lineHeight: 16, fontWeight: '500', marginTop: 1 },
+  shareMoreDots: { width: 34, color: colors.textPrimary, fontSize: 24, lineHeight: 24, fontWeight: '500' },
+  shareValue: { color: colors.textHint, fontSize: 16, fontWeight: '500' },
+  shareDivider: { height: 12, backgroundColor: colors.bgSubtle, marginTop: 4 },
   shareSwitch: { width: 62, height: 38, borderRadius: 19, backgroundColor: '#686D78' },
-  shareSubmitButton: {
-    position: 'absolute', left: 20, right: 20, bottom: 24, height: 62, borderRadius: 17,
-    backgroundColor: '#4B5CF6', alignItems: 'center', justifyContent: 'center',
+  placeBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(255,255,255,0.72)' },
+  placeBackdropDismiss: { ...StyleSheet.absoluteFillObject },
+  placeSheet: {
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    backgroundColor: colors.bgCard,
+    paddingHorizontal: spacing.md,
+    paddingTop: 10,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    ...shadows.elevation2,
   },
-  shareSubmitText: { color: '#FFF', fontSize: 20, fontWeight: '900' },
-  textOverlayBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.52)' },
+  placeTitle: { color: colors.textPrimary, fontSize: 22, lineHeight: 28, fontWeight: '600', marginTop: 8 },
+  placeSub: { color: colors.textHint, fontSize: 13, lineHeight: 19, fontWeight: '500', marginTop: 4, marginBottom: spacing.md },
+  placeInput: {
+    minHeight: 48,
+    borderRadius: 16,
+    backgroundColor: colors.bgSubtle,
+    color: colors.textPrimary,
+    fontSize: 15,
+    lineHeight: 20,
+    fontWeight: '500',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    marginBottom: spacing.sm,
+  },
+  placeAddressInput: { minHeight: 76, textAlignVertical: 'top' },
+  placeDetectButton: {
+    minHeight: 44,
+    borderRadius: 22,
+    backgroundColor: colors.surfaceRaised,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+    marginTop: 2,
+  },
+  placeDetectText: { color: colors.textPrimary, fontSize: 14, fontWeight: '600' },
+  placeActions: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginTop: spacing.md },
+  placeCancelButton: {
+    flex: 1,
+    minHeight: 46,
+    borderRadius: 23,
+    backgroundColor: colors.bgSubtle,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  placeCancelText: { color: colors.textSecondary, fontSize: 14, fontWeight: '600' },
+  placeSaveButton: {
+    flex: 1,
+    minHeight: 46,
+    borderRadius: 23,
+    backgroundColor: colors.accentPrimary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  placeSaveText: { color: colors.textInverse, fontSize: 14, fontWeight: '700' },
+  shareSubmitButton: {
+    position: 'absolute', left: spacing.md, right: spacing.md, bottom: 18, height: 48, borderRadius: 24,
+    backgroundColor: colors.accentPrimary, alignItems: 'center', justifyContent: 'center',
+    ...shadows.elevation1,
+  },
+  shareSubmitText: { color: colors.textInverse, fontSize: 16, lineHeight: 21, fontWeight: '600' },
+  textOverlayBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: colors.modalScrim },
   textOverlayDismiss: { ...StyleSheet.absoluteFillObject },
   textOverlaySheet: {
-    margin: 14, borderRadius: 26, backgroundColor: '#111318', borderWidth: 1, borderColor: 'rgba(255,255,255,0.12)',
-    padding: 16, gap: 14,
+    margin: spacing.gutter, borderRadius: borderRadius.sheet, backgroundColor: '#11130F', borderWidth: 1, borderColor: 'rgba(255,255,255,0.10)',
+    padding: spacing.gutter, gap: spacing.gutter,
   },
-  textOverlayTitle: { color: '#FFFFFF', fontSize: 20, fontWeight: '900' },
+  textOverlayTitle: { color: '#FFFFFF', fontSize: 17, lineHeight: 22, fontWeight: '500' },
   textOverlayInput: {
-    minHeight: 112, borderRadius: 18, backgroundColor: '#1D2027', color: '#FFFFFF',
-    fontSize: 22, lineHeight: 28, fontWeight: '800', paddingHorizontal: 14, paddingVertical: 12,
+    minHeight: 82, borderRadius: borderRadius.lg, backgroundColor: '#1F221C', color: '#FFFFFF',
+    fontSize: 17, lineHeight: 23, fontWeight: '500', paddingHorizontal: 12, paddingVertical: 10,
     textAlignVertical: 'top',
   },
-  textOverlayActions: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  textTypeStrip: { gap: 7, paddingRight: 7 },
+  textTypeChip: { height: 30, borderRadius: 15, backgroundColor: '#242832', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 10 },
+  textTypeChipOn: { backgroundColor: colors.accentPrimary },
+  textTypeChipText: { color: '#FFFFFF', fontSize: 11, fontWeight: '500', textTransform: 'capitalize' },
+  textTypeChipTextOn: { color: '#FFFFFF' },
+  textStyleChip: { minHeight: 32, borderRadius: 11, backgroundColor: '#242832', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 10 },
+  textStyleChipOn: { backgroundColor: colors.surfaceTint, borderColor: colors.accentPrimary },
+  textStyleChipText: { color: '#FFFFFF', fontSize: 11, fontWeight: '500' },
+  textStyleChipTextOn: { color: '#111111' },
+  textColorRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  textColorSwatch: { width: 28, height: 28, borderRadius: 14, borderWidth: 2, borderColor: 'rgba(255,255,255,0.18)' },
+  textColorSwatchOn: { borderColor: colors.accentPrimary },
+  shadowToggle: { height: 30, borderRadius: 15, backgroundColor: '#242832', justifyContent: 'center', paddingHorizontal: 12 },
+  shadowToggleOn: { backgroundColor: colors.accentPrimary },
+  shadowToggleText: { color: '#FFFFFF', fontSize: 11, fontWeight: '500' },
+  shadowToggleTextOn: { color: '#FFFFFF' },
+  textOverlayActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   textOverlayCancel: {
-    flex: 1, height: 50, borderRadius: 25, backgroundColor: '#242832', alignItems: 'center', justifyContent: 'center',
+    flex: 1, height: 42, borderRadius: 21, backgroundColor: '#242832', alignItems: 'center', justifyContent: 'center',
   },
-  textOverlayCancelText: { color: '#FFFFFF', fontSize: 15, fontWeight: '900' },
+  textOverlayCancelText: { color: '#FFFFFF', fontSize: 13, fontWeight: '500' },
   textOverlayDone: {
-    flex: 1, height: 50, borderRadius: 25, backgroundColor: '#DFFF32', borderWidth: 1.5, borderColor: '#111',
+    flex: 1, minHeight: 40, borderRadius: 20, backgroundColor: colors.accentPrimary, borderWidth: 1, borderColor: colors.accentPrimaryHover,
     alignItems: 'center', justifyContent: 'center',
   },
-  textOverlayDoneText: { color: '#111111', fontSize: 15, fontWeight: '900' },
-  audienceBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.38)' },
+  textOverlayDoneText: { color: colors.textInverse, fontSize: 13, fontWeight: '500' },
+  shareAudienceOverlay: { ...StyleSheet.absoluteFillObject, justifyContent: 'flex-end', backgroundColor: colors.modalScrim, zIndex: 40 },
+  audienceBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: colors.modalScrim },
   audienceDismiss: { ...StyleSheet.absoluteFillObject },
   audienceSheet: {
     backgroundColor: '#111318', borderTopLeftRadius: 28, borderTopRightRadius: 28,
     paddingTop: 10, paddingHorizontal: 16, gap: 10,
   },
   audienceHandle: { alignSelf: 'center', width: 44, height: 5, borderRadius: 3, backgroundColor: 'rgba(255,255,255,0.22)', marginBottom: 8 },
-  audienceTitle: { color: '#FFFFFF', fontSize: 22, fontWeight: '900' },
-  audienceSub: { color: 'rgba(255,255,255,0.62)', fontSize: 14, lineHeight: 19, fontWeight: '700', marginBottom: 4 },
+  audienceTitle: { color: '#FFFFFF', fontSize: 22, fontWeight: '500' },
+  audienceSub: { color: 'rgba(255,255,255,0.62)', fontSize: 14, lineHeight: 19, fontWeight: '500', marginBottom: 4 },
   audienceOption: {
     minHeight: 72, borderRadius: 20, backgroundColor: '#1D2027', borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.08)', flexDirection: 'row', alignItems: 'center', gap: 12, padding: 12,
   },
-  audienceOptionOn: { borderColor: '#DFFF32', backgroundColor: '#22261E' },
+  audienceOptionOn: { borderColor: colors.accentPrimary, backgroundColor: '#22261E' },
   audienceIcon: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#30343D', alignItems: 'center', justifyContent: 'center' },
-  audienceIconOn: { backgroundColor: '#DFFF32', borderWidth: 1.4, borderColor: '#111111' },
+  audienceIconOn: { backgroundColor: colors.accentPrimary, borderWidth: 1.2, borderColor: colors.accentPrimaryHover },
   audienceCopy: { flex: 1, minWidth: 0 },
-  audienceLabel: { color: '#FFFFFF', fontSize: 16, fontWeight: '900' },
-  audienceOptionSub: { color: 'rgba(255,255,255,0.58)', fontSize: 12, lineHeight: 16, fontWeight: '700', marginTop: 2 },
+  audienceLabel: { color: '#FFFFFF', fontSize: 16, fontWeight: '500' },
+  audienceOptionSub: { color: 'rgba(255,255,255,0.58)', fontSize: 12, lineHeight: 16, fontWeight: '500', marginTop: 2 },
+  tagUserRoot: { flex: 1, backgroundColor: colors.bgApp },
+  tagUserHeader: {
+    minHeight: 58,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 14,
+  },
+  tagUserClose: { width: 44, height: 44, alignItems: 'flex-start', justifyContent: 'center' },
+  tagUserTitle: { color: '#111111', fontSize: 19, lineHeight: 24, fontWeight: '500' },
+  tagUserDone: {
+    minWidth: 58,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: '#FFF93F',
+    borderWidth: 1,
+    borderColor: '#111111',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+  },
+  tagUserDoneText: { color: '#111111', fontSize: 13, fontWeight: '500' },
+  tagUserSearchWrap: {
+    minHeight: 44,
+    borderRadius: 12,
+    backgroundColor: '#F2F2F2',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: 16,
+    paddingHorizontal: 12,
+  },
+  tagUserSearchInput: { flex: 1, minHeight: 42, color: '#111111', fontSize: 15, fontWeight: '600' },
+  tagUserSelectedRail: { gap: 8, paddingHorizontal: 16, paddingTop: 12, paddingBottom: 2 },
+  tagUserSelectedChip: {
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#FFF93F',
+    borderWidth: 1,
+    borderColor: '#111111',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+  },
+  tagUserSelectedText: { maxWidth: 126, color: '#111111', fontSize: 12, fontWeight: '500' },
+  tagUserLoading: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  tagUserList: { flex: 1, paddingHorizontal: 16, paddingTop: 10 },
+  tagUserRow: {
+    minHeight: 66,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#EDEDED',
+  },
+  tagUserAvatar: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#E6E6E6' },
+  tagUserAvatarFallback: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#111111', alignItems: 'center', justifyContent: 'center' },
+  tagUserAvatarText: { color: '#FFFFFF', fontSize: 16, fontWeight: '500' },
+  tagUserInfo: { flex: 1, minWidth: 0 },
+  tagUserName: { color: '#111111', fontSize: 15, lineHeight: 19, fontWeight: '500' },
+  tagUserHandle: { color: '#8A8A8A', fontSize: 12, lineHeight: 15, fontWeight: '500', marginTop: 1 },
+  tagUserPick: { width: 24, height: 24, borderRadius: 12, borderWidth: 1.5, borderColor: '#C7C7C7', alignItems: 'center', justifyContent: 'center' },
+  tagUserPickOn: { backgroundColor: '#FFF93F', borderColor: '#111111' },
+  tagUserEmpty: { color: '#8A8A8A', fontSize: 14, fontWeight: '600', textAlign: 'center', paddingTop: 44 },
 
   // Header
   header: {
@@ -1727,13 +1976,13 @@ const s = StyleSheet.create({
     borderBottomWidth: 1, borderBottomColor: '#F0EDE7',
   },
   closeBtn: { width: 44, height: 44, borderRadius: 22, justifyContent: 'center', alignItems: 'center' },
-  headerTitle: { fontSize: 17, fontWeight: '700', color: '#1A1A1A' },
+  headerTitle: { fontSize: 17, fontWeight: '500', color: '#1A1A1A' },
   postBtn: {
     backgroundColor: '#1A1A1A', paddingHorizontal: 22, paddingVertical: 10,
     borderRadius: 20, minWidth: 72, alignItems: 'center',
   },
   postBtnDisabled: { opacity: 0.3 },
-  postBtnText: { fontSize: 14, fontWeight: '700', color: '#FFF' },
+  postBtnText: { fontSize: 14, fontWeight: '500', color: '#FFF' },
 
   // Progress
   progressBar: {
@@ -1776,79 +2025,22 @@ const s = StyleSheet.create({
   // Sections
   section: { paddingHorizontal: 16, paddingTop: 16 },
   sectionHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
-  sectionLabel: { fontSize: 14, fontWeight: '700', color: '#1A1A1A', marginBottom: 10 },
+  sectionLabel: { fontSize: 14, fontWeight: '500', color: '#1A1A1A', marginBottom: 10 },
   required: { color: '#DC2626', fontWeight: '600' },
   optional: { color: '#BBB', fontWeight: '400', fontSize: 12 },
   detectedHint: { color: '#059669', fontWeight: '500', fontSize: 12 },
 
-  // Music studio
-  addMusicButton: {
-    minHeight: 74, borderRadius: 18, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#F0EDE7',
-    flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 14, paddingVertical: 12,
-  },
-  addMusicIcon: {
-    width: 44, height: 44, borderRadius: 22, backgroundColor: '#DFFF32', borderWidth: 1.5, borderColor: '#111',
-    alignItems: 'center', justifyContent: 'center',
-  },
-  addMusicTitle: { color: '#111', fontSize: 15, fontWeight: '900' },
-  addMusicSubtitle: { color: '#777', fontSize: 12, lineHeight: 16, fontWeight: '600', marginTop: 2 },
-  removeSoundText: { color: '#B42318', fontSize: 12, fontWeight: '900' },
-  selectedSoundCard: {
-    minHeight: 82, borderRadius: 18, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#F0EDE7',
-    flexDirection: 'row', alignItems: 'center', gap: 12, padding: 12,
-  },
-  selectedSoundArt: { width: 58, height: 58, borderRadius: 12, backgroundColor: '#EEE' },
-  selectedSoundArtFallback: { width: 58, height: 58, borderRadius: 12, backgroundColor: '#DFFF32', alignItems: 'center', justifyContent: 'center' },
-  selectedSoundCopy: { flex: 1, minWidth: 0 },
-  selectedSoundTitle: { color: '#111', fontSize: 15, fontWeight: '900' },
-  selectedSoundArtist: { color: '#777', fontSize: 12, fontWeight: '700', marginTop: 2 },
   clipControls: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8 },
-  clipLabel: { color: '#777', fontSize: 11, fontWeight: '800' },
+  clipLabel: { color: '#777', fontSize: 11, fontWeight: '600' },
   clipInput: {
     width: 48, height: 30, borderRadius: 10, backgroundColor: '#F5F5F2', textAlign: 'center',
-    color: '#111', fontSize: 13, fontWeight: '900', paddingVertical: 0,
+    color: '#111', fontSize: 13, fontWeight: '500', paddingVertical: 0,
   },
   durationRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginTop: 10 },
   durationChip: { height: 34, minWidth: 50, borderRadius: 17, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E8E4DF', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12 },
   durationChipOn: { backgroundColor: '#111', borderColor: '#111' },
-  durationText: { color: '#555', fontSize: 12, fontWeight: '900' },
+  durationText: { color: '#555', fontSize: 12, fontWeight: '500' },
   durationTextOn: { color: '#FFF' },
-  changeSoundButton: { height: 34, borderRadius: 17, backgroundColor: '#DFFF32', borderWidth: 1.5, borderColor: '#111', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 14 },
-  changeSoundText: { color: '#111', fontSize: 12, fontWeight: '900' },
-
-  musicModal: { flex: 1, backgroundColor: '#FAFAF8' },
-  musicHeader: { minHeight: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14 },
-  musicClose: { width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center' },
-  musicTitle: { color: '#111', fontSize: 19, fontWeight: '900' },
-  musicSearchWrap: {
-    minHeight: 50, marginHorizontal: 16, borderRadius: 18, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#F0EDE7',
-    flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 14,
-  },
-  musicSearchInput: { flex: 1, height: 48, color: '#111', fontSize: 15, fontWeight: '700', paddingVertical: 0 },
-  musicTabs: { flexDirection: 'row', gap: 8, paddingHorizontal: 16, paddingVertical: 12 },
-  musicTab: { height: 36, borderRadius: 18, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#EEEAE2', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 16 },
-  musicTabOn: { backgroundColor: '#111', borderColor: '#111' },
-  musicTabText: { color: '#777', fontSize: 13, fontWeight: '900' },
-  musicTabTextOn: { color: '#FFF' },
-  musicList: { paddingHorizontal: 16, gap: 10 },
-  musicState: { minHeight: 220, alignItems: 'center', justifyContent: 'center', gap: 10, paddingHorizontal: 28 },
-  musicStateText: { color: '#777', textAlign: 'center', fontSize: 14, fontWeight: '700' },
-  musicRetry: { height: 38, borderRadius: 19, backgroundColor: '#111', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 18 },
-  musicRetryText: { color: '#FFF', fontSize: 13, fontWeight: '900' },
-  trackRow: {
-    minHeight: 76, borderRadius: 18, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#F0EDE7',
-    flexDirection: 'row', alignItems: 'center', gap: 10, padding: 10,
-  },
-  trackArt: { width: 54, height: 54, borderRadius: 13, backgroundColor: '#EEE' },
-  trackArtFallback: { width: 54, height: 54, borderRadius: 13, backgroundColor: '#DFFF32', alignItems: 'center', justifyContent: 'center' },
-  trackCopy: { flex: 1, minWidth: 0 },
-  trackTitle: { color: '#111', fontSize: 14, fontWeight: '900' },
-  trackArtist: { color: '#777', fontSize: 12, fontWeight: '700', marginTop: 2 },
-  previewButton: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#F1F1EF', alignItems: 'center', justifyContent: 'center' },
-  favoriteSoundButton: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#F1F1EF', alignItems: 'center', justifyContent: 'center' },
-  favoriteSoundButtonOn: { backgroundColor: '#DFFF32', borderWidth: 1.4, borderColor: '#111' },
-  useSoundButton: { minHeight: 36, borderRadius: 18, backgroundColor: '#DFFF32', borderWidth: 1.5, borderColor: '#111', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12 },
-  useSoundText: { color: '#111', fontSize: 12, fontWeight: '900' },
 
   // Format
   formatChip: {

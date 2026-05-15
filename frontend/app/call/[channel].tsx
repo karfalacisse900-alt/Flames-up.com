@@ -33,16 +33,16 @@ function readParam(value?: string | string[]): string {
   return Array.isArray(value) ? value[0] || '' : value || '';
 }
 
-async function requestNativeCallPermissions(): Promise<boolean> {
+async function requestNativeCallPermissions(needsVideo = true): Promise<boolean> {
   if (Platform.OS !== 'android') return true;
 
-  const result = await PermissionsAndroid.requestMultiple([
-    PermissionsAndroid.PERMISSIONS.CAMERA,
-    PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
-  ]);
+  const permissions = needsVideo
+    ? [PermissionsAndroid.PERMISSIONS.CAMERA, PermissionsAndroid.PERMISSIONS.RECORD_AUDIO]
+    : [PermissionsAndroid.PERMISSIONS.RECORD_AUDIO];
+  const result = await PermissionsAndroid.requestMultiple(permissions);
 
   return (
-    result[PermissionsAndroid.PERMISSIONS.CAMERA] === PermissionsAndroid.RESULTS.GRANTED &&
+    (!needsVideo || result[PermissionsAndroid.PERMISSIONS.CAMERA] === PermissionsAndroid.RESULTS.GRANTED) &&
     result[PermissionsAndroid.PERMISSIONS.RECORD_AUDIO] === PermissionsAndroid.RESULTS.GRANTED
   );
 }
@@ -60,8 +60,10 @@ export default function AgoraCallScreen() {
   const channel = readParam(params.channel);
   const peerName = readParam(params.peerName) || 'Video call';
   const peerAvatar = readParam(params.peerAvatar);
-  const mode = (readParam(params.mode) === 'live' ? 'live' : 'call') as CallMode;
+  const rawMode = readParam(params.mode);
+  const mode = (rawMode === 'live' || rawMode === 'voice' ? rawMode : 'call') as CallMode;
   const role = (readParam(params.role) === 'audience' ? 'audience' : 'host') as CallRole;
+  const isVoiceCall = mode === 'voice';
 
   const agora = useMemo(() => loadAgoraModule(), []);
   const engineRef = useRef<any>(null);
@@ -107,16 +109,16 @@ export default function AgoraCallScreen() {
 
     async function joinCall() {
       try {
-        if (!agora || !RtcSurfaceView) {
+        if (!agora || (!isVoiceCall && !RtcSurfaceView)) {
           setIsJoining(false);
-          setStatusText('Video calls need an iOS or Android development build.');
+          setStatusText(`${isVoiceCall ? 'Voice' : 'Video'} calls need an iOS or Android development build.`);
           return;
         }
 
-        const granted = await requestNativeCallPermissions();
+        const granted = await requestNativeCallPermissions(!isVoiceCall);
         if (!granted) {
           setIsJoining(false);
-          setErrorText('Camera and microphone access are required for video calls.');
+          setErrorText(isVoiceCall ? 'Microphone access is required for voice calls.' : 'Camera and microphone access are required for video calls.');
           return;
         }
 
@@ -169,16 +171,18 @@ export default function AgoraCallScreen() {
 
         engine.setChannelProfile(channelProfile);
         engine.setClientRole(clientRole);
-        engine.enableVideo();
-        if (clientRole === agora.ClientRoleType.ClientRoleBroadcaster) {
+        if (!isVoiceCall) {
+          engine.enableVideo();
+        }
+        if (!isVoiceCall && clientRole === agora.ClientRoleType.ClientRoleBroadcaster) {
           engine.startPreview();
         }
         engine.joinChannel(tokenData.token, tokenData.channel, tokenData.uid, {
           autoSubscribeAudio: true,
-          autoSubscribeVideo: true,
+          autoSubscribeVideo: !isVoiceCall,
           channelProfile,
           clientRoleType: clientRole,
-          publishCameraTrack: clientRole === agora.ClientRoleType.ClientRoleBroadcaster,
+          publishCameraTrack: !isVoiceCall && clientRole === agora.ClientRoleType.ClientRoleBroadcaster,
           publishMicrophoneTrack: clientRole === agora.ClientRoleType.ClientRoleBroadcaster,
         });
       } catch (error: any) {
@@ -194,7 +198,7 @@ export default function AgoraCallScreen() {
       mounted = false;
       if (!closedRef.current) cleanupEngine();
     };
-  }, [agora, cleanupEngine, fetchToken, mode, role, RtcSurfaceView]);
+  }, [agora, cleanupEngine, fetchToken, isVoiceCall, mode, role, RtcSurfaceView]);
 
   useEffect(() => {
     if (!isJoined) return undefined;
@@ -211,6 +215,7 @@ export default function AgoraCallScreen() {
   const toggleCamera = () => {
     const next = !cameraOff;
     setCameraOff(next);
+    if (isVoiceCall) return;
     engineRef.current?.muteLocalVideoStream(next);
     if (next) {
       engineRef.current?.stopPreview();
@@ -266,7 +271,7 @@ export default function AgoraCallScreen() {
           </TouchableOpacity>
         </View>
 
-        {!isAudience && (
+        {!isAudience && !isVoiceCall && (
           <View style={styles.localPreview}>
             {!cameraOff && RtcSurfaceView ? (
               <RtcSurfaceView
@@ -291,12 +296,16 @@ export default function AgoraCallScreen() {
               <TouchableOpacity style={[styles.controlButton, micMuted && styles.controlActive]} onPress={toggleMic} activeOpacity={0.85}>
                 <Ionicons name={micMuted ? 'mic-off' : 'mic'} size={24} color="#FFF" />
               </TouchableOpacity>
-              <TouchableOpacity style={[styles.controlButton, cameraOff && styles.controlActive]} onPress={toggleCamera} activeOpacity={0.85}>
-                <Ionicons name={cameraOff ? 'videocam-off' : 'videocam'} size={24} color="#FFF" />
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.controlButton} onPress={flipCamera} activeOpacity={0.85}>
-                <Ionicons name="camera-reverse" size={24} color="#FFF" />
-              </TouchableOpacity>
+              {!isVoiceCall ? (
+                <>
+                  <TouchableOpacity style={[styles.controlButton, cameraOff && styles.controlActive]} onPress={toggleCamera} activeOpacity={0.85}>
+                    <Ionicons name={cameraOff ? 'videocam-off' : 'videocam'} size={24} color="#FFF" />
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.controlButton} onPress={flipCamera} activeOpacity={0.85}>
+                    <Ionicons name="camera-reverse" size={24} color="#FFF" />
+                  </TouchableOpacity>
+                </>
+              ) : null}
             </>
           )}
           <TouchableOpacity style={styles.endButton} onPress={endCall} activeOpacity={0.85}>
@@ -354,7 +363,7 @@ const styles = StyleSheet.create({
   peerName: {
     color: '#FFFFFF',
     fontSize: 17,
-    fontWeight: '700',
+    fontWeight: '500',
   },
   callStatus: {
     color: 'rgba(255,255,255,0.72)',
@@ -385,12 +394,12 @@ const styles = StyleSheet.create({
   waitingInitial: {
     color: '#FFFFFF',
     fontSize: 42,
-    fontWeight: '800',
+    fontWeight: '600',
   },
   waitingName: {
     color: '#FFFFFF',
     fontSize: 26,
-    fontWeight: '800',
+    fontWeight: '600',
     textAlign: 'center',
   },
   waitingStatus: {
@@ -433,7 +442,7 @@ const styles = StyleSheet.create({
   localBadgeText: {
     color: '#FFFFFF',
     fontSize: 10,
-    fontWeight: '700',
+    fontWeight: '500',
   },
   controlsBar: {
     alignSelf: 'center',

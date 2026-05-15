@@ -1,8 +1,9 @@
 import React from 'react';
 import { Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { colors } from '../../src/utils/theme';
+import { colors, layout } from '../../src/utils/theme';
 import { Platform } from 'react-native';
+import { appFontFamily } from '../../src/utils/typography';
 
 export default function TabsLayout() {
   return (
@@ -10,19 +11,24 @@ export default function TabsLayout() {
       screenOptions={{
         headerShown: false,
         tabBarStyle: {
-          backgroundColor: colors.bgCard,
-          borderTopColor: colors.borderLight,
-          borderTopWidth: 1,
-          height: Platform.OS === 'ios' ? 88 : 64,
+          backgroundColor: colors.bgNav,
+          borderTopColor: colors.divider,
+          borderTopWidth: 0.5,
+          height: Platform.OS === 'ios' ? 80 : 64,
           paddingTop: 8,
-          paddingBottom: Platform.OS === 'ios' ? 28 : 8,
+          paddingBottom: Platform.OS === 'ios' ? 22 : 8,
         },
-        tabBarActiveTintColor: colors.accentPrimary,
+        tabBarActiveTintColor: colors.textStrong,
         tabBarInactiveTintColor: colors.textHint,
+        tabBarItemStyle: {
+          minHeight: layout.minTouchTarget,
+          paddingVertical: 2,
+        },
         tabBarLabelStyle: {
+          fontFamily: appFontFamily,
           fontSize: 11,
           fontWeight: '600',
-          letterSpacing: 0.3,
+          letterSpacing: 0,
         },
       }}
     >

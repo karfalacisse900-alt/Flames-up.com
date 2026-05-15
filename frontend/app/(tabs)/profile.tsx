@@ -1,13 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  ActivityIndicator,
   Alert,
   Dimensions,
   Image,
-  Linking,
   Modal,
   Pressable,
-  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -21,11 +18,12 @@ import { Ionicons } from '@expo/vector-icons';
 import MediaPreview from '../../src/components/MediaPreview';
 import api from '../../src/api/client';
 import { useAuthStore } from '../../src/store/authStore';
-import { cachePostForDetail, cachePostsForDetail, setPostDetailFeedContext } from '../../src/store/postDetailCache';
-import { colors } from '../../src/utils/theme';
+import { cachePostForDetail, cachePostsForDetail } from '../../src/store/postDetailCache';
+import { borderRadius, colors, hitSlop, layout, spacing } from '../../src/utils/theme';
+import { openSafeUrl } from '../../src/utils/safeLinking';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
-const GRID_GAP = 2;
+const GRID_GAP = 1;
 const TILE_SIZE = Math.floor((SCREEN_WIDTH - GRID_GAP * 2) / 3);
 
 function parseImages(value: unknown): string[] {
@@ -60,7 +58,6 @@ export default function ProfileScreen() {
   const [posts, setPosts] = useState<any[]>([]);
   const [stats, setStats] = useState({ posts: 0, followers: 0, following: 0 });
   const [isLoading, setIsLoading] = useState(true);
-  const [isRefreshing, setIsRefreshing] = useState(false);
   const [showMore, setShowMore] = useState(false);
 
   const loadUserData = useCallback(async () => {
@@ -88,12 +85,6 @@ export default function ProfileScreen() {
     if (user?.id) void loadUserData();
   }, [loadUserData, user?.id]);
 
-  const onRefresh = async () => {
-    setIsRefreshing(true);
-    await loadUserData();
-    setIsRefreshing(false);
-  };
-
   const handleLogout = () => {
     Alert.alert('Logout', 'Are you sure you want to logout?', [
       { text: 'Cancel', style: 'cancel' },
@@ -109,26 +100,30 @@ export default function ProfileScreen() {
   };
 
   const coverMedia = useMemo(() => (
-    (user as any)?.cover_image || getPostMedia(posts[0]) || user?.profile_image || ''
+    (user as any)?.profile_background_image || (user as any)?.cover_image || getPostMedia(posts[0]) || user?.profile_image || ''
   ), [posts, user]);
 
   if (isLoading || !user) {
     return (
       <SafeAreaView style={s.loadingContainer}>
-        <ActivityIndicator size="large" color={colors.accentPrimary} />
+        <View style={s.profileLoadingCard}>
+          <View style={s.profileLoadingHero} />
+          <View style={s.profileLoadingAvatar} />
+          <View style={s.profileLoadingLine} />
+          <View style={[s.profileLoadingLine, s.profileLoadingLineShort]} />
+        </View>
       </SafeAreaView>
     );
   }
 
   const displayName = user.full_name || user.username || 'Flames';
   const username = user.username || user.email?.split('@')[0] || 'profile';
-  const location = user.city || 'Flames-Up';
+  const isPremium = !!(user as any)?.is_premium;
 
   return (
     <View style={s.root}>
       <ScrollView
         showsVerticalScrollIndicator={false}
-        refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={onRefresh} tintColor="#FFFFFF" />}
         contentContainerStyle={{ paddingBottom: 122 }}
       >
         <View style={s.hero}>
@@ -139,15 +134,15 @@ export default function ProfileScreen() {
           )}
           <View style={s.heroDim} />
 
-          <View style={[s.topbar, { paddingTop: insets.top + 8 }]}>
-            <TouchableOpacity style={s.roundNav} onPress={() => router.push('/(tabs)/home' as any)}>
+          <View style={[s.topbar, { paddingTop: insets.top + 2 }]}>
+            <TouchableOpacity style={s.roundNav} onPress={() => router.push('/(tabs)/home' as any)} hitSlop={hitSlop} accessibilityLabel="Back to home">
               <Ionicons name="chevron-back" size={22} color="#FFFFFF" />
             </TouchableOpacity>
             <View style={s.topActions}>
-              <TouchableOpacity style={s.roundNav} onPress={() => router.push('/(tabs)/messages' as any)}>
+              <TouchableOpacity style={s.roundNav} onPress={() => router.push('/(tabs)/messages' as any)} hitSlop={hitSlop} accessibilityLabel="Open messages">
                 <Ionicons name="chatbubble-outline" size={20} color="#FFFFFF" />
               </TouchableOpacity>
-              <TouchableOpacity style={s.roundNav} onPress={() => setShowMore(true)}>
+              <TouchableOpacity style={s.roundNav} onPress={() => setShowMore(true)} hitSlop={hitSlop} accessibilityLabel="Open profile menu">
                 <Ionicons name="ellipsis-horizontal" size={22} color="#FFFFFF" />
               </TouchableOpacity>
             </View>
@@ -163,53 +158,39 @@ export default function ProfileScreen() {
                 )}
               </View>
               <View style={s.smallBadge}>
-                <Text style={s.smallBadgeText}>🌍</Text>
+                <Ionicons name="earth-outline" size={26} color="#FFFFFF" />
               </View>
             </View>
 
             <Text style={s.name}>{displayName}</Text>
-            <Text style={s.meta}>iAm  @{username}  ·  {location}</Text>
+            <View style={s.metaRow}>
+              <Text style={s.meta}>@{username}</Text>
+              {isPremium ? (
+                <View style={s.premiumBadge}>
+                  <Ionicons name="sparkles" size={11} color="#FFFFFF" />
+                  <Text style={s.premiumBadgeText}>Premium</Text>
+                </View>
+              ) : null}
+            </View>
 
-            <View style={s.supportRow}>
-              <View style={s.supportAvatars}>
-                {posts.slice(0, 3).map((post, index) => {
-                  const media = getPostMedia(post);
-                  return (
-                    <View key={post.id || index} style={[s.supportAvatar, { marginLeft: index === 0 ? 0 : -10 }]}>
-                      {media ? <MediaPreview uri={media} mediaTypes={post.media_types} style={s.supportAvatarMedia} /> : <Text style={s.supportInitial}>{index + 1}</Text>}
-                    </View>
-                  );
-                })}
+            <View style={s.followStatsRow}>
+              <View style={s.followStat}>
+                <Text style={s.followStatValue}>{compact(stats.followers)}</Text>
+                <Text style={s.followStatLabel}>Followers</Text>
               </View>
-              <View>
-                <Text style={s.supportCount}>{compact(stats.followers)}</Text>
-                <Text style={s.supportLabel}>Supporters</Text>
+              <View style={s.followStat}>
+                <Text style={s.followStatValue}>{compact(stats.following)}</Text>
+                <Text style={s.followStatLabel}>Following</Text>
               </View>
-              <TouchableOpacity style={s.primaryAction} onPress={() => router.push('/edit-profile' as any)}>
+              <TouchableOpacity style={s.primaryAction} onPress={() => router.push('/edit-profile' as any)} accessibilityLabel="Edit profile">
                 <Text style={s.primaryActionText}>Edit</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={s.secondaryAction}>
+              <TouchableOpacity style={s.secondaryAction} accessibilityLabel="Share profile">
                 <Text style={s.secondaryActionText}>Share</Text>
               </TouchableOpacity>
             </View>
           </View>
         </View>
-
-        <View style={s.profileTabs}>
-          <TouchableOpacity style={[s.profileTab, s.profileTabOn]}>
-            <Ionicons name="bag-outline" size={22} color="#DFFF32" />
-          </TouchableOpacity>
-          <TouchableOpacity style={s.profileTab} onPress={() => router.push('/(tabs)/messages' as any)}>
-            <Ionicons name="chatbubbles-outline" size={22} color="rgba(255,255,255,0.74)" />
-          </TouchableOpacity>
-          <TouchableOpacity style={s.profileTab}>
-            <Ionicons name="grid-outline" size={22} color="rgba(255,255,255,0.74)" />
-          </TouchableOpacity>
-        </View>
-
-        {user.bio ? (
-          <Text style={s.bio}>{user.bio}</Text>
-        ) : null}
 
         <View style={s.grid}>
           {posts.length === 0 ? (
@@ -226,7 +207,6 @@ export default function ProfileScreen() {
                 activeOpacity={0.9}
                 onPress={() => {
                   cachePostForDetail(post);
-                  setPostDetailFeedContext(posts.map((item) => item.id));
                   router.push(`/post/${post.id}` as any);
                 }}
               >
@@ -245,14 +225,15 @@ export default function ProfileScreen() {
 
       <Modal visible={showMore} transparent animationType="fade" onRequestClose={() => setShowMore(false)}>
         <Pressable style={s.menuOverlay} onPress={() => setShowMore(false)}>
-          <View style={[s.menu, { top: insets.top + 54 }]}>
+          <View style={[s.menu, { top: insets.top + 48 }]}>
             <MenuItem icon="library-outline" label="My Library" onPress={() => router.push('/library' as any)} />
+            <MenuItem icon="wallet-outline" label="Wallet" onPress={() => router.push('/wallet' as any)} />
             {user?.is_admin ? (
               <MenuItem icon="shield-checkmark-outline" label="Governance Mobile" onPress={() => Alert.alert('Governance Mobile', 'Open the separate Governance Mobile app for moderation.')} />
             ) : null}
             <MenuItem icon="settings-outline" label="Settings" onPress={() => router.push('/settings' as any)} />
             {user.social_website ? (
-              <MenuItem icon="globe-outline" label="Open website" onPress={() => Linking.openURL(user.social_website!.startsWith('http') ? user.social_website! : `https://${user.social_website}`)} />
+              <MenuItem icon="globe-outline" label="Open website" onPress={() => openSafeUrl(user.social_website)} />
             ) : null}
             <MenuItem danger icon="log-out-outline" label="Logout" onPress={handleLogout} />
           </View>
@@ -282,49 +263,83 @@ function MenuItem({
 }
 
 const s = StyleSheet.create({
-  root: { flex: 1, backgroundColor: '#050505' },
-  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#050505' },
-  hero: { height: Math.max(520, SCREEN_WIDTH * 1.52), backgroundColor: '#111111', overflow: 'hidden' },
+  root: { flex: 1, backgroundColor: colors.bgApp },
+  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.bgApp, paddingHorizontal: spacing.lg },
+  profileLoadingCard: {
+    width: '100%',
+    maxWidth: 320,
+    borderRadius: 30,
+    backgroundColor: colors.surfaceRaised,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    padding: spacing.md,
+    alignItems: 'center',
+  },
+  profileLoadingHero: {
+    width: '100%',
+    height: 112,
+    borderRadius: 24,
+    backgroundColor: colors.bgSubtle,
+  },
+  profileLoadingAvatar: {
+    width: 74,
+    height: 74,
+    borderRadius: 37,
+    marginTop: -37,
+    backgroundColor: colors.accentPrimaryLight,
+    borderWidth: 4,
+    borderColor: colors.surfaceRaised,
+  },
+  profileLoadingLine: {
+    width: '72%',
+    height: 13,
+    borderRadius: 7,
+    backgroundColor: colors.bgSubtle,
+    marginTop: spacing.md,
+  },
+  profileLoadingLineShort: {
+    width: '45%',
+    marginTop: spacing.sm,
+  },
+  hero: { height: Math.max(470, SCREEN_WIDTH * 1.32), backgroundColor: '#11120F', overflow: 'hidden' },
   heroMedia: { ...StyleSheet.absoluteFillObject },
-  heroFallback: { ...StyleSheet.absoluteFillObject, backgroundColor: '#171717' },
-  heroDim: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.42)' },
-  topbar: { position: 'absolute', left: 18, right: 18, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  topActions: { flexDirection: 'row', gap: 10 },
-  roundNav: { width: 42, height: 42, borderRadius: 21, backgroundColor: 'rgba(0,0,0,0.32)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.16)', alignItems: 'center', justifyContent: 'center' },
-  identityBlock: { position: 'absolute', left: 22, right: 22, bottom: 30 },
-  avatarRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
+  heroFallback: { ...StyleSheet.absoluteFillObject, backgroundColor: colors.surfaceTint },
+  heroDim: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.32)' },
+  topbar: { position: 'absolute', left: spacing.md, right: spacing.md, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  topActions: { flexDirection: 'row', gap: spacing.sm },
+  roundNav: { width: layout.iconButton, height: layout.iconButton, borderRadius: layout.iconButton / 2, backgroundColor: 'rgba(12,16,11,0.42)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.20)', alignItems: 'center', justifyContent: 'center' },
+  identityBlock: { position: 'absolute', left: spacing.lg, right: spacing.lg, bottom: spacing.xl },
+  avatarRow: { flexDirection: 'row', alignItems: 'center', marginBottom: spacing.gutter },
   avatar: { width: 62, height: 62, borderRadius: 31, borderWidth: 2, borderColor: '#FFFFFF', backgroundColor: '#FFFFFF', overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
   avatarImage: { width: '100%', height: '100%' },
-  avatarInitial: { color: '#111111', fontSize: 26, fontWeight: '900' },
-  smallBadge: { width: 54, height: 54, borderRadius: 27, marginLeft: -8, backgroundColor: '#6ED3FF', borderWidth: 2, borderColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center' },
-  smallBadgeText: { fontSize: 28 },
-  name: { color: '#FFFFFF', fontSize: 47, lineHeight: 49, fontWeight: '900', letterSpacing: 0 },
-  meta: { color: 'rgba(255,255,255,0.78)', fontSize: 14, lineHeight: 18, fontWeight: '800', marginTop: 6 },
-  supportRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 20 },
-  supportAvatars: { flexDirection: 'row', minWidth: 66 },
-  supportAvatar: { width: 32, height: 32, borderRadius: 16, borderWidth: 1.5, borderColor: '#FFFFFF', backgroundColor: '#222222', overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
-  supportAvatarMedia: { width: '100%', height: '100%' },
-  supportInitial: { color: '#FFFFFF', fontSize: 12, fontWeight: '900' },
-  supportCount: { color: '#FFFFFF', fontSize: 21, lineHeight: 23, fontWeight: '900', fontVariant: ['tabular-nums'] },
-  supportLabel: { color: 'rgba(255,255,255,0.72)', fontSize: 11, fontWeight: '700' },
-  primaryAction: { marginLeft: 'auto', width: 70, height: 70, borderRadius: 35, backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center' },
-  primaryActionText: { color: '#111111', fontSize: 12, fontWeight: '900' },
-  secondaryAction: { width: 70, height: 70, borderRadius: 35, borderWidth: 1.4, borderColor: 'rgba(255,255,255,0.26)', backgroundColor: 'rgba(0,0,0,0.22)', alignItems: 'center', justifyContent: 'center' },
-  secondaryActionText: { color: '#FFFFFF', fontSize: 12, fontWeight: '900' },
+  avatarInitial: { color: '#111111', fontSize: 26, fontWeight: '500' },
+  smallBadge: { width: 50, height: 50, borderRadius: 25, marginLeft: -8, backgroundColor: colors.accentPrimary, borderWidth: 2, borderColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center' },
+  name: { color: '#FFFFFF', fontSize: 32, lineHeight: 37, fontWeight: '600', letterSpacing: 0 },
+  meta: { color: 'rgba(255,255,255,0.78)', fontSize: 13, lineHeight: 18, fontWeight: '500', marginTop: 5 },
+  metaRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, flexWrap: 'wrap' },
+  premiumBadge: { height: 24, borderRadius: 12, backgroundColor: colors.accentLime, flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 9, marginTop: 6 },
+  premiumBadgeText: { color: colors.textInverse, fontSize: 11, fontWeight: '600' },
+  followStatsRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.gutter, marginTop: spacing.section },
+  followStat: { minWidth: 70 },
+  followStatValue: { color: '#FFFFFF', fontSize: 19, lineHeight: 23, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  followStatLabel: { color: 'rgba(255,255,255,0.72)', fontSize: 11, fontWeight: '500' },
+  primaryAction: { marginLeft: 'auto', minWidth: 72, minHeight: 38, borderRadius: 19, backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.gutter },
+  primaryActionText: { color: colors.textPrimary, fontSize: 13, fontWeight: '600' },
+  secondaryAction: { minWidth: 78, minHeight: 38, borderRadius: borderRadius.full, borderWidth: 1.2, borderColor: 'rgba(255,255,255,0.30)', backgroundColor: 'rgba(0,0,0,0.24)', alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.md },
+  secondaryActionText: { color: '#FFFFFF', fontSize: 13, fontWeight: '500' },
   profileTabs: { height: 58, marginTop: -1, flexDirection: 'row', backgroundColor: '#080808', borderTopWidth: 1, borderBottomWidth: 1, borderColor: 'rgba(255,255,255,0.08)' },
   profileTab: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   profileTabOn: { backgroundColor: '#171717' },
-  bio: { color: 'rgba(255,255,255,0.78)', fontSize: 14, lineHeight: 20, fontWeight: '700', paddingHorizontal: 16, paddingVertical: 16 },
-  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: GRID_GAP, backgroundColor: '#050505' },
-  tile: { width: TILE_SIZE, height: TILE_SIZE, overflow: 'hidden', backgroundColor: '#161616' },
+  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: GRID_GAP, backgroundColor: 'rgba(17,17,17,0.14)' },
+  tile: { width: TILE_SIZE, height: TILE_SIZE, overflow: 'hidden', backgroundColor: colors.bgSubtle },
   tileMedia: { width: '100%', height: '100%' },
-  textTile: { flex: 1, padding: 10, justifyContent: 'center', backgroundColor: '#191919' },
-  textTileText: { color: '#FFFFFF', fontSize: 12, lineHeight: 16, fontWeight: '800' },
-  emptyPosts: { width: SCREEN_WIDTH, minHeight: 170, alignItems: 'center', justifyContent: 'center', gap: 8 },
-  emptyText: { color: 'rgba(255,255,255,0.56)', fontSize: 14, fontWeight: '800' },
-  menuOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.36)' },
-  menu: { position: 'absolute', right: 14, width: 236, borderRadius: 18, backgroundColor: 'rgba(16,16,16,0.96)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.12)', overflow: 'hidden' },
-  menuItem: { minHeight: 52, flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.08)' },
-  menuItemText: { color: '#FFFFFF', fontSize: 15, fontWeight: '800' },
+  textTile: { flex: 1, padding: 10, justifyContent: 'center', backgroundColor: colors.surfaceTint },
+  textTileText: { color: colors.textPrimary, fontSize: 12, lineHeight: 16, fontWeight: '600' },
+  emptyPosts: { width: SCREEN_WIDTH, minHeight: 190, alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: colors.bgApp },
+  emptyText: { color: colors.textHint, fontSize: 14, fontWeight: '500' },
+  menuOverlay: { flex: 1, backgroundColor: colors.modalScrim },
+  menu: { position: 'absolute', right: spacing.md, width: 236, borderRadius: borderRadius.xl, backgroundColor: 'rgba(16,16,16,0.96)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.12)', overflow: 'hidden' },
+  menuItem: { minHeight: 52, flexDirection: 'row', alignItems: 'center', gap: spacing.gutter, paddingHorizontal: spacing.md, borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.08)' },
+  menuItemText: { color: '#FFFFFF', fontSize: 15, fontWeight: '500' },
   menuItemTextDanger: { color: '#FF5A5F' },
 });

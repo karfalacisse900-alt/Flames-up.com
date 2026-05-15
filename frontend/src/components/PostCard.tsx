@@ -4,16 +4,14 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  Image,
-  Dimensions,
+  useWindowDimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, spacing, borderRadius } from '../utils/theme';
+import { colors, spacing, borderRadius, hitSlop, layout, typography, shadows } from '../utils/theme';
 import { formatDistanceToNow } from 'date-fns';
 import api from '../api/client';
 import MediaPreview from './MediaPreview';
-
-const { width } = Dimensions.get('window');
+import OptimizedImage from './OptimizedImage';
 
 interface Post {
   id: string;
@@ -46,6 +44,7 @@ export default function PostCard({
   onUserPress,
   onCommentPress,
 }: PostCardProps) {
+  const { width } = useWindowDimensions();
   const [liked, setLiked] = useState(post.liked_by?.includes(currentUserId));
   const [likesCount, setLikesCount] = useState(post.likes_count);
   const [isLiking, setIsLiking] = useState(false);
@@ -53,14 +52,18 @@ export default function PostCard({
   const handleLike = async () => {
     if (isLiking) return;
     setIsLiking(true);
+    const nextLiked = !liked;
+    const nextCount = Math.max(0, liked ? likesCount - 1 : likesCount + 1);
     
     // Optimistic update
-    setLiked(!liked);
-    setLikesCount(liked ? likesCount - 1 : likesCount + 1);
+    setLiked(nextLiked);
+    setLikesCount(nextCount);
     
     try {
-      await api.post(`/posts/${post.id}/like`);
-    } catch (error) {
+      const response = await api.post(`/posts/${post.id}/like`, { liked: nextLiked });
+      if (typeof response.data?.liked === 'boolean') setLiked(response.data.liked);
+      if (Number.isFinite(Number(response.data?.likes_count))) setLikesCount(Number(response.data.likes_count));
+    } catch {
       // Revert on error
       setLiked(liked);
       setLikesCount(likesCount);
@@ -74,10 +77,17 @@ export default function PostCard({
   return (
     <View style={styles.container}>
       {/* Header */}
-      <TouchableOpacity style={styles.header} onPress={onUserPress} activeOpacity={0.7}>
+      <TouchableOpacity
+        style={styles.header}
+        onPress={onUserPress}
+        activeOpacity={0.72}
+        accessibilityRole="button"
+        accessibilityLabel={`Open ${post.user_full_name || post.user_username}'s profile`}
+        hitSlop={hitSlop}
+      >
         <View style={styles.avatar}>
           {post.user_profile_image ? (
-            <Image source={{ uri: post.user_profile_image }} style={styles.avatarImage} />
+            <OptimizedImage uri={post.user_profile_image} preset="avatar" style={styles.avatarImage} />
           ) : (
             <View style={styles.avatarPlaceholder}>
               <Text style={styles.avatarText}>{post.user_username[0].toUpperCase()}</Text>
@@ -92,8 +102,8 @@ export default function PostCard({
             <Text style={styles.time}>{timeAgo}</Text>
           </View>
         </View>
-        <TouchableOpacity style={styles.moreButton}>
-          <Ionicons name="ellipsis-horizontal" size={20} color={colors.textTertiary} />
+        <TouchableOpacity style={styles.moreButton} accessibilityRole="button" accessibilityLabel="More post options" hitSlop={hitSlop}>
+          <Ionicons name="ellipsis-horizontal" size={20} color={colors.textHint} />
         </TouchableOpacity>
       </TouchableOpacity>
 
@@ -103,7 +113,7 @@ export default function PostCard({
         
         {post.image && (
           <View style={styles.imageContainer}>
-            <MediaPreview uri={post.image} mediaTypes={post.media_types} style={styles.postImage} />
+            <MediaPreview uri={post.image} mediaTypes={post.media_types} style={[styles.postImage, { height: Math.min(520, Math.round((width - spacing.md * 4) * 1.25)) }]} imagePreset="feed" />
           </View>
         )}
         
@@ -117,10 +127,10 @@ export default function PostCard({
 
       {/* Actions */}
       <View style={styles.actions}>
-        <TouchableOpacity style={styles.actionButton} onPress={handleLike}>
+        <TouchableOpacity style={styles.actionButton} onPress={handleLike} accessibilityRole="button" accessibilityLabel={liked ? 'Unlike post' : 'Like post'} hitSlop={hitSlop}>
           <Ionicons
             name={liked ? 'heart' : 'heart-outline'}
-            size={22}
+            size={20}
             color={liked ? colors.error : colors.textSecondary}
           />
           {likesCount > 0 && (
@@ -128,19 +138,19 @@ export default function PostCard({
           )}
         </TouchableOpacity>
         
-        <TouchableOpacity style={styles.actionButton} onPress={onCommentPress}>
-          <Ionicons name="chatbubble-outline" size={20} color={colors.textSecondary} />
+        <TouchableOpacity style={styles.actionButton} onPress={onCommentPress} accessibilityRole="button" accessibilityLabel="Open comments" hitSlop={hitSlop}>
+          <Ionicons name="chatbubble-outline" size={18} color={colors.textSecondary} />
           {post.comments_count > 0 && (
             <Text style={styles.actionText}>{post.comments_count}</Text>
           )}
         </TouchableOpacity>
         
-        <TouchableOpacity style={styles.actionButton}>
-          <Ionicons name="share-outline" size={22} color={colors.textSecondary} />
+        <TouchableOpacity style={styles.actionButton} accessibilityRole="button" accessibilityLabel="Share post" hitSlop={hitSlop}>
+          <Ionicons name="share-outline" size={20} color={colors.textSecondary} />
         </TouchableOpacity>
         
-        <TouchableOpacity style={styles.actionButton}>
-          <Ionicons name="bookmark-outline" size={20} color={colors.textSecondary} />
+        <TouchableOpacity style={styles.actionButton} accessibilityRole="button" accessibilityLabel="Save post" hitSlop={hitSlop}>
+          <Ionicons name="bookmark-outline" size={18} color={colors.textSecondary} />
         </TouchableOpacity>
       </View>
     </View>
@@ -149,22 +159,27 @@ export default function PostCard({
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: colors.background,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.borderLight,
+    backgroundColor: colors.surfaceRaised,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    borderRadius: borderRadius.card,
     paddingVertical: spacing.md,
+    marginHorizontal: spacing.md,
+    marginBottom: spacing.md,
+    ...shadows.elevation1,
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: spacing.md,
-    marginBottom: spacing.sm,
+    marginBottom: spacing.xs,
   },
   avatar: {
     width: 44,
     height: 44,
     borderRadius: 22,
     overflow: 'hidden',
+    backgroundColor: colors.bgSubtle,
   },
   avatarImage: {
     width: '100%',
@@ -173,7 +188,7 @@ const styles = StyleSheet.create({
   avatarPlaceholder: {
     width: '100%',
     height: '100%',
-    backgroundColor: colors.primary,
+    backgroundColor: colors.accentPrimary,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -184,10 +199,10 @@ const styles = StyleSheet.create({
   },
   headerInfo: {
     flex: 1,
-    marginLeft: spacing.sm,
+    marginLeft: spacing.gutter,
   },
   username: {
-    fontSize: 15,
+    ...typography.body,
     fontWeight: '600',
     color: colors.textPrimary,
   },
@@ -198,37 +213,40 @@ const styles = StyleSheet.create({
   },
   handle: {
     fontSize: 13,
-    color: colors.textTertiary,
+    color: colors.textHint,
   },
   dot: {
     fontSize: 13,
-    color: colors.textTertiary,
+    color: colors.textHint,
     marginHorizontal: 4,
   },
   time: {
     fontSize: 13,
-    color: colors.textTertiary,
+    color: colors.textHint,
   },
   moreButton: {
-    padding: spacing.xs,
+    width: layout.minTouchTarget,
+    height: layout.minTouchTarget,
+    borderRadius: layout.minTouchTarget / 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surfaceSoft,
   },
   content: {
-    fontSize: 15,
-    lineHeight: 22,
+    ...typography.body,
     color: colors.textPrimary,
     paddingHorizontal: spacing.md,
-    marginBottom: spacing.sm,
+    marginBottom: spacing.gutter,
   },
   imageContainer: {
     marginHorizontal: spacing.md,
-    borderRadius: borderRadius.md,
+    borderRadius: 20,
     overflow: 'hidden',
-    marginBottom: spacing.sm,
+    marginBottom: spacing.gutter,
+    backgroundColor: colors.bgSubtle,
   },
   postImage: {
     width: '100%',
-    height: width - spacing.md * 2,
-    maxHeight: 400,
   },
   locationRow: {
     flexDirection: 'row',
@@ -238,24 +256,29 @@ const styles = StyleSheet.create({
   },
   locationText: {
     fontSize: 13,
-    color: colors.textTertiary,
+    color: colors.textHint,
     marginLeft: 4,
   },
   actions: {
     flexDirection: 'row',
     paddingHorizontal: spacing.md,
     paddingTop: spacing.xs,
+    justifyContent: 'space-between',
+    gap: spacing.sm,
   },
   actionButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginRight: spacing.xl,
-    paddingVertical: spacing.xs,
+    minHeight: layout.minTouchTarget,
+    borderRadius: 22,
+    paddingHorizontal: spacing.gutter,
+    gap: spacing.xs,
+    backgroundColor: colors.bgSubtle,
   },
   actionText: {
-    fontSize: 13,
+    fontSize: 12,
     color: colors.textSecondary,
-    marginLeft: 4,
+    fontWeight: '500',
   },
   likedText: {
     color: colors.error,

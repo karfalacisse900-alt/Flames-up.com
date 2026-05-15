@@ -15,6 +15,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import api from '../../src/api/client';
 import { useAuthStore } from '../../src/store/authStore';
+import { openSafeUrl } from '../../src/utils/safeLinking';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -47,7 +48,7 @@ export default function PlaceDetailScreen() {
     if (!place) return;
 
     if (place.mapbox_url) {
-      Linking.openURL(place.mapbox_url);
+      openSafeUrl(place.mapbox_url);
       return;
     }
 
@@ -63,7 +64,7 @@ export default function PlaceDetailScreen() {
 
   const openWebsite = () => {
     if (place?.website) {
-      Linking.openURL(place.website);
+      openSafeUrl(place.website);
     }
   };
 
@@ -187,7 +188,7 @@ const styles = StyleSheet.create({
   errorBtnText: {
     color: '#FFFFFF',
     fontSize: 14,
-    fontWeight: '700',
+    fontWeight: '500',
   },
   heroCard: {
     flex: 1,

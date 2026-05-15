@@ -160,7 +160,7 @@ export default function VerifyPhoneScreen() {
 
           <View style={styles.hero}>
             <View style={styles.heroIcon}>
-              <Ionicons name="shield-checkmark" size={28} color="#111111" />
+              <Ionicons name="shield-checkmark" size={27} color="#FFFFFF" />
             </View>
             <Text style={styles.title}>Verify your phone</Text>
             <Text style={styles.subtitle}>
@@ -247,13 +247,13 @@ export default function VerifyPhoneScreen() {
               onPress={step === 'phone' ? () => sendCode(false) : verifyCode}
             >
               {loadingAction ? (
-                <ActivityIndicator color="#111111" />
+                <ActivityIndicator color="#FFFFFF" />
               ) : (
                 <>
                   <Text style={styles.primaryButtonText}>
                     {step === 'phone' ? 'Send verification code' : 'Verify phone'}
                   </Text>
-                  <Ionicons name="arrow-forward" size={18} color="#111111" />
+                  <Ionicons name="arrow-forward" size={17} color="#FFFFFF" />
                 </>
               )}
             </TouchableOpacity>
@@ -303,13 +303,13 @@ const styles = StyleSheet.create({
     width: 64,
     height: 64,
     borderRadius: 32,
-    backgroundColor: '#DFFF32',
+    backgroundColor: '#20361F',
     borderWidth: 1.5,
-    borderColor: '#111111',
+    borderColor: '#172917',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  title: { fontSize: 32, lineHeight: 36, fontWeight: '900', color: '#111111', textAlign: 'center' },
+  title: { fontSize: 32, lineHeight: 36, fontWeight: '500', color: '#111111', textAlign: 'center' },
   subtitle: { maxWidth: 310, fontSize: 15, lineHeight: 22, color: '#565656', textAlign: 'center' },
   card: {
     backgroundColor: '#FFFFFF',
@@ -331,15 +331,15 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   stepDotActive: { backgroundColor: '#111111', borderColor: '#111111' },
-  stepDotText: { color: '#FFFFFF', fontSize: 13, fontWeight: '900' },
+  stepDotText: { color: '#FFFFFF', fontSize: 13, fontWeight: '500' },
   stepDotTextMuted: { color: '#777777' },
   stepLine: { flex: 1, height: 2, backgroundColor: '#E6E1D8', marginHorizontal: 10 },
   fieldGroup: { gap: 8 },
-  label: { fontSize: 13, fontWeight: '900', color: '#222222' },
+  label: { fontSize: 13, fontWeight: '500', color: '#222222' },
   sentRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
   sentText: { flexShrink: 1, fontSize: 12, color: '#6E6E6E', textAlign: 'right' },
   inputWrap: {
-    minHeight: 58,
+    minHeight: 46,
     borderRadius: 18,
     borderWidth: 1.5,
     borderColor: '#D9D4CA',
@@ -351,8 +351,8 @@ const styles = StyleSheet.create({
   },
   inputWrapLocked: { backgroundColor: '#F7F7F3' },
   codeWrap: { borderColor: '#111111' },
-  input: { flex: 1, minHeight: 52, color: '#171717', fontSize: 17, fontWeight: '700' },
-  codeInput: { fontSize: 24, fontWeight: '900' },
+  input: { flex: 1, minHeight: 52, color: '#171717', fontSize: 17, fontWeight: '500' },
+  codeInput: { fontSize: 24, fontWeight: '500' },
   notice: {
     borderRadius: 16,
     borderWidth: 1,
@@ -363,22 +363,22 @@ const styles = StyleSheet.create({
     gap: 9,
   },
   notice_info: { backgroundColor: '#F5F5F1', borderColor: '#E4E0D7' },
-  notice_success: { backgroundColor: '#F1FFD0', borderColor: '#C7E96A' },
+  notice_success: { backgroundColor: '#E5F1E1', borderColor: '#C7D0BD' },
   notice_error: { backgroundColor: '#FFF0EA', borderColor: '#F3B8A4' },
-  noticeText: { flex: 1, color: '#242424', fontSize: 13, lineHeight: 18, fontWeight: '700' },
+  noticeText: { flex: 1, color: '#242424', fontSize: 13, lineHeight: 18, fontWeight: '500' },
   primaryButton: {
-    minHeight: 58,
+    minHeight: 46,
     borderRadius: 18,
-    backgroundColor: '#DFFF32',
-    borderWidth: 1.5,
-    borderColor: '#111111',
+    backgroundColor: '#20361F',
+    borderWidth: 1,
+    borderColor: '#172917',
     alignItems: 'center',
     justifyContent: 'center',
     flexDirection: 'row',
     gap: 8,
   },
   disabledButton: { opacity: 0.48 },
-  primaryButtonText: { color: '#111111', fontSize: 16, fontWeight: '900' },
+  primaryButtonText: { color: '#FFFFFF', fontSize: 15, fontWeight: '500' },
   actionRow: { flexDirection: 'row', gap: 10 },
   actionButton: {
     flex: 1,
@@ -394,5 +394,5 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
   },
   actionButtonDisabled: { opacity: 0.55 },
-  actionButtonText: { color: '#111111', fontSize: 13, fontWeight: '900', textAlign: 'center' },
+  actionButtonText: { color: '#111111', fontSize: 13, fontWeight: '500', textAlign: 'center' },
 });

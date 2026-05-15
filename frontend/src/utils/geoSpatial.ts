@@ -34,6 +34,21 @@ export type PlaceClusterNode = {
 
 export type GeoNode = PlaceMarkerNode | PlaceClusterNode;
 
+type NativeGeoSearch = {
+  rankPlaceIds?: (
+    places: PlaceLike[],
+    query: string,
+    userLat?: number,
+    userLng?: number,
+    limit?: number
+  ) => string[] | string;
+};
+
+declare global {
+  // Installed by the native C++ JSI geospatial engine when available.
+  var __FlamesGeoSearch: NativeGeoSearch | undefined;
+}
+
 const EARTH_RADIUS_KM = 6371;
 const WORLD_EXTENT_METERS = 20037508.34;
 
@@ -80,6 +95,16 @@ function getPlaceId(place: PlaceLike, index: number): string {
   return String(place.place_id || place.id || `place-${index}`);
 }
 
+function parseNativeIds(value: string[] | string | undefined): string[] | null {
+  if (!value) return null;
+  if (Array.isArray(value)) return value.map(String);
+  try {
+    const parsed = JSON.parse(value);
+    if (Array.isArray(parsed)) return parsed.map(String);
+  } catch {}
+  return null;
+}
+
 function tokenize(value: string): string[] {
   return normalizeText(value)
     .split(/[\s,.-]+/)
@@ -106,6 +131,20 @@ export function rankPlacesByQuery<T extends PlaceLike>(
   userLoc?: LatLng,
   limit = 120
 ): T[] {
+  try {
+    const ids = parseNativeIds(global.__FlamesGeoSearch?.rankPlaceIds?.(
+      places,
+      query,
+      userLoc?.lat,
+      userLoc?.lng,
+      limit
+    ));
+    if (ids?.length) {
+      const byId = new Map(places.map((place, index) => [getPlaceId(place, index), place]));
+      return ids.map((id) => byId.get(id)).filter(Boolean) as T[];
+    }
+  } catch {}
+
   const normalizedQuery = normalizeText(query);
   if (!normalizedQuery) return places.slice(0, limit);
   const tokens = tokenize(normalizedQuery);

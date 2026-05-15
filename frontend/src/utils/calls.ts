@@ -1,4 +1,4 @@
-export type CallMode = 'call' | 'live';
+export type CallMode = 'call' | 'voice' | 'live';
 export type CallRole = 'host' | 'audience';
 
 type CallHrefOptions = {

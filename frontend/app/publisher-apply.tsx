@@ -166,14 +166,14 @@ const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#FAFAF8' },
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 12 },
   backBtn: { width: 44, height: 44, justifyContent: 'center', alignItems: 'center' },
-  headerTitle: { fontSize: 18, fontWeight: '700', color: '#1B4332' },
+  headerTitle: { fontSize: 18, fontWeight: '500', color: '#1B4332' },
   progress: { flexDirection: 'row', justifyContent: 'center', gap: 8, paddingVertical: 8 },
   progressDot: { width: 32, height: 4, borderRadius: 2, backgroundColor: '#E0D5C5' },
   progressDotActive: { backgroundColor: '#2D6A4F' },
-  stepTitle: { fontSize: 22, fontWeight: '800', color: '#1B4332', marginBottom: 4 },
+  stepTitle: { fontSize: 22, fontWeight: '600', color: '#1B4332', marginBottom: 4 },
   stepDesc: { fontSize: 14, color: '#6B7280', marginBottom: 20, lineHeight: 20 },
   field: { marginBottom: 18 },
-  label: { fontSize: 14, fontWeight: '700', color: '#1B4332', marginBottom: 6 },
+  label: { fontSize: 14, fontWeight: '500', color: '#1B4332', marginBottom: 6 },
   input: {
     backgroundColor: '#FFF', borderRadius: 14, borderWidth: 1, borderColor: '#E0D5C5',
     paddingHorizontal: 14, paddingVertical: 12, fontSize: 15, color: '#1B4332',
@@ -191,7 +191,7 @@ const s = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
     paddingVertical: 14, borderRadius: 20, backgroundColor: '#2D6A4F', marginTop: 8,
   },
-  nextBtnText: { fontSize: 15, fontWeight: '700', color: '#FFF' },
+  nextBtnText: { fontSize: 15, fontWeight: '500', color: '#FFF' },
   backStepBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4,
     paddingVertical: 14, paddingHorizontal: 20, borderRadius: 20,
@@ -202,5 +202,5 @@ const s = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
     paddingVertical: 14, borderRadius: 20, backgroundColor: '#10B981', marginTop: 8,
   },
-  submitBtnText: { fontSize: 15, fontWeight: '700', color: '#FFF' },
+  submitBtnText: { fontSize: 15, fontWeight: '500', color: '#FFF' },
 });

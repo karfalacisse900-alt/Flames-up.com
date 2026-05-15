@@ -1,0 +1,9 @@
+{
+  "platforms": ["apple", "android", "web"],
+  "apple": {
+    "modules": ["MiraPerformanceModule"]
+  },
+  "android": {
+    "modules": ["expo.modules.miraperformance.MiraPerformanceModule"]
+  }
+}

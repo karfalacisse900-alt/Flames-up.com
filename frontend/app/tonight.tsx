@@ -1,14 +1,14 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, Image, ScrollView,
-  RefreshControl, Dimensions,
+  Dimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import api from '../src/api/client';
 import MediaPreview from '../src/components/MediaPreview';
-import { cachePostForDetail, setPostDetailFeedContext } from '../src/store/postDetailCache';
+import { cachePostForDetail } from '../src/store/postDetailCache';
 
 const { width: SW } = Dimensions.get('window');
 
@@ -66,7 +66,6 @@ export default function TonightScreen() {
   const insets = useSafeAreaInsets();
   const [activeCat, setActiveCat] = useState('all');
   const [feedPosts, setFeedPosts] = useState<any[]>([]);
-  const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => { loadNightPosts(); }, []);
 
@@ -84,12 +83,6 @@ export default function TonightScreen() {
     } catch {}
   };
 
-  const onRefresh = useCallback(async () => {
-    setRefreshing(true);
-    await loadNightPosts();
-    setRefreshing(false);
-  }, []);
-
   const filteredPicks = activeCat === 'all'
     ? TONIGHT_PICKS
     : TONIGHT_PICKS.filter(p => p.category === activeCat);
@@ -101,7 +94,7 @@ export default function TonightScreen() {
   return (
     <View style={s.container}>
       {/* Header */}
-      <View style={[s.header, { paddingTop: insets.top + 8 }]}>
+      <View style={[s.header, { paddingTop: insets.top + 2 }]}>
         <TouchableOpacity style={s.backBtn} onPress={() => router.back()}>
           <Ionicons name="arrow-back" size={20} color="#FFF" />
         </TouchableOpacity>
@@ -133,7 +126,6 @@ export default function TonightScreen() {
 
       <ScrollView
         showsVerticalScrollIndicator={false}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#F97316" />}
         contentContainerStyle={{ paddingBottom: 60 }}
       >
         {/* Tonight picks */}
@@ -187,7 +179,6 @@ export default function TonightScreen() {
                   activeOpacity={0.9}
                   onPress={() => {
                     cachePostForDetail(post);
-                    setPostDetailFeedContext(feedPosts.map((item) => item.id));
                     router.push(`/post/${post.id}` as any);
                   }}
                 >
@@ -224,11 +215,11 @@ const s = StyleSheet.create({
     width: 40, height: 40, borderRadius: 20,
     backgroundColor: 'rgba(255,255,255,0.08)', justifyContent: 'center', alignItems: 'center',
   },
-  headerTitle: { fontSize: 24, fontWeight: '800', color: '#FFF', letterSpacing: -0.5 },
+  headerTitle: { fontSize: 24, fontWeight: '600', color: '#FFF', letterSpacing: -0.5 },
   headerSub: { fontSize: 13, color: 'rgba(255,255,255,0.4)', marginTop: 2 },
   liveDot: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   liveDotInner: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#22C55E' },
-  liveText: { fontSize: 10, fontWeight: '800', color: '#22C55E', letterSpacing: 1 },
+  liveText: { fontSize: 10, fontWeight: '600', color: '#22C55E', letterSpacing: 1 },
 
   // Category
   catBar: { paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.06)' },
@@ -243,7 +234,7 @@ const s = StyleSheet.create({
 
   // Section
   sectionHeader: { paddingHorizontal: 20, paddingTop: 24, paddingBottom: 12 },
-  sectionTitle: { fontSize: 20, fontWeight: '800', color: '#FFF', letterSpacing: -0.3 },
+  sectionTitle: { fontSize: 20, fontWeight: '600', color: '#FFF', letterSpacing: -0.3 },
   sectionSub: { fontSize: 13, color: 'rgba(255,255,255,0.35)', marginTop: 2 },
 
   // Hero pick
@@ -259,8 +250,8 @@ const s = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.4)', paddingHorizontal: 10, paddingVertical: 4,
     borderRadius: 8, alignSelf: 'flex-start', marginBottom: 10,
   },
-  vibeText: { fontSize: 11, fontWeight: '700', color: '#F97316' },
-  heroTitle: { fontSize: 22, fontWeight: '800', color: '#FFF', lineHeight: 28, marginBottom: 4 },
+  vibeText: { fontSize: 11, fontWeight: '500', color: '#F97316' },
+  heroTitle: { fontSize: 22, fontWeight: '600', color: '#FFF', lineHeight: 28, marginBottom: 4 },
   heroSub: { fontSize: 13, color: 'rgba(255,255,255,0.6)' },
 
   // Picks grid
@@ -275,8 +266,8 @@ const s = StyleSheet.create({
   pickImage: { width: '100%', height: '100%', position: 'absolute' },
   pickOverlay: { position: 'absolute', width: '100%', height: '100%', backgroundColor: 'rgba(0,0,0,0.35)' },
   pickContent: { position: 'absolute', bottom: 14, left: 14, right: 14 },
-  pickVibe: { fontSize: 10, fontWeight: '700', color: '#F97316', marginBottom: 4 },
-  pickTitle: { fontSize: 14, fontWeight: '700', color: '#FFF', lineHeight: 18 },
+  pickVibe: { fontSize: 10, fontWeight: '500', color: '#F97316', marginBottom: 4 },
+  pickTitle: { fontSize: 14, fontWeight: '500', color: '#FFF', lineHeight: 18 },
   pickSub: { fontSize: 11, color: 'rgba(255,255,255,0.5)', marginTop: 3 },
 
   // Active now
@@ -287,6 +278,6 @@ const s = StyleSheet.create({
   activeImage: { width: '100%', height: '100%', position: 'absolute' },
   activeOverlay: { position: 'absolute', width: '100%', height: '100%', backgroundColor: 'rgba(0,0,0,0.3)' },
   activeContent: { position: 'absolute', bottom: 12, left: 12, right: 12 },
-  activeName: { fontSize: 12, fontWeight: '700', color: '#FFF' },
+  activeName: { fontSize: 12, fontWeight: '500', color: '#FFF' },
   activeCaption: { fontSize: 11, color: 'rgba(255,255,255,0.6)', marginTop: 2 },
 });

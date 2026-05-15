@@ -1,14 +1,14 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, Image, ScrollView,
-  RefreshControl, Dimensions, ActivityIndicator,
+  Dimensions, ActivityIndicator,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { isCFStreamVideo, extractStreamUid, getStreamPlaybackInfo } from '../../../src/utils/mediaUpload';
 import api from '../../../src/api/client';
-import { cachePostsForDetail, cachePostForDetail, setPostDetailFeedContext } from '../../../src/store/postDetailCache';
+import { cachePostsForDetail, cachePostForDetail } from '../../../src/store/postDetailCache';
 
 const { width: SW } = Dimensions.get('window');
 const COL_GAP = 8;
@@ -91,7 +91,6 @@ export default function SceneScreen() {
 
   const [posts, setPosts] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [isRefreshing, setIsRefreshing] = useState(false);
 
   const ctxMeta = CONTEXT_META[context || 'global'] || CONTEXT_META.global;
   const catLabel = CATEGORY_LABELS[category || 'all'] || 'All Posts';
@@ -119,16 +118,11 @@ export default function SceneScreen() {
         }
       }
       cachePostsForDetail(all);
-      setPostDetailFeedContext(all.map((post: any) => post.id));
       setPosts(all);
     } catch { setPosts([]); } finally { setIsLoading(false); }
   }, [context]);
 
   useEffect(() => { void loadPosts(); }, [loadPosts]);
-
-  const onRefresh = useCallback(async () => {
-    setIsRefreshing(true); await loadPosts(); setIsRefreshing(false);
-  }, [loadPosts]);
 
   // Only posts with images
   const imagePosts = posts.filter((p: any) => {
@@ -164,7 +158,6 @@ export default function SceneScreen() {
 
       <ScrollView
         showsVerticalScrollIndicator={false}
-        refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={onRefresh} tintColor="#1A1A1A" />}
         contentContainerStyle={{ paddingBottom: 100 }}
       >
         {isLoading ? (
@@ -193,7 +186,7 @@ const s = StyleSheet.create({
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 12, paddingBottom: 4 },
   backBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#F5F5F5', justifyContent: 'center', alignItems: 'center' },
   headerCenter: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  headerTitle: { fontSize: 18, fontWeight: '700', color: '#1A1A1A' },
+  headerTitle: { fontSize: 18, fontWeight: '500', color: '#1A1A1A' },
   subTitle: { fontSize: 13, color: '#AAA', fontWeight: '600', paddingHorizontal: 16, marginBottom: 10 },
 
   masonry: { flexDirection: 'row', paddingHorizontal: H_PAD, gap: COL_GAP },
@@ -208,7 +201,7 @@ const s = StyleSheet.create({
   cardAuthorRow: { flexDirection: 'row', alignItems: 'center', gap: 5, flex: 1 },
   cardAv: { width: 18, height: 18, borderRadius: 9 },
   cardAvFb: { width: 18, height: 18, borderRadius: 9, backgroundColor: '#F0F0F0', justifyContent: 'center', alignItems: 'center' },
-  cardAvTxt: { fontSize: 9, fontWeight: '700', color: '#BBB' },
+  cardAvTxt: { fontSize: 9, fontWeight: '500', color: '#BBB' },
   cardAuthor: { fontSize: 11, color: '#AAA', fontWeight: '500', flex: 1 },
   cardLikes: { flexDirection: 'row', alignItems: 'center', gap: 3 },
   cardLikesTxt: { fontSize: 11, color: '#BBB' },
@@ -216,5 +209,5 @@ const s = StyleSheet.create({
   center: { paddingTop: 100, alignItems: 'center' },
   emptyText: { fontSize: 15, color: '#BBB', marginTop: 12 },
   createBtn: { marginTop: 16, backgroundColor: '#1A1A1A', paddingHorizontal: 24, paddingVertical: 12, borderRadius: 12 },
-  createBtnText: { color: '#FFF', fontSize: 14, fontWeight: '700' },
+  createBtnText: { color: '#FFF', fontSize: 14, fontWeight: '500' },
 });

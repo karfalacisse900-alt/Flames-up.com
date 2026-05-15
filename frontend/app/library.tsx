@@ -14,7 +14,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../src/utils/theme';
 import api from '../src/api/client';
 import MediaPreview from '../src/components/MediaPreview';
-import { cachePostForDetail, cachePostsForDetail, setPostDetailFeedContext } from '../src/store/postDetailCache';
+import { cachePostForDetail, cachePostsForDetail } from '../src/store/postDetailCache';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const THUMB_SIZE = (SCREEN_WIDTH - 48) / 3;
@@ -68,7 +68,6 @@ export default function LibraryScreen() {
           style={s.thumb}
           onPress={() => {
             cachePostForDetail(post);
-            setPostDetailFeedContext(posts.map((item) => item.id));
             router.push(`/post/${post.id}`);
           }}
         >
@@ -173,12 +172,12 @@ const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bgApp },
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 12 },
   backBtn: { width: 44, height: 44, justifyContent: 'center', alignItems: 'center' },
-  headerTitle: { fontSize: 18, fontWeight: '700', color: colors.textPrimary, fontStyle: 'italic' },
+  headerTitle: { fontSize: 18, fontWeight: '500', color: colors.textPrimary, fontStyle: 'italic' },
   tabRow: { flexDirection: 'row', paddingHorizontal: 16, gap: 8, marginBottom: 16 },
   tab: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 12, borderRadius: 16, backgroundColor: colors.bgSubtle, borderWidth: 1, borderColor: colors.borderLight },
   tabActive: { backgroundColor: colors.accentPrimaryLight, borderColor: colors.accentPrimary + '40' },
   tabText: { fontSize: 13, fontWeight: '600', color: colors.textHint },
-  tabTextActive: { color: colors.accentPrimary, fontWeight: '700' },
+  tabTextActive: { color: colors.accentPrimary, fontWeight: '500' },
   grid: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 16, gap: 4 },
   thumb: { width: THUMB_SIZE, height: THUMB_SIZE, borderRadius: 12, overflow: 'hidden', backgroundColor: colors.bgSubtle },
   thumbImage: { width: '100%', height: '100%' },
@@ -187,10 +186,10 @@ const s = StyleSheet.create({
   collectionsGrid: { paddingHorizontal: 16, gap: 12 },
   collectionCard: { flexDirection: 'row', alignItems: 'center', gap: 14, backgroundColor: colors.bgCard, borderRadius: 20, padding: 16, borderWidth: 1, borderColor: colors.borderLight },
   collectionIcon: { width: 52, height: 52, borderRadius: 16, backgroundColor: colors.accentPrimaryLight, justifyContent: 'center', alignItems: 'center' },
-  collectionName: { fontSize: 16, fontWeight: '700', color: colors.textPrimary, flex: 1, textTransform: 'capitalize' },
+  collectionName: { fontSize: 16, fontWeight: '500', color: colors.textPrimary, flex: 1, textTransform: 'capitalize' },
   collectionCount: { fontSize: 13, color: colors.textHint },
   loadingCenter: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingTop: 60 },
   emptyState: { alignItems: 'center', paddingVertical: 60 },
-  emptyTitle: { fontSize: 16, fontWeight: '700', color: colors.textPrimary, marginTop: 16 },
+  emptyTitle: { fontSize: 16, fontWeight: '500', color: colors.textPrimary, marginTop: 16 },
   emptyText: { fontSize: 13, color: colors.textHint, marginTop: 4 },
 });

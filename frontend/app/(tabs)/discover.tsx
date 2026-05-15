@@ -1,765 +1,2180 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, Image, ScrollView,
-  RefreshControl, ActivityIndicator, Alert, TextInput,
+  ActivityIndicator,
+  Alert,
+  Image,
+  Keyboard,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  Share,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  useWindowDimensions,
+  View,
 } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { Audio } from 'expo-av';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import * as ImagePicker from 'expo-image-picker';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
 import api from '../../src/api/client';
+import ReportReasonSheet, { type ReportReason } from '../../src/components/ReportReasonSheet';
 import { useAuthStore } from '../../src/store/authStore';
-import { colors } from '../../src/utils/theme';
+import { cacheDiscoverNotes, cacheDiscoverStories, getCachedDiscover } from '../../src/store/discoverCache';
+import { cacheNoteForDetail, cacheNotesForDetail } from '../../src/store/noteDetailCache';
+import { useSocialState } from '../../src/store/socialState';
+import { colors, hitSlop, layout, shadows, spacing } from '../../src/utils/theme';
 import { useI18n } from '../../src/utils/i18n';
 import { requireVerifiedPhone } from '../../src/utils/phoneVerification';
-import NoteCard from '../../src/components/NoteCard';
-import {
-  AudiusTrack,
-  getAudiusTrackStream,
-  getAudiusTrendingTracks,
-  getFavoriteAudiusTracks,
-  searchAudiusTracks,
-  toggleFavoriteAudiusTrack,
-} from '../../src/utils/music';
-import {
-  NotePost,
-  loadNotes,
-} from '../../src/utils/recommendFeatures';
+import { uploadImageWithBackup } from '../../src/utils/mediaUpload';
+import { NOTE_IMAGE_PICKER_QUALITY } from '../../src/utils/mediaQuality';
+import { optimizeImageUrl, prefetchImageUrls } from '../../src/utils/optimizedMedia';
 
-const CITY_TABS = [
-  { id: 'all', label: 'For You' },
-  { id: 'notes', label: 'Notes' },
-  { id: 'music', label: 'Music' },
-];
+type StoryGroup = {
+  user_id: string;
+  user_username?: string;
+  user_full_name?: string;
+  user_profile_image?: string;
+  has_unviewed?: boolean;
+  statuses?: any[];
+};
 
-const RECOMMEND_CATEGORIES = [
-  { id: 'notes', label: 'Notes' },
-  { id: 'music', label: 'Music' },
-];
+type UserSearchResult = {
+  id: string;
+  username?: string;
+  full_name?: string;
+  profile_image?: string;
+  bio?: string;
+};
 
-const RECOMMEND_PAGE_IDS = new Set(RECOMMEND_CATEGORIES.map((category) => category.id));
+type NoteCard = {
+  id: string;
+  body?: string;
+  note_type?: string;
+  mood?: string;
+  color?: string;
+  media_url?: string;
+  media_type?: string;
+  reactions_count?: number;
+  comments_count?: number;
+  saves_count?: number;
+  shares_count?: number;
+  reacted?: boolean;
+  saved?: boolean;
+  created_at?: string;
+  user?: {
+    id?: string;
+    username?: string;
+    full_name?: string;
+    profile_image?: string;
+    followed?: boolean;
+    is_following?: boolean;
+    following?: boolean;
+  };
+};
 
-type Recommendation = {
+type NotePhotoDraft = {
+  uri: string;
+  base64?: string;
+  fileName?: string;
+  isRemote?: boolean;
+};
+
+type GifResult = {
   id: string;
   title: string;
-  description?: string;
-  category?: string;
-  tags?: string[];
-  external_url?: string;
-  provider?: string;
-  embed_url?: string;
-  thumbnail_url?: string;
-  creator_name?: string;
+  url: string;
+  preview: string;
+};
+
+type NoteComment = {
+  id: string;
+  body: string;
+  created_at?: string;
   user?: {
+    id?: string;
     username?: string;
     full_name?: string;
     profile_image?: string;
   };
 };
 
-function formatDuration(seconds: unknown) {
-  const total = Math.max(0, Math.round(Number(seconds || 0)));
-  const minutes = Math.floor(total / 60);
-  const rest = `${total % 60}`.padStart(2, '0');
-  return `${minutes}:${rest}`;
+const NOTE_DRAFT_PREFIX = 'flames:note-draft:v1:';
+const GIPHY_API_KEY = process.env.EXPO_PUBLIC_GIPHY_API_KEY || 'a2puMkHvEAeLT47RL4JZhEdWwUXjXGhR';
+
+function noteDraftKey(userId?: string) {
+  return `${NOTE_DRAFT_PREFIX}${userId || 'guest'}`;
 }
 
-function recommendationCardColor(item: Recommendation, index: number) {
-  if (item.thumbnail_url) return '#F3F4F0';
-  const palette = ['#C9E7F8', '#C7353E', '#D8C0A8', '#E6D9BF', '#BFD8C2', '#F4D4C8', '#E9E8E1'];
-  return palette[index % palette.length];
+function displayName(group: StoryGroup) {
+  return group.user_full_name || group.user_username || 'Story';
 }
 
-function recommendationProviderLabel(item: Recommendation) {
-  const provider = String(item.provider || item.category || 'link').replace(/_/g, ' ');
-  return provider.charAt(0).toUpperCase() + provider.slice(1);
+function noteAuthor(note: NoteCard) {
+  return note.user?.full_name || note.user?.username || 'MIRA';
 }
 
-function recommendationAuthor(item: Recommendation) {
-  return item.creator_name || item.user?.full_name || item.user?.username || 'Community pick';
+function noteTime(value?: string) {
+  if (!value) return 'now';
+  const timestamp = new Date(value).getTime();
+  if (!Number.isFinite(timestamp)) return 'now';
+  const minutes = Math.max(0, Math.floor((Date.now() - timestamp) / 60000));
+  if (minutes < 1) return 'now';
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  return `${Math.floor(hours / 24)}d`;
 }
 
 export default function DiscoverScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ compose?: string }>();
   const insets = useSafeAreaInsets();
+  const { width, height } = useWindowDimensions();
   const { user } = useAuthStore();
+  const cachedDiscover = getCachedDiscover();
+  const followedUserFlags = useSocialState((state) => state.followedUserIds);
+  const setUserFollowing = useSocialState((state) => state.setUserFollowing);
   const { t } = useI18n();
-  const [tab, setTab] = useState('all');
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [statusGroups, setStatusGroups] = useState<any[]>([]);
-  const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
-  const [recommendCategory, setRecommendCategory] = useState('music');
-  const [recommendLoading, setRecommendLoading] = useState(false);
-  const [audiusTracks, setAudiusTracks] = useState<AudiusTrack[]>([]);
-  const [audiusFavorites, setAudiusFavorites] = useState<AudiusTrack[]>([]);
-  const [audiusQuery, setAudiusQuery] = useState('');
-  const [audiusLoading, setAudiusLoading] = useState(false);
-  const [audiusPlayingId, setAudiusPlayingId] = useState('');
-  const [audiusLoadingId, setAudiusLoadingId] = useState('');
-  const [notes, setNotes] = useState<NotePost[]>([]);
-  const [notesLoading, setNotesLoading] = useState(false);
-  const audiusSoundRef = useRef<Audio.Sound | null>(null);
-  const audiusQueryRef = useRef('');
+  const [loading, setLoading] = useState(cachedDiscover.stories.length === 0);
+  const [storyGroups, setStoryGroups] = useState<StoryGroup[]>(() => cachedDiscover.stories);
+  const [notes, setNotes] = useState<NoteCard[]>(() => cachedDiscover.notes);
+  const [notesLoading, setNotesLoading] = useState(cachedDiscover.notes.length === 0);
+  const [postChooserVisible, setPostChooserVisible] = useState(false);
+  const [noteComposerVisible, setNoteComposerVisible] = useState(false);
+  const [noteDraft, setNoteDraft] = useState('');
+  const [notePhoto, setNotePhoto] = useState<NotePhotoDraft | null>(null);
+  const [notePosting, setNotePosting] = useState(false);
+  const [noteError, setNoteError] = useState('');
+  const [draftSavedAt, setDraftSavedAt] = useState<number | null>(null);
+  const [gifPickerVisible, setGifPickerVisible] = useState(false);
+  const [gifQuery, setGifQuery] = useState('');
+  const [gifResults, setGifResults] = useState<GifResult[]>([]);
+  const [gifLoading, setGifLoading] = useState(false);
+  const [commentSheetVisible, setCommentSheetVisible] = useState(false);
+  const [selectedNote, setSelectedNote] = useState<NoteCard | null>(null);
+  const [noteComments, setNoteComments] = useState<NoteComment[]>([]);
+  const [noteCommentDraft, setNoteCommentDraft] = useState('');
+  const [noteCommentLoading, setNoteCommentLoading] = useState(false);
+  const [noteCommentPosting, setNoteCommentPosting] = useState(false);
+  const [reportTargetNote, setReportTargetNote] = useState<NoteCard | null>(null);
+  const [reportSubmitting, setReportSubmitting] = useState(false);
+  const [searchVisible, setSearchVisible] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<UserSearchResult[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const isCompactScreen = height < 760;
+  const noteCardWidth = Math.min(Math.max(width * (isCompactScreen ? 0.74 : 0.8), 250), isCompactScreen ? 292 : 320);
+  const noteCardHeight = Math.round(noteCardWidth * 1.25);
 
-  const loadStatusGroups = useCallback(async () => {
+  const loadStories = useCallback(async () => {
+    setLoading(true);
     try {
-      const r = await api.get('/statuses');
-      const groups = Array.isArray(r.data) ? r.data : [];
-      setStatusGroups(groups.filter((group: any) => (
+      const response = await api.get('/statuses').catch(() => ({ data: [] }));
+      const groups = Array.isArray(response.data) ? response.data : [];
+      const visibleGroups = groups.filter((group: StoryGroup) => (
         group?.user_id
         && group.user_id !== user?.id
         && Array.isArray(group.statuses)
         && group.statuses.length > 0
-      )));
-    } catch (error: any) {
-      console.log('Could not load public stories', error?.response?.data?.detail || error?.message);
-      setStatusGroups([]);
+      ));
+      cacheDiscoverStories(visibleGroups);
+      setStoryGroups(visibleGroups);
+    } finally {
+      setLoading(false);
     }
   }, [user?.id]);
 
-  const loadRecommendations = useCallback(async (category = 'all') => {
-    setRecommendLoading(true);
-    try {
-      const r = await api.get('/recommendations', {
-        params: {
-          category,
-          limit: 48,
-        },
-      });
-      setRecommendations(Array.isArray(r.data) ? r.data : []);
-    } catch (error: any) {
-      console.log('Could not load recommendations', error?.response?.data?.detail || error?.message);
-      setRecommendations([]);
-    } finally {
-      setRecommendLoading(false);
-    }
-  }, []);
-
-  const loadAudiusDiscovery = useCallback(async (queryOverride?: string) => {
-    setAudiusLoading(true);
-    try {
-      const query = (queryOverride ?? audiusQueryRef.current).trim();
-      const [tracks, favorites] = await Promise.all([
-        query.length >= 2 ? searchAudiusTracks(query, 50) : getAudiusTrendingTracks(50),
-        getFavoriteAudiusTracks().catch(() => []),
-      ]);
-      setAudiusTracks(tracks);
-      setAudiusFavorites(favorites);
-    } catch (error: any) {
-      console.log('Could not load Audius music', error?.response?.data?.detail || error?.message);
-      setAudiusTracks([]);
-    } finally {
-      setAudiusLoading(false);
-    }
-  }, []);
-
-  const loadNotePosts = useCallback(async () => {
+  const loadNotes = useCallback(async () => {
     setNotesLoading(true);
     try {
-      setNotes(await loadNotes(36));
-    } catch (error: any) {
-      console.log('Could not load notes', error?.response?.data?.detail || error?.message);
-      setNotes([]);
+      const response = await api.get('/notes', { params: { limit: 14 } }).catch(() => ({ data: [] }));
+      const loadedNotes = Array.isArray(response.data) ? response.data.filter((note: NoteCard) => note?.id) : [];
+      cacheNotesForDetail(loadedNotes);
+      cacheDiscoverNotes(loadedNotes);
+      setNotes(loadedNotes);
     } finally {
       setNotesLoading(false);
     }
   }, []);
 
-  const stopAudiusPreview = useCallback(async () => {
-    const sound = audiusSoundRef.current;
-    audiusSoundRef.current = null;
-    setAudiusPlayingId('');
-    setAudiusLoadingId('');
-    if (sound) {
-      await sound.stopAsync().catch(() => undefined);
-      await sound.unloadAsync().catch(() => undefined);
+  const hydrateSavedNoteDraft = useCallback(async () => {
+    if (noteDraft.trim() || notePhoto) return;
+    try {
+      const raw = await AsyncStorage.getItem(noteDraftKey(user?.id));
+      if (!raw) return;
+      const saved = JSON.parse(raw);
+      if (typeof saved.body === 'string') setNoteDraft(saved.body.slice(0, 420));
+      if (typeof saved.saved_at === 'number') setDraftSavedAt(saved.saved_at);
+      if (saved.photo?.uri) {
+        setNotePhoto({
+          uri: String(saved.photo.uri),
+          base64: saved.photo.base64 ? String(saved.photo.base64) : undefined,
+          fileName: saved.photo.fileName ? String(saved.photo.fileName) : undefined,
+          isRemote: !!saved.photo.isRemote,
+        });
+      }
+    } catch {
+      // Ignore broken local drafts; posting should never be blocked by local storage.
     }
+  }, [noteDraft, notePhoto, user?.id]);
+
+  const saveNoteDraft = useCallback(async () => {
+    if (!noteDraft.trim() && !notePhoto) return;
+    try {
+      await AsyncStorage.setItem(noteDraftKey(user?.id), JSON.stringify({
+        body: noteDraft.slice(0, 420),
+        photo: notePhoto,
+        saved_at: Date.now(),
+      }));
+      setDraftSavedAt(Date.now());
+    } catch {
+      setNoteError('Could not save draft on this device.');
+    }
+  }, [noteDraft, notePhoto, user?.id]);
+
+  const loadGifs = useCallback(async (queryValue = gifQuery.trim()) => {
+    setGifLoading(true);
+    try {
+      const query = queryValue.trim();
+      const endpoint = query
+        ? `https://api.giphy.com/v1/gifs/search?api_key=${encodeURIComponent(GIPHY_API_KEY)}&q=${encodeURIComponent(query)}&limit=24&rating=pg-13`
+        : `https://api.giphy.com/v1/gifs/trending?api_key=${encodeURIComponent(GIPHY_API_KEY)}&limit=24&rating=pg-13`;
+      const response = await fetch(endpoint);
+      const payload = await response.json();
+      const items = Array.isArray(payload?.data) ? payload.data : [];
+      setGifResults(items.map((item: any) => {
+        const image = item?.images || {};
+        const url = image.downsized_medium?.url || image.fixed_height?.url || image.original?.url || '';
+        const preview = image.fixed_width_small?.url || image.downsized_still?.url || url;
+        return {
+          id: String(item.id || url),
+          title: String(item.title || 'GIF'),
+          url,
+          preview,
+        };
+      }).filter((item: GifResult) => item.url && item.preview));
+    } catch {
+      setGifResults([]);
+    } finally {
+      setGifLoading(false);
+    }
+  }, [gifQuery]);
+
+  const patchNote = useCallback((noteId: string, updater: (note: NoteCard) => NoteCard) => {
+    setNotes((current) => current.map((note) => (note.id === noteId ? updater(note) : note)));
   }, []);
 
-  useEffect(() => () => {
-    void stopAudiusPreview();
-  }, [stopAudiusPreview]);
-
-  const playAudiusTrack = useCallback(async (track: AudiusTrack) => {
-    const trackId = track.track_id || track.id;
-    if (!trackId) return;
-    if (audiusPlayingId === trackId) {
-      await stopAudiusPreview();
+  const toggleNoteReaction = useCallback(async (note: NoteCard) => {
+    if (!user?.id) {
+      router.push('/login' as any);
       return;
     }
-    setAudiusLoadingId(trackId);
+    const wasReacted = !!note.reacted;
+    patchNote(note.id, (current) => ({
+      ...current,
+      reacted: !wasReacted,
+      reactions_count: Math.max(0, Number(current.reactions_count || 0) + (wasReacted ? -1 : 1)),
+    }));
     try {
-      await stopAudiusPreview();
-      const streamTrack = track.stream_url ? track : await getAudiusTrackStream(trackId);
-      if (!streamTrack.stream_url) {
-        Alert.alert('Audio unavailable', 'Audius did not return a stream for this track.');
+      await api.post(`/notes/${note.id}/interactions`, { kind: 'reaction', value: 'heart' });
+    } catch {
+      patchNote(note.id, (current) => ({
+        ...current,
+        reacted: wasReacted,
+        reactions_count: Math.max(0, Number(current.reactions_count || 0) + (wasReacted ? 1 : -1)),
+      }));
+    }
+  }, [patchNote, router, user?.id]);
+
+  const openNoteComments = useCallback(async (note: NoteCard) => {
+    if (!user?.id) {
+      router.push('/login' as any);
+      return;
+    }
+    setSelectedNote(note);
+    setNoteComments([]);
+    setNoteCommentDraft('');
+    setCommentSheetVisible(true);
+    setNoteCommentLoading(true);
+    try {
+      const response = await api.get(`/notes/${note.id}/comments`);
+      setNoteComments(Array.isArray(response.data) ? response.data : []);
+    } catch {
+      setNoteComments([]);
+    } finally {
+      setNoteCommentLoading(false);
+    }
+  }, [router, user?.id]);
+
+  const submitNoteComment = useCallback(async () => {
+    const body = noteCommentDraft.trim();
+    if (!selectedNote?.id || body.length < 1 || noteCommentPosting) return;
+    setNoteCommentPosting(true);
+    try {
+      const response = await api.post(`/notes/${selectedNote.id}/comments`, { body });
+      const created: NoteComment = {
+        id: response.data?.id || `${Date.now()}`,
+        body: response.data?.body || body,
+        created_at: response.data?.created_at || new Date().toISOString(),
+        user: {
+          id: user?.id,
+          username: user?.username,
+          full_name: user?.full_name,
+          profile_image: user?.profile_image,
+        },
+      };
+      setNoteComments((current) => [...current, created]);
+      setNoteCommentDraft('');
+      patchNote(selectedNote.id, (current) => ({
+        ...current,
+        comments_count: Number(current.comments_count || 0) + 1,
+      }));
+    } catch {
+      Alert.alert('Comment failed', 'Could not post that comment. Please try again.');
+    } finally {
+      setNoteCommentPosting(false);
+    }
+  }, [noteCommentDraft, noteCommentPosting, patchNote, selectedNote?.id, user]);
+
+  const shareNote = useCallback(async (note: NoteCard) => {
+    if (!user?.id) {
+      router.push('/login' as any);
+      return;
+    }
+    try {
+      const message = note.body?.trim()
+        ? `${noteAuthor(note)} on MIRA: ${note.body.trim()}`
+        : `${noteAuthor(note)} shared a note on MIRA.`;
+      await Share.share({ message });
+      patchNote(note.id, (current) => ({ ...current, shares_count: Number(current.shares_count || 0) + 1 }));
+      await api.post(`/notes/${note.id}/interactions`, { kind: 'share' }).catch(() => undefined);
+    } catch {
+      // Native share sheets throw when dismissed on some platforms; no user-facing error needed.
+    }
+  }, [patchNote, router, user?.id]);
+
+  const openNoteDetail = useCallback((note: NoteCard) => {
+    cacheNoteForDetail(note);
+    const warmUrls = [
+      note.media_url ? optimizeImageUrl(note.media_url, 'detail') : '',
+      note.user?.profile_image ? optimizeImageUrl(note.user.profile_image, 'avatar') : '',
+    ].filter(Boolean);
+    if (warmUrls.length) void prefetchImageUrls(warmUrls, 4);
+    router.push(`/note/${note.id}` as any);
+  }, [router]);
+
+  const reportNote = useCallback((note: NoteCard) => {
+    if (!user?.id) {
+      router.push('/login' as any);
+      return;
+    }
+    setReportTargetNote(note);
+  }, [router, user?.id]);
+
+  const submitNoteReport = useCallback(async (reason: ReportReason) => {
+    const note = reportTargetNote;
+    if (!note || reportSubmitting) return;
+    setReportSubmitting(true);
+    try {
+      await api.post(`/notes/${note.id}/report`, {
+        reason: reason.id,
+        details: reason.details,
+      });
+      setReportTargetNote(null);
+      Alert.alert('Reported', 'Thanks. We sent this note to moderation.');
+    } catch (error: any) {
+      Alert.alert('Report failed', error?.response?.data?.detail || 'Could not report this note.');
+    } finally {
+      setReportSubmitting(false);
+    }
+  }, [reportSubmitting, reportTargetNote]);
+
+  const markNoteNotInterested = useCallback((note: NoteCard) => {
+    setNotes((current) => current.filter((item) => item.id !== note.id));
+    if (selectedNote?.id === note.id) {
+      setCommentSheetVisible(false);
+      setSelectedNote(null);
+    }
+  }, [selectedNote?.id]);
+
+  const openNoteMenu = useCallback((note: NoteCard) => {
+    Alert.alert('Note options', undefined, [
+      { text: 'Not interested', onPress: () => markNoteNotInterested(note) },
+      { text: 'Report', style: 'destructive', onPress: () => reportNote(note) },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
+  }, [markNoteNotInterested, reportNote]);
+
+  const toggleNoteAuthorFollow = useCallback(async (note: NoteCard, event?: any) => {
+    event?.stopPropagation?.();
+    const targetId = String(note.user?.id || '');
+    if (!targetId || targetId === user?.id) return;
+    if (!user?.id) {
+      router.push('/login' as any);
+      return;
+    }
+    const seedFollowing = !!(note.user?.is_following ?? note.user?.following ?? note.user?.followed);
+    const wasFollowing = followedUserFlags[targetId] ?? seedFollowing;
+    const nextFollowing = !wasFollowing;
+    setUserFollowing(targetId, nextFollowing);
+    try {
+      const response = await api.post(`/users/${targetId}/follow`, { following: nextFollowing });
+      if (typeof response.data?.following === 'boolean') {
+        setUserFollowing(targetId, !!response.data.following);
+      }
+    } catch (error: any) {
+      setUserFollowing(targetId, wasFollowing);
+      Alert.alert('Follow failed', error?.response?.data?.detail || 'Could not follow this user.');
+    }
+  }, [followedUserFlags, router, setUserFollowing, user?.id]);
+
+  useEffect(() => {
+    void loadStories();
+  }, [loadStories]);
+
+  useEffect(() => {
+    void loadNotes();
+  }, [loadNotes]);
+
+  useEffect(() => {
+    if (params.compose === 'note') {
+      setNoteComposerVisible(true);
+      router.setParams({ compose: undefined } as any);
+    }
+  }, [params.compose, router]);
+
+  useEffect(() => {
+    if (noteComposerVisible) void hydrateSavedNoteDraft();
+  }, [hydrateSavedNoteDraft, noteComposerVisible]);
+
+  useEffect(() => {
+    if (!gifPickerVisible) return;
+    const timer = setTimeout(() => {
+      void loadGifs(gifQuery);
+    }, 220);
+    return () => clearTimeout(timer);
+  }, [gifPickerVisible, gifQuery, loadGifs]);
+
+  useEffect(() => {
+    if (!searchVisible) return;
+    const query = searchQuery.trim();
+    if (query.length < 2) {
+      setSearchResults([]);
+      setSearchLoading(false);
+      return;
+    }
+    setSearchLoading(true);
+    const timer = setTimeout(async () => {
+      try {
+        const response = await api.get(`/users/search/${encodeURIComponent(query)}`);
+        const people = Array.isArray(response.data) ? response.data : [];
+        setSearchResults(people.filter((person: UserSearchResult) => person.id && person.id !== user?.id));
+      } catch {
+        setSearchResults([]);
+      } finally {
+        setSearchLoading(false);
+      }
+    }, 240);
+    return () => clearTimeout(timer);
+  }, [searchQuery, searchVisible, user?.id]);
+
+  const AvatarCircle = ({
+    label,
+    ring,
+    uri,
+  }: {
+    label: string;
+    ring?: boolean;
+    uri?: string;
+  }) => (
+    <View style={[s.avatarRing, ring && s.avatarRingActive]}>
+      {uri ? (
+        <Image source={{ uri }} style={s.avatarImage} />
+      ) : (
+        <View style={s.avatarFallback}>
+          <Text style={s.avatarInitial}>{label.slice(0, 1).toUpperCase()}</Text>
+        </View>
+      )}
+    </View>
+  );
+
+  const submitNote = useCallback(async () => {
+    const body = noteDraft.trim();
+    if ((body.length < 2 && !notePhoto) || notePosting) return;
+    setNotePosting(true);
+    setNoteError('');
+    try {
+      let mediaUrl = '';
+      if (notePhoto?.uri && /^https?:\/\//i.test(notePhoto.uri)) {
+        mediaUrl = notePhoto.uri;
+      } else if (notePhoto?.base64) {
+        const dataUri = notePhoto.base64.startsWith('data:')
+          ? notePhoto.base64
+          : `data:image/jpeg;base64,${notePhoto.base64}`;
+        const uploaded = await uploadImageWithBackup(dataUri, notePhoto.fileName || 'note-photo.jpg');
+        mediaUrl = uploaded.url;
+      }
+      const response = await api.post('/notes', {
+        body,
+        note_type: 'thought',
+        mood: 'soft',
+        color: '#F4EBDD',
+        media_url: mediaUrl,
+      });
+      if (response.data?.id) setNotes((current) => [response.data, ...current]);
+      setNoteDraft('');
+      setNotePhoto(null);
+      setDraftSavedAt(null);
+      await AsyncStorage.removeItem(noteDraftKey(user?.id)).catch(() => undefined);
+      setNoteComposerVisible(false);
+    } catch (error: any) {
+      setNoteError(error?.response?.data?.detail || 'Could not post note. Try again.');
+    } finally {
+      setNotePosting(false);
+    }
+  }, [noteDraft, notePhoto, notePosting, user?.id]);
+
+  const pickNotePhoto = useCallback(async () => {
+    try {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission needed', 'Please allow access to your photo library.');
         return;
       }
-      await Audio.setAudioModeAsync({ playsInSilentModeIOS: true }).catch(() => undefined);
-      const { sound } = await Audio.Sound.createAsync(
-        { uri: streamTrack.stream_url },
-        { shouldPlay: true, volume: 1 }
-      );
-      sound.setOnPlaybackStatusUpdate((status: any) => {
-        if (status?.didJustFinish) void stopAudiusPreview();
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsMultipleSelection: false,
+        quality: NOTE_IMAGE_PICKER_QUALITY,
+        base64: true,
+        selectionLimit: 1,
+        preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Current,
       });
-      audiusSoundRef.current = sound;
-      setAudiusPlayingId(trackId);
-    } catch (error: any) {
-      Alert.alert('Playback failed', error?.response?.data?.detail || error?.message || 'Could not play this Audius track.');
-    } finally {
-      setAudiusLoadingId('');
-    }
-  }, [audiusPlayingId, stopAudiusPreview]);
-
-  const toggleAudiusFavorite = useCallback(async (track: AudiusTrack) => {
-    try {
-      const result = await toggleFavoriteAudiusTrack(track);
-      setAudiusFavorites(result.favorites);
-    } catch (error: any) {
-      Alert.alert('Could not save sound', error?.response?.data?.detail || 'Try again in a moment.');
+      if (result.canceled || !result.assets?.[0]) return;
+      const asset = result.assets[0];
+      setNotePhoto({
+        uri: asset.uri,
+        base64: asset.base64 || undefined,
+        fileName: asset.fileName || 'note-photo.jpg',
+      });
+      setDraftSavedAt(null);
+    } catch {
+      Alert.alert('Photo failed', 'Please try selecting the photo again.');
     }
   }, []);
 
-  const handleUseAudiusSound = useCallback(async (track: AudiusTrack) => {
-    try {
-      const trackId = track.track_id || track.id;
-      const streamTrack = track.stream_url ? track : await getAudiusTrackStream(trackId);
-      router.push({
-        pathname: '/create-post',
-        params: {
-          audio_provider: 'audius',
-          audio_track_id: streamTrack.track_id || streamTrack.id,
-          audio_title: streamTrack.title,
-          audio_artist: streamTrack.artist,
-          audio_artwork_url: streamTrack.artwork_url,
-          audio_stream_url: streamTrack.stream_url || '',
-          audio_start_time: '0',
-          audio_duration: '15',
-        },
-      } as any);
-    } catch (error: any) {
-      Alert.alert('Could not use sound', error?.response?.data?.detail || 'Try another Audius track.');
+  const openNoteComposer = useCallback(() => {
+    if (!user?.id) {
+      router.push('/login' as any);
+      return;
     }
+    setNoteError('');
+    setNoteComposerVisible(true);
+  }, [router, user]);
+
+  const openCreateChooser = useCallback(() => {
+    if (!requireVerifiedPhone(user, router, 'create posts')) return;
+    setPostChooserVisible(true);
+  }, [router, user]);
+
+  const chooseStandardPost = useCallback(() => {
+    setPostChooserVisible(false);
+    router.push('/create-post' as any);
   }, [router]);
 
-  useEffect(() => {
-    let mounted = true;
-    async function bootstrap() {
-      setLoading(true);
-      await Promise.all([loadStatusGroups(), loadAudiusDiscovery()]);
-      if (mounted) setLoading(false);
-    }
-    bootstrap();
-    return () => { mounted = false; };
-  }, [loadStatusGroups, loadAudiusDiscovery]);
-
-  useEffect(() => {
-    const activeCategory = RECOMMEND_PAGE_IDS.has(tab) ? tab : recommendCategory;
-    if (!RECOMMEND_PAGE_IDS.has(activeCategory)) return;
-    if (activeCategory === 'music') {
-      loadAudiusDiscovery();
-    } else if (activeCategory === 'notes') {
-      loadNotePosts();
-    } else {
-      loadRecommendations(activeCategory);
-    }
-  }, [loadAudiusDiscovery, loadNotePosts, loadRecommendations, recommendCategory, tab]);
-
-  const onRefresh = useCallback(async () => {
-    setRefreshing(true);
-    const activeCategory = RECOMMEND_PAGE_IDS.has(tab) ? tab : recommendCategory;
-    await Promise.all([
-      loadStatusGroups(),
-      activeCategory === 'music'
-        ? loadAudiusDiscovery()
-        : activeCategory === 'notes'
-          ? loadNotePosts()
-          : RECOMMEND_PAGE_IDS.has(activeCategory)
-            ? loadRecommendations(activeCategory)
-            : Promise.resolve(),
-    ]);
-    setRefreshing(false);
-  }, [loadAudiusDiscovery, loadNotePosts, loadRecommendations, loadStatusGroups, recommendCategory, tab]);
-
-  const renderRecommendationCard = (item: Recommendation, index: number) => {
-    const tall = index % 5 === 0 || index % 5 === 3;
-    const bg = recommendationCardColor(item, index);
-    return (
-      <TouchableOpacity
-        key={item.id}
-        style={[s.recommendCard, { minHeight: tall ? 228 : 184, backgroundColor: bg }]}
-        activeOpacity={0.88}
-        onPress={() => router.push(`/recommendation/${item.id}` as any)}
-      >
-        {item.thumbnail_url ? (
-          <Image source={{ uri: item.thumbnail_url }} style={s.recommendCardImage} resizeMode="cover" />
-        ) : null}
-        <View style={[s.recommendCardShade, item.thumbnail_url ? s.recommendCardShadeOnImage : null]} />
-        <View style={s.recommendCardCopy}>
-          <Text style={[s.recommendSmall, item.thumbnail_url && s.recommendTextOnImage]} numberOfLines={1}>
-            {recommendationProviderLabel(item)}
-          </Text>
-          <Text style={[s.recommendCardTitle, item.thumbnail_url && s.recommendTextOnImage]} numberOfLines={3}>
-            {item.title}
-          </Text>
-          <Text style={[s.recommendCardMeta, item.thumbnail_url && s.recommendTextOnImage]} numberOfLines={1}>
-            {recommendationAuthor(item)}
-          </Text>
-        </View>
-        <View style={s.recommendReadMore}>
-          <Text style={[s.recommendReadText, item.thumbnail_url && s.recommendReadTextOnImage]}>READ MORE</Text>
-          <Ionicons name="arrow-forward" size={12} color={item.thumbnail_url ? '#FFFFFF' : '#111111'} />
-        </View>
-      </TouchableOpacity>
-    );
-  };
-
-  const renderAudiusTrackCard = (track: AudiusTrack, index: number) => {
-    const trackId = track.track_id || track.id;
-    const favorite = audiusFavorites.some((item) => (item.track_id || item.id) === trackId);
-    const playing = audiusPlayingId === trackId;
-    const loadingTrack = audiusLoadingId === trackId;
-    return (
-      <TouchableOpacity
-        key={trackId || `${track.title}-${index}`}
-        style={s.audiusCard}
-        activeOpacity={0.9}
-        onPress={() => router.push({
-          pathname: '/music/[id]',
-          params: {
-            id: trackId,
-            title: track.title,
-            artist: track.artist,
-            artwork: track.artwork_url,
-            duration: String(track.duration || 0),
-          },
-        } as any)}
-      >
-        <View style={s.audiusArtworkWrap}>
-          {track.artwork_url ? (
-            <Image source={{ uri: track.artwork_url }} style={s.audiusArtwork} resizeMode="cover" />
-          ) : (
-            <View style={s.audiusArtworkFallback}>
-              <Ionicons name="musical-notes-outline" size={34} color="#111111" />
-            </View>
-          )}
-          <TouchableOpacity style={s.audiusPlayButton} onPress={() => playAudiusTrack(track)} activeOpacity={0.86}>
-            {loadingTrack ? (
-              <ActivityIndicator size="small" color="#111111" />
-            ) : (
-              <Ionicons name={playing ? 'pause' : 'play'} size={18} color="#111111" />
-            )}
-          </TouchableOpacity>
-        </View>
-        <View style={s.audiusCopy}>
-          <View style={s.audiusMetaRow}>
-            <Text style={s.audiusSource}>AUDIUS</Text>
-            <Text style={s.audiusDot}>•</Text>
-            <Text style={s.audiusDuration}>{formatDuration(track.duration)}</Text>
-          </View>
-          <Text style={s.audiusTitle} numberOfLines={2}>{track.title}</Text>
-          <Text style={s.audiusArtist} numberOfLines={1}>{track.artist}</Text>
-          <View style={s.audiusActions}>
-            <TouchableOpacity style={s.audiusPrimaryAction} onPress={() => handleUseAudiusSound(track)} activeOpacity={0.86}>
-              <Ionicons name="add-circle-outline" size={16} color="#111111" />
-              <Text style={s.audiusPrimaryActionText}>Use sound</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={[s.audiusIconAction, favorite && s.audiusIconActionOn]} onPress={() => toggleAudiusFavorite(track)} activeOpacity={0.82}>
-              <Ionicons name={favorite ? 'bookmark' : 'bookmark-outline'} size={17} color="#111111" />
-            </TouchableOpacity>
-          </View>
-        </View>
-      </TouchableOpacity>
-    );
-  };
-
-  const renderRecommendTab = () => {
-    const activeCategory = RECOMMEND_PAGE_IDS.has(tab) ? tab : recommendCategory;
-    const directPage = RECOMMEND_PAGE_IDS.has(tab);
-    const left = recommendations.filter((_, index) => index % 2 === 0);
-    const right = recommendations.filter((_, index) => index % 2 === 1);
-    const isMusicPage = activeCategory === 'music';
-    const isNotesPage = activeCategory === 'notes';
-    const showCreate = isNotesPage;
-    const createRoute = isNotesPage ? '/create-note' : '/create-recommendation';
-    const brandIcon = isMusicPage ? 'radio-outline' : isNotesPage ? 'moon-outline' : 'albums-outline';
-    const brandText = isMusicPage ? 'AUDIUS DISCOVERY' : isNotesPage ? 'NOTES' : 'FLAMES RECS';
-
-    return (
-      <View style={s.recommendRoot}>
-        <View style={s.recommendTopBar}>
-          <View style={s.recommendBrandPill}>
-            <Ionicons name={brandIcon as any} size={17} color="#111111" />
-            <Text style={s.recommendBrandText}>{brandText}</Text>
-          </View>
-          {showCreate ? (
-            <TouchableOpacity style={s.recommendMenuBtn} onPress={() => router.push(createRoute as any)}>
-              <Ionicons name="add" size={24} color="#111111" />
-            </TouchableOpacity>
-          ) : <View style={s.recommendMenuSpacer} />}
-        </View>
-
-        {!directPage ? (
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.recommendCategoryRail}>
-            {RECOMMEND_CATEGORIES.map((category, index) => {
-              const active = category.id === activeCategory;
-              return (
-                <TouchableOpacity
-                  key={category.id}
-                  style={[
-                    s.recommendCategoryPill,
-                    { backgroundColor: ['#E7CFB7', '#D87A86', '#D7EFF7', '#DDF0CA', '#F2DFBE', '#E8E2F3', '#F6D3C9'][index % 7] },
-                    active && s.recommendCategoryPillOn,
-                  ]}
-                  onPress={() => setRecommendCategory(category.id)}
-                >
-                  <Text style={[s.recommendCategoryText, active && s.recommendCategoryTextOn]}>{category.label}</Text>
-                </TouchableOpacity>
-              );
-            })}
-          </ScrollView>
-        ) : null}
-
-        {(!isMusicPage && !isNotesPage) ? (
-          <TouchableOpacity style={s.submitRecommendButton} activeOpacity={0.85} onPress={() => router.push('/create-recommendation' as any)}>
-            <View>
-              <Text style={s.submitRecommendTitle}>Submit recommend</Text>
-              <Text style={s.submitRecommendSub}>Share a note, music find, video, podcast, or link.</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={22} color="#111111" />
-          </TouchableOpacity>
-        ) : null}
-
-        {isMusicPage ? (
-          <>
-            <View style={s.audiusHero}>
-              <Text style={s.audiusHeroTitle}>Underground sounds</Text>
-              <Text style={s.audiusHeroText}>Discover independent artists and tracks from Audius. Search a sound, preview it, save it, or use it in a post.</Text>
-              <View style={s.audiusSearchBox}>
-                <Ionicons name="search" size={18} color="#777777" />
-                <TextInput
-                  value={audiusQuery}
-                  onChangeText={(text) => {
-                    audiusQueryRef.current = text;
-                    setAudiusQuery(text);
-                  }}
-                  onSubmitEditing={() => loadAudiusDiscovery()}
-                  placeholder="Search artists, songs, underground..."
-                  placeholderTextColor="#8A8A8A"
-                  style={s.audiusSearchInput}
-                  returnKeyType="search"
-                />
-                {audiusQuery.trim() ? (
-                  <TouchableOpacity
-                    onPress={() => {
-                      audiusQueryRef.current = '';
-                      setAudiusQuery('');
-                      loadAudiusDiscovery('');
-                    }}
-                    style={s.audiusSearchClear}
-                  >
-                    <Ionicons name="close" size={16} color="#111111" />
-                  </TouchableOpacity>
-                ) : null}
-              </View>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.audiusChipRail}>
-                {['underground', 'indie', 'lofi', 'afrobeats', 'jersey club', 'bedroom pop'].map((query) => (
-                  <TouchableOpacity
-                    key={query}
-                    style={s.audiusChip}
-                    onPress={() => {
-                      audiusQueryRef.current = query;
-                      setAudiusQuery(query);
-                      loadAudiusDiscovery(query);
-                    }}
-                  >
-                    <Text style={s.audiusChipText}>{query}</Text>
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
-            </View>
-            {audiusLoading && audiusTracks.length === 0 ? (
-              <View style={s.recommendLoading}>
-                <ActivityIndicator color="#111111" />
-              </View>
-            ) : audiusTracks.length > 0 ? (
-              <View style={s.audiusList}>
-                {audiusTracks.map(renderAudiusTrackCard)}
-              </View>
-            ) : (
-              <View style={s.recommendEmpty}>
-                <Ionicons name="radio-outline" size={34} color="#888888" />
-                <Text style={s.recommendEmptyTitle}>No Audius tracks found</Text>
-                <Text style={s.recommendEmptyText}>Try another artist, genre, or underground sound keyword.</Text>
-              </View>
-            )}
-          </>
-        ) : isNotesPage ? (
-          notesLoading && notes.length === 0 ? (
-            <View style={s.recommendLoading}><ActivityIndicator color="#111111" /></View>
-          ) : notes.length > 0 ? (
-            <View style={s.noteList}>
-              {notes.map((note) => (
-                <NoteCard
-                  key={note.id}
-                  note={note}
-                  onChanged={(next) => setNotes((current) => current.map((item) => item.id === next.id ? next : item))}
-                />
-              ))}
-            </View>
-          ) : (
-            <View style={s.recommendEmpty}>
-              <Ionicons name="moon-outline" size={34} color="#888888" />
-              <Text style={s.recommendEmptyTitle}>No notes yet</Text>
-              <Text style={s.recommendEmptyText}>Share a thought, confession, question, mood, or mini journal post.</Text>
-              <TouchableOpacity style={s.recommendEmptyButton} onPress={() => router.push('/create-note' as any)}>
-                <Text style={s.recommendEmptyButtonText}>Write note</Text>
-              </TouchableOpacity>
-            </View>
-          )
-        ) : recommendLoading && recommendations.length === 0 ? (
-          <View style={s.recommendLoading}>
-            <ActivityIndicator color="#111111" />
-          </View>
-        ) : recommendations.length > 0 ? (
-          <View style={s.recommendGrid}>
-            <View style={s.recommendColumn}>
-              {left.map((item, index) => renderRecommendationCard(item, index * 2))}
-            </View>
-            <View style={s.recommendColumn}>
-              {right.map((item, index) => renderRecommendationCard(item, index * 2 + 1))}
-            </View>
-          </View>
-        ) : (
-          <View style={s.recommendEmpty}>
-            <Ionicons name="sparkles-outline" size={34} color="#888888" />
-            <Text style={s.recommendEmptyTitle}>No recommendations yet</Text>
-            <Text style={s.recommendEmptyText}>Be the first to share something worth watching, reading, or listening to.</Text>
-            <TouchableOpacity style={s.recommendEmptyButton} onPress={() => router.push('/create-recommendation' as any)}>
-              <Text style={s.recommendEmptyButtonText}>Add one</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-      </View>
-    );
-  };
+  const chooseNotePost = useCallback(() => {
+    setPostChooserVisible(false);
+    openNoteComposer();
+  }, [openNoteComposer]);
 
   return (
     <View style={s.root}>
-      {/* Header */}
-      <View style={[s.header, { paddingTop: insets.top + 4 }]}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.tabs}>
-          {CITY_TABS.map(c => (
-            <TouchableOpacity key={c.id} onPress={() => setTab(c.id)}>
-              <Text style={[s.tabTx, tab === c.id && s.tabTxOn]}>{c.label.toUpperCase()}</Text>
-            </TouchableOpacity>
-          ))}
+      <View style={[s.storyPanel, { marginTop: insets.top + 8 }]}>
+        <View style={s.storyHeader}>
+          <Text style={s.sectionTitle}>Stories</Text>
+          <TouchableOpacity
+            style={s.storySearchButton}
+            activeOpacity={0.84}
+            accessibilityLabel="Search users"
+            hitSlop={hitSlop}
+            onPress={() => setSearchVisible(true)}
+          >
+            <Ionicons name="search" size={19} color={colors.textPrimary} />
+          </TouchableOpacity>
+        </View>
+
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          bounces={false}
+          alwaysBounceHorizontal={false}
+          overScrollMode="never"
+          contentContainerStyle={s.storyRail}
+        >
+          <TouchableOpacity
+            style={s.storyItem}
+            activeOpacity={0.86}
+            onPress={() => {
+              if (!requireVerifiedPhone(user, router, 'share stories')) return;
+              router.push('/create-status' as any);
+            }}
+          >
+            <View>
+              <AvatarCircle label={user?.full_name || user?.username || 'Y'} uri={user?.profile_image} />
+              <View style={s.addBadge}>
+                <Ionicons name="add" size={15} color="#FFFFFF" />
+              </View>
+            </View>
+            <Text style={s.storyName} numberOfLines={1}>{t('yourStory')}</Text>
+          </TouchableOpacity>
+
+          {storyGroups.map((group) => {
+            const name = displayName(group);
+            return (
+              <TouchableOpacity
+                key={group.user_id}
+                style={s.storyItem}
+                activeOpacity={0.86}
+                onPress={() => router.push({ pathname: '/story-viewer', params: { userId: group.user_id } } as any)}
+              >
+                <AvatarCircle label={name} uri={group.user_profile_image} ring={group.has_unviewed} />
+                <Text style={s.storyName} numberOfLines={1}>{name}</Text>
+              </TouchableOpacity>
+            );
+          })}
         </ScrollView>
-        <TouchableOpacity style={s.searchIcon}><Ionicons name="search" size={18} color="#1A1A1A" /></TouchableOpacity>
       </View>
 
-      <ScrollView
-        showsVerticalScrollIndicator={false}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#1A1A1A" />}
-        contentContainerStyle={{ paddingBottom: 100 }}
-      >
+      <View style={s.notesPanel}>
+        <View style={s.notesHeader}>
+          <View>
+            <Text style={s.sectionTitle}>Notes</Text>
+          </View>
+          <TouchableOpacity
+            style={s.notesCreateButton}
+            activeOpacity={0.86}
+            onPress={chooseNotePost}
+            accessibilityLabel="Create note"
+          >
+            <Ionicons name="add" size={18} color={colors.textInverse} />
+          </TouchableOpacity>
+        </View>
+
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          bounces={false}
+          alwaysBounceHorizontal={false}
+          overScrollMode="never"
+          decelerationRate="fast"
+          snapToAlignment="start"
+          snapToInterval={noteCardWidth + spacing.gutter}
+          contentContainerStyle={s.notesRail}
+        >
+          <TouchableOpacity
+            style={[s.noteLargeCard, s.noteCreateLargeCard, { width: noteCardWidth, height: noteCardHeight }]}
+            activeOpacity={0.86}
+            onPress={openNoteComposer}
+          >
+            <View style={s.noteCreateProfile}>
+              {user?.profile_image ? (
+                <Image source={{ uri: user.profile_image }} style={s.noteLargeAvatar} />
+              ) : (
+                <View style={s.noteLargeAvatarFallback}>
+                  <Text style={s.noteLargeAvatarText}>{String(user?.full_name || user?.username || 'Y').slice(0, 1).toUpperCase()}</Text>
+                </View>
+              )}
+              <View style={s.noteCreateCopy}>
+                <Text style={s.noteLargeAuthor} numberOfLines={1}>{user?.full_name || user?.username || 'Your note'}</Text>
+                <Text style={s.noteLargeMeta}>Photo or text</Text>
+              </View>
+            </View>
+            <View style={s.noteCreateCenter}>
+              <View style={s.noteCreateIcon}>
+                <Ionicons name="add" size={26} color={colors.textInverse} />
+              </View>
+              <Text style={s.noteCreateTitle}>Create a note</Text>
+              <Text style={s.noteCreateText}>Add a photo, write text, or both.</Text>
+            </View>
+          </TouchableOpacity>
+
+          {notesLoading ? (
+            [0, 1, 2].map((item) => (
+              <View key={`note-loading-${item}`} style={[s.noteSkeleton, { width: noteCardWidth, height: noteCardHeight }]}>
+                <View style={s.noteSkeletonLine} />
+                <View style={[s.noteSkeletonLine, s.noteSkeletonShort]} />
+              </View>
+            ))
+          ) : notes.length ? (
+            notes.map((note) => {
+              const author = noteAuthor(note);
+              const hasPhoto = !!note.media_url;
+              const authorId = String(note.user?.id || '');
+              const noteAuthorFollowing = !!(followedUserFlags[authorId] ?? note.user?.is_following ?? note.user?.following ?? note.user?.followed);
+              const canFollowAuthor = !!authorId && authorId !== user?.id;
+              return (
+                <TouchableOpacity
+                  key={note.id}
+                  style={[s.noteLargeCard, { width: noteCardWidth, height: noteCardHeight }]}
+                  activeOpacity={0.88}
+                  onPress={() => openNoteDetail(note)}
+                >
+                  <View style={s.noteThreadHeader}>
+                    <View style={s.noteAvatarWrap}>
+                      {note.user?.profile_image ? (
+                        <Image source={{ uri: note.user.profile_image }} style={s.noteLargeAvatar} />
+                      ) : (
+                        <View style={s.noteLargeAvatarFallback}>
+                          <Text style={s.noteLargeAvatarText}>{author.slice(0, 1).toUpperCase()}</Text>
+                        </View>
+                      )}
+                      {canFollowAuthor ? (
+                        <TouchableOpacity
+                          style={[s.noteFollowBadge, noteAuthorFollowing && s.noteFollowBadgeOn]}
+                          activeOpacity={0.86}
+                          onPress={(event) => toggleNoteAuthorFollow(note, event)}
+                          accessibilityLabel={noteAuthorFollowing ? 'Unfollow note author' : 'Follow note author'}
+                        >
+                          <Ionicons name={noteAuthorFollowing ? 'checkmark' : 'add'} size={12} color="#FFFFFF" />
+                        </TouchableOpacity>
+                      ) : null}
+                    </View>
+                    <View style={s.noteThreadAuthorCopy}>
+                      <View style={s.noteThreadNameRow}>
+                        <Text style={s.noteThreadAuthor} numberOfLines={1}>{author}</Text>
+                        <View style={s.noteVerifiedBadge}>
+                          <Ionicons name="checkmark" size={12} color="#FFFFFF" />
+                        </View>
+                        <Text style={s.noteThreadTime}>{noteTime(note.created_at)}</Text>
+                      </View>
+                    </View>
+                    <TouchableOpacity
+                      style={s.noteMenuButton}
+                      activeOpacity={0.8}
+                      onPress={(event) => {
+                        event.stopPropagation();
+                        openNoteMenu(note);
+                      }}
+                      accessibilityLabel="Open note options"
+                    >
+                      <Ionicons name="ellipsis-horizontal" size={24} color={colors.textHint} />
+                    </TouchableOpacity>
+                  </View>
+
+                  <Text style={[s.noteThreadBody, !hasPhoto && s.noteThreadBodyTextOnly]} numberOfLines={hasPhoto ? 2 : 6}>
+                    {note.body || 'New note'}
+                    {note.body && note.body.length > 98 ? <Text style={s.noteThreadMore}> more</Text> : null}
+                  </Text>
+
+                  {hasPhoto ? (
+                    <Image
+                      source={{ uri: note.media_url }}
+                      style={[s.noteThreadImage, { height: Math.round(noteCardWidth * (isCompactScreen ? 0.58 : 0.62)) }]}
+                      resizeMode="cover"
+                    />
+                  ) : null}
+
+                  <View style={s.noteThreadActions}>
+                    <TouchableOpacity
+                      style={s.noteThreadAction}
+                      activeOpacity={0.76}
+                      onPress={(event) => {
+                        event.stopPropagation();
+                        void toggleNoteReaction(note);
+                      }}
+                      accessibilityLabel="Like note"
+                    >
+                      <Ionicons
+                        name={note.reacted ? 'heart' : 'heart-outline'}
+                        size={21}
+                        color={note.reacted ? colors.accentPrimary : colors.textSecondary}
+                      />
+                      <Text style={s.noteThreadActionText}>{Number(note.reactions_count || 0)}</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={s.noteThreadAction}
+                      activeOpacity={0.76}
+                      onPress={(event) => {
+                        event.stopPropagation();
+                        openNoteDetail(note);
+                      }}
+                      accessibilityLabel="Open note comments"
+                    >
+                      <Ionicons name="chatbubble-outline" size={20} color={colors.textSecondary} />
+                      <Text style={s.noteThreadActionText}>{Number(note.comments_count || 0)}</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={s.noteThreadAction}
+                      activeOpacity={0.76}
+                      onPress={(event) => {
+                        event.stopPropagation();
+                        void shareNote(note);
+                      }}
+                      accessibilityLabel="Share note"
+                    >
+                      <Ionicons name="paper-plane-outline" size={20} color={colors.textSecondary} />
+                      <Text style={s.noteThreadActionText}>{Number(note.shares_count || 0)}</Text>
+                    </TouchableOpacity>
+                  </View>
+                </TouchableOpacity>
+              );
+            })
+          ) : (
+            <View style={[s.noteEmptyCard, { width: noteCardWidth, height: noteCardHeight }]}>
+              <Text style={s.noteEmptyTitle}>No notes yet</Text>
+              <Text style={s.noteEmptyText}>Be the first to start the thread.</Text>
+            </View>
+          )}
+        </ScrollView>
+      </View>
+
+      <View style={s.body}>
         {loading ? (
-          <View style={s.center}><ActivityIndicator size="large" color="#1A1A1A" /></View>
-        ) : RECOMMEND_PAGE_IDS.has(tab) ? (
-          renderRecommendTab()
-        ) : (
-          <>
-            {/* Search */}
-            <View style={s.searchWrap}>
-              <View style={s.searchBar}>
-                <Ionicons name="search" size={18} color="#999" />
-                <Text style={s.searchPh}>{t('searchPrompt')}</Text>
+          <View style={s.loadingCard}>
+            <View style={s.loadingAvatar} />
+            <View style={s.loadingLines}>
+              <View style={s.loadingLine} />
+              <View style={[s.loadingLine, s.loadingLineShort]} />
+            </View>
+          </View>
+        ) : storyGroups.length === 0 ? (
+          <View style={s.empty}>
+            <View style={s.emptyIcon}>
+              <Ionicons name="radio-outline" size={34} color={colors.textHint} />
+            </View>
+            <Text style={s.emptyTitle}>No stories yet</Text>
+            <Text style={s.emptyText}>Stories from other users will show here when they post.</Text>
+          </View>
+        ) : null}
+      </View>
+
+      <Modal visible={searchVisible} animationType="slide" onRequestClose={() => setSearchVisible(false)}>
+        <View style={[s.searchRoot, { paddingTop: insets.top + 8 }]}>
+          <View style={s.searchHeader}>
+            <TouchableOpacity
+              style={s.searchClose}
+              onPress={() => {
+                setSearchVisible(false);
+                setSearchQuery('');
+                setSearchResults([]);
+              }}
+              activeOpacity={0.84}
+            >
+              <Ionicons name="chevron-back" size={30} color={colors.textPrimary} />
+            </TouchableOpacity>
+            <Text style={s.searchTitle}>Search users</Text>
+            <View style={s.searchClose} />
+          </View>
+          <View style={s.searchInputWrap}>
+            <Ionicons name="search" size={19} color={colors.textHint} />
+            <TextInput
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+              placeholder="Search username or name"
+              placeholderTextColor={colors.textHint}
+              style={s.searchInput}
+              autoCapitalize="none"
+              autoCorrect={false}
+              autoFocus
+            />
+          </View>
+          {searchLoading ? (
+            <View style={s.searchState}>
+              <ActivityIndicator color={colors.textPrimary} />
+            </View>
+          ) : searchQuery.trim().length < 2 ? (
+            <View style={s.searchState}>
+              <Text style={s.searchStateTitle}>Find people</Text>
+              <Text style={s.searchStateText}>Type at least two letters to search users.</Text>
+            </View>
+          ) : searchResults.length ? (
+            <ScrollView style={s.searchList} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+              {searchResults.map((person) => {
+                const name = person.full_name || person.username || 'User';
+                return (
+                  <TouchableOpacity
+                    key={person.id}
+                    style={s.userRow}
+                    activeOpacity={0.86}
+                    onPress={() => {
+                      setSearchVisible(false);
+                      setSearchQuery('');
+                      setSearchResults([]);
+                      router.push(`/user/${person.id}` as any);
+                    }}
+                  >
+                    {person.profile_image ? (
+                      <Image source={{ uri: person.profile_image }} style={s.userAvatar} />
+                    ) : (
+                      <View style={s.userAvatarFallback}>
+                        <Text style={s.userAvatarText}>{name.slice(0, 1).toUpperCase()}</Text>
+                      </View>
+                    )}
+                    <View style={s.userInfo}>
+                      <Text style={s.userName} numberOfLines={1}>{name}</Text>
+                      <Text style={s.userHandle} numberOfLines={1}>@{person.username || 'flames'}</Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={20} color={colors.textHint} />
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          ) : (
+            <View style={s.searchState}>
+              <Text style={s.searchStateTitle}>No users found</Text>
+              <Text style={s.searchStateText}>Try another name or username.</Text>
+            </View>
+          )}
+        </View>
+      </Modal>
+
+      <Modal visible={commentSheetVisible} animationType="slide" onRequestClose={() => setCommentSheetVisible(false)}>
+        <View style={[s.commentRoot, { paddingTop: insets.top + 8 }]}>
+          <View style={s.commentHeader}>
+            <TouchableOpacity
+              style={s.commentClose}
+              onPress={() => setCommentSheetVisible(false)}
+              activeOpacity={0.84}
+              accessibilityLabel="Close comments"
+            >
+              <Ionicons name="chevron-down" size={28} color={colors.textPrimary} />
+            </TouchableOpacity>
+            <Text style={s.commentTitle}>Comments</Text>
+            <View style={s.commentClose} />
+          </View>
+          <ScrollView
+            style={s.commentList}
+            contentContainerStyle={s.commentListContent}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
+            {noteCommentLoading ? (
+              <View style={s.commentState}>
+                <ActivityIndicator color={colors.textPrimary} />
+              </View>
+            ) : noteComments.length ? (
+              noteComments.map((comment) => {
+                const name = comment.user?.full_name || comment.user?.username || 'User';
+                return (
+                  <View key={comment.id} style={s.commentRow}>
+                    {comment.user?.profile_image ? (
+                      <Image source={{ uri: comment.user.profile_image }} style={s.commentAvatar} />
+                    ) : (
+                      <View style={s.commentAvatarFallback}>
+                        <Text style={s.commentAvatarText}>{name.slice(0, 1).toUpperCase()}</Text>
+                      </View>
+                    )}
+                    <View style={s.commentBubble}>
+                      <Text style={s.commentName} numberOfLines={1}>{name}</Text>
+                      <Text style={s.commentBody}>{comment.body}</Text>
+                    </View>
+                  </View>
+                );
+              })
+            ) : (
+              <View style={s.commentState}>
+                <Text style={s.commentStateTitle}>No comments yet</Text>
+                <Text style={s.commentStateText}>Start the conversation.</Text>
+              </View>
+            )}
+          </ScrollView>
+          <View style={[s.commentInputBar, { paddingBottom: Math.max(insets.bottom, spacing.sm) }]}>
+            <TextInput
+              value={noteCommentDraft}
+              onChangeText={(value) => setNoteCommentDraft(value.slice(0, 500))}
+              placeholder="Add comment..."
+              placeholderTextColor={colors.textHint}
+              style={s.commentInput}
+              multiline
+              maxLength={500}
+            />
+            <TouchableOpacity
+              style={[s.commentSend, (!noteCommentDraft.trim() || noteCommentPosting) && s.commentSendDisabled]}
+              activeOpacity={0.86}
+              disabled={!noteCommentDraft.trim() || noteCommentPosting}
+              onPress={submitNoteComment}
+              accessibilityLabel="Post comment"
+            >
+              {noteCommentPosting ? (
+                <ActivityIndicator size="small" color={colors.textInverse} />
+              ) : (
+                <Ionicons name="arrow-up" size={24} color={colors.textInverse} />
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      <ReportReasonSheet
+        visible={!!reportTargetNote}
+        submitting={reportSubmitting}
+        onClose={() => {
+          if (!reportSubmitting) setReportTargetNote(null);
+        }}
+        onSelect={submitNoteReport}
+      />
+
+      <Modal visible={postChooserVisible} transparent animationType="fade" onRequestClose={() => setPostChooserVisible(false)}>
+        <Pressable style={s.postChooserOverlay} onPress={() => setPostChooserVisible(false)}>
+          <Pressable style={[s.postChooserSheet, { paddingBottom: Math.max(18, insets.bottom + 12) }]} onPress={() => {}}>
+            <View style={s.postChooserHandle} />
+            <Text style={s.postChooserTitle}>Create</Text>
+            <Text style={s.postChooserSub}>Choose what you want to share.</Text>
+            <View style={s.postChooserActions}>
+              <TouchableOpacity style={s.postChooserOption} onPress={chooseStandardPost} activeOpacity={0.86}>
+                <View style={s.postChooserIcon}>
+                  <Ionicons name="images-outline" size={22} color={colors.accentPrimary} />
+                </View>
+                <View style={s.postChooserCopy}>
+                  <Text style={s.postChooserLabel}>Post</Text>
+                  <Text style={s.postChooserHint}>Photo, video, carousel, place, or caption.</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={colors.textHint} />
+              </TouchableOpacity>
+              <TouchableOpacity style={s.postChooserOption} onPress={chooseNotePost} activeOpacity={0.86}>
+                <View style={s.postChooserIcon}>
+                  <Ionicons name="chatbox-ellipses-outline" size={22} color={colors.accentPrimary} />
+                </View>
+                <View style={s.postChooserCopy}>
+                  <Text style={s.postChooserLabel}>Note</Text>
+                  <Text style={s.postChooserHint}>Short thought, photo note, or GIF note.</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={colors.textHint} />
+              </TouchableOpacity>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      <Modal visible={noteComposerVisible} animationType="slide" onRequestClose={() => setNoteComposerVisible(false)}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={[s.composerRoot, { paddingTop: insets.top }]}
+        >
+          <View style={s.threadComposerHeader}>
+            <TouchableOpacity
+              onPress={() => {
+                if (notePosting) return;
+                setNoteComposerVisible(false);
+                setNoteError('');
+              }}
+              activeOpacity={0.84}
+            >
+              <Text style={s.threadCancelText}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[s.threadSaveButton, (!noteDraft.trim() && !notePhoto) && s.threadSaveButtonDisabled]}
+              activeOpacity={0.84}
+              disabled={!noteDraft.trim() && !notePhoto}
+              onPress={saveNoteDraft}
+              accessibilityLabel="Save note draft"
+            >
+              <Text style={[s.threadSaveText, (!noteDraft.trim() && !notePhoto) && s.threadSaveTextDisabled]}>{draftSavedAt ? 'Saved' : 'Save'}</Text>
+            </TouchableOpacity>
+          </View>
+
+          <View style={s.threadComposerDivider} />
+
+          <View style={s.threadComposerContent}>
+            <View style={s.threadAvatarColumn}>
+              {user?.profile_image ? (
+                <Image source={{ uri: user.profile_image }} style={s.threadAvatar} />
+              ) : (
+                <View style={s.threadAvatarFallback}>
+                  <Text style={s.threadAvatarText}>{String(user?.full_name || user?.username || 'Y').slice(0, 1).toUpperCase()}</Text>
+                </View>
+              )}
+              <View style={s.threadVerticalLine} />
+              <View style={s.threadMiniAvatar}>
+                <Text style={s.threadMiniAvatarText}>{String(user?.full_name || user?.username || 'Y').slice(0, 1).toUpperCase()}</Text>
               </View>
             </View>
 
-            {/* Story statuses */}
-            <View style={s.peopleSection}>
-              <Text style={s.peopleSectionTitle}>Stories</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.peopleScroll}>
+            <View style={s.threadInputColumn}>
+              <View style={s.threadMetaRow}>
+                <Text style={s.threadUsername} numberOfLines={1}>{user?.username || user?.full_name || 'yourname'}</Text>
+              </View>
+
+              <TextInput
+                value={noteDraft}
+                onChangeText={(value) => {
+                  setNoteDraft(value.slice(0, 420));
+                  setDraftSavedAt(null);
+                  if (noteError) setNoteError('');
+                }}
+                placeholder="What's new?"
+                placeholderTextColor={colors.textHint}
+                style={s.threadInput}
+                multiline
+                autoFocus
+                textAlignVertical="top"
+                maxLength={420}
+              />
+
+              {notePhoto ? (
+                <View style={s.threadPhotoWrap}>
+                  <Image source={{ uri: notePhoto.uri }} style={s.threadPhotoPreview} resizeMode="cover" />
+                  <TouchableOpacity
+                    style={s.threadRemovePhoto}
+                    activeOpacity={0.84}
+                    onPress={() => {
+                      setNotePhoto(null);
+                      setDraftSavedAt(null);
+                    }}
+                  >
+                    <Ionicons name="close" size={14} color="#FFFFFF" />
+                  </TouchableOpacity>
+                </View>
+              ) : null}
+
+              <View style={s.threadToolRow}>
+                <TouchableOpacity style={s.threadToolButton} activeOpacity={0.72} onPress={pickNotePhoto}>
+                  <Ionicons name="image-outline" size={27} color={colors.textHint} />
+                </TouchableOpacity>
                 <TouchableOpacity
-                  key="your-story"
-                  style={s.personCard}
-                  activeOpacity={0.9}
+                  style={s.threadToolButton}
+                  activeOpacity={0.72}
                   onPress={() => {
-                    if (!requireVerifiedPhone(user, router, 'share stories')) return;
-                    router.push('/create-status' as any);
+                    Keyboard.dismiss();
+                    setGifPickerVisible((visible) => !visible);
+                    if (!gifPickerVisible && !gifResults.length) void loadGifs('');
                   }}
                 >
-                  <View style={s.yourStoryImageWrap}>
-                    {user?.profile_image ? (
-                      <Image source={{ uri: user.profile_image }} style={s.personImg} />
-                    ) : (
-                      <View style={[s.personImg, s.yourStoryFallback]}>
-                        <Text style={s.yourStoryInitial}>
-                          {(user?.full_name || user?.username || 'Y')[0].toUpperCase()}
-                        </Text>
-                      </View>
-                    )}
-                    <View style={s.yourStoryPlus}>
-                      <Ionicons name="add" size={16} color="#FFF" />
-                    </View>
-                  </View>
-                  <Text style={s.personName} numberOfLines={1}>{t('yourStory')}</Text>
-                  <Text style={s.personBio} numberOfLines={1}>{user?.username || user?.full_name || ''}</Text>
+                  <Text style={s.threadGifText}>GIF</Text>
                 </TouchableOpacity>
-                  {statusGroups.map((group: any) => (
-                    <TouchableOpacity
-                      key={group.user_id}
-                      style={s.personCard}
-                      activeOpacity={0.9}
-                      onPress={() => router.push({ pathname: '/story-viewer', params: { userId: group.user_id } } as any)}
-                    >
-                      <View style={[s.statusRing, group.has_unviewed && s.statusRingActive]}>
-                        {group.user_profile_image ? (
-                          <Image source={{ uri: group.user_profile_image }} style={s.personImg} />
-                        ) : (
-                          <View style={[s.personImg, { backgroundColor: '#F0F0F0', justifyContent: 'center', alignItems: 'center' }]}>
-                            <Text style={s.personInit}>{(group.user_full_name || group.user_username || 'U')[0]}</Text>
-                          </View>
-                        )}
-                      </View>
-                      <Text style={s.personName} numberOfLines={1}>{group.user_full_name || group.user_username || 'Story'}</Text>
-                      <Text style={s.personBio} numberOfLines={1}>
-                        {group.statuses?.length || 1} update{group.statuses?.length === 1 ? '' : 's'}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                  {statusGroups.length === 0 ? (
-                    <View style={s.emptyStoryCard}>
-                      <Ionicons name="sparkles-outline" size={22} color="#9B9B9B" />
-                      <Text style={s.emptyStoryText}>Public stories will appear here.</Text>
-                    </View>
-                  ) : null}
-              </ScrollView>
-            </View>
+              </View>
 
-          </>
-        )}
-      </ScrollView>
+              {gifPickerVisible ? (
+                <View style={s.inlineGifPanel}>
+                  <View style={s.inlineGifSearchWrap}>
+                    <Ionicons name="search" size={17} color={colors.textHint} />
+                    <TextInput
+                      value={gifQuery}
+                      onChangeText={setGifQuery}
+                      placeholder="Search GIF"
+                      placeholderTextColor={colors.textHint}
+                      style={s.inlineGifSearchInput}
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                    />
+                    <TouchableOpacity
+                      style={s.inlineGifClose}
+                      activeOpacity={0.8}
+                      onPress={() => setGifPickerVisible(false)}
+                      accessibilityLabel="Close GIF picker"
+                    >
+                      <Ionicons name="close" size={17} color={colors.textHint} />
+                    </TouchableOpacity>
+                  </View>
+                  {gifLoading ? (
+                    <View style={s.inlineGifState}>
+                      <ActivityIndicator color={colors.textPrimary} />
+                    </View>
+                  ) : (
+                    <ScrollView
+                      horizontal
+                      showsHorizontalScrollIndicator={false}
+                      keyboardShouldPersistTaps="handled"
+                      contentContainerStyle={s.inlineGifRail}
+                    >
+                      {gifResults.map((gif) => (
+                        <TouchableOpacity
+                          key={gif.id}
+                          style={s.inlineGifTile}
+                          activeOpacity={0.84}
+                          onPress={() => {
+                            setNotePhoto({ uri: gif.url, fileName: 'giphy.gif', isRemote: true });
+                            setDraftSavedAt(null);
+                            setGifPickerVisible(false);
+                          }}
+                        >
+                          <Image source={{ uri: gif.preview }} style={s.gifImage} resizeMode="cover" />
+                        </TouchableOpacity>
+                      ))}
+                      {!gifResults.length ? (
+                        <View style={s.inlineGifEmpty}>
+                          <Text style={s.inlineGifEmptyText}>No GIFs found</Text>
+                        </View>
+                      ) : null}
+                    </ScrollView>
+                  )}
+                </View>
+              ) : null}
+
+              {noteError ? <Text style={s.threadError}>{noteError}</Text> : null}
+            </View>
+          </View>
+
+          <View style={s.threadComposerFooter}>
+            <View style={s.threadFooterLeft}>
+              <TouchableOpacity style={s.threadReplyOptions} activeOpacity={0.8}>
+                <Ionicons name="options-outline" size={22} color={colors.textHint} />
+                <Text style={s.threadReplyText}>Reply options</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                accessibilityLabel="Hide keyboard"
+                hitSlop={hitSlop}
+                style={s.threadKeyboardButton}
+                activeOpacity={0.82}
+                onPress={Keyboard.dismiss}
+              >
+                <Ionicons name="chevron-down" size={20} color={colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+            <TouchableOpacity
+              style={[s.threadPostButton, (noteDraft.trim().length < 2 && !notePhoto) && s.threadPostButtonDisabled]}
+              activeOpacity={0.86}
+              disabled={(noteDraft.trim().length < 2 && !notePhoto) || notePosting}
+              onPress={submitNote}
+            >
+              <Text style={s.threadPostText}>{notePosting ? 'Posting' : 'Post'}</Text>
+            </TouchableOpacity>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </View>
   );
 }
 
 const s = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.white },
-  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingBottom: 10, gap: 12 },
-  tabs: { gap: 20, alignItems: 'center' },
-  tabTx: { fontSize: 13, fontWeight: '600', color: '#BBB', letterSpacing: 0.5 },
-  tabTxOn: { color: '#1A1A1A', fontWeight: '800', textDecorationLine: 'underline' },
-  searchIcon: { width: 38, height: 38, borderRadius: 19, backgroundColor: '#F0F0F0', justifyContent: 'center', alignItems: 'center' },
-
-  searchWrap: { paddingHorizontal: 16, paddingBottom: 16 },
-  searchBar: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#F5F5F5', borderRadius: 24, paddingHorizontal: 16, paddingVertical: 12 },
-  searchPh: { fontSize: 14, color: '#AAA' },
-
-  peopleSection: { paddingLeft: 16, marginBottom: 20 },
-  peopleSectionTitle: { fontSize: 18, fontWeight: '800', color: '#1A1A1A', marginBottom: 12 },
-  peopleScroll: { gap: 12, paddingRight: 16 },
-  personCard: { width: 130, alignItems: 'center' },
-  personImg: { width: 100, height: 100, borderRadius: 50 },
-  personInit: { fontSize: 28, fontWeight: '800', color: '#CCC' },
-  personName: { fontSize: 14, fontWeight: '700', color: '#1A1A1A', marginTop: 8, textAlign: 'center' },
-  personBio: { fontSize: 11, color: '#999', textAlign: 'center', marginTop: 2 },
-  statusRing: { width: 106, height: 106, borderRadius: 53, justifyContent: 'center', alignItems: 'center', borderWidth: 2, borderColor: '#E6E6E6' },
-  statusRingActive: { borderColor: colors.accentPrimary },
-  yourStoryImageWrap: { width: 100, height: 100, position: 'relative' },
-  yourStoryFallback: { backgroundColor: '#F5F2EC', borderWidth: 2, borderColor: '#DDD8CC', justifyContent: 'center', alignItems: 'center' },
-  yourStoryInitial: { fontSize: 30, fontWeight: '900', color: colors.accentPrimary },
-  yourStoryPlus: {
+  root: { flex: 1, backgroundColor: colors.bgApp },
+  header: {
+    minHeight: 88,
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing.section,
+    paddingBottom: 8,
+    backgroundColor: colors.bgApp,
+  },
+  headerCopy: { flex: 1, minWidth: 0 },
+  eyebrow: { color: colors.textHint, fontSize: 12, lineHeight: 16, fontWeight: '700', letterSpacing: 0.6, textTransform: 'uppercase' },
+  title: { color: colors.textPrimary, fontSize: 31, lineHeight: 37, fontWeight: '600', letterSpacing: 0 },
+  searchButton: {
+    width: layout.iconButton,
+    height: layout.iconButton,
+    borderRadius: layout.iconButton / 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surfaceRaised,
+    borderWidth: 1,
+    borderColor: colors.borderLight,
+  },
+  storyPanel: {
+    marginHorizontal: spacing.md,
+    borderRadius: 24,
+    backgroundColor: colors.surfaceRaised,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    paddingTop: 10,
+    paddingBottom: 6,
+  },
+  storyHeader: {
+    minHeight: 34,
+    paddingHorizontal: spacing.md,
+    paddingBottom: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  storySearchButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.bgSubtle,
+  },
+  sectionTitle: { color: colors.textPrimary, fontSize: 18, lineHeight: 23, fontWeight: '600' },
+  sectionSubtitle: { marginTop: 1, color: colors.textHint, fontSize: 12, lineHeight: 16, fontWeight: '500' },
+  storyRail: { gap: 12, paddingHorizontal: spacing.md, paddingVertical: 2 },
+  storyItem: { width: 66, alignItems: 'center' },
+  avatarRing: {
+    width: 62,
+    height: 62,
+    borderRadius: 31,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: colors.borderSubtle,
+    backgroundColor: colors.surfaceRaised,
+  },
+  avatarRingActive: { borderColor: colors.accentPrimary },
+  avatarImage: { width: 54, height: 54, borderRadius: 27, backgroundColor: colors.bgSubtle },
+  avatarFallback: {
+    width: 54,
+    height: 54,
+    borderRadius: 27,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surfaceRaised,
+  },
+  avatarInitial: { color: colors.textPrimary, fontSize: 21, fontWeight: '600' },
+  addBadge: {
     position: 'absolute',
-    right: 4,
-    bottom: 4,
+    right: 1,
+    bottom: 1,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.accentPrimary,
+    borderWidth: 2,
+    borderColor: colors.bgApp,
+  },
+  storyName: { marginTop: 4, color: colors.textPrimary, fontSize: 11, lineHeight: 14, fontWeight: '600', textAlign: 'center' },
+  notesPanel: {
+    marginTop: 8,
+    paddingTop: 0,
+  },
+  notesHeader: {
+    paddingHorizontal: spacing.section,
+    paddingBottom: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  notesCreateButton: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.accentPrimary,
+  },
+  notesRail: {
+    gap: spacing.gutter,
+    paddingHorizontal: spacing.section,
+    paddingBottom: spacing.xs,
+  },
+  noteLargeCard: {
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: 'rgba(32,54,31,0.10)',
+    backgroundColor: colors.surfaceRaised,
+    padding: 14,
+    gap: 10,
+  },
+  noteCreateLargeCard: {
+    padding: spacing.md,
+    justifyContent: 'space-between',
+  },
+  noteCreateProfile: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  noteCreateCopy: { flex: 1, minWidth: 0 },
+  noteCreateCenter: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 8, paddingHorizontal: spacing.md },
+  noteCreateIcon: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.accentPrimary,
+  },
+  noteCreateTitle: { color: colors.textPrimary, fontSize: 20, lineHeight: 25, fontWeight: '600', textAlign: 'center' },
+  noteCreateText: { color: colors.textSecondary, fontSize: 12, lineHeight: 17, fontWeight: '500', textAlign: 'center' },
+  noteCardPhoto: {
+    ...StyleSheet.absoluteFillObject,
+    width: '100%',
+    height: '100%',
+    resizeMode: 'cover',
+  },
+  notePhotoShade: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.20)',
+  },
+  noteTextShade: {
+    backgroundColor: 'rgba(255,255,255,0.08)',
+  },
+  noteLargeTopRow: {
+    position: 'absolute',
+    left: spacing.md,
+    right: spacing.md,
+    top: spacing.md,
+    zIndex: 2,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  noteLargeAvatar: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.bgSubtle },
+  noteAvatarWrap: { width: 40, height: 40, borderRadius: 20, position: 'relative' },
+  noteFollowBadge: {
+    position: 'absolute',
+    right: -3,
+    bottom: -4,
+    width: 19,
+    height: 19,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.accentPrimary,
+    borderWidth: 2,
+    borderColor: colors.surfaceRaised,
+  },
+  noteFollowBadgeOn: { backgroundColor: colors.textPrimary },
+  noteLargeAvatarFallback: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.accentPrimaryLight,
+  },
+  noteLargeAvatarText: { color: colors.textPrimary, fontSize: 16, fontWeight: '600' },
+  noteThreadHeader: { flexDirection: 'row', alignItems: 'center', gap: 9 },
+  noteThreadAuthorCopy: { flex: 1, minWidth: 0 },
+  noteThreadNameRow: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 5, minWidth: 0 },
+  noteThreadAuthor: { flex: 1, minWidth: 0, color: colors.textPrimary, fontSize: 17, lineHeight: 22, fontWeight: '700' },
+  noteVerifiedBadge: {
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#3B9CE8',
+  },
+  noteThreadTime: { flexShrink: 0, color: colors.textHint, fontSize: 15, lineHeight: 20, fontWeight: '600' },
+  noteMenuButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  noteThreadBody: { color: '#050605', fontSize: 18, lineHeight: 25, fontWeight: '700' },
+  noteThreadBodyTextOnly: { flex: 1, textAlignVertical: 'center' },
+  noteThreadMore: { color: colors.textHint, fontWeight: '700' },
+  noteThreadImage: {
+    width: '100%',
+    borderRadius: 18,
+    backgroundColor: colors.bgSubtle,
+  },
+  noteThreadActions: {
+    marginTop: 'auto',
+    minHeight: 36,
+    flexShrink: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 6,
+  },
+  noteThreadAction: { minWidth: 64, minHeight: 34, flexDirection: 'row', alignItems: 'center', gap: 4 },
+  noteThreadActionText: { color: colors.textSecondary, fontSize: 15, lineHeight: 20, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  noteLargeAuthorCopy: { flex: 1, minWidth: 0 },
+  noteLargeAuthor: { color: colors.textPrimary, fontSize: 15, lineHeight: 19, fontWeight: '600' },
+  noteLargeMeta: { color: colors.textSecondary, fontSize: 12, lineHeight: 16, fontWeight: '500' },
+  noteLargeAuthorOnPhoto: { color: '#FFFFFF', textShadowColor: 'rgba(0,0,0,0.35)', textShadowRadius: 7 },
+  noteLargeMetaOnPhoto: { color: 'rgba(255,255,255,0.78)', textShadowColor: 'rgba(0,0,0,0.35)', textShadowRadius: 7 },
+  noteLargeBottom: {
+    position: 'absolute',
+    left: spacing.md,
+    right: spacing.md,
+    bottom: spacing.md,
+    zIndex: 2,
+    gap: spacing.gutter,
+  },
+  noteLargeBody: { color: colors.textPrimary, fontSize: 28, lineHeight: 34, fontWeight: '600' },
+  noteLargeBodyOnPhoto: {
+    color: '#FFFFFF',
+    textShadowColor: 'rgba(0,0,0,0.42)',
+    textShadowRadius: 9,
+    textShadowOffset: { width: 0, height: 1 },
+  },
+  noteLargeActions: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm },
+  noteLargePill: {
+    overflow: 'hidden',
+    paddingHorizontal: 11,
+    paddingVertical: 7,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.62)',
+    color: colors.textSecondary,
+    fontSize: 12,
+    lineHeight: 15,
+    fontWeight: '600',
+  },
+  noteLargePillOnPhoto: { color: '#FFFFFF', backgroundColor: 'rgba(0,0,0,0.30)' },
+  noteLargeCounts: { color: colors.textHint, fontSize: 12, lineHeight: 15, fontWeight: '600' },
+  noteLargeCountsOnPhoto: { color: 'rgba(255,255,255,0.82)' },
+  noteComposerCard: {
+    width: 142,
+    minHeight: 132,
+    borderRadius: 24,
+    backgroundColor: colors.surfaceRaised,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    padding: spacing.md,
+    justifyContent: 'space-between',
+  },
+  noteComposerIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.accentPrimaryLight,
+  },
+  noteComposerTitle: { color: colors.textPrimary, fontSize: 15, lineHeight: 19, fontWeight: '600' },
+  noteComposerText: { color: colors.textHint, fontSize: 12, lineHeight: 16, fontWeight: '500' },
+  noteCard: {
+    width: 218,
+    minHeight: 132,
+    borderRadius: 24,
+    padding: spacing.md,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    justifyContent: 'space-between',
+  },
+  noteTopRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  noteAvatar: { width: 32, height: 32, borderRadius: 16, backgroundColor: colors.bgSubtle },
+  noteAvatarFallback: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.72)',
+  },
+  noteAvatarText: { color: colors.textPrimary, fontSize: 13, fontWeight: '600' },
+  noteAuthorCopy: { flex: 1, minWidth: 0 },
+  noteAuthor: { color: colors.textPrimary, fontSize: 13, lineHeight: 17, fontWeight: '600' },
+  noteMeta: { color: colors.textHint, fontSize: 11, lineHeight: 14, fontWeight: '500' },
+  noteBody: { marginTop: spacing.gutter, color: colors.textPrimary, fontSize: 15, lineHeight: 20, fontWeight: '500' },
+  noteBottomRow: { marginTop: spacing.gutter, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm },
+  notePill: {
+    overflow: 'hidden',
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.58)',
+    color: colors.textSecondary,
+    fontSize: 11,
+    lineHeight: 14,
+    fontWeight: '600',
+  },
+  noteCounts: { color: colors.textHint, fontSize: 11, lineHeight: 14, fontWeight: '600' },
+  noteSkeleton: {
+    width: 188,
+    minHeight: 132,
+    borderRadius: 24,
+    backgroundColor: colors.surfaceRaised,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    padding: spacing.md,
+    justifyContent: 'center',
+    gap: spacing.sm,
+  },
+  noteSkeletonLine: { height: 14, borderRadius: 8, backgroundColor: colors.skeleton },
+  noteSkeletonShort: { width: '62%' },
+  noteEmptyCard: {
+    width: 210,
+    minHeight: 132,
+    borderRadius: 24,
+    backgroundColor: colors.surfaceRaised,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    padding: spacing.md,
+    justifyContent: 'center',
+  },
+  noteEmptyTitle: { color: colors.textPrimary, fontSize: 16, lineHeight: 21, fontWeight: '600' },
+  noteEmptyText: { marginTop: spacing.xs, color: colors.textHint, fontSize: 13, lineHeight: 18, fontWeight: '500' },
+  body: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.xl, paddingBottom: 110 },
+  loadingCard: {
+    width: '100%',
+    maxWidth: 310,
+    minHeight: 112,
+    borderRadius: 28,
+    backgroundColor: colors.surfaceRaised,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    padding: spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+  },
+  loadingAvatar: {
+    width: 62,
+    height: 62,
+    borderRadius: 31,
+    backgroundColor: colors.bgSubtle,
+  },
+  loadingLines: { flex: 1, gap: spacing.sm },
+  loadingLine: {
+    height: 13,
+    borderRadius: 7,
+    backgroundColor: colors.bgSubtle,
+  },
+  loadingLineShort: { width: '62%' },
+  empty: { alignItems: 'center', padding: spacing.lg, borderRadius: 28, backgroundColor: colors.surfaceRaised, borderWidth: 1, borderColor: colors.borderSubtle },
+  emptyIcon: {
+    width: 86,
+    height: 86,
+    borderRadius: 43,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.bgSubtle,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+  },
+  emptyTitle: { marginTop: spacing.md, color: colors.textPrimary, fontSize: 22, lineHeight: 28, fontWeight: '600', textAlign: 'center' },
+  emptyText: { marginTop: 6, color: colors.textHint, fontSize: 14, lineHeight: 20, fontWeight: '500', textAlign: 'center' },
+  searchRoot: { flex: 1, backgroundColor: colors.bgApp },
+  searchHeader: {
+    minHeight: 58,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing.md,
+  },
+  searchClose: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+  searchTitle: { color: colors.textPrimary, fontSize: 19, lineHeight: 24, fontWeight: '600' },
+  searchInputWrap: {
+    minHeight: 48,
+    borderRadius: 18,
+    backgroundColor: colors.surfaceRaised,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: spacing.md,
+    paddingHorizontal: spacing.gutter,
+  },
+  searchInput: { flex: 1, minHeight: 46, color: colors.textPrimary, fontSize: 16, lineHeight: 21, fontWeight: '500' },
+  searchState: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.xl, paddingBottom: 120 },
+  searchStateTitle: { color: colors.textPrimary, fontSize: 21, lineHeight: 27, fontWeight: '600', textAlign: 'center' },
+  searchStateText: { marginTop: 6, color: colors.textHint, fontSize: 14, lineHeight: 20, fontWeight: '500', textAlign: 'center' },
+  searchList: { flex: 1, paddingHorizontal: spacing.md, paddingTop: spacing.md },
+  userRow: {
+    minHeight: 68,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.gutter,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.borderSubtle,
+  },
+  userAvatar: { width: 46, height: 46, borderRadius: 23, backgroundColor: colors.bgSubtle },
+  userAvatarFallback: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surfaceRaised,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+  },
+  userAvatarText: { color: colors.textPrimary, fontSize: 17, fontWeight: '600' },
+  userInfo: { flex: 1, minWidth: 0 },
+  userName: { color: colors.textPrimary, fontSize: 15, lineHeight: 20, fontWeight: '600' },
+  userHandle: { color: colors.textHint, fontSize: 12, lineHeight: 16, fontWeight: '500', marginTop: 1 },
+  postChooserOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(244,245,241,0.62)' },
+  postChooserSheet: {
+    backgroundColor: colors.bgModal,
+    borderTopLeftRadius: 26,
+    borderTopRightRadius: 26,
+    paddingTop: 10,
+    paddingHorizontal: 16,
+    gap: 8,
+    ...shadows.sheet,
+  },
+  postChooserHandle: { alignSelf: 'center', width: 42, height: 5, borderRadius: 3, backgroundColor: colors.borderMedium },
+  postChooserTitle: { color: colors.textPrimary, fontSize: 22, lineHeight: 27, fontWeight: '700', marginTop: 2 },
+  postChooserSub: { color: colors.textSecondary, fontSize: 13, lineHeight: 18, fontWeight: '500', marginBottom: 6 },
+  postChooserActions: { gap: 8 },
+  postChooserOption: {
+    minHeight: 66,
+    borderRadius: 18,
+    backgroundColor: colors.bgSubtle,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 12,
+  },
+  postChooserIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: colors.surfaceRaised,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+  },
+  postChooserCopy: { flex: 1, minWidth: 0 },
+  postChooserLabel: { color: colors.textPrimary, fontSize: 16, lineHeight: 21, fontWeight: '700' },
+  postChooserHint: { color: colors.textSecondary, fontSize: 12, lineHeight: 16, fontWeight: '500', marginTop: 1 },
+  composerRoot: { flex: 1, backgroundColor: colors.bgApp },
+  composerPostButton: {
+    minWidth: 68,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.accentPrimary,
+    paddingHorizontal: spacing.md,
+  },
+  composerPostButtonDisabled: { opacity: 0.42 },
+  composerPostText: { color: colors.textInverse, fontSize: 14, lineHeight: 18, fontWeight: '600' },
+  composerCard: {
+    margin: spacing.md,
+    borderRadius: 26,
+    backgroundColor: colors.surfaceRaised,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    padding: spacing.md,
+  },
+  composerPhotoButton: {
+    height: 245,
+    borderRadius: 24,
+    overflow: 'hidden',
+    backgroundColor: colors.bgSubtle,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+  },
+  composerPhotoPreview: { width: '100%', height: '100%' },
+  composerPhotoEmpty: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing.sm },
+  composerPhotoText: { color: colors.textHint, fontSize: 14, lineHeight: 18, fontWeight: '600' },
+  composerRemovePhoto: {
+    alignSelf: 'flex-start',
+    minHeight: 34,
+    borderRadius: 17,
+    marginTop: spacing.sm,
+    paddingHorizontal: spacing.gutter,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    backgroundColor: colors.bgSubtle,
+  },
+  composerRemovePhotoText: { color: colors.textSecondary, fontSize: 13, lineHeight: 17, fontWeight: '600' },
+  composerInput: {
+    minHeight: 180,
+    color: colors.textPrimary,
+    fontSize: 18,
+    lineHeight: 25,
+    fontWeight: '500',
+  },
+  composerInputWithPhoto: { minHeight: 120, marginTop: spacing.sm },
+  composerFooter: { minHeight: 28, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.md },
+  composerCounter: { color: colors.textHint, fontSize: 12, lineHeight: 16, fontWeight: '500' },
+  composerError: { flex: 1, color: colors.error, fontSize: 12, lineHeight: 16, fontWeight: '600', textAlign: 'right' },
+  commentRoot: {
+    flex: 1,
+    backgroundColor: colors.bgApp,
+  },
+  commentHeader: {
+    minHeight: 58,
+    paddingHorizontal: spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  commentClose: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+  commentTitle: { color: colors.textPrimary, fontSize: 20, lineHeight: 26, fontWeight: '700' },
+  commentList: { flex: 1 },
+  commentListContent: { paddingHorizontal: spacing.md, paddingTop: spacing.sm, paddingBottom: spacing.xl },
+  commentState: { minHeight: 180, alignItems: 'center', justifyContent: 'center', gap: 4 },
+  commentStateTitle: { color: colors.textPrimary, fontSize: 18, lineHeight: 23, fontWeight: '700' },
+  commentStateText: { color: colors.textSecondary, fontSize: 14, lineHeight: 19, fontWeight: '500' },
+  commentRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm, marginBottom: spacing.gutter },
+  commentAvatar: { width: 34, height: 34, borderRadius: 17, backgroundColor: colors.bgSubtle },
+  commentAvatarFallback: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.accentPrimaryLight,
+  },
+  commentAvatarText: { color: colors.textPrimary, fontSize: 13, lineHeight: 17, fontWeight: '700' },
+  commentBubble: {
+    flex: 1,
+    minWidth: 0,
+    borderRadius: 18,
+    paddingHorizontal: spacing.gutter,
+    paddingVertical: spacing.sm,
+    backgroundColor: colors.bgCard,
+  },
+  commentName: { color: colors.textPrimary, fontSize: 13, lineHeight: 17, fontWeight: '700' },
+  commentBody: { color: colors.textSecondary, fontSize: 14, lineHeight: 20, fontWeight: '500', marginTop: 2 },
+  commentInputBar: {
+    paddingTop: spacing.sm,
+    paddingHorizontal: spacing.md,
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: spacing.sm,
+    backgroundColor: colors.bgApp,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.borderSubtle,
+  },
+  commentInput: {
+    flex: 1,
+    minHeight: 48,
+    maxHeight: 112,
+    borderRadius: 22,
+    paddingHorizontal: spacing.md,
+    paddingTop: 13,
+    paddingBottom: 10,
+    color: colors.textPrimary,
+    backgroundColor: colors.bgSubtle,
+    fontSize: 16,
+    lineHeight: 21,
+    fontWeight: '500',
+  },
+  commentSend: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.accentPrimary,
+  },
+  commentSendDisabled: { backgroundColor: colors.textDisabled },
+  gifRoot: { flex: 1, backgroundColor: colors.bgApp },
+  gifHeader: {
+    minHeight: 58,
+    paddingHorizontal: spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  gifClose: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+  gifTitle: { color: colors.textPrimary, fontSize: 20, lineHeight: 26, fontWeight: '800' },
+  gifSearchWrap: {
+    minHeight: 48,
+    marginHorizontal: spacing.md,
+    paddingHorizontal: spacing.md,
+    borderRadius: 24,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    backgroundColor: colors.bgSubtle,
+  },
+  gifSearchInput: { flex: 1, color: colors.textPrimary, fontSize: 16, lineHeight: 21, fontWeight: '500' },
+  gifState: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  gifGrid: {
+    padding: spacing.md,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+  },
+  gifTile: {
+    width: '31.8%',
+    aspectRatio: 1,
+    borderRadius: 14,
+    overflow: 'hidden',
+    backgroundColor: colors.bgSubtle,
+  },
+  gifImage: { width: '100%', height: '100%' },
+  gifEmpty: { width: '100%', minHeight: 180, alignItems: 'center', justifyContent: 'center', gap: 4 },
+  gifEmptyTitle: { color: colors.textPrimary, fontSize: 18, lineHeight: 23, fontWeight: '700' },
+  gifEmptyText: { color: colors.textSecondary, fontSize: 14, lineHeight: 19, fontWeight: '500' },
+  inlineGifPanel: {
+    marginTop: spacing.sm,
+    borderRadius: 18,
+    paddingVertical: spacing.sm,
+    backgroundColor: colors.bgCard,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+  },
+  inlineGifSearchWrap: {
+    minHeight: 40,
+    marginHorizontal: spacing.sm,
+    paddingHorizontal: spacing.gutter,
+    borderRadius: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    backgroundColor: colors.bgSubtle,
+  },
+  inlineGifSearchInput: {
+    flex: 1,
+    minWidth: 0,
+    color: colors.textPrimary,
+    fontSize: 14,
+    lineHeight: 19,
+    fontWeight: '600',
+    paddingVertical: 0,
+  },
+  inlineGifClose: { width: 28, height: 28, alignItems: 'center', justifyContent: 'center' },
+  inlineGifState: { height: 96, alignItems: 'center', justifyContent: 'center' },
+  inlineGifRail: { paddingHorizontal: spacing.sm, paddingTop: spacing.sm, gap: spacing.sm },
+  inlineGifTile: {
+    width: 82,
+    height: 100,
+    borderRadius: 14,
+    overflow: 'hidden',
+    backgroundColor: colors.bgSubtle,
+  },
+  inlineGifEmpty: { width: 180, height: 90, alignItems: 'center', justifyContent: 'center' },
+  inlineGifEmptyText: { color: colors.textHint, fontSize: 13, lineHeight: 18, fontWeight: '600' },
+  threadComposerHeader: {
+    minHeight: 78,
+    paddingHorizontal: spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: colors.bgApp,
+  },
+  threadCancelText: {
+    color: colors.textPrimary,
+    fontSize: 21,
+    lineHeight: 27,
+    fontWeight: '600',
+  },
+  threadSaveButton: {
+    minWidth: 72,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.md,
+    backgroundColor: colors.accentPrimary,
+  },
+  threadSaveButtonDisabled: {
+    backgroundColor: colors.bgSubtle,
+  },
+  threadSaveText: {
+    color: colors.textInverse,
+    fontSize: 15,
+    lineHeight: 20,
+    fontWeight: '700',
+  },
+  threadSaveTextDisabled: {
+    color: colors.textHint,
+  },
+  threadHeaderSpacer: { width: 70, height: 36 },
+  threadComposerTitle: {
+    position: 'absolute',
+    left: 96,
+    right: 96,
+    textAlign: 'center',
+    color: colors.textPrimary,
+    fontSize: 22,
+    lineHeight: 28,
+    fontWeight: '700',
+  },
+  threadHeaderActions: { flexDirection: 'row', alignItems: 'center', gap: 14 },
+  threadHeaderIcon: {
+    width: 36,
+    height: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  threadComposerDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: colors.borderSubtle,
+  },
+  threadComposerContent: {
+    flex: 1,
+    flexDirection: 'row',
+    paddingHorizontal: spacing.md,
+    paddingTop: 22,
+  },
+  threadAvatarColumn: {
+    width: 48,
+    alignItems: 'center',
+  },
+  threadAvatar: { width: 44, height: 44, borderRadius: 22, backgroundColor: colors.bgSubtle },
+  threadAvatarFallback: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.accentPrimaryLight,
+  },
+  threadAvatarText: { color: colors.textPrimary, fontSize: 17, lineHeight: 22, fontWeight: '700' },
+  threadVerticalLine: {
+    width: 3,
+    flex: 1,
+    minHeight: 126,
+    marginTop: 12,
+    marginBottom: 10,
+    borderRadius: 999,
+    backgroundColor: colors.borderSubtle,
+  },
+  threadMiniAvatar: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.bgSubtle,
+    opacity: 0.52,
+  },
+  threadMiniAvatarText: { color: colors.textHint, fontSize: 11, fontWeight: '700' },
+  threadInputColumn: {
+    flex: 1,
+    minWidth: 0,
+    paddingLeft: spacing.gutter,
+  },
+  threadMetaRow: {
+    minHeight: 30,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+  },
+  threadUsername: {
+    maxWidth: '48%',
+    color: colors.textPrimary,
+    fontSize: 21,
+    lineHeight: 27,
+    fontWeight: '700',
+  },
+  threadTopic: {
+    flex: 1,
+    minWidth: 0,
+    color: colors.textHint,
+    fontSize: 21,
+    lineHeight: 27,
+    fontWeight: '600',
+  },
+  threadInput: {
+    minHeight: 70,
+    color: colors.textPrimary,
+    fontSize: 21,
+    lineHeight: 28,
+    fontWeight: '400',
+    paddingTop: 2,
+    paddingBottom: 8,
+  },
+  threadToolRow: {
+    minHeight: 46,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 22,
+    marginTop: 8,
+  },
+  threadToolButton: {
+    minWidth: 30,
+    minHeight: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  threadGifText: {
+    color: colors.textHint,
+    fontSize: 15,
+    lineHeight: 19,
+    fontWeight: '800',
+    borderWidth: 2,
+    borderColor: colors.textHint,
+    borderRadius: 6,
+    paddingHorizontal: 3,
+    paddingVertical: 1,
+  },
+  threadPhotoWrap: {
+    width: '78%',
+    aspectRatio: 0.78,
+    borderRadius: 18,
+    overflow: 'hidden',
+    backgroundColor: colors.bgSubtle,
+    marginTop: spacing.sm,
+  },
+  threadPhotoPreview: { width: '100%', height: '100%' },
+  threadRemovePhoto: {
+    position: 'absolute',
+    right: 8,
+    top: 8,
     width: 26,
     height: 26,
     borderRadius: 13,
-    backgroundColor: colors.accentPrimary,
-    borderWidth: 2,
-    borderColor: colors.white,
-    justifyContent: 'center',
     alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.48)',
   },
-  emptyStoryCard: {
-    width: 178,
-    height: 124,
-    borderRadius: 18,
-    backgroundColor: '#F5F5F5',
+  threadAddRow: {
+    minHeight: 48,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 12,
+  },
+  threadGhostAvatar: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.bgSubtle,
+    opacity: 0.5,
+  },
+  threadGhostAvatarText: { color: colors.textHint, fontSize: 10, fontWeight: '700' },
+  threadAddText: {
+    color: colors.textHint,
+    fontSize: 20,
+    lineHeight: 26,
+    fontWeight: '600',
+    opacity: 0.45,
+  },
+  threadError: {
+    color: colors.error,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '600',
+    marginTop: spacing.sm,
+  },
+  threadComposerFooter: {
+    minHeight: 86,
+    paddingHorizontal: spacing.md,
+    paddingBottom: spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: colors.bgApp,
+  },
+  threadFooterLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    flexShrink: 1,
+  },
+  threadReplyOptions: {
+    minHeight: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 9,
+    flexShrink: 1,
+  },
+  threadReplyText: {
+    color: colors.textHint,
+    fontSize: 16,
+    lineHeight: 22,
+    fontWeight: '600',
+  },
+  threadKeyboardButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surfaceRaised,
     borderWidth: 1,
-    borderColor: '#ECECEC',
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 14,
+    borderColor: colors.borderSubtle,
   },
-  emptyStoryText: { marginTop: 8, fontSize: 12, lineHeight: 16, color: '#777', textAlign: 'center', fontWeight: '700' },
-
-  recommendRoot: { paddingHorizontal: 14, paddingTop: 6, paddingBottom: 36 },
-  recommendTopBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingBottom: 18 },
-  recommendBrandPill: { minHeight: 36, borderRadius: 18, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#ECECEC', flexDirection: 'row', alignItems: 'center', gap: 7, paddingHorizontal: 13 },
-  recommendBrandText: { color: '#111111', fontSize: 12, fontWeight: '900', letterSpacing: 0.2 },
-  recommendMenuBtn: { width: 42, height: 42, borderRadius: 21, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#ECECEC', alignItems: 'center', justifyContent: 'center' },
-  recommendMenuSpacer: { width: 42, height: 42 },
-  recommendCategoryRail: { gap: 8, paddingBottom: 14 },
-  recommendCategoryPill: { minHeight: 34, borderRadius: 17, justifyContent: 'center', paddingHorizontal: 12 },
-  recommendCategoryPillOn: { borderWidth: 1.3, borderColor: '#111111' },
-  recommendCategoryText: { color: '#333333', fontSize: 12, fontWeight: '700' },
-  recommendCategoryTextOn: { color: '#111111', fontWeight: '900' },
-  submitRecommendButton: { minHeight: 68, borderRadius: 18, backgroundColor: '#F4F2EA', borderWidth: 1, borderColor: '#E8E2D5', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, paddingHorizontal: 16, marginBottom: 14 },
-  submitRecommendTitle: { color: '#111111', fontSize: 17, fontWeight: '900' },
-  submitRecommendSub: { color: '#6E6A62', fontSize: 12, lineHeight: 16, fontWeight: '700', marginTop: 3 },
-  audiusHero: { borderRadius: 26, backgroundColor: '#F4F6EE', borderWidth: 1, borderColor: '#E6EAD8', padding: 16, marginBottom: 14, gap: 12 },
-  audiusHeroTitle: { color: '#111111', fontSize: 28, lineHeight: 31, fontWeight: '900' },
-  audiusHeroText: { color: '#5F6459', fontSize: 13, lineHeight: 18, fontWeight: '700' },
-  audiusSearchBox: { minHeight: 48, borderRadius: 24, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E3E3E3', flexDirection: 'row', alignItems: 'center', gap: 9, paddingHorizontal: 13 },
-  audiusSearchInput: { flex: 1, minWidth: 0, color: '#111111', fontSize: 14, fontWeight: '800', paddingVertical: 0 },
-  audiusSearchClear: { width: 28, height: 28, borderRadius: 14, backgroundColor: '#F1F1F1', alignItems: 'center', justifyContent: 'center' },
-  audiusChipRail: { gap: 8, paddingRight: 4 },
-  audiusChip: { minHeight: 34, borderRadius: 17, backgroundColor: '#111111', justifyContent: 'center', paddingHorizontal: 12 },
-  audiusChipText: { color: '#FFFFFF', fontSize: 12, fontWeight: '900' },
-  audiusList: { gap: 12 },
-  audiusCard: { minHeight: 126, borderRadius: 22, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E9E9E9', flexDirection: 'row', gap: 12, padding: 10 },
-  audiusArtworkWrap: { width: 104, height: 104, borderRadius: 18, overflow: 'hidden', backgroundColor: '#EFF2E8', position: 'relative' },
-  audiusArtwork: { width: '100%', height: '100%' },
-  audiusArtworkFallback: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  audiusPlayButton: { position: 'absolute', right: 8, bottom: 8, width: 38, height: 38, borderRadius: 19, backgroundColor: '#DFFF32', borderWidth: 1.2, borderColor: '#111111', alignItems: 'center', justifyContent: 'center' },
-  audiusCopy: { flex: 1, minWidth: 0, justifyContent: 'center' },
-  audiusMetaRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 5 },
-  audiusSource: { color: '#56724C', fontSize: 10, fontWeight: '900', letterSpacing: 0.7 },
-  audiusDot: { color: '#9A9A9A', fontSize: 10, fontWeight: '900' },
-  audiusDuration: { color: '#777777', fontSize: 11, fontWeight: '800' },
-  audiusTitle: { color: '#111111', fontSize: 17, lineHeight: 20, fontWeight: '900' },
-  audiusArtist: { color: '#6F6F6F', fontSize: 13, fontWeight: '800', marginTop: 4 },
-  audiusActions: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 12 },
-  audiusPrimaryAction: { flex: 1, minHeight: 38, borderRadius: 19, backgroundColor: '#DFFF32', borderWidth: 1.2, borderColor: '#111111', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingHorizontal: 10 },
-  audiusPrimaryActionText: { color: '#111111', fontSize: 12, fontWeight: '900' },
-  audiusIconAction: { width: 38, height: 38, borderRadius: 19, backgroundColor: '#F2F2F2', alignItems: 'center', justifyContent: 'center' },
-  audiusIconActionOn: { backgroundColor: '#DFFF32', borderWidth: 1.2, borderColor: '#111111' },
-  noteList: { gap: 14 },
-  recommendGrid: { flexDirection: 'row', gap: 3, alignItems: 'flex-start' },
-  recommendColumn: { flex: 1, gap: 3 },
-  recommendCard: { borderRadius: 18, overflow: 'hidden', position: 'relative', padding: 15, justifyContent: 'space-between' },
-  recommendCardImage: { ...StyleSheet.absoluteFillObject, width: '100%', height: '100%' },
-  recommendCardShade: { ...StyleSheet.absoluteFillObject, backgroundColor: 'transparent' },
-  recommendCardShadeOnImage: { backgroundColor: 'rgba(0,0,0,0.20)' },
-  recommendCardCopy: { gap: 6 },
-  recommendSmall: { color: '#2D2D2D', fontSize: 11, fontWeight: '700' },
-  recommendCardTitle: { color: '#111111', fontSize: 24, lineHeight: 25, fontWeight: '500', letterSpacing: 0 },
-  recommendCardMeta: { color: '#2D2D2D', fontSize: 11, fontWeight: '700' },
-  recommendTextOnImage: { color: '#FFFFFF', textShadowColor: 'rgba(0,0,0,0.32)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 4 },
-  recommendReadMore: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 18 },
-  recommendReadText: { color: '#111111', fontSize: 11, fontWeight: '900' },
-  recommendReadTextOnImage: { color: '#FFFFFF' },
-  recommendLoading: { minHeight: 260, alignItems: 'center', justifyContent: 'center' },
-  recommendEmpty: { minHeight: 280, borderRadius: 22, backgroundColor: '#F7F7F7', alignItems: 'center', justifyContent: 'center', padding: 24 },
-  recommendEmptyTitle: { color: '#111111', fontSize: 19, fontWeight: '900', marginTop: 10 },
-  recommendEmptyText: { color: '#777777', fontSize: 13, lineHeight: 18, textAlign: 'center', marginTop: 6, fontWeight: '700' },
-  recommendEmptyButton: { marginTop: 16, minHeight: 44, borderRadius: 22, backgroundColor: '#111111', justifyContent: 'center', paddingHorizontal: 18 },
-  recommendEmptyButtonText: { color: '#FFFFFF', fontSize: 13, fontWeight: '900' },
-
-  center: { paddingTop: 100, alignItems: 'center' },
+  threadPostButton: {
+    minWidth: 86,
+    height: 48,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.accentPrimary,
+    paddingHorizontal: spacing.lg,
+  },
+  threadPostButtonDisabled: {
+    backgroundColor: 'rgba(0,0,0,0.26)',
+  },
+  threadPostText: {
+    color: colors.textInverse,
+    fontSize: 19,
+    lineHeight: 24,
+    fontWeight: '700',
+  },
 });

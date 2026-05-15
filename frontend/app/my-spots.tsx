@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, Image, ScrollView,
-  RefreshControl, ActivityIndicator, Alert,
+  ActivityIndicator, Alert,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -50,7 +50,6 @@ export default function MySpotsScreen() {
   const [savedPlaces, setSavedPlaces] = useState<SavedPlace[]>([]);
   const [savedPosts, setSavedPosts] = useState<SavedPost[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [isRefreshing, setIsRefreshing] = useState(false);
   const [viewMode, setViewMode] = useState<'places' | 'posts'>('places');
 
   useEffect(() => {
@@ -76,12 +75,6 @@ export default function MySpotsScreen() {
       setIsLoading(false);
     }
   };
-
-  const onRefresh = useCallback(async () => {
-    setIsRefreshing(true);
-    await loadData();
-    setIsRefreshing(false);
-  }, []);
 
   const handleRemovePlace = async (placeId: string) => {
     Alert.alert('Remove Place', 'Remove this from your saved spots?', [
@@ -152,7 +145,7 @@ export default function MySpotsScreen() {
   return (
     <View style={s.container}>
       {/* ── Header ── */}
-      <View style={[s.header, { paddingTop: insets.top + 8 }]}>
+      <View style={[s.header, { paddingTop: insets.top + 2 }]}>
         <View style={s.headerTop}>
           <TouchableOpacity style={s.backBtn} onPress={() => router.back()}>
             <Ionicons name="arrow-back" size={20} color="#1A1A1A" />
@@ -205,7 +198,6 @@ export default function MySpotsScreen() {
       {/* ── Content ── */}
       <ScrollView
         showsVerticalScrollIndicator={false}
-        refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={onRefresh} tintColor="#1A1A1A" />}
         contentContainerStyle={{ paddingBottom: 40, flexGrow: 1 }}
       >
         {isLoading ? (
@@ -348,7 +340,7 @@ const s = StyleSheet.create({
   header: { backgroundColor: '#FFF', borderBottomWidth: 1, borderBottomColor: '#ECEAE3', paddingBottom: 12 },
   headerTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, marginBottom: 12 },
   backBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#F5F0EB', justifyContent: 'center', alignItems: 'center' },
-  headerTitle: { fontSize: 20, fontWeight: '800', color: '#1A1A1A', letterSpacing: -0.3 },
+  headerTitle: { fontSize: 20, fontWeight: '600', color: '#1A1A1A', letterSpacing: -0.3 },
 
   // View toggle
   viewToggle: {
@@ -383,7 +375,7 @@ const s = StyleSheet.create({
     width: 72, height: 72, borderRadius: 36,
     backgroundColor: '#F5F0EB', justifyContent: 'center', alignItems: 'center', marginBottom: 16,
   },
-  emptyTitle: { fontSize: 18, fontWeight: '700', color: '#1A1A1A', marginBottom: 6 },
+  emptyTitle: { fontSize: 18, fontWeight: '500', color: '#1A1A1A', marginBottom: 6 },
   emptySub: { fontSize: 14, color: '#999', textAlign: 'center', lineHeight: 20 },
 
   // List
@@ -400,7 +392,7 @@ const s = StyleSheet.create({
     justifyContent: 'center', alignItems: 'center', marginRight: 12,
   },
   placeInfo: { flex: 1 },
-  placeName: { fontSize: 15, fontWeight: '700', color: '#1A1A1A', marginBottom: 4 },
+  placeName: { fontSize: 15, fontWeight: '500', color: '#1A1A1A', marginBottom: 4 },
   placeMeta: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   saveTypeBadge: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   saveTypeText: { fontSize: 11, fontWeight: '600' },
@@ -426,7 +418,7 @@ const s = StyleSheet.create({
   postMeta: { flexDirection: 'row', alignItems: 'center' },
   postAvatar: { width: 18, height: 18, borderRadius: 9, marginRight: 6 },
   postAvatarFallback: { backgroundColor: '#E8E4DF', justifyContent: 'center', alignItems: 'center' },
-  postAvatarInit: { fontSize: 8, fontWeight: '700', color: '#AAA' },
+  postAvatarInit: { fontSize: 8, fontWeight: '500', color: '#AAA' },
   postAuthor: { fontSize: 11, color: '#999', flex: 1 },
   postLikes: { flexDirection: 'row', alignItems: 'center', gap: 3 },
   postLikesText: { fontSize: 11, color: '#999' },

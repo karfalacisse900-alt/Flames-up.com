@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -18,11 +18,12 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
-import { colors, shadows } from '../src/utils/theme';
+import { colors } from '../src/utils/theme';
 import { useAuthStore } from '../src/store/authStore';
 import api from '../src/api/client';
 import { processMediaBatch } from '../src/utils/mediaProcessing';
 import { uploadImageWithBackup, uploadVideoWithBackup } from '../src/utils/mediaUpload';
+import { HD_VIDEO_EXPORT_PRESET, HD_VIDEO_QUALITY, POST_IMAGE_PICKER_QUALITY } from '../src/utils/mediaQuality';
 import { isPhoneVerificationError, requireVerifiedPhone } from '../src/utils/phoneVerification';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
@@ -46,22 +47,14 @@ export default function CheckInPostScreen() {
 
   const { user } = useAuthStore();
   const [content, setContent] = useState('');
-  const [media, setMedia] = useState<{ uri: string; type: string; base64?: string; mimeType?: string; fileName?: string | null }[]>([]);
+  const [media, setMedia] = useState<{ uri: string; type: string; base64?: string; mimeType?: string; fileName?: string | null; fileSize?: number }[]>([]);
   const [isPosting, setIsPosting] = useState(false);
   const [postType, setPostType] = useState<string>(params.placeId ? 'check_in' : 'lifestyle');
   const [isCheckingLocation, setIsCheckingLocation] = useState(false);
   const [proximityVerified, setProximityVerified] = useState(false);
   const [distance, setDistance] = useState<number | null>(null);
-  const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
 
-  // Check proximity on mount if place is provided
-  useEffect(() => {
-    if (params.placeId && params.placeLat && params.placeLng) {
-      verifyProximity();
-    }
-  }, []);
-
-  const verifyProximity = async () => {
+  const verifyProximity = useCallback(async () => {
     setIsCheckingLocation(true);
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
@@ -73,7 +66,6 @@ export default function CheckInPostScreen() {
 
       const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
       const userLoc = { lat: loc.coords.latitude, lng: loc.coords.longitude };
-      setUserLocation(userLoc);
 
       const response = await api.post('/places/verify-proximity', {
         user_lat: userLoc.lat,
@@ -93,28 +85,36 @@ export default function CheckInPostScreen() {
     } finally {
       setIsCheckingLocation(false);
     }
-  };
+  }, [params.placeLat, params.placeLng]);
+
+  // Check proximity on mount if place is provided
+  useEffect(() => {
+    if (params.placeId && params.placeLat && params.placeLng) {
+      verifyProximity();
+    }
+  }, [params.placeId, params.placeLat, params.placeLng, verifyProximity]);
 
   const pickImages = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images', 'videos'],
       allowsMultipleSelection: true,
-      quality: 0.85,
-      base64: false,
+      quality: POST_IMAGE_PICKER_QUALITY,
+      base64: true,
       selectionLimit: MAX_MEDIA - media.length,
-      videoExportPreset: ImagePicker.VideoExportPreset.H264_1280x720,
-      videoQuality: ImagePicker.UIImagePickerControllerQualityType.Medium,
-      preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
+      videoExportPreset: HD_VIDEO_EXPORT_PRESET,
+      videoQuality: HD_VIDEO_QUALITY,
+      preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Current,
     });
 
     if (!result.canceled && result.assets) {
-      const processedAssets = await processMediaBatch(result.assets, 'balanced');
+      const processedAssets = await processMediaBatch(result.assets, 'quality');
       const newMedia = processedAssets.map((asset) => ({
         uri: asset.uri,
         type: asset.type,
         base64: asset.base64,
         mimeType: asset.mimeType,
         fileName: asset.fileName,
+        fileSize: asset.fileSize,
       }));
       setMedia((prev) => [...prev, ...newMedia].slice(0, MAX_MEDIA));
     }
@@ -127,17 +127,18 @@ export default function CheckInPostScreen() {
       return;
     }
     const result = await ImagePicker.launchCameraAsync({
-      quality: 0.85,
-      base64: false,
+      quality: POST_IMAGE_PICKER_QUALITY,
+      base64: true,
       mediaTypes: ['images', 'videos'],
-      videoQuality: ImagePicker.UIImagePickerControllerQualityType.Medium,
+      videoExportPreset: HD_VIDEO_EXPORT_PRESET,
+      videoQuality: HD_VIDEO_QUALITY,
       videoMaxDuration: 45,
     });
     if (!result.canceled && result.assets[0]) {
-      const [asset] = await processMediaBatch([result.assets[0]], 'balanced');
+      const [asset] = await processMediaBatch([result.assets[0]], 'quality');
       setMedia((prev) => [
         ...prev,
-        { uri: asset.uri, type: asset.type, base64: asset.base64, mimeType: asset.mimeType, fileName: asset.fileName },
+        { uri: asset.uri, type: asset.type, base64: asset.base64, mimeType: asset.mimeType, fileName: asset.fileName, fileSize: asset.fileSize },
       ].slice(0, MAX_MEDIA));
     }
   };
@@ -179,7 +180,7 @@ export default function CheckInPostScreen() {
       for (let i = 0; i < media.length; i++) {
         const item = media[i];
         if (item.type === 'video') {
-          const uploaded = await uploadVideoWithBackup(item.uri, item.mimeType || 'video/mp4', item.fileName || `checkin-video-${i + 1}.mp4`);
+          const uploaded = await uploadVideoWithBackup(item.uri, item.mimeType || 'video/mp4', item.fileName || `checkin-video-${i + 1}.mp4`, item.fileSize);
           if (uploaded?.url) {
             imagesList.push(uploaded.url);
             mediaTypes.push('video');
@@ -198,6 +199,7 @@ export default function CheckInPostScreen() {
         }
       }
       const postData: any = {
+        client_request_id: `post_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`,
         content: content.trim(),
         image: imagesList[0] || null,
         images: imagesList.length > 0 ? imagesList : undefined,
@@ -288,7 +290,7 @@ export default function CheckInPostScreen() {
                   size={16}
                   color={postType === type.id ? type.color : colors.textHint}
                 />
-                <Text style={[styles.typeChipText, postType === type.id && { color: type.color, fontWeight: '700' }]}>
+                <Text style={[styles.typeChipText, postType === type.id && { color: type.color, fontWeight: '500' }]}>
                   {type.label}
                 </Text>
               </TouchableOpacity>
@@ -430,12 +432,12 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1, borderBottomColor: colors.borderSubtle,
   },
   headerBtn: { padding: 4 },
-  headerTitle: { fontSize: 17, fontWeight: '700', color: colors.textPrimary },
+  headerTitle: { fontSize: 17, fontWeight: '500', color: colors.textPrimary },
   postButton: {
     backgroundColor: colors.accentPrimary, paddingHorizontal: 20, paddingVertical: 10,
     borderRadius: 20, minWidth: 70, alignItems: 'center',
   },
-  postButtonText: { color: '#FFFFFF', fontSize: 14, fontWeight: '700' },
+  postButtonText: { color: '#FFFFFF', fontSize: 14, fontWeight: '500' },
   // Post Type Selector
   typeRow: {
     flexDirection: 'row', paddingHorizontal: 16, paddingVertical: 12, gap: 8,
@@ -456,7 +458,7 @@ const styles = StyleSheet.create({
     width: 36, height: 36, borderRadius: 12,
     backgroundColor: '#C8E6C9', justifyContent: 'center', alignItems: 'center',
   },
-  placeCardName: { fontSize: 15, fontWeight: '700', color: '#1B5E20' },
+  placeCardName: { fontSize: 15, fontWeight: '500', color: '#1B5E20' },
   placeCardStatus: { fontSize: 12, color: colors.textSecondary },
   directionBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 4,
@@ -484,8 +486,8 @@ const styles = StyleSheet.create({
     width: '100%', height: '100%', backgroundColor: colors.avatarTeal,
     justifyContent: 'center', alignItems: 'center',
   },
-  avatarFallbackText: { color: '#FFFFFF', fontSize: 18, fontWeight: '700' },
-  userName: { fontSize: 15, fontWeight: '700', color: colors.textPrimary },
+  avatarFallbackText: { color: '#FFFFFF', fontSize: 18, fontWeight: '500' },
+  userName: { fontSize: 15, fontWeight: '500', color: colors.textPrimary },
   visibilityRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 },
   visibilityText: { fontSize: 12, color: colors.textSecondary, fontWeight: '500' },
   // Content

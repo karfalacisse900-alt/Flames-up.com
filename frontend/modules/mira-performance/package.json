@@ -1,0 +1,17 @@
+{
+  "name": "mira-performance",
+  "version": "1.0.0",
+  "description": "Native performance helpers for MIRA.",
+  "main": "index.ts",
+  "private": true,
+  "expo-module": {
+    "autolinking": {
+      "ios": {
+        "modules": ["MiraPerformanceModule"]
+      },
+      "android": {
+        "modules": ["expo.modules.miraperformance.MiraPerformanceModule"]
+      }
+    }
+  }
+}

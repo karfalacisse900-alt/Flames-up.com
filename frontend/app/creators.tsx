@@ -1,14 +1,13 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput,
-  Image, FlatList, ActivityIndicator, Dimensions, RefreshControl,
+  Image, ActivityIndicator, Dimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, spacing, borderRadius } from '../src/utils/theme';
+import { colors } from '../src/utils/theme';
 import api from '../src/api/client';
-import { useAuthStore } from '../src/store/authStore';
 
 const { width: SW } = Dimensions.get('window');
 const CARD_WIDTH = (SW - 48 - 12) / 2;
@@ -38,11 +37,9 @@ const AVAILABILITY_COLORS: Record<string, string> = {
 
 export default function CreatorsScreen() {
   const router = useRouter();
-  const { user } = useAuthStore();
   const [activeTab, setActiveTab] = useState(0);
   const [creators, setCreators] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
   const [search, setSearch] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [myCreatorStatus, setMyCreatorStatus] = useState<any>(null);
@@ -71,12 +68,6 @@ export default function CreatorsScreen() {
       setLoading(false);
     }
   };
-
-  const onRefresh = useCallback(async () => {
-    setRefreshing(true);
-    await loadCreators();
-    setRefreshing(false);
-  }, [activeTab, selectedCategory, search]);
 
   const handleSearch = () => { loadCreators(); };
 
@@ -187,7 +178,6 @@ export default function CreatorsScreen() {
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={s.scrollContent}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.accentPrimary} />}
       >
         {activeTab === 2 && renderCategoryGrid()}
 
@@ -234,11 +224,11 @@ const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bgApp },
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: colors.borderSubtle },
   backBtn: { width: 44, height: 44, justifyContent: 'center', alignItems: 'center' },
-  headerTitle: { fontSize: 20, fontWeight: '800', color: colors.textPrimary, fontStyle: 'italic' },
+  headerTitle: { fontSize: 20, fontWeight: '600', color: colors.textPrimary, fontStyle: 'italic' },
   applyBtn: { backgroundColor: colors.accentPrimary, paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20 },
-  applyBtnText: { fontSize: 13, fontWeight: '700', color: '#FFFFFF' },
+  applyBtnText: { fontSize: 13, fontWeight: '500', color: '#FFFFFF' },
   badgeSmall: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: colors.accentPrimaryLight, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20 },
-  badgeText: { fontSize: 12, fontWeight: '700', color: colors.accentPrimary },
+  badgeText: { fontSize: 12, fontWeight: '500', color: colors.accentPrimary },
   searchWrap: { flexDirection: 'row', alignItems: 'center', marginHorizontal: 16, marginTop: 12, backgroundColor: colors.bgCard, borderRadius: 16, paddingHorizontal: 14, paddingVertical: 10, borderWidth: 1, borderColor: colors.borderLight, gap: 8 },
   searchInput: { flex: 1, fontSize: 15, color: colors.textPrimary },
   tabs: { flexDirection: 'row', marginHorizontal: 16, marginTop: 12, gap: 8 },
@@ -258,19 +248,19 @@ const s = StyleSheet.create({
   cardImageWrap: { position: 'relative' },
   cardImage: { width: '100%', height: CARD_WIDTH * 1.1, backgroundColor: colors.bgSubtle },
   cardImagePlaceholder: { justifyContent: 'center', alignItems: 'center' },
-  cardImageText: { fontSize: 32, fontWeight: '800', color: colors.textHint },
+  cardImageText: { fontSize: 32, fontWeight: '600', color: colors.textHint },
   availabilityDot: { position: 'absolute', bottom: 8, right: 8, width: 14, height: 14, borderRadius: 7, borderWidth: 2, borderColor: '#FFFFFF' },
   cardInfo: { padding: 12 },
   nameRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  cardName: { fontSize: 14, fontWeight: '700', color: colors.textPrimary, flex: 1 },
+  cardName: { fontSize: 14, fontWeight: '500', color: colors.textPrimary, flex: 1 },
   cardCategory: { fontSize: 12, color: colors.accentPrimary, fontWeight: '600', marginTop: 2, textTransform: 'capitalize' },
   statsRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 6 },
   statText: { fontSize: 11, color: colors.textHint, marginRight: 6 },
   loadingWrap: { alignItems: 'center', paddingTop: 60 },
   loadingText: { fontSize: 14, color: colors.textHint, marginTop: 12 },
   emptyWrap: { alignItems: 'center', paddingTop: 60 },
-  emptyTitle: { fontSize: 18, fontWeight: '700', color: colors.textPrimary, marginTop: 12 },
+  emptyTitle: { fontSize: 18, fontWeight: '500', color: colors.textPrimary, marginTop: 12 },
   emptyBody: { fontSize: 14, color: colors.textHint, marginTop: 4, textAlign: 'center', maxWidth: 280 },
   emptyCta: { backgroundColor: colors.accentPrimary, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 24, marginTop: 20 },
-  emptyCtaText: { fontSize: 14, fontWeight: '700', color: '#FFFFFF' },
+  emptyCtaText: { fontSize: 14, fontWeight: '500', color: '#FFFFFF' },
 });

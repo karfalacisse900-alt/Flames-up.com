@@ -233,15 +233,30 @@ export default function MapViewScreen() {
       userEl.innerHTML='<div class="pulse"></div><div class="user-dot"></div>';
       new mapboxgl.Marker(userEl).setLngLat([${lng},${lat}]).addTo(map);
 
+      function escapeHtml(value){
+        return String(value || '').replace(/[&<>"']/g,function(ch){
+          return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[ch];
+        });
+      }
+      function safeHttpUrl(value){
+        try {
+          var url = new URL(String(value || ''));
+          return (url.protocol === 'https:' || url.protocol === 'http:') ? url.toString() : '';
+        } catch(e) {
+          return '';
+        }
+      }
+
       nodes.forEach(function(node){
         var el = document.createElement('div');
         el.className = 'pin';
         if(node.kind === 'place'){
-          var photo = node.photo_url ? '<img src="' + node.photo_url + '" />' : '<span>' + (node.order || 1) + '</span>';
+          var photoUrl = safeHttpUrl(node.photo_url);
+          var photo = photoUrl ? '<img alt="" src="' + escapeHtml(photoUrl) + '" />' : '<span>' + escapeHtml(node.order || 1) + '</span>';
           var badge = node.rating ? Number(node.rating).toFixed(1) : (node.order || '');
           el.innerHTML = '<div class="photo-pin">' + photo + '<div class="pin-badge">' + badge + '</div></div>';
         } else {
-          el.innerHTML = '<div class="cluster-pin">' + node.count + '</div>';
+          el.innerHTML = '<div class="cluster-pin">' + escapeHtml(node.count) + '</div>';
         }
 
         var marker = new mapboxgl.Marker(el).setLngLat([node.lng,node.lat]).addTo(map);
@@ -493,7 +508,7 @@ const s = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  cityName: { fontSize: 20, fontWeight: '800', color: '#1B4332', letterSpacing: -0.5 },
+  cityName: { fontSize: 20, fontWeight: '600', color: '#1B4332', letterSpacing: -0.5 },
   subtitle: { fontSize: 12, color: '#8B7355', marginTop: 1, fontWeight: '500' },
   locateBtn: {
     width: 40,
@@ -602,7 +617,7 @@ const s = StyleSheet.create({
   cardImg: { width: 72, height: 72, borderRadius: 16, overflow: 'hidden' },
   cardImgFallback: { backgroundColor: '#F5F0EB', justifyContent: 'center', alignItems: 'center' },
   cardInfo: { flex: 1, justifyContent: 'center' },
-  cardName: { fontSize: 18, fontWeight: '800', color: '#1B4332', letterSpacing: -0.3 },
+  cardName: { fontSize: 18, fontWeight: '600', color: '#1B4332', letterSpacing: -0.3 },
   cardMeta: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6 },
   ratingPill: {
     flexDirection: 'row',
@@ -613,7 +628,7 @@ const s = StyleSheet.create({
     borderRadius: 10,
     backgroundColor: '#FEF3C7',
   },
-  ratingText: { fontSize: 13, fontWeight: '700', color: '#92400E' },
+  ratingText: { fontSize: 13, fontWeight: '500', color: '#92400E' },
   statusPill: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -623,7 +638,7 @@ const s = StyleSheet.create({
     borderRadius: 10,
   },
   statusDot: { width: 6, height: 6, borderRadius: 3 },
-  statusLabel: { fontSize: 12, fontWeight: '700' },
+  statusLabel: { fontSize: 12, fontWeight: '500' },
   reviewCount: { fontSize: 12, color: '#8B7355' },
   cardAddress: { fontSize: 13, color: '#8B7355', marginTop: 4 },
   cardActions: { flexDirection: 'row', gap: 10, marginTop: 16 },
@@ -637,7 +652,7 @@ const s = StyleSheet.create({
     borderRadius: 16,
     backgroundColor: '#2D6A4F',
   },
-  actionPrimaryText: { fontSize: 14, fontWeight: '700', color: '#FFFFFF' },
+  actionPrimaryText: { fontSize: 14, fontWeight: '500', color: '#FFFFFF' },
   actionSecondary: {
     flex: 1,
     flexDirection: 'row',
@@ -650,5 +665,5 @@ const s = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#A5D6A7',
   },
-  actionSecondaryText: { fontSize: 13, fontWeight: '700', color: '#2D6A4F' },
+  actionSecondaryText: { fontSize: 13, fontWeight: '500', color: '#2D6A4F' },
 });

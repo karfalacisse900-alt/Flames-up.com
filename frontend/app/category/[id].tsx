@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, Image, ScrollView,
-  RefreshControl, Dimensions, ActivityIndicator,
+  Dimensions, ActivityIndicator,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
@@ -85,7 +85,6 @@ export default function CategoryScreen() {
 
   const [sections, setSections] = useState<Record<string, any[]>>({});
   const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
   const [coords, setCoords] = useState({ lat: 40.7128, lng: -74.006 }); // Default NYC
   const [locReady, setLocReady] = useState(false);
 
@@ -116,8 +115,6 @@ export default function CategoryScreen() {
     setSections(result);
     setLoading(false);
   };
-
-  const onRefresh = useCallback(async () => { setRefreshing(true); await loadData(); setRefreshing(false); }, [coords]);
 
   // Masonry tile layout — varying sizes like the reference
   const renderSection = (label: string, places: any[]) => {
@@ -190,7 +187,6 @@ export default function CategoryScreen() {
 
       <ScrollView
         showsVerticalScrollIndicator={false}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#1A1A1A" />}
         contentContainerStyle={{ paddingBottom: 100 }}
       >
         {loading ? (
@@ -212,10 +208,10 @@ const ms = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#E2DFD7' },
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingBottom: 8 },
   backBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#FFF', justifyContent: 'center', alignItems: 'center' },
-  headerTitle: { fontSize: 20, fontWeight: '800', color: '#1A1A1A' },
+  headerTitle: { fontSize: 20, fontWeight: '600', color: '#1A1A1A' },
 
   section: { paddingHorizontal: P, marginBottom: 24 },
-  sectionTitle: { fontSize: 22, fontWeight: '900', color: '#1A1A1A', fontStyle: 'italic', marginBottom: 8 },
+  sectionTitle: { fontSize: 22, fontWeight: '500', color: '#1A1A1A', fontStyle: 'italic', marginBottom: 8 },
 
   row: { flexDirection: 'row', gap: G, marginBottom: G },
   stackCol: { gap: G },

@@ -13,11 +13,12 @@ This folder contains a high-performance ranking core and a JSI install scaffold.
   - MMR diversity reranking
 
 - `RecommendationEngineJSI.cpp`:
-  JSI install scaffold that exposes `global.__FlamesRecommendationEngine.rankFeed(payloadJson)`.
+  JSI bridge that exposes:
+  - `global.__FlamesRecommendationEngine.rankFeedItems(items, context, options)`
+  - `global.__FlamesRecommendationEngine.rankFeed(payloadJson)` for backwards compatibility
 
 ## Integration Steps
 
 1. Add these sources to your iOS/Android native targets.
 2. Call `flames::InstallRecommendationEngine(runtime)` during JS runtime initialization.
-3. Implement payload parsing in `RecommendationEngineJSI.cpp`.
-4. Keep the JS fallback in `src/recommendation/` for non-native environments.
+3. Keep the JS fallback in `src/recommendation/` for Expo Go, web, and any build where the native engine is not installed.

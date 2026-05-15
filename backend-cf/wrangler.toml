@@ -5,26 +5,29 @@ compatibility_flags = ["nodejs_compat"]
 account_id = "2ca88b3551321681a5f9434814f38ec8"
 
 [vars]
+ENVIRONMENT = "development"
 FRONTEND_URL = "https://flames-up.com"
 CLOUDFLARE_ACCOUNT_ID = "2ca88b3551321681a5f9434814f38ec8"
+SUPABASE_URL = "https://cclgvxukwccvtgrbcwie.supabase.co"
+GOOGLE_OAUTH_CLIENT_IDS = "702354172189-dcg22qr9dqln7mqd1gi3q3bdbl9dajcd.apps.googleusercontent.com,702354172189-9gg83vd92n3s217n5pb4ddqqsnme8ocb.apps.googleusercontent.com"
+APPLE_OAUTH_AUDIENCES = "com.karfala90.frontend"
 MAPBOX_ACCESS_TOKEN = ""
 CLOUDFLARE_IMAGES_ACCOUNT_HASH = "DY-IgVdOm-0zb0K5ZFnpKA"
 OWNER_USERNAMES = "dxhfqhsd5c"
-MEDIA_AI_ENHANCEMENT = "flux2"
-MEDIA_AI_MODEL = "@cf/black-forest-labs/flux-2-klein-9b"
 MEDIA_BACKUP_MAX_VIDEO_BYTES = "95000000"
 
 [observability]
 enabled = true
 head_sampling_rate = 1
 
-[ai]
-binding = "AI"
-
 [[d1_databases]]
 binding = "DB"
 database_name = "flames-up"
 database_id = "ce387f44-33eb-42ac-85cb-46b6009b49f5"
+
+[[kv_namespaces]]
+binding = "KV"
+id = "cecde60b06c24da8abfa01a617aac9eb"
 
 [[r2_buckets]]
 binding = "MEDIA_BACKUP"
@@ -34,26 +37,29 @@ bucket_name = "flames-up-media-backup"
 name = "flames-up-api"
 
 [env.production.vars]
+ENVIRONMENT = "production"
 FRONTEND_URL = "https://flames-up.com"
 CLOUDFLARE_ACCOUNT_ID = "2ca88b3551321681a5f9434814f38ec8"
+SUPABASE_URL = "https://cclgvxukwccvtgrbcwie.supabase.co"
+GOOGLE_OAUTH_CLIENT_IDS = "702354172189-dcg22qr9dqln7mqd1gi3q3bdbl9dajcd.apps.googleusercontent.com,702354172189-9gg83vd92n3s217n5pb4ddqqsnme8ocb.apps.googleusercontent.com"
+APPLE_OAUTH_AUDIENCES = "com.karfala90.frontend"
 MAPBOX_ACCESS_TOKEN = ""
 CLOUDFLARE_IMAGES_ACCOUNT_HASH = "DY-IgVdOm-0zb0K5ZFnpKA"
 OWNER_USERNAMES = "dxhfqhsd5c"
-MEDIA_AI_ENHANCEMENT = "flux2"
-MEDIA_AI_MODEL = "@cf/black-forest-labs/flux-2-klein-9b"
 MEDIA_BACKUP_MAX_VIDEO_BYTES = "95000000"
 
 [env.production.observability]
 enabled = true
 head_sampling_rate = 1
 
-[env.production.ai]
-binding = "AI"
-
 [[env.production.d1_databases]]
 binding = "DB"
 database_name = "flames-up"
 database_id = "ce387f44-33eb-42ac-85cb-46b6009b49f5"
+
+[[env.production.kv_namespaces]]
+binding = "KV"
+id = "cecde60b06c24da8abfa01a617aac9eb"
 
 [[env.production.r2_buckets]]
 binding = "MEDIA_BACKUP"

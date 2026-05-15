@@ -27,9 +27,18 @@ interface UserStatus {
 interface StatusBarProps {
   currentUserId: string;
   onAddStatus?: () => void;
+  friendsOnly?: boolean;
+  showOwnStory?: boolean;
+  compact?: boolean;
 }
 
-export default function StatusBar({ currentUserId, onAddStatus }: StatusBarProps) {
+export default function StatusBar({
+  currentUserId,
+  onAddStatus,
+  friendsOnly = false,
+  showOwnStory = true,
+  compact = false,
+}: StatusBarProps) {
   const { t } = useI18n();
   const currentUser = useAuthStore((state) => state.user);
   const [userStatuses, setUserStatuses] = useState<UserStatus[]>([]);
@@ -41,12 +50,12 @@ export default function StatusBar({ currentUserId, onAddStatus }: StatusBarProps
 
   const loadStatuses = useCallback(async () => {
     try {
-      const response = await api.get('/statuses');
+      const response = await api.get(friendsOnly ? '/statuses/friends' : '/statuses');
       setUserStatuses(response.data);
     } catch (error) {
       console.log('Error loading statuses:', error);
     }
-  }, []);
+  }, [friendsOnly]);
 
   useFocusEffect(
     useCallback(() => {
@@ -84,33 +93,42 @@ export default function StatusBar({ currentUserId, onAddStatus }: StatusBarProps
     }
   };
 
+  if (!showOwnStory && otherStatuses.length === 0) {
+    return null;
+  }
+
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, compact && styles.compactContainer]}>
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
+        bounces={false}
+        alwaysBounceHorizontal={false}
+        overScrollMode="never"
         contentContainerStyle={styles.scrollContent}
       >
-        <TouchableOpacity style={styles.statusItem} onPress={onAddStatus} activeOpacity={0.85}>
-          <View style={styles.ownStoryWrap}>
-            <View style={styles.ownStoryRing}>
-              {currentUser?.profile_image ? (
-                <Image
-                  source={{ uri: currentUser.profile_image }}
-                  style={styles.ownStoryAvatar}
-                />
-              ) : (
-                <View style={styles.ownStoryAvatarPlaceholder}>
-                  <Text style={styles.ownStoryAvatarText}>{ownStoryInitial}</Text>
-                </View>
-              )}
+        {showOwnStory ? (
+          <TouchableOpacity style={styles.statusItem} onPress={onAddStatus} activeOpacity={0.85}>
+            <View style={styles.ownStoryWrap}>
+              <View style={styles.ownStoryRing}>
+                {currentUser?.profile_image ? (
+                  <Image
+                    source={{ uri: currentUser.profile_image }}
+                    style={styles.ownStoryAvatar}
+                  />
+                ) : (
+                  <View style={styles.ownStoryAvatarPlaceholder}>
+                    <Text style={styles.ownStoryAvatarText}>{ownStoryInitial}</Text>
+                  </View>
+                )}
+              </View>
+              <View style={styles.plusBadge}>
+                <Ionicons name="add" size={15} color={colors.white} />
+              </View>
             </View>
-            <View style={styles.plusBadge}>
-              <Ionicons name="add" size={15} color={colors.white} />
-            </View>
-          </View>
-          <Text style={styles.statusLabel}>{t('yourStory')}</Text>
-        </TouchableOpacity>
+            <Text style={styles.statusLabel}>{t('yourStory')}</Text>
+          </TouchableOpacity>
+        ) : null}
 
         {otherStatuses.map((userStatus) => (
           <TouchableOpacity
@@ -179,8 +197,8 @@ export default function StatusBar({ currentUserId, onAddStatus }: StatusBarProps
                   />
                 ) : (
                   <View style={styles.statusHeaderAvatarPlaceholder}>
-                    <Text style={styles.statusHeaderAvatarText}>
-                      {selectedStatus.user_username[0].toUpperCase()}
+                  <Text style={styles.statusHeaderAvatarText}>
+                      {(selectedStatus.user_username || selectedStatus.user_full_name || 'U')[0].toUpperCase()}
                     </Text>
                   </View>
                 )}
@@ -214,15 +232,19 @@ export default function StatusBar({ currentUserId, onAddStatus }: StatusBarProps
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: colors.white,
-    paddingVertical: spacing.sm,
+    backgroundColor: colors.bgApp,
+    paddingVertical: spacing.gutter,
+  },
+  compactContainer: {
+    paddingTop: 0,
+    paddingBottom: spacing.xs,
   },
   scrollContent: {
     paddingHorizontal: spacing.md,
+    gap: spacing.gutter,
   },
   statusItem: {
     alignItems: 'center',
-    marginRight: spacing.md,
   },
   ownStoryWrap: {
     width: 68,
@@ -235,10 +257,10 @@ const styles = StyleSheet.create({
     borderRadius: 34,
     padding: 3,
     borderWidth: 2,
-    borderColor: colors.borderLight,
+    borderColor: colors.borderSubtle,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: colors.white,
+    backgroundColor: colors.surfaceRaised,
   },
   ownStoryAvatar: {
     width: 58,
@@ -249,7 +271,7 @@ const styles = StyleSheet.create({
     width: 58,
     height: 58,
     borderRadius: 29,
-    backgroundColor: colors.backgroundSecondary,
+    backgroundColor: colors.bgSubtle,
     borderWidth: 1,
     borderColor: colors.borderSubtle,
     justifyContent: 'center',
@@ -258,7 +280,7 @@ const styles = StyleSheet.create({
   ownStoryAvatarText: {
     color: colors.primary,
     fontSize: 22,
-    fontWeight: '700',
+    fontWeight: '500',
   },
   plusBadge: {
     position: 'absolute',
@@ -269,7 +291,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     borderWidth: 2,
     borderColor: colors.white,
-    backgroundColor: colors.primary,
+    backgroundColor: colors.accentPrimary,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -283,7 +305,7 @@ const styles = StyleSheet.create({
   },
   unviewedRing: {
     borderWidth: 3,
-    borderColor: colors.accent,
+    borderColor: colors.accentPrimary,
   },
   viewedRing: {
     borderWidth: 2,

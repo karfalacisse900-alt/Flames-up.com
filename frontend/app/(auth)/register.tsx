@@ -65,7 +65,7 @@ export default function RegisterScreen() {
           setUsernameStatus('taken');
           setSuggestions(generateSuggestions(clean));
         }
-      } catch (e) {
+      } catch {
         setUsernameStatus('taken');
         setSuggestions(generateSuggestions(clean));
       }
@@ -103,7 +103,7 @@ export default function RegisterScreen() {
       await register(email, password, username, fullName);
       router.replace('/(tabs)/home');
     } catch (error: any) {
-      Alert.alert('Registration Failed', error.response?.data?.detail || 'Could not create account');
+      Alert.alert('Registration Failed', error.response?.data?.detail || error?.message || 'Could not create account');
     } finally {
       setIsLoading(false);
     }
@@ -269,7 +269,7 @@ const styles = StyleSheet.create({
   },
   title: {
     fontSize: 28,
-    fontWeight: '700',
+    fontWeight: '500',
     color: colors.textPrimary,
     marginBottom: spacing.xs,
   },

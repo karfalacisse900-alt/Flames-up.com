@@ -1,141 +1,191 @@
-import React, { useState, useRef } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
-  TextInput,
-  TouchableOpacity,
-  Image,
-  Dimensions,
-  KeyboardAvoidingView,
-  Platform,
   ActivityIndicator,
   Alert,
-  ScrollView,
-  Modal,
+  Image,
+  Keyboard,
+  KeyboardAvoidingView,
+  Platform,
   Pressable,
-  FlatList,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  useWindowDimensions,
+  View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
+import { CameraType, CameraView, FlashMode, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
-import { colors } from '../src/utils/theme';
-import { useAuthStore } from '../src/store/authStore';
+import { StatusBar } from 'expo-status-bar';
+import { Ionicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
 import api from '../src/api/client';
 import { uploadImage } from '../src/utils/mediaUpload';
+import { useAuthStore } from '../src/store/authStore';
+import { colors, hitSlop, spacing } from '../src/utils/theme';
+import { STORY_IMAGE_PICKER_QUALITY } from '../src/utils/mediaQuality';
 import { useI18n } from '../src/utils/i18n';
 import { isPhoneVerificationError, requireVerifiedPhone } from '../src/utils/phoneVerification';
 
-const { width: SW, height: SH } = Dimensions.get('window');
+type ToolMode = 'none' | 'text' | 'stickers' | 'color';
 
-// ─── Design tokens ───────────────────────────────────────────────────────────
-const GRADIENTS = [
-  ['#6366f1', '#8b5cf6'], ['#ec4899', '#f43f5e'], ['#f59e0b', '#ef4444'],
-  ['#10b981', '#059669'], ['#0ea5e9', '#3b82f6'], ['#1f2937', '#111827'],
-  ['#7c3aed', '#4f46e5'], ['#be185d', '#9333ea'], ['#0284c7', '#0d9488'],
-  ['#dc2626', '#f97316'], ['#16a34a', '#2563eb'], ['#1B4332', '#2D6A4F'],
-];
+type PlacedSticker = {
+  emoji: string;
+  x: number;
+  y: number;
+};
 
-const SOLID_COLORS = [
-  '#6366f1', '#8b5cf6', '#ec4899', '#ef4444', '#f59e0b', '#10b981',
-  '#0ea5e9', '#1f2937', '#059669', '#7c3aed', '#be185d', '#0284c7',
-  '#1B4332', '#2D6A4F', '#000000', '#FFFFFF',
-];
+const TEXT_COLORS = ['#FFFFFF', '#F8F4EA', '#DFFF32', '#F6A6B7', '#83D89B', '#111111'];
+const STICKERS = ['Love', 'Mood', 'NYC', 'Today', 'Fire', 'Real', 'Vibe', 'Glow'];
 
-const FONTS = [
-  { name: 'Default', weight: '700' as const, style: 'normal' as const },
-  { name: 'Light', weight: '300' as const, style: 'normal' as const },
-  { name: 'Bold', weight: '900' as const, style: 'normal' as const },
-  { name: 'Italic', weight: '700' as const, style: 'italic' as const },
-  { name: 'Thin', weight: '100' as const, style: 'normal' as const },
-];
-
-const FONT_SIZES = [18, 24, 32, 42, 56];
-
-const TEXT_COLORS = [
-  '#FFFFFF', '#000000', '#F97316', '#EF4444', '#10B981',
-  '#3B82F6', '#8B5CF6', '#F59E0B', '#EC4899', '#6366F1',
-];
-
-const STICKERS = [
-  '🔥', '❤️', '😂', '🎉', '✨', '💯', '🙌', '👑', '💪', '🎵',
-  '📍', '🍕', '☕', '🌟', '🏆', '💬', '🎯', '🚀', '🌈', '⚡',
-  '🎶', '💥', '🌻', '🦋', '🍔', '🎸', '🏖️', '🌙', '💫', '🎨',
-];
-
-type ToolMode = 'none' | 'text' | 'color' | 'font' | 'sticker' | 'textColor';
+function dataUriFromBase64(base64?: string, fallbackUri?: string) {
+  if (base64) return `data:image/jpeg;base64,${base64}`;
+  if (fallbackUri?.startsWith('data:')) return fallbackUri;
+  return '';
+}
 
 export default function CreateStatusScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
+  const { width, height } = useWindowDimensions();
   const { user } = useAuthStore();
   const { t } = useI18n();
-  const [content, setContent] = useState('');
-  const [image, setImage] = useState<string | null>(null);
-  const [imageUri, setImageUri] = useState<string | null>(null);
-  const [bgColorIdx, setBgColorIdx] = useState(0);
-  const [useGradient, setUseGradient] = useState(true);
-  const [isPosting, setIsPosting] = useState(false);
-  const [fontIdx, setFontIdx] = useState(0);
-  const [fontSizeIdx, setFontSizeIdx] = useState(2);
-  const [textAlign, setTextAlign] = useState<'left' | 'center' | 'right'>('center');
-  const [textColor, setTextColor] = useState('#FFFFFF');
-  const [toolMode, setToolMode] = useState<ToolMode>('none');
-  const [placedStickers, setPlacedStickers] = useState<{ emoji: string; x: number; y: number }[]>([]);
+  const cameraRef = useRef<CameraView>(null);
   const inputRef = useRef<TextInput>(null);
+  const requestedPermissionRef = useRef(false);
+  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
+  const [cameraFacing, setCameraFacing] = useState<CameraType>('back');
+  const [flash, setFlash] = useState<FlashMode>('off');
+  const [content, setContent] = useState('');
+  const [imageUri, setImageUri] = useState('');
+  const [imageData, setImageData] = useState('');
+  const [textColor, setTextColor] = useState('#FFFFFF');
+  const [textAlign, setTextAlign] = useState<'left' | 'center' | 'right'>('left');
+  const [toolMode, setToolMode] = useState<ToolMode>('none');
+  const [placedStickers, setPlacedStickers] = useState<PlacedSticker[]>([]);
+  const [isCapturing, setIsCapturing] = useState(false);
+  const [isPosting, setIsPosting] = useState(false);
 
-  const pickImage = async () => {
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'], allowsEditing: true, aspect: [9, 16], quality: 0.7, base64: true,
-    });
-    if (!result.canceled && result.assets[0]) {
-      setImageUri(result.assets[0].uri);
-      if (result.assets[0].base64) setImage(`data:image/jpeg;base64,${result.assets[0].base64}`);
+  const hasImage = !!imageUri;
+  const canPost = !!content.trim() || !!imageData || placedStickers.length > 0;
+  const storyFrameHeight = Math.max(520, height - insets.top - insets.bottom - 32);
+
+  useEffect(() => {
+    if (!cameraPermission || cameraPermission.granted || requestedPermissionRef.current) return;
+    requestedPermissionRef.current = true;
+    void requestCameraPermission();
+  }, [cameraPermission, requestCameraPermission]);
+
+  const focusText = useCallback(() => {
+    setToolMode('text');
+    requestAnimationFrame(() => inputRef.current?.focus());
+  }, []);
+
+  const cycleTextAlign = useCallback(() => {
+    const alignments: Array<'left' | 'center' | 'right'> = ['left', 'center', 'right'];
+    setTextAlign((current) => alignments[(alignments.indexOf(current) + 1) % alignments.length]);
+  }, []);
+
+  const cycleFlash = useCallback(() => {
+    const modes: FlashMode[] = ['off', 'on', 'auto'];
+    setFlash((current) => modes[(modes.indexOf(current) + 1) % modes.length]);
+  }, []);
+
+  const flipCamera = useCallback(() => {
+    setCameraFacing((current) => (current === 'back' ? 'front' : 'back'));
+  }, []);
+
+  const capturePhoto = useCallback(async () => {
+    if (isCapturing || !cameraRef.current || hasImage) return;
+    setIsCapturing(true);
+    try {
+      const picture = await cameraRef.current.takePictureAsync({
+        quality: STORY_IMAGE_PICKER_QUALITY,
+        base64: true,
+        exif: false,
+        skipProcessing: false,
+      });
+      if (!picture?.uri) return;
+      setImageUri(picture.uri);
+      setImageData(dataUriFromBase64(picture.base64 || undefined, picture.uri || undefined));
+      setToolMode('text');
+    } catch {
+      Alert.alert('Camera failed', 'Could not take that photo. Please try again.');
+    } finally {
+      setIsCapturing(false);
     }
-  };
+  }, [hasImage, isCapturing]);
 
-  const takePhoto = async () => {
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') { Alert.alert(t('permissionNeeded'), t('cameraAccessRequired')); return; }
-    const result = await ImagePicker.launchCameraAsync({
-      allowsEditing: true, aspect: [9, 16], quality: 0.7, base64: true,
-    });
-    if (!result.canceled && result.assets[0]) {
-      setImageUri(result.assets[0].uri);
-      if (result.assets[0].base64) setImage(`data:image/jpeg;base64,${result.assets[0].base64}`);
+  const pickImage = useCallback(async () => {
+    try {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission needed', 'Please allow access to your photo library.');
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: true,
+        aspect: [9, 16],
+        quality: STORY_IMAGE_PICKER_QUALITY,
+        base64: true,
+        preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Current,
+      });
+      if (result.canceled || !result.assets?.[0]) return;
+      const asset = result.assets[0];
+      setImageUri(asset.uri);
+      setImageData(dataUriFromBase64(asset.base64 || undefined, asset.uri || undefined));
+      setToolMode('text');
+    } catch {
+      Alert.alert('Gallery failed', 'Could not open your gallery. Please try again.');
     }
-  };
+  }, []);
 
-  const addSticker = (emoji: string) => {
-    setPlacedStickers(prev => [...prev, {
-      emoji,
-      x: 100 + Math.random() * (SW - 200),
-      y: 200 + Math.random() * (SH - 500),
-    }]);
+  const addSticker = useCallback((label: string) => {
+    const maxX = Math.max(120, width - 170);
+    const maxY = Math.max(230, storyFrameHeight - 250);
+    setPlacedStickers((current) => [
+      ...current,
+      {
+        emoji: label,
+        x: 66 + Math.random() * maxX,
+        y: 210 + Math.random() * maxY,
+      },
+    ]);
     setToolMode('none');
-  };
+  }, [storyFrameHeight, width]);
 
-  const handlePost = async () => {
-    if (!content.trim() && !image && placedStickers.length === 0) {
+  const clearCapture = useCallback(() => {
+    setImageUri('');
+    setImageData('');
+    setToolMode('none');
+  }, []);
+
+  const handlePost = useCallback(async () => {
+    if (!canPost || isPosting) {
       Alert.alert(t('error'), t('statusEmptyMessage'));
       return;
     }
     if (!requireVerifiedPhone(user, router, 'share stories')) return;
+    if (imageUri && !imageData) {
+      Alert.alert('Image not ready', 'Please capture or choose the image again.');
+      return;
+    }
+    Keyboard.dismiss();
     setIsPosting(true);
     try {
-      let uploadedImage = image;
-      if (image) {
-        uploadedImage = await uploadImage(image);
-      }
-      const gradient = useGradient ? GRADIENTS[bgColorIdx] : null;
+      const uploadedImage = imageData ? await uploadImage(imageData) : '';
       await api.post('/statuses', {
         content: content.trim(),
-        image: uploadedImage,
-        background_color: useGradient ? GRADIENTS[bgColorIdx][0] : SOLID_COLORS[bgColorIdx],
-        font_style: FONTS[fontIdx].name,
+        image: uploadedImage || undefined,
+        background_color: '#080D10',
+        font_style: 'Default',
         text_color: textColor,
         text_align: textAlign,
-        font_size: FONT_SIZES[fontSizeIdx],
+        font_size: 34,
         stickers: placedStickers.length > 0 ? JSON.stringify(placedStickers) : undefined,
       });
       router.back();
@@ -148,245 +198,416 @@ export default function CreateStatusScreen() {
     } finally {
       setIsPosting(false);
     }
+  }, [canPost, content, imageData, imageUri, isPosting, placedStickers, router, t, textAlign, textColor, user]);
+
+  const renderCameraSurface = () => {
+    if (!cameraPermission) {
+      return (
+        <View style={s.permissionState}>
+          <ActivityIndicator color="#FFFFFF" />
+        </View>
+      );
+    }
+
+    if (!cameraPermission.granted && !hasImage) {
+      return (
+        <View style={s.permissionState}>
+          <Ionicons name="camera-outline" size={42} color="#FFFFFF" />
+          <Text style={s.permissionTitle}>Camera access needed</Text>
+          <Text style={s.permissionText}>Allow camera access to create a story directly in Flames.</Text>
+          <TouchableOpacity style={s.permissionButton} onPress={requestCameraPermission} activeOpacity={0.84}>
+            <Text style={s.permissionButtonText}>Allow camera</Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
+
+    if (hasImage) {
+      return <Image source={{ uri: imageUri }} style={s.cameraFill} resizeMode="cover" />;
+    }
+
+    return (
+      <CameraView
+        ref={cameraRef}
+        style={s.cameraFill}
+        mode="picture"
+        facing={cameraFacing}
+        flash={flash}
+        mirror={cameraFacing === 'front'}
+      />
+    );
   };
 
-  const hasImage = !!imageUri;
-  const font = FONTS[fontIdx];
-  const fontSize = FONT_SIZES[fontSizeIdx];
-  const bgGradient = useGradient ? GRADIENTS[bgColorIdx % GRADIENTS.length] : null;
-  const bgSolid = !useGradient ? SOLID_COLORS[bgColorIdx % SOLID_COLORS.length] : '#000';
-  const bgStyle = hasImage ? { backgroundColor: '#000' } : bgGradient ? { backgroundColor: bgGradient[0] } : { backgroundColor: bgSolid };
-
-  const toggleTool = (mode: ToolMode) => setToolMode(prev => prev === mode ? 'none' : mode);
-
   return (
-    <View style={[s.container, bgStyle]}>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
-        {/* Background image */}
-        {hasImage && <Image source={{ uri: imageUri! }} style={s.bgImage} resizeMode="cover" />}
-        {/* Gradient overlay if not image */}
-        {!hasImage && bgGradient && (
-          <View style={[s.gradientOverlay, { backgroundColor: bgGradient[1], opacity: 0.6 }]} />
-        )}
+    <View style={s.root}>
+      <StatusBar hidden />
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={s.flex}>
+        <View style={[s.cameraFrame, { height: storyFrameHeight }]}>
+          {renderCameraSurface()}
+          <View style={s.cameraShade} pointerEvents="none" />
 
-        {/* Placed stickers */}
-        {placedStickers.map((st, i) => (
-          <TouchableOpacity
-            key={i}
-            style={[s.placedSticker, { left: st.x - 24, top: st.y - 24 }]}
-            onLongPress={() => setPlacedStickers(prev => prev.filter((_, idx) => idx !== i))}
-          >
-            <Text style={s.placedStickerText}>{st.emoji}</Text>
-          </TouchableOpacity>
-        ))}
-
-        {/* ─── Top Bar ─────────────────────────────────────────────── */}
-        <SafeAreaView edges={['top']} style={s.topBar}>
-          <TouchableOpacity onPress={() => router.back()} style={s.topBtn}>
-            <Ionicons name="close" size={28} color="#FFF" />
-          </TouchableOpacity>
-
-          <View style={s.topTools}>
-            <TouchableOpacity onPress={() => toggleTool('font')} style={[s.pill, toolMode === 'font' && s.pillActive]}>
-              <Ionicons name="text" size={16} color="#FFF" />
-              <Text style={s.pillText}>Aa</Text>
+          <View style={[s.topControls, { top: insets.top + 18 }]}>
+            <TouchableOpacity style={s.circleButton} onPress={() => router.back()} activeOpacity={0.82} accessibilityLabel="Close story editor">
+              <Ionicons name="close" size={38} color="#FFFFFF" />
             </TouchableOpacity>
-            <TouchableOpacity onPress={() => toggleTool('textColor')} style={[s.pill, toolMode === 'textColor' && s.pillActive]}>
-              <View style={[s.colorDotSmall, { backgroundColor: textColor }]} />
+            <TouchableOpacity style={s.flashButton} onPress={cycleFlash} activeOpacity={0.82} accessibilityLabel="Change flash mode">
+              <Ionicons name={flash === 'off' ? 'flash-off' : flash === 'on' ? 'flash' : 'sparkles'} size={38} color="#FFFFFF" />
             </TouchableOpacity>
-            <TouchableOpacity onPress={() => {
-              const aligns: ('left' | 'center' | 'right')[] = ['left', 'center', 'right'];
-              setTextAlign(aligns[(aligns.indexOf(textAlign) + 1) % 3]);
-            }} style={s.pill}>
-              <Ionicons name={textAlign === 'left' ? 'reorder-two' : textAlign === 'center' ? 'reorder-three' : 'reorder-four'} size={16} color="#FFF" />
+            <TouchableOpacity style={s.circleButton} onPress={flipCamera} activeOpacity={0.82} accessibilityLabel="Switch camera">
+              <Ionicons name="settings-outline" size={38} color="#FFFFFF" />
             </TouchableOpacity>
           </View>
 
-          <TouchableOpacity
-            style={[s.shareBtn, ((!content.trim() && !image && placedStickers.length === 0) || isPosting) && { opacity: 0.4 }]}
-            onPress={handlePost}
-            disabled={(!content.trim() && !image && placedStickers.length === 0) || isPosting}
-          >
-            {isPosting ? <ActivityIndicator size="small" color="#FFF" /> : (
-              <View style={s.shareBtnInner}>
-                <Ionicons name="paper-plane" size={14} color="#FFF" />
-                <Text style={s.shareBtnText}>{t('share')}</Text>
-              </View>
-            )}
-          </TouchableOpacity>
-        </SafeAreaView>
-
-        {/* ─── Center Text ─────────────────────────────────────────── */}
-        <Pressable style={s.centerContent} onPress={() => inputRef.current?.focus()}>
-          <TextInput
-            ref={inputRef}
-            style={[
-              s.storyInput,
-              { fontSize, textAlign, color: textColor, fontWeight: font.weight, fontStyle: font.style },
-              hasImage && s.storyInputWithImage,
-            ]}
-            placeholder={t('typeYourStory')}
-            placeholderTextColor="rgba(255,255,255,0.4)"
-            value={content}
-            onChangeText={setContent}
-            multiline
-            maxLength={500}
-            autoFocus={!hasImage}
-          />
-        </Pressable>
-
-        {/* ─── Bottom Toolbar ──────────────────────────────────────── */}
-        <SafeAreaView edges={['bottom']} style={s.bottomArea}>
-          {/* Expanding panels */}
-          {toolMode === 'color' && (
-            <View style={s.panel}>
-              <View style={s.panelHeader}>
-                <TouchableOpacity onPress={() => setUseGradient(true)} style={[s.panelTab, useGradient && s.panelTabActive]}>
-                  <Text style={[s.panelTabText, useGradient && { color: '#FFF' }]}>{t('gradients')}</Text>
-                </TouchableOpacity>
-                <TouchableOpacity onPress={() => setUseGradient(false)} style={[s.panelTab, !useGradient && s.panelTabActive]}>
-                  <Text style={[s.panelTabText, !useGradient && { color: '#FFF' }]}>{t('solid')}</Text>
-                </TouchableOpacity>
-              </View>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.colorRow}>
-                {(useGradient ? GRADIENTS : SOLID_COLORS.map(c => [c, c])).map((c, i) => (
-                  <TouchableOpacity
-                    key={i}
-                    style={[s.colorDot, { backgroundColor: Array.isArray(c) ? c[0] : c }, bgColorIdx === i && s.colorDotActive]}
-                    onPress={() => setBgColorIdx(i)}
-                  >
-                    {Array.isArray(c) && c[0] !== c[1] && (
-                      <View style={[s.colorDotHalf, { backgroundColor: c[1] }]} />
-                    )}
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
-            </View>
-          )}
-          {toolMode === 'font' && (
-            <View style={s.panel}>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.colorRow}>
-                {FONTS.map((f, i) => (
-                  <TouchableOpacity key={i} style={[s.fontPill, fontIdx === i && s.fontPillActive]} onPress={() => setFontIdx(i)}>
-                    <Text style={[s.fontPillText, { fontWeight: f.weight, fontStyle: f.style }, fontIdx === i && { color: '#FFF' }]}>{f.name}</Text>
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.colorRow}>
-                {FONT_SIZES.map((sz, i) => (
-                  <TouchableOpacity key={i} style={[s.sizePill, fontSizeIdx === i && s.sizePillActive]} onPress={() => setFontSizeIdx(i)}>
-                    <Text style={[s.sizePillText, fontSizeIdx === i && { color: '#FFF' }]}>{sz}</Text>
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
-            </View>
-          )}
-          {toolMode === 'textColor' && (
-            <View style={s.panel}>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.colorRow}>
-                {TEXT_COLORS.map((c, i) => (
-                  <TouchableOpacity
-                    key={i}
-                    style={[s.textColorDot, { backgroundColor: c }, textColor === c && s.textColorDotActive]}
-                    onPress={() => setTextColor(c)}
-                  />
-                ))}
-              </ScrollView>
-            </View>
-          )}
-          {toolMode === 'sticker' && (
-            <View style={s.panel}>
-              <View style={s.stickerGrid}>
-                {STICKERS.map((em, i) => (
-                  <TouchableOpacity key={i} style={s.stickerItem} onPress={() => addSticker(em)}>
-                    <Text style={s.stickerEmoji}>{em}</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            </View>
-          )}
-
-          {/* Main toolbar */}
-          <View style={s.toolRow}>
-            <TouchableOpacity style={s.bottomBtn} onPress={pickImage}>
-              <Ionicons name="image-outline" size={24} color="#FFF" />
-              <Text style={s.bottomLabel}>{t('gallery')}</Text>
+          <View style={s.leftTools}>
+            <TouchableOpacity style={[s.sideTool, toolMode === 'text' && s.sideToolOn]} onPress={focusText} activeOpacity={0.78}>
+              <Text style={s.sideTextTool}>Aa</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={s.bottomBtn} onPress={takePhoto}>
-              <Ionicons name="camera-outline" size={24} color="#FFF" />
-              <Text style={s.bottomLabel}>{t('camera')}</Text>
+            <TouchableOpacity style={s.sideTool} onPress={() => setToolMode((mode) => (mode === 'color' ? 'none' : 'color'))} activeOpacity={0.78}>
+              <Ionicons name="infinite-outline" size={40} color="#FFFFFF" />
             </TouchableOpacity>
-            {!hasImage && (
-              <TouchableOpacity style={s.bottomBtn} onPress={() => toggleTool('color')}>
-                <View style={[s.colorPreview, { backgroundColor: useGradient ? GRADIENTS[bgColorIdx][0] : SOLID_COLORS[bgColorIdx] }]} />
-                <Text style={s.bottomLabel}>{t('color')}</Text>
-              </TouchableOpacity>
-            )}
-            <TouchableOpacity style={s.bottomBtn} onPress={() => toggleTool('sticker')}>
-              <Text style={{ fontSize: 22 }}>😊</Text>
-              <Text style={s.bottomLabel}>{t('sticker')}</Text>
+            <TouchableOpacity style={s.sideTool} onPress={cycleTextAlign} activeOpacity={0.78}>
+              <Ionicons name="grid-outline" size={35} color="#FFFFFF" />
             </TouchableOpacity>
-            {hasImage && (
-              <TouchableOpacity style={s.bottomBtn} onPress={() => { setImage(null); setImageUri(null); }}>
-                <Ionicons name="trash-outline" size={24} color="#FF6B6B" />
-                <Text style={[s.bottomLabel, { color: '#FF6B6B' }]}>{t('remove')}</Text>
-              </TouchableOpacity>
-            )}
+            <TouchableOpacity style={[s.sideTool, toolMode === 'stickers' && s.sideToolOn]} onPress={() => setToolMode((mode) => (mode === 'stickers' ? 'none' : 'stickers'))} activeOpacity={0.78}>
+              <Ionicons name="happy-outline" size={38} color="#FFFFFF" />
+            </TouchableOpacity>
+            <TouchableOpacity style={s.sideTool} onPress={handlePost} activeOpacity={0.78} disabled={isPosting}>
+              {isPosting ? <ActivityIndicator color="#FFFFFF" /> : <Ionicons name="checkmark" size={42} color="#FFFFFF" />}
+            </TouchableOpacity>
           </View>
-          <Text style={s.charCount}>{content.length}/500</Text>
-        </SafeAreaView>
+
+          {placedStickers.map((sticker, index) => (
+            <TouchableOpacity
+              key={`${sticker.emoji}-${index}`}
+              style={[s.placedSticker, { left: sticker.x, top: sticker.y }]}
+              activeOpacity={0.8}
+              onLongPress={() => setPlacedStickers((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+            >
+              <Text style={s.placedStickerText}>{sticker.emoji}</Text>
+            </TouchableOpacity>
+          ))}
+
+          <Pressable style={s.textLayer} onPress={focusText}>
+            {(toolMode === 'text' || content.trim()) ? (
+              <TextInput
+                ref={inputRef}
+                value={content}
+                onChangeText={(value) => setContent(value.slice(0, 500))}
+                placeholder="Aa"
+                placeholderTextColor="rgba(255,255,255,0.78)"
+                style={[s.storyInput, { color: textColor, textAlign }]}
+                multiline
+                maxLength={500}
+                textAlignVertical="center"
+              />
+            ) : null}
+          </Pressable>
+
+          {toolMode === 'color' ? (
+            <View style={s.colorPanel}>
+              {TEXT_COLORS.map((color) => (
+                <TouchableOpacity
+                  key={color}
+                  style={[s.colorSwatch, { backgroundColor: color }, textColor === color && s.colorSwatchOn]}
+                  onPress={() => setTextColor(color)}
+                  activeOpacity={0.8}
+                  accessibilityLabel={`Use ${color} text`}
+                />
+              ))}
+            </View>
+          ) : null}
+
+          {toolMode === 'stickers' ? (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.stickerPanel} contentContainerStyle={s.stickerContent}>
+              {STICKERS.map((sticker) => (
+                <TouchableOpacity key={sticker} style={s.stickerButton} onPress={() => addSticker(sticker)} activeOpacity={0.82}>
+                  <Text style={s.stickerText}>{sticker}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          ) : null}
+
+          <View style={[s.bottomControls, { bottom: Math.max(insets.bottom + 16, 30) }]}>
+            <TouchableOpacity style={s.galleryButton} onPress={pickImage} activeOpacity={0.82} accessibilityLabel="Open gallery">
+              {hasImage ? (
+                <Image source={{ uri: imageUri }} style={s.galleryThumb} />
+              ) : (
+                <Ionicons name="images-outline" size={25} color="#FFFFFF" />
+              )}
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[s.shutterButton, (isCapturing || hasImage) && s.shutterButtonMuted]}
+              onPress={hasImage ? clearCapture : capturePhoto}
+              activeOpacity={0.82}
+              accessibilityLabel={hasImage ? 'Retake story photo' : 'Take story photo'}
+              disabled={isCapturing}
+            >
+              <View style={s.shutterInner}>
+                {isCapturing ? <ActivityIndicator color="#FFFFFF" /> : null}
+              </View>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[s.sendButton, !canPost && s.sendButtonDisabled]}
+              onPress={handlePost}
+              disabled={!canPost || isPosting}
+              activeOpacity={0.84}
+              accessibilityLabel="Share story"
+            >
+              {isPosting ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Ionicons name="arrow-forward" size={30} color="#FFFFFF" />}
+            </TouchableOpacity>
+          </View>
+        </View>
       </KeyboardAvoidingView>
     </View>
   );
 }
 
 const s = StyleSheet.create({
-  container: { flex: 1 },
-  bgImage: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
-  gradientOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
-  placedSticker: { position: 'absolute', zIndex: 5 },
-  placedStickerText: { fontSize: 48 },
-  // Top bar
-  topBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 12, paddingBottom: 4, zIndex: 10 },
-  topBtn: { width: 44, height: 44, borderRadius: 22, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.25)' },
-  topTools: { flexDirection: 'row', gap: 6 },
-  pill: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 20, paddingHorizontal: 12, paddingVertical: 7 },
-  pillActive: { backgroundColor: 'rgba(255,255,255,0.35)' },
-  pillText: { color: '#FFF', fontSize: 13, fontWeight: '700' },
-  colorDotSmall: { width: 18, height: 18, borderRadius: 9, borderWidth: 2, borderColor: '#FFF' },
-  shareBtn: { backgroundColor: '#2D6A4F', borderRadius: 22, paddingHorizontal: 16, paddingVertical: 9 },
-  shareBtnInner: { flexDirection: 'row', alignItems: 'center', gap: 5 },
-  shareBtnText: { color: '#FFF', fontSize: 13, fontWeight: '700' },
-  // Center
-  centerContent: { flex: 1, justifyContent: 'center', paddingHorizontal: 20, zIndex: 1 },
-  storyInput: { lineHeight: 48, padding: 16, textShadowColor: 'rgba(0,0,0,0.3)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 3 },
-  storyInputWithImage: { backgroundColor: 'rgba(0,0,0,0.35)', borderRadius: 16 },
-  // Bottom
-  bottomArea: { paddingBottom: 4, zIndex: 10 },
-  panel: { backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 16, marginHorizontal: 12, marginBottom: 8, padding: 12 },
-  panelHeader: { flexDirection: 'row', gap: 8, marginBottom: 10 },
-  panelTab: { paddingHorizontal: 14, paddingVertical: 5, borderRadius: 14, backgroundColor: 'rgba(255,255,255,0.1)' },
-  panelTabActive: { backgroundColor: 'rgba(255,255,255,0.3)' },
-  panelTabText: { color: 'rgba(255,255,255,0.6)', fontSize: 12, fontWeight: '600' },
-  colorRow: { gap: 8, paddingHorizontal: 4 },
-  colorDot: { width: 36, height: 36, borderRadius: 18, borderWidth: 2, borderColor: 'transparent', overflow: 'hidden' },
-  colorDotActive: { borderColor: '#FFF', borderWidth: 3 },
-  colorDotHalf: { position: 'absolute', bottom: 0, left: 0, right: 0, height: '50%' },
-  fontPill: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.1)', marginRight: 4 },
-  fontPillActive: { backgroundColor: 'rgba(255,255,255,0.35)' },
-  fontPillText: { color: 'rgba(255,255,255,0.7)', fontSize: 14 },
-  sizePill: { paddingHorizontal: 14, paddingVertical: 6, borderRadius: 14, backgroundColor: 'rgba(255,255,255,0.1)', marginRight: 4, marginTop: 8 },
-  sizePillActive: { backgroundColor: 'rgba(255,255,255,0.35)' },
-  sizePillText: { color: 'rgba(255,255,255,0.7)', fontSize: 13, fontWeight: '600' },
-  textColorDot: { width: 32, height: 32, borderRadius: 16, borderWidth: 2, borderColor: 'rgba(255,255,255,0.3)' },
-  textColorDotActive: { borderColor: '#FFF', borderWidth: 3, transform: [{ scale: 1.15 }] },
-  stickerGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 4 },
-  stickerItem: { width: (SW - 24 - 40) / 10, alignItems: 'center', paddingVertical: 4 },
-  stickerEmoji: { fontSize: 26 },
-  // Toolbar
-  toolRow: { flexDirection: 'row', justifyContent: 'space-around', paddingHorizontal: 16, paddingVertical: 8 },
-  bottomBtn: { alignItems: 'center', gap: 3 },
-  bottomLabel: { color: 'rgba(255,255,255,0.7)', fontSize: 10, fontWeight: '600' },
-  colorPreview: { width: 24, height: 24, borderRadius: 12, borderWidth: 2, borderColor: '#FFF' },
-  charCount: { textAlign: 'center', color: 'rgba(255,255,255,0.35)', fontSize: 11, paddingBottom: 4 },
+  root: { flex: 1, backgroundColor: '#071015' },
+  flex: { flex: 1 },
+  cameraFrame: {
+    flex: 1,
+    marginHorizontal: 0,
+    marginTop: 0,
+    overflow: 'hidden',
+    borderBottomLeftRadius: 42,
+    borderBottomRightRadius: 42,
+    backgroundColor: '#101417',
+  },
+  cameraFill: {
+    ...StyleSheet.absoluteFillObject,
+    width: '100%',
+    height: '100%',
+  },
+  cameraShade: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.08)',
+  },
+  topControls: {
+    position: 'absolute',
+    left: 24,
+    right: 24,
+    zIndex: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  circleButton: {
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  flashButton: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  leftTools: {
+    position: 'absolute',
+    left: 34,
+    top: '41%',
+    zIndex: 12,
+    gap: 16,
+  },
+  sideTool: {
+    width: 56,
+    minHeight: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sideToolOn: {
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.16)',
+  },
+  sideTextTool: {
+    color: '#FFFFFF',
+    fontSize: 38,
+    lineHeight: 44,
+    fontWeight: '300',
+  },
+  textLayer: {
+    position: 'absolute',
+    left: 54,
+    right: 30,
+    top: '38%',
+    minHeight: 120,
+    zIndex: 8,
+  },
+  storyInput: {
+    minHeight: 92,
+    padding: 0,
+    color: '#FFFFFF',
+    fontSize: 42,
+    lineHeight: 50,
+    fontWeight: '400',
+    textShadowColor: 'rgba(0,0,0,0.34)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 8,
+  },
+  placedSticker: {
+    position: 'absolute',
+    zIndex: 9,
+    paddingHorizontal: 13,
+    paddingVertical: 7,
+    borderRadius: 999,
+    backgroundColor: 'rgba(0,0,0,0.42)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.22)',
+  },
+  placedStickerText: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    lineHeight: 23,
+    fontWeight: '800',
+  },
+  colorPanel: {
+    position: 'absolute',
+    left: 100,
+    right: 24,
+    bottom: 132,
+    zIndex: 20,
+    minHeight: 54,
+    borderRadius: 27,
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: 'rgba(5,8,10,0.64)',
+  },
+  colorSwatch: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.35)',
+  },
+  colorSwatchOn: {
+    borderColor: '#FFFFFF',
+    transform: [{ scale: 1.13 }],
+  },
+  stickerPanel: {
+    position: 'absolute',
+    left: 82,
+    right: 18,
+    bottom: 132,
+    zIndex: 20,
+  },
+  stickerContent: {
+    minHeight: 56,
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: spacing.sm,
+  },
+  stickerButton: {
+    minHeight: 42,
+    borderRadius: 21,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(5,8,10,0.64)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.16)',
+  },
+  stickerText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    lineHeight: 20,
+    fontWeight: '800',
+  },
+  bottomControls: {
+    position: 'absolute',
+    left: 42,
+    right: 42,
+    zIndex: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  galleryButton: {
+    width: 58,
+    height: 58,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+    backgroundColor: 'rgba(255,255,255,0.12)',
+  },
+  galleryThumb: {
+    width: '100%',
+    height: '100%',
+  },
+  shutterButton: {
+    width: 96,
+    height: 96,
+    borderRadius: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 6,
+    borderColor: '#FFFFFF',
+    backgroundColor: 'rgba(255,255,255,0.18)',
+  },
+  shutterButtonMuted: {
+    opacity: 0.78,
+  },
+  shutterInner: {
+    width: 76,
+    height: 76,
+    borderRadius: 38,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(238,238,238,0.92)',
+  },
+  sendButton: {
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.accentPrimary,
+  },
+  sendButtonDisabled: {
+    opacity: 0.42,
+  },
+  permissionState: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.gutter,
+    paddingHorizontal: spacing.xl,
+    backgroundColor: '#0C1114',
+  },
+  permissionTitle: {
+    color: '#FFFFFF',
+    fontSize: 22,
+    lineHeight: 27,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+  permissionText: {
+    color: 'rgba(255,255,255,0.72)',
+    fontSize: 15,
+    lineHeight: 21,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  permissionButton: {
+    minHeight: 46,
+    borderRadius: 23,
+    paddingHorizontal: spacing.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFFFFF',
+  },
+  permissionButtonText: {
+    color: '#071015',
+    fontSize: 15,
+    lineHeight: 20,
+    fontWeight: '800',
+  },
 });
