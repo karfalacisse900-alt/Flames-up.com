@@ -87,6 +87,7 @@ public struct PostDetailNativeView: View {
   @Environment(\.dismiss) private var dismiss
   @StateObject private var model: PostDetailModel
   @State private var draft = ""
+  private let likeTint = Color(red: 0.875, green: 0.305, blue: 0.440)
 
   public init(post: MIRAPost, api: MIRAAPIClient) {
     _model = StateObject(wrappedValue: PostDetailModel(post: post, api: api))
@@ -101,32 +102,32 @@ public struct PostDetailNativeView: View {
           if !model.post.mediaURLs.isEmpty {
             MIRAAdaptiveMediaView(
               urls: model.post.mediaURLs,
-              maxSingleImageHeight: min(UIScreen.main.bounds.width * 1.18, 560),
-              carouselHeight: min(UIScreen.main.bounds.width * 1.08, 520)
+              maxSingleImageHeight: min(UIScreen.main.bounds.width * 1.30, 590),
+              carouselHeight: min(UIScreen.main.bounds.width * 1.18, 560)
             )
           }
 
-          VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
-            VStack(alignment: .leading, spacing: MIRATheme.Space.sm) {
+          VStack(alignment: .leading, spacing: MIRATheme.Space.lg) {
+            VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
               Text(model.post.titleText)
-                .font(.system(size: 24, weight: .semibold))
+                .font(.system(size: 31, weight: .heavy))
                 .foregroundStyle(MIRATheme.Color.textPrimary)
-                .lineSpacing(2)
+                .lineSpacing(1)
 
               if !model.post.bodyText.isEmpty {
                 Text(model.post.bodyText)
-                  .font(.system(size: 15, weight: .regular))
-                  .foregroundStyle(MIRATheme.Color.textSecondary)
-                  .lineSpacing(4)
+                  .font(.system(size: 18, weight: .medium))
+                  .foregroundStyle(MIRATheme.Color.textPrimary.opacity(0.88))
+                  .lineSpacing(5)
               }
+
+              Text(relativeAge(model.post.createdAt))
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(MIRATheme.Color.textMuted)
             }
 
-            actionRow
-
-            Divider().overlay(MIRATheme.Color.divider)
-
             Text("\(model.comments.count) comments")
-              .font(.system(size: 17, weight: .semibold))
+              .font(.system(size: 24, weight: .heavy))
               .foregroundStyle(MIRATheme.Color.textPrimary)
 
             if model.isLoadingComments && model.comments.isEmpty {
@@ -141,14 +142,17 @@ public struct PostDetailNativeView: View {
               }
             }
           }
-          .padding(MIRATheme.Space.md)
+          .padding(.horizontal, MIRATheme.Space.md)
+          .padding(.top, MIRATheme.Space.md)
+          .padding(.bottom, MIRATheme.Space.xl)
         }
       }
 
       commentBar
     }
-    .background(MIRATheme.Color.appBackground)
+    .background(MIRATheme.Color.surface)
     .toolbar(.hidden, for: .navigationBar)
+    .toolbar(.hidden, for: .tabBar)
     .task {
       await model.refreshPost()
       await model.loadComments()
@@ -175,7 +179,13 @@ public struct PostDetailNativeView: View {
         .foregroundStyle(MIRATheme.Color.textPrimary)
         .lineLimit(1)
       Spacer()
-      MIRAIconButton(systemImage: "paperplane") {}
+      Button(action: {}) {
+        Image(systemName: "arrowshape.turn.up.right")
+          .font(.system(size: 29, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .frame(width: 48, height: 48)
+      }
+      .buttonStyle(.plain)
     }
     .padding(.horizontal, MIRATheme.Space.md)
     .padding(.top, MIRATheme.Space.xs)
@@ -187,33 +197,53 @@ public struct PostDetailNativeView: View {
   }
 
   private var commentBar: some View {
-    HStack(spacing: MIRATheme.Space.sm) {
+    HStack(spacing: MIRATheme.Space.md) {
       TextField("Add comment...", text: $draft, axis: .vertical)
         .font(.system(size: 16, weight: .regular))
         .padding(.horizontal, MIRATheme.Space.md)
-        .frame(minHeight: 46)
+        .frame(minHeight: 54)
         .background(MIRATheme.Color.surfaceSoft)
         .clipShape(Capsule())
-      MIRAIconButton(systemImage: "arrow.up") {
-        let text = draft
-        draft = ""
-        Task { await model.sendComment(text) }
-      }
-    }
-    .padding(MIRATheme.Space.md)
-    .background(.ultraThinMaterial)
-  }
+        .onSubmit {
+          let text = draft
+          draft = ""
+          Task { await model.sendComment(text) }
+        }
 
-  private var actionRow: some View {
-    HStack(spacing: MIRATheme.Space.lg) {
-      MIRAStatButton(systemImage: model.post.isLiked == true ? "heart.fill" : "heart", value: model.post.likesCount ?? 0) {
+      Button {
         Task { await model.toggleLike() }
+      } label: {
+        HStack(spacing: 7) {
+          Image(systemName: model.post.isLiked == true ? "heart.fill" : "heart")
+            .font(.system(size: 31, weight: .semibold))
+          Text(compact(model.post.likesCount ?? 0))
+            .font(.system(size: 18, weight: .semibold))
+        }
+        .foregroundStyle(model.post.isLiked == true ? likeTint : MIRATheme.Color.textPrimary)
+        .frame(minWidth: 70, minHeight: 54)
       }
-      MIRAStatButton(systemImage: model.post.viewerSaved ? "bookmark.fill" : "bookmark", value: model.post.savesCount ?? 0) {
+      .buttonStyle(.plain)
+
+      Button {
         Task { await model.toggleSave() }
+      } label: {
+        HStack(spacing: 7) {
+          Image(systemName: model.post.viewerSaved ? "bookmark.fill" : "bookmark")
+            .font(.system(size: 31, weight: .semibold))
+          Text(compact(model.post.savesCount ?? 0))
+            .font(.system(size: 18, weight: .semibold))
+        }
+        .foregroundStyle(model.post.viewerSaved ? MIRATheme.Color.forest : MIRATheme.Color.textPrimary)
+        .frame(minWidth: 62, minHeight: 54)
       }
-      Spacer()
-      MIRAIconButton(systemImage: "paperplane") {}
+      .buttonStyle(.plain)
+    }
+    .padding(.horizontal, MIRATheme.Space.md)
+    .padding(.top, MIRATheme.Space.sm)
+    .padding(.bottom, MIRATheme.Space.md)
+    .background(MIRATheme.Color.surface)
+    .overlay(alignment: .top) {
+      Rectangle().fill(MIRATheme.Color.hairline).frame(height: 0.5)
     }
   }
 }
@@ -244,4 +274,28 @@ private struct CommentRow: View {
         .frame(width: 44, height: 44)
     }
   }
+}
+
+private func relativeAge(_ value: String?) -> String {
+  guard let value else { return "" }
+  let formatter = ISO8601DateFormatter()
+  guard let date = formatter.date(from: value) else { return "" }
+  let seconds = max(0, Date().timeIntervalSince(date))
+  if seconds < 60 { return "now" }
+  let minutes = Int(seconds / 60)
+  if minutes < 60 { return "\(minutes)m ago" }
+  let hours = Int(seconds / 3600)
+  if hours < 24 { return "\(hours)h ago" }
+  let days = Int(seconds / 86_400)
+  if days < 30 { return "\(days) days ago" }
+  let months = Int(seconds / 2_592_000)
+  if months < 12 { return "\(months) month\(months == 1 ? "" : "s") ago" }
+  let years = Int(seconds / 31_536_000)
+  return "\(years) year\(years == 1 ? "" : "s") ago"
+}
+
+private func compact(_ value: Int) -> String {
+  if value >= 1_000_000 { return "\(value / 1_000_000)M" }
+  if value >= 1_000 { return "\(value / 1_000)K" }
+  return "\(value)"
 }

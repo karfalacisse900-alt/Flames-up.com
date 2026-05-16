@@ -207,29 +207,7 @@ private struct MainNativePostCard: View {
       }
       .padding(.horizontal, MIRATheme.Space.md)
       .padding(.top, MIRATheme.Space.sm)
-      .padding(.bottom, MIRATheme.Space.xs)
-
-      if !post.titleText.isEmpty {
-        Text(post.titleText)
-          .font(.system(size: 18, weight: .semibold))
-          .foregroundStyle(MIRATheme.Color.textPrimary)
-          .lineLimit(2)
-          .contentShape(Rectangle())
-          .onTapGesture(perform: onOpen)
-          .padding(.horizontal, MIRATheme.Space.md)
-          .padding(.bottom, post.bodyText.isEmpty ? MIRATheme.Space.md : MIRATheme.Space.xs)
-      }
-
-      if !post.bodyText.isEmpty {
-        Text(post.bodyText)
-          .font(.system(size: 14, weight: .regular))
-          .foregroundStyle(MIRATheme.Color.textSecondary)
-          .lineLimit(3)
-          .contentShape(Rectangle())
-          .onTapGesture(perform: onOpen)
-          .padding(.horizontal, MIRATheme.Space.md)
-          .padding(.bottom, MIRATheme.Space.md)
-      }
+      .padding(.bottom, MIRATheme.Space.md)
     }
     .background(MIRATheme.Color.surface)
     .overlay(alignment: .bottom) {
