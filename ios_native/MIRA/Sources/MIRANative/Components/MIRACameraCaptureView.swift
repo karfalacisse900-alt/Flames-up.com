@@ -64,8 +64,14 @@ public struct MIRACameraCaptureView: UIViewControllerRepresentable {
 
 struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
   let onCapture: (MIRAPickedMedia) -> Void
+  let onCancel: () -> Void
 
   @Environment(\.dismiss) private var dismiss
+
+  init(onCapture: @escaping (MIRAPickedMedia) -> Void, onCancel: @escaping () -> Void = {}) {
+    self.onCapture = onCapture
+    self.onCancel = onCancel
+  }
 
   func makeUIViewController(context: Context) -> MIRAStoryCameraViewController {
     let controller = MIRAStoryCameraViewController()
@@ -76,19 +82,22 @@ struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
   func updateUIViewController(_ uiViewController: MIRAStoryCameraViewController, context: Context) {}
 
   func makeCoordinator() -> Coordinator {
-    Coordinator(onCapture: onCapture, dismiss: dismiss)
+    Coordinator(onCapture: onCapture, onCancel: onCancel, dismiss: dismiss)
   }
 
   final class Coordinator: NSObject, MIRAStoryCameraViewControllerDelegate {
     private let onCapture: (MIRAPickedMedia) -> Void
+    private let onCancel: () -> Void
     private let dismiss: DismissAction
 
-    init(onCapture: @escaping (MIRAPickedMedia) -> Void, dismiss: DismissAction) {
+    init(onCapture: @escaping (MIRAPickedMedia) -> Void, onCancel: @escaping () -> Void, dismiss: DismissAction) {
       self.onCapture = onCapture
+      self.onCancel = onCancel
       self.dismiss = dismiss
     }
 
     func storyCameraDidCancel() {
+      onCancel()
       dismiss()
     }
 

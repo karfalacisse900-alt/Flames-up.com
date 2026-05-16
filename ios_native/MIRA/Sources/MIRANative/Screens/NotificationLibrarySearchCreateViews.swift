@@ -285,6 +285,7 @@ public struct CreatePostNativeView: View {
   @State private var pickerItems: [PhotosPickerItem] = []
   @State private var showCamera = false
   @State private var showPreview = false
+  @State private var isEditingPostDetails = false
   @State private var isPosting = false
   @State private var isLoadingMedia = false
   @State private var errorMessage: String?
@@ -296,19 +297,12 @@ public struct CreatePostNativeView: View {
   public var body: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: MIRATheme.Space.lg) {
-        composerHeader("Create post")
-        mediaPreview
-        composerTextFields
-        composerToolbar
-        if let errorMessage {
-          Text(errorMessage)
-            .font(.system(size: 13, weight: .medium))
-            .foregroundStyle(.red.opacity(0.85))
+        composerHeader(isEditingPostDetails ? "Preview" : "Create post")
+        if isEditingPostDetails {
+          finalPostPage
+        } else {
+          mediaFirstPage
         }
-        MIRAPrimaryButton(isPosting ? "Posting..." : "Post", systemImage: "paperplane.fill") {
-          Task { await submit() }
-        }
-        .disabled(isPosting || !canPost)
       }
       .padding(MIRATheme.Space.md)
     }
@@ -326,6 +320,84 @@ public struct CreatePostNativeView: View {
     .sheet(isPresented: $showPreview) {
       ComposerPreviewSheet(title: title, bodyText: bodyText, mediaItems: mediaItems)
     }
+  }
+
+  private var mediaFirstPage: some View {
+    VStack(alignment: .leading, spacing: MIRATheme.Space.lg) {
+      largePostMediaStage
+      composerToolbar
+      if let errorMessage {
+        composerError(errorMessage)
+      }
+      MIRAPrimaryButton("Next", systemImage: "arrow.right") {
+        withAnimation(.snappy(duration: 0.18)) {
+          isEditingPostDetails = true
+        }
+      }
+      .disabled(mediaItems.isEmpty || isLoadingMedia)
+    }
+  }
+
+  private var finalPostPage: some View {
+    VStack(alignment: .leading, spacing: MIRATheme.Space.lg) {
+      mediaPreview
+      composerTextFields
+      HStack(spacing: MIRATheme.Space.sm) {
+        Button {
+          withAnimation(.snappy(duration: 0.18)) {
+            isEditingPostDetails = false
+          }
+        } label: {
+          composerTool("Back", systemImage: "chevron.left")
+        }
+        composerToolbar
+      }
+      if let errorMessage {
+        composerError(errorMessage)
+      }
+      MIRAPrimaryButton(isPosting ? "Posting..." : "Post", systemImage: "paperplane.fill") {
+        Task { await submit() }
+      }
+      .disabled(isPosting || !canPost)
+    }
+  }
+
+  private var largePostMediaStage: some View {
+    Group {
+      if let first = mediaItems.first {
+        LocalMediaThumb(media: first, width: UIScreen.main.bounds.width - 32, height: min((UIScreen.main.bounds.width - 32) * 1.25, 680))
+          .overlay(alignment: .topTrailing) {
+            Button {
+              mediaItems.removeAll()
+            } label: {
+              Image(systemName: "xmark")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 32, height: 32)
+                .background(.black.opacity(0.55))
+                .clipShape(Circle())
+            }
+            .padding(MIRATheme.Space.sm)
+          }
+      } else {
+        PhotosPicker(selection: $pickerItems, maxSelectionCount: 10, matching: .any(of: [.images, .videos])) {
+          RoundedRectangle(cornerRadius: MIRATheme.Radius.large, style: .continuous)
+            .fill(MIRATheme.Color.surfaceSoft)
+            .frame(maxWidth: .infinity)
+            .frame(height: min((UIScreen.main.bounds.width - 32) * 1.25, 680))
+            .overlay {
+              VStack(spacing: MIRATheme.Space.sm) {
+                Image(systemName: "photo.on.rectangle.angled")
+                  .font(.system(size: 32, weight: .regular))
+                Text("Choose photo or video")
+                  .font(.system(size: 16, weight: .semibold))
+              }
+              .foregroundStyle(MIRATheme.Color.textMuted)
+            }
+        }
+      }
+    }
+    .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.large, style: .continuous))
   }
 
   private var composerTextFields: some View {
@@ -377,13 +449,18 @@ public struct CreatePostNativeView: View {
       Button { showCamera = true } label: {
         composerTool("Camera", systemImage: "camera")
       }
-      Button { showPreview = true } label: {
-        composerTool("Preview", systemImage: "eye")
+      if !isEditingPostDetails {
+        Spacer()
       }
-      Spacer()
       if isLoadingMedia { ProgressView() }
     }
     .buttonStyle(.plain)
+  }
+
+  private func composerError(_ message: String) -> some View {
+    Text(message)
+      .font(.system(size: 13, weight: .medium))
+      .foregroundStyle(.red.opacity(0.85))
   }
 
   private var addTile: some View {
@@ -574,7 +651,7 @@ public struct CreateNoteNativeView: View {
           }
 
           Button {
-            withAnimation(.snappy(duration: 0.18)) { showGIFField.toggle() }
+            openGIFPicker()
           } label: {
             Text("GIF")
               .font(.system(size: 19, weight: .heavy))
@@ -707,7 +784,7 @@ public struct CreateNoteNativeView: View {
           .padding(.vertical, 2)
         }
       } else {
-        Text("Search Giphy and tap one to add it.")
+        Text(isSearchingGIFs ? "Loading GIFs..." : "Tap search or type a word to find GIFs.")
           .font(.system(size: 13, weight: .medium))
           .foregroundStyle(MIRATheme.Color.textMuted)
       }
@@ -774,9 +851,25 @@ public struct CreateNoteNativeView: View {
   }
 
   @MainActor
+  private func openGIFPicker() {
+    let shouldLoadInitialResults = !showGIFField && gifResults.isEmpty
+    withAnimation(.snappy(duration: 0.18)) {
+      showGIFField.toggle()
+    }
+    guard shouldLoadInitialResults else { return }
+    if gifQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      gifQuery = "reaction"
+    }
+    Task { await searchGIFs() }
+  }
+
+  @MainActor
   private func searchGIFs() async {
     let clean = gifQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard clean.count >= 2 else { return }
+    guard clean.count >= 2 else {
+      gifResults = []
+      return
+    }
     isSearchingGIFs = true
     defer { isSearchingGIFs = false }
     var components = URLComponents()
@@ -847,16 +940,7 @@ public struct CreateStoryNativeView: View {
             LocalMediaThumb(media: mediaItem, width: UIScreen.main.bounds.width - 28, height: UIScreen.main.bounds.height * 0.70)
           } else {
             RoundedRectangle(cornerRadius: 30, style: .continuous)
-              .fill(MIRATheme.Color.forest)
-              .overlay {
-                VStack(spacing: MIRATheme.Space.md) {
-                  Image(systemName: "camera.viewfinder")
-                    .font(.system(size: 44, weight: .light))
-                  Text("Add a story")
-                    .font(.system(size: 24, weight: .semibold))
-                }
-                .foregroundStyle(.white.opacity(0.9))
-              }
+              .fill(.black)
           }
 
           TextField("Aa", text: $text, axis: .vertical)
@@ -908,9 +992,16 @@ public struct CreateStoryNativeView: View {
       Task { await loadPickerItem(newItem) }
     }
     .fullScreenCover(isPresented: $showCamera) {
-      MIRAStoryLiveCameraView { media in
-        mediaItem = media
-      }
+      MIRAStoryLiveCameraView(
+        onCapture: { media in
+          mediaItem = media
+        },
+        onCancel: {
+          if mediaItem == nil {
+            dismiss()
+          }
+        }
+      )
       .ignoresSafeArea()
     }
   }

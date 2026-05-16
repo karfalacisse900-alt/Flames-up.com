@@ -189,6 +189,10 @@ private struct MainNativePostCard: View {
   let onSave: () -> Void
   let onFollow: () -> Void
 
+  private var mediaHeight: CGFloat {
+    min(UIScreen.main.bounds.width * 1.25, 680)
+  }
+
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
       postHeader
@@ -196,8 +200,8 @@ private struct MainNativePostCard: View {
       if !post.mediaURLs.isEmpty {
         MIRAAdaptiveMediaView(
           urls: post.mediaURLs,
-          maxSingleImageHeight: min(UIScreen.main.bounds.width * 1.06, 520),
-          carouselHeight: min(UIScreen.main.bounds.width * 1.06, 520),
+          maxSingleImageHeight: mediaHeight,
+          carouselHeight: mediaHeight,
           singleImageContentMode: .fill
         )
         .contentShape(Rectangle())
