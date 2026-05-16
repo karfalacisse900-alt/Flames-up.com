@@ -18,11 +18,19 @@ final class MainFeedModel: ObservableObject {
     if posts.isEmpty { isLoading = true }
     defer { isLoading = false }
     do {
-      let loaded: [MIRAPost] = try await api.get("/posts/feed?limit=36")
+      var loaded: [MIRAPost] = try await api.get("/posts/feed?limit=36")
+      if loaded.isEmpty {
+        loaded = (try? await api.get("/posts/world-board?limit=36")) ?? []
+      }
       posts = loaded.sorted { nativeScore($0) > nativeScore($1) }
       errorMessage = nil
     } catch {
-      errorMessage = "Could not load the feed. Pull back in a moment."
+      if let fallback: [MIRAPost] = try? await api.get("/posts/world-board?limit=36"), !fallback.isEmpty {
+        posts = fallback.sorted { nativeScore($0) > nativeScore($1) }
+        errorMessage = nil
+      } else {
+        errorMessage = "Could not load the feed. Pull back in a moment."
+      }
     }
   }
 

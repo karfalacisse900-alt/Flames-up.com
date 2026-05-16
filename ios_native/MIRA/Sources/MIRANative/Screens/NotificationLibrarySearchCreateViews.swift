@@ -815,6 +815,7 @@ public struct CreateStoryNativeView: View {
   @State private var mediaItem: MIRAPickedMedia?
   @State private var pickerItem: PhotosPickerItem?
   @State private var showCamera = false
+  @State private var didOpenInitialCamera = false
   @State private var isPosting = false
   @State private var errorMessage: String?
 
@@ -898,11 +899,16 @@ public struct CreateStoryNativeView: View {
       }
     }
     .toolbar(.hidden, for: .navigationBar)
+    .task {
+      guard !didOpenInitialCamera, mediaItem == nil else { return }
+      didOpenInitialCamera = true
+      showCamera = true
+    }
     .onChange(of: pickerItem) { _, newItem in
       Task { await loadPickerItem(newItem) }
     }
-    .sheet(isPresented: $showCamera) {
-      MIRACameraCaptureView(allowsVideo: true) { media in
+    .fullScreenCover(isPresented: $showCamera) {
+      MIRAStoryLiveCameraView { media in
         mediaItem = media
       }
       .ignoresSafeArea()
