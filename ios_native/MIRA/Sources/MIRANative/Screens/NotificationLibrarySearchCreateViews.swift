@@ -448,6 +448,7 @@ public struct CreatePostNativeView: View {
 public struct CreateNoteNativeView: View {
   let api: MIRAAPIClient
   @Environment(\.dismiss) private var dismiss
+  @State private var currentUser: MIRAUser?
   @State private var noteText = ""
   @State private var mediaItem: MIRAPickedMedia?
   @State private var pickerItem: PhotosPickerItem?
@@ -464,95 +465,24 @@ public struct CreateNoteNativeView: View {
 
   public var body: some View {
     VStack(spacing: 0) {
-      HStack {
-        Button("Cancel") { dismiss() }
-          .font(.system(size: 21, weight: .semibold))
-        Spacer()
-        Button("Save") {}
-          .font(.system(size: 16, weight: .semibold))
-          .foregroundStyle(MIRATheme.Color.textMuted)
-          .padding(.horizontal, MIRATheme.Space.md)
-          .frame(height: 40)
-          .background(MIRATheme.Color.surfaceSoft)
-          .clipShape(Capsule())
-      }
-      .padding(MIRATheme.Space.md)
+      noteComposerHeader
+      Divider().overlay(MIRATheme.Color.hairline)
 
       ScrollView {
-        VStack(alignment: .leading, spacing: MIRATheme.Space.lg) {
-          HStack(alignment: .top, spacing: MIRATheme.Space.md) {
-            RemoteAvatar(url: nil, size: 44)
-            VStack(alignment: .leading, spacing: MIRATheme.Space.xs) {
-              Text("karfala900")
-                .font(.system(size: 20, weight: .semibold))
-                .foregroundStyle(MIRATheme.Color.textPrimary)
-              TextField("What's new?", text: $noteText, axis: .vertical)
-                .font(.system(size: 21, weight: .medium))
-                .lineLimit(5...12)
-            }
-          }
-
-          noteMediaPreview
-
-          HStack(spacing: MIRATheme.Space.lg) {
-            PhotosPicker(selection: $pickerItem, matching: .images) {
-              Image(systemName: "photo")
-                .font(.system(size: 26, weight: .regular))
-            }
-            Button { showGIFField.toggle() } label: {
-              Text("GIF")
-                .font(.system(size: 18, weight: .heavy))
-                .padding(.horizontal, 8)
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(lineWidth: 2))
-            }
-            Button { showCamera = true } label: {
-              Image(systemName: "camera")
-                .font(.system(size: 25, weight: .regular))
-            }
-            Spacer()
-            if isLoadingMedia { ProgressView() }
-          }
-          .foregroundStyle(MIRATheme.Color.textSecondary)
-          .buttonStyle(.plain)
-
-          if showGIFField {
-            TextField("Paste GIF URL", text: $gifURL)
-              .keyboardType(.URL)
-              .textInputAutocapitalization(.never)
-              .autocorrectionDisabled()
-              .padding(MIRATheme.Space.md)
-              .background(MIRATheme.Color.surfaceSoft)
-              .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-          }
-
-          if let errorMessage {
-            Text(errorMessage).foregroundStyle(.red)
-          }
-        }
-        .padding(MIRATheme.Space.md)
+        noteEditorContent
+          .padding(.horizontal, MIRATheme.Space.md)
+          .padding(.top, MIRATheme.Space.lg)
+          .padding(.bottom, 140)
       }
 
-      HStack {
-        Spacer()
-        Button {
-          Task { await submit() }
-        } label: {
-          if isPosting {
-            ProgressView().tint(.white)
-          } else {
-            Text("Post").font(.system(size: 18, weight: .semibold))
-          }
-        }
-        .foregroundStyle(.white)
-        .frame(width: 118, height: 50)
-        .background(canPostNote ? MIRATheme.Color.forest : MIRATheme.Color.textMuted.opacity(0.35))
-        .clipShape(Capsule())
-        .disabled(isPosting || !canPostNote)
-      }
-      .padding(MIRATheme.Space.md)
+      noteBottomBar
     }
-    .background(MIRATheme.Color.appBackground)
+    .background(MIRATheme.Color.surface)
     .toolbar(.hidden, for: .navigationBar)
+    .task {
+      await loadCurrentUser()
+      restoreDraft()
+    }
     .onChange(of: pickerItem) { _, newItem in
       Task { await loadPickerItem(newItem) }
     }
@@ -562,6 +492,173 @@ public struct CreateNoteNativeView: View {
       }
       .ignoresSafeArea()
     }
+  }
+
+  private var noteComposerHeader: some View {
+    HStack {
+      Button("Cancel") { dismiss() }
+        .font(.system(size: 26, weight: .semibold))
+        .foregroundStyle(MIRATheme.Color.textPrimary)
+        .frame(minHeight: 56)
+
+      Spacer()
+
+      Button("Save") {
+        saveDraft()
+      }
+      .font(.system(size: 18, weight: .semibold))
+      .foregroundStyle(canSaveDraft ? MIRATheme.Color.forest : MIRATheme.Color.textMuted)
+      .frame(width: 92, height: 46)
+      .background(canSaveDraft ? MIRATheme.Color.forestSoft : MIRATheme.Color.surfaceSoft.opacity(0.72))
+      .clipShape(Capsule())
+      .disabled(!canSaveDraft)
+    }
+    .padding(.horizontal, MIRATheme.Space.md)
+    .padding(.top, MIRATheme.Space.xs)
+    .padding(.bottom, MIRATheme.Space.sm)
+    .background(MIRATheme.Color.surface)
+  }
+
+  private var noteEditorContent: some View {
+    HStack(alignment: .top, spacing: MIRATheme.Space.md) {
+      VStack(spacing: 0) {
+        RemoteAvatar(url: currentUser?.profileImage, size: 48)
+        Rectangle()
+          .fill(MIRATheme.Color.surfaceSoft)
+          .frame(width: 5)
+          .frame(minHeight: 460)
+          .clipShape(Capsule())
+          .padding(.top, MIRATheme.Space.sm)
+        Text((currentUser?.displayName.first.map(String.init) ?? "M").uppercased())
+          .font(.system(size: 12, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textMuted.opacity(0.45))
+          .frame(width: 34, height: 34)
+          .background(MIRATheme.Color.surfaceSoft.opacity(0.35))
+          .clipShape(Circle())
+          .padding(.top, MIRATheme.Space.sm)
+      }
+
+      VStack(alignment: .leading, spacing: MIRATheme.Space.sm) {
+        Text(currentUser?.displayName ?? "karfala900")
+          .font(.system(size: 27, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .lineLimit(1)
+          .minimumScaleFactor(0.78)
+
+        ZStack(alignment: .topLeading) {
+          if noteText.isEmpty {
+            Text("What's new?")
+              .font(.system(size: 27, weight: .semibold))
+              .foregroundStyle(MIRATheme.Color.textMuted.opacity(0.72))
+              .padding(.top, 7)
+              .allowsHitTesting(false)
+          }
+
+          TextEditor(text: $noteText)
+            .font(.system(size: 23, weight: .medium))
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+            .lineSpacing(2)
+            .scrollContentBackground(.hidden)
+            .frame(minHeight: 130)
+            .padding(.leading, -5)
+        }
+
+        HStack(spacing: MIRATheme.Space.xl) {
+          PhotosPicker(selection: $pickerItem, matching: .images) {
+            Image(systemName: "photo")
+              .font(.system(size: 29, weight: .regular))
+              .frame(width: 42, height: 42)
+          }
+
+          Button {
+            withAnimation(.snappy(duration: 0.18)) { showGIFField.toggle() }
+          } label: {
+            Text("GIF")
+              .font(.system(size: 19, weight: .heavy))
+              .frame(width: 62, height: 42)
+              .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).stroke(lineWidth: 2.4))
+          }
+
+          if isLoadingMedia {
+            ProgressView()
+              .tint(MIRATheme.Color.textMuted)
+          }
+        }
+        .foregroundStyle(MIRATheme.Color.textMuted)
+        .buttonStyle(.plain)
+        .padding(.top, MIRATheme.Space.sm)
+
+        if showGIFField {
+          TextField("Paste GIF URL", text: $gifURL)
+            .keyboardType(.URL)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .font(.system(size: 15, weight: .medium))
+            .padding(.horizontal, MIRATheme.Space.md)
+            .frame(height: 44)
+            .background(MIRATheme.Color.surfaceSoft.opacity(0.80))
+            .clipShape(Capsule())
+            .transition(.move(edge: .top).combined(with: .opacity))
+        }
+
+        noteMediaPreview
+          .padding(.top, MIRATheme.Space.sm)
+
+        if let errorMessage {
+          Text(errorMessage)
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(.red)
+            .padding(.top, MIRATheme.Space.xs)
+        }
+      }
+    }
+  }
+
+  private var noteBottomBar: some View {
+    HStack(spacing: MIRATheme.Space.sm) {
+      Image(systemName: "slider.horizontal.3")
+        .font(.system(size: 23, weight: .medium))
+        .foregroundStyle(MIRATheme.Color.textMuted)
+
+      Text("Reply options")
+        .font(.system(size: 21, weight: .semibold))
+        .foregroundStyle(MIRATheme.Color.textMuted)
+        .lineLimit(1)
+        .minimumScaleFactor(0.78)
+
+      Spacer()
+
+      Button {} label: {
+        Image(systemName: "chevron.down")
+          .font(.system(size: 20, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textSecondary)
+          .frame(width: 54, height: 54)
+          .background(MIRATheme.Color.surface)
+          .overlay(Circle().stroke(MIRATheme.Color.hairline, lineWidth: 1))
+          .clipShape(Circle())
+      }
+      .buttonStyle(.plain)
+
+      Button {
+        Task { await submit() }
+      } label: {
+        if isPosting {
+          ProgressView().tint(.white)
+        } else {
+          Text("Post")
+            .font(.system(size: 23, weight: .semibold))
+        }
+      }
+      .foregroundStyle(.white)
+      .frame(width: 116, height: 58)
+      .background(canPostNote ? MIRATheme.Color.forest : MIRATheme.Color.textMuted.opacity(0.55))
+      .clipShape(Capsule())
+      .disabled(isPosting || !canPostNote)
+    }
+    .padding(.horizontal, MIRATheme.Space.md)
+    .padding(.top, MIRATheme.Space.sm)
+    .padding(.bottom, MIRATheme.Space.md)
+    .background(MIRATheme.Color.surface)
   }
 
   private func submit() async {
@@ -588,16 +685,39 @@ public struct CreateNoteNativeView: View {
       !gifURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
   }
 
+  private var canSaveDraft: Bool {
+    canPostNote
+  }
+
   private var noteMediaPreview: some View {
     Group {
       if let mediaItem {
-        LocalMediaThumb(media: mediaItem, width: UIScreen.main.bounds.width - 64, height: 250)
+        LocalMediaThumb(media: mediaItem, width: UIScreen.main.bounds.width - 94, height: 260)
       } else if !gifURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
         RemoteMediaView(url: gifURL, isVideo: false)
-          .frame(height: 250)
+          .frame(maxWidth: .infinity)
+          .frame(height: 260)
           .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.large, style: .continuous))
       }
     }
+  }
+
+  @MainActor
+  private func loadCurrentUser() async {
+    guard currentUser == nil else { return }
+    currentUser = try? await api.get("/auth/me")
+  }
+
+  private func saveDraft() {
+    UserDefaults.standard.set(noteText, forKey: "mira.noteDraft.text")
+    UserDefaults.standard.set(gifURL, forKey: "mira.noteDraft.gifURL")
+  }
+
+  private func restoreDraft() {
+    guard noteText.isEmpty && gifURL.isEmpty && mediaItem == nil else { return }
+    noteText = UserDefaults.standard.string(forKey: "mira.noteDraft.text") ?? ""
+    gifURL = UserDefaults.standard.string(forKey: "mira.noteDraft.gifURL") ?? ""
+    showGIFField = !gifURL.isEmpty
   }
 
   @MainActor
