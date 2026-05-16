@@ -23,6 +23,7 @@ export interface Env {
   TWILIO_VERIFY_SERVICE_SID?: string;
   TWILIO_SERVICE_SID?: string;
   TWILIO_FROM_PHONE?: string;
+  GIPHY_API_KEY?: string;
   AGORA_APP_ID?: string;
   AGORA_APP_CERTIFICATE?: string;
   AGORA_TOKEN_TTL_SECONDS?: string;

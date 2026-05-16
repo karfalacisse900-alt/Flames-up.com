@@ -72,6 +72,7 @@ public struct MIRAPost: Decodable, Identifiable, Hashable {
   public func updating(
     liked: Bool? = nil,
     likesCount: Int? = nil,
+    commentsCount: Int? = nil,
     saved: Bool? = nil,
     savesCount: Int? = nil,
     following: Bool? = nil
@@ -89,7 +90,7 @@ public struct MIRAPost: Decodable, Identifiable, Hashable {
       mediaTypes: mediaTypes,
       createdAt: createdAt,
       likesCount: likesCount ?? self.likesCount,
-      commentsCount: commentsCount,
+      commentsCount: commentsCount ?? self.commentsCount,
       savesCount: savesCount ?? self.savesCount,
       sharesCount: sharesCount,
       viewsCount: viewsCount,
@@ -113,6 +114,19 @@ public struct MIRANote: Decodable, Identifiable, Hashable {
   public let sharesCount: Int?
   public let reacted: Bool?
   public let user: MIRAUser?
+}
+
+public struct MIRAGifItem: Decodable, Identifiable, Hashable {
+  public let id: String
+  public let title: String?
+  public let previewUrl: String?
+  public let mediaUrl: String?
+  public let width: Int?
+  public let height: Int?
+}
+
+public struct MIRAGifSearchResponse: Decodable, Hashable {
+  public let gifs: [MIRAGifItem]
 }
 
 public struct MIRAStatusPreview: Decodable, Identifiable, Hashable {

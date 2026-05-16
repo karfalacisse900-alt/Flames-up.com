@@ -18,7 +18,7 @@ final class MainFeedModel: ObservableObject {
     if posts.isEmpty { isLoading = true }
     defer { isLoading = false }
     do {
-      let loaded: [MIRAPost] = try await api.get("/posts/world-board?limit=36")
+      let loaded: [MIRAPost] = try await api.get("/posts/feed?limit=36")
       posts = loaded.sorted { nativeScore($0) > nativeScore($1) }
       errorMessage = nil
     } catch {
@@ -156,9 +156,6 @@ public struct MainFeedView: View {
 
   private var mainHeader: some View {
     HStack(spacing: MIRATheme.Space.sm) {
-      Text("Main")
-        .font(.system(size: 21, weight: .semibold))
-        .foregroundStyle(MIRATheme.Color.textPrimary)
       Spacer()
       NavigationLink(destination: CreatePostNativeView(api: model.api)) {
         MIRAHeaderCircleButton(systemImage: "plus")
@@ -168,8 +165,8 @@ public struct MainFeedView: View {
       }
     }
     .padding(.horizontal, MIRATheme.Space.md)
-    .padding(.top, MIRATheme.Space.xs)
-    .padding(.bottom, 6)
+    .padding(.top, 2)
+    .padding(.bottom, 5)
     .background(MIRATheme.Color.surface)
     .overlay(alignment: .bottom) {
       Rectangle().fill(MIRATheme.Color.hairline).frame(height: 0.5)
@@ -191,8 +188,9 @@ private struct MainNativePostCard: View {
       if !post.mediaURLs.isEmpty {
         MIRAAdaptiveMediaView(
           urls: post.mediaURLs,
-          maxSingleImageHeight: min(UIScreen.main.bounds.width * 1.05, 510),
-          carouselHeight: min(UIScreen.main.bounds.width * 1.06, 520)
+          maxSingleImageHeight: min(UIScreen.main.bounds.width * 1.06, 520),
+          carouselHeight: min(UIScreen.main.bounds.width * 1.06, 520),
+          singleImageContentMode: .fill
         )
         .contentShape(Rectangle())
         .onTapGesture(perform: onOpen)
@@ -203,7 +201,7 @@ private struct MainNativePostCard: View {
         CompactPostAction(systemImage: post.viewerSaved ? "bookmark.fill" : "bookmark", value: post.savesCount ?? 0, action: onSave)
         Spacer()
         CompactTextAction("View", action: onOpen)
-        CompactTextAction("Share", systemImage: "paperplane") {}
+        CompactShareAction(post: post)
       }
       .padding(.horizontal, MIRATheme.Space.md)
       .padding(.top, MIRATheme.Space.sm)
@@ -317,8 +315,32 @@ private struct CompactTextAction: View {
   }
 }
 
+private struct CompactShareAction: View {
+  let post: MIRAPost
+
+  var body: some View {
+    ShareLink(item: shareURL(for: post), subject: Text(post.titleText), message: Text(post.titleText)) {
+      HStack(spacing: 6) {
+        Image(systemName: "paperplane")
+          .font(.system(size: 13, weight: .semibold))
+        Text("Share")
+          .font(.system(size: 14, weight: .semibold))
+      }
+      .foregroundStyle(.white)
+      .frame(height: 36)
+      .padding(.horizontal, MIRATheme.Space.md)
+      .background(MIRATheme.Color.forest)
+      .clipShape(Capsule())
+    }
+  }
+}
+
 private func compact(_ value: Int) -> String {
   if value >= 1_000_000 { return "\(value / 1_000_000)M" }
   if value >= 1_000 { return "\(value / 1_000)K" }
   return "\(value)"
+}
+
+private func shareURL(for post: MIRAPost) -> URL {
+  URL(string: "https://flames-up.com/post/\(post.id)")!
 }

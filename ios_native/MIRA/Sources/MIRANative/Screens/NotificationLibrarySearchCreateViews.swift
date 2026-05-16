@@ -453,10 +453,13 @@ public struct CreateNoteNativeView: View {
   @State private var mediaItem: MIRAPickedMedia?
   @State private var pickerItem: PhotosPickerItem?
   @State private var gifURL = ""
+  @State private var gifQuery = ""
+  @State private var gifResults: [MIRAGifItem] = []
   @State private var showGIFField = false
   @State private var showCamera = false
   @State private var isPosting = false
   @State private var isLoadingMedia = false
+  @State private var isSearchingGIFs = false
   @State private var errorMessage: String?
 
   public init(api: MIRAAPIClient) {
@@ -589,15 +592,7 @@ public struct CreateNoteNativeView: View {
         .padding(.top, MIRATheme.Space.sm)
 
         if showGIFField {
-          TextField("Paste GIF URL", text: $gifURL)
-            .keyboardType(.URL)
-            .textInputAutocapitalization(.never)
-            .autocorrectionDisabled()
-            .font(.system(size: 15, weight: .medium))
-            .padding(.horizontal, MIRATheme.Space.md)
-            .frame(height: 44)
-            .background(MIRATheme.Color.surfaceSoft.opacity(0.80))
-            .clipShape(Capsule())
+          gifSearchPanel
             .transition(.move(edge: .top).combined(with: .opacity))
         }
 
@@ -661,6 +656,64 @@ public struct CreateNoteNativeView: View {
     .background(MIRATheme.Color.surface)
   }
 
+  private var gifSearchPanel: some View {
+    VStack(alignment: .leading, spacing: MIRATheme.Space.sm) {
+      HStack(spacing: MIRATheme.Space.sm) {
+        TextField("Search GIFs", text: $gifQuery)
+          .textInputAutocapitalization(.never)
+          .autocorrectionDisabled()
+          .font(.system(size: 15, weight: .medium))
+          .padding(.horizontal, MIRATheme.Space.md)
+          .frame(height: 44)
+          .background(MIRATheme.Color.surfaceSoft.opacity(0.80))
+          .clipShape(Capsule())
+          .onSubmit { Task { await searchGIFs() } }
+
+        Button {
+          Task { await searchGIFs() }
+        } label: {
+          if isSearchingGIFs {
+            ProgressView().tint(MIRATheme.Color.forest)
+          } else {
+            Image(systemName: "magnifyingglass")
+              .font(.system(size: 17, weight: .semibold))
+          }
+        }
+        .foregroundStyle(MIRATheme.Color.forest)
+        .frame(width: 44, height: 44)
+        .background(MIRATheme.Color.forestSoft)
+        .clipShape(Circle())
+        .buttonStyle(.plain)
+      }
+
+      if !gifResults.isEmpty {
+        ScrollView(.horizontal, showsIndicators: false) {
+          HStack(spacing: MIRATheme.Space.sm) {
+            ForEach(gifResults) { gif in
+              Button {
+                gifURL = gif.mediaUrl ?? gif.previewUrl ?? ""
+              } label: {
+                RemoteMediaView(url: gif.previewUrl ?? gif.mediaUrl ?? "", isVideo: false)
+                  .frame(width: 92, height: 92)
+                  .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.small, style: .continuous))
+                  .overlay(
+                    RoundedRectangle(cornerRadius: MIRATheme.Radius.small, style: .continuous)
+                      .stroke((gif.mediaUrl == gifURL || gif.previewUrl == gifURL) ? MIRATheme.Color.forest : .clear, lineWidth: 2)
+                  )
+              }
+              .buttonStyle(.plain)
+            }
+          }
+          .padding(.vertical, 2)
+        }
+      } else {
+        Text("Search Giphy and tap one to add it.")
+          .font(.system(size: 13, weight: .medium))
+          .foregroundStyle(MIRATheme.Color.textMuted)
+      }
+    }
+  }
+
   private func submit() async {
     isPosting = true
     defer { isPosting = false }
@@ -718,6 +771,27 @@ public struct CreateNoteNativeView: View {
     noteText = UserDefaults.standard.string(forKey: "mira.noteDraft.text") ?? ""
     gifURL = UserDefaults.standard.string(forKey: "mira.noteDraft.gifURL") ?? ""
     showGIFField = !gifURL.isEmpty
+  }
+
+  @MainActor
+  private func searchGIFs() async {
+    let clean = gifQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard clean.count >= 2 else { return }
+    isSearchingGIFs = true
+    defer { isSearchingGIFs = false }
+    var components = URLComponents()
+    components.queryItems = [
+      URLQueryItem(name: "q", value: clean),
+      URLQueryItem(name: "limit", value: "18"),
+    ]
+    let query = components.percentEncodedQuery ?? "q=\(clean)"
+    do {
+      let response: MIRAGifSearchResponse = try await api.get("/gifs/search?\(query)")
+      gifResults = response.gifs
+      errorMessage = nil
+    } catch {
+      errorMessage = "GIF search is not available yet."
+    }
   }
 
   @MainActor

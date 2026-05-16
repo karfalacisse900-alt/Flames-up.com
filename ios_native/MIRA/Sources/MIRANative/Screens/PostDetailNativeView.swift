@@ -35,6 +35,7 @@ final class PostDetailModel: ObservableObject {
     guard !clean.isEmpty else { return }
     if let comment: MIRAComment = try? await api.post("/posts/\(post.id)/comments", body: PostCommentBody(content: clean)) {
       comments.append(comment)
+      post = post.updating(commentsCount: max(comments.count, (post.commentsCount ?? 0) + 1))
     }
   }
 
@@ -103,7 +104,8 @@ public struct PostDetailNativeView: View {
             MIRAAdaptiveMediaView(
               urls: model.post.mediaURLs,
               maxSingleImageHeight: min(UIScreen.main.bounds.width * 1.30, 590),
-              carouselHeight: min(UIScreen.main.bounds.width * 1.18, 560)
+              carouselHeight: min(UIScreen.main.bounds.width * 1.18, 560),
+              singleImageContentMode: .fill
             )
           }
 
@@ -126,7 +128,7 @@ public struct PostDetailNativeView: View {
                 .foregroundStyle(MIRATheme.Color.textMuted)
             }
 
-            Text("\(model.comments.count) comments")
+            Text("\(model.post.commentsCount ?? model.comments.count) comments")
               .font(.system(size: 24, weight: .heavy))
               .foregroundStyle(MIRATheme.Color.textPrimary)
 
@@ -179,13 +181,12 @@ public struct PostDetailNativeView: View {
         .foregroundStyle(MIRATheme.Color.textPrimary)
         .lineLimit(1)
       Spacer()
-      Button(action: {}) {
+      ShareLink(item: shareURL(for: model.post), subject: Text(model.post.titleText), message: Text(model.post.titleText)) {
         Image(systemName: "arrowshape.turn.up.right")
           .font(.system(size: 29, weight: .semibold))
           .foregroundStyle(MIRATheme.Color.textPrimary)
           .frame(width: 48, height: 48)
       }
-      .buttonStyle(.plain)
     }
     .padding(.horizontal, MIRATheme.Space.md)
     .padding(.top, MIRATheme.Space.xs)
@@ -209,6 +210,22 @@ public struct PostDetailNativeView: View {
           draft = ""
           Task { await model.sendComment(text) }
         }
+
+      if !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        Button {
+          let text = draft
+          draft = ""
+          Task { await model.sendComment(text) }
+        } label: {
+          Image(systemName: "arrow.up")
+            .font(.system(size: 17, weight: .bold))
+            .foregroundStyle(.white)
+            .frame(width: 44, height: 44)
+            .background(MIRATheme.Color.forest)
+            .clipShape(Circle())
+        }
+        .buttonStyle(.plain)
+      }
 
       Button {
         Task { await model.toggleLike() }
@@ -298,4 +315,8 @@ private func compact(_ value: Int) -> String {
   if value >= 1_000_000 { return "\(value / 1_000_000)M" }
   if value >= 1_000 { return "\(value / 1_000)K" }
   return "\(value)"
+}
+
+private func shareURL(for post: MIRAPost) -> URL {
+  URL(string: "https://flames-up.com/post/\(post.id)")!
 }

@@ -32,6 +32,7 @@ interface Env {
   TWILIO_VERIFY_SERVICE_SID?: string;
   TWILIO_SERVICE_SID?: string;
   TWILIO_FROM_PHONE?: string;
+  GIPHY_API_KEY?: string;
   AGORA_APP_ID?: string;
   AGORA_APP_CERTIFICATE?: string;
   AGORA_TOKEN_TTL_SECONDS?: string;
@@ -5316,6 +5317,56 @@ api.get('/music/audius/search', async (c) => {
   }
 });
 
+// Server-side Giphy proxy for Notes GIF picking. The API key stays in Cloudflare secrets,
+// never in the native app bundle or frontend code.
+api.get('/gifs/search', authMiddleware, async (c) => {
+  try {
+    const userId = getUserId(c);
+    const limited = await enforceRateLimit(c, 'giphy_search', userId || clientIp(c), 80, 60);
+    if (limited) return limited;
+    const apiKey = String(c.env.GIPHY_API_KEY || '').trim();
+    if (!apiKey) return c.json({ detail: 'GIF search is not configured yet.', gifs: [] }, 503);
+    const query = cleanText(c.req.query('q') || c.req.query('query'), 80);
+    if (query.length < 2) return c.json({ gifs: [] });
+    const limit = clampNumber(c.req.query('limit'), 1, 32, 24);
+    const offset = clampNumber(c.req.query('offset'), 0, 500, 0);
+    const cacheKey = `giphy:search:${query.toLowerCase()}:${limit}:${offset}`;
+    const gifs = await cachedJson(c, cacheKey, 180, async () => {
+      const params = new URLSearchParams({
+        api_key: apiKey,
+        q: query,
+        limit: String(limit),
+        offset: String(offset),
+        rating: 'pg-13',
+        lang: 'en',
+      });
+      const response = await fetch(`https://api.giphy.com/v1/gifs/search?${params.toString()}`, {
+        headers: { Accept: 'application/json' },
+      });
+      if (!response.ok) throw new Error(`Giphy returned ${response.status}`);
+      const data: any = await response.json();
+      const rows = Array.isArray(data?.data) ? data.data : [];
+      return rows.map((gif: any) => {
+        const images = gif?.images || {};
+        const original = images.original || {};
+        const preview = images.fixed_width_small || images.fixed_width || images.downsized || original;
+        return {
+          id: publicId(gif?.id, 80),
+          title: cleanText(gif?.title, 120),
+          preview_url: String(preview.webp || preview.url || '').slice(0, 500),
+          media_url: String(original.webp || original.url || preview.webp || preview.url || '').slice(0, 500),
+          width: clampNumber(original.width, 1, 4096, 0),
+          height: clampNumber(original.height, 1, 4096, 0),
+        };
+      }).filter((gif: any) => gif.id && gif.media_url);
+    });
+    return c.json({ gifs });
+  } catch (error: any) {
+    console.log('Giphy search failed:', error?.message || error);
+    return c.json({ detail: 'GIF search is temporarily unavailable.', gifs: [] }, 503);
+  }
+});
+
 api.get('/music/audius/stream/:trackId', async (c) => {
   try {
     await ensureAudioSchema(c.env.DB);
@@ -6002,11 +6053,12 @@ api.get('/posts/feed', authMiddleware, async (c) => {
   const posts = await c.env.DB.prepare(
     `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
        EXISTS (SELECT 1 FROM follows fl WHERE fl.follower_id = ? AND fl.following_id = p.user_id) AS is_following,
+       EXISTS (SELECT 1 FROM likes lk WHERE lk.user_id = ? AND lk.post_id = p.id) AS is_liked,
        EXISTS (SELECT 1 FROM saved_posts sp WHERE sp.user_id = ? AND sp.post_id = p.id) AS saved
      FROM posts p JOIN users u ON p.user_id = u.id
      WHERE ${visiblePostWhere('u', 'p')}
      ORDER BY p.created_at DESC LIMIT ? OFFSET ?`
-  ).bind(userId, userId, ...visiblePostBindValues(userId), limit, skip).all();
+  ).bind(userId, userId, userId, ...visiblePostBindValues(userId), limit, skip).all();
   const results = [];
   for (const p of posts.results as any[]) {
     const likes = await c.env.DB.prepare('SELECT user_id FROM likes WHERE post_id = ?').bind(p.id).all();
@@ -6058,9 +6110,10 @@ api.get('/posts/:postId', authMiddleware, async (c) => {
   const p: any = await c.env.DB.prepare(
     `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
        EXISTS (SELECT 1 FROM follows fl WHERE fl.follower_id = ? AND fl.following_id = p.user_id) AS is_following,
+       EXISTS (SELECT 1 FROM likes lk WHERE lk.user_id = ? AND lk.post_id = p.id) AS is_liked,
        EXISTS (SELECT 1 FROM saved_posts sp WHERE sp.user_id = ? AND sp.post_id = p.id) AS saved
      FROM posts p JOIN users u ON p.user_id = u.id
-     WHERE p.id = ? AND ${visiblePostWhere('u', 'p')}`).bind(userId, userId, postId, ...visiblePostBindValues(userId)).first();
+     WHERE p.id = ? AND ${visiblePostWhere('u', 'p')}`).bind(userId, userId, userId, postId, ...visiblePostBindValues(userId)).first();
   if (!p) return c.json({ detail: 'Post not found' }, 404);
   const likes = await c.env.DB.prepare('SELECT user_id FROM likes WHERE post_id = ?').bind(postId).all();
   return c.json(postPayload(p, likes.results.map((l: any) => l.user_id)));

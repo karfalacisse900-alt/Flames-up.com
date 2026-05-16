@@ -1,3 +1,4 @@
+import AVFoundation
 import AVKit
 import SwiftUI
 import UIKit
@@ -188,7 +189,7 @@ private struct MIRAResolvedVideoPlayer: View {
   var body: some View {
     ZStack {
       if let player {
-        VideoPlayer(player: player)
+        MIRAFillVideoPlayer(player: player)
           .onAppear { player.play() }
           .onDisappear { player.pause() }
       } else if let thumbnailURL {
@@ -271,33 +272,59 @@ private struct MIRAResolvedVideoPlayer: View {
   }
 }
 
+private struct MIRAFillVideoPlayer: UIViewRepresentable {
+  let player: AVPlayer
+
+  func makeUIView(context: Context) -> PlayerView {
+    let view = PlayerView()
+    view.playerLayer.player = player
+    view.playerLayer.videoGravity = .resizeAspectFill
+    return view
+  }
+
+  func updateUIView(_ uiView: PlayerView, context: Context) {
+    uiView.playerLayer.player = player
+    uiView.playerLayer.videoGravity = .resizeAspectFill
+  }
+
+  final class PlayerView: UIView {
+    override class var layerClass: AnyClass {
+      AVPlayerLayer.self
+    }
+
+    var playerLayer: AVPlayerLayer {
+      layer as! AVPlayerLayer
+    }
+  }
+}
+
 public struct MIRAAdaptiveMediaView: View {
   let urls: [String]
   let cornerRadius: CGFloat
   let maxSingleImageHeight: CGFloat
   let carouselHeight: CGFloat
+  let singleImageContentMode: ContentMode
 
   public init(
     urls: [String],
     cornerRadius: CGFloat = 0,
     maxSingleImageHeight: CGFloat = min(UIScreen.main.bounds.width * 1.18, 560),
-    carouselHeight: CGFloat = min(UIScreen.main.bounds.width * 1.08, 520)
+    carouselHeight: CGFloat = min(UIScreen.main.bounds.width * 1.08, 520),
+    singleImageContentMode: ContentMode = .fill
   ) {
     self.urls = urls
     self.cornerRadius = cornerRadius
     self.maxSingleImageHeight = maxSingleImageHeight
     self.carouselHeight = carouselHeight
+    self.singleImageContentMode = singleImageContentMode
   }
 
   public var body: some View {
     Group {
       if let url = urls.first, urls.count == 1, !url.isVideoURL {
-        RemoteMediaView(url: url, isVideo: false, contentMode: .fit)
+        RemoteMediaView(url: url, isVideo: false, contentMode: singleImageContentMode)
           .frame(maxWidth: .infinity)
-          .frame(
-            minHeight: min(UIScreen.main.bounds.width * 0.62, maxSingleImageHeight),
-            maxHeight: maxSingleImageHeight
-          )
+          .frame(height: maxSingleImageHeight)
           .background(MIRATheme.Color.surfaceSoft)
       } else {
         TabView {
