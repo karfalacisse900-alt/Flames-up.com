@@ -77,7 +77,7 @@ public struct MIRAEmptyState: View {
         .font(.system(size: 42, weight: .light))
         .foregroundStyle(MIRATheme.Color.textMuted)
       Text(title)
-        .font(.system(size: 22, weight: .semibold))
+        .font(.system(size: 18, weight: .semibold))
         .foregroundStyle(MIRATheme.Color.textPrimary)
       Text(message)
         .font(.system(size: 15, weight: .regular))
@@ -339,6 +339,17 @@ public struct MIRAAdaptiveMediaView: View {
       }
     }
     .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+  }
+}
+
+public enum MIRAMediaSizing {
+  public static func feedHeight(for urls: [String], width: CGFloat = UIScreen.main.bounds.width) -> CGFloat {
+    let lowercased = urls.map { $0.lowercased() }
+    let prefersLongVertical = lowercased.contains { value in
+      value.isVideoURL || value.contains("9x16") || value.contains("9:16") || value.contains("story")
+    }
+    let height = prefersLongVertical ? width * (16.0 / 9.0) : width * 1.25
+    return min(height, UIScreen.main.bounds.height * 0.74)
   }
 }
 

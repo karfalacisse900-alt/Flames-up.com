@@ -190,7 +190,7 @@ private struct MainNativePostCard: View {
   let onFollow: () -> Void
 
   private var mediaHeight: CGFloat {
-    min(UIScreen.main.bounds.width * 1.25, 680)
+    MIRAMediaSizing.feedHeight(for: post.mediaURLs)
   }
 
   var body: some View {
@@ -285,12 +285,12 @@ private struct CompactPostAction: View {
     Button(action: action) {
       HStack(spacing: 5) {
         Image(systemName: systemImage)
-          .font(.system(size: 22, weight: .regular))
+          .font(.system(size: 20, weight: .regular))
         Text(compact(value))
-          .font(.system(size: 13, weight: .semibold))
+          .font(.system(size: 12, weight: .semibold))
       }
       .foregroundStyle(MIRATheme.Color.textPrimary)
-      .frame(minHeight: 38)
+      .frame(minHeight: 36)
     }
     .buttonStyle(.plain)
   }
@@ -312,13 +312,13 @@ private struct CompactTextAction: View {
       HStack(spacing: 6) {
         if let systemImage {
           Image(systemName: systemImage)
-            .font(.system(size: 13, weight: .semibold))
+            .font(.system(size: 12, weight: .semibold))
         }
         Text(title)
-          .font(.system(size: 14, weight: .semibold))
+          .font(.system(size: 13, weight: .semibold))
       }
       .foregroundStyle(MIRATheme.Color.forest)
-      .frame(height: 36)
+      .frame(height: 34)
       .padding(.horizontal, MIRATheme.Space.md)
       .background(MIRATheme.Color.surfaceSoft)
       .clipShape(Capsule())
@@ -334,12 +334,12 @@ private struct CompactShareAction: View {
     ShareLink(item: shareURL(for: post), subject: Text(post.titleText), message: Text(post.titleText)) {
       HStack(spacing: 6) {
         Image(systemName: "paperplane")
-          .font(.system(size: 13, weight: .semibold))
+          .font(.system(size: 12, weight: .semibold))
         Text("Share")
-          .font(.system(size: 14, weight: .semibold))
+          .font(.system(size: 13, weight: .semibold))
       }
       .foregroundStyle(.white)
-      .frame(height: 36)
+      .frame(height: 34)
       .padding(.horizontal, MIRATheme.Space.md)
       .background(MIRATheme.Color.forest)
       .clipShape(Capsule())

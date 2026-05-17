@@ -33,10 +33,10 @@ public struct AuthNativeView: View {
   private var brandBlock: some View {
     VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
       Text("MIRA")
-        .font(.system(size: 54, weight: .semibold, design: .rounded))
+        .font(.system(size: 44, weight: .semibold, design: .rounded))
         .foregroundStyle(MIRATheme.Color.textPrimary)
       Text("Share what you see. Discover what feels real.")
-        .font(.system(size: 18, weight: .medium))
+        .font(.system(size: 16, weight: .medium))
         .foregroundStyle(MIRATheme.Color.textSecondary)
         .fixedSize(horizontal: false, vertical: true)
     }

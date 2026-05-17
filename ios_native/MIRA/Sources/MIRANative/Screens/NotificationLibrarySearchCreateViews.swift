@@ -362,10 +362,19 @@ public struct CreatePostNativeView: View {
     }
   }
 
+  private var postStageWidth: CGFloat {
+    UIScreen.main.bounds.width - 32
+  }
+
+  private func postStageHeight(for media: MIRAPickedMedia? = nil) -> CGFloat {
+    let target = postStageWidth * ((media?.kind == .video) ? (16.0 / 9.0) : 1.25)
+    return min(target, UIScreen.main.bounds.height * 0.74)
+  }
+
   private var largePostMediaStage: some View {
     Group {
       if let first = mediaItems.first {
-        LocalMediaThumb(media: first, width: UIScreen.main.bounds.width - 32, height: min((UIScreen.main.bounds.width - 32) * 1.25, 680))
+        LocalMediaThumb(media: first, width: postStageWidth, height: postStageHeight(for: first))
           .overlay(alignment: .topTrailing) {
             Button {
               mediaItems.removeAll()
@@ -384,7 +393,7 @@ public struct CreatePostNativeView: View {
           RoundedRectangle(cornerRadius: MIRATheme.Radius.large, style: .continuous)
             .fill(MIRATheme.Color.surfaceSoft)
             .frame(maxWidth: .infinity)
-            .frame(height: min((UIScreen.main.bounds.width - 32) * 1.25, 680))
+            .frame(height: postStageHeight())
             .overlay {
               VStack(spacing: MIRATheme.Space.sm) {
                 Image(systemName: "photo.on.rectangle.angled")
@@ -577,7 +586,7 @@ public struct CreateNoteNativeView: View {
   private var noteComposerHeader: some View {
     HStack {
       Button("Cancel") { dismiss() }
-        .font(.system(size: 26, weight: .semibold))
+        .font(.system(size: 22, weight: .semibold))
         .foregroundStyle(MIRATheme.Color.textPrimary)
         .frame(minHeight: 56)
 
@@ -620,7 +629,7 @@ public struct CreateNoteNativeView: View {
 
       VStack(alignment: .leading, spacing: MIRATheme.Space.sm) {
         Text(currentUser?.displayName ?? "karfala900")
-          .font(.system(size: 27, weight: .semibold))
+          .font(.system(size: 22, weight: .semibold))
           .foregroundStyle(MIRATheme.Color.textPrimary)
           .lineLimit(1)
           .minimumScaleFactor(0.78)
@@ -628,14 +637,14 @@ public struct CreateNoteNativeView: View {
         ZStack(alignment: .topLeading) {
           if noteText.isEmpty {
             Text("What's new?")
-              .font(.system(size: 27, weight: .semibold))
+              .font(.system(size: 22, weight: .semibold))
               .foregroundStyle(MIRATheme.Color.textMuted.opacity(0.72))
               .padding(.top, 7)
               .allowsHitTesting(false)
           }
 
           TextEditor(text: $noteText)
-            .font(.system(size: 23, weight: .medium))
+            .font(.system(size: 18, weight: .medium))
             .foregroundStyle(MIRATheme.Color.textPrimary)
             .lineSpacing(2)
             .scrollContentBackground(.hidden)
@@ -646,7 +655,7 @@ public struct CreateNoteNativeView: View {
         HStack(spacing: MIRATheme.Space.xl) {
           PhotosPicker(selection: $pickerItem, matching: .images) {
             Image(systemName: "photo")
-              .font(.system(size: 29, weight: .regular))
+              .font(.system(size: 24, weight: .regular))
               .frame(width: 42, height: 42)
           }
 
@@ -654,8 +663,8 @@ public struct CreateNoteNativeView: View {
             openGIFPicker()
           } label: {
             Text("GIF")
-              .font(.system(size: 19, weight: .heavy))
-              .frame(width: 62, height: 42)
+              .font(.system(size: 16, weight: .heavy))
+              .frame(width: 56, height: 40)
               .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).stroke(lineWidth: 2.4))
           }
 
@@ -689,11 +698,11 @@ public struct CreateNoteNativeView: View {
   private var noteBottomBar: some View {
     HStack(spacing: MIRATheme.Space.sm) {
       Image(systemName: "slider.horizontal.3")
-        .font(.system(size: 23, weight: .medium))
+        .font(.system(size: 19, weight: .medium))
         .foregroundStyle(MIRATheme.Color.textMuted)
 
       Text("Reply options")
-        .font(.system(size: 21, weight: .semibold))
+        .font(.system(size: 17, weight: .semibold))
         .foregroundStyle(MIRATheme.Color.textMuted)
         .lineLimit(1)
         .minimumScaleFactor(0.78)
@@ -702,9 +711,9 @@ public struct CreateNoteNativeView: View {
 
       Button {} label: {
         Image(systemName: "chevron.down")
-          .font(.system(size: 20, weight: .semibold))
+          .font(.system(size: 17, weight: .semibold))
           .foregroundStyle(MIRATheme.Color.textSecondary)
-          .frame(width: 54, height: 54)
+          .frame(width: 46, height: 46)
           .background(MIRATheme.Color.surface)
           .overlay(Circle().stroke(MIRATheme.Color.hairline, lineWidth: 1))
           .clipShape(Circle())
@@ -718,11 +727,11 @@ public struct CreateNoteNativeView: View {
           ProgressView().tint(.white)
         } else {
           Text("Post")
-            .font(.system(size: 23, weight: .semibold))
+            .font(.system(size: 18, weight: .semibold))
         }
       }
       .foregroundStyle(.white)
-      .frame(width: 116, height: 58)
+      .frame(width: 98, height: 50)
       .background(canPostNote ? MIRATheme.Color.forest : MIRATheme.Color.textMuted.opacity(0.55))
       .clipShape(Capsule())
       .disabled(isPosting || !canPostNote)
@@ -944,7 +953,7 @@ public struct CreateStoryNativeView: View {
           }
 
           TextField("Aa", text: $text, axis: .vertical)
-            .font(.system(size: 30, weight: .semibold))
+            .font(.system(size: 24, weight: .semibold))
             .foregroundStyle(.white)
             .padding(MIRATheme.Space.lg)
         }
@@ -1091,7 +1100,9 @@ private struct ComposerPreviewSheet: View {
       ScrollView {
         VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
           if let first = mediaItems.first {
-            LocalMediaThumb(media: first, width: UIScreen.main.bounds.width - 32, height: 420)
+            let width = UIScreen.main.bounds.width - 32
+            let height = min(width * (first.kind == .video ? 16.0 / 9.0 : 1.25), UIScreen.main.bounds.height * 0.74)
+            LocalMediaThumb(media: first, width: width, height: height)
           }
           if !title.isEmpty {
             Text(title)

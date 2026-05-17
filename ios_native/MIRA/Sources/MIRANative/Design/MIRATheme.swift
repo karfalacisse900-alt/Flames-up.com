@@ -2,11 +2,11 @@ import SwiftUI
 
 public enum MIRATheme {
   public enum Color {
-    public static let appBackground = SwiftUI.Color(red: 0.998, green: 0.997, blue: 0.990)
+    public static let appBackground = SwiftUI.Color.white
     public static let surface = SwiftUI.Color.white
-    public static let surfaceSoft = SwiftUI.Color(red: 0.972, green: 0.972, blue: 0.956)
-    public static let surfaceRaised = SwiftUI.Color(red: 1.000, green: 0.999, blue: 0.994)
-    public static let textPrimary = SwiftUI.Color(red: 0.060, green: 0.072, blue: 0.060)
+    public static let surfaceSoft = SwiftUI.Color(red: 0.970, green: 0.975, blue: 0.965)
+    public static let surfaceRaised = SwiftUI.Color.white
+    public static let textPrimary = SwiftUI.Color(red: 0.075, green: 0.088, blue: 0.072)
     public static let textSecondary = SwiftUI.Color(red: 0.430, green: 0.465, blue: 0.410)
     public static let textMuted = SwiftUI.Color(red: 0.610, green: 0.635, blue: 0.580)
     public static let forest = SwiftUI.Color(red: 0.090, green: 0.175, blue: 0.105)
@@ -34,11 +34,11 @@ public enum MIRATheme {
   }
 
   public static func softShadow() -> some ViewModifier {
-    SurfaceShadow(radius: 24, y: 8, opacity: 0.070)
+    SurfaceShadow(radius: 22, y: 7, opacity: 0.060)
   }
 
   public static func floatingShadow() -> some ViewModifier {
-    SurfaceShadow(radius: 34, y: 14, opacity: 0.105)
+    SurfaceShadow(radius: 32, y: 12, opacity: 0.090)
   }
 }
 

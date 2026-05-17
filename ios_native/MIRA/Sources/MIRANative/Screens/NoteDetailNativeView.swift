@@ -36,6 +36,12 @@ final class NoteDetailNativeModel: ObservableObject {
 public struct NoteDetailNativeView: View {
   @StateObject private var model: NoteDetailNativeModel
   @State private var draft = ""
+  private var mediaHeight: CGFloat {
+    if let media = model.note.mediaUrl, !media.isEmpty {
+      return min(MIRAMediaSizing.feedHeight(for: [media]), 520)
+    }
+    return 0
+  }
 
   public init(note: MIRANote, api: MIRAAPIClient) {
     _model = StateObject(wrappedValue: NoteDetailNativeModel(note: note, api: api))
@@ -52,22 +58,22 @@ public struct NoteDetailNativeView: View {
             .buttonStyle(.plain)
 
             Text(model.note.user?.displayName ?? "mira")
-              .font(.system(size: 20, weight: .semibold))
+              .font(.system(size: 17, weight: .semibold))
             Spacer()
             MIRAIconButton(systemImage: "ellipsis") {}
           }
 
           Text(model.note.body ?? "")
-            .font(.system(size: 20, weight: .semibold))
+            .font(.system(size: 17, weight: .semibold))
             .foregroundStyle(MIRATheme.Color.textPrimary)
-            .lineSpacing(2)
+            .lineSpacing(3)
 
           if let media = model.note.mediaUrl, !media.isEmpty {
             MIRAAdaptiveMediaView(
               urls: [media],
               cornerRadius: MIRATheme.Radius.large,
-              maxSingleImageHeight: min(UIScreen.main.bounds.width * 1.05, 500),
-              carouselHeight: min(UIScreen.main.bounds.width * 1.05, 500)
+              maxSingleImageHeight: mediaHeight,
+              carouselHeight: mediaHeight
             )
           }
 
@@ -97,7 +103,7 @@ public struct NoteDetailNativeView: View {
   private var replyBar: some View {
     HStack(spacing: MIRATheme.Space.sm) {
       TextField("Add your reply...", text: $draft, axis: .vertical)
-        .font(.system(size: 16, weight: .regular))
+        .font(.system(size: 15, weight: .regular))
         .padding(.horizontal, MIRATheme.Space.md)
         .frame(minHeight: 46)
         .background(MIRATheme.Color.surfaceSoft)
@@ -110,7 +116,10 @@ public struct NoteDetailNativeView: View {
       }
     }
     .padding(MIRATheme.Space.md)
-    .background(.ultraThinMaterial)
+    .background(MIRATheme.Color.surface)
+    .overlay(alignment: .top) {
+      Rectangle().fill(MIRATheme.Color.hairline).frame(height: 0.5)
+    }
   }
 }
 
@@ -119,13 +128,13 @@ private struct CommentRowNative: View {
 
   var body: some View {
     HStack(alignment: .top, spacing: MIRATheme.Space.sm) {
-      RemoteAvatar(url: comment.user?.profileImage, size: 38)
+      RemoteAvatar(url: comment.user?.profileImage, size: 34)
       VStack(alignment: .leading, spacing: MIRATheme.Space.xs) {
         Text(comment.user?.displayName ?? "user")
-          .font(.system(size: 15, weight: .semibold))
+          .font(.system(size: 13, weight: .semibold))
           .foregroundStyle(MIRATheme.Color.textMuted)
         Text(comment.text)
-          .font(.system(size: 17, weight: .regular))
+          .font(.system(size: 15, weight: .regular))
           .foregroundStyle(MIRATheme.Color.textPrimary)
         HStack(spacing: MIRATheme.Space.lg) {
           Text("Reply")
@@ -137,7 +146,7 @@ private struct CommentRowNative: View {
       Spacer()
       Image(systemName: "heart")
         .foregroundStyle(MIRATheme.Color.textSecondary)
-        .frame(width: 44, height: 44)
+        .frame(width: 40, height: 40)
     }
   }
 }

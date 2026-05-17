@@ -68,7 +68,7 @@ public struct ProfileNativeView: View {
     VStack(spacing: MIRATheme.Space.md) {
       RemoteAvatar(url: model.user?.profileImage, size: 92)
       Text(model.user?.displayName ?? "mira")
-        .font(.system(size: 28, weight: .semibold))
+        .font(.system(size: 24, weight: .semibold))
         .foregroundStyle(MIRATheme.Color.textPrimary)
       HStack(spacing: MIRATheme.Space.xl) {
         profileMetric("Posts", model.user?.postsCount ?? model.posts.count)
@@ -120,7 +120,7 @@ public struct ChatNativeView: View {
       ScrollView {
         VStack(alignment: .leading, spacing: MIRATheme.Space.lg) {
           Text("Chat")
-            .font(.system(size: 34, weight: .semibold))
+            .font(.system(size: 28, weight: .semibold))
             .padding(.horizontal, MIRATheme.Space.md)
 
           if model.conversations.isEmpty && !model.isLoading {
@@ -192,9 +192,9 @@ public struct WalletNativeView: View {
       VStack(alignment: .leading, spacing: MIRATheme.Space.lg) {
         VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
           Text("Wallet")
-            .font(.system(size: 28, weight: .semibold))
+            .font(.system(size: 24, weight: .semibold))
           Text("\(model.wallet?.balance ?? 0)")
-            .font(.system(size: 56, weight: .semibold))
+            .font(.system(size: 42, weight: .semibold))
           Text("MIRA coins")
             .foregroundStyle(MIRATheme.Color.textSecondary)
           MIRAPrimaryButton("Buy coins", systemImage: "plus") {}
@@ -207,7 +207,7 @@ public struct WalletNativeView: View {
 
         VStack(alignment: .leading, spacing: MIRATheme.Space.sm) {
           Text("Premium")
-            .font(.system(size: 22, weight: .semibold))
+            .font(.system(size: 18, weight: .semibold))
           Text(model.wallet?.premiumActive == true ? "Premium is active" : "$4.99/month")
             .foregroundStyle(MIRATheme.Color.textSecondary)
           MIRAPrimaryButton("Manage premium", systemImage: "crown") {}
@@ -229,10 +229,10 @@ public struct StudioNativeView: View {
   public var body: some View {
     VStack(spacing: MIRATheme.Space.xl) {
       Image(systemName: "camera.viewfinder")
-        .font(.system(size: 54, weight: .light))
+        .font(.system(size: 40, weight: .light))
         .foregroundStyle(MIRATheme.Color.forest)
       Text("Native Studio")
-        .font(.system(size: 28, weight: .semibold))
+        .font(.system(size: 22, weight: .semibold))
       Text("This is the SwiftUI starting point for the camera, post composer, notes composer, places, preview, and media tools.")
         .font(.system(size: 16, weight: .regular))
         .foregroundStyle(MIRATheme.Color.textSecondary)

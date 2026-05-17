@@ -89,6 +89,7 @@ public struct PostDetailNativeView: View {
   @StateObject private var model: PostDetailModel
   @State private var draft = ""
   private let likeTint = Color(red: 0.875, green: 0.305, blue: 0.440)
+  private var mediaHeight: CGFloat { MIRAMediaSizing.feedHeight(for: model.post.mediaURLs) }
 
   public init(post: MIRAPost, api: MIRAAPIClient) {
     _model = StateObject(wrappedValue: PostDetailModel(post: post, api: api))
@@ -103,33 +104,33 @@ public struct PostDetailNativeView: View {
           if !model.post.mediaURLs.isEmpty {
             MIRAAdaptiveMediaView(
               urls: model.post.mediaURLs,
-              maxSingleImageHeight: min(UIScreen.main.bounds.width * 1.30, 590),
-              carouselHeight: min(UIScreen.main.bounds.width * 1.18, 560),
+              maxSingleImageHeight: mediaHeight,
+              carouselHeight: mediaHeight,
               singleImageContentMode: .fill
             )
           }
 
-          VStack(alignment: .leading, spacing: MIRATheme.Space.lg) {
-            VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
+          VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
+            VStack(alignment: .leading, spacing: MIRATheme.Space.sm) {
               Text(model.post.titleText)
-                .font(.system(size: 31, weight: .heavy))
+                .font(.system(size: 24, weight: .bold))
                 .foregroundStyle(MIRATheme.Color.textPrimary)
-                .lineSpacing(1)
+                .lineSpacing(2)
 
               if !model.post.bodyText.isEmpty {
                 Text(model.post.bodyText)
-                  .font(.system(size: 18, weight: .medium))
-                  .foregroundStyle(MIRATheme.Color.textPrimary.opacity(0.88))
-                  .lineSpacing(5)
+                  .font(.system(size: 15, weight: .regular))
+                  .foregroundStyle(MIRATheme.Color.textPrimary.opacity(0.86))
+                  .lineSpacing(4)
               }
 
               Text(relativeAge(model.post.createdAt))
-                .font(.system(size: 16, weight: .semibold))
+                .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(MIRATheme.Color.textMuted)
             }
 
             Text("\(model.post.commentsCount ?? model.comments.count) comments")
-              .font(.system(size: 24, weight: .heavy))
+              .font(.system(size: 18, weight: .semibold))
               .foregroundStyle(MIRATheme.Color.textPrimary)
 
             if model.isLoadingComments && model.comments.isEmpty {
@@ -177,15 +178,15 @@ public struct PostDetailNativeView: View {
       .buttonStyle(.plain)
 
       Text(model.post.userUsername ?? model.post.userFullName ?? "mira")
-        .font(.system(size: 20, weight: .semibold))
+        .font(.system(size: 17, weight: .semibold))
         .foregroundStyle(MIRATheme.Color.textPrimary)
         .lineLimit(1)
       Spacer()
       ShareLink(item: shareURL(for: model.post), subject: Text(model.post.titleText), message: Text(model.post.titleText)) {
         Image(systemName: "arrowshape.turn.up.right")
-          .font(.system(size: 29, weight: .semibold))
+          .font(.system(size: 24, weight: .semibold))
           .foregroundStyle(MIRATheme.Color.textPrimary)
-          .frame(width: 48, height: 48)
+          .frame(width: 44, height: 44)
       }
     }
     .padding(.horizontal, MIRATheme.Space.md)
@@ -200,9 +201,9 @@ public struct PostDetailNativeView: View {
   private var commentBar: some View {
     HStack(spacing: MIRATheme.Space.md) {
       TextField("Add comment...", text: $draft, axis: .vertical)
-        .font(.system(size: 16, weight: .regular))
+        .font(.system(size: 15, weight: .regular))
         .padding(.horizontal, MIRATheme.Space.md)
-        .frame(minHeight: 54)
+        .frame(minHeight: 48)
         .background(MIRATheme.Color.surfaceSoft)
         .clipShape(Capsule())
         .onSubmit {
@@ -232,12 +233,12 @@ public struct PostDetailNativeView: View {
       } label: {
         HStack(spacing: 7) {
           Image(systemName: model.post.isLiked == true ? "heart.fill" : "heart")
-            .font(.system(size: 31, weight: .semibold))
+            .font(.system(size: 24, weight: .semibold))
           Text(compact(model.post.likesCount ?? 0))
-            .font(.system(size: 18, weight: .semibold))
+            .font(.system(size: 14, weight: .semibold))
         }
         .foregroundStyle(model.post.isLiked == true ? likeTint : MIRATheme.Color.textPrimary)
-        .frame(minWidth: 70, minHeight: 54)
+        .frame(minWidth: 58, minHeight: 48)
       }
       .buttonStyle(.plain)
 
@@ -246,12 +247,12 @@ public struct PostDetailNativeView: View {
       } label: {
         HStack(spacing: 7) {
           Image(systemName: model.post.viewerSaved ? "bookmark.fill" : "bookmark")
-            .font(.system(size: 31, weight: .semibold))
+            .font(.system(size: 24, weight: .semibold))
           Text(compact(model.post.savesCount ?? 0))
-            .font(.system(size: 18, weight: .semibold))
+            .font(.system(size: 14, weight: .semibold))
         }
         .foregroundStyle(model.post.viewerSaved ? MIRATheme.Color.forest : MIRATheme.Color.textPrimary)
-        .frame(minWidth: 62, minHeight: 54)
+        .frame(minWidth: 54, minHeight: 48)
       }
       .buttonStyle(.plain)
     }
@@ -270,13 +271,13 @@ private struct CommentRow: View {
 
   var body: some View {
     HStack(alignment: .top, spacing: MIRATheme.Space.sm) {
-      RemoteAvatar(url: comment.user?.profileImage, size: 34)
+      RemoteAvatar(url: comment.user?.profileImage, size: 32)
       VStack(alignment: .leading, spacing: 4) {
         Text(comment.user?.displayName ?? "user")
-          .font(.system(size: 14, weight: .semibold))
+          .font(.system(size: 13, weight: .semibold))
           .foregroundStyle(MIRATheme.Color.textMuted)
         Text(comment.text)
-          .font(.system(size: 16, weight: .regular))
+          .font(.system(size: 15, weight: .regular))
           .foregroundStyle(MIRATheme.Color.textPrimary)
         HStack(spacing: MIRATheme.Space.lg) {
           Text("Reply")
@@ -288,7 +289,7 @@ private struct CommentRow: View {
       Spacer()
       Image(systemName: comment.likedByMe == true ? "heart.fill" : "heart")
         .foregroundStyle(MIRATheme.Color.textSecondary)
-        .frame(width: 44, height: 44)
+        .frame(width: 40, height: 40)
     }
   }
 }

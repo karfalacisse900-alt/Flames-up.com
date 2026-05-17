@@ -55,7 +55,7 @@ public struct DiscoverNativeView: View {
   private var discoverHeader: some View {
     HStack(spacing: MIRATheme.Space.sm) {
       Text("Discover")
-        .font(.system(size: 21, weight: .semibold))
+        .font(.system(size: 18, weight: .semibold))
         .foregroundStyle(MIRATheme.Color.textPrimary)
       Spacer()
       NavigationLink(destination: SearchUsersNativeView(api: model.api)) {
@@ -81,7 +81,7 @@ public struct DiscoverNativeView: View {
     return VStack(alignment: .leading, spacing: MIRATheme.Space.sm) {
       HStack {
         Text("Notes")
-          .font(.system(size: 22, weight: .semibold))
+          .font(.system(size: 20, weight: .semibold))
           .foregroundStyle(MIRATheme.Color.textPrimary)
         Spacer()
         NavigationLink(destination: CreateNoteNativeView(api: model.api)) {
