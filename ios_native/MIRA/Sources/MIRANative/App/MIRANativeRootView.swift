@@ -50,6 +50,8 @@ public struct MIRANativeRootView: View {
             .tabItem { Label("Profile", systemImage: "person.fill") }
         }
         .tint(MIRATheme.Color.forest)
+        .toolbarBackground(MIRATheme.Color.surface, for: .tabBar)
+        .toolbarBackground(.visible, for: .tabBar)
         .background(MIRATheme.Color.appBackground)
       }
     }

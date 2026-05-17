@@ -19,10 +19,41 @@ final class DiscoverNativeModel: ObservableObject {
     let loadedStories: [MIRAStoryGroup] = (try? await api.get("/statuses")) ?? []
     stories = loadedStories.filter { ($0.statuses?.isEmpty == false) }
   }
+
+  func toggleReaction(for note: MIRANote) async {
+    guard let index = notes.firstIndex(where: { $0.id == note.id }) else { return }
+    let previous = notes[index]
+    let nextReacted = !(previous.reacted ?? false)
+    let nextCount = max(0, (previous.reactionsCount ?? 0) + (nextReacted ? 1 : -1))
+    notes[index] = previous.updating(reactionsCount: nextCount, reacted: nextReacted)
+    do {
+      let response: NoteInteractionResponse = try await api.post("/notes/\(note.id)/interactions", body: NoteInteractionBody(kind: "reaction", value: "heart"))
+      notes[index] = notes[index].updating(reactionsCount: nextCount, reacted: response.active ?? nextReacted)
+    } catch {
+      notes[index] = previous
+    }
+  }
+
+  func recordShare(for note: MIRANote) async {
+    guard let index = notes.firstIndex(where: { $0.id == note.id }) else { return }
+    let previous = notes[index]
+    notes[index] = previous.updating(sharesCount: (previous.sharesCount ?? 0) + 1)
+    do {
+      let _: NoteInteractionResponse = try await api.post("/notes/\(note.id)/interactions", body: NoteInteractionBody(kind: "share", value: nil))
+    } catch {
+      notes[index] = previous
+    }
+  }
+
+  func report(note: MIRANote, reason: String) async {
+    let _: EmptyResponse? = try? await api.post("/notes/\(note.id)/report", body: NoteReportBody(reason: reason, details: nil))
+  }
 }
 
 public struct DiscoverNativeView: View {
   @StateObject private var model: DiscoverNativeModel
+  @State private var selectedNote: MIRANote?
+  @State private var menuNote: MIRANote?
 
   public init(api: MIRAAPIClient) {
     _model = StateObject(wrappedValue: DiscoverNativeModel(api: api))
@@ -45,8 +76,17 @@ public struct DiscoverNativeView: View {
       }
       .background(MIRATheme.Color.appBackground)
       .toolbar(.hidden, for: .navigationBar)
-      .navigationDestination(for: MIRANote.self) { note in
+      .navigationDestination(item: $selectedNote) { note in
         NoteDetailNativeView(note: note, api: model.api)
+      }
+      .confirmationDialog("Note options", item: $menuNote) { note in
+        Button("Not interested", role: .destructive) {
+          model.notes.removeAll { $0.id == note.id }
+        }
+        Button("Report", role: .destructive) {
+          Task { await model.report(note: note, reason: "other") }
+        }
+        Button("Cancel", role: .cancel) {}
       }
       .task { await model.load() }
     }
@@ -105,10 +145,16 @@ public struct DiscoverNativeView: View {
             EmptyNoteCardNative(width: width, height: height)
           } else {
             ForEach(model.notes) { note in
-              NavigationLink(value: note) {
-                NoteCardNative(note: note, width: width, height: height)
-              }
-              .buttonStyle(.plain)
+              NoteCardNative(
+                note: note,
+                width: width,
+                height: height,
+                onOpen: { selectedNote = note },
+                onReact: { Task { await model.toggleReaction(for: note) } },
+                onComment: { selectedNote = note },
+                onShare: { Task { await model.recordShare(for: note) } },
+                onMenu: { menuNote = note }
+              )
             }
           }
         }
@@ -189,6 +235,11 @@ private struct NoteCardNative: View {
   let note: MIRANote
   let width: CGFloat
   let height: CGFloat
+  let onOpen: () -> Void
+  let onReact: () -> Void
+  let onComment: () -> Void
+  let onShare: () -> Void
+  let onMenu: () -> Void
 
   var body: some View {
     VStack(alignment: .leading, spacing: 7) {
@@ -205,9 +256,13 @@ private struct NoteCardNative: View {
             .foregroundStyle(MIRATheme.Color.textMuted)
         }
         Spacer(minLength: 4)
-        Image(systemName: "ellipsis")
-          .font(.system(size: 20, weight: .semibold))
-          .foregroundStyle(MIRATheme.Color.textMuted)
+        Button(action: onMenu) {
+          Image(systemName: "ellipsis")
+            .font(.system(size: 19, weight: .semibold))
+            .foregroundStyle(MIRATheme.Color.textMuted)
+            .frame(width: 34, height: 34)
+        }
+        .buttonStyle(.plain)
       }
 
       Text(note.body ?? "New note")
@@ -226,10 +281,10 @@ private struct NoteCardNative: View {
       }
 
       HStack(spacing: MIRATheme.Space.sm) {
-        NoteActionNative(systemImage: note.reacted == true ? "heart.fill" : "heart", value: note.reactionsCount ?? 0)
-        NoteActionNative(systemImage: "bubble.left", value: note.commentsCount ?? 0)
+        NoteActionNative(systemImage: note.reacted == true ? "heart.fill" : "heart", value: note.reactionsCount ?? 0, tint: note.reacted == true ? MIRATheme.Color.like : MIRATheme.Color.textSecondary, action: onReact)
+        NoteActionNative(systemImage: "bubble.left", value: note.commentsCount ?? 0, tint: MIRATheme.Color.textSecondary, action: onComment)
         Spacer()
-        NoteActionNative(systemImage: "paperplane", value: note.sharesCount ?? 0)
+        NoteActionNative(systemImage: "paperplane", value: note.sharesCount ?? 0, tint: MIRATheme.Color.textSecondary, action: onShare)
       }
       .padding(.top, 2)
     }
@@ -238,6 +293,8 @@ private struct NoteCardNative: View {
     .background(MIRATheme.Color.surfaceRaised)
     .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
     .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(MIRATheme.Color.hairline, lineWidth: 1))
+    .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+    .onTapGesture(perform: onOpen)
   }
 }
 
@@ -334,16 +391,21 @@ private struct EmptyNoteCardNative: View {
 private struct NoteActionNative: View {
   let systemImage: String
   let value: Int
+  let tint: Color
+  let action: () -> Void
 
   var body: some View {
-    HStack(spacing: 5) {
-      Image(systemName: systemImage)
-        .font(.system(size: 18, weight: .regular))
-      Text(compact(value))
-        .font(.system(size: 13, weight: .semibold))
+    Button(action: action) {
+      HStack(spacing: 5) {
+        Image(systemName: systemImage)
+          .font(.system(size: 18, weight: .regular))
+        Text(compact(value))
+          .font(.system(size: 13, weight: .semibold))
+      }
+      .foregroundStyle(tint)
+      .frame(minHeight: 32)
     }
-    .foregroundStyle(MIRATheme.Color.textSecondary)
-    .frame(minHeight: 32)
+    .buttonStyle(.plain)
   }
 }
 

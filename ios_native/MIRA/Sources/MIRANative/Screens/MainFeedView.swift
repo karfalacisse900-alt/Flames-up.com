@@ -161,10 +161,11 @@ public struct MainFeedView: View {
         }
 
         mainHeader
-          .offset(y: isHeaderHidden ? -68 : 0)
+          .padding(.top, 1)
+          .offset(y: isHeaderHidden ? -58 : 0)
           .opacity(isHeaderHidden ? 0 : 1)
           .allowsHitTesting(!isHeaderHidden)
-          .animation(.easeInOut(duration: 0.22), value: isHeaderHidden)
+          .animation(.smooth(duration: 0.26), value: isHeaderHidden)
       }
       .background(MIRATheme.Color.appBackground)
       .toolbar(.hidden, for: .navigationBar)
@@ -217,12 +218,7 @@ public struct MainFeedView: View {
       }
     }
     .padding(.horizontal, MIRATheme.Space.md)
-    .padding(.top, 2)
-    .padding(.bottom, 5)
-    .background(MIRATheme.Color.surface)
-    .overlay(alignment: .bottom) {
-      Rectangle().fill(MIRATheme.Color.hairline).frame(height: 0.5)
-    }
+    .padding(.top, MIRATheme.Space.xs)
   }
 }
 
@@ -250,13 +246,14 @@ private struct MainNativePostCard: View {
           singleImageContentMode: .fill,
           shouldPlay: isVideoActive
         )
+        .frame(maxWidth: .infinity)
         .contentShape(Rectangle())
         .onTapGesture(perform: onOpen)
       }
 
       HStack(spacing: MIRATheme.Space.md) {
-        CompactPostAction(systemImage: post.isLiked == true ? "heart.fill" : "heart", value: post.likesCount ?? 0, action: onLike)
-        CompactPostAction(systemImage: post.viewerSaved ? "bookmark.fill" : "bookmark", value: post.savesCount ?? 0, action: onSave)
+        CompactPostAction(systemImage: post.isLiked == true ? "heart.fill" : "heart", value: post.likesCount ?? 0, tint: post.isLiked == true ? MIRATheme.Color.like : MIRATheme.Color.textSecondary, action: onLike)
+        CompactPostAction(systemImage: post.viewerSaved ? "bookmark.fill" : "bookmark", value: post.savesCount ?? 0, tint: post.viewerSaved ? MIRATheme.Color.forest : MIRATheme.Color.textSecondary, action: onSave)
         Spacer()
         CompactTextAction("View", action: onOpen)
         CompactShareAction(post: post)
@@ -294,7 +291,7 @@ private struct MainNativePostCard: View {
       .buttonStyle(.plain)
 
       Text(post.userUsername ?? post.userFullName ?? "mira")
-        .font(.system(size: 16, weight: .semibold))
+        .font(.system(size: 15, weight: .semibold))
         .foregroundStyle(MIRATheme.Color.textPrimary)
         .lineLimit(1)
       Spacer()
@@ -340,17 +337,18 @@ private struct MediaCarouselNative: View {
 private struct CompactPostAction: View {
   let systemImage: String
   let value: Int
+  let tint: Color
   let action: () -> Void
 
   var body: some View {
     Button(action: action) {
       HStack(spacing: 5) {
         Image(systemName: systemImage)
-          .font(.system(size: 20, weight: .regular))
+          .font(.system(size: 19, weight: .regular))
         Text(compact(value))
-          .font(.system(size: 12, weight: .semibold))
+          .font(.system(size: 12, weight: .medium))
       }
-      .foregroundStyle(MIRATheme.Color.textPrimary)
+      .foregroundStyle(tint)
       .frame(minHeight: 36)
     }
     .buttonStyle(.plain)

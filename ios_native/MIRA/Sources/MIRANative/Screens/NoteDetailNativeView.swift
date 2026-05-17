@@ -31,11 +31,40 @@ final class NoteDetailNativeModel: ObservableObject {
     guard let userId = note.user?.id, !userId.isEmpty else { return }
     let _: FollowResponse? = try? await api.post("/users/\(userId)/follow", body: FollowBody(following: true))
   }
+
+  func toggleReaction() async {
+    let previous = note
+    let nextReacted = !(note.reacted ?? false)
+    let nextCount = max(0, (note.reactionsCount ?? 0) + (nextReacted ? 1 : -1))
+    note = note.updating(reactionsCount: nextCount, reacted: nextReacted)
+    do {
+      let response: NoteInteractionResponse = try await api.post("/notes/\(note.id)/interactions", body: NoteInteractionBody(kind: "reaction", value: "heart"))
+      note = note.updating(reacted: response.active ?? nextReacted)
+    } catch {
+      note = previous
+    }
+  }
+
+  func recordShare() async {
+    let previous = note
+    note = note.updating(sharesCount: (note.sharesCount ?? 0) + 1)
+    do {
+      let _: NoteInteractionResponse = try await api.post("/notes/\(note.id)/interactions", body: NoteInteractionBody(kind: "share", value: nil))
+    } catch {
+      note = previous
+    }
+  }
+
+  func report(reason: String) async {
+    let _: EmptyResponse? = try? await api.post("/notes/\(note.id)/report", body: NoteReportBody(reason: reason, details: nil))
+  }
 }
 
 public struct NoteDetailNativeView: View {
+  @Environment(\.dismiss) private var dismiss
   @StateObject private var model: NoteDetailNativeModel
   @State private var draft = ""
+  @State private var showMenu = false
   private var mediaHeight: CGFloat {
     if let media = model.note.mediaUrl, !media.isEmpty {
       return min(MIRAMediaSizing.feedHeight(for: [media]), 520)
@@ -49,6 +78,8 @@ public struct NoteDetailNativeView: View {
 
   public var body: some View {
     VStack(spacing: 0) {
+      noteDetailHeader
+
       ScrollView {
         VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
           HStack(spacing: MIRATheme.Space.sm) {
@@ -58,13 +89,24 @@ public struct NoteDetailNativeView: View {
             .buttonStyle(.plain)
 
             Text(model.note.user?.displayName ?? "mira")
-              .font(.system(size: 17, weight: .semibold))
+              .font(.system(size: 16, weight: .semibold))
+            Text(noteAge(model.note.createdAt))
+              .font(.system(size: 15, weight: .semibold))
+              .foregroundStyle(MIRATheme.Color.textMuted)
             Spacer()
-            MIRAIconButton(systemImage: "ellipsis") {}
+            Button {
+              showMenu = true
+            } label: {
+              Image(systemName: "ellipsis")
+                .font(.system(size: 19, weight: .semibold))
+                .foregroundStyle(MIRATheme.Color.textMuted)
+                .frame(width: 40, height: 40)
+            }
+            .buttonStyle(.plain)
           }
 
           Text(model.note.body ?? "")
-            .font(.system(size: 17, weight: .semibold))
+            .font(.system(size: 18, weight: .semibold))
             .foregroundStyle(MIRATheme.Color.textPrimary)
             .lineSpacing(3)
 
@@ -78,10 +120,14 @@ public struct NoteDetailNativeView: View {
           }
 
           HStack(spacing: MIRATheme.Space.lg) {
-            MIRAStatButton(systemImage: "heart", value: model.note.reactionsCount ?? 0) {}
+            MIRAStatButton(systemImage: model.note.reacted == true ? "heart.fill" : "heart", value: model.note.reactionsCount ?? 0) {
+              Task { await model.toggleReaction() }
+            }
             MIRAStatButton(systemImage: "bubble.left", value: model.note.commentsCount ?? 0) {}
             Spacer()
-            MIRAStatButton(systemImage: "paperplane", value: model.note.sharesCount ?? 0) {}
+            MIRAStatButton(systemImage: "paperplane", value: model.note.sharesCount ?? 0) {
+              Task { await model.recordShare() }
+            }
           }
 
           Divider()
@@ -96,8 +142,40 @@ public struct NoteDetailNativeView: View {
       replyBar
     }
     .background(MIRATheme.Color.appBackground)
-    .navigationBarTitleDisplayMode(.inline)
+    .toolbar(.hidden, for: .navigationBar)
+    .confirmationDialog("Note options", isPresented: $showMenu) {
+      Button("Not interested", role: .destructive) {}
+      Button("Report", role: .destructive) {
+        Task { await model.report(reason: "other") }
+      }
+      Button("Cancel", role: .cancel) {}
+    }
     .task { await model.load() }
+  }
+
+  private var noteDetailHeader: some View {
+    HStack {
+      Button(action: { dismiss() }) {
+        Image(systemName: "chevron.left")
+          .font(.system(size: 25, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .frame(width: 44, height: 44)
+      }
+      .buttonStyle(.plain)
+      Spacer()
+      Button {
+        showMenu = true
+      } label: {
+        Image(systemName: "ellipsis")
+          .font(.system(size: 22, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .frame(width: 44, height: 44)
+      }
+      .buttonStyle(.plain)
+    }
+    .padding(.horizontal, MIRATheme.Space.md)
+    .padding(.top, MIRATheme.Space.xs)
+    .background(MIRATheme.Color.surface)
   }
 
   private var replyBar: some View {
@@ -123,6 +201,15 @@ public struct NoteDetailNativeView: View {
   }
 }
 
+private func noteAge(_ value: String?) -> String {
+  guard let value, let date = ISO8601DateFormatter().date(from: value) else { return "" }
+  let minutes = max(0, Int(Date().timeIntervalSince(date) / 60))
+  if minutes < 60 { return "\(minutes)m" }
+  let hours = minutes / 60
+  if hours < 24 { return "\(hours)h" }
+  return "\(hours / 24)d"
+}
+
 private struct CommentRowNative: View {
   let comment: MIRAComment
 
@@ -138,7 +225,6 @@ private struct CommentRowNative: View {
           .foregroundStyle(MIRATheme.Color.textPrimary)
         HStack(spacing: MIRATheme.Space.lg) {
           Text("Reply")
-          Text("View replies")
         }
         .font(.system(size: 13, weight: .semibold))
         .foregroundStyle(MIRATheme.Color.textMuted)

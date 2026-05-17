@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 
 @MainActor
@@ -60,7 +61,6 @@ public struct ProfileNativeView: View {
         }
       }
       .task { await model.load() }
-      .refreshable { await model.load() }
     }
   }
 
@@ -119,51 +119,109 @@ public struct ChatNativeView: View {
     NavigationStack {
       ScrollView {
         VStack(alignment: .leading, spacing: MIRATheme.Space.lg) {
-          Text("Chat")
-            .font(.system(size: 28, weight: .semibold))
-            .padding(.horizontal, MIRATheme.Space.md)
+          chatHeader
+          friendStoryPlaceholder
 
           if model.conversations.isEmpty && !model.isLoading {
             MIRAEmptyState(title: "No chats yet", message: "Friends and replies will appear here.", systemImage: "bubble.left.and.bubble.right")
           } else {
-            ForEach(model.conversations) { conversation in
-              if let peerId = conversation.otherUserId {
-                NavigationLink(destination: ConversationNativeView(peerId: peerId, title: conversation.displayName, api: model.api)) {
-                  HStack(spacing: MIRATheme.Space.sm) {
-                    MIRAFollowAvatar(url: conversation.otherProfileImage, size: 48)
-                    VStack(alignment: .leading, spacing: 4) {
-                      Text(conversation.displayName)
-                        .font(.system(size: 16, weight: .semibold))
-                      Text(conversation.lastMessage ?? "Start chat")
-                        .font(.system(size: 14, weight: .regular))
-                        .foregroundStyle(MIRATheme.Color.textSecondary)
-                        .lineLimit(1)
-                    }
-                    Spacer()
-                    if (conversation.unreadCount ?? 0) > 0 {
-                      Text("\(conversation.unreadCount ?? 0)")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(minWidth: 22, minHeight: 22)
-                        .background(MIRATheme.Color.forest)
-                        .clipShape(Circle())
-                    }
+            LazyVStack(spacing: 0) {
+              ForEach(model.conversations) { conversation in
+                if let peerId = conversation.otherUserId {
+                  NavigationLink(destination: ConversationNativeView(peerId: peerId, title: conversation.displayName, api: model.api)) {
+                    ChatConversationRow(conversation: conversation)
                   }
-                  .padding(MIRATheme.Space.md)
-                  .miraCardSurface(cornerRadius: MIRATheme.Radius.medium)
-                  .padding(.horizontal, MIRATheme.Space.md)
+                  .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
               }
             }
+            .padding(.horizontal, MIRATheme.Space.md)
           }
         }
-        .padding(.vertical, MIRATheme.Space.md)
+        .padding(.top, MIRATheme.Space.md)
+        .padding(.bottom, MIRATheme.Space.xxl)
       }
       .background(MIRATheme.Color.appBackground)
       .task { await model.load() }
     }
   }
+
+  private var chatHeader: some View {
+    HStack {
+      Text("Chat")
+        .font(.system(size: 30, weight: .semibold))
+        .foregroundStyle(MIRATheme.Color.textPrimary)
+      Spacer()
+      MIRAHeaderCircleButton(systemImage: "line.3.horizontal.decrease")
+      MIRAHeaderCircleButton(systemImage: "magnifyingglass")
+    }
+    .padding(.horizontal, MIRATheme.Space.md)
+  }
+
+  private var friendStoryPlaceholder: some View {
+    HStack(spacing: MIRATheme.Space.sm) {
+      Image(systemName: "person.2")
+        .font(.system(size: 17, weight: .semibold))
+      Text("Friend stories will appear here")
+        .font(.system(size: 15, weight: .semibold))
+        .lineLimit(1)
+        .minimumScaleFactor(0.82)
+    }
+    .foregroundStyle(MIRATheme.Color.textMuted)
+    .frame(maxWidth: .infinity, minHeight: 56)
+    .background(MIRATheme.Color.surface)
+    .clipShape(Capsule())
+    .overlay(Capsule().stroke(MIRATheme.Color.hairline, lineWidth: 1))
+    .padding(.horizontal, MIRATheme.Space.md)
+  }
+}
+
+private struct ChatConversationRow: View {
+  let conversation: MIRAConversation
+
+  var body: some View {
+    HStack(spacing: MIRATheme.Space.md) {
+      MIRAFollowAvatar(url: conversation.otherProfileImage, size: 56)
+      VStack(alignment: .leading, spacing: 5) {
+        Text(conversation.displayName)
+          .font(.system(size: 17, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .lineLimit(1)
+        Text(conversation.lastMessage ?? "Start chat")
+          .font(.system(size: 14, weight: .medium))
+          .foregroundStyle(MIRATheme.Color.textMuted)
+          .lineLimit(1)
+      }
+      Spacer()
+      VStack(alignment: .trailing, spacing: MIRATheme.Space.sm) {
+        Text(chatTime(conversation.lastMessageTime ?? conversation.updatedAt))
+          .font(.system(size: 12, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textMuted)
+        Image(systemName: "video")
+          .font(.system(size: 13, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textMuted)
+          .frame(width: 30, height: 30)
+          .background(MIRATheme.Color.surface)
+          .clipShape(Circle())
+          .overlay(Circle().stroke(MIRATheme.Color.hairline, lineWidth: 1))
+      }
+    }
+    .padding(.vertical, MIRATheme.Space.md)
+    .overlay(alignment: .bottom) {
+      Rectangle().fill(MIRATheme.Color.hairline).frame(height: 0.5).padding(.leading, 72)
+    }
+  }
+}
+
+private func chatTime(_ value: String?) -> String {
+  guard let value, let date = ISO8601DateFormatter().date(from: value) else { return "" }
+  let minutes = max(0, Int(Date().timeIntervalSince(date) / 60))
+  if minutes < 60 { return "\(minutes)m" }
+  let hours = minutes / 60
+  if hours < 24 { return "\(hours)h" }
+  let days = hours / 24
+  if days < 7 { return "\(days)d" }
+  return "\(max(1, days / 7))w"
 }
 
 @MainActor

@@ -50,7 +50,6 @@ public struct NotificationNativeView: View {
     .background(MIRATheme.Color.appBackground)
     .navigationTitle("Notifications")
     .task { await model.load() }
-    .refreshable { await model.load() }
   }
 
   private func notificationRow(_ item: MIRANotification) -> some View {
@@ -170,7 +169,6 @@ public struct LibraryNativeView: View {
     .navigationTitle("My Library")
     .task { await model.load() }
     .onChange(of: model.tab) { _ in Task { await model.load() } }
-    .refreshable { await model.load() }
   }
 
   private func postGrid(posts: [MIRAPost]) -> some View {
@@ -367,7 +365,7 @@ public struct CreatePostNativeView: View {
   }
 
   private func postStageHeight(for media: MIRAPickedMedia? = nil) -> CGFloat {
-    let target = postStageWidth * ((media?.kind == .video) ? (16.0 / 9.0) : 1.25)
+    let target = postStageWidth * 1.25
     return min(target, UIScreen.main.bounds.height * 0.74)
   }
 
@@ -412,10 +410,10 @@ public struct CreatePostNativeView: View {
   private var composerTextFields: some View {
     VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
       TextField("Add a catchy headline", text: $title)
-        .font(.system(size: 24, weight: .semibold))
+          .font(.system(size: 21, weight: .semibold))
       Rectangle().fill(MIRATheme.Color.hairline).frame(height: 0.5)
       TextField("Write caption with details to get more views.", text: $bodyText, axis: .vertical)
-        .font(.system(size: 17, weight: .regular))
+          .font(.system(size: 15, weight: .regular))
         .lineLimit(5...10)
     }
     .padding(MIRATheme.Space.md)
@@ -586,7 +584,7 @@ public struct CreateNoteNativeView: View {
   private var noteComposerHeader: some View {
     HStack {
       Button("Cancel") { dismiss() }
-        .font(.system(size: 22, weight: .semibold))
+        .font(.system(size: 20, weight: .semibold))
         .foregroundStyle(MIRATheme.Color.textPrimary)
         .frame(minHeight: 56)
 
@@ -595,7 +593,7 @@ public struct CreateNoteNativeView: View {
       Button("Save") {
         saveDraft()
       }
-      .font(.system(size: 18, weight: .semibold))
+        .font(.system(size: 16, weight: .semibold))
       .foregroundStyle(canSaveDraft ? MIRATheme.Color.forest : MIRATheme.Color.textMuted)
       .frame(width: 92, height: 46)
       .background(canSaveDraft ? MIRATheme.Color.forestSoft : MIRATheme.Color.surfaceSoft.opacity(0.72))
@@ -629,7 +627,7 @@ public struct CreateNoteNativeView: View {
 
       VStack(alignment: .leading, spacing: MIRATheme.Space.sm) {
         Text(currentUser?.displayName ?? "karfala900")
-          .font(.system(size: 22, weight: .semibold))
+          .font(.system(size: 19, weight: .semibold))
           .foregroundStyle(MIRATheme.Color.textPrimary)
           .lineLimit(1)
           .minimumScaleFactor(0.78)
@@ -637,14 +635,14 @@ public struct CreateNoteNativeView: View {
         ZStack(alignment: .topLeading) {
           if noteText.isEmpty {
             Text("What's new?")
-              .font(.system(size: 22, weight: .semibold))
+              .font(.system(size: 19, weight: .semibold))
               .foregroundStyle(MIRATheme.Color.textMuted.opacity(0.72))
               .padding(.top, 7)
               .allowsHitTesting(false)
           }
 
           TextEditor(text: $noteText)
-            .font(.system(size: 18, weight: .medium))
+            .font(.system(size: 16, weight: .medium))
             .foregroundStyle(MIRATheme.Color.textPrimary)
             .lineSpacing(2)
             .scrollContentBackground(.hidden)
@@ -702,7 +700,7 @@ public struct CreateNoteNativeView: View {
         .foregroundStyle(MIRATheme.Color.textMuted)
 
       Text("Reply options")
-        .font(.system(size: 17, weight: .semibold))
+        .font(.system(size: 15, weight: .semibold))
         .foregroundStyle(MIRATheme.Color.textMuted)
         .lineLimit(1)
         .minimumScaleFactor(0.78)
@@ -727,7 +725,7 @@ public struct CreateNoteNativeView: View {
           ProgressView().tint(.white)
         } else {
           Text("Post")
-            .font(.system(size: 18, weight: .semibold))
+            .font(.system(size: 16, weight: .semibold))
         }
       }
       .foregroundStyle(.white)
@@ -861,9 +859,9 @@ public struct CreateNoteNativeView: View {
 
   @MainActor
   private func openGIFPicker() {
-    let shouldLoadInitialResults = !showGIFField && gifResults.isEmpty
+    let shouldLoadInitialResults = gifResults.isEmpty
     withAnimation(.snappy(duration: 0.18)) {
-      showGIFField.toggle()
+      showGIFField = true
     }
     guard shouldLoadInitialResults else { return }
     if gifQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {

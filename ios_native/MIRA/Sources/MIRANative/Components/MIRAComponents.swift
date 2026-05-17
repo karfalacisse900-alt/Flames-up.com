@@ -24,7 +24,7 @@ public struct MIRAPrimaryButton: View {
         Text(title).font(.system(size: 16, weight: .semibold))
       }
       .foregroundStyle(.white)
-      .frame(minHeight: 44)
+      .frame(minHeight: 42)
       .padding(.horizontal, MIRATheme.Space.lg)
       .background(MIRATheme.Color.forest)
       .clipShape(Capsule())
@@ -61,7 +61,7 @@ public struct MIRAHeaderCircleButton: View {
     Image(systemName: systemImage)
       .font(.system(size: 17, weight: .semibold))
       .foregroundStyle(MIRATheme.Color.textPrimary)
-      .frame(width: 40, height: 40)
+      .frame(width: 38, height: 38)
       .background(MIRATheme.Color.surfaceSoft)
       .clipShape(Circle())
   }
@@ -171,6 +171,9 @@ public struct RemoteMediaView: View {
       }
     }
     .clipped()
+    .transaction { transaction in
+      transaction.animation = .easeInOut(duration: 0.18)
+    }
   }
 
   private var placeholder: some View {
@@ -189,13 +192,17 @@ private struct MIRAResolvedVideoPlayer: View {
   @State private var player: AVPlayer?
   @State private var thumbnailURL: String?
   @State private var failed = false
+  @State private var endObserver: NSObjectProtocol?
 
   var body: some View {
     ZStack {
       if let player {
         MIRAFillVideoPlayer(player: player)
           .onAppear { syncPlayback(player) }
-          .onDisappear { player.pause() }
+          .onDisappear {
+            player.pause()
+            removeLoopObserver()
+          }
       } else if let thumbnailURL {
         AsyncImage(url: URL(string: thumbnailURL)) { phase in
           switch phase {
@@ -243,6 +250,7 @@ private struct MIRAResolvedVideoPlayer: View {
 
     if let directURL = URL(string: url), let scheme = directURL.scheme, scheme.hasPrefix("http") || scheme == "file" {
       let avPlayer = AVPlayer(url: directURL)
+      configurePlayback(for: avPlayer)
       player = avPlayer
       syncPlayback(avPlayer)
       return
@@ -269,6 +277,7 @@ private struct MIRAResolvedVideoPlayer: View {
       thumbnailURL = info.thumbnail
       if let hls = info.hls, let hlsURL = URL(string: hls), info.ready != false {
         let avPlayer = AVPlayer(url: hlsURL)
+        configurePlayback(for: avPlayer)
         player = avPlayer
         syncPlayback(avPlayer)
       } else {
@@ -279,11 +288,37 @@ private struct MIRAResolvedVideoPlayer: View {
     }
   }
 
+  @MainActor
   private func syncPlayback(_ player: AVPlayer) {
     if shouldPlay {
       player.play()
     } else {
       player.pause()
+    }
+  }
+
+  @MainActor
+  private func configurePlayback(for player: AVPlayer) {
+    player.actionAtItemEnd = .none
+    player.automaticallyWaitsToMinimizeStalling = true
+    removeLoopObserver()
+    endObserver = NotificationCenter.default.addObserver(
+      forName: .AVPlayerItemDidPlayToEndTime,
+      object: player.currentItem,
+      queue: .main
+    ) { _ in
+      player.seek(to: .zero)
+      if shouldPlay {
+        player.play()
+      }
+    }
+  }
+
+  @MainActor
+  private func removeLoopObserver() {
+    if let endObserver {
+      NotificationCenter.default.removeObserver(endObserver)
+      self.endObserver = nil
     }
   }
 }

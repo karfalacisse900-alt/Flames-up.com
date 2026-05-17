@@ -88,7 +88,6 @@ public struct PostDetailNativeView: View {
   @Environment(\.dismiss) private var dismiss
   @StateObject private var model: PostDetailModel
   @State private var draft = ""
-  private let likeTint = Color(red: 0.875, green: 0.305, blue: 0.440)
   private var mediaHeight: CGFloat { MIRAMediaSizing.feedHeight(for: model.post.mediaURLs) }
 
   public init(post: MIRAPost, api: MIRAAPIClient) {
@@ -113,14 +112,14 @@ public struct PostDetailNativeView: View {
           VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
             VStack(alignment: .leading, spacing: MIRATheme.Space.sm) {
               Text(model.post.titleText)
-                .font(.system(size: 24, weight: .bold))
+                .font(.system(size: 24, weight: .semibold))
                 .foregroundStyle(MIRATheme.Color.textPrimary)
                 .lineSpacing(2)
 
               if !model.post.bodyText.isEmpty {
                 Text(model.post.bodyText)
-                  .font(.system(size: 15, weight: .regular))
-                  .foregroundStyle(MIRATheme.Color.textPrimary.opacity(0.86))
+                  .font(.system(size: 16, weight: .regular))
+                  .foregroundStyle(MIRATheme.Color.textPrimary.opacity(0.88))
                   .lineSpacing(4)
               }
 
@@ -130,7 +129,7 @@ public struct PostDetailNativeView: View {
             }
 
             Text("\(model.post.commentsCount ?? model.comments.count) comments")
-              .font(.system(size: 18, weight: .semibold))
+              .font(.system(size: 17, weight: .semibold))
               .foregroundStyle(MIRATheme.Color.textPrimary)
 
             if model.isLoadingComments && model.comments.isEmpty {
@@ -178,7 +177,7 @@ public struct PostDetailNativeView: View {
       .buttonStyle(.plain)
 
       Text(model.post.userUsername ?? model.post.userFullName ?? "mira")
-        .font(.system(size: 17, weight: .semibold))
+        .font(.system(size: 18, weight: .semibold))
         .foregroundStyle(MIRATheme.Color.textPrimary)
         .lineLimit(1)
       Spacer()
@@ -233,11 +232,11 @@ public struct PostDetailNativeView: View {
       } label: {
         HStack(spacing: 7) {
           Image(systemName: model.post.isLiked == true ? "heart.fill" : "heart")
-            .font(.system(size: 24, weight: .semibold))
+            .font(.system(size: 22, weight: .semibold))
           Text(compact(model.post.likesCount ?? 0))
             .font(.system(size: 14, weight: .semibold))
         }
-        .foregroundStyle(model.post.isLiked == true ? likeTint : MIRATheme.Color.textPrimary)
+        .foregroundStyle(model.post.isLiked == true ? MIRATheme.Color.like : MIRATheme.Color.textSecondary)
         .frame(minWidth: 58, minHeight: 48)
       }
       .buttonStyle(.plain)
@@ -247,7 +246,7 @@ public struct PostDetailNativeView: View {
       } label: {
         HStack(spacing: 7) {
           Image(systemName: model.post.viewerSaved ? "bookmark.fill" : "bookmark")
-            .font(.system(size: 24, weight: .semibold))
+            .font(.system(size: 22, weight: .semibold))
           Text(compact(model.post.savesCount ?? 0))
             .font(.system(size: 14, weight: .semibold))
         }

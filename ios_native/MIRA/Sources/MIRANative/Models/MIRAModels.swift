@@ -21,6 +21,7 @@ public struct MIRAPost: Decodable, Identifiable, Hashable {
   public let userUsername: String?
   public let userFullName: String?
   public let userProfileImage: String?
+  public let title: String?
   public let content: String?
   public let caption: String?
   public let image: String?
@@ -40,12 +41,18 @@ public struct MIRAPost: Decodable, Identifiable, Hashable {
   public let followed: FlexibleBool?
 
   public var titleText: String {
+    if let title, !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      return title.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
     let raw = (caption?.isEmpty == false ? caption : content) ?? ""
     let first = raw.components(separatedBy: .newlines).first ?? raw
     return first.isEmpty ? "MIRA post" : first
   }
 
   public var bodyText: String {
+    if let title, !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      return ((caption?.isEmpty == false ? caption : content) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
     let raw = (caption?.isEmpty == false ? caption : content) ?? ""
     let lines = raw.components(separatedBy: .newlines).filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     return lines.count > 1 ? lines.dropFirst().joined(separator: "\n") : ""
@@ -83,6 +90,7 @@ public struct MIRAPost: Decodable, Identifiable, Hashable {
       userUsername: userUsername,
       userFullName: userFullName,
       userProfileImage: userProfileImage,
+      title: title,
       content: content,
       caption: caption,
       image: image,
@@ -114,6 +122,20 @@ public struct MIRANote: Decodable, Identifiable, Hashable {
   public let sharesCount: Int?
   public let reacted: Bool?
   public let user: MIRAUser?
+
+  public func updating(reactionsCount: Int? = nil, commentsCount: Int? = nil, sharesCount: Int? = nil, reacted: Bool? = nil) -> MIRANote {
+    MIRANote(
+      id: id,
+      body: body,
+      mediaUrl: mediaUrl,
+      createdAt: createdAt,
+      reactionsCount: reactionsCount ?? self.reactionsCount,
+      commentsCount: commentsCount ?? self.commentsCount,
+      sharesCount: sharesCount ?? self.sharesCount,
+      reacted: reacted ?? self.reacted,
+      user: user
+    )
+  }
 }
 
 public struct MIRAGifItem: Decodable, Identifiable, Hashable {
@@ -311,6 +333,16 @@ public struct TypingBody: Encodable {
 public struct NoteInteractionBody: Encodable {
   public let kind: String
   public let value: String?
+}
+
+public struct NoteInteractionResponse: Decodable {
+  public let active: Bool?
+  public let kind: String?
+}
+
+public struct NoteReportBody: Encodable {
+  public let reason: String
+  public let details: String?
 }
 
 public struct FollowBody: Encodable {
