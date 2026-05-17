@@ -54,6 +54,7 @@ public struct DiscoverNativeView: View {
   @StateObject private var model: DiscoverNativeModel
   @State private var selectedNote: MIRANote?
   @State private var menuNote: MIRANote?
+  @State private var isShowingNoteMenu = false
 
   public init(api: MIRAAPIClient) {
     _model = StateObject(wrappedValue: DiscoverNativeModel(api: api))
@@ -79,14 +80,21 @@ public struct DiscoverNativeView: View {
       .navigationDestination(item: $selectedNote) { note in
         NoteDetailNativeView(note: note, api: model.api)
       }
-      .confirmationDialog("Note options", item: $menuNote) { note in
+      .confirmationDialog("Note options", isPresented: $isShowingNoteMenu) {
         Button("Not interested", role: .destructive) {
-          model.notes.removeAll { $0.id == note.id }
+          guard let menuNote else { return }
+          model.notes.removeAll { $0.id == menuNote.id }
         }
         Button("Report", role: .destructive) {
-          Task { await model.report(note: note, reason: "other") }
+          guard let menuNote else { return }
+          Task { await model.report(note: menuNote, reason: "other") }
         }
         Button("Cancel", role: .cancel) {}
+      }
+      .onChange(of: isShowingNoteMenu) { _, isPresented in
+        if !isPresented {
+          menuNote = nil
+        }
       }
       .task { await model.load() }
     }
@@ -153,7 +161,10 @@ public struct DiscoverNativeView: View {
                 onReact: { Task { await model.toggleReaction(for: note) } },
                 onComment: { selectedNote = note },
                 onShare: { Task { await model.recordShare(for: note) } },
-                onMenu: { menuNote = note }
+                onMenu: {
+                  menuNote = note
+                  isShowingNoteMenu = true
+                }
               )
             }
           }
