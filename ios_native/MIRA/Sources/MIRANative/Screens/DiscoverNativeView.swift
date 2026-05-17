@@ -75,8 +75,8 @@ public struct DiscoverNativeView: View {
   }
 
   private var notesSection: some View {
-    let width = min(max(UIScreen.main.bounds.width * 0.68, 228), min(278, UIScreen.main.bounds.width - 78))
-    let height = width * 1.18
+    let width = min(max(UIScreen.main.bounds.width * 0.76, 258), min(318, UIScreen.main.bounds.width - 52))
+    let height = width * 1.24
 
     return VStack(alignment: .leading, spacing: MIRATheme.Space.sm) {
       HStack {
@@ -150,21 +150,21 @@ private struct StoryBubbleNative: View {
   var body: some View {
     VStack(spacing: 5) {
       ZStack(alignment: .bottomTrailing) {
-        RemoteAvatar(url: avatarURL, size: 58)
+        RemoteAvatar(url: avatarURL, size: 68)
           .overlay(Circle().stroke(hasUnviewed ? MIRATheme.Color.forest : MIRATheme.Color.hairline, lineWidth: hasUnviewed ? 2 : 1))
         if isAdd {
           Circle()
             .fill(MIRATheme.Color.forest)
-            .frame(width: 19, height: 19)
-            .overlay(Image(systemName: "plus").font(.system(size: 10, weight: .bold)).foregroundStyle(.white))
+            .frame(width: 21, height: 21)
+            .overlay(Image(systemName: "plus").font(.system(size: 11, weight: .bold)).foregroundStyle(.white))
             .overlay(Circle().stroke(MIRATheme.Color.surface, lineWidth: 2))
         }
       }
       Text(name)
-        .font(.system(size: 11, weight: .medium))
+        .font(.system(size: 12, weight: .medium))
         .foregroundStyle(MIRATheme.Color.textSecondary)
         .lineLimit(1)
-        .frame(width: 64)
+        .frame(width: 78)
     }
   }
 }
@@ -176,10 +176,10 @@ private struct StoryBubblePlaceholder: View {
     VStack(spacing: 5) {
       Circle()
         .fill(MIRATheme.Color.surfaceSoft)
-        .frame(width: 58, height: 58)
+        .frame(width: 68, height: 68)
       RoundedRectangle(cornerRadius: 4)
         .fill(MIRATheme.Color.surfaceSoft)
-        .frame(width: 40, height: 8)
+        .frame(width: 46, height: 8)
     }
     .redacted(reason: .placeholder)
   }
@@ -219,7 +219,7 @@ private struct NoteCardNative: View {
       if let media = note.mediaUrl, !media.isEmpty {
         RemoteMediaView(url: media, isVideo: media.isVideoURL)
           .frame(maxWidth: .infinity)
-          .frame(height: min(width * 0.70, height * 0.50))
+          .frame(height: min(width * 0.78, height * 0.55))
           .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
       } else {
         Spacer(minLength: 0)
@@ -297,7 +297,7 @@ private struct NoteCardSkeletonNative: View {
         RoundedRectangle(cornerRadius: 6).fill(MIRATheme.Color.surfaceSoft).frame(width: 120, height: 16)
       }
       RoundedRectangle(cornerRadius: 8).fill(MIRATheme.Color.surfaceSoft).frame(height: 18)
-      RoundedRectangle(cornerRadius: 18).fill(MIRATheme.Color.surfaceSoft).frame(height: min(width * 0.62, height * 0.46))
+      RoundedRectangle(cornerRadius: 18).fill(MIRATheme.Color.surfaceSoft).frame(height: min(width * 0.78, height * 0.55))
       Spacer()
     }
     .padding(14)

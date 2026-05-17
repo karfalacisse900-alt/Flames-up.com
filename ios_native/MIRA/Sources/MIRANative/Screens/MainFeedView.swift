@@ -121,6 +121,9 @@ final class MainFeedModel: ObservableObject {
 public struct MainFeedView: View {
   @StateObject private var model: MainFeedModel
   @State private var selectedPost: MIRAPost?
+  @State private var activeVideoPostID: String?
+  @State private var isHeaderHidden = false
+  @State private var previousScrollMinY: CGFloat?
 
   public init(api: MIRAAPIClient) {
     _model = StateObject(wrappedValue: MainFeedModel(api: api))
@@ -128,10 +131,13 @@ public struct MainFeedView: View {
 
   public var body: some View {
     NavigationStack {
-      VStack(spacing: 0) {
-        mainHeader
-
+      ZStack(alignment: .top) {
         ScrollView {
+          GeometryReader { proxy in
+            Color.clear.preference(key: MainFeedScrollOffsetPreferenceKey.self, value: proxy.frame(in: .global).minY)
+          }
+          .frame(height: 0)
+
           LazyVStack(spacing: 0) {
             if model.isLoading && model.posts.isEmpty {
               ForEach(0..<4, id: \.self) { _ in MainPostSkeleton() }
@@ -142,6 +148,7 @@ public struct MainFeedView: View {
               ForEach(model.posts) { post in
                 MainNativePostCard(
                   post: post,
+                  isVideoActive: post.id == activeVideoPostID,
                   onOpen: { selectedPost = post },
                   onLike: { Task { await model.toggleLike(post) } },
                   onSave: { Task { await model.toggleSave(post) } },
@@ -152,6 +159,12 @@ public struct MainFeedView: View {
           }
           .padding(.bottom, MIRATheme.Space.xxl)
         }
+
+        mainHeader
+          .offset(y: isHeaderHidden ? -68 : 0)
+          .opacity(isHeaderHidden ? 0 : 1)
+          .allowsHitTesting(!isHeaderHidden)
+          .animation(.easeInOut(duration: 0.22), value: isHeaderHidden)
       }
       .background(MIRATheme.Color.appBackground)
       .toolbar(.hidden, for: .navigationBar)
@@ -159,6 +172,37 @@ public struct MainFeedView: View {
         PostDetailNativeView(post: post, api: model.api)
       }
       .task { await model.load() }
+      .onPreferenceChange(MainFeedScrollOffsetPreferenceKey.self, perform: handleScroll)
+      .onPreferenceChange(MainPostVisibilityPreferenceKey.self, perform: updateActiveVideo)
+    }
+  }
+
+  private func handleScroll(_ minY: CGFloat) {
+    guard let previousScrollMinY else {
+      previousScrollMinY = minY
+      return
+    }
+
+    let delta = minY - previousScrollMinY
+    self.previousScrollMinY = minY
+    guard abs(delta) > 14 else { return }
+
+    if minY > -2 {
+      isHeaderHidden = false
+    } else if delta < 0 {
+      isHeaderHidden = true
+    } else if delta > 0 {
+      isHeaderHidden = false
+    }
+  }
+
+  private func updateActiveVideo(_ visibility: [MainPostVisibility]) {
+    let candidate = visibility
+      .filter { $0.hasVideo && $0.visibleRatio >= 0.60 }
+      .max { $0.visibleRatio < $1.visibleRatio }
+    let nextID = candidate?.id
+    if activeVideoPostID != nextID {
+      activeVideoPostID = nextID
     }
   }
 
@@ -184,6 +228,7 @@ public struct MainFeedView: View {
 
 private struct MainNativePostCard: View {
   let post: MIRAPost
+  let isVideoActive: Bool
   let onOpen: () -> Void
   let onLike: () -> Void
   let onSave: () -> Void
@@ -202,7 +247,8 @@ private struct MainNativePostCard: View {
           urls: post.mediaURLs,
           maxSingleImageHeight: mediaHeight,
           carouselHeight: mediaHeight,
-          singleImageContentMode: .fill
+          singleImageContentMode: .fill,
+          shouldPlay: isVideoActive
         )
         .contentShape(Rectangle())
         .onTapGesture(perform: onOpen)
@@ -220,9 +266,24 @@ private struct MainNativePostCard: View {
       .padding(.bottom, MIRATheme.Space.md)
     }
     .background(MIRATheme.Color.surface)
+    .background {
+      GeometryReader { proxy in
+        Color.clear.preference(
+          key: MainPostVisibilityPreferenceKey.self,
+          value: [MainPostVisibility(id: post.id, visibleRatio: visibleRatio(in: proxy), hasVideo: post.mediaURLs.contains { $0.isVideoURL })]
+        )
+      }
+    }
     .overlay(alignment: .bottom) {
       Rectangle().fill(MIRATheme.Color.hairline).frame(height: 0.75)
     }
+  }
+
+  private func visibleRatio(in proxy: GeometryProxy) -> CGFloat {
+    let frame = proxy.frame(in: .global)
+    let screen = UIScreen.main.bounds
+    let visibleHeight = min(frame.maxY, screen.maxY) - max(frame.minY, screen.minY)
+    return max(0, min(1, visibleHeight / max(frame.height, 1)))
   }
 
   private var postHeader: some View {
@@ -355,4 +416,26 @@ private func compact(_ value: Int) -> String {
 
 private func shareURL(for post: MIRAPost) -> URL {
   URL(string: "https://flames-up.com/post/\(post.id)")!
+}
+
+private struct MainPostVisibility: Equatable {
+  let id: String
+  let visibleRatio: CGFloat
+  let hasVideo: Bool
+}
+
+private struct MainPostVisibilityPreferenceKey: PreferenceKey {
+  static var defaultValue: [MainPostVisibility] = []
+
+  static func reduce(value: inout [MainPostVisibility], nextValue: () -> [MainPostVisibility]) {
+    value.append(contentsOf: nextValue())
+  }
+}
+
+private struct MainFeedScrollOffsetPreferenceKey: PreferenceKey {
+  static var defaultValue: CGFloat = 0
+
+  static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+    value = nextValue()
+  }
 }

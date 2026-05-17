@@ -1,5 +1,6 @@
 import AVFoundation
 import AVKit
+import Foundation
 import SwiftUI
 import UIKit
 
@@ -143,17 +144,19 @@ public struct RemoteMediaView: View {
   let url: String
   let isVideo: Bool
   let contentMode: ContentMode
+  let shouldPlay: Bool
 
-  public init(url: String, isVideo: Bool, contentMode: ContentMode = .fill) {
+  public init(url: String, isVideo: Bool, contentMode: ContentMode = .fill, shouldPlay: Bool = false) {
     self.url = url
     self.isVideo = isVideo
     self.contentMode = contentMode
+    self.shouldPlay = shouldPlay
   }
 
   public var body: some View {
     Group {
       if isVideo {
-        MIRAResolvedVideoPlayer(url: url)
+        MIRAResolvedVideoPlayer(url: url, shouldPlay: shouldPlay)
       } else {
         AsyncImage(url: URL(string: url)) { phase in
           switch phase {
@@ -182,6 +185,7 @@ public struct RemoteMediaView: View {
 
 private struct MIRAResolvedVideoPlayer: View {
   let url: String
+  let shouldPlay: Bool
   @State private var player: AVPlayer?
   @State private var thumbnailURL: String?
   @State private var failed = false
@@ -190,7 +194,7 @@ private struct MIRAResolvedVideoPlayer: View {
     ZStack {
       if let player {
         MIRAFillVideoPlayer(player: player)
-          .onAppear { player.play() }
+          .onAppear { syncPlayback(player) }
           .onDisappear { player.pause() }
       } else if let thumbnailURL {
         AsyncImage(url: URL(string: thumbnailURL)) { phase in
@@ -218,6 +222,10 @@ private struct MIRAResolvedVideoPlayer: View {
       }
     }
     .task(id: url) { await configurePlayer() }
+    .onChange(of: shouldPlay) { _, _ in
+      guard let player else { return }
+      syncPlayback(player)
+    }
   }
 
   private var placeholder: some View {
@@ -236,7 +244,7 @@ private struct MIRAResolvedVideoPlayer: View {
     if let directURL = URL(string: url), let scheme = directURL.scheme, scheme.hasPrefix("http") || scheme == "file" {
       let avPlayer = AVPlayer(url: directURL)
       player = avPlayer
-      avPlayer.play()
+      syncPlayback(avPlayer)
       return
     }
 
@@ -262,12 +270,20 @@ private struct MIRAResolvedVideoPlayer: View {
       if let hls = info.hls, let hlsURL = URL(string: hls), info.ready != false {
         let avPlayer = AVPlayer(url: hlsURL)
         player = avPlayer
-        avPlayer.play()
+        syncPlayback(avPlayer)
       } else {
         failed = true
       }
     } catch {
       failed = true
+    }
+  }
+
+  private func syncPlayback(_ player: AVPlayer) {
+    if shouldPlay {
+      player.play()
+    } else {
+      player.pause()
     }
   }
 }
@@ -304,19 +320,23 @@ public struct MIRAAdaptiveMediaView: View {
   let maxSingleImageHeight: CGFloat
   let carouselHeight: CGFloat
   let singleImageContentMode: ContentMode
+  let shouldPlay: Bool
+  @State private var selectedIndex = 0
 
   public init(
     urls: [String],
     cornerRadius: CGFloat = 0,
     maxSingleImageHeight: CGFloat = min(UIScreen.main.bounds.width * 1.18, 560),
     carouselHeight: CGFloat = min(UIScreen.main.bounds.width * 1.08, 520),
-    singleImageContentMode: ContentMode = .fill
+    singleImageContentMode: ContentMode = .fill,
+    shouldPlay: Bool = true
   ) {
     self.urls = urls
     self.cornerRadius = cornerRadius
     self.maxSingleImageHeight = maxSingleImageHeight
     self.carouselHeight = carouselHeight
     self.singleImageContentMode = singleImageContentMode
+    self.shouldPlay = shouldPlay
   }
 
   public var body: some View {
@@ -327,15 +347,17 @@ public struct MIRAAdaptiveMediaView: View {
           .frame(height: maxSingleImageHeight)
           .background(MIRATheme.Color.surfaceSoft)
       } else {
-        TabView {
-          ForEach(Array(urls.enumerated()), id: \.offset) { _, url in
-            RemoteMediaView(url: url, isVideo: url.isVideoURL)
+        TabView(selection: $selectedIndex) {
+          ForEach(Array(urls.enumerated()), id: \.offset) { index, url in
+            RemoteMediaView(url: url, isVideo: url.isVideoURL, shouldPlay: shouldPlay && selectedIndex == index)
+              .tag(index)
           }
         }
         .tabViewStyle(.page(indexDisplayMode: urls.count > 1 ? .automatic : .never))
         .frame(maxWidth: .infinity)
         .frame(height: carouselHeight)
         .background(MIRATheme.Color.surfaceSoft)
+        .onChange(of: urls) { _, _ in selectedIndex = 0 }
       }
     }
     .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
@@ -345,11 +367,40 @@ public struct MIRAAdaptiveMediaView: View {
 public enum MIRAMediaSizing {
   public static func feedHeight(for urls: [String], width: CGFloat = UIScreen.main.bounds.width) -> CGFloat {
     let lowercased = urls.map { $0.lowercased() }
-    let prefersLongVertical = lowercased.contains { value in
-      value.isVideoURL || value.contains("9x16") || value.contains("9:16") || value.contains("story")
+    if let ratio = lowercased.compactMap({ dimensionsRatio(in: $0) }).first {
+      return min(width * ratio, UIScreen.main.bounds.height * 0.74)
     }
-    let height = prefersLongVertical ? width * (16.0 / 9.0) : width * 1.25
+
+    let prefersSquare = lowercased.contains { value in
+      value.contains("1x1") || value.contains("1:1") || value.contains("square")
+    }
+    let prefersLongVertical = lowercased.contains { value in
+      value.contains("9x16") || value.contains("9:16") || value.contains("story") || value.contains("vertical")
+    }
+    let height: CGFloat
+    if prefersSquare {
+      height = width
+    } else if prefersLongVertical {
+      height = width * (16.0 / 9.0)
+    } else {
+      height = width * 1.25
+    }
     return min(height, UIScreen.main.bounds.height * 0.74)
+  }
+
+  private static func dimensionsRatio(in value: String) -> CGFloat? {
+    let pattern = #"(?<!\d)(\d{3,5})[xX](\d{3,5})(?!\d)"#
+    guard let expression = try? NSRegularExpression(pattern: pattern) else { return nil }
+    let range = NSRange(value.startIndex..<value.endIndex, in: value)
+    guard let match = expression.firstMatch(in: value, range: range), match.numberOfRanges == 3 else { return nil }
+    guard
+      let widthRange = Range(match.range(at: 1), in: value),
+      let heightRange = Range(match.range(at: 2), in: value)
+    else { return nil }
+    let mediaWidth = CGFloat(Double(String(value[widthRange])) ?? 0)
+    let mediaHeight = CGFloat(Double(String(value[heightRange])) ?? 0)
+    guard mediaWidth > 0, mediaHeight > 0 else { return nil }
+    return min(max(mediaHeight / mediaWidth, 1.0), 16.0 / 9.0)
   }
 }
 
