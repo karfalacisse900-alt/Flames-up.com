@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import UIKit
 
 @MainActor
 final class ProfileNativeModel: ObservableObject {
@@ -22,6 +23,12 @@ final class ProfileNativeModel: ObservableObject {
 public struct ProfileNativeView: View {
   @StateObject private var model: ProfileNativeModel
   private let authSession: MIRAAuthSession?
+  private var gridTileSize: CGFloat {
+    floor((UIScreen.main.bounds.width - 2) / 3)
+  }
+  private var postGridColumns: [GridItem] {
+    Array(repeating: GridItem(.fixed(gridTileSize), spacing: 1), count: 3)
+  }
 
   public init(api: MIRAAPIClient, authSession: MIRAAuthSession? = nil) {
     self.authSession = authSession
@@ -33,16 +40,12 @@ public struct ProfileNativeView: View {
       ScrollView {
         VStack(spacing: MIRATheme.Space.lg) {
           profileHeader
-          LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 1), count: 3), spacing: 1) {
+          LazyVGrid(columns: postGridColumns, spacing: 1) {
             ForEach(model.posts) { post in
-              if let media = post.mediaURLs.first {
-                RemoteMediaView(url: media, isVideo: media.isVideoURL)
-                  .aspectRatio(1, contentMode: .fill)
-              } else {
-                MIRATheme.Color.surfaceSoft.aspectRatio(1, contentMode: .fill)
-              }
+              ProfilePostTile(post: post, size: gridTileSize)
             }
           }
+          .frame(width: UIScreen.main.bounds.width, alignment: .center)
         }
       }
       .background(MIRATheme.Color.appBackground)
@@ -88,6 +91,24 @@ public struct ProfileNativeView: View {
       Text("\(value)").font(.system(size: 18, weight: .semibold))
       Text(label).font(.system(size: 12, weight: .medium)).foregroundStyle(MIRATheme.Color.textMuted)
     }
+  }
+}
+
+private struct ProfilePostTile: View {
+  let post: MIRAPost
+  let size: CGFloat
+
+  var body: some View {
+    ZStack {
+      if let media = post.mediaURLs.first {
+        RemoteMediaView(url: media, isVideo: media.isVideoURL, shouldPlay: false)
+      } else {
+        MIRATheme.Color.surfaceSoft
+      }
+    }
+    .frame(width: size, height: size)
+    .clipped()
+    .contentShape(Rectangle())
   }
 }
 

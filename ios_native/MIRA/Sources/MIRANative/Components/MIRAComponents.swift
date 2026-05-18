@@ -95,8 +95,8 @@ private final class MIRAImageMemoryCache {
   private let cache = NSCache<NSURL, UIImage>()
 
   private init() {
-    cache.countLimit = 220
-    cache.totalCostLimit = 72 * 1024 * 1024
+    cache.countLimit = 420
+    cache.totalCostLimit = 160 * 1024 * 1024
   }
 
   func image(for url: URL) -> UIImage? {
@@ -113,6 +113,7 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
   let content: (Image) -> Content
   let placeholder: () -> Placeholder
   @State private var uiImage: UIImage?
+  @State private var loadedURL: URL?
 
   public init(
     url: String?,
@@ -137,11 +138,22 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
 
   @MainActor
   private func loadImage() async {
-    uiImage = nil
-    guard let url, let remoteURL = URL(string: url) else { return }
+    guard let url, let remoteURL = URL(string: url) else {
+      uiImage = nil
+      loadedURL = nil
+      return
+    }
+
+    if loadedURL == remoteURL, uiImage != nil { return }
+
     if let cached = MIRAImageMemoryCache.shared.image(for: remoteURL) {
       uiImage = cached
+      loadedURL = remoteURL
       return
+    }
+
+    if loadedURL != remoteURL {
+      uiImage = nil
     }
 
     do {
@@ -155,8 +167,11 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
       guard !Task.isCancelled, let decoded else { return }
       MIRAImageMemoryCache.shared.store(decoded, for: remoteURL, cost: data.count)
       uiImage = decoded
+      loadedURL = remoteURL
     } catch {
-      uiImage = nil
+      if loadedURL != remoteURL {
+        uiImage = nil
+      }
     }
   }
 }
