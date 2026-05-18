@@ -112,7 +112,7 @@ public struct MIRAPerformanceMetric {
 
   public static func begin(category: String, label: String) async -> MIRAPerformanceMetric {
     let metric = MIRAPerformanceMetric(category: category, label: label)
-    await MIRAPerformanceMonitor.shared.begin(category: category, label: label)
+    _ = await MIRAPerformanceMonitor.shared.begin(category: category, label: label)
     return metric
   }
 

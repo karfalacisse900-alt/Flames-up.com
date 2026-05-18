@@ -186,7 +186,7 @@ final class MainFeedModel: ObservableObject {
     }.value
   }
 
-  private static func ageHours(from value: String?, formatter: ISO8601DateFormatter) -> Double {
+  nonisolated private static func ageHours(from value: String?, formatter: ISO8601DateFormatter) -> Double {
     guard let value, let date = formatter.date(from: value) else { return 24 }
     return max(0, Date().timeIntervalSince(date) / 3600)
   }
