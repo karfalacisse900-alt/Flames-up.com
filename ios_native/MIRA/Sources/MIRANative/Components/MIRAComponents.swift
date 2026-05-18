@@ -136,43 +136,83 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
     .task(id: url) { await loadImage() }
   }
 
-  @MainActor
   private func loadImage() async {
     guard let url, let remoteURL = URL(string: url) else {
-      uiImage = nil
-      loadedURL = nil
+      await MainActor.run {
+        uiImage = nil
+        loadedURL = nil
+      }
       return
     }
 
-    if loadedURL == remoteURL, uiImage != nil { return }
+    let isAlreadyLoaded = await MainActor.run {
+      loadedURL == remoteURL && uiImage != nil
+    }
+    if isAlreadyLoaded { return }
 
     if let cached = MIRAImageMemoryCache.shared.image(for: remoteURL) {
-      uiImage = cached
-      loadedURL = remoteURL
+      await MainActor.run {
+        uiImage = cached
+        loadedURL = remoteURL
+      }
       return
     }
 
-    if loadedURL != remoteURL {
-      uiImage = nil
+    if let diskCached = await MIRAImageDiskCache.image(for: remoteURL) {
+      MIRAImageMemoryCache.shared.store(diskCached, for: remoteURL, cost: diskCached.miraCacheCost)
+      await MainActor.run {
+        uiImage = diskCached
+        loadedURL = remoteURL
+      }
+      return
+    }
+
+    let shouldClear = await MainActor.run {
+      loadedURL != remoteURL
+    }
+    if shouldClear {
+      await MainActor.run { uiImage = nil }
     }
 
     do {
       var request = URLRequest(url: remoteURL)
       request.cachePolicy = .returnCacheDataElseLoad
       request.timeoutInterval = 20
-      let (data, response) = try await URLSession.shared.data(for: request)
+      let metric = await MIRAPerformanceMetric.begin(category: "image", label: remoteURL.host ?? remoteURL.path)
+      let data: Data
+      let response: URLResponse
+      do {
+        (data, response) = try await MIRAAPIClient.productionSession.data(for: request)
+      } catch {
+        await metric.finish(status: "error")
+        throw error
+      }
+      await metric.finish(status: String((response as? HTTPURLResponse)?.statusCode ?? 200), bytes: data.count)
       let status = (response as? HTTPURLResponse)?.statusCode ?? 200
       guard (200..<300).contains(status) else { return }
-      let decoded = UIImage(data: data)
+      let decoded = await MIRAImageDiskCache.decode(data)
       guard !Task.isCancelled, let decoded else { return }
-      MIRAImageMemoryCache.shared.store(decoded, for: remoteURL, cost: data.count)
-      uiImage = decoded
-      loadedURL = remoteURL
+      MIRAImageMemoryCache.shared.store(decoded, for: remoteURL, cost: decoded.miraCacheCost)
+      await MIRAImageDiskCache.store(data: data, for: remoteURL)
+      await MainActor.run {
+        uiImage = decoded
+        loadedURL = remoteURL
+      }
     } catch {
-      if loadedURL != remoteURL {
-        uiImage = nil
+      let shouldClear = await MainActor.run {
+        loadedURL != remoteURL
+      }
+      if shouldClear {
+        await MainActor.run { uiImage = nil }
       }
     }
+  }
+}
+
+private extension UIImage {
+  var miraCacheCost: Int {
+    guard let cgImage else { return 1_000_000 }
+    return cgImage.bytesPerRow * cgImage.height
   }
 }
 
@@ -272,6 +312,7 @@ private struct MIRAResolvedVideoPlayer: View {
   @State private var thumbnailURL: String?
   @State private var failed = false
   @State private var endObserver: NSObjectProtocol?
+  @State private var loadedVideoURL: String?
 
   var body: some View {
     ZStack {
@@ -304,11 +345,15 @@ private struct MIRAResolvedVideoPlayer: View {
         .clipShape(Capsule())
       }
     }
-    .task(id: url) { await configurePlayer() }
+    .task(id: playbackTaskID) { await configurePlayer() }
     .onChange(of: shouldPlay) { _, _ in
       guard let player else { return }
       syncPlayback(player)
     }
+  }
+
+  private var playbackTaskID: String {
+    "\(url)|\(shouldPlay)"
   }
 
   private var placeholder: some View {
@@ -320,9 +365,32 @@ private struct MIRAResolvedVideoPlayer: View {
 
   @MainActor
   private func configurePlayer() async {
+    if loadedVideoURL != url {
+      player?.pause()
+      removeLoopObserver()
+      player = nil
+      thumbnailURL = nil
+      failed = false
+      loadedVideoURL = url
+    }
+
+    if !shouldPlay {
+      if let player {
+        player.pause()
+        self.player = nil
+        removeLoopObserver()
+      }
+      if thumbnailURL == nil && url.lowercased().hasPrefix("cfstream:") {
+        await resolveCloudflareStream(createPlayer: false)
+      }
+      return
+    }
+
     failed = false
-    thumbnailURL = nil
-    player = nil
+    if let player {
+      syncPlayback(player)
+      return
+    }
 
     if let directURL = URL(string: url), let scheme = directURL.scheme, scheme.hasPrefix("http") || scheme == "file" {
       let avPlayer = AVPlayer(url: directURL)
@@ -337,27 +405,43 @@ private struct MIRAResolvedVideoPlayer: View {
       return
     }
 
+    await resolveCloudflareStream(createPlayer: true)
+  }
+
+  @MainActor
+  private func resolveCloudflareStream(createPlayer: Bool) async {
     let uid = String(url.dropFirst("cfstream:".count))
     let endpoint = MIRAProductionBackend.apiURL("stream/video/\(uid)")
 
     do {
-      let (data, response) = try await URLSession.shared.data(from: endpoint)
+      let metric = await MIRAPerformanceMetric.begin(category: "network", label: "STREAM \(uid)")
+      let data: Data
+      let response: URLResponse
+      do {
+        (data, response) = try await MIRAAPIClient.productionSession.data(from: endpoint)
+      } catch {
+        await metric.finish(status: "error")
+        throw error
+      }
       let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+      await metric.finish(status: "\(status)", bytes: data.count)
       guard (200..<300).contains(status) else { throw MIRAAPIError.badStatus(status) }
       let decoder = JSONDecoder()
       decoder.keyDecodingStrategy = .convertFromSnakeCase
       let info = try decoder.decode(MIRAStreamPlaybackInfo.self, from: data)
       thumbnailURL = info.thumbnail
-      if let hls = info.hls, let hlsURL = URL(string: hls), info.ready != false {
+      if createPlayer, let hls = info.hls, let hlsURL = URL(string: hls), info.ready != false {
         let avPlayer = AVPlayer(url: hlsURL)
         configurePlayback(for: avPlayer)
         player = avPlayer
         syncPlayback(avPlayer)
-      } else {
+      } else if createPlayer {
         failed = true
+      } else {
+        failed = false
       }
     } catch {
-      failed = true
+      failed = createPlayer
     }
   }
 

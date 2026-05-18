@@ -9,6 +9,7 @@ public enum MIRATab: Hashable {
 
 public struct MIRANativeRootView: View {
   @State private var selectedTab: MIRATab = .main
+  @State private var loadedTabs: Set<MIRATab> = [.main]
   @StateObject private var authSession: MIRAAuthSession
   private let api: MIRAAPIClient
 
@@ -33,19 +34,27 @@ public struct MIRANativeRootView: View {
         AuthNativeView(session: authSession, api: api)
       } else {
         TabView(selection: $selectedTab) {
-          MainFeedView(api: api)
+          lazyTab(.main) {
+            MainFeedView(api: api)
+          }
             .tag(MIRATab.main)
             .tabItem { Label("Home", systemImage: "house.fill") }
 
-          DiscoverNativeView(api: api)
+          lazyTab(.discover) {
+            DiscoverNativeView(api: api)
+          }
             .tag(MIRATab.discover)
             .tabItem { Label("Discover", systemImage: "safari.fill") }
 
-          ChatNativeView(api: api)
+          lazyTab(.chat) {
+            ChatNativeView(api: api)
+          }
             .tag(MIRATab.chat)
             .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right.fill") }
 
-          ProfileNativeView(api: api, authSession: authSession)
+          lazyTab(.profile) {
+            ProfileNativeView(api: api, authSession: authSession)
+          }
             .tag(MIRATab.profile)
             .tabItem { Label("Profile", systemImage: "person.fill") }
         }
@@ -54,8 +63,25 @@ public struct MIRANativeRootView: View {
         .toolbarBackground(.visible, for: .tabBar)
         .background(MIRATheme.Color.appBackground)
         .statusBarHidden(selectedTab == .main)
+        .onChange(of: selectedTab) { _, tab in
+          loadedTabs.insert(tab)
+        }
       }
     }
+    .onAppear {
+      MIRAMainThreadStallMonitor.shared.start()
+    }
     .task { await authSession.bootstrap(api: api) }
+  }
+
+  @ViewBuilder
+  private func lazyTab<Content: View>(_ tab: MIRATab, @ViewBuilder content: () -> Content) -> some View {
+    if loadedTabs.contains(tab) || selectedTab == tab {
+      content()
+    } else {
+      Color.clear
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(MIRATheme.Color.appBackground)
+    }
   }
 }

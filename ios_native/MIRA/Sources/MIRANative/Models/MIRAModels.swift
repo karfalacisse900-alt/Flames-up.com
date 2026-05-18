@@ -1,6 +1,6 @@
 import Foundation
 
-public struct MIRAUser: Decodable, Identifiable, Hashable {
+public struct MIRAUser: Codable, Identifiable, Hashable {
   public let id: String
   public let username: String?
   public let fullName: String?
@@ -15,7 +15,7 @@ public struct MIRAUser: Decodable, Identifiable, Hashable {
   }
 }
 
-public struct MIRAPost: Decodable, Identifiable, Hashable {
+public struct MIRAPost: Codable, Identifiable, Hashable {
   public let id: String
   public let userId: String?
   public let userUsername: String?
@@ -112,7 +112,7 @@ public struct MIRAPost: Decodable, Identifiable, Hashable {
   }
 }
 
-public struct MIRANote: Decodable, Identifiable, Hashable {
+public struct MIRANote: Codable, Identifiable, Hashable {
   public let id: String
   public let body: String?
   public let mediaUrl: String?
@@ -151,11 +151,11 @@ public struct MIRAGifSearchResponse: Decodable, Hashable {
   public let gifs: [MIRAGifItem]
 }
 
-public struct MIRAStatusPreview: Decodable, Identifiable, Hashable {
+public struct MIRAStatusPreview: Codable, Identifiable, Hashable {
   public let id: String
 }
 
-public struct MIRAStoryGroup: Decodable, Identifiable, Hashable {
+public struct MIRAStoryGroup: Codable, Identifiable, Hashable {
   public var id: String { userId }
   public let userId: String
   public let userUsername: String?
@@ -182,13 +182,13 @@ public struct MIRAComment: Decodable, Identifiable, Hashable {
   public var text: String { body ?? content ?? "" }
 }
 
-public struct MIRAWallet: Decodable, Hashable {
+public struct MIRAWallet: Codable, Hashable {
   public let balance: Int?
   public let premiumActive: Bool?
   public let premiumPlan: String?
 }
 
-public struct MIRAConversation: Decodable, Identifiable, Hashable {
+public struct MIRAConversation: Codable, Identifiable, Hashable {
   public let id: String
   public let type: String?
   public let otherUserId: String?
@@ -382,7 +382,7 @@ public struct PostCommentBody: Encodable {
   public let content: String
 }
 
-public struct FlexibleStringArray: Decodable, Hashable {
+public struct FlexibleStringArray: Codable, Hashable {
   public let values: [String]
 
   public init(from decoder: Decoder) throws {
@@ -405,9 +405,14 @@ public struct FlexibleStringArray: Decodable, Hashable {
     }
     values = []
   }
+
+  public func encode(to encoder: Encoder) throws {
+    var container = encoder.singleValueContainer()
+    try container.encode(values)
+  }
 }
 
-public struct FlexibleBool: Decodable, Hashable {
+public struct FlexibleBool: Codable, Hashable {
   public let value: Bool
 
   public init(from decoder: Decoder) throws {
@@ -422,9 +427,14 @@ public struct FlexibleBool: Decodable, Hashable {
       value = false
     }
   }
+
+  public func encode(to encoder: Encoder) throws {
+    var container = encoder.singleValueContainer()
+    try container.encode(value)
+  }
 }
 
-public struct FlexibleJSONText: Decodable, Hashable {
+public struct FlexibleJSONText: Codable, Hashable {
   public let raw: String
 
   public init(from decoder: Decoder) throws {
@@ -440,5 +450,10 @@ public struct FlexibleJSONText: Decodable, Hashable {
       return
     }
     raw = "{}"
+  }
+
+  public func encode(to encoder: Encoder) throws {
+    var container = encoder.singleValueContainer()
+    try container.encode(raw)
   }
 }

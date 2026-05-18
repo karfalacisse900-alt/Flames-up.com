@@ -7,16 +7,49 @@ final class ProfileNativeModel: ObservableObject {
   @Published var user: MIRAUser?
   @Published var posts: [MIRAPost] = []
   let api: MIRAAPIClient
+  private let userCacheKey = "native.profile.me.v2"
 
   init(api: MIRAAPIClient) {
     self.api = api
   }
 
   func load() async {
-    user = try? await api.get("/auth/me")
-    if let user {
-      posts = (try? await api.get("/users/\(user.id)/posts")) ?? []
+    if user == nil, let cachedUser: MIRAUser = await MIRALocalJSONCache.load(MIRAUser.self, key: userCacheKey) {
+      user = cachedUser
+      posts = await MIRALocalJSONCache.load([MIRAPost].self, key: postsCacheKey(for: cachedUser.id)) ?? posts
     }
+
+    guard let freshUser: MIRAUser = try? await api.get("/auth/me") else { return }
+    user = freshUser
+    await MIRALocalJSONCache.save(freshUser, key: userCacheKey)
+    let freshPosts: [MIRAPost] = (try? await api.get("/users/\(freshUser.id)/posts")) ?? posts
+    posts = freshPosts
+    await MIRALocalJSONCache.save(freshPosts, key: postsCacheKey(for: freshUser.id))
+  }
+
+  private func postsCacheKey(for userID: String) -> String {
+    "native.profile.posts.\(userID).v2"
+  }
+}
+
+private struct ProfileGridSkeleton: View {
+  private var gridTileSize: CGFloat {
+    floor((UIScreen.main.bounds.width - 2) / 3)
+  }
+  private var columns: [GridItem] {
+    Array(repeating: GridItem(.fixed(gridTileSize), spacing: 1), count: 3)
+  }
+
+  var body: some View {
+    LazyVGrid(columns: columns, spacing: 1) {
+      ForEach(0..<9, id: \.self) { _ in
+        Rectangle()
+          .fill(MIRATheme.Color.surfaceSoft)
+          .frame(width: gridTileSize, height: gridTileSize)
+      }
+    }
+    .frame(width: UIScreen.main.bounds.width, alignment: .center)
+    .redacted(reason: .placeholder)
   }
 }
 
@@ -40,12 +73,16 @@ public struct ProfileNativeView: View {
       ScrollView {
         VStack(spacing: MIRATheme.Space.lg) {
           profileHeader
-          LazyVGrid(columns: postGridColumns, spacing: 1) {
-            ForEach(model.posts) { post in
-              ProfilePostTile(post: post, size: gridTileSize)
+          if model.posts.isEmpty && model.user == nil {
+            ProfileGridSkeleton()
+          } else {
+            LazyVGrid(columns: postGridColumns, spacing: 1) {
+              ForEach(model.posts) { post in
+                ProfilePostTile(post: post, size: gridTileSize)
+              }
             }
+            .frame(width: UIScreen.main.bounds.width, alignment: .center)
           }
-          .frame(width: UIScreen.main.bounds.width, alignment: .center)
         }
       }
       .background(MIRATheme.Color.appBackground)
@@ -117,15 +154,21 @@ final class ChatNativeModel: ObservableObject {
   @Published var conversations: [MIRAConversation] = []
   @Published var isLoading = false
   let api: MIRAAPIClient
+  private let conversationsCacheKey = "native.chat.conversations.v2"
 
   init(api: MIRAAPIClient) {
     self.api = api
   }
 
   func load() async {
+    if conversations.isEmpty, let cached: [MIRAConversation] = await MIRALocalJSONCache.load([MIRAConversation].self, key: conversationsCacheKey) {
+      conversations = cached
+    }
     isLoading = conversations.isEmpty
     defer { isLoading = false }
-    conversations = (try? await api.get("/conversations")) ?? []
+    let fresh: [MIRAConversation] = (try? await api.get("/conversations")) ?? conversations
+    conversations = fresh
+    await MIRALocalJSONCache.save(fresh, key: conversationsCacheKey)
   }
 }
 
@@ -249,13 +292,19 @@ private func chatTime(_ value: String?) -> String {
 final class WalletNativeModel: ObservableObject {
   @Published var wallet: MIRAWallet?
   private let api: MIRAAPIClient
+  private let walletCacheKey = "native.wallet.v2"
 
   init(api: MIRAAPIClient) {
     self.api = api
   }
 
   func load() async {
-    wallet = try? await api.get("/wallet")
+    if wallet == nil {
+      wallet = await MIRALocalJSONCache.load(MIRAWallet.self, key: walletCacheKey)
+    }
+    guard let fresh: MIRAWallet = try? await api.get("/wallet") else { return }
+    wallet = fresh
+    await MIRALocalJSONCache.save(fresh, key: walletCacheKey)
   }
 }
 

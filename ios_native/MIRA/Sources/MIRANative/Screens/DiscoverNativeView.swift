@@ -6,18 +6,81 @@ final class DiscoverNativeModel: ObservableObject {
   @Published var notes: [MIRANote] = []
   @Published var stories: [MIRAStoryGroup] = []
   @Published var isLoading = false
+  @Published var isLoadingNotes = false
+  @Published var isLoadingStories = false
   let api: MIRAAPIClient
+  private let notesCacheKey = "native.discover.notes.v2"
+  private let storiesCacheKey = "native.discover.stories.v2"
+  private var hasLoadedFreshNotes = false
+  private var hasLoadedFreshStories = false
 
   init(api: MIRAAPIClient) {
     self.api = api
   }
 
   func load() async {
-    isLoading = notes.isEmpty && stories.isEmpty
-    defer { isLoading = false }
-    notes = (try? await api.get("/notes?limit=14")) ?? []
-    let loadedStories: [MIRAStoryGroup] = (try? await api.get("/statuses")) ?? []
-    stories = loadedStories.filter { ($0.statuses?.isEmpty == false) }
+    if notes.isEmpty, let cachedNotes: [MIRANote] = await MIRALocalJSONCache.load([MIRANote].self, key: notesCacheKey) {
+      notes = cachedNotes
+    }
+    if stories.isEmpty, let cachedStories: [MIRAStoryGroup] = await MIRALocalJSONCache.load([MIRAStoryGroup].self, key: storiesCacheKey) {
+      stories = cachedStories
+    }
+
+    if !hasLoadedFreshNotes && notes.isEmpty { isLoadingNotes = true }
+    if !hasLoadedFreshStories && stories.isEmpty { isLoadingStories = true }
+    updateLoadingState()
+    Task { await self.loadNotes() }
+    Task { await self.loadStories() }
+  }
+
+  private func loadNotes() async {
+    guard !hasLoadedFreshNotes else { return }
+    hasLoadedFreshNotes = true
+    if notes.isEmpty {
+      isLoadingNotes = true
+      updateLoadingState()
+    }
+    defer {
+      isLoadingNotes = false
+      updateLoadingState()
+    }
+    do {
+      let loaded: [MIRANote] = try await api.get("/notes?limit=10")
+      notes = loaded
+      await MIRALocalJSONCache.save(loaded, key: notesCacheKey)
+    } catch {
+      if notes.isEmpty { hasLoadedFreshNotes = false }
+    }
+  }
+
+  private func loadStories() async {
+    guard !hasLoadedFreshStories else { return }
+    hasLoadedFreshStories = true
+    if stories.isEmpty {
+      isLoadingStories = true
+      updateLoadingState()
+    }
+    defer {
+      isLoadingStories = false
+      updateLoadingState()
+    }
+    do {
+      let loadedStories: [MIRAStoryGroup] = try await api.get("/statuses")
+      let visibleStories = loadedStories.filter { ($0.statuses?.isEmpty == false) }
+      stories = visibleStories
+      await MIRALocalJSONCache.save(visibleStories, key: storiesCacheKey)
+    } catch {
+      if stories.isEmpty { hasLoadedFreshStories = false }
+    }
+  }
+
+  private func updateLoadingState() {
+    isLoading = isLoadingNotes || isLoadingStories
+  }
+
+  private func cacheNotes() {
+    let snapshot = notes
+    Task { await MIRALocalJSONCache.save(snapshot, key: notesCacheKey) }
   }
 
   func toggleReaction(for note: MIRANote) async {
@@ -29,6 +92,7 @@ final class DiscoverNativeModel: ObservableObject {
     do {
       let response: NoteInteractionResponse = try await api.post("/notes/\(note.id)/interactions", body: NoteInteractionBody(kind: "reaction", value: "heart"))
       notes[index] = notes[index].updating(reactionsCount: nextCount, reacted: response.active ?? nextReacted)
+      cacheNotes()
     } catch {
       notes[index] = previous
     }
@@ -40,6 +104,7 @@ final class DiscoverNativeModel: ObservableObject {
     notes[index] = previous.updating(sharesCount: (previous.sharesCount ?? 0) + 1)
     do {
       let _: NoteInteractionResponse = try await api.post("/notes/\(note.id)/interactions", body: NoteInteractionBody(kind: "share", value: nil))
+      cacheNotes()
     } catch {
       notes[index] = previous
     }
@@ -137,7 +202,7 @@ public struct DiscoverNativeView: View {
 
       ScrollView(.horizontal, showsIndicators: false) {
         HStack(spacing: MIRATheme.Space.md) {
-          if model.isLoading && model.notes.isEmpty {
+          if model.isLoadingNotes && model.notes.isEmpty {
             ForEach(0..<2, id: \.self) { _ in
               NoteCardSkeletonNative(width: width, height: height)
             }
@@ -174,7 +239,7 @@ public struct DiscoverNativeView: View {
         }
         .buttonStyle(.plain)
 
-        if model.isLoading && model.stories.isEmpty {
+        if model.isLoadingStories && model.stories.isEmpty {
           ForEach(0..<5, id: \.self) { index in
             StoryBubblePlaceholder(index: index)
           }

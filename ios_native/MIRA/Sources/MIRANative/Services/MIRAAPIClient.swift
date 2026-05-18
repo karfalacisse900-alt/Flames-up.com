@@ -52,6 +52,21 @@ public enum MIRAAPIError: Error, LocalizedError {
 }
 
 public final class MIRAAPIClient {
+  public static let productionSession: URLSession = {
+    let configuration = URLSessionConfiguration.default
+    configuration.requestCachePolicy = .useProtocolCachePolicy
+    configuration.timeoutIntervalForRequest = 25
+    configuration.timeoutIntervalForResource = 45
+    configuration.waitsForConnectivity = true
+    configuration.httpMaximumConnectionsPerHost = 6
+    configuration.urlCache = URLCache(
+      memoryCapacity: 64 * 1024 * 1024,
+      diskCapacity: 256 * 1024 * 1024,
+      directory: nil
+    )
+    return URLSession(configuration: configuration)
+  }()
+
   public let baseURL: URL
   private let sessionProvider: MIRASessionProviding?
   private let session: URLSession
@@ -61,7 +76,7 @@ public final class MIRAAPIClient {
   public init(
     baseURL: URL = MIRAProductionBackend.apiBaseURL,
     sessionProvider: MIRASessionProviding? = nil,
-    session: URLSession = .shared
+    session: URLSession = MIRAAPIClient.productionSession
   ) {
     self.baseURL = baseURL
     self.sessionProvider = sessionProvider
@@ -116,8 +131,17 @@ public final class MIRAAPIClient {
       request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
     }
 
-    let (responseData, response) = try await session.data(for: request)
+    let metric = await MIRAPerformanceMetric.begin(category: "network", label: "UPLOAD \(absoluteURL.path)")
+    let responseData: Data
+    let response: URLResponse
+    do {
+      (responseData, response) = try await session.data(for: request)
+    } catch {
+      await metric.finish(status: "error")
+      throw error
+    }
     let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+    await metric.finish(status: "\(status)", bytes: responseData.count)
     guard (200..<300).contains(status) else { throw MIRAAPIError.badStatus(status) }
     if T.self == EmptyResponse.self {
       return EmptyResponse() as! T
@@ -144,8 +168,17 @@ public final class MIRAAPIClient {
       request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
     }
 
-    let (data, response) = try await session.data(for: request)
+    let metric = await MIRAPerformanceMetric.begin(category: "network", label: "\(method) \(url.path)")
+    let data: Data
+    let response: URLResponse
+    do {
+      (data, response) = try await session.data(for: request)
+    } catch {
+      await metric.finish(status: "error")
+      throw error
+    }
     let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+    await metric.finish(status: "\(status)", bytes: data.count)
     guard (200..<300).contains(status) else { throw MIRAAPIError.badStatus(status) }
     do {
       return try decoder.decode(T.self, from: data)

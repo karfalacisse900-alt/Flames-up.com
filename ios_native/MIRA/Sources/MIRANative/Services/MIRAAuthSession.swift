@@ -8,6 +8,7 @@ public final class MIRAAuthSession: ObservableObject, MIRASessionProviding {
 
   private let keychain: MIRAKeychainSessionProvider
   private var token: String?
+  private let cachedUserKey = "native.auth.user.v2"
 
   public init(keychain: MIRAKeychainSessionProvider = MIRAKeychainSessionProvider()) {
     self.keychain = keychain
@@ -23,22 +24,36 @@ public final class MIRAAuthSession: ObservableObject, MIRASessionProviding {
   @MainActor
   public func bootstrap(api: MIRAAPIClient) async {
     isBootstrapping = true
-    defer { isBootstrapping = false }
     guard let storedToken = await keychain.accessToken(), !storedToken.isEmpty else {
       token = nil
       user = nil
+      isBootstrapping = false
       return
     }
 
     token = storedToken
+
+    if let cachedUser: MIRAUser = await MIRALocalJSONCache.load(MIRAUser.self, key: cachedUserKey) {
+      user = cachedUser
+      isBootstrapping = false
+    }
+
     do {
-      user = try await api.get("/auth/me")
+      let freshUser: MIRAUser = try await api.get("/auth/me")
+      user = freshUser
+      await MIRALocalJSONCache.save(freshUser, key: cachedUserKey)
       errorMessage = nil
     } catch {
-      token = nil
-      user = nil
-      keychain.clearAccessToken()
+      if case MIRAAPIError.badStatus(let status) = error, status == 401 || status == 403 {
+        token = nil
+        user = nil
+        keychain.clearAccessToken()
+      } else if user == nil {
+        token = nil
+        keychain.clearAccessToken()
+      }
     }
+    isBootstrapping = false
   }
 
   @MainActor
@@ -86,6 +101,7 @@ public final class MIRAAuthSession: ObservableObject, MIRASessionProviding {
       token = response.accessToken
       user = response.user
       keychain.saveAccessToken(response.accessToken)
+      await MIRALocalJSONCache.save(response.user, key: cachedUserKey)
     } catch {
       errorMessage = "Could not sign in. Check your account and try again."
     }

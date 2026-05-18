@@ -9,26 +9,41 @@ final class MainFeedModel: ObservableObject {
 
   let api: MIRAAPIClient
   private let isoDateFormatter = ISO8601DateFormatter()
+  private let feedCacheKey = "native.main.feed.v2"
+  private var hasLoadedFreshFeed = false
 
   init(api: MIRAAPIClient) {
     self.api = api
   }
 
-  func load() async {
+  func load(forceRefresh: Bool = false) async {
+    if !forceRefresh && hasLoadedFreshFeed && !posts.isEmpty { return }
+
+    if posts.isEmpty, let cached: [MIRAPost] = await MIRALocalJSONCache.load([MIRAPost].self, key: feedCacheKey) {
+      posts = cached.sorted { nativeScore($0) > nativeScore($1) }
+      errorMessage = nil
+    }
+
     if posts.isEmpty { isLoading = true }
+    hasLoadedFreshFeed = true
     defer { isLoading = false }
     do {
-      var loaded: [MIRAPost] = try await api.get("/posts/feed?limit=36")
+      var loaded: [MIRAPost] = try await api.get("/posts/feed?limit=12")
       if loaded.isEmpty {
-        loaded = (try? await api.get("/posts/world-board?limit=36")) ?? []
+        loaded = (try? await api.get("/posts/world-board?limit=12")) ?? []
       }
-      posts = loaded.sorted { nativeScore($0) > nativeScore($1) }
+      let sorted = loaded.sorted { nativeScore($0) > nativeScore($1) }
+      posts = sorted
+      await MIRALocalJSONCache.save(sorted, key: feedCacheKey)
       errorMessage = nil
     } catch {
-      if let fallback: [MIRAPost] = try? await api.get("/posts/world-board?limit=36"), !fallback.isEmpty {
-        posts = fallback.sorted { nativeScore($0) > nativeScore($1) }
+      if let fallback: [MIRAPost] = try? await api.get("/posts/world-board?limit=12"), !fallback.isEmpty {
+        let sorted = fallback.sorted { nativeScore($0) > nativeScore($1) }
+        posts = sorted
+        await MIRALocalJSONCache.save(sorted, key: feedCacheKey)
         errorMessage = nil
       } else {
+        if posts.isEmpty { hasLoadedFreshFeed = false }
         errorMessage = "Could not load the feed. Pull back in a moment."
       }
     }
@@ -48,6 +63,7 @@ final class MainFeedModel: ObservableObject {
           liked: response.liked ?? nextLiked,
           likesCount: response.likesCount ?? nextCount
         )
+        cacheCurrentPosts()
       }
     } catch {
       if let currentIndex = posts.firstIndex(where: { $0.id == post.id }) {
@@ -75,6 +91,7 @@ final class MainFeedModel: ObservableObject {
           saved: response.saved ?? nextSaved,
           savesCount: response.savesCount ?? nextCount
         )
+        cacheCurrentPosts()
       }
     } catch {
       if let currentIndex = posts.firstIndex(where: { $0.id == post.id }) {
@@ -94,9 +111,15 @@ final class MainFeedModel: ObservableObject {
       let response: FollowResponse = try await api.post("/users/\(userId)/follow", body: FollowBody(following: nextFollowing))
       let serverFollowing = response.following ?? nextFollowing
       posts = posts.map { $0.userId == userId ? $0.updating(following: serverFollowing) : $0 }
+      cacheCurrentPosts()
     } catch {
       posts = previous
     }
+  }
+
+  private func cacheCurrentPosts() {
+    let snapshot = posts
+    Task { await MIRALocalJSONCache.save(snapshot, key: feedCacheKey) }
   }
 
   private func nativeScore(_ post: MIRAPost) -> Double {
@@ -325,16 +348,28 @@ private struct MainNativePostCard: View {
 
 private struct MainPostSkeleton: View {
   var body: some View {
-    VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
-      HStack {
+    VStack(alignment: .leading, spacing: 0) {
+      HStack(spacing: MIRATheme.Space.sm) {
         Circle().fill(MIRATheme.Color.surfaceSoft).frame(width: 42, height: 42)
-        RoundedRectangle(cornerRadius: 8).fill(MIRATheme.Color.surfaceSoft).frame(width: 160, height: 18)
+        RoundedRectangle(cornerRadius: 8).fill(MIRATheme.Color.surfaceSoft).frame(width: 150, height: 16)
+        Spacer()
       }
+      .padding(.horizontal, MIRATheme.Space.md)
+      .padding(.vertical, MIRATheme.Space.sm)
+
       RoundedRectangle(cornerRadius: 0)
         .fill(MIRATheme.Color.surfaceSoft)
-        .aspectRatio(4.0 / 5.0, contentMode: .fit)
+        .frame(width: UIScreen.main.bounds.width, height: MIRAMediaSizing.mainFeedHeight(for: []))
+
+      HStack {
+        RoundedRectangle(cornerRadius: 8).fill(MIRATheme.Color.surfaceSoft).frame(width: 60, height: 18)
+        RoundedRectangle(cornerRadius: 8).fill(MIRATheme.Color.surfaceSoft).frame(width: 54, height: 18)
+        Spacer()
+        RoundedRectangle(cornerRadius: 16).fill(MIRATheme.Color.surfaceSoft).frame(width: 74, height: 34)
+        RoundedRectangle(cornerRadius: 16).fill(MIRATheme.Color.surfaceSoft).frame(width: 92, height: 34)
+      }
+      .padding(MIRATheme.Space.md)
     }
-    .padding(MIRATheme.Space.md)
     .background(MIRATheme.Color.surface)
     .redacted(reason: .placeholder)
   }
