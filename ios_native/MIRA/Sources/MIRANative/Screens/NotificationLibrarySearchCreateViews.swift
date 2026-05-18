@@ -293,19 +293,15 @@ public struct CreatePostNativeView: View {
   }
 
   public var body: some View {
-    ScrollView {
-      VStack(alignment: .leading, spacing: MIRATheme.Space.lg) {
-        composerHeader(isEditingPostDetails ? "Preview" : "Create post")
-        if isEditingPostDetails {
-          finalPostPage
-        } else {
-          mediaFirstPage
-        }
+    Group {
+      if isEditingPostDetails {
+        finalPostPage
+      } else {
+        mediaFirstPage
       }
-      .padding(MIRATheme.Space.md)
     }
-    .background(MIRATheme.Color.appBackground)
     .toolbar(.hidden, for: .navigationBar)
+    .navigationBarBackButtonHidden(true)
     .onChange(of: pickerItems) { _, newItems in
       Task { await loadPickerItems(newItems) }
     }
@@ -321,164 +317,364 @@ public struct CreatePostNativeView: View {
   }
 
   private var mediaFirstPage: some View {
-    VStack(alignment: .leading, spacing: MIRATheme.Space.lg) {
-      largePostMediaStage
-      composerToolbar
-      if let errorMessage {
-        composerError(errorMessage)
-      }
-      MIRAPrimaryButton("Next", systemImage: "arrow.right") {
-        withAnimation(.snappy(duration: 0.18)) {
-          isEditingPostDetails = true
+    GeometryReader { proxy in
+      let screenWidth = proxy.size.width
+      let stageHeight = min(screenWidth * 1.34, proxy.size.height * 0.57)
+
+      VStack(spacing: 0) {
+        HStack {
+          Button { dismiss() } label: {
+            Image(systemName: "chevron.left")
+              .font(.system(size: 35, weight: .medium))
+              .foregroundStyle(.white)
+              .frame(width: 54, height: 54)
+          }
+          .buttonStyle(.plain)
+
+          Spacer()
         }
+        .padding(.horizontal, 24)
+        .padding(.top, 30)
+        .frame(height: 116)
+
+        postStudioStage(width: screenWidth, height: stageHeight)
+
+        postStudioThumbnailStrip
+          .padding(.top, 18)
+
+        HStack(alignment: .top) {
+          postStudioTextTool
+          Spacer()
+          postStudioFilterTool
+        }
+        .padding(.horizontal, 82)
+        .padding(.top, 24)
+
+        if let errorMessage {
+          Text(errorMessage)
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(.red.opacity(0.92))
+            .padding(.top, 10)
+        }
+
+        Spacer(minLength: 16)
+
+        postComposerPillButton(title: "Next", disabled: mediaItems.isEmpty || isLoadingMedia) {
+          withAnimation(.snappy(duration: 0.2)) {
+            isEditingPostDetails = true
+          }
+        }
+        .padding(.horizontal, 30)
+        .padding(.bottom, max(proxy.safeAreaInsets.bottom, 18))
       }
-      .disabled(mediaItems.isEmpty || isLoadingMedia)
+      .frame(width: proxy.size.width, height: proxy.size.height)
+      .background(Color.black.ignoresSafeArea())
     }
   }
 
   private var finalPostPage: some View {
-    VStack(alignment: .leading, spacing: MIRATheme.Space.lg) {
-      mediaPreview
-      composerTextFields
-      HStack(spacing: MIRATheme.Space.sm) {
-        Button {
-          withAnimation(.snappy(duration: 0.18)) {
-            isEditingPostDetails = false
+    GeometryReader { proxy in
+      VStack(spacing: 0) {
+        postDetailsTopBar
+
+        ScrollView(showsIndicators: false) {
+          VStack(alignment: .leading, spacing: 0) {
+            postDetailsMediaStrip
+              .padding(.top, 36)
+
+            postDetailsTextFields
+              .padding(.top, 40)
+
+            Spacer(minLength: max(120, proxy.size.height * 0.22))
+
+            postDetailsQuickActions
+              .padding(.top, 24)
+
+            Rectangle()
+              .fill(MIRATheme.Color.hairline.opacity(0.75))
+              .frame(height: 0.7)
+              .padding(.top, 20)
+
+            postOptionRow(icon: "mappin.circle", title: "Add Location")
+
+            postOptionRow(icon: "ellipsis", title: "Who can see this post", subtitle: "Public")
           }
-        } label: {
-          composerTool("Back", systemImage: "chevron.left")
+          .padding(.horizontal, 16)
+          .padding(.bottom, 128)
         }
-        composerToolbar
+
+        postComposerPillButton(title: isPosting ? "Posting..." : "Post", disabled: isPosting || !canPost) {
+          Task { await submit() }
+        }
+        .padding(.horizontal, 16)
+        .padding(.bottom, max(proxy.safeAreaInsets.bottom, 18))
       }
-      if let errorMessage {
-        composerError(errorMessage)
-      }
-      MIRAPrimaryButton(isPosting ? "Posting..." : "Post", systemImage: "paperplane.fill") {
-        Task { await submit() }
-      }
-      .disabled(isPosting || !canPost)
+      .background(MIRATheme.Color.surface.ignoresSafeArea())
     }
   }
 
-  private var postStageWidth: CGFloat {
-    UIScreen.main.bounds.width - 32
-  }
-
-  private func postStageHeight(for media: MIRAPickedMedia? = nil) -> CGFloat {
-    let target = postStageWidth * 1.25
-    return min(target, UIScreen.main.bounds.height * 0.74)
-  }
-
-  private var largePostMediaStage: some View {
-    Group {
+  private func postStudioStage(width: CGFloat, height: CGFloat) -> some View {
+    ZStack {
       if let first = mediaItems.first {
-        LocalMediaThumb(media: first, width: postStageWidth, height: postStageHeight(for: first))
-          .overlay(alignment: .topTrailing) {
-            Button {
-              mediaItems.removeAll()
-            } label: {
-              Image(systemName: "xmark")
-                .font(.system(size: 13, weight: .bold))
-                .foregroundStyle(.white)
-                .frame(width: 32, height: 32)
-                .background(.black.opacity(0.55))
-                .clipShape(Circle())
-            }
-            .padding(MIRATheme.Space.sm)
-          }
+        postComposerMedia(first, width: width, height: height, cornerRadius: 0)
       } else {
         PhotosPicker(selection: $pickerItems, maxSelectionCount: 10, matching: .any(of: [.images, .videos])) {
-          RoundedRectangle(cornerRadius: MIRATheme.Radius.large, style: .continuous)
-            .fill(MIRATheme.Color.surfaceSoft)
-            .frame(maxWidth: .infinity)
-            .frame(height: postStageHeight())
+          Rectangle()
+            .fill(Color.white.opacity(0.08))
+            .frame(width: width, height: height)
             .overlay {
-              VStack(spacing: MIRATheme.Space.sm) {
+              VStack(spacing: 12) {
                 Image(systemName: "photo.on.rectangle.angled")
-                  .font(.system(size: 32, weight: .regular))
+                  .font(.system(size: 34, weight: .regular))
                 Text("Choose photo or video")
                   .font(.system(size: 16, weight: .semibold))
               }
-              .foregroundStyle(MIRATheme.Color.textMuted)
+              .foregroundStyle(.white.opacity(0.76))
             }
         }
       }
     }
-    .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.large, style: .continuous))
   }
 
-  private var composerTextFields: some View {
-    VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
-      TextField("Add a catchy headline", text: $title)
-          .font(.system(size: 21, weight: .semibold))
-      Rectangle().fill(MIRATheme.Color.hairline).frame(height: 0.5)
-      TextField("Write caption with details to get more views.", text: $bodyText, axis: .vertical)
-          .font(.system(size: 15, weight: .regular))
-        .lineLimit(5...10)
-    }
-    .padding(MIRATheme.Space.md)
-    .background(MIRATheme.Color.surface)
-    .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.large, style: .continuous))
-  }
-
-  private var mediaPreview: some View {
-    ScrollView(.horizontal, showsIndicators: false) {
-      HStack(spacing: MIRATheme.Space.sm) {
-        ForEach(Array(mediaItems.enumerated()), id: \.offset) { index, item in
-          LocalMediaThumb(media: item)
-            .overlay(alignment: .topTrailing) {
-              Button {
-                mediaItems.remove(at: index)
-              } label: {
-                Image(systemName: "xmark")
-                  .font(.system(size: 10, weight: .bold))
-                  .foregroundStyle(.white)
-                  .frame(width: 22, height: 22)
-                  .background(.black.opacity(0.55))
-                  .clipShape(Circle())
-              }
-              .padding(6)
-            }
-        }
-        PhotosPicker(selection: $pickerItems, maxSelectionCount: 10, matching: .any(of: [.images, .videos])) {
-          addTile
-        }
+  private var postStudioThumbnailStrip: some View {
+    HStack(spacing: 14) {
+      ForEach(Array(mediaItems.enumerated()), id: \.offset) { index, item in
+        postComposerMedia(item, width: 58, height: 58, cornerRadius: 11)
+          .overlay {
+            RoundedRectangle(cornerRadius: 11, style: .continuous)
+              .stroke(index == 0 ? .white : .clear, lineWidth: 2.5)
+          }
       }
-      .padding(.vertical, MIRATheme.Space.xs)
-    }
-  }
 
-  private var composerToolbar: some View {
-    HStack(spacing: MIRATheme.Space.sm) {
       PhotosPicker(selection: $pickerItems, maxSelectionCount: 10, matching: .any(of: [.images, .videos])) {
-        composerTool("Gallery", systemImage: "photo.on.rectangle")
+        RoundedRectangle(cornerRadius: 12, style: .continuous)
+          .fill(Color.white.opacity(0.14))
+          .frame(width: 58, height: 58)
+          .overlay {
+            Image(systemName: "plus")
+              .font(.system(size: 29, weight: .light))
+              .foregroundStyle(.white)
+          }
       }
-      Button { showCamera = true } label: {
-        composerTool("Camera", systemImage: "camera")
+
+      if isLoadingMedia {
+        ProgressView()
+          .tint(.white)
+          .padding(.leading, 4)
       }
-      if !isEditingPostDetails {
-        Spacer()
+    }
+    .frame(maxWidth: .infinity)
+  }
+
+  private var postStudioTextTool: some View {
+    Button {} label: {
+      VStack(spacing: 4) {
+        Text("Aa")
+          .font(.system(size: 33, weight: .regular))
+        Text("Text")
+          .font(.system(size: 15, weight: .medium))
       }
-      if isLoadingMedia { ProgressView() }
+      .foregroundStyle(.white)
+      .frame(width: 84, height: 68)
     }
     .buttonStyle(.plain)
   }
 
-  private func composerError(_ message: String) -> some View {
-    Text(message)
-      .font(.system(size: 13, weight: .medium))
-      .foregroundStyle(.red.opacity(0.85))
+  private var postStudioFilterTool: some View {
+    Button {} label: {
+      VStack(spacing: 8) {
+        Image(systemName: "camera.aperture")
+          .font(.system(size: 31, weight: .regular))
+        Text("Filters")
+          .font(.system(size: 15, weight: .medium))
+      }
+      .foregroundStyle(.white)
+      .frame(width: 84, height: 68)
+    }
+    .buttonStyle(.plain)
   }
 
-  private var addTile: some View {
-    RoundedRectangle(cornerRadius: 18, style: .continuous)
-      .fill(MIRATheme.Color.surfaceSoft)
-      .frame(width: 96, height: 96)
-      .overlay {
-        Image(systemName: "plus")
-          .font(.system(size: 26, weight: .semibold))
-          .foregroundStyle(MIRATheme.Color.textMuted)
+  private var postDetailsTopBar: some View {
+    HStack {
+      Button {
+        withAnimation(.snappy(duration: 0.2)) {
+          isEditingPostDetails = false
+        }
+      } label: {
+        Image(systemName: "chevron.left")
+          .font(.system(size: 34, weight: .medium))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .frame(width: 54, height: 54)
       }
+      .buttonStyle(.plain)
+
+      Spacer()
+
+      Button { showPreview = true } label: {
+        HStack(spacing: 6) {
+          Text("Preview")
+            .font(.system(size: 21, weight: .semibold))
+          Image(systemName: "eye")
+            .font(.system(size: 17, weight: .semibold))
+            .foregroundStyle(MIRATheme.Color.textMuted)
+        }
+        .foregroundStyle(MIRATheme.Color.textPrimary)
+        .frame(minHeight: 54)
+      }
+      .buttonStyle(.plain)
+    }
+    .padding(.horizontal, 20)
+    .padding(.top, 30)
+    .frame(height: 116)
+  }
+
+  private var postDetailsMediaStrip: some View {
+    HStack(spacing: 14) {
+      if let first = mediaItems.first {
+        postComposerMedia(first, width: 104, height: 108, cornerRadius: 14)
+          .overlay(alignment: .bottomLeading) {
+            Text("Cover")
+              .font(.system(size: 15, weight: .semibold))
+              .foregroundStyle(.white)
+              .padding(.horizontal, 10)
+              .frame(height: 31)
+              .background(.black.opacity(0.52))
+              .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+              .padding(8)
+          }
+      }
+
+      PhotosPicker(selection: $pickerItems, maxSelectionCount: 10, matching: .any(of: [.images, .videos])) {
+        RoundedRectangle(cornerRadius: 14, style: .continuous)
+          .fill(MIRATheme.Color.surfaceSoft.opacity(0.6))
+          .frame(width: 104, height: 108)
+          .overlay {
+            Image(systemName: "plus")
+              .font(.system(size: 36, weight: .light))
+              .foregroundStyle(MIRATheme.Color.textMuted.opacity(0.82))
+          }
+      }
+    }
+  }
+
+  private var postDetailsTextFields: some View {
+    VStack(alignment: .leading, spacing: 18) {
+      TextField("Add a catchy headline", text: $title)
+        .font(.system(size: 25, weight: .semibold))
+        .foregroundStyle(MIRATheme.Color.textPrimary)
+        .submitLabel(.next)
+
+      Rectangle()
+        .fill(MIRATheme.Color.hairline.opacity(0.78))
+        .frame(height: 0.7)
+
+      TextField("Write caption with details to get more views.", text: $bodyText, axis: .vertical)
+        .font(.system(size: 18, weight: .regular))
+        .foregroundStyle(MIRATheme.Color.textPrimary)
+        .lineLimit(4...8)
+
+      if let errorMessage {
+        Text(errorMessage)
+          .font(.system(size: 13, weight: .semibold))
+          .foregroundStyle(.red.opacity(0.9))
+      }
+    }
+  }
+
+  private var postDetailsQuickActions: some View {
+    HStack(spacing: 10) {
+      postDetailsChip("Places", systemImage: "mappin.circle")
+      postDetailsChip("@", systemImage: nil)
+      postDetailsChip("#", systemImage: nil)
+    }
+  }
+
+  private func postDetailsChip(_ title: String, systemImage: String?) -> some View {
+    Button {} label: {
+      HStack(spacing: 8) {
+        if let systemImage {
+          Image(systemName: systemImage)
+            .font(.system(size: 19, weight: .regular))
+        }
+        Text(title)
+          .font(.system(size: title.count == 1 ? 23 : 17, weight: .semibold))
+      }
+      .foregroundStyle(MIRATheme.Color.textPrimary)
+      .padding(.horizontal, title.count == 1 ? 18 : 20)
+      .frame(height: 52)
+      .background(MIRATheme.Color.surfaceSoft.opacity(0.58))
+      .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+    }
+    .buttonStyle(.plain)
+  }
+
+  private func postOptionRow(icon: String, title: String, subtitle: String? = nil) -> some View {
+    Button {} label: {
+      HStack(spacing: 18) {
+        Image(systemName: icon)
+          .font(.system(size: icon == "ellipsis" ? 25 : 28, weight: .regular))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .frame(width: 34)
+
+        VStack(alignment: .leading, spacing: 3) {
+          Text(title)
+            .font(.system(size: 19, weight: .regular))
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+          if let subtitle {
+            Text(subtitle)
+              .font(.system(size: 14, weight: .regular))
+              .foregroundStyle(MIRATheme.Color.textMuted)
+          }
+        }
+
+        Spacer()
+
+        Image(systemName: "chevron.right")
+          .font(.system(size: 27, weight: .regular))
+          .foregroundStyle(MIRATheme.Color.textMuted.opacity(0.82))
+      }
+      .frame(minHeight: 72)
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .overlay(alignment: .bottom) {
+      Rectangle()
+        .fill(MIRATheme.Color.hairline.opacity(0.72))
+        .frame(height: 0.7)
+    }
+  }
+
+  private func postComposerPillButton(title: String, disabled: Bool, action: @escaping () -> Void) -> some View {
+    Button(action: action) {
+      Text(title)
+        .font(.system(size: 18, weight: .semibold))
+        .foregroundStyle(.white)
+        .frame(maxWidth: .infinity)
+        .frame(height: 58)
+        .background(disabled ? MIRATheme.Color.textMuted.opacity(0.55) : MIRATheme.Color.forest)
+        .clipShape(Capsule())
+    }
+    .buttonStyle(.plain)
+    .disabled(disabled)
+  }
+
+  @ViewBuilder
+  private func postComposerMedia(_ media: MIRAPickedMedia, width: CGFloat, height: CGFloat, cornerRadius: CGFloat) -> some View {
+    ZStack {
+      if media.kind == .image, let image = UIImage(data: media.data) {
+        Image(uiImage: image)
+          .resizable()
+          .scaledToFill()
+      } else {
+        Color.black.opacity(0.88)
+        Image(systemName: "play.fill")
+          .font(.system(size: min(width, height) * 0.24, weight: .semibold))
+          .foregroundStyle(.white)
+      }
+    }
+    .frame(width: width, height: height)
+    .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+    .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
   }
 
   private var canPost: Bool {

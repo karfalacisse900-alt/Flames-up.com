@@ -132,14 +132,6 @@ public struct DiscoverNativeView: View {
           .font(.system(size: 20, weight: .semibold))
           .foregroundStyle(MIRATheme.Color.textPrimary)
         Spacer()
-        NavigationLink(destination: CreateNoteNativeView(api: model.api)) {
-          Image(systemName: "plus")
-            .font(.system(size: 17, weight: .semibold))
-            .foregroundStyle(.white)
-            .frame(width: 38, height: 38)
-            .background(MIRATheme.Color.forest)
-            .clipShape(Circle())
-        }
       }
       .padding(.horizontal, MIRATheme.Space.md)
 
