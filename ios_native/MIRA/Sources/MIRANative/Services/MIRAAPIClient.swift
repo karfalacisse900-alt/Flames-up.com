@@ -1,5 +1,24 @@
 import Foundation
 
+public enum MIRAProductionBackend {
+  public static let apiBaseURL = URL(string: "https://api.flames-up.com/api")!
+  public static let siteBaseURL = URL(string: "https://flames-up.com")!
+
+  public static func apiURL(_ path: String) -> URL {
+    makeURL(baseURL: apiBaseURL, path: path)
+  }
+
+  public static func siteURL(_ path: String) -> URL {
+    makeURL(baseURL: siteBaseURL, path: path)
+  }
+
+  private static func makeURL(baseURL: URL, path: String) -> URL {
+    let cleanPath = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    let baseString = baseURL.absoluteString.hasSuffix("/") ? baseURL.absoluteString : "\(baseURL.absoluteString)/"
+    return URL(string: cleanPath, relativeTo: URL(string: baseString)!)!.absoluteURL
+  }
+}
+
 public protocol MIRASessionProviding: AnyObject {
   func accessToken() async -> String?
 }
@@ -40,7 +59,7 @@ public final class MIRAAPIClient {
   private let encoder: JSONEncoder
 
   public init(
-    baseURL: URL = URL(string: "https://api.flames-up.com/api")!,
+    baseURL: URL = MIRAProductionBackend.apiBaseURL,
     sessionProvider: MIRASessionProviding? = nil,
     session: URLSession = .shared
   ) {

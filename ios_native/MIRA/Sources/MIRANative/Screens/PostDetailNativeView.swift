@@ -318,5 +318,5 @@ private func compact(_ value: Int) -> String {
 }
 
 private func shareURL(for post: MIRAPost) -> URL {
-  URL(string: "https://flames-up.com/post/\(post.id)")!
+  MIRAProductionBackend.siteURL("post/\(post.id)")
 }

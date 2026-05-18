@@ -248,6 +248,10 @@ private struct MainNativePostCard: View {
     MIRAMediaSizing.mainFeedHeight(for: post.mediaURLs)
   }
 
+  private var cardWidth: CGFloat {
+    UIScreen.main.bounds.width
+  }
+
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
       postHeader
@@ -260,7 +264,8 @@ private struct MainNativePostCard: View {
           singleImageContentMode: .fill,
           shouldPlay: isVideoActive
         )
-        .frame(maxWidth: .infinity)
+        .frame(width: cardWidth, height: mediaHeight)
+        .clipped()
         .contentShape(Rectangle())
         .onTapGesture(perform: onOpen)
       }
@@ -276,6 +281,8 @@ private struct MainNativePostCard: View {
       .padding(.top, MIRATheme.Space.sm)
       .padding(.bottom, MIRATheme.Space.md)
     }
+    .frame(width: cardWidth, alignment: .topLeading)
+    .clipped()
     .background(MIRATheme.Color.surface)
     .background {
       GeometryReader { proxy in
@@ -427,7 +434,7 @@ private func compact(_ value: Int) -> String {
 }
 
 private func shareURL(for post: MIRAPost) -> URL {
-  URL(string: "https://flames-up.com/post/\(post.id)")!
+  MIRAProductionBackend.siteURL("post/\(post.id)")
 }
 
 private struct MainPostVisibility: Equatable {

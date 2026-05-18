@@ -323,10 +323,7 @@ private struct MIRAResolvedVideoPlayer: View {
     }
 
     let uid = String(url.dropFirst("cfstream:".count))
-    guard let endpoint = URL(string: "https://api.flames-up.com/api/stream/video/\(uid)") else {
-      failed = true
-      return
-    }
+    let endpoint = MIRAProductionBackend.apiURL("stream/video/\(uid)")
 
     do {
       let (data, response) = try await URLSession.shared.data(from: endpoint)
@@ -352,6 +349,9 @@ private struct MIRAResolvedVideoPlayer: View {
   @MainActor
   private func syncPlayback(_ player: AVPlayer) {
     if shouldPlay {
+      configureAudioSession()
+      player.isMuted = false
+      player.volume = 1
       player.play()
     } else {
       player.pause()
@@ -360,8 +360,11 @@ private struct MIRAResolvedVideoPlayer: View {
 
   @MainActor
   private func configurePlayback(for player: AVPlayer) {
+    configureAudioSession()
     player.actionAtItemEnd = .none
     player.automaticallyWaitsToMinimizeStalling = true
+    player.isMuted = false
+    player.volume = 1
     removeLoopObserver()
     endObserver = NotificationCenter.default.addObserver(
       forName: .AVPlayerItemDidPlayToEndTime,
@@ -372,6 +375,17 @@ private struct MIRAResolvedVideoPlayer: View {
       if shouldPlay {
         player.play()
       }
+    }
+  }
+
+  @MainActor
+  private func configureAudioSession() {
+    do {
+      let session = AVAudioSession.sharedInstance()
+      try session.setCategory(.playback, mode: .moviePlayback)
+      try session.setActive(true)
+    } catch {
+      // Keep the video visible even if iOS refuses the audio session.
     }
   }
 
