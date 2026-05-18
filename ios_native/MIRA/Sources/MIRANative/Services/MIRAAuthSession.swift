@@ -23,11 +23,13 @@ public final class MIRAAuthSession: ObservableObject, MIRASessionProviding {
 
   @MainActor
   public func bootstrap(api: MIRAAPIClient) async {
+    MIRAPerformanceTimeline.mark("auth_bootstrap_start")
     isBootstrapping = true
     guard let storedToken = await keychain.accessToken(), !storedToken.isEmpty else {
       token = nil
       user = nil
       isBootstrapping = false
+      MIRAPerformanceTimeline.mark("auth_bootstrap_no_token")
       return
     }
 
@@ -36,6 +38,7 @@ public final class MIRAAuthSession: ObservableObject, MIRASessionProviding {
     if let cachedUser: MIRAUser = await MIRALocalJSONCache.load(MIRAUser.self, key: cachedUserKey) {
       user = cachedUser
       isBootstrapping = false
+      MIRAPerformanceTimeline.mark("auth_cached_user_ready")
     }
 
     do {
@@ -54,6 +57,7 @@ public final class MIRAAuthSession: ObservableObject, MIRASessionProviding {
       }
     }
     isBootstrapping = false
+    MIRAPerformanceTimeline.mark("auth_bootstrap_finished", detail: user == nil ? "signed_out" : "signed_in")
   }
 
   @MainActor

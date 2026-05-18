@@ -4,13 +4,15 @@ import UIKit
 @MainActor
 final class MainFeedModel: ObservableObject {
   @Published var posts: [MIRAPost] = []
-  @Published var isLoading = false
+  @Published var isLoading = true
+  @Published var isLoadingMore = false
   @Published var errorMessage: String?
 
   let api: MIRAAPIClient
-  private let isoDateFormatter = ISO8601DateFormatter()
   private let feedCacheKey = "native.main.feed.v2"
   private var hasLoadedFreshFeed = false
+  private var canLoadMore = true
+  private let firstPageLimit = 8
 
   init(api: MIRAAPIClient) {
     self.api = api
@@ -18,34 +20,72 @@ final class MainFeedModel: ObservableObject {
 
   func load(forceRefresh: Bool = false) async {
     if !forceRefresh && hasLoadedFreshFeed && !posts.isEmpty { return }
+    MIRAPerformanceTimeline.mark("home_load_start", detail: forceRefresh ? "refresh" : "normal")
 
     if posts.isEmpty, let cached: [MIRAPost] = await MIRALocalJSONCache.load([MIRAPost].self, key: feedCacheKey) {
-      posts = cached.sorted { nativeScore($0) > nativeScore($1) }
+      // Cached feed is already stored in display order, so show it immediately.
+      posts = cached
+      MIRAPerformanceTimeline.markOnce("time_to_first_real_home_item", detail: "cache")
       errorMessage = nil
+      isLoading = false
     }
 
     if posts.isEmpty { isLoading = true }
     hasLoadedFreshFeed = true
     defer { isLoading = false }
     do {
-      var loaded: [MIRAPost] = try await api.get("/posts/feed?limit=12")
+      var loaded: [MIRAPost] = try await api.get("/posts/feed?limit=\(firstPageLimit)")
       if loaded.isEmpty {
-        loaded = (try? await api.get("/posts/world-board?limit=12")) ?? []
+        loaded = (try? await api.get("/posts/world-board?limit=\(firstPageLimit)")) ?? []
       }
-      let sorted = loaded.sorted { nativeScore($0) > nativeScore($1) }
+      let sorted = await sortedByNativeScore(loaded)
       posts = sorted
+      canLoadMore = loaded.count >= firstPageLimit
       await MIRALocalJSONCache.save(sorted, key: feedCacheKey)
+      MIRAPerformanceTimeline.markOnce("time_to_first_real_home_item", detail: "network")
       errorMessage = nil
     } catch {
-      if let fallback: [MIRAPost] = try? await api.get("/posts/world-board?limit=12"), !fallback.isEmpty {
-        let sorted = fallback.sorted { nativeScore($0) > nativeScore($1) }
+      if let fallback: [MIRAPost] = try? await api.get("/posts/world-board?limit=\(firstPageLimit)"), !fallback.isEmpty {
+        let sorted = await sortedByNativeScore(fallback)
         posts = sorted
+        canLoadMore = fallback.count >= firstPageLimit
         await MIRALocalJSONCache.save(sorted, key: feedCacheKey)
+        MIRAPerformanceTimeline.markOnce("time_to_first_real_home_item", detail: "fallback")
         errorMessage = nil
       } else {
         if posts.isEmpty { hasLoadedFreshFeed = false }
         errorMessage = "Could not load the feed. Pull back in a moment."
       }
+    }
+  }
+
+  func loadMoreIfNeeded(after post: MIRAPost) async {
+    guard canLoadMore, !isLoading, !isLoadingMore else { return }
+    guard posts.suffix(3).contains(where: { $0.id == post.id }) else { return }
+    isLoadingMore = true
+    defer { isLoadingMore = false }
+
+    let skip = posts.count
+    do {
+      var loaded: [MIRAPost] = try await api.get("/posts/feed?limit=\(firstPageLimit)&skip=\(skip)")
+      if loaded.isEmpty {
+        loaded = (try? await api.get("/posts/world-board?limit=\(firstPageLimit)&skip=\(skip)")) ?? []
+      }
+      guard !loaded.isEmpty else {
+        canLoadMore = false
+        return
+      }
+      let existing = Set(posts.map(\.id))
+      let unique = loaded.filter { !existing.contains($0.id) }
+      guard !unique.isEmpty else {
+        canLoadMore = false
+        return
+      }
+      posts.append(contentsOf: await sortedByNativeScore(unique))
+      canLoadMore = loaded.count >= firstPageLimit
+      cacheCurrentPosts()
+    } catch {
+      // Keep the visible feed stable; pagination can retry on the next near-bottom cell.
     }
   }
 
@@ -122,21 +162,32 @@ final class MainFeedModel: ObservableObject {
     Task { await MIRALocalJSONCache.save(snapshot, key: feedCacheKey) }
   }
 
-  private func nativeScore(_ post: MIRAPost) -> Double {
-    MIRANativeEngine.scoreFeedItem(
-      likes: Double(post.likesCount ?? 0),
-      comments: Double(post.commentsCount ?? 0),
-      saves: Double(post.savesCount ?? 0),
-      shares: Double(post.sharesCount ?? 0),
-      views: Double(post.viewsCount ?? 0),
-      ageHours: ageHours(from: post.createdAt),
-      isFollowed: post.isFollowing == true,
-      isVideo: post.mediaURLs.first?.isVideoURL == true
-    )
+  private func sortedByNativeScore(_ posts: [MIRAPost]) async -> [MIRAPost] {
+    await Task.detached(priority: .userInitiated) {
+      let formatter = ISO8601DateFormatter()
+      return posts
+        .map { post in
+          (
+            post,
+            MIRANativeEngine.scoreFeedItem(
+              likes: Double(post.likesCount ?? 0),
+              comments: Double(post.commentsCount ?? 0),
+              saves: Double(post.savesCount ?? 0),
+              shares: Double(post.sharesCount ?? 0),
+              views: Double(post.viewsCount ?? 0),
+              ageHours: Self.ageHours(from: post.createdAt, formatter: formatter),
+              isFollowed: post.isFollowing == true,
+              isVideo: post.mediaURLs.first?.isVideoURL == true
+            )
+          )
+        }
+        .sorted { $0.1 > $1.1 }
+        .map(\.0)
+    }.value
   }
 
-  private func ageHours(from value: String?) -> Double {
-    guard let value, let date = isoDateFormatter.date(from: value) else { return 24 }
+  private static func ageHours(from value: String?, formatter: ISO8601DateFormatter) -> Double {
+    guard let value, let date = formatter.date(from: value) else { return 24 }
     return max(0, Date().timeIntervalSince(date) / 3600)
   }
 }
@@ -179,6 +230,12 @@ public struct MainFeedView: View {
                   onSave: { Task { await model.toggleSave(post) } },
                   onFollow: { Task { await model.toggleFollowAuthor(post) } }
                 )
+                .onAppear {
+                  Task { await model.loadMoreIfNeeded(after: post) }
+                }
+              }
+              if model.isLoadingMore {
+                MainPostSkeleton()
               }
             }
           }
@@ -242,6 +299,7 @@ public struct MainFeedView: View {
     let nextID = candidate?.id
     if activeVideoPostID != nextID {
       activeVideoPostID = nextID
+      MIRAMemoryMetrics.log("main_feed_video_switch")
     }
   }
 
@@ -372,6 +430,9 @@ private struct MainPostSkeleton: View {
     }
     .background(MIRATheme.Color.surface)
     .redacted(reason: .placeholder)
+    .onAppear {
+      MIRAPerformanceTimeline.markOnce("time_to_first_home_skeleton")
+    }
   }
 }
 

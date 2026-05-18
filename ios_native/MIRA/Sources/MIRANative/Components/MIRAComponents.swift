@@ -155,6 +155,7 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
         uiImage = cached
         loadedURL = remoteURL
       }
+      MIRAPerformanceTimeline.markOnce("time_to_first_thumbnail", detail: "memory")
       return
     }
 
@@ -164,6 +165,7 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
         uiImage = diskCached
         loadedURL = remoteURL
       }
+      MIRAPerformanceTimeline.markOnce("time_to_first_thumbnail", detail: "disk")
       return
     }
 
@@ -198,6 +200,7 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
         uiImage = decoded
         loadedURL = remoteURL
       }
+      MIRAPerformanceTimeline.markOnce("time_to_first_thumbnail", detail: "network")
     } catch {
       let shouldClear = await MainActor.run {
         loadedURL != remoteURL
@@ -313,6 +316,7 @@ private struct MIRAResolvedVideoPlayer: View {
   @State private var failed = false
   @State private var endObserver: NSObjectProtocol?
   @State private var loadedVideoURL: String?
+  @State private var videoMetric: MIRAPerformanceMetric?
 
   var body: some View {
     ZStack {
@@ -322,6 +326,7 @@ private struct MIRAResolvedVideoPlayer: View {
           .onDisappear {
             player.pause()
             removeLoopObserver()
+            stopVideoMetric(status: "disappear")
           }
       } else if let thumbnailURL {
         MIRACachedImage(url: thumbnailURL) { image in
@@ -368,6 +373,7 @@ private struct MIRAResolvedVideoPlayer: View {
     if loadedVideoURL != url {
       player?.pause()
       removeLoopObserver()
+      stopVideoMetric(status: "url_changed")
       player = nil
       thumbnailURL = nil
       failed = false
@@ -379,6 +385,7 @@ private struct MIRAResolvedVideoPlayer: View {
         player.pause()
         self.player = nil
         removeLoopObserver()
+        stopVideoMetric(status: "not_visible")
       }
       if thumbnailURL == nil && url.lowercased().hasPrefix("cfstream:") {
         await resolveCloudflareStream(createPlayer: false)
@@ -396,7 +403,9 @@ private struct MIRAResolvedVideoPlayer: View {
       let avPlayer = AVPlayer(url: directURL)
       configurePlayback(for: avPlayer)
       player = avPlayer
+      await startVideoMetric(label: directURL.host ?? directURL.path)
       syncPlayback(avPlayer)
+      MIRAPerformanceTimeline.markOnce("time_to_first_video_frame", detail: "direct")
       return
     }
 
@@ -434,15 +443,34 @@ private struct MIRAResolvedVideoPlayer: View {
         let avPlayer = AVPlayer(url: hlsURL)
         configurePlayback(for: avPlayer)
         player = avPlayer
+        await startVideoMetric(label: "stream \(uid)")
         syncPlayback(avPlayer)
+        MIRAPerformanceTimeline.markOnce("time_to_first_video_frame", detail: "stream")
       } else if createPlayer {
         failed = true
+        stopVideoMetric(status: "not_ready")
       } else {
         failed = false
       }
     } catch {
       failed = createPlayer
+      if createPlayer {
+        stopVideoMetric(status: "error")
+      }
     }
+  }
+
+  @MainActor
+  private func startVideoMetric(label: String) async {
+    guard videoMetric == nil else { return }
+    videoMetric = await MIRAPerformanceMetric.begin(category: "video", label: label)
+  }
+
+  @MainActor
+  private func stopVideoMetric(status: String) {
+    guard let metric = videoMetric else { return }
+    videoMetric = nil
+    Task { await metric.finish(status: status) }
   }
 
   @MainActor

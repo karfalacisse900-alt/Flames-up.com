@@ -1,7 +1,58 @@
 import CryptoKit
+import Darwin
 import Foundation
 import ImageIO
 import UIKit
+
+public enum MIRAPerformanceTimeline {
+  private final class Storage: @unchecked Sendable {
+    let lock = NSLock()
+    var emittedOnce = Set<String>()
+  }
+
+  private static let start = DispatchTime.now()
+  private static let storage = Storage()
+
+  public static func mark(_ name: String, detail: String? = nil) {
+    #if DEBUG
+    let elapsed = Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000
+    let detailText = detail.map { " \($0)" } ?? ""
+    print("[MIRA perf] mark \(name) \(Int(elapsed))ms\(detailText)")
+    #endif
+  }
+
+  public static func markOnce(_ name: String, detail: String? = nil) {
+    #if DEBUG
+    storage.lock.lock()
+    let shouldEmit = storage.emittedOnce.insert(name).inserted
+    storage.lock.unlock()
+    if shouldEmit {
+      mark(name, detail: detail)
+    }
+    #endif
+  }
+}
+
+public enum MIRAMemoryMetrics {
+  public static func log(_ label: String) {
+    #if DEBUG
+    guard let value = residentMemoryMB() else { return }
+    print("[MIRA perf] memory \(label) \(Int(value))MB")
+    #endif
+  }
+
+  private static func residentMemoryMB() -> Double? {
+    var info = mach_task_basic_info()
+    var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.stride / MemoryLayout<natural_t>.stride)
+    let result = withUnsafeMutablePointer(to: &info) {
+      $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+        task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
+      }
+    }
+    guard result == KERN_SUCCESS else { return nil }
+    return Double(info.resident_size) / 1_048_576
+  }
+}
 
 public actor MIRAPerformanceMonitor {
   public static let shared = MIRAPerformanceMonitor()

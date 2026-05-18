@@ -5,9 +5,9 @@ import UIKit
 final class DiscoverNativeModel: ObservableObject {
   @Published var notes: [MIRANote] = []
   @Published var stories: [MIRAStoryGroup] = []
-  @Published var isLoading = false
-  @Published var isLoadingNotes = false
-  @Published var isLoadingStories = false
+  @Published var isLoading = true
+  @Published var isLoadingNotes = true
+  @Published var isLoadingStories = true
   let api: MIRAAPIClient
   private let notesCacheKey = "native.discover.notes.v2"
   private let storiesCacheKey = "native.discover.stories.v2"
@@ -19,11 +19,16 @@ final class DiscoverNativeModel: ObservableObject {
   }
 
   func load() async {
+    MIRAPerformanceTimeline.mark("discover_load_start")
     if notes.isEmpty, let cachedNotes: [MIRANote] = await MIRALocalJSONCache.load([MIRANote].self, key: notesCacheKey) {
       notes = cachedNotes
+      isLoadingNotes = false
+      MIRAPerformanceTimeline.markOnce("discover_first_content", detail: "notes_cache")
     }
     if stories.isEmpty, let cachedStories: [MIRAStoryGroup] = await MIRALocalJSONCache.load([MIRAStoryGroup].self, key: storiesCacheKey) {
       stories = cachedStories
+      isLoadingStories = false
+      MIRAPerformanceTimeline.markOnce("discover_first_content", detail: "stories_cache")
     }
 
     if !hasLoadedFreshNotes && notes.isEmpty { isLoadingNotes = true }
@@ -48,6 +53,9 @@ final class DiscoverNativeModel: ObservableObject {
       let loaded: [MIRANote] = try await api.get("/notes?limit=10")
       notes = loaded
       await MIRALocalJSONCache.save(loaded, key: notesCacheKey)
+      if !loaded.isEmpty {
+        MIRAPerformanceTimeline.markOnce("discover_first_content", detail: "notes_network")
+      }
     } catch {
       if notes.isEmpty { hasLoadedFreshNotes = false }
     }
@@ -69,6 +77,9 @@ final class DiscoverNativeModel: ObservableObject {
       let visibleStories = loadedStories.filter { ($0.statuses?.isEmpty == false) }
       stories = visibleStories
       await MIRALocalJSONCache.save(visibleStories, key: storiesCacheKey)
+      if !visibleStories.isEmpty {
+        MIRAPerformanceTimeline.markOnce("discover_first_content", detail: "stories_network")
+      }
     } catch {
       if stories.isEmpty { hasLoadedFreshStories = false }
     }
@@ -430,6 +441,9 @@ private struct NoteCardSkeletonNative: View {
     .background(MIRATheme.Color.surfaceRaised)
     .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
     .redacted(reason: .placeholder)
+    .onAppear {
+      MIRAPerformanceTimeline.markOnce("discover_first_skeleton")
+    }
   }
 }
 

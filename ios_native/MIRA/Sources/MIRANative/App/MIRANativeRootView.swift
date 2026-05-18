@@ -17,6 +17,7 @@ public struct MIRANativeRootView: View {
     let session = MIRAAuthSession()
     _authSession = StateObject(wrappedValue: session)
     self.api = MIRAAPIClient(sessionProvider: session)
+    MIRAPerformanceTimeline.mark("native_root_init")
   }
 
   public var body: some View {
@@ -64,12 +65,14 @@ public struct MIRANativeRootView: View {
         .background(MIRATheme.Color.appBackground)
         .statusBarHidden(selectedTab == .main)
         .onChange(of: selectedTab) { _, tab in
+          MIRAPerformanceTimeline.mark("tab_switch", detail: "\(tab)")
           loadedTabs.insert(tab)
         }
       }
     }
     .onAppear {
       MIRAMainThreadStallMonitor.shared.start()
+      MIRAPerformanceTimeline.markOnce("time_to_first_screen")
     }
     .task { await authSession.bootstrap(api: api) }
   }
