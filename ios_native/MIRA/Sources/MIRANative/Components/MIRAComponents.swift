@@ -727,11 +727,11 @@ public enum MIRAMediaSizing {
     guard let match = expression.firstMatch(in: normalized, range: range), match.numberOfRanges == 3,
           let widthRange = Range(match.range(at: 1), in: normalized),
           let heightRange = Range(match.range(at: 2), in: normalized) else {
-      return dimensionsRatio(in: value)
+      return namedDimensionsRatio(in: normalized) ?? dimensionsRatio(in: value)
     }
     let mediaWidth = CGFloat(Double(String(normalized[widthRange])) ?? 0)
     let mediaHeight = CGFloat(Double(String(normalized[heightRange])) ?? 0)
-    guard mediaWidth > 0, mediaHeight > 0 else { return dimensionsRatio(in: value) }
+    guard mediaWidth > 0, mediaHeight > 0 else { return namedDimensionsRatio(in: normalized) ?? dimensionsRatio(in: value) }
     return min(max(mediaHeight / mediaWidth, 1.0 / 1.91), 16.0 / 9.0)
   }
 
@@ -754,6 +754,24 @@ public enum MIRAMediaSizing {
     let mediaHeight = CGFloat(Double(String(value[heightRange])) ?? 0)
     guard mediaWidth > 0, mediaHeight > 0 else { return nil }
     return min(max(mediaHeight / mediaWidth, 1.0 / 1.91), 16.0 / 9.0)
+  }
+
+  private static func namedDimensionsRatio(in value: String) -> CGFloat? {
+    let width = captureNumber(in: value, pattern: #"(?i)(?:width|w)[=:_-](\d{2,5})"#)
+    let height = captureNumber(in: value, pattern: #"(?i)(?:height|h)[=:_-](\d{2,5})"#)
+    guard width > 0, height > 0 else { return nil }
+    return min(max(height / width, 1.0 / 1.91), 16.0 / 9.0)
+  }
+
+  private static func captureNumber(in value: String, pattern: String) -> CGFloat {
+    guard let expression = try? NSRegularExpression(pattern: pattern) else { return 0 }
+    let range = NSRange(value.startIndex..<value.endIndex, in: value)
+    guard let match = expression.firstMatch(in: value, range: range),
+          match.numberOfRanges > 1,
+          let numberRange = Range(match.range(at: 1), in: value) else {
+      return 0
+    }
+    return CGFloat(Double(String(value[numberRange])) ?? 0)
   }
 
   private static func aspectRatioHint(in value: String) -> CGFloat? {

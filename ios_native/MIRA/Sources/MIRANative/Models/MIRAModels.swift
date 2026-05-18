@@ -149,7 +149,9 @@ public struct MIRAMediaDimension: Codable, Hashable {
     width = Self.decodeDouble(container, keys: [.width])
     height = Self.decodeDouble(container, keys: [.height])
     ratio = Self.decodeDouble(container, keys: [.ratio, .aspectRatio, .aspectRatioSnake])
-    format = try? container.decodeIfPresent(String.self, forKey: .format)
+    let explicitFormat = try? container.decodeIfPresent(String.self, forKey: .format)
+    let ratioText = Self.decodeString(container, keys: [.ratio, .aspectRatio, .aspectRatioSnake])
+    format = explicitFormat ?? ratioText
     type = try? container.decodeIfPresent(String.self, forKey: .type)
   }
 
@@ -186,6 +188,16 @@ public struct MIRAMediaDimension: Codable, Hashable {
       if let string = try? container.decodeIfPresent(String.self, forKey: key),
          let value = Double(string.trimmingCharacters(in: .whitespacesAndNewlines)) {
         return value
+      }
+    }
+    return nil
+  }
+
+  private static func decodeString(_ container: KeyedDecodingContainer<CodingKeys>, keys: [CodingKeys]) -> String? {
+    for key in keys {
+      if let string = try? container.decodeIfPresent(String.self, forKey: key) {
+        let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty { return trimmed }
       }
     }
     return nil
@@ -514,17 +526,36 @@ public struct FlexibleMediaDimensions: Codable, Hashable {
       values = array
       return
     }
+    if let dimension = try? container.decode(MIRAMediaDimension.self) {
+      values = [dimension]
+      return
+    }
+    if let dictionary = try? container.decode([String: MIRAMediaDimension].self) {
+      values = dictionary.keys.sorted().compactMap { dictionary[$0] }
+      return
+    }
     if let string = try? container.decode(String.self) {
       let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
       if trimmed.isEmpty {
         values = []
         return
       }
-      if let data = trimmed.data(using: .utf8),
-         let decoded = try? JSONDecoder().decode([MIRAMediaDimension].self, from: data) {
-        values = decoded
-        return
+      if let data = trimmed.data(using: .utf8) {
+        if let decoded = try? JSONDecoder().decode([MIRAMediaDimension].self, from: data) {
+          values = decoded
+          return
+        }
+        if let decoded = try? JSONDecoder().decode(MIRAMediaDimension.self, from: data) {
+          values = [decoded]
+          return
+        }
+        if let decoded = try? JSONDecoder().decode([String: MIRAMediaDimension].self, from: data) {
+          values = decoded.keys.sorted().compactMap { decoded[$0] }
+          return
+        }
       }
+      values = [MIRAMediaDimension(width: nil, height: nil, ratio: nil, format: trimmed, type: nil)]
+      return
     }
     values = []
   }

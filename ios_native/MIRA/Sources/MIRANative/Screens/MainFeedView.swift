@@ -244,14 +244,14 @@ public struct MainFeedView: View {
         }
         .coordinateSpace(name: "mainFeedScroll")
 
-        if !isHeaderHidden {
-          mainHeader
-            .transition(.move(edge: .top).combined(with: .opacity))
-            .zIndex(10)
-        }
+        mainHeader
+          .offset(y: isHeaderHidden ? -84 : 0)
+          .opacity(isHeaderHidden ? 0 : 1)
+          .allowsHitTesting(!isHeaderHidden)
+          .zIndex(10)
       }
       .background(MIRATheme.Color.appBackground)
-      .animation(.snappy(duration: 0.28, extraBounce: 0.02), value: isHeaderHidden)
+      .animation(.easeInOut(duration: 0.18), value: isHeaderHidden)
       .toolbar(.hidden, for: .navigationBar)
       .navigationDestination(item: $selectedPost) { post in
         PostDetailNativeView(post: post, api: model.api)
@@ -273,7 +273,7 @@ public struct MainFeedView: View {
 
     let delta = minY - previousScrollMinY
     self.previousScrollMinY = minY
-    guard abs(delta) > 2 else { return }
+    guard abs(delta) > 1 else { return }
 
     if minY > -10 {
       isHeaderHidden = false
@@ -285,14 +285,17 @@ public struct MainFeedView: View {
     let direction = delta < 0 ? 1 : -1
     if direction != scrollIntentDirection {
       scrollIntentDirection = direction
-      scrollIntentDistance = 0
+      scrollIntentDistance = abs(delta)
+    } else {
+      scrollIntentDistance += abs(delta)
     }
-    scrollIntentDistance += abs(delta)
 
-    if direction == 1 && scrollIntentDistance > 18 {
+    if direction == 1 && minY < -18 && scrollIntentDistance > 10 {
       isHeaderHidden = true
-    } else if direction == -1 && scrollIntentDistance > 44 {
+      scrollIntentDistance = 0
+    } else if direction == -1 && scrollIntentDistance > 10 {
       isHeaderHidden = false
+      scrollIntentDistance = 0
     }
   }
 
