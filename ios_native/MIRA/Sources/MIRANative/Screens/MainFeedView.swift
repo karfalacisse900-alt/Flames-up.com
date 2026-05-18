@@ -9,7 +9,7 @@ final class MainFeedModel: ObservableObject {
   @Published var errorMessage: String?
 
   let api: MIRAAPIClient
-  private let feedCacheKey = "native.main.feed.v2"
+  private let feedCacheKey = "native.main.feed.v3"
   private var hasLoadedFreshFeed = false
   private var canLoadMore = true
   private let firstPageLimit = 8
@@ -330,10 +330,6 @@ private struct MainNativePostCard: View {
     MIRAMediaSizing.mainFeedHeight(for: post.mediaURLs, aspectRatios: post.mediaHeightToWidthRatios)
   }
 
-  private var cardWidth: CGFloat {
-    UIScreen.main.bounds.width
-  }
-
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
       postHeader
@@ -346,7 +342,8 @@ private struct MainNativePostCard: View {
           singleImageContentMode: .fill,
           shouldPlay: isVideoActive
         )
-        .frame(width: cardWidth, height: mediaHeight)
+        .frame(maxWidth: .infinity)
+        .frame(height: mediaHeight)
         .clipped()
         .contentShape(Rectangle())
         .onTapGesture(perform: onOpen)
@@ -363,7 +360,7 @@ private struct MainNativePostCard: View {
       .padding(.top, MIRATheme.Space.sm)
       .padding(.bottom, MIRATheme.Space.md)
     }
-    .frame(width: cardWidth, alignment: .topLeading)
+    .frame(maxWidth: .infinity, alignment: .topLeading)
     .clipped()
     .background(MIRATheme.Color.surface)
     .background {

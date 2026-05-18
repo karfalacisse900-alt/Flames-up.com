@@ -283,7 +283,7 @@ public struct RemoteMediaView: View {
     Group {
       if isVideo {
         MIRAResolvedVideoPlayer(url: url, shouldPlay: shouldPlay)
-          .background(Color.black)
+          .background(Color.clear)
       } else {
         MIRACachedImage(url: url) { image in
           image.resizable().aspectRatio(contentMode: contentMode)
@@ -318,9 +318,24 @@ private struct MIRAResolvedVideoPlayer: View {
   @State private var endObserver: NSObjectProtocol?
   @State private var loadedVideoURL: String?
   @State private var videoMetric: MIRAPerformanceMetric?
+  @State private var generatedThumbnail: UIImage?
 
   var body: some View {
     ZStack {
+      if let thumbnailURL {
+        MIRACachedImage(url: thumbnailURL) { image in
+          image.resizable().scaledToFill()
+        } placeholder: {
+          placeholder
+        }
+      } else if let generatedThumbnail {
+        Image(uiImage: generatedThumbnail)
+          .resizable()
+          .scaledToFill()
+      } else if player == nil {
+        placeholder
+      }
+
       if let player {
         MIRAFillVideoPlayer(player: player)
           .onAppear { syncPlayback(player) }
@@ -329,14 +344,6 @@ private struct MIRAResolvedVideoPlayer: View {
             removeLoopObserver()
             stopVideoMetric(status: "disappear")
           }
-      } else if let thumbnailURL {
-        MIRACachedImage(url: thumbnailURL) { image in
-          image.resizable().scaledToFill()
-        } placeholder: {
-          placeholder
-        }
-      } else {
-        placeholder
       }
 
       if failed {
@@ -364,8 +371,10 @@ private struct MIRAResolvedVideoPlayer: View {
 
   private var placeholder: some View {
     ZStack {
-      Color.black
-      ProgressView().tint(MIRATheme.Color.textMuted)
+      MIRATheme.Color.surfaceSoft
+      Image(systemName: "play.fill")
+        .font(.system(size: 24, weight: .semibold))
+        .foregroundStyle(MIRATheme.Color.textMuted.opacity(0.38))
     }
   }
 
@@ -377,8 +386,14 @@ private struct MIRAResolvedVideoPlayer: View {
       stopVideoMetric(status: "url_changed")
       player = nil
       thumbnailURL = nil
+      generatedThumbnail = nil
       failed = false
       loadedVideoURL = url
+    }
+
+    let directURL = URL(string: url)
+    if let directURL, directURL.isPlayableFileOrRemoteVideo, generatedThumbnail == nil {
+      Task { await loadGeneratedThumbnail(for: directURL, expectedURL: url) }
     }
 
     if !shouldPlay {
@@ -400,7 +415,7 @@ private struct MIRAResolvedVideoPlayer: View {
       return
     }
 
-    if let directURL = URL(string: url), let scheme = directURL.scheme, scheme.hasPrefix("http") || scheme == "file" {
+    if let directURL, directURL.isPlayableFileOrRemoteVideo {
       let avPlayer = AVPlayer(url: directURL)
       configurePlayback(for: avPlayer)
       player = avPlayer
@@ -459,6 +474,28 @@ private struct MIRAResolvedVideoPlayer: View {
         stopVideoMetric(status: "error")
       }
     }
+  }
+
+  @MainActor
+  private func loadGeneratedThumbnail(for directURL: URL, expectedURL: String) async {
+    guard generatedThumbnail == nil else { return }
+    let image = await Self.generateVideoThumbnail(for: directURL)
+    guard loadedVideoURL == expectedURL else { return }
+    generatedThumbnail = image
+  }
+
+  nonisolated private static func generateVideoThumbnail(for url: URL) async -> UIImage? {
+    await Task.detached(priority: .utility) {
+      let asset = AVURLAsset(url: url)
+      let generator = AVAssetImageGenerator(asset: asset)
+      generator.appliesPreferredTrackTransform = true
+      generator.maximumSize = CGSize(width: 900, height: 900)
+      let time = CMTime(seconds: 0.2, preferredTimescale: 600)
+      guard let cgImage = try? generator.copyCGImage(at: time, actualTime: nil) else {
+        return nil
+      }
+      return UIImage(cgImage: cgImage)
+    }.value
   }
 
   @MainActor
@@ -531,17 +568,17 @@ private struct MIRAFillVideoPlayer: UIViewRepresentable {
 
   func makeUIView(context: Context) -> PlayerView {
     let view = PlayerView()
-    view.backgroundColor = .black
+    view.backgroundColor = .clear
     view.playerLayer.player = player
-    view.playerLayer.backgroundColor = UIColor.black.cgColor
+    view.playerLayer.backgroundColor = UIColor.clear.cgColor
     view.playerLayer.videoGravity = .resizeAspectFill
     return view
   }
 
   func updateUIView(_ uiView: PlayerView, context: Context) {
-    uiView.backgroundColor = .black
+    uiView.backgroundColor = .clear
     uiView.playerLayer.player = player
-    uiView.playerLayer.backgroundColor = UIColor.black.cgColor
+    uiView.playerLayer.backgroundColor = UIColor.clear.cgColor
     uiView.playerLayer.videoGravity = .resizeAspectFill
   }
 
@@ -556,12 +593,12 @@ private struct MIRAFillVideoPlayer: UIViewRepresentable {
 
     override init(frame: CGRect) {
       super.init(frame: frame)
-      backgroundColor = .black
+      backgroundColor = .clear
     }
 
     required init?(coder: NSCoder) {
       super.init(coder: coder)
-      backgroundColor = .black
+      backgroundColor = .clear
     }
   }
 }
@@ -597,7 +634,7 @@ public struct MIRAAdaptiveMediaView: View {
         RemoteMediaView(url: url, isVideo: false, contentMode: singleImageContentMode)
           .frame(maxWidth: .infinity)
           .frame(height: maxSingleImageHeight)
-          .background(MIRATheme.Color.surfaceSoft)
+          .background(Color.clear)
       } else {
         TabView(selection: $selectedIndex) {
           ForEach(Array(urls.enumerated()), id: \.offset) { index, url in
@@ -609,7 +646,7 @@ public struct MIRAAdaptiveMediaView: View {
         .tabViewStyle(.page(indexDisplayMode: urls.count > 1 ? .automatic : .never))
         .frame(maxWidth: .infinity)
         .frame(height: carouselHeight)
-        .background(urls.contains { $0.isVideoURL } ? Color.black : MIRATheme.Color.surfaceSoft)
+        .background(Color.clear)
         .onChange(of: urls) { _, _ in selectedIndex = 0 }
       }
     }
@@ -669,7 +706,7 @@ public enum MIRAMediaSizing {
     let ideal = feedHeight(for: urls, aspectRatios: aspectRatios, width: width)
     // Detail pages need room for the title/caption and the fixed action/comment bar.
     // Tall 9:16 media is still displayed large, but it cannot push controls off-screen.
-    let readableDetailHeight = UIScreen.main.bounds.height * 0.52
+    let readableDetailHeight = UIScreen.main.bounds.height * 0.48
     return min(ideal, readableDetailHeight)
   }
 
@@ -685,7 +722,7 @@ public enum MIRAMediaSizing {
   }
 
   private static func dimensionsRatio(in value: String) -> CGFloat? {
-    let pattern = #"(?<!\d)(\d{3,5})[xX](\d{3,5})(?!\d)"#
+    let pattern = #"(?<!\d)(\d{3,5})\s*[xX×]\s*(\d{3,5})(?!\d)"#
     guard let expression = try? NSRegularExpression(pattern: pattern) else { return nil }
     let range = NSRange(value.startIndex..<value.endIndex, in: value)
     guard let match = expression.firstMatch(in: value, range: range), match.numberOfRanges == 3 else { return nil }
@@ -721,7 +758,7 @@ public enum MIRAMediaSizing {
   private static func containsRatio(_ width: String, _ height: String, in value: String) -> Bool {
     let escapedWidth = NSRegularExpression.escapedPattern(for: width)
     let escapedHeight = NSRegularExpression.escapedPattern(for: height)
-    let pattern = #"(?<![\d.])\#(escapedWidth)\s*[:x]\s*\#(escapedHeight)(?![\d.])"#
+    let pattern = #"(?<![\d.])\#(escapedWidth)\s*[:x×]\s*\#(escapedHeight)(?![\d.])"#
     guard let expression = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
       return false
     }
@@ -759,5 +796,12 @@ extension String {
   var isVideoURL: Bool {
     let lower = lowercased()
     return lower.contains(".mp4") || lower.contains(".mov") || lower.contains(".m3u8") || lower.contains("stream")
+  }
+}
+
+private extension URL {
+  var isPlayableFileOrRemoteVideo: Bool {
+    guard let scheme else { return false }
+    return scheme.hasPrefix("http") || scheme == "file"
   }
 }

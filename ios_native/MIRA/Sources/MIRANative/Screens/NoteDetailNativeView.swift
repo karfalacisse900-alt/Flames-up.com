@@ -66,44 +66,41 @@ public struct NoteDetailNativeView: View {
   @State private var draft = ""
   @State private var showMenu = false
   @FocusState private var replyFocused: Bool
-  private var horizontalInset: CGFloat { MIRATheme.Space.md }
-  private var contentWidth: CGFloat { max(0, UIScreen.main.bounds.width - horizontalInset * 2) }
-
-  private var mediaHeight: CGFloat {
-    if let media = model.note.mediaUrl, !media.isEmpty {
-      return min(MIRAMediaSizing.feedHeight(for: [media], width: contentWidth), UIScreen.main.bounds.height * 0.40)
-    }
-    return 0
-  }
+  private let horizontalInset: CGFloat = MIRATheme.Space.md
 
   public init(note: MIRANote, api: MIRAAPIClient) {
     _model = StateObject(wrappedValue: NoteDetailNativeModel(note: note, api: api))
   }
 
   public var body: some View {
-    ScrollView {
-      VStack(alignment: .leading, spacing: 0) {
-        topBar
-        noteHeader
-          .padding(.top, 14)
-        noteBody
-          .padding(.top, 12)
-        noteActions
-          .padding(.top, 14)
-        Rectangle()
-          .fill(MIRATheme.Color.hairline.opacity(0.62))
-          .frame(height: 0.7)
-          .padding(.top, 16)
-        commentsList
-          .padding(.top, 18)
+    GeometryReader { proxy in
+      let contentWidth = max(0, proxy.size.width - horizontalInset * 2)
+      ZStack(alignment: .bottom) {
+        ScrollView {
+          VStack(alignment: .leading, spacing: 0) {
+            topBar
+            noteHeader
+              .padding(.top, 14)
+            noteBody(contentWidth: contentWidth)
+              .padding(.top, 12)
+            noteActions
+              .padding(.top, 14)
+            Rectangle()
+              .fill(MIRATheme.Color.hairline.opacity(0.62))
+              .frame(height: 0.7)
+              .padding(.top, 16)
+            commentsList
+              .padding(.top, 18)
+          }
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .padding(.horizontal, horizontalInset)
+          .padding(.top, 8)
+          .padding(.bottom, 108)
+        }
+        .scrollIndicators(.hidden)
+
+        replyBar(horizontalInset: horizontalInset)
       }
-      .frame(width: contentWidth, alignment: .leading)
-      .padding(.horizontal, horizontalInset)
-      .padding(.top, 8)
-      .padding(.bottom, 96)
-    }
-    .safeAreaInset(edge: .bottom, spacing: 0) {
-      replyBar
     }
     .background(MIRATheme.Color.surface.ignoresSafeArea())
     .navigationBarBackButtonHidden(true)
@@ -166,16 +163,17 @@ public struct NoteDetailNativeView: View {
     }
   }
 
-  private var noteBody: some View {
+  private func noteBody(contentWidth: CGFloat) -> some View {
     VStack(alignment: .leading, spacing: 16) {
       Text(model.note.body ?? "")
         .font(.system(size: 20, weight: .regular))
         .foregroundStyle(MIRATheme.Color.textPrimary)
         .lineSpacing(4)
-        .frame(width: contentWidth, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .fixedSize(horizontal: false, vertical: true)
 
       if let media = model.note.mediaUrl, !media.isEmpty {
+        let mediaHeight = noteMediaHeight(for: media, width: contentWidth)
         MIRAAdaptiveMediaView(
           urls: [media],
           cornerRadius: 18,
@@ -186,6 +184,14 @@ public struct NoteDetailNativeView: View {
         .frame(width: contentWidth, height: mediaHeight)
       }
     }
+  }
+
+  private func noteMediaHeight(for media: String, width: CGFloat) -> CGFloat {
+    guard width > 0 else { return 0 }
+    let ideal = MIRAMediaSizing.feedHeight(for: [media], width: width)
+    let lower = width * 0.54
+    let upper = min(width * 0.80, UIScreen.main.bounds.height * 0.42)
+    return min(max(ideal, lower), upper)
   }
 
   private var noteActions: some View {
@@ -209,7 +215,7 @@ public struct NoteDetailNativeView: View {
     }
   }
 
-  private var replyBar: some View {
+  private func replyBar(horizontalInset: CGFloat) -> some View {
     HStack(spacing: MIRATheme.Space.sm) {
       RemoteAvatar(url: model.note.user?.profileImage, size: 34)
       TextField("Add your reply...", text: $draft, axis: .vertical)

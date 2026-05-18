@@ -126,12 +126,40 @@ public struct MIRAMediaDimension: Codable, Hashable {
   public let format: String?
   public let type: String?
 
+  enum CodingKeys: String, CodingKey {
+    case width
+    case height
+    case ratio
+    case aspectRatio
+    case aspectRatioSnake = "aspect_ratio"
+    case format
+    case type
+  }
+
   public init(width: Double?, height: Double?, ratio: Double?, format: String?, type: String?) {
     self.width = width
     self.height = height
     self.ratio = ratio
     self.format = format
     self.type = type
+  }
+
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    width = Self.decodeDouble(container, keys: [.width])
+    height = Self.decodeDouble(container, keys: [.height])
+    ratio = Self.decodeDouble(container, keys: [.ratio, .aspectRatio, .aspectRatioSnake])
+    format = try? container.decodeIfPresent(String.self, forKey: .format)
+    type = try? container.decodeIfPresent(String.self, forKey: .type)
+  }
+
+  public func encode(to encoder: Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encodeIfPresent(width, forKey: .width)
+    try container.encodeIfPresent(height, forKey: .height)
+    try container.encodeIfPresent(ratio, forKey: .ratio)
+    try container.encodeIfPresent(format, forKey: .format)
+    try container.encodeIfPresent(type, forKey: .type)
   }
 
   public var heightToWidthRatio: CGFloat? {
@@ -145,6 +173,22 @@ public struct MIRAMediaDimension: Codable, Hashable {
       return CGFloat(1 / ratio)
     }
     return MIRAMediaSizing.heightToWidthRatio(forFormat: format)
+  }
+
+  private static func decodeDouble(_ container: KeyedDecodingContainer<CodingKeys>, keys: [CodingKeys]) -> Double? {
+    for key in keys {
+      if let value = try? container.decodeIfPresent(Double.self, forKey: key) {
+        return value
+      }
+      if let intValue = try? container.decodeIfPresent(Int.self, forKey: key) {
+        return Double(intValue)
+      }
+      if let string = try? container.decodeIfPresent(String.self, forKey: key),
+         let value = Double(string.trimmingCharacters(in: .whitespacesAndNewlines)) {
+        return value
+      }
+    }
+    return nil
   }
 }
 
