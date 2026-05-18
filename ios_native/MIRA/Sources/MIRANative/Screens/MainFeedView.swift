@@ -124,6 +124,8 @@ public struct MainFeedView: View {
   @State private var activeVideoPostID: String?
   @State private var isHeaderHidden = false
   @State private var previousScrollMinY: CGFloat?
+  @State private var scrollIntentDistance: CGFloat = 0
+  @State private var scrollIntentDirection = 0
 
   public init(api: MIRAAPIClient) {
     _model = StateObject(wrappedValue: MainFeedModel(api: api))
@@ -134,7 +136,7 @@ public struct MainFeedView: View {
       ZStack(alignment: .top) {
         ScrollView {
           GeometryReader { proxy in
-            Color.clear.preference(key: MainFeedScrollOffsetPreferenceKey.self, value: proxy.frame(in: .global).minY)
+            Color.clear.preference(key: MainFeedScrollOffsetPreferenceKey.self, value: proxy.frame(in: .named("mainFeedScroll")).minY)
           }
           .frame(height: 0)
 
@@ -159,13 +161,13 @@ public struct MainFeedView: View {
           }
           .padding(.bottom, MIRATheme.Space.xxl)
         }
+        .coordinateSpace(name: "mainFeedScroll")
 
         mainHeader
-          .padding(.top, 1)
-          .offset(y: isHeaderHidden ? -58 : 0)
+          .offset(y: isHeaderHidden ? -54 : 0)
           .opacity(isHeaderHidden ? 0 : 1)
           .allowsHitTesting(!isHeaderHidden)
-          .animation(.smooth(duration: 0.26), value: isHeaderHidden)
+          .animation(.snappy(duration: 0.30, extraBounce: 0.02), value: isHeaderHidden)
       }
       .background(MIRATheme.Color.appBackground)
       .toolbar(.hidden, for: .navigationBar)
@@ -186,13 +188,25 @@ public struct MainFeedView: View {
 
     let delta = minY - previousScrollMinY
     self.previousScrollMinY = minY
-    guard abs(delta) > 14 else { return }
+    guard abs(delta) > 2 else { return }
 
-    if minY > -2 {
+    if minY > -18 {
       isHeaderHidden = false
-    } else if delta < 0 {
+      scrollIntentDistance = 0
+      scrollIntentDirection = 0
+      return
+    }
+
+    let direction = delta < 0 ? 1 : -1
+    if direction != scrollIntentDirection {
+      scrollIntentDirection = direction
+      scrollIntentDistance = 0
+    }
+    scrollIntentDistance += abs(delta)
+
+    if direction == 1 && scrollIntentDistance > 42 {
       isHeaderHidden = true
-    } else if delta > 0 {
+    } else if direction == -1 && scrollIntentDistance > 26 {
       isHeaderHidden = false
     }
   }
@@ -218,7 +232,7 @@ public struct MainFeedView: View {
       }
     }
     .padding(.horizontal, MIRATheme.Space.md)
-    .padding(.top, MIRATheme.Space.xs)
+    .padding(.top, 0)
   }
 }
 
@@ -231,7 +245,7 @@ private struct MainNativePostCard: View {
   let onFollow: () -> Void
 
   private var mediaHeight: CGFloat {
-    MIRAMediaSizing.feedHeight(for: post.mediaURLs)
+    MIRAMediaSizing.mainFeedHeight(for: post.mediaURLs)
   }
 
   var body: some View {

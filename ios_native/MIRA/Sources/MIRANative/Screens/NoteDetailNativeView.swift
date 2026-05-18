@@ -61,13 +61,12 @@ final class NoteDetailNativeModel: ObservableObject {
 }
 
 public struct NoteDetailNativeView: View {
-  @Environment(\.dismiss) private var dismiss
   @StateObject private var model: NoteDetailNativeModel
   @State private var draft = ""
   @State private var showMenu = false
   private var mediaHeight: CGFloat {
     if let media = model.note.mediaUrl, !media.isEmpty {
-      return min(MIRAMediaSizing.feedHeight(for: [media]), 520)
+      return min(MIRAMediaSizing.feedHeight(for: [media], width: UIScreen.main.bounds.width - 32), 430)
     }
     return 0
   }
@@ -78,8 +77,6 @@ public struct NoteDetailNativeView: View {
 
   public var body: some View {
     VStack(spacing: 0) {
-      noteDetailHeader
-
       ScrollView {
         VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
           HStack(spacing: MIRATheme.Space.sm) {
@@ -106,7 +103,7 @@ public struct NoteDetailNativeView: View {
           }
 
           Text(model.note.body ?? "")
-            .font(.system(size: 18, weight: .semibold))
+            .font(.system(size: 17, weight: .semibold))
             .foregroundStyle(MIRATheme.Color.textPrimary)
             .lineSpacing(3)
 
@@ -137,12 +134,27 @@ public struct NoteDetailNativeView: View {
           }
         }
         .padding(MIRATheme.Space.md)
+        .padding(.top, MIRATheme.Space.xs)
       }
 
       replyBar
     }
     .background(MIRATheme.Color.appBackground)
-    .toolbar(.hidden, for: .navigationBar)
+    .navigationBarTitleDisplayMode(.inline)
+    .toolbar(.visible, for: .navigationBar)
+    .toolbar {
+      ToolbarItem(placement: .topBarTrailing) {
+        Button {
+          showMenu = true
+        } label: {
+          Image(systemName: "ellipsis")
+            .font(.system(size: 18, weight: .semibold))
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+            .frame(width: 40, height: 40)
+        }
+        .buttonStyle(.plain)
+      }
+    }
     .confirmationDialog("Note options", isPresented: $showMenu) {
       Button("Not interested", role: .destructive) {}
       Button("Report", role: .destructive) {
@@ -151,31 +163,6 @@ public struct NoteDetailNativeView: View {
       Button("Cancel", role: .cancel) {}
     }
     .task { await model.load() }
-  }
-
-  private var noteDetailHeader: some View {
-    HStack {
-      Button(action: { dismiss() }) {
-        Image(systemName: "chevron.left")
-          .font(.system(size: 25, weight: .semibold))
-          .foregroundStyle(MIRATheme.Color.textPrimary)
-          .frame(width: 44, height: 44)
-      }
-      .buttonStyle(.plain)
-      Spacer()
-      Button {
-        showMenu = true
-      } label: {
-        Image(systemName: "ellipsis")
-          .font(.system(size: 22, weight: .semibold))
-          .foregroundStyle(MIRATheme.Color.textPrimary)
-          .frame(width: 44, height: 44)
-      }
-      .buttonStyle(.plain)
-    }
-    .padding(.horizontal, MIRATheme.Space.md)
-    .padding(.top, MIRATheme.Space.xs)
-    .background(MIRATheme.Color.surface)
   }
 
   private var replyBar: some View {

@@ -90,21 +90,89 @@ public struct MIRAEmptyState: View {
   }
 }
 
+private final class MIRAImageMemoryCache {
+  static let shared = MIRAImageMemoryCache()
+  private let cache = NSCache<NSURL, UIImage>()
+
+  private init() {
+    cache.countLimit = 220
+    cache.totalCostLimit = 72 * 1024 * 1024
+  }
+
+  func image(for url: URL) -> UIImage? {
+    cache.object(forKey: url as NSURL)
+  }
+
+  func store(_ image: UIImage, for url: URL, cost: Int) {
+    cache.setObject(image, forKey: url as NSURL, cost: cost)
+  }
+}
+
+public struct MIRACachedImage<Content: View, Placeholder: View>: View {
+  let url: String?
+  let content: (Image) -> Content
+  let placeholder: () -> Placeholder
+  @State private var uiImage: UIImage?
+
+  public init(
+    url: String?,
+    @ViewBuilder content: @escaping (Image) -> Content,
+    @ViewBuilder placeholder: @escaping () -> Placeholder
+  ) {
+    self.url = url
+    self.content = content
+    self.placeholder = placeholder
+  }
+
+  public var body: some View {
+    Group {
+      if let uiImage {
+        content(Image(uiImage: uiImage))
+      } else {
+        placeholder()
+      }
+    }
+    .task(id: url) { await loadImage() }
+  }
+
+  @MainActor
+  private func loadImage() async {
+    uiImage = nil
+    guard let url, let remoteURL = URL(string: url) else { return }
+    if let cached = MIRAImageMemoryCache.shared.image(for: remoteURL) {
+      uiImage = cached
+      return
+    }
+
+    do {
+      var request = URLRequest(url: remoteURL)
+      request.cachePolicy = .returnCacheDataElseLoad
+      request.timeoutInterval = 20
+      let (data, response) = try await URLSession.shared.data(for: request)
+      let status = (response as? HTTPURLResponse)?.statusCode ?? 200
+      guard (200..<300).contains(status) else { return }
+      let decoded = UIImage(data: data)
+      guard !Task.isCancelled, let decoded else { return }
+      MIRAImageMemoryCache.shared.store(decoded, for: remoteURL, cost: data.count)
+      uiImage = decoded
+    } catch {
+      uiImage = nil
+    }
+  }
+}
+
 public struct RemoteAvatar: View {
   let url: String?
   let size: CGFloat
 
   public var body: some View {
-    AsyncImage(url: URL(string: url ?? "")) { phase in
-      switch phase {
-      case .success(let image):
-        image.resizable().scaledToFill()
-      default:
-        ZStack {
-          MIRATheme.Color.surfaceSoft
-          Image(systemName: "person.fill")
-            .foregroundStyle(MIRATheme.Color.textMuted)
-        }
+    MIRACachedImage(url: url) { image in
+      image.resizable().scaledToFill()
+    } placeholder: {
+      ZStack {
+        MIRATheme.Color.surfaceSoft
+        Image(systemName: "person.fill")
+          .foregroundStyle(MIRATheme.Color.textMuted)
       }
     }
     .frame(width: size, height: size)
@@ -158,18 +226,14 @@ public struct RemoteMediaView: View {
       if isVideo {
         MIRAResolvedVideoPlayer(url: url, shouldPlay: shouldPlay)
       } else {
-        AsyncImage(url: URL(string: url)) { phase in
-          switch phase {
-          case .success(let image):
-            image.resizable().aspectRatio(contentMode: contentMode)
-          case .failure:
-            placeholder
-          default:
-            placeholder.redacted(reason: .placeholder)
-          }
+        MIRACachedImage(url: url) { image in
+          image.resizable().aspectRatio(contentMode: contentMode)
+        } placeholder: {
+          placeholder.redacted(reason: .placeholder)
         }
       }
     }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
     .clipped()
     .transaction { transaction in
       transaction.animation = .easeInOut(duration: 0.18)
@@ -204,13 +268,10 @@ private struct MIRAResolvedVideoPlayer: View {
             removeLoopObserver()
           }
       } else if let thumbnailURL {
-        AsyncImage(url: URL(string: thumbnailURL)) { phase in
-          switch phase {
-          case .success(let image):
-            image.resizable().scaledToFill()
-          default:
-            placeholder
-          }
+        MIRACachedImage(url: thumbnailURL) { image in
+          image.resizable().scaledToFill()
+        } placeholder: {
+          placeholder
         }
       } else {
         placeholder
@@ -385,6 +446,7 @@ public struct MIRAAdaptiveMediaView: View {
         TabView(selection: $selectedIndex) {
           ForEach(Array(urls.enumerated()), id: \.offset) { index, url in
             RemoteMediaView(url: url, isVideo: url.isVideoURL, shouldPlay: shouldPlay && selectedIndex == index)
+              .frame(maxWidth: .infinity, maxHeight: .infinity)
               .tag(index)
           }
         }
@@ -421,6 +483,12 @@ public enum MIRAMediaSizing {
       height = width * 1.25
     }
     return min(height, UIScreen.main.bounds.height * 0.74)
+  }
+
+  public static func mainFeedHeight(for urls: [String], width: CGFloat = UIScreen.main.bounds.width) -> CGFloat {
+    let ideal = feedHeight(for: urls, width: width)
+    let visibleActionSafeHeight = UIScreen.main.bounds.height * 0.64
+    return min(ideal, visibleActionSafeHeight)
   }
 
   private static func dimensionsRatio(in value: String) -> CGFloat? {

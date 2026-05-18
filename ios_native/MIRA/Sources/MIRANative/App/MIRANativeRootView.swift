@@ -53,6 +53,7 @@ public struct MIRANativeRootView: View {
         .toolbarBackground(MIRATheme.Color.surface, for: .tabBar)
         .toolbarBackground(.visible, for: .tabBar)
         .background(MIRATheme.Color.appBackground)
+        .statusBarHidden(selectedTab == .main)
       }
     }
     .task { await authSession.bootstrap(api: api) }
