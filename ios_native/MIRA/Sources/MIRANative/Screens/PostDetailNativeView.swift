@@ -88,7 +88,7 @@ public struct PostDetailNativeView: View {
   @Environment(\.dismiss) private var dismiss
   @StateObject private var model: PostDetailModel
   @State private var draft = ""
-  private var mediaHeight: CGFloat { MIRAMediaSizing.feedHeight(for: model.post.mediaURLs) }
+  private var mediaHeight: CGFloat { MIRAMediaSizing.detailHeight(for: model.post.mediaURLs) }
 
   public init(post: MIRAPost, api: MIRAAPIClient) {
     _model = StateObject(wrappedValue: PostDetailModel(post: post, api: api))

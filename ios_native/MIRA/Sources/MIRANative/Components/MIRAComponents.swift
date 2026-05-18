@@ -516,8 +516,16 @@ public enum MIRAMediaSizing {
 
   public static func mainFeedHeight(for urls: [String], width: CGFloat = UIScreen.main.bounds.width) -> CGFloat {
     let ideal = feedHeight(for: urls, width: width)
-    let visibleActionSafeHeight = UIScreen.main.bounds.height * 0.64
+    // Keep the feed action row visible for tall 9:16 posts instead of letting media
+    // consume the whole viewport.
+    let visibleActionSafeHeight = UIScreen.main.bounds.height * 0.56
     return min(ideal, visibleActionSafeHeight)
+  }
+
+  public static func detailHeight(for urls: [String], width: CGFloat = UIScreen.main.bounds.width) -> CGFloat {
+    let ideal = feedHeight(for: urls, width: width)
+    let readableDetailHeight = UIScreen.main.bounds.height * 0.62
+    return min(ideal, readableDetailHeight)
   }
 
   private static func dimensionsRatio(in value: String) -> CGFloat? {
