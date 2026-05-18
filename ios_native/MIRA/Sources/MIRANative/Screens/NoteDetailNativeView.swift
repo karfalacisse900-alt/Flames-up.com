@@ -66,10 +66,12 @@ public struct NoteDetailNativeView: View {
   @State private var draft = ""
   @State private var showMenu = false
   @FocusState private var replyFocused: Bool
+  private var horizontalInset: CGFloat { MIRATheme.Space.md }
+  private var contentWidth: CGFloat { max(0, UIScreen.main.bounds.width - horizontalInset * 2) }
+
   private var mediaHeight: CGFloat {
     if let media = model.note.mediaUrl, !media.isEmpty {
-      let width = UIScreen.main.bounds.width - (MIRATheme.Space.md * 2)
-      return min(MIRAMediaSizing.feedHeight(for: [media], width: width), UIScreen.main.bounds.height * 0.43)
+      return min(MIRAMediaSizing.feedHeight(for: [media], width: contentWidth), UIScreen.main.bounds.height * 0.40)
     }
     return 0
   }
@@ -83,21 +85,22 @@ public struct NoteDetailNativeView: View {
       VStack(alignment: .leading, spacing: 0) {
         topBar
         noteHeader
-          .padding(.top, 18)
-        noteBody
           .padding(.top, 14)
+        noteBody
+          .padding(.top, 12)
         noteActions
-          .padding(.top, 16)
+          .padding(.top, 14)
         Rectangle()
           .fill(MIRATheme.Color.hairline.opacity(0.62))
           .frame(height: 0.7)
-          .padding(.top, 18)
+          .padding(.top, 16)
         commentsList
-          .padding(.top, 20)
+          .padding(.top, 18)
       }
-      .padding(.horizontal, MIRATheme.Space.md)
+      .frame(width: contentWidth, alignment: .leading)
+      .padding(.horizontal, horizontalInset)
       .padding(.top, 8)
-      .padding(.bottom, 104)
+      .padding(.bottom, 96)
     }
     .safeAreaInset(edge: .bottom, spacing: 0) {
       replyBar
@@ -122,7 +125,7 @@ public struct NoteDetailNativeView: View {
         dismiss()
       } label: {
         Image(systemName: "chevron.left")
-          .font(.system(size: 30, weight: .semibold))
+          .font(.system(size: 28, weight: .semibold))
           .foregroundStyle(MIRATheme.Color.textPrimary)
           .frame(width: 48, height: 48, alignment: .leading)
       }
@@ -134,7 +137,7 @@ public struct NoteDetailNativeView: View {
         showMenu = true
       } label: {
         Image(systemName: "ellipsis")
-          .font(.system(size: 23, weight: .bold))
+          .font(.system(size: 22, weight: .bold))
           .foregroundStyle(MIRATheme.Color.textPrimary)
           .frame(width: 48, height: 48, alignment: .trailing)
       }
@@ -143,20 +146,20 @@ public struct NoteDetailNativeView: View {
   }
 
   private var noteHeader: some View {
-    HStack(spacing: 12) {
+    HStack(spacing: 10) {
       Button(action: { Task { await model.followAuthor() } }) {
-        MIRAFollowAvatar(url: model.note.user?.profileImage, size: 52)
+        MIRAFollowAvatar(url: model.note.user?.profileImage, size: 46)
       }
       .buttonStyle(.plain)
 
       Text(model.note.user?.displayName ?? "mira")
-        .font(.system(size: 22, weight: .semibold))
+        .font(.system(size: 20, weight: .semibold))
         .foregroundStyle(MIRATheme.Color.textPrimary)
         .lineLimit(1)
         .minimumScaleFactor(0.82)
 
       Text(noteAge(model.note.createdAt))
-        .font(.system(size: 19, weight: .semibold))
+        .font(.system(size: 17, weight: .semibold))
         .foregroundStyle(MIRATheme.Color.textMuted)
 
       Spacer()
@@ -166,9 +169,10 @@ public struct NoteDetailNativeView: View {
   private var noteBody: some View {
     VStack(alignment: .leading, spacing: 16) {
       Text(model.note.body ?? "")
-        .font(.system(size: 23, weight: .regular))
+        .font(.system(size: 20, weight: .regular))
         .foregroundStyle(MIRATheme.Color.textPrimary)
         .lineSpacing(4)
+        .frame(width: contentWidth, alignment: .leading)
         .fixedSize(horizontal: false, vertical: true)
 
       if let media = model.note.mediaUrl, !media.isEmpty {
@@ -179,7 +183,7 @@ public struct NoteDetailNativeView: View {
           carouselHeight: mediaHeight,
           singleImageContentMode: .fill
         )
-        .frame(maxWidth: .infinity, minHeight: mediaHeight, maxHeight: mediaHeight)
+        .frame(width: contentWidth, height: mediaHeight)
       }
     }
   }
@@ -207,24 +211,26 @@ public struct NoteDetailNativeView: View {
 
   private var replyBar: some View {
     HStack(spacing: MIRATheme.Space.sm) {
-      RemoteAvatar(url: model.note.user?.profileImage, size: 38)
+      RemoteAvatar(url: model.note.user?.profileImage, size: 34)
       TextField("Add your reply...", text: $draft, axis: .vertical)
-        .font(.system(size: 18, weight: .semibold))
+        .font(.system(size: 16, weight: .semibold))
         .foregroundStyle(MIRATheme.Color.textPrimary)
         .focused($replyFocused)
+        .lineLimit(1...3)
+        .layoutPriority(1)
       Button {} label: {
         Image(systemName: "photo")
-          .font(.system(size: 24, weight: .semibold))
+          .font(.system(size: 22, weight: .semibold))
           .foregroundStyle(MIRATheme.Color.textPrimary)
-          .frame(width: 42, height: 42)
+          .frame(width: 36, height: 38)
       }
       .buttonStyle(.plain)
       Button {} label: {
         Text("GIF")
-          .font(.system(size: 18, weight: .heavy))
+          .font(.system(size: 16, weight: .heavy))
           .foregroundStyle(MIRATheme.Color.textPrimary)
-          .frame(width: 54, height: 42)
-          .overlay(Capsule().stroke(MIRATheme.Color.textPrimary, lineWidth: 3))
+          .frame(width: 46, height: 38)
+          .overlay(Capsule().stroke(MIRATheme.Color.textPrimary, lineWidth: 2.5))
       }
       .buttonStyle(.plain)
       Button {
@@ -233,18 +239,19 @@ public struct NoteDetailNativeView: View {
         Task { await model.sendReply(text) }
       } label: {
         Image(systemName: "arrow.up")
-          .font(.system(size: 25, weight: .bold))
+          .font(.system(size: 23, weight: .bold))
           .foregroundStyle(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? MIRATheme.Color.textMuted.opacity(0.55) : MIRATheme.Color.forest)
-          .frame(width: 38, height: 42)
+          .frame(width: 34, height: 38)
       }
       .buttonStyle(.plain)
       .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
-    .padding(.horizontal, MIRATheme.Space.md)
-    .frame(height: 62)
+    .padding(.horizontal, 12)
+    .frame(height: 58)
+    .frame(maxWidth: .infinity)
     .background(MIRATheme.Color.surfaceSoft.opacity(0.82))
     .clipShape(Capsule())
-    .padding(.horizontal, MIRATheme.Space.md)
+    .padding(.horizontal, horizontalInset)
     .padding(.top, 8)
     .padding(.bottom, MIRATheme.Space.sm)
     .background(MIRATheme.Color.surface.opacity(0.98))
@@ -268,12 +275,12 @@ private struct NoteDetailAction: View {
 
   var body: some View {
     Button(action: action) {
-      HStack(spacing: 8) {
+      HStack(spacing: 7) {
         Image(systemName: systemImage)
-          .font(.system(size: 28, weight: .regular))
+          .font(.system(size: 25, weight: .regular))
           .foregroundStyle(tint)
         Text("\(value)")
-          .font(.system(size: 19, weight: .medium))
+          .font(.system(size: 17, weight: .medium))
           .foregroundStyle(MIRATheme.Color.textSecondary)
       }
       .frame(minHeight: 40)
@@ -286,33 +293,37 @@ private struct NoteReplyRowNative: View {
   let comment: MIRAComment
 
   var body: some View {
-    HStack(alignment: .top, spacing: 14) {
-      RemoteAvatar(url: comment.user?.profileImage, size: 46)
+    HStack(alignment: .top, spacing: 12) {
+      RemoteAvatar(url: comment.user?.profileImage, size: 42)
       VStack(alignment: .leading, spacing: 5) {
         Text(comment.user?.displayName ?? "user")
-          .font(.system(size: 18, weight: .semibold))
+          .font(.system(size: 16, weight: .semibold))
           .foregroundStyle(MIRATheme.Color.textMuted)
+          .lineLimit(1)
         Text(comment.text)
-          .font(.system(size: 19, weight: .regular))
+          .font(.system(size: 17, weight: .regular))
           .foregroundStyle(MIRATheme.Color.textPrimary)
           .lineSpacing(3)
+          .fixedSize(horizontal: false, vertical: true)
         HStack(spacing: 26) {
           Text(noteAge(comment.createdAt))
           Text("Reply")
         }
-        .font(.system(size: 16, weight: .semibold))
+        .font(.system(size: 15, weight: .semibold))
         .foregroundStyle(MIRATheme.Color.textMuted)
       }
+      .frame(maxWidth: .infinity, alignment: .leading)
       Spacer()
       HStack(spacing: 6) {
         Image(systemName: comment.likedByMe == true ? "heart.fill" : "heart")
-          .font(.system(size: 27, weight: .regular))
+          .font(.system(size: 24, weight: .regular))
           .foregroundStyle(comment.likedByMe == true ? MIRATheme.Color.like : MIRATheme.Color.textSecondary)
         Text("\(comment.likesCount ?? 0)")
-          .font(.system(size: 17, weight: .medium))
+          .font(.system(size: 15, weight: .medium))
           .foregroundStyle(MIRATheme.Color.textSecondary)
       }
-      .frame(minWidth: 58, minHeight: 46)
+      .frame(width: 52)
+      .frame(minHeight: 42)
     }
   }
 }

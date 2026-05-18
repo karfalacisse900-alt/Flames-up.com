@@ -90,7 +90,10 @@ public struct PostDetailNativeView: View {
   @State private var draft = ""
   private var mediaHeight: CGFloat {
     let maxHeight = max(320, UIScreen.main.bounds.height - 390)
-    return min(MIRAMediaSizing.detailHeight(for: model.post.mediaURLs), maxHeight)
+    return min(
+      MIRAMediaSizing.detailHeight(for: model.post.mediaURLs, aspectRatios: model.post.mediaHeightToWidthRatios),
+      maxHeight
+    )
   }
 
   public init(post: MIRAPost, api: MIRAAPIClient) {

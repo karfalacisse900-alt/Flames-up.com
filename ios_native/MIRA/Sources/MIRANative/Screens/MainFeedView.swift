@@ -327,7 +327,7 @@ private struct MainNativePostCard: View {
   let onFollow: () -> Void
 
   private var mediaHeight: CGFloat {
-    MIRAMediaSizing.mainFeedHeight(for: post.mediaURLs)
+    MIRAMediaSizing.mainFeedHeight(for: post.mediaURLs, aspectRatios: post.mediaHeightToWidthRatios)
   }
 
   private var cardWidth: CGFloat {

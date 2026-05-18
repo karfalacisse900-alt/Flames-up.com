@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 
 public struct MIRAUser: Codable, Identifiable, Hashable {
   public let id: String
@@ -27,6 +28,7 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
   public let image: String?
   public let images: FlexibleStringArray?
   public let mediaTypes: FlexibleStringArray?
+  public let mediaDimensions: FlexibleMediaDimensions?
   public let createdAt: String?
   public let likesCount: Int?
   public let commentsCount: Int?
@@ -66,6 +68,10 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
     return urls.filter { seen.insert($0).inserted }
   }
 
+  public var mediaHeightToWidthRatios: [CGFloat] {
+    mediaDimensions?.values.compactMap(\.heightToWidthRatio) ?? []
+  }
+
   public var viewerSaved: Bool {
     if let isSaved { return isSaved }
     return saved?.value == true
@@ -96,6 +102,7 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
       image: image,
       images: images,
       mediaTypes: mediaTypes,
+      mediaDimensions: mediaDimensions,
       createdAt: createdAt,
       likesCount: likesCount ?? self.likesCount,
       commentsCount: commentsCount ?? self.commentsCount,
@@ -109,6 +116,35 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
       following: self.following,
       followed: self.followed
     )
+  }
+}
+
+public struct MIRAMediaDimension: Codable, Hashable {
+  public let width: Double?
+  public let height: Double?
+  public let ratio: Double?
+  public let format: String?
+  public let type: String?
+
+  public init(width: Double?, height: Double?, ratio: Double?, format: String?, type: String?) {
+    self.width = width
+    self.height = height
+    self.ratio = ratio
+    self.format = format
+    self.type = type
+  }
+
+  public var heightToWidthRatio: CGFloat? {
+    let widthValue = width ?? 0
+    let heightValue = height ?? 0
+    if widthValue > 0, heightValue > 0 {
+      return CGFloat(heightValue / widthValue)
+    }
+    if let ratio, ratio > 0 {
+      // Backend/frontend stores ratio as width / height. Feed sizing needs height / width.
+      return CGFloat(1 / ratio)
+    }
+    return MIRAMediaSizing.heightToWidthRatio(forFormat: format)
   }
 }
 
@@ -302,6 +338,7 @@ public struct CreatePostBody: Encodable {
   public let image: String?
   public let images: [String]
   public let mediaTypes: [String]
+  public let mediaDimensions: [MIRAMediaDimension]
   public let visibility: String
   public let clientRequestId: String
 }
@@ -402,6 +439,36 @@ public struct FlexibleStringArray: Codable, Hashable {
         values = [string]
       }
       return
+    }
+    values = []
+  }
+
+  public func encode(to encoder: Encoder) throws {
+    var container = encoder.singleValueContainer()
+    try container.encode(values)
+  }
+}
+
+public struct FlexibleMediaDimensions: Codable, Hashable {
+  public let values: [MIRAMediaDimension]
+
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.singleValueContainer()
+    if let array = try? container.decode([MIRAMediaDimension].self) {
+      values = array
+      return
+    }
+    if let string = try? container.decode(String.self) {
+      let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+      if trimmed.isEmpty {
+        values = []
+        return
+      }
+      if let data = trimmed.data(using: .utf8),
+         let decoded = try? JSONDecoder().decode([MIRAMediaDimension].self, from: data) {
+        values = decoded
+        return
+      }
     }
     values = []
   }

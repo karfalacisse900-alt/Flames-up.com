@@ -690,9 +690,11 @@ public struct CreatePostNativeView: View {
       let uploader = MIRAMediaUploadService(api: api)
       var uploaded: [String] = []
       var mediaTypes: [String] = []
+      var mediaDimensions: [MIRAMediaDimension] = []
       for item in mediaItems {
         uploaded.append(try await uploader.upload(item))
         mediaTypes.append(item.kind.rawValue)
+        mediaDimensions.append(await item.mediaDimension())
       }
       let body = CreatePostBody(
         title: title,
@@ -700,6 +702,7 @@ public struct CreatePostNativeView: View {
         image: uploaded.first,
         images: uploaded,
         mediaTypes: mediaTypes,
+        mediaDimensions: mediaDimensions,
         visibility: "public",
         clientRequestId: UUID().uuidString
       )

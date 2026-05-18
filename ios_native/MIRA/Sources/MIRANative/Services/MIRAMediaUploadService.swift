@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import UIKit
 import UniformTypeIdentifiers
@@ -18,6 +19,60 @@ public struct MIRAPickedMedia: Hashable {
     self.kind = kind
     self.fileName = fileName
     self.mimeType = mimeType
+  }
+
+  public func mediaDimension() async -> MIRAMediaDimension {
+    let size: CGSize?
+    switch kind {
+    case .image:
+      size = UIImage(data: data)?.size
+    case .video:
+      size = await videoNaturalSize()
+    }
+
+    guard let size, size.width > 0, size.height > 0 else {
+      return MIRAMediaDimension(width: nil, height: nil, ratio: nil, format: nil, type: kind.rawValue)
+    }
+
+    let width = Double(size.width)
+    let height = Double(size.height)
+    return MIRAMediaDimension(
+      width: width,
+      height: height,
+      ratio: width / height,
+      format: Self.mediaFormat(width: width, height: height),
+      type: kind.rawValue
+    )
+  }
+
+  private func videoNaturalSize() async -> CGSize? {
+    let ext = URL(fileURLWithPath: fileName).pathExtension.isEmpty ? "mov" : URL(fileURLWithPath: fileName).pathExtension
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).\(ext)")
+    do {
+      try data.write(to: url, options: .atomic)
+      defer { try? FileManager.default.removeItem(at: url) }
+      let asset = AVURLAsset(url: url)
+      let tracks = try await asset.loadTracks(withMediaType: .video)
+      guard let track = tracks.first else { return nil }
+      let naturalSize = try await track.load(.naturalSize)
+      let transform = try await track.load(.preferredTransform)
+      let transformed = naturalSize.applying(transform)
+      return CGSize(width: abs(transformed.width), height: abs(transformed.height))
+    } catch {
+      try? FileManager.default.removeItem(at: url)
+      return nil
+    }
+  }
+
+  private static func mediaFormat(width: Double, height: Double) -> String {
+    guard width > 0, height > 0 else { return "" }
+    let ratio = width / height
+    if abs(ratio - 1.91) <= 0.08 { return "1.91:1" }
+    if abs(ratio - (16.0 / 9.0)) <= 0.08 { return "16:9" }
+    if abs(ratio - 1.0) <= 0.06 { return "1:1" }
+    if abs(ratio - (4.0 / 5.0)) <= 0.07 { return "4:5" }
+    if abs(ratio - (9.0 / 16.0)) <= 0.07 { return "9:16" }
+    return ratio > 1 ? "landscape" : "portrait"
   }
 }
 

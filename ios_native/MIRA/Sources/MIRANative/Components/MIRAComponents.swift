@@ -283,6 +283,7 @@ public struct RemoteMediaView: View {
     Group {
       if isVideo {
         MIRAResolvedVideoPlayer(url: url, shouldPlay: shouldPlay)
+          .background(Color.black)
       } else {
         MIRACachedImage(url: url) { image in
           image.resizable().aspectRatio(contentMode: contentMode)
@@ -363,7 +364,7 @@ private struct MIRAResolvedVideoPlayer: View {
 
   private var placeholder: some View {
     ZStack {
-      MIRATheme.Color.surfaceSoft
+      Color.black
       ProgressView().tint(MIRATheme.Color.textMuted)
     }
   }
@@ -530,13 +531,17 @@ private struct MIRAFillVideoPlayer: UIViewRepresentable {
 
   func makeUIView(context: Context) -> PlayerView {
     let view = PlayerView()
+    view.backgroundColor = .black
     view.playerLayer.player = player
+    view.playerLayer.backgroundColor = UIColor.black.cgColor
     view.playerLayer.videoGravity = .resizeAspectFill
     return view
   }
 
   func updateUIView(_ uiView: PlayerView, context: Context) {
+    uiView.backgroundColor = .black
     uiView.playerLayer.player = player
+    uiView.playerLayer.backgroundColor = UIColor.black.cgColor
     uiView.playerLayer.videoGravity = .resizeAspectFill
   }
 
@@ -547,6 +552,16 @@ private struct MIRAFillVideoPlayer: UIViewRepresentable {
 
     var playerLayer: AVPlayerLayer {
       layer as! AVPlayerLayer
+    }
+
+    override init(frame: CGRect) {
+      super.init(frame: frame)
+      backgroundColor = .black
+    }
+
+    required init?(coder: NSCoder) {
+      super.init(coder: coder)
+      backgroundColor = .black
     }
   }
 }
@@ -594,7 +609,7 @@ public struct MIRAAdaptiveMediaView: View {
         .tabViewStyle(.page(indexDisplayMode: urls.count > 1 ? .automatic : .never))
         .frame(maxWidth: .infinity)
         .frame(height: carouselHeight)
-        .background(MIRATheme.Color.surfaceSoft)
+        .background(urls.contains { $0.isVideoURL } ? Color.black : MIRATheme.Color.surfaceSoft)
         .onChange(of: urls) { _, _ in selectedIndex = 0 }
       }
     }
@@ -603,10 +618,18 @@ public struct MIRAAdaptiveMediaView: View {
 }
 
 public enum MIRAMediaSizing {
-  public static func feedHeight(for urls: [String], width: CGFloat = UIScreen.main.bounds.width) -> CGFloat {
+  public static func feedHeight(
+    for urls: [String],
+    aspectRatios: [CGFloat] = [],
+    width: CGFloat = UIScreen.main.bounds.width
+  ) -> CGFloat {
+    if let ratio = aspectRatios.first(where: { $0.isFinite && $0 > 0 }) {
+      return boundedHeight(width * ratio, width: width)
+    }
+
     let lowercased = urls.map { $0.lowercased() }
-    if let ratio = lowercased.compactMap({ dimensionsRatio(in: $0) }).first {
-      return min(width * ratio, UIScreen.main.bounds.height * 0.74)
+    if let ratio = lowercased.compactMap({ dimensionsRatio(in: $0) ?? aspectRatioHint(in: $0) }).first {
+      return boundedHeight(width * ratio, width: width)
     }
 
     let prefersSquare = lowercased.contains { value in
@@ -623,23 +646,42 @@ public enum MIRAMediaSizing {
     } else {
       height = width * 1.25
     }
-    return min(height, UIScreen.main.bounds.height * 0.74)
+    return boundedHeight(height, width: width)
   }
 
-  public static func mainFeedHeight(for urls: [String], width: CGFloat = UIScreen.main.bounds.width) -> CGFloat {
-    let ideal = feedHeight(for: urls, width: width)
+  public static func mainFeedHeight(
+    for urls: [String],
+    aspectRatios: [CGFloat] = [],
+    width: CGFloat = UIScreen.main.bounds.width
+  ) -> CGFloat {
+    let ideal = feedHeight(for: urls, aspectRatios: aspectRatios, width: width)
     // Keep the feed action row visible for tall 9:16 posts instead of letting media
     // consume the whole viewport.
-    let visibleActionSafeHeight = UIScreen.main.bounds.height * 0.56
+    let visibleActionSafeHeight = max(width * 1.25, UIScreen.main.bounds.height * 0.56)
     return min(ideal, visibleActionSafeHeight)
   }
 
-  public static func detailHeight(for urls: [String], width: CGFloat = UIScreen.main.bounds.width) -> CGFloat {
-    let ideal = feedHeight(for: urls, width: width)
+  public static func detailHeight(
+    for urls: [String],
+    aspectRatios: [CGFloat] = [],
+    width: CGFloat = UIScreen.main.bounds.width
+  ) -> CGFloat {
+    let ideal = feedHeight(for: urls, aspectRatios: aspectRatios, width: width)
     // Detail pages need room for the title/caption and the fixed action/comment bar.
     // Tall 9:16 media is still displayed large, but it cannot push controls off-screen.
     let readableDetailHeight = UIScreen.main.bounds.height * 0.52
     return min(ideal, readableDetailHeight)
+  }
+
+  public static func heightToWidthRatio(forFormat format: String?) -> CGFloat? {
+    guard let format else { return nil }
+    return aspectRatioHint(in: format.lowercased())
+  }
+
+  private static func boundedHeight(_ height: CGFloat, width: CGFloat) -> CGFloat {
+    let minHeight = width / 1.91
+    let maxHeight = UIScreen.main.bounds.height * 0.74
+    return min(max(height, minHeight), maxHeight)
   }
 
   private static func dimensionsRatio(in value: String) -> CGFloat? {
@@ -654,7 +696,37 @@ public enum MIRAMediaSizing {
     let mediaWidth = CGFloat(Double(String(value[widthRange])) ?? 0)
     let mediaHeight = CGFloat(Double(String(value[heightRange])) ?? 0)
     guard mediaWidth > 0, mediaHeight > 0 else { return nil }
-    return min(max(mediaHeight / mediaWidth, 1.0), 16.0 / 9.0)
+    return min(max(mediaHeight / mediaWidth, 1.0 / 1.91), 16.0 / 9.0)
+  }
+
+  private static func aspectRatioHint(in value: String) -> CGFloat? {
+    let decoded = (value.removingPercentEncoding ?? value).lowercased()
+    if decoded.contains("1.91:1")
+      || decoded.contains("1_91_1")
+      || decoded.contains("1-91-1")
+      || decoded.contains("191:100")
+      || decoded.contains("191x100") {
+      return 1.0 / 1.91
+    }
+    if containsRatio("16", "9", in: decoded) { return 9.0 / 16.0 }
+    if containsRatio("4", "5", in: decoded) { return 5.0 / 4.0 }
+    if containsRatio("1", "1", in: decoded) { return 1.0 }
+    if containsRatio("9", "16", in: decoded) { return 16.0 / 9.0 }
+    if decoded.contains("square") { return 1.0 }
+    if decoded.contains("portrait") { return 5.0 / 4.0 }
+    if decoded.contains("landscape") { return 9.0 / 16.0 }
+    return nil
+  }
+
+  private static func containsRatio(_ width: String, _ height: String, in value: String) -> Bool {
+    let escapedWidth = NSRegularExpression.escapedPattern(for: width)
+    let escapedHeight = NSRegularExpression.escapedPattern(for: height)
+    let pattern = #"(?<![\d.])\#(escapedWidth)\s*[:x]\s*\#(escapedHeight)(?![\d.])"#
+    guard let expression = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+      return false
+    }
+    let range = NSRange(value.startIndex..<value.endIndex, in: value)
+    return expression.firstMatch(in: value, range: range) != nil
   }
 }
 
