@@ -608,7 +608,9 @@ public enum MIRAMediaSizing {
 
   public static func detailHeight(for urls: [String], width: CGFloat = UIScreen.main.bounds.width) -> CGFloat {
     let ideal = feedHeight(for: urls, width: width)
-    let readableDetailHeight = UIScreen.main.bounds.height * 0.62
+    // Detail pages need room for the title/caption and the fixed action/comment bar.
+    // Tall 9:16 media is still displayed large, but it cannot push controls off-screen.
+    let readableDetailHeight = UIScreen.main.bounds.height * 0.52
     return min(ideal, readableDetailHeight)
   }
 

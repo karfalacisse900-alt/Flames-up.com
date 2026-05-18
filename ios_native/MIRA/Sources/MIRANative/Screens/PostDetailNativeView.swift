@@ -88,7 +88,10 @@ public struct PostDetailNativeView: View {
   @Environment(\.dismiss) private var dismiss
   @StateObject private var model: PostDetailModel
   @State private var draft = ""
-  private var mediaHeight: CGFloat { MIRAMediaSizing.detailHeight(for: model.post.mediaURLs) }
+  private var mediaHeight: CGFloat {
+    let maxHeight = max(320, UIScreen.main.bounds.height - 390)
+    return min(MIRAMediaSizing.detailHeight(for: model.post.mediaURLs), maxHeight)
+  }
 
   public init(post: MIRAPost, api: MIRAAPIClient) {
     _model = StateObject(wrappedValue: PostDetailModel(post: post, api: api))
@@ -107,6 +110,7 @@ public struct PostDetailNativeView: View {
               carouselHeight: mediaHeight,
               singleImageContentMode: .fill
             )
+            .frame(maxWidth: .infinity, minHeight: mediaHeight, maxHeight: mediaHeight)
           }
 
           VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
@@ -146,10 +150,11 @@ public struct PostDetailNativeView: View {
           }
           .padding(.horizontal, MIRATheme.Space.md)
           .padding(.top, MIRATheme.Space.md)
-          .padding(.bottom, MIRATheme.Space.xl)
+          .padding(.bottom, 24)
         }
       }
-
+    }
+    .safeAreaInset(edge: .bottom, spacing: 0) {
       commentBar
     }
     .background(MIRATheme.Color.surface)
