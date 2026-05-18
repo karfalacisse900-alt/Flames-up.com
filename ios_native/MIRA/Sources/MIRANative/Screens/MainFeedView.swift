@@ -200,6 +200,7 @@ public struct MainFeedView: View {
   @State private var previousScrollMinY: CGFloat?
   @State private var scrollIntentDistance: CGFloat = 0
   @State private var scrollIntentDirection = 0
+  @State private var isShowingCreatePost = false
 
   public init(api: MIRAAPIClient) {
     _model = StateObject(wrappedValue: MainFeedModel(api: api))
@@ -255,6 +256,9 @@ public struct MainFeedView: View {
       .navigationDestination(item: $selectedPost) { post in
         PostDetailNativeView(post: post, api: model.api)
       }
+      .fullScreenCover(isPresented: $isShowingCreatePost) {
+        CreatePostNativeView(api: model.api)
+      }
       .task { await model.load() }
       .onPreferenceChange(MainFeedScrollOffsetPreferenceKey.self, perform: handleScroll)
       .onPreferenceChange(MainPostVisibilityPreferenceKey.self, perform: updateActiveVideo)
@@ -306,9 +310,12 @@ public struct MainFeedView: View {
   private var mainHeader: some View {
     HStack(spacing: MIRATheme.Space.sm) {
       Spacer()
-      NavigationLink(destination: CreatePostNativeView(api: model.api)) {
+      Button {
+        isShowingCreatePost = true
+      } label: {
         MIRAHeaderCircleButton(systemImage: "plus")
       }
+      .buttonStyle(.plain)
       NavigationLink(destination: NotificationNativeView(api: model.api)) {
         MIRAHeaderCircleButton(systemImage: "bell")
       }

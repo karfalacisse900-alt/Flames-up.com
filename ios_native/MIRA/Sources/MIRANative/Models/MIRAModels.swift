@@ -233,6 +233,18 @@ public struct MIRAGifSearchResponse: Decodable, Hashable {
 
 public struct MIRAStatusPreview: Codable, Identifiable, Hashable {
   public let id: String
+  public let userId: String?
+  public let content: String?
+  public let image: String?
+  public let backgroundColor: String?
+  public let textColor: String?
+  public let createdAt: String?
+  public let expiresAt: String?
+
+  public var mediaURL: String? {
+    guard let image, !image.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+    return image
+  }
 }
 
 public struct MIRAStoryGroup: Codable, Identifiable, Hashable {

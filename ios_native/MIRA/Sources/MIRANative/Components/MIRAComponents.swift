@@ -665,7 +665,7 @@ public enum MIRAMediaSizing {
     }
 
     let lowercased = urls.map { $0.lowercased() }
-    if let ratio = lowercased.compactMap({ dimensionsRatio(in: $0) ?? aspectRatioHint(in: $0) }).first {
+    if let ratio = lowercased.compactMap({ flexibleDimensionsRatio(in: $0) ?? aspectRatioHint(in: $0) }).first {
       return boundedHeight(width * ratio, width: width)
     }
 
@@ -715,6 +715,26 @@ public enum MIRAMediaSizing {
     return aspectRatioHint(in: format.lowercased())
   }
 
+  private static func flexibleDimensionsRatio(in value: String) -> CGFloat? {
+    let normalized = (value.removingPercentEncoding ?? value)
+      .replacingOccurrences(of: "×", with: "x")
+      .replacingOccurrences(of: "Ã—", with: "x")
+      .replacingOccurrences(of: "%C3%97", with: "x")
+      .replacingOccurrences(of: "%c3%97", with: "x")
+    let pattern = #"(?<!\d)(\d{3,5})\s*[xX]\s*(\d{3,5})(?!\d)"#
+    guard let expression = try? NSRegularExpression(pattern: pattern) else { return dimensionsRatio(in: value) }
+    let range = NSRange(normalized.startIndex..<normalized.endIndex, in: normalized)
+    guard let match = expression.firstMatch(in: normalized, range: range), match.numberOfRanges == 3,
+          let widthRange = Range(match.range(at: 1), in: normalized),
+          let heightRange = Range(match.range(at: 2), in: normalized) else {
+      return dimensionsRatio(in: value)
+    }
+    let mediaWidth = CGFloat(Double(String(normalized[widthRange])) ?? 0)
+    let mediaHeight = CGFloat(Double(String(normalized[heightRange])) ?? 0)
+    guard mediaWidth > 0, mediaHeight > 0 else { return dimensionsRatio(in: value) }
+    return min(max(mediaHeight / mediaWidth, 1.0 / 1.91), 16.0 / 9.0)
+  }
+
   private static func boundedHeight(_ height: CGFloat, width: CGFloat) -> CGFloat {
     let minHeight = width / 1.91
     let maxHeight = UIScreen.main.bounds.height * 0.74
@@ -737,7 +757,10 @@ public enum MIRAMediaSizing {
   }
 
   private static func aspectRatioHint(in value: String) -> CGFloat? {
-    let decoded = (value.removingPercentEncoding ?? value).lowercased()
+    let decoded = (value.removingPercentEncoding ?? value)
+      .lowercased()
+      .replacingOccurrences(of: "×", with: "x")
+      .replacingOccurrences(of: "Ã—", with: "x")
     if decoded.contains("1.91:1")
       || decoded.contains("1_91_1")
       || decoded.contains("1-91-1")
@@ -756,6 +779,18 @@ public enum MIRAMediaSizing {
   }
 
   private static func containsRatio(_ width: String, _ height: String, in value: String) -> Bool {
+    let normalized = value
+      .replacingOccurrences(of: "×", with: "x")
+      .replacingOccurrences(of: "Ã—", with: "x")
+    let plainTokens = [
+      "\(width):\(height)",
+      "\(width)x\(height)",
+      "\(width)_\(height)",
+      "\(width)-\(height)"
+    ]
+    if plainTokens.contains(where: { normalized.contains($0) }) {
+      return true
+    }
     let escapedWidth = NSRegularExpression.escapedPattern(for: width)
     let escapedHeight = NSRegularExpression.escapedPattern(for: height)
     let pattern = #"(?<![\d.])\#(escapedWidth)\s*[:x×]\s*\#(escapedHeight)(?![\d.])"#

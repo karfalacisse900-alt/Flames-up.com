@@ -129,6 +129,7 @@ final class DiscoverNativeModel: ObservableObject {
 public struct DiscoverNativeView: View {
   @StateObject private var model: DiscoverNativeModel
   @State private var selectedNote: MIRANote?
+  @State private var selectedStoryGroup: MIRAStoryGroup?
   @State private var menuNote: MIRANote?
   @State private var isShowingNoteMenu = false
 
@@ -155,6 +156,9 @@ public struct DiscoverNativeView: View {
       .toolbar(.hidden, for: .navigationBar)
       .navigationDestination(item: $selectedNote) { note in
         NoteDetailNativeView(note: note, api: model.api)
+      }
+      .fullScreenCover(item: $selectedStoryGroup) { group in
+        StoryViewerNativeView(group: group, api: model.api)
       }
       .confirmationDialog("Note options", isPresented: $isShowingNoteMenu) {
         Button("Not interested", role: .destructive) {
@@ -229,6 +233,11 @@ public struct DiscoverNativeView: View {
                 onReact: { Task { await model.toggleReaction(for: note) } },
                 onComment: { selectedNote = note },
                 onShare: { Task { await model.recordShare(for: note) } },
+                onStory: {
+                  if let group = storyGroup(for: note) {
+                    selectedStoryGroup = group
+                  }
+                },
                 onMenu: {
                   menuNote = note
                   isShowingNoteMenu = true
@@ -240,6 +249,11 @@ public struct DiscoverNativeView: View {
         .padding(.horizontal, MIRATheme.Space.md)
       }
     }
+  }
+
+  private func storyGroup(for note: MIRANote) -> MIRAStoryGroup? {
+    guard let userID = note.user?.id else { return nil }
+    return model.stories.first { $0.userId == userID }
   }
 
   private var storyRail: some View {
@@ -256,12 +270,175 @@ public struct DiscoverNativeView: View {
           }
         } else {
           ForEach(model.stories) { group in
-            StoryBubbleNative(name: group.displayName, avatarURL: group.userProfileImage, hasUnviewed: group.hasUnviewed == true, isAdd: false)
+            Button {
+              selectedStoryGroup = group
+            } label: {
+              StoryBubbleNative(name: group.displayName, avatarURL: group.userProfileImage, hasUnviewed: group.hasUnviewed == true, isAdd: false)
+            }
+            .buttonStyle(.plain)
           }
         }
       }
       .padding(.horizontal, MIRATheme.Space.md)
       .padding(.top, MIRATheme.Space.sm)
+    }
+  }
+}
+
+private struct StoryViewerNativeView: View {
+  let group: MIRAStoryGroup
+  let api: MIRAAPIClient
+  @Environment(\.dismiss) private var dismiss
+  @State private var selectedIndex = 0
+  @State private var message = ""
+
+  private var stories: [MIRAStatusPreview] {
+    group.statuses?.isEmpty == false ? group.statuses! : []
+  }
+
+  private var currentStory: MIRAStatusPreview? {
+    guard stories.indices.contains(selectedIndex) else { return nil }
+    return stories[selectedIndex]
+  }
+
+  var body: some View {
+    ZStack {
+      Color(red: 0.04, green: 0.05, blue: 0.06).ignoresSafeArea()
+
+      VStack(spacing: 0) {
+        storyCanvas
+          .padding(.horizontal, 0)
+
+        bottomComposer
+          .padding(.horizontal, MIRATheme.Space.md)
+          .padding(.top, 12)
+          .padding(.bottom, MIRATheme.Space.md)
+      }
+    }
+    .statusBarHidden(false)
+    .task(id: currentStory?.id) {
+      guard let id = currentStory?.id else { return }
+      let _: EmptyResponse? = try? await api.post("/statuses/\(id)/view", body: EmptyBody())
+    }
+  }
+
+  private var storyCanvas: some View {
+    GeometryReader { proxy in
+      ZStack(alignment: .top) {
+        if let mediaURL = currentStory?.mediaURL {
+          RemoteMediaView(url: mediaURL, isVideo: mediaURL.isVideoURL, shouldPlay: true)
+            .frame(width: proxy.size.width, height: proxy.size.height)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        } else {
+          RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .fill(MIRATheme.Color.forest)
+            .overlay {
+              Text(currentStory?.content?.isEmpty == false ? currentStory!.content! : "Story")
+                .font(.system(size: 28, weight: .semibold))
+                .foregroundStyle(.white)
+                .multilineTextAlignment(.center)
+                .padding(28)
+            }
+        }
+
+        HStack(spacing: 0) {
+          Color.clear
+            .contentShape(Rectangle())
+            .onTapGesture { goToPreviousStory() }
+          Color.clear
+            .contentShape(Rectangle())
+            .onTapGesture { goToNextStory() }
+        }
+        .padding(.top, 92)
+
+        VStack(spacing: 13) {
+          progressRail
+            .padding(.top, 14)
+          storyTopBar
+        }
+        .padding(.horizontal, MIRATheme.Space.md)
+      }
+    }
+    .frame(maxWidth: .infinity)
+    .frame(maxHeight: .infinity)
+  }
+
+  private var progressRail: some View {
+    HStack(spacing: 5) {
+      ForEach(Array(stories.enumerated()), id: \.offset) { index, _ in
+        Capsule()
+          .fill(index <= selectedIndex ? Color.white.opacity(0.92) : Color.white.opacity(0.38))
+          .frame(height: 3)
+      }
+    }
+  }
+
+  private var storyTopBar: some View {
+    HStack(spacing: 10) {
+      RemoteAvatar(url: group.userProfileImage, size: 44)
+      Text(group.displayName)
+        .font(.system(size: 17, weight: .semibold))
+        .foregroundStyle(.white)
+        .lineLimit(1)
+      Text(noteAge(currentStory?.createdAt))
+        .font(.system(size: 16, weight: .medium))
+        .foregroundStyle(.white.opacity(0.78))
+      Spacer()
+      Button {} label: {
+        Image(systemName: "ellipsis")
+          .font(.system(size: 22, weight: .bold))
+          .foregroundStyle(.white)
+          .frame(width: 38, height: 38)
+      }
+      .buttonStyle(.plain)
+      Button { dismiss() } label: {
+        Image(systemName: "xmark")
+          .font(.system(size: 33, weight: .light))
+          .foregroundStyle(.white)
+          .frame(width: 42, height: 42)
+      }
+      .buttonStyle(.plain)
+    }
+  }
+
+  private func goToPreviousStory() {
+    if selectedIndex > 0 {
+      selectedIndex -= 1
+    }
+  }
+
+  private func goToNextStory() {
+    if selectedIndex < stories.count - 1 {
+      selectedIndex += 1
+    } else {
+      dismiss()
+    }
+  }
+
+  private var bottomComposer: some View {
+    HStack(spacing: 14) {
+      TextField("Send message...", text: $message)
+        .font(.system(size: 18, weight: .regular))
+        .foregroundStyle(.white)
+        .padding(.horizontal, 20)
+        .frame(height: 56)
+        .overlay(Capsule().stroke(Color.white.opacity(0.45), lineWidth: 1.4))
+
+      Button {} label: {
+        Image(systemName: "heart")
+          .font(.system(size: 30, weight: .regular))
+          .foregroundStyle(.white)
+          .frame(width: 46, height: 46)
+      }
+      .buttonStyle(.plain)
+
+      Button {} label: {
+        Image(systemName: "paperplane")
+          .font(.system(size: 30, weight: .regular))
+          .foregroundStyle(.white)
+          .frame(width: 46, height: 46)
+      }
+      .buttonStyle(.plain)
     }
   }
 }
@@ -318,12 +495,16 @@ private struct NoteCardNative: View {
   let onReact: () -> Void
   let onComment: () -> Void
   let onShare: () -> Void
+  let onStory: () -> Void
   let onMenu: () -> Void
 
   var body: some View {
     VStack(alignment: .leading, spacing: 7) {
       HStack(spacing: 8) {
-        MIRAFollowAvatar(url: note.user?.profileImage, size: 36)
+        Button(action: onStory) {
+          MIRAFollowAvatar(url: note.user?.profileImage, size: 36)
+        }
+        .buttonStyle(.plain)
         HStack(spacing: 5) {
           Text(note.user?.displayName ?? "mira")
             .font(.system(size: 14, weight: .semibold))

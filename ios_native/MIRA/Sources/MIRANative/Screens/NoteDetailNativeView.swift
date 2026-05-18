@@ -75,34 +75,33 @@ public struct NoteDetailNativeView: View {
   public var body: some View {
     GeometryReader { proxy in
       let contentWidth = max(0, proxy.size.width - horizontalInset * 2)
-      ZStack(alignment: .bottom) {
-        ScrollView {
-          VStack(alignment: .leading, spacing: 0) {
-            topBar
-            noteHeader
-              .padding(.top, 14)
-            noteBody(contentWidth: contentWidth)
-              .padding(.top, 12)
-            noteActions
-              .padding(.top, 14)
-            Rectangle()
-              .fill(MIRATheme.Color.hairline.opacity(0.62))
-              .frame(height: 0.7)
-              .padding(.top, 16)
-            commentsList
-              .padding(.top, 18)
-          }
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .padding(.horizontal, horizontalInset)
-          .padding(.top, 8)
-          .padding(.bottom, 108)
+      ScrollView {
+        VStack(alignment: .leading, spacing: 0) {
+          topBar
+          noteHeader
+            .padding(.top, 18)
+          noteBody(contentWidth: contentWidth)
+            .padding(.top, 14)
+          noteActions
+            .padding(.top, 15)
+          Rectangle()
+            .fill(MIRATheme.Color.hairline.opacity(0.52))
+            .frame(height: 0.7)
+            .padding(.top, 18)
+          commentsList
+            .padding(.top, 20)
         }
-        .scrollIndicators(.hidden)
-
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, horizontalInset)
+        .padding(.top, 8)
+        .padding(.bottom, 24)
+      }
+      .scrollIndicators(.hidden)
+      .safeAreaInset(edge: .bottom) {
         replyBar(horizontalInset: horizontalInset)
       }
     }
-    .background(MIRATheme.Color.surface.ignoresSafeArea())
+    .background(Color.white.ignoresSafeArea())
     .navigationBarBackButtonHidden(true)
     .toolbar(.hidden, for: .navigationBar)
     .toolbar(.hidden, for: .tabBar)
@@ -145,18 +144,18 @@ public struct NoteDetailNativeView: View {
   private var noteHeader: some View {
     HStack(spacing: 10) {
       Button(action: { Task { await model.followAuthor() } }) {
-        MIRAFollowAvatar(url: model.note.user?.profileImage, size: 46)
+        MIRAFollowAvatar(url: model.note.user?.profileImage, size: 48)
       }
       .buttonStyle(.plain)
 
       Text(model.note.user?.displayName ?? "mira")
-        .font(.system(size: 20, weight: .semibold))
+        .font(.system(size: 19, weight: .semibold))
         .foregroundStyle(MIRATheme.Color.textPrimary)
         .lineLimit(1)
         .minimumScaleFactor(0.82)
 
       Text(noteAge(model.note.createdAt))
-        .font(.system(size: 17, weight: .semibold))
+        .font(.system(size: 16, weight: .semibold))
         .foregroundStyle(MIRATheme.Color.textMuted)
 
       Spacer()
@@ -166,9 +165,9 @@ public struct NoteDetailNativeView: View {
   private func noteBody(contentWidth: CGFloat) -> some View {
     VStack(alignment: .leading, spacing: 16) {
       Text(model.note.body ?? "")
-        .font(.system(size: 20, weight: .regular))
+        .font(.system(size: 21, weight: .regular))
         .foregroundStyle(MIRATheme.Color.textPrimary)
-        .lineSpacing(4)
+        .lineSpacing(5)
         .frame(maxWidth: .infinity, alignment: .leading)
         .fixedSize(horizontal: false, vertical: true)
 
@@ -182,6 +181,8 @@ public struct NoteDetailNativeView: View {
           singleImageContentMode: .fill
         )
         .frame(width: contentWidth, height: mediaHeight)
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
       }
     }
   }
@@ -189,13 +190,13 @@ public struct NoteDetailNativeView: View {
   private func noteMediaHeight(for media: String, width: CGFloat) -> CGFloat {
     guard width > 0 else { return 0 }
     let ideal = MIRAMediaSizing.feedHeight(for: [media], width: width)
-    let lower = width * 0.54
-    let upper = min(width * 0.80, UIScreen.main.bounds.height * 0.42)
+    let lower = width * 0.58
+    let upper = min(width * 0.78, UIScreen.main.bounds.height * 0.38)
     return min(max(ideal, lower), upper)
   }
 
   private var noteActions: some View {
-    HStack(spacing: 30) {
+    HStack(spacing: 31) {
       NoteDetailAction(systemImage: model.note.reacted == true ? "heart.fill" : "heart", value: model.note.reactionsCount ?? 0, tint: model.note.reacted == true ? MIRATheme.Color.like : MIRATheme.Color.textSecondary) {
         Task { await model.toggleReaction() }
       }
@@ -255,12 +256,12 @@ public struct NoteDetailNativeView: View {
     .padding(.horizontal, 12)
     .frame(height: 58)
     .frame(maxWidth: .infinity)
-    .background(MIRATheme.Color.surfaceSoft.opacity(0.82))
+    .background(Color(red: 0.985, green: 0.985, blue: 0.975))
     .clipShape(Capsule())
     .padding(.horizontal, horizontalInset)
     .padding(.top, 8)
     .padding(.bottom, MIRATheme.Space.sm)
-    .background(MIRATheme.Color.surface.opacity(0.98))
+    .background(Color.white.opacity(0.98))
   }
 }
 
@@ -300,16 +301,16 @@ private struct NoteReplyRowNative: View {
 
   var body: some View {
     HStack(alignment: .top, spacing: 12) {
-      RemoteAvatar(url: comment.user?.profileImage, size: 42)
+      RemoteAvatar(url: comment.user?.profileImage, size: 46)
       VStack(alignment: .leading, spacing: 5) {
         Text(comment.user?.displayName ?? "user")
           .font(.system(size: 16, weight: .semibold))
           .foregroundStyle(MIRATheme.Color.textMuted)
           .lineLimit(1)
         Text(comment.text)
-          .font(.system(size: 17, weight: .regular))
+          .font(.system(size: 18, weight: .regular))
           .foregroundStyle(MIRATheme.Color.textPrimary)
-          .lineSpacing(3)
+          .lineSpacing(3.5)
           .fixedSize(horizontal: false, vertical: true)
         HStack(spacing: 26) {
           Text(noteAge(comment.createdAt))

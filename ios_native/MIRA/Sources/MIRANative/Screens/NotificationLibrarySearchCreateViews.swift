@@ -301,6 +301,7 @@ public struct CreatePostNativeView: View {
       }
     }
     .toolbar(.hidden, for: .navigationBar)
+    .toolbar(.hidden, for: .tabBar)
     .navigationBarBackButtonHidden(true)
     .onChange(of: pickerItems) { _, newItems in
       Task { await loadPickerItems(newItems) }
