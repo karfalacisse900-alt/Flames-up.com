@@ -243,6 +243,10 @@ public struct MainFeedView: View {
           .padding(.bottom, MIRATheme.Space.xxl)
         }
         .coordinateSpace(name: "mainFeedScroll")
+        .simultaneousGesture(
+          DragGesture(minimumDistance: 8)
+            .onChanged(handleFeedDrag)
+        )
 
         mainHeader
           .offset(y: isHeaderHidden ? -84 : 0)
@@ -299,6 +303,14 @@ public struct MainFeedView: View {
     }
   }
 
+  private func handleFeedDrag(_ value: DragGesture.Value) {
+    if value.translation.height < -14 {
+      isHeaderHidden = true
+    } else if value.translation.height > 10 {
+      isHeaderHidden = false
+    }
+  }
+
   private func updateActiveVideo(_ visibility: [MainPostVisibility]) {
     let candidate = visibility
       .filter { $0.hasVideo && $0.visibleRatio >= 0.60 }
@@ -335,9 +347,14 @@ private struct MainNativePostCard: View {
   let onLike: () -> Void
   let onSave: () -> Void
   let onFollow: () -> Void
+  @State private var measuredRatios: [String: CGFloat] = [:]
 
   private var mediaHeight: CGFloat {
-    MIRAMediaSizing.mainFeedHeight(for: post.mediaURLs, aspectRatios: post.mediaHeightToWidthRatios)
+    let liveRatios = post.mediaURLs.compactMap { measuredRatios[$0] }
+    return MIRAMediaSizing.mainFeedHeight(
+      for: post.mediaURLs,
+      aspectRatios: liveRatios + post.mediaHeightToWidthRatios
+    )
   }
 
   var body: some View {
@@ -350,7 +367,8 @@ private struct MainNativePostCard: View {
           maxSingleImageHeight: mediaHeight,
           carouselHeight: mediaHeight,
           singleImageContentMode: .fill,
-          shouldPlay: isVideoActive
+          shouldPlay: isVideoActive,
+          onMediaRatioChange: recordMeasuredRatio
         )
         .frame(maxWidth: .infinity)
         .frame(height: mediaHeight)
@@ -391,6 +409,14 @@ private struct MainNativePostCard: View {
     let screen = UIScreen.main.bounds
     let visibleHeight = min(frame.maxY, screen.maxY) - max(frame.minY, screen.minY)
     return max(0, min(1, visibleHeight / max(frame.height, 1)))
+  }
+
+  private func recordMeasuredRatio(url: String, ratio: CGFloat) {
+    guard ratio.isFinite, ratio > 0 else { return }
+    let clamped = min(max(ratio, 1.0 / 1.91), 16.0 / 9.0)
+    if abs((measuredRatios[url] ?? 0) - clamped) > 0.01 {
+      measuredRatios[url] = clamped
+    }
   }
 
   private var postHeader: some View {

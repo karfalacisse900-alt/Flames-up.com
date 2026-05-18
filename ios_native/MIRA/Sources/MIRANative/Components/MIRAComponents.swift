@@ -110,6 +110,7 @@ private final class MIRAImageMemoryCache {
 
 public struct MIRACachedImage<Content: View, Placeholder: View>: View {
   let url: String?
+  let onImageLoaded: (UIImage) -> Void
   let content: (Image) -> Content
   let placeholder: () -> Placeholder
   @State private var uiImage: UIImage?
@@ -117,10 +118,12 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
 
   public init(
     url: String?,
+    onImageLoaded: @escaping (UIImage) -> Void = { _ in },
     @ViewBuilder content: @escaping (Image) -> Content,
     @ViewBuilder placeholder: @escaping () -> Placeholder
   ) {
     self.url = url
+    self.onImageLoaded = onImageLoaded
     self.content = content
     self.placeholder = placeholder
   }
@@ -154,6 +157,7 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
       await MainActor.run {
         uiImage = cached
         loadedURL = remoteURL
+        onImageLoaded(cached)
       }
       MIRAPerformanceTimeline.markOnce("time_to_first_thumbnail", detail: "memory")
       return
@@ -164,6 +168,7 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
       await MainActor.run {
         uiImage = diskCached
         loadedURL = remoteURL
+        onImageLoaded(diskCached)
       }
       MIRAPerformanceTimeline.markOnce("time_to_first_thumbnail", detail: "disk")
       return
@@ -199,6 +204,7 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
       await MainActor.run {
         uiImage = decoded
         loadedURL = remoteURL
+        onImageLoaded(decoded)
       }
       MIRAPerformanceTimeline.markOnce("time_to_first_thumbnail", detail: "network")
     } catch {
@@ -271,21 +277,29 @@ public struct RemoteMediaView: View {
   let isVideo: Bool
   let contentMode: ContentMode
   let shouldPlay: Bool
+  let onMeasuredRatio: (CGFloat) -> Void
 
-  public init(url: String, isVideo: Bool, contentMode: ContentMode = .fill, shouldPlay: Bool = false) {
+  public init(
+    url: String,
+    isVideo: Bool,
+    contentMode: ContentMode = .fill,
+    shouldPlay: Bool = false,
+    onMeasuredRatio: @escaping (CGFloat) -> Void = { _ in }
+  ) {
     self.url = url
     self.isVideo = isVideo
     self.contentMode = contentMode
     self.shouldPlay = shouldPlay
+    self.onMeasuredRatio = onMeasuredRatio
   }
 
   public var body: some View {
     Group {
       if isVideo {
-        MIRAResolvedVideoPlayer(url: url, shouldPlay: shouldPlay)
+        MIRAResolvedVideoPlayer(url: url, shouldPlay: shouldPlay, onMeasuredRatio: onMeasuredRatio)
           .background(Color.clear)
       } else {
-        MIRACachedImage(url: url) { image in
+        MIRACachedImage(url: url, onImageLoaded: reportRatio) { image in
           image.resizable().aspectRatio(contentMode: contentMode)
         } placeholder: {
           placeholder.redacted(reason: .placeholder)
@@ -307,11 +321,17 @@ public struct RemoteMediaView: View {
         .foregroundStyle(MIRATheme.Color.textMuted)
     }
   }
+
+  private func reportRatio(_ image: UIImage) {
+    guard image.size.width > 0, image.size.height > 0 else { return }
+    onMeasuredRatio(image.size.height / image.size.width)
+  }
 }
 
 private struct MIRAResolvedVideoPlayer: View {
   let url: String
   let shouldPlay: Bool
+  let onMeasuredRatio: (CGFloat) -> Void
   @State private var player: AVPlayer?
   @State private var thumbnailURL: String?
   @State private var failed = false
@@ -323,7 +343,7 @@ private struct MIRAResolvedVideoPlayer: View {
   var body: some View {
     ZStack {
       if let thumbnailURL {
-        MIRACachedImage(url: thumbnailURL) { image in
+        MIRACachedImage(url: thumbnailURL, onImageLoaded: reportRatio) { image in
           image.resizable().scaledToFill()
         } placeholder: {
           placeholder
@@ -482,6 +502,14 @@ private struct MIRAResolvedVideoPlayer: View {
     let image = await Self.generateVideoThumbnail(for: directURL)
     guard loadedVideoURL == expectedURL else { return }
     generatedThumbnail = image
+    if let image {
+      reportRatio(image)
+    }
+  }
+
+  private func reportRatio(_ image: UIImage) {
+    guard image.size.width > 0, image.size.height > 0 else { return }
+    onMeasuredRatio(image.size.height / image.size.width)
   }
 
   nonisolated private static func generateVideoThumbnail(for url: URL) async -> UIImage? {
@@ -610,6 +638,7 @@ public struct MIRAAdaptiveMediaView: View {
   let carouselHeight: CGFloat
   let singleImageContentMode: ContentMode
   let shouldPlay: Bool
+  let onMediaRatioChange: (String, CGFloat) -> Void
   @State private var selectedIndex = 0
 
   public init(
@@ -618,7 +647,8 @@ public struct MIRAAdaptiveMediaView: View {
     maxSingleImageHeight: CGFloat = min(UIScreen.main.bounds.width * 1.18, 560),
     carouselHeight: CGFloat = min(UIScreen.main.bounds.width * 1.08, 520),
     singleImageContentMode: ContentMode = .fill,
-    shouldPlay: Bool = true
+    shouldPlay: Bool = true,
+    onMediaRatioChange: @escaping (String, CGFloat) -> Void = { _, _ in }
   ) {
     self.urls = urls
     self.cornerRadius = cornerRadius
@@ -626,19 +656,30 @@ public struct MIRAAdaptiveMediaView: View {
     self.carouselHeight = carouselHeight
     self.singleImageContentMode = singleImageContentMode
     self.shouldPlay = shouldPlay
+    self.onMediaRatioChange = onMediaRatioChange
   }
 
   public var body: some View {
     Group {
       if let url = urls.first, urls.count == 1, !url.isVideoURL {
-        RemoteMediaView(url: url, isVideo: false, contentMode: singleImageContentMode)
+        RemoteMediaView(
+          url: url,
+          isVideo: false,
+          contentMode: singleImageContentMode,
+          onMeasuredRatio: { onMediaRatioChange(url, $0) }
+        )
           .frame(maxWidth: .infinity)
           .frame(height: maxSingleImageHeight)
           .background(Color.clear)
       } else {
         TabView(selection: $selectedIndex) {
           ForEach(Array(urls.enumerated()), id: \.offset) { index, url in
-            RemoteMediaView(url: url, isVideo: url.isVideoURL, shouldPlay: shouldPlay && selectedIndex == index)
+            RemoteMediaView(
+              url: url,
+              isVideo: url.isVideoURL,
+              shouldPlay: shouldPlay && selectedIndex == index,
+              onMeasuredRatio: { onMediaRatioChange(url, $0) }
+            )
               .frame(maxWidth: .infinity, maxHeight: .infinity)
               .tag(index)
           }
