@@ -1071,10 +1071,6 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
       return
     }
     guard session.isRunning else { return }
-    if selectedMode == .text {
-      showTransientMessage("Text posts continue on the next page.")
-      return
-    }
     if movieOutput.isRecording {
       stopRecordingVideo()
       return
@@ -1094,8 +1090,6 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
       capturePhoto()
     case .video15, .video60:
       startRecordingVideo(maxDuration: selectedMode.maxDuration)
-    case .text:
-      showTransientMessage("Text posts continue on the next page.")
     }
   }
 
