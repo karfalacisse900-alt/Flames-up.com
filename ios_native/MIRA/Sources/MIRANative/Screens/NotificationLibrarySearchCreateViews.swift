@@ -323,12 +323,16 @@ public struct CreatePostNativeView: View {
       MIRAStoryLiveCameraView(
         onCapture: { media in
           showCamera = false
-          presentEditor(for: media)
+          addCapturedMediaAndContinue(media)
         },
         onCancel: {
           showCamera = false
           if mediaItems.isEmpty && !isEditingPostDetails {
             dismiss()
+          } else if !isEditingPostDetails {
+            withAnimation(.snappy(duration: 0.2)) {
+              isEditingPostDetails = true
+            }
           }
         }
       )
@@ -354,8 +358,17 @@ public struct CreatePostNativeView: View {
 
   private var mediaFirstPage: some View {
     GeometryReader { proxy in
-      VStack(spacing: 0) {
-        HStack {
+      ZStack(alignment: .topLeading) {
+        Color.black.ignoresSafeArea()
+
+        if isLoadingMedia {
+          ProgressView()
+            .tint(.white)
+            .scaleEffect(1.12)
+            .frame(width: proxy.size.width, height: proxy.size.height)
+        }
+
+        VStack {
           Button { dismiss() } label: {
             Image(systemName: "chevron.left")
               .font(.system(size: 32, weight: .medium))
@@ -368,71 +381,8 @@ public struct CreatePostNativeView: View {
         }
         .padding(.horizontal, 24)
         .padding(.top, 30)
-        .frame(height: 116)
-
-        Spacer()
-
-        VStack(spacing: 18) {
-          ProgressView()
-            .tint(.white)
-            .scaleEffect(1.15)
-
-          Text("Open camera")
-            .font(.system(size: 24, weight: .semibold))
-            .foregroundStyle(.white)
-
-          Text("Tap to take a photo. Hold the shutter to record video.")
-            .font(.system(size: 15, weight: .medium))
-            .foregroundStyle(.white.opacity(0.66))
-            .multilineTextAlignment(.center)
-            .padding(.horizontal, 42)
-
-          HStack(spacing: 12) {
-            Button {
-              showCamera = true
-            } label: {
-              Label("Camera", systemImage: "camera.fill")
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(.black)
-                .frame(height: 48)
-                .padding(.horizontal, 18)
-                .background(.white)
-                .clipShape(Capsule())
-            }
-            .buttonStyle(.plain)
-
-            PhotosPicker(selection: $pickerItems, maxSelectionCount: 10, matching: .any(of: [.images, .videos])) {
-              Label("Library", systemImage: "photo.on.rectangle")
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(.white)
-                .frame(height: 48)
-                .padding(.horizontal, 18)
-                .background(.white.opacity(0.14))
-                .clipShape(Capsule())
-            }
-            .buttonStyle(.plain)
-          }
-          .padding(.top, 6)
-        }
-
-        if let errorMessage {
-          Text(errorMessage)
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(.red.opacity(0.92))
-            .padding(.top, 22)
-        }
-
-        Spacer()
-
-        if isLoadingMedia {
-          Text("Preparing media...")
-            .font(.system(size: 14, weight: .semibold))
-            .foregroundStyle(.white.opacity(0.72))
-            .padding(.bottom, max(proxy.safeAreaInsets.bottom + 18, 34))
-        }
       }
       .frame(width: proxy.size.width, height: proxy.size.height)
-      .background(Color.black.ignoresSafeArea())
     }
   }
 
@@ -445,6 +395,9 @@ public struct CreatePostNativeView: View {
           VStack(alignment: .leading, spacing: 0) {
             postDetailsMediaStrip
               .padding(.top, 36)
+
+            postDetailsEditTools
+              .padding(.top, 18)
 
             postDetailsTextFields
               .padding(.top, 40)
@@ -477,68 +430,10 @@ public struct CreatePostNativeView: View {
     }
   }
 
-  private func postStudioStage(width: CGFloat, height: CGFloat) -> some View {
-    ZStack {
-      if let first = mediaItems.first {
-        postComposerMedia(first, width: width, height: height, cornerRadius: 0)
-      } else {
-        PhotosPicker(selection: $pickerItems, maxSelectionCount: 10, matching: .any(of: [.images, .videos])) {
-          Rectangle()
-            .fill(Color.white.opacity(0.08))
-            .frame(width: width, height: height)
-            .overlay {
-              VStack(spacing: 12) {
-                Image(systemName: "photo.on.rectangle.angled")
-                  .font(.system(size: 34, weight: .regular))
-                Text("Choose photo or video")
-                  .font(.system(size: 16, weight: .semibold))
-              }
-              .foregroundStyle(.white.opacity(0.76))
-            }
-        }
-      }
-    }
-  }
-
-  private var postStudioThumbnailStrip: some View {
-    HStack(spacing: 14) {
-      ForEach(Array(mediaItems.enumerated()), id: \.offset) { index, item in
-        postComposerMedia(item, width: 58, height: 58, cornerRadius: 11)
-          .overlay {
-            RoundedRectangle(cornerRadius: 11, style: .continuous)
-              .stroke(index == 0 ? .white : .clear, lineWidth: 2.5)
-          }
-          .onTapGesture {
-            editingMedia = MIRAEditorPresentation(media: item, replacementIndex: index)
-          }
-      }
-
-      PhotosPicker(selection: $pickerItems, maxSelectionCount: 10, matching: .any(of: [.images, .videos])) {
-        RoundedRectangle(cornerRadius: 12, style: .continuous)
-          .fill(Color.white.opacity(0.14))
-          .frame(width: 58, height: 58)
-          .overlay {
-            Image(systemName: "plus")
-              .font(.system(size: 29, weight: .light))
-              .foregroundStyle(.white)
-          }
-      }
-
-      if isLoadingMedia {
-        ProgressView()
-          .tint(.white)
-          .padding(.leading, 4)
-      }
-    }
-    .frame(maxWidth: .infinity)
-  }
-
   private var postDetailsTopBar: some View {
     HStack {
       Button {
-        withAnimation(.snappy(duration: 0.2)) {
-          isEditingPostDetails = false
-        }
+        returnToCapture()
       } label: {
         Image(systemName: "chevron.left")
           .font(.system(size: 34, weight: .medium))
@@ -581,6 +476,9 @@ public struct CreatePostNativeView: View {
               .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
               .padding(8)
           }
+          .onTapGesture {
+            editingMedia = MIRAEditorPresentation(media: first, replacementIndex: 0)
+          }
       }
 
       PhotosPicker(selection: $pickerItems, maxSelectionCount: 10, matching: .any(of: [.images, .videos])) {
@@ -594,6 +492,35 @@ public struct CreatePostNativeView: View {
           }
       }
     }
+  }
+
+  private var postDetailsEditTools: some View {
+    HStack(spacing: 12) {
+      postEditToolButton(title: "Text", systemImage: "textformat")
+      postEditToolButton(title: "Filters", systemImage: "camera.filters")
+      postEditToolButton(title: "Adjust", systemImage: "slider.horizontal.3")
+    }
+  }
+
+  private func postEditToolButton(title: String, systemImage: String) -> some View {
+    Button {
+      openPrimaryMediaEditor()
+    } label: {
+      HStack(spacing: 8) {
+        Image(systemName: systemImage)
+          .font(.system(size: 16, weight: .semibold))
+        Text(title)
+          .font(.system(size: 15, weight: .semibold))
+      }
+      .foregroundStyle(MIRATheme.Color.textPrimary)
+      .frame(height: 44)
+      .padding(.horizontal, 14)
+      .background(MIRATheme.Color.surfaceSoft.opacity(0.58))
+      .clipShape(Capsule())
+    }
+    .buttonStyle(.plain)
+    .disabled(mediaItems.isEmpty)
+    .opacity(mediaItems.isEmpty ? 0.45 : 1)
   }
 
   private var postDetailsTextFields: some View {
@@ -766,21 +693,35 @@ public struct CreatePostNativeView: View {
       let (kind, fileName, mimeType) = pickedMediaKind(from: item.supportedContentTypes, fallbackData: data)
       loaded.append(MIRAPickedMedia(data: data, kind: kind, fileName: fileName, mimeType: mimeType))
     }
-    if loaded.count == 1, let media = loaded.first {
-      editingMedia = MIRAEditorPresentation(media: media)
-    } else {
-      mediaItems.append(contentsOf: loaded)
-      if !loaded.isEmpty {
-        withAnimation(.snappy(duration: 0.2)) {
-          isEditingPostDetails = true
-        }
+    mediaItems.append(contentsOf: loaded)
+    if !loaded.isEmpty {
+      withAnimation(.snappy(duration: 0.2)) {
+        isEditingPostDetails = true
       }
     }
   }
 
-  private func presentEditor(for media: MIRAPickedMedia) {
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-      editingMedia = MIRAEditorPresentation(media: media)
+  private func addCapturedMediaAndContinue(_ media: MIRAPickedMedia) {
+    mediaItems.append(media)
+    withAnimation(.snappy(duration: 0.2)) {
+      isEditingPostDetails = true
+    }
+  }
+
+  private func openPrimaryMediaEditor() {
+    guard let first = mediaItems.first else {
+      showCamera = true
+      return
+    }
+    editingMedia = MIRAEditorPresentation(media: first, replacementIndex: 0)
+  }
+
+  private func returnToCapture() {
+    withAnimation(.snappy(duration: 0.2)) {
+      isEditingPostDetails = false
+    }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+      showCamera = true
     }
   }
 
