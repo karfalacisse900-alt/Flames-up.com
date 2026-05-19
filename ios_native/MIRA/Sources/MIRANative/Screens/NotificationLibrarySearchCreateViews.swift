@@ -278,6 +278,7 @@ private struct MIRAEditorPresentation: Identifiable {
   let id = UUID()
   let media: MIRAPickedMedia
   var replacementIndex: Int?
+  var returnsToCamera = false
 }
 
 public struct CreatePostNativeView: View {
@@ -287,14 +288,13 @@ public struct CreatePostNativeView: View {
   @State private var bodyText = ""
   @State private var mediaItems: [MIRAPickedMedia] = []
   @State private var pickerItems: [PhotosPickerItem] = []
-  @State private var showCamera = false
   @State private var showPreview = false
   @State private var isEditingPostDetails = false
-  @State private var didOpenInitialCamera = false
   @State private var isPosting = false
   @State private var isLoadingMedia = false
   @State private var errorMessage: String?
   @State private var editingMedia: MIRAEditorPresentation?
+  @State private var editedCameraMedia: MIRAPickedMedia?
 
   public init(api: MIRAAPIClient) {
     self.api = api
@@ -311,45 +311,23 @@ public struct CreatePostNativeView: View {
     .toolbar(.hidden, for: .navigationBar)
     .toolbar(.hidden, for: .tabBar)
     .navigationBarBackButtonHidden(true)
-    .task {
-      guard !didOpenInitialCamera else { return }
-      didOpenInitialCamera = true
-      showCamera = true
-    }
     .onChange(of: pickerItems) { _, newItems in
       Task { await loadPickerItems(newItems) }
-    }
-    .fullScreenCover(isPresented: $showCamera) {
-      MIRAStoryLiveCameraView(
-        onCapture: { media in
-          showCamera = false
-          addCapturedMediaAndContinue(media)
-        },
-        onCancel: {
-          showCamera = false
-          if mediaItems.isEmpty && !isEditingPostDetails {
-            dismiss()
-          } else if !isEditingPostDetails {
-            withAnimation(.snappy(duration: 0.2)) {
-              isEditingPostDetails = true
-            }
-          }
-        }
-      )
-      .ignoresSafeArea()
     }
     .sheet(isPresented: $showPreview) {
       ComposerPreviewSheet(title: title, bodyText: bodyText, mediaItems: mediaItems)
     }
     .fullScreenCover(item: $editingMedia) { item in
       MIRANativeMediaEditorView(media: item.media, mode: .post) { edited in
-        if let index = item.replacementIndex, mediaItems.indices.contains(index) {
+        if item.returnsToCamera {
+          editedCameraMedia = edited
+        } else if let index = item.replacementIndex, mediaItems.indices.contains(index) {
           mediaItems[index] = edited
         } else {
           mediaItems.append(edited)
-        }
-        withAnimation(.snappy(duration: 0.2)) {
-          isEditingPostDetails = true
+          withAnimation(.snappy(duration: 0.2)) {
+            isEditingPostDetails = true
+          }
         }
       }
       .ignoresSafeArea()
@@ -357,33 +335,29 @@ public struct CreatePostNativeView: View {
   }
 
   private var mediaFirstPage: some View {
-    GeometryReader { proxy in
-      ZStack(alignment: .topLeading) {
-        Color.black.ignoresSafeArea()
-
-        if isLoadingMedia {
-          ProgressView()
-            .tint(.white)
-            .scaleEffect(1.12)
-            .frame(width: proxy.size.width, height: proxy.size.height)
+    ZStack {
+      MIRAStoryLiveCameraView(
+        editedMedia: editedCameraMedia,
+        dismissesOnCapture: false,
+        onCapture: { media in
+          addCapturedMediaAndContinue(media)
+        },
+        onCancel: {
+          dismiss()
+        },
+        onEdit: { media, _ in
+          editingMedia = MIRAEditorPresentation(media: media, returnsToCamera: true)
         }
+      )
+      .ignoresSafeArea()
 
-        VStack {
-          Button { dismiss() } label: {
-            Image(systemName: "chevron.left")
-              .font(.system(size: 32, weight: .medium))
-              .foregroundStyle(.white)
-              .frame(width: 54, height: 54)
-          }
-          .buttonStyle(.plain)
-
-          Spacer()
-        }
-        .padding(.horizontal, 24)
-        .padding(.top, 30)
+      if isLoadingMedia {
+        ProgressView()
+          .tint(.white)
+          .scaleEffect(1.12)
       }
-      .frame(width: proxy.size.width, height: proxy.size.height)
     }
+    .background(Color.black.ignoresSafeArea())
   }
 
   private var finalPostPage: some View {
@@ -702,6 +676,7 @@ public struct CreatePostNativeView: View {
   }
 
   private func addCapturedMediaAndContinue(_ media: MIRAPickedMedia) {
+    editedCameraMedia = nil
     mediaItems.append(media)
     withAnimation(.snappy(duration: 0.2)) {
       isEditingPostDetails = true
@@ -710,18 +685,18 @@ public struct CreatePostNativeView: View {
 
   private func openPrimaryMediaEditor() {
     guard let first = mediaItems.first else {
-      showCamera = true
+      withAnimation(.snappy(duration: 0.2)) {
+        isEditingPostDetails = false
+      }
       return
     }
     editingMedia = MIRAEditorPresentation(media: first, replacementIndex: 0)
   }
 
   private func returnToCapture() {
+    editedCameraMedia = nil
     withAnimation(.snappy(duration: 0.2)) {
       isEditingPostDetails = false
-    }
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
-      showCamera = true
     }
   }
 

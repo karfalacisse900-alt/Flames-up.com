@@ -5,15 +5,33 @@ import Photos
 import PhotosUI
 import UniformTypeIdentifiers
 
+enum MIRAStoryCameraEditTool {
+  case text
+  case filters
+  case adjust
+}
+
 struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
+  var editedMedia: MIRAPickedMedia?
+  var dismissesOnCapture = true
   let onCapture: (MIRAPickedMedia) -> Void
   let onCancel: () -> Void
+  let onEdit: (MIRAPickedMedia, MIRAStoryCameraEditTool) -> Void
 
   @Environment(\.dismiss) private var dismiss
 
-  init(onCapture: @escaping (MIRAPickedMedia) -> Void, onCancel: @escaping () -> Void = {}) {
+  init(
+    editedMedia: MIRAPickedMedia? = nil,
+    dismissesOnCapture: Bool = true,
+    onCapture: @escaping (MIRAPickedMedia) -> Void,
+    onCancel: @escaping () -> Void = {},
+    onEdit: @escaping (MIRAPickedMedia, MIRAStoryCameraEditTool) -> Void = { _, _ in }
+  ) {
+    self.editedMedia = editedMedia
+    self.dismissesOnCapture = dismissesOnCapture
     self.onCapture = onCapture
     self.onCancel = onCancel
+    self.onEdit = onEdit
   }
 
   func makeUIViewController(context: Context) -> MIRAStoryCameraViewController {
@@ -22,20 +40,34 @@ struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
     return controller
   }
 
-  func updateUIViewController(_ uiViewController: MIRAStoryCameraViewController, context: Context) {}
+  func updateUIViewController(_ uiViewController: MIRAStoryCameraViewController, context: Context) {
+    if let editedMedia {
+      uiViewController.applyEditedMedia(editedMedia)
+    }
+  }
 
   func makeCoordinator() -> Coordinator {
-    Coordinator(onCapture: onCapture, onCancel: onCancel, dismiss: dismiss)
+    Coordinator(onCapture: onCapture, onCancel: onCancel, onEdit: onEdit, dismissesOnCapture: dismissesOnCapture, dismiss: dismiss)
   }
 
   final class Coordinator: NSObject, MIRAStoryCameraViewControllerDelegate {
     private let onCapture: (MIRAPickedMedia) -> Void
     private let onCancel: () -> Void
+    private let onEdit: (MIRAPickedMedia, MIRAStoryCameraEditTool) -> Void
+    private let dismissesOnCapture: Bool
     private let dismiss: DismissAction
 
-    init(onCapture: @escaping (MIRAPickedMedia) -> Void, onCancel: @escaping () -> Void, dismiss: DismissAction) {
+    init(
+      onCapture: @escaping (MIRAPickedMedia) -> Void,
+      onCancel: @escaping () -> Void,
+      onEdit: @escaping (MIRAPickedMedia, MIRAStoryCameraEditTool) -> Void,
+      dismissesOnCapture: Bool,
+      dismiss: DismissAction
+    ) {
       self.onCapture = onCapture
       self.onCancel = onCancel
+      self.onEdit = onEdit
+      self.dismissesOnCapture = dismissesOnCapture
       self.dismiss = dismiss
     }
 
@@ -46,7 +78,13 @@ struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
 
     func storyCameraDidCapture(_ media: MIRAPickedMedia) {
       onCapture(media)
-      dismiss()
+      if dismissesOnCapture {
+        dismiss()
+      }
+    }
+
+    func storyCameraDidRequestEdit(_ media: MIRAPickedMedia, tool: MIRAStoryCameraEditTool) {
+      onEdit(media, tool)
     }
   }
 }
@@ -54,6 +92,7 @@ struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
 protocol MIRAStoryCameraViewControllerDelegate: AnyObject {
   func storyCameraDidCancel()
   func storyCameraDidCapture(_ media: MIRAPickedMedia)
+  func storyCameraDidRequestEdit(_ media: MIRAPickedMedia, tool: MIRAStoryCameraEditTool)
 }
 
 final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptureDelegate, AVCaptureFileOutputRecordingDelegate, PHPickerViewControllerDelegate {
@@ -155,8 +194,10 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
   private let shutterFill = UIView()
   private let modeStack = UIStackView()
   private let rightRail = UIStackView()
+  private let reviewToolsStack = UIStackView()
   private let reviewBar = UIStackView()
   private var modeButtons: [CameraMode: UIButton] = [:]
+  private var lastAppliedEditedMediaSignature: String?
 
   private let messageLabel: UILabel = {
     let label = UILabel()
@@ -347,6 +388,17 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     let retakeButton = reviewButton(title: "Retake", foreground: .white, background: UIColor.white.withAlphaComponent(0.14), action: #selector(retakeCapturedMedia))
     let galleryReviewButton = reviewButton(title: "Gallery", foreground: .white, background: UIColor.white.withAlphaComponent(0.14), action: #selector(openGallery))
     let nextButton = reviewButton(title: "Next", foreground: .black, background: .white, action: #selector(confirmCapturedMedia))
+    let textEditButton = reviewToolButton(title: "Text", systemImage: "textformat", action: #selector(editTextTapped))
+    let filtersEditButton = reviewToolButton(title: "Filters", systemImage: "camera.filters", action: #selector(editFiltersTapped))
+    let adjustEditButton = reviewToolButton(title: "Adjust", systemImage: "slider.horizontal.3", action: #selector(editAdjustTapped))
+    reviewToolsStack.axis = .horizontal
+    reviewToolsStack.spacing = 10
+    reviewToolsStack.distribution = .fillEqually
+    reviewToolsStack.translatesAutoresizingMaskIntoConstraints = false
+    reviewToolsStack.addArrangedSubview(textEditButton)
+    reviewToolsStack.addArrangedSubview(filtersEditButton)
+    reviewToolsStack.addArrangedSubview(adjustEditButton)
+
     reviewBar.axis = .horizontal
     reviewBar.spacing = 12
     reviewBar.distribution = .fillEqually
@@ -358,7 +410,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     messageLabel.translatesAutoresizingMaskIntoConstraints = false
     countdownLabel.translatesAutoresizingMaskIntoConstraints = false
 
-    [closeButton, rightRail, shutterButton, galleryButton, effectsButton, modeStack, reviewBar, messageLabel, countdownLabel].forEach {
+    [closeButton, rightRail, shutterButton, galleryButton, effectsButton, modeStack, reviewToolsStack, reviewBar, messageLabel, countdownLabel].forEach {
       view.addSubview($0)
     }
 
@@ -404,6 +456,11 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
       reviewBar.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -24),
       reviewBar.heightAnchor.constraint(equalToConstant: 56),
 
+      reviewToolsStack.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 24),
+      reviewToolsStack.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -24),
+      reviewToolsStack.bottomAnchor.constraint(equalTo: reviewBar.topAnchor, constant: -12),
+      reviewToolsStack.heightAnchor.constraint(equalToConstant: 46),
+
       messageLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 34),
       messageLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -34),
       messageLabel.centerYAnchor.constraint(equalTo: view.centerYAnchor),
@@ -444,6 +501,24 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     button.backgroundColor = background
     button.layer.cornerRadius = 22
     button.layer.cornerCurve = .continuous
+    button.addTarget(self, action: action, for: .touchUpInside)
+    return button
+  }
+
+  private func reviewToolButton(title: String, systemImage: String, action: Selector) -> UIButton {
+    let button = UIButton(type: .system)
+    var configuration = UIButton.Configuration.filled()
+    configuration.title = title
+    configuration.image = UIImage(systemName: systemImage)
+    configuration.imagePadding = 7
+    configuration.baseForegroundColor = .white
+    configuration.baseBackgroundColor = UIColor.white.withAlphaComponent(0.16)
+    configuration.contentInsets = NSDirectionalEdgeInsets(top: 8, leading: 10, bottom: 8, trailing: 10)
+    button.configuration = configuration
+    button.titleLabel?.font = .systemFont(ofSize: 14, weight: .semibold)
+    button.layer.cornerRadius = 19
+    button.layer.cornerCurve = .continuous
+    button.clipsToBounds = true
     button.addTarget(self, action: action, for: .touchUpInside)
     return button
   }
@@ -602,6 +677,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
   private func setReviewMode(_ isReviewing: Bool) {
     capturedImageView.isHidden = !isReviewing
     capturedPlayIcon.isHidden = !isReviewing || capturedMedia?.kind != .video
+    reviewToolsStack.isHidden = !isReviewing
     reviewBar.isHidden = !isReviewing
     rightRail.isHidden = isReviewing
     shutterButton.isHidden = isReviewing
@@ -656,7 +732,29 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
   }
 
   @objc private func filtersTapped() {
-    showTransientMessage("Filters are available after capture.")
+    guard let capturedMedia else {
+      showTransientMessage("Filters are available after capture.")
+      return
+    }
+    delegate?.storyCameraDidRequestEdit(capturedMedia, tool: .filters)
+  }
+
+  @objc private func editTextTapped() {
+    requestEdit(.text)
+  }
+
+  @objc private func editFiltersTapped() {
+    requestEdit(.filters)
+  }
+
+  @objc private func editAdjustTapped() {
+    requestEdit(.adjust)
+  }
+
+  private func requestEdit(_ tool: MIRAStoryCameraEditTool) {
+    guard let capturedMedia else { return }
+    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    delegate?.storyCameraDidRequestEdit(capturedMedia, tool: tool)
   }
 
   @objc private func openGallery() {
@@ -895,6 +993,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
 
   @objc private func retakeCapturedMedia() {
     capturedMedia = nil
+    lastAppliedEditedMediaSignature = nil
     capturedImageView.image = nil
     setReviewMode(false)
     UIImpactFeedbackGenerator(style: .light).impactOccurred()
@@ -907,6 +1006,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
 
   private func showCapturedMedia(_ media: MIRAPickedMedia, thumbnail: UIImage? = nil) {
     capturedMedia = media
+    lastAppliedEditedMediaSignature = editedMediaSignature(media)
     if media.kind == .image {
       capturedImageView.image = UIImage(data: media.data)
       capturedPlayIcon.isHidden = true
@@ -923,6 +1023,16 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
         self.capturedImageView.image = image
       }
     }
+  }
+
+  func applyEditedMedia(_ media: MIRAPickedMedia) {
+    let signature = editedMediaSignature(media)
+    guard signature != lastAppliedEditedMediaSignature else { return }
+    showCapturedMedia(media)
+  }
+
+  private func editedMediaSignature(_ media: MIRAPickedMedia) -> String {
+    "\(media.fileName)-\(media.data.count)-\(media.editorMetadata?.appliedFilter ?? "none")-\(media.editorMetadata?.hasTextOverlay == true)"
   }
 
   private func makeVideoThumbnail(from data: Data, completion: @escaping (UIImage?) -> Void) {
