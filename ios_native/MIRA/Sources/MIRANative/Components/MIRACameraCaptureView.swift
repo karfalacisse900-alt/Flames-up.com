@@ -177,6 +177,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
   private let previewContainer = UIView()
   private let gridOverlay = MIRACameraGridOverlayView()
   private let capturedImageView = UIImageView()
+  private let textOverlayContainer = UIView()
   private let capturedPlayIcon = UIImageView(image: UIImage(systemName: "play.fill"))
   private let focusRing = UIView()
   private let loadingIndicator = UIActivityIndicatorView(style: .large)
@@ -194,10 +195,25 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
   private let shutterFill = UIView()
   private let modeStack = UIStackView()
   private let rightRail = UIStackView()
+  private let inlineEditPanel = UIView()
+  private let filterScrollView = UIScrollView()
+  private let filterStack = UIStackView()
+  private let adjustmentStack = UIStackView()
+  private let brightnessSlider = UISlider()
+  private let contrastSlider = UISlider()
+  private let saturationSlider = UISlider()
   private let reviewToolsStack = UIStackView()
   private let reviewBar = UIStackView()
   private var modeButtons: [CameraMode: UIButton] = [:]
   private var lastAppliedEditedMediaSignature: String?
+  private var inlineEditPanelHeightConstraint: NSLayoutConstraint?
+  private var inlinePanelConstraints: [NSLayoutConstraint] = []
+  private var capturedOriginalImage: UIImage?
+  private var activeFilter: MIRANativeEditorFilter = .original
+  private var activeBrightness: Double = 0
+  private var activeContrast: Double = 1
+  private var activeSaturation: Double = 1
+  private var textLabels: [UILabel] = []
 
   private let messageLabel: UILabel = {
     let label = UILabel()
@@ -283,6 +299,12 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     capturedImageView.isHidden = true
     previewContainer.addSubview(capturedImageView)
 
+    textOverlayContainer.translatesAutoresizingMaskIntoConstraints = false
+    textOverlayContainer.backgroundColor = .clear
+    textOverlayContainer.clipsToBounds = true
+    textOverlayContainer.isHidden = true
+    previewContainer.addSubview(textOverlayContainer)
+
     capturedPlayIcon.translatesAutoresizingMaskIntoConstraints = false
     capturedPlayIcon.tintColor = .white
     capturedPlayIcon.contentMode = .scaleAspectFit
@@ -313,6 +335,11 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
       capturedImageView.leadingAnchor.constraint(equalTo: previewContainer.leadingAnchor),
       capturedImageView.trailingAnchor.constraint(equalTo: previewContainer.trailingAnchor),
       capturedImageView.bottomAnchor.constraint(equalTo: previewContainer.bottomAnchor),
+
+      textOverlayContainer.topAnchor.constraint(equalTo: previewContainer.topAnchor),
+      textOverlayContainer.leadingAnchor.constraint(equalTo: previewContainer.leadingAnchor),
+      textOverlayContainer.trailingAnchor.constraint(equalTo: previewContainer.trailingAnchor),
+      textOverlayContainer.bottomAnchor.constraint(equalTo: previewContainer.bottomAnchor),
 
       capturedPlayIcon.centerXAnchor.constraint(equalTo: previewContainer.centerXAnchor),
       capturedPlayIcon.centerYAnchor.constraint(equalTo: previewContainer.centerYAnchor),
@@ -407,12 +434,43 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     reviewBar.addArrangedSubview(galleryReviewButton)
     reviewBar.addArrangedSubview(nextButton)
 
+    inlineEditPanel.translatesAutoresizingMaskIntoConstraints = false
+    inlineEditPanel.backgroundColor = UIColor.black.withAlphaComponent(0.58)
+    inlineEditPanel.layer.cornerRadius = 24
+    inlineEditPanel.layer.cornerCurve = .continuous
+    inlineEditPanel.layer.borderColor = UIColor.white.withAlphaComponent(0.08).cgColor
+    inlineEditPanel.layer.borderWidth = 1
+    inlineEditPanel.clipsToBounds = true
+    inlineEditPanel.isHidden = true
+
+    filterScrollView.translatesAutoresizingMaskIntoConstraints = false
+    filterScrollView.showsHorizontalScrollIndicator = false
+    filterStack.axis = .horizontal
+    filterStack.spacing = 10
+    filterStack.alignment = .center
+    filterStack.translatesAutoresizingMaskIntoConstraints = false
+    filterScrollView.addSubview(filterStack)
+
+    adjustmentStack.axis = .vertical
+    adjustmentStack.spacing = 8
+    adjustmentStack.translatesAutoresizingMaskIntoConstraints = false
+    configureAdjustmentSlider(brightnessSlider, value: 0, minimum: -0.35, maximum: 0.35)
+    configureAdjustmentSlider(contrastSlider, value: 1, minimum: 0.65, maximum: 1.45)
+    configureAdjustmentSlider(saturationSlider, value: 1, minimum: 0, maximum: 1.8)
+    [
+      adjustmentRow(title: "Brightness", slider: brightnessSlider),
+      adjustmentRow(title: "Contrast", slider: contrastSlider),
+      adjustmentRow(title: "Saturation", slider: saturationSlider)
+    ].forEach { adjustmentStack.addArrangedSubview($0) }
+
     messageLabel.translatesAutoresizingMaskIntoConstraints = false
     countdownLabel.translatesAutoresizingMaskIntoConstraints = false
 
-    [closeButton, rightRail, shutterButton, galleryButton, effectsButton, modeStack, reviewToolsStack, reviewBar, messageLabel, countdownLabel].forEach {
+    [closeButton, rightRail, shutterButton, galleryButton, effectsButton, modeStack, inlineEditPanel, reviewToolsStack, reviewBar, messageLabel, countdownLabel].forEach {
       view.addSubview($0)
     }
+    inlineEditPanelHeightConstraint = inlineEditPanel.heightAnchor.constraint(equalToConstant: 58)
+    inlineEditPanelHeightConstraint?.isActive = true
 
     NSLayoutConstraint.activate([
       previewContainer.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),
@@ -460,6 +518,10 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
       reviewToolsStack.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -24),
       reviewToolsStack.bottomAnchor.constraint(equalTo: reviewBar.topAnchor, constant: -12),
       reviewToolsStack.heightAnchor.constraint(equalToConstant: 46),
+
+      inlineEditPanel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 18),
+      inlineEditPanel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -18),
+      inlineEditPanel.bottomAnchor.constraint(equalTo: reviewToolsStack.topAnchor, constant: -10),
 
       messageLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 34),
       messageLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -34),
@@ -521,6 +583,31 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     button.clipsToBounds = true
     button.addTarget(self, action: action, for: .touchUpInside)
     return button
+  }
+
+  private func configureAdjustmentSlider(_ slider: UISlider, value: Float, minimum: Float, maximum: Float) {
+    slider.minimumValue = minimum
+    slider.maximumValue = maximum
+    slider.value = value
+    slider.minimumTrackTintColor = .white
+    slider.maximumTrackTintColor = UIColor.white.withAlphaComponent(0.22)
+    slider.thumbTintColor = .white
+    slider.addTarget(self, action: #selector(adjustmentSliderChanged), for: .valueChanged)
+  }
+
+  private func adjustmentRow(title: String, slider: UISlider) -> UIView {
+    let row = UIStackView()
+    row.axis = .horizontal
+    row.spacing = 10
+    row.alignment = .center
+    let label = UILabel()
+    label.text = title
+    label.textColor = .white
+    label.font = .systemFont(ofSize: 13, weight: .semibold)
+    label.widthAnchor.constraint(equalToConstant: 82).isActive = true
+    row.addArrangedSubview(label)
+    row.addArrangedSubview(slider)
+    return row
   }
 
   private func prepareCamera() {
@@ -676,15 +763,98 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
 
   private func setReviewMode(_ isReviewing: Bool) {
     capturedImageView.isHidden = !isReviewing
+    textOverlayContainer.isHidden = !isReviewing
     capturedPlayIcon.isHidden = !isReviewing || capturedMedia?.kind != .video
     reviewToolsStack.isHidden = !isReviewing
     reviewBar.isHidden = !isReviewing
+    if !isReviewing {
+      inlineEditPanel.isHidden = true
+    }
     rightRail.isHidden = isReviewing
     shutterButton.isHidden = isReviewing
     shutterFill.isHidden = isReviewing
     modeStack.isHidden = isReviewing
     galleryButton.isHidden = isReviewing
     effectsButton.isHidden = isReviewing
+  }
+
+  private func showFilterPanel() {
+    guard capturedMedia?.kind == .image else {
+      showTransientMessage("Video filters are coming soon.")
+      return
+    }
+    clearInlinePanel()
+    inlineEditPanelHeightConstraint?.constant = 58
+    inlineEditPanel.addSubview(filterScrollView)
+    inlinePanelConstraints = [
+      filterScrollView.topAnchor.constraint(equalTo: inlineEditPanel.topAnchor),
+      filterScrollView.leadingAnchor.constraint(equalTo: inlineEditPanel.leadingAnchor, constant: 10),
+      filterScrollView.trailingAnchor.constraint(equalTo: inlineEditPanel.trailingAnchor, constant: -10),
+      filterScrollView.bottomAnchor.constraint(equalTo: inlineEditPanel.bottomAnchor),
+      filterStack.topAnchor.constraint(equalTo: filterScrollView.contentLayoutGuide.topAnchor),
+      filterStack.leadingAnchor.constraint(equalTo: filterScrollView.contentLayoutGuide.leadingAnchor),
+      filterStack.trailingAnchor.constraint(equalTo: filterScrollView.contentLayoutGuide.trailingAnchor),
+      filterStack.bottomAnchor.constraint(equalTo: filterScrollView.contentLayoutGuide.bottomAnchor),
+      filterStack.heightAnchor.constraint(equalTo: filterScrollView.frameLayoutGuide.heightAnchor)
+    ]
+    NSLayoutConstraint.activate(inlinePanelConstraints)
+    MIRANativeEditorFilter.allCases.forEach { filter in
+      let button = inlinePillButton(title: filter.title, isSelected: filter == activeFilter)
+      button.addAction(UIAction { [weak self] _ in
+        self?.activeFilter = filter
+        self?.showFilterPanel()
+        self?.applyCurrentPhotoPreview()
+      }, for: .touchUpInside)
+      filterStack.addArrangedSubview(button)
+    }
+    showInlinePanel()
+  }
+
+  private func showAdjustPanel() {
+    guard capturedMedia?.kind == .image else {
+      showTransientMessage("Video adjustments are coming soon.")
+      return
+    }
+    clearInlinePanel()
+    inlineEditPanelHeightConstraint?.constant = 132
+    inlineEditPanel.addSubview(adjustmentStack)
+    inlinePanelConstraints = [
+      adjustmentStack.topAnchor.constraint(equalTo: inlineEditPanel.topAnchor, constant: 12),
+      adjustmentStack.leadingAnchor.constraint(equalTo: inlineEditPanel.leadingAnchor, constant: 16),
+      adjustmentStack.trailingAnchor.constraint(equalTo: inlineEditPanel.trailingAnchor, constant: -16),
+      adjustmentStack.bottomAnchor.constraint(equalTo: inlineEditPanel.bottomAnchor, constant: -12)
+    ]
+    NSLayoutConstraint.activate(inlinePanelConstraints)
+    showInlinePanel()
+  }
+
+  private func showInlinePanel() {
+    inlineEditPanel.isHidden = false
+    UIView.animate(withDuration: 0.16) {
+      self.view.layoutIfNeeded()
+    }
+  }
+
+  private func clearInlinePanel() {
+    NSLayoutConstraint.deactivate(inlinePanelConstraints)
+    inlinePanelConstraints = []
+    inlineEditPanel.subviews.forEach { $0.removeFromSuperview() }
+    filterStack.arrangedSubviews.forEach { view in
+      filterStack.removeArrangedSubview(view)
+      view.removeFromSuperview()
+    }
+  }
+
+  private func inlinePillButton(title: String, isSelected: Bool) -> UIButton {
+    let button = UIButton(type: .system)
+    button.setTitle(title, for: .normal)
+    button.titleLabel?.font = .systemFont(ofSize: 13, weight: .semibold)
+    button.setTitleColor(isSelected ? .black : .white, for: .normal)
+    button.backgroundColor = isSelected ? .white : UIColor.white.withAlphaComponent(0.16)
+    button.layer.cornerRadius = 18
+    button.layer.cornerCurve = .continuous
+    button.contentEdgeInsets = UIEdgeInsets(top: 8, left: 14, bottom: 8, right: 14)
+    return button
   }
 
   private func setRecordingState(_ isRecording: Bool) {
@@ -732,29 +902,138 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
   }
 
   @objc private func filtersTapped() {
-    guard let capturedMedia else {
+    guard capturedMedia != nil else {
       showTransientMessage("Filters are available after capture.")
       return
     }
-    delegate?.storyCameraDidRequestEdit(capturedMedia, tool: .filters)
+    showFilterPanel()
   }
 
   @objc private func editTextTapped() {
-    requestEdit(.text)
+    guard capturedMedia != nil else { return }
+    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    presentTextEditor()
   }
 
   @objc private func editFiltersTapped() {
-    requestEdit(.filters)
+    guard capturedMedia != nil else { return }
+    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    showFilterPanel()
   }
 
   @objc private func editAdjustTapped() {
-    requestEdit(.adjust)
+    guard capturedMedia != nil else { return }
+    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    showAdjustPanel()
   }
 
-  private func requestEdit(_ tool: MIRAStoryCameraEditTool) {
-    guard let capturedMedia else { return }
-    UIImpactFeedbackGenerator(style: .light).impactOccurred()
-    delegate?.storyCameraDidRequestEdit(capturedMedia, tool: tool)
+  private func presentTextEditor(for label: UILabel? = nil) {
+    let alert = UIAlertController(title: label == nil ? "Add text" : "Edit text", message: nil, preferredStyle: .alert)
+    alert.addTextField { textField in
+      textField.placeholder = "Text"
+      textField.text = label?.text == "Text" ? "" : label?.text
+      textField.autocapitalizationType = .sentences
+    }
+    alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+    if let label {
+      alert.addAction(UIAlertAction(title: "Delete", style: .destructive) { [weak self, weak label] _ in
+        guard let self, let label else { return }
+        self.textLabels.removeAll { $0 === label }
+        label.removeFromSuperview()
+      })
+    }
+    alert.addAction(UIAlertAction(title: label == nil ? "Add" : "Save", style: .default) { [weak self, weak label] _ in
+      guard let self else { return }
+      let text = alert.textFields?.first?.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+      guard !text.isEmpty else { return }
+      if let label {
+        label.text = text
+        label.sizeToFit()
+        label.bounds = CGRect(
+          x: 0,
+          y: 0,
+          width: min(max(label.bounds.width + 28, 96), self.textOverlayContainer.bounds.width - 36),
+          height: label.bounds.height + 12
+        )
+      } else {
+        self.addTextLabel(text)
+      }
+    })
+    present(alert, animated: true)
+  }
+
+  private func addTextLabel(_ text: String) {
+    let label = UILabel()
+    label.text = text
+    label.textColor = .white
+    label.textAlignment = .center
+    label.numberOfLines = 0
+    label.font = .systemFont(ofSize: 34, weight: .semibold)
+    label.layer.shadowColor = UIColor.black.cgColor
+    label.layer.shadowOpacity = 0.36
+    label.layer.shadowRadius = 10
+    label.layer.shadowOffset = CGSize(width: 0, height: 4)
+    label.isUserInteractionEnabled = true
+    label.accessibilityLabel = "Text overlay"
+    label.sizeToFit()
+    let width = min(max(label.bounds.width + 34, 120), textOverlayContainer.bounds.width - 44)
+    label.bounds = CGRect(x: 0, y: 0, width: width, height: max(label.bounds.height + 16, 52))
+    label.center = CGPoint(x: textOverlayContainer.bounds.midX, y: textOverlayContainer.bounds.midY)
+    label.addGestureRecognizer(UIPanGestureRecognizer(target: self, action: #selector(textOverlayPanned(_:))))
+    label.addGestureRecognizer(UIPinchGestureRecognizer(target: self, action: #selector(textOverlayPinched(_:))))
+    label.addGestureRecognizer(UIRotationGestureRecognizer(target: self, action: #selector(textOverlayRotated(_:))))
+    label.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(textOverlayTapped(_:))))
+    let longPress = UILongPressGestureRecognizer(target: self, action: #selector(textOverlayLongPressed(_:)))
+    longPress.minimumPressDuration = 0.35
+    label.addGestureRecognizer(longPress)
+    textOverlayContainer.addSubview(label)
+    textLabels.append(label)
+  }
+
+  @objc private func textOverlayPanned(_ recognizer: UIPanGestureRecognizer) {
+    guard let label = recognizer.view else { return }
+    let translation = recognizer.translation(in: textOverlayContainer)
+    let proposed = CGPoint(x: label.center.x + translation.x, y: label.center.y + translation.y)
+    label.center = CGPoint(
+      x: min(max(proposed.x, 34), textOverlayContainer.bounds.width - 34),
+      y: min(max(proposed.y, 34), textOverlayContainer.bounds.height - 34)
+    )
+    recognizer.setTranslation(.zero, in: textOverlayContainer)
+  }
+
+  @objc private func textOverlayPinched(_ recognizer: UIPinchGestureRecognizer) {
+    guard let label = recognizer.view else { return }
+    label.transform = label.transform.scaledBy(x: recognizer.scale, y: recognizer.scale)
+    recognizer.scale = 1
+  }
+
+  @objc private func textOverlayRotated(_ recognizer: UIRotationGestureRecognizer) {
+    guard let label = recognizer.view else { return }
+    label.transform = label.transform.rotated(by: recognizer.rotation)
+    recognizer.rotation = 0
+  }
+
+  @objc private func textOverlayTapped(_ recognizer: UITapGestureRecognizer) {
+    guard let label = recognizer.view as? UILabel else { return }
+    presentTextEditor(for: label)
+  }
+
+  @objc private func textOverlayLongPressed(_ recognizer: UILongPressGestureRecognizer) {
+    guard recognizer.state == .began, let label = recognizer.view as? UILabel else { return }
+    textLabels.removeAll { $0 === label }
+    UIView.animate(withDuration: 0.14, animations: {
+      label.alpha = 0
+      label.transform = label.transform.scaledBy(x: 0.82, y: 0.82)
+    }, completion: { _ in
+      label.removeFromSuperview()
+    })
+  }
+
+  @objc private func adjustmentSliderChanged() {
+    activeBrightness = Double(brightnessSlider.value)
+    activeContrast = Double(contrastSlider.value)
+    activeSaturation = Double(saturationSlider.value)
+    applyCurrentPhotoPreview()
   }
 
   @objc private func openGallery() {
@@ -994,6 +1273,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
   @objc private func retakeCapturedMedia() {
     capturedMedia = nil
     lastAppliedEditedMediaSignature = nil
+    resetInlineEdits()
     capturedImageView.image = nil
     setReviewMode(false)
     UIImpactFeedbackGenerator(style: .light).impactOccurred()
@@ -1001,20 +1281,40 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
 
   @objc private func confirmCapturedMedia() {
     guard let capturedMedia else { return }
-    delegate?.storyCameraDidCapture(capturedMedia)
+    let recipe = currentEditRecipe(for: capturedMedia)
+    guard recipe.hasEdits else {
+      delegate?.storyCameraDidCapture(capturedMedia)
+      return
+    }
+    showExportState(true)
+    Task { @MainActor in
+      do {
+        let finalMedia = try await exportInlineEditedMedia(from: capturedMedia, recipe: recipe)
+        showExportState(false)
+        delegate?.storyCameraDidCapture(finalMedia)
+      } catch {
+        showExportState(false)
+        showTransientMessage("Edits could not be applied. Try again.")
+      }
+    }
   }
 
   private func showCapturedMedia(_ media: MIRAPickedMedia, thumbnail: UIImage? = nil) {
     capturedMedia = media
     lastAppliedEditedMediaSignature = editedMediaSignature(media)
+    resetInlineEdits(keepMedia: true)
     if media.kind == .image {
-      capturedImageView.image = UIImage(data: media.data)
+      let image = UIImage(data: media.data)
+      capturedOriginalImage = image
+      capturedImageView.image = image
       capturedPlayIcon.isHidden = true
       setReviewMode(true)
     } else if let thumbnail {
+      capturedOriginalImage = nil
       capturedImageView.image = thumbnail
       setReviewMode(true)
     } else {
+      capturedOriginalImage = nil
       capturedImageView.image = nil
       capturedImageView.backgroundColor = UIColor.black.withAlphaComponent(0.92)
       setReviewMode(true)
@@ -1022,6 +1322,90 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
         guard let self, self.capturedMedia?.fileName == media.fileName else { return }
         self.capturedImageView.image = image
       }
+    }
+  }
+
+  private func resetInlineEdits(keepMedia: Bool = false) {
+    activeFilter = .original
+    activeBrightness = 0
+    activeContrast = 1
+    activeSaturation = 1
+    brightnessSlider.value = 0
+    contrastSlider.value = 1
+    saturationSlider.value = 1
+    inlineEditPanel.isHidden = true
+    clearInlinePanel()
+    textLabels.forEach { $0.removeFromSuperview() }
+    textLabels.removeAll()
+    if !keepMedia {
+      capturedOriginalImage = nil
+    }
+  }
+
+  private func currentEditRecipe(for media: MIRAPickedMedia) -> MIRANativeEditRecipe {
+    MIRANativeEditRecipe(
+      mediaId: media.fileName,
+      mediaType: media.kind == .image ? .photo : .video,
+      selectedFilter: activeFilter,
+      brightness: activeBrightness,
+      contrast: activeContrast,
+      saturation: activeSaturation,
+      textLayers: currentTextLayers()
+    )
+  }
+
+  private func currentTextLayers() -> [MIRANativeTextLayer] {
+    let bounds = textOverlayContainer.bounds
+    guard bounds.width > 0, bounds.height > 0 else { return [] }
+    return textLabels.enumerated().compactMap { index, label in
+      guard let text = label.text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return nil }
+      let transform = label.transform
+      let scale = max(0.5, min(3.2, sqrt(transform.a * transform.a + transform.c * transform.c)))
+      let rotation = atan2(transform.b, transform.a)
+      return MIRANativeTextLayer(
+        text: text,
+        x: label.center.x / bounds.width,
+        y: label.center.y / bounds.height,
+        scale: scale,
+        rotation: rotation,
+        colorHex: "#FFFFFF",
+        fontSize: 34,
+        alignment: "center",
+        zIndex: index
+      )
+    }
+  }
+
+  private func applyCurrentPhotoPreview() {
+    guard let capturedMedia, capturedMedia.kind == .image, let original = capturedOriginalImage else { return }
+    let recipe = currentEditRecipe(for: capturedMedia)
+    DispatchQueue.global(qos: .userInitiated).async {
+      let preview = MIRANativeMediaEditorRenderer.applyPhotoFilter(to: original, recipe: recipe)
+      DispatchQueue.main.async { [weak self] in
+        guard let self, self.capturedMedia?.fileName == capturedMedia.fileName else { return }
+        self.capturedImageView.image = preview
+      }
+    }
+  }
+
+  private func exportInlineEditedMedia(from media: MIRAPickedMedia, recipe: MIRANativeEditRecipe) async throws -> MIRAPickedMedia {
+    switch media.kind {
+    case .image:
+      return try await MIRANativeMediaEditorExporter.exportPhoto(media: media, recipe: recipe)
+    case .video:
+      return try await MIRANativeMediaEditorExporter.exportVideo(media: media, recipe: recipe)
+    }
+  }
+
+  private func showExportState(_ isExporting: Bool) {
+    reviewBar.isUserInteractionEnabled = !isExporting
+    reviewToolsStack.isUserInteractionEnabled = !isExporting
+    if isExporting {
+      loadingIndicator.startAnimating()
+      loadingIndicator.isHidden = false
+    } else {
+      loadingIndicator.stopAnimating()
+      loadingIndicator.isHidden = true
     }
   }
 
