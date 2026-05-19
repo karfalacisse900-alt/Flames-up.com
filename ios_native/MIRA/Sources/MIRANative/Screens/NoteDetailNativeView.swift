@@ -5,7 +5,7 @@ import UIKit
 final class NoteDetailNativeModel: ObservableObject {
   @Published var note: MIRANote
   @Published var comments: [MIRAComment] = []
-  private let api: MIRAAPIClient
+  let api: MIRAAPIClient
 
   init(note: MIRANote, api: MIRAAPIClient) {
     self.note = note
@@ -148,11 +148,22 @@ public struct NoteDetailNativeView: View {
       }
       .buttonStyle(.plain)
 
-      Text(model.note.user?.displayName ?? "mira")
-        .font(.system(size: 19, weight: .semibold))
-        .foregroundStyle(MIRATheme.Color.textPrimary)
-        .lineLimit(1)
-        .minimumScaleFactor(0.82)
+      if let userId = model.note.user?.id, !userId.isEmpty {
+        NavigationLink(destination: UserProfileNativeView(userId: userId, api: model.api)) {
+          Text(model.note.user?.displayName ?? "mira")
+            .font(.system(size: 19, weight: .semibold))
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+            .lineLimit(1)
+            .minimumScaleFactor(0.82)
+        }
+        .buttonStyle(.plain)
+      } else {
+        Text(model.note.user?.displayName ?? "mira")
+          .font(.system(size: 19, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .lineLimit(1)
+          .minimumScaleFactor(0.82)
+      }
 
       Text(noteAge(model.note.createdAt))
         .font(.system(size: 16, weight: .semibold))

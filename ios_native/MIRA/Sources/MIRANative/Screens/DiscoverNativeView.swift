@@ -227,6 +227,7 @@ public struct DiscoverNativeView: View {
             ForEach(model.notes) { note in
               NoteCardNative(
                 note: note,
+                api: model.api,
                 width: width,
                 height: height,
                 onOpen: { selectedNote = note },
@@ -489,6 +490,7 @@ private struct StoryBubblePlaceholder: View {
 
 private struct NoteCardNative: View {
   let note: MIRANote
+  let api: MIRAAPIClient
   let width: CGFloat
   let height: CGFloat
   let onOpen: () -> Void
@@ -506,11 +508,22 @@ private struct NoteCardNative: View {
         }
         .buttonStyle(.plain)
         HStack(spacing: 5) {
-          Text(note.user?.displayName ?? "mira")
-            .font(.system(size: 14, weight: .semibold))
-            .foregroundStyle(MIRATheme.Color.textPrimary)
-            .lineLimit(1)
-            .minimumScaleFactor(0.82)
+          if let userId = note.user?.id, !userId.isEmpty {
+            NavigationLink(destination: UserProfileNativeView(userId: userId, api: api)) {
+              Text(note.user?.displayName ?? "mira")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(MIRATheme.Color.textPrimary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.82)
+            }
+            .buttonStyle(.plain)
+          } else {
+            Text(note.user?.displayName ?? "mira")
+              .font(.system(size: 14, weight: .semibold))
+              .foregroundStyle(MIRATheme.Color.textPrimary)
+              .lineLimit(1)
+              .minimumScaleFactor(0.82)
+          }
           Text(noteAge(note.createdAt))
             .font(.system(size: 12, weight: .semibold))
             .foregroundStyle(MIRATheme.Color.textMuted)

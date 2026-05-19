@@ -10,9 +10,14 @@ public struct MIRAUser: Codable, Identifiable, Hashable {
   public let followersCount: Int?
   public let followingCount: Int?
   public let postsCount: Int?
+  public let isFollowing: Bool?
 
   public var displayName: String {
     username?.isEmpty == false ? username! : (fullName?.isEmpty == false ? fullName! : "mira")
+  }
+
+  public var viewerFollowing: Bool {
+    isFollowing == true
   }
 }
 

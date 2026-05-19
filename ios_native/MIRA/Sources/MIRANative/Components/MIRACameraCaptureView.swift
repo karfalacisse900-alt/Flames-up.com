@@ -1,66 +1,6 @@
 import SwiftUI
 import UIKit
 import AVFoundation
-import UniformTypeIdentifiers
-
-public struct MIRACameraCaptureView: UIViewControllerRepresentable {
-  public typealias UIViewControllerType = UIImagePickerController
-
-  let allowsVideo: Bool
-  let onCapture: (MIRAPickedMedia) -> Void
-
-  @Environment(\.dismiss) private var dismiss
-
-  public init(allowsVideo: Bool = true, onCapture: @escaping (MIRAPickedMedia) -> Void) {
-    self.allowsVideo = allowsVideo
-    self.onCapture = onCapture
-  }
-
-  public func makeUIViewController(context: Context) -> UIImagePickerController {
-    let picker = UIImagePickerController()
-    picker.sourceType = UIImagePickerController.isSourceTypeAvailable(.camera) ? .camera : .photoLibrary
-    picker.mediaTypes = allowsVideo ? [UTType.image.identifier, UTType.movie.identifier] : [UTType.image.identifier]
-    picker.videoQuality = .typeHigh
-    picker.delegate = context.coordinator
-    return picker
-  }
-
-  public func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
-
-  public func makeCoordinator() -> Coordinator {
-    Coordinator(parent: self)
-  }
-
-  public final class Coordinator: NSObject, UINavigationControllerDelegate, UIImagePickerControllerDelegate {
-    private let parent: MIRACameraCaptureView
-
-    init(parent: MIRACameraCaptureView) {
-      self.parent = parent
-    }
-
-    public func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
-      parent.dismiss()
-    }
-
-    public func imagePickerController(
-      _ picker: UIImagePickerController,
-      didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]
-    ) {
-      defer { parent.dismiss() }
-
-      if let videoURL = info[.mediaURL] as? URL,
-         let data = try? Data(contentsOf: videoURL) {
-        parent.onCapture(MIRAPickedMedia(data: data, kind: .video, fileName: "\(UUID().uuidString).mov", mimeType: "video/quicktime"))
-        return
-      }
-
-      if let image = info[.originalImage] as? UIImage,
-         let data = image.jpegData(compressionQuality: 0.9) {
-        parent.onCapture(MIRAPickedMedia(data: data, kind: .image, fileName: "\(UUID().uuidString).jpg", mimeType: "image/jpeg"))
-      }
-    }
-  }
-}
 
 struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
   let onCapture: (MIRAPickedMedia) -> Void
@@ -129,7 +69,6 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
   private let previewLayer = AVCaptureVideoPreviewLayer()
   private var currentInput: AVCaptureDeviceInput?
   private var cameraPosition: AVCaptureDevice.Position = .back
-  private var flashMode: AVCaptureDevice.FlashMode = .off
   private var isConfigured = false
 
   private let messageLabel: UILabel = {
@@ -172,24 +111,12 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
 
   private func installControls() {
     let closeButton = iconButton(systemName: "xmark", action: #selector(cancelTapped))
-    let flashButton = iconButton(systemName: "bolt.slash", action: #selector(toggleFlash))
     let flipButton = iconButton(systemName: "arrow.triangle.2.circlepath.camera", action: #selector(flipCamera))
-    let textButton = textOverlayButton("Aa")
-    let loopButton = iconButton(systemName: "infinity", action: #selector(noop))
-    let layoutButton = iconButton(systemName: "square.split.2x1", action: #selector(noop))
-    let effectsButton = iconButton(systemName: "face.smiling", action: #selector(noop))
-    let confirmButton = iconButton(systemName: "checkmark", action: #selector(noop))
 
-    let topRow = UIStackView(arrangedSubviews: [closeButton, UIView(), flashButton, UIView(), flipButton])
+    let topRow = UIStackView(arrangedSubviews: [closeButton, UIView(), flipButton])
     topRow.axis = .horizontal
     topRow.alignment = .center
     topRow.translatesAutoresizingMaskIntoConstraints = false
-
-    let toolColumn = UIStackView(arrangedSubviews: [textButton, loopButton, layoutButton, effectsButton, confirmButton])
-    toolColumn.axis = .vertical
-    toolColumn.alignment = .leading
-    toolColumn.spacing = 22
-    toolColumn.translatesAutoresizingMaskIntoConstraints = false
 
     let shutterButton = UIButton(type: .system)
     shutterButton.translatesAutoresizingMaskIntoConstraints = false
@@ -209,7 +136,6 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     messageLabel.translatesAutoresizingMaskIntoConstraints = false
 
     view.addSubview(topRow)
-    view.addSubview(toolColumn)
     view.addSubview(shutterButton)
     view.addSubview(messageLabel)
 
@@ -219,13 +145,8 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
       topRow.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -28),
       closeButton.widthAnchor.constraint(equalToConstant: 52),
       closeButton.heightAnchor.constraint(equalToConstant: 52),
-      flashButton.widthAnchor.constraint(equalToConstant: 52),
-      flashButton.heightAnchor.constraint(equalToConstant: 52),
       flipButton.widthAnchor.constraint(equalToConstant: 52),
       flipButton.heightAnchor.constraint(equalToConstant: 52),
-
-      toolColumn.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 34),
-      toolColumn.centerYAnchor.constraint(equalTo: view.centerYAnchor, constant: 40),
 
       shutterButton.centerXAnchor.constraint(equalTo: view.centerXAnchor),
       shutterButton.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -38),
@@ -247,18 +168,6 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     button.backgroundColor = UIColor.black.withAlphaComponent(0.16)
     button.layer.cornerRadius = 26
     button.addTarget(self, action: action, for: .touchUpInside)
-    return button
-  }
-
-  private func textOverlayButton(_ title: String) -> UIButton {
-    let button = UIButton(type: .system)
-    button.translatesAutoresizingMaskIntoConstraints = false
-    button.setTitle(title, for: .normal)
-    button.setTitleColor(.white, for: .normal)
-    button.titleLabel?.font = .systemFont(ofSize: 34, weight: .regular)
-    button.widthAnchor.constraint(equalToConstant: 58).isActive = true
-    button.heightAnchor.constraint(equalToConstant: 44).isActive = true
-    button.addTarget(self, action: #selector(noop), for: .touchUpInside)
     return button
   }
 
@@ -329,9 +238,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
   @objc private func capturePhoto() {
     guard session.isRunning, !movieOutput.isRecording else { return }
     let settings = AVCapturePhotoSettings()
-    if photoOutput.supportedFlashModes.contains(flashMode) {
-      settings.flashMode = flashMode
-    }
+    settings.flashMode = .off
     photoOutput.capturePhoto(with: settings, delegate: self)
   }
 
@@ -365,12 +272,6 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     movieOutput.startRecording(to: url, recordingDelegate: self)
   }
 
-  @objc private func toggleFlash(_ sender: UIButton) {
-    flashMode = flashMode == .off ? .auto : .off
-    let imageName = flashMode == .off ? "bolt.slash" : "bolt.badge.a"
-    sender.setImage(UIImage(systemName: imageName), for: .normal)
-  }
-
   @objc private func flipCamera() {
     cameraPosition = cameraPosition == .back ? .front : .back
     sessionQueue.async { [weak self] in
@@ -386,8 +287,6 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
       self.session.commitConfiguration()
     }
   }
-
-  @objc private func noop() {}
 
   func photoOutput(
     _ output: AVCapturePhotoOutput,

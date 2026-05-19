@@ -7,7 +7,7 @@ final class PostDetailModel: ObservableObject {
   @Published var comments: [MIRAComment] = []
   @Published var isLoadingComments = false
 
-  private let api: MIRAAPIClient
+  let api: MIRAAPIClient
 
   init(post: MIRAPost, api: MIRAAPIClient) {
     self.post = post
@@ -25,7 +25,13 @@ final class PostDetailModel: ObservableObject {
     isLoadingComments = true
     defer { isLoadingComments = false }
     do {
-      comments = try await api.get("/posts/\(post.id)/comments")
+      let loaded: [MIRAComment] = try await api.get("/posts/\(post.id)/comments")
+      comments = loaded
+      let nextCount = loaded.count
+      if post.commentsCount != nextCount {
+        post = post.updating(commentsCount: nextCount)
+        publishEngagement()
+      }
     } catch {
       comments = []
     }
@@ -213,10 +219,20 @@ public struct PostDetailNativeView: View {
       }
       .buttonStyle(.plain)
 
-      Text(model.post.userUsername ?? model.post.userFullName ?? "mira")
-        .font(.system(size: 18, weight: .semibold))
-        .foregroundStyle(MIRATheme.Color.textPrimary)
-        .lineLimit(1)
+      if let userId = model.post.userId, !userId.isEmpty {
+        NavigationLink(destination: UserProfileNativeView(userId: userId, api: model.api)) {
+          Text(model.post.userUsername ?? model.post.userFullName ?? "mira")
+            .font(.system(size: 18, weight: .semibold))
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+            .lineLimit(1)
+        }
+        .buttonStyle(.plain)
+      } else {
+        Text(model.post.userUsername ?? model.post.userFullName ?? "mira")
+          .font(.system(size: 18, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .lineLimit(1)
+      }
       Spacer()
       ShareLink(item: shareURL(for: model.post), subject: Text(model.post.titleText), message: Text(model.post.titleText)) {
         Image(systemName: "arrowshape.turn.up.right")

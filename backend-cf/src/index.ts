@@ -5168,9 +5168,13 @@ api.get('/users/check-username/:username', async (c) => {
 api.get('/users/:userId', authMiddleware, async (c) => {
   const viewerId = getUserId(c);
   await ensurePremiumSchema(c.env.DB);
-  const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(c.req.param('userId')).first();
+  const targetUserId = c.req.param('userId');
+  const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(targetUserId).first();
   if (!user) return c.json({ detail: 'User not found' }, 404);
   const safe = safeUserPayload(user);
+  const follow: any = viewerId && viewerId !== targetUserId
+    ? await c.env.DB.prepare('SELECT id FROM follows WHERE follower_id = ? AND following_id = ? LIMIT 1').bind(viewerId, targetUserId).first()
+    : null;
   const canView = await canViewUserContent(c.env.DB, viewerId, user);
   if (!canView) {
     return c.json({
@@ -5181,11 +5185,12 @@ api.get('/users/:userId', authMiddleware, async (c) => {
       followers_count: safe.followers_count,
       following_count: safe.following_count,
       posts_count: safe.posts_count,
+      is_following: !!follow,
       is_private: true,
       privacy_locked: true,
     });
   }
-  return c.json(safe);
+  return c.json({ ...safe, is_following: !!follow });
 });
 
 api.post('/users/:userId/follow', authMiddleware, async (c) => {
@@ -6640,8 +6645,6 @@ api.post('/presence/touch', authMiddleware, async (c) => {
 });
 
 api.post('/messages', authMiddleware, async (c) => {
-  const phoneGate = await requirePhoneVerified(c, 'send messages');
-  if (phoneGate) return phoneGate;
   const userId = getUserId(c);
   await touchUserPresence(c.env.DB, userId);
   const limited = await enforceRateLimit(c, 'message_send', userId, 45, 60);

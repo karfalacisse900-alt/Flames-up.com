@@ -313,10 +313,16 @@ public struct CreatePostNativeView: View {
     .onChange(of: pickerItems) { _, newItems in
       Task { await loadPickerItems(newItems) }
     }
-    .sheet(isPresented: $showCamera) {
-      MIRACameraCaptureView(allowsVideo: true) { media in
-        presentEditor(for: media)
-      }
+    .fullScreenCover(isPresented: $showCamera) {
+      MIRAStoryLiveCameraView(
+        onCapture: { media in
+          showCamera = false
+          presentEditor(for: media)
+        },
+        onCancel: {
+          showCamera = false
+        }
+      )
       .ignoresSafeArea()
     }
     .sheet(isPresented: $showPreview) {
@@ -359,14 +365,6 @@ public struct CreatePostNativeView: View {
 
         postStudioThumbnailStrip
           .padding(.top, 18)
-
-        HStack(alignment: .top) {
-          postStudioTextTool
-          Spacer()
-          postStudioFilterTool
-        }
-        .padding(.horizontal, 82)
-        .padding(.top, 24)
 
         if let errorMessage {
           Text(errorMessage)
@@ -485,42 +483,6 @@ public struct CreatePostNativeView: View {
       }
     }
     .frame(maxWidth: .infinity)
-  }
-
-  private var postStudioTextTool: some View {
-    Button {
-      if let first = mediaItems.first {
-        editingMedia = MIRAEditorPresentation(media: first, replacementIndex: 0)
-      }
-    } label: {
-      VStack(spacing: 4) {
-        Text("Aa")
-          .font(.system(size: 33, weight: .regular))
-        Text("Text")
-          .font(.system(size: 15, weight: .medium))
-      }
-      .foregroundStyle(.white)
-      .frame(width: 84, height: 68)
-    }
-    .buttonStyle(.plain)
-  }
-
-  private var postStudioFilterTool: some View {
-    Button {
-      if let first = mediaItems.first {
-        editingMedia = MIRAEditorPresentation(media: first, replacementIndex: 0)
-      }
-    } label: {
-      VStack(spacing: 8) {
-        Image(systemName: "camera.aperture")
-          .font(.system(size: 31, weight: .regular))
-        Text("Filters")
-          .font(.system(size: 15, weight: .medium))
-      }
-      .foregroundStyle(.white)
-      .frame(width: 84, height: 68)
-    }
-    .buttonStyle(.plain)
   }
 
   private var postDetailsTopBar: some View {
@@ -789,7 +751,6 @@ public struct CreateNoteNativeView: View {
   @State private var gifQuery = ""
   @State private var gifResults: [MIRAGifItem] = []
   @State private var showGIFField = false
-  @State private var showCamera = false
   @State private var isPosting = false
   @State private var isLoadingMedia = false
   @State private var isSearchingGIFs = false
@@ -821,12 +782,6 @@ public struct CreateNoteNativeView: View {
     }
     .onChange(of: pickerItem) { _, newItem in
       Task { await loadPickerItem(newItem) }
-    }
-    .sheet(isPresented: $showCamera) {
-      MIRACameraCaptureView(allowsVideo: false) { media in
-        mediaItem = media
-      }
-      .ignoresSafeArea()
     }
   }
 
@@ -1160,9 +1115,6 @@ public struct CreateNoteNativeView: View {
 public struct CreateStoryNativeView: View {
   let api: MIRAAPIClient
   @Environment(\.dismiss) private var dismiss
-  @State private var text = ""
-  @State private var mediaItem: MIRAPickedMedia?
-  @State private var pickerItem: PhotosPickerItem?
   @State private var showCamera = false
   @State private var didOpenInitialCamera = false
   @State private var isPosting = false
@@ -1175,119 +1127,98 @@ public struct CreateStoryNativeView: View {
 
   public var body: some View {
     ZStack {
-      MIRATheme.Color.textPrimary.ignoresSafeArea()
-      VStack(spacing: MIRATheme.Space.md) {
+      Color.black.ignoresSafeArea()
+
+      VStack {
         HStack {
           Button { dismiss() } label: {
             Image(systemName: "xmark")
               .font(.system(size: 24, weight: .regular))
               .foregroundStyle(.white)
+              .frame(width: 48, height: 48)
           }
+
           Spacer()
-          Button { showCamera = true } label: {
-            Image(systemName: "camera")
-              .font(.system(size: 22, weight: .semibold))
-              .foregroundStyle(.white)
-          }
         }
-        .padding(MIRATheme.Space.md)
-
-        ZStack(alignment: .bottomLeading) {
-          if let mediaItem {
-            LocalMediaThumb(media: mediaItem, width: UIScreen.main.bounds.width - 28, height: UIScreen.main.bounds.height * 0.70)
-          } else {
-            RoundedRectangle(cornerRadius: 30, style: .continuous)
-              .fill(.black)
-          }
-
-          TextField("Aa", text: $text, axis: .vertical)
-            .font(.system(size: 24, weight: .semibold))
-            .foregroundStyle(.white)
-            .padding(MIRATheme.Space.lg)
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 30, style: .continuous))
-
-        HStack(spacing: MIRATheme.Space.lg) {
-          PhotosPicker(selection: $pickerItem, matching: .any(of: [.images, .videos])) {
-            Image(systemName: "photo.on.rectangle")
-          }
-          Button { showCamera = true } label: {
-            Image(systemName: "camera")
-          }
-          Spacer()
-          Button {
-            Task { await submit() }
-          } label: {
-            Text(isPosting ? "Posting..." : "Share story")
-              .font(.system(size: 16, weight: .semibold))
-              .foregroundStyle(MIRATheme.Color.textPrimary)
-              .frame(height: 48)
-              .padding(.horizontal, MIRATheme.Space.lg)
-              .background(.white)
-              .clipShape(Capsule())
-          }
-          .disabled(isPosting || (mediaItem == nil && text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
-        }
-        .font(.system(size: 24, weight: .semibold))
-        .foregroundStyle(.white)
         .padding(.horizontal, MIRATheme.Space.md)
+        .padding(.top, MIRATheme.Space.sm)
 
-        if let errorMessage {
-          Text(errorMessage)
-            .foregroundStyle(.white)
-            .font(.system(size: 13, weight: .semibold))
+        Spacer()
+
+        VStack(spacing: MIRATheme.Space.md) {
+          if isPosting {
+            ProgressView()
+              .tint(.white)
+            Text("Posting story...")
+              .font(.system(size: 15, weight: .semibold))
+              .foregroundStyle(.white.opacity(0.82))
+          } else if let errorMessage {
+            Text(errorMessage)
+              .font(.system(size: 15, weight: .semibold))
+              .foregroundStyle(.white.opacity(0.86))
+              .multilineTextAlignment(.center)
+
+            Button { showCamera = true } label: {
+              Label("Try again", systemImage: "camera")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(MIRATheme.Color.textPrimary)
+                .padding(.horizontal, 20)
+                .frame(height: 46)
+                .background(.white)
+                .clipShape(Capsule())
+            }
+          } else {
+            ProgressView()
+              .tint(.white)
+            Text("Opening camera...")
+              .font(.system(size: 15, weight: .semibold))
+              .foregroundStyle(.white.opacity(0.72))
+          }
         }
+
+        Spacer()
       }
     }
     .toolbar(.hidden, for: .navigationBar)
     .task {
-      guard !didOpenInitialCamera, mediaItem == nil else { return }
+      guard !didOpenInitialCamera else { return }
       didOpenInitialCamera = true
       showCamera = true
-    }
-    .onChange(of: pickerItem) { _, newItem in
-      Task { await loadPickerItem(newItem) }
     }
     .fullScreenCover(isPresented: $showCamera) {
       MIRAStoryLiveCameraView(
         onCapture: { media in
+          showCamera = false
           presentStoryEditor(for: media)
         },
         onCancel: {
-          if mediaItem == nil {
-            dismiss()
-          }
+          dismiss()
         }
       )
       .ignoresSafeArea()
     }
     .fullScreenCover(item: $editingMedia) { item in
       MIRANativeMediaEditorView(media: item.media, mode: .story) { edited in
-        mediaItem = edited
+        Task { await submit(media: edited) }
       }
       .ignoresSafeArea()
     }
   }
 
-  private func submit() async {
+  private func submit(media: MIRAPickedMedia) async {
     isPosting = true
     defer { isPosting = false }
     do {
-      let uploaded: String?
-      if let mediaItem {
-        uploaded = try await MIRAMediaUploadService(api: api).upload(mediaItem)
-      } else {
-        uploaded = nil
-      }
+      let uploaded = try await MIRAMediaUploadService(api: api).upload(media)
       let _: MIRAStatusPreview = try await api.post(
         "/statuses",
         body: CreateStatusBody(
-          content: text,
+          content: "",
           image: uploaded,
           backgroundColor: "#1B4332",
           textColor: "#FFFFFF",
           visibility: "public",
-          editorMetadata: mediaItem?.editorMetadata
+          editorMetadata: media.editorMetadata
         )
       )
       dismiss()
@@ -1296,16 +1227,8 @@ public struct CreateStoryNativeView: View {
     }
   }
 
-  @MainActor
-  private func loadPickerItem(_ item: PhotosPickerItem?) async {
-    guard let item, let data = try? await item.loadTransferable(type: Data.self) else { return }
-    let (kind, fileName, mimeType) = pickedMediaKind(from: item.supportedContentTypes, fallbackData: data)
-    editingMedia = MIRAEditorPresentation(media: MIRAPickedMedia(data: data, kind: kind, fileName: fileName, mimeType: mimeType))
-    pickerItem = nil
-  }
-
   private func presentStoryEditor(for media: MIRAPickedMedia) {
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
       editingMedia = MIRAEditorPresentation(media: media)
     }
   }

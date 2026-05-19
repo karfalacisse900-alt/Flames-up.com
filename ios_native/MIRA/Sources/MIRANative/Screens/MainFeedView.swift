@@ -258,6 +258,7 @@ public struct MainFeedView: View {
               ForEach(model.posts) { post in
                 MainNativePostCard(
                   post: post,
+                  api: model.api,
                   isVideoActive: post.id == activeVideoPostID,
                   onOpen: { selectedPost = post },
                   onLike: { Task { await model.toggleLike(post) } },
@@ -379,6 +380,7 @@ public struct MainFeedView: View {
 
 private struct MainNativePostCard: View {
   let post: MIRAPost
+  let api: MIRAAPIClient
   let isVideoActive: Bool
   let onOpen: () -> Void
   let onLike: () -> Void
@@ -463,10 +465,20 @@ private struct MainNativePostCard: View {
       }
       .buttonStyle(.plain)
 
-      Text(post.userUsername ?? post.userFullName ?? "mira")
-        .font(.system(size: 15, weight: .semibold))
-        .foregroundStyle(MIRATheme.Color.textPrimary)
-        .lineLimit(1)
+      if let userId = post.userId, !userId.isEmpty {
+        NavigationLink(destination: UserProfileNativeView(userId: userId, api: api)) {
+          Text(post.userUsername ?? post.userFullName ?? "mira")
+            .font(.system(size: 15, weight: .semibold))
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+            .lineLimit(1)
+        }
+        .buttonStyle(.plain)
+      } else {
+        Text(post.userUsername ?? post.userFullName ?? "mira")
+          .font(.system(size: 15, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .lineLimit(1)
+      }
       Spacer()
     }
     .padding(.horizontal, MIRATheme.Space.md)

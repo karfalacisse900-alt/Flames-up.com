@@ -131,6 +131,165 @@ public struct ProfileNativeView: View {
   }
 }
 
+@MainActor
+final class UserProfileNativeModel: ObservableObject {
+  @Published var user: MIRAUser?
+  @Published var posts: [MIRAPost] = []
+  @Published var isFollowing = false
+  @Published var followersCount = 0
+  @Published var isLoading = false
+  let userId: String
+  let api: MIRAAPIClient
+  private var userCacheKey: String { "native.profile.user.\(userId).v2" }
+  private var postsCacheKey: String { "native.profile.posts.\(userId).v2" }
+
+  init(userId: String, api: MIRAAPIClient) {
+    self.userId = userId
+    self.api = api
+  }
+
+  func load() async {
+    if user == nil, let cachedUser: MIRAUser = await MIRALocalJSONCache.load(MIRAUser.self, key: userCacheKey) {
+      apply(user: cachedUser)
+      posts = await MIRALocalJSONCache.load([MIRAPost].self, key: postsCacheKey) ?? posts
+    }
+
+    isLoading = user == nil && posts.isEmpty
+    defer { isLoading = false }
+
+    if let freshUser: MIRAUser = try? await api.get("/users/\(userId)") {
+      apply(user: freshUser)
+      await MIRALocalJSONCache.save(freshUser, key: userCacheKey)
+    }
+    let freshPosts: [MIRAPost] = (try? await api.get("/users/\(userId)/posts")) ?? posts
+    posts = freshPosts
+    await MIRALocalJSONCache.save(freshPosts, key: postsCacheKey)
+  }
+
+  func toggleFollow() async {
+    let previousFollowing = isFollowing
+    let previousFollowers = followersCount
+    let nextFollowing = !isFollowing
+    isFollowing = nextFollowing
+    followersCount = max(0, followersCount + (nextFollowing ? 1 : -1))
+    do {
+      let response: FollowResponse = try await api.post("/users/\(userId)/follow", body: FollowBody(following: nextFollowing))
+      isFollowing = response.following ?? nextFollowing
+      followersCount = response.followersCount ?? followersCount
+    } catch {
+      isFollowing = previousFollowing
+      followersCount = previousFollowers
+    }
+  }
+
+  private func apply(user freshUser: MIRAUser) {
+    user = freshUser
+    isFollowing = freshUser.viewerFollowing
+    followersCount = freshUser.followersCount ?? followersCount
+  }
+}
+
+public struct UserProfileNativeView: View {
+  @StateObject private var model: UserProfileNativeModel
+  private var gridTileSize: CGFloat {
+    floor((UIScreen.main.bounds.width - 2) / 3)
+  }
+  private var postGridColumns: [GridItem] {
+    Array(repeating: GridItem(.fixed(gridTileSize), spacing: 1), count: 3)
+  }
+
+  public init(userId: String, api: MIRAAPIClient) {
+    _model = StateObject(wrappedValue: UserProfileNativeModel(userId: userId, api: api))
+  }
+
+  public var body: some View {
+    ScrollView {
+      VStack(spacing: MIRATheme.Space.lg) {
+        profileHeader
+
+        if model.posts.isEmpty && model.isLoading {
+          ProfileGridSkeleton()
+        } else if model.posts.isEmpty {
+          MIRAEmptyState(title: "No posts yet", message: "This profile has not posted yet.", systemImage: "square.grid.3x3")
+            .padding(.horizontal, MIRATheme.Space.md)
+        } else {
+          LazyVGrid(columns: postGridColumns, spacing: 1) {
+            ForEach(model.posts) { post in
+              ProfilePostTile(post: post, size: gridTileSize)
+            }
+          }
+          .frame(width: UIScreen.main.bounds.width, alignment: .center)
+        }
+      }
+      .padding(.top, MIRATheme.Space.md)
+      .padding(.bottom, MIRATheme.Space.xxl)
+    }
+    .background(MIRATheme.Color.appBackground)
+    .navigationTitle(model.user?.displayName ?? "Profile")
+    .navigationBarTitleDisplayMode(.inline)
+    .task { await model.load() }
+  }
+
+  private var profileHeader: some View {
+    VStack(spacing: MIRATheme.Space.md) {
+      RemoteAvatar(url: model.user?.profileImage, size: 92)
+      VStack(spacing: 4) {
+        Text(model.user?.displayName ?? "mira")
+          .font(.system(size: 24, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .lineLimit(1)
+        if let username = model.user?.username, !username.isEmpty {
+          Text("@\(username)")
+            .font(.system(size: 14, weight: .medium))
+            .foregroundStyle(MIRATheme.Color.textMuted)
+            .lineLimit(1)
+        }
+      }
+
+      HStack(spacing: MIRATheme.Space.xl) {
+        profileMetric("Posts", model.user?.postsCount ?? model.posts.count)
+        profileMetric("Followers", model.followersCount)
+        profileMetric("Following", model.user?.followingCount ?? 0)
+      }
+
+      HStack(spacing: MIRATheme.Space.sm) {
+        Button {
+          Task { await model.toggleFollow() }
+        } label: {
+          Label(model.isFollowing ? "Following" : "Follow", systemImage: model.isFollowing ? "checkmark" : "plus")
+            .font(.system(size: 15, weight: .semibold))
+            .foregroundStyle(model.isFollowing ? MIRATheme.Color.textPrimary : .white)
+            .frame(maxWidth: .infinity, minHeight: 46)
+            .background(model.isFollowing ? MIRATheme.Color.surfaceSoft : MIRATheme.Color.forest)
+            .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
+
+        NavigationLink(destination: ConversationNativeView(peerId: model.userId, title: model.user?.displayName ?? "Chat", api: model.api)) {
+          Label("Message", systemImage: "message")
+            .font(.system(size: 15, weight: .semibold))
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+            .frame(maxWidth: .infinity, minHeight: 46)
+            .background(MIRATheme.Color.surfaceSoft)
+            .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
+      }
+    }
+    .padding(MIRATheme.Space.xl)
+    .frame(maxWidth: .infinity)
+    .miraCardSurface()
+    .padding(.horizontal, MIRATheme.Space.md)
+  }
+
+  private func profileMetric(_ label: String, _ value: Int) -> some View {
+    VStack(spacing: 4) {
+      Text("\(value)").font(.system(size: 18, weight: .semibold))
+      Text(label).font(.system(size: 12, weight: .medium)).foregroundStyle(MIRATheme.Color.textMuted)
+    }
+  }
+}
+
 private struct ProfilePostTile: View {
   let post: MIRAPost
   let size: CGFloat
@@ -348,28 +507,5 @@ public struct WalletNativeView: View {
     .navigationTitle("Wallet")
     .background(MIRATheme.Color.appBackground)
     .task { await model.load() }
-  }
-}
-
-public struct StudioNativeView: View {
-  public init() {}
-
-  public var body: some View {
-    VStack(spacing: MIRATheme.Space.xl) {
-      Image(systemName: "camera.viewfinder")
-        .font(.system(size: 40, weight: .light))
-        .foregroundStyle(MIRATheme.Color.forest)
-      Text("Native Studio")
-        .font(.system(size: 22, weight: .semibold))
-      Text("This is the SwiftUI starting point for the camera, post composer, notes composer, places, preview, and media tools.")
-        .font(.system(size: 16, weight: .regular))
-        .foregroundStyle(MIRATheme.Color.textSecondary)
-        .multilineTextAlignment(.center)
-      MIRAPrimaryButton("Open camera", systemImage: "camera") {}
-    }
-    .padding(MIRATheme.Space.xl)
-    .frame(maxWidth: .infinity, maxHeight: .infinity)
-    .background(MIRATheme.Color.appBackground)
-    .navigationTitle("Studio")
   }
 }
