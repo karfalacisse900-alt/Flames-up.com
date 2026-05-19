@@ -102,7 +102,6 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     case photo = "Photo"
     case video15 = "15s"
     case video60 = "60s"
-    case text = "Text"
 
     var maxDuration: TimeInterval? {
       switch self {
@@ -189,6 +188,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
   private let gridButton = UIButton(type: .system)
   private let galleryRailButton = UIButton(type: .system)
   private let filtersButton = UIButton(type: .system)
+  private let editRailButton = UIButton(type: .system)
   private let galleryButton = UIButton(type: .system)
   private let effectsButton = UIButton(type: .system)
   private let shutterButton = UIButton(type: .system)
@@ -359,14 +359,16 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     configureCircleButton(gridButton, systemImage: "square.grid.3x3", action: #selector(toggleGrid))
     configureCircleButton(galleryRailButton, systemImage: "photo.on.rectangle", action: #selector(openGallery))
     configureCircleButton(filtersButton, systemImage: "wand.and.stars", action: #selector(filtersTapped))
+    configureCircleButton(editRailButton, systemImage: "pencil", action: #selector(editRailTapped))
     configureCircleButton(effectsButton, systemImage: "sparkles", action: #selector(filtersTapped))
+    effectsButton.isHidden = true
     configureCircleButton(galleryButton, systemImage: "photo", action: #selector(openGallery))
 
     rightRail.axis = .vertical
     rightRail.spacing = 12
     rightRail.alignment = .center
     rightRail.translatesAutoresizingMaskIntoConstraints = false
-    [flipButton, flashButton, timerButton, gridButton, galleryRailButton, filtersButton].forEach {
+    [flipButton, flashButton, gridButton, editRailButton].forEach {
       rightRail.addArrangedSubview($0)
       $0.widthAnchor.constraint(equalToConstant: 48).isActive = true
       $0.heightAnchor.constraint(equalToConstant: 48).isActive = true
@@ -773,7 +775,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     shutterFill.isHidden = isReviewing
     modeStack.isHidden = isReviewing
     galleryButton.isHidden = isReviewing
-    effectsButton.isHidden = isReviewing
+    effectsButton.isHidden = true
   }
 
   private func showFilterPanel() {
@@ -905,6 +907,14 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
       return
     }
     showFilterPanel()
+  }
+
+  @objc private func editRailTapped() {
+    guard capturedMedia != nil else {
+      showTransientMessage("Capture a photo or video first, then tap Edit.")
+      return
+    }
+    editCapturedMedia()
   }
 
   @objc private func editTextTapped() {
