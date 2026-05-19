@@ -290,6 +290,7 @@ public struct CreatePostNativeView: View {
   @State private var showCamera = false
   @State private var showPreview = false
   @State private var isEditingPostDetails = false
+  @State private var didOpenInitialCamera = false
   @State private var isPosting = false
   @State private var isLoadingMedia = false
   @State private var errorMessage: String?
@@ -310,6 +311,11 @@ public struct CreatePostNativeView: View {
     .toolbar(.hidden, for: .navigationBar)
     .toolbar(.hidden, for: .tabBar)
     .navigationBarBackButtonHidden(true)
+    .task {
+      guard !didOpenInitialCamera else { return }
+      didOpenInitialCamera = true
+      showCamera = true
+    }
     .onChange(of: pickerItems) { _, newItems in
       Task { await loadPickerItems(newItems) }
     }
@@ -321,6 +327,9 @@ public struct CreatePostNativeView: View {
         },
         onCancel: {
           showCamera = false
+          if mediaItems.isEmpty && !isEditingPostDetails {
+            dismiss()
+          }
         }
       )
       .ignoresSafeArea()
@@ -335,6 +344,9 @@ public struct CreatePostNativeView: View {
         } else {
           mediaItems.append(edited)
         }
+        withAnimation(.snappy(duration: 0.2)) {
+          isEditingPostDetails = true
+        }
       }
       .ignoresSafeArea()
     }
@@ -342,14 +354,11 @@ public struct CreatePostNativeView: View {
 
   private var mediaFirstPage: some View {
     GeometryReader { proxy in
-      let screenWidth = proxy.size.width
-      let stageHeight = min(screenWidth * 1.34, proxy.size.height * 0.57)
-
       VStack(spacing: 0) {
         HStack {
           Button { dismiss() } label: {
             Image(systemName: "chevron.left")
-              .font(.system(size: 35, weight: .medium))
+              .font(.system(size: 32, weight: .medium))
               .foregroundStyle(.white)
               .frame(width: 54, height: 54)
           }
@@ -361,27 +370,66 @@ public struct CreatePostNativeView: View {
         .padding(.top, 30)
         .frame(height: 116)
 
-        postStudioStage(width: screenWidth, height: stageHeight)
+        Spacer()
 
-        postStudioThumbnailStrip
-          .padding(.top, 18)
+        VStack(spacing: 18) {
+          ProgressView()
+            .tint(.white)
+            .scaleEffect(1.15)
+
+          Text("Open camera")
+            .font(.system(size: 24, weight: .semibold))
+            .foregroundStyle(.white)
+
+          Text("Tap to take a photo. Hold the shutter to record video.")
+            .font(.system(size: 15, weight: .medium))
+            .foregroundStyle(.white.opacity(0.66))
+            .multilineTextAlignment(.center)
+            .padding(.horizontal, 42)
+
+          HStack(spacing: 12) {
+            Button {
+              showCamera = true
+            } label: {
+              Label("Camera", systemImage: "camera.fill")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.black)
+                .frame(height: 48)
+                .padding(.horizontal, 18)
+                .background(.white)
+                .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
+
+            PhotosPicker(selection: $pickerItems, maxSelectionCount: 10, matching: .any(of: [.images, .videos])) {
+              Label("Library", systemImage: "photo.on.rectangle")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(height: 48)
+                .padding(.horizontal, 18)
+                .background(.white.opacity(0.14))
+                .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
+          }
+          .padding(.top, 6)
+        }
 
         if let errorMessage {
           Text(errorMessage)
             .font(.system(size: 13, weight: .semibold))
             .foregroundStyle(.red.opacity(0.92))
-            .padding(.top, 10)
+            .padding(.top, 22)
         }
 
-        Spacer(minLength: 16)
+        Spacer()
 
-        postComposerPillButton(title: "Next", disabled: mediaItems.isEmpty || isLoadingMedia) {
-          withAnimation(.snappy(duration: 0.2)) {
-            isEditingPostDetails = true
-          }
+        if isLoadingMedia {
+          Text("Preparing media...")
+            .font(.system(size: 14, weight: .semibold))
+            .foregroundStyle(.white.opacity(0.72))
+            .padding(.bottom, max(proxy.safeAreaInsets.bottom + 18, 34))
         }
-        .padding(.horizontal, 30)
-        .padding(.bottom, max(proxy.safeAreaInsets.bottom, 18))
       }
       .frame(width: proxy.size.width, height: proxy.size.height)
       .background(Color.black.ignoresSafeArea())
@@ -722,6 +770,11 @@ public struct CreatePostNativeView: View {
       editingMedia = MIRAEditorPresentation(media: media)
     } else {
       mediaItems.append(contentsOf: loaded)
+      if !loaded.isEmpty {
+        withAnimation(.snappy(duration: 0.2)) {
+          isEditingPostDetails = true
+        }
+      }
     }
   }
 
