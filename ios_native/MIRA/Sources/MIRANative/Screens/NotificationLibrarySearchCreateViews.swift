@@ -278,6 +278,7 @@ private struct MIRAEditorPresentation: Identifiable {
   let id = UUID()
   let media: MIRAPickedMedia
   var replacementIndex: Int?
+  var returnsToCamera = false
 }
 
 public struct CreatePostNativeView: View {
@@ -293,6 +294,7 @@ public struct CreatePostNativeView: View {
   @State private var isLoadingMedia = false
   @State private var errorMessage: String?
   @State private var editingMedia: MIRAEditorPresentation?
+  @State private var editedCameraMedia: MIRAPickedMedia?
 
   public init(api: MIRAAPIClient) {
     self.api = api
@@ -317,7 +319,9 @@ public struct CreatePostNativeView: View {
     }
     .fullScreenCover(item: $editingMedia) { item in
       MIRANativeMediaEditorView(media: item.media, mode: .post) { edited in
-        if let index = item.replacementIndex, mediaItems.indices.contains(index) {
+        if item.returnsToCamera {
+          editedCameraMedia = edited
+        } else if let index = item.replacementIndex, mediaItems.indices.contains(index) {
           mediaItems[index] = edited
         } else {
           mediaItems.append(edited)
@@ -333,12 +337,16 @@ public struct CreatePostNativeView: View {
   private var mediaFirstPage: some View {
     ZStack {
       MIRAStoryLiveCameraView(
+        editedMedia: editedCameraMedia,
         dismissesOnCapture: false,
         onCapture: { media in
           addCapturedMediaAndContinue(media)
         },
         onCancel: {
           dismiss()
+        },
+        onEdit: { media, _ in
+          editingMedia = MIRAEditorPresentation(media: media, returnsToCamera: true)
         }
       )
       .ignoresSafeArea()
@@ -668,6 +676,7 @@ public struct CreatePostNativeView: View {
   }
 
   private func addCapturedMediaAndContinue(_ media: MIRAPickedMedia) {
+    editedCameraMedia = nil
     mediaItems.append(media)
     withAnimation(.snappy(duration: 0.2)) {
       isEditingPostDetails = true
@@ -685,6 +694,7 @@ public struct CreatePostNativeView: View {
   }
 
   private func returnToCapture() {
+    editedCameraMedia = nil
     withAnimation(.snappy(duration: 0.2)) {
       isEditingPostDetails = false
     }

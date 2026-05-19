@@ -412,8 +412,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
       modeStack.addArrangedSubview(button)
     }
 
-    let retakeButton = reviewButton(title: "Retake", foreground: .white, background: UIColor.white.withAlphaComponent(0.14), action: #selector(retakeCapturedMedia))
-    let galleryReviewButton = reviewButton(title: "Gallery", foreground: .white, background: UIColor.white.withAlphaComponent(0.14), action: #selector(openGallery))
+    let editButton = reviewButton(title: "Edit", foreground: .white, background: UIColor.white.withAlphaComponent(0.16), action: #selector(editCapturedMedia))
     let nextButton = reviewButton(title: "Next", foreground: .black, background: .white, action: #selector(confirmCapturedMedia))
     let textEditButton = reviewToolButton(title: "Text", systemImage: "textformat", action: #selector(editTextTapped))
     let filtersEditButton = reviewToolButton(title: "Filters", systemImage: "camera.filters", action: #selector(editFiltersTapped))
@@ -430,8 +429,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     reviewBar.spacing = 12
     reviewBar.distribution = .fillEqually
     reviewBar.translatesAutoresizingMaskIntoConstraints = false
-    reviewBar.addArrangedSubview(retakeButton)
-    reviewBar.addArrangedSubview(galleryReviewButton)
+    reviewBar.addArrangedSubview(editButton)
     reviewBar.addArrangedSubview(nextButton)
 
     inlineEditPanel.translatesAutoresizingMaskIntoConstraints = false
@@ -765,7 +763,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     capturedImageView.isHidden = !isReviewing
     textOverlayContainer.isHidden = !isReviewing
     capturedPlayIcon.isHidden = !isReviewing || capturedMedia?.kind != .video
-    reviewToolsStack.isHidden = !isReviewing
+    reviewToolsStack.isHidden = true
     reviewBar.isHidden = !isReviewing
     if !isReviewing {
       inlineEditPanel.isHidden = true
@@ -1277,6 +1275,12 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     capturedImageView.image = nil
     setReviewMode(false)
     UIImpactFeedbackGenerator(style: .light).impactOccurred()
+  }
+
+  @objc private func editCapturedMedia() {
+    guard let capturedMedia else { return }
+    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    delegate?.storyCameraDidRequestEdit(capturedMedia, tool: .text)
   }
 
   @objc private func confirmCapturedMedia() {
