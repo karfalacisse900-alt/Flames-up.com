@@ -105,20 +105,27 @@ struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
       onCapture(MIRAPickedMedia(data: data, kind: .image, fileName: "\(UUID().uuidString).jpg", mimeType: "image/jpeg"))
       dismiss()
     }
+
+    func storyCameraDidCaptureVideo(_ data: Data) {
+      onCapture(MIRAPickedMedia(data: data, kind: .video, fileName: "\(UUID().uuidString).mov", mimeType: "video/quicktime"))
+      dismiss()
+    }
   }
 }
 
 protocol MIRAStoryCameraViewControllerDelegate: AnyObject {
   func storyCameraDidCancel()
   func storyCameraDidCapturePhoto(_ data: Data)
+  func storyCameraDidCaptureVideo(_ data: Data)
 }
 
-final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptureDelegate {
+final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptureDelegate, AVCaptureFileOutputRecordingDelegate {
   weak var delegate: MIRAStoryCameraViewControllerDelegate?
 
   private let session = AVCaptureSession()
   private let sessionQueue = DispatchQueue(label: "mira.story.camera.session")
   private let photoOutput = AVCapturePhotoOutput()
+  private let movieOutput = AVCaptureMovieFileOutput()
   private let previewLayer = AVCaptureVideoPreviewLayer()
   private var currentInput: AVCaptureDeviceInput?
   private var cameraPosition: AVCaptureDevice.Position = .back
@@ -195,6 +202,9 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     shutterButton.layer.shadowRadius = 16
     shutterButton.layer.shadowOffset = CGSize(width: 0, height: 8)
     shutterButton.addTarget(self, action: #selector(capturePhoto), for: .touchUpInside)
+    let longPress = UILongPressGestureRecognizer(target: self, action: #selector(handleShutterLongPress(_:)))
+    longPress.minimumPressDuration = 0.22
+    shutterButton.addGestureRecognizer(longPress)
 
     messageLabel.translatesAutoresizingMaskIntoConstraints = false
 
@@ -274,7 +284,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     sessionQueue.async { [weak self] in
       guard let self else { return }
       self.session.beginConfiguration()
-      self.session.sessionPreset = .photo
+      self.session.sessionPreset = .high
 
       if let input = self.makeCameraInput(position: self.cameraPosition), self.session.canAddInput(input) {
         self.session.addInput(input)
@@ -283,6 +293,11 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
 
       if self.session.canAddOutput(self.photoOutput) {
         self.session.addOutput(self.photoOutput)
+      }
+
+      if self.session.canAddOutput(self.movieOutput) {
+        self.session.addOutput(self.movieOutput)
+        self.movieOutput.movieFragmentInterval = .invalid
       }
 
       self.session.commitConfiguration()
@@ -312,12 +327,42 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
   }
 
   @objc private func capturePhoto() {
-    guard session.isRunning else { return }
+    guard session.isRunning, !movieOutput.isRecording else { return }
     let settings = AVCapturePhotoSettings()
     if photoOutput.supportedFlashModes.contains(flashMode) {
       settings.flashMode = flashMode
     }
     photoOutput.capturePhoto(with: settings, delegate: self)
+  }
+
+  @objc private func handleShutterLongPress(_ recognizer: UILongPressGestureRecognizer) {
+    switch recognizer.state {
+    case .began:
+      startRecordingVideo()
+      UIView.animate(withDuration: 0.12) {
+        recognizer.view?.transform = CGAffineTransform(scaleX: 0.86, y: 0.86)
+        recognizer.view?.backgroundColor = UIColor.white.withAlphaComponent(0.64)
+      }
+    case .ended, .cancelled, .failed:
+      if movieOutput.isRecording {
+        movieOutput.stopRecording()
+      }
+      UIView.animate(withDuration: 0.12) {
+        recognizer.view?.transform = .identity
+        recognizer.view?.backgroundColor = UIColor.white.withAlphaComponent(0.80)
+      }
+    default:
+      break
+    }
+  }
+
+  private func startRecordingVideo() {
+    guard session.isRunning, !movieOutput.isRecording else { return }
+    if let connection = movieOutput.connection(with: .video), connection.isVideoOrientationSupported {
+      connection.videoOrientation = .portrait
+    }
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).mov")
+    movieOutput.startRecording(to: url, recordingDelegate: self)
   }
 
   @objc private func toggleFlash(_ sender: UIButton) {
@@ -355,5 +400,20 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
       return
     }
     delegate?.storyCameraDidCapturePhoto(data)
+  }
+
+  func fileOutput(
+    _ output: AVCaptureFileOutput,
+    didFinishRecordingTo outputFileURL: URL,
+    from connections: [AVCaptureConnection],
+    error: Error?
+  ) {
+    defer { try? FileManager.default.removeItem(at: outputFileURL) }
+    guard error == nil, let data = try? Data(contentsOf: outputFileURL), !data.isEmpty else {
+      messageLabel.text = "That video could not be captured. Try again."
+      messageLabel.isHidden = false
+      return
+    }
+    delegate?.storyCameraDidCaptureVideo(data)
   }
 }

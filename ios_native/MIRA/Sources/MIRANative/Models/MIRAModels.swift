@@ -407,8 +407,49 @@ public struct CreatePostBody: Encodable {
   public let images: [String]
   public let mediaTypes: [String]
   public let mediaDimensions: [MIRAMediaDimension]
+  public let editorOverlays: [MIRAEditorUploadMetadata]?
   public let visibility: String
   public let clientRequestId: String
+
+  public init(
+    title: String,
+    content: String,
+    image: String?,
+    images: [String],
+    mediaTypes: [String],
+    mediaDimensions: [MIRAMediaDimension],
+    editorOverlays: [MIRAEditorUploadMetadata]? = nil,
+    visibility: String,
+    clientRequestId: String
+  ) {
+    self.title = title
+    self.content = content
+    self.image = image
+    self.images = images
+    self.mediaTypes = mediaTypes
+    self.mediaDimensions = mediaDimensions
+    self.editorOverlays = editorOverlays
+    self.visibility = visibility
+    self.clientRequestId = clientRequestId
+  }
+}
+
+public struct MIRAEditorUploadMetadata: Encodable, Hashable {
+  public let type: String
+  public let mediaIndex: Int
+  public let wasEdited: Bool
+  public let editorVersion: String
+  public let appliedFilter: String
+  public let hasTextOverlay: Bool
+
+  public init(mediaIndex: Int, metadata: MIRANativeEditedMediaMetadata) {
+    self.type = "native_editor"
+    self.mediaIndex = mediaIndex
+    self.wasEdited = metadata.wasEdited
+    self.editorVersion = metadata.editorVersion
+    self.appliedFilter = metadata.appliedFilter
+    self.hasTextOverlay = metadata.hasTextOverlay
+  }
 }
 
 public struct CreateNoteBody: Encodable {
@@ -423,6 +464,23 @@ public struct CreateStatusBody: Encodable {
   public let backgroundColor: String
   public let textColor: String
   public let visibility: String
+  public let editorMetadata: MIRANativeEditedMediaMetadata?
+
+  public init(
+    content: String,
+    image: String?,
+    backgroundColor: String,
+    textColor: String,
+    visibility: String,
+    editorMetadata: MIRANativeEditedMediaMetadata? = nil
+  ) {
+    self.content = content
+    self.image = image
+    self.backgroundColor = backgroundColor
+    self.textColor = textColor
+    self.visibility = visibility
+    self.editorMetadata = editorMetadata
+  }
 }
 
 public struct SendMessageBody: Encodable {

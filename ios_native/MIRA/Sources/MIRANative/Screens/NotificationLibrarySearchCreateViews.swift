@@ -274,6 +274,12 @@ public struct SearchUsersNativeView: View {
   }
 }
 
+private struct MIRAEditorPresentation: Identifiable {
+  let id = UUID()
+  let media: MIRAPickedMedia
+  var replacementIndex: Int?
+}
+
 public struct CreatePostNativeView: View {
   let api: MIRAAPIClient
   @Environment(\.dismiss) private var dismiss
@@ -287,6 +293,7 @@ public struct CreatePostNativeView: View {
   @State private var isPosting = false
   @State private var isLoadingMedia = false
   @State private var errorMessage: String?
+  @State private var editingMedia: MIRAEditorPresentation?
 
   public init(api: MIRAAPIClient) {
     self.api = api
@@ -308,12 +315,22 @@ public struct CreatePostNativeView: View {
     }
     .sheet(isPresented: $showCamera) {
       MIRACameraCaptureView(allowsVideo: true) { media in
-        mediaItems.append(media)
+        presentEditor(for: media)
       }
       .ignoresSafeArea()
     }
     .sheet(isPresented: $showPreview) {
       ComposerPreviewSheet(title: title, bodyText: bodyText, mediaItems: mediaItems)
+    }
+    .fullScreenCover(item: $editingMedia) { item in
+      MIRANativeMediaEditorView(media: item.media, mode: .post) { edited in
+        if let index = item.replacementIndex, mediaItems.indices.contains(index) {
+          mediaItems[index] = edited
+        } else {
+          mediaItems.append(edited)
+        }
+      }
+      .ignoresSafeArea()
     }
   }
 
@@ -445,6 +462,9 @@ public struct CreatePostNativeView: View {
             RoundedRectangle(cornerRadius: 11, style: .continuous)
               .stroke(index == 0 ? .white : .clear, lineWidth: 2.5)
           }
+          .onTapGesture {
+            editingMedia = MIRAEditorPresentation(media: item, replacementIndex: index)
+          }
       }
 
       PhotosPicker(selection: $pickerItems, maxSelectionCount: 10, matching: .any(of: [.images, .videos])) {
@@ -468,7 +488,11 @@ public struct CreatePostNativeView: View {
   }
 
   private var postStudioTextTool: some View {
-    Button {} label: {
+    Button {
+      if let first = mediaItems.first {
+        editingMedia = MIRAEditorPresentation(media: first, replacementIndex: 0)
+      }
+    } label: {
       VStack(spacing: 4) {
         Text("Aa")
           .font(.system(size: 33, weight: .regular))
@@ -482,7 +506,11 @@ public struct CreatePostNativeView: View {
   }
 
   private var postStudioFilterTool: some View {
-    Button {} label: {
+    Button {
+      if let first = mediaItems.first {
+        editingMedia = MIRAEditorPresentation(media: first, replacementIndex: 0)
+      }
+    } label: {
       VStack(spacing: 8) {
         Image(systemName: "camera.aperture")
           .font(.system(size: 31, weight: .regular))
@@ -704,6 +732,7 @@ public struct CreatePostNativeView: View {
         images: uploaded,
         mediaTypes: mediaTypes,
         mediaDimensions: mediaDimensions,
+        editorOverlays: editorUploadMetadata(),
         visibility: "public",
         clientRequestId: UUID().uuidString
       )
@@ -721,11 +750,31 @@ public struct CreatePostNativeView: View {
       isLoadingMedia = false
       pickerItems = []
     }
+    var loaded: [MIRAPickedMedia] = []
     for item in items {
       guard let data = try? await item.loadTransferable(type: Data.self) else { continue }
       let (kind, fileName, mimeType) = pickedMediaKind(from: item.supportedContentTypes, fallbackData: data)
-      mediaItems.append(MIRAPickedMedia(data: data, kind: kind, fileName: fileName, mimeType: mimeType))
+      loaded.append(MIRAPickedMedia(data: data, kind: kind, fileName: fileName, mimeType: mimeType))
     }
+    if loaded.count == 1, let media = loaded.first {
+      editingMedia = MIRAEditorPresentation(media: media)
+    } else {
+      mediaItems.append(contentsOf: loaded)
+    }
+  }
+
+  private func presentEditor(for media: MIRAPickedMedia) {
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+      editingMedia = MIRAEditorPresentation(media: media)
+    }
+  }
+
+  private func editorUploadMetadata() -> [MIRAEditorUploadMetadata]? {
+    let metadata = mediaItems.enumerated().compactMap { index, item -> MIRAEditorUploadMetadata? in
+      guard let editorMetadata = item.editorMetadata else { return nil }
+      return MIRAEditorUploadMetadata(mediaIndex: index, metadata: editorMetadata)
+    }
+    return metadata.isEmpty ? nil : metadata
   }
 }
 
@@ -1118,6 +1167,7 @@ public struct CreateStoryNativeView: View {
   @State private var didOpenInitialCamera = false
   @State private var isPosting = false
   @State private var errorMessage: String?
+  @State private var editingMedia: MIRAEditorPresentation?
 
   public init(api: MIRAAPIClient) {
     self.api = api
@@ -1201,7 +1251,7 @@ public struct CreateStoryNativeView: View {
     .fullScreenCover(isPresented: $showCamera) {
       MIRAStoryLiveCameraView(
         onCapture: { media in
-          mediaItem = media
+          presentStoryEditor(for: media)
         },
         onCancel: {
           if mediaItem == nil {
@@ -1209,6 +1259,12 @@ public struct CreateStoryNativeView: View {
           }
         }
       )
+      .ignoresSafeArea()
+    }
+    .fullScreenCover(item: $editingMedia) { item in
+      MIRANativeMediaEditorView(media: item.media, mode: .story) { edited in
+        mediaItem = edited
+      }
       .ignoresSafeArea()
     }
   }
@@ -1225,7 +1281,14 @@ public struct CreateStoryNativeView: View {
       }
       let _: MIRAStatusPreview = try await api.post(
         "/statuses",
-        body: CreateStatusBody(content: text, image: uploaded, backgroundColor: "#1B4332", textColor: "#FFFFFF", visibility: "public")
+        body: CreateStatusBody(
+          content: text,
+          image: uploaded,
+          backgroundColor: "#1B4332",
+          textColor: "#FFFFFF",
+          visibility: "public",
+          editorMetadata: mediaItem?.editorMetadata
+        )
       )
       dismiss()
     } catch {
@@ -1237,8 +1300,14 @@ public struct CreateStoryNativeView: View {
   private func loadPickerItem(_ item: PhotosPickerItem?) async {
     guard let item, let data = try? await item.loadTransferable(type: Data.self) else { return }
     let (kind, fileName, mimeType) = pickedMediaKind(from: item.supportedContentTypes, fallbackData: data)
-    mediaItem = MIRAPickedMedia(data: data, kind: kind, fileName: fileName, mimeType: mimeType)
+    editingMedia = MIRAEditorPresentation(media: MIRAPickedMedia(data: data, kind: kind, fileName: fileName, mimeType: mimeType))
     pickerItem = nil
+  }
+
+  private func presentStoryEditor(for media: MIRAPickedMedia) {
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+      editingMedia = MIRAEditorPresentation(media: media)
+    }
   }
 }
 
