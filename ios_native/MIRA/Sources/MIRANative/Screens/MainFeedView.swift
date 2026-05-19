@@ -101,8 +101,12 @@ final class MainFeedModel: ObservableObject {
       if let currentIndex = posts.firstIndex(where: { $0.id == post.id }) {
         posts[currentIndex] = posts[currentIndex].updating(
           liked: response.liked ?? nextLiked,
-          likesCount: response.likesCount ?? nextCount
+          likesCount: response.likesCount ?? nextCount,
+          commentsCount: response.commentsCount,
+          saved: response.saved,
+          savesCount: response.savesCount
         )
+        publishEngagement(for: posts[currentIndex])
         cacheCurrentPosts()
       }
     } catch {
@@ -128,9 +132,13 @@ final class MainFeedModel: ObservableObject {
       }
       if let currentIndex = posts.firstIndex(where: { $0.id == post.id }) {
         posts[currentIndex] = posts[currentIndex].updating(
+          liked: response.liked,
+          likesCount: response.likesCount,
+          commentsCount: response.commentsCount,
           saved: response.saved ?? nextSaved,
           savesCount: response.savesCount ?? nextCount
         )
+        publishEngagement(for: posts[currentIndex])
         cacheCurrentPosts()
       }
     } catch {
@@ -138,6 +146,18 @@ final class MainFeedModel: ObservableObject {
         posts[currentIndex] = previous
       }
     }
+  }
+
+  func applyEngagementUpdate(_ update: MIRAPostEngagementUpdate) {
+    guard let index = posts.firstIndex(where: { $0.id == update.postId }) else { return }
+    posts[index] = posts[index].updating(
+      liked: update.liked,
+      likesCount: update.likesCount,
+      commentsCount: update.commentsCount,
+      saved: update.saved,
+      savesCount: update.savesCount
+    )
+    cacheCurrentPosts()
   }
 
   func toggleFollowAuthor(_ post: MIRAPost) async {
@@ -160,6 +180,19 @@ final class MainFeedModel: ObservableObject {
   private func cacheCurrentPosts() {
     let snapshot = posts
     Task { await MIRALocalJSONCache.save(snapshot, key: feedCacheKey) }
+  }
+
+  private func publishEngagement(for post: MIRAPost) {
+    MIRAPostEngagementSync.publish(
+      MIRAPostEngagementUpdate(
+        postId: post.id,
+        liked: post.isLiked,
+        likesCount: post.likesCount,
+        saved: post.viewerSaved,
+        savesCount: post.savesCount,
+        commentsCount: post.commentsCount
+      )
+    )
   }
 
   private func sortedByNativeScore(_ posts: [MIRAPost]) async -> [MIRAPost] {
@@ -264,6 +297,10 @@ public struct MainFeedView: View {
         CreatePostNativeView(api: model.api)
       }
       .task { await model.load() }
+      .onReceive(NotificationCenter.default.publisher(for: .miraPostEngagementDidChange)) { notification in
+        guard let update = MIRAPostEngagementSync.update(from: notification) else { return }
+        model.applyEngagementUpdate(update)
+      }
       .onPreferenceChange(MainFeedScrollOffsetPreferenceKey.self, perform: handleScroll)
       .onPreferenceChange(MainPostVisibilityPreferenceKey.self, perform: updateActiveVideo)
     }

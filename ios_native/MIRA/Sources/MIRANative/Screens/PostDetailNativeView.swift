@@ -17,6 +17,7 @@ final class PostDetailModel: ObservableObject {
   func refreshPost() async {
     do {
       post = try await api.get("/posts/\(post.id)")
+      publishEngagement()
     } catch {}
   }
 
@@ -36,6 +37,7 @@ final class PostDetailModel: ObservableObject {
     if let comment: MIRAComment = try? await api.post("/posts/\(post.id)/comments", body: PostCommentBody(content: clean)) {
       comments.append(comment)
       post = post.updating(commentsCount: max(comments.count, (post.commentsCount ?? 0) + 1))
+      publishEngagement()
     }
   }
 
@@ -46,7 +48,14 @@ final class PostDetailModel: ObservableObject {
     post = post.updating(liked: nextLiked, likesCount: nextCount)
     do {
       let response: PostLikeResponse = try await api.post("/posts/\(post.id)/like", body: LikeBody(liked: nextLiked))
-      post = post.updating(liked: response.liked ?? nextLiked, likesCount: response.likesCount ?? nextCount)
+      post = post.updating(
+        liked: response.liked ?? nextLiked,
+        likesCount: response.likesCount ?? nextCount,
+        commentsCount: response.commentsCount,
+        saved: response.saved,
+        savesCount: response.savesCount
+      )
+      publishEngagement()
     } catch {
       post = previous
     }
@@ -64,7 +73,14 @@ final class PostDetailModel: ObservableObject {
       } else {
         response = try await api.delete("/library/save/\(post.id)")
       }
-      post = post.updating(saved: response.saved ?? nextSaved, savesCount: response.savesCount ?? nextCount)
+      post = post.updating(
+        liked: response.liked,
+        likesCount: response.likesCount,
+        commentsCount: response.commentsCount,
+        saved: response.saved ?? nextSaved,
+        savesCount: response.savesCount ?? nextCount
+      )
+      publishEngagement()
     } catch {
       post = previous
     }
@@ -81,6 +97,19 @@ final class PostDetailModel: ObservableObject {
     } catch {
       post = previous
     }
+  }
+
+  private func publishEngagement() {
+    MIRAPostEngagementSync.publish(
+      MIRAPostEngagementUpdate(
+        postId: post.id,
+        liked: post.isLiked,
+        likesCount: post.likesCount,
+        saved: post.viewerSaved,
+        savesCount: post.savesCount,
+        commentsCount: post.commentsCount
+      )
+    )
   }
 }
 

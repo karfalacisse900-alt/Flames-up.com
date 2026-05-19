@@ -471,11 +471,17 @@ public struct FollowResponse: Decodable {
 public struct PostLikeResponse: Decodable {
   public let liked: Bool?
   public let likesCount: Int?
+  public let saved: Bool?
+  public let savesCount: Int?
+  public let commentsCount: Int?
 }
 
 public struct PostSaveResponse: Decodable {
   public let saved: Bool?
   public let savesCount: Int?
+  public let liked: Bool?
+  public let likesCount: Int?
+  public let commentsCount: Int?
 }
 
 public struct NoteCommentBody: Encodable {
