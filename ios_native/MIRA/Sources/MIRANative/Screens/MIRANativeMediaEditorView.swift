@@ -6,13 +6,6 @@ import UIKit
 public enum MIRANativeMediaEditorMode {
   case post
   case story
-
-  var nextTitle: String {
-    switch self {
-    case .post: return "Next"
-    case .story: return "Post"
-    }
-  }
 }
 
 public struct MIRANativeMediaEditorView: View {
@@ -141,16 +134,16 @@ public struct MIRANativeMediaEditorView: View {
       Button {
         Task { await exportMedia() }
       } label: {
-        Text(isExporting ? "Exporting..." : mode.nextTitle)
-          .font(.system(size: 17, weight: .semibold))
+        Image(systemName: isExporting ? "hourglass" : "square.and.arrow.down")
+          .font(.system(size: 20, weight: .semibold))
           .foregroundStyle(mode == .story ? MIRATheme.Color.textPrimary : .white)
-          .padding(.horizontal, 24)
-          .frame(height: 46)
+          .frame(width: 50, height: 50)
           .background(mode == .story ? Color.white : MIRATheme.Color.forest)
-          .clipShape(Capsule())
+          .clipShape(Circle())
       }
       .buttonStyle(.plain)
       .disabled(isExporting)
+      .accessibilityLabel(isExporting ? "Saving edit" : "Save edit")
     }
   }
 

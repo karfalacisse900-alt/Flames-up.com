@@ -260,7 +260,12 @@ public struct MainFeedView: View {
                   post: post,
                   api: model.api,
                   isVideoActive: post.id == activeVideoPostID,
-                  onOpen: { selectedPost = post },
+                  onOpen: {
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    withAnimation(.easeOut(duration: 0.24)) {
+                      selectedPost = post
+                    }
+                  },
                   onLike: { Task { await model.toggleLike(post) } },
                   onSave: { Task { await model.toggleSave(post) } },
                   onFollow: { Task { await model.toggleFollowAuthor(post) } }
@@ -287,12 +292,13 @@ public struct MainFeedView: View {
           .opacity(isHeaderHidden ? 0 : 1)
           .allowsHitTesting(!isHeaderHidden)
           .zIndex(10)
+          .animation(.easeInOut(duration: 0.24), value: isHeaderHidden)
       }
       .background(MIRATheme.Color.appBackground)
-      .animation(.easeInOut(duration: 0.18), value: isHeaderHidden)
       .toolbar(.hidden, for: .navigationBar)
       .navigationDestination(item: $selectedPost) { post in
         PostDetailNativeView(post: post, api: model.api)
+          .transition(.opacity.combined(with: .move(edge: .trailing)))
       }
       .fullScreenCover(isPresented: $isShowingCreatePost) {
         CreatePostNativeView(api: model.api)
@@ -355,7 +361,11 @@ public struct MainFeedView: View {
       .max { $0.visibleRatio < $1.visibleRatio }
     let nextID = candidate?.id
     if activeVideoPostID != nextID {
-      activeVideoPostID = nextID
+      var transaction = Transaction()
+      transaction.animation = nil
+      withTransaction(transaction) {
+        activeVideoPostID = nextID
+      }
       MIRAMemoryMetrics.log("main_feed_video_switch")
     }
   }
@@ -441,6 +451,9 @@ private struct MainNativePostCard: View {
     .overlay(alignment: .bottom) {
       Rectangle().fill(MIRATheme.Color.hairline).frame(height: 0.75)
     }
+    .transaction { transaction in
+      transaction.animation = nil
+    }
   }
 
   private func visibleRatio(in proxy: GeometryProxy) -> CGFloat {
@@ -454,7 +467,11 @@ private struct MainNativePostCard: View {
     guard ratio.isFinite, ratio > 0 else { return }
     let clamped = min(max(ratio, 1.0 / 1.91), 16.0 / 9.0)
     if abs((measuredRatios[url] ?? 0) - clamped) > 0.01 {
-      measuredRatios[url] = clamped
+      var transaction = Transaction()
+      transaction.animation = nil
+      withTransaction(transaction) {
+        measuredRatios[url] = clamped
+      }
     }
   }
 

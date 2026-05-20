@@ -309,7 +309,7 @@ public struct RemoteMediaView: View {
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .clipped()
     .transaction { transaction in
-      transaction.animation = .easeInOut(duration: 0.18)
+      transaction.animation = nil
     }
   }
 

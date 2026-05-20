@@ -16,7 +16,12 @@ final class PostDetailModel: ObservableObject {
 
   func refreshPost() async {
     do {
-      post = try await api.get("/posts/\(post.id)")
+      let refreshed: MIRAPost = try await api.get("/posts/\(post.id)")
+      var transaction = Transaction()
+      transaction.animation = nil
+      withTransaction(transaction) {
+        post = refreshed
+      }
       publishEngagement()
     } catch {}
   }
@@ -123,6 +128,7 @@ public struct PostDetailNativeView: View {
   @Environment(\.dismiss) private var dismiss
   @StateObject private var model: PostDetailModel
   @State private var draft = ""
+  @State private var didAppear = false
   private var mediaHeight: CGFloat {
     let maxHeight = max(300, UIScreen.main.bounds.height * 0.48)
     return min(
@@ -196,6 +202,13 @@ public struct PostDetailNativeView: View {
       commentBar
     }
     .background(MIRATheme.Color.surface)
+    .opacity(didAppear ? 1 : 0.985)
+    .offset(y: didAppear ? 0 : 6)
+    .onAppear {
+      withAnimation(.easeOut(duration: 0.22)) {
+        didAppear = true
+      }
+    }
     .toolbar(.hidden, for: .navigationBar)
     .toolbar(.hidden, for: .tabBar)
     .task {

@@ -414,25 +414,15 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
       modeStack.addArrangedSubview(button)
     }
 
-    let editButton = reviewButton(title: "Edit", foreground: .white, background: UIColor.white.withAlphaComponent(0.16), action: #selector(editCapturedMedia))
-    let nextButton = reviewButton(title: "Next", foreground: .black, background: .white, action: #selector(confirmCapturedMedia))
-    let textEditButton = reviewToolButton(title: "Text", systemImage: "textformat", action: #selector(editTextTapped))
-    let filtersEditButton = reviewToolButton(title: "Filters", systemImage: "camera.filters", action: #selector(editFiltersTapped))
-    let adjustEditButton = reviewToolButton(title: "Adjust", systemImage: "slider.horizontal.3", action: #selector(editAdjustTapped))
     reviewToolsStack.axis = .horizontal
     reviewToolsStack.spacing = 10
     reviewToolsStack.distribution = .fillEqually
     reviewToolsStack.translatesAutoresizingMaskIntoConstraints = false
-    reviewToolsStack.addArrangedSubview(textEditButton)
-    reviewToolsStack.addArrangedSubview(filtersEditButton)
-    reviewToolsStack.addArrangedSubview(adjustEditButton)
 
     reviewBar.axis = .horizontal
     reviewBar.spacing = 12
     reviewBar.distribution = .fillEqually
     reviewBar.translatesAutoresizingMaskIntoConstraints = false
-    reviewBar.addArrangedSubview(editButton)
-    reviewBar.addArrangedSubview(nextButton)
 
     inlineEditPanel.translatesAutoresizingMaskIntoConstraints = false
     inlineEditPanel.backgroundColor = UIColor.black.withAlphaComponent(0.58)
@@ -553,36 +543,6 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     button.clipsToBounds = true
     button.addTarget(self, action: action, for: .touchUpInside)
     button.accessibilityTraits.insert(.button)
-  }
-
-  private func reviewButton(title: String, foreground: UIColor, background: UIColor, action: Selector) -> UIButton {
-    let button = UIButton(type: .system)
-    button.setTitle(title, for: .normal)
-    button.titleLabel?.font = .systemFont(ofSize: 17, weight: .semibold)
-    button.setTitleColor(foreground, for: .normal)
-    button.backgroundColor = background
-    button.layer.cornerRadius = 22
-    button.layer.cornerCurve = .continuous
-    button.addTarget(self, action: action, for: .touchUpInside)
-    return button
-  }
-
-  private func reviewToolButton(title: String, systemImage: String, action: Selector) -> UIButton {
-    let button = UIButton(type: .system)
-    var configuration = UIButton.Configuration.filled()
-    configuration.title = title
-    configuration.image = UIImage(systemName: systemImage)
-    configuration.imagePadding = 7
-    configuration.baseForegroundColor = .white
-    configuration.baseBackgroundColor = UIColor.white.withAlphaComponent(0.16)
-    configuration.contentInsets = NSDirectionalEdgeInsets(top: 8, leading: 10, bottom: 8, trailing: 10)
-    button.configuration = configuration
-    button.titleLabel?.font = .systemFont(ofSize: 14, weight: .semibold)
-    button.layer.cornerRadius = 19
-    button.layer.cornerCurve = .continuous
-    button.clipsToBounds = true
-    button.addTarget(self, action: action, for: .touchUpInside)
-    return button
   }
 
   private func configureAdjustmentSlider(_ slider: UISlider, value: Float, minimum: Float, maximum: Float) {
@@ -766,11 +726,16 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     textOverlayContainer.isHidden = !isReviewing
     capturedPlayIcon.isHidden = !isReviewing || capturedMedia?.kind != .video
     reviewToolsStack.isHidden = true
-    reviewBar.isHidden = !isReviewing
+    reviewBar.isHidden = true
     if !isReviewing {
       inlineEditPanel.isHidden = true
     }
-    rightRail.isHidden = isReviewing
+    rightRail.isHidden = false
+    flipButton.isHidden = isReviewing
+    flashButton.isHidden = isReviewing
+    gridButton.isHidden = isReviewing
+    editRailButton.isHidden = false
+    editRailButton.alpha = capturedMedia == nil ? 0.62 : 1
     shutterButton.isHidden = isReviewing
     shutterFill.isHidden = isReviewing
     modeStack.isHidden = isReviewing
