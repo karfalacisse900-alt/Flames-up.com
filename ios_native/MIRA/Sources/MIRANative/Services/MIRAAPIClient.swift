@@ -98,6 +98,11 @@ public final class MIRAAPIClient {
     return try await request(path, method: "POST", body: data)
   }
 
+  public func put<T: Decodable, Body: Encodable>(_ path: String, body: Body) async throws -> T {
+    let data = try encoder.encode(body)
+    return try await request(path, method: "PUT", body: data)
+  }
+
   public func delete<T: Decodable>(_ path: String) async throws -> T {
     try await request(path, method: "DELETE", body: Optional<Data>.none)
   }

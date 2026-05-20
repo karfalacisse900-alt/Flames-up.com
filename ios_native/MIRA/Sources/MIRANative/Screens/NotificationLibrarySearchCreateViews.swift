@@ -1724,36 +1724,3 @@ private struct ComposerPreviewSheet: View {
     }
   }
 }
-
-public struct SettingsNativeView: View {
-  private let authSession: MIRAAuthSession?
-
-  public init(authSession: MIRAAuthSession? = nil) {
-    self.authSession = authSession
-  }
-
-  public var body: some View {
-    List {
-      Section("Account") {
-        Label("Privacy", systemImage: "lock")
-        Label("Notifications", systemImage: "bell")
-        Label("Security", systemImage: "shield")
-        if let authSession {
-          Button(role: .destructive) {
-            authSession.logout()
-          } label: {
-            Label("Log out", systemImage: "rectangle.portrait.and.arrow.right")
-          }
-        }
-      }
-      Section("Support") {
-        Label("Help", systemImage: "questionmark.circle")
-        Label("Terms", systemImage: "doc.text")
-        Label("Privacy Policy", systemImage: "hand.raised")
-      }
-    }
-    .scrollContentBackground(.hidden)
-    .background(MIRATheme.Color.appBackground)
-    .navigationTitle("Settings")
-  }
-}

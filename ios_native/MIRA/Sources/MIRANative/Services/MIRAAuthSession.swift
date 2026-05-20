@@ -96,6 +96,12 @@ public final class MIRAAuthSession: ObservableObject, MIRASessionProviding {
   }
 
   @MainActor
+  public func replaceUser(_ updatedUser: MIRAUser) {
+    user = updatedUser
+    Task { await MIRALocalJSONCache.save(updatedUser, key: cachedUserKey) }
+  }
+
+  @MainActor
   private func authenticate(_ operation: () async throws -> MIRAAuthResponse) async {
     isWorking = true
     errorMessage = nil

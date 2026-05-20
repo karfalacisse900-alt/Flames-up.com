@@ -7,10 +7,16 @@ public struct MIRAUser: Codable, Identifiable, Hashable {
   public let fullName: String?
   public let profileImage: String?
   public let bio: String?
+  public let email: String?
+  public let phone: String?
+  public let phoneVerified: Bool?
   public let followersCount: Int?
   public let followingCount: Int?
   public let postsCount: Int?
   public let isFollowing: Bool?
+  public let isPrivate: Bool?
+  public let isPremium: Bool?
+  public let language: String?
 
   public var displayName: String {
     username?.isEmpty == false ? username! : (fullName?.isEmpty == false ? fullName! : "mira")

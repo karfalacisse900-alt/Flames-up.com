@@ -95,7 +95,7 @@ public struct ProfileNativeView: View {
           NavigationLink(destination: WalletNativeView(api: model.api)) {
             Image(systemName: "wallet.pass")
           }
-          NavigationLink(destination: SettingsNativeView(authSession: authSession)) {
+          NavigationLink(destination: SettingsNativeView(api: model.api, authSession: authSession)) {
             Image(systemName: "gearshape")
           }
         }
