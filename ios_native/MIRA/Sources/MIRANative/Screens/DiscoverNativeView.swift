@@ -3,15 +3,11 @@ import UIKit
 
 @MainActor
 final class DiscoverNativeModel: ObservableObject {
-  @Published var notes: [MIRANote] = []
   @Published var stories: [MIRAStoryGroup] = []
   @Published var isLoading = true
-  @Published var isLoadingNotes = true
   @Published var isLoadingStories = true
   let api: MIRAAPIClient
-  private let notesCacheKey = "native.discover.notes.v2"
   private let storiesCacheKey = "native.discover.stories.v2"
-  private var hasLoadedFreshNotes = false
   private var hasLoadedFreshStories = false
 
   init(api: MIRAAPIClient) {
@@ -20,45 +16,15 @@ final class DiscoverNativeModel: ObservableObject {
 
   func load() async {
     MIRAPerformanceTimeline.mark("discover_load_start")
-    if notes.isEmpty, let cachedNotes: [MIRANote] = await MIRALocalJSONCache.load([MIRANote].self, key: notesCacheKey) {
-      notes = cachedNotes
-      isLoadingNotes = false
-      MIRAPerformanceTimeline.markOnce("discover_first_content", detail: "notes_cache")
-    }
     if stories.isEmpty, let cachedStories: [MIRAStoryGroup] = await MIRALocalJSONCache.load([MIRAStoryGroup].self, key: storiesCacheKey) {
       stories = cachedStories
       isLoadingStories = false
       MIRAPerformanceTimeline.markOnce("discover_first_content", detail: "stories_cache")
     }
 
-    if !hasLoadedFreshNotes && notes.isEmpty { isLoadingNotes = true }
     if !hasLoadedFreshStories && stories.isEmpty { isLoadingStories = true }
     updateLoadingState()
-    Task { await self.loadNotes() }
     Task { await self.loadStories() }
-  }
-
-  private func loadNotes() async {
-    guard !hasLoadedFreshNotes else { return }
-    hasLoadedFreshNotes = true
-    if notes.isEmpty {
-      isLoadingNotes = true
-      updateLoadingState()
-    }
-    defer {
-      isLoadingNotes = false
-      updateLoadingState()
-    }
-    do {
-      let loaded: [MIRANote] = try await api.get("/notes?limit=10")
-      notes = loaded
-      await MIRALocalJSONCache.save(loaded, key: notesCacheKey)
-      if !loaded.isEmpty {
-        MIRAPerformanceTimeline.markOnce("discover_first_content", detail: "notes_network")
-      }
-    } catch {
-      if notes.isEmpty { hasLoadedFreshNotes = false }
-    }
   }
 
   private func loadStories() async {
@@ -86,52 +52,92 @@ final class DiscoverNativeModel: ObservableObject {
   }
 
   private func updateLoadingState() {
-    isLoading = isLoadingNotes || isLoadingStories
-  }
-
-  private func cacheNotes() {
-    let snapshot = notes
-    Task { await MIRALocalJSONCache.save(snapshot, key: notesCacheKey) }
-  }
-
-  func toggleReaction(for note: MIRANote) async {
-    guard let index = notes.firstIndex(where: { $0.id == note.id }) else { return }
-    let previous = notes[index]
-    let nextReacted = !(previous.reacted ?? false)
-    let nextCount = max(0, (previous.reactionsCount ?? 0) + (nextReacted ? 1 : -1))
-    notes[index] = previous.updating(reactionsCount: nextCount, reacted: nextReacted)
-    do {
-      let response: NoteInteractionResponse = try await api.post("/notes/\(note.id)/interactions", body: NoteInteractionBody(kind: "reaction", value: "heart"))
-      notes[index] = notes[index].updating(reactionsCount: nextCount, reacted: response.active ?? nextReacted)
-      cacheNotes()
-    } catch {
-      notes[index] = previous
-    }
-  }
-
-  func recordShare(for note: MIRANote) async {
-    guard let index = notes.firstIndex(where: { $0.id == note.id }) else { return }
-    let previous = notes[index]
-    notes[index] = previous.updating(sharesCount: (previous.sharesCount ?? 0) + 1)
-    do {
-      let _: NoteInteractionResponse = try await api.post("/notes/\(note.id)/interactions", body: NoteInteractionBody(kind: "share", value: nil))
-      cacheNotes()
-    } catch {
-      notes[index] = previous
-    }
-  }
-
-  func report(note: MIRANote, reason: String) async {
-    let _: EmptyResponse? = try? await api.post("/notes/\(note.id)/report", body: NoteReportBody(reason: reason, details: nil))
+    isLoading = isLoadingStories
   }
 }
 
+private struct DiscoverChallenge: Identifiable {
+  let id: String
+  let title: String
+  let subtitle: String
+  let systemImage: String
+  let colors: [Color]
+  let filterIDs: Set<String>
+}
+
+private struct DiscoverChallengeFilter: Identifiable {
+  let id: String
+  let title: String
+}
+
+private let discoverChallenges: [DiscoverChallenge] = [
+  .init(
+    id: "night-out",
+    title: "Night out",
+    subtitle: "Best after-dark moment",
+    systemImage: "moon.stars.fill",
+    colors: [Color(red: 0.12, green: 0.12, blue: 0.20), Color(red: 0.48, green: 0.18, blue: 0.40)],
+    filterIDs: ["night-out", "nightlife"]
+  ),
+  .init(
+    id: "best-fit",
+    title: "Best fit",
+    subtitle: "Show the look",
+    systemImage: "tshirt.fill",
+    colors: [Color(red: 0.10, green: 0.24, blue: 0.22), Color(red: 0.18, green: 0.55, blue: 0.44)],
+    filterIDs: ["best-fit", "style"]
+  ),
+  .init(
+    id: "food-find",
+    title: "Food find",
+    subtitle: "What did you order?",
+    systemImage: "fork.knife",
+    colors: [Color(red: 0.58, green: 0.26, blue: 0.12), Color(red: 0.90, green: 0.58, blue: 0.24)],
+    filterIDs: ["food", "cafe"]
+  ),
+  .init(
+    id: "trip-dump",
+    title: "Trip dump",
+    subtitle: "Vacation or quick escape",
+    systemImage: "airplane",
+    colors: [Color(red: 0.10, green: 0.28, blue: 0.48), Color(red: 0.20, green: 0.58, blue: 0.82)],
+    filterIDs: ["trip", "travel"]
+  ),
+  .init(
+    id: "golden-hour",
+    title: "Golden hour",
+    subtitle: "Best light today",
+    systemImage: "sun.max.fill",
+    colors: [Color(red: 0.70, green: 0.38, blue: 0.10), Color(red: 0.98, green: 0.74, blue: 0.28)],
+    filterIDs: ["golden-hour", "trip", "cafe"]
+  ),
+  .init(
+    id: "friends-moment",
+    title: "Friends moment",
+    subtitle: "A candid with your circle",
+    systemImage: "person.2.fill",
+    colors: [Color(red: 0.20, green: 0.20, blue: 0.46), Color(red: 0.50, green: 0.42, blue: 0.82)],
+    filterIDs: ["friends", "nightlife"]
+  ),
+]
+
+private let discoverChallengeFilters: [DiscoverChallengeFilter] = [
+  .init(id: "all", title: "All"),
+  .init(id: "night-out", title: "Night out"),
+  .init(id: "nightlife", title: "Nightlife"),
+  .init(id: "best-fit", title: "Best fit"),
+  .init(id: "food", title: "Food"),
+  .init(id: "trip", title: "Trip"),
+  .init(id: "cafe", title: "Cafe"),
+  .init(id: "friends", title: "Friends"),
+  .init(id: "golden-hour", title: "Golden hour"),
+]
+
 public struct DiscoverNativeView: View {
   @StateObject private var model: DiscoverNativeModel
-  @State private var selectedNote: MIRANote?
   @State private var selectedStoryGroup: MIRAStoryGroup?
-  @State private var menuNote: MIRANote?
-  @State private var isShowingNoteMenu = false
+  @State private var isShowingCreatePost = false
+  @State private var selectedChallengeFilter = "all"
 
   public init(api: MIRAAPIClient) {
     _model = StateObject(wrappedValue: DiscoverNativeModel(api: api))
@@ -143,38 +149,22 @@ public struct DiscoverNativeView: View {
         discoverHeader
 
         ScrollView {
-          VStack(alignment: .leading, spacing: MIRATheme.Space.lg) {
+          LazyVStack(alignment: .leading, spacing: MIRATheme.Space.xl) {
             storyRail
 
-            notesSection
+            challengesSection
           }
           .padding(.top, MIRATheme.Space.xs)
-          .padding(.bottom, MIRATheme.Space.xxl)
+          .padding(.bottom, MIRATheme.Space.xxl + MIRATheme.Space.lg)
         }
       }
       .background(MIRATheme.Color.appBackground)
       .toolbar(.hidden, for: .navigationBar)
-      .navigationDestination(item: $selectedNote) { note in
-        NoteDetailNativeView(note: note, api: model.api)
-      }
       .fullScreenCover(item: $selectedStoryGroup) { group in
         StoryViewerNativeView(group: group, api: model.api)
       }
-      .confirmationDialog("Note options", isPresented: $isShowingNoteMenu) {
-        Button("Not interested", role: .destructive) {
-          guard let menuNote else { return }
-          model.notes.removeAll { $0.id == menuNote.id }
-        }
-        Button("Report", role: .destructive) {
-          guard let menuNote else { return }
-          Task { await model.report(note: menuNote, reason: "other") }
-        }
-        Button("Cancel", role: .cancel) {}
-      }
-      .onChange(of: isShowingNoteMenu) { _, isPresented in
-        if !isPresented {
-          menuNote = nil
-        }
+      .fullScreenCover(isPresented: $isShowingCreatePost) {
+        CreatePostNativeView(api: model.api)
       }
       .task { await model.load() }
     }
@@ -189,9 +179,12 @@ public struct DiscoverNativeView: View {
       NavigationLink(destination: SearchUsersNativeView(api: model.api)) {
         MIRAHeaderCircleButton(systemImage: "magnifyingglass")
       }
-      NavigationLink(destination: CreateNoteNativeView(api: model.api)) {
+      Button {
+        isShowingCreatePost = true
+      } label: {
         MIRAHeaderCircleButton(systemImage: "plus")
       }
+      .buttonStyle(.plain)
     }
     .padding(.horizontal, MIRATheme.Space.md)
     .padding(.top, MIRATheme.Space.xs)
@@ -202,64 +195,67 @@ public struct DiscoverNativeView: View {
     }
   }
 
-  private var notesSection: some View {
-    GeometryReader { proxy in
-      let width = max(310, proxy.size.width - 32)
-      let height = min(max(width * 1.28, 430), 520)
+  private var challengesSection: some View {
+    VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
+      sectionHeader(title: "Challenges", subtitle: "Pick a vibe and post into the moment.")
 
-      VStack(alignment: .leading, spacing: MIRATheme.Space.sm) {
-        HStack {
-          Text("Notes")
-            .font(.system(size: 20, weight: .semibold))
-            .foregroundStyle(MIRATheme.Color.textPrimary)
-          Spacer()
-        }
-        .padding(.horizontal, MIRATheme.Space.md)
+      challengeFilterRail
 
-        TabView {
-          if model.isLoadingNotes && model.notes.isEmpty {
-            ForEach(0..<2, id: \.self) { _ in
-              NoteCardSkeletonNative(width: width, height: height)
-                .padding(.horizontal, MIRATheme.Space.md)
-            }
-          } else if model.notes.isEmpty {
-            EmptyNoteCardNative(width: width, height: height)
-              .padding(.horizontal, MIRATheme.Space.md)
-          } else {
-            ForEach(model.notes) { note in
-              NoteCardNative(
-                note: note,
-                api: model.api,
-                width: width,
-                height: height,
-                onOpen: { selectedNote = note },
-                onReact: { Task { await model.toggleReaction(for: note) } },
-                onComment: { selectedNote = note },
-                onShare: { Task { await model.recordShare(for: note) } },
-                onStory: {
-                  if let group = storyGroup(for: note) {
-                    selectedStoryGroup = group
-                  }
-                },
-                onMenu: {
-                  menuNote = note
-                  isShowingNoteMenu = true
-                }
-              )
-              .padding(.horizontal, MIRATheme.Space.md)
-            }
+      LazyVGrid(columns: [GridItem(.adaptive(minimum: 154), spacing: MIRATheme.Space.sm)], spacing: MIRATheme.Space.sm) {
+        ForEach(filteredChallenges) { challenge in
+          DiscoverChallengeCard(challenge: challenge) {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            isShowingCreatePost = true
           }
         }
-        .tabViewStyle(.page(indexDisplayMode: .never))
-        .frame(height: height)
       }
+      .padding(.horizontal, MIRATheme.Space.md)
     }
-    .frame(height: min(max((UIScreen.main.bounds.width - 32) * 1.28, 430), 520) + 42)
   }
 
-  private func storyGroup(for note: MIRANote) -> MIRAStoryGroup? {
-    guard let userID = note.user?.id else { return nil }
-    return model.stories.first { $0.userId == userID }
+  private var challengeFilterRail: some View {
+    ScrollView(.horizontal, showsIndicators: false) {
+      HStack(spacing: MIRATheme.Space.sm) {
+        ForEach(discoverChallengeFilters) { filter in
+          Button {
+            withAnimation(.spring(response: 0.28, dampingFraction: 0.86)) {
+              selectedChallengeFilter = filter.id
+            }
+          } label: {
+            Text(filter.title)
+              .font(.system(size: 14, weight: .semibold))
+              .foregroundStyle(selectedChallengeFilter == filter.id ? .white : MIRATheme.Color.textPrimary)
+              .padding(.horizontal, 15)
+              .frame(height: 40)
+              .background(selectedChallengeFilter == filter.id ? MIRATheme.Color.forest : MIRATheme.Color.surfaceRaised)
+              .clipShape(Capsule())
+              .overlay(
+                Capsule()
+                  .stroke(selectedChallengeFilter == filter.id ? Color.clear : MIRATheme.Color.hairline, lineWidth: 1)
+              )
+          }
+          .buttonStyle(.plain)
+        }
+      }
+      .padding(.horizontal, MIRATheme.Space.md)
+    }
+  }
+
+  private var filteredChallenges: [DiscoverChallenge] {
+    if selectedChallengeFilter == "all" { return discoverChallenges }
+    return discoverChallenges.filter { $0.filterIDs.contains(selectedChallengeFilter) }
+  }
+
+  private func sectionHeader(title: String, subtitle: String) -> some View {
+    VStack(alignment: .leading, spacing: 4) {
+      Text(title)
+        .font(.system(size: 22, weight: .semibold))
+        .foregroundStyle(MIRATheme.Color.textPrimary)
+      Text(subtitle)
+        .font(.system(size: 13, weight: .medium))
+        .foregroundStyle(MIRATheme.Color.textSecondary)
+    }
+    .padding(.horizontal, MIRATheme.Space.md)
   }
 
   private var storyRail: some View {
@@ -274,6 +270,8 @@ public struct DiscoverNativeView: View {
           ForEach(0..<5, id: \.self) { index in
             StoryBubblePlaceholder(index: index)
           }
+        } else if model.stories.isEmpty {
+          StoryEmptyBubble()
         } else {
           ForEach(model.stories) { group in
             Button {
@@ -386,7 +384,7 @@ private struct StoryViewerNativeView: View {
         .font(.system(size: 17, weight: .semibold))
         .foregroundStyle(.white)
         .lineLimit(1)
-      Text(noteAge(currentStory?.createdAt))
+      Text(storyAge(currentStory?.createdAt))
         .font(.system(size: 16, weight: .medium))
         .foregroundStyle(.white.opacity(0.78))
       Spacer()
@@ -493,204 +491,97 @@ private struct StoryBubblePlaceholder: View {
   }
 }
 
-private struct NoteCardNative: View {
-  let note: MIRANote
-  let api: MIRAAPIClient
-  let width: CGFloat
-  let height: CGFloat
-  let onOpen: () -> Void
-  let onReact: () -> Void
-  let onComment: () -> Void
-  let onShare: () -> Void
-  let onStory: () -> Void
-  let onMenu: () -> Void
-
+private struct StoryEmptyBubble: View {
   var body: some View {
-    VStack(alignment: .leading, spacing: 14) {
-      HStack(spacing: 12) {
-        Button(action: onStory) {
-          MIRAFollowAvatar(url: note.user?.profileImage, size: 54)
-        }
-        .buttonStyle(.plain)
-        HStack(spacing: 7) {
-          if let userId = note.user?.id, !userId.isEmpty {
-            NavigationLink(destination: UserProfileNativeView(userId: userId, api: api)) {
-              Text(note.user?.displayName ?? "mira")
-                .font(.system(size: 22, weight: .semibold))
-                .foregroundStyle(MIRATheme.Color.textPrimary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.72)
-            }
-            .buttonStyle(.plain)
-          } else {
-            Text(note.user?.displayName ?? "mira")
-              .font(.system(size: 22, weight: .semibold))
-              .foregroundStyle(MIRATheme.Color.textPrimary)
-              .lineLimit(1)
-              .minimumScaleFactor(0.72)
-          }
-          Text(noteAge(note.createdAt))
-            .font(.system(size: 19, weight: .semibold))
-            .foregroundStyle(MIRATheme.Color.textMuted)
-        }
-        Spacer(minLength: 4)
-        Button(action: onMenu) {
-          Image(systemName: "ellipsis")
-            .font(.system(size: 22, weight: .semibold))
-            .foregroundStyle(MIRATheme.Color.textMuted)
-            .frame(width: 44, height: 44)
-        }
-        .buttonStyle(.plain)
-      }
-
-      Text(note.body ?? "New note")
-        .font(.system(size: 26, weight: .semibold))
-        .lineSpacing(4)
-        .foregroundStyle(MIRATheme.Color.textPrimary)
-        .lineLimit(note.mediaUrl?.isEmpty == false ? 2 : 4)
-
-      if let media = note.mediaUrl, !media.isEmpty {
-        RemoteMediaView(url: media, isVideo: media.isVideoURL)
-          .frame(maxWidth: .infinity)
-          .frame(height: min(width * 0.82, height * 0.58))
-          .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-      } else {
-        Spacer(minLength: 0)
-      }
-
-      HStack(spacing: MIRATheme.Space.sm) {
-        NoteActionNative(systemImage: note.reacted == true ? "heart.fill" : "heart", value: note.reactionsCount ?? 0, tint: note.reacted == true ? MIRATheme.Color.like : MIRATheme.Color.textSecondary, action: onReact)
-        NoteActionNative(systemImage: "bubble.left", value: note.commentsCount ?? 0, tint: MIRATheme.Color.textSecondary, action: onComment)
-        Spacer()
-        NoteActionNative(systemImage: "paperplane", value: note.sharesCount ?? 0, tint: MIRATheme.Color.textSecondary, action: onShare)
-      }
-      .padding(.top, 4)
-    }
-    .padding(18)
-    .frame(width: width, height: height, alignment: .topLeading)
-    .background(MIRATheme.Color.surfaceRaised)
-    .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
-    .overlay(RoundedRectangle(cornerRadius: 28, style: .continuous).stroke(MIRATheme.Color.hairline, lineWidth: 1))
-    .contentShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
-    .onTapGesture(perform: onOpen)
-  }
-}
-
-private struct CreateNoteCardNative: View {
-  let width: CGFloat
-  let height: CGFloat
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
-      HStack(spacing: 9) {
-        RemoteAvatar(url: nil, size: 40)
-        VStack(alignment: .leading, spacing: 2) {
-          Text("Your note")
-            .font(.system(size: 16, weight: .semibold))
-            .foregroundStyle(MIRATheme.Color.textPrimary)
-          Text("Photo or text")
-            .font(.system(size: 12, weight: .medium))
-            .foregroundStyle(MIRATheme.Color.textSecondary)
-        }
-      }
-
-      Spacer()
-      VStack(spacing: 8) {
-        Image(systemName: "plus")
-          .font(.system(size: 24, weight: .semibold))
-          .foregroundStyle(.white)
-          .frame(width: 46, height: 46)
-          .background(MIRATheme.Color.forest)
-          .clipShape(Circle())
-        Text("Create a note")
-          .font(.system(size: 19, weight: .semibold))
-          .foregroundStyle(MIRATheme.Color.textPrimary)
-        Text("Add a photo, GIF, or thought.")
-          .font(.system(size: 12, weight: .medium))
-          .foregroundStyle(MIRATheme.Color.textSecondary)
-          .multilineTextAlignment(.center)
-      }
-      .frame(maxWidth: .infinity)
-      Spacer()
-    }
-    .padding(MIRATheme.Space.md)
-    .frame(width: width, height: height)
-    .background(MIRATheme.Color.surfaceRaised)
-    .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-    .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).stroke(MIRATheme.Color.hairline, lineWidth: 1))
-  }
-}
-
-private struct NoteCardSkeletonNative: View {
-  let width: CGFloat
-  let height: CGFloat
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
-      HStack {
-        Circle().fill(MIRATheme.Color.surfaceSoft).frame(width: 54, height: 54)
-        RoundedRectangle(cornerRadius: 6).fill(MIRATheme.Color.surfaceSoft).frame(width: 150, height: 22)
-      }
-      RoundedRectangle(cornerRadius: 8).fill(MIRATheme.Color.surfaceSoft).frame(height: 24)
-      RoundedRectangle(cornerRadius: 20).fill(MIRATheme.Color.surfaceSoft).frame(height: min(width * 0.82, height * 0.58))
-      Spacer()
-    }
-    .padding(18)
-    .frame(width: width, height: height)
-    .background(MIRATheme.Color.surfaceRaised)
-    .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-    .redacted(reason: .placeholder)
-    .onAppear {
-      MIRAPerformanceTimeline.markOnce("discover_first_skeleton")
-    }
-  }
-}
-
-private struct EmptyNoteCardNative: View {
-  let width: CGFloat
-  let height: CGFloat
-
-  var body: some View {
-    VStack(spacing: MIRATheme.Space.sm) {
-      Image(systemName: "text.bubble")
-        .font(.system(size: 32, weight: .light))
-        .foregroundStyle(MIRATheme.Color.textMuted)
-      Text("No notes yet")
+    HStack(spacing: 10) {
+      Image(systemName: "sparkles")
         .font(.system(size: 18, weight: .semibold))
-        .foregroundStyle(MIRATheme.Color.textPrimary)
-      Text("Be the first to start one.")
-        .font(.system(size: 13, weight: .medium))
-        .foregroundStyle(MIRATheme.Color.textSecondary)
+        .foregroundStyle(MIRATheme.Color.forest)
+        .frame(width: 40, height: 40)
+        .background(MIRATheme.Color.forestSoft)
+        .clipShape(Circle())
+      VStack(alignment: .leading, spacing: 2) {
+        Text("No stories yet")
+          .font(.system(size: 14, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+        Text("Fresh stories will appear here.")
+          .font(.system(size: 12, weight: .medium))
+          .foregroundStyle(MIRATheme.Color.textMuted)
+      }
     }
-    .frame(width: width, height: height)
+    .padding(.horizontal, 14)
+    .frame(height: 76)
     .background(MIRATheme.Color.surfaceRaised)
-    .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-    .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).stroke(MIRATheme.Color.hairline, lineWidth: 1))
+    .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+    .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(MIRATheme.Color.hairline, lineWidth: 1))
   }
 }
 
-private struct NoteActionNative: View {
-  let systemImage: String
-  let value: Int
-  let tint: Color
+private struct DiscoverChallengeCard: View {
+  let challenge: DiscoverChallenge
   let action: () -> Void
 
   var body: some View {
     Button(action: action) {
-      HStack(spacing: 5) {
-        Image(systemName: systemImage)
-          .font(.system(size: 25, weight: .regular))
-        Text(compact(value))
-          .font(.system(size: 20, weight: .semibold))
+      VStack(alignment: .leading, spacing: 12) {
+        HStack {
+          Image(systemName: challenge.systemImage)
+            .font(.system(size: 22, weight: .semibold))
+            .foregroundStyle(.white)
+            .frame(width: 44, height: 44)
+            .background(.white.opacity(0.18))
+            .clipShape(Circle())
+          Spacer()
+          Text("Challenge")
+            .font(.system(size: 11, weight: .bold))
+            .foregroundStyle(.white.opacity(0.82))
+            .textCase(.uppercase)
+        }
+
+        Spacer(minLength: 6)
+
+        Text(challenge.title)
+          .font(.system(size: 23, weight: .bold))
+          .foregroundStyle(.white)
+          .lineLimit(1)
+          .minimumScaleFactor(0.82)
+
+        Text(challenge.subtitle)
+          .font(.system(size: 13, weight: .semibold))
+          .foregroundStyle(.white.opacity(0.82))
+          .lineLimit(2)
+
+        HStack(spacing: 6) {
+          Text("Join")
+            .font(.system(size: 13, weight: .bold))
+          Image(systemName: "arrow.right")
+            .font(.system(size: 12, weight: .bold))
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 12)
+        .frame(height: 32)
+        .background(.white.opacity(0.18))
+        .clipShape(Capsule())
       }
-      .foregroundStyle(tint)
-      .frame(minHeight: 42)
+      .padding(16)
+      .frame(maxWidth: .infinity, minHeight: 178, alignment: .topLeading)
+      .background {
+        LinearGradient(colors: challenge.colors, startPoint: .topLeading, endPoint: .bottomTrailing)
+      }
+      .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+      .overlay(alignment: .bottomTrailing) {
+        Circle()
+          .fill(.white.opacity(0.12))
+          .frame(width: 86, height: 86)
+          .offset(x: 22, y: 28)
+      }
     }
     .buttonStyle(.plain)
+    .accessibilityLabel("Join \(challenge.title) challenge")
   }
 }
 
-private func noteAge(_ value: String?) -> String {
+private func storyAge(_ value: String?) -> String {
   guard let value, let date = ISO8601DateFormatter().date(from: value) else { return "now" }
   let minutes = max(0, Int(Date().timeIntervalSince(date) / 60))
   if minutes < 1 { return "now" }
@@ -698,10 +589,4 @@ private func noteAge(_ value: String?) -> String {
   let hours = minutes / 60
   if hours < 24 { return "\(hours)h" }
   return "\(hours / 24)d"
-}
-
-private func compact(_ value: Int) -> String {
-  if value >= 1_000_000 { return "\(value / 1_000_000)M" }
-  if value >= 1_000 { return "\(value / 1_000)K" }
-  return "\(value)"
 }
