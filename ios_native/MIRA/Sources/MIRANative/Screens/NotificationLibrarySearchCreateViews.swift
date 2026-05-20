@@ -281,6 +281,48 @@ private struct MIRAEditorPresentation: Identifiable {
   var returnsToCamera = false
 }
 
+private enum PostDetailSheet: Identifiable {
+  case location
+  case people
+  case tags
+
+  var id: String {
+    switch self {
+    case .location: return "location"
+    case .people: return "people"
+    case .tags: return "tags"
+    }
+  }
+}
+
+private struct MIRAMapboxPlace: Decodable, Identifiable, Hashable {
+  let placeId: String?
+  let mapboxId: String?
+  let name: String?
+  let formattedAddress: String?
+  let address: String?
+  let vicinity: String?
+  let lat: Double?
+  let lng: Double?
+
+  var id: String {
+    placeId ?? mapboxId ?? [displayName, addressText].compactMap { $0 }.joined(separator: "-")
+  }
+
+  var displayName: String {
+    let clean = name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return clean.isEmpty ? "Place" : clean
+  }
+
+  var addressText: String? {
+    for value in [formattedAddress, address, vicinity] {
+      let clean = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+      if !clean.isEmpty { return clean }
+    }
+    return nil
+  }
+}
+
 public struct CreatePostNativeView: View {
   let api: MIRAAPIClient
   @Environment(\.dismiss) private var dismiss
@@ -295,6 +337,10 @@ public struct CreatePostNativeView: View {
   @State private var errorMessage: String?
   @State private var editingMedia: MIRAEditorPresentation?
   @State private var editedCameraMedia: MIRAPickedMedia?
+  @State private var activePostDetailSheet: PostDetailSheet?
+  @State private var selectedPlace: MIRAMapboxPlace?
+  @State private var taggedUsers: [MIRAUser] = []
+  @State private var hashtags: [String] = []
 
   public init(api: MIRAAPIClient) {
     self.api = api
@@ -316,6 +362,16 @@ public struct CreatePostNativeView: View {
     }
     .sheet(isPresented: $showPreview) {
       ComposerPreviewSheet(title: title, bodyText: bodyText, mediaItems: mediaItems)
+    }
+    .sheet(item: $activePostDetailSheet) { sheet in
+      switch sheet {
+      case .location:
+        PostLocationPickerSheet(api: api, selectedPlace: $selectedPlace)
+      case .people:
+        PostPeopleTagSheet(api: api, selectedUsers: $taggedUsers)
+      case .tags:
+        PostHashtagSheet(hashtags: $hashtags)
+      }
     }
     .fullScreenCover(item: $editingMedia) { item in
       MIRANativeMediaEditorView(media: item.media, mode: .post) { edited in
@@ -370,9 +426,6 @@ public struct CreatePostNativeView: View {
             postDetailsMediaStrip
               .padding(.top, 36)
 
-            postDetailsEditTools
-              .padding(.top, 18)
-
             postDetailsTextFields
               .padding(.top, 40)
 
@@ -386,9 +439,12 @@ public struct CreatePostNativeView: View {
               .frame(height: 0.7)
               .padding(.top, 20)
 
-            postOptionRow(icon: "mappin.circle", title: "Add Location")
-
-            postOptionRow(icon: "ellipsis", title: "Who can see this post", subtitle: "Public")
+            postOptionRow(
+              icon: "mappin.circle",
+              title: selectedPlace?.displayName ?? "Add Location",
+              subtitle: selectedPlace?.addressText ?? "Search places or add an address",
+              action: { activePostDetailSheet = .location }
+            )
           }
           .padding(.horizontal, 16)
           .padding(.bottom, 128)
@@ -468,35 +524,6 @@ public struct CreatePostNativeView: View {
     }
   }
 
-  private var postDetailsEditTools: some View {
-    HStack(spacing: 12) {
-      postEditToolButton(title: "Text", systemImage: "textformat")
-      postEditToolButton(title: "Filters", systemImage: "camera.filters")
-      postEditToolButton(title: "Adjust", systemImage: "slider.horizontal.3")
-    }
-  }
-
-  private func postEditToolButton(title: String, systemImage: String) -> some View {
-    Button {
-      openPrimaryMediaEditor()
-    } label: {
-      HStack(spacing: 8) {
-        Image(systemName: systemImage)
-          .font(.system(size: 16, weight: .semibold))
-        Text(title)
-          .font(.system(size: 15, weight: .semibold))
-      }
-      .foregroundStyle(MIRATheme.Color.textPrimary)
-      .frame(height: 44)
-      .padding(.horizontal, 14)
-      .background(MIRATheme.Color.surfaceSoft.opacity(0.58))
-      .clipShape(Capsule())
-    }
-    .buttonStyle(.plain)
-    .disabled(mediaItems.isEmpty)
-    .opacity(mediaItems.isEmpty ? 0.45 : 1)
-  }
-
   private var postDetailsTextFields: some View {
     VStack(alignment: .leading, spacing: 18) {
       TextField("Add a catchy headline", text: $title)
@@ -523,14 +550,20 @@ public struct CreatePostNativeView: View {
 
   private var postDetailsQuickActions: some View {
     HStack(spacing: 10) {
-      postDetailsChip("Places", systemImage: "mappin.circle")
-      postDetailsChip("@", systemImage: nil)
-      postDetailsChip("#", systemImage: nil)
+      postDetailsChip(selectedPlace?.displayName ?? "Places", systemImage: "mappin.circle") {
+        activePostDetailSheet = .location
+      }
+      postDetailsChip(taggedUsers.isEmpty ? "@" : "@ \(taggedUsers.count)", systemImage: nil) {
+        activePostDetailSheet = .people
+      }
+      postDetailsChip(hashtags.isEmpty ? "#" : "# \(hashtags.count)", systemImage: nil) {
+        activePostDetailSheet = .tags
+      }
     }
   }
 
-  private func postDetailsChip(_ title: String, systemImage: String?) -> some View {
-    Button {} label: {
+  private func postDetailsChip(_ title: String, systemImage: String?, action: @escaping () -> Void) -> some View {
+    Button(action: action) {
       HStack(spacing: 8) {
         if let systemImage {
           Image(systemName: systemImage)
@@ -548,8 +581,8 @@ public struct CreatePostNativeView: View {
     .buttonStyle(.plain)
   }
 
-  private func postOptionRow(icon: String, title: String, subtitle: String? = nil) -> some View {
-    Button {} label: {
+  private func postOptionRow(icon: String, title: String, subtitle: String? = nil, action: @escaping () -> Void) -> some View {
+    Button(action: action) {
       HStack(spacing: 18) {
         Image(systemName: icon)
           .font(.system(size: icon == "ellipsis" ? 25 : 28, weight: .regular))
@@ -636,14 +669,31 @@ public struct CreatePostNativeView: View {
         mediaTypes.append(item.kind.rawValue)
         mediaDimensions.append(await item.mediaDimension())
       }
+      let cleanedTags = hashtags
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "#")) }
+        .filter { !$0.isEmpty }
+      let tagLine = cleanedTags.isEmpty ? "" : cleanedTags.map { "#\($0)" }.joined(separator: " ")
+      let postContent = [bodyText.trimmingCharacters(in: .whitespacesAndNewlines), tagLine]
+        .filter { !$0.isEmpty }
+        .joined(separator: "\n\n")
+      let taggedPayload = taggedUsers.map {
+        MIRATaggedUserPayload(id: $0.id, username: $0.username, fullName: $0.fullName, profileImage: $0.profileImage)
+      }
       let body = CreatePostBody(
         title: title,
-        content: bodyText,
+        content: postContent,
         image: uploaded.first,
         images: uploaded,
         mediaTypes: mediaTypes,
         mediaDimensions: mediaDimensions,
         editorOverlays: editorUploadMetadata(),
+        location: selectedPlace?.addressText ?? selectedPlace?.displayName,
+        postType: selectedPlace == nil ? "general" : "place",
+        placeId: selectedPlace?.placeId ?? selectedPlace?.mapboxId,
+        placeName: selectedPlace?.displayName,
+        placeLat: selectedPlace?.lat,
+        placeLng: selectedPlace?.lng,
+        taggedUsers: taggedPayload.isEmpty ? nil : taggedPayload,
         visibility: "public",
         clientRequestId: UUID().uuidString
       )
@@ -683,16 +733,6 @@ public struct CreatePostNativeView: View {
     }
   }
 
-  private func openPrimaryMediaEditor() {
-    guard let first = mediaItems.first else {
-      withAnimation(.snappy(duration: 0.2)) {
-        isEditingPostDetails = false
-      }
-      return
-    }
-    editingMedia = MIRAEditorPresentation(media: first, replacementIndex: 0)
-  }
-
   private func returnToCapture() {
     editedCameraMedia = nil
     withAnimation(.snappy(duration: 0.2)) {
@@ -706,6 +746,403 @@ public struct CreatePostNativeView: View {
       return MIRAEditorUploadMetadata(mediaIndex: index, metadata: editorMetadata)
     }
     return metadata.isEmpty ? nil : metadata
+  }
+}
+
+private struct PostLocationPickerSheet: View {
+  let api: MIRAAPIClient
+  @Binding var selectedPlace: MIRAMapboxPlace?
+  @Environment(\.dismiss) private var dismiss
+  @State private var query = ""
+  @State private var places: [MIRAMapboxPlace] = []
+  @State private var isLoading = false
+  @State private var errorMessage: String?
+
+  var body: some View {
+    NavigationStack {
+      VStack(spacing: 0) {
+        VStack(spacing: MIRATheme.Space.md) {
+          HStack(spacing: 10) {
+            Image(systemName: "magnifyingglass")
+              .foregroundStyle(MIRATheme.Color.textMuted)
+            TextField("Search place or address", text: $query)
+              .textInputAutocapitalization(.words)
+              .autocorrectionDisabled()
+              .submitLabel(.search)
+          }
+          .padding(.horizontal, MIRATheme.Space.md)
+          .frame(height: 48)
+          .background(MIRATheme.Color.surfaceSoft)
+          .clipShape(Capsule())
+
+          if let selectedPlace {
+            selectedPlacePill(selectedPlace)
+          }
+        }
+        .padding(MIRATheme.Space.md)
+
+        List {
+          if isLoading {
+            ProgressView()
+              .frame(maxWidth: .infinity, minHeight: 72)
+              .listRowBackground(MIRATheme.Color.surface)
+          } else if let errorMessage {
+            Text(errorMessage)
+              .font(.system(size: 14, weight: .medium))
+              .foregroundStyle(MIRATheme.Color.textMuted)
+              .listRowBackground(MIRATheme.Color.surface)
+          }
+
+          if cleanQuery.count >= 2 {
+            Button {
+              selectedPlace = MIRAMapboxPlace(
+                placeId: manualPlaceId,
+                mapboxId: nil,
+                name: cleanQuery,
+                formattedAddress: cleanQuery,
+                address: cleanQuery,
+                vicinity: nil,
+                lat: nil,
+                lng: nil
+              )
+              dismiss()
+            } label: {
+              placeRowTitle(name: "Use \"\(cleanQuery)\"", subtitle: "Custom place/address")
+            }
+            .listRowBackground(MIRATheme.Color.surface)
+          }
+
+          ForEach(places) { place in
+            Button {
+              selectedPlace = place
+              dismiss()
+            } label: {
+              placeRowTitle(name: place.displayName, subtitle: place.addressText)
+            }
+            .listRowBackground(MIRATheme.Color.surface)
+          }
+        }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+      }
+      .background(MIRATheme.Color.surface.ignoresSafeArea())
+      .navigationTitle("Add Location")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .topBarLeading) {
+          Button("Cancel") { dismiss() }
+        }
+        ToolbarItem(placement: .topBarTrailing) {
+          if selectedPlace != nil {
+            Button("Remove") {
+              selectedPlace = nil
+              dismiss()
+            }
+            .foregroundStyle(.red)
+          }
+        }
+      }
+      .task(id: query) {
+        try? await Task.sleep(nanoseconds: 260_000_000)
+        await searchPlaces()
+      }
+    }
+    .presentationDetents([.medium, .large])
+    .presentationDragIndicator(.visible)
+  }
+
+  private func selectedPlacePill(_ place: MIRAMapboxPlace) -> some View {
+    HStack(spacing: 10) {
+      Image(systemName: "mappin.circle.fill")
+        .foregroundStyle(MIRATheme.Color.forest)
+      VStack(alignment: .leading, spacing: 2) {
+        Text(place.displayName)
+          .font(.system(size: 15, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+        if let address = place.addressText {
+          Text(address)
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(MIRATheme.Color.textMuted)
+            .lineLimit(1)
+        }
+      }
+      Spacer()
+    }
+    .padding(MIRATheme.Space.md)
+    .background(MIRATheme.Color.forestSoft)
+    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+  }
+
+  private func placeRowTitle(name: String, subtitle: String?) -> some View {
+    HStack(spacing: MIRATheme.Space.md) {
+      Image(systemName: "mappin")
+        .font(.system(size: 18, weight: .semibold))
+        .foregroundStyle(MIRATheme.Color.forest)
+        .frame(width: 42, height: 42)
+        .background(MIRATheme.Color.forestSoft)
+        .clipShape(Circle())
+      VStack(alignment: .leading, spacing: 3) {
+        Text(name)
+          .font(.system(size: 16, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .lineLimit(1)
+        if let subtitle, !subtitle.isEmpty {
+          Text(subtitle)
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(MIRATheme.Color.textMuted)
+            .lineLimit(1)
+        }
+      }
+    }
+    .padding(.vertical, 6)
+  }
+
+  private var cleanQuery: String {
+    query.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  private var manualPlaceId: String {
+    let slug = cleanQuery
+      .lowercased()
+      .filter { $0.isLetter || $0.isNumber }
+      .prefix(42)
+    return "manual-\(slug.isEmpty ? "place" : String(slug))"
+  }
+
+  @MainActor
+  private func searchPlaces() async {
+    let clean = cleanQuery
+    guard clean.count >= 2 else {
+      places = []
+      errorMessage = nil
+      return
+    }
+    isLoading = true
+    defer { isLoading = false }
+    do {
+      let encoded = clean.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? clean
+      places = try await api.get("/mapbox-places/nearby?keyword=\(encoded)&type=place")
+      errorMessage = places.isEmpty ? "No places found. You can still use your typed address." : nil
+    } catch {
+      places = []
+      errorMessage = "Mapbox places could not load. You can still use your typed address."
+    }
+  }
+}
+
+private struct PostPeopleTagSheet: View {
+  let api: MIRAAPIClient
+  @Binding var selectedUsers: [MIRAUser]
+  @Environment(\.dismiss) private var dismiss
+  @State private var query = ""
+  @State private var users: [MIRAUser] = []
+  @State private var isLoading = false
+
+  var body: some View {
+    NavigationStack {
+      VStack(spacing: 0) {
+        HStack(spacing: 10) {
+          Image(systemName: "magnifyingglass")
+            .foregroundStyle(MIRATheme.Color.textMuted)
+          TextField("Search people", text: $query)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+        }
+        .padding(.horizontal, MIRATheme.Space.md)
+        .frame(height: 48)
+        .background(MIRATheme.Color.surfaceSoft)
+        .clipShape(Capsule())
+        .padding(MIRATheme.Space.md)
+
+        List {
+          if !selectedUsers.isEmpty {
+            Section("Tagged") {
+              ForEach(selectedUsers) { user in
+                personRow(user, selected: true)
+                  .listRowBackground(MIRATheme.Color.surface)
+              }
+            }
+          }
+
+          Section(query.trimmingCharacters(in: .whitespacesAndNewlines).count >= 2 ? "Results" : "Search") {
+            if isLoading {
+              ProgressView()
+                .frame(maxWidth: .infinity, minHeight: 58)
+                .listRowBackground(MIRATheme.Color.surface)
+            } else {
+              ForEach(users) { user in
+                personRow(user, selected: selectedUsers.contains(where: { $0.id == user.id }))
+                  .listRowBackground(MIRATheme.Color.surface)
+              }
+            }
+          }
+        }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+      }
+      .background(MIRATheme.Color.surface.ignoresSafeArea())
+      .navigationTitle("Tag People")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .topBarLeading) {
+          Button("Cancel") { dismiss() }
+        }
+        ToolbarItem(placement: .topBarTrailing) {
+          Button("Done") { dismiss() }
+            .fontWeight(.semibold)
+        }
+      }
+      .task(id: query) {
+        try? await Task.sleep(nanoseconds: 250_000_000)
+        await searchUsers()
+      }
+    }
+    .presentationDetents([.medium, .large])
+    .presentationDragIndicator(.visible)
+  }
+
+  private func personRow(_ user: MIRAUser, selected: Bool) -> some View {
+    Button {
+      toggle(user)
+    } label: {
+      HStack(spacing: MIRATheme.Space.md) {
+        RemoteAvatar(url: user.profileImage, size: 44)
+        VStack(alignment: .leading, spacing: 3) {
+          Text(user.displayName)
+            .font(.system(size: 16, weight: .semibold))
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+          if let fullName = user.fullName, fullName != user.displayName {
+            Text(fullName)
+              .font(.system(size: 13, weight: .medium))
+              .foregroundStyle(MIRATheme.Color.textMuted)
+          }
+        }
+        Spacer()
+        Image(systemName: selected ? "checkmark.circle.fill" : "plus.circle")
+          .font(.system(size: 22, weight: .semibold))
+          .foregroundStyle(selected ? MIRATheme.Color.forest : MIRATheme.Color.textMuted)
+      }
+      .padding(.vertical, 5)
+    }
+    .buttonStyle(.plain)
+  }
+
+  private func toggle(_ user: MIRAUser) {
+    if let index = selectedUsers.firstIndex(where: { $0.id == user.id }) {
+      selectedUsers.remove(at: index)
+    } else if selectedUsers.count < 10 {
+      selectedUsers.append(user)
+    }
+  }
+
+  @MainActor
+  private func searchUsers() async {
+    let clean = query.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard clean.count >= 2 else {
+      users = []
+      return
+    }
+    isLoading = true
+    defer { isLoading = false }
+    users = (try? await api.get("/users/search/\(clean.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? clean)")) ?? []
+  }
+}
+
+private struct PostHashtagSheet: View {
+  @Binding var hashtags: [String]
+  @Environment(\.dismiss) private var dismiss
+  @State private var draft = ""
+
+  var body: some View {
+    NavigationStack {
+      VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
+        HStack(spacing: MIRATheme.Space.sm) {
+          TextField("Add tag", text: $draft)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .padding(.horizontal, MIRATheme.Space.md)
+            .frame(height: 48)
+            .background(MIRATheme.Color.surfaceSoft)
+            .clipShape(Capsule())
+
+          Button("Add") {
+            addTag()
+          }
+          .font(.system(size: 15, weight: .semibold))
+          .foregroundStyle(.white)
+          .frame(width: 74, height: 48)
+          .background(canAddTag ? MIRATheme.Color.forest : MIRATheme.Color.textMuted.opacity(0.45))
+          .clipShape(Capsule())
+          .disabled(!canAddTag)
+        }
+        .padding(.horizontal, MIRATheme.Space.md)
+        .padding(.top, MIRATheme.Space.md)
+
+        if hashtags.isEmpty {
+          MIRAEmptyState(title: "No tags yet", message: "Add a few tags to help people understand the post.", systemImage: "number")
+            .padding(.top, MIRATheme.Space.xl)
+        } else {
+          LazyVStack(spacing: MIRATheme.Space.sm) {
+            ForEach(hashtags, id: \.self) { tag in
+              HStack {
+                Text("#\(tag)")
+                  .font(.system(size: 17, weight: .semibold))
+                  .foregroundStyle(MIRATheme.Color.textPrimary)
+                Spacer()
+                Button {
+                  hashtags.removeAll { $0 == tag }
+                } label: {
+                  Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 21, weight: .semibold))
+                    .foregroundStyle(MIRATheme.Color.textMuted)
+                }
+                .buttonStyle(.plain)
+              }
+              .padding(MIRATheme.Space.md)
+              .background(MIRATheme.Color.surfaceSoft.opacity(0.7))
+              .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            }
+          }
+          .padding(.horizontal, MIRATheme.Space.md)
+        }
+
+        Spacer()
+      }
+      .background(MIRATheme.Color.surface.ignoresSafeArea())
+      .navigationTitle("Tags")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .topBarLeading) {
+          Button("Cancel") { dismiss() }
+        }
+        ToolbarItem(placement: .topBarTrailing) {
+          Button("Done") { dismiss() }
+            .fontWeight(.semibold)
+        }
+      }
+    }
+    .presentationDetents([.medium])
+    .presentationDragIndicator(.visible)
+  }
+
+  private var canAddTag: Bool {
+    normalizedDraft.count >= 1 && !hashtags.contains(normalizedDraft)
+  }
+
+  private var normalizedDraft: String {
+    let raw = draft
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+      .trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+      .lowercased()
+    let allowed = raw.filter { $0.isLetter || $0.isNumber || $0 == "_" }
+    return String(allowed.prefix(30))
+  }
+
+  private func addTag() {
+    let clean = normalizedDraft
+    guard !clean.isEmpty, !hashtags.contains(clean), hashtags.count < 12 else { return }
+    hashtags.append(clean)
+    draft = ""
   }
 }
 

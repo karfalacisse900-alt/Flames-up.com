@@ -174,6 +174,28 @@ public struct PostDetailNativeView: View {
               Text(relativeAge(model.post.createdAt))
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(MIRATheme.Color.textMuted)
+
+              if let placeName = model.post.placeDisplayName {
+                HStack(alignment: .top, spacing: 8) {
+                  Image(systemName: "mappin.circle.fill")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(MIRATheme.Color.forest)
+                  VStack(alignment: .leading, spacing: 1) {
+                    Text(placeName)
+                      .font(.system(size: 14, weight: .semibold))
+                      .foregroundStyle(MIRATheme.Color.forest)
+                      .lineLimit(1)
+                    if let subtitle = model.post.placeDisplaySubtitle {
+                      Text(subtitle)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(MIRATheme.Color.textMuted)
+                        .lineLimit(1)
+                    }
+                  }
+                  Spacer()
+                }
+                .padding(.top, 2)
+              }
             }
 
             Text("\(model.post.commentsCount ?? model.comments.count) comments")

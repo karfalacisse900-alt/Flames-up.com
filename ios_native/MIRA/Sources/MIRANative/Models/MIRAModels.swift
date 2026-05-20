@@ -34,6 +34,13 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
   public let images: FlexibleStringArray?
   public let mediaTypes: FlexibleStringArray?
   public let mediaDimensions: FlexibleMediaDimensions?
+  public let location: String?
+  public let postType: String?
+  public let placeId: String?
+  public let placeName: String?
+  public let placeLat: Double?
+  public let placeLng: Double?
+  public let taggedUsers: [MIRATaggedUserPayload]?
   public let createdAt: String?
   public let likesCount: Int?
   public let commentsCount: Int?
@@ -77,6 +84,24 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
     mediaDimensions?.values.compactMap(\.heightToWidthRatio) ?? []
   }
 
+  public var placeDisplayName: String? {
+    let name = placeName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    if !name.isEmpty { return name }
+    let fallback = location?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return fallback.isEmpty ? nil : fallback
+  }
+
+  public var placeDisplaySubtitle: String? {
+    guard
+      let location,
+      !location.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+      location.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() != (placeDisplayName ?? "").lowercased()
+    else {
+      return nil
+    }
+    return location.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
   public var viewerSaved: Bool {
     if let isSaved { return isSaved }
     return saved?.value == true
@@ -108,6 +133,13 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
       images: images,
       mediaTypes: mediaTypes,
       mediaDimensions: mediaDimensions,
+      location: location,
+      postType: postType,
+      placeId: placeId,
+      placeName: placeName,
+      placeLat: placeLat,
+      placeLng: placeLng,
+      taggedUsers: taggedUsers,
       createdAt: createdAt,
       likesCount: likesCount ?? self.likesCount,
       commentsCount: commentsCount ?? self.commentsCount,
@@ -121,6 +153,20 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
       following: self.following,
       followed: self.followed
     )
+  }
+}
+
+public struct MIRATaggedUserPayload: Codable, Hashable, Identifiable {
+  public let id: String
+  public let username: String?
+  public let fullName: String?
+  public let profileImage: String?
+
+  public init(id: String, username: String?, fullName: String?, profileImage: String?) {
+    self.id = id
+    self.username = username
+    self.fullName = fullName
+    self.profileImage = profileImage
   }
 }
 
@@ -413,6 +459,13 @@ public struct CreatePostBody: Encodable {
   public let mediaTypes: [String]
   public let mediaDimensions: [MIRAMediaDimension]
   public let editorOverlays: [MIRAEditorUploadMetadata]?
+  public let location: String?
+  public let postType: String?
+  public let placeId: String?
+  public let placeName: String?
+  public let placeLat: Double?
+  public let placeLng: Double?
+  public let taggedUsers: [MIRATaggedUserPayload]?
   public let visibility: String
   public let clientRequestId: String
 
@@ -424,6 +477,13 @@ public struct CreatePostBody: Encodable {
     mediaTypes: [String],
     mediaDimensions: [MIRAMediaDimension],
     editorOverlays: [MIRAEditorUploadMetadata]? = nil,
+    location: String? = nil,
+    postType: String? = nil,
+    placeId: String? = nil,
+    placeName: String? = nil,
+    placeLat: Double? = nil,
+    placeLng: Double? = nil,
+    taggedUsers: [MIRATaggedUserPayload]? = nil,
     visibility: String,
     clientRequestId: String
   ) {
@@ -434,6 +494,13 @@ public struct CreatePostBody: Encodable {
     self.mediaTypes = mediaTypes
     self.mediaDimensions = mediaDimensions
     self.editorOverlays = editorOverlays
+    self.location = location
+    self.postType = postType
+    self.placeId = placeId
+    self.placeName = placeName
+    self.placeLat = placeLat
+    self.placeLng = placeLng
+    self.taggedUsers = taggedUsers
     self.visibility = visibility
     self.clientRequestId = clientRequestId
   }
