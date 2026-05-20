@@ -424,10 +424,10 @@ public struct CreatePostNativeView: View {
         ScrollView(showsIndicators: false) {
           VStack(alignment: .leading, spacing: 0) {
             postDetailsMediaStrip
-              .padding(.top, 36)
+              .padding(.top, 24)
 
             postDetailsTextFields
-              .padding(.top, 40)
+              .padding(.top, 34)
 
             Spacer(minLength: max(120, proxy.size.height * 0.22))
 
@@ -447,14 +447,8 @@ public struct CreatePostNativeView: View {
             )
           }
           .padding(.horizontal, 16)
-          .padding(.bottom, 128)
+          .padding(.bottom, max(proxy.safeAreaInsets.bottom + 28, 52))
         }
-
-        postComposerPillButton(title: isPosting ? "Posting..." : "Post", disabled: isPosting || !canPost) {
-          Task { await submit() }
-        }
-        .padding(.horizontal, 16)
-        .padding(.bottom, max(proxy.safeAreaInsets.bottom, 18))
       }
       .background(MIRATheme.Color.surface.ignoresSafeArea())
     }
@@ -474,22 +468,48 @@ public struct CreatePostNativeView: View {
 
       Spacer()
 
-      Button { showPreview = true } label: {
-        HStack(spacing: 6) {
-          Text("Preview")
-            .font(.system(size: 21, weight: .semibold))
-          Image(systemName: "eye")
-            .font(.system(size: 17, weight: .semibold))
-            .foregroundStyle(MIRATheme.Color.textMuted)
+      HStack(spacing: 10) {
+        Button { showPreview = true } label: {
+          HStack(spacing: 6) {
+            Text("Preview")
+              .font(.system(size: 17, weight: .semibold))
+            Image(systemName: "eye")
+              .font(.system(size: 15, weight: .semibold))
+          }
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .padding(.horizontal, 15)
+          .frame(height: 46)
+          .background(MIRATheme.Color.surfaceSoft.opacity(0.72))
+          .clipShape(Capsule())
         }
-        .foregroundStyle(MIRATheme.Color.textPrimary)
-        .frame(minHeight: 54)
+        .buttonStyle(.plain)
+
+        Button {
+          Task { await submit() }
+        } label: {
+          HStack(spacing: 7) {
+            if isPosting {
+              ProgressView()
+                .tint(.white)
+                .scaleEffect(0.72)
+            }
+            Text(isPosting ? "Posting" : "Post")
+              .font(.system(size: 17, weight: .semibold))
+          }
+          .foregroundStyle(.white)
+          .padding(.horizontal, 19)
+          .frame(height: 46)
+          .background(canPost && !isPosting ? MIRATheme.Color.forest : MIRATheme.Color.textMuted.opacity(0.45))
+          .clipShape(Capsule())
+          .shadow(color: MIRATheme.Color.forest.opacity(canPost ? 0.18 : 0), radius: 16, x: 0, y: 8)
+        }
+        .buttonStyle(.plain)
+        .disabled(isPosting || !canPost)
       }
-      .buttonStyle(.plain)
     }
     .padding(.horizontal, 20)
-    .padding(.top, 30)
-    .frame(height: 116)
+    .padding(.top, 18)
+    .frame(height: 98)
   }
 
   private var postDetailsMediaStrip: some View {
@@ -615,20 +635,6 @@ public struct CreatePostNativeView: View {
         .fill(MIRATheme.Color.hairline.opacity(0.72))
         .frame(height: 0.7)
     }
-  }
-
-  private func postComposerPillButton(title: String, disabled: Bool, action: @escaping () -> Void) -> some View {
-    Button(action: action) {
-      Text(title)
-        .font(.system(size: 18, weight: .semibold))
-        .foregroundStyle(.white)
-        .frame(maxWidth: .infinity)
-        .frame(height: 58)
-        .background(disabled ? MIRATheme.Color.textMuted.opacity(0.55) : MIRATheme.Color.forest)
-        .clipShape(Capsule())
-    }
-    .buttonStyle(.plain)
-    .disabled(disabled)
   }
 
   @ViewBuilder

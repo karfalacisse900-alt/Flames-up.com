@@ -279,12 +279,12 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     previewContainer.translatesAutoresizingMaskIntoConstraints = false
     previewContainer.backgroundColor = .black
     previewContainer.clipsToBounds = true
-    previewContainer.layer.cornerRadius = 30
+    previewContainer.layer.cornerRadius = 34
     previewContainer.layer.cornerCurve = .continuous
     previewContainer.layer.shadowColor = UIColor.black.cgColor
-    previewContainer.layer.shadowOpacity = 0.22
-    previewContainer.layer.shadowRadius = 28
-    previewContainer.layer.shadowOffset = CGSize(width: 0, height: 14)
+    previewContainer.layer.shadowOpacity = 0.26
+    previewContainer.layer.shadowRadius = 34
+    previewContainer.layer.shadowOffset = CGSize(width: 0, height: 16)
 
     previewLayer.videoGravity = .resizeAspectFill
     previewLayer.backgroundColor = UIColor.black.cgColor
@@ -370,7 +370,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     rightRail.spacing = 12
     rightRail.alignment = .center
     rightRail.translatesAutoresizingMaskIntoConstraints = false
-    [flipButton, flashButton, gridButton, editRailButton].forEach {
+    [flipButton, flashButton, timerButton, gridButton, editRailButton].forEach {
       rightRail.addArrangedSubview($0)
       $0.widthAnchor.constraint(equalToConstant: 48).isActive = true
       $0.heightAnchor.constraint(equalToConstant: 48).isActive = true
@@ -465,9 +465,9 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     inlineEditPanelHeightConstraint?.isActive = true
 
     NSLayoutConstraint.activate([
-      previewContainer.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),
-      previewContainer.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-      previewContainer.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+      previewContainer.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 6),
+      previewContainer.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 6),
+      previewContainer.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -6),
       previewContainer.bottomAnchor.constraint(equalTo: modeStack.topAnchor, constant: -18),
 
       closeButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 22),
@@ -542,11 +542,15 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     button.tintColor = .white
     button.setImage(UIImage(systemName: systemImage), for: .normal)
     button.imageView?.contentMode = .scaleAspectFit
-    button.backgroundColor = UIColor.black.withAlphaComponent(0.30)
+    button.backgroundColor = UIColor.black.withAlphaComponent(0.34)
     button.layer.cornerRadius = 26
     button.layer.cornerCurve = .continuous
     button.layer.borderWidth = 1
-    button.layer.borderColor = UIColor.white.withAlphaComponent(0.08).cgColor
+    button.layer.borderColor = UIColor.white.withAlphaComponent(0.12).cgColor
+    button.layer.shadowColor = UIColor.black.cgColor
+    button.layer.shadowOpacity = 0.18
+    button.layer.shadowRadius = 14
+    button.layer.shadowOffset = CGSize(width: 0, height: 8)
     button.clipsToBounds = true
     button.addTarget(self, action: action, for: .touchUpInside)
     button.accessibilityTraits.insert(.button)
@@ -628,7 +632,9 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     sessionQueue.async { [weak self] in
       guard let self else { return }
       self.session.beginConfiguration()
-      if self.session.canSetSessionPreset(.high) {
+      if self.session.canSetSessionPreset(.hd1920x1080) {
+        self.session.sessionPreset = .hd1920x1080
+      } else if self.session.canSetSessionPreset(.high) {
         self.session.sessionPreset = .high
       }
 
@@ -648,11 +654,16 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
       if self.session.canAddOutput(self.photoOutput) {
         self.session.addOutput(self.photoOutput)
         self.photoOutput.isHighResolutionCaptureEnabled = true
+        self.photoOutput.maxPhotoQualityPrioritization = .quality
       }
 
       if self.session.canAddOutput(self.movieOutput) {
         self.session.addOutput(self.movieOutput)
         self.movieOutput.movieFragmentInterval = .invalid
+        if let connection = self.movieOutput.connection(with: .video),
+           connection.isVideoStabilizationSupported {
+          connection.preferredVideoStabilizationMode = .auto
+        }
       }
 
       self.session.commitConfiguration()
@@ -672,11 +683,19 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
   }
 
   private func makeCameraInput(position: AVCaptureDevice.Position) -> AVCaptureDeviceInput? {
-    guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position) else {
+    guard let device = preferredCameraDevice(position: position) else {
       return nil
     }
     configureDeviceDefaults(device)
     return try? AVCaptureDeviceInput(device: device)
+  }
+
+  private func preferredCameraDevice(position: AVCaptureDevice.Position) -> AVCaptureDevice? {
+    let deviceTypes: [AVCaptureDevice.DeviceType] = position == .back
+      ? [.builtInTripleCamera, .builtInDualWideCamera, .builtInDualCamera, .builtInWideAngleCamera]
+      : [.builtInTrueDepthCamera, .builtInWideAngleCamera]
+    let discovery = AVCaptureDevice.DiscoverySession(deviceTypes: deviceTypes, mediaType: .video, position: position)
+    return discovery.devices.first ?? AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position)
   }
 
   private func configureDeviceDefaults(_ device: AVCaptureDevice) {
@@ -690,6 +709,9 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
       }
       if device.isWhiteBalanceModeSupported(.continuousAutoWhiteBalance) {
         device.whiteBalanceMode = .continuousAutoWhiteBalance
+      }
+      if device.isLowLightBoostSupported {
+        device.automaticallyEnablesLowLightBoostWhenAvailable = true
       }
       device.unlockForConfiguration()
     } catch {}
@@ -1121,6 +1143,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
   private func capturePhoto() {
     guard session.isRunning, !movieOutput.isRecording else { return }
     let settings = AVCapturePhotoSettings()
+    settings.photoQualityPrioritization = .quality
     if currentInput?.device.hasFlash == true {
       settings.flashMode = flashSetting.photoMode
     } else {
@@ -1158,6 +1181,9 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
       connection.videoOrientation = .portrait
       if cameraPosition == .front, connection.isVideoMirroringSupported {
         connection.isVideoMirrored = true
+      }
+      if connection.isVideoStabilizationSupported {
+        connection.preferredVideoStabilizationMode = .auto
       }
     }
     setTorch(active: flashSetting == .on)
