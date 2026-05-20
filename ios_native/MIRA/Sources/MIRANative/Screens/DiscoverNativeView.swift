@@ -196,14 +196,17 @@ public struct DiscoverNativeView: View {
   }
 
   private var challengesSection: some View {
-    VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
-      sectionHeader(title: "Challenges", subtitle: "Pick a vibe and post into the moment.")
+    VStack(alignment: .leading, spacing: MIRATheme.Space.sm) {
+      Text("Challenges")
+        .font(.system(size: 22, weight: .semibold))
+        .foregroundStyle(MIRATheme.Color.textPrimary)
+        .padding(.horizontal, MIRATheme.Space.md)
 
       challengeFilterRail
 
-      LazyVGrid(columns: [GridItem(.adaptive(minimum: 154), spacing: MIRATheme.Space.sm)], spacing: MIRATheme.Space.sm) {
+      LazyVGrid(columns: challengeGridColumns, spacing: 3) {
         ForEach(filteredChallenges) { challenge in
-          DiscoverChallengeCard(challenge: challenge) {
+          DiscoverChallengeTile(challenge: challenge) {
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
             isShowingCreatePost = true
           }
@@ -211,6 +214,10 @@ public struct DiscoverNativeView: View {
       }
       .padding(.horizontal, MIRATheme.Space.md)
     }
+  }
+
+  private var challengeGridColumns: [GridItem] {
+    Array(repeating: GridItem(.flexible(), spacing: 3), count: 3)
   }
 
   private var challengeFilterRail: some View {
@@ -517,64 +524,49 @@ private struct StoryEmptyBubble: View {
   }
 }
 
-private struct DiscoverChallengeCard: View {
+private struct DiscoverChallengeTile: View {
   let challenge: DiscoverChallenge
   let action: () -> Void
 
   var body: some View {
     Button(action: action) {
-      VStack(alignment: .leading, spacing: 12) {
-        HStack {
-          Image(systemName: challenge.systemImage)
-            .font(.system(size: 22, weight: .semibold))
-            .foregroundStyle(.white)
-            .frame(width: 44, height: 44)
-            .background(.white.opacity(0.18))
-            .clipShape(Circle())
-          Spacer()
-          Text("Challenge")
-            .font(.system(size: 11, weight: .bold))
-            .foregroundStyle(.white.opacity(0.82))
-            .textCase(.uppercase)
-        }
-
-        Spacer(minLength: 6)
-
-        Text(challenge.title)
-          .font(.system(size: 23, weight: .bold))
-          .foregroundStyle(.white)
-          .lineLimit(1)
-          .minimumScaleFactor(0.82)
-
-        Text(challenge.subtitle)
-          .font(.system(size: 13, weight: .semibold))
-          .foregroundStyle(.white.opacity(0.82))
-          .lineLimit(2)
-
-        HStack(spacing: 6) {
-          Text("Join")
-            .font(.system(size: 13, weight: .bold))
-          Image(systemName: "arrow.right")
-            .font(.system(size: 12, weight: .bold))
-        }
-        .foregroundStyle(.white)
-        .padding(.horizontal, 12)
-        .frame(height: 32)
-        .background(.white.opacity(0.18))
-        .clipShape(Capsule())
-      }
-      .padding(16)
-      .frame(maxWidth: .infinity, minHeight: 178, alignment: .topLeading)
-      .background {
+      ZStack(alignment: .bottomLeading) {
         LinearGradient(colors: challenge.colors, startPoint: .topLeading, endPoint: .bottomTrailing)
-      }
-      .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-      .overlay(alignment: .bottomTrailing) {
+
+        Image(systemName: challenge.systemImage)
+          .font(.system(size: 34, weight: .semibold))
+          .foregroundStyle(.white.opacity(0.58))
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+
         Circle()
-          .fill(.white.opacity(0.12))
-          .frame(width: 86, height: 86)
-          .offset(x: 22, y: 28)
+          .fill(.white.opacity(0.16))
+          .frame(width: 68, height: 68)
+          .offset(x: 42, y: -48)
+
+        LinearGradient(
+          colors: [.clear, .black.opacity(0.46)],
+          startPoint: .center,
+          endPoint: .bottom
+        )
+
+        VStack(alignment: .leading, spacing: 2) {
+          Text(challenge.title)
+            .font(.system(size: 13, weight: .bold))
+            .foregroundStyle(.white)
+            .lineLimit(1)
+            .minimumScaleFactor(0.78)
+
+          Text(challenge.subtitle)
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(.white.opacity(0.82))
+            .lineLimit(1)
+            .minimumScaleFactor(0.75)
+        }
+        .padding(10)
       }
+      .aspectRatio(1, contentMode: .fit)
+      .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+      .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
     .buttonStyle(.plain)
     .accessibilityLabel("Join \(challenge.title) challenge")
