@@ -193,6 +193,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
   private let effectsButton = UIButton(type: .system)
   private let shutterButton = UIButton(type: .system)
   private let shutterFill = UIView()
+  private let nextButton = UIButton(type: .system)
   private let modeStack = UIStackView()
   private let rightRail = UIStackView()
   private let inlineEditPanel = UIView()
@@ -363,6 +364,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     configureCircleButton(effectsButton, systemImage: "sparkles", action: #selector(filtersTapped))
     effectsButton.isHidden = true
     configureCircleButton(galleryButton, systemImage: "photo", action: #selector(openGallery))
+    configureNextButton()
 
     rightRail.axis = .vertical
     rightRail.spacing = 12
@@ -456,7 +458,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     messageLabel.translatesAutoresizingMaskIntoConstraints = false
     countdownLabel.translatesAutoresizingMaskIntoConstraints = false
 
-    [closeButton, rightRail, shutterButton, galleryButton, effectsButton, modeStack, inlineEditPanel, reviewToolsStack, reviewBar, messageLabel, countdownLabel].forEach {
+    [closeButton, rightRail, shutterButton, nextButton, galleryButton, effectsButton, modeStack, inlineEditPanel, reviewToolsStack, reviewBar, messageLabel, countdownLabel].forEach {
       view.addSubview($0)
     }
     inlineEditPanelHeightConstraint = inlineEditPanel.heightAnchor.constraint(equalToConstant: 58)
@@ -488,6 +490,11 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
       shutterFill.centerYAnchor.constraint(equalTo: shutterButton.centerYAnchor),
       shutterFill.widthAnchor.constraint(equalToConstant: 62),
       shutterFill.heightAnchor.constraint(equalToConstant: 62),
+
+      nextButton.leadingAnchor.constraint(equalTo: shutterButton.trailingAnchor, constant: 18),
+      nextButton.centerYAnchor.constraint(equalTo: shutterButton.centerYAnchor),
+      nextButton.widthAnchor.constraint(equalToConstant: 86),
+      nextButton.heightAnchor.constraint(equalToConstant: 52),
 
       galleryButton.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 28),
       galleryButton.centerYAnchor.constraint(equalTo: shutterButton.centerYAnchor),
@@ -543,6 +550,24 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     button.clipsToBounds = true
     button.addTarget(self, action: action, for: .touchUpInside)
     button.accessibilityTraits.insert(.button)
+  }
+
+  private func configureNextButton() {
+    nextButton.translatesAutoresizingMaskIntoConstraints = false
+    nextButton.setTitle("Next", for: .normal)
+    nextButton.setTitleColor(.white, for: .normal)
+    nextButton.titleLabel?.font = .systemFont(ofSize: 16, weight: .semibold)
+    nextButton.backgroundColor = UIColor(red: 0.09, green: 0.175, blue: 0.105, alpha: 1)
+    nextButton.layer.cornerRadius = 26
+    nextButton.layer.cornerCurve = .continuous
+    nextButton.layer.shadowColor = UIColor.black.cgColor
+    nextButton.layer.shadowOpacity = 0.16
+    nextButton.layer.shadowRadius = 14
+    nextButton.layer.shadowOffset = CGSize(width: 0, height: 8)
+    nextButton.isHidden = true
+    nextButton.accessibilityLabel = "Next"
+    nextButton.accessibilityTraits.insert(.button)
+    nextButton.addTarget(self, action: #selector(confirmCapturedMedia), for: .touchUpInside)
   }
 
   private func configureAdjustmentSlider(_ slider: UISlider, value: Float, minimum: Float, maximum: Float) {
@@ -736,8 +761,11 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     gridButton.isHidden = isReviewing
     editRailButton.isHidden = false
     editRailButton.alpha = capturedMedia == nil ? 0.62 : 1
-    shutterButton.isHidden = isReviewing
-    shutterFill.isHidden = isReviewing
+    shutterButton.isHidden = false
+    shutterFill.isHidden = false
+    shutterFill.backgroundColor = isReviewing ? UIColor.white.withAlphaComponent(0.34) : UIColor.white.withAlphaComponent(0.82)
+    shutterButton.accessibilityLabel = isReviewing ? "Retake" : "Capture"
+    nextButton.isHidden = !isReviewing
     modeStack.isHidden = isReviewing
     galleryButton.isHidden = isReviewing
     effectsButton.isHidden = true
@@ -1031,6 +1059,10 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
   }
 
   @objc private func capturePressed() {
+    if capturedMedia != nil {
+      retakeCapturedMedia()
+      return
+    }
     if longPressDidRecord {
       longPressDidRecord = false
       return
