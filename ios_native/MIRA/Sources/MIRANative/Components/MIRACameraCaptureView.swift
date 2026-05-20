@@ -756,9 +756,9 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
       inlineEditPanel.isHidden = true
     }
     rightRail.isHidden = false
-    flipButton.isHidden = isReviewing
-    flashButton.isHidden = isReviewing
-    gridButton.isHidden = isReviewing
+    flipButton.isHidden = false
+    flashButton.isHidden = false
+    gridButton.isHidden = false
     editRailButton.isHidden = false
     editRailButton.alpha = capturedMedia == nil ? 0.62 : 1
     shutterButton.isHidden = false
@@ -766,8 +766,8 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     shutterFill.backgroundColor = isReviewing ? UIColor.white.withAlphaComponent(0.34) : UIColor.white.withAlphaComponent(0.82)
     shutterButton.accessibilityLabel = isReviewing ? "Retake" : "Capture"
     nextButton.isHidden = !isReviewing
-    modeStack.isHidden = isReviewing
-    galleryButton.isHidden = isReviewing
+    modeStack.isHidden = false
+    galleryButton.isHidden = false
     effectsButton.isHidden = true
   }
 
