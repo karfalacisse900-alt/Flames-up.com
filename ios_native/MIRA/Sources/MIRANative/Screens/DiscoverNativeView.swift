@@ -203,26 +203,28 @@ public struct DiscoverNativeView: View {
   }
 
   private var notesSection: some View {
-    let width = min(max(UIScreen.main.bounds.width * 0.76, 258), min(318, UIScreen.main.bounds.width - 52))
-    let height = width * 1.24
+    GeometryReader { proxy in
+      let width = max(310, proxy.size.width - 32)
+      let height = min(max(width * 1.28, 430), 520)
 
-    return VStack(alignment: .leading, spacing: MIRATheme.Space.sm) {
-      HStack {
-        Text("Notes")
-          .font(.system(size: 20, weight: .semibold))
-          .foregroundStyle(MIRATheme.Color.textPrimary)
-        Spacer()
-      }
-      .padding(.horizontal, MIRATheme.Space.md)
+      VStack(alignment: .leading, spacing: MIRATheme.Space.sm) {
+        HStack {
+          Text("Notes")
+            .font(.system(size: 20, weight: .semibold))
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+          Spacer()
+        }
+        .padding(.horizontal, MIRATheme.Space.md)
 
-      ScrollView(.horizontal, showsIndicators: false) {
-        HStack(spacing: MIRATheme.Space.md) {
+        TabView {
           if model.isLoadingNotes && model.notes.isEmpty {
             ForEach(0..<2, id: \.self) { _ in
               NoteCardSkeletonNative(width: width, height: height)
+                .padding(.horizontal, MIRATheme.Space.md)
             }
           } else if model.notes.isEmpty {
             EmptyNoteCardNative(width: width, height: height)
+              .padding(.horizontal, MIRATheme.Space.md)
           } else {
             ForEach(model.notes) { note in
               NoteCardNative(
@@ -244,12 +246,15 @@ public struct DiscoverNativeView: View {
                   isShowingNoteMenu = true
                 }
               )
+              .padding(.horizontal, MIRATheme.Space.md)
             }
           }
         }
-        .padding(.horizontal, MIRATheme.Space.md)
+        .tabViewStyle(.page(indexDisplayMode: .never))
+        .frame(height: height)
       }
     }
+    .frame(height: min(max((UIScreen.main.bounds.width - 32) * 1.28, 430), 520) + 42)
   }
 
   private func storyGroup(for note: MIRANote) -> MIRAStoryGroup? {
@@ -451,23 +456,23 @@ private struct StoryBubbleNative: View {
   let isAdd: Bool
 
   var body: some View {
-    VStack(spacing: 5) {
+    VStack(spacing: 7) {
       ZStack(alignment: .bottomTrailing) {
-        RemoteAvatar(url: avatarURL, size: 68)
-          .overlay(Circle().stroke(hasUnviewed ? MIRATheme.Color.forest : MIRATheme.Color.hairline, lineWidth: hasUnviewed ? 2 : 1))
+        RemoteAvatar(url: avatarURL, size: 92)
+          .overlay(Circle().stroke(hasUnviewed ? MIRATheme.Color.forest : MIRATheme.Color.hairline, lineWidth: hasUnviewed ? 3 : 1))
         if isAdd {
           Circle()
             .fill(MIRATheme.Color.forest)
-            .frame(width: 21, height: 21)
-            .overlay(Image(systemName: "plus").font(.system(size: 11, weight: .bold)).foregroundStyle(.white))
-            .overlay(Circle().stroke(MIRATheme.Color.surface, lineWidth: 2))
+            .frame(width: 28, height: 28)
+            .overlay(Image(systemName: "plus").font(.system(size: 15, weight: .bold)).foregroundStyle(.white))
+            .overlay(Circle().stroke(MIRATheme.Color.surface, lineWidth: 3))
         }
       }
       Text(name)
-        .font(.system(size: 12, weight: .medium))
-        .foregroundStyle(MIRATheme.Color.textSecondary)
+        .font(.system(size: 14, weight: .semibold))
+        .foregroundStyle(MIRATheme.Color.textPrimary)
         .lineLimit(1)
-        .frame(width: 78)
+        .frame(width: 104)
     }
   }
 }
@@ -476,13 +481,13 @@ private struct StoryBubblePlaceholder: View {
   let index: Int
 
   var body: some View {
-    VStack(spacing: 5) {
+    VStack(spacing: 7) {
       Circle()
         .fill(MIRATheme.Color.surfaceSoft)
-        .frame(width: 68, height: 68)
+        .frame(width: 92, height: 92)
       RoundedRectangle(cornerRadius: 4)
         .fill(MIRATheme.Color.surfaceSoft)
-        .frame(width: 46, height: 8)
+        .frame(width: 58, height: 10)
     }
     .redacted(reason: .placeholder)
   }
@@ -501,54 +506,54 @@ private struct NoteCardNative: View {
   let onMenu: () -> Void
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 7) {
-      HStack(spacing: 8) {
+    VStack(alignment: .leading, spacing: 14) {
+      HStack(spacing: 12) {
         Button(action: onStory) {
-          MIRAFollowAvatar(url: note.user?.profileImage, size: 36)
+          MIRAFollowAvatar(url: note.user?.profileImage, size: 54)
         }
         .buttonStyle(.plain)
-        HStack(spacing: 5) {
+        HStack(spacing: 7) {
           if let userId = note.user?.id, !userId.isEmpty {
             NavigationLink(destination: UserProfileNativeView(userId: userId, api: api)) {
               Text(note.user?.displayName ?? "mira")
-                .font(.system(size: 14, weight: .semibold))
+                .font(.system(size: 22, weight: .semibold))
                 .foregroundStyle(MIRATheme.Color.textPrimary)
                 .lineLimit(1)
-                .minimumScaleFactor(0.82)
+                .minimumScaleFactor(0.72)
             }
             .buttonStyle(.plain)
           } else {
             Text(note.user?.displayName ?? "mira")
-              .font(.system(size: 14, weight: .semibold))
+              .font(.system(size: 22, weight: .semibold))
               .foregroundStyle(MIRATheme.Color.textPrimary)
               .lineLimit(1)
-              .minimumScaleFactor(0.82)
+              .minimumScaleFactor(0.72)
           }
           Text(noteAge(note.createdAt))
-            .font(.system(size: 12, weight: .semibold))
+            .font(.system(size: 19, weight: .semibold))
             .foregroundStyle(MIRATheme.Color.textMuted)
         }
         Spacer(minLength: 4)
         Button(action: onMenu) {
           Image(systemName: "ellipsis")
-            .font(.system(size: 19, weight: .semibold))
+            .font(.system(size: 22, weight: .semibold))
             .foregroundStyle(MIRATheme.Color.textMuted)
-            .frame(width: 34, height: 34)
+            .frame(width: 44, height: 44)
         }
         .buttonStyle(.plain)
       }
 
       Text(note.body ?? "New note")
-        .font(.system(size: 15, weight: .semibold))
-        .lineSpacing(2)
+        .font(.system(size: 26, weight: .semibold))
+        .lineSpacing(4)
         .foregroundStyle(MIRATheme.Color.textPrimary)
         .lineLimit(note.mediaUrl?.isEmpty == false ? 2 : 4)
 
       if let media = note.mediaUrl, !media.isEmpty {
         RemoteMediaView(url: media, isVideo: media.isVideoURL)
           .frame(maxWidth: .infinity)
-          .frame(height: min(width * 0.78, height * 0.55))
-          .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+          .frame(height: min(width * 0.82, height * 0.58))
+          .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
       } else {
         Spacer(minLength: 0)
       }
@@ -559,14 +564,14 @@ private struct NoteCardNative: View {
         Spacer()
         NoteActionNative(systemImage: "paperplane", value: note.sharesCount ?? 0, tint: MIRATheme.Color.textSecondary, action: onShare)
       }
-      .padding(.top, 2)
+      .padding(.top, 4)
     }
-    .padding(12)
+    .padding(18)
     .frame(width: width, height: height, alignment: .topLeading)
     .background(MIRATheme.Color.surfaceRaised)
-    .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-    .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(MIRATheme.Color.hairline, lineWidth: 1))
-    .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+    .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+    .overlay(RoundedRectangle(cornerRadius: 28, style: .continuous).stroke(MIRATheme.Color.hairline, lineWidth: 1))
+    .contentShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
     .onTapGesture(perform: onOpen)
   }
 }
@@ -623,14 +628,14 @@ private struct NoteCardSkeletonNative: View {
   var body: some View {
     VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
       HStack {
-        Circle().fill(MIRATheme.Color.surfaceSoft).frame(width: 40, height: 40)
-        RoundedRectangle(cornerRadius: 6).fill(MIRATheme.Color.surfaceSoft).frame(width: 120, height: 16)
+        Circle().fill(MIRATheme.Color.surfaceSoft).frame(width: 54, height: 54)
+        RoundedRectangle(cornerRadius: 6).fill(MIRATheme.Color.surfaceSoft).frame(width: 150, height: 22)
       }
-      RoundedRectangle(cornerRadius: 8).fill(MIRATheme.Color.surfaceSoft).frame(height: 18)
-      RoundedRectangle(cornerRadius: 18).fill(MIRATheme.Color.surfaceSoft).frame(height: min(width * 0.78, height * 0.55))
+      RoundedRectangle(cornerRadius: 8).fill(MIRATheme.Color.surfaceSoft).frame(height: 24)
+      RoundedRectangle(cornerRadius: 20).fill(MIRATheme.Color.surfaceSoft).frame(height: min(width * 0.82, height * 0.58))
       Spacer()
     }
-    .padding(14)
+    .padding(18)
     .frame(width: width, height: height)
     .background(MIRATheme.Color.surfaceRaised)
     .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
@@ -674,12 +679,12 @@ private struct NoteActionNative: View {
     Button(action: action) {
       HStack(spacing: 5) {
         Image(systemName: systemImage)
-          .font(.system(size: 18, weight: .regular))
+          .font(.system(size: 25, weight: .regular))
         Text(compact(value))
-          .font(.system(size: 13, weight: .semibold))
+          .font(.system(size: 20, weight: .semibold))
       }
       .foregroundStyle(tint)
-      .frame(minHeight: 32)
+      .frame(minHeight: 42)
     }
     .buttonStyle(.plain)
   }
