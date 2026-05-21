@@ -4,11 +4,15 @@ import UIKit
 @MainActor
 final class DiscoverNativeModel: ObservableObject {
   @Published var stories: [MIRAStoryGroup] = []
+  @Published var posts: [MIRAPost] = []
   @Published var isLoading = true
   @Published var isLoadingStories = true
+  @Published var isLoadingPosts = true
   let api: MIRAAPIClient
   private let storiesCacheKey = "native.discover.stories.v2"
+  private let postsCacheKey = "native.discover.posts.v1"
   private var hasLoadedFreshStories = false
+  private var hasLoadedFreshPosts = false
 
   init(api: MIRAAPIClient) {
     self.api = api
@@ -16,15 +20,54 @@ final class DiscoverNativeModel: ObservableObject {
 
   func load() async {
     MIRAPerformanceTimeline.mark("discover_load_start")
+    if posts.isEmpty, let cachedPosts: [MIRAPost] = await MIRALocalJSONCache.load([MIRAPost].self, key: postsCacheKey) {
+      posts = cachedPosts
+      isLoadingPosts = false
+      MIRAPerformanceTimeline.markOnce("discover_first_content", detail: "posts_cache")
+    }
     if stories.isEmpty, let cachedStories: [MIRAStoryGroup] = await MIRALocalJSONCache.load([MIRAStoryGroup].self, key: storiesCacheKey) {
       stories = cachedStories
       isLoadingStories = false
       MIRAPerformanceTimeline.markOnce("discover_first_content", detail: "stories_cache")
     }
 
+    if !hasLoadedFreshPosts && posts.isEmpty { isLoadingPosts = true }
     if !hasLoadedFreshStories && stories.isEmpty { isLoadingStories = true }
     updateLoadingState()
+    Task { await self.loadPosts() }
     Task { await self.loadStories() }
+  }
+
+  private func loadPosts() async {
+    guard !hasLoadedFreshPosts else { return }
+    hasLoadedFreshPosts = true
+    if posts.isEmpty {
+      isLoadingPosts = true
+      updateLoadingState()
+    }
+    defer {
+      isLoadingPosts = false
+      updateLoadingState()
+    }
+    do {
+      var loaded: [MIRAPost] = try await api.get("/posts/feed?limit=60")
+      if loaded.isEmpty {
+        loaded = (try? await api.get("/posts/world-board?limit=60")) ?? []
+      }
+      posts = loaded
+      await MIRALocalJSONCache.save(loaded, key: postsCacheKey)
+      if !loaded.isEmpty {
+        MIRAPerformanceTimeline.markOnce("discover_first_content", detail: "posts_network")
+      }
+    } catch {
+      if let fallback: [MIRAPost] = try? await api.get("/posts/world-board?limit=60"), !fallback.isEmpty {
+        posts = fallback
+        await MIRALocalJSONCache.save(fallback, key: postsCacheKey)
+        MIRAPerformanceTimeline.markOnce("discover_first_content", detail: "posts_fallback")
+      } else if posts.isEmpty {
+        hasLoadedFreshPosts = false
+      }
+    }
   }
 
   private func loadStories() async {
@@ -52,92 +95,33 @@ final class DiscoverNativeModel: ObservableObject {
   }
 
   private func updateLoadingState() {
-    isLoading = isLoadingStories
+    isLoading = isLoadingStories || isLoadingPosts
   }
 }
 
-private struct DiscoverChallenge: Identifiable {
+private struct DiscoverGalleryFilter: Identifiable {
   let id: String
   let title: String
-  let subtitle: String
-  let systemImage: String
-  let colors: [Color]
-  let filterIDs: Set<String>
+  let keywords: [String]
 }
 
-private struct DiscoverChallengeFilter: Identifiable {
-  let id: String
-  let title: String
-}
-
-private let discoverChallenges: [DiscoverChallenge] = [
-  .init(
-    id: "night-out",
-    title: "Night out",
-    subtitle: "Best after-dark moment",
-    systemImage: "moon.stars.fill",
-    colors: [Color(red: 0.12, green: 0.12, blue: 0.20), Color(red: 0.48, green: 0.18, blue: 0.40)],
-    filterIDs: ["night-out", "nightlife"]
-  ),
-  .init(
-    id: "best-fit",
-    title: "Best fit",
-    subtitle: "Show the look",
-    systemImage: "tshirt.fill",
-    colors: [Color(red: 0.10, green: 0.24, blue: 0.22), Color(red: 0.18, green: 0.55, blue: 0.44)],
-    filterIDs: ["best-fit", "style"]
-  ),
-  .init(
-    id: "food-find",
-    title: "Food find",
-    subtitle: "What did you order?",
-    systemImage: "fork.knife",
-    colors: [Color(red: 0.58, green: 0.26, blue: 0.12), Color(red: 0.90, green: 0.58, blue: 0.24)],
-    filterIDs: ["food", "cafe"]
-  ),
-  .init(
-    id: "trip-dump",
-    title: "Trip dump",
-    subtitle: "Vacation or quick escape",
-    systemImage: "airplane",
-    colors: [Color(red: 0.10, green: 0.28, blue: 0.48), Color(red: 0.20, green: 0.58, blue: 0.82)],
-    filterIDs: ["trip", "travel"]
-  ),
-  .init(
-    id: "golden-hour",
-    title: "Golden hour",
-    subtitle: "Best light today",
-    systemImage: "sun.max.fill",
-    colors: [Color(red: 0.70, green: 0.38, blue: 0.10), Color(red: 0.98, green: 0.74, blue: 0.28)],
-    filterIDs: ["golden-hour", "trip", "cafe"]
-  ),
-  .init(
-    id: "friends-moment",
-    title: "Friends moment",
-    subtitle: "A candid with your circle",
-    systemImage: "person.2.fill",
-    colors: [Color(red: 0.20, green: 0.20, blue: 0.46), Color(red: 0.50, green: 0.42, blue: 0.82)],
-    filterIDs: ["friends", "nightlife"]
-  ),
-]
-
-private let discoverChallengeFilters: [DiscoverChallengeFilter] = [
-  .init(id: "all", title: "All"),
-  .init(id: "night-out", title: "Night out"),
-  .init(id: "nightlife", title: "Nightlife"),
-  .init(id: "best-fit", title: "Best fit"),
-  .init(id: "food", title: "Food"),
-  .init(id: "trip", title: "Trip"),
-  .init(id: "cafe", title: "Cafe"),
-  .init(id: "friends", title: "Friends"),
-  .init(id: "golden-hour", title: "Golden hour"),
+private let discoverGalleryFilters: [DiscoverGalleryFilter] = [
+  .init(id: "all", title: "All", keywords: []),
+  .init(id: "night-out", title: "Night out", keywords: ["night out", "party", "club", "bar", "dinner"]),
+  .init(id: "nightlife", title: "Nightlife", keywords: ["nightlife", "club", "bar", "party", "late"]),
+  .init(id: "best-fit", title: "Best fit", keywords: ["fit", "outfit", "style", "fashion", "look"]),
+  .init(id: "food", title: "Food", keywords: ["food", "restaurant", "dinner", "lunch", "brunch", "eat"]),
+  .init(id: "trip", title: "Trip", keywords: ["trip", "travel", "vacation", "beach", "hotel"]),
+  .init(id: "cafe", title: "Cafe", keywords: ["cafe", "coffee", "latte", "bakery"]),
+  .init(id: "friends", title: "Friends", keywords: ["friends", "crew", "group", "moment"]),
+  .init(id: "golden-hour", title: "Golden hour", keywords: ["golden hour", "sunset", "sunrise", "sky"])
 ]
 
 public struct DiscoverNativeView: View {
   @StateObject private var model: DiscoverNativeModel
   @State private var selectedStoryGroup: MIRAStoryGroup?
   @State private var isShowingCreatePost = false
-  @State private var selectedChallengeFilter = "all"
+  @State private var selectedGalleryFilter = "all"
 
   public init(api: MIRAAPIClient) {
     _model = StateObject(wrappedValue: DiscoverNativeModel(api: api))
@@ -152,7 +136,7 @@ public struct DiscoverNativeView: View {
           LazyVStack(alignment: .leading, spacing: MIRATheme.Space.xl) {
             storyRail
 
-            challengesSection
+            gallerySection
           }
           .padding(.top, MIRATheme.Space.xs)
           .padding(.bottom, MIRATheme.Space.xxl + MIRATheme.Space.lg)
@@ -195,50 +179,60 @@ public struct DiscoverNativeView: View {
     }
   }
 
-  private var challengesSection: some View {
+  private var gallerySection: some View {
     VStack(alignment: .leading, spacing: MIRATheme.Space.sm) {
-      Text("Challenges")
+      Text("Gallery")
         .font(.system(size: 22, weight: .semibold))
         .foregroundStyle(MIRATheme.Color.textPrimary)
         .padding(.horizontal, MIRATheme.Space.md)
 
-      challengeFilterRail
+      galleryFilterRail
 
-      LazyVGrid(columns: challengeGridColumns, spacing: 3) {
-        ForEach(filteredChallenges) { challenge in
-          DiscoverChallengeTile(challenge: challenge) {
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
-            isShowingCreatePost = true
+      if model.isLoadingPosts && model.posts.isEmpty {
+        LazyVGrid(columns: galleryGridColumns, spacing: 3) {
+          ForEach(0..<18, id: \.self) { index in
+            DiscoverGallerySkeletonTile(index: index)
+          }
+        }
+      } else if filteredGalleryPosts.isEmpty {
+        DiscoverGalleryEmptyTile()
+          .padding(.horizontal, MIRATheme.Space.md)
+      } else {
+        LazyVGrid(columns: galleryGridColumns, spacing: 3) {
+          ForEach(filteredGalleryPosts) { post in
+            NavigationLink(destination: PostDetailNativeView(post: post, api: model.api)) {
+              DiscoverPostGalleryTile(post: post)
+            }
+            .buttonStyle(.plain)
           }
         }
       }
-      .padding(.horizontal, MIRATheme.Space.md)
     }
   }
 
-  private var challengeGridColumns: [GridItem] {
+  private var galleryGridColumns: [GridItem] {
     Array(repeating: GridItem(.flexible(), spacing: 3), count: 3)
   }
 
-  private var challengeFilterRail: some View {
+  private var galleryFilterRail: some View {
     ScrollView(.horizontal, showsIndicators: false) {
       HStack(spacing: MIRATheme.Space.sm) {
-        ForEach(discoverChallengeFilters) { filter in
+        ForEach(discoverGalleryFilters) { filter in
           Button {
             withAnimation(.spring(response: 0.28, dampingFraction: 0.86)) {
-              selectedChallengeFilter = filter.id
+              selectedGalleryFilter = filter.id
             }
           } label: {
             Text(filter.title)
               .font(.system(size: 14, weight: .semibold))
-              .foregroundStyle(selectedChallengeFilter == filter.id ? .white : MIRATheme.Color.textPrimary)
+              .foregroundStyle(selectedGalleryFilter == filter.id ? .white : MIRATheme.Color.textPrimary)
               .padding(.horizontal, 15)
               .frame(height: 40)
-              .background(selectedChallengeFilter == filter.id ? MIRATheme.Color.forest : MIRATheme.Color.surfaceRaised)
+              .background(selectedGalleryFilter == filter.id ? MIRATheme.Color.forest : MIRATheme.Color.surfaceRaised)
               .clipShape(Capsule())
               .overlay(
                 Capsule()
-                  .stroke(selectedChallengeFilter == filter.id ? Color.clear : MIRATheme.Color.hairline, lineWidth: 1)
+                  .stroke(selectedGalleryFilter == filter.id ? Color.clear : MIRATheme.Color.hairline, lineWidth: 1)
               )
           }
           .buttonStyle(.plain)
@@ -248,9 +242,32 @@ public struct DiscoverNativeView: View {
     }
   }
 
-  private var filteredChallenges: [DiscoverChallenge] {
-    if selectedChallengeFilter == "all" { return discoverChallenges }
-    return discoverChallenges.filter { $0.filterIDs.contains(selectedChallengeFilter) }
+  private var galleryPosts: [MIRAPost] {
+    let mediaPosts = model.posts.filter { !$0.mediaURLs.isEmpty }
+    return mediaPosts.isEmpty ? model.posts : mediaPosts
+  }
+
+  private var filteredGalleryPosts: [MIRAPost] {
+    guard
+      selectedGalleryFilter != "all",
+      let filter = discoverGalleryFilters.first(where: { $0.id == selectedGalleryFilter })
+    else {
+      return galleryPosts
+    }
+    let matches = galleryPosts.filter { post in
+      let haystack = [
+        post.title,
+        post.caption,
+        post.content,
+        post.location,
+        post.placeName,
+        post.postType
+      ]
+      .compactMap { $0?.lowercased() }
+      .joined(separator: " ")
+      return filter.keywords.contains { haystack.contains($0) }
+    }
+    return matches.isEmpty ? galleryPosts : matches
   }
 
   private func sectionHeader(title: String, subtitle: String) -> some View {
@@ -524,52 +541,74 @@ private struct StoryEmptyBubble: View {
   }
 }
 
-private struct DiscoverChallengeTile: View {
-  let challenge: DiscoverChallenge
-  let action: () -> Void
+private struct DiscoverPostGalleryTile: View {
+  let post: MIRAPost
 
   var body: some View {
-    Button(action: action) {
-      ZStack(alignment: .bottomLeading) {
-        LinearGradient(colors: challenge.colors, startPoint: .topLeading, endPoint: .bottomTrailing)
-
-        Image(systemName: challenge.systemImage)
-          .font(.system(size: 34, weight: .semibold))
-          .foregroundStyle(.white.opacity(0.58))
-          .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-        Circle()
-          .fill(.white.opacity(0.16))
-          .frame(width: 68, height: 68)
-          .offset(x: 42, y: -48)
-
-        LinearGradient(
-          colors: [.clear, .black.opacity(0.46)],
-          startPoint: .center,
-          endPoint: .bottom
-        )
-
-        VStack(alignment: .leading, spacing: 2) {
-          Text(challenge.title)
-            .font(.system(size: 13, weight: .bold))
-            .foregroundStyle(.white)
-            .lineLimit(1)
-            .minimumScaleFactor(0.78)
-
-          Text(challenge.subtitle)
-            .font(.system(size: 10, weight: .semibold))
-            .foregroundStyle(.white.opacity(0.82))
-            .lineLimit(1)
-            .minimumScaleFactor(0.75)
+    ZStack(alignment: .topTrailing) {
+      if let media = post.mediaURLs.first {
+        RemoteMediaView(url: media, isVideo: media.isVideoURL, shouldPlay: false)
+      } else {
+        ZStack {
+          MIRATheme.Color.surfaceSoft
+          Text(post.titleText)
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+            .multilineTextAlignment(.center)
+            .lineLimit(4)
+            .padding(8)
         }
-        .padding(10)
       }
-      .aspectRatio(1, contentMode: .fit)
-      .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-      .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+      if post.mediaURLs.first?.isVideoURL == true {
+        Image(systemName: "play.fill")
+          .font(.system(size: 10, weight: .bold))
+          .foregroundStyle(.white)
+          .padding(7)
+          .background(.black.opacity(0.36))
+          .clipShape(Circle())
+          .padding(6)
+      } else if post.mediaURLs.count > 1 {
+        Image(systemName: "square.on.square")
+          .font(.system(size: 11, weight: .bold))
+          .foregroundStyle(.white)
+          .padding(7)
+          .background(.black.opacity(0.36))
+          .clipShape(Circle())
+          .padding(6)
+      }
     }
-    .buttonStyle(.plain)
-    .accessibilityLabel("Join \(challenge.title) challenge")
+    .aspectRatio(1, contentMode: .fill)
+    .clipped()
+    .contentShape(Rectangle())
+    .accessibilityLabel(post.titleText)
+  }
+}
+
+private struct DiscoverGallerySkeletonTile: View {
+  let index: Int
+
+  var body: some View {
+    RoundedRectangle(cornerRadius: 0)
+      .fill(index.isMultiple(of: 2) ? MIRATheme.Color.surfaceSoft : MIRATheme.Color.surfaceRaised)
+      .aspectRatio(1, contentMode: .fit)
+      .redacted(reason: .placeholder)
+  }
+}
+
+private struct DiscoverGalleryEmptyTile: View {
+  var body: some View {
+    VStack(spacing: 10) {
+      Image(systemName: "photo.on.rectangle.angled")
+        .font(.system(size: 26, weight: .semibold))
+        .foregroundStyle(MIRATheme.Color.textMuted)
+      Text("Posts will appear here.")
+        .font(.system(size: 14, weight: .semibold))
+        .foregroundStyle(MIRATheme.Color.textSecondary)
+    }
+    .frame(maxWidth: .infinity)
+    .frame(height: 150)
+    .background(MIRATheme.Color.surfaceRaised)
   }
 }
 
