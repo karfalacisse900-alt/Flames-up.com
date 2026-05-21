@@ -133,7 +133,7 @@ public struct DiscoverNativeView: View {
         discoverHeader
 
         ScrollView {
-          LazyVStack(alignment: .leading, spacing: MIRATheme.Space.xl) {
+          LazyVStack(alignment: .leading, spacing: MIRATheme.Space.md) {
             storyRail
 
             gallerySection
@@ -180,25 +180,26 @@ public struct DiscoverNativeView: View {
   }
 
   private var gallerySection: some View {
-    VStack(alignment: .leading, spacing: MIRATheme.Space.sm) {
+    VStack(alignment: .leading, spacing: 8) {
       Text("Gallery")
-        .font(.system(size: 22, weight: .semibold))
+        .font(.system(size: 18, weight: .semibold))
         .foregroundStyle(MIRATheme.Color.textPrimary)
         .padding(.horizontal, MIRATheme.Space.md)
 
       galleryFilterRail
 
       if model.isLoadingPosts && model.posts.isEmpty {
-        LazyVGrid(columns: galleryGridColumns, spacing: 3) {
+        LazyVGrid(columns: galleryGridColumns, spacing: 2) {
           ForEach(0..<18, id: \.self) { index in
             DiscoverGallerySkeletonTile(index: index)
           }
         }
+        .padding(.horizontal, 2)
       } else if filteredGalleryPosts.isEmpty {
         DiscoverGalleryEmptyTile()
           .padding(.horizontal, MIRATheme.Space.md)
       } else {
-        LazyVGrid(columns: galleryGridColumns, spacing: 3) {
+        LazyVGrid(columns: galleryGridColumns, spacing: 2) {
           ForEach(filteredGalleryPosts) { post in
             NavigationLink(destination: PostDetailNativeView(post: post, api: model.api)) {
               DiscoverPostGalleryTile(post: post)
@@ -206,17 +207,18 @@ public struct DiscoverNativeView: View {
             .buttonStyle(.plain)
           }
         }
+        .padding(.horizontal, 2)
       }
     }
   }
 
   private var galleryGridColumns: [GridItem] {
-    Array(repeating: GridItem(.flexible(), spacing: 3), count: 3)
+    Array(repeating: GridItem(.flexible(), spacing: 2), count: 3)
   }
 
   private var galleryFilterRail: some View {
     ScrollView(.horizontal, showsIndicators: false) {
-      HStack(spacing: MIRATheme.Space.sm) {
+      HStack(spacing: 8) {
         ForEach(discoverGalleryFilters) { filter in
           Button {
             withAnimation(.spring(response: 0.28, dampingFraction: 0.86)) {
@@ -224,10 +226,10 @@ public struct DiscoverNativeView: View {
             }
           } label: {
             Text(filter.title)
-              .font(.system(size: 14, weight: .semibold))
+              .font(.system(size: 13, weight: .semibold))
               .foregroundStyle(selectedGalleryFilter == filter.id ? .white : MIRATheme.Color.textPrimary)
-              .padding(.horizontal, 15)
-              .frame(height: 40)
+              .padding(.horizontal, 13)
+              .frame(height: 34)
               .background(selectedGalleryFilter == filter.id ? MIRATheme.Color.forest : MIRATheme.Color.surfaceRaised)
               .clipShape(Capsule())
               .overlay(
@@ -240,6 +242,7 @@ public struct DiscoverNativeView: View {
       }
       .padding(.horizontal, MIRATheme.Space.md)
     }
+    .frame(height: 38)
   }
 
   private var galleryPosts: [MIRAPost] {
@@ -284,7 +287,7 @@ public struct DiscoverNativeView: View {
 
   private var storyRail: some View {
     ScrollView(.horizontal, showsIndicators: false) {
-      HStack(spacing: MIRATheme.Space.md) {
+      HStack(spacing: 10) {
         NavigationLink(destination: CreateStoryNativeView(api: model.api)) {
           StoryBubbleNative(name: "You", avatarURL: nil, hasUnviewed: false, isAdd: true)
         }
@@ -308,7 +311,8 @@ public struct DiscoverNativeView: View {
         }
       }
       .padding(.horizontal, MIRATheme.Space.md)
-      .padding(.top, MIRATheme.Space.sm)
+      .padding(.top, 4)
+      .padding(.bottom, 2)
     }
   }
 }
@@ -478,24 +482,25 @@ private struct StoryBubbleNative: View {
   let isAdd: Bool
 
   var body: some View {
-    VStack(spacing: 7) {
+    VStack(spacing: 4) {
       ZStack(alignment: .bottomTrailing) {
-        RemoteAvatar(url: avatarURL, size: 92)
-          .overlay(Circle().stroke(hasUnviewed ? MIRATheme.Color.forest : MIRATheme.Color.hairline, lineWidth: hasUnviewed ? 3 : 1))
+        RemoteAvatar(url: avatarURL, size: 58)
+          .overlay(Circle().stroke(hasUnviewed ? MIRATheme.Color.forest : MIRATheme.Color.hairline, lineWidth: hasUnviewed ? 2 : 1))
         if isAdd {
           Circle()
             .fill(MIRATheme.Color.forest)
-            .frame(width: 28, height: 28)
-            .overlay(Image(systemName: "plus").font(.system(size: 15, weight: .bold)).foregroundStyle(.white))
-            .overlay(Circle().stroke(MIRATheme.Color.surface, lineWidth: 3))
+            .frame(width: 20, height: 20)
+            .overlay(Image(systemName: "plus").font(.system(size: 11, weight: .bold)).foregroundStyle(.white))
+            .overlay(Circle().stroke(MIRATheme.Color.surface, lineWidth: 2))
         }
       }
       Text(name)
-        .font(.system(size: 14, weight: .semibold))
+        .font(.system(size: 11, weight: .semibold))
         .foregroundStyle(MIRATheme.Color.textPrimary)
         .lineLimit(1)
-        .frame(width: 104)
+        .frame(width: 66)
     }
+    .frame(width: 68)
   }
 }
 
@@ -503,14 +508,15 @@ private struct StoryBubblePlaceholder: View {
   let index: Int
 
   var body: some View {
-    VStack(spacing: 7) {
+    VStack(spacing: 4) {
       Circle()
         .fill(MIRATheme.Color.surfaceSoft)
-        .frame(width: 92, height: 92)
+        .frame(width: 58, height: 58)
       RoundedRectangle(cornerRadius: 4)
         .fill(MIRATheme.Color.surfaceSoft)
-        .frame(width: 58, height: 10)
+        .frame(width: 42, height: 8)
     }
+    .frame(width: 68)
     .redacted(reason: .placeholder)
   }
 }
@@ -519,25 +525,25 @@ private struct StoryEmptyBubble: View {
   var body: some View {
     HStack(spacing: 10) {
       Image(systemName: "sparkles")
-        .font(.system(size: 18, weight: .semibold))
+        .font(.system(size: 14, weight: .semibold))
         .foregroundStyle(MIRATheme.Color.forest)
-        .frame(width: 40, height: 40)
+        .frame(width: 32, height: 32)
         .background(MIRATheme.Color.forestSoft)
         .clipShape(Circle())
       VStack(alignment: .leading, spacing: 2) {
         Text("No stories yet")
-          .font(.system(size: 14, weight: .semibold))
+          .font(.system(size: 12, weight: .semibold))
           .foregroundStyle(MIRATheme.Color.textPrimary)
         Text("Fresh stories will appear here.")
-          .font(.system(size: 12, weight: .medium))
+          .font(.system(size: 10, weight: .medium))
           .foregroundStyle(MIRATheme.Color.textMuted)
       }
     }
-    .padding(.horizontal, 14)
-    .frame(height: 76)
+    .padding(.horizontal, 12)
+    .frame(height: 54)
     .background(MIRATheme.Color.surfaceRaised)
-    .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-    .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(MIRATheme.Color.hairline, lineWidth: 1))
+    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(MIRATheme.Color.hairline, lineWidth: 1))
   }
 }
 
@@ -545,40 +551,46 @@ private struct DiscoverPostGalleryTile: View {
   let post: MIRAPost
 
   var body: some View {
-    ZStack(alignment: .topTrailing) {
-      if let media = post.mediaURLs.first {
-        RemoteMediaView(url: media, isVideo: media.isVideoURL, shouldPlay: false)
-      } else {
-        ZStack {
-          MIRATheme.Color.surfaceSoft
-          Text(post.titleText)
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(MIRATheme.Color.textPrimary)
-            .multilineTextAlignment(.center)
-            .lineLimit(4)
-            .padding(8)
+    GeometryReader { proxy in
+      ZStack(alignment: .topTrailing) {
+        if let media = post.mediaURLs.first {
+          RemoteMediaView(url: media, isVideo: media.isVideoURL, shouldPlay: false)
+            .frame(width: proxy.size.width, height: proxy.size.width)
+        } else {
+          ZStack {
+            MIRATheme.Color.surfaceSoft
+            Text(post.titleText)
+              .font(.system(size: 12, weight: .semibold))
+              .foregroundStyle(MIRATheme.Color.textPrimary)
+              .multilineTextAlignment(.center)
+              .lineLimit(4)
+              .padding(8)
+          }
+          .frame(width: proxy.size.width, height: proxy.size.width)
+        }
+
+        if post.mediaURLs.first?.isVideoURL == true {
+          Image(systemName: "play.fill")
+            .font(.system(size: 10, weight: .bold))
+            .foregroundStyle(.white)
+            .padding(7)
+            .background(.black.opacity(0.36))
+            .clipShape(Circle())
+            .padding(6)
+        } else if post.mediaURLs.count > 1 {
+          Image(systemName: "square.on.square")
+            .font(.system(size: 11, weight: .bold))
+            .foregroundStyle(.white)
+            .padding(7)
+            .background(.black.opacity(0.36))
+            .clipShape(Circle())
+            .padding(6)
         }
       }
-
-      if post.mediaURLs.first?.isVideoURL == true {
-        Image(systemName: "play.fill")
-          .font(.system(size: 10, weight: .bold))
-          .foregroundStyle(.white)
-          .padding(7)
-          .background(.black.opacity(0.36))
-          .clipShape(Circle())
-          .padding(6)
-      } else if post.mediaURLs.count > 1 {
-        Image(systemName: "square.on.square")
-          .font(.system(size: 11, weight: .bold))
-          .foregroundStyle(.white)
-          .padding(7)
-          .background(.black.opacity(0.36))
-          .clipShape(Circle())
-          .padding(6)
-      }
+      .frame(width: proxy.size.width, height: proxy.size.width)
+      .clipped()
     }
-    .aspectRatio(1, contentMode: .fill)
+    .aspectRatio(1, contentMode: .fit)
     .clipped()
     .contentShape(Rectangle())
     .accessibilityLabel(post.titleText)
