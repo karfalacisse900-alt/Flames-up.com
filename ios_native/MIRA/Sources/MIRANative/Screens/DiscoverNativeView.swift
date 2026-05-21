@@ -177,26 +177,20 @@ public struct DiscoverNativeView: View {
   }
 
   private var gallerySection: some View {
-    VStack(alignment: .leading, spacing: 8) {
-      Text("Gallery")
-        .font(.system(size: 18, weight: .semibold))
-        .foregroundStyle(MIRATheme.Color.textPrimary)
-        .padding(.horizontal, MIRATheme.Space.md)
-
+    VStack(alignment: .leading, spacing: 6) {
       galleryFilterRail
 
       if model.isLoadingPosts && model.posts.isEmpty {
-        LazyVGrid(columns: galleryGridColumns, spacing: 2) {
+        LazyVGrid(columns: galleryGridColumns, spacing: 1) {
           ForEach(0..<18, id: \.self) { index in
             DiscoverGallerySkeletonTile(index: index)
           }
         }
-        .padding(.horizontal, 2)
       } else if filteredGalleryPosts.isEmpty {
         DiscoverGalleryEmptyTile()
           .padding(.horizontal, MIRATheme.Space.md)
       } else {
-        LazyVGrid(columns: galleryGridColumns, spacing: 2) {
+        LazyVGrid(columns: galleryGridColumns, spacing: 1) {
           ForEach(filteredGalleryPosts) { post in
             NavigationLink(destination: PostDetailNativeView(post: post, api: model.api)) {
               DiscoverPostGalleryTile(post: post)
@@ -204,13 +198,12 @@ public struct DiscoverNativeView: View {
             .buttonStyle(.plain)
           }
         }
-        .padding(.horizontal, 2)
       }
     }
   }
 
   private var galleryGridColumns: [GridItem] {
-    Array(repeating: GridItem(.flexible(), spacing: 2), count: 3)
+    Array(repeating: GridItem(.flexible(), spacing: 1), count: 3)
   }
 
   private var galleryFilterRail: some View {
