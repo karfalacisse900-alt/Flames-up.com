@@ -13,6 +13,7 @@ final class MainFeedModel: ObservableObject {
   private var hasLoadedFreshFeed = false
   private var canLoadMore = true
   private let firstPageLimit = 8
+  private let paginationTriggerWindow = 5
 
   init(api: MIRAAPIClient) {
     self.api = api
@@ -33,60 +34,73 @@ final class MainFeedModel: ObservableObject {
     if posts.isEmpty { isLoading = true }
     hasLoadedFreshFeed = true
     defer { isLoading = false }
-    do {
-      var loaded: [MIRAPost] = try await api.get("/posts/feed?limit=\(firstPageLimit)")
-      if loaded.isEmpty {
-        loaded = (try? await api.get("/posts/world-board?limit=\(firstPageLimit)")) ?? []
-      }
-      let sorted = await sortedByNativeScore(loaded)
-      posts = sorted
-      canLoadMore = loaded.count >= firstPageLimit
-      await MIRALocalJSONCache.save(sorted, key: feedCacheKey)
-      MIRAPerformanceTimeline.markOnce("time_to_first_real_home_item", detail: "network")
-      errorMessage = nil
-    } catch {
-      if let fallback: [MIRAPost] = try? await api.get("/posts/world-board?limit=\(firstPageLimit)"), !fallback.isEmpty {
-        let sorted = await sortedByNativeScore(fallback)
-        posts = sorted
-        canLoadMore = fallback.count >= firstPageLimit
-        await MIRALocalJSONCache.save(sorted, key: feedCacheKey)
-        MIRAPerformanceTimeline.markOnce("time_to_first_real_home_item", detail: "fallback")
-        errorMessage = nil
-      } else {
-        if posts.isEmpty { hasLoadedFreshFeed = false }
+    let loaded = await fetchFeedPage(skip: 0)
+    guard !loaded.isEmpty else {
+      canLoadMore = false
+      if posts.isEmpty {
+        hasLoadedFreshFeed = false
         errorMessage = "Could not load the feed. Pull back in a moment."
       }
+      return
     }
+    let sorted = await sortedByNativeScore(loaded)
+    posts = sorted
+    canLoadMore = loaded.count >= firstPageLimit
+    await MIRALocalJSONCache.save(sorted, key: feedCacheKey)
+    MIRAPerformanceTimeline.markOnce("time_to_first_real_home_item", detail: "network")
+    errorMessage = nil
+    prefetchNextPageIfNeeded(afterInitialCount: sorted.count)
   }
 
   func loadMoreIfNeeded(after post: MIRAPost) async {
-    guard canLoadMore, !isLoading, !isLoadingMore else { return }
-    guard posts.suffix(3).contains(where: { $0.id == post.id }) else { return }
+    guard !isLoading else { return }
+    guard posts.suffix(paginationTriggerWindow).contains(where: { $0.id == post.id }) else { return }
+    await loadNextPage(reason: "scroll")
+  }
+
+  private func loadNextPage(reason: String) async {
+    guard canLoadMore, !isLoadingMore else { return }
     isLoadingMore = true
     defer { isLoadingMore = false }
 
     let skip = posts.count
-    do {
-      var loaded: [MIRAPost] = try await api.get("/posts/feed?limit=\(firstPageLimit)&skip=\(skip)")
-      if loaded.isEmpty {
-        loaded = (try? await api.get("/posts/world-board?limit=\(firstPageLimit)&skip=\(skip)")) ?? []
-      }
-      guard !loaded.isEmpty else {
-        canLoadMore = false
-        return
-      }
-      let existing = Set(posts.map(\.id))
-      let unique = loaded.filter { !existing.contains($0.id) }
-      guard !unique.isEmpty else {
-        canLoadMore = false
-        return
-      }
-      posts.append(contentsOf: await sortedByNativeScore(unique))
-      canLoadMore = loaded.count >= firstPageLimit
-      cacheCurrentPosts()
-    } catch {
-      // Keep the visible feed stable; pagination can retry on the next near-bottom cell.
+    MIRAPerformanceTimeline.mark("home_load_more_start", detail: "\(reason) skip=\(skip)")
+    let loaded = await fetchFeedPage(skip: skip)
+    guard !loaded.isEmpty else {
+      canLoadMore = false
+      MIRAPerformanceTimeline.mark("home_load_more_empty", detail: "skip=\(skip)")
+      return
     }
+    let existing = Set(posts.map(\.id))
+    var unique = loaded.filter { !existing.contains($0.id) }
+
+    if unique.isEmpty {
+      let fallback = await fetchPublicFeedPage(skip: skip)
+      unique = fallback.filter { !existing.contains($0.id) }
+      if unique.isEmpty {
+        canLoadMore = fallback.count >= firstPageLimit
+        MIRAPerformanceTimeline.mark("home_load_more_duplicate_page", detail: "skip=\(skip)")
+        return
+      }
+    }
+
+    posts.append(contentsOf: await sortedByNativeScore(unique))
+    canLoadMore = loaded.count >= firstPageLimit || unique.count >= firstPageLimit
+    MIRAPerformanceTimeline.mark("home_load_more_done", detail: "added=\(unique.count) total=\(posts.count)")
+    cacheCurrentPosts()
+  }
+
+  private func prefetchNextPageIfNeeded(afterInitialCount initialCount: Int) {
+    guard canLoadMore, initialCount <= firstPageLimit else { return }
+    Task { [weak self] in
+      try? await Task.sleep(nanoseconds: 350_000_000)
+      await self?.prefetchNextPageIfStillCurrent(initialCount)
+    }
+  }
+
+  private func prefetchNextPageIfStillCurrent(_ initialCount: Int) async {
+    guard posts.count == initialCount, !isLoading else { return }
+    await loadNextPage(reason: "prefetch")
   }
 
   func toggleLike(_ post: MIRAPost) async {
@@ -193,6 +207,27 @@ final class MainFeedModel: ObservableObject {
         commentsCount: post.commentsCount
       )
     )
+  }
+
+  private func fetchFeedPage(skip: Int) async -> [MIRAPost] {
+    do {
+      let loaded: [MIRAPost] = try await api.get("/posts/feed?limit=\(firstPageLimit)&skip=\(skip)")
+      if !loaded.isEmpty { return loaded }
+      MIRAPerformanceTimeline.mark("home_feed_page_empty", detail: "authenticated skip=\(skip)")
+    } catch {
+      MIRAPerformanceTimeline.mark("home_feed_page_failed", detail: "authenticated skip=\(skip)")
+    }
+    return await fetchPublicFeedPage(skip: skip)
+  }
+
+  private func fetchPublicFeedPage(skip: Int) async -> [MIRAPost] {
+    do {
+      let loaded: [MIRAPost] = try await api.get("/posts/world-board?limit=\(firstPageLimit)&skip=\(skip)")
+      return loaded
+    } catch {
+      MIRAPerformanceTimeline.mark("home_feed_page_failed", detail: "public skip=\(skip)")
+      return []
+    }
   }
 
   private func sortedByNativeScore(_ posts: [MIRAPost]) async -> [MIRAPost] {
