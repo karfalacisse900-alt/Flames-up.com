@@ -277,6 +277,13 @@ public struct MainFeedView: View {
               if model.isLoadingMore {
                 MainPostSkeleton()
               }
+              if !model.isLoading, let lastPost = model.posts.last {
+                Color.clear
+                  .frame(height: 1)
+                  .task(id: "\(lastPost.id)-\(model.posts.count)") {
+                    await model.loadMoreIfNeeded(after: lastPost)
+                  }
+              }
             }
           }
           .padding(.bottom, MIRATheme.Space.xxl)
@@ -397,6 +404,7 @@ private struct MainNativePostCard: View {
   let onSave: () -> Void
   let onFollow: () -> Void
   @State private var measuredRatios: [String: CGFloat] = [:]
+  @State private var selectedMediaIndex = 0
 
   private var mediaHeight: CGFloat {
     let liveRatios = post.mediaURLs.compactMap { measuredRatios[$0] }
@@ -411,19 +419,7 @@ private struct MainNativePostCard: View {
       postHeader
 
       if !post.mediaURLs.isEmpty {
-        MIRAAdaptiveMediaView(
-          urls: post.mediaURLs,
-          maxSingleImageHeight: mediaHeight,
-          carouselHeight: mediaHeight,
-          singleImageContentMode: .fill,
-          shouldPlay: isVideoActive,
-          onMediaRatioChange: recordMeasuredRatio
-        )
-        .frame(maxWidth: .infinity)
-        .frame(height: mediaHeight)
-        .clipped()
-        .contentShape(Rectangle())
-        .onTapGesture(perform: onOpen)
+        mediaCarousel
       }
 
       HStack(spacing: MIRATheme.Space.md) {
@@ -453,6 +449,65 @@ private struct MainNativePostCard: View {
     }
     .transaction { transaction in
       transaction.animation = nil
+    }
+    .onChange(of: post.id) { _, _ in selectedMediaIndex = 0 }
+    .onChange(of: post.mediaURLs) { _, urls in
+      if selectedMediaIndex >= urls.count {
+        selectedMediaIndex = max(0, urls.count - 1)
+      }
+    }
+  }
+
+  @ViewBuilder
+  private var mediaCarousel: some View {
+    if post.mediaURLs.count == 1, let url = post.mediaURLs.first {
+      RemoteMediaView(
+        url: url,
+        isVideo: url.isVideoURL,
+        contentMode: .fill,
+        shouldPlay: isVideoActive,
+        onMeasuredRatio: { recordMeasuredRatio(url: url, ratio: $0) }
+      )
+      .frame(maxWidth: .infinity)
+      .frame(height: mediaHeight)
+      .clipped()
+      .contentShape(Rectangle())
+      .onTapGesture(perform: onOpen)
+    } else {
+      VStack(spacing: 7) {
+        TabView(selection: $selectedMediaIndex) {
+          ForEach(Array(post.mediaURLs.enumerated()), id: \.offset) { index, url in
+            RemoteMediaView(
+              url: url,
+              isVideo: url.isVideoURL,
+              contentMode: .fill,
+              shouldPlay: isVideoActive && selectedMediaIndex == index,
+              onMeasuredRatio: { recordMeasuredRatio(url: url, ratio: $0) }
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipped()
+            .contentShape(Rectangle())
+            .onTapGesture(perform: onOpen)
+            .tag(index)
+          }
+        }
+        .tabViewStyle(.page(indexDisplayMode: .never))
+        .frame(maxWidth: .infinity)
+        .frame(height: mediaHeight)
+        .background(MIRATheme.Color.surfaceSoft)
+
+        HStack(spacing: 6) {
+          ForEach(post.mediaURLs.indices, id: \.self) { index in
+            Circle()
+              .fill(index == selectedMediaIndex ? Color(red: 0.0, green: 0.48, blue: 1.0) : MIRATheme.Color.textMuted.opacity(0.28))
+              .frame(width: index == selectedMediaIndex ? 7 : 5, height: index == selectedMediaIndex ? 7 : 5)
+          }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 1)
+        .padding(.bottom, 2)
+      }
+      .background(MIRATheme.Color.surface)
     }
   }
 
