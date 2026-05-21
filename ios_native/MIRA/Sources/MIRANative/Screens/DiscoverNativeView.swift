@@ -107,14 +107,11 @@ private struct DiscoverGalleryFilter: Identifiable {
 
 private let discoverGalleryFilters: [DiscoverGalleryFilter] = [
   .init(id: "all", title: "All", keywords: []),
-  .init(id: "night-out", title: "Night out", keywords: ["night out", "party", "club", "bar", "dinner"]),
-  .init(id: "nightlife", title: "Nightlife", keywords: ["nightlife", "club", "bar", "party", "late"]),
-  .init(id: "best-fit", title: "Best fit", keywords: ["fit", "outfit", "style", "fashion", "look"]),
-  .init(id: "food", title: "Food", keywords: ["food", "restaurant", "dinner", "lunch", "brunch", "eat"]),
-  .init(id: "trip", title: "Trip", keywords: ["trip", "travel", "vacation", "beach", "hotel"]),
-  .init(id: "cafe", title: "Cafe", keywords: ["cafe", "coffee", "latte", "bakery"]),
-  .init(id: "friends", title: "Friends", keywords: ["friends", "crew", "group", "moment"]),
-  .init(id: "golden-hour", title: "Golden hour", keywords: ["golden hour", "sunset", "sunrise", "sky"])
+  .init(id: "travel", title: "Travel", keywords: ["trip", "travel", "vacation", "beach", "hotel"]),
+  .init(id: "dining", title: "Dining", keywords: ["food", "restaurant", "dinner", "lunch", "brunch", "eat", "cafe", "coffee"]),
+  .init(id: "outfits", title: "Outfits", keywords: ["fit", "outfit", "style", "fashion", "look"]),
+  .init(id: "home", title: "Home", keywords: ["home", "room", "apartment", "house"]),
+  .init(id: "relationship", title: "Relationship", keywords: ["relationship", "date", "couple", "friends", "love"])
 ]
 
 public struct DiscoverNativeView: View {
@@ -218,31 +215,29 @@ public struct DiscoverNativeView: View {
 
   private var galleryFilterRail: some View {
     ScrollView(.horizontal, showsIndicators: false) {
-      HStack(spacing: 8) {
+      HStack(spacing: 34) {
         ForEach(discoverGalleryFilters) { filter in
           Button {
-            withAnimation(.spring(response: 0.28, dampingFraction: 0.86)) {
+            withAnimation(.easeInOut(duration: 0.18)) {
               selectedGalleryFilter = filter.id
             }
           } label: {
             Text(filter.title)
-              .font(.system(size: 13, weight: .semibold))
-              .foregroundStyle(selectedGalleryFilter == filter.id ? .white : MIRATheme.Color.textPrimary)
-              .padding(.horizontal, 13)
-              .frame(height: 34)
-              .background(selectedGalleryFilter == filter.id ? MIRATheme.Color.forest : MIRATheme.Color.surfaceRaised)
-              .clipShape(Capsule())
-              .overlay(
-                Capsule()
-                  .stroke(selectedGalleryFilter == filter.id ? Color.clear : MIRATheme.Color.hairline, lineWidth: 1)
-              )
+              .font(.system(size: 18, weight: selectedGalleryFilter == filter.id ? .semibold : .regular))
+              .foregroundStyle(selectedGalleryFilter == filter.id ? MIRATheme.Color.textPrimary : MIRATheme.Color.textMuted)
+              .frame(height: 36)
           }
           .buttonStyle(.plain)
         }
       }
       .padding(.horizontal, MIRATheme.Space.md)
     }
-    .frame(height: 38)
+    .frame(height: 40)
+    .overlay(alignment: .bottom) {
+      Rectangle()
+        .fill(MIRATheme.Color.hairline)
+        .frame(height: 0.5)
+    }
   }
 
   private var galleryPosts: [MIRAPost] {
