@@ -628,6 +628,7 @@ async function ensurePrivacySchema(db: D1Database) {
     'CREATE INDEX IF NOT EXISTS idx_users_private ON users(is_private)',
     'CREATE INDEX IF NOT EXISTS idx_posts_visibility ON posts(visibility)',
     'CREATE INDEX IF NOT EXISTS idx_statuses_visibility ON statuses(visibility)',
+    'CREATE INDEX IF NOT EXISTS idx_statuses_created_at ON statuses(created_at)',
   ];
 
   for (const statement of statements) {
@@ -6496,7 +6497,8 @@ api.post('/statuses', authMiddleware, async (c) => {
   if (phoneGate) return phoneGate;
   const userId = getUserId(c); const b = await c.req.json();
   const user: any = await c.env.DB.prepare('SELECT username, full_name, profile_image FROM users WHERE id = ?').bind(userId).first();
-  const id = uuid(); const expiresAt = new Date(Date.now() + 86400000).toISOString();
+  const storyLifetimeMs = 7 * 24 * 60 * 60 * 1000;
+  const id = uuid(); const expiresAt = new Date(Date.now() + storyLifetimeMs).toISOString();
   const visibility = normalizeVisibility(b.visibility);
   await c.env.DB.prepare('INSERT INTO statuses (id, user_id, content, image, background_color, text_color, visibility, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
     .bind(id, userId, b.content || '', b.image || null, b.background_color || '#1B4332', b.text_color || '#FFFFFF', visibility, expiresAt).run();
@@ -6508,7 +6510,7 @@ api.get('/statuses', authMiddleware, async (c) => {
   const r = await c.env.DB.prepare(
     `SELECT s.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
      FROM statuses s JOIN users u ON s.user_id = u.id
-     WHERE s.expires_at > datetime('now') AND ${visibleStatusWhere('u', 's')}
+     WHERE s.created_at >= datetime('now', '-7 days') AND ${visibleStatusWhere('u', 's')}
      ORDER BY s.created_at DESC`
   ).bind(userId, userId).all();
   return c.json(groupStatusRows(r.results as any[], userId));
@@ -6519,7 +6521,7 @@ api.get('/statuses/friends', authMiddleware, async (c) => {
   const r = await c.env.DB.prepare(
     `SELECT s.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
      FROM statuses s JOIN users u ON s.user_id = u.id
-     WHERE s.expires_at > datetime('now')
+     WHERE s.created_at >= datetime('now', '-7 days')
        AND s.user_id != ?
        AND COALESCE(s.visibility, 'public') != 'private'
        AND EXISTS (SELECT 1 FROM friendships f WHERE f.user_id = ? AND f.friend_id = s.user_id)
