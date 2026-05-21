@@ -455,7 +455,9 @@ private struct MainNativePostCard: View {
         CompactPostAction(systemImage: post.isLiked == true ? "heart.fill" : "heart", value: post.likesCount ?? 0, tint: post.isLiked == true ? MIRATheme.Color.like : MIRATheme.Color.textSecondary, action: onLike)
         CompactPostAction(systemImage: post.viewerSaved ? "bookmark.fill" : "bookmark", value: post.savesCount ?? 0, tint: post.viewerSaved ? MIRATheme.Color.forest : MIRATheme.Color.textSecondary, action: onSave)
         Spacer()
-        CompactTextAction(isShowingCaption ? "Less" : "More", action: toggleCaption)
+        if hasCaptionContent {
+          CompactTextAction(isShowingCaption ? "Less" : "More", action: toggleCaption)
+        }
         CompactShareAction(post: post)
       }
       .padding(.horizontal, MIRATheme.Space.md)
@@ -541,13 +543,15 @@ private struct MainNativePostCard: View {
 
   private var captionBlock: some View {
     VStack(alignment: .leading, spacing: 6) {
-      Text(post.titleText)
-        .font(.system(size: 20, weight: .semibold))
-        .foregroundStyle(MIRATheme.Color.textPrimary)
-        .fixedSize(horizontal: false, vertical: true)
+      if let headlineText {
+        Text(headlineText)
+          .font(.system(size: 20, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .fixedSize(horizontal: false, vertical: true)
+      }
 
-      if !post.bodyText.isEmpty {
-        Text(post.bodyText)
+      if let captionText {
+        Text(captionText)
           .font(.system(size: 15, weight: .regular))
           .lineSpacing(3)
           .foregroundStyle(MIRATheme.Color.textSecondary)
@@ -557,6 +561,21 @@ private struct MainNativePostCard: View {
     .padding(.horizontal, MIRATheme.Space.md)
     .padding(.top, MIRATheme.Space.md)
     .padding(.bottom, MIRATheme.Space.xs)
+  }
+
+  private var hasCaptionContent: Bool {
+    headlineText != nil || captionText != nil
+  }
+
+  private var headlineText: String? {
+    let value = post.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return value.isEmpty ? nil : value
+  }
+
+  private var captionText: String? {
+    let value = ((post.caption?.isEmpty == false ? post.caption : post.content) ?? "")
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    return value.isEmpty ? nil : value
   }
 
   private func toggleCaption() {
