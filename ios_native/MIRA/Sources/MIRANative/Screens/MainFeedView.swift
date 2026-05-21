@@ -262,7 +262,6 @@ final class MainFeedModel: ObservableObject {
 
 public struct MainFeedView: View {
   @StateObject private var model: MainFeedModel
-  @State private var selectedPost: MIRAPost?
   @State private var activeVideoPostID: String?
   @State private var isHeaderHidden = false
   @State private var previousScrollMinY: CGFloat?
@@ -295,12 +294,6 @@ public struct MainFeedView: View {
                   post: post,
                   api: model.api,
                   isVideoActive: post.id == activeVideoPostID,
-                  onOpen: {
-                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                    withAnimation(.easeOut(duration: 0.24)) {
-                      selectedPost = post
-                    }
-                  },
                   onLike: { Task { await model.toggleLike(post) } },
                   onSave: { Task { await model.toggleSave(post) } },
                   onFollow: { Task { await model.toggleFollowAuthor(post) } }
@@ -338,10 +331,6 @@ public struct MainFeedView: View {
       }
       .background(MIRATheme.Color.appBackground)
       .toolbar(.hidden, for: .navigationBar)
-      .navigationDestination(item: $selectedPost) { post in
-        PostDetailNativeView(post: post, api: model.api)
-          .transition(.opacity.combined(with: .move(edge: .trailing)))
-      }
       .fullScreenCover(isPresented: $isShowingCreatePost) {
         CreatePostNativeView(api: model.api)
       }
@@ -434,12 +423,12 @@ private struct MainNativePostCard: View {
   let post: MIRAPost
   let api: MIRAAPIClient
   let isVideoActive: Bool
-  let onOpen: () -> Void
   let onLike: () -> Void
   let onSave: () -> Void
   let onFollow: () -> Void
   @State private var measuredRatios: [String: CGFloat] = [:]
   @State private var selectedMediaIndex = 0
+  @State private var isShowingCaption = false
 
   private var mediaHeight: CGFloat {
     let liveRatios = post.mediaURLs.compactMap { measuredRatios[$0] }
@@ -457,11 +446,16 @@ private struct MainNativePostCard: View {
         mediaCarousel
       }
 
+      if isShowingCaption {
+        captionBlock
+          .transition(.opacity.combined(with: .move(edge: .top)))
+      }
+
       HStack(spacing: MIRATheme.Space.md) {
         CompactPostAction(systemImage: post.isLiked == true ? "heart.fill" : "heart", value: post.likesCount ?? 0, tint: post.isLiked == true ? MIRATheme.Color.like : MIRATheme.Color.textSecondary, action: onLike)
         CompactPostAction(systemImage: post.viewerSaved ? "bookmark.fill" : "bookmark", value: post.savesCount ?? 0, tint: post.viewerSaved ? MIRATheme.Color.forest : MIRATheme.Color.textSecondary, action: onSave)
         Spacer()
-        CompactTextAction("View", action: onOpen)
+        CompactTextAction(isShowingCaption ? "Less" : "More", action: toggleCaption)
         CompactShareAction(post: post)
       }
       .padding(.horizontal, MIRATheme.Space.md)
@@ -491,6 +485,7 @@ private struct MainNativePostCard: View {
         selectedMediaIndex = max(0, urls.count - 1)
       }
     }
+    .onChange(of: post.id) { _, _ in isShowingCaption = false }
   }
 
   @ViewBuilder
@@ -507,7 +502,6 @@ private struct MainNativePostCard: View {
       .frame(height: mediaHeight)
       .clipped()
       .contentShape(Rectangle())
-      .onTapGesture(perform: onOpen)
     } else {
       VStack(spacing: 7) {
         TabView(selection: $selectedMediaIndex) {
@@ -522,7 +516,6 @@ private struct MainNativePostCard: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()
             .contentShape(Rectangle())
-            .onTapGesture(perform: onOpen)
             .tag(index)
           }
         }
@@ -543,6 +536,33 @@ private struct MainNativePostCard: View {
         .padding(.bottom, 2)
       }
       .background(MIRATheme.Color.surface)
+    }
+  }
+
+  private var captionBlock: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      Text(post.titleText)
+        .font(.system(size: 20, weight: .semibold))
+        .foregroundStyle(MIRATheme.Color.textPrimary)
+        .fixedSize(horizontal: false, vertical: true)
+
+      if !post.bodyText.isEmpty {
+        Text(post.bodyText)
+          .font(.system(size: 15, weight: .regular))
+          .lineSpacing(3)
+          .foregroundStyle(MIRATheme.Color.textSecondary)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+    }
+    .padding(.horizontal, MIRATheme.Space.md)
+    .padding(.top, MIRATheme.Space.md)
+    .padding(.bottom, MIRATheme.Space.xs)
+  }
+
+  private func toggleCaption() {
+    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    withAnimation(.easeInOut(duration: 0.2)) {
+      isShowingCaption.toggle()
     }
   }
 
