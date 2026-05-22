@@ -310,7 +310,6 @@ private struct StoryViewerNativeView: View {
   let api: MIRAAPIClient
   @Environment(\.dismiss) private var dismiss
   @State private var selectedIndex = 0
-  @State private var message = ""
 
   private var stories: [MIRAStatusPreview] {
     group.statuses?.isEmpty == false ? group.statuses! : []
@@ -322,18 +321,14 @@ private struct StoryViewerNativeView: View {
   }
 
   var body: some View {
-    ZStack {
+    ZStack(alignment: .bottom) {
       Color(red: 0.04, green: 0.05, blue: 0.06).ignoresSafeArea()
 
-      VStack(spacing: 0) {
-        storyCanvas
-          .padding(.horizontal, 0)
+      storyCanvas
 
-        bottomComposer
-          .padding(.horizontal, MIRATheme.Space.md)
-          .padding(.top, 12)
-          .padding(.bottom, MIRATheme.Space.md)
-      }
+      storyBottomActions
+        .padding(.horizontal, MIRATheme.Space.lg)
+        .padding(.bottom, 10)
     }
     .statusBarHidden(false)
     .task(id: currentStory?.id) {
@@ -348,9 +343,9 @@ private struct StoryViewerNativeView: View {
         if let mediaURL = currentStory?.mediaURL {
           RemoteMediaView(url: mediaURL, isVideo: mediaURL.isVideoURL, shouldPlay: true)
             .frame(width: proxy.size.width, height: proxy.size.height)
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         } else {
-          RoundedRectangle(cornerRadius: 10, style: .continuous)
+          RoundedRectangle(cornerRadius: 14, style: .continuous)
             .fill(MIRATheme.Color.forest)
             .overlay {
               Text(currentStory?.content?.isEmpty == false ? currentStory!.content! : "Story")
@@ -369,14 +364,14 @@ private struct StoryViewerNativeView: View {
             .contentShape(Rectangle())
             .onTapGesture { goToNextStory() }
         }
-        .padding(.top, 92)
+        .padding(.top, 76)
 
-        VStack(spacing: 13) {
+        VStack(spacing: 9) {
           progressRail
-            .padding(.top, 14)
+            .padding(.top, 10)
           storyTopBar
         }
-        .padding(.horizontal, MIRATheme.Space.md)
+        .padding(.horizontal, 12)
       }
     }
     .frame(maxWidth: .infinity)
@@ -388,34 +383,34 @@ private struct StoryViewerNativeView: View {
       ForEach(Array(stories.enumerated()), id: \.offset) { index, _ in
         Capsule()
           .fill(index <= selectedIndex ? Color.white.opacity(0.92) : Color.white.opacity(0.38))
-          .frame(height: 3)
+          .frame(height: 2.5)
       }
     }
   }
 
   private var storyTopBar: some View {
-    HStack(spacing: 10) {
-      RemoteAvatar(url: group.userProfileImage, size: 44)
+    HStack(spacing: 8) {
+      RemoteAvatar(url: group.userProfileImage, size: 34)
       Text(group.displayName)
-        .font(.system(size: 17, weight: .semibold))
+        .font(.system(size: 15, weight: .semibold))
         .foregroundStyle(.white)
         .lineLimit(1)
       Text(storyAge(currentStory?.createdAt))
-        .font(.system(size: 16, weight: .medium))
+        .font(.system(size: 14, weight: .medium))
         .foregroundStyle(.white.opacity(0.78))
       Spacer()
       Button {} label: {
         Image(systemName: "ellipsis")
-          .font(.system(size: 22, weight: .bold))
+          .font(.system(size: 18, weight: .bold))
           .foregroundStyle(.white)
-          .frame(width: 38, height: 38)
+          .frame(width: 34, height: 34)
       }
       .buttonStyle(.plain)
       Button { dismiss() } label: {
         Image(systemName: "xmark")
-          .font(.system(size: 33, weight: .light))
+          .font(.system(size: 27, weight: .light))
           .foregroundStyle(.white)
-          .frame(width: 42, height: 42)
+          .frame(width: 36, height: 36)
       }
       .buttonStyle(.plain)
     }
@@ -435,28 +430,22 @@ private struct StoryViewerNativeView: View {
     }
   }
 
-  private var bottomComposer: some View {
+  private var storyBottomActions: some View {
     HStack(spacing: 14) {
-      TextField("Send message...", text: $message)
-        .font(.system(size: 18, weight: .regular))
-        .foregroundStyle(.white)
-        .padding(.horizontal, 20)
-        .frame(height: 56)
-        .overlay(Capsule().stroke(Color.white.opacity(0.45), lineWidth: 1.4))
-
+      Spacer()
       Button {} label: {
         Image(systemName: "heart")
-          .font(.system(size: 30, weight: .regular))
+          .font(.system(size: 24, weight: .regular))
           .foregroundStyle(.white)
-          .frame(width: 46, height: 46)
+          .frame(width: 42, height: 42)
       }
       .buttonStyle(.plain)
 
       Button {} label: {
         Image(systemName: "paperplane")
-          .font(.system(size: 30, weight: .regular))
+          .font(.system(size: 24, weight: .regular))
           .foregroundStyle(.white)
-          .frame(width: 46, height: 46)
+          .frame(width: 42, height: 42)
       }
       .buttonStyle(.plain)
     }

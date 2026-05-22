@@ -174,6 +174,7 @@ public struct ConversationNativeView: View {
   @State private var pickerItem: PhotosPickerItem?
   @State private var showFileImporter = false
   @State private var showGIFPicker = false
+  @State private var showAttachmentTray = false
   private let title: String
 
   public init(peerId: String, title: String, api: MIRAAPIClient, currentUserId: String = "") {
@@ -317,7 +318,7 @@ public struct ConversationNativeView: View {
   }
 
   private var composer: some View {
-    VStack(spacing: MIRATheme.Space.xs) {
+    VStack(spacing: MIRATheme.Space.sm) {
       if model.isUploading {
         ProgressView("Sending...")
           .font(.system(size: 12, weight: .semibold))
@@ -326,26 +327,23 @@ public struct ConversationNativeView: View {
           .padding(.horizontal, MIRATheme.Space.md)
       }
 
+      if showAttachmentTray {
+        attachmentTray
+          .transition(.move(edge: .bottom).combined(with: .opacity))
+      }
+
       HStack(spacing: MIRATheme.Space.sm) {
-        PhotosPicker(selection: $pickerItem, matching: .any(of: [.images, .videos])) {
-          composerIcon("photo")
-        }
-        .disabled(model.isUploading)
-
-        Button { showGIFPicker = true } label: {
-          composerIcon("gift")
-        }
-        .buttonStyle(.plain)
-
-        Button { showFileImporter = true } label: {
-          composerIcon("paperclip")
-        }
-        .buttonStyle(.plain)
-
         Button {
-          Task { await model.toggleVoiceRecording() }
+          withAnimation(.spring(response: 0.24, dampingFraction: 0.9)) {
+            showAttachmentTray.toggle()
+          }
         } label: {
-          composerIcon(model.isRecording ? "stop.fill" : "mic.fill", tint: model.isRecording ? .red : MIRATheme.Color.textMuted)
+          Image(systemName: showAttachmentTray ? "xmark" : "plus")
+            .font(.system(size: 17, weight: .semibold))
+            .foregroundStyle(MIRATheme.Color.textMuted)
+            .frame(width: 36, height: 36)
+            .background(MIRATheme.Color.surfaceSoft)
+            .clipShape(Circle())
         }
         .buttonStyle(.plain)
 
@@ -360,20 +358,10 @@ public struct ConversationNativeView: View {
             model.updateTyping(!value.isEmpty)
           }
 
-        Button {
-          Task { await model.sendText() }
-        } label: {
-          Image(systemName: "arrow.up")
-            .font(.system(size: 17, weight: .bold))
-            .foregroundStyle(.white)
-            .frame(width: 42, height: 42)
-            .background(MIRATheme.Color.forest)
-            .clipShape(Circle())
-        }
-        .disabled(model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.isSending)
-        .opacity(model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.45 : 1)
+        composerPrimaryButton
       }
-      .padding(MIRATheme.Space.md)
+      .padding(.horizontal, MIRATheme.Space.md)
+      .padding(.vertical, MIRATheme.Space.sm)
     }
     .background(MIRATheme.Color.surface)
     .overlay(alignment: .top) {
@@ -381,12 +369,70 @@ public struct ConversationNativeView: View {
     }
   }
 
-  private func composerIcon(_ systemImage: String, tint: Color = MIRATheme.Color.textMuted) -> some View {
-    Image(systemName: systemImage)
-      .font(.system(size: 17, weight: .semibold))
-      .foregroundStyle(tint)
-      .frame(width: 34, height: 42)
+  private var attachmentTray: some View {
+    HStack(spacing: MIRATheme.Space.sm) {
+      PhotosPicker(selection: $pickerItem, matching: .any(of: [.images, .videos])) {
+        trayButton("photo", "Media")
+      }
+      .disabled(model.isUploading)
+
+      Button { showGIFPicker = true } label: {
+        trayButton("gift", "GIF")
+      }
+      .buttonStyle(.plain)
+
+      Button { showFileImporter = true } label: {
+        trayButton("paperclip", "File")
+      }
+      .buttonStyle(.plain)
+
+      Button {
+        Task { await model.toggleVoiceRecording() }
+      } label: {
+        trayButton(model.isRecording ? "stop.fill" : "mic.fill", model.isRecording ? "Stop" : "Voice", tint: model.isRecording ? .red : MIRATheme.Color.textMuted)
+      }
+      .buttonStyle(.plain)
+
+      Spacer()
+    }
+    .padding(.horizontal, MIRATheme.Space.md)
   }
+
+  private var composerPrimaryButton: some View {
+    let hasDraft = !model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    return Button {
+      Task {
+        if hasDraft {
+          await model.sendText()
+        } else {
+          await model.toggleVoiceRecording()
+        }
+      }
+    } label: {
+      Image(systemName: hasDraft ? "arrow.up" : (model.isRecording ? "stop.fill" : "mic.fill"))
+        .font(.system(size: 16, weight: .bold))
+        .foregroundStyle(.white)
+        .frame(width: 38, height: 38)
+        .background(model.isRecording ? Color.red : MIRATheme.Color.forest)
+        .clipShape(Circle())
+    }
+    .buttonStyle(.plain)
+    .disabled(hasDraft && model.isSending)
+  }
+
+  private func trayButton(_ systemImage: String, _ title: String, tint: Color = MIRATheme.Color.textMuted) -> some View {
+    VStack(spacing: 4) {
+      Image(systemName: systemImage)
+        .font(.system(size: 15, weight: .semibold))
+      Text(title)
+        .font(.system(size: 10, weight: .semibold))
+    }
+    .foregroundStyle(tint)
+    .frame(width: 58, height: 50)
+    .background(MIRATheme.Color.surfaceSoft)
+    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+  }
+
 }
 
 private struct MessageBubbleContent: View {
