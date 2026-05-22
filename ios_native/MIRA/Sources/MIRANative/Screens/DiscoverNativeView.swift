@@ -117,8 +117,10 @@ private let discoverGalleryFilters: [DiscoverGalleryFilter] = [
 public struct DiscoverNativeView: View {
   @StateObject private var model: DiscoverNativeModel
   @State private var selectedStoryGroup: MIRAStoryGroup?
+  @State private var isStoryViewerVisible = false
   @State private var isShowingCreatePost = false
   @State private var selectedGalleryFilter = "all"
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   public init(api: MIRAAPIClient) {
     _model = StateObject(wrappedValue: DiscoverNativeModel(api: api))
@@ -126,29 +128,70 @@ public struct DiscoverNativeView: View {
 
   public var body: some View {
     NavigationStack {
-      VStack(spacing: 0) {
-        discoverHeader
+      ZStack {
+        VStack(spacing: 0) {
+          discoverHeader
 
-        ScrollView {
-          LazyVStack(alignment: .leading, spacing: MIRATheme.Space.md) {
-            storyRail
+          ScrollView {
+            LazyVStack(alignment: .leading, spacing: MIRATheme.Space.md) {
+              storyRail
 
-            gallerySection
+              gallerySection
+            }
+            .padding(.top, MIRATheme.Space.xs)
+            .padding(.bottom, MIRATheme.Space.xxl + MIRATheme.Space.lg)
           }
-          .padding(.top, MIRATheme.Space.xs)
-          .padding(.bottom, MIRATheme.Space.xxl + MIRATheme.Space.lg)
         }
+        .background(MIRATheme.Color.appBackground)
+
+        storyViewerOverlay
       }
       .background(MIRATheme.Color.appBackground)
       .miraScreenEnter(.tab)
       .toolbar(.hidden, for: .navigationBar)
-      .fullScreenCover(item: $selectedStoryGroup) { group in
-        StoryViewerNativeView(group: group, api: model.api)
-      }
+      .toolbar(selectedStoryGroup == nil ? .visible : .hidden, for: .tabBar)
       .fullScreenCover(isPresented: $isShowingCreatePost) {
         CreatePostNativeView(api: model.api)
       }
       .task { await model.load() }
+    }
+  }
+
+  @ViewBuilder
+  private var storyViewerOverlay: some View {
+    if let group = selectedStoryGroup {
+      ZStack {
+        Color(red: 0.04, green: 0.05, blue: 0.06).ignoresSafeArea()
+        StoryViewerNativeView(group: group, api: model.api, onClose: closeStoryViewer)
+      }
+      .opacity(isStoryViewerVisible ? 1 : 0)
+      .scaleEffect(reduceMotion || isStoryViewerVisible ? 1 : 0.982)
+      .offset(y: reduceMotion || isStoryViewerVisible ? 0 : 18)
+      .ignoresSafeArea()
+      .zIndex(50)
+      .transition(.opacity)
+      .animation(.easeOut(duration: reduceMotion ? 0.1 : 0.28), value: isStoryViewerVisible)
+    }
+  }
+
+  private func openStoryViewer(_ group: MIRAStoryGroup) {
+    selectedStoryGroup = group
+    isStoryViewerVisible = false
+    DispatchQueue.main.async {
+      withAnimation(.easeOut(duration: reduceMotion ? 0.1 : 0.28)) {
+        isStoryViewerVisible = true
+      }
+    }
+  }
+
+  private func closeStoryViewer() {
+    withAnimation(.easeInOut(duration: reduceMotion ? 0.1 : 0.22)) {
+      isStoryViewerVisible = false
+    }
+    DispatchQueue.main.asyncAfter(deadline: .now() + (reduceMotion ? 0.11 : 0.23)) {
+      if !isStoryViewerVisible {
+        selectedStoryGroup = nil
+      }
     }
   }
 
@@ -280,7 +323,7 @@ public struct DiscoverNativeView: View {
         NavigationLink(destination: CreateStoryNativeView(api: model.api)) {
           StoryBubbleNative(name: "You", avatarURL: nil, hasUnviewed: false, isAdd: true)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.miraPress)
 
         if model.isLoadingStories && model.stories.isEmpty {
           ForEach(0..<5, id: \.self) { index in
@@ -291,11 +334,11 @@ public struct DiscoverNativeView: View {
         } else {
           ForEach(model.stories) { group in
             Button {
-              selectedStoryGroup = group
+              openStoryViewer(group)
             } label: {
               StoryBubbleNative(name: group.displayName, avatarURL: group.userProfileImage, hasUnviewed: group.hasUnviewed == true, isAdd: false)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.miraPress)
           }
         }
       }
@@ -309,11 +352,13 @@ public struct DiscoverNativeView: View {
 private struct StoryViewerNativeView: View {
   let group: MIRAStoryGroup
   let api: MIRAAPIClient
-  @Environment(\.dismiss) private var dismiss
+  let onClose: () -> Void
   @State private var selectedIndex = 0
   @State private var localStories: [MIRAStatusPreview]?
   @State private var currentUserId: String?
   @State private var showStoryMenu = false
+  @State private var isCanvasVisible = false
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   private var stories: [MIRAStatusPreview] {
     localStories ?? (group.statuses?.isEmpty == false ? group.statuses! : [])
@@ -335,6 +380,14 @@ private struct StoryViewerNativeView: View {
         .padding(.bottom, 10)
     }
     .statusBarHidden(false)
+    .opacity(isCanvasVisible ? 1 : 0.001)
+    .scaleEffect(reduceMotion || isCanvasVisible ? 1 : 0.992)
+    .animation(.easeOut(duration: reduceMotion ? 0.1 : 0.24), value: isCanvasVisible)
+    .onAppear {
+      withAnimation(.easeOut(duration: reduceMotion ? 0.1 : 0.24)) {
+        isCanvasVisible = true
+      }
+    }
     .task(id: currentStory?.id) {
       guard let id = currentStory?.id else { return }
       let _: EmptyResponse? = try? await api.post("/statuses/\(id)/view", body: EmptyBody())
@@ -397,6 +450,9 @@ private struct StoryViewerNativeView: View {
     }
     .frame(maxWidth: .infinity)
     .frame(maxHeight: .infinity)
+    .id(currentStory?.id ?? "empty-story")
+    .transition(.opacity)
+    .animation(.easeInOut(duration: reduceMotion ? 0.08 : 0.16), value: currentStory?.id)
   }
 
   private var progressRail: some View {
@@ -426,28 +482,32 @@ private struct StoryViewerNativeView: View {
           .foregroundStyle(.white)
           .frame(width: 34, height: 34)
       }
-      .buttonStyle(.plain)
-      Button { dismiss() } label: {
+      .buttonStyle(.miraPress)
+      Button { closeStoryViewer() } label: {
         Image(systemName: "xmark")
           .font(.system(size: 27, weight: .light))
           .foregroundStyle(.white)
           .frame(width: 36, height: 36)
       }
-      .buttonStyle(.plain)
+      .buttonStyle(.miraPress)
     }
   }
 
   private func goToPreviousStory() {
     if selectedIndex > 0 {
-      selectedIndex -= 1
+      withAnimation(.easeInOut(duration: 0.18)) {
+        selectedIndex -= 1
+      }
     }
   }
 
   private func goToNextStory() {
     if selectedIndex < stories.count - 1 {
-      selectedIndex += 1
+      withAnimation(.easeInOut(duration: 0.18)) {
+        selectedIndex += 1
+      }
     } else {
-      dismiss()
+      closeStoryViewer()
     }
   }
 
@@ -459,13 +519,22 @@ private struct StoryViewerNativeView: View {
       nextStories.removeAll { $0.id == id }
       localStories = nextStories
       if nextStories.isEmpty {
-        dismiss()
+        closeStoryViewer()
       } else {
-        selectedIndex = min(selectedIndex, max(0, nextStories.count - 1))
+        withAnimation(.easeInOut(duration: 0.18)) {
+          selectedIndex = min(selectedIndex, max(0, nextStories.count - 1))
+        }
       }
     } catch {
       // Keep the story visible if the backend rejects the delete.
     }
+  }
+
+  private func closeStoryViewer() {
+    withAnimation(.easeInOut(duration: reduceMotion ? 0.1 : 0.18)) {
+      isCanvasVisible = false
+    }
+    onClose()
   }
 
   private var storyBottomActions: some View {
@@ -477,7 +546,7 @@ private struct StoryViewerNativeView: View {
           .foregroundStyle(.white)
           .frame(width: 42, height: 42)
       }
-      .buttonStyle(.plain)
+      .buttonStyle(.miraPress)
 
       Button {} label: {
         Image(systemName: "paperplane")
@@ -485,7 +554,7 @@ private struct StoryViewerNativeView: View {
           .foregroundStyle(.white)
           .frame(width: 42, height: 42)
       }
-      .buttonStyle(.plain)
+      .buttonStyle(.miraPress)
     }
   }
 }

@@ -29,7 +29,7 @@ public struct MIRAPrimaryButton: View {
       .background(MIRATheme.Color.forest)
       .clipShape(Capsule())
     }
-    .buttonStyle(.plain)
+    .buttonStyle(.miraPress)
   }
 }
 
@@ -46,7 +46,7 @@ public struct MIRAIconButton: View {
         .background(MIRATheme.Color.surfaceSoft)
         .clipShape(Circle())
     }
-    .buttonStyle(.plain)
+    .buttonStyle(.miraPress)
   }
 }
 
@@ -123,6 +123,23 @@ public extension View {
   func miraScreenEnter(_ style: MIRAScreenEnterStyle = .push) -> some View {
     modifier(MIRAScreenEnterModifier(style: style))
   }
+}
+
+public struct MIRAPressButtonStyle: ButtonStyle {
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+  public init() {}
+
+  public func makeBody(configuration: Configuration) -> some View {
+    configuration.label
+      .scaleEffect(configuration.isPressed && !reduceMotion ? 0.94 : 1)
+      .opacity(configuration.isPressed ? 0.82 : 1)
+      .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+  }
+}
+
+public extension ButtonStyle where Self == MIRAPressButtonStyle {
+  static var miraPress: MIRAPressButtonStyle { MIRAPressButtonStyle() }
 }
 
 public struct MIRAEmptyState: View {
