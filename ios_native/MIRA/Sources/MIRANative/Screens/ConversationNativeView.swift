@@ -1009,7 +1009,7 @@ private final class MIRAVoiceRecorder: NSObject, AVAudioRecorderDelegate {
     }
     guard granted else { throw MIRARecorderError.permissionDenied }
     let session = AVAudioSession.sharedInstance()
-    try session.setCategory(.playAndRecord, mode: .spokenAudio, options: [.defaultToSpeaker, .allowBluetooth, .allowBluetoothA2DP])
+    try session.setCategory(.playAndRecord, mode: .spokenAudio, options: [.defaultToSpeaker, .allowBluetoothHFP])
     try session.setActive(true)
     let url = FileManager.default.temporaryDirectory.appendingPathComponent("mira-voice-\(UUID().uuidString).m4a")
     let settings: [String: Any] = [
@@ -1031,11 +1031,11 @@ private final class MIRAVoiceRecorder: NSObject, AVAudioRecorderDelegate {
   }
 
   func stop() -> MIRAVoiceDraft? {
-    guard let recorder else { return nil }
-    let url = recorder.url
-    let duration = max(recorder.currentTime, startedAt.map { Date().timeIntervalSince($0) } ?? 0)
-    recorder?.stop()
-    recorder = nil
+    guard let activeRecorder = recorder else { return nil }
+    let url = activeRecorder.url
+    let duration = max(activeRecorder.currentTime, startedAt.map { Date().timeIntervalSince($0) } ?? 0)
+    activeRecorder.stop()
+    self.recorder = nil
     startedAt = nil
     try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     return MIRAVoiceDraft(url: url, duration: duration)
