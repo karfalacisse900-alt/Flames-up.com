@@ -353,7 +353,6 @@ public struct MainFeedView: View {
   @State private var isShowingCreatePost = false
   @State private var activeCommentsPost: MIRAPost?
   @State private var isCommentsPresented = false
-  @State private var activeMediaViewer: MIRAMediaViewerPresentation?
 
   public init(api: MIRAAPIClient) {
     _model = StateObject(wrappedValue: MainFeedModel(api: api))
@@ -383,9 +382,6 @@ public struct MainFeedView: View {
                   onLike: { Task { await model.toggleLike(post) } },
                   onSave: { Task { await model.toggleSave(post) } },
                   onComment: { presentComments(for: post) },
-                  onOpenMedia: { index in
-                    activeMediaViewer = MIRAMediaViewerPresentation(urls: post.mediaURLs, initialIndex: index)
-                  },
                   onFollow: { Task { await model.toggleFollowAuthor(post) } },
                   onNotInterested: { model.hidePost(post) },
                   onReport: { Task { await model.reportPost(post) } },
@@ -437,21 +433,9 @@ public struct MainFeedView: View {
           .zIndex(40)
         }
       }
-      .overlay {
-        if let viewer = activeMediaViewer {
-          MIRAFullScreenMediaViewer(
-            urls: viewer.urls,
-            initialIndex: viewer.initialIndex,
-            onClose: { activeMediaViewer = nil }
-          )
-          .transition(.opacity)
-          .zIndex(50)
-        }
-      }
-      .animation(.easeInOut(duration: 0.24), value: activeMediaViewer?.id)
       .miraScreenEnter(.tab)
       .toolbar(.hidden, for: .navigationBar)
-      .toolbar(activeMediaViewer == nil ? .visible : .hidden, for: .tabBar)
+      .toolbar(.visible, for: .tabBar)
       .statusBarHidden(true)
       .fullScreenCover(isPresented: $isShowingCreatePost) {
         CreatePostNativeView(api: model.api)
@@ -580,7 +564,6 @@ private struct MainNativePostCard: View {
   let onLike: () -> Void
   let onSave: () -> Void
   let onComment: () -> Void
-  let onOpenMedia: (Int) -> Void
   let onFollow: () -> Void
   let onNotInterested: () -> Void
   let onReport: () -> Void
@@ -653,8 +636,6 @@ private struct MainNativePostCard: View {
       .frame(minHeight: mediaHeight, maxHeight: mediaHeight)
       .background(MIRATheme.Color.surfaceSoft)
       .clipped()
-      .contentShape(Rectangle())
-      .onTapGesture { onOpenMedia(0) }
     } else {
       VStack(spacing: 7) {
         TabView(selection: $selectedMediaIndex) {
@@ -667,8 +648,6 @@ private struct MainNativePostCard: View {
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()
-            .contentShape(Rectangle())
-            .onTapGesture { onOpenMedia(index) }
             .tag(index)
           }
         }
@@ -704,7 +683,7 @@ private struct MainNativePostCard: View {
         action: onComment
       )
       Spacer(minLength: MIRATheme.Space.xs)
-      if hasCaptionContent {
+      if captionNeedsExpansion {
         CompactTextAction(isShowingCaption ? "Less" : "More", action: toggleCaption)
           .layoutPriority(1)
       }
@@ -721,7 +700,7 @@ private struct MainNativePostCard: View {
         Text(headlineText)
           .font(.system(size: 20, weight: .semibold))
           .foregroundStyle(MIRATheme.Color.textPrimary)
-          .lineLimit(isShowingCaption ? 3 : 1)
+          .lineLimit(isShowingCaption ? nil : 1)
           .truncationMode(.tail)
           .fixedSize(horizontal: false, vertical: true)
       }
@@ -731,7 +710,7 @@ private struct MainNativePostCard: View {
           .font(.system(size: 15, weight: .regular))
           .lineSpacing(3)
           .foregroundStyle(MIRATheme.Color.textSecondary)
-          .lineLimit(isShowingCaption ? 8 : 2)
+          .lineLimit(isShowingCaption ? nil : 2)
           .truncationMode(.tail)
           .fixedSize(horizontal: false, vertical: true)
       }
@@ -756,7 +735,7 @@ private struct MainNativePostCard: View {
             .font(.system(size: 12, weight: .semibold))
           Text(taggedPeopleText)
             .font(.system(size: 13, weight: .medium))
-            .lineLimit(isShowingCaption ? 2 : 1)
+            .lineLimit(isShowingCaption ? nil : 1)
             .truncationMode(.tail)
         }
         .foregroundStyle(MIRATheme.Color.textMuted)
@@ -769,6 +748,16 @@ private struct MainNativePostCard: View {
 
   private var hasCaptionContent: Bool {
     headlineText != nil || captionBodyText != nil || placeText != nil || taggedPeopleText != nil
+  }
+
+  private var captionNeedsExpansion: Bool {
+    if let headlineText, headlineText.count > 58 { return true }
+    if let captionBodyText {
+      if captionBodyText.count > 118 { return true }
+      if captionBodyText.contains("\n") { return true }
+    }
+    if let taggedPeopleText, taggedPeopleText.count > 64 { return true }
+    return false
   }
 
   private var headlineText: String? {
