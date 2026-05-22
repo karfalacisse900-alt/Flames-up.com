@@ -1,4 +1,5 @@
 import Foundation
+import PhotosUI
 import SwiftUI
 import UIKit
 
@@ -6,6 +7,7 @@ import UIKit
 final class ProfileNativeModel: ObservableObject {
   @Published var user: MIRAUser?
   @Published var posts: [MIRAPost] = []
+  @Published var profileError: String?
   let api: MIRAAPIClient
   private let userCacheKey = "native.profile.me.v2"
 
@@ -27,9 +29,39 @@ final class ProfileNativeModel: ObservableObject {
     await MIRALocalJSONCache.save(freshPosts, key: postsCacheKey(for: freshUser.id))
   }
 
+  func primeUser(_ signedInUser: MIRAUser?) {
+    guard user == nil, let signedInUser else { return }
+    user = signedInUser
+  }
+
+  func applyUpdatedUser(_ updated: MIRAUser) async {
+    user = updated
+    await MIRALocalJSONCache.save(updated, key: userCacheKey)
+  }
+
+  func deletePost(_ post: MIRAPost) async {
+    guard let user else { return }
+    let previousPosts = posts
+    posts.removeAll { $0.id == post.id }
+    do {
+      let _: EmptyResponse = try await api.delete("/posts/\(post.id)")
+      await MIRALocalJSONCache.save(posts, key: postsCacheKey(for: user.id))
+      profileError = nil
+    } catch {
+      posts = previousPosts
+      profileError = "Could not delete this post."
+    }
+  }
+
   private func postsCacheKey(for userID: String) -> String {
     "native.profile.posts.\(userID).v2"
   }
+}
+
+private struct ProfileUpdateBody: Encodable {
+  let fullName: String?
+  let username: String?
+  let profileImage: String?
 }
 
 private struct ProfileGridSkeleton: View {
@@ -55,6 +87,7 @@ private struct ProfileGridSkeleton: View {
 
 public struct ProfileNativeView: View {
   @StateObject private var model: ProfileNativeModel
+  @State private var showEditProfile = false
   private let authSession: MIRAAuthSession?
   private var gridTileSize: CGFloat {
     floor((UIScreen.main.bounds.width - 2) / 3)
@@ -78,14 +111,23 @@ public struct ProfileNativeView: View {
           } else {
             LazyVGrid(columns: postGridColumns, spacing: 1) {
               ForEach(model.posts) { post in
-                ProfilePostTile(post: post, size: gridTileSize)
+                ProfilePostTile(post: post, size: gridTileSize) {
+                  Task { await model.deletePost(post) }
+                }
               }
             }
             .frame(width: UIScreen.main.bounds.width, alignment: .center)
           }
+          if let profileError = model.profileError {
+            Text(profileError)
+              .font(.system(size: 13, weight: .semibold))
+              .foregroundStyle(.red)
+              .padding(.horizontal, MIRATheme.Space.md)
+          }
         }
       }
       .background(MIRATheme.Color.appBackground)
+      .miraScreenEnter(.tab)
       .navigationTitle("Profile")
       .toolbar {
         ToolbarItemGroup(placement: .topBarTrailing) {
@@ -100,22 +142,46 @@ public struct ProfileNativeView: View {
           }
         }
       }
-      .task { await model.load() }
+      .task {
+        await MainActor.run {
+          model.primeUser(authSession?.user)
+        }
+        await model.load()
+      }
+      .sheet(isPresented: $showEditProfile) {
+        EditProfileNativeView(user: model.user, api: model.api) { updated in
+          Task { @MainActor in
+            authSession?.replaceUser(updated)
+            await model.applyUpdatedUser(updated)
+          }
+        }
+      }
     }
   }
 
   private var profileHeader: some View {
     VStack(spacing: MIRATheme.Space.md) {
       RemoteAvatar(url: model.user?.profileImage, size: 92)
-      Text(model.user?.displayName ?? "mira")
-        .font(.system(size: 24, weight: .semibold))
-        .foregroundStyle(MIRATheme.Color.textPrimary)
+      VStack(spacing: 4) {
+        Text(profileTitle)
+          .font(.system(size: 24, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .lineLimit(1)
+        if let username = model.user?.username, !username.isEmpty {
+          Text("@\(username)")
+            .font(.system(size: 14, weight: .medium))
+            .foregroundStyle(MIRATheme.Color.textMuted)
+            .lineLimit(1)
+        }
+      }
       HStack(spacing: MIRATheme.Space.xl) {
         profileMetric("Posts", model.user?.postsCount ?? model.posts.count)
         profileMetric("Followers", model.user?.followersCount ?? 0)
         profileMetric("Following", model.user?.followingCount ?? 0)
       }
-      MIRAPrimaryButton("Edit profile", systemImage: "pencil") {}
+      MIRAPrimaryButton("Edit profile", systemImage: "pencil") {
+        showEditProfile = true
+      }
     }
     .padding(MIRATheme.Space.xl)
     .frame(maxWidth: .infinity)
@@ -128,6 +194,13 @@ public struct ProfileNativeView: View {
       Text("\(value)").font(.system(size: 18, weight: .semibold))
       Text(label).font(.system(size: 12, weight: .medium)).foregroundStyle(MIRATheme.Color.textMuted)
     }
+  }
+
+  private var profileTitle: String {
+    if let fullName = model.user?.fullName, !fullName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      return fullName
+    }
+    return model.user?.username ?? "mira"
   }
 }
 
@@ -225,6 +298,7 @@ public struct UserProfileNativeView: View {
       .padding(.bottom, MIRATheme.Space.xxl)
     }
     .background(MIRATheme.Color.appBackground)
+    .miraScreenEnter(.push)
     .navigationTitle(model.user?.displayName ?? "Profile")
     .navigationBarTitleDisplayMode(.inline)
     .task { await model.load() }
@@ -234,7 +308,7 @@ public struct UserProfileNativeView: View {
     VStack(spacing: MIRATheme.Space.md) {
       RemoteAvatar(url: model.user?.profileImage, size: 92)
       VStack(spacing: 4) {
-        Text(model.user?.displayName ?? "mira")
+        Text(profileTitle)
           .font(.system(size: 24, weight: .semibold))
           .foregroundStyle(MIRATheme.Color.textPrimary)
           .lineLimit(1)
@@ -288,11 +362,19 @@ public struct UserProfileNativeView: View {
       Text(label).font(.system(size: 12, weight: .medium)).foregroundStyle(MIRATheme.Color.textMuted)
     }
   }
+
+  private var profileTitle: String {
+    if let fullName = model.user?.fullName, !fullName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      return fullName
+    }
+    return model.user?.username ?? "mira"
+  }
 }
 
 private struct ProfilePostTile: View {
   let post: MIRAPost
   let size: CGFloat
+  var onDelete: (() -> Void)? = nil
 
   var body: some View {
     ZStack {
@@ -301,10 +383,206 @@ private struct ProfilePostTile: View {
       } else {
         MIRATheme.Color.surfaceSoft
       }
+      if let onDelete {
+        VStack {
+          HStack {
+            Spacer()
+            Menu {
+              Button("Delete post", role: .destructive) { onDelete() }
+            } label: {
+              Image(systemName: "ellipsis")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 28, height: 28)
+                .background(.black.opacity(0.38))
+                .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .padding(6)
+          }
+          Spacer()
+        }
+      }
     }
     .frame(width: size, height: size)
     .clipped()
     .contentShape(Rectangle())
+  }
+}
+
+private struct EditProfileNativeView: View {
+  let user: MIRAUser?
+  let api: MIRAAPIClient
+  let onSaved: (MIRAUser) -> Void
+
+  @Environment(\.dismiss) private var dismiss
+  @State private var fullName: String
+  @State private var username: String
+  @State private var profileImage: String?
+  @State private var pickerItem: PhotosPickerItem?
+  @State private var pickedImageData: Data?
+  @State private var pickedUIImage: UIImage?
+  @State private var isSaving = false
+  @State private var didHydrateMissingUser = false
+  @State private var errorMessage: String?
+
+  init(user: MIRAUser?, api: MIRAAPIClient, onSaved: @escaping (MIRAUser) -> Void) {
+    self.user = user
+    self.api = api
+    self.onSaved = onSaved
+    _fullName = State(initialValue: user?.fullName ?? "")
+    _username = State(initialValue: user?.username ?? "")
+    _profileImage = State(initialValue: user?.profileImage)
+  }
+
+  var body: some View {
+    NavigationStack {
+      ScrollView {
+        VStack(spacing: MIRATheme.Space.xl) {
+          VStack(spacing: MIRATheme.Space.md) {
+            profilePhoto
+            PhotosPicker(selection: $pickerItem, matching: .images) {
+              Text("Change profile picture")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(MIRATheme.Color.forest)
+            }
+            .disabled(isSaving)
+          }
+          .padding(.top, MIRATheme.Space.lg)
+
+          VStack(spacing: MIRATheme.Space.md) {
+            editField(title: "Name", text: $fullName, placeholder: "Your name")
+            editField(title: "Username", text: $username, placeholder: "username")
+          }
+
+          if let errorMessage {
+            Text(errorMessage)
+              .font(.system(size: 13, weight: .semibold))
+              .foregroundStyle(.red)
+              .frame(maxWidth: .infinity, alignment: .leading)
+          }
+        }
+        .padding(MIRATheme.Space.lg)
+      }
+      .background(MIRATheme.Color.appBackground)
+      .navigationTitle("Edit profile")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .topBarLeading) {
+          Button("Cancel") { dismiss() }
+            .disabled(isSaving)
+        }
+        ToolbarItem(placement: .topBarTrailing) {
+          Button {
+            Task { await save() }
+          } label: {
+            if isSaving {
+              ProgressView()
+            } else {
+              Text("Save").fontWeight(.semibold)
+            }
+          }
+          .disabled(isSaving)
+        }
+      }
+      .onChange(of: pickerItem) { item in
+        guard let item else { return }
+        Task {
+          guard let data = try? await item.loadTransferable(type: Data.self),
+                let image = UIImage(data: data)
+          else {
+            errorMessage = "Could not read this photo."
+            return
+          }
+          pickedImageData = data
+          pickedUIImage = image
+        }
+      }
+      .task { await hydrateMissingUserIfNeeded() }
+    }
+  }
+
+  @ViewBuilder
+  private var profilePhoto: some View {
+    if let pickedUIImage {
+      Image(uiImage: pickedUIImage)
+        .resizable()
+        .scaledToFill()
+        .frame(width: 104, height: 104)
+        .clipShape(Circle())
+    } else {
+      RemoteAvatar(url: profileImage, size: 104)
+    }
+  }
+
+  private func editField(title: String, text: Binding<String>, placeholder: String) -> some View {
+    VStack(alignment: .leading, spacing: 8) {
+      Text(title)
+        .font(.system(size: 13, weight: .semibold))
+        .foregroundStyle(MIRATheme.Color.textMuted)
+      TextField(placeholder, text: text)
+        .font(.system(size: 17, weight: .semibold))
+        .textInputAutocapitalization(title == "Username" ? .never : .words)
+        .autocorrectionDisabled(title == "Username")
+        .padding(.horizontal, MIRATheme.Space.md)
+        .frame(height: 52)
+        .background(MIRATheme.Color.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(MIRATheme.Color.hairline, lineWidth: 1))
+    }
+  }
+
+  private func save() async {
+    guard !isSaving else { return }
+    let cleanName = fullName.trimmingCharacters(in: .whitespacesAndNewlines)
+    let cleanUsername = username.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    let usernameToSave = cleanUsername.isEmpty ? nil : cleanUsername
+    if let usernameToSave, usernameToSave.count < 3 {
+      errorMessage = "Username must be at least 3 characters."
+      return
+    }
+    isSaving = true
+    defer { isSaving = false }
+    do {
+      var uploadedImage = profileImage
+      if let pickedImageData {
+        uploadedImage = try await MIRAMediaUploadService(api: api).upload(
+          MIRAPickedMedia(
+            data: pickedImageData,
+            kind: .image,
+            fileName: "profile-\(UUID().uuidString).jpg",
+            mimeType: "image/jpeg"
+          )
+        )
+      }
+      let updated: MIRAUser = try await api.put(
+        "/users/me",
+        body: ProfileUpdateBody(
+          fullName: cleanName.isEmpty ? nil : cleanName,
+          username: usernameToSave,
+          profileImage: uploadedImage
+        )
+      )
+      onSaved(updated)
+      dismiss()
+    } catch {
+      errorMessage = "Could not save your profile."
+    }
+  }
+
+  private func hydrateMissingUserIfNeeded() async {
+    guard user == nil, !didHydrateMissingUser else { return }
+    didHydrateMissingUser = true
+    guard let me: MIRAUser = try? await api.get("/auth/me") else { return }
+    if fullName.isEmpty {
+      fullName = me.fullName ?? ""
+    }
+    if username.isEmpty {
+      username = me.username ?? ""
+    }
+    if profileImage == nil {
+      profileImage = me.profileImage
+    }
   }
 }
 
@@ -375,6 +653,7 @@ public struct ChatNativeView: View {
         .padding(.bottom, MIRATheme.Space.xxl)
       }
       .background(MIRATheme.Color.appBackground)
+      .miraScreenEnter(.tab)
       .task { await model.load() }
       .sheet(isPresented: $showCreateGroup) {
         CreateGroupChatSheet(api: model.api, currentUserId: currentUserId) {
@@ -389,19 +668,20 @@ public struct ChatNativeView: View {
   private var chatHeader: some View {
     HStack {
       Text("Chat")
-        .font(.system(size: 30, weight: .semibold))
+        .font(.system(size: 32, weight: .semibold))
         .foregroundStyle(MIRATheme.Color.textPrimary)
       Spacer()
       Button { showCreateGroup = true } label: {
-        Image(systemName: "person.2.badge.plus")
+        Image(systemName: "square.and.pencil")
           .font(.system(size: 17, weight: .semibold))
           .foregroundStyle(MIRATheme.Color.textPrimary)
-          .frame(width: 38, height: 38)
-          .background(MIRATheme.Color.surfaceSoft)
+          .frame(width: 44, height: 44)
+          .background(MIRATheme.Color.surface)
           .clipShape(Circle())
+          .shadow(color: .black.opacity(0.04), radius: 12, y: 4)
       }
       .buttonStyle(.plain)
-      MIRAHeaderCircleButton(systemImage: "magnifyingglass")
+      MIRAHeaderCircleButton(systemImage: "magnifyingglass", size: 44)
     }
     .padding(.horizontal, MIRATheme.Space.md)
   }
@@ -446,21 +726,11 @@ private struct ChatConversationRow: View {
   let conversation: MIRAConversation
 
   var body: some View {
-    HStack(spacing: MIRATheme.Space.md) {
-      if conversation.isGroup {
-        ZStack {
-          Circle().fill(MIRATheme.Color.surfaceSoft)
-          Image(systemName: "person.2.fill")
-            .font(.system(size: 22, weight: .semibold))
-            .foregroundStyle(MIRATheme.Color.forest)
-        }
-        .frame(width: 56, height: 56)
-      } else {
-        MIRAFollowAvatar(url: conversation.otherProfileImage, size: 56)
-      }
+    HStack(spacing: 14) {
+      avatar
       VStack(alignment: .leading, spacing: 5) {
         Text(conversation.displayName)
-          .font(.system(size: 17, weight: .semibold))
+          .font(.system(size: 18, weight: .semibold))
           .foregroundStyle(MIRATheme.Color.textPrimary)
           .lineLimit(1)
         Text(rowPreview)
@@ -469,22 +739,49 @@ private struct ChatConversationRow: View {
           .lineLimit(1)
       }
       Spacer()
-      VStack(alignment: .trailing, spacing: MIRATheme.Space.sm) {
+      VStack(alignment: .trailing, spacing: 8) {
         Text(chatTime(conversation.lastMessageTime ?? conversation.updatedAt))
           .font(.system(size: 12, weight: .semibold))
           .foregroundStyle(MIRATheme.Color.textMuted)
-        Image(systemName: "video")
-          .font(.system(size: 13, weight: .semibold))
-          .foregroundStyle(MIRATheme.Color.textMuted)
-          .frame(width: 30, height: 30)
-          .background(MIRATheme.Color.surface)
-          .clipShape(Circle())
-          .overlay(Circle().stroke(MIRATheme.Color.hairline, lineWidth: 1))
+        if let unread = conversation.unreadCount, unread > 0 {
+          Text("\(min(unread, 99))")
+            .font(.system(size: 11, weight: .bold))
+            .foregroundStyle(.white)
+            .frame(minWidth: 22, minHeight: 22)
+            .background(MIRATheme.Color.forest)
+            .clipShape(Capsule())
+        } else if conversation.otherIsOnline == true {
+          Text("online")
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(MIRATheme.Color.forest)
+        }
       }
     }
-    .padding(.vertical, MIRATheme.Space.md)
+    .padding(.vertical, 14)
     .overlay(alignment: .bottom) {
       Rectangle().fill(MIRATheme.Color.hairline).frame(height: 0.5).padding(.leading, 72)
+    }
+  }
+
+  private var avatar: some View {
+    ZStack(alignment: .bottomTrailing) {
+      if conversation.isGroup {
+        ZStack {
+          Circle().fill(MIRATheme.Color.forestSoft)
+          Image(systemName: "person.2.fill")
+            .font(.system(size: 22, weight: .semibold))
+            .foregroundStyle(MIRATheme.Color.forest)
+        }
+        .frame(width: 58, height: 58)
+      } else {
+        RemoteAvatar(url: conversation.otherProfileImage, size: 58)
+      }
+      if conversation.otherIsOnline == true && !conversation.isGroup {
+        Circle()
+          .fill(MIRATheme.Color.forest)
+          .frame(width: 14, height: 14)
+          .overlay(Circle().stroke(MIRATheme.Color.surface, lineWidth: 2))
+      }
     }
   }
 
@@ -754,6 +1051,7 @@ public struct WalletNativeView: View {
     }
     .navigationTitle("Wallet")
     .background(MIRATheme.Color.appBackground)
+    .miraScreenEnter(.push)
     .task { await model.load() }
   }
 }

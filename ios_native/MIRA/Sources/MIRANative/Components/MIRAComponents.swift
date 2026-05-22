@@ -52,18 +52,76 @@ public struct MIRAIconButton: View {
 
 public struct MIRAHeaderCircleButton: View {
   let systemImage: String
+  let size: CGFloat
 
-  public init(systemImage: String) {
+  public init(systemImage: String, size: CGFloat = 38) {
     self.systemImage = systemImage
+    self.size = size
   }
 
   public var body: some View {
     Image(systemName: systemImage)
       .font(.system(size: 17, weight: .semibold))
       .foregroundStyle(MIRATheme.Color.textPrimary)
-      .frame(width: 38, height: 38)
+      .frame(width: size, height: size)
       .background(MIRATheme.Color.surfaceSoft)
       .clipShape(Circle())
+  }
+}
+
+public enum MIRAScreenEnterStyle {
+  case push
+  case modal
+  case tab
+
+  fileprivate var offset: CGSize {
+    switch self {
+    case .push: return CGSize(width: 12, height: 0)
+    case .modal: return CGSize(width: 0, height: 18)
+    case .tab: return CGSize(width: 0, height: 8)
+    }
+  }
+
+  fileprivate var scale: CGFloat {
+    switch self {
+    case .push: return 0.996
+    case .modal: return 0.985
+    case .tab: return 0.998
+    }
+  }
+
+  fileprivate var duration: Double {
+    switch self {
+    case .push: return 0.22
+    case .modal: return 0.26
+    case .tab: return 0.18
+    }
+  }
+}
+
+private struct MIRAScreenEnterModifier: ViewModifier {
+  let style: MIRAScreenEnterStyle
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @State private var isVisible = false
+
+  func body(content: Content) -> some View {
+    let offset = reduceMotion ? .zero : style.offset
+    content
+      .opacity(isVisible ? 1 : 0)
+      .scaleEffect(isVisible || reduceMotion ? 1 : style.scale)
+      .offset(x: isVisible ? 0 : offset.width, y: isVisible ? 0 : offset.height)
+      .onAppear {
+        guard !isVisible else { return }
+        withAnimation(.easeOut(duration: reduceMotion ? 0.08 : style.duration)) {
+          isVisible = true
+        }
+      }
+  }
+}
+
+public extension View {
+  func miraScreenEnter(_ style: MIRAScreenEnterStyle = .push) -> some View {
+    modifier(MIRAScreenEnterModifier(style: style))
   }
 }
 

@@ -6578,6 +6578,16 @@ api.post('/statuses/:statusId/view', authMiddleware, async (c) => {
   return c.json({ viewed: true });
 });
 
+api.delete('/statuses/:statusId', authMiddleware, async (c) => {
+  const userId = getUserId(c); const statusId = c.req.param('statusId');
+  const story: any = await c.env.DB.prepare('SELECT user_id FROM statuses WHERE id = ?').bind(statusId).first();
+  if (!story) return c.json({ detail: 'Story not found' }, 404);
+  if (story.user_id !== userId) return c.json({ detail: 'Not your story' }, 403);
+  await c.env.DB.prepare('DELETE FROM statuses WHERE id = ? AND user_id = ?').bind(statusId, userId).run();
+  await logSecurityEvent(c, 'story_deleted', userId, { status_id: statusId });
+  return c.json({ deleted: true });
+});
+
 // Messages (with media support)
 async function requireGroupMember(c: any, groupId: string, userId: string) {
   const member = await c.env.DB.prepare('SELECT id FROM group_chat_members WHERE group_id = ? AND user_id = ?')

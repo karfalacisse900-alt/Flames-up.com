@@ -48,6 +48,7 @@ public struct NotificationNativeView: View {
       .padding(MIRATheme.Space.md)
     }
     .background(MIRATheme.Color.appBackground)
+    .miraScreenEnter(.push)
     .navigationTitle("Notifications")
     .task { await model.load() }
   }
@@ -166,6 +167,7 @@ public struct LibraryNativeView: View {
       .padding(.top, MIRATheme.Space.md)
     }
     .background(MIRATheme.Color.appBackground)
+    .miraScreenEnter(.push)
     .navigationTitle("My Library")
     .task { await model.load() }
     .onChange(of: model.tab) { _ in Task { await model.load() } }
@@ -265,6 +267,7 @@ public struct SearchUsersNativeView: View {
     }
     .scrollContentBackground(.hidden)
     .background(MIRATheme.Color.appBackground)
+    .miraScreenEnter(.push)
     .navigationTitle("Search")
     .searchable(text: $model.query, prompt: "Search users")
     .task(id: model.query) {
@@ -356,6 +359,7 @@ public struct CreatePostNativeView: View {
     }
     .toolbar(.hidden, for: .navigationBar)
     .toolbar(.hidden, for: .tabBar)
+    .miraScreenEnter(.modal)
     .navigationBarBackButtonHidden(true)
     .onChange(of: pickerItems) { _, newItems in
       Task { await loadPickerItems(newItems) }
@@ -1187,6 +1191,7 @@ public struct CreateNoteNativeView: View {
       noteBottomBar
     }
     .background(MIRATheme.Color.surface)
+    .miraScreenEnter(.modal)
     .toolbar(.hidden, for: .navigationBar)
     .task {
       await loadCurrentUser()
@@ -1592,6 +1597,7 @@ public struct CreateStoryNativeView: View {
       }
     }
     .toolbar(.hidden, for: .navigationBar)
+    .miraScreenEnter(.modal)
     .task {
       guard !didOpenInitialCamera else { return }
       didOpenInitialCamera = true

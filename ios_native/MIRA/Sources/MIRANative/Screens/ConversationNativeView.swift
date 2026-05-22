@@ -228,7 +228,8 @@ public struct ConversationNativeView: View {
 
       composer
     }
-    .background(MIRATheme.Color.appBackground)
+    .background(MIRATheme.Color.surface)
+    .miraScreenEnter(.push)
     .navigationTitle(title)
     .navigationBarTitleDisplayMode(.inline)
     .toolbar(.hidden, for: .tabBar)
@@ -332,7 +333,7 @@ public struct ConversationNativeView: View {
           .transition(.move(edge: .bottom).combined(with: .opacity))
       }
 
-      HStack(spacing: MIRATheme.Space.sm) {
+      HStack(spacing: 10) {
         Button {
           withAnimation(.spring(response: 0.24, dampingFraction: 0.9)) {
             showAttachmentTray.toggle()
@@ -340,20 +341,20 @@ public struct ConversationNativeView: View {
         } label: {
           Image(systemName: showAttachmentTray ? "xmark" : "plus")
             .font(.system(size: 17, weight: .semibold))
-            .foregroundStyle(MIRATheme.Color.textMuted)
-            .frame(width: 36, height: 36)
-            .background(MIRATheme.Color.surfaceSoft)
+            .foregroundStyle(MIRATheme.Color.forest)
+            .frame(width: 38, height: 38)
+            .background(MIRATheme.Color.forestSoft)
             .clipShape(Circle())
         }
         .buttonStyle(.plain)
 
-        TextField("Message", text: $model.draft, axis: .vertical)
+        TextField("Send message...", text: $model.draft, axis: .vertical)
           .lineLimit(1...5)
           .font(.system(size: 15))
           .padding(.horizontal, MIRATheme.Space.md)
-          .padding(.vertical, 10)
+          .padding(.vertical, 11)
           .background(MIRATheme.Color.surfaceSoft)
-          .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+          .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
           .onChange(of: model.draft) { value in
             model.updateTyping(!value.isEmpty)
           }
@@ -361,18 +362,19 @@ public struct ConversationNativeView: View {
         composerPrimaryButton
       }
       .padding(.horizontal, MIRATheme.Space.md)
-      .padding(.vertical, MIRATheme.Space.sm)
+      .padding(.vertical, 10)
     }
     .background(MIRATheme.Color.surface)
+    .shadow(color: .black.opacity(0.06), radius: 18, x: 0, y: -4)
     .overlay(alignment: .top) {
       Rectangle().fill(MIRATheme.Color.hairline).frame(height: 0.5)
     }
   }
 
   private var attachmentTray: some View {
-    HStack(spacing: MIRATheme.Space.sm) {
+    HStack(spacing: 10) {
       PhotosPicker(selection: $pickerItem, matching: .any(of: [.images, .videos])) {
-        trayButton("photo", "Media")
+        trayButton("photo.on.rectangle", "Media")
       }
       .disabled(model.isUploading)
 
@@ -393,7 +395,6 @@ public struct ConversationNativeView: View {
       }
       .buttonStyle(.plain)
 
-      Spacer()
     }
     .padding(.horizontal, MIRATheme.Space.md)
   }

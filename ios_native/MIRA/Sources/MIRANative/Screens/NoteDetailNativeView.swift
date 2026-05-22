@@ -102,6 +102,7 @@ public struct NoteDetailNativeView: View {
       }
     }
     .background(Color.white.ignoresSafeArea())
+    .miraScreenEnter(.push)
     .navigationBarBackButtonHidden(true)
     .toolbar(.hidden, for: .navigationBar)
     .toolbar(.hidden, for: .tabBar)

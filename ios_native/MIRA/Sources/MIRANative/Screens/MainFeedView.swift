@@ -7,6 +7,8 @@ final class MainFeedModel: ObservableObject {
   @Published var isLoading = true
   @Published var isLoadingMore = false
   @Published var errorMessage: String?
+  @Published var currentUserId: String?
+  @Published var currentUsername: String?
 
   let api: MIRAAPIClient
   private let feedCacheKey = "native.main.feed.v3"
@@ -20,6 +22,9 @@ final class MainFeedModel: ObservableObject {
   }
 
   func load(forceRefresh: Bool = false) async {
+    if currentUserId == nil && currentUsername == nil {
+      Task { await loadCurrentUserIfNeeded() }
+    }
     if !forceRefresh && hasLoadedFreshFeed && !posts.isEmpty { return }
     MIRAPerformanceTimeline.mark("home_load_start", detail: forceRefresh ? "refresh" : "normal")
 
@@ -212,6 +217,41 @@ final class MainFeedModel: ObservableObject {
     }
   }
 
+  func deletePost(_ post: MIRAPost) async {
+    let previous = posts
+    posts.removeAll { $0.id == post.id }
+    do {
+      let _: EmptyResponse = try await api.delete("/posts/\(post.id)")
+      cacheCurrentPosts()
+      errorMessage = nil
+    } catch {
+      posts = previous
+      errorMessage = "Could not delete this post."
+    }
+  }
+
+  private func loadCurrentUserIfNeeded() async {
+    guard currentUserId == nil && currentUsername == nil else { return }
+    let me: MIRAUser? = try? await api.get("/auth/me")
+    currentUserId = me?.id
+    currentUsername = me?.username
+  }
+
+  func canDelete(_ post: MIRAPost) -> Bool {
+    // If auth ownership is still loading, keep Delete visible and let the backend
+    // enforce ownership. This avoids hiding the owner action because /auth/me
+    // resolved a moment after the menu was opened.
+    if currentUserId == nil && currentUsername == nil {
+      return true
+    }
+    if let currentUserId, let postUserId = post.userId, currentUserId == postUserId {
+      return true
+    }
+    let ownerUsername = post.userUsername?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    let viewerUsername = currentUsername?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    return ownerUsername?.isEmpty == false && ownerUsername == viewerUsername
+  }
+
   private func cacheCurrentPosts() {
     let snapshot = posts
     Task { await MIRALocalJSONCache.save(snapshot, key: feedCacheKey) }
@@ -319,7 +359,9 @@ public struct MainFeedView: View {
                   onSave: { Task { await model.toggleSave(post) } },
                   onFollow: { Task { await model.toggleFollowAuthor(post) } },
                   onNotInterested: { model.hidePost(post) },
-                  onReport: { Task { await model.reportPost(post) } }
+                  onReport: { Task { await model.reportPost(post) } },
+                  canDelete: model.canDelete(post),
+                  onDelete: { Task { await model.deletePost(post) } }
                 )
                 .onAppear {
                   Task { await model.loadMoreIfNeeded(after: post) }
@@ -353,6 +395,7 @@ public struct MainFeedView: View {
           .animation(.easeInOut(duration: 0.24), value: isHeaderHidden)
       }
       .background(MIRATheme.Color.appBackground)
+      .miraScreenEnter(.tab)
       .toolbar(.hidden, for: .navigationBar)
       .fullScreenCover(isPresented: $isShowingCreatePost) {
         CreatePostNativeView(api: model.api)
@@ -451,6 +494,8 @@ private struct MainNativePostCard: View {
   let onFollow: () -> Void
   let onNotInterested: () -> Void
   let onReport: () -> Void
+  let canDelete: Bool
+  let onDelete: () -> Void
   @State private var measuredRatios: [String: CGFloat] = [:]
   @State private var selectedMediaIndex = 0
   @State private var isShowingCaption = false
@@ -662,6 +707,15 @@ private struct MainNativePostCard: View {
           onNotInterested()
         } label: {
           Label("Not interested", systemImage: "eye.slash")
+        }
+
+        if canDelete {
+          Button(role: .destructive) {
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            onDelete()
+          } label: {
+            Label("Delete post", systemImage: "trash")
+          }
         }
 
         Button(role: .destructive) {

@@ -250,6 +250,7 @@ public struct SettingsNativeView: View {
       .padding(.bottom, MIRATheme.Space.xxl)
     }
     .background(MIRATheme.Color.appBackground.ignoresSafeArea())
+    .miraScreenEnter(.push)
     .navigationTitle("Settings")
     .navigationBarTitleDisplayMode(.inline)
     .task { await model.load() }

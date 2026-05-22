@@ -140,6 +140,7 @@ public struct DiscoverNativeView: View {
         }
       }
       .background(MIRATheme.Color.appBackground)
+      .miraScreenEnter(.tab)
       .toolbar(.hidden, for: .navigationBar)
       .fullScreenCover(item: $selectedStoryGroup) { group in
         StoryViewerNativeView(group: group, api: model.api)
@@ -310,9 +311,12 @@ private struct StoryViewerNativeView: View {
   let api: MIRAAPIClient
   @Environment(\.dismiss) private var dismiss
   @State private var selectedIndex = 0
+  @State private var localStories: [MIRAStatusPreview]?
+  @State private var currentUserId: String?
+  @State private var showStoryMenu = false
 
   private var stories: [MIRAStatusPreview] {
-    group.statuses?.isEmpty == false ? group.statuses! : []
+    localStories ?? (group.statuses?.isEmpty == false ? group.statuses! : [])
   }
 
   private var currentStory: MIRAStatusPreview? {
@@ -334,6 +338,23 @@ private struct StoryViewerNativeView: View {
     .task(id: currentStory?.id) {
       guard let id = currentStory?.id else { return }
       let _: EmptyResponse? = try? await api.post("/statuses/\(id)/view", body: EmptyBody())
+    }
+    .task {
+      if localStories == nil {
+        localStories = group.statuses ?? []
+      }
+      if currentUserId == nil {
+        let me: MIRAUser? = try? await api.get("/auth/me")
+        currentUserId = me?.id
+      }
+    }
+    .confirmationDialog("Story options", isPresented: $showStoryMenu, titleVisibility: .visible) {
+      if currentUserId == group.userId {
+        Button("Delete story", role: .destructive) {
+          Task { await deleteCurrentStory() }
+        }
+      }
+      Button("Cancel", role: .cancel) {}
     }
   }
 
@@ -399,7 +420,7 @@ private struct StoryViewerNativeView: View {
         .font(.system(size: 14, weight: .medium))
         .foregroundStyle(.white.opacity(0.78))
       Spacer()
-      Button {} label: {
+      Button { showStoryMenu = true } label: {
         Image(systemName: "ellipsis")
           .font(.system(size: 18, weight: .bold))
           .foregroundStyle(.white)
@@ -427,6 +448,23 @@ private struct StoryViewerNativeView: View {
       selectedIndex += 1
     } else {
       dismiss()
+    }
+  }
+
+  private func deleteCurrentStory() async {
+    guard let id = currentStory?.id else { return }
+    do {
+      let _: EmptyResponse = try await api.delete("/statuses/\(id)")
+      var nextStories = stories
+      nextStories.removeAll { $0.id == id }
+      localStories = nextStories
+      if nextStories.isEmpty {
+        dismiss()
+      } else {
+        selectedIndex = min(selectedIndex, max(0, nextStories.count - 1))
+      }
+    } catch {
+      // Keep the story visible if the backend rejects the delete.
     }
   }
 
