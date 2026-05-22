@@ -341,7 +341,7 @@ public struct ConversationNativeView: View {
         }
         MessageBubbleContent(message: message, outgoing: outgoing, maxWidth: bubbleMaxWidth)
         if let createdAt = message.createdAt {
-          Text(chatTime(createdAt))
+          Text(conversationMessageAge(createdAt))
             .font(.system(size: 10, weight: .semibold))
             .foregroundStyle(MIRATheme.Color.textMuted.opacity(0.78))
             .padding(.horizontal, 4)
@@ -355,6 +355,17 @@ public struct ConversationNativeView: View {
 
   private var bubbleMaxWidth: CGFloat {
     min(UIScreen.main.bounds.width * 0.74, 304)
+  }
+
+  private func conversationMessageAge(_ value: String) -> String {
+    guard let date = ISO8601DateFormatter().date(from: value) else { return "" }
+    let minutes = max(0, Int(Date().timeIntervalSince(date) / 60))
+    if minutes < 60 { return "\(minutes)m" }
+    let hours = minutes / 60
+    if hours < 24 { return "\(hours)h" }
+    let days = hours / 24
+    if days < 7 { return "\(days)d" }
+    return "\(max(1, days / 7))w"
   }
 
   private func isOutgoing(_ message: MIRAMessage) -> Bool {

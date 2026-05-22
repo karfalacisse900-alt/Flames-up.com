@@ -222,8 +222,8 @@ final class MIRAAgoraCallModel: NSObject, ObservableObject, AgoraRtcEngineDelega
     let mediaOptions = AgoraRtcChannelMediaOptions()
     let profile: AgoraChannelProfile = presentation.mode == .live ? .liveBroadcasting : .communication
     let clientRole: AgoraClientRole = presentation.role == .audience ? .audience : .broadcaster
-    mediaOptions.channelProfile = .of(Int32(profile.rawValue))
-    mediaOptions.clientRoleType = .of(Int32(clientRole.rawValue))
+    mediaOptions.channelProfile = profile
+    mediaOptions.clientRoleType = clientRole
 
     let result = rtcEngine.joinChannel(
       byToken: token.token,
