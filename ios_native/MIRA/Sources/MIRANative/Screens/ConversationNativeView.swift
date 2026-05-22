@@ -870,6 +870,8 @@ private struct VoicePlaybackPill: View {
   let outgoing: Bool
   @State private var player: AVPlayer?
   @State private var isPlaying = false
+  @State private var playbackError = false
+  @State private var endObserver: NSObjectProtocol?
 
   var body: some View {
     Button {
@@ -884,29 +886,68 @@ private struct VoicePlaybackPill: View {
           .clipShape(Circle())
         Image(systemName: "waveform")
           .font(.system(size: 18, weight: .semibold))
-        Text("Voice message")
+        Text(playbackError ? "Could not play" : "Voice message")
           .lineLimit(1)
       }
       .font(.system(size: 14, weight: .semibold))
-      .foregroundStyle(outgoing ? .white : MIRATheme.Color.textPrimary)
+      .foregroundStyle(playbackError ? ChatRoomPalette.voice : (outgoing ? .white : MIRATheme.Color.textPrimary))
       .padding(.trailing, 4)
     }
     .buttonStyle(.plain)
     .contentShape(Rectangle())
+    .onDisappear {
+      cleanup()
+    }
   }
 
   private func toggle() {
-    guard let remoteURL = URL(string: url) else { return }
+    guard let remoteURL = resolvedVoicePlaybackURL(url) else {
+      playbackError = true
+      return
+    }
+    playbackError = false
     if player == nil {
-      player = AVPlayer(url: remoteURL)
+      let item = AVPlayerItem(url: remoteURL)
+      player = AVPlayer(playerItem: item)
+      player?.volume = 1
+      endObserver = NotificationCenter.default.addObserver(
+        forName: .AVPlayerItemDidPlayToEndTime,
+        object: item,
+        queue: .main
+      ) { _ in
+        isPlaying = false
+        player?.seek(to: .zero)
+      }
     }
     if isPlaying {
-      player?.pause()
-      isPlaying = false
+      stop()
     } else {
+      do {
+        let session = AVAudioSession.sharedInstance()
+        try session.setCategory(.playback, mode: .spokenAudio)
+        try session.setActive(true)
+      } catch {
+        playbackError = true
+        return
+      }
+      player?.seek(to: .zero)
       player?.play()
       isPlaying = true
     }
+  }
+
+  private func stop() {
+    player?.pause()
+    isPlaying = false
+  }
+
+  private func cleanup() {
+    stop()
+    if let endObserver {
+      NotificationCenter.default.removeObserver(endObserver)
+      self.endObserver = nil
+    }
+    player = nil
   }
 }
 
@@ -995,6 +1036,23 @@ private func voiceDurationLabel(_ duration: TimeInterval) -> String {
   let minutes = totalSeconds / 60
   let seconds = totalSeconds % 60
   return "\(minutes):\(String(format: "%02d", seconds))"
+}
+
+private func resolvedVoicePlaybackURL(_ value: String) -> URL? {
+  let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+  guard !trimmed.isEmpty else { return nil }
+  if trimmed.hasPrefix("//") {
+    return URL(string: "https:\(trimmed)")
+  }
+  if let absolute = URL(string: trimmed), absolute.scheme != nil {
+    return absolute
+  }
+  let cleanPath = trimmed.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+  guard !cleanPath.isEmpty else { return nil }
+  if cleanPath.hasPrefix("api/") {
+    return MIRAProductionBackend.apiURL(String(cleanPath.dropFirst(4)))
+  }
+  return MIRAProductionBackend.apiURL(cleanPath)
 }
 
 private final class MIRAVoiceRecorder: NSObject, AVAudioRecorderDelegate {

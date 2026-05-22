@@ -100,7 +100,7 @@ public final class MIRAMediaUploadService {
     }
   }
 
-  public func uploadAudio(data: Data, fileName: String, mimeType: String = "audio/m4a") async throws -> String {
+  public func uploadAudio(data: Data, fileName: String, mimeType: String = "audio/mp4") async throws -> String {
     let response: MIRAMediaUploadResponse = try await api.uploadMultipart(
       "/upload/audio",
       fileName: fileName,

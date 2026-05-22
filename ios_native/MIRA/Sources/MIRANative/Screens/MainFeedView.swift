@@ -415,11 +415,11 @@ public struct MainFeedView: View {
         )
 
         mainHeader
-          .offset(y: isHeaderHidden ? -84 : 0)
-          .opacity(isHeaderHidden ? 0 : 1)
-          .allowsHitTesting(!isHeaderHidden)
+          .offset(y: isFeedChromeHidden ? -84 : 0)
+          .opacity(isFeedChromeHidden ? 0 : 1)
+          .allowsHitTesting(!isFeedChromeHidden)
           .zIndex(10)
-          .animation(.easeInOut(duration: 0.24), value: isHeaderHidden)
+          .animation(.easeInOut(duration: 0.24), value: isFeedChromeHidden)
       }
       .background(MIRATheme.Color.appBackground)
       .overlay {
@@ -435,7 +435,7 @@ public struct MainFeedView: View {
       }
       .miraScreenEnter(.tab)
       .toolbar(.hidden, for: .navigationBar)
-      .toolbar(.visible, for: .tabBar)
+      .toolbar(feedTabBarVisibility, for: .tabBar)
       .statusBarHidden(true)
       .fullScreenCover(isPresented: $isShowingCreatePost) {
         CreatePostNativeView(api: model.api)
@@ -554,6 +554,14 @@ public struct MainFeedView: View {
     }
     .padding(.horizontal, MIRATheme.Space.md)
     .padding(.top, 0)
+  }
+
+  private var isFeedChromeHidden: Bool {
+    isHeaderHidden || isCommentsPresented || activeCommentsPost != nil
+  }
+
+  private var feedTabBarVisibility: Visibility {
+    (isCommentsPresented || activeCommentsPost != nil) ? .hidden : .visible
   }
 }
 
@@ -808,76 +816,131 @@ private struct MainNativePostCard: View {
 
   private var postHeader: some View {
     HStack(spacing: MIRATheme.Space.sm) {
-      Button(action: onFollow) {
-        MIRAFollowAvatar(url: post.userProfileImage, size: 42, isFollowing: post.viewerFollowing)
+      authorIdentity
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .layoutPriority(1)
+
+      if !canDelete {
+        feedFollowButton
+      }
+
+      postMenu
+    }
+    .padding(.horizontal, MIRATheme.Space.md)
+    .padding(.vertical, 10)
+  }
+
+  @ViewBuilder
+  private var authorIdentity: some View {
+    if let userId = post.userId, !userId.isEmpty {
+      NavigationLink(destination: UserProfileNativeView(userId: userId, api: api)) {
+        authorIdentityLabel
       }
       .buttonStyle(.plain)
+    } else {
+      authorIdentityLabel
+    }
+  }
 
-      Group {
-        if let userId = post.userId, !userId.isEmpty {
-          NavigationLink(destination: UserProfileNativeView(userId: userId, api: api)) {
-            authorNameLabel
-          }
-          .buttonStyle(.plain)
-        } else {
-          authorNameLabel
+  private var authorIdentityLabel: some View {
+    HStack(spacing: 10) {
+      RemoteAvatar(url: post.userProfileImage, size: 42)
+      VStack(alignment: .leading, spacing: 2) {
+        authorNameLabel
+        if let subtitle = authorSubtitle {
+          Text(subtitle)
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(MIRATheme.Color.textMuted)
+            .lineLimit(1)
+            .truncationMode(.tail)
         }
       }
       .frame(maxWidth: .infinity, alignment: .leading)
-      .layoutPriority(1)
+    }
+    .contentShape(Rectangle())
+  }
 
-      Menu {
-        Button {
-          UIImpactFeedbackGenerator(style: .light).impactOccurred()
-          onNotInterested()
-        } label: {
-          Label("Not interested", systemImage: "eye.slash")
+  private var feedFollowButton: some View {
+    Button {
+      UIImpactFeedbackGenerator(style: .light).impactOccurred()
+      onFollow()
+    } label: {
+      HStack(spacing: 5) {
+        Image(systemName: post.viewerFollowing ? "checkmark" : "plus")
+          .font(.system(size: 11, weight: .bold))
+        Text(post.viewerFollowing ? "Following" : "Follow")
+          .font(.system(size: 12, weight: .bold))
+          .lineLimit(1)
+          .minimumScaleFactor(0.82)
+      }
+      .foregroundStyle(post.viewerFollowing ? MIRATheme.Color.textPrimary : .white)
+      .padding(.horizontal, post.viewerFollowing ? 10 : 12)
+      .frame(height: 32)
+      .background(post.viewerFollowing ? MIRATheme.Color.surfaceSoft : MIRATheme.Color.forest)
+      .clipShape(Capsule())
+      .overlay {
+        Capsule()
+          .stroke(post.viewerFollowing ? MIRATheme.Color.hairline : Color.clear, lineWidth: 1)
+      }
+      .shadow(color: post.viewerFollowing ? .clear : MIRATheme.Color.forest.opacity(0.18), radius: 10, y: 4)
+    }
+    .buttonStyle(.miraPress)
+    .accessibilityLabel(post.viewerFollowing ? "Following" : "Follow")
+  }
+
+  private var postMenu: some View {
+    Menu {
+      Button {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        onNotInterested()
+      } label: {
+        Label("Not interested", systemImage: "eye.slash")
+      }
+
+      if canDelete {
+        if normalizedVisibility != "public" {
+          Button {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            onMakePublic()
+          } label: {
+            Label("Make post public", systemImage: "globe")
+          }
         }
 
-        if canDelete {
-          if normalizedVisibility != "public" {
-            Button {
-              UIImpactFeedbackGenerator(style: .light).impactOccurred()
-              onMakePublic()
-            } label: {
-              Label("Make post public", systemImage: "globe")
-            }
-          }
-
-          if normalizedVisibility != "private" {
-            Button {
-              UIImpactFeedbackGenerator(style: .light).impactOccurred()
-              onMakePrivate()
-            } label: {
-              Label("Make post private", systemImage: "lock")
-            }
-          }
-
-          Button(role: .destructive) {
-            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-            onDelete()
+        if normalizedVisibility != "private" {
+          Button {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            onMakePrivate()
           } label: {
-            Label("Delete post", systemImage: "trash")
+            Label("Make post private", systemImage: "lock")
           }
         }
 
         Button(role: .destructive) {
           UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-          onReport()
+          onDelete()
         } label: {
-          Label("Report", systemImage: "flag")
+          Label("Delete post", systemImage: "trash")
         }
-      } label: {
-        Image(systemName: "ellipsis")
-          .font(.system(size: 17, weight: .semibold))
-          .foregroundStyle(MIRATheme.Color.textSecondary)
-          .frame(width: 38, height: 38)
-          .contentShape(Circle())
       }
-      .buttonStyle(.plain)
+
+      Button(role: .destructive) {
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        onReport()
+      } label: {
+        Label("Report", systemImage: "flag")
+      }
+    } label: {
+      Image(systemName: "ellipsis")
+        .font(.system(size: 17, weight: .semibold))
+        .foregroundStyle(MIRATheme.Color.textSecondary)
+        .frame(width: 36, height: 36)
+        .background(MIRATheme.Color.surfaceSoft)
+        .clipShape(Circle())
+        .overlay(Circle().stroke(MIRATheme.Color.hairline, lineWidth: 1))
+        .contentShape(Circle())
     }
-    .padding(.horizontal, MIRATheme.Space.md)
-    .padding(.vertical, MIRATheme.Space.sm)
+    .buttonStyle(.miraPress)
   }
 
   private var authorNameLabel: some View {
@@ -886,6 +949,13 @@ private struct MainNativePostCard: View {
       .foregroundStyle(MIRATheme.Color.textPrimary)
       .lineLimit(1)
       .truncationMode(.tail)
+  }
+
+  private var authorSubtitle: String? {
+    let username = post.userUsername?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    let subtitle = post.userFullName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    guard !subtitle.isEmpty, subtitle != username else { return nil }
+    return subtitle
   }
 }
 
