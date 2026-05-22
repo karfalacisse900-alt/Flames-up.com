@@ -191,6 +191,27 @@ final class MainFeedModel: ObservableObject {
     }
   }
 
+  func hidePost(_ post: MIRAPost) {
+    posts.removeAll { $0.id == post.id }
+    cacheCurrentPosts()
+  }
+
+  func reportPost(_ post: MIRAPost) async {
+    do {
+      let _: EmptyResponse? = try await api.post(
+        "/reports",
+        body: PostReportBody(
+          reportedType: "post",
+          reportedId: post.id,
+          reason: "other",
+          details: "Reported from the Main feed post menu."
+        )
+      )
+    } catch {
+      errorMessage = "Could not send report. Try again in a moment."
+    }
+  }
+
   private func cacheCurrentPosts() {
     let snapshot = posts
     Task { await MIRALocalJSONCache.save(snapshot, key: feedCacheKey) }
@@ -296,7 +317,9 @@ public struct MainFeedView: View {
                   isVideoActive: post.id == activeVideoPostID,
                   onLike: { Task { await model.toggleLike(post) } },
                   onSave: { Task { await model.toggleSave(post) } },
-                  onFollow: { Task { await model.toggleFollowAuthor(post) } }
+                  onFollow: { Task { await model.toggleFollowAuthor(post) } },
+                  onNotInterested: { model.hidePost(post) },
+                  onReport: { Task { await model.reportPost(post) } }
                 )
                 .onAppear {
                   Task { await model.loadMoreIfNeeded(after: post) }
@@ -426,6 +449,8 @@ private struct MainNativePostCard: View {
   let onLike: () -> Void
   let onSave: () -> Void
   let onFollow: () -> Void
+  let onNotInterested: () -> Void
+  let onReport: () -> Void
   @State private var measuredRatios: [String: CGFloat] = [:]
   @State private var selectedMediaIndex = 0
   @State private var isShowingCaption = false
@@ -454,11 +479,16 @@ private struct MainNativePostCard: View {
       HStack(spacing: MIRATheme.Space.md) {
         CompactPostAction(systemImage: post.isLiked == true ? "heart.fill" : "heart", value: post.likesCount ?? 0, tint: post.isLiked == true ? MIRATheme.Color.like : MIRATheme.Color.textSecondary, action: onLike)
         CompactPostAction(systemImage: post.viewerSaved ? "bookmark.fill" : "bookmark", value: post.savesCount ?? 0, tint: post.viewerSaved ? MIRATheme.Color.forest : MIRATheme.Color.textSecondary, action: onSave)
+        CompactPostLinkAction(
+          systemImage: "bubble.left",
+          value: post.commentsCount ?? 0,
+          tint: MIRATheme.Color.textSecondary,
+          destination: PostDetailNativeView(post: post, api: api)
+        )
         Spacer()
         if hasCaptionContent {
           CompactTextAction(isShowingCaption ? "Less" : "More", action: toggleCaption)
         }
-        CompactShareAction(post: post)
       }
       .padding(.horizontal, MIRATheme.Space.md)
       .padding(.top, MIRATheme.Space.sm)
@@ -626,6 +656,28 @@ private struct MainNativePostCard: View {
           .lineLimit(1)
       }
       Spacer()
+      Menu {
+        Button {
+          UIImpactFeedbackGenerator(style: .light).impactOccurred()
+          onNotInterested()
+        } label: {
+          Label("Not interested", systemImage: "eye.slash")
+        }
+
+        Button(role: .destructive) {
+          UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+          onReport()
+        } label: {
+          Label("Report", systemImage: "flag")
+        }
+      } label: {
+        Image(systemName: "ellipsis")
+          .font(.system(size: 17, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textSecondary)
+          .frame(width: 38, height: 38)
+          .contentShape(Circle())
+      }
+      .buttonStyle(.plain)
     }
     .padding(.horizontal, MIRATheme.Space.md)
     .padding(.vertical, MIRATheme.Space.sm)
@@ -701,6 +753,27 @@ private struct CompactPostAction: View {
   }
 }
 
+private struct CompactPostLinkAction<Destination: View>: View {
+  let systemImage: String
+  let value: Int
+  let tint: Color
+  let destination: Destination
+
+  var body: some View {
+    NavigationLink(destination: destination) {
+      HStack(spacing: 5) {
+        Image(systemName: systemImage)
+          .font(.system(size: 19, weight: .regular))
+        Text(compact(value))
+          .font(.system(size: 12, weight: .medium))
+      }
+      .foregroundStyle(tint)
+      .frame(minHeight: 36)
+    }
+    .buttonStyle(.plain)
+  }
+}
+
 private struct CompactTextAction: View {
   let title: String
   let systemImage: String?
@@ -732,34 +805,10 @@ private struct CompactTextAction: View {
   }
 }
 
-private struct CompactShareAction: View {
-  let post: MIRAPost
-
-  var body: some View {
-    ShareLink(item: shareURL(for: post), subject: Text(post.titleText), message: Text(post.titleText)) {
-      HStack(spacing: 6) {
-        Image(systemName: "paperplane")
-          .font(.system(size: 12, weight: .semibold))
-        Text("Share")
-          .font(.system(size: 13, weight: .semibold))
-      }
-      .foregroundStyle(.white)
-      .frame(height: 34)
-      .padding(.horizontal, MIRATheme.Space.md)
-      .background(MIRATheme.Color.forest)
-      .clipShape(Capsule())
-    }
-  }
-}
-
 private func compact(_ value: Int) -> String {
   if value >= 1_000_000 { return "\(value / 1_000_000)M" }
   if value >= 1_000 { return "\(value / 1_000)K" }
   return "\(value)"
-}
-
-private func shareURL(for post: MIRAPost) -> URL {
-  MIRAProductionBackend.siteURL("post/\(post.id)")
 }
 
 private struct MainPostVisibility: Equatable {

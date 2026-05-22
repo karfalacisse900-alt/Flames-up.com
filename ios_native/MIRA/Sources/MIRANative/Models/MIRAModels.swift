@@ -741,6 +741,20 @@ public struct NoteReportBody: Encodable {
   public let details: String?
 }
 
+public struct PostReportBody: Encodable {
+  public let reportedType: String
+  public let reportedId: String
+  public let reason: String
+  public let details: String?
+
+  enum CodingKeys: String, CodingKey {
+    case reportedType = "reported_type"
+    case reportedId = "reported_id"
+    case reason
+    case details
+  }
+}
+
 public struct FollowBody: Encodable {
   public let following: Bool
 }
