@@ -438,6 +438,8 @@ public struct MainFeedView: View {
       .animation(.easeInOut(duration: 0.24), value: activeMediaViewer?.id)
       .miraScreenEnter(.tab)
       .toolbar(.hidden, for: .navigationBar)
+      .toolbar(activeMediaViewer == nil ? .visible : .hidden, for: .tabBar)
+      .statusBarHidden(true)
       .fullScreenCover(isPresented: $isShowingCreatePost) {
         CreatePostNativeView(api: model.api)
       }
@@ -548,15 +550,13 @@ private struct MainNativePostCard: View {
   let onDelete: () -> Void
   let onMakePublic: () -> Void
   let onMakePrivate: () -> Void
-  @State private var measuredRatios: [String: CGFloat] = [:]
   @State private var selectedMediaIndex = 0
   @State private var isShowingCaption = false
 
   private var mediaHeight: CGFloat {
-    let liveRatios = post.mediaURLs.count > 1 ? [] : post.mediaURLs.compactMap { measuredRatios[$0] }
     return MIRAMediaSizing.mainFeedHeight(
       for: post.mediaURLs,
-      aspectRatios: liveRatios + post.mediaHeightToWidthRatios
+      aspectRatios: post.mediaHeightToWidthRatios
     )
   }
 
@@ -625,8 +625,7 @@ private struct MainNativePostCard: View {
         url: url,
         isVideo: url.isVideoURL,
         contentMode: .fill,
-        shouldPlay: isVideoActive,
-        onMeasuredRatio: { recordMeasuredRatio(url: url, ratio: $0) }
+        shouldPlay: isVideoActive
       )
       .frame(maxWidth: .infinity)
       .frame(height: mediaHeight)
@@ -641,8 +640,7 @@ private struct MainNativePostCard: View {
               url: url,
               isVideo: url.isVideoURL,
               contentMode: .fill,
-              shouldPlay: isVideoActive && selectedMediaIndex == index,
-              onMeasuredRatio: { _ in }
+              shouldPlay: isVideoActive && selectedMediaIndex == index
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()
@@ -695,7 +693,7 @@ private struct MainNativePostCard: View {
   }
 
   private var hasCaptionContent: Bool {
-    headlineText != nil || captionText != nil
+    headlineText != nil || captionText != nil || !captionMetadataLines.isEmpty
   }
 
   private var headlineText: String? {
@@ -704,9 +702,33 @@ private struct MainNativePostCard: View {
   }
 
   private var captionText: String? {
-    let value = ((post.caption?.isEmpty == false ? post.caption : post.content) ?? "")
+    let base = ((post.caption?.isEmpty == false ? post.caption : post.content) ?? "")
       .trimmingCharacters(in: .whitespacesAndNewlines)
-    return value.isEmpty ? nil : value
+    let values = ([base] + captionMetadataLines).filter { !$0.isEmpty }
+    return values.isEmpty ? nil : values.joined(separator: "\n\n")
+  }
+
+  private var captionMetadataLines: [String] {
+    var lines: [String] = []
+    if let place = post.placeDisplayName?.trimmingCharacters(in: .whitespacesAndNewlines), !place.isEmpty {
+      lines.append("At \(place)")
+    }
+    let people = (post.taggedUsers ?? [])
+      .compactMap { taggedUserName($0) }
+      .prefix(6)
+      .joined(separator: ", ")
+    if !people.isEmpty {
+      lines.append("With \(people)")
+    }
+    return lines
+  }
+
+  private func taggedUserName(_ user: MIRATaggedUserPayload) -> String? {
+    let raw = (user.username?.isEmpty == false ? user.username : user.fullName)?
+      .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    guard !raw.isEmpty else { return nil }
+    if raw.hasPrefix("@") { return raw }
+    return "@\(raw)"
   }
 
   private func toggleCaption() {
@@ -721,18 +743,6 @@ private struct MainNativePostCard: View {
     let screen = UIScreen.main.bounds
     let visibleHeight = min(frame.maxY, screen.maxY) - max(frame.minY, screen.minY)
     return max(0, min(1, visibleHeight / max(frame.height, 1)))
-  }
-
-  private func recordMeasuredRatio(url: String, ratio: CGFloat) {
-    guard ratio.isFinite, ratio > 0 else { return }
-    let clamped = min(max(ratio, 1.0 / 1.91), 16.0 / 9.0)
-    if abs((measuredRatios[url] ?? 0) - clamped) > 0.01 {
-      var transaction = Transaction()
-      transaction.animation = nil
-      withTransaction(transaction) {
-        measuredRatios[url] = clamped
-      }
-    }
   }
 
   private var postHeader: some View {

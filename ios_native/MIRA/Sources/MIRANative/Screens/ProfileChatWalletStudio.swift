@@ -200,6 +200,9 @@ public struct ProfileNativeView: View {
         }
       }
       .animation(.easeInOut(duration: 0.24), value: activeMediaViewer?.id)
+      .toolbar(activeMediaViewer == nil ? .visible : .hidden, for: .navigationBar)
+      .toolbar(activeMediaViewer == nil ? .visible : .hidden, for: .tabBar)
+      .statusBarHidden(activeMediaViewer != nil)
     }
   }
 
@@ -365,6 +368,9 @@ public struct UserProfileNativeView: View {
       }
     }
     .animation(.easeInOut(duration: 0.24), value: activeMediaViewer?.id)
+    .toolbar(activeMediaViewer == nil ? .visible : .hidden, for: .navigationBar)
+    .toolbar(activeMediaViewer == nil ? .visible : .hidden, for: .tabBar)
+    .statusBarHidden(activeMediaViewer != nil)
   }
 
   private var profileHeader: some View {

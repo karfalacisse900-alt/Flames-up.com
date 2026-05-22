@@ -218,7 +218,7 @@ public enum MIRAImageDiskCache {
     }.value
   }
 
-  private static func decodedImage(from data: Data, maxPixelSize: CGFloat = 1800) -> UIImage? {
+  private static func decodedImage(from data: Data, maxPixelSize: CGFloat = 2160) -> UIImage? {
     let options = [
       kCGImageSourceShouldCache: false
     ] as CFDictionary

@@ -352,6 +352,8 @@ public struct RemoteMediaView: View {
   let isVideo: Bool
   let contentMode: ContentMode
   let shouldPlay: Bool
+  let placeholderColor: Color
+  let placeholderTint: Color
   let onMeasuredRatio: (CGFloat) -> Void
 
   public init(
@@ -359,19 +361,30 @@ public struct RemoteMediaView: View {
     isVideo: Bool,
     contentMode: ContentMode = .fill,
     shouldPlay: Bool = false,
+    placeholderColor: Color = MIRATheme.Color.surfaceSoft,
+    placeholderTint: Color = MIRATheme.Color.textMuted,
     onMeasuredRatio: @escaping (CGFloat) -> Void = { _ in }
   ) {
     self.url = url
     self.isVideo = isVideo
     self.contentMode = contentMode
     self.shouldPlay = shouldPlay
+    self.placeholderColor = placeholderColor
+    self.placeholderTint = placeholderTint
     self.onMeasuredRatio = onMeasuredRatio
   }
 
   public var body: some View {
     Group {
       if isVideo {
-        MIRAResolvedVideoPlayer(url: url, contentMode: contentMode, shouldPlay: shouldPlay, onMeasuredRatio: onMeasuredRatio)
+        MIRAResolvedVideoPlayer(
+          url: url,
+          contentMode: contentMode,
+          shouldPlay: shouldPlay,
+          placeholderColor: placeholderColor,
+          placeholderTint: placeholderTint,
+          onMeasuredRatio: onMeasuredRatio
+        )
           .background(Color.clear)
       } else {
         MIRACachedImage(url: url, onImageLoaded: reportRatio) { image in
@@ -390,10 +403,10 @@ public struct RemoteMediaView: View {
 
   private var placeholder: some View {
     ZStack {
-      MIRATheme.Color.surfaceSoft
+      placeholderColor
       Image(systemName: "photo")
         .font(.system(size: 28, weight: .light))
-        .foregroundStyle(MIRATheme.Color.textMuted)
+        .foregroundStyle(placeholderTint)
     }
   }
 
@@ -407,6 +420,8 @@ private struct MIRAResolvedVideoPlayer: View {
   let url: String
   let contentMode: ContentMode
   let shouldPlay: Bool
+  let placeholderColor: Color
+  let placeholderTint: Color
   let onMeasuredRatio: (CGFloat) -> Void
   @State private var player: AVPlayer?
   @State private var thumbnailURL: String?
@@ -467,10 +482,10 @@ private struct MIRAResolvedVideoPlayer: View {
 
   private var placeholder: some View {
     ZStack {
-      MIRATheme.Color.surfaceSoft
+      placeholderColor
       Image(systemName: "play.fill")
         .font(.system(size: 24, weight: .semibold))
-        .foregroundStyle(MIRATheme.Color.textMuted.opacity(0.38))
+        .foregroundStyle(placeholderTint.opacity(0.38))
     }
   }
 
@@ -593,7 +608,7 @@ private struct MIRAResolvedVideoPlayer: View {
       let asset = AVURLAsset(url: url)
       let generator = AVAssetImageGenerator(asset: asset)
       generator.appliesPreferredTrackTransform = true
-      generator.maximumSize = CGSize(width: 900, height: 900)
+      generator.maximumSize = CGSize(width: 1080, height: 1920)
       let time = CMTime(seconds: 0.2, preferredTimescale: 600)
       guard let cgImage = try? generator.copyCGImage(at: time, actualTime: nil) else {
         return nil
@@ -818,9 +833,12 @@ public struct MIRAFullScreenMediaViewer: View {
             url: url,
             isVideo: url.isVideoURL,
             contentMode: .fit,
-            shouldPlay: selectedIndex == index
+            shouldPlay: selectedIndex == index,
+            placeholderColor: .black,
+            placeholderTint: .white
           )
           .frame(maxWidth: .infinity, maxHeight: .infinity)
+          .background(Color.black)
           .contentShape(Rectangle())
           .tag(index)
         }
@@ -873,6 +891,9 @@ public struct MIRAFullScreenMediaViewer: View {
         isVisible = true
       }
     }
+    .toolbar(.hidden, for: .navigationBar)
+    .toolbar(.hidden, for: .tabBar)
+    .statusBarHidden(true)
   }
 
   private func close() {
@@ -891,8 +912,11 @@ public struct MIRAFullScreenMediaViewer: View {
 
 public enum MIRAMediaSizing {
   public static let feedPreviewRatio: CGFloat = 5.0 / 4.0
+  public static let feedTallRatio: CGFloat = 4.0 / 3.0
+  public static let feedImmersiveRatio: CGFloat = 3.0 / 2.0
   public static let profileGridRatio: CGFloat = 5.0 / 4.0
   public static let fullVerticalRatio: CGFloat = 16.0 / 9.0
+  public static let maxMainFeedScreenHeightFraction: CGFloat = 0.78
 
   public static func feedHeight(
     for urls: [String],
@@ -928,11 +952,29 @@ public enum MIRAMediaSizing {
   public static func mainFeedHeight(
     for urls: [String],
     aspectRatios: [CGFloat] = [],
-    width: CGFloat = UIScreen.main.bounds.width
+    width: CGFloat = UIScreen.main.bounds.width,
+    screenHeight: CGFloat = UIScreen.main.bounds.height
   ) -> CGFloat {
-    // Main feed media is always a 4:5 preview. The original media remains intact
-    // and can be viewed uncropped in the full-screen viewer.
-    width * feedPreviewRatio
+    let displayRatio = mainFeedDisplayRatio(for: urls, aspectRatios: aspectRatios)
+    let height = width * displayRatio
+    guard displayRatio > feedPreviewRatio else { return height }
+    return min(height, screenHeight * maxMainFeedScreenHeightFraction)
+  }
+
+  public static func mainFeedDisplayRatio(
+    for urls: [String],
+    aspectRatios: [CGFloat] = []
+  ) -> CGFloat {
+    if let ratio = aspectRatios.first(where: { $0.isFinite && $0 > 0 }) {
+      return mainFeedDisplayRatio(forSourceHeightToWidthRatio: ratio)
+    }
+
+    let lowercased = urls.map { $0.lowercased() }
+    if let ratio = lowercased.compactMap({ flexibleDimensionsRatio(in: $0) ?? aspectRatioHint(in: $0) }).first {
+      return mainFeedDisplayRatio(forSourceHeightToWidthRatio: ratio)
+    }
+
+    return feedPreviewRatio
   }
 
   public static func detailHeight(
@@ -974,8 +1016,16 @@ public enum MIRAMediaSizing {
 
   private static func boundedHeight(_ height: CGFloat, width: CGFloat) -> CGFloat {
     let minHeight = width / 1.91
-    let maxHeight = UIScreen.main.bounds.height * 0.74
+    let maxHeight = UIScreen.main.bounds.height * maxMainFeedScreenHeightFraction
     return min(max(height, minHeight), maxHeight)
+  }
+
+  private static func mainFeedDisplayRatio(forSourceHeightToWidthRatio ratio: CGFloat) -> CGFloat {
+    let clamped = min(max(ratio, 1.0 / 1.91), fullVerticalRatio)
+    if clamped >= 1.62 { return fullVerticalRatio }
+    if clamped >= 1.42 { return feedImmersiveRatio }
+    if clamped >= 1.29 { return feedTallRatio }
+    return feedPreviewRatio
   }
 
   private static func dimensionsRatio(in value: String) -> CGFloat? {
@@ -1025,6 +1075,8 @@ public enum MIRAMediaSizing {
     }
     if containsRatio("16", "9", in: decoded) { return 9.0 / 16.0 }
     if containsRatio("4", "5", in: decoded) { return 5.0 / 4.0 }
+    if containsRatio("3", "4", in: decoded) { return 4.0 / 3.0 }
+    if containsRatio("2", "3", in: decoded) { return 3.0 / 2.0 }
     if containsRatio("1", "1", in: decoded) { return 1.0 }
     if containsRatio("9", "16", in: decoded) { return 16.0 / 9.0 }
     if decoded.contains("square") { return 1.0 }

@@ -122,12 +122,18 @@ public final class MIRAMediaUploadService {
     return url
   }
 
+  private struct PreparedImageUpload {
+    let data: Data
+    let mimeType: String
+    let fileName: String
+  }
+
   private func uploadImage(_ media: MIRAPickedMedia) async throws -> String {
-    let prepared = prepareImage(media.data) ?? media.data
-    let base64 = "data:image/jpeg;base64,\(prepared.base64EncodedString())"
+    let prepared = prepareImageUpload(media)
+    let base64 = "data:\(prepared.mimeType);base64,\(prepared.data.base64EncodedString())"
     let response: MIRAMediaUploadResponse = try await api.post(
       "/upload/image",
-      body: MIRAUploadImageBody(image: base64, filename: normalizedImageName(media.fileName))
+      body: MIRAUploadImageBody(image: base64, filename: prepared.fileName)
     )
     guard let url = response.url, !url.isEmpty else { throw MIRAAPIError.emptyResponse }
     return url
@@ -169,12 +175,56 @@ public final class MIRAMediaUploadService {
     let rendered = renderer.image { _ in
       image.draw(in: CGRect(origin: .zero, size: targetSize))
     }
-    return rendered.jpegData(compressionQuality: 0.88)
+    return rendered.jpegData(compressionQuality: 0.92)
   }
 
-  private func normalizedImageName(_ fileName: String) -> String {
+  private func prepareImageUpload(_ media: MIRAPickedMedia) -> PreparedImageUpload {
+    if let detectedMimeType = detectedImageMimeType(media.data), media.data.count <= 10_000_000 {
+      return PreparedImageUpload(
+        data: media.data,
+        mimeType: detectedMimeType,
+        fileName: normalizedImageName(media.fileName, mimeType: detectedMimeType)
+      )
+    }
+
+    let prepared = prepareImage(media.data) ?? media.data
+    return PreparedImageUpload(
+      data: prepared,
+      mimeType: "image/jpeg",
+      fileName: normalizedImageName(media.fileName, mimeType: "image/jpeg")
+    )
+  }
+
+  private func detectedImageMimeType(_ data: Data) -> String? {
+    if data.starts(with: [0xff, 0xd8, 0xff]) {
+      return "image/jpeg"
+    }
+    if data.starts(with: [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]) {
+      return "image/png"
+    }
+    if data.count >= 12 {
+      let header = Array(data.prefix(12))
+      let isRIFF = header[0] == 0x52 && header[1] == 0x49 && header[2] == 0x46 && header[3] == 0x46
+      let isWEBP = header[8] == 0x57 && header[9] == 0x45 && header[10] == 0x42 && header[11] == 0x50
+      if isRIFF && isWEBP {
+        return "image/webp"
+      }
+    }
+    return nil
+  }
+
+  private func normalizedImageName(_ fileName: String, mimeType: String) -> String {
     let base = fileName.split(separator: ".").first.map(String.init) ?? UUID().uuidString
-    return "\(base).jpg"
+    let ext: String
+    switch mimeType.lowercased() {
+    case "image/png":
+      ext = "png"
+    case "image/webp":
+      ext = "webp"
+    default:
+      ext = "jpg"
+    }
+    return "\(base).\(ext)"
   }
 }
 
