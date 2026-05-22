@@ -10,6 +10,9 @@ let package = Package(
     .library(name: "MIRANative", targets: ["MIRANative"]),
     .library(name: "MIRACoreCpp", targets: ["MIRACoreCpp"])
   ],
+  dependencies: [
+    .package(url: "https://github.com/AgoraIO/AgoraRtcEngine_iOS.git", exact: "4.6.2")
+  ],
   targets: [
     .target(
       name: "MIRACoreCpp",
@@ -17,7 +20,10 @@ let package = Package(
     ),
     .target(
       name: "MIRANative",
-      dependencies: ["MIRACoreCpp"]
+      dependencies: [
+        "MIRACoreCpp",
+        .product(name: "RtcBasic", package: "AgoraRtcEngine_iOS")
+      ]
     )
   ],
   cxxLanguageStandard: .cxx17

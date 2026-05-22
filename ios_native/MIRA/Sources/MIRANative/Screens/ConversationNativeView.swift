@@ -175,6 +175,7 @@ public struct ConversationNativeView: View {
   @State private var showFileImporter = false
   @State private var showGIFPicker = false
   @State private var showAttachmentTray = false
+  @State private var activeCall: MIRAAgoraCallPresentation?
   private let title: String
 
   public init(peerId: String, title: String, api: MIRAAPIClient, currentUserId: String = "") {
@@ -188,7 +189,8 @@ public struct ConversationNativeView: View {
   }
 
   public var body: some View {
-    VStack(spacing: 0) {
+    ZStack {
+      MIRATheme.Color.appBackground.ignoresSafeArea()
       ScrollViewReader { proxy in
         ScrollView {
           LazyVStack(spacing: MIRATheme.Space.md) {
@@ -205,7 +207,7 @@ public struct ConversationNativeView: View {
           }
           .padding(.horizontal, MIRATheme.Space.md)
           .padding(.top, MIRATheme.Space.md)
-          .padding(.bottom, MIRATheme.Space.xl)
+          .padding(.bottom, 120)
         }
         .scrollDismissesKeyboard(.interactively)
         .onChange(of: model.messages.count) { _ in
@@ -216,19 +218,11 @@ public struct ConversationNativeView: View {
           }
         }
       }
-
-      if let error = model.errorMessage {
-        Text(error)
-          .font(.system(size: 12, weight: .semibold))
-          .foregroundStyle(.red)
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .padding(.horizontal, MIRATheme.Space.md)
-          .padding(.bottom, MIRATheme.Space.xs)
-      }
-
-      composer
     }
-    .background(MIRATheme.Color.surface)
+    .safeAreaInset(edge: .bottom, spacing: 0) {
+      composerContainer
+    }
+    .background(MIRATheme.Color.appBackground)
     .miraScreenEnter(.push)
     .navigationTitle(title)
     .navigationBarTitleDisplayMode(.inline)
@@ -236,15 +230,27 @@ public struct ConversationNativeView: View {
     .toolbar {
       ToolbarItem(placement: .principal) {
         VStack(spacing: 2) {
-          Text(title).font(.system(size: 17, weight: .semibold))
+          Text(title)
+            .font(.system(size: 17, weight: .semibold))
+            .lineLimit(1)
+            .truncationMode(.tail)
           Text(statusText)
             .font(.system(size: 12, weight: .medium))
             .foregroundStyle(MIRATheme.Color.textMuted)
         }
       }
+      ToolbarItemGroup(placement: .topBarTrailing) {
+        if model.peerId != nil {
+          callToolbarButton(systemImage: "phone.fill", mode: .voice)
+          callToolbarButton(systemImage: "video.fill", mode: .video)
+        }
+      }
     }
     .task { await model.load() }
     .task { await model.pollPresence() }
+    .fullScreenCover(item: $activeCall) { presentation in
+      MIRAAgoraCallView(presentation: presentation, api: model.api)
+    }
     .sheet(isPresented: $showGIFPicker) {
       ChatGIFPickerSheet(api: model.api) { gif in
         showGIFPicker = false
@@ -273,6 +279,36 @@ public struct ConversationNativeView: View {
     return "chat"
   }
 
+  private func callToolbarButton(systemImage: String, mode: MIRAAgoraCallMode) -> some View {
+    Button {
+      startCall(mode: mode)
+    } label: {
+      Image(systemName: systemImage)
+        .font(.system(size: 14, weight: .bold))
+        .foregroundStyle(MIRATheme.Color.forest)
+        .frame(width: 34, height: 34)
+        .background(MIRATheme.Color.forestSoft)
+        .clipShape(Circle())
+    }
+    .buttonStyle(.miraPress)
+  }
+
+  private func startCall(mode: MIRAAgoraCallMode) {
+    guard let peerId = model.peerId, !peerId.isEmpty else { return }
+    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+    activeCall = MIRAAgoraCallPresentation.direct(
+      currentUserId: model.currentUserId,
+      peerId: peerId,
+      peerName: title,
+      peerAvatar: peerAvatarURL,
+      mode: mode
+    )
+  }
+
+  private var peerAvatarURL: String? {
+    model.messages.first { !isOutgoing($0) }?.profileImage
+  }
+
   private var chatSkeleton: some View {
     VStack(spacing: MIRATheme.Space.md) {
       ForEach(0..<5, id: \.self) { index in
@@ -292,20 +328,33 @@ public struct ConversationNativeView: View {
   private func messageBubble(_ message: MIRAMessage) -> some View {
     let outgoing = isOutgoing(message)
     return HStack(alignment: .bottom, spacing: MIRATheme.Space.sm) {
-      if outgoing { Spacer(minLength: 52) }
-      if model.isGroup && !outgoing {
+      if outgoing { Spacer(minLength: 54) }
+      if !outgoing {
         RemoteAvatar(url: message.profileImage, size: 30)
       }
-      VStack(alignment: outgoing ? .trailing : .leading, spacing: 5) {
+      VStack(alignment: outgoing ? .trailing : .leading, spacing: 6) {
         if model.isGroup && !outgoing {
           Text(message.fullName ?? message.username ?? "MIRA")
             .font(.system(size: 11, weight: .semibold))
             .foregroundStyle(MIRATheme.Color.textMuted)
+            .lineLimit(1)
         }
-        MessageBubbleContent(message: message, outgoing: outgoing)
+        MessageBubbleContent(message: message, outgoing: outgoing, maxWidth: bubbleMaxWidth)
+        if let createdAt = message.createdAt {
+          Text(chatTime(createdAt))
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(MIRATheme.Color.textMuted.opacity(0.78))
+            .padding(.horizontal, 4)
+        }
       }
-      if !outgoing { Spacer(minLength: 52) }
+      .frame(maxWidth: bubbleMaxWidth, alignment: outgoing ? .trailing : .leading)
+      if !outgoing { Spacer(minLength: 54) }
     }
+    .transition(.move(edge: .bottom).combined(with: .opacity))
+  }
+
+  private var bubbleMaxWidth: CGFloat {
+    min(UIScreen.main.bounds.width * 0.74, 304)
   }
 
   private func isOutgoing(_ message: MIRAMessage) -> Bool {
@@ -316,6 +365,22 @@ public struct ConversationNativeView: View {
       return message.senderId != peerId
     }
     return false
+  }
+
+  private var composerContainer: some View {
+    VStack(spacing: 0) {
+      if let error = model.errorMessage {
+        Text(error)
+          .font(.system(size: 12, weight: .semibold))
+          .foregroundStyle(.red)
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .padding(.horizontal, MIRATheme.Space.md)
+          .padding(.top, MIRATheme.Space.xs)
+          .padding(.bottom, MIRATheme.Space.xs)
+          .background(MIRATheme.Color.surface)
+      }
+      composer
+    }
   }
 
   private var composer: some View {
@@ -335,6 +400,7 @@ public struct ConversationNativeView: View {
 
       HStack(spacing: 10) {
         Button {
+          UIImpactFeedbackGenerator(style: .light).impactOccurred()
           withAnimation(.spring(response: 0.24, dampingFraction: 0.9)) {
             showAttachmentTray.toggle()
           }
@@ -355,6 +421,10 @@ public struct ConversationNativeView: View {
           .padding(.vertical, 11)
           .background(MIRATheme.Color.surfaceSoft)
           .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+          .overlay {
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+              .stroke(MIRATheme.Color.hairline, lineWidth: 1)
+          }
           .onChange(of: model.draft) { value in
             model.updateTyping(!value.isEmpty)
           }
@@ -369,6 +439,7 @@ public struct ConversationNativeView: View {
     .overlay(alignment: .top) {
       Rectangle().fill(MIRATheme.Color.hairline).frame(height: 0.5)
     }
+    .animation(.spring(response: 0.24, dampingFraction: 0.9), value: showAttachmentTray)
   }
 
   private var attachmentTray: some View {
@@ -402,6 +473,7 @@ public struct ConversationNativeView: View {
   private var composerPrimaryButton: some View {
     let hasDraft = !model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     return Button {
+      UIImpactFeedbackGenerator(style: .light).impactOccurred()
       Task {
         if hasDraft {
           await model.sendText()
@@ -439,6 +511,7 @@ public struct ConversationNativeView: View {
 private struct MessageBubbleContent: View {
   let message: MIRAMessage
   let outgoing: Bool
+  let maxWidth: CGFloat
 
   var body: some View {
     VStack(alignment: outgoing ? .trailing : .leading, spacing: MIRATheme.Space.xs) {
@@ -450,10 +523,13 @@ private struct MessageBubbleContent: View {
           .font(.system(size: 15, weight: .regular))
           .foregroundStyle(outgoing ? .white : MIRATheme.Color.textPrimary)
           .fixedSize(horizontal: false, vertical: true)
+          .multilineTextAlignment(outgoing ? .trailing : .leading)
+          .frame(maxWidth: maxWidth, alignment: outgoing ? .trailing : .leading)
       }
     }
     .padding(.horizontal, hasLargeMedia ? 6 : MIRATheme.Space.md)
     .padding(.vertical, hasLargeMedia ? 6 : MIRATheme.Space.sm)
+    .frame(maxWidth: maxWidth, alignment: outgoing ? .trailing : .leading)
     .background(outgoing ? MIRATheme.Color.forest : MIRATheme.Color.surface)
     .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
     .overlay {
@@ -472,6 +548,7 @@ private struct MessageBubbleContent: View {
   @ViewBuilder
   private func mediaContent(url: String) -> some View {
     let type = message.mediaType?.lowercased() ?? ""
+    let mediaWidth = min(maxWidth, 260)
     if type == "voice" || type == "audio" {
       VoicePlaybackPill(url: url, outgoing: outgoing)
     } else if type == "file" {
@@ -479,12 +556,14 @@ private struct MessageBubbleContent: View {
         Image(systemName: "doc.fill")
         Text(message.content?.isEmpty == false ? message.content! : "File")
           .lineLimit(1)
+          .truncationMode(.middle)
       }
       .font(.system(size: 14, weight: .semibold))
       .foregroundStyle(outgoing ? .white : MIRATheme.Color.textPrimary)
+      .frame(maxWidth: maxWidth, alignment: outgoing ? .trailing : .leading)
     } else {
       RemoteMediaView(url: url, isVideo: type == "video" || url.isVideoURL, shouldPlay: false)
-        .frame(width: 218, height: type == "video" || url.isVideoURL ? 260 : 190)
+        .frame(width: mediaWidth, height: type == "video" || url.isVideoURL ? mediaWidth * 1.22 : mediaWidth * 0.86)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
   }

@@ -497,6 +497,23 @@ public struct MIRAPresence: Decodable, Hashable {
   public let isTyping: Bool?
 }
 
+public struct MIRAAgoraTokenRequest: Encodable {
+  public let channel: String
+  public let role: String
+  public let mode: String
+}
+
+public struct MIRAAgoraTokenResponse: Decodable, Hashable {
+  public let appId: String?
+  public let channel: String
+  public let uid: UInt
+  public let role: String
+  public let mode: String
+  public let token: String
+  public let expiresIn: Int?
+  public let expiresAt: String?
+}
+
 public struct MIRANotification: Decodable, Identifiable, Hashable {
   public let id: String
   public let type: String?

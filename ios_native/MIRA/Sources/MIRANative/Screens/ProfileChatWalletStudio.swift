@@ -716,6 +716,7 @@ final class ChatNativeModel: ObservableObject {
 public struct ChatNativeView: View {
   @StateObject private var model: ChatNativeModel
   @State private var showCreateGroup = false
+  @State private var activeCall: MIRAAgoraCallPresentation?
   private let currentUserId: String
 
   public init(api: MIRAAPIClient, currentUserId: String = "") {
@@ -728,26 +729,16 @@ public struct ChatNativeView: View {
       ScrollView {
         VStack(alignment: .leading, spacing: MIRATheme.Space.lg) {
           chatHeader
-          friendStoryPlaceholder
+          quickCallStrip
 
           if model.conversations.isEmpty && model.isLoading {
             chatListSkeleton
           } else if model.conversations.isEmpty {
             MIRAEmptyState(title: "No chats yet", message: "Friends and replies will appear here.", systemImage: "bubble.left.and.bubble.right")
           } else {
-            LazyVStack(spacing: 0) {
+            LazyVStack(spacing: MIRATheme.Space.sm) {
               ForEach(model.conversations) { conversation in
-                if let groupId = conversation.groupId {
-                  NavigationLink(destination: ConversationNativeView(groupId: groupId, title: conversation.displayName, api: model.api, currentUserId: currentUserId)) {
-                    ChatConversationRow(conversation: conversation)
-                  }
-                  .buttonStyle(.plain)
-                } else if let peerId = conversation.otherUserId {
-                  NavigationLink(destination: ConversationNativeView(peerId: peerId, title: conversation.displayName, api: model.api, currentUserId: currentUserId)) {
-                    ChatConversationRow(conversation: conversation)
-                  }
-                  .buttonStyle(.plain)
-                }
+                conversationCard(conversation)
               }
             }
             .padding(.horizontal, MIRATheme.Space.md)
@@ -766,14 +757,22 @@ public struct ChatNativeView: View {
         }
         .presentationDetents([.medium, .large])
       }
+      .fullScreenCover(item: $activeCall) { presentation in
+        MIRAAgoraCallView(presentation: presentation, api: model.api)
+      }
     }
   }
 
   private var chatHeader: some View {
-    HStack {
-      Text("Chat")
-        .font(.system(size: 32, weight: .semibold))
-        .foregroundStyle(MIRATheme.Color.textPrimary)
+    HStack(alignment: .center, spacing: MIRATheme.Space.md) {
+      VStack(alignment: .leading, spacing: 2) {
+        Text("Messages")
+          .font(.system(size: 32, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+        Text("\(model.conversations.count) chats")
+          .font(.system(size: 13, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textMuted)
+      }
       Spacer()
       Button { showCreateGroup = true } label: {
         Image(systemName: "square.and.pencil")
@@ -790,21 +789,107 @@ public struct ChatNativeView: View {
     .padding(.horizontal, MIRATheme.Space.md)
   }
 
-  private var friendStoryPlaceholder: some View {
-    HStack(spacing: MIRATheme.Space.sm) {
-      Image(systemName: "person.2")
-        .font(.system(size: 17, weight: .semibold))
-      Text("Friend stories will appear here")
-        .font(.system(size: 15, weight: .semibold))
-        .lineLimit(1)
-        .minimumScaleFactor(0.82)
+  @ViewBuilder
+  private var quickCallStrip: some View {
+    let directConversations = model.conversations.filter { !$0.isGroup && $0.otherUserId != nil }
+    if !directConversations.isEmpty {
+      ScrollView(.horizontal, showsIndicators: false) {
+        HStack(spacing: MIRATheme.Space.sm) {
+          ForEach(Array(directConversations.prefix(12))) { conversation in
+            Button {
+              startCall(for: conversation, mode: .video)
+            } label: {
+              VStack(spacing: 7) {
+                ZStack(alignment: .bottomTrailing) {
+                  RemoteAvatar(url: conversation.otherProfileImage, size: 58)
+                  Circle()
+                    .fill(MIRATheme.Color.forest)
+                    .frame(width: 22, height: 22)
+                    .overlay {
+                      Image(systemName: "video.fill")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.white)
+                    }
+                    .overlay(Circle().stroke(MIRATheme.Color.surface, lineWidth: 2))
+                }
+                Text(conversation.displayName)
+                  .font(.system(size: 12, weight: .semibold))
+                  .foregroundStyle(MIRATheme.Color.textSecondary)
+                  .lineLimit(1)
+                  .frame(width: 72)
+              }
+              .padding(.vertical, 4)
+              .contentShape(Rectangle())
+            }
+            .buttonStyle(.miraPress)
+          }
+        }
+        .padding(.horizontal, MIRATheme.Space.md)
+      }
     }
-    .foregroundStyle(MIRATheme.Color.textMuted)
-    .frame(maxWidth: .infinity, minHeight: 56)
+  }
+
+  @ViewBuilder
+  private func conversationCard(_ conversation: MIRAConversation) -> some View {
+    HStack(spacing: MIRATheme.Space.sm) {
+      NavigationLink {
+        conversationDestination(conversation)
+      } label: {
+        ChatConversationRow(conversation: conversation)
+      }
+      .buttonStyle(.plain)
+
+      if callPresentation(for: conversation, mode: .video) != nil {
+        Button {
+          startCall(for: conversation, mode: .video)
+        } label: {
+          Image(systemName: "video.fill")
+            .font(.system(size: 16, weight: .bold))
+            .foregroundStyle(.white)
+            .frame(width: 42, height: 42)
+            .background(MIRATheme.Color.forest)
+            .clipShape(Circle())
+        }
+        .buttonStyle(.miraPress)
+        .accessibilityLabel("Start video call")
+      }
+    }
+    .padding(.horizontal, MIRATheme.Space.sm)
+    .padding(.vertical, 8)
     .background(MIRATheme.Color.surface)
-    .clipShape(Capsule())
-    .overlay(Capsule().stroke(MIRATheme.Color.hairline, lineWidth: 1))
-    .padding(.horizontal, MIRATheme.Space.md)
+    .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+    .overlay {
+      RoundedRectangle(cornerRadius: 22, style: .continuous)
+        .stroke(MIRATheme.Color.hairline, lineWidth: 1)
+    }
+  }
+
+  @ViewBuilder
+  private func conversationDestination(_ conversation: MIRAConversation) -> some View {
+    if let groupId = conversation.groupId {
+      ConversationNativeView(groupId: groupId, title: conversation.displayName, api: model.api, currentUserId: currentUserId)
+    } else if let peerId = conversation.otherUserId {
+      ConversationNativeView(peerId: peerId, title: conversation.displayName, api: model.api, currentUserId: currentUserId)
+    } else {
+      MIRAEmptyState(title: "Chat unavailable", message: "This conversation cannot be opened right now.", systemImage: "exclamationmark.bubble")
+    }
+  }
+
+  private func startCall(for conversation: MIRAConversation, mode: MIRAAgoraCallMode) {
+    guard let presentation = callPresentation(for: conversation, mode: mode) else { return }
+    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+    activeCall = presentation
+  }
+
+  private func callPresentation(for conversation: MIRAConversation, mode: MIRAAgoraCallMode) -> MIRAAgoraCallPresentation? {
+    guard let peerId = conversation.otherUserId, !peerId.isEmpty else { return nil }
+    return MIRAAgoraCallPresentation.direct(
+      currentUserId: currentUserId,
+      peerId: peerId,
+      peerName: conversation.displayName,
+      peerAvatar: conversation.otherProfileImage,
+      mode: mode
+    )
   }
 
   private var chatListSkeleton: some View {
@@ -832,21 +917,26 @@ private struct ChatConversationRow: View {
   var body: some View {
     HStack(spacing: 14) {
       avatar
-      VStack(alignment: .leading, spacing: 5) {
+      VStack(alignment: .leading, spacing: 6) {
         Text(conversation.displayName)
           .font(.system(size: 18, weight: .semibold))
           .foregroundStyle(MIRATheme.Color.textPrimary)
           .lineLimit(1)
+          .truncationMode(.tail)
         Text(rowPreview)
           .font(.system(size: 14, weight: .medium))
           .foregroundStyle(MIRATheme.Color.textMuted)
           .lineLimit(1)
+          .truncationMode(.tail)
       }
-      Spacer()
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .layoutPriority(1)
+
       VStack(alignment: .trailing, spacing: 8) {
         Text(chatTime(conversation.lastMessageTime ?? conversation.updatedAt))
           .font(.system(size: 12, weight: .semibold))
           .foregroundStyle(MIRATheme.Color.textMuted)
+          .lineLimit(1)
         if let unread = conversation.unreadCount, unread > 0 {
           Text("\(min(unread, 99))")
             .font(.system(size: 11, weight: .bold))
@@ -861,10 +951,8 @@ private struct ChatConversationRow: View {
         }
       }
     }
-    .padding(.vertical, 14)
-    .overlay(alignment: .bottom) {
-      Rectangle().fill(MIRATheme.Color.hairline).frame(height: 0.5).padding(.leading, 72)
-    }
+    .frame(maxWidth: .infinity, minHeight: 64, alignment: .leading)
+    .contentShape(Rectangle())
   }
 
   private var avatar: some View {
