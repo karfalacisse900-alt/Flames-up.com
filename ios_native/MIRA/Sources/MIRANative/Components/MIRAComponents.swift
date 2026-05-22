@@ -97,6 +97,14 @@ public enum MIRAScreenEnterStyle {
     case .tab: return 0.18
     }
   }
+
+  fileprivate var initialOpacity: Double {
+    switch self {
+    case .push: return 0.96
+    case .modal: return 0.94
+    case .tab: return 1.0
+    }
+  }
 }
 
 private struct MIRAScreenEnterModifier: ViewModifier {
@@ -107,7 +115,7 @@ private struct MIRAScreenEnterModifier: ViewModifier {
   func body(content: Content) -> some View {
     let offset = reduceMotion ? .zero : style.offset
     content
-      .opacity(isVisible ? 1 : 0)
+      .opacity(isVisible ? 1 : style.initialOpacity)
       .scaleEffect(isVisible || reduceMotion ? 1 : style.scale)
       .offset(x: isVisible ? 0 : offset.width, y: isVisible ? 0 : offset.height)
       .onAppear {

@@ -42,14 +42,17 @@ final class PostDetailModel: ObservableObject {
     }
   }
 
-  func sendComment(_ text: String) async {
+  @discardableResult
+  func sendComment(_ text: String) async -> Bool {
     let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !clean.isEmpty else { return }
+    guard !clean.isEmpty else { return false }
     if let comment: MIRAComment = try? await api.post("/posts/\(post.id)/comments", body: PostCommentBody(content: clean)) {
       comments.append(comment)
       post = post.updating(commentsCount: max(comments.count, (post.commentsCount ?? 0) + 1))
       publishEngagement()
+      return true
     }
+    return false
   }
 
   func toggleLike() async {
@@ -128,6 +131,7 @@ public struct PostDetailNativeView: View {
   @Environment(\.dismiss) private var dismiss
   @StateObject private var model: PostDetailModel
   @State private var draft = ""
+  @State private var isSendingComment = false
   private var mediaHeight: CGFloat {
     let maxHeight = max(300, UIScreen.main.bounds.height * 0.48)
     return min(
@@ -280,32 +284,35 @@ public struct PostDetailNativeView: View {
 
   private var commentBar: some View {
     HStack(spacing: MIRATheme.Space.md) {
-      TextField("Add comment...", text: $draft, axis: .vertical)
+      TextField("Add a comment...", text: $draft, axis: .vertical)
         .font(.system(size: 15, weight: .regular))
         .padding(.horizontal, MIRATheme.Space.md)
         .frame(minHeight: 48)
         .background(MIRATheme.Color.surfaceSoft)
         .clipShape(Capsule())
-        .onSubmit {
-          let text = draft
-          draft = ""
-          Task { await model.sendComment(text) }
-        }
+        .onSubmit(sendDraftComment)
 
-      if !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      if canSendComment || isSendingComment {
         Button {
-          let text = draft
-          draft = ""
-          Task { await model.sendComment(text) }
+          sendDraftComment()
         } label: {
-          Image(systemName: "arrow.up")
-            .font(.system(size: 17, weight: .bold))
-            .foregroundStyle(.white)
-            .frame(width: 44, height: 44)
-            .background(MIRATheme.Color.forest)
-            .clipShape(Circle())
+          Group {
+            if isSendingComment {
+              ProgressView()
+                .tint(.white)
+                .frame(width: 18, height: 18)
+            } else {
+              Image(systemName: "arrow.up")
+                .font(.system(size: 17, weight: .bold))
+                .foregroundStyle(.white)
+            }
+          }
+          .frame(width: 44, height: 44)
+          .background(MIRATheme.Color.forest)
+          .clipShape(Circle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.miraPress)
+        .disabled(!canSendComment || isSendingComment)
       }
 
       Button {
@@ -342,6 +349,25 @@ public struct PostDetailNativeView: View {
     .background(MIRATheme.Color.surface)
     .overlay(alignment: .top) {
       Rectangle().fill(MIRATheme.Color.hairline).frame(height: 0.5)
+    }
+  }
+
+  private var canSendComment: Bool {
+    !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isSendingComment
+  }
+
+  private func sendDraftComment() {
+    let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !text.isEmpty, !isSendingComment else { return }
+    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    isSendingComment = true
+    draft = ""
+    Task {
+      let didSend = await model.sendComment(text)
+      if !didSend {
+        draft = text
+      }
+      isSendingComment = false
     }
   }
 }
@@ -393,9 +419,17 @@ private func relativeAge(_ value: String?) -> String {
 }
 
 private func compact(_ value: Int) -> String {
-  if value >= 1_000_000 { return "\(value / 1_000_000)M" }
-  if value >= 1_000 { return "\(value / 1_000)K" }
+  if value >= 1_000_000 { return compactDecimal(Double(value) / 1_000_000, suffix: "M") }
+  if value >= 1_000 { return compactDecimal(Double(value) / 1_000, suffix: "K") }
   return "\(value)"
+}
+
+private func compactDecimal(_ value: Double, suffix: String) -> String {
+  let rounded = value >= 100 ? floor(value) : floor(value * 10) / 10
+  if rounded.truncatingRemainder(dividingBy: 1) == 0 {
+    return "\(Int(rounded))\(suffix)"
+  }
+  return String(format: "%.1f%@", rounded, suffix)
 }
 
 private func shareURL(for post: MIRAPost) -> URL {
