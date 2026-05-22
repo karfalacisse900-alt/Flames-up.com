@@ -8,11 +8,33 @@ enum ConversationNativeKind: Hashable {
   case group(groupId: String)
 }
 
+struct MIRAVoiceDraft: Identifiable, Hashable {
+  let url: URL
+  let duration: TimeInterval
+
+  var id: String {
+    url.absoluteString
+  }
+}
+
+private enum ChatRoomPalette {
+  static let background = Color(red: 0.958, green: 0.963, blue: 0.951)
+  static let composer = Color.white
+  static let input = Color(red: 0.974, green: 0.977, blue: 0.969)
+  static let incomingBubble = Color.white
+  static let outgoingBubble = Color(red: 0.075, green: 0.086, blue: 0.076)
+  static let outgoingSoft = Color(red: 0.160, green: 0.188, blue: 0.165)
+  static let accent = Color(red: 0.105, green: 0.135, blue: 0.110)
+  static let voice = Color(red: 0.840, green: 0.220, blue: 0.330)
+  static let hairline = Color.black.opacity(0.070)
+}
+
 @MainActor
 final class ConversationNativeModel: ObservableObject {
   @Published var messages: [MIRAMessage] = []
   @Published var presence: MIRAPresence?
   @Published var draft = ""
+  @Published var pendingVoiceDraft: MIRAVoiceDraft?
   @Published var isLoading = false
   @Published var isSending = false
   @Published var isUploading = false
@@ -114,25 +136,63 @@ final class ConversationNativeModel: ObservableObject {
     await send(content: gif.title ?? "", mediaUrl: url, mediaType: "image")
   }
 
-  func toggleVoiceRecording() async {
+  func startVoiceRecording() async {
+    guard !isRecording, pendingVoiceDraft == nil else { return }
+    do {
+      try await recorder.start()
+      isRecording = true
+      errorMessage = nil
+    } catch {
+      errorMessage = "Microphone permission is needed for voice messages."
+    }
+  }
+
+  func stopVoiceRecording() {
+    guard isRecording else { return }
+    isRecording = false
+    guard let draft = recorder.stop() else {
+      errorMessage = "No voice was recorded."
+      return
+    }
+    guard draft.duration >= 0.4 else {
+      try? FileManager.default.removeItem(at: draft.url)
+      errorMessage = "Hold a little longer to record a voice message."
+      return
+    }
+    pendingVoiceDraft = draft
+    errorMessage = nil
+  }
+
+  func cancelVoiceRecording() {
     if isRecording {
       isRecording = false
-      guard let url = recorder.stop() else { return }
-      do {
-        let data = try Data(contentsOf: url)
-        let remote = try await uploadService.uploadAudio(data: data, fileName: url.lastPathComponent)
-        await send(content: "", mediaUrl: remote, mediaType: "voice")
-      } catch {
-        errorMessage = "Could not send the voice message."
+      if let draft = recorder.stop() {
+        try? FileManager.default.removeItem(at: draft.url)
       }
-      try? FileManager.default.removeItem(at: url)
-    } else {
-      do {
-        try await recorder.start()
-        isRecording = true
-      } catch {
-        errorMessage = "Microphone permission is needed for voice messages."
-      }
+    }
+    discardVoiceDraft()
+  }
+
+  func discardVoiceDraft() {
+    if let draft = pendingVoiceDraft {
+      try? FileManager.default.removeItem(at: draft.url)
+    }
+    pendingVoiceDraft = nil
+  }
+
+  func sendVoiceDraft() async {
+    guard let draft = pendingVoiceDraft, !isUploading, !isSending else { return }
+    isUploading = true
+    defer { isUploading = false }
+    do {
+      let data = try Data(contentsOf: draft.url)
+      let remote = try await uploadService.uploadAudio(data: data, fileName: draft.url.lastPathComponent)
+      pendingVoiceDraft = nil
+      try? FileManager.default.removeItem(at: draft.url)
+      await send(content: "Voice message", mediaUrl: remote, mediaType: "voice")
+      errorMessage = nil
+    } catch {
+      errorMessage = "Could not send the voice message."
     }
   }
 
@@ -190,7 +250,7 @@ public struct ConversationNativeView: View {
 
   public var body: some View {
     ZStack {
-      MIRATheme.Color.appBackground.ignoresSafeArea()
+      ChatRoomPalette.background.ignoresSafeArea()
       ScrollViewReader { proxy in
         ScrollView {
           LazyVStack(spacing: MIRATheme.Space.md) {
@@ -222,7 +282,7 @@ public struct ConversationNativeView: View {
     .safeAreaInset(edge: .bottom, spacing: 0) {
       composerContainer
     }
-    .background(MIRATheme.Color.appBackground)
+    .background(ChatRoomPalette.background)
     .miraScreenEnter(.push)
     .navigationTitle(title)
     .navigationBarTitleDisplayMode(.inline)
@@ -285,10 +345,11 @@ public struct ConversationNativeView: View {
     } label: {
       Image(systemName: systemImage)
         .font(.system(size: 14, weight: .bold))
-        .foregroundStyle(MIRATheme.Color.forest)
+        .foregroundStyle(ChatRoomPalette.accent)
         .frame(width: 34, height: 34)
-        .background(MIRATheme.Color.forestSoft)
+        .background(Color.white)
         .clipShape(Circle())
+        .overlay(Circle().stroke(ChatRoomPalette.hairline, lineWidth: 1))
     }
     .buttonStyle(.miraPress)
   }
@@ -388,7 +449,7 @@ public struct ConversationNativeView: View {
           .padding(.horizontal, MIRATheme.Space.md)
           .padding(.top, MIRATheme.Space.xs)
           .padding(.bottom, MIRATheme.Space.xs)
-          .background(MIRATheme.Color.surface)
+          .background(ChatRoomPalette.composer)
       }
       composer
     }
@@ -402,6 +463,38 @@ public struct ConversationNativeView: View {
           .foregroundStyle(MIRATheme.Color.textMuted)
           .frame(maxWidth: .infinity, alignment: .leading)
           .padding(.horizontal, MIRATheme.Space.md)
+      }
+
+      if model.isRecording {
+        VoiceRecordingComposerBar(
+          onCancel: {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            model.cancelVoiceRecording()
+          },
+          onStop: {
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            model.stopVoiceRecording()
+          }
+        )
+        .padding(.horizontal, MIRATheme.Space.md)
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+      }
+
+      if let voiceDraft = model.pendingVoiceDraft {
+        VoiceDraftComposerPreview(
+          draft: voiceDraft,
+          isSending: model.isUploading || model.isSending,
+          onDelete: {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            model.discardVoiceDraft()
+          },
+          onSend: {
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            Task { await model.sendVoiceDraft() }
+          }
+        )
+        .padding(.horizontal, MIRATheme.Space.md)
+        .transition(.move(edge: .bottom).combined(with: .opacity))
       }
 
       if showAttachmentTray {
@@ -418,9 +511,9 @@ public struct ConversationNativeView: View {
         } label: {
           Image(systemName: showAttachmentTray ? "xmark" : "plus")
             .font(.system(size: 17, weight: .semibold))
-            .foregroundStyle(MIRATheme.Color.forest)
+            .foregroundStyle(ChatRoomPalette.accent)
             .frame(width: 38, height: 38)
-            .background(MIRATheme.Color.forestSoft)
+            .background(ChatRoomPalette.input)
             .clipShape(Circle())
         }
         .buttonStyle(.plain)
@@ -430,11 +523,11 @@ public struct ConversationNativeView: View {
           .font(.system(size: 15))
           .padding(.horizontal, MIRATheme.Space.md)
           .padding(.vertical, 11)
-          .background(MIRATheme.Color.surfaceSoft)
+          .background(ChatRoomPalette.input)
           .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
           .overlay {
             RoundedRectangle(cornerRadius: 24, style: .continuous)
-              .stroke(MIRATheme.Color.hairline, lineWidth: 1)
+              .stroke(ChatRoomPalette.hairline, lineWidth: 1)
           }
           .onChange(of: model.draft) { value in
             model.updateTyping(!value.isEmpty)
@@ -445,63 +538,93 @@ public struct ConversationNativeView: View {
       .padding(.horizontal, MIRATheme.Space.md)
       .padding(.vertical, 10)
     }
-    .background(MIRATheme.Color.surface)
-    .shadow(color: .black.opacity(0.06), radius: 18, x: 0, y: -4)
+    .background(ChatRoomPalette.composer)
+    .shadow(color: .black.opacity(0.07), radius: 22, x: 0, y: -6)
     .overlay(alignment: .top) {
-      Rectangle().fill(MIRATheme.Color.hairline).frame(height: 0.5)
+      Rectangle().fill(ChatRoomPalette.hairline).frame(height: 0.5)
     }
     .animation(.spring(response: 0.24, dampingFraction: 0.9), value: showAttachmentTray)
+    .animation(.spring(response: 0.24, dampingFraction: 0.9), value: model.isRecording)
+    .animation(.spring(response: 0.24, dampingFraction: 0.9), value: model.pendingVoiceDraft)
   }
 
   private var attachmentTray: some View {
-    HStack(spacing: 10) {
-      PhotosPicker(selection: $pickerItem, matching: .any(of: [.images, .videos])) {
-        trayButton("photo.on.rectangle", "Media")
-      }
-      .disabled(model.isUploading)
+    ScrollView(.horizontal, showsIndicators: false) {
+      HStack(spacing: 10) {
+        PhotosPicker(selection: $pickerItem, matching: .any(of: [.images, .videos])) {
+          trayButton("photo.on.rectangle", "Media")
+        }
+        .disabled(model.isUploading)
 
-      Button { showGIFPicker = true } label: {
-        trayButton("gift", "GIF")
-      }
-      .buttonStyle(.plain)
+        Button { showGIFPicker = true } label: {
+          trayButton("gift", "GIF")
+        }
+        .buttonStyle(.plain)
 
-      Button { showFileImporter = true } label: {
-        trayButton("paperclip", "File")
-      }
-      .buttonStyle(.plain)
+        Button { showFileImporter = true } label: {
+          trayButton("paperclip", "File")
+        }
+        .buttonStyle(.plain)
 
-      Button {
-        Task { await model.toggleVoiceRecording() }
-      } label: {
-        trayButton(model.isRecording ? "stop.fill" : "mic.fill", model.isRecording ? "Stop" : "Voice", tint: model.isRecording ? .red : MIRATheme.Color.textMuted)
-      }
-      .buttonStyle(.plain)
+        Button {
+          toggleVoiceRecording()
+        } label: {
+          trayButton(
+            model.isRecording ? "stop.fill" : "mic.fill",
+            model.isRecording ? "Stop" : "Voice",
+            tint: model.isRecording ? ChatRoomPalette.voice : MIRATheme.Color.textMuted
+          )
+        }
+        .buttonStyle(.plain)
 
+        if model.peerId != nil {
+          Button {
+            startCall(mode: .voice)
+          } label: {
+            trayButton("phone.fill", "Call", tint: ChatRoomPalette.accent)
+          }
+          .buttonStyle(.plain)
+        }
+      }
+      .padding(.horizontal, MIRATheme.Space.md)
     }
-    .padding(.horizontal, MIRATheme.Space.md)
   }
 
   private var composerPrimaryButton: some View {
     let hasDraft = !model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    let hasVoiceDraft = model.pendingVoiceDraft != nil
     return Button {
       UIImpactFeedbackGenerator(style: .light).impactOccurred()
       Task {
         if hasDraft {
           await model.sendText()
+        } else if hasVoiceDraft {
+          await model.sendVoiceDraft()
+        } else if model.isRecording {
+          model.stopVoiceRecording()
         } else {
-          await model.toggleVoiceRecording()
+          await model.startVoiceRecording()
         }
       }
     } label: {
-      Image(systemName: hasDraft ? "arrow.up" : (model.isRecording ? "stop.fill" : "mic.fill"))
+      Image(systemName: hasDraft || hasVoiceDraft ? "arrow.up" : (model.isRecording ? "stop.fill" : "mic.fill"))
         .font(.system(size: 16, weight: .bold))
         .foregroundStyle(.white)
         .frame(width: 38, height: 38)
-        .background(model.isRecording ? Color.red : MIRATheme.Color.forest)
+        .background(model.isRecording ? ChatRoomPalette.voice : ChatRoomPalette.accent)
         .clipShape(Circle())
     }
-    .buttonStyle(.plain)
-    .disabled(hasDraft && model.isSending)
+    .buttonStyle(.miraPress)
+    .disabled((hasDraft && model.isSending) || (hasVoiceDraft && (model.isUploading || model.isSending)))
+  }
+
+  private func toggleVoiceRecording() {
+    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    if model.isRecording {
+      model.stopVoiceRecording()
+    } else {
+      Task { await model.startVoiceRecording() }
+    }
   }
 
   private func trayButton(_ systemImage: String, _ title: String, tint: Color = MIRATheme.Color.textMuted) -> some View {
@@ -513,10 +636,166 @@ public struct ConversationNativeView: View {
     }
     .foregroundStyle(tint)
     .frame(width: 58, height: 50)
-    .background(MIRATheme.Color.surfaceSoft)
+    .background(ChatRoomPalette.input)
     .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    .overlay {
+      RoundedRectangle(cornerRadius: 16, style: .continuous)
+        .stroke(ChatRoomPalette.hairline, lineWidth: 1)
+    }
   }
 
+}
+
+private struct VoiceRecordingComposerBar: View {
+  let onCancel: () -> Void
+  let onStop: () -> Void
+  @State private var pulse = false
+
+  var body: some View {
+    HStack(spacing: MIRATheme.Space.sm) {
+      Circle()
+        .fill(ChatRoomPalette.voice)
+        .frame(width: 10, height: 10)
+        .scaleEffect(pulse ? 1.28 : 0.86)
+        .opacity(pulse ? 0.55 : 1)
+        .animation(.easeInOut(duration: 0.72).repeatForever(autoreverses: true), value: pulse)
+
+      Image(systemName: "waveform")
+        .font(.system(size: 17, weight: .semibold))
+        .foregroundStyle(ChatRoomPalette.voice)
+
+      Text("Recording voice")
+        .font(.system(size: 14, weight: .semibold))
+        .foregroundStyle(MIRATheme.Color.textPrimary)
+        .lineLimit(1)
+
+      Spacer()
+
+      Button(action: onCancel) {
+        Image(systemName: "xmark")
+          .font(.system(size: 13, weight: .bold))
+          .foregroundStyle(MIRATheme.Color.textMuted)
+          .frame(width: 34, height: 34)
+          .background(ChatRoomPalette.input)
+          .clipShape(Circle())
+      }
+      .buttonStyle(.miraPress)
+
+      Button(action: onStop) {
+        Image(systemName: "stop.fill")
+          .font(.system(size: 13, weight: .bold))
+          .foregroundStyle(.white)
+          .frame(width: 38, height: 34)
+          .background(ChatRoomPalette.voice)
+          .clipShape(Capsule())
+      }
+      .buttonStyle(.miraPress)
+    }
+    .padding(.horizontal, MIRATheme.Space.md)
+    .padding(.vertical, 10)
+    .background(Color.white)
+    .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+    .overlay {
+      RoundedRectangle(cornerRadius: 22, style: .continuous)
+        .stroke(ChatRoomPalette.hairline, lineWidth: 1)
+    }
+    .onAppear { pulse = true }
+  }
+}
+
+private struct VoiceDraftComposerPreview: View {
+  let draft: MIRAVoiceDraft
+  let isSending: Bool
+  let onDelete: () -> Void
+  let onSend: () -> Void
+  @State private var player: AVPlayer?
+  @State private var isPlaying = false
+
+  var body: some View {
+    HStack(spacing: MIRATheme.Space.sm) {
+      Button {
+        togglePlayback()
+      } label: {
+        Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+          .font(.system(size: 13, weight: .bold))
+          .foregroundStyle(.white)
+          .frame(width: 34, height: 34)
+          .background(ChatRoomPalette.accent)
+          .clipShape(Circle())
+      }
+      .buttonStyle(.miraPress)
+
+      Image(systemName: "waveform")
+        .font(.system(size: 18, weight: .semibold))
+        .foregroundStyle(ChatRoomPalette.voice)
+
+      VStack(alignment: .leading, spacing: 2) {
+        Text("Voice message")
+          .font(.system(size: 14, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+        Text(voiceDurationLabel(draft.duration))
+          .font(.system(size: 12, weight: .medium))
+          .foregroundStyle(MIRATheme.Color.textMuted)
+      }
+
+      Spacer()
+
+      Button(action: onDelete) {
+        Image(systemName: "trash")
+          .font(.system(size: 14, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textMuted)
+          .frame(width: 36, height: 36)
+          .background(ChatRoomPalette.input)
+          .clipShape(Circle())
+      }
+      .buttonStyle(.miraPress)
+      .disabled(isSending)
+
+      Button(action: onSend) {
+        Group {
+          if isSending {
+            ProgressView()
+              .tint(.white)
+          } else {
+            Image(systemName: "arrow.up")
+              .font(.system(size: 14, weight: .bold))
+          }
+        }
+        .foregroundStyle(.white)
+        .frame(width: 40, height: 36)
+        .background(ChatRoomPalette.accent)
+        .clipShape(Capsule())
+      }
+      .buttonStyle(.miraPress)
+      .disabled(isSending)
+    }
+    .padding(.horizontal, MIRATheme.Space.md)
+    .padding(.vertical, 10)
+    .background(Color.white)
+    .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+    .overlay {
+      RoundedRectangle(cornerRadius: 22, style: .continuous)
+        .stroke(ChatRoomPalette.hairline, lineWidth: 1)
+    }
+    .onDisappear {
+      player?.pause()
+      isPlaying = false
+    }
+  }
+
+  private func togglePlayback() {
+    if player == nil {
+      player = AVPlayer(url: draft.url)
+    }
+    if isPlaying {
+      player?.pause()
+      isPlaying = false
+    } else {
+      player?.seek(to: .zero)
+      player?.play()
+      isPlaying = true
+    }
+  }
 }
 
 private struct MessageBubbleContent: View {
@@ -529,7 +808,7 @@ private struct MessageBubbleContent: View {
       if let mediaUrl = message.mediaUrl, !mediaUrl.isEmpty {
         mediaContent(url: mediaUrl)
       }
-      if let content = message.content?.trimmingCharacters(in: .whitespacesAndNewlines), !content.isEmpty {
+      if shouldShowTextContent, let content = message.content?.trimmingCharacters(in: .whitespacesAndNewlines), !content.isEmpty {
         Text(content)
           .font(.system(size: 15, weight: .regular))
           .foregroundStyle(outgoing ? .white : MIRATheme.Color.textPrimary)
@@ -541,19 +820,25 @@ private struct MessageBubbleContent: View {
     .padding(.horizontal, hasLargeMedia ? 6 : MIRATheme.Space.md)
     .padding(.vertical, hasLargeMedia ? 6 : MIRATheme.Space.sm)
     .frame(maxWidth: maxWidth, alignment: outgoing ? .trailing : .leading)
-    .background(outgoing ? MIRATheme.Color.forest : MIRATheme.Color.surface)
-    .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+    .background(outgoing ? ChatRoomPalette.outgoingBubble : ChatRoomPalette.incomingBubble)
+    .clipShape(RoundedRectangle(cornerRadius: hasLargeMedia ? 18 : 21, style: .continuous))
     .overlay {
       if !outgoing {
-        RoundedRectangle(cornerRadius: 20, style: .continuous)
-          .stroke(MIRATheme.Color.hairline, lineWidth: 1)
+        RoundedRectangle(cornerRadius: hasLargeMedia ? 18 : 21, style: .continuous)
+          .stroke(ChatRoomPalette.hairline, lineWidth: 1)
       }
     }
+    .shadow(color: .black.opacity(outgoing ? 0.045 : 0.035), radius: 10, x: 0, y: 4)
   }
 
   private var hasLargeMedia: Bool {
     guard let mediaType = message.mediaType?.lowercased() else { return false }
     return mediaType == "image" || mediaType == "video"
+  }
+
+  private var shouldShowTextContent: Bool {
+    let mediaType = message.mediaType?.lowercased()
+    return mediaType != "voice" && mediaType != "audio"
   }
 
   @ViewBuilder
@@ -592,13 +877,22 @@ private struct VoicePlaybackPill: View {
     } label: {
       HStack(spacing: MIRATheme.Space.sm) {
         Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+          .font(.system(size: 11, weight: .bold))
+          .foregroundStyle(outgoing ? ChatRoomPalette.outgoingBubble : .white)
+          .frame(width: 28, height: 28)
+          .background(outgoing ? Color.white : ChatRoomPalette.accent)
+          .clipShape(Circle())
         Image(systemName: "waveform")
+          .font(.system(size: 18, weight: .semibold))
         Text("Voice message")
+          .lineLimit(1)
       }
       .font(.system(size: 14, weight: .semibold))
       .foregroundStyle(outgoing ? .white : MIRATheme.Color.textPrimary)
+      .padding(.trailing, 4)
     }
     .buttonStyle(.plain)
+    .contentShape(Rectangle())
   }
 
   private func toggle() {
@@ -696,8 +990,16 @@ private struct ChatGIFPickerSheet: View {
   }
 }
 
+private func voiceDurationLabel(_ duration: TimeInterval) -> String {
+  let totalSeconds = max(0, Int(duration.rounded()))
+  let minutes = totalSeconds / 60
+  let seconds = totalSeconds % 60
+  return "\(minutes):\(String(format: "%02d", seconds))"
+}
+
 private final class MIRAVoiceRecorder: NSObject, AVAudioRecorderDelegate {
   private var recorder: AVAudioRecorder?
+  private var startedAt: Date?
 
   func start() async throws {
     let granted = await withCheckedContinuation { continuation in
@@ -707,7 +1009,7 @@ private final class MIRAVoiceRecorder: NSObject, AVAudioRecorderDelegate {
     }
     guard granted else { throw MIRARecorderError.permissionDenied }
     let session = AVAudioSession.sharedInstance()
-    try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetooth])
+    try session.setCategory(.playAndRecord, mode: .spokenAudio, options: [.defaultToSpeaker, .allowBluetooth, .allowBluetoothA2DP])
     try session.setActive(true)
     let url = FileManager.default.temporaryDirectory.appendingPathComponent("mira-voice-\(UUID().uuidString).m4a")
     let settings: [String: Any] = [
@@ -718,17 +1020,29 @@ private final class MIRAVoiceRecorder: NSObject, AVAudioRecorderDelegate {
     ]
     recorder = try AVAudioRecorder(url: url, settings: settings)
     recorder?.delegate = self
-    recorder?.record()
+    recorder?.isMeteringEnabled = true
+    recorder?.prepareToRecord()
+    startedAt = Date()
+    guard recorder?.record() == true else {
+      recorder = nil
+      startedAt = nil
+      throw MIRARecorderError.failedToStart
+    }
   }
 
-  func stop() -> URL? {
-    let url = recorder?.url
+  func stop() -> MIRAVoiceDraft? {
+    guard let recorder else { return nil }
+    let url = recorder.url
+    let duration = max(recorder.currentTime, startedAt.map { Date().timeIntervalSince($0) } ?? 0)
     recorder?.stop()
     recorder = nil
-    return url
+    startedAt = nil
+    try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    return MIRAVoiceDraft(url: url, duration: duration)
   }
 }
 
 private enum MIRARecorderError: Error {
   case permissionDenied
+  case failedToStart
 }
