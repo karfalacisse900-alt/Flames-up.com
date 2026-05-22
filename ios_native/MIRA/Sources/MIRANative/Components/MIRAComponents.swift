@@ -371,7 +371,7 @@ public struct RemoteMediaView: View {
   public var body: some View {
     Group {
       if isVideo {
-        MIRAResolvedVideoPlayer(url: url, shouldPlay: shouldPlay, onMeasuredRatio: onMeasuredRatio)
+        MIRAResolvedVideoPlayer(url: url, contentMode: contentMode, shouldPlay: shouldPlay, onMeasuredRatio: onMeasuredRatio)
           .background(Color.clear)
       } else {
         MIRACachedImage(url: url, onImageLoaded: reportRatio) { image in
@@ -405,6 +405,7 @@ public struct RemoteMediaView: View {
 
 private struct MIRAResolvedVideoPlayer: View {
   let url: String
+  let contentMode: ContentMode
   let shouldPlay: Bool
   let onMeasuredRatio: (CGFloat) -> Void
   @State private var player: AVPlayer?
@@ -419,20 +420,20 @@ private struct MIRAResolvedVideoPlayer: View {
     ZStack {
       if let thumbnailURL {
         MIRACachedImage(url: thumbnailURL, onImageLoaded: reportRatio) { image in
-          image.resizable().scaledToFill()
+          image.resizable().aspectRatio(contentMode: contentMode)
         } placeholder: {
           placeholder
         }
       } else if let generatedThumbnail {
         Image(uiImage: generatedThumbnail)
           .resizable()
-          .scaledToFill()
+          .aspectRatio(contentMode: contentMode)
       } else if player == nil {
         placeholder
       }
 
       if let player {
-        MIRAFillVideoPlayer(player: player)
+        MIRAVideoPlayerView(player: player, contentMode: contentMode)
           .onAppear { syncPlayback(player) }
           .onDisappear {
             player.pause()
@@ -666,15 +667,16 @@ private struct MIRAResolvedVideoPlayer: View {
   }
 }
 
-private struct MIRAFillVideoPlayer: UIViewRepresentable {
+private struct MIRAVideoPlayerView: UIViewRepresentable {
   let player: AVPlayer
+  let contentMode: ContentMode
 
   func makeUIView(context: Context) -> PlayerView {
     let view = PlayerView()
     view.backgroundColor = .clear
     view.playerLayer.player = player
     view.playerLayer.backgroundColor = UIColor.clear.cgColor
-    view.playerLayer.videoGravity = .resizeAspectFill
+    view.playerLayer.videoGravity = videoGravity
     return view
   }
 
@@ -682,7 +684,16 @@ private struct MIRAFillVideoPlayer: UIViewRepresentable {
     uiView.backgroundColor = .clear
     uiView.playerLayer.player = player
     uiView.playerLayer.backgroundColor = UIColor.clear.cgColor
-    uiView.playerLayer.videoGravity = .resizeAspectFill
+    uiView.playerLayer.videoGravity = videoGravity
+  }
+
+  private var videoGravity: AVLayerVideoGravity {
+    switch contentMode {
+    case .fit:
+      return .resizeAspect
+    case .fill:
+      return .resizeAspectFill
+    }
   }
 
   final class PlayerView: UIView {
@@ -770,7 +781,113 @@ public struct MIRAAdaptiveMediaView: View {
   }
 }
 
+public struct MIRAMediaViewerPresentation: Identifiable, Hashable {
+  public let id = UUID()
+  public let urls: [String]
+  public let initialIndex: Int
+
+  public init(urls: [String], initialIndex: Int = 0) {
+    self.urls = urls
+    self.initialIndex = initialIndex
+  }
+}
+
+public struct MIRAFullScreenMediaViewer: View {
+  @Environment(\.dismiss) private var dismiss
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  private let urls: [String]
+  private let initialIndex: Int
+  @State private var selectedIndex: Int
+  @State private var isVisible = false
+
+  public init(urls: [String], initialIndex: Int = 0) {
+    self.urls = urls
+    self.initialIndex = initialIndex
+    _selectedIndex = State(initialValue: min(max(initialIndex, 0), max(0, urls.count - 1)))
+  }
+
+  public var body: some View {
+    ZStack {
+      Color.black.ignoresSafeArea()
+
+      TabView(selection: $selectedIndex) {
+        ForEach(Array(urls.enumerated()), id: \.offset) { index, url in
+          RemoteMediaView(
+            url: url,
+            isVideo: url.isVideoURL,
+            contentMode: .fit,
+            shouldPlay: selectedIndex == index
+          )
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+          .contentShape(Rectangle())
+          .tag(index)
+        }
+      }
+      .tabViewStyle(.page(indexDisplayMode: .never))
+      .ignoresSafeArea()
+
+      VStack(spacing: 0) {
+        HStack {
+          Button(action: close) {
+            Image(systemName: "xmark")
+              .font(.system(size: 17, weight: .bold))
+              .foregroundStyle(.white)
+              .frame(width: 44, height: 44)
+              .background(.black.opacity(0.34))
+              .clipShape(Circle())
+          }
+          .buttonStyle(.miraPress)
+          .accessibilityLabel("Close media viewer")
+
+          Spacer()
+        }
+        .padding(.horizontal, MIRATheme.Space.md)
+        .padding(.top, MIRATheme.Space.sm)
+
+        Spacer()
+
+        if urls.count > 1 {
+          HStack(spacing: 7) {
+            ForEach(urls.indices, id: \.self) { index in
+              Capsule()
+                .fill(index == selectedIndex ? Color(red: 0.0, green: 0.48, blue: 1.0) : .white.opacity(0.34))
+                .frame(width: index == selectedIndex ? 18 : 6, height: 6)
+            }
+          }
+          .padding(.horizontal, 12)
+          .padding(.vertical, 8)
+          .background(.black.opacity(0.28))
+          .clipShape(Capsule())
+          .padding(.bottom, MIRATheme.Space.lg)
+          .animation(.easeInOut(duration: 0.18), value: selectedIndex)
+        }
+      }
+    }
+    .opacity(isVisible ? 1 : 0)
+    .scaleEffect(isVisible || reduceMotion ? 1 : 0.985)
+    .onAppear {
+      selectedIndex = min(max(initialIndex, 0), max(0, urls.count - 1))
+      withAnimation(.easeOut(duration: reduceMotion ? 0.08 : 0.24)) {
+        isVisible = true
+      }
+    }
+  }
+
+  private func close() {
+    withAnimation(.easeInOut(duration: reduceMotion ? 0.08 : 0.2)) {
+      isVisible = false
+    }
+    DispatchQueue.main.asyncAfter(deadline: .now() + (reduceMotion ? 0.08 : 0.18)) {
+      dismiss()
+    }
+  }
+}
+
 public enum MIRAMediaSizing {
+  public static let feedPreviewRatio: CGFloat = 5.0 / 4.0
+  public static let profileGridRatio: CGFloat = 5.0 / 4.0
+  public static let fullVerticalRatio: CGFloat = 16.0 / 9.0
+
   public static func feedHeight(
     for urls: [String],
     aspectRatios: [CGFloat] = [],
@@ -807,11 +924,9 @@ public enum MIRAMediaSizing {
     aspectRatios: [CGFloat] = [],
     width: CGFloat = UIScreen.main.bounds.width
   ) -> CGFloat {
-    let ideal = feedHeight(for: urls, aspectRatios: aspectRatios, width: width)
-    // Keep the feed action row visible for tall 9:16 posts instead of letting media
-    // consume the whole viewport.
-    let visibleActionSafeHeight = max(width * 1.25, UIScreen.main.bounds.height * 0.56)
-    return min(ideal, visibleActionSafeHeight)
+    // Main feed media is always a 4:5 preview. The original media remains intact
+    // and can be viewed uncropped in the full-screen viewer.
+    width * feedPreviewRatio
   }
 
   public static func detailHeight(

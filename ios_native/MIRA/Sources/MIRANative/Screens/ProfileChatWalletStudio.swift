@@ -68,6 +68,9 @@ private struct ProfileGridSkeleton: View {
   private var gridTileSize: CGFloat {
     floor((UIScreen.main.bounds.width - 2) / 3)
   }
+  private var gridTileHeight: CGFloat {
+    gridTileSize * MIRAMediaSizing.profileGridRatio
+  }
   private var columns: [GridItem] {
     Array(repeating: GridItem(.fixed(gridTileSize), spacing: 1), count: 3)
   }
@@ -77,7 +80,7 @@ private struct ProfileGridSkeleton: View {
       ForEach(0..<9, id: \.self) { _ in
         Rectangle()
           .fill(MIRATheme.Color.surfaceSoft)
-          .frame(width: gridTileSize, height: gridTileSize)
+          .frame(width: gridTileSize, height: gridTileHeight)
       }
     }
     .frame(width: UIScreen.main.bounds.width, alignment: .center)
@@ -88,6 +91,7 @@ private struct ProfileGridSkeleton: View {
 public struct ProfileNativeView: View {
   @StateObject private var model: ProfileNativeModel
   @State private var showEditProfile = false
+  @State private var activeMediaViewer: MIRAMediaViewerPresentation?
   private let authSession: MIRAAuthSession?
   private var gridTileSize: CGFloat {
     floor((UIScreen.main.bounds.width - 2) / 3)
@@ -111,9 +115,14 @@ public struct ProfileNativeView: View {
           } else {
             LazyVGrid(columns: postGridColumns, spacing: 1) {
               ForEach(model.posts) { post in
-                ProfilePostTile(post: post, size: gridTileSize) {
-                  Task { await model.deletePost(post) }
-                }
+                ProfilePostTile(
+                  post: post,
+                  size: gridTileSize,
+                  onDelete: { Task { await model.deletePost(post) } },
+                  onOpenMedia: {
+                    activeMediaViewer = MIRAMediaViewerPresentation(urls: post.mediaURLs, initialIndex: 0)
+                  }
+                )
               }
             }
             .frame(width: UIScreen.main.bounds.width, alignment: .center)
@@ -155,6 +164,9 @@ public struct ProfileNativeView: View {
             await model.applyUpdatedUser(updated)
           }
         }
+      }
+      .fullScreenCover(item: $activeMediaViewer) { viewer in
+        MIRAFullScreenMediaViewer(urls: viewer.urls, initialIndex: viewer.initialIndex)
       }
     }
   }
@@ -264,6 +276,7 @@ final class UserProfileNativeModel: ObservableObject {
 
 public struct UserProfileNativeView: View {
   @StateObject private var model: UserProfileNativeModel
+  @State private var activeMediaViewer: MIRAMediaViewerPresentation?
   private var gridTileSize: CGFloat {
     floor((UIScreen.main.bounds.width - 2) / 3)
   }
@@ -288,7 +301,13 @@ public struct UserProfileNativeView: View {
         } else {
           LazyVGrid(columns: postGridColumns, spacing: 1) {
             ForEach(model.posts) { post in
-              ProfilePostTile(post: post, size: gridTileSize)
+              ProfilePostTile(
+                post: post,
+                size: gridTileSize,
+                onOpenMedia: {
+                  activeMediaViewer = MIRAMediaViewerPresentation(urls: post.mediaURLs, initialIndex: 0)
+                }
+              )
             }
           }
           .frame(width: UIScreen.main.bounds.width, alignment: .center)
@@ -302,6 +321,9 @@ public struct UserProfileNativeView: View {
     .navigationTitle(model.user?.displayName ?? "Profile")
     .navigationBarTitleDisplayMode(.inline)
     .task { await model.load() }
+    .fullScreenCover(item: $activeMediaViewer) { viewer in
+      MIRAFullScreenMediaViewer(urls: viewer.urls, initialIndex: viewer.initialIndex)
+    }
   }
 
   private var profileHeader: some View {
@@ -375,6 +397,11 @@ private struct ProfilePostTile: View {
   let post: MIRAPost
   let size: CGFloat
   var onDelete: (() -> Void)? = nil
+  var onOpenMedia: (() -> Void)? = nil
+
+  private var height: CGFloat {
+    size * MIRAMediaSizing.profileGridRatio
+  }
 
   var body: some View {
     ZStack {
@@ -404,9 +431,13 @@ private struct ProfilePostTile: View {
         }
       }
     }
-    .frame(width: size, height: size)
+    .frame(width: size, height: height)
     .clipped()
     .contentShape(Rectangle())
+    .onTapGesture {
+      guard !post.mediaURLs.isEmpty else { return }
+      onOpenMedia?()
+    }
   }
 }
 

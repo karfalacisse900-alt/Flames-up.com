@@ -330,6 +330,7 @@ public struct MainFeedView: View {
   @State private var scrollIntentDirection = 0
   @State private var isShowingCreatePost = false
   @State private var activeCommentsPost: MIRAPost?
+  @State private var activeMediaViewer: MIRAMediaViewerPresentation?
 
   public init(api: MIRAAPIClient) {
     _model = StateObject(wrappedValue: MainFeedModel(api: api))
@@ -359,6 +360,9 @@ public struct MainFeedView: View {
                   onLike: { Task { await model.toggleLike(post) } },
                   onSave: { Task { await model.toggleSave(post) } },
                   onComment: { activeCommentsPost = post },
+                  onOpenMedia: { index in
+                    activeMediaViewer = MIRAMediaViewerPresentation(urls: post.mediaURLs, initialIndex: index)
+                  },
                   onFollow: { Task { await model.toggleFollowAuthor(post) } },
                   onNotInterested: { model.hidePost(post) },
                   onReport: { Task { await model.reportPost(post) } },
@@ -407,6 +411,9 @@ public struct MainFeedView: View {
           .presentationDetents([.medium, .large])
           .presentationDragIndicator(.visible)
           .presentationCornerRadius(28)
+      }
+      .fullScreenCover(item: $activeMediaViewer) { viewer in
+        MIRAFullScreenMediaViewer(urls: viewer.urls, initialIndex: viewer.initialIndex)
       }
       .task { await model.load() }
       .onReceive(NotificationCenter.default.publisher(for: .miraPostEngagementDidChange)) { notification in
@@ -501,6 +508,7 @@ private struct MainNativePostCard: View {
   let onLike: () -> Void
   let onSave: () -> Void
   let onComment: () -> Void
+  let onOpenMedia: (Int) -> Void
   let onFollow: () -> Void
   let onNotInterested: () -> Void
   let onReport: () -> Void
@@ -586,6 +594,7 @@ private struct MainNativePostCard: View {
       .frame(height: mediaHeight)
       .clipped()
       .contentShape(Rectangle())
+      .onTapGesture { onOpenMedia(0) }
     } else {
       VStack(spacing: 7) {
         TabView(selection: $selectedMediaIndex) {
@@ -600,6 +609,7 @@ private struct MainNativePostCard: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()
             .contentShape(Rectangle())
+            .onTapGesture { onOpenMedia(index) }
             .tag(index)
           }
         }
