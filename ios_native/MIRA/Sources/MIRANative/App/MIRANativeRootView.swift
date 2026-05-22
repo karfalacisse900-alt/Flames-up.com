@@ -48,7 +48,7 @@ public struct MIRANativeRootView: View {
             .tabItem { Label("Discover", systemImage: "safari.fill") }
 
           lazyTab(.chat) {
-            ChatNativeView(api: api)
+            ChatNativeView(api: api, currentUserId: authSession.user?.id ?? "")
           }
             .tag(MIRATab.chat)
             .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right.fill") }

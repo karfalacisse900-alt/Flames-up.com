@@ -2442,8 +2442,32 @@ function contentTypeExtension(contentType: string, fallback = 'bin'): string {
     'audio/mpeg': 'mp3',
     'audio/wav': 'wav',
     'audio/webm': 'webm',
+    'application/pdf': 'pdf',
+    'text/plain': 'txt',
+    'application/zip': 'zip',
+    'application/msword': 'doc',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+    'application/vnd.ms-powerpoint': 'ppt',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'pptx',
+    'application/vnd.ms-excel': 'xls',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
   };
   return map[normalized] || fallback;
+}
+
+function contentTypeFromFilename(value: unknown): string {
+  const map: Record<string, string> = {
+    pdf: 'application/pdf',
+    txt: 'text/plain',
+    zip: 'application/zip',
+    doc: 'application/msword',
+    docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    ppt: 'application/vnd.ms-powerpoint',
+    pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    xls: 'application/vnd.ms-excel',
+    xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  };
+  return map[fileExtension(value)] || '';
 }
 
 function bytesToArrayBuffer(bytes: Uint8Array): ArrayBuffer {
@@ -2470,9 +2494,21 @@ function normalizedContentType(value: unknown): string {
 const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/webp']);
 const ALLOWED_VIDEO_TYPES = new Set(['video/mp4', 'video/quicktime', 'video/webm']);
 const ALLOWED_AUDIO_TYPES = new Set(['audio/m4a', 'audio/mp4', 'audio/aac', 'audio/mpeg', 'audio/wav', 'audio/webm']);
+const ALLOWED_FILE_TYPES = new Set([
+  'application/pdf',
+  'text/plain',
+  'application/zip',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-powerpoint',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+]);
 const ALLOWED_IMAGE_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'webp']);
 const ALLOWED_VIDEO_EXTENSIONS = new Set(['mp4', 'mov', 'webm']);
 const ALLOWED_AUDIO_EXTENSIONS = new Set(['m4a', 'aac', 'mp3', 'wav', 'webm']);
+const ALLOWED_FILE_EXTENSIONS = new Set(['pdf', 'txt', 'zip', 'doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx']);
 
 function fileExtension(value: unknown): string {
   const match = /\.([a-z0-9]{1,12})$/i.exec(String(value || '').split(/[?#]/)[0]);
@@ -2646,7 +2682,7 @@ function preserveOriginalImage(bytes: Uint8Array, contentType: string) {
 async function storeMediaBackup(c: any, opts: {
   userId: string;
   postId?: string | null;
-  mediaKind: 'image' | 'video' | 'audio';
+  mediaKind: 'image' | 'video' | 'audio' | 'file';
   provider: string;
   providerId?: string;
   deliveryUrl?: string;
@@ -2659,7 +2695,7 @@ async function storeMediaBackup(c: any, opts: {
 
   const id = uuid();
   const date = new Date().toISOString().slice(0, 10);
-  const ext = contentTypeExtension(opts.contentType, opts.mediaKind === 'image' ? 'jpg' : opts.mediaKind === 'audio' ? 'm4a' : 'mp4');
+  const ext = contentTypeExtension(opts.contentType, opts.mediaKind === 'image' ? 'jpg' : opts.mediaKind === 'audio' ? 'm4a' : opts.mediaKind === 'file' ? 'bin' : 'mp4');
   const key = `users/${opts.userId}/${date}/${id}.${ext}`;
   const buffer = opts.bytes instanceof Uint8Array ? bytesToArrayBuffer(opts.bytes) : opts.bytes;
   const checksum = await sha256BinaryHex(buffer);
@@ -6579,6 +6615,8 @@ api.get('/conversations', authMiddleware, async (c) => {
     if (!map.has(oid)) {
       let preview = m.content || '';
       if (!preview && m.media_type === 'video') preview = 'Sent a video';
+      else if (!preview && m.media_type === 'voice') preview = 'Sent a voice message';
+      else if (!preview && m.media_type === 'file') preview = 'Sent a file';
       else if (!preview && (m.media_url || m.image)) preview = 'Sent a photo';
       map.set(oid, {
         id: `conv-${oid}`,
@@ -6609,6 +6647,8 @@ api.get('/conversations', authMiddleware, async (c) => {
         g.created_at,
         COUNT(all_members.user_id) AS member_count,
         last_message.content AS last_message,
+        last_message.media_url AS last_media_url,
+        last_message.media_type AS last_media_type,
         last_message.created_at AS last_message_time,
         sender.username AS last_sender_username
       FROM group_chats g
@@ -6628,9 +6668,15 @@ api.get('/conversations', authMiddleware, async (c) => {
       group_id: g.id,
       group_name: g.name,
       member_count: Number(g.member_count || 0),
-      last_message: g.last_message
-        ? `${g.last_sender_username || 'Someone'}: ${g.last_message}`
-        : 'Group created',
+      last_message: (() => {
+        const sender = g.last_sender_username || 'Someone';
+        if (g.last_message) return `${sender}: ${g.last_message}`;
+        if (g.last_media_type === 'video') return `${sender}: Sent a video`;
+        if (g.last_media_type === 'voice') return `${sender}: Sent a voice message`;
+        if (g.last_media_type === 'file') return `${sender}: Sent a file`;
+        if (g.last_media_url) return `${sender}: Sent a photo`;
+        return 'Group created';
+      })(),
       last_message_time: g.last_message_time || g.created_at,
       unread_count: 0,
     }));
@@ -6664,7 +6710,9 @@ api.post('/messages', authMiddleware, async (c) => {
     ? 'video'
     : requestedMediaType.includes('voice') || requestedMediaType.includes('audio')
       ? 'voice'
-      : mediaUrl ? 'image' : null;
+      : requestedMediaType.includes('file') || requestedMediaType.includes('document')
+        ? 'file'
+        : mediaUrl ? 'image' : null;
   if (!receiverId || receiverId === userId) return c.json({ detail: 'Choose a valid recipient.' }, 400);
   if (!content && !mediaUrl) return c.json({ detail: 'Message is empty.' }, 400);
   const recipient = await c.env.DB.prepare('SELECT id FROM users WHERE id = ?').bind(receiverId).first();
@@ -6692,6 +6740,8 @@ api.post('/messages', authMiddleware, async (c) => {
       ? 'Sent you a voice message'
       : mediaType === 'video'
         ? 'Sent you a video'
+        : mediaType === 'file'
+          ? 'Sent you a file'
         : mediaUrl
           ? 'Sent you a photo'
           : cleanText(content, 120);
@@ -6759,8 +6809,6 @@ api.get('/messages/:userId', authMiddleware, async (c) => {
 });
 
 api.post('/group-chats', authMiddleware, async (c) => {
-  const phoneGate = await requirePhoneVerified(c, 'create group chats');
-  if (phoneGate) return phoneGate;
   const userId = getUserId(c);
   const body: any = await c.req.json().catch(() => ({}));
   const memberIds = Array.isArray(body.member_ids)
@@ -6814,8 +6862,6 @@ api.get('/group-chats/:groupId/messages', authMiddleware, async (c) => {
 });
 
 api.post('/group-chats/:groupId/messages', authMiddleware, async (c) => {
-  const phoneGate = await requirePhoneVerified(c, 'send group messages');
-  if (phoneGate) return phoneGate;
   const userId = getUserId(c);
   const groupId = c.req.param('groupId');
   if (!await requireGroupMember(c, groupId, userId)) return c.json({ detail: 'Group not found' }, 404);
@@ -6827,7 +6873,9 @@ api.post('/group-chats/:groupId/messages', authMiddleware, async (c) => {
     ? 'video'
     : requestedMediaType.includes('voice') || requestedMediaType.includes('audio')
       ? 'voice'
-      : mediaUrl ? 'image' : null;
+      : requestedMediaType.includes('file') || requestedMediaType.includes('document')
+        ? 'file'
+        : mediaUrl ? 'image' : null;
   if (!content && !mediaUrl) return c.json({ detail: 'Message is empty' }, 400);
 
   const id = uuid();
@@ -9297,6 +9345,61 @@ api.post('/upload/base64-image', authMiddleware, async (c) => {
     body: JSON.stringify(body),
   });
   return api.fetch(newReq, c.env);
+});
+
+api.post('/upload/file', authMiddleware, async (c) => {
+  try {
+    const userId = getUserId(c);
+    const bodyTooLarge = rejectLargeRequest(c, 26_000_000);
+    if (bodyTooLarge) return bodyTooLarge;
+    const limited = await enforceRateLimit(c, 'upload_file', userId, 25, 60);
+    if (limited) return limited;
+    const dailyLimited = await enforceRateLimit(c, 'upload_file_daily', userId, 120, 86400);
+    if (dailyLimited) return dailyLimited;
+
+    const formData = await c.req.raw.formData();
+    const file = formData.get('file') as unknown as {
+      type?: string;
+      size?: number;
+      name?: string;
+      arrayBuffer?: () => Promise<ArrayBuffer>;
+    } | null;
+    if (!file || typeof file !== 'object' || typeof file.arrayBuffer !== 'function') {
+      return c.json({ detail: 'No file provided' }, 400);
+    }
+
+    const fileType = normalizedContentType(file.type || '') || contentTypeFromFilename(file.name);
+    const fileSize = Number(file.size || 0);
+    if (!ALLOWED_FILE_TYPES.has(fileType) || !extensionAllowed(file.name, ALLOWED_FILE_EXTENSIONS)) {
+      return c.json({ detail: 'Unsupported file type. Use PDF, TXT, ZIP, Word, PowerPoint, or Excel files.' }, 400);
+    }
+    if (fileSize > 24_000_000) {
+      return c.json({ detail: 'File is too large.', max_bytes: 24_000_000 }, 413);
+    }
+
+    const bytes = await file.arrayBuffer();
+    const backup = await storeMediaBackup(c, {
+      userId,
+      mediaKind: 'file',
+      provider: 'r2_file',
+      contentType: fileType,
+      bytes,
+      originalFilename: file.name || `file.${contentTypeExtension(fileType, 'bin')}`,
+    });
+    if (!backup) return c.json({ detail: 'Media storage is not configured.' }, 503);
+
+    return c.json({
+      url: backup.delivery_url,
+      id: backup.id,
+      source: 'r2_file',
+      backup_id: backup.id,
+      size_bytes: backup.size_bytes,
+      checksum_sha256: backup.checksum_sha256,
+    });
+  } catch (e: any) {
+    console.error('File upload failed:', getErrorCode(e));
+    return c.json({ detail: 'File upload failed. Please try again.' }, 500);
+  }
 });
 
 api.post('/upload/audio', authMiddleware, async (c) => {

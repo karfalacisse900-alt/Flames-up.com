@@ -356,6 +356,9 @@ public struct MIRAConversation: Codable, Identifiable, Hashable {
   public let otherUsername: String?
   public let otherFullName: String?
   public let otherProfileImage: String?
+  public let otherLastSeenAt: String?
+  public let otherIsOnline: Bool?
+  public let otherIsTyping: Bool?
   public let lastMessage: String?
   public let lastMessageTime: String?
   public let updatedAt: String?
@@ -367,16 +370,122 @@ public struct MIRAConversation: Codable, Identifiable, Hashable {
   public var displayName: String {
     groupName?.isEmpty == false ? groupName! : (otherUsername?.isEmpty == false ? otherUsername! : (otherFullName ?? "Chat"))
   }
+
+  public var isGroup: Bool {
+    type == "group" || groupId != nil
+  }
+
+  enum CodingKeys: String, CodingKey {
+    case id, type
+    case otherUser
+    case otherUserId, otherUsername, otherFullName, otherProfileImage, otherLastSeenAt, otherIsOnline, otherIsTyping
+    case lastMessage, lastMessageTime, updatedAt, unreadCount
+    case groupId, groupName, memberCount
+  }
+
+  enum OtherUserKeys: String, CodingKey {
+    case id, username, fullName, profileImage, lastSeenAt, isOnline, isTyping
+  }
+
+  public init(
+    id: String,
+    type: String?,
+    otherUserId: String?,
+    otherUsername: String?,
+    otherFullName: String?,
+    otherProfileImage: String?,
+    otherLastSeenAt: String?,
+    otherIsOnline: Bool?,
+    otherIsTyping: Bool?,
+    lastMessage: String?,
+    lastMessageTime: String?,
+    updatedAt: String?,
+    unreadCount: Int?,
+    groupId: String?,
+    groupName: String?,
+    memberCount: Int?
+  ) {
+    self.id = id
+    self.type = type
+    self.otherUserId = otherUserId
+    self.otherUsername = otherUsername
+    self.otherFullName = otherFullName
+    self.otherProfileImage = otherProfileImage
+    self.otherLastSeenAt = otherLastSeenAt
+    self.otherIsOnline = otherIsOnline
+    self.otherIsTyping = otherIsTyping
+    self.lastMessage = lastMessage
+    self.lastMessageTime = lastMessageTime
+    self.updatedAt = updatedAt
+    self.unreadCount = unreadCount
+    self.groupId = groupId
+    self.groupName = groupName
+    self.memberCount = memberCount
+  }
+
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    id = try container.decode(String.self, forKey: .id)
+    type = try? container.decodeIfPresent(String.self, forKey: .type)
+    lastMessage = try? container.decodeIfPresent(String.self, forKey: .lastMessage)
+    lastMessageTime = try? container.decodeIfPresent(String.self, forKey: .lastMessageTime)
+    updatedAt = try? container.decodeIfPresent(String.self, forKey: .updatedAt)
+    unreadCount = try? container.decodeIfPresent(Int.self, forKey: .unreadCount)
+    groupId = try? container.decodeIfPresent(String.self, forKey: .groupId)
+    groupName = try? container.decodeIfPresent(String.self, forKey: .groupName)
+    memberCount = try? container.decodeIfPresent(Int.self, forKey: .memberCount)
+
+    let nested = try? container.nestedContainer(keyedBy: OtherUserKeys.self, forKey: .otherUser)
+    func nestedString(_ key: OtherUserKeys) -> String? {
+      guard let nested else { return nil }
+      return try? nested.decodeIfPresent(String.self, forKey: key)
+    }
+    func nestedBool(_ key: OtherUserKeys) -> Bool? {
+      guard let nested else { return nil }
+      return try? nested.decodeIfPresent(Bool.self, forKey: key)
+    }
+    otherUserId = (try? container.decodeIfPresent(String.self, forKey: .otherUserId)) ?? nestedString(.id)
+    otherUsername = (try? container.decodeIfPresent(String.self, forKey: .otherUsername)) ?? nestedString(.username)
+    otherFullName = (try? container.decodeIfPresent(String.self, forKey: .otherFullName)) ?? nestedString(.fullName)
+    otherProfileImage = (try? container.decodeIfPresent(String.self, forKey: .otherProfileImage)) ?? nestedString(.profileImage)
+    otherLastSeenAt = (try? container.decodeIfPresent(String.self, forKey: .otherLastSeenAt)) ?? nestedString(.lastSeenAt)
+    otherIsOnline = (try? container.decodeIfPresent(Bool.self, forKey: .otherIsOnline)) ?? nestedBool(.isOnline)
+    otherIsTyping = (try? container.decodeIfPresent(Bool.self, forKey: .otherIsTyping)) ?? nestedBool(.isTyping)
+  }
+
+  public func encode(to encoder: Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(id, forKey: .id)
+    try container.encodeIfPresent(type, forKey: .type)
+    try container.encodeIfPresent(otherUserId, forKey: .otherUserId)
+    try container.encodeIfPresent(otherUsername, forKey: .otherUsername)
+    try container.encodeIfPresent(otherFullName, forKey: .otherFullName)
+    try container.encodeIfPresent(otherProfileImage, forKey: .otherProfileImage)
+    try container.encodeIfPresent(otherLastSeenAt, forKey: .otherLastSeenAt)
+    try container.encodeIfPresent(otherIsOnline, forKey: .otherIsOnline)
+    try container.encodeIfPresent(otherIsTyping, forKey: .otherIsTyping)
+    try container.encodeIfPresent(lastMessage, forKey: .lastMessage)
+    try container.encodeIfPresent(lastMessageTime, forKey: .lastMessageTime)
+    try container.encodeIfPresent(updatedAt, forKey: .updatedAt)
+    try container.encodeIfPresent(unreadCount, forKey: .unreadCount)
+    try container.encodeIfPresent(groupId, forKey: .groupId)
+    try container.encodeIfPresent(groupName, forKey: .groupName)
+    try container.encodeIfPresent(memberCount, forKey: .memberCount)
+  }
 }
 
 public struct MIRAMessage: Decodable, Identifiable, Hashable {
   public let id: String
+  public let groupId: String?
   public let senderId: String?
   public let receiverId: String?
   public let content: String?
   public let mediaUrl: String?
   public let mediaType: String?
   public let createdAt: String?
+  public let username: String?
+  public let fullName: String?
+  public let profileImage: String?
 }
 
 public struct MIRAPresence: Decodable, Hashable {
@@ -564,6 +673,52 @@ public struct CreateStatusBody: Encodable {
 public struct SendMessageBody: Encodable {
   public let receiverId: String
   public let content: String
+  public let mediaUrl: String?
+  public let mediaType: String?
+
+  public init(receiverId: String, content: String, mediaUrl: String? = nil, mediaType: String? = nil) {
+    self.receiverId = receiverId
+    self.content = content
+    self.mediaUrl = mediaUrl
+    self.mediaType = mediaType
+  }
+}
+
+public struct GroupMessageBody: Encodable {
+  public let content: String
+  public let mediaUrl: String?
+  public let mediaType: String?
+
+  public init(content: String, mediaUrl: String? = nil, mediaType: String? = nil) {
+    self.content = content
+    self.mediaUrl = mediaUrl
+    self.mediaType = mediaType
+  }
+}
+
+public struct CreateGroupChatBody: Encodable {
+  public let name: String
+  public let memberIds: [String]
+}
+
+public struct MIRAGroupChatCreatedResponse: Decodable, Hashable {
+  public let id: String
+  public let name: String?
+  public let memberCount: Int?
+  public let createdBy: String?
+  public let createdAt: String?
+}
+
+public struct MIRAGroupInfo: Decodable, Hashable {
+  public let id: String
+  public let name: String?
+  public let createdBy: String?
+  public let memberCount: Int?
+}
+
+public struct MIRAGroupMessagesResponse: Decodable, Hashable {
+  public let group: MIRAGroupInfo?
+  public let messages: [MIRAMessage]
 }
 
 public struct TypingBody: Encodable {

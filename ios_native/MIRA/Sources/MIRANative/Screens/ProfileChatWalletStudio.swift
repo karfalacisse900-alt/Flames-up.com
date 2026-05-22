@@ -333,8 +333,11 @@ final class ChatNativeModel: ObservableObject {
 
 public struct ChatNativeView: View {
   @StateObject private var model: ChatNativeModel
+  @State private var showCreateGroup = false
+  private let currentUserId: String
 
-  public init(api: MIRAAPIClient) {
+  public init(api: MIRAAPIClient, currentUserId: String = "") {
+    self.currentUserId = currentUserId
     _model = StateObject(wrappedValue: ChatNativeModel(api: api))
   }
 
@@ -345,13 +348,20 @@ public struct ChatNativeView: View {
           chatHeader
           friendStoryPlaceholder
 
-          if model.conversations.isEmpty && !model.isLoading {
+          if model.conversations.isEmpty && model.isLoading {
+            chatListSkeleton
+          } else if model.conversations.isEmpty {
             MIRAEmptyState(title: "No chats yet", message: "Friends and replies will appear here.", systemImage: "bubble.left.and.bubble.right")
           } else {
             LazyVStack(spacing: 0) {
               ForEach(model.conversations) { conversation in
-                if let peerId = conversation.otherUserId {
-                  NavigationLink(destination: ConversationNativeView(peerId: peerId, title: conversation.displayName, api: model.api)) {
+                if let groupId = conversation.groupId {
+                  NavigationLink(destination: ConversationNativeView(groupId: groupId, title: conversation.displayName, api: model.api, currentUserId: currentUserId)) {
+                    ChatConversationRow(conversation: conversation)
+                  }
+                  .buttonStyle(.plain)
+                } else if let peerId = conversation.otherUserId {
+                  NavigationLink(destination: ConversationNativeView(peerId: peerId, title: conversation.displayName, api: model.api, currentUserId: currentUserId)) {
                     ChatConversationRow(conversation: conversation)
                   }
                   .buttonStyle(.plain)
@@ -366,6 +376,13 @@ public struct ChatNativeView: View {
       }
       .background(MIRATheme.Color.appBackground)
       .task { await model.load() }
+      .sheet(isPresented: $showCreateGroup) {
+        CreateGroupChatSheet(api: model.api, currentUserId: currentUserId) {
+          showCreateGroup = false
+          Task { await model.load() }
+        }
+        .presentationDetents([.medium, .large])
+      }
     }
   }
 
@@ -375,7 +392,15 @@ public struct ChatNativeView: View {
         .font(.system(size: 30, weight: .semibold))
         .foregroundStyle(MIRATheme.Color.textPrimary)
       Spacer()
-      MIRAHeaderCircleButton(systemImage: "line.3.horizontal.decrease")
+      Button { showCreateGroup = true } label: {
+        Image(systemName: "person.2.badge.plus")
+          .font(.system(size: 17, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .frame(width: 38, height: 38)
+          .background(MIRATheme.Color.surfaceSoft)
+          .clipShape(Circle())
+      }
+      .buttonStyle(.plain)
       MIRAHeaderCircleButton(systemImage: "magnifyingglass")
     }
     .padding(.horizontal, MIRATheme.Space.md)
@@ -397,6 +422,24 @@ public struct ChatNativeView: View {
     .overlay(Capsule().stroke(MIRATheme.Color.hairline, lineWidth: 1))
     .padding(.horizontal, MIRATheme.Space.md)
   }
+
+  private var chatListSkeleton: some View {
+    VStack(spacing: 0) {
+      ForEach(0..<4, id: \.self) { _ in
+        HStack(spacing: MIRATheme.Space.md) {
+          Circle().fill(MIRATheme.Color.surfaceSoft).frame(width: 56, height: 56)
+          VStack(alignment: .leading, spacing: 8) {
+            RoundedRectangle(cornerRadius: 6).fill(MIRATheme.Color.surfaceSoft).frame(width: 150, height: 16)
+            RoundedRectangle(cornerRadius: 6).fill(MIRATheme.Color.surfaceSoft).frame(width: 220, height: 13)
+          }
+          Spacer()
+        }
+        .padding(.horizontal, MIRATheme.Space.md)
+        .padding(.vertical, MIRATheme.Space.md)
+      }
+    }
+    .redacted(reason: .placeholder)
+  }
 }
 
 private struct ChatConversationRow: View {
@@ -404,13 +447,23 @@ private struct ChatConversationRow: View {
 
   var body: some View {
     HStack(spacing: MIRATheme.Space.md) {
-      MIRAFollowAvatar(url: conversation.otherProfileImage, size: 56)
+      if conversation.isGroup {
+        ZStack {
+          Circle().fill(MIRATheme.Color.surfaceSoft)
+          Image(systemName: "person.2.fill")
+            .font(.system(size: 22, weight: .semibold))
+            .foregroundStyle(MIRATheme.Color.forest)
+        }
+        .frame(width: 56, height: 56)
+      } else {
+        MIRAFollowAvatar(url: conversation.otherProfileImage, size: 56)
+      }
       VStack(alignment: .leading, spacing: 5) {
         Text(conversation.displayName)
           .font(.system(size: 17, weight: .semibold))
           .foregroundStyle(MIRATheme.Color.textPrimary)
           .lineLimit(1)
-        Text(conversation.lastMessage ?? "Start chat")
+        Text(rowPreview)
           .font(.system(size: 14, weight: .medium))
           .foregroundStyle(MIRATheme.Color.textMuted)
           .lineLimit(1)
@@ -432,6 +485,201 @@ private struct ChatConversationRow: View {
     .padding(.vertical, MIRATheme.Space.md)
     .overlay(alignment: .bottom) {
       Rectangle().fill(MIRATheme.Color.hairline).frame(height: 0.5).padding(.leading, 72)
+    }
+  }
+
+  private var rowPreview: String {
+    if conversation.otherIsTyping == true { return "typing..." }
+    if let last = conversation.lastMessage, !last.isEmpty { return last }
+    if conversation.isGroup, let count = conversation.memberCount { return "\(count) members" }
+    return "Start chat"
+  }
+}
+
+@MainActor
+private final class CreateGroupChatModel: ObservableObject {
+  @Published var groupName = ""
+  @Published var query = ""
+  @Published var results: [MIRAUser] = []
+  @Published var selected: [MIRAUser] = []
+  @Published var isSearching = false
+  @Published var isCreating = false
+  @Published var errorMessage: String?
+
+  let api: MIRAAPIClient
+  let currentUserId: String
+
+  init(api: MIRAAPIClient, currentUserId: String) {
+    self.api = api
+    self.currentUserId = currentUserId
+  }
+
+  func search() async {
+    let clean = query.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard clean.count >= 2 else {
+      results = []
+      return
+    }
+    isSearching = true
+    defer { isSearching = false }
+    let encoded = clean.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? clean
+    do {
+      let users: [MIRAUser] = try await api.get("/users/search/\(encoded)")
+      let selectedIds = Set(selected.map(\.id))
+      results = users.filter { $0.id != currentUserId && !selectedIds.contains($0.id) }
+      errorMessage = nil
+    } catch {
+      errorMessage = "Could not search users."
+    }
+  }
+
+  func toggle(_ user: MIRAUser) {
+    if selected.contains(where: { $0.id == user.id }) {
+      selected.removeAll { $0.id == user.id }
+    } else {
+      selected.append(user)
+    }
+  }
+
+  func create() async -> Bool {
+    guard selected.count >= 2 else {
+      errorMessage = "Choose at least two people."
+      return false
+    }
+    guard !isCreating else { return false }
+    isCreating = true
+    defer { isCreating = false }
+    do {
+      let name = groupName.trimmingCharacters(in: .whitespacesAndNewlines)
+      let _: MIRAGroupChatCreatedResponse = try await api.post(
+        "/group-chats",
+        body: CreateGroupChatBody(name: name.isEmpty ? "New group" : name, memberIds: selected.map(\.id))
+      )
+      return true
+    } catch {
+      errorMessage = "Could not create this group."
+      return false
+    }
+  }
+}
+
+private struct CreateGroupChatSheet: View {
+  @StateObject private var model: CreateGroupChatModel
+  @Environment(\.dismiss) private var dismiss
+  let onCreated: () -> Void
+
+  init(api: MIRAAPIClient, currentUserId: String, onCreated: @escaping () -> Void) {
+    self.onCreated = onCreated
+    _model = StateObject(wrappedValue: CreateGroupChatModel(api: api, currentUserId: currentUserId))
+  }
+
+  var body: some View {
+    NavigationStack {
+      VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
+        TextField("Group name", text: $model.groupName)
+          .font(.system(size: 16, weight: .semibold))
+          .padding(.horizontal, MIRATheme.Space.md)
+          .frame(height: 48)
+          .background(MIRATheme.Color.surfaceSoft)
+          .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+          .padding(.horizontal, MIRATheme.Space.md)
+
+        if !model.selected.isEmpty {
+          ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: MIRATheme.Space.sm) {
+              ForEach(model.selected) { user in
+                Button { model.toggle(user) } label: {
+                  HStack(spacing: 6) {
+                    RemoteAvatar(url: user.profileImage, size: 24)
+                    Text(user.displayName).lineLimit(1)
+                    Image(systemName: "xmark")
+                  }
+                  .font(.system(size: 13, weight: .semibold))
+                  .foregroundStyle(MIRATheme.Color.textPrimary)
+                  .padding(.horizontal, 10)
+                  .frame(height: 34)
+                  .background(MIRATheme.Color.surfaceSoft)
+                  .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+              }
+            }
+            .padding(.horizontal, MIRATheme.Space.md)
+          }
+        }
+
+        HStack {
+          Image(systemName: "magnifyingglass")
+            .foregroundStyle(MIRATheme.Color.textMuted)
+          TextField("Search people", text: $model.query)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .onSubmit { Task { await model.search() } }
+        }
+        .padding(.horizontal, MIRATheme.Space.md)
+        .frame(height: 48)
+        .background(MIRATheme.Color.surfaceSoft)
+        .clipShape(Capsule())
+        .padding(.horizontal, MIRATheme.Space.md)
+
+        if let error = model.errorMessage {
+          Text(error)
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(.red)
+            .padding(.horizontal, MIRATheme.Space.md)
+        }
+
+        ScrollView {
+          LazyVStack(spacing: 0) {
+            ForEach(model.results) { user in
+              Button { model.toggle(user) } label: {
+                HStack(spacing: MIRATheme.Space.md) {
+                  RemoteAvatar(url: user.profileImage, size: 44)
+                  VStack(alignment: .leading, spacing: 3) {
+                    Text(user.displayName)
+                      .font(.system(size: 15, weight: .semibold))
+                      .foregroundStyle(MIRATheme.Color.textPrimary)
+                    if let fullName = user.fullName, !fullName.isEmpty {
+                      Text(fullName)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(MIRATheme.Color.textMuted)
+                    }
+                  }
+                  Spacer()
+                  Image(systemName: "plus.circle.fill")
+                    .foregroundStyle(MIRATheme.Color.forest)
+                }
+                .padding(.horizontal, MIRATheme.Space.md)
+                .padding(.vertical, MIRATheme.Space.sm)
+              }
+              .buttonStyle(.plain)
+            }
+          }
+        }
+      }
+      .navigationTitle("New group")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .topBarLeading) {
+          Button("Cancel") { dismiss() }
+        }
+        ToolbarItem(placement: .topBarTrailing) {
+          Button(model.isCreating ? "Creating" : "Create") {
+            Task {
+              if await model.create() {
+                dismiss()
+                onCreated()
+              }
+            }
+          }
+          .font(.system(size: 15, weight: .semibold))
+          .disabled(model.isCreating || model.selected.count < 2)
+        }
+      }
+      .task(id: model.query) {
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        await model.search()
+      }
     }
   }
 }
