@@ -797,12 +797,14 @@ public struct MIRAFullScreenMediaViewer: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   private let urls: [String]
   private let initialIndex: Int
+  private let onClose: (() -> Void)?
   @State private var selectedIndex: Int
   @State private var isVisible = false
 
-  public init(urls: [String], initialIndex: Int = 0) {
+  public init(urls: [String], initialIndex: Int = 0, onClose: (() -> Void)? = nil) {
     self.urls = urls
     self.initialIndex = initialIndex
+    self.onClose = onClose
     _selectedIndex = State(initialValue: min(max(initialIndex, 0), max(0, urls.count - 1)))
   }
 
@@ -878,7 +880,11 @@ public struct MIRAFullScreenMediaViewer: View {
       isVisible = false
     }
     DispatchQueue.main.asyncAfter(deadline: .now() + (reduceMotion ? 0.08 : 0.18)) {
-      dismiss()
+      if let onClose {
+        onClose()
+      } else {
+        dismiss()
+      }
     }
   }
 }

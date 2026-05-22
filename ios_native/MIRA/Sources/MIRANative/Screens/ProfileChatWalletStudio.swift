@@ -53,9 +53,30 @@ final class ProfileNativeModel: ObservableObject {
     }
   }
 
+  func updatePostVisibility(_ post: MIRAPost, visibility: String) async {
+    guard let user else { return }
+    do {
+      let updated: MIRAPost = try await api.put(
+        "/posts/\(post.id)/visibility",
+        body: PostVisibilityUpdateBody(visibility: visibility)
+      )
+      if let index = posts.firstIndex(where: { $0.id == post.id }) {
+        posts[index] = updated
+      }
+      await MIRALocalJSONCache.save(posts, key: postsCacheKey(for: user.id))
+      profileError = nil
+    } catch {
+      profileError = "Could not update post visibility."
+    }
+  }
+
   private func postsCacheKey(for userID: String) -> String {
     "native.profile.posts.\(userID).v2"
   }
+}
+
+private struct PostVisibilityUpdateBody: Encodable {
+  let visibility: String
 }
 
 private struct ProfileUpdateBody: Encodable {
@@ -119,6 +140,8 @@ public struct ProfileNativeView: View {
                   post: post,
                   size: gridTileSize,
                   onDelete: { Task { await model.deletePost(post) } },
+                  onMakePublic: { Task { await model.updatePostVisibility(post, visibility: "public") } },
+                  onMakePrivate: { Task { await model.updatePostVisibility(post, visibility: "private") } },
                   onOpenMedia: {
                     activeMediaViewer = MIRAMediaViewerPresentation(urls: post.mediaURLs, initialIndex: 0)
                   }
@@ -165,9 +188,18 @@ public struct ProfileNativeView: View {
           }
         }
       }
-      .fullScreenCover(item: $activeMediaViewer) { viewer in
-        MIRAFullScreenMediaViewer(urls: viewer.urls, initialIndex: viewer.initialIndex)
+      .overlay {
+        if let viewer = activeMediaViewer {
+          MIRAFullScreenMediaViewer(
+            urls: viewer.urls,
+            initialIndex: viewer.initialIndex,
+            onClose: { activeMediaViewer = nil }
+          )
+          .transition(.opacity)
+          .zIndex(50)
+        }
       }
+      .animation(.easeInOut(duration: 0.24), value: activeMediaViewer?.id)
     }
   }
 
@@ -321,9 +353,18 @@ public struct UserProfileNativeView: View {
     .navigationTitle(model.user?.displayName ?? "Profile")
     .navigationBarTitleDisplayMode(.inline)
     .task { await model.load() }
-    .fullScreenCover(item: $activeMediaViewer) { viewer in
-      MIRAFullScreenMediaViewer(urls: viewer.urls, initialIndex: viewer.initialIndex)
+    .overlay {
+      if let viewer = activeMediaViewer {
+        MIRAFullScreenMediaViewer(
+          urls: viewer.urls,
+          initialIndex: viewer.initialIndex,
+          onClose: { activeMediaViewer = nil }
+        )
+        .transition(.opacity)
+        .zIndex(50)
+      }
     }
+    .animation(.easeInOut(duration: 0.24), value: activeMediaViewer?.id)
   }
 
   private var profileHeader: some View {
@@ -397,10 +438,16 @@ private struct ProfilePostTile: View {
   let post: MIRAPost
   let size: CGFloat
   var onDelete: (() -> Void)? = nil
+  var onMakePublic: (() -> Void)? = nil
+  var onMakePrivate: (() -> Void)? = nil
   var onOpenMedia: (() -> Void)? = nil
 
   private var height: CGFloat {
     size * MIRAMediaSizing.profileGridRatio
+  }
+
+  private var normalizedVisibility: String {
+    post.visibility?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "public"
   }
 
   var body: some View {
@@ -415,17 +462,37 @@ private struct ProfilePostTile: View {
           HStack {
             Spacer()
             Menu {
+              if normalizedVisibility != "public", let onMakePublic {
+                Button {
+                  UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                  onMakePublic()
+                } label: {
+                  Label("Make post public", systemImage: "globe")
+                }
+              }
+
+              if normalizedVisibility != "private", let onMakePrivate {
+                Button {
+                  UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                  onMakePrivate()
+                } label: {
+                  Label("Make post private", systemImage: "lock")
+                }
+              }
+
               Button("Delete post", role: .destructive) { onDelete() }
             } label: {
               Image(systemName: "ellipsis")
-                .font(.system(size: 13, weight: .bold))
-                .foregroundStyle(.white)
-                .frame(width: 28, height: 28)
-                .background(.black.opacity(0.38))
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(MIRATheme.Color.textPrimary)
+                .frame(width: 36, height: 36)
+                .background(.white.opacity(0.92))
                 .clipShape(Circle())
+                .shadow(color: .black.opacity(0.20), radius: 10, x: 0, y: 4)
+                .overlay(Circle().stroke(.black.opacity(0.06), lineWidth: 1))
             }
             .buttonStyle(.plain)
-            .padding(6)
+            .padding(7)
           }
           Spacer()
         }

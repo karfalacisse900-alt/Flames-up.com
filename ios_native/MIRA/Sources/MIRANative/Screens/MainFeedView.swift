@@ -230,6 +230,23 @@ final class MainFeedModel: ObservableObject {
     }
   }
 
+  func updatePostVisibility(_ post: MIRAPost, visibility: String) async {
+    guard posts.contains(where: { $0.id == post.id }) else { return }
+    do {
+      let updated: MIRAPost = try await api.put(
+        "/posts/\(post.id)/visibility",
+        body: MainPostVisibilityUpdateBody(visibility: visibility)
+      )
+      if let index = posts.firstIndex(where: { $0.id == post.id }) {
+        posts[index] = updated
+      }
+      cacheCurrentPosts()
+      errorMessage = nil
+    } catch {
+      errorMessage = "Could not update post visibility."
+    }
+  }
+
   private func loadCurrentUserIfNeeded() async {
     guard currentUserId == nil && currentUsername == nil else { return }
     let me: MIRAUser? = try? await api.get("/auth/me")
@@ -321,6 +338,10 @@ final class MainFeedModel: ObservableObject {
   }
 }
 
+private struct MainPostVisibilityUpdateBody: Encodable {
+  let visibility: String
+}
+
 public struct MainFeedView: View {
   @StateObject private var model: MainFeedModel
   @State private var activeVideoPostID: String?
@@ -367,7 +388,9 @@ public struct MainFeedView: View {
                   onNotInterested: { model.hidePost(post) },
                   onReport: { Task { await model.reportPost(post) } },
                   canDelete: model.canDelete(post),
-                  onDelete: { Task { await model.deletePost(post) } }
+                  onDelete: { Task { await model.deletePost(post) } },
+                  onMakePublic: { Task { await model.updatePostVisibility(post, visibility: "public") } },
+                  onMakePrivate: { Task { await model.updatePostVisibility(post, visibility: "private") } }
                 )
                 .onAppear {
                   Task { await model.loadMoreIfNeeded(after: post) }
@@ -401,6 +424,18 @@ public struct MainFeedView: View {
           .animation(.easeInOut(duration: 0.24), value: isHeaderHidden)
       }
       .background(MIRATheme.Color.appBackground)
+      .overlay {
+        if let viewer = activeMediaViewer {
+          MIRAFullScreenMediaViewer(
+            urls: viewer.urls,
+            initialIndex: viewer.initialIndex,
+            onClose: { activeMediaViewer = nil }
+          )
+          .transition(.opacity)
+          .zIndex(50)
+        }
+      }
+      .animation(.easeInOut(duration: 0.24), value: activeMediaViewer?.id)
       .miraScreenEnter(.tab)
       .toolbar(.hidden, for: .navigationBar)
       .fullScreenCover(isPresented: $isShowingCreatePost) {
@@ -411,9 +446,6 @@ public struct MainFeedView: View {
           .presentationDetents([.medium, .large])
           .presentationDragIndicator(.visible)
           .presentationCornerRadius(28)
-      }
-      .fullScreenCover(item: $activeMediaViewer) { viewer in
-        MIRAFullScreenMediaViewer(urls: viewer.urls, initialIndex: viewer.initialIndex)
       }
       .task { await model.load() }
       .onReceive(NotificationCenter.default.publisher(for: .miraPostEngagementDidChange)) { notification in
@@ -514,6 +546,8 @@ private struct MainNativePostCard: View {
   let onReport: () -> Void
   let canDelete: Bool
   let onDelete: () -> Void
+  let onMakePublic: () -> Void
+  let onMakePrivate: () -> Void
   @State private var measuredRatios: [String: CGFloat] = [:]
   @State private var selectedMediaIndex = 0
   @State private var isShowingCaption = false
@@ -526,6 +560,10 @@ private struct MainNativePostCard: View {
     )
   }
 
+  private var normalizedVisibility: String {
+    post.visibility?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "public"
+  }
+
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
       postHeader
@@ -536,7 +574,7 @@ private struct MainNativePostCard: View {
 
       if isShowingCaption {
         captionBlock
-          .transition(.opacity.combined(with: .move(edge: .top)))
+          .transition(.opacity.combined(with: .scale(scale: 0.985, anchor: .top)))
       }
 
       HStack(spacing: MIRATheme.Space.md) {
@@ -558,7 +596,6 @@ private struct MainNativePostCard: View {
       .padding(.bottom, MIRATheme.Space.md)
     }
     .frame(maxWidth: .infinity, alignment: .topLeading)
-    .clipped()
     .background(MIRATheme.Color.surface)
     .background {
       GeometryReader { proxy in
@@ -578,6 +615,7 @@ private struct MainNativePostCard: View {
       }
     }
     .onChange(of: post.id) { _, _ in isShowingCaption = false }
+    .animation(.easeInOut(duration: 0.24), value: isShowingCaption)
   }
 
   @ViewBuilder
@@ -673,7 +711,7 @@ private struct MainNativePostCard: View {
 
   private func toggleCaption() {
     UIImpactFeedbackGenerator(style: .light).impactOccurred()
-    withAnimation(.easeInOut(duration: 0.2)) {
+    withAnimation(.easeInOut(duration: 0.24)) {
       isShowingCaption.toggle()
     }
   }
@@ -728,6 +766,24 @@ private struct MainNativePostCard: View {
         }
 
         if canDelete {
+          if normalizedVisibility != "public" {
+            Button {
+              UIImpactFeedbackGenerator(style: .light).impactOccurred()
+              onMakePublic()
+            } label: {
+              Label("Make post public", systemImage: "globe")
+            }
+          }
+
+          if normalizedVisibility != "private" {
+            Button {
+              UIImpactFeedbackGenerator(style: .light).impactOccurred()
+              onMakePrivate()
+            } label: {
+              Label("Make post private", systemImage: "lock")
+            }
+          }
+
           Button(role: .destructive) {
             UIImpactFeedbackGenerator(style: .medium).impactOccurred()
             onDelete()
@@ -791,6 +847,7 @@ private struct MainFeedCommentsSheet: View {
         .padding(.bottom, 18)
       }
       .scrollIndicators(.hidden)
+      .scrollDismissesKeyboard(.interactively)
     }
     .safeAreaInset(edge: .bottom, spacing: 0) {
       commentComposer
@@ -798,37 +855,40 @@ private struct MainFeedCommentsSheet: View {
     .background(MIRATheme.Color.surface.ignoresSafeArea())
     .task {
       await model.loadComments()
-      DispatchQueue.main.asyncAfter(deadline: .now() + 0.28) {
-        isReplyFocused = true
-      }
     }
   }
 
   private var sheetHeader: some View {
-    HStack(spacing: MIRATheme.Space.sm) {
-      VStack(alignment: .leading, spacing: 2) {
-        Text("Comments")
-          .font(.system(size: 18, weight: .semibold))
-          .foregroundStyle(MIRATheme.Color.textPrimary)
-        Text("\(model.post.commentsCount ?? model.comments.count)")
-          .font(.system(size: 12, weight: .medium))
-          .foregroundStyle(MIRATheme.Color.textMuted)
+    VStack(spacing: MIRATheme.Space.sm) {
+      Capsule()
+        .fill(MIRATheme.Color.textMuted.opacity(0.22))
+        .frame(width: 42, height: 5)
+        .padding(.top, 10)
+
+      HStack(spacing: MIRATheme.Space.sm) {
+        VStack(alignment: .leading, spacing: 2) {
+          Text("Comments")
+            .font(.system(size: 18, weight: .semibold))
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+          Text("\(model.post.commentsCount ?? model.comments.count)")
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(MIRATheme.Color.textMuted)
+        }
+        Spacer()
+        Button {
+          dismiss()
+        } label: {
+          Image(systemName: "xmark")
+            .font(.system(size: 14, weight: .bold))
+            .foregroundStyle(MIRATheme.Color.textSecondary)
+            .frame(width: 34, height: 34)
+            .background(MIRATheme.Color.surfaceSoft)
+            .clipShape(Circle())
+        }
+        .buttonStyle(.miraPress)
       }
-      Spacer()
-      Button {
-        dismiss()
-      } label: {
-        Image(systemName: "xmark")
-          .font(.system(size: 14, weight: .bold))
-          .foregroundStyle(MIRATheme.Color.textSecondary)
-          .frame(width: 34, height: 34)
-          .background(MIRATheme.Color.surfaceSoft)
-          .clipShape(Circle())
-      }
-      .buttonStyle(.miraPress)
+      .padding(.horizontal, MIRATheme.Space.md)
     }
-    .padding(.horizontal, MIRATheme.Space.md)
-    .padding(.top, MIRATheme.Space.md)
     .padding(.bottom, MIRATheme.Space.sm)
     .overlay(alignment: .bottom) {
       Rectangle().fill(MIRATheme.Color.hairline).frame(height: 0.5)
@@ -873,7 +933,8 @@ private struct MainFeedCommentsSheet: View {
   }
 
   private func sendComment() {
-    let text = draft
+    let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !text.isEmpty else { return }
     draft = ""
     Task { await model.sendComment(text) }
   }

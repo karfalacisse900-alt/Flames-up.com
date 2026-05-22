@@ -42,6 +42,7 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
   public let mediaDimensions: FlexibleMediaDimensions?
   public let location: String?
   public let postType: String?
+  public let visibility: String?
   public let placeId: String?
   public let placeName: String?
   public let placeLat: Double?
@@ -141,6 +142,7 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
       mediaDimensions: mediaDimensions,
       location: location,
       postType: postType,
+      visibility: visibility,
       placeId: placeId,
       placeName: placeName,
       placeLat: placeLat,

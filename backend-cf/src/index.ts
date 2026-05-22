@@ -6287,6 +6287,42 @@ api.delete('/posts/:postId', authMiddleware, async (c) => {
   return c.json({ deleted: true, soft_deleted: true });
 });
 
+api.put('/posts/:postId/visibility', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const postId = c.req.param('postId');
+  await ensurePrivacySchema(c.env.DB);
+  const body: any = await c.req.json().catch(() => ({}));
+  const requestedVisibility = typeof body.visibility === 'string' ? body.visibility.trim().toLowerCase() : '';
+  if (!['public', 'followers', 'friends', 'private'].includes(requestedVisibility)) {
+    return c.json({ detail: 'Invalid visibility.' }, 400);
+  }
+  const visibility = normalizeVisibility(requestedVisibility);
+
+  const post: any = await c.env.DB.prepare(
+    "SELECT id, user_id FROM posts WHERE id = ? AND COALESCE(status, 'active') != 'removed'"
+  ).bind(postId).first();
+  if (!post) return c.json({ detail: 'Post not found' }, 404);
+  if (post.user_id !== userId) return c.json({ detail: 'Not your post' }, 403);
+
+  await c.env.DB.prepare('UPDATE posts SET visibility = ? WHERE id = ?').bind(visibility, postId).run();
+  await logSecurityEvent(c, 'post_visibility_updated', userId, { post_id: postId, visibility });
+
+  const updated: any = await c.env.DB.prepare(
+    `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
+       EXISTS (SELECT 1 FROM follows fl WHERE fl.follower_id = ? AND fl.following_id = p.user_id) AS is_following,
+       EXISTS (SELECT 1 FROM likes lk WHERE lk.user_id = ? AND lk.post_id = p.id) AS is_liked,
+       EXISTS (SELECT 1 FROM saved_posts sp WHERE sp.user_id = ? AND sp.post_id = p.id) AS saved,
+       (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
+       (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id) AS live_comments_count,
+       (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id) AS live_saves_count
+     FROM posts p JOIN users u ON p.user_id = u.id
+     WHERE p.id = ?`
+  ).bind(userId, userId, userId, postId).first();
+  if (!updated) return c.json({ detail: 'Post not found' }, 404);
+
+  return c.json(postPayload(updated));
+});
+
 api.get('/users/:userId/posts', authMiddleware, async (c) => {
   const viewerId = getUserId(c);
   const targetId = c.req.param('userId');
