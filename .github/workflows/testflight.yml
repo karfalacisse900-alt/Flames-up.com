@@ -28,7 +28,7 @@ env:
 jobs:
   upload:
     name: Archive and Upload
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 60
 
     steps:
@@ -38,8 +38,14 @@ jobs:
       - name: Select Xcode
         run: |
           set -euo pipefail
-          if [ -d "/Applications/Xcode_16.4.app" ]; then
-            sudo xcode-select -s /Applications/Xcode_16.4.app/Contents/Developer
+          if [ -d "/Applications/Xcode_26.5.0.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_26.5.0.app/Contents/Developer
+          elif [ -d "/Applications/Xcode_26.4.1.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_26.4.1.app/Contents/Developer
+          elif [ -d "/Applications/Xcode_26.4.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_26.4.app/Contents/Developer
+          elif [ -d "/Applications/Xcode_26.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_26.app/Contents/Developer
           else
             sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
           fi
