@@ -162,11 +162,15 @@ private struct DiscoverGalleryFilter: Identifiable {
 
 private let discoverGalleryFilters: [DiscoverGalleryFilter] = [
   .init(id: "all", title: "All", keywords: []),
-  .init(id: "travel", title: "Travel", keywords: ["trip", "travel", "vacation", "beach", "hotel"]),
-  .init(id: "dining", title: "Dining", keywords: ["food", "restaurant", "dinner", "lunch", "brunch", "eat", "cafe", "coffee"]),
-  .init(id: "outfits", title: "Outfits", keywords: ["fit", "outfit", "style", "fashion", "look"]),
-  .init(id: "home", title: "Home", keywords: ["home", "room", "apartment", "house"]),
-  .init(id: "relationship", title: "Relationship", keywords: ["relationship", "date", "couple", "friends", "love"])
+  .init(id: "photography", title: "Photography", keywords: ["photo", "photography", "portrait", "camera", "shoot", "shot", "film", "lens", "street photo"]),
+  .init(id: "outdoors", title: "Outdoors", keywords: ["outdoors", "outside", "nature", "hike", "hiking", "mountain", "park", "beach", "lake", "trail", "sunset"]),
+  .init(id: "outfits", title: "Outfits", keywords: ["fit", "outfit", "style", "fashion", "look", "wear", "dress", "sneakers", "jacket"]),
+  .init(id: "food", title: "Food", keywords: ["food", "restaurant", "dinner", "lunch", "brunch", "eat", "cafe", "coffee", "meal", "dessert"]),
+  .init(id: "travel", title: "Travel", keywords: ["trip", "travel", "vacation", "hotel", "flight", "airport", "city", "passport", "road trip"]),
+  .init(id: "art", title: "Art", keywords: ["art", "artist", "drawing", "painting", "design", "creative", "gallery", "museum", "illustration"]),
+  .init(id: "lifestyle", title: "Lifestyle", keywords: ["lifestyle", "daily", "routine", "home", "room", "apartment", "friends", "selfie", "moment"]),
+  .init(id: "events", title: "Events", keywords: ["event", "events", "party", "concert", "festival", "show", "birthday", "wedding", "meetup"]),
+  .init(id: "nightlife", title: "Nightlife", keywords: ["nightlife", "night", "club", "bar", "lounge", "dj", "dance", "after dark"])
 ]
 
 public struct DiscoverNativeView: View {
