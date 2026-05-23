@@ -39,6 +39,8 @@ public final class MIRAAuthSession: ObservableObject, MIRASessionProviding {
       user = cachedUser
       isBootstrapping = false
       MIRAPerformanceTimeline.mark("auth_cached_user_ready")
+      Task { await refreshCachedSession(api: api) }
+      return
     }
 
     do {
@@ -58,6 +60,24 @@ public final class MIRAAuthSession: ObservableObject, MIRASessionProviding {
     }
     isBootstrapping = false
     MIRAPerformanceTimeline.mark("auth_bootstrap_finished", detail: user == nil ? "signed_out" : "signed_in")
+  }
+
+  @MainActor
+  private func refreshCachedSession(api: MIRAAPIClient) async {
+    do {
+      let freshUser: MIRAUser = try await api.get("/auth/me")
+      user = freshUser
+      await MIRALocalJSONCache.save(freshUser, key: cachedUserKey)
+      errorMessage = nil
+      MIRAPerformanceTimeline.mark("auth_cached_user_refreshed")
+    } catch {
+      if case MIRAAPIError.badStatus(let status) = error, status == 401 || status == 403 {
+        token = nil
+        user = nil
+        keychain.clearAccessToken()
+        MIRAPerformanceTimeline.mark("auth_cached_user_rejected")
+      }
+    }
   }
 
   @MainActor

@@ -13,6 +13,7 @@ final class MainFeedModel: ObservableObject {
   let api: MIRAAPIClient
   private let feedCacheKey = "native.main.feed.v3"
   private var hasLoadedFreshFeed = false
+  private var isLoadingFreshFeed = false
   private var canLoadMore = true
   private var isLoadingCurrentUser = false
   private let firstPageLimit = 8
@@ -22,24 +23,35 @@ final class MainFeedModel: ObservableObject {
     self.api = api
   }
 
+  func prepareForStartup() async {
+    MIRAPerformanceTimeline.mark("home_startup_prepare")
+    if currentUserId == nil && currentUsername == nil {
+      Task { await loadCurrentUserIfNeeded() }
+    }
+    await hydrateCachedFeedIfNeeded()
+    if posts.isEmpty {
+      isLoading = true
+    }
+    Task { await load() }
+  }
+
   func load(forceRefresh: Bool = false) async {
     if currentUserId == nil && currentUsername == nil {
       Task { await loadCurrentUserIfNeeded() }
     }
+    if isLoadingFreshFeed && !forceRefresh { return }
     if !forceRefresh && hasLoadedFreshFeed && !posts.isEmpty { return }
+    isLoadingFreshFeed = true
+    defer {
+      isLoading = false
+      isLoadingFreshFeed = false
+    }
     MIRAPerformanceTimeline.mark("home_load_start", detail: forceRefresh ? "refresh" : "normal")
 
-    if posts.isEmpty, let cached: [MIRAPost] = await MIRALocalJSONCache.load([MIRAPost].self, key: feedCacheKey) {
-      // Cached feed is already stored in display order, so show it immediately.
-      posts = cached
-      MIRAPerformanceTimeline.markOnce("time_to_first_real_home_item", detail: "cache")
-      errorMessage = nil
-      isLoading = false
-    }
+    await hydrateCachedFeedIfNeeded()
 
     if posts.isEmpty { isLoading = true }
     hasLoadedFreshFeed = true
-    defer { isLoading = false }
     let loaded = await fetchFeedPage(skip: 0)
     guard !loaded.isEmpty else {
       canLoadMore = false
@@ -56,6 +68,15 @@ final class MainFeedModel: ObservableObject {
     MIRAPerformanceTimeline.markOnce("time_to_first_real_home_item", detail: "network")
     errorMessage = nil
     prefetchNextPageIfNeeded(afterInitialCount: sorted.count)
+  }
+
+  private func hydrateCachedFeedIfNeeded() async {
+    guard posts.isEmpty, let cached: [MIRAPost] = await MIRALocalJSONCache.load([MIRAPost].self, key: feedCacheKey) else { return }
+    // Cached feed is already stored in display order, so show it immediately.
+    posts = cached
+    MIRAPerformanceTimeline.markOnce("time_to_first_real_home_item", detail: "cache")
+    errorMessage = nil
+    isLoading = false
   }
 
   func loadMoreIfNeeded(after post: MIRAPost) async {
@@ -380,6 +401,10 @@ public struct MainFeedView: View {
 
   public init(api: MIRAAPIClient) {
     _model = StateObject(wrappedValue: MainFeedModel(api: api))
+  }
+
+  init(api: MIRAAPIClient, model: MainFeedModel) {
+    _model = StateObject(wrappedValue: model)
   }
 
   public var body: some View {

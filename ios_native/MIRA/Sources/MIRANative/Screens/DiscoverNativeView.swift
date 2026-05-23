@@ -14,13 +14,40 @@ final class DiscoverNativeModel: ObservableObject {
   private let postsCacheKey = "native.discover.posts.v1"
   private var hasLoadedFreshStories = false
   private var hasLoadedFreshPosts = false
+  private var hasScheduledPostsLoad = false
+  private var hasScheduledStoriesLoad = false
 
   init(api: MIRAAPIClient) {
     self.api = api
   }
 
+  func prepareForStartup() async {
+    MIRAPerformanceTimeline.mark("discover_startup_prepare")
+    await hydrateCachedContentIfNeeded()
+    if posts.isEmpty { isLoadingPosts = true }
+    if stories.isEmpty { isLoadingStories = true }
+    updateLoadingState()
+    await load()
+  }
+
   func load() async {
     MIRAPerformanceTimeline.mark("discover_load_start")
+    await hydrateCachedContentIfNeeded()
+
+    if !hasLoadedFreshPosts && posts.isEmpty { isLoadingPosts = true }
+    if !hasLoadedFreshStories && stories.isEmpty { isLoadingStories = true }
+    updateLoadingState()
+    if !hasScheduledPostsLoad {
+      hasScheduledPostsLoad = true
+      Task { await self.loadPosts() }
+    }
+    if !hasScheduledStoriesLoad {
+      hasScheduledStoriesLoad = true
+      Task { await self.loadStories() }
+    }
+  }
+
+  private func hydrateCachedContentIfNeeded() async {
     if posts.isEmpty, let cachedPosts: [MIRAPost] = await MIRALocalJSONCache.load([MIRAPost].self, key: postsCacheKey) {
       posts = cachedPosts
       isLoadingPosts = false
@@ -31,12 +58,6 @@ final class DiscoverNativeModel: ObservableObject {
       isLoadingStories = false
       MIRAPerformanceTimeline.markOnce("discover_first_content", detail: "stories_cache")
     }
-
-    if !hasLoadedFreshPosts && posts.isEmpty { isLoadingPosts = true }
-    if !hasLoadedFreshStories && stories.isEmpty { isLoadingStories = true }
-    updateLoadingState()
-    Task { await self.loadPosts() }
-    Task { await self.loadStories() }
   }
 
   private func loadPosts() async {
@@ -67,6 +88,7 @@ final class DiscoverNativeModel: ObservableObject {
         MIRAPerformanceTimeline.markOnce("discover_first_content", detail: "posts_fallback")
       } else if posts.isEmpty {
         hasLoadedFreshPosts = false
+        hasScheduledPostsLoad = false
       }
     }
   }
@@ -91,7 +113,10 @@ final class DiscoverNativeModel: ObservableObject {
         MIRAPerformanceTimeline.markOnce("discover_first_content", detail: "stories_network")
       }
     } catch {
-      if stories.isEmpty { hasLoadedFreshStories = false }
+      if stories.isEmpty {
+        hasLoadedFreshStories = false
+        hasScheduledStoriesLoad = false
+      }
     }
   }
 
@@ -145,6 +170,10 @@ public struct DiscoverNativeView: View {
 
   public init(api: MIRAAPIClient) {
     _model = StateObject(wrappedValue: DiscoverNativeModel(api: api))
+  }
+
+  init(api: MIRAAPIClient, model: DiscoverNativeModel) {
+    _model = StateObject(wrappedValue: model)
   }
 
   public var body: some View {

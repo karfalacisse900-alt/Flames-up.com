@@ -10,16 +10,25 @@ final class ProfileNativeModel: ObservableObject {
   @Published var profileError: String?
   let api: MIRAAPIClient
   private let userCacheKey = "native.profile.me.v2"
+  private var isLoadingFreshProfile = false
 
   init(api: MIRAAPIClient) {
     self.api = api
   }
 
+  func prepareForStartup(signedInUser: MIRAUser?) async {
+    MIRAPerformanceTimeline.mark("profile_startup_prepare")
+    primeUser(signedInUser)
+    await hydrateCachedProfileIfNeeded()
+    Task { await load() }
+  }
+
   func load() async {
-    if user == nil, let cachedUser: MIRAUser = await MIRALocalJSONCache.load(MIRAUser.self, key: userCacheKey) {
-      user = cachedUser
-      posts = await MIRALocalJSONCache.load([MIRAPost].self, key: postsCacheKey(for: cachedUser.id)) ?? posts
-    }
+    guard !isLoadingFreshProfile else { return }
+    isLoadingFreshProfile = true
+    defer { isLoadingFreshProfile = false }
+
+    await hydrateCachedProfileIfNeeded()
 
     guard let freshUser: MIRAUser = try? await api.get("/auth/me") else { return }
     user = freshUser
@@ -32,6 +41,12 @@ final class ProfileNativeModel: ObservableObject {
   func primeUser(_ signedInUser: MIRAUser?) {
     guard user == nil, let signedInUser else { return }
     user = signedInUser
+  }
+
+  private func hydrateCachedProfileIfNeeded() async {
+    guard user == nil, let cachedUser: MIRAUser = await MIRALocalJSONCache.load(MIRAUser.self, key: userCacheKey) else { return }
+    user = cachedUser
+    posts = await MIRALocalJSONCache.load([MIRAPost].self, key: postsCacheKey(for: cachedUser.id)) ?? posts
   }
 
   func applyUpdatedUser(_ updated: MIRAUser) async {
@@ -124,6 +139,11 @@ public struct ProfileNativeView: View {
   public init(api: MIRAAPIClient, authSession: MIRAAuthSession? = nil) {
     self.authSession = authSession
     _model = StateObject(wrappedValue: ProfileNativeModel(api: api))
+  }
+
+  init(api: MIRAAPIClient, authSession: MIRAAuthSession? = nil, model: ProfileNativeModel) {
+    self.authSession = authSession
+    _model = StateObject(wrappedValue: model)
   }
 
   public var body: some View {
