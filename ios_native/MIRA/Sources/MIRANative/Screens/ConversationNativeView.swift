@@ -900,7 +900,8 @@ private struct MessageBubbleContent: View {
     .padding(.leading, bubbleLeadingPadding)
     .padding(.trailing, bubbleTrailingPadding)
     .padding(.vertical, bubbleVerticalPadding)
-    .frame(maxWidth: maxWidth, alignment: outgoing ? .trailing : .leading)
+    .fixedSize(horizontal: false, vertical: true)
+    .frame(maxWidth: bubbleFrameMaxWidth, alignment: outgoing ? .trailing : .leading)
     .background {
       RoundedRectangle(cornerRadius: bubbleRadius, style: .continuous)
         .fill(bubbleFill)
@@ -940,7 +941,11 @@ private struct MessageBubbleContent: View {
   }
 
   private var textMaxWidth: CGFloat {
-    max(120, maxWidth - bubbleLeadingPadding - bubbleTrailingPadding)
+    max(96, maxWidth - bubbleLeadingPadding - bubbleTrailingPadding)
+  }
+
+  private var bubbleFrameMaxWidth: CGFloat? {
+    isVoiceMessage ? nil : maxWidth
   }
 
   private var bubbleLeadingPadding: CGFloat {
@@ -1009,14 +1014,14 @@ private struct VoicePlaybackPill: View {
           .background(Color.white)
           .clipShape(Circle())
         VoiceWaveformBars(color: .white.opacity(0.88))
-          .frame(width: 148, height: 30)
+          .frame(width: 86, height: 28)
         if playbackError {
           Image(systemName: "exclamationmark.circle.fill")
             .font(.system(size: 15, weight: .bold))
             .foregroundStyle(Color.white.opacity(0.88))
         }
       }
-      .frame(minWidth: 218, alignment: outgoing ? .trailing : .leading)
+      .frame(width: playbackError ? 154 : 136, alignment: outgoing ? .trailing : .leading)
     }
     .buttonStyle(.plain)
     .contentShape(Rectangle())
@@ -1080,9 +1085,8 @@ private struct VoiceWaveformBars: View {
   let color: Color
 
   private let heights: [CGFloat] = [
-    4, 5, 4, 6, 5, 8, 10, 14, 18, 22,
-    15, 26, 30, 21, 25, 29, 19, 27, 24, 30,
-    22, 26, 18, 24, 20, 17, 22, 15, 12, 10
+    4, 5, 4, 7, 10, 15, 20, 24, 14, 26,
+    22, 18, 25, 17, 12, 20, 14, 9
   ]
 
   var body: some View {

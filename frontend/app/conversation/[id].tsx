@@ -9,7 +9,7 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuthStore } from '../../src/store/authStore';
 import api from '../../src/api/client';
-import { format, formatDistanceToNow } from 'date-fns';
+import { formatDistanceToNow } from 'date-fns';
 import * as ImagePicker from 'expo-image-picker';
 import { Audio, Video, ResizeMode } from 'expo-av';
 import { uploadAudioWithBackup, uploadImage, getVideoUploadUrl, uploadVideoToStream } from '../../src/utils/mediaUpload';
@@ -18,6 +18,7 @@ import { isPhoneVerificationError, requireVerifiedPhone } from '../../src/utils/
 import { colors } from '../../src/utils/theme';
 
 const { width: SW } = Dimensions.get('window');
+const VOICE_WAVE_HEIGHTS = [6, 8, 5, 11, 15, 20, 24, 13, 22, 18, 26, 15, 10, 18, 12, 8];
 
 export default function ConversationScreen() {
   const router = useRouter();
@@ -29,7 +30,7 @@ export default function ConversationScreen() {
   const [newMessage, setNewMessage] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [isSending, setIsSending] = useState(false);
-  const [selectedMedia, setSelectedMedia] = useState<{ uri: string; type: 'image' | 'video'; base64?: string } | null>(null);
+  const [selectedMedia, setSelectedMedia] = useState<{ uri: string; type: 'image' | 'video' | 'voice'; base64?: string } | null>(null);
   const [showAttachMenu, setShowAttachMenu] = useState(false);
   const [viewingMedia, setViewingMedia] = useState<string | null>(null);
   const [peerPresence, setPeerPresence] = useState<{ is_online: boolean; is_typing: boolean; last_seen_at?: string | null }>({ is_online: false, is_typing: false });
@@ -202,8 +203,7 @@ export default function ConversationScreen() {
       const uri = recording.getURI();
       setRecording(null);
       if (uri && recordDuration >= 1) {
-        // Send as voice message
-        sendMessage(undefined, uri, 'voice');
+        setSelectedMedia({ uri, type: 'voice' });
       }
     } catch (e) { console.log('Stop error:', e); }
   };
@@ -306,7 +306,12 @@ export default function ConversationScreen() {
 
     return (
       <View style={[st.msgRow, isOwn && st.msgRowOwn]}>
-        <View style={[st.bubble, isOwn ? st.bubbleOwn : st.bubbleOther, hasMedia && !isVoice && st.mediaBubble]}>
+        <View style={[
+          st.bubble,
+          isOwn ? st.bubbleOwn : st.bubbleOther,
+          isVoice && st.voiceMessageBubble,
+          hasMedia && !isVoice && st.mediaBubble,
+        ]}>
           {/* Image */}
           {hasMedia && mediaType === 'image' && (
             <TouchableOpacity onPress={() => setViewingMedia(mediaSource)} activeOpacity={0.9}>
@@ -329,44 +334,31 @@ export default function ConversationScreen() {
           {/* Voice message */}
           {isVoice && (
             <TouchableOpacity style={st.voiceBubble} onPress={() => playVoiceMessage(mediaSource)}>
-              <Ionicons name={playingVoice === mediaSource ? 'pause' : 'play'} size={20} color={isOwn ? '#FFF' : '#2D6A4F'} />
+              <View style={st.voicePlayCircle}>
+                <Ionicons name={playingVoice === mediaSource ? 'pause' : 'play'} size={18} color="#000" />
+              </View>
               <View style={st.voiceWave}>
-                {[...Array(12)].map((_, i) => (
-                  <View key={i} style={[st.waveBar, { height: 6 + Math.random() * 14, backgroundColor: isOwn ? 'rgba(255,255,255,0.5)' : 'rgba(45,106,79,0.4)' }]} />
+                {VOICE_WAVE_HEIGHTS.map((height, i) => (
+                  <View key={i} style={[st.waveBar, { height, backgroundColor: 'rgba(255,255,255,0.86)' }]} />
                 ))}
               </View>
-              <Ionicons name="mic" size={14} color={isOwn ? 'rgba(255,255,255,0.5)' : '#9CA3AF'} />
             </TouchableOpacity>
           )}
           {/* Text */}
           {item.content ? <Text style={[st.msgText, isOwn && st.msgTextOwn]}>{item.content}</Text> : null}
-          {/* Time + read receipt */}
-          <View style={st.metaRow}>
-            <Text style={[st.msgTime, isOwn && st.msgTimeOwn]}>
-              {format(new Date(item.created_at), 'HH:mm')}
-            </Text>
-            {isOwn && (
-              <Ionicons
-                name={item.is_read ? 'checkmark-done' : 'checkmark'}
-                size={14}
-                color={item.is_read ? '#60A5FA' : (isOwn ? 'rgba(255,255,255,0.4)' : '#9CA3AF')}
-                style={{ marginLeft: 3 }}
-              />
-            )}
-          </View>
         </View>
       </View>
     );
   };
 
-  if (isLoading) return <SafeAreaView style={st.loading}><ActivityIndicator size="large" color="#2D6A4F" /></SafeAreaView>;
+  if (isLoading) return <SafeAreaView style={st.loading}><ActivityIndicator size="large" color="#000" /></SafeAreaView>;
 
   return (
     <SafeAreaView style={st.container} edges={['top']}>
       {/* Header */}
       <View style={st.header}>
         <TouchableOpacity onPress={() => router.back()} style={st.backBtn}>
-          <Ionicons name="arrow-back" size={24} color="#1B4332" />
+          <Ionicons name="arrow-back" size={24} color="#000" />
         </TouchableOpacity>
         <TouchableOpacity style={st.headerUser} onPress={() => router.push(`/user/${peerId}`)}>
           <View style={st.avatarWrap}>
@@ -385,10 +377,10 @@ export default function ConversationScreen() {
           </View>
         </TouchableOpacity>
         <TouchableOpacity style={st.headerCallBtn} onPress={startVoiceCall} activeOpacity={0.75}>
-          <Ionicons name="call-outline" size={22} color="#1B4332" />
+          <Ionicons name="call-outline" size={22} color="#000" />
         </TouchableOpacity>
         <TouchableOpacity style={st.headerCallBtn} onPress={startVideoCall} activeOpacity={0.75}>
-          <Ionicons name="videocam-outline" size={24} color="#1B4332" />
+          <Ionicons name="videocam-outline" size={24} color="#000" />
         </TouchableOpacity>
       </View>
 
@@ -413,6 +405,16 @@ export default function ConversationScreen() {
           <View style={st.mediaPreview}>
             {selectedMedia.type === 'image' ? (
               <Image source={{ uri: selectedMedia.uri }} style={st.previewImg} />
+            ) : selectedMedia.type === 'voice' ? (
+              <View style={st.previewVoice}>
+                <Ionicons name="play" size={16} color="#000" />
+                <View style={st.previewVoiceWave}>
+                  {VOICE_WAVE_HEIGHTS.slice(0, 10).map((height, i) => (
+                    <View key={i} style={[st.previewWaveBar, { height: Math.max(5, height * 0.62) }]} />
+                  ))}
+                </View>
+                <Text style={st.previewVoiceText}>{formatDuration(recordDuration)}</Text>
+              </View>
             ) : (
               <View style={st.previewVid}><Ionicons name="videocam" size={22} color="#FFF" /><Text style={st.previewVidText}>Video</Text></View>
             )}
@@ -432,7 +434,7 @@ export default function ConversationScreen() {
             <Text style={st.recTime}>{formatDuration(recordDuration)}</Text>
             <Text style={st.recLabel}>Recording...</Text>
             <TouchableOpacity onPress={stopRecording} style={st.sendRecBtn}>
-              <Ionicons name="send" size={16} color="#FFF" />
+              <Ionicons name="checkmark" size={18} color="#FFF" />
             </TouchableOpacity>
           </View>
         )}
@@ -441,7 +443,7 @@ export default function ConversationScreen() {
         {!isRecording && (
           <View style={st.inputBar}>
             <TouchableOpacity style={st.attachBtn} onPress={() => setShowAttachMenu(true)}>
-              <Ionicons name="add-circle" size={28} color="#2D6A4F" />
+              <Ionicons name="add-circle" size={28} color="#000" />
             </TouchableOpacity>
             <TextInput
               style={st.input}
@@ -458,7 +460,7 @@ export default function ConversationScreen() {
               </TouchableOpacity>
             ) : (
               <TouchableOpacity style={st.micBtn} onPress={startRecording}>
-                <Ionicons name="mic" size={22} color="#2D6A4F" />
+                <Ionicons name="mic" size={22} color="#FFF" />
               </TouchableOpacity>
             )}
           </View>
@@ -501,35 +503,37 @@ export default function ConversationScreen() {
 }
 
 const st = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#FAFAF8' },
-  loading: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#FAFAF8' },
-  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#F0ECE5', backgroundColor: '#FAFAF8' },
+  container: { flex: 1, backgroundColor: '#F1F1F1' },
+  loading: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#F1F1F1' },
+  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#DEDEDE', backgroundColor: '#FFF' },
   backBtn: { width: 44, height: 44, justifyContent: 'center', alignItems: 'center' },
   headerUser: { flexDirection: 'row', alignItems: 'center', flex: 1, marginLeft: 4 },
   headerCallBtn: { width: 44, height: 44, borderRadius: 22, justifyContent: 'center', alignItems: 'center', marginLeft: 8 },
   avatarWrap: { width: 40, height: 40, marginRight: 10 },
   avatar: { width: 40, height: 40, borderRadius: 20 },
-  avatarFallback: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#2D6A4F', justifyContent: 'center', alignItems: 'center' },
+  avatarFallback: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#000', justifyContent: 'center', alignItems: 'center' },
   avatarText: { color: '#FFF', fontSize: 16, fontWeight: '500' },
-  onlineDot: { position: 'absolute', right: 0, bottom: 0, width: 11, height: 11, borderRadius: 6, borderWidth: 2, borderColor: '#FAFAF8', backgroundColor: '#36C56B' },
-  headerName: { fontSize: 16, fontWeight: '500', color: '#1B4332' },
+  onlineDot: { position: 'absolute', right: 0, bottom: 0, width: 11, height: 11, borderRadius: 6, borderWidth: 2, borderColor: '#FFF', backgroundColor: '#36C56B' },
+  headerName: { fontSize: 16, fontWeight: '600', color: '#000' },
   headerHandle: { fontSize: 12, color: '#9CA3AF' },
-  headerTyping: { color: '#2D6A4F', fontWeight: '600' },
-  msgList: { padding: 16, flexGrow: 1 },
-  msgRow: { marginBottom: 6, alignItems: 'flex-start' },
+  headerTyping: { color: '#000', fontWeight: '600' },
+  msgList: { paddingHorizontal: 14, paddingVertical: 16, flexGrow: 1 },
+  msgRow: { marginBottom: 10, alignItems: 'flex-start' },
   msgRowOwn: { alignItems: 'flex-end' },
-  bubble: { maxWidth: '80%', padding: 10, borderRadius: 18 },
+  bubble: { maxWidth: '74%', paddingHorizontal: 18, paddingVertical: 12, borderRadius: 22 },
   mediaBubble: { padding: 4, overflow: 'hidden' },
-  bubbleOwn: { backgroundColor: '#2D6A4F', borderBottomRightRadius: 4 },
-  bubbleOther: { backgroundColor: '#F3F0EB', borderBottomLeftRadius: 4 },
+  bubbleOwn: { backgroundColor: '#000' },
+  bubbleOther: { backgroundColor: '#FFF' },
+  voiceMessageBubble: { backgroundColor: '#000', paddingHorizontal: 8, paddingVertical: 6, borderRadius: 25 },
   msgImage: { width: SW * 0.6, height: SW * 0.45, borderRadius: 14 },
-  videoBox: { width: SW * 0.6, height: SW * 0.35, borderRadius: 14, backgroundColor: '#1B4332', justifyContent: 'center', alignItems: 'center' },
+  videoBox: { width: SW * 0.6, height: SW * 0.35, borderRadius: 14, backgroundColor: '#000', justifyContent: 'center', alignItems: 'center' },
   playCircle: { width: 52, height: 52, borderRadius: 26, backgroundColor: 'rgba(255,255,255,0.2)', justifyContent: 'center', alignItems: 'center' },
   videoLabel: { fontSize: 12, color: 'rgba(255,255,255,0.7)', fontWeight: '500', marginTop: 4 },
-  voiceBubble: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 6, paddingVertical: 4, minWidth: 160 },
-  voiceWave: { flexDirection: 'row', alignItems: 'center', gap: 2, flex: 1 },
+  voiceBubble: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 0, paddingVertical: 0 },
+  voicePlayCircle: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#FFF', alignItems: 'center', justifyContent: 'center' },
+  voiceWave: { flexDirection: 'row', alignItems: 'center', gap: 2 },
   waveBar: { width: 3, borderRadius: 1.5 },
-  msgText: { fontSize: 15, color: '#1B4332', lineHeight: 20, paddingHorizontal: 6, paddingTop: 4 },
+  msgText: { fontSize: 15, color: '#111', lineHeight: 20 },
   msgTextOwn: { color: '#FFF' },
   metaRow: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-end', paddingHorizontal: 6, paddingBottom: 2, marginTop: 2 },
   msgTime: { fontSize: 10, color: '#9CA3AF' },
@@ -537,29 +541,33 @@ const st = StyleSheet.create({
   empty: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingVertical: 60, gap: 8 },
   emptyText: { fontSize: 14, color: '#9CA3AF' },
   // Media preview
-  mediaPreview: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 6, backgroundColor: '#FFF', borderTopWidth: 1, borderTopColor: '#F0ECE5' },
+  mediaPreview: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 8, backgroundColor: '#FFF', borderTopWidth: 1, borderTopColor: '#DEDEDE' },
   previewImg: { width: 56, height: 56, borderRadius: 10 },
-  previewVid: { width: 56, height: 56, borderRadius: 10, backgroundColor: '#1B4332', justifyContent: 'center', alignItems: 'center' },
+  previewVid: { width: 56, height: 56, borderRadius: 10, backgroundColor: '#000', justifyContent: 'center', alignItems: 'center' },
   previewVidText: { fontSize: 8, color: '#FFF', marginTop: 2 },
+  previewVoice: { height: 44, borderRadius: 22, backgroundColor: '#000', paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  previewVoiceWave: { flexDirection: 'row', alignItems: 'center', gap: 2 },
+  previewWaveBar: { width: 3, borderRadius: 1.5, backgroundColor: 'rgba(255,255,255,0.84)' },
+  previewVoiceText: { color: '#FFF', fontSize: 12, fontWeight: '700', marginLeft: 2 },
   removeMedia: { marginLeft: 8, padding: 4 },
   // Recording
-  recordingBar: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 16, paddingVertical: 12, backgroundColor: '#FFF', borderTopWidth: 1, borderTopColor: '#F0ECE5' },
+  recordingBar: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 16, paddingVertical: 12, backgroundColor: '#FFF', borderTopWidth: 1, borderTopColor: '#DEDEDE' },
   cancelRecBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#FEF2F2', justifyContent: 'center', alignItems: 'center' },
   recDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#EF4444' },
-  recTime: { fontSize: 15, fontWeight: '500', color: '#1B4332', fontVariant: ['tabular-nums'] },
+  recTime: { fontSize: 15, fontWeight: '600', color: '#000', fontVariant: ['tabular-nums'] },
   recLabel: { flex: 1, fontSize: 13, color: '#9CA3AF' },
-  sendRecBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#2D6A4F', justifyContent: 'center', alignItems: 'center' },
+  sendRecBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#000', justifyContent: 'center', alignItems: 'center' },
   // Input
-  inputBar: { flexDirection: 'row', alignItems: 'flex-end', paddingHorizontal: 10, paddingVertical: 8, borderTopWidth: 1, borderTopColor: '#F0ECE5', backgroundColor: '#FFF', gap: 6 },
+  inputBar: { flexDirection: 'row', alignItems: 'flex-end', paddingHorizontal: 10, paddingVertical: 8, borderTopWidth: 1, borderTopColor: '#DEDEDE', backgroundColor: '#FFF', gap: 6 },
   attachBtn: { width: 44, height: 44, justifyContent: 'center', alignItems: 'center' },
-  input: { flex: 1, backgroundColor: '#F3F0EB', borderRadius: 20, paddingHorizontal: 16, paddingVertical: 10, fontSize: 15, color: '#1B4332', maxHeight: 100 },
-  sendBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#2D6A4F', justifyContent: 'center', alignItems: 'center' },
-  micBtn: { width: 44, height: 44, justifyContent: 'center', alignItems: 'center' },
+  input: { flex: 1, backgroundColor: '#FFF', borderRadius: 20, paddingHorizontal: 12, paddingVertical: 10, fontSize: 15, color: '#111', maxHeight: 100 },
+  sendBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#000', justifyContent: 'center', alignItems: 'center' },
+  micBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#000', justifyContent: 'center', alignItems: 'center', marginBottom: 4 },
   // Attach
   attachOverlay: { flex: 1, backgroundColor: colors.modalScrim, justifyContent: 'flex-end' },
   attachSheet: { backgroundColor: '#FFF', borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingHorizontal: 24, paddingBottom: 40, paddingTop: 12 },
   attachHandle: { width: 40, height: 4, backgroundColor: '#D1D5DB', borderRadius: 2, alignSelf: 'center', marginBottom: 16 },
-  attachTitle: { fontSize: 18, fontWeight: '500', color: '#1B4332', marginBottom: 20, textAlign: 'center' },
+  attachTitle: { fontSize: 18, fontWeight: '600', color: '#111', marginBottom: 20, textAlign: 'center' },
   attachOpts: { flexDirection: 'row', justifyContent: 'space-around' },
   attachOpt: { alignItems: 'center', gap: 8 },
   attachIconBox: { width: 60, height: 60, borderRadius: 20, justifyContent: 'center', alignItems: 'center' },

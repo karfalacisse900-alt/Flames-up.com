@@ -14,7 +14,6 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { format } from 'date-fns';
 import api from '../../src/api/client';
 import { useAuthStore } from '../../src/store/authStore';
 import { colors, spacing } from '../../src/utils/theme';
@@ -83,9 +82,6 @@ export default function GroupConversationScreen() {
         )}
         <View style={[styles.bubble, isOwn ? styles.bubbleOwn : styles.bubbleOther]}>
           <Text style={[styles.messageText, isOwn && styles.messageTextOwn]}>{item.content}</Text>
-          <Text style={[styles.messageTime, isOwn && styles.messageTimeOwn]}>
-            {format(new Date(item.created_at), 'HH:mm')}
-          </Text>
         </View>
       </View>
     );
@@ -103,7 +99,7 @@ export default function GroupConversationScreen() {
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
         <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
-          <Ionicons name="arrow-back" size={24} color={colors.primary} />
+          <Ionicons name="arrow-back" size={24} color="#000" />
         </TouchableOpacity>
         <View style={styles.groupIcon}>
           <Ionicons name="people" size={22} color={colors.textInverse} />
@@ -150,30 +146,30 @@ export default function GroupConversationScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.bgApp },
-  loading: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.bgApp },
-  header: { minHeight: 64, flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.sm, borderBottomWidth: 1, borderBottomColor: colors.borderSubtle, backgroundColor: colors.bgApp },
+  container: { flex: 1, backgroundColor: '#F1F1F1' },
+  loading: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F1F1F1' },
+  header: { minHeight: 64, flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.sm, borderBottomWidth: 1, borderBottomColor: '#DEDEDE', backgroundColor: '#FFF' },
   backButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
-  groupIcon: { width: 42, height: 42, borderRadius: 21, backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center', marginRight: spacing.sm },
+  groupIcon: { width: 42, height: 42, borderRadius: 21, backgroundColor: '#000', alignItems: 'center', justifyContent: 'center', marginRight: spacing.sm },
   headerText: { flex: 1, minWidth: 0 },
   groupName: { color: colors.textPrimary, fontSize: 17, fontWeight: '500' },
   memberCount: { color: colors.textTertiary, fontSize: 12, fontWeight: '500', marginTop: 2 },
   body: { flex: 1 },
-  messageList: { flexGrow: 1, padding: spacing.md, gap: 8 },
+  messageList: { flexGrow: 1, padding: spacing.md, gap: 10 },
   messageRow: { alignItems: 'flex-start' },
   messageRowOwn: { alignItems: 'flex-end' },
   senderName: { color: colors.textTertiary, fontSize: 11, fontWeight: '600', marginBottom: 3, marginLeft: 6, maxWidth: '80%' },
-  bubble: { maxWidth: '82%', borderRadius: 18, paddingHorizontal: 12, paddingVertical: 9 },
-  bubbleOwn: { backgroundColor: colors.primary, borderBottomRightRadius: 5 },
-  bubbleOther: { backgroundColor: colors.bgSubtle, borderBottomLeftRadius: 5 },
+  bubble: { maxWidth: '74%', borderRadius: 22, paddingHorizontal: 18, paddingVertical: 12 },
+  bubbleOwn: { backgroundColor: '#000' },
+  bubbleOther: { backgroundColor: '#FFF' },
   messageText: { color: colors.textPrimary, fontSize: 15, lineHeight: 21 },
   messageTextOwn: { color: colors.textInverse },
   messageTime: { alignSelf: 'flex-end', color: colors.textTertiary, fontSize: 10, fontWeight: '500', marginTop: 4 },
   messageTimeOwn: { color: 'rgba(255,255,255,0.68)' },
   empty: { flex: 1, minHeight: 320, alignItems: 'center', justifyContent: 'center' },
   emptyText: { color: colors.textSecondary, fontSize: 14, fontWeight: '500', marginTop: spacing.sm },
-  inputBar: { flexDirection: 'row', alignItems: 'flex-end', gap: spacing.sm, padding: spacing.md, borderTopWidth: 1, borderTopColor: colors.borderSubtle, backgroundColor: colors.bgApp },
-  input: { flex: 1, maxHeight: 120, minHeight: 44, borderRadius: 22, backgroundColor: colors.bgSubtle, paddingHorizontal: spacing.md, paddingVertical: 11, color: colors.textPrimary, fontSize: 15 },
-  sendButton: { width: 44, height: 44, borderRadius: 22, backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center' },
+  inputBar: { flexDirection: 'row', alignItems: 'flex-end', gap: spacing.sm, padding: spacing.md, borderTopWidth: 1, borderTopColor: '#DEDEDE', backgroundColor: '#FFF' },
+  input: { flex: 1, maxHeight: 120, minHeight: 44, borderRadius: 22, backgroundColor: '#FFF', paddingHorizontal: spacing.md, paddingVertical: 11, color: '#111', fontSize: 15 },
+  sendButton: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#000', alignItems: 'center', justifyContent: 'center' },
   sendButtonDisabled: { opacity: 0.45 },
 });
