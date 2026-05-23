@@ -27,6 +27,11 @@ export interface Env {
   AGORA_APP_ID?: string;
   AGORA_APP_CERTIFICATE?: string;
   AGORA_TOKEN_TTL_SECONDS?: string;
+  APNS_TEAM_ID?: string;
+  APNS_KEY_ID?: string;
+  APNS_BUNDLE_ID?: string;
+  APNS_VOIP_PRIVATE_KEY?: string;
+  APNS_ENVIRONMENT?: string;
   MEDIA_BACKUP_MAX_VIDEO_BYTES?: string;
   STRIPE_SECRET_KEY?: string;
   STRIPE_PUBLISHABLE_KEY?: string;

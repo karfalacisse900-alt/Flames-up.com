@@ -36,6 +36,11 @@ interface Env {
   AGORA_APP_ID?: string;
   AGORA_APP_CERTIFICATE?: string;
   AGORA_TOKEN_TTL_SECONDS?: string;
+  APNS_TEAM_ID?: string;
+  APNS_KEY_ID?: string;
+  APNS_BUNDLE_ID?: string;
+  APNS_VOIP_PRIVATE_KEY?: string;
+  APNS_ENVIRONMENT?: string;
   MEDIA_BACKUP_MAX_VIDEO_BYTES?: string;
   STRIPE_SECRET_KEY?: string;
   STRIPE_PUBLISHABLE_KEY?: string;
@@ -1106,6 +1111,38 @@ async function ensureAbuseProtectionSchema(db: D1Database) {
       created_at TEXT DEFAULT (datetime('now')),
       UNIQUE(blocker_id, blocked_id)
     )`,
+    `CREATE TABLE IF NOT EXISTS call_sessions (
+      id TEXT PRIMARY KEY,
+      caller_id TEXT NOT NULL,
+      callee_id TEXT NOT NULL,
+      caller_name TEXT DEFAULT '',
+      caller_avatar TEXT DEFAULT '',
+      callee_name TEXT DEFAULT '',
+      callee_avatar TEXT DEFAULT '',
+      call_type TEXT DEFAULT 'video',
+      status TEXT DEFAULT 'ringing',
+      room_id TEXT NOT NULL,
+      channel_name TEXT NOT NULL,
+      push_delivery_status TEXT DEFAULT '',
+      created_at TEXT NOT NULL,
+      answered_at TEXT DEFAULT '',
+      ended_at TEXT DEFAULT '',
+      timeout_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
+    `CREATE TABLE IF NOT EXISTS voip_push_tokens (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      token TEXT NOT NULL,
+      device_id TEXT DEFAULT '',
+      bundle_id TEXT DEFAULT '',
+      environment TEXT DEFAULT 'production',
+      platform TEXT DEFAULT 'ios',
+      is_active INTEGER DEFAULT 1,
+      last_seen_at TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(user_id, token)
+    )`,
     `CREATE TABLE IF NOT EXISTS abuse_signals (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
@@ -1135,6 +1172,9 @@ async function ensureAbuseProtectionSchema(db: D1Database) {
     'CREATE INDEX IF NOT EXISTS idx_security_events_user_created ON security_events(user_id, created_at)',
     'CREATE INDEX IF NOT EXISTS idx_notifications_user_type_created ON notifications(user_id, type, created_at)',
     'CREATE INDEX IF NOT EXISTS idx_blocks_blocker ON blocks(blocker_id, blocked_id)',
+    'CREATE INDEX IF NOT EXISTS idx_call_sessions_callee_status ON call_sessions(callee_id, status, timeout_at)',
+    'CREATE INDEX IF NOT EXISTS idx_call_sessions_caller_status ON call_sessions(caller_id, status, timeout_at)',
+    'CREATE INDEX IF NOT EXISTS idx_voip_push_tokens_user ON voip_push_tokens(user_id, is_active, last_seen_at)',
     'CREATE INDEX IF NOT EXISTS idx_abuse_signals_hash ON abuse_signals(signal_type, signal_hash, user_id)',
     'CREATE INDEX IF NOT EXISTS idx_abuse_signals_user ON abuse_signals(user_id, last_seen_at)',
     'CREATE INDEX IF NOT EXISTS idx_ban_evasion_flags_status ON ban_evasion_flags(status, created_at)',
@@ -3639,6 +3679,149 @@ async function numericAgoraUid(userId: string): Promise<number> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(userId));
   const view = new DataView(digest);
   return (view.getUint32(0) % 2147483646) + 1;
+}
+
+const ACTIVE_CALL_STATUSES = ['ringing', 'accepted', 'connecting', 'active'];
+
+function buildCaptroCallChannel(callId: string): string {
+  return normalizeAgoraChannel(`captro_${callId.replace(/-/g, '_').slice(0, 48)}`);
+}
+
+function callTimeoutAt(seconds = 42): string {
+  return new Date(Date.now() + seconds * 1000).toISOString();
+}
+
+function safeCallPayload(row: any) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    call_id: row.id,
+    caller_user_id: row.caller_id,
+    callee_user_id: row.callee_id,
+    caller_name: row.caller_name || '',
+    caller_avatar: row.caller_avatar || '',
+    callee_name: row.callee_name || '',
+    callee_avatar: row.callee_avatar || '',
+    call_type: row.call_type || 'video',
+    status: row.status || 'failed',
+    room_id: row.room_id || row.channel_name || row.id,
+    channel_name: row.channel_name || row.room_id || row.id,
+    push_delivery_status: row.push_delivery_status || '',
+    created_at: row.created_at || '',
+    answered_at: row.answered_at || '',
+    ended_at: row.ended_at || '',
+    timeout_at: row.timeout_at || '',
+  };
+}
+
+async function expireRingingCalls(db: D1Database) {
+  const timestamp = now();
+  await db.prepare(
+    `UPDATE call_sessions
+     SET status = 'missed', ended_at = ?, updated_at = ?
+     WHERE status = 'ringing' AND timeout_at <= ?`
+  ).bind(timestamp, timestamp, timestamp).run();
+}
+
+async function getVisibleCallForUser(db: D1Database, callId: string, userId: string) {
+  await expireRingingCalls(db);
+  return db.prepare('SELECT * FROM call_sessions WHERE id = ? AND (caller_id = ? OR callee_id = ?) LIMIT 1')
+    .bind(publicId(callId, 120), userId, userId)
+    .first();
+}
+
+async function hasActiveCallForUser(db: D1Database, userId: string): Promise<boolean> {
+  await expireRingingCalls(db);
+  const placeholders = ACTIVE_CALL_STATUSES.map(() => '?').join(', ');
+  const row: any = await db.prepare(
+    `SELECT id FROM call_sessions
+     WHERE (caller_id = ? OR callee_id = ?) AND status IN (${placeholders})
+     LIMIT 1`
+  ).bind(userId, userId, ...ACTIVE_CALL_STATUSES).first();
+  return !!row;
+}
+
+function getApnsConfig(c: any) {
+  const teamId = String(c.env.APNS_TEAM_ID || '').trim();
+  const keyId = String(c.env.APNS_KEY_ID || '').trim();
+  const bundleId = String(c.env.APNS_BUNDLE_ID || '').trim();
+  const privateKey = String(c.env.APNS_VOIP_PRIVATE_KEY || '').replace(/\\n/g, '\n').trim();
+  const environment = String(c.env.APNS_ENVIRONMENT || c.env.ENVIRONMENT || 'production').toLowerCase();
+  if (!teamId || !keyId || !bundleId || !privateKey) return null;
+  return { teamId, keyId, bundleId, privateKey, environment };
+}
+
+async function signApnsJwt(config: { teamId: string; keyId: string; privateKey: string }) {
+  const { importPKCS8, SignJWT } = await import('jose');
+  const key = await importPKCS8(config.privateKey, 'ES256');
+  return new SignJWT({})
+    .setProtectedHeader({ alg: 'ES256', kid: config.keyId })
+    .setIssuer(config.teamId)
+    .setIssuedAt()
+    .sign(key);
+}
+
+async function sendVoipPushForCall(c: any, call: any): Promise<string> {
+  const config = getApnsConfig(c);
+  if (!config) return 'voip_not_configured';
+
+  const tokens = await c.env.DB.prepare(
+    `SELECT token, bundle_id, environment
+     FROM voip_push_tokens
+     WHERE user_id = ? AND is_active = 1
+     ORDER BY last_seen_at DESC
+     LIMIT 8`
+  ).bind(call.callee_id).all();
+  const rows = (tokens.results || []) as any[];
+  if (!rows.length) return 'no_voip_tokens';
+
+  const jwt = await signApnsJwt(config);
+  const isSandbox = config.environment === 'development' || config.environment === 'sandbox';
+  const baseURL = isSandbox ? 'https://api.sandbox.push.apple.com' : 'https://api.push.apple.com';
+  const payloadCall = safeCallPayload(call) || {};
+  const isRinging = String(call.status || 'ringing') === 'ringing';
+  const payload = {
+    aps: {
+      alert: {
+        title: isRinging ? 'Captro Video Call' : 'Captro Call Update',
+        body: isRinging ? `${call.caller_name || 'Someone'} is calling you` : 'Call ended',
+      },
+      sound: 'default',
+    },
+    ...payloadCall,
+  };
+
+  let sent = 0;
+  let failed = 0;
+  for (const row of rows) {
+    const token = String(row.token || '').trim();
+    if (!token) continue;
+    const topic = String(row.bundle_id || config.bundleId).trim() || config.bundleId;
+    const response = await fetch(`${baseURL}/3/device/${token}`, {
+      method: 'POST',
+      headers: {
+        authorization: `bearer ${jwt}`,
+        'apns-topic': `${topic}.voip`,
+        'apns-push-type': 'voip',
+        'apns-priority': '10',
+        'apns-expiration': '0',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+    if (response.ok) {
+      sent += 1;
+    } else {
+      failed += 1;
+      if (response.status === 400 || response.status === 410) {
+        await c.env.DB.prepare('UPDATE voip_push_tokens SET is_active = 0 WHERE token = ?').bind(token).run();
+      }
+    }
+  }
+
+  if (sent > 0 && failed === 0) return `voip_sent:${sent}`;
+  if (sent > 0) return `voip_partial:${sent}/${sent + failed}`;
+  return 'voip_failed';
 }
 
 const MAPBOX_SEARCH_BOX_API_BASE = 'https://api.mapbox.com/search/searchbox/v1';
@@ -6933,6 +7116,225 @@ api.post('/group-chats/:groupId/messages', authMiddleware, async (c) => {
 });
 
 // Calls
+api.post('/calls/voip-token', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const body: any = await c.req.json().catch(() => ({}));
+  const token = String(body.token || '').trim().replace(/[^a-fA-F0-9]/g, '');
+  if (token.length < 32) return c.json({ detail: 'Invalid VoIP token.' }, 400);
+  await ensureAbuseProtectionSchema(c.env.DB);
+  const timestamp = now();
+  await c.env.DB.prepare(
+    `INSERT INTO voip_push_tokens (id, user_id, token, device_id, bundle_id, environment, platform, is_active, last_seen_at, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, 'ios', 1, ?, ?)
+     ON CONFLICT(user_id, token) DO UPDATE SET
+       device_id = excluded.device_id,
+       bundle_id = excluded.bundle_id,
+       environment = excluded.environment,
+       is_active = 1,
+       last_seen_at = excluded.last_seen_at`
+  ).bind(
+    uuid(),
+    userId,
+    token,
+    cleanText(body.device_id || body.deviceId || '', 160),
+    cleanText(body.bundle_id || body.bundleId || c.env.APNS_BUNDLE_ID || '', 160),
+    cleanText(body.environment || 'production', 32),
+    timestamp,
+    timestamp
+  ).run();
+  return c.json({ ok: true });
+});
+
+api.post('/calls', authMiddleware, async (c) => {
+  try {
+    const phoneGate = await requirePhoneVerified(c, 'start video calls');
+    if (phoneGate) return phoneGate;
+    await ensureAbuseProtectionSchema(c.env.DB);
+    await expireRingingCalls(c.env.DB);
+
+    const callerId = getUserId(c);
+    const body: any = await c.req.json().catch(() => ({}));
+    const calleeId = publicId(body.callee_user_id || body.calleeUserId || body.user_id || body.userId || '', 120);
+    if (!calleeId || calleeId === callerId) return c.json({ detail: 'Choose someone else to call.' }, 400);
+
+    const blocked: any = await c.env.DB.prepare(
+      'SELECT id FROM blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?) LIMIT 1'
+    ).bind(callerId, calleeId, calleeId, callerId).first();
+    if (blocked) return c.json({ detail: 'This call is not available.' }, 403);
+
+    if (await hasActiveCallForUser(c.env.DB, callerId) || await hasActiveCallForUser(c.env.DB, calleeId)) {
+      return c.json({ detail: 'One of you is already in another call.' }, 409);
+    }
+
+    const caller: any = await c.env.DB.prepare('SELECT id, username, full_name, profile_image FROM users WHERE id = ? LIMIT 1').bind(callerId).first();
+    const callee: any = await c.env.DB.prepare('SELECT id, username, full_name, profile_image FROM users WHERE id = ? LIMIT 1').bind(calleeId).first();
+    if (!caller || !callee) return c.json({ detail: 'User not found.' }, 404);
+
+    const callId = uuid();
+    const timestamp = now();
+    const timeoutAt = callTimeoutAt();
+    const channel = buildCaptroCallChannel(callId);
+    await c.env.DB.prepare(
+      `INSERT INTO call_sessions
+       (id, caller_id, callee_id, caller_name, caller_avatar, callee_name, callee_avatar, call_type, status, room_id, channel_name, push_delivery_status, created_at, timeout_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'video', 'ringing', ?, ?, '', ?, ?, ?)`
+    ).bind(
+      callId,
+      callerId,
+      calleeId,
+      cleanText(caller.full_name || caller.username || 'Captro', 120),
+      cleanText(caller.profile_image || '', 500),
+      cleanText(callee.full_name || callee.username || 'Captro', 120),
+      cleanText(callee.profile_image || '', 500),
+      channel,
+      channel,
+      timestamp,
+      timeoutAt,
+      timestamp
+    ).run();
+
+    const call: any = await c.env.DB.prepare('SELECT * FROM call_sessions WHERE id = ?').bind(callId).first();
+    await insertNotificationOnce(c, {
+      userId: calleeId,
+      type: 'incoming_call',
+      title: 'Captro Video Call',
+      body: `${call.caller_name || 'Someone'} is calling you`,
+      data: { call_id: callId, caller_user_id: callerId, status: 'ringing' },
+      dedupeKey: `incoming_call:${callId}`,
+      dedupeSeconds: 90,
+    });
+
+    const pushStatus = await sendVoipPushForCall(c, call);
+    await c.env.DB.prepare('UPDATE call_sessions SET push_delivery_status = ?, updated_at = ? WHERE id = ?')
+      .bind(pushStatus, now(), callId)
+      .run();
+    const fresh: any = await c.env.DB.prepare('SELECT * FROM call_sessions WHERE id = ?').bind(callId).first();
+    return c.json(safeCallPayload(fresh));
+  } catch (error: any) {
+    const code = getErrorCode(error);
+    if (code === 'AGORA_INVALID_CHANNEL') return c.json({ detail: 'Invalid call channel.' }, 400);
+    return c.json({ detail: 'Could not start the call.' }, 500);
+  }
+});
+
+api.get('/calls/incoming', authMiddleware, async (c) => {
+  await ensureAbuseProtectionSchema(c.env.DB);
+  const userId = getUserId(c);
+  await expireRingingCalls(c.env.DB);
+  const row: any = await c.env.DB.prepare(
+    `SELECT * FROM call_sessions
+     WHERE callee_id = ? AND status = 'ringing' AND timeout_at > ?
+     ORDER BY created_at DESC
+     LIMIT 1`
+  ).bind(userId, now()).first();
+  return c.json({ call: safeCallPayload(row) });
+});
+
+api.get('/calls/:callId', authMiddleware, async (c) => {
+  await ensureAbuseProtectionSchema(c.env.DB);
+  const row: any = await getVisibleCallForUser(c.env.DB, c.req.param('callId'), getUserId(c));
+  if (!row) return c.json({ detail: 'Call not found.' }, 404);
+  return c.json(safeCallPayload(row));
+});
+
+api.post('/calls/:callId/accept', authMiddleware, async (c) => {
+  await ensureAbuseProtectionSchema(c.env.DB);
+  const userId = getUserId(c);
+  const row: any = await getVisibleCallForUser(c.env.DB, c.req.param('callId'), userId);
+  if (!row || row.callee_id !== userId) return c.json({ detail: 'Call not found.' }, 404);
+  if (row.status !== 'ringing') return c.json(safeCallPayload(row));
+  const timestamp = now();
+  await c.env.DB.prepare("UPDATE call_sessions SET status = 'accepted', answered_at = ?, updated_at = ? WHERE id = ?")
+    .bind(timestamp, timestamp, row.id)
+    .run();
+  const fresh: any = await c.env.DB.prepare('SELECT * FROM call_sessions WHERE id = ?').bind(row.id).first();
+  await insertNotificationOnce(c, {
+    userId: row.caller_id,
+    type: 'call_accepted',
+    title: 'Call accepted',
+    body: `${fresh.callee_name || 'They'} joined your call`,
+    data: { call_id: row.id, status: 'accepted' },
+    dedupeKey: `call_accepted:${row.id}`,
+    dedupeSeconds: 120,
+  });
+  return c.json(safeCallPayload(fresh));
+});
+
+api.post('/calls/:callId/decline', authMiddleware, async (c) => {
+  await ensureAbuseProtectionSchema(c.env.DB);
+  const userId = getUserId(c);
+  const row: any = await getVisibleCallForUser(c.env.DB, c.req.param('callId'), userId);
+  if (!row || row.callee_id !== userId) return c.json({ detail: 'Call not found.' }, 404);
+  if (row.status === 'ringing') {
+    const timestamp = now();
+    await c.env.DB.prepare("UPDATE call_sessions SET status = 'declined', ended_at = ?, updated_at = ? WHERE id = ?")
+      .bind(timestamp, timestamp, row.id)
+      .run();
+    await insertNotificationOnce(c, {
+      userId: row.caller_id,
+      type: 'call_declined',
+      title: 'Call declined',
+      body: `${row.callee_name || 'They'} declined your call`,
+      data: { call_id: row.id, status: 'declined' },
+      dedupeKey: `call_declined:${row.id}`,
+      dedupeSeconds: 120,
+    });
+  }
+  const fresh: any = await c.env.DB.prepare('SELECT * FROM call_sessions WHERE id = ?').bind(row.id).first();
+  return c.json(safeCallPayload(fresh));
+});
+
+api.post('/calls/:callId/cancel', authMiddleware, async (c) => {
+  await ensureAbuseProtectionSchema(c.env.DB);
+  const userId = getUserId(c);
+  const row: any = await getVisibleCallForUser(c.env.DB, c.req.param('callId'), userId);
+  if (!row || row.caller_id !== userId) return c.json({ detail: 'Call not found.' }, 404);
+  if (row.status === 'ringing') {
+    const timestamp = now();
+    await c.env.DB.prepare("UPDATE call_sessions SET status = 'cancelled', ended_at = ?, updated_at = ? WHERE id = ?")
+      .bind(timestamp, timestamp, row.id)
+      .run();
+  }
+  const fresh: any = await c.env.DB.prepare('SELECT * FROM call_sessions WHERE id = ?').bind(row.id).first();
+  if (fresh?.status === 'cancelled') {
+    const pushStatus = await sendVoipPushForCall(c, fresh);
+    await c.env.DB.prepare('UPDATE call_sessions SET push_delivery_status = ?, updated_at = ? WHERE id = ?')
+      .bind(pushStatus, now(), row.id)
+      .run();
+  }
+  return c.json(safeCallPayload(fresh));
+});
+
+api.post('/calls/:callId/active', authMiddleware, async (c) => {
+  await ensureAbuseProtectionSchema(c.env.DB);
+  const userId = getUserId(c);
+  const row: any = await getVisibleCallForUser(c.env.DB, c.req.param('callId'), userId);
+  if (!row) return c.json({ detail: 'Call not found.' }, 404);
+  if (['accepted', 'connecting', 'active'].includes(row.status)) {
+    await c.env.DB.prepare("UPDATE call_sessions SET status = 'active', updated_at = ? WHERE id = ?")
+      .bind(now(), row.id)
+      .run();
+  }
+  const fresh: any = await c.env.DB.prepare('SELECT * FROM call_sessions WHERE id = ?').bind(row.id).first();
+  return c.json(safeCallPayload(fresh));
+});
+
+api.post('/calls/:callId/end', authMiddleware, async (c) => {
+  await ensureAbuseProtectionSchema(c.env.DB);
+  const userId = getUserId(c);
+  const row: any = await getVisibleCallForUser(c.env.DB, c.req.param('callId'), userId);
+  if (!row) return c.json({ detail: 'Call not found.' }, 404);
+  if (['accepted', 'connecting', 'active', 'ringing'].includes(row.status)) {
+    const timestamp = now();
+    const nextStatus = row.status === 'ringing' ? 'cancelled' : 'ended';
+    await c.env.DB.prepare('UPDATE call_sessions SET status = ?, ended_at = ?, updated_at = ? WHERE id = ?')
+      .bind(nextStatus, timestamp, timestamp, row.id)
+      .run();
+  }
+  const fresh: any = await c.env.DB.prepare('SELECT * FROM call_sessions WHERE id = ?').bind(row.id).first();
+  return c.json(safeCallPayload(fresh));
+});
+
 api.post('/calls/agora/token', authMiddleware, async (c) => {
   try {
     const phoneGate = await requirePhoneVerified(c, 'start video calls');

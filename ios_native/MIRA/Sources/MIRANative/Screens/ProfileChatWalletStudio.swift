@@ -742,7 +742,6 @@ final class ChatNativeModel: ObservableObject {
 public struct ChatNativeView: View {
   @StateObject private var model: ChatNativeModel
   @State private var showCreateGroup = false
-  @State private var activeCall: MIRAAgoraCallPresentation?
   private let currentUserId: String
 
   public init(api: MIRAAPIClient, currentUserId: String = "") {
@@ -755,7 +754,6 @@ public struct ChatNativeView: View {
       ScrollView {
         VStack(alignment: .leading, spacing: MIRATheme.Space.lg) {
           chatHeader
-          quickCallStrip
 
           if model.conversations.isEmpty && model.isLoading {
             chatListSkeleton
@@ -781,9 +779,6 @@ public struct ChatNativeView: View {
           dismissCreateGroup()
           Task { await model.load() }
         }
-      }
-      .miraFullScreenOverlay(item: $activeCall, background: .black) { presentation, dismissCall in
-        MIRAAgoraCallView(presentation: presentation, api: model.api, onClose: dismissCall)
       }
     }
   }
@@ -815,70 +810,13 @@ public struct ChatNativeView: View {
   }
 
   @ViewBuilder
-  private var quickCallStrip: some View {
-    let directConversations = model.conversations.filter { !$0.isGroup && $0.otherUserId != nil }
-    if !directConversations.isEmpty {
-      ScrollView(.horizontal, showsIndicators: false) {
-        HStack(spacing: MIRATheme.Space.sm) {
-          ForEach(Array(directConversations.prefix(12))) { conversation in
-            Button {
-              startCall(for: conversation, mode: .video)
-            } label: {
-              VStack(spacing: 7) {
-                ZStack(alignment: .bottomTrailing) {
-                  RemoteAvatar(url: conversation.otherProfileImage, size: 58)
-                  Circle()
-                    .fill(MIRATheme.Color.forest)
-                    .frame(width: 22, height: 22)
-                    .overlay {
-                      Image(systemName: "video.fill")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(.white)
-                    }
-                    .overlay(Circle().stroke(MIRATheme.Color.surface, lineWidth: 2))
-                }
-                Text(conversation.displayName)
-                  .font(.system(size: 12, weight: .semibold))
-                  .foregroundStyle(MIRATheme.Color.textSecondary)
-                  .lineLimit(1)
-                  .frame(width: 72)
-              }
-              .padding(.vertical, 4)
-              .contentShape(Rectangle())
-            }
-            .buttonStyle(.miraPress)
-          }
-        }
-        .padding(.horizontal, MIRATheme.Space.md)
-      }
-    }
-  }
-
-  @ViewBuilder
   private func conversationCard(_ conversation: MIRAConversation) -> some View {
-    HStack(spacing: MIRATheme.Space.sm) {
-      NavigationLink {
-        conversationDestination(conversation)
-      } label: {
-        ChatConversationRow(conversation: conversation)
-      }
-      .buttonStyle(.plain)
-
-      if callPresentation(for: conversation, mode: .video) != nil {
-        Button {
-          startCall(for: conversation, mode: .video)
-        } label: {
-          Image(systemName: "video.fill")
-            .font(.system(size: 16, weight: .bold))
-            .foregroundStyle(.white)
-            .frame(width: 42, height: 42)
-            .background(MIRATheme.Color.forest)
-            .clipShape(Circle())
-        }
-        .buttonStyle(.miraPress)
-        .accessibilityLabel("Start video call")
-      }
+    NavigationLink {
+      conversationDestination(conversation)
+    } label: {
+      ChatConversationRow(conversation: conversation)
     }
+    .buttonStyle(.plain)
     .padding(.horizontal, MIRATheme.Space.sm)
     .padding(.vertical, 8)
     .background(MIRATheme.Color.surface)
@@ -898,23 +836,6 @@ public struct ChatNativeView: View {
     } else {
       MIRAEmptyState(title: "Chat unavailable", message: "This conversation cannot be opened right now.", systemImage: "exclamationmark.bubble")
     }
-  }
-
-  private func startCall(for conversation: MIRAConversation, mode: MIRAAgoraCallMode) {
-    guard let presentation = callPresentation(for: conversation, mode: mode) else { return }
-    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-    activeCall = presentation
-  }
-
-  private func callPresentation(for conversation: MIRAConversation, mode: MIRAAgoraCallMode) -> MIRAAgoraCallPresentation? {
-    guard let peerId = conversation.otherUserId, !peerId.isEmpty else { return nil }
-    return MIRAAgoraCallPresentation.direct(
-      currentUserId: currentUserId,
-      peerId: peerId,
-      peerName: conversation.displayName,
-      peerAvatar: conversation.otherProfileImage,
-      mode: mode
-    )
   }
 
   private var chatListSkeleton: some View {

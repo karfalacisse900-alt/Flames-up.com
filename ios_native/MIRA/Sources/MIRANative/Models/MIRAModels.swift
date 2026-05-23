@@ -514,6 +514,80 @@ public struct MIRAAgoraTokenResponse: Decodable, Hashable {
   public let expiresAt: String?
 }
 
+enum MIRACallStatus: String, Decodable, Hashable {
+  case idle
+  case creatingCall
+  case ringing
+  case incoming
+  case accepted
+  case connecting
+  case active
+  case declined
+  case cancelled
+  case missed
+  case failed
+  case ended
+}
+
+struct MIRACallSession: Decodable, Identifiable, Hashable {
+  let id: String
+  let callId: String?
+  let callerUserId: String
+  let calleeUserId: String
+  let callerName: String?
+  let callerAvatar: String?
+  let calleeName: String?
+  let calleeAvatar: String?
+  let callType: String?
+  let status: MIRACallStatus
+  let roomId: String?
+  let channelName: String
+  let pushDeliveryStatus: String?
+  let createdAt: String?
+  let answeredAt: String?
+  let endedAt: String?
+  let timeoutAt: String?
+
+  var resolvedId: String { callId ?? id }
+
+  func agoraPresentation(currentUserId: String) -> MIRAAgoraCallPresentation {
+    let isCaller = callerUserId == currentUserId
+    let peerId = isCaller ? calleeUserId : callerUserId
+    let peerName = isCaller ? (calleeName ?? "Video call") : (callerName ?? "Video call")
+    let peerAvatar = isCaller ? calleeAvatar : callerAvatar
+    return MIRAAgoraCallPresentation(
+      callId: resolvedId,
+      peerId: peerId,
+      peerName: peerName,
+      peerAvatar: peerAvatar,
+      channel: channelName,
+      mode: .video,
+      role: .host
+    )
+  }
+}
+
+struct MIRACallStartBody: Encodable {
+  let calleeUserId: String
+  let callType: String
+
+  init(calleeUserId: String, callType: String = "video") {
+    self.calleeUserId = calleeUserId
+    self.callType = callType
+  }
+}
+
+struct MIRAVoIPTokenBody: Encodable {
+  let token: String
+  let deviceId: String
+  let bundleId: String
+  let environment: String
+}
+
+struct MIRAIncomingCallEnvelope: Decodable, Hashable {
+  let call: MIRACallSession?
+}
+
 public struct MIRANotification: Decodable, Identifiable, Hashable {
   public let id: String
   public let type: String?

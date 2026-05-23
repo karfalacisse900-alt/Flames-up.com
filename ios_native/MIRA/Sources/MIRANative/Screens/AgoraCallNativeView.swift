@@ -27,6 +27,7 @@ enum MIRAAgoraCallRole: String, Hashable {
 }
 
 struct MIRAAgoraCallPresentation: Identifiable, Hashable {
+  let callId: String?
   let peerId: String
   let peerName: String
   let peerAvatar: String?
@@ -35,7 +36,7 @@ struct MIRAAgoraCallPresentation: Identifiable, Hashable {
   let role: MIRAAgoraCallRole
 
   var id: String {
-    "\(channel)-\(mode.rawValue)-\(role.rawValue)"
+    callId ?? "\(channel)-\(mode.rawValue)-\(role.rawValue)"
   }
 
   static func direct(
@@ -46,6 +47,7 @@ struct MIRAAgoraCallPresentation: Identifiable, Hashable {
     mode: MIRAAgoraCallMode = .video
   ) -> MIRAAgoraCallPresentation {
     MIRAAgoraCallPresentation(
+      callId: nil,
       peerId: peerId,
       peerName: peerName.isEmpty ? mode.title : peerName,
       peerAvatar: peerAvatar,
@@ -328,6 +330,7 @@ final class MIRAAgoraCallModel: NSObject, ObservableObject, AgoraRtcEngineDelega
       statusText = remoteUid == nil ? "Waiting for them..." : "Connected"
       errorText = nil
       startTimerIfNeeded()
+      markCallActiveIfNeeded()
     }
   }
 
@@ -363,6 +366,14 @@ final class MIRAAgoraCallModel: NSObject, ObservableObject, AgoraRtcEngineDelega
   nonisolated func rtcEngine(_ engine: AgoraRtcEngineKit, tokenPrivilegeWillExpire token: String) {
     Task { [weak self] in
       await self?.renewToken()
+    }
+  }
+
+  @MainActor
+  private func markCallActiveIfNeeded() {
+    guard let callId = presentation.callId else { return }
+    Task { [api] in
+      let _: MIRACallSession? = try? await api.post("/calls/\(callId)/active", body: EmptyBody())
     }
   }
 }

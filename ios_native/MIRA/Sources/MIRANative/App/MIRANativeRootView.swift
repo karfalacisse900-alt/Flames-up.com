@@ -197,6 +197,7 @@ public struct MIRANativeRootView: View {
   @State private var loadedTabs: Set<MIRATab> = [.main]
   @StateObject private var authSession: MIRAAuthSession
   @StateObject private var startup: MIRAStartupCoordinator
+  @StateObject private var callCoordinator: MIRAAppCallCoordinator
   private let api: MIRAAPIClient
 
   public init() {
@@ -204,6 +205,7 @@ public struct MIRANativeRootView: View {
     let client = MIRAAPIClient(sessionProvider: session)
     _authSession = StateObject(wrappedValue: session)
     _startup = StateObject(wrappedValue: MIRAStartupCoordinator(api: client))
+    _callCoordinator = StateObject(wrappedValue: MIRAAppCallCoordinator.shared)
     self.api = client
     MIRAPerformanceTimeline.mark("native_root_init")
   }
@@ -221,6 +223,15 @@ public struct MIRANativeRootView: View {
           .scaleEffect(startup.isSplashVisible ? 1 : 0.985)
           .zIndex(10)
       }
+
+      MIRACallOverlays(coordinator: callCoordinator)
+        .zIndex(30)
+    }
+    .miraFullScreenOverlay(item: activeCallBinding, background: .black) { presentation, dismissCall in
+      MIRAAgoraCallView(presentation: presentation, api: api) {
+        Task { await callCoordinator.endActiveCall() }
+        dismissCall()
+      }
     }
     .background(MIRATheme.Color.launchBackground.ignoresSafeArea())
     .statusBarHidden(startup.isSplashMounted || (authSession.user != nil && selectedTab == .main))
@@ -228,7 +239,10 @@ public struct MIRANativeRootView: View {
       MIRAMainThreadStallMonitor.shared.start()
       MIRAPerformanceTimeline.markOnce("time_to_first_screen")
     }
-    .task { await startup.start(authSession: authSession) }
+    .task {
+      await startup.start(authSession: authSession)
+      callCoordinator.configure(api: api, currentUserId: authSession.user?.id)
+    }
     .onChange(of: authSession.user?.id) { _, userID in
       if userID == nil {
         selectedTab = .main
@@ -236,7 +250,15 @@ public struct MIRANativeRootView: View {
       } else {
         loadedTabs.formUnion([.main, .discover, .profile])
       }
+      callCoordinator.configure(api: api, currentUserId: userID)
     }
+  }
+
+  private var activeCallBinding: Binding<MIRAAgoraCallPresentation?> {
+    Binding(
+      get: { callCoordinator.activeCall },
+      set: { callCoordinator.activeCall = $0 }
+    )
   }
 
   @ViewBuilder

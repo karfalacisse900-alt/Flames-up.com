@@ -248,7 +248,6 @@ public struct ConversationNativeView: View {
   @State private var showFileImporter = false
   @State private var showGIFPicker = false
   @State private var showAttachmentTray = false
-  @State private var activeCall: MIRAAgoraCallPresentation?
   @Environment(\.dismiss) private var dismiss
   private let title: String
 
@@ -302,9 +301,6 @@ public struct ConversationNativeView: View {
     .toolbar(.hidden, for: .tabBar)
     .task { await model.load() }
     .task { await model.pollPresence() }
-    .miraFullScreenOverlay(item: $activeCall, background: .black) { presentation, dismissCall in
-      MIRAAgoraCallView(presentation: presentation, api: model.api, onClose: dismissCall)
-    }
     .miraBottomSheet(isPresented: $showGIFPicker, preferredHeightFraction: 0.72) { dismissGIFPicker in
       ChatGIFPickerSheet(api: model.api, onClose: dismissGIFPicker) { gif in
         dismissGIFPicker()
@@ -354,17 +350,27 @@ public struct ConversationNativeView: View {
       }
       .frame(maxWidth: .infinity, alignment: .leading)
 
+      if model.peerId != nil {
+        Button {
+          startCall(mode: .video)
+        } label: {
+          Image(systemName: "video.fill")
+            .font(.system(size: 16, weight: .bold))
+            .foregroundStyle(.white)
+            .frame(width: 40, height: 40)
+            .background(Color.black)
+            .clipShape(Circle())
+        }
+        .buttonStyle(.miraPress)
+        .accessibilityLabel("Video Call")
+      }
+
       Menu {
         if model.peerId != nil {
           Button {
-            startCall(mode: .voice)
-          } label: {
-            Label("Voice call", systemImage: "phone.fill")
-          }
-          Button {
             startCall(mode: .video)
           } label: {
-            Label("FaceTime", systemImage: "video.fill")
+            Label("Video Call", systemImage: "video.fill")
           }
         } else {
           Text("Group chat")
@@ -393,31 +399,17 @@ public struct ConversationNativeView: View {
     return "chat"
   }
 
-  private func callToolbarButton(systemImage: String, mode: MIRAAgoraCallMode) -> some View {
-    Button {
-      startCall(mode: mode)
-    } label: {
-      Image(systemName: systemImage)
-        .font(.system(size: 14, weight: .bold))
-        .foregroundStyle(ChatRoomPalette.accent)
-        .frame(width: 34, height: 34)
-        .background(Color.white)
-        .clipShape(Circle())
-        .overlay(Circle().stroke(ChatRoomPalette.hairline, lineWidth: 1))
-    }
-    .buttonStyle(.miraPress)
-  }
-
   private func startCall(mode: MIRAAgoraCallMode) {
     guard let peerId = model.peerId, !peerId.isEmpty else { return }
     UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-    activeCall = MIRAAgoraCallPresentation.direct(
-      currentUserId: model.currentUserId,
-      peerId: peerId,
-      peerName: title,
-      peerAvatar: peerAvatarURL,
-      mode: mode
-    )
+    guard mode == .video else { return }
+    Task {
+      await MIRAAppCallCoordinator.shared.startVideoCall(
+        peerId: peerId,
+        peerName: title,
+        peerAvatar: peerAvatarURL
+      )
+    }
   }
 
   private var peerAvatarURL: String? {
@@ -623,9 +615,9 @@ public struct ConversationNativeView: View {
 
         if model.peerId != nil {
           Button {
-            startCall(mode: .voice)
+            startCall(mode: .video)
           } label: {
-            trayButton("phone.fill", "Call", tint: ChatRoomPalette.accent)
+            trayButton("video.fill", "Video", tint: ChatRoomPalette.accent)
           }
           .buttonStyle(.plain)
         }

@@ -956,8 +956,8 @@ public struct MIRAFullScreenMediaViewer: View {
 }
 
 public enum MIRAMediaSizing {
-  public static let feedPreviewRatio: CGFloat = 4.0 / 3.0
-  public static let feedTallRatio: CGFloat = 4.0 / 3.0
+  public static let feedPreviewRatio: CGFloat = 3.0 / 2.0
+  public static let feedTallRatio: CGFloat = 3.0 / 2.0
   public static let feedImmersiveRatio: CGFloat = 3.0 / 2.0
   public static let profileGridRatio: CGFloat = 5.0 / 4.0
   public static let fullVerticalRatio: CGFloat = 16.0 / 9.0
@@ -1068,8 +1068,6 @@ public enum MIRAMediaSizing {
   private static func mainFeedDisplayRatio(forSourceHeightToWidthRatio ratio: CGFloat) -> CGFloat {
     let clamped = min(max(ratio, 1.0 / 1.91), fullVerticalRatio)
     if clamped >= 1.62 { return fullVerticalRatio }
-    if clamped >= 1.42 { return feedImmersiveRatio }
-    if clamped >= 1.29 { return feedTallRatio }
     return feedPreviewRatio
   }
 
