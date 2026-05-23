@@ -4,6 +4,7 @@ import {
   Alert,
   FlatList,
   KeyboardAvoidingView,
+  Dimensions,
   Platform,
   StyleSheet,
   Text,
@@ -18,6 +19,9 @@ import api from '../../src/api/client';
 import { useAuthStore } from '../../src/store/authStore';
 import { colors, spacing } from '../../src/utils/theme';
 import { isPhoneVerificationError, requireVerifiedPhone } from '../../src/utils/phoneVerification';
+
+const { width: SW } = Dimensions.get('window');
+const MESSAGE_MAX_WIDTH = Math.min(SW * 0.72, 296);
 
 export default function GroupConversationScreen() {
   const router = useRouter();
@@ -159,10 +163,17 @@ const styles = StyleSheet.create({
   messageRow: { alignItems: 'flex-start' },
   messageRowOwn: { alignItems: 'flex-end' },
   senderName: { color: colors.textTertiary, fontSize: 11, fontWeight: '600', marginBottom: 3, marginLeft: 6, maxWidth: '80%' },
-  bubble: { maxWidth: '74%', borderRadius: 22, paddingHorizontal: 18, paddingVertical: 12 },
-  bubbleOwn: { backgroundColor: '#000' },
-  bubbleOther: { backgroundColor: '#FFF' },
-  messageText: { color: colors.textPrimary, fontSize: 15, lineHeight: 21 },
+  bubble: {
+    maxWidth: MESSAGE_MAX_WIDTH,
+    flexShrink: 1,
+    alignSelf: 'flex-start',
+    borderRadius: 22,
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+  },
+  bubbleOwn: { alignSelf: 'flex-end', backgroundColor: '#000' },
+  bubbleOther: { alignSelf: 'flex-start', backgroundColor: '#FFF' },
+  messageText: { flexShrink: 1, color: colors.textPrimary, fontSize: 15, lineHeight: 21 },
   messageTextOwn: { color: colors.textInverse },
   messageTime: { alignSelf: 'flex-end', color: colors.textTertiary, fontSize: 10, fontWeight: '500', marginTop: 4 },
   messageTimeOwn: { color: 'rgba(255,255,255,0.68)' },

@@ -18,6 +18,8 @@ import { isPhoneVerificationError, requireVerifiedPhone } from '../../src/utils/
 import { colors } from '../../src/utils/theme';
 
 const { width: SW } = Dimensions.get('window');
+const MESSAGE_MAX_WIDTH = Math.min(SW * 0.72, 296);
+const MEDIA_MESSAGE_WIDTH = Math.min(SW * 0.62, 260);
 const VOICE_WAVE_HEIGHTS = [6, 8, 5, 11, 15, 20, 24, 13, 22, 18, 26, 15, 10, 18, 12, 8];
 
 export default function ConversationScreen() {
@@ -323,7 +325,7 @@ export default function ConversationScreen() {
             <View style={st.videoBox}>
               <Video
                 source={{ uri: mediaSource }}
-                style={{ width: SW * 0.55, height: SW * 0.55 * 0.75, borderRadius: 12 }}
+                style={{ width: MEDIA_MESSAGE_WIDTH, height: MEDIA_MESSAGE_WIDTH * 0.75, borderRadius: 12 }}
                 resizeMode={ResizeMode.CONTAIN}
                 useNativeControls
                 shouldPlay={false}
@@ -520,20 +522,27 @@ const st = StyleSheet.create({
   msgList: { paddingHorizontal: 14, paddingVertical: 16, flexGrow: 1 },
   msgRow: { marginBottom: 10, alignItems: 'flex-start' },
   msgRowOwn: { alignItems: 'flex-end' },
-  bubble: { maxWidth: '74%', paddingHorizontal: 18, paddingVertical: 12, borderRadius: 22 },
+  bubble: {
+    maxWidth: MESSAGE_MAX_WIDTH,
+    flexShrink: 1,
+    alignSelf: 'flex-start',
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+    borderRadius: 22,
+  },
   mediaBubble: { padding: 4, overflow: 'hidden' },
-  bubbleOwn: { backgroundColor: '#000' },
-  bubbleOther: { backgroundColor: '#FFF' },
+  bubbleOwn: { alignSelf: 'flex-end', backgroundColor: '#000' },
+  bubbleOther: { alignSelf: 'flex-start', backgroundColor: '#FFF' },
   voiceMessageBubble: { backgroundColor: '#000', paddingHorizontal: 8, paddingVertical: 6, borderRadius: 25 },
-  msgImage: { width: SW * 0.6, height: SW * 0.45, borderRadius: 14 },
-  videoBox: { width: SW * 0.6, height: SW * 0.35, borderRadius: 14, backgroundColor: '#000', justifyContent: 'center', alignItems: 'center' },
+  msgImage: { width: MEDIA_MESSAGE_WIDTH, height: MEDIA_MESSAGE_WIDTH * 0.75, borderRadius: 14 },
+  videoBox: { width: MEDIA_MESSAGE_WIDTH, height: MEDIA_MESSAGE_WIDTH * 0.75, borderRadius: 14, backgroundColor: '#000', justifyContent: 'center', alignItems: 'center' },
   playCircle: { width: 52, height: 52, borderRadius: 26, backgroundColor: 'rgba(255,255,255,0.2)', justifyContent: 'center', alignItems: 'center' },
   videoLabel: { fontSize: 12, color: 'rgba(255,255,255,0.7)', fontWeight: '500', marginTop: 4 },
   voiceBubble: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 0, paddingVertical: 0 },
   voicePlayCircle: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#FFF', alignItems: 'center', justifyContent: 'center' },
   voiceWave: { flexDirection: 'row', alignItems: 'center', gap: 2 },
   waveBar: { width: 3, borderRadius: 1.5 },
-  msgText: { fontSize: 15, color: '#111', lineHeight: 20 },
+  msgText: { flexShrink: 1, fontSize: 15, color: '#111', lineHeight: 20 },
   msgTextOwn: { color: '#FFF' },
   metaRow: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-end', paddingHorizontal: 6, paddingBottom: 2, marginTop: 2 },
   msgTime: { fontSize: 10, color: '#9CA3AF' },

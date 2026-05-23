@@ -466,7 +466,7 @@ public struct ConversationNativeView: View {
   }
 
   private var bubbleMaxWidth: CGFloat {
-    min(UIScreen.main.bounds.width * 0.78, 304)
+    min(UIScreen.main.bounds.width * 0.72, 296)
   }
 
   private func conversationMessageAge(_ value: String) -> String {
@@ -881,13 +881,8 @@ private struct MessageBubbleContent: View {
       if let mediaUrl = message.mediaUrl, !mediaUrl.isEmpty {
         mediaContent(url: mediaUrl)
       }
-      if shouldShowTextContent, let content = message.content?.trimmingCharacters(in: .whitespacesAndNewlines), !content.isEmpty {
-        Text(content)
-          .font(.system(size: 15, weight: .regular))
-          .foregroundStyle(bubbleTextColor)
-          .fixedSize(horizontal: false, vertical: true)
-          .multilineTextAlignment(outgoing ? .trailing : .leading)
-          .frame(maxWidth: textMaxWidth, alignment: outgoing ? .trailing : .leading)
+      if shouldShowTextContent, let content = normalizedText {
+        bubbleText(content)
       }
       if let timestamp, !timestamp.isEmpty {
         Text(timestamp)
@@ -918,9 +913,21 @@ private struct MessageBubbleContent: View {
     return mediaType == "image" || mediaType == "video"
   }
 
+  private var hasAnyMedia: Bool {
+    guard let mediaUrl = message.mediaUrl?.trimmingCharacters(in: .whitespacesAndNewlines) else { return false }
+    return !mediaUrl.isEmpty
+  }
+
   private var isVoiceMessage: Bool {
     let mediaType = message.mediaType?.lowercased()
     return mediaType == "voice" || mediaType == "audio"
+  }
+
+  private var normalizedText: String? {
+    guard let content = message.content?.trimmingCharacters(in: .whitespacesAndNewlines), !content.isEmpty else {
+      return nil
+    }
+    return content
   }
 
   private var bubbleFill: Color {
@@ -945,7 +952,8 @@ private struct MessageBubbleContent: View {
   }
 
   private var bubbleFrameMaxWidth: CGFloat? {
-    isVoiceMessage ? nil : maxWidth
+    if isVoiceMessage || isCompactTextOnly { return nil }
+    return maxWidth
   }
 
   private var bubbleLeadingPadding: CGFloat {
@@ -963,6 +971,35 @@ private struct MessageBubbleContent: View {
   private var shouldShowTextContent: Bool {
     let mediaType = message.mediaType?.lowercased()
     return mediaType != "voice" && mediaType != "audio"
+  }
+
+  private var isCompactTextOnly: Bool {
+    guard !hasAnyMedia, let content = normalizedText else { return false }
+    return shouldUseCompactTextLayout(content)
+  }
+
+  private func shouldUseCompactTextLayout(_ content: String) -> Bool {
+    let longestWord = content.split(separator: " ").map(\.count).max() ?? content.count
+    return content.count <= 36 && longestWord <= 18 && !content.contains("\n")
+  }
+
+  @ViewBuilder
+  private func bubbleText(_ content: String) -> some View {
+    if shouldUseCompactTextLayout(content) {
+      Text(content)
+        .font(.system(size: 15, weight: .regular))
+        .foregroundStyle(bubbleTextColor)
+        .lineLimit(1)
+        .fixedSize(horizontal: true, vertical: false)
+        .multilineTextAlignment(outgoing ? .trailing : .leading)
+    } else {
+      Text(content)
+        .font(.system(size: 15, weight: .regular))
+        .foregroundStyle(bubbleTextColor)
+        .fixedSize(horizontal: false, vertical: true)
+        .multilineTextAlignment(outgoing ? .trailing : .leading)
+        .frame(maxWidth: textMaxWidth, alignment: outgoing ? .trailing : .leading)
+    }
   }
 
   @ViewBuilder
