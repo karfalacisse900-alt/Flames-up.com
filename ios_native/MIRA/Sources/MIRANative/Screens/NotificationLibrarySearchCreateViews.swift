@@ -1,3 +1,4 @@
+import AVFoundation
 import PhotosUI
 import SwiftUI
 
@@ -551,7 +552,9 @@ public struct CreatePostNativeView: View {
               .padding(8)
           }
           .onTapGesture {
-            editingMedia = MIRAEditorPresentation(media: first, replacementIndex: 0)
+            if first.kind == .image {
+              editingMedia = MIRAEditorPresentation(media: first, replacementIndex: 0)
+            }
           }
       }
 
@@ -663,21 +666,7 @@ public struct CreatePostNativeView: View {
 
   @ViewBuilder
   private func postComposerMedia(_ media: MIRAPickedMedia, width: CGFloat, height: CGFloat, cornerRadius: CGFloat) -> some View {
-    ZStack {
-      if media.kind == .image, let image = UIImage(data: media.data) {
-        Image(uiImage: image)
-          .resizable()
-          .scaledToFill()
-      } else {
-        Color.black.opacity(0.88)
-        Image(systemName: "play.fill")
-          .font(.system(size: min(width, height) * 0.24, weight: .semibold))
-          .foregroundStyle(.white)
-      }
-    }
-    .frame(width: width, height: height)
-    .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-    .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+    LocalMediaThumb(media: media, width: width, height: height, cornerRadius: cornerRadius)
   }
 
   private var canPost: Bool {
@@ -1835,10 +1824,130 @@ private func composerTool(_ title: String, systemImage: String) -> some View {
   .clipShape(Capsule())
 }
 
+private final class LocalVideoPlayerUIView: UIView {
+  override static var layerClass: AnyClass { AVPlayerLayer.self }
+
+  var playerLayer: AVPlayerLayer {
+    layer as! AVPlayerLayer
+  }
+
+  override init(frame: CGRect) {
+    super.init(frame: frame)
+    backgroundColor = .black
+    playerLayer.videoGravity = .resizeAspectFill
+  }
+
+  required init?(coder: NSCoder) {
+    fatalError("init(coder:) has not been implemented")
+  }
+}
+
+private struct LocalAVPlayerLayerView: UIViewRepresentable {
+  let player: AVPlayer?
+
+  func makeUIView(context: Context) -> LocalVideoPlayerUIView {
+    LocalVideoPlayerUIView()
+  }
+
+  func updateUIView(_ uiView: LocalVideoPlayerUIView, context: Context) {
+    uiView.playerLayer.player = player
+  }
+}
+
+private struct LocalVideoPreview: View {
+  let media: MIRAPickedMedia
+  @Binding var isPlaying: Bool
+  @State private var player: AVPlayer?
+  @State private var tempURL: URL?
+  @State private var failed = false
+
+  private var signature: String {
+    "\(media.fileName)-\(media.data.count)"
+  }
+
+  var body: some View {
+    ZStack {
+      if let player {
+        LocalAVPlayerLayerView(player: player)
+      } else {
+        Color.black.opacity(0.9)
+        if failed {
+          Image(systemName: "video.slash")
+            .font(.system(size: 24, weight: .semibold))
+            .foregroundStyle(.white.opacity(0.72))
+        } else {
+          ProgressView()
+            .tint(.white)
+        }
+      }
+    }
+    .task(id: signature) {
+      await preparePlayer()
+    }
+    .onChange(of: isPlaying) { _, playing in
+      updatePlayback(playing)
+    }
+    .onDisappear {
+      cleanup()
+    }
+  }
+
+  private func preparePlayer() async {
+    cleanup()
+    failed = false
+    let data = media.data
+    let ext = URL(fileURLWithPath: media.fileName).pathExtension.isEmpty ? "mov" : URL(fileURLWithPath: media.fileName).pathExtension
+    let preparedURL = await Task.detached(priority: .utility) { () -> URL? in
+      let url = FileManager.default.temporaryDirectory.appendingPathComponent("captro-preview-\(UUID().uuidString).\(ext)")
+      do {
+        try data.write(to: url, options: .atomic)
+        return url
+      } catch {
+        return nil
+      }
+    }.value
+
+    guard let preparedURL else {
+      failed = true
+      return
+    }
+
+    tempURL = preparedURL
+    let item = AVPlayerItem(url: preparedURL)
+    let nextPlayer = AVPlayer(playerItem: item)
+    nextPlayer.isMuted = true
+    nextPlayer.actionAtItemEnd = .pause
+    player = nextPlayer
+    updatePlayback(isPlaying)
+  }
+
+  private func updatePlayback(_ playing: Bool) {
+    guard let player else { return }
+    if playing {
+      player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
+      player.play()
+    } else {
+      player.pause()
+    }
+  }
+
+  private func cleanup() {
+    player?.pause()
+    player?.replaceCurrentItem(with: nil)
+    player = nil
+    if let tempURL {
+      try? FileManager.default.removeItem(at: tempURL)
+    }
+    tempURL = nil
+  }
+}
+
 private struct LocalMediaThumb: View {
   let media: MIRAPickedMedia
   var width: CGFloat = 96
   var height: CGFloat = 96
+  var cornerRadius: CGFloat = 18
+  @State private var isVideoPlaying = false
 
   var body: some View {
     ZStack {
@@ -1847,14 +1956,28 @@ private struct LocalMediaThumb: View {
           .resizable()
           .scaledToFill()
       } else {
-        MIRATheme.Color.surfaceSoft
-        Image(systemName: "play.fill")
-          .font(.system(size: 26, weight: .semibold))
-          .foregroundStyle(MIRATheme.Color.forest)
+        LocalVideoPreview(media: media, isPlaying: $isVideoPlaying)
+        if !isVideoPlaying {
+          Circle()
+            .fill(.black.opacity(0.44))
+            .frame(width: min(58, min(width, height) * 0.54), height: min(58, min(width, height) * 0.54))
+          Image(systemName: "play.fill")
+            .font(.system(size: min(28, min(width, height) * 0.24), weight: .bold))
+            .foregroundStyle(.white)
+            .offset(x: 2)
+        }
       }
     }
     .frame(width: width, height: height)
-    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+    .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+    .onTapGesture {
+      guard media.kind == .video else { return }
+      UIImpactFeedbackGenerator(style: .light).impactOccurred()
+      withAnimation(.easeInOut(duration: 0.14)) {
+        isVideoPlaying.toggle()
+      }
+    }
   }
 }
 

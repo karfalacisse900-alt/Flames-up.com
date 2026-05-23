@@ -391,6 +391,9 @@ private struct StoryViewerNativeView: View {
   @State private var currentUserId: String?
   @State private var showStoryMenu = false
   @State private var isCanvasVisible = false
+  @State private var isClosing = false
+  @State private var replyText = ""
+  @FocusState private var isReplyFocused: Bool
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   private var stories: [MIRAStatusPreview] {
@@ -403,16 +406,30 @@ private struct StoryViewerNativeView: View {
   }
 
   var body: some View {
-    ZStack(alignment: .bottom) {
+    ZStack {
       Color.black.ignoresSafeArea()
 
-      storyCanvas
+      GeometryReader { proxy in
+        let safeTop = proxy.safeAreaInsets.top
+        let safeBottom = proxy.safeAreaInsets.bottom
+        let bottomChromeHeight = max(108, safeBottom + 96)
+        let topChromeHeight = max(6, safeTop + 4)
+        let mediaHeight = max(380, proxy.size.height - bottomChromeHeight - topChromeHeight)
 
-      storyBottomActions
-        .padding(.horizontal, MIRATheme.Space.lg)
-        .padding(.bottom, 10)
+        VStack(spacing: 0) {
+          storyCanvas
+            .frame(width: proxy.size.width, height: mediaHeight)
+            .padding(.top, topChromeHeight)
+
+          Spacer(minLength: 0)
+
+          storyBottomActions
+            .padding(.horizontal, 16)
+            .padding(.bottom, max(12, safeBottom + 6))
+        }
+        .frame(width: proxy.size.width, height: proxy.size.height)
+      }
     }
-    .statusBarHidden(true)
     .opacity(isCanvasVisible ? 1 : 0.001)
     .scaleEffect(reduceMotion || isCanvasVisible ? 1 : 0.992)
     .animation(.easeOut(duration: reduceMotion ? 0.1 : 0.24), value: isCanvasVisible)
@@ -457,9 +474,8 @@ private struct StoryViewerNativeView: View {
             placeholderTint: .white.opacity(0.62)
           )
             .frame(width: proxy.size.width, height: proxy.size.height)
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         } else {
-          RoundedRectangle(cornerRadius: 14, style: .continuous)
+          RoundedRectangle(cornerRadius: 24, style: .continuous)
             .fill(MIRATheme.Color.forest)
             .overlay {
               Text(currentStory?.content?.isEmpty == false ? currentStory!.content! : "Story")
@@ -469,6 +485,21 @@ private struct StoryViewerNativeView: View {
                 .padding(28)
             }
         }
+
+        LinearGradient(
+          colors: [.black.opacity(0.34), .black.opacity(0.08), .clear],
+          startPoint: .top,
+          endPoint: .bottom
+        )
+        .frame(height: min(170, proxy.size.height * 0.26))
+
+        LinearGradient(
+          colors: [.clear, .black.opacity(0.22)],
+          startPoint: .top,
+          endPoint: .bottom
+        )
+        .frame(height: min(190, proxy.size.height * 0.30))
+        .frame(maxHeight: .infinity, alignment: .bottom)
 
         HStack(spacing: 0) {
           Color.clear
@@ -482,71 +513,122 @@ private struct StoryViewerNativeView: View {
 
         VStack(spacing: 9) {
           progressRail
-            .padding(.top, 10)
+            .padding(.top, 18)
           storyTopBar
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, 14)
       }
+      .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
     }
     .frame(maxWidth: .infinity)
-    .frame(maxHeight: .infinity)
     .transition(.opacity)
     .animation(.easeInOut(duration: reduceMotion ? 0.08 : 0.16), value: currentStory?.id)
   }
 
   private var progressRail: some View {
-    HStack(spacing: 5) {
-      ForEach(Array(stories.enumerated()), id: \.offset) { index, _ in
+    HStack(spacing: 7) {
+      ForEach(0..<max(stories.count, 1), id: \.self) { index in
         Capsule()
-          .fill(index <= selectedIndex ? Color.white.opacity(0.92) : Color.white.opacity(0.38))
-          .frame(height: 2.5)
+          .fill(index <= selectedIndex ? Color.white.opacity(0.96) : Color.white.opacity(0.36))
+          .frame(height: 4.5)
       }
     }
   }
 
   private var storyTopBar: some View {
-    HStack(spacing: 8) {
-      RemoteAvatar(url: group.userProfileImage, size: 34)
-      Text(group.displayName)
-        .font(.system(size: 15, weight: .semibold))
-        .foregroundStyle(.white)
-        .lineLimit(1)
-      Text(storyAge(currentStory?.createdAt))
-        .font(.system(size: 14, weight: .medium))
-        .foregroundStyle(.white.opacity(0.78))
-      Spacer()
-      Button { showStoryMenu = true } label: {
-        Image(systemName: "ellipsis")
-          .font(.system(size: 18, weight: .bold))
+    HStack(spacing: 11) {
+      RemoteAvatar(url: group.userProfileImage, size: 42)
+
+      HStack(spacing: 7) {
+        Text(group.displayName)
+          .font(.system(size: 17, weight: .semibold))
           .foregroundStyle(.white)
-          .frame(width: 34, height: 34)
+          .lineLimit(1)
+        Text("· \(storyAge(currentStory?.createdAt))")
+          .font(.system(size: 17, weight: .semibold))
+          .foregroundStyle(.white.opacity(0.66))
+          .lineLimit(1)
+      }
+      .layoutPriority(1)
+
+      Spacer()
+
+      Button {} label: {
+        ZStack(alignment: .bottomTrailing) {
+          RoundedRectangle(cornerRadius: 9, style: .continuous)
+            .fill(.black.opacity(0.34))
+            .frame(width: 38, height: 38)
+          Image(systemName: "music.note")
+            .font(.system(size: 16, weight: .bold))
+            .foregroundStyle(.white)
+            .offset(x: 4, y: 4)
+        }
+        .frame(width: 42, height: 42)
       }
       .buttonStyle(.miraPress)
+
       Button { closeStoryViewer() } label: {
         Image(systemName: "xmark")
-          .font(.system(size: 27, weight: .light))
+          .font(.system(size: 34, weight: .regular))
           .foregroundStyle(.white)
-          .frame(width: 36, height: 36)
+          .frame(width: 44, height: 44)
       }
       .buttonStyle(.miraPress)
     }
   }
 
-  private func goToPreviousStory() {
-    if selectedIndex > 0 {
-      withAnimation(.easeInOut(duration: 0.18)) {
-        selectedIndex -= 1
-      }
-    }
-  }
+  private var storyBottomActions: some View {
+    HStack(spacing: 14) {
+      HStack(spacing: 12) {
+        TextField("Message...", text: $replyText)
+          .font(.system(size: 19, weight: .regular))
+          .foregroundStyle(.white)
+          .tint(.white)
+          .focused($isReplyFocused)
+          .submitLabel(.send)
+          .onSubmit(sendStoryReplyDraft)
 
-  private func goToNextStory() {
-    if selectedIndex < stories.count - 1 {
-      withAnimation(.easeInOut(duration: 0.18)) {
-        selectedIndex += 1
+        Spacer(minLength: 4)
+
+        if replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+          HStack(spacing: 18) {
+            Text("😍")
+            Text("😂")
+            Text("😳")
+          }
+          .font(.system(size: 31))
+          .lineLimit(1)
+        } else {
+          Button(action: sendStoryReplyDraft) {
+            Image(systemName: "paperplane.fill")
+              .font(.system(size: 18, weight: .bold))
+              .foregroundStyle(.white)
+              .frame(width: 34, height: 34)
+          }
+          .buttonStyle(.miraPress)
+        }
       }
-    } else {
-      closeStoryViewer()
+      .padding(.leading, 24)
+      .padding(.trailing, 16)
+      .frame(height: 58)
+      .background(Color.white.opacity(0.18))
+      .clipShape(Capsule())
+
+      Button {} label: {
+        Image(systemName: "heart")
+          .font(.system(size: 37, weight: .regular))
+          .foregroundStyle(.white)
+          .frame(width: 45, height: 58)
+      }
+      .buttonStyle(.miraPress)
+
+      Button { showStoryMenu = true } label: {
+        Image(systemName: "ellipsis")
+          .font(.system(size: 32, weight: .bold))
+          .foregroundStyle(.white)
+          .frame(width: 42, height: 58)
+      }
+      .buttonStyle(.miraPress)
     }
   }
 
@@ -570,30 +652,39 @@ private struct StoryViewerNativeView: View {
   }
 
   private func closeStoryViewer() {
-    withAnimation(.easeInOut(duration: reduceMotion ? 0.1 : 0.18)) {
+    guard !isClosing else { return }
+    isClosing = true
+    let duration = reduceMotion ? 0.08 : 0.22
+    withAnimation(.easeInOut(duration: duration)) {
       isCanvasVisible = false
     }
-    onClose()
+    DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
+      onClose()
+    }
   }
 
-  private var storyBottomActions: some View {
-    HStack(spacing: 14) {
-      Spacer()
-      Button {} label: {
-        Image(systemName: "heart")
-          .font(.system(size: 24, weight: .regular))
-          .foregroundStyle(.white)
-          .frame(width: 42, height: 42)
-      }
-      .buttonStyle(.miraPress)
+  private func sendStoryReplyDraft() {
+    guard !replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    replyText = ""
+    isReplyFocused = false
+  }
 
-      Button {} label: {
-        Image(systemName: "paperplane")
-          .font(.system(size: 24, weight: .regular))
-          .foregroundStyle(.white)
-          .frame(width: 42, height: 42)
+  private func goToPreviousStory() {
+    if selectedIndex > 0 {
+      withAnimation(.easeInOut(duration: 0.18)) {
+        selectedIndex -= 1
       }
-      .buttonStyle(.miraPress)
+    }
+  }
+
+  private func goToNextStory() {
+    if selectedIndex < stories.count - 1 {
+      withAnimation(.easeInOut(duration: 0.18)) {
+        selectedIndex += 1
+      }
+    } else {
+      closeStoryViewer()
     }
   }
 }

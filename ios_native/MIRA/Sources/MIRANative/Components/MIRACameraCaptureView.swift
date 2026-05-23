@@ -675,9 +675,8 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
       if self.session.canAddOutput(self.movieOutput) {
         self.session.addOutput(self.movieOutput)
         self.movieOutput.movieFragmentInterval = .invalid
-        if let connection = self.movieOutput.connection(with: .video),
-           connection.isVideoStabilizationSupported {
-          connection.preferredVideoStabilizationMode = .auto
+        if let connection = self.movieOutput.connection(with: .video) {
+          self.applyPreferredVideoStabilization(to: connection)
         }
       }
 
@@ -719,6 +718,9 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
       if device.isFocusModeSupported(.continuousAutoFocus) {
         device.focusMode = .continuousAutoFocus
       }
+      if device.isSmoothAutoFocusSupported {
+        device.isSmoothAutoFocusEnabled = true
+      }
       if device.isExposureModeSupported(.continuousAutoExposure) {
         device.exposureMode = .continuousAutoExposure
       }
@@ -730,6 +732,18 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
       }
       device.unlockForConfiguration()
     } catch {}
+  }
+
+  private func applyPreferredVideoStabilization(to connection: AVCaptureConnection) {
+    guard connection.isVideoStabilizationSupported else { return }
+    let activeFormat = currentInput?.device.activeFormat
+    if activeFormat?.isVideoStabilizationModeSupported(.cinematicExtended) == true {
+      connection.preferredVideoStabilizationMode = .cinematicExtended
+    } else if activeFormat?.isVideoStabilizationModeSupported(.cinematic) == true {
+      connection.preferredVideoStabilizationMode = .cinematic
+    } else {
+      connection.preferredVideoStabilizationMode = .auto
+    }
   }
 
   private func showCameraUnavailableMessage() {
@@ -1197,9 +1211,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
       if cameraPosition == .front, connection.isVideoMirroringSupported {
         connection.isVideoMirrored = true
       }
-      if connection.isVideoStabilizationSupported {
-        connection.preferredVideoStabilizationMode = .auto
-      }
+      applyPreferredVideoStabilization(to: connection)
     }
     setTorch(active: flashSetting == .on)
     setRecordingState(true)
