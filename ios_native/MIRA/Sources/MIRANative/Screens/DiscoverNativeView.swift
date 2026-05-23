@@ -668,7 +668,7 @@ private struct DiscoverPostGalleryTile: View {
       let tileHeight = proxy.size.width * MIRAMediaSizing.profileGridRatio
       ZStack(alignment: .topTrailing) {
         if let media = post.mediaURLs.first {
-          RemoteMediaView(url: media, isVideo: media.isVideoURL, shouldPlay: false)
+          RemoteMediaView(url: media, isVideo: media.isVideoURL, shouldPlay: false, showsVideoPlaceholderIcon: false)
             .frame(width: proxy.size.width, height: tileHeight)
         } else {
           ZStack {
@@ -683,15 +683,7 @@ private struct DiscoverPostGalleryTile: View {
           .frame(width: proxy.size.width, height: tileHeight)
         }
 
-        if post.mediaURLs.first?.isVideoURL == true {
-          Image(systemName: "play.fill")
-            .font(.system(size: 10, weight: .bold))
-            .foregroundStyle(.white)
-            .padding(7)
-            .background(.black.opacity(0.36))
-            .clipShape(Circle())
-            .padding(6)
-        } else if post.mediaURLs.count > 1 {
+        if post.mediaURLs.count > 1 {
           Image(systemName: "square.on.square")
             .font(.system(size: 11, weight: .bold))
             .foregroundStyle(.white)

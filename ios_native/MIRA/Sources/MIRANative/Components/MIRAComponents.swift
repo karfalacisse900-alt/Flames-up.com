@@ -360,6 +360,7 @@ public struct RemoteMediaView: View {
   let isVideo: Bool
   let contentMode: ContentMode
   let shouldPlay: Bool
+  let showsVideoPlaceholderIcon: Bool
   let placeholderColor: Color
   let placeholderTint: Color
   let onMeasuredRatio: (CGFloat) -> Void
@@ -369,6 +370,7 @@ public struct RemoteMediaView: View {
     isVideo: Bool,
     contentMode: ContentMode = .fill,
     shouldPlay: Bool = false,
+    showsVideoPlaceholderIcon: Bool = true,
     placeholderColor: Color = MIRATheme.Color.surfaceSoft,
     placeholderTint: Color = MIRATheme.Color.textMuted,
     onMeasuredRatio: @escaping (CGFloat) -> Void = { _ in }
@@ -377,6 +379,7 @@ public struct RemoteMediaView: View {
     self.isVideo = isVideo
     self.contentMode = contentMode
     self.shouldPlay = shouldPlay
+    self.showsVideoPlaceholderIcon = showsVideoPlaceholderIcon
     self.placeholderColor = placeholderColor
     self.placeholderTint = placeholderTint
     self.onMeasuredRatio = onMeasuredRatio
@@ -389,6 +392,7 @@ public struct RemoteMediaView: View {
           url: url,
           contentMode: contentMode,
           shouldPlay: shouldPlay,
+          showsPlaceholderIcon: showsVideoPlaceholderIcon,
           placeholderColor: placeholderColor,
           placeholderTint: placeholderTint,
           onMeasuredRatio: onMeasuredRatio
@@ -428,6 +432,7 @@ private struct MIRAResolvedVideoPlayer: View {
   let url: String
   let contentMode: ContentMode
   let shouldPlay: Bool
+  let showsPlaceholderIcon: Bool
   let placeholderColor: Color
   let placeholderTint: Color
   let onMeasuredRatio: (CGFloat) -> Void
@@ -491,9 +496,11 @@ private struct MIRAResolvedVideoPlayer: View {
   private var placeholder: some View {
     ZStack {
       placeholderColor
-      Image(systemName: "play.fill")
-        .font(.system(size: 24, weight: .semibold))
-        .foregroundStyle(placeholderTint.opacity(0.38))
+      if showsPlaceholderIcon {
+        Image(systemName: "play.fill")
+          .font(.system(size: 24, weight: .semibold))
+          .foregroundStyle(placeholderTint.opacity(0.38))
+      }
     }
   }
 

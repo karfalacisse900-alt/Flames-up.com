@@ -28,6 +28,10 @@ private enum ChatRoomPalette {
   static let accent = Color(red: 0.040, green: 0.220, blue: 0.260)
   static let voice = Color(red: 0.840, green: 0.220, blue: 0.330)
   static let hairline = Color.black.opacity(0.070)
+  static let incomingStroke = Color(red: 0.862, green: 0.898, blue: 0.882)
+  static let outgoingStroke = Color.white.opacity(0.12)
+  static let incomingTimestamp = Color(red: 0.492, green: 0.545, blue: 0.525)
+  static let outgoingTimestamp = Color(red: 0.812, green: 0.906, blue: 0.894)
   static let messageShadow = Color.black.opacity(0.055)
 }
 
@@ -414,13 +418,12 @@ public struct ConversationNativeView: View {
             .foregroundStyle(MIRATheme.Color.textMuted)
             .lineLimit(1)
         }
-        MessageBubbleContent(message: message, outgoing: outgoing, maxWidth: bubbleMaxWidth)
-        if let createdAt = message.createdAt {
-          Text(conversationMessageAge(createdAt))
-            .font(.system(size: 10, weight: .semibold))
-            .foregroundStyle(MIRATheme.Color.textMuted.opacity(0.78))
-            .padding(.horizontal, 4)
-        }
+        MessageBubbleContent(
+          message: message,
+          outgoing: outgoing,
+          maxWidth: bubbleMaxWidth,
+          timestamp: message.createdAt.map(conversationMessageAge)
+        )
       }
       .frame(maxWidth: bubbleMaxWidth, alignment: outgoing ? .trailing : .leading)
       if !outgoing { Spacer(minLength: 54) }
@@ -843,9 +846,10 @@ private struct MessageBubbleContent: View {
   let message: MIRAMessage
   let outgoing: Bool
   let maxWidth: CGFloat
+  let timestamp: String?
 
   var body: some View {
-    VStack(alignment: outgoing ? .trailing : .leading, spacing: MIRATheme.Space.xs) {
+    VStack(alignment: outgoing ? .trailing : .leading, spacing: hasLargeMedia ? 6 : 5) {
       if let mediaUrl = message.mediaUrl, !mediaUrl.isEmpty {
         mediaContent(url: mediaUrl)
       }
@@ -855,22 +859,29 @@ private struct MessageBubbleContent: View {
           .foregroundStyle(outgoing ? .white : MIRATheme.Color.textPrimary)
           .fixedSize(horizontal: false, vertical: true)
           .multilineTextAlignment(outgoing ? .trailing : .leading)
-          .frame(maxWidth: maxWidth, alignment: outgoing ? .trailing : .leading)
+          .frame(maxWidth: textMaxWidth, alignment: outgoing ? .trailing : .leading)
+      }
+      if let timestamp, !timestamp.isEmpty {
+        Text(timestamp)
+          .font(.system(size: 10.5, weight: .semibold))
+          .foregroundStyle(outgoing ? ChatRoomPalette.outgoingTimestamp : ChatRoomPalette.incomingTimestamp)
+          .lineLimit(1)
+          .padding(.top, hasLargeMedia ? 0 : 1)
       }
     }
     .padding(.leading, bubbleLeadingPadding)
     .padding(.trailing, bubbleTrailingPadding)
-    .padding(.vertical, hasLargeMedia ? 6 : 10)
+    .padding(.vertical, hasLargeMedia ? 6 : 11)
     .frame(maxWidth: maxWidth, alignment: outgoing ? .trailing : .leading)
     .background {
-      ChatBubbleShape(outgoing: outgoing, radius: hasLargeMedia ? 18 : 22)
+      ChatBubbleShape(outgoing: outgoing, radius: hasLargeMedia ? 18 : 22, compactBottomCorner: hasLargeMedia ? 12 : 8)
         .fill(outgoing ? ChatRoomPalette.outgoingBubble : ChatRoomPalette.incomingBubble)
     }
     .overlay {
-      ChatBubbleShape(outgoing: outgoing, radius: hasLargeMedia ? 18 : 22)
-        .stroke(outgoing ? Color.white.opacity(0.10) : ChatRoomPalette.hairline, lineWidth: 1)
+      ChatBubbleShape(outgoing: outgoing, radius: hasLargeMedia ? 18 : 22, compactBottomCorner: hasLargeMedia ? 12 : 8)
+        .stroke(outgoing ? ChatRoomPalette.outgoingStroke : ChatRoomPalette.incomingStroke, lineWidth: 1)
     }
-    .shadow(color: ChatRoomPalette.messageShadow, radius: outgoing ? 12 : 10, x: 0, y: 5)
+    .shadow(color: ChatRoomPalette.messageShadow, radius: hasLargeMedia ? 16 : 12, x: 0, y: 6)
   }
 
   private var hasLargeMedia: Bool {
@@ -878,12 +889,18 @@ private struct MessageBubbleContent: View {
     return mediaType == "image" || mediaType == "video"
   }
 
+  private var textMaxWidth: CGFloat {
+    max(120, maxWidth - bubbleLeadingPadding - bubbleTrailingPadding)
+  }
+
   private var bubbleLeadingPadding: CGFloat {
-    hasLargeMedia ? 6 : (outgoing ? MIRATheme.Space.md : MIRATheme.Space.md + 6)
+    if hasLargeMedia { return outgoing ? 10 : 14 }
+    return outgoing ? 16 : 24
   }
 
   private var bubbleTrailingPadding: CGFloat {
-    hasLargeMedia ? 6 : (outgoing ? MIRATheme.Space.md + 6 : MIRATheme.Space.md)
+    if hasLargeMedia { return outgoing ? 14 : 10 }
+    return outgoing ? 24 : 16
   }
 
   private var shouldShowTextContent: Bool {
@@ -900,13 +917,18 @@ private struct MessageBubbleContent: View {
     } else if type == "file" {
       HStack(spacing: MIRATheme.Space.sm) {
         Image(systemName: "doc.fill")
+          .font(.system(size: 13, weight: .bold))
+          .foregroundStyle(outgoing ? ChatRoomPalette.outgoingBubble : .white)
+          .frame(width: 28, height: 28)
+          .background(outgoing ? Color.white.opacity(0.92) : ChatRoomPalette.accent)
+          .clipShape(Circle())
         Text(message.content?.isEmpty == false ? message.content! : "File")
           .lineLimit(1)
           .truncationMode(.middle)
       }
       .font(.system(size: 14, weight: .semibold))
       .foregroundStyle(outgoing ? .white : MIRATheme.Color.textPrimary)
-      .frame(maxWidth: maxWidth, alignment: outgoing ? .trailing : .leading)
+      .frame(maxWidth: textMaxWidth, alignment: outgoing ? .trailing : .leading)
     } else {
       RemoteMediaView(url: url, isVideo: type == "video" || url.isVideoURL, shouldPlay: false)
         .frame(width: mediaWidth, height: type == "video" || url.isVideoURL ? mediaWidth * 1.22 : mediaWidth * 0.86)
@@ -918,48 +940,77 @@ private struct MessageBubbleContent: View {
 private struct ChatBubbleShape: Shape {
   let outgoing: Bool
   let radius: CGFloat
+  let compactBottomCorner: CGFloat
 
   func path(in rect: CGRect) -> Path {
-    let tailWidth: CGFloat = 7
+    let tailWidth: CGFloat = 10
     let bubbleRect = outgoing
       ? CGRect(x: rect.minX, y: rect.minY, width: max(0, rect.width - tailWidth), height: rect.height)
       : CGRect(x: rect.minX + tailWidth, y: rect.minY, width: max(0, rect.width - tailWidth), height: rect.height)
     var path = Path()
-    path.addRoundedRect(
+    path.addAsymmetricRoundedRect(
       in: bubbleRect,
-      cornerSize: CGSize(width: radius, height: radius),
-      style: .continuous
+      topLeft: radius,
+      topRight: radius,
+      bottomRight: outgoing ? compactBottomCorner : radius,
+      bottomLeft: outgoing ? radius : compactBottomCorner
     )
     var tail = Path()
 
     if outgoing {
-      let start = CGPoint(x: bubbleRect.maxX - 1, y: bubbleRect.maxY - 19)
+      let start = CGPoint(x: bubbleRect.maxX - 1, y: bubbleRect.maxY - 28)
       tail.move(to: start)
       tail.addQuadCurve(
-        to: CGPoint(x: rect.maxX, y: rect.maxY - 9),
-        control: CGPoint(x: rect.maxX - 1, y: rect.maxY - 16)
+        to: CGPoint(x: rect.maxX, y: rect.maxY - 13),
+        control: CGPoint(x: rect.maxX - 2, y: rect.maxY - 22)
       )
       tail.addQuadCurve(
-        to: CGPoint(x: bubbleRect.maxX - 8, y: bubbleRect.maxY - 5),
-        control: CGPoint(x: rect.maxX - 1, y: rect.maxY - 1)
+        to: CGPoint(x: bubbleRect.maxX - 14, y: bubbleRect.maxY - 8),
+        control: CGPoint(x: rect.maxX - 1, y: rect.maxY - 2)
       )
       tail.addLine(to: start)
     } else {
-      let start = CGPoint(x: bubbleRect.minX + 1, y: bubbleRect.maxY - 19)
+      let start = CGPoint(x: bubbleRect.minX + 1, y: bubbleRect.maxY - 28)
       tail.move(to: start)
       tail.addQuadCurve(
-        to: CGPoint(x: rect.minX, y: rect.maxY - 9),
-        control: CGPoint(x: rect.minX + 1, y: rect.maxY - 16)
+        to: CGPoint(x: rect.minX, y: rect.maxY - 13),
+        control: CGPoint(x: rect.minX + 2, y: rect.maxY - 22)
       )
       tail.addQuadCurve(
-        to: CGPoint(x: bubbleRect.minX + 8, y: bubbleRect.maxY - 5),
-        control: CGPoint(x: rect.minX + 1, y: rect.maxY - 1)
+        to: CGPoint(x: bubbleRect.minX + 14, y: bubbleRect.maxY - 8),
+        control: CGPoint(x: rect.minX + 1, y: rect.maxY - 2)
       )
       tail.addLine(to: start)
     }
 
     path.addPath(tail)
     return path
+  }
+}
+
+private extension Path {
+  mutating func addAsymmetricRoundedRect(
+    in rect: CGRect,
+    topLeft: CGFloat,
+    topRight: CGFloat,
+    bottomRight: CGFloat,
+    bottomLeft: CGFloat
+  ) {
+    let tl = min(topLeft, min(rect.width, rect.height) / 2)
+    let tr = min(topRight, min(rect.width, rect.height) / 2)
+    let br = min(bottomRight, min(rect.width, rect.height) / 2)
+    let bl = min(bottomLeft, min(rect.width, rect.height) / 2)
+
+    move(to: CGPoint(x: rect.minX + tl, y: rect.minY))
+    addLine(to: CGPoint(x: rect.maxX - tr, y: rect.minY))
+    addQuadCurve(to: CGPoint(x: rect.maxX, y: rect.minY + tr), control: CGPoint(x: rect.maxX, y: rect.minY))
+    addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - br))
+    addQuadCurve(to: CGPoint(x: rect.maxX - br, y: rect.maxY), control: CGPoint(x: rect.maxX, y: rect.maxY))
+    addLine(to: CGPoint(x: rect.minX + bl, y: rect.maxY))
+    addQuadCurve(to: CGPoint(x: rect.minX, y: rect.maxY - bl), control: CGPoint(x: rect.minX, y: rect.maxY))
+    addLine(to: CGPoint(x: rect.minX, y: rect.minY + tl))
+    addQuadCurve(to: CGPoint(x: rect.minX + tl, y: rect.minY), control: CGPoint(x: rect.minX, y: rect.minY))
+    closeSubpath()
   }
 }
 
@@ -979,17 +1030,17 @@ private struct VoicePlaybackPill: View {
         Image(systemName: isPlaying ? "pause.fill" : "play.fill")
           .font(.system(size: 11, weight: .bold))
           .foregroundStyle(outgoing ? ChatRoomPalette.outgoingBubble : .white)
-          .frame(width: 28, height: 28)
-          .background(outgoing ? Color.white : ChatRoomPalette.accent)
+          .frame(width: 32, height: 32)
+          .background(outgoing ? Color.white.opacity(0.92) : ChatRoomPalette.accent)
           .clipShape(Circle())
-        Image(systemName: "waveform")
-          .font(.system(size: 18, weight: .semibold))
+        VoiceWaveformBars(outgoing: outgoing)
+          .frame(width: 74, height: 28)
         Text(playbackError ? "Could not play" : "Voice message")
           .lineLimit(1)
       }
       .font(.system(size: 14, weight: .semibold))
       .foregroundStyle(playbackError ? ChatRoomPalette.voice : (outgoing ? .white : MIRATheme.Color.textPrimary))
-      .padding(.trailing, 4)
+      .frame(minWidth: 188, alignment: outgoing ? .trailing : .leading)
     }
     .buttonStyle(.plain)
     .contentShape(Rectangle())
@@ -1046,6 +1097,24 @@ private struct VoicePlaybackPill: View {
       self.endObserver = nil
     }
     player = nil
+  }
+}
+
+private struct VoiceWaveformBars: View {
+  let outgoing: Bool
+
+  private let heights: [CGFloat] = [12, 21, 28, 18, 24, 14, 8]
+
+  var body: some View {
+    HStack(alignment: .center, spacing: 4) {
+      ForEach(Array(heights.enumerated()), id: \.offset) { _, height in
+        RoundedRectangle(cornerRadius: 2, style: .continuous)
+          .fill(outgoing ? Color.white.opacity(0.82) : ChatRoomPalette.accent.opacity(0.62))
+          .frame(width: 4, height: height)
+      }
+    }
+    .frame(maxHeight: .infinity)
+    .accessibilityHidden(true)
   }
 }
 
