@@ -160,7 +160,7 @@ public struct ProfileNativeView: View {
       }
       .background(MIRATheme.Color.appBackground)
       .miraScreenEnter(.tab)
-      .navigationTitle("Profile")
+      .navigationTitle("")
       .toolbar {
         ToolbarItemGroup(placement: .topBarTrailing) {
           NavigationLink(destination: LibraryNativeView(api: model.api)) {

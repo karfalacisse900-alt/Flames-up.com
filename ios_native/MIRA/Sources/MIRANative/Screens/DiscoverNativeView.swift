@@ -8,6 +8,7 @@ final class DiscoverNativeModel: ObservableObject {
   @Published var isLoading = true
   @Published var isLoadingStories = true
   @Published var isLoadingPosts = true
+  @Published var errorMessage: String?
   let api: MIRAAPIClient
   private let storiesCacheKey = "native.discover.stories.v3"
   private let postsCacheKey = "native.discover.posts.v1"
@@ -96,6 +97,29 @@ final class DiscoverNativeModel: ObservableObject {
 
   private func updateLoadingState() {
     isLoading = isLoadingStories || isLoadingPosts
+  }
+
+  func hidePost(_ post: MIRAPost) {
+    posts.removeAll { $0.id == post.id }
+    let snapshot = posts
+    Task { await MIRALocalJSONCache.save(snapshot, key: postsCacheKey) }
+  }
+
+  func reportPost(_ post: MIRAPost) async {
+    do {
+      let _: EmptyResponse? = try await api.post(
+        "/reports",
+        body: PostReportBody(
+          reportedType: "post",
+          reportedId: post.id,
+          reason: "other",
+          details: "Reported from the Discover post menu."
+        )
+      )
+      errorMessage = nil
+    } catch {
+      errorMessage = "Could not send report. Try again in a moment."
+    }
   }
 }
 
@@ -230,6 +254,21 @@ public struct DiscoverNativeView: View {
               DiscoverPostGalleryTile(post: post)
             }
             .buttonStyle(.plain)
+            .contextMenu {
+              Button(role: .destructive) {
+                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                Task { await model.reportPost(post) }
+              } label: {
+                Label("Report", systemImage: "flag")
+              }
+
+              Button {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                model.hidePost(post)
+              } label: {
+                Label("Not interested", systemImage: "eye.slash")
+              }
+            }
           }
         }
       }
@@ -626,10 +665,11 @@ private struct DiscoverPostGalleryTile: View {
 
   var body: some View {
     GeometryReader { proxy in
+      let tileHeight = proxy.size.width * MIRAMediaSizing.profileGridRatio
       ZStack(alignment: .topTrailing) {
         if let media = post.mediaURLs.first {
           RemoteMediaView(url: media, isVideo: media.isVideoURL, shouldPlay: false)
-            .frame(width: proxy.size.width, height: proxy.size.width)
+            .frame(width: proxy.size.width, height: tileHeight)
         } else {
           ZStack {
             MIRATheme.Color.surfaceSoft
@@ -640,7 +680,7 @@ private struct DiscoverPostGalleryTile: View {
               .lineLimit(4)
               .padding(8)
           }
-          .frame(width: proxy.size.width, height: proxy.size.width)
+          .frame(width: proxy.size.width, height: tileHeight)
         }
 
         if post.mediaURLs.first?.isVideoURL == true {
@@ -661,10 +701,10 @@ private struct DiscoverPostGalleryTile: View {
             .padding(6)
         }
       }
-      .frame(width: proxy.size.width, height: proxy.size.width)
+      .frame(width: proxy.size.width, height: tileHeight)
       .clipped()
     }
-    .aspectRatio(1, contentMode: .fit)
+    .aspectRatio(1.0 / MIRAMediaSizing.profileGridRatio, contentMode: .fit)
     .clipped()
     .contentShape(Rectangle())
     .accessibilityLabel(post.titleText)
@@ -677,7 +717,7 @@ private struct DiscoverGallerySkeletonTile: View {
   var body: some View {
     RoundedRectangle(cornerRadius: 0)
       .fill(index.isMultiple(of: 2) ? MIRATheme.Color.surfaceSoft : MIRATheme.Color.surfaceRaised)
-      .aspectRatio(1, contentMode: .fit)
+      .aspectRatio(1.0 / MIRAMediaSizing.profileGridRatio, contentMode: .fit)
       .redacted(reason: .placeholder)
   }
 }
