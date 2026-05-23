@@ -767,6 +767,7 @@ private struct PostLocationPickerSheet: View {
   @State private var places: [MIRAMapboxPlace] = []
   @State private var isLoading = false
   @State private var errorMessage: String?
+  @FocusState private var isSearchFocused: Bool
 
   var body: some View {
     NavigationStack {
@@ -779,6 +780,22 @@ private struct PostLocationPickerSheet: View {
               .textInputAutocapitalization(.words)
               .autocorrectionDisabled()
               .submitLabel(.search)
+              .focused($isSearchFocused)
+              .onSubmit {
+                Task { await searchPlaces(for: cleanQuery) }
+              }
+            if !cleanQuery.isEmpty {
+              Button {
+                query = ""
+                places = []
+                isLoading = false
+                errorMessage = nil
+              } label: {
+                Image(systemName: "xmark.circle.fill")
+                  .foregroundStyle(MIRATheme.Color.textMuted.opacity(0.75))
+              }
+              .buttonStyle(.plain)
+            }
           }
           .padding(.horizontal, MIRATheme.Space.md)
           .frame(height: 48)
@@ -791,49 +808,36 @@ private struct PostLocationPickerSheet: View {
         }
         .padding(MIRATheme.Space.md)
 
-        List {
-          if isLoading {
-            ProgressView()
-              .frame(maxWidth: .infinity, minHeight: 72)
-              .listRowBackground(MIRATheme.Color.surface)
-          } else if let errorMessage {
-            Text(errorMessage)
-              .font(.system(size: 14, weight: .medium))
-              .foregroundStyle(MIRATheme.Color.textMuted)
-              .listRowBackground(MIRATheme.Color.surface)
-          }
+        ScrollView {
+          LazyVStack(spacing: 10) {
+            searchStatusView
 
-          if cleanQuery.count >= 2 {
-            Button {
-              selectedPlace = MIRAMapboxPlace(
-                placeId: manualPlaceId,
-                mapboxId: nil,
-                name: cleanQuery,
-                formattedAddress: cleanQuery,
-                address: cleanQuery,
-                vicinity: nil,
-                lat: nil,
-                lng: nil
-              )
-              dismiss()
-            } label: {
-              placeRowTitle(name: "Use \"\(cleanQuery)\"", subtitle: "Custom place/address")
+            if cleanQuery.count >= 2 {
+              Button {
+                selectManualPlace()
+              } label: {
+                placeRowTitle(
+                  systemImage: "plus.circle.fill",
+                  name: "Use \"\(cleanQuery)\"",
+                  subtitle: "Custom place or address"
+                )
+              }
+              .buttonStyle(.miraPress)
             }
-            .listRowBackground(MIRATheme.Color.surface)
-          }
 
-          ForEach(places) { place in
-            Button {
-              selectedPlace = place
-              dismiss()
-            } label: {
-              placeRowTitle(name: place.displayName, subtitle: place.addressText)
+            ForEach(places) { place in
+              Button {
+                selectedPlace = place
+                dismiss()
+              } label: {
+                placeRowTitle(systemImage: "mappin.circle.fill", name: place.displayName, subtitle: place.addressText)
+              }
+              .buttonStyle(.miraPress)
             }
-            .listRowBackground(MIRATheme.Color.surface)
           }
+          .padding(.horizontal, MIRATheme.Space.md)
+          .padding(.bottom, 28)
         }
-        .listStyle(.plain)
-        .scrollContentBackground(.hidden)
       }
       .background(MIRATheme.Color.surface.ignoresSafeArea())
       .navigationTitle("Add Location")
@@ -852,9 +856,14 @@ private struct PostLocationPickerSheet: View {
           }
         }
       }
-      .task(id: query) {
+      .onAppear {
+        isSearchFocused = true
+      }
+      .task(id: cleanQuery) {
+        let snapshot = cleanQuery
         try? await Task.sleep(nanoseconds: 260_000_000)
-        await searchPlaces()
+        guard !Task.isCancelled else { return }
+        await searchPlaces(for: snapshot)
       }
     }
     .presentationDetents([.medium, .large])
@@ -883,9 +892,56 @@ private struct PostLocationPickerSheet: View {
     .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
   }
 
-  private func placeRowTitle(name: String, subtitle: String?) -> some View {
+  @ViewBuilder
+  private var searchStatusView: some View {
+    if isLoading {
+      HStack(spacing: MIRATheme.Space.sm) {
+        ProgressView()
+          .tint(MIRATheme.Color.forest)
+        Text("Finding places...")
+          .font(.system(size: 14, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textSecondary)
+      }
+      .frame(maxWidth: .infinity, minHeight: 62)
+      .background(MIRATheme.Color.surfaceSoft.opacity(0.72))
+      .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    } else if let errorMessage {
+      placePickerMessage(errorMessage, systemImage: "exclamationmark.triangle")
+    } else if cleanQuery.isEmpty {
+      placePickerMessage("Search for a restaurant, venue, city, or type any address.", systemImage: "magnifyingglass.circle")
+    } else if cleanQuery.count < 2 {
+      placePickerMessage("Keep typing to search places.", systemImage: "text.cursor")
+    } else if places.isEmpty {
+      placePickerMessage("No matching places yet. You can still use your typed location.", systemImage: "mappin.circle")
+    }
+  }
+
+  private func placePickerMessage(_ text: String, systemImage: String) -> some View {
+    HStack(spacing: MIRATheme.Space.sm) {
+      Image(systemName: systemImage)
+        .font(.system(size: 17, weight: .semibold))
+        .foregroundStyle(MIRATheme.Color.textMuted)
+        .frame(width: 34, height: 34)
+        .background(MIRATheme.Color.surfaceSoft)
+        .clipShape(Circle())
+      Text(text)
+        .font(.system(size: 14, weight: .medium))
+        .foregroundStyle(MIRATheme.Color.textSecondary)
+        .fixedSize(horizontal: false, vertical: true)
+      Spacer()
+    }
+    .padding(MIRATheme.Space.md)
+    .background(MIRATheme.Color.surface)
+    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    .overlay {
+      RoundedRectangle(cornerRadius: 18, style: .continuous)
+        .stroke(MIRATheme.Color.hairline, lineWidth: 1)
+    }
+  }
+
+  private func placeRowTitle(systemImage: String, name: String, subtitle: String?) -> some View {
     HStack(spacing: MIRATheme.Space.md) {
-      Image(systemName: "mappin")
+      Image(systemName: systemImage)
         .font(.system(size: 18, weight: .semibold))
         .foregroundStyle(MIRATheme.Color.forest)
         .frame(width: 42, height: 42)
@@ -903,8 +959,18 @@ private struct PostLocationPickerSheet: View {
             .lineLimit(1)
         }
       }
+      Spacer(minLength: MIRATheme.Space.sm)
+      Image(systemName: "chevron.right")
+        .font(.system(size: 12, weight: .bold))
+        .foregroundStyle(MIRATheme.Color.textMuted.opacity(0.65))
     }
-    .padding(.vertical, 6)
+    .padding(MIRATheme.Space.md)
+    .background(MIRATheme.Color.surface)
+    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    .overlay {
+      RoundedRectangle(cornerRadius: 18, style: .continuous)
+        .stroke(MIRATheme.Color.hairline, lineWidth: 1)
+    }
   }
 
   private var cleanQuery: String {
@@ -919,24 +985,48 @@ private struct PostLocationPickerSheet: View {
     return "manual-\(slug.isEmpty ? "place" : String(slug))"
   }
 
+  private func selectManualPlace() {
+    selectedPlace = MIRAMapboxPlace(
+      placeId: manualPlaceId,
+      mapboxId: nil,
+      name: cleanQuery,
+      formattedAddress: cleanQuery,
+      address: cleanQuery,
+      vicinity: nil,
+      lat: nil,
+      lng: nil
+    )
+    dismiss()
+  }
+
   @MainActor
-  private func searchPlaces() async {
-    let clean = cleanQuery
+  private func searchPlaces(for clean: String) async {
     guard clean.count >= 2 else {
       places = []
       errorMessage = nil
+      isLoading = false
       return
     }
     isLoading = true
-    defer { isLoading = false }
     do {
-      let encoded = clean.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? clean
-      places = try await api.get("/mapbox-places/nearby?keyword=\(encoded)&type=place")
-      errorMessage = places.isEmpty ? "No places found. You can still use your typed address." : nil
+      let encoded = clean.addingPercentEncoding(withAllowedCharacters: urlQueryComponentAllowed) ?? clean
+      let loaded: [MIRAMapboxPlace] = try await api.get("/mapbox-places/nearby?keyword=\(encoded)&type=place")
+      guard !Task.isCancelled, clean == cleanQuery else { return }
+      places = loaded
+      errorMessage = nil
+      isLoading = false
     } catch {
+      guard !Task.isCancelled, clean == cleanQuery else { return }
       places = []
       errorMessage = "Mapbox places could not load. You can still use your typed address."
+      isLoading = false
     }
+  }
+
+  private var urlQueryComponentAllowed: CharacterSet {
+    var allowed = CharacterSet.urlQueryAllowed
+    allowed.remove(charactersIn: "&=?+")
+    return allowed
   }
 }
 

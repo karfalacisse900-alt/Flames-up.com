@@ -18,15 +18,17 @@ struct MIRAVoiceDraft: Identifiable, Hashable {
 }
 
 private enum ChatRoomPalette {
-  static let background = Color(red: 0.958, green: 0.963, blue: 0.951)
+  static let background = Color(red: 0.946, green: 0.957, blue: 0.954)
+  static let backgroundWash = Color(red: 0.910, green: 0.942, blue: 0.936)
   static let composer = Color.white
-  static let input = Color(red: 0.974, green: 0.977, blue: 0.969)
+  static let input = Color(red: 0.965, green: 0.972, blue: 0.970)
   static let incomingBubble = Color.white
-  static let outgoingBubble = Color(red: 0.075, green: 0.086, blue: 0.076)
-  static let outgoingSoft = Color(red: 0.160, green: 0.188, blue: 0.165)
-  static let accent = Color(red: 0.105, green: 0.135, blue: 0.110)
+  static let outgoingBubble = Color(red: 0.035, green: 0.250, blue: 0.285)
+  static let outgoingSoft = Color(red: 0.105, green: 0.380, blue: 0.410)
+  static let accent = Color(red: 0.040, green: 0.220, blue: 0.260)
   static let voice = Color(red: 0.840, green: 0.220, blue: 0.330)
   static let hairline = Color.black.opacity(0.070)
+  static let messageShadow = Color.black.opacity(0.055)
 }
 
 @MainActor
@@ -94,9 +96,10 @@ final class ConversationNativeModel: ObservableObject {
   func sendText() async {
     let clean = draft.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !clean.isEmpty, !isSending else { return }
-    await send(content: clean, mediaUrl: nil, mediaType: nil)
-    draft = ""
-    updateTyping(false)
+    if await send(content: clean, mediaUrl: nil, mediaType: nil) {
+      draft = ""
+      updateTyping(false)
+    }
   }
 
   func sendPickedMedia(data: Data, contentTypes: [UTType]) async {
@@ -187,10 +190,13 @@ final class ConversationNativeModel: ObservableObject {
     do {
       let data = try Data(contentsOf: draft.url)
       let remote = try await uploadService.uploadAudio(data: data, fileName: draft.url.lastPathComponent)
-      pendingVoiceDraft = nil
-      try? FileManager.default.removeItem(at: draft.url)
-      await send(content: "Voice message", mediaUrl: remote, mediaType: "voice")
-      errorMessage = nil
+      if await send(content: "Voice message", mediaUrl: remote, mediaType: "voice") {
+        pendingVoiceDraft = nil
+        try? FileManager.default.removeItem(at: draft.url)
+        errorMessage = nil
+      } else {
+        errorMessage = "Could not send the voice message."
+      }
     } catch {
       errorMessage = "Could not send the voice message."
     }
@@ -203,8 +209,9 @@ final class ConversationNativeModel: ObservableObject {
     }
   }
 
-  private func send(content: String, mediaUrl: String?, mediaType: String?) async {
-    guard !isSending else { return }
+  @discardableResult
+  private func send(content: String, mediaUrl: String?, mediaType: String?) async -> Bool {
+    guard !isSending else { return false }
     isSending = true
     defer { isSending = false }
     do {
@@ -223,8 +230,10 @@ final class ConversationNativeModel: ObservableObject {
         messages.append(sent)
       }
       errorMessage = nil
+      return true
     } catch {
       errorMessage = "Could not send this message."
+      return false
     }
   }
 }
@@ -250,10 +259,15 @@ public struct ConversationNativeView: View {
 
   public var body: some View {
     ZStack {
-      ChatRoomPalette.background.ignoresSafeArea()
+      LinearGradient(
+        colors: [ChatRoomPalette.background, ChatRoomPalette.backgroundWash],
+        startPoint: .top,
+        endPoint: .bottom
+      )
+      .ignoresSafeArea()
       ScrollViewReader { proxy in
         ScrollView {
-          LazyVStack(spacing: MIRATheme.Space.md) {
+          LazyVStack(spacing: 12) {
             if model.isLoading && model.messages.isEmpty {
               chatSkeleton
             } else if model.messages.isEmpty {
@@ -266,7 +280,7 @@ public struct ConversationNativeView: View {
             }
           }
           .padding(.horizontal, MIRATheme.Space.md)
-          .padding(.top, MIRATheme.Space.md)
+          .padding(.top, MIRATheme.Space.lg)
           .padding(.bottom, 120)
         }
         .scrollDismissesKeyboard(.interactively)
@@ -415,7 +429,7 @@ public struct ConversationNativeView: View {
   }
 
   private var bubbleMaxWidth: CGFloat {
-    min(UIScreen.main.bounds.width * 0.74, 304)
+    min(UIScreen.main.bounds.width * 0.78, 324)
   }
 
   private func conversationMessageAge(_ value: String) -> String {
@@ -710,6 +724,7 @@ private struct VoiceDraftComposerPreview: View {
   let onSend: () -> Void
   @State private var player: AVPlayer?
   @State private var isPlaying = false
+  @State private var endObserver: NSObjectProtocol?
 
   var body: some View {
     HStack(spacing: MIRATheme.Space.sm) {
@@ -778,23 +793,49 @@ private struct VoiceDraftComposerPreview: View {
         .stroke(ChatRoomPalette.hairline, lineWidth: 1)
     }
     .onDisappear {
-      player?.pause()
-      isPlaying = false
+      cleanup()
     }
   }
 
   private func togglePlayback() {
     if player == nil {
-      player = AVPlayer(url: draft.url)
+      let item = AVPlayerItem(url: draft.url)
+      player = AVPlayer(playerItem: item)
+      player?.volume = 1
+      endObserver = NotificationCenter.default.addObserver(
+        forName: .AVPlayerItemDidPlayToEndTime,
+        object: item,
+        queue: .main
+      ) { _ in
+        isPlaying = false
+        player?.seek(to: .zero)
+      }
     }
     if isPlaying {
       player?.pause()
       isPlaying = false
     } else {
+      do {
+        let session = AVAudioSession.sharedInstance()
+        try session.setCategory(.playback, mode: .spokenAudio)
+        try session.setActive(true)
+      } catch {
+        return
+      }
       player?.seek(to: .zero)
       player?.play()
       isPlaying = true
     }
+  }
+
+  private func cleanup() {
+    player?.pause()
+    isPlaying = false
+    if let endObserver {
+      NotificationCenter.default.removeObserver(endObserver)
+      self.endObserver = nil
+    }
+    player = nil
   }
 }
 
@@ -817,23 +858,32 @@ private struct MessageBubbleContent: View {
           .frame(maxWidth: maxWidth, alignment: outgoing ? .trailing : .leading)
       }
     }
-    .padding(.horizontal, hasLargeMedia ? 6 : MIRATheme.Space.md)
-    .padding(.vertical, hasLargeMedia ? 6 : MIRATheme.Space.sm)
+    .padding(.leading, bubbleLeadingPadding)
+    .padding(.trailing, bubbleTrailingPadding)
+    .padding(.vertical, hasLargeMedia ? 6 : 10)
     .frame(maxWidth: maxWidth, alignment: outgoing ? .trailing : .leading)
-    .background(outgoing ? ChatRoomPalette.outgoingBubble : ChatRoomPalette.incomingBubble)
-    .clipShape(RoundedRectangle(cornerRadius: hasLargeMedia ? 18 : 21, style: .continuous))
-    .overlay {
-      if !outgoing {
-        RoundedRectangle(cornerRadius: hasLargeMedia ? 18 : 21, style: .continuous)
-          .stroke(ChatRoomPalette.hairline, lineWidth: 1)
-      }
+    .background {
+      ChatBubbleShape(outgoing: outgoing, radius: hasLargeMedia ? 18 : 22)
+        .fill(outgoing ? ChatRoomPalette.outgoingBubble : ChatRoomPalette.incomingBubble)
     }
-    .shadow(color: .black.opacity(outgoing ? 0.045 : 0.035), radius: 10, x: 0, y: 4)
+    .overlay {
+      ChatBubbleShape(outgoing: outgoing, radius: hasLargeMedia ? 18 : 22)
+        .stroke(outgoing ? Color.white.opacity(0.10) : ChatRoomPalette.hairline, lineWidth: 1)
+    }
+    .shadow(color: ChatRoomPalette.messageShadow, radius: outgoing ? 12 : 10, x: 0, y: 5)
   }
 
   private var hasLargeMedia: Bool {
     guard let mediaType = message.mediaType?.lowercased() else { return false }
     return mediaType == "image" || mediaType == "video"
+  }
+
+  private var bubbleLeadingPadding: CGFloat {
+    hasLargeMedia ? 6 : (outgoing ? MIRATheme.Space.md : MIRATheme.Space.md + 6)
+  }
+
+  private var bubbleTrailingPadding: CGFloat {
+    hasLargeMedia ? 6 : (outgoing ? MIRATheme.Space.md + 6 : MIRATheme.Space.md)
   }
 
   private var shouldShowTextContent: Bool {
@@ -862,6 +912,54 @@ private struct MessageBubbleContent: View {
         .frame(width: mediaWidth, height: type == "video" || url.isVideoURL ? mediaWidth * 1.22 : mediaWidth * 0.86)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
+  }
+}
+
+private struct ChatBubbleShape: Shape {
+  let outgoing: Bool
+  let radius: CGFloat
+
+  func path(in rect: CGRect) -> Path {
+    let tailWidth: CGFloat = 7
+    let bubbleRect = outgoing
+      ? CGRect(x: rect.minX, y: rect.minY, width: max(0, rect.width - tailWidth), height: rect.height)
+      : CGRect(x: rect.minX + tailWidth, y: rect.minY, width: max(0, rect.width - tailWidth), height: rect.height)
+    var path = Path()
+    path.addRoundedRect(
+      in: bubbleRect,
+      cornerSize: CGSize(width: radius, height: radius),
+      style: .continuous
+    )
+    var tail = Path()
+
+    if outgoing {
+      let start = CGPoint(x: bubbleRect.maxX - 1, y: bubbleRect.maxY - 19)
+      tail.move(to: start)
+      tail.addQuadCurve(
+        to: CGPoint(x: rect.maxX, y: rect.maxY - 9),
+        control: CGPoint(x: rect.maxX - 1, y: rect.maxY - 16)
+      )
+      tail.addQuadCurve(
+        to: CGPoint(x: bubbleRect.maxX - 8, y: bubbleRect.maxY - 5),
+        control: CGPoint(x: rect.maxX - 1, y: rect.maxY - 1)
+      )
+      tail.addLine(to: start)
+    } else {
+      let start = CGPoint(x: bubbleRect.minX + 1, y: bubbleRect.maxY - 19)
+      tail.move(to: start)
+      tail.addQuadCurve(
+        to: CGPoint(x: rect.minX, y: rect.maxY - 9),
+        control: CGPoint(x: rect.minX + 1, y: rect.maxY - 16)
+      )
+      tail.addQuadCurve(
+        to: CGPoint(x: bubbleRect.minX + 8, y: bubbleRect.maxY - 5),
+        control: CGPoint(x: rect.minX + 1, y: rect.maxY - 1)
+      )
+      tail.addLine(to: start)
+    }
+
+    path.addPath(tail)
+    return path
   }
 }
 
