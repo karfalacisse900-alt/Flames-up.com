@@ -11,6 +11,7 @@ public enum MIRANativeMediaEditorMode {
 public struct MIRANativeMediaEditorView: View {
   private let media: MIRAPickedMedia
   private let mode: MIRANativeMediaEditorMode
+  private let onClose: (() -> Void)?
   private let onComplete: (MIRAPickedMedia) -> Void
 
   @Environment(\.dismiss) private var dismiss
@@ -29,10 +30,12 @@ public struct MIRANativeMediaEditorView: View {
   public init(
     media: MIRAPickedMedia,
     mode: MIRANativeMediaEditorMode,
+    onClose: (() -> Void)? = nil,
     onComplete: @escaping (MIRAPickedMedia) -> Void
   ) {
     self.media = media
     self.mode = mode
+    self.onClose = onClose
     self.onComplete = onComplete
     let mediaType: MIRANativeEditorMediaType = media.kind == .video ? .video : .photo
     _recipe = State(initialValue: MIRANativeEditRecipe(
@@ -120,7 +123,7 @@ public struct MIRANativeMediaEditorView: View {
     HStack {
       Button {
         player?.pause()
-        dismiss()
+        closeEditor()
       } label: {
         Image(systemName: mode == .story ? "xmark" : "chevron.left")
           .font(.system(size: mode == .story ? 26 : 30, weight: .medium))
@@ -442,11 +445,19 @@ public struct MIRANativeMediaEditorView: View {
         edited = try await MIRANativeMediaEditorExporter.exportPhoto(media: media, recipe: recipe)
       }
       onComplete(edited)
-      dismiss()
+      closeEditor()
     } catch is CancellationError {
       errorMessage = "Export was cancelled."
     } catch {
       errorMessage = "Could not export this edit. Please try again."
+    }
+  }
+
+  private func closeEditor() {
+    if let onClose {
+      onClose()
+    } else {
+      dismiss()
     }
   }
 

@@ -368,7 +368,6 @@ private struct MainPostVisibilityUpdateBody: Encodable {
 }
 
 public struct MainFeedView: View {
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @StateObject private var model: MainFeedModel
   @State private var activeVideoPostID: String?
   @State private var isHeaderHidden = false
@@ -448,23 +447,22 @@ public struct MainFeedView: View {
           .animation(.easeInOut(duration: 0.24), value: isFeedChromeHidden)
       }
       .background(MIRATheme.Color.appBackground)
-      .overlay {
-        if let post = activeCommentsPost {
-          MainFeedCommentsOverlay(
-            post: post,
-            api: model.api,
-            isPresented: isCommentsPresented,
-            onClose: closeComments
-          )
-          .zIndex(40)
-        }
-      }
       .miraScreenEnter(.tab)
       .toolbar(.hidden, for: .navigationBar)
       .toolbar(feedTabBarVisibility, for: .tabBar)
       .statusBarHidden(true)
-      .fullScreenCover(isPresented: $isShowingCreatePost) {
-        CreatePostNativeView(api: model.api)
+      .miraBottomSheet(
+        isPresented: $isCommentsPresented,
+        onDismissed: { activeCommentsPost = nil }
+      ) { dismiss in
+        if let post = activeCommentsPost {
+          MainFeedCommentsSheet(post: post, api: model.api, onClose: dismiss)
+        } else {
+          Color.clear
+        }
+      }
+      .miraFullScreenOverlay(isPresented: $isShowingCreatePost, background: .black) { dismiss in
+        CreatePostNativeView(api: model.api, onClose: dismiss)
       }
       .task { await model.load() }
       .onReceive(NotificationCenter.default.publisher(for: .miraPostEngagementDidChange)) { notification in
@@ -534,36 +532,10 @@ public struct MainFeedView: View {
     }
   }
 
-  private var commentSheetAnimation: Animation {
-    reduceMotion ? .easeOut(duration: 0.08) : .spring(response: 0.32, dampingFraction: 0.90, blendDuration: 0.02)
-  }
-
-  private var commentSheetDismissDelay: Double {
-    reduceMotion ? 0.08 : 0.28
-  }
-
   private func presentComments(for post: MIRAPost) {
     UIImpactFeedbackGenerator(style: .light).impactOccurred()
     activeCommentsPost = post
-    DispatchQueue.main.async {
-      withAnimation(self.commentSheetAnimation) {
-        self.isCommentsPresented = true
-      }
-    }
-  }
-
-  private func closeComments() {
-    guard activeCommentsPost != nil else { return }
-    let closingPostID = activeCommentsPost?.id
-    UIImpactFeedbackGenerator(style: .light).impactOccurred()
-    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-    withAnimation(commentSheetAnimation) {
-      isCommentsPresented = false
-    }
-    DispatchQueue.main.asyncAfter(deadline: .now() + commentSheetDismissDelay) {
-      guard !self.isCommentsPresented, self.activeCommentsPost?.id == closingPostID else { return }
-      self.activeCommentsPost = nil
-    }
+    isCommentsPresented = true
   }
 
   private var mainHeader: some View {
@@ -1020,75 +992,6 @@ private struct MainNativePostCard: View {
     let subtitle = post.userFullName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     guard !subtitle.isEmpty, subtitle != username else { return nil }
     return subtitle
-  }
-}
-
-private struct MainFeedCommentsOverlay: View {
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  let post: MIRAPost
-  let api: MIRAAPIClient
-  let isPresented: Bool
-  let onClose: () -> Void
-  @GestureState private var dragOffset: CGFloat = 0
-
-  var body: some View {
-    GeometryReader { proxy in
-      let height = sheetHeight(for: proxy)
-      ZStack(alignment: .bottom) {
-        Color.black
-          .opacity(isPresented ? 0.18 : 0)
-          .ignoresSafeArea()
-          .contentShape(Rectangle())
-          .onTapGesture {
-            guard isPresented else { return }
-            onClose()
-          }
-
-        MainFeedCommentsSheet(post: post, api: api, onClose: onClose)
-          .frame(maxWidth: .infinity)
-          .frame(height: height)
-          .background(MIRATheme.Color.surface)
-          .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.sheet, style: .continuous))
-          .shadow(color: .black.opacity(isPresented ? 0.16 : 0), radius: 24, x: 0, y: -8)
-          .padding(.horizontal, proxy.size.width > 700 ? 76 : 0)
-          .offset(y: sheetOffset(height: height, safeAreaBottom: proxy.safeAreaInsets.bottom))
-          .simultaneousGesture(sheetDragGesture(threshold: min(180, height * 0.24)))
-      }
-      .frame(width: proxy.size.width, height: proxy.size.height)
-    }
-    .ignoresSafeArea(.container, edges: [.horizontal, .bottom])
-    .allowsHitTesting(isPresented)
-    .animation(sheetAnimation, value: isPresented)
-    .animation(sheetAnimation, value: dragOffset)
-  }
-
-  private var sheetAnimation: Animation {
-    reduceMotion ? .easeOut(duration: 0.08) : .spring(response: 0.32, dampingFraction: 0.90, blendDuration: 0.02)
-  }
-
-  private func sheetHeight(for proxy: GeometryProxy) -> CGFloat {
-    let available = max(320, proxy.size.height - 10)
-    let preferred = proxy.size.height * 0.76
-    return min(max(360, preferred), min(720, available))
-  }
-
-  private func sheetOffset(height: CGFloat, safeAreaBottom: CGFloat) -> CGFloat {
-    guard isPresented else { return height + safeAreaBottom + 56 }
-    return max(0, dragOffset)
-  }
-
-  private func sheetDragGesture(threshold: CGFloat) -> some Gesture {
-    DragGesture(minimumDistance: 18, coordinateSpace: .global)
-      .updating($dragOffset) { value, state, _ in
-        guard value.translation.height > 0, abs(value.translation.height) > abs(value.translation.width) else { return }
-        state = value.translation.height
-      }
-      .onEnded { value in
-        let downward = value.translation.height > threshold || value.predictedEndTranslation.height > threshold * 1.35
-        if downward {
-          onClose()
-        }
-      }
   }
 }
 

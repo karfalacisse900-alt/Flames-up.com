@@ -180,26 +180,22 @@ public struct ProfileNativeView: View {
         }
         await model.load()
       }
-      .sheet(isPresented: $showEditProfile) {
-        EditProfileNativeView(user: model.user, api: model.api) { updated in
+      .miraBottomSheet(isPresented: $showEditProfile, preferredHeightFraction: 0.86) { dismissEditProfile in
+        EditProfileNativeView(user: model.user, api: model.api, onCancel: dismissEditProfile) { updated in
+          dismissEditProfile()
           Task { @MainActor in
             authSession?.replaceUser(updated)
             await model.applyUpdatedUser(updated)
           }
         }
       }
-      .overlay {
-        if let viewer = activeMediaViewer {
-          MIRAFullScreenMediaViewer(
-            urls: viewer.urls,
-            initialIndex: viewer.initialIndex,
-            onClose: { activeMediaViewer = nil }
-          )
-          .transition(.opacity)
-          .zIndex(50)
-        }
+      .miraFullScreenOverlay(item: $activeMediaViewer, background: .black) { viewer, dismissViewer in
+        MIRAFullScreenMediaViewer(
+          urls: viewer.urls,
+          initialIndex: viewer.initialIndex,
+          onClose: dismissViewer
+        )
       }
-      .animation(.easeInOut(duration: 0.24), value: activeMediaViewer?.id)
       .toolbar(activeMediaViewer == nil ? .visible : .hidden, for: .navigationBar)
       .toolbar(activeMediaViewer == nil ? .visible : .hidden, for: .tabBar)
       .statusBarHidden(activeMediaViewer != nil)
@@ -356,18 +352,13 @@ public struct UserProfileNativeView: View {
     .navigationTitle(model.user?.displayName ?? "Profile")
     .navigationBarTitleDisplayMode(.inline)
     .task { await model.load() }
-    .overlay {
-      if let viewer = activeMediaViewer {
-        MIRAFullScreenMediaViewer(
-          urls: viewer.urls,
-          initialIndex: viewer.initialIndex,
-          onClose: { activeMediaViewer = nil }
-        )
-        .transition(.opacity)
-        .zIndex(50)
-      }
+    .miraFullScreenOverlay(item: $activeMediaViewer, background: .black) { viewer, dismissViewer in
+      MIRAFullScreenMediaViewer(
+        urls: viewer.urls,
+        initialIndex: viewer.initialIndex,
+        onClose: dismissViewer
+      )
     }
-    .animation(.easeInOut(duration: 0.24), value: activeMediaViewer?.id)
     .toolbar(activeMediaViewer == nil ? .visible : .hidden, for: .navigationBar)
     .toolbar(activeMediaViewer == nil ? .visible : .hidden, for: .tabBar)
     .statusBarHidden(activeMediaViewer != nil)
@@ -523,6 +514,7 @@ private struct ProfilePostTile: View {
 private struct EditProfileNativeView: View {
   let user: MIRAUser?
   let api: MIRAAPIClient
+  let onCancel: (() -> Void)?
   let onSaved: (MIRAUser) -> Void
 
   @Environment(\.dismiss) private var dismiss
@@ -536,9 +528,10 @@ private struct EditProfileNativeView: View {
   @State private var didHydrateMissingUser = false
   @State private var errorMessage: String?
 
-  init(user: MIRAUser?, api: MIRAAPIClient, onSaved: @escaping (MIRAUser) -> Void) {
+  init(user: MIRAUser?, api: MIRAAPIClient, onCancel: (() -> Void)? = nil, onSaved: @escaping (MIRAUser) -> Void) {
     self.user = user
     self.api = api
+    self.onCancel = onCancel
     self.onSaved = onSaved
     _fullName = State(initialValue: user?.fullName ?? "")
     _username = State(initialValue: user?.username ?? "")
@@ -579,7 +572,7 @@ private struct EditProfileNativeView: View {
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
         ToolbarItem(placement: .topBarLeading) {
-          Button("Cancel") { dismiss() }
+          Button("Cancel") { close() }
             .disabled(isSaving)
         }
         ToolbarItem(placement: .topBarTrailing) {
@@ -674,9 +667,16 @@ private struct EditProfileNativeView: View {
         )
       )
       onSaved(updated)
-      dismiss()
     } catch {
       errorMessage = "Could not save your profile."
+    }
+  }
+
+  private func close() {
+    if let onCancel {
+      onCancel()
+    } else {
+      dismiss()
     }
   }
 
@@ -756,15 +756,14 @@ public struct ChatNativeView: View {
       .background(MIRATheme.Color.appBackground)
       .miraScreenEnter(.tab)
       .task { await model.load() }
-      .sheet(isPresented: $showCreateGroup) {
-        CreateGroupChatSheet(api: model.api, currentUserId: currentUserId) {
-          showCreateGroup = false
+      .miraBottomSheet(isPresented: $showCreateGroup, preferredHeightFraction: 0.76) { dismissCreateGroup in
+        CreateGroupChatSheet(api: model.api, currentUserId: currentUserId, onCancel: dismissCreateGroup) {
+          dismissCreateGroup()
           Task { await model.load() }
         }
-        .presentationDetents([.medium, .large])
       }
-      .fullScreenCover(item: $activeCall) { presentation in
-        MIRAAgoraCallView(presentation: presentation, api: model.api)
+      .miraFullScreenOverlay(item: $activeCall, background: .black) { presentation, dismissCall in
+        MIRAAgoraCallView(presentation: presentation, api: model.api, onClose: dismissCall)
       }
     }
   }
@@ -1061,9 +1060,11 @@ private final class CreateGroupChatModel: ObservableObject {
 private struct CreateGroupChatSheet: View {
   @StateObject private var model: CreateGroupChatModel
   @Environment(\.dismiss) private var dismiss
+  let onCancel: (() -> Void)?
   let onCreated: () -> Void
 
-  init(api: MIRAAPIClient, currentUserId: String, onCreated: @escaping () -> Void) {
+  init(api: MIRAAPIClient, currentUserId: String, onCancel: (() -> Void)? = nil, onCreated: @escaping () -> Void) {
+    self.onCancel = onCancel
     self.onCreated = onCreated
     _model = StateObject(wrappedValue: CreateGroupChatModel(api: api, currentUserId: currentUserId))
   }
@@ -1156,13 +1157,12 @@ private struct CreateGroupChatSheet: View {
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
         ToolbarItem(placement: .topBarLeading) {
-          Button("Cancel") { dismiss() }
+          Button("Cancel") { close() }
         }
         ToolbarItem(placement: .topBarTrailing) {
           Button(model.isCreating ? "Creating" : "Create") {
             Task {
               if await model.create() {
-                dismiss()
                 onCreated()
               }
             }
@@ -1175,6 +1175,14 @@ private struct CreateGroupChatSheet: View {
         try? await Task.sleep(nanoseconds: 300_000_000)
         await model.search()
       }
+    }
+  }
+
+  private func close() {
+    if let onCancel {
+      onCancel()
+    } else {
+      dismiss()
     }
   }
 }

@@ -14,6 +14,7 @@ enum MIRAStoryCameraEditTool {
 struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
   var editedMedia: MIRAPickedMedia?
   var dismissesOnCapture = true
+  var dismissesOnCancel = true
   let onCapture: (MIRAPickedMedia) -> Void
   let onCancel: () -> Void
   let onEdit: (MIRAPickedMedia, MIRAStoryCameraEditTool) -> Void
@@ -23,12 +24,14 @@ struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
   init(
     editedMedia: MIRAPickedMedia? = nil,
     dismissesOnCapture: Bool = true,
+    dismissesOnCancel: Bool = true,
     onCapture: @escaping (MIRAPickedMedia) -> Void,
     onCancel: @escaping () -> Void = {},
     onEdit: @escaping (MIRAPickedMedia, MIRAStoryCameraEditTool) -> Void = { _, _ in }
   ) {
     self.editedMedia = editedMedia
     self.dismissesOnCapture = dismissesOnCapture
+    self.dismissesOnCancel = dismissesOnCancel
     self.onCapture = onCapture
     self.onCancel = onCancel
     self.onEdit = onEdit
@@ -47,7 +50,14 @@ struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
   }
 
   func makeCoordinator() -> Coordinator {
-    Coordinator(onCapture: onCapture, onCancel: onCancel, onEdit: onEdit, dismissesOnCapture: dismissesOnCapture, dismiss: dismiss)
+    Coordinator(
+      onCapture: onCapture,
+      onCancel: onCancel,
+      onEdit: onEdit,
+      dismissesOnCapture: dismissesOnCapture,
+      dismissesOnCancel: dismissesOnCancel,
+      dismiss: dismiss
+    )
   }
 
   final class Coordinator: NSObject, MIRAStoryCameraViewControllerDelegate {
@@ -55,6 +65,7 @@ struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
     private let onCancel: () -> Void
     private let onEdit: (MIRAPickedMedia, MIRAStoryCameraEditTool) -> Void
     private let dismissesOnCapture: Bool
+    private let dismissesOnCancel: Bool
     private let dismiss: DismissAction
 
     init(
@@ -62,18 +73,22 @@ struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
       onCancel: @escaping () -> Void,
       onEdit: @escaping (MIRAPickedMedia, MIRAStoryCameraEditTool) -> Void,
       dismissesOnCapture: Bool,
+      dismissesOnCancel: Bool,
       dismiss: DismissAction
     ) {
       self.onCapture = onCapture
       self.onCancel = onCancel
       self.onEdit = onEdit
       self.dismissesOnCapture = dismissesOnCapture
+      self.dismissesOnCancel = dismissesOnCancel
       self.dismiss = dismiss
     }
 
     func storyCameraDidCancel() {
       onCancel()
-      dismiss()
+      if dismissesOnCancel {
+        dismiss()
+      }
     }
 
     func storyCameraDidCapture(_ media: MIRAPickedMedia) {

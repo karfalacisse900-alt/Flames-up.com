@@ -374,9 +374,11 @@ struct MIRAAgoraCallView: View {
   @State private var isVisible = false
 
   private let presentation: MIRAAgoraCallPresentation
+  private let onClose: (() -> Void)?
 
-  init(presentation: MIRAAgoraCallPresentation, api: MIRAAPIClient) {
+  init(presentation: MIRAAgoraCallPresentation, api: MIRAAPIClient, onClose: (() -> Void)? = nil) {
     self.presentation = presentation
+    self.onClose = onClose
     _model = StateObject(wrappedValue: MIRAAgoraCallModel(presentation: presentation, api: api))
   }
 
@@ -571,7 +573,11 @@ struct MIRAAgoraCallView: View {
       isVisible = false
     }
     DispatchQueue.main.asyncAfter(deadline: .now() + (reduceMotion ? 0.05 : 0.22)) {
-      dismiss()
+      if let onClose {
+        onClose()
+      } else {
+        dismiss()
+      }
     }
   }
 }

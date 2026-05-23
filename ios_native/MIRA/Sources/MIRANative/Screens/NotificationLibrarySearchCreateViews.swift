@@ -284,7 +284,7 @@ private struct MIRAEditorPresentation: Identifiable {
   var returnsToCamera = false
 }
 
-private enum PostDetailSheet: Identifiable {
+private enum PostDetailSheet: Identifiable, Equatable {
   case location
   case people
   case tags
@@ -328,6 +328,7 @@ private struct MIRAMapboxPlace: Decodable, Identifiable, Hashable {
 
 public struct CreatePostNativeView: View {
   let api: MIRAAPIClient
+  private let onClose: (() -> Void)?
   @Environment(\.dismiss) private var dismiss
   @State private var title = ""
   @State private var bodyText = ""
@@ -345,8 +346,9 @@ public struct CreatePostNativeView: View {
   @State private var taggedUsers: [MIRAUser] = []
   @State private var hashtags: [String] = []
 
-  public init(api: MIRAAPIClient) {
+  public init(api: MIRAAPIClient, onClose: (() -> Void)? = nil) {
     self.api = api
+    self.onClose = onClose
   }
 
   public var body: some View {
@@ -364,21 +366,23 @@ public struct CreatePostNativeView: View {
     .onChange(of: pickerItems) { _, newItems in
       Task { await loadPickerItems(newItems) }
     }
-    .sheet(isPresented: $showPreview) {
+    .miraBottomSheet(isPresented: $showPreview, preferredHeightFraction: 0.72) { _ in
       ComposerPreviewSheet(title: title, bodyText: bodyText, mediaItems: mediaItems)
     }
-    .sheet(item: $activePostDetailSheet) { sheet in
-      switch sheet {
+    .miraBottomSheet(isPresented: postDetailSheetPresentedBinding, preferredHeightFraction: postDetailSheetHeightFraction) { closeSheet in
+      switch activePostDetailSheet {
       case .location:
-        PostLocationPickerSheet(api: api, selectedPlace: $selectedPlace)
+        PostLocationPickerSheet(api: api, selectedPlace: $selectedPlace, onClose: closeSheet)
       case .people:
-        PostPeopleTagSheet(api: api, selectedUsers: $taggedUsers)
+        PostPeopleTagSheet(api: api, selectedUsers: $taggedUsers, onClose: closeSheet)
       case .tags:
-        PostHashtagSheet(hashtags: $hashtags)
+        PostHashtagSheet(hashtags: $hashtags, onClose: closeSheet)
+      case nil:
+        Color.clear
       }
     }
-    .fullScreenCover(item: $editingMedia) { item in
-      MIRANativeMediaEditorView(media: item.media, mode: .post) { edited in
+    .miraFullScreenOverlay(item: $editingMedia, background: .black) { item, closeEditor in
+      MIRANativeMediaEditorView(media: item.media, mode: .post, onClose: closeEditor) { edited in
         if item.returnsToCamera {
           editedCameraMedia = edited
         } else if let index = item.replacementIndex, mediaItems.indices.contains(index) {
@@ -394,16 +398,32 @@ public struct CreatePostNativeView: View {
     }
   }
 
+  private var postDetailSheetPresentedBinding: Binding<Bool> {
+    Binding(
+      get: { activePostDetailSheet != nil },
+      set: { isPresented in
+        if !isPresented {
+          activePostDetailSheet = nil
+        }
+      }
+    )
+  }
+
+  private var postDetailSheetHeightFraction: CGFloat {
+    activePostDetailSheet == .tags ? 0.50 : 0.76
+  }
+
   private var mediaFirstPage: some View {
     ZStack {
       MIRAStoryLiveCameraView(
         editedMedia: editedCameraMedia,
         dismissesOnCapture: false,
+        dismissesOnCancel: false,
         onCapture: { media in
           addCapturedMediaAndContinue(media)
         },
         onCancel: {
-          dismiss()
+          close()
         },
         onEdit: { media, _ in
           editingMedia = MIRAEditorPresentation(media: media, returnsToCamera: true)
@@ -708,9 +728,17 @@ public struct CreatePostNativeView: View {
         clientRequestId: UUID().uuidString
       )
       let _: MIRAPost = try await api.post("/posts", body: body)
-      dismiss()
+      close()
     } catch {
       errorMessage = "Post could not be created."
+    }
+  }
+
+  private func close() {
+    if let onClose {
+      onClose()
+    } else {
+      dismiss()
     }
   }
 
@@ -762,6 +790,7 @@ public struct CreatePostNativeView: View {
 private struct PostLocationPickerSheet: View {
   let api: MIRAAPIClient
   @Binding var selectedPlace: MIRAMapboxPlace?
+  let onClose: (() -> Void)?
   @Environment(\.dismiss) private var dismiss
   @State private var query = ""
   @State private var places: [MIRAMapboxPlace] = []
@@ -828,7 +857,7 @@ private struct PostLocationPickerSheet: View {
             ForEach(places) { place in
               Button {
                 selectedPlace = place
-                dismiss()
+                close()
               } label: {
                 placeRowTitle(systemImage: "mappin.circle.fill", name: place.displayName, subtitle: place.addressText)
               }
@@ -844,13 +873,13 @@ private struct PostLocationPickerSheet: View {
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
         ToolbarItem(placement: .topBarLeading) {
-          Button("Cancel") { dismiss() }
+          Button("Cancel") { close() }
         }
         ToolbarItem(placement: .topBarTrailing) {
           if selectedPlace != nil {
             Button("Remove") {
               selectedPlace = nil
-              dismiss()
+              close()
             }
             .foregroundStyle(.red)
           }
@@ -996,7 +1025,15 @@ private struct PostLocationPickerSheet: View {
       lat: nil,
       lng: nil
     )
-    dismiss()
+    close()
+  }
+
+  private func close() {
+    if let onClose {
+      onClose()
+    } else {
+      dismiss()
+    }
   }
 
   @MainActor
@@ -1033,6 +1070,7 @@ private struct PostLocationPickerSheet: View {
 private struct PostPeopleTagSheet: View {
   let api: MIRAAPIClient
   @Binding var selectedUsers: [MIRAUser]
+  let onClose: (() -> Void)?
   @Environment(\.dismiss) private var dismiss
   @State private var query = ""
   @State private var users: [MIRAUser] = []
@@ -1085,10 +1123,10 @@ private struct PostPeopleTagSheet: View {
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
         ToolbarItem(placement: .topBarLeading) {
-          Button("Cancel") { dismiss() }
+          Button("Cancel") { close() }
         }
         ToolbarItem(placement: .topBarTrailing) {
-          Button("Done") { dismiss() }
+          Button("Done") { close() }
             .fontWeight(.semibold)
         }
       }
@@ -1135,6 +1173,14 @@ private struct PostPeopleTagSheet: View {
     }
   }
 
+  private func close() {
+    if let onClose {
+      onClose()
+    } else {
+      dismiss()
+    }
+  }
+
   @MainActor
   private func searchUsers() async {
     let clean = query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1150,6 +1196,7 @@ private struct PostPeopleTagSheet: View {
 
 private struct PostHashtagSheet: View {
   @Binding var hashtags: [String]
+  let onClose: (() -> Void)?
   @Environment(\.dismiss) private var dismiss
   @State private var draft = ""
 
@@ -1213,10 +1260,10 @@ private struct PostHashtagSheet: View {
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
         ToolbarItem(placement: .topBarLeading) {
-          Button("Cancel") { dismiss() }
+          Button("Cancel") { close() }
         }
         ToolbarItem(placement: .topBarTrailing) {
-          Button("Done") { dismiss() }
+          Button("Done") { close() }
             .fontWeight(.semibold)
         }
       }
@@ -1243,6 +1290,14 @@ private struct PostHashtagSheet: View {
     guard !clean.isEmpty, !hashtags.contains(clean), hashtags.count < 12 else { return }
     hashtags.append(clean)
     draft = ""
+  }
+
+  private func close() {
+    if let onClose {
+      onClose()
+    } else {
+      dismiss()
+    }
   }
 }
 
@@ -1621,15 +1676,18 @@ public struct CreateNoteNativeView: View {
 
 public struct CreateStoryNativeView: View {
   let api: MIRAAPIClient
+  private let onClose: (() -> Void)?
   @Environment(\.dismiss) private var dismiss
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var showCamera = false
   @State private var didOpenInitialCamera = false
   @State private var isPosting = false
   @State private var errorMessage: String?
   @State private var editingMedia: MIRAEditorPresentation?
 
-  public init(api: MIRAAPIClient) {
+  public init(api: MIRAAPIClient, onClose: (() -> Void)? = nil) {
     self.api = api
+    self.onClose = onClose
   }
 
   public var body: some View {
@@ -1638,7 +1696,7 @@ public struct CreateStoryNativeView: View {
 
       VStack {
         HStack {
-          Button { dismiss() } label: {
+          Button { close() } label: {
             Image(systemName: "xmark")
               .font(.system(size: 24, weight: .regular))
               .foregroundStyle(.white)
@@ -1693,20 +1751,25 @@ public struct CreateStoryNativeView: View {
       didOpenInitialCamera = true
       showCamera = true
     }
-    .fullScreenCover(isPresented: $showCamera) {
+    .miraFullScreenOverlay(isPresented: $showCamera, background: .black) { closeCamera in
       MIRAStoryLiveCameraView(
+        dismissesOnCapture: false,
+        dismissesOnCancel: false,
         onCapture: { media in
-          showCamera = false
+          closeCamera()
           presentStoryEditor(for: media)
         },
         onCancel: {
-          dismiss()
+          closeCamera()
+          DispatchQueue.main.asyncAfter(deadline: .now() + (reduceMotion ? 0.08 : MIRATransitionTiming.fullScreenClose)) {
+            close()
+          }
         }
       )
       .ignoresSafeArea()
     }
-    .fullScreenCover(item: $editingMedia) { item in
-      MIRANativeMediaEditorView(media: item.media, mode: .story) { edited in
+    .miraFullScreenOverlay(item: $editingMedia, background: .black) { item, closeEditor in
+      MIRANativeMediaEditorView(media: item.media, mode: .story, onClose: closeEditor) { edited in
         Task { await submit(media: edited) }
       }
       .ignoresSafeArea()
@@ -1729,7 +1792,7 @@ public struct CreateStoryNativeView: View {
           editorMetadata: media.editorMetadata
         )
       )
-      dismiss()
+      close()
     } catch {
       errorMessage = "Story could not be posted."
     }
@@ -1738,6 +1801,14 @@ public struct CreateStoryNativeView: View {
   private func presentStoryEditor(for media: MIRAPickedMedia) {
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
       editingMedia = MIRAEditorPresentation(media: media)
+    }
+  }
+
+  private func close() {
+    if let onClose {
+      onClose()
+    } else {
+      dismiss()
     }
   }
 }

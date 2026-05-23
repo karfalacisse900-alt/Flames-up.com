@@ -141,9 +141,7 @@ private let discoverGalleryFilters: [DiscoverGalleryFilter] = [
 public struct DiscoverNativeView: View {
   @StateObject private var model: DiscoverNativeModel
   @State private var selectedStoryGroup: MIRAStoryGroup?
-  @State private var isStoryViewerVisible = false
   @State private var selectedGalleryFilter = "all"
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   public init(api: MIRAAPIClient) {
     _model = StateObject(wrappedValue: DiscoverNativeModel(api: api))
@@ -166,53 +164,20 @@ public struct DiscoverNativeView: View {
           }
         }
         .background(MIRATheme.Color.appBackground)
-
-        storyViewerOverlay
       }
       .background(MIRATheme.Color.appBackground)
       .miraScreenEnter(.tab)
       .toolbar(.hidden, for: .navigationBar)
       .toolbar(selectedStoryGroup == nil ? .visible : .hidden, for: .tabBar)
       .task { await model.load() }
-    }
-  }
-
-  @ViewBuilder
-  private var storyViewerOverlay: some View {
-    if let group = selectedStoryGroup {
-      ZStack {
-        Color.black.ignoresSafeArea()
-        StoryViewerNativeView(group: group, api: model.api, onClose: closeStoryViewer)
+      .miraFullScreenOverlay(item: $selectedStoryGroup, background: .black) { group, dismissStory in
+        StoryViewerNativeView(group: group, api: model.api, onClose: dismissStory)
       }
-      .opacity(isStoryViewerVisible ? 1 : 0)
-      .scaleEffect(reduceMotion || isStoryViewerVisible ? 1 : 0.982)
-      .offset(y: reduceMotion || isStoryViewerVisible ? 0 : 18)
-      .ignoresSafeArea()
-      .zIndex(50)
-      .transition(.opacity)
-      .animation(.easeOut(duration: reduceMotion ? 0.1 : 0.28), value: isStoryViewerVisible)
     }
   }
 
   private func openStoryViewer(_ group: MIRAStoryGroup) {
     selectedStoryGroup = group
-    isStoryViewerVisible = false
-    DispatchQueue.main.async {
-      withAnimation(.easeOut(duration: reduceMotion ? 0.1 : 0.28)) {
-        isStoryViewerVisible = true
-      }
-    }
-  }
-
-  private func closeStoryViewer() {
-    withAnimation(.easeInOut(duration: reduceMotion ? 0.1 : 0.22)) {
-      isStoryViewerVisible = false
-    }
-    DispatchQueue.main.asyncAfter(deadline: .now() + (reduceMotion ? 0.11 : 0.23)) {
-      if !isStoryViewerVisible {
-        selectedStoryGroup = nil
-      }
-    }
   }
 
   private var discoverHeader: some View {

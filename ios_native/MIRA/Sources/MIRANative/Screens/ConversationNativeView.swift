@@ -302,15 +302,14 @@ public struct ConversationNativeView: View {
     .toolbar(.hidden, for: .tabBar)
     .task { await model.load() }
     .task { await model.pollPresence() }
-    .fullScreenCover(item: $activeCall) { presentation in
-      MIRAAgoraCallView(presentation: presentation, api: model.api)
+    .miraFullScreenOverlay(item: $activeCall, background: .black) { presentation, dismissCall in
+      MIRAAgoraCallView(presentation: presentation, api: model.api, onClose: dismissCall)
     }
-    .sheet(isPresented: $showGIFPicker) {
-      ChatGIFPickerSheet(api: model.api) { gif in
-        showGIFPicker = false
+    .miraBottomSheet(isPresented: $showGIFPicker, preferredHeightFraction: 0.72) { dismissGIFPicker in
+      ChatGIFPickerSheet(api: model.api, onClose: dismissGIFPicker) { gif in
+        dismissGIFPicker()
         Task { await model.sendGIF(gif) }
       }
-      .presentationDetents([.medium, .large])
     }
     .fileImporter(isPresented: $showFileImporter, allowedContentTypes: [.item], allowsMultipleSelection: false) { result in
       guard case let .success(urls) = result, let url = urls.first else { return }
@@ -1141,6 +1140,7 @@ private struct VoiceWaveformBars: View {
 
 private struct ChatGIFPickerSheet: View {
   let api: MIRAAPIClient
+  let onClose: (() -> Void)?
   let onSelect: (MIRAGifItem) -> Void
   @Environment(\.dismiss) private var dismiss
   @State private var query = "reaction"
@@ -1188,7 +1188,7 @@ private struct ChatGIFPickerSheet: View {
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
         ToolbarItem(placement: .topBarTrailing) {
-          Button("Done") { dismiss() }
+          Button("Done") { close() }
         }
       }
       .task { await search() }
@@ -1215,6 +1215,14 @@ private struct ChatGIFPickerSheet: View {
     let encoded = components.percentEncodedQuery ?? "q=\(clean)"
     if let response: MIRAGifSearchResponse = try? await api.get("/gifs/search?\(encoded)") {
       results = response.gifs
+    }
+  }
+
+  private func close() {
+    if let onClose {
+      onClose()
+    } else {
+      dismiss()
     }
   }
 }
