@@ -18,21 +18,21 @@ struct MIRAVoiceDraft: Identifiable, Hashable {
 }
 
 private enum ChatRoomPalette {
-  static let background = Color(red: 0.946, green: 0.957, blue: 0.954)
-  static let backgroundWash = Color(red: 0.910, green: 0.942, blue: 0.936)
+  static let background = Color(red: 0.944, green: 0.944, blue: 0.944)
+  static let backgroundWash = Color(red: 0.944, green: 0.944, blue: 0.944)
   static let composer = Color.white
-  static let input = Color(red: 0.965, green: 0.972, blue: 0.970)
+  static let input = Color(red: 0.910, green: 0.910, blue: 0.910)
   static let incomingBubble = Color.white
-  static let outgoingBubble = Color(red: 0.035, green: 0.250, blue: 0.285)
-  static let outgoingSoft = Color(red: 0.105, green: 0.380, blue: 0.410)
-  static let accent = Color(red: 0.040, green: 0.220, blue: 0.260)
-  static let voice = Color(red: 0.840, green: 0.220, blue: 0.330)
-  static let hairline = Color.black.opacity(0.070)
-  static let incomingStroke = Color(red: 0.862, green: 0.898, blue: 0.882)
-  static let outgoingStroke = Color.white.opacity(0.12)
-  static let incomingTimestamp = Color(red: 0.492, green: 0.545, blue: 0.525)
-  static let outgoingTimestamp = Color(red: 0.812, green: 0.906, blue: 0.894)
-  static let messageShadow = Color.black.opacity(0.055)
+  static let outgoingBubble = Color.black
+  static let outgoingSoft = Color.black.opacity(0.82)
+  static let accent = Color.black
+  static let voice = Color.black
+  static let hairline = Color.black.opacity(0.075)
+  static let incomingStroke = Color.clear
+  static let outgoingStroke = Color.clear
+  static let incomingTimestamp = Color(red: 0.520, green: 0.520, blue: 0.520)
+  static let outgoingTimestamp = Color.white.opacity(0.72)
+  static let messageShadow = Color.black.opacity(0.030)
 }
 
 @MainActor
@@ -249,6 +249,7 @@ public struct ConversationNativeView: View {
   @State private var showGIFPicker = false
   @State private var showAttachmentTray = false
   @State private var activeCall: MIRAAgoraCallPresentation?
+  @Environment(\.dismiss) private var dismiss
   private let title: String
 
   public init(peerId: String, title: String, api: MIRAAPIClient, currentUserId: String = "") {
@@ -262,13 +263,8 @@ public struct ConversationNativeView: View {
   }
 
   public var body: some View {
-    ZStack {
-      LinearGradient(
-        colors: [ChatRoomPalette.background, ChatRoomPalette.backgroundWash],
-        startPoint: .top,
-        endPoint: .bottom
-      )
-      .ignoresSafeArea()
+    VStack(spacing: 0) {
+      chatHeader
       ScrollViewReader { proxy in
         ScrollView {
           LazyVStack(spacing: 12) {
@@ -283,8 +279,8 @@ public struct ConversationNativeView: View {
               }
             }
           }
-          .padding(.horizontal, MIRATheme.Space.md)
-          .padding(.top, MIRATheme.Space.lg)
+          .padding(.horizontal, 14)
+          .padding(.top, 14)
           .padding(.bottom, 120)
         }
         .scrollDismissesKeyboard(.interactively)
@@ -302,28 +298,8 @@ public struct ConversationNativeView: View {
     }
     .background(ChatRoomPalette.background)
     .miraScreenEnter(.push)
-    .navigationTitle(title)
-    .navigationBarTitleDisplayMode(.inline)
+    .toolbar(.hidden, for: .navigationBar)
     .toolbar(.hidden, for: .tabBar)
-    .toolbar {
-      ToolbarItem(placement: .principal) {
-        VStack(spacing: 2) {
-          Text(title)
-            .font(.system(size: 17, weight: .semibold))
-            .lineLimit(1)
-            .truncationMode(.tail)
-          Text(statusText)
-            .font(.system(size: 12, weight: .medium))
-            .foregroundStyle(MIRATheme.Color.textMuted)
-        }
-      }
-      ToolbarItemGroup(placement: .topBarTrailing) {
-        if model.peerId != nil {
-          callToolbarButton(systemImage: "phone.fill", mode: .voice)
-          callToolbarButton(systemImage: "video.fill", mode: .video)
-        }
-      }
-    }
     .task { await model.load() }
     .task { await model.pollPresence() }
     .fullScreenCover(item: $activeCall) { presentation in
@@ -347,6 +323,67 @@ public struct ConversationNativeView: View {
         guard let data = try? await item.loadTransferable(type: Data.self) else { return }
         await model.sendPickedMedia(data: data, contentTypes: item.supportedContentTypes)
       }
+    }
+  }
+
+  private var chatHeader: some View {
+    HStack(spacing: 10) {
+      Button {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        dismiss()
+      } label: {
+        Image(systemName: "chevron.left")
+          .font(.system(size: 19, weight: .semibold))
+          .foregroundStyle(.black)
+          .frame(width: 30, height: 40)
+      }
+      .buttonStyle(.miraPress)
+
+      RemoteAvatar(url: peerAvatarURL, size: 40)
+
+      VStack(alignment: .leading, spacing: 2) {
+        Text(title)
+          .font(.system(size: 15, weight: .semibold))
+          .foregroundStyle(.black)
+          .lineLimit(1)
+          .truncationMode(.tail)
+        Text(statusText)
+          .font(.system(size: 11, weight: .regular))
+          .foregroundStyle(Color.black.opacity(0.58))
+          .lineLimit(1)
+          .truncationMode(.tail)
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
+
+      Menu {
+        if model.peerId != nil {
+          Button {
+            startCall(mode: .voice)
+          } label: {
+            Label("Voice call", systemImage: "phone.fill")
+          }
+          Button {
+            startCall(mode: .video)
+          } label: {
+            Label("FaceTime", systemImage: "video.fill")
+          }
+        } else {
+          Text("Group chat")
+        }
+      } label: {
+        Image(systemName: "ellipsis.vertical")
+          .font(.system(size: 19, weight: .bold))
+          .foregroundStyle(.black)
+          .frame(width: 36, height: 40)
+          .contentShape(Rectangle())
+      }
+      .buttonStyle(.miraPress)
+    }
+    .padding(.horizontal, 12)
+    .padding(.vertical, 10)
+    .background(ChatRoomPalette.composer)
+    .overlay(alignment: .bottom) {
+      Rectangle().fill(ChatRoomPalette.hairline).frame(height: 0.5)
     }
   }
 
@@ -406,11 +443,8 @@ public struct ConversationNativeView: View {
 
   private func messageBubble(_ message: MIRAMessage) -> some View {
     let outgoing = isOutgoing(message)
-    return HStack(alignment: .bottom, spacing: MIRATheme.Space.sm) {
-      if outgoing { Spacer(minLength: 54) }
-      if !outgoing {
-        RemoteAvatar(url: message.profileImage, size: 30)
-      }
+    return HStack(alignment: .bottom, spacing: 0) {
+      if outgoing { Spacer(minLength: 68) }
       VStack(alignment: outgoing ? .trailing : .leading, spacing: 6) {
         if model.isGroup && !outgoing {
           Text(message.fullName ?? message.username ?? "MIRA")
@@ -422,17 +456,17 @@ public struct ConversationNativeView: View {
           message: message,
           outgoing: outgoing,
           maxWidth: bubbleMaxWidth,
-          timestamp: message.createdAt.map(conversationMessageAge)
+          timestamp: nil
         )
       }
       .frame(maxWidth: bubbleMaxWidth, alignment: outgoing ? .trailing : .leading)
-      if !outgoing { Spacer(minLength: 54) }
+      if !outgoing { Spacer(minLength: 68) }
     }
     .transition(.move(edge: .bottom).combined(with: .opacity))
   }
 
   private var bubbleMaxWidth: CGFloat {
-    min(UIScreen.main.bounds.width * 0.78, 324)
+    min(UIScreen.main.bounds.width * 0.78, 304)
   }
 
   private func conversationMessageAge(_ value: String) -> String {
@@ -527,36 +561,30 @@ public struct ConversationNativeView: View {
           }
         } label: {
           Image(systemName: showAttachmentTray ? "xmark" : "plus")
-            .font(.system(size: 17, weight: .semibold))
-            .foregroundStyle(ChatRoomPalette.accent)
-            .frame(width: 38, height: 38)
+            .font(.system(size: 15, weight: .semibold))
+            .foregroundStyle(.black)
+            .frame(width: 32, height: 32)
             .background(ChatRoomPalette.input)
             .clipShape(Circle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.miraPress)
 
-        TextField("Send message...", text: $model.draft, axis: .vertical)
+        TextField("Message", text: $model.draft, axis: .vertical)
           .lineLimit(1...5)
           .font(.system(size: 15))
-          .padding(.horizontal, MIRATheme.Space.md)
-          .padding(.vertical, 11)
-          .background(ChatRoomPalette.input)
-          .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-          .overlay {
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-              .stroke(ChatRoomPalette.hairline, lineWidth: 1)
-          }
+          .foregroundStyle(.black)
+          .padding(.vertical, 8)
           .onChange(of: model.draft) { value in
             model.updateTyping(!value.isEmpty)
           }
 
         composerPrimaryButton
       }
-      .padding(.horizontal, MIRATheme.Space.md)
-      .padding(.vertical, 10)
+      .padding(.horizontal, 14)
+      .padding(.vertical, 9)
     }
     .background(ChatRoomPalette.composer)
-    .shadow(color: .black.opacity(0.07), radius: 22, x: 0, y: -6)
+    .shadow(color: .black.opacity(0.035), radius: 12, x: 0, y: -3)
     .overlay(alignment: .top) {
       Rectangle().fill(ChatRoomPalette.hairline).frame(height: 0.5)
     }
@@ -589,7 +617,7 @@ public struct ConversationNativeView: View {
           trayButton(
             model.isRecording ? "stop.fill" : "mic.fill",
             model.isRecording ? "Stop" : "Voice",
-            tint: model.isRecording ? ChatRoomPalette.voice : MIRATheme.Color.textMuted
+            tint: model.isRecording ? ChatRoomPalette.voice : Color.black.opacity(0.62)
           )
         }
         .buttonStyle(.plain)
@@ -625,9 +653,9 @@ public struct ConversationNativeView: View {
       }
     } label: {
       Image(systemName: hasDraft || hasVoiceDraft ? "arrow.up" : (model.isRecording ? "stop.fill" : "mic.fill"))
-        .font(.system(size: 16, weight: .bold))
+        .font(.system(size: 15, weight: .bold))
         .foregroundStyle(.white)
-        .frame(width: 38, height: 38)
+        .frame(width: 34, height: 34)
         .background(model.isRecording ? ChatRoomPalette.voice : ChatRoomPalette.accent)
         .clipShape(Circle())
     }
@@ -653,7 +681,7 @@ public struct ConversationNativeView: View {
     }
     .foregroundStyle(tint)
     .frame(width: 58, height: 50)
-    .background(ChatRoomPalette.input)
+    .background(Color.white)
     .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
     .overlay {
       RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -856,7 +884,7 @@ private struct MessageBubbleContent: View {
       if shouldShowTextContent, let content = message.content?.trimmingCharacters(in: .whitespacesAndNewlines), !content.isEmpty {
         Text(content)
           .font(.system(size: 15, weight: .regular))
-          .foregroundStyle(outgoing ? .white : MIRATheme.Color.textPrimary)
+          .foregroundStyle(bubbleTextColor)
           .fixedSize(horizontal: false, vertical: true)
           .multilineTextAlignment(outgoing ? .trailing : .leading)
           .frame(maxWidth: textMaxWidth, alignment: outgoing ? .trailing : .leading)
@@ -871,22 +899,44 @@ private struct MessageBubbleContent: View {
     }
     .padding(.leading, bubbleLeadingPadding)
     .padding(.trailing, bubbleTrailingPadding)
-    .padding(.vertical, hasLargeMedia ? 6 : 11)
+    .padding(.vertical, bubbleVerticalPadding)
     .frame(maxWidth: maxWidth, alignment: outgoing ? .trailing : .leading)
     .background {
-      ChatBubbleShape(outgoing: outgoing, radius: hasLargeMedia ? 18 : 22, compactBottomCorner: hasLargeMedia ? 12 : 8)
-        .fill(outgoing ? ChatRoomPalette.outgoingBubble : ChatRoomPalette.incomingBubble)
+      RoundedRectangle(cornerRadius: bubbleRadius, style: .continuous)
+        .fill(bubbleFill)
     }
     .overlay {
-      ChatBubbleShape(outgoing: outgoing, radius: hasLargeMedia ? 18 : 22, compactBottomCorner: hasLargeMedia ? 12 : 8)
+      RoundedRectangle(cornerRadius: bubbleRadius, style: .continuous)
         .stroke(outgoing ? ChatRoomPalette.outgoingStroke : ChatRoomPalette.incomingStroke, lineWidth: 1)
     }
-    .shadow(color: ChatRoomPalette.messageShadow, radius: hasLargeMedia ? 16 : 12, x: 0, y: 6)
+    .shadow(color: ChatRoomPalette.messageShadow, radius: 8, x: 0, y: 4)
   }
 
   private var hasLargeMedia: Bool {
     guard let mediaType = message.mediaType?.lowercased() else { return false }
     return mediaType == "image" || mediaType == "video"
+  }
+
+  private var isVoiceMessage: Bool {
+    let mediaType = message.mediaType?.lowercased()
+    return mediaType == "voice" || mediaType == "audio"
+  }
+
+  private var bubbleFill: Color {
+    outgoing || isVoiceMessage ? ChatRoomPalette.outgoingBubble : ChatRoomPalette.incomingBubble
+  }
+
+  private var bubbleTextColor: Color {
+    outgoing || isVoiceMessage ? .white : .black
+  }
+
+  private var bubbleRadius: CGFloat {
+    isVoiceMessage ? 25 : (hasLargeMedia ? 18 : 22)
+  }
+
+  private var bubbleVerticalPadding: CGFloat {
+    if isVoiceMessage { return 6 }
+    return hasLargeMedia ? 6 : 12
   }
 
   private var textMaxWidth: CGFloat {
@@ -895,12 +945,14 @@ private struct MessageBubbleContent: View {
 
   private var bubbleLeadingPadding: CGFloat {
     if hasLargeMedia { return outgoing ? 10 : 14 }
-    return outgoing ? 16 : 24
+    if isVoiceMessage { return 8 }
+    return 18
   }
 
   private var bubbleTrailingPadding: CGFloat {
     if hasLargeMedia { return outgoing ? 14 : 10 }
-    return outgoing ? 24 : 16
+    if isVoiceMessage { return 8 }
+    return 18
   }
 
   private var shouldShowTextContent: Bool {
@@ -937,83 +989,6 @@ private struct MessageBubbleContent: View {
   }
 }
 
-private struct ChatBubbleShape: Shape {
-  let outgoing: Bool
-  let radius: CGFloat
-  let compactBottomCorner: CGFloat
-
-  func path(in rect: CGRect) -> Path {
-    let tailWidth: CGFloat = 10
-    let bubbleRect = outgoing
-      ? CGRect(x: rect.minX, y: rect.minY, width: max(0, rect.width - tailWidth), height: rect.height)
-      : CGRect(x: rect.minX + tailWidth, y: rect.minY, width: max(0, rect.width - tailWidth), height: rect.height)
-    var path = Path()
-    path.addAsymmetricRoundedRect(
-      in: bubbleRect,
-      topLeft: radius,
-      topRight: radius,
-      bottomRight: outgoing ? compactBottomCorner : radius,
-      bottomLeft: outgoing ? radius : compactBottomCorner
-    )
-    var tail = Path()
-
-    if outgoing {
-      let start = CGPoint(x: bubbleRect.maxX - 1, y: bubbleRect.maxY - 28)
-      tail.move(to: start)
-      tail.addQuadCurve(
-        to: CGPoint(x: rect.maxX, y: rect.maxY - 13),
-        control: CGPoint(x: rect.maxX - 2, y: rect.maxY - 22)
-      )
-      tail.addQuadCurve(
-        to: CGPoint(x: bubbleRect.maxX - 14, y: bubbleRect.maxY - 8),
-        control: CGPoint(x: rect.maxX - 1, y: rect.maxY - 2)
-      )
-      tail.addLine(to: start)
-    } else {
-      let start = CGPoint(x: bubbleRect.minX + 1, y: bubbleRect.maxY - 28)
-      tail.move(to: start)
-      tail.addQuadCurve(
-        to: CGPoint(x: rect.minX, y: rect.maxY - 13),
-        control: CGPoint(x: rect.minX + 2, y: rect.maxY - 22)
-      )
-      tail.addQuadCurve(
-        to: CGPoint(x: bubbleRect.minX + 14, y: bubbleRect.maxY - 8),
-        control: CGPoint(x: rect.minX + 1, y: rect.maxY - 2)
-      )
-      tail.addLine(to: start)
-    }
-
-    path.addPath(tail)
-    return path
-  }
-}
-
-private extension Path {
-  mutating func addAsymmetricRoundedRect(
-    in rect: CGRect,
-    topLeft: CGFloat,
-    topRight: CGFloat,
-    bottomRight: CGFloat,
-    bottomLeft: CGFloat
-  ) {
-    let tl = min(topLeft, min(rect.width, rect.height) / 2)
-    let tr = min(topRight, min(rect.width, rect.height) / 2)
-    let br = min(bottomRight, min(rect.width, rect.height) / 2)
-    let bl = min(bottomLeft, min(rect.width, rect.height) / 2)
-
-    move(to: CGPoint(x: rect.minX + tl, y: rect.minY))
-    addLine(to: CGPoint(x: rect.maxX - tr, y: rect.minY))
-    addQuadCurve(to: CGPoint(x: rect.maxX, y: rect.minY + tr), control: CGPoint(x: rect.maxX, y: rect.minY))
-    addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - br))
-    addQuadCurve(to: CGPoint(x: rect.maxX - br, y: rect.maxY), control: CGPoint(x: rect.maxX, y: rect.maxY))
-    addLine(to: CGPoint(x: rect.minX + bl, y: rect.maxY))
-    addQuadCurve(to: CGPoint(x: rect.minX, y: rect.maxY - bl), control: CGPoint(x: rect.minX, y: rect.maxY))
-    addLine(to: CGPoint(x: rect.minX, y: rect.minY + tl))
-    addQuadCurve(to: CGPoint(x: rect.minX + tl, y: rect.minY), control: CGPoint(x: rect.minX, y: rect.minY))
-    closeSubpath()
-  }
-}
-
 private struct VoicePlaybackPill: View {
   let url: String
   let outgoing: Bool
@@ -1026,21 +1001,22 @@ private struct VoicePlaybackPill: View {
     Button {
       toggle()
     } label: {
-      HStack(spacing: MIRATheme.Space.sm) {
+      HStack(spacing: 8) {
         Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-          .font(.system(size: 11, weight: .bold))
-          .foregroundStyle(outgoing ? ChatRoomPalette.outgoingBubble : .white)
-          .frame(width: 32, height: 32)
-          .background(outgoing ? Color.white.opacity(0.92) : ChatRoomPalette.accent)
+          .font(.system(size: 13, weight: .bold))
+          .foregroundStyle(.black)
+          .frame(width: 36, height: 36)
+          .background(Color.white)
           .clipShape(Circle())
-        VoiceWaveformBars(outgoing: outgoing)
-          .frame(width: 74, height: 28)
-        Text(playbackError ? "Could not play" : "Voice message")
-          .lineLimit(1)
+        VoiceWaveformBars(color: .white.opacity(0.88))
+          .frame(width: 148, height: 30)
+        if playbackError {
+          Image(systemName: "exclamationmark.circle.fill")
+            .font(.system(size: 15, weight: .bold))
+            .foregroundStyle(Color.white.opacity(0.88))
+        }
       }
-      .font(.system(size: 14, weight: .semibold))
-      .foregroundStyle(playbackError ? ChatRoomPalette.voice : (outgoing ? .white : MIRATheme.Color.textPrimary))
-      .frame(minWidth: 188, alignment: outgoing ? .trailing : .leading)
+      .frame(minWidth: 218, alignment: outgoing ? .trailing : .leading)
     }
     .buttonStyle(.plain)
     .contentShape(Rectangle())
@@ -1101,16 +1077,20 @@ private struct VoicePlaybackPill: View {
 }
 
 private struct VoiceWaveformBars: View {
-  let outgoing: Bool
+  let color: Color
 
-  private let heights: [CGFloat] = [12, 21, 28, 18, 24, 14, 8]
+  private let heights: [CGFloat] = [
+    4, 5, 4, 6, 5, 8, 10, 14, 18, 22,
+    15, 26, 30, 21, 25, 29, 19, 27, 24, 30,
+    22, 26, 18, 24, 20, 17, 22, 15, 12, 10
+  ]
 
   var body: some View {
-    HStack(alignment: .center, spacing: 4) {
+    HStack(alignment: .center, spacing: 2) {
       ForEach(Array(heights.enumerated()), id: \.offset) { _, height in
         RoundedRectangle(cornerRadius: 2, style: .continuous)
-          .fill(outgoing ? Color.white.opacity(0.82) : ChatRoomPalette.accent.opacity(0.62))
-          .frame(width: 4, height: height)
+          .fill(color)
+          .frame(width: 3, height: height)
       }
     }
     .frame(maxHeight: .infinity)

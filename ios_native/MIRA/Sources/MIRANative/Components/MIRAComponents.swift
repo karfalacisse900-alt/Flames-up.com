@@ -956,7 +956,7 @@ public struct MIRAFullScreenMediaViewer: View {
 }
 
 public enum MIRAMediaSizing {
-  public static let feedPreviewRatio: CGFloat = 5.0 / 4.0
+  public static let feedPreviewRatio: CGFloat = 4.0 / 3.0
   public static let feedTallRatio: CGFloat = 4.0 / 3.0
   public static let feedImmersiveRatio: CGFloat = 3.0 / 2.0
   public static let profileGridRatio: CGFloat = 5.0 / 4.0
@@ -989,7 +989,7 @@ public enum MIRAMediaSizing {
     } else if prefersLongVertical {
       height = width * (16.0 / 9.0)
     } else {
-      height = width * 1.25
+      height = width * feedPreviewRatio
     }
     return boundedHeight(height, width: width)
   }
