@@ -132,6 +132,7 @@ public struct PostDetailNativeView: View {
   @StateObject private var model: PostDetailModel
   @State private var draft = ""
   @State private var isSendingComment = false
+  @FocusState private var isCommentFocused: Bool
   private var mediaHeight: CGFloat {
     let maxHeight = max(300, UIScreen.main.bounds.height * 0.48)
     return min(
@@ -206,7 +207,11 @@ public struct PostDetailNativeView: View {
               .foregroundStyle(MIRATheme.Color.textPrimary)
 
             if model.isLoadingComments && model.comments.isEmpty {
-              ProgressView().frame(maxWidth: .infinity, minHeight: 80)
+              LazyVStack(spacing: MIRATheme.Space.md) {
+                ForEach(0..<4, id: \.self) { _ in
+                  PostDetailCommentSkeleton()
+                }
+              }
             } else if model.comments.isEmpty {
               MIRAEmptyState(title: "No comments yet", message: "Be the first to reply.", systemImage: "bubble.left")
             } else {
@@ -283,14 +288,24 @@ public struct PostDetailNativeView: View {
   }
 
   private var commentBar: some View {
-    HStack(spacing: MIRATheme.Space.md) {
+    HStack(alignment: .bottom, spacing: MIRATheme.Space.sm) {
       TextField("Add a comment...", text: $draft, axis: .vertical)
         .font(.system(size: 15, weight: .regular))
+        .textInputAutocapitalization(.sentences)
+        .submitLabel(.send)
+        .focused($isCommentFocused)
+        .lineLimit(1...5)
         .padding(.horizontal, MIRATheme.Space.md)
-        .frame(minHeight: 48)
+        .padding(.vertical, 11)
+        .frame(minHeight: 44)
         .background(MIRATheme.Color.surfaceSoft)
-        .clipShape(Capsule())
+        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay {
+          RoundedRectangle(cornerRadius: 22, style: .continuous)
+            .stroke(isCommentFocused ? MIRATheme.Color.forest.opacity(0.18) : MIRATheme.Color.hairline, lineWidth: 1)
+        }
         .onSubmit(sendDraftComment)
+        .animation(.easeOut(duration: 0.18), value: isCommentFocused)
 
       if canSendComment || isSendingComment {
         Button {
@@ -315,33 +330,39 @@ public struct PostDetailNativeView: View {
         .disabled(!canSendComment || isSendingComment)
       }
 
-      Button {
-        Task { await model.toggleLike() }
-      } label: {
-        HStack(spacing: 7) {
-          Image(systemName: model.post.isLiked == true ? "heart.fill" : "heart")
-            .font(.system(size: 22, weight: .semibold))
-          Text(compact(model.post.likesCount ?? 0))
-            .font(.system(size: 14, weight: .semibold))
+      if !isCommentFocused && draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        Button {
+          Task { await model.toggleLike() }
+        } label: {
+          HStack(spacing: 7) {
+            Image(systemName: model.post.isLiked == true ? "heart.fill" : "heart")
+              .font(.system(size: 22, weight: .semibold))
+            Text(compact(model.post.likesCount ?? 0))
+              .font(.system(size: 14, weight: .semibold))
+              .lineLimit(1)
+              .minimumScaleFactor(0.76)
+          }
+          .foregroundStyle(model.post.isLiked == true ? MIRATheme.Color.like : MIRATheme.Color.textSecondary)
+          .frame(minWidth: 54, minHeight: 44)
         }
-        .foregroundStyle(model.post.isLiked == true ? MIRATheme.Color.like : MIRATheme.Color.textSecondary)
-        .frame(minWidth: 58, minHeight: 48)
-      }
-      .buttonStyle(.plain)
+        .buttonStyle(.plain)
 
-      Button {
-        Task { await model.toggleSave() }
-      } label: {
-        HStack(spacing: 7) {
-          Image(systemName: model.post.viewerSaved ? "bookmark.fill" : "bookmark")
-            .font(.system(size: 22, weight: .semibold))
-          Text(compact(model.post.savesCount ?? 0))
-            .font(.system(size: 14, weight: .semibold))
+        Button {
+          Task { await model.toggleSave() }
+        } label: {
+          HStack(spacing: 7) {
+            Image(systemName: model.post.viewerSaved ? "bookmark.fill" : "bookmark")
+              .font(.system(size: 22, weight: .semibold))
+            Text(compact(model.post.savesCount ?? 0))
+              .font(.system(size: 14, weight: .semibold))
+              .lineLimit(1)
+              .minimumScaleFactor(0.76)
+          }
+          .foregroundStyle(model.post.viewerSaved ? MIRATheme.Color.forest : MIRATheme.Color.textPrimary)
+          .frame(minWidth: 50, minHeight: 44)
         }
-        .foregroundStyle(model.post.viewerSaved ? MIRATheme.Color.forest : MIRATheme.Color.textPrimary)
-        .frame(minWidth: 54, minHeight: 48)
+        .buttonStyle(.plain)
       }
-      .buttonStyle(.plain)
     }
     .padding(.horizontal, MIRATheme.Space.md)
     .padding(.top, MIRATheme.Space.sm)
@@ -378,25 +399,71 @@ private struct CommentRow: View {
   var body: some View {
     HStack(alignment: .top, spacing: MIRATheme.Space.sm) {
       RemoteAvatar(url: comment.user?.profileImage, size: 32)
-      VStack(alignment: .leading, spacing: 4) {
-        Text(comment.user?.displayName ?? "user")
-          .font(.system(size: 13, weight: .semibold))
-          .foregroundStyle(MIRATheme.Color.textMuted)
-        Text(comment.text)
-          .font(.system(size: 15, weight: .regular))
-          .foregroundStyle(MIRATheme.Color.textPrimary)
+        .padding(.top, 2)
+      VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: 5) {
+          HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(comment.user?.displayName ?? "user")
+              .font(.system(size: 14, weight: .semibold))
+              .foregroundStyle(MIRATheme.Color.textPrimary)
+              .lineLimit(1)
+              .truncationMode(.tail)
+              .layoutPriority(1)
+            if let createdAt = comment.createdAt {
+              Text(relativeAge(createdAt))
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(MIRATheme.Color.textMuted.opacity(0.82))
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+            }
+          }
+          Text(comment.text)
+            .font(.system(size: 15, weight: .regular))
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+            .lineSpacing(2)
+            .fixedSize(horizontal: false, vertical: true)
+            .textSelection(.enabled)
+        }
+        .padding(.horizontal, MIRATheme.Space.md)
+        .padding(.vertical, 10)
+        .background(MIRATheme.Color.surfaceSoft.opacity(0.78))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+
         HStack(spacing: MIRATheme.Space.lg) {
           Text("Reply")
-          Text("\(comment.likesCount ?? 0)")
+          HStack(spacing: 4) {
+            Image(systemName: comment.likedByMe == true ? "heart.fill" : "heart")
+              .font(.system(size: 12, weight: .semibold))
+            Text(compact(comment.likesCount ?? 0))
+          }
+          .foregroundStyle(comment.likedByMe == true ? MIRATheme.Color.like : MIRATheme.Color.textMuted)
         }
-        .font(.system(size: 13, weight: .medium))
+        .font(.system(size: 12, weight: .semibold))
         .foregroundStyle(MIRATheme.Color.textMuted)
+        .padding(.leading, MIRATheme.Space.xs)
       }
-      Spacer()
-      Image(systemName: comment.likedByMe == true ? "heart.fill" : "heart")
-        .foregroundStyle(MIRATheme.Color.textSecondary)
-        .frame(width: 40, height: 40)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .layoutPriority(1)
     }
+  }
+}
+
+private struct PostDetailCommentSkeleton: View {
+  var body: some View {
+    HStack(alignment: .top, spacing: MIRATheme.Space.sm) {
+      Circle()
+        .fill(MIRATheme.Color.surfaceSoft)
+        .frame(width: 32, height: 32)
+      VStack(alignment: .leading, spacing: 8) {
+        RoundedRectangle(cornerRadius: 5, style: .continuous)
+          .fill(MIRATheme.Color.surfaceSoft)
+          .frame(width: 128, height: 12)
+        RoundedRectangle(cornerRadius: 12, style: .continuous)
+          .fill(MIRATheme.Color.surfaceSoft)
+          .frame(maxWidth: .infinity, minHeight: 42, maxHeight: 42)
+      }
+    }
+    .redacted(reason: .placeholder)
   }
 }
 

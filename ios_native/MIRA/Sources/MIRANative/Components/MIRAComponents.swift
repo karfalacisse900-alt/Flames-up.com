@@ -830,6 +830,7 @@ public struct MIRAFullScreenMediaViewer: View {
   private let onClose: (() -> Void)?
   @State private var selectedIndex: Int
   @State private var isVisible = false
+  @GestureState private var dragOffset: CGFloat = 0
 
   public init(urls: [String], initialIndex: Int = 0, onClose: (() -> Void)? = nil) {
     self.urls = urls
@@ -898,8 +899,10 @@ public struct MIRAFullScreenMediaViewer: View {
         }
       }
     }
-    .opacity(isVisible ? 1 : 0)
-    .scaleEffect(isVisible || reduceMotion ? 1 : 0.985)
+    .opacity(viewerOpacity)
+    .scaleEffect(viewerScale)
+    .offset(y: max(0, dragOffset))
+    .simultaneousGesture(closeDragGesture)
     .onAppear {
       selectedIndex = min(max(initialIndex, 0), max(0, urls.count - 1))
       withAnimation(.easeOut(duration: reduceMotion ? 0.08 : 0.24)) {
@@ -911,7 +914,34 @@ public struct MIRAFullScreenMediaViewer: View {
     .statusBarHidden(true)
   }
 
+  private var viewerOpacity: Double {
+    guard isVisible else { return 0 }
+    let dragFade = Double(max(0, min(0.34, dragOffset / 520)))
+    return 1 - dragFade
+  }
+
+  private var viewerScale: CGFloat {
+    guard isVisible, !reduceMotion else { return 1 }
+    let dragScale = min(0.035, dragOffset / 6_000)
+    return 1 - dragScale
+  }
+
+  private var closeDragGesture: some Gesture {
+    DragGesture(minimumDistance: 18, coordinateSpace: .global)
+      .updating($dragOffset) { value, state, _ in
+        guard value.translation.height > 0, abs(value.translation.height) > abs(value.translation.width) else { return }
+        state = value.translation.height
+      }
+      .onEnded { value in
+        let shouldClose = value.translation.height > 120 || value.predictedEndTranslation.height > 210
+        if shouldClose {
+          close()
+        }
+      }
+  }
+
   private func close() {
+    guard isVisible else { return }
     withAnimation(.easeInOut(duration: reduceMotion ? 0.08 : 0.2)) {
       isVisible = false
     }

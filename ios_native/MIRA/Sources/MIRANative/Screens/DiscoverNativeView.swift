@@ -181,7 +181,7 @@ public struct DiscoverNativeView: View {
   private var storyViewerOverlay: some View {
     if let group = selectedStoryGroup {
       ZStack {
-        Color(red: 0.04, green: 0.05, blue: 0.06).ignoresSafeArea()
+        Color.black.ignoresSafeArea()
         StoryViewerNativeView(group: group, api: model.api, onClose: closeStoryViewer)
       }
       .opacity(isStoryViewerVisible ? 1 : 0)
@@ -400,7 +400,7 @@ private struct StoryViewerNativeView: View {
 
   var body: some View {
     ZStack(alignment: .bottom) {
-      Color(red: 0.04, green: 0.05, blue: 0.06).ignoresSafeArea()
+      Color.black.ignoresSafeArea()
 
       storyCanvas
 
@@ -408,7 +408,7 @@ private struct StoryViewerNativeView: View {
         .padding(.horizontal, MIRATheme.Space.lg)
         .padding(.bottom, 10)
     }
-    .statusBarHidden(false)
+    .statusBarHidden(true)
     .opacity(isCanvasVisible ? 1 : 0.001)
     .scaleEffect(reduceMotion || isCanvasVisible ? 1 : 0.992)
     .animation(.easeOut(duration: reduceMotion ? 0.1 : 0.24), value: isCanvasVisible)
@@ -444,7 +444,14 @@ private struct StoryViewerNativeView: View {
     GeometryReader { proxy in
       ZStack(alignment: .top) {
         if let mediaURL = currentStory?.mediaURL {
-          RemoteMediaView(url: mediaURL, isVideo: mediaURL.isVideoURL, shouldPlay: true)
+          RemoteMediaView(
+            url: mediaURL,
+            isVideo: mediaURL.isVideoURL,
+            contentMode: .fill,
+            shouldPlay: true,
+            placeholderColor: .black,
+            placeholderTint: .white.opacity(0.62)
+          )
             .frame(width: proxy.size.width, height: proxy.size.height)
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         } else {
@@ -479,7 +486,6 @@ private struct StoryViewerNativeView: View {
     }
     .frame(maxWidth: .infinity)
     .frame(maxHeight: .infinity)
-    .id(currentStory?.id ?? "empty-story")
     .transition(.opacity)
     .animation(.easeInOut(duration: reduceMotion ? 0.08 : 0.16), value: currentStory?.id)
   }
