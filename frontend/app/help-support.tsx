@@ -12,7 +12,7 @@ const FAQ_SECTIONS = [
     items: [
       { q: 'I forgot my password', a: 'Tap "Forgot Password" on the login screen. We\'ll send a reset link to your email.' },
       { q: 'I can\'t log in', a: 'Make sure your email and password are correct. If the issue persists, try resetting your password or contact support.' },
-      { q: 'I want to delete my account', a: 'Go to Settings > Delete Account. Your data will be removed within 30 days. You can also email support@flames-up.com.' },
+      { q: 'I want to delete my account', a: 'Go to Settings > Delete Account. Your data will be removed within 30 days. You can also email karfalacisse900@gmail.com.' },
     ],
   },
   {
@@ -98,14 +98,14 @@ export default function HelpSupportScreen() {
         <View style={s.card}>
           <TouchableOpacity
             style={s.contactRow}
-            onPress={() => Linking.openURL('mailto:support@flames-up.com')}
+            onPress={() => Linking.openURL('mailto:karfalacisse900@gmail.com')}
           >
             <View style={s.sectionIcon}>
               <Ionicons name="mail-outline" size={18} color={colors.accentPrimary} />
             </View>
             <View style={{ flex: 1 }}>
               <Text style={s.contactLabel}>Email</Text>
-              <Text style={s.contactValue}>support@flames-up.com</Text>
+              <Text style={s.contactValue}>karfalacisse900@gmail.com</Text>
             </View>
             <Ionicons name="open-outline" size={16} color={colors.textHint} />
           </TouchableOpacity>

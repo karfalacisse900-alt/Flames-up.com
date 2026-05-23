@@ -240,6 +240,25 @@ export default function RegisterScreen() {
               </TouchableOpacity>
             </Link>
           </View>
+
+          <View style={styles.legalFooter}>
+            <Text style={styles.legalText}>By creating an account, you agree to Captro's legal and safety terms.</Text>
+            <View style={styles.legalLinks}>
+              <Link href={'/legal/terms' as any} asChild>
+                <TouchableOpacity style={styles.legalPill}><Text style={styles.legalPillText}>Terms</Text></TouchableOpacity>
+              </Link>
+              <Link href={'/legal/privacy' as any} asChild>
+                <TouchableOpacity style={styles.legalPill}><Text style={styles.legalPillText}>Privacy</Text></TouchableOpacity>
+              </Link>
+              <Link href={'/legal/community-guidelines' as any} asChild>
+                <TouchableOpacity style={styles.legalPill}><Text style={styles.legalPillText}>Guidelines</Text></TouchableOpacity>
+              </Link>
+              <Link href={'/legal/safety' as any} asChild>
+                <TouchableOpacity style={styles.legalPill}><Text style={styles.legalPillText}>Safety</Text></TouchableOpacity>
+              </Link>
+            </View>
+            <Text style={styles.supportText}>Support: karfalacisse900@gmail.com</Text>
+          </View>
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -345,5 +364,46 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: colors.primary,
     fontWeight: '600',
+  },
+  legalFooter: {
+    marginTop: spacing.lg,
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  legalText: {
+    color: colors.textSecondary,
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: '500',
+    textAlign: 'center',
+  },
+  legalLinks: {
+    width: '100%',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+    justifyContent: 'center',
+  },
+  legalPill: {
+    minWidth: 96,
+    height: 34,
+    paddingHorizontal: spacing.gutter,
+    borderRadius: 17,
+    backgroundColor: colors.backgroundSecondary,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  legalPillText: {
+    color: colors.textPrimary,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  supportText: {
+    color: colors.textSecondary,
+    fontSize: 12,
+    fontWeight: '700',
+    textAlign: 'center',
   },
 });

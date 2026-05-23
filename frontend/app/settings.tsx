@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, Switch, TextInput, Alert, ScrollView,
+  View, Text, StyleSheet, TouchableOpacity, Switch, TextInput, Alert, ScrollView, Linking,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -221,6 +221,61 @@ export default function SettingsScreen() {
           </View>
         </View>
 
+        {/* Legal and Safety */}
+        <View style={s.section}>
+          <Text style={s.sectionTitle}>Legal & Safety</Text>
+          <TouchableOpacity style={s.row} onPress={() => router.push('/legal/terms' as any)}>
+            <View style={s.rowLeft}>
+              <Ionicons name="document-text-outline" size={20} color={colors.textPrimary} />
+              <View style={s.rowText}>
+                <Text style={s.rowLabel}>Terms of Service</Text>
+                <Text style={s.rowSub}>Rules for using Captro</Text>
+              </View>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color={colors.textHint} />
+          </TouchableOpacity>
+          <TouchableOpacity style={s.row} onPress={() => router.push('/legal/privacy' as any)}>
+            <View style={s.rowLeft}>
+              <Ionicons name="hand-left-outline" size={20} color={colors.textPrimary} />
+              <View style={s.rowText}>
+                <Text style={s.rowLabel}>Privacy Policy</Text>
+                <Text style={s.rowSub}>How Captro handles data</Text>
+              </View>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color={colors.textHint} />
+          </TouchableOpacity>
+          <TouchableOpacity style={s.row} onPress={() => router.push('/legal/community-guidelines' as any)}>
+            <View style={s.rowLeft}>
+              <Ionicons name="people-outline" size={20} color={colors.textPrimary} />
+              <View style={s.rowText}>
+                <Text style={s.rowLabel}>Community Guidelines</Text>
+                <Text style={s.rowSub}>Posting, chat, and safety rules</Text>
+              </View>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color={colors.textHint} />
+          </TouchableOpacity>
+          <TouchableOpacity style={s.row} onPress={() => router.push('/legal/safety' as any)}>
+            <View style={s.rowLeft}>
+              <Ionicons name="shield-checkmark-outline" size={20} color={colors.textPrimary} />
+              <View style={s.rowText}>
+                <Text style={s.rowLabel}>Safety & Reporting</Text>
+                <Text style={s.rowSub}>Report, block, and stay safe</Text>
+              </View>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color={colors.textHint} />
+          </TouchableOpacity>
+          <TouchableOpacity style={[s.row, s.lastRow]} onPress={() => Linking.openURL('mailto:karfalacisse900@gmail.com')}>
+            <View style={s.rowLeft}>
+              <Ionicons name="mail-outline" size={20} color={colors.textPrimary} />
+              <View style={s.rowText}>
+                <Text style={s.rowLabel}>Contact support</Text>
+                <Text style={s.rowSub}>karfalacisse900@gmail.com</Text>
+              </View>
+            </View>
+            <Ionicons name="open-outline" size={16} color={colors.textHint} />
+          </TouchableOpacity>
+        </View>
+
         {/* Sign Out */}
         <TouchableOpacity style={s.logoutBtn} onPress={handleLogout}>
           <Ionicons name="log-out-outline" size={20} color="#EF4444" />
@@ -265,6 +320,7 @@ const s = StyleSheet.create({
   },
   sectionTitle: { fontSize: 12, fontWeight: '600', color: colors.textHint, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: spacing.sm },
   row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 14, borderBottomWidth: 0.5, borderBottomColor: colors.divider, gap: spacing.gutter },
+  lastRow: { borderBottomWidth: 0 },
   rowLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing.gutter, flex: 1 },
   rowText: { flex: 1 },
   rowLabel: { fontSize: 16, fontWeight: '500', color: colors.textPrimary },

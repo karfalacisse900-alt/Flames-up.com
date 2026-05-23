@@ -237,12 +237,36 @@ public struct SettingsNativeView: View {
           )
         }
 
+        SettingsCard(title: "Legal & Safety") {
+          SettingsNavigationRow(
+            title: "Terms of Service",
+            subtitle: "Rules for using Captro",
+            systemImage: "doc.text",
+            destination: TermsOfServiceView()
+          )
+          SettingsNavigationRow(
+            title: "Privacy Policy",
+            subtitle: "How Captro handles data",
+            systemImage: "hand.raised",
+            destination: PrivacyPolicyView()
+          )
+          SettingsNavigationRow(
+            title: "Community Guidelines",
+            subtitle: "Posting, chat, and safety rules",
+            systemImage: "person.2",
+            destination: CommunityGuidelinesView()
+          )
+          SettingsNavigationRow(
+            title: "Safety & Reporting",
+            subtitle: "Report, block, and stay safe",
+            systemImage: "shield.lefthalf.filled",
+            destination: SafetyReportingView()
+          )
+        }
+
         SettingsCard(title: "Support") {
           SettingsLinkRow(title: "Help", subtitle: "Get support", systemImage: "questionmark.circle", url: MIRAProductionBackend.siteURL("help-support"))
-          SettingsLinkRow(title: "Community Guidelines", subtitle: "Safety rules", systemImage: "person.2", url: MIRAProductionBackend.siteURL("community-guidelines"))
-          SettingsLinkRow(title: "Terms", subtitle: "Terms of service", systemImage: "doc.text", url: MIRAProductionBackend.siteURL("terms-of-service"))
-          SettingsLinkRow(title: "Privacy Policy", subtitle: "How privacy works", systemImage: "hand.raised", url: MIRAProductionBackend.siteURL("privacy-policy"))
-          SettingsLinkRow(title: "Contact privacy", subtitle: "privacy@flames-up.com", systemImage: "envelope", url: URL(string: "mailto:privacy@flames-up.com")!)
+          SettingsLinkRow(title: "Contact support", subtitle: "karfalacisse900@gmail.com", systemImage: "envelope", url: URL(string: "mailto:karfalacisse900@gmail.com")!)
         }
       }
       .padding(.horizontal, MIRATheme.Space.md)
@@ -322,7 +346,8 @@ private struct PrivacySettingsNativeView: View {
       }
 
       SettingsCard(title: "Privacy tools") {
-        SettingsLinkRow(title: "Privacy Policy", subtitle: "Read how data is handled", systemImage: "hand.raised", url: MIRAProductionBackend.siteURL("privacy-policy"))
+        SettingsNavigationRow(title: "Privacy Policy", subtitle: "Read how data is handled", systemImage: "hand.raised", destination: PrivacyPolicyView())
+        SettingsNavigationRow(title: "Safety & Reporting", subtitle: "Report abuse or unsafe behavior", systemImage: "shield.lefthalf.filled", destination: SafetyReportingView())
         SettingsLinkRow(title: "Data deletion", subtitle: "Learn how account deletion works", systemImage: "trash", url: MIRAProductionBackend.siteURL("data-deletion"))
       }
     }

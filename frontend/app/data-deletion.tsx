@@ -76,8 +76,8 @@ export default function DataDeletionScreen() {
         <View style={s.card}>
           <Text style={s.cardTitle}>Need help deleting your account?</Text>
           <Text style={s.cardBody}>Email us at:</Text>
-          <TouchableOpacity onPress={() => Linking.openURL('mailto:support@flames-up.com')}>
-            <Text style={s.emailLink}>support@flames-up.com</Text>
+          <TouchableOpacity onPress={() => Linking.openURL('mailto:karfalacisse900@gmail.com')}>
+            <Text style={s.emailLink}>karfalacisse900@gmail.com</Text>
           </TouchableOpacity>
         </View>
 

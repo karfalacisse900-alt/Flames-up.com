@@ -17,17 +17,21 @@ public struct AuthNativeView: View {
   }
 
   public var body: some View {
-    ScrollView {
-      VStack(alignment: .leading, spacing: MIRATheme.Space.xl) {
-        brandBlock
-        formBlock
-        appleButton
+    NavigationStack {
+      ScrollView {
+        VStack(alignment: .leading, spacing: MIRATheme.Space.xl) {
+          brandBlock
+          formBlock
+          appleButton
+          legalFooter
+        }
+        .padding(.horizontal, MIRATheme.Space.xl)
+        .padding(.top, 70)
+        .padding(.bottom, MIRATheme.Space.xxl)
       }
-      .padding(.horizontal, MIRATheme.Space.xl)
-      .padding(.top, 70)
-      .padding(.bottom, MIRATheme.Space.xxl)
+      .background(MIRATheme.Color.appBackground.ignoresSafeArea())
+      .toolbar(.hidden, for: .navigationBar)
     }
-    .background(MIRATheme.Color.appBackground.ignoresSafeArea())
   }
 
   private var brandBlock: some View {
@@ -123,6 +127,46 @@ public struct AuthNativeView: View {
     .signInWithAppleButtonStyle(.black)
     .frame(height: 50)
     .clipShape(Capsule())
+  }
+
+  private var legalFooter: some View {
+    VStack(spacing: MIRATheme.Space.sm) {
+      Text("By continuing, you agree to Captro's legal and safety terms.")
+        .font(.system(size: 12.5, weight: .medium))
+        .foregroundStyle(MIRATheme.Color.textMuted)
+        .multilineTextAlignment(.center)
+        .frame(maxWidth: .infinity)
+
+      LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: MIRATheme.Space.sm) {
+        NavigationLink(destination: TermsOfServiceView()) {
+          legalFooterPill("Terms")
+        }
+        NavigationLink(destination: PrivacyPolicyView()) {
+          legalFooterPill("Privacy")
+        }
+        NavigationLink(destination: CommunityGuidelinesView()) {
+          legalFooterPill("Guidelines")
+        }
+        NavigationLink(destination: SafetyReportingView()) {
+          legalFooterPill("Safety")
+        }
+      }
+
+      Text("Support: karfalacisse900@gmail.com")
+        .font(.system(size: 12, weight: .semibold))
+        .foregroundStyle(MIRATheme.Color.textSecondary)
+        .textSelection(.enabled)
+    }
+  }
+
+  private func legalFooterPill(_ title: String) -> some View {
+    Text(title)
+      .font(.system(size: 12.5, weight: .semibold))
+      .foregroundStyle(MIRATheme.Color.textPrimary)
+      .frame(maxWidth: .infinity)
+      .frame(height: 36)
+      .background(MIRATheme.Color.surfaceSoft)
+      .clipShape(Capsule())
   }
 
   private func authField(
