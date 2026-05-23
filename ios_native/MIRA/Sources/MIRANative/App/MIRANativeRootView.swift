@@ -55,6 +55,7 @@ final class MIRAStartupCoordinator: ObservableObject {
 
   let feedModel: MainFeedModel
   let discoverModel: DiscoverNativeModel
+  let chatModel: ChatNativeModel
   let profileModel: ProfileNativeModel
 
   private let api: MIRAAPIClient
@@ -66,6 +67,7 @@ final class MIRAStartupCoordinator: ObservableObject {
     self.api = api
     self.feedModel = MainFeedModel(api: api)
     self.discoverModel = DiscoverNativeModel(api: api)
+    self.chatModel = ChatNativeModel(api: api)
     self.profileModel = ProfileNativeModel(api: api)
   }
 
@@ -104,7 +106,9 @@ final class MIRAStartupCoordinator: ObservableObject {
     phase = .preparingProfile
     let profileTask = Task { await profileModel.prepareForStartup(signedInUser: authSession.user) }
 
-    _ = await (feedTask.value, discoverTask.value, profileTask.value)
+    let chatTask = Task { await chatModel.prepareForStartup() }
+
+    _ = await (feedTask.value, discoverTask.value, profileTask.value, chatTask.value)
     startInitialMediaPrewarm()
 
     phase = .readyAuthenticated
@@ -151,7 +155,7 @@ final class MIRAStartupCoordinator: ObservableObject {
     let posts = Array(feedModel.posts.prefix(4)) + Array(discoverModel.posts.prefix(9)) + Array(profileModel.posts.prefix(6))
     let urls = Array(
       posts
-        .flatMap(\.mediaURLs)
+        .flatMap(\.feedMediaURLs)
         .filter { !$0.isVideoURL }
         .prefix(8)
     )
@@ -177,7 +181,7 @@ private enum MIRAStartupMediaPrewarmer {
 
   private static func prewarmImage(_ value: String) async {
     guard let url = URL(string: value) else { return }
-    if await MIRAImageDiskCache.image(for: url) != nil { return }
+    if await MIRAImageDiskCache.image(for: url, maxPixelSize: MIRAMediaSizing.feedTargetHeight) != nil { return }
     do {
       var request = URLRequest(url: url)
       request.cachePolicy = .returnCacheDataElseLoad
@@ -287,7 +291,7 @@ public struct MIRANativeRootView: View {
         .tabItem { Label("Discover", systemImage: "safari.fill") }
 
       lazyTab(.chat) {
-        ChatNativeView(api: api, currentUserId: authSession.user?.id ?? "")
+        ChatNativeView(api: api, currentUserId: authSession.user?.id ?? "", model: startup.chatModel)
       }
         .tag(MIRATab.chat)
         .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right.fill") }

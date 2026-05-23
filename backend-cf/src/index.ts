@@ -15,6 +15,8 @@ interface Env {
   CLOUDFLARE_ACCOUNT_ID: string;
   CLOUDFLARE_IMAGES_ACCOUNT_HASH?: string;
   CLOUDFLARE_IMAGES_TOKEN: string;
+  CLOUDFLARE_IMAGES_FEED_VARIANT?: string;
+  CLOUDFLARE_IMAGES_THUMBNAIL_VARIANT?: string;
   CLOUDFLARE_STREAM_TOKEN: string;
   MAPBOX_ACCESS_TOKEN?: string;
   ENVIRONMENT?: string;
@@ -2788,13 +2790,81 @@ async function attachMediaBackupsToPost(db: D1Database, userId: string, postId: 
   }
 }
 
-function postPayload(post: any, likedBy: string[] = []) {
+const FEED_MEDIA_WIDTH = 1080;
+const FEED_MEDIA_HEIGHT = 1440;
+const FEED_MEDIA_ASPECT_RATIO = FEED_MEDIA_WIDTH / FEED_MEDIA_HEIGHT;
+
+function replaceCloudflareImageVariant(url: string, variant: string): string {
+  const cleanVariant = cleanText(variant, 80);
+  if (!cleanVariant || !url.includes('imagedelivery.net')) return url;
+  try {
+    const parsed = new URL(url);
+    const segments = parsed.pathname.split('/').filter(Boolean);
+    if (segments.length < 3) return url;
+    segments[segments.length - 1] = cleanVariant;
+    parsed.pathname = `/${segments.join('/')}`;
+    return parsed.toString();
+  } catch {
+    return url;
+  }
+}
+
+function isVideoMediaUrl(url: string): boolean {
+  const lower = String(url || '').toLowerCase();
+  return lower.startsWith('cfstream:') || /\.(mp4|mov|m4v|webm)(\?|#|$)/.test(lower);
+}
+
+function feedDeliveryUrl(url: string, mediaType: string, variant: string): string {
+  if (!url) return '';
+  if (mediaType === 'video') return url;
+  return replaceCloudflareImageVariant(url, variant);
+}
+
+function posterDeliveryUrl(url: string, mediaType: string, variant: string): string {
+  if (!url) return '';
+  if (mediaType !== 'video') return replaceCloudflareImageVariant(url, variant);
+  return url;
+}
+
+function feedMediaDimensions(mediaUrls: string[], mediaTypes: string[], dimensions: any[]) {
+  return mediaUrls.map((url, index) => {
+    const original = dimensions[index] || {};
+    const originalWidth = Number(original.width || original.original_width || 0) || null;
+    const originalHeight = Number(original.height || original.original_height || 0) || null;
+    const originalAspectRatio = Number(original.ratio || original.aspect_ratio || (originalWidth && originalHeight ? originalWidth / originalHeight : 0)) || null;
+    const rawType = String(mediaTypes[index] || original.type || '').toLowerCase();
+    const mediaType = rawType.includes('video') || isVideoMediaUrl(url) ? 'video' : 'image';
+    return {
+      ...original,
+      original_width: originalWidth,
+      original_height: originalHeight,
+      original_aspect_ratio: originalAspectRatio,
+      feed_width: FEED_MEDIA_WIDTH,
+      feed_height: FEED_MEDIA_HEIGHT,
+      feed_aspect_ratio: FEED_MEDIA_ASPECT_RATIO,
+      media_type: mediaType,
+      type: mediaType,
+    };
+  });
+}
+
+function postPayload(post: any, likedBy: string[] = [], env?: Env) {
   const audioHidden = Number(post.audio_hidden || 0) === 1;
   const likesCount = Math.max(0, Number(post.live_likes_count ?? post.likes_count ?? 0));
   const commentsCount = Math.max(0, Number(post.live_comments_count ?? post.comments_count ?? 0));
   const savesCount = Math.max(0, Number(post.live_saves_count ?? post.saves_count ?? 0));
   const isLiked = post.is_liked === true || post.is_liked === 1 || post.is_liked === '1';
   const isSaved = post.is_saved === true || post.is_saved === 1 || post.is_saved === '1' || post.saved === true || post.saved === 1 || post.saved === '1';
+  const mediaUrls = sanitizeMediaReferences(post.images, post.image);
+  const primaryMediaUrl = safeMediaReference(post.image) || mediaUrls[0] || '';
+  const mediaTypes = parseJsonArray(post.media_types).map((item) => String(item || '').toLowerCase().includes('video') ? 'video' : 'image');
+  while (mediaTypes.length < mediaUrls.length) mediaTypes.push(isVideoMediaUrl(mediaUrls[mediaTypes.length]) ? 'video' : 'image');
+  const dimensions = parseJsonArray(post.media_dimensions);
+  const feedVariant = env?.CLOUDFLARE_IMAGES_FEED_VARIANT || '';
+  const thumbnailVariant = env?.CLOUDFLARE_IMAGES_THUMBNAIL_VARIANT || '';
+  const feedMediaUrls = mediaUrls.map((url, index) => feedDeliveryUrl(url, mediaTypes[index] || 'image', feedVariant)).filter(Boolean);
+  const thumbnailUrls = mediaUrls.map((url, index) => posterDeliveryUrl(url, mediaTypes[index] || 'image', thumbnailVariant)).filter(Boolean);
+  const posterUrls = mediaUrls.map((url, index) => posterDeliveryUrl(url, mediaTypes[index] || 'image', thumbnailVariant)).filter(Boolean);
   const payload = {
     ...post,
     likes_count: likesCount,
@@ -2803,10 +2873,19 @@ function postPayload(post: any, likedBy: string[] = []) {
     is_liked: isLiked,
     is_saved: isSaved,
     saved: isSaved,
-    images: parseJsonArray(post.images),
-    media_types: parseJsonArray(post.media_types),
+    image: primaryMediaUrl,
+    images: mediaUrls,
+    feed_media_urls: feedMediaUrls,
+    thumbnail_urls: thumbnailUrls,
+    poster_urls: posterUrls,
+    original_media_url: primaryMediaUrl,
+    original_media_urls: mediaUrls,
+    media_types: mediaTypes.slice(0, mediaUrls.length || mediaTypes.length),
     media_backup_ids: parseJsonArray(post.media_backup_ids),
-    media_dimensions: parseJsonArray(post.media_dimensions),
+    media_dimensions: feedMediaDimensions(mediaUrls, mediaTypes, dimensions),
+    feed_width: FEED_MEDIA_WIDTH,
+    feed_height: FEED_MEDIA_HEIGHT,
+    feed_aspect_ratio: FEED_MEDIA_ASPECT_RATIO,
     editor_overlays: parseJsonArray(post.editor_overlays),
     tagged_users: parseJsonArray(post.tagged_users),
     liked_by: likedBy,
@@ -6206,7 +6285,7 @@ api.post('/posts', authMiddleware, async (c) => {
        WHERE p.user_id = ? AND p.client_request_id = ?
        LIMIT 1`
     ).bind(userId, clientRequestId).first();
-    if (existing) return c.json({ ...postPayload(existing), idempotent_replay: true });
+    if (existing) return c.json({ ...postPayload(existing, [], c.env), idempotent_replay: true });
   }
   const id = uuid();
   const postType = cleanText(b.post_type || b.category || 'general', 50) || 'general';
@@ -6267,7 +6346,7 @@ api.post('/posts', authMiddleware, async (c) => {
        WHERE p.user_id = ? AND p.client_request_id = ?
        LIMIT 1`
     ).bind(userId, clientRequestId).first();
-    if (existing) return c.json({ ...postPayload(existing), idempotent_replay: true });
+    if (existing) return c.json({ ...postPayload(existing, [], c.env), idempotent_replay: true });
   }
   if (!inserted) return c.json({ detail: 'Could not create post. Please retry.' }, 409);
   await attachMediaBackupsToPost(c.env.DB, userId, id, backupIds);
@@ -6300,14 +6379,15 @@ api.post('/posts', authMiddleware, async (c) => {
       })));
     });
   }
-  return c.json({ id, user_id: userId, user_username: user?.username, user_full_name: user?.full_name,
+  const createdPost = { id, user_id: userId, user_username: user?.username, user_full_name: user?.full_name,
     user_profile_image: user?.profile_image, title: postTitle, content: postContent, image: primaryImage, images: imageUrls,
     media_types: mediaTypes, media_backup_ids: backupIds, media_dimensions: mediaDimensions, editor_overlays: editorOverlays, tagged_users: taggedUsers,
     location, post_type: postType, place_id: cleanText(b.place_id, 120), place_name: cleanText(b.place_name, 180),
     place_lat: placeLat, place_lng: placeLng, is_verified_checkin: !!isCheckin,
     audio_provider: audioProvider, audio_track_id: audioTrackId, audio_title: audioTitle, audio_artist: audioArtist,
     audio_artwork_url: audioArtworkUrl, audio_stream_url: audioStreamUrl, audio_start_time: audioStartTime, audio_duration: audioDuration,
-    client_request_id: clientRequestId, visibility, likes_count: 0, comments_count: 0, liked_by: [], created_at: now() });
+    client_request_id: clientRequestId, visibility, likes_count: 0, comments_count: 0, liked_by: [], created_at: now() };
+  return c.json(postPayload(createdPost, [], c.env));
 });
 
 api.get('/posts/feed', authMiddleware, async (c) => {
@@ -6328,12 +6408,7 @@ api.get('/posts/feed', authMiddleware, async (c) => {
      WHERE ${visiblePostWhere('u', 'p')}
      ORDER BY p.created_at DESC LIMIT ? OFFSET ?`
   ).bind(userId, userId, userId, ...visiblePostBindValues(userId), limit, skip).all();
-  const results = [];
-  for (const p of posts.results as any[]) {
-    const likes = await c.env.DB.prepare('SELECT user_id FROM likes WHERE post_id = ?').bind(p.id).all();
-    results.push(postPayload(p, likes.results.map((l: any) => l.user_id)));
-  }
-  return c.json(results);
+  return c.json((posts.results as any[]).map((p) => postPayload(p, [], c.env)));
 });
 
 api.get('/posts/world-board', async (c) => {
@@ -6343,7 +6418,7 @@ api.get('/posts/world-board', async (c) => {
     if (limited) return limited;
     const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
     const limit = clampNumber(c.req.query('limit') || '40', 1, 50, 40);
-    const payload = await cachedJson(c, `posts:world-board:v7:${skip}:${limit}`, 8, async () => {
+    const payload = await cachedJson(c, `posts:world-board:v8:${skip}:${limit}`, 8, async () => {
       const posts = await c.env.DB.prepare(
         `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
            (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
@@ -6353,7 +6428,7 @@ api.get('/posts/world-board', async (c) => {
          WHERE ${publicPostWhere('u', 'p')}
          ORDER BY p.created_at DESC LIMIT ? OFFSET ?`
       ).bind(limit, skip).all();
-      return (posts.results as any[]).map((p) => postPayload(p));
+      return (posts.results as any[]).map((p) => postPayload(p, [], c.env));
     });
     const response = c.json(payload);
     response.headers.set('cache-control', 'public, max-age=4, s-maxage=8');
@@ -6376,7 +6451,7 @@ api.get('/posts/nearby-feed', authMiddleware, async (c) => {
      WHERE ${visiblePostWhere('u', 'p')}
      ORDER BY p.created_at DESC LIMIT 50`
   ).bind(...visiblePostBindValues(userId)).all();
-  return c.json((posts.results as any[]).map((p) => postPayload(p)));
+  return c.json((posts.results as any[]).map((p) => postPayload(p, [], c.env)));
 });
 
 api.get('/posts/:postId', authMiddleware, async (c) => {
@@ -6394,7 +6469,7 @@ api.get('/posts/:postId', authMiddleware, async (c) => {
      WHERE p.id = ? AND ${visiblePostWhere('u', 'p')}`).bind(userId, userId, userId, postId, ...visiblePostBindValues(userId)).first();
   if (!p) return c.json({ detail: 'Post not found' }, 404);
   const likes = await c.env.DB.prepare('SELECT user_id FROM likes WHERE post_id = ?').bind(postId).all();
-  return c.json(postPayload(p, likes.results.map((l: any) => l.user_id)));
+  return c.json(postPayload(p, likes.results.map((l: any) => l.user_id), c.env));
 });
 
 api.post('/posts/:postId/like', authMiddleware, async (c) => {
@@ -6503,7 +6578,7 @@ api.put('/posts/:postId/visibility', authMiddleware, async (c) => {
   ).bind(userId, userId, userId, postId).first();
   if (!updated) return c.json({ detail: 'Post not found' }, 404);
 
-  return c.json(postPayload(updated));
+  return c.json(postPayload(updated, [], c.env));
 });
 
 api.get('/users/:userId/posts', authMiddleware, async (c) => {
@@ -6531,7 +6606,7 @@ api.get('/users/:userId/posts', authMiddleware, async (c) => {
      )
      ORDER BY p.created_at DESC`
   ).bind(viewerId, viewerId, targetId, viewerId, viewerId, viewerId, viewerId).all();
-  return c.json((posts.results as any[]).map((p) => postPayload(p)));
+  return c.json((posts.results as any[]).map((p) => postPayload(p, [], c.env)));
 });
 
 // Comments
@@ -7412,7 +7487,7 @@ api.get('/library/liked', authMiddleware, async (c) => {
      WHERE l.user_id = ? AND ${visiblePostWhere('u', 'p')}
      ORDER BY l.created_at DESC`
   ).bind(userId, userId, ...visiblePostBindValues(userId)).all();
-  return c.json((r.results as any[]).map((p) => postPayload(p)));
+  return c.json((r.results as any[]).map((p) => postPayload(p, [], c.env)));
 });
 api.get('/library/saved', authMiddleware, async (c) => {
   const userId = getUserId(c);
@@ -7434,7 +7509,7 @@ api.get('/library/saved', authMiddleware, async (c) => {
   }
   sql += ' ORDER BY sp.created_at DESC';
   const r = await c.env.DB.prepare(sql).bind(...binds).all();
-  return c.json((r.results as any[]).map((p) => postPayload(p)));
+  return c.json((r.results as any[]).map((p) => postPayload(p, [], c.env)));
 });
 api.post('/library/save/:postId', authMiddleware, async (c) => {
   const userId = getUserId(c);
@@ -8223,7 +8298,7 @@ api.get('/discover/trending', authMiddleware, async (c) => {
      WHERE ${visiblePostWhere('u', 'p')}
      ORDER BY p.likes_count DESC, p.created_at DESC LIMIT 20`
   ).bind(...visiblePostBindValues(userId)).all();
-  return c.json((r.results as any[]).map((p) => postPayload(p)));
+  return c.json((r.results as any[]).map((p) => postPayload(p, [], c.env)));
 });
 api.get('/discover/search', authMiddleware, async (c) => {
   const userId = getUserId(c);
@@ -8238,7 +8313,7 @@ api.get('/discover/search', authMiddleware, async (c) => {
      LIMIT 20`
   ).bind(`%${q}%`, ...visiblePostBindValues(userId)).all();
   const users = await c.env.DB.prepare('SELECT id, username, full_name, profile_image, bio, is_private FROM users WHERE username LIKE ? OR full_name LIKE ? LIMIT 10').bind(`%${q}%`, `%${q}%`).all();
-  return c.json({ posts: (posts.results as any[]).map((p) => postPayload(p)), users: (users.results as any[]).map((user) => safeUserPayload(user)) });
+  return c.json({ posts: (posts.results as any[]).map((p) => postPayload(p, [], c.env)), users: (users.results as any[]).map((user) => safeUserPayload(user)) });
 });
 api.get('/discover/suggested-users', authMiddleware, async (c) => {
   const userId = getUserId(c);

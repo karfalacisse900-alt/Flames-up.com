@@ -31,10 +31,14 @@ final class ProfileNativeModel: ObservableObject {
     await hydrateCachedProfileIfNeeded()
 
     guard let freshUser: MIRAUser = try? await api.get("/auth/me") else { return }
-    user = freshUser
+    if user != freshUser {
+      user = freshUser
+    }
     await MIRALocalJSONCache.save(freshUser, key: userCacheKey)
     let freshPosts: [MIRAPost] = (try? await api.get("/users/\(freshUser.id)/posts")) ?? posts
-    posts = freshPosts
+    if posts != freshPosts {
+      posts = freshPosts
+    }
     await MIRALocalJSONCache.save(freshPosts, key: postsCacheKey(for: freshUser.id))
   }
 
@@ -127,7 +131,6 @@ private struct ProfileGridSkeleton: View {
 public struct ProfileNativeView: View {
   @StateObject private var model: ProfileNativeModel
   @State private var showEditProfile = false
-  @State private var activeMediaViewer: MIRAMediaViewerPresentation?
   private let authSession: MIRAAuthSession?
   private var gridTileSize: CGFloat {
     floor((UIScreen.main.bounds.width - 2) / 3)
@@ -161,10 +164,7 @@ public struct ProfileNativeView: View {
                   size: gridTileSize,
                   onDelete: { Task { await model.deletePost(post) } },
                   onMakePublic: { Task { await model.updatePostVisibility(post, visibility: "public") } },
-                  onMakePrivate: { Task { await model.updatePostVisibility(post, visibility: "private") } },
-                  onOpenMedia: {
-                    activeMediaViewer = MIRAMediaViewerPresentation(urls: post.mediaURLs, initialIndex: 0)
-                  }
+                  onMakePrivate: { Task { await model.updatePostVisibility(post, visibility: "private") } }
                 )
               }
             }
@@ -209,16 +209,6 @@ public struct ProfileNativeView: View {
           }
         }
       }
-      .miraFullScreenOverlay(item: $activeMediaViewer, background: .black) { viewer, dismissViewer in
-        MIRAFullScreenMediaViewer(
-          urls: viewer.urls,
-          initialIndex: viewer.initialIndex,
-          onClose: dismissViewer
-        )
-      }
-      .toolbar(activeMediaViewer == nil ? .visible : .hidden, for: .navigationBar)
-      .toolbar(activeMediaViewer == nil ? .visible : .hidden, for: .tabBar)
-      .statusBarHidden(activeMediaViewer != nil)
     }
   }
 
@@ -298,7 +288,9 @@ final class UserProfileNativeModel: ObservableObject {
       await MIRALocalJSONCache.save(freshUser, key: userCacheKey)
     }
     let freshPosts: [MIRAPost] = (try? await api.get("/users/\(userId)/posts")) ?? posts
-    posts = freshPosts
+    if posts != freshPosts {
+      posts = freshPosts
+    }
     await MIRALocalJSONCache.save(freshPosts, key: postsCacheKey)
   }
 
@@ -327,7 +319,6 @@ final class UserProfileNativeModel: ObservableObject {
 
 public struct UserProfileNativeView: View {
   @StateObject private var model: UserProfileNativeModel
-  @State private var activeMediaViewer: MIRAMediaViewerPresentation?
   private var gridTileSize: CGFloat {
     floor((UIScreen.main.bounds.width - 2) / 3)
   }
@@ -354,10 +345,7 @@ public struct UserProfileNativeView: View {
             ForEach(model.posts) { post in
               ProfilePostTile(
                 post: post,
-                size: gridTileSize,
-                onOpenMedia: {
-                  activeMediaViewer = MIRAMediaViewerPresentation(urls: post.mediaURLs, initialIndex: 0)
-                }
+                size: gridTileSize
               )
             }
           }
@@ -372,16 +360,6 @@ public struct UserProfileNativeView: View {
     .navigationTitle(model.user?.displayName ?? "Profile")
     .navigationBarTitleDisplayMode(.inline)
     .task { await model.load() }
-    .miraFullScreenOverlay(item: $activeMediaViewer, background: .black) { viewer, dismissViewer in
-      MIRAFullScreenMediaViewer(
-        urls: viewer.urls,
-        initialIndex: viewer.initialIndex,
-        onClose: dismissViewer
-      )
-    }
-    .toolbar(activeMediaViewer == nil ? .visible : .hidden, for: .navigationBar)
-    .toolbar(activeMediaViewer == nil ? .visible : .hidden, for: .tabBar)
-    .statusBarHidden(activeMediaViewer != nil)
   }
 
   private var profileHeader: some View {
@@ -457,7 +435,6 @@ private struct ProfilePostTile: View {
   var onDelete: (() -> Void)? = nil
   var onMakePublic: (() -> Void)? = nil
   var onMakePrivate: (() -> Void)? = nil
-  var onOpenMedia: (() -> Void)? = nil
 
   private var height: CGFloat {
     size * MIRAMediaSizing.profileGridRatio
@@ -481,8 +458,14 @@ private struct ProfilePostTile: View {
 
   private var tileContent: some View {
     ZStack {
-      if let media = post.mediaURLs.first {
-        RemoteMediaView(url: media, isVideo: media.isVideoURL, shouldPlay: false)
+      if let media = post.thumbnailMediaURLs.first {
+        RemoteMediaView(
+          url: media,
+          isVideo: media.isVideoURL,
+          shouldPlay: false,
+          maxPixelSize: 520,
+          showsVideoPlaceholderIcon: false
+        )
       } else {
         MIRATheme.Color.surfaceSoft
       }
@@ -490,10 +473,6 @@ private struct ProfilePostTile: View {
     .frame(width: size, height: height)
     .clipped()
     .contentShape(Rectangle())
-    .onTapGesture {
-      guard !post.mediaURLs.isEmpty else { return }
-      onOpenMedia?()
-    }
   }
 
   private var hasOwnerActions: Bool {
@@ -722,20 +701,53 @@ final class ChatNativeModel: ObservableObject {
   @Published var isLoading = false
   let api: MIRAAPIClient
   private let conversationsCacheKey = "native.chat.conversations.v2"
+  private var hasLoadedFreshConversations = false
+  private var isLoadingFreshConversations = false
 
   init(api: MIRAAPIClient) {
     self.api = api
   }
 
-  func load() async {
-    if conversations.isEmpty, let cached: [MIRAConversation] = await MIRALocalJSONCache.load([MIRAConversation].self, key: conversationsCacheKey) {
-      conversations = cached
+  func prepareForStartup() async {
+    MIRAPerformanceTimeline.mark("chat_startup_prepare")
+    await hydrateCachedConversationsIfNeeded()
+    if conversations.isEmpty {
+      isLoading = true
     }
-    isLoading = conversations.isEmpty
-    defer { isLoading = false }
-    let fresh: [MIRAConversation] = (try? await api.get("/conversations")) ?? conversations
-    conversations = fresh
+    Task { await load() }
+  }
+
+  func load(forceRefresh: Bool = false) async {
+    if isLoadingFreshConversations && !forceRefresh { return }
+    if !forceRefresh && hasLoadedFreshConversations && !conversations.isEmpty { return }
+    isLoadingFreshConversations = true
+    await hydrateCachedConversationsIfNeeded()
+    if conversations.isEmpty { isLoading = true }
+    defer {
+      isLoading = false
+      isLoadingFreshConversations = false
+    }
+
+    guard let fresh: [MIRAConversation] = try? await api.get("/conversations") else {
+      if conversations.isEmpty {
+        hasLoadedFreshConversations = false
+      }
+      return
+    }
+    hasLoadedFreshConversations = true
+    if conversations != fresh {
+      conversations = fresh
+    }
     await MIRALocalJSONCache.save(fresh, key: conversationsCacheKey)
+  }
+
+  private func hydrateCachedConversationsIfNeeded() async {
+    guard conversations.isEmpty,
+          let cached: [MIRAConversation] = await MIRALocalJSONCache.load([MIRAConversation].self, key: conversationsCacheKey)
+    else { return }
+    conversations = cached
+    isLoading = false
+    MIRAPerformanceTimeline.markOnce("chat_first_content", detail: "cache")
   }
 }
 
@@ -747,6 +759,11 @@ public struct ChatNativeView: View {
   public init(api: MIRAAPIClient, currentUserId: String = "") {
     self.currentUserId = currentUserId
     _model = StateObject(wrappedValue: ChatNativeModel(api: api))
+  }
+
+  init(api: MIRAAPIClient, currentUserId: String = "", model: ChatNativeModel) {
+    self.currentUserId = currentUserId
+    _model = StateObject(wrappedValue: model)
   }
 
   public var body: some View {

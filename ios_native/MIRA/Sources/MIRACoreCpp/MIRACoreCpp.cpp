@@ -115,15 +115,15 @@ const char* mira_plan_media_json(
   const bool unsafe = IsUnsafeFile(uri, mimeType, fileName);
   const int maxBytes = kind == "video" ? 500 * 1024 * 1024 : 20 * 1024 * 1024;
   const bool allowed = kind != "unknown" && !unsafe && file_size <= static_cast<double>(maxBytes);
-  const double sourceWidth = width > 0 ? width : (kind == "video" ? 1080.0 : 1440.0);
-  const double sourceHeight = height > 0 ? height : (kind == "video" ? 1920.0 : 1920.0);
+  const double sourceWidth = width > 0 ? width : 1080.0;
+  const double sourceHeight = height > 0 ? height : 1440.0;
   const double maxLongEdge = kind == "video"
-    ? 1920.0
+    ? (preset == "quality" ? 1920.0 : (preset == "compact" ? 1080.0 : 1440.0))
     : preset == "quality"
-      ? 3000.0
+      ? 2160.0
       : preset == "compact"
-        ? 1280.0
-        : 2200.0;
+        ? 1080.0
+        : 1440.0;
   const double longEdge = std::max(1.0, std::max(sourceWidth, sourceHeight));
   const double scale = std::min(1.0, maxLongEdge / longEdge);
   const int targetWidth = std::max(1, static_cast<int>(std::round(sourceWidth * scale)));

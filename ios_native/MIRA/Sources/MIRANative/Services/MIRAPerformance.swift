@@ -196,12 +196,12 @@ public enum MIRALocalJSONCache {
 }
 
 public enum MIRAImageDiskCache {
-  public static func image(for url: URL) async -> UIImage? {
+  public static func image(for url: URL, maxPixelSize: CGFloat = MIRAMediaSizing.feedTargetHeight) async -> UIImage? {
     await Task.detached(priority: .utility) {
       guard let fileURL = cacheFileURL(for: url.absoluteString),
             let data = try? Data(contentsOf: fileURL)
       else { return nil }
-      return decodedImage(from: data)
+      return decodedImage(from: data, maxPixelSize: maxPixelSize)
     }.value
   }
 
@@ -212,13 +212,13 @@ public enum MIRAImageDiskCache {
     }.value
   }
 
-  public static func decode(_ data: Data) async -> UIImage? {
+  public static func decode(_ data: Data, maxPixelSize: CGFloat = MIRAMediaSizing.feedTargetHeight) async -> UIImage? {
     await Task.detached(priority: .userInitiated) {
-      decodedImage(from: data)
+      decodedImage(from: data, maxPixelSize: maxPixelSize)
     }.value
   }
 
-  private static func decodedImage(from data: Data, maxPixelSize: CGFloat = 2160) -> UIImage? {
+  private static func decodedImage(from data: Data, maxPixelSize: CGFloat) -> UIImage? {
     let options = [
       kCGImageSourceShouldCache: false
     ] as CFDictionary

@@ -51,6 +51,31 @@ public enum MIRAAPIError: Error, LocalizedError {
   }
 }
 
+private actor MIRAAPIRequestDeduplicator {
+  static let shared = MIRAAPIRequestDeduplicator()
+
+  private var inFlight: [String: Task<Data, Error>] = [:]
+
+  func data(for key: String, start: @escaping () async throws -> Data) async throws -> Data {
+    if let task = inFlight[key] {
+      return try await task.value
+    }
+
+    let task = Task {
+      try await start()
+    }
+    inFlight[key] = task
+    do {
+      let data = try await task.value
+      inFlight[key] = nil
+      return data
+    } catch {
+      inFlight[key] = nil
+      throw error
+    }
+  }
+}
+
 public final class MIRAAPIClient {
   public static let productionSession: URLSession = {
     let configuration = URLSessionConfiguration.default
@@ -165,17 +190,36 @@ public final class MIRAAPIClient {
     request.httpMethod = method
     request.timeoutInterval = 25
     request.setValue("application/json", forHTTPHeaderField: "Accept")
+    let token = await sessionProvider?.accessToken()
     if let body {
       request.httpBody = body
       request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     }
-    if let token = await sessionProvider?.accessToken(), !token.isEmpty {
+    if let token, !token.isEmpty {
       request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
     }
 
-    let metric = await MIRAPerformanceMetric.begin(category: "network", label: "\(method) \(url.path)")
     let data: Data
+    if method == "GET", body == nil {
+      let key = "\(method) \(url.absoluteString) \(token ?? "")"
+      data = try await MIRAAPIRequestDeduplicator.shared.data(for: key) {
+        try await self.responseData(for: request, metricLabel: "\(method) \(url.path)")
+      }
+    } else {
+      data = try await responseData(for: request, metricLabel: "\(method) \(url.path)")
+    }
+
+    do {
+      return try decoder.decode(T.self, from: data)
+    } catch {
+      throw MIRAAPIError.decodingFailed
+    }
+  }
+
+  private func responseData(for request: URLRequest, metricLabel: String) async throws -> Data {
+    let metric = await MIRAPerformanceMetric.begin(category: "network", label: metricLabel)
     let response: URLResponse
+    let data: Data
     do {
       (data, response) = try await session.data(for: request)
     } catch {
@@ -185,11 +229,7 @@ public final class MIRAAPIClient {
     let status = (response as? HTTPURLResponse)?.statusCode ?? 0
     await metric.finish(status: "\(status)", bytes: data.count)
     guard (200..<300).contains(status) else { throw MIRAAPIError.badStatus(status) }
-    do {
-      return try decoder.decode(T.self, from: data)
-    } catch {
-      throw MIRAAPIError.decodingFailed
-    }
+    return data
   }
 
   private func makeURL(_ path: String) throws -> URL {

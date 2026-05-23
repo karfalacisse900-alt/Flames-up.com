@@ -33,7 +33,9 @@ public struct MIRAPickedMedia: Hashable {
     let size: CGSize?
     switch kind {
     case .image:
-      size = UIImage(data: data)?.size
+      size = await Task.detached(priority: .utility) {
+        UIImage(data: data)?.size
+      }.value
     case .video:
       size = await videoNaturalSize()
     }
@@ -129,7 +131,7 @@ public final class MIRAMediaUploadService {
   }
 
   private func uploadImage(_ media: MIRAPickedMedia) async throws -> String {
-    let prepared = prepareImageUpload(media)
+    let prepared = await prepareImageUpload(media)
     let base64 = "data:\(prepared.mimeType);base64,\(prepared.data.base64EncodedString())"
     let response: MIRAMediaUploadResponse = try await api.post(
       "/upload/image",
@@ -166,19 +168,21 @@ public final class MIRAMediaUploadService {
     return url
   }
 
-  private func prepareImage(_ data: Data) -> Data? {
-    guard let image = UIImage(data: data) else { return nil }
-    let maxSide: CGFloat = 2160
-    let scale = min(1, maxSide / max(image.size.width, image.size.height))
-    let targetSize = CGSize(width: image.size.width * scale, height: image.size.height * scale)
-    let renderer = UIGraphicsImageRenderer(size: targetSize)
-    let rendered = renderer.image { _ in
-      image.draw(in: CGRect(origin: .zero, size: targetSize))
-    }
-    return rendered.jpegData(compressionQuality: 0.92)
+  private func prepareImage(_ data: Data) async -> Data? {
+    await Task.detached(priority: .utility) {
+      guard let image = UIImage(data: data) else { return nil }
+      let maxSide = MIRAMediaSizing.feedTargetHeight
+      let scale = min(1, maxSide / max(image.size.width, image.size.height))
+      let targetSize = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+      let renderer = UIGraphicsImageRenderer(size: targetSize)
+      let rendered = renderer.image { _ in
+        image.draw(in: CGRect(origin: .zero, size: targetSize))
+      }
+      return rendered.jpegData(compressionQuality: 0.92)
+    }.value
   }
 
-  private func prepareImageUpload(_ media: MIRAPickedMedia) -> PreparedImageUpload {
+  private func prepareImageUpload(_ media: MIRAPickedMedia) async -> PreparedImageUpload {
     if let detectedMimeType = detectedImageMimeType(media.data), media.data.count <= 10_000_000 {
       return PreparedImageUpload(
         data: media.data,
@@ -187,7 +191,7 @@ public final class MIRAMediaUploadService {
       )
     }
 
-    let prepared = prepareImage(media.data) ?? media.data
+    let prepared = await prepareImage(media.data) ?? media.data
     return PreparedImageUpload(
       data: prepared,
       mimeType: "image/jpeg",

@@ -172,7 +172,7 @@ public enum MIRANativeMediaEditorRenderer {
         let asset = AVURLAsset(url: url)
         let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true
-        generator.maximumSize = CGSize(width: 1080, height: 1080)
+        generator.maximumSize = CGSize(width: MIRAMediaSizing.feedTargetWidth, height: MIRAMediaSizing.feedTargetHeight)
         let cgImage = try generator.copyCGImage(at: .zero, actualTime: nil)
         return UIImage(cgImage: cgImage)
       } catch {

@@ -11,7 +11,7 @@ final class DiscoverNativeModel: ObservableObject {
   @Published var errorMessage: String?
   let api: MIRAAPIClient
   private let storiesCacheKey = "native.discover.stories.v3"
-  private let postsCacheKey = "native.discover.posts.v1"
+  private let postsCacheKey = "native.discover.posts.v2"
   private var hasLoadedFreshStories = false
   private var hasLoadedFreshPosts = false
   private var hasScheduledPostsLoad = false
@@ -72,18 +72,22 @@ final class DiscoverNativeModel: ObservableObject {
       updateLoadingState()
     }
     do {
-      var loaded: [MIRAPost] = try await api.get("/posts/feed?limit=60")
+      var loaded: [MIRAPost] = try await api.get("/posts/feed?limit=24")
       if loaded.isEmpty {
-        loaded = (try? await api.get("/posts/world-board?limit=60")) ?? []
+        loaded = (try? await api.get("/posts/world-board?limit=24")) ?? []
       }
-      posts = loaded
+      if posts != loaded {
+        posts = loaded
+      }
       await MIRALocalJSONCache.save(loaded, key: postsCacheKey)
       if !loaded.isEmpty {
         MIRAPerformanceTimeline.markOnce("discover_first_content", detail: "posts_network")
       }
     } catch {
-      if let fallback: [MIRAPost] = try? await api.get("/posts/world-board?limit=60"), !fallback.isEmpty {
-        posts = fallback
+      if let fallback: [MIRAPost] = try? await api.get("/posts/world-board?limit=24"), !fallback.isEmpty {
+        if posts != fallback {
+          posts = fallback
+        }
         await MIRALocalJSONCache.save(fallback, key: postsCacheKey)
         MIRAPerformanceTimeline.markOnce("discover_first_content", detail: "posts_fallback")
       } else if posts.isEmpty {
@@ -107,7 +111,9 @@ final class DiscoverNativeModel: ObservableObject {
     do {
       let loadedStories: [MIRAStoryGroup] = try await api.get("/statuses")
       let visibleStories = loadedStories.filter { ($0.statuses?.isEmpty == false) }
-      stories = visibleStories
+      if stories != visibleStories {
+        stories = visibleStories
+      }
       await MIRALocalJSONCache.save(visibleStories, key: storiesCacheKey)
       if !visibleStories.isEmpty {
         MIRAPerformanceTimeline.markOnce("discover_first_content", detail: "stories_network")
@@ -667,8 +673,14 @@ private struct DiscoverPostGalleryTile: View {
     GeometryReader { proxy in
       let tileHeight = proxy.size.width * MIRAMediaSizing.profileGridRatio
       ZStack(alignment: .topTrailing) {
-        if let media = post.mediaURLs.first {
-          RemoteMediaView(url: media, isVideo: media.isVideoURL, shouldPlay: false, showsVideoPlaceholderIcon: false)
+        if let media = post.thumbnailMediaURLs.first {
+          RemoteMediaView(
+            url: media,
+            isVideo: media.isVideoURL,
+            shouldPlay: false,
+            maxPixelSize: 560,
+            showsVideoPlaceholderIcon: false
+          )
             .frame(width: proxy.size.width, height: tileHeight)
         } else {
           ZStack {
@@ -683,7 +695,7 @@ private struct DiscoverPostGalleryTile: View {
           .frame(width: proxy.size.width, height: tileHeight)
         }
 
-        if post.mediaURLs.count > 1 {
+        if post.thumbnailMediaURLs.count > 1 {
           Image(systemName: "square.on.square")
             .font(.system(size: 11, weight: .bold))
             .foregroundStyle(.white)

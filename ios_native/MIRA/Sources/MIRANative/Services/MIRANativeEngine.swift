@@ -43,7 +43,7 @@ public enum MIRANativeEngine {
     fileSize: Double,
     width: Double,
     height: Double,
-    preset: String = "quality"
+    preset: String = "balanced"
   ) -> MIRANativeMediaPlan {
     let json = uri.withCString { uriPointer in
       mimeType.withCString { mimePointer in

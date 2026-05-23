@@ -175,37 +175,45 @@ public struct MIRAEmptyState: View {
 
 private final class MIRAImageMemoryCache {
   static let shared = MIRAImageMemoryCache()
-  private let cache = NSCache<NSURL, UIImage>()
+  private let cache = NSCache<NSString, UIImage>()
 
   private init() {
     cache.countLimit = 420
     cache.totalCostLimit = 160 * 1024 * 1024
   }
 
-  func image(for url: URL) -> UIImage? {
-    cache.object(forKey: url as NSURL)
+  func image(for url: URL, maxPixelSize: CGFloat) -> UIImage? {
+    cache.object(forKey: cacheKey(for: url, maxPixelSize: maxPixelSize))
   }
 
-  func store(_ image: UIImage, for url: URL, cost: Int) {
-    cache.setObject(image, forKey: url as NSURL, cost: cost)
+  func store(_ image: UIImage, for url: URL, maxPixelSize: CGFloat, cost: Int) {
+    cache.setObject(image, forKey: cacheKey(for: url, maxPixelSize: maxPixelSize), cost: cost)
+  }
+
+  private func cacheKey(for url: URL, maxPixelSize: CGFloat) -> NSString {
+    "\(url.absoluteString)#\(Int(maxPixelSize.rounded()))" as NSString
   }
 }
 
 public struct MIRACachedImage<Content: View, Placeholder: View>: View {
   let url: String?
+  let maxPixelSize: CGFloat
   let onImageLoaded: (UIImage) -> Void
   let content: (Image) -> Content
   let placeholder: () -> Placeholder
   @State private var uiImage: UIImage?
   @State private var loadedURL: URL?
+  @State private var isImageVisible = false
 
   public init(
     url: String?,
+    maxPixelSize: CGFloat = MIRAMediaSizing.feedTargetHeight,
     onImageLoaded: @escaping (UIImage) -> Void = { _ in },
     @ViewBuilder content: @escaping (Image) -> Content,
     @ViewBuilder placeholder: @escaping () -> Placeholder
   ) {
     self.url = url
+    self.maxPixelSize = maxPixelSize
     self.onImageLoaded = onImageLoaded
     self.content = content
     self.placeholder = placeholder
@@ -215,6 +223,7 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
     Group {
       if let uiImage {
         content(Image(uiImage: uiImage))
+          .opacity(isImageVisible ? 1 : 0)
       } else {
         placeholder()
       }
@@ -236,21 +245,25 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
     }
     if isAlreadyLoaded { return }
 
-    if let cached = MIRAImageMemoryCache.shared.image(for: remoteURL) {
+    let resolvedMaxPixelSize = max(64, maxPixelSize)
+
+    if let cached = MIRAImageMemoryCache.shared.image(for: remoteURL, maxPixelSize: resolvedMaxPixelSize) {
       await MainActor.run {
         uiImage = cached
         loadedURL = remoteURL
+        isImageVisible = true
         onImageLoaded(cached)
       }
       MIRAPerformanceTimeline.markOnce("time_to_first_thumbnail", detail: "memory")
       return
     }
 
-    if let diskCached = await MIRAImageDiskCache.image(for: remoteURL) {
-      MIRAImageMemoryCache.shared.store(diskCached, for: remoteURL, cost: diskCached.miraCacheCost)
+    if let diskCached = await MIRAImageDiskCache.image(for: remoteURL, maxPixelSize: resolvedMaxPixelSize) {
+      MIRAImageMemoryCache.shared.store(diskCached, for: remoteURL, maxPixelSize: resolvedMaxPixelSize, cost: diskCached.miraCacheCost)
       await MainActor.run {
         uiImage = diskCached
         loadedURL = remoteURL
+        isImageVisible = true
         onImageLoaded(diskCached)
       }
       MIRAPerformanceTimeline.markOnce("time_to_first_thumbnail", detail: "disk")
@@ -261,7 +274,10 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
       loadedURL != remoteURL
     }
     if shouldClear {
-      await MainActor.run { uiImage = nil }
+      await MainActor.run {
+        uiImage = nil
+        isImageVisible = false
+      }
     }
 
     do {
@@ -280,13 +296,16 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
       await metric.finish(status: String((response as? HTTPURLResponse)?.statusCode ?? 200), bytes: data.count)
       let status = (response as? HTTPURLResponse)?.statusCode ?? 200
       guard (200..<300).contains(status) else { return }
-      let decoded = await MIRAImageDiskCache.decode(data)
+      let decoded = await MIRAImageDiskCache.decode(data, maxPixelSize: resolvedMaxPixelSize)
       guard !Task.isCancelled, let decoded else { return }
-      MIRAImageMemoryCache.shared.store(decoded, for: remoteURL, cost: decoded.miraCacheCost)
+      MIRAImageMemoryCache.shared.store(decoded, for: remoteURL, maxPixelSize: resolvedMaxPixelSize, cost: decoded.miraCacheCost)
       await MIRAImageDiskCache.store(data: data, for: remoteURL)
       await MainActor.run {
         uiImage = decoded
         loadedURL = remoteURL
+        withAnimation(.easeOut(duration: 0.16)) {
+          isImageVisible = true
+        }
         onImageLoaded(decoded)
       }
       MIRAPerformanceTimeline.markOnce("time_to_first_thumbnail", detail: "network")
@@ -295,7 +314,10 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
         loadedURL != remoteURL
       }
       if shouldClear {
-        await MainActor.run { uiImage = nil }
+        await MainActor.run {
+          uiImage = nil
+          isImageVisible = false
+        }
       }
     }
   }
@@ -313,7 +335,7 @@ public struct RemoteAvatar: View {
   let size: CGFloat
 
   public var body: some View {
-    MIRACachedImage(url: url) { image in
+    MIRACachedImage(url: url, maxPixelSize: max(96, size * 3)) { image in
       image.resizable().scaledToFill()
     } placeholder: {
       ZStack {
@@ -360,6 +382,7 @@ public struct RemoteMediaView: View {
   let isVideo: Bool
   let contentMode: ContentMode
   let shouldPlay: Bool
+  let maxPixelSize: CGFloat
   let showsVideoPlaceholderIcon: Bool
   let placeholderColor: Color
   let placeholderTint: Color
@@ -370,6 +393,7 @@ public struct RemoteMediaView: View {
     isVideo: Bool,
     contentMode: ContentMode = .fill,
     shouldPlay: Bool = false,
+    maxPixelSize: CGFloat = MIRAMediaSizing.feedTargetHeight,
     showsVideoPlaceholderIcon: Bool = true,
     placeholderColor: Color = MIRATheme.Color.surfaceSoft,
     placeholderTint: Color = MIRATheme.Color.textMuted,
@@ -379,6 +403,7 @@ public struct RemoteMediaView: View {
     self.isVideo = isVideo
     self.contentMode = contentMode
     self.shouldPlay = shouldPlay
+    self.maxPixelSize = maxPixelSize
     self.showsVideoPlaceholderIcon = showsVideoPlaceholderIcon
     self.placeholderColor = placeholderColor
     self.placeholderTint = placeholderTint
@@ -399,7 +424,7 @@ public struct RemoteMediaView: View {
         )
           .background(Color.clear)
       } else {
-        MIRACachedImage(url: url, onImageLoaded: reportRatio) { image in
+        MIRACachedImage(url: url, maxPixelSize: maxPixelSize, onImageLoaded: reportRatio) { image in
           image.resizable().aspectRatio(contentMode: contentMode)
         } placeholder: {
           placeholder.redacted(reason: .placeholder)
@@ -447,7 +472,7 @@ private struct MIRAResolvedVideoPlayer: View {
   var body: some View {
     ZStack {
       if let thumbnailURL {
-        MIRACachedImage(url: thumbnailURL, onImageLoaded: reportRatio) { image in
+        MIRACachedImage(url: thumbnailURL, maxPixelSize: MIRAMediaSizing.feedTargetHeight, onImageLoaded: reportRatio) { image in
           image.resizable().aspectRatio(contentMode: contentMode)
         } placeholder: {
           placeholder
@@ -623,7 +648,7 @@ private struct MIRAResolvedVideoPlayer: View {
       let asset = AVURLAsset(url: url)
       let generator = AVAssetImageGenerator(asset: asset)
       generator.appliesPreferredTrackTransform = true
-      generator.maximumSize = CGSize(width: 1080, height: 1920)
+      generator.maximumSize = CGSize(width: MIRAMediaSizing.feedTargetWidth, height: MIRAMediaSizing.feedTargetHeight)
       let time = CMTime(seconds: 0.2, preferredTimescale: 600)
       guard let cgImage = try? generator.copyCGImage(at: time, actualTime: nil) else {
         return nil
@@ -811,154 +836,12 @@ public struct MIRAAdaptiveMediaView: View {
   }
 }
 
-public struct MIRAMediaViewerPresentation: Identifiable, Hashable {
-  public let id = UUID()
-  public let urls: [String]
-  public let initialIndex: Int
-
-  public init(urls: [String], initialIndex: Int = 0) {
-    self.urls = urls
-    self.initialIndex = initialIndex
-  }
-}
-
-public struct MIRAFullScreenMediaViewer: View {
-  @Environment(\.dismiss) private var dismiss
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  private let urls: [String]
-  private let initialIndex: Int
-  private let onClose: (() -> Void)?
-  @State private var selectedIndex: Int
-  @State private var isVisible = false
-  @GestureState private var dragOffset: CGFloat = 0
-
-  public init(urls: [String], initialIndex: Int = 0, onClose: (() -> Void)? = nil) {
-    self.urls = urls
-    self.initialIndex = initialIndex
-    self.onClose = onClose
-    _selectedIndex = State(initialValue: min(max(initialIndex, 0), max(0, urls.count - 1)))
-  }
-
-  public var body: some View {
-    ZStack {
-      Color.black.ignoresSafeArea()
-
-      TabView(selection: $selectedIndex) {
-        ForEach(Array(urls.enumerated()), id: \.offset) { index, url in
-          RemoteMediaView(
-            url: url,
-            isVideo: url.isVideoURL,
-            contentMode: .fit,
-            shouldPlay: selectedIndex == index,
-            placeholderColor: .black,
-            placeholderTint: .white
-          )
-          .frame(maxWidth: .infinity, maxHeight: .infinity)
-          .background(Color.black)
-          .contentShape(Rectangle())
-          .tag(index)
-        }
-      }
-      .tabViewStyle(.page(indexDisplayMode: .never))
-      .ignoresSafeArea()
-
-      VStack(spacing: 0) {
-        HStack {
-          Button(action: close) {
-            Image(systemName: "xmark")
-              .font(.system(size: 17, weight: .bold))
-              .foregroundStyle(.white)
-              .frame(width: 44, height: 44)
-              .background(.black.opacity(0.34))
-              .clipShape(Circle())
-          }
-          .buttonStyle(.miraPress)
-          .accessibilityLabel("Close media viewer")
-
-          Spacer()
-        }
-        .padding(.horizontal, MIRATheme.Space.md)
-        .padding(.top, MIRATheme.Space.sm)
-
-        Spacer()
-
-        if urls.count > 1 {
-          HStack(spacing: 7) {
-            ForEach(urls.indices, id: \.self) { index in
-              Capsule()
-                .fill(index == selectedIndex ? Color(red: 0.0, green: 0.48, blue: 1.0) : .white.opacity(0.34))
-                .frame(width: index == selectedIndex ? 18 : 6, height: 6)
-            }
-          }
-          .padding(.horizontal, 12)
-          .padding(.vertical, 8)
-          .background(.black.opacity(0.28))
-          .clipShape(Capsule())
-          .padding(.bottom, MIRATheme.Space.lg)
-          .animation(.easeInOut(duration: 0.18), value: selectedIndex)
-        }
-      }
-    }
-    .opacity(viewerOpacity)
-    .scaleEffect(viewerScale)
-    .offset(y: max(0, dragOffset))
-    .simultaneousGesture(closeDragGesture)
-    .onAppear {
-      selectedIndex = min(max(initialIndex, 0), max(0, urls.count - 1))
-      withAnimation(.easeOut(duration: reduceMotion ? 0.08 : 0.24)) {
-        isVisible = true
-      }
-    }
-    .toolbar(.hidden, for: .navigationBar)
-    .toolbar(.hidden, for: .tabBar)
-    .statusBarHidden(true)
-  }
-
-  private var viewerOpacity: Double {
-    guard isVisible else { return 0 }
-    let dragFade = Double(max(0, min(0.34, dragOffset / 520)))
-    return 1 - dragFade
-  }
-
-  private var viewerScale: CGFloat {
-    guard isVisible, !reduceMotion else { return 1 }
-    let dragScale = min(0.035, dragOffset / 6_000)
-    return 1 - dragScale
-  }
-
-  private var closeDragGesture: some Gesture {
-    DragGesture(minimumDistance: 18, coordinateSpace: .global)
-      .updating($dragOffset) { value, state, _ in
-        guard value.translation.height > 0, abs(value.translation.height) > abs(value.translation.width) else { return }
-        state = value.translation.height
-      }
-      .onEnded { value in
-        let shouldClose = value.translation.height > 120 || value.predictedEndTranslation.height > 210
-        if shouldClose {
-          close()
-        }
-      }
-  }
-
-  private func close() {
-    guard isVisible else { return }
-    withAnimation(.easeInOut(duration: reduceMotion ? 0.08 : 0.2)) {
-      isVisible = false
-    }
-    DispatchQueue.main.asyncAfter(deadline: .now() + (reduceMotion ? 0.08 : 0.18)) {
-      if let onClose {
-        onClose()
-      } else {
-        dismiss()
-      }
-    }
-  }
-}
-
 public enum MIRAMediaSizing {
-  public static let feedPreviewRatio: CGFloat = 3.0 / 2.0
-  public static let feedTallRatio: CGFloat = 3.0 / 2.0
-  public static let feedImmersiveRatio: CGFloat = 3.0 / 2.0
+  public static let feedTargetWidth: CGFloat = 1080
+  public static let feedTargetHeight: CGFloat = 1440
+  public static let feedPreviewRatio: CGFloat = 4.0 / 3.0
+  public static let feedTallRatio: CGFloat = 4.0 / 3.0
+  public static let feedImmersiveRatio: CGFloat = 4.0 / 3.0
   public static let profileGridRatio: CGFloat = 5.0 / 4.0
   public static let fullVerticalRatio: CGFloat = 16.0 / 9.0
   public static let maxMainFeedScreenHeightFraction: CGFloat = 0.78
@@ -1010,15 +893,10 @@ public enum MIRAMediaSizing {
     for urls: [String],
     aspectRatios: [CGFloat] = []
   ) -> CGFloat {
-    if let ratio = aspectRatios.first(where: { $0.isFinite && $0 > 0 }) {
-      return mainFeedDisplayRatio(forSourceHeightToWidthRatio: ratio)
-    }
-
-    let lowercased = urls.map { $0.lowercased() }
-    if let ratio = lowercased.compactMap({ flexibleDimensionsRatio(in: $0) ?? aspectRatioHint(in: $0) }).first {
-      return mainFeedDisplayRatio(forSourceHeightToWidthRatio: ratio)
-    }
-
+    _ = urls
+    _ = aspectRatios
+    // Main feed cards intentionally reserve one stable 3:4 surface.
+    // The original upload stays intact; the feed uses aspect-fill optimized previews.
     return feedPreviewRatio
   }
 
@@ -1063,12 +941,6 @@ public enum MIRAMediaSizing {
     let minHeight = width / 1.91
     let maxHeight = UIScreen.main.bounds.height * maxMainFeedScreenHeightFraction
     return min(max(height, minHeight), maxHeight)
-  }
-
-  private static func mainFeedDisplayRatio(forSourceHeightToWidthRatio ratio: CGFloat) -> CGFloat {
-    let clamped = min(max(ratio, 1.0 / 1.91), fullVerticalRatio)
-    if clamped >= 1.62 { return fullVerticalRatio }
-    return feedPreviewRatio
   }
 
   private static func dimensionsRatio(in value: String) -> CGFloat? {

@@ -292,7 +292,7 @@ private let termsSections: [LegalSection] = [
   LegalSection(
     title: "What Captro Is",
     paragraphs: [
-      "Captro is a social media, photo, and short-video sharing app for capturing moments, posting photos and videos, discovering visual content, and connecting with people through profiles, chat, feed posts, stories, fullscreen media, notifications, and gallery-style discovery.",
+      "Captro is a social media, photo, and short-video sharing app for capturing moments, posting photos and videos, discovering visual content, and connecting with people through profiles, chat, feed posts, stories, notifications, and gallery-style discovery.",
       "These Terms explain the rules for using Captro. If you do not agree, do not use the app."
     ],
     bullets: []
@@ -382,7 +382,7 @@ private let privacySections: [LegalSection] = [
   LegalSection(
     title: "Discover, Gallery, Stories, and Media Data",
     paragraphs: [
-      "Captro may process posts shown in Feed, Discover, profile grids, stories, fullscreen viewers, and gallery-style surfaces. We may generate thumbnails, previews, optimized feed versions, and playback versions while preserving the original upload when technically possible."
+      "Captro may process posts shown in Feed, Discover, profile grids, stories, and gallery-style surfaces. We may generate thumbnails, previews, optimized feed versions, and playback versions while preserving the original upload when technically possible."
     ],
     bullets: [
       "Views, interactions, likes, saves, comments, shares, reports, and other usage activity may be used to operate and improve the app.",
@@ -474,7 +474,7 @@ private let communitySections: [LegalSection] = [
   LegalSection(
     title: "Discover, Gallery, Feed, and Stories",
     paragraphs: [
-      "Discover posts, gallery-style visual content, feed posts, stories, profile grids, comments, and fullscreen media must follow these Guidelines."
+      "Discover posts, gallery-style visual content, feed posts, stories, profile grids, comments, and media previews must follow these Guidelines."
     ],
     bullets: [
       "No stolen images or videos.",

@@ -38,6 +38,9 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
   public let caption: String?
   public let image: String?
   public let images: FlexibleStringArray?
+  public let feedMediaUrls: FlexibleStringArray?
+  public let thumbnailUrls: FlexibleStringArray?
+  public let posterUrls: FlexibleStringArray?
   public let mediaTypes: FlexibleStringArray?
   public let mediaDimensions: FlexibleMediaDimensions?
   public let location: String?
@@ -80,9 +83,28 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
   }
 
   public var mediaURLs: [String] {
+    uniqueMediaURLs(from: images?.values ?? [], fallback: image)
+  }
+
+  public var feedMediaURLs: [String] {
+    let optimized = uniqueMediaURLs(from: feedMediaUrls?.values ?? [], fallback: nil)
+    return optimized.isEmpty ? mediaURLs : optimized
+  }
+
+  public var thumbnailMediaURLs: [String] {
+    let thumbnails = uniqueMediaURLs(from: thumbnailUrls?.values ?? [], fallback: nil)
+    return thumbnails.isEmpty ? feedMediaURLs : thumbnails
+  }
+
+  public var posterMediaURLs: [String] {
+    let posters = uniqueMediaURLs(from: posterUrls?.values ?? [], fallback: nil)
+    return posters.isEmpty ? thumbnailMediaURLs : posters
+  }
+
+  private func uniqueMediaURLs(from values: [String], fallback: String?) -> [String] {
     var urls: [String] = []
-    if let image, !image.isEmpty { urls.append(image) }
-    urls.append(contentsOf: images?.values ?? [])
+    if let fallback, !fallback.isEmpty { urls.append(fallback) }
+    urls.append(contentsOf: values)
     var seen = Set<String>()
     return urls.filter { seen.insert($0).inserted }
   }
@@ -138,6 +160,9 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
       caption: caption,
       image: image,
       images: images,
+      feedMediaUrls: feedMediaUrls,
+      thumbnailUrls: thumbnailUrls,
+      posterUrls: posterUrls,
       mediaTypes: mediaTypes,
       mediaDimensions: mediaDimensions,
       location: location,

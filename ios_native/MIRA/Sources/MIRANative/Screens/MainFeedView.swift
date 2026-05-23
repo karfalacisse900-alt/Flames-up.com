@@ -62,7 +62,9 @@ final class MainFeedModel: ObservableObject {
       return
     }
     let sorted = await sortedByNativeScore(loaded)
-    posts = sorted
+    if posts != sorted {
+      posts = sorted
+    }
     canLoadMore = loaded.count >= firstPageLimit
     await MIRALocalJSONCache.save(sorted, key: feedCacheKey)
     MIRAPerformanceTimeline.markOnce("time_to_first_real_home_item", detail: "network")
@@ -611,7 +613,7 @@ private struct MainNativePostCard: View {
 
   private var mediaHeight: CGFloat {
     return MIRAMediaSizing.mainFeedHeight(
-      for: post.mediaURLs,
+      for: post.feedMediaURLs,
       aspectRatios: post.mediaHeightToWidthRatios,
       width: measuredCardWidth
     )
@@ -663,7 +665,7 @@ private struct MainNativePostCard: View {
       Rectangle().fill(MIRATheme.Color.hairline).frame(height: 0.75)
     }
     .onChange(of: post.id) { _, _ in selectedMediaIndex = 0 }
-    .onChange(of: post.mediaURLs) { _, urls in
+    .onChange(of: post.feedMediaURLs) { _, urls in
       if selectedMediaIndex >= urls.count {
         selectedMediaIndex = max(0, urls.count - 1)
       }
@@ -674,12 +676,14 @@ private struct MainNativePostCard: View {
 
   @ViewBuilder
   private var mediaCarousel: some View {
-    if post.mediaURLs.count == 1, let url = post.mediaURLs.first {
+    let mediaURLs = post.feedMediaURLs
+    if mediaURLs.count == 1, let url = mediaURLs.first {
       RemoteMediaView(
         url: url,
         isVideo: url.isVideoURL,
         contentMode: .fill,
-        shouldPlay: isVideoActive
+        shouldPlay: isVideoActive,
+        maxPixelSize: MIRAMediaSizing.feedTargetHeight
       )
       .frame(maxWidth: .infinity)
       .frame(minHeight: mediaHeight, maxHeight: mediaHeight)
@@ -688,12 +692,13 @@ private struct MainNativePostCard: View {
     } else {
       VStack(spacing: 7) {
         TabView(selection: $selectedMediaIndex) {
-          ForEach(Array(post.mediaURLs.enumerated()), id: \.offset) { index, url in
+          ForEach(Array(mediaURLs.enumerated()), id: \.offset) { index, url in
             RemoteMediaView(
               url: url,
               isVideo: url.isVideoURL,
               contentMode: .fill,
-              shouldPlay: isVideoActive && selectedMediaIndex == index
+              shouldPlay: isVideoActive && selectedMediaIndex == index,
+              maxPixelSize: MIRAMediaSizing.feedTargetHeight
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()
@@ -706,7 +711,7 @@ private struct MainNativePostCard: View {
         .background(MIRATheme.Color.surfaceSoft)
 
         HStack(spacing: 6) {
-          ForEach(post.mediaURLs.indices, id: \.self) { index in
+          ForEach(mediaURLs.indices, id: \.self) { index in
             Circle()
               .fill(index == selectedMediaIndex ? Color(red: 0.0, green: 0.48, blue: 1.0) : MIRATheme.Color.textMuted.opacity(0.28))
               .frame(width: index == selectedMediaIndex ? 7 : 5, height: index == selectedMediaIndex ? 7 : 5)
