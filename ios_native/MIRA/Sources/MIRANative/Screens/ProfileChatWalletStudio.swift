@@ -456,52 +456,24 @@ private struct ProfilePostTile: View {
     post.visibility?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "public"
   }
 
+  @ViewBuilder
   var body: some View {
+    if hasOwnerActions {
+      tileContent
+        .contextMenu {
+          ownerContextMenu
+        }
+    } else {
+      tileContent
+    }
+  }
+
+  private var tileContent: some View {
     ZStack {
       if let media = post.mediaURLs.first {
         RemoteMediaView(url: media, isVideo: media.isVideoURL, shouldPlay: false)
       } else {
         MIRATheme.Color.surfaceSoft
-      }
-      if let onDelete {
-        VStack {
-          HStack {
-            Spacer()
-            Menu {
-              if normalizedVisibility != "public", let onMakePublic {
-                Button {
-                  UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                  onMakePublic()
-                } label: {
-                  Label("Make post public", systemImage: "globe")
-                }
-              }
-
-              if normalizedVisibility != "private", let onMakePrivate {
-                Button {
-                  UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                  onMakePrivate()
-                } label: {
-                  Label("Make post private", systemImage: "lock")
-                }
-              }
-
-              Button("Delete post", role: .destructive) { onDelete() }
-            } label: {
-              Image(systemName: "ellipsis")
-                .font(.system(size: 15, weight: .bold))
-                .foregroundStyle(MIRATheme.Color.textPrimary)
-                .frame(width: 36, height: 36)
-                .background(.white.opacity(0.92))
-                .clipShape(Circle())
-                .shadow(color: .black.opacity(0.20), radius: 10, x: 0, y: 4)
-                .overlay(Circle().stroke(.black.opacity(0.06), lineWidth: 1))
-            }
-            .buttonStyle(.plain)
-            .padding(7)
-          }
-          Spacer()
-        }
       }
     }
     .frame(width: size, height: height)
@@ -510,6 +482,40 @@ private struct ProfilePostTile: View {
     .onTapGesture {
       guard !post.mediaURLs.isEmpty else { return }
       onOpenMedia?()
+    }
+  }
+
+  private var hasOwnerActions: Bool {
+    onDelete != nil || onMakePublic != nil || onMakePrivate != nil
+  }
+
+  @ViewBuilder
+  private var ownerContextMenu: some View {
+    if normalizedVisibility != "private", let onMakePrivate {
+      Button {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        onMakePrivate()
+      } label: {
+        Label("Make post private", systemImage: "lock")
+      }
+    }
+
+    if normalizedVisibility != "public", let onMakePublic {
+      Button {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        onMakePublic()
+      } label: {
+        Label("Make post public", systemImage: "globe")
+      }
+    }
+
+    if let onDelete {
+      Button(role: .destructive) {
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        onDelete()
+      } label: {
+        Label("Delete post", systemImage: "trash")
+      }
     }
   }
 }

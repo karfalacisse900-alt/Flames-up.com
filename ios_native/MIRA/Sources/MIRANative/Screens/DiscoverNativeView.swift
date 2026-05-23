@@ -118,7 +118,6 @@ public struct DiscoverNativeView: View {
   @StateObject private var model: DiscoverNativeModel
   @State private var selectedStoryGroup: MIRAStoryGroup?
   @State private var isStoryViewerVisible = false
-  @State private var isShowingCreatePost = false
   @State private var selectedGalleryFilter = "all"
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -150,9 +149,6 @@ public struct DiscoverNativeView: View {
       .miraScreenEnter(.tab)
       .toolbar(.hidden, for: .navigationBar)
       .toolbar(selectedStoryGroup == nil ? .visible : .hidden, for: .tabBar)
-      .fullScreenCover(isPresented: $isShowingCreatePost) {
-        CreatePostNativeView(api: model.api)
-      }
       .task { await model.load() }
     }
   }
@@ -204,12 +200,6 @@ public struct DiscoverNativeView: View {
       NavigationLink(destination: SearchUsersNativeView(api: model.api)) {
         MIRAHeaderCircleButton(systemImage: "magnifyingglass")
       }
-      Button {
-        isShowingCreatePost = true
-      } label: {
-        MIRAHeaderCircleButton(systemImage: "plus")
-      }
-      .buttonStyle(.plain)
     }
     .padding(.horizontal, MIRATheme.Space.md)
     .padding(.top, MIRATheme.Space.xs)

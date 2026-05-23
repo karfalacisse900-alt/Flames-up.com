@@ -14,6 +14,7 @@ final class MainFeedModel: ObservableObject {
   private let feedCacheKey = "native.main.feed.v3"
   private var hasLoadedFreshFeed = false
   private var canLoadMore = true
+  private var isLoadingCurrentUser = false
   private let firstPageLimit = 8
   private let paginationTriggerWindow = 5
 
@@ -180,6 +181,7 @@ final class MainFeedModel: ObservableObject {
   }
 
   func toggleFollowAuthor(_ post: MIRAPost) async {
+    guard canFollowAuthor(post) else { return }
     guard let userId = post.userId, !userId.isEmpty else { return }
     let previous = posts
     let current = posts.first(where: { $0.id == post.id }) ?? post
@@ -194,6 +196,28 @@ final class MainFeedModel: ObservableObject {
     } catch {
       posts = previous
     }
+  }
+
+  func canFollowAuthor(_ post: MIRAPost) -> Bool {
+    if currentUserId == nil && currentUsername == nil {
+      Task { await loadCurrentUserIfNeeded() }
+      return false
+    }
+
+    let postUserId = post.userId?.trimmingCharacters(in: .whitespacesAndNewlines)
+    let ownerUsername = post.userUsername?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    guard postUserId?.isEmpty == false || ownerUsername?.isEmpty == false else { return false }
+
+    if let currentUserId, let postUserId, !postUserId.isEmpty {
+      return currentUserId != postUserId
+    }
+
+    let viewerUsername = currentUsername?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    if let ownerUsername, !ownerUsername.isEmpty, let viewerUsername, !viewerUsername.isEmpty {
+      return ownerUsername != viewerUsername
+    }
+
+    return false
   }
 
   func hidePost(_ post: MIRAPost) {
@@ -249,17 +273,18 @@ final class MainFeedModel: ObservableObject {
 
   private func loadCurrentUserIfNeeded() async {
     guard currentUserId == nil && currentUsername == nil else { return }
+    guard !isLoadingCurrentUser else { return }
+    isLoadingCurrentUser = true
+    defer { isLoadingCurrentUser = false }
     let me: MIRAUser? = try? await api.get("/auth/me")
     currentUserId = me?.id
     currentUsername = me?.username
   }
 
   func canDelete(_ post: MIRAPost) -> Bool {
-    // If auth ownership is still loading, keep Delete visible and let the backend
-    // enforce ownership. This avoids hiding the owner action because /auth/me
-    // resolved a moment after the menu was opened.
     if currentUserId == nil && currentUsername == nil {
-      return true
+      Task { await loadCurrentUserIfNeeded() }
+      return false
     }
     if let currentUserId, let postUserId = post.userId, currentUserId == postUserId {
       return true
@@ -385,6 +410,7 @@ public struct MainFeedView: View {
                   onFollow: { Task { await model.toggleFollowAuthor(post) } },
                   onNotInterested: { model.hidePost(post) },
                   onReport: { Task { await model.reportPost(post) } },
+                  canFollowAuthor: model.canFollowAuthor(post),
                   canDelete: model.canDelete(post),
                   onDelete: { Task { await model.deletePost(post) } },
                   onMakePublic: { Task { await model.updatePostVisibility(post, visibility: "public") } },
@@ -575,6 +601,7 @@ private struct MainNativePostCard: View {
   let onFollow: () -> Void
   let onNotInterested: () -> Void
   let onReport: () -> Void
+  let canFollowAuthor: Bool
   let canDelete: Bool
   let onDelete: () -> Void
   let onMakePublic: () -> Void
@@ -816,18 +843,37 @@ private struct MainNativePostCard: View {
 
   private var postHeader: some View {
     HStack(spacing: MIRATheme.Space.sm) {
+      authorAvatar
+
       authorIdentity
         .frame(maxWidth: .infinity, alignment: .leading)
         .layoutPriority(1)
-
-      if !canDelete {
-        feedFollowButton
-      }
 
       postMenu
     }
     .padding(.horizontal, MIRATheme.Space.md)
     .padding(.vertical, 10)
+  }
+
+  @ViewBuilder
+  private var authorAvatar: some View {
+    if canFollowAuthor {
+      Button {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        onFollow()
+      } label: {
+        MIRAFollowAvatar(url: post.userProfileImage, size: 42, isFollowing: post.viewerFollowing)
+      }
+      .buttonStyle(.plain)
+      .accessibilityLabel(post.viewerFollowing ? "Following" : "Follow")
+    } else if let userId = post.userId, !userId.isEmpty {
+      NavigationLink(destination: UserProfileNativeView(userId: userId, api: api)) {
+        RemoteAvatar(url: post.userProfileImage, size: 42)
+      }
+      .buttonStyle(.plain)
+    } else {
+      RemoteAvatar(url: post.userProfileImage, size: 42)
+    }
   }
 
   @ViewBuilder
@@ -843,49 +889,18 @@ private struct MainNativePostCard: View {
   }
 
   private var authorIdentityLabel: some View {
-    HStack(spacing: 10) {
-      RemoteAvatar(url: post.userProfileImage, size: 42)
-      VStack(alignment: .leading, spacing: 2) {
-        authorNameLabel
-        if let subtitle = authorSubtitle {
-          Text(subtitle)
-            .font(.system(size: 12, weight: .medium))
-            .foregroundStyle(MIRATheme.Color.textMuted)
-            .lineLimit(1)
-            .truncationMode(.tail)
-        }
-      }
-      .frame(maxWidth: .infinity, alignment: .leading)
-    }
-    .contentShape(Rectangle())
-  }
-
-  private var feedFollowButton: some View {
-    Button {
-      UIImpactFeedbackGenerator(style: .light).impactOccurred()
-      onFollow()
-    } label: {
-      HStack(spacing: 5) {
-        Image(systemName: post.viewerFollowing ? "checkmark" : "plus")
-          .font(.system(size: 11, weight: .bold))
-        Text(post.viewerFollowing ? "Following" : "Follow")
-          .font(.system(size: 12, weight: .bold))
+    VStack(alignment: .leading, spacing: 2) {
+      authorNameLabel
+      if let subtitle = authorSubtitle {
+        Text(subtitle)
+          .font(.system(size: 12, weight: .medium))
+          .foregroundStyle(MIRATheme.Color.textMuted)
           .lineLimit(1)
-          .minimumScaleFactor(0.82)
+          .truncationMode(.tail)
       }
-      .foregroundStyle(post.viewerFollowing ? MIRATheme.Color.textPrimary : .white)
-      .padding(.horizontal, post.viewerFollowing ? 10 : 12)
-      .frame(height: 32)
-      .background(post.viewerFollowing ? MIRATheme.Color.surfaceSoft : MIRATheme.Color.forest)
-      .clipShape(Capsule())
-      .overlay {
-        Capsule()
-          .stroke(post.viewerFollowing ? MIRATheme.Color.hairline : Color.clear, lineWidth: 1)
-      }
-      .shadow(color: post.viewerFollowing ? .clear : MIRATheme.Color.forest.opacity(0.18), radius: 10, y: 4)
     }
-    .buttonStyle(.miraPress)
-    .accessibilityLabel(post.viewerFollowing ? "Following" : "Follow")
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .contentShape(Rectangle())
   }
 
   private var postMenu: some View {
