@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
   <key>CFBundleDisplayName</key>
-  <string>MIRA</string>
+  <string>Captro</string>
   <key>CFBundleDevelopmentRegion</key>
   <string>$(DEVELOPMENT_LANGUAGE)</string>
   <key>CFBundleExecutable</key>
@@ -13,7 +13,7 @@
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
-  <string>MIRA</string>
+  <string>Captro</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
@@ -29,7 +29,7 @@
   <key>NSPhotoLibraryUsageDescription</key>
   <string>Choose photos and videos from your gallery.</string>
   <key>NSPhotoLibraryAddUsageDescription</key>
-  <string>Save edited media from MIRA to your photo library.</string>
+  <string>Save edited media from Captro to your photo library.</string>
   <key>NSLocationWhenInUseUsageDescription</key>
   <string>Add places and nearby context to posts.</string>
   <key>ITSAppUsesNonExemptEncryption</key>
@@ -43,6 +43,10 @@
   <dict>
     <key>UIColorName</key>
     <string>MIRALaunchBackground</string>
+    <key>UIImageName</key>
+    <string>CaptroLaunchLogo</string>
+    <key>UIImageRespectsSafeAreaInsets</key>
+    <true/>
   </dict>
   <key>UISupportedInterfaceOrientations</key>
   <array>

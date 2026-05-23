@@ -3,6 +3,7 @@ import SwiftUI
 public enum MIRATheme {
   public enum Color {
     public static let appBackground = SwiftUI.Color.white
+    public static let launchBackground = SwiftUI.Color(red: 0.961, green: 0.957, blue: 0.941)
     public static let surface = SwiftUI.Color.white
     public static let surfaceSoft = SwiftUI.Color(red: 0.982, green: 0.985, blue: 0.978)
     public static let surfaceRaised = SwiftUI.Color.white
