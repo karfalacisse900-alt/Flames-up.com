@@ -29,7 +29,7 @@ rules:
       - pattern: "console.error($X)"
     metavariable-regex:
       metavariable: $X
-      regex: (?i).*(token|authorization|password|secret|cookie|private.?message|message_content).*
+      regex: (?i).*(auth_?token|access_?token|refresh_?token|authorization|password|secret|cookie|private_?message|message_content).*
 
   - id: captro-worker-raw-sql-template
     message: Do not interpolate user-controlled values into SQL. Use D1 prepared statements and bind parameters.

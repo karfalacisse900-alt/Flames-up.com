@@ -104,11 +104,14 @@ export default function CreateStatusScreen() {
   };
 
   const addSticker = (emoji: string) => {
-    setPlacedStickers(prev => [...prev, {
-      emoji,
-      x: 100 + Math.random() * (SW - 200),
-      y: 200 + Math.random() * (SH - 500),
-    }]);
+    setPlacedStickers(prev => {
+      const offset = prev.length;
+      return [...prev, {
+        emoji,
+        x: 100 + ((offset * 47) % Math.max(1, SW - 200)),
+        y: 200 + ((offset * 61) % Math.max(1, SH - 500)),
+      }];
+    });
     setToolMode('none');
   };
 

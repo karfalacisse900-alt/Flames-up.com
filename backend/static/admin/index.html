@@ -392,13 +392,17 @@ function timeAgo(d) {
   return new Date(d).toLocaleDateString();
 }
 
-function avatarHTML(img, name) {
-  if (img && img.startsWith('http')) return `<div class="avatar"><img src="${img}" alt="" /></div>`;
-  const initial = (name||'?')[0].toUpperCase();
-  return `<div class="avatar">${initial}</div>`;
+function esc(s) { const d = document.createElement('div'); d.textContent = s||''; return d.innerHTML; }
+function attr(s) { return esc(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
+function jsAttrArg(value) {
+  return attr(JSON.stringify(String(value ?? '')).replace(/</g, '\\u003c').replace(/>/g, '\\u003e').replace(/&/g, '\\u0026'));
 }
 
-function esc(s) { const d = document.createElement('div'); d.textContent = s||''; return d.innerHTML; }
+function avatarHTML(img, name) {
+  if (typeof img === 'string' && /^https?:\/\//i.test(img)) return `<div class="avatar"><img src="${attr(img)}" alt="" /></div>`;
+  const initial = esc((name||'?')[0].toUpperCase());
+  return `<div class="avatar">${initial}</div>`;
+}
 
 // ═════════════════════════════════════════════════════════════════════════════
 // DASHBOARD
@@ -670,7 +674,6 @@ async function loadUsers() {
     if (u.is_publisher) roles.push('<span class="badge badge-publisher">Publisher</span>');
     if (u.is_verified) roles.push('<span class="badge badge-verified">Verified</span>');
     if (!roles.length) roles.push('<span class="badge" style="background:#222;color:#666">User</span>');
-    const safeName = (u.full_name||'').replace(/'/g, "\\'");
     return `
       <tr>
         <td><div class="user-cell">${avatarHTML(u.profile_image, u.full_name)}<div><div class="name">${esc(u.full_name||'—')}</div><div class="email">@${esc(u.username||'—')}</div></div></div></td>
@@ -678,7 +681,7 @@ async function loadUsers() {
         <td><div style="display:flex;gap:4px;flex-wrap:wrap">${roles.join('')}</div></td>
         <td>${u.posts_count||0}</td>
         <td>${timeAgo(u.created_at)}</td>
-        <td><button class="btn-sm btn-edit" onclick="editUser('${u.id}','${safeName}',${u.is_admin?1:0},${u.is_creator?1:0},${u.is_publisher?1:0},${u.is_verified?1:0})">Edit Roles</button></td>
+        <td><button class="btn-sm btn-edit" onclick="editUser(${jsAttrArg(u.id)},${jsAttrArg(u.full_name||'')},${u.is_admin?1:0},${u.is_creator?1:0},${u.is_publisher?1:0},${u.is_verified?1:0})">Edit Roles</button></td>
       </tr>
     `;
   }).join('');
