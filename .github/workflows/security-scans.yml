@@ -90,14 +90,27 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Detect supported source tree
+        id: detect-source
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ matrix.language }}" != "swift" || -f "ios_native/MIRA/project.yml" ]]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "Swift CodeQL skipped because ios_native/MIRA is not present on this branch."
+          fi
+
       - name: Initialize CodeQL
+        if: steps.detect-source.outputs.enabled == 'true'
         uses: github/codeql-action/init@v3
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
 
       - name: Build Swift app for CodeQL
-        if: matrix.language == 'swift'
+        if: matrix.language == 'swift' && steps.detect-source.outputs.enabled == 'true'
         working-directory: ios_native/MIRA
         run: |
           set -euo pipefail
@@ -112,6 +125,7 @@ jobs:
             build
 
       - name: Analyze
+        if: steps.detect-source.outputs.enabled == 'true'
         uses: github/codeql-action/analyze@v3
         with:
           category: /language:${{ matrix.language }}
