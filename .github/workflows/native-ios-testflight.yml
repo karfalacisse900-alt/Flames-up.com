@@ -1,4 +1,4 @@
-﻿name: Native iOS TestFlight
+name: Native iOS TestFlight
 
 on:
   workflow_dispatch:
@@ -141,7 +141,7 @@ jobs:
             -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist"
 
       - name: Upload IPA artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: MIRA-native-ios-ipa
           path: ${{ runner.temp }}/export/*.ipa
