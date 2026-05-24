@@ -27,7 +27,7 @@ jobs:
         run: xcodebuild -version
 
       - name: Install XcodeGen
-        run: brew install xcodegen
+        run: arch -arm64 brew install xcodegen
 
       - name: Check Rust native core
         run: |

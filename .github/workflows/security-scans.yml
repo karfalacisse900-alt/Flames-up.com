@@ -118,7 +118,7 @@ jobs:
         working-directory: ios_native/MIRA
         run: |
           set -euo pipefail
-          brew install xcodegen
+          arch -arm64 brew install xcodegen
           xcodegen generate --spec project.yml
           xcodebuild \
             -project MIRA.xcodeproj \
