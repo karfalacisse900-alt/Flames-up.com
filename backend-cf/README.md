@@ -1,88 +1,91 @@
-# Flames-Up API — Cloudflare Workers
+# Flames-Up API (Cloudflare Workers)
 
-Production-ready backend using **Hono** router, **Cloudflare D1** (SQLite), **Cloudflare Images**, and **Cloudflare Stream**.
-
-## Structure
-
-```
-backend-cf/
-├── wrangler.toml          # Cloudflare config (D1, KV bindings)
-├── package.json           # Dependencies (hono, jose)
-├── tsconfig.json          # TypeScript config
-├── migrations/
-│   └── 0001_init.sql      # D1 database schema (13 tables)
-└── src/
-    └── index.ts           # Complete Hono API (all endpoints)
-```
+Backend stack: Hono + D1 + Cloudflare Images/Stream.
 
 ## Setup
 
-1. **Install dependencies:**
-   ```bash
-   npm install
-   ```
+1. Install dependencies:
+   `npm install`
 
-2. **Create D1 database:**
-   ```bash
-   wrangler d1 create flames-up-db
-   ```
-   Copy the `database_id` into `wrangler.toml`.
+2. Run migrations (remote):
+   `wrangler d1 execute flames-up-db --file=./migrations/0001_init.sql --remote`
+   `wrangler d1 execute flames-up-db --file=./migrations/0002_additions.sql --remote`
+   `wrangler d1 execute flames-up-db --file=./migrations/0003_creators.sql --remote`
+   `wrangler d1 execute flames-up-db --file=./migrations/0004_oauth.sql --remote`
+   `wrangler d1 execute flames-up-db --file=./migrations/0005_phone_auth.sql --remote`
 
-3. **Create KV namespace:**
-   ```bash
-   wrangler kv namespace create "KV"
-   ```
-   Copy the `id` into `wrangler.toml`.
+3. Configure vars:
+   - `JWT_SECRET`
+   - `CLOUDFLARE_ACCOUNT_ID`
+   - `CLOUDFLARE_IMAGES_TOKEN`
+   - `CLOUDFLARE_STREAM_TOKEN`
+   - `MAPBOX_ACCESS_TOKEN`
+   - `OWNER_USERNAMES` (comma-separated usernames that can use creator actions before phone verification)
+   - `GOOGLE_OAUTH_CLIENT_IDS` (comma-separated Google client IDs)
+   - `APPLE_OAUTH_AUDIENCES` (comma-separated Apple audiences, bundle/service IDs)
+   - `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_VERIFY_SERVICE_SID` for Twilio Verify phone codes
+   - `TWILIO_FROM_PHONE` is only used by the legacy SMS fallback if Verify is not configured
+   - `SUPABASE_URL` as a public Worker var, for example `https://your-project-ref.supabase.co`
+   - `SUPABASE_SERVICE_ROLE_KEY` as a Worker secret only; never put this in the iOS app or public config
+   - `SUPABASE_JWT_ISSUER` only if your Supabase issuer differs from `SUPABASE_URL/auth/v1`
 
-4. **Run migrations:**
-   ```bash
-   # Local development
-   wrangler d1 execute flames-up-db --file=./migrations/0001_init.sql --local
+4. Deploy:
+   `wrangler deploy`
 
-   # Production
-   wrangler d1 execute flames-up-db --file=./migrations/0001_init.sql --remote
-   ```
+Google OAuth requires the same client IDs used by the native app and web auth callback:
 
-5. **Set environment variables in `wrangler.toml`:**
-   - `JWT_SECRET` — A random secret for JWT signing
-   - `CLOUDFLARE_ACCOUNT_ID` — Your Cloudflare account ID
-   - `CLOUDFLARE_IMAGES_TOKEN` — API token with Images access
-   - `CLOUDFLARE_STREAM_TOKEN` — API token with Stream access
-   - `GOOGLE_MAPS_API_KEY` — For Places API proxy
+```powershell
+$ids = "your-web-client-id.apps.googleusercontent.com,your-ios-client-id.apps.googleusercontent.com,your-android-client-id.apps.googleusercontent.com"
+$ids | npx wrangler secret put GOOGLE_OAUTH_CLIENT_IDS --env production
+npx wrangler deploy --env production
+```
 
-6. **Deploy:**
-   ```bash
-   wrangler deploy
-   ```
+## Auth Endpoints
 
-## API Endpoints
+- `POST /api/auth/register`
+- `POST /api/auth/login`
+- `POST /api/auth/oauth/google`
+- `POST /api/auth/oauth/apple`
+- `POST /api/auth/phone/start`
+- `POST /api/auth/phone/verify`
+- `GET /api/auth/me`
 
-### Auth
-- `POST /api/auth/register` — Sign up
-- `POST /api/auth/login` — Sign in (returns JWT)
-- `GET /api/auth/me` — Current user
+If Twilio is not configured, `/api/auth/phone/start` returns a `dev_code` for local testing instead of sending SMS.
 
-### Posts (with Check-In support)
-- `POST /api/posts` — Create post (lifestyle / check_in / question)
-- `GET /api/posts/feed` — Feed (paginated)
-- `GET /api/posts/nearby-feed` — Location-prioritized feed
-- `GET /api/posts/:id` — Single post
-- `POST /api/posts/:id/like` — Toggle like
-- `DELETE /api/posts/:id` — Delete own post
-- `POST /api/posts/:id/comments` — Add comment
-- `GET /api/posts/:id/comments` — List comments
+## Supabase Auth + Postgres/JSONB
 
-### Uploads (Direct to Cloudflare)
-- `POST /api/upload/image-direct` — Get CF Images upload URL
-- `POST /api/upload/video-direct` — Get CF Stream upload URL
+Supabase is used for production auth, PostgreSQL tables, and JSONB document storage. The JSONB `app_documents` table is the app's flexible NoSQL-style layer; it is still stored securely inside Postgres with RLS.
 
-### Users, Statuses, Messages, Library, Friends, Places, Discover
-All endpoints fully implemented. See `src/index.ts` for details.
+Run or push the Supabase migrations from the repository root:
 
-## Image Upload Flow (Cloudflare Images)
+```powershell
+cd "C:\Users\The-s\Documents\New project\Flames-up.com"
+npx.cmd supabase db push
+```
 
-1. Frontend calls `POST /api/upload/image-direct` → gets `upload_url` + `image_id`
-2. Frontend uploads image directly to `upload_url`
-3. Frontend sends `image_id` in `POST /api/posts`
+Set the backend service-role secret for Cloudflare Workers:
 
-No base64. No file proxy. Direct upload to Cloudflare edge.
+```powershell
+cd "C:\Users\The-s\Documents\New project\Flames-up.com\backend-cf"
+npx.cmd wrangler secret put SUPABASE_SERVICE_ROLE_KEY --env production
+npx.cmd wrangler deploy --env production
+```
+
+The native app should only use public Supabase values:
+
+```text
+SUPABASE_URL=https://your-project-ref.supabase.co
+SUPABASE_PUBLISHABLE_KEY=sb_publishable_...
+SUPABASE_WEB_REDIRECT_URI=https://flames-up.com/auth/callback
+SUPABASE_NATIVE_REDIRECT_URI=captro://auth/callback
+```
+
+Google OAuth setup:
+- Google Cloud authorized redirect URI should be the Supabase callback: `https://your-project-ref.supabase.co/auth/v1/callback`
+- Supabase Auth redirect URLs should include both `https://flames-up.com/auth/callback` and `captro://auth/callback`
+- Use the Web OAuth client ID and client secret in the Supabase Google provider. Native iOS/Android IDs can be used by the mobile app, but Supabase's provider secret belongs to the Web client.
+
+Apple native sign-in:
+- Enable Sign in with Apple on the iOS App ID `com.karfala90.frontend`.
+- Configure the Apple Services ID in Supabase for web OAuth.
+- Set `APPLE_OAUTH_AUDIENCES` on the Worker to include both the iOS bundle ID and the Services ID, for example `com.karfala90.frontend,com.karfala90.frontend.auth`.

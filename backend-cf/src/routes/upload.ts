@@ -4,7 +4,7 @@ import { getAuthUser } from '../lib/auth';
 
 export const uploadRoutes = new Hono<{ Bindings: Env }>();
 
-// Step 1: Frontend calls this to get a direct upload URL from Cloudflare Images
+// Step 1: The native client calls this to get a direct upload URL from Cloudflare Images.
 uploadRoutes.post('/image-direct', async (c) => {
   const user = await getAuthUser(c);
   if (!user) return c.json({ error: 'Unauthorized' }, 401);
@@ -19,14 +19,14 @@ uploadRoutes.post('/image-direct', async (c) => {
   );
   const data: any = await res.json();
   if (!data.success) {
-    return c.json({ error: 'Failed to get upload URL', details: data.errors }, 500);
+    return c.json({ error: 'Failed to get upload URL' }, 500);
   }
 
-  // Return the upload URL and image ID to frontend
+  // Return the upload URL and image ID to the client.
   return c.json({
     upload_url: data.result.uploadURL,
     image_id: data.result.id,
-    // Frontend will upload directly to upload_url
+    // The client uploads directly to upload_url.
     // Then use image_id when creating the post
     delivery_url: `https://imagedelivery.net/${c.env.CF_ACCOUNT_HASH}/${data.result.id}/public`,
   });

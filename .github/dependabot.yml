@@ -18,30 +18,12 @@ updates:
       timezone: America/New_York
     open-pull-requests-limit: 5
 
-  - package-ecosystem: npm
-    directory: /frontend
-    schedule:
-      interval: weekly
-      day: monday
-      time: "09:30"
-      timezone: America/New_York
-    open-pull-requests-limit: 5
-
-  - package-ecosystem: npm
-    directory: /governance-mobile
-    schedule:
-      interval: weekly
-      day: monday
-      time: "09:45"
-      timezone: America/New_York
-    open-pull-requests-limit: 5
-
   - package-ecosystem: swift
     directory: /ios_native/MIRA
     schedule:
       interval: weekly
       day: monday
-      time: "10:00"
+      time: "09:30"
       timezone: America/New_York
     open-pull-requests-limit: 5
 
@@ -50,15 +32,6 @@ updates:
     schedule:
       interval: weekly
       day: monday
-      time: "10:15"
-      timezone: America/New_York
-    open-pull-requests-limit: 5
-
-  - package-ecosystem: gradle
-    directory: /android_native
-    schedule:
-      interval: weekly
-      day: monday
-      time: "10:30"
+      time: "09:45"
       timezone: America/New_York
     open-pull-requests-limit: 5

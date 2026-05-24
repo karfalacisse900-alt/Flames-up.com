@@ -3,33 +3,36 @@ rules:
     message: Store auth/session tokens in Keychain, not UserDefaults.
     severity: ERROR
     languages: [swift]
-    pattern-either:
-      - pattern: "UserDefaults.standard.set($VALUE, forKey: $KEY)"
-      - pattern: "UserDefaults.standard.setValue($VALUE, forKey: $KEY)"
-    metavariable-regex:
-      metavariable: $KEY
-      regex: (?i).*(token|session|auth|password|secret|credential).*
+    patterns:
+      - pattern-either:
+          - pattern: "UserDefaults.standard.set($VALUE, forKey: $KEY)"
+          - pattern: "UserDefaults.standard.setValue($VALUE, forKey: $KEY)"
+      - metavariable-regex:
+          metavariable: $KEY
+          regex: '(?i)^"[^"]*(token|session|auth|password|secret|credential)[^"]*"$'
 
   - id: captro-swift-insecure-url-literal
     message: Captro iOS code should not call insecure HTTP endpoints outside DEBUG localhost flows.
     severity: ERROR
     languages: [swift]
-    pattern: "URL(string: $URL)"
-    metavariable-regex:
-      metavariable: $URL
-      regex: '"http://(?!localhost|127\.0\.0\.1|\[::1\]).*'
+    patterns:
+      - pattern: "URL(string: $URL)"
+      - metavariable-regex:
+          metavariable: $URL
+          regex: '^"http://(?!localhost|127\.0\.0\.1|\[::1\])'
 
   - id: captro-worker-sensitive-console-log
     message: Do not log sensitive auth, token, secret, password, cookie, or private message data.
     severity: ERROR
     languages: [typescript, javascript]
-    pattern-either:
-      - pattern: "console.log($X)"
-      - pattern: "console.warn($X)"
-      - pattern: "console.error($X)"
-    metavariable-regex:
-      metavariable: $X
-      regex: (?i).*(auth_?token|access_?token|refresh_?token|authorization|password|secret|cookie|private_?message|message_content).*
+    patterns:
+      - pattern-either:
+          - pattern: "console.log($X)"
+          - pattern: "console.warn($X)"
+          - pattern: "console.error($X)"
+      - metavariable-regex:
+          metavariable: $X
+          regex: (?i).*(authToken|accessToken|refreshToken|auth_token|access_token|refresh_token|authorization|password|secret|cookie|privateMessage|private_message|messageContent|message_content).*
 
   - id: captro-worker-raw-sql-template
     message: Do not interpolate user-controlled values into SQL. Use D1 prepared statements and bind parameters.

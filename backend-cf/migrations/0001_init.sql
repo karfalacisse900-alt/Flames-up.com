@@ -81,6 +81,7 @@ CREATE TABLE IF NOT EXISTS statuses (
   expires_at TEXT,
   FOREIGN KEY (user_id) REFERENCES users(id)
 );
+CREATE INDEX IF NOT EXISTS idx_statuses_created_at ON statuses(created_at);
 
 CREATE TABLE IF NOT EXISTS messages (
   id TEXT PRIMARY KEY,
