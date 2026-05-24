@@ -47,7 +47,7 @@ jobs:
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
 
       - name: Run Gitleaks
-        run: gitleaks detect --source . --config .gitleaks.toml --redact --verbose
+        run: gitleaks dir --source . --config .gitleaks.toml --redact --verbose
 
   semgrep:
     name: Static security rules (Semgrep)
