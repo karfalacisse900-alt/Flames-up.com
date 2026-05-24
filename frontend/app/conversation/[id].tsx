@@ -258,7 +258,7 @@ export default function ConversationScreen() {
               <Ionicons name={playingVoice === mediaSource ? 'pause' : 'play'} size={20} color={isOwn ? '#FFF' : '#2D6A4F'} />
               <View style={st.voiceWave}>
                 {[...Array(12)].map((_, i) => (
-                  <View key={i} style={[st.waveBar, { height: 6 + Math.random() * 14, backgroundColor: isOwn ? 'rgba(255,255,255,0.5)' : 'rgba(45,106,79,0.4)' }]} />
+                  <View key={i} style={[st.waveBar, { height: 6 + ((i * 7) % 14), backgroundColor: isOwn ? 'rgba(255,255,255,0.5)' : 'rgba(45,106,79,0.4)' }]} />
                 ))}
               </View>
               <Ionicons name="mic" size={14} color={isOwn ? 'rgba(255,255,255,0.5)' : '#9CA3AF'} />

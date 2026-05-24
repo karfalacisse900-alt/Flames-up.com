@@ -149,7 +149,9 @@ api.put('/users/me', authMiddleware, async (c) => {
   for (const f of fields) { if (body[f] !== undefined) { updates.push(`${f} = ?`); values.push(body[f]); } }
   if (updates.length === 0) return c.json({ detail: 'Nothing to update' }, 400);
   values.push(userId);
-  await c.env.DB.prepare(`UPDATE users SET ${updates.join(', ')}, updated_at = datetime('now') WHERE id = ?`).bind(...values).run();
+  // Column assignments are built only from the allowlisted fields above; user values stay parameter-bound.
+  const updateSql = 'UPDATE users SET ' + updates.join(', ') + ", updated_at = datetime('now') WHERE id = ?";
+  await c.env.DB.prepare(updateSql).bind(...values).run();
   const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
   const { password_hash, ...safe } = user;
   return c.json(safe);
@@ -640,7 +642,9 @@ api.put('/admin/users/:userId', authMiddleware, adminGuard, async (c) => {
   if (body.is_verified !== undefined) { fields.push('is_verified = ?'); vals.push(body.is_verified ? 1 : 0); }
   if (fields.length === 0) return c.json({ detail: 'No fields to update' }, 400);
   vals.push(userId);
-  await c.env.DB.prepare(`UPDATE users SET ${fields.join(', ')}, updated_at = datetime('now') WHERE id = ?`).bind(...vals).run();
+  // Column assignments are admin-only and chosen from the allowlist above; values stay parameter-bound.
+  const roleUpdateSql = 'UPDATE users SET ' + fields.join(', ') + ", updated_at = datetime('now') WHERE id = ?";
+  await c.env.DB.prepare(roleUpdateSql).bind(...vals).run();
   return c.json({ success: true, message: 'User roles updated' });
 });
 
@@ -1014,7 +1018,9 @@ api.put('/creators/me', authMiddleware, async (c) => {
     if (body.borough !== undefined) { fields.push('borough = ?'); vals.push(body.borough); }
     if (fields.length === 0) return c.json({ detail: 'No fields to update' }, 400);
     fields.push('updated_at = ?'); vals.push(now()); vals.push(userId);
-    await c.env.DB.prepare(`UPDATE creators SET ${fields.join(', ')} WHERE user_id = ?`).bind(...vals).run();
+    // Column assignments are built only from the creator-profile allowlist above.
+    const creatorUpdateSql = 'UPDATE creators SET ' + fields.join(', ') + ' WHERE user_id = ?';
+    await c.env.DB.prepare(creatorUpdateSql).bind(...vals).run();
     return c.json({ message: 'Creator profile updated' });
   } catch (e: any) { return c.json({ detail: 'Update failed', error: e?.message }, 500); }
 });
@@ -1037,11 +1043,12 @@ api.get('/creators', async (c) => {
   binds.push(limit, offset);
 
   try {
-    const { results } = await c.env.DB.prepare(`
+    // Filters are assembled from fixed SQL fragments above; filter values are bound separately.
+    const creatorListSql = `
       SELECT c.*, u.full_name, u.username, u.profile_image, u.followers_count, u.posts_count
       FROM creators c JOIN users u ON c.user_id = u.id
-      WHERE ${where} ORDER BY u.followers_count DESC, c.created_at DESC LIMIT ? OFFSET ?
-    `).bind(...binds).all();
+      WHERE ` + where + ' ORDER BY u.followers_count DESC, c.created_at DESC LIMIT ? OFFSET ?';
+    const { results } = await c.env.DB.prepare(creatorListSql).bind(...binds).all();
     const creators = (results || []).map((cr: any) => ({
       ...cr, portfolio_links: JSON.parse(cr.portfolio_links || '[]'),
       skills: JSON.parse(cr.skills || '[]'),
@@ -1429,7 +1436,9 @@ api.put('/admin/users/:userId', authMiddleware, async (c) => {
     if (is_verified !== undefined) { fields.push('is_verified = ?'); vals.push(is_verified ? 1 : 0); }
     if (fields.length === 0) return c.json({ detail: 'No fields to update' }, 400);
     vals.push(targetUserId);
-    await c.env.DB.prepare(`UPDATE users SET ${fields.join(', ')} WHERE id = ?`).bind(...vals).run();
+    // Column assignments are admin-only and chosen from the allowlist above; values stay parameter-bound.
+    const adminUserUpdateSql = 'UPDATE users SET ' + fields.join(', ') + ' WHERE id = ?';
+    await c.env.DB.prepare(adminUserUpdateSql).bind(...vals).run();
 
     await c.env.DB.prepare(
       'INSERT INTO admin_actions (id, admin_id, action_type, target_type, target_id, details, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'

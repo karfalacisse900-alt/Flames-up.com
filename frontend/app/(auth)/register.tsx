@@ -38,14 +38,13 @@ export default function RegisterScreen() {
 
   const generateSuggestions = (base: string): string[] => {
     const year = new Date().getFullYear().toString().slice(-2);
-    const rand = Math.floor(Math.random() * 99);
-    return [
+    return Array.from(new Set([
       `${base}${year}`,
-      `${base}_${rand}`,
-      `${base}${Math.floor(Math.random() * 999)}`,
+      `${base}_01`,
+      `${base}001`,
       `the_${base}`,
       `${base}_official`,
-    ].slice(0, 3);
+    ])).slice(0, 3);
   };
 
   const handleUsernameChange = (text: string) => {

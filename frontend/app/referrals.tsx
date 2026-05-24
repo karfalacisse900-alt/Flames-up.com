@@ -11,10 +11,13 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, shadows } from '../src/utils/theme';
+import { useAuthStore } from '../src/store/authStore';
 
 export default function ReferralsScreen() {
   const router = useRouter();
-  const referralCode = 'FLAMES-' + Math.random().toString(36).substring(2, 8).toUpperCase();
+  const { user } = useAuthStore();
+  const referralSeed = (user?.username || user?.id || 'captro').replace(/[^a-z0-9]/gi, '').toUpperCase().slice(0, 8) || 'CAPTRO';
+  const referralCode = `FLAMES-${referralSeed}`;
 
   const shareReferral = async () => {
     try {
