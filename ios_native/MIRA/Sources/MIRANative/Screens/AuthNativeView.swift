@@ -232,6 +232,10 @@ private struct UsernameClaimBody: Encodable {
   let username: String
 }
 
+private struct UsernameProfileFallbackBody: Encodable {
+  let username: String
+}
+
 private enum UsernameAvailabilityState: Equatable {
   case idle
   case invalid(String)
@@ -476,7 +480,22 @@ public struct ChooseUsernameNativeView: View {
       UIImpactFeedbackGenerator(style: .medium).impactOccurred()
       session.replaceUser(updated)
     } catch {
+      if await saveThroughProfileFallback(clean) {
+        return
+      }
       availability = .failed("Could not save username. Try another one.")
+    }
+  }
+
+  @MainActor
+  private func saveThroughProfileFallback(_ clean: String) async -> Bool {
+    do {
+      let updated: MIRAUser = try await api.put("/users/me", body: UsernameProfileFallbackBody(username: clean))
+      UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+      session.replaceUser(updated)
+      return true
+    } catch {
+      return false
     }
   }
 
