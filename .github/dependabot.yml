@@ -1,0 +1,64 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: America/New_York
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: npm
+    directory: /backend-cf
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:15"
+      timezone: America/New_York
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:30"
+      timezone: America/New_York
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: npm
+    directory: /governance-mobile
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:45"
+      timezone: America/New_York
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: swift
+    directory: /ios_native/MIRA
+    schedule:
+      interval: weekly
+      day: monday
+      time: "10:00"
+      timezone: America/New_York
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: cargo
+    directory: /ios_native/MIRA/rust/mira_core
+    schedule:
+      interval: weekly
+      day: monday
+      time: "10:15"
+      timezone: America/New_York
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: gradle
+    directory: /android_native
+    schedule:
+      interval: weekly
+      day: monday
+      time: "10:30"
+      timezone: America/New_York
+    open-pull-requests-limit: 5
