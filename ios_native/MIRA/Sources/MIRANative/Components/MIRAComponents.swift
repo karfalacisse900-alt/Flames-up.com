@@ -1049,6 +1049,126 @@ public struct MIRAStatButton: View {
   }
 }
 
+public struct MIRASaveToCollectionSheet: View {
+  private let options: [MIRASaveCollectionOption] = [
+    .init(title: "Inspiration", systemImage: "lightbulb"),
+    .init(title: "Outfits", systemImage: "tshirt"),
+    .init(title: "Places", systemImage: "mappin.and.ellipse"),
+    .init(title: "Food", systemImage: "fork.knife"),
+    .init(title: "Photos", systemImage: "photo.on.rectangle"),
+    .init(title: "Videos", systemImage: "play.rectangle")
+  ]
+
+  let isSaved: Bool
+  let onSelect: (String) -> Void
+  let onRemove: () -> Void
+  let onClose: () -> Void
+
+  public init(
+    isSaved: Bool,
+    onSelect: @escaping (String) -> Void,
+    onRemove: @escaping () -> Void,
+    onClose: @escaping () -> Void
+  ) {
+    self.isSaved = isSaved
+    self.onSelect = onSelect
+    self.onRemove = onRemove
+    self.onClose = onClose
+  }
+
+  public var body: some View {
+    VStack(spacing: 0) {
+      Capsule()
+        .fill(MIRATheme.Color.textMuted.opacity(0.24))
+        .frame(width: 42, height: 5)
+        .padding(.top, 10)
+        .padding(.bottom, MIRATheme.Space.sm)
+
+      HStack {
+        VStack(alignment: .leading, spacing: 3) {
+          Text("Save to")
+            .font(.system(size: 20, weight: .semibold))
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+          Text("Choose the collection for this post.")
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(MIRATheme.Color.textMuted)
+        }
+        Spacer()
+        Button(action: onClose) {
+          Image(systemName: "xmark")
+            .font(.system(size: 14, weight: .bold))
+            .foregroundStyle(MIRATheme.Color.textSecondary)
+            .frame(width: 34, height: 34)
+            .background(MIRATheme.Color.surfaceSoft)
+            .clipShape(Circle())
+        }
+        .buttonStyle(.miraPress)
+      }
+      .padding(.horizontal, MIRATheme.Space.lg)
+      .padding(.bottom, MIRATheme.Space.md)
+
+      LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
+        ForEach(options) { option in
+          Button {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            onSelect(option.title)
+          } label: {
+            HStack(spacing: 10) {
+              Image(systemName: option.systemImage)
+                .font(.system(size: 17, weight: .semibold))
+                .frame(width: 30, height: 30)
+                .background(MIRATheme.Color.surface)
+                .clipShape(Circle())
+              Text(option.title)
+                .font(.system(size: 14, weight: .semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.82)
+              Spacer(minLength: 0)
+            }
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+            .padding(.horizontal, 12)
+            .frame(height: 56)
+            .background(MIRATheme.Color.surfaceSoft)
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay {
+              RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(MIRATheme.Color.hairline, lineWidth: 1)
+            }
+          }
+          .buttonStyle(.miraPress)
+        }
+      }
+      .padding(.horizontal, MIRATheme.Space.lg)
+
+      if isSaved {
+        Button(role: .destructive) {
+          UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+          onRemove()
+        } label: {
+          Label("Remove from saved", systemImage: "bookmark.slash")
+            .font(.system(size: 15, weight: .semibold))
+            .frame(maxWidth: .infinity)
+            .frame(height: 48)
+            .background(MIRATheme.Color.surfaceSoft)
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
+        .buttonStyle(.miraPress)
+        .padding(.horizontal, MIRATheme.Space.lg)
+        .padding(.top, MIRATheme.Space.md)
+      }
+
+      Spacer(minLength: 0)
+    }
+    .background(MIRATheme.Color.surface)
+  }
+}
+
+private struct MIRASaveCollectionOption: Identifiable {
+  let title: String
+  let systemImage: String
+  var id: String { title }
+}
+
 extension String {
   var isVideoURL: Bool {
     let lower = lowercased()

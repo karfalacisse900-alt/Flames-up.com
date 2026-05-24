@@ -124,6 +124,7 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
   public let savesCount: Int?
   public let sharesCount: Int?
   public let viewsCount: Int?
+  public let pinnedAt: String?
   public let isLiked: Bool?
   public let isSaved: Bool?
   public let isFollowing: Bool?
@@ -218,6 +219,10 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
     return following?.value == true || followed?.value == true
   }
 
+  public var isPinned: Bool {
+    !(pinnedAt?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+  }
+
   public func updating(
     liked: Bool? = nil,
     likesCount: Int? = nil,
@@ -256,12 +261,54 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
       savesCount: savesCount ?? self.savesCount,
       sharesCount: sharesCount,
       viewsCount: viewsCount,
+      pinnedAt: pinnedAt,
       isLiked: liked ?? isLiked,
       isSaved: saved ?? isSaved,
       isFollowing: following ?? isFollowing,
       saved: self.saved,
       following: self.following,
       followed: self.followed
+    )
+  }
+
+  public func updatingPinned(at value: String?) -> MIRAPost {
+    MIRAPost(
+      id: id,
+      userId: userId,
+      userUsername: userUsername,
+      userFullName: userFullName,
+      userProfileImage: userProfileImage,
+      title: title,
+      content: content,
+      caption: caption,
+      image: image,
+      images: images,
+      feedMediaUrls: feedMediaUrls,
+      thumbnailUrls: thumbnailUrls,
+      posterUrls: posterUrls,
+      mediaTypes: mediaTypes,
+      mediaDimensions: mediaDimensions,
+      location: location,
+      postType: postType,
+      visibility: visibility,
+      placeId: placeId,
+      placeName: placeName,
+      placeLat: placeLat,
+      placeLng: placeLng,
+      taggedUsers: taggedUsers,
+      createdAt: createdAt,
+      likesCount: likesCount,
+      commentsCount: commentsCount,
+      savesCount: savesCount,
+      sharesCount: sharesCount,
+      viewsCount: viewsCount,
+      pinnedAt: value,
+      isLiked: isLiked,
+      isSaved: isSaved,
+      isFollowing: isFollowing,
+      saved: saved,
+      following: following,
+      followed: followed
     )
   }
 }
@@ -442,15 +489,144 @@ public struct MIRAStoryGroup: Codable, Identifiable, Hashable {
 
 public struct MIRAComment: Decodable, Identifiable, Hashable {
   public let id: String
+  public let userId: String?
+  public let postId: String?
+  public let postUserId: String?
   public let content: String?
   public let body: String?
   public let parentId: String?
   public let createdAt: String?
   public let likesCount: Int?
   public let likedByMe: Bool?
+  public let pinnedAt: String?
+  public let isPinned: Bool?
   public let user: MIRAUser?
 
   public var text: String { body ?? content ?? "" }
+
+  public var viewerLiked: Bool { likedByMe == true }
+
+  public var pinned: Bool {
+    isPinned == true || !(pinnedAt?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+  }
+
+  public var isReply: Bool {
+    !(parentId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+  }
+
+  public init(
+    id: String,
+    userId: String?,
+    postId: String?,
+    postUserId: String?,
+    content: String?,
+    body: String?,
+    parentId: String?,
+    createdAt: String?,
+    likesCount: Int?,
+    likedByMe: Bool?,
+    pinnedAt: String?,
+    isPinned: Bool?,
+    user: MIRAUser?
+  ) {
+    self.id = id
+    self.userId = userId
+    self.postId = postId
+    self.postUserId = postUserId
+    self.content = content
+    self.body = body
+    self.parentId = parentId
+    self.createdAt = createdAt
+    self.likesCount = likesCount
+    self.likedByMe = likedByMe
+    self.pinnedAt = pinnedAt
+    self.isPinned = isPinned
+    self.user = user
+  }
+
+  enum CodingKeys: String, CodingKey {
+    case id
+    case userId
+    case postId
+    case postUserId
+    case content
+    case body
+    case parentId
+    case createdAt
+    case likesCount
+    case likedByMe
+    case pinnedAt
+    case isPinned
+    case user
+    case userUsername
+    case userFullName
+    case userProfileImage
+  }
+
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    id = try container.decode(String.self, forKey: .id)
+    userId = try container.decodeIfPresent(String.self, forKey: .userId)
+    postId = try container.decodeIfPresent(String.self, forKey: .postId)
+    postUserId = try container.decodeIfPresent(String.self, forKey: .postUserId)
+    content = try container.decodeIfPresent(String.self, forKey: .content)
+    body = try container.decodeIfPresent(String.self, forKey: .body)
+    parentId = try container.decodeIfPresent(String.self, forKey: .parentId)
+    createdAt = try container.decodeIfPresent(String.self, forKey: .createdAt)
+    likesCount = try container.decodeIfPresent(Int.self, forKey: .likesCount)
+    likedByMe = try container.decodeIfPresent(Bool.self, forKey: .likedByMe)
+    pinnedAt = try container.decodeIfPresent(String.self, forKey: .pinnedAt)
+    isPinned = try container.decodeIfPresent(Bool.self, forKey: .isPinned)
+
+    if let nestedUser = try container.decodeIfPresent(MIRAUser.self, forKey: .user) {
+      user = nestedUser
+    } else {
+      let username = try container.decodeIfPresent(String.self, forKey: .userUsername)
+      let fullName = try container.decodeIfPresent(String.self, forKey: .userFullName)
+      let profileImage = try container.decodeIfPresent(String.self, forKey: .userProfileImage)
+      if userId != nil || username != nil || fullName != nil || profileImage != nil {
+        user = MIRAUser(
+          id: userId ?? id,
+          username: username,
+          usernameRequired: nil,
+          onboardingRequired: nil,
+          fullName: fullName,
+          profileImage: profileImage,
+          bio: nil,
+          email: nil,
+          phone: nil,
+          phoneVerified: nil,
+          followersCount: nil,
+          followingCount: nil,
+          postsCount: nil,
+          isFollowing: nil,
+          isPrivate: nil,
+          isPremium: nil,
+          language: nil
+        )
+      } else {
+        user = nil
+      }
+    }
+  }
+
+  public func updating(liked: Bool? = nil, likesCount: Int? = nil, pinnedAt: String? = nil, clearPin: Bool = false) -> MIRAComment {
+    MIRAComment(
+      id: id,
+      userId: userId,
+      postId: postId,
+      postUserId: postUserId,
+      content: content,
+      body: body,
+      parentId: parentId,
+      createdAt: createdAt,
+      likesCount: likesCount ?? self.likesCount,
+      likedByMe: liked ?? likedByMe,
+      pinnedAt: clearPin ? nil : (pinnedAt ?? self.pinnedAt),
+      isPinned: clearPin ? false : ((pinnedAt != nil) ? true : isPinned),
+      user: user
+    )
+  }
 }
 
 public struct MIRAWallet: Codable, Hashable {
@@ -964,6 +1140,14 @@ public struct LikeBody: Encodable {
   public let liked: Bool
 }
 
+public struct PostPinBody: Encodable {
+  public let pinned: Bool
+}
+
+public struct CommentPinBody: Encodable {
+  public let pinned: Bool
+}
+
 public struct SaveCollectionBody: Encodable {
   public let collection: String
 }
@@ -990,6 +1174,22 @@ public struct PostSaveResponse: Decodable {
   public let commentsCount: Int?
 }
 
+public struct CommentLikeResponse: Decodable {
+  public let liked: Bool?
+  public let likesCount: Int?
+}
+
+public struct CommentPinResponse: Decodable {
+  public let pinned: Bool?
+  public let pinnedAt: String?
+}
+
+public struct CommentMutationResponse: Decodable {
+  public let deleted: Bool?
+  public let hidden: Bool?
+  public let commentsCount: Int?
+}
+
 public struct NoteCommentBody: Encodable {
   public let body: String
   public let parentId: String?
@@ -997,6 +1197,12 @@ public struct NoteCommentBody: Encodable {
 
 public struct PostCommentBody: Encodable {
   public let content: String
+  public let parentId: String?
+
+  public init(content: String, parentId: String? = nil) {
+    self.content = content
+    self.parentId = parentId
+  }
 }
 
 public struct FlexibleStringArray: Codable, Hashable {

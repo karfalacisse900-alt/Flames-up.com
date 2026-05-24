@@ -703,9 +703,11 @@ async function ensurePrivacySchema(db: D1Database) {
     'ALTER TABLE users ADD COLUMN is_private INTEGER DEFAULT 0',
     "ALTER TABLE users ADD COLUMN language TEXT DEFAULT 'en'",
     "ALTER TABLE posts ADD COLUMN visibility TEXT DEFAULT 'public'",
+    'ALTER TABLE posts ADD COLUMN pinned_at TEXT',
     "ALTER TABLE statuses ADD COLUMN visibility TEXT DEFAULT 'public'",
     'CREATE INDEX IF NOT EXISTS idx_users_private ON users(is_private)',
     'CREATE INDEX IF NOT EXISTS idx_posts_visibility ON posts(visibility)',
+    'CREATE INDEX IF NOT EXISTS idx_posts_user_pinned ON posts(user_id, pinned_at DESC, created_at DESC)',
     'CREATE INDEX IF NOT EXISTS idx_statuses_visibility ON statuses(visibility)',
     'CREATE INDEX IF NOT EXISTS idx_statuses_created_at ON statuses(created_at)',
   ];
@@ -2984,7 +2986,7 @@ async function getPostEngagementState(db: D1Database, postId: string, userId: st
   const row: any = await db.prepare(
     `SELECT
        (SELECT COUNT(*) FROM likes WHERE post_id = ?) AS likes_count,
-       (SELECT COUNT(*) FROM comments WHERE post_id = ?) AS comments_count,
+       (SELECT COUNT(*) FROM comments WHERE post_id = ? AND COALESCE(status, 'active') NOT IN ('removed', 'hidden')) AS comments_count,
        (SELECT COUNT(*) FROM saved_posts WHERE post_id = ?) AS saves_count,
        EXISTS (SELECT 1 FROM likes WHERE user_id = ? AND post_id = ?) AS is_liked,
        EXISTS (SELECT 1 FROM saved_posts WHERE user_id = ? AND post_id = ?) AS saved`
@@ -4097,6 +4099,9 @@ async function ensureCommentSchema(db: D1Database) {
   const statements = [
     'ALTER TABLE comments ADD COLUMN parent_id TEXT',
     'ALTER TABLE comments ADD COLUMN likes_count INTEGER DEFAULT 0',
+    'ALTER TABLE comments ADD COLUMN pinned_at TEXT',
+    'ALTER TABLE comments ADD COLUMN hidden_at TEXT',
+    'ALTER TABLE comments ADD COLUMN hidden_by_user_id TEXT',
     `CREATE TABLE IF NOT EXISTS comment_likes (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
@@ -4105,6 +4110,7 @@ async function ensureCommentSchema(db: D1Database) {
       UNIQUE(user_id, comment_id)
     )`,
     'CREATE INDEX IF NOT EXISTS idx_comments_parent ON comments(parent_id, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_comments_post_pinned ON comments(post_id, pinned_at DESC, created_at)',
     'CREATE INDEX IF NOT EXISTS idx_comment_likes_comment ON comment_likes(comment_id)',
     'CREATE INDEX IF NOT EXISTS idx_comment_likes_user ON comment_likes(user_id)',
   ];
@@ -6542,7 +6548,7 @@ api.get('/posts/feed', authMiddleware, async (c) => {
        EXISTS (SELECT 1 FROM likes lk WHERE lk.user_id = ? AND lk.post_id = p.id) AS is_liked,
        EXISTS (SELECT 1 FROM saved_posts sp WHERE sp.user_id = ? AND sp.post_id = p.id) AS saved,
        (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
-       (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id) AS live_comments_count,
+       (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden')) AS live_comments_count,
        (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id) AS live_saves_count
      FROM posts p JOIN users u ON p.user_id = u.id
      WHERE ${visiblePostWhere('u', 'p')}
@@ -6562,7 +6568,7 @@ api.get('/posts/world-board', async (c) => {
       const posts = await c.env.DB.prepare(
         `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
            (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
-           (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id) AS live_comments_count,
+           (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden')) AS live_comments_count,
            (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id) AS live_saves_count
          FROM posts p JOIN users u ON p.user_id = u.id
          WHERE ${publicPostWhere('u', 'p')}
@@ -6585,7 +6591,7 @@ api.get('/posts/nearby-feed', authMiddleware, async (c) => {
   const posts = await c.env.DB.prepare(
     `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
        (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
-       (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id) AS live_comments_count,
+       (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden')) AS live_comments_count,
        (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id) AS live_saves_count
      FROM posts p JOIN users u ON p.user_id = u.id
      WHERE ${visiblePostWhere('u', 'p')}
@@ -6603,7 +6609,7 @@ api.get('/posts/:postId', authMiddleware, async (c) => {
        EXISTS (SELECT 1 FROM likes lk WHERE lk.user_id = ? AND lk.post_id = p.id) AS is_liked,
        EXISTS (SELECT 1 FROM saved_posts sp WHERE sp.user_id = ? AND sp.post_id = p.id) AS saved,
        (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
-       (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id) AS live_comments_count,
+       (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden')) AS live_comments_count,
        (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id) AS live_saves_count
      FROM posts p JOIN users u ON p.user_id = u.id
      WHERE p.id = ? AND ${visiblePostWhere('u', 'p')}`).bind(userId, userId, userId, postId, ...visiblePostBindValues(userId)).first();
@@ -6614,6 +6620,7 @@ api.get('/posts/:postId', authMiddleware, async (c) => {
 
 api.post('/posts/:postId/like', authMiddleware, async (c) => {
   const userId = getUserId(c); const postId = c.req.param('postId');
+  await ensureGovernanceSchema(c.env.DB);
   const limited = await enforceRateLimit(c, 'post_like', userId, 300, 60);
   if (limited) return limited;
   const body: any = await c.req.json().catch(() => ({}));
@@ -6711,7 +6718,43 @@ api.put('/posts/:postId/visibility', authMiddleware, async (c) => {
        EXISTS (SELECT 1 FROM likes lk WHERE lk.user_id = ? AND lk.post_id = p.id) AS is_liked,
        EXISTS (SELECT 1 FROM saved_posts sp WHERE sp.user_id = ? AND sp.post_id = p.id) AS saved,
        (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
-       (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id) AS live_comments_count,
+       (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden')) AS live_comments_count,
+       (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id) AS live_saves_count
+     FROM posts p JOIN users u ON p.user_id = u.id
+     WHERE p.id = ?`
+  ).bind(userId, userId, userId, postId).first();
+  if (!updated) return c.json({ detail: 'Post not found' }, 404);
+
+  return c.json(postPayload(updated, [], c.env));
+});
+
+api.put('/posts/:postId/pin', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const postId = c.req.param('postId');
+  await ensurePrivacySchema(c.env.DB);
+  const body: any = await c.req.json().catch(() => ({}));
+  const requested = optionalBoolean(body.pinned ?? body.pin ?? body.value);
+  const shouldPin = requested === null ? true : requested;
+
+  const post: any = await c.env.DB.prepare(
+    "SELECT id, user_id FROM posts WHERE id = ? AND COALESCE(status, 'active') != 'removed'"
+  ).bind(postId).first();
+  if (!post) return c.json({ detail: 'Post not found' }, 404);
+  if (post.user_id !== userId) return c.json({ detail: 'Not your post' }, 403);
+
+  const pinnedAt = shouldPin ? now() : null;
+  await c.env.DB.prepare('UPDATE posts SET pinned_at = ? WHERE id = ? AND user_id = ?')
+    .bind(pinnedAt, postId, userId)
+    .run();
+  await logSecurityEvent(c, shouldPin ? 'post_pinned' : 'post_unpinned', userId, { post_id: postId });
+
+  const updated: any = await c.env.DB.prepare(
+    `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
+       EXISTS (SELECT 1 FROM follows fl WHERE fl.follower_id = ? AND fl.following_id = p.user_id) AS is_following,
+       EXISTS (SELECT 1 FROM likes lk WHERE lk.user_id = ? AND lk.post_id = p.id) AS is_liked,
+       EXISTS (SELECT 1 FROM saved_posts sp WHERE sp.user_id = ? AND sp.post_id = p.id) AS saved,
+       (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
+       (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden')) AS live_comments_count,
        (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id) AS live_saves_count
      FROM posts p JOIN users u ON p.user_id = u.id
      WHERE p.id = ?`
@@ -6732,7 +6775,7 @@ api.get('/users/:userId/posts', authMiddleware, async (c) => {
        EXISTS (SELECT 1 FROM likes lk WHERE lk.user_id = ? AND lk.post_id = p.id) AS is_liked,
        EXISTS (SELECT 1 FROM saved_posts sp WHERE sp.user_id = ? AND sp.post_id = p.id) AS saved,
        (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
-       (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id) AS live_comments_count,
+       (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden')) AS live_comments_count,
        (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id) AS live_saves_count
      FROM posts p JOIN users u ON p.user_id = u.id
      WHERE p.user_id = ? AND COALESCE(p.status, 'active') != 'removed' AND (
@@ -6744,7 +6787,7 @@ api.get('/users/:userId/posts', authMiddleware, async (c) => {
        ))
        OR (COALESCE(p.visibility, 'public') = 'friends' AND EXISTS (SELECT 1 FROM friendships f3 WHERE f3.user_id = ? AND f3.friend_id = p.user_id))
      )
-     ORDER BY p.created_at DESC`
+     ORDER BY p.pinned_at IS NULL, p.pinned_at DESC, p.created_at DESC`
   ).bind(viewerId, viewerId, targetId, viewerId, viewerId, viewerId, viewerId).all();
   return c.json((posts.results as any[]).map((p) => postPayload(p, [], c.env)));
 });
@@ -6776,7 +6819,7 @@ api.post('/posts/:postId/comments', authMiddleware, async (c) => {
 
     let parent: any = null;
     if (parentId) {
-      parent = await c.env.DB.prepare("SELECT id, user_id FROM comments WHERE id = ? AND post_id = ? AND COALESCE(status, 'active') != 'removed'")
+      parent = await c.env.DB.prepare("SELECT id, user_id FROM comments WHERE id = ? AND post_id = ? AND COALESCE(status, 'active') NOT IN ('removed', 'hidden')")
         .bind(parentId, postId)
         .first();
       if (!parent) return c.json({ detail: 'Comment to reply to was not found.' }, 404);
@@ -6836,13 +6879,16 @@ api.post('/posts/:postId/comments', authMiddleware, async (c) => {
       id,
       user_id: userId,
       post_id: postId,
+      post_user_id: visiblePost.user_id,
       parent_id: parentId,
       content,
       client_request_id: clientRequestId,
       likes_count: 0,
       post_comments_count: engagement.comments_count,
       liked_by_me: false,
-      user_username: user?.username,
+      pinned_at: null,
+      is_pinned: false,
+      user_username: publicUsernameFor(user),
       user_full_name: user?.full_name,
       user_profile_image: user?.profile_image,
       created_at: createdAt,
@@ -6860,20 +6906,23 @@ api.get('/posts/:postId/comments', authMiddleware, async (c) => {
     await ensureCommentSchema(c.env.DB);
     const userId = getUserId(c);
     const r = await c.env.DB.prepare(
-      `SELECT c.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
+      `SELECT c.*, p.user_id AS post_user_id, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
+              CASE WHEN c.pinned_at IS NULL THEN 0 ELSE 1 END AS is_pinned,
               CASE WHEN cl.id IS NULL THEN 0 ELSE 1 END AS liked_by_me
        FROM comments c
        JOIN posts p ON c.post_id = p.id
        JOIN users owner ON p.user_id = owner.id
        JOIN users u ON c.user_id = u.id
        LEFT JOIN comment_likes cl ON cl.comment_id = c.id AND cl.user_id = ?
-       WHERE c.post_id = ? AND COALESCE(c.status, 'active') != 'removed' AND ${visiblePostWhere('owner', 'p')}
-       ORDER BY COALESCE(c.parent_id, c.id), c.parent_id IS NOT NULL, c.created_at ASC`
+       WHERE c.post_id = ? AND COALESCE(c.status, 'active') NOT IN ('removed', 'hidden') AND ${visiblePostWhere('owner', 'p')}
+       ORDER BY c.pinned_at IS NULL, c.pinned_at DESC, COALESCE(c.parent_id, c.id), c.parent_id IS NOT NULL, c.created_at ASC`
     ).bind(userId, c.req.param('postId'), ...visiblePostBindValues(userId)).all();
 
     return c.json((r.results as any[]).map((comment) => ({
       ...comment,
+      user_username: publicUsernameFor({ username: comment.user_username }),
       likes_count: Number(comment.likes_count || 0),
+      is_pinned: !!comment.is_pinned,
       liked_by_me: !!comment.liked_by_me,
     })));
   } catch (error: any) {
@@ -6898,7 +6947,7 @@ api.post('/comments/:commentId/like', authMiddleware, async (c) => {
        FROM comments c
        JOIN posts p ON c.post_id = p.id
        JOIN users owner ON p.user_id = owner.id
-       WHERE c.id = ? AND COALESCE(c.status, 'active') != 'removed' AND ${visiblePostWhere('owner', 'p')}`
+       WHERE c.id = ? AND COALESCE(c.status, 'active') NOT IN ('removed', 'hidden') AND ${visiblePostWhere('owner', 'p')}`
     ).bind(commentId, ...visiblePostBindValues(userId)).first();
     if (!comment) return c.json({ detail: 'Comment not found' }, 404);
 
@@ -6935,6 +6984,97 @@ api.post('/comments/:commentId/like', authMiddleware, async (c) => {
   } catch (error: any) {
     console.error('Comment like failed:', getErrorCode(error), error?.message || error);
     return c.json({ detail: 'Could not update comment like.' }, 500);
+  }
+});
+
+api.post('/comments/:commentId/pin', authMiddleware, async (c) => {
+  try {
+    await ensurePrivacySchema(c.env.DB);
+    await ensureGovernanceSchema(c.env.DB);
+    await ensureCommentSchema(c.env.DB);
+    const userId = getUserId(c);
+    const commentId = c.req.param('commentId');
+    const body: any = await c.req.json().catch(() => ({}));
+    const requested = optionalBoolean(body.pinned ?? body.pin ?? body.value);
+    const shouldPin = requested === null ? true : requested;
+    const comment: any = await c.env.DB.prepare(
+      `SELECT c.id, c.post_id, c.pinned_at, p.user_id AS post_user_id
+       FROM comments c
+       JOIN posts p ON c.post_id = p.id
+       WHERE c.id = ? AND COALESCE(c.status, 'active') NOT IN ('removed', 'hidden')`
+    ).bind(commentId).first();
+    if (!comment) return c.json({ detail: 'Comment not found' }, 404);
+    if (comment.post_user_id !== userId) return c.json({ detail: 'Only the creator can pin comments.' }, 403);
+
+    const pinnedAt = shouldPin ? now() : null;
+    if (shouldPin) {
+      await c.env.DB.batch([
+        c.env.DB.prepare('UPDATE comments SET pinned_at = NULL WHERE post_id = ?').bind(comment.post_id),
+        c.env.DB.prepare('UPDATE comments SET pinned_at = ? WHERE id = ?').bind(pinnedAt, commentId),
+      ]);
+    } else {
+      await c.env.DB.prepare('UPDATE comments SET pinned_at = NULL WHERE id = ?').bind(commentId).run();
+    }
+    await logSecurityEvent(c, shouldPin ? 'comment_pinned' : 'comment_unpinned', userId, { comment_id: commentId, post_id: comment.post_id });
+    return c.json({ pinned: shouldPin, pinned_at: pinnedAt });
+  } catch (error: any) {
+    console.error('Comment pin failed:', getErrorCode(error), error?.message || error);
+    return c.json({ detail: 'Could not update pinned comment.' }, 500);
+  }
+});
+
+api.delete('/comments/:commentId', authMiddleware, async (c) => {
+  try {
+    await ensurePrivacySchema(c.env.DB);
+    await ensureGovernanceSchema(c.env.DB);
+    await ensureCommentSchema(c.env.DB);
+    const userId = getUserId(c);
+    const commentId = c.req.param('commentId');
+    const comment: any = await c.env.DB.prepare(
+      `SELECT c.id, c.user_id, c.post_id
+       FROM comments c
+       WHERE c.id = ? AND COALESCE(c.status, 'active') NOT IN ('removed', 'hidden')`
+    ).bind(commentId).first();
+    if (!comment) return c.json({ detail: 'Comment not found' }, 404);
+    if (comment.user_id !== userId) return c.json({ detail: 'Not your comment' }, 403);
+
+    await c.env.DB.prepare("UPDATE comments SET status = 'removed', removed_at = ?, removed_reason = 'Deleted by commenter', pinned_at = NULL WHERE id = ?")
+      .bind(now(), commentId)
+      .run();
+    const engagement = await getPostEngagementState(c.env.DB, comment.post_id, userId);
+    await logSecurityEvent(c, 'comment_deleted', userId, { comment_id: commentId, post_id: comment.post_id });
+    return c.json({ deleted: true, comments_count: engagement.comments_count });
+  } catch (error: any) {
+    console.error('Comment delete failed:', getErrorCode(error), error?.message || error);
+    return c.json({ detail: 'Could not delete comment.' }, 500);
+  }
+});
+
+api.post('/comments/:commentId/hide', authMiddleware, async (c) => {
+  try {
+    await ensurePrivacySchema(c.env.DB);
+    await ensureGovernanceSchema(c.env.DB);
+    await ensureCommentSchema(c.env.DB);
+    const userId = getUserId(c);
+    const commentId = c.req.param('commentId');
+    const comment: any = await c.env.DB.prepare(
+      `SELECT c.id, c.post_id, p.user_id AS post_user_id
+       FROM comments c
+       JOIN posts p ON c.post_id = p.id
+       WHERE c.id = ? AND COALESCE(c.status, 'active') NOT IN ('removed', 'hidden')`
+    ).bind(commentId).first();
+    if (!comment) return c.json({ detail: 'Comment not found' }, 404);
+    if (comment.post_user_id !== userId) return c.json({ detail: 'Only the creator can hide comments.' }, 403);
+
+    await c.env.DB.prepare("UPDATE comments SET status = 'hidden', hidden_at = ?, hidden_by_user_id = ?, removed_reason = 'Hidden by creator', pinned_at = NULL WHERE id = ?")
+      .bind(now(), userId, commentId)
+      .run();
+    const engagement = await getPostEngagementState(c.env.DB, comment.post_id, userId);
+    await logSecurityEvent(c, 'comment_hidden', userId, { comment_id: commentId, post_id: comment.post_id });
+    return c.json({ hidden: true, comments_count: engagement.comments_count });
+  } catch (error: any) {
+    console.error('Comment hide failed:', getErrorCode(error), error?.message || error);
+    return c.json({ detail: 'Could not hide comment.' }, 500);
   }
 });
 
@@ -7621,7 +7761,7 @@ api.get('/library/liked', authMiddleware, async (c) => {
        1 AS is_liked,
        EXISTS (SELECT 1 FROM saved_posts sp WHERE sp.user_id = ? AND sp.post_id = p.id) AS saved,
        (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
-       (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id) AS live_comments_count,
+       (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden')) AS live_comments_count,
        (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id) AS live_saves_count
      FROM likes l JOIN posts p ON l.post_id = p.id JOIN users u ON p.user_id = u.id
      WHERE l.user_id = ? AND ${visiblePostWhere('u', 'p')}
@@ -7636,7 +7776,7 @@ api.get('/library/saved', authMiddleware, async (c) => {
       EXISTS (SELECT 1 FROM likes lk WHERE lk.user_id = ? AND lk.post_id = p.id) AS is_liked,
       1 AS saved,
       (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
-      (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id) AS live_comments_count,
+      (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden')) AS live_comments_count,
       (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id) AS live_saves_count
     FROM saved_posts sp
     JOIN posts p ON sp.post_id = p.id
@@ -7653,6 +7793,7 @@ api.get('/library/saved', authMiddleware, async (c) => {
 });
 api.post('/library/save/:postId', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  await ensureGovernanceSchema(c.env.DB);
   const limited = await enforceRateLimit(c, 'save_post', userId, 240, 60);
   if (limited) return limited;
   const postId = c.req.param('postId');
@@ -7688,6 +7829,7 @@ api.post('/library/save/:postId', authMiddleware, async (c) => {
 });
 api.delete('/library/save/:postId', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  await ensureGovernanceSchema(c.env.DB);
   const limited = await enforceRateLimit(c, 'save_post', userId, 240, 60);
   if (limited) return limited;
   const postId = c.req.param('postId');
@@ -10468,6 +10610,7 @@ api.post('/bookmarks/setup-db', authMiddleware, async (c) => {
 // Save/Bookmark a post
 api.post('/bookmarks', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  await ensureGovernanceSchema(c.env.DB);
   const limited = await enforceRateLimit(c, 'save_post', userId, 240, 60);
   if (limited) return limited;
   const { post_id, collection } = await c.req.json().catch(() => ({}));
@@ -10510,6 +10653,7 @@ api.post('/bookmarks', authMiddleware, async (c) => {
 // Unsave/Remove bookmark
 api.delete('/bookmarks/:postId', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  await ensureGovernanceSchema(c.env.DB);
   const limited = await enforceRateLimit(c, 'save_post', userId, 240, 60);
   if (limited) return limited;
   const postId = publicId(c.req.param('postId'), 120);

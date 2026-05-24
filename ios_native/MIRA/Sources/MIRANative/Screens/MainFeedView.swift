@@ -159,26 +159,20 @@ final class MainFeedModel: ObservableObject {
     }
   }
 
-  func toggleSave(_ post: MIRAPost) async {
+  func save(_ post: MIRAPost, to collection: String) async {
     guard let index = posts.firstIndex(where: { $0.id == post.id }) else { return }
     let previous = posts[index]
-    let nextSaved = !previous.viewerSaved
-    let nextCount = max(0, (previous.savesCount ?? 0) + (nextSaved ? 1 : -1))
-    posts[index] = previous.updating(saved: nextSaved, savesCount: nextCount)
+    let nextCount = max(0, (previous.savesCount ?? 0) + (previous.viewerSaved ? 0 : 1))
+    posts[index] = previous.updating(saved: true, savesCount: nextCount)
 
     do {
-      let response: PostSaveResponse
-      if nextSaved {
-        response = try await api.post("/library/save/\(post.id)", body: SaveCollectionBody(collection: "My Library"))
-      } else {
-        response = try await api.delete("/library/save/\(post.id)")
-      }
+      let response: PostSaveResponse = try await api.post("/library/save/\(post.id)", body: SaveCollectionBody(collection: collection))
       if let currentIndex = posts.firstIndex(where: { $0.id == post.id }) {
         posts[currentIndex] = posts[currentIndex].updating(
           liked: response.liked,
           likesCount: response.likesCount,
           commentsCount: response.commentsCount,
-          saved: response.saved ?? nextSaved,
+          saved: response.saved ?? true,
           savesCount: response.savesCount ?? nextCount
         )
         publishEngagement(for: posts[currentIndex])
@@ -188,6 +182,52 @@ final class MainFeedModel: ObservableObject {
       if let currentIndex = posts.firstIndex(where: { $0.id == post.id }) {
         posts[currentIndex] = previous
       }
+    }
+  }
+
+  func unsave(_ post: MIRAPost) async {
+    guard let index = posts.firstIndex(where: { $0.id == post.id }) else { return }
+    let previous = posts[index]
+    guard previous.viewerSaved else { return }
+    let nextCount = max(0, (previous.savesCount ?? 0) - 1)
+    posts[index] = previous.updating(saved: false, savesCount: nextCount)
+
+    do {
+      let response: PostSaveResponse = try await api.delete("/library/save/\(post.id)")
+      if let currentIndex = posts.firstIndex(where: { $0.id == post.id }) {
+        posts[currentIndex] = posts[currentIndex].updating(
+          liked: response.liked,
+          likesCount: response.likesCount,
+          commentsCount: response.commentsCount,
+          saved: response.saved ?? false,
+          savesCount: response.savesCount ?? nextCount
+        )
+        publishEngagement(for: posts[currentIndex])
+        cacheCurrentPosts()
+      }
+    } catch {
+      if let currentIndex = posts.firstIndex(where: { $0.id == post.id }) {
+        posts[currentIndex] = previous
+      }
+    }
+  }
+
+  func togglePin(_ post: MIRAPost) async {
+    guard canDelete(post), let index = posts.firstIndex(where: { $0.id == post.id }) else { return }
+    let previous = posts[index]
+    let shouldPin = !previous.isPinned
+    posts[index] = previous.updatingPinned(at: shouldPin ? ISO8601DateFormatter().string(from: Date()) : nil)
+    do {
+      let updated: MIRAPost = try await api.put("/posts/\(post.id)/pin", body: PostPinBody(pinned: shouldPin))
+      if let currentIndex = posts.firstIndex(where: { $0.id == post.id }) {
+        posts[currentIndex] = updated
+      }
+      cacheCurrentPosts()
+    } catch {
+      if let currentIndex = posts.firstIndex(where: { $0.id == post.id }) {
+        posts[currentIndex] = previous
+      }
+      errorMessage = "Could not update pinned post."
     }
   }
 
@@ -400,6 +440,8 @@ public struct MainFeedView: View {
   @State private var isShowingCreatePost = false
   @State private var activeCommentsPost: MIRAPost?
   @State private var isCommentsPresented = false
+  @State private var saveTargetPost: MIRAPost?
+  @State private var isSaveSheetPresented = false
 
   public init(api: MIRAAPIClient) {
     _model = StateObject(wrappedValue: MainFeedModel(api: api))
@@ -431,9 +473,10 @@ public struct MainFeedView: View {
                   api: model.api,
                   isVideoActive: post.id == activeVideoPostID,
                   onLike: { Task { await model.toggleLike(post) } },
-                  onSave: { Task { await model.toggleSave(post) } },
+                  onSave: { presentSaveSheet(for: post) },
                   onComment: { presentComments(for: post) },
                   onFollow: { Task { await model.toggleFollowAuthor(post) } },
+                  onPin: { Task { await model.togglePin(post) } },
                   onNotInterested: { model.hidePost(post) },
                   onReport: { Task { await model.reportPost(post) } },
                   canFollowAuthor: model.canFollowAuthor(post),
@@ -484,6 +527,33 @@ public struct MainFeedView: View {
       ) { dismiss in
         if let post = activeCommentsPost {
           MainFeedCommentsSheet(post: post, api: model.api, onClose: dismiss)
+        } else {
+          Color.clear
+        }
+      }
+      .miraBottomSheet(
+        isPresented: $isSaveSheetPresented,
+        preferredHeightFraction: 0.46,
+        maxHeight: 440,
+        onDismissed: { saveTargetPost = nil }
+      ) { dismiss in
+        if let post = saveTargetPost {
+          MIRASaveToCollectionSheet(
+            isSaved: post.viewerSaved,
+            onSelect: { collection in
+              Task {
+                await model.save(post, to: collection)
+                dismiss()
+              }
+            },
+            onRemove: {
+              Task {
+                await model.unsave(post)
+                dismiss()
+              }
+            },
+            onClose: dismiss
+          )
         } else {
           Color.clear
         }
@@ -562,7 +632,17 @@ public struct MainFeedView: View {
   private func presentComments(for post: MIRAPost) {
     UIImpactFeedbackGenerator(style: .light).impactOccurred()
     activeCommentsPost = post
-    isCommentsPresented = true
+    withAnimation(.spring(response: 0.32, dampingFraction: 0.92)) {
+      isCommentsPresented = true
+    }
+  }
+
+  private func presentSaveSheet(for post: MIRAPost) {
+    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    saveTargetPost = post
+    withAnimation(.spring(response: 0.30, dampingFraction: 0.90)) {
+      isSaveSheetPresented = true
+    }
   }
 
   private var mainHeader: some View {
@@ -599,6 +679,7 @@ private struct MainNativePostCard: View {
   let onSave: () -> Void
   let onComment: () -> Void
   let onFollow: () -> Void
+  let onPin: () -> Void
   let onNotInterested: () -> Void
   let onReport: () -> Void
   let canFollowAuthor: Bool
@@ -663,6 +744,9 @@ private struct MainNativePostCard: View {
     }
     .overlay(alignment: .bottom) {
       Rectangle().fill(MIRATheme.Color.hairline).frame(height: 0.75)
+    }
+    .contextMenu {
+      postContextMenu
     }
     .onChange(of: post.id) { _, _ in selectedMediaIndex = 0 }
     .onChange(of: post.feedMediaURLs) { _, urls in
@@ -890,6 +974,17 @@ private struct MainNativePostCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .layoutPriority(1)
 
+      if post.isPinned {
+        Label("Pinned", systemImage: "pin.fill")
+          .font(.system(size: 11, weight: .semibold))
+          .labelStyle(.iconOnly)
+          .foregroundStyle(MIRATheme.Color.forest)
+          .frame(width: 28, height: 28)
+          .background(MIRATheme.Color.forest.opacity(0.10))
+          .clipShape(Circle())
+          .accessibilityLabel("Pinned post")
+      }
+
       postMenu
     }
     .padding(.horizontal, MIRATheme.Space.md)
@@ -946,46 +1041,7 @@ private struct MainNativePostCard: View {
 
   private var postMenu: some View {
     Menu {
-      Button {
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        onNotInterested()
-      } label: {
-        Label("Not interested", systemImage: "eye.slash")
-      }
-
-      if canDelete {
-        if normalizedVisibility != "public" {
-          Button {
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
-            onMakePublic()
-          } label: {
-            Label("Make post public", systemImage: "globe")
-          }
-        }
-
-        if normalizedVisibility != "private" {
-          Button {
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
-            onMakePrivate()
-          } label: {
-            Label("Make post private", systemImage: "lock")
-          }
-        }
-
-        Button(role: .destructive) {
-          UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-          onDelete()
-        } label: {
-          Label("Delete post", systemImage: "trash")
-        }
-      }
-
-      Button(role: .destructive) {
-        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-        onReport()
-      } label: {
-        Label("Report", systemImage: "flag")
-      }
+      postContextMenu
     } label: {
       Image(systemName: "ellipsis")
         .font(.system(size: 17, weight: .semibold))
@@ -1009,6 +1065,57 @@ private struct MainNativePostCard: View {
     .buttonStyle(.miraPress)
   }
 
+  @ViewBuilder
+  private var postContextMenu: some View {
+    if canDelete {
+      Button {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        onPin()
+      } label: {
+        Label(post.isPinned ? "Unpin post" : "Pin post", systemImage: post.isPinned ? "pin.slash" : "pin")
+      }
+
+      if normalizedVisibility != "public" {
+        Button {
+          UIImpactFeedbackGenerator(style: .light).impactOccurred()
+          onMakePublic()
+        } label: {
+          Label("Make post public", systemImage: "globe")
+        }
+      }
+
+      if normalizedVisibility != "private" {
+        Button {
+          UIImpactFeedbackGenerator(style: .light).impactOccurred()
+          onMakePrivate()
+        } label: {
+          Label("Make post private", systemImage: "lock")
+        }
+      }
+
+      Button(role: .destructive) {
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        onDelete()
+      } label: {
+        Label("Delete post", systemImage: "trash")
+      }
+    } else {
+      Button {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        onNotInterested()
+      } label: {
+        Label("Not interested", systemImage: "eye.slash")
+      }
+
+      Button(role: .destructive) {
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        onReport()
+      } label: {
+        Label("Report", systemImage: "flag")
+      }
+    }
+  }
+
   private var authorNameLabel: some View {
     Text(post.authorDisplayName)
       .font(.system(size: 15, weight: .semibold))
@@ -1029,6 +1136,7 @@ private struct MainFeedCommentsSheet: View {
   @StateObject private var model: PostDetailModel
   @State private var draft = ""
   @State private var isSending = false
+  @State private var replyingTo: MIRAComment?
   @FocusState private var isReplyFocused: Bool
   let onClose: () -> Void
 
@@ -1053,7 +1161,30 @@ private struct MainFeedCommentsSheet: View {
               .padding(.top, 28)
           } else {
             ForEach(model.comments) { comment in
-              MainFeedCommentRow(comment: comment)
+              MainFeedCommentRow(
+                comment: comment,
+                currentUserId: model.currentUserId,
+                postOwnerId: model.post.userId,
+                onReply: {
+                  replyingTo = comment
+                  isReplyFocused = true
+                },
+                onLike: {
+                  Task { await model.toggleCommentLike(comment) }
+                },
+                onPin: {
+                  Task { await model.toggleCommentPin(comment) }
+                },
+                onReport: {
+                  Task { await model.reportComment(comment) }
+                },
+                onDelete: {
+                  Task { await model.deleteComment(comment) }
+                },
+                onHide: {
+                  Task { await model.hideComment(comment) }
+                }
+              )
             }
           }
         }
@@ -1117,10 +1248,34 @@ private struct MainFeedCommentsSheet: View {
 
   private var commentComposer: some View {
     VStack(spacing: 0) {
+      if let replyingTo {
+        HStack(spacing: 8) {
+          Image(systemName: "arrowshape.turn.up.left")
+            .font(.system(size: 12, weight: .semibold))
+          Text("Replying to \(replyingTo.user?.displayName ?? "comment")")
+            .font(.system(size: 12, weight: .semibold))
+            .lineLimit(1)
+            .truncationMode(.tail)
+          Spacer(minLength: 0)
+          Button {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            self.replyingTo = nil
+          } label: {
+            Image(systemName: "xmark")
+              .font(.system(size: 11, weight: .bold))
+              .frame(width: 24, height: 24)
+          }
+          .buttonStyle(.miraPress)
+        }
+        .foregroundStyle(MIRATheme.Color.textMuted)
+        .padding(.horizontal, MIRATheme.Space.md)
+        .padding(.top, MIRATheme.Space.sm)
+      }
+
       HStack(alignment: .bottom, spacing: MIRATheme.Space.sm) {
         RemoteAvatar(url: model.post.userProfileImage, size: 34)
           .padding(.bottom, 2)
-        TextField("Add a comment...", text: $draft, axis: .vertical)
+        TextField(replyingTo == nil ? "Add a comment..." : "Write a reply...", text: $draft, axis: .vertical)
           .font(.system(size: 15, weight: .regular))
           .textInputAutocapitalization(.sentences)
           .submitLabel(.send)
@@ -1177,9 +1332,12 @@ private struct MainFeedCommentsSheet: View {
     isSending = true
     draft = ""
     Task {
-      let didSend = await model.sendComment(text)
+      let parentId = replyingTo?.id
+      let didSend = await model.sendComment(text, parentId: parentId)
       if !didSend {
         draft = text
+      } else {
+        replyingTo = nil
       }
       isSending = false
     }
@@ -1193,12 +1351,36 @@ private struct MainFeedCommentsSheet: View {
 
 private struct MainFeedCommentRow: View {
   let comment: MIRAComment
+  let currentUserId: String?
+  let postOwnerId: String?
+  let onReply: () -> Void
+  let onLike: () -> Void
+  let onPin: () -> Void
+  let onReport: () -> Void
+  let onDelete: () -> Void
+  let onHide: () -> Void
+
+  private var isOwnComment: Bool {
+    guard let currentUserId, let userId = comment.userId else { return false }
+    return currentUserId == userId
+  }
+
+  private var isPostCreator: Bool {
+    guard let currentUserId, let postOwnerId else { return false }
+    return currentUserId == postOwnerId
+  }
 
   var body: some View {
     HStack(alignment: .top, spacing: MIRATheme.Space.sm) {
       RemoteAvatar(url: comment.user?.profileImage, size: 34)
         .padding(.top, 2)
       VStack(alignment: .leading, spacing: 7) {
+        if comment.pinned {
+          Label("Pinned by creator", systemImage: "pin.fill")
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(MIRATheme.Color.forest)
+        }
+
         VStack(alignment: .leading, spacing: 5) {
           HStack(alignment: .firstTextBaseline, spacing: 6) {
             Text(comment.user?.displayName ?? "user")
@@ -1230,20 +1412,22 @@ private struct MainFeedCommentRow: View {
         HStack(spacing: MIRATheme.Space.lg) {
           Button("Reply") {
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            onReply()
           }
           .buttonStyle(.plain)
 
           Button {
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            onLike()
           } label: {
             HStack(spacing: 4) {
-              Image(systemName: comment.likedByMe == true ? "heart.fill" : "heart")
+              Image(systemName: comment.viewerLiked ? "heart.fill" : "heart")
                 .font(.system(size: 12, weight: .semibold))
               Text(compact(comment.likesCount ?? 0))
             }
           }
           .buttonStyle(.plain)
-          .foregroundStyle(comment.likedByMe == true ? MIRATheme.Color.like : MIRATheme.Color.textMuted)
+          .foregroundStyle(comment.viewerLiked ? MIRATheme.Color.like : MIRATheme.Color.textMuted)
         }
         .font(.system(size: 12, weight: .semibold))
         .foregroundStyle(MIRATheme.Color.textMuted)
@@ -1252,7 +1436,34 @@ private struct MainFeedCommentRow: View {
       .frame(maxWidth: .infinity, alignment: .leading)
       .layoutPriority(1)
     }
-    .padding(.leading, comment.parentId == nil ? 0 : 42)
+    .padding(.leading, comment.isReply ? 42 : 0)
+    .contextMenu {
+      Button(action: onReply) {
+        Label("Reply", systemImage: "arrowshape.turn.up.left")
+      }
+      Button(action: onLike) {
+        Label(comment.viewerLiked ? "Unlike comment" : "Like comment", systemImage: comment.viewerLiked ? "heart.slash" : "heart")
+      }
+      if isPostCreator {
+        Button(action: onPin) {
+          Label(comment.pinned ? "Unpin comment" : "Pin comment", systemImage: comment.pinned ? "pin.slash" : "pin")
+        }
+        if !isOwnComment {
+          Button(role: .destructive, action: onHide) {
+            Label("Hide comment", systemImage: "eye.slash")
+          }
+        }
+      }
+      if isOwnComment {
+        Button(role: .destructive, action: onDelete) {
+          Label("Delete comment", systemImage: "trash")
+        }
+      } else {
+        Button(role: .destructive, action: onReport) {
+          Label("Report comment", systemImage: "flag")
+        }
+      }
+    }
   }
 }
 

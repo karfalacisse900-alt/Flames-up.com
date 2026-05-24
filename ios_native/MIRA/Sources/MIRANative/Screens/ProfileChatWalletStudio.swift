@@ -89,6 +89,29 @@ final class ProfileNativeModel: ObservableObject {
     }
   }
 
+  func togglePin(_ post: MIRAPost) async {
+    guard let user else { return }
+    guard let index = posts.firstIndex(where: { $0.id == post.id }) else { return }
+    let previous = posts[index]
+    let shouldPin = !previous.isPinned
+    posts[index] = previous.updatingPinned(at: shouldPin ? ISO8601DateFormatter().string(from: Date()) : nil)
+    do {
+      let updated: MIRAPost = try await api.put("/posts/\(post.id)/pin", body: PostPinBody(pinned: shouldPin))
+      if let currentIndex = posts.firstIndex(where: { $0.id == post.id }) {
+        posts[currentIndex] = updated
+      }
+      posts.sort { lhs, rhs in
+        if lhs.isPinned != rhs.isPinned { return lhs.isPinned && !rhs.isPinned }
+        return (lhs.createdAt ?? "") > (rhs.createdAt ?? "")
+      }
+      await MIRALocalJSONCache.save(posts, key: postsCacheKey(for: user.id))
+      profileError = nil
+    } catch {
+      posts[index] = previous
+      profileError = "Could not update pinned post."
+    }
+  }
+
   private func postsCacheKey(for userID: String) -> String {
     "native.profile.posts.\(userID).v2"
   }
@@ -162,6 +185,7 @@ public struct ProfileNativeView: View {
                 ProfilePostTile(
                   post: post,
                   size: gridTileSize,
+                  onPin: { Task { await model.togglePin(post) } },
                   onDelete: { Task { await model.deletePost(post) } },
                   onMakePublic: { Task { await model.updatePostVisibility(post, visibility: "public") } },
                   onMakePrivate: { Task { await model.updatePostVisibility(post, visibility: "private") } }
@@ -432,6 +456,7 @@ public struct UserProfileNativeView: View {
 private struct ProfilePostTile: View {
   let post: MIRAPost
   let size: CGFloat
+  var onPin: (() -> Void)? = nil
   var onDelete: (() -> Void)? = nil
   var onMakePublic: (() -> Void)? = nil
   var onMakePrivate: (() -> Void)? = nil
@@ -469,6 +494,17 @@ private struct ProfilePostTile: View {
       } else {
         MIRATheme.Color.surfaceSoft
       }
+
+      if post.isPinned {
+        Image(systemName: "pin.fill")
+          .font(.system(size: 11, weight: .semibold))
+          .foregroundStyle(.white)
+          .frame(width: 24, height: 24)
+          .background(.black.opacity(0.48))
+          .clipShape(Circle())
+          .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+          .padding(6)
+      }
     }
     .frame(width: size, height: height)
     .clipped()
@@ -476,11 +512,20 @@ private struct ProfilePostTile: View {
   }
 
   private var hasOwnerActions: Bool {
-    onDelete != nil || onMakePublic != nil || onMakePrivate != nil
+    onPin != nil || onDelete != nil || onMakePublic != nil || onMakePrivate != nil
   }
 
   @ViewBuilder
   private var ownerContextMenu: some View {
+    if let onPin {
+      Button {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        onPin()
+      } label: {
+        Label(post.isPinned ? "Unpin post" : "Pin post", systemImage: post.isPinned ? "pin.slash" : "pin")
+      }
+    }
+
     if normalizedVisibility != "private", let onMakePrivate {
       Button {
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
