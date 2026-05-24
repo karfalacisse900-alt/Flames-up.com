@@ -4,8 +4,8 @@ rules:
     severity: ERROR
     languages: [swift]
     pattern-either:
-      - pattern: UserDefaults.standard.set($VALUE, forKey: $KEY)
-      - pattern: UserDefaults.standard.setValue($VALUE, forKey: $KEY)
+      - pattern: "UserDefaults.standard.set($VALUE, forKey: $KEY)"
+      - pattern: "UserDefaults.standard.setValue($VALUE, forKey: $KEY)"
     metavariable-regex:
       metavariable: $KEY
       regex: (?i).*(token|session|auth|password|secret|credential).*
@@ -14,7 +14,7 @@ rules:
     message: Captro iOS code should not call insecure HTTP endpoints outside DEBUG localhost flows.
     severity: ERROR
     languages: [swift]
-    pattern: URL(string: $URL)
+    pattern: "URL(string: $URL)"
     metavariable-regex:
       metavariable: $URL
       regex: '"http://(?!localhost|127\.0\.0\.1|\[::1\]).*'
@@ -24,9 +24,9 @@ rules:
     severity: ERROR
     languages: [typescript, javascript]
     pattern-either:
-      - pattern: console.log($X)
-      - pattern: console.warn($X)
-      - pattern: console.error($X)
+      - pattern: "console.log($X)"
+      - pattern: "console.warn($X)"
+      - pattern: "console.error($X)"
     metavariable-regex:
       metavariable: $X
       regex: (?i).*(token|authorization|password|secret|cookie|private.?message|message_content).*

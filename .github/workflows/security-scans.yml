@@ -7,15 +7,15 @@ on:
   push:
     branches: [main]
     paths:
-      - 'backend-cf/**'
-      - 'frontend/**'
-      - 'governance-mobile/**'
-      - 'ios_native/MIRA/**'
-      - '.github/workflows/security-scans.yml'
-      - '.semgrep.yml'
-      - '.gitleaks.toml'
+      - "backend-cf/**"
+      - "frontend/**"
+      - "governance-mobile/**"
+      - "ios_native/MIRA/**"
+      - ".github/workflows/security-scans.yml"
+      - ".semgrep.yml"
+      - ".gitleaks.toml"
   schedule:
-    - cron: '27 8 * * 1'
+    - cron: "27 8 * * 1"
 
 permissions:
   actions: read
