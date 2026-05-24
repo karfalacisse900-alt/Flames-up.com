@@ -26,11 +26,12 @@ authRoutes.post('/signup', async (c) => {
 
 authRoutes.post('/login', async (c) => {
   const { email, password } = await c.req.json();
-  const user = await c.env.DB.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
-  if (!user) return c.json({ error: 'Invalid credentials' }, 401);
+  const normalizedEmail = String(email || '').trim().toLowerCase();
+  const user = await c.env.DB.prepare('SELECT * FROM users WHERE email = ?').bind(normalizedEmail).first();
+  if (!user) return c.json({ error: 'Invalid email or password.' }, 401);
 
   const valid = await verifyPassword(password, user.hashed_password as string);
-  if (!valid) return c.json({ error: 'Invalid credentials' }, 401);
+  if (!valid) return c.json({ error: 'Invalid email or password.' }, 401);
 
   const token = await createToken({ sub: user.id as string, exp: Math.floor(Date.now() / 1000) + 86400 * 7 }, c.env.JWT_SECRET);
   return c.json({

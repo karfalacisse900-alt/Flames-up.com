@@ -2,24 +2,65 @@ name = "flames-up-api"
 main = "src/index.ts"
 compatibility_date = "2024-12-01"
 compatibility_flags = ["nodejs_compat"]
-account_id = "REPLACE_WITH_YOUR_ACCOUNT_ID"
+account_id = "2ca88b3551321681a5f9434814f38ec8"
 
 [vars]
-JWT_SECRET = "REPLACE_WITH_YOUR_JWT_SECRET"
-CLOUDFLARE_ACCOUNT_ID = "2ca88b3551321681a5f9434814f38ec8"
-CLOUDFLARE_IMAGES_TOKEN = "placeholder"
-CLOUDFLARE_STREAM_TOKEN = "placeholder"
-GOOGLE_MAPS_API_KEY = "placeholder"
+ENVIRONMENT = "development"
 FRONTEND_URL = "https://flames-up.com"
+CLOUDFLARE_ACCOUNT_ID = "2ca88b3551321681a5f9434814f38ec8"
+SUPABASE_URL = "https://cclgvxukwccvtgrbcwie.supabase.co"
+GOOGLE_OAUTH_CLIENT_IDS = "702354172189-dcg22qr9dqln7mqd1gi3q3bdbl9dajcd.apps.googleusercontent.com,702354172189-9gg83vd92n3s217n5pb4ddqqsnme8ocb.apps.googleusercontent.com"
+APPLE_OAUTH_AUDIENCES = "com.karfala90.frontend"
+MAPBOX_ACCESS_TOKEN = ""
+CLOUDFLARE_IMAGES_ACCOUNT_HASH = "DY-IgVdOm-0zb0K5ZFnpKA"
+OWNER_USERNAMES = "dxhfqhsd5c"
+MEDIA_BACKUP_MAX_VIDEO_BYTES = "95000000"
+
+[observability]
+enabled = true
+head_sampling_rate = 1
 
 [[d1_databases]]
 binding = "DB"
 database_name = "flames-up"
 database_id = "ce387f44-33eb-42ac-85cb-46b6009b49f5"
 
+[[kv_namespaces]]
+binding = "KV"
+id = "cecde60b06c24da8abfa01a617aac9eb"
+
+[[r2_buckets]]
+binding = "MEDIA_BACKUP"
+bucket_name = "flames-up-media-backup"
+
 [env.production]
 name = "flames-up-api"
 
 [env.production.vars]
-JWT_SECRET = "placeholder"
+ENVIRONMENT = "production"
 FRONTEND_URL = "https://flames-up.com"
+CLOUDFLARE_ACCOUNT_ID = "2ca88b3551321681a5f9434814f38ec8"
+SUPABASE_URL = "https://cclgvxukwccvtgrbcwie.supabase.co"
+GOOGLE_OAUTH_CLIENT_IDS = "702354172189-dcg22qr9dqln7mqd1gi3q3bdbl9dajcd.apps.googleusercontent.com,702354172189-9gg83vd92n3s217n5pb4ddqqsnme8ocb.apps.googleusercontent.com"
+APPLE_OAUTH_AUDIENCES = "com.karfala90.frontend"
+MAPBOX_ACCESS_TOKEN = ""
+CLOUDFLARE_IMAGES_ACCOUNT_HASH = "DY-IgVdOm-0zb0K5ZFnpKA"
+OWNER_USERNAMES = "dxhfqhsd5c"
+MEDIA_BACKUP_MAX_VIDEO_BYTES = "95000000"
+
+[env.production.observability]
+enabled = true
+head_sampling_rate = 1
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "flames-up"
+database_id = "ce387f44-33eb-42ac-85cb-46b6009b49f5"
+
+[[env.production.kv_namespaces]]
+binding = "KV"
+id = "cecde60b06c24da8abfa01a617aac9eb"
+
+[[env.production.r2_buckets]]
+binding = "MEDIA_BACKUP"
+bucket_name = "flames-up-media-backup"

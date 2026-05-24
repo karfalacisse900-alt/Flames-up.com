@@ -1,0 +1,14 @@
+[package]
+name = "mira_core"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "mira_core"
+crate-type = ["staticlib", "cdylib"]
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+panic = "abort"
+strip = "symbols"

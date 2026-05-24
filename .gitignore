@@ -19,10 +19,8 @@ node_modules/
 # Testing
 /coverage
 
-# Next.js
-/.next/
+# Generated web outputs
 /out/
-next-env.d.ts
 *.tsbuildinfo
 
 # Production builds
@@ -79,30 +77,13 @@ agenthub/agents/youtube/db
 memory/test_credentials.md
 
 # Mobile development
-android-sdk/-e 
+DerivedData/
+ios_native/MIRA/*.xcodeproj/
+ios_native/MIRA/*.xcworkspace/
+ios_native/MIRA/.build/
+ios_native/MIRA/rust/**/target/
 # Environment files
 *.env
 *.env.*
-backend-cf/node_modules/@cloudflare/workerd-linux-arm64/bin/workerd
-frontend/.metro-cache/
-frontend/node_modules/
-frontend/.metro-cache*
-frontend/.env
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
+backend-cf/node_modules/
+backend-cf/.wrangler/
