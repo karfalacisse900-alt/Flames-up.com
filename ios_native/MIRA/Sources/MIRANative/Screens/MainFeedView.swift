@@ -1010,7 +1010,7 @@ private struct MainNativePostCard: View {
   }
 
   private var authorNameLabel: some View {
-    Text(post.userUsername ?? post.userFullName ?? "mira")
+    Text(post.authorDisplayName)
       .font(.system(size: 15, weight: .semibold))
       .foregroundStyle(MIRATheme.Color.textPrimary)
       .lineLimit(1)
@@ -1018,7 +1018,7 @@ private struct MainNativePostCard: View {
   }
 
   private var authorSubtitle: String? {
-    let username = post.userUsername?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    let username = MIRAUsernameRules.isValidPublicUsername(post.userUsername) ? MIRAUsernameRules.normalized(post.userUsername) : ""
     let subtitle = post.userFullName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     guard !subtitle.isEmpty, subtitle != username else { return nil }
     return subtitle

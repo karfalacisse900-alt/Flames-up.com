@@ -275,10 +275,11 @@ function parseAudiences(...values: Array<string | undefined>): string[] {
 function usernameSlug(input: string): string {
   const base = input
     .toLowerCase()
-    .replace(/[^a-z0-9_]/g, '_')
+    .replace(/[^a-z0-9_.]/g, '_')
     .replace(/_+/g, '_')
+    .replace(/\.+/g, '.')
     .replace(/^_+|_+$/g, '');
-  return base || `user_${Math.floor(Math.random() * 100000)}`;
+  return base.replace(/^\.+|\.+$/g, '') || 'captro';
 }
 
 const RESERVED_USERNAMES = new Set([
@@ -294,51 +295,122 @@ const RESERVED_USERNAMES = new Set([
   'root',
   'owner',
   'verified',
+  'captro',
+  'team',
+  'privacy',
+  'terms',
+  'safety',
+  'legal',
+  'login',
+  'signup',
+  'settings',
+  'discover',
+  'explore',
+  'feed',
+  'chat',
+  'profile',
+  'notifications',
   'null',
   'undefined',
   'api',
 ]);
 
-const STAFF_USERNAME_PATTERN = /(^|_)(admin|administrator|support|moderator|staff|security|official|system|owner|root)(_|$)/;
+const STAFF_USERNAME_PATTERN = /(^|[_.])(admin|administrator|support|moderator|staff|security|official|system|owner|root)([_.]|$)/;
 
 function strictUsernameSlug(value: unknown): string {
   return String(value || '')
     .trim()
     .toLowerCase()
-    .replace(/[^a-z0-9_]/g, '_')
-    .replace(/_+/g, '_')
-    .replace(/^_+|_+$/g, '');
+    .replace(/^@+/, '');
 }
 
 function isReservedOrStaffUsername(username: string): boolean {
   return RESERVED_USERNAMES.has(username) || STAFF_USERNAME_PATTERN.test(username);
 }
 
-function validateUsernameForAccount(value: unknown): { ok: boolean; username: string; detail?: string } {
+const GENERATED_USERNAME_PREFIXES = [
+  'user_',
+  'temp_',
+  'apple_',
+  'appleuser',
+  'google_',
+  'guest_',
+  'pending_',
+  'phone_',
+  'sb_',
+  'nulluser',
+];
+
+function isLikelyGeneratedUsername(value: unknown): boolean {
   const username = strictUsernameSlug(value);
-  if (!/^[a-z0-9_]{3,30}$/.test(username)) {
-    return { ok: false, username, detail: 'Username must be 3 to 30 letters, numbers, or underscores.' };
+  if (!username) return true;
+  if (GENERATED_USERNAME_PREFIXES.some((prefix) => username.startsWith(prefix))) return true;
+  if (/^[0-9a-f]{8,32}$/i.test(username)) return true;
+  if (/^[0-9a-f]{6,12}$/i.test(username) && /\d/.test(username)) return true;
+  if (/^[a-z0-9]{6,10}$/i.test(username)) {
+    const letters = username.replace(/[^a-z]/g, '');
+    const vowels = (letters.match(/[aeiou]/g) || []).length;
+    const hardConsonantRun = /[bcdfghjklmnpqrstvwxyz]{5,}/.test(letters);
+    if (vowels === 0 || hardConsonantRun) return true;
+  }
+  return false;
+}
+
+function usernameNeedsOnboarding(user: any): boolean {
+  const username = strictUsernameSlug(user?.username);
+  if (!username) return true;
+  const validation = validateUsernameForAccount(username, { allowGenerated: false });
+  return !validation.ok || isLikelyGeneratedUsername(username);
+}
+
+function publicUsernameFor(user: any): string | null {
+  return usernameNeedsOnboarding(user) ? null : strictUsernameSlug(user.username);
+}
+
+function validateUsernameForAccount(
+  value: unknown,
+  options: { allowGenerated?: boolean } = {}
+): { ok: boolean; username: string; code?: string; detail?: string } {
+  const username = strictUsernameSlug(value);
+  if (username.length < 3) {
+    return { ok: false, username, code: 'too_short', detail: 'Username must be at least 3 characters.' };
+  }
+  if (username.length > 20) {
+    return { ok: false, username, code: 'too_long', detail: 'Username must be 20 characters or fewer.' };
+  }
+  if (!/^[a-z0-9_.]+$/.test(username)) {
+    return { ok: false, username, code: 'invalid_format', detail: 'Use only letters, numbers, underscores, and periods.' };
+  }
+  if (username.startsWith('.') || username.endsWith('.') || username.includes('..')) {
+    return { ok: false, username, code: 'invalid_format', detail: 'Username cannot start or end with a period or contain double periods.' };
   }
   if (isReservedOrStaffUsername(username)) {
-    return { ok: false, username, detail: 'That username is reserved.' };
+    return { ok: false, username, code: 'reserved', detail: 'That username is reserved.' };
+  }
+  if (!options.allowGenerated && isLikelyGeneratedUsername(username)) {
+    return { ok: false, username, code: 'blocked_word', detail: 'Choose a more personal username.' };
   }
   return { ok: true, username };
 }
 
+function pendingUsernameForUser(id: string): string {
+  return `pending_${String(id || uuid()).replace(/[^a-z0-9]/gi, '').slice(0, 18).toLowerCase()}`;
+}
+
 async function ensureUniqueUsername(db: D1Database, desired: string): Promise<string> {
   const desiredSlug = strictUsernameSlug(desired);
-  const base = (isReservedOrStaffUsername(desiredSlug) ? `user_${Math.floor(Math.random() * 100000)}` : (desiredSlug || usernameSlug(desired))).slice(0, 24);
-  let candidate = base;
-  let attempt = 0;
-
-  while (attempt < 100) {
+  let base = (desiredSlug || usernameSlug(desired)).slice(0, 16).replace(/^\.+|\.+$/g, '');
+  if (!validateUsernameForAccount(base, { allowGenerated: true }).ok || isReservedOrStaffUsername(base)) {
+    base = 'captro.member';
+  }
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const suffix = attempt === 0 ? '' : String(attempt).padStart(2, '0');
+    const candidate = `${base.slice(0, Math.max(3, 20 - suffix.length))}${suffix}`;
     const existing = await db.prepare('SELECT id FROM users WHERE LOWER(username) = ?').bind(candidate.toLowerCase()).first();
     if (!existing) return candidate;
-    attempt += 1;
-    candidate = `${base}_${Math.floor(Math.random() * 9999)}`.slice(0, 30);
   }
 
-  return `${base}_${Date.now().toString().slice(-6)}`.slice(0, 30);
+  return pendingUsernameForUser(uuid());
 }
 
 let phoneAuthSchemaReady = false;
@@ -2867,6 +2939,7 @@ function postPayload(post: any, likedBy: string[] = [], env?: Env) {
   const posterUrls = mediaUrls.map((url, index) => posterDeliveryUrl(url, mediaTypes[index] || 'image', thumbnailVariant)).filter(Boolean);
   const payload = {
     ...post,
+    user_username: publicUsernameFor({ username: post.user_username }),
     likes_count: likesCount,
     comments_count: commentsCount,
     saves_count: savesCount,
@@ -2953,9 +3026,12 @@ async function canViewUserContent(db: D1Database, viewerId: string, owner: any):
 }
 
 function safeUserPayload(user: any, opts: { includePrivate?: boolean } = {}) {
+  const onboardingRequired = usernameNeedsOnboarding(user);
   const publicPayload: any = {
     id: user.id,
-    username: cleanText(user.username, 60),
+    username: publicUsernameFor(user),
+    username_required: onboardingRequired,
+    onboarding_required: onboardingRequired,
     full_name: cleanText(user.full_name, 120),
     profile_image: safeMediaReference(user.profile_image),
     cover_image: safeMediaReference(user.cover_image),
@@ -3025,8 +3101,18 @@ function isInternalOAuthEmail(email: unknown): boolean {
   return String(email || '').toLowerCase().endsWith('@oauth.flames-up.local');
 }
 
+function isApplePrivateRelayEmail(email: unknown): boolean {
+  return String(email || '').toLowerCase().endsWith('@privaterelay.appleid.com');
+}
+
 function publicUserEmail(email: unknown): string {
   return isInternalOAuthEmail(email) ? '' : String(email || '');
+}
+
+function safeDisplayNameFromEmail(email: unknown): string {
+  const clean = normalizeOptionalEmail(email);
+  if (!clean || isInternalOAuthEmail(clean) || isApplePrivateRelayEmail(clean)) return '';
+  return cleanText(clean.split('@')[0], 80);
 }
 
 function getErrorCode(error: any): string {
@@ -4208,7 +4294,7 @@ async function findOrCreatePhoneUser(c: any, phone: string, fullName?: string) {
   if (!user) {
     const id = uuid();
     const digits = phone.replace(/\D/g, '');
-    const username = await ensureUniqueUsername(c.env.DB, `phone_${digits.slice(-6)}`);
+    const username = pendingUsernameForUser(id);
     const safeName = String(fullName || '').trim() || 'Flames User';
     const email = `${digits}@phone.flames-up.local`;
     const generatedPasswordHash = await hashPassword(`phone_${phone}_${uuid()}`);
@@ -4227,12 +4313,15 @@ async function findOrCreatePhoneUser(c: any, phone: string, fullName?: string) {
 }
 
 function authUserPayload(user: any) {
+  const onboardingRequired = usernameNeedsOnboarding(user);
   return {
     id: user.id,
     email: publicUserEmail(user.email),
     phone: user.phone,
     phone_verified: !!user.phone_verified,
-    username: user.username,
+    username: publicUsernameFor(user),
+    username_required: onboardingRequired,
+    onboarding_required: onboardingRequired,
     full_name: user.full_name,
     profile_image: user.profile_image,
     cover_image: user.cover_image,
@@ -4348,7 +4437,7 @@ async function verifyAppleIdToken(c: any, idToken: string) {
   return {
     subject: String(payload.sub),
     email,
-    fullName: email ? email.split('@')[0] : '',
+    fullName: safeDisplayNameFromEmail(email),
     profileImage: '',
   };
 }
@@ -4403,10 +4492,9 @@ async function findOrCreateOAuthUser(
   }
 
   const id = uuid();
-  const usernameSeed = providedEmail ? providedEmail.split('@')[0] : `${provider}_${normalizedSubject.replace(/[^a-z0-9]/gi, '').slice(-8) || 'user'}`;
-  const username = await ensureUniqueUsername(c.env.DB, usernameSeed);
+  const username = pendingUsernameForUser(id);
   const generatedPasswordHash = await hashPassword(`${provider}_${normalizedSubject}_${uuid()}`);
-  const safeName = safeFullName || (providedEmail ? providedEmail.split('@')[0] : 'Apple User');
+  const safeName = safeFullName || safeDisplayNameFromEmail(providedEmail) || (provider === 'apple' ? 'Apple User' : 'Google User');
 
   await c.env.DB.prepare(
     'INSERT INTO users (id, email, username, full_name, password_hash, profile_image, oauth_provider, oauth_subject) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
@@ -4442,7 +4530,6 @@ async function findOrCreateSupabaseUser(c: any, payload: any, extras: any = {}) 
   const email = normalizeOptionalEmail(payload.email || extras.email);
   const metadata = payload.user_metadata && typeof payload.user_metadata === 'object' ? payload.user_metadata : {};
   const safeFullName = normalizeOptionalName(extras.full_name || metadata.full_name || metadata.name || email.split('@')[0] || 'Flames User');
-  const requestedUsername = normalizeOptionalName(extras.username || metadata.username || (email ? email.split('@')[0] : `sb_${supabaseUserId.slice(0, 8)}`));
   const profileImage = cleanText(metadata.avatar_url || metadata.picture || extras.profile_image || '', 1000);
 
   if (!supabaseUserId) throw new Error('SUPABASE_SUBJECT_MISSING');
@@ -4466,7 +4553,7 @@ async function findOrCreateSupabaseUser(c: any, payload: any, extras: any = {}) 
 
   const idOwner = await c.env.DB.prepare('SELECT id FROM users WHERE id = ?').bind(supabaseUserId).first();
   const id = idOwner ? uuid() : supabaseUserId;
-  const username = await ensureUniqueUsername(c.env.DB, requestedUsername);
+  const username = pendingUsernameForUser(id);
   const generatedPasswordHash = await hashPassword(`supabase_${supabaseUserId}_${uuid()}`);
 
   await c.env.DB.prepare(
@@ -5444,6 +5531,47 @@ api.post('/users/me/phone/verify', authMiddleware, async (c) => {
   }
 });
 
+api.put('/users/me/username', authMiddleware, async (c) => {
+  try {
+    const userId = getUserId(c);
+    const bodyTooLarge = rejectLargeRequest(c, 20_000);
+    if (bodyTooLarge) return bodyTooLarge;
+    const limited = await enforceRateLimit(c, 'username_claim', userId, 30, 300);
+    if (limited) return limited;
+    const body: any = await c.req.json().catch(() => ({}));
+    const usernameCheck = validateUsernameForAccount(body.username);
+    if (!usernameCheck.ok) {
+      return c.json({
+        available: false,
+        username: usernameCheck.username,
+        code: usernameCheck.code || 'invalid_format',
+        reason: usernameCheck.detail,
+      }, 400);
+    }
+    const existing: any = await c.env.DB.prepare('SELECT id FROM users WHERE LOWER(username) = ? AND id != ?')
+      .bind(usernameCheck.username, userId)
+      .first();
+    if (existing) {
+      return c.json({
+        available: false,
+        username: usernameCheck.username,
+        code: 'taken',
+        reason: 'Username is already taken.',
+      }, 409);
+    }
+
+    await c.env.DB.prepare('UPDATE users SET username = ?, updated_at = datetime(\'now\') WHERE id = ?')
+      .bind(usernameCheck.username, userId)
+      .run();
+    const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
+    await recordAbuseSignals(c, userId, 'username_claim', { username: usernameCheck.username });
+    return c.json(authUserPayload(user));
+  } catch (error: any) {
+    console.error('Username claim failed:', getErrorCode(error), error?.message || error);
+    return c.json({ detail: 'Could not save username.' }, 500);
+  }
+});
+
 api.get('/users/search/:query', authMiddleware, async (c) => {
   const limited = await enforceRateLimit(c, 'user_search', getUserId(c), 120, 60);
   if (limited) return limited;
@@ -5459,9 +5587,21 @@ api.get('/users/check-username/:username', async (c) => {
   if (limited) return limited;
   const usernameCheck = validateUsernameForAccount(c.req.param('username'));
   const username = usernameCheck.username;
-  if (!usernameCheck.ok) return c.json({ available: false, username, reason: usernameCheck.detail });
+  if (!usernameCheck.ok) {
+    return c.json({
+      available: false,
+      username,
+      code: usernameCheck.code || 'invalid_format',
+      reason: usernameCheck.detail,
+    });
+  }
   const user: any = await c.env.DB.prepare('SELECT id FROM users WHERE LOWER(username) = ?').bind(username).first();
-  return c.json({ available: !user, username });
+  return c.json({
+    available: !user,
+    username,
+    code: user ? 'taken' : 'available',
+    reason: user ? 'Username is already taken.' : 'Username available',
+  });
 });
 
 api.get('/users/:userId', authMiddleware, async (c) => {
@@ -6806,7 +6946,7 @@ function groupStatusRows(rows: any[], viewerId: string) {
     if (!grouped.has(uid)) {
       grouped.set(uid, {
         user_id: uid,
-        user_username: s.user_username,
+        user_username: publicUsernameFor({ username: s.user_username }),
         user_full_name: s.user_full_name,
         user_profile_image: s.user_profile_image,
         statuses: [],
@@ -6832,7 +6972,7 @@ api.post('/statuses', authMiddleware, async (c) => {
   const visibility = normalizeVisibility(b.visibility);
   await c.env.DB.prepare('INSERT INTO statuses (id, user_id, content, image, background_color, text_color, visibility, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
     .bind(id, userId, b.content || '', b.image || null, b.background_color || '#1B4332', b.text_color || '#FFFFFF', visibility, expiresAt).run();
-  return c.json({ id, user_id: userId, content: b.content, image: b.image, background_color: b.background_color, text_color: b.text_color, visibility, user_username: user?.username, user_full_name: user?.full_name, user_profile_image: user?.profile_image, viewed_by: [], created_at: now(), expires_at: expiresAt });
+  return c.json({ id, user_id: userId, content: b.content, image: b.image, background_color: b.background_color, text_color: b.text_color, visibility, user_username: publicUsernameFor(user), user_full_name: user?.full_name, user_profile_image: user?.profile_image, viewed_by: [], created_at: now(), expires_at: expiresAt });
 });
 
 api.get('/statuses', authMiddleware, async (c) => {

@@ -258,14 +258,14 @@ public struct PostDetailNativeView: View {
 
       if let userId = model.post.userId, !userId.isEmpty {
         NavigationLink(destination: UserProfileNativeView(userId: userId, api: model.api)) {
-          Text(model.post.userUsername ?? model.post.userFullName ?? "mira")
+          Text(model.post.authorDisplayName)
             .font(.system(size: 18, weight: .semibold))
             .foregroundStyle(MIRATheme.Color.textPrimary)
             .lineLimit(1)
         }
         .buttonStyle(.plain)
       } else {
-        Text(model.post.userUsername ?? model.post.userFullName ?? "mira")
+        Text(model.post.authorDisplayName)
           .font(.system(size: 18, weight: .semibold))
           .foregroundStyle(MIRATheme.Color.textPrimary)
           .lineLimit(1)

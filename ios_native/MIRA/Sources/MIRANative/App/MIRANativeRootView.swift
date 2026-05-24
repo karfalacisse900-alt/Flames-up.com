@@ -89,6 +89,14 @@ final class MIRAStartupCoordinator: ObservableObject {
       return
     }
 
+    if authSession.user?.needsUsernameOnboarding == true {
+      phase = .readyAuthenticated
+      await waitForMinimumSplash(since: startedAt)
+      MIRAPerformanceTimeline.mark("startup_username_required")
+      dismissSplash()
+      return
+    }
+
     shouldMountAllAuthenticatedTabs = true
     phase = .loadingUser
     profileModel.primeUser(authSession.user)
@@ -269,6 +277,9 @@ public struct MIRANativeRootView: View {
   private var destinationView: some View {
     if authSession.user == nil {
       AuthNativeView(session: authSession, api: api)
+        .transition(.opacity)
+    } else if let user = authSession.user, user.needsUsernameOnboarding {
+      ChooseUsernameNativeView(user: user, api: api, session: authSession)
         .transition(.opacity)
     } else {
       mainTabs

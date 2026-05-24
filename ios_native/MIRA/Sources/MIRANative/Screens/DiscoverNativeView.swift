@@ -412,9 +412,9 @@ private struct StoryViewerNativeView: View {
       GeometryReader { proxy in
         let safeTop = proxy.safeAreaInsets.top
         let safeBottom = proxy.safeAreaInsets.bottom
-        let bottomChromeHeight = max(108, safeBottom + 96)
-        let topChromeHeight = max(6, safeTop + 4)
-        let mediaHeight = max(380, proxy.size.height - bottomChromeHeight - topChromeHeight)
+        let bottomChromeHeight = max(88, safeBottom + 76)
+        let topChromeHeight = max(2, safeTop + 2)
+        let mediaHeight = max(360, proxy.size.height - bottomChromeHeight - topChromeHeight)
 
         VStack(spacing: 0) {
           storyCanvas
@@ -424,8 +424,8 @@ private struct StoryViewerNativeView: View {
           Spacer(minLength: 0)
 
           storyBottomActions
-            .padding(.horizontal, 16)
-            .padding(.bottom, max(12, safeBottom + 6))
+            .padding(.horizontal, 14)
+            .padding(.bottom, max(8, safeBottom + 2))
         }
         .frame(width: proxy.size.width, height: proxy.size.height)
       }
@@ -518,7 +518,7 @@ private struct StoryViewerNativeView: View {
         }
         .padding(.horizontal, 14)
       }
-      .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+      .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
     }
     .frame(maxWidth: .infinity)
     .transition(.opacity)
@@ -610,7 +610,7 @@ private struct StoryViewerNativeView: View {
       }
       .padding(.leading, 24)
       .padding(.trailing, 16)
-      .frame(height: 58)
+      .frame(height: 56)
       .background(Color.white.opacity(0.18))
       .clipShape(Capsule())
 
@@ -618,7 +618,7 @@ private struct StoryViewerNativeView: View {
         Image(systemName: "heart")
           .font(.system(size: 37, weight: .regular))
           .foregroundStyle(.white)
-          .frame(width: 45, height: 58)
+          .frame(width: 44, height: 56)
       }
       .buttonStyle(.miraPress)
 
@@ -626,7 +626,7 @@ private struct StoryViewerNativeView: View {
         Image(systemName: "ellipsis")
           .font(.system(size: 32, weight: .bold))
           .foregroundStyle(.white)
-          .frame(width: 42, height: 58)
+          .frame(width: 40, height: 56)
       }
       .buttonStyle(.miraPress)
     }
