@@ -32,6 +32,40 @@
   <string>Save edited media from Captro to your photo library.</string>
   <key>NSLocationWhenInUseUsageDescription</key>
   <string>Add places and nearby context to posts.</string>
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <key>NSAllowsArbitraryLoads</key>
+    <false/>
+    <key>NSAllowsArbitraryLoadsForMedia</key>
+    <false/>
+    <key>NSAllowsArbitraryLoadsInWebContent</key>
+    <false/>
+    <key>NSExceptionDomains</key>
+    <dict>
+      <key>api.flames-up.com</key>
+      <dict>
+        <key>NSIncludesSubdomains</key>
+        <true/>
+        <key>NSExceptionAllowsInsecureHTTPLoads</key>
+        <false/>
+        <key>NSExceptionMinimumTLSVersion</key>
+        <string>TLSv1.2</string>
+        <key>NSExceptionRequiresForwardSecrecy</key>
+        <true/>
+      </dict>
+      <key>flames-up.com</key>
+      <dict>
+        <key>NSIncludesSubdomains</key>
+        <true/>
+        <key>NSExceptionAllowsInsecureHTTPLoads</key>
+        <false/>
+        <key>NSExceptionMinimumTLSVersion</key>
+        <string>TLSv1.2</string>
+        <key>NSExceptionRequiresForwardSecrecy</key>
+        <true/>
+      </dict>
+    </dict>
+  </dict>
   <key>ITSAppUsesNonExemptEncryption</key>
   <false/>
   <key>UIBackgroundModes</key>

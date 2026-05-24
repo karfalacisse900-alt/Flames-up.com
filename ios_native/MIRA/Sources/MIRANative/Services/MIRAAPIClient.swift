@@ -38,6 +38,7 @@ public final class StaticSessionProvider: MIRASessionProviding {
 
 public enum MIRAAPIError: Error, LocalizedError {
   case badURL
+  case insecureURL
   case badStatus(Int)
   case decodingFailed
   case emptyResponse
@@ -45,10 +46,59 @@ public enum MIRAAPIError: Error, LocalizedError {
   public var errorDescription: String? {
     switch self {
     case .badURL: return "The request URL is not valid."
+    case .insecureURL: return "The request was blocked because it is not a trusted secure connection."
     case .badStatus: return "The server could not finish this request."
     case .decodingFailed: return "The app could not read the server response."
     case .emptyResponse: return "The server returned an empty response."
     }
+  }
+}
+
+public enum MIRANetworkSecurityPolicy {
+  private static let apiHosts: Set<String> = [
+    "api.flames-up.com",
+    "flames-up-api.karfalacisse900.workers.dev"
+  ]
+
+  private static let directUploadHostSuffixes = [
+    "imagedelivery.net",
+    "videodelivery.net",
+    "cloudflarestream.com"
+  ]
+
+  public static func validateAPIURL(_ url: URL) throws {
+    guard isHTTPS(url) || isLocalDebugURL(url) else { throw MIRAAPIError.insecureURL }
+    guard isAllowedAPIHost(url) || isLocalDebugURL(url) else { throw MIRAAPIError.insecureURL }
+  }
+
+  public static func validateDirectUploadURL(_ url: URL) throws {
+    guard isHTTPS(url) else { throw MIRAAPIError.insecureURL }
+    guard let host = url.host?.lowercased(), directUploadHostSuffixes.contains(where: { host == $0 || host.hasSuffix(".\($0)") }) else {
+      throw MIRAAPIError.insecureURL
+    }
+  }
+
+  public static func isSecureMediaURL(_ url: URL) -> Bool {
+    guard isHTTPS(url) else { return false }
+    return true
+  }
+
+  private static func isHTTPS(_ url: URL) -> Bool {
+    url.scheme?.lowercased() == "https"
+  }
+
+  private static func isAllowedAPIHost(_ url: URL) -> Bool {
+    guard let host = url.host?.lowercased() else { return false }
+    return apiHosts.contains(host)
+  }
+
+  private static func isLocalDebugURL(_ url: URL) -> Bool {
+    #if DEBUG
+    guard let host = url.host?.lowercased(), let scheme = url.scheme?.lowercased() else { return false }
+    return (scheme == "http" || scheme == "https") && (host == "localhost" || host == "127.0.0.1" || host == "::1")
+    #else
+    return false
+    #endif
   }
 }
 
@@ -156,7 +206,13 @@ public final class MIRAAPIClient {
     let boundary = "mira-\(UUID().uuidString)"
     request.httpMethod = "POST"
     request.timeoutInterval = 120
+    if authorize {
+      try MIRANetworkSecurityPolicy.validateAPIURL(absoluteURL)
+    } else {
+      try MIRANetworkSecurityPolicy.validateDirectUploadURL(absoluteURL)
+    }
     request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+    request.setValue(UUID().uuidString, forHTTPHeaderField: "X-Request-ID")
     request.httpBody = multipartBody(boundary: boundary, fieldName: fieldName, fileName: fileName, mimeType: mimeType, data: data)
     if authorize, let token = await sessionProvider?.accessToken(), !token.isEmpty {
       request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -190,7 +246,9 @@ public final class MIRAAPIClient {
     var request = URLRequest(url: url)
     request.httpMethod = method
     request.timeoutInterval = 25
+    try MIRANetworkSecurityPolicy.validateAPIURL(url)
     request.setValue("application/json", forHTTPHeaderField: "Accept")
+    request.setValue(UUID().uuidString, forHTTPHeaderField: "X-Request-ID")
     let token = await sessionProvider?.accessToken()
     if let body {
       request.httpBody = body
@@ -235,6 +293,7 @@ public final class MIRAAPIClient {
 
   private func makeURL(_ path: String) throws -> URL {
     if let absolute = URL(string: path), absolute.scheme != nil {
+      try MIRANetworkSecurityPolicy.validateAPIURL(absolute)
       return absolute
     }
     let cleanPath = path.hasPrefix("/") ? String(path.dropFirst()) : path
@@ -242,6 +301,7 @@ public final class MIRAAPIClient {
     guard let base = URL(string: baseString), let url = URL(string: cleanPath, relativeTo: base)?.absoluteURL else {
       throw MIRAAPIError.badURL
     }
+    try MIRANetworkSecurityPolicy.validateAPIURL(url)
     return url
   }
 

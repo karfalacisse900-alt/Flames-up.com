@@ -7437,7 +7437,7 @@ api.post('/messages', authMiddleware, async (c) => {
   runBackgroundTask(c, 'message_notification_failed', async () => {
     const sender: any = await c.env.DB.prepare('SELECT username, full_name FROM users WHERE id = ?').bind(userId).first();
     const senderName = cleanText(sender?.full_name || sender?.username || 'Someone', 80);
-    const preview = mediaType === 'voice'
+    const privatePreview = mediaType === 'voice'
       ? 'Sent you a voice message'
       : mediaType === 'video'
         ? 'Sent you a video'
@@ -7445,12 +7445,12 @@ api.post('/messages', authMiddleware, async (c) => {
           ? 'Sent you a file'
         : mediaUrl
           ? 'Sent you a photo'
-          : cleanText(content, 120);
+          : 'Sent you a message';
     await insertNotificationOnce(c, {
       userId: receiverId,
       type: 'message',
       title: `${senderName} messaged you`,
-      body: preview || 'Sent you a message',
+      body: privatePreview,
       data: { sender_id: userId, conversation_id: userId, message_id: id },
       dedupeKey: `message:${id}`,
       dedupeSeconds: 86400,

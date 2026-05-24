@@ -189,6 +189,7 @@ private enum MIRAStartupMediaPrewarmer {
 
   private static func prewarmImage(_ value: String) async {
     guard let url = URL(string: value) else { return }
+    guard MIRANetworkSecurityPolicy.isSecureMediaURL(url) else { return }
     if await MIRAImageDiskCache.image(for: url, maxPixelSize: MIRAMediaSizing.feedTargetHeight) != nil { return }
     do {
       var request = URLRequest(url: url)
@@ -205,8 +206,10 @@ private enum MIRAStartupMediaPrewarmer {
 }
 
 public struct MIRANativeRootView: View {
+  @Environment(\.scenePhase) private var scenePhase
   @State private var selectedTab: MIRATab = .main
   @State private var loadedTabs: Set<MIRATab> = [.main]
+  @State private var isPrivacyShieldVisible = false
   @StateObject private var authSession: MIRAAuthSession
   @StateObject private var startup: MIRAStartupCoordinator
   @StateObject private var callCoordinator: MIRAAppCallCoordinator
@@ -238,6 +241,12 @@ public struct MIRANativeRootView: View {
 
       MIRACallOverlays(coordinator: callCoordinator)
         .zIndex(30)
+
+      if isPrivacyShieldVisible {
+        MIRAPrivacyShieldView()
+          .transition(.opacity)
+          .zIndex(100)
+      }
     }
     .miraFullScreenOverlay(item: activeCallBinding, background: .black) { presentation, dismissCall in
       MIRAAgoraCallView(presentation: presentation, api: api) {
@@ -263,6 +272,11 @@ public struct MIRANativeRootView: View {
         loadedTabs.formUnion([.main, .discover, .profile])
       }
       callCoordinator.configure(api: api, currentUserId: userID)
+    }
+    .onChange(of: scenePhase) { _, phase in
+      withAnimation(.easeOut(duration: phase == .active ? 0.18 : 0.06)) {
+        isPrivacyShieldVisible = phase != .active
+      }
     }
   }
 
@@ -339,6 +353,18 @@ public struct MIRANativeRootView: View {
       return true
     }
     return loadedTabs.contains(tab) || selectedTab == tab
+  }
+}
+
+private struct MIRAPrivacyShieldView: View {
+  var body: some View {
+    ZStack {
+      MIRATheme.Color.launchBackground.ignoresSafeArea()
+      CaptroWordmarkView()
+        .scaleEffect(0.74)
+        .opacity(0.92)
+        .accessibilityHidden(true)
+    }
   }
 }
 

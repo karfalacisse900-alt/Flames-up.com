@@ -47,9 +47,18 @@ targets:
       configs:
         Debug:
           CODE_SIGN_STYLE: Automatic
+          ENABLE_TESTABILITY: YES
         Release:
           CODE_SIGN_STYLE: Manual
           CODE_SIGN_IDENTITY: Apple Distribution
+          COPY_PHASE_STRIP: YES
+          DEAD_CODE_STRIPPING: YES
+          DEBUG_INFORMATION_FORMAT: dwarf-with-dsym
+          ENABLE_TESTABILITY: NO
+          GCC_OPTIMIZATION_LEVEL: s
+          STRIP_INSTALLED_PRODUCT: YES
+          SWIFT_COMPILATION_MODE: wholemodule
+          SWIFT_OPTIMIZATION_LEVEL: -O
 
 schemes:
   MIRA:
