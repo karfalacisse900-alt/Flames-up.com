@@ -89,7 +89,7 @@ class FlamesUpEdgeCaseTester:
 
         # Test non-existent post
         try:
-            fake_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ0ZXN0IiwiZXhwIjo5OTk5OTk5OTk5fQ.invalid"
+            fake_token = "invalid-token-for-non-existent-post-test"
             headers = {"Authorization": f"Bearer {fake_token}"}
             response = self.make_request("GET", "/posts/non-existent-id", headers=headers)
             if response.status_code in [401, 404]:

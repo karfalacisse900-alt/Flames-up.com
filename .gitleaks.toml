@@ -1,0 +1,14 @@
+title = "Captro Gitleaks Configuration"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Documented non-secret placeholders"
+regexes = [
+  '''replace-with-strong-secret'''
+]
+paths = [
+  '''^backend-cf/\.env\.example$''',
+  '''^SECURITY_AUDIT_PLAN\.md$'''
+]
