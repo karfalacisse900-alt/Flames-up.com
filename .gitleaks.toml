@@ -4,16 +4,11 @@ title = "Captro Gitleaks Configuration"
 useDefault = true
 
 [allowlist]
-description = "Documented placeholders and public identifiers"
+description = "Documented non-secret placeholders"
 regexes = [
-  '''replace-with-strong-secret''',
-  '''AIza[0-9A-Za-z_\-]{20,}''',
-  '''702354172189-[0-9a-z]+\.apps\.googleusercontent\.com''',
-  '''2ca88b3551321681a5f9434814f38ec8''',
-  '''DY-IgVdOm-0zb0K5ZFnpKA'''
+  '''replace-with-strong-secret'''
 ]
 paths = [
   '''^backend-cf/\.env\.example$''',
-  '''^SECURITY_AUDIT_PLAN\.md$''',
-  '''^SECURITY_OPERATIONS\.md$'''
+  '''^SECURITY_AUDIT_PLAN\.md$'''
 ]
