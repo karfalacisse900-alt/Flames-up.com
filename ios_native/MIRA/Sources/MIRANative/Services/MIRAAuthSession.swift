@@ -53,9 +53,11 @@ public final class MIRAAuthSession: ObservableObject, MIRASessionProviding {
         token = nil
         user = nil
         keychain.clearAccessToken()
+        await MIRALocalJSONCache.remove(key: cachedUserKey)
       } else if user == nil {
         token = nil
         keychain.clearAccessToken()
+        await MIRALocalJSONCache.remove(key: cachedUserKey)
       }
     }
     isBootstrapping = false
@@ -75,6 +77,7 @@ public final class MIRAAuthSession: ObservableObject, MIRASessionProviding {
         token = nil
         user = nil
         keychain.clearAccessToken()
+        await MIRALocalJSONCache.remove(key: cachedUserKey)
         MIRAPerformanceTimeline.mark("auth_cached_user_rejected")
       }
     }
@@ -113,6 +116,8 @@ public final class MIRAAuthSession: ObservableObject, MIRASessionProviding {
     user = nil
     errorMessage = nil
     keychain.clearAccessToken()
+    MIRAAPIClient.productionSession.configuration.urlCache?.removeAllCachedResponses()
+    Task { await MIRALocalJSONCache.remove(key: cachedUserKey) }
   }
 
   @MainActor

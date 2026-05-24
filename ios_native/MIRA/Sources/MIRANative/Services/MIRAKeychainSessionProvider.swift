@@ -23,14 +23,14 @@ public final class MIRAKeychainSessionProvider: MIRASessionProviding {
     ]
     let attributes: [String: Any] = [
       kSecValueData as String: data,
-      kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+      kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
     ]
 
     let status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
     if status == errSecItemNotFound {
       var insert = query
       insert[kSecValueData as String] = data
-      insert[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+      insert[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
       SecItemAdd(insert as CFDictionary, nil)
     }
   }

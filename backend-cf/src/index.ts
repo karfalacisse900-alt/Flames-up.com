@@ -63,7 +63,7 @@ interface Env {
   ARWEAVE_GATEWAY?: string;
 }
 
-type HonoApp = { Bindings: Env; Variables: { userId: string } };
+type HonoApp = { Bindings: Env; Variables: { userId: string; requestId: string } };
 
 const app = new Hono<HonoApp>();
 
@@ -91,12 +91,27 @@ function allowedCorsOrigin(origin: string, c?: any) {
 const corsOpts = {
   origin: allowedCorsOrigin,
   allowMethods: ['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowHeaders: ['Authorization', 'Content-Type', 'Range', 'Idempotency-Key', 'X-Idempotency-Key'],
-  exposeHeaders: ['Accept-Ranges', 'Content-Length', 'Content-Range', 'Content-Type', 'ETag'],
+  allowHeaders: ['Authorization', 'Content-Type', 'Range', 'Idempotency-Key', 'X-Idempotency-Key', 'X-Request-ID'],
+  exposeHeaders: ['Accept-Ranges', 'Content-Length', 'Content-Range', 'Content-Type', 'ETag', 'X-Request-ID'],
   maxAge: 600,
 };
 app.use('*', cors(corsOpts));
 api.use('*', cors(corsOpts));
+
+function sanitizeRequestId(value: unknown): string {
+  const clean = String(value || '').trim().replace(/[^a-zA-Z0-9_.:-]/g, '').slice(0, 80);
+  return clean.length >= 8 ? clean : uuid();
+}
+
+const requestIdMiddleware = async (c: any, next: () => Promise<void>) => {
+  const requestId = sanitizeRequestId(c.req.header('X-Request-ID') || c.req.header('CF-Ray'));
+  c.set('requestId', requestId);
+  c.header('X-Request-ID', requestId);
+  await next();
+  c.header('X-Request-ID', requestId);
+};
+app.use('*', requestIdMiddleware);
+api.use('*', requestIdMiddleware);
 
 const securityHeaders = async (c: any, next: () => Promise<void>) => {
   await next();
@@ -1454,6 +1469,18 @@ function publicId(value: unknown, max = 120): string {
   return String(value || '').trim().replace(/[^a-zA-Z0-9_.:-]/g, '').slice(0, max);
 }
 
+function rejectUnknownFields(c: any, body: any, allowedFields: string[]) {
+  const allowed = new Set(allowedFields);
+  const unknown = Object.keys(body || {}).filter((key) => !allowed.has(key));
+  if (unknown.length > 0) {
+    return c.json({
+      detail: 'Request contains unsupported fields.',
+      fields: unknown.slice(0, 8).map((key) => cleanText(key, 80)),
+    }, 400);
+  }
+  return null;
+}
+
 function safeRateLimitPart(value: unknown): string {
   const clean = String(value || '')
     .trim()
@@ -1512,8 +1539,30 @@ async function enforceRateLimit(c: any, bucket: string, identity: string, limit:
   ]);
   const count = Number((results?.[2] as any)?.results?.[0]?.count || 0);
   if (count > limit) {
-    console.warn(JSON.stringify({ event: 'rate_limit_hit', bucket: safeRateLimitPart(bucket), identity: safeRateLimitPart(identity), count, limit }));
+    console.warn(JSON.stringify({ event: 'rate_limit_hit', request_id: c.get?.('requestId') || '', bucket: safeRateLimitPart(bucket), identity: safeRateLimitPart(identity), count, limit }));
     return c.json({ detail: 'Too many requests. Try again in a moment.', retry_after_seconds: windowSeconds }, 429);
+  }
+  return null;
+}
+
+async function usersAreBlocked(db: D1Database, firstUserId: string, secondUserId: string): Promise<boolean> {
+  if (!firstUserId || !secondUserId || firstUserId === secondUserId) return false;
+  await ensureAbuseProtectionSchema(db);
+  const block: any = await db.prepare(
+    'SELECT id FROM blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?) LIMIT 1'
+  ).bind(firstUserId, secondUserId, secondUserId, firstUserId).first();
+  return !!block;
+}
+
+async function validateDirectMessagePeer(c: any, currentUserId: string, peerId: string) {
+  if (!peerId || peerId === currentUserId) {
+    return c.json({ detail: 'Choose a valid recipient.' }, 400);
+  }
+  const peer = await c.env.DB.prepare('SELECT id FROM users WHERE id = ?').bind(peerId).first();
+  if (!peer) return c.json({ detail: 'Recipient not found.' }, 404);
+  if (await usersAreBlocked(c.env.DB, currentUserId, peerId)) {
+    await logSecurityEvent(c, 'blocked_message_access_denied', currentUserId, { peer_id: peerId });
+    return c.json({ detail: 'You cannot message this profile.' }, 403);
   }
   return null;
 }
@@ -2081,7 +2130,14 @@ function safeMediaReference(value: unknown): string {
   if (!raw || raw.length > 2500) return '';
   if (/^cfstream:[a-zA-Z0-9_-]{6,128}$/.test(raw)) return raw;
   if (/^\/api\/media\/[a-zA-Z0-9_-]{8,160}$/.test(raw)) return raw;
-  return safeExternalUrl(raw);
+  const external = safeExternalUrl(raw);
+  if (!external) return '';
+  try {
+    const url = new URL(external);
+    return url.protocol === 'https:' ? url.toString() : '';
+  } catch {
+    return '';
+  }
 }
 
 function sanitizeMediaReferences(value: unknown, fallback?: unknown): string[] {
@@ -2613,7 +2669,6 @@ const ALLOWED_AUDIO_TYPES = new Set(['audio/m4a', 'audio/mp4', 'audio/aac', 'aud
 const ALLOWED_FILE_TYPES = new Set([
   'application/pdf',
   'text/plain',
-  'application/zip',
   'application/msword',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   'application/vnd.ms-powerpoint',
@@ -2624,7 +2679,7 @@ const ALLOWED_FILE_TYPES = new Set([
 const ALLOWED_IMAGE_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'webp']);
 const ALLOWED_VIDEO_EXTENSIONS = new Set(['mp4', 'mov', 'webm']);
 const ALLOWED_AUDIO_EXTENSIONS = new Set(['m4a', 'aac', 'mp3', 'wav', 'webm']);
-const ALLOWED_FILE_EXTENSIONS = new Set(['pdf', 'txt', 'zip', 'doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx']);
+const ALLOWED_FILE_EXTENSIONS = new Set(['pdf', 'txt', 'doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx']);
 
 function fileExtension(value: unknown): string {
   const match = /\.([a-z0-9]{1,12})$/i.exec(String(value || '').split(/[?#]/)[0]);
@@ -2643,6 +2698,37 @@ function detectImageContentType(bytes: Uint8Array): string {
     && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46
     && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) return 'image/webp';
   return '';
+}
+
+function looksLikePlainText(bytes: Uint8Array): boolean {
+  const sample = bytes.slice(0, Math.min(bytes.length, 4096));
+  if (sample.length === 0) return true;
+  let suspicious = 0;
+  for (const byte of sample) {
+    const isAllowedWhitespace = byte === 0x09 || byte === 0x0a || byte === 0x0d;
+    const isPrintable = byte >= 0x20 && byte <= 0x7e;
+    const isUtf8HighByte = byte >= 0x80;
+    if (!isAllowedWhitespace && !isPrintable && !isUtf8HighByte) suspicious += 1;
+  }
+  return suspicious / sample.length < 0.02;
+}
+
+function detectDocumentContentType(bytes: Uint8Array): string {
+  if (bytes.length >= 5
+    && bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46 && bytes[4] === 0x2d) return 'application/pdf';
+  if (bytes.length >= 4
+    && bytes[0] === 0xd0 && bytes[1] === 0xcf && bytes[2] === 0x11 && bytes[3] === 0xe0) return 'application/msword';
+  if (bytes.length >= 4
+    && bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04) return 'application/zip';
+  if (looksLikePlainText(bytes)) return 'text/plain';
+  return '';
+}
+
+function documentContentMatches(declaredType: string, detectedType: string): boolean {
+  if (declaredType === detectedType) return true;
+  if (declaredType.startsWith('application/vnd.openxmlformats-officedocument.') && detectedType === 'application/zip') return true;
+  if (['application/msword', 'application/vnd.ms-powerpoint', 'application/vnd.ms-excel'].includes(declaredType) && detectedType === 'application/msword') return true;
+  return false;
 }
 
 async function sha256BinaryHex(input: ArrayBuffer | Uint8Array): Promise<string> {
@@ -4766,6 +4852,8 @@ function runBackgroundTask(c: any, label: string, task: () => Promise<void>) {
   });
   if (c.executionCtx?.waitUntil) {
     c.executionCtx.waitUntil(promise);
+  } else {
+    void promise;
   }
 }
 
@@ -4996,10 +5084,12 @@ api.post('/auth/register', async (c) => {
     if (dailyLimited) return dailyLimited;
     const jwtSecret = getJwtSecret(c);
     const body: any = await c.req.json().catch(() => ({}));
+    const unknown = rejectUnknownFields(c, body, ['email', 'password', 'username', 'full_name', 'fullName']);
+    if (unknown) return unknown;
     const email = normalizeOptionalEmail(body.email);
     const password = String(body.password || '');
     const username = normalizeOptionalName(body.username);
-    const fullName = normalizeOptionalName(body.full_name);
+    const fullName = normalizeOptionalName(body.full_name || body.fullName);
     if (!email || !password || !username || !fullName)
       return c.json({ detail: 'All fields required' }, 400);
     if (password.length < 8 || password.length > 200) {
@@ -5036,6 +5126,8 @@ api.post('/auth/login', async (c) => {
     const bodyTooLarge = rejectLargeRequest(c, 60_000);
     if (bodyTooLarge) return bodyTooLarge;
     const body: any = await c.req.json().catch(() => ({}));
+    const unknown = rejectUnknownFields(c, body, ['email', 'password']);
+    if (unknown) return unknown;
     const email = normalizeOptionalEmail(body.email);
     const password = String(body.password || '');
     if (!email || !password) return c.json({ detail: 'Invalid email or password.' }, 401);
@@ -5202,7 +5294,10 @@ api.post('/auth/oauth/google', async (c) => {
     const limited = await enforceRateLimit(c, 'oauth_google', clientIp(c), 30, 300);
     if (limited) return limited;
     await ensureOAuthSchema(c.env.DB);
-    const { id_token } = await c.req.json();
+    const body: any = await c.req.json().catch(() => ({}));
+    const unknown = rejectUnknownFields(c, body, ['id_token', 'idToken']);
+    if (unknown) return unknown;
+    const id_token = String(body.id_token || body.idToken || '');
     if (!id_token) return c.json({ detail: 'id_token is required' }, 400);
 
     const googleProfile = await verifyGoogleIdToken(c, id_token);
@@ -5238,13 +5333,15 @@ api.post('/auth/oauth/apple', async (c) => {
     if (limited) return limited;
     await ensureOAuthSchema(c.env.DB);
     const body: any = await c.req.json().catch(() => ({}));
-    const idToken = String(body.id_token || '');
+    const unknown = rejectUnknownFields(c, body, ['id_token', 'idToken', 'email', 'full_name', 'fullName', 'apple_user', 'appleUser']);
+    if (unknown) return unknown;
+    const idToken = String(body.id_token || body.idToken || '');
     if (!idToken) return c.json({ detail: 'id_token is required' }, 400);
 
     const appleProfile = await verifyAppleIdToken(c, idToken);
     const clientEmail = normalizeOptionalEmail(body.email);
-    const clientFullName = normalizeOptionalName(body.full_name);
-    const appleSubject = String(appleProfile.subject || body.apple_user || '').trim();
+    const clientFullName = normalizeOptionalName(body.full_name || body.fullName);
+    const appleSubject = String(appleProfile.subject || body.apple_user || body.appleUser || '').trim();
     const user = await findOrCreateOAuthUser(
       c,
       'apple',
@@ -5291,6 +5388,17 @@ api.put('/users/me', authMiddleware, async (c) => {
   if (limited) return limited;
   await ensurePremiumSchema(c.env.DB);
   const body = await c.req.json();
+  const unknown = rejectUnknownFields(c, body, ['full_name', 'fullName', 'bio', 'profile_image', 'profileImage', 'cover_image', 'coverImage', 'profile_background_image', 'profileBackgroundImage', 'city', 'username', 'age', 'looking_for', 'lookingFor', 'interests', 'social_website', 'socialWebsite', 'social_tiktok', 'socialTiktok', 'social_instagram', 'socialInstagram', 'is_private', 'isPrivate', 'language']);
+  if (unknown) return unknown;
+  if (body.fullName !== undefined && body.full_name === undefined) body.full_name = body.fullName;
+  if (body.profileImage !== undefined && body.profile_image === undefined) body.profile_image = body.profileImage;
+  if (body.coverImage !== undefined && body.cover_image === undefined) body.cover_image = body.coverImage;
+  if (body.profileBackgroundImage !== undefined && body.profile_background_image === undefined) body.profile_background_image = body.profileBackgroundImage;
+  if (body.lookingFor !== undefined && body.looking_for === undefined) body.looking_for = body.lookingFor;
+  if (body.socialWebsite !== undefined && body.social_website === undefined) body.social_website = body.socialWebsite;
+  if (body.socialTiktok !== undefined && body.social_tiktok === undefined) body.social_tiktok = body.socialTiktok;
+  if (body.socialInstagram !== undefined && body.social_instagram === undefined) body.social_instagram = body.socialInstagram;
+  if (body.isPrivate !== undefined && body.is_private === undefined) body.is_private = body.isPrivate;
   const currentUser: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
   const wantsCustomBackground = body.profile_background_image !== undefined || body.cover_image !== undefined;
   if (wantsCustomBackground && !userHasActivePremium(currentUser)) {
@@ -5311,7 +5419,7 @@ api.put('/users/me', authMiddleware, async (c) => {
         const usernameCheck = validateUsernameForAccount(body[f]);
         if (!usernameCheck.ok) return c.json({ detail: usernameCheck.detail }, 400);
         const existing: any = await c.env.DB.prepare('SELECT id FROM users WHERE LOWER(username) = ? AND id != ?')
-          .bind(usernameCheck.username, userId)
+          .bind(usernameCheck.username.toLowerCase(), userId)
           .first();
         if (existing) return c.json({ detail: 'Username is not available.' }, 409);
         values.push(usernameCheck.username);
@@ -5323,6 +5431,9 @@ api.put('/users/me', authMiddleware, async (c) => {
   values.push(userId);
   await c.env.DB.prepare(`UPDATE users SET ${updates.join(', ')}, updated_at = datetime('now') WHERE id = ?`).bind(...values).run();
   const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
+  if (body.username !== undefined && strictUsernameSlug(currentUser?.username) !== strictUsernameSlug(user?.username)) {
+    await logSecurityEvent(c, 'username_changed', userId, { previous_username: currentUser?.username || '', new_username: user?.username || '' });
+  }
   await recordAbuseSignals(c, userId, 'profile_update', {
     username: user.username,
     display_name: user.full_name,
@@ -5545,6 +5656,8 @@ api.put('/users/me/username', authMiddleware, async (c) => {
     const limited = await enforceRateLimit(c, 'username_claim', userId, 30, 300);
     if (limited) return limited;
     const body: any = await c.req.json().catch(() => ({}));
+    const unknown = rejectUnknownFields(c, body, ['username']);
+    if (unknown) return unknown;
     const usernameCheck = validateUsernameForAccount(body.username);
     if (!usernameCheck.ok) {
       return c.json({
@@ -5554,8 +5667,9 @@ api.put('/users/me/username', authMiddleware, async (c) => {
         reason: usernameCheck.detail,
       }, 400);
     }
+    const currentUser: any = await c.env.DB.prepare('SELECT username FROM users WHERE id = ?').bind(userId).first();
     const existing: any = await c.env.DB.prepare('SELECT id FROM users WHERE LOWER(username) = ? AND id != ?')
-      .bind(usernameCheck.username, userId)
+      .bind(usernameCheck.username.toLowerCase(), userId)
       .first();
     if (existing) {
       return c.json({
@@ -5571,6 +5685,7 @@ api.put('/users/me/username', authMiddleware, async (c) => {
       .run();
     const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
     await recordAbuseSignals(c, userId, 'username_claim', { username: usernameCheck.username });
+    await logSecurityEvent(c, 'username_changed', userId, { previous_username: currentUser?.username || '', new_username: usernameCheck.username });
     return c.json(authUserPayload(user));
   } catch (error: any) {
     console.error('Username claim failed:', getErrorCode(error), error?.message || error);
@@ -5601,7 +5716,7 @@ api.get('/users/check-username/:username', async (c) => {
       reason: usernameCheck.detail,
     });
   }
-  const user: any = await c.env.DB.prepare('SELECT id FROM users WHERE LOWER(username) = ?').bind(username).first();
+  const user: any = await c.env.DB.prepare('SELECT id FROM users WHERE LOWER(username) = ?').bind(username.toLowerCase()).first();
   return c.json({
     available: !user,
     username,
@@ -7173,6 +7288,7 @@ async function requireGroupMember(c: any, groupId: string, userId: string) {
 api.get('/conversations', authMiddleware, async (c) => {
   const userId = getUserId(c);
   await touchUserPresence(c.env.DB, userId);
+  await ensureAbuseProtectionSchema(c.env.DB);
   const msgs = await c.env.DB.prepare(`
     SELECT
       m.*,
@@ -7190,9 +7306,14 @@ api.get('/conversations', authMiddleware, async (c) => {
     FROM messages m
     JOIN users u ON (CASE WHEN m.sender_id = ? THEN m.receiver_id ELSE m.sender_id END) = u.id
     LEFT JOIN user_presence up ON up.user_id = u.id
-    WHERE m.sender_id = ? OR m.receiver_id = ?
+    WHERE (m.sender_id = ? OR m.receiver_id = ?)
+      AND NOT EXISTS (
+        SELECT 1 FROM blocks b
+        WHERE (b.blocker_id = ? AND b.blocked_id = u.id)
+           OR (b.blocker_id = u.id AND b.blocked_id = ?)
+      )
     ORDER BY m.created_at DESC
-  `).bind(userId, userId, userId, userId).all();
+  `).bind(userId, userId, userId, userId, userId, userId).all();
   const map = new Map<string, any>();
   for (const m of msgs.results as any[]) {
     const oid = m.sender_id === userId ? m.receiver_id : m.sender_id;
@@ -7286,10 +7407,12 @@ api.post('/messages', authMiddleware, async (c) => {
   const bodyTooLarge = rejectLargeRequest(c, 120_000);
   if (bodyTooLarge) return bodyTooLarge;
   const b = await c.req.json().catch(() => ({}));
-  const receiverId = publicId(b.receiver_id, 120);
+  const unknown = rejectUnknownFields(c, b, ['receiver_id', 'receiverId', 'content', 'media_url', 'mediaUrl', 'media_type', 'mediaType', 'client_request_id', 'clientRequestId', 'idempotency_key', 'request_id']);
+  if (unknown) return unknown;
+  const receiverId = publicId(b.receiver_id || b.receiverId, 120);
   const content = cleanMultilineText(b.content, 2000);
-  const mediaUrl = safeMediaReference(b.media_url);
-  const requestedMediaType = String(b.media_type || '').toLowerCase();
+  const mediaUrl = safeMediaReference(b.media_url || b.mediaUrl);
+  const requestedMediaType = String(b.media_type || b.mediaType || '').toLowerCase();
   const mediaType = requestedMediaType.includes('video')
     ? 'video'
     : requestedMediaType.includes('voice') || requestedMediaType.includes('audio')
@@ -7297,15 +7420,9 @@ api.post('/messages', authMiddleware, async (c) => {
       : requestedMediaType.includes('file') || requestedMediaType.includes('document')
         ? 'file'
         : mediaUrl ? 'image' : null;
-  if (!receiverId || receiverId === userId) return c.json({ detail: 'Choose a valid recipient.' }, 400);
+  const invalidPeer = await validateDirectMessagePeer(c, userId, receiverId);
+  if (invalidPeer) return invalidPeer;
   if (!content && !mediaUrl) return c.json({ detail: 'Message is empty.' }, 400);
-  const recipient = await c.env.DB.prepare('SELECT id FROM users WHERE id = ?').bind(receiverId).first();
-  if (!recipient) return c.json({ detail: 'Recipient not found.' }, 404);
-  await ensureAbuseProtectionSchema(c.env.DB);
-  const block: any = await c.env.DB.prepare('SELECT id FROM blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?) LIMIT 1')
-    .bind(userId, receiverId, receiverId, userId)
-    .first();
-  if (block) return c.json({ detail: 'You cannot message this profile.' }, 403);
   if (content) {
     const recentDuplicate: any = await c.env.DB.prepare(
       "SELECT id FROM messages WHERE sender_id = ? AND receiver_id = ? AND content = ? AND created_at > datetime('now', '-30 seconds') LIMIT 1"
@@ -7348,8 +7465,12 @@ api.post('/messages', authMiddleware, async (c) => {
 
 api.get('/messages/presence/:userId', authMiddleware, async (c) => {
   const myId = getUserId(c);
-  const peerId = c.req.param('userId');
+  const peerId = publicId(c.req.param('userId'), 120);
   await touchUserPresence(c.env.DB, myId);
+  const limited = await enforceRateLimit(c, 'message_presence', myId, 160, 60);
+  if (limited) return limited;
+  const invalidPeer = await validateDirectMessagePeer(c, myId, peerId);
+  if (invalidPeer) return invalidPeer;
   const presence: any = await c.env.DB.prepare('SELECT last_seen_at FROM user_presence WHERE user_id = ?')
     .bind(peerId)
     .first();
@@ -7369,10 +7490,18 @@ api.get('/messages/presence/:userId', authMiddleware, async (c) => {
 api.post('/messages/typing', authMiddleware, async (c) => {
   const userId = getUserId(c);
   await touchUserPresence(c.env.DB, userId);
+  const limited = await enforceRateLimit(c, 'message_typing', userId, 120, 60);
+  if (limited) return limited;
+  const bodyTooLarge = rejectLargeRequest(c, 20_000);
+  if (bodyTooLarge) return bodyTooLarge;
   const body: any = await c.req.json().catch(() => ({}));
-  const peerId = publicId(body.peer_id, 120);
-  const isTyping = optionalBoolean(body.is_typing ?? body.typing) === true;
+  const unknown = rejectUnknownFields(c, body, ['peer_id', 'peerId', 'is_typing', 'isTyping', 'typing']);
+  if (unknown) return unknown;
+  const peerId = publicId(body.peer_id || body.peerId, 120);
+  const isTyping = optionalBoolean(body.is_typing ?? body.isTyping ?? body.typing) === true;
   if (!peerId || peerId === userId) return c.json({ typing: false });
+  const invalidPeer = await validateDirectMessagePeer(c, userId, peerId);
+  if (invalidPeer) return invalidPeer;
   const timestamp = now();
   await c.env.DB.prepare(`
     INSERT INTO message_typing (id, user_id, peer_id, is_typing, updated_at)
@@ -7385,21 +7514,63 @@ api.post('/messages/typing', authMiddleware, async (c) => {
 });
 
 api.get('/messages/:userId', authMiddleware, async (c) => {
-  const myId = getUserId(c); const oid = c.req.param('userId');
+  const myId = getUserId(c);
+  const oid = publicId(c.req.param('userId'), 120);
   await touchUserPresence(c.env.DB, myId);
+  const limited = await enforceRateLimit(c, 'message_read', myId, 160, 60);
+  if (limited) return limited;
+  const invalidPeer = await validateDirectMessagePeer(c, myId, oid);
+  if (invalidPeer) return invalidPeer;
+  const limit = clampNumber(c.req.query('limit') || '80', 1, 100, 80);
+  const before = cleanText(c.req.query('before') || '', 60);
   await c.env.DB.prepare('UPDATE messages SET is_read = 1 WHERE sender_id = ? AND receiver_id = ? AND is_read = 0').bind(oid, myId).run();
-  const r = await c.env.DB.prepare('SELECT * FROM messages WHERE (sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?) ORDER BY created_at ASC').bind(myId, oid, oid, myId).all();
+  const beforeClause = before ? "AND datetime(created_at) < datetime(?)" : '';
+  const binds = before ? [myId, oid, oid, myId, before, limit] : [myId, oid, oid, myId, limit];
+  const r = await c.env.DB.prepare(`
+    SELECT * FROM (
+      SELECT * FROM messages
+      WHERE ((sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?))
+        ${beforeClause}
+      ORDER BY created_at DESC
+      LIMIT ?
+    )
+    ORDER BY created_at ASC
+  `).bind(...binds).all();
   return c.json(r.results);
 });
 
 api.post('/group-chats', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const limited = await enforceRateLimit(c, 'group_chat_create', userId, 20, 60);
+  if (limited) return limited;
+  const dailyLimited = await enforceRateLimit(c, 'group_chat_create_daily', userId, 80, 86400);
+  if (dailyLimited) return dailyLimited;
+  const bodyTooLarge = rejectLargeRequest(c, 40_000);
+  if (bodyTooLarge) return bodyTooLarge;
   const body: any = await c.req.json().catch(() => ({}));
-  const memberIds = Array.isArray(body.member_ids)
-    ? body.member_ids.map((id: any) => String(id)).filter((id: string) => id && id !== userId)
+  const unknown = rejectUnknownFields(c, body, ['member_ids', 'memberIds', 'name']);
+  if (unknown) return unknown;
+  const rawMemberIds = Array.isArray(body.member_ids) ? body.member_ids : Array.isArray(body.memberIds) ? body.memberIds : [];
+  const memberIds = Array.isArray(rawMemberIds)
+    ? rawMemberIds.map((id: any) => publicId(id, 120)).filter((id: string) => id && id !== userId)
     : [];
   const uniqueMemberIds = Array.from(new Set(memberIds)).slice(0, 50);
   if (uniqueMemberIds.length < 2) return c.json({ detail: 'Select at least two people for a group chat.' }, 400);
+  await ensureAbuseProtectionSchema(c.env.DB);
+  const memberPlaceholders = uniqueMemberIds.map(() => '?').join(', ');
+  const existingMembers = await c.env.DB.prepare(`SELECT id FROM users WHERE id IN (${memberPlaceholders})`)
+    .bind(...uniqueMemberIds)
+    .all();
+  if ((existingMembers.results as any[]).length !== uniqueMemberIds.length) {
+    return c.json({ detail: 'One or more selected people could not be found.' }, 400);
+  }
+  const blockedMember = await c.env.DB.prepare(`
+    SELECT id FROM blocks
+    WHERE (blocker_id = ? AND blocked_id IN (${memberPlaceholders}))
+       OR (blocked_id = ? AND blocker_id IN (${memberPlaceholders}))
+    LIMIT 1
+  `).bind(userId, ...uniqueMemberIds, userId, ...uniqueMemberIds).first();
+  if (blockedMember) return c.json({ detail: 'A blocked profile cannot be added to this group.' }, 403);
 
   const groupId = uuid();
   const name = String(body.name || '').trim().slice(0, 80) || 'New group';
@@ -7424,8 +7595,12 @@ api.post('/group-chats', authMiddleware, async (c) => {
 
 api.get('/group-chats/:groupId/messages', authMiddleware, async (c) => {
   const userId = getUserId(c);
-  const groupId = c.req.param('groupId');
+  const groupId = publicId(c.req.param('groupId'), 120);
+  const limited = await enforceRateLimit(c, 'group_message_read', userId, 160, 60);
+  if (limited) return limited;
   if (!await requireGroupMember(c, groupId, userId)) return c.json({ detail: 'Group not found' }, 404);
+  const limit = clampNumber(c.req.query('limit') || '80', 1, 100, 80);
+  const before = cleanText(c.req.query('before') || '', 60);
 
   const group: any = await c.env.DB.prepare(`
     SELECT g.*, COUNT(m.user_id) AS member_count
@@ -7439,20 +7614,30 @@ api.get('/group-chats/:groupId/messages', authMiddleware, async (c) => {
     FROM group_messages gm
     JOIN users u ON u.id = gm.sender_id
     WHERE gm.group_id = ?
-    ORDER BY gm.created_at ASC
-  `).bind(groupId).all();
+      ${before ? "AND datetime(gm.created_at) < datetime(?)" : ''}
+    ORDER BY gm.created_at DESC
+    LIMIT ?
+  `).bind(...(before ? [groupId, before, limit] : [groupId, limit])).all();
 
-  return c.json({ group, messages: messages.results });
+  return c.json({ group, messages: [...(messages.results as any[])].reverse() });
 });
 
 api.post('/group-chats/:groupId/messages', authMiddleware, async (c) => {
   const userId = getUserId(c);
-  const groupId = c.req.param('groupId');
+  const groupId = publicId(c.req.param('groupId'), 120);
+  const limited = await enforceRateLimit(c, 'group_message_send', userId, 60, 60);
+  if (limited) return limited;
+  const dailyLimited = await enforceRateLimit(c, 'group_message_send_daily', userId, 800, 86400);
+  if (dailyLimited) return dailyLimited;
+  const bodyTooLarge = rejectLargeRequest(c, 120_000);
+  if (bodyTooLarge) return bodyTooLarge;
   if (!await requireGroupMember(c, groupId, userId)) return c.json({ detail: 'Group not found' }, 404);
   const body: any = await c.req.json().catch(() => ({}));
+  const unknown = rejectUnknownFields(c, body, ['content', 'media_url', 'mediaUrl', 'media_type', 'mediaType', 'client_request_id', 'clientRequestId', 'idempotency_key', 'request_id']);
+  if (unknown) return unknown;
   const content = cleanMultilineText(body.content, 2000);
-  const mediaUrl = safeMediaReference(body.media_url);
-  const requestedMediaType = String(body.media_type || '').toLowerCase();
+  const mediaUrl = safeMediaReference(body.media_url || body.mediaUrl);
+  const requestedMediaType = String(body.media_type || body.mediaType || '').toLowerCase();
   const mediaType = requestedMediaType.includes('video')
     ? 'video'
     : requestedMediaType.includes('voice') || requestedMediaType.includes('audio')
@@ -7461,6 +7646,15 @@ api.post('/group-chats/:groupId/messages', authMiddleware, async (c) => {
         ? 'file'
         : mediaUrl ? 'image' : null;
   if (!content && !mediaUrl) return c.json({ detail: 'Message is empty' }, 400);
+  if (content) {
+    const recentDuplicate: any = await c.env.DB.prepare(
+      "SELECT id FROM group_messages WHERE group_id = ? AND sender_id = ? AND content = ? AND created_at > datetime('now', '-30 seconds') LIMIT 1"
+    ).bind(groupId, userId, content).first();
+    if (recentDuplicate) {
+      await logSecurityEvent(c, 'duplicate_group_message_blocked', userId, { group_id: groupId });
+      return c.json({ detail: 'You already sent that message. Try again in a moment.' }, 429);
+    }
+  }
 
   const id = uuid();
   await c.env.DB.prepare('INSERT INTO group_messages (id, group_id, sender_id, content, media_url, media_type) VALUES (?, ?, ?, ?, ?, ?)')
@@ -9999,6 +10193,14 @@ async function serveMediaBackup(c: any) {
         `SELECT p.id FROM posts p JOIN users u ON p.user_id = u.id WHERE p.id = ? AND ${visiblePostWhere('u', 'p')} LIMIT 1`
       ).bind(backup.post_id, ...visiblePostBindValues(viewerId)).first();
       if (!visiblePost) return c.json({ detail: 'Media not found' }, 404);
+    } else if (!viewerId) {
+      return c.json({ detail: 'Media not found' }, 404);
+    } else if (backup.user_id !== viewerId) {
+      const viewer: any = await c.env.DB.prepare('SELECT username, is_admin FROM users WHERE id = ?').bind(viewerId).first();
+      if (!viewer?.is_admin && !isOwnerUsername(c, viewer?.username)) {
+        await logSecurityEvent(c, 'unattached_media_access_denied', viewerId, { backup_id: backup.id });
+        return c.json({ detail: 'Media not found' }, 404);
+      }
     }
 
     const head = await c.env.MEDIA_BACKUP.head(backup.r2_key);
@@ -10176,13 +10378,18 @@ api.post('/upload/file', authMiddleware, async (c) => {
     const fileType = normalizedContentType(file.type || '') || contentTypeFromFilename(file.name);
     const fileSize = Number(file.size || 0);
     if (!ALLOWED_FILE_TYPES.has(fileType) || !extensionAllowed(file.name, ALLOWED_FILE_EXTENSIONS)) {
-      return c.json({ detail: 'Unsupported file type. Use PDF, TXT, ZIP, Word, PowerPoint, or Excel files.' }, 400);
+      return c.json({ detail: 'Unsupported file type. Use PDF, TXT, Word, PowerPoint, or Excel files.' }, 400);
     }
     if (fileSize > 24_000_000) {
       return c.json({ detail: 'File is too large.', max_bytes: 24_000_000 }, 413);
     }
 
     const bytes = await file.arrayBuffer();
+    const detectedType = detectDocumentContentType(new Uint8Array(bytes));
+    if (!detectedType || !documentContentMatches(fileType, detectedType)) {
+      await logSecurityEvent(c, 'file_upload_type_mismatch', userId, { declared_type: fileType, detected_type: detectedType || 'unknown' });
+      return c.json({ detail: 'File type does not match the uploaded data.' }, 400);
+    }
     const backup = await storeMediaBackup(c, {
       userId,
       mediaKind: 'file',
@@ -10583,6 +10790,7 @@ api.get('/database/status', authMiddleware, async (c) => {
 // Setup bookmarks table
 api.post('/bookmarks/setup-db', authMiddleware, async (c) => {
   try {
+    await requireOwnerOrAdmin(c);
     await c.env.DB.exec(`
       CREATE TABLE IF NOT EXISTS bookmarks (
         id TEXT PRIMARY KEY, user_id TEXT NOT NULL, post_id TEXT NOT NULL,
@@ -10604,7 +10812,12 @@ api.post('/bookmarks/setup-db', authMiddleware, async (c) => {
     try { await c.env.DB.exec(`ALTER TABLE posts ADD COLUMN place_id TEXT DEFAULT NULL;`); } catch {}
     try { await c.env.DB.exec(`ALTER TABLE posts ADD COLUMN place_name TEXT DEFAULT NULL;`); } catch {}
     return c.json({ success: true, message: 'Bookmarks + Saved Places tables created' });
-  } catch (e: any) { console.error('Bookmarks setup failed:', getErrorCode(e)); return c.json({ success: true, message: 'Tables already exist or could not be changed now' }); }
+  } catch (e: any) {
+    const forbidden = String(e?.message || '') === 'FORBIDDEN';
+    if (forbidden) return c.json({ detail: 'Owner access required.' }, 403);
+    console.error('Bookmarks setup failed:', getErrorCode(e));
+    return c.json({ success: true, message: 'Tables already exist or could not be changed now' });
+  }
 });
 
 // Save/Bookmark a post

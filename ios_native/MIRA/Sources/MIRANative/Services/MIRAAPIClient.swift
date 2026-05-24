@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 public enum MIRAProductionBackend {
@@ -201,7 +202,7 @@ public final class MIRAAPIClient {
 
     let data: Data
     if method == "GET", body == nil {
-      let key = "\(method) \(url.absoluteString) \(token ?? "")"
+      let key = "\(method) \(url.absoluteString) \(tokenFingerprint(token))"
       data = try await MIRAAPIRequestDeduplicator.shared.data(for: key) {
         try await self.responseData(for: request, metricLabel: "\(method) \(url.path)")
       }
@@ -242,6 +243,12 @@ public final class MIRAAPIClient {
       throw MIRAAPIError.badURL
     }
     return url
+  }
+
+  private func tokenFingerprint(_ token: String?) -> String {
+    guard let token, !token.isEmpty else { return "anonymous" }
+    let digest = SHA256.hash(data: Data(token.utf8))
+    return digest.prefix(12).map { String(format: "%02x", $0) }.joined()
   }
 
   private func multipartBody(boundary: String, fieldName: String, fileName: String, mimeType: String, data: Data) -> Data {

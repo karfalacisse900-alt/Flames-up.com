@@ -179,6 +179,13 @@ public enum MIRALocalJSONCache {
     }.value
   }
 
+  public static func remove(key: String) async {
+    await Task.detached(priority: .utility) {
+      guard let fileURL = cacheFileURL(for: key) else { return }
+      try? FileManager.default.removeItem(at: fileURL)
+    }.value
+  }
+
   private static func cacheFileURL(for key: String) -> URL? {
     guard let directory = cacheDirectory() else { return nil }
     let digest = SHA256.hash(data: Data(key.utf8)).map { String(format: "%02x", $0) }.joined()
