@@ -23,6 +23,10 @@ jobs:
         working-directory: ./backend-cf
         run: npm ci
 
+      - name: Type-check backend-cf
+        working-directory: ./backend-cf
+        run: npx tsc --noEmit
+
       - name: Deploy to Cloudflare Workers
         working-directory: ./backend-cf
         run: npx wrangler deploy --env production --keep-vars

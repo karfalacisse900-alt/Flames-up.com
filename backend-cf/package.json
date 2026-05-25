@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy --keep-vars",
+    "deploy": "wrangler deploy --env production --keep-vars",
     "db:migrate": "wrangler d1 execute flames-up-db --file=./migrations/0001_init.sql",
     "db:migrate:prod": "wrangler d1 execute flames-up-db --file=./migrations/0001_init.sql --remote"
   },

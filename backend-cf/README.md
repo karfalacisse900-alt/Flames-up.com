@@ -13,6 +13,7 @@ Backend stack: Hono + D1 + Cloudflare Images/Stream.
    `wrangler d1 execute flames-up-db --file=./migrations/0003_creators.sql --remote`
    `wrangler d1 execute flames-up-db --file=./migrations/0004_oauth.sql --remote`
    `wrangler d1 execute flames-up-db --file=./migrations/0005_phone_auth.sql --remote`
+   `wrangler d1 execute flames-up-db --file=./migrations/0019_production_performance_indexes.sql --remote`
 
 3. Configure vars:
    - `JWT_SECRET`
@@ -30,7 +31,7 @@ Backend stack: Hono + D1 + Cloudflare Images/Stream.
    - `SUPABASE_JWT_ISSUER` only if your Supabase issuer differs from `SUPABASE_URL/auth/v1`
 
 4. Deploy:
-   `wrangler deploy`
+   `wrangler deploy --env production --keep-vars`
 
 Google OAuth requires the same client IDs used by the native app and web auth callback:
 
