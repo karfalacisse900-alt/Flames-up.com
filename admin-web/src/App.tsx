@@ -52,17 +52,18 @@ const navItems: Array<{ key: ViewKey; label: string }> = [
 
 const reportReasons = [
   'all',
-  'harassment',
-  'bullying',
-  'hate',
-  'threats',
-  'doxxing',
-  'spam',
-  'scam',
+  'harassment_or_bullying',
+  'hate_speech',
+  'threats_or_violence',
+  'doxxing_or_private_information',
+  'spam_or_scam',
   'impersonation',
-  'copyright_issue',
-  'sexual_exploitation',
-  'violence',
+  'stolen_content_or_copyright',
+  'sexual_content_or_exploitation',
+  'illegal_or_dangerous_activity',
+  'self_harm_concern',
+  'false_or_misleading_content',
+  'dont_want_to_see',
   'other',
 ];
 
@@ -99,7 +100,7 @@ function clampText(value?: string | null, fallback = 'No text') {
 
 function statusClass(value?: string) {
   const clean = String(value || '').toLowerCase();
-  if (['high', 'banned', 'removed', 'declined', 'failed'].includes(clean)) return 'badge danger';
+  if (['urgent', 'high', 'banned', 'removed', 'declined', 'failed'].includes(clean)) return 'badge danger';
   if (['medium', 'suspended', 'under_review', 'escalated', 'hidden', 'pending'].includes(clean)) return 'badge warning';
   if (['active', 'action_taken', 'closed', 'restored', 'safe'].includes(clean)) return 'badge success';
   return 'badge';
@@ -611,7 +612,9 @@ function ReportsPage({
             <option value="user">Users</option>
             <option value="profile">Profiles</option>
             <option value="message">Messages</option>
+            <option value="discover_post">Discover posts</option>
             <option value="story">Stories</option>
+            <option value="handshake_request">Handshake requests</option>
           </select>
           <input type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} aria-label="Created after" />
         </div>

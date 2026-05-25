@@ -1790,20 +1790,31 @@ async function validateDirectMessagePeer(c: any, currentUserId: string, peerId: 
 
 const REPORT_REASONS = new Set([
   'spam',
+  'spam_or_scam',
   'scam',
   'impersonation',
   'harassment',
+  'harassment_or_bullying',
   'bullying',
   'hate',
+  'hate_speech',
   'violence',
+  'threats_or_violence',
   'illegal_activity',
+  'illegal_or_dangerous_activity',
   'sexual_content',
   'sexual_exploitation',
+  'sexual_content_or_exploitation',
+  'minor_safety',
+  'self_harm_concern',
+  'false_or_misleading_content',
+  'dont_want_to_see',
   'unwanted_explicit_content',
   'dangerous_product',
   'misleading_product',
   'suspicious_link',
   'copyright_issue',
+  'stolen_content_or_copyright',
   'stolen_photo',
   'stolen_video',
   'unauthorized_repost',
@@ -1811,6 +1822,7 @@ const REPORT_REASONS = new Set([
   'fake_creator',
   'fake_business_identity',
   'private_personal_information',
+  'doxxing_or_private_information',
   'phone_number_exposed',
   'address_exposed',
   'email_exposed',
@@ -1837,6 +1849,9 @@ const REPORT_TARGET_TYPES = new Set([
   'profile',
   'user',
   'message',
+  'discover_post',
+  'handshake_request',
+  'story',
   'note',
   'music',
   'sound',
@@ -1845,8 +1860,9 @@ const REPORT_TARGET_TYPES = new Set([
   'other',
 ]);
 
-const HIGH_PRIORITY_REPORT_REASONS = new Set([
+const URGENT_PRIORITY_REPORT_REASONS = new Set([
   'private_personal_information',
+  'doxxing_or_private_information',
   'phone_number_exposed',
   'address_exposed',
   'email_exposed',
@@ -1855,9 +1871,26 @@ const HIGH_PRIORITY_REPORT_REASONS = new Set([
   'school_information',
   'workplace_information',
   'threats',
+  'threats_or_violence',
   'harassment_private_info',
   'doxxing',
   'privacy_concern',
+  'sexual_exploitation',
+  'sexual_content_or_exploitation',
+  'minor_safety',
+  'self_harm_concern',
+  'illegal_activity',
+  'illegal_or_dangerous_activity',
+]);
+
+const HIGH_PRIORITY_REPORT_REASONS = new Set([
+  'harassment',
+  'harassment_or_bullying',
+  'bullying',
+  'hate',
+  'hate_speech',
+  'violence',
+  'unwanted_explicit_content',
 ]);
 
 const COPYRIGHT_REPORT_REASONS = new Set([
@@ -1882,21 +1915,50 @@ const REPORT_STATUSES = new Set([
 
 function normalizeReportReason(value: unknown): string {
   const reason = cleanText(value || 'other', 80).toLowerCase().replace(/[\s-]+/g, '_');
+  const aliases: Record<string, string> = {
+    harassment_bullying: 'harassment_or_bullying',
+    harassment_or_bullying: 'harassment_or_bullying',
+    hate: 'hate_speech',
+    hate_speech: 'hate_speech',
+    threats: 'threats_or_violence',
+    threats_violence: 'threats_or_violence',
+    threats_or_violence: 'threats_or_violence',
+    doxxing_private_information: 'doxxing_or_private_information',
+    doxxing_or_private_information: 'doxxing_or_private_information',
+    private_info: 'doxxing_or_private_information',
+    spam_scam: 'spam_or_scam',
+    spam_or_scam: 'spam_or_scam',
+    stolen_content: 'stolen_content_or_copyright',
+    stolen_content_or_copyright: 'stolen_content_or_copyright',
+    copyright: 'stolen_content_or_copyright',
+    sexual_content_exploitation: 'sexual_content_or_exploitation',
+    sexual_content_or_exploitation: 'sexual_content_or_exploitation',
+    illegal_dangerous_activity: 'illegal_or_dangerous_activity',
+    illegal_or_dangerous_activity: 'illegal_or_dangerous_activity',
+    self_harm: 'self_harm_concern',
+    false_or_misleading: 'false_or_misleading_content',
+    misleading: 'false_or_misleading_content',
+    not_interested: 'dont_want_to_see',
+    i_dont_want_to_see_this: 'dont_want_to_see',
+  };
+  const normalized = aliases[reason] || reason;
+  if (REPORT_REASONS.has(normalized)) return normalized;
   return REPORT_REASONS.has(reason) ? reason : 'other';
 }
 
 function normalizeReportStatus(value: unknown, fallback = 'pending'): string {
   const status = cleanText(value || fallback, 40).toLowerCase().replace(/[\s-]+/g, '_');
-  if (status === 'open') return 'pending';
+  if (status === 'open') return 'open';
   if (status === 'in_review') return 'under_review';
   if (status === 'resolved' || status === 'removed') return 'action_taken';
   if (status === 'reviewing') return 'under_review';
   return REPORT_STATUSES.has(status) ? status : fallback;
 }
 
-function priorityForReportReason(reason: string): 'high' | 'medium' | 'normal' {
+function priorityForReportReason(reason: string): 'urgent' | 'high' | 'medium' | 'normal' {
+  if (URGENT_PRIORITY_REPORT_REASONS.has(reason)) return 'urgent';
   if (HIGH_PRIORITY_REPORT_REASONS.has(reason)) return 'high';
-  if (COPYRIGHT_REPORT_REASONS.has(reason) || reason === 'impersonation' || reason === 'suspicious_link') return 'medium';
+  if (COPYRIGHT_REPORT_REASONS.has(reason) || reason === 'stolen_content_or_copyright' || reason === 'impersonation' || reason === 'suspicious_link' || reason === 'spam_or_scam') return 'medium';
   return 'normal';
 }
 
@@ -1904,6 +1966,9 @@ function normalizeReportTargetType(value: unknown): string {
   const type = cleanText(value || 'other', 60).toLowerCase().replace(/[\s-]+/g, '_');
   if (type === 'people') return 'people_profile';
   if (type === 'user_profile') return 'profile';
+  if (type === 'discover' || type === 'discover_item') return 'discover_post';
+  if (type === 'status') return 'story';
+  if (type === 'handshake') return 'handshake_request';
   return REPORT_TARGET_TYPES.has(type) ? type : 'other';
 }
 
@@ -2127,7 +2192,7 @@ async function insertNotificationOnce(c: any, input: {
   return true;
 }
 
-async function resolveReportTarget(c: any, reporterId: string, type: string, reportedId: string, body: any): Promise<{ ok: boolean; status?: number; detail?: string; contentId?: string }> {
+async function resolveReportTarget(c: any, reporterId: string, type: string, reportedId: string, body: any): Promise<{ ok: boolean; status?: number; detail?: string; contentId?: string; targetOwnerUserId?: string }> {
   try {
     if (!reportedId) return { ok: false, status: 400, detail: 'Choose something to report.' };
     if (type === 'post') {
@@ -2138,7 +2203,7 @@ async function resolveReportTarget(c: any, reporterId: string, type: string, rep
       const row: any = await c.env.DB.prepare(reportPostSql).bind(reportedId, ...visiblePostBindValues(reporterId)).first();
       if (!row) return { ok: false, status: 404, detail: 'Reported post was not found.' };
       if (row.user_id === reporterId) return { ok: false, status: 400, detail: 'You cannot report your own content.' };
-      return { ok: true, contentId: row.id };
+      return { ok: true, contentId: row.id, targetOwnerUserId: row.user_id };
     }
     if (type === 'comment') {
       const reportCommentSql = [
@@ -2151,41 +2216,59 @@ async function resolveReportTarget(c: any, reporterId: string, type: string, rep
       const row: any = await c.env.DB.prepare(reportCommentSql).bind(reportedId, ...visiblePostBindValues(reporterId)).first();
       if (!row) return { ok: false, status: 404, detail: 'Reported comment was not found.' };
       if (row.user_id === reporterId) return { ok: false, status: 400, detail: 'You cannot report your own comment.' };
-      return { ok: true, contentId: row.post_id };
+      return { ok: true, contentId: row.post_id, targetOwnerUserId: row.user_id };
     }
     if (type === 'profile' || type === 'user') {
       const row: any = await c.env.DB.prepare('SELECT id FROM users WHERE id = ? LIMIT 1').bind(reportedId).first();
       if (!row) return { ok: false, status: 404, detail: 'Reported profile was not found.' };
       if (row.id === reporterId) return { ok: false, status: 400, detail: 'You cannot report your own profile.' };
-      return { ok: true, contentId: row.id };
+      return { ok: true, contentId: row.id, targetOwnerUserId: row.id };
     }
     if (type === 'message') {
       const row: any = await c.env.DB.prepare('SELECT id, sender_id, receiver_id FROM messages WHERE id = ? AND (sender_id = ? OR receiver_id = ?) LIMIT 1')
         .bind(reportedId, reporterId, reporterId)
         .first();
       if (!row) return { ok: false, status: 404, detail: 'Reported message was not found.' };
-      return { ok: true, contentId: row.id };
+      const targetOwnerUserId = row.sender_id === reporterId ? row.receiver_id : row.sender_id;
+      if (!targetOwnerUserId || targetOwnerUserId === reporterId) return { ok: false, status: 400, detail: 'You cannot report your own message.' };
+      return { ok: true, contentId: row.id, targetOwnerUserId };
+    }
+    if (type === 'discover_post') {
+      const row: any = await c.env.DB.prepare('SELECT id, user_id FROM discover_posts WHERE id = ? LIMIT 1').bind(reportedId).first();
+      if (!row) return { ok: false, status: 404, detail: 'Reported Discover post was not found.' };
+      if (row.user_id === reporterId) return { ok: false, status: 400, detail: 'You cannot report your own Discover post.' };
+      return { ok: true, contentId: row.id, targetOwnerUserId: row.user_id };
+    }
+    if (type === 'story') {
+      const storySql = [
+        'SELECT s.id, s.user_id FROM statuses s JOIN users u ON s.user_id = u.id',
+        `WHERE s.id = ? AND s.created_at >= datetime('now', '-7 days') AND ${visibleStatusWhere('u', 's')} LIMIT 1`,
+      ].join(' ');
+      const row: any = await c.env.DB.prepare(storySql).bind(reportedId, reporterId, reporterId).first();
+      if (!row) return { ok: false, status: 404, detail: 'Reported story was not found.' };
+      if (row.user_id === reporterId) return { ok: false, status: 400, detail: 'You cannot report your own story.' };
+      return { ok: true, contentId: row.id, targetOwnerUserId: row.user_id };
     }
     if (type === 'note') {
       await ensureNotesSchema(c.env.DB);
       const row: any = await c.env.DB.prepare("SELECT id, user_id FROM notes WHERE id = ? AND COALESCE(status, 'active') = 'active' LIMIT 1").bind(reportedId).first();
       if (!row) return { ok: false, status: 404, detail: 'Reported note was not found.' };
       if (row.user_id === reporterId) return { ok: false, status: 400, detail: 'You cannot report your own note.' };
-      return { ok: true, contentId: row.id };
+      return { ok: true, contentId: row.id, targetOwnerUserId: row.user_id };
     }
     if (type === 'music') {
       await ensureAiMusicSchema(c.env.DB);
       const row: any = await c.env.DB.prepare("SELECT id, user_id FROM ai_music_posts WHERE id = ? AND COALESCE(status, 'active') != 'removed' LIMIT 1").bind(reportedId).first();
       if (!row) return { ok: false, status: 404, detail: 'Reported music post was not found.' };
       if (row.user_id === reporterId) return { ok: false, status: 400, detail: 'You cannot report your own music post.' };
-      return { ok: true, contentId: row.id };
+      return { ok: true, contentId: row.id, targetOwnerUserId: row.user_id };
     }
     if (type === 'recommendation') {
       await ensureRecommendationSchema(c.env.DB);
       const row: any = await c.env.DB.prepare("SELECT id, user_id FROM recommendations WHERE id = ? AND COALESCE(status, 'active') = 'active' LIMIT 1").bind(reportedId).first();
       if (!row) return { ok: false, status: 404, detail: 'Reported recommendation was not found.' };
       if (row.user_id === reporterId) return { ok: false, status: 400, detail: 'You cannot report your own recommendation.' };
-      return { ok: true, contentId: row.id };
+      return { ok: true, contentId: row.id, targetOwnerUserId: row.user_id };
     }
     if (type === 'people_profile') {
       await ensurePeopleSchema(c.env.DB);
@@ -2200,8 +2283,22 @@ async function resolveReportTarget(c: any, reporterId: string, type: string, rep
   }
 }
 
-async function submitReportRequest(c: any) {
+async function blockUserForReporter(c: any, blockerId: string, blockedId: string): Promise<boolean> {
+  const cleanBlockedId = publicId(blockedId, 120);
+  if (!cleanBlockedId || cleanBlockedId === blockerId) return false;
   await ensureAbuseProtectionSchema(c.env.DB);
+  const target: any = await c.env.DB.prepare('SELECT id FROM users WHERE id = ? LIMIT 1').bind(cleanBlockedId).first();
+  if (!target) return false;
+  await c.env.DB.batch([
+    c.env.DB.prepare("INSERT OR IGNORE INTO blocks (id, blocker_id, blocked_id, created_at) VALUES (?, ?, ?, datetime('now'))").bind(uuid(), blockerId, cleanBlockedId),
+    c.env.DB.prepare('DELETE FROM follows WHERE (follower_id = ? AND following_id = ?) OR (follower_id = ? AND following_id = ?)').bind(blockerId, cleanBlockedId, cleanBlockedId, blockerId),
+  ]);
+  await logSecurityEvent(c, 'user_blocked', blockerId, { blocked_id: cleanBlockedId, source: 'report_flow' });
+  return true;
+}
+
+async function submitReportRequest(c: any) {
+  await ensureAdminModerationSchema(c.env.DB);
   const bodyTooLarge = rejectLargeRequest(c, 50_000);
   if (bodyTooLarge) return bodyTooLarge;
   const reporterId = getUserId(c);
@@ -2215,28 +2312,32 @@ async function submitReportRequest(c: any) {
   const reportedId = publicId(body.reported_id || body.target_id || body.post_id || body.user_id || body.comment_id || body.message_id || '', 140);
   const reason = normalizeReportReason(body.reason || body.report_reason);
   const priority = priorityForReportReason(reason);
-  const details = cleanMultilineText(body.details || body.description || body.notes || '', 1000);
+  const details = cleanMultilineText(body.details || body.description || body.notes || '', 500);
+  const wantsBlock = optionalBoolean(body.block_user ?? body.blockUser ?? body.block) === true;
+  const wantsHideContent = optionalBoolean(body.hide_content ?? body.hideContent ?? body.hide) !== false;
   const target = await resolveReportTarget(c, reporterId, reportedType, reportedId, body);
   if (!target.ok) return c.json({ detail: target.detail || 'Reported content was not found.' }, target.status || 400);
 
   const existing: any = await c.env.DB.prepare(
-    "SELECT id FROM reports WHERE reporter_id = ? AND reported_type = ? AND reported_id = ? AND COALESCE(status, 'pending') IN ('pending', 'under_review', 'reviewing', 'escalated') LIMIT 1"
+    "SELECT id FROM reports WHERE reporter_id = ? AND reported_type = ? AND reported_id = ? AND COALESCE(status, 'open') IN ('open', 'pending', 'under_review', 'reviewing', 'escalated') LIMIT 1"
   ).bind(reporterId, reportedType, reportedId).first();
   if (existing) {
     await logSecurityEvent(c, 'duplicate_report_blocked', reporterId, { reported_type: reportedType, reason });
-    return c.json({ id: existing.id, reported: true, duplicate: true });
+    const blocked = wantsBlock && target.targetOwnerUserId ? await blockUserForReporter(c, reporterId, target.targetOwnerUserId) : false;
+    return c.json({ id: existing.id, reported: true, duplicate: true, blocked, hidden: wantsHideContent });
   }
 
   const id = uuid();
   const ts = now();
   await c.env.DB.prepare(
     `INSERT INTO reports (
-      id, reporter_id, reported_id, report_type, reported_type, reason, details, content_id, status, priority, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`
-  ).bind(id, reporterId, reportedId, reportedType, reportedType, reason, details, target.contentId || '', priority, ts, ts).run();
-  await logSecurityEvent(c, priority === 'high' ? 'high_priority_report_submitted' : 'report_submitted', reporterId, { reported_type: reportedType, reason, priority });
+      id, reporter_id, reported_id, report_type, reported_type, reason, details, content_id, status, priority, target_owner_user_id, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?)`
+  ).bind(id, reporterId, reportedId, reportedType, reportedType, reason, details, target.contentId || '', priority, target.targetOwnerUserId || '', ts, ts).run();
+  const blocked = wantsBlock && target.targetOwnerUserId ? await blockUserForReporter(c, reporterId, target.targetOwnerUserId) : false;
+  await logSecurityEvent(c, priority === 'urgent' ? 'urgent_report_submitted' : priority === 'high' ? 'high_priority_report_submitted' : 'report_submitted', reporterId, { reported_type: reportedType, reason, priority, target_owner: target.targetOwnerUserId || '' });
   await recordAbuseSignals(c, reporterId, 'report_submit', {});
-  return c.json({ id, reported: true });
+  return c.json({ id, reported: true, blocked, hidden: wantsHideContent });
 }
 
 function clampFloat(value: unknown, min: number, max: number, fallback: number): number {
@@ -10619,7 +10720,7 @@ api.get('/admin/governance/reports', authMiddleware, async (c) => {
       LEFT JOIN posts p ON p.id = COALESCE(r.content_id, CASE WHEN COALESCE(NULLIF(r.reported_type, ''), r.report_type) = 'post' THEN r.reported_id ELSE NULL END)
       LEFT JOIN users post_author ON post_author.id = p.user_id
       ${where}
-      ORDER BY CASE COALESCE(r.priority, 'normal') WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, r.created_at DESC
+      ORDER BY CASE COALESCE(r.priority, 'normal') WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END, r.created_at DESC
       LIMIT 100
     `;
     const result = bindings.length
@@ -11239,8 +11340,8 @@ api.get('/admin/dashboard', authMiddleware, async (c) => {
     await requireAdminRole(c, 'admin:read');
     await ensureAdminModerationSchema(c.env.DB);
     const [openReports, urgentReports, reportsToday, postsRemovedToday, usersSuspendedToday, newAccountsToday, uploadFailures] = await Promise.all([
-      c.env.DB.prepare("SELECT COUNT(*) AS count FROM reports WHERE COALESCE(status, 'pending') IN ('pending', 'under_review', 'escalated')").first(),
-      c.env.DB.prepare("SELECT COUNT(*) AS count FROM reports WHERE COALESCE(priority, 'normal') = 'high' AND COALESCE(status, 'pending') IN ('pending', 'under_review', 'escalated')").first(),
+      c.env.DB.prepare("SELECT COUNT(*) AS count FROM reports WHERE COALESCE(status, 'open') IN ('open', 'pending', 'under_review', 'escalated')").first(),
+      c.env.DB.prepare("SELECT COUNT(*) AS count FROM reports WHERE COALESCE(priority, 'normal') IN ('urgent', 'high') AND COALESCE(status, 'open') IN ('open', 'pending', 'under_review', 'escalated')").first(),
       c.env.DB.prepare("SELECT COUNT(*) AS count FROM reports WHERE datetime(created_at) >= datetime('now', 'start of day')").first(),
       c.env.DB.prepare("SELECT COUNT(*) AS count FROM posts WHERE datetime(removed_at) >= datetime('now', 'start of day')").first(),
       c.env.DB.prepare("SELECT COUNT(*) AS count FROM users WHERE COALESCE(status, 'active') = 'suspended' AND datetime(updated_at) >= datetime('now', 'start of day')").first(),
@@ -11258,8 +11359,8 @@ api.get('/admin/dashboard', authMiddleware, async (c) => {
       LEFT JOIN users reporter ON reporter.id = r.reporter_id
       LEFT JOIN posts p ON p.id = r.reported_id OR p.id = r.content_id
       LEFT JOIN users target ON target.id = COALESCE(NULLIF(r.target_owner_user_id, ''), p.user_id, r.reported_id)
-      WHERE COALESCE(r.status, 'pending') IN ('pending', 'under_review', 'escalated')
-      ORDER BY CASE COALESCE(r.priority, 'normal') WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, r.created_at DESC
+      WHERE COALESCE(r.status, 'open') IN ('open', 'pending', 'under_review', 'escalated')
+      ORDER BY CASE COALESCE(r.priority, 'normal') WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END, r.created_at DESC
       LIMIT 8
     `).all();
     return c.json({
@@ -11291,7 +11392,7 @@ api.get('/admin/reports', authMiddleware, async (c) => {
     const statusQuery = cleanText(c.req.query('status') || 'open', 40).toLowerCase();
     if (statusQuery && statusQuery !== 'all') {
       if (statusQuery === 'open') {
-        conditions.push("COALESCE(r.status, 'pending') IN ('pending', 'under_review', 'escalated')");
+        conditions.push("COALESCE(r.status, 'open') IN ('open', 'pending', 'under_review', 'escalated')");
       } else {
         conditions.push("COALESCE(r.status, 'pending') = ?");
         binds.push(normalizeReportStatus(statusQuery, 'pending'));
@@ -11333,7 +11434,7 @@ api.get('/admin/reports', authMiddleware, async (c) => {
       LEFT JOIN posts p ON p.id = r.reported_id OR p.id = r.content_id
       LEFT JOIN users target ON target.id = COALESCE(NULLIF(r.target_owner_user_id, ''), p.user_id, r.reported_id)
       ${where}
-      ORDER BY CASE COALESCE(r.priority, 'normal') WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, r.created_at DESC
+      ORDER BY CASE COALESCE(r.priority, 'normal') WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END, r.created_at DESC
       LIMIT ? OFFSET ?
     `).bind(...binds, limit, offset).all();
     return c.json({
