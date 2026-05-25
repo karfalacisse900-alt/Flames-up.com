@@ -416,7 +416,7 @@ private struct BlockedAccountsNativeView: View {
           .font(.system(size: 15, weight: .semibold))
           .foregroundStyle(MIRATheme.Color.textPrimary)
           .lineLimit(1)
-        Text(row.user?.publicUsername.map { "@\($0)" } ?? "Blocked account")
+        Text(row.user?.username.map { "@\(MIRAUsernameRules.normalized($0))" } ?? "Blocked account")
           .font(.system(size: 12, weight: .medium))
           .foregroundStyle(MIRATheme.Color.textSecondary)
           .lineLimit(1)
