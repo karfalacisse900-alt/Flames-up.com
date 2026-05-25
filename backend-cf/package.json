@@ -7,7 +7,8 @@
     "deploy": "wrangler deploy --env production --keep-vars",
     "db:migrate": "wrangler d1 execute flames-up-db --file=./migrations/0001_init.sql",
     "db:migrate:prod": "wrangler d1 execute flames-up-db --file=./migrations/0001_init.sql --remote",
-    "db:perf-indexes:prod": "wrangler d1 execute DB --env production --remote --yes --file=./migrations/0019_production_performance_indexes.sql"
+    "db:perf-indexes:prod": "wrangler d1 execute DB --env production --remote --yes --file=./migrations/0019_production_performance_indexes.sql",
+    "db:readiness:prod": "wrangler d1 execute DB --env production --remote --yes --file=./migrations/0020_production_readiness.sql"
   },
   "dependencies": {
     "agora-token": "^2.0.5",

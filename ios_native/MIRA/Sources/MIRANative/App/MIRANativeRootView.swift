@@ -263,6 +263,7 @@ public struct MIRANativeRootView: View {
     .task {
       await startup.start(authSession: authSession)
       callCoordinator.configure(api: api, currentUserId: authSession.user?.id)
+      registerCachedPushTokenIfPossible()
     }
     .onChange(of: authSession.user?.id) { _, userID in
       if userID == nil {
@@ -272,11 +273,19 @@ public struct MIRANativeRootView: View {
         loadedTabs.formUnion([.main, .discover, .profile])
       }
       callCoordinator.configure(api: api, currentUserId: userID)
+      registerCachedPushTokenIfPossible()
     }
     .onChange(of: scenePhase) { _, phase in
       withAnimation(.easeOut(duration: phase == .active ? 0.18 : 0.06)) {
         isPrivacyShieldVisible = phase != .active
       }
+      if phase == .active {
+        registerCachedPushTokenIfPossible()
+      }
+    }
+    .onReceive(NotificationCenter.default.publisher(for: .miraRemotePushTokenReceived)) { notification in
+      guard let token = notification.object as? String else { return }
+      registerPushToken(token)
     }
   }
 
@@ -353,6 +362,22 @@ public struct MIRANativeRootView: View {
       return true
     }
     return loadedTabs.contains(tab) || selectedTab == tab
+  }
+
+  private func registerCachedPushTokenIfPossible() {
+    guard authSession.user != nil else { return }
+    if let token = MIRAPushNotificationRegistrar.cachedDeviceToken {
+      registerPushToken(token)
+    } else {
+      MIRAPushNotificationRegistrar.registerForRemoteNotifications()
+    }
+  }
+
+  private func registerPushToken(_ token: String) {
+    guard authSession.user != nil else { return }
+    Task {
+      await MIRAPushTokenRegistry.shared.registerDeviceToken(token, api: api)
+    }
   }
 }
 

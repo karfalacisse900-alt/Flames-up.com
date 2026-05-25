@@ -14,6 +14,7 @@ Backend stack: Hono + D1 + Cloudflare Images/Stream.
    `wrangler d1 execute flames-up-db --file=./migrations/0004_oauth.sql --remote`
    `wrangler d1 execute flames-up-db --file=./migrations/0005_phone_auth.sql --remote`
    `wrangler d1 execute flames-up-db --file=./migrations/0019_production_performance_indexes.sql --remote`
+   `wrangler d1 execute DB --env production --remote --yes --file=./migrations/0020_production_readiness.sql`
 
 3. Configure vars:
    - `JWT_SECRET`
@@ -29,6 +30,7 @@ Backend stack: Hono + D1 + Cloudflare Images/Stream.
    - `SUPABASE_URL` as a public Worker var, for example `https://your-project-ref.supabase.co`
    - `SUPABASE_SERVICE_ROLE_KEY` as a Worker secret only; never put this in the iOS app or public config
    - `SUPABASE_JWT_ISSUER` only if your Supabase issuer differs from `SUPABASE_URL/auth/v1`
+   - `APNS_PRIVATE_KEY`, `APNS_TEAM_ID`, `APNS_KEY_ID`, `APNS_BUNDLE_ID`, and `APNS_ENVIRONMENT` for standard iOS push notifications
 
 4. Deploy:
    `wrangler deploy --env production --keep-vars`

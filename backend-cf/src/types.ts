@@ -32,6 +32,7 @@ export interface Env {
   APNS_TEAM_ID?: string;
   APNS_KEY_ID?: string;
   APNS_BUNDLE_ID?: string;
+  APNS_PRIVATE_KEY?: string;
   APNS_VOIP_PRIVATE_KEY?: string;
   APNS_ENVIRONMENT?: string;
   MEDIA_BACKUP_MAX_VIDEO_BYTES?: string;

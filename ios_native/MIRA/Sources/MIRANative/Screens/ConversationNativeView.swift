@@ -70,7 +70,21 @@ final class ConversationNativeModel: ObservableObject {
     return nil
   }
 
+  private var messagesCacheKey: String {
+    switch kind {
+    case let .direct(peerId):
+      return "native.chat.messages.direct.\(currentUserId).\(peerId)"
+    case let .group(groupId):
+      return "native.chat.messages.group.\(groupId)"
+    }
+  }
+
   func load() async {
+    if messages.isEmpty, let cached: [MIRAMessage] = await MIRALocalJSONCache.load([MIRAMessage].self, key: messagesCacheKey) {
+      messages = cached
+      MIRAPerformanceTimeline.markOnce("chat_room_first_content", detail: "cache")
+    }
+
     isLoading = messages.isEmpty
     defer { isLoading = false }
     do {
@@ -78,10 +92,12 @@ final class ConversationNativeModel: ObservableObject {
       case let .direct(peerId):
         let rows: [MIRAMessage] = try await api.get("/messages/\(peerId)")
         messages = rows
+        await MIRALocalJSONCache.save(rows, key: messagesCacheKey)
         presence = try? await api.get("/messages/presence/\(peerId)")
       case let .group(groupId):
         let response: MIRAGroupMessagesResponse = try await api.get("/group-chats/\(groupId)/messages")
         messages = response.messages
+        await MIRALocalJSONCache.save(response.messages, key: messagesCacheKey)
       }
       errorMessage = nil
     } catch {
@@ -128,7 +144,7 @@ final class ConversationNativeModel: ObservableObject {
       if access { url.stopAccessingSecurityScopedResource() }
     }
     do {
-      let data = try Data(contentsOf: url)
+      let data = try await loadDataOffMain(url)
       let type = UTType(filenameExtension: url.pathExtension)
       let mimeType = type?.preferredMIMEType ?? "application/octet-stream"
       let uploaded = try await uploadService.uploadFile(data: data, fileName: url.lastPathComponent, mimeType: mimeType)
@@ -192,7 +208,7 @@ final class ConversationNativeModel: ObservableObject {
     isUploading = true
     defer { isUploading = false }
     do {
-      let data = try Data(contentsOf: draft.url)
+      let data = try await loadDataOffMain(draft.url)
       let remote = try await uploadService.uploadAudio(data: data, fileName: draft.url.lastPathComponent)
       if await send(content: "Voice message", mediaUrl: remote, mediaType: "voice") {
         pendingVoiceDraft = nil
@@ -226,12 +242,14 @@ final class ConversationNativeModel: ObservableObject {
           body: SendMessageBody(receiverId: peerId, content: content, mediaUrl: mediaUrl, mediaType: mediaType)
         )
         messages.append(sent)
+        await MIRALocalJSONCache.save(messages, key: messagesCacheKey)
       case let .group(groupId):
         let sent: MIRAMessage = try await api.post(
           "/group-chats/\(groupId)/messages",
           body: GroupMessageBody(content: content, mediaUrl: mediaUrl, mediaType: mediaType)
         )
         messages.append(sent)
+        await MIRALocalJSONCache.save(messages, key: messagesCacheKey)
       }
       errorMessage = nil
       return true
@@ -239,6 +257,12 @@ final class ConversationNativeModel: ObservableObject {
       errorMessage = "Could not send this message."
       return false
     }
+  }
+
+  private func loadDataOffMain(_ url: URL) async throws -> Data {
+    try await Task.detached(priority: .utility) {
+      try Data(contentsOf: url)
+    }.value
   }
 }
 

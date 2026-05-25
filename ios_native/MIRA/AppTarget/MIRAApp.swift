@@ -3,6 +3,7 @@ import MIRANative
 
 @main
 struct MIRAApp: App {
+  @UIApplicationDelegateAdaptor(MIRAAppDelegate.self) private var appDelegate
   @Environment(\.scenePhase) private var scenePhase
 
   init() {

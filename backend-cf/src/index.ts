@@ -41,6 +41,7 @@ interface Env {
   APNS_TEAM_ID?: string;
   APNS_KEY_ID?: string;
   APNS_BUNDLE_ID?: string;
+  APNS_PRIVATE_KEY?: string;
   APNS_VOIP_PRIVATE_KEY?: string;
   APNS_ENVIRONMENT?: string;
   MEDIA_BACKUP_MAX_VIDEO_BYTES?: string;
@@ -478,6 +479,7 @@ let walletSchemaReady = false;
 let premiumSchemaReady = false;
 let abuseProtectionSchemaReady = false;
 let messagePresenceSchemaReady = false;
+let productionReadinessSchemaReady = false;
 
 function normalizeSchemaSql(statement: string): string {
   return statement.replace(/\s+/g, ' ').trim().replace(/;$/, '');
@@ -1318,6 +1320,54 @@ async function ensureAbuseProtectionSchema(db: D1Database) {
   abuseProtectionSchemaReady = true;
 }
 
+async function ensureProductionReadinessSchema(db: D1Database) {
+  if (productionReadinessSchemaReady) return;
+
+  const statements = [
+    `CREATE TABLE IF NOT EXISTS push_tokens (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      token TEXT NOT NULL,
+      device_id TEXT DEFAULT '',
+      bundle_id TEXT DEFAULT '',
+      environment TEXT DEFAULT 'production',
+      platform TEXT DEFAULT 'ios',
+      is_active INTEGER DEFAULT 1,
+      last_seen_at TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(user_id, token)
+    )`,
+    `CREATE TABLE IF NOT EXISTS client_events (
+      id TEXT PRIMARY KEY,
+      user_id TEXT DEFAULT '',
+      event_name TEXT NOT NULL,
+      category TEXT DEFAULT '',
+      status TEXT DEFAULT '',
+      duration_ms INTEGER DEFAULT 0,
+      metadata TEXT DEFAULT '{}',
+      app_version TEXT DEFAULT '',
+      platform TEXT DEFAULT 'ios',
+      created_at TEXT NOT NULL
+    )`,
+    'CREATE INDEX IF NOT EXISTS idx_push_tokens_user ON push_tokens(user_id, is_active, last_seen_at)',
+    'CREATE INDEX IF NOT EXISTS idx_client_events_name_created ON client_events(event_name, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_client_events_user_created ON client_events(user_id, created_at)',
+  ];
+
+  for (const statement of statements) {
+    try {
+      await runSchemaStatement(db, statement);
+    } catch (error: any) {
+      if (!isIgnorableSchemaError(error, statement)) {
+        throw error;
+      }
+    }
+  }
+
+  productionReadinessSchemaReady = true;
+}
+
 async function ensureMediaBackupSchema(db: D1Database) {
   if (mediaBackupSchemaReady) return;
 
@@ -1327,6 +1377,8 @@ async function ensureMediaBackupSchema(db: D1Database) {
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
       post_id TEXT,
+      message_id TEXT DEFAULT '',
+      group_message_id TEXT DEFAULT '',
       media_kind TEXT NOT NULL,
       provider TEXT NOT NULL,
       provider_id TEXT DEFAULT '',
@@ -1340,8 +1392,12 @@ async function ensureMediaBackupSchema(db: D1Database) {
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     )`,
+    "ALTER TABLE media_backups ADD COLUMN message_id TEXT DEFAULT ''",
+    "ALTER TABLE media_backups ADD COLUMN group_message_id TEXT DEFAULT ''",
     'CREATE INDEX IF NOT EXISTS idx_media_backups_user ON media_backups(user_id, created_at)',
     'CREATE INDEX IF NOT EXISTS idx_media_backups_post ON media_backups(post_id)',
+    'CREATE INDEX IF NOT EXISTS idx_media_backups_message ON media_backups(message_id)',
+    'CREATE INDEX IF NOT EXISTS idx_media_backups_group_message ON media_backups(group_message_id)',
     'CREATE INDEX IF NOT EXISTS idx_media_backups_r2_key ON media_backups(r2_key)',
   ];
 
@@ -1723,6 +1779,25 @@ function scrubLogMetadata(value: Record<string, unknown>): Record<string, unknow
   return safe;
 }
 
+function sanitizeClientEventMetadata(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const safe: Record<string, unknown> = {};
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>).slice(0, 12)) {
+    const normalizedKey = key.toLowerCase();
+    if (/(password|token|secret|authorization|cookie|card|email|phone|message|content|caption|body)/.test(normalizedKey)) continue;
+    const cleanKey = cleanText(key, 40).replace(/[^a-zA-Z0-9_.:-]/g, '_');
+    if (!cleanKey) continue;
+    if (typeof raw === 'number') {
+      safe[cleanKey] = clampNumber(raw, -1_000_000, 1_000_000, 0);
+    } else if (typeof raw === 'boolean') {
+      safe[cleanKey] = raw;
+    } else if (raw != null) {
+      safe[cleanKey] = cleanText(raw, 120);
+    }
+  }
+  return safe;
+}
+
 async function logSecurityEvent(c: any, eventType: string, userId = '', metadata: Record<string, unknown> = {}) {
   try {
     await ensureAbuseProtectionSchema(c.env.DB);
@@ -1895,6 +1970,18 @@ async function insertNotificationOnce(c: any, input: {
   await c.env.DB.prepare(
     'INSERT INTO notifications (id, user_id, type, title, body, data, is_read, created_at) VALUES (?, ?, ?, ?, ?, ?, 0, datetime(\'now\'))'
   ).bind(uuid(), input.userId, type, cleanText(input.title, 120), cleanText(input.body, 300), JSON.stringify(data)).run();
+  runBackgroundTask(c, 'alert_push_failed', async () => {
+    const status = await sendAlertPushForNotification(c, {
+      userId: input.userId,
+      type,
+      title: input.title,
+      body: input.body,
+      data,
+    });
+    if (status.startsWith('apns_failed')) {
+      await logSecurityEvent(c, 'alert_push_failed', input.userId, { type, status });
+    }
+  });
   return true;
 }
 
@@ -2789,6 +2876,53 @@ function mediaDeliveryUrl(c: any, backupId: string): string {
   return `${origin}/api/media/${encodeURIComponent(backupId)}`;
 }
 
+function mediaBackupIdFromReference(value: unknown): string {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const relative = /^\/api\/media\/([a-zA-Z0-9_-]{8,160})(?:[?#].*)?$/.exec(raw);
+  if (relative) return relative[1];
+  try {
+    const url = new URL(raw);
+    const match = /^\/api\/media\/([a-zA-Z0-9_-]{8,160})$/.exec(url.pathname);
+    return match ? match[1] : '';
+  } catch {
+    return '';
+  }
+}
+
+async function mediaAccessSignature(c: any, backupId: string, expiresAt: number): Promise<string> {
+  return hmacSha256Hex(getJwtSecret(c), `media:${backupId}:${expiresAt}`);
+}
+
+async function signedMediaDeliveryUrl(c: any, backupId: string): Promise<string> {
+  const expiresAt = Math.floor(Date.now() / 1000) + 24 * 60 * 60;
+  const signature = await mediaAccessSignature(c, backupId, expiresAt);
+  const url = new URL(mediaDeliveryUrl(c, backupId));
+  url.searchParams.set('exp', String(expiresAt));
+  url.searchParams.set('sig', signature);
+  return url.toString();
+}
+
+async function hasValidMediaAccessToken(c: any, backupId: string): Promise<boolean> {
+  const expiresAt = Number(c.req.query('exp') || 0);
+  const signature = String(c.req.query('sig') || '').trim().toLowerCase();
+  if (!Number.isFinite(expiresAt) || expiresAt < Math.floor(Date.now() / 1000)) return false;
+  if (!/^[a-f0-9]{64}$/.test(signature)) return false;
+  const expected = await mediaAccessSignature(c, backupId, expiresAt);
+  return constantTimeEqualHex(signature, expected);
+}
+
+async function signedMessageMediaReference(c: any, value: unknown): Promise<string> {
+  const raw = String(value || '').trim();
+  const backupId = mediaBackupIdFromReference(raw);
+  return backupId ? signedMediaDeliveryUrl(c, backupId) : raw;
+}
+
+function normalizedMediaReferenceForStorage(c: any, value: string): string {
+  const backupId = mediaBackupIdFromReference(value);
+  return backupId ? mediaDeliveryUrl(c, backupId) : value;
+}
+
 function appendBytes(out: number[], bytes: Uint8Array) {
   for (let i = 0; i < bytes.length; i += 1) out.push(bytes[i]);
 }
@@ -2989,6 +3123,26 @@ async function attachMediaBackupsToPost(db: D1Database, userId: string, postId: 
       .bind(postId, now(), backupId, userId)
       .run();
   }
+}
+
+async function attachMediaBackupToMessage(
+  db: D1Database,
+  userId: string,
+  messageId: string,
+  mediaUrl: string,
+  column: 'message_id' | 'group_message_id'
+) {
+  const backupId = mediaBackupIdFromReference(mediaUrl);
+  if (!backupId) return;
+  await ensureMediaBackupSchema(db);
+  await db.prepare(`UPDATE media_backups SET ${column} = ?, updated_at = ? WHERE id = ? AND user_id = ?`)
+    .bind(messageId, now(), backupId, userId)
+    .run();
+}
+
+async function messagePayload(c: any, row: any): Promise<any> {
+  const mediaUrl = row.media_url ? await signedMessageMediaReference(c, row.media_url) : row.media_url;
+  return { ...row, media_url: mediaUrl };
 }
 
 const FEED_MEDIA_WIDTH = 1080;
@@ -4061,7 +4215,7 @@ function getApnsConfig(c: any) {
   const teamId = String(c.env.APNS_TEAM_ID || '').trim();
   const keyId = String(c.env.APNS_KEY_ID || '').trim();
   const bundleId = String(c.env.APNS_BUNDLE_ID || '').trim();
-  const privateKey = String(c.env.APNS_VOIP_PRIVATE_KEY || '').replace(/\\n/g, '\n').trim();
+  const privateKey = String(c.env.APNS_PRIVATE_KEY || c.env.APNS_VOIP_PRIVATE_KEY || '').replace(/\\n/g, '\n').trim();
   const environment = String(c.env.APNS_ENVIRONMENT || c.env.ENVIRONMENT || 'production').toLowerCase();
   if (!teamId || !keyId || !bundleId || !privateKey) return null;
   return { teamId, keyId, bundleId, privateKey, environment };
@@ -4138,6 +4292,76 @@ async function sendVoipPushForCall(c: any, call: any): Promise<string> {
   if (sent > 0 && failed === 0) return `voip_sent:${sent}`;
   if (sent > 0) return `voip_partial:${sent}/${sent + failed}`;
   return 'voip_failed';
+}
+
+async function sendAlertPushForNotification(c: any, input: {
+  userId: string;
+  type: string;
+  title: string;
+  body: string;
+  data: Record<string, unknown>;
+}): Promise<string> {
+  const config = getApnsConfig(c);
+  if (!config) return 'apns_not_configured';
+  await ensureProductionReadinessSchema(c.env.DB);
+
+  const tokens = await c.env.DB.prepare(
+    `SELECT token, bundle_id, environment
+     FROM push_tokens
+     WHERE user_id = ? AND is_active = 1
+     ORDER BY last_seen_at DESC
+     LIMIT 8`
+  ).bind(input.userId).all();
+  const rows = (tokens.results || []) as any[];
+  if (!rows.length) return 'no_push_tokens';
+
+  const jwt = await signApnsJwt(config);
+  let sent = 0;
+  let failed = 0;
+  for (const row of rows) {
+    const token = String(row.token || '').trim();
+    if (!token) continue;
+    const rowEnvironment = String(row.environment || config.environment).toLowerCase();
+    const isSandbox = rowEnvironment === 'development' || rowEnvironment === 'sandbox';
+    const baseURL = isSandbox ? 'https://api.sandbox.push.apple.com' : 'https://api.push.apple.com';
+    const topic = String(row.bundle_id || config.bundleId).trim() || config.bundleId;
+    const response = await fetch(`${baseURL}/3/device/${token}`, {
+      method: 'POST',
+      headers: {
+        authorization: `bearer ${jwt}`,
+        'apns-topic': topic,
+        'apns-push-type': 'alert',
+        'apns-priority': '10',
+        'apns-expiration': String(Math.floor(Date.now() / 1000) + 3600),
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        aps: {
+          alert: {
+            title: cleanText(input.title, 120),
+            body: cleanText(input.body, 180),
+          },
+          sound: 'default',
+        },
+        notification_type: cleanText(input.type, 60),
+        data: safeNotificationData(input.data),
+      }),
+    });
+    if (response.ok) {
+      sent += 1;
+    } else {
+      failed += 1;
+      if (response.status === 400 || response.status === 410) {
+        await c.env.DB.prepare('UPDATE push_tokens SET is_active = 0, updated_at = ? WHERE token = ?')
+          .bind(now(), token)
+          .run();
+      }
+    }
+  }
+
+  if (sent > 0 && failed === 0) return `apns_sent:${sent}`;
+  if (sent > 0) return `apns_partial:${sent}/${sent + failed}`;
+  return 'apns_failed';
 }
 
 const MAPBOX_SEARCH_BOX_API_BASE = 'https://api.mapbox.com/search/searchbox/v1';
@@ -7536,7 +7760,7 @@ api.post('/messages', authMiddleware, async (c) => {
   if (unknown) return unknown;
   const receiverId = publicId(b.receiver_id || b.receiverId, 120);
   const content = cleanMultilineText(b.content, 2000);
-  const mediaUrl = safeMediaReference(b.media_url || b.mediaUrl);
+  const mediaUrl = normalizedMediaReferenceForStorage(c, safeMediaReference(b.media_url || b.mediaUrl));
   const requestedMediaType = String(b.media_type || b.mediaType || '').toLowerCase();
   const mediaType = requestedMediaType.includes('video')
     ? 'video'
@@ -7548,7 +7772,7 @@ api.post('/messages', authMiddleware, async (c) => {
   const invalidPeer = await validateDirectMessagePeer(c, userId, receiverId);
   if (invalidPeer) return invalidPeer;
   if (!content && !mediaUrl) return c.json({ detail: 'Message is empty.' }, 400);
-  if (content) {
+  if (content && !mediaUrl) {
     const recentDuplicate: any = await c.env.DB.prepare(
       "SELECT id FROM messages WHERE sender_id = ? AND receiver_id = ? AND content = ? AND created_at > datetime('now', '-30 seconds') LIMIT 1"
     ).bind(userId, receiverId, content).first();
@@ -7559,6 +7783,7 @@ api.post('/messages', authMiddleware, async (c) => {
   }
   const id = uuid();
   await c.env.DB.prepare('INSERT INTO messages (id, sender_id, receiver_id, content, media_url, media_type) VALUES (?, ?, ?, ?, ?, ?)').bind(id, userId, receiverId, content, mediaUrl || null, mediaType).run();
+  await attachMediaBackupToMessage(c.env.DB, userId, id, mediaUrl, 'message_id');
   runBackgroundTask(c, 'message_notification_failed', async () => {
     const sender: any = await c.env.DB.prepare('SELECT username, full_name FROM users WHERE id = ?').bind(userId).first();
     const senderName = cleanText(sender?.full_name || sender?.username || 'Someone', 80);
@@ -7585,7 +7810,7 @@ api.post('/messages', authMiddleware, async (c) => {
     .bind(now(), userId, receiverId)
     .run()
     .catch(() => {});
-  return c.json({ id, sender_id: userId, receiver_id: receiverId, content, media_url: mediaUrl || null, media_type: mediaType, created_at: now() });
+  return c.json(await messagePayload(c, { id, sender_id: userId, receiver_id: receiverId, content, media_url: mediaUrl || null, media_type: mediaType, created_at: now() }));
 });
 
 api.get('/messages/presence/:userId', authMiddleware, async (c) => {
@@ -7662,7 +7887,8 @@ api.get('/messages/:userId', authMiddleware, async (c) => {
     ORDER BY created_at ASC
   `;
   const r = await c.env.DB.prepare(directMessagesSql).bind(...binds).all();
-  return c.json(r.results);
+  const messages = await Promise.all((r.results as any[]).map((row) => messagePayload(c, row)));
+  return c.json(messages);
 });
 
 api.post('/group-chats', authMiddleware, async (c) => {
@@ -7748,7 +7974,8 @@ api.get('/group-chats/:groupId/messages', authMiddleware, async (c) => {
   `;
   const messages = await c.env.DB.prepare(groupMessagesSql).bind(...(before ? [groupId, before, limit] : [groupId, limit])).all();
 
-  return c.json({ group, messages: [...(messages.results as any[])].reverse() });
+  const signedMessages = await Promise.all([...(messages.results as any[])].reverse().map((row) => messagePayload(c, row)));
+  return c.json({ group, messages: signedMessages });
 });
 
 api.post('/group-chats/:groupId/messages', authMiddleware, async (c) => {
@@ -7765,7 +7992,7 @@ api.post('/group-chats/:groupId/messages', authMiddleware, async (c) => {
   const unknown = rejectUnknownFields(c, body, ['content', 'media_url', 'mediaUrl', 'media_type', 'mediaType', 'client_request_id', 'clientRequestId', 'idempotency_key', 'request_id']);
   if (unknown) return unknown;
   const content = cleanMultilineText(body.content, 2000);
-  const mediaUrl = safeMediaReference(body.media_url || body.mediaUrl);
+  const mediaUrl = normalizedMediaReferenceForStorage(c, safeMediaReference(body.media_url || body.mediaUrl));
   const requestedMediaType = String(body.media_type || body.mediaType || '').toLowerCase();
   const mediaType = requestedMediaType.includes('video')
     ? 'video'
@@ -7775,7 +8002,7 @@ api.post('/group-chats/:groupId/messages', authMiddleware, async (c) => {
         ? 'file'
         : mediaUrl ? 'image' : null;
   if (!content && !mediaUrl) return c.json({ detail: 'Message is empty' }, 400);
-  if (content) {
+  if (content && !mediaUrl) {
     const recentDuplicate: any = await c.env.DB.prepare(
       "SELECT id FROM group_messages WHERE group_id = ? AND sender_id = ? AND content = ? AND created_at > datetime('now', '-30 seconds') LIMIT 1"
     ).bind(groupId, userId, content).first();
@@ -7789,8 +8016,9 @@ api.post('/group-chats/:groupId/messages', authMiddleware, async (c) => {
   await c.env.DB.prepare('INSERT INTO group_messages (id, group_id, sender_id, content, media_url, media_type) VALUES (?, ?, ?, ?, ?, ?)')
     .bind(id, groupId, userId, content, mediaUrl || null, mediaType)
     .run();
+  await attachMediaBackupToMessage(c.env.DB, userId, id, mediaUrl, 'group_message_id');
   await c.env.DB.prepare('UPDATE group_chats SET updated_at = datetime(\'now\') WHERE id = ?').bind(groupId).run();
-  return c.json({ id, group_id: groupId, sender_id: userId, content, media_url: mediaUrl || null, media_type: mediaType, created_at: now() });
+  return c.json(await messagePayload(c, { id, group_id: groupId, sender_id: userId, content, media_url: mediaUrl || null, media_type: mediaType, created_at: now() }));
 });
 
 // Calls
@@ -8077,6 +8305,83 @@ api.get('/notifications/unread-count', authMiddleware, async (c) => {
   } catch { return c.json({ count: 0 }); }
 });
 api.post('/notifications/mark-read', authMiddleware, async (c) => { await c.env.DB.prepare('UPDATE notifications SET is_read = 1 WHERE user_id = ?').bind(getUserId(c)).run(); return c.json({ marked: true }); });
+
+api.post('/notifications/device-token', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const limited = await enforceRateLimit(c, 'push_token_register', userId, 30, 60);
+  if (limited) return limited;
+  const bodyTooLarge = rejectLargeRequest(c, 20_000);
+  if (bodyTooLarge) return bodyTooLarge;
+  const body: any = await c.req.json().catch(() => ({}));
+  const token = String(body.token || '').trim().replace(/[^a-fA-F0-9]/g, '');
+  if (token.length < 32 || token.length > 512) return c.json({ detail: 'Invalid device token.' }, 400);
+  await ensureProductionReadinessSchema(c.env.DB);
+  const timestamp = now();
+  await c.env.DB.prepare(
+    `INSERT INTO push_tokens (id, user_id, token, device_id, bundle_id, environment, platform, is_active, last_seen_at, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, 'ios', 1, ?, ?, ?)
+     ON CONFLICT(user_id, token) DO UPDATE SET
+       device_id = excluded.device_id,
+       bundle_id = excluded.bundle_id,
+       environment = excluded.environment,
+       is_active = 1,
+       last_seen_at = excluded.last_seen_at,
+       updated_at = excluded.updated_at`
+  ).bind(
+    uuid(),
+    userId,
+    token.toLowerCase(),
+    cleanText(body.device_id || body.deviceId || '', 160),
+    cleanText(body.bundle_id || body.bundleId || c.env.APNS_BUNDLE_ID || '', 160),
+    cleanText(body.environment || c.env.APNS_ENVIRONMENT || 'production', 32),
+    timestamp,
+    timestamp,
+    timestamp
+  ).run();
+  return c.json({ ok: true });
+});
+
+api.delete('/notifications/device-token', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const body: any = await c.req.json().catch(() => ({}));
+  const token = String(body.token || '').trim().replace(/[^a-fA-F0-9]/g, '').toLowerCase();
+  if (!token) return c.json({ ok: true });
+  await ensureProductionReadinessSchema(c.env.DB);
+  await c.env.DB.prepare('UPDATE push_tokens SET is_active = 0, updated_at = ? WHERE user_id = ? AND token = ?')
+    .bind(now(), userId, token)
+    .run();
+  return c.json({ ok: true });
+});
+
+api.post('/client/events', async (c) => {
+  const userId = await getOptionalUserId(c);
+  const key = userId || clientIp(c);
+  const limited = await enforceRateLimit(c, 'client_events', key, 80, 60);
+  if (limited) return limited;
+  const bodyTooLarge = rejectLargeRequest(c, 24_000);
+  if (bodyTooLarge) return bodyTooLarge;
+  const body: any = await c.req.json().catch(() => ({}));
+  const eventName = cleanText(body.event_name || body.eventName || body.name, 80);
+  if (!eventName || !/^[a-z0-9_.:-]{2,80}$/i.test(eventName)) return c.json({ detail: 'Invalid event name.' }, 400);
+  const metadata = sanitizeClientEventMetadata(body.metadata || {});
+  await ensureProductionReadinessSchema(c.env.DB);
+  await c.env.DB.prepare(
+    `INSERT INTO client_events (id, user_id, event_name, category, status, duration_ms, metadata, app_version, platform, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(
+    uuid(),
+    userId || '',
+    eventName,
+    cleanText(body.category || '', 40),
+    cleanText(body.status || '', 40),
+    clampNumber(body.duration_ms || body.durationMs || 0, 0, 600_000, 0),
+    JSON.stringify(metadata),
+    cleanText(body.app_version || body.appVersion || '', 40),
+    cleanText(body.platform || 'ios', 20),
+    now()
+  ).run();
+  return c.json({ accepted: true }, 202);
+});
 
 // Library
 api.get('/library/liked', authMiddleware, async (c) => {
@@ -10356,11 +10661,14 @@ async function serveMediaBackup(c: any) {
       .bind(c.req.param('backupId'))
       .first();
     if (!backup) return c.json({ detail: 'Media not found' }, 404);
+    const hasSignedAccess = await hasValidMediaAccessToken(c, backup.id);
     const viewerId = await getOptionalUserId(c);
     const limited = await enforceRateLimit(c, 'media_read', viewerId || clientIp(c), 600, 60);
     if (limited) return limited;
 
-    if (backup.post_id) {
+    if (hasSignedAccess) {
+      // Signed URLs are issued only from authorized message APIs so AVPlayer can stream private chat media.
+    } else if (backup.post_id) {
       const mediaVisiblePostSql = [
         'SELECT p.id FROM posts p JOIN users u ON p.user_id = u.id',
         `WHERE p.id = ? AND ${visiblePostWhere('u', 'p')} LIMIT 1`,
