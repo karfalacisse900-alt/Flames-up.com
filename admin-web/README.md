@@ -20,7 +20,7 @@ Backend roles are enforced by `/api/admin/me` and each `/api/admin/*` endpoint:
 - `support`
 - `viewer`
 
-Existing `users.is_admin = 1` accounts are treated as `admin`. Owner usernames configured by the Worker `OWNER_USERNAMES` secret are treated as `owner`. The `admin_roles` table supports explicit roles.
+Existing `users.is_admin = 1` accounts are treated as `admin`. Owner emails configured by the Worker `OWNER_EMAILS` secret are treated as `owner`; `OWNER_USERNAMES` is optional and should only contain real chosen usernames. The `admin_roles` table supports explicit roles.
 
 ## Local Development
 

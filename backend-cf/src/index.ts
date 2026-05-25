@@ -83,6 +83,7 @@ const DEFAULT_ALLOWED_ORIGINS = [
   'https://flames-up.com',
   'https://www.flames-up.com',
   'https://admin.flames-up.com',
+  'https://captro-admin.pages.dev',
 ];
 function isProductionEnv(c: any): boolean {
   return String(c?.env?.ENVIRONMENT || '').toLowerCase() === 'production';
@@ -4877,7 +4878,7 @@ async function requirePhoneVerified(c: any, action = 'continue') {
 }
 
 function ownerUsernames(c: any): string[] {
-  return String(c.env.OWNER_USERNAMES || 'dxhfqhsd5c')
+  return String(c.env.OWNER_USERNAMES || '')
     .split(',')
     .map((value) => value.replace(/^@/, '').trim().toLowerCase())
     .filter(Boolean);
@@ -12087,8 +12088,8 @@ async function serveMediaBackup(c: any) {
     } else if (!viewerId) {
       return c.json({ detail: 'Media not found' }, 404);
     } else if (backup.user_id !== viewerId) {
-      const viewer: any = await c.env.DB.prepare('SELECT username, is_admin FROM users WHERE id = ?').bind(viewerId).first();
-      if (!viewer?.is_admin && !isOwnerUsername(c, viewer?.username)) {
+      const viewer: any = await c.env.DB.prepare('SELECT username, email, is_admin FROM users WHERE id = ?').bind(viewerId).first();
+      if (!viewer?.is_admin && !isOwnerUsername(c, viewer?.username) && !isOwnerEmail(c, viewer?.email)) {
         await logSecurityEvent(c, 'unattached_media_access_denied', viewerId, { backup_id: backup.id });
         return c.json({ detail: 'Media not found' }, 404);
       }

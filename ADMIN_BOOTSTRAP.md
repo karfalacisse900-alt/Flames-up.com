@@ -10,16 +10,12 @@ Captro supports a backend owner allowlist through the Cloudflare Worker environm
 OWNER_EMAILS=karfalacisse900@gmail.com
 ```
 
-Optional username allowlist:
-
-```text
-OWNER_USERNAMES=<real-captro-username>
-```
+Use `OWNER_USERNAMES` only after the user has a real, chosen Captro username. Do not allowlist generated or temporary usernames.
 
 When an authenticated user calls `GET /api/admin/me`, the Worker loads the user from the production database and checks:
 
 - `OWNER_EMAILS` against the user's normalized account email
-- `OWNER_USERNAMES` against the user's normalized username
+- `OWNER_USERNAMES` against the user's normalized username only when intentionally configured
 - `admin_roles.user_id` for explicit staff roles
 - legacy `users.is_admin = 1` as `admin`
 
