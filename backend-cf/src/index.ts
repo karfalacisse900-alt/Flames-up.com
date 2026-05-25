@@ -6753,9 +6753,9 @@ api.get('/posts/world-board', async (c) => {
     const payload = await cachedJson(c, `posts:world-board:v8:${skip}:${limit}`, 8, async () => {
       const worldBoardSql = [
         `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
-           (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
-           (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden')) AS live_comments_count,
-           (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id) AS live_saves_count
+           COALESCE(p.likes_count, 0) AS live_likes_count,
+           COALESCE(p.comments_count, 0) AS live_comments_count,
+           COALESCE(p.saves_count, 0) AS live_saves_count
          FROM posts p JOIN users u ON p.user_id = u.id`,
         `WHERE ${publicPostWhere('u', 'p')}`,
         'ORDER BY p.created_at DESC LIMIT ? OFFSET ?',
