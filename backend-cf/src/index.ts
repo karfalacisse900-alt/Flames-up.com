@@ -6755,7 +6755,7 @@ api.get('/posts/world-board', async (c) => {
         `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
            COALESCE(p.likes_count, 0) AS live_likes_count,
            COALESCE(p.comments_count, 0) AS live_comments_count,
-           COALESCE(p.saves_count, 0) AS live_saves_count
+           0 AS live_saves_count
          FROM posts p JOIN users u ON p.user_id = u.id`,
         `WHERE ${publicPostWhere('u', 'p')}`,
         'ORDER BY p.created_at DESC LIMIT ? OFFSET ?',
