@@ -57,6 +57,7 @@ export type ReportSummary = {
   reporter: UserMini;
   target_user: UserMini;
   preview: string;
+  target_media?: AdminMedia | null;
 };
 
 export type UserMini = {
@@ -97,13 +98,38 @@ export type AdminPost = {
   discover_blocked_reason?: string;
   image?: string;
   images?: string[];
+  media_type?: string;
+  feed_media_url?: string;
+  thumbnail_url?: string;
+  poster_url?: string;
+  feed_media_urls?: string[];
   thumbnail_urls?: string[];
+  poster_urls?: string[];
   media_types?: string[];
+  width?: number | null;
+  height?: number | null;
+  aspect_ratio?: number | null;
+  media?: AdminMedia[];
   likes_count?: number;
   comments_count?: number;
   saves_count?: number;
   created_at?: string;
   updated_at?: string;
+};
+
+export type AdminMedia = {
+  type?: string;
+  media_type?: string;
+  feed_media_url?: string;
+  feedUrl?: string;
+  thumbnail_url?: string;
+  thumbnailUrl?: string;
+  poster_url?: string;
+  posterUrl?: string;
+  width?: number | null;
+  height?: number | null;
+  aspect_ratio?: number | null;
+  aspectRatio?: number | null;
 };
 
 export type AdminComment = {

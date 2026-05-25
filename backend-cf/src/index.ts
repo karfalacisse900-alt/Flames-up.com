@@ -3324,6 +3324,22 @@ function posterDeliveryUrl(url: string, mediaType: string, variant: string): str
   return url;
 }
 
+function cloudflareStreamUid(url: string): string {
+  const clean = String(url || '').trim();
+  if (!clean.startsWith('cfstream:')) return '';
+  return clean.replace('cfstream:', '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 128);
+}
+
+function streamThumbnailUrl(url: string): string {
+  const uid = cloudflareStreamUid(url);
+  return uid ? `https://videodelivery.net/${uid}/thumbnails/thumbnail.jpg?time=1s&height=720` : '';
+}
+
+function streamPlaybackUrl(url: string): string {
+  const uid = cloudflareStreamUid(url);
+  return uid ? `https://videodelivery.net/${uid}/manifest/video.m3u8` : url;
+}
+
 function feedMediaDimensions(mediaUrls: string[], mediaTypes: string[], dimensions: any[]) {
   return mediaUrls.map((url, index) => {
     const original = dimensions[index] || {};
@@ -10869,7 +10885,36 @@ function adminUserPayload(row: any, role: AdminRole) {
 function adminPostPayload(row: any, env: Env) {
   const mediaUrls = sanitizeMediaReferences(row.images, row.image);
   const mediaTypes = parseJsonArray(row.media_types);
+  const dimensions = parseJsonArray(row.media_dimensions);
   const thumbnailVariant = env.CLOUDFLARE_IMAGES_THUMBNAIL_VARIANT || '';
+  const feedVariant = env.CLOUDFLARE_IMAGES_FEED_VARIANT || '';
+  const normalizedTypes = mediaTypes.length ? mediaTypes : mediaUrls.map((url) => isVideoMediaUrl(url) ? 'video' : 'image');
+  const media = mediaUrls.map((url, index) => {
+    const mediaType = String(normalizedTypes[index] || 'image').toLowerCase().includes('video') || isVideoMediaUrl(url) ? 'video' : 'image';
+    const feedUrl = mediaType === 'video' ? streamPlaybackUrl(url) : feedDeliveryUrl(url, mediaType, feedVariant);
+    const thumbnailUrl = mediaType === 'video'
+      ? streamThumbnailUrl(url)
+      : posterDeliveryUrl(url, mediaType, thumbnailVariant);
+    const original = dimensions[index] || {};
+    const width = Number(original.feed_width || original.width || original.original_width || 0) || null;
+    const height = Number(original.feed_height || original.height || original.original_height || 0) || null;
+    const aspectRatio = Number(original.feed_aspect_ratio || original.ratio || original.aspect_ratio || (width && height ? width / height : 0)) || null;
+    return {
+      type: mediaType,
+      media_type: mediaType,
+      feed_media_url: feedUrl,
+      feedUrl,
+      thumbnail_url: thumbnailUrl || feedUrl,
+      thumbnailUrl: thumbnailUrl || feedUrl,
+      poster_url: thumbnailUrl || '',
+      posterUrl: thumbnailUrl || '',
+      width,
+      height,
+      aspect_ratio: aspectRatio,
+      aspectRatio,
+    };
+  });
+  const first: any = media[0] || {};
   return {
     id: row.id,
     user_id: row.user_id,
@@ -10888,10 +10933,20 @@ function adminPostPayload(row: any, env: Env) {
     removed_reason: cleanMultilineText(row.removed_reason, 500),
     discover_blocked_at: row.discover_blocked_at || null,
     discover_blocked_reason: cleanMultilineText(row.discover_blocked_reason, 500),
-    image: feedDeliveryUrl(safeMediaReference(row.image) || mediaUrls[0] || '', String(mediaTypes[0] || 'image'), env.CLOUDFLARE_IMAGES_FEED_VARIANT || ''),
-    images: mediaUrls.map((url, index) => feedDeliveryUrl(url, String(mediaTypes[index] || 'image'), env.CLOUDFLARE_IMAGES_FEED_VARIANT || '')),
-    thumbnail_urls: mediaUrls.map((url, index) => posterDeliveryUrl(url, String(mediaTypes[index] || 'image'), thumbnailVariant)),
-    media_types: mediaTypes.length ? mediaTypes : mediaUrls.map((url) => isVideoMediaUrl(url) ? 'video' : 'image'),
+    media_type: first.media_type || '',
+    feed_media_url: first.feed_media_url || '',
+    thumbnail_url: first.thumbnail_url || '',
+    poster_url: first.poster_url || '',
+    width: first.width || null,
+    height: first.height || null,
+    aspect_ratio: first.aspect_ratio || null,
+    image: first.feed_media_url || '',
+    images: media.map((item) => item.feed_media_url).filter(Boolean),
+    feed_media_urls: media.map((item) => item.feed_media_url).filter(Boolean),
+    thumbnail_urls: media.map((item) => item.thumbnail_url).filter(Boolean),
+    poster_urls: media.map((item) => item.poster_url).filter(Boolean),
+    media_types: media.map((item) => item.media_type),
+    media,
     likes_count: Number(row.likes_count || 0),
     comments_count: Number(row.comments_count || 0),
     saves_count: Number(row.saves_count || 0),
@@ -10929,8 +10984,22 @@ function reportTargetType(row: any): string {
   return normalizeReportTargetType(row?.reported_type || row?.report_type || 'other');
 }
 
-function adminReportSummary(row: any) {
+function adminReportSummary(row: any, env?: Env) {
   const type = reportTargetType(row);
+  const targetPost = env && (row.post_id || row.post_image || row.post_images) ? adminPostPayload({
+    id: row.post_id || row.reported_id,
+    user_id: row.post_user_id || row.target_owner_user_id || '',
+    content: row.post_content || '',
+    title: row.post_title || '',
+    image: row.post_image || '',
+    images: row.post_images || '',
+    media_types: row.post_media_types || '',
+    media_dimensions: row.post_media_dimensions || '',
+    status: row.post_status || '',
+    user_username: row.target_username || '',
+    user_full_name: row.target_full_name || '',
+    user_profile_image: row.target_profile_image || '',
+  }, env) : null;
   return {
     id: row.id,
     reporter_id: row.reporter_id,
@@ -10960,6 +11029,7 @@ function adminReportSummary(row: any) {
       status: cleanText(row.target_status || '', 40),
     },
     preview: cleanMultilineText(row.target_preview || row.post_content || row.comment_content || row.message_content || '', 400),
+    target_media: targetPost?.media?.[0] || null,
   };
 }
 
@@ -11083,7 +11153,7 @@ async function adminReportDetail(c: any, report: any) {
     LIMIT 30
   `).bind(report.reported_id || report.id, report.target_owner_user_id || report.reported_id || '').all();
   return {
-    ...adminReportSummary(report),
+    ...adminReportSummary(report, c.env),
     admin_notes: cleanMultilineText(report.admin_notes, 1000),
     action_taken: cleanText(report.action_taken, 120),
     reviewed_by: report.reviewed_by || '',
@@ -11179,11 +11249,15 @@ api.get('/admin/dashboard', authMiddleware, async (c) => {
     ]);
     const quick = await c.env.DB.prepare(`
       SELECT r.*, reporter.username AS reporter_username, reporter.full_name AS reporter_full_name, reporter.profile_image AS reporter_profile_image,
+             p.id AS post_id, p.user_id AS post_user_id, p.content AS post_content, p.title AS post_title,
+             p.image AS post_image, p.images AS post_images, p.media_types AS post_media_types,
+             p.media_dimensions AS post_media_dimensions, p.status AS post_status,
              target.username AS target_username, target.full_name AS target_full_name, target.profile_image AS target_profile_image, target.status AS target_status,
              target.id AS target_user_id
       FROM reports r
       LEFT JOIN users reporter ON reporter.id = r.reporter_id
-      LEFT JOIN users target ON target.id = r.reported_id OR target.id = r.target_owner_user_id
+      LEFT JOIN posts p ON p.id = r.reported_id OR p.id = r.content_id
+      LEFT JOIN users target ON target.id = COALESCE(NULLIF(r.target_owner_user_id, ''), p.user_id, r.reported_id)
       WHERE COALESCE(r.status, 'pending') IN ('pending', 'under_review', 'escalated')
       ORDER BY CASE COALESCE(r.priority, 'normal') WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, r.created_at DESC
       LIMIT 8
@@ -11199,7 +11273,7 @@ api.get('/admin/dashboard', authMiddleware, async (c) => {
         upload_failures_24h: Number((uploadFailures as any)?.count || 0),
       },
       queues: {
-        new_reports: (quick.results as any[]).map(adminReportSummary),
+        new_reports: (quick.results as any[]).map((row) => adminReportSummary(row, c.env)),
       },
     });
   } catch (error: any) {
@@ -11233,6 +11307,11 @@ api.get('/admin/reports', authMiddleware, async (c) => {
       conditions.push("COALESCE(NULLIF(r.reported_type, ''), r.report_type, 'other') = ?");
       binds.push(normalizeReportTargetType(targetType));
     }
+    const fromDate = cleanText(c.req.query('from') || '', 40);
+    if (/^\d{4}-\d{2}-\d{2}/.test(fromDate)) {
+      conditions.push('datetime(r.created_at) >= datetime(?)');
+      binds.push(fromDate);
+    }
     const search = searchPattern(c.req.query('search'));
     if (search) {
       conditions.push(`(
@@ -11244,17 +11323,21 @@ api.get('/admin/reports', authMiddleware, async (c) => {
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
     const rows = await c.env.DB.prepare(`
       SELECT r.*, reporter.username AS reporter_username, reporter.full_name AS reporter_full_name, reporter.profile_image AS reporter_profile_image,
+             p.id AS post_id, p.user_id AS post_user_id, p.content AS post_content, p.title AS post_title,
+             p.image AS post_image, p.images AS post_images, p.media_types AS post_media_types,
+             p.media_dimensions AS post_media_dimensions, p.status AS post_status,
              target.id AS target_user_id, target.username AS target_username, target.full_name AS target_full_name,
              target.profile_image AS target_profile_image, target.status AS target_status
       FROM reports r
       LEFT JOIN users reporter ON reporter.id = r.reporter_id
-      LEFT JOIN users target ON target.id = r.reported_id OR target.id = r.target_owner_user_id
+      LEFT JOIN posts p ON p.id = r.reported_id OR p.id = r.content_id
+      LEFT JOIN users target ON target.id = COALESCE(NULLIF(r.target_owner_user_id, ''), p.user_id, r.reported_id)
       ${where}
       ORDER BY CASE COALESCE(r.priority, 'normal') WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, r.created_at DESC
       LIMIT ? OFFSET ?
     `).bind(...binds, limit, offset).all();
     return c.json({
-      results: (rows.results as any[]).map(adminReportSummary),
+      results: (rows.results as any[]).map((row) => adminReportSummary(row, c.env)),
       pagination: { limit, offset, next_offset: offset + limit },
     });
   } catch (error: any) {
@@ -11571,12 +11654,21 @@ api.get('/admin/posts', authMiddleware, async (c) => {
     await ensureAdminModerationSchema(c.env.DB);
     const { limit, offset } = adminPageParams(c);
     const status = cleanText(c.req.query('status') || 'all', 40);
+    const category = cleanText(c.req.query('category') || '', 60).toLowerCase();
+    const surface = cleanText(c.req.query('surface') || '', 40).toLowerCase();
     const search = searchPattern(c.req.query('search'));
     const conditions: string[] = [];
     const binds: any[] = [];
     if (status !== 'all') {
       conditions.push("COALESCE(p.status, 'active') = ?");
       binds.push(status);
+    }
+    if (category && category !== 'all') {
+      conditions.push('LOWER(COALESCE(p.post_type, ?)) = ?');
+      binds.push('general', category);
+    }
+    if (surface === 'discover') {
+      conditions.push("COALESCE(p.discover_blocked_at, '') = ''");
     }
     if (search) {
       conditions.push('(LOWER(p.id) LIKE ? OR LOWER(p.content) LIKE ? OR LOWER(u.username) LIKE ?)');
@@ -11600,6 +11692,7 @@ api.get('/admin/posts', authMiddleware, async (c) => {
 api.get('/admin/posts/:postId', authMiddleware, async (c) => {
   try {
     await requireAdminRole(c, 'content:read');
+    await ensureAdminModerationSchema(c.env.DB);
     const postId = publicId(c.req.param('postId'), 120);
     const row: any = await c.env.DB.prepare(`
       SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
@@ -11608,7 +11701,15 @@ api.get('/admin/posts/:postId', authMiddleware, async (c) => {
       LIMIT 1
     `).bind(postId).first();
     if (!row) return c.json({ detail: 'Post not found.' }, 404);
-    return c.json({ post: adminPostPayload(row, c.env) });
+    const actions = await c.env.DB.prepare(`
+      SELECT a.*, u.username AS actor_username, u.full_name AS actor_full_name
+      FROM moderation_actions a
+      LEFT JOIN users u ON u.id = a.actor_admin_user_id
+      WHERE a.target_type = 'post' AND a.target_id = ?
+      ORDER BY a.created_at DESC
+      LIMIT 30
+    `).bind(postId).all();
+    return c.json({ post: adminPostPayload(row, c.env), actions: actions.results || [] });
   } catch (error: any) {
     return governanceError(c, error);
   }
@@ -11617,6 +11718,7 @@ api.get('/admin/posts/:postId', authMiddleware, async (c) => {
 api.post('/admin/posts/:postId/remove', authMiddleware, async (c) => {
   try {
     const admin = await requireAdminRole(c, 'content:write');
+    await ensureAdminModerationSchema(c.env.DB);
     const limited = await requireAdminWriteRateLimit(c, admin, 'admin_post_remove');
     if (limited) return limited;
     const postId = publicId(c.req.param('postId'), 120);
@@ -11636,6 +11738,7 @@ api.post('/admin/posts/:postId/remove', authMiddleware, async (c) => {
 api.post('/admin/posts/:postId/restore', authMiddleware, async (c) => {
   try {
     const admin = await requireAdminRole(c, 'content:write');
+    await ensureAdminModerationSchema(c.env.DB);
     const limited = await requireAdminWriteRateLimit(c, admin, 'admin_post_restore');
     if (limited) return limited;
     const postId = publicId(c.req.param('postId'), 120);
@@ -11652,9 +11755,33 @@ api.post('/admin/posts/:postId/restore', authMiddleware, async (c) => {
   }
 });
 
+api.post('/admin/posts/:postId/mark-safe', authMiddleware, async (c) => {
+  try {
+    const admin = await requireAdminRole(c, 'content:write');
+    await ensureAdminModerationSchema(c.env.DB);
+    const limited = await requireAdminWriteRateLimit(c, admin, 'admin_post_mark_safe');
+    if (limited) return limited;
+    const postId = publicId(c.req.param('postId'), 120);
+    const body: any = await c.req.json().catch(() => ({}));
+    const unknown = rejectUnknownFields(c, body, ['reason', 'note']);
+    if (unknown) return unknown;
+    const reason = cleanMultilineText(body.reason, 500);
+    if (!reason) return c.json({ detail: 'Reason is required.' }, 400);
+    const before: any = await c.env.DB.prepare('SELECT id, user_id, status, discover_blocked_at FROM posts WHERE id = ?').bind(postId).first();
+    if (!before) return c.json({ detail: 'Post not found.' }, 404);
+    await c.env.DB.prepare("UPDATE posts SET status = 'active', removed_at = NULL, removed_reason = '', discover_blocked_at = NULL, discover_blocked_by = '', discover_blocked_reason = '', updated_at = datetime('now') WHERE id = ?")
+      .bind(postId).run();
+    await writeAdminAuditLog(c, admin, { actionType: 'post_marked_safe', targetType: 'post', targetId: postId, targetUserId: before.user_id, reason, note: body.note, beforeState: before, afterState: { status: 'active', discover_blocked: false } });
+    return c.json({ marked_safe: true });
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
 api.post('/admin/posts/:postId/remove-from-discover', authMiddleware, async (c) => {
   try {
     const admin = await requireAdminRole(c, 'content:write');
+    await ensureAdminModerationSchema(c.env.DB);
     const limited = await requireAdminWriteRateLimit(c, admin, 'admin_post_discover_remove');
     if (limited) return limited;
     const postId = publicId(c.req.param('postId'), 120);
@@ -11764,7 +11891,7 @@ api.get('/admin/messages/reported', authMiddleware, async (c) => {
       ORDER BY r.created_at DESC
       LIMIT ? OFFSET ?
     `).bind(limit, offset).all();
-    return c.json({ results: (rows.results as any[]).map(adminReportSummary), pagination: { limit, offset, next_offset: offset + limit } });
+    return c.json({ results: (rows.results as any[]).map((row) => adminReportSummary(row, c.env)), pagination: { limit, offset, next_offset: offset + limit } });
   } catch (error: any) {
     return governanceError(c, error);
   }
