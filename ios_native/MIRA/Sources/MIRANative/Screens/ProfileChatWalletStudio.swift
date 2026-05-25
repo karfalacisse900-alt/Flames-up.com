@@ -238,11 +238,7 @@ public struct ProfileNativeView: View {
 
   private var profileHeader: some View {
     VStack(spacing: MIRATheme.Space.md) {
-      ZStack(alignment: .topTrailing) {
-        RemoteAvatar(url: model.user?.profileImage, size: 92)
-          .frame(maxWidth: .infinity)
-        profileSafetyMenu
-      }
+      RemoteAvatar(url: model.user?.profileImage, size: 92)
       VStack(spacing: 4) {
         Text(profileTitle)
           .font(.system(size: 24, weight: .semibold))
@@ -268,43 +264,6 @@ public struct ProfileNativeView: View {
     .frame(maxWidth: .infinity)
     .miraCardSurface()
     .padding(.horizontal, MIRATheme.Space.md)
-  }
-
-  private var profileSafetyMenu: some View {
-    Menu {
-      Button(role: .destructive) {
-        presentProfileReport()
-      } label: {
-        Label("Report profile", systemImage: "flag")
-      }
-      Button(role: .destructive) {
-        Task { _ = await model.blockUser() }
-      } label: {
-        Label("Block user", systemImage: "hand.raised")
-      }
-    } label: {
-      Image(systemName: "ellipsis")
-        .font(.system(size: 16, weight: .bold))
-        .foregroundStyle(MIRATheme.Color.textSecondary)
-        .frame(width: 34, height: 34)
-        .background(MIRATheme.Color.surfaceSoft)
-        .clipShape(Circle())
-    }
-    .buttonStyle(.miraPress)
-  }
-
-  private func presentProfileReport() {
-    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-    reportTarget = MIRAReportTarget(
-      targetType: "profile",
-      targetId: model.userId,
-      ownerUserId: model.userId,
-      title: "Report profile",
-      subtitle: model.user?.displayName ?? model.user?.username
-    )
-    withAnimation(.spring(response: 0.30, dampingFraction: 0.90)) {
-      isReportSheetPresented = true
-    }
   }
 
   private func profileMetric(_ label: String, _ value: Int) -> some View {
@@ -465,7 +424,11 @@ public struct UserProfileNativeView: View {
 
   private var profileHeader: some View {
     VStack(spacing: MIRATheme.Space.md) {
-      RemoteAvatar(url: model.user?.profileImage, size: 92)
+      ZStack(alignment: .topTrailing) {
+        RemoteAvatar(url: model.user?.profileImage, size: 92)
+          .frame(maxWidth: .infinity)
+        profileSafetyMenu
+      }
       VStack(spacing: 4) {
         Text(profileTitle)
           .font(.system(size: 24, weight: .semibold))
@@ -513,6 +476,43 @@ public struct UserProfileNativeView: View {
     .frame(maxWidth: .infinity)
     .miraCardSurface()
     .padding(.horizontal, MIRATheme.Space.md)
+  }
+
+  private var profileSafetyMenu: some View {
+    Menu {
+      Button(role: .destructive) {
+        presentProfileReport()
+      } label: {
+        Label("Report profile", systemImage: "flag")
+      }
+      Button(role: .destructive) {
+        Task { _ = await model.blockUser() }
+      } label: {
+        Label("Block user", systemImage: "hand.raised")
+      }
+    } label: {
+      Image(systemName: "ellipsis")
+        .font(.system(size: 16, weight: .bold))
+        .foregroundStyle(MIRATheme.Color.textSecondary)
+        .frame(width: 34, height: 34)
+        .background(MIRATheme.Color.surfaceSoft)
+        .clipShape(Circle())
+    }
+    .buttonStyle(.miraPress)
+  }
+
+  private func presentProfileReport() {
+    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+    reportTarget = MIRAReportTarget(
+      targetType: "profile",
+      targetId: model.userId,
+      ownerUserId: model.userId,
+      title: "Report profile",
+      subtitle: model.user?.displayName ?? model.user?.username
+    )
+    withAnimation(.spring(response: 0.30, dampingFraction: 0.90)) {
+      isReportSheetPresented = true
+    }
   }
 
   private func profileMetric(_ label: String, _ value: Int) -> some View {
