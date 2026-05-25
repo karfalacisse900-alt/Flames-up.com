@@ -3110,6 +3110,7 @@ function postPayload(post: any, likedBy: string[] = [], env?: Env) {
   const payload = {
     ...post,
     user_username: publicUsernameFor({ username: post.user_username }),
+    user_profile_image: safeMediaReference(post.user_profile_image),
     likes_count: likesCount,
     comments_count: commentsCount,
     saves_count: savesCount,
@@ -7098,7 +7099,13 @@ api.post('/posts/:postId/comments', authMiddleware, async (c) => {
          WHERE c.user_id = ? AND c.client_request_id = ?
          LIMIT 1`
       ).bind(userId, userId, clientRequestId).first();
-      if (existing) return c.json({ ...existing, liked_by_me: !!existing.liked_by_me, idempotent_replay: true });
+      if (existing) return c.json({
+        ...existing,
+        user_username: publicUsernameFor({ username: existing.user_username }),
+        user_profile_image: safeMediaReference(existing.user_profile_image),
+        liked_by_me: !!existing.liked_by_me,
+        idempotent_replay: true,
+      });
     }
     if (!inserted) return c.json({ detail: 'Could not post comment. Please retry.' }, 409);
     const engagement = await getPostEngagementState(c.env.DB, postId, userId);
@@ -7138,7 +7145,7 @@ api.post('/posts/:postId/comments', authMiddleware, async (c) => {
       is_pinned: false,
       user_username: publicUsernameFor(user),
       user_full_name: user?.full_name,
-      user_profile_image: user?.profile_image,
+      user_profile_image: safeMediaReference(user?.profile_image),
       created_at: createdAt,
     });
   } catch (error: any) {
@@ -7174,6 +7181,7 @@ api.get('/posts/:postId/comments', authMiddleware, async (c) => {
     return c.json((r.results as any[]).map((comment) => ({
       ...comment,
       user_username: publicUsernameFor({ username: comment.user_username }),
+      user_profile_image: safeMediaReference(comment.user_profile_image),
       likes_count: Number(comment.likes_count || 0),
       is_pinned: !!comment.is_pinned,
       liked_by_me: !!comment.liked_by_me,
@@ -7492,7 +7500,7 @@ api.get('/conversations', authMiddleware, async (c) => {
           id: oid,
           username: m.username,
           full_name: m.full_name,
-          profile_image: m.profile_image,
+          profile_image: safeMediaReference(m.profile_image),
           last_seen_at: m.other_last_seen_at || null,
           is_online: isPresenceOnline(m.other_last_seen_at),
           is_typing: Number(m.other_is_typing || 0) > 0,
@@ -9557,7 +9565,7 @@ api.post('/discover/posts', authMiddleware, async (c) => {
   if (!user?.is_publisher) return c.json({ detail: 'Publishers only' }, 403);
   const id = uuid();
   await c.env.DB.prepare('INSERT INTO discover_posts (id, user_id, content, image, images, category, location) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(id, userId, b.content || '', b.image || null, JSON.stringify(b.images || []), b.category || 'culture', b.location || '').run();
-  return c.json({ id, user_id: userId, user_username: user.username, user_full_name: user.full_name, user_profile_image: user.profile_image, content: b.content, category: b.category, created_at: now() });
+  return c.json({ id, user_id: userId, user_username: user.username, user_full_name: user.full_name, user_profile_image: safeMediaReference(user.profile_image), content: b.content, category: b.category, created_at: now() });
 });
 
 api.get('/discover/feed', authMiddleware, async (c) => {
@@ -9574,7 +9582,16 @@ api.get('/discover/feed', authMiddleware, async (c) => {
   sql += ' ORDER BY dp.created_at DESC LIMIT ? OFFSET ?';
   binds.push(limit, skip);
   const r = binds.length ? await c.env.DB.prepare(sql).bind(...binds).all() : await c.env.DB.prepare(sql).all();
-  return c.json((r.results as any[]).map(p => ({ ...p, images: JSON.parse(p.images || '[]') })));
+  return c.json((r.results as any[]).map(p => {
+    const images = sanitizeMediaReferences(p.images, p.image);
+    return {
+      ...p,
+      image: safeMediaReference(p.image) || images[0] || '',
+      images,
+      user_username: publicUsernameFor({ username: p.user_username }),
+      user_profile_image: safeMediaReference(p.user_profile_image),
+    };
+  }));
 });
 
 api.post('/discover/posts/:postId/like', authMiddleware, async (c) => {
