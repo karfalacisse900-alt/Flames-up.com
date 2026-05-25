@@ -90,10 +90,13 @@ export const AdminApi = {
   forceUsername: (token: string, id: string, body: Record<string, unknown>) =>
     request(`/admin/users/${encodeURIComponent(id)}/force-username-change`, token, { method: 'POST', body: JSON.stringify(body) }),
   posts: (token: string, query = '') => request<Paginated<AdminPost>>(`/admin/posts${query}`, token),
+  post: (token: string, id: string) => request<{ post: AdminPost; actions?: AuditLog[] }>(`/admin/posts/${encodeURIComponent(id)}`, token),
   removePost: (token: string, id: string, body: Record<string, unknown>) =>
     request(`/admin/posts/${encodeURIComponent(id)}/remove`, token, { method: 'POST', body: JSON.stringify(body) }),
   restorePost: (token: string, id: string, body: Record<string, unknown>) =>
     request(`/admin/posts/${encodeURIComponent(id)}/restore`, token, { method: 'POST', body: JSON.stringify(body) }),
+  markPostSafe: (token: string, id: string, body: Record<string, unknown>) =>
+    request(`/admin/posts/${encodeURIComponent(id)}/mark-safe`, token, { method: 'POST', body: JSON.stringify(body) }),
   removeFromDiscover: (token: string, id: string, body: Record<string, unknown>) =>
     request(`/admin/posts/${encodeURIComponent(id)}/remove-from-discover`, token, { method: 'POST', body: JSON.stringify(body) }),
   comments: (token: string, query = '') => request<Paginated<AdminComment>>(`/admin/comments${query}`, token),
