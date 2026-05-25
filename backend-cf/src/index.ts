@@ -478,7 +478,6 @@ let walletSchemaReady = false;
 let premiumSchemaReady = false;
 let abuseProtectionSchemaReady = false;
 let messagePresenceSchemaReady = false;
-let productionPerformanceSchemaReady = false;
 
 function normalizeSchemaSql(statement: string): string {
   return statement.replace(/\s+/g, ' ').trim().replace(/;$/, '');
@@ -614,45 +613,6 @@ async function ensureMessagePresenceSchema(db: D1Database) {
   }
 
   messagePresenceSchemaReady = true;
-}
-
-async function ensureProductionPerformanceSchema(db: D1Database) {
-  if (productionPerformanceSchemaReady) return;
-
-  const statements = [
-    'CREATE INDEX IF NOT EXISTS idx_posts_created_desc ON posts(created_at DESC)',
-    'CREATE INDEX IF NOT EXISTS idx_posts_user_created ON posts(user_id, created_at DESC)',
-    'CREATE INDEX IF NOT EXISTS idx_posts_type_created ON posts(post_type, created_at DESC)',
-    'CREATE INDEX IF NOT EXISTS idx_posts_visibility_created ON posts(visibility, created_at DESC)',
-    'CREATE INDEX IF NOT EXISTS idx_comments_post_created ON comments(post_id, created_at)',
-    'CREATE INDEX IF NOT EXISTS idx_likes_post_user ON likes(post_id, user_id)',
-    'CREATE INDEX IF NOT EXISTS idx_saved_posts_post_user ON saved_posts(post_id, user_id)',
-    'CREATE INDEX IF NOT EXISTS idx_saved_posts_user_created ON saved_posts(user_id, created_at DESC)',
-    'CREATE INDEX IF NOT EXISTS idx_follows_following_follower ON follows(following_id, follower_id)',
-    'CREATE INDEX IF NOT EXISTS idx_messages_receiver_sender_created ON messages(receiver_id, sender_id, created_at)',
-    'CREATE INDEX IF NOT EXISTS idx_messages_sender_created ON messages(sender_id, created_at DESC)',
-    'CREATE INDEX IF NOT EXISTS idx_messages_receiver_created ON messages(receiver_id, created_at DESC)',
-    'CREATE INDEX IF NOT EXISTS idx_notifications_user_created ON notifications(user_id, created_at DESC)',
-    'CREATE INDEX IF NOT EXISTS idx_notifications_user_unread_created ON notifications(user_id, is_read, created_at DESC)',
-    'CREATE INDEX IF NOT EXISTS idx_blocks_blocked_blocker ON blocks(blocked_id, blocker_id)',
-    'CREATE INDEX IF NOT EXISTS idx_discover_posts_category_created ON discover_posts(category, created_at DESC)',
-    'CREATE INDEX IF NOT EXISTS idx_discover_posts_user_created ON discover_posts(user_id, created_at DESC)',
-    'CREATE INDEX IF NOT EXISTS idx_discover_likes_post_user ON discover_likes(post_id, user_id)',
-  ];
-
-  for (const statement of statements) {
-    try {
-      await runSchemaStatement(db, statement);
-    } catch (error: any) {
-      const message = String(error?.message || '').toLowerCase();
-      const optionalLegacyTableMissing = message.includes('no such table') || message.includes('no such column');
-      if (!optionalLegacyTableMissing && !isIgnorableSchemaError(error, statement)) {
-        throw error;
-      }
-    }
-  }
-
-  productionPerformanceSchemaReady = true;
 }
 
 async function touchUserPresence(db: D1Database, userId: string) {
@@ -6763,7 +6723,6 @@ api.get('/posts/feed', authMiddleware, async (c) => {
   await ensurePrivacySchema(c.env.DB);
   await ensureGovernanceSchema(c.env.DB);
   await ensurePostEditorSchema(c.env.DB);
-  await ensureProductionPerformanceSchema(c.env.DB);
   const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
   const limit = clampNumber(c.req.query('limit') || '20', 1, 50, 20);
   const feedSql = [
@@ -6787,7 +6746,6 @@ api.get('/posts/world-board', async (c) => {
     await ensurePrivacySchema(c.env.DB);
     await ensureGovernanceSchema(c.env.DB);
     await ensurePostEditorSchema(c.env.DB);
-    await ensureProductionPerformanceSchema(c.env.DB);
     const limited = await enforceRateLimit(c, 'public_world_board', clientIp(c), 180, 60);
     if (limited) return limited;
     const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
@@ -6820,7 +6778,6 @@ api.get('/posts/nearby-feed', authMiddleware, async (c) => {
   await ensurePrivacySchema(c.env.DB);
   await ensureGovernanceSchema(c.env.DB);
   await ensurePostEditorSchema(c.env.DB);
-  await ensureProductionPerformanceSchema(c.env.DB);
   const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
   const limit = clampNumber(c.req.query('limit') || '24', 1, 50, 24);
   const nearbyFeedSql = [
@@ -7010,7 +6967,6 @@ api.get('/users/:userId/posts', authMiddleware, async (c) => {
   await ensurePrivacySchema(c.env.DB);
   await ensureGovernanceSchema(c.env.DB);
   await ensurePostEditorSchema(c.env.DB);
-  await ensureProductionPerformanceSchema(c.env.DB);
   const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
   const limit = clampNumber(c.req.query('limit') || '60', 1, 100, 60);
   const owner: any = await c.env.DB.prepare('SELECT id, is_private FROM users WHERE id = ?').bind(targetId).first();
@@ -7159,7 +7115,6 @@ api.get('/posts/:postId/comments', authMiddleware, async (c) => {
     await ensurePrivacySchema(c.env.DB);
     await ensureGovernanceSchema(c.env.DB);
     await ensureCommentSchema(c.env.DB);
-    await ensureProductionPerformanceSchema(c.env.DB);
     const userId = getUserId(c);
     const limit = clampNumber(c.req.query('limit') || '80', 1, 100, 80);
     const commentsSql = [
@@ -7439,7 +7394,6 @@ api.get('/conversations', authMiddleware, async (c) => {
   const userId = getUserId(c);
   await touchUserPresence(c.env.DB, userId);
   await ensureAbuseProtectionSchema(c.env.DB);
-  await ensureProductionPerformanceSchema(c.env.DB);
   const limit = clampNumber(c.req.query('limit') || '60', 1, 100, 60);
   const msgs = await c.env.DB.prepare(`
     WITH ranked_messages AS (
@@ -8105,7 +8059,6 @@ api.get('/notifications', authMiddleware, async (c) => {
     const limited = await enforceRateLimit(c, 'notifications_read', userId, 180, 60);
     if (limited) return limited;
     await ensureAbuseProtectionSchema(c.env.DB);
-    await ensureProductionPerformanceSchema(c.env.DB);
     const limit = clampNumber(c.req.query('limit') || '50', 1, 80, 50);
     const before = cleanText(c.req.query('before') || '', 60);
     const notificationsSql = `SELECT * FROM notifications WHERE user_id = ? ${before ? 'AND datetime(created_at) < datetime(?)' : ''} ORDER BY created_at DESC LIMIT ?`;
@@ -8128,7 +8081,6 @@ api.post('/notifications/mark-read', authMiddleware, async (c) => { await c.env.
 // Library
 api.get('/library/liked', authMiddleware, async (c) => {
   const userId = getUserId(c);
-  await ensureProductionPerformanceSchema(c.env.DB);
   const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
   const limit = clampNumber(c.req.query('limit') || '40', 1, 80, 40);
   const likedLibrarySql = [
@@ -8148,7 +8100,6 @@ api.get('/library/liked', authMiddleware, async (c) => {
 api.get('/library/saved', authMiddleware, async (c) => {
   const userId = getUserId(c);
   const collection = c.req.query('collection');
-  await ensureProductionPerformanceSchema(c.env.DB);
   const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
   const limit = clampNumber(c.req.query('limit') || '40', 1, 80, 40);
   const savedLibraryBaseSql = [
@@ -8968,7 +8919,6 @@ api.get('/discover/trending', authMiddleware, async (c) => {
   await ensurePrivacySchema(c.env.DB);
   await ensureGovernanceSchema(c.env.DB);
   await ensurePostEditorSchema(c.env.DB);
-  await ensureProductionPerformanceSchema(c.env.DB);
   const limit = clampNumber(c.req.query('limit') || '20', 1, 40, 20);
   const discoverTrendingSql = [
     'SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image',
@@ -8986,7 +8936,6 @@ api.get('/discover/search', authMiddleware, async (c) => {
   await ensurePrivacySchema(c.env.DB);
   await ensureGovernanceSchema(c.env.DB);
   await ensurePostEditorSchema(c.env.DB);
-  await ensureProductionPerformanceSchema(c.env.DB);
   const q = cleanText(c.req.query('q'), 80);
   if (q.length < 2) return c.json({ posts: [], users: [] });
   const limit = clampNumber(c.req.query('limit') || '20', 1, 30, 20);
@@ -9569,7 +9518,6 @@ api.post('/discover/posts', authMiddleware, async (c) => {
 });
 
 api.get('/discover/feed', authMiddleware, async (c) => {
-  await ensureProductionPerformanceSchema(c.env.DB);
   const category = c.req.query('category') || 'all';
   const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
   const limit = clampNumber(c.req.query('limit') || '30', 1, 60, 30);
