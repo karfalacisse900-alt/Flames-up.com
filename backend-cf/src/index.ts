@@ -1,5 +1,5 @@
 // Flames-Up Cloudflare Workers API — Hono + D1 + CF Images + CF Stream
-// Deploy: wrangler deploy
+// Deploy: wrangler deploy --env production --keep-vars
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import bcrypt from 'bcryptjs';
@@ -44,6 +44,8 @@ interface Env {
   APNS_VOIP_PRIVATE_KEY?: string;
   APNS_ENVIRONMENT?: string;
   MEDIA_BACKUP_MAX_VIDEO_BYTES?: string;
+  SOURCE_COMMIT?: string;
+  WORKER_VERSION?: string;
   STRIPE_SECRET_KEY?: string;
   STRIPE_PUBLISHABLE_KEY?: string;
   STRIPE_DEFAULT_PRICE_ID?: string;
@@ -66,9 +68,11 @@ interface Env {
 type HonoApp = { Bindings: Env; Variables: { userId: string; requestId: string } };
 
 const app = new Hono<HonoApp>();
+const API_VERSION = '2.0';
+const WORKER_NAME = 'flames-up-api';
 
 // Root handler
-app.get('/', (c) => c.json({ name: 'Captro API', version: '2.0', status: 'live', docs: '/api/health' }));
+app.get('/', (c) => c.json({ name: 'Captro API', version: API_VERSION, status: 'live', docs: '/api/health' }));
 
 const api = new Hono<HonoApp>();
 
@@ -100,7 +104,7 @@ const corsOpts = {
   origin: allowedCorsOrigin,
   allowMethods: ['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowHeaders: ['Authorization', 'Content-Type', 'Range', 'Idempotency-Key', 'X-Idempotency-Key', 'X-Request-ID'],
-  exposeHeaders: ['Accept-Ranges', 'Content-Length', 'Content-Range', 'Content-Type', 'ETag', 'X-Request-ID'],
+  exposeHeaders: ['Accept-Ranges', 'Content-Length', 'Content-Range', 'Content-Type', 'ETag', 'Server-Timing', 'X-Request-ID', 'X-Response-Time'],
   maxAge: 600,
 };
 app.use('*', cors(corsOpts));
@@ -120,6 +124,26 @@ const requestIdMiddleware = async (c: any, next: () => Promise<void>) => {
 };
 app.use('*', requestIdMiddleware);
 api.use('*', requestIdMiddleware);
+
+const responseTimingMiddleware = async (c: any, next: () => Promise<void>) => {
+  const startedAt = Date.now();
+  await next();
+  const elapsedMs = Date.now() - startedAt;
+  c.header('Server-Timing', `app;dur=${elapsedMs}`);
+  c.header('X-Response-Time', `${elapsedMs}ms`);
+  const status = Number(c.res?.status || 200);
+  if (elapsedMs >= 750 || status >= 500) {
+    console.warn(JSON.stringify({
+      event: 'api_request_slow_or_error',
+      request_id: c.get?.('requestId') || '',
+      method: c.req.method,
+      path: new URL(c.req.url).pathname,
+      status,
+      duration_ms: elapsedMs,
+    }));
+  }
+};
+app.use('*', responseTimingMiddleware);
 
 const securityHeaders = async (c: any, next: () => Promise<void>) => {
   await next();
@@ -454,6 +478,7 @@ let walletSchemaReady = false;
 let premiumSchemaReady = false;
 let abuseProtectionSchemaReady = false;
 let messagePresenceSchemaReady = false;
+let productionPerformanceSchemaReady = false;
 
 function normalizeSchemaSql(statement: string): string {
   return statement.replace(/\s+/g, ' ').trim().replace(/;$/, '');
@@ -589,6 +614,45 @@ async function ensureMessagePresenceSchema(db: D1Database) {
   }
 
   messagePresenceSchemaReady = true;
+}
+
+async function ensureProductionPerformanceSchema(db: D1Database) {
+  if (productionPerformanceSchemaReady) return;
+
+  const statements = [
+    'CREATE INDEX IF NOT EXISTS idx_posts_created_desc ON posts(created_at DESC)',
+    'CREATE INDEX IF NOT EXISTS idx_posts_user_created ON posts(user_id, created_at DESC)',
+    'CREATE INDEX IF NOT EXISTS idx_posts_type_created ON posts(post_type, created_at DESC)',
+    'CREATE INDEX IF NOT EXISTS idx_posts_visibility_created ON posts(visibility, created_at DESC)',
+    'CREATE INDEX IF NOT EXISTS idx_comments_post_created ON comments(post_id, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_likes_post_user ON likes(post_id, user_id)',
+    'CREATE INDEX IF NOT EXISTS idx_saved_posts_post_user ON saved_posts(post_id, user_id)',
+    'CREATE INDEX IF NOT EXISTS idx_saved_posts_user_created ON saved_posts(user_id, created_at DESC)',
+    'CREATE INDEX IF NOT EXISTS idx_follows_following_follower ON follows(following_id, follower_id)',
+    'CREATE INDEX IF NOT EXISTS idx_messages_receiver_sender_created ON messages(receiver_id, sender_id, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_messages_sender_created ON messages(sender_id, created_at DESC)',
+    'CREATE INDEX IF NOT EXISTS idx_messages_receiver_created ON messages(receiver_id, created_at DESC)',
+    'CREATE INDEX IF NOT EXISTS idx_notifications_user_created ON notifications(user_id, created_at DESC)',
+    'CREATE INDEX IF NOT EXISTS idx_notifications_user_unread_created ON notifications(user_id, is_read, created_at DESC)',
+    'CREATE INDEX IF NOT EXISTS idx_blocks_blocked_blocker ON blocks(blocked_id, blocker_id)',
+    'CREATE INDEX IF NOT EXISTS idx_discover_posts_category_created ON discover_posts(category, created_at DESC)',
+    'CREATE INDEX IF NOT EXISTS idx_discover_posts_user_created ON discover_posts(user_id, created_at DESC)',
+    'CREATE INDEX IF NOT EXISTS idx_discover_likes_post_user ON discover_likes(post_id, user_id)',
+  ];
+
+  for (const statement of statements) {
+    try {
+      await runSchemaStatement(db, statement);
+    } catch (error: any) {
+      const message = String(error?.message || '').toLowerCase();
+      const optionalLegacyTableMissing = message.includes('no such table') || message.includes('no such column');
+      if (!optionalLegacyTableMissing && !isIgnorableSchemaError(error, statement)) {
+        throw error;
+      }
+    }
+  }
+
+  productionPerformanceSchemaReady = true;
 }
 
 async function touchUserPresence(db: D1Database, userId: string) {
@@ -3083,6 +3147,25 @@ function postPayload(post: any, likedBy: string[] = [], env?: Env) {
     payload.audio_start_time = 0;
     payload.audio_duration = 0;
   }
+  return payload;
+}
+
+function feedPostPayload(post: any, likedBy: string[] = [], env?: Env) {
+  const payload: any = postPayload(post, likedBy, env);
+  const feedUrls = Array.isArray(payload.feed_media_urls) ? payload.feed_media_urls.filter(Boolean) : [];
+  if (feedUrls.length) {
+    payload.image = feedUrls[0];
+    payload.images = feedUrls;
+  }
+  delete payload.original_media_url;
+  delete payload.original_media_urls;
+  delete payload.media_backup_ids;
+  delete payload.client_request_id;
+  delete payload.removed_at;
+  delete payload.removed_reason;
+  delete payload.hidden_at;
+  delete payload.hidden_by_user_id;
+  delete payload.user_email;
   return payload;
 }
 
@@ -6676,6 +6759,10 @@ api.get('/posts/feed', authMiddleware, async (c) => {
   const userId = getUserId(c);
   const limited = await enforceRateLimit(c, 'feed_read', userId, 240, 60);
   if (limited) return limited;
+  await ensurePrivacySchema(c.env.DB);
+  await ensureGovernanceSchema(c.env.DB);
+  await ensurePostEditorSchema(c.env.DB);
+  await ensureProductionPerformanceSchema(c.env.DB);
   const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
   const limit = clampNumber(c.req.query('limit') || '20', 1, 50, 20);
   const feedSql = [
@@ -6691,12 +6778,15 @@ api.get('/posts/feed', authMiddleware, async (c) => {
     'ORDER BY p.created_at DESC LIMIT ? OFFSET ?',
   ].join(' ');
   const posts = await c.env.DB.prepare(feedSql).bind(userId, userId, userId, ...visiblePostBindValues(userId), limit, skip).all();
-  return c.json((posts.results as any[]).map((p) => postPayload(p, [], c.env)));
+  return c.json((posts.results as any[]).map((p) => feedPostPayload(p, [], c.env)));
 });
 
 api.get('/posts/world-board', async (c) => {
   try {
     await ensurePrivacySchema(c.env.DB);
+    await ensureGovernanceSchema(c.env.DB);
+    await ensurePostEditorSchema(c.env.DB);
+    await ensureProductionPerformanceSchema(c.env.DB);
     const limited = await enforceRateLimit(c, 'public_world_board', clientIp(c), 180, 60);
     if (limited) return limited;
     const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
@@ -6712,7 +6802,7 @@ api.get('/posts/world-board', async (c) => {
         'ORDER BY p.created_at DESC LIMIT ? OFFSET ?',
       ].join(' ');
       const posts = await c.env.DB.prepare(worldBoardSql).bind(limit, skip).all();
-      return (posts.results as any[]).map((p) => postPayload(p, [], c.env));
+      return (posts.results as any[]).map((p) => feedPostPayload(p, [], c.env));
     });
     const response = c.json(payload);
     response.headers.set('cache-control', 'public, max-age=4, s-maxage=8');
@@ -6726,6 +6816,12 @@ api.get('/posts/nearby-feed', authMiddleware, async (c) => {
   const userId = getUserId(c);
   const limited = await enforceRateLimit(c, 'nearby_feed_read', userId, 180, 60);
   if (limited) return limited;
+  await ensurePrivacySchema(c.env.DB);
+  await ensureGovernanceSchema(c.env.DB);
+  await ensurePostEditorSchema(c.env.DB);
+  await ensureProductionPerformanceSchema(c.env.DB);
+  const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
+  const limit = clampNumber(c.req.query('limit') || '24', 1, 50, 24);
   const nearbyFeedSql = [
     `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
        (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
@@ -6733,10 +6829,10 @@ api.get('/posts/nearby-feed', authMiddleware, async (c) => {
        (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id) AS live_saves_count
      FROM posts p JOIN users u ON p.user_id = u.id`,
     `WHERE ${visiblePostWhere('u', 'p')}`,
-    'ORDER BY p.created_at DESC LIMIT 50',
+    'ORDER BY p.created_at DESC LIMIT ? OFFSET ?',
   ].join(' ');
-  const posts = await c.env.DB.prepare(nearbyFeedSql).bind(...visiblePostBindValues(userId)).all();
-  return c.json((posts.results as any[]).map((p) => postPayload(p, [], c.env)));
+  const posts = await c.env.DB.prepare(nearbyFeedSql).bind(...visiblePostBindValues(userId), limit, skip).all();
+  return c.json((posts.results as any[]).map((p) => feedPostPayload(p, [], c.env)));
 });
 
 api.get('/posts/:postId', authMiddleware, async (c) => {
@@ -6910,6 +7006,12 @@ api.put('/posts/:postId/pin', authMiddleware, async (c) => {
 api.get('/users/:userId/posts', authMiddleware, async (c) => {
   const viewerId = getUserId(c);
   const targetId = c.req.param('userId');
+  await ensurePrivacySchema(c.env.DB);
+  await ensureGovernanceSchema(c.env.DB);
+  await ensurePostEditorSchema(c.env.DB);
+  await ensureProductionPerformanceSchema(c.env.DB);
+  const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
+  const limit = clampNumber(c.req.query('limit') || '60', 1, 100, 60);
   const owner: any = await c.env.DB.prepare('SELECT id, is_private FROM users WHERE id = ?').bind(targetId).first();
   if (!owner) return c.json({ detail: 'User not found' }, 404);
   if (!(await canViewUserContent(c.env.DB, viewerId, owner))) return c.json([]);
@@ -6930,9 +7032,10 @@ api.get('/users/:userId/posts', authMiddleware, async (c) => {
        ))
        OR (COALESCE(p.visibility, 'public') = 'friends' AND EXISTS (SELECT 1 FROM friendships f3 WHERE f3.user_id = ? AND f3.friend_id = p.user_id))
      )
-     ORDER BY p.pinned_at IS NULL, p.pinned_at DESC, p.created_at DESC`
-  ).bind(viewerId, viewerId, targetId, viewerId, viewerId, viewerId, viewerId).all();
-  return c.json((posts.results as any[]).map((p) => postPayload(p, [], c.env)));
+      ORDER BY p.pinned_at IS NULL, p.pinned_at DESC, p.created_at DESC
+      LIMIT ? OFFSET ?`
+  ).bind(viewerId, viewerId, targetId, viewerId, viewerId, viewerId, viewerId, limit, skip).all();
+  return c.json((posts.results as any[]).map((p) => feedPostPayload(p, [], c.env)));
 });
 
 // Comments
@@ -7049,7 +7152,9 @@ api.get('/posts/:postId/comments', authMiddleware, async (c) => {
     await ensurePrivacySchema(c.env.DB);
     await ensureGovernanceSchema(c.env.DB);
     await ensureCommentSchema(c.env.DB);
+    await ensureProductionPerformanceSchema(c.env.DB);
     const userId = getUserId(c);
+    const limit = clampNumber(c.req.query('limit') || '80', 1, 100, 80);
     const commentsSql = [
       `SELECT c.*, p.user_id AS post_user_id, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
               CASE WHEN c.pinned_at IS NULL THEN 0 ELSE 1 END AS is_pinned,
@@ -7062,8 +7167,9 @@ api.get('/posts/:postId/comments', authMiddleware, async (c) => {
        WHERE c.post_id = ? AND COALESCE(c.status, 'active') NOT IN ('removed', 'hidden')`,
       `AND ${visiblePostWhere('owner', 'p')}`,
       'ORDER BY c.pinned_at IS NULL, c.pinned_at DESC, COALESCE(c.parent_id, c.id), c.parent_id IS NOT NULL, c.created_at ASC',
+      'LIMIT ?',
     ].join(' ');
-    const r = await c.env.DB.prepare(commentsSql).bind(userId, c.req.param('postId'), ...visiblePostBindValues(userId)).all();
+    const r = await c.env.DB.prepare(commentsSql).bind(userId, c.req.param('postId'), ...visiblePostBindValues(userId), limit).all();
 
     return c.json((r.results as any[]).map((comment) => ({
       ...comment,
@@ -7325,7 +7431,20 @@ api.get('/conversations', authMiddleware, async (c) => {
   const userId = getUserId(c);
   await touchUserPresence(c.env.DB, userId);
   await ensureAbuseProtectionSchema(c.env.DB);
+  await ensureProductionPerformanceSchema(c.env.DB);
+  const limit = clampNumber(c.req.query('limit') || '60', 1, 100, 60);
   const msgs = await c.env.DB.prepare(`
+    WITH ranked_messages AS (
+      SELECT
+        m.*,
+        CASE WHEN m.sender_id = ? THEN m.receiver_id ELSE m.sender_id END AS other_id,
+        ROW_NUMBER() OVER (
+          PARTITION BY CASE WHEN m.sender_id = ? THEN m.receiver_id ELSE m.sender_id END
+          ORDER BY datetime(m.created_at) DESC
+        ) AS rn
+      FROM messages m
+      WHERE (m.sender_id = ? OR m.receiver_id = ?)
+    )
     SELECT
       m.*,
       u.username,
@@ -7339,17 +7458,24 @@ api.get('/conversations', authMiddleware, async (c) => {
           AND mt.is_typing = 1
           AND datetime(mt.updated_at) > datetime('now', '-10 seconds')
       ) AS other_is_typing
-    FROM messages m
-    JOIN users u ON (CASE WHEN m.sender_id = ? THEN m.receiver_id ELSE m.sender_id END) = u.id
+      ,
+      (SELECT COUNT(*)
+       FROM messages unread
+       WHERE unread.sender_id = u.id
+         AND unread.receiver_id = ?
+         AND unread.is_read = 0) AS unread_total
+    FROM ranked_messages m
+    JOIN users u ON m.other_id = u.id
     LEFT JOIN user_presence up ON up.user_id = u.id
-    WHERE (m.sender_id = ? OR m.receiver_id = ?)
+    WHERE m.rn = 1
       AND NOT EXISTS (
         SELECT 1 FROM blocks b
         WHERE (b.blocker_id = ? AND b.blocked_id = u.id)
            OR (b.blocker_id = u.id AND b.blocked_id = ?)
       )
     ORDER BY m.created_at DESC
-  `).bind(userId, userId, userId, userId, userId, userId).all();
+    LIMIT ?
+  `).bind(userId, userId, userId, userId, userId, userId, userId, userId, limit).all();
   const map = new Map<string, any>();
   for (const m of msgs.results as any[]) {
     const oid = m.sender_id === userId ? m.receiver_id : m.sender_id;
@@ -7373,7 +7499,7 @@ api.get('/conversations', authMiddleware, async (c) => {
         },
         last_message: preview,
         last_message_time: m.created_at,
-        unread_count: (!m.is_read && m.receiver_id === userId) ? 1 : 0,
+        unread_count: Number(m.unread_total || 0),
       });
     }
   }
@@ -7401,7 +7527,8 @@ api.get('/conversations', authMiddleware, async (c) => {
       LEFT JOIN users sender ON sender.id = last_message.sender_id
       GROUP BY g.id
       ORDER BY COALESCE(last_message.created_at, g.created_at) DESC
-    `).bind(userId).all();
+      LIMIT ?
+    `).bind(userId, limit).all();
 
     groupConversations = (groups.results as any[]).map((g) => ({
       id: `group-${g.id}`,
@@ -7970,8 +8097,11 @@ api.get('/notifications', authMiddleware, async (c) => {
     const limited = await enforceRateLimit(c, 'notifications_read', userId, 180, 60);
     if (limited) return limited;
     await ensureAbuseProtectionSchema(c.env.DB);
+    await ensureProductionPerformanceSchema(c.env.DB);
     const limit = clampNumber(c.req.query('limit') || '50', 1, 80, 50);
-    const r = await c.env.DB.prepare('SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT ?').bind(userId, limit).all();
+    const before = cleanText(c.req.query('before') || '', 60);
+    const notificationsSql = `SELECT * FROM notifications WHERE user_id = ? ${before ? 'AND datetime(created_at) < datetime(?)' : ''} ORDER BY created_at DESC LIMIT ?`;
+    const r = await c.env.DB.prepare(notificationsSql).bind(...(before ? [userId, before, limit] : [userId, limit])).all();
     return c.json((r.results as any[]).map(safeNotificationPayload));
   } catch {
     // Auto-create table if missing
@@ -7990,6 +8120,9 @@ api.post('/notifications/mark-read', authMiddleware, async (c) => { await c.env.
 // Library
 api.get('/library/liked', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  await ensureProductionPerformanceSchema(c.env.DB);
+  const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
+  const limit = clampNumber(c.req.query('limit') || '40', 1, 80, 40);
   const likedLibrarySql = [
     `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
        1 AS is_liked,
@@ -7999,14 +8132,17 @@ api.get('/library/liked', authMiddleware, async (c) => {
        (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id) AS live_saves_count
      FROM likes l JOIN posts p ON l.post_id = p.id JOIN users u ON p.user_id = u.id`,
     `WHERE l.user_id = ? AND ${visiblePostWhere('u', 'p')}`,
-    'ORDER BY l.created_at DESC',
+    'ORDER BY l.created_at DESC LIMIT ? OFFSET ?',
   ].join(' ');
-  const r = await c.env.DB.prepare(likedLibrarySql).bind(userId, userId, ...visiblePostBindValues(userId)).all();
-  return c.json((r.results as any[]).map((p) => postPayload(p, [], c.env)));
+  const r = await c.env.DB.prepare(likedLibrarySql).bind(userId, userId, ...visiblePostBindValues(userId), limit, skip).all();
+  return c.json((r.results as any[]).map((p) => feedPostPayload(p, [], c.env)));
 });
 api.get('/library/saved', authMiddleware, async (c) => {
   const userId = getUserId(c);
   const collection = c.req.query('collection');
+  await ensureProductionPerformanceSchema(c.env.DB);
+  const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
+  const limit = clampNumber(c.req.query('limit') || '40', 1, 80, 40);
   const savedLibraryBaseSql = [
     `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image, sp.collection,
       EXISTS (SELECT 1 FROM likes lk WHERE lk.user_id = ? AND lk.post_id = p.id) AS is_liked,
@@ -8025,9 +8161,10 @@ api.get('/library/saved', authMiddleware, async (c) => {
     sql += ' AND sp.collection = ?';
     binds.push(collection);
   }
-  sql += ' ORDER BY sp.created_at DESC';
+  sql += ' ORDER BY sp.created_at DESC LIMIT ? OFFSET ?';
+  binds.push(limit, skip);
   const r = await c.env.DB.prepare(sql).bind(...binds).all();
-  return c.json((r.results as any[]).map((p) => postPayload(p, [], c.env)));
+  return c.json((r.results as any[]).map((p) => feedPostPayload(p, [], c.env)));
 });
 api.post('/library/save/:postId', authMiddleware, async (c) => {
   const userId = getUserId(c);
@@ -8820,30 +8957,40 @@ api.post('/people/:profileId/report', authMiddleware, async (c) => {
 // Discover
 api.get('/discover/trending', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  await ensurePrivacySchema(c.env.DB);
+  await ensureGovernanceSchema(c.env.DB);
+  await ensurePostEditorSchema(c.env.DB);
+  await ensureProductionPerformanceSchema(c.env.DB);
+  const limit = clampNumber(c.req.query('limit') || '20', 1, 40, 20);
   const discoverTrendingSql = [
     'SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image',
     'FROM posts p JOIN users u ON p.user_id = u.id',
     `WHERE ${visiblePostWhere('u', 'p')}`,
-    'ORDER BY p.likes_count DESC, p.created_at DESC LIMIT 20',
+    'ORDER BY p.likes_count DESC, p.created_at DESC LIMIT ?',
   ].join(' ');
-  const r = await c.env.DB.prepare(discoverTrendingSql).bind(...visiblePostBindValues(userId)).all();
-  return c.json((r.results as any[]).map((p) => postPayload(p, [], c.env)));
+  const r = await c.env.DB.prepare(discoverTrendingSql).bind(...visiblePostBindValues(userId), limit).all();
+  return c.json((r.results as any[]).map((p) => feedPostPayload(p, [], c.env)));
 });
 api.get('/discover/search', authMiddleware, async (c) => {
   const userId = getUserId(c);
   const limited = await enforceRateLimit(c, 'discover_search', userId, 100, 60);
   if (limited) return limited;
+  await ensurePrivacySchema(c.env.DB);
+  await ensureGovernanceSchema(c.env.DB);
+  await ensurePostEditorSchema(c.env.DB);
+  await ensureProductionPerformanceSchema(c.env.DB);
   const q = cleanText(c.req.query('q'), 80);
   if (q.length < 2) return c.json({ posts: [], users: [] });
+  const limit = clampNumber(c.req.query('limit') || '20', 1, 30, 20);
   const discoverSearchSql = [
     'SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image',
     'FROM posts p JOIN users u ON p.user_id = u.id',
     `WHERE p.content LIKE ? AND ${visiblePostWhere('u', 'p')}`,
-    'LIMIT 20',
+    'LIMIT ?',
   ].join(' ');
-  const posts = await c.env.DB.prepare(discoverSearchSql).bind(`%${q}%`, ...visiblePostBindValues(userId)).all();
+  const posts = await c.env.DB.prepare(discoverSearchSql).bind(`%${q}%`, ...visiblePostBindValues(userId), limit).all();
   const users = await c.env.DB.prepare('SELECT id, username, full_name, profile_image, bio, is_private FROM users WHERE username LIKE ? OR full_name LIKE ? LIMIT 10').bind(`%${q}%`, `%${q}%`).all();
-  return c.json({ posts: (posts.results as any[]).map((p) => postPayload(p, [], c.env)), users: (users.results as any[]).map((user) => safeUserPayload(user)) });
+  return c.json({ posts: (posts.results as any[]).map((p) => feedPostPayload(p, [], c.env)), users: (users.results as any[]).map((user) => safeUserPayload(user)) });
 });
 api.get('/discover/suggested-users', authMiddleware, async (c) => {
   const userId = getUserId(c);
@@ -9414,14 +9561,18 @@ api.post('/discover/posts', authMiddleware, async (c) => {
 });
 
 api.get('/discover/feed', authMiddleware, async (c) => {
+  await ensureProductionPerformanceSchema(c.env.DB);
   const category = c.req.query('category') || 'all';
+  const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
+  const limit = clampNumber(c.req.query('limit') || '30', 1, 60, 30);
   let sql = `SELECT dp.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image FROM discover_posts dp JOIN users u ON dp.user_id = u.id`;
   const binds: any[] = [];
   if (category !== 'all') {
     sql += ' WHERE dp.category = ?';
     binds.push(category);
   }
-  sql += ' ORDER BY dp.created_at DESC LIMIT 50';
+  sql += ' ORDER BY dp.created_at DESC LIMIT ? OFFSET ?';
+  binds.push(limit, skip);
   const r = binds.length ? await c.env.DB.prepare(sql).bind(...binds).all() : await c.env.DB.prepare(sql).all();
   return c.json((r.results as any[]).map(p => ({ ...p, images: JSON.parse(p.images || '[]') })));
 });
@@ -10806,8 +10957,36 @@ api.get('/mapbox-places/nearby', mapboxPlacesNearbyHandler);
 api.get('/mapbox-places/:placeId', mapboxPlaceDetailHandler);
 
 // Health
-api.get('/', (c) => c.json({ message: 'Flames-Up API', version: '2.0', runtime: 'Cloudflare Workers + Hono + D1 + Supabase' }));
-api.get('/health', (c) => c.json({ status: 'healthy', timestamp: now() }));
+api.get('/', (c) => c.json({ message: 'Captro API', version: API_VERSION, runtime: 'Cloudflare Workers + Hono + D1 + Supabase' }));
+api.get('/health', async (c) => {
+  const startedAt = Date.now();
+  const dbStartedAt = Date.now();
+  let databaseHealthy = false;
+  try {
+    const row: any = await c.env.DB.prepare('SELECT 1 AS ok').first();
+    databaseHealthy = Number(row?.ok || 0) === 1;
+  } catch {
+    databaseHealthy = false;
+  }
+  const response = c.json({
+    status: databaseHealthy ? 'healthy' : 'degraded',
+    environment: c.env.ENVIRONMENT || 'unknown',
+    service: WORKER_NAME,
+    version: c.env.WORKER_VERSION || API_VERSION,
+    commit: c.env.SOURCE_COMMIT || '',
+    timestamp: now(),
+    checks: {
+      database: {
+        configured: true,
+        healthy: databaseHealthy,
+        latency_ms: Date.now() - dbStartedAt,
+      },
+    },
+    latency_ms: Date.now() - startedAt,
+  }, databaseHealthy ? 200 : 503);
+  response.headers.set('cache-control', 'no-store');
+  return response;
+});
 api.get('/database/status', authMiddleware, async (c) => {
   try {
     await requireOwnerOrAdmin(c);
