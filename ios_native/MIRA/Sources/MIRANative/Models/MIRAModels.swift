@@ -760,7 +760,7 @@ public struct MIRAConversation: Codable, Identifiable, Hashable {
   }
 }
 
-public struct MIRAMessage: Decodable, Identifiable, Hashable {
+public struct MIRAMessage: Codable, Identifiable, Hashable {
   public let id: String
   public let groupId: String?
   public let senderId: String?

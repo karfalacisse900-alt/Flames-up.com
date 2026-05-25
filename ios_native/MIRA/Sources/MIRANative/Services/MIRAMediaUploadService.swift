@@ -102,26 +102,30 @@ public final class MIRAMediaUploadService {
     }
   }
 
-  public func uploadAudio(data: Data, fileName: String, mimeType: String = "audio/mp4") async throws -> String {
-    let response: MIRAMediaUploadResponse = try await api.uploadMultipart(
-      "/upload/audio",
-      fileName: fileName,
-      mimeType: mimeType,
-      data: data
-    )
-    guard let url = response.url, !url.isEmpty else { throw MIRAAPIError.emptyResponse }
-    return url
+  public func uploadAudio(data: Data, fileName: String, mimeType: String = "audio/m4a") async throws -> String {
+    try await performUpload(kind: "audio", bytes: data.count) {
+      let response: MIRAMediaUploadResponse = try await api.uploadMultipart(
+        "/upload/audio",
+        fileName: fileName,
+        mimeType: mimeType,
+        data: data
+      )
+      guard let url = response.url, !url.isEmpty else { throw MIRAAPIError.emptyResponse }
+      return url
+    }
   }
 
   public func uploadFile(data: Data, fileName: String, mimeType: String) async throws -> String {
-    let response: MIRAMediaUploadResponse = try await api.uploadMultipart(
-      "/upload/file",
-      fileName: fileName,
-      mimeType: mimeType,
-      data: data
-    )
-    guard let url = response.url, !url.isEmpty else { throw MIRAAPIError.emptyResponse }
-    return url
+    try await performUpload(kind: "file", bytes: data.count) {
+      let response: MIRAMediaUploadResponse = try await api.uploadMultipart(
+        "/upload/file",
+        fileName: fileName,
+        mimeType: mimeType,
+        data: data
+      )
+      guard let url = response.url, !url.isEmpty else { throw MIRAAPIError.emptyResponse }
+      return url
+    }
   }
 
   private struct PreparedImageUpload {
@@ -132,40 +136,86 @@ public final class MIRAMediaUploadService {
 
   private func uploadImage(_ media: MIRAPickedMedia) async throws -> String {
     let prepared = await prepareImageUpload(media)
-    let base64 = "data:\(prepared.mimeType);base64,\(prepared.data.base64EncodedString())"
-    let response: MIRAMediaUploadResponse = try await api.post(
-      "/upload/image",
-      body: MIRAUploadImageBody(image: base64, filename: prepared.fileName)
-    )
-    guard let url = response.url, !url.isEmpty else { throw MIRAAPIError.emptyResponse }
-    return url
+    return try await performUpload(kind: "image", bytes: prepared.data.count) {
+      let base64 = "data:\(prepared.mimeType);base64,\(prepared.data.base64EncodedString())"
+      let response: MIRAMediaUploadResponse = try await api.post(
+        "/upload/image",
+        body: MIRAUploadImageBody(image: base64, filename: prepared.fileName)
+      )
+      guard let url = response.url, !url.isEmpty else { throw MIRAAPIError.emptyResponse }
+      return url
+    }
   }
 
   private func uploadVideo(_ media: MIRAPickedMedia) async throws -> String {
-    do {
-      let setup: MIRAMediaUploadResponse = try await api.post("/upload/video", body: EmptyBody())
-      if let uploadURL = setup.uploadUrl.flatMap(URL.init(string:)), let videoUID = setup.videoUid, !videoUID.isEmpty {
-        let _: EmptyResponse = try await api.uploadMultipart(
-          to: uploadURL,
-          fieldName: "file",
-          fileName: media.fileName,
-          mimeType: media.mimeType,
-          data: media.data
-        )
-        return "cfstream:\(videoUID)"
+    try await performUpload(kind: "video", bytes: media.data.count) {
+      do {
+        let setup: MIRAMediaUploadResponse = try await api.post("/upload/video", body: EmptyBody())
+        if let uploadURL = setup.uploadUrl.flatMap(URL.init(string:)), let videoUID = setup.videoUid, !videoUID.isEmpty {
+          let _: EmptyResponse = try await api.uploadMultipart(
+            to: uploadURL,
+            fieldName: "file",
+            fileName: media.fileName,
+            mimeType: media.mimeType,
+            data: media.data
+          )
+          return "cfstream:\(videoUID)"
+        }
+      } catch {
+        // Fall through to the Worker-backed path, which stores a backup if Stream direct upload is unavailable.
       }
-    } catch {
-      // Fall through to the Worker-backed path, which stores a backup if Stream direct upload is unavailable.
-    }
 
-    let response: MIRAMediaUploadResponse = try await api.uploadMultipart(
-      "/upload/video-with-backup",
-      fileName: media.fileName,
-      mimeType: media.mimeType,
-      data: media.data
+      let response: MIRAMediaUploadResponse = try await api.uploadMultipart(
+        "/upload/video-with-backup",
+        fileName: media.fileName,
+        mimeType: media.mimeType,
+        data: media.data
+      )
+      guard let url = response.url, !url.isEmpty else { throw MIRAAPIError.emptyResponse }
+      return url
+    }
+  }
+
+  private func performUpload<T>(kind: String, bytes: Int, operation: () async throws -> T) async throws -> T {
+    let started = Date()
+    var lastError: Error?
+    for attempt in 1...2 {
+      do {
+        let result = try await operation()
+        await recordUploadEvent(kind: kind, status: "success", bytes: bytes, started: started, attempt: attempt)
+        return result
+      } catch {
+        lastError = error
+        guard attempt == 1, shouldRetryUpload(error) else {
+          await recordUploadEvent(kind: kind, status: "error", bytes: bytes, started: started, attempt: attempt)
+          throw error
+        }
+        try? await Task.sleep(nanoseconds: 450_000_000)
+      }
+    }
+    throw lastError ?? MIRAAPIError.emptyResponse
+  }
+
+  private func shouldRetryUpload(_ error: Error) -> Bool {
+    if case MIRAAPIError.badStatus(let status) = error {
+      return status == 408 || status == 425 || status == 429 || (500...599).contains(status)
+    }
+    return true
+  }
+
+  private func recordUploadEvent(kind: String, status: String, bytes: Int, started: Date, attempt: Int) async {
+    await MIRAObservability.record(
+      "media_upload",
+      category: "media",
+      status: status,
+      durationMilliseconds: Int(Date().timeIntervalSince(started) * 1000),
+      metadata: [
+        "kind": kind,
+        "bytes": String(bytes),
+        "attempt": String(attempt),
+      ],
+      api: api
     )
-    guard let url = response.url, !url.isEmpty else { throw MIRAAPIError.emptyResponse }
-    return url
   }
 
   private func prepareImage(_ data: Data) async -> Data? {

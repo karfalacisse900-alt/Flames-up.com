@@ -22,6 +22,14 @@ private struct SettingsMessageResponse: Decodable {
   let deleted: Bool?
 }
 
+private struct SettingsBlockedAccount: Decodable, Identifiable, Hashable {
+  let blockedId: String
+  let createdAt: String?
+  let user: MIRAUser?
+
+  var id: String { blockedId }
+}
+
 @MainActor
 final class SettingsNativeModel: ObservableObject {
   @Published var user: MIRAUser?
@@ -346,10 +354,112 @@ private struct PrivacySettingsNativeView: View {
       }
 
       SettingsCard(title: "Privacy tools") {
+        SettingsNavigationRow(title: "Blocked accounts", subtitle: "Review and unblock people.", systemImage: "person.crop.circle.badge.xmark", destination: BlockedAccountsNativeView(api: model.api))
         SettingsNavigationRow(title: "Privacy Policy", subtitle: "Read how data is handled", systemImage: "hand.raised", destination: PrivacyPolicyView())
         SettingsNavigationRow(title: "Safety & Reporting", subtitle: "Report abuse or unsafe behavior", systemImage: "shield.lefthalf.filled", destination: SafetyReportingView())
         SettingsLinkRow(title: "Data deletion", subtitle: "Learn how account deletion works", systemImage: "trash", url: MIRAProductionBackend.siteURL("data-deletion"))
       }
+    }
+  }
+}
+
+private struct BlockedAccountsNativeView: View {
+  let api: MIRAAPIClient
+  @State private var rows: [SettingsBlockedAccount] = []
+  @State private var isLoading = false
+  @State private var errorMessage: String?
+
+  var body: some View {
+    SettingsDetailScaffold(title: "Blocked accounts") {
+      SettingsCard(title: "People you blocked") {
+        if isLoading && rows.isEmpty {
+          VStack(spacing: 0) {
+            ForEach(0..<4, id: \.self) { _ in
+              SettingsRowContent(title: "Loading", subtitle: "Blocked account", systemImage: "person") {
+                ProgressView()
+              }
+              .redacted(reason: .placeholder)
+            }
+          }
+        } else if rows.isEmpty {
+          VStack(alignment: .leading, spacing: MIRATheme.Space.sm) {
+            Image(systemName: "person.crop.circle.badge.checkmark")
+              .font(.system(size: 24, weight: .semibold))
+              .foregroundStyle(MIRATheme.Color.forest)
+            Text("No blocked accounts")
+              .font(.system(size: 16, weight: .semibold))
+              .foregroundStyle(MIRATheme.Color.textPrimary)
+            Text("People you block will show here so you can manage them later.")
+              .font(.system(size: 13, weight: .medium))
+              .foregroundStyle(MIRATheme.Color.textSecondary)
+          }
+          .padding(MIRATheme.Space.md)
+        } else {
+          ForEach(rows) { row in
+            blockedRow(row)
+          }
+        }
+      }
+
+      if let errorMessage {
+        SettingsBanner(message: errorMessage, isError: true)
+      }
+    }
+    .task { await load() }
+  }
+
+  private func blockedRow(_ row: SettingsBlockedAccount) -> some View {
+    HStack(spacing: MIRATheme.Space.sm) {
+      RemoteAvatar(url: row.user?.profileImage, size: 42)
+      VStack(alignment: .leading, spacing: 3) {
+        Text(row.user?.displayName ?? "Captro user")
+          .font(.system(size: 15, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .lineLimit(1)
+        Text(row.user?.publicUsername.map { "@\($0)" } ?? "Blocked account")
+          .font(.system(size: 12, weight: .medium))
+          .foregroundStyle(MIRATheme.Color.textSecondary)
+          .lineLimit(1)
+      }
+      Spacer()
+      Button {
+        Task { await unblock(row) }
+      } label: {
+        Text("Unblock")
+          .font(.system(size: 12, weight: .bold))
+          .foregroundStyle(.white)
+          .padding(.horizontal, 13)
+          .frame(height: 32)
+          .background(MIRATheme.Color.forest)
+          .clipShape(Capsule())
+      }
+      .buttonStyle(.miraPress)
+    }
+    .padding(.horizontal, MIRATheme.Space.md)
+    .padding(.vertical, 12)
+  }
+
+  @MainActor
+  private func load() async {
+    guard !isLoading else { return }
+    isLoading = true
+    defer { isLoading = false }
+    do {
+      rows = try await api.get("/blocks")
+      errorMessage = nil
+    } catch {
+      errorMessage = "Could not load blocked accounts."
+    }
+  }
+
+  @MainActor
+  private func unblock(_ row: SettingsBlockedAccount) async {
+    do {
+      let _: SettingsMessageResponse = try await api.delete("/users/\(row.blockedId)/block")
+      rows.removeAll { $0.id == row.id }
+      errorMessage = nil
+    } catch {
+      errorMessage = "Could not unblock this account."
     }
   }
 }
@@ -403,6 +513,9 @@ private struct NotificationSettingsNativeView: View {
     do {
       let granted = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound])
       pushEnabled = granted
+      if granted {
+        MIRAPushNotificationRegistrar.registerForRemoteNotifications()
+      }
       await refreshNotificationStatus()
     } catch {
       pushEnabled = false
