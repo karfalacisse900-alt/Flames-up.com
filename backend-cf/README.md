@@ -15,6 +15,7 @@ Backend stack: Hono + D1 + Cloudflare Images/Stream.
    `wrangler d1 execute flames-up-db --file=./migrations/0005_phone_auth.sql --remote`
    `wrangler d1 execute flames-up-db --file=./migrations/0019_production_performance_indexes.sql --remote`
    `wrangler d1 execute DB --env production --remote --yes --file=./migrations/0020_production_readiness.sql`
+   `wrangler d1 execute DB --env production --remote --yes --file=./migrations/0021_admin_moderation.sql`
 
 3. Configure vars:
    - `JWT_SECRET`
@@ -30,7 +31,7 @@ Backend stack: Hono + D1 + Cloudflare Images/Stream.
    - `SUPABASE_URL` as a public Worker var, for example `https://your-project-ref.supabase.co`
    - `SUPABASE_SERVICE_ROLE_KEY` as a Worker secret only; never put this in the iOS app or public config
    - `SUPABASE_JWT_ISSUER` only if your Supabase issuer differs from `SUPABASE_URL/auth/v1`
-   - `APNS_PRIVATE_KEY`, `APNS_TEAM_ID`, `APNS_KEY_ID`, `APNS_BUNDLE_ID`, and `APNS_ENVIRONMENT` for standard iOS push notifications
+- `APNS_PRIVATE_KEY`, `APNS_TEAM_ID`, `APNS_KEY_ID`, `APNS_BUNDLE_ID`, and `APNS_ENVIRONMENT` for standard iOS push notifications
 
 4. Deploy:
    `wrangler deploy --env production --keep-vars`
@@ -92,3 +93,41 @@ Apple native sign-in:
 - Enable Sign in with Apple on the iOS App ID `com.karfala90.frontend`.
 - Configure the Apple Services ID in Supabase for web OAuth.
 - Set `APPLE_OAUTH_AUDIENCES` on the Worker to include both the iOS bundle ID and the Services ID, for example `com.karfala90.frontend,com.karfala90.frontend.auth`.
+
+## Admin Moderation API
+
+The private admin web app uses protected `/api/admin/*` endpoints. These routes require normal Captro authentication plus backend role authorization; frontend checks are never the source of truth.
+
+Admin roles:
+
+- `owner`
+- `admin`
+- `moderator`
+- `support`
+- `viewer`
+
+Existing `users.is_admin = 1` accounts are treated as `admin`. Usernames listed in `OWNER_USERNAMES` are treated as `owner`. Use the `admin_roles` table for explicit lower-privilege roles.
+
+Important endpoints:
+
+- `GET /api/admin/me`
+- `GET /api/admin/dashboard`
+- `GET /api/admin/reports`
+- `GET /api/admin/reports/:reportId`
+- `POST /api/admin/reports/:reportId/status`
+- `POST /api/admin/reports/:reportId/action`
+- `POST /api/admin/reports/:reportId/note`
+- `GET /api/admin/users`
+- `POST /api/admin/users/:userId/warn`
+- `POST /api/admin/users/:userId/restrict`
+- `POST /api/admin/users/:userId/suspend`
+- `POST /api/admin/users/:userId/ban`
+- `GET /api/admin/posts`
+- `POST /api/admin/posts/:postId/remove`
+- `POST /api/admin/posts/:postId/restore`
+- `GET /api/admin/comments`
+- `POST /api/admin/comments/:commentId/remove`
+- `GET /api/admin/messages/reported`
+- `GET /api/admin/audit-logs`
+
+Every write/destructive route requires a reason and records an audit log. Reported message detail views are also audit logged and return limited nearby context only.

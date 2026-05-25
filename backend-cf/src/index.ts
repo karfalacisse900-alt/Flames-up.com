@@ -81,6 +81,7 @@ const api = new Hono<HonoApp>();
 const DEFAULT_ALLOWED_ORIGINS = [
   'https://flames-up.com',
   'https://www.flames-up.com',
+  'https://admin.flames-up.com',
 ];
 function isProductionEnv(c: any): boolean {
   return String(c?.env?.ENVIRONMENT || '').toLowerCase() === 'production';
@@ -245,18 +246,33 @@ const authMiddleware = async (c: any, next: () => Promise<void>) => {
   try {
     let user: any;
     try {
-      user = await c.env.DB.prepare('SELECT id, status FROM users WHERE id = ?').bind(userId).first();
+      user = await c.env.DB.prepare('SELECT id, status, suspended_until FROM users WHERE id = ?').bind(userId).first();
     } catch (error: any) {
       const message = String(error?.message || '');
-      if (!message.includes('no such column: status')) throw error;
-      user = await c.env.DB.prepare("SELECT id, 'active' AS status FROM users WHERE id = ?").bind(userId).first();
+      if (message.includes('no such column: suspended_until')) {
+        user = await c.env.DB.prepare('SELECT id, status, NULL AS suspended_until FROM users WHERE id = ?').bind(userId).first();
+      } else if (message.includes('no such column: status')) {
+        user = await c.env.DB.prepare("SELECT id, 'active' AS status, NULL AS suspended_until FROM users WHERE id = ?").bind(userId).first();
+      } else {
+        throw error;
+      }
     }
 
     if (!user) return c.json({ detail: 'Session user was not found.', code: 'USER_NOT_FOUND' }, 401);
 
     const accountStatus = String(user?.status || 'active');
-    if (accountStatus === 'banned' || accountStatus === 'suspended' || accountStatus === 'deleted') {
-      return c.json({ detail: accountStatus === 'suspended' ? 'This account is suspended.' : 'This account cannot be used.' }, 403);
+    if (accountStatus === 'suspended') {
+      const suspendedUntil = Date.parse(String(user?.suspended_until || ''));
+      if (Number.isFinite(suspendedUntil) && suspendedUntil <= Date.now()) {
+        await c.env.DB.prepare("UPDATE users SET status = 'active', suspended_until = NULL, updated_at = datetime('now') WHERE id = ? AND status = 'suspended'")
+          .bind(userId)
+          .run()
+          .catch(() => {});
+      } else {
+        return c.json({ detail: 'This account is suspended.' }, 403);
+      }
+    } else if (accountStatus === 'banned' || accountStatus === 'deleted') {
+      return c.json({ detail: 'This account cannot be used.' }, 403);
     }
     await next();
   } catch (error: any) {
@@ -283,14 +299,28 @@ async function getOptionalUserId(c: any): Promise<string> {
 
     let user: any;
     try {
-      user = await c.env.DB.prepare('SELECT id, status FROM users WHERE id = ?').bind(userId).first();
+      user = await c.env.DB.prepare('SELECT id, status, suspended_until FROM users WHERE id = ?').bind(userId).first();
     } catch (error: any) {
       const message = String(error?.message || '');
-      if (!message.includes('no such column: status')) throw error;
-      user = await c.env.DB.prepare("SELECT id, 'active' AS status FROM users WHERE id = ?").bind(userId).first();
+      if (message.includes('no such column: suspended_until')) {
+        user = await c.env.DB.prepare('SELECT id, status, NULL AS suspended_until FROM users WHERE id = ?').bind(userId).first();
+      } else if (message.includes('no such column: status')) {
+        user = await c.env.DB.prepare("SELECT id, 'active' AS status, NULL AS suspended_until FROM users WHERE id = ?").bind(userId).first();
+      } else {
+        throw error;
+      }
     }
 
-    if (!user || ['banned', 'suspended', 'deleted'].includes(String(user?.status || 'active'))) return '';
+    const optionalStatus = String(user?.status || 'active');
+    if (!user || optionalStatus === 'banned' || optionalStatus === 'deleted') return '';
+    if (optionalStatus === 'suspended') {
+      const suspendedUntil = Date.parse(String(user?.suspended_until || ''));
+      if (!Number.isFinite(suspendedUntil) || suspendedUntil > Date.now()) return '';
+      await c.env.DB.prepare("UPDATE users SET status = 'active', suspended_until = NULL, updated_at = datetime('now') WHERE id = ? AND status = 'suspended'")
+        .bind(userId)
+        .run()
+        .catch(() => {});
+    }
     c.set('jwtPayload', payload);
     return userId;
   } catch {
@@ -480,6 +510,7 @@ let premiumSchemaReady = false;
 let abuseProtectionSchemaReady = false;
 let messagePresenceSchemaReady = false;
 let productionReadinessSchemaReady = false;
+let adminModerationSchemaReady = false;
 
 function normalizeSchemaSql(statement: string): string {
   return statement.replace(/\s+/g, ' ').trim().replace(/;$/, '');
@@ -1206,6 +1237,106 @@ async function ensureGovernanceSchema(db: D1Database) {
   governanceSchemaReady = true;
 }
 
+async function ensureAdminModerationSchema(db: D1Database) {
+  if (adminModerationSchemaReady) return;
+  await ensureGovernanceSchema(db);
+  await ensureCommentSchema(db);
+  await ensureMessagePresenceSchema(db);
+
+  const statements = [
+    "ALTER TABLE users ADD COLUMN suspended_until TEXT",
+    "ALTER TABLE users ADD COLUMN warning_count INTEGER DEFAULT 0",
+    "ALTER TABLE reports ADD COLUMN target_owner_user_id TEXT DEFAULT ''",
+    "ALTER TABLE reports ADD COLUMN assigned_to TEXT DEFAULT ''",
+    "ALTER TABLE reports ADD COLUMN closed_at TEXT",
+    "ALTER TABLE posts ADD COLUMN discover_blocked_at TEXT",
+    "ALTER TABLE posts ADD COLUMN discover_blocked_by TEXT DEFAULT ''",
+    "ALTER TABLE posts ADD COLUMN discover_blocked_reason TEXT DEFAULT ''",
+    "ALTER TABLE messages ADD COLUMN status TEXT DEFAULT 'active'",
+    "ALTER TABLE messages ADD COLUMN removed_at TEXT",
+    "ALTER TABLE messages ADD COLUMN removed_by TEXT DEFAULT ''",
+    "ALTER TABLE messages ADD COLUMN removed_reason TEXT DEFAULT ''",
+    `CREATE TABLE IF NOT EXISTS admin_roles (
+      user_id TEXT PRIMARY KEY,
+      role TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      created_by TEXT DEFAULT '',
+      updated_at TEXT NOT NULL
+    )`,
+    `CREATE TABLE IF NOT EXISTS moderation_notes (
+      id TEXT PRIMARY KEY,
+      report_id TEXT DEFAULT '',
+      target_type TEXT NOT NULL,
+      target_id TEXT NOT NULL,
+      author_admin_user_id TEXT NOT NULL,
+      note TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )`,
+    `CREATE TABLE IF NOT EXISTS moderation_actions (
+      id TEXT PRIMARY KEY,
+      actor_admin_user_id TEXT NOT NULL,
+      actor_role TEXT NOT NULL,
+      action_type TEXT NOT NULL,
+      target_type TEXT NOT NULL,
+      target_id TEXT NOT NULL,
+      target_user_id TEXT DEFAULT '',
+      reason TEXT DEFAULT '',
+      note TEXT DEFAULT '',
+      created_at TEXT NOT NULL
+    )`,
+    `CREATE TABLE IF NOT EXISTS audit_logs (
+      id TEXT PRIMARY KEY,
+      actor_admin_user_id TEXT NOT NULL,
+      actor_role TEXT NOT NULL,
+      action_type TEXT NOT NULL,
+      target_type TEXT NOT NULL,
+      target_id TEXT NOT NULL,
+      target_user_id TEXT DEFAULT '',
+      reason TEXT DEFAULT '',
+      internal_note TEXT DEFAULT '',
+      before_state TEXT DEFAULT '{}',
+      after_state TEXT DEFAULT '{}',
+      ip_hash TEXT DEFAULT '',
+      request_id TEXT DEFAULT '',
+      created_at TEXT NOT NULL
+    )`,
+    `CREATE TABLE IF NOT EXISTS user_restrictions (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      restriction_type TEXT NOT NULL,
+      reason TEXT DEFAULT '',
+      starts_at TEXT NOT NULL,
+      ends_at TEXT,
+      created_by TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )`,
+    'CREATE INDEX IF NOT EXISTS idx_admin_roles_role ON admin_roles(role)',
+    'CREATE INDEX IF NOT EXISTS idx_reports_target_status ON reports(reported_type, reported_id, status, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_reports_target_owner ON reports(target_owner_user_id, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_moderation_notes_report ON moderation_notes(report_id, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_moderation_notes_target ON moderation_notes(target_type, target_id, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_moderation_actions_target ON moderation_actions(target_type, target_id, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_moderation_actions_actor ON moderation_actions(actor_admin_user_id, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_audit_logs_actor ON audit_logs(actor_admin_user_id, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_audit_logs_target ON audit_logs(target_type, target_id, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_user_restrictions_user_active ON user_restrictions(user_id, restriction_type, starts_at, ends_at)',
+    'CREATE INDEX IF NOT EXISTS idx_messages_status_created ON messages(status, created_at)',
+  ];
+
+  for (const statement of statements) {
+    try {
+      await runSchemaStatement(db, statement);
+    } catch (error: any) {
+      if (!isIgnorableSchemaError(error, statement)) {
+        throw error;
+      }
+    }
+  }
+
+  adminModerationSchemaReady = true;
+}
+
 async function ensureAbuseProtectionSchema(db: D1Database) {
   if (abuseProtectionSchemaReady) return;
   await ensureGovernanceSchema(db);
@@ -1660,9 +1791,13 @@ const REPORT_REASONS = new Set([
   'scam',
   'impersonation',
   'harassment',
+  'bullying',
   'hate',
   'violence',
+  'illegal_activity',
   'sexual_content',
+  'sexual_exploitation',
+  'unwanted_explicit_content',
   'dangerous_product',
   'misleading_product',
   'suspicious_link',
@@ -1733,11 +1868,14 @@ const COPYRIGHT_REPORT_REASONS = new Set([
 
 const REPORT_STATUSES = new Set([
   'pending',
+  'open',
   'under_review',
+  'in_review',
   'dismissed',
   'action_taken',
   'escalated',
   'duplicate',
+  'closed',
 ]);
 
 function normalizeReportReason(value: unknown): string {
@@ -1747,6 +1885,8 @@ function normalizeReportReason(value: unknown): string {
 
 function normalizeReportStatus(value: unknown, fallback = 'pending'): string {
   const status = cleanText(value || fallback, 40).toLowerCase().replace(/[\s-]+/g, '_');
+  if (status === 'open') return 'pending';
+  if (status === 'in_review') return 'under_review';
   if (status === 'resolved' || status === 'removed') return 'action_taken';
   if (status === 'reviewing') return 'under_review';
   return REPORT_STATUSES.has(status) ? status : fallback;
@@ -6825,6 +6965,8 @@ api.post('/posts', authMiddleware, async (c) => {
   const userId = getUserId(c);
   const limited = await enforceRateLimit(c, 'post_create', userId, 30, 60);
   if (limited) return limited;
+  const restricted = await enforceUserRestriction(c, userId, 'posting');
+  if (restricted) return restricted;
   const user: any = await c.env.DB.prepare('SELECT username, full_name, profile_image FROM users WHERE id = ?').bind(userId).first();
   const b = await c.req.json().catch(() => ({}));
   const clientRequestId = getClientRequestId(c, b);
@@ -7231,6 +7373,8 @@ api.post('/posts/:postId/comments', authMiddleware, async (c) => {
     const userId = getUserId(c);
     const limited = await enforceRateLimit(c, 'comment_create', userId, 40, 60);
     if (limited) return limited;
+    const restricted = await enforceUserRestriction(c, userId, 'commenting');
+    if (restricted) return restricted;
     const postId = c.req.param('postId');
     const body: any = await c.req.json().catch(() => ({}));
     const content = cleanMultilineText(body.content, 1200);
@@ -7753,6 +7897,8 @@ api.post('/messages', authMiddleware, async (c) => {
   if (limited) return limited;
   const dailyLimited = await enforceRateLimit(c, 'message_send_daily', userId, 600, 86400);
   if (dailyLimited) return dailyLimited;
+  const restricted = await enforceUserRestriction(c, userId, 'messaging');
+  if (restricted) return restricted;
   const bodyTooLarge = rejectLargeRequest(c, 120_000);
   if (bodyTooLarge) return bodyTooLarge;
   const b = await c.req.json().catch(() => ({}));
@@ -9814,6 +9960,8 @@ api.post('/discover/posts', authMiddleware, async (c) => {
   const userId = getUserId(c);
   const limited = await enforceRateLimit(c, 'discover_post_create', userId, 30, 60);
   if (limited) return limited;
+  const restricted = await enforceUserRestriction(c, userId, 'posting');
+  if (restricted) return restricted;
   const b = await c.req.json().catch(() => ({}));
   const user: any = await c.env.DB.prepare('SELECT username, full_name, profile_image, is_publisher FROM users WHERE id = ?').bind(userId).first();
   if (!user?.is_publisher) return c.json({ detail: 'Publishers only' }, 403);
@@ -9916,20 +10064,108 @@ api.post('/places/verify-proximity', authMiddleware, async (c) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 // ADMIN
 // ═══════════════════════════════════════════════════════════════════════════════
-const adminGuard = async (c: any, next: () => Promise<void>) => {
+type AdminRole = 'owner' | 'admin' | 'moderator' | 'support' | 'viewer';
+
+type AdminContext = {
+  userId: string;
+  role: AdminRole;
+  user: any;
+};
+
+const ADMIN_ROLE_ORDER: AdminRole[] = ['viewer', 'support', 'moderator', 'admin', 'owner'];
+const ADMIN_PERMISSIONS: Record<AdminRole, Set<string>> = {
+  owner: new Set(['*']),
+  admin: new Set([
+    'admin:read',
+    'reports:read',
+    'reports:write',
+    'content:read',
+    'content:write',
+    'users:read',
+    'users:private',
+    'users:warn',
+    'users:restrict',
+    'users:suspend',
+    'users:ban',
+    'messages:reported:read',
+    'messages:reported:write',
+    'audit:read',
+    'roles:write',
+  ]),
+  moderator: new Set([
+    'admin:read',
+    'reports:read',
+    'reports:write',
+    'content:read',
+    'content:write',
+    'users:read',
+    'users:warn',
+    'users:restrict',
+    'messages:reported:read',
+  ]),
+  support: new Set([
+    'admin:read',
+    'reports:read',
+    'content:read',
+    'users:read',
+    'messages:reported:read',
+  ]),
+  viewer: new Set([
+    'admin:read',
+    'reports:read',
+    'content:read',
+    'users:read',
+  ]),
+};
+
+function normalizeAdminRole(value: unknown): AdminRole | '' {
+  const role = cleanText(value, 40).toLowerCase().replace(/[\s-]+/g, '_');
+  return ADMIN_ROLE_ORDER.includes(role as AdminRole) ? role as AdminRole : '';
+}
+
+function adminCan(role: AdminRole, permission: string): boolean {
+  return ADMIN_PERMISSIONS[role]?.has('*') || ADMIN_PERMISSIONS[role]?.has(permission);
+}
+
+function adminPermissionList(role: AdminRole): string[] {
+  if (role === 'owner') return ['*'];
+  return Array.from(ADMIN_PERMISSIONS[role] || []).sort();
+}
+
+async function getAdminContext(c: any): Promise<AdminContext | null> {
+  await ensureAdminModerationSchema(c.env.DB);
   const userId = getUserId(c);
-  const user: any = await c.env.DB.prepare('SELECT is_admin FROM users WHERE id = ?').bind(userId).first();
-  if (!user?.is_admin) return c.json({ detail: 'Admin access required' }, 403);
-  await next();
+  if (!userId) return null;
+  const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
+  if (!user || ['banned', 'deleted'].includes(String(user.status || 'active'))) return null;
+
+  let role = normalizeAdminRole(user.admin_role);
+  const roleRow: any = await c.env.DB.prepare('SELECT role FROM admin_roles WHERE user_id = ?').bind(userId).first();
+  role = normalizeAdminRole(roleRow?.role) || role;
+  if (isOwnerUsername(c, user.username)) role = 'owner';
+  if (!role && Number(user.is_admin || 0) === 1) role = 'admin';
+  if (!role) return null;
+  return { userId, role, user };
+}
+
+async function requireAdminRole(c: any, permission = 'admin:read'): Promise<AdminContext> {
+  const admin = await getAdminContext(c);
+  if (!admin || !adminCan(admin.role, permission)) throw new Error('FORBIDDEN');
+  return admin;
+}
+
+const adminGuard = async (c: any, next: () => Promise<void>) => {
+  try {
+    await requireAdminRole(c, 'admin:read');
+    await next();
+  } catch {
+    return c.json({ detail: 'Admin access required' }, 403);
+  }
 };
 
 async function requireGovernanceAdmin(c: any): Promise<string> {
-  await ensureGovernanceSchema(c.env.DB);
-  const userId = getUserId(c);
-  const user: any = await c.env.DB.prepare('SELECT is_admin, status FROM users WHERE id = ?').bind(userId).first();
-  if (!user?.is_admin) throw new Error('FORBIDDEN');
-  if (String(user.status || 'active') === 'banned') throw new Error('FORBIDDEN');
-  return userId;
+  const admin = await requireAdminRole(c, 'admin:read');
+  return admin.userId;
 }
 
 function governanceError(c: any, error: any) {
@@ -9940,9 +10176,108 @@ function governanceError(c: any, error: any) {
 
 async function logGovernanceAction(c: any, adminId: string, actionType: string, targetType: string, targetId: string, details: any = {}) {
   await ensureGovernanceSchema(c.env.DB);
+  const ts = now();
   await c.env.DB.prepare(
     'INSERT INTO admin_actions (id, admin_id, action_type, target_type, target_id, details, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
-  ).bind(uuid(), adminId, actionType, targetType, targetId, JSON.stringify(scrubLogMetadata(details || {})), now()).run();
+  ).bind(uuid(), adminId, actionType, targetType, targetId, JSON.stringify(scrubLogMetadata(details || {})), ts).run();
+  try {
+    const admin = await getAdminContext(c);
+    if (admin && admin.userId === adminId) {
+      await c.env.DB.batch([
+        c.env.DB.prepare(
+          `INSERT INTO audit_logs (
+             id, actor_admin_user_id, actor_role, action_type, target_type, target_id, target_user_id,
+             reason, internal_note, before_state, after_state, ip_hash, request_id, created_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '{}', '{}', ?, ?, ?)`
+        ).bind(uuid(), adminId, admin.role, cleanText(actionType, 80), cleanText(targetType, 60), publicId(targetId, 160), cleanText((details || {}).target_user_id || '', 120), cleanMultilineText((details || {}).reason || '', 800), cleanMultilineText((details || {}).note || (details || {}).admin_notes || '', 1000), await safeRequestIpHash(c), cleanText(c.get?.('requestId') || '', 120), ts),
+        c.env.DB.prepare(
+          `INSERT INTO moderation_actions (
+             id, actor_admin_user_id, actor_role, action_type, target_type, target_id, target_user_id, reason, note, created_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ).bind(uuid(), adminId, admin.role, cleanText(actionType, 80), cleanText(targetType, 60), publicId(targetId, 160), cleanText((details || {}).target_user_id || '', 120), cleanMultilineText((details || {}).reason || '', 800), cleanMultilineText((details || {}).note || (details || {}).admin_notes || '', 1000), ts),
+      ]);
+    }
+  } catch {
+    // Legacy governance routes still keep admin_actions if the richer audit schema is not ready yet.
+  }
+}
+
+async function safeRequestIpHash(c: any): Promise<string> {
+  const ip = clientIp(c);
+  const secret = String(c.env.ABUSE_SIGNAL_SECRET || c.env.JWT_SECRET || 'captro-admin-audit');
+  return sha256Hex(`${secret}:admin:${ip}`);
+}
+
+function safeJsonState(value: any): string {
+  if (!value || typeof value !== 'object') return '{}';
+  return JSON.stringify(scrubLogMetadata(value));
+}
+
+async function writeAdminAuditLog(c: any, admin: AdminContext, input: {
+  actionType: string;
+  targetType: string;
+  targetId: string;
+  targetUserId?: string;
+  reason?: string;
+  note?: string;
+  beforeState?: Record<string, unknown>;
+  afterState?: Record<string, unknown>;
+}) {
+  await ensureAdminModerationSchema(c.env.DB);
+  const ts = now();
+  const reason = cleanMultilineText(input.reason || '', 800);
+  const note = cleanMultilineText(input.note || '', 1000);
+  const targetUserId = publicId(input.targetUserId || '', 120);
+  const requestId = cleanText(c.get?.('requestId') || c.req.header('X-Request-ID') || '', 120);
+  const ipHash = await safeRequestIpHash(c);
+  const actionType = cleanText(input.actionType, 80);
+  const targetType = cleanText(input.targetType, 60);
+  const targetId = publicId(input.targetId, 160);
+
+  await c.env.DB.batch([
+    c.env.DB.prepare(
+      `INSERT INTO audit_logs (
+         id, actor_admin_user_id, actor_role, action_type, target_type, target_id, target_user_id,
+         reason, internal_note, before_state, after_state, ip_hash, request_id, created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(uuid(), admin.userId, admin.role, actionType, targetType, targetId, targetUserId, reason, note, safeJsonState(input.beforeState), safeJsonState(input.afterState), ipHash, requestId, ts),
+    c.env.DB.prepare(
+      `INSERT INTO moderation_actions (
+         id, actor_admin_user_id, actor_role, action_type, target_type, target_id,
+         target_user_id, reason, note, created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(uuid(), admin.userId, admin.role, actionType, targetType, targetId, targetUserId, reason, note, ts),
+    c.env.DB.prepare(
+      'INSERT INTO admin_actions (id, admin_id, action_type, target_type, target_id, details, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).bind(uuid(), admin.userId, actionType, targetType, targetId, JSON.stringify(scrubLogMetadata({ target_user_id: targetUserId, reason, note })), ts),
+  ]);
+}
+
+async function requireAdminWriteRateLimit(c: any, admin: AdminContext, bucket = 'admin_write') {
+  return enforceRateLimit(c, bucket, admin.userId, 80, 60);
+}
+
+function normalizeRestrictionType(value: unknown): string {
+  const type = cleanText(value || 'all', 60).toLowerCase().replace(/[\s-]+/g, '_');
+  return ['all', 'posting', 'commenting', 'messaging', 'discover', 'handshake'].includes(type) ? type : 'all';
+}
+
+async function userHasActiveRestriction(c: any, userId: string, type: 'posting' | 'commenting' | 'messaging' | 'discover' | 'handshake'): Promise<boolean> {
+  await ensureAdminModerationSchema(c.env.DB);
+  const row = await c.env.DB.prepare(
+    `SELECT id FROM user_restrictions
+     WHERE user_id = ?
+       AND restriction_type IN ('all', ?)
+       AND datetime(starts_at) <= datetime('now')
+       AND (ends_at IS NULL OR ends_at = '' OR datetime(ends_at) > datetime('now'))
+     LIMIT 1`
+  ).bind(userId, type).first();
+  return !!row;
+}
+
+async function enforceUserRestriction(c: any, userId: string, type: 'posting' | 'commenting' | 'messaging' | 'discover' | 'handshake') {
+  if (!(await userHasActiveRestriction(c, userId, type))) return null;
+  return c.json({ detail: `This account is temporarily restricted from ${type}.` }, 403);
 }
 
 api.delete('/admin/notes/:noteId', authMiddleware, async (c) => {
@@ -10465,6 +10800,1067 @@ api.get('/admin/governance/actions', authMiddleware, async (c) => {
       ...action,
       details: action.details ? JSON.parse(action.details) : {},
     })));
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+function adminPageParams(c: any, defaultLimit = 50, maxLimit = 100) {
+  const limit = clampNumber(c.req.query('limit') || defaultLimit, 1, maxLimit, defaultLimit);
+  const page = clampNumber(c.req.query('page') || '1', 1, 1_000_000, 1);
+  const offset = clampNumber(c.req.query('offset') || ((page - 1) * limit), 0, 1_000_000_000, 0);
+  return { limit, page, offset };
+}
+
+function searchPattern(value: unknown): string {
+  const query = cleanText(value, 120).toLowerCase();
+  return query ? `%${query}%` : '';
+}
+
+function roleCanViewPrivateUserFields(role: AdminRole): boolean {
+  return adminCan(role, 'users:private');
+}
+
+function adminUserPayload(row: any, role: AdminRole) {
+  const payload: any = {
+    id: row.id,
+    username: publicUsernameFor(row),
+    raw_username: cleanText(row.username, 80),
+    full_name: cleanText(row.full_name, 120),
+    profile_image: safeMediaReference(row.profile_image),
+    bio: cleanMultilineText(row.bio, 500),
+    city: cleanText(row.city, 120),
+    status: cleanText(row.status || 'active', 40),
+    suspended_until: row.suspended_until || null,
+    banned_at: row.banned_at || null,
+    ban_reason: cleanMultilineText(row.ban_reason, 500),
+    warning_count: Number(row.warning_count || 0),
+    followers_count: Number(row.followers_count || 0),
+    following_count: Number(row.following_count || 0),
+    posts_count: Number(row.posts_count || 0),
+    report_count: Number(row.report_count || row.reports_count || 0),
+    is_admin: Number(row.is_admin || 0) === 1,
+    is_creator: Number(row.is_creator || 0) === 1,
+    is_verified: Number(row.is_verified || 0) === 1,
+    created_at: row.created_at || '',
+    updated_at: row.updated_at || '',
+  };
+  if (roleCanViewPrivateUserFields(role)) {
+    payload.email = publicUserEmail(row.email);
+    payload.phone = row.phone || '';
+  }
+  return payload;
+}
+
+function adminPostPayload(row: any, env: Env) {
+  const mediaUrls = sanitizeMediaReferences(row.images, row.image);
+  const mediaTypes = parseJsonArray(row.media_types);
+  const thumbnailVariant = env.CLOUDFLARE_IMAGES_THUMBNAIL_VARIANT || '';
+  return {
+    id: row.id,
+    user_id: row.user_id,
+    author: {
+      id: row.user_id,
+      username: publicUsernameFor({ username: row.user_username || row.username }),
+      full_name: cleanText(row.user_full_name || row.full_name, 120),
+      profile_image: safeMediaReference(row.user_profile_image || row.profile_image),
+    },
+    title: cleanText(row.title || '', 180),
+    content: cleanMultilineText(row.content, 1200),
+    category: cleanText(row.post_type || row.category || 'general', 60),
+    visibility: cleanText(row.visibility || 'public', 40),
+    status: cleanText(row.status || 'active', 40),
+    removed_at: row.removed_at || null,
+    removed_reason: cleanMultilineText(row.removed_reason, 500),
+    discover_blocked_at: row.discover_blocked_at || null,
+    discover_blocked_reason: cleanMultilineText(row.discover_blocked_reason, 500),
+    image: feedDeliveryUrl(safeMediaReference(row.image) || mediaUrls[0] || '', String(mediaTypes[0] || 'image'), env.CLOUDFLARE_IMAGES_FEED_VARIANT || ''),
+    images: mediaUrls.map((url, index) => feedDeliveryUrl(url, String(mediaTypes[index] || 'image'), env.CLOUDFLARE_IMAGES_FEED_VARIANT || '')),
+    thumbnail_urls: mediaUrls.map((url, index) => posterDeliveryUrl(url, String(mediaTypes[index] || 'image'), thumbnailVariant)),
+    media_types: mediaTypes.length ? mediaTypes : mediaUrls.map((url) => isVideoMediaUrl(url) ? 'video' : 'image'),
+    likes_count: Number(row.likes_count || 0),
+    comments_count: Number(row.comments_count || 0),
+    saves_count: Number(row.saves_count || 0),
+    created_at: row.created_at || '',
+    updated_at: row.updated_at || '',
+  };
+}
+
+function adminCommentPayload(row: any) {
+  return {
+    id: row.id,
+    user_id: row.user_id,
+    post_id: row.post_id,
+    parent_id: row.parent_id || null,
+    content: cleanMultilineText(row.content, 1200),
+    status: cleanText(row.status || 'active', 40),
+    removed_at: row.removed_at || null,
+    removed_reason: cleanMultilineText(row.removed_reason, 500),
+    hidden_at: row.hidden_at || null,
+    hidden_by_user_id: row.hidden_by_user_id || '',
+    likes_count: Number(row.likes_count || 0),
+    author: {
+      id: row.user_id,
+      username: publicUsernameFor({ username: row.user_username || row.username }),
+      full_name: cleanText(row.user_full_name || row.full_name, 120),
+      profile_image: safeMediaReference(row.user_profile_image || row.profile_image),
+    },
+    post_author_id: row.post_user_id || '',
+    created_at: row.created_at || '',
+    updated_at: row.updated_at || '',
+  };
+}
+
+function reportTargetType(row: any): string {
+  return normalizeReportTargetType(row?.reported_type || row?.report_type || 'other');
+}
+
+function adminReportSummary(row: any) {
+  const type = reportTargetType(row);
+  return {
+    id: row.id,
+    reporter_id: row.reporter_id,
+    reported_id: row.reported_id,
+    target_type: type,
+    target_id: row.reported_id,
+    target_owner_user_id: row.target_owner_user_id || row.post_user_id || row.comment_user_id || row.message_sender_id || '',
+    reason: normalizeReportReason(row.reason),
+    details: cleanMultilineText(row.details, 1000),
+    status: normalizeReportStatus(row.status, 'pending'),
+    priority: cleanText(row.priority || 'normal', 20),
+    assigned_to: row.assigned_to || '',
+    created_at: row.created_at || '',
+    updated_at: row.updated_at || '',
+    closed_at: row.closed_at || null,
+    reporter: {
+      id: row.reporter_id,
+      username: publicUsernameFor({ username: row.reporter_username }),
+      full_name: cleanText(row.reporter_full_name, 120),
+      profile_image: safeMediaReference(row.reporter_profile_image),
+    },
+    target_user: {
+      id: row.target_user_id || '',
+      username: publicUsernameFor({ username: row.target_username }),
+      full_name: cleanText(row.target_full_name, 120),
+      profile_image: safeMediaReference(row.target_profile_image),
+      status: cleanText(row.target_status || '', 40),
+    },
+    preview: cleanMultilineText(row.target_preview || row.post_content || row.comment_content || row.message_content || '', 400),
+  };
+}
+
+async function getAdminReportRow(c: any, reportId: string) {
+  return c.env.DB.prepare(`
+    SELECT
+      r.*,
+      reporter.username AS reporter_username,
+      reporter.full_name AS reporter_full_name,
+      reporter.profile_image AS reporter_profile_image,
+      p.id AS post_id,
+      p.user_id AS post_user_id,
+      p.content AS post_content,
+      p.title AS post_title,
+      p.image AS post_image,
+      p.images AS post_images,
+      p.media_types AS post_media_types,
+      p.status AS post_status,
+      cm.id AS comment_id,
+      cm.user_id AS comment_user_id,
+      cm.content AS comment_content,
+      cm.status AS comment_status,
+      msg.id AS message_id,
+      msg.sender_id AS message_sender_id,
+      msg.receiver_id AS message_receiver_id,
+      msg.content AS message_content,
+      msg.media_type AS message_media_type,
+      msg.status AS message_status,
+      target_user.id AS target_user_id,
+      target_user.username AS target_username,
+      target_user.full_name AS target_full_name,
+      target_user.profile_image AS target_profile_image,
+      target_user.status AS target_status
+    FROM reports r
+    LEFT JOIN users reporter ON reporter.id = r.reporter_id
+    LEFT JOIN posts p ON p.id = r.reported_id OR p.id = r.content_id
+    LEFT JOIN comments cm ON cm.id = r.reported_id
+    LEFT JOIN messages msg ON msg.id = r.reported_id
+    LEFT JOIN users target_user ON target_user.id = COALESCE(NULLIF(r.target_owner_user_id, ''), p.user_id, cm.user_id, msg.sender_id, r.reported_id)
+    WHERE r.id = ?
+    LIMIT 1
+  `).bind(reportId).first();
+}
+
+async function reportTargetPreview(c: any, report: any) {
+  const type = reportTargetType(report);
+  if (type === 'post' && (report.post_id || report.reported_id)) {
+    const row: any = await c.env.DB.prepare(`
+      SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
+      FROM posts p
+      LEFT JOIN users u ON u.id = p.user_id
+      WHERE p.id = ?
+      LIMIT 1
+    `).bind(report.post_id || report.reported_id).first();
+    return row ? { type: 'post', post: adminPostPayload(row, c.env) } : { type: 'post', missing: true };
+  }
+  if (type === 'comment' && (report.comment_id || report.reported_id)) {
+    const row: any = await c.env.DB.prepare(`
+      SELECT c.*, p.user_id AS post_user_id, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
+      FROM comments c
+      LEFT JOIN posts p ON p.id = c.post_id
+      LEFT JOIN users u ON u.id = c.user_id
+      WHERE c.id = ?
+      LIMIT 1
+    `).bind(report.comment_id || report.reported_id).first();
+    return row ? { type: 'comment', comment: adminCommentPayload(row) } : { type: 'comment', missing: true };
+  }
+  if (type === 'message' && (report.message_id || report.reported_id)) {
+    const row: any = await c.env.DB.prepare(`
+      SELECT m.*, sender.username AS sender_username, sender.full_name AS sender_full_name, receiver.username AS receiver_username, receiver.full_name AS receiver_full_name
+      FROM messages m
+      LEFT JOIN users sender ON sender.id = m.sender_id
+      LEFT JOIN users receiver ON receiver.id = m.receiver_id
+      WHERE m.id = ?
+      LIMIT 1
+    `).bind(report.message_id || report.reported_id).first();
+    if (!row) return { type: 'message', missing: true };
+    return {
+      type: 'message',
+      message: {
+        id: row.id,
+        sender_id: row.sender_id,
+        receiver_id: row.receiver_id,
+        sender_username: publicUsernameFor({ username: row.sender_username }),
+        sender_full_name: cleanText(row.sender_full_name, 120),
+        receiver_username: publicUsernameFor({ username: row.receiver_username }),
+        receiver_full_name: cleanText(row.receiver_full_name, 120),
+        content: cleanMultilineText(row.content, 2000),
+        media_type: cleanText(row.media_type, 40),
+        status: cleanText(row.status || 'active', 40),
+        created_at: row.created_at,
+      },
+    };
+  }
+  if ((type === 'profile' || type === 'user') && report.reported_id) {
+    const row: any = await c.env.DB.prepare(`
+      SELECT u.*,
+        (SELECT COUNT(*) FROM reports rr WHERE rr.reported_id = u.id OR rr.target_owner_user_id = u.id) AS report_count
+      FROM users u WHERE u.id = ? LIMIT 1
+    `).bind(report.reported_id).first();
+    return row ? { type: 'user', user: adminUserPayload(row, 'viewer') } : { type: 'user', missing: true };
+  }
+  return { type, missing: true };
+}
+
+async function adminReportDetail(c: any, report: any) {
+  const notes = await c.env.DB.prepare(`
+    SELECT n.*, u.username AS admin_username, u.full_name AS admin_full_name
+    FROM moderation_notes n
+    LEFT JOIN users u ON u.id = n.author_admin_user_id
+    WHERE n.report_id = ?
+    ORDER BY n.created_at DESC
+    LIMIT 40
+  `).bind(report.id).all();
+  const actions = await c.env.DB.prepare(`
+    SELECT a.*, u.username AS admin_username, u.full_name AS admin_full_name
+    FROM moderation_actions a
+    LEFT JOIN users u ON u.id = a.actor_admin_user_id
+    WHERE a.target_id = ? OR a.target_user_id = ?
+    ORDER BY a.created_at DESC
+    LIMIT 30
+  `).bind(report.reported_id || report.id, report.target_owner_user_id || report.reported_id || '').all();
+  return {
+    ...adminReportSummary(report),
+    admin_notes: cleanMultilineText(report.admin_notes, 1000),
+    action_taken: cleanText(report.action_taken, 120),
+    reviewed_by: report.reviewed_by || '',
+    reviewed_at: report.reviewed_at || null,
+    target: await reportTargetPreview(c, report),
+    notes: (notes.results as any[]).map((note) => ({
+      id: note.id,
+      note: cleanMultilineText(note.note, 1000),
+      created_at: note.created_at,
+      admin: {
+        id: note.author_admin_user_id,
+        username: publicUsernameFor({ username: note.admin_username }),
+        full_name: cleanText(note.admin_full_name, 120),
+      },
+    })),
+    previous_actions: (actions.results as any[]).map((action) => ({
+      ...action,
+      reason: cleanMultilineText(action.reason, 500),
+      note: cleanMultilineText(action.note, 800),
+    })),
+  };
+}
+
+async function setReportStatus(c: any, admin: AdminContext, reportId: string, status: string, reason: string, note: string) {
+  const before: any = await c.env.DB.prepare('SELECT id, status, reported_id, reported_type, report_type FROM reports WHERE id = ?').bind(reportId).first();
+  if (!before) return c.json({ detail: 'Report not found.' }, 404);
+  const normalizedStatus = normalizeReportStatus(status, 'under_review');
+  const closedAt = ['action_taken', 'dismissed', 'closed', 'duplicate'].includes(normalizedStatus) ? now() : null;
+  const ts = now();
+  await c.env.DB.prepare(
+    `UPDATE reports
+     SET status = ?, admin_notes = ?, action_taken = ?, reviewed_by = ?, reviewed_at = ?, updated_at = ?, closed_at = COALESCE(?, closed_at)
+     WHERE id = ?`
+  ).bind(normalizedStatus, note, normalizedStatus, admin.userId, ts, ts, closedAt, reportId).run();
+  await writeAdminAuditLog(c, admin, {
+    actionType: `report_${normalizedStatus}`,
+    targetType: 'report',
+    targetId: reportId,
+    targetUserId: before.reported_id || '',
+    reason,
+    note,
+    beforeState: { status: before.status },
+    afterState: { status: normalizedStatus },
+  });
+  const updated = await getAdminReportRow(c, reportId);
+  return c.json({ report: await adminReportDetail(c, updated) });
+}
+
+api.get('/admin/health', authMiddleware, async (c) => {
+  try {
+    await requireAdminRole(c, 'admin:read');
+    await ensureAdminModerationSchema(c.env.DB);
+    const db: any = await c.env.DB.prepare('SELECT 1 AS ok').first();
+    return c.json({
+      status: 'ok',
+      environment: c.env.ENVIRONMENT || 'production',
+      timestamp: now(),
+      version: c.env.WORKER_VERSION || API_VERSION,
+      commit: c.env.SOURCE_COMMIT || '',
+      database: Number(db?.ok || 0) === 1 ? 'ok' : 'unknown',
+    });
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+api.get('/admin/me', authMiddleware, async (c) => {
+  try {
+    const admin = await requireAdminRole(c, 'admin:read');
+    return c.json({
+      user: adminUserPayload(admin.user, admin.role),
+      role: admin.role,
+      permissions: adminPermissionList(admin.role),
+      environment: c.env.ENVIRONMENT || 'production',
+    });
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+api.get('/admin/dashboard', authMiddleware, async (c) => {
+  try {
+    await requireAdminRole(c, 'admin:read');
+    await ensureAdminModerationSchema(c.env.DB);
+    const [openReports, urgentReports, reportsToday, postsRemovedToday, usersSuspendedToday, newAccountsToday, uploadFailures] = await Promise.all([
+      c.env.DB.prepare("SELECT COUNT(*) AS count FROM reports WHERE COALESCE(status, 'pending') IN ('pending', 'under_review', 'escalated')").first(),
+      c.env.DB.prepare("SELECT COUNT(*) AS count FROM reports WHERE COALESCE(priority, 'normal') = 'high' AND COALESCE(status, 'pending') IN ('pending', 'under_review', 'escalated')").first(),
+      c.env.DB.prepare("SELECT COUNT(*) AS count FROM reports WHERE datetime(created_at) >= datetime('now', 'start of day')").first(),
+      c.env.DB.prepare("SELECT COUNT(*) AS count FROM posts WHERE datetime(removed_at) >= datetime('now', 'start of day')").first(),
+      c.env.DB.prepare("SELECT COUNT(*) AS count FROM users WHERE COALESCE(status, 'active') = 'suspended' AND datetime(updated_at) >= datetime('now', 'start of day')").first(),
+      c.env.DB.prepare("SELECT COUNT(*) AS count FROM users WHERE datetime(created_at) >= datetime('now', 'start of day')").first(),
+      c.env.DB.prepare("SELECT COUNT(*) AS count FROM client_events WHERE event_name LIKE '%upload%' AND status LIKE '%fail%' AND datetime(created_at) >= datetime('now', '-24 hours')").first().catch(() => ({ count: 0 })),
+    ]);
+    const quick = await c.env.DB.prepare(`
+      SELECT r.*, reporter.username AS reporter_username, reporter.full_name AS reporter_full_name, reporter.profile_image AS reporter_profile_image,
+             target.username AS target_username, target.full_name AS target_full_name, target.profile_image AS target_profile_image, target.status AS target_status,
+             target.id AS target_user_id
+      FROM reports r
+      LEFT JOIN users reporter ON reporter.id = r.reporter_id
+      LEFT JOIN users target ON target.id = r.reported_id OR target.id = r.target_owner_user_id
+      WHERE COALESCE(r.status, 'pending') IN ('pending', 'under_review', 'escalated')
+      ORDER BY CASE COALESCE(r.priority, 'normal') WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, r.created_at DESC
+      LIMIT 8
+    `).all();
+    return c.json({
+      cards: {
+        open_reports: Number((openReports as any)?.count || 0),
+        urgent_reports: Number((urgentReports as any)?.count || 0),
+        reports_today: Number((reportsToday as any)?.count || 0),
+        posts_removed_today: Number((postsRemovedToday as any)?.count || 0),
+        users_suspended_today: Number((usersSuspendedToday as any)?.count || 0),
+        new_accounts_today: Number((newAccountsToday as any)?.count || 0),
+        upload_failures_24h: Number((uploadFailures as any)?.count || 0),
+      },
+      queues: {
+        new_reports: (quick.results as any[]).map(adminReportSummary),
+      },
+    });
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+api.get('/admin/reports', authMiddleware, async (c) => {
+  try {
+    await requireAdminRole(c, 'reports:read');
+    await ensureAdminModerationSchema(c.env.DB);
+    const { limit, offset } = adminPageParams(c);
+    const conditions: string[] = [];
+    const binds: any[] = [];
+    const statusQuery = cleanText(c.req.query('status') || 'open', 40).toLowerCase();
+    if (statusQuery && statusQuery !== 'all') {
+      if (statusQuery === 'open') {
+        conditions.push("COALESCE(r.status, 'pending') IN ('pending', 'under_review', 'escalated')");
+      } else {
+        conditions.push("COALESCE(r.status, 'pending') = ?");
+        binds.push(normalizeReportStatus(statusQuery, 'pending'));
+      }
+    }
+    const reason = cleanText(c.req.query('reason') || '', 80);
+    if (reason && reason !== 'all') {
+      conditions.push('r.reason = ?');
+      binds.push(normalizeReportReason(reason));
+    }
+    const targetType = cleanText(c.req.query('target_type') || c.req.query('type') || '', 60);
+    if (targetType && targetType !== 'all') {
+      conditions.push("COALESCE(NULLIF(r.reported_type, ''), r.report_type, 'other') = ?");
+      binds.push(normalizeReportTargetType(targetType));
+    }
+    const search = searchPattern(c.req.query('search'));
+    if (search) {
+      conditions.push(`(
+        LOWER(r.id) LIKE ? OR LOWER(r.reported_id) LIKE ? OR LOWER(r.reporter_id) LIKE ?
+        OR LOWER(reporter.username) LIKE ? OR LOWER(target.username) LIKE ?
+      )`);
+      binds.push(search, search, search, search, search);
+    }
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const rows = await c.env.DB.prepare(`
+      SELECT r.*, reporter.username AS reporter_username, reporter.full_name AS reporter_full_name, reporter.profile_image AS reporter_profile_image,
+             target.id AS target_user_id, target.username AS target_username, target.full_name AS target_full_name,
+             target.profile_image AS target_profile_image, target.status AS target_status
+      FROM reports r
+      LEFT JOIN users reporter ON reporter.id = r.reporter_id
+      LEFT JOIN users target ON target.id = r.reported_id OR target.id = r.target_owner_user_id
+      ${where}
+      ORDER BY CASE COALESCE(r.priority, 'normal') WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, r.created_at DESC
+      LIMIT ? OFFSET ?
+    `).bind(...binds, limit, offset).all();
+    return c.json({
+      results: (rows.results as any[]).map(adminReportSummary),
+      pagination: { limit, offset, next_offset: offset + limit },
+    });
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+api.get('/admin/reports/:reportId', authMiddleware, async (c) => {
+  try {
+    await requireAdminRole(c, 'reports:read');
+    await ensureAdminModerationSchema(c.env.DB);
+    const reportId = publicId(c.req.param('reportId'), 120);
+    const report = await getAdminReportRow(c, reportId);
+    if (!report) return c.json({ detail: 'Report not found.' }, 404);
+    return c.json({ report: await adminReportDetail(c, report) });
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+api.post('/admin/reports/:reportId/status', authMiddleware, async (c) => {
+  try {
+    const admin = await requireAdminRole(c, 'reports:write');
+    const limited = await requireAdminWriteRateLimit(c, admin, 'admin_report_write');
+    if (limited) return limited;
+    const body: any = await c.req.json().catch(() => ({}));
+    const unknown = rejectUnknownFields(c, body, ['status', 'reason', 'note', 'admin_notes']);
+    if (unknown) return unknown;
+    return setReportStatus(c, admin, publicId(c.req.param('reportId'), 120), body.status || 'under_review', cleanMultilineText(body.reason, 500), cleanMultilineText(body.note || body.admin_notes, 1000));
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+api.post('/admin/reports/:reportId/note', authMiddleware, async (c) => {
+  try {
+    const admin = await requireAdminRole(c, 'reports:write');
+    const limited = await requireAdminWriteRateLimit(c, admin, 'admin_report_note');
+    if (limited) return limited;
+    const reportId = publicId(c.req.param('reportId'), 120);
+    const body: any = await c.req.json().catch(() => ({}));
+    const unknown = rejectUnknownFields(c, body, ['note']);
+    if (unknown) return unknown;
+    const note = cleanMultilineText(body.note, 1000);
+    if (!note) return c.json({ detail: 'Internal note is required.' }, 400);
+    const report: any = await c.env.DB.prepare('SELECT id, reported_id, reported_type, report_type FROM reports WHERE id = ?').bind(reportId).first();
+    if (!report) return c.json({ detail: 'Report not found.' }, 404);
+    await c.env.DB.prepare(
+      'INSERT INTO moderation_notes (id, report_id, target_type, target_id, author_admin_user_id, note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).bind(uuid(), reportId, reportTargetType(report), report.reported_id, admin.userId, note, now()).run();
+    await writeAdminAuditLog(c, admin, { actionType: 'internal_note_added', targetType: 'report', targetId: reportId, targetUserId: report.reported_id, note });
+    return c.json({ added: true });
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+api.post('/admin/reports/:reportId/action', authMiddleware, async (c) => {
+  try {
+    const admin = await requireAdminRole(c, 'reports:write');
+    const limited = await requireAdminWriteRateLimit(c, admin, 'admin_report_action');
+    if (limited) return limited;
+    const reportId = publicId(c.req.param('reportId'), 120);
+    const body: any = await c.req.json().catch(() => ({}));
+    const unknown = rejectUnknownFields(c, body, ['action', 'status', 'reason', 'note', 'admin_notes']);
+    if (unknown) return unknown;
+    const action = cleanText(body.action || body.status || 'under_review', 80).toLowerCase().replace(/[\s-]+/g, '_');
+    const report = await getAdminReportRow(c, reportId);
+    if (!report) return c.json({ detail: 'Report not found.' }, 404);
+    const reason = cleanMultilineText(body.reason || 'Moderation action from report', 500);
+    const note = cleanMultilineText(body.note || body.admin_notes || '', 1000);
+    if (action === 'remove_content') {
+      const type = reportTargetType(report);
+      if (type === 'post' && (report.post_id || report.reported_id)) {
+        await c.env.DB.prepare("UPDATE posts SET status = 'removed', removed_at = ?, removed_reason = ? WHERE id = ?")
+          .bind(now(), reason, report.post_id || report.reported_id).run();
+        await writeAdminAuditLog(c, admin, { actionType: 'content_removed_from_report', targetType: 'post', targetId: report.post_id || report.reported_id, targetUserId: report.post_user_id, reason, note });
+      } else if (type === 'comment' && (report.comment_id || report.reported_id)) {
+        await c.env.DB.prepare("UPDATE comments SET status = 'removed', removed_at = ?, removed_reason = ?, pinned_at = NULL WHERE id = ?")
+          .bind(now(), reason, report.comment_id || report.reported_id).run();
+        await writeAdminAuditLog(c, admin, { actionType: 'content_removed_from_report', targetType: 'comment', targetId: report.comment_id || report.reported_id, targetUserId: report.comment_user_id, reason, note });
+      } else if (type === 'message' && (report.message_id || report.reported_id)) {
+        await c.env.DB.prepare("UPDATE messages SET status = 'removed', removed_at = ?, removed_by = ?, removed_reason = ? WHERE id = ?")
+          .bind(now(), admin.userId, reason, report.message_id || report.reported_id).run();
+        await writeAdminAuditLog(c, admin, { actionType: 'message_removed_from_report', targetType: 'message', targetId: report.message_id || report.reported_id, targetUserId: report.message_sender_id, reason, note });
+      }
+      return setReportStatus(c, admin, reportId, 'action_taken', reason, note);
+    }
+    if (action === 'dismiss' || action === 'dismissed') return setReportStatus(c, admin, reportId, 'dismissed', reason, note);
+    if (action === 'escalate' || action === 'escalated') return setReportStatus(c, admin, reportId, 'escalated', reason, note);
+    if (action === 'close' || action === 'closed') return setReportStatus(c, admin, reportId, 'closed', reason, note);
+    return setReportStatus(c, admin, reportId, body.status || 'under_review', reason, note);
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+api.get('/admin/users', authMiddleware, async (c) => {
+  try {
+    const admin = await requireAdminRole(c, 'users:read');
+    await ensureAdminModerationSchema(c.env.DB);
+    const { limit, offset } = adminPageParams(c);
+    const search = searchPattern(c.req.query('search'));
+    const status = cleanText(c.req.query('status') || '', 40);
+    const conditions: string[] = [];
+    const binds: any[] = [];
+    if (search) {
+      conditions.push('(LOWER(u.username) LIKE ? OR LOWER(u.full_name) LIKE ? OR LOWER(u.id) LIKE ? OR LOWER(u.email) LIKE ?)');
+      binds.push(search, search, search, search);
+    }
+    if (status && status !== 'all') {
+      conditions.push("COALESCE(u.status, 'active') = ?");
+      binds.push(status);
+    }
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const rows = await c.env.DB.prepare(`
+      SELECT u.*,
+             (SELECT COUNT(*) FROM reports r WHERE r.reported_id = u.id OR r.target_owner_user_id = u.id) AS report_count
+      FROM users u
+      ${where}
+      ORDER BY u.created_at DESC
+      LIMIT ? OFFSET ?
+    `).bind(...binds, limit, offset).all();
+    return c.json({ results: (rows.results as any[]).map((row) => adminUserPayload(row, admin.role)), pagination: { limit, offset, next_offset: offset + limit } });
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+api.get('/admin/users/:userId', authMiddleware, async (c) => {
+  try {
+    const admin = await requireAdminRole(c, 'users:read');
+    await ensureAdminModerationSchema(c.env.DB);
+    const targetUserId = publicId(c.req.param('userId'), 120);
+    const row: any = await c.env.DB.prepare(`
+      SELECT u.*,
+             (SELECT COUNT(*) FROM reports r WHERE r.reported_id = u.id OR r.target_owner_user_id = u.id) AS report_count
+      FROM users u WHERE u.id = ? LIMIT 1
+    `).bind(targetUserId).first();
+    if (!row) return c.json({ detail: 'User not found.' }, 404);
+    const [restrictions, actions, posts] = await Promise.all([
+      c.env.DB.prepare('SELECT * FROM user_restrictions WHERE user_id = ? ORDER BY created_at DESC LIMIT 50').bind(targetUserId).all(),
+      c.env.DB.prepare('SELECT * FROM moderation_actions WHERE target_user_id = ? OR target_id = ? ORDER BY created_at DESC LIMIT 50').bind(targetUserId, targetUserId).all(),
+      c.env.DB.prepare(`
+        SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
+        FROM posts p LEFT JOIN users u ON u.id = p.user_id
+        WHERE p.user_id = ?
+        ORDER BY p.created_at DESC
+        LIMIT 12
+      `).bind(targetUserId).all(),
+    ]);
+    return c.json({
+      user: adminUserPayload(row, admin.role),
+      restrictions: restrictions.results || [],
+      actions: actions.results || [],
+      recent_posts: (posts.results as any[]).map((post) => adminPostPayload(post, c.env)),
+    });
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+api.post('/admin/users/:userId/warn', authMiddleware, async (c) => {
+  try {
+    const admin = await requireAdminRole(c, 'users:warn');
+    const limited = await requireAdminWriteRateLimit(c, admin, 'admin_user_warn');
+    if (limited) return limited;
+    const targetUserId = publicId(c.req.param('userId'), 120);
+    if (targetUserId === admin.userId) return c.json({ detail: 'Admins cannot warn themselves.' }, 400);
+    const body: any = await c.req.json().catch(() => ({}));
+    const unknown = rejectUnknownFields(c, body, ['reason', 'note']);
+    if (unknown) return unknown;
+    const reason = cleanMultilineText(body.reason, 500);
+    if (!reason) return c.json({ detail: 'Reason is required.' }, 400);
+    const target: any = await c.env.DB.prepare('SELECT id, warning_count FROM users WHERE id = ?').bind(targetUserId).first();
+    if (!target) return c.json({ detail: 'User not found.' }, 404);
+    await c.env.DB.prepare('UPDATE users SET warning_count = COALESCE(warning_count, 0) + 1, updated_at = datetime(\'now\') WHERE id = ?').bind(targetUserId).run();
+    await insertNotificationOnce(c, {
+      userId: targetUserId,
+      type: 'moderation_warning',
+      title: 'Captro safety warning',
+      body: reason,
+      data: { moderation_action: 'warning' },
+      dedupeKey: `warn:${targetUserId}:${Date.now()}`,
+      dedupeSeconds: 60,
+    });
+    await writeAdminAuditLog(c, admin, { actionType: 'user_warned', targetType: 'user', targetId: targetUserId, targetUserId, reason, note: body.note, beforeState: { warning_count: target.warning_count || 0 }, afterState: { warned: true } });
+    return c.json({ warned: true });
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+api.post('/admin/users/:userId/restrict', authMiddleware, async (c) => {
+  try {
+    const admin = await requireAdminRole(c, 'users:restrict');
+    const limited = await requireAdminWriteRateLimit(c, admin, 'admin_user_restrict');
+    if (limited) return limited;
+    const targetUserId = publicId(c.req.param('userId'), 120);
+    if (targetUserId === admin.userId) return c.json({ detail: 'Admins cannot restrict themselves.' }, 400);
+    const body: any = await c.req.json().catch(() => ({}));
+    const unknown = rejectUnknownFields(c, body, ['restriction_type', 'type', 'reason', 'note', 'duration_hours', 'ends_at']);
+    if (unknown) return unknown;
+    const target = await c.env.DB.prepare('SELECT id FROM users WHERE id = ?').bind(targetUserId).first();
+    if (!target) return c.json({ detail: 'User not found.' }, 404);
+    const restrictionType = normalizeRestrictionType(body.restriction_type || body.type);
+    const hours = clampNumber(body.duration_hours || 24, 1, 24 * 90, 24);
+    const endsAt = cleanText(body.ends_at || '', 60) || new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
+    const reason = cleanMultilineText(body.reason, 500);
+    if (!reason) return c.json({ detail: 'Reason is required.' }, 400);
+    await c.env.DB.prepare(
+      'INSERT INTO user_restrictions (id, user_id, restriction_type, reason, starts_at, ends_at, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+    ).bind(uuid(), targetUserId, restrictionType, reason, now(), endsAt, admin.userId, now()).run();
+    await writeAdminAuditLog(c, admin, { actionType: 'user_restricted', targetType: 'user', targetId: targetUserId, targetUserId, reason, note: body.note, afterState: { restriction_type: restrictionType, ends_at: endsAt } });
+    return c.json({ restricted: true, restriction_type: restrictionType, ends_at: endsAt });
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+api.post('/admin/users/:userId/suspend', authMiddleware, async (c) => {
+  try {
+    const admin = await requireAdminRole(c, 'users:suspend');
+    const limited = await requireAdminWriteRateLimit(c, admin, 'admin_user_suspend');
+    if (limited) return limited;
+    const targetUserId = publicId(c.req.param('userId'), 120);
+    if (targetUserId === admin.userId) return c.json({ detail: 'Admins cannot suspend themselves.' }, 400);
+    const body: any = await c.req.json().catch(() => ({}));
+    const unknown = rejectUnknownFields(c, body, ['reason', 'note', 'duration_hours', 'ends_at']);
+    if (unknown) return unknown;
+    const reason = cleanMultilineText(body.reason, 500);
+    if (!reason) return c.json({ detail: 'Reason is required.' }, 400);
+    const hours = clampNumber(body.duration_hours || 24, 1, 24 * 90, 24);
+    const suspendedUntil = cleanText(body.ends_at || '', 60) || new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
+    const before: any = await c.env.DB.prepare('SELECT id, status FROM users WHERE id = ?').bind(targetUserId).first();
+    if (!before) return c.json({ detail: 'User not found.' }, 404);
+    await c.env.DB.prepare("UPDATE users SET status = 'suspended', suspended_until = ?, ban_reason = ?, updated_at = datetime('now') WHERE id = ?")
+      .bind(suspendedUntil, reason, targetUserId).run();
+    await writeAdminAuditLog(c, admin, { actionType: 'user_suspended', targetType: 'user', targetId: targetUserId, targetUserId, reason, note: body.note, beforeState: before, afterState: { status: 'suspended', suspended_until: suspendedUntil } });
+    return c.json({ suspended: true, suspended_until: suspendedUntil });
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+api.post('/admin/users/:userId/ban', authMiddleware, async (c) => {
+  try {
+    const admin = await requireAdminRole(c, 'users:ban');
+    const limited = await requireAdminWriteRateLimit(c, admin, 'admin_user_ban');
+    if (limited) return limited;
+    const targetUserId = publicId(c.req.param('userId'), 120);
+    if (targetUserId === admin.userId) return c.json({ detail: 'Admins cannot ban themselves.' }, 400);
+    const body: any = await c.req.json().catch(() => ({}));
+    const unknown = rejectUnknownFields(c, body, ['reason', 'note']);
+    if (unknown) return unknown;
+    const reason = cleanMultilineText(body.reason, 500);
+    if (!reason) return c.json({ detail: 'Reason is required.' }, 400);
+    const before: any = await c.env.DB.prepare('SELECT id, status, username, full_name FROM users WHERE id = ?').bind(targetUserId).first();
+    if (!before) return c.json({ detail: 'User not found.' }, 404);
+    await c.env.DB.prepare("UPDATE users SET status = 'banned', banned_at = ?, ban_reason = ?, updated_at = datetime('now') WHERE id = ?")
+      .bind(now(), reason, targetUserId).run();
+    await writeAdminAuditLog(c, admin, { actionType: 'user_banned', targetType: 'user', targetId: targetUserId, targetUserId, reason, note: body.note, beforeState: before, afterState: { status: 'banned' } });
+    return c.json({ banned: true });
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+api.post('/admin/users/:userId/unban', authMiddleware, async (c) => {
+  try {
+    const admin = await requireAdminRole(c, 'users:ban');
+    const limited = await requireAdminWriteRateLimit(c, admin, 'admin_user_unban');
+    if (limited) return limited;
+    const targetUserId = publicId(c.req.param('userId'), 120);
+    const body: any = await c.req.json().catch(() => ({}));
+    const unknown = rejectUnknownFields(c, body, ['reason', 'note']);
+    if (unknown) return unknown;
+    const reason = cleanMultilineText(body.reason, 500);
+    if (!reason) return c.json({ detail: 'Reason is required.' }, 400);
+    const before: any = await c.env.DB.prepare('SELECT id, status FROM users WHERE id = ?').bind(targetUserId).first();
+    if (!before) return c.json({ detail: 'User not found.' }, 404);
+    await c.env.DB.prepare("UPDATE users SET status = 'active', banned_at = NULL, suspended_until = NULL, ban_reason = '', updated_at = datetime('now') WHERE id = ?")
+      .bind(targetUserId).run();
+    await writeAdminAuditLog(c, admin, { actionType: 'user_unbanned', targetType: 'user', targetId: targetUserId, targetUserId, reason, note: body.note, beforeState: before, afterState: { status: 'active' } });
+    return c.json({ unbanned: true });
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+api.post('/admin/users/:userId/force-username-change', authMiddleware, async (c) => {
+  try {
+    const admin = await requireAdminRole(c, 'users:restrict');
+    const limited = await requireAdminWriteRateLimit(c, admin, 'admin_username_force_change');
+    if (limited) return limited;
+    const targetUserId = publicId(c.req.param('userId'), 120);
+    const body: any = await c.req.json().catch(() => ({}));
+    const reason = cleanMultilineText(body.reason, 500);
+    if (!reason) return c.json({ detail: 'Reason is required.' }, 400);
+    const before: any = await c.env.DB.prepare('SELECT id, username FROM users WHERE id = ?').bind(targetUserId).first();
+    if (!before) return c.json({ detail: 'User not found.' }, 404);
+    const pending = pendingUsernameForUser(targetUserId);
+    await c.env.DB.prepare("UPDATE users SET username = ?, updated_at = datetime('now') WHERE id = ?").bind(pending, targetUserId).run();
+    await writeAdminAuditLog(c, admin, { actionType: 'username_force_changed', targetType: 'user', targetId: targetUserId, targetUserId, reason, note: body.note, beforeState: { username: before.username }, afterState: { username_required: true } });
+    return c.json({ username_required: true });
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+api.get('/admin/posts', authMiddleware, async (c) => {
+  try {
+    await requireAdminRole(c, 'content:read');
+    await ensureAdminModerationSchema(c.env.DB);
+    const { limit, offset } = adminPageParams(c);
+    const status = cleanText(c.req.query('status') || 'all', 40);
+    const search = searchPattern(c.req.query('search'));
+    const conditions: string[] = [];
+    const binds: any[] = [];
+    if (status !== 'all') {
+      conditions.push("COALESCE(p.status, 'active') = ?");
+      binds.push(status);
+    }
+    if (search) {
+      conditions.push('(LOWER(p.id) LIKE ? OR LOWER(p.content) LIKE ? OR LOWER(u.username) LIKE ?)');
+      binds.push(search, search, search);
+    }
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const rows = await c.env.DB.prepare(`
+      SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
+      FROM posts p
+      LEFT JOIN users u ON u.id = p.user_id
+      ${where}
+      ORDER BY p.created_at DESC
+      LIMIT ? OFFSET ?
+    `).bind(...binds, limit, offset).all();
+    return c.json({ results: (rows.results as any[]).map((row) => adminPostPayload(row, c.env)), pagination: { limit, offset, next_offset: offset + limit } });
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+api.get('/admin/posts/:postId', authMiddleware, async (c) => {
+  try {
+    await requireAdminRole(c, 'content:read');
+    const postId = publicId(c.req.param('postId'), 120);
+    const row: any = await c.env.DB.prepare(`
+      SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
+      FROM posts p LEFT JOIN users u ON u.id = p.user_id
+      WHERE p.id = ?
+      LIMIT 1
+    `).bind(postId).first();
+    if (!row) return c.json({ detail: 'Post not found.' }, 404);
+    return c.json({ post: adminPostPayload(row, c.env) });
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+api.post('/admin/posts/:postId/remove', authMiddleware, async (c) => {
+  try {
+    const admin = await requireAdminRole(c, 'content:write');
+    const limited = await requireAdminWriteRateLimit(c, admin, 'admin_post_remove');
+    if (limited) return limited;
+    const postId = publicId(c.req.param('postId'), 120);
+    const body: any = await c.req.json().catch(() => ({}));
+    const reason = cleanMultilineText(body.reason, 500);
+    if (!reason) return c.json({ detail: 'Reason is required.' }, 400);
+    const before: any = await c.env.DB.prepare('SELECT id, user_id, status FROM posts WHERE id = ?').bind(postId).first();
+    if (!before) return c.json({ detail: 'Post not found.' }, 404);
+    await c.env.DB.prepare("UPDATE posts SET status = 'removed', removed_at = ?, removed_reason = ? WHERE id = ?").bind(now(), reason, postId).run();
+    await writeAdminAuditLog(c, admin, { actionType: 'post_removed', targetType: 'post', targetId: postId, targetUserId: before.user_id, reason, note: body.note, beforeState: before, afterState: { status: 'removed' } });
+    return c.json({ removed: true });
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+api.post('/admin/posts/:postId/restore', authMiddleware, async (c) => {
+  try {
+    const admin = await requireAdminRole(c, 'content:write');
+    const limited = await requireAdminWriteRateLimit(c, admin, 'admin_post_restore');
+    if (limited) return limited;
+    const postId = publicId(c.req.param('postId'), 120);
+    const body: any = await c.req.json().catch(() => ({}));
+    const reason = cleanMultilineText(body.reason, 500);
+    if (!reason) return c.json({ detail: 'Reason is required.' }, 400);
+    const before: any = await c.env.DB.prepare('SELECT id, user_id, status FROM posts WHERE id = ?').bind(postId).first();
+    if (!before) return c.json({ detail: 'Post not found.' }, 404);
+    await c.env.DB.prepare("UPDATE posts SET status = 'active', removed_at = NULL, removed_reason = '' WHERE id = ?").bind(postId).run();
+    await writeAdminAuditLog(c, admin, { actionType: 'post_restored', targetType: 'post', targetId: postId, targetUserId: before.user_id, reason, note: body.note, beforeState: before, afterState: { status: 'active' } });
+    return c.json({ restored: true });
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+api.post('/admin/posts/:postId/remove-from-discover', authMiddleware, async (c) => {
+  try {
+    const admin = await requireAdminRole(c, 'content:write');
+    const limited = await requireAdminWriteRateLimit(c, admin, 'admin_post_discover_remove');
+    if (limited) return limited;
+    const postId = publicId(c.req.param('postId'), 120);
+    const body: any = await c.req.json().catch(() => ({}));
+    const reason = cleanMultilineText(body.reason, 500);
+    if (!reason) return c.json({ detail: 'Reason is required.' }, 400);
+    const before: any = await c.env.DB.prepare('SELECT id, user_id, discover_blocked_at FROM posts WHERE id = ?').bind(postId).first();
+    if (!before) return c.json({ detail: 'Post not found.' }, 404);
+    await c.env.DB.prepare('UPDATE posts SET discover_blocked_at = ?, discover_blocked_by = ?, discover_blocked_reason = ? WHERE id = ?')
+      .bind(now(), admin.userId, reason, postId).run();
+    await writeAdminAuditLog(c, admin, { actionType: 'post_removed_from_discover', targetType: 'post', targetId: postId, targetUserId: before.user_id, reason, note: body.note, beforeState: before, afterState: { discover_blocked: true } });
+    return c.json({ removed_from_discover: true });
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+api.get('/admin/comments', authMiddleware, async (c) => {
+  try {
+    await requireAdminRole(c, 'content:read');
+    await ensureAdminModerationSchema(c.env.DB);
+    const { limit, offset } = adminPageParams(c);
+    const status = cleanText(c.req.query('status') || 'all', 40);
+    const search = searchPattern(c.req.query('search'));
+    const conditions: string[] = [];
+    const binds: any[] = [];
+    if (status !== 'all') {
+      conditions.push("COALESCE(c.status, 'active') = ?");
+      binds.push(status);
+    }
+    if (search) {
+      conditions.push('(LOWER(c.id) LIKE ? OR LOWER(c.content) LIKE ? OR LOWER(u.username) LIKE ?)');
+      binds.push(search, search, search);
+    }
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const rows = await c.env.DB.prepare(`
+      SELECT c.*, p.user_id AS post_user_id, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
+      FROM comments c
+      LEFT JOIN posts p ON p.id = c.post_id
+      LEFT JOIN users u ON u.id = c.user_id
+      ${where}
+      ORDER BY c.created_at DESC
+      LIMIT ? OFFSET ?
+    `).bind(...binds, limit, offset).all();
+    return c.json({ results: (rows.results as any[]).map(adminCommentPayload), pagination: { limit, offset, next_offset: offset + limit } });
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+api.post('/admin/comments/:commentId/remove', authMiddleware, async (c) => {
+  try {
+    const admin = await requireAdminRole(c, 'content:write');
+    const limited = await requireAdminWriteRateLimit(c, admin, 'admin_comment_remove');
+    if (limited) return limited;
+    const commentId = publicId(c.req.param('commentId'), 120);
+    const body: any = await c.req.json().catch(() => ({}));
+    const reason = cleanMultilineText(body.reason, 500);
+    if (!reason) return c.json({ detail: 'Reason is required.' }, 400);
+    const before: any = await c.env.DB.prepare('SELECT id, user_id, post_id, status FROM comments WHERE id = ?').bind(commentId).first();
+    if (!before) return c.json({ detail: 'Comment not found.' }, 404);
+    await c.env.DB.prepare("UPDATE comments SET status = 'removed', removed_at = ?, removed_reason = ?, pinned_at = NULL WHERE id = ?")
+      .bind(now(), reason, commentId).run();
+    await writeAdminAuditLog(c, admin, { actionType: 'comment_removed', targetType: 'comment', targetId: commentId, targetUserId: before.user_id, reason, note: body.note, beforeState: before, afterState: { status: 'removed' } });
+    return c.json({ removed: true });
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+api.post('/admin/comments/:commentId/restore', authMiddleware, async (c) => {
+  try {
+    const admin = await requireAdminRole(c, 'content:write');
+    const limited = await requireAdminWriteRateLimit(c, admin, 'admin_comment_restore');
+    if (limited) return limited;
+    const commentId = publicId(c.req.param('commentId'), 120);
+    const body: any = await c.req.json().catch(() => ({}));
+    const reason = cleanMultilineText(body.reason, 500);
+    if (!reason) return c.json({ detail: 'Reason is required.' }, 400);
+    const before: any = await c.env.DB.prepare('SELECT id, user_id, post_id, status FROM comments WHERE id = ?').bind(commentId).first();
+    if (!before) return c.json({ detail: 'Comment not found.' }, 404);
+    await c.env.DB.prepare("UPDATE comments SET status = 'active', removed_at = NULL, removed_reason = '', hidden_at = NULL, hidden_by_user_id = '', pinned_at = NULL WHERE id = ?")
+      .bind(commentId).run();
+    await writeAdminAuditLog(c, admin, { actionType: 'comment_restored', targetType: 'comment', targetId: commentId, targetUserId: before.user_id, reason, note: body.note, beforeState: before, afterState: { status: 'active' } });
+    return c.json({ restored: true });
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+api.get('/admin/messages/reported', authMiddleware, async (c) => {
+  try {
+    await requireAdminRole(c, 'messages:reported:read');
+    await ensureAdminModerationSchema(c.env.DB);
+    const { limit, offset } = adminPageParams(c);
+    const rows = await c.env.DB.prepare(`
+      SELECT r.*, m.sender_id AS message_sender_id, m.receiver_id AS message_receiver_id, m.content AS message_content,
+             m.media_type AS message_media_type, m.status AS message_status,
+             reporter.username AS reporter_username, reporter.full_name AS reporter_full_name, reporter.profile_image AS reporter_profile_image,
+             sender.username AS target_username, sender.full_name AS target_full_name, sender.profile_image AS target_profile_image, sender.status AS target_status,
+             sender.id AS target_user_id
+      FROM reports r
+      JOIN messages m ON m.id = r.reported_id
+      LEFT JOIN users reporter ON reporter.id = r.reporter_id
+      LEFT JOIN users sender ON sender.id = m.sender_id
+      WHERE COALESCE(NULLIF(r.reported_type, ''), r.report_type, 'other') = 'message'
+      ORDER BY r.created_at DESC
+      LIMIT ? OFFSET ?
+    `).bind(limit, offset).all();
+    return c.json({ results: (rows.results as any[]).map(adminReportSummary), pagination: { limit, offset, next_offset: offset + limit } });
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+api.get('/admin/messages/reported/:reportId', authMiddleware, async (c) => {
+  try {
+    const admin = await requireAdminRole(c, 'messages:reported:read');
+    await ensureAdminModerationSchema(c.env.DB);
+    const reportId = publicId(c.req.param('reportId'), 120);
+    const report = await getAdminReportRow(c, reportId);
+    if (!report || reportTargetType(report) !== 'message') return c.json({ detail: 'Reported message not found.' }, 404);
+    const messageId = report.message_id || report.reported_id;
+    const message: any = await c.env.DB.prepare('SELECT * FROM messages WHERE id = ?').bind(messageId).first();
+    if (!message) return c.json({ detail: 'Message not found.' }, 404);
+    const context = await c.env.DB.prepare(`
+      SELECT id, sender_id, receiver_id, content, media_type, status, created_at
+      FROM messages
+      WHERE ((sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?))
+        AND datetime(created_at) BETWEEN datetime(?, '-10 minutes') AND datetime(?, '+10 minutes')
+      ORDER BY created_at ASC
+      LIMIT 12
+    `).bind(message.sender_id, message.receiver_id, message.receiver_id, message.sender_id, message.created_at, message.created_at).all();
+    await writeAdminAuditLog(c, admin, { actionType: 'reported_message_viewed', targetType: 'message', targetId: messageId, targetUserId: message.sender_id, reason: 'Safety review', note: `Report ${reportId}` });
+    return c.json({
+      report: await adminReportDetail(c, report),
+      privacy_warning: 'Reported message access is audit logged and limited to nearby context needed for safety review.',
+      context: (context.results as any[]).map((row) => ({
+        id: row.id,
+        sender_id: row.sender_id,
+        receiver_id: row.receiver_id,
+        content: cleanMultilineText(row.content, 2000),
+        media_type: cleanText(row.media_type, 40),
+        status: cleanText(row.status || 'active', 40),
+        created_at: row.created_at,
+        is_reported: row.id === messageId,
+      })),
+    });
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+api.post('/admin/messages/reported/:reportId/action', authMiddleware, async (c) => {
+  try {
+    const admin = await requireAdminRole(c, 'messages:reported:write');
+    const limited = await requireAdminWriteRateLimit(c, admin, 'admin_message_report_action');
+    if (limited) return limited;
+    const reportId = publicId(c.req.param('reportId'), 120);
+    const body: any = await c.req.json().catch(() => ({}));
+    const action = cleanText(body.action || 'remove_message', 80).toLowerCase().replace(/[\s-]+/g, '_');
+    const reason = cleanMultilineText(body.reason, 500);
+    if (!reason) return c.json({ detail: 'Reason is required.' }, 400);
+    const report = await getAdminReportRow(c, reportId);
+    if (!report || reportTargetType(report) !== 'message') return c.json({ detail: 'Reported message not found.' }, 404);
+    const messageId = report.message_id || report.reported_id;
+    if (action === 'remove_message' || action === 'remove') {
+      await c.env.DB.prepare("UPDATE messages SET status = 'removed', removed_at = ?, removed_by = ?, removed_reason = ? WHERE id = ?")
+        .bind(now(), admin.userId, reason, messageId).run();
+      await writeAdminAuditLog(c, admin, { actionType: 'reported_message_removed', targetType: 'message', targetId: messageId, targetUserId: report.message_sender_id, reason, note: body.note });
+      return setReportStatus(c, admin, reportId, 'action_taken', reason, body.note || '');
+    }
+    return setReportStatus(c, admin, reportId, action === 'dismiss' ? 'dismissed' : 'under_review', reason, body.note || '');
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+api.get('/admin/audit-logs', authMiddleware, async (c) => {
+  try {
+    await requireAdminRole(c, 'audit:read');
+    await ensureAdminModerationSchema(c.env.DB);
+    const { limit, offset } = adminPageParams(c, 80, 150);
+    const action = cleanText(c.req.query('action') || '', 80);
+    const targetType = cleanText(c.req.query('target_type') || '', 60);
+    const adminId = publicId(c.req.query('admin_id') || '', 120);
+    const conditions: string[] = [];
+    const binds: any[] = [];
+    if (action) { conditions.push('a.action_type = ?'); binds.push(action); }
+    if (targetType) { conditions.push('a.target_type = ?'); binds.push(targetType); }
+    if (adminId) { conditions.push('a.actor_admin_user_id = ?'); binds.push(adminId); }
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const rows = await c.env.DB.prepare(`
+      SELECT a.*, u.username AS admin_username, u.full_name AS admin_full_name
+      FROM audit_logs a
+      LEFT JOIN users u ON u.id = a.actor_admin_user_id
+      ${where}
+      ORDER BY a.created_at DESC
+      LIMIT ? OFFSET ?
+    `).bind(...binds, limit, offset).all();
+    return c.json({
+      results: (rows.results as any[]).map((row) => ({
+        id: row.id,
+        actor_admin_user_id: row.actor_admin_user_id,
+        actor_role: row.actor_role,
+        actor_username: publicUsernameFor({ username: row.admin_username }),
+        actor_full_name: cleanText(row.admin_full_name, 120),
+        action_type: row.action_type,
+        target_type: row.target_type,
+        target_id: row.target_id,
+        target_user_id: row.target_user_id || '',
+        reason: cleanMultilineText(row.reason, 500),
+        internal_note: cleanMultilineText(row.internal_note, 800),
+        before_state: parseJsonObject(row.before_state),
+        after_state: parseJsonObject(row.after_state),
+        request_id: row.request_id || '',
+        created_at: row.created_at,
+      })),
+      pagination: { limit, offset, next_offset: offset + limit },
+    });
   } catch (error: any) {
     return governanceError(c, error);
   }
@@ -11736,10 +13132,8 @@ api.delete('/admin/creators/:creatorId/badge', authMiddleware, async (c) => {
 
 // Helper: check admin
 const requireAdmin = async (c: any) => {
-  const userId = getUserId(c);
-  const admin: any = await c.env.DB.prepare('SELECT is_admin FROM users WHERE id = ?').bind(userId).first();
-  if (!admin?.is_admin) throw new Error('FORBIDDEN');
-  return userId;
+  const admin = await requireAdminRole(c, 'admin:read');
+  return admin.userId;
 };
 
 api.post('/admin/supabase/transfer', authMiddleware, async (c) => {
