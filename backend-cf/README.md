@@ -23,7 +23,8 @@ Backend stack: Hono + D1 + Cloudflare Images/Stream.
    - `CLOUDFLARE_IMAGES_TOKEN`
    - `CLOUDFLARE_STREAM_TOKEN`
    - `MAPBOX_ACCESS_TOKEN`
-   - `OWNER_USERNAMES` (comma-separated usernames that can use creator actions before phone verification)
+   - `OWNER_EMAILS` (comma-separated verified account emails that receive owner admin role)
+   - `OWNER_USERNAMES` (comma-separated usernames that receive owner admin role)
    - `GOOGLE_OAUTH_CLIENT_IDS` (comma-separated Google client IDs)
    - `APPLE_OAUTH_AUDIENCES` (comma-separated Apple audiences, bundle/service IDs)
    - `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_VERIFY_SERVICE_SID` for Twilio Verify phone codes
@@ -106,7 +107,7 @@ Admin roles:
 - `support`
 - `viewer`
 
-Existing `users.is_admin = 1` accounts are treated as `admin`. Usernames listed in `OWNER_USERNAMES` are treated as `owner`. Use the `admin_roles` table for explicit lower-privilege roles.
+Existing `users.is_admin = 1` accounts are treated as `admin`. Emails listed in `OWNER_EMAILS` and usernames listed in `OWNER_USERNAMES` are treated as `owner`. Use the `admin_roles` table for explicit lower-privilege roles.
 
 Important endpoints:
 

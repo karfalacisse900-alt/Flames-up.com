@@ -22,6 +22,7 @@ interface Env {
   ENVIRONMENT?: string;
   FRONTEND_URL: string;
   OWNER_USERNAMES?: string;
+  OWNER_EMAILS?: string;
   GOOGLE_OAUTH_CLIENT_ID?: string;
   GOOGLE_OAUTH_CLIENT_IDS?: string;
   SUPABASE_URL?: string;
@@ -4882,17 +4883,29 @@ function ownerUsernames(c: any): string[] {
     .filter(Boolean);
 }
 
+function ownerEmails(c: any): string[] {
+  return String(c.env.OWNER_EMAILS || '')
+    .split(',')
+    .map((value) => normalizeOptionalEmail(value))
+    .filter(Boolean);
+}
+
 function isOwnerUsername(c: any, username: unknown): boolean {
   const clean = String(username || '').replace(/^@/, '').trim().toLowerCase();
   return !!clean && ownerUsernames(c).includes(clean);
 }
 
+function isOwnerEmail(c: any, email: unknown): boolean {
+  const clean = normalizeOptionalEmail(email);
+  return !!clean && ownerEmails(c).includes(clean);
+}
+
 async function requireOwnerOrAdmin(c: any): Promise<any> {
   const userId = getUserId(c);
-  const user: any = await c.env.DB.prepare('SELECT id, username, full_name, is_admin FROM users WHERE id = ?')
+  const user: any = await c.env.DB.prepare('SELECT id, email, username, full_name, is_admin FROM users WHERE id = ?')
     .bind(userId)
     .first();
-  if (!user?.is_admin && !isOwnerUsername(c, user?.username)) {
+  if (!user?.is_admin && !isOwnerUsername(c, user?.username) && !isOwnerEmail(c, user?.email)) {
     throw new Error('FORBIDDEN');
   }
   return user;
@@ -10142,7 +10155,7 @@ async function getAdminContext(c: any): Promise<AdminContext | null> {
   let role = normalizeAdminRole(user.admin_role);
   const roleRow: any = await c.env.DB.prepare('SELECT role FROM admin_roles WHERE user_id = ?').bind(userId).first();
   role = normalizeAdminRole(roleRow?.role) || role;
-  if (isOwnerUsername(c, user.username)) role = 'owner';
+  if (isOwnerUsername(c, user.username) || isOwnerEmail(c, user.email)) role = 'owner';
   if (!role && Number(user.is_admin || 0) === 1) role = 'admin';
   if (!role) return null;
   return { userId, role, user };
