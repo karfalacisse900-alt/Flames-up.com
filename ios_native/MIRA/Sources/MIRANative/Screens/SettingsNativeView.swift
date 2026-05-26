@@ -285,6 +285,7 @@ public struct SettingsNativeView: View {
     .miraScreenEnter(.push)
     .navigationTitle("Settings")
     .navigationBarTitleDisplayMode(.inline)
+    .toolbar(.hidden, for: .tabBar)
     .task { await model.load() }
   }
 
