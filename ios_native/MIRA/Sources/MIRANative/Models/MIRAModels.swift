@@ -71,6 +71,9 @@ public struct MIRAUser: Codable, Identifiable, Hashable {
   public let followingCount: Int?
   public let postsCount: Int?
   public let isFollowing: Bool?
+  public let viewerHasBlocked: Bool?
+  public let viewerBlockedBy: Bool?
+  public let privacyLocked: Bool?
   public let isPrivate: Bool?
   public let isPremium: Bool?
   public let language: String?
@@ -600,6 +603,9 @@ public struct MIRAComment: Decodable, Identifiable, Hashable {
           followingCount: nil,
           postsCount: nil,
           isFollowing: nil,
+          viewerHasBlocked: nil,
+          viewerBlockedBy: nil,
+          privacyLocked: nil,
           isPrivate: nil,
           isPremium: nil,
           language: nil

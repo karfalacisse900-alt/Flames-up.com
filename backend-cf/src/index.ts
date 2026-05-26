@@ -6294,6 +6294,13 @@ api.get('/users/:userId', authMiddleware, async (c) => {
   const follow: any = viewerId && viewerId !== targetUserId
     ? await c.env.DB.prepare('SELECT id FROM follows WHERE follower_id = ? AND following_id = ? LIMIT 1').bind(viewerId, targetUserId).first()
     : null;
+  const block: any = viewerId && viewerId !== targetUserId
+    ? await c.env.DB.prepare('SELECT blocker_id, blocked_id FROM blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?) LIMIT 1')
+      .bind(viewerId, targetUserId, targetUserId, viewerId)
+      .first()
+    : null;
+  const viewerHasBlocked = block?.blocker_id === viewerId && block?.blocked_id === targetUserId;
+  const viewerBlockedBy = block?.blocker_id === targetUserId && block?.blocked_id === viewerId;
   const canView = await canViewUserContent(c.env.DB, viewerId, user);
   if (!canView) {
     return c.json({
@@ -6305,11 +6312,13 @@ api.get('/users/:userId', authMiddleware, async (c) => {
       following_count: safe.following_count,
       posts_count: safe.posts_count,
       is_following: !!follow,
+      viewer_has_blocked: viewerHasBlocked,
+      viewer_blocked_by: viewerBlockedBy,
       is_private: true,
       privacy_locked: true,
     });
   }
-  return c.json({ ...safe, is_following: !!follow });
+  return c.json({ ...safe, is_following: !!follow, viewer_has_blocked: viewerHasBlocked, viewer_blocked_by: viewerBlockedBy });
 });
 
 api.post('/users/:userId/follow', authMiddleware, async (c) => {

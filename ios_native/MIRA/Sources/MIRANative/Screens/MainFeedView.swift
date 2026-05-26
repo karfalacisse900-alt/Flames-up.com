@@ -262,6 +262,8 @@ final class MainFeedModel: ObservableObject {
   }
 
   func canFollowAuthor(_ post: MIRAPost) -> Bool {
+    if post.viewerFollowing { return false }
+
     if currentUserId == nil && currentUsername == nil {
       Task { await loadCurrentUserIfNeeded() }
       return false
@@ -796,7 +798,6 @@ private struct MainNativePostCard: View {
   @State private var selectedMediaIndex = 0
   @State private var isShowingCaption = false
   @State private var measuredCardWidth = UIScreen.main.bounds.width
-  @GestureState private var isPostMenuPressed = false
 
   private var mediaHeight: CGFloat {
     return MIRAMediaSizing.mainFeedHeight(
@@ -1157,17 +1158,8 @@ private struct MainNativePostCard: View {
         .clipShape(Circle())
         .overlay(Circle().stroke(MIRATheme.Color.hairline, lineWidth: 1))
         .contentShape(Circle())
-        .scaleEffect(isPostMenuPressed ? 0.90 : 1)
-        .rotationEffect(.degrees(isPostMenuPressed ? 8 : 0))
-        .shadow(color: .black.opacity(isPostMenuPressed ? 0.10 : 0.03), radius: isPostMenuPressed ? 8 : 4, x: 0, y: isPostMenuPressed ? 3 : 1)
-        .animation(.spring(response: 0.18, dampingFraction: 0.68), value: isPostMenuPressed)
+        .shadow(color: .black.opacity(0.03), radius: 4, x: 0, y: 1)
     }
-    .simultaneousGesture(
-      DragGesture(minimumDistance: 0)
-        .updating($isPostMenuPressed) { _, state, _ in
-          state = true
-        }
-    )
     .buttonStyle(.miraPress)
   }
 
