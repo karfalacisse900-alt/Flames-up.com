@@ -229,6 +229,32 @@ final class ConversationNativeModel: ObservableObject {
     }
   }
 
+  func deleteForMe(_ message: MIRAMessage) {
+    messages.removeAll { $0.id == message.id }
+    let snapshot = messages
+    Task { await MIRALocalJSONCache.save(snapshot, key: messagesCacheKey) }
+  }
+
+  func removeMessages(byUserId userId: String) {
+    messages.removeAll { $0.senderId == userId || $0.receiverId == userId }
+    let snapshot = messages
+    Task { await MIRALocalJSONCache.save(snapshot, key: messagesCacheKey) }
+  }
+
+  func blockPeer() async -> Bool {
+    guard let peerId, !peerId.isEmpty else { return false }
+    do {
+      let _: EmptyResponse? = try await api.post("/users/\(peerId)/block", body: EmptyBody())
+      messages = []
+      await MIRALocalJSONCache.save(messages, key: messagesCacheKey)
+      errorMessage = nil
+      return true
+    } catch {
+      errorMessage = "Could not block this user. Try again in a moment."
+      return false
+    }
+  }
+
   @discardableResult
   private func send(content: String, mediaUrl: String?, mediaType: String?) async -> Bool {
     guard !isSending else { return false }
@@ -272,6 +298,9 @@ public struct ConversationNativeView: View {
   @State private var showFileImporter = false
   @State private var showGIFPicker = false
   @State private var showAttachmentTray = false
+  @State private var reportTarget: MIRAReportTarget?
+  @State private var reportMessage: MIRAMessage?
+  @State private var isReportSheetPresented = false
   @Environment(\.dismiss) private var dismiss
   private let title: String
 
@@ -329,6 +358,26 @@ public struct ConversationNativeView: View {
       ChatGIFPickerSheet(api: model.api, onClose: dismissGIFPicker) { gif in
         dismissGIFPicker()
         Task { await model.sendGIF(gif) }
+      }
+    }
+    .miraBottomSheet(
+      isPresented: $isReportSheetPresented,
+      preferredHeightFraction: 0.78,
+      maxHeight: 700,
+      onDismissed: {
+        reportTarget = nil
+        reportMessage = nil
+      }
+    ) { dismissReport in
+      if let reportTarget {
+        MIRAReportSheet(
+          target: reportTarget,
+          api: model.api,
+          onSubmitted: { result in handleReportResult(result) },
+          onClose: dismissReport
+        )
+      } else {
+        Color.clear
       }
     }
     .fileImporter(isPresented: $showFileImporter, allowedContentTypes: [.item], allowsMultipleSelection: false) { result in
@@ -396,6 +445,16 @@ public struct ConversationNativeView: View {
           } label: {
             Label("Video Call", systemImage: "video.fill")
           }
+          Button(role: .destructive) {
+            presentProfileReport()
+          } label: {
+            Label("Report profile", systemImage: "flag")
+          }
+          Button(role: .destructive) {
+            Task { _ = await model.blockPeer() }
+          } label: {
+            Label("Block user", systemImage: "hand.raised")
+          }
         } else {
           Text("Group chat")
         }
@@ -433,6 +492,45 @@ public struct ConversationNativeView: View {
         peerName: title,
         peerAvatar: peerAvatarURL
       )
+    }
+  }
+
+  private func presentProfileReport() {
+    guard let peerId = model.peerId, !peerId.isEmpty else { return }
+    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+    reportMessage = nil
+    reportTarget = MIRAReportTarget(
+      targetType: "profile",
+      targetId: peerId,
+      ownerUserId: peerId,
+      title: "Report profile",
+      subtitle: title
+    )
+    withAnimation(.spring(response: 0.30, dampingFraction: 0.90)) {
+      isReportSheetPresented = true
+    }
+  }
+
+  private func presentReport(for message: MIRAMessage) {
+    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+    reportMessage = message
+    reportTarget = MIRAReportTarget(
+      targetType: "message",
+      targetId: message.id,
+      ownerUserId: message.senderId,
+      title: "Report message",
+      subtitle: message.content?.isEmpty == false ? message.content : "Media message"
+    )
+    withAnimation(.spring(response: 0.30, dampingFraction: 0.90)) {
+      isReportSheetPresented = true
+    }
+  }
+
+  private func handleReportResult(_ result: MIRAReportResult) {
+    if result.blocked, let peerId = model.peerId {
+      model.removeMessages(byUserId: peerId)
+    } else if result.hidden, let reportMessage {
+      model.deleteForMe(reportMessage)
     }
   }
 
@@ -478,6 +576,25 @@ public struct ConversationNativeView: View {
       if !outgoing { Spacer(minLength: 68) }
     }
     .transition(.move(edge: .bottom).combined(with: .opacity))
+    .contextMenu {
+      if !outgoing {
+        Button(role: .destructive) {
+          presentReport(for: message)
+        } label: {
+          Label("Report message", systemImage: "flag")
+        }
+        Button(role: .destructive) {
+          Task { _ = await model.blockPeer() }
+        } label: {
+          Label("Block user", systemImage: "hand.raised")
+        }
+      }
+      Button(role: .destructive) {
+        model.deleteForMe(message)
+      } label: {
+        Label("Delete for me", systemImage: "trash")
+      }
+    }
   }
 
   private var bubbleMaxWidth: CGFloat {

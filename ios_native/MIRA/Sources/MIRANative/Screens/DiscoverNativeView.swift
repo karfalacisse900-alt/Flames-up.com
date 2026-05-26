@@ -136,6 +136,27 @@ final class DiscoverNativeModel: ObservableObject {
     Task { await MIRALocalJSONCache.save(snapshot, key: postsCacheKey) }
   }
 
+  func hidePosts(byUserId userId: String) {
+    posts.removeAll { $0.userId == userId }
+    let snapshot = posts
+    Task { await MIRALocalJSONCache.save(snapshot, key: postsCacheKey) }
+  }
+
+  func blockAuthor(_ post: MIRAPost) async {
+    guard let userId = post.userId, !userId.isEmpty else { return }
+    let previous = posts
+    posts.removeAll { $0.userId == userId }
+    do {
+      let _: EmptyResponse? = try await api.post("/users/\(userId)/block", body: EmptyBody())
+      let snapshot = posts
+      Task { await MIRALocalJSONCache.save(snapshot, key: postsCacheKey) }
+      errorMessage = nil
+    } catch {
+      posts = previous
+      errorMessage = "Could not block this user. Try again in a moment."
+    }
+  }
+
   func reportPost(_ post: MIRAPost) async {
     do {
       let _: EmptyResponse? = try await api.post(
@@ -177,6 +198,9 @@ public struct DiscoverNativeView: View {
   @StateObject private var model: DiscoverNativeModel
   @State private var selectedStoryGroup: MIRAStoryGroup?
   @State private var selectedGalleryFilter = "all"
+  @State private var reportTarget: MIRAReportTarget?
+  @State private var reportSourcePost: MIRAPost?
+  @State private var isReportSheetPresented = false
 
   public init(api: MIRAAPIClient) {
     _model = StateObject(wrappedValue: DiscoverNativeModel(api: api))
@@ -210,13 +234,68 @@ public struct DiscoverNativeView: View {
       .toolbar(selectedStoryGroup == nil ? .visible : .hidden, for: .tabBar)
       .task { await model.load() }
       .miraFullScreenOverlay(item: $selectedStoryGroup, background: .black) { group, dismissStory in
-        StoryViewerNativeView(group: group, api: model.api, onClose: dismissStory)
+        StoryViewerNativeView(
+          group: group,
+          api: model.api,
+          onClose: dismissStory,
+          onReportStory: { target in
+            dismissStory()
+            DispatchQueue.main.asyncAfter(deadline: .now() + MIRATransitionTiming.fullScreenClose) {
+              reportSourcePost = nil
+              reportTarget = target
+              isReportSheetPresented = true
+            }
+          }
+        )
+      }
+      .miraBottomSheet(
+        isPresented: $isReportSheetPresented,
+        preferredHeightFraction: 0.78,
+        maxHeight: 700,
+        onDismissed: {
+          reportTarget = nil
+          reportSourcePost = nil
+        }
+      ) { dismissReport in
+        if let reportTarget {
+          MIRAReportSheet(
+            target: reportTarget,
+            api: model.api,
+            onSubmitted: { result in handleReportResult(result) },
+            onClose: dismissReport
+          )
+        } else {
+          Color.clear
+        }
       }
     }
   }
 
   private func openStoryViewer(_ group: MIRAStoryGroup) {
     selectedStoryGroup = group
+  }
+
+  private func presentReport(for post: MIRAPost) {
+    reportSourcePost = post
+    reportTarget = MIRAReportTarget(
+      targetType: "post",
+      targetId: post.id,
+      ownerUserId: post.userId,
+      title: "Report post",
+      subtitle: post.titleText
+    )
+    withAnimation(.spring(response: 0.30, dampingFraction: 0.90)) {
+      isReportSheetPresented = true
+    }
+  }
+
+  private func handleReportResult(_ result: MIRAReportResult) {
+    guard let post = reportSourcePost else { return }
+    if result.blocked, let userId = post.userId {
+      model.hidePosts(byUserId: userId)
+    } else if result.hidden {
+      model.hidePost(post)
+    }
   }
 
   private var discoverHeader: some View {
@@ -254,28 +333,62 @@ public struct DiscoverNativeView: View {
       } else {
         LazyVGrid(columns: galleryGridColumns, spacing: 1) {
           ForEach(filteredGalleryPosts) { post in
-            NavigationLink(destination: PostDetailNativeView(post: post, api: model.api)) {
-              DiscoverPostGalleryTile(post: post)
-            }
-            .buttonStyle(.plain)
-            .contextMenu {
-              Button(role: .destructive) {
-                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                Task { await model.reportPost(post) }
-              } label: {
-                Label("Report", systemImage: "flag")
+            ZStack(alignment: .topTrailing) {
+              NavigationLink(destination: PostDetailNativeView(post: post, api: model.api)) {
+                DiscoverPostGalleryTile(post: post)
               }
+              .buttonStyle(.plain)
 
-              Button {
-                UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                model.hidePost(post)
+              Menu {
+                discoverPostActions(post)
               } label: {
-                Label("Not interested", systemImage: "eye.slash")
+                Image(systemName: "ellipsis")
+                  .font(.system(size: 13, weight: .bold))
+                  .foregroundStyle(.white)
+                  .frame(width: 28, height: 28)
+                  .background(.black.opacity(0.38))
+                  .clipShape(Circle())
               }
+              .buttonStyle(.miraPress)
+              .padding(6)
+            }
+            .contextMenu {
+              discoverPostActions(post)
             }
           }
         }
       }
+    }
+  }
+
+  @ViewBuilder
+  private func discoverPostActions(_ post: MIRAPost) -> some View {
+    Button(role: .destructive) {
+      UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+      presentReport(for: post)
+    } label: {
+      Label("Report", systemImage: "flag")
+    }
+
+    Button(role: .destructive) {
+      UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+      Task { await model.blockAuthor(post) }
+    } label: {
+      Label("Block user", systemImage: "hand.raised")
+    }
+
+    Button {
+      UIImpactFeedbackGenerator(style: .light).impactOccurred()
+      model.hidePost(post)
+    } label: {
+      Label("Hide this post", systemImage: "eye.slash")
+    }
+
+    Button {
+      UIImpactFeedbackGenerator(style: .light).impactOccurred()
+      model.hidePost(post)
+    } label: {
+      Label("Not interested", systemImage: "hand.thumbsdown")
     }
   }
 
@@ -386,6 +499,7 @@ private struct StoryViewerNativeView: View {
   let group: MIRAStoryGroup
   let api: MIRAAPIClient
   let onClose: () -> Void
+  let onReportStory: (MIRAReportTarget) -> Void
   @State private var selectedIndex = 0
   @State private var localStories: [MIRAStatusPreview]?
   @State private var currentUserId: String?
@@ -455,6 +569,13 @@ private struct StoryViewerNativeView: View {
       if currentUserId == group.userId {
         Button("Delete story", role: .destructive) {
           Task { await deleteCurrentStory() }
+        }
+      } else {
+        Button("Report story", role: .destructive) {
+          reportCurrentStory()
+        }
+        Button("Block user", role: .destructive) {
+          Task { await blockStoryOwner() }
         }
       }
       Button("Cancel", role: .cancel) {}
@@ -649,6 +770,26 @@ private struct StoryViewerNativeView: View {
     } catch {
       // Keep the story visible if the backend rejects the delete.
     }
+  }
+
+  private func reportCurrentStory() {
+    guard let story = currentStory else { return }
+    onReportStory(
+      MIRAReportTarget(
+        targetType: "story",
+        targetId: story.id,
+        ownerUserId: story.userId ?? group.userId,
+        title: "Report story",
+        subtitle: story.content?.isEmpty == false ? story.content : group.displayName
+      )
+    )
+  }
+
+  private func blockStoryOwner() async {
+    let ownerId = currentStory?.userId ?? group.userId
+    guard !ownerId.isEmpty, ownerId != currentUserId else { return }
+    let _: EmptyResponse? = try? await api.post("/users/\(ownerId)/block", body: EmptyBody())
+    closeStoryViewer()
   }
 
   private func closeStoryViewer() {

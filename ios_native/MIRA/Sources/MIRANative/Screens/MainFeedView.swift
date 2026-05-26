@@ -288,6 +288,25 @@ final class MainFeedModel: ObservableObject {
     cacheCurrentPosts()
   }
 
+  func hidePosts(byUserId userId: String) {
+    posts.removeAll { $0.userId == userId }
+    cacheCurrentPosts()
+  }
+
+  func blockAuthor(_ post: MIRAPost) async {
+    guard let userId = post.userId, !userId.isEmpty else { return }
+    let previous = posts
+    posts.removeAll { $0.userId == userId }
+    do {
+      let _: EmptyResponse? = try await api.post("/users/\(userId)/block", body: EmptyBody())
+      cacheCurrentPosts()
+      errorMessage = nil
+    } catch {
+      posts = previous
+      errorMessage = "Could not block this user. Try again in a moment."
+    }
+  }
+
   func reportPost(_ post: MIRAPost) async {
     do {
       let _: EmptyResponse? = try await api.post(
@@ -442,6 +461,9 @@ public struct MainFeedView: View {
   @State private var isCommentsPresented = false
   @State private var saveTargetPost: MIRAPost?
   @State private var isSaveSheetPresented = false
+  @State private var reportTarget: MIRAReportTarget?
+  @State private var reportSourcePost: MIRAPost?
+  @State private var isReportSheetPresented = false
 
   public init(api: MIRAAPIClient) {
     _model = StateObject(wrappedValue: MainFeedModel(api: api))
@@ -478,7 +500,8 @@ public struct MainFeedView: View {
                   onFollow: { Task { await model.toggleFollowAuthor(post) } },
                   onPin: { Task { await model.togglePin(post) } },
                   onNotInterested: { model.hidePost(post) },
-                  onReport: { Task { await model.reportPost(post) } },
+                  onReport: { presentReport(for: post) },
+                  onBlockAuthor: { Task { await model.blockAuthor(post) } },
                   canFollowAuthor: model.canFollowAuthor(post),
                   canDelete: model.canDelete(post),
                   onDelete: { Task { await model.deletePost(post) } },
@@ -526,7 +549,21 @@ public struct MainFeedView: View {
         onDismissed: { activeCommentsPost = nil }
       ) { dismiss in
         if let post = activeCommentsPost {
-          MainFeedCommentsSheet(post: post, api: model.api, onClose: dismiss)
+          MainFeedCommentsSheet(
+            post: post,
+            api: model.api,
+            onClose: dismiss,
+            onReportComment: { comment in
+              dismiss()
+              DispatchQueue.main.asyncAfter(deadline: .now() + MIRATransitionTiming.sheetClose) {
+                presentReport(for: comment)
+              }
+            },
+            onBlockCommentUser: { comment in
+              dismiss()
+              Task { await blockCommentAuthor(comment) }
+            }
+          )
         } else {
           Color.clear
         }
@@ -552,6 +589,26 @@ public struct MainFeedView: View {
                 dismiss()
               }
             },
+            onClose: dismiss
+          )
+        } else {
+          Color.clear
+        }
+      }
+      .miraBottomSheet(
+        isPresented: $isReportSheetPresented,
+        preferredHeightFraction: 0.78,
+        maxHeight: 700,
+        onDismissed: {
+          reportTarget = nil
+          reportSourcePost = nil
+        }
+      ) { dismiss in
+        if let target = reportTarget {
+          MIRAReportSheet(
+            target: target,
+            api: model.api,
+            onSubmitted: { result in handleReportResult(result) },
             onClose: dismiss
           )
         } else {
@@ -645,6 +702,54 @@ public struct MainFeedView: View {
     }
   }
 
+  private func presentReport(for post: MIRAPost) {
+    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+    reportSourcePost = post
+    reportTarget = MIRAReportTarget(
+      targetType: "post",
+      targetId: post.id,
+      ownerUserId: post.userId,
+      title: "Report post",
+      subtitle: post.titleText
+    )
+    withAnimation(.spring(response: 0.30, dampingFraction: 0.90)) {
+      isReportSheetPresented = true
+    }
+  }
+
+  private func presentReport(for comment: MIRAComment) {
+    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+    reportTarget = MIRAReportTarget(
+      targetType: "comment",
+      targetId: comment.id,
+      ownerUserId: comment.userId,
+      title: "Report comment",
+      subtitle: comment.text
+    )
+    withAnimation(.spring(response: 0.30, dampingFraction: 0.90)) {
+      isReportSheetPresented = true
+    }
+  }
+
+  private func handleReportResult(_ result: MIRAReportResult) {
+    guard let post = reportSourcePost else { return }
+    if result.blocked, let userId = post.userId {
+      model.hidePosts(byUserId: userId)
+    } else if result.hidden {
+      model.hidePost(post)
+    }
+  }
+
+  private func blockCommentAuthor(_ comment: MIRAComment) async {
+    guard let userId = comment.userId, !userId.isEmpty else { return }
+    do {
+      let _: EmptyResponse? = try await model.api.post("/users/\(userId)/block", body: EmptyBody())
+      model.hidePosts(byUserId: userId)
+    } catch {
+      model.errorMessage = "Could not block this user. Try again in a moment."
+    }
+  }
+
   private var mainHeader: some View {
     HStack(spacing: MIRATheme.Space.sm) {
       Spacer()
@@ -682,6 +787,7 @@ private struct MainNativePostCard: View {
   let onPin: () -> Void
   let onNotInterested: () -> Void
   let onReport: () -> Void
+  let onBlockAuthor: () -> Void
   let canFollowAuthor: Bool
   let canDelete: Bool
   let onDelete: () -> Void
@@ -1100,18 +1206,32 @@ private struct MainNativePostCard: View {
         Label("Delete post", systemImage: "trash")
       }
     } else {
-      Button {
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        onNotInterested()
-      } label: {
-        Label("Not interested", systemImage: "eye.slash")
-      }
-
       Button(role: .destructive) {
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         onReport()
       } label: {
         Label("Report", systemImage: "flag")
+      }
+
+      Button(role: .destructive) {
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        onBlockAuthor()
+      } label: {
+        Label("Block user", systemImage: "hand.raised")
+      }
+
+      Button {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        onNotInterested()
+      } label: {
+        Label("Hide this post", systemImage: "eye.slash")
+      }
+
+      Button {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        onNotInterested()
+      } label: {
+        Label("Not interested", systemImage: "hand.thumbsdown")
       }
     }
   }
@@ -1139,10 +1259,20 @@ private struct MainFeedCommentsSheet: View {
   @State private var replyingTo: MIRAComment?
   @FocusState private var isReplyFocused: Bool
   let onClose: () -> Void
+  let onReportComment: (MIRAComment) -> Void
+  let onBlockCommentUser: (MIRAComment) -> Void
 
-  init(post: MIRAPost, api: MIRAAPIClient, onClose: @escaping () -> Void) {
+  init(
+    post: MIRAPost,
+    api: MIRAAPIClient,
+    onClose: @escaping () -> Void,
+    onReportComment: @escaping (MIRAComment) -> Void,
+    onBlockCommentUser: @escaping (MIRAComment) -> Void
+  ) {
     _model = StateObject(wrappedValue: PostDetailModel(post: post, api: api))
     self.onClose = onClose
+    self.onReportComment = onReportComment
+    self.onBlockCommentUser = onBlockCommentUser
   }
 
   var body: some View {
@@ -1176,7 +1306,10 @@ private struct MainFeedCommentsSheet: View {
                   Task { await model.toggleCommentPin(comment) }
                 },
                 onReport: {
-                  Task { await model.reportComment(comment) }
+                  onReportComment(comment)
+                },
+                onBlockUser: {
+                  onBlockCommentUser(comment)
                 },
                 onDelete: {
                   Task { await model.deleteComment(comment) }
@@ -1357,6 +1490,7 @@ private struct MainFeedCommentRow: View {
   let onLike: () -> Void
   let onPin: () -> Void
   let onReport: () -> Void
+  let onBlockUser: () -> Void
   let onDelete: () -> Void
   let onHide: () -> Void
 
@@ -1459,6 +1593,9 @@ private struct MainFeedCommentRow: View {
           Label("Delete comment", systemImage: "trash")
         }
       } else {
+        Button(role: .destructive, action: onBlockUser) {
+          Label("Block user", systemImage: "hand.raised")
+        }
         Button(role: .destructive, action: onReport) {
           Label("Report comment", systemImage: "flag")
         }

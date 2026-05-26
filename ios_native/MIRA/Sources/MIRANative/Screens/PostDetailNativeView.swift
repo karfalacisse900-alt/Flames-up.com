@@ -137,6 +137,22 @@ final class PostDetailModel: ObservableObject {
     } catch {}
   }
 
+  func removeCommentLocally(_ comment: MIRAComment) {
+    comments.removeAll { $0.id == comment.id }
+  }
+
+  func removeComments(byUserId userId: String) {
+    comments.removeAll { $0.userId == userId }
+  }
+
+  func blockCommentAuthor(_ comment: MIRAComment) async {
+    guard let userId = comment.userId, !userId.isEmpty else { return }
+    do {
+      let _: EmptyResponse? = try await api.post("/users/\(userId)/block", body: EmptyBody())
+      removeComments(byUserId: userId)
+    } catch {}
+  }
+
   func toggleLike() async {
     let previous = post
     let nextLiked = !(post.isLiked ?? false)
@@ -244,6 +260,9 @@ public struct PostDetailNativeView: View {
   @State private var isSendingComment = false
   @State private var replyingTo: MIRAComment?
   @State private var isSaveSheetPresented = false
+  @State private var reportTarget: MIRAReportTarget?
+  @State private var reportComment: MIRAComment?
+  @State private var isReportSheetPresented = false
   @FocusState private var isCommentFocused: Bool
   private var mediaHeight: CGFloat {
     let maxHeight = max(300, UIScreen.main.bounds.height * 0.48)
@@ -344,7 +363,10 @@ public struct PostDetailNativeView: View {
                       Task { await model.toggleCommentPin(comment) }
                     },
                     onReport: {
-                      Task { await model.reportComment(comment) }
+                      presentReport(for: comment)
+                    },
+                    onBlockUser: {
+                      Task { await model.blockCommentAuthor(comment) }
                     },
                     onDelete: {
                       Task { await model.deleteComment(comment) }
@@ -392,9 +414,53 @@ public struct PostDetailNativeView: View {
         onClose: dismissSheet
       )
     }
+    .miraBottomSheet(
+      isPresented: $isReportSheetPresented,
+      preferredHeightFraction: 0.78,
+      maxHeight: 700,
+      onDismissed: {
+        reportTarget = nil
+        reportComment = nil
+      }
+    ) { dismissSheet in
+      if let reportTarget {
+        MIRAReportSheet(
+          target: reportTarget,
+          api: model.api,
+          onSubmitted: { result in handleReportResult(result) },
+          onClose: dismissSheet
+        )
+      } else {
+        Color.clear
+      }
+    }
     .task {
       await model.refreshPost()
       await model.loadComments()
+    }
+  }
+
+  private func presentReport(for comment: MIRAComment) {
+    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+    reportComment = comment
+    reportTarget = MIRAReportTarget(
+      targetType: "comment",
+      targetId: comment.id,
+      ownerUserId: comment.userId,
+      title: "Report comment",
+      subtitle: comment.text
+    )
+    withAnimation(.spring(response: 0.30, dampingFraction: 0.90)) {
+      isReportSheetPresented = true
+    }
+  }
+
+  private func handleReportResult(_ result: MIRAReportResult) {
+    guard let reportComment else { return }
+    if result.blocked, let userId = reportComment.userId {
+      model.removeComments(byUserId: userId)
+    } else if result.hidden {
+      model.removeCommentLocally(reportComment)
     }
   }
 
@@ -588,6 +654,7 @@ private struct CommentRow: View {
   let onLike: () -> Void
   let onPin: () -> Void
   let onReport: () -> Void
+  let onBlockUser: () -> Void
   let onDelete: () -> Void
   let onHide: () -> Void
 
@@ -688,6 +755,9 @@ private struct CommentRow: View {
           Label("Delete comment", systemImage: "trash")
         }
       } else {
+        Button(role: .destructive, action: onBlockUser) {
+          Label("Block user", systemImage: "hand.raised")
+        }
         Button(role: .destructive, action: onReport) {
           Label("Report comment", systemImage: "flag")
         }

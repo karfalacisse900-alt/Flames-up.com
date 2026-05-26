@@ -288,6 +288,7 @@ final class UserProfileNativeModel: ObservableObject {
   @Published var isFollowing = false
   @Published var followersCount = 0
   @Published var isLoading = false
+  @Published var errorMessage: String?
   let userId: String
   let api: MIRAAPIClient
   private var userCacheKey: String { "native.profile.user.\(userId).v2" }
@@ -334,6 +335,18 @@ final class UserProfileNativeModel: ObservableObject {
     }
   }
 
+  func blockUser() async -> Bool {
+    do {
+      let _: EmptyResponse? = try await api.post("/users/\(userId)/block", body: EmptyBody())
+      posts = []
+      errorMessage = nil
+      return true
+    } catch {
+      errorMessage = "Could not block this user. Try again in a moment."
+      return false
+    }
+  }
+
   private func apply(user freshUser: MIRAUser) {
     user = freshUser
     isFollowing = freshUser.viewerFollowing
@@ -343,6 +356,8 @@ final class UserProfileNativeModel: ObservableObject {
 
 public struct UserProfileNativeView: View {
   @StateObject private var model: UserProfileNativeModel
+  @State private var reportTarget: MIRAReportTarget?
+  @State private var isReportSheetPresented = false
   private var gridTileSize: CGFloat {
     floor((UIScreen.main.bounds.width - 2) / 3)
   }
@@ -384,11 +399,36 @@ public struct UserProfileNativeView: View {
     .navigationTitle(model.user?.displayName ?? "Profile")
     .navigationBarTitleDisplayMode(.inline)
     .task { await model.load() }
+    .miraBottomSheet(
+      isPresented: $isReportSheetPresented,
+      preferredHeightFraction: 0.78,
+      maxHeight: 700,
+      onDismissed: { reportTarget = nil }
+    ) { dismissReport in
+      if let reportTarget {
+        MIRAReportSheet(
+          target: reportTarget,
+          api: model.api,
+          onSubmitted: { result in
+            if result.blocked {
+              model.posts = []
+            }
+          },
+          onClose: dismissReport
+        )
+      } else {
+        Color.clear
+      }
+    }
   }
 
   private var profileHeader: some View {
     VStack(spacing: MIRATheme.Space.md) {
-      RemoteAvatar(url: model.user?.profileImage, size: 92)
+      ZStack(alignment: .topTrailing) {
+        RemoteAvatar(url: model.user?.profileImage, size: 92)
+          .frame(maxWidth: .infinity)
+        profileSafetyMenu
+      }
       VStack(spacing: 4) {
         Text(profileTitle)
           .font(.system(size: 24, weight: .semibold))
@@ -436,6 +476,43 @@ public struct UserProfileNativeView: View {
     .frame(maxWidth: .infinity)
     .miraCardSurface()
     .padding(.horizontal, MIRATheme.Space.md)
+  }
+
+  private var profileSafetyMenu: some View {
+    Menu {
+      Button(role: .destructive) {
+        presentProfileReport()
+      } label: {
+        Label("Report profile", systemImage: "flag")
+      }
+      Button(role: .destructive) {
+        Task { _ = await model.blockUser() }
+      } label: {
+        Label("Block user", systemImage: "hand.raised")
+      }
+    } label: {
+      Image(systemName: "ellipsis")
+        .font(.system(size: 16, weight: .bold))
+        .foregroundStyle(MIRATheme.Color.textSecondary)
+        .frame(width: 34, height: 34)
+        .background(MIRATheme.Color.surfaceSoft)
+        .clipShape(Circle())
+    }
+    .buttonStyle(.miraPress)
+  }
+
+  private func presentProfileReport() {
+    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+    reportTarget = MIRAReportTarget(
+      targetType: "profile",
+      targetId: model.userId,
+      ownerUserId: model.userId,
+      title: "Report profile",
+      subtitle: model.user?.displayName ?? model.user?.username
+    )
+    withAnimation(.spring(response: 0.30, dampingFraction: 0.90)) {
+      isReportSheetPresented = true
+    }
   }
 
   private func profileMetric(_ label: String, _ value: Int) -> some View {
