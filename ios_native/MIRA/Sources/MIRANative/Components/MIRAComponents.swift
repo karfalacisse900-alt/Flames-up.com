@@ -330,6 +330,82 @@ private extension UIImage {
   }
 }
 
+private actor MIRAImagePrefetchState {
+  static let shared = MIRAImagePrefetchState()
+  private var inFlight = Set<String>()
+
+  func begin(_ key: String) -> Bool {
+    inFlight.insert(key).inserted
+  }
+
+  func finish(_ key: String) {
+    inFlight.remove(key)
+  }
+}
+
+public enum MIRAImagePrefetcher {
+  public static func prefetch(
+    urls: [String],
+    maxPixelSize: CGFloat = MIRAMediaSizing.feedTargetHeight,
+    limit: Int = 10
+  ) async {
+    let uniqueURLs = orderedUnique(urls)
+      .filter { !$0.isVideoURL }
+      .prefix(limit)
+
+    await withTaskGroup(of: Void.self) { group in
+      for value in uniqueURLs {
+        group.addTask {
+          await prefetchImage(value, maxPixelSize: maxPixelSize)
+        }
+      }
+    }
+  }
+
+  private static func prefetchImage(_ value: String, maxPixelSize: CGFloat) async {
+    guard let remoteURL = URL(string: value) else { return }
+    guard MIRANetworkSecurityPolicy.isSecureMediaURL(remoteURL) else { return }
+
+    let resolvedMaxPixelSize = max(64, maxPixelSize)
+    let key = "\(remoteURL.absoluteString)#\(Int(resolvedMaxPixelSize.rounded()))"
+    guard await MIRAImagePrefetchState.shared.begin(key) else { return }
+    defer { Task { await MIRAImagePrefetchState.shared.finish(key) } }
+
+    if MIRAImageMemoryCache.shared.image(for: remoteURL, maxPixelSize: resolvedMaxPixelSize) != nil {
+      return
+    }
+    if let diskCached = await MIRAImageDiskCache.image(for: remoteURL, maxPixelSize: resolvedMaxPixelSize) {
+      MIRAImageMemoryCache.shared.store(diskCached, for: remoteURL, maxPixelSize: resolvedMaxPixelSize, cost: diskCached.miraCacheCost)
+      return
+    }
+
+    do {
+      var request = URLRequest(url: remoteURL)
+      request.cachePolicy = .returnCacheDataElseLoad
+      request.timeoutInterval = 8
+      let (data, response) = try await MIRAAPIClient.productionSession.data(for: request)
+      let status = (response as? HTTPURLResponse)?.statusCode ?? 200
+      guard (200..<300).contains(status), data.count <= 12 * 1024 * 1024 else { return }
+      guard let decoded = await MIRAImageDiskCache.decode(data, maxPixelSize: resolvedMaxPixelSize) else { return }
+      MIRAImageMemoryCache.shared.store(decoded, for: remoteURL, maxPixelSize: resolvedMaxPixelSize, cost: decoded.miraCacheCost)
+      await MIRAImageDiskCache.store(data: data, for: remoteURL)
+    } catch {
+      return
+    }
+  }
+
+  private static func orderedUnique(_ values: [String]) -> [String] {
+    var seen = Set<String>()
+    var result: [String] = []
+    for value in values {
+      let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !trimmed.isEmpty, seen.insert(trimmed).inserted else { continue }
+      result.append(trimmed)
+    }
+    return result
+  }
+}
+
 public struct RemoteAvatar: View {
   let url: String?
   let size: CGFloat
@@ -380,6 +456,7 @@ public struct MIRAFollowAvatar: View {
 public struct RemoteMediaView: View {
   let url: String
   let isVideo: Bool
+  let placeholderURL: String?
   let contentMode: ContentMode
   let shouldPlay: Bool
   let maxPixelSize: CGFloat
@@ -391,16 +468,18 @@ public struct RemoteMediaView: View {
   public init(
     url: String,
     isVideo: Bool,
+    placeholderURL: String? = nil,
     contentMode: ContentMode = .fill,
     shouldPlay: Bool = false,
     maxPixelSize: CGFloat = MIRAMediaSizing.feedTargetHeight,
     showsVideoPlaceholderIcon: Bool = true,
-    placeholderColor: Color = MIRATheme.Color.surfaceSoft,
-    placeholderTint: Color = MIRATheme.Color.textMuted,
+    placeholderColor: Color = MIRATheme.Color.mediaPlaceholder,
+    placeholderTint: Color = .white.opacity(0.62),
     onMeasuredRatio: @escaping (CGFloat) -> Void = { _ in }
   ) {
     self.url = url
     self.isVideo = isVideo
+    self.placeholderURL = placeholderURL
     self.contentMode = contentMode
     self.shouldPlay = shouldPlay
     self.maxPixelSize = maxPixelSize
@@ -415,6 +494,7 @@ public struct RemoteMediaView: View {
       if isVideo {
         MIRAResolvedVideoPlayer(
           url: url,
+          posterURL: resolvedPlaceholderURL,
           contentMode: contentMode,
           shouldPlay: shouldPlay,
           showsPlaceholderIcon: showsVideoPlaceholderIcon,
@@ -424,27 +504,54 @@ public struct RemoteMediaView: View {
         )
           .background(Color.clear)
       } else {
-        MIRACachedImage(url: url, maxPixelSize: maxPixelSize, onImageLoaded: reportRatio) { image in
-          image.resizable().aspectRatio(contentMode: contentMode)
-        } placeholder: {
-          placeholder.redacted(reason: .placeholder)
+        ZStack {
+          placeholder
+          if let previewURL = resolvedPlaceholderURL {
+            MIRACachedImage(url: previewURL, maxPixelSize: min(maxPixelSize, 520), onImageLoaded: reportRatio) { image in
+              image
+                .resizable()
+                .aspectRatio(contentMode: contentMode)
+                .blur(radius: contentMode == .fill ? 8 : 0)
+                .scaleEffect(contentMode == .fill ? 1.035 : 1)
+                .opacity(0.92)
+            } placeholder: {
+              Color.clear
+            }
+          }
+          MIRACachedImage(url: url, maxPixelSize: maxPixelSize, onImageLoaded: reportRatio) { image in
+            image.resizable().aspectRatio(contentMode: contentMode)
+          } placeholder: {
+            Color.clear
+          }
         }
       }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .clipped()
-    .transaction { transaction in
-      transaction.animation = nil
-    }
   }
 
   private var placeholder: some View {
     ZStack {
       placeholderColor
+      LinearGradient(
+        colors: [
+          MIRATheme.Color.mediaPlaceholderRaised.opacity(0.62),
+          placeholderColor,
+          MIRATheme.Color.mediaPlaceholderRaised.opacity(0.38)
+        ],
+        startPoint: .topLeading,
+        endPoint: .bottomTrailing
+      )
       Image(systemName: "photo")
         .font(.system(size: 28, weight: .light))
-        .foregroundStyle(placeholderTint)
+        .foregroundStyle(placeholderTint.opacity(0.44))
     }
+  }
+
+  private var resolvedPlaceholderURL: String? {
+    let trimmed = placeholderURL?.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let trimmed, !trimmed.isEmpty, trimmed != url else { return nil }
+    return trimmed
   }
 
   private func reportRatio(_ image: UIImage) {
@@ -455,6 +562,7 @@ public struct RemoteMediaView: View {
 
 private struct MIRAResolvedVideoPlayer: View {
   let url: String
+  let posterURL: String?
   let contentMode: ContentMode
   let shouldPlay: Bool
   let showsPlaceholderIcon: Bool
@@ -468,25 +576,28 @@ private struct MIRAResolvedVideoPlayer: View {
   @State private var loadedVideoURL: String?
   @State private var videoMetric: MIRAPerformanceMetric?
   @State private var generatedThumbnail: UIImage?
+  @State private var isPlayerReady = false
 
   var body: some View {
     ZStack {
-      if let thumbnailURL {
-        MIRACachedImage(url: thumbnailURL, maxPixelSize: MIRAMediaSizing.feedTargetHeight, onImageLoaded: reportRatio) { image in
+      placeholder
+
+      if let previewURL = currentPosterURL {
+        MIRACachedImage(url: previewURL, maxPixelSize: MIRAMediaSizing.feedTargetHeight, onImageLoaded: reportRatio) { image in
           image.resizable().aspectRatio(contentMode: contentMode)
         } placeholder: {
-          placeholder
+          Color.clear
         }
       } else if let generatedThumbnail {
         Image(uiImage: generatedThumbnail)
           .resizable()
           .aspectRatio(contentMode: contentMode)
-      } else if player == nil {
-        placeholder
       }
 
       if let player {
         MIRAVideoPlayerView(player: player, contentMode: contentMode)
+          .opacity(isPlayerReady ? 1 : 0)
+          .animation(.easeOut(duration: 0.18), value: isPlayerReady)
           .onAppear { syncPlayback(player) }
           .onDisappear {
             player.pause()
@@ -521,12 +632,31 @@ private struct MIRAResolvedVideoPlayer: View {
   private var placeholder: some View {
     ZStack {
       placeholderColor
+      LinearGradient(
+        colors: [
+          MIRATheme.Color.mediaPlaceholderRaised.opacity(0.58),
+          placeholderColor,
+          MIRATheme.Color.mediaPlaceholderRaised.opacity(0.35)
+        ],
+        startPoint: .topLeading,
+        endPoint: .bottomTrailing
+      )
       if showsPlaceholderIcon {
         Image(systemName: "play.fill")
           .font(.system(size: 24, weight: .semibold))
-          .foregroundStyle(placeholderTint.opacity(0.38))
+          .foregroundStyle(placeholderTint.opacity(0.42))
       }
     }
+  }
+
+  private var currentPosterURL: String? {
+    normalizedPreviewURL(posterURL) ?? normalizedPreviewURL(thumbnailURL)
+  }
+
+  private func normalizedPreviewURL(_ value: String?) -> String? {
+    let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let trimmed, !trimmed.isEmpty, trimmed != url else { return nil }
+    return trimmed
   }
 
   @MainActor
@@ -539,6 +669,7 @@ private struct MIRAResolvedVideoPlayer: View {
       thumbnailURL = nil
       generatedThumbnail = nil
       failed = false
+      isPlayerReady = false
       loadedVideoURL = url
     }
 
@@ -551,6 +682,7 @@ private struct MIRAResolvedVideoPlayer: View {
       if let player {
         player.pause()
         self.player = nil
+        isPlayerReady = false
         removeLoopObserver()
         stopVideoMetric(status: "not_visible")
       }
@@ -570,8 +702,10 @@ private struct MIRAResolvedVideoPlayer: View {
       let avPlayer = AVPlayer(url: directURL)
       configurePlayback(for: avPlayer)
       player = avPlayer
+      isPlayerReady = false
       await startVideoMetric(label: directURL.host ?? directURL.path)
       syncPlayback(avPlayer)
+      Task { await markPlayerReady(avPlayer, expectedURL: url) }
       MIRAPerformanceTimeline.markOnce("time_to_first_video_frame", detail: "direct")
       return
     }
@@ -610,8 +744,10 @@ private struct MIRAResolvedVideoPlayer: View {
         let avPlayer = AVPlayer(url: hlsURL)
         configurePlayback(for: avPlayer)
         player = avPlayer
+        isPlayerReady = false
         await startVideoMetric(label: "stream \(uid)")
         syncPlayback(avPlayer)
+        Task { await markPlayerReady(avPlayer, expectedURL: url) }
         MIRAPerformanceTimeline.markOnce("time_to_first_video_frame", detail: "stream")
       } else if createPlayer {
         failed = true
@@ -636,6 +772,26 @@ private struct MIRAResolvedVideoPlayer: View {
     if let image {
       reportRatio(image)
     }
+  }
+
+  @MainActor
+  private func markPlayerReady(_ expectedPlayer: AVPlayer, expectedURL: String) async {
+    for _ in 0..<30 {
+      guard loadedVideoURL == expectedURL, player === expectedPlayer else { return }
+      if expectedPlayer.currentItem?.status == .readyToPlay {
+        withAnimation(.easeOut(duration: 0.18)) {
+          isPlayerReady = true
+        }
+        stopVideoMetric(status: "ready")
+        return
+      }
+      try? await Task.sleep(nanoseconds: 100_000_000)
+    }
+    guard loadedVideoURL == expectedURL, player === expectedPlayer else { return }
+    withAnimation(.easeOut(duration: 0.18)) {
+      isPlayerReady = true
+    }
+    stopVideoMetric(status: "ready_timeout")
   }
 
   private func reportRatio(_ image: UIImage) {

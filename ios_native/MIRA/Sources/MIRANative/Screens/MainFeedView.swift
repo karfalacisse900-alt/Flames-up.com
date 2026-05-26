@@ -88,6 +88,37 @@ final class MainFeedModel: ObservableObject {
     await loadNextPage(reason: "scroll")
   }
 
+  func prefetchMedia(around post: MIRAPost) {
+    guard let index = posts.firstIndex(where: { $0.id == post.id }) else { return }
+    let nearbyPosts = Array(posts.dropFirst(index).prefix(4))
+    guard !nearbyPosts.isEmpty else { return }
+
+    let previewURLs = nearbyPosts.flatMap { post in
+      post.posterMediaURLs + post.thumbnailMediaURLs
+    }
+    let nextFeedImageURLs = Array(nearbyPosts.prefix(2))
+      .flatMap(\.feedMediaURLs)
+      .filter { !$0.isVideoURL }
+    let urls = orderedMediaURLs(previewURLs + nextFeedImageURLs)
+      .filter { !$0.isVideoURL }
+
+    guard !urls.isEmpty else { return }
+    Task.detached(priority: .utility) {
+      await MIRAImagePrefetcher.prefetch(urls: urls, maxPixelSize: MIRAMediaSizing.feedTargetHeight, limit: 12)
+    }
+  }
+
+  private func orderedMediaURLs(_ values: [String]) -> [String] {
+    var seen = Set<String>()
+    var result: [String] = []
+    for value in values {
+      let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !trimmed.isEmpty, seen.insert(trimmed).inserted else { continue }
+      result.append(trimmed)
+    }
+    return result
+  }
+
   private func loadNextPage(reason: String) async {
     guard canLoadMore, !isLoadingMore else { return }
     isLoadingMore = true
@@ -528,6 +559,7 @@ public struct MainFeedView: View {
                 )
                 .onAppear {
                   Task { await model.loadMoreIfNeeded(after: post) }
+                  model.prefetchMedia(around: post)
                 }
               }
               if model.isLoadingMore {
@@ -882,13 +914,15 @@ private struct MainNativePostCard: View {
       RemoteMediaView(
         url: url,
         isVideo: url.isVideoURL,
+        placeholderURL: mediaPlaceholderURL(for: 0, mediaURL: url),
         contentMode: .fill,
         shouldPlay: isVideoActive,
-        maxPixelSize: MIRAMediaSizing.feedTargetHeight
+        maxPixelSize: MIRAMediaSizing.feedTargetHeight,
+        placeholderColor: MIRATheme.Color.mediaPlaceholder
       )
       .frame(maxWidth: .infinity)
       .frame(minHeight: mediaHeight, maxHeight: mediaHeight)
-      .background(MIRATheme.Color.surfaceSoft)
+      .background(MIRATheme.Color.mediaPlaceholder)
       .clipped()
     } else {
       VStack(spacing: 7) {
@@ -897,9 +931,11 @@ private struct MainNativePostCard: View {
             RemoteMediaView(
               url: url,
               isVideo: url.isVideoURL,
+              placeholderURL: mediaPlaceholderURL(for: index, mediaURL: url),
               contentMode: .fill,
               shouldPlay: isVideoActive && selectedMediaIndex == index,
-              maxPixelSize: MIRAMediaSizing.feedTargetHeight
+              maxPixelSize: MIRAMediaSizing.feedTargetHeight,
+              placeholderColor: MIRATheme.Color.mediaPlaceholder
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()
@@ -909,7 +945,7 @@ private struct MainNativePostCard: View {
         .tabViewStyle(.page(indexDisplayMode: .never))
         .frame(maxWidth: .infinity)
         .frame(minHeight: mediaHeight, maxHeight: mediaHeight)
-        .background(MIRATheme.Color.surfaceSoft)
+        .background(MIRATheme.Color.mediaPlaceholder)
 
         HStack(spacing: 6) {
           ForEach(mediaURLs.indices, id: \.self) { index in
@@ -925,6 +961,17 @@ private struct MainNativePostCard: View {
       }
       .background(MIRATheme.Color.surface)
     }
+  }
+
+  private func mediaPlaceholderURL(for index: Int, mediaURL: String) -> String? {
+    let posters = post.posterMediaURLs
+    let thumbnails = post.thumbnailMediaURLs
+    let poster = posters.indices.contains(index) ? posters[index] : nil
+    let thumbnail = thumbnails.indices.contains(index) ? thumbnails[index] : nil
+    let candidate = mediaURL.isVideoURL ? (poster ?? thumbnail) : (thumbnail ?? poster)
+    let trimmed = candidate?.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let trimmed, !trimmed.isEmpty, trimmed != mediaURL else { return nil }
+    return trimmed
   }
 
   private var actionRow: some View {

@@ -161,47 +161,28 @@ final class MIRAStartupCoordinator: ObservableObject {
 
   private func startInitialMediaPrewarm() {
     let posts = Array(feedModel.posts.prefix(4)) + Array(discoverModel.posts.prefix(9)) + Array(profileModel.posts.prefix(6))
-    let urls = Array(
-      posts
-        .flatMap(\.feedMediaURLs)
-        .filter { !$0.isVideoURL }
-        .prefix(8)
-    )
+    let previewURLs = posts.flatMap { post in
+      post.posterMediaURLs + post.thumbnailMediaURLs
+    }
+    let feedImageURLs = posts
+      .flatMap(\.feedMediaURLs)
+      .filter { !$0.isVideoURL }
+    let urls = Array(orderedMediaURLs(previewURLs + feedImageURLs).prefix(16))
     guard !urls.isEmpty else { return }
     Task.detached(priority: .utility) {
-      await MIRAStartupMediaPrewarmer.prewarm(urls: urls)
-    }
-  }
-}
-
-private enum MIRAStartupMediaPrewarmer {
-  static func prewarm(urls: [String]) async {
-    guard !urls.isEmpty else { return }
-
-    await withTaskGroup(of: Void.self) { group in
-      for value in urls {
-        group.addTask {
-          await prewarmImage(value)
-        }
-      }
+      await MIRAImagePrefetcher.prefetch(urls: urls, maxPixelSize: MIRAMediaSizing.feedTargetHeight, limit: 16)
     }
   }
 
-  private static func prewarmImage(_ value: String) async {
-    guard let url = URL(string: value) else { return }
-    guard MIRANetworkSecurityPolicy.isSecureMediaURL(url) else { return }
-    if await MIRAImageDiskCache.image(for: url, maxPixelSize: MIRAMediaSizing.feedTargetHeight) != nil { return }
-    do {
-      var request = URLRequest(url: url)
-      request.cachePolicy = .returnCacheDataElseLoad
-      request.timeoutInterval = 5
-      let (data, response) = try await MIRAAPIClient.productionSession.data(for: request)
-      let status = (response as? HTTPURLResponse)?.statusCode ?? 200
-      guard (200..<300).contains(status), data.count <= 10 * 1024 * 1024 else { return }
-      await MIRAImageDiskCache.store(data: data, for: url)
-    } catch {
-      // Startup prewarming is opportunistic. Stable placeholders still cover misses.
+  private func orderedMediaURLs(_ values: [String]) -> [String] {
+    var seen = Set<String>()
+    var result: [String] = []
+    for value in values {
+      let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !trimmed.isEmpty, !trimmed.isVideoURL, seen.insert(trimmed).inserted else { continue }
+      result.append(trimmed)
     }
+    return result
   }
 }
 
