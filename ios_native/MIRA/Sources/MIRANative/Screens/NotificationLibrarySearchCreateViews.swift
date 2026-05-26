@@ -170,6 +170,7 @@ public struct LibraryNativeView: View {
     .background(MIRATheme.Color.appBackground)
     .miraScreenEnter(.push)
     .navigationTitle("My Library")
+    .toolbar(.hidden, for: .tabBar)
     .task { await model.load() }
     .onChange(of: model.tab) { _ in Task { await model.load() } }
   }
@@ -1734,6 +1735,7 @@ public struct CreateStoryNativeView: View {
       }
     }
     .toolbar(.hidden, for: .navigationBar)
+    .toolbar(.hidden, for: .tabBar)
     .miraScreenEnter(.modal)
     .task {
       guard !didOpenInitialCamera else { return }

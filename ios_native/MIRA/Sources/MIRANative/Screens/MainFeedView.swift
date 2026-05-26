@@ -16,6 +16,7 @@ final class MainFeedModel: ObservableObject {
   private var isLoadingFreshFeed = false
   private var canLoadMore = true
   private var isLoadingCurrentUser = false
+  private var followingAuthorIds = Set<String>()
   private let firstPageLimit = 8
   private let paginationTriggerWindow = 5
 
@@ -243,21 +244,27 @@ final class MainFeedModel: ObservableObject {
     cacheCurrentPosts()
   }
 
-  func toggleFollowAuthor(_ post: MIRAPost) async {
-    guard canFollowAuthor(post) else { return }
-    guard let userId = post.userId, !userId.isEmpty else { return }
+  func followAuthor(_ post: MIRAPost) async -> Bool {
+    guard canFollowAuthor(post) else { return false }
+    guard let userId = post.userId, !userId.isEmpty else { return false }
+    guard !followingAuthorIds.contains(userId) else { return false }
+    followingAuthorIds.insert(userId)
+    defer { followingAuthorIds.remove(userId) }
+
     let previous = posts
-    let current = posts.first(where: { $0.id == post.id }) ?? post
-    let nextFollowing = !current.viewerFollowing
-    posts = posts.map { $0.userId == userId ? $0.updating(following: nextFollowing) : $0 }
+    posts = posts.map { $0.userId == userId ? $0.updating(following: true) : $0 }
 
     do {
-      let response: FollowResponse = try await api.post("/users/\(userId)/follow", body: FollowBody(following: nextFollowing))
-      let serverFollowing = response.following ?? nextFollowing
+      let response: FollowResponse = try await api.post("/users/\(userId)/follow", body: FollowBody(following: true))
+      let serverFollowing = response.following ?? true
       posts = posts.map { $0.userId == userId ? $0.updating(following: serverFollowing) : $0 }
       cacheCurrentPosts()
+      MIRAUserFollowSync.publish(MIRAUserFollowUpdate(userId: userId, following: serverFollowing, followersCount: response.followersCount ?? response.followingCount))
+      return serverFollowing
     } catch {
       posts = previous
+      errorMessage = "Could not follow this user. Try again in a moment."
+      return false
     }
   }
 
@@ -283,6 +290,15 @@ final class MainFeedModel: ObservableObject {
     }
 
     return false
+  }
+
+  func applyFollowUpdate(_ update: MIRAUserFollowUpdate) {
+    let updated = posts.map { post in
+      post.userId == update.userId ? post.updating(following: update.following) : post
+    }
+    guard updated != posts else { return }
+    posts = updated
+    cacheCurrentPosts()
   }
 
   func hidePost(_ post: MIRAPost) {
@@ -499,7 +515,7 @@ public struct MainFeedView: View {
                   onLike: { Task { await model.toggleLike(post) } },
                   onSave: { presentSaveSheet(for: post) },
                   onComment: { presentComments(for: post) },
-                  onFollow: { Task { await model.toggleFollowAuthor(post) } },
+                  onFollow: { await model.followAuthor(post) },
                   onPin: { Task { await model.togglePin(post) } },
                   onNotInterested: { model.hidePost(post) },
                   onReport: { presentReport(for: post) },
@@ -529,10 +545,6 @@ public struct MainFeedView: View {
           .padding(.bottom, MIRATheme.Space.xxl)
         }
         .coordinateSpace(name: "mainFeedScroll")
-        .simultaneousGesture(
-          DragGesture(minimumDistance: 8)
-            .onChanged(handleFeedDrag)
-        )
 
         mainHeader
           .offset(y: isFeedChromeHidden ? -84 : 0)
@@ -625,6 +637,10 @@ public struct MainFeedView: View {
         guard let update = MIRAPostEngagementSync.update(from: notification) else { return }
         model.applyEngagementUpdate(update)
       }
+      .onReceive(NotificationCenter.default.publisher(for: .miraUserFollowDidChange)) { notification in
+        guard let update = MIRAUserFollowSync.update(from: notification) else { return }
+        model.applyFollowUpdate(update)
+      }
       .onPreferenceChange(MainFeedScrollOffsetPreferenceKey.self, perform: handleScroll)
       .onPreferenceChange(MainPostVisibilityPreferenceKey.self, perform: updateActiveVideo)
     }
@@ -661,15 +677,6 @@ public struct MainFeedView: View {
     } else if direction == -1 && scrollIntentDistance > 10 {
       isHeaderHidden = false
       scrollIntentDistance = 0
-    }
-  }
-
-  private func handleFeedDrag(_ value: DragGesture.Value) {
-    guard abs(value.translation.height) > abs(value.translation.width) else { return }
-    if value.translation.height < -14 {
-      isHeaderHidden = true
-    } else if value.translation.height > 10 {
-      isHeaderHidden = false
     }
   }
 
@@ -770,11 +777,11 @@ public struct MainFeedView: View {
   }
 
   private var isFeedChromeHidden: Bool {
-    isHeaderHidden || isCommentsPresented || activeCommentsPost != nil
+    isHeaderHidden || isCommentsPresented || activeCommentsPost != nil || isShowingCreatePost
   }
 
   private var feedTabBarVisibility: Visibility {
-    (isCommentsPresented || activeCommentsPost != nil) ? .hidden : .visible
+    (isCommentsPresented || activeCommentsPost != nil || isShowingCreatePost) ? .hidden : .visible
   }
 }
 
@@ -785,7 +792,7 @@ private struct MainNativePostCard: View {
   let onLike: () -> Void
   let onSave: () -> Void
   let onComment: () -> Void
-  let onFollow: () -> Void
+  let onFollow: () async -> Bool
   let onPin: () -> Void
   let onNotInterested: () -> Void
   let onReport: () -> Void
@@ -798,6 +805,8 @@ private struct MainNativePostCard: View {
   @State private var selectedMediaIndex = 0
   @State private var isShowingCaption = false
   @State private var measuredCardWidth = UIScreen.main.bounds.width
+  @State private var isSubmittingFollow = false
+  @State private var isFollowConfirmationVisible = false
 
   private var mediaHeight: CGFloat {
     return MIRAMediaSizing.mainFeedHeight(
@@ -852,10 +861,11 @@ private struct MainNativePostCard: View {
     .overlay(alignment: .bottom) {
       Rectangle().fill(MIRATheme.Color.hairline).frame(height: 0.75)
     }
-    .contextMenu {
-      postContextMenu
+    .onChange(of: post.id) { _, _ in
+      selectedMediaIndex = 0
+      isSubmittingFollow = false
+      isFollowConfirmationVisible = false
     }
-    .onChange(of: post.id) { _, _ in selectedMediaIndex = 0 }
     .onChange(of: post.feedMediaURLs) { _, urls in
       if selectedMediaIndex >= urls.count {
         selectedMediaIndex = max(0, urls.count - 1)
@@ -1100,15 +1110,33 @@ private struct MainNativePostCard: View {
 
   @ViewBuilder
   private var authorAvatar: some View {
-    if canFollowAuthor {
+    if canFollowAuthor || isSubmittingFollow || isFollowConfirmationVisible {
       Button {
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        onFollow()
+        followWithConfirmation()
       } label: {
-        MIRAFollowAvatar(url: post.userProfileImage, size: 42, isFollowing: post.viewerFollowing)
+        MIRAFollowAvatar(
+          url: post.userProfileImage,
+          size: 42,
+          isFollowing: post.viewerFollowing || isSubmittingFollow || isFollowConfirmationVisible
+        )
+        .scaleEffect(isFollowConfirmationVisible ? 1.08 : 1)
+        .overlay(alignment: .bottom) {
+          if isFollowConfirmationVisible {
+            Text("Following")
+              .font(.system(size: 10, weight: .semibold))
+              .foregroundStyle(.white)
+              .padding(.horizontal, 8)
+              .frame(height: 20)
+              .background(MIRATheme.Color.textPrimary.opacity(0.86))
+              .clipShape(Capsule())
+              .offset(y: 24)
+              .transition(.opacity.combined(with: .scale(scale: 0.92)))
+          }
+        }
       }
       .buttonStyle(.plain)
-      .accessibilityLabel(post.viewerFollowing ? "Following" : "Follow")
+      .disabled(isSubmittingFollow)
+      .accessibilityLabel(isSubmittingFollow || isFollowConfirmationVisible ? "Following" : "Follow")
     } else if let userId = post.userId, !userId.isEmpty {
       NavigationLink(destination: UserProfileNativeView(userId: userId, api: api)) {
         RemoteAvatar(url: post.userProfileImage, size: 42)
@@ -1160,7 +1188,6 @@ private struct MainNativePostCard: View {
         .contentShape(Circle())
         .shadow(color: .black.opacity(0.03), radius: 4, x: 0, y: 1)
     }
-    .buttonStyle(.miraPress)
   }
 
   @ViewBuilder
@@ -1224,6 +1251,27 @@ private struct MainNativePostCard: View {
         onNotInterested()
       } label: {
         Label("Not interested", systemImage: "hand.thumbsdown")
+      }
+    }
+  }
+
+  private func followWithConfirmation() {
+    guard !isSubmittingFollow, canFollowAuthor else { return }
+    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    isSubmittingFollow = true
+    withAnimation(.spring(response: 0.24, dampingFraction: 0.78)) {
+      isFollowConfirmationVisible = true
+    }
+
+    Task {
+      let didFollow = await onFollow()
+      let holdNanoseconds: UInt64 = didFollow ? 700_000_000 : 180_000_000
+      try? await Task.sleep(nanoseconds: holdNanoseconds)
+      await MainActor.run {
+        withAnimation(.easeInOut(duration: 0.18)) {
+          isFollowConfirmationVisible = false
+        }
+        isSubmittingFollow = false
       }
     }
   }

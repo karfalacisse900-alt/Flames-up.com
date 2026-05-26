@@ -25,8 +25,21 @@ public struct MIRAPostEngagementUpdate {
   }
 }
 
+public struct MIRAUserFollowUpdate {
+  public let userId: String
+  public let following: Bool
+  public let followersCount: Int?
+
+  public init(userId: String, following: Bool, followersCount: Int? = nil) {
+    self.userId = userId
+    self.following = following
+    self.followersCount = followersCount
+  }
+}
+
 public extension Notification.Name {
   static let miraPostEngagementDidChange = Notification.Name("mira.post.engagement.didChange")
+  static let miraUserFollowDidChange = Notification.Name("mira.user.follow.didChange")
 }
 
 @MainActor
@@ -37,5 +50,16 @@ public enum MIRAPostEngagementSync {
 
   public static func update(from notification: Notification) -> MIRAPostEngagementUpdate? {
     notification.object as? MIRAPostEngagementUpdate
+  }
+}
+
+@MainActor
+public enum MIRAUserFollowSync {
+  public static func publish(_ update: MIRAUserFollowUpdate) {
+    NotificationCenter.default.post(name: .miraUserFollowDidChange, object: update)
+  }
+
+  public static func update(from notification: Notification) -> MIRAUserFollowUpdate? {
+    notification.object as? MIRAUserFollowUpdate
   }
 }

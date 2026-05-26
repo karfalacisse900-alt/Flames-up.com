@@ -331,6 +331,7 @@ final class UserProfileNativeModel: ObservableObject {
       let response: FollowResponse = try await api.post("/users/\(userId)/follow", body: FollowBody(following: nextFollowing))
       isFollowing = response.following ?? nextFollowing
       followersCount = response.followersCount ?? followersCount
+      MIRAUserFollowSync.publish(MIRAUserFollowUpdate(userId: userId, following: isFollowing, followersCount: followersCount))
     } catch {
       isFollowing = previousFollowing
       followersCount = previousFollowers
@@ -343,6 +344,7 @@ final class UserProfileNativeModel: ObservableObject {
       isBlocked = true
       isFollowing = false
       posts = []
+      MIRAUserFollowSync.publish(MIRAUserFollowUpdate(userId: userId, following: false))
       errorMessage = nil
       return true
     } catch {
@@ -1383,6 +1385,7 @@ public struct WalletNativeView: View {
       .padding(MIRATheme.Space.md)
     }
     .navigationTitle("Wallet")
+    .toolbar(.hidden, for: .tabBar)
     .background(MIRATheme.Color.appBackground)
     .miraScreenEnter(.push)
     .task { await model.load() }
