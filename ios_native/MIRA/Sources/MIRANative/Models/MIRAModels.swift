@@ -603,6 +603,9 @@ public struct MIRAComment: Decodable, Identifiable, Hashable {
           followingCount: nil,
           postsCount: nil,
           isFollowing: nil,
+          viewerHasBlocked: nil,
+          viewerBlockedBy: nil,
+          privacyLocked: nil,
           isPrivate: nil,
           isPremium: nil,
           language: nil
