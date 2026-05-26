@@ -7,6 +7,8 @@ public enum MIRATheme {
     public static let surface = SwiftUI.Color.white
     public static let surfaceSoft = SwiftUI.Color(red: 0.982, green: 0.985, blue: 0.978)
     public static let surfaceRaised = SwiftUI.Color.white
+    public static let mediaPlaceholder = SwiftUI.Color(red: 0.070, green: 0.078, blue: 0.070)
+    public static let mediaPlaceholderRaised = SwiftUI.Color(red: 0.115, green: 0.124, blue: 0.108)
     public static let textPrimary = SwiftUI.Color(red: 0.070, green: 0.084, blue: 0.068)
     public static let textSecondary = SwiftUI.Color(red: 0.405, green: 0.440, blue: 0.390)
     public static let textMuted = SwiftUI.Color(red: 0.595, green: 0.625, blue: 0.570)
