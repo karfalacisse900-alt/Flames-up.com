@@ -333,25 +333,10 @@ public struct DiscoverNativeView: View {
       } else {
         LazyVGrid(columns: galleryGridColumns, spacing: 1) {
           ForEach(filteredGalleryPosts) { post in
-            ZStack(alignment: .topTrailing) {
-              NavigationLink(destination: PostDetailNativeView(post: post, api: model.api)) {
-                DiscoverPostGalleryTile(post: post)
-              }
-              .buttonStyle(.plain)
-
-              Menu {
-                discoverPostActions(post)
-              } label: {
-                Image(systemName: "ellipsis")
-                  .font(.system(size: 13, weight: .bold))
-                  .foregroundStyle(.white)
-                  .frame(width: 28, height: 28)
-                  .background(.black.opacity(0.38))
-                  .clipShape(Circle())
-              }
-              .buttonStyle(.miraPress)
-              .padding(6)
+            NavigationLink(destination: PostDetailNativeView(post: post, api: model.api)) {
+              DiscoverPostGalleryTile(post: post)
             }
+            .buttonStyle(.plain)
             .contextMenu {
               discoverPostActions(post)
             }

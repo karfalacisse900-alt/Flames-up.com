@@ -71,6 +71,9 @@ public struct MIRAUser: Codable, Identifiable, Hashable {
   public let followingCount: Int?
   public let postsCount: Int?
   public let isFollowing: Bool?
+  public let viewerHasBlocked: Bool?
+  public let viewerBlockedBy: Bool?
+  public let privacyLocked: Bool?
   public let isPrivate: Bool?
   public let isPremium: Bool?
   public let language: String?

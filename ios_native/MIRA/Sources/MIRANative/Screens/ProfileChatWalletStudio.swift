@@ -287,6 +287,8 @@ final class UserProfileNativeModel: ObservableObject {
   @Published var posts: [MIRAPost] = []
   @Published var isFollowing = false
   @Published var followersCount = 0
+  @Published var isBlocked = false
+  @Published var isBlockedBy = false
   @Published var isLoading = false
   @Published var errorMessage: String?
   let userId: String
@@ -338,6 +340,8 @@ final class UserProfileNativeModel: ObservableObject {
   func blockUser() async -> Bool {
     do {
       let _: EmptyResponse? = try await api.post("/users/\(userId)/block", body: EmptyBody())
+      isBlocked = true
+      isFollowing = false
       posts = []
       errorMessage = nil
       return true
@@ -347,10 +351,25 @@ final class UserProfileNativeModel: ObservableObject {
     }
   }
 
+  func unblockUser() async -> Bool {
+    do {
+      let _: EmptyResponse? = try await api.delete("/users/\(userId)/block")
+      isBlocked = false
+      errorMessage = nil
+      await load()
+      return true
+    } catch {
+      errorMessage = "Could not unblock this user. Try again in a moment."
+      return false
+    }
+  }
+
   private func apply(user freshUser: MIRAUser) {
     user = freshUser
     isFollowing = freshUser.viewerFollowing
     followersCount = freshUser.followersCount ?? followersCount
+    isBlocked = freshUser.viewerHasBlocked == true
+    isBlockedBy = freshUser.viewerBlockedBy == true
   }
 }
 
@@ -411,6 +430,8 @@ public struct UserProfileNativeView: View {
           api: model.api,
           onSubmitted: { result in
             if result.blocked {
+              model.isBlocked = true
+              model.isFollowing = false
               model.posts = []
             }
           },
@@ -448,28 +469,34 @@ public struct UserProfileNativeView: View {
         profileMetric("Following", model.user?.followingCount ?? 0)
       }
 
-      HStack(spacing: MIRATheme.Space.sm) {
-        Button {
-          Task { await model.toggleFollow() }
-        } label: {
-          Label(model.isFollowing ? "Following" : "Follow", systemImage: model.isFollowing ? "checkmark" : "plus")
-            .font(.system(size: 15, weight: .semibold))
-            .foregroundStyle(model.isFollowing ? MIRATheme.Color.textPrimary : .white)
-            .frame(maxWidth: .infinity, minHeight: 46)
-            .background(model.isFollowing ? MIRATheme.Color.surfaceSoft : MIRATheme.Color.forest)
-            .clipShape(Capsule())
-        }
-        .buttonStyle(.plain)
+      if model.isBlocked {
+        profileStatusNotice("You blocked this user. Unblock them to message or follow again.")
+      } else if model.isBlockedBy {
+        profileStatusNotice("This profile is unavailable.")
+      } else {
+        HStack(spacing: MIRATheme.Space.sm) {
+          Button {
+            Task { await model.toggleFollow() }
+          } label: {
+            Label(model.isFollowing ? "Following" : "Follow", systemImage: model.isFollowing ? "checkmark" : "plus")
+              .font(.system(size: 15, weight: .semibold))
+              .foregroundStyle(model.isFollowing ? MIRATheme.Color.textPrimary : .white)
+              .frame(maxWidth: .infinity, minHeight: 46)
+              .background(model.isFollowing ? MIRATheme.Color.surfaceSoft : MIRATheme.Color.forest)
+              .clipShape(Capsule())
+          }
+          .buttonStyle(.plain)
 
-        NavigationLink(destination: ConversationNativeView(peerId: model.userId, title: model.user?.displayName ?? "Chat", api: model.api)) {
-          Label("Message", systemImage: "message")
-            .font(.system(size: 15, weight: .semibold))
-            .foregroundStyle(MIRATheme.Color.textPrimary)
-            .frame(maxWidth: .infinity, minHeight: 46)
-            .background(MIRATheme.Color.surfaceSoft)
-            .clipShape(Capsule())
+          NavigationLink(destination: ConversationNativeView(peerId: model.userId, title: model.user?.displayName ?? "Chat", api: model.api)) {
+            Label("Message", systemImage: "message")
+              .font(.system(size: 15, weight: .semibold))
+              .foregroundStyle(MIRATheme.Color.textPrimary)
+              .frame(maxWidth: .infinity, minHeight: 46)
+              .background(MIRATheme.Color.surfaceSoft)
+              .clipShape(Capsule())
+          }
+          .buttonStyle(.plain)
         }
-        .buttonStyle(.plain)
       }
     }
     .padding(MIRATheme.Space.xl)
@@ -485,10 +512,18 @@ public struct UserProfileNativeView: View {
       } label: {
         Label("Report profile", systemImage: "flag")
       }
-      Button(role: .destructive) {
-        Task { _ = await model.blockUser() }
-      } label: {
-        Label("Block user", systemImage: "hand.raised")
+      if model.isBlocked {
+        Button {
+          Task { _ = await model.unblockUser() }
+        } label: {
+          Label("Unblock user", systemImage: "hand.raised.slash")
+        }
+      } else {
+        Button(role: .destructive) {
+          Task { _ = await model.blockUser() }
+        } label: {
+          Label("Block user", systemImage: "hand.raised")
+        }
       }
     } label: {
       Image(systemName: "ellipsis")
@@ -513,6 +548,18 @@ public struct UserProfileNativeView: View {
     withAnimation(.spring(response: 0.30, dampingFraction: 0.90)) {
       isReportSheetPresented = true
     }
+  }
+
+  private func profileStatusNotice(_ message: String) -> some View {
+    Text(message)
+      .font(.system(size: 13, weight: .semibold))
+      .foregroundStyle(MIRATheme.Color.textSecondary)
+      .multilineTextAlignment(.center)
+      .frame(maxWidth: .infinity)
+      .padding(.horizontal, MIRATheme.Space.md)
+      .padding(.vertical, 12)
+      .background(MIRATheme.Color.surfaceSoft)
+      .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
   }
 
   private func profileMetric(_ label: String, _ value: Int) -> some View {
