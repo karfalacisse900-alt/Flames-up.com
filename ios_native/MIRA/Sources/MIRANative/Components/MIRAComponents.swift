@@ -50,6 +50,142 @@ public struct MIRAIconButton: View {
   }
 }
 
+public struct MIRAAudioPreviewButton: View {
+  public let api: MIRAAPIClient?
+  public let trackId: String?
+  public let title: String
+  public let artist: String
+  public let artworkUrl: String?
+  public let streamUrl: String?
+  public let compact: Bool
+
+  @State private var player: AVPlayer?
+  @State private var isPlaying = false
+  @State private var isLoading = false
+
+  public init(
+    api: MIRAAPIClient? = nil,
+    trackId: String?,
+    title: String,
+    artist: String,
+    artworkUrl: String? = nil,
+    streamUrl: String? = nil,
+    compact: Bool = false
+  ) {
+    self.api = api
+    self.trackId = trackId
+    self.title = title
+    self.artist = artist
+    self.artworkUrl = artworkUrl
+    self.streamUrl = streamUrl
+    self.compact = compact
+  }
+
+  public var body: some View {
+    Button {
+      Task { await togglePlayback() }
+    } label: {
+      HStack(spacing: compact ? 9 : 12) {
+        artworkView
+          .frame(width: compact ? 34 : 44, height: compact ? 34 : 44)
+          .clipShape(RoundedRectangle(cornerRadius: compact ? 10 : 12, style: .continuous))
+
+        VStack(alignment: .leading, spacing: 2) {
+          Text(title)
+            .font(.system(size: compact ? 13 : 15, weight: .semibold))
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+            .lineLimit(1)
+          Text(artist)
+            .font(.system(size: compact ? 11 : 12, weight: .medium))
+            .foregroundStyle(MIRATheme.Color.textSecondary)
+            .lineLimit(1)
+        }
+
+        Spacer(minLength: 8)
+
+        ZStack {
+          if isLoading {
+            ProgressView()
+              .scaleEffect(0.76)
+              .tint(MIRATheme.Color.forest)
+          } else {
+            Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+              .font(.system(size: compact ? 11 : 13, weight: .bold))
+              .foregroundStyle(.white)
+          }
+        }
+        .frame(width: compact ? 28 : 34, height: compact ? 28 : 34)
+        .background(MIRATheme.Color.forest)
+        .clipShape(Circle())
+      }
+      .padding(.leading, compact ? 8 : 10)
+      .padding(.trailing, compact ? 8 : 10)
+      .frame(height: compact ? 46 : 58)
+      .background(MIRATheme.Color.forestSoft.opacity(0.72))
+      .clipShape(RoundedRectangle(cornerRadius: compact ? 14 : 18, style: .continuous))
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.miraPress)
+    .onDisappear { stopPlayback() }
+  }
+
+  @ViewBuilder
+  private var artworkView: some View {
+    if let artworkUrl, !artworkUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      RemoteMediaView(url: artworkUrl, isVideo: false)
+    } else {
+      ZStack {
+        MIRATheme.Color.forestSoft
+        Image(systemName: "music.note")
+          .font(.system(size: compact ? 15 : 18, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.forest)
+      }
+    }
+  }
+
+  @MainActor
+  private func togglePlayback() async {
+    if isPlaying {
+      stopPlayback()
+      return
+    }
+
+    isLoading = true
+    defer { isLoading = false }
+    guard let urlString = await resolveStreamURL(), let url = URL(string: urlString) else { return }
+    let nextPlayer = AVPlayer(url: url)
+    player = nextPlayer
+    nextPlayer.play()
+    isPlaying = true
+  }
+
+  private func resolveStreamURL() async -> String? {
+    let cleanStream = streamUrl?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    if !cleanStream.isEmpty { return cleanStream }
+    guard
+      let api,
+      let encoded = trackId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        .addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+      !encoded.isEmpty
+    else {
+      return nil
+    }
+    do {
+      let track: MIRAAudiusTrack = try await api.get("/music/audius/stream/\(encoded)")
+      return track.streamUrl
+    } catch {
+      return nil
+    }
+  }
+
+  @MainActor
+  private func stopPlayback() {
+    player?.pause()
+    player = nil
+    isPlaying = false
+  }
+}
+
 public struct MIRAHeaderCircleButton: View {
   let systemImage: String
   let size: CGFloat

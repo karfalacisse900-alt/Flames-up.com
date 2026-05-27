@@ -290,12 +290,14 @@ private enum PostDetailSheet: Identifiable, Equatable {
   case location
   case people
   case tags
+  case music
 
   var id: String {
     switch self {
     case .location: return "location"
     case .people: return "people"
     case .tags: return "tags"
+    case .music: return "music"
     }
   }
 }
@@ -347,6 +349,7 @@ public struct CreatePostNativeView: View {
   @State private var selectedPlace: MIRAMapboxPlace?
   @State private var taggedUsers: [MIRAUser] = []
   @State private var hashtags: [String] = []
+  @State private var selectedAudioTrack: MIRAAudiusTrack?
 
   public init(api: MIRAAPIClient, onClose: (() -> Void)? = nil) {
     self.api = api
@@ -379,6 +382,8 @@ public struct CreatePostNativeView: View {
         PostPeopleTagSheet(api: api, selectedUsers: $taggedUsers, onClose: closeSheet)
       case .tags:
         PostHashtagSheet(hashtags: $hashtags, onClose: closeSheet)
+      case .music:
+        MIRAAudiusMusicPickerSheet(api: api, selectedTrack: $selectedAudioTrack, onClose: closeSheet)
       case nil:
         Color.clear
       }
@@ -412,7 +417,11 @@ public struct CreatePostNativeView: View {
   }
 
   private var postDetailSheetHeightFraction: CGFloat {
-    activePostDetailSheet == .tags ? 0.50 : 0.76
+    switch activePostDetailSheet {
+    case .tags: return 0.50
+    case .music: return 0.78
+    default: return 0.76
+    }
   }
 
   private var mediaFirstPage: some View {
@@ -470,6 +479,12 @@ public struct CreatePostNativeView: View {
               title: selectedPlace?.displayName ?? "Add Location",
               subtitle: selectedPlace?.addressText ?? "Search places or add an address",
               action: { activePostDetailSheet = .location }
+            )
+            postOptionRow(
+              icon: "music.note",
+              title: selectedAudioTrack?.displayTitle ?? "Add music",
+              subtitle: selectedAudioTrack?.displayArtist ?? "Search Audius tracks",
+              action: { activePostDetailSheet = .music }
             )
           }
           .padding(.horizontal, 16)
@@ -597,15 +612,20 @@ public struct CreatePostNativeView: View {
   }
 
   private var postDetailsQuickActions: some View {
-    HStack(spacing: 10) {
-      postDetailsChip(selectedPlace?.displayName ?? "Places", systemImage: "mappin.circle") {
-        activePostDetailSheet = .location
-      }
-      postDetailsChip(taggedUsers.isEmpty ? "@" : "@ \(taggedUsers.count)", systemImage: nil) {
-        activePostDetailSheet = .people
-      }
-      postDetailsChip(hashtags.isEmpty ? "#" : "# \(hashtags.count)", systemImage: nil) {
-        activePostDetailSheet = .tags
+    ScrollView(.horizontal, showsIndicators: false) {
+      HStack(spacing: 10) {
+        postDetailsChip(selectedPlace?.displayName ?? "Places", systemImage: "mappin.circle") {
+          activePostDetailSheet = .location
+        }
+        postDetailsChip(taggedUsers.isEmpty ? "@" : "@ \(taggedUsers.count)", systemImage: nil) {
+          activePostDetailSheet = .people
+        }
+        postDetailsChip(hashtags.isEmpty ? "#" : "# \(hashtags.count)", systemImage: nil) {
+          activePostDetailSheet = .tags
+        }
+        postDetailsChip(selectedAudioTrack == nil ? "Music" : "Sound", systemImage: "music.note") {
+          activePostDetailSheet = .music
+        }
       }
     }
   }
@@ -714,6 +734,14 @@ public struct CreatePostNativeView: View {
         placeLat: selectedPlace?.lat,
         placeLng: selectedPlace?.lng,
         taggedUsers: taggedPayload.isEmpty ? nil : taggedPayload,
+        audioProvider: selectedAudioTrack == nil ? nil : "audius",
+        audioTrackId: selectedAudioTrack?.resolvedTrackId,
+        audioTitle: selectedAudioTrack?.displayTitle,
+        audioArtist: selectedAudioTrack?.displayArtist,
+        audioArtworkUrl: selectedAudioTrack?.artworkUrl,
+        audioStreamUrl: selectedAudioTrack?.streamUrl,
+        audioStartTime: selectedAudioTrack == nil ? nil : 0,
+        audioDuration: selectedAudioTrack.map { min(max($0.duration ?? 15, 5), 30) },
         visibility: "public",
         clientRequestId: UUID().uuidString
       )
@@ -774,6 +802,245 @@ public struct CreatePostNativeView: View {
       return MIRAEditorUploadMetadata(mediaIndex: index, metadata: editorMetadata)
     }
     return metadata.isEmpty ? nil : metadata
+  }
+}
+
+private struct MIRAAudiusMusicPickerSheet: View {
+  let api: MIRAAPIClient
+  @Binding var selectedTrack: MIRAAudiusTrack?
+  let onClose: (() -> Void)?
+  @Environment(\.dismiss) private var dismiss
+  @FocusState private var isSearchFocused: Bool
+  @State private var query = ""
+  @State private var tracks: [MIRAAudiusTrack] = []
+  @State private var isLoading = false
+  @State private var errorMessage: String?
+
+  var body: some View {
+    NavigationStack {
+      VStack(spacing: 0) {
+        VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
+          HStack(spacing: MIRATheme.Space.sm) {
+            Image(systemName: "magnifyingglass")
+              .font(.system(size: 15, weight: .semibold))
+              .foregroundStyle(MIRATheme.Color.textMuted)
+            TextField("Search Audius music", text: $query)
+              .focused($isSearchFocused)
+              .textInputAutocapitalization(.never)
+              .autocorrectionDisabled()
+              .submitLabel(.search)
+              .onSubmit { Task { await searchTracks() } }
+            Button {
+              query = ""
+              Task { await loadTrending() }
+            } label: {
+              Image(systemName: "xmark.circle.fill")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(MIRATheme.Color.textMuted.opacity(query.isEmpty ? 0 : 0.75))
+            }
+            .disabled(query.isEmpty)
+          }
+          .padding(.horizontal, MIRATheme.Space.md)
+          .frame(height: 46)
+          .background(MIRATheme.Color.surfaceSoft.opacity(0.74))
+          .clipShape(Capsule())
+
+          if let selectedTrack {
+            VStack(alignment: .leading, spacing: MIRATheme.Space.xs) {
+              Text("Selected sound")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(MIRATheme.Color.textMuted)
+                .textCase(.uppercase)
+              MIRAAudioPreviewButton(
+                api: api,
+                trackId: selectedTrack.resolvedTrackId,
+                title: selectedTrack.displayTitle,
+                artist: selectedTrack.displayArtist,
+                artworkUrl: selectedTrack.artworkUrl,
+                streamUrl: selectedTrack.streamUrl
+              )
+            }
+          }
+        }
+        .padding(.horizontal, MIRATheme.Space.md)
+        .padding(.top, MIRATheme.Space.md)
+        .padding(.bottom, MIRATheme.Space.sm)
+
+        if isLoading && tracks.isEmpty {
+          ScrollView {
+            LazyVStack(spacing: 0) {
+              ForEach(0..<8, id: \.self) { _ in
+                musicSkeletonRow
+              }
+            }
+          }
+        } else if tracks.isEmpty {
+          VStack(spacing: MIRATheme.Space.sm) {
+            Image(systemName: "music.note.list")
+              .font(.system(size: 30, weight: .semibold))
+              .foregroundStyle(MIRATheme.Color.forest)
+            Text(errorMessage ?? "Search for a song or pick from trending tracks.")
+              .font(.system(size: 15, weight: .semibold))
+              .foregroundStyle(MIRATheme.Color.textSecondary)
+              .multilineTextAlignment(.center)
+              .padding(.horizontal, MIRATheme.Space.xl)
+          }
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+          ScrollView {
+            LazyVStack(spacing: 0) {
+              ForEach(tracks) { track in
+                musicTrackRow(track)
+              }
+            }
+            .padding(.bottom, MIRATheme.Space.xl)
+          }
+        }
+      }
+      .background(MIRATheme.Color.surface.ignoresSafeArea())
+      .navigationTitle("Music")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .topBarLeading) {
+          Button("Cancel") { close() }
+        }
+        ToolbarItem(placement: .topBarTrailing) {
+          HStack(spacing: MIRATheme.Space.xs) {
+            if selectedTrack != nil {
+              Button("Remove") { selectedTrack = nil }
+                .foregroundStyle(.red.opacity(0.85))
+            }
+            Button("Done") { close() }
+              .fontWeight(.semibold)
+          }
+        }
+      }
+      .task { await loadTrending() }
+    }
+  }
+
+  private var musicSkeletonRow: some View {
+    HStack(spacing: MIRATheme.Space.sm) {
+      RoundedRectangle(cornerRadius: 12, style: .continuous)
+        .fill(MIRATheme.Color.forestSoft.opacity(0.75))
+        .frame(width: 52, height: 52)
+      VStack(alignment: .leading, spacing: 8) {
+        RoundedRectangle(cornerRadius: 6, style: .continuous)
+          .fill(MIRATheme.Color.surfaceSoft)
+          .frame(width: 180, height: 13)
+        RoundedRectangle(cornerRadius: 6, style: .continuous)
+          .fill(MIRATheme.Color.surfaceSoft.opacity(0.72))
+          .frame(width: 112, height: 11)
+      }
+      Spacer()
+    }
+    .padding(.horizontal, MIRATheme.Space.md)
+    .padding(.vertical, 10)
+    .redacted(reason: .placeholder)
+  }
+
+  private func musicTrackRow(_ track: MIRAAudiusTrack) -> some View {
+    Button {
+      selectedTrack = track
+      UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    } label: {
+      HStack(spacing: MIRATheme.Space.sm) {
+        if let artwork = track.artworkUrl, !artwork.isEmpty {
+          RemoteMediaView(url: artwork, isVideo: false)
+            .frame(width: 52, height: 52)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        } else {
+          RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .fill(MIRATheme.Color.forestSoft)
+            .frame(width: 52, height: 52)
+            .overlay {
+              Image(systemName: "music.note")
+                .font(.system(size: 19, weight: .semibold))
+                .foregroundStyle(MIRATheme.Color.forest)
+            }
+        }
+
+        VStack(alignment: .leading, spacing: 3) {
+          Text(track.displayTitle)
+            .font(.system(size: 15, weight: .semibold))
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+            .lineLimit(1)
+          HStack(spacing: 6) {
+            Text(track.displayArtist)
+              .lineLimit(1)
+            if let duration = durationText(track.duration) {
+              Text("• \(duration)")
+            }
+          }
+          .font(.system(size: 12, weight: .medium))
+          .foregroundStyle(MIRATheme.Color.textSecondary)
+        }
+
+        Spacer(minLength: MIRATheme.Space.sm)
+
+        Image(systemName: selectedTrack?.resolvedTrackId == track.resolvedTrackId ? "checkmark.circle.fill" : "plus.circle")
+          .font(.system(size: 22, weight: .semibold))
+          .foregroundStyle(selectedTrack?.resolvedTrackId == track.resolvedTrackId ? MIRATheme.Color.forest : MIRATheme.Color.textMuted)
+      }
+      .padding(.horizontal, MIRATheme.Space.md)
+      .padding(.vertical, 10)
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+  }
+
+  @MainActor
+  private func loadTrending() async {
+    guard !isLoading else { return }
+    isLoading = true
+    defer { isLoading = false }
+    do {
+      let response: MIRAAudiusTrackResponse = try await api.get("/music/audius/trending?limit=24")
+      tracks = response.tracks
+      errorMessage = nil
+    } catch {
+      if tracks.isEmpty {
+        errorMessage = "Music is temporarily unavailable."
+      }
+    }
+  }
+
+  @MainActor
+  private func searchTracks() async {
+    let clean = query.trimmingCharacters(in: .whitespacesAndNewlines)
+    if clean.count < 2 {
+      await loadTrending()
+      return
+    }
+    guard !isLoading else { return }
+    isLoading = true
+    defer { isLoading = false }
+    var components = URLComponents()
+    components.queryItems = [
+      URLQueryItem(name: "q", value: clean),
+      URLQueryItem(name: "limit", value: "24"),
+    ]
+    let queryString = components.percentEncodedQuery ?? ""
+    do {
+      let response: MIRAAudiusTrackResponse = try await api.get("/music/audius/search?\(queryString)")
+      tracks = response.tracks
+      errorMessage = nil
+    } catch {
+      errorMessage = "Could not search music. Try again."
+    }
+  }
+
+  private func durationText(_ seconds: Int?) -> String? {
+    guard let seconds, seconds > 0 else { return nil }
+    return "\(seconds / 60):\(String(format: "%02d", seconds % 60))"
+  }
+
+  private func close() {
+    if let onClose {
+      onClose()
+    } else {
+      dismiss()
+    }
   }
 }
 
@@ -1674,6 +1941,9 @@ public struct CreateStoryNativeView: View {
   @State private var isPosting = false
   @State private var errorMessage: String?
   @State private var editingMedia: MIRAEditorPresentation?
+  @State private var pendingStoryMedia: MIRAPickedMedia?
+  @State private var selectedAudioTrack: MIRAAudiusTrack?
+  @State private var showMusicPicker = false
 
   public init(api: MIRAAPIClient, onClose: (() -> Void)? = nil) {
     self.api = api
@@ -1684,7 +1954,10 @@ public struct CreateStoryNativeView: View {
     ZStack {
       Color.black.ignoresSafeArea()
 
-      VStack {
+      if let pendingStoryMedia {
+        storyPublishPage(media: pendingStoryMedia)
+      } else {
+        VStack {
         HStack {
           Button { close() } label: {
             Image(systemName: "xmark")
@@ -1733,6 +2006,7 @@ public struct CreateStoryNativeView: View {
 
         Spacer()
       }
+      }
     }
     .toolbar(.hidden, for: .navigationBar)
     .toolbar(.hidden, for: .tabBar)
@@ -1763,9 +2037,127 @@ public struct CreateStoryNativeView: View {
     }
     .miraFullScreenOverlay(item: $editingMedia, background: .black) { item, closeEditor in
       MIRANativeMediaEditorView(media: item.media, mode: .story, onClose: closeEditor) { edited in
-        Task { await submit(media: edited) }
+        pendingStoryMedia = edited
+        closeEditor()
       }
       .ignoresSafeArea()
+    }
+    .miraBottomSheet(isPresented: $showMusicPicker, preferredHeightFraction: 0.78) { closeSheet in
+      MIRAAudiusMusicPickerSheet(api: api, selectedTrack: $selectedAudioTrack, onClose: closeSheet)
+    }
+  }
+
+  private func storyPublishPage(media: MIRAPickedMedia) -> some View {
+    GeometryReader { proxy in
+      VStack(spacing: 0) {
+        HStack {
+          Button {
+            pendingStoryMedia = nil
+            selectedAudioTrack = nil
+            errorMessage = nil
+            showCamera = true
+          } label: {
+            Image(systemName: "chevron.left")
+              .font(.system(size: 28, weight: .medium))
+              .foregroundStyle(.white)
+              .frame(width: 50, height: 50)
+          }
+          .buttonStyle(.plain)
+
+          Spacer()
+
+          Button { close() } label: {
+            Image(systemName: "xmark")
+              .font(.system(size: 22, weight: .semibold))
+              .foregroundStyle(.white)
+              .frame(width: 50, height: 50)
+          }
+          .buttonStyle(.plain)
+        }
+        .padding(.horizontal, MIRATheme.Space.sm)
+        .padding(.top, proxy.safeAreaInsets.top + 4)
+
+        LocalMediaThumb(
+          media: media,
+          width: min(proxy.size.width - 28, 430),
+          height: min(proxy.size.height * 0.70, (proxy.size.width - 28) * 16 / 9),
+          cornerRadius: 24
+        )
+        .padding(.top, MIRATheme.Space.sm)
+        .shadow(color: .black.opacity(0.28), radius: 18, x: 0, y: 10)
+
+        if let errorMessage {
+          Text(errorMessage)
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(.white.opacity(0.86))
+            .multilineTextAlignment(.center)
+            .padding(.horizontal, MIRATheme.Space.md)
+            .padding(.top, MIRATheme.Space.md)
+        }
+
+        Spacer(minLength: MIRATheme.Space.md)
+
+        VStack(spacing: MIRATheme.Space.sm) {
+          Button {
+            showMusicPicker = true
+          } label: {
+            HStack(spacing: MIRATheme.Space.sm) {
+              Image(systemName: "music.note")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 36, height: 36)
+                .background(MIRATheme.Color.forest)
+                .clipShape(Circle())
+
+              VStack(alignment: .leading, spacing: 2) {
+                Text(selectedAudioTrack?.displayTitle ?? "Add music")
+                  .font(.system(size: 15, weight: .semibold))
+                  .foregroundStyle(.white)
+                  .lineLimit(1)
+                Text(selectedAudioTrack?.displayArtist ?? "Search Audius tracks")
+                  .font(.system(size: 12, weight: .medium))
+                  .foregroundStyle(.white.opacity(0.68))
+                  .lineLimit(1)
+              }
+
+              Spacer()
+
+              Image(systemName: "chevron.right")
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(.white.opacity(0.68))
+            }
+            .padding(.horizontal, MIRATheme.Space.md)
+            .frame(height: 58)
+            .background(.white.opacity(0.14))
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+          }
+          .buttonStyle(.miraPress)
+
+          Button {
+            Task { await submit(media: media) }
+          } label: {
+            HStack(spacing: 8) {
+              if isPosting {
+                ProgressView()
+                  .tint(.white)
+                  .scaleEffect(0.74)
+              }
+              Text(isPosting ? "Posting" : "Share story")
+                .font(.system(size: 16, weight: .bold))
+            }
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity)
+            .frame(height: 54)
+            .background(MIRATheme.Color.forest)
+            .clipShape(Capsule())
+          }
+          .buttonStyle(.miraPress)
+          .disabled(isPosting)
+        }
+        .padding(.horizontal, MIRATheme.Space.md)
+        .padding(.bottom, max(proxy.safeAreaInsets.bottom + 12, 26))
+      }
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
   }
 
@@ -1782,7 +2174,15 @@ public struct CreateStoryNativeView: View {
           backgroundColor: "#1B4332",
           textColor: "#FFFFFF",
           visibility: "public",
-          editorMetadata: media.editorMetadata
+          editorMetadata: media.editorMetadata,
+          audioProvider: selectedAudioTrack == nil ? nil : "audius",
+          audioTrackId: selectedAudioTrack?.resolvedTrackId,
+          audioTitle: selectedAudioTrack?.displayTitle,
+          audioArtist: selectedAudioTrack?.displayArtist,
+          audioArtworkUrl: selectedAudioTrack?.artworkUrl,
+          audioStreamUrl: selectedAudioTrack?.streamUrl,
+          audioStartTime: selectedAudioTrack == nil ? nil : 0,
+          audioDuration: selectedAudioTrack.map { min(max($0.duration ?? 15, 5), 30) }
         )
       )
       close()

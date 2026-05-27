@@ -120,6 +120,14 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
   public let placeName: String?
   public let placeLat: Double?
   public let placeLng: Double?
+  public let audioProvider: String?
+  public let audioTrackId: String?
+  public let audioTitle: String?
+  public let audioArtist: String?
+  public let audioArtworkUrl: String?
+  public let audioStreamUrl: String?
+  public let audioStartTime: Int?
+  public let audioDuration: Int?
   public let taggedUsers: [MIRATaggedUserPayload]?
   public let createdAt: String?
   public let likesCount: Int?
@@ -202,6 +210,22 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
     return location.trimmingCharacters(in: .whitespacesAndNewlines)
   }
 
+  public var audioDisplayTitle: String? {
+    let clean = audioTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return clean.isEmpty ? nil : clean
+  }
+
+  public var audioDisplayArtist: String? {
+    let clean = audioArtist?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return clean.isEmpty ? "Audius" : clean
+  }
+
+  public var hasAudio: Bool {
+    (audioProvider?.lowercased() == "audius") &&
+      !(audioTrackId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) &&
+      audioDisplayTitle != nil
+  }
+
   public var authorDisplayName: String {
     if MIRAUsernameRules.isValidPublicUsername(userUsername) {
       return MIRAUsernameRules.normalized(userUsername)
@@ -257,6 +281,14 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
       placeName: placeName,
       placeLat: placeLat,
       placeLng: placeLng,
+      audioProvider: audioProvider,
+      audioTrackId: audioTrackId,
+      audioTitle: audioTitle,
+      audioArtist: audioArtist,
+      audioArtworkUrl: audioArtworkUrl,
+      audioStreamUrl: audioStreamUrl,
+      audioStartTime: audioStartTime,
+      audioDuration: audioDuration,
       taggedUsers: taggedUsers,
       createdAt: createdAt,
       likesCount: likesCount ?? self.likesCount,
@@ -298,6 +330,14 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
       placeName: placeName,
       placeLat: placeLat,
       placeLng: placeLng,
+      audioProvider: audioProvider,
+      audioTrackId: audioTrackId,
+      audioTitle: audioTitle,
+      audioArtist: audioArtist,
+      audioArtworkUrl: audioArtworkUrl,
+      audioStreamUrl: audioStreamUrl,
+      audioStartTime: audioStartTime,
+      audioDuration: audioDuration,
       taggedUsers: taggedUsers,
       createdAt: createdAt,
       likesCount: likesCount,
@@ -454,6 +494,41 @@ public struct MIRAGifSearchResponse: Decodable, Hashable {
   public let gifs: [MIRAGifItem]
 }
 
+public struct MIRAAudiusTrack: Codable, Identifiable, Hashable {
+  public let id: String
+  public let trackId: String?
+  public let title: String?
+  public let artist: String?
+  public let artistId: String?
+  public let artistHandle: String?
+  public let artistProfileImage: String?
+  public let artworkUrl: String?
+  public let duration: Int?
+  public let genre: String?
+  public let playCount: Int?
+  public let favoriteCount: Int?
+  public let streamUrl: String?
+
+  public var resolvedTrackId: String {
+    let cleanTrackId = trackId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return cleanTrackId.isEmpty ? id : cleanTrackId
+  }
+
+  public var displayTitle: String {
+    let clean = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return clean.isEmpty ? "Untitled track" : clean
+  }
+
+  public var displayArtist: String {
+    let clean = artist?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return clean.isEmpty ? "Audius artist" : clean
+  }
+}
+
+public struct MIRAAudiusTrackResponse: Decodable, Hashable {
+  public let tracks: [MIRAAudiusTrack]
+}
+
 public struct MIRAStatusPreview: Codable, Identifiable, Hashable {
   public let id: String
   public let userId: String?
@@ -461,12 +536,37 @@ public struct MIRAStatusPreview: Codable, Identifiable, Hashable {
   public let image: String?
   public let backgroundColor: String?
   public let textColor: String?
+  public let audioProvider: String?
+  public let audioTrackId: String?
+  public let audioTitle: String?
+  public let audioArtist: String?
+  public let audioArtworkUrl: String?
+  public let audioStreamUrl: String?
+  public let audioStartTime: Int?
+  public let audioDuration: Int?
+  public let audioHidden: FlexibleBool?
   public let createdAt: String?
   public let expiresAt: String?
 
   public var mediaURL: String? {
     guard let image, !image.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
     return image
+  }
+
+  public var hasAudio: Bool {
+    audioHidden?.value != true &&
+      audioProvider?.lowercased() == "audius" &&
+      !(audioTrackId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+  }
+
+  public var audioDisplayTitle: String {
+    let clean = audioTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return clean.isEmpty ? "Story sound" : clean
+  }
+
+  public var audioDisplayArtist: String {
+    let clean = audioArtist?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return clean.isEmpty ? "Audius" : clean
   }
 }
 
@@ -964,6 +1064,14 @@ public struct CreatePostBody: Encodable {
   public let placeLat: Double?
   public let placeLng: Double?
   public let taggedUsers: [MIRATaggedUserPayload]?
+  public let audioProvider: String?
+  public let audioTrackId: String?
+  public let audioTitle: String?
+  public let audioArtist: String?
+  public let audioArtworkUrl: String?
+  public let audioStreamUrl: String?
+  public let audioStartTime: Int?
+  public let audioDuration: Int?
   public let visibility: String
   public let clientRequestId: String
 
@@ -982,6 +1090,14 @@ public struct CreatePostBody: Encodable {
     placeLat: Double? = nil,
     placeLng: Double? = nil,
     taggedUsers: [MIRATaggedUserPayload]? = nil,
+    audioProvider: String? = nil,
+    audioTrackId: String? = nil,
+    audioTitle: String? = nil,
+    audioArtist: String? = nil,
+    audioArtworkUrl: String? = nil,
+    audioStreamUrl: String? = nil,
+    audioStartTime: Int? = nil,
+    audioDuration: Int? = nil,
     visibility: String,
     clientRequestId: String
   ) {
@@ -999,6 +1115,14 @@ public struct CreatePostBody: Encodable {
     self.placeLat = placeLat
     self.placeLng = placeLng
     self.taggedUsers = taggedUsers
+    self.audioProvider = audioProvider
+    self.audioTrackId = audioTrackId
+    self.audioTitle = audioTitle
+    self.audioArtist = audioArtist
+    self.audioArtworkUrl = audioArtworkUrl
+    self.audioStreamUrl = audioStreamUrl
+    self.audioStartTime = audioStartTime
+    self.audioDuration = audioDuration
     self.visibility = visibility
     self.clientRequestId = clientRequestId
   }
@@ -1035,6 +1159,14 @@ public struct CreateStatusBody: Encodable {
   public let textColor: String
   public let visibility: String
   public let editorMetadata: MIRANativeEditedMediaMetadata?
+  public let audioProvider: String?
+  public let audioTrackId: String?
+  public let audioTitle: String?
+  public let audioArtist: String?
+  public let audioArtworkUrl: String?
+  public let audioStreamUrl: String?
+  public let audioStartTime: Int?
+  public let audioDuration: Int?
 
   public init(
     content: String,
@@ -1042,7 +1174,15 @@ public struct CreateStatusBody: Encodable {
     backgroundColor: String,
     textColor: String,
     visibility: String,
-    editorMetadata: MIRANativeEditedMediaMetadata? = nil
+    editorMetadata: MIRANativeEditedMediaMetadata? = nil,
+    audioProvider: String? = nil,
+    audioTrackId: String? = nil,
+    audioTitle: String? = nil,
+    audioArtist: String? = nil,
+    audioArtworkUrl: String? = nil,
+    audioStreamUrl: String? = nil,
+    audioStartTime: Int? = nil,
+    audioDuration: Int? = nil
   ) {
     self.content = content
     self.image = image
@@ -1050,6 +1190,14 @@ public struct CreateStatusBody: Encodable {
     self.textColor = textColor
     self.visibility = visibility
     self.editorMetadata = editorMetadata
+    self.audioProvider = audioProvider
+    self.audioTrackId = audioTrackId
+    self.audioTitle = audioTitle
+    self.audioArtist = audioArtist
+    self.audioArtworkUrl = audioArtworkUrl
+    self.audioStreamUrl = audioStreamUrl
+    self.audioStartTime = audioStartTime
+    self.audioDuration = audioDuration
   }
 }
 

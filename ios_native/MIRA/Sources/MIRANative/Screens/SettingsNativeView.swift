@@ -9,11 +9,9 @@ private struct SettingsProfileUpdateBody: Encodable {
 
 private struct SettingsEmailBody: Encodable {
   let email: String
-  let password: String
 }
 
 private struct SettingsPasswordBody: Encodable {
-  let oldPassword: String
   let newPassword: String
 }
 
@@ -107,14 +105,10 @@ final class SettingsNativeModel: ObservableObject {
     }
   }
 
-  func updateEmail(newEmail: String, password: String) async -> Bool {
+  func updateEmail(newEmail: String) async -> Bool {
     let cleanEmail = newEmail.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     guard cleanEmail.contains("@"), cleanEmail.contains(".") else {
       show("Enter a valid email address.", isError: true)
-      return false
-    }
-    guard !password.isEmpty else {
-      show("Enter your current password to update email.", isError: true)
       return false
     }
     isSavingEmail = true
@@ -122,21 +116,21 @@ final class SettingsNativeModel: ObservableObject {
     do {
       let updated: MIRAUser = try await api.put(
         "/users/me/email",
-        body: SettingsEmailBody(email: cleanEmail, password: password)
+        body: SettingsEmailBody(email: cleanEmail)
       )
       apply(user: updated)
       authSession?.replaceUser(updated)
       show("Email updated.")
       return true
     } catch {
-      show("Could not update email. Check your password and try again.", isError: true)
+      show("Could not update email. Try again in a moment.", isError: true)
       return false
     }
   }
 
-  func updatePassword(currentPassword: String, newPassword: String) async -> Bool {
-    guard !currentPassword.isEmpty, !newPassword.isEmpty else {
-      show("Fill in both password fields.", isError: true)
+  func updatePassword(newPassword: String) async -> Bool {
+    guard !newPassword.isEmpty else {
+      show("Enter a new password.", isError: true)
       return false
     }
     guard newPassword.count >= 8 else {
@@ -148,12 +142,12 @@ final class SettingsNativeModel: ObservableObject {
     do {
       let _: SettingsMessageResponse = try await api.put(
         "/users/me/password",
-        body: SettingsPasswordBody(oldPassword: currentPassword, newPassword: newPassword)
+        body: SettingsPasswordBody(newPassword: newPassword)
       )
       show("Password updated.")
       return true
     } catch {
-      show("Could not update password. Check your current password.", isError: true)
+      show("Could not update password. Try again in a moment.", isError: true)
       return false
     }
   }
@@ -547,8 +541,6 @@ private struct NotificationSettingsNativeView: View {
 private struct SecuritySettingsNativeView: View {
   @ObservedObject var model: SettingsNativeModel
   @State private var newEmail = ""
-  @State private var emailPassword = ""
-  @State private var currentPassword = ""
   @State private var newPassword = ""
   @State private var showDeleteConfirm = false
   @State private var showLogoutConfirm = false
@@ -557,23 +549,28 @@ private struct SecuritySettingsNativeView: View {
     SettingsDetailScaffold(title: "Security") {
       SettingsCard(title: "Email") {
         SettingsTextField(title: "Email", text: $newEmail, keyboardType: .emailAddress)
-        SettingsSecureField(title: "Current password", text: $emailPassword)
+        Text("Uses your signed-in Captro session. Log out on shared devices.")
+          .font(.system(size: 12, weight: .medium))
+          .foregroundStyle(MIRATheme.Color.textMuted)
+          .padding(.horizontal, MIRATheme.Space.md)
+          .padding(.bottom, MIRATheme.Space.xs)
         SettingsActionButton(title: model.isSavingEmail ? "Saving..." : "Update email", disabled: model.isSavingEmail) {
           Task {
-            if await model.updateEmail(newEmail: newEmail, password: emailPassword) {
-              emailPassword = ""
-            }
+            _ = await model.updateEmail(newEmail: newEmail)
           }
         }
       }
 
       SettingsCard(title: "Password") {
-        SettingsSecureField(title: "Current password", text: $currentPassword)
         SettingsSecureField(title: "New password", text: $newPassword)
+        Text("Minimum 8 characters. This updates the login password for your signed-in account.")
+          .font(.system(size: 12, weight: .medium))
+          .foregroundStyle(MIRATheme.Color.textMuted)
+          .padding(.horizontal, MIRATheme.Space.md)
+          .padding(.bottom, MIRATheme.Space.xs)
         SettingsActionButton(title: model.isSavingPassword ? "Saving..." : "Update password", disabled: model.isSavingPassword) {
           Task {
-            if await model.updatePassword(currentPassword: currentPassword, newPassword: newPassword) {
-              currentPassword = ""
+            if await model.updatePassword(newPassword: newPassword) {
               newPassword = ""
             }
           }

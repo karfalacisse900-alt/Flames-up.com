@@ -1073,6 +1073,19 @@ private struct MainNativePostCard: View {
         .accessibilityElement(children: .combine)
       }
 
+      if post.hasAudio {
+        MIRAAudioPreviewButton(
+          api: api,
+          trackId: post.audioTrackId,
+          title: post.audioDisplayTitle ?? "Audio",
+          artist: post.audioDisplayArtist ?? "Audius",
+          artworkUrl: post.audioArtworkUrl,
+          streamUrl: post.audioStreamUrl,
+          compact: true
+        )
+        .padding(.top, 2)
+      }
+
       if let taggedPeopleText {
         HStack(spacing: 6) {
           Image(systemName: "person.2.fill")
@@ -1091,7 +1104,7 @@ private struct MainNativePostCard: View {
   }
 
   private var hasCaptionContent: Bool {
-    headlineText != nil || captionBodyText != nil || placeText != nil || taggedPeopleText != nil
+    headlineText != nil || captionBodyText != nil || placeText != nil || taggedPeopleText != nil || post.hasAudio
   }
 
   private var captionNeedsExpansion: Bool {

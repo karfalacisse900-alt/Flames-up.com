@@ -182,7 +182,14 @@ api.all('/challenge-entries/*', retiredFeature('Challenge entries'));
 api.all('/admin/challenges', retiredFeature('Challenge admin tools'));
 api.all('/admin/challenges/*', retiredFeature('Challenge admin tools'));
 api.all('/music', retiredFeature('Music'));
-api.all('/music/*', retiredFeature('Music'));
+api.use('/music/*', async (c, next) => {
+  const path = new URL(c.req.url).pathname;
+  if (path.startsWith('/api/music/audius/')) {
+    await next();
+    return;
+  }
+  return retiredFeature('Music')(c);
+});
 api.all('/admin/music', retiredFeature('Music admin tools'));
 api.all('/admin/music/*', retiredFeature('Music admin tools'));
 api.all('/admin/notes', retiredFeature('Notes admin tools'));
@@ -1560,6 +1567,15 @@ async function ensureAudioSchema(db: D1Database) {
     'ALTER TABLE posts ADD COLUMN audio_start_time INTEGER DEFAULT 0',
     'ALTER TABLE posts ADD COLUMN audio_duration INTEGER DEFAULT 0',
     'ALTER TABLE posts ADD COLUMN audio_hidden INTEGER DEFAULT 0',
+    "ALTER TABLE statuses ADD COLUMN audio_provider TEXT DEFAULT ''",
+    "ALTER TABLE statuses ADD COLUMN audio_track_id TEXT DEFAULT ''",
+    "ALTER TABLE statuses ADD COLUMN audio_title TEXT DEFAULT ''",
+    "ALTER TABLE statuses ADD COLUMN audio_artist TEXT DEFAULT ''",
+    "ALTER TABLE statuses ADD COLUMN audio_artwork_url TEXT DEFAULT ''",
+    "ALTER TABLE statuses ADD COLUMN audio_stream_url TEXT DEFAULT ''",
+    'ALTER TABLE statuses ADD COLUMN audio_start_time INTEGER DEFAULT 0',
+    'ALTER TABLE statuses ADD COLUMN audio_duration INTEGER DEFAULT 0',
+    'ALTER TABLE statuses ADD COLUMN audio_hidden INTEGER DEFAULT 0',
     `CREATE TABLE IF NOT EXISTS hidden_sounds (
       track_id TEXT PRIMARY KEY,
       provider TEXT DEFAULT 'audius',
@@ -1587,6 +1603,7 @@ async function ensureAudioSchema(db: D1Database) {
     'ALTER TABLE favorite_sounds ADD COLUMN play_count INTEGER DEFAULT 0',
     'ALTER TABLE favorite_sounds ADD COLUMN favorite_count INTEGER DEFAULT 0',
     'CREATE INDEX IF NOT EXISTS idx_posts_audio_track ON posts(audio_provider, audio_track_id)',
+    'CREATE INDEX IF NOT EXISTS idx_statuses_audio_track ON statuses(audio_provider, audio_track_id)',
     'CREATE INDEX IF NOT EXISTS idx_hidden_sounds_provider ON hidden_sounds(provider, track_id)',
     'CREATE INDEX IF NOT EXISTS idx_favorite_sounds_user ON favorite_sounds(user_id, provider, created_at)',
   ];
@@ -2893,8 +2910,8 @@ function publicAiMusicPayload(row: any, opts: { liked?: boolean; saved?: boolean
   };
 }
 
-const AUDIUS_APP_NAME = 'Flames Up';
-const AUDIUS_BASE_URL = 'https://discoveryprovider.audius.co/v1';
+const AUDIUS_APP_NAME = 'Captro';
+const AUDIUS_BASE_URL = 'https://api.audius.co/v1';
 
 function audiusUrl(path: string, params: Record<string, string | number | undefined>) {
   const url = new URL(`${AUDIUS_BASE_URL}${path}`);
@@ -5241,6 +5258,30 @@ function getSupabaseServiceRoleKey(c: any): string {
   return key;
 }
 
+async function updateSupabaseAuthUser(c: any, supabaseUserId: unknown, payload: { email?: string; password?: string }) {
+  const id = String(supabaseUserId || '').trim();
+  const body = Object.fromEntries(
+    Object.entries(payload).filter(([, value]) => typeof value === 'string' && value.trim().length > 0)
+  );
+  if (!id || Object.keys(body).length === 0) return;
+
+  const serviceRoleKey = getSupabaseServiceRoleKey(c);
+  const response = await fetch(`${getSupabaseUrl(c)}/auth/v1/admin/users/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    headers: {
+      apikey: serviceRoleKey,
+      Authorization: `Bearer ${serviceRoleKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`SUPABASE_AUTH_UPDATE_FAILED:${response.status}:${text.slice(0, 200)}`);
+  }
+}
+
 function isUuidText(value: unknown): string | null {
   const text = String(value || '').trim();
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(text) ? text : null;
@@ -6045,28 +6086,32 @@ api.put('/users/me/email', authMiddleware, async (c) => {
     if (limited) return limited;
     const body: any = await c.req.json().catch(() => ({}));
     const email = normalizeOptionalEmail(body.email || body.new_email);
-    const password = String(body.password || body.current_password || '');
 
     if (!email) return c.json({ detail: 'Enter a valid email address.' }, 400);
-    if (!password) return c.json({ detail: 'Enter your current password to change email.' }, 400);
 
     const currentUser: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
     if (!currentUser) return c.json({ detail: 'User not found' }, 404);
-    if (!(await verifyPassword(password, currentUser.password_hash))) {
-      return c.json({ detail: 'Current password is incorrect.' }, 401);
-    }
 
     const owner: any = await c.env.DB.prepare('SELECT id FROM users WHERE LOWER(email) = ? AND id != ?')
       .bind(email, userId)
       .first();
     if (owner) return c.json({ detail: 'That email is already used by another account.' }, 409);
 
+    if (currentUser.supabase_user_id) {
+      await updateSupabaseAuthUser(c, currentUser.supabase_user_id, { email });
+    }
+
     await c.env.DB.prepare('UPDATE users SET email = ?, updated_at = datetime(\'now\') WHERE id = ?')
       .bind(email, userId)
       .run();
     const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
+    await logSecurityEvent(c, 'email_updated', userId, {});
     return c.json(authUserPayload(user));
-  } catch {
+  } catch (error: any) {
+    const code = getErrorCode(error);
+    if (code.startsWith('SUPABASE_AUTH_UPDATE_FAILED') || code === 'SUPABASE_SERVICE_ROLE_MISSING' || code === 'SUPABASE_NOT_CONFIGURED') {
+      return c.json({ detail: 'Could not update the login email right now.' }, 503);
+    }
     return c.json({ detail: 'Could not update email.' }, 500);
   }
 });
@@ -6074,25 +6119,34 @@ api.put('/users/me/email', authMiddleware, async (c) => {
 api.put('/users/me/password', authMiddleware, async (c) => {
   try {
     const userId = getUserId(c);
+    const bodyTooLarge = rejectLargeRequest(c, 60_000);
+    if (bodyTooLarge) return bodyTooLarge;
+    const limited = await enforceRateLimit(c, 'account_password', userId, 8, 600);
+    if (limited) return limited;
     const body: any = await c.req.json().catch(() => ({}));
-    const currentPassword = String(body.old_password || body.current_password || '');
-    const newPassword = String(body.new_password || '');
+    const newPassword = String(body.new_password || body.password || '');
 
-    if (!currentPassword || !newPassword) return c.json({ detail: 'Current password and new password are required.' }, 400);
+    if (!newPassword) return c.json({ detail: 'New password is required.' }, 400);
     if (newPassword.length < 8) return c.json({ detail: 'New password must be at least 8 characters.' }, 400);
 
     const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
     if (!user) return c.json({ detail: 'User not found' }, 404);
-    if (!(await verifyPassword(currentPassword, user.password_hash))) {
-      return c.json({ detail: 'Current password is incorrect.' }, 401);
+
+    if (user.supabase_user_id) {
+      await updateSupabaseAuthUser(c, user.supabase_user_id, { password: newPassword });
     }
 
     const newHash = await hashPassword(newPassword);
     await c.env.DB.prepare('UPDATE users SET password_hash = ?, updated_at = datetime(\'now\') WHERE id = ?')
       .bind(newHash, userId)
       .run();
+    await logSecurityEvent(c, 'password_updated', userId, {});
     return c.json({ detail: 'Password updated.' });
-  } catch {
+  } catch (error: any) {
+    const code = getErrorCode(error);
+    if (code.startsWith('SUPABASE_AUTH_UPDATE_FAILED') || code === 'SUPABASE_SERVICE_ROLE_MISSING' || code === 'SUPABASE_NOT_CONFIGURED') {
+      return c.json({ detail: 'Could not update the login password right now.' }, 503);
+    }
     return c.json({ detail: 'Could not update password.' }, 500);
   }
 });
@@ -7831,14 +7885,47 @@ function groupStatusRows(rows: any[], viewerId: string) {
 api.post('/statuses', authMiddleware, async (c) => {
   const phoneGate = await requirePhoneVerified(c, 'share stories');
   if (phoneGate) return phoneGate;
+  await ensureAudioSchema(c.env.DB);
   const userId = getUserId(c); const b = await c.req.json();
   const user: any = await c.env.DB.prepare('SELECT username, full_name, profile_image FROM users WHERE id = ?').bind(userId).first();
   const storyLifetimeMs = 7 * 24 * 60 * 60 * 1000;
   const id = uuid(); const expiresAt = new Date(Date.now() + storyLifetimeMs).toISOString();
   const visibility = normalizeVisibility(b.visibility);
-  await c.env.DB.prepare('INSERT INTO statuses (id, user_id, content, image, background_color, text_color, visibility, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-    .bind(id, userId, b.content || '', b.image || null, b.background_color || '#1B4332', b.text_color || '#FFFFFF', visibility, expiresAt).run();
-  return c.json({ id, user_id: userId, content: b.content, image: b.image, background_color: b.background_color, text_color: b.text_color, visibility, user_username: publicUsernameFor(user), user_full_name: user?.full_name, user_profile_image: user?.profile_image, viewed_by: [], created_at: now(), expires_at: expiresAt });
+  const audioProvider = b.audio_provider === 'audius' ? 'audius' : '';
+  const audioTrackId = audioProvider ? cleanText(b.audio_track_id, 80) : '';
+  const audioTitle = audioProvider ? cleanText(b.audio_title, 180) : '';
+  const audioArtist = audioProvider ? cleanText(b.audio_artist, 120) : '';
+  const audioArtworkUrl = audioProvider ? cleanText(b.audio_artwork_url, 1000) : '';
+  const audioStreamUrl = audioProvider ? cleanText(b.audio_stream_url, 2200) : '';
+  const audioStartTime = audioProvider ? clampNumber(b.audio_start_time, 0, 60 * 60 * 6, 0) : 0;
+  const audioDuration = audioProvider ? clampNumber(b.audio_duration, 5, 30, 15) : 0;
+  if (audioProvider && !audioTrackId) {
+    return c.json({ detail: 'Audio track id is required.' }, 400);
+  }
+  if (audioProvider) {
+    const hidden = await c.env.DB.prepare("SELECT track_id FROM hidden_sounds WHERE provider = 'audius' AND track_id = ?")
+      .bind(audioTrackId)
+      .first();
+    if (hidden) return c.json({ detail: 'This sound is unavailable.' }, 400);
+  }
+  await c.env.DB.prepare(
+    `INSERT INTO statuses (
+      id, user_id, content, image, background_color, text_color, visibility, expires_at,
+      audio_provider, audio_track_id, audio_title, audio_artist, audio_artwork_url, audio_stream_url,
+      audio_start_time, audio_duration
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  )
+    .bind(
+      id, userId, b.content || '', b.image || null, b.background_color || '#1B4332', b.text_color || '#FFFFFF', visibility, expiresAt,
+      audioProvider, audioTrackId, audioTitle, audioArtist, audioArtworkUrl, audioStreamUrl, audioStartTime, audioDuration
+    ).run();
+  return c.json({
+    id, user_id: userId, content: b.content, image: b.image, background_color: b.background_color, text_color: b.text_color,
+    visibility, user_username: publicUsernameFor(user), user_full_name: user?.full_name, user_profile_image: user?.profile_image,
+    audio_provider: audioProvider, audio_track_id: audioTrackId, audio_title: audioTitle, audio_artist: audioArtist,
+    audio_artwork_url: audioArtworkUrl, audio_stream_url: audioStreamUrl, audio_start_time: audioStartTime, audio_duration: audioDuration,
+    viewed_by: [], created_at: now(), expires_at: expiresAt,
+  });
 });
 
 api.get('/statuses', authMiddleware, async (c) => {

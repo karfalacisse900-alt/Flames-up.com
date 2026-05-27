@@ -1,3 +1,4 @@
+import AVFoundation
 import SwiftUI
 import UIKit
 
@@ -492,6 +493,9 @@ private struct StoryViewerNativeView: View {
   @State private var isCanvasVisible = false
   @State private var isClosing = false
   @State private var replyText = ""
+  @State private var storyAudioPlayer: AVPlayer?
+  @State private var isStoryAudioPlaying = false
+  @State private var isStoryAudioLoading = false
   @FocusState private var isReplyFocused: Bool
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -541,6 +545,9 @@ private struct StoryViewerNativeView: View {
       guard let id = currentStory?.id else { return }
       let _: EmptyResponse? = try? await api.post("/statuses/\(id)/view", body: EmptyBody())
     }
+    .task(id: currentStory?.id) {
+      await prepareStoryAudioIfNeeded()
+    }
     .task {
       if localStories == nil {
         localStories = group.statuses ?? []
@@ -565,6 +572,7 @@ private struct StoryViewerNativeView: View {
       }
       Button("Cancel", role: .cancel) {}
     }
+    .onDisappear { stopStoryAudio() }
   }
 
   private var storyCanvas: some View {
@@ -659,19 +667,29 @@ private struct StoryViewerNativeView: View {
 
       Spacer()
 
-      Button {} label: {
-        ZStack(alignment: .bottomTrailing) {
-          RoundedRectangle(cornerRadius: 9, style: .continuous)
-            .fill(.black.opacity(0.34))
-            .frame(width: 32, height: 32)
-          Image(systemName: "music.note")
-            .font(.system(size: 13, weight: .bold))
-            .foregroundStyle(.white)
-            .offset(x: 3, y: 3)
+      if currentStory?.hasAudio == true {
+        Button {
+          toggleStoryAudio()
+        } label: {
+          ZStack(alignment: .bottomTrailing) {
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+              .fill(.black.opacity(0.34))
+              .frame(width: 32, height: 32)
+            if isStoryAudioLoading {
+              ProgressView()
+                .tint(.white)
+                .scaleEffect(0.58)
+            } else {
+              Image(systemName: isStoryAudioPlaying ? "pause.fill" : "music.note")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(.white)
+                .offset(x: isStoryAudioPlaying ? 0 : 3, y: isStoryAudioPlaying ? 0 : 3)
+            }
+          }
+          .frame(width: 36, height: 36)
         }
-        .frame(width: 36, height: 36)
+        .buttonStyle(.miraPress)
       }
-      .buttonStyle(.miraPress)
 
       Button { closeStoryViewer() } label: {
         Image(systemName: "xmark")
@@ -750,6 +768,56 @@ private struct StoryViewerNativeView: View {
       return .white
     }
     return Color(uiColor: UIColor(hex: value))
+  }
+
+  @MainActor
+  private func prepareStoryAudioIfNeeded() async {
+    stopStoryAudio()
+    guard let story = currentStory, story.hasAudio else { return }
+    isStoryAudioLoading = true
+    defer { isStoryAudioLoading = false }
+    guard let stream = await storyAudioStreamURL(for: story), let url = URL(string: stream) else { return }
+    let player = AVPlayer(url: url)
+    storyAudioPlayer = player
+    player.play()
+    isStoryAudioPlaying = true
+  }
+
+  private func storyAudioStreamURL(for story: MIRAStatusPreview) async -> String? {
+    let stream = story.audioStreamUrl?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    if !stream.isEmpty { return stream }
+    guard
+      let encoded = story.audioTrackId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        .addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+      !encoded.isEmpty
+    else {
+      return nil
+    }
+    do {
+      let track: MIRAAudiusTrack = try await api.get("/music/audius/stream/\(encoded)")
+      return track.streamUrl
+    } catch {
+      return nil
+    }
+  }
+
+  private func toggleStoryAudio() {
+    if isStoryAudioPlaying {
+      storyAudioPlayer?.pause()
+      isStoryAudioPlaying = false
+    } else if let storyAudioPlayer {
+      storyAudioPlayer.play()
+      isStoryAudioPlaying = true
+    } else {
+      Task { await prepareStoryAudioIfNeeded() }
+    }
+  }
+
+  private func stopStoryAudio() {
+    storyAudioPlayer?.pause()
+    storyAudioPlayer = nil
+    isStoryAudioPlaying = false
+    isStoryAudioLoading = false
   }
 
   private func deleteCurrentStory() async {
