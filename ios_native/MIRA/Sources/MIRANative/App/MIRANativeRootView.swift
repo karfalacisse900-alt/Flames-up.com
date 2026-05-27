@@ -429,15 +429,10 @@ private struct CaptroStartupView: View {
 
 private struct CaptroWordmarkView: View {
   var body: some View {
-    HStack(alignment: .firstTextBaseline, spacing: 0) {
-      Text("Cap")
-      Text("Tro")
-        .italic()
-    }
-    .font(.system(size: 58, weight: .regular, design: .serif))
-    .foregroundStyle(Color.black.opacity(0.90))
-    .lineLimit(1)
-    .minimumScaleFactor(0.75)
+    Image("CaptroLaunchLogo", bundle: .main)
+      .resizable()
+      .scaledToFit()
+      .frame(width: 164, height: 164)
     .accessibilityLabel("Captro")
   }
 }
