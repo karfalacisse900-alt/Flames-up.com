@@ -432,8 +432,8 @@ private struct CaptroWordmarkView: View {
     Image("CaptroLaunchLogo", bundle: .main)
       .resizable()
       .scaledToFit()
-      .frame(width: 164, height: 164)
-    .accessibilityLabel("Captro")
+      .frame(width: 292, height: 98)
+    .accessibilityLabel("Cap Tro")
   }
 }
 
