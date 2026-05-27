@@ -909,10 +909,16 @@ private struct MainNativePostCard: View {
       isSubmittingFollow = false
       isFollowConfirmationVisible = false
     }
+    .onAppear {
+      prefetchCarouselNeighbors()
+    }
     .onChange(of: post.feedMediaURLs) { _, urls in
       if selectedMediaIndex >= urls.count {
         selectedMediaIndex = max(0, urls.count - 1)
       }
+    }
+    .onChange(of: selectedMediaIndex) { _, _ in
+      prefetchCarouselNeighbors()
     }
     .onChange(of: post.id) { _, _ in isShowingCaption = false }
     .animation(.easeInOut(duration: 0.24), value: isShowingCaption)
@@ -958,6 +964,12 @@ private struct MainNativePostCard: View {
         .frame(maxWidth: .infinity)
         .frame(minHeight: mediaHeight, maxHeight: mediaHeight)
         .background(MIRATheme.Color.mediaPlaceholder)
+        .overlay(alignment: .topTrailing) {
+          carouselCounter(current: selectedMediaIndex + 1, total: mediaURLs.count)
+            .padding(.top, 12)
+            .padding(.trailing, 12)
+            .allowsHitTesting(false)
+        }
 
         HStack(spacing: 6) {
           ForEach(mediaURLs.indices, id: \.self) { index in
@@ -972,6 +984,40 @@ private struct MainNativePostCard: View {
         .animation(.easeInOut(duration: 0.16), value: selectedMediaIndex)
       }
       .background(MIRATheme.Color.surface)
+    }
+  }
+
+  private func carouselCounter(current: Int, total: Int) -> some View {
+    Text("\(min(max(current, 1), max(total, 1)))/\(max(total, 1))")
+      .font(.system(size: 13, weight: .bold))
+      .foregroundStyle(.white)
+      .padding(.horizontal, 10)
+      .frame(height: 28)
+      .background(.black.opacity(0.58))
+      .clipShape(Capsule())
+      .overlay(Capsule().stroke(.white.opacity(0.16), lineWidth: 0.8))
+      .shadow(color: .black.opacity(0.18), radius: 8, x: 0, y: 3)
+  }
+
+  private func prefetchCarouselNeighbors() {
+    let mediaURLs = post.feedMediaURLs
+    guard mediaURLs.count > 1 else { return }
+    let selected = min(max(selectedMediaIndex, 0), mediaURLs.count - 1)
+    let lower = max(0, selected - 1)
+    let upper = min(mediaURLs.count - 1, selected + 2)
+    var urls: [String] = []
+    for index in lower...upper {
+      let url = mediaURLs[index]
+      if let placeholder = mediaPlaceholderURL(for: index, mediaURL: url) {
+        urls.append(placeholder)
+      }
+      if !url.isVideoURL {
+        urls.append(url)
+      }
+    }
+    guard !urls.isEmpty else { return }
+    Task.detached(priority: .utility) {
+      await MIRAImagePrefetcher.prefetch(urls: urls, maxPixelSize: MIRAMediaSizing.feedTargetHeight, limit: 8)
     }
   }
 

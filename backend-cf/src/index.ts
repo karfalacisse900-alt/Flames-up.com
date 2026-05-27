@@ -7290,15 +7290,17 @@ api.get('/posts/feed', authMiddleware, async (c) => {
        EXISTS (SELECT 1 FROM follows fl WHERE fl.follower_id = ? AND fl.following_id = p.user_id) AS is_following,
        EXISTS (SELECT 1 FROM likes lk WHERE lk.user_id = ? AND lk.post_id = p.id) AS is_liked,
        EXISTS (SELECT 1 FROM saved_posts sp WHERE sp.user_id = ? AND sp.post_id = p.id) AS saved,
-       (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
-       (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden')) AS live_comments_count,
-       (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id) AS live_saves_count
+       COALESCE(p.likes_count, 0) AS live_likes_count,
+       COALESCE(p.comments_count, 0) AS live_comments_count,
+       COALESCE(p.saves_count, 0) AS live_saves_count
      FROM posts p JOIN users u ON p.user_id = u.id`,
     `WHERE ${visiblePostWhere('u', 'p')}`,
     'ORDER BY p.created_at DESC LIMIT ? OFFSET ?',
   ].join(' ');
   const posts = await c.env.DB.prepare(feedSql).bind(userId, userId, userId, ...visiblePostBindValues(userId), limit, skip).all();
-  return c.json((posts.results as any[]).map((p) => feedPostPayload(p, [], c.env)));
+  const response = c.json((posts.results as any[]).map((p) => feedPostPayload(p, [], c.env)));
+  response.headers.set('cache-control', 'private, max-age=6');
+  return response;
 });
 
 api.get('/posts/world-board', async (c) => {
@@ -7342,15 +7344,17 @@ api.get('/posts/nearby-feed', authMiddleware, async (c) => {
   const limit = clampNumber(c.req.query('limit') || '24', 1, 50, 24);
   const nearbyFeedSql = [
     `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
-       (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
-       (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden')) AS live_comments_count,
-       (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id) AS live_saves_count
+       COALESCE(p.likes_count, 0) AS live_likes_count,
+       COALESCE(p.comments_count, 0) AS live_comments_count,
+       COALESCE(p.saves_count, 0) AS live_saves_count
      FROM posts p JOIN users u ON p.user_id = u.id`,
     `WHERE ${visiblePostWhere('u', 'p')}`,
     'ORDER BY p.created_at DESC LIMIT ? OFFSET ?',
   ].join(' ');
   const posts = await c.env.DB.prepare(nearbyFeedSql).bind(...visiblePostBindValues(userId), limit, skip).all();
-  return c.json((posts.results as any[]).map((p) => feedPostPayload(p, [], c.env)));
+  const response = c.json((posts.results as any[]).map((p) => feedPostPayload(p, [], c.env)));
+  response.headers.set('cache-control', 'private, max-age=6');
+  return response;
 });
 
 api.get('/posts/:postId', authMiddleware, async (c) => {

@@ -134,10 +134,10 @@ public final class MIRAAPIClient {
     configuration.timeoutIntervalForRequest = 25
     configuration.timeoutIntervalForResource = 45
     configuration.waitsForConnectivity = true
-    configuration.httpMaximumConnectionsPerHost = 6
+    configuration.httpMaximumConnectionsPerHost = 8
     configuration.urlCache = URLCache(
-      memoryCapacity: 64 * 1024 * 1024,
-      diskCapacity: 256 * 1024 * 1024,
+      memoryCapacity: 96 * 1024 * 1024,
+      diskCapacity: 768 * 1024 * 1024,
       directory: nil
     )
     return URLSession(configuration: configuration)

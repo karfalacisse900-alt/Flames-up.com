@@ -331,6 +331,74 @@ private final class MIRAImageMemoryCache {
   }
 }
 
+private enum MIRAImageLoadSource: Equatable {
+  case memory
+  case disk
+  case network
+}
+
+private struct MIRAImageLoadResult {
+  let image: UIImage
+  let source: MIRAImageLoadSource
+}
+
+private actor MIRAImageLoadPipeline {
+  static let shared = MIRAImageLoadPipeline()
+  private var inFlight: [String: Task<MIRAImageLoadResult?, Never>] = [:]
+
+  func image(for remoteURL: URL, maxPixelSize: CGFloat) async -> MIRAImageLoadResult? {
+    let resolvedMaxPixelSize = max(64, maxPixelSize)
+    let key = "\(remoteURL.absoluteString)#\(Int(resolvedMaxPixelSize.rounded()))"
+
+    if let cached = MIRAImageMemoryCache.shared.image(for: remoteURL, maxPixelSize: resolvedMaxPixelSize) {
+      return MIRAImageLoadResult(image: cached, source: .memory)
+    }
+
+    if let existing = inFlight[key] {
+      return await existing.value
+    }
+
+    let task = Task.detached(priority: .userInitiated) { () -> MIRAImageLoadResult? in
+      if let diskCached = await MIRAImageDiskCache.image(for: remoteURL, maxPixelSize: resolvedMaxPixelSize) {
+        MIRAImageMemoryCache.shared.store(diskCached, for: remoteURL, maxPixelSize: resolvedMaxPixelSize, cost: diskCached.miraCacheCost)
+        return MIRAImageLoadResult(image: diskCached, source: .disk)
+      }
+
+      do {
+        var request = URLRequest(url: remoteURL)
+        request.cachePolicy = .returnCacheDataElseLoad
+        request.timeoutInterval = 14
+        request.setValue("image/avif,image/webp,image/*,*/*;q=0.8", forHTTPHeaderField: "Accept")
+
+        let metric = await MIRAPerformanceMetric.begin(category: "image", label: remoteURL.host ?? remoteURL.path)
+        let data: Data
+        let response: URLResponse
+        do {
+          (data, response) = try await MIRAAPIClient.productionSession.data(for: request)
+        } catch {
+          await metric.finish(status: "error")
+          throw error
+        }
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 200
+        await metric.finish(status: String(status), bytes: data.count)
+        guard (200..<300).contains(status), data.count <= 24 * 1024 * 1024 else { return nil }
+        guard let decoded = await MIRAImageDiskCache.decode(data, maxPixelSize: resolvedMaxPixelSize) else { return nil }
+
+        MIRAImageMemoryCache.shared.store(decoded, for: remoteURL, maxPixelSize: resolvedMaxPixelSize, cost: decoded.miraCacheCost)
+        await MIRAImageDiskCache.store(data: data, for: remoteURL)
+        return MIRAImageLoadResult(image: decoded, source: .network)
+      } catch {
+        return nil
+      }
+    }
+
+    inFlight[key] = task
+    let result = await task.value
+    inFlight[key] = nil
+    return result
+  }
+}
+
 public struct MIRACachedImage<Content: View, Placeholder: View>: View {
   let url: String?
   let maxPixelSize: CGFloat
@@ -383,29 +451,6 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
 
     let resolvedMaxPixelSize = max(64, maxPixelSize)
 
-    if let cached = MIRAImageMemoryCache.shared.image(for: remoteURL, maxPixelSize: resolvedMaxPixelSize) {
-      await MainActor.run {
-        uiImage = cached
-        loadedURL = remoteURL
-        isImageVisible = true
-        onImageLoaded(cached)
-      }
-      MIRAPerformanceTimeline.markOnce("time_to_first_thumbnail", detail: "memory")
-      return
-    }
-
-    if let diskCached = await MIRAImageDiskCache.image(for: remoteURL, maxPixelSize: resolvedMaxPixelSize) {
-      MIRAImageMemoryCache.shared.store(diskCached, for: remoteURL, maxPixelSize: resolvedMaxPixelSize, cost: diskCached.miraCacheCost)
-      await MainActor.run {
-        uiImage = diskCached
-        loadedURL = remoteURL
-        isImageVisible = true
-        onImageLoaded(diskCached)
-      }
-      MIRAPerformanceTimeline.markOnce("time_to_first_thumbnail", detail: "disk")
-      return
-    }
-
     let shouldClear = await MainActor.run {
       loadedURL != remoteURL
     }
@@ -416,36 +461,28 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
       }
     }
 
-    do {
-      var request = URLRequest(url: remoteURL)
-      request.cachePolicy = .returnCacheDataElseLoad
-      request.timeoutInterval = 20
-      let metric = await MIRAPerformanceMetric.begin(category: "image", label: remoteURL.host ?? remoteURL.path)
-      let data: Data
-      let response: URLResponse
-      do {
-        (data, response) = try await MIRAAPIClient.productionSession.data(for: request)
-      } catch {
-        await metric.finish(status: "error")
-        throw error
-      }
-      await metric.finish(status: String((response as? HTTPURLResponse)?.statusCode ?? 200), bytes: data.count)
-      let status = (response as? HTTPURLResponse)?.statusCode ?? 200
-      guard (200..<300).contains(status) else { return }
-      let decoded = await MIRAImageDiskCache.decode(data, maxPixelSize: resolvedMaxPixelSize)
-      guard !Task.isCancelled, let decoded else { return }
-      MIRAImageMemoryCache.shared.store(decoded, for: remoteURL, maxPixelSize: resolvedMaxPixelSize, cost: decoded.miraCacheCost)
-      await MIRAImageDiskCache.store(data: data, for: remoteURL)
+    if let result = await MIRAImageLoadPipeline.shared.image(for: remoteURL, maxPixelSize: resolvedMaxPixelSize) {
+      guard !Task.isCancelled else { return }
       await MainActor.run {
-        uiImage = decoded
+        uiImage = result.image
         loadedURL = remoteURL
-        withAnimation(.easeOut(duration: 0.16)) {
+        if result.source == .network {
+          withAnimation(.easeOut(duration: 0.16)) {
+            isImageVisible = true
+          }
+        } else {
           isImageVisible = true
         }
-        onImageLoaded(decoded)
+        onImageLoaded(result.image)
       }
-      MIRAPerformanceTimeline.markOnce("time_to_first_thumbnail", detail: "network")
-    } catch {
+      let detail: String
+      switch result.source {
+      case .memory: detail = "memory"
+      case .disk: detail = "disk"
+      case .network: detail = "network"
+      }
+      MIRAPerformanceTimeline.markOnce("time_to_first_thumbnail", detail: detail)
+    } else {
       let shouldClear = await MainActor.run {
         loadedURL != remoteURL
       }
@@ -515,19 +552,7 @@ public enum MIRAImagePrefetcher {
       return
     }
 
-    do {
-      var request = URLRequest(url: remoteURL)
-      request.cachePolicy = .returnCacheDataElseLoad
-      request.timeoutInterval = 8
-      let (data, response) = try await MIRAAPIClient.productionSession.data(for: request)
-      let status = (response as? HTTPURLResponse)?.statusCode ?? 200
-      guard (200..<300).contains(status), data.count <= 12 * 1024 * 1024 else { return }
-      guard let decoded = await MIRAImageDiskCache.decode(data, maxPixelSize: resolvedMaxPixelSize) else { return }
-      MIRAImageMemoryCache.shared.store(decoded, for: remoteURL, maxPixelSize: resolvedMaxPixelSize, cost: decoded.miraCacheCost)
-      await MIRAImageDiskCache.store(data: data, for: remoteURL)
-    } catch {
-      return
-    }
+    _ = await MIRAImageLoadPipeline.shared.image(for: remoteURL, maxPixelSize: resolvedMaxPixelSize)
   }
 
   private static func orderedUnique(_ values: [String]) -> [String] {
