@@ -206,4 +206,6 @@ This pass focused on production-risk bugs across feed interactions, media loadin
 - Passed: `admin-web: npm.cmd --prefix admin-web run build`
 - Passed with Windows line-ending warnings only: `git diff --check`
 - Not run locally: Swift/Xcode build, because this machine is Windows.
-
+- Passed in GitHub Actions: Admin Web CI.
+- Passed in GitHub Actions: Native iOS TestFlight.
+- Passed in GitHub Actions: Security Scans, including Gitleaks, Semgrep, JavaScript/TypeScript CodeQL, and Swift CodeQL.
