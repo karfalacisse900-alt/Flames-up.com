@@ -350,7 +350,7 @@ public struct DiscoverNativeView: View {
   private func discoverPostActions(_ post: MIRAPost) -> some View {
     Button(role: .destructive) {
       UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-      presentReport(for: post)
+      MIRARunAfterMenuDismiss { presentReport(for: post) }
     } label: {
       Label("Report", systemImage: "flag")
     }

@@ -511,6 +511,7 @@ let walletSchemaReady = false;
 let premiumSchemaReady = false;
 let abuseProtectionSchemaReady = false;
 let messagePresenceSchemaReady = false;
+let groupChatSchemaReady = false;
 let productionReadinessSchemaReady = false;
 let adminModerationSchemaReady = false;
 
@@ -618,8 +619,15 @@ async function ensureMessagePresenceSchema(db: D1Database) {
     )`,
     'ALTER TABLE messages ADD COLUMN media_url TEXT',
     'ALTER TABLE messages ADD COLUMN media_type TEXT',
+    'ALTER TABLE messages ADD COLUMN status TEXT DEFAULT \'active\'',
+    'ALTER TABLE messages ADD COLUMN removed_at TEXT',
+    'ALTER TABLE messages ADD COLUMN removed_by TEXT DEFAULT \'\'',
+    'ALTER TABLE messages ADD COLUMN removed_reason TEXT DEFAULT \'\'',
+    'ALTER TABLE messages ADD COLUMN client_request_id TEXT',
     'CREATE INDEX IF NOT EXISTS idx_messages_sender_receiver_created ON messages(sender_id, receiver_id, created_at)',
     'CREATE INDEX IF NOT EXISTS idx_messages_receiver_read ON messages(receiver_id, is_read)',
+    'CREATE INDEX IF NOT EXISTS idx_messages_status_created ON messages(status, created_at)',
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_direct_client_request ON messages(sender_id, receiver_id, client_request_id)',
     `CREATE TABLE IF NOT EXISTS user_presence (
       user_id TEXT PRIMARY KEY,
       last_seen_at TEXT NOT NULL,
@@ -648,6 +656,66 @@ async function ensureMessagePresenceSchema(db: D1Database) {
   }
 
   messagePresenceSchemaReady = true;
+}
+
+async function ensureGroupChatSchema(db: D1Database) {
+  if (groupChatSchemaReady) return;
+
+  const statements = [
+    `CREATE TABLE IF NOT EXISTS group_chats (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      created_by TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    )`,
+    `CREATE TABLE IF NOT EXISTS group_chat_members (
+      id TEXT PRIMARY KEY,
+      group_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      role TEXT DEFAULT 'member',
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(group_id, user_id)
+    )`,
+    `CREATE TABLE IF NOT EXISTS group_messages (
+      id TEXT PRIMARY KEY,
+      group_id TEXT NOT NULL,
+      sender_id TEXT NOT NULL,
+      content TEXT NOT NULL,
+      media_url TEXT,
+      media_type TEXT,
+      status TEXT DEFAULT 'active',
+      removed_at TEXT,
+      removed_by TEXT DEFAULT '',
+      removed_reason TEXT DEFAULT '',
+      client_request_id TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    )`,
+    'ALTER TABLE group_messages ADD COLUMN media_url TEXT',
+    'ALTER TABLE group_messages ADD COLUMN media_type TEXT',
+    'ALTER TABLE group_messages ADD COLUMN status TEXT DEFAULT \'active\'',
+    'ALTER TABLE group_messages ADD COLUMN removed_at TEXT',
+    'ALTER TABLE group_messages ADD COLUMN removed_by TEXT DEFAULT \'\'',
+    'ALTER TABLE group_messages ADD COLUMN removed_reason TEXT DEFAULT \'\'',
+    'ALTER TABLE group_messages ADD COLUMN client_request_id TEXT',
+    'CREATE INDEX IF NOT EXISTS idx_group_chat_members_user ON group_chat_members(user_id)',
+    'CREATE INDEX IF NOT EXISTS idx_group_chat_members_group ON group_chat_members(group_id)',
+    'CREATE INDEX IF NOT EXISTS idx_group_messages_group ON group_messages(group_id, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_group_messages_status_created ON group_messages(status, created_at)',
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_group_messages_sender_client_request ON group_messages(group_id, sender_id, client_request_id)',
+  ];
+
+  for (const statement of statements) {
+    try {
+      await runSchemaStatement(db, statement);
+    } catch (error: any) {
+      if (!isIgnorableSchemaError(error, statement)) {
+        throw error;
+      }
+    }
+  }
+
+  groupChatSchemaReady = true;
 }
 
 async function touchUserPresence(db: D1Database, userId: string) {
@@ -1720,7 +1788,9 @@ function getClientRequestId(c: any, body?: any): string | null {
   const raw = c.req.header('Idempotency-Key')
     || c.req.header('X-Idempotency-Key')
     || body?.client_request_id
+    || body?.clientRequestId
     || body?.idempotency_key
+    || body?.idempotencyKey
     || body?.request_id;
   const clean = String(raw || '').trim().replace(/[^a-zA-Z0-9_.:-]/g, '').slice(0, 120);
   return clean || null;
@@ -3384,8 +3454,38 @@ async function attachMediaBackupToMessage(
 }
 
 async function messagePayload(c: any, row: any): Promise<any> {
+  const status = String(row?.status || 'active').toLowerCase();
+  const isRemoved = status === 'removed' || status === 'hidden' || !!row?.removed_at;
+  const payload = { ...row };
+  delete payload.removed_by;
+  delete payload.removed_reason;
+
+  if (isRemoved) {
+    return {
+      ...payload,
+      status: 'removed',
+      removed: true,
+      content: 'Message removed',
+      media_url: null,
+      media_type: null,
+    };
+  }
+
   const mediaUrl = row.media_url ? await signedMessageMediaReference(c, row.media_url) : row.media_url;
-  return { ...row, media_url: mediaUrl };
+  return { ...payload, media_url: mediaUrl, removed: false };
+}
+
+function messagePreviewText(row: any, fallback = ''): string {
+  const status = String(row?.status || 'active').toLowerCase();
+  if (status === 'removed' || status === 'hidden' || !!row?.removed_at) return 'Message removed';
+  const content = String(row?.content || '').trim();
+  if (content) return content;
+  const mediaType = String(row?.media_type || '').toLowerCase();
+  if (mediaType === 'video') return 'Sent a video';
+  if (mediaType === 'voice' || mediaType === 'audio') return 'Sent a voice message';
+  if (mediaType === 'file') return 'Sent a file';
+  if (row?.media_url || row?.image) return 'Sent a photo';
+  return fallback;
 }
 
 const FEED_MEDIA_WIDTH = 1080;
@@ -7892,6 +7992,7 @@ api.delete('/statuses/:statusId', authMiddleware, async (c) => {
 
 // Messages (with media support)
 async function requireGroupMember(c: any, groupId: string, userId: string) {
+  await ensureGroupChatSchema(c.env.DB);
   const member = await c.env.DB.prepare('SELECT id FROM group_chat_members WHERE group_id = ? AND user_id = ?')
     .bind(groupId, userId)
     .first();
@@ -7933,7 +8034,8 @@ api.get('/conversations', authMiddleware, async (c) => {
        FROM messages unread
        WHERE unread.sender_id = u.id
          AND unread.receiver_id = ?
-         AND unread.is_read = 0) AS unread_total
+         AND unread.is_read = 0
+         AND COALESCE(unread.status, 'active') != 'removed') AS unread_total
     FROM ranked_messages m
     JOIN users u ON m.other_id = u.id
     LEFT JOIN user_presence up ON up.user_id = u.id
@@ -7950,11 +8052,7 @@ api.get('/conversations', authMiddleware, async (c) => {
   for (const m of msgs.results as any[]) {
     const oid = m.sender_id === userId ? m.receiver_id : m.sender_id;
     if (!map.has(oid)) {
-      let preview = m.content || '';
-      if (!preview && m.media_type === 'video') preview = 'Sent a video';
-      else if (!preview && m.media_type === 'voice') preview = 'Sent a voice message';
-      else if (!preview && m.media_type === 'file') preview = 'Sent a file';
-      else if (!preview && (m.media_url || m.image)) preview = 'Sent a photo';
+      const preview = messagePreviewText(m);
       map.set(oid, {
         id: `conv-${oid}`,
         participants: [userId, oid],
@@ -7977,6 +8075,7 @@ api.get('/conversations', authMiddleware, async (c) => {
 
   let groupConversations: any[] = [];
   try {
+    await ensureGroupChatSchema(c.env.DB);
     const groups = await c.env.DB.prepare(`
       SELECT
         g.id,
@@ -7986,6 +8085,8 @@ api.get('/conversations', authMiddleware, async (c) => {
         last_message.content AS last_message,
         last_message.media_url AS last_media_url,
         last_message.media_type AS last_media_type,
+        last_message.status AS last_message_status,
+        last_message.removed_at AS last_removed_at,
         last_message.created_at AS last_message_time,
         sender.username AS last_sender_username
       FROM group_chats g
@@ -8008,12 +8109,14 @@ api.get('/conversations', authMiddleware, async (c) => {
       member_count: Number(g.member_count || 0),
       last_message: (() => {
         const sender = g.last_sender_username || 'Someone';
-        if (g.last_message) return `${sender}: ${g.last_message}`;
-        if (g.last_media_type === 'video') return `${sender}: Sent a video`;
-        if (g.last_media_type === 'voice') return `${sender}: Sent a voice message`;
-        if (g.last_media_type === 'file') return `${sender}: Sent a file`;
-        if (g.last_media_url) return `${sender}: Sent a photo`;
-        return 'Group created';
+        const preview = messagePreviewText({
+          content: g.last_message,
+          media_url: g.last_media_url,
+          media_type: g.last_media_type,
+          status: g.last_message_status,
+          removed_at: g.last_removed_at,
+        }, 'Group created');
+        return preview === 'Group created' ? preview : `${sender}: ${preview}`;
       })(),
       last_message_time: g.last_message_time || g.created_at,
       unread_count: 0,
@@ -8055,9 +8158,16 @@ api.post('/messages', authMiddleware, async (c) => {
       : requestedMediaType.includes('file') || requestedMediaType.includes('document')
         ? 'file'
         : mediaUrl ? 'image' : null;
+  const clientRequestId = getClientRequestId(c, b);
   const invalidPeer = await validateDirectMessagePeer(c, userId, receiverId);
   if (invalidPeer) return invalidPeer;
   if (!content && !mediaUrl) return c.json({ detail: 'Message is empty.' }, 400);
+  if (clientRequestId) {
+    const existing: any = await c.env.DB.prepare(
+      'SELECT * FROM messages WHERE sender_id = ? AND receiver_id = ? AND client_request_id = ? LIMIT 1'
+    ).bind(userId, receiverId, clientRequestId).first();
+    if (existing) return c.json(await messagePayload(c, existing));
+  }
   if (content && !mediaUrl) {
     const recentDuplicate: any = await c.env.DB.prepare(
       "SELECT id FROM messages WHERE sender_id = ? AND receiver_id = ? AND content = ? AND created_at > datetime('now', '-30 seconds') LIMIT 1"
@@ -8068,7 +8178,19 @@ api.post('/messages', authMiddleware, async (c) => {
     }
   }
   const id = uuid();
-  await c.env.DB.prepare('INSERT INTO messages (id, sender_id, receiver_id, content, media_url, media_type) VALUES (?, ?, ?, ?, ?, ?)').bind(id, userId, receiverId, content, mediaUrl || null, mediaType).run();
+  try {
+    await c.env.DB.prepare('INSERT INTO messages (id, sender_id, receiver_id, content, media_url, media_type, client_request_id) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .bind(id, userId, receiverId, content, mediaUrl || null, mediaType, clientRequestId)
+      .run();
+  } catch (error: any) {
+    if (clientRequestId && String(error?.message || '').toLowerCase().includes('unique')) {
+      const existing: any = await c.env.DB.prepare(
+        'SELECT * FROM messages WHERE sender_id = ? AND receiver_id = ? AND client_request_id = ? LIMIT 1'
+      ).bind(userId, receiverId, clientRequestId).first();
+      if (existing) return c.json(await messagePayload(c, existing));
+    }
+    throw error;
+  }
   await attachMediaBackupToMessage(c.env.DB, userId, id, mediaUrl, 'message_id');
   runBackgroundTask(c, 'message_notification_failed', async () => {
     const sender: any = await c.env.DB.prepare('SELECT username, full_name FROM users WHERE id = ?').bind(userId).first();
@@ -8096,7 +8218,7 @@ api.post('/messages', authMiddleware, async (c) => {
     .bind(now(), userId, receiverId)
     .run()
     .catch(() => {});
-  return c.json(await messagePayload(c, { id, sender_id: userId, receiver_id: receiverId, content, media_url: mediaUrl || null, media_type: mediaType, created_at: now() }));
+  return c.json(await messagePayload(c, { id, sender_id: userId, receiver_id: receiverId, content, media_url: mediaUrl || null, media_type: mediaType, client_request_id: clientRequestId, created_at: now() }));
 });
 
 api.get('/messages/presence/:userId', authMiddleware, async (c) => {
@@ -8179,6 +8301,7 @@ api.get('/messages/:userId', authMiddleware, async (c) => {
 
 api.post('/group-chats', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  await ensureGroupChatSchema(c.env.DB);
   const limited = await enforceRateLimit(c, 'group_chat_create', userId, 20, 60);
   if (limited) return limited;
   const dailyLimited = await enforceRateLimit(c, 'group_chat_create_daily', userId, 80, 86400);
@@ -8287,7 +8410,14 @@ api.post('/group-chats/:groupId/messages', authMiddleware, async (c) => {
       : requestedMediaType.includes('file') || requestedMediaType.includes('document')
         ? 'file'
         : mediaUrl ? 'image' : null;
+  const clientRequestId = getClientRequestId(c, body);
   if (!content && !mediaUrl) return c.json({ detail: 'Message is empty' }, 400);
+  if (clientRequestId) {
+    const existing: any = await c.env.DB.prepare(
+      'SELECT * FROM group_messages WHERE group_id = ? AND sender_id = ? AND client_request_id = ? LIMIT 1'
+    ).bind(groupId, userId, clientRequestId).first();
+    if (existing) return c.json(await messagePayload(c, existing));
+  }
   if (content && !mediaUrl) {
     const recentDuplicate: any = await c.env.DB.prepare(
       "SELECT id FROM group_messages WHERE group_id = ? AND sender_id = ? AND content = ? AND created_at > datetime('now', '-30 seconds') LIMIT 1"
@@ -8299,12 +8429,22 @@ api.post('/group-chats/:groupId/messages', authMiddleware, async (c) => {
   }
 
   const id = uuid();
-  await c.env.DB.prepare('INSERT INTO group_messages (id, group_id, sender_id, content, media_url, media_type) VALUES (?, ?, ?, ?, ?, ?)')
-    .bind(id, groupId, userId, content, mediaUrl || null, mediaType)
-    .run();
+  try {
+    await c.env.DB.prepare('INSERT INTO group_messages (id, group_id, sender_id, content, media_url, media_type, client_request_id) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .bind(id, groupId, userId, content, mediaUrl || null, mediaType, clientRequestId)
+      .run();
+  } catch (error: any) {
+    if (clientRequestId && String(error?.message || '').toLowerCase().includes('unique')) {
+      const existing: any = await c.env.DB.prepare(
+        'SELECT * FROM group_messages WHERE group_id = ? AND sender_id = ? AND client_request_id = ? LIMIT 1'
+      ).bind(groupId, userId, clientRequestId).first();
+      if (existing) return c.json(await messagePayload(c, existing));
+    }
+    throw error;
+  }
   await attachMediaBackupToMessage(c.env.DB, userId, id, mediaUrl, 'group_message_id');
   await c.env.DB.prepare('UPDATE group_chats SET updated_at = datetime(\'now\') WHERE id = ?').bind(groupId).run();
-  return c.json(await messagePayload(c, { id, group_id: groupId, sender_id: userId, content, media_url: mediaUrl || null, media_type: mediaType, created_at: now() }));
+  return c.json(await messagePayload(c, { id, group_id: groupId, sender_id: userId, content, media_url: mediaUrl || null, media_type: mediaType, client_request_id: clientRequestId, created_at: now() }));
 });
 
 // Calls

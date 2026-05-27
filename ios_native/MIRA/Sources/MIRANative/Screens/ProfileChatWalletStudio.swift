@@ -510,7 +510,7 @@ public struct UserProfileNativeView: View {
   private var profileSafetyMenu: some View {
     Menu {
       Button(role: .destructive) {
-        presentProfileReport()
+        MIRARunAfterMenuDismiss { presentProfileReport() }
       } label: {
         Label("Report profile", systemImage: "flag")
       }

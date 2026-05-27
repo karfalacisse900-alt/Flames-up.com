@@ -758,7 +758,9 @@ private struct CommentRow: View {
         Button(role: .destructive, action: onBlockUser) {
           Label("Block user", systemImage: "hand.raised")
         }
-        Button(role: .destructive, action: onReport) {
+        Button(role: .destructive) {
+          MIRARunAfterMenuDismiss(onReport)
+        } label: {
           Label("Report comment", systemImage: "flag")
         }
       }

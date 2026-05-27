@@ -1319,7 +1319,7 @@ private struct MainNativePostCard: View {
       Button(role: .destructive) {
         debugTap("tap_report_post")
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-        onReport()
+        MIRARunAfterMenuDismiss(onReport)
       } label: {
         Label("Report", systemImage: "flag")
       }
@@ -1738,7 +1738,9 @@ private struct MainFeedCommentRow: View {
         Button(role: .destructive, action: onBlockUser) {
           Label("Block user", systemImage: "hand.raised")
         }
-        Button(role: .destructive, action: onReport) {
+        Button(role: .destructive) {
+          MIRARunAfterMenuDismiss(onReport)
+        } label: {
           Label("Report comment", systemImage: "flag")
         }
       }

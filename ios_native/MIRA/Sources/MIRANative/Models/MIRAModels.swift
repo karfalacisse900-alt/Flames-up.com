@@ -1058,12 +1058,20 @@ public struct SendMessageBody: Encodable {
   public let content: String
   public let mediaUrl: String?
   public let mediaType: String?
+  public let clientRequestId: String
 
-  public init(receiverId: String, content: String, mediaUrl: String? = nil, mediaType: String? = nil) {
+  public init(
+    receiverId: String,
+    content: String,
+    mediaUrl: String? = nil,
+    mediaType: String? = nil,
+    clientRequestId: String = UUID().uuidString
+  ) {
     self.receiverId = receiverId
     self.content = content
     self.mediaUrl = mediaUrl
     self.mediaType = mediaType
+    self.clientRequestId = clientRequestId
   }
 }
 
@@ -1071,11 +1079,18 @@ public struct GroupMessageBody: Encodable {
   public let content: String
   public let mediaUrl: String?
   public let mediaType: String?
+  public let clientRequestId: String
 
-  public init(content: String, mediaUrl: String? = nil, mediaType: String? = nil) {
+  public init(
+    content: String,
+    mediaUrl: String? = nil,
+    mediaType: String? = nil,
+    clientRequestId: String = UUID().uuidString
+  ) {
     self.content = content
     self.mediaUrl = mediaUrl
     self.mediaType = mediaType
+    self.clientRequestId = clientRequestId
   }
 }
 
