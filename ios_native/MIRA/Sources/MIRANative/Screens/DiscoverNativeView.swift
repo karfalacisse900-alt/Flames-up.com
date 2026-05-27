@@ -511,7 +511,7 @@ private struct StoryViewerNativeView: View {
       GeometryReader { proxy in
         let safeTop = proxy.safeAreaInsets.top
         let safeBottom = proxy.safeAreaInsets.bottom
-        let bottomChromeHeight = max(88, safeBottom + 76)
+        let bottomChromeHeight = max(74, safeBottom + 62)
         let topChromeHeight = max(2, safeTop + 2)
         let mediaHeight = max(360, proxy.size.height - bottomChromeHeight - topChromeHeight)
 
@@ -523,8 +523,8 @@ private struct StoryViewerNativeView: View {
           Spacer(minLength: 0)
 
           storyBottomActions
-            .padding(.horizontal, 14)
-            .padding(.bottom, max(8, safeBottom + 2))
+            .padding(.horizontal, 13)
+            .padding(.bottom, max(7, safeBottom + 1))
         }
         .frame(width: proxy.size.width, height: proxy.size.height)
       }
@@ -576,17 +576,17 @@ private struct StoryViewerNativeView: View {
             isVideo: mediaURL.isVideoURL,
             contentMode: .fill,
             shouldPlay: true,
-            placeholderColor: .black,
-            placeholderTint: .white.opacity(0.62)
+            placeholderColor: storyFallbackColor,
+            placeholderTint: MIRATheme.Color.textSecondary.opacity(0.68)
           )
             .frame(width: proxy.size.width, height: proxy.size.height)
         } else {
           RoundedRectangle(cornerRadius: 24, style: .continuous)
-            .fill(MIRATheme.Color.forest)
+            .fill(storyFallbackColor)
             .overlay {
               Text(currentStory?.content?.isEmpty == false ? currentStory!.content! : "Story")
-                .font(.system(size: 28, weight: .semibold))
-                .foregroundStyle(.white)
+                .font(.system(size: 24, weight: .semibold))
+                .foregroundStyle(storyTextColor)
                 .multilineTextAlignment(.center)
                 .padding(28)
             }
@@ -619,12 +619,12 @@ private struct StoryViewerNativeView: View {
 
         VStack(spacing: 9) {
           progressRail
-            .padding(.top, 18)
+            .padding(.top, 13)
           storyTopBar
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 13)
       }
-      .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+      .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
     .frame(maxWidth: .infinity)
     .transition(.opacity)
@@ -632,26 +632,26 @@ private struct StoryViewerNativeView: View {
   }
 
   private var progressRail: some View {
-    HStack(spacing: 7) {
+    HStack(spacing: 6) {
       ForEach(0..<max(stories.count, 1), id: \.self) { index in
         Capsule()
           .fill(index <= selectedIndex ? Color.white.opacity(0.96) : Color.white.opacity(0.36))
-          .frame(height: 4.5)
+          .frame(height: 3.2)
       }
     }
   }
 
   private var storyTopBar: some View {
-    HStack(spacing: 11) {
-      RemoteAvatar(url: group.userProfileImage, size: 42)
+    HStack(spacing: 9) {
+      RemoteAvatar(url: group.userProfileImage, size: 36)
 
       HStack(spacing: 7) {
         Text(group.displayName)
-          .font(.system(size: 17, weight: .semibold))
+          .font(.system(size: 15, weight: .semibold))
           .foregroundStyle(.white)
           .lineLimit(1)
-        Text("· \(storyAge(currentStory?.createdAt))")
-          .font(.system(size: 17, weight: .semibold))
+        Text("\u{00B7} \(storyAge(currentStory?.createdAt))")
+          .font(.system(size: 14, weight: .semibold))
           .foregroundStyle(.white.opacity(0.66))
           .lineLimit(1)
       }
@@ -663,31 +663,31 @@ private struct StoryViewerNativeView: View {
         ZStack(alignment: .bottomTrailing) {
           RoundedRectangle(cornerRadius: 9, style: .continuous)
             .fill(.black.opacity(0.34))
-            .frame(width: 38, height: 38)
+            .frame(width: 32, height: 32)
           Image(systemName: "music.note")
-            .font(.system(size: 16, weight: .bold))
+            .font(.system(size: 13, weight: .bold))
             .foregroundStyle(.white)
-            .offset(x: 4, y: 4)
+            .offset(x: 3, y: 3)
         }
-        .frame(width: 42, height: 42)
+        .frame(width: 36, height: 36)
       }
       .buttonStyle(.miraPress)
 
       Button { closeStoryViewer() } label: {
         Image(systemName: "xmark")
-          .font(.system(size: 34, weight: .regular))
+          .font(.system(size: 25, weight: .regular))
           .foregroundStyle(.white)
-          .frame(width: 44, height: 44)
+          .frame(width: 38, height: 38)
       }
       .buttonStyle(.miraPress)
     }
   }
 
   private var storyBottomActions: some View {
-    HStack(spacing: 14) {
-      HStack(spacing: 12) {
+    HStack(spacing: 12) {
+      HStack(spacing: 10) {
         TextField("Message...", text: $replyText)
-          .font(.system(size: 19, weight: .regular))
+          .font(.system(size: 16, weight: .regular))
           .foregroundStyle(.white)
           .tint(.white)
           .focused($isReplyFocused)
@@ -697,45 +697,59 @@ private struct StoryViewerNativeView: View {
         Spacer(minLength: 4)
 
         if replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-          HStack(spacing: 18) {
+          HStack(spacing: 14) {
             Text("😍")
             Text("😂")
             Text("😳")
           }
-          .font(.system(size: 31))
+          .font(.system(size: 25))
           .lineLimit(1)
         } else {
           Button(action: sendStoryReplyDraft) {
             Image(systemName: "paperplane.fill")
-              .font(.system(size: 18, weight: .bold))
+              .font(.system(size: 16, weight: .bold))
               .foregroundStyle(.white)
-              .frame(width: 34, height: 34)
+              .frame(width: 30, height: 30)
           }
           .buttonStyle(.miraPress)
         }
       }
-      .padding(.leading, 24)
-      .padding(.trailing, 16)
-      .frame(height: 56)
+      .padding(.leading, 18)
+      .padding(.trailing, 13)
+      .frame(height: 48)
       .background(Color.white.opacity(0.18))
       .clipShape(Capsule())
 
       Button {} label: {
         Image(systemName: "heart")
-          .font(.system(size: 37, weight: .regular))
+          .font(.system(size: 29, weight: .regular))
           .foregroundStyle(.white)
-          .frame(width: 44, height: 56)
+          .frame(width: 38, height: 48)
       }
       .buttonStyle(.miraPress)
 
       Button { showStoryMenu = true } label: {
         Image(systemName: "ellipsis")
-          .font(.system(size: 32, weight: .bold))
+          .font(.system(size: 26, weight: .bold))
           .foregroundStyle(.white)
-          .frame(width: 40, height: 56)
+          .frame(width: 36, height: 48)
       }
       .buttonStyle(.miraPress)
     }
+  }
+
+  private var storyFallbackColor: Color {
+    guard let value = currentStory?.backgroundColor, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+      return MIRATheme.Color.mediaPlaceholder
+    }
+    return Color(uiColor: UIColor(hex: value))
+  }
+
+  private var storyTextColor: Color {
+    guard let value = currentStory?.textColor, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+      return .white
+    }
+    return Color(uiColor: UIColor(hex: value))
   }
 
   private func deleteCurrentStory() async {

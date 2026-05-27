@@ -474,7 +474,7 @@ public struct RemoteMediaView: View {
     maxPixelSize: CGFloat = MIRAMediaSizing.feedTargetHeight,
     showsVideoPlaceholderIcon: Bool = true,
     placeholderColor: Color = MIRATheme.Color.mediaPlaceholder,
-    placeholderTint: Color = .white.opacity(0.62),
+    placeholderTint: Color = MIRATheme.Color.textSecondary.opacity(0.72),
     onMeasuredRatio: @escaping (CGFloat) -> Void = { _ in }
   ) {
     self.url = url
@@ -535,16 +535,16 @@ public struct RemoteMediaView: View {
       placeholderColor
       LinearGradient(
         colors: [
-          MIRATheme.Color.mediaPlaceholderRaised.opacity(0.62),
+          MIRATheme.Color.mediaPlaceholderRaised.opacity(0.76),
           placeholderColor,
-          MIRATheme.Color.mediaPlaceholderRaised.opacity(0.38)
+          MIRATheme.Color.forestSoft.opacity(0.68)
         ],
         startPoint: .topLeading,
         endPoint: .bottomTrailing
       )
       Image(systemName: "photo")
-        .font(.system(size: 28, weight: .light))
-        .foregroundStyle(placeholderTint.opacity(0.44))
+        .font(.system(size: 22, weight: .light))
+        .foregroundStyle(placeholderTint.opacity(0.36))
     }
   }
 
@@ -634,9 +634,9 @@ private struct MIRAResolvedVideoPlayer: View {
       placeholderColor
       LinearGradient(
         colors: [
-          MIRATheme.Color.mediaPlaceholderRaised.opacity(0.58),
+          MIRATheme.Color.mediaPlaceholderRaised.opacity(0.72),
           placeholderColor,
-          MIRATheme.Color.mediaPlaceholderRaised.opacity(0.35)
+          MIRATheme.Color.forestSoft.opacity(0.62)
         ],
         startPoint: .topLeading,
         endPoint: .bottomTrailing
