@@ -839,6 +839,7 @@ private struct MainNativePostCard: View {
   @State private var measuredCardWidth = UIScreen.main.bounds.width
   @State private var isSubmittingFollow = false
   @State private var isFollowConfirmationVisible = false
+  @State private var isPostMenuPresented = false
 
   private var mediaHeight: CGFloat {
     return MIRAMediaSizing.mainFeedHeight(
@@ -855,12 +856,15 @@ private struct MainNativePostCard: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
       postHeader
+        .zIndex(3)
 
       if !post.mediaURLs.isEmpty {
         mediaCarousel
+          .zIndex(1)
       }
 
       actionRow
+        .zIndex(3)
 
       if hasCaptionContent {
         captionBlock
@@ -868,6 +872,7 @@ private struct MainNativePostCard: View {
       }
     }
     .frame(maxWidth: .infinity, alignment: .topLeading)
+    .contentShape(Rectangle())
     .background(MIRATheme.Color.surface)
     .background {
       GeometryReader { proxy in
@@ -891,7 +896,13 @@ private struct MainNativePostCard: View {
       }
     }
     .overlay(alignment: .bottom) {
-      Rectangle().fill(MIRATheme.Color.hairline).frame(height: 0.75)
+      Rectangle().fill(MIRATheme.Color.hairline).frame(height: 0.75).allowsHitTesting(false)
+    }
+    .confirmationDialog("Post options", isPresented: $isPostMenuPresented, titleVisibility: .visible) {
+      postContextMenu
+      Button("Cancel", role: .cancel) {
+        debugTap("cancel_post_menu")
+      }
     }
     .onChange(of: post.id) { _, _ in
       selectedMediaIndex = 0
@@ -924,6 +935,7 @@ private struct MainNativePostCard: View {
       .frame(minHeight: mediaHeight, maxHeight: mediaHeight)
       .background(MIRATheme.Color.mediaPlaceholder)
       .clipped()
+      .allowsHitTesting(false)
     } else {
       VStack(spacing: 7) {
         TabView(selection: $selectedMediaIndex) {
@@ -998,14 +1010,22 @@ private struct MainNativePostCard: View {
 
   private var engagementButtons: some View {
     HStack(spacing: MIRATheme.Space.sm) {
-      CompactPostAction(systemImage: post.isLiked == true ? "heart.fill" : "heart", value: post.likesCount ?? 0, tint: post.isLiked == true ? MIRATheme.Color.like : MIRATheme.Color.textSecondary, action: onLike)
-      CompactPostAction(systemImage: post.viewerSaved ? "bookmark.fill" : "bookmark", value: post.savesCount ?? 0, tint: post.viewerSaved ? MIRATheme.Color.forest : MIRATheme.Color.textSecondary, action: onSave)
+      CompactPostAction(systemImage: post.isLiked == true ? "heart.fill" : "heart", value: post.likesCount ?? 0, tint: post.isLiked == true ? MIRATheme.Color.like : MIRATheme.Color.textSecondary) {
+        debugTap("tap_like")
+        onLike()
+      }
+      CompactPostAction(systemImage: post.viewerSaved ? "bookmark.fill" : "bookmark", value: post.savesCount ?? 0, tint: post.viewerSaved ? MIRATheme.Color.forest : MIRATheme.Color.textSecondary) {
+        debugTap("tap_save")
+        onSave()
+      }
       CompactPostAction(
         systemImage: "bubble.left",
         value: post.commentsCount ?? 0,
-        tint: MIRATheme.Color.textSecondary,
-        action: onComment
-      )
+        tint: MIRATheme.Color.textSecondary
+      ) {
+        debugTap("tap_comment")
+        onComment()
+      }
     }
     .layoutPriority(2)
   }
@@ -1117,6 +1137,7 @@ private struct MainNativePostCard: View {
   }
 
   private func toggleCaption() {
+    debugTap("tap_caption_more")
     UIImpactFeedbackGenerator(style: .light).impactOccurred()
     withAnimation(.easeInOut(duration: 0.24)) {
       isShowingCaption.toggle()
@@ -1159,6 +1180,7 @@ private struct MainNativePostCard: View {
   private var authorAvatar: some View {
     if canFollowAuthor || isSubmittingFollow || isFollowConfirmationVisible {
       Button {
+        debugTap("tap_follow_avatar")
         followWithConfirmation()
       } label: {
         MIRAFollowAvatar(
@@ -1184,13 +1206,21 @@ private struct MainNativePostCard: View {
       .buttonStyle(.plain)
       .disabled(isSubmittingFollow)
       .accessibilityLabel(isSubmittingFollow || isFollowConfirmationVisible ? "Following" : "Follow")
+      .frame(minWidth: 44, minHeight: 44)
+      .contentShape(Rectangle())
     } else if let userId = post.userId, !userId.isEmpty {
       NavigationLink(destination: UserProfileNativeView(userId: userId, api: api)) {
         RemoteAvatar(url: post.userProfileImage, size: 42)
       }
       .buttonStyle(.plain)
+      .simultaneousGesture(TapGesture().onEnded { debugTap("tap_avatar_profile") })
+      .frame(minWidth: 44, minHeight: 44)
+      .contentShape(Rectangle())
     } else {
       RemoteAvatar(url: post.userProfileImage, size: 42)
+        .frame(minWidth: 44, minHeight: 44)
+        .contentShape(Rectangle())
+        .onTapGesture { debugTap("tap_avatar_missing_author") }
     }
   }
 
@@ -1201,8 +1231,14 @@ private struct MainNativePostCard: View {
         authorIdentityLabel
       }
       .buttonStyle(.plain)
+      .simultaneousGesture(TapGesture().onEnded { debugTap("tap_username_profile") })
+      .frame(minHeight: 44, alignment: .leading)
+      .contentShape(Rectangle())
     } else {
       authorIdentityLabel
+        .frame(minHeight: 44, alignment: .leading)
+        .contentShape(Rectangle())
+        .onTapGesture { debugTap("tap_username_missing_author") }
     }
   }
 
@@ -1222,25 +1258,30 @@ private struct MainNativePostCard: View {
   }
 
   private var postMenu: some View {
-    Menu {
-      postContextMenu
+    Button {
+      debugTap("tap_post_menu")
+      UIImpactFeedbackGenerator(style: .light).impactOccurred()
+      isPostMenuPresented = true
     } label: {
       Image(systemName: "ellipsis")
         .font(.system(size: 17, weight: .semibold))
         .foregroundStyle(MIRATheme.Color.textSecondary)
-        .frame(width: 36, height: 36)
+        .frame(width: 44, height: 44)
         .background(MIRATheme.Color.surfaceSoft)
         .clipShape(Circle())
         .overlay(Circle().stroke(MIRATheme.Color.hairline, lineWidth: 1))
         .contentShape(Circle())
         .shadow(color: .black.opacity(0.03), radius: 4, x: 0, y: 1)
     }
+    .buttonStyle(.miraPress)
+    .accessibilityLabel("Post options")
   }
 
   @ViewBuilder
   private var postContextMenu: some View {
     if canDelete {
       Button {
+        debugTap(post.isPinned ? "tap_unpin_post" : "tap_pin_post")
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         onPin()
       } label: {
@@ -1249,6 +1290,7 @@ private struct MainNativePostCard: View {
 
       if normalizedVisibility != "public" {
         Button {
+          debugTap("tap_make_post_public")
           UIImpactFeedbackGenerator(style: .light).impactOccurred()
           onMakePublic()
         } label: {
@@ -1258,6 +1300,7 @@ private struct MainNativePostCard: View {
 
       if normalizedVisibility != "private" {
         Button {
+          debugTap("tap_make_post_private")
           UIImpactFeedbackGenerator(style: .light).impactOccurred()
           onMakePrivate()
         } label: {
@@ -1266,6 +1309,7 @@ private struct MainNativePostCard: View {
       }
 
       Button(role: .destructive) {
+        debugTap("tap_delete_post")
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         onDelete()
       } label: {
@@ -1273,6 +1317,7 @@ private struct MainNativePostCard: View {
       }
     } else {
       Button(role: .destructive) {
+        debugTap("tap_report_post")
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         onReport()
       } label: {
@@ -1280,6 +1325,7 @@ private struct MainNativePostCard: View {
       }
 
       Button(role: .destructive) {
+        debugTap("tap_block_author")
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         onBlockAuthor()
       } label: {
@@ -1287,6 +1333,7 @@ private struct MainNativePostCard: View {
       }
 
       Button {
+        debugTap("tap_hide_post")
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         onNotInterested()
       } label: {
@@ -1294,6 +1341,7 @@ private struct MainNativePostCard: View {
       }
 
       Button {
+        debugTap("tap_not_interested")
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         onNotInterested()
       } label: {
@@ -1336,6 +1384,13 @@ private struct MainNativePostCard: View {
     let subtitle = post.userFullName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     guard !subtitle.isEmpty, subtitle != username else { return nil }
     return subtitle
+  }
+
+  private func debugTap(_ action: String) {
+    #if DEBUG
+    let author = post.userId?.isEmpty == false ? post.userId! : "missing"
+    print("[Captro feed tap] action=\(action) post_id=\(post.id) author_id=\(author)")
+    #endif
   }
 }
 
@@ -1763,7 +1818,8 @@ private struct CompactPostAction: View {
           .minimumScaleFactor(0.78)
       }
       .foregroundStyle(tint)
-      .frame(minHeight: 36)
+      .frame(minWidth: 44, minHeight: 44)
+      .padding(.horizontal, 2)
       .contentShape(Rectangle())
     }
     .buttonStyle(.miraPress)
@@ -1794,10 +1850,11 @@ private struct CompactTextAction: View {
           .minimumScaleFactor(0.82)
       }
       .foregroundStyle(MIRATheme.Color.forest)
-      .frame(height: 34)
+      .frame(minWidth: 44, minHeight: 44)
       .padding(.horizontal, MIRATheme.Space.md)
       .background(MIRATheme.Color.surfaceSoft)
       .clipShape(Capsule())
+      .contentShape(Rectangle())
     }
     .buttonStyle(.miraPress)
   }

@@ -1736,6 +1736,8 @@ public struct CreateStoryNativeView: View {
     }
     .toolbar(.hidden, for: .navigationBar)
     .toolbar(.hidden, for: .tabBar)
+    .navigationBarBackButtonHidden(true)
+    .statusBarHidden(true)
     .miraScreenEnter(.modal)
     .task {
       guard !didOpenInitialCamera else { return }
