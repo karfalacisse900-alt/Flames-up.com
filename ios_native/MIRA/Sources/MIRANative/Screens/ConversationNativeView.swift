@@ -267,14 +267,14 @@ final class ConversationNativeModel: ObservableObject {
           "/messages",
           body: SendMessageBody(receiverId: peerId, content: content, mediaUrl: mediaUrl, mediaType: mediaType)
         )
-        messages.append(sent)
+        appendOrReplaceMessage(sent)
         await MIRALocalJSONCache.save(messages, key: messagesCacheKey)
       case let .group(groupId):
         let sent: MIRAMessage = try await api.post(
           "/group-chats/\(groupId)/messages",
           body: GroupMessageBody(content: content, mediaUrl: mediaUrl, mediaType: mediaType)
         )
-        messages.append(sent)
+        appendOrReplaceMessage(sent)
         await MIRALocalJSONCache.save(messages, key: messagesCacheKey)
       }
       errorMessage = nil
@@ -289,6 +289,14 @@ final class ConversationNativeModel: ObservableObject {
     try await Task.detached(priority: .utility) {
       try Data(contentsOf: url)
     }.value
+  }
+
+  private func appendOrReplaceMessage(_ message: MIRAMessage) {
+    if let index = messages.firstIndex(where: { $0.id == message.id }) {
+      messages[index] = message
+    } else {
+      messages.append(message)
+    }
   }
 }
 
@@ -579,7 +587,7 @@ public struct ConversationNativeView: View {
     .contextMenu {
       if !outgoing {
         Button(role: .destructive) {
-          presentReport(for: message)
+          MIRARunAfterMenuDismiss { presentReport(for: message) }
         } label: {
           Label("Report message", systemImage: "flag")
         }
