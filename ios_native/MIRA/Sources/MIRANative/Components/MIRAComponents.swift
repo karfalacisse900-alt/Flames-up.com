@@ -741,6 +741,7 @@ private struct MIRAResolvedVideoPlayer: View {
   @State private var videoMetric: MIRAPerformanceMetric?
   @State private var generatedThumbnail: UIImage?
   @State private var isPlayerReady = false
+  @State private var globallyPaused = false
 
   var body: some View {
     ZStack {
@@ -786,6 +787,12 @@ private struct MIRAResolvedVideoPlayer: View {
     .onChange(of: shouldPlay) { _, _ in
       guard let player else { return }
       syncPlayback(player)
+    }
+    .onReceive(NotificationCenter.default.publisher(for: .miraPlaybackShouldPause)) { _ in
+      pauseForGlobalInterruption()
+    }
+    .onReceive(NotificationCenter.default.publisher(for: .miraPlaybackMayResume)) { _ in
+      resumeAfterGlobalInterruption()
     }
   }
 
@@ -992,7 +999,7 @@ private struct MIRAResolvedVideoPlayer: View {
 
   @MainActor
   private func syncPlayback(_ player: AVPlayer) {
-    if shouldPlay {
+    if shouldPlay && !globallyPaused {
       configureAudioSession()
       player.isMuted = false
       player.volume = 1
@@ -1020,6 +1027,19 @@ private struct MIRAResolvedVideoPlayer: View {
         player.play()
       }
     }
+  }
+
+  @MainActor
+  private func pauseForGlobalInterruption() {
+    globallyPaused = true
+    player?.pause()
+  }
+
+  @MainActor
+  private func resumeAfterGlobalInterruption() {
+    globallyPaused = false
+    guard let player else { return }
+    syncPlayback(player)
   }
 
   @MainActor

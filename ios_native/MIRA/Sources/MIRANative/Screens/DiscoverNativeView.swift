@@ -269,7 +269,7 @@ public struct DiscoverNativeView: View {
       .background(MIRATheme.Color.appBackground)
       .miraScreenEnter(.tab)
       .toolbar(.hidden, for: .navigationBar)
-      .toolbar(selectedStoryGroup == nil ? .visible : .hidden, for: .tabBar)
+      .toolbar((selectedStoryGroup == nil && !isReportSheetPresented) ? .visible : .hidden, for: .tabBar)
       .task { await model.load() }
       .miraFullScreenOverlay(item: $selectedStoryGroup, background: .black) { group, dismissStory in
         StoryViewerNativeView(
@@ -515,8 +515,10 @@ private struct StoryViewerNativeView: View {
   @State private var storyAudioPlayer: AVPlayer?
   @State private var isStoryAudioPlaying = false
   @State private var isStoryAudioLoading = false
+  @State private var resumeStoryAudioAfterInterruption = false
   @FocusState private var isReplyFocused: Bool
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.scenePhase) private var scenePhase
 
   private var stories: [MIRAStatusPreview] {
     localStories ?? (group.statuses?.isEmpty == false ? group.statuses! : [])
@@ -590,6 +592,20 @@ private struct StoryViewerNativeView: View {
         }
       }
       Button("Cancel", role: .cancel) {}
+    }
+    .onChange(of: scenePhase) { _, phase in
+      if phase == .active {
+        MIRAPlaybackCoordinator.resumeVisible(reason: "story_active")
+        resumeStoryAudioIfNeeded()
+      } else {
+        pauseStoryAudioForInterruption()
+      }
+    }
+    .onReceive(NotificationCenter.default.publisher(for: .miraPlaybackShouldPause)) { _ in
+      pauseStoryAudioForInterruption()
+    }
+    .onReceive(NotificationCenter.default.publisher(for: .miraPlaybackMayResume)) { _ in
+      resumeStoryAudioIfNeeded()
     }
     .onDisappear { stopStoryAudio() }
   }
@@ -822,6 +838,7 @@ private struct StoryViewerNativeView: View {
 
   private func toggleStoryAudio() {
     if isStoryAudioPlaying {
+      resumeStoryAudioAfterInterruption = false
       storyAudioPlayer?.pause()
       isStoryAudioPlaying = false
     } else if let storyAudioPlayer {
@@ -837,6 +854,20 @@ private struct StoryViewerNativeView: View {
     storyAudioPlayer = nil
     isStoryAudioPlaying = false
     isStoryAudioLoading = false
+    resumeStoryAudioAfterInterruption = false
+  }
+
+  private func pauseStoryAudioForInterruption() {
+    resumeStoryAudioAfterInterruption = isStoryAudioPlaying
+    storyAudioPlayer?.pause()
+    isStoryAudioPlaying = false
+  }
+
+  private func resumeStoryAudioIfNeeded() {
+    guard resumeStoryAudioAfterInterruption, let storyAudioPlayer else { return }
+    storyAudioPlayer.play()
+    isStoryAudioPlaying = true
+    resumeStoryAudioAfterInterruption = false
   }
 
   private func deleteCurrentStory() async {

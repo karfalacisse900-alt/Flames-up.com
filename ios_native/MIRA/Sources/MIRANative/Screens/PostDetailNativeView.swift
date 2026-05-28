@@ -9,6 +9,8 @@ final class PostDetailModel: ObservableObject {
   @Published var currentUserId: String?
 
   let api: MIRAAPIClient
+  private var likingPostIds = Set<String>()
+  private var likingCommentIds = Set<String>()
 
   init(post: MIRAPost, api: MIRAAPIClient) {
     self.post = post
@@ -59,6 +61,10 @@ final class PostDetailModel: ObservableObject {
 
   func toggleCommentLike(_ comment: MIRAComment) async {
     guard let index = comments.firstIndex(where: { $0.id == comment.id }) else { return }
+    guard !likingCommentIds.contains(comment.id) else { return }
+    likingCommentIds.insert(comment.id)
+    defer { likingCommentIds.remove(comment.id) }
+
     let previous = comments[index]
     let nextLiked = !previous.viewerLiked
     let nextCount = max(0, (previous.likesCount ?? 0) + (nextLiked ? 1 : -1))
@@ -154,6 +160,10 @@ final class PostDetailModel: ObservableObject {
   }
 
   func toggleLike() async {
+    guard !likingPostIds.contains(post.id) else { return }
+    likingPostIds.insert(post.id)
+    defer { likingPostIds.remove(post.id) }
+
     let previous = post
     let nextLiked = !(post.isLiked ?? false)
     let nextCount = max(0, (post.likesCount ?? 0) + (nextLiked ? 1 : -1))

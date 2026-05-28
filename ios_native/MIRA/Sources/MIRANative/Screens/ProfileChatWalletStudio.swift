@@ -205,6 +205,7 @@ public struct ProfileNativeView: View {
       .background(MIRATheme.Color.appBackground)
       .miraScreenEnter(.tab)
       .navigationTitle("")
+      .toolbar(showEditProfile ? .hidden : .visible, for: .tabBar)
       .toolbar {
         ToolbarItemGroup(placement: .topBarTrailing) {
           NavigationLink(destination: LibraryNativeView(api: model.api)) {
@@ -420,6 +421,7 @@ public struct UserProfileNativeView: View {
     .miraScreenEnter(.push)
     .navigationTitle(model.user?.displayName ?? "Profile")
     .navigationBarTitleDisplayMode(.inline)
+    .toolbar(.hidden, for: .tabBar)
     .task { await model.load() }
     .miraBottomSheet(
       isPresented: $isReportSheetPresented,

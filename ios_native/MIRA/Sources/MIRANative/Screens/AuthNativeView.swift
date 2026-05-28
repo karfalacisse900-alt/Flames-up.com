@@ -357,6 +357,7 @@ private struct CaptroWelcomePager: View {
   let onSignup: () -> Void
   @StateObject private var audio = CaptroWelcomeAudioController()
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.scenePhase) private var scenePhase
 
   private var currentPage: CaptroWelcomePage {
     let pages = CaptroWelcomePage.all
@@ -403,10 +404,17 @@ private struct CaptroWelcomePager: View {
     }
     .background(currentPage.background.ignoresSafeArea())
     .onAppear {
-      audio.start()
+      audio.resumeIfAllowed()
     }
     .onDisappear {
       audio.stop()
+    }
+    .onChange(of: scenePhase) { _, phase in
+      if phase == .active {
+        audio.resumeIfAllowed()
+      } else {
+        audio.pauseForInterruption()
+      }
     }
   }
 }
@@ -612,8 +620,14 @@ private enum CaptroWelcomeActionStyle {
 private final class CaptroWelcomeAudioController: ObservableObject {
   @Published private(set) var isPlaying = false
   private var player: AVAudioPlayer?
+  private var userMuted = false
 
-  func start() {
+  func resumeIfAllowed() {
+    guard !userMuted else { return }
+    startPlayback()
+  }
+
+  private func startPlayback() {
     guard player == nil else {
       play()
       return
@@ -625,7 +639,9 @@ private final class CaptroWelcomeAudioController: ObservableObject {
     }
 
     do {
-      try AVAudioSession.sharedInstance().setCategory(.ambient, options: [.mixWithOthers])
+      let session = AVAudioSession.sharedInstance()
+      try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+      try session.setActive(true)
       let audioPlayer = try AVAudioPlayer(contentsOf: url)
       audioPlayer.numberOfLoops = -1
       audioPlayer.volume = 0.22
@@ -639,16 +655,23 @@ private final class CaptroWelcomeAudioController: ObservableObject {
 
   func toggle() {
     if isPlaying {
+      userMuted = true
       pause()
     } else {
-      start()
+      userMuted = false
+      startPlayback()
     }
+  }
+
+  func pauseForInterruption() {
+    pause()
   }
 
   func stop() {
     player?.stop()
     player?.currentTime = 0
     isPlaying = false
+    try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
   }
 
   private func play() {

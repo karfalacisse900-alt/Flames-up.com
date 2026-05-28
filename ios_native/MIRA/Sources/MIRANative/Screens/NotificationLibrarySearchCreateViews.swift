@@ -51,6 +51,7 @@ public struct NotificationNativeView: View {
     .background(MIRATheme.Color.appBackground)
     .miraScreenEnter(.push)
     .navigationTitle("Notifications")
+    .toolbar(.hidden, for: .tabBar)
     .task { await model.load() }
   }
 
@@ -271,6 +272,7 @@ public struct SearchUsersNativeView: View {
     .background(MIRATheme.Color.appBackground)
     .miraScreenEnter(.push)
     .navigationTitle("Search")
+    .toolbar(.hidden, for: .tabBar)
     .searchable(text: $model.query, prompt: "Search users")
     .task(id: model.query) {
       try? await Task.sleep(nanoseconds: 250_000_000)
@@ -368,6 +370,9 @@ public struct CreatePostNativeView: View {
     .toolbar(.hidden, for: .tabBar)
     .miraScreenEnter(.modal)
     .navigationBarBackButtonHidden(true)
+    .onAppear {
+      MIRAPlaybackCoordinator.pauseAll(reason: "post_creation_open")
+    }
     .onChange(of: pickerItems) { _, newItems in
       Task { await loadPickerItems(newItems) }
     }
@@ -2039,6 +2044,9 @@ public struct CreateStoryNativeView: View {
     .navigationBarBackButtonHidden(true)
     .statusBarHidden(true)
     .miraScreenEnter(.modal)
+    .onAppear {
+      MIRAPlaybackCoordinator.pauseAll(reason: "story_creation_open")
+    }
     .task {
       guard !didOpenInitialCamera else { return }
       didOpenInitialCamera = true

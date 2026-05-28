@@ -17,6 +17,7 @@ final class MainFeedModel: ObservableObject {
   private var canLoadMore = true
   private var isLoadingCurrentUser = false
   private var followingAuthorIds = Set<String>()
+  private var likingPostIds = Set<String>()
   private let firstPageLimit = 8
   private let paginationTriggerWindow = 5
 
@@ -166,6 +167,10 @@ final class MainFeedModel: ObservableObject {
 
   func toggleLike(_ post: MIRAPost) async {
     guard let index = posts.firstIndex(where: { $0.id == post.id }) else { return }
+    guard !likingPostIds.contains(post.id) else { return }
+    likingPostIds.insert(post.id)
+    defer { likingPostIds.remove(post.id) }
+
     let previous = posts[index]
     let nextLiked = !(previous.isLiked ?? false)
     let nextCount = max(0, (previous.likesCount ?? 0) + (nextLiked ? 1 : -1))
@@ -500,6 +505,7 @@ private struct MainPostVisibilityUpdateBody: Encodable {
 
 public struct MainFeedView: View {
   @StateObject private var model: MainFeedModel
+  private let isTabActive: Bool
   @State private var activeVideoPostID: String?
   @State private var isHeaderHidden = false
   @State private var previousScrollMinY: CGFloat?
@@ -518,10 +524,12 @@ public struct MainFeedView: View {
 
   public init(api: MIRAAPIClient) {
     _model = StateObject(wrappedValue: MainFeedModel(api: api))
+    self.isTabActive = true
   }
 
-  init(api: MIRAAPIClient, model: MainFeedModel) {
+  init(api: MIRAAPIClient, model: MainFeedModel, isTabActive: Bool = true) {
     _model = StateObject(wrappedValue: model)
+    self.isTabActive = isTabActive
   }
 
   public var body: some View {
@@ -544,7 +552,7 @@ public struct MainFeedView: View {
                 MainNativePostCard(
                   post: post,
                   api: model.api,
-                  isVideoActive: post.id == activeVideoPostID,
+                  isVideoActive: post.id == activeVideoPostID && !isMediaPlaybackSuppressed,
                   onLike: { Task { await model.toggleLike(post) } },
                   onSave: { presentSaveSheet(for: post) },
                   onComment: { presentComments(for: post) },
@@ -691,6 +699,21 @@ public struct MainFeedView: View {
       }
       .onPreferenceChange(MainFeedScrollOffsetPreferenceKey.self, perform: handleScroll)
       .onPreferenceChange(MainPostVisibilityPreferenceKey.self, perform: updateActiveVideo)
+      .onChange(of: isMediaPlaybackSuppressed) { _, suppressed in
+        if suppressed {
+          MIRAPlaybackCoordinator.pauseAll(reason: "home_feed_overlay")
+        } else {
+          MIRAPlaybackCoordinator.resumeVisible(reason: "home_feed_overlay_closed")
+        }
+      }
+      .onAppear {
+        if !isMediaPlaybackSuppressed {
+          MIRAPlaybackCoordinator.resumeVisible(reason: "home_feed_appeared")
+        }
+      }
+      .onDisappear {
+        pauseVisibleMedia(reason: "home_feed_disappeared")
+      }
     }
   }
 
@@ -729,6 +752,7 @@ public struct MainFeedView: View {
   }
 
   private func updateActiveVideo(_ visibility: [MainPostVisibility]) {
+    guard !isMediaPlaybackSuppressed else { return }
     let candidate = visibility
       .filter { $0.hasVideo && $0.visibleRatio >= 0.60 }
       .max { $0.visibleRatio < $1.visibleRatio }
@@ -740,6 +764,17 @@ public struct MainFeedView: View {
         activeVideoPostID = nextID
       }
       MIRAMemoryMetrics.log("main_feed_video_switch")
+    }
+  }
+
+  private func pauseVisibleMedia(reason: String) {
+    MIRAPlaybackCoordinator.pauseAll(reason: reason)
+    if activeVideoPostID != nil {
+      var transaction = Transaction()
+      transaction.animation = nil
+      withTransaction(transaction) {
+        activeVideoPostID = nil
+      }
     }
   }
 
@@ -842,11 +877,27 @@ public struct MainFeedView: View {
   }
 
   private var isFeedChromeHidden: Bool {
-    isHeaderHidden || isCommentsPresented || activeCommentsPost != nil || isPostOptionsPresented || postOptionsTarget != nil || isShowingCreatePost
+    isHeaderHidden || isFeedOverlayPresented
   }
 
   private var feedTabBarVisibility: Visibility {
-    (isCommentsPresented || activeCommentsPost != nil || isPostOptionsPresented || postOptionsTarget != nil || isShowingCreatePost) ? .hidden : .visible
+    isFeedOverlayPresented ? .hidden : .visible
+  }
+
+  private var isMediaPlaybackSuppressed: Bool {
+    !isTabActive || isFeedOverlayPresented
+  }
+
+  private var isFeedOverlayPresented: Bool {
+    isCommentsPresented ||
+      activeCommentsPost != nil ||
+      isSaveSheetPresented ||
+      saveTargetPost != nil ||
+      isPostOptionsPresented ||
+      postOptionsTarget != nil ||
+      isReportSheetPresented ||
+      reportTarget != nil ||
+      isShowingCreatePost
   }
 }
 

@@ -262,6 +262,11 @@ public struct MIRANativeRootView: View {
       }
       if phase == .active {
         registerCachedPushTokenIfPossible()
+        if selectedTab == .main {
+          MIRAPlaybackCoordinator.resumeVisible(reason: "app_active_home")
+        }
+      } else {
+        MIRAPlaybackCoordinator.pauseAll(reason: "app_inactive")
       }
     }
     .onReceive(NotificationCenter.default.publisher(for: .miraRemotePushTokenReceived)) { notification in
@@ -294,7 +299,7 @@ public struct MIRANativeRootView: View {
   private var mainTabs: some View {
     TabView(selection: $selectedTab) {
       lazyTab(.main) {
-        MainFeedView(api: api, model: startup.feedModel)
+        MainFeedView(api: api, model: startup.feedModel, isTabActive: selectedTab == .main)
       }
         .tag(MIRATab.main)
         .tabItem { Label("Home", systemImage: "house.fill") }
@@ -324,6 +329,11 @@ public struct MIRANativeRootView: View {
     .onChange(of: selectedTab) { _, tab in
       MIRAPerformanceTimeline.mark("tab_switch", detail: "\(tab)")
       loadedTabs.insert(tab)
+      if tab == .main {
+        MIRAPlaybackCoordinator.resumeVisible(reason: "home_tab_selected")
+      } else {
+        MIRAPlaybackCoordinator.pauseAll(reason: "tab_changed")
+      }
     }
   }
 
