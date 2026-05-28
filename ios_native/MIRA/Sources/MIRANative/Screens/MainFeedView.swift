@@ -510,6 +510,8 @@ public struct MainFeedView: View {
   @State private var isCommentsPresented = false
   @State private var saveTargetPost: MIRAPost?
   @State private var isSaveSheetPresented = false
+  @State private var postOptionsTarget: MIRAPost?
+  @State private var isPostOptionsPresented = false
   @State private var reportTarget: MIRAReportTarget?
   @State private var reportSourcePost: MIRAPost?
   @State private var isReportSheetPresented = false
@@ -547,15 +549,8 @@ public struct MainFeedView: View {
                   onSave: { presentSaveSheet(for: post) },
                   onComment: { presentComments(for: post) },
                   onFollow: { await model.followAuthor(post) },
-                  onPin: { Task { await model.togglePin(post) } },
-                  onNotInterested: { model.hidePost(post) },
-                  onReport: { presentReport(for: post) },
-                  onBlockAuthor: { Task { await model.blockAuthor(post) } },
-                  canFollowAuthor: model.canFollowAuthor(post),
-                  canDelete: model.canDelete(post),
-                  onDelete: { Task { await model.deletePost(post) } },
-                  onMakePublic: { Task { await model.updatePostVisibility(post, visibility: "public") } },
-                  onMakePrivate: { Task { await model.updatePostVisibility(post, visibility: "private") } }
+                  onOpenOptions: { presentPostOptions(for: post) },
+                  canFollowAuthor: model.canFollowAuthor(post)
                 )
                 .onAppear {
                   Task { await model.loadMoreIfNeeded(after: post) }
@@ -636,6 +631,27 @@ public struct MainFeedView: View {
               }
             },
             onClose: dismiss
+          )
+        } else {
+          Color.clear
+        }
+      }
+      .miraBottomSheet(
+        isPresented: $isPostOptionsPresented,
+        preferredHeightFraction: 0.32,
+        maxHeight: 320,
+        onDismissed: { postOptionsTarget = nil }
+      ) { dismiss in
+        if let post = postOptionsTarget {
+          MainFeedPostOptionsSheet(
+            post: post,
+            shareURL: mainFeedShareURL(for: post),
+            onReport: { reportPostFromOptions(post, dismiss: dismiss) },
+            onNotInterested: {
+              UIImpactFeedbackGenerator(style: .light).impactOccurred()
+              model.hidePost(post)
+              dismiss()
+            }
           )
         } else {
           Color.clear
@@ -743,6 +759,22 @@ public struct MainFeedView: View {
     }
   }
 
+  private func presentPostOptions(for post: MIRAPost) {
+    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    postOptionsTarget = post
+    withAnimation(.spring(response: 0.30, dampingFraction: 0.90)) {
+      isPostOptionsPresented = true
+    }
+  }
+
+  private func reportPostFromOptions(_ post: MIRAPost, dismiss: @escaping () -> Void) {
+    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+    dismiss()
+    DispatchQueue.main.asyncAfter(deadline: .now() + MIRATransitionTiming.sheetClose) {
+      presentReport(for: post)
+    }
+  }
+
   private func presentReport(for post: MIRAPost) {
     UIImpactFeedbackGenerator(style: .medium).impactOccurred()
     reportSourcePost = post
@@ -809,11 +841,11 @@ public struct MainFeedView: View {
   }
 
   private var isFeedChromeHidden: Bool {
-    isHeaderHidden || isCommentsPresented || activeCommentsPost != nil || isShowingCreatePost
+    isHeaderHidden || isCommentsPresented || activeCommentsPost != nil || isPostOptionsPresented || postOptionsTarget != nil || isShowingCreatePost
   }
 
   private var feedTabBarVisibility: Visibility {
-    (isCommentsPresented || activeCommentsPost != nil || isShowingCreatePost) ? .hidden : .visible
+    (isCommentsPresented || activeCommentsPost != nil || isPostOptionsPresented || postOptionsTarget != nil || isShowingCreatePost) ? .hidden : .visible
   }
 }
 
@@ -825,21 +857,13 @@ private struct MainNativePostCard: View {
   let onSave: () -> Void
   let onComment: () -> Void
   let onFollow: () async -> Bool
-  let onPin: () -> Void
-  let onNotInterested: () -> Void
-  let onReport: () -> Void
-  let onBlockAuthor: () -> Void
+  let onOpenOptions: () -> Void
   let canFollowAuthor: Bool
-  let canDelete: Bool
-  let onDelete: () -> Void
-  let onMakePublic: () -> Void
-  let onMakePrivate: () -> Void
   @State private var selectedMediaIndex = 0
   @State private var isShowingCaption = false
   @State private var measuredCardWidth = UIScreen.main.bounds.width
   @State private var isSubmittingFollow = false
   @State private var isFollowConfirmationVisible = false
-  @State private var isPostMenuPresented = false
 
   private var mediaHeight: CGFloat {
     return MIRAMediaSizing.mainFeedHeight(
@@ -847,10 +871,6 @@ private struct MainNativePostCard: View {
       aspectRatios: post.mediaHeightToWidthRatios,
       width: measuredCardWidth
     )
-  }
-
-  private var normalizedVisibility: String {
-    post.visibility?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "public"
   }
 
   var body: some View {
@@ -897,12 +917,6 @@ private struct MainNativePostCard: View {
     }
     .overlay(alignment: .bottom) {
       Rectangle().fill(MIRATheme.Color.hairline).frame(height: 0.75).allowsHitTesting(false)
-    }
-    .confirmationDialog("Post options", isPresented: $isPostMenuPresented, titleVisibility: .visible) {
-      postContextMenu
-      Button("Cancel", role: .cancel) {
-        debugTap("cancel_post_menu")
-      }
     }
     .onChange(of: post.id) { _, _ in
       selectedMediaIndex = 0
@@ -1119,19 +1133,6 @@ private struct MainNativePostCard: View {
         .accessibilityElement(children: .combine)
       }
 
-      if post.hasAudio {
-        MIRAAudioPreviewButton(
-          api: api,
-          trackId: post.audioTrackId,
-          title: post.audioDisplayTitle ?? "Audio",
-          artist: post.audioDisplayArtist ?? "Audius",
-          artworkUrl: post.audioArtworkUrl,
-          streamUrl: post.audioStreamUrl,
-          compact: true
-        )
-        .padding(.top, 2)
-      }
-
       if let taggedPeopleText {
         HStack(spacing: 6) {
           Image(systemName: "person.2.fill")
@@ -1150,7 +1151,7 @@ private struct MainNativePostCard: View {
   }
 
   private var hasCaptionContent: Bool {
-    headlineText != nil || captionBodyText != nil || placeText != nil || taggedPeopleText != nil || post.hasAudio
+    headlineText != nil || captionBodyText != nil || placeText != nil || taggedPeopleText != nil
   }
 
   private var captionNeedsExpansion: Bool {
@@ -1319,8 +1320,7 @@ private struct MainNativePostCard: View {
   private var postMenu: some View {
     Button {
       debugTap("tap_post_menu")
-      UIImpactFeedbackGenerator(style: .light).impactOccurred()
-      isPostMenuPresented = true
+      onOpenOptions()
     } label: {
       Image(systemName: "ellipsis")
         .font(.system(size: 17, weight: .semibold))
@@ -1334,79 +1334,6 @@ private struct MainNativePostCard: View {
     }
     .buttonStyle(.miraPress)
     .accessibilityLabel("Post options")
-  }
-
-  @ViewBuilder
-  private var postContextMenu: some View {
-    if canDelete {
-      Button {
-        debugTap(post.isPinned ? "tap_unpin_post" : "tap_pin_post")
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        onPin()
-      } label: {
-        Label(post.isPinned ? "Unpin post" : "Pin post", systemImage: post.isPinned ? "pin.slash" : "pin")
-      }
-
-      if normalizedVisibility != "public" {
-        Button {
-          debugTap("tap_make_post_public")
-          UIImpactFeedbackGenerator(style: .light).impactOccurred()
-          onMakePublic()
-        } label: {
-          Label("Make post public", systemImage: "globe")
-        }
-      }
-
-      if normalizedVisibility != "private" {
-        Button {
-          debugTap("tap_make_post_private")
-          UIImpactFeedbackGenerator(style: .light).impactOccurred()
-          onMakePrivate()
-        } label: {
-          Label("Make post private", systemImage: "lock")
-        }
-      }
-
-      Button(role: .destructive) {
-        debugTap("tap_delete_post")
-        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-        onDelete()
-      } label: {
-        Label("Delete post", systemImage: "trash")
-      }
-    } else {
-      Button(role: .destructive) {
-        debugTap("tap_report_post")
-        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-        onReport()
-      } label: {
-        Label("Report", systemImage: "flag")
-      }
-
-      Button(role: .destructive) {
-        debugTap("tap_block_author")
-        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-        onBlockAuthor()
-      } label: {
-        Label("Block user", systemImage: "hand.raised")
-      }
-
-      Button {
-        debugTap("tap_hide_post")
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        onNotInterested()
-      } label: {
-        Label("Hide this post", systemImage: "eye.slash")
-      }
-
-      Button {
-        debugTap("tap_not_interested")
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        onNotInterested()
-      } label: {
-        Label("Not interested", systemImage: "hand.thumbsdown")
-      }
-    }
   }
 
   private func followWithConfirmation() {
@@ -1439,10 +1366,18 @@ private struct MainNativePostCard: View {
   }
 
   private var authorSubtitle: String? {
-    let username = MIRAUsernameRules.isValidPublicUsername(post.userUsername) ? MIRAUsernameRules.normalized(post.userUsername) : ""
-    let subtitle = post.userFullName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-    guard !subtitle.isEmpty, subtitle != username else { return nil }
-    return subtitle
+    let location = cleanedLocation(post.location)
+      ?? cleanedLocation(post.placeDisplaySubtitle)
+      ?? cleanedLocation(post.placeDisplayName)
+    return location
+  }
+
+  private func cleanedLocation(_ value: String?) -> String? {
+    let clean = value?
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+      .replacingOccurrences(of: #"\s*,\s*"#, with: ", ", options: .regularExpression) ?? ""
+    guard !clean.isEmpty else { return nil }
+    return clean
   }
 
   private func debugTap(_ action: String) {
@@ -1451,6 +1386,104 @@ private struct MainNativePostCard: View {
     print("[Captro feed tap] action=\(action) post_id=\(post.id) author_id=\(author)")
     #endif
   }
+}
+
+private struct MainFeedPostOptionsSheet: View {
+  let post: MIRAPost
+  let shareURL: URL
+  let onReport: () -> Void
+  let onNotInterested: () -> Void
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      Capsule()
+        .fill(MIRATheme.Color.textMuted.opacity(0.28))
+        .frame(width: 42, height: 5)
+        .frame(maxWidth: .infinity)
+        .padding(.top, 10)
+        .padding(.bottom, 16)
+
+      Text("Post options")
+        .font(.system(size: 18, weight: .semibold))
+        .foregroundStyle(MIRATheme.Color.textPrimary)
+        .padding(.horizontal, MIRATheme.Space.lg)
+        .padding(.bottom, 10)
+
+      Button(action: onReport) {
+        MainFeedPostOptionRow(
+          title: "Report",
+          subtitle: "Send this post to Captro moderation.",
+          systemImage: "flag",
+          tint: MIRATheme.Color.like
+        )
+      }
+      .buttonStyle(.miraPress)
+
+      Button(action: onNotInterested) {
+        MainFeedPostOptionRow(
+          title: "Not Interested",
+          subtitle: "Hide this post and tune your feed.",
+          systemImage: "hand.thumbsdown",
+          tint: MIRATheme.Color.textSecondary
+        )
+      }
+      .buttonStyle(.miraPress)
+
+      ShareLink(item: shareURL, subject: Text(post.titleText), message: Text(post.titleText)) {
+        MainFeedPostOptionRow(
+          title: "Share",
+          subtitle: "Share this Captro post.",
+          systemImage: "square.and.arrow.up",
+          tint: MIRATheme.Color.forest
+        )
+      }
+      .buttonStyle(.miraPress)
+
+      Spacer(minLength: 0)
+    }
+    .background(MIRATheme.Color.surface)
+  }
+}
+
+private struct MainFeedPostOptionRow: View {
+  let title: String
+  let subtitle: String
+  let systemImage: String
+  let tint: Color
+
+  var body: some View {
+    HStack(spacing: MIRATheme.Space.md) {
+      Image(systemName: systemImage)
+        .font(.system(size: 17, weight: .semibold))
+        .foregroundStyle(tint)
+        .frame(width: 38, height: 38)
+        .background(tint.opacity(0.10))
+        .clipShape(Circle())
+
+      VStack(alignment: .leading, spacing: 3) {
+        Text(title)
+          .font(.system(size: 16, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+        Text(subtitle)
+          .font(.system(size: 13, weight: .medium))
+          .foregroundStyle(MIRATheme.Color.textMuted)
+          .lineLimit(1)
+          .truncationMode(.tail)
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
+
+      Image(systemName: "chevron.right")
+        .font(.system(size: 12, weight: .bold))
+        .foregroundStyle(MIRATheme.Color.textMuted.opacity(0.65))
+    }
+    .padding(.horizontal, MIRATheme.Space.lg)
+    .frame(minHeight: 58)
+    .contentShape(Rectangle())
+  }
+}
+
+private func mainFeedShareURL(for post: MIRAPost) -> URL {
+  MIRAProductionBackend.siteURL("post/\(post.id)")
 }
 
 private struct MainFeedCommentsSheet: View {

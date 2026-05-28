@@ -17,6 +17,7 @@ struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
   var dismissesOnCancel = true
   let onCapture: (MIRAPickedMedia) -> Void
   let onCancel: () -> Void
+  let onMusic: () -> Void
   let onEdit: (MIRAPickedMedia, MIRAStoryCameraEditTool) -> Void
 
   @Environment(\.dismiss) private var dismiss
@@ -27,6 +28,7 @@ struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
     dismissesOnCancel: Bool = true,
     onCapture: @escaping (MIRAPickedMedia) -> Void,
     onCancel: @escaping () -> Void = {},
+    onMusic: @escaping () -> Void = {},
     onEdit: @escaping (MIRAPickedMedia, MIRAStoryCameraEditTool) -> Void = { _, _ in }
   ) {
     self.editedMedia = editedMedia
@@ -34,6 +36,7 @@ struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
     self.dismissesOnCancel = dismissesOnCancel
     self.onCapture = onCapture
     self.onCancel = onCancel
+    self.onMusic = onMusic
     self.onEdit = onEdit
   }
 
@@ -53,6 +56,7 @@ struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
     Coordinator(
       onCapture: onCapture,
       onCancel: onCancel,
+      onMusic: onMusic,
       onEdit: onEdit,
       dismissesOnCapture: dismissesOnCapture,
       dismissesOnCancel: dismissesOnCancel,
@@ -63,6 +67,7 @@ struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
   final class Coordinator: NSObject, MIRAStoryCameraViewControllerDelegate {
     private let onCapture: (MIRAPickedMedia) -> Void
     private let onCancel: () -> Void
+    private let onMusic: () -> Void
     private let onEdit: (MIRAPickedMedia, MIRAStoryCameraEditTool) -> Void
     private let dismissesOnCapture: Bool
     private let dismissesOnCancel: Bool
@@ -71,6 +76,7 @@ struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
     init(
       onCapture: @escaping (MIRAPickedMedia) -> Void,
       onCancel: @escaping () -> Void,
+      onMusic: @escaping () -> Void,
       onEdit: @escaping (MIRAPickedMedia, MIRAStoryCameraEditTool) -> Void,
       dismissesOnCapture: Bool,
       dismissesOnCancel: Bool,
@@ -78,6 +84,7 @@ struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
     ) {
       self.onCapture = onCapture
       self.onCancel = onCancel
+      self.onMusic = onMusic
       self.onEdit = onEdit
       self.dismissesOnCapture = dismissesOnCapture
       self.dismissesOnCancel = dismissesOnCancel
@@ -98,6 +105,10 @@ struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
       }
     }
 
+    func storyCameraDidRequestMusic() {
+      onMusic()
+    }
+
     func storyCameraDidRequestEdit(_ media: MIRAPickedMedia, tool: MIRAStoryCameraEditTool) {
       onEdit(media, tool)
     }
@@ -107,6 +118,7 @@ struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
 protocol MIRAStoryCameraViewControllerDelegate: AnyObject {
   func storyCameraDidCancel()
   func storyCameraDidCapture(_ media: MIRAPickedMedia)
+  func storyCameraDidRequestMusic()
   func storyCameraDidRequestEdit(_ media: MIRAPickedMedia, tool: MIRAStoryCameraEditTool)
 }
 
@@ -372,7 +384,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     configureCircleButton(flipButton, systemImage: "arrow.triangle.2.circlepath.camera", action: #selector(flipCamera))
     configureCircleButton(flashButton, systemImage: flashSetting.systemImage, action: #selector(cycleFlash))
     configureCircleButton(timerButton, systemImage: "timer", action: #selector(cycleTimer))
-    configureCircleButton(gridButton, systemImage: "square.grid.3x3", action: #selector(toggleGrid))
+    configureCircleButton(gridButton, systemImage: "music.note", action: #selector(musicTapped))
     configureCircleButton(galleryRailButton, systemImage: "photo.on.rectangle", action: #selector(openGallery))
     configureCircleButton(filtersButton, systemImage: "wand.and.stars", action: #selector(filtersTapped))
     configureCircleButton(editRailButton, systemImage: "pencil", action: #selector(editRailTapped))
@@ -943,6 +955,11 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     gridOverlay.isHidden.toggle()
     gridButton.backgroundColor = gridOverlay.isHidden ? UIColor.black.withAlphaComponent(0.30) : UIColor.white.withAlphaComponent(0.24)
     UIImpactFeedbackGenerator(style: .light).impactOccurred()
+  }
+
+  @objc private func musicTapped() {
+    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    delegate?.storyCameraDidRequestMusic()
   }
 
   @objc private func filtersTapped() {

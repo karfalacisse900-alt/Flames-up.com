@@ -436,6 +436,9 @@ public struct CreatePostNativeView: View {
         onCancel: {
           close()
         },
+        onMusic: {
+          activePostDetailSheet = .music
+        },
         onEdit: { media, _ in
           editingMedia = MIRAEditorPresentation(media: media, returnsToCamera: true)
         }
@@ -2031,6 +2034,9 @@ public struct CreateStoryNativeView: View {
           DispatchQueue.main.asyncAfter(deadline: .now() + (reduceMotion ? 0.08 : MIRATransitionTiming.fullScreenClose)) {
             close()
           }
+        },
+        onMusic: {
+          showMusicPicker = true
         }
       )
       .ignoresSafeArea()
