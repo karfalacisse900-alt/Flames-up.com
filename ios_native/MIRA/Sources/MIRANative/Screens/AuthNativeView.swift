@@ -10,6 +10,9 @@ public struct AuthNativeView: View {
   @State private var username = ""
   @State private var fullName = ""
   @State private var isCreatingAccount = false
+  @State private var selectedWelcomePage = 0
+  @State private var isAuthPanelVisible = false
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   public init(session: MIRAAuthSession, api: MIRAAPIClient) {
     self.session = session
@@ -18,33 +21,101 @@ public struct AuthNativeView: View {
 
   public var body: some View {
     NavigationStack {
+      ZStack {
+        CaptroWelcomePager(
+          selectedPage: $selectedWelcomePage,
+          onLogin: { presentAuthPanel(createAccount: false) },
+          onSignup: { presentAuthPanel(createAccount: true) }
+        )
+
+        if isAuthPanelVisible {
+          Color.black.opacity(0.24)
+            .ignoresSafeArea()
+            .transition(.opacity)
+            .onTapGesture {
+              closeAuthPanel()
+            }
+            .zIndex(1)
+
+          authPanel
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+            .zIndex(2)
+        }
+      }
+      .animation(.spring(response: reduceMotion ? 0.18 : 0.34, dampingFraction: 0.9), value: isAuthPanelVisible)
+      .toolbar(.hidden, for: .navigationBar)
+    }
+  }
+
+  private var authPanel: some View {
+    VStack(spacing: 0) {
+      Capsule()
+        .fill(MIRATheme.Color.textMuted.opacity(0.28))
+        .frame(width: 42, height: 5)
+        .padding(.top, 10)
+        .padding(.bottom, MIRATheme.Space.md)
+
+      HStack(spacing: MIRATheme.Space.sm) {
+        VStack(alignment: .leading, spacing: 3) {
+          Text(isCreatingAccount ? "Sign up" : "Log in")
+            .font(.system(size: 28, weight: .black, design: .rounded))
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+          Text(isCreatingAccount ? "Create your Captro account." : "Welcome back to Captro.")
+            .font(.system(size: 14.5, weight: .medium))
+            .foregroundStyle(MIRATheme.Color.textSecondary)
+        }
+
+        Spacer()
+
+        Button {
+          closeAuthPanel()
+        } label: {
+          Image(systemName: "xmark")
+            .font(.system(size: 15, weight: .bold))
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+            .frame(width: 44, height: 44)
+            .background(MIRATheme.Color.surfaceSoft)
+            .clipShape(Circle())
+        }
+        .buttonStyle(.miraPress)
+        .accessibilityLabel("Close")
+      }
+      .padding(.horizontal, MIRATheme.Space.xl)
+
       ScrollView {
-        VStack(alignment: .leading, spacing: MIRATheme.Space.xl) {
-          brandBlock
+        VStack(alignment: .leading, spacing: MIRATheme.Space.lg) {
           formBlock
           appleButton
           legalFooter
         }
         .padding(.horizontal, MIRATheme.Space.xl)
-        .padding(.top, 70)
+        .padding(.top, MIRATheme.Space.lg)
         .padding(.bottom, MIRATheme.Space.xxl)
       }
-      .background(MIRATheme.Color.appBackground.ignoresSafeArea())
-      .toolbar(.hidden, for: .navigationBar)
+    }
+    .frame(maxWidth: .infinity)
+    .frame(maxHeight: isCreatingAccount ? 720 : 650, alignment: .bottom)
+    .background(MIRATheme.Color.launchBackground)
+    .clipShape(RoundedRectangle(cornerRadius: 34, style: .continuous))
+    .modifier(MIRATheme.floatingShadow())
+    .frame(maxHeight: .infinity, alignment: .bottom)
+    .ignoresSafeArea(edges: .bottom)
+  }
+
+  private func presentAuthPanel(createAccount: Bool) {
+    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    session.errorMessage = nil
+    isCreatingAccount = createAccount
+    withAnimation(.spring(response: reduceMotion ? 0.16 : 0.34, dampingFraction: 0.9)) {
+      isAuthPanelVisible = true
     }
   }
 
-  private var brandBlock: some View {
-    VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
-      Text("MIRA")
-        .font(.system(size: 44, weight: .semibold, design: .rounded))
-        .foregroundStyle(MIRATheme.Color.textPrimary)
-      Text("Share what you see. Discover what feels real.")
-        .font(.system(size: 16, weight: .medium))
-        .foregroundStyle(MIRATheme.Color.textSecondary)
-        .fixedSize(horizontal: false, vertical: true)
+  private func closeAuthPanel() {
+    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    withAnimation(.easeOut(duration: reduceMotion ? 0.12 : 0.24)) {
+      isAuthPanelVisible = false
     }
-    .frame(maxWidth: .infinity, alignment: .leading)
   }
 
   private var formBlock: some View {
@@ -218,6 +289,441 @@ public struct AuthNativeView: View {
     } else {
       await session.login(email: email, password: password, api: api)
     }
+  }
+}
+
+private enum CaptroWelcomeVisualStyle {
+  case capture
+  case discover
+  case people
+}
+
+private struct CaptroWelcomePage: Identifiable {
+  let id: Int
+  let title: String
+  let subtitle: String
+  let background: Color
+  let accent: Color
+  let secondaryAccent: Color
+  let textColor: Color
+  let mutedTextColor: Color
+  let visualStyle: CaptroWelcomeVisualStyle
+
+  static let all: [CaptroWelcomePage] = [
+    CaptroWelcomePage(
+      id: 0,
+      title: "Capture\nyour moment",
+      subtitle: "Share photos and short videos that feel real, not fake.",
+      background: Color(red: 0.090, green: 0.175, blue: 0.105),
+      accent: Color(red: 0.580, green: 0.850, blue: 0.470),
+      secondaryAccent: Color(red: 0.980, green: 0.820, blue: 0.420),
+      textColor: .white,
+      mutedTextColor: .white.opacity(0.82),
+      visualStyle: .capture
+    ),
+    CaptroWelcomePage(
+      id: 1,
+      title: "Discover\nyour world",
+      subtitle: "Explore photography, outfits, food, outdoors, events, and more.",
+      background: Color(red: 0.030, green: 0.455, blue: 0.810),
+      accent: Color(red: 0.480, green: 0.890, blue: 0.950),
+      secondaryAccent: Color(red: 1.000, green: 0.600, blue: 0.350),
+      textColor: .white,
+      mutedTextColor: .white.opacity(0.84),
+      visualStyle: .discover
+    ),
+    CaptroWelcomePage(
+      id: 2,
+      title: "Find\nyour people",
+      subtitle: "Connect through what you post, what you love, and what you discover.",
+      background: Color(red: 0.560, green: 0.075, blue: 0.590),
+      accent: Color(red: 1.000, green: 0.475, blue: 0.650),
+      secondaryAccent: Color(red: 0.970, green: 0.890, blue: 0.260),
+      textColor: .white,
+      mutedTextColor: .white.opacity(0.84),
+      visualStyle: .people
+    )
+  ]
+}
+
+private struct CaptroWelcomePager: View {
+  @Binding var selectedPage: Int
+  let onLogin: () -> Void
+  let onSignup: () -> Void
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+  private var currentPage: CaptroWelcomePage {
+    let pages = CaptroWelcomePage.all
+    let index = min(max(selectedPage, 0), pages.count - 1)
+    return pages[index]
+  }
+
+  var body: some View {
+    ZStack {
+      TabView(selection: $selectedPage) {
+        ForEach(CaptroWelcomePage.all) { page in
+          CaptroWelcomeSlide(page: page)
+            .tag(page.id)
+        }
+      }
+      .tabViewStyle(.page(indexDisplayMode: .never))
+      .ignoresSafeArea()
+
+      VStack(spacing: 0) {
+        HStack(alignment: .center, spacing: MIRATheme.Space.md) {
+          CaptroWelcomeWordmark(color: currentPage.textColor)
+          Spacer()
+          CaptroWelcomePageIndicator(selectedPage: selectedPage, tint: currentPage.textColor)
+        }
+        .padding(.horizontal, 28)
+        .padding(.top, 58)
+        .animation(.easeOut(duration: reduceMotion ? 0.1 : 0.2), value: selectedPage)
+
+        Spacer()
+
+        HStack(spacing: MIRATheme.Space.md) {
+          CaptroWelcomeActionButton(title: "Log in", style: .filled, action: onLogin)
+          CaptroWelcomeActionButton(title: "Sign up", style: .light, action: onSignup)
+        }
+        .padding(.horizontal, 28)
+        .padding(.bottom, 34)
+      }
+      .ignoresSafeArea()
+    }
+    .background(currentPage.background.ignoresSafeArea())
+  }
+}
+
+private struct CaptroWelcomeSlide: View {
+  let page: CaptroWelcomePage
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+  var body: some View {
+    GeometryReader { geometry in
+      ZStack {
+        page.background.ignoresSafeArea()
+
+        CaptroWelcomeAnimatedScene(page: page)
+          .allowsHitTesting(false)
+
+        VStack(alignment: .leading, spacing: MIRATheme.Space.xl) {
+          Spacer()
+
+          VStack(alignment: .leading, spacing: MIRATheme.Space.lg) {
+            Text(page.title)
+              .font(.system(size: 60, weight: .black, design: .rounded))
+              .foregroundStyle(page.textColor)
+              .lineLimit(3)
+              .minimumScaleFactor(0.74)
+              .fixedSize(horizontal: false, vertical: true)
+              .accessibilityAddTraits(.isHeader)
+
+            Text(page.subtitle)
+              .font(.system(size: 22, weight: .bold, design: .rounded))
+              .foregroundStyle(page.mutedTextColor)
+              .lineLimit(4)
+              .minimumScaleFactor(0.82)
+              .fixedSize(horizontal: false, vertical: true)
+          }
+          .padding(.bottom, max(145, geometry.safeAreaInsets.bottom + 130))
+        }
+        .padding(.horizontal, 28)
+      }
+      .animation(.easeOut(duration: reduceMotion ? 0.1 : 0.26), value: page.id)
+    }
+  }
+}
+
+private struct CaptroWelcomeAnimatedScene: View {
+  let page: CaptroWelcomePage
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+  var body: some View {
+    TimelineView(.animation) { timeline in
+      GeometryReader { geometry in
+        let time = reduceMotion ? 0 : timeline.date.timeIntervalSinceReferenceDate
+        ZStack {
+          switch page.visualStyle {
+          case .capture:
+            captureScene(size: geometry.size, time: time)
+          case .discover:
+            discoverScene(size: geometry.size, time: time)
+          case .people:
+            peopleScene(size: geometry.size, time: time)
+          }
+        }
+        .frame(width: geometry.size.width, height: geometry.size.height)
+      }
+    }
+  }
+
+  @ViewBuilder
+  private func captureScene(size: CGSize, time: TimeInterval) -> some View {
+    CaptroFloatingMediaTile(
+      systemImage: "camera.viewfinder",
+      label: "Photo",
+      background: page.accent,
+      foreground: page.background
+    )
+    .frame(width: 150, height: 190)
+    .rotationEffect(.degrees(-8 + sin(time * 0.8) * 3))
+    .position(x: size.width * 0.72, y: size.height * 0.22 + sin(time) * 10)
+
+    CaptroFloatingCapsule(
+      systemImage: "play.fill",
+      label: "Short video",
+      background: page.secondaryAccent,
+      foreground: page.background
+    )
+    .frame(width: 172, height: 66)
+    .rotationEffect(.degrees(7 + cos(time * 0.9) * 2))
+    .position(x: size.width * 0.38, y: size.height * 0.35 + cos(time * 0.8) * 8)
+
+    CaptroFloatingCircle(
+      systemImage: "sparkles",
+      background: .white.opacity(0.20),
+      foreground: page.textColor
+    )
+    .frame(width: 92, height: 92)
+    .position(x: size.width * 0.82, y: size.height * 0.43 + sin(time * 1.2) * 8)
+  }
+
+  @ViewBuilder
+  private func discoverScene(size: CGSize, time: TimeInterval) -> some View {
+    CaptroFloatingMediaTile(
+      systemImage: "leaf.fill",
+      label: "Outdoors",
+      background: Color(red: 0.450, green: 0.850, blue: 0.610),
+      foreground: page.background
+    )
+    .frame(width: 118, height: 154)
+    .rotationEffect(.degrees(-12 + sin(time * 0.7) * 3))
+    .position(x: size.width * 0.30, y: size.height * 0.22 + sin(time * 0.9) * 10)
+
+    CaptroFloatingMediaTile(
+      systemImage: "tshirt.fill",
+      label: "Outfits",
+      background: page.accent,
+      foreground: page.background
+    )
+    .frame(width: 132, height: 172)
+    .rotationEffect(.degrees(10 + cos(time * 0.8) * 3))
+    .position(x: size.width * 0.66, y: size.height * 0.28 + cos(time) * 8)
+
+    CaptroFloatingCapsule(
+      systemImage: "fork.knife",
+      label: "Food",
+      background: page.secondaryAccent,
+      foreground: page.background
+    )
+    .frame(width: 150, height: 66)
+    .position(x: size.width * 0.55, y: size.height * 0.43 + sin(time * 1.1) * 7)
+  }
+
+  @ViewBuilder
+  private func peopleScene(size: CGSize, time: TimeInterval) -> some View {
+    CaptroFloatingAvatarPair(
+      accent: page.accent,
+      secondaryAccent: page.secondaryAccent,
+      foreground: page.background
+    )
+    .frame(width: 235, height: 112)
+    .rotationEffect(.degrees(-5 + sin(time * 0.7) * 2))
+    .position(x: size.width * 0.62, y: size.height * 0.25 + sin(time * 0.9) * 9)
+
+    CaptroFloatingCapsule(
+      systemImage: "heart.fill",
+      label: "Loved it",
+      background: page.accent.opacity(0.92),
+      foreground: .white
+    )
+    .frame(width: 162, height: 66)
+    .position(x: size.width * 0.36, y: size.height * 0.39 + cos(time * 1.1) * 8)
+
+    CaptroFloatingCircle(
+      systemImage: "person.2.fill",
+      background: .white.opacity(0.20),
+      foreground: page.textColor
+    )
+    .frame(width: 88, height: 88)
+    .position(x: size.width * 0.78, y: size.height * 0.42 + sin(time) * 7)
+  }
+}
+
+private struct CaptroWelcomeWordmark: View {
+  let color: Color
+
+  var body: some View {
+    HStack(spacing: 10) {
+      Image("CaptroLaunchLogo", bundle: .main)
+        .resizable()
+        .scaledToFit()
+        .frame(width: 34, height: 34)
+
+      Text("Captro")
+        .font(.system(size: 20, weight: .black, design: .rounded))
+        .foregroundStyle(color)
+    }
+    .accessibilityLabel("Captro")
+  }
+}
+
+private struct CaptroWelcomePageIndicator: View {
+  let selectedPage: Int
+  let tint: Color
+
+  var body: some View {
+    HStack(spacing: 8) {
+      ForEach(CaptroWelcomePage.all.indices, id: \.self) { index in
+        Capsule()
+          .fill(tint.opacity(index == selectedPage ? 1 : 0.42))
+          .frame(width: index == selectedPage ? 34 : 10, height: 9)
+      }
+    }
+    .animation(.spring(response: 0.26, dampingFraction: 0.82), value: selectedPage)
+    .accessibilityLabel("Welcome screen \(selectedPage + 1) of \(CaptroWelcomePage.all.count)")
+  }
+}
+
+private enum CaptroWelcomeActionStyle {
+  case filled
+  case light
+}
+
+private struct CaptroWelcomeActionButton: View {
+  let title: String
+  let style: CaptroWelcomeActionStyle
+  let action: () -> Void
+
+  var body: some View {
+    Button(action: action) {
+      Text(title)
+        .font(.system(size: 20, weight: .black, design: .rounded))
+        .foregroundStyle(style == .filled ? .white : MIRATheme.Color.textPrimary)
+        .frame(maxWidth: .infinity)
+        .frame(height: 58)
+        .background(style == .filled ? Color.black : Color.white)
+        .clipShape(Capsule())
+        .overlay(
+          Capsule()
+            .stroke(style == .filled ? Color.black.opacity(0.18) : Color.black.opacity(0.16), lineWidth: 1)
+        )
+    }
+    .buttonStyle(.miraPress)
+    .accessibilityLabel(title)
+  }
+}
+
+private struct CaptroFloatingMediaTile: View {
+  let systemImage: String
+  let label: String
+  let background: Color
+  let foreground: Color
+
+  var body: some View {
+    ZStack(alignment: .bottomLeading) {
+      RoundedRectangle(cornerRadius: 26, style: .continuous)
+        .fill(
+          LinearGradient(
+            colors: [background.opacity(0.95), background.opacity(0.62)],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+          )
+        )
+
+      Image(systemName: systemImage)
+        .font(.system(size: 44, weight: .black))
+        .foregroundStyle(foreground.opacity(0.88))
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+      Text(label)
+        .font(.system(size: 14, weight: .black, design: .rounded))
+        .foregroundStyle(foreground)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+    .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).stroke(.white.opacity(0.22), lineWidth: 1))
+    .shadow(color: .black.opacity(0.16), radius: 20, x: 0, y: 12)
+  }
+}
+
+private struct CaptroFloatingCapsule: View {
+  let systemImage: String
+  let label: String
+  let background: Color
+  let foreground: Color
+
+  var body: some View {
+    HStack(spacing: 10) {
+      Image(systemName: systemImage)
+        .font(.system(size: 18, weight: .black))
+      Text(label)
+        .font(.system(size: 15, weight: .black, design: .rounded))
+        .lineLimit(1)
+    }
+    .foregroundStyle(foreground)
+    .padding(.horizontal, 18)
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .background(background)
+    .clipShape(Capsule())
+    .overlay(Capsule().stroke(.white.opacity(0.22), lineWidth: 1))
+    .shadow(color: .black.opacity(0.14), radius: 18, x: 0, y: 12)
+  }
+}
+
+private struct CaptroFloatingCircle: View {
+  let systemImage: String
+  let background: Color
+  let foreground: Color
+
+  var body: some View {
+    Circle()
+      .fill(background)
+      .overlay(
+        Image(systemName: systemImage)
+          .font(.system(size: 32, weight: .black))
+          .foregroundStyle(foreground)
+      )
+      .overlay(Circle().stroke(.white.opacity(0.24), lineWidth: 1))
+      .shadow(color: .black.opacity(0.12), radius: 16, x: 0, y: 10)
+  }
+}
+
+private struct CaptroFloatingAvatarPair: View {
+  let accent: Color
+  let secondaryAccent: Color
+  let foreground: Color
+
+  var body: some View {
+    HStack(spacing: -12) {
+      CaptroAvatarBubble(systemImage: "person.crop.circle.fill", background: accent, foreground: foreground)
+      CaptroAvatarBubble(systemImage: "camera.fill", background: secondaryAccent, foreground: foreground)
+      CaptroAvatarBubble(systemImage: "sparkles", background: .white.opacity(0.26), foreground: .white)
+    }
+    .padding(.horizontal, 18)
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .background(.white.opacity(0.18))
+    .clipShape(Capsule())
+    .overlay(Capsule().stroke(.white.opacity(0.24), lineWidth: 1))
+    .shadow(color: .black.opacity(0.14), radius: 18, x: 0, y: 12)
+  }
+}
+
+private struct CaptroAvatarBubble: View {
+  let systemImage: String
+  let background: Color
+  let foreground: Color
+
+  var body: some View {
+    Circle()
+      .fill(background)
+      .frame(width: 64, height: 64)
+      .overlay(
+        Image(systemName: systemImage)
+          .font(.system(size: 27, weight: .black))
+          .foregroundStyle(foreground)
+      )
+      .overlay(Circle().stroke(.white.opacity(0.38), lineWidth: 2))
   }
 }
 
