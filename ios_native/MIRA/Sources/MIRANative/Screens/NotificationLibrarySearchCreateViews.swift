@@ -701,6 +701,7 @@ public struct CreatePostNativeView: View {
 
   private func submit() async {
     isPosting = true
+    MIRAPerformanceTimeline.mark("post_upload_start", detail: "post")
     defer { isPosting = false }
     do {
       let uploader = MIRAMediaUploadService(api: api)
@@ -762,8 +763,10 @@ public struct CreatePostNativeView: View {
         clientRequestId: UUID().uuidString
       )
       let _: MIRAPost = try await api.post("/posts", body: body)
+      MIRAPerformanceTimeline.mark("post_upload_complete", detail: "post")
       close()
     } catch {
+      MIRAPerformanceTimeline.mark("post_upload_failed", detail: "post")
       errorMessage = "Post could not be created."
     }
   }
@@ -1839,6 +1842,7 @@ public struct CreateNoteNativeView: View {
 
   private func submit() async {
     isPosting = true
+    MIRAPerformanceTimeline.mark("post_upload_start", detail: "note")
     defer { isPosting = false }
     do {
       let uploadedURL: String?
@@ -1849,8 +1853,10 @@ public struct CreateNoteNativeView: View {
         uploadedURL = cleanGIF.isEmpty ? nil : cleanGIF
       }
       let _: MIRANote = try await api.post("/notes", body: CreateNoteBody(body: noteText, mediaUrl: uploadedURL, color: "#FFFFFF"))
+      MIRAPerformanceTimeline.mark("post_upload_complete", detail: "note")
       dismiss()
     } catch {
+      MIRAPerformanceTimeline.mark("post_upload_failed", detail: "note")
       errorMessage = "Note could not be created."
     }
   }
@@ -2182,6 +2188,7 @@ public struct CreateStoryNativeView: View {
 
   private func submit(media: MIRAPickedMedia) async {
     isPosting = true
+    MIRAPerformanceTimeline.mark("post_upload_start", detail: "story")
     defer { isPosting = false }
     do {
       let uploaded = try await MIRAMediaUploadService(api: api).upload(media)
@@ -2204,8 +2211,10 @@ public struct CreateStoryNativeView: View {
           audioDuration: selectedAudioTrack.map { min(max($0.duration ?? 15, 5), 30) }
         )
       )
+      MIRAPerformanceTimeline.mark("post_upload_complete", detail: "story")
       close()
     } catch {
+      MIRAPerformanceTimeline.mark("post_upload_failed", detail: "story")
       errorMessage = "Story could not be posted."
     }
   }

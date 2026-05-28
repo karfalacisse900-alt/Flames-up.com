@@ -7,6 +7,8 @@ final class MIRAAppDelegate: NSObject, UIApplicationDelegate, UNUserNotification
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
   ) -> Bool {
+    MIRAAppleRuntimeDiagnostics.start()
+    MIRABackgroundTaskCoordinator.shared.register()
     UNUserNotificationCenter.current().delegate = self
     return true
   }
@@ -32,5 +34,14 @@ final class MIRAAppDelegate: NSObject, UIApplicationDelegate, UNUserNotification
     willPresent notification: UNNotification
   ) async -> UNNotificationPresentationOptions {
     [.banner, .sound, .badge, .list]
+  }
+
+  func userNotificationCenter(
+    _ center: UNUserNotificationCenter,
+    didReceive response: UNNotificationResponse
+  ) async {
+    let userInfo = response.notification.request.content.userInfo
+    NotificationCenter.default.post(name: .miraNotificationOpened, object: nil, userInfo: userInfo)
+    MIRAApplePerformanceLogger.event("notification_opened")
   }
 }

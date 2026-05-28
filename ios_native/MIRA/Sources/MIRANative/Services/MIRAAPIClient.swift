@@ -217,6 +217,10 @@ public final class MIRAAPIClient {
     if authorize, let token = await sessionProvider?.accessToken(), !token.isEmpty {
       request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
     }
+    if authorize {
+      let trustHeaders = await MIRADeviceTrustService.shared.headers(for: "POST", path: absoluteURL.path)
+      trustHeaders.forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
+    }
 
     let metric = await MIRAPerformanceMetric.begin(category: "network", label: "UPLOAD \(absoluteURL.path)")
     let responseData: Data
@@ -257,6 +261,8 @@ public final class MIRAAPIClient {
     if let token, !token.isEmpty {
       request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
     }
+    let trustHeaders = await MIRADeviceTrustService.shared.headers(for: method, path: url.path)
+    trustHeaders.forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
 
     let data: Data
     if method == "GET", body == nil {

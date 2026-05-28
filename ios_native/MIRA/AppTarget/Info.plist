@@ -71,7 +71,13 @@
   <key>UIBackgroundModes</key>
   <array>
     <string>audio</string>
+    <string>fetch</string>
     <string>voip</string>
+  </array>
+  <key>BGTaskSchedulerPermittedIdentifiers</key>
+  <array>
+    <string>com.karfala90.frontend.background-refresh</string>
+    <string>com.karfala90.frontend.cache-cleanup</string>
   </array>
   <key>UILaunchScreen</key>
   <dict>

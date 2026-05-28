@@ -4,6 +4,7 @@ import UIKit
 public extension Notification.Name {
   static let miraRemotePushTokenReceived = Notification.Name("mira.remotePushTokenReceived")
   static let miraRemotePushRegistrationFailed = Notification.Name("mira.remotePushRegistrationFailed")
+  static let miraNotificationOpened = Notification.Name("mira.notificationOpened")
 }
 
 private struct MIRAPushTokenBody: Encodable {

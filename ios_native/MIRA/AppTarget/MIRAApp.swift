@@ -18,9 +18,13 @@ struct MIRAApp: App {
           MIRAPerformanceTimeline.markOnce("time_to_first_window")
         }
         .onChange(of: scenePhase) { _, phase in
-          guard phase == .active else { return }
-          MIRAPerformanceTimeline.mark("warm_launch_or_resume")
-          MIRAMemoryMetrics.log("scene_active")
+          if phase == .active {
+            MIRAPerformanceTimeline.mark("warm_launch_or_resume")
+            MIRAMemoryMetrics.log("scene_active")
+          } else if phase == .background {
+            MIRABackgroundTaskCoordinator.shared.scheduleAppRefresh()
+            MIRABackgroundTaskCoordinator.shared.scheduleCacheCleanup()
+          }
         }
     }
   }

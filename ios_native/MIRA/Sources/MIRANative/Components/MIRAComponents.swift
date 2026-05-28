@@ -351,6 +351,7 @@ private actor MIRAImageLoadPipeline {
     let key = "\(remoteURL.absoluteString)#\(Int(resolvedMaxPixelSize.rounded()))"
 
     if let cached = MIRAImageMemoryCache.shared.image(for: remoteURL, maxPixelSize: resolvedMaxPixelSize) {
+      MIRAApplePerformanceLogger.event("media_cache_hit", detail: "memory")
       return MIRAImageLoadResult(image: cached, source: .memory)
     }
 
@@ -361,10 +362,12 @@ private actor MIRAImageLoadPipeline {
     let task = Task.detached(priority: .userInitiated) { () -> MIRAImageLoadResult? in
       if let diskCached = await MIRAImageDiskCache.image(for: remoteURL, maxPixelSize: resolvedMaxPixelSize) {
         MIRAImageMemoryCache.shared.store(diskCached, for: remoteURL, maxPixelSize: resolvedMaxPixelSize, cost: diskCached.miraCacheCost)
+        MIRAApplePerformanceLogger.event("media_cache_hit", detail: "disk")
         return MIRAImageLoadResult(image: diskCached, source: .disk)
       }
 
       do {
+        MIRAApplePerformanceLogger.event("media_cache_miss", detail: "network")
         var request = URLRequest(url: remoteURL)
         request.cachePolicy = .returnCacheDataElseLoad
         request.timeoutInterval = 14

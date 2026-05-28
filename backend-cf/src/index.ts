@@ -108,7 +108,18 @@ function allowedCorsOrigin(origin: string, c?: any) {
 const corsOpts = {
   origin: allowedCorsOrigin,
   allowMethods: ['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowHeaders: ['Authorization', 'Content-Type', 'Range', 'Idempotency-Key', 'X-Idempotency-Key', 'X-Request-ID'],
+  allowHeaders: [
+    'Authorization',
+    'Content-Type',
+    'Range',
+    'Idempotency-Key',
+    'X-Idempotency-Key',
+    'X-Request-ID',
+    'X-Captro-Device-Trust-Mode',
+    'X-Captro-Device-Trust-Action',
+    'X-Captro-App-Attest-Supported',
+    'X-Captro-DeviceCheck-Token'
+  ],
   exposeHeaders: ['Accept-Ranges', 'Content-Length', 'Content-Range', 'Content-Type', 'ETag', 'Server-Timing', 'X-Request-ID', 'X-Response-Time'],
   maxAge: 600,
 };

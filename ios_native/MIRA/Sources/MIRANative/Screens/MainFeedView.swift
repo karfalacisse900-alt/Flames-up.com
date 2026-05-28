@@ -745,6 +745,7 @@ public struct MainFeedView: View {
 
   private func presentComments(for post: MIRAPost) {
     UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    MIRAPerformanceTimeline.mark("comments_open", detail: "post")
     activeCommentsPost = post
     withAnimation(.spring(response: 0.32, dampingFraction: 0.92)) {
       isCommentsPresented = true
