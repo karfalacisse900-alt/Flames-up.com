@@ -115,6 +115,12 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
   public let mediaDimensions: FlexibleMediaDimensions?
   public let location: String?
   public let postType: String?
+  public let primaryCategory: String?
+  public let category: String?
+  public let categoryConfidence: Double?
+  public let categorySource: String?
+  public let categoryStatus: String?
+  public let tags: FlexibleStringArray?
   public let visibility: String?
   public let placeId: String?
   public let placeName: String?
@@ -276,6 +282,12 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
       mediaDimensions: mediaDimensions,
       location: location,
       postType: postType,
+      primaryCategory: primaryCategory,
+      category: category,
+      categoryConfidence: categoryConfidence,
+      categorySource: categorySource,
+      categoryStatus: categoryStatus,
+      tags: tags,
       visibility: visibility,
       placeId: placeId,
       placeName: placeName,
@@ -325,6 +337,12 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
       mediaDimensions: mediaDimensions,
       location: location,
       postType: postType,
+      primaryCategory: primaryCategory,
+      category: category,
+      categoryConfidence: categoryConfidence,
+      categorySource: categorySource,
+      categoryStatus: categoryStatus,
+      tags: tags,
       visibility: visibility,
       placeId: placeId,
       placeName: placeName,
@@ -1064,6 +1082,10 @@ public struct CreatePostBody: Encodable {
   public let placeLat: Double?
   public let placeLng: Double?
   public let taggedUsers: [MIRATaggedUserPayload]?
+  public let tags: [String]?
+  public let appleVisionLabels: [MIRAAutoCategoryLabel]?
+  public let appleVisionCategoryGuess: String?
+  public let appleVisionConfidence: Double?
   public let audioProvider: String?
   public let audioTrackId: String?
   public let audioTitle: String?
@@ -1090,6 +1112,10 @@ public struct CreatePostBody: Encodable {
     placeLat: Double? = nil,
     placeLng: Double? = nil,
     taggedUsers: [MIRATaggedUserPayload]? = nil,
+    tags: [String]? = nil,
+    appleVisionLabels: [MIRAAutoCategoryLabel]? = nil,
+    appleVisionCategoryGuess: String? = nil,
+    appleVisionConfidence: Double? = nil,
     audioProvider: String? = nil,
     audioTrackId: String? = nil,
     audioTitle: String? = nil,
@@ -1115,6 +1141,10 @@ public struct CreatePostBody: Encodable {
     self.placeLat = placeLat
     self.placeLng = placeLng
     self.taggedUsers = taggedUsers
+    self.tags = tags
+    self.appleVisionLabels = appleVisionLabels
+    self.appleVisionCategoryGuess = appleVisionCategoryGuess
+    self.appleVisionConfidence = appleVisionConfidence
     self.audioProvider = audioProvider
     self.audioTrackId = audioTrackId
     self.audioTitle = audioTitle

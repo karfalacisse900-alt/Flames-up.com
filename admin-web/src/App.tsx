@@ -67,7 +67,8 @@ const reportReasons = [
   'other',
 ];
 
-const postCategories = ['all', 'photography', 'outdoors', 'outfits', 'food', 'travel', 'art', 'lifestyle', 'events', 'nightlife'];
+const postCategories = ['all', 'photography', 'outdoors', 'outfits', 'food', 'travel', 'events', 'nightlife', 'art', 'lifestyle', 'fitness', 'pets', 'cars', 'beauty'];
+const editablePostCategories = postCategories.filter((category) => category !== 'all');
 
 function formatDate(value?: string | null) {
   if (!value) return '-';
@@ -96,6 +97,15 @@ function compactId(value?: string) {
 function clampText(value?: string | null, fallback = 'No text') {
   const clean = String(value || '').trim();
   return clean || fallback;
+}
+
+function postCategory(post: AdminPost) {
+  return post.primary_category || post.category || 'lifestyle';
+}
+
+function formatConfidence(value?: number) {
+  if (typeof value !== 'number' || Number.isNaN(value)) return '0%';
+  return `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
 }
 
 function statusClass(value?: string) {
@@ -783,6 +793,20 @@ function PostModerationPage({
     });
   }
 
+  function changeCategory(post: AdminPost, category: string) {
+    openAction({
+      title: 'Change Discover category',
+      message: `Move post ${compactId(post.id)} to ${titleCase(category)}.`,
+      confirmLabel: 'Change category',
+      targetPreview: <PostActionPreview post={post} />,
+      onConfirm: async (reason, note) => {
+        await AdminApi.changePostCategory(token, post.id, { primary_category: category, reason, note });
+        await list.reload();
+        if (selectedPostId) await detail.reload();
+      },
+    });
+  }
+
   const title = surface === 'discover' ? 'Discover Moderation' : 'Post Moderation';
   const subtitle = surface === 'discover'
     ? 'Review public gallery content, categories, and visual spam before it spreads.'
@@ -831,7 +855,7 @@ function PostModerationPage({
       </div>
       <aside className="detail-panel">
         {detail.loading ? <LoadingRows compact /> : detail.data?.post ? (
-          <PostDetailPanel post={detail.data.post} actions={detail.data.actions || []} session={session} onAction={act} onViewAuthor={() => onViewAuthor(detail.data?.post.author.id || '')} />
+          <PostDetailPanel post={detail.data.post} actions={detail.data.actions || []} session={session} onAction={act} onCategoryChange={changeCategory} onViewAuthor={() => onViewAuthor(detail.data?.post.author.id || '')} />
         ) : <EmptyState title="Select a post" body="Media preview, caption, metadata, and actions will appear here." />}
       </aside>
     </section>
@@ -843,7 +867,7 @@ function PostActionPreview({ post }: { post: AdminPost }) {
     <div className="action-preview">
       <MediaPreview post={post} size="table" />
       <div>
-        <strong>@{post.author.username || 'unknown'} - {titleCase(post.category)}</strong>
+        <strong>@{post.author.username || 'unknown'} - {titleCase(postCategory(post))}</strong>
         <span>{clampText(post.content || post.title, 'No caption')}</span>
       </div>
     </div>
@@ -872,7 +896,7 @@ function PostRow({
       </button>
       <button className="text-cell" onClick={onView}>
         <strong>{clampText(post.title || post.content, 'Untitled post')}</strong>
-        <span>{titleCase(post.category)} - {formatDate(post.created_at)}</span>
+        <span>{titleCase(postCategory(post))} - {formatDate(post.created_at)}</span>
       </button>
       <button className="author-cell" onClick={onViewAuthor}>
         <Avatar src={post.author.profile_image} label={post.author.full_name || post.author.username || 'U'} />
@@ -897,14 +921,21 @@ function PostDetailPanel({
   actions,
   session,
   onAction,
+  onCategoryChange,
   onViewAuthor,
 }: {
   post: AdminPost;
   actions: AuditLog[];
   session: AdminSession;
   onAction: (post: AdminPost, label: string, action: PostAction) => void;
+  onCategoryChange: (post: AdminPost, category: string) => void;
   onViewAuthor: () => void;
 }) {
+  const [selectedCategory, setSelectedCategory] = useState(postCategory(post));
+  useEffect(() => {
+    setSelectedCategory(postCategory(post));
+  }, [post.id, post.primary_category, post.category]);
+
   return (
     <div className="detail-stack">
       <div className="detail-title">
@@ -915,12 +946,38 @@ function PostDetailPanel({
       <MediaPreview post={post} size="detail" />
       <div className="detail-meta">
         <span>Category</span>
-        <strong>{titleCase(post.category)}</strong>
+        <strong>{titleCase(postCategory(post))}</strong>
+        <span>AI confidence</span>
+        <strong>{formatConfidence(post.category_confidence)} / {titleCase(post.category_status || 'low_confidence')}</strong>
+        <span>Source</span>
+        <strong>{titleCase(post.category_source || 'fallback')}</strong>
         <span>Visibility</span>
         <strong>{titleCase(post.visibility)}</strong>
         <span>Counts</span>
         <strong>{post.likes_count || 0} likes / {post.comments_count || 0} comments / {post.saves_count || 0} saves</strong>
       </div>
+      <div className="preview-box">
+        <strong>Discover tags</strong>
+        <p>{post.tags?.length ? post.tags.map((tag) => `#${tag}`).join(' ') : 'No category tags saved yet.'}</p>
+      </div>
+      {can(session, 'content:write') ? (
+        <div className="category-correction">
+          <div>
+            <strong>Correct Discover category</strong>
+            <span>Requires a reason and writes a category_changed audit log.</span>
+          </div>
+          <select value={selectedCategory} onChange={(event) => setSelectedCategory(event.target.value)}>
+            {editablePostCategories.map((item) => <option value={item} key={item}>{titleCase(item)}</option>)}
+          </select>
+          <button
+            className="secondary-button"
+            disabled={selectedCategory === postCategory(post)}
+            onClick={() => onCategoryChange(post, selectedCategory)}
+          >
+            Change
+          </button>
+        </div>
+      ) : null}
       <div className="preview-box">
         <strong>Caption</strong>
         <p>{clampText(post.content, 'No caption')}</p>

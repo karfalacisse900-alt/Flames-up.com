@@ -704,6 +704,17 @@ public struct CreatePostNativeView: View {
     defer { isPosting = false }
     do {
       let uploader = MIRAMediaUploadService(api: api)
+      let cleanedTags = hashtags
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "#")) }
+        .filter { !$0.isEmpty }
+      async let autoCategorySignals = MIRAAutoCategoryService.analyze(
+        mediaItems: mediaItems,
+        title: title,
+        caption: bodyText,
+        hashtags: cleanedTags,
+        placeName: selectedPlace?.displayName,
+        location: selectedPlace?.addressText
+      )
       var uploaded: [String] = []
       var mediaTypes: [String] = []
       var mediaDimensions: [MIRAMediaDimension] = []
@@ -712,13 +723,11 @@ public struct CreatePostNativeView: View {
         mediaTypes.append(item.kind.rawValue)
         mediaDimensions.append(await item.mediaDimension())
       }
-      let cleanedTags = hashtags
-        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "#")) }
-        .filter { !$0.isEmpty }
       let tagLine = cleanedTags.isEmpty ? "" : cleanedTags.map { "#\($0)" }.joined(separator: " ")
       let postContent = [bodyText.trimmingCharacters(in: .whitespacesAndNewlines), tagLine]
         .filter { !$0.isEmpty }
         .joined(separator: "\n\n")
+      let categorySignals = await autoCategorySignals
       let taggedPayload = taggedUsers.map {
         MIRATaggedUserPayload(id: $0.id, username: $0.username, fullName: $0.fullName, profileImage: $0.profileImage)
       }
@@ -737,6 +746,10 @@ public struct CreatePostNativeView: View {
         placeLat: selectedPlace?.lat,
         placeLng: selectedPlace?.lng,
         taggedUsers: taggedPayload.isEmpty ? nil : taggedPayload,
+        tags: cleanedTags.isEmpty ? nil : cleanedTags,
+        appleVisionLabels: categorySignals.appleVisionLabels.isEmpty ? nil : categorySignals.appleVisionLabels,
+        appleVisionCategoryGuess: categorySignals.appleVisionCategoryGuess,
+        appleVisionConfidence: categorySignals.appleVisionConfidence,
         audioProvider: selectedAudioTrack == nil ? nil : "audius",
         audioTrackId: selectedAudioTrack?.resolvedTrackId,
         audioTitle: selectedAudioTrack?.displayTitle,

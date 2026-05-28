@@ -12,7 +12,8 @@ final class DiscoverNativeModel: ObservableObject {
   @Published var errorMessage: String?
   let api: MIRAAPIClient
   private let storiesCacheKey = "native.discover.stories.v3"
-  private let postsCacheKey = "native.discover.posts.v2"
+  private let postsCacheKeyPrefix = "native.discover.posts.v3"
+  private var activePostsCategory = "all"
   private var hasLoadedFreshStories = false
   private var hasLoadedFreshPosts = false
   private var hasScheduledPostsLoad = false
@@ -40,7 +41,7 @@ final class DiscoverNativeModel: ObservableObject {
     updateLoadingState()
     if !hasScheduledPostsLoad {
       hasScheduledPostsLoad = true
-      Task { await self.loadPosts() }
+      Task { await self.loadPosts(category: self.activePostsCategory) }
     }
     if !hasScheduledStoriesLoad {
       hasScheduledStoriesLoad = true
@@ -49,7 +50,7 @@ final class DiscoverNativeModel: ObservableObject {
   }
 
   private func hydrateCachedContentIfNeeded() async {
-    if posts.isEmpty, let cachedPosts: [MIRAPost] = await MIRALocalJSONCache.load([MIRAPost].self, key: postsCacheKey) {
+    if posts.isEmpty, let cachedPosts: [MIRAPost] = await MIRALocalJSONCache.load([MIRAPost].self, key: postsCacheKey(for: activePostsCategory)) {
       posts = cachedPosts
       isLoadingPosts = false
       MIRAPerformanceTimeline.markOnce("discover_first_content", detail: "posts_cache")
@@ -61,8 +62,27 @@ final class DiscoverNativeModel: ObservableObject {
     }
   }
 
-  private func loadPosts() async {
-    guard !hasLoadedFreshPosts else { return }
+  func selectCategory(_ category: String) async {
+    let normalized = normalizedDiscoverCategory(category)
+    guard normalized != activePostsCategory || posts.isEmpty else { return }
+    activePostsCategory = normalized
+    hasLoadedFreshPosts = false
+    hasScheduledPostsLoad = false
+    if let cachedPosts: [MIRAPost] = await MIRALocalJSONCache.load([MIRAPost].self, key: postsCacheKey(for: normalized)) {
+      posts = cachedPosts
+      isLoadingPosts = false
+    } else {
+      posts = []
+      isLoadingPosts = true
+    }
+    updateLoadingState()
+    await loadPosts(category: normalized, force: true)
+  }
+
+  private func loadPosts(category requestedCategory: String = "all", force: Bool = false) async {
+    let category = normalizedDiscoverCategory(requestedCategory)
+    guard force || !hasLoadedFreshPosts else { return }
+    activePostsCategory = category
     hasLoadedFreshPosts = true
     if posts.isEmpty {
       isLoadingPosts = true
@@ -73,23 +93,27 @@ final class DiscoverNativeModel: ObservableObject {
       updateLoadingState()
     }
     do {
-      var loaded: [MIRAPost] = try await api.get("/posts/feed?limit=24")
-      if loaded.isEmpty {
+      let encodedCategory = category.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "all"
+      var loaded: [MIRAPost] = try await api.get("/discover?category=\(encodedCategory)&limit=36")
+      if loaded.isEmpty && category == "all" {
+        loaded = (try? await api.get("/posts/feed?limit=24")) ?? []
+      }
+      if loaded.isEmpty && category == "all" {
         loaded = (try? await api.get("/posts/world-board?limit=24")) ?? []
       }
       if posts != loaded {
         posts = loaded
       }
-      await MIRALocalJSONCache.save(loaded, key: postsCacheKey)
+      await MIRALocalJSONCache.save(loaded, key: postsCacheKey(for: category))
       if !loaded.isEmpty {
         MIRAPerformanceTimeline.markOnce("discover_first_content", detail: "posts_network")
       }
     } catch {
-      if let fallback: [MIRAPost] = try? await api.get("/posts/world-board?limit=24"), !fallback.isEmpty {
+      if category == "all", let fallback: [MIRAPost] = try? await api.get("/posts/world-board?limit=24"), !fallback.isEmpty {
         if posts != fallback {
           posts = fallback
         }
-        await MIRALocalJSONCache.save(fallback, key: postsCacheKey)
+        await MIRALocalJSONCache.save(fallback, key: postsCacheKey(for: category))
         MIRAPerformanceTimeline.markOnce("discover_first_content", detail: "posts_fallback")
       } else if posts.isEmpty {
         hasLoadedFreshPosts = false
@@ -134,13 +158,13 @@ final class DiscoverNativeModel: ObservableObject {
   func hidePost(_ post: MIRAPost) {
     posts.removeAll { $0.id == post.id }
     let snapshot = posts
-    Task { await MIRALocalJSONCache.save(snapshot, key: postsCacheKey) }
+    Task { await MIRALocalJSONCache.save(snapshot, key: postsCacheKey(for: activePostsCategory)) }
   }
 
   func hidePosts(byUserId userId: String) {
     posts.removeAll { $0.userId == userId }
     let snapshot = posts
-    Task { await MIRALocalJSONCache.save(snapshot, key: postsCacheKey) }
+    Task { await MIRALocalJSONCache.save(snapshot, key: postsCacheKey(for: activePostsCategory)) }
   }
 
   func blockAuthor(_ post: MIRAPost) async {
@@ -150,7 +174,7 @@ final class DiscoverNativeModel: ObservableObject {
     do {
       let _: EmptyResponse? = try await api.post("/users/\(userId)/block", body: EmptyBody())
       let snapshot = posts
-      Task { await MIRALocalJSONCache.save(snapshot, key: postsCacheKey) }
+      Task { await MIRALocalJSONCache.save(snapshot, key: postsCacheKey(for: activePostsCategory)) }
       errorMessage = nil
     } catch {
       posts = previous
@@ -174,25 +198,38 @@ final class DiscoverNativeModel: ObservableObject {
       errorMessage = "Could not send report. Try again in a moment."
     }
   }
+
+  private func postsCacheKey(for category: String) -> String {
+    "\(postsCacheKeyPrefix).\(normalizedDiscoverCategory(category))"
+  }
+
+  private func normalizedDiscoverCategory(_ value: String) -> String {
+    let allowed = Set(discoverGalleryFilters.map(\.id))
+    let clean = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    return allowed.contains(clean) ? clean : "all"
+  }
 }
 
 private struct DiscoverGalleryFilter: Identifiable {
   let id: String
   let title: String
-  let keywords: [String]
 }
 
 private let discoverGalleryFilters: [DiscoverGalleryFilter] = [
-  .init(id: "all", title: "All", keywords: []),
-  .init(id: "photography", title: "Photography", keywords: ["photo", "photography", "portrait", "camera", "shoot", "shot", "film", "lens", "street photo"]),
-  .init(id: "outdoors", title: "Outdoors", keywords: ["outdoors", "outside", "nature", "hike", "hiking", "mountain", "park", "beach", "lake", "trail", "sunset"]),
-  .init(id: "outfits", title: "Outfits", keywords: ["fit", "outfit", "style", "fashion", "look", "wear", "dress", "sneakers", "jacket"]),
-  .init(id: "food", title: "Food", keywords: ["food", "restaurant", "dinner", "lunch", "brunch", "eat", "cafe", "coffee", "meal", "dessert"]),
-  .init(id: "travel", title: "Travel", keywords: ["trip", "travel", "vacation", "hotel", "flight", "airport", "city", "passport", "road trip"]),
-  .init(id: "art", title: "Art", keywords: ["art", "artist", "drawing", "painting", "design", "creative", "gallery", "museum", "illustration"]),
-  .init(id: "lifestyle", title: "Lifestyle", keywords: ["lifestyle", "daily", "routine", "home", "room", "apartment", "friends", "selfie", "moment"]),
-  .init(id: "events", title: "Events", keywords: ["event", "events", "party", "concert", "festival", "show", "birthday", "wedding", "meetup"]),
-  .init(id: "nightlife", title: "Nightlife", keywords: ["nightlife", "night", "club", "bar", "lounge", "dj", "dance", "after dark"])
+  .init(id: "all", title: "All"),
+  .init(id: "photography", title: "Photography"),
+  .init(id: "outdoors", title: "Outdoors"),
+  .init(id: "outfits", title: "Outfits"),
+  .init(id: "food", title: "Food"),
+  .init(id: "travel", title: "Travel"),
+  .init(id: "events", title: "Events"),
+  .init(id: "nightlife", title: "Nightlife"),
+  .init(id: "art", title: "Art"),
+  .init(id: "lifestyle", title: "Lifestyle"),
+  .init(id: "fitness", title: "Fitness"),
+  .init(id: "pets", title: "Pets"),
+  .init(id: "cars", title: "Cars"),
+  .init(id: "beauty", title: "Beauty")
 ]
 
 public struct DiscoverNativeView: View {
@@ -390,6 +427,7 @@ public struct DiscoverNativeView: View {
             withAnimation(.easeInOut(duration: 0.18)) {
               selectedGalleryFilter = filter.id
             }
+            Task { await model.selectCategory(filter.id) }
           } label: {
             Text(filter.title)
               .font(.system(size: 18, weight: selectedGalleryFilter == filter.id ? .semibold : .regular))
@@ -415,26 +453,7 @@ public struct DiscoverNativeView: View {
   }
 
   private var filteredGalleryPosts: [MIRAPost] {
-    guard
-      selectedGalleryFilter != "all",
-      let filter = discoverGalleryFilters.first(where: { $0.id == selectedGalleryFilter })
-    else {
-      return galleryPosts
-    }
-    let matches = galleryPosts.filter { post in
-      let haystack = [
-        post.title,
-        post.caption,
-        post.content,
-        post.location,
-        post.placeName,
-        post.postType
-      ]
-      .compactMap { $0?.lowercased() }
-      .joined(separator: " ")
-      return filter.keywords.contains { haystack.contains($0) }
-    }
-    return matches.isEmpty ? galleryPosts : matches
+    galleryPosts
   }
 
   private func sectionHeader(title: String, subtitle: String) -> some View {

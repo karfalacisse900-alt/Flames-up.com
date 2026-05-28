@@ -2,6 +2,7 @@ export interface Env {
   DB: D1Database;
   KV: KVNamespace;
   HYPERDRIVE?: any;
+  AI?: any;
   MEDIA_BACKUP?: R2Bucket;
   JWT_SECRET: string;
   CF_API_TOKEN: string;

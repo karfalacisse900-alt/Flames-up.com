@@ -10,6 +10,7 @@ interface Env {
   DB: D1Database;
   KV?: KVNamespace;
   HYPERDRIVE?: any;
+  AI?: any;
   MEDIA_BACKUP?: R2Bucket;
   JWT_SECRET: string;
   CLOUDFLARE_ACCOUNT_ID: string;
@@ -520,6 +521,7 @@ let abuseProtectionSchemaReady = false;
 let messagePresenceSchemaReady = false;
 let productionReadinessSchemaReady = false;
 let adminModerationSchemaReady = false;
+let autoCategorySchemaReady = false;
 
 function normalizeSchemaSql(statement: string): string {
   return statement.replace(/\s+/g, ' ').trim().replace(/;$/, '');
@@ -1346,6 +1348,34 @@ async function ensureAdminModerationSchema(db: D1Database) {
   adminModerationSchemaReady = true;
 }
 
+async function ensureAutoCategorySchema(db: D1Database) {
+  if (autoCategorySchemaReady) return;
+
+  const statements = [
+    "ALTER TABLE posts ADD COLUMN primary_category TEXT DEFAULT 'lifestyle'",
+    'ALTER TABLE posts ADD COLUMN category_confidence REAL DEFAULT 0',
+    "ALTER TABLE posts ADD COLUMN category_source TEXT DEFAULT 'fallback'",
+    "ALTER TABLE posts ADD COLUMN category_status TEXT DEFAULT 'low_confidence'",
+    "ALTER TABLE posts ADD COLUMN category_signals_json TEXT DEFAULT '{}'",
+    "ALTER TABLE posts ADD COLUMN tags_json TEXT DEFAULT '[]'",
+    'CREATE INDEX IF NOT EXISTS idx_posts_primary_category_created ON posts(primary_category, created_at DESC)',
+    'CREATE INDEX IF NOT EXISTS idx_posts_category_status_created ON posts(category_status, created_at DESC)',
+    'CREATE INDEX IF NOT EXISTS idx_posts_discover_category_created ON posts(primary_category, status, visibility, created_at DESC)',
+  ];
+
+  for (const statement of statements) {
+    try {
+      await runSchemaStatement(db, statement);
+    } catch (error: any) {
+      if (!isIgnorableSchemaError(error, statement)) {
+        throw error;
+      }
+    }
+  }
+
+  autoCategorySchemaReady = true;
+}
+
 async function ensureAbuseProtectionSchema(db: D1Database) {
   if (abuseProtectionSchemaReady) return;
   await ensureGovernanceSchema(db);
@@ -1717,6 +1747,254 @@ function rejectUnknownFields(c: any, body: any, allowedFields: string[]) {
     }, 400);
   }
   return null;
+}
+
+type DiscoverCategory =
+  | 'photography'
+  | 'outdoors'
+  | 'outfits'
+  | 'food'
+  | 'travel'
+  | 'events'
+  | 'nightlife'
+  | 'art'
+  | 'lifestyle'
+  | 'fitness'
+  | 'pets'
+  | 'cars'
+  | 'beauty';
+
+type AutoCategorySource = 'apple_vision' | 'backend_ai' | 'hybrid_ai' | 'fallback' | 'admin_changed' | 'user_changed_optional';
+type AutoCategoryStatus = 'pending' | 'classified' | 'low_confidence' | 'needs_review' | 'admin_corrected';
+
+type AutoCategoryLabel = {
+  label: string;
+  confidence: number;
+  source?: string;
+};
+
+type AutoCategoryInput = {
+  caption?: string;
+  mediaType?: string;
+  postType?: string;
+  hashtags?: string[];
+  location?: string | null;
+  placeName?: string | null;
+  appleLabels?: AutoCategoryLabel[];
+  appleCategoryGuess?: string;
+  appleConfidence?: number;
+  backendLabels?: AutoCategoryLabel[];
+  backendCategoryGuess?: string;
+  backendConfidence?: number;
+};
+
+type AutoCategoryResult = {
+  primary_category: DiscoverCategory;
+  category_confidence: number;
+  category_source: AutoCategorySource;
+  category_status: AutoCategoryStatus;
+  tags: string[];
+  signals: Record<string, unknown>;
+};
+
+const DISCOVER_CATEGORIES: DiscoverCategory[] = [
+  'photography',
+  'outdoors',
+  'outfits',
+  'food',
+  'travel',
+  'events',
+  'nightlife',
+  'art',
+  'lifestyle',
+  'fitness',
+  'pets',
+  'cars',
+  'beauty',
+];
+
+const CATEGORY_KEYWORDS: Record<DiscoverCategory, string[]> = {
+  outfits: ['outfit', 'fit', 'fit check', 'clothes', 'style', 'fashion', 'streetwear', 'shoes', 'jacket', 'mirror selfie', 'clothing', 'accessories', 'sneakers', 'dress'],
+  food: ['food', 'meal', 'restaurant', 'cafe', 'coffee', 'drink', 'dessert', 'pizza', 'burger', 'cooking', 'plate', 'bakery', 'brunch', 'lunch', 'dinner'],
+  outdoors: ['outdoors', 'outside', 'park', 'beach', 'hiking', 'trail', 'nature', 'mountain', 'lake', 'sunset', 'trees', 'forest', 'walking', 'landscape', 'snow'],
+  events: ['event', 'concert', 'festival', 'meetup', 'show', 'game', 'crowd', 'stadium', 'venue', 'performance', 'birthday', 'wedding'],
+  nightlife: ['nightlife', 'night', 'club', 'bar', 'lounge', 'party', 'rooftop', 'dj', 'drinks', 'city night', 'after dark', 'dance'],
+  travel: ['travel', 'trip', 'vacation', 'hotel', 'airport', 'landmark', 'city visit', 'tourist', 'destination', 'road trip', 'passport', 'flight'],
+  photography: ['photography', 'portrait', 'camera', 'photo shoot', 'street photo', 'aesthetic', 'landscape shot', 'creative shot', 'close up', 'lens', 'film'],
+  art: ['art', 'drawing', 'painting', 'design', 'sketch', 'illustration', 'mural', 'gallery', 'creative work', 'museum', 'artist'],
+  fitness: ['gym', 'workout', 'running', 'fitness', 'sport', 'basketball', 'soccer', 'training', 'yoga', 'exercise'],
+  pets: ['dog', 'cat', 'pet', 'puppy', 'kitten', 'animal'],
+  cars: ['car', 'truck', 'motorcycle', 'auto', 'vehicle', 'car meet'],
+  beauty: ['makeup', 'hair', 'skincare', 'nails', 'beauty', 'salon'],
+  lifestyle: ['daily life', 'friends', 'home', 'routine', 'random moment', 'personal moment', 'general capture', 'selfie', 'room'],
+};
+
+function normalizeDiscoverCategory(value: unknown, allowAll = false): DiscoverCategory | 'all' | '' {
+  const clean = cleanText(value, 40).toLowerCase().replace(/[\s-]+/g, '_');
+  if (allowAll && clean === 'all') return 'all';
+  return DISCOVER_CATEGORIES.includes(clean as DiscoverCategory) ? clean as DiscoverCategory : '';
+}
+
+function normalizeCategorySource(value: unknown): AutoCategorySource {
+  const clean = cleanText(value, 40).toLowerCase().replace(/[\s-]+/g, '_');
+  return ['apple_vision', 'backend_ai', 'hybrid_ai', 'fallback', 'admin_changed', 'user_changed_optional'].includes(clean)
+    ? clean as AutoCategorySource
+    : 'fallback';
+}
+
+function normalizeCategoryStatus(value: unknown): AutoCategoryStatus {
+  const clean = cleanText(value, 40).toLowerCase().replace(/[\s-]+/g, '_');
+  return ['pending', 'classified', 'low_confidence', 'needs_review', 'admin_corrected'].includes(clean)
+    ? clean as AutoCategoryStatus
+    : 'low_confidence';
+}
+
+function sanitizeAutoCategoryTags(value: unknown): string[] {
+  const raw = Array.isArray(value) ? value : parseJsonArray(value);
+  const seen = new Set<string>();
+  return raw
+    .flatMap((item) => String(item || '').split(/[#,]/g))
+    .map((item) => cleanText(item, 40).toLowerCase().replace(/[^a-z0-9_. -]/g, '').trim())
+    .filter((item) => item.length >= 2 && item.length <= 40 && !seen.has(item) && seen.add(item))
+    .slice(0, 20);
+}
+
+function sanitizeAutoCategoryLabels(value: unknown): AutoCategoryLabel[] {
+  const raw = Array.isArray(value) ? value : parseJsonArray(value);
+  const labels: AutoCategoryLabel[] = [];
+  for (const item of raw) {
+    const label = typeof item === 'string'
+      ? cleanText(item, 80).toLowerCase()
+      : cleanText((item as any)?.label || (item as any)?.identifier || (item as any)?.name, 80).toLowerCase();
+    if (!label) continue;
+    const confidence = typeof item === 'string'
+      ? 0.72
+      : clampFloat((item as any)?.confidence ?? (item as any)?.score ?? (item as any)?.probability, 0, 1, 0.70);
+    labels.push({ label, confidence, source: cleanText((item as any)?.source || '', 40) || undefined });
+  }
+  return labels.slice(0, 24);
+}
+
+function categoryTextMatches(text: string, keyword: string): boolean {
+  const cleanTextValue = text.toLowerCase();
+  const cleanKeyword = keyword.toLowerCase();
+  return cleanKeyword.includes(' ')
+    ? cleanTextValue.includes(cleanKeyword)
+    : new RegExp(`(^|[^a-z0-9])${cleanKeyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^a-z0-9]|$)`, 'i').test(cleanTextValue);
+}
+
+function collectHashtagsFromText(text: string): string[] {
+  const matches = text.match(/#[a-zA-Z0-9_.]{2,40}/g) || [];
+  return matches.map((tag) => tag.replace(/^#/, '').toLowerCase());
+}
+
+function scoreCategoryFromText(scores: Record<DiscoverCategory, number>, text: string, weight: number) {
+  if (!text) return;
+  for (const category of DISCOVER_CATEGORIES) {
+    for (const keyword of CATEGORY_KEYWORDS[category]) {
+      if (categoryTextMatches(text, keyword)) {
+        scores[category] += weight;
+      }
+    }
+  }
+}
+
+function categoryFromLabels(labels: AutoCategoryLabel[]): { category: DiscoverCategory | ''; confidence: number } {
+  const scores = Object.fromEntries(DISCOVER_CATEGORIES.map((category) => [category, 0])) as Record<DiscoverCategory, number>;
+  for (const label of labels) {
+    for (const category of DISCOVER_CATEGORIES) {
+      for (const keyword of CATEGORY_KEYWORDS[category]) {
+        if (categoryTextMatches(label.label, keyword)) {
+          scores[category] += Math.max(0.1, label.confidence);
+        }
+      }
+    }
+  }
+  const winner = DISCOVER_CATEGORIES
+    .map((category) => ({ category, score: scores[category] }))
+    .sort((a, b) => b.score - a.score)[0];
+  return winner && winner.score > 0
+    ? { category: winner.category, confidence: Math.min(1, winner.score / 2.4) }
+    : { category: '', confidence: 0 };
+}
+
+function autoCategoryEngine(input: AutoCategoryInput): AutoCategoryResult {
+  const scores = Object.fromEntries(DISCOVER_CATEGORIES.map((category) => [category, 0])) as Record<DiscoverCategory, number>;
+  const tags = new Set<string>();
+  const caption = cleanMultilineText(input.caption || '', 5000).toLowerCase();
+  const hashtags = sanitizeAutoCategoryTags([...(input.hashtags || []), ...collectHashtagsFromText(caption)]);
+  const placeText = [input.location, input.placeName, input.postType].map((item) => cleanText(item, 160).toLowerCase()).filter(Boolean).join(' ');
+  const appleGuess = normalizeDiscoverCategory(input.appleCategoryGuess, false) as DiscoverCategory | '';
+  const backendGuess = normalizeDiscoverCategory(input.backendCategoryGuess, false) as DiscoverCategory | '';
+  const appleConfidence = clampFloat(input.appleConfidence, 0, 1, 0);
+  const backendConfidence = clampFloat(input.backendConfidence, 0, 1, 0);
+  const appleLabels = sanitizeAutoCategoryLabels(input.appleLabels || []);
+  const backendLabels = sanitizeAutoCategoryLabels(input.backendLabels || []);
+
+  if (backendGuess) scores[backendGuess] += 45 * Math.max(backendConfidence, 0.55);
+  if (appleGuess) scores[appleGuess] += 30 * Math.max(appleConfidence, 0.55);
+  scoreCategoryFromText(scores, caption, 25);
+  scoreCategoryFromText(scores, hashtags.join(' '), 25);
+  scoreCategoryFromText(scores, placeText, placeText.includes('event') || placeText.includes('venue') ? 50 : 40);
+
+  for (const { category, confidence } of [categoryFromLabels(appleLabels), categoryFromLabels(backendLabels)]) {
+    if (category) scores[category] += Math.round(confidence * 30);
+  }
+
+  for (const tag of hashtags) tags.add(tag);
+  [...appleLabels, ...backendLabels]
+    .sort((a, b) => b.confidence - a.confidence)
+    .slice(0, 12)
+    .forEach((item) => {
+      const label = cleanText(item.label, 40).toLowerCase().replace(/[^a-z0-9_. -]/g, '').trim();
+      if (label.length >= 2) tags.add(label);
+    });
+
+  const winner = DISCOVER_CATEGORIES
+    .map((category) => ({ category, score: scores[category] }))
+    .sort((a, b) => b.score - a.score)[0];
+  const rawConfidence = winner ? Math.min(0.99, Math.max(0, winner.score / 100)) : 0;
+  const confidence = Number(rawConfidence.toFixed(2));
+  const isLow = confidence < 0.50;
+  const primaryCategory = isLow ? 'lifestyle' : winner.category;
+  const source: AutoCategorySource = backendGuess || backendLabels.length
+    ? (appleGuess || appleLabels.length ? 'hybrid_ai' : 'backend_ai')
+    : appleGuess || appleLabels.length
+      ? 'apple_vision'
+      : 'fallback';
+  const status: AutoCategoryStatus = isLow ? 'low_confidence' : 'classified';
+
+  return {
+    primary_category: primaryCategory,
+    category_confidence: isLow ? Math.max(confidence, 0.35) : confidence,
+    category_source: isLow ? 'fallback' : source,
+    category_status: status,
+    tags: Array.from(tags).slice(0, 16),
+    signals: {
+      apple_category_guess: appleGuess || '',
+      apple_confidence: appleConfidence || 0,
+      apple_labels: appleLabels,
+      backend_category_guess: backendGuess || '',
+      backend_confidence: backendConfidence || 0,
+      backend_labels: backendLabels,
+      caption_hashtags: hashtags,
+      scores,
+    },
+  };
+}
+
+function autoCategoryFromBody(body: any, input: Omit<AutoCategoryInput, 'appleLabels' | 'appleCategoryGuess' | 'appleConfidence'>): AutoCategoryResult {
+  return autoCategoryEngine({
+    ...input,
+    hashtags: sanitizeAutoCategoryTags([
+      ...(input.hashtags || []),
+      ...sanitizeAutoCategoryTags(body.tags),
+      ...sanitizeAutoCategoryTags(body.hashtags),
+    ]),
+    appleLabels: sanitizeAutoCategoryLabels(body.apple_vision_labels || body.appleVisionLabels),
+    appleCategoryGuess: body.apple_vision_category_guess || body.appleVisionCategoryGuess,
+    appleConfidence: clampFloat(body.apple_vision_confidence ?? body.appleVisionConfidence, 0, 1, 0),
+  });
 }
 
 function safeRateLimitPart(value: unknown): string {
@@ -3497,6 +3775,8 @@ function postPayload(post: any, likedBy: string[] = [], env?: Env) {
   const feedMediaUrls = mediaUrls.map((url, index) => feedDeliveryUrl(url, mediaTypes[index] || 'image', feedVariant)).filter(Boolean);
   const thumbnailUrls = mediaUrls.map((url, index) => posterDeliveryUrl(url, mediaTypes[index] || 'image', thumbnailVariant)).filter(Boolean);
   const posterUrls = mediaUrls.map((url, index) => posterDeliveryUrl(url, mediaTypes[index] || 'image', thumbnailVariant)).filter(Boolean);
+  const primaryCategory = normalizeDiscoverCategory(post.primary_category || post.category || post.post_type || 'lifestyle', false) || 'lifestyle';
+  const categoryConfidence = clampFloat(post.category_confidence, 0, 1, 0);
   const payload = {
     ...post,
     user_username: publicUsernameFor({ username: post.user_username }),
@@ -3520,6 +3800,13 @@ function postPayload(post: any, likedBy: string[] = [], env?: Env) {
     feed_width: FEED_MEDIA_WIDTH,
     feed_height: FEED_MEDIA_HEIGHT,
     feed_aspect_ratio: FEED_MEDIA_ASPECT_RATIO,
+    primary_category: primaryCategory,
+    category: primaryCategory,
+    category_confidence: categoryConfidence,
+    category_source: normalizeCategorySource(post.category_source),
+    category_status: normalizeCategoryStatus(post.category_status),
+    category_signals: parseJsonObject(post.category_signals_json),
+    tags: sanitizeAutoCategoryTags(post.tags_json),
     editor_overlays: parseJsonArray(post.editor_overlays),
     tagged_users: parseJsonArray(post.tagged_users),
     liked_by: likedBy,
@@ -3557,6 +3844,8 @@ function feedPostPayload(post: any, likedBy: string[] = [], env?: Env) {
   delete payload.hidden_at;
   delete payload.hidden_by_user_id;
   delete payload.user_email;
+  delete payload.category_signals_json;
+  delete payload.category_signals;
   return payload;
 }
 
@@ -5361,6 +5650,7 @@ function legacyUserTransferPayload(row: any) {
 
 function legacyPostTransferPayload(row: any) {
   const editorOverlays = parseJsonArray(row.editor_overlays);
+  const primaryCategory = normalizeDiscoverCategory(row.primary_category || row.category || row.post_type || 'lifestyle', false) || 'lifestyle';
   return {
     legacy_post_id: String(row.id || ''),
     user_id: isUuidText(row.supabase_user_id),
@@ -5370,7 +5660,7 @@ function legacyPostTransferPayload(row: any) {
     visibility: normalizeVisibility(row.visibility),
     status: cleanText(row.status || 'active', 40) === 'removed' ? 'removed' : 'active',
     post_type: cleanText(row.post_type || row.category || 'general', 80),
-    category: cleanText(row.category, 80) || null,
+    category: primaryCategory,
     location: cleanText(row.location || row.place_name, 180) || null,
     media: legacyMediaPayload(row),
     media_dimensions: parseJsonArray(row.media_dimensions),
@@ -5385,6 +5675,13 @@ function legacyPostTransferPayload(row: any) {
       source: 'cloudflare_d1_transfer',
       image: cleanText(row.image, 1200),
       media_backup_ids: parseJsonArray(row.media_backup_ids),
+      discover_category: {
+        primary_category: primaryCategory,
+        confidence: clampFloat(row.category_confidence, 0, 1, 0),
+        source: normalizeCategorySource(row.category_source),
+        status: normalizeCategoryStatus(row.category_status),
+        tags: sanitizeAutoCategoryTags(row.tags_json),
+      },
       place: {
         id: cleanText(row.place_id, 160),
         name: cleanText(row.place_name, 180),
@@ -5454,6 +5751,98 @@ function runBackgroundTask(c: any, label: string, task: () => Promise<void>) {
   } else {
     void promise;
   }
+}
+
+function workersAiLabelsFromResult(result: any): AutoCategoryLabel[] {
+  const raw = Array.isArray(result)
+    ? result
+    : Array.isArray(result?.result)
+      ? result.result
+      : Array.isArray(result?.labels)
+        ? result.labels
+        : Array.isArray(result?.predictions)
+          ? result.predictions
+          : [];
+  return sanitizeAutoCategoryLabels(raw.map((item: any) => ({
+    label: item?.label || item?.class || item?.name,
+    confidence: item?.score ?? item?.confidence ?? item?.probability,
+    source: 'workers_ai',
+  }))).slice(0, 12);
+}
+
+async function classifyImageWithWorkersAi(env: Env, imageUrl: string): Promise<AutoCategoryLabel[]> {
+  if (!env.AI || !imageUrl || !/^https:\/\//i.test(imageUrl)) return [];
+  const response = await fetch(imageUrl, {
+    headers: { accept: 'image/*' },
+  });
+  if (!response.ok) return [];
+  const contentLength = Number(response.headers.get('content-length') || 0);
+  if (contentLength > 4_000_000) return [];
+  const imageBytes = await response.arrayBuffer();
+  if (!imageBytes.byteLength || imageBytes.byteLength > 4_000_000) return [];
+  const result = await env.AI.run('@cf/microsoft/resnet-50', {
+    image: Array.from(new Uint8Array(imageBytes)),
+  });
+  return workersAiLabelsFromResult(result);
+}
+
+async function refinePostCategoryWithBackendAi(c: any, postId: string) {
+  if (!c.env.AI) return;
+  await ensureAutoCategorySchema(c.env.DB);
+  const row: any = await c.env.DB.prepare(
+    `SELECT id, content, title, image, images, media_types, media_dimensions, location, place_name, post_type,
+            primary_category, category_confidence, category_signals_json, tags_json
+     FROM posts
+     WHERE id = ?
+     LIMIT 1`
+  ).bind(postId).first();
+  if (!row) return;
+
+  const currentConfidence = clampFloat(row.category_confidence, 0, 1, 0);
+  const mediaUrls = sanitizeMediaReferences(row.images, row.image);
+  const mediaTypes = sanitizeMediaTypes(row.media_types, mediaUrls.length || 1);
+  const primaryUrl = mediaUrls[0] || safeMediaReference(row.image);
+  const primaryType = mediaTypes[0] || (isVideoMediaUrl(primaryUrl) ? 'video' : 'image');
+  if (currentConfidence >= 0.75 && primaryType !== 'video') return;
+
+  const thumbnailVariant = c.env.CLOUDFLARE_IMAGES_THUMBNAIL_VARIANT || '';
+  const feedVariant = c.env.CLOUDFLARE_IMAGES_FEED_VARIANT || '';
+  const mediaPreviewUrl = primaryType === 'video'
+    ? streamThumbnailUrl(primaryUrl)
+    : posterDeliveryUrl(primaryUrl, primaryType, thumbnailVariant) || feedDeliveryUrl(primaryUrl, primaryType, feedVariant);
+  const backendLabels = await classifyImageWithWorkersAi(c.env, mediaPreviewUrl);
+  if (!backendLabels.length) return;
+
+  const backendCategory = categoryFromLabels(backendLabels);
+  const currentSignals = parseJsonObject(row.category_signals_json);
+  const result = autoCategoryEngine({
+    caption: [row.title, row.content].filter(Boolean).join('\n\n'),
+    mediaType: primaryType,
+    postType: row.post_type,
+    hashtags: sanitizeAutoCategoryTags(row.tags_json),
+    location: row.location,
+    placeName: row.place_name,
+    appleLabels: sanitizeAutoCategoryLabels((currentSignals as any).apple_labels),
+    appleCategoryGuess: cleanText((currentSignals as any).apple_category_guess, 40),
+    appleConfidence: clampFloat((currentSignals as any).apple_confidence, 0, 1, 0),
+    backendLabels,
+    backendCategoryGuess: backendCategory.category,
+    backendConfidence: backendCategory.confidence,
+  });
+  await c.env.DB.prepare(
+    `UPDATE posts
+     SET primary_category = ?, category_confidence = ?, category_source = ?, category_status = ?,
+         category_signals_json = ?, tags_json = ?, updated_at = datetime('now')
+     WHERE id = ?`
+  ).bind(
+    result.primary_category,
+    result.category_confidence,
+    result.category_source,
+    result.category_status,
+    JSON.stringify(result.signals),
+    JSON.stringify(result.tags),
+    postId
+  ).run();
 }
 
 async function supabaseAdminDeleteSafe(c: any, table: string, filters: Record<string, string>) {
@@ -7156,6 +7545,8 @@ api.post('/posts', authMiddleware, async (c) => {
   await ensureAudioSchema(c.env.DB);
   await ensurePostEditorSchema(c.env.DB);
   await ensureReliabilitySchema(c.env.DB);
+  await ensureGovernanceSchema(c.env.DB);
+  await ensureAutoCategorySchema(c.env.DB);
   const userId = getUserId(c);
   const limited = await enforceRateLimit(c, 'post_create', userId, 30, 60);
   if (limited) return limited;
@@ -7183,6 +7574,16 @@ api.post('/posts', authMiddleware, async (c) => {
   const imageUrls = sanitizeMediaReferences(b.images, b.image);
   const primaryImage = safeMediaReference(b.image) || imageUrls[0] || null;
   const mediaTypes = sanitizeMediaTypes(b.media_types, imageUrls.length || (primaryImage ? 1 : 0));
+  const explicitTags = sanitizeAutoCategoryTags([...(parseJsonArray(b.tags)), ...(parseJsonArray(b.hashtags))]);
+  const mediaTypeHint = mediaTypes.includes('video') ? 'video' : 'image';
+  const autoCategory = autoCategoryFromBody(b, {
+    caption: [postTitle, postContent].filter(Boolean).join('\n\n'),
+    mediaType: mediaTypeHint,
+    postType,
+    hashtags: explicitTags,
+    location,
+    placeName: cleanText(b.place_name, 180) || null,
+  });
   const placeLat = b.place_lat == null ? null : clampFloat(b.place_lat, -90, 90, 0);
   const placeLng = b.place_lng == null ? null : clampFloat(b.place_lng, -180, 180, 0);
   const backupIds = parseJsonArray(b.media_backup_ids).map(String).filter(Boolean);
@@ -7213,14 +7614,16 @@ api.post('/posts', authMiddleware, async (c) => {
        id, user_id, title, content, image, images, media_types, media_backup_ids, media_dimensions, location, post_type,
        place_id, place_name, place_lat, place_lng, is_verified_checkin, visibility,
        editor_overlays, tagged_users,
+       primary_category, category_confidence, category_source, category_status, category_signals_json, tags_json,
        audio_provider, audio_track_id, audio_title, audio_artist, audio_artwork_url, audio_stream_url,
        audio_start_time, audio_duration, client_request_id
      )
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(id, userId, postTitle, postContent, primaryImage, JSON.stringify(imageUrls), JSON.stringify(mediaTypes),
     JSON.stringify(backupIds), JSON.stringify(mediaDimensions), location, postType,
     cleanText(b.place_id, 120) || null, cleanText(b.place_name, 180) || null, placeLat, placeLng, isCheckin, visibility,
     JSON.stringify(editorOverlays), JSON.stringify(taggedUsers),
+    autoCategory.primary_category, autoCategory.category_confidence, autoCategory.category_source, autoCategory.category_status, JSON.stringify(autoCategory.signals), JSON.stringify(autoCategory.tags),
     audioProvider, audioTrackId, audioTitle, audioArtist, audioArtworkUrl, audioStreamUrl, audioStartTime, audioDuration, clientRequestId),
     c.env.DB.prepare('UPDATE users SET posts_count = COALESCE(posts_count, 0) + 1 WHERE id = ? AND changes() > 0').bind(userId),
   ]);
@@ -7242,6 +7645,9 @@ api.post('/posts', authMiddleware, async (c) => {
   runBackgroundTask(c, 'supabase_post_write_through_failed', async () => {
     await mirrorLegacyUserToSupabase(c, userId);
     await mirrorLegacyPostToSupabase(c, id);
+  });
+  runBackgroundTask(c, 'post_category_refinement_failed', async () => {
+    await refinePostCategoryWithBackendAi(c, id);
   });
   if (visibility === 'public' || visibility === 'followers') {
     runBackgroundTask(c, 'post_follower_notifications_failed', async () => {
@@ -7268,6 +7674,9 @@ api.post('/posts', authMiddleware, async (c) => {
   const createdPost = { id, user_id: userId, user_username: user?.username, user_full_name: user?.full_name,
     user_profile_image: user?.profile_image, title: postTitle, content: postContent, image: primaryImage, images: imageUrls,
     media_types: mediaTypes, media_backup_ids: backupIds, media_dimensions: mediaDimensions, editor_overlays: editorOverlays, tagged_users: taggedUsers,
+    primary_category: autoCategory.primary_category, category_confidence: autoCategory.category_confidence,
+    category_source: autoCategory.category_source, category_status: autoCategory.category_status,
+    category_signals_json: JSON.stringify(autoCategory.signals), tags_json: JSON.stringify(autoCategory.tags),
     location, post_type: postType, place_id: cleanText(b.place_id, 120), place_name: cleanText(b.place_name, 180),
     place_lat: placeLat, place_lng: placeLng, is_verified_checkin: !!isCheckin,
     audio_provider: audioProvider, audio_track_id: audioTrackId, audio_title: audioTitle, audio_artist: audioArtist,
@@ -9596,6 +10005,46 @@ api.post('/people/:profileId/report', authMiddleware, async (c) => {
 });
 
 // Discover
+api.get('/discover', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const limited = await enforceRateLimit(c, 'discover_category_read', userId, 180, 60);
+  if (limited) return limited;
+  await ensurePrivacySchema(c.env.DB);
+  await ensureGovernanceSchema(c.env.DB);
+  await ensurePostEditorSchema(c.env.DB);
+  await ensureAutoCategorySchema(c.env.DB);
+  const rawCategory = c.req.query('category') || 'all';
+  const category = normalizeDiscoverCategory(rawCategory, true);
+  if (!category) return c.json({ detail: 'Unknown Discover category.' }, 400);
+  const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
+  const limit = clampNumber(c.req.query('limit') || '36', 1, 60, 36);
+  const conditions = [
+    visiblePostWhere('u', 'p'),
+    "COALESCE(p.discover_blocked_at, '') = ''",
+  ];
+  const binds: any[] = [userId, userId, userId, ...visiblePostBindValues(userId)];
+  if (category !== 'all') {
+    conditions.push("LOWER(COALESCE(NULLIF(p.primary_category, ''), NULLIF(p.category, ''), 'lifestyle')) = ?");
+    binds.push(category);
+  }
+  const sql = [
+    `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
+       EXISTS (SELECT 1 FROM follows fl WHERE fl.follower_id = ? AND fl.following_id = p.user_id) AS is_following,
+       EXISTS (SELECT 1 FROM likes lk WHERE lk.user_id = ? AND lk.post_id = p.id) AS is_liked,
+       EXISTS (SELECT 1 FROM saved_posts sp WHERE sp.user_id = ? AND sp.post_id = p.id) AS saved,
+       COALESCE(p.likes_count, 0) AS live_likes_count,
+       COALESCE(p.comments_count, 0) AS live_comments_count,
+       COALESCE(p.saves_count, 0) AS live_saves_count
+     FROM posts p JOIN users u ON p.user_id = u.id`,
+    `WHERE ${conditions.join(' AND ')}`,
+    'ORDER BY p.created_at DESC LIMIT ? OFFSET ?',
+  ].join(' ');
+  const rows = await c.env.DB.prepare(sql).bind(...binds, limit, skip).all();
+  const response = c.json((rows.results as any[]).map((post) => feedPostPayload(post, [], c.env)));
+  response.headers.set('cache-control', 'private, max-age=8');
+  return response;
+});
+
 api.get('/discover/trending', authMiddleware, async (c) => {
   const userId = getUserId(c);
   await ensurePrivacySchema(c.env.DB);
@@ -10255,11 +10704,20 @@ api.post('/discover/posts/:postId/like', authMiddleware, async (c) => {
 
 api.get('/discover/categories', async (c) => {
   return c.json([
+    { id: 'all', name: 'All', icon: 'square.grid.2x2' },
+    { id: 'photography', name: 'Photography', icon: 'camera' },
+    { id: 'outdoors', name: 'Outdoors', icon: 'leaf' },
+    { id: 'outfits', name: 'Outfits', icon: 'tshirt' },
+    { id: 'food', name: 'Food', icon: 'fork.knife' },
+    { id: 'travel', name: 'Travel', icon: 'airplane' },
     { id: 'events', name: 'Events', icon: 'calendar' },
-    { id: 'food_reviews', name: 'Food Reviews', icon: 'restaurant' },
-    { id: 'culture', name: 'Culture', icon: 'color-palette' },
-    { id: 'tips', name: 'Tips & Recs', icon: 'bulb' },
-    { id: 'spotlights', name: 'Spotlights', icon: 'flash' },
+    { id: 'nightlife', name: 'Nightlife', icon: 'moon.stars' },
+    { id: 'art', name: 'Art', icon: 'paintpalette' },
+    { id: 'lifestyle', name: 'Lifestyle', icon: 'sparkles' },
+    { id: 'fitness', name: 'Fitness', icon: 'figure.run' },
+    { id: 'pets', name: 'Pets', icon: 'pawprint' },
+    { id: 'cars', name: 'Cars', icon: 'car' },
+    { id: 'beauty', name: 'Beauty', icon: 'wand.and.stars' },
   ]);
 });
 
@@ -11087,6 +11545,10 @@ function adminPostPayload(row: any, env: Env) {
   const mediaUrls = sanitizeMediaReferences(row.images, row.image);
   const mediaTypes = parseJsonArray(row.media_types);
   const dimensions = parseJsonArray(row.media_dimensions);
+  const primaryCategory = normalizeDiscoverCategory(row.primary_category || row.category || row.post_type || 'lifestyle', false) || 'lifestyle';
+  const categoryConfidence = clampFloat(row.category_confidence, 0, 1, 0);
+  const tags = sanitizeAutoCategoryTags(row.tags_json);
+  const categorySignals = parseJsonObject(row.category_signals_json);
   const thumbnailVariant = env.CLOUDFLARE_IMAGES_THUMBNAIL_VARIANT || '';
   const feedVariant = env.CLOUDFLARE_IMAGES_FEED_VARIANT || '';
   const normalizedTypes = mediaTypes.length ? mediaTypes : mediaUrls.map((url) => isVideoMediaUrl(url) ? 'video' : 'image');
@@ -11127,7 +11589,14 @@ function adminPostPayload(row: any, env: Env) {
     },
     title: cleanText(row.title || '', 180),
     content: cleanMultilineText(row.content, 1200),
-    category: cleanText(row.post_type || row.category || 'general', 60),
+    category: primaryCategory,
+    primary_category: primaryCategory,
+    category_confidence: categoryConfidence,
+    category_source: normalizeCategorySource(row.category_source),
+    category_status: normalizeCategoryStatus(row.category_status),
+    category_signals: categorySignals,
+    category_signals_json: categorySignals,
+    tags,
     visibility: cleanText(row.visibility || 'public', 40),
     status: cleanText(row.status || 'active', 40),
     removed_at: row.removed_at || null,
@@ -11853,6 +12322,7 @@ api.get('/admin/posts', authMiddleware, async (c) => {
   try {
     await requireAdminRole(c, 'content:read');
     await ensureAdminModerationSchema(c.env.DB);
+    await ensureAutoCategorySchema(c.env.DB);
     const { limit, offset } = adminPageParams(c);
     const status = cleanText(c.req.query('status') || 'all', 40);
     const category = cleanText(c.req.query('category') || '', 60).toLowerCase();
@@ -11865,8 +12335,10 @@ api.get('/admin/posts', authMiddleware, async (c) => {
       binds.push(status);
     }
     if (category && category !== 'all') {
-      conditions.push('LOWER(COALESCE(p.post_type, ?)) = ?');
-      binds.push('general', category);
+      const normalizedCategory = normalizeDiscoverCategory(category, false);
+      if (!normalizedCategory) return c.json({ detail: 'Unknown category.' }, 400);
+      conditions.push("LOWER(COALESCE(NULLIF(p.primary_category, ''), NULLIF(p.category, ''), 'lifestyle')) = ?");
+      binds.push(normalizedCategory);
     }
     if (surface === 'discover') {
       conditions.push("COALESCE(p.discover_blocked_at, '') = ''");
@@ -11894,6 +12366,7 @@ api.get('/admin/posts/:postId', authMiddleware, async (c) => {
   try {
     await requireAdminRole(c, 'content:read');
     await ensureAdminModerationSchema(c.env.DB);
+    await ensureAutoCategorySchema(c.env.DB);
     const postId = publicId(c.req.param('postId'), 120);
     const row: any = await c.env.DB.prepare(`
       SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
@@ -11995,6 +12468,64 @@ api.post('/admin/posts/:postId/remove-from-discover', authMiddleware, async (c) 
       .bind(now(), admin.userId, reason, postId).run();
     await writeAdminAuditLog(c, admin, { actionType: 'post_removed_from_discover', targetType: 'post', targetId: postId, targetUserId: before.user_id, reason, note: body.note, beforeState: before, afterState: { discover_blocked: true } });
     return c.json({ removed_from_discover: true });
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+api.post('/admin/posts/:postId/category', authMiddleware, async (c) => {
+  try {
+    const admin = await requireAdminRole(c, 'content:write');
+    await ensureAdminModerationSchema(c.env.DB);
+    await ensureAutoCategorySchema(c.env.DB);
+    const limited = await requireAdminWriteRateLimit(c, admin, 'admin_post_category_change');
+    if (limited) return limited;
+    const postId = publicId(c.req.param('postId'), 120);
+    const body: any = await c.req.json().catch(() => ({}));
+    const unknown = rejectUnknownFields(c, body, ['primary_category', 'category', 'reason', 'note']);
+    if (unknown) return unknown;
+    const category = normalizeDiscoverCategory(body.primary_category || body.category, false);
+    if (!category) return c.json({ detail: 'Choose a valid Discover category.' }, 400);
+    const reason = cleanMultilineText(body.reason, 500);
+    if (!reason) return c.json({ detail: 'Reason is required.' }, 400);
+    const before: any = await c.env.DB.prepare(
+      `SELECT id, user_id, primary_category, category_confidence, category_source, category_status, category_signals_json, tags_json
+       FROM posts
+       WHERE id = ?
+       LIMIT 1`
+    ).bind(postId).first();
+    if (!before) return c.json({ detail: 'Post not found.' }, 404);
+    const oldCategory = normalizeDiscoverCategory(before.primary_category || 'lifestyle', false) || 'lifestyle';
+    const nextSignals = {
+      ...parseJsonObject(before.category_signals_json),
+      admin_changed_at: now(),
+      admin_previous_category: oldCategory,
+      admin_new_category: category,
+      admin_reason: reason,
+    };
+    await c.env.DB.prepare(
+      `UPDATE posts
+       SET primary_category = ?, category_confidence = 1, category_source = 'admin_changed',
+           category_status = 'admin_corrected', category_signals_json = ?, updated_at = datetime('now')
+       WHERE id = ?`
+    ).bind(category, JSON.stringify(nextSignals), postId).run();
+    await writeAdminAuditLog(c, admin, {
+      actionType: 'category_changed',
+      targetType: 'post',
+      targetId: postId,
+      targetUserId: before.user_id,
+      reason,
+      note: body.note,
+      beforeState: { old_category: oldCategory, category_source: before.category_source, category_status: before.category_status },
+      afterState: { new_category: category, category_source: 'admin_changed', category_status: 'admin_corrected' },
+    });
+    const row: any = await c.env.DB.prepare(`
+      SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
+      FROM posts p LEFT JOIN users u ON u.id = p.user_id
+      WHERE p.id = ?
+      LIMIT 1
+    `).bind(postId).first();
+    return c.json({ post: adminPostPayload(row, c.env) });
   } catch (error: any) {
     return governanceError(c, error);
   }

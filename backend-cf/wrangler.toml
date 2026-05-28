@@ -19,6 +19,9 @@ MEDIA_BACKUP_MAX_VIDEO_BYTES = "95000000"
 enabled = true
 head_sampling_rate = 1
 
+[ai]
+binding = "AI"
+
 [[d1_databases]]
 binding = "DB"
 database_name = "flames-up"
@@ -49,6 +52,9 @@ MEDIA_BACKUP_MAX_VIDEO_BYTES = "95000000"
 [env.production.observability]
 enabled = true
 head_sampling_rate = 1
+
+[env.production.ai]
+binding = "AI"
 
 [[env.production.d1_databases]]
 binding = "DB"

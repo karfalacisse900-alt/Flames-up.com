@@ -90,6 +90,13 @@ export type AdminPost = {
   title?: string;
   content: string;
   category: string;
+  primary_category?: string;
+  category_confidence?: number;
+  category_source?: string;
+  category_status?: string;
+  category_signals?: Record<string, unknown>;
+  category_signals_json?: Record<string, unknown>;
+  tags?: string[];
   visibility: string;
   status: string;
   removed_at?: string | null;
