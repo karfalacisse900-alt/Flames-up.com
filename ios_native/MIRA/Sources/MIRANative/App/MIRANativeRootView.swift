@@ -194,6 +194,7 @@ public struct MIRANativeRootView: View {
   @StateObject private var authSession: MIRAAuthSession
   @StateObject private var startup: MIRAStartupCoordinator
   @StateObject private var callCoordinator: MIRAAppCallCoordinator
+  @StateObject private var localization: MIRALocalization
   private let api: MIRAAPIClient
 
   public init() {
@@ -202,6 +203,7 @@ public struct MIRANativeRootView: View {
     _authSession = StateObject(wrappedValue: session)
     _startup = StateObject(wrappedValue: MIRAStartupCoordinator(api: client))
     _callCoordinator = StateObject(wrappedValue: MIRAAppCallCoordinator.shared)
+    _localization = StateObject(wrappedValue: MIRALocalization.shared)
     self.api = client
     MIRAPerformanceTimeline.mark("native_root_init")
   }
@@ -236,6 +238,7 @@ public struct MIRANativeRootView: View {
       }
     }
     .background(MIRATheme.Color.launchBackground.ignoresSafeArea())
+    .environmentObject(localization)
     .statusBarHidden(startup.isSplashMounted || (authSession.user != nil && selectedTab == .main))
     .onAppear {
       MIRAMainThreadStallMonitor.shared.start()

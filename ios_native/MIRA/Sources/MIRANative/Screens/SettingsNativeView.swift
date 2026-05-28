@@ -32,7 +32,7 @@ private struct SettingsBlockedAccount: Decodable, Identifiable, Hashable {
 final class SettingsNativeModel: ObservableObject {
   @Published var user: MIRAUser?
   @Published var isPrivate = false
-  @Published var language = "en"
+  @Published var language = MIRALanguageResolver.storedPreference()
   @Published var email = ""
   @Published var isLoading = false
   @Published var isSavingPrivacy = false
@@ -62,7 +62,7 @@ final class SettingsNativeModel: ObservableObject {
       authSession?.replaceUser(fresh)
     } catch {
       if user == nil {
-        show("Settings could not load. Check your connection and try again.", isError: true)
+        show(MIRALocalization.shared.string("common.error"), isError: true)
       }
     }
   }
@@ -82,26 +82,31 @@ final class SettingsNativeModel: ObservableObject {
       show(value ? "Private account is on." : "Private account is off.")
     } catch {
       isPrivate = previous
-      show("Could not update privacy.", isError: true)
+      show(MIRALocalization.shared.string("common.error"), isError: true)
     }
   }
 
   func updateLanguage(_ value: String) async {
     let previous = language
     language = value
+    MIRALocalization.shared.setPreference(value)
     isSavingLanguage = true
     defer { isSavingLanguage = false }
     do {
+      let backendLanguage = MIRALanguageResolver.resolvedLanguageCode(for: value)
       let updated: MIRAUser = try await api.put(
         "/users/me",
-        body: SettingsProfileUpdateBody(isPrivate: nil, language: value)
+        body: SettingsProfileUpdateBody(isPrivate: nil, language: backendLanguage)
       )
       apply(user: updated)
       authSession?.replaceUser(updated)
-      show("Language updated.")
+      language = value
+      MIRALocalization.shared.setPreference(value)
+      show(MIRALocalization.shared.string("settings.language_updated"))
     } catch {
       language = previous
-      show("Could not update language.", isError: true)
+      MIRALocalization.shared.setPreference(previous)
+      show(MIRALocalization.shared.string("settings.language_failed"), isError: true)
     }
   }
 
@@ -172,7 +177,7 @@ final class SettingsNativeModel: ObservableObject {
   private func apply(user: MIRAUser?) {
     self.user = user
     isPrivate = user?.isPrivate == true
-    language = supportedLanguage(user?.language)
+    language = MIRALanguageResolver.storedPreference()
     email = user?.email ?? ""
   }
 
@@ -182,13 +187,14 @@ final class SettingsNativeModel: ObservableObject {
   }
 
   private func supportedLanguage(_ raw: String?) -> String {
-    let normalized = (raw ?? "en").lowercased()
-    return ["en", "fr", "es"].contains(normalized) ? normalized : "en"
+    let normalized = (raw ?? "system").lowercased()
+    return ["system", "en", "fr", "es"].contains(normalized) ? normalized : "system"
   }
 }
 
 public struct SettingsNativeView: View {
   @StateObject private var model: SettingsNativeModel
+  @EnvironmentObject private var localization: MIRALocalization
 
   public init(api: MIRAAPIClient, authSession: MIRAAuthSession? = nil) {
     _model = StateObject(wrappedValue: SettingsNativeModel(api: api, authSession: authSession))
@@ -203,70 +209,70 @@ public struct SettingsNativeView: View {
           SettingsBanner(message: message, isError: model.bannerIsError)
         }
 
-        SettingsCard(title: "Account") {
+        SettingsCard(title: localization.string("settings.account")) {
           SettingsNavigationRow(
-            title: "Privacy",
+            title: localization.string("settings.privacy"),
             subtitle: model.isPrivate ? "Private account is on" : "Public account",
             systemImage: "lock",
             destination: PrivacySettingsNativeView(model: model)
           )
           SettingsNavigationRow(
-            title: "Notifications",
+            title: localization.string("settings.notifications"),
             subtitle: "Push, likes, comments, messages",
             systemImage: "bell",
             destination: NotificationSettingsNativeView()
           )
           SettingsNavigationRow(
-            title: "Security",
+            title: localization.string("settings.security"),
             subtitle: "Email, password, account actions",
             systemImage: "shield",
             destination: SecuritySettingsNativeView(model: model)
           )
         }
 
-        SettingsCard(title: "Preferences") {
+        SettingsCard(title: localization.string("settings.preferences")) {
           SettingsNavigationRow(
-            title: "Language",
-            subtitle: languageLabel(model.language),
+            title: localization.string("settings.language"),
+            subtitle: languageLabel(model.language, localization: localization),
             systemImage: "globe",
             destination: PreferenceSettingsNativeView(model: model)
           )
           SettingsNavigationRow(
-            title: "App permissions",
+            title: localization.string("settings.app_permissions"),
             subtitle: "Camera, photos, microphone, notifications",
             systemImage: "switch.2",
             destination: PermissionSettingsNativeView()
           )
         }
 
-        SettingsCard(title: "Legal & Safety") {
+        SettingsCard(title: localization.string("settings.legal_safety")) {
           SettingsNavigationRow(
-            title: "Terms of Service",
+            title: localization.string("legal.terms"),
             subtitle: "Rules for using Captro",
             systemImage: "doc.text",
             destination: TermsOfServiceView()
           )
           SettingsNavigationRow(
-            title: "Privacy Policy",
+            title: localization.string("legal.privacy"),
             subtitle: "How Captro handles data",
             systemImage: "hand.raised",
             destination: PrivacyPolicyView()
           )
           SettingsNavigationRow(
-            title: "Community Guidelines",
+            title: localization.string("legal.community"),
             subtitle: "Posting, chat, and safety rules",
             systemImage: "person.2",
             destination: CommunityGuidelinesView()
           )
           SettingsNavigationRow(
-            title: "Safety & Reporting",
+            title: localization.string("legal.safety"),
             subtitle: "Report, block, and stay safe",
             systemImage: "shield.lefthalf.filled",
             destination: SafetyReportingView()
           )
         }
 
-        SettingsCard(title: "Support") {
+        SettingsCard(title: localization.string("settings.support")) {
           SettingsLinkRow(title: "Help", subtitle: "Get support", systemImage: "questionmark.circle", url: MIRAProductionBackend.siteURL("help-support"))
           SettingsLinkRow(title: "Contact support", subtitle: "karfalacisse900@gmail.com", systemImage: "envelope", url: URL(string: "mailto:karfalacisse900@gmail.com")!)
         }
@@ -277,7 +283,7 @@ public struct SettingsNativeView: View {
     }
     .background(MIRATheme.Color.appBackground.ignoresSafeArea())
     .miraScreenEnter(.push)
-    .navigationTitle("Settings")
+    .navigationTitle(localization.string("settings.title"))
     .navigationBarTitleDisplayMode(.inline)
     .toolbar(.hidden, for: .tabBar)
     .task { await model.load() }
@@ -290,7 +296,7 @@ public struct SettingsNativeView: View {
         Text(model.user?.displayName ?? "MIRA")
           .font(.system(size: 22, weight: .semibold))
           .foregroundStyle(MIRATheme.Color.textPrimary)
-        Text(model.email.isEmpty ? "Manage your account" : model.email)
+        Text(model.email.isEmpty ? localization.string("settings.manage_account") : model.email)
           .font(.system(size: 13, weight: .medium))
           .foregroundStyle(MIRATheme.Color.textSecondary)
           .lineLimit(1)
@@ -609,18 +615,21 @@ private struct PreferenceSettingsNativeView: View {
   @AppStorage("mira.settings.autoplay_video") private var autoplayVideo = true
   @AppStorage("mira.settings.high_quality_uploads") private var highQualityUploads = true
   @AppStorage("mira.settings.reduce_motion") private var reduceMotion = false
+  @EnvironmentObject private var localization: MIRALocalization
 
   var body: some View {
-    SettingsDetailScaffold(title: "Preferences") {
-      SettingsCard(title: "Language") {
+    SettingsDetailScaffold(title: localization.string("settings.preferences")) {
+      SettingsCard(title: localization.string("settings.language")) {
         HStack(spacing: MIRATheme.Space.sm) {
           ForEach(languageOptions.indices, id: \.self) { index in
             let option = languageOptions[index]
             Button {
               Task { await model.updateLanguage(option.code) }
             } label: {
-              Text(option.label)
+              Text(languageLabel(option.code, localization: localization))
                 .font(.system(size: 14, weight: .semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.78)
                 .foregroundStyle(model.language == option.code ? .white : MIRATheme.Color.textPrimary)
                 .frame(maxWidth: .infinity)
                 .frame(height: 42)
@@ -631,6 +640,11 @@ private struct PreferenceSettingsNativeView: View {
             .disabled(model.isSavingLanguage)
           }
         }
+        Text(localization.string("settings.restart_to_apply"))
+          .font(.system(size: 12, weight: .medium))
+          .foregroundStyle(MIRATheme.Color.textMuted)
+          .padding(.horizontal, MIRATheme.Space.md)
+          .padding(.bottom, MIRATheme.Space.sm)
       }
 
       SettingsCard(title: "Media") {
@@ -915,13 +929,14 @@ private struct SettingsBanner: View {
 }
 
 private let languageOptions: [(code: String, label: String)] = [
+  ("system", "System Default"),
   ("en", "English"),
   ("fr", "Français"),
   ("es", "Español"),
 ]
 
-private func languageLabel(_ code: String) -> String {
-  languageOptions.first { $0.code == code }?.label ?? "English"
+private func languageLabel(_ code: String, localization: MIRALocalization) -> String {
+  localization.languageDisplayName(code)
 }
 
 private func openAppSettings() {

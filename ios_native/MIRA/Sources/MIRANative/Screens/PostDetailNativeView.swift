@@ -265,6 +265,7 @@ final class PostDetailModel: ObservableObject {
 
 public struct PostDetailNativeView: View {
   @Environment(\.dismiss) private var dismiss
+  @EnvironmentObject private var localization: MIRALocalization
   @StateObject private var model: PostDetailModel
   @State private var draft = ""
   @State private var isSendingComment = false
@@ -547,7 +548,7 @@ public struct PostDetailNativeView: View {
       }
 
       HStack(alignment: .bottom, spacing: MIRATheme.Space.sm) {
-        TextField(replyingTo == nil ? "Add a comment..." : "Write a reply...", text: $draft, axis: .vertical)
+        TextField(replyingTo == nil ? localization.string("comments.add_placeholder") : localization.string("comments.reply_placeholder"), text: $draft, axis: .vertical)
           .font(.system(size: 15, weight: .regular))
           .textInputAutocapitalization(.sentences)
           .submitLabel(.send)

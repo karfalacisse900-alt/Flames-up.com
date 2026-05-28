@@ -2229,6 +2229,7 @@ function normalizeReportReason(value: unknown): string {
     threats: 'threats_or_violence',
     threats_violence: 'threats_or_violence',
     threats_or_violence: 'threats_or_violence',
+    doxxing_private_info: 'doxxing_or_private_information',
     doxxing_private_information: 'doxxing_or_private_information',
     doxxing_or_private_information: 'doxxing_or_private_information',
     private_info: 'doxxing_or_private_information',
@@ -2242,6 +2243,7 @@ function normalizeReportReason(value: unknown): string {
     illegal_dangerous_activity: 'illegal_or_dangerous_activity',
     illegal_or_dangerous_activity: 'illegal_or_dangerous_activity',
     self_harm: 'self_harm_concern',
+    misleading_content: 'false_or_misleading_content',
     false_or_misleading: 'false_or_misleading_content',
     misleading: 'false_or_misleading_content',
     not_interested: 'dont_want_to_see',
@@ -2468,6 +2470,8 @@ async function insertNotificationOnce(c: any, input: {
   const type = cleanText(input.type || 'general', 60);
   const dedupeKey = cleanText(input.dedupeKey || '', 160);
   const data = safeNotificationData({ ...(input.data || {}), ...(dedupeKey ? { dedupe_key: dedupeKey } : {}) });
+  const language = await preferredNotificationLanguage(c, input.userId);
+  const copy = localizedNotificationCopy(language, type, input.title, input.body, data);
 
   if (dedupeKey) {
     try {
@@ -2482,13 +2486,13 @@ async function insertNotificationOnce(c: any, input: {
 
   await c.env.DB.prepare(
     'INSERT INTO notifications (id, user_id, type, title, body, data, is_read, created_at) VALUES (?, ?, ?, ?, ?, ?, 0, datetime(\'now\'))'
-  ).bind(uuid(), input.userId, type, cleanText(input.title, 120), cleanText(input.body, 300), JSON.stringify(data)).run();
+  ).bind(uuid(), input.userId, type, cleanText(copy.title, 120), cleanText(copy.body, 300), JSON.stringify(data)).run();
   runBackgroundTask(c, 'alert_push_failed', async () => {
     const status = await sendAlertPushForNotification(c, {
       userId: input.userId,
       type,
-      title: input.title,
-      body: input.body,
+      title: copy.title,
+      body: copy.body,
       data,
     });
     if (status.startsWith('apns_failed')) {
@@ -2496,6 +2500,37 @@ async function insertNotificationOnce(c: any, input: {
     }
   });
   return true;
+}
+
+async function preferredNotificationLanguage(c: any, userId: string): Promise<'en' | 'fr' | 'es'> {
+  try {
+    const row: any = await c.env.DB.prepare('SELECT language FROM users WHERE id = ? LIMIT 1').bind(userId).first();
+    const language = cleanText(row?.language || '', 8).toLowerCase().split('-')[0];
+    return language === 'fr' || language === 'es' ? language : 'en';
+  } catch {
+    return 'en';
+  }
+}
+
+function localizedNotificationCopy(language: 'en' | 'fr' | 'es', type: string, title: string, body: string, data: Record<string, unknown>): { title: string; body: string } {
+  const actorName = cleanText((data.actor_name || data.from_user_name || data.from_username || '') as string, 80) || (language === 'fr' ? 'Quelqu’un' : language === 'es' ? 'Alguien' : 'Someone');
+  if (type === 'like') {
+    if (language === 'fr') return { title: 'Nouveau J’aime', body: `${actorName} a aimé votre publication.` };
+    if (language === 'es') return { title: 'Nuevo me gusta', body: `A ${actorName} le gustó tu publicación.` };
+    return { title: 'New Like', body: `${actorName} liked your post.` };
+  }
+  if (type === 'comment' || type === 'comment_reply') {
+    const isReply = type === 'comment_reply';
+    if (language === 'fr') return { title: isReply ? 'Nouvelle réponse' : 'Nouveau commentaire', body: `${actorName} ${isReply ? 'a répondu à votre commentaire' : 'a commenté votre publication'}.` };
+    if (language === 'es') return { title: isReply ? 'Nueva respuesta' : 'Nuevo comentario', body: `${actorName} ${isReply ? 'respondió a tu comentario' : 'comentó tu publicación'}.` };
+    return { title: isReply ? 'New Reply' : 'New Comment', body: `${actorName} ${isReply ? 'replied to your comment' : 'commented on your post'}.` };
+  }
+  if (type === 'message') {
+    if (language === 'fr') return { title: 'Nouveau message', body: `Nouveau message de ${actorName}` };
+    if (language === 'es') return { title: 'Nuevo mensaje', body: `Nuevo mensaje de ${actorName}` };
+    return { title: 'New message', body: `New message from ${actorName}` };
+  }
+  return { title, body };
 }
 
 async function resolveReportTarget(c: any, reporterId: string, type: string, reportedId: string, body: any): Promise<{ ok: boolean; status?: number; detail?: string; contentId?: string; targetOwnerUserId?: string }> {
@@ -2622,7 +2657,7 @@ async function submitReportRequest(c: any) {
   const wantsBlock = optionalBoolean(body.block_user ?? body.blockUser ?? body.block) === true;
   const wantsHideContent = optionalBoolean(body.hide_content ?? body.hideContent ?? body.hide) !== false;
   const target = await resolveReportTarget(c, reporterId, reportedType, reportedId, body);
-  if (!target.ok) return c.json({ detail: target.detail || 'Reported content was not found.' }, target.status || 400);
+  if (!target.ok) return c.json({ error_code: 'target_not_found', detail: target.detail || 'Reported content was not found.' }, target.status || 400);
 
   const existing: any = await c.env.DB.prepare(
     "SELECT id FROM reports WHERE reporter_id = ? AND reported_type = ? AND reported_id = ? AND COALESCE(status, 'open') IN ('open', 'pending', 'under_review', 'reviewing', 'escalated') LIMIT 1"
@@ -2630,7 +2665,7 @@ async function submitReportRequest(c: any) {
   if (existing) {
     await logSecurityEvent(c, 'duplicate_report_blocked', reporterId, { reported_type: reportedType, reason });
     const blocked = wantsBlock && target.targetOwnerUserId ? await blockUserForReporter(c, reporterId, target.targetOwnerUserId) : false;
-    return c.json({ id: existing.id, reported: true, duplicate: true, blocked, hidden: wantsHideContent });
+    return c.json({ id: existing.id, reported: true, duplicate: true, blocked, hidden: wantsHideContent, error_code: 'report_duplicate' });
   }
 
   const id = uuid();
@@ -7839,7 +7874,7 @@ api.post('/posts/:postId/like', authMiddleware, async (c) => {
         type: 'like',
         title: 'New Like',
         body: `${me?.full_name || 'Someone'} liked your post`,
-        data: { post_id: postId, from_user_id: userId },
+        data: { post_id: postId, from_user_id: userId, actor_name: me?.full_name || 'Someone' },
         dedupeKey: `like:${userId}:${postId}`,
         dedupeSeconds: 86400,
       });
@@ -8060,7 +8095,7 @@ api.post('/posts/:postId/comments', authMiddleware, async (c) => {
           type: parentId ? 'comment_reply' : 'comment',
           title: parentId ? 'New Reply' : 'New Comment',
           body: `${user?.full_name || 'Someone'} ${parentId ? 'replied to your comment' : 'commented on your post'}`,
-          data: { post_id: postId, comment_id: id, parent_id: parentId, from_user_id: userId },
+          data: { post_id: postId, comment_id: id, parent_id: parentId, from_user_id: userId, actor_name: user?.full_name || 'Someone' },
           dedupeKey: `comment:${userId}:${postId}:${parentId || 'root'}:${content.slice(0, 80)}`,
           dedupeSeconds: 300,
         });
@@ -8598,7 +8633,7 @@ api.post('/messages', authMiddleware, async (c) => {
       type: 'message',
       title: `${senderName} messaged you`,
       body: privatePreview,
-      data: { sender_id: userId, conversation_id: userId, message_id: id },
+      data: { sender_id: userId, conversation_id: userId, message_id: id, actor_name: senderName },
       dedupeKey: `message:${id}`,
       dedupeSeconds: 86400,
     });

@@ -301,8 +301,8 @@ private enum CaptroWelcomeVisualStyle {
 
 private struct CaptroWelcomePage: Identifiable {
   let id: Int
-  let title: String
-  let subtitle: String
+  let titleKey: String
+  let subtitleKey: String
   let background: Color
   let accent: Color
   let secondaryAccent: Color
@@ -314,8 +314,8 @@ private struct CaptroWelcomePage: Identifiable {
   static let all: [CaptroWelcomePage] = [
     CaptroWelcomePage(
       id: 0,
-      title: "Capture\nyour moment",
-      subtitle: "Share photos and short videos that feel real, not fake.",
+      titleKey: "welcome.capture.title",
+      subtitleKey: "welcome.capture.subtitle",
       background: Color(red: 0.090, green: 0.175, blue: 0.105),
       accent: Color(red: 0.580, green: 0.850, blue: 0.470),
       secondaryAccent: Color(red: 0.980, green: 0.820, blue: 0.420),
@@ -326,8 +326,8 @@ private struct CaptroWelcomePage: Identifiable {
     ),
     CaptroWelcomePage(
       id: 1,
-      title: "Discover\nyour world",
-      subtitle: "Explore photography, outfits, food, outdoors, events, and more.",
+      titleKey: "welcome.discover.title",
+      subtitleKey: "welcome.discover.subtitle",
       background: Color(red: 0.030, green: 0.455, blue: 0.810),
       accent: Color(red: 0.480, green: 0.890, blue: 0.950),
       secondaryAccent: Color(red: 1.000, green: 0.600, blue: 0.350),
@@ -338,8 +338,8 @@ private struct CaptroWelcomePage: Identifiable {
     ),
     CaptroWelcomePage(
       id: 2,
-      title: "Find\nyour people",
-      subtitle: "Connect through what you post, what you love, and what you discover.",
+      titleKey: "welcome.people.title",
+      subtitleKey: "welcome.people.subtitle",
       background: Color(red: 0.560, green: 0.075, blue: 0.590),
       accent: Color(red: 1.000, green: 0.475, blue: 0.650),
       secondaryAccent: Color(red: 0.970, green: 0.890, blue: 0.260),
@@ -358,6 +358,7 @@ private struct CaptroWelcomePager: View {
   @StateObject private var audio = CaptroWelcomeAudioController()
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @Environment(\.scenePhase) private var scenePhase
+  @EnvironmentObject private var localization: MIRALocalization
 
   private var currentPage: CaptroWelcomePage {
     let pages = CaptroWelcomePage.all
@@ -394,8 +395,8 @@ private struct CaptroWelcomePager: View {
         Spacer()
 
         HStack(spacing: MIRATheme.Space.md) {
-          CaptroWelcomeActionButton(title: "Log in", style: .filled, action: onLogin)
-          CaptroWelcomeActionButton(title: "Sign up", style: .light, action: onSignup)
+          CaptroWelcomeActionButton(title: localization.string("auth.login"), style: .filled, action: onLogin)
+          CaptroWelcomeActionButton(title: localization.string("auth.signup"), style: .light, action: onSignup)
         }
         .padding(.horizontal, 28)
         .padding(.bottom, 34)
@@ -422,6 +423,7 @@ private struct CaptroWelcomePager: View {
 private struct CaptroWelcomeSlide: View {
   let page: CaptroWelcomePage
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @EnvironmentObject private var localization: MIRALocalization
 
   var body: some View {
     GeometryReader { geometry in
@@ -435,7 +437,7 @@ private struct CaptroWelcomeSlide: View {
           Spacer()
 
           VStack(alignment: .leading, spacing: MIRATheme.Space.lg) {
-            Text(page.title)
+            Text(localization.string(page.titleKey))
               .font(.system(size: 60, weight: .black, design: .rounded))
               .foregroundStyle(page.textColor)
               .lineLimit(3)
@@ -443,7 +445,7 @@ private struct CaptroWelcomeSlide: View {
               .fixedSize(horizontal: false, vertical: true)
               .accessibilityAddTraits(.isHeader)
 
-            Text(page.subtitle)
+            Text(localization.string(page.subtitleKey))
               .font(.system(size: 22, weight: .bold, design: .rounded))
               .foregroundStyle(page.mutedTextColor)
               .lineLimit(4)
@@ -939,16 +941,16 @@ private enum UsernameAvailabilityState: Equatable {
   case taken(String)
   case failed(String)
 
-  var helperText: String {
+  func helperText(localization: MIRALocalization) -> String {
     switch self {
     case .idle:
-      return "3-20 characters. Letters, numbers, underscores, and periods only."
+      return localization.string("auth.username_helper")
     case .invalid(let message), .taken(let message), .failed(let message):
       return message
     case .checking:
-      return "Checking..."
+      return localization.string("auth.username_checking")
     case .available:
-      return "Username available"
+      return localization.string("auth.username_available")
     }
   }
 
@@ -970,6 +972,7 @@ public struct ChooseUsernameNativeView: View {
   @State private var appeared = false
   @FocusState private var isFocused: Bool
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @EnvironmentObject private var localization: MIRALocalization
 
   public init(user: MIRAUser, api: MIRAAPIClient, session: MIRAAuthSession) {
     self.user = user
@@ -984,12 +987,12 @@ public struct ChooseUsernameNativeView: View {
       ScrollView {
         VStack(alignment: .leading, spacing: MIRATheme.Space.xl) {
           VStack(alignment: .leading, spacing: MIRATheme.Space.sm) {
-            Text("Choose your username")
+            Text(localization.string("auth.choose_username"))
               .font(.system(size: 36, weight: .semibold, design: .rounded))
               .foregroundStyle(MIRATheme.Color.textPrimary)
               .fixedSize(horizontal: false, vertical: true)
 
-            Text("This is how people will find you on Captro.")
+            Text(localization.string("auth.username_subtitle"))
               .font(.system(size: 16, weight: .medium))
               .foregroundStyle(MIRATheme.Color.textSecondary)
               .fixedSize(horizontal: false, vertical: true)
@@ -1001,7 +1004,7 @@ public struct ChooseUsernameNativeView: View {
                 .font(.system(size: 22, weight: .bold))
                 .foregroundStyle(MIRATheme.Color.textMuted)
 
-              TextField("username", text: $username)
+              TextField(localization.string("auth.username_placeholder"), text: $username)
                 .font(.system(size: 19, weight: .semibold))
                 .foregroundStyle(MIRATheme.Color.textPrimary)
                 .keyboardType(.asciiCapable)
@@ -1021,14 +1024,14 @@ public struct ChooseUsernameNativeView: View {
             .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(borderColor, lineWidth: 1))
 
-            Text(availability.helperText)
+            Text(availability.helperText(localization: localization))
               .font(.system(size: 13, weight: .medium))
               .foregroundStyle(helperColor)
               .fixedSize(horizontal: false, vertical: true)
 
             if !suggestions.isEmpty {
               VStack(alignment: .leading, spacing: 10) {
-                Text("Suggestions")
+                Text(localization.string("auth.username_suggestions"))
                   .font(.system(size: 13, weight: .semibold))
                   .foregroundStyle(MIRATheme.Color.textMuted)
 
@@ -1052,7 +1055,7 @@ public struct ChooseUsernameNativeView: View {
               if isSaving {
                 ProgressView().tint(.white)
               } else {
-                Text("Continue")
+                Text(localization.string("auth.continue"))
                   .font(.system(size: 16, weight: .semibold))
               }
               Spacer()
@@ -1156,11 +1159,11 @@ public struct ChooseUsernameNativeView: View {
       if response.available {
         availability = .available
       } else {
-        availability = .taken(response.reason ?? "Username already taken")
+        availability = .taken(usernameAvailabilityMessage(code: response.code, fallback: response.reason))
         suggestions = makeSuggestions(excluding: clean)
       }
     } catch {
-      availability = .failed("Could not check that username. Try again.")
+      availability = .failed(localization.string("auth.username_check_failed"))
     }
   }
 
@@ -1178,7 +1181,7 @@ public struct ChooseUsernameNativeView: View {
       if await saveThroughProfileFallback(clean) {
         return
       }
-      availability = .failed("Could not save username. Try another one.")
+      availability = .failed(localization.string("auth.username_save_failed"))
     }
   }
 
@@ -1195,15 +1198,32 @@ public struct ChooseUsernameNativeView: View {
   }
 
   private func localValidationMessage(for value: String) -> String {
-    if value.count < 3 { return "Username must be at least 3 characters." }
-    if value.count > 20 { return "Username must be 20 characters or fewer." }
+    if value.count < 3 { return localization.string("auth.username_too_short") }
+    if value.count > 20 { return localization.string("auth.username_too_long") }
     if value.range(of: #"^[a-z0-9_.]+$"#, options: .regularExpression) == nil {
-      return "Use only letters, numbers, underscores, and periods."
+      return localization.string("auth.username_format")
     }
     if value.hasPrefix(".") || value.hasSuffix(".") || value.contains("..") {
-      return "Username cannot start or end with a period or contain double periods."
+      return localization.string("auth.username_period_rule")
     }
-    return "Username cannot be used."
+    return localization.string("auth.username_cannot_use")
+  }
+
+  private func usernameAvailabilityMessage(code: String?, fallback: String?) -> String {
+    switch code?.lowercased() {
+    case "taken":
+      return localization.string("auth.username_taken")
+    case "too_short":
+      return localization.string("auth.username_too_short")
+    case "too_long":
+      return localization.string("auth.username_too_long")
+    case "invalid_format":
+      return localization.string("auth.username_format")
+    case "reserved", "blocked_word":
+      return localization.string("auth.username_cannot_use")
+    default:
+      return fallback?.isEmpty == false ? fallback! : localization.string("auth.username_taken")
+    }
   }
 
   private func makeSuggestions(excluding excluded: String? = nil) -> [String] {

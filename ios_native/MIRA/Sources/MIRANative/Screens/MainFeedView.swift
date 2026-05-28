@@ -506,6 +506,7 @@ private struct MainPostVisibilityUpdateBody: Encodable {
 public struct MainFeedView: View {
   @StateObject private var model: MainFeedModel
   private let isTabActive: Bool
+  @EnvironmentObject private var localization: MIRALocalization
   @State private var activeVideoPostID: String?
   @State private var isHeaderHidden = false
   @State private var previousScrollMinY: CGFloat?
@@ -545,7 +546,7 @@ public struct MainFeedView: View {
             if model.isLoading && model.posts.isEmpty {
               ForEach(0..<4, id: \.self) { _ in MainPostSkeleton() }
             } else if model.posts.isEmpty {
-              MIRAEmptyState(title: "No posts yet", message: "Fresh moments will show here when they are ready.", systemImage: "sparkles")
+              MIRAEmptyState(title: localization.string("feed.empty.title"), message: localization.string("feed.empty.message"), systemImage: "sparkles")
                 .padding(.top, 80)
             } else {
               ForEach(model.posts) { post in
@@ -1544,6 +1545,7 @@ private struct MainFeedCommentsSheet: View {
   @State private var isSending = false
   @State private var replyingTo: MIRAComment?
   @FocusState private var isReplyFocused: Bool
+  @EnvironmentObject private var localization: MIRALocalization
   let onClose: () -> Void
   let onReportComment: (MIRAComment) -> Void
   let onBlockCommentUser: (MIRAComment) -> Void
@@ -1572,7 +1574,7 @@ private struct MainFeedCommentsSheet: View {
               MainFeedCommentSkeleton()
             }
           } else if model.comments.isEmpty {
-            MIRAEmptyState(title: "No comments yet", message: "Start the conversation.", systemImage: "bubble.left")
+            MIRAEmptyState(title: localization.string("comments.empty.title"), message: localization.string("comments.empty.message"), systemImage: "bubble.left")
               .frame(maxWidth: .infinity)
               .padding(.top, 28)
           } else {
@@ -1633,7 +1635,7 @@ private struct MainFeedCommentsSheet: View {
 
       HStack(spacing: MIRATheme.Space.sm) {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-          Text("Comments")
+          Text(localization.string("comments.title"))
             .font(.system(size: 18, weight: .semibold))
             .foregroundStyle(MIRATheme.Color.textPrimary)
           Text(compact(model.post.commentsCount ?? model.comments.count))
@@ -1694,7 +1696,7 @@ private struct MainFeedCommentsSheet: View {
       HStack(alignment: .bottom, spacing: MIRATheme.Space.sm) {
         RemoteAvatar(url: model.post.userProfileImage, size: 34)
           .padding(.bottom, 2)
-        TextField(replyingTo == nil ? "Add a comment..." : "Write a reply...", text: $draft, axis: .vertical)
+        TextField(replyingTo == nil ? localization.string("comments.add_placeholder") : localization.string("comments.reply_placeholder"), text: $draft, axis: .vertical)
           .font(.system(size: 15, weight: .regular))
           .textInputAutocapitalization(.sentences)
           .submitLabel(.send)

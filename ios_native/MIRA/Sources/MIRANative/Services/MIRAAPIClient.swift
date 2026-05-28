@@ -40,6 +40,7 @@ public enum MIRAAPIError: Error, LocalizedError {
   case badURL
   case insecureURL
   case badStatus(Int)
+  case server(status: Int, code: String?, detail: String?)
   case decodingFailed
   case emptyResponse
 
@@ -48,10 +49,22 @@ public enum MIRAAPIError: Error, LocalizedError {
     case .badURL: return "The request URL is not valid."
     case .insecureURL: return "The request was blocked because it is not a trusted secure connection."
     case .badStatus: return "The server could not finish this request."
+    case .server(_, let code, let detail):
+      if let code, !code.isEmpty {
+        return MIRALanguageResolver.localizedAPIError(code: code)
+      }
+      return detail?.isEmpty == false ? detail : MIRALanguageResolver.localizedAPIError(code: code)
     case .decodingFailed: return "The app could not read the server response."
     case .emptyResponse: return "The server returned an empty response."
     }
   }
+}
+
+private struct MIRAAPIErrorPayload: Decodable {
+  let detail: String?
+  let error: String?
+  let code: String?
+  let errorCode: String?
 }
 
 public enum MIRANetworkSecurityPolicy {
@@ -212,6 +225,7 @@ public final class MIRAAPIClient {
       try MIRANetworkSecurityPolicy.validateDirectUploadURL(absoluteURL)
     }
     request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+    request.setValue(MIRALanguageResolver.acceptLanguageHeader(), forHTTPHeaderField: "Accept-Language")
     request.setValue(UUID().uuidString, forHTTPHeaderField: "X-Request-ID")
     request.httpBody = multipartBody(boundary: boundary, fieldName: fieldName, fileName: fileName, mimeType: mimeType, data: data)
     if authorize, let token = await sessionProvider?.accessToken(), !token.isEmpty {
@@ -233,7 +247,7 @@ public final class MIRAAPIClient {
     }
     let status = (response as? HTTPURLResponse)?.statusCode ?? 0
     await metric.finish(status: "\(status)", bytes: responseData.count)
-    guard (200..<300).contains(status) else { throw MIRAAPIError.badStatus(status) }
+    guard (200..<300).contains(status) else { throw apiError(status: status, data: responseData) }
     if T.self == EmptyResponse.self {
       return EmptyResponse() as! T
     }
@@ -252,6 +266,7 @@ public final class MIRAAPIClient {
     request.timeoutInterval = 25
     try MIRANetworkSecurityPolicy.validateAPIURL(url)
     request.setValue("application/json", forHTTPHeaderField: "Accept")
+    request.setValue(MIRALanguageResolver.acceptLanguageHeader(), forHTTPHeaderField: "Accept-Language")
     request.setValue(UUID().uuidString, forHTTPHeaderField: "X-Request-ID")
     let token = await sessionProvider?.accessToken()
     if let body {
@@ -293,7 +308,7 @@ public final class MIRAAPIClient {
     }
     let status = (response as? HTTPURLResponse)?.statusCode ?? 0
     await metric.finish(status: "\(status)", bytes: data.count)
-    guard (200..<300).contains(status) else { throw MIRAAPIError.badStatus(status) }
+    guard (200..<300).contains(status) else { throw apiError(status: status, data: data) }
     return data
   }
 
@@ -315,6 +330,20 @@ public final class MIRAAPIClient {
     guard let token, !token.isEmpty else { return "anonymous" }
     let digest = SHA256.hash(data: Data(token.utf8))
     return digest.prefix(12).map { String(format: "%02x", $0) }.joined()
+  }
+
+  private func apiError(status: Int, data: Data) -> MIRAAPIError {
+    guard
+      let payload = try? decoder.decode(MIRAAPIErrorPayload.self, from: data),
+      payload.detail != nil || payload.error != nil || payload.code != nil || payload.errorCode != nil
+    else {
+      return .badStatus(status)
+    }
+    return .server(
+      status: status,
+      code: payload.errorCode ?? payload.code ?? payload.error,
+      detail: payload.detail
+    )
   }
 
   private func multipartBody(boundary: String, fieldName: String, fileName: String, mimeType: String, data: Data) -> Data {

@@ -210,27 +210,26 @@ final class DiscoverNativeModel: ObservableObject {
   }
 }
 
+private let discoverGalleryFilters: [DiscoverGalleryFilter] = [
+  .init(id: "all"),
+  .init(id: "photography"),
+  .init(id: "outdoors"),
+  .init(id: "outfits"),
+  .init(id: "food"),
+  .init(id: "travel"),
+  .init(id: "events"),
+  .init(id: "nightlife"),
+  .init(id: "art"),
+  .init(id: "lifestyle"),
+  .init(id: "fitness"),
+  .init(id: "pets"),
+  .init(id: "cars"),
+  .init(id: "beauty")
+]
+
 private struct DiscoverGalleryFilter: Identifiable {
   let id: String
-  let title: String
 }
-
-private let discoverGalleryFilters: [DiscoverGalleryFilter] = [
-  .init(id: "all", title: "All"),
-  .init(id: "photography", title: "Photography"),
-  .init(id: "outdoors", title: "Outdoors"),
-  .init(id: "outfits", title: "Outfits"),
-  .init(id: "food", title: "Food"),
-  .init(id: "travel", title: "Travel"),
-  .init(id: "events", title: "Events"),
-  .init(id: "nightlife", title: "Nightlife"),
-  .init(id: "art", title: "Art"),
-  .init(id: "lifestyle", title: "Lifestyle"),
-  .init(id: "fitness", title: "Fitness"),
-  .init(id: "pets", title: "Pets"),
-  .init(id: "cars", title: "Cars"),
-  .init(id: "beauty", title: "Beauty")
-]
 
 public struct DiscoverNativeView: View {
   @StateObject private var model: DiscoverNativeModel
@@ -239,6 +238,7 @@ public struct DiscoverNativeView: View {
   @State private var reportTarget: MIRAReportTarget?
   @State private var reportSourcePost: MIRAPost?
   @State private var isReportSheetPresented = false
+  @EnvironmentObject private var localization: MIRALocalization
 
   public init(api: MIRAAPIClient) {
     _model = StateObject(wrappedValue: DiscoverNativeModel(api: api))
@@ -338,7 +338,7 @@ public struct DiscoverNativeView: View {
 
   private var discoverHeader: some View {
     HStack(spacing: MIRATheme.Space.sm) {
-      Text("Discover")
+      Text(localization.string("discover.title"))
         .font(.system(size: 18, weight: .semibold))
         .foregroundStyle(MIRATheme.Color.textPrimary)
       Spacer()
@@ -390,28 +390,28 @@ public struct DiscoverNativeView: View {
       UIImpactFeedbackGenerator(style: .medium).impactOccurred()
       presentReport(for: post)
     } label: {
-      Label("Report", systemImage: "flag")
+      Label(localization.string("common.report"), systemImage: "flag")
     }
 
     Button(role: .destructive) {
       UIImpactFeedbackGenerator(style: .medium).impactOccurred()
       Task { await model.blockAuthor(post) }
     } label: {
-      Label("Block user", systemImage: "hand.raised")
+      Label(localization.string("common.block_user"), systemImage: "hand.raised")
     }
 
     Button {
       UIImpactFeedbackGenerator(style: .light).impactOccurred()
       model.hidePost(post)
     } label: {
-      Label("Hide this post", systemImage: "eye.slash")
+      Label(localization.string("report.hide_content"), systemImage: "eye.slash")
     }
 
     Button {
       UIImpactFeedbackGenerator(style: .light).impactOccurred()
       model.hidePost(post)
     } label: {
-      Label("Not interested", systemImage: "hand.thumbsdown")
+      Label(localization.string("common.not_interested"), systemImage: "hand.thumbsdown")
     }
   }
 
@@ -429,7 +429,7 @@ public struct DiscoverNativeView: View {
             }
             Task { await model.selectCategory(filter.id) }
           } label: {
-            Text(filter.title)
+            Text(localization.discoverCategoryLabel(filter.id))
               .font(.system(size: 18, weight: selectedGalleryFilter == filter.id ? .semibold : .regular))
               .foregroundStyle(selectedGalleryFilter == filter.id ? MIRATheme.Color.textPrimary : MIRATheme.Color.textMuted)
               .frame(height: 36)
