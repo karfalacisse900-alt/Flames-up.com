@@ -377,7 +377,7 @@ public struct DiscoverNativeView: View {
       } else {
         LazyVGrid(columns: galleryGridColumns, spacing: 1) {
           ForEach(filteredGalleryPosts) { post in
-            NavigationLink(destination: PostDetailNativeView(post: post, api: model.api)) {
+            NavigationLink(destination: DiscoverPostDetailNativeView(post: post, api: model.api)) {
               DiscoverPostGalleryTile(post: post)
             }
             .buttonStyle(.plain)

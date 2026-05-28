@@ -659,6 +659,660 @@ public struct PostDetailNativeView: View {
   }
 }
 
+public struct DiscoverPostDetailNativeView: View {
+  @Environment(\.dismiss) private var dismiss
+  @StateObject private var model: PostDetailModel
+  @State private var isCaptionExpanded = false
+  @State private var isCommentsPresented = false
+  @State private var reportTarget: MIRAReportTarget?
+  @State private var reportComment: MIRAComment?
+  @State private var isReportSheetPresented = false
+
+  public init(post: MIRAPost, api: MIRAAPIClient) {
+    _model = StateObject(wrappedValue: PostDetailModel(post: post, api: api))
+  }
+
+  public var body: some View {
+    ZStack(alignment: .bottom) {
+      MIRATheme.Color.surface.ignoresSafeArea()
+
+      ScrollView {
+        VStack(alignment: .leading, spacing: 18) {
+          topBar
+          captionBlock
+          mediaCarousel
+          actionRow
+          postContext
+        }
+        .padding(.bottom, 112)
+      }
+      .scrollIndicators(.hidden)
+
+      bottomNowPlayingPanel
+        .padding(.horizontal, MIRATheme.Space.md)
+        .padding(.bottom, 10)
+    }
+    .background(MIRATheme.Color.surface)
+    .miraScreenEnter(.push)
+    .toolbar(.hidden, for: .navigationBar)
+    .toolbar(.hidden, for: .tabBar)
+    .miraBottomSheet(
+      isPresented: $isCommentsPresented,
+      preferredHeightFraction: 0.72,
+      maxHeight: 640
+    ) { dismissComments in
+      DiscoverDetailCommentsSheet(
+        model: model,
+        onClose: dismissComments,
+        onReportComment: { comment in
+          dismissComments()
+          DispatchQueue.main.asyncAfter(deadline: .now() + MIRATransitionTiming.sheetClose) {
+            presentReport(for: comment)
+          }
+        },
+        onBlockCommentUser: { comment in
+          dismissComments()
+          Task { await model.blockCommentAuthor(comment) }
+        }
+      )
+    }
+    .miraBottomSheet(
+      isPresented: $isReportSheetPresented,
+      preferredHeightFraction: 0.78,
+      maxHeight: 700,
+      onDismissed: {
+        reportTarget = nil
+        reportComment = nil
+      }
+    ) { dismissReport in
+      if let reportTarget {
+        MIRAReportSheet(
+          target: reportTarget,
+          api: model.api,
+          onSubmitted: { result in handleReportResult(result) },
+          onClose: dismissReport
+        )
+      } else {
+        Color.clear
+      }
+    }
+    .task {
+      await model.refreshPost()
+    }
+  }
+
+  private var topBar: some View {
+    HStack {
+      Button {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        dismiss()
+      } label: {
+        Image(systemName: "chevron.left")
+          .font(.system(size: 18, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .frame(width: 44, height: 44)
+          .background(MIRATheme.Color.surfaceSoft)
+          .clipShape(Circle())
+      }
+      .buttonStyle(.miraPress)
+
+      Spacer()
+
+      if let place = model.post.placeDisplayName {
+        Label(place, systemImage: "mappin.circle.fill")
+          .font(.system(size: 13, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.forest.opacity(0.82))
+          .lineLimit(1)
+          .padding(.horizontal, 12)
+          .padding(.vertical, 8)
+          .background(MIRATheme.Color.forestSoft.opacity(0.92))
+          .clipShape(Capsule())
+      }
+    }
+    .padding(.horizontal, MIRATheme.Space.md)
+    .padding(.top, MIRATheme.Space.xs)
+  }
+
+  private var captionBlock: some View {
+    Button {
+      guard shouldCollapseCaption else { return }
+      UIImpactFeedbackGenerator(style: .light).impactOccurred()
+      withAnimation(.easeInOut(duration: 0.22)) {
+        isCaptionExpanded.toggle()
+      }
+    } label: {
+      captionLabel
+        .font(.system(size: 29, weight: .regular))
+        .foregroundStyle(MIRATheme.Color.textPrimary)
+        .lineSpacing(5)
+        .multilineTextAlignment(.leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+    .buttonStyle(.plain)
+    .padding(.horizontal, MIRATheme.Space.md)
+    .accessibilityLabel(captionText)
+  }
+
+  private var captionLabel: Text {
+    guard shouldCollapseCaption else {
+      return Text(captionText)
+    }
+    if isCaptionExpanded {
+      return Text(captionText) + Text("  Read less").foregroundColor(MIRATheme.Color.textSecondary).fontWeight(.semibold)
+    }
+    return Text(captionPreviewText) + Text("...Read more").foregroundColor(MIRATheme.Color.textSecondary).fontWeight(.semibold)
+  }
+
+  private var mediaCarousel: some View {
+    Group {
+      if displayMediaURLs.isEmpty {
+        RoundedRectangle(cornerRadius: 18, style: .continuous)
+          .fill(MIRATheme.Color.mediaPlaceholder)
+          .overlay {
+            VStack(spacing: 8) {
+              Image(systemName: "photo")
+                .font(.system(size: 26, weight: .light))
+              Text("No media")
+                .font(.system(size: 13, weight: .semibold))
+            }
+            .foregroundStyle(MIRATheme.Color.textSecondary.opacity(0.72))
+          }
+          .frame(width: carouselCardWidth, height: carouselHeight)
+          .padding(.horizontal, MIRATheme.Space.md)
+      } else {
+        ScrollView(.horizontal, showsIndicators: false) {
+          LazyHStack(spacing: 12) {
+            ForEach(Array(displayMediaURLs.enumerated()), id: \.offset) { index, url in
+              DiscoverDetailMediaCard(
+                url: url,
+                isVideo: isVideo(at: index, url: url),
+                placeholderURL: placeholderURL(at: index),
+                index: index,
+                totalCount: displayMediaURLs.count
+              )
+              .frame(width: carouselCardWidth, height: carouselHeight)
+            }
+          }
+          .padding(.horizontal, MIRATheme.Space.md)
+        }
+      }
+    }
+    .frame(height: carouselHeight)
+  }
+
+  private var actionRow: some View {
+    HStack(alignment: .center, spacing: 0) {
+      Button {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        Task { await model.toggleLike() }
+      } label: {
+        HStack(spacing: 12) {
+          Image(systemName: model.post.isLiked == true ? "hand.thumbsup.fill" : "hand.thumbsup")
+            .font(.system(size: 34, weight: .regular))
+          Text(compact(model.post.likesCount ?? 0))
+            .font(.system(size: 24, weight: .regular))
+            .lineLimit(1)
+            .minimumScaleFactor(0.72)
+        }
+        .foregroundStyle(model.post.isLiked == true ? MIRATheme.Color.like : MIRATheme.Color.textPrimary)
+        .frame(minWidth: 112, minHeight: 54, alignment: .leading)
+        .contentShape(Rectangle())
+      }
+      .buttonStyle(.miraPress)
+
+      Button {
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+      } label: {
+        Image(systemName: "hand.thumbsdown")
+          .font(.system(size: 34, weight: .regular))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .frame(width: 70, height: 54)
+      }
+      .buttonStyle(.miraPress)
+      .accessibilityLabel("Not interested")
+
+      Spacer(minLength: 18)
+
+      ShareLink(item: shareURL(for: model.post), subject: Text(model.post.titleText), message: Text(captionText)) {
+        Image(systemName: "arrowshape.turn.up.right")
+          .font(.system(size: 34, weight: .regular))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .frame(width: 58, height: 54)
+      }
+      .buttonStyle(.miraPress)
+
+      Button {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        isCommentsPresented = true
+      } label: {
+        HStack(spacing: 10) {
+          Image(systemName: "bubble.right")
+            .font(.system(size: 34, weight: .regular))
+          Text(compact(model.post.commentsCount ?? model.comments.count))
+            .font(.system(size: 24, weight: .regular))
+            .lineLimit(1)
+            .minimumScaleFactor(0.72)
+        }
+        .foregroundStyle(MIRATheme.Color.textPrimary)
+        .frame(minWidth: 92, minHeight: 54, alignment: .trailing)
+        .contentShape(Rectangle())
+      }
+      .buttonStyle(.miraPress)
+    }
+    .padding(.horizontal, MIRATheme.Space.md)
+  }
+
+  private var postContext: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      HStack(spacing: 10) {
+        if let userId = model.post.userId, !userId.isEmpty {
+          NavigationLink(destination: UserProfileNativeView(userId: userId, api: model.api)) {
+            authorSummary
+          }
+          .buttonStyle(.plain)
+        } else {
+          authorSummary
+        }
+        Spacer()
+      }
+
+      if let subtitle = model.post.placeDisplaySubtitle {
+        Text(subtitle)
+          .font(.system(size: 14, weight: .medium))
+          .foregroundStyle(MIRATheme.Color.textMuted)
+          .lineLimit(2)
+      }
+    }
+    .padding(.horizontal, MIRATheme.Space.md)
+  }
+
+  private var authorSummary: some View {
+    HStack(spacing: 10) {
+      RemoteAvatar(url: model.post.userProfileImage, size: 38)
+      VStack(alignment: .leading, spacing: 2) {
+        Text(model.post.authorDisplayName)
+          .font(.system(size: 15, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .lineLimit(1)
+        Text(relativeAge(model.post.createdAt))
+          .font(.system(size: 12, weight: .medium))
+          .foregroundStyle(MIRATheme.Color.textMuted)
+          .lineLimit(1)
+      }
+    }
+  }
+
+  private var bottomNowPlayingPanel: some View {
+    HStack(spacing: 14) {
+      Image(systemName: "dot.radiowaves.left.and.right")
+        .font(.system(size: 26, weight: .semibold))
+        .foregroundStyle(MIRATheme.Color.textPrimary)
+        .frame(width: 42, height: 42)
+
+      VStack(alignment: .leading, spacing: 3) {
+        Text(bottomPanelTitle)
+          .font(.system(size: 17, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .lineLimit(1)
+        Text(bottomPanelSubtitle)
+          .font(.system(size: 15, weight: .regular))
+          .foregroundStyle(MIRATheme.Color.textSecondary)
+          .lineLimit(1)
+      }
+      Spacer(minLength: 8)
+      Image(systemName: "chevron.up")
+        .font(.system(size: 22, weight: .semibold))
+        .foregroundStyle(MIRATheme.Color.textPrimary)
+    }
+    .padding(.horizontal, MIRATheme.Space.md)
+    .padding(.vertical, 11)
+    .background(.ultraThinMaterial)
+    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    .overlay {
+      RoundedRectangle(cornerRadius: 18, style: .continuous)
+        .stroke(MIRATheme.Color.hairline, lineWidth: 1)
+    }
+    .modifier(MIRATheme.floatingShadow())
+  }
+
+  private var displayMediaURLs: [String] {
+    let feed = model.post.feedMediaURLs
+    return feed.isEmpty ? model.post.mediaURLs : feed
+  }
+
+  private var carouselCardWidth: CGFloat {
+    max(280, UIScreen.main.bounds.width - 66)
+  }
+
+  private var carouselHeight: CGFloat {
+    min(carouselCardWidth * 1.03, UIScreen.main.bounds.height * 0.58)
+  }
+
+  private var captionText: String {
+    let title = model.post.titleText.trimmingCharacters(in: .whitespacesAndNewlines)
+    let body = model.post.bodyText.trimmingCharacters(in: .whitespacesAndNewlines)
+    if body.isEmpty { return title }
+    return "\(title) \(body)"
+  }
+
+  private var shouldCollapseCaption: Bool {
+    captionText.count > 82 || captionText.contains("\n")
+  }
+
+  private var captionPreviewText: String {
+    let clean = captionText.replacingOccurrences(of: "\n", with: " ")
+    guard clean.count > 82 else { return clean }
+    return String(clean.prefix(82)).trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  private var bottomPanelTitle: String {
+    if let title = model.post.audioDisplayTitle {
+      return "Next: \(title)"
+    }
+    if let category = model.post.primaryCategory ?? model.post.category {
+      return "Next: \(category.capitalized) moments"
+    }
+    return "Next: Discover more"
+  }
+
+  private var bottomPanelSubtitle: String {
+    if let artist = model.post.audioDisplayArtist {
+      return "Mix - \(artist)"
+    }
+    return "Mix - Captro Discover"
+  }
+
+  private func isVideo(at index: Int, url: String) -> Bool {
+    let types = model.post.mediaTypes?.values ?? []
+    if types.indices.contains(index) {
+      return types[index].lowercased().contains("video")
+    }
+    return url.isVideoURL
+  }
+
+  private func placeholderURL(at index: Int) -> String? {
+    let posters = model.post.posterMediaURLs
+    if posters.indices.contains(index) { return posters[index] }
+    let thumbnails = model.post.thumbnailMediaURLs
+    if thumbnails.indices.contains(index) { return thumbnails[index] }
+    return thumbnails.first ?? posters.first
+  }
+
+  private func presentReport(for comment: MIRAComment) {
+    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+    reportComment = comment
+    reportTarget = MIRAReportTarget(
+      targetType: "comment",
+      targetId: comment.id,
+      ownerUserId: comment.userId,
+      title: "Report comment",
+      subtitle: comment.text
+    )
+    DispatchQueue.main.async {
+      withAnimation(.spring(response: 0.30, dampingFraction: 0.90)) {
+        isReportSheetPresented = true
+      }
+    }
+  }
+
+  private func handleReportResult(_ result: MIRAReportResult) {
+    guard let reportComment else { return }
+    if result.blocked, let userId = reportComment.userId {
+      model.removeComments(byUserId: userId)
+    } else if result.hidden {
+      model.removeCommentLocally(reportComment)
+    }
+  }
+}
+
+private struct DiscoverDetailMediaCard: View {
+  let url: String
+  let isVideo: Bool
+  let placeholderURL: String?
+  let index: Int
+  let totalCount: Int
+
+  var body: some View {
+    ZStack(alignment: .topTrailing) {
+      RemoteMediaView(
+        url: url,
+        isVideo: isVideo,
+        placeholderURL: placeholderURL,
+        contentMode: .fill,
+        shouldPlay: false,
+        maxPixelSize: MIRAMediaSizing.feedTargetHeight,
+        showsVideoPlaceholderIcon: isVideo
+      )
+      .allowsHitTesting(false)
+
+      if totalCount > 1 {
+        Text("\(index + 1)/\(totalCount)")
+          .font(.system(size: 20, weight: .medium))
+          .foregroundStyle(.white)
+          .padding(.horizontal, 17)
+          .padding(.vertical, 10)
+          .background(Color.black.opacity(0.78))
+          .clipShape(Capsule())
+          .overlay(Capsule().stroke(Color.white.opacity(0.12), lineWidth: 1))
+          .padding(16)
+      }
+    }
+    .background(MIRATheme.Color.mediaPlaceholder)
+    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+  }
+}
+
+private struct DiscoverDetailCommentsSheet: View {
+  @ObservedObject var model: PostDetailModel
+  @State private var draft = ""
+  @State private var isSending = false
+  @State private var replyingTo: MIRAComment?
+  @FocusState private var isReplyFocused: Bool
+  @EnvironmentObject private var localization: MIRALocalization
+  let onClose: () -> Void
+  let onReportComment: (MIRAComment) -> Void
+  let onBlockCommentUser: (MIRAComment) -> Void
+
+  var body: some View {
+    VStack(spacing: 0) {
+      sheetHeader
+
+      ScrollView {
+        LazyVStack(alignment: .leading, spacing: MIRATheme.Space.lg) {
+          if model.isLoadingComments && model.comments.isEmpty {
+            ForEach(0..<5, id: \.self) { _ in
+              PostDetailCommentSkeleton()
+            }
+          } else if model.comments.isEmpty {
+            MIRAEmptyState(title: localization.string("comments.empty.title"), message: localization.string("comments.empty.message"), systemImage: "bubble.left")
+              .frame(maxWidth: .infinity)
+              .padding(.top, 28)
+          } else {
+            ForEach(model.comments) { comment in
+              CommentRow(
+                comment: comment,
+                currentUserId: model.currentUserId,
+                postOwnerId: model.post.userId,
+                onReply: {
+                  replyingTo = comment
+                  isReplyFocused = true
+                },
+                onLike: {
+                  Task { await model.toggleCommentLike(comment) }
+                },
+                onPin: {
+                  Task { await model.toggleCommentPin(comment) }
+                },
+                onReport: {
+                  onReportComment(comment)
+                },
+                onBlockUser: {
+                  onBlockCommentUser(comment)
+                },
+                onDelete: {
+                  Task { await model.deleteComment(comment) }
+                },
+                onHide: {
+                  Task { await model.hideComment(comment) }
+                }
+              )
+            }
+          }
+        }
+        .padding(.horizontal, MIRATheme.Space.md)
+        .padding(.top, MIRATheme.Space.md)
+        .padding(.bottom, 18)
+      }
+      .scrollIndicators(.hidden)
+      .scrollDismissesKeyboard(.interactively)
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+    .safeAreaInset(edge: .bottom, spacing: 0) {
+      commentComposer
+    }
+    .background(MIRATheme.Color.surface)
+    .task {
+      await model.loadComments()
+    }
+  }
+
+  private var sheetHeader: some View {
+    VStack(spacing: MIRATheme.Space.sm) {
+      Capsule()
+        .fill(MIRATheme.Color.textMuted.opacity(0.22))
+        .frame(width: 42, height: 5)
+        .padding(.top, 10)
+
+      HStack(spacing: MIRATheme.Space.sm) {
+        Text(localization.string("comments.title"))
+          .font(.system(size: 18, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+        Text(compact(model.post.commentsCount ?? model.comments.count))
+          .font(.system(size: 12, weight: .medium))
+          .foregroundStyle(MIRATheme.Color.textMuted)
+          .padding(.horizontal, 7)
+          .padding(.vertical, 3)
+          .background(MIRATheme.Color.surfaceSoft)
+          .clipShape(Capsule())
+        Spacer()
+        Button {
+          isReplyFocused = false
+          onClose()
+        } label: {
+          Image(systemName: "xmark")
+            .font(.system(size: 14, weight: .bold))
+            .foregroundStyle(MIRATheme.Color.textSecondary)
+            .frame(width: 34, height: 34)
+            .background(MIRATheme.Color.surfaceSoft)
+            .clipShape(Circle())
+        }
+        .buttonStyle(.miraPress)
+      }
+      .padding(.horizontal, MIRATheme.Space.md)
+    }
+    .padding(.bottom, MIRATheme.Space.sm)
+    .overlay(alignment: .bottom) {
+      Rectangle().fill(MIRATheme.Color.hairline).frame(height: 0.5)
+    }
+  }
+
+  private var commentComposer: some View {
+    VStack(spacing: 0) {
+      if let replyingTo {
+        HStack(spacing: 8) {
+          Image(systemName: "arrowshape.turn.up.left")
+            .font(.system(size: 12, weight: .semibold))
+          Text("Replying to \(replyingTo.user?.displayName ?? "comment")")
+            .font(.system(size: 12, weight: .semibold))
+            .lineLimit(1)
+            .truncationMode(.tail)
+          Spacer(minLength: 0)
+          Button {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            self.replyingTo = nil
+          } label: {
+            Image(systemName: "xmark")
+              .font(.system(size: 11, weight: .bold))
+              .frame(width: 24, height: 24)
+          }
+          .buttonStyle(.miraPress)
+        }
+        .foregroundStyle(MIRATheme.Color.textMuted)
+        .padding(.horizontal, MIRATheme.Space.md)
+        .padding(.top, MIRATheme.Space.sm)
+      }
+
+      HStack(alignment: .bottom, spacing: MIRATheme.Space.sm) {
+        TextField(replyingTo == nil ? localization.string("comments.add_placeholder") : localization.string("comments.reply_placeholder"), text: $draft, axis: .vertical)
+          .font(.system(size: 15, weight: .regular))
+          .textInputAutocapitalization(.sentences)
+          .submitLabel(.send)
+          .focused($isReplyFocused)
+          .lineLimit(1...5)
+          .padding(.horizontal, MIRATheme.Space.md)
+          .padding(.vertical, 11)
+          .background(MIRATheme.Color.surfaceSoft)
+          .clipShape(RoundedRectangle(cornerRadius: 21, style: .continuous))
+          .overlay {
+            RoundedRectangle(cornerRadius: 21, style: .continuous)
+              .stroke(isReplyFocused ? MIRATheme.Color.forest.opacity(0.18) : MIRATheme.Color.hairline, lineWidth: 1)
+          }
+          .onSubmit(sendComment)
+          .animation(.easeOut(duration: 0.18), value: isReplyFocused)
+
+        Button(action: sendComment) {
+          Group {
+            if isSending {
+              ProgressView()
+                .tint(.white)
+                .frame(width: 17, height: 17)
+            } else {
+              Image(systemName: "arrow.up")
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(.white)
+            }
+          }
+          .frame(width: 40, height: 40)
+          .background(canSend ? MIRATheme.Color.forest : MIRATheme.Color.textMuted.opacity(0.28))
+          .clipShape(Circle())
+        }
+        .buttonStyle(.miraPress)
+        .disabled(!canSend || isSending)
+      }
+      .padding(.horizontal, MIRATheme.Space.md)
+      .padding(.top, MIRATheme.Space.sm)
+      .padding(.bottom, MIRATheme.Space.md)
+    }
+    .background(MIRATheme.Color.surface)
+    .overlay(alignment: .top) {
+      Rectangle().fill(MIRATheme.Color.hairline).frame(height: 0.5)
+    }
+  }
+
+  private var canSend: Bool {
+    !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isSending
+  }
+
+  private func sendComment() {
+    let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !text.isEmpty, !isSending else { return }
+    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    isSending = true
+    draft = ""
+    Task {
+      let parentId = replyingTo?.id
+      let didSend = await model.sendComment(text, parentId: parentId)
+      if !didSend {
+        draft = text
+      } else {
+        replyingTo = nil
+      }
+      isSending = false
+    }
+  }
+}
+
 private struct CommentRow: View {
   let comment: MIRAComment
   let currentUserId: String?
