@@ -215,16 +215,12 @@ private let discoverGalleryFilters: [DiscoverGalleryFilter] = [
   .init(id: "photography"),
   .init(id: "outdoors"),
   .init(id: "outfits"),
-  .init(id: "food"),
   .init(id: "travel"),
   .init(id: "events"),
   .init(id: "nightlife"),
   .init(id: "art"),
   .init(id: "lifestyle"),
-  .init(id: "fitness"),
-  .init(id: "pets"),
-  .init(id: "cars"),
-  .init(id: "beauty")
+  .init(id: "fitness")
 ]
 
 private struct DiscoverGalleryFilter: Identifiable {

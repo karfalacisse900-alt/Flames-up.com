@@ -67,7 +67,7 @@ const reportReasons = [
   'other',
 ];
 
-const postCategories = ['all', 'photography', 'outdoors', 'outfits', 'food', 'travel', 'events', 'nightlife', 'art', 'lifestyle', 'fitness', 'pets', 'cars', 'beauty'];
+const postCategories = ['all', 'photography', 'outdoors', 'outfits', 'travel', 'events', 'nightlife', 'art', 'lifestyle', 'fitness'];
 const editablePostCategories = postCategories.filter((category) => category !== 'all');
 
 function formatDate(value?: string | null) {

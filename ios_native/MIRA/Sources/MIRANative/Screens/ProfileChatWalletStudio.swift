@@ -127,6 +127,12 @@ private struct ProfileUpdateBody: Encodable {
   let profileImage: String?
 }
 
+private struct ProfileUsernameAvailabilityResponse: Decodable {
+  let available: Bool?
+  let reason: String?
+  let code: String?
+}
+
 private struct ProfileGridSkeleton: View {
   private var gridTileSize: CGFloat {
     floor((UIScreen.main.bounds.width - 2) / 3)
@@ -840,6 +846,7 @@ private struct EditProfileNativeView: View {
   @State private var fullName: String
   @State private var username: String
   @State private var profileImage: String?
+  @State private var originalUsername: String
   @State private var pickerItem: PhotosPickerItem?
   @State private var pickedImageData: Data?
   @State private var pickedUIImage: UIImage?
@@ -855,6 +862,7 @@ private struct EditProfileNativeView: View {
     _fullName = State(initialValue: user?.fullName ?? "")
     _username = State(initialValue: user?.username ?? "")
     _profileImage = State(initialValue: user?.profileImage)
+    _originalUsername = State(initialValue: MIRAUsernameRules.normalized(user?.username))
   }
 
   var body: some View {
@@ -875,6 +883,10 @@ private struct EditProfileNativeView: View {
           VStack(spacing: MIRATheme.Space.md) {
             editField(title: "Name", text: $fullName, placeholder: "Your name")
             editField(title: "Username", text: $username, placeholder: "username")
+            Text("Use 3-20 lowercase letters, numbers, underscores, or periods. Do not include @.")
+              .font(.system(size: 12, weight: .medium))
+              .foregroundStyle(MIRATheme.Color.textMuted)
+              .frame(maxWidth: .infinity, alignment: .leading)
           }
 
           if let errorMessage {
@@ -916,8 +928,9 @@ private struct EditProfileNativeView: View {
             errorMessage = "Could not read this photo."
             return
           }
-          pickedImageData = data
           pickedUIImage = image
+          pickedImageData = await preparedProfileImageData(from: image) ?? data
+          errorMessage = nil
         }
       }
       .task { await hydrateMissingUserIfNeeded() }
@@ -957,15 +970,19 @@ private struct EditProfileNativeView: View {
   private func save() async {
     guard !isSaving else { return }
     let cleanName = fullName.trimmingCharacters(in: .whitespacesAndNewlines)
-    let cleanUsername = username.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    let cleanUsername = MIRAUsernameRules.normalized(username)
     let usernameToSave = cleanUsername.isEmpty ? nil : cleanUsername
-    if let usernameToSave, usernameToSave.count < 3 {
-      errorMessage = "Username must be at least 3 characters."
+    if let usernameToSave, !MIRAUsernameRules.isValidPublicUsername(usernameToSave) {
+      errorMessage = "Choose a username with 3-20 letters, numbers, underscores, or periods."
       return
     }
     isSaving = true
     defer { isSaving = false }
     do {
+      if let usernameToSave,
+         usernameToSave != originalUsername {
+        try await verifyUsernameAvailability(usernameToSave)
+      }
       var uploadedImage = profileImage
       if let pickedImageData {
         uploadedImage = try await MIRAMediaUploadService(api: api).upload(
@@ -987,8 +1004,56 @@ private struct EditProfileNativeView: View {
       )
       onSaved(updated)
     } catch {
-      errorMessage = "Could not save your profile."
+      errorMessage = profileSaveErrorMessage(for: error)
     }
+  }
+
+  private func verifyUsernameAvailability(_ username: String) async throws {
+    let encoded = username.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? username
+    let response: ProfileUsernameAvailabilityResponse = try await api.get("/users/check-username/\(encoded)")
+    if response.available == false {
+      throw MIRAAPIError.server(
+        status: 409,
+        code: response.code,
+        detail: response.reason ?? "Username is not available."
+      )
+    }
+  }
+
+  private func profileSaveErrorMessage(for error: Error) -> String {
+    if let apiError = error as? MIRAAPIError,
+       let message = apiError.errorDescription,
+       !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      return message
+    }
+    let message = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+    return message.isEmpty ? "Could not save your profile." : message
+  }
+
+  private func preparedProfileImageData(from image: UIImage) async -> Data? {
+    await Task.detached(priority: .userInitiated) {
+      let maxSide: CGFloat = 1024
+      let side = min(image.size.width, image.size.height)
+      guard side > 0 else { return nil }
+      let origin = CGPoint(
+        x: max(0, (image.size.width - side) / 2),
+        y: max(0, (image.size.height - side) / 2)
+      )
+      let cropRect = CGRect(origin: origin, size: CGSize(width: side, height: side))
+      let targetSide = min(maxSide, side)
+      let format = UIGraphicsImageRendererFormat()
+      format.scale = 1
+      format.opaque = true
+      let renderer = UIGraphicsImageRenderer(size: CGSize(width: targetSide, height: targetSide), format: format)
+      let rendered = renderer.image { _ in
+        UIColor.white.setFill()
+        UIBezierPath(rect: CGRect(origin: .zero, size: CGSize(width: targetSide, height: targetSide))).fill()
+        image.draw(
+          in: CGRect(x: -cropRect.minX * targetSide / side, y: -cropRect.minY * targetSide / side, width: image.size.width * targetSide / side, height: image.size.height * targetSide / side)
+        )
+      }
+      return rendered.jpegData(compressionQuality: 0.88)
+    }.value
   }
 
   private func close() {
@@ -1008,6 +1073,9 @@ private struct EditProfileNativeView: View {
     }
     if username.isEmpty {
       username = me.username ?? ""
+    }
+    if originalUsername.isEmpty {
+      originalUsername = MIRAUsernameRules.normalized(me.username)
     }
     if profileImage == nil {
       profileImage = me.profileImage

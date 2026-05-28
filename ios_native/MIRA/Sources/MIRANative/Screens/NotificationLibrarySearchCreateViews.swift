@@ -109,117 +109,286 @@ public struct NotificationNativeView: View {
 
 @MainActor
 final class LibraryNativeModel: ObservableObject {
-  enum Tab: String, CaseIterable {
-    case saved = "Saved"
+  enum Section: String, CaseIterable, Identifiable, Hashable {
+    case inspiration = "Inspiration"
+    case outfits = "Outfits"
+    case places = "Places"
+    case food = "Food"
+    case photos = "Photos"
+    case videos = "Videos"
     case liked = "Liked"
-    case collections = "Collections"
+
+    var id: String { rawValue }
+
+    var systemImage: String {
+      switch self {
+      case .inspiration: return "lightbulb"
+      case .outfits: return "tshirt"
+      case .places: return "mappin.and.ellipse"
+      case .food: return "fork.knife"
+      case .photos: return "photo.on.rectangle"
+      case .videos: return "play.rectangle"
+      case .liked: return "heart"
+      }
+    }
+
+    var collectionName: String? {
+      self == .liked ? nil : rawValue
+    }
   }
 
-  @Published var tab: Tab = .saved
-  @Published var savedPosts: [MIRAPost] = []
-  @Published var likedPosts: [MIRAPost] = []
-  @Published var collections: [MIRALibraryCollection] = []
+  @Published var selectedSection: Section = .inspiration
+  @Published var posts: [MIRAPost] = []
+  @Published var collectionCounts: [String: Int] = [:]
   @Published var isLoading = false
+  @Published var errorMessage: String?
   let api: MIRAAPIClient
+  private var postsBySection: [Section: [MIRAPost]] = [:]
 
   init(api: MIRAAPIClient) {
     self.api = api
   }
 
-  func load() async {
+  func load(force: Bool = false) async {
+    await loadCollectionCounts()
+    await loadSelectedSection(force: force)
+  }
+
+  func select(_ section: Section) async {
+    guard selectedSection != section || posts.isEmpty else { return }
+    selectedSection = section
+    if let cached = postsBySection[section] {
+      posts = cached
+      errorMessage = nil
+      return
+    }
+    await loadSelectedSection(force: false)
+  }
+
+  private func loadSelectedSection(force: Bool) async {
+    if let cached = postsBySection[selectedSection], !force {
+      posts = cached
+      errorMessage = nil
+      return
+    }
     isLoading = true
     defer { isLoading = false }
     do {
-      switch tab {
-      case .saved:
-        savedPosts = try await api.get("/library/saved")
-      case .liked:
-        likedPosts = try await api.get("/library/liked")
-      case .collections:
-        collections = try await api.get("/library/collections")
+      let loaded: [MIRAPost]
+      if selectedSection == .liked {
+        loaded = try await api.get("/library/liked")
+      } else if let collectionName = selectedSection.collectionName {
+        let encoded = collectionName.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? collectionName
+        loaded = try await api.get("/library/saved?collection=\(encoded)")
+      } else {
+        loaded = []
       }
-    } catch {}
+      posts = loaded
+      postsBySection[selectedSection] = loaded
+      errorMessage = nil
+    } catch {
+      if posts.isEmpty {
+        errorMessage = "Could not load this library section."
+      }
+    }
+  }
+
+  private func loadCollectionCounts() async {
+    guard let collections: [MIRALibraryCollection] = try? await api.get("/library/collections") else { return }
+    var counts: [String: Int] = [:]
+    for item in collections {
+      let name = item.collection ?? item.name ?? ""
+      guard !name.isEmpty else { continue }
+      counts[name] = item.count ?? 0
+    }
+    collectionCounts = counts
+  }
+
+  func count(for section: Section) -> Int {
+    guard let collectionName = section.collectionName else { return 0 }
+    return collectionCounts[collectionName] ?? 0
   }
 }
 
 public struct LibraryNativeView: View {
   @StateObject private var model: LibraryNativeModel
+  @Environment(\.dismiss) private var dismiss
 
   public init(api: MIRAAPIClient) {
     _model = StateObject(wrappedValue: LibraryNativeModel(api: api))
   }
 
   public var body: some View {
-    ScrollView {
-      VStack(spacing: MIRATheme.Space.lg) {
-        Picker("Library", selection: $model.tab) {
-          ForEach(LibraryNativeModel.Tab.allCases, id: \.self) { tab in
-            Text(tab.rawValue).tag(tab)
+    VStack(spacing: 0) {
+      libraryHeader
+
+      ScrollView(showsIndicators: false) {
+        VStack(alignment: .leading, spacing: MIRATheme.Space.lg) {
+          sectionRail
+
+          if let errorMessage = model.errorMessage {
+            libraryErrorBanner(errorMessage)
+              .padding(.horizontal, MIRATheme.Space.md)
+          }
+
+          if model.isLoading && model.posts.isEmpty {
+            librarySkeleton
+          } else if model.posts.isEmpty {
+            MIRAEmptyState(
+              title: "Nothing saved here yet",
+              message: emptyMessage,
+              systemImage: model.selectedSection.systemImage
+            )
+            .padding(.horizontal, MIRATheme.Space.md)
+          } else {
+            postGrid(posts: model.posts)
           }
         }
-        .pickerStyle(.segmented)
-        .padding(.horizontal, MIRATheme.Space.md)
-
-        if model.tab == .collections {
-          collectionList
-        } else {
-          postGrid(posts: model.tab == .saved ? model.savedPosts : model.likedPosts)
-        }
+        .padding(.top, MIRATheme.Space.md)
+        .padding(.bottom, MIRATheme.Space.xxl)
       }
-      .padding(.top, MIRATheme.Space.md)
     }
     .background(MIRATheme.Color.appBackground)
     .miraScreenEnter(.push)
-    .navigationTitle("My Library")
+    .navigationBarBackButtonHidden(true)
+    .toolbar(.hidden, for: .navigationBar)
     .toolbar(.hidden, for: .tabBar)
     .task { await model.load() }
-    .onChange(of: model.tab) { _ in Task { await model.load() } }
+  }
+
+  private var libraryHeader: some View {
+    HStack(spacing: MIRATheme.Space.sm) {
+      Button { dismiss() } label: {
+        Image(systemName: "chevron.left")
+          .font(.system(size: 18, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .frame(width: 44, height: 44)
+      }
+      .buttonStyle(.miraPress)
+
+      VStack(alignment: .leading, spacing: 2) {
+        Text("My Library")
+          .font(.system(size: 22, weight: .bold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+        Text("Saved posts organized by what inspired you.")
+          .font(.system(size: 12, weight: .medium))
+          .foregroundStyle(MIRATheme.Color.textMuted)
+      }
+
+      Spacer()
+    }
+    .padding(.horizontal, MIRATheme.Space.md)
+    .padding(.vertical, MIRATheme.Space.sm)
+    .background(MIRATheme.Color.surface)
+    .overlay(alignment: .bottom) {
+      Rectangle().fill(MIRATheme.Color.hairline).frame(height: 0.5)
+    }
+  }
+
+  private var sectionRail: some View {
+    ScrollView(.horizontal, showsIndicators: false) {
+      HStack(spacing: MIRATheme.Space.sm) {
+        ForEach(LibraryNativeModel.Section.allCases) { section in
+          let isSelected = model.selectedSection == section
+          Button {
+            Task { await model.select(section) }
+          } label: {
+            HStack(spacing: 8) {
+              Image(systemName: section.systemImage)
+                .font(.system(size: 14, weight: .semibold))
+              Text(section.rawValue)
+                .font(.system(size: 14, weight: .semibold))
+              if section != .liked {
+                Text("\(model.count(for: section))")
+                  .font(.system(size: 11, weight: .bold))
+                  .foregroundStyle(isSelected ? .white.opacity(0.78) : MIRATheme.Color.textMuted)
+              }
+            }
+            .foregroundStyle(isSelected ? .white : MIRATheme.Color.textPrimary)
+            .padding(.horizontal, 14)
+            .frame(height: 42)
+            .background(isSelected ? MIRATheme.Color.forest : MIRATheme.Color.surfaceRaised)
+            .clipShape(Capsule())
+            .overlay(Capsule().stroke(isSelected ? Color.clear : MIRATheme.Color.hairline, lineWidth: 1))
+          }
+          .buttonStyle(.miraPress)
+        }
+      }
+      .padding(.horizontal, MIRATheme.Space.md)
+    }
+  }
+
+  private func libraryErrorBanner(_ message: String) -> some View {
+    Text(message)
+      .font(.system(size: 13, weight: .semibold))
+      .foregroundStyle(.red)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .padding(MIRATheme.Space.md)
+      .background(Color.red.opacity(0.08))
+      .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
   }
 
   private func postGrid(posts: [MIRAPost]) -> some View {
-    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 2), count: 3), spacing: 2) {
+    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 2), spacing: 10) {
       ForEach(posts) { post in
-        if let media = post.mediaURLs.first {
+        libraryPostTile(post)
+      }
+    }
+    .padding(.horizontal, MIRATheme.Space.md)
+  }
+
+  private func libraryPostTile(_ post: MIRAPost) -> some View {
+    NavigationLink(destination: PostDetailNativeView(post: post, api: model.api)) {
+      ZStack(alignment: .bottomLeading) {
+        if let media = post.thumbnailMediaURLs.first ?? post.feedMediaURLs.first {
           RemoteMediaView(url: media, isVideo: media.isVideoURL)
-            .aspectRatio(1, contentMode: .fill)
+            .aspectRatio(3.0 / 4.0, contentMode: .fill)
         } else {
           ZStack {
             MIRATheme.Color.surfaceSoft
             Text(post.titleText)
-              .font(.system(size: 12, weight: .medium))
+              .font(.system(size: 12, weight: .semibold))
               .foregroundStyle(MIRATheme.Color.textSecondary)
-              .padding(8)
+              .lineLimit(4)
+              .multilineTextAlignment(.leading)
+              .padding(12)
           }
-          .aspectRatio(1, contentMode: .fill)
+          .aspectRatio(3.0 / 4.0, contentMode: .fill)
         }
+
+        LinearGradient(colors: [.clear, .black.opacity(0.52)], startPoint: .center, endPoint: .bottom)
+          .allowsHitTesting(false)
+
+        Text(post.titleText)
+          .font(.system(size: 12, weight: .semibold))
+          .foregroundStyle(.white)
+          .lineLimit(2)
+          .padding(10)
+          .shadow(radius: 4)
       }
+      .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+      .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(MIRATheme.Color.hairline, lineWidth: 1))
     }
+    .buttonStyle(.plain)
   }
 
-  private var collectionList: some View {
-    LazyVStack(spacing: MIRATheme.Space.sm) {
-      if model.collections.isEmpty {
-        MIRAEmptyState(title: "No collections yet", message: "Saved posts can be organized here.", systemImage: "folder")
-      } else {
-        ForEach(model.collections) { collection in
-          HStack {
-            Image(systemName: "folder.fill")
-              .foregroundStyle(MIRATheme.Color.forest)
-              .frame(width: 44, height: 44)
-              .background(MIRATheme.Color.forestSoft)
-              .clipShape(Circle())
-            Text(collection.collection ?? collection.name ?? "Collection")
-              .font(.system(size: 17, weight: .semibold))
-            Spacer()
-            Text("\(collection.count ?? 0)")
-              .foregroundStyle(MIRATheme.Color.textMuted)
-          }
-          .padding(MIRATheme.Space.md)
-          .miraCardSurface()
-          .padding(.horizontal, MIRATheme.Space.md)
-        }
+  private var librarySkeleton: some View {
+    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 2), spacing: 10) {
+      ForEach(0..<6, id: \.self) { _ in
+        RoundedRectangle(cornerRadius: 18, style: .continuous)
+          .fill(MIRATheme.Color.surfaceSoft)
+          .aspectRatio(3.0 / 4.0, contentMode: .fit)
+          .redacted(reason: .placeholder)
       }
     }
+    .padding(.horizontal, MIRATheme.Space.md)
+  }
+
+  private var emptyMessage: String {
+    if model.selectedSection == .liked {
+      return "Posts you like will show here."
+    }
+    return "Tap save on a post and choose \(model.selectedSection.rawValue) to organize it here."
   }
 }
 
@@ -248,35 +417,107 @@ final class SearchUsersNativeModel: ObservableObject {
 
 public struct SearchUsersNativeView: View {
   @StateObject private var model: SearchUsersNativeModel
+  @Environment(\.dismiss) private var dismiss
 
   public init(api: MIRAAPIClient) {
     _model = StateObject(wrappedValue: SearchUsersNativeModel(api: api))
   }
 
   public var body: some View {
-    List {
-      ForEach(model.users) { user in
-        HStack(spacing: MIRATheme.Space.md) {
-          RemoteAvatar(url: user.profileImage, size: 44)
-          VStack(alignment: .leading) {
-            Text(user.displayName).font(.system(size: 16, weight: .semibold))
-            if let bio = user.bio, !bio.isEmpty {
-              Text(bio).font(.system(size: 13)).foregroundStyle(MIRATheme.Color.textMuted).lineLimit(1)
+    VStack(spacing: 0) {
+      searchHeader
+
+      List {
+        if model.query.trimmingCharacters(in: .whitespacesAndNewlines).count < 2 {
+          Text("Search people by name or username.")
+            .font(.system(size: 14, weight: .medium))
+            .foregroundStyle(MIRATheme.Color.textMuted)
+            .listRowBackground(MIRATheme.Color.appBackground)
+        } else if model.isLoading && model.users.isEmpty {
+          HStack {
+            ProgressView()
+            Text("Searching...")
+              .font(.system(size: 14, weight: .medium))
+              .foregroundStyle(MIRATheme.Color.textMuted)
+          }
+          .listRowBackground(MIRATheme.Color.appBackground)
+        } else if model.users.isEmpty {
+          Text("No people found.")
+            .font(.system(size: 14, weight: .medium))
+            .foregroundStyle(MIRATheme.Color.textMuted)
+            .listRowBackground(MIRATheme.Color.appBackground)
+        } else {
+          ForEach(model.users) { user in
+            NavigationLink(destination: UserProfileNativeView(userId: user.id, api: model.api)) {
+              HStack(spacing: MIRATheme.Space.md) {
+                RemoteAvatar(url: user.profileImage, size: 44)
+                VStack(alignment: .leading) {
+                  Text(user.displayName).font(.system(size: 16, weight: .semibold))
+                  if let bio = user.bio, !bio.isEmpty {
+                    Text(bio).font(.system(size: 13)).foregroundStyle(MIRATheme.Color.textMuted).lineLimit(1)
+                  }
+                }
+              }
             }
+            .buttonStyle(.plain)
+            .listRowBackground(MIRATheme.Color.surface)
           }
         }
-        .listRowBackground(MIRATheme.Color.surface)
       }
+      .scrollContentBackground(.hidden)
     }
-    .scrollContentBackground(.hidden)
     .background(MIRATheme.Color.appBackground)
     .miraScreenEnter(.push)
-    .navigationTitle("Search")
+    .navigationBarBackButtonHidden(true)
+    .toolbar(.hidden, for: .navigationBar)
     .toolbar(.hidden, for: .tabBar)
-    .searchable(text: $model.query, prompt: "Search users")
     .task(id: model.query) {
       try? await Task.sleep(nanoseconds: 250_000_000)
       await model.search()
+    }
+  }
+
+  private var searchHeader: some View {
+    HStack(spacing: MIRATheme.Space.sm) {
+      Button { dismiss() } label: {
+        Image(systemName: "chevron.left")
+          .font(.system(size: 18, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .frame(width: 44, height: 44)
+      }
+      .buttonStyle(.miraPress)
+
+      HStack(spacing: 10) {
+        Image(systemName: "magnifyingglass")
+          .font(.system(size: 15, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textMuted)
+        TextField("Search people", text: $model.query)
+          .textInputAutocapitalization(.never)
+          .autocorrectionDisabled()
+          .font(.system(size: 16, weight: .medium))
+        if !model.query.isEmpty {
+          Button {
+            model.query = ""
+            model.users = []
+          } label: {
+            Image(systemName: "xmark.circle.fill")
+              .font(.system(size: 16, weight: .semibold))
+              .foregroundStyle(MIRATheme.Color.textMuted)
+          }
+          .buttonStyle(.plain)
+        }
+      }
+      .padding(.horizontal, 14)
+      .frame(height: 44)
+      .background(MIRATheme.Color.surfaceRaised)
+      .clipShape(Capsule())
+      .overlay(Capsule().stroke(MIRATheme.Color.hairline, lineWidth: 1))
+    }
+    .padding(.horizontal, MIRATheme.Space.md)
+    .padding(.vertical, MIRATheme.Space.sm)
+    .background(MIRATheme.Color.surface)
+    .overlay(alignment: .bottom) {
+      Rectangle().fill(MIRATheme.Color.hairline).frame(height: 0.5)
     }
   }
 }

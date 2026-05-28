@@ -1764,16 +1764,12 @@ type DiscoverCategory =
   | 'photography'
   | 'outdoors'
   | 'outfits'
-  | 'food'
   | 'travel'
   | 'events'
   | 'nightlife'
   | 'art'
   | 'lifestyle'
-  | 'fitness'
-  | 'pets'
-  | 'cars'
-  | 'beauty';
+  | 'fitness';
 
 type AutoCategorySource = 'apple_vision' | 'backend_ai' | 'hybrid_ai' | 'fallback' | 'admin_changed' | 'user_changed_optional';
 type AutoCategoryStatus = 'pending' | 'classified' | 'low_confidence' | 'needs_review' | 'admin_corrected';
@@ -1812,32 +1808,24 @@ const DISCOVER_CATEGORIES: DiscoverCategory[] = [
   'photography',
   'outdoors',
   'outfits',
-  'food',
   'travel',
   'events',
   'nightlife',
   'art',
   'lifestyle',
   'fitness',
-  'pets',
-  'cars',
-  'beauty',
 ];
 
 const CATEGORY_KEYWORDS: Record<DiscoverCategory, string[]> = {
-  outfits: ['outfit', 'fit', 'fit check', 'clothes', 'style', 'fashion', 'streetwear', 'shoes', 'jacket', 'mirror selfie', 'clothing', 'accessories', 'sneakers', 'dress'],
-  food: ['food', 'meal', 'restaurant', 'cafe', 'coffee', 'drink', 'dessert', 'pizza', 'burger', 'cooking', 'plate', 'bakery', 'brunch', 'lunch', 'dinner'],
-  outdoors: ['outdoors', 'outside', 'park', 'beach', 'hiking', 'trail', 'nature', 'mountain', 'lake', 'sunset', 'trees', 'forest', 'walking', 'landscape', 'snow'],
-  events: ['event', 'concert', 'festival', 'meetup', 'show', 'game', 'crowd', 'stadium', 'venue', 'performance', 'birthday', 'wedding'],
-  nightlife: ['nightlife', 'night', 'club', 'bar', 'lounge', 'party', 'rooftop', 'dj', 'drinks', 'city night', 'after dark', 'dance'],
-  travel: ['travel', 'trip', 'vacation', 'hotel', 'airport', 'landmark', 'city visit', 'tourist', 'destination', 'road trip', 'passport', 'flight'],
-  photography: ['photography', 'portrait', 'camera', 'photo shoot', 'street photo', 'aesthetic', 'landscape shot', 'creative shot', 'close up', 'lens', 'film'],
-  art: ['art', 'drawing', 'painting', 'design', 'sketch', 'illustration', 'mural', 'gallery', 'creative work', 'museum', 'artist'],
-  fitness: ['gym', 'workout', 'running', 'fitness', 'sport', 'basketball', 'soccer', 'training', 'yoga', 'exercise'],
-  pets: ['dog', 'cat', 'pet', 'puppy', 'kitten', 'animal'],
-  cars: ['car', 'truck', 'motorcycle', 'auto', 'vehicle', 'car meet'],
-  beauty: ['makeup', 'hair', 'skincare', 'nails', 'beauty', 'salon'],
-  lifestyle: ['daily life', 'friends', 'home', 'routine', 'random moment', 'personal moment', 'general capture', 'selfie', 'room'],
+  outfits: ['outfit', 'fit', 'fit check', 'clothes', 'style', 'fashion', 'streetwear', 'shoes', 'shoe', 'jacket', 'mirror selfie', 'clothing', 'accessories', 'sneakers', 'dress', 'apparel', 'person'],
+  outdoors: ['outdoors', 'outdoor', 'outside', 'park', 'beach', 'hiking', 'trail', 'nature', 'mountain', 'lake', 'sunset', 'sunrise', 'trees', 'tree', 'forest', 'walking', 'landscape', 'snow', 'sky', 'water', 'river', 'ocean', 'sea', 'flower', 'plant', 'grass', 'garden', 'field', 'woods', 'camping'],
+  events: ['event', 'concert', 'festival', 'meetup', 'show', 'game', 'crowd', 'stadium', 'venue', 'performance', 'birthday', 'wedding', 'audience', 'stage', 'party', 'celebration'],
+  nightlife: ['nightlife', 'night', 'club', 'bar', 'lounge', 'party', 'rooftop', 'dj', 'drinks', 'city night', 'after dark', 'dance', 'neon', 'dark', 'cocktail', 'evening'],
+  travel: ['travel', 'trip', 'vacation', 'hotel', 'airport', 'landmark', 'city visit', 'tourist', 'destination', 'road trip', 'passport', 'flight', 'city', 'street', 'architecture', 'building', 'castle', 'monument', 'bridge', 'train', 'station', 'historic', 'old town', 'view'],
+  photography: ['photography', 'portrait', 'camera', 'photo shoot', 'street photo', 'aesthetic', 'landscape shot', 'creative shot', 'close up', 'close-up', 'lens', 'film', 'macro', 'black and white', 'monochrome', 'composition'],
+  art: ['art', 'drawing', 'painting', 'design', 'sketch', 'illustration', 'mural', 'gallery', 'creative work', 'museum', 'artist', 'craft', 'sculpture', 'visual art'],
+  fitness: ['gym', 'workout', 'running', 'fitness', 'sport', 'basketball', 'soccer', 'training', 'yoga', 'exercise', 'athlete', 'cycling', 'bike', 'bicycle'],
+  lifestyle: ['daily life', 'friends', 'home', 'routine', 'random moment', 'personal moment', 'general capture', 'selfie', 'room', 'people', 'human', 'family'],
 };
 
 function normalizeDiscoverCategory(value: unknown, allowAll = false): DiscoverCategory | 'all' | '' {
@@ -10070,8 +10058,17 @@ api.get('/discover', authMiddleware, async (c) => {
   ];
   const binds: any[] = [userId, userId, userId, ...visiblePostBindValues(userId)];
   if (category !== 'all') {
-    conditions.push("LOWER(COALESCE(NULLIF(p.primary_category, ''), NULLIF(p.category, ''), 'lifestyle')) = ?");
-    binds.push(category);
+    const keywords = CATEGORY_KEYWORDS[category].slice(0, 18);
+    const searchableText = "LOWER(COALESCE(p.title, '') || ' ' || COALESCE(p.content, '') || ' ' || COALESCE(p.location, '') || ' ' || COALESCE(p.place_name, '') || ' ' || COALESCE(p.tags_json, ''))";
+    const keywordMatches = keywords.map(() => `${searchableText} LIKE ?`).join(' OR ');
+    conditions.push(`(
+      LOWER(COALESCE(NULLIF(p.primary_category, ''), NULLIF(p.category, ''), 'lifestyle')) = ?
+      OR (
+        LOWER(COALESCE(p.primary_category, '')) IN ('', 'lifestyle', 'general', 'place')
+        AND (${keywordMatches})
+      )
+    )`);
+    binds.push(category, ...keywords.map((keyword) => `%${keyword}%`));
   }
   const sql = [
     `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
@@ -10754,16 +10751,12 @@ api.get('/discover/categories', async (c) => {
     { id: 'photography', name: 'Photography', icon: 'camera' },
     { id: 'outdoors', name: 'Outdoors', icon: 'leaf' },
     { id: 'outfits', name: 'Outfits', icon: 'tshirt' },
-    { id: 'food', name: 'Food', icon: 'fork.knife' },
     { id: 'travel', name: 'Travel', icon: 'airplane' },
     { id: 'events', name: 'Events', icon: 'calendar' },
     { id: 'nightlife', name: 'Nightlife', icon: 'moon.stars' },
     { id: 'art', name: 'Art', icon: 'paintpalette' },
     { id: 'lifestyle', name: 'Lifestyle', icon: 'sparkles' },
     { id: 'fitness', name: 'Fitness', icon: 'figure.run' },
-    { id: 'pets', name: 'Pets', icon: 'pawprint' },
-    { id: 'cars', name: 'Cars', icon: 'car' },
-    { id: 'beauty', name: 'Beauty', icon: 'wand.and.stars' },
   ]);
 });
 
