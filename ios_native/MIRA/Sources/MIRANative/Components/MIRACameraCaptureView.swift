@@ -318,7 +318,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     previewContainer.layer.addSublayer(previewLayer)
 
     gridOverlay.translatesAutoresizingMaskIntoConstraints = false
-    gridOverlay.isHidden = true
+    gridOverlay.isHidden = false
     previewContainer.addSubview(gridOverlay)
 
     capturedImageView.translatesAutoresizingMaskIntoConstraints = false
@@ -659,7 +659,9 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     sessionQueue.async { [weak self] in
       guard let self else { return }
       self.session.beginConfiguration()
-      if self.session.canSetSessionPreset(.hd1920x1080) {
+      if self.session.canSetSessionPreset(.hd4K3840x2160) {
+        self.session.sessionPreset = .hd4K3840x2160
+      } else if self.session.canSetSessionPreset(.hd1920x1080) {
         self.session.sessionPreset = .hd1920x1080
       } else if self.session.canSetSessionPreset(.high) {
         self.session.sessionPreset = .high
@@ -1618,19 +1620,49 @@ private final class MIRACameraGridOverlayView: UIView {
 
   override func draw(_ rect: CGRect) {
     guard let context = UIGraphicsGetCurrentContext() else { return }
-    context.setStrokeColor(UIColor.white.withAlphaComponent(0.28).cgColor)
-    context.setLineWidth(0.8)
+    let guideRect = captureGuideRect(in: rect)
+    let outerPath = UIBezierPath(roundedRect: guideRect, cornerRadius: 22)
+
+    context.setStrokeColor(UIColor.white.withAlphaComponent(0.46).cgColor)
+    context.setLineWidth(1.4)
+    context.addPath(outerPath.cgPath)
+    context.strokePath()
+
+    context.setStrokeColor(UIColor.white.withAlphaComponent(0.24).cgColor)
+    context.setLineWidth(0.75)
 
     for fraction in [CGFloat(1.0 / 3.0), CGFloat(2.0 / 3.0)] {
-      let x = rect.width * fraction
-      context.move(to: CGPoint(x: x, y: 0))
-      context.addLine(to: CGPoint(x: x, y: rect.height))
+      let x = guideRect.minX + guideRect.width * fraction
+      context.move(to: CGPoint(x: x, y: guideRect.minY))
+      context.addLine(to: CGPoint(x: x, y: guideRect.maxY))
 
-      let y = rect.height * fraction
-      context.move(to: CGPoint(x: 0, y: y))
-      context.addLine(to: CGPoint(x: rect.width, y: y))
+      let y = guideRect.minY + guideRect.height * fraction
+      context.move(to: CGPoint(x: guideRect.minX, y: y))
+      context.addLine(to: CGPoint(x: guideRect.maxX, y: y))
     }
 
     context.strokePath()
+  }
+
+  private func captureGuideRect(in rect: CGRect) -> CGRect {
+    let insetRect = rect.insetBy(dx: 14, dy: 14)
+    let targetRatio = CGFloat(3.0 / 4.0)
+    let rectRatio = insetRect.width / max(insetRect.height, 1)
+    if rectRatio > targetRatio {
+      let width = insetRect.height * targetRatio
+      return CGRect(
+        x: insetRect.midX - width / 2,
+        y: insetRect.minY,
+        width: width,
+        height: insetRect.height
+      )
+    }
+    let height = insetRect.width / targetRatio
+    return CGRect(
+      x: insetRect.minX,
+      y: insetRect.midY - height / 2,
+      width: insetRect.width,
+      height: height
+    )
   }
 }

@@ -86,11 +86,18 @@ public struct MIRAPickedMedia: Hashable {
   }
 }
 
+public enum MIRAMediaUploadTarget: Hashable {
+  case general
+  case feedPost
+}
+
 public final class MIRAMediaUploadService {
   private let api: MIRAAPIClient
+  private let target: MIRAMediaUploadTarget
 
-  public init(api: MIRAAPIClient) {
+  public init(api: MIRAAPIClient, target: MIRAMediaUploadTarget = .general) {
     self.api = api
+    self.target = target
   }
 
   public func upload(_ media: MIRAPickedMedia) async throws -> String {
@@ -233,6 +240,14 @@ public final class MIRAMediaUploadService {
   }
 
   private func prepareImageUpload(_ media: MIRAPickedMedia) async -> PreparedImageUpload {
+    if target == .feedPost, let feedImage = await prepareFeedImage(media.data) {
+      return PreparedImageUpload(
+        data: feedImage,
+        mimeType: "image/jpeg",
+        fileName: normalizedImageName(media.fileName, mimeType: "image/jpeg")
+      )
+    }
+
     if let detectedMimeType = detectedImageMimeType(media.data), media.data.count <= 10_000_000 {
       return PreparedImageUpload(
         data: media.data,
@@ -247,6 +262,29 @@ public final class MIRAMediaUploadService {
       mimeType: "image/jpeg",
       fileName: normalizedImageName(media.fileName, mimeType: "image/jpeg")
     )
+  }
+
+  private func prepareFeedImage(_ data: Data) async -> Data? {
+    await Task.detached(priority: .userInitiated) {
+      guard let image = UIImage(data: data), image.size.width > 0, image.size.height > 0 else { return nil }
+      let targetSize = CGSize(width: 1080, height: 1440)
+      let scale = max(targetSize.width / image.size.width, targetSize.height / image.size.height)
+      let drawSize = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+      let drawOrigin = CGPoint(
+        x: (targetSize.width - drawSize.width) / 2,
+        y: (targetSize.height - drawSize.height) / 2
+      )
+      let format = UIGraphicsImageRendererFormat()
+      format.scale = 1
+      format.opaque = true
+      let renderer = UIGraphicsImageRenderer(size: targetSize, format: format)
+      let rendered = renderer.image { _ in
+        UIColor.black.setFill()
+        UIBezierPath(rect: CGRect(origin: .zero, size: targetSize)).fill()
+        image.draw(in: CGRect(origin: drawOrigin, size: drawSize))
+      }
+      return rendered.jpegData(compressionQuality: 0.92)
+    }.value
   }
 
   private func detectedImageMimeType(_ data: Data) -> String? {

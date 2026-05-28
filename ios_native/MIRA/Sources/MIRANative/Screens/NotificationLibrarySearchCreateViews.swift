@@ -704,7 +704,7 @@ public struct CreatePostNativeView: View {
     MIRAPerformanceTimeline.mark("post_upload_start", detail: "post")
     defer { isPosting = false }
     do {
-      let uploader = MIRAMediaUploadService(api: api)
+      let uploader = MIRAMediaUploadService(api: api, target: .feedPost)
       let cleanedTags = hashtags
         .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "#")) }
         .filter { !$0.isEmpty }
@@ -722,7 +722,11 @@ public struct CreatePostNativeView: View {
       for item in mediaItems {
         uploaded.append(try await uploader.upload(item))
         mediaTypes.append(item.kind.rawValue)
-        mediaDimensions.append(await item.mediaDimension())
+        if item.kind == .image {
+          mediaDimensions.append(MIRAMediaDimension(width: 1080, height: 1440, ratio: 0.75, format: "3:4", type: item.kind.rawValue))
+        } else {
+          mediaDimensions.append(await item.mediaDimension())
+        }
       }
       let tagLine = cleanedTags.isEmpty ? "" : cleanedTags.map { "#\($0)" }.joined(separator: " ")
       let postContent = [bodyText.trimmingCharacters(in: .whitespacesAndNewlines), tagLine]

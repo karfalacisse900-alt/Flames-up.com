@@ -211,7 +211,8 @@ public struct ProfileNativeView: View {
             Image(systemName: "bookmark")
           }
           NavigationLink(destination: WalletNativeView(api: model.api)) {
-            Image(systemName: "wallet.pass")
+            Image(systemName: "trophy")
+              .accessibilityLabel("Contest prizes")
           }
           NavigationLink(destination: SettingsNativeView(api: model.api, authSession: authSession)) {
             Image(systemName: "gearshape")
@@ -1358,13 +1359,13 @@ public struct WalletNativeView: View {
     ScrollView {
       VStack(alignment: .leading, spacing: MIRATheme.Space.lg) {
         VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
-          Text("Wallet")
+          Text("Contest prizes")
             .font(.system(size: 24, weight: .semibold))
           Text("\(model.wallet?.balance ?? 0)")
             .font(.system(size: 42, weight: .semibold))
-          Text("MIRA coins")
+          Text("Prize credits")
             .foregroundStyle(MIRATheme.Color.textSecondary)
-          MIRAPrimaryButton("Buy coins", systemImage: "plus") {}
+          MIRAPrimaryButton("View contests", systemImage: "trophy") {}
         }
         .padding(MIRATheme.Space.xl)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1373,18 +1374,18 @@ public struct WalletNativeView: View {
         .modifier(MIRATheme.softShadow())
 
         VStack(alignment: .leading, spacing: MIRATheme.Space.sm) {
-          Text("Premium")
+          Text("Prize status")
             .font(.system(size: 18, weight: .semibold))
-          Text(model.wallet?.premiumActive == true ? "Premium is active" : "$4.99/month")
+          Text(model.wallet?.premiumActive == true ? "Contest perks are active" : "No active prize perks")
             .foregroundStyle(MIRATheme.Color.textSecondary)
-          MIRAPrimaryButton("Manage premium", systemImage: "crown") {}
+          MIRAPrimaryButton("Manage prize perks", systemImage: "crown") {}
         }
         .padding(MIRATheme.Space.xl)
         .miraCardSurface()
       }
       .padding(MIRATheme.Space.md)
     }
-    .navigationTitle("Wallet")
+    .navigationTitle("Contest prizes")
     .toolbar(.hidden, for: .tabBar)
     .background(MIRATheme.Color.appBackground)
     .miraScreenEnter(.push)
