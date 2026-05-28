@@ -461,8 +461,10 @@ public struct PostDetailNativeView: View {
       title: "Report comment",
       subtitle: comment.text
     )
-    withAnimation(.spring(response: 0.30, dampingFraction: 0.90)) {
-      isReportSheetPresented = true
+    DispatchQueue.main.async {
+      withAnimation(.spring(response: 0.30, dampingFraction: 0.90)) {
+        isReportSheetPresented = true
+      }
     }
   }
 

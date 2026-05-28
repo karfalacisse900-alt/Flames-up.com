@@ -381,6 +381,9 @@ public struct UserProfileNativeView: View {
   @StateObject private var model: UserProfileNativeModel
   @State private var reportTarget: MIRAReportTarget?
   @State private var isReportSheetPresented = false
+  @State private var isProfileOptionsPresented = false
+  @State private var isOpeningMessage = false
+  @State private var messageRoute: ChatOpenRoute?
   private var gridTileSize: CGFloat {
     floor((UIScreen.main.bounds.width - 2) / 3)
   }
@@ -423,6 +426,25 @@ public struct UserProfileNativeView: View {
     .navigationBarTitleDisplayMode(.inline)
     .toolbar(.hidden, for: .tabBar)
     .task { await model.load() }
+    .background {
+      NavigationLink(
+        isActive: Binding(
+          get: { messageRoute != nil },
+          set: { isActive in
+            if !isActive { messageRoute = nil }
+          }
+        )
+      ) {
+        if let route = messageRoute {
+          ConversationNativeView(title: route.title, model: route.model)
+        } else {
+          EmptyView()
+        }
+      } label: {
+        EmptyView()
+      }
+      .hidden()
+    }
     .miraBottomSheet(
       isPresented: $isReportSheetPresented,
       preferredHeightFraction: 0.78,
@@ -445,6 +467,25 @@ public struct UserProfileNativeView: View {
       } else {
         Color.clear
       }
+    }
+    .miraBottomSheet(isPresented: $isProfileOptionsPresented, preferredHeightFraction: 0.34, maxHeight: 330) { dismissOptions in
+      UserProfileSafetyOptionsSheet(
+        isBlocked: model.isBlocked,
+        onReport: {
+          dismissOptions()
+          DispatchQueue.main.asyncAfter(deadline: .now() + MIRATransitionTiming.sheetClose) {
+            presentProfileReport()
+          }
+        },
+        onBlock: {
+          dismissOptions()
+          Task { _ = await model.blockUser() }
+        },
+        onUnblock: {
+          dismissOptions()
+          Task { _ = await model.unblockUser() }
+        }
+      )
     }
   }
 
@@ -492,8 +533,10 @@ public struct UserProfileNativeView: View {
           }
           .buttonStyle(.plain)
 
-          NavigationLink(destination: ConversationNativeView(peerId: model.userId, title: model.user?.displayName ?? "Chat", api: model.api)) {
-            Label("Message", systemImage: "message")
+          Button {
+            Task { await openMessageChat() }
+          } label: {
+            Label(isOpeningMessage ? "Opening" : "Message", systemImage: isOpeningMessage ? "hourglass" : "message")
               .font(.system(size: 15, weight: .semibold))
               .foregroundStyle(MIRATheme.Color.textPrimary)
               .frame(maxWidth: .infinity, minHeight: 46)
@@ -501,6 +544,7 @@ public struct UserProfileNativeView: View {
               .clipShape(Capsule())
           }
           .buttonStyle(.plain)
+          .disabled(isOpeningMessage)
         }
       }
     }
@@ -511,23 +555,11 @@ public struct UserProfileNativeView: View {
   }
 
   private var profileSafetyMenu: some View {
-    Menu {
-      Button(role: .destructive) {
-        presentProfileReport()
-      } label: {
-        Label("Report profile", systemImage: "flag")
-      }
-      if model.isBlocked {
-        Button {
-          Task { _ = await model.unblockUser() }
-        } label: {
-          Label("Unblock user", systemImage: "hand.raised.slash")
-        }
-      } else {
-        Button(role: .destructive) {
-          Task { _ = await model.blockUser() }
-        } label: {
-          Label("Block user", systemImage: "hand.raised")
+    Button {
+      UIImpactFeedbackGenerator(style: .light).impactOccurred()
+      DispatchQueue.main.async {
+        withAnimation(.spring(response: 0.30, dampingFraction: 0.90)) {
+          isProfileOptionsPresented = true
         }
       }
     } label: {
@@ -539,6 +571,7 @@ public struct UserProfileNativeView: View {
         .clipShape(Circle())
     }
     .buttonStyle(.miraPress)
+    .accessibilityLabel("Profile options")
   }
 
   private func presentProfileReport() {
@@ -550,9 +583,26 @@ public struct UserProfileNativeView: View {
       title: "Report profile",
       subtitle: model.user?.displayName ?? model.user?.username
     )
-    withAnimation(.spring(response: 0.30, dampingFraction: 0.90)) {
-      isReportSheetPresented = true
+    DispatchQueue.main.async {
+      withAnimation(.spring(response: 0.30, dampingFraction: 0.90)) {
+        isReportSheetPresented = true
+      }
     }
+  }
+
+  @MainActor
+  private func openMessageChat() async {
+    guard !isOpeningMessage else { return }
+    isOpeningMessage = true
+    defer { isOpeningMessage = false }
+
+    let roomModel = ConversationNativeModel(kind: .direct(peerId: model.userId), api: model.api, currentUserId: "")
+    await roomModel.load()
+    messageRoute = ChatOpenRoute(
+      id: "profile-\(model.userId)",
+      title: model.user?.displayName ?? "Chat",
+      model: roomModel
+    )
   }
 
   private func profileStatusNotice(_ message: String) -> some View {
@@ -579,6 +629,102 @@ public struct UserProfileNativeView: View {
       return fullName
     }
     return model.user?.username ?? "mira"
+  }
+}
+
+private struct UserProfileSafetyOptionsSheet: View {
+  let isBlocked: Bool
+  let onReport: () -> Void
+  let onBlock: () -> Void
+  let onUnblock: () -> Void
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      Capsule()
+        .fill(MIRATheme.Color.textMuted.opacity(0.28))
+        .frame(width: 42, height: 5)
+        .frame(maxWidth: .infinity)
+        .padding(.top, 10)
+        .padding(.bottom, 16)
+
+      Text("Profile options")
+        .font(.system(size: 18, weight: .semibold))
+        .foregroundStyle(MIRATheme.Color.textPrimary)
+        .padding(.horizontal, MIRATheme.Space.lg)
+        .padding(.bottom, 10)
+
+      Button(role: .destructive, action: onReport) {
+        UserProfileOptionRow(
+          title: "Report profile",
+          subtitle: "Send this profile to Captro moderation.",
+          systemImage: "flag",
+          tint: .red
+        )
+      }
+      .buttonStyle(.miraPress)
+
+      if isBlocked {
+        Button(action: onUnblock) {
+          UserProfileOptionRow(
+            title: "Unblock user",
+            subtitle: "Allow this profile to interact again.",
+            systemImage: "hand.raised.slash",
+            tint: MIRATheme.Color.forest
+          )
+        }
+        .buttonStyle(.miraPress)
+      } else {
+        Button(role: .destructive, action: onBlock) {
+          UserProfileOptionRow(
+            title: "Block user",
+            subtitle: "Stop messages and unwanted contact.",
+            systemImage: "hand.raised.fill",
+            tint: .red
+          )
+        }
+        .buttonStyle(.miraPress)
+      }
+
+      Spacer(minLength: 0)
+    }
+    .background(MIRATheme.Color.surface)
+  }
+}
+
+private struct UserProfileOptionRow: View {
+  let title: String
+  let subtitle: String
+  let systemImage: String
+  let tint: Color
+
+  var body: some View {
+    HStack(spacing: MIRATheme.Space.md) {
+      Image(systemName: systemImage)
+        .font(.system(size: 17, weight: .semibold))
+        .foregroundStyle(tint)
+        .frame(width: 38, height: 38)
+        .background(tint.opacity(0.10))
+        .clipShape(Circle())
+
+      VStack(alignment: .leading, spacing: 3) {
+        Text(title)
+          .font(.system(size: 16, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+        Text(subtitle)
+          .font(.system(size: 13, weight: .medium))
+          .foregroundStyle(MIRATheme.Color.textMuted)
+          .lineLimit(1)
+          .truncationMode(.tail)
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
+
+      Image(systemName: "chevron.right")
+        .font(.system(size: 12, weight: .bold))
+        .foregroundStyle(MIRATheme.Color.textMuted.opacity(0.65))
+    }
+    .padding(.horizontal, MIRATheme.Space.lg)
+    .frame(minHeight: 58)
+    .contentShape(Rectangle())
   }
 }
 
@@ -928,6 +1074,8 @@ final class ChatNativeModel: ObservableObject {
 public struct ChatNativeView: View {
   @StateObject private var model: ChatNativeModel
   @State private var showCreateGroup = false
+  @State private var openingConversationId: String?
+  @State private var activeConversationRoute: ChatOpenRoute?
   private let currentUserId: String
 
   public init(api: MIRAAPIClient, currentUserId: String = "") {
@@ -965,6 +1113,25 @@ public struct ChatNativeView: View {
       .background(MIRATheme.Color.appBackground)
       .miraScreenEnter(.tab)
       .task { await model.load() }
+      .background {
+        NavigationLink(
+          isActive: Binding(
+            get: { activeConversationRoute != nil },
+            set: { isActive in
+              if !isActive { activeConversationRoute = nil }
+            }
+          )
+        ) {
+          if let route = activeConversationRoute {
+            ConversationNativeView(title: route.title, model: route.model)
+          } else {
+            EmptyView()
+          }
+        } label: {
+          EmptyView()
+        }
+        .hidden()
+      }
       .miraBottomSheet(isPresented: $showCreateGroup, preferredHeightFraction: 0.76) { dismissCreateGroup in
         CreateGroupChatSheet(api: model.api, currentUserId: currentUserId, onCancel: dismissCreateGroup) {
           dismissCreateGroup()
@@ -1002,12 +1169,21 @@ public struct ChatNativeView: View {
 
   @ViewBuilder
   private func conversationCard(_ conversation: MIRAConversation) -> some View {
-    NavigationLink {
-      conversationDestination(conversation)
+    Button {
+      UIImpactFeedbackGenerator(style: .light).impactOccurred()
+      Task { await openConversation(conversation) }
     } label: {
-      ChatConversationRow(conversation: conversation)
+      ZStack(alignment: .trailing) {
+        ChatConversationRow(conversation: conversation)
+        if openingConversationId == conversation.id {
+          ProgressView()
+            .tint(MIRATheme.Color.textPrimary)
+            .padding(.trailing, MIRATheme.Space.md)
+        }
+      }
     }
     .buttonStyle(.plain)
+    .disabled(openingConversationId != nil)
     .padding(.horizontal, MIRATheme.Space.sm)
     .padding(.vertical, 8)
     .background(MIRATheme.Color.surface)
@@ -1018,15 +1194,28 @@ public struct ChatNativeView: View {
     }
   }
 
-  @ViewBuilder
-  private func conversationDestination(_ conversation: MIRAConversation) -> some View {
+  @MainActor
+  private func openConversation(_ conversation: MIRAConversation) async {
+    guard openingConversationId == nil else { return }
+    openingConversationId = conversation.id
+    defer { openingConversationId = nil }
+
+    let roomModel: ConversationNativeModel?
     if let groupId = conversation.groupId {
-      ConversationNativeView(groupId: groupId, title: conversation.displayName, api: model.api, currentUserId: currentUserId)
+      roomModel = ConversationNativeModel(kind: .group(groupId: groupId), api: model.api, currentUserId: currentUserId)
     } else if let peerId = conversation.otherUserId {
-      ConversationNativeView(peerId: peerId, title: conversation.displayName, api: model.api, currentUserId: currentUserId)
+      roomModel = ConversationNativeModel(kind: .direct(peerId: peerId), api: model.api, currentUserId: currentUserId)
     } else {
-      MIRAEmptyState(title: "Chat unavailable", message: "This conversation cannot be opened right now.", systemImage: "exclamationmark.bubble")
+      roomModel = nil
     }
+
+    guard let roomModel else { return }
+    await roomModel.load()
+    activeConversationRoute = ChatOpenRoute(
+      id: conversation.id,
+      title: conversation.displayName,
+      model: roomModel
+    )
   }
 
   private var chatListSkeleton: some View {
@@ -1046,6 +1235,12 @@ public struct ChatNativeView: View {
     }
     .redacted(reason: .placeholder)
   }
+}
+
+private struct ChatOpenRoute: Identifiable {
+  let id: String
+  let title: String
+  let model: ConversationNativeModel
 }
 
 private struct ChatConversationRow: View {

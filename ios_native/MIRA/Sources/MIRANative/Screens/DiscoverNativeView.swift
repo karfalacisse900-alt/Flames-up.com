@@ -281,7 +281,11 @@ public struct DiscoverNativeView: View {
             DispatchQueue.main.asyncAfter(deadline: .now() + MIRATransitionTiming.fullScreenClose) {
               reportSourcePost = nil
               reportTarget = target
-              isReportSheetPresented = true
+              DispatchQueue.main.async {
+                withAnimation(.spring(response: 0.30, dampingFraction: 0.90)) {
+                  isReportSheetPresented = true
+                }
+              }
             }
           }
         )
@@ -322,8 +326,10 @@ public struct DiscoverNativeView: View {
       title: "Report post",
       subtitle: post.titleText
     )
-    withAnimation(.spring(response: 0.30, dampingFraction: 0.90)) {
-      isReportSheetPresented = true
+    DispatchQueue.main.async {
+      withAnimation(.spring(response: 0.30, dampingFraction: 0.90)) {
+        isReportSheetPresented = true
+      }
     }
   }
 

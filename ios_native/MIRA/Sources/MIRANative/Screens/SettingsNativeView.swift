@@ -273,7 +273,6 @@ public struct SettingsNativeView: View {
         }
 
         SettingsCard(title: localization.string("settings.support")) {
-          SettingsLinkRow(title: "Help", subtitle: "Get support", systemImage: "questionmark.circle", url: MIRAProductionBackend.siteURL("help-support"))
           SettingsLinkRow(title: "Contact support", subtitle: "karfalacisse900@gmail.com", systemImage: "envelope", url: URL(string: "mailto:karfalacisse900@gmail.com")!)
         }
       }

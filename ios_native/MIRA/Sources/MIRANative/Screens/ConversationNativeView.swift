@@ -82,6 +82,7 @@ final class ConversationNativeModel: ObservableObject {
   func load() async {
     if messages.isEmpty, let cached: [MIRAMessage] = await MIRALocalJSONCache.load([MIRAMessage].self, key: messagesCacheKey) {
       messages = cached
+      prefetchMessageMedia(cached)
       MIRAPerformanceTimeline.markOnce("chat_room_first_content", detail: "cache")
     }
 
@@ -92,11 +93,13 @@ final class ConversationNativeModel: ObservableObject {
       case let .direct(peerId):
         let rows: [MIRAMessage] = try await api.get("/messages/\(peerId)")
         messages = rows
+        prefetchMessageMedia(rows)
         await MIRALocalJSONCache.save(rows, key: messagesCacheKey)
         presence = try? await api.get("/messages/presence/\(peerId)")
       case let .group(groupId):
         let response: MIRAGroupMessagesResponse = try await api.get("/group-chats/\(groupId)/messages")
         messages = response.messages
+        prefetchMessageMedia(response.messages)
         await MIRALocalJSONCache.save(response.messages, key: messagesCacheKey)
       }
       errorMessage = nil
@@ -290,6 +293,19 @@ final class ConversationNativeModel: ObservableObject {
       try Data(contentsOf: url)
     }.value
   }
+
+  private func prefetchMessageMedia(_ rows: [MIRAMessage]) {
+    let imageURLs = rows.suffix(24).compactMap { message -> String? in
+      let mediaType = message.mediaType?.lowercased()
+      guard mediaType == "image" else { return nil }
+      guard let mediaUrl = message.mediaUrl?.trimmingCharacters(in: .whitespacesAndNewlines), !mediaUrl.isEmpty else { return nil }
+      return mediaUrl
+    }
+    guard !imageURLs.isEmpty else { return }
+    Task.detached(priority: .utility) {
+      await MIRAImagePrefetcher.prefetch(urls: imageURLs, maxPixelSize: 760, limit: 12)
+    }
+  }
 }
 
 public struct ConversationNativeView: View {
@@ -298,6 +314,7 @@ public struct ConversationNativeView: View {
   @State private var showFileImporter = false
   @State private var showGIFPicker = false
   @State private var showAttachmentTray = false
+  @State private var showProfileOptions = false
   @State private var reportTarget: MIRAReportTarget?
   @State private var reportMessage: MIRAMessage?
   @State private var isReportSheetPresented = false
@@ -312,6 +329,11 @@ public struct ConversationNativeView: View {
   public init(groupId: String, title: String, api: MIRAAPIClient, currentUserId: String = "") {
     self.title = title
     _model = StateObject(wrappedValue: ConversationNativeModel(kind: .group(groupId: groupId), api: api, currentUserId: currentUserId))
+  }
+
+  init(title: String, model: ConversationNativeModel) {
+    self.title = title
+    _model = StateObject(wrappedValue: model)
   }
 
   public var body: some View {
@@ -354,6 +376,25 @@ public struct ConversationNativeView: View {
     .toolbar(.hidden, for: .tabBar)
     .task { await model.load() }
     .task { await model.pollPresence() }
+    .miraBottomSheet(isPresented: $showProfileOptions, preferredHeightFraction: 0.36, maxHeight: 340) { dismissOptions in
+      ChatProfileOptionsSheet(
+        isGroup: model.isGroup,
+        onVideoCall: {
+          dismissOptions()
+          startCall(mode: .video)
+        },
+        onReport: {
+          dismissOptions()
+          DispatchQueue.main.asyncAfter(deadline: .now() + MIRATransitionTiming.sheetClose) {
+            presentProfileReport()
+          }
+        },
+        onBlock: {
+          dismissOptions()
+          Task { _ = await model.blockPeer() }
+        }
+      )
+    }
     .miraBottomSheet(isPresented: $showGIFPicker, preferredHeightFraction: 0.72) { dismissGIFPicker in
       ChatGIFPickerSheet(api: model.api, onClose: dismissGIFPicker) { gif in
         dismissGIFPicker()
@@ -438,25 +479,12 @@ public struct ConversationNativeView: View {
         .accessibilityLabel("Video Call")
       }
 
-      Menu {
-        if model.peerId != nil {
-          Button {
-            startCall(mode: .video)
-          } label: {
-            Label("Video Call", systemImage: "video.fill")
+      Button {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        DispatchQueue.main.async {
+          withAnimation(.spring(response: 0.30, dampingFraction: 0.90)) {
+            showProfileOptions = true
           }
-          Button(role: .destructive) {
-            presentProfileReport()
-          } label: {
-            Label("Report profile", systemImage: "flag")
-          }
-          Button(role: .destructive) {
-            Task { _ = await model.blockPeer() }
-          } label: {
-            Label("Block user", systemImage: "hand.raised")
-          }
-        } else {
-          Text("Group chat")
         }
       } label: {
         Image(systemName: "ellipsis.vertical")
@@ -466,6 +494,7 @@ public struct ConversationNativeView: View {
           .contentShape(Rectangle())
       }
       .buttonStyle(.miraPress)
+      .accessibilityLabel("Chat options")
     }
     .padding(.horizontal, 12)
     .padding(.vertical, 10)
@@ -506,8 +535,10 @@ public struct ConversationNativeView: View {
       title: "Report profile",
       subtitle: title
     )
-    withAnimation(.spring(response: 0.30, dampingFraction: 0.90)) {
-      isReportSheetPresented = true
+    DispatchQueue.main.async {
+      withAnimation(.spring(response: 0.30, dampingFraction: 0.90)) {
+        isReportSheetPresented = true
+      }
     }
   }
 
@@ -521,8 +552,10 @@ public struct ConversationNativeView: View {
       title: "Report message",
       subtitle: message.content?.isEmpty == false ? message.content : "Media message"
     )
-    withAnimation(.spring(response: 0.30, dampingFraction: 0.90)) {
-      isReportSheetPresented = true
+    DispatchQueue.main.async {
+      withAnimation(.spring(response: 0.30, dampingFraction: 0.90)) {
+        isReportSheetPresented = true
+      }
     }
   }
 
@@ -821,6 +854,90 @@ public struct ConversationNativeView: View {
     }
   }
 
+}
+
+private struct ChatProfileOptionsSheet: View {
+  let isGroup: Bool
+  let onVideoCall: () -> Void
+  let onReport: () -> Void
+  let onBlock: () -> Void
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      Capsule()
+        .fill(Color.black.opacity(0.20))
+        .frame(width: 42, height: 5)
+        .frame(maxWidth: .infinity)
+        .padding(.top, 10)
+        .padding(.bottom, 16)
+
+      Text(isGroup ? "Chat options" : "Profile options")
+        .font(.system(size: 18, weight: .semibold))
+        .foregroundStyle(.black)
+        .padding(.horizontal, MIRATheme.Space.lg)
+        .padding(.bottom, 10)
+
+      if !isGroup {
+        Button(action: onVideoCall) {
+          ChatProfileOptionRow(title: "Video Call", subtitle: "Start an in-app Captro call.", systemImage: "video.fill", tint: .black)
+        }
+        .buttonStyle(.miraPress)
+
+        Button(role: .destructive, action: onReport) {
+          ChatProfileOptionRow(title: "Report profile", subtitle: "Send this profile to moderation.", systemImage: "flag", tint: .red)
+        }
+        .buttonStyle(.miraPress)
+
+        Button(role: .destructive, action: onBlock) {
+          ChatProfileOptionRow(title: "Block user", subtitle: "Stop messages and unwanted contact.", systemImage: "hand.raised.fill", tint: .red)
+        }
+        .buttonStyle(.miraPress)
+      } else {
+        ChatProfileOptionRow(title: "Group chat", subtitle: "Group moderation tools are coming soon.", systemImage: "person.3.fill", tint: .black.opacity(0.68))
+          .opacity(0.72)
+      }
+
+      Spacer(minLength: 0)
+    }
+    .background(ChatRoomPalette.composer)
+  }
+}
+
+private struct ChatProfileOptionRow: View {
+  let title: String
+  let subtitle: String
+  let systemImage: String
+  let tint: Color
+
+  var body: some View {
+    HStack(spacing: MIRATheme.Space.md) {
+      Image(systemName: systemImage)
+        .font(.system(size: 17, weight: .semibold))
+        .foregroundStyle(tint)
+        .frame(width: 38, height: 38)
+        .background(tint.opacity(0.10))
+        .clipShape(Circle())
+
+      VStack(alignment: .leading, spacing: 3) {
+        Text(title)
+          .font(.system(size: 16, weight: .semibold))
+          .foregroundStyle(.black)
+        Text(subtitle)
+          .font(.system(size: 13, weight: .medium))
+          .foregroundStyle(Color.black.opacity(0.56))
+          .lineLimit(1)
+          .truncationMode(.tail)
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
+
+      Image(systemName: "chevron.right")
+        .font(.system(size: 12, weight: .bold))
+        .foregroundStyle(Color.black.opacity(0.32))
+    }
+    .padding(.horizontal, MIRATheme.Space.lg)
+    .frame(minHeight: 58)
+    .contentShape(Rectangle())
+  }
 }
 
 private struct VoiceRecordingComposerBar: View {

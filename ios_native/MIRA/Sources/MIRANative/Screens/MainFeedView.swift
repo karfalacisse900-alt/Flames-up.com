@@ -878,24 +878,30 @@ public struct MainFeedView: View {
     UIImpactFeedbackGenerator(style: .light).impactOccurred()
     MIRAPerformanceTimeline.mark("comments_open", detail: "post")
     activeCommentsPost = post
-    withAnimation(.spring(response: 0.32, dampingFraction: 0.92)) {
-      isCommentsPresented = true
+    DispatchQueue.main.async {
+      withAnimation(.spring(response: 0.32, dampingFraction: 0.92)) {
+        isCommentsPresented = true
+      }
     }
   }
 
   private func presentSaveSheet(for post: MIRAPost) {
     UIImpactFeedbackGenerator(style: .light).impactOccurred()
     saveTargetPost = post
-    withAnimation(.spring(response: 0.30, dampingFraction: 0.90)) {
-      isSaveSheetPresented = true
+    DispatchQueue.main.async {
+      withAnimation(.spring(response: 0.30, dampingFraction: 0.90)) {
+        isSaveSheetPresented = true
+      }
     }
   }
 
   private func presentPostOptions(for post: MIRAPost) {
     UIImpactFeedbackGenerator(style: .light).impactOccurred()
     postOptionsTarget = post
-    withAnimation(.spring(response: 0.30, dampingFraction: 0.90)) {
-      isPostOptionsPresented = true
+    DispatchQueue.main.async {
+      withAnimation(.spring(response: 0.30, dampingFraction: 0.90)) {
+        isPostOptionsPresented = true
+      }
     }
   }
 
@@ -917,8 +923,10 @@ public struct MainFeedView: View {
       title: "Report post",
       subtitle: post.titleText
     )
-    withAnimation(.spring(response: 0.30, dampingFraction: 0.90)) {
-      isReportSheetPresented = true
+    DispatchQueue.main.async {
+      withAnimation(.spring(response: 0.30, dampingFraction: 0.90)) {
+        isReportSheetPresented = true
+      }
     }
   }
 
@@ -931,8 +939,10 @@ public struct MainFeedView: View {
       title: "Report comment",
       subtitle: comment.text
     )
-    withAnimation(.spring(response: 0.30, dampingFraction: 0.90)) {
-      isReportSheetPresented = true
+    DispatchQueue.main.async {
+      withAnimation(.spring(response: 0.30, dampingFraction: 0.90)) {
+        isReportSheetPresented = true
+      }
     }
   }
 
