@@ -199,6 +199,10 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
   private var initialZoomFactor: CGFloat = 1
   private var longPressDidRecord = false
   private var capturedMedia: MIRAPickedMedia?
+  private var reviewVideoPlayer: AVPlayer?
+  private var reviewVideoLayer: AVPlayerLayer?
+  private var reviewVideoURL: URL?
+  private var reviewVideoEndObserver: NSObjectProtocol?
 
   private let previewContainer = UIView()
   private let gridOverlay = MIRACameraGridOverlayView()
@@ -286,6 +290,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
   override func viewDidLayoutSubviews() {
     super.viewDidLayoutSubviews()
     previewLayer.frame = previewContainer.bounds
+    reviewVideoLayer?.frame = capturedImageView.bounds
   }
 
   override func viewWillDisappear(_ animated: Bool) {
@@ -295,6 +300,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     if movieOutput.isRecording {
       movieOutput.stopRecording()
     }
+    cleanupReviewVideoPlayer()
     sessionQueue.async { [session] in
       if session.isRunning {
         session.stopRunning()
@@ -383,7 +389,6 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     configureCircleButton(closeButton, systemImage: "xmark", action: #selector(cancelTapped))
     configureCircleButton(flipButton, systemImage: "arrow.triangle.2.circlepath.camera", action: #selector(flipCamera))
     configureCircleButton(flashButton, systemImage: flashSetting.systemImage, action: #selector(cycleFlash))
-    configureCircleButton(timerButton, systemImage: "timer", action: #selector(cycleTimer))
     configureCircleButton(gridButton, systemImage: "music.note", action: #selector(musicTapped))
     configureCircleButton(galleryRailButton, systemImage: "photo.on.rectangle", action: #selector(openGallery))
     configureCircleButton(filtersButton, systemImage: "wand.and.stars", action: #selector(filtersTapped))
@@ -397,7 +402,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     rightRail.spacing = 12
     rightRail.alignment = .center
     rightRail.translatesAutoresizingMaskIntoConstraints = false
-    [flipButton, flashButton, timerButton, gridButton, editRailButton].forEach {
+    [flipButton, flashButton, gridButton, editRailButton].forEach {
       rightRail.addArrangedSubview($0)
       $0.widthAnchor.constraint(equalToConstant: 48).isActive = true
       $0.heightAnchor.constraint(equalToConstant: 48).isActive = true
@@ -1292,6 +1297,11 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
   }
 
   @objc private func focusAndExpose(_ recognizer: UITapGestureRecognizer) {
+    if capturedMedia?.kind == .video {
+      toggleReviewVideoPlayback()
+      return
+    }
+
     let point = recognizer.location(in: previewContainer)
     showFocusRing(at: point)
     let devicePoint = previewLayer.captureDevicePointConverted(fromLayerPoint: point)
@@ -1342,6 +1352,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
   }
 
   @objc private func retakeCapturedMedia() {
+    cleanupReviewVideoPlayer()
     capturedMedia = nil
     lastAppliedEditedMediaSignature = nil
     resetInlineEdits()
@@ -1377,6 +1388,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
   }
 
   private func showCapturedMedia(_ media: MIRAPickedMedia, thumbnail: UIImage? = nil) {
+    cleanupReviewVideoPlayer()
     capturedMedia = media
     lastAppliedEditedMediaSignature = editedMediaSignature(media)
     resetInlineEdits(keepMedia: true)
@@ -1390,15 +1402,99 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
       capturedOriginalImage = nil
       capturedImageView.image = thumbnail
       setReviewMode(true)
+      prepareReviewVideoPlayer(for: media)
     } else {
       capturedOriginalImage = nil
       capturedImageView.image = nil
       capturedImageView.backgroundColor = UIColor.black.withAlphaComponent(0.92)
       setReviewMode(true)
+      prepareReviewVideoPlayer(for: media)
       makeVideoThumbnail(from: media.data) { [weak self] image in
         guard let self, self.capturedMedia?.fileName == media.fileName else { return }
         self.capturedImageView.image = image
       }
+    }
+  }
+
+  private func prepareReviewVideoPlayer(for media: MIRAPickedMedia) {
+    guard media.kind == .video else { return }
+
+    let ext = URL(fileURLWithPath: media.fileName).pathExtension.isEmpty
+      ? "mov"
+      : URL(fileURLWithPath: media.fileName).pathExtension
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).\(ext)")
+    do {
+      try media.data.write(to: url, options: [.atomic])
+    } catch {
+      showTransientMessage("Video preview is unavailable.")
+      return
+    }
+
+    let player = AVPlayer(url: url)
+    player.isMuted = true
+    player.actionAtItemEnd = .pause
+
+    let layer = AVPlayerLayer(player: player)
+    layer.videoGravity = .resizeAspectFill
+    layer.frame = capturedImageView.bounds
+    layer.isHidden = true
+    capturedImageView.layer.addSublayer(layer)
+
+    reviewVideoURL = url
+    reviewVideoPlayer = player
+    reviewVideoLayer = layer
+    reviewVideoEndObserver = NotificationCenter.default.addObserver(
+      forName: .AVPlayerItemDidPlayToEndTime,
+      object: player.currentItem,
+      queue: .main
+    ) { [weak self] _ in
+      self?.pauseReviewVideo(resetToStart: true)
+    }
+  }
+
+  private func toggleReviewVideoPlayback() {
+    guard let player = reviewVideoPlayer else {
+      if let capturedMedia, capturedMedia.kind == .video {
+        prepareReviewVideoPlayer(for: capturedMedia)
+      }
+      return
+    }
+
+    if player.timeControlStatus == .playing {
+      pauseReviewVideo(resetToStart: false)
+    } else {
+      reviewVideoLayer?.isHidden = false
+      capturedPlayIcon.isHidden = true
+      if let duration = player.currentItem?.duration,
+         duration.seconds.isFinite,
+         player.currentTime().seconds >= duration.seconds {
+        player.seek(to: .zero)
+      }
+      player.play()
+    }
+  }
+
+  private func pauseReviewVideo(resetToStart: Bool) {
+    reviewVideoPlayer?.pause()
+    if resetToStart {
+      reviewVideoPlayer?.seek(to: .zero)
+    }
+    reviewVideoLayer?.isHidden = true
+    capturedPlayIcon.isHidden = capturedMedia?.kind != .video
+  }
+
+  private func cleanupReviewVideoPlayer() {
+    reviewVideoPlayer?.pause()
+    reviewVideoPlayer = nil
+    reviewVideoLayer?.removeFromSuperlayer()
+    reviewVideoLayer = nil
+    if let reviewVideoEndObserver {
+      NotificationCenter.default.removeObserver(reviewVideoEndObserver)
+      self.reviewVideoEndObserver = nil
+    }
+    if let reviewVideoURL {
+      try? FileManager.default.removeItem(at: reviewVideoURL)
+      self.reviewVideoURL = nil
     }
   }
 

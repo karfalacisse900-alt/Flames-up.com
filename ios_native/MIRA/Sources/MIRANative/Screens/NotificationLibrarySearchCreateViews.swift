@@ -805,22 +805,7 @@ public struct CreatePostNativeView: View {
   private var postDetailsMediaStrip: some View {
     HStack(spacing: 14) {
       if let first = mediaItems.first {
-        postComposerMedia(first, width: 104, height: 108, cornerRadius: 14)
-          .overlay(alignment: .bottomLeading) {
-            Text("Cover")
-              .font(.system(size: 15, weight: .semibold))
-              .foregroundStyle(.white)
-              .padding(.horizontal, 10)
-              .frame(height: 31)
-              .background(.black.opacity(0.52))
-              .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-              .padding(8)
-          }
-          .onTapGesture {
-            if first.kind == .image {
-              editingMedia = MIRAEditorPresentation(media: first, replacementIndex: 0)
-            }
-          }
+        postDetailsCoverTile(first)
       }
 
       PhotosPicker(selection: $pickerItems, maxSelectionCount: 10, matching: .any(of: [.images, .videos])) {
@@ -833,6 +818,30 @@ public struct CreatePostNativeView: View {
               .foregroundStyle(MIRATheme.Color.textMuted.opacity(0.82))
           }
       }
+    }
+  }
+
+  @ViewBuilder
+  private func postDetailsCoverTile(_ first: MIRAPickedMedia) -> some View {
+    let tile = postComposerMedia(first, width: 104, height: 108, cornerRadius: 14)
+      .overlay(alignment: .bottomLeading) {
+        Text("Cover")
+          .font(.system(size: 15, weight: .semibold))
+          .foregroundStyle(.white)
+          .padding(.horizontal, 10)
+          .frame(height: 31)
+          .background(.black.opacity(0.52))
+          .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+          .padding(8)
+          .allowsHitTesting(false)
+      }
+
+    if first.kind == .image {
+      tile.onTapGesture {
+        editingMedia = MIRAEditorPresentation(media: first, replacementIndex: 0)
+      }
+    } else {
+      tile
     }
   }
 
@@ -1082,7 +1091,10 @@ private struct MIRAAudiusMusicPickerSheet: View {
   @FocusState private var isSearchFocused: Bool
   @State private var query = ""
   @State private var tracks: [MIRAAudiusTrack] = []
-  @State private var isLoading = false
+  @State private var favoriteTracks: [MIRAAudiusTrack] = []
+  @State private var favoriteTrackIds: Set<String> = []
+  @State private var favoriteMutationIds: Set<String> = []
+  @State private var isLoading = true
   @State private var errorMessage: String?
 
   var body: some View {
@@ -1135,7 +1147,7 @@ private struct MIRAAudiusMusicPickerSheet: View {
         .padding(.top, MIRATheme.Space.md)
         .padding(.bottom, MIRATheme.Space.sm)
 
-        if isLoading && tracks.isEmpty {
+        if isLoading && tracks.isEmpty && favoriteTracks.isEmpty {
           ScrollView {
             LazyVStack(spacing: 0) {
               ForEach(0..<8, id: \.self) { _ in
@@ -1143,7 +1155,7 @@ private struct MIRAAudiusMusicPickerSheet: View {
               }
             }
           }
-        } else if tracks.isEmpty {
+        } else if tracks.isEmpty && favoriteTracks.isEmpty {
           VStack(spacing: MIRATheme.Space.sm) {
             Image(systemName: "music.note.list")
               .font(.system(size: 30, weight: .semibold))
@@ -1157,8 +1169,16 @@ private struct MIRAAudiusMusicPickerSheet: View {
           .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
           ScrollView {
-            LazyVStack(spacing: 0) {
-              ForEach(tracks) { track in
+            LazyVStack(alignment: .leading, spacing: 0) {
+              if shouldShowFavoritesSection {
+                musicSectionHeader("Favorites")
+                ForEach(favoriteTracks) { track in
+                  musicTrackRow(track)
+                }
+                musicSectionHeader("Trending")
+              }
+
+              ForEach(visibleTracks) { track in
                 musicTrackRow(track)
               }
             }
@@ -1184,8 +1204,27 @@ private struct MIRAAudiusMusicPickerSheet: View {
           }
         }
       }
-      .task { await loadTrending() }
+      .task { await loadInitialMusic() }
     }
+  }
+
+  private var shouldShowFavoritesSection: Bool {
+    !favoriteTracks.isEmpty && query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+  }
+
+  private var visibleTracks: [MIRAAudiusTrack] {
+    guard shouldShowFavoritesSection else { return tracks }
+    return tracks.filter { !favoriteTrackIds.contains($0.resolvedTrackId) }
+  }
+
+  private func musicSectionHeader(_ title: String) -> some View {
+    Text(title)
+      .font(.system(size: 12, weight: .bold))
+      .foregroundStyle(MIRATheme.Color.textMuted)
+      .textCase(.uppercase)
+      .padding(.horizontal, MIRATheme.Space.md)
+      .padding(.top, title == "Favorites" ? MIRATheme.Space.sm : MIRATheme.Space.md)
+      .padding(.bottom, 6)
   }
 
   private var musicSkeletonRow: some View {
@@ -1209,11 +1248,12 @@ private struct MIRAAudiusMusicPickerSheet: View {
   }
 
   private func musicTrackRow(_ track: MIRAAudiusTrack) -> some View {
-    Button {
-      selectedTrack = track
-      UIImpactFeedbackGenerator(style: .light).impactOccurred()
-    } label: {
-      HStack(spacing: MIRATheme.Space.sm) {
+    let trackId = track.resolvedTrackId
+    let isSelected = selectedTrack?.resolvedTrackId == trackId
+    let isFavorite = favoriteTrackIds.contains(trackId)
+    let isMutating = favoriteMutationIds.contains(trackId)
+
+    return HStack(spacing: MIRATheme.Space.sm) {
         if let artwork = track.artworkUrl, !artwork.isEmpty {
           RemoteMediaView(url: artwork, isVideo: false)
             .frame(width: 52, height: 52)
@@ -1238,7 +1278,7 @@ private struct MIRAAudiusMusicPickerSheet: View {
             Text(track.displayArtist)
               .lineLimit(1)
             if let duration = durationText(track.duration) {
-              Text("• \(duration)")
+              Text("- \(duration)")
             }
           }
           .font(.system(size: 12, weight: .medium))
@@ -1247,20 +1287,61 @@ private struct MIRAAudiusMusicPickerSheet: View {
 
         Spacer(minLength: MIRATheme.Space.sm)
 
-        Image(systemName: selectedTrack?.resolvedTrackId == track.resolvedTrackId ? "checkmark.circle.fill" : "plus.circle")
-          .font(.system(size: 22, weight: .semibold))
-          .foregroundStyle(selectedTrack?.resolvedTrackId == track.resolvedTrackId ? MIRATheme.Color.forest : MIRATheme.Color.textMuted)
+        Button {
+          Task { await toggleFavorite(track) }
+        } label: {
+          Image(systemName: isFavorite ? "heart.fill" : "heart")
+            .font(.system(size: 20, weight: .semibold))
+            .foregroundStyle(isFavorite ? Color.red.opacity(0.86) : MIRATheme.Color.textMuted)
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(isMutating)
+
+        Button {
+          selectTrackAndClose(track)
+        } label: {
+          Image(systemName: isSelected ? "checkmark.circle.fill" : "plus.circle.fill")
+            .font(.system(size: 23, weight: .semibold))
+            .foregroundStyle(isSelected ? MIRATheme.Color.forest : MIRATheme.Color.textPrimary)
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
       }
       .padding(.horizontal, MIRATheme.Space.md)
       .padding(.vertical, 10)
       .contentShape(Rectangle())
-    }
-    .buttonStyle(.plain)
+  }
+
+  private func selectTrackAndClose(_ track: MIRAAudiusTrack) {
+    selectedTrack = track
+    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    close()
   }
 
   @MainActor
-  private func loadTrending() async {
-    guard !isLoading else { return }
+  private func loadInitialMusic() async {
+    await loadFavorites()
+    await loadTrending(force: true)
+  }
+
+  @MainActor
+  private func loadFavorites() async {
+    do {
+      let response: MIRAAudiusTrackResponse = try await api.get("/music/audius/favorites")
+      favoriteTracks = response.tracks
+      favoriteTrackIds = Set(response.tracks.map(\.resolvedTrackId))
+    } catch {
+      favoriteTracks = []
+      favoriteTrackIds = []
+    }
+  }
+
+  @MainActor
+  private func loadTrending(force: Bool = false) async {
+    guard force || !isLoading else { return }
     isLoading = true
     defer { isLoading = false }
     do {
@@ -1299,9 +1380,57 @@ private struct MIRAAudiusMusicPickerSheet: View {
     }
   }
 
+  @MainActor
+  private func toggleFavorite(_ track: MIRAAudiusTrack) async {
+    let trackId = track.resolvedTrackId
+    guard !trackId.isEmpty, !favoriteMutationIds.contains(trackId) else { return }
+    favoriteMutationIds.insert(trackId)
+    defer { favoriteMutationIds.remove(trackId) }
+
+    let wasFavorite = favoriteTrackIds.contains(trackId)
+    if wasFavorite {
+      favoriteTrackIds.remove(trackId)
+      favoriteTracks.removeAll { $0.resolvedTrackId == trackId }
+    } else {
+      favoriteTrackIds.insert(trackId)
+      favoriteTracks.removeAll { $0.resolvedTrackId == trackId }
+      favoriteTracks.insert(track, at: 0)
+    }
+
+    do {
+      if wasFavorite {
+        let encoded = encodedPathComponent(trackId)
+        let _: EmptyResponse = try await api.delete("/music/audius/favorites/\(encoded)")
+      } else {
+        let _: MIRAAudiusFavoriteSaveResponse = try await api.post(
+          "/music/audius/favorites",
+          body: MIRAAudiusFavoriteBody(track: track)
+        )
+      }
+      UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    } catch {
+      if wasFavorite {
+        favoriteTrackIds.insert(trackId)
+        favoriteTracks.removeAll { $0.resolvedTrackId == trackId }
+        favoriteTracks.insert(track, at: 0)
+        errorMessage = "Could not remove this favorite."
+      } else {
+        favoriteTrackIds.remove(trackId)
+        favoriteTracks.removeAll { $0.resolvedTrackId == trackId }
+        errorMessage = "Could not save this favorite."
+      }
+    }
+  }
+
   private func durationText(_ seconds: Int?) -> String? {
     guard let seconds, seconds > 0 else { return nil }
     return "\(seconds / 60):\(String(format: "%02d", seconds % 60))"
+  }
+
+  private func encodedPathComponent(_ value: String) -> String {
+    var allowed = CharacterSet.urlPathAllowed
+    allowed.remove(charactersIn: "/?#[]@!$&'()*+,;=")
+    return value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
   }
 
   private func close() {
@@ -1311,6 +1440,41 @@ private struct MIRAAudiusMusicPickerSheet: View {
       dismiss()
     }
   }
+}
+
+private struct MIRAAudiusFavoriteBody: Encodable {
+  let id: String
+  let trackId: String
+  let title: String
+  let artist: String
+  let artistId: String?
+  let artistHandle: String?
+  let artistProfileImage: String?
+  let artworkUrl: String?
+  let duration: Int?
+  let genre: String?
+  let playCount: Int?
+  let favoriteCount: Int?
+
+  init(track: MIRAAudiusTrack) {
+    id = track.resolvedTrackId
+    trackId = track.resolvedTrackId
+    title = track.displayTitle
+    artist = track.displayArtist
+    artistId = track.artistId
+    artistHandle = track.artistHandle
+    artistProfileImage = track.artistProfileImage
+    artworkUrl = track.artworkUrl
+    duration = track.duration
+    genre = track.genre
+    playCount = track.playCount
+    favoriteCount = track.favoriteCount
+  }
+}
+
+private struct MIRAAudiusFavoriteSaveResponse: Decodable {
+  let favorite: Bool
+  let track: MIRAAudiusTrack?
 }
 
 private struct PostLocationPickerSheet: View {
