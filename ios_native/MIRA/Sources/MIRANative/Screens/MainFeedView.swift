@@ -1107,7 +1107,7 @@ private struct MainNativePostCard: View {
     } else {
       VStack(spacing: 7) {
         TabView(selection: $selectedMediaIndex) {
-          ForEach(Array(mediaURLs.enumerated()), id: \.element) { index, url in
+          ForEach(Array(mediaURLs.enumerated()), id: \.offset) { index, url in
             RemoteMediaView(
               url: url,
               isVideo: url.isVideoURL,
