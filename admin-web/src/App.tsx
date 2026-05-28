@@ -15,7 +15,7 @@ import type {
 } from './types';
 
 type ViewKey = 'dashboard' | 'reports' | 'posts' | 'comments' | 'users' | 'messages' | 'discover' | 'audit' | 'settings';
-type PostAction = 'remove' | 'restore' | 'discover' | 'safe';
+type PostAction = 'remove' | 'restore' | 'discover' | 'safe' | 'clearLocation';
 
 type ActionDialogState = {
   title: string;
@@ -787,6 +787,7 @@ function PostModerationPage({
         if (action === 'restore') await AdminApi.restorePost(token, post.id, body);
         if (action === 'discover') await AdminApi.removeFromDiscover(token, post.id, body);
         if (action === 'safe') await AdminApi.markPostSafe(token, post.id, body);
+        if (action === 'clearLocation') await AdminApi.clearPostLocation(token, post.id, body);
         await list.reload();
         if (selectedPostId) await detail.reload();
       },
@@ -953,9 +954,20 @@ function PostDetailPanel({
         <strong>{titleCase(post.category_source || 'fallback')}</strong>
         <span>Visibility</span>
         <strong>{titleCase(post.visibility)}</strong>
+        <span>Display location</span>
+        <strong>{post.display_location_label ? `${post.display_location_label} (${titleCase(post.display_location_visibility || 'hidden')})` : 'Hidden'}</strong>
+        <span>Exact place</span>
+        <strong>{post.exact_place?.name || 'None'}</strong>
         <span>Counts</span>
         <strong>{post.likes_count || 0} likes / {post.comments_count || 0} comments / {post.saves_count || 0} saves</strong>
       </div>
+      {post.exact_place?.name || post.exact_place?.formatted_address ? (
+        <div className="preview-box">
+          <strong>Place tag</strong>
+          <p>{[post.exact_place?.name, post.exact_place?.formatted_address].filter(Boolean).join(' - ')}</p>
+          <span className="muted">{post.exact_place?.provider || 'apple_mapkit'} / {post.exact_place?.category || 'uncategorized'}</span>
+        </div>
+      ) : null}
       <div className="preview-box">
         <strong>Discover tags</strong>
         <p>{post.tags?.length ? post.tags.map((tag) => `#${tag}`).join(' ') : 'No category tags saved yet.'}</p>
@@ -984,6 +996,9 @@ function PostDetailPanel({
       </div>
       <div className="action-grid">
         <button className="secondary-button" onClick={onViewAuthor}>View author</button>
+        {(post.display_location_label || post.exact_place?.name) && can(session, 'content:write') ? (
+          <button className="secondary-button" onClick={() => onAction(post, 'Clear location', 'clearLocation')}>Clear location</button>
+        ) : null}
         {can(session, 'content:write') ? <button className="secondary-button" onClick={() => onAction(post, 'Mark safe', 'safe')}>Mark safe</button> : null}
         {can(session, 'content:write') && post.status === 'removed'
           ? <button className="primary-button" onClick={() => onAction(post, 'Restore', 'restore')}>Restore</button>

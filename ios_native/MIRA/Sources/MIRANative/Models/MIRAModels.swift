@@ -64,6 +64,7 @@ public struct MIRAUser: Codable, Identifiable, Hashable {
   public let fullName: String?
   public let profileImage: String?
   public let bio: String?
+  public let city: String?
   public let email: String?
   public let phone: String?
   public let phoneVerified: Bool?
@@ -114,6 +115,12 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
   public let mediaTypes: FlexibleStringArray?
   public let mediaDimensions: FlexibleMediaDimensions?
   public let location: String?
+  public let displayCity: String?
+  public let displayRegion: String?
+  public let displayCountry: String?
+  public let displayLocationLabel: String?
+  public let displayLocationSource: String?
+  public let displayLocationVisibility: String?
   public let postType: String?
   public let primaryCategory: String?
   public let category: String?
@@ -124,6 +131,13 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
   public let visibility: String?
   public let placeId: String?
   public let placeName: String?
+  public let placeProvider: String?
+  public let placeProviderId: String?
+  public let placeFormattedAddress: String?
+  public let placeCategory: String?
+  public let placeCity: String?
+  public let placeRegion: String?
+  public let placeCountry: String?
   public let placeLat: Double?
   public let placeLng: Double?
   public let audioProvider: String?
@@ -200,20 +214,25 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
 
   public var placeDisplayName: String? {
     let name = placeName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-    if !name.isEmpty { return name }
-    let fallback = location?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-    return fallback.isEmpty ? nil : fallback
+    return name.isEmpty ? nil : name
   }
 
   public var placeDisplaySubtitle: String? {
-    guard
-      let location,
-      !location.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-      location.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() != (placeDisplayName ?? "").lowercased()
-    else {
-      return nil
-    }
-    return location.trimmingCharacters(in: .whitespacesAndNewlines)
+    let address = (placeFormattedAddress ?? location)?
+      .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    guard !address.isEmpty, address.lowercased() != (placeDisplayName ?? "").lowercased() else { return nil }
+    return address
+  }
+
+  public var displayLocationText: String? {
+    let visibility = (displayLocationVisibility ?? "hidden").lowercased()
+    guard visibility != "hidden" else { return nil }
+    let label = displayLocationLabel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    if !label.isEmpty { return label }
+    let parts = [displayCity, displayRegion, displayCountry]
+      .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { !$0.isEmpty }
+    return parts.isEmpty ? nil : parts.joined(separator: ", ")
   }
 
   public var audioDisplayTitle: String? {
@@ -281,6 +300,12 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
       mediaTypes: mediaTypes,
       mediaDimensions: mediaDimensions,
       location: location,
+      displayCity: displayCity,
+      displayRegion: displayRegion,
+      displayCountry: displayCountry,
+      displayLocationLabel: displayLocationLabel,
+      displayLocationSource: displayLocationSource,
+      displayLocationVisibility: displayLocationVisibility,
       postType: postType,
       primaryCategory: primaryCategory,
       category: category,
@@ -291,6 +316,13 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
       visibility: visibility,
       placeId: placeId,
       placeName: placeName,
+      placeProvider: placeProvider,
+      placeProviderId: placeProviderId,
+      placeFormattedAddress: placeFormattedAddress,
+      placeCategory: placeCategory,
+      placeCity: placeCity,
+      placeRegion: placeRegion,
+      placeCountry: placeCountry,
       placeLat: placeLat,
       placeLng: placeLng,
       audioProvider: audioProvider,
@@ -336,6 +368,12 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
       mediaTypes: mediaTypes,
       mediaDimensions: mediaDimensions,
       location: location,
+      displayCity: displayCity,
+      displayRegion: displayRegion,
+      displayCountry: displayCountry,
+      displayLocationLabel: displayLocationLabel,
+      displayLocationSource: displayLocationSource,
+      displayLocationVisibility: displayLocationVisibility,
       postType: postType,
       primaryCategory: primaryCategory,
       category: category,
@@ -346,6 +384,13 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
       visibility: visibility,
       placeId: placeId,
       placeName: placeName,
+      placeProvider: placeProvider,
+      placeProviderId: placeProviderId,
+      placeFormattedAddress: placeFormattedAddress,
+      placeCategory: placeCategory,
+      placeCity: placeCity,
+      placeRegion: placeRegion,
+      placeCountry: placeCountry,
       placeLat: placeLat,
       placeLng: placeLng,
       audioProvider: audioProvider,
@@ -714,6 +759,7 @@ public struct MIRAComment: Decodable, Identifiable, Hashable {
           fullName: fullName,
           profileImage: profileImage,
           bio: nil,
+          city: nil,
           email: nil,
           phone: nil,
           phoneVerified: nil,
@@ -1076,9 +1122,22 @@ public struct CreatePostBody: Encodable {
   public let mediaDimensions: [MIRAMediaDimension]
   public let editorOverlays: [MIRAEditorUploadMetadata]?
   public let location: String?
+  public let displayCity: String?
+  public let displayRegion: String?
+  public let displayCountry: String?
+  public let displayLocationLabel: String?
+  public let displayLocationSource: String?
+  public let displayLocationVisibility: String?
   public let postType: String?
   public let placeId: String?
   public let placeName: String?
+  public let placeProvider: String?
+  public let placeProviderId: String?
+  public let placeFormattedAddress: String?
+  public let placeCategory: String?
+  public let placeCity: String?
+  public let placeRegion: String?
+  public let placeCountry: String?
   public let placeLat: Double?
   public let placeLng: Double?
   public let taggedUsers: [MIRATaggedUserPayload]?
@@ -1106,9 +1165,22 @@ public struct CreatePostBody: Encodable {
     mediaDimensions: [MIRAMediaDimension],
     editorOverlays: [MIRAEditorUploadMetadata]? = nil,
     location: String? = nil,
+    displayCity: String? = nil,
+    displayRegion: String? = nil,
+    displayCountry: String? = nil,
+    displayLocationLabel: String? = nil,
+    displayLocationSource: String? = nil,
+    displayLocationVisibility: String? = nil,
     postType: String? = nil,
     placeId: String? = nil,
     placeName: String? = nil,
+    placeProvider: String? = nil,
+    placeProviderId: String? = nil,
+    placeFormattedAddress: String? = nil,
+    placeCategory: String? = nil,
+    placeCity: String? = nil,
+    placeRegion: String? = nil,
+    placeCountry: String? = nil,
     placeLat: Double? = nil,
     placeLng: Double? = nil,
     taggedUsers: [MIRATaggedUserPayload]? = nil,
@@ -1135,9 +1207,22 @@ public struct CreatePostBody: Encodable {
     self.mediaDimensions = mediaDimensions
     self.editorOverlays = editorOverlays
     self.location = location
+    self.displayCity = displayCity
+    self.displayRegion = displayRegion
+    self.displayCountry = displayCountry
+    self.displayLocationLabel = displayLocationLabel
+    self.displayLocationSource = displayLocationSource
+    self.displayLocationVisibility = displayLocationVisibility
     self.postType = postType
     self.placeId = placeId
     self.placeName = placeName
+    self.placeProvider = placeProvider
+    self.placeProviderId = placeProviderId
+    self.placeFormattedAddress = placeFormattedAddress
+    self.placeCategory = placeCategory
+    self.placeCity = placeCity
+    self.placeRegion = placeRegion
+    self.placeCountry = placeCountry
     self.placeLat = placeLat
     self.placeLng = placeLng
     self.taggedUsers = taggedUsers

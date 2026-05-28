@@ -1560,10 +1560,10 @@ private struct MainNativePostCard: View {
   }
 
   private var authorSubtitle: String? {
-    let location = cleanedLocation(post.location)
-      ?? cleanedLocation(post.placeDisplaySubtitle)
-      ?? cleanedLocation(post.placeDisplayName)
-    return location
+    let username = cleanedUsername(post.userUsername)
+    let location = cleanedLocation(post.displayLocationText)
+    let parts = [username, location].compactMap { $0 }
+    return parts.isEmpty ? nil : parts.joined(separator: " · ")
   }
 
   private func cleanedLocation(_ value: String?) -> String? {
@@ -1572,6 +1572,14 @@ private struct MainNativePostCard: View {
       .replacingOccurrences(of: #"\s*,\s*"#, with: ", ", options: .regularExpression) ?? ""
     guard !clean.isEmpty else { return nil }
     return clean
+  }
+
+  private func cleanedUsername(_ value: String?) -> String? {
+    let clean = value?
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+      .replacingOccurrences(of: "^@+", with: "", options: .regularExpression) ?? ""
+    guard !clean.isEmpty else { return nil }
+    return "@\(clean)"
   }
 
   private func debugTap(_ action: String) {

@@ -99,6 +99,8 @@ export const AdminApi = {
     request(`/admin/posts/${encodeURIComponent(id)}/mark-safe`, token, { method: 'POST', body: JSON.stringify(body) }),
   removeFromDiscover: (token: string, id: string, body: Record<string, unknown>) =>
     request(`/admin/posts/${encodeURIComponent(id)}/remove-from-discover`, token, { method: 'POST', body: JSON.stringify(body) }),
+  clearPostLocation: (token: string, id: string, body: Record<string, unknown>) =>
+    request<{ post: AdminPost }>(`/admin/posts/${encodeURIComponent(id)}/location/clear`, token, { method: 'POST', body: JSON.stringify(body) }),
   changePostCategory: (token: string, id: string, body: Record<string, unknown>) =>
     request<{ post: AdminPost }>(`/admin/posts/${encodeURIComponent(id)}/category`, token, { method: 'POST', body: JSON.stringify(body) }),
   comments: (token: string, query = '') => request<Paginated<AdminComment>>(`/admin/comments${query}`, token),

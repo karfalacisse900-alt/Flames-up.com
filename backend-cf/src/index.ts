@@ -533,6 +533,7 @@ let messagePresenceSchemaReady = false;
 let productionReadinessSchemaReady = false;
 let adminModerationSchemaReady = false;
 let autoCategorySchemaReady = false;
+let locationSchemaReady = false;
 
 function normalizeSchemaSql(statement: string): string {
   return statement.replace(/\s+/g, ' ').trim().replace(/;$/, '');
@@ -1385,6 +1386,56 @@ async function ensureAutoCategorySchema(db: D1Database) {
   }
 
   autoCategorySchemaReady = true;
+}
+
+async function ensureLocationSchema(db: D1Database) {
+  if (locationSchemaReady) return;
+
+  const statements = [
+    "ALTER TABLE posts ADD COLUMN display_city TEXT DEFAULT ''",
+    "ALTER TABLE posts ADD COLUMN display_region TEXT DEFAULT ''",
+    "ALTER TABLE posts ADD COLUMN display_country TEXT DEFAULT ''",
+    "ALTER TABLE posts ADD COLUMN display_location_label TEXT DEFAULT ''",
+    "ALTER TABLE posts ADD COLUMN display_location_source TEXT DEFAULT 'none'",
+    "ALTER TABLE posts ADD COLUMN display_location_visibility TEXT DEFAULT 'hidden'",
+    "ALTER TABLE posts ADD COLUMN place_provider TEXT DEFAULT ''",
+    "ALTER TABLE posts ADD COLUMN place_provider_id TEXT DEFAULT ''",
+    "ALTER TABLE posts ADD COLUMN place_formatted_address TEXT DEFAULT ''",
+    "ALTER TABLE posts ADD COLUMN place_category TEXT DEFAULT ''",
+    "ALTER TABLE posts ADD COLUMN place_city TEXT DEFAULT ''",
+    "ALTER TABLE posts ADD COLUMN place_region TEXT DEFAULT ''",
+    "ALTER TABLE posts ADD COLUMN place_country TEXT DEFAULT ''",
+    `CREATE TABLE IF NOT EXISTS post_places (
+      id TEXT PRIMARY KEY,
+      post_id TEXT NOT NULL,
+      provider TEXT DEFAULT 'apple_mapkit',
+      provider_place_id TEXT DEFAULT '',
+      name TEXT DEFAULT '',
+      formatted_address TEXT DEFAULT '',
+      latitude REAL,
+      longitude REAL,
+      category TEXT DEFAULT '',
+      city TEXT DEFAULT '',
+      region TEXT DEFAULT '',
+      country TEXT DEFAULT '',
+      created_at TEXT NOT NULL
+    )`,
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_post_places_post_provider ON post_places(post_id, provider)',
+    'CREATE INDEX IF NOT EXISTS idx_post_places_post ON post_places(post_id)',
+    'CREATE INDEX IF NOT EXISTS idx_posts_display_location ON posts(display_location_visibility, display_city, display_country, created_at)',
+  ];
+
+  for (const statement of statements) {
+    try {
+      await runSchemaStatement(db, statement);
+    } catch (error: any) {
+      if (!isIgnorableSchemaError(error, statement)) {
+        throw error;
+      }
+    }
+  }
+
+  locationSchemaReady = true;
 }
 
 async function ensureAbuseProtectionSchema(db: D1Database) {
@@ -3792,6 +3843,38 @@ function feedMediaDimensions(mediaUrls: string[], mediaTypes: string[], dimensio
   });
 }
 
+function normalizeDisplayLocationSource(value: unknown): string {
+  const clean = cleanText(value, 40).toLowerCase();
+  return ['user_profile', 'mapbox_reverse_geocode', 'manual', 'none'].includes(clean) ? clean : 'none';
+}
+
+function normalizeDisplayLocationVisibility(value: unknown): string {
+  const clean = cleanText(value, 40).toLowerCase();
+  return ['public', 'followers', 'hidden'].includes(clean) ? clean : 'hidden';
+}
+
+function normalizeAppleMapKitProvider(value: unknown): string {
+  const clean = cleanText(value, 40).toLowerCase();
+  return clean === 'apple_mapkit' ? 'apple_mapkit' : '';
+}
+
+function normalizeDisplayLocationLabel(city: string, region: string, country: string, fallback: string): string {
+  const label = cleanText(fallback, 120);
+  if (label) return label;
+  const parts = [city, region, country].map((part) => cleanText(part, 80)).filter(Boolean);
+  if (!parts.length) return '';
+  if (parts.length === 3) return `${parts[0]}, ${parts[1]}, ${parts[2]}`;
+  return parts.join(', ');
+}
+
+function looksLikePrivatePlace(name: string, address: string, category: string): boolean {
+  const text = `${name} ${address} ${category}`.toLowerCase();
+  if (!text.trim()) return false;
+  if (/\b(home|house|apartment|apt|unit|private residence|residential)\b/.test(text)) return true;
+  return /\b\d{1,6}\s+[a-z0-9.' -]+\s+(street|st|avenue|ave|road|rd|lane|ln|drive|dr|court|ct|way|boulevard|blvd)\b/.test(text)
+    && !/\b(restaurant|cafe|coffee|gym|park|museum|bar|club|hotel|school|store|venue|stadium|gallery)\b/.test(text);
+}
+
 function postPayload(post: any, likedBy: string[] = [], env?: Env) {
   const audioHidden = Number(post.audio_hidden || 0) === 1;
   const likesCount = Math.max(0, Number(post.live_likes_count ?? post.likes_count ?? 0));
@@ -3811,6 +3894,12 @@ function postPayload(post: any, likedBy: string[] = [], env?: Env) {
   const posterUrls = mediaUrls.map((url, index) => posterDeliveryUrl(url, mediaTypes[index] || 'image', thumbnailVariant)).filter(Boolean);
   const primaryCategory = normalizeDiscoverCategory(post.primary_category || post.category || post.post_type || 'lifestyle', false) || 'lifestyle';
   const categoryConfidence = clampFloat(post.category_confidence, 0, 1, 0);
+  const displayLocationVisibility = normalizeDisplayLocationVisibility(post.display_location_visibility);
+  const canShowDisplayLocation = displayLocationVisibility === 'public'
+    || (displayLocationVisibility === 'followers' && (post.is_following === true || post.is_following === 1 || post.is_following === '1'));
+  const displayLocationLabel = !canShowDisplayLocation
+    ? ''
+    : normalizeDisplayLocationLabel(post.display_city || '', post.display_region || '', post.display_country || '', post.display_location_label || '');
   const payload = {
     ...post,
     user_username: publicUsernameFor({ username: post.user_username }),
@@ -3841,6 +3930,19 @@ function postPayload(post: any, likedBy: string[] = [], env?: Env) {
     category_status: normalizeCategoryStatus(post.category_status),
     category_signals: parseJsonObject(post.category_signals_json),
     tags: sanitizeAutoCategoryTags(post.tags_json),
+    display_city: canShowDisplayLocation ? cleanText(post.display_city, 80) : '',
+    display_region: canShowDisplayLocation ? cleanText(post.display_region, 80) : '',
+    display_country: canShowDisplayLocation ? cleanText(post.display_country, 80) : '',
+    display_location_label: displayLocationLabel,
+    display_location_source: displayLocationLabel ? normalizeDisplayLocationSource(post.display_location_source) : 'none',
+    display_location_visibility: displayLocationVisibility,
+    place_provider: cleanText(post.place_provider, 40),
+    place_provider_id: cleanText(post.place_provider_id || post.place_id, 160),
+    place_formatted_address: cleanText(post.place_formatted_address || post.location, 260),
+    place_category: cleanText(post.place_category, 80),
+    place_city: cleanText(post.place_city, 80),
+    place_region: cleanText(post.place_region, 80),
+    place_country: cleanText(post.place_country, 80),
     editor_overlays: parseJsonArray(post.editor_overlays),
     tagged_users: parseJsonArray(post.tagged_users),
     liked_by: likedBy,
@@ -3849,6 +3951,8 @@ function postPayload(post: any, likedBy: string[] = [], env?: Env) {
   delete payload.live_likes_count;
   delete payload.live_comments_count;
   delete payload.live_saves_count;
+  delete payload.place_lat;
+  delete payload.place_lng;
   if (audioHidden) {
     payload.audio_provider = '';
     payload.audio_track_id = '';
@@ -3878,6 +3982,8 @@ function feedPostPayload(post: any, likedBy: string[] = [], env?: Env) {
   delete payload.hidden_at;
   delete payload.hidden_by_user_id;
   delete payload.user_email;
+  delete payload.place_lat;
+  delete payload.place_lng;
   delete payload.category_signals_json;
   delete payload.category_signals;
   return payload;
@@ -4964,6 +5070,7 @@ async function sendAlertPushForNotification(c: any, input: {
 }
 
 const MAPBOX_SEARCH_BOX_API_BASE = 'https://api.mapbox.com/search/searchbox/v1';
+const MAPBOX_GEOCODING_API_BASE = 'https://api.mapbox.com/search/geocode/v6';
 
 function uniq(values: string[]): string[] {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
@@ -5032,6 +5139,34 @@ function mapboxFeatureToPlace(feature: any, fallbackId: string) {
     photo_url: null,
     mapbox_id: properties.mapbox_id || fallbackId,
     mapbox_url: coords.lat !== null && coords.lng !== null ? `https://www.mapbox.com/search?query=${encodeURIComponent(properties.name || address)}&center=${coords.lng},${coords.lat}` : '',
+  };
+}
+
+function mapboxContextName(context: any, key: string): string {
+  const value = context?.[key];
+  if (!value) return '';
+  if (typeof value === 'string') return cleanText(value, 80);
+  return cleanText(value.name || value.text || value.name_preferred || '', 80);
+}
+
+function mapboxFeatureToBroadLocation(feature: any) {
+  const properties = feature?.properties || {};
+  const context = properties.context || {};
+  const featureType = cleanText(properties.feature_type || properties.type || '', 40).toLowerCase();
+  const name = cleanText(properties.name || properties.name_preferred || '', 80);
+  const city = featureType === 'place' || featureType === 'locality'
+    ? name
+    : (mapboxContextName(context, 'place') || mapboxContextName(context, 'locality') || name);
+  const region = mapboxContextName(context, 'region');
+  const country = mapboxContextName(context, 'country');
+  const label = normalizeDisplayLocationLabel(city, region, country, '');
+  return {
+    city,
+    region,
+    country,
+    label,
+    display_location_label: label,
+    display_location_source: 'mapbox_reverse_geocode',
   };
 }
 
@@ -7581,12 +7716,13 @@ api.post('/posts', authMiddleware, async (c) => {
   await ensureReliabilitySchema(c.env.DB);
   await ensureGovernanceSchema(c.env.DB);
   await ensureAutoCategorySchema(c.env.DB);
+  await ensureLocationSchema(c.env.DB);
   const userId = getUserId(c);
   const limited = await enforceRateLimit(c, 'post_create', userId, 30, 60);
   if (limited) return limited;
   const restricted = await enforceUserRestriction(c, userId, 'posting');
   if (restricted) return restricted;
-  const user: any = await c.env.DB.prepare('SELECT username, full_name, profile_image FROM users WHERE id = ?').bind(userId).first();
+  const user: any = await c.env.DB.prepare('SELECT username, full_name, profile_image, city FROM users WHERE id = ?').bind(userId).first();
   const b = await c.req.json().catch(() => ({}));
   const clientRequestId = getClientRequestId(c, b);
   if (clientRequestId) {
@@ -7600,8 +7736,29 @@ api.post('/posts', authMiddleware, async (c) => {
   }
   const id = uuid();
   const postType = cleanText(b.post_type || b.category || 'general', 50) || 'general';
-  const isCheckin = postType === 'check_in' && b.place_id ? 1 : 0;
-  const location = cleanText(b.location || b.place_name, 180) || null;
+  const placeProvider = normalizeAppleMapKitProvider(b.place_provider || b.provider) || (b.place_name ? 'apple_mapkit' : '');
+  const placeProviderId = cleanText(b.place_provider_id || b.place_id, 160);
+  const placeName = cleanText(b.place_name, 180);
+  const placeFormattedAddress = cleanText(b.place_formatted_address || b.location, 260);
+  const placeCategory = cleanText(b.place_category || b.category_hint, 80);
+  const placeCity = cleanText(b.place_city, 80);
+  const placeRegion = cleanText(b.place_region, 80);
+  const placeCountry = cleanText(b.place_country, 80);
+  if ((placeName || placeFormattedAddress) && looksLikePrivatePlace(placeName, placeFormattedAddress, placeCategory)) {
+    return c.json({ detail: 'Private home-style addresses cannot be added as public place tags.' }, 400);
+  }
+  const isCheckin = postType === 'check_in' && placeProviderId ? 1 : 0;
+  const location = placeFormattedAddress || placeName || null;
+  const displayCity = cleanText(b.display_city, 80);
+  const displayRegion = cleanText(b.display_region, 80);
+  const displayCountry = cleanText(b.display_country, 80);
+  const displayLocationSource = normalizeDisplayLocationSource(b.display_location_source || (displayCity || displayCountry ? 'manual' : 'none'));
+  let displayLocationVisibility = normalizeDisplayLocationVisibility(b.display_location_visibility);
+  let displayLocationLabel = normalizeDisplayLocationLabel(displayCity, displayRegion, displayCountry, cleanText(b.display_location_label, 120));
+  if (!displayLocationLabel && displayLocationVisibility !== 'hidden') {
+    displayLocationLabel = normalizeDisplayLocationLabel(cleanText(user?.city, 120), '', '', '');
+  }
+  if (!displayLocationLabel) displayLocationVisibility = 'hidden';
   const visibility = normalizeVisibility(b.visibility);
   const postTitle = cleanText(b.title || b.headline, 180);
   const postContent = cleanMultilineText(b.content, 5000);
@@ -7616,7 +7773,7 @@ api.post('/posts', authMiddleware, async (c) => {
     postType,
     hashtags: explicitTags,
     location,
-    placeName: cleanText(b.place_name, 180) || null,
+    placeName: placeName || null,
   });
   const placeLat = b.place_lat == null ? null : clampFloat(b.place_lat, -90, 90, 0);
   const placeLng = b.place_lng == null ? null : clampFloat(b.place_lng, -180, 180, 0);
@@ -7645,17 +7802,23 @@ api.post('/posts', authMiddleware, async (c) => {
   const insertResults = await c.env.DB.batch([
     c.env.DB.prepare(
       `INSERT OR IGNORE INTO posts (
-       id, user_id, title, content, image, images, media_types, media_backup_ids, media_dimensions, location, post_type,
-       place_id, place_name, place_lat, place_lng, is_verified_checkin, visibility,
+       id, user_id, title, content, image, images, media_types, media_backup_ids, media_dimensions, location,
+       display_city, display_region, display_country, display_location_label, display_location_source, display_location_visibility,
+       post_type,
+       place_id, place_name, place_provider, place_provider_id, place_formatted_address, place_category, place_city, place_region, place_country,
+       place_lat, place_lng, is_verified_checkin, visibility,
        editor_overlays, tagged_users,
        primary_category, category_confidence, category_source, category_status, category_signals_json, tags_json,
        audio_provider, audio_track_id, audio_title, audio_artist, audio_artwork_url, audio_stream_url,
        audio_start_time, audio_duration, client_request_id
      )
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+     VALUES (${Array(47).fill('?').join(', ')})`
     ).bind(id, userId, postTitle, postContent, primaryImage, JSON.stringify(imageUrls), JSON.stringify(mediaTypes),
-    JSON.stringify(backupIds), JSON.stringify(mediaDimensions), location, postType,
-    cleanText(b.place_id, 120) || null, cleanText(b.place_name, 180) || null, placeLat, placeLng, isCheckin, visibility,
+    JSON.stringify(backupIds), JSON.stringify(mediaDimensions), location,
+    displayCity, displayRegion, displayCountry, displayLocationLabel, displayLocationSource, displayLocationVisibility,
+    postType,
+    placeProviderId || null, placeName || null, placeProvider, placeProviderId, placeFormattedAddress, placeCategory, placeCity, placeRegion, placeCountry,
+    placeLat, placeLng, isCheckin, visibility,
     JSON.stringify(editorOverlays), JSON.stringify(taggedUsers),
     autoCategory.primary_category, autoCategory.category_confidence, autoCategory.category_source, autoCategory.category_status, JSON.stringify(autoCategory.signals), JSON.stringify(autoCategory.tags),
     audioProvider, audioTrackId, audioTitle, audioArtist, audioArtworkUrl, audioStreamUrl, audioStartTime, audioDuration, clientRequestId),
@@ -7672,6 +7835,16 @@ api.post('/posts', authMiddleware, async (c) => {
     if (existing) return c.json({ ...postPayload(existing, [], c.env), idempotent_replay: true });
   }
   if (!inserted) return c.json({ detail: 'Could not create post. Please retry.' }, 409);
+  if (placeName || placeFormattedAddress || placeProviderId) {
+    await c.env.DB.prepare(
+      `INSERT OR REPLACE INTO post_places
+       (id, post_id, provider, provider_place_id, name, formatted_address, latitude, longitude, category, city, region, country, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      uuid(), id, placeProvider || 'apple_mapkit', placeProviderId, placeName, placeFormattedAddress,
+      placeLat, placeLng, placeCategory, placeCity, placeRegion, placeCountry, now()
+    ).run();
+  }
   await attachMediaBackupsToPost(c.env.DB, userId, id, backupIds);
   await recordAbuseSignals(c, userId, 'post_create', {
     product_links: editorOverlays.filter((item: any) => item?.type === 'product' && item.link).map((item: any) => item.link),
@@ -7711,7 +7884,13 @@ api.post('/posts', authMiddleware, async (c) => {
     primary_category: autoCategory.primary_category, category_confidence: autoCategory.category_confidence,
     category_source: autoCategory.category_source, category_status: autoCategory.category_status,
     category_signals_json: JSON.stringify(autoCategory.signals), tags_json: JSON.stringify(autoCategory.tags),
-    location, post_type: postType, place_id: cleanText(b.place_id, 120), place_name: cleanText(b.place_name, 180),
+    location,
+    display_city: displayCity, display_region: displayRegion, display_country: displayCountry,
+    display_location_label: displayLocationLabel, display_location_source: displayLocationSource,
+    display_location_visibility: displayLocationVisibility,
+    post_type: postType, place_id: placeProviderId, place_name: placeName,
+    place_provider: placeProvider, place_provider_id: placeProviderId, place_formatted_address: placeFormattedAddress,
+    place_category: placeCategory, place_city: placeCity, place_region: placeRegion, place_country: placeCountry,
     place_lat: placeLat, place_lng: placeLng, is_verified_checkin: !!isCheckin,
     audio_provider: audioProvider, audio_track_id: audioTrackId, audio_title: audioTitle, audio_artist: audioArtist,
     audio_artwork_url: audioArtworkUrl, audio_stream_url: audioStreamUrl, audio_start_time: audioStartTime, audio_duration: audioDuration,
@@ -7726,6 +7905,7 @@ api.get('/posts/feed', authMiddleware, async (c) => {
   await ensurePrivacySchema(c.env.DB);
   await ensureGovernanceSchema(c.env.DB);
   await ensurePostEditorSchema(c.env.DB);
+  await ensureLocationSchema(c.env.DB);
   const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
   const limit = clampNumber(c.req.query('limit') || '20', 1, 50, 20);
   const feedSql = [
@@ -7751,6 +7931,7 @@ api.get('/posts/world-board', async (c) => {
     await ensurePrivacySchema(c.env.DB);
     await ensureGovernanceSchema(c.env.DB);
     await ensurePostEditorSchema(c.env.DB);
+    await ensureLocationSchema(c.env.DB);
     const limited = await enforceRateLimit(c, 'public_world_board', clientIp(c), 180, 60);
     if (limited) return limited;
     const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
@@ -7783,6 +7964,7 @@ api.get('/posts/nearby-feed', authMiddleware, async (c) => {
   await ensurePrivacySchema(c.env.DB);
   await ensureGovernanceSchema(c.env.DB);
   await ensurePostEditorSchema(c.env.DB);
+  await ensureLocationSchema(c.env.DB);
   const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
   const limit = clampNumber(c.req.query('limit') || '24', 1, 50, 24);
   const nearbyFeedSql = [
@@ -7803,6 +7985,7 @@ api.get('/posts/nearby-feed', authMiddleware, async (c) => {
 api.get('/posts/:postId', authMiddleware, async (c) => {
   const userId = getUserId(c);
   const postId = c.req.param('postId');
+  await ensureLocationSchema(c.env.DB);
   const postByIdSql = [
     `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
        EXISTS (SELECT 1 FROM follows fl WHERE fl.follower_id = ? AND fl.following_id = p.user_id) AS is_following,
@@ -8334,7 +8517,7 @@ api.post('/statuses', authMiddleware, async (c) => {
   if (phoneGate) return phoneGate;
   await ensureAudioSchema(c.env.DB);
   const userId = getUserId(c); const b = await c.req.json();
-  const user: any = await c.env.DB.prepare('SELECT username, full_name, profile_image FROM users WHERE id = ?').bind(userId).first();
+  const user: any = await c.env.DB.prepare('SELECT username, full_name, profile_image, city FROM users WHERE id = ?').bind(userId).first();
   const storyLifetimeMs = 7 * 24 * 60 * 60 * 1000;
   const id = uuid(); const expiresAt = new Date(Date.now() + storyLifetimeMs).toISOString();
   const visibility = normalizeVisibility(b.visibility);
@@ -10046,6 +10229,7 @@ api.get('/discover', authMiddleware, async (c) => {
   await ensurePrivacySchema(c.env.DB);
   await ensureGovernanceSchema(c.env.DB);
   await ensurePostEditorSchema(c.env.DB);
+  await ensureLocationSchema(c.env.DB);
   await ensureAutoCategorySchema(c.env.DB);
   const rawCategory = c.req.query('category') || 'all';
   const category = normalizeDiscoverCategory(rawCategory, true);
@@ -10090,9 +10274,10 @@ api.get('/discover', authMiddleware, async (c) => {
 
 api.get('/discover/trending', authMiddleware, async (c) => {
   const userId = getUserId(c);
-  await ensurePrivacySchema(c.env.DB);
-  await ensureGovernanceSchema(c.env.DB);
-  await ensurePostEditorSchema(c.env.DB);
+    await ensurePrivacySchema(c.env.DB);
+    await ensureGovernanceSchema(c.env.DB);
+    await ensurePostEditorSchema(c.env.DB);
+    await ensureLocationSchema(c.env.DB);
   const limit = clampNumber(c.req.query('limit') || '20', 1, 40, 20);
   const discoverTrendingSql = [
     'SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image',
@@ -10110,6 +10295,7 @@ api.get('/discover/search', authMiddleware, async (c) => {
   await ensurePrivacySchema(c.env.DB);
   await ensureGovernanceSchema(c.env.DB);
   await ensurePostEditorSchema(c.env.DB);
+  await ensureLocationSchema(c.env.DB);
   const q = cleanText(c.req.query('q'), 80);
   if (q.length < 2) return c.json({ posts: [], users: [] });
   const limit = clampNumber(c.req.query('limit') || '20', 1, 30, 20);
@@ -11642,6 +11828,21 @@ function adminPostPayload(row: any, env: Env) {
     removed_reason: cleanMultilineText(row.removed_reason, 500),
     discover_blocked_at: row.discover_blocked_at || null,
     discover_blocked_reason: cleanMultilineText(row.discover_blocked_reason, 500),
+    display_location_label: normalizeDisplayLocationLabel(row.display_city || '', row.display_region || '', row.display_country || '', row.display_location_label || ''),
+    display_location_visibility: normalizeDisplayLocationVisibility(row.display_location_visibility),
+    display_location_source: normalizeDisplayLocationSource(row.display_location_source),
+    exact_place: {
+      provider: cleanText(row.place_provider, 40),
+      provider_place_id: cleanText(row.place_provider_id || row.place_id, 160),
+      name: cleanText(row.place_name, 180),
+      formatted_address: cleanText(row.place_formatted_address || row.location, 260),
+      category: cleanText(row.place_category, 80),
+      city: cleanText(row.place_city, 80),
+      region: cleanText(row.place_region, 80),
+      country: cleanText(row.place_country, 80),
+      latitude: row.place_lat == null ? null : clampFloat(row.place_lat, -90, 90, 0),
+      longitude: row.place_lng == null ? null : clampFloat(row.place_lng, -180, 180, 0),
+    },
     media_type: first.media_type || '',
     feed_media_url: first.feed_media_url || '',
     thumbnail_url: first.thumbnail_url || '',
@@ -12362,6 +12563,7 @@ api.get('/admin/posts', authMiddleware, async (c) => {
     await requireAdminRole(c, 'content:read');
     await ensureAdminModerationSchema(c.env.DB);
     await ensureAutoCategorySchema(c.env.DB);
+    await ensureLocationSchema(c.env.DB);
     const { limit, offset } = adminPageParams(c);
     const status = cleanText(c.req.query('status') || 'all', 40);
     const category = cleanText(c.req.query('category') || '', 60).toLowerCase();
@@ -12406,6 +12608,7 @@ api.get('/admin/posts/:postId', authMiddleware, async (c) => {
     await requireAdminRole(c, 'content:read');
     await ensureAdminModerationSchema(c.env.DB);
     await ensureAutoCategorySchema(c.env.DB);
+    await ensureLocationSchema(c.env.DB);
     const postId = publicId(c.req.param('postId'), 120);
     const row: any = await c.env.DB.prepare(`
       SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
@@ -12507,6 +12710,58 @@ api.post('/admin/posts/:postId/remove-from-discover', authMiddleware, async (c) 
       .bind(now(), admin.userId, reason, postId).run();
     await writeAdminAuditLog(c, admin, { actionType: 'post_removed_from_discover', targetType: 'post', targetId: postId, targetUserId: before.user_id, reason, note: body.note, beforeState: before, afterState: { discover_blocked: true } });
     return c.json({ removed_from_discover: true });
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+api.post('/admin/posts/:postId/location/clear', authMiddleware, async (c) => {
+  try {
+    const admin = await requireAdminRole(c, 'content:write');
+    await ensureAdminModerationSchema(c.env.DB);
+    await ensureLocationSchema(c.env.DB);
+    const limited = await requireAdminWriteRateLimit(c, admin, 'admin_post_location_clear');
+    if (limited) return limited;
+    const postId = publicId(c.req.param('postId'), 120);
+    const body: any = await c.req.json().catch(() => ({}));
+    const unknown = rejectUnknownFields(c, body, ['reason', 'note']);
+    if (unknown) return unknown;
+    const reason = cleanMultilineText(body.reason, 500);
+    if (!reason) return c.json({ detail: 'Reason is required.' }, 400);
+    const before: any = await c.env.DB.prepare(
+      `SELECT id, user_id, display_location_label, display_location_visibility, place_name, place_formatted_address, place_lat, place_lng
+       FROM posts WHERE id = ? LIMIT 1`
+    ).bind(postId).first();
+    if (!before) return c.json({ detail: 'Post not found.' }, 404);
+    await c.env.DB.batch([
+      c.env.DB.prepare(
+        `UPDATE posts
+         SET display_city = '', display_region = '', display_country = '', display_location_label = '',
+             display_location_source = 'none', display_location_visibility = 'hidden',
+             location = NULL, place_id = NULL, place_name = NULL, place_lat = NULL, place_lng = NULL,
+             place_provider = '', place_provider_id = '', place_formatted_address = '', place_category = '',
+             place_city = '', place_region = '', place_country = '', updated_at = datetime('now')
+         WHERE id = ?`
+      ).bind(postId),
+      c.env.DB.prepare('DELETE FROM post_places WHERE post_id = ?').bind(postId),
+    ]);
+    await writeAdminAuditLog(c, admin, {
+      actionType: 'post_location_cleared',
+      targetType: 'post',
+      targetId: postId,
+      targetUserId: before.user_id,
+      reason,
+      note: body.note,
+      beforeState: before,
+      afterState: { display_location_visibility: 'hidden', place_removed: true },
+    });
+    const row: any = await c.env.DB.prepare(`
+      SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
+      FROM posts p LEFT JOIN users u ON u.id = p.user_id
+      WHERE p.id = ?
+      LIMIT 1
+    `).bind(postId).first();
+    return c.json({ post: adminPostPayload(row, c.env) });
   } catch (error: any) {
     return governanceError(c, error);
   }
@@ -13534,8 +13789,70 @@ async function mapboxPlaceDetailHandler(c: any) {
   });
 }
 
+async function mapboxCitySearchHandler(c: any) {
+  try {
+    const userId = getUserId(c);
+    const limited = await enforceRateLimit(c, 'mapbox_city_search', userId, 45, 60);
+    if (limited) return limited;
+    const query = cleanText(c.req.query('q') || c.req.query('query') || '', 80);
+    if (query.length < 2) return c.json({ locations: [] });
+    const token = getMapboxAccessToken(c);
+    const params = new URLSearchParams({
+      q: query,
+      language: 'en',
+      limit: '8',
+      types: 'place,region,country',
+      access_token: token,
+    });
+    const proximity = cleanText(c.req.query('proximity'), 80);
+    if (proximity) params.set('proximity', proximity);
+    const res = await fetch(`${MAPBOX_SEARCH_BOX_API_BASE}/forward?${params.toString()}`);
+    if (!res.ok) return c.json({ detail: 'Mapbox city search failed.', locations: [] }, 502);
+    const data: any = await res.json();
+    const locations = Array.isArray(data.features)
+      ? data.features.map(mapboxFeatureToBroadLocation).filter((item: any) => item.label)
+      : [];
+    return c.json({ locations });
+  } catch (error: any) {
+    const code = getErrorCode(error);
+    if (code === 'MAPBOX_ACCESS_TOKEN_MISSING') return c.json({ detail: 'Mapbox is not configured.', locations: [] }, 503);
+    return c.json({ detail: 'City search could not load.', locations: [] }, 500);
+  }
+}
+
+async function mapboxReverseBroadLocationHandler(c: any) {
+  try {
+    const userId = getUserId(c);
+    const limited = await enforceRateLimit(c, 'mapbox_reverse_city', userId, 45, 60);
+    if (limited) return limited;
+    const lat = clampFloat(c.req.query('lat'), -90, 90, NaN);
+    const lng = clampFloat(c.req.query('lng'), -180, 180, NaN);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return c.json({ detail: 'Approximate latitude and longitude are required.' }, 400);
+    const token = getMapboxAccessToken(c);
+    const params = new URLSearchParams({
+      latitude: String(lat),
+      longitude: String(lng),
+      language: 'en',
+      types: 'place,region,country',
+      access_token: token,
+    });
+    const res = await fetch(`${MAPBOX_GEOCODING_API_BASE}/reverse?${params.toString()}`);
+    if (!res.ok) return c.json({ detail: 'Mapbox reverse geocoding failed.' }, 502);
+    const data: any = await res.json();
+    const feature = Array.isArray(data.features) ? data.features[0] : null;
+    if (!feature) return c.json({ location: null });
+    return c.json({ location: mapboxFeatureToBroadLocation(feature) });
+  } catch (error: any) {
+    const code = getErrorCode(error);
+    if (code === 'MAPBOX_ACCESS_TOKEN_MISSING') return c.json({ detail: 'Mapbox is not configured.' }, 503);
+    return c.json({ detail: 'Broad location could not load.' }, 500);
+  }
+}
+
 api.get('/mapbox-places/nearby', mapboxPlacesNearbyHandler);
 api.get('/mapbox-places/:placeId', mapboxPlaceDetailHandler);
+api.get('/mapbox-locations/cities', authMiddleware, mapboxCitySearchHandler);
+api.get('/mapbox-locations/reverse', authMiddleware, mapboxReverseBroadLocationHandler);
 
 // Health
 api.get('/', (c) => c.json({ message: 'Captro API', version: API_VERSION, runtime: 'Cloudflare Workers + Hono + D1 + Supabase' }));

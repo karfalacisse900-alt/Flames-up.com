@@ -1,4 +1,5 @@
 import AVFoundation
+import MapKit
 import PhotosUI
 import SwiftUI
 
@@ -531,6 +532,7 @@ private struct MIRAEditorPresentation: Identifiable {
 
 private enum PostDetailSheet: Identifiable, Equatable {
   case location
+  case city
   case people
   case tags
   case music
@@ -538,6 +540,7 @@ private enum PostDetailSheet: Identifiable, Equatable {
   var id: String {
     switch self {
     case .location: return "location"
+    case .city: return "city"
     case .people: return "people"
     case .tags: return "tags"
     case .music: return "music"
@@ -545,31 +548,151 @@ private enum PostDetailSheet: Identifiable, Equatable {
   }
 }
 
-private struct MIRAMapboxPlace: Decodable, Identifiable, Hashable {
-  let placeId: String?
-  let mapboxId: String?
-  let name: String?
-  let formattedAddress: String?
-  let address: String?
-  let vicinity: String?
-  let lat: Double?
-  let lng: Double?
+private struct MIRABroadDisplayLocation: Hashable {
+  var city: String?
+  var region: String?
+  var country: String?
+  var label: String?
+  var source: String = "none"
+  var visibility: String = "hidden"
+
+  var hasVisibleLabel: Bool {
+    let clean = label?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return visibility != "hidden" && !clean.isEmpty
+  }
+}
+
+private struct MIRABroadLocationSearchResponse: Decodable {
+  let locations: [MIRABroadLocationSearchResult]
+}
+
+private struct MIRABroadLocationSearchResult: Decodable, Identifiable, Hashable {
+  let city: String?
+  let region: String?
+  let country: String?
+  let label: String?
+  let displayLocationLabel: String?
+  let displayLocationSource: String?
 
   var id: String {
-    placeId ?? mapboxId ?? [displayName, addressText].compactMap { $0 }.joined(separator: "-")
+    [resolvedLabel, city, region, country].compactMap { $0 }.joined(separator: "-")
+  }
+
+  var resolvedLabel: String {
+    let explicit = (displayLocationLabel ?? label)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    if !explicit.isEmpty { return explicit }
+    return [city, region, country]
+      .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { !$0.isEmpty }
+      .joined(separator: ", ")
+  }
+
+  var displayLocation: MIRABroadDisplayLocation {
+    MIRABroadDisplayLocation(
+      city: city,
+      region: region,
+      country: country,
+      label: resolvedLabel,
+      source: displayLocationSource ?? "mapbox_reverse_geocode",
+      visibility: "public"
+    )
+  }
+}
+
+private struct MIRAExactPostPlace: Identifiable, Hashable {
+  let provider: String
+  let providerPlaceId: String?
+  let name: String
+  let formattedAddress: String?
+  let latitude: Double?
+  let longitude: Double?
+  let category: String?
+  let city: String?
+  let region: String?
+  let country: String?
+
+  var id: String {
+    providerPlaceId ?? [displayName, addressText].compactMap { $0 }.joined(separator: "-")
   }
 
   var displayName: String {
-    let clean = name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
     return clean.isEmpty ? "Place" : clean
   }
 
   var addressText: String? {
-    for value in [formattedAddress, address, vicinity] {
+    for value in [formattedAddress, cityCountryText] {
       let clean = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
       if !clean.isEmpty { return clean }
     }
     return nil
+  }
+
+  private var cityCountryText: String? {
+    let parts = [city, region, country]
+      .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { !$0.isEmpty }
+    return parts.isEmpty ? nil : parts.joined(separator: ", ")
+  }
+
+  init(
+    provider: String = "apple_mapkit",
+    providerPlaceId: String?,
+    name: String,
+    formattedAddress: String?,
+    latitude: Double?,
+    longitude: Double?,
+    category: String?,
+    city: String?,
+    region: String?,
+    country: String?
+  ) {
+    self.provider = provider
+    self.providerPlaceId = providerPlaceId
+    self.name = name
+    self.formattedAddress = formattedAddress
+    self.latitude = latitude
+    self.longitude = longitude
+    self.category = category
+    self.city = city
+    self.region = region
+    self.country = country
+  }
+
+  init(mapItem: MKMapItem) {
+    let placemark = mapItem.placemark
+    let coordinate = placemark.coordinate
+    let name = (mapItem.name ?? placemark.name ?? placemark.title ?? "Place")
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    let addressParts = [
+      [placemark.subThoroughfare, placemark.thoroughfare].compactMap { $0 }.joined(separator: " "),
+      placemark.locality,
+      placemark.administrativeArea,
+      placemark.country
+    ]
+      .map { $0?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "" }
+      .filter { !$0.isEmpty }
+    let address = addressParts.joined(separator: ", ")
+    let providerIdBase = [
+      name,
+      placemark.locality ?? "",
+      String(format: "%.5f", coordinate.latitude),
+      String(format: "%.5f", coordinate.longitude)
+    ]
+      .joined(separator: "-")
+      .lowercased()
+      .replacingOccurrences(of: #"[^a-z0-9_.-]+"#, with: "-", options: .regularExpression)
+    self.init(
+      providerPlaceId: "apple-mapkit-\(providerIdBase)",
+      name: name.isEmpty ? "Place" : name,
+      formattedAddress: address.isEmpty ? nil : address,
+      latitude: CLLocationCoordinate2DIsValid(coordinate) ? coordinate.latitude : nil,
+      longitude: CLLocationCoordinate2DIsValid(coordinate) ? coordinate.longitude : nil,
+      category: mapItem.pointOfInterestCategory?.rawValue,
+      city: placemark.locality,
+      region: placemark.administrativeArea,
+      country: placemark.country
+    )
   }
 }
 
@@ -589,7 +712,10 @@ public struct CreatePostNativeView: View {
   @State private var editingMedia: MIRAEditorPresentation?
   @State private var editedCameraMedia: MIRAPickedMedia?
   @State private var activePostDetailSheet: PostDetailSheet?
-  @State private var selectedPlace: MIRAMapboxPlace?
+  @State private var selectedPlace: MIRAExactPostPlace?
+  @State private var broadLocation = MIRABroadDisplayLocation()
+  @State private var showBroadLocation = false
+  @State private var hasLoadedBroadLocation = false
   @State private var taggedUsers: [MIRAUser] = []
   @State private var hashtags: [String] = []
   @State private var selectedAudioTrack: MIRAAudiusTrack?
@@ -614,6 +740,9 @@ public struct CreatePostNativeView: View {
     .onAppear {
       MIRAPlaybackCoordinator.pauseAll(reason: "post_creation_open")
     }
+    .task {
+      await loadBroadLocationDefaultIfNeeded()
+    }
     .onChange(of: pickerItems) { _, newItems in
       Task { await loadPickerItems(newItems) }
     }
@@ -624,6 +753,8 @@ public struct CreatePostNativeView: View {
       switch activePostDetailSheet {
       case .location:
         PostLocationPickerSheet(api: api, selectedPlace: $selectedPlace, onClose: closeSheet)
+      case .city:
+        PostBroadLocationPickerSheet(api: api, broadLocation: $broadLocation, showBroadLocation: $showBroadLocation, onClose: closeSheet)
       case .people:
         PostPeopleTagSheet(api: api, selectedUsers: $taggedUsers, onClose: closeSheet)
       case .tags:
@@ -665,6 +796,7 @@ public struct CreatePostNativeView: View {
   private var postDetailSheetHeightFraction: CGFloat {
     switch activePostDetailSheet {
     case .tags: return 0.50
+    case .city: return 0.62
     case .music: return 0.78
     default: return 0.76
     }
@@ -725,10 +857,11 @@ public struct CreatePostNativeView: View {
 
             postOptionRow(
               icon: "mappin.circle",
-              title: selectedPlace?.displayName ?? "Add Location",
-              subtitle: selectedPlace?.addressText ?? "Search places or add an address",
+              title: selectedPlace?.displayName ?? "Add place",
+              subtitle: selectedPlace?.addressText ?? "Restaurant, gym, cafe, park, or venue",
               action: { activePostDetailSheet = .location }
             )
+            broadLocationOptionRow
             postOptionRow(
               icon: "music.note",
               title: selectedAudioTrack?.displayTitle ?? "Add music",
@@ -872,7 +1005,7 @@ public struct CreatePostNativeView: View {
   private var postDetailsQuickActions: some View {
     ScrollView(.horizontal, showsIndicators: false) {
       HStack(spacing: 10) {
-        postDetailsChip(selectedPlace?.displayName ?? "Places", systemImage: "mappin.circle") {
+        postDetailsChip(selectedPlace?.displayName ?? "Place", systemImage: "mappin.circle") {
           activePostDetailSheet = .location
         }
         postDetailsChip(taggedUsers.isEmpty ? "@" : "@ \(taggedUsers.count)", systemImage: nil) {
@@ -943,6 +1076,51 @@ public struct CreatePostNativeView: View {
     }
   }
 
+  private var broadLocationOptionRow: some View {
+    HStack(spacing: 18) {
+      Image(systemName: "location.circle")
+        .font(.system(size: 28, weight: .regular))
+        .foregroundStyle(MIRATheme.Color.textPrimary)
+        .frame(width: 34)
+
+      VStack(alignment: .leading, spacing: 3) {
+        Text("Show city/country")
+          .font(.system(size: 19, weight: .regular))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+        Text(broadLocation.label?.isEmpty == false ? broadLocation.label! : "Hidden for this post")
+          .font(.system(size: 14, weight: .regular))
+          .foregroundStyle(MIRATheme.Color.textMuted)
+          .lineLimit(1)
+          .truncationMode(.tail)
+      }
+
+      Spacer()
+
+      Toggle("", isOn: $showBroadLocation)
+        .labelsHidden()
+        .disabled(broadLocation.label?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+
+      Button {
+        activePostDetailSheet = .city
+      } label: {
+        Text("Change")
+          .font(.system(size: 13, weight: .bold))
+          .foregroundStyle(MIRATheme.Color.forest)
+          .padding(.horizontal, 11)
+          .frame(height: 34)
+          .background(MIRATheme.Color.forestSoft)
+          .clipShape(Capsule())
+      }
+      .buttonStyle(.plain)
+    }
+    .frame(minHeight: 72)
+    .overlay(alignment: .bottom) {
+      Rectangle()
+        .fill(MIRATheme.Color.hairline.opacity(0.72))
+        .frame(height: 0.7)
+    }
+  }
+
   @ViewBuilder
   private func postComposerMedia(_ media: MIRAPickedMedia, width: CGFloat, height: CGFloat, cornerRadius: CGFloat) -> some View {
     LocalMediaThumb(media: media, width: width, height: height, cornerRadius: cornerRadius)
@@ -1000,11 +1178,24 @@ public struct CreatePostNativeView: View {
         mediaDimensions: mediaDimensions,
         editorOverlays: editorUploadMetadata(),
         location: selectedPlace?.addressText ?? selectedPlace?.displayName,
+        displayCity: showBroadLocation ? broadLocation.city : nil,
+        displayRegion: showBroadLocation ? broadLocation.region : nil,
+        displayCountry: showBroadLocation ? broadLocation.country : nil,
+        displayLocationLabel: showBroadLocation ? broadLocation.label : nil,
+        displayLocationSource: showBroadLocation ? broadLocation.source : "none",
+        displayLocationVisibility: showBroadLocation ? "public" : "hidden",
         postType: selectedPlace == nil ? "general" : "place",
-        placeId: selectedPlace?.placeId ?? selectedPlace?.mapboxId,
+        placeId: selectedPlace?.providerPlaceId,
         placeName: selectedPlace?.displayName,
-        placeLat: selectedPlace?.lat,
-        placeLng: selectedPlace?.lng,
+        placeProvider: selectedPlace?.provider,
+        placeProviderId: selectedPlace?.providerPlaceId,
+        placeFormattedAddress: selectedPlace?.addressText,
+        placeCategory: selectedPlace?.category,
+        placeCity: selectedPlace?.city,
+        placeRegion: selectedPlace?.region,
+        placeCountry: selectedPlace?.country,
+        placeLat: selectedPlace?.latitude,
+        placeLng: selectedPlace?.longitude,
         taggedUsers: taggedPayload.isEmpty ? nil : taggedPayload,
         tags: cleanedTags.isEmpty ? nil : cleanedTags,
         appleVisionLabels: categorySignals.appleVisionLabels.isEmpty ? nil : categorySignals.appleVisionLabels,
@@ -1080,6 +1271,40 @@ public struct CreatePostNativeView: View {
       return MIRAEditorUploadMetadata(mediaIndex: index, metadata: editorMetadata)
     }
     return metadata.isEmpty ? nil : metadata
+  }
+
+  @MainActor
+  private func loadBroadLocationDefaultIfNeeded() async {
+    guard !hasLoadedBroadLocation else { return }
+    hasLoadedBroadLocation = true
+    do {
+      let user: MIRAUser = try await api.get("/auth/me")
+      let location = parseProfileCity(user.city)
+      broadLocation = location
+      showBroadLocation = location.hasVisibleLabel
+    } catch {
+      broadLocation = MIRABroadDisplayLocation()
+      showBroadLocation = false
+    }
+  }
+
+  private func parseProfileCity(_ value: String?) -> MIRABroadDisplayLocation {
+    let clean = value?
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+      .replacingOccurrences(of: #"\s*,\s*"#, with: ", ", options: .regularExpression) ?? ""
+    guard !clean.isEmpty else { return MIRABroadDisplayLocation() }
+    let parts = clean
+      .split(separator: ",")
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { !$0.isEmpty }
+    return MIRABroadDisplayLocation(
+      city: parts.first,
+      region: parts.count > 2 ? parts[1] : nil,
+      country: parts.count > 1 ? parts.last : nil,
+      label: clean,
+      source: "user_profile",
+      visibility: "public"
+    )
   }
 }
 
@@ -1477,13 +1702,233 @@ private struct MIRAAudiusFavoriteSaveResponse: Decodable {
   let track: MIRAAudiusTrack?
 }
 
+private struct PostBroadLocationPickerSheet: View {
+  let api: MIRAAPIClient
+  @Binding var broadLocation: MIRABroadDisplayLocation
+  @Binding var showBroadLocation: Bool
+  let onClose: (() -> Void)?
+  @Environment(\.dismiss) private var dismiss
+  @FocusState private var isSearchFocused: Bool
+  @State private var query = ""
+  @State private var results: [MIRABroadLocationSearchResult] = []
+  @State private var isLoading = false
+  @State private var errorMessage: String?
+
+  var body: some View {
+    NavigationStack {
+      VStack(spacing: 0) {
+        VStack(spacing: MIRATheme.Space.md) {
+          HStack(spacing: 10) {
+            Image(systemName: "magnifyingglass")
+              .foregroundStyle(MIRATheme.Color.textMuted)
+            TextField("Search city or country", text: $query)
+              .textInputAutocapitalization(.words)
+              .autocorrectionDisabled()
+              .submitLabel(.search)
+              .focused($isSearchFocused)
+              .onSubmit { Task { await searchCities(for: cleanQuery) } }
+            if !cleanQuery.isEmpty {
+              Button {
+                query = ""
+                results = []
+                errorMessage = nil
+              } label: {
+                Image(systemName: "xmark.circle.fill")
+                  .foregroundStyle(MIRATheme.Color.textMuted.opacity(0.75))
+              }
+              .buttonStyle(.plain)
+            }
+          }
+          .padding(.horizontal, MIRATheme.Space.md)
+          .frame(height: 48)
+          .background(MIRATheme.Color.surfaceSoft)
+          .clipShape(Capsule())
+
+          if let label = broadLocation.label, !label.isEmpty {
+            HStack(spacing: 10) {
+              Image(systemName: "location.circle.fill")
+                .foregroundStyle(MIRATheme.Color.forest)
+              Text(label)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(MIRATheme.Color.textPrimary)
+                .lineLimit(1)
+              Spacer()
+              Text(showBroadLocation ? "Visible" : "Hidden")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(showBroadLocation ? MIRATheme.Color.forest : MIRATheme.Color.textMuted)
+            }
+            .padding(MIRATheme.Space.md)
+            .background(MIRATheme.Color.surfaceSoft.opacity(0.72))
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+          }
+        }
+        .padding(MIRATheme.Space.md)
+
+        ScrollView {
+          LazyVStack(spacing: 10) {
+            if isLoading {
+              ProgressView("Finding cities...")
+                .tint(MIRATheme.Color.forest)
+                .frame(maxWidth: .infinity, minHeight: 64)
+            } else if let errorMessage {
+              placePickerMessage(errorMessage, systemImage: "exclamationmark.triangle")
+            } else if cleanQuery.isEmpty {
+              placePickerMessage("Search a broad city/country label like New York, USA. Exact places stay in Add place.", systemImage: "location.circle")
+            } else if cleanQuery.count < 2 {
+              placePickerMessage("Keep typing to search cities.", systemImage: "text.cursor")
+            } else if results.isEmpty {
+              placePickerMessage("No city results yet.", systemImage: "mappin.circle")
+            }
+
+            ForEach(results) { result in
+              Button {
+                broadLocation = result.displayLocation
+                showBroadLocation = true
+                close()
+              } label: {
+                placeRowTitle(systemImage: "location.circle.fill", name: result.resolvedLabel, subtitle: "City/country label")
+              }
+              .buttonStyle(.miraPress)
+            }
+          }
+          .padding(.horizontal, MIRATheme.Space.md)
+          .padding(.bottom, 28)
+        }
+      }
+      .background(MIRATheme.Color.surface.ignoresSafeArea())
+      .navigationTitle("City/country")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .topBarLeading) {
+          Button("Cancel") { close() }
+        }
+        ToolbarItem(placement: .topBarTrailing) {
+          Button("Hide") {
+            showBroadLocation = false
+            close()
+          }
+          .foregroundStyle(MIRATheme.Color.textMuted)
+        }
+      }
+      .onAppear { isSearchFocused = true }
+      .task(id: cleanQuery) {
+        let snapshot = cleanQuery
+        try? await Task.sleep(nanoseconds: 260_000_000)
+        guard !Task.isCancelled else { return }
+        await searchCities(for: snapshot)
+      }
+    }
+    .presentationDetents([.medium, .large])
+    .presentationDragIndicator(.visible)
+  }
+
+  private var cleanQuery: String {
+    query.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  private func placePickerMessage(_ text: String, systemImage: String) -> some View {
+    HStack(spacing: MIRATheme.Space.sm) {
+      Image(systemName: systemImage)
+        .font(.system(size: 17, weight: .semibold))
+        .foregroundStyle(MIRATheme.Color.textMuted)
+        .frame(width: 34, height: 34)
+        .background(MIRATheme.Color.surfaceSoft)
+        .clipShape(Circle())
+      Text(text)
+        .font(.system(size: 14, weight: .medium))
+        .foregroundStyle(MIRATheme.Color.textSecondary)
+        .fixedSize(horizontal: false, vertical: true)
+      Spacer()
+    }
+    .padding(MIRATheme.Space.md)
+    .background(MIRATheme.Color.surface)
+    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    .overlay {
+      RoundedRectangle(cornerRadius: 18, style: .continuous)
+        .stroke(MIRATheme.Color.hairline, lineWidth: 1)
+    }
+  }
+
+  private func placeRowTitle(systemImage: String, name: String, subtitle: String?) -> some View {
+    HStack(spacing: MIRATheme.Space.md) {
+      Image(systemName: systemImage)
+        .font(.system(size: 18, weight: .semibold))
+        .foregroundStyle(MIRATheme.Color.forest)
+        .frame(width: 42, height: 42)
+        .background(MIRATheme.Color.forestSoft)
+        .clipShape(Circle())
+      VStack(alignment: .leading, spacing: 3) {
+        Text(name)
+          .font(.system(size: 16, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .lineLimit(1)
+        if let subtitle, !subtitle.isEmpty {
+          Text(subtitle)
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(MIRATheme.Color.textMuted)
+            .lineLimit(1)
+        }
+      }
+      Spacer(minLength: MIRATheme.Space.sm)
+      Image(systemName: "chevron.right")
+        .font(.system(size: 12, weight: .bold))
+        .foregroundStyle(MIRATheme.Color.textMuted.opacity(0.65))
+    }
+    .padding(MIRATheme.Space.md)
+    .background(MIRATheme.Color.surface)
+    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    .overlay {
+      RoundedRectangle(cornerRadius: 18, style: .continuous)
+        .stroke(MIRATheme.Color.hairline, lineWidth: 1)
+    }
+  }
+
+  @MainActor
+  private func searchCities(for clean: String) async {
+    guard clean.count >= 2 else {
+      results = []
+      errorMessage = nil
+      isLoading = false
+      return
+    }
+    isLoading = true
+    do {
+      let encoded = clean.addingPercentEncoding(withAllowedCharacters: urlQueryComponentAllowed) ?? clean
+      let response: MIRABroadLocationSearchResponse = try await api.get("/mapbox-locations/cities?q=\(encoded)")
+      guard !Task.isCancelled, clean == cleanQuery else { return }
+      results = response.locations
+      errorMessage = nil
+      isLoading = false
+    } catch {
+      guard !Task.isCancelled, clean == cleanQuery else { return }
+      results = []
+      errorMessage = "City search could not load."
+      isLoading = false
+    }
+  }
+
+  private func close() {
+    if let onClose {
+      onClose()
+    } else {
+      dismiss()
+    }
+  }
+
+  private var urlQueryComponentAllowed: CharacterSet {
+    var allowed = CharacterSet.urlQueryAllowed
+    allowed.remove(charactersIn: "&=?+")
+    return allowed
+  }
+}
+
 private struct PostLocationPickerSheet: View {
   let api: MIRAAPIClient
-  @Binding var selectedPlace: MIRAMapboxPlace?
+  @Binding var selectedPlace: MIRAExactPostPlace?
   let onClose: (() -> Void)?
   @Environment(\.dismiss) private var dismiss
   @State private var query = ""
-  @State private var places: [MIRAMapboxPlace] = []
+  @State private var places: [MIRAExactPostPlace] = []
   @State private var isLoading = false
   @State private var errorMessage: String?
   @FocusState private var isSearchFocused: Bool
@@ -1495,7 +1940,7 @@ private struct PostLocationPickerSheet: View {
           HStack(spacing: 10) {
             Image(systemName: "magnifyingglass")
               .foregroundStyle(MIRATheme.Color.textMuted)
-            TextField("Search place or address", text: $query)
+            TextField("Search Apple Maps places", text: $query)
               .textInputAutocapitalization(.words)
               .autocorrectionDisabled()
               .submitLabel(.search)
@@ -1559,7 +2004,7 @@ private struct PostLocationPickerSheet: View {
         }
       }
       .background(MIRATheme.Color.surface.ignoresSafeArea())
-      .navigationTitle("Add Location")
+      .navigationTitle("Add place")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
         ToolbarItem(placement: .topBarLeading) {
@@ -1589,7 +2034,7 @@ private struct PostLocationPickerSheet: View {
     .presentationDragIndicator(.visible)
   }
 
-  private func selectedPlacePill(_ place: MIRAMapboxPlace) -> some View {
+  private func selectedPlacePill(_ place: MIRAExactPostPlace) -> some View {
     HStack(spacing: 10) {
       Image(systemName: "mappin.circle.fill")
         .foregroundStyle(MIRATheme.Color.forest)
@@ -1627,11 +2072,11 @@ private struct PostLocationPickerSheet: View {
     } else if let errorMessage {
       placePickerMessage(errorMessage, systemImage: "exclamationmark.triangle")
     } else if cleanQuery.isEmpty {
-      placePickerMessage("Search for a restaurant, venue, city, or type any address.", systemImage: "magnifyingglass.circle")
+      placePickerMessage("Search for a restaurant, gym, cafe, park, venue, or address.", systemImage: "magnifyingglass.circle")
     } else if cleanQuery.count < 2 {
       placePickerMessage("Keep typing to search places.", systemImage: "text.cursor")
     } else if places.isEmpty {
-      placePickerMessage("No matching places yet. You can still use your typed location.", systemImage: "mappin.circle")
+      placePickerMessage("No matching places yet. You can still use your typed place.", systemImage: "mappin.circle")
     }
   }
 
@@ -1705,15 +2150,16 @@ private struct PostLocationPickerSheet: View {
   }
 
   private func selectManualPlace() {
-    selectedPlace = MIRAMapboxPlace(
-      placeId: manualPlaceId,
-      mapboxId: nil,
+    selectedPlace = MIRAExactPostPlace(
+      providerPlaceId: manualPlaceId,
       name: cleanQuery,
       formattedAddress: cleanQuery,
-      address: cleanQuery,
-      vicinity: nil,
-      lat: nil,
-      lng: nil
+      latitude: nil,
+      longitude: nil,
+      category: "manual",
+      city: nil,
+      region: nil,
+      country: nil
     )
     close()
   }
@@ -1736,8 +2182,11 @@ private struct PostLocationPickerSheet: View {
     }
     isLoading = true
     do {
-      let encoded = clean.addingPercentEncoding(withAllowedCharacters: urlQueryComponentAllowed) ?? clean
-      let loaded: [MIRAMapboxPlace] = try await api.get("/mapbox-places/nearby?keyword=\(encoded)&type=place")
+      let request = MKLocalSearch.Request()
+      request.naturalLanguageQuery = clean
+      request.resultTypes = [.pointOfInterest, .address]
+      let response = try await MKLocalSearch(request: request).start()
+      let loaded = response.mapItems.map(MIRAExactPostPlace.init(mapItem:))
       guard !Task.isCancelled, clean == cleanQuery else { return }
       places = loaded
       errorMessage = nil
@@ -1745,15 +2194,9 @@ private struct PostLocationPickerSheet: View {
     } catch {
       guard !Task.isCancelled, clean == cleanQuery else { return }
       places = []
-      errorMessage = "Mapbox places could not load. You can still use your typed address."
+      errorMessage = "Apple Maps places could not load. You can still use your typed place."
       isLoading = false
     }
-  }
-
-  private var urlQueryComponentAllowed: CharacterSet {
-    var allowed = CharacterSet.urlQueryAllowed
-    allowed.remove(charactersIn: "&=?+")
-    return allowed
   }
 }
 

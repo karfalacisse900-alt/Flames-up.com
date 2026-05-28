@@ -103,6 +103,21 @@ export type AdminPost = {
   removed_reason?: string;
   discover_blocked_at?: string | null;
   discover_blocked_reason?: string;
+  display_location_label?: string;
+  display_location_visibility?: string;
+  display_location_source?: string;
+  exact_place?: {
+    provider?: string;
+    provider_place_id?: string;
+    name?: string;
+    formatted_address?: string;
+    category?: string;
+    city?: string;
+    region?: string;
+    country?: string;
+    latitude?: number | null;
+    longitude?: number | null;
+  };
   image?: string;
   images?: string[];
   media_type?: string;
