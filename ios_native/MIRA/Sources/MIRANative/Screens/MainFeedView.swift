@@ -1,6 +1,17 @@
 import SwiftUI
 import UIKit
 
+private struct MainFeedMediaPreloadPlan: Sendable {
+  var previewURLs: [String] = []
+  var feedImageURLs: [String] = []
+  var videoPrewarmURLs: [String] = []
+  var videoKeepAliveURLs: [String] = []
+
+  var isEmpty: Bool {
+    previewURLs.isEmpty && feedImageURLs.isEmpty && videoPrewarmURLs.isEmpty
+  }
+}
+
 @MainActor
 final class MainFeedModel: ObservableObject {
   @Published var posts: [MIRAPost] = []
@@ -16,10 +27,12 @@ final class MainFeedModel: ObservableObject {
   private var isLoadingFreshFeed = false
   private var canLoadMore = true
   private var isLoadingCurrentUser = false
+  private var mediaPrefetchTask: Task<Void, Never>?
   private var followingAuthorIds = Set<String>()
   private var likingPostIds = Set<String>()
-  private let firstPageLimit = 8
-  private let paginationTriggerWindow = 5
+  private let firstPageLimit = 12
+  private let paginationTriggerRatio = 0.70
+  private let paginationTriggerWindow = 4
 
   init(api: MIRAAPIClient) {
     self.api = api
@@ -71,6 +84,7 @@ final class MainFeedModel: ObservableObject {
     await MIRALocalJSONCache.save(sorted, key: feedCacheKey)
     MIRAPerformanceTimeline.markOnce("time_to_first_real_home_item", detail: "network")
     errorMessage = nil
+    prefetchInitialMediaWindow()
     prefetchNextPageIfNeeded(afterInitialCount: sorted.count)
   }
 
@@ -81,32 +95,113 @@ final class MainFeedModel: ObservableObject {
     MIRAPerformanceTimeline.markOnce("time_to_first_real_home_item", detail: "cache")
     errorMessage = nil
     isLoading = false
+    prefetchInitialMediaWindow()
   }
 
   func loadMoreIfNeeded(after post: MIRAPost) async {
     guard !isLoading else { return }
-    guard posts.suffix(paginationTriggerWindow).contains(where: { $0.id == post.id }) else { return }
+    guard let index = posts.firstIndex(where: { $0.id == post.id }) else { return }
+    let ratioTriggerIndex = max(0, Int((Double(max(posts.count - 1, 0)) * paginationTriggerRatio).rounded(.down)))
+    let isNearEnd = posts.suffix(paginationTriggerWindow).contains(where: { $0.id == post.id })
+    guard index >= ratioTriggerIndex || isNearEnd else { return }
     await loadNextPage(reason: "scroll")
   }
 
-  func prefetchMedia(around post: MIRAPost) {
+  func prefetchMedia(around post: MIRAPost, scrollDirection: Int = 1) {
     guard let index = posts.firstIndex(where: { $0.id == post.id }) else { return }
-    let nearbyPosts = Array(posts.dropFirst(index).prefix(4))
-    guard !nearbyPosts.isEmpty else { return }
+    let plan = makeMediaPreloadPlan(focusIndex: index, scrollDirection: scrollDirection)
+    guard !plan.isEmpty else { return }
 
-    let previewURLs = nearbyPosts.flatMap { post in
-      post.posterMediaURLs + post.thumbnailMediaURLs
+    if !plan.videoPrewarmURLs.isEmpty {
+      MIRAVideoPrewarmManager.shared.prewarm(
+        urls: plan.videoPrewarmURLs,
+        keepOnly: Set(plan.videoKeepAliveURLs)
+      )
     }
-    let nextFeedImageURLs = Array(nearbyPosts.prefix(2))
-      .flatMap(\.feedMediaURLs)
-      .filter { !$0.isVideoURL }
-    let urls = orderedMediaURLs(previewURLs + nextFeedImageURLs)
-      .filter { !$0.isVideoURL }
 
-    guard !urls.isEmpty else { return }
-    Task.detached(priority: .utility) {
-      await MIRAImagePrefetcher.prefetch(urls: urls, maxPixelSize: MIRAMediaSizing.feedTargetHeight, limit: 12)
+    mediaPrefetchTask?.cancel()
+    mediaPrefetchTask = Task.detached(priority: .utility) {
+      if !plan.previewURLs.isEmpty {
+        MIRAApplePerformanceLogger.event("media_prefetch_started", detail: "feed_previews=\(plan.previewURLs.count)")
+        await MIRAImagePrefetcher.prefetch(urls: plan.previewURLs, maxPixelSize: 560, limit: 28)
+        MIRAApplePerformanceLogger.event("media_prefetch_completed", detail: "feed_previews")
+      }
+      guard !Task.isCancelled else {
+        MIRAApplePerformanceLogger.event("media_prefetch_canceled", detail: "feed_full")
+        return
+      }
+      if !plan.feedImageURLs.isEmpty {
+        MIRAApplePerformanceLogger.event("media_prefetch_started", detail: "feed_full=\(plan.feedImageURLs.count)")
+        await MIRAImagePrefetcher.prefetch(urls: plan.feedImageURLs, maxPixelSize: MIRAMediaSizing.feedTargetHeight, limit: 12)
+        MIRAApplePerformanceLogger.event("media_prefetch_completed", detail: "feed_full")
+      }
     }
+  }
+
+  private func prefetchInitialMediaWindow() {
+    guard let firstPost = posts.first else { return }
+    prefetchMedia(around: firstPost, scrollDirection: 1)
+  }
+
+  private func makeMediaPreloadPlan(focusIndex: Int, scrollDirection: Int) -> MainFeedMediaPreloadPlan {
+    guard posts.indices.contains(focusIndex) else { return MainFeedMediaPreloadPlan() }
+
+    let direction = scrollDirection < 0 ? -1 : 1
+    let orderedIndices = mediaPreloadIndices(from: focusIndex, direction: direction, limit: 16)
+    var previewURLs: [String] = []
+    var feedImageURLs: [String] = []
+    var videoPrewarmURLs: [String] = []
+    var videoKeepAliveURLs: [String] = []
+
+    for (rank, index) in orderedIndices.enumerated() {
+      let post = posts[index]
+      previewURLs.append(contentsOf: post.posterMediaURLs)
+      previewURLs.append(contentsOf: post.thumbnailMediaURLs)
+
+      let mediaURLs = post.feedMediaURLs
+      let imageURLs = mediaURLs.filter { !$0.isVideoURL }
+      let videoURLs = mediaURLs.filter { $0.isVideoURL }
+
+      if rank == 0 {
+        // Visible carousel: all previews, current/next optimized images, then remaining images if the cache has room.
+        feedImageURLs.append(contentsOf: imageURLs.prefix(3))
+        feedImageURLs.append(contentsOf: imageURLs.dropFirst(3).prefix(5))
+        videoPrewarmURLs.append(contentsOf: videoURLs.prefix(2))
+      } else if rank <= 3 {
+        feedImageURLs.append(contentsOf: imageURLs.prefix(2))
+        videoPrewarmURLs.append(contentsOf: videoURLs.prefix(1))
+      } else if rank <= 6 {
+        feedImageURLs.append(contentsOf: imageURLs.prefix(1))
+      }
+
+      if rank <= 3 {
+        videoKeepAliveURLs.append(contentsOf: videoURLs.prefix(2))
+      }
+    }
+
+    return MainFeedMediaPreloadPlan(
+      previewURLs: orderedMediaURLs(previewURLs),
+      feedImageURLs: orderedMediaURLs(feedImageURLs),
+      videoPrewarmURLs: orderedMediaURLs(videoPrewarmURLs),
+      videoKeepAliveURLs: orderedMediaURLs(videoKeepAliveURLs)
+    )
+  }
+
+  private func mediaPreloadIndices(from focusIndex: Int, direction: Int, limit: Int) -> [Int] {
+    var result: [Int] = [focusIndex]
+    var cursor = focusIndex + direction
+    while posts.indices.contains(cursor), result.count < limit {
+      result.append(cursor)
+      cursor += direction
+    }
+
+    let oppositeDirection = -direction
+    cursor = focusIndex + oppositeDirection
+    while posts.indices.contains(cursor), result.count < min(limit + 3, posts.count) {
+      result.append(cursor)
+      cursor += oppositeDirection
+    }
+    return result
   }
 
   private func orderedMediaURLs(_ values: [String]) -> [String] {
@@ -484,7 +579,7 @@ final class MainFeedModel: ObservableObject {
               views: Double(post.viewsCount ?? 0),
               ageHours: Self.ageHours(from: post.createdAt, formatter: formatter),
               isFollowed: post.isFollowing == true,
-              isVideo: post.mediaURLs.first?.isVideoURL == true
+              isVideo: post.feedMediaURLs.first?.isVideoURL == true
             )
           )
         }
@@ -563,7 +658,7 @@ public struct MainFeedView: View {
                 )
                 .onAppear {
                   Task { await model.loadMoreIfNeeded(after: post) }
-                  model.prefetchMedia(around: post)
+                  model.prefetchMedia(around: post, scrollDirection: scrollIntentDirection)
                 }
               }
               if model.isLoadingMore {
@@ -931,7 +1026,7 @@ private struct MainNativePostCard: View {
       postHeader
         .zIndex(3)
 
-      if !post.mediaURLs.isEmpty {
+      if !post.feedMediaURLs.isEmpty {
         mediaCarousel
           .zIndex(1)
       }
@@ -956,7 +1051,7 @@ private struct MainNativePostCard: View {
       GeometryReader { proxy in
         Color.clear.preference(
           key: MainPostVisibilityPreferenceKey.self,
-          value: [MainPostVisibility(id: post.id, visibleRatio: visibleRatio(in: proxy), hasVideo: post.mediaURLs.contains { $0.isVideoURL })]
+          value: [MainPostVisibility(id: post.id, visibleRatio: visibleRatio(in: proxy), hasVideo: post.feedMediaURLs.contains { $0.isVideoURL })]
         )
       }
     }
@@ -1012,7 +1107,7 @@ private struct MainNativePostCard: View {
     } else {
       VStack(spacing: 7) {
         TabView(selection: $selectedMediaIndex) {
-          ForEach(Array(mediaURLs.enumerated()), id: \.offset) { index, url in
+          ForEach(Array(mediaURLs.enumerated()), id: \.element) { index, url in
             RemoteMediaView(
               url: url,
               isVideo: url.isVideoURL,
@@ -1070,22 +1165,58 @@ private struct MainNativePostCard: View {
     let mediaURLs = post.feedMediaURLs
     guard mediaURLs.count > 1 else { return }
     let selected = min(max(selectedMediaIndex, 0), mediaURLs.count - 1)
-    let lower = max(0, selected - 1)
-    let upper = min(mediaURLs.count - 1, selected + 2)
-    var urls: [String] = []
-    for index in lower...upper {
+
+    var previewURLs: [String] = []
+    var priorityImageURLs: [String] = []
+    var remainingImageURLs: [String] = []
+    var videoURLs: [String] = []
+
+    for index in mediaURLs.indices {
       let url = mediaURLs[index]
       if let placeholder = mediaPlaceholderURL(for: index, mediaURL: url) {
-        urls.append(placeholder)
+        previewURLs.append(placeholder)
       }
-      if !url.isVideoURL {
-        urls.append(url)
+      if url.isVideoURL {
+        if abs(index - selected) <= 1 {
+          videoURLs.append(url)
+        }
+      } else if index >= selected && index <= min(mediaURLs.count - 1, selected + 2) {
+        priorityImageURLs.append(url)
+      } else {
+        remainingImageURLs.append(url)
       }
     }
-    guard !urls.isEmpty else { return }
+
+    if !videoURLs.isEmpty {
+      Task { @MainActor in
+        MIRAVideoPrewarmManager.shared.prewarm(urls: videoURLs, keepOnly: Set(videoURLs))
+      }
+    }
+
+    let fullImageURLs = orderedCarouselURLs(priorityImageURLs + remainingImageURLs)
+    let previews = orderedCarouselURLs(previewURLs)
+    guard !previews.isEmpty || !fullImageURLs.isEmpty else { return }
     Task.detached(priority: .utility) {
-      await MIRAImagePrefetcher.prefetch(urls: urls, maxPixelSize: MIRAMediaSizing.feedTargetHeight, limit: 8)
+      if !previews.isEmpty {
+        MIRAApplePerformanceLogger.event("carousel_media_prefetched", detail: "previews=\(previews.count)")
+        await MIRAImagePrefetcher.prefetch(urls: previews, maxPixelSize: 560, limit: 16)
+      }
+      if !fullImageURLs.isEmpty {
+        MIRAApplePerformanceLogger.event("carousel_media_prefetched", detail: "full=\(fullImageURLs.count)")
+        await MIRAImagePrefetcher.prefetch(urls: fullImageURLs, maxPixelSize: MIRAMediaSizing.feedTargetHeight, limit: 10)
+      }
     }
+  }
+
+  private func orderedCarouselURLs(_ values: [String]) -> [String] {
+    var seen = Set<String>()
+    var result: [String] = []
+    for value in values {
+      let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !trimmed.isEmpty, seen.insert(trimmed).inserted else { continue }
+      result.append(trimmed)
+    }
+    return result
   }
 
   private func mediaPlaceholderURL(for index: Int, mediaURL: String) -> String? {

@@ -616,6 +616,7 @@ private struct PreferenceSettingsNativeView: View {
   @AppStorage("mira.settings.high_quality_uploads") private var highQualityUploads = true
   @AppStorage("mira.settings.reduce_motion") private var reduceMotion = false
   @EnvironmentObject private var localization: MIRALocalization
+  @State private var isClearingMediaCache = false
 
   var body: some View {
     SettingsDetailScaffold(title: localization.string("settings.preferences")) {
@@ -651,6 +652,18 @@ private struct PreferenceSettingsNativeView: View {
         SettingsToggleRow(title: "Autoplay videos", subtitle: "Play visible videos automatically.", systemImage: "play.circle", isOn: $autoplayVideo)
         SettingsToggleRow(title: "High quality uploads", subtitle: "Keep uploads sharp when possible.", systemImage: "arrow.up.circle", isOn: $highQualityUploads)
         SettingsToggleRow(title: "Reduce motion", subtitle: "Use simpler animations.", systemImage: "figure.walk.motion", isOn: $reduceMotion)
+        SettingsButtonRow(
+          title: isClearingMediaCache ? "Clearing media cache..." : "Clear media cache",
+          subtitle: "Remove old cached thumbnails, posters, and feed images.",
+          systemImage: "externaldrive.badge.xmark"
+        ) {
+          guard !isClearingMediaCache else { return }
+          isClearingMediaCache = true
+          MIRAMediaCacheMaintenance.clearMediaCaches()
+          DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
+            isClearingMediaCache = false
+          }
+        }
       }
     }
   }

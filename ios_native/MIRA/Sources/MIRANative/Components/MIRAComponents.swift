@@ -326,8 +326,23 @@ private final class MIRAImageMemoryCache {
     cache.setObject(image, forKey: cacheKey(for: url, maxPixelSize: maxPixelSize), cost: cost)
   }
 
+  func removeAll() {
+    cache.removeAllObjects()
+  }
+
   private func cacheKey(for url: URL, maxPixelSize: CGFloat) -> NSString {
     "\(url.absoluteString)#\(Int(maxPixelSize.rounded()))" as NSString
+  }
+}
+
+public enum MIRAMediaCacheMaintenance {
+  public static func clearMediaCaches() {
+    MIRAImageMemoryCache.shared.removeAll()
+    MIRAAPIClient.productionSession.configuration.urlCache?.removeAllCachedResponses()
+    Task {
+      await MIRAImageDiskCache.clear()
+      MIRAApplePerformanceLogger.event("media_cache_cleared", detail: "manual")
+    }
   }
 }
 
@@ -431,11 +446,18 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
       if let uiImage {
         content(Image(uiImage: uiImage))
           .opacity(isImageVisible ? 1 : 0)
+      } else if let memoryImage = memoryImageForCurrentURL {
+        content(Image(uiImage: memoryImage))
       } else {
         placeholder()
       }
     }
     .task(id: url) { await loadImage() }
+  }
+
+  private var memoryImageForCurrentURL: UIImage? {
+    guard let url, let remoteURL = URL(string: url) else { return nil }
+    return MIRAImageMemoryCache.shared.image(for: remoteURL, maxPixelSize: max(64, maxPixelSize))
   }
 
   private func loadImage() async {
@@ -453,6 +475,17 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
     if isAlreadyLoaded { return }
 
     let resolvedMaxPixelSize = max(64, maxPixelSize)
+
+    if let memoryImage = MIRAImageMemoryCache.shared.image(for: remoteURL, maxPixelSize: resolvedMaxPixelSize) {
+      await MainActor.run {
+        uiImage = memoryImage
+        loadedURL = remoteURL
+        isImageVisible = true
+        onImageLoaded(memoryImage)
+      }
+      MIRAApplePerformanceLogger.event("media_cache_hit", detail: "memory_sync")
+      return
+    }
 
     let shouldClear = await MainActor.run {
       loadedURL != remoteURL
@@ -531,6 +564,7 @@ public enum MIRAImagePrefetcher {
 
     await withTaskGroup(of: Void.self) { group in
       for value in uniqueURLs {
+        guard !Task.isCancelled else { break }
         group.addTask {
           await prefetchImage(value, maxPixelSize: maxPixelSize)
         }
@@ -539,6 +573,7 @@ public enum MIRAImagePrefetcher {
   }
 
   private static func prefetchImage(_ value: String, maxPixelSize: CGFloat) async {
+    guard !Task.isCancelled else { return }
     guard let remoteURL = URL(string: value) else { return }
     guard MIRANetworkSecurityPolicy.isSecureMediaURL(remoteURL) else { return }
 
@@ -555,6 +590,7 @@ public enum MIRAImagePrefetcher {
       return
     }
 
+    guard !Task.isCancelled else { return }
     _ = await MIRAImageLoadPipeline.shared.image(for: remoteURL, maxPixelSize: resolvedMaxPixelSize)
   }
 
@@ -869,6 +905,20 @@ private struct MIRAResolvedVideoPlayer: View {
       return
     }
 
+    if let prewarmedPlayer = MIRAVideoPrewarmManager.shared.consumePreparedPlayer(for: url) {
+      if let info = MIRAVideoPrewarmManager.shared.streamInfo(for: url) {
+        thumbnailURL = info.thumbnail
+      }
+      configurePlayback(for: prewarmedPlayer)
+      player = prewarmedPlayer
+      isPlayerReady = false
+      await startVideoMetric(label: "prewarmed")
+      syncPlayback(prewarmedPlayer)
+      Task { await markPlayerReady(prewarmedPlayer, expectedURL: url) }
+      MIRAPerformanceTimeline.markOnce("time_to_first_video_frame", detail: "prewarmed")
+      return
+    }
+
     if let directURL, directURL.isPlayableFileOrRemoteVideo {
       let avPlayer = AVPlayer(url: directURL)
       configurePlayback(for: avPlayer)
@@ -891,6 +941,11 @@ private struct MIRAResolvedVideoPlayer: View {
 
   @MainActor
   private func resolveCloudflareStream(createPlayer: Bool) async {
+    if let cachedInfo = MIRAVideoPrewarmManager.shared.streamInfo(for: url) {
+      applyStreamPlaybackInfo(cachedInfo, createPlayer: createPlayer)
+      return
+    }
+
     let uid = String(url.dropFirst("cfstream:".count))
     let endpoint = MIRAProductionBackend.apiURL("stream/video/\(uid)")
 
@@ -910,27 +965,32 @@ private struct MIRAResolvedVideoPlayer: View {
       let decoder = JSONDecoder()
       decoder.keyDecodingStrategy = .convertFromSnakeCase
       let info = try decoder.decode(MIRAStreamPlaybackInfo.self, from: data)
-      thumbnailURL = info.thumbnail
-      if createPlayer, let hls = info.hls, let hlsURL = URL(string: hls), info.ready != false {
-        let avPlayer = AVPlayer(url: hlsURL)
-        configurePlayback(for: avPlayer)
-        player = avPlayer
-        isPlayerReady = false
-        await startVideoMetric(label: "stream \(uid)")
-        syncPlayback(avPlayer)
-        Task { await markPlayerReady(avPlayer, expectedURL: url) }
-        MIRAPerformanceTimeline.markOnce("time_to_first_video_frame", detail: "stream")
-      } else if createPlayer {
-        failed = true
-        stopVideoMetric(status: "not_ready")
-      } else {
-        failed = false
-      }
+      applyStreamPlaybackInfo(info, createPlayer: createPlayer)
     } catch {
       failed = createPlayer
       if createPlayer {
         stopVideoMetric(status: "error")
       }
+    }
+  }
+
+  @MainActor
+  private func applyStreamPlaybackInfo(_ info: MIRAStreamPlaybackInfo, createPlayer: Bool) {
+    thumbnailURL = info.thumbnail
+    if createPlayer, let hls = info.hls, let hlsURL = URL(string: hls), info.ready != false {
+      let avPlayer = AVPlayer(url: hlsURL)
+      configurePlayback(for: avPlayer)
+      player = avPlayer
+      isPlayerReady = false
+      Task { await startVideoMetric(label: "stream \(info.uid ?? "video")") }
+      syncPlayback(avPlayer)
+      Task { await markPlayerReady(avPlayer, expectedURL: url) }
+      MIRAPerformanceTimeline.markOnce("time_to_first_video_frame", detail: "stream")
+    } else if createPlayer {
+      failed = true
+      stopVideoMetric(status: "not_ready")
+    } else {
+      failed = false
     }
   }
 

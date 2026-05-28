@@ -1044,7 +1044,7 @@ public struct MIRAMediaUploadResponse: Decodable, Hashable {
   public let source: String?
 }
 
-public struct MIRAStreamPlaybackInfo: Decodable, Hashable {
+public struct MIRAStreamPlaybackInfo: Decodable, Hashable, Sendable {
   public let uid: String?
   public let hls: String?
   public let dash: String?

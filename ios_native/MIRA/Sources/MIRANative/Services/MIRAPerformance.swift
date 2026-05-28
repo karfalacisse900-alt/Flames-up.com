@@ -329,6 +329,21 @@ public enum MIRAImageDiskCache {
     }.value
   }
 
+  public static func clear() async {
+    await Task.detached(priority: .utility) {
+      guard let directory = cacheDirectory(),
+            let files = try? FileManager.default.contentsOfDirectory(
+              at: directory,
+              includingPropertiesForKeys: nil,
+              options: [.skipsHiddenFiles]
+            )
+      else { return }
+      for file in files {
+        try? FileManager.default.removeItem(at: file)
+      }
+    }.value
+  }
+
   public static func trim(maxAge: TimeInterval = 60 * 60 * 24 * 14, maxBytes: Int = 700 * 1024 * 1024) async {
     await Task.detached(priority: .utility) {
       guard let directory = cacheDirectory(),
