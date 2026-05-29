@@ -533,6 +533,7 @@ let messagePresenceSchemaReady = false;
 let productionReadinessSchemaReady = false;
 let adminModerationSchemaReady = false;
 let autoCategorySchemaReady = false;
+let autoCategoryBackfillReady = false;
 let locationSchemaReady = false;
 
 function normalizeSchemaSql(statement: string): string {
@@ -1386,6 +1387,48 @@ async function ensureAutoCategorySchema(db: D1Database) {
   }
 
   autoCategorySchemaReady = true;
+  await backfillDiscoverCategories(db);
+}
+
+async function backfillDiscoverCategories(db: D1Database) {
+  if (autoCategoryBackfillReady) return;
+  const searchableSql = [
+    "COALESCE(title, '')",
+    "COALESCE(content, '')",
+    "COALESCE(location, '')",
+    "COALESCE(category, '')",
+    "COALESCE(post_type, '')",
+    "COALESCE(tags_json, '')",
+    "COALESCE(category_signals_json, '')",
+  ].join(" || ' ' || ");
+  for (const category of DISCOVER_CATEGORIES.filter((item) => item !== 'lifestyle')) {
+    const keywords = CATEGORY_KEYWORDS[category].slice(0, 28);
+    const keywordMatches = keywords.map(() => `LOWER(${searchableSql}) LIKE ?`).join(' OR ');
+    try {
+      await db.prepare(`
+        UPDATE posts
+        SET primary_category = ?,
+            category_confidence = MAX(COALESCE(category_confidence, 0), 0.56),
+            category_source = CASE
+              WHEN COALESCE(category_source, '') IN ('', 'fallback') THEN 'fallback'
+              ELSE category_source
+            END,
+            category_status = CASE
+              WHEN COALESCE(category_status, '') IN ('', 'pending') THEN 'low_confidence'
+              ELSE category_status
+            END
+        WHERE (
+          COALESCE(primary_category, '') IN ('', 'lifestyle', 'general', 'place')
+          OR COALESCE(category_confidence, 0) < 0.50
+        )
+        AND (${keywordMatches})
+      `).bind(category, ...keywords.map((keyword) => `%${keyword}%`)).run();
+    } catch (error) {
+      console.warn('Discover category backfill skipped:', category, getErrorCode(error));
+      break;
+    }
+  }
+  autoCategoryBackfillReady = true;
 }
 
 async function ensureLocationSchema(db: D1Database) {

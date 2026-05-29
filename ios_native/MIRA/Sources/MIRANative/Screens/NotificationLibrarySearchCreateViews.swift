@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreLocation
 import MapKit
 import PhotosUI
 import SwiftUI
@@ -548,7 +549,7 @@ private enum PostDetailSheet: Identifiable, Equatable {
   }
 }
 
-private struct MIRABroadDisplayLocation: Hashable {
+private struct MIRABroadDisplayLocation: Codable, Hashable {
   var city: String?
   var region: String?
   var country: String?
@@ -560,6 +561,10 @@ private struct MIRABroadDisplayLocation: Hashable {
     let clean = label?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     return visibility != "hidden" && !clean.isEmpty
   }
+}
+
+private struct MIRABroadLocationReverseResponse: Decodable {
+  let location: MIRABroadLocationSearchResult?
 }
 
 private struct MIRABroadLocationSearchResponse: Decodable {
@@ -696,10 +701,75 @@ private struct MIRAExactPostPlace: Identifiable, Hashable {
   }
 }
 
+@MainActor
+private final class MIRABroadLocationResolver: NSObject, ObservableObject, CLLocationManagerDelegate {
+  @Published var isResolving = false
+  private let manager = CLLocationManager()
+  private var continuation: CheckedContinuation<CLLocation?, Never>?
+
+  override init() {
+    super.init()
+    manager.delegate = self
+    manager.desiredAccuracy = kCLLocationAccuracyThreeKilometers
+  }
+
+  func resolveCurrentLocation() async -> CLLocation? {
+    guard !isResolving else { return nil }
+    isResolving = true
+    return await withCheckedContinuation { continuation in
+      self.continuation = continuation
+      Task { [weak self] in
+        try? await Task.sleep(nanoseconds: 10_000_000_000)
+        await self?.finish(nil)
+      }
+      switch manager.authorizationStatus {
+      case .notDetermined:
+        manager.requestWhenInUseAuthorization()
+      case .authorizedAlways, .authorizedWhenInUse:
+        manager.requestLocation()
+      case .denied, .restricted:
+        finish(nil)
+      @unknown default:
+        finish(nil)
+      }
+    }
+  }
+
+  func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+    guard continuation != nil else { return }
+    switch manager.authorizationStatus {
+    case .authorizedAlways, .authorizedWhenInUse:
+      manager.requestLocation()
+    case .denied, .restricted:
+      finish(nil)
+    case .notDetermined:
+      break
+    @unknown default:
+      finish(nil)
+    }
+  }
+
+  func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+    finish(locations.last)
+  }
+
+  func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+    finish(nil)
+  }
+
+  private func finish(_ location: CLLocation?) {
+    guard let continuation else { return }
+    self.continuation = nil
+    isResolving = false
+    continuation.resume(returning: location)
+  }
+}
+
 public struct CreatePostNativeView: View {
   let api: MIRAAPIClient
   private let onClose: (() -> Void)?
   @Environment(\.dismiss) private var dismiss
+  @StateObject private var broadLocationResolver = MIRABroadLocationResolver()
   @State private var title = ""
   @State private var bodyText = ""
   @State private var mediaItems: [MIRAPickedMedia] = []
@@ -715,6 +785,7 @@ public struct CreatePostNativeView: View {
   @State private var selectedPlace: MIRAExactPostPlace?
   @State private var broadLocation = MIRABroadDisplayLocation()
   @State private var showBroadLocation = false
+  @State private var broadLocationError: String?
   @State private var hasLoadedBroadLocation = false
   @State private var taggedUsers: [MIRAUser] = []
   @State private var hashtags: [String] = []
@@ -745,6 +816,10 @@ public struct CreatePostNativeView: View {
     }
     .onChange(of: pickerItems) { _, newItems in
       Task { await loadPickerItems(newItems) }
+    }
+    .onChange(of: showBroadLocation) { _, isOn in
+      guard isOn else { return }
+      Task { await resolveCurrentBroadLocationForPost() }
     }
     .miraBottomSheet(isPresented: $showPreview, preferredHeightFraction: 0.72) { _ in
       ComposerPreviewSheet(title: title, bodyText: bodyText, mediaItems: mediaItems)
@@ -1087,7 +1162,7 @@ public struct CreatePostNativeView: View {
         Text("Show city/country")
           .font(.system(size: 19, weight: .regular))
           .foregroundStyle(MIRATheme.Color.textPrimary)
-        Text(broadLocation.label?.isEmpty == false ? broadLocation.label! : "Hidden for this post")
+        Text(broadLocationStatusText)
           .font(.system(size: 14, weight: .regular))
           .foregroundStyle(MIRATheme.Color.textMuted)
           .lineLimit(1)
@@ -1098,7 +1173,7 @@ public struct CreatePostNativeView: View {
 
       Toggle("", isOn: $showBroadLocation)
         .labelsHidden()
-        .disabled(broadLocation.label?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+        .disabled(broadLocationResolver.isResolving)
 
       Button {
         activePostDetailSheet = .city
@@ -1119,6 +1194,19 @@ public struct CreatePostNativeView: View {
         .fill(MIRATheme.Color.hairline.opacity(0.72))
         .frame(height: 0.7)
     }
+  }
+
+  private var broadLocationStatusText: String {
+    if broadLocationResolver.isResolving {
+      return "Finding your city..."
+    }
+    if let broadLocationError, !broadLocationError.isEmpty {
+      return broadLocationError
+    }
+    if let label = broadLocation.label?.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty {
+      return showBroadLocation ? label : "\(label) hidden"
+    }
+    return showBroadLocation ? "Tap Allow to add your city/country" : "Hidden for this post"
   }
 
   @ViewBuilder
@@ -1277,10 +1365,37 @@ public struct CreatePostNativeView: View {
       let user: MIRAUser = try await api.get("/auth/me")
       let location = parseProfileCity(user.city)
       broadLocation = location
-      showBroadLocation = location.hasVisibleLabel
+      showBroadLocation = false
     } catch {
       broadLocation = MIRABroadDisplayLocation()
       showBroadLocation = false
+    }
+  }
+
+  @MainActor
+  private func resolveCurrentBroadLocationForPost() async {
+    broadLocationError = nil
+    guard let location = await broadLocationResolver.resolveCurrentLocation() else {
+      showBroadLocation = broadLocation.hasVisibleLabel
+      broadLocationError = "Location permission is needed."
+      return
+    }
+
+    let lat = String(format: "%.5f", location.coordinate.latitude)
+    let lng = String(format: "%.5f", location.coordinate.longitude)
+    do {
+      let response: MIRABroadLocationReverseResponse = try await api.get("/mapbox-locations/reverse?lat=\(lat)&lng=\(lng)")
+      guard let resolved = response.location?.displayLocation, resolved.hasVisibleLabel else {
+        showBroadLocation = broadLocation.hasVisibleLabel
+        broadLocationError = "Could not find your city."
+        return
+      }
+      broadLocation = resolved
+      showBroadLocation = true
+      broadLocationError = nil
+    } catch {
+      showBroadLocation = broadLocation.hasVisibleLabel
+      broadLocationError = "City/country could not load."
     }
   }
 

@@ -635,7 +635,7 @@ public struct MainFeedView: View {
           GeometryReader { proxy in
             Color.clear.preference(key: MainFeedScrollOffsetPreferenceKey.self, value: proxy.frame(in: .named("mainFeedScroll")).minY)
           }
-          .frame(height: 0)
+          .frame(height: 1)
 
           LazyVStack(spacing: 0) {
             if model.isLoading && model.posts.isEmpty {
@@ -676,6 +676,10 @@ public struct MainFeedView: View {
           .padding(.bottom, MIRATheme.Space.xxl)
         }
         .coordinateSpace(name: "mainFeedScroll")
+        .simultaneousGesture(
+          DragGesture(minimumDistance: 6, coordinateSpace: .local)
+            .onChanged(handleScrollDrag)
+        )
 
         mainHeader
           .offset(y: isFeedChromeHidden ? -84 : 0)
@@ -860,6 +864,25 @@ public struct MainFeedView: View {
         activeVideoPostID = nextID
       }
       MIRAMemoryMetrics.log("main_feed_video_switch")
+    }
+  }
+
+  private func handleScrollDrag(_ value: DragGesture.Value) {
+    let vertical = value.translation.height
+    let horizontal = abs(value.translation.width)
+    guard abs(vertical) > max(8, horizontal * 0.65) else { return }
+    if vertical < -8 {
+      if !isHeaderHidden {
+        withAnimation(.easeOut(duration: 0.16)) {
+          isHeaderHidden = true
+        }
+      }
+    } else if vertical > 10 {
+      if isHeaderHidden {
+        withAnimation(.easeOut(duration: 0.18)) {
+          isHeaderHidden = false
+        }
+      }
     }
   }
 
