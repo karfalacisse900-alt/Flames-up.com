@@ -386,7 +386,7 @@ private actor MIRAImageLoadPipeline {
         var request = URLRequest(url: remoteURL)
         request.cachePolicy = .returnCacheDataElseLoad
         request.timeoutInterval = 14
-        request.setValue("image/avif,image/webp,image/*,*/*;q=0.8", forHTTPHeaderField: "Accept")
+        request.setValue("image/jpeg,image/png,image/webp,*/*;q=0.5", forHTTPHeaderField: "Accept")
 
         let metric = await MIRAPerformanceMetric.begin(category: "image", label: remoteURL.host ?? remoteURL.path)
         let data: Data

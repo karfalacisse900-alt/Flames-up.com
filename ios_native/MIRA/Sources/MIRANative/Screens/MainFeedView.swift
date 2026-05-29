@@ -823,7 +823,7 @@ public struct MainFeedView: View {
     self.previousScrollMinY = minY
     guard abs(delta) > 1 else { return }
 
-    if minY > -10 {
+    if minY > -6 {
       isHeaderHidden = false
       scrollIntentDistance = 0
       scrollIntentDirection = 0
@@ -838,10 +838,10 @@ public struct MainFeedView: View {
       scrollIntentDistance += abs(delta)
     }
 
-    if direction == 1 && minY < -18 && scrollIntentDistance > 10 {
+    if direction == 1 && minY < -8 && scrollIntentDistance > 6 {
       isHeaderHidden = true
       scrollIntentDistance = 0
-    } else if direction == -1 && scrollIntentDistance > 10 {
+    } else if direction == -1 && scrollIntentDistance > 8 {
       isHeaderHidden = false
       scrollIntentDistance = 0
     }

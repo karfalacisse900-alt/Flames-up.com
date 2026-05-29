@@ -2003,10 +2003,12 @@ function autoCategoryEngine(input: AutoCategoryInput): AutoCategoryResult {
   const winner = DISCOVER_CATEGORIES
     .map((category) => ({ category, score: scores[category] }))
     .sort((a, b) => b.score - a.score)[0];
-  const rawConfidence = winner ? Math.min(0.99, Math.max(0, winner.score / 100)) : 0;
+  const winnerScore = winner?.score || 0;
+  const hasCategorySignal = winnerScore >= 20;
+  const rawConfidence = hasCategorySignal ? Math.min(0.99, Math.max(0, winnerScore / 65)) : 0;
   const confidence = Number(rawConfidence.toFixed(2));
-  const isLow = confidence < 0.50;
-  const primaryCategory = isLow ? 'lifestyle' : winner.category;
+  const isLow = !hasCategorySignal || confidence < 0.50;
+  const primaryCategory = hasCategorySignal ? winner.category : 'lifestyle';
   const source: AutoCategorySource = backendGuess || backendLabels.length
     ? (appleGuess || appleLabels.length ? 'hybrid_ai' : 'backend_ai')
     : appleGuess || appleLabels.length
@@ -2016,8 +2018,8 @@ function autoCategoryEngine(input: AutoCategoryInput): AutoCategoryResult {
 
   return {
     primary_category: primaryCategory,
-    category_confidence: isLow ? Math.max(confidence, 0.35) : confidence,
-    category_source: isLow ? 'fallback' : source,
+    category_confidence: hasCategorySignal ? Math.max(confidence, 0.35) : 0.35,
+    category_source: hasCategorySignal ? source : 'fallback',
     category_status: status,
     tags: Array.from(tags).slice(0, 16),
     signals: {
@@ -7834,13 +7836,21 @@ api.post('/posts', authMiddleware, async (c) => {
   const mediaTypes = sanitizeMediaTypes(b.media_types, imageUrls.length || (primaryImage ? 1 : 0));
   const explicitTags = sanitizeAutoCategoryTags([...(parseJsonArray(b.tags)), ...(parseJsonArray(b.hashtags))]);
   const mediaTypeHint = mediaTypes.includes('video') ? 'video' : 'image';
+  const categoryLocationSignals = [
+    location,
+    displayLocationLabel,
+    displayCity,
+    displayRegion,
+    displayCountry,
+    placeCategory,
+  ].filter(Boolean).join(' ');
   const autoCategory = autoCategoryFromBody(b, {
     caption: [postTitle, postContent].filter(Boolean).join('\n\n'),
     mediaType: mediaTypeHint,
     postType,
     hashtags: explicitTags,
-    location,
-    placeName: placeName || null,
+    location: categoryLocationSignals || location,
+    placeName: [placeName, placeCategory].filter(Boolean).join(' ') || null,
   });
   const placeLat = b.place_lat == null ? null : clampFloat(b.place_lat, -90, 90, 0);
   const placeLng = b.place_lng == null ? null : clampFloat(b.place_lng, -180, 180, 0);
@@ -10310,16 +10320,26 @@ api.get('/discover', authMiddleware, async (c) => {
   const binds: any[] = [userId, userId, userId, ...visiblePostBindValues(userId)];
   if (category !== 'all') {
     const keywords = CATEGORY_KEYWORDS[category].slice(0, 18);
-    const searchableText = "LOWER(COALESCE(p.title, '') || ' ' || COALESCE(p.content, '') || ' ' || COALESCE(p.location, '') || ' ' || COALESCE(p.place_name, '') || ' ' || COALESCE(p.tags_json, ''))";
-    const keywordMatches = keywords.map(() => `${searchableText} LIKE ?`).join(' OR ');
+    const searchableText = [
+      "COALESCE(p.title, '')",
+      "COALESCE(p.content, '')",
+      "COALESCE(p.location, '')",
+      "COALESCE(p.place_name, '')",
+      "COALESCE(p.place_category, '')",
+      "COALESCE(p.display_location_label, '')",
+      "COALESCE(p.display_city, '')",
+      "COALESCE(p.display_country, '')",
+      "COALESCE(p.tags_json, '')",
+      "COALESCE(p.category_signals_json, '')",
+    ].join(" || ' ' || ");
+    const searchableSql = `LOWER(${searchableText})`;
+    const keywordMatches = keywords.map(() => `${searchableSql} LIKE ?`).join(' OR ');
     conditions.push(`(
       LOWER(COALESCE(NULLIF(p.primary_category, ''), NULLIF(p.category, ''), 'lifestyle')) = ?
-      OR (
-        LOWER(COALESCE(p.primary_category, '')) IN ('', 'lifestyle', 'general', 'place')
-        AND (${keywordMatches})
-      )
+      OR LOWER(COALESCE(p.category, '')) = ?
+      OR (${keywordMatches})
     )`);
-    binds.push(category, ...keywords.map((keyword) => `%${keyword}%`));
+    binds.push(category, category, ...keywords.map((keyword) => `%${keyword}%`));
   }
   const sql = [
     `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,

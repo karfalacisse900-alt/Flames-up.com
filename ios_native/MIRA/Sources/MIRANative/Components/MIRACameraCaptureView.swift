@@ -1229,11 +1229,11 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
   private func capturePhoto() {
     guard session.isRunning, !movieOutput.isRecording else { return }
     let settings: AVCapturePhotoSettings
+    let jpegFormat: [String: Any] = [AVVideoCodecKey: AVVideoCodecType.jpeg]
     if rawCaptureEnabled, let rawPixelFormat = photoOutput.availableRawPhotoPixelFormatTypes.first {
-      let processedFormat: [String: Any] = [AVVideoCodecKey: AVVideoCodecType.hevc]
-      settings = AVCapturePhotoSettings(rawPixelFormatType: rawPixelFormat, processedFormat: processedFormat)
+      settings = AVCapturePhotoSettings(rawPixelFormatType: rawPixelFormat, processedFormat: jpegFormat)
     } else {
-      settings = AVCapturePhotoSettings()
+      settings = AVCapturePhotoSettings(format: jpegFormat)
     }
     settings.photoQualityPrioritization = .quality
     if currentInput?.device.hasFlash == true {
