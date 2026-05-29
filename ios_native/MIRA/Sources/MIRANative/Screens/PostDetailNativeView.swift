@@ -1166,6 +1166,7 @@ private struct DiscoverDetailCommentsSheet: View {
       }
       .scrollIndicators(.hidden)
       .scrollDismissesKeyboard(.interactively)
+      .miraScrollFeel(.sheet)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
     .safeAreaInset(edge: .bottom, spacing: 0) {

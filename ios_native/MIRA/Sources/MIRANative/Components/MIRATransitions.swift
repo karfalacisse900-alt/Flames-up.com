@@ -23,7 +23,7 @@ public extension View {
     isPresented: Binding<Bool>,
     preferredHeightFraction: CGFloat = 0.76,
     maxHeight: CGFloat = 720,
-    scrimOpacity: Double = 0.18,
+    scrimOpacity: Double = 0.22,
     onDismissed: (() -> Void)? = nil,
     @ViewBuilder sheet: @escaping (_ dismiss: @escaping () -> Void) -> Sheet
   ) -> some View {

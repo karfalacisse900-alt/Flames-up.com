@@ -676,6 +676,7 @@ public struct MainFeedView: View {
           .padding(.bottom, MIRATheme.Space.xxl)
         }
         .coordinateSpace(name: "mainFeedScroll")
+        .miraScrollFeel(.feed)
         .simultaneousGesture(
           DragGesture(minimumDistance: 6, coordinateSpace: .local)
             .onChanged(handleScrollDrag)
@@ -1787,6 +1788,7 @@ private struct MainFeedCommentsSheet: View {
       }
       .scrollIndicators(.hidden)
       .scrollDismissesKeyboard(.interactively)
+      .miraScrollFeel(.sheet)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
     .safeAreaInset(edge: .bottom, spacing: 0) {

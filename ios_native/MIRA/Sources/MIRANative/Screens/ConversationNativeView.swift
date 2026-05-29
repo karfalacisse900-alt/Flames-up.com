@@ -358,6 +358,7 @@ public struct ConversationNativeView: View {
           .padding(.bottom, 120)
         }
         .scrollDismissesKeyboard(.interactively)
+        .miraScrollFeel(.chat)
         .onChange(of: model.messages.count) { _ in
           if let last = model.messages.last?.id {
             withAnimation(.easeOut(duration: 0.2)) {

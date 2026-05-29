@@ -269,6 +269,72 @@ public extension View {
   }
 }
 
+public enum MIRAScrollFeel {
+  case feed
+  case chat
+  case sheet
+
+  fileprivate var decelerationRate: UIScrollView.DecelerationRate {
+    switch self {
+    case .feed:
+      return UIScrollView.DecelerationRate(rawValue: 0.992)
+    case .chat:
+      return UIScrollView.DecelerationRate(rawValue: 0.994)
+    case .sheet:
+      return UIScrollView.DecelerationRate(rawValue: 0.995)
+    }
+  }
+
+  fileprivate var directionalLockEnabled: Bool {
+    switch self {
+    case .feed:
+      return true
+    case .chat, .sheet:
+      return false
+    }
+  }
+}
+
+public extension View {
+  func miraScrollFeel(_ feel: MIRAScrollFeel) -> some View {
+    background(MIRAScrollTuningView(feel: feel).frame(width: 0, height: 0))
+  }
+}
+
+private struct MIRAScrollTuningView: UIViewRepresentable {
+  let feel: MIRAScrollFeel
+
+  func makeUIView(context: Context) -> UIView {
+    let view = UIView(frame: .zero)
+    view.isUserInteractionEnabled = false
+    DispatchQueue.main.async {
+      configureScrollView(from: view)
+    }
+    return view
+  }
+
+  func updateUIView(_ uiView: UIView, context: Context) {
+    DispatchQueue.main.async {
+      configureScrollView(from: uiView)
+    }
+  }
+
+  private func configureScrollView(from view: UIView) {
+    var parent = view.superview
+    while let candidate = parent {
+      if let scrollView = candidate as? UIScrollView {
+        scrollView.decelerationRate = feel.decelerationRate
+        scrollView.delaysContentTouches = false
+        scrollView.canCancelContentTouches = true
+        scrollView.directionalLockEnabled = feel.directionalLockEnabled
+        scrollView.backgroundColor = .clear
+        return
+      }
+      parent = candidate.superview
+    }
+  }
+}
+
 public struct MIRAPressButtonStyle: ButtonStyle {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 

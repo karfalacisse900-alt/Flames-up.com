@@ -1178,6 +1178,7 @@ public struct ChatNativeView: View {
         .padding(.top, MIRATheme.Space.md)
         .padding(.bottom, MIRATheme.Space.xxl)
       }
+      .miraScrollFeel(.chat)
       .background(MIRATheme.Color.appBackground)
       .miraScreenEnter(.tab)
       .task { await model.load() }
@@ -1266,7 +1267,6 @@ public struct ChatNativeView: View {
   private func openConversation(_ conversation: MIRAConversation) async {
     guard openingConversationId == nil else { return }
     openingConversationId = conversation.id
-    defer { openingConversationId = nil }
 
     let roomModel: ConversationNativeModel?
     if let groupId = conversation.groupId {
@@ -1277,13 +1277,19 @@ public struct ChatNativeView: View {
       roomModel = nil
     }
 
-    guard let roomModel else { return }
-    await roomModel.load()
-    activeConversationRoute = ChatOpenRoute(
-      id: conversation.id,
-      title: conversation.displayName,
-      model: roomModel
-    )
+    guard let roomModel else {
+      openingConversationId = nil
+      return
+    }
+
+    withAnimation(.spring(response: 0.30, dampingFraction: 0.90)) {
+      activeConversationRoute = ChatOpenRoute(
+        id: conversation.id,
+        title: conversation.displayName,
+        model: roomModel
+      )
+      openingConversationId = nil
+    }
   }
 
   private var chatListSkeleton: some View {
