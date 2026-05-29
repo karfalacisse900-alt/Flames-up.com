@@ -537,6 +537,7 @@ private enum PostDetailSheet: Identifiable, Equatable {
   case people
   case tags
   case music
+  case aiAssist
 
   var id: String {
     switch self {
@@ -545,6 +546,7 @@ private enum PostDetailSheet: Identifiable, Equatable {
     case .people: return "people"
     case .tags: return "tags"
     case .music: return "music"
+    case .aiAssist: return "aiAssist"
     }
   }
 }
@@ -790,6 +792,9 @@ public struct CreatePostNativeView: View {
   @State private var taggedUsers: [MIRAUser] = []
   @State private var hashtags: [String] = []
   @State private var selectedAudioTrack: MIRAAudiusTrack?
+  @State private var postAssistResponse: MIRAPostAssistResponse?
+  @State private var isGeneratingPostAssist = false
+  @State private var postAssistError: String?
 
   public init(api: MIRAAPIClient, onClose: (() -> Void)? = nil) {
     self.api = api
@@ -836,6 +841,24 @@ public struct CreatePostNativeView: View {
         PostHashtagSheet(hashtags: $hashtags, onClose: closeSheet)
       case .music:
         MIRAAudiusMusicPickerSheet(api: api, selectedTrack: $selectedAudioTrack, onClose: closeSheet)
+      case .aiAssist:
+        PostAIAssistSheet(
+          response: postAssistResponse,
+          isLoading: isGeneratingPostAssist,
+          errorMessage: postAssistError,
+          onGenerate: {
+            Task { await generatePostAssist() }
+          },
+          onApplyHeadline: { suggestion in
+            title = suggestion
+            activePostDetailSheet = nil
+          },
+          onApplyCaption: { suggestion in
+            bodyText = suggestion
+            activePostDetailSheet = nil
+          },
+          onClose: closeSheet
+        )
       case nil:
         Color.clear
       }
@@ -873,6 +896,7 @@ public struct CreatePostNativeView: View {
     case .tags: return 0.50
     case .city: return 0.62
     case .music: return 0.78
+    case .aiAssist: return 0.70
     default: return 0.76
     }
   }
@@ -1069,6 +1093,39 @@ public struct CreatePostNativeView: View {
         .foregroundStyle(MIRATheme.Color.textPrimary)
         .lineLimit(4...8)
 
+      Button {
+        Task { await generatePostAssist() }
+      } label: {
+        HStack(spacing: 8) {
+          if isGeneratingPostAssist {
+            ProgressView()
+              .scaleEffect(0.72)
+          } else {
+            Image(systemName: "sparkles")
+              .font(.system(size: 15, weight: .bold))
+          }
+          Text(isGeneratingPostAssist ? "Creating ideas" : "Help me write this")
+            .font(.system(size: 15, weight: .bold))
+          if let category = postAssistResponse?.resolvedCategory, !category.isEmpty {
+            Text(category.capitalized)
+              .font(.system(size: 12, weight: .bold))
+              .foregroundStyle(MIRATheme.Color.forest)
+              .padding(.horizontal, 9)
+              .frame(height: 24)
+              .background(MIRATheme.Color.forestSoft)
+              .clipShape(Capsule())
+          }
+        }
+        .foregroundStyle(MIRATheme.Color.textPrimary)
+        .padding(.horizontal, 13)
+        .frame(height: 42)
+        .background(MIRATheme.Color.surfaceSoft.opacity(0.72))
+        .clipShape(Capsule())
+        .contentShape(Capsule())
+      }
+      .buttonStyle(.plain)
+      .disabled(isGeneratingPostAssist)
+
       if let errorMessage {
         Text(errorMessage)
           .font(.system(size: 13, weight: .semibold))
@@ -1218,6 +1275,46 @@ public struct CreatePostNativeView: View {
     !mediaItems.isEmpty ||
       !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
       !bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+  }
+
+  @MainActor
+  private func generatePostAssist() async {
+    guard !isGeneratingPostAssist else { return }
+    activePostDetailSheet = .aiAssist
+    isGeneratingPostAssist = true
+    postAssistError = nil
+    defer { isGeneratingPostAssist = false }
+
+    do {
+      let cleanedTags = hashtags
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "#")) }
+        .filter { !$0.isEmpty }
+      let mediaType = mediaItems.contains(where: { $0.kind == .video }) ? "video" : mediaItems.isEmpty ? nil : "image"
+      let signals = await MIRAAutoCategoryService.analyze(
+        mediaItems: mediaItems,
+        title: title,
+        caption: bodyText,
+        hashtags: cleanedTags,
+        placeName: selectedPlace?.displayName,
+        location: selectedPlace?.addressText ?? broadLocation.label
+      )
+      let body = MIRAPostAssistBody(
+        title: title,
+        caption: bodyText,
+        mediaType: mediaType,
+        postType: selectedPlace == nil ? "general" : "place",
+        hashtags: cleanedTags,
+        location: selectedPlace?.addressText ?? broadLocation.label,
+        placeName: selectedPlace?.displayName,
+        appleVisionLabels: signals.appleVisionLabels.isEmpty ? nil : signals.appleVisionLabels,
+        appleVisionCategoryGuess: signals.appleVisionCategoryGuess,
+        appleVisionConfidence: signals.appleVisionConfidence
+      )
+      let response: MIRAPostAssistResponse = try await api.post("/ai/post-assist", body: body)
+      postAssistResponse = response
+    } catch {
+      postAssistError = "Could not create ideas. Try again."
+    }
   }
 
   private func submit() async {
@@ -1416,6 +1513,174 @@ public struct CreatePostNativeView: View {
       source: "user_profile",
       visibility: "public"
     )
+  }
+}
+
+private struct PostAIAssistSheet: View {
+  let response: MIRAPostAssistResponse?
+  let isLoading: Bool
+  let errorMessage: String?
+  let onGenerate: () -> Void
+  let onApplyHeadline: (String) -> Void
+  let onApplyCaption: (String) -> Void
+  let onClose: () -> Void
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 18) {
+      HStack {
+        VStack(alignment: .leading, spacing: 5) {
+          Text("Post Assist")
+            .font(.system(size: 24, weight: .bold))
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+          Text("Caption, headline, and Discover category ideas.")
+            .font(.system(size: 14, weight: .medium))
+            .foregroundStyle(MIRATheme.Color.textMuted)
+        }
+
+        Spacer()
+
+        Button(action: onClose) {
+          Image(systemName: "xmark")
+            .font(.system(size: 15, weight: .bold))
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+            .frame(width: 38, height: 38)
+            .background(MIRATheme.Color.surfaceSoft)
+            .clipShape(Circle())
+        }
+        .buttonStyle(.plain)
+      }
+
+      if isLoading {
+        VStack(spacing: 13) {
+          ProgressView()
+          Text("Creating natural suggestions...")
+            .font(.system(size: 15, weight: .semibold))
+            .foregroundStyle(MIRATheme.Color.textMuted)
+        }
+        .frame(maxWidth: .infinity, minHeight: 190)
+      } else if let errorMessage {
+        VStack(alignment: .leading, spacing: 14) {
+          Text(errorMessage)
+            .font(.system(size: 15, weight: .semibold))
+            .foregroundStyle(.red.opacity(0.9))
+          Button(action: onGenerate) {
+            Text("Try again")
+              .font(.system(size: 15, weight: .bold))
+              .foregroundStyle(.white)
+              .padding(.horizontal, 18)
+              .frame(height: 42)
+              .background(MIRATheme.Color.forest)
+              .clipShape(Capsule())
+          }
+          .buttonStyle(.plain)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 24)
+      } else if let response {
+        ScrollView(showsIndicators: false) {
+          VStack(alignment: .leading, spacing: 22) {
+            categoryRow(response)
+            suggestionSection(
+              title: "Headlines",
+              suggestions: response.headlineSuggestions ?? [],
+              applyTitle: "Use headline",
+              onApply: onApplyHeadline
+            )
+            suggestionSection(
+              title: "Captions",
+              suggestions: response.captionSuggestions ?? [],
+              applyTitle: "Use caption",
+              onApply: onApplyCaption
+            )
+          }
+          .padding(.bottom, 28)
+        }
+      } else {
+        Button(action: onGenerate) {
+          HStack(spacing: 9) {
+            Image(systemName: "sparkles")
+            Text("Generate ideas")
+          }
+          .font(.system(size: 16, weight: .bold))
+          .foregroundStyle(.white)
+          .frame(maxWidth: .infinity)
+          .frame(height: 52)
+          .background(MIRATheme.Color.forest)
+          .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
+        .buttonStyle(.plain)
+      }
+    }
+    .padding(.horizontal, 22)
+    .padding(.top, 18)
+  }
+
+  private func categoryRow(_ response: MIRAPostAssistResponse) -> some View {
+    HStack(spacing: 10) {
+      Image(systemName: "sparkles")
+        .font(.system(size: 18, weight: .bold))
+        .foregroundStyle(MIRATheme.Color.forest)
+      VStack(alignment: .leading, spacing: 3) {
+        Text("Discover category")
+          .font(.system(size: 13, weight: .bold))
+          .foregroundStyle(MIRATheme.Color.textMuted)
+        Text(response.resolvedCategory.capitalized)
+          .font(.system(size: 18, weight: .bold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+      }
+      Spacer()
+      if let confidence = response.categoryConfidence {
+        Text("\(Int(confidence * 100))%")
+          .font(.system(size: 12, weight: .bold))
+          .foregroundStyle(MIRATheme.Color.forest)
+          .padding(.horizontal, 9)
+          .frame(height: 28)
+          .background(MIRATheme.Color.forestSoft)
+          .clipShape(Capsule())
+      }
+    }
+    .padding(14)
+    .background(MIRATheme.Color.surfaceSoft.opacity(0.64))
+    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+  }
+
+  private func suggestionSection(
+    title: String,
+    suggestions: [String],
+    applyTitle: String,
+    onApply: @escaping (String) -> Void
+  ) -> some View {
+    VStack(alignment: .leading, spacing: 10) {
+      Text(title)
+        .font(.system(size: 14, weight: .bold))
+        .foregroundStyle(MIRATheme.Color.textMuted)
+
+      ForEach(Array(suggestions.enumerated()), id: \.offset) { _, suggestion in
+        VStack(alignment: .leading, spacing: 11) {
+          Text(suggestion)
+            .font(.system(size: 16, weight: .semibold))
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+            .fixedSize(horizontal: false, vertical: true)
+
+          Button {
+            onApply(suggestion)
+          } label: {
+            Text(applyTitle)
+              .font(.system(size: 13, weight: .bold))
+              .foregroundStyle(MIRATheme.Color.forest)
+              .frame(height: 32)
+              .padding(.horizontal, 12)
+              .background(MIRATheme.Color.forestSoft)
+              .clipShape(Capsule())
+          }
+          .buttonStyle(.plain)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(MIRATheme.Color.surfaceSoft.opacity(0.54))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+      }
+    }
   }
 }
 

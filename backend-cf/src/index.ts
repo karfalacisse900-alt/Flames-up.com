@@ -23,6 +23,7 @@ interface Env {
   CLOUDFLARE_IMAGES_FEED_VARIANT?: string;
   CLOUDFLARE_IMAGES_THUMBNAIL_VARIANT?: string;
   CLOUDFLARE_STREAM_TOKEN?: string;
+  POST_ASSIST_MODEL?: string;
   MAPBOX_ACCESS_TOKEN?: string;
   ENVIRONMENT?: string;
   FRONTEND_URL: string;
@@ -2119,6 +2120,162 @@ function autoCategoryFromBody(body: any, input: Omit<AutoCategoryInput, 'appleLa
     appleCategoryGuess: body.apple_vision_category_guess || body.appleVisionCategoryGuess,
     appleConfidence: clampFloat(body.apple_vision_confidence ?? body.appleVisionConfidence, 0, 1, 0),
   });
+}
+
+type PostAssistResult = {
+  source: 'workers_ai' | 'fallback';
+  ai_available: boolean;
+  primary_category: DiscoverCategory;
+  category_confidence: number;
+  category_status: AutoCategoryStatus;
+  headline_suggestions: string[];
+  caption_suggestions: string[];
+  tags: string[];
+};
+
+function postAssistModel(env: Env): string {
+  return cleanText(env.POST_ASSIST_MODEL || '@cf/meta/llama-3.1-8b-instruct-fast', 120);
+}
+
+function cleanSuggestionList(value: unknown, maxItems: number, maxLength: number): string[] {
+  const raw = Array.isArray(value) ? value : parseJsonArray(value);
+  const seen = new Set<string>();
+  return raw
+    .map((item) => cleanMultilineText(item, maxLength).replace(/\s+/g, ' ').trim())
+    .filter((item) => item.length >= 3 && !seen.has(item.toLowerCase()) && seen.add(item.toLowerCase()))
+    .slice(0, maxItems);
+}
+
+function fallbackPostAssist(input: AutoCategoryInput, category: AutoCategoryResult): PostAssistResult {
+  const place = cleanText(input.placeName || input.location || '', 80);
+  const categoryLabel = category.primary_category.replace(/_/g, ' ');
+  const captionSeed = cleanMultilineText(input.caption || '', 180).replace(/\s+/g, ' ').trim();
+  const placeSuffix = place ? ` in ${place}` : '';
+  const headlineSuggestions = cleanSuggestionList([
+    captionSeed ? captionSeed.split(/[.!?\n]/)[0] : '',
+    `${categoryLabel.charAt(0).toUpperCase()}${categoryLabel.slice(1)} moment${placeSuffix}`,
+    place ? `A moment from ${place}` : 'Captured for today',
+  ], 3, 72);
+  const captionSuggestions = cleanSuggestionList([
+    captionSeed,
+    `A real ${categoryLabel} moment${placeSuffix}.`,
+    place ? `Caught this at ${place}.` : 'Keeping this one for the memory.',
+  ], 3, 260);
+  return {
+    source: 'fallback',
+    ai_available: false,
+    primary_category: category.primary_category,
+    category_confidence: category.category_confidence,
+    category_status: category.category_status,
+    headline_suggestions: headlineSuggestions.length ? headlineSuggestions : ['Captured for today'],
+    caption_suggestions: captionSuggestions.length ? captionSuggestions : ['Keeping this one for the memory.'],
+    tags: category.tags,
+  };
+}
+
+function workersAiText(result: any): string {
+  if (typeof result === 'string') return result;
+  if (typeof result?.response === 'string') return result.response;
+  if (typeof result?.result?.response === 'string') return result.result.response;
+  if (typeof result?.text === 'string') return result.text;
+  if (typeof result?.result?.text === 'string') return result.result.text;
+  const choice = result?.choices?.[0]?.message?.content || result?.result?.choices?.[0]?.message?.content;
+  return typeof choice === 'string' ? choice : '';
+}
+
+function parseJsonObjectFromAi(value: unknown): Record<string, unknown> {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const response = (value as any).response;
+    if (response && typeof response === 'object' && !Array.isArray(response)) return response;
+  }
+  const text = workersAiText(value).trim();
+  if (!text) return {};
+  const direct = parseJsonObject(text);
+  if (Object.keys(direct).length) return direct;
+  const match = text.match(/\{[\s\S]*\}/);
+  return match ? parseJsonObject(match[0]) : {};
+}
+
+function normalizePostAssistAiPayload(raw: Record<string, unknown>, fallback: PostAssistResult): PostAssistResult {
+  const aiCategory = normalizeDiscoverCategory(raw.primary_category || raw.category, false) as DiscoverCategory | '';
+  const confidence = clampFloat(raw.category_confidence ?? raw.confidence, 0, 1, fallback.category_confidence);
+  const headlineSuggestions = cleanSuggestionList(raw.headline_suggestions || raw.headlines || raw.titles, 4, 72);
+  const captionSuggestions = cleanSuggestionList(raw.caption_suggestions || raw.captions, 4, 280);
+  const tags = sanitizeAutoCategoryTags([...(fallback.tags || []), ...sanitizeAutoCategoryTags(raw.tags)]);
+  return {
+    source: 'workers_ai',
+    ai_available: true,
+    primary_category: aiCategory || fallback.primary_category,
+    category_confidence: Number(Math.max(confidence, fallback.category_confidence).toFixed(2)),
+    category_status: Math.max(confidence, fallback.category_confidence) >= 0.50 ? 'classified' : 'low_confidence',
+    headline_suggestions: headlineSuggestions.length ? headlineSuggestions : fallback.headline_suggestions,
+    caption_suggestions: captionSuggestions.length ? captionSuggestions : fallback.caption_suggestions,
+    tags: tags.length ? tags : fallback.tags,
+  };
+}
+
+async function generatePostAssistWithWorkersAi(env: Env, input: AutoCategoryInput, fallback: PostAssistResult): Promise<PostAssistResult> {
+  if (!env.AI) return fallback;
+  const payload = {
+    existing_headline: cleanText((input as any).title || '', 120),
+    existing_caption: cleanMultilineText(input.caption || '', 700),
+    media_type: cleanText(input.mediaType || input.postType || 'image', 40),
+    place: cleanText(input.placeName || '', 120),
+    location: cleanText(input.location || '', 140),
+    hashtags: sanitizeAutoCategoryTags(input.hashtags),
+    apple_vision_guess: normalizeDiscoverCategory(input.appleCategoryGuess, false),
+    apple_vision_confidence: clampFloat(input.appleConfidence, 0, 1, 0),
+    apple_vision_labels: sanitizeAutoCategoryLabels(input.appleLabels).slice(0, 12),
+    fallback_category: fallback.primary_category,
+    allowed_categories: DISCOVER_CATEGORIES,
+  };
+  const result = await env.AI.run(postAssistModel(env), {
+    messages: [
+      {
+        role: 'system',
+        content: [
+          'You are Captro Post Assist for a real social photo and short-video app.',
+          'Write natural, human captions and short headlines. Keep it premium, simple, and not fake.',
+          'Classify the post into exactly one allowed category. Do not invent unsupported categories.',
+          'Return JSON only. Do not include markdown.',
+        ].join(' '),
+      },
+      {
+        role: 'user',
+        content: JSON.stringify(payload),
+      },
+    ],
+    max_tokens: 420,
+    response_format: {
+      type: 'json_schema',
+      json_schema: {
+        type: 'object',
+        properties: {
+          primary_category: { type: 'string', enum: DISCOVER_CATEGORIES },
+          category_confidence: { type: 'number' },
+          headline_suggestions: { type: 'array', items: { type: 'string' } },
+          caption_suggestions: { type: 'array', items: { type: 'string' } },
+          tags: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['primary_category', 'category_confidence', 'headline_suggestions', 'caption_suggestions', 'tags'],
+      },
+    },
+  });
+  const parsed = parseJsonObjectFromAi(result);
+  return Object.keys(parsed).length ? normalizePostAssistAiPayload(parsed, fallback) : fallback;
+}
+
+async function classifyPostMetadataWithWorkersAi(env: Env, input: AutoCategoryInput): Promise<{ category: DiscoverCategory | ''; confidence: number; labels: AutoCategoryLabel[] }> {
+  if (!env.AI) return { category: '', confidence: 0, labels: [] };
+  const base = autoCategoryEngine(input);
+  const fallback = fallbackPostAssist(input, base);
+  const assist = await generatePostAssistWithWorkersAi(env, input, fallback);
+  const labels = sanitizeAutoCategoryLabels(assist.tags.map((tag) => ({ label: tag, confidence: 0.74, source: 'workers_ai_text' })));
+  return {
+    category: assist.primary_category,
+    confidence: assist.category_confidence,
+    labels,
+  };
 }
 
 function safeRateLimitPart(value: unknown): string {
@@ -6121,11 +6278,8 @@ async function refinePostCategoryWithBackendAi(c: any, postId: string) {
     ? streamThumbnailUrl(primaryUrl)
     : posterDeliveryUrl(primaryUrl, primaryType, thumbnailVariant) || feedDeliveryUrl(primaryUrl, primaryType, feedVariant);
   const backendLabels = await classifyImageWithWorkersAi(c.env, mediaPreviewUrl);
-  if (!backendLabels.length) return;
-
-  const backendCategory = categoryFromLabels(backendLabels);
   const currentSignals = parseJsonObject(row.category_signals_json);
-  const result = autoCategoryEngine({
+  const aiInput: AutoCategoryInput = {
     caption: [row.title, row.content].filter(Boolean).join('\n\n'),
     mediaType: primaryType,
     postType: row.post_type,
@@ -6135,9 +6289,22 @@ async function refinePostCategoryWithBackendAi(c: any, postId: string) {
     appleLabels: sanitizeAutoCategoryLabels((currentSignals as any).apple_labels),
     appleCategoryGuess: cleanText((currentSignals as any).apple_category_guess, 40),
     appleConfidence: clampFloat((currentSignals as any).apple_confidence, 0, 1, 0),
-    backendLabels,
-    backendCategoryGuess: backendCategory.category,
-    backendConfidence: backendCategory.confidence,
+  };
+  const backendCategory = categoryFromLabels(backendLabels);
+  let textAiCategory: { category: DiscoverCategory | ''; confidence: number; labels: AutoCategoryLabel[] } = { category: '', confidence: 0, labels: [] };
+  try {
+    textAiCategory = await classifyPostMetadataWithWorkersAi(c.env, { ...aiInput, backendLabels, backendCategoryGuess: backendCategory.category, backendConfidence: backendCategory.confidence });
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'post_category_text_ai_failed', code: getErrorCode(error).slice(0, 160) }));
+  }
+  const combinedBackendLabels = [...backendLabels, ...textAiCategory.labels].slice(0, 24);
+  if (!combinedBackendLabels.length && !backendCategory.category && !textAiCategory.category) return;
+
+  const result = autoCategoryEngine({
+    ...aiInput,
+    backendLabels: combinedBackendLabels,
+    backendCategoryGuess: textAiCategory.category || backendCategory.category,
+    backendConfidence: Math.max(textAiCategory.confidence, backendCategory.confidence),
   });
   await c.env.DB.prepare(
     `UPDATE posts
@@ -7843,6 +8010,61 @@ api.get('/music/:musicId', authMiddleware, async (c) => {
   } catch (error: any) {
     console.log('AI music detail failed:', error?.message || error);
     return c.json({ detail: 'Could not load music post.' }, 500);
+  }
+});
+
+api.post('/ai/post-assist', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const limited = await enforceRateLimit(c, 'post_ai_assist', userId, 45, 60);
+  if (limited) return limited;
+  const tooLarge = rejectLargeRequest(c, 24_000);
+  if (tooLarge) return tooLarge;
+  const body = await c.req.json().catch(() => ({}));
+  const unknown = rejectUnknownFields(c, body, [
+    'title', 'headline', 'caption', 'content', 'media_type', 'mediaType', 'post_type', 'postType',
+    'hashtags', 'tags', 'location', 'place_name', 'placeName',
+    'apple_vision_labels', 'appleVisionLabels',
+    'apple_vision_category_guess', 'appleVisionCategoryGuess',
+    'apple_vision_confidence', 'appleVisionConfidence',
+  ]);
+  if (unknown) return unknown;
+
+  const title = cleanText(body.title || body.headline, 120);
+  const caption = cleanMultilineText(body.caption || body.content, 900);
+  const hashtags = sanitizeAutoCategoryTags([...(parseJsonArray(body.hashtags)), ...(parseJsonArray(body.tags))]);
+  const input: AutoCategoryInput & { title?: string } = {
+    title,
+    caption: [title, caption].filter(Boolean).join('\n\n'),
+    mediaType: cleanText(body.media_type || body.mediaType, 40),
+    postType: cleanText(body.post_type || body.postType, 60),
+    hashtags,
+    location: cleanText(body.location, 140),
+    placeName: cleanText(body.place_name || body.placeName, 140),
+    appleLabels: sanitizeAutoCategoryLabels(body.apple_vision_labels || body.appleVisionLabels),
+    appleCategoryGuess: body.apple_vision_category_guess || body.appleVisionCategoryGuess,
+    appleConfidence: clampFloat(body.apple_vision_confidence ?? body.appleVisionConfidence, 0, 1, 0),
+  };
+  const deterministicCategory = autoCategoryEngine(input);
+  const fallback = fallbackPostAssist(input, deterministicCategory);
+
+  try {
+    const result = await generatePostAssistWithWorkersAi(c.env, input, fallback);
+    return c.json({
+      ...result,
+      category: result.primary_category,
+      ai_available: !!c.env.AI,
+    });
+  } catch (error: any) {
+    console.warn(JSON.stringify({
+      event: 'post_assist_ai_failed',
+      request_id: c.get?.('requestId') || '',
+      code: getErrorCode(error).slice(0, 160),
+    }));
+    return c.json({
+      ...fallback,
+      category: fallback.primary_category,
+      ai_available: !!c.env.AI,
+    });
   }
 });
 

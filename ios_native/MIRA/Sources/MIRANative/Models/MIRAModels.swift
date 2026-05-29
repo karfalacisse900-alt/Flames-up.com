@@ -1230,6 +1230,35 @@ public struct MIRAStreamPlaybackInfo: Decodable, Hashable, Sendable {
   public let ready: Bool?
 }
 
+public struct MIRAPostAssistBody: Encodable {
+  public let title: String
+  public let caption: String
+  public let mediaType: String?
+  public let postType: String?
+  public let hashtags: [String]
+  public let location: String?
+  public let placeName: String?
+  public let appleVisionLabels: [MIRAAutoCategoryLabel]?
+  public let appleVisionCategoryGuess: String?
+  public let appleVisionConfidence: Double?
+}
+
+public struct MIRAPostAssistResponse: Decodable, Hashable {
+  public let source: String?
+  public let aiAvailable: Bool?
+  public let primaryCategory: String?
+  public let category: String?
+  public let categoryConfidence: Double?
+  public let categoryStatus: String?
+  public let headlineSuggestions: [String]?
+  public let captionSuggestions: [String]?
+  public let tags: [String]?
+
+  public var resolvedCategory: String {
+    (primaryCategory?.isEmpty == false ? primaryCategory : category) ?? "lifestyle"
+  }
+}
+
 public struct MIRALibraryCollection: Decodable, Identifiable, Hashable {
   public var id: String { collection ?? name ?? "collection" }
   public let collection: String?
