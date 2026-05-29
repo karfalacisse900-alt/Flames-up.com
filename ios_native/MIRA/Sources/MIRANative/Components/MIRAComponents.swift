@@ -326,7 +326,7 @@ private struct MIRAScrollTuningView: UIViewRepresentable {
         scrollView.decelerationRate = feel.decelerationRate
         scrollView.delaysContentTouches = false
         scrollView.canCancelContentTouches = true
-        scrollView.directionalLockEnabled = feel.directionalLockEnabled
+        scrollView.isDirectionalLockEnabled = feel.directionalLockEnabled
         scrollView.backgroundColor = .clear
         return
       }
