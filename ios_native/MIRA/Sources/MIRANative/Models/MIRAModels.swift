@@ -1208,6 +1208,12 @@ public struct MIRAUploadImageBody: Encodable {
   public let filename: String
 }
 
+public struct MIRAUploadImageDirectBody: Encodable {
+  public let filename: String
+  public let mimeType: String
+  public let target: String
+}
+
 public struct MIRAMediaUploadResponse: Decodable, Hashable {
   public let url: String?
   public let id: String?

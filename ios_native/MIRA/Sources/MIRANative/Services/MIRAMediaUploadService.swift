@@ -148,6 +148,33 @@ public final class MIRAMediaUploadService {
   private func uploadImage(_ media: MIRAPickedMedia) async throws -> String {
     let prepared = await prepareImageUpload(media)
     return try await performUpload(kind: "image", bytes: prepared.data.count) {
+      do {
+        let setup: MIRAMediaUploadResponse = try await api.post(
+          "/upload/image-direct",
+          body: MIRAUploadImageDirectBody(
+            filename: prepared.fileName,
+            mimeType: prepared.mimeType,
+            target: target == .feedPost ? "feed_post" : "general"
+          )
+        )
+        if
+          let uploadURL = setup.uploadUrl.flatMap(URL.init(string:)),
+          let deliveryURL = setup.url?.trimmingCharacters(in: .whitespacesAndNewlines),
+          !deliveryURL.isEmpty
+        {
+          let _: EmptyResponse = try await api.uploadMultipart(
+            to: uploadURL,
+            fieldName: "file",
+            fileName: prepared.fileName,
+            mimeType: prepared.mimeType,
+            data: prepared.data
+          )
+          return deliveryURL
+        }
+      } catch {
+        // Fall back to the Worker-backed path if Cloudflare Images direct upload is not ready.
+      }
+
       let base64 = "data:\(prepared.mimeType);base64,\(prepared.data.base64EncodedString())"
       let response: MIRAMediaUploadResponse = try await api.post(
         "/upload/image",

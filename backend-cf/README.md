@@ -20,8 +20,8 @@ Backend stack: Hono + D1 + Cloudflare Images/Stream.
 3. Configure vars:
    - `JWT_SECRET`
    - `CLOUDFLARE_ACCOUNT_ID`
-   - `CLOUDFLARE_IMAGES_TOKEN`
-   - `CLOUDFLARE_STREAM_TOKEN`
+   - `CLOUDFLARE_IMAGES_TOKEN` and `CLOUDFLARE_STREAM_TOKEN` as Worker secrets, or a shared `CLOUDFLARE_API_TOKEN` that has Cloudflare Images and Stream permissions
+   - `CLOUDFLARE_IMAGES_ACCOUNT_HASH` for `https://imagedelivery.net/...` delivery URLs
    - `MAPBOX_ACCESS_TOKEN`
    - `OWNER_EMAILS` (comma-separated verified account emails that receive owner admin role)
    - `OWNER_USERNAMES` (optional comma-separated real usernames; do not use generated/temp usernames)

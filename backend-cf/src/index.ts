@@ -14,11 +14,15 @@ interface Env {
   MEDIA_BACKUP?: R2Bucket;
   JWT_SECRET: string;
   CLOUDFLARE_ACCOUNT_ID: string;
+  CLOUDFLARE_API_TOKEN?: string;
+  CF_API_TOKEN?: string;
+  CF_ACCOUNT_ID?: string;
+  CF_ACCOUNT_HASH?: string;
   CLOUDFLARE_IMAGES_ACCOUNT_HASH?: string;
-  CLOUDFLARE_IMAGES_TOKEN: string;
+  CLOUDFLARE_IMAGES_TOKEN?: string;
   CLOUDFLARE_IMAGES_FEED_VARIANT?: string;
   CLOUDFLARE_IMAGES_THUMBNAIL_VARIANT?: string;
-  CLOUDFLARE_STREAM_TOKEN: string;
+  CLOUDFLARE_STREAM_TOKEN?: string;
   MAPBOX_ACCESS_TOKEN?: string;
   ENVIRONMENT?: string;
   FRONTEND_URL: string;
@@ -1827,6 +1831,31 @@ function cleanText(value: unknown, max = 500): string {
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, max);
+}
+
+function cloudflareAccountId(env: Env): string {
+  return cleanText(env.CLOUDFLARE_ACCOUNT_ID || env.CF_ACCOUNT_ID || '', 140);
+}
+
+function cloudflareImagesToken(env: Env): string {
+  return cleanText(env.CLOUDFLARE_IMAGES_TOKEN || env.CLOUDFLARE_API_TOKEN || env.CF_API_TOKEN || '', 4096);
+}
+
+function cloudflareStreamToken(env: Env): string {
+  return cleanText(env.CLOUDFLARE_STREAM_TOKEN || env.CLOUDFLARE_API_TOKEN || env.CF_API_TOKEN || '', 4096);
+}
+
+function cloudflareImagesAccountHash(env: Env): string {
+  return cleanText(env.CLOUDFLARE_IMAGES_ACCOUNT_HASH || env.CF_ACCOUNT_HASH || 'DY-IgVdOm-0zb0K5ZFnpKA', 160);
+}
+
+function cloudflareImageDeliveryUrl(env: Env, imageId: string, variant = 'public'): string {
+  const accountHash = cloudflareImagesAccountHash(env);
+  const cleanImageId = cleanText(imageId, 180);
+  const cleanVariant = cleanText(variant || 'public', 120) || 'public';
+  return accountHash && cleanImageId
+    ? `https://imagedelivery.net/${accountHash}/${cleanImageId}/${cleanVariant}`
+    : '';
 }
 
 function cleanMultilineText(value: unknown, max = 5000): string {
@@ -10454,13 +10483,39 @@ api.post('/upload/image-direct', authMiddleware, async (c) => {
   if (limited) return limited;
   const dailyLimited = await enforceRateLimit(c, 'upload_image_direct_daily', userId, 250, 86400);
   if (dailyLimited) return dailyLimited;
-  if (!c.env.CLOUDFLARE_ACCOUNT_ID || !c.env.CLOUDFLARE_IMAGES_TOKEN) {
+  const accountId = cloudflareAccountId(c.env);
+  const token = cloudflareImagesToken(c.env);
+  if (!accountId || !token) {
     return c.json({ detail: 'Image upload is not configured.' }, 503);
   }
-  const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${c.env.CLOUDFLARE_ACCOUNT_ID}/images/v2/direct_upload`, { method: 'POST', headers: { Authorization: `Bearer ${c.env.CLOUDFLARE_IMAGES_TOKEN}` } });
+  const body: any = await c.req.json().catch(() => ({}));
+  const filename = cleanText(body.filename || body.file_name || 'captro-upload.jpg', 180);
+  const mimeType = normalizedContentType(body.mime_type || body.mimeType || 'image/jpeg');
+  if (mimeType && (!ALLOWED_IMAGE_TYPES.has(mimeType) || !extensionAllowed(filename, ALLOWED_IMAGE_EXTENSIONS))) {
+    return c.json({ detail: 'Unsupported image type. Use JPG, PNG, or WebP.' }, 400);
+  }
+  const formData = new FormData();
+  formData.append('requireSignedURLs', 'false');
+  formData.append('metadata', JSON.stringify({ userId, filename, mimeType: mimeType || 'image/jpeg', source: 'captro_ios' }));
+  const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/images/v2/direct_upload`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body: formData,
+  });
   const data: any = await res.json();
-  if (!data.success) return c.json({ detail: 'Failed to get upload URL' }, 500);
-  return c.json({ upload_url: data.result.uploadURL, image_id: data.result.id });
+  if (!data.success) {
+    console.warn('CF Images direct upload setup failed:', res.status, data.errors?.[0]?.code || 'cloudflare_images_error');
+    return c.json({ detail: 'Failed to get upload URL' }, 500);
+  }
+  const imageId = cleanText(data.result?.id, 180);
+  const deliveryUrl = cloudflareImageDeliveryUrl(c.env, imageId);
+  return c.json({
+    upload_url: data.result.uploadURL,
+    image_id: imageId,
+    id: imageId,
+    url: deliveryUrl,
+    source: 'cloudflare_images_direct',
+  });
 });
 
 api.post('/upload/video-direct', authMiddleware, async (c) => {
@@ -10469,10 +10524,12 @@ api.post('/upload/video-direct', authMiddleware, async (c) => {
   if (limited) return limited;
   const dailyLimited = await enforceRateLimit(c, 'upload_video_direct_daily', userId, 100, 86400);
   if (dailyLimited) return dailyLimited;
-  if (!c.env.CLOUDFLARE_ACCOUNT_ID || !c.env.CLOUDFLARE_STREAM_TOKEN) {
+  const accountId = cloudflareAccountId(c.env);
+  const token = cloudflareStreamToken(c.env);
+  if (!accountId || !token) {
     return c.json({ detail: 'Video upload is not configured.' }, 503);
   }
-  const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${c.env.CLOUDFLARE_ACCOUNT_ID}/stream/direct_upload`, { method: 'POST', headers: { Authorization: `Bearer ${c.env.CLOUDFLARE_STREAM_TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ maxDurationSeconds: 300, creator: userId }) });
+  const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/direct_upload`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ maxDurationSeconds: 300, creator: userId }) });
   const data: any = await res.json();
   if (!data.success) return c.json({ detail: 'Failed to get upload URL' }, 500);
   return c.json({ upload_url: data.result.uploadURL, video_uid: data.result.uid });
@@ -11418,7 +11475,9 @@ async function maybeDeleteStreamAssets(c: any, post: any) {
     .map((value) => value.replace('cfstream:', '').trim())
     .filter(Boolean);
 
-  if (!c.env.CLOUDFLARE_ACCOUNT_ID || !c.env.CLOUDFLARE_STREAM_TOKEN) {
+  const accountId = cloudflareAccountId(c.env);
+  const token = cloudflareStreamToken(c.env);
+  if (!accountId || !token) {
     return { attempted: false, deleted: [], failed: streamIds };
   }
 
@@ -11426,9 +11485,9 @@ async function maybeDeleteStreamAssets(c: any, post: any) {
   const failed: string[] = [];
   for (const uid of streamIds) {
     try {
-      const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${c.env.CLOUDFLARE_ACCOUNT_ID}/stream/${uid}`, {
+      const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/${uid}`, {
         method: 'DELETE',
-        headers: { Authorization: `Bearer ${c.env.CLOUDFLARE_STREAM_TOKEN}` },
+        headers: { Authorization: `Bearer ${token}` },
       });
       if (response.ok) deleted.push(uid);
       else failed.push(uid);
@@ -13466,17 +13525,18 @@ api.post('/upload/image', authMiddleware, async (c) => {
     formData.append('file', blob, `${uuid()}.${fileExt}`);
     formData.append('metadata', JSON.stringify({ userId, backup: true, image_processing: processed.status }));
 
-    if (c.env.CLOUDFLARE_ACCOUNT_ID && c.env.CLOUDFLARE_IMAGES_TOKEN) {
-      const cfRes = await fetch(`https://api.cloudflare.com/client/v4/accounts/${c.env.CLOUDFLARE_ACCOUNT_ID}/images/v1`, {
+    const accountId = cloudflareAccountId(c.env);
+    const token = cloudflareImagesToken(c.env);
+    if (accountId && token) {
+      const cfRes = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/images/v1`, {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${c.env.CLOUDFLARE_IMAGES_TOKEN}` },
+        headers: { 'Authorization': `Bearer ${token}` },
         body: formData,
       });
       const cfData: any = await cfRes.json();
       if (cfData.success) {
         const imageId = cfData.result.id;
-        const ACCOUNT_HASH = c.env.CLOUDFLARE_IMAGES_ACCOUNT_HASH || 'DY-IgVdOm-0zb0K5ZFnpKA';
-        const deliveryUrl = `https://imagedelivery.net/${ACCOUNT_HASH}/${imageId}/public`;
+        const deliveryUrl = cloudflareImageDeliveryUrl(c.env, imageId);
         const backup = await storeMediaBackup(c, {
           userId,
           mediaKind: 'image',
@@ -13661,17 +13721,19 @@ api.post('/upload/video', authMiddleware, async (c) => {
     if (limited) return limited;
     const dailyLimited = await enforceRateLimit(c, 'upload_video_direct_daily', userId, 100, 86400);
     if (dailyLimited) return dailyLimited;
-    if (!c.env.CLOUDFLARE_ACCOUNT_ID || !c.env.CLOUDFLARE_STREAM_TOKEN) {
+    const accountId = cloudflareAccountId(c.env);
+    const token = cloudflareStreamToken(c.env);
+    if (!accountId || !token) {
       return c.json({ detail: 'Cloudflare Stream is not configured.' }, 503);
     }
     // Get a direct upload URL from Cloudflare Stream
-    const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${c.env.CLOUDFLARE_ACCOUNT_ID}/stream/direct_upload`, {
+    const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/direct_upload`, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${c.env.CLOUDFLARE_STREAM_TOKEN}`,
+        'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ maxDurationSeconds: 300 }),
+      body: JSON.stringify({ maxDurationSeconds: 300, creator: userId }),
     });
     const data: any = await res.json();
     if (!data.success) return c.json({ detail: 'Failed to get upload URL' }, 500);
@@ -13715,14 +13777,16 @@ api.post('/upload/video-with-backup', authMiddleware, async (c) => {
     }
 
     const videoBytes = await file.arrayBuffer();
-    const hasStreamConfig = !!(c.env.CLOUDFLARE_ACCOUNT_ID && c.env.CLOUDFLARE_STREAM_TOKEN);
+    const accountId = cloudflareAccountId(c.env);
+    const token = cloudflareStreamToken(c.env);
+    const hasStreamConfig = !!(accountId && token);
 
     if (hasStreamConfig) {
       try {
-        const directRes = await fetch(`https://api.cloudflare.com/client/v4/accounts/${c.env.CLOUDFLARE_ACCOUNT_ID}/stream/direct_upload`, {
+        const directRes = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/direct_upload`, {
           method: 'POST',
           headers: {
-            'Authorization': `Bearer ${c.env.CLOUDFLARE_STREAM_TOKEN}`,
+            'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({ maxDurationSeconds: 300, creator: userId }),
@@ -13796,6 +13860,9 @@ api.post('/upload/video-with-backup', authMiddleware, async (c) => {
 api.get('/stream/video/:videoUid', async (c) => {
   const uid = c.req.param('videoUid');
   try {
+    const accountId = cloudflareAccountId(c.env);
+    const token = cloudflareStreamToken(c.env);
+    if (!accountId || !token) return c.json({ detail: 'Cloudflare Stream is not configured.' }, 503);
     const cacheKey = `stream:video:${uid}`;
     const cached = c.env.KV ? await c.env.KV.get(cacheKey, 'json').catch(() => null) : null;
     if (cached) {
@@ -13804,8 +13871,8 @@ api.get('/stream/video/:videoUid', async (c) => {
       return response;
     }
 
-    const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${c.env.CLOUDFLARE_ACCOUNT_ID}/stream/${uid}`, {
-      headers: { 'Authorization': `Bearer ${c.env.CLOUDFLARE_STREAM_TOKEN}` },
+    const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/${uid}`, {
+      headers: { 'Authorization': `Bearer ${token}` },
     });
     const data: any = await res.json();
     if (!data.success || !data.result) return c.json({ detail: 'Video not found' }, 404);

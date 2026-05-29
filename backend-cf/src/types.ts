@@ -5,10 +5,11 @@ export interface Env {
   AI?: any;
   MEDIA_BACKUP?: R2Bucket;
   JWT_SECRET: string;
-  CF_API_TOKEN: string;
-  CF_ACCOUNT_ID: string;
-  CF_ACCOUNT_HASH: string;
+  CF_API_TOKEN?: string;
+  CF_ACCOUNT_ID?: string;
+  CF_ACCOUNT_HASH?: string;
   CLOUDFLARE_ACCOUNT_ID?: string;
+  CLOUDFLARE_API_TOKEN?: string;
   CLOUDFLARE_IMAGES_ACCOUNT_HASH?: string;
   CLOUDFLARE_IMAGES_TOKEN?: string;
   CLOUDFLARE_IMAGES_FEED_VARIANT?: string;
