@@ -51,6 +51,8 @@ targets:
         Release:
           CODE_SIGN_STYLE: Manual
           CODE_SIGN_IDENTITY: Apple Distribution
+          DEVELOPMENT_TEAM: "$(APPLE_TEAM_ID)"
+          PROVISIONING_PROFILE_SPECIFIER: "$(PROFILE_NAME)"
           COPY_PHASE_STRIP: YES
           DEAD_CODE_STRIPPING: YES
           DEBUG_INFORMATION_FORMAT: dwarf-with-dsym

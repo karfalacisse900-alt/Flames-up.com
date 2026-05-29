@@ -1,6 +1,8 @@
 import AuthenticationServices
 import AVFoundation
+import GoogleSignIn
 import SwiftUI
+import UIKit
 
 public struct AuthNativeView: View {
   @ObservedObject var session: MIRAAuthSession
@@ -46,6 +48,9 @@ public struct AuthNativeView: View {
       .animation(.spring(response: reduceMotion ? 0.18 : 0.34, dampingFraction: 0.9), value: isAuthPanelVisible)
       .toolbar(.hidden, for: .navigationBar)
     }
+    .onOpenURL { url in
+      _ = GIDSignIn.sharedInstance.handle(url)
+    }
   }
 
   private var authPanel: some View {
@@ -85,8 +90,9 @@ public struct AuthNativeView: View {
 
       ScrollView {
         VStack(alignment: .leading, spacing: MIRATheme.Space.lg) {
+          socialAuthBlock
+          authDivider
           formBlock
-          appleButton
           legalFooter
         }
         .padding(.horizontal, MIRATheme.Space.xl)
@@ -95,7 +101,7 @@ public struct AuthNativeView: View {
       }
     }
     .frame(maxWidth: .infinity)
-    .frame(maxHeight: isCreatingAccount ? 720 : 650, alignment: .bottom)
+    .frame(maxHeight: isCreatingAccount ? 740 : 680, alignment: .bottom)
     .background(MIRATheme.Color.launchBackground)
     .clipShape(RoundedRectangle(cornerRadius: 34, style: .continuous))
     .modifier(MIRATheme.floatingShadow())
@@ -120,7 +126,11 @@ public struct AuthNativeView: View {
   }
 
   private var formBlock: some View {
-    VStack(spacing: MIRATheme.Space.md) {
+    VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
+      Text(isCreatingAccount ? "Create with email" : "Continue with email")
+        .font(.system(size: 15, weight: .black, design: .rounded))
+        .foregroundStyle(MIRATheme.Color.textPrimary)
+
       if isCreatingAccount {
         authField("Username", text: $username, systemImage: "person")
         authField("Full name", text: $fullName, systemImage: "textformat")
@@ -170,8 +180,62 @@ public struct AuthNativeView: View {
       }
       .buttonStyle(.plain)
     }
-    .padding(MIRATheme.Space.lg)
-    .miraCardSurface(cornerRadius: 26)
+  }
+
+  private var socialAuthBlock: some View {
+    VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
+      Text(isCreatingAccount ? "Create your account" : "Sign in faster")
+        .font(.system(size: 15, weight: .black, design: .rounded))
+        .foregroundStyle(MIRATheme.Color.textPrimary)
+
+      VStack(spacing: MIRATheme.Space.sm) {
+        googleButton
+        appleButton
+      }
+    }
+  }
+
+  private var googleButton: some View {
+    Button {
+      startGoogleSignIn()
+    } label: {
+      HStack(spacing: MIRATheme.Space.sm) {
+        Text("G")
+          .font(.system(size: 18, weight: .black, design: .rounded))
+          .foregroundStyle(MIRATheme.Color.forest)
+          .frame(width: 28, height: 28)
+          .background(.white)
+          .clipShape(Circle())
+          .overlay(Circle().stroke(Color.black.opacity(0.08), lineWidth: 1))
+
+        Text("Continue with Google")
+          .font(.system(size: 16, weight: .black, design: .rounded))
+      }
+      .foregroundStyle(MIRATheme.Color.textPrimary)
+      .frame(maxWidth: .infinity)
+      .frame(height: 52)
+      .background(.white)
+      .clipShape(Capsule())
+      .overlay(Capsule().stroke(Color.black.opacity(0.12), lineWidth: 1))
+    }
+    .buttonStyle(.miraPress)
+    .disabled(session.isWorking)
+    .accessibilityLabel("Continue with Google")
+  }
+
+  private var authDivider: some View {
+    HStack(spacing: MIRATheme.Space.md) {
+      Rectangle()
+        .fill(MIRATheme.Color.textMuted.opacity(0.16))
+        .frame(height: 1)
+      Text("or")
+        .font(.system(size: 13, weight: .semibold))
+        .foregroundStyle(MIRATheme.Color.textMuted)
+      Rectangle()
+        .fill(MIRATheme.Color.textMuted.opacity(0.16))
+        .frame(height: 1)
+    }
+    .padding(.vertical, 2)
   }
 
   private var appleButton: some View {
@@ -289,6 +353,43 @@ public struct AuthNativeView: View {
       await session.register(email: email, password: password, username: username, fullName: fullName, api: api)
     } else {
       await session.login(email: email, password: password, api: api)
+    }
+  }
+
+  private var googleClientID: String {
+    Bundle.main.object(forInfoDictionaryKey: "GIDClientID") as? String
+      ?? "702354172189-9gg83vd92n3s217n5pb4ddqqsnme8ocb.apps.googleusercontent.com"
+  }
+
+  @MainActor
+  private func startGoogleSignIn() {
+    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    session.errorMessage = nil
+    GIDSignIn.sharedInstance.configuration = GIDConfiguration(clientID: googleClientID)
+
+    guard let presenter = UIApplication.shared.miraTopPresentedViewController() else {
+      session.errorMessage = "Google sign in is not ready. Please try again."
+      return
+    }
+
+    GIDSignIn.sharedInstance.signIn(withPresenting: presenter) { result, error in
+      if error != nil {
+        Task { @MainActor in
+          session.errorMessage = "Google sign in could not finish."
+        }
+        return
+      }
+
+      guard let idToken = result?.user.idToken?.tokenString else {
+        Task { @MainActor in
+          session.errorMessage = "Google sign in did not return a valid token."
+        }
+        return
+      }
+
+      Task {
+        await session.signInWithGoogle(idToken: idToken, api: api)
+      }
     }
   }
 }
@@ -506,13 +607,14 @@ private struct CaptroWelcomeAnimatedScene: View {
     .rotationEffect(.degrees(7 + cos(time * 0.9) * 2))
     .position(x: size.width * 0.38, y: size.height * 0.35 + cos(time * 0.8) * 8)
 
-    CaptroFloatingCircle(
-      systemImage: "sparkles",
-      background: .white.opacity(0.20),
-      foreground: page.textColor
+    CaptroWelcomeStarAvatarCluster(
+      imageName: "CaptroWelcomeProfile",
+      accent: page.secondaryAccent,
+      ring: page.textColor
     )
-    .frame(width: 92, height: 92)
-    .position(x: size.width * 0.82, y: size.height * 0.43 + sin(time * 1.2) * 8)
+    .frame(width: 142, height: 118)
+    .rotationEffect(.degrees(5 + sin(time * 0.85) * 2))
+    .position(x: size.width * 0.80, y: size.height * 0.43 + sin(time * 1.2) * 8)
   }
 
   @ViewBuilder
@@ -575,6 +677,83 @@ private struct CaptroWelcomeAnimatedScene: View {
     )
     .frame(width: 88, height: 88)
     .position(x: size.width * 0.78, y: size.height * 0.42 + sin(time) * 7)
+  }
+}
+
+private struct CaptroWelcomeStarAvatarCluster: View {
+  let imageName: String
+  let accent: Color
+  let ring: Color
+
+  var body: some View {
+    ZStack {
+      CaptroWelcomeStarAvatar(imageName: imageName, size: 74, ring: ring)
+        .rotationEffect(.degrees(-9))
+        .position(x: 48, y: 52)
+
+      CaptroWelcomeStarAvatar(imageName: imageName, size: 58, ring: accent)
+        .rotationEffect(.degrees(12))
+        .position(x: 98, y: 34)
+
+      CaptroWelcomeStarAvatar(imageName: imageName, size: 50, ring: .white.opacity(0.9))
+        .rotationEffect(.degrees(-18))
+        .position(x: 100, y: 88)
+    }
+    .background(
+      Capsule()
+        .fill(.white.opacity(0.15))
+        .blur(radius: 0.5)
+    )
+    .overlay(Capsule().stroke(.white.opacity(0.18), lineWidth: 1))
+    .shadow(color: .black.opacity(0.16), radius: 18, x: 0, y: 12)
+  }
+}
+
+private struct CaptroWelcomeStarAvatar: View {
+  let imageName: String
+  let size: CGFloat
+  let ring: Color
+
+  var body: some View {
+    Image(imageName, bundle: .main)
+      .resizable()
+      .scaledToFill()
+      .frame(width: size, height: size)
+      .clipShape(CaptroWelcomeStarShape())
+      .overlay(
+        CaptroWelcomeStarShape()
+          .stroke(ring.opacity(0.92), lineWidth: max(2, size * 0.04))
+      )
+      .shadow(color: .black.opacity(0.18), radius: 10, x: 0, y: 7)
+      .accessibilityHidden(true)
+  }
+}
+
+private struct CaptroWelcomeStarShape: Shape {
+  func path(in rect: CGRect) -> Path {
+    let center = CGPoint(x: rect.midX, y: rect.midY)
+    let outerRadius = min(rect.width, rect.height) / 2
+    let innerRadius = outerRadius * 0.48
+    let points = 5
+    var path = Path()
+
+    for index in 0..<(points * 2) {
+      let radius = index.isMultiple(of: 2) ? outerRadius : innerRadius
+      let angle = CGFloat(index) * .pi / CGFloat(points) - .pi / 2
+      let point = CGPoint(
+        x: center.x + CGFloat(cos(Double(angle))) * radius,
+        y: center.y + CGFloat(sin(Double(angle))) * radius
+      )
+
+      if index == 0 {
+        path.move(to: point)
+      } else {
+        path.addLine(to: point)
+      }
+    }
+
+    path.closeSubpath()
+    return path
   }
 }
 
@@ -915,6 +1094,43 @@ private struct CaptroAvatarBubble: View {
           .foregroundStyle(foreground)
       )
       .overlay(Circle().stroke(.white.opacity(0.38), lineWidth: 2))
+  }
+}
+
+private extension UIApplication {
+  @MainActor
+  func miraTopPresentedViewController() -> UIViewController? {
+    let activeScene = connectedScenes
+      .compactMap { $0 as? UIWindowScene }
+      .first { $0.activationState == .foregroundActive }
+
+    let root = activeScene?
+      .windows
+      .first { $0.isKeyWindow }?
+      .rootViewController
+
+    return root?.miraTopPresentedViewController()
+  }
+}
+
+private extension UIViewController {
+  @MainActor
+  func miraTopPresentedViewController() -> UIViewController {
+    if let navigationController = self as? UINavigationController,
+       let visibleViewController = navigationController.visibleViewController {
+      return visibleViewController.miraTopPresentedViewController()
+    }
+
+    if let tabBarController = self as? UITabBarController,
+       let selectedViewController = tabBarController.selectedViewController {
+      return selectedViewController.miraTopPresentedViewController()
+    }
+
+    if let presentedViewController {
+      return presentedViewController.miraTopPresentedViewController()
+    }
+
+    return self
   }
 }
 

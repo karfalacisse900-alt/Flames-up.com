@@ -14,12 +14,25 @@
   <string>6.0</string>
   <key>CFBundleName</key>
   <string>Captro</string>
+  <key>GIDClientID</key>
+  <string>702354172189-9gg83vd92n3s217n5pb4ddqqsnme8ocb.apps.googleusercontent.com</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
   <string>$(MARKETING_VERSION)</string>
   <key>CFBundleVersion</key>
   <string>$(CURRENT_PROJECT_VERSION)</string>
+  <key>CFBundleURLTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeRole</key>
+      <string>Editor</string>
+      <key>CFBundleURLSchemes</key>
+      <array>
+        <string>com.googleusercontent.apps.702354172189-9gg83vd92n3s217n5pb4ddqqsnme8ocb</string>
+      </array>
+    </dict>
+  </array>
   <key>LSRequiresIPhoneOS</key>
   <true/>
   <key>NSCameraUsageDescription</key>

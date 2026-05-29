@@ -111,6 +111,13 @@ public final class MIRAAuthSession: ObservableObject, MIRASessionProviding {
   }
 
   @MainActor
+  public func signInWithGoogle(idToken: String, api: MIRAAPIClient) async {
+    await authenticate {
+      try await api.post("/auth/oauth/google", body: MIRAGoogleOAuthBody(idToken: idToken))
+    }
+  }
+
+  @MainActor
   public func logout() {
     token = nil
     user = nil

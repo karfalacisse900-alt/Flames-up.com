@@ -1203,6 +1203,10 @@ public struct MIRAAppleOAuthBody: Encodable {
   public let appleUser: String?
 }
 
+public struct MIRAGoogleOAuthBody: Encodable {
+  public let idToken: String
+}
+
 public struct MIRAUploadImageBody: Encodable {
   public let image: String
   public let filename: String
