@@ -2811,11 +2811,39 @@ function sanitizeMediaDimensions(value: unknown): any[] {
     .map((item: any) => {
       const width = clampNumber(item?.width, 0, 12000, 0);
       const height = clampNumber(item?.height, 0, 12000, 0);
-      const ratio = clampFloat(item?.ratio || (width > 0 && height > 0 ? width / height : 0), 0, 4, 0);
-      const format = cleanText(item?.format, 16);
-      const type = String(item?.type || '').toLowerCase().includes('video') ? 'video' : 'image';
-      if (!width && !height && !ratio && !format) return null;
-      return { width, height, ratio, format, type };
+      const originalWidth = clampNumber(item?.original_width ?? item?.originalWidth ?? width, 0, 12000, 0);
+      const originalHeight = clampNumber(item?.original_height ?? item?.originalHeight ?? height, 0, 12000, 0);
+      const originalAspectRatio = clampFloat(
+        item?.original_aspect_ratio
+        ?? item?.originalAspectRatio
+        ?? item?.aspect_ratio
+        ?? item?.aspectRatio
+        ?? item?.ratio
+        ?? (originalWidth > 0 && originalHeight > 0 ? originalWidth / originalHeight : 0),
+        0,
+        4,
+        0
+      );
+      const variant = supportedFeedMediaVariant({ ...item, width, height, original_width: originalWidth, original_height: originalHeight, original_aspect_ratio: originalAspectRatio });
+      const ratio = clampFloat(item?.ratio || originalAspectRatio || (width > 0 && height > 0 ? width / height : 0), 0, 4, 0);
+      const type = String(item?.media_type || item?.mediaType || item?.type || '').toLowerCase().includes('video') ? 'video' : 'image';
+      if (!width && !height && !ratio && !originalWidth && !originalHeight && !item?.format) return null;
+      return {
+        width,
+        height,
+        ratio,
+        format: variant.format,
+        type,
+        original_width: originalWidth || width || null,
+        original_height: originalHeight || height || null,
+        original_aspect_ratio: originalAspectRatio || ratio || null,
+        feed_width: variant.feed_width,
+        feed_height: variant.feed_height,
+        feed_aspect_ratio: variant.feed_aspect_ratio,
+        display_aspect_ratio: variant.feed_aspect_ratio,
+        crop_mode: cleanText(item?.crop_mode || item?.cropMode || 'center_crop', 40),
+        media_type: type,
+      };
     })
     .filter(Boolean)
     .slice(0, 12);
@@ -3771,6 +3799,36 @@ async function messagePayload(c: any, row: any): Promise<any> {
 const FEED_MEDIA_WIDTH = 1080;
 const FEED_MEDIA_HEIGHT = 1440;
 const FEED_MEDIA_ASPECT_RATIO = FEED_MEDIA_WIDTH / FEED_MEDIA_HEIGHT;
+const SUPPORTED_FEED_MEDIA_RATIOS = [
+  { format: '3:4', feed_width: 1080, feed_height: 1440, feed_aspect_ratio: 1080 / 1440 },
+  { format: '4:5', feed_width: 1080, feed_height: 1350, feed_aspect_ratio: 1080 / 1350 },
+  { format: '2:3', feed_width: 1080, feed_height: 1620, feed_aspect_ratio: 1080 / 1620 },
+];
+const DEFAULT_FEED_MEDIA_RATIO = SUPPORTED_FEED_MEDIA_RATIOS[0];
+
+function supportedFeedMediaVariant(source: any = {}) {
+  const format = cleanText(source?.format, 16);
+  const explicit = SUPPORTED_FEED_MEDIA_RATIOS.find((item) => item.format === format);
+  if (explicit) return explicit;
+  const width = Number(source?.original_width || source?.originalWidth || source?.width || 0);
+  const height = Number(source?.original_height || source?.originalHeight || source?.height || 0);
+  const ratio = Number(
+    source?.display_aspect_ratio
+    || source?.displayAspectRatio
+    || source?.feed_aspect_ratio
+    || source?.feedAspectRatio
+    || source?.original_aspect_ratio
+    || source?.originalAspectRatio
+    || source?.aspect_ratio
+    || source?.aspectRatio
+    || source?.ratio
+    || (width > 0 && height > 0 ? width / height : 0)
+  );
+  if (!Number.isFinite(ratio) || ratio <= 0 || ratio >= 1) return DEFAULT_FEED_MEDIA_RATIO;
+  return SUPPORTED_FEED_MEDIA_RATIOS.reduce((best, candidate) => (
+    Math.abs(candidate.feed_aspect_ratio - ratio) < Math.abs(best.feed_aspect_ratio - ratio) ? candidate : best
+  ), DEFAULT_FEED_MEDIA_RATIO);
+}
 
 function replaceCloudflareImageVariant(url: string, variant: string): string {
   const cleanVariant = cleanText(variant, 80);
@@ -3829,14 +3887,21 @@ function feedMediaDimensions(mediaUrls: string[], mediaTypes: string[], dimensio
     const originalAspectRatio = Number(original.ratio || original.aspect_ratio || (originalWidth && originalHeight ? originalWidth / originalHeight : 0)) || null;
     const rawType = String(mediaTypes[index] || original.type || '').toLowerCase();
     const mediaType = rawType.includes('video') || isVideoMediaUrl(url) ? 'video' : 'image';
+    const variant = supportedFeedMediaVariant({ ...original, original_width: originalWidth, original_height: originalHeight, original_aspect_ratio: originalAspectRatio });
     return {
       ...original,
       original_width: originalWidth,
       original_height: originalHeight,
       original_aspect_ratio: originalAspectRatio,
-      feed_width: FEED_MEDIA_WIDTH,
-      feed_height: FEED_MEDIA_HEIGHT,
-      feed_aspect_ratio: FEED_MEDIA_ASPECT_RATIO,
+      width: originalWidth,
+      height: originalHeight,
+      ratio: originalAspectRatio,
+      format: variant.format,
+      feed_width: variant.feed_width,
+      feed_height: variant.feed_height,
+      feed_aspect_ratio: variant.feed_aspect_ratio,
+      display_aspect_ratio: variant.feed_aspect_ratio,
+      crop_mode: cleanText(original.crop_mode || original.cropMode || 'center_crop', 40),
       media_type: mediaType,
       type: mediaType,
     };
@@ -3892,6 +3957,8 @@ function postPayload(post: any, likedBy: string[] = [], env?: Env) {
   const feedMediaUrls = mediaUrls.map((url, index) => feedDeliveryUrl(url, mediaTypes[index] || 'image', feedVariant)).filter(Boolean);
   const thumbnailUrls = mediaUrls.map((url, index) => posterDeliveryUrl(url, mediaTypes[index] || 'image', thumbnailVariant)).filter(Boolean);
   const posterUrls = mediaUrls.map((url, index) => posterDeliveryUrl(url, mediaTypes[index] || 'image', thumbnailVariant)).filter(Boolean);
+  const renderedMediaDimensions = feedMediaDimensions(mediaUrls, mediaTypes, dimensions);
+  const primaryMediaDimensions = renderedMediaDimensions[0] || DEFAULT_FEED_MEDIA_RATIO;
   const primaryCategory = normalizeDiscoverCategory(post.primary_category || post.category || post.post_type || 'lifestyle', false) || 'lifestyle';
   const categoryConfidence = clampFloat(post.category_confidence, 0, 1, 0);
   const displayLocationVisibility = normalizeDisplayLocationVisibility(post.display_location_visibility);
@@ -3919,10 +3986,10 @@ function postPayload(post: any, likedBy: string[] = [], env?: Env) {
     original_media_urls: mediaUrls,
     media_types: mediaTypes.slice(0, mediaUrls.length || mediaTypes.length),
     media_backup_ids: parseJsonArray(post.media_backup_ids),
-    media_dimensions: feedMediaDimensions(mediaUrls, mediaTypes, dimensions),
-    feed_width: FEED_MEDIA_WIDTH,
-    feed_height: FEED_MEDIA_HEIGHT,
-    feed_aspect_ratio: FEED_MEDIA_ASPECT_RATIO,
+    media_dimensions: renderedMediaDimensions,
+    feed_width: Number(primaryMediaDimensions.feed_width || FEED_MEDIA_WIDTH),
+    feed_height: Number(primaryMediaDimensions.feed_height || FEED_MEDIA_HEIGHT),
+    feed_aspect_ratio: Number(primaryMediaDimensions.feed_aspect_ratio || FEED_MEDIA_ASPECT_RATIO),
     primary_category: primaryCategory,
     category: primaryCategory,
     category_confidence: categoryConfidence,
@@ -11777,13 +11844,14 @@ function adminPostPayload(row: any, env: Env) {
   const thumbnailVariant = env.CLOUDFLARE_IMAGES_THUMBNAIL_VARIANT || '';
   const feedVariant = env.CLOUDFLARE_IMAGES_FEED_VARIANT || '';
   const normalizedTypes = mediaTypes.length ? mediaTypes : mediaUrls.map((url) => isVideoMediaUrl(url) ? 'video' : 'image');
+  const normalizedDimensions = feedMediaDimensions(mediaUrls, normalizedTypes, dimensions);
   const media = mediaUrls.map((url, index) => {
     const mediaType = String(normalizedTypes[index] || 'image').toLowerCase().includes('video') || isVideoMediaUrl(url) ? 'video' : 'image';
     const feedUrl = mediaType === 'video' ? streamPlaybackUrl(url) : feedDeliveryUrl(url, mediaType, feedVariant);
     const thumbnailUrl = mediaType === 'video'
       ? streamThumbnailUrl(url)
       : posterDeliveryUrl(url, mediaType, thumbnailVariant);
-    const original = dimensions[index] || {};
+    const original = normalizedDimensions[index] || dimensions[index] || {};
     const width = Number(original.feed_width || original.width || original.original_width || 0) || null;
     const height = Number(original.feed_height || original.height || original.original_height || 0) || null;
     const aspectRatio = Number(original.feed_aspect_ratio || original.ratio || original.aspect_ratio || (width && height ? width / height : 0)) || null;
@@ -11800,6 +11868,15 @@ function adminPostPayload(row: any, env: Env) {
       height,
       aspect_ratio: aspectRatio,
       aspectRatio,
+      original_width: original.original_width || null,
+      original_height: original.original_height || null,
+      original_aspect_ratio: original.original_aspect_ratio || null,
+      feed_width: original.feed_width || width,
+      feed_height: original.feed_height || height,
+      feed_aspect_ratio: original.feed_aspect_ratio || aspectRatio,
+      display_aspect_ratio: original.display_aspect_ratio || aspectRatio,
+      format: original.format || supportedFeedMediaVariant(original).format,
+      crop_mode: original.crop_mode || 'center_crop',
     };
   });
   const first: any = media[0] || {};

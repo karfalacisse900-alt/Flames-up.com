@@ -1155,11 +1155,7 @@ public struct CreatePostNativeView: View {
       for item in mediaItems {
         uploaded.append(try await uploader.upload(item))
         mediaTypes.append(item.kind.rawValue)
-        if item.kind == .image {
-          mediaDimensions.append(MIRAMediaDimension(width: 1080, height: 1440, ratio: 0.75, format: "3:4", type: item.kind.rawValue))
-        } else {
-          mediaDimensions.append(await item.mediaDimension())
-        }
+        mediaDimensions.append(await item.mediaDimension())
       }
       let tagLine = cleanedTags.isEmpty ? "" : cleanedTags.map { "#\($0)" }.joined(separator: " ")
       let postContent = [bodyText.trimmingCharacters(in: .whitespacesAndNewlines), tagLine]

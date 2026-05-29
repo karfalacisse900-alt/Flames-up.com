@@ -433,12 +433,69 @@ public struct MIRATaggedUserPayload: Codable, Hashable, Identifiable {
   }
 }
 
+public enum MIRASupportedPostAspectRatio: String, CaseIterable, Codable, Hashable {
+  case threeFour = "3:4"
+  case fourFive = "4:5"
+  case twoThree = "2:3"
+
+  public static let defaultRatio: MIRASupportedPostAspectRatio = .threeFour
+
+  public var feedWidth: Double { 1080 }
+
+  public var feedHeight: Double {
+    switch self {
+    case .threeFour: return 1440
+    case .fourFive: return 1350
+    case .twoThree: return 1620
+    }
+  }
+
+  public var widthToHeightRatio: Double {
+    feedWidth / feedHeight
+  }
+
+  public var heightToWidthRatio: CGFloat {
+    CGFloat(feedHeight / feedWidth)
+  }
+
+  public static func nearest(width: Double?, height: Double?, preferred: MIRASupportedPostAspectRatio = .threeFour) -> MIRASupportedPostAspectRatio {
+    guard let width, let height, width > 0, height > 0 else { return preferred }
+    let original = width / height
+    guard original < 1 else { return preferred }
+    return allCases.min { lhs, rhs in
+      abs(lhs.widthToHeightRatio - original) < abs(rhs.widthToHeightRatio - original)
+    } ?? preferred
+  }
+
+  public static func nearest(widthToHeightRatio ratio: Double?) -> MIRASupportedPostAspectRatio {
+    guard let ratio, ratio.isFinite, ratio > 0, ratio < 1 else { return defaultRatio }
+    return allCases.min { lhs, rhs in
+      abs(lhs.widthToHeightRatio - ratio) < abs(rhs.widthToHeightRatio - ratio)
+    } ?? defaultRatio
+  }
+
+  public static func from(format: String?) -> MIRASupportedPostAspectRatio? {
+    guard let format else { return nil }
+    let normalized = format.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    return allCases.first { $0.rawValue.lowercased() == normalized }
+  }
+}
+
 public struct MIRAMediaDimension: Codable, Hashable {
   public let width: Double?
   public let height: Double?
   public let ratio: Double?
   public let format: String?
   public let type: String?
+  public let originalWidth: Double?
+  public let originalHeight: Double?
+  public let originalAspectRatio: Double?
+  public let feedWidth: Double?
+  public let feedHeight: Double?
+  public let feedAspectRatio: Double?
+  public let displayAspectRatio: Double?
+  public let cropMode: String?
+  public let mediaType: String?
 
   enum CodingKeys: String, CodingKey {
     case width
@@ -448,14 +505,56 @@ public struct MIRAMediaDimension: Codable, Hashable {
     case aspectRatioSnake = "aspect_ratio"
     case format
     case type
+    case originalWidth
+    case originalWidthSnake = "original_width"
+    case originalHeight
+    case originalHeightSnake = "original_height"
+    case originalAspectRatio
+    case originalAspectRatioSnake = "original_aspect_ratio"
+    case feedWidth
+    case feedWidthSnake = "feed_width"
+    case feedHeight
+    case feedHeightSnake = "feed_height"
+    case feedAspectRatio
+    case feedAspectRatioSnake = "feed_aspect_ratio"
+    case displayAspectRatio
+    case displayAspectRatioSnake = "display_aspect_ratio"
+    case cropMode
+    case cropModeSnake = "crop_mode"
+    case mediaType
+    case mediaTypeSnake = "media_type"
   }
 
-  public init(width: Double?, height: Double?, ratio: Double?, format: String?, type: String?) {
+  public init(
+    width: Double?,
+    height: Double?,
+    ratio: Double?,
+    format: String?,
+    type: String?,
+    originalWidth: Double? = nil,
+    originalHeight: Double? = nil,
+    originalAspectRatio: Double? = nil,
+    feedWidth: Double? = nil,
+    feedHeight: Double? = nil,
+    feedAspectRatio: Double? = nil,
+    displayAspectRatio: Double? = nil,
+    cropMode: String? = nil,
+    mediaType: String? = nil
+  ) {
     self.width = width
     self.height = height
     self.ratio = ratio
     self.format = format
     self.type = type
+    self.originalWidth = originalWidth
+    self.originalHeight = originalHeight
+    self.originalAspectRatio = originalAspectRatio
+    self.feedWidth = feedWidth
+    self.feedHeight = feedHeight
+    self.feedAspectRatio = feedAspectRatio
+    self.displayAspectRatio = displayAspectRatio
+    self.cropMode = cropMode
+    self.mediaType = mediaType
   }
 
   public init(from decoder: Decoder) throws {
@@ -467,6 +566,15 @@ public struct MIRAMediaDimension: Codable, Hashable {
     let ratioText = Self.decodeString(container, keys: [.ratio, .aspectRatio, .aspectRatioSnake])
     format = explicitFormat ?? ratioText
     type = try? container.decodeIfPresent(String.self, forKey: .type)
+    originalWidth = Self.decodeDouble(container, keys: [.originalWidth, .originalWidthSnake])
+    originalHeight = Self.decodeDouble(container, keys: [.originalHeight, .originalHeightSnake])
+    originalAspectRatio = Self.decodeDouble(container, keys: [.originalAspectRatio, .originalAspectRatioSnake])
+    feedWidth = Self.decodeDouble(container, keys: [.feedWidth, .feedWidthSnake])
+    feedHeight = Self.decodeDouble(container, keys: [.feedHeight, .feedHeightSnake])
+    feedAspectRatio = Self.decodeDouble(container, keys: [.feedAspectRatio, .feedAspectRatioSnake])
+    displayAspectRatio = Self.decodeDouble(container, keys: [.displayAspectRatio, .displayAspectRatioSnake])
+    cropMode = Self.decodeString(container, keys: [.cropMode, .cropModeSnake])
+    mediaType = Self.decodeString(container, keys: [.mediaType, .mediaTypeSnake])
   }
 
   public func encode(to encoder: Encoder) throws {
@@ -476,17 +584,35 @@ public struct MIRAMediaDimension: Codable, Hashable {
     try container.encodeIfPresent(ratio, forKey: .ratio)
     try container.encodeIfPresent(format, forKey: .format)
     try container.encodeIfPresent(type, forKey: .type)
+    try container.encodeIfPresent(originalWidth, forKey: .originalWidthSnake)
+    try container.encodeIfPresent(originalHeight, forKey: .originalHeightSnake)
+    try container.encodeIfPresent(originalAspectRatio, forKey: .originalAspectRatioSnake)
+    try container.encodeIfPresent(feedWidth, forKey: .feedWidthSnake)
+    try container.encodeIfPresent(feedHeight, forKey: .feedHeightSnake)
+    try container.encodeIfPresent(feedAspectRatio, forKey: .feedAspectRatioSnake)
+    try container.encodeIfPresent(displayAspectRatio, forKey: .displayAspectRatioSnake)
+    try container.encodeIfPresent(cropMode, forKey: .cropModeSnake)
+    try container.encodeIfPresent(mediaType, forKey: .mediaTypeSnake)
   }
 
   public var heightToWidthRatio: CGFloat? {
-    let widthValue = width ?? 0
-    let heightValue = height ?? 0
+    if let formatRatio = MIRASupportedPostAspectRatio.from(format: format) {
+      return formatRatio.heightToWidthRatio
+    }
+    if let displayAspectRatio, displayAspectRatio > 0 {
+      return MIRASupportedPostAspectRatio.nearest(widthToHeightRatio: displayAspectRatio).heightToWidthRatio
+    }
+    if let feedAspectRatio, feedAspectRatio > 0 {
+      return MIRASupportedPostAspectRatio.nearest(widthToHeightRatio: feedAspectRatio).heightToWidthRatio
+    }
+    let widthValue = feedWidth ?? width ?? originalWidth ?? 0
+    let heightValue = feedHeight ?? height ?? originalHeight ?? 0
     if widthValue > 0, heightValue > 0 {
-      return CGFloat(heightValue / widthValue)
+      return MIRASupportedPostAspectRatio.nearest(width: widthValue, height: heightValue).heightToWidthRatio
     }
     if let ratio, ratio > 0 {
       // Backend stores ratio as width / height. Feed sizing needs height / width.
-      return CGFloat(1 / ratio)
+      return MIRASupportedPostAspectRatio.nearest(widthToHeightRatio: ratio).heightToWidthRatio
     }
     return MIRAMediaSizing.heightToWidthRatio(forFormat: format)
   }

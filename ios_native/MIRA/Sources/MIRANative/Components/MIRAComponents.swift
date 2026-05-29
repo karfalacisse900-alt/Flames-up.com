@@ -1240,8 +1240,9 @@ public enum MIRAMediaSizing {
   public static let feedTargetWidth: CGFloat = 1080
   public static let feedTargetHeight: CGFloat = 1440
   public static let feedPreviewRatio: CGFloat = 4.0 / 3.0
-  public static let feedTallRatio: CGFloat = 4.0 / 3.0
-  public static let feedImmersiveRatio: CGFloat = 4.0 / 3.0
+  public static let feedShortPortraitRatio: CGFloat = 5.0 / 4.0
+  public static let feedTallRatio: CGFloat = 3.0 / 2.0
+  public static let feedImmersiveRatio: CGFloat = 3.0 / 2.0
   public static let profileGridRatio: CGFloat = 5.0 / 4.0
   public static let fullVerticalRatio: CGFloat = 16.0 / 9.0
   public static let maxMainFeedScreenHeightFraction: CGFloat = 0.78
@@ -1252,29 +1253,15 @@ public enum MIRAMediaSizing {
     width: CGFloat = UIScreen.main.bounds.width
   ) -> CGFloat {
     if let ratio = aspectRatios.first(where: { $0.isFinite && $0 > 0 }) {
-      return boundedHeight(width * ratio, width: width)
+      return boundedHeight(width * supportedFeedHeightToWidthRatio(ratio), width: width)
     }
 
     let lowercased = urls.map { $0.lowercased() }
     if let ratio = lowercased.compactMap({ flexibleDimensionsRatio(in: $0) ?? aspectRatioHint(in: $0) }).first {
-      return boundedHeight(width * ratio, width: width)
+      return boundedHeight(width * supportedFeedHeightToWidthRatio(ratio), width: width)
     }
 
-    let prefersSquare = lowercased.contains { value in
-      value.contains("1x1") || value.contains("1:1") || value.contains("square")
-    }
-    let prefersLongVertical = lowercased.contains { value in
-      value.contains("9x16") || value.contains("9:16") || value.contains("story") || value.contains("vertical")
-    }
-    let height: CGFloat
-    if prefersSquare {
-      height = width
-    } else if prefersLongVertical {
-      height = width * (16.0 / 9.0)
-    } else {
-      height = width * feedPreviewRatio
-    }
-    return boundedHeight(height, width: width)
+    return boundedHeight(width * feedPreviewRatio, width: width)
   }
 
   public static func mainFeedHeight(
@@ -1293,10 +1280,13 @@ public enum MIRAMediaSizing {
     for urls: [String],
     aspectRatios: [CGFloat] = []
   ) -> CGFloat {
-    _ = urls
-    _ = aspectRatios
-    // Main feed cards intentionally reserve one stable 3:4 surface.
-    // The original upload stays intact; the feed uses aspect-fill optimized previews.
+    if let ratio = aspectRatios.first(where: { $0.isFinite && $0 > 0 }) {
+      return supportedFeedHeightToWidthRatio(ratio)
+    }
+    let lowercased = urls.map { $0.lowercased() }
+    if let ratio = lowercased.compactMap({ flexibleDimensionsRatio(in: $0) ?? aspectRatioHint(in: $0) }).first {
+      return supportedFeedHeightToWidthRatio(ratio)
+    }
     return feedPreviewRatio
   }
 
@@ -1307,14 +1297,14 @@ public enum MIRAMediaSizing {
   ) -> CGFloat {
     let ideal = feedHeight(for: urls, aspectRatios: aspectRatios, width: width)
     // Detail pages need room for the title/caption and the fixed action/comment bar.
-    // Tall 9:16 media is still displayed large, but it cannot push controls off-screen.
+    // Tall 2:3 media is still displayed large, but it cannot push controls off-screen.
     let readableDetailHeight = UIScreen.main.bounds.height * 0.48
     return min(ideal, readableDetailHeight)
   }
 
   public static func heightToWidthRatio(forFormat format: String?) -> CGFloat? {
     guard let format else { return nil }
-    return aspectRatioHint(in: format.lowercased())
+    return aspectRatioHint(in: format.lowercased()).map(supportedFeedHeightToWidthRatio)
   }
 
   private static func flexibleDimensionsRatio(in value: String) -> CGFloat? {
@@ -1334,13 +1324,21 @@ public enum MIRAMediaSizing {
     let mediaWidth = CGFloat(Double(String(normalized[widthRange])) ?? 0)
     let mediaHeight = CGFloat(Double(String(normalized[heightRange])) ?? 0)
     guard mediaWidth > 0, mediaHeight > 0 else { return namedDimensionsRatio(in: normalized) ?? dimensionsRatio(in: value) }
-    return min(max(mediaHeight / mediaWidth, 1.0 / 1.91), 16.0 / 9.0)
+    return supportedFeedHeightToWidthRatio(mediaHeight / mediaWidth)
   }
 
   private static func boundedHeight(_ height: CGFloat, width: CGFloat) -> CGFloat {
-    let minHeight = width / 1.91
-    let maxHeight = UIScreen.main.bounds.height * maxMainFeedScreenHeightFraction
+    let minHeight = width * feedShortPortraitRatio
+    let maxHeight = min(width * feedTallRatio, UIScreen.main.bounds.height * maxMainFeedScreenHeightFraction)
     return min(max(height, minHeight), maxHeight)
+  }
+
+  private static func supportedFeedHeightToWidthRatio(_ ratio: CGFloat) -> CGFloat {
+    guard ratio.isFinite, ratio > 0 else { return feedPreviewRatio }
+    let supported = MIRASupportedPostAspectRatio.allCases.map(\.heightToWidthRatio)
+    return supported.min { lhs, rhs in
+      abs(lhs - ratio) < abs(rhs - ratio)
+    } ?? feedPreviewRatio
   }
 
   private static func dimensionsRatio(in value: String) -> CGFloat? {
@@ -1355,14 +1353,14 @@ public enum MIRAMediaSizing {
     let mediaWidth = CGFloat(Double(String(value[widthRange])) ?? 0)
     let mediaHeight = CGFloat(Double(String(value[heightRange])) ?? 0)
     guard mediaWidth > 0, mediaHeight > 0 else { return nil }
-    return min(max(mediaHeight / mediaWidth, 1.0 / 1.91), 16.0 / 9.0)
+    return supportedFeedHeightToWidthRatio(mediaHeight / mediaWidth)
   }
 
   private static func namedDimensionsRatio(in value: String) -> CGFloat? {
     let width = captureNumber(in: value, pattern: #"(?i)(?:width|w)[=:_-](\d{2,5})"#)
     let height = captureNumber(in: value, pattern: #"(?i)(?:height|h)[=:_-](\d{2,5})"#)
     guard width > 0, height > 0 else { return nil }
-    return min(max(height / width, 1.0 / 1.91), 16.0 / 9.0)
+    return supportedFeedHeightToWidthRatio(height / width)
   }
 
   private static func captureNumber(in value: String, pattern: String) -> CGFloat {
@@ -1381,22 +1379,10 @@ public enum MIRAMediaSizing {
       .lowercased()
       .replacingOccurrences(of: "×", with: "x")
       .replacingOccurrences(of: "Ã—", with: "x")
-    if decoded.contains("1.91:1")
-      || decoded.contains("1_91_1")
-      || decoded.contains("1-91-1")
-      || decoded.contains("191:100")
-      || decoded.contains("191x100") {
-      return 1.0 / 1.91
-    }
-    if containsRatio("16", "9", in: decoded) { return 9.0 / 16.0 }
     if containsRatio("4", "5", in: decoded) { return 5.0 / 4.0 }
     if containsRatio("3", "4", in: decoded) { return 4.0 / 3.0 }
     if containsRatio("2", "3", in: decoded) { return 3.0 / 2.0 }
-    if containsRatio("1", "1", in: decoded) { return 1.0 }
-    if containsRatio("9", "16", in: decoded) { return 16.0 / 9.0 }
-    if decoded.contains("square") { return 1.0 }
-    if decoded.contains("portrait") { return 5.0 / 4.0 }
-    if decoded.contains("landscape") { return 9.0 / 16.0 }
+    if decoded.contains("portrait") { return feedPreviewRatio }
     return nil
   }
 

@@ -195,6 +195,8 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
   private var flashSetting: FlashSetting = .off
   private var countdownTimer: Timer?
   private var countdownValue = 0
+  private var rawCaptureSupported = false
+  private var rawCaptureEnabled = false
   private var pendingStopWorkItem: DispatchWorkItem?
   private var initialZoomFactor: CGFloat = 1
   private var longPressDidRecord = false
@@ -215,6 +217,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
   private let closeButton = UIButton(type: .system)
   private let flipButton = UIButton(type: .system)
   private let flashButton = UIButton(type: .system)
+  private let rawButton = UIButton(type: .system)
   private let timerButton = UIButton(type: .system)
   private let gridButton = UIButton(type: .system)
   private let galleryRailButton = UIButton(type: .system)
@@ -389,6 +392,11 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     configureCircleButton(closeButton, systemImage: "xmark", action: #selector(cancelTapped))
     configureCircleButton(flipButton, systemImage: "arrow.triangle.2.circlepath.camera", action: #selector(flipCamera))
     configureCircleButton(flashButton, systemImage: flashSetting.systemImage, action: #selector(cycleFlash))
+    configureCircleButton(rawButton, systemImage: "camera.aperture", action: #selector(toggleRawCapture))
+    rawButton.setTitle("RAW", for: .normal)
+    rawButton.setImage(nil, for: .normal)
+    rawButton.titleLabel?.font = .systemFont(ofSize: 11, weight: .heavy)
+    rawButton.isHidden = true
     configureCircleButton(gridButton, systemImage: "music.note", action: #selector(musicTapped))
     configureCircleButton(galleryRailButton, systemImage: "photo.on.rectangle", action: #selector(openGallery))
     configureCircleButton(filtersButton, systemImage: "wand.and.stars", action: #selector(filtersTapped))
@@ -402,7 +410,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     rightRail.spacing = 12
     rightRail.alignment = .center
     rightRail.translatesAutoresizingMaskIntoConstraints = false
-    [flipButton, flashButton, gridButton, editRailButton].forEach {
+    [flipButton, flashButton, rawButton, gridButton, editRailButton].forEach {
       rightRail.addArrangedSubview($0)
       $0.widthAnchor.constraint(equalToConstant: 48).isActive = true
       $0.heightAnchor.constraint(equalToConstant: 48).isActive = true
@@ -664,7 +672,9 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     sessionQueue.async { [weak self] in
       guard let self else { return }
       self.session.beginConfiguration()
-      if self.session.canSetSessionPreset(.hd4K3840x2160) {
+      if self.session.canSetSessionPreset(.photo) {
+        self.session.sessionPreset = .photo
+      } else if self.session.canSetSessionPreset(.hd4K3840x2160) {
         self.session.sessionPreset = .hd4K3840x2160
       } else if self.session.canSetSessionPreset(.hd1920x1080) {
         self.session.sessionPreset = .hd1920x1080
@@ -689,6 +699,12 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
         self.session.addOutput(self.photoOutput)
         self.photoOutput.isHighResolutionCaptureEnabled = true
         self.photoOutput.maxPhotoQualityPrioritization = .quality
+        let rawSupported = !self.photoOutput.availableRawPhotoPixelFormatTypes.isEmpty
+        DispatchQueue.main.async {
+          self.rawCaptureSupported = rawSupported
+          self.rawCaptureEnabled = self.rawCaptureEnabled && rawSupported
+          self.updateRawButton()
+        }
       }
 
       if self.session.canAddOutput(self.movieOutput) {
@@ -809,6 +825,13 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     flashButton.accessibilityLabel = "Flash \(flashSetting)"
   }
 
+  private func updateRawButton() {
+    rawButton.isHidden = !rawCaptureSupported || capturedMedia != nil || selectedMode != .photo
+    rawButton.backgroundColor = rawCaptureEnabled ? UIColor.white.withAlphaComponent(0.26) : UIColor.black.withAlphaComponent(0.34)
+    rawButton.setTitleColor(rawCaptureEnabled ? .white : UIColor.white.withAlphaComponent(0.86), for: .normal)
+    rawButton.accessibilityLabel = rawCaptureEnabled ? "RAW capture on" : "RAW capture off"
+  }
+
   private func updateFlashAvailability() {
     let device = currentInput?.device
     let isAvailable = (device?.hasFlash == true) || (device?.hasTorch == true)
@@ -828,6 +851,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     rightRail.isHidden = false
     flipButton.isHidden = false
     flashButton.isHidden = false
+    rawButton.isHidden = isReviewing || !rawCaptureSupported || selectedMode != .photo
     gridButton.isHidden = false
     editRailButton.isHidden = false
     editRailButton.alpha = capturedMedia == nil ? 0.62 : 1
@@ -938,6 +962,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     UIImpactFeedbackGenerator(style: .light).impactOccurred()
     UIView.animate(withDuration: 0.18) {
       self.updateModeSelection()
+      self.updateRawButton()
       self.modeStack.layoutIfNeeded()
     }
   }
@@ -956,6 +981,14 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     flashSetting = values[nextIndex % values.count]
     updateFlashButton()
     UIImpactFeedbackGenerator(style: .light).impactOccurred()
+  }
+
+  @objc private func toggleRawCapture() {
+    guard rawCaptureSupported else { return }
+    rawCaptureEnabled.toggle()
+    updateRawButton()
+    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    showTransientMessage(rawCaptureEnabled ? "RAW capture on. Posting still uses optimized feed media." : "RAW capture off.")
   }
 
   @objc private func toggleGrid() {
@@ -1195,7 +1228,13 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
 
   private func capturePhoto() {
     guard session.isRunning, !movieOutput.isRecording else { return }
-    let settings = AVCapturePhotoSettings()
+    let settings: AVCapturePhotoSettings
+    if rawCaptureEnabled, let rawPixelFormat = photoOutput.availableRawPhotoPixelFormatTypes.first {
+      let processedFormat: [String: Any] = [AVVideoCodecKey: AVVideoCodecType.hevc]
+      settings = AVCapturePhotoSettings(rawPixelFormatType: rawPixelFormat, processedFormat: processedFormat)
+    } else {
+      settings = AVCapturePhotoSettings()
+    }
     settings.photoQualityPrioritization = .quality
     if currentInput?.device.hasFlash == true {
       settings.flashMode = flashSetting.photoMode
@@ -1203,6 +1242,12 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
       settings.flashMode = .off
     }
     settings.isHighResolutionPhotoEnabled = true
+#if DEBUG
+    print(
+      "CaptroCameraQuality capture_start device=\(currentInput?.device.localizedName ?? "unknown") " +
+      "preset=\(session.sessionPreset.rawValue) prioritization=\(settings.photoQualityPrioritization) highRes=\(settings.isHighResolutionPhotoEnabled)"
+    )
+#endif
     if let connection = photoOutput.connection(with: .video), connection.isVideoOrientationSupported {
       connection.videoOrientation = .portrait
       if cameraPosition == .front, connection.isVideoMirroringSupported {
@@ -1671,11 +1716,56 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
       }
       return
     }
-    let media = MIRAPickedMedia(data: data, kind: .image, fileName: "\(UUID().uuidString).jpg", mimeType: "image/jpeg")
+    if photo.isRawPhoto {
+#if DEBUG
+      let debugURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent("captro-camera-raw-\(UUID().uuidString).dng")
+      try? data.write(to: debugURL, options: [.atomic])
+      print("CaptroCameraQuality raw_saved=\(debugURL.path) bytes=\(data.count)")
+#endif
+      return
+    }
+    let imageType = capturedImageType(for: data)
+#if DEBUG
+    logCapturedPhotoQuality(data: data, imageType: imageType)
+#endif
+    let media = MIRAPickedMedia(data: data, kind: .image, fileName: "\(UUID().uuidString).\(imageType.extensionName)", mimeType: imageType.mimeType)
     DispatchQueue.main.async {
       self.showCapturedMedia(media)
     }
   }
+
+  private func capturedImageType(for data: Data) -> (mimeType: String, extensionName: String) {
+    if data.starts(with: [0xff, 0xd8, 0xff]) {
+      return ("image/jpeg", "jpg")
+    }
+    if data.count >= 12 {
+      let header = Array(data.prefix(12))
+      let isISOBaseMedia = header[4] == 0x66 && header[5] == 0x74 && header[6] == 0x79 && header[7] == 0x70
+      let brand = String(bytes: header[8...11], encoding: .ascii)?.lowercased() ?? ""
+      if isISOBaseMedia, ["heic", "heix", "hevc", "hevx", "mif1", "msf1"].contains(brand) {
+        return ("image/heic", "heic")
+      }
+    }
+    return ("image/jpeg", "jpg")
+  }
+
+#if DEBUG
+  private func logCapturedPhotoQuality(data: Data, imageType: (mimeType: String, extensionName: String)) {
+    let image = UIImage(data: data)
+    let width = Int(image?.size.width ?? 0)
+    let height = Int(image?.size.height ?? 0)
+    print(
+      "CaptroCameraQuality capture_complete device=\(currentInput?.device.localizedName ?? "unknown") " +
+      "preset=\(session.sessionPreset.rawValue) mime=\(imageType.mimeType) " +
+      "original=\(width)x\(height) bytes=\(data.count)"
+    )
+    let debugURL = FileManager.default.temporaryDirectory
+      .appendingPathComponent("captro-camera-original-\(UUID().uuidString).\(imageType.extensionName)")
+    try? data.write(to: debugURL, options: [.atomic])
+    print("CaptroCameraQuality original_saved=\(debugURL.path)")
+  }
+#endif
 
   func fileOutput(
     _ output: AVCaptureFileOutput,

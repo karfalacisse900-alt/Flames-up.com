@@ -34,7 +34,11 @@ public struct MIRAPickedMedia: Hashable {
     switch kind {
     case .image:
       size = await Task.detached(priority: .utility) {
-        UIImage(data: data)?.size
+        guard let image = UIImage(data: data) else { return nil }
+        if let cgImage = image.cgImage {
+          return CGSize(width: cgImage.width, height: cgImage.height)
+        }
+        return image.size
       }.value
     case .video:
       size = await videoNaturalSize()
@@ -46,12 +50,22 @@ public struct MIRAPickedMedia: Hashable {
 
     let width = Double(size.width)
     let height = Double(size.height)
+    let supportedRatio = MIRASupportedPostAspectRatio.nearest(width: width, height: height)
     return MIRAMediaDimension(
       width: width,
       height: height,
       ratio: width / height,
-      format: Self.mediaFormat(width: width, height: height),
-      type: kind.rawValue
+      format: supportedRatio.rawValue,
+      type: kind.rawValue,
+      originalWidth: width,
+      originalHeight: height,
+      originalAspectRatio: width / height,
+      feedWidth: supportedRatio.feedWidth,
+      feedHeight: supportedRatio.feedHeight,
+      feedAspectRatio: supportedRatio.widthToHeightRatio,
+      displayAspectRatio: supportedRatio.widthToHeightRatio,
+      cropMode: "center_crop",
+      mediaType: kind.rawValue
     )
   }
 
@@ -74,16 +88,6 @@ public struct MIRAPickedMedia: Hashable {
     }
   }
 
-  private static func mediaFormat(width: Double, height: Double) -> String {
-    guard width > 0, height > 0 else { return "" }
-    let ratio = width / height
-    if abs(ratio - 1.91) <= 0.08 { return "1.91:1" }
-    if abs(ratio - (16.0 / 9.0)) <= 0.08 { return "16:9" }
-    if abs(ratio - 1.0) <= 0.06 { return "1:1" }
-    if abs(ratio - (4.0 / 5.0)) <= 0.07 { return "4:5" }
-    if abs(ratio - (9.0 / 16.0)) <= 0.07 { return "9:16" }
-    return ratio > 1 ? "landscape" : "portrait"
-  }
 }
 
 public enum MIRAMediaUploadTarget: Hashable {
@@ -267,7 +271,11 @@ public final class MIRAMediaUploadService {
   private func prepareFeedImage(_ data: Data) async -> Data? {
     await Task.detached(priority: .userInitiated) {
       guard let image = UIImage(data: data), image.size.width > 0, image.size.height > 0 else { return nil }
-      let targetSize = CGSize(width: 1080, height: 1440)
+      let selectedRatio = MIRASupportedPostAspectRatio.nearest(
+        width: Double(image.size.width),
+        height: Double(image.size.height)
+      )
+      let targetSize = CGSize(width: CGFloat(selectedRatio.feedWidth), height: CGFloat(selectedRatio.feedHeight))
       let scale = max(targetSize.width / image.size.width, targetSize.height / image.size.height)
       let drawSize = CGSize(width: image.size.width * scale, height: image.size.height * scale)
       let drawOrigin = CGPoint(
@@ -283,7 +291,16 @@ public final class MIRAMediaUploadService {
         UIBezierPath(rect: CGRect(origin: .zero, size: targetSize)).fill()
         image.draw(in: CGRect(origin: drawOrigin, size: drawSize))
       }
-      return rendered.jpegData(compressionQuality: 0.92)
+      let renderedData = rendered.jpegData(compressionQuality: 0.94)
+      #if DEBUG
+      if let renderedData {
+        print(
+          "CaptroCameraQuality original=\(Int(image.size.width))x\(Int(image.size.height)) bytes=\(data.count) " +
+          "feed=\(Int(targetSize.width))x\(Int(targetSize.height)) ratio=\(selectedRatio.rawValue) bytes=\(renderedData.count) compression=0.94"
+        )
+      }
+      #endif
+      return renderedData
     }.value
   }
 
