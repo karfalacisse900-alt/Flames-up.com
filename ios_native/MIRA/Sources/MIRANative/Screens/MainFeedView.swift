@@ -12,6 +12,18 @@ private struct MainFeedMediaPreloadPlan: Sendable {
   }
 }
 
+private final class MainFeedScrollState {
+  var previousMinY: CGFloat?
+  var intentDistance: CGFloat = 0
+  var intentDirection = 0
+
+  func reset() {
+    previousMinY = nil
+    intentDistance = 0
+    intentDirection = 0
+  }
+}
+
 @MainActor
 final class MainFeedModel: ObservableObject {
   @Published var posts: [MIRAPost] = []
@@ -608,11 +620,9 @@ public struct MainFeedView: View {
   @StateObject private var model: MainFeedModel
   private let isTabActive: Bool
   @EnvironmentObject private var localization: MIRALocalization
+  @State private var scrollState = MainFeedScrollState()
   @State private var activeVideoPostID: String?
   @State private var isHeaderHidden = false
-  @State private var previousScrollMinY: CGFloat?
-  @State private var scrollIntentDistance: CGFloat = 0
-  @State private var scrollIntentDirection = 0
   @State private var isShowingCreatePost = false
   @State private var activeCommentsPost: MIRAPost?
   @State private var isCommentsPresented = false
@@ -663,8 +673,9 @@ public struct MainFeedView: View {
                   canFollowAuthor: model.canFollowAuthor(post)
                 )
                 .onAppear {
+                  MIRAApplePerformanceLogger.event("post_cell_appear", detail: post.feedMediaURLs.first?.isVideoURL == true ? "video" : "image")
                   Task { await model.loadMoreIfNeeded(after: post) }
-                  model.prefetchMedia(around: post, scrollDirection: scrollIntentDirection)
+                  model.prefetchMedia(around: post, scrollDirection: scrollState.intentDirection)
                 }
               }
               if model.isLoadingMore {
@@ -814,6 +825,7 @@ public struct MainFeedView: View {
         }
       }
       .onAppear {
+        MIRAApplePerformanceLogger.event("feed_render", detail: model.posts.isEmpty ? "empty" : "posts")
         if !isMediaPlaybackSuppressed {
           MIRAPlaybackCoordinator.resumeVisible(reason: "home_feed_appeared")
         }
@@ -825,36 +837,48 @@ public struct MainFeedView: View {
   }
 
   private func handleScroll(_ minY: CGFloat) {
-    guard let previousScrollMinY else {
-      previousScrollMinY = minY
+    guard let previousMinY = scrollState.previousMinY else {
+      scrollState.previousMinY = minY
       return
     }
 
-    let delta = minY - previousScrollMinY
-    self.previousScrollMinY = minY
+    let delta = minY - previousMinY
+    scrollState.previousMinY = minY
     guard abs(delta) > 1 else { return }
 
     if minY > -6 {
-      isHeaderHidden = false
-      scrollIntentDistance = 0
-      scrollIntentDirection = 0
+      if isHeaderHidden {
+        withAnimation(.easeOut(duration: 0.14)) {
+          isHeaderHidden = false
+        }
+      }
+      scrollState.intentDistance = 0
+      scrollState.intentDirection = 0
       return
     }
 
     let direction = delta < 0 ? 1 : -1
-    if direction != scrollIntentDirection {
-      scrollIntentDirection = direction
-      scrollIntentDistance = abs(delta)
+    if direction != scrollState.intentDirection {
+      scrollState.intentDirection = direction
+      scrollState.intentDistance = abs(delta)
     } else {
-      scrollIntentDistance += abs(delta)
+      scrollState.intentDistance += abs(delta)
     }
 
-    if direction == 1 && minY < -8 && scrollIntentDistance > 6 {
-      isHeaderHidden = true
-      scrollIntentDistance = 0
-    } else if direction == -1 && scrollIntentDistance > 8 {
-      isHeaderHidden = false
-      scrollIntentDistance = 0
+    if direction == 1 && minY < -8 && scrollState.intentDistance > 5 {
+      if !isHeaderHidden {
+        withAnimation(.easeOut(duration: 0.14)) {
+          isHeaderHidden = true
+        }
+      }
+      scrollState.intentDistance = 0
+    } else if direction == -1 && scrollState.intentDistance > 10 {
+      if isHeaderHidden {
+        withAnimation(.easeOut(duration: 0.18)) {
+          isHeaderHidden = false
+        }
+      }
+      scrollState.intentDistance = 0
     }
   }
 
@@ -917,6 +941,7 @@ public struct MainFeedView: View {
 
   private func presentSaveSheet(for post: MIRAPost) {
     UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    MIRAApplePerformanceLogger.event("modal_open", detail: "save_sheet")
     saveTargetPost = post
     DispatchQueue.main.async {
       withAnimation(.spring(response: 0.30, dampingFraction: 0.90)) {
@@ -927,6 +952,7 @@ public struct MainFeedView: View {
 
   private func presentPostOptions(for post: MIRAPost) {
     UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    MIRAApplePerformanceLogger.event("modal_open", detail: "post_options")
     postOptionsTarget = post
     DispatchQueue.main.async {
       withAnimation(.spring(response: 0.30, dampingFraction: 0.90)) {
@@ -1271,20 +1297,10 @@ private struct MainNativePostCard: View {
   }
 
   private var actionRow: some View {
-    ViewThatFits(in: .horizontal) {
-      HStack(spacing: 4) {
-        engagementButtons
-        Spacer(minLength: 4)
-        captionExpansionButton
-      }
-
-      VStack(alignment: .leading, spacing: 2) {
-        HStack(spacing: 4) {
-          engagementButtons
-          Spacer(minLength: 0)
-        }
-        captionExpansionButton
-      }
+    HStack(spacing: 4) {
+      engagementButtons
+      Spacer(minLength: 4)
+      captionExpansionButton
     }
     .lineLimit(1)
     .padding(.horizontal, MIRATheme.Space.md)

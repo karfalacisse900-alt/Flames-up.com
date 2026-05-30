@@ -21,22 +21,31 @@ public final class MIRAVideoPrewarmManager {
   public static let shared = MIRAVideoPrewarmManager()
 
   private var cachedStreamInfo: [String: MIRAStreamPlaybackInfo] = [:]
+  private var preparedPlayers: [String: AVPlayer] = [:]
+  private var preparedOrder: [String] = []
   private var inFlight = Set<String>()
   private let maxMetadataPreloads = 3
+  private let maxPreparedPlayers = 2
 
   private init() {}
 
-  public func prewarm(urls: [String], keepOnly _: Set<String> = []) {
+  public func prewarm(urls: [String], keepOnly: Set<String> = []) {
     let candidates = Array(orderedUnique(urls).filter(\.isVideoURL).prefix(maxMetadataPreloads))
     guard !candidates.isEmpty else { return }
+
+    trimPreparedPlayers(keepOnly: Set(candidates).union(keepOnly.map { normalized($0) }))
 
     for url in candidates {
       prewarm(url: url)
     }
   }
 
-  public func consumePreparedPlayer(for _: String) -> AVPlayer? {
-    return nil
+  public func consumePreparedPlayer(for url: String) -> AVPlayer? {
+    let key = normalized(url)
+    guard let player = preparedPlayers.removeValue(forKey: key) else { return nil }
+    preparedOrder.removeAll { $0 == key }
+    MIRAApplePerformanceLogger.event("video_prewarm_consumed", detail: key.videoPrewarmLogLabel)
+    return player
   }
 
   public func streamInfo(for url: String) -> MIRAStreamPlaybackInfo? {
@@ -49,6 +58,12 @@ public final class MIRAVideoPrewarmManager {
     inFlight.insert(key)
     MIRAApplePerformanceLogger.event("video_prewarm_started", detail: key.videoPrewarmLogLabel)
 
+    if preparedPlayers[key] != nil {
+      inFlight.remove(key)
+      MIRAApplePerformanceLogger.event("video_prewarm_skipped", detail: "prepared")
+      return
+    }
+
     if key.lowercased().hasPrefix("cfstream:") {
       Task { [weak self] in
         await self?.resolveCloudflareStream(for: key)
@@ -56,10 +71,14 @@ public final class MIRAVideoPrewarmManager {
       return
     }
 
-    // Avoid creating offscreen AVPlayer instances from the feed preloader. The visible
-    // media view owns playback; preloading stays limited to posters and Stream metadata.
+    guard let url = URL(string: key), url.isPlayableFileOrRemoteVideo else {
+      inFlight.remove(key)
+      MIRAApplePerformanceLogger.event("video_prewarm_skipped", detail: key.videoPrewarmLogLabel)
+      return
+    }
+
+    preparePlayer(for: key, playbackURL: url)
     inFlight.remove(key)
-    MIRAApplePerformanceLogger.event("video_prewarm_skipped", detail: key.videoPrewarmLogLabel)
   }
 
   private func resolveCloudflareStream(for key: String) async {
@@ -84,11 +103,45 @@ public final class MIRAVideoPrewarmManager {
       inFlight.remove(key)
       if info.ready != false {
         MIRAApplePerformanceLogger.event("video_ready_to_play", detail: "stream_info")
+        if let hls = info.hls, let hlsURL = URL(string: hls) {
+          preparePlayer(for: key, playbackURL: hlsURL)
+        }
       }
     } catch {
       inFlight.remove(key)
       MIRAApplePerformanceLogger.event("video_prewarm_failed", detail: key.videoPrewarmLogLabel)
     }
+  }
+
+  private func preparePlayer(for key: String, playbackURL: URL) {
+    guard preparedPlayers[key] == nil else { return }
+    let item = AVPlayerItem(url: playbackURL)
+    item.preferredForwardBufferDuration = 1.2
+    let player = AVPlayer(playerItem: item)
+    player.isMuted = true
+    player.volume = 0
+    player.automaticallyWaitsToMinimizeStalling = true
+    player.pause()
+    preparedPlayers[key] = player
+    preparedOrder.removeAll { $0 == key }
+    preparedOrder.append(key)
+    trimPreparedPlayers(keepOnly: Set(preparedOrder.suffix(maxPreparedPlayers)))
+    MIRAApplePerformanceLogger.event("video_prewarm_ready", detail: key.videoPrewarmLogLabel)
+  }
+
+  private func trimPreparedPlayers(keepOnly: Set<String>) {
+    let normalizedKeepOnly = Set(keepOnly.map { normalized($0) })
+    let overflow = max(0, preparedOrder.count - maxPreparedPlayers)
+    let overflowKeys = Set(preparedOrder.prefix(overflow))
+    let keysToRemove = Set(preparedPlayers.keys).filter { key in
+      !normalizedKeepOnly.contains(key) || overflowKeys.contains(key)
+    }
+    guard !keysToRemove.isEmpty else { return }
+    for key in keysToRemove {
+      preparedPlayers[key]?.pause()
+      preparedPlayers.removeValue(forKey: key)
+    }
+    preparedOrder.removeAll { keysToRemove.contains($0) }
   }
 
   private func normalized(_ value: String) -> String {
@@ -104,6 +157,13 @@ public final class MIRAVideoPrewarmManager {
       result.append(trimmed)
     }
     return result
+  }
+}
+
+private extension URL {
+  var isPlayableFileOrRemoteVideo: Bool {
+    guard let scheme else { return false }
+    return scheme.hasPrefix("http") || scheme == "file"
   }
 }
 

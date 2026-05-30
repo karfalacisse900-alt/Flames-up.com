@@ -277,9 +277,9 @@ public enum MIRAScrollFeel {
   fileprivate var decelerationRate: UIScrollView.DecelerationRate {
     switch self {
     case .feed:
-      return UIScrollView.DecelerationRate(rawValue: 0.992)
+      return UIScrollView.DecelerationRate(rawValue: 0.988)
     case .chat:
-      return UIScrollView.DecelerationRate(rawValue: 0.994)
+      return UIScrollView.DecelerationRate(rawValue: 0.992)
     case .sheet:
       return UIScrollView.DecelerationRate(rawValue: 0.995)
     }
@@ -631,15 +631,30 @@ public enum MIRAImagePrefetcher {
     maxPixelSize: CGFloat = MIRAMediaSizing.feedTargetHeight,
     limit: Int = 10
   ) async {
-    let uniqueURLs = orderedUnique(urls)
+    let uniqueURLs = Array(orderedUnique(urls)
       .filter { !$0.isVideoURL }
-      .prefix(limit)
+      .prefix(limit))
+    guard !uniqueURLs.isEmpty else { return }
 
     await withTaskGroup(of: Void.self) { group in
-      for value in uniqueURLs {
+      let maxConcurrent = min(4, uniqueURLs.count)
+      var nextIndex = 0
+
+      for _ in 0..<maxConcurrent {
         guard !Task.isCancelled else { break }
-        group.addTask {
-          await prefetchImage(value, maxPixelSize: maxPixelSize)
+        let value = uniqueURLs[nextIndex]
+        nextIndex += 1
+        group.addTask(priority: .utility) {
+          await MIRAImagePrefetcher.prefetchImage(value, maxPixelSize: maxPixelSize)
+        }
+      }
+
+      while await group.next() != nil {
+        guard nextIndex < uniqueURLs.count, !Task.isCancelled else { continue }
+        let value = uniqueURLs[nextIndex]
+        nextIndex += 1
+        group.addTask(priority: .utility) {
+          await MIRAImagePrefetcher.prefetchImage(value, maxPixelSize: maxPixelSize)
         }
       }
     }
@@ -810,7 +825,7 @@ public struct RemoteMediaView: View {
         colors: [
           MIRATheme.Color.mediaPlaceholderRaised.opacity(0.76),
           placeholderColor,
-          MIRATheme.Color.forestSoft.opacity(0.68)
+          MIRATheme.Color.textMuted.opacity(0.18)
         ],
         startPoint: .topLeading,
         endPoint: .bottomTrailing
@@ -916,7 +931,7 @@ private struct MIRAResolvedVideoPlayer: View {
         colors: [
           MIRATheme.Color.mediaPlaceholderRaised.opacity(0.72),
           placeholderColor,
-          MIRATheme.Color.forestSoft.opacity(0.62)
+          MIRATheme.Color.textMuted.opacity(0.16)
         ],
         startPoint: .topLeading,
         endPoint: .bottomTrailing

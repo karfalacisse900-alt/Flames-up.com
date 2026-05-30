@@ -249,7 +249,14 @@ private struct MIRABottomSheetModifier<Sheet: View>: ViewModifier {
   }
 
   private func present() {
+    guard !isMounted else {
+      if !isVisible {
+        withAnimation(sheetAnimation) { isVisible = true }
+      }
+      return
+    }
     isMounted = true
+    MIRAApplePerformanceLogger.event("modal_open", detail: "bottom_sheet")
     DispatchQueue.main.async {
       withAnimation(sheetAnimation) {
         isVisible = true
@@ -259,6 +266,7 @@ private struct MIRABottomSheetModifier<Sheet: View>: ViewModifier {
 
   private func dismiss() {
     guard isMounted, isVisible else { return }
+    MIRAApplePerformanceLogger.event("modal_close", detail: "bottom_sheet")
     withAnimation(sheetAnimation) {
       isVisible = false
     }
@@ -271,6 +279,7 @@ private struct MIRABottomSheetModifier<Sheet: View>: ViewModifier {
 
   private func dismissFromExternalState() {
     guard isMounted else { return }
+    MIRAApplePerformanceLogger.event("modal_close", detail: "bottom_sheet_external")
     withAnimation(sheetAnimation) {
       isVisible = false
     }
@@ -330,7 +339,14 @@ private struct MIRAFadeScaleOverlayModifier<Overlay: View>: ViewModifier {
   }
 
   private func present() {
+    guard !isMounted else {
+      if !isVisible {
+        withAnimation(animation) { isVisible = true }
+      }
+      return
+    }
     isMounted = true
+    MIRAApplePerformanceLogger.event("modal_open", detail: "fade_scale")
     DispatchQueue.main.async {
       withAnimation(animation) {
         isVisible = true
@@ -340,6 +356,7 @@ private struct MIRAFadeScaleOverlayModifier<Overlay: View>: ViewModifier {
 
   private func dismiss() {
     guard isMounted, isVisible else { return }
+    MIRAApplePerformanceLogger.event("modal_close", detail: "fade_scale")
     withAnimation(animation) {
       isVisible = false
     }
@@ -352,6 +369,7 @@ private struct MIRAFadeScaleOverlayModifier<Overlay: View>: ViewModifier {
 
   private func dismissFromExternalState() {
     guard isMounted else { return }
+    MIRAApplePerformanceLogger.event("modal_close", detail: "fade_scale_external")
     withAnimation(animation) {
       isVisible = false
     }
@@ -409,7 +427,14 @@ private struct MIRAFullScreenBoolOverlayModifier<Overlay: View>: ViewModifier {
   }
 
   private func present() {
+    guard !isMounted else {
+      if !isVisible {
+        withAnimation(animation) { isVisible = true }
+      }
+      return
+    }
     isMounted = true
+    MIRAApplePerformanceLogger.event("modal_open", detail: "fullscreen")
     DispatchQueue.main.async {
       withAnimation(animation) {
         isVisible = true
@@ -419,6 +444,7 @@ private struct MIRAFullScreenBoolOverlayModifier<Overlay: View>: ViewModifier {
 
   private func dismiss() {
     guard isMounted, isVisible else { return }
+    MIRAApplePerformanceLogger.event("modal_close", detail: "fullscreen")
     withAnimation(animation) {
       isVisible = false
     }
@@ -431,6 +457,7 @@ private struct MIRAFullScreenBoolOverlayModifier<Overlay: View>: ViewModifier {
 
   private func dismissFromExternalState() {
     guard isMounted else { return }
+    MIRAApplePerformanceLogger.event("modal_close", detail: "fullscreen_external")
     withAnimation(animation) {
       isVisible = false
     }
@@ -485,7 +512,11 @@ private struct MIRAFullScreenItemOverlayModifier<Item: Identifiable, Overlay: Vi
 
   private func syncWithBinding() {
     if let item {
+      if mountedItem?.id == item.id, isVisible {
+        return
+      }
       mountedItem = item
+      MIRAApplePerformanceLogger.event("modal_open", detail: "fullscreen_item")
       DispatchQueue.main.async {
         withAnimation(animation) {
           isVisible = true
@@ -498,6 +529,7 @@ private struct MIRAFullScreenItemOverlayModifier<Item: Identifiable, Overlay: Vi
 
   private func dismiss() {
     guard mountedItem != nil, isVisible else { return }
+    MIRAApplePerformanceLogger.event("modal_close", detail: "fullscreen_item")
     withAnimation(animation) {
       isVisible = false
     }
@@ -510,6 +542,7 @@ private struct MIRAFullScreenItemOverlayModifier<Item: Identifiable, Overlay: Vi
 
   private func dismissFromExternalState() {
     guard mountedItem != nil else { return }
+    MIRAApplePerformanceLogger.event("modal_close", detail: "fullscreen_item_external")
     withAnimation(animation) {
       isVisible = false
     }

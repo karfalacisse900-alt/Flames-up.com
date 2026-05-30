@@ -421,8 +421,11 @@ public struct ConversationNativeView: View {
         }
         .scrollDismissesKeyboard(.interactively)
         .miraScrollFeel(.chat)
-        .onChange(of: model.messages.count) { _ in
-          if let last = model.messages.last?.id {
+        .onChange(of: model.messages.map(\.id)) { oldIDs, newIDs in
+          guard let last = newIDs.last else { return }
+          let shouldStayPinnedToBottom = oldIDs.isEmpty || oldIDs.last != last
+          guard shouldStayPinnedToBottom else { return }
+          DispatchQueue.main.async {
             withAnimation(.easeOut(duration: 0.2)) {
               proxy.scrollTo(last, anchor: .bottom)
             }

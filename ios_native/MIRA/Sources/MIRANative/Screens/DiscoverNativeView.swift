@@ -53,6 +53,7 @@ final class DiscoverNativeModel: ObservableObject {
     if posts.isEmpty, let cachedPosts = await cachedDiscoverPosts(for: activePostsCategory) {
       posts = cachedPosts
       isLoadingPosts = false
+      prefetchVisibleMedia(cachedPosts)
       MIRAPerformanceTimeline.markOnce("discover_first_content", detail: "posts_cache")
     }
     if stories.isEmpty, let cachedStories = await cachedDiscoverStories() {
@@ -104,6 +105,7 @@ final class DiscoverNativeModel: ObservableObject {
       if posts != loaded {
         posts = loaded
       }
+      prefetchVisibleMedia(loaded)
       await MIRAAppCacheStore.shared.saveDiscoverPosts(loaded, category: category)
       if !loaded.isEmpty {
         MIRAPerformanceTimeline.markOnce("discover_first_content", detail: "posts_network")
@@ -113,6 +115,7 @@ final class DiscoverNativeModel: ObservableObject {
         if posts != fallback {
           posts = fallback
         }
+        prefetchVisibleMedia(fallback)
         await MIRAAppCacheStore.shared.saveDiscoverPosts(fallback, category: category)
         MIRAPerformanceTimeline.markOnce("discover_first_content", detail: "posts_fallback")
       } else if posts.isEmpty {
@@ -153,6 +156,21 @@ final class DiscoverNativeModel: ObservableObject {
 
   private func updateLoadingState() {
     isLoading = isLoadingStories || isLoadingPosts
+  }
+
+  private func prefetchVisibleMedia(_ posts: [MIRAPost]) {
+    let previewURLs = posts
+      .prefix(30)
+      .flatMap { $0.posterMediaURLs + $0.thumbnailMediaURLs }
+    let feedURLs = posts
+      .prefix(12)
+      .flatMap(\.feedMediaURLs)
+      .filter { !$0.isVideoURL }
+    guard !previewURLs.isEmpty || !feedURLs.isEmpty else { return }
+    Task.detached(priority: .utility) {
+      await MIRAImagePrefetcher.prefetch(urls: previewURLs, maxPixelSize: 520, limit: 30)
+      await MIRAImagePrefetcher.prefetch(urls: feedURLs, maxPixelSize: MIRAMediaSizing.feedTargetHeight, limit: 12)
+    }
   }
 
   func hidePost(_ post: MIRAPost) {
@@ -274,6 +292,7 @@ public struct DiscoverNativeView: View {
             .padding(.top, MIRATheme.Space.xs)
             .padding(.bottom, MIRATheme.Space.xxl + MIRATheme.Space.lg)
           }
+          .miraScrollFeel(.feed)
         }
         .background(MIRATheme.Color.appBackground)
       }
