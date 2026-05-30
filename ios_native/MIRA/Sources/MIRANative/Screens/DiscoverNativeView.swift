@@ -301,6 +301,7 @@ public struct DiscoverNativeView: View {
       .miraScreenEnter(.tab)
       .toolbar(.hidden, for: .navigationBar)
       .toolbar((selectedStoryGroup == nil && !isReportSheetPresented) ? .visible : .hidden, for: .tabBar)
+      .statusBarHidden(selectedStoryGroup != nil)
       .task { await model.load() }
       .miraFullScreenOverlay(item: $selectedStoryGroup, background: .black) { group, dismissStory in
         StoryViewerNativeView(
@@ -655,13 +656,10 @@ private struct StoryViewerNativeView: View {
           .padding(.top, safeTop + 86)
           .padding(.bottom, safeBottom + 164)
 
-          VStack(spacing: 10) {
-            progressRail
-            storyTopBar
-          }
-          .padding(.horizontal, 13)
-          .padding(.top, safeTop + 8)
-          .frame(maxHeight: .infinity, alignment: .top)
+          storyTopBar
+            .padding(.horizontal, 13)
+            .padding(.top, safeTop + 8)
+            .frame(maxHeight: .infinity, alignment: .top)
 
           storyThoughtOverlay
             .padding(.horizontal, 14)
@@ -683,6 +681,7 @@ private struct StoryViewerNativeView: View {
     .opacity(isCanvasVisible ? 1 : 0.001)
     .scaleEffect(reduceMotion || isCanvasVisible ? 1 : 0.992)
     .animation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion), value: isCanvasVisible)
+    .statusBarHidden(true)
     .onAppear {
       withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
         isCanvasVisible = true
@@ -825,16 +824,6 @@ private struct StoryViewerNativeView: View {
       return "@\(MIRAUsernameRules.normalized(railGroup.userUsername))"
     }
     return railGroup.displayName
-  }
-
-  private var progressRail: some View {
-    HStack(spacing: 6) {
-      ForEach(0..<max(stories.count, 1), id: \.self) { index in
-        Capsule()
-          .fill(index <= selectedIndex ? Color.white.opacity(0.96) : Color.white.opacity(0.36))
-          .frame(height: 3.2)
-      }
-    }
   }
 
   private var storyTopBar: some View {
@@ -1184,12 +1173,11 @@ private struct StoryViewerNativeView: View {
   }
 
   private func goToNextStory() {
-    if selectedIndex < stories.count - 1 {
-      withAnimation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion)) {
-        selectedIndex += 1
-      }
-    } else {
-      closeStoryViewer()
+    guard selectedIndex < stories.count - 1 else {
+      return
+    }
+    withAnimation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion)) {
+      selectedIndex += 1
     }
   }
 }
