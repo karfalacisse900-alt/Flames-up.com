@@ -1149,6 +1149,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     var configuration = PHPickerConfiguration(photoLibrary: .shared())
     configuration.filter = .any(of: [.images, .videos])
     configuration.selectionLimit = 1
+    configuration.preferredAssetRepresentationMode = .current
     let picker = PHPickerViewController(configuration: configuration)
     picker.delegate = self
     present(picker, animated: true)

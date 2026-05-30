@@ -1040,30 +1040,54 @@ public struct CreatePostNativeView: View {
   }
 
   private var postDetailsMediaStrip: some View {
-    HStack(spacing: 14) {
-      if let first = mediaItems.first {
-        postDetailsCoverTile(first)
-      }
+    ScrollView(.horizontal, showsIndicators: false) {
+      HStack(spacing: 14) {
+        ForEach(Array(mediaItems.enumerated()), id: \.offset) { index, item in
+          postDetailsMediaTile(item, index: index)
+        }
 
-      PhotosPicker(selection: $pickerItems, maxSelectionCount: 10, matching: .any(of: [.images, .videos])) {
-        RoundedRectangle(cornerRadius: 14, style: .continuous)
-          .fill(MIRATheme.Color.surfaceSoft.opacity(0.6))
-          .frame(width: 104, height: 108)
-          .overlay {
-            Image(systemName: "plus")
-              .font(.system(size: 36, weight: .light))
-              .foregroundStyle(MIRATheme.Color.textMuted.opacity(0.82))
-          }
+        PhotosPicker(
+          selection: $pickerItems,
+          maxSelectionCount: 10,
+          matching: .any(of: [.images, .videos]),
+          preferredItemEncoding: .current
+        ) {
+          RoundedRectangle(cornerRadius: 14, style: .continuous)
+            .fill(MIRATheme.Color.surfaceSoft.opacity(0.6))
+            .frame(width: 104, height: 108)
+            .overlay {
+              Image(systemName: "plus")
+                .font(.system(size: 36, weight: .light))
+                .foregroundStyle(MIRATheme.Color.textMuted.opacity(0.82))
+            }
+            .overlay(alignment: .bottom) {
+              Text("Add")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(MIRATheme.Color.textMuted)
+                .padding(.bottom, 10)
+            }
+        }
       }
+      .padding(.horizontal, 1)
     }
   }
 
-  @ViewBuilder
-  private func postDetailsCoverTile(_ first: MIRAPickedMedia) -> some View {
-    let tile = postComposerMedia(first, width: 104, height: 108, cornerRadius: 14)
+  private func postDetailsMediaTile(_ media: MIRAPickedMedia, index: Int) -> some View {
+    postComposerMedia(media, width: 104, height: 108, cornerRadius: 14)
+      .overlay(alignment: .topTrailing) {
+        if media.kind == .video {
+          Image(systemName: "play.fill")
+            .font(.system(size: 11, weight: .bold))
+            .foregroundStyle(.white)
+            .frame(width: 26, height: 26)
+            .background(.black.opacity(0.58))
+            .clipShape(Circle())
+            .padding(8)
+        }
+      }
       .overlay(alignment: .bottomLeading) {
-        Text("Cover")
-          .font(.system(size: 15, weight: .semibold))
+        Text(index == 0 ? "Cover" : "\(index + 1)")
+          .font(.system(size: 13, weight: .semibold))
           .foregroundStyle(.white)
           .padding(.horizontal, 10)
           .frame(height: 31)
@@ -1072,13 +1096,36 @@ public struct CreatePostNativeView: View {
           .padding(8)
           .allowsHitTesting(false)
       }
-
-    if first.kind == .image {
-      tile.onTapGesture {
-        editingMedia = MIRAEditorPresentation(media: first, replacementIndex: 0)
+      .overlay(alignment: .topLeading) {
+        if mediaItems.count > 1 {
+          Button {
+            removeMedia(at: index)
+          } label: {
+            Image(systemName: "xmark")
+              .font(.system(size: 10, weight: .bold))
+              .foregroundStyle(.white)
+              .frame(width: 24, height: 24)
+              .background(.black.opacity(0.58))
+              .clipShape(Circle())
+          }
+          .buttonStyle(.plain)
+          .padding(8)
+        }
       }
-    } else {
-      tile
+      .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+      .onTapGesture {
+        editingMedia = MIRAEditorPresentation(media: media, replacementIndex: index)
+      }
+      .accessibilityLabel(index == 0 ? "Edit cover media" : "Edit media \(index + 1)")
+  }
+
+  private func removeMedia(at index: Int) {
+    guard mediaItems.indices.contains(index) else { return }
+    withAnimation(.snappy(duration: 0.18)) {
+      mediaItems.remove(at: index)
+      if mediaItems.isEmpty {
+        isEditingPostDetails = false
+      }
     }
   }
 
@@ -1410,10 +1457,19 @@ public struct CreatePostNativeView: View {
       pickerItems = []
     }
     var loaded: [MIRAPickedMedia] = []
+    var failedCount = 0
     for item in items {
-      guard let data = try? await item.loadTransferable(type: Data.self) else { continue }
+      guard let data = try? await item.loadTransferable(type: Data.self) else {
+        failedCount += 1
+        continue
+      }
       let (kind, fileName, mimeType) = pickedMediaKind(from: item.supportedContentTypes, fallbackData: data)
       loaded.append(MIRAPickedMedia(data: data, kind: kind, fileName: fileName, mimeType: mimeType))
+    }
+    if failedCount > 0 {
+      errorMessage = failedCount == 1 ? "One media item could not be loaded." : "\(failedCount) media items could not be loaded."
+    } else {
+      errorMessage = nil
     }
     mediaItems.append(contentsOf: loaded)
     if !loaded.isEmpty {

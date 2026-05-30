@@ -20,7 +20,8 @@ public struct MIRANativeMediaEditorView: View {
   @State private var videoThumbnail: UIImage?
   @State private var player: AVPlayer?
   @State private var previewVideoURL: URL?
-  @State private var activePanel: EditorPanel = .filters
+  @State private var activePanel: EditorPanel = .crop
+  @State private var videoDurationSeconds: Double = 0
   @State private var selectedTextID: String?
   @State private var editingText = false
   @State private var draftText = ""
@@ -40,7 +41,7 @@ public struct MIRANativeMediaEditorView: View {
     let mediaType: MIRANativeEditorMediaType = media.kind == .video ? .video : .photo
     _recipe = State(initialValue: MIRANativeEditRecipe(
       mediaType: mediaType,
-      aspectRatio: mode == .story ? .story9x16 : .original
+      aspectRatio: mode == .story ? .story9x16 : .portrait3x4
     ))
   }
 
@@ -137,12 +138,20 @@ public struct MIRANativeMediaEditorView: View {
       Button {
         Task { await exportMedia() }
       } label: {
-        Image(systemName: isExporting ? "hourglass" : "square.and.arrow.down")
-          .font(.system(size: 20, weight: .semibold))
-          .foregroundStyle(mode == .story ? MIRATheme.Color.textPrimary : .white)
-          .frame(width: 50, height: 50)
-          .background(mode == .story ? Color.white : MIRATheme.Color.forest)
-          .clipShape(Circle())
+        HStack(spacing: 7) {
+          if isExporting {
+            ProgressView()
+              .tint(mode == .story ? MIRATheme.Color.textPrimary : .white)
+              .scaleEffect(0.72)
+          }
+          Text(isExporting ? "Saving" : "Done")
+            .font(.system(size: 16, weight: .bold))
+        }
+        .foregroundStyle(mode == .story ? MIRATheme.Color.textPrimary : .white)
+        .padding(.horizontal, 18)
+        .frame(height: 46)
+        .background(mode == .story ? Color.white : MIRATheme.Color.forest)
+        .clipShape(Capsule())
       }
       .buttonStyle(.plain)
       .disabled(isExporting)
@@ -195,19 +204,28 @@ public struct MIRANativeMediaEditorView: View {
   private var editorPanel: some View {
     VStack(spacing: 14) {
       HStack(spacing: 12) {
-        panelButton(.text, systemImage: "textformat", title: "Text")
-        panelButton(.filters, systemImage: "camera.filters", title: "Filters")
+        panelButton(.crop, systemImage: "crop.rotate", title: "Crop")
         panelButton(.adjustments, systemImage: "slider.horizontal.3", title: "Adjust")
+        panelButton(.filters, systemImage: "camera.filters", title: "Filters")
+        if media.kind == .video {
+          panelButton(.trim, systemImage: "scissors", title: "Trim")
+        } else if mode == .story {
+          panelButton(.text, systemImage: "textformat", title: "Text")
+        }
       }
       .padding(.horizontal, 16)
 
       switch activePanel {
+      case .crop:
+        cropToolPanel
       case .text:
         textToolPanel
       case .filters:
         filterCarousel
       case .adjustments:
         adjustmentSliders
+      case .trim:
+        trimToolPanel
       }
 
       if let errorMessage {
@@ -234,6 +252,45 @@ public struct MIRANativeMediaEditorView: View {
         .clipShape(Capsule())
     }
     .buttonStyle(.plain)
+  }
+
+  private var cropToolPanel: some View {
+    VStack(spacing: 12) {
+      ScrollView(.horizontal, showsIndicators: false) {
+        HStack(spacing: 10) {
+          ForEach(availableRatios, id: \.self) { ratio in
+            Button {
+              recipe.aspectRatio = ratio
+            } label: {
+              Text(ratio.title)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(recipe.aspectRatio == ratio ? .white : panelTextColor)
+                .padding(.horizontal, 16)
+                .frame(height: 42)
+                .background(recipe.aspectRatio == ratio ? MIRATheme.Color.forest : inactivePanelColor)
+                .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
+          }
+        }
+        .padding(.horizontal, 16)
+      }
+
+      Button {
+        recipe.rotationQuarterTurns = (recipe.rotationQuarterTurns + 1) % 4
+      } label: {
+        Label("Rotate", systemImage: "rotate.right")
+          .font(.system(size: 16, weight: .semibold))
+          .frame(maxWidth: .infinity)
+          .frame(height: 48)
+          .background(inactivePanelColor)
+          .clipShape(Capsule())
+      }
+      .buttonStyle(.plain)
+      .padding(.horizontal, 16)
+      .disabled(media.kind == .video)
+      .opacity(media.kind == .video ? 0.45 : 1)
+    }
   }
 
   private var textToolPanel: some View {
@@ -297,7 +354,10 @@ public struct MIRANativeMediaEditorView: View {
     VStack(spacing: 8) {
       editorSlider(title: "Brightness", value: $recipe.brightness, range: -0.25...0.25)
       editorSlider(title: "Contrast", value: $recipe.contrast, range: 0.75...1.35)
+      editorSlider(title: "Exposure", value: $recipe.exposure, range: -1...1)
+      editorSlider(title: "Warmth", value: $recipe.warmth, range: -1...1)
       editorSlider(title: "Saturation", value: $recipe.saturation, range: 0.65...1.45)
+      editorSlider(title: "Sharpness", value: $recipe.sharpness, range: 0...1.2)
     }
     .padding(.horizontal, 16)
   }
@@ -310,6 +370,51 @@ public struct MIRANativeMediaEditorView: View {
       Slider(value: value, in: range)
         .tint(mode == .story ? .white : MIRATheme.Color.forest)
     }
+  }
+
+  private var trimToolPanel: some View {
+    VStack(spacing: 12) {
+      if videoDurationSeconds > 0 {
+        HStack {
+          Text("Start \(formatTime(recipe.trimStartSeconds))")
+            .font(.system(size: 13, weight: .semibold))
+          Spacer()
+          Text("End \(formatTime(effectiveTrimEnd))")
+            .font(.system(size: 13, weight: .semibold))
+        }
+        .foregroundStyle(panelTextColor.opacity(0.78))
+
+        Slider(
+          value: Binding(
+            get: { recipe.trimStartSeconds },
+            set: { recipe.trimStartSeconds = min(max(0, $0), max(0, effectiveTrimEnd - 0.4)) }
+          ),
+          in: 0...max(0.1, videoDurationSeconds)
+        )
+        .tint(mode == .story ? .white : MIRATheme.Color.forest)
+
+        Slider(
+          value: Binding(
+            get: { effectiveTrimEnd },
+            set: { recipe.trimEndSeconds = min(max(recipe.trimStartSeconds + 0.4, $0), videoDurationSeconds) }
+          ),
+          in: 0...max(0.1, videoDurationSeconds)
+        )
+        .tint(mode == .story ? .white : MIRATheme.Color.forest)
+      } else {
+        HStack(spacing: 10) {
+          ProgressView()
+            .tint(mode == .story ? .white : MIRATheme.Color.forest)
+          Text("Preparing video trim")
+            .font(.system(size: 14, weight: .semibold))
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 48)
+        .background(inactivePanelColor)
+        .clipShape(Capsule())
+      }
+    }
+    .padding(.horizontal, 16)
   }
 
   private func selectedTextControls(index: Int) -> some View {
@@ -387,7 +492,34 @@ public struct MIRANativeMediaEditorView: View {
   }
 
   private var filterPreviewKey: String {
-    "\(recipe.selectedFilter.rawValue)-\(recipe.brightness)-\(recipe.contrast)-\(recipe.saturation)-\(media.data.count)"
+    [
+      recipe.selectedFilter.rawValue,
+      recipe.aspectRatio.rawValue,
+      "\(recipe.brightness)",
+      "\(recipe.contrast)",
+      "\(recipe.exposure)",
+      "\(recipe.warmth)",
+      "\(recipe.saturation)",
+      "\(recipe.sharpness)",
+      "\(recipe.rotationQuarterTurns)",
+      "\(media.data.count)"
+    ].joined(separator: "-")
+  }
+
+  private var availableRatios: [MIRANativeEditorAspectRatio] {
+    switch mode {
+    case .post:
+      return [.portrait3x4, .portrait4x5, .portrait2x3]
+    case .story:
+      return [.story9x16, .portrait3x4, .portrait4x5, .portrait2x3]
+    }
+  }
+
+  private var effectiveTrimEnd: Double {
+    if recipe.trimEndSeconds > recipe.trimStartSeconds {
+      return min(recipe.trimEndSeconds, max(videoDurationSeconds, 0))
+    }
+    return max(videoDurationSeconds, 0)
   }
 
   private func previewHeight(for size: CGSize) -> CGFloat {
@@ -415,6 +547,13 @@ public struct MIRANativeMediaEditorView: View {
         try? FileManager.default.removeItem(at: previewVideoURL)
       }
       previewVideoURL = url
+      let asset = AVURLAsset(url: url)
+      let duration = try await asset.load(.duration)
+      let seconds = max(0, CMTimeGetSeconds(duration))
+      videoDurationSeconds = seconds
+      if recipe.trimEndSeconds <= recipe.trimStartSeconds {
+        recipe.trimEndSeconds = seconds
+      }
       player = AVPlayer(url: url)
       player?.isMuted = false
     } catch {
@@ -469,10 +608,18 @@ public struct MIRANativeMediaEditorView: View {
     }
   }
 
+  private func formatTime(_ seconds: Double) -> String {
+    guard seconds.isFinite else { return "0:00" }
+    let total = max(0, Int(seconds.rounded()))
+    return "\(total / 60):\(String(format: "%02d", total % 60))"
+  }
+
   private enum EditorPanel {
+    case crop
     case text
     case filters
     case adjustments
+    case trim
   }
 }
 

@@ -371,6 +371,14 @@ public func pickedMediaKind(from contentTypes: [UTType], fallbackData: Data) -> 
   if let first = contentTypes.first(where: { $0.conforms(to: .image) }), first.conforms(to: .png) {
     return (.image, "\(UUID().uuidString).png", "image/png")
   }
+  if fallbackData.count >= 12 {
+    let header = Array(fallbackData.prefix(12))
+    let hasISOBaseMediaSignature = header[4] == 0x66 && header[5] == 0x74 && header[6] == 0x79 && header[7] == 0x70
+    let hasQuickTimeSignature = header[4] == 0x6d && header[5] == 0x6f && header[6] == 0x6f && header[7] == 0x76
+    if hasISOBaseMediaSignature || hasQuickTimeSignature {
+      return (.video, "\(UUID().uuidString).mp4", "video/mp4")
+    }
+  }
   if fallbackData.starts(with: [0x00, 0x00, 0x00]) {
     return (.video, "\(UUID().uuidString).mp4", "video/mp4")
   }
