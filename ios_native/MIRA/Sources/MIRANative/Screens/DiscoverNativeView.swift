@@ -268,6 +268,7 @@ public struct DiscoverNativeView: View {
   @State private var reportSourcePost: MIRAPost?
   @State private var isReportSheetPresented = false
   @EnvironmentObject private var localization: MIRALocalization
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   public init(api: MIRAAPIClient) {
     _model = StateObject(wrappedValue: DiscoverNativeModel(api: api))
@@ -312,7 +313,7 @@ public struct DiscoverNativeView: View {
               reportSourcePost = nil
               reportTarget = target
               DispatchQueue.main.async {
-                withAnimation(.spring(response: 0.30, dampingFraction: 0.90)) {
+                withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
                   isReportSheetPresented = true
                 }
               }
@@ -357,7 +358,7 @@ public struct DiscoverNativeView: View {
       subtitle: post.titleText
     )
     DispatchQueue.main.async {
-      withAnimation(.spring(response: 0.30, dampingFraction: 0.90)) {
+      withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
         isReportSheetPresented = true
       }
     }
@@ -423,28 +424,28 @@ public struct DiscoverNativeView: View {
   @ViewBuilder
   private func discoverPostActions(_ post: MIRAPost) -> some View {
     Button(role: .destructive) {
-      UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+      CaptroHaptics.medium()
       presentReport(for: post)
     } label: {
       Label(localization.string("common.report"), systemImage: "flag")
     }
 
     Button(role: .destructive) {
-      UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+      CaptroHaptics.medium()
       Task { await model.blockAuthor(post) }
     } label: {
       Label(localization.string("common.block_user"), systemImage: "hand.raised")
     }
 
     Button {
-      UIImpactFeedbackGenerator(style: .light).impactOccurred()
+      CaptroHaptics.light()
       model.hidePost(post)
     } label: {
       Label(localization.string("report.hide_content"), systemImage: "eye.slash")
     }
 
     Button {
-      UIImpactFeedbackGenerator(style: .light).impactOccurred()
+      CaptroHaptics.light()
       model.hidePost(post)
     } label: {
       Label(localization.string("common.not_interested"), systemImage: "hand.thumbsdown")
@@ -460,7 +461,7 @@ public struct DiscoverNativeView: View {
       HStack(spacing: 34) {
         ForEach(discoverGalleryFilters) { filter in
           Button {
-            withAnimation(.easeInOut(duration: 0.18)) {
+            withAnimation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion)) {
               selectedGalleryFilter = filter.id
             }
             Task { await model.selectCategory(filter.id) }
@@ -592,9 +593,9 @@ private struct StoryViewerNativeView: View {
     }
     .opacity(isCanvasVisible ? 1 : 0.001)
     .scaleEffect(reduceMotion || isCanvasVisible ? 1 : 0.992)
-    .animation(.easeOut(duration: reduceMotion ? 0.1 : 0.24), value: isCanvasVisible)
+    .animation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion), value: isCanvasVisible)
     .onAppear {
-      withAnimation(.easeOut(duration: reduceMotion ? 0.1 : 0.24)) {
+      withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
         isCanvasVisible = true
       }
     }
@@ -707,7 +708,7 @@ private struct StoryViewerNativeView: View {
     }
     .frame(maxWidth: .infinity)
     .transition(.opacity)
-    .animation(.easeInOut(duration: reduceMotion ? 0.08 : 0.16), value: currentStory?.id)
+    .animation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion), value: currentStory?.id)
   }
 
   private var progressRail: some View {
@@ -916,7 +917,7 @@ private struct StoryViewerNativeView: View {
       if nextStories.isEmpty {
         closeStoryViewer()
       } else {
-        withAnimation(.easeInOut(duration: 0.18)) {
+        withAnimation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion)) {
           selectedIndex = min(selectedIndex, max(0, nextStories.count - 1))
         }
       }
@@ -948,8 +949,8 @@ private struct StoryViewerNativeView: View {
   private func closeStoryViewer() {
     guard !isClosing else { return }
     isClosing = true
-    let duration = reduceMotion ? 0.08 : 0.22
-    withAnimation(.easeInOut(duration: duration)) {
+    let duration = reduceMotion ? CaptroMotion.Duration.reduced : CaptroMotion.Duration.fullScreenClose
+    withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
       isCanvasVisible = false
     }
     DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
@@ -959,14 +960,14 @@ private struct StoryViewerNativeView: View {
 
   private func sendStoryReplyDraft() {
     guard !replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    CaptroHaptics.light()
     replyText = ""
     isReplyFocused = false
   }
 
   private func goToPreviousStory() {
     if selectedIndex > 0 {
-      withAnimation(.easeInOut(duration: 0.18)) {
+      withAnimation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion)) {
         selectedIndex -= 1
       }
     }
@@ -974,7 +975,7 @@ private struct StoryViewerNativeView: View {
 
   private func goToNextStory() {
     if selectedIndex < stories.count - 1 {
-      withAnimation(.easeInOut(duration: 0.18)) {
+      withAnimation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion)) {
         selectedIndex += 1
       }
     } else {

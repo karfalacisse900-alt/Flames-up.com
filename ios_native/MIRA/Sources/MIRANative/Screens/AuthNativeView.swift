@@ -45,7 +45,7 @@ public struct AuthNativeView: View {
             .zIndex(2)
         }
       }
-      .animation(.spring(response: reduceMotion ? 0.18 : 0.34, dampingFraction: 0.9), value: isAuthPanelVisible)
+      .animation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion), value: isAuthPanelVisible)
       .toolbar(.hidden, for: .navigationBar)
     }
     .onOpenURL { url in
@@ -110,17 +110,17 @@ public struct AuthNativeView: View {
   }
 
   private func presentAuthPanel(createAccount: Bool) {
-    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    CaptroHaptics.light()
     session.errorMessage = nil
     isCreatingAccount = createAccount
-    withAnimation(.spring(response: reduceMotion ? 0.16 : 0.34, dampingFraction: 0.9)) {
+    withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
       isAuthPanelVisible = true
     }
   }
 
   private func closeAuthPanel() {
-    UIImpactFeedbackGenerator(style: .light).impactOccurred()
-    withAnimation(.easeOut(duration: reduceMotion ? 0.12 : 0.24)) {
+    CaptroHaptics.light()
+    withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
       isAuthPanelVisible = false
     }
   }
@@ -167,7 +167,7 @@ public struct AuthNativeView: View {
       .disabled(session.isWorking || !canSubmit)
 
       Button {
-        withAnimation(.snappy(duration: 0.2)) {
+        withAnimation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion)) {
           isCreatingAccount.toggle()
           session.errorMessage = nil
         }
@@ -363,7 +363,7 @@ public struct AuthNativeView: View {
 
   @MainActor
   private func startGoogleSignIn() {
-    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    CaptroHaptics.light()
     session.errorMessage = nil
     GIDSignIn.sharedInstance.configuration = GIDConfiguration(clientID: googleClientID)
 
@@ -491,7 +491,7 @@ private struct CaptroWelcomePager: View {
         }
         .padding(.horizontal, 28)
         .padding(.top, 58)
-        .animation(.easeOut(duration: reduceMotion ? 0.1 : 0.2), value: selectedPage)
+        .animation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion), value: selectedPage)
 
         Spacer()
 
@@ -557,7 +557,7 @@ private struct CaptroWelcomeSlide: View {
         }
         .padding(.horizontal, 28)
       }
-      .animation(.easeOut(duration: reduceMotion ? 0.1 : 0.26), value: page.id)
+      .animation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion), value: page.id)
     }
   }
 }
@@ -778,6 +778,7 @@ private struct CaptroWelcomeWordmark: View {
 private struct CaptroWelcomePageIndicator: View {
   let selectedPage: Int
   let tint: Color
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   var body: some View {
     HStack(spacing: 8) {
@@ -787,7 +788,7 @@ private struct CaptroWelcomePageIndicator: View {
           .frame(width: index == selectedPage ? 34 : 10, height: 9)
       }
     }
-    .animation(.spring(response: 0.26, dampingFraction: 0.82), value: selectedPage)
+    .animation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion), value: selectedPage)
     .accessibilityLabel("Welcome screen \(selectedPage + 1) of \(CaptroWelcomePage.all.count)")
   }
 }
@@ -1252,7 +1253,7 @@ public struct ChooseUsernameNativeView: View {
                   .foregroundStyle(MIRATheme.Color.textMuted)
 
                 FlowSuggestionGrid(values: suggestions) { value in
-                  UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                  CaptroHaptics.light()
                   username = value
                   isFocused = true
                 }
@@ -1296,7 +1297,7 @@ public struct ChooseUsernameNativeView: View {
       if username.isEmpty {
         username = suggestions.first ?? ""
       }
-      withAnimation(.easeOut(duration: reduceMotion ? 0.1 : 0.26)) {
+      withAnimation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion)) {
         appeared = true
       }
       DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
@@ -1391,7 +1392,7 @@ public struct ChooseUsernameNativeView: View {
     defer { isSaving = false }
     do {
       let updated: MIRAUser = try await api.put("/users/me/username", body: UsernameClaimBody(username: clean))
-      UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+      CaptroHaptics.medium()
       session.replaceUser(updated)
     } catch {
       if await saveThroughProfileFallback(clean) {
@@ -1405,7 +1406,7 @@ public struct ChooseUsernameNativeView: View {
   private func saveThroughProfileFallback(_ clean: String) async -> Bool {
     do {
       let updated: MIRAUser = try await api.put("/users/me", body: UsernameProfileFallbackBody(username: clean))
-      UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+      CaptroHaptics.medium()
       session.replaceUser(updated)
       return true
     } catch {

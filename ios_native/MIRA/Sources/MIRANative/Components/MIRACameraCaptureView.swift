@@ -959,7 +959,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
   @objc private func modeTapped(_ sender: UIButton) {
     guard let mode = modeButtons.first(where: { $0.value === sender })?.key else { return }
     selectedMode = mode
-    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    CaptroHaptics.light()
     UIView.animate(withDuration: 0.18) {
       self.updateModeSelection()
       self.updateRawButton()
@@ -972,7 +972,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     let nextIndex = (values.firstIndex(of: timerSetting) ?? 0) + 1
     timerSetting = values[nextIndex % values.count]
     updateTimerButton()
-    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    CaptroHaptics.light()
   }
 
   @objc private func cycleFlash() {
@@ -980,25 +980,25 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     let nextIndex = (values.firstIndex(of: flashSetting) ?? 0) + 1
     flashSetting = values[nextIndex % values.count]
     updateFlashButton()
-    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    CaptroHaptics.light()
   }
 
   @objc private func toggleRawCapture() {
     guard rawCaptureSupported else { return }
     rawCaptureEnabled.toggle()
     updateRawButton()
-    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    CaptroHaptics.light()
     showTransientMessage(rawCaptureEnabled ? "RAW capture on. Posting still uses optimized feed media." : "RAW capture off.")
   }
 
   @objc private func toggleGrid() {
     gridOverlay.isHidden.toggle()
     gridButton.backgroundColor = gridOverlay.isHidden ? UIColor.black.withAlphaComponent(0.30) : UIColor.white.withAlphaComponent(0.24)
-    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    CaptroHaptics.light()
   }
 
   @objc private func musicTapped() {
-    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    CaptroHaptics.light()
     delegate?.storyCameraDidRequestMusic()
   }
 
@@ -1020,19 +1020,19 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
 
   @objc private func editTextTapped() {
     guard capturedMedia != nil else { return }
-    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    CaptroHaptics.light()
     presentTextEditor()
   }
 
   @objc private func editFiltersTapped() {
     guard capturedMedia != nil else { return }
-    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    CaptroHaptics.light()
     showFilterPanel()
   }
 
   @objc private func editAdjustTapped() {
     guard capturedMedia != nil else { return }
-    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    CaptroHaptics.light()
     showAdjustPanel()
   }
 
@@ -1206,7 +1206,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     countdownLabel.transform = CGAffineTransform(scaleX: 0.92, y: 0.92)
     countdownLabel.alpha = 0
     countdownLabel.isHidden = false
-    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+    CaptroHaptics.medium()
     UIView.animate(withDuration: 0.18) {
       self.countdownLabel.alpha = 1
       self.countdownLabel.transform = .identity
@@ -1218,11 +1218,11 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
       if self.countdownValue <= 0 {
         timer.invalidate()
         self.countdownLabel.isHidden = true
-        UINotificationFeedbackGenerator().notificationOccurred(.success)
+        CaptroHaptics.success()
         completion()
       } else {
         self.countdownLabel.text = "\(self.countdownValue)"
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        CaptroHaptics.light()
       }
     }
   }
@@ -1255,7 +1255,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
         connection.isVideoMirrored = true
       }
     }
-    UINotificationFeedbackGenerator().notificationOccurred(.success)
+    CaptroHaptics.success()
     photoOutput.capturePhoto(with: settings, delegate: self)
   }
 
@@ -1285,7 +1285,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     }
     setTorch(active: flashSetting == .on)
     setRecordingState(true)
-    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+    CaptroHaptics.medium()
     let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).mov")
     movieOutput.startRecording(to: url, recordingDelegate: self)
 
@@ -1320,7 +1320,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
 
   @objc private func flipCamera() {
     cameraPosition = cameraPosition == .back ? .front : .back
-    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    CaptroHaptics.light()
     UIView.animate(withDuration: 0.22) {
       self.flipButton.transform = self.flipButton.transform.rotated(by: .pi)
     }
@@ -1404,12 +1404,12 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     resetInlineEdits()
     capturedImageView.image = nil
     setReviewMode(false)
-    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    CaptroHaptics.light()
   }
 
   @objc private func editCapturedMedia() {
     guard let capturedMedia else { return }
-    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    CaptroHaptics.light()
     delegate?.storyCameraDidRequestEdit(capturedMedia, tool: .text)
   }
 

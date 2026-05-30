@@ -801,6 +801,7 @@ public struct CreatePostNativeView: View {
   let api: MIRAAPIClient
   private let onClose: (() -> Void)?
   @Environment(\.dismiss) private var dismiss
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @StateObject private var broadLocationResolver = MIRABroadLocationResolver()
   @State private var title = ""
   @State private var bodyText = ""
@@ -915,7 +916,7 @@ public struct CreatePostNativeView: View {
           mediaItems[index] = edited
         } else {
           mediaItems.append(edited)
-          withAnimation(.snappy(duration: 0.2)) {
+          withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
             isEditingPostDetails = true
           }
         }
@@ -1157,7 +1158,7 @@ public struct CreatePostNativeView: View {
 
   private func removeMedia(at index: Int) {
     guard mediaItems.indices.contains(index) else { return }
-    withAnimation(.snappy(duration: 0.18)) {
+    withAnimation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion)) {
       mediaItems.remove(at: index)
       if mediaItems.isEmpty {
         isEditingPostDetails = false
@@ -1478,7 +1479,7 @@ public struct CreatePostNativeView: View {
     mediaItems.append(contentsOf: loaded)
     if !loaded.isEmpty {
       await persistComposerDraft(uploadStatus: "draft", errorMessage: nil, includeMedia: true)
-      withAnimation(.snappy(duration: 0.2)) {
+      withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
         isEditingPostDetails = true
       }
     }
@@ -1488,14 +1489,14 @@ public struct CreatePostNativeView: View {
     editedCameraMedia = nil
     mediaItems.append(media)
     Task { await persistComposerDraft(uploadStatus: "draft", errorMessage: nil, includeMedia: true) }
-    withAnimation(.snappy(duration: 0.2)) {
+    withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
       isEditingPostDetails = true
     }
   }
 
   private func returnToCapture() {
     editedCameraMedia = nil
-    withAnimation(.snappy(duration: 0.2)) {
+    withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
       isEditingPostDetails = false
     }
   }
@@ -2180,7 +2181,7 @@ private struct MIRAAudiusMusicPickerSheet: View {
   private func selectTrackAndClose(_ track: MIRAAudiusTrack) {
     stopPreview()
     selectedTrack = track
-    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    CaptroHaptics.light()
     close()
   }
 
@@ -2204,7 +2205,7 @@ private struct MIRAAudiusMusicPickerSheet: View {
     previewPlayer = player
     previewingTrackId = trackId
     player.play()
-    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    CaptroHaptics.light()
   }
 
   private func resolvePreviewURL(for track: MIRAAudiusTrack) async -> String? {
@@ -2314,7 +2315,7 @@ private struct MIRAAudiusMusicPickerSheet: View {
           body: MIRAAudiusFavoriteBody(track: track)
         )
       }
-      UIImpactFeedbackGenerator(style: .light).impactOccurred()
+      CaptroHaptics.light()
     } catch {
       if wasFavorite {
         favoriteTrackIds.insert(trackId)
@@ -3923,6 +3924,7 @@ private struct LocalMediaThumb: View {
   var width: CGFloat = 96
   var height: CGFloat = 96
   var cornerRadius: CGFloat = 18
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var isVideoPlaying = false
 
   var body: some View {
@@ -3949,8 +3951,8 @@ private struct LocalMediaThumb: View {
     .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
     .onTapGesture {
       guard media.kind == .video else { return }
-      UIImpactFeedbackGenerator(style: .light).impactOccurred()
-      withAnimation(.easeInOut(duration: 0.14)) {
+      CaptroHaptics.light()
+      withAnimation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion)) {
         isVideoPlaying.toggle()
       }
     }

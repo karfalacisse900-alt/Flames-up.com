@@ -1,14 +1,90 @@
 import SwiftUI
 import UIKit
 
+public enum CaptroMotion {
+  public enum Duration {
+    public static let reduced: Double = 0.08
+    public static let buttonPress: Double = 0.10
+    public static let smallMenuOpen: Double = 0.20
+    public static let smallMenuClose: Double = 0.16
+    public static let bottomSheetOpen: Double = 0.32
+    public static let bottomSheetClose: Double = 0.26
+    public static let fullScreenOpen: Double = 0.28
+    public static let fullScreenClose: Double = 0.24
+    public static let mediaFade: Double = 0.16
+    public static let feedChrome: Double = 0.16
+    public static let pagePush: Double = 0.22
+    public static let pageModal: Double = 0.26
+    public static let pageTab: Double = 0.18
+  }
+
+  public enum Scale {
+    public static let buttonPressed: CGFloat = 0.97
+    public static let smallMenuInitial: CGFloat = 0.975
+    public static let fullScreenInitial: CGFloat = 0.985
+  }
+
+  public static func buttonPressAnimation(reduceMotion: Bool) -> Animation {
+    .easeOut(duration: reduceMotion ? Duration.reduced : Duration.buttonPress)
+  }
+
+  public static func smallMenuAnimation(reduceMotion: Bool) -> Animation {
+    .easeOut(duration: reduceMotion ? Duration.reduced : Duration.smallMenuOpen)
+  }
+
+  public static func bottomSheetAnimation(reduceMotion: Bool) -> Animation {
+    reduceMotion
+      ? .easeOut(duration: Duration.reduced)
+      : .spring(response: Duration.bottomSheetOpen, dampingFraction: 0.90, blendDuration: 0.02)
+  }
+
+  public static func fullScreenAnimation(reduceMotion: Bool) -> Animation {
+    .easeOut(duration: reduceMotion ? Duration.reduced : Duration.fullScreenOpen)
+  }
+
+  public static func mediaFadeAnimation(reduceMotion: Bool) -> Animation {
+    .easeOut(duration: reduceMotion ? Duration.reduced : Duration.mediaFade)
+  }
+
+  public static func feedChromeAnimation(reduceMotion: Bool) -> Animation {
+    .easeOut(duration: reduceMotion ? Duration.reduced : Duration.feedChrome)
+  }
+
+  public static func pageEnterAnimation(reduceMotion: Bool, duration: Double) -> Animation {
+    .easeOut(duration: reduceMotion ? Duration.reduced : duration)
+  }
+}
+
+public enum CaptroHaptics {
+  public static func light() {
+    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+  }
+
+  public static func medium() {
+    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+  }
+
+  public static func success() {
+    UINotificationFeedbackGenerator().notificationOccurred(.success)
+  }
+
+  public static func warning() {
+    UINotificationFeedbackGenerator().notificationOccurred(.warning)
+  }
+
+  public static func error() {
+    UINotificationFeedbackGenerator().notificationOccurred(.error)
+  }
+}
+
 public enum MIRATransitionTiming {
-  public static let buttonPress: Double = 0.12
-  public static let popupOpen: Double = 0.22
-  public static let popupClose: Double = 0.18
-  public static let sheetOpen: Double = 0.32
-  public static let sheetClose: Double = 0.26
-  public static let fullScreenOpen: Double = 0.30
-  public static let fullScreenClose: Double = 0.24
+  public static let buttonPress: Double = CaptroMotion.Duration.buttonPress
+  public static let popupOpen: Double = CaptroMotion.Duration.smallMenuOpen
+  public static let popupClose: Double = CaptroMotion.Duration.smallMenuClose
+  public static let sheetOpen: Double = CaptroMotion.Duration.bottomSheetOpen
+  public static let sheetClose: Double = CaptroMotion.Duration.bottomSheetClose
+  public static let fullScreenOpen: Double = CaptroMotion.Duration.fullScreenOpen
+  public static let fullScreenClose: Double = CaptroMotion.Duration.fullScreenClose
 }
 
 private enum MIRAPresentationGeometry {
@@ -222,11 +298,11 @@ private struct MIRABottomSheetModifier<Sheet: View>: ViewModifier {
   }
 
   private var sheetAnimation: Animation {
-    reduceMotion ? .easeOut(duration: 0.08) : .spring(response: 0.32, dampingFraction: 0.90, blendDuration: 0.02)
+    CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)
   }
 
   private var dismissDelay: Double {
-    reduceMotion ? 0.08 : MIRATransitionTiming.sheetClose
+    reduceMotion ? CaptroMotion.Duration.reduced : CaptroMotion.Duration.bottomSheetClose
   }
 
   private func sheetOffset(height: CGFloat, safeAreaBottom: CGFloat) -> CGFloat {
@@ -313,7 +389,7 @@ private struct MIRAFadeScaleOverlayModifier<Overlay: View>: ViewModifier {
 
             overlay(dismiss)
               .opacity(isVisible ? 1 : 0)
-              .scaleEffect(reduceMotion || isVisible ? 1 : 0.975)
+              .scaleEffect(reduceMotion || isVisible ? 1 : CaptroMotion.Scale.smallMenuInitial)
           }
           .zIndex(850)
           .allowsHitTesting(isMounted)
@@ -331,11 +407,11 @@ private struct MIRAFadeScaleOverlayModifier<Overlay: View>: ViewModifier {
   }
 
   private var animation: Animation {
-    reduceMotion ? .easeOut(duration: 0.08) : .easeOut(duration: MIRATransitionTiming.popupOpen)
+    CaptroMotion.smallMenuAnimation(reduceMotion: reduceMotion)
   }
 
   private var dismissDelay: Double {
-    reduceMotion ? 0.08 : MIRATransitionTiming.popupClose
+    reduceMotion ? CaptroMotion.Duration.reduced : CaptroMotion.Duration.smallMenuClose
   }
 
   private func present() {
@@ -400,7 +476,7 @@ private struct MIRAFullScreenBoolOverlayModifier<Overlay: View>: ViewModifier {
               .ignoresSafeArea()
             overlay(dismiss)
               .opacity(isVisible ? 1 : 0)
-              .scaleEffect(reduceMotion || isVisible ? 1 : 0.985)
+              .scaleEffect(reduceMotion || isVisible ? 1 : CaptroMotion.Scale.fullScreenInitial)
           }
           .ignoresSafeArea()
           .zIndex(950)
@@ -419,11 +495,11 @@ private struct MIRAFullScreenBoolOverlayModifier<Overlay: View>: ViewModifier {
   }
 
   private var animation: Animation {
-    reduceMotion ? .easeOut(duration: 0.08) : .easeOut(duration: MIRATransitionTiming.fullScreenOpen)
+    CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)
   }
 
   private var dismissDelay: Double {
-    reduceMotion ? 0.08 : MIRATransitionTiming.fullScreenClose
+    reduceMotion ? CaptroMotion.Duration.reduced : CaptroMotion.Duration.fullScreenClose
   }
 
   private func present() {
@@ -488,7 +564,7 @@ private struct MIRAFullScreenItemOverlayModifier<Item: Identifiable, Overlay: Vi
               .ignoresSafeArea()
             overlay(presentedItem, dismiss)
               .opacity(isVisible ? 1 : 0)
-              .scaleEffect(reduceMotion || isVisible ? 1 : 0.985)
+              .scaleEffect(reduceMotion || isVisible ? 1 : CaptroMotion.Scale.fullScreenInitial)
           }
           .ignoresSafeArea()
           .zIndex(950)
@@ -503,11 +579,11 @@ private struct MIRAFullScreenItemOverlayModifier<Item: Identifiable, Overlay: Vi
   }
 
   private var animation: Animation {
-    reduceMotion ? .easeOut(duration: 0.08) : .easeOut(duration: MIRATransitionTiming.fullScreenOpen)
+    CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)
   }
 
   private var dismissDelay: Double {
-    reduceMotion ? 0.08 : MIRATransitionTiming.fullScreenClose
+    reduceMotion ? CaptroMotion.Duration.reduced : CaptroMotion.Duration.fullScreenClose
   }
 
   private func syncWithBinding() {

@@ -84,6 +84,7 @@ public struct MIRAReportSheet: View {
   @State private var lastResult: MIRAReportResult?
   @FocusState private var detailsFocused: Bool
   @EnvironmentObject private var localization: MIRALocalization
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   public init(
     target: MIRAReportTarget,
@@ -195,9 +196,9 @@ public struct MIRAReportSheet: View {
     VStack(alignment: .leading, spacing: MIRATheme.Space.sm) {
       ForEach(miraReportReasons) { reason in
         Button {
-          UIImpactFeedbackGenerator(style: .light).impactOccurred()
+          CaptroHaptics.light()
           selectedReason = reason
-          withAnimation(.easeInOut(duration: 0.18)) {
+          withAnimation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion)) {
             step = .details
           }
         } label: {
@@ -325,7 +326,7 @@ public struct MIRAReportSheet: View {
         HStack(spacing: MIRATheme.Space.sm) {
           Button(localization.string("common.back")) {
             detailsFocused = false
-            withAnimation(.easeInOut(duration: 0.18)) {
+            withAnimation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion)) {
               step = .reasons
             }
           }
@@ -452,13 +453,13 @@ public struct MIRAReportSheet: View {
       )
       lastResult = result
       onSubmitted(result)
-      UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-      withAnimation(.easeInOut(duration: 0.20)) {
+      CaptroHaptics.medium()
+      withAnimation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion)) {
         step = .confirmation
       }
     } catch {
       errorMessage = localization.string("report.failed")
-      UINotificationFeedbackGenerator().notificationOccurred(.error)
+      CaptroHaptics.error()
     }
   }
 
@@ -471,10 +472,10 @@ public struct MIRAReportSheet: View {
       let result = MIRAReportResult(reportId: lastResult?.reportId, duplicate: lastResult?.duplicate == true, blocked: true, hidden: lastResult?.hidden == true)
       lastResult = result
       onSubmitted(result)
-      UINotificationFeedbackGenerator().notificationOccurred(.success)
+      CaptroHaptics.success()
     } catch {
       errorMessage = localization.string("report.failed")
-      UINotificationFeedbackGenerator().notificationOccurred(.error)
+      CaptroHaptics.error()
     }
   }
 

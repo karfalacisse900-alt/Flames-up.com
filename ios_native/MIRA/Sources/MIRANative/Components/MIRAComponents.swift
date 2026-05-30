@@ -228,9 +228,9 @@ public enum MIRAScreenEnterStyle {
 
   fileprivate var duration: Double {
     switch self {
-    case .push: return 0.22
-    case .modal: return 0.26
-    case .tab: return 0.18
+    case .push: return CaptroMotion.Duration.pagePush
+    case .modal: return CaptroMotion.Duration.pageModal
+    case .tab: return CaptroMotion.Duration.pageTab
     }
   }
 
@@ -256,7 +256,7 @@ private struct MIRAScreenEnterModifier: ViewModifier {
       .offset(x: isVisible ? 0 : offset.width, y: isVisible ? 0 : offset.height)
       .onAppear {
         guard !isVisible else { return }
-        withAnimation(.easeOut(duration: reduceMotion ? 0.08 : style.duration)) {
+        withAnimation(CaptroMotion.pageEnterAnimation(reduceMotion: reduceMotion, duration: style.duration)) {
           isVisible = true
         }
       }
@@ -342,9 +342,9 @@ public struct MIRAPressButtonStyle: ButtonStyle {
 
   public func makeBody(configuration: Configuration) -> some View {
     configuration.label
-      .scaleEffect(configuration.isPressed && !reduceMotion ? 0.94 : 1)
-      .opacity(configuration.isPressed ? 0.82 : 1)
-      .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+      .scaleEffect(configuration.isPressed && !reduceMotion ? CaptroMotion.Scale.buttonPressed : 1)
+      .opacity(configuration.isPressed ? 0.88 : 1)
+      .animation(CaptroMotion.buttonPressAnimation(reduceMotion: reduceMotion), value: configuration.isPressed)
   }
 }
 
@@ -496,6 +496,7 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
   let onImageLoaded: (UIImage) -> Void
   let content: (Image) -> Content
   let placeholder: () -> Placeholder
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var uiImage: UIImage?
   @State private var loadedURL: URL?
   @State private var isImageVisible = false
@@ -533,6 +534,7 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
     return MIRAImageMemoryCache.shared.image(for: remoteURL, maxPixelSize: max(64, maxPixelSize))
   }
 
+  @MainActor
   private func loadImage() async {
     guard let url, let remoteURL = URL(string: url) else {
       await MainActor.run {
@@ -576,7 +578,7 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
         uiImage = result.image
         loadedURL = remoteURL
         if result.source == .network {
-          withAnimation(.easeOut(duration: 0.16)) {
+          withAnimation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion)) {
             isImageVisible = true
           }
         } else {
@@ -857,6 +859,7 @@ private struct MIRAResolvedVideoPlayer: View {
   let placeholderColor: Color
   let placeholderTint: Color
   let onMeasuredRatio: (CGFloat) -> Void
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var player: AVPlayer?
   @State private var thumbnailURL: String?
   @State private var failed = false
@@ -886,7 +889,7 @@ private struct MIRAResolvedVideoPlayer: View {
       if let player {
         MIRAVideoPlayerView(player: player, contentMode: contentMode)
           .opacity(isPlayerReady ? 1 : 0)
-          .animation(.easeOut(duration: 0.18), value: isPlayerReady)
+          .animation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion), value: isPlayerReady)
           .onAppear { syncPlayback(player) }
           .onDisappear {
             player.pause()
@@ -1098,7 +1101,7 @@ private struct MIRAResolvedVideoPlayer: View {
     for _ in 0..<30 {
       guard loadedVideoURL == expectedURL, player === expectedPlayer else { return }
       if expectedPlayer.currentItem?.status == .readyToPlay {
-        withAnimation(.easeOut(duration: 0.18)) {
+        withAnimation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion)) {
           isPlayerReady = true
         }
         stopVideoMetric(status: "ready")
@@ -1107,7 +1110,7 @@ private struct MIRAResolvedVideoPlayer: View {
       try? await Task.sleep(nanoseconds: 100_000_000)
     }
     guard loadedVideoURL == expectedURL, player === expectedPlayer else { return }
-    withAnimation(.easeOut(duration: 0.18)) {
+    withAnimation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion)) {
       isPlayerReady = true
     }
     stopVideoMetric(status: "ready_timeout")
@@ -1584,7 +1587,7 @@ public struct MIRASaveToCollectionSheet: View {
       LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
         ForEach(options) { option in
           Button {
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            CaptroHaptics.light()
             onSelect(option.title)
           } label: {
             HStack(spacing: 10) {
@@ -1616,7 +1619,7 @@ public struct MIRASaveToCollectionSheet: View {
 
       if isSaved {
         Button(role: .destructive) {
-          UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+          CaptroHaptics.medium()
           onRemove()
         } label: {
           Label("Remove from saved", systemImage: "bookmark.slash")

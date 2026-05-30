@@ -412,6 +412,7 @@ final class UserProfileNativeModel: ObservableObject {
 
 public struct UserProfileNativeView: View {
   @StateObject private var model: UserProfileNativeModel
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var reportTarget: MIRAReportTarget?
   @State private var isReportSheetPresented = false
   @State private var isProfileOptionsPresented = false
@@ -589,9 +590,9 @@ public struct UserProfileNativeView: View {
 
   private var profileSafetyMenu: some View {
     Button {
-      UIImpactFeedbackGenerator(style: .light).impactOccurred()
+      CaptroHaptics.light()
       DispatchQueue.main.async {
-        withAnimation(.spring(response: 0.30, dampingFraction: 0.90)) {
+        withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
           isProfileOptionsPresented = true
         }
       }
@@ -608,7 +609,7 @@ public struct UserProfileNativeView: View {
   }
 
   private func presentProfileReport() {
-    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+    CaptroHaptics.medium()
     reportTarget = MIRAReportTarget(
       targetType: "profile",
       targetId: model.userId,
@@ -617,7 +618,7 @@ public struct UserProfileNativeView: View {
       subtitle: model.user?.displayName ?? model.user?.username
     )
     DispatchQueue.main.async {
-      withAnimation(.spring(response: 0.30, dampingFraction: 0.90)) {
+      withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
         isReportSheetPresented = true
       }
     }
@@ -827,7 +828,7 @@ private struct ProfilePostTile: View {
   private var ownerContextMenu: some View {
     if let onPin {
       Button {
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        CaptroHaptics.light()
         onPin()
       } label: {
         Label(post.isPinned ? "Unpin post" : "Pin post", systemImage: post.isPinned ? "pin.slash" : "pin")
@@ -836,7 +837,7 @@ private struct ProfilePostTile: View {
 
     if normalizedVisibility != "private", let onMakePrivate {
       Button {
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        CaptroHaptics.light()
         onMakePrivate()
       } label: {
         Label("Make post private", systemImage: "lock")
@@ -845,7 +846,7 @@ private struct ProfilePostTile: View {
 
     if normalizedVisibility != "public", let onMakePublic {
       Button {
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        CaptroHaptics.light()
         onMakePublic()
       } label: {
         Label("Make post public", systemImage: "globe")
@@ -854,7 +855,7 @@ private struct ProfilePostTile: View {
 
     if let onDelete {
       Button(role: .destructive) {
-        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        CaptroHaptics.medium()
         onDelete()
       } label: {
         Label("Delete post", systemImage: "trash")
@@ -1179,6 +1180,7 @@ final class ChatNativeModel: ObservableObject {
 
 public struct ChatNativeView: View {
   @StateObject private var model: ChatNativeModel
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var showCreateGroup = false
   @State private var openingConversationId: String?
   @State private var activeConversationRoute: ChatOpenRoute?
@@ -1279,7 +1281,7 @@ public struct ChatNativeView: View {
   @ViewBuilder
   private func conversationCard(_ conversation: MIRAConversation) -> some View {
     Button {
-      UIImpactFeedbackGenerator(style: .light).impactOccurred()
+      CaptroHaptics.light()
       Task { await openConversation(conversation) }
     } label: {
       ZStack(alignment: .trailing) {
@@ -1322,7 +1324,7 @@ public struct ChatNativeView: View {
       return
     }
 
-    withAnimation(.spring(response: 0.30, dampingFraction: 0.90)) {
+    withAnimation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion)) {
       activeConversationRoute = ChatOpenRoute(
         id: conversation.id,
         title: conversation.displayName,

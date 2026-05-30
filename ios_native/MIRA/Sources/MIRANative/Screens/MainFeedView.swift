@@ -620,6 +620,7 @@ public struct MainFeedView: View {
   @StateObject private var model: MainFeedModel
   private let isTabActive: Bool
   @EnvironmentObject private var localization: MIRALocalization
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var scrollState = MainFeedScrollState()
   @State private var activeVideoPostID: String?
   @State private var isHeaderHidden = false
@@ -704,7 +705,7 @@ public struct MainFeedView: View {
           .opacity(isFeedChromeHidden ? 0 : 1)
           .allowsHitTesting(!isFeedChromeHidden)
           .zIndex(10)
-          .animation(.easeInOut(duration: 0.24), value: isFeedChromeHidden)
+          .animation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion), value: isFeedChromeHidden)
       }
       .background(MIRATheme.Color.appBackground)
       .miraScreenEnter(.tab)
@@ -774,7 +775,7 @@ public struct MainFeedView: View {
             shareURL: mainFeedShareURL(for: post),
             onReport: { reportPostFromOptions(post, dismiss: dismiss) },
             onNotInterested: {
-              UIImpactFeedbackGenerator(style: .light).impactOccurred()
+              CaptroHaptics.light()
               model.hidePost(post)
               dismiss()
             }
@@ -848,7 +849,7 @@ public struct MainFeedView: View {
 
     if minY > -6 {
       if isHeaderHidden {
-        withAnimation(.easeOut(duration: 0.14)) {
+        withAnimation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion)) {
           isHeaderHidden = false
         }
       }
@@ -867,14 +868,14 @@ public struct MainFeedView: View {
 
     if direction == 1 && minY < -8 && scrollState.intentDistance > 5 {
       if !isHeaderHidden {
-        withAnimation(.easeOut(duration: 0.14)) {
+        withAnimation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion)) {
           isHeaderHidden = true
         }
       }
       scrollState.intentDistance = 0
     } else if direction == -1 && scrollState.intentDistance > 10 {
       if isHeaderHidden {
-        withAnimation(.easeOut(duration: 0.18)) {
+        withAnimation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion)) {
           isHeaderHidden = false
         }
       }
@@ -904,13 +905,13 @@ public struct MainFeedView: View {
     guard abs(vertical) > max(8, horizontal * 0.65) else { return }
     if vertical < -8 {
       if !isHeaderHidden {
-        withAnimation(.easeOut(duration: 0.16)) {
+        withAnimation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion)) {
           isHeaderHidden = true
         }
       }
     } else if vertical > 10 {
       if isHeaderHidden {
-        withAnimation(.easeOut(duration: 0.18)) {
+        withAnimation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion)) {
           isHeaderHidden = false
         }
       }
@@ -929,40 +930,40 @@ public struct MainFeedView: View {
   }
 
   private func presentComments(for post: MIRAPost) {
-    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    CaptroHaptics.light()
     MIRAPerformanceTimeline.mark("comments_open", detail: "post")
     activeCommentsPost = post
     DispatchQueue.main.async {
-      withAnimation(.spring(response: 0.32, dampingFraction: 0.92)) {
+      withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
         isCommentsPresented = true
       }
     }
   }
 
   private func presentSaveSheet(for post: MIRAPost) {
-    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    CaptroHaptics.light()
     MIRAApplePerformanceLogger.event("modal_open", detail: "save_sheet")
     saveTargetPost = post
     DispatchQueue.main.async {
-      withAnimation(.spring(response: 0.30, dampingFraction: 0.90)) {
+      withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
         isSaveSheetPresented = true
       }
     }
   }
 
   private func presentPostOptions(for post: MIRAPost) {
-    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    CaptroHaptics.light()
     MIRAApplePerformanceLogger.event("modal_open", detail: "post_options")
     postOptionsTarget = post
     DispatchQueue.main.async {
-      withAnimation(.spring(response: 0.30, dampingFraction: 0.90)) {
+      withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
         isPostOptionsPresented = true
       }
     }
   }
 
   private func reportPostFromOptions(_ post: MIRAPost, dismiss: @escaping () -> Void) {
-    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+    CaptroHaptics.medium()
     dismiss()
     DispatchQueue.main.asyncAfter(deadline: .now() + MIRATransitionTiming.sheetClose) {
       presentReport(for: post)
@@ -970,7 +971,7 @@ public struct MainFeedView: View {
   }
 
   private func presentReport(for post: MIRAPost) {
-    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+    CaptroHaptics.medium()
     reportSourcePost = post
     reportTarget = MIRAReportTarget(
       targetType: "post",
@@ -980,14 +981,14 @@ public struct MainFeedView: View {
       subtitle: post.titleText
     )
     DispatchQueue.main.async {
-      withAnimation(.spring(response: 0.30, dampingFraction: 0.90)) {
+      withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
         isReportSheetPresented = true
       }
     }
   }
 
   private func presentReport(for comment: MIRAComment) {
-    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+    CaptroHaptics.medium()
     reportTarget = MIRAReportTarget(
       targetType: "comment",
       targetId: comment.id,
@@ -996,7 +997,7 @@ public struct MainFeedView: View {
       subtitle: comment.text
     )
     DispatchQueue.main.async {
-      withAnimation(.spring(response: 0.30, dampingFraction: 0.90)) {
+      withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
         isReportSheetPresented = true
       }
     }
@@ -1073,6 +1074,7 @@ private struct MainNativePostCard: View {
   let onFollow: () async -> Bool
   let onOpenOptions: () -> Void
   let canFollowAuthor: Bool
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var selectedMediaIndex = 0
   @State private var isShowingCaption = false
   @State private var measuredCardWidth = UIScreen.main.bounds.width
@@ -1149,7 +1151,7 @@ private struct MainNativePostCard: View {
       prefetchCarouselNeighbors()
     }
     .onChange(of: post.id) { _, _ in isShowingCaption = false }
-    .animation(.easeInOut(duration: 0.24), value: isShowingCaption)
+    .animation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion), value: isShowingCaption)
   }
 
   @ViewBuilder
@@ -1209,7 +1211,7 @@ private struct MainNativePostCard: View {
         .frame(maxWidth: .infinity)
         .padding(.top, 1)
         .padding(.bottom, 2)
-        .animation(.easeInOut(duration: 0.16), value: selectedMediaIndex)
+        .animation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion), value: selectedMediaIndex)
       }
       .background(MIRATheme.Color.surface)
     }
@@ -1438,8 +1440,8 @@ private struct MainNativePostCard: View {
 
   private func toggleCaption() {
     debugTap("tap_caption_more")
-    UIImpactFeedbackGenerator(style: .light).impactOccurred()
-    withAnimation(.easeInOut(duration: 0.24)) {
+    CaptroHaptics.light()
+    withAnimation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion)) {
       isShowingCaption.toggle()
     }
   }
@@ -1578,9 +1580,9 @@ private struct MainNativePostCard: View {
 
   private func followWithConfirmation() {
     guard !isSubmittingFollow, canFollowAuthor else { return }
-    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    CaptroHaptics.light()
     isSubmittingFollow = true
-    withAnimation(.spring(response: 0.24, dampingFraction: 0.78)) {
+    withAnimation(CaptroMotion.buttonPressAnimation(reduceMotion: reduceMotion)) {
       isFollowConfirmationVisible = true
     }
 
@@ -1589,7 +1591,7 @@ private struct MainNativePostCard: View {
       let holdNanoseconds: UInt64 = didFollow ? 700_000_000 : 180_000_000
       try? await Task.sleep(nanoseconds: holdNanoseconds)
       await MainActor.run {
-        withAnimation(.easeInOut(duration: 0.18)) {
+        withAnimation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion)) {
           isFollowConfirmationVisible = false
         }
         isSubmittingFollow = false
@@ -1730,6 +1732,7 @@ private struct MainFeedCommentsSheet: View {
   @State private var replyingTo: MIRAComment?
   @FocusState private var isReplyFocused: Bool
   @EnvironmentObject private var localization: MIRALocalization
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   let onClose: () -> Void
   let onReportComment: (MIRAComment) -> Void
   let onBlockCommentUser: (MIRAComment) -> Void
@@ -1864,7 +1867,7 @@ private struct MainFeedCommentsSheet: View {
             .truncationMode(.tail)
           Spacer(minLength: 0)
           Button {
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            CaptroHaptics.light()
             self.replyingTo = nil
           } label: {
             Image(systemName: "xmark")
@@ -1896,7 +1899,7 @@ private struct MainFeedCommentsSheet: View {
               .stroke(isReplyFocused ? MIRATheme.Color.forest.opacity(0.18) : MIRATheme.Color.hairline, lineWidth: 1)
           }
           .onSubmit(sendComment)
-          .animation(.easeOut(duration: 0.18), value: isReplyFocused)
+          .animation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion), value: isReplyFocused)
 
         Button(action: sendComment) {
           Group {
@@ -1934,7 +1937,7 @@ private struct MainFeedCommentsSheet: View {
   private func sendComment() {
     let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !text.isEmpty, !isSending else { return }
-    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    CaptroHaptics.light()
     isSending = true
     draft = ""
     Task {
@@ -2018,13 +2021,13 @@ private struct MainFeedCommentRow: View {
 
         HStack(spacing: MIRATheme.Space.lg) {
           Button("Reply") {
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            CaptroHaptics.light()
             onReply()
           }
           .buttonStyle(.plain)
 
           Button {
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            CaptroHaptics.light()
             onLike()
           } label: {
             HStack(spacing: 4) {
@@ -2137,7 +2140,7 @@ private struct CompactPostAction: View {
 
   var body: some View {
     Button {
-      UIImpactFeedbackGenerator(style: .light).impactOccurred()
+      CaptroHaptics.light()
       action()
     } label: {
       HStack(spacing: 3) {

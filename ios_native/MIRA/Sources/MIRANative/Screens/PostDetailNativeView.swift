@@ -280,6 +280,7 @@ final class PostDetailModel: ObservableObject {
 public struct PostDetailNativeView: View {
   @Environment(\.dismiss) private var dismiss
   @EnvironmentObject private var localization: MIRALocalization
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @StateObject private var model: PostDetailModel
   @State private var draft = ""
   @State private var isSendingComment = false
@@ -466,7 +467,7 @@ public struct PostDetailNativeView: View {
   }
 
   private func presentReport(for comment: MIRAComment) {
-    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+    CaptroHaptics.medium()
     reportComment = comment
     reportTarget = MIRAReportTarget(
       targetType: "comment",
@@ -476,7 +477,7 @@ public struct PostDetailNativeView: View {
       subtitle: comment.text
     )
     DispatchQueue.main.async {
-      withAnimation(.spring(response: 0.30, dampingFraction: 0.90)) {
+      withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
         isReportSheetPresented = true
       }
     }
@@ -549,7 +550,7 @@ public struct PostDetailNativeView: View {
             .truncationMode(.tail)
           Spacer(minLength: 0)
           Button {
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            CaptroHaptics.light()
             self.replyingTo = nil
           } label: {
             Image(systemName: "xmark")
@@ -580,7 +581,7 @@ public struct PostDetailNativeView: View {
               .stroke(isCommentFocused ? MIRATheme.Color.forest.opacity(0.18) : MIRATheme.Color.hairline, lineWidth: 1)
           }
           .onSubmit(sendDraftComment)
-          .animation(.easeOut(duration: 0.18), value: isCommentFocused)
+          .animation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion), value: isCommentFocused)
 
         if canSendComment || isSendingComment {
           Button {
@@ -623,7 +624,7 @@ public struct PostDetailNativeView: View {
           .buttonStyle(.plain)
 
           Button {
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            CaptroHaptics.light()
             isSaveSheetPresented = true
           } label: {
             HStack(spacing: 7) {
@@ -657,7 +658,7 @@ public struct PostDetailNativeView: View {
   private func sendDraftComment() {
     let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !text.isEmpty, !isSendingComment else { return }
-    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    CaptroHaptics.light()
     isSendingComment = true
     draft = ""
     Task {
@@ -675,6 +676,7 @@ public struct PostDetailNativeView: View {
 
 public struct DiscoverPostDetailNativeView: View {
   @Environment(\.dismiss) private var dismiss
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @StateObject private var model: PostDetailModel
   @State private var isCaptionExpanded = false
   @State private var isCommentsPresented = false
@@ -754,7 +756,7 @@ public struct DiscoverPostDetailNativeView: View {
   private var topBar: some View {
     HStack {
       Button {
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        CaptroHaptics.light()
         dismiss()
       } label: {
         Image(systemName: "chevron.left")
@@ -786,8 +788,8 @@ public struct DiscoverPostDetailNativeView: View {
   private var captionBlock: some View {
     Button {
       guard shouldCollapseCaption else { return }
-      UIImpactFeedbackGenerator(style: .light).impactOccurred()
-      withAnimation(.easeInOut(duration: 0.22)) {
+      CaptroHaptics.light()
+      withAnimation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion)) {
         isCaptionExpanded.toggle()
       }
     } label: {
@@ -853,7 +855,7 @@ public struct DiscoverPostDetailNativeView: View {
   private var actionRow: some View {
     HStack(alignment: .center, spacing: 0) {
       Button {
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        CaptroHaptics.light()
         Task { await model.toggleLike() }
       } label: {
         HStack(spacing: 12) {
@@ -873,7 +875,7 @@ public struct DiscoverPostDetailNativeView: View {
       Spacer(minLength: 24)
 
       Button {
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        CaptroHaptics.light()
         isCommentsPresented = true
       } label: {
         HStack(spacing: 10) {
@@ -980,7 +982,7 @@ public struct DiscoverPostDetailNativeView: View {
   }
 
   private func presentReport(for comment: MIRAComment) {
-    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+    CaptroHaptics.medium()
     reportComment = comment
     reportTarget = MIRAReportTarget(
       targetType: "comment",
@@ -990,7 +992,7 @@ public struct DiscoverPostDetailNativeView: View {
       subtitle: comment.text
     )
     DispatchQueue.main.async {
-      withAnimation(.spring(response: 0.30, dampingFraction: 0.90)) {
+      withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
         isReportSheetPresented = true
       }
     }
@@ -1051,6 +1053,7 @@ private struct DiscoverDetailCommentsSheet: View {
   @State private var replyingTo: MIRAComment?
   @FocusState private var isReplyFocused: Bool
   @EnvironmentObject private var localization: MIRALocalization
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   let onClose: () -> Void
   let onReportComment: (MIRAComment) -> Void
   let onBlockCommentUser: (MIRAComment) -> Void
@@ -1171,7 +1174,7 @@ private struct DiscoverDetailCommentsSheet: View {
             .truncationMode(.tail)
           Spacer(minLength: 0)
           Button {
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            CaptroHaptics.light()
             self.replyingTo = nil
           } label: {
             Image(systemName: "xmark")
@@ -1201,7 +1204,7 @@ private struct DiscoverDetailCommentsSheet: View {
               .stroke(isReplyFocused ? MIRATheme.Color.forest.opacity(0.18) : MIRATheme.Color.hairline, lineWidth: 1)
           }
           .onSubmit(sendComment)
-          .animation(.easeOut(duration: 0.18), value: isReplyFocused)
+          .animation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion), value: isReplyFocused)
 
         Button(action: sendComment) {
           Group {
@@ -1239,7 +1242,7 @@ private struct DiscoverDetailCommentsSheet: View {
   private func sendComment() {
     let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !text.isEmpty, !isSending else { return }
-    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    CaptroHaptics.light()
     isSending = true
     draft = ""
     Task {
@@ -1317,12 +1320,12 @@ private struct CommentRow: View {
 
         HStack(spacing: MIRATheme.Space.lg) {
           Button("Reply") {
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            CaptroHaptics.light()
             onReply()
           }
           .buttonStyle(.plain)
           Button {
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            CaptroHaptics.light()
             onLike()
           } label: {
             HStack(spacing: 4) {

@@ -378,6 +378,7 @@ public struct ConversationNativeView: View {
   @State private var reportMessage: MIRAMessage?
   @State private var isReportSheetPresented = false
   @Environment(\.dismiss) private var dismiss
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   private let title: String
 
   public init(peerId: String, title: String, api: MIRAAPIClient, currentUserId: String = "") {
@@ -426,7 +427,7 @@ public struct ConversationNativeView: View {
           let shouldStayPinnedToBottom = oldIDs.isEmpty || oldIDs.last != last
           guard shouldStayPinnedToBottom else { return }
           DispatchQueue.main.async {
-            withAnimation(.easeOut(duration: 0.2)) {
+            withAnimation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion)) {
               proxy.scrollTo(last, anchor: .bottom)
             }
           }
@@ -496,7 +497,7 @@ public struct ConversationNativeView: View {
   private var chatHeader: some View {
     HStack(spacing: 10) {
       Button {
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        CaptroHaptics.light()
         dismiss()
       } label: {
         Image(systemName: "chevron.left")
@@ -523,9 +524,9 @@ public struct ConversationNativeView: View {
       .frame(maxWidth: .infinity, alignment: .leading)
 
       Button {
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        CaptroHaptics.light()
         DispatchQueue.main.async {
-          withAnimation(.spring(response: 0.30, dampingFraction: 0.90)) {
+          withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
             showProfileOptions = true
           }
         }
@@ -556,7 +557,7 @@ public struct ConversationNativeView: View {
 
   private func presentProfileReport() {
     guard let peerId = model.peerId, !peerId.isEmpty else { return }
-    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+    CaptroHaptics.medium()
     reportMessage = nil
     reportTarget = MIRAReportTarget(
       targetType: "profile",
@@ -566,14 +567,14 @@ public struct ConversationNativeView: View {
       subtitle: title
     )
     DispatchQueue.main.async {
-      withAnimation(.spring(response: 0.30, dampingFraction: 0.90)) {
+      withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
         isReportSheetPresented = true
       }
     }
   }
 
   private func presentReport(for message: MIRAMessage) {
-    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+    CaptroHaptics.medium()
     reportMessage = message
     reportTarget = MIRAReportTarget(
       targetType: "message",
@@ -583,7 +584,7 @@ public struct ConversationNativeView: View {
       subtitle: message.content?.isEmpty == false ? message.content : "Media message"
     )
     DispatchQueue.main.async {
-      withAnimation(.spring(response: 0.30, dampingFraction: 0.90)) {
+      withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
         isReportSheetPresented = true
       }
     }
@@ -767,8 +768,8 @@ public struct ConversationNativeView: View {
 
       HStack(spacing: 10) {
         Button {
-          UIImpactFeedbackGenerator(style: .light).impactOccurred()
-          withAnimation(.spring(response: 0.24, dampingFraction: 0.9)) {
+          CaptroHaptics.light()
+          withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
             showAttachmentTray.toggle()
           }
         } label: {
@@ -800,7 +801,7 @@ public struct ConversationNativeView: View {
     .overlay(alignment: .top) {
       Rectangle().fill(ChatRoomPalette.hairline).frame(height: 0.5)
     }
-    .animation(.spring(response: 0.24, dampingFraction: 0.9), value: showAttachmentTray)
+    .animation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion), value: showAttachmentTray)
   }
 
   private var attachmentTray: some View {
@@ -823,7 +824,7 @@ public struct ConversationNativeView: View {
   private var composerPrimaryButton: some View {
     let hasDraft = !model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     return Button {
-      UIImpactFeedbackGenerator(style: .light).impactOccurred()
+      CaptroHaptics.light()
       Task {
         if hasDraft {
           await model.sendText()
