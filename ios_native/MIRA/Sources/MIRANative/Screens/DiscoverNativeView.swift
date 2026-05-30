@@ -362,17 +362,16 @@ public struct DiscoverNativeView: View {
       galleryFilterRail
 
       if model.isLoadingPosts && model.posts.isEmpty {
-        LazyVGrid(columns: galleryGridColumns, spacing: 10) {
-          ForEach(0..<8, id: \.self) { index in
+        LazyVGrid(columns: galleryGridColumns, spacing: 1) {
+          ForEach(0..<18, id: \.self) { index in
             DiscoverGallerySkeletonTile(index: index)
           }
         }
-        .padding(.horizontal, MIRATheme.Space.md)
       } else if filteredGalleryPosts.isEmpty {
         DiscoverGalleryEmptyTile()
           .padding(.horizontal, MIRATheme.Space.md)
       } else {
-        LazyVGrid(columns: galleryGridColumns, spacing: 10) {
+        LazyVGrid(columns: galleryGridColumns, spacing: 1) {
           ForEach(filteredGalleryPosts) { post in
             NavigationLink(destination: DiscoverPostDetailNativeView(post: post, api: model.api)) {
               DiscoverPostGalleryTile(post: post)
@@ -383,7 +382,6 @@ public struct DiscoverNativeView: View {
             }
           }
         }
-        .padding(.horizontal, MIRATheme.Space.md)
       }
     }
   }
@@ -420,7 +418,7 @@ public struct DiscoverNativeView: View {
   }
 
   private var galleryGridColumns: [GridItem] {
-    Array(repeating: GridItem(.flexible(minimum: 0), spacing: 10), count: 2)
+    Array(repeating: GridItem(.flexible(), spacing: 1), count: 3)
   }
 
   private var galleryFilterRail: some View {
@@ -1027,58 +1025,47 @@ private struct DiscoverPostGalleryTile: View {
   let post: MIRAPost
 
   var body: some View {
-    ZStack(alignment: .bottomLeading) {
-      MIRATheme.Color.mediaPlaceholder
+    GeometryReader { proxy in
+      let tileHeight = proxy.size.width * MIRAMediaSizing.profileGridRatio
+      ZStack(alignment: .topTrailing) {
+        if let media = post.thumbnailMediaURLs.first {
+          RemoteMediaView(
+            url: media,
+            isVideo: media.isVideoURL,
+            shouldPlay: false,
+            maxPixelSize: 560,
+            showsVideoPlaceholderIcon: false
+          )
+            .frame(width: proxy.size.width, height: tileHeight)
+        } else {
+          ZStack {
+            MIRATheme.Color.surfaceSoft
+            Text(post.titleText)
+              .font(.system(size: 12, weight: .semibold))
+              .foregroundStyle(MIRATheme.Color.textPrimary)
+              .multilineTextAlignment(.center)
+              .lineLimit(4)
+              .padding(8)
+          }
+          .frame(width: proxy.size.width, height: tileHeight)
+        }
 
-      if let media = post.thumbnailMediaURLs.first ?? post.feedMediaURLs.first {
-        RemoteMediaView(
-          url: media,
-          isVideo: media.isVideoURL,
-          shouldPlay: false,
-          maxPixelSize: 760,
-          showsVideoPlaceholderIcon: false
-        )
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .clipped()
-      } else {
-        ZStack {
-          MIRATheme.Color.surfaceSoft
-          Text(post.titleText)
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(MIRATheme.Color.textSecondary)
-            .multilineTextAlignment(.leading)
-            .lineLimit(4)
-            .padding(12)
+        if post.thumbnailMediaURLs.count > 1 {
+          Image(systemName: "square.on.square")
+            .font(.system(size: 11, weight: .bold))
+            .foregroundStyle(.white)
+            .padding(7)
+            .background(.black.opacity(0.36))
+            .clipShape(Circle())
+            .padding(6)
         }
       }
-
-      LinearGradient(colors: [.clear, .black.opacity(0.52)], startPoint: .center, endPoint: .bottom)
-        .allowsHitTesting(false)
-
-      Text(post.titleText)
-        .font(.system(size: 12, weight: .semibold))
-        .foregroundStyle(.white)
-        .lineLimit(2)
-        .padding(10)
-        .shadow(radius: 4)
-
-      if post.thumbnailMediaURLs.count > 1 || post.feedMediaURLs.count > 1 {
-        Image(systemName: "square.on.square")
-          .font(.system(size: 11, weight: .bold))
-          .foregroundStyle(.white)
-          .padding(7)
-          .background(.black.opacity(0.42))
-          .clipShape(Circle())
-          .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-          .padding(8)
-      }
+      .frame(width: proxy.size.width, height: tileHeight)
+      .clipped()
     }
-    .aspectRatio(3.0 / 4.0, contentMode: .fit)
-    .frame(maxWidth: .infinity)
-    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-    .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(MIRATheme.Color.hairline, lineWidth: 1))
+    .aspectRatio(1.0 / MIRAMediaSizing.profileGridRatio, contentMode: .fit)
     .clipped()
-    .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    .contentShape(Rectangle())
     .accessibilityLabel(post.titleText)
   }
 }
@@ -1087,9 +1074,9 @@ private struct DiscoverGallerySkeletonTile: View {
   let index: Int
 
   var body: some View {
-    RoundedRectangle(cornerRadius: 18, style: .continuous)
+    RoundedRectangle(cornerRadius: 0)
       .fill(index.isMultiple(of: 2) ? MIRATheme.Color.surfaceSoft : MIRATheme.Color.surfaceRaised)
-      .aspectRatio(3.0 / 4.0, contentMode: .fit)
+      .aspectRatio(1.0 / MIRAMediaSizing.profileGridRatio, contentMode: .fit)
       .redacted(reason: .placeholder)
   }
 }
@@ -1107,8 +1094,6 @@ private struct DiscoverGalleryEmptyTile: View {
     .frame(maxWidth: .infinity)
     .frame(height: 150)
     .background(MIRATheme.Color.surfaceRaised)
-    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-    .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(MIRATheme.Color.hairline, lineWidth: 1))
   }
 }
 
