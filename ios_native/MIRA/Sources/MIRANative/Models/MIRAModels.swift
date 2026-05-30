@@ -1065,9 +1065,120 @@ public struct MIRAMessage: Codable, Identifiable, Hashable {
   public let mediaUrl: String?
   public let mediaType: String?
   public let createdAt: String?
+  public let updatedAt: String?
+  public let status: String?
+  public let localCreatedAt: String?
+  public let serverSequence: Int?
+  public let thumbnailUrl: String?
+  public let posterUrl: String?
+  public let localFilePath: String?
+  public let localThumbnailPath: String?
+  public let fileName: String?
+  public let fileSize: Int?
+  public let width: Int?
+  public let height: Int?
+  public let durationMs: Int?
+  public let downloadStatus: String?
+  public let uploadStatus: String?
   public let username: String?
   public let fullName: String?
   public let profileImage: String?
+
+  public init(
+    id: String,
+    groupId: String? = nil,
+    senderId: String? = nil,
+    receiverId: String? = nil,
+    content: String? = nil,
+    mediaUrl: String? = nil,
+    mediaType: String? = nil,
+    createdAt: String? = nil,
+    updatedAt: String? = nil,
+    status: String? = nil,
+    localCreatedAt: String? = nil,
+    serverSequence: Int? = nil,
+    thumbnailUrl: String? = nil,
+    posterUrl: String? = nil,
+    localFilePath: String? = nil,
+    localThumbnailPath: String? = nil,
+    fileName: String? = nil,
+    fileSize: Int? = nil,
+    width: Int? = nil,
+    height: Int? = nil,
+    durationMs: Int? = nil,
+    downloadStatus: String? = nil,
+    uploadStatus: String? = nil,
+    username: String? = nil,
+    fullName: String? = nil,
+    profileImage: String? = nil
+  ) {
+    self.id = id
+    self.groupId = groupId
+    self.senderId = senderId
+    self.receiverId = receiverId
+    self.content = content
+    self.mediaUrl = mediaUrl
+    self.mediaType = mediaType
+    self.createdAt = createdAt
+    self.updatedAt = updatedAt
+    self.status = status
+    self.localCreatedAt = localCreatedAt
+    self.serverSequence = serverSequence
+    self.thumbnailUrl = thumbnailUrl
+    self.posterUrl = posterUrl
+    self.localFilePath = localFilePath
+    self.localThumbnailPath = localThumbnailPath
+    self.fileName = fileName
+    self.fileSize = fileSize
+    self.width = width
+    self.height = height
+    self.durationMs = durationMs
+    self.downloadStatus = downloadStatus
+    self.uploadStatus = uploadStatus
+    self.username = username
+    self.fullName = fullName
+    self.profileImage = profileImage
+  }
+
+  public func updating(
+    id: String? = nil,
+    content: String? = nil,
+    mediaUrl: String? = nil,
+    mediaType: String? = nil,
+    createdAt: String? = nil,
+    updatedAt: String? = nil,
+    status: String? = nil,
+    uploadStatus: String? = nil
+  ) -> MIRAMessage {
+    MIRAMessage(
+      id: id ?? self.id,
+      groupId: groupId,
+      senderId: senderId,
+      receiverId: receiverId,
+      content: content ?? self.content,
+      mediaUrl: mediaUrl ?? self.mediaUrl,
+      mediaType: mediaType ?? self.mediaType,
+      createdAt: createdAt ?? self.createdAt,
+      updatedAt: updatedAt ?? self.updatedAt,
+      status: status ?? self.status,
+      localCreatedAt: localCreatedAt,
+      serverSequence: serverSequence,
+      thumbnailUrl: thumbnailUrl,
+      posterUrl: posterUrl,
+      localFilePath: localFilePath,
+      localThumbnailPath: localThumbnailPath,
+      fileName: fileName,
+      fileSize: fileSize,
+      width: width,
+      height: height,
+      durationMs: durationMs,
+      downloadStatus: downloadStatus,
+      uploadStatus: uploadStatus ?? self.uploadStatus,
+      username: username,
+      fullName: fullName,
+      profileImage: profileImage
+    )
+  }
 }
 
 public struct MIRAPresence: Decodable, Hashable {

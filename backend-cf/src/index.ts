@@ -4025,7 +4025,19 @@ async function attachMediaBackupToMessage(
 
 async function messagePayload(c: any, row: any): Promise<any> {
   const mediaUrl = row.media_url ? await signedMessageMediaReference(c, row.media_url) : row.media_url;
-  return { ...row, media_url: mediaUrl };
+  const rawCreatedAt = cleanText(row.created_at || '', 80);
+  const parsedCreatedAt = rawCreatedAt
+    ? Date.parse(rawCreatedAt.includes('T') ? rawCreatedAt : `${rawCreatedAt.replace(' ', 'T')}Z`)
+    : NaN;
+  return {
+    ...row,
+    media_url: mediaUrl,
+    status: row.status || 'sent',
+    updated_at: row.updated_at || row.created_at || null,
+    server_sequence: Number.isFinite(parsedCreatedAt) ? parsedCreatedAt : null,
+    thumbnail_url: row.thumbnail_url || row.thumbnail || null,
+    poster_url: row.poster_url || row.poster || null,
+  };
 }
 
 const FEED_MEDIA_WIDTH = 1080;
@@ -9852,19 +9864,31 @@ api.get('/messages/:userId', authMiddleware, async (c) => {
   if (invalidPeer) return invalidPeer;
   const limit = clampNumber(c.req.query('limit') || '80', 1, 100, 80);
   const before = cleanText(c.req.query('before') || '', 60);
+  const after = cleanText(c.req.query('after') || '', 60);
   await c.env.DB.prepare('UPDATE messages SET is_read = 1 WHERE sender_id = ? AND receiver_id = ? AND is_read = 0').bind(oid, myId).run();
-  const beforeClause = before ? "AND datetime(created_at) < datetime(?)" : '';
-  const binds = before ? [myId, oid, oid, myId, before, limit] : [myId, oid, oid, myId, limit];
-  const directMessagesSql = `
-    SELECT * FROM (
+  const directMessagesSql = after
+    ? `
       SELECT * FROM messages
       WHERE ((sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?))
-        ${beforeClause}
-      ORDER BY created_at DESC
+        AND datetime(created_at) > datetime(?)
+      ORDER BY created_at ASC
       LIMIT ?
-    )
-    ORDER BY created_at ASC
-  `;
+    `
+    : `
+      SELECT * FROM (
+        SELECT * FROM messages
+        WHERE ((sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?))
+          ${before ? "AND datetime(created_at) < datetime(?)" : ''}
+        ORDER BY created_at DESC
+        LIMIT ?
+      )
+      ORDER BY created_at ASC
+    `;
+  const binds = after
+    ? [myId, oid, oid, myId, after, limit]
+    : before
+      ? [myId, oid, oid, myId, before, limit]
+      : [myId, oid, oid, myId, limit];
   const r = await c.env.DB.prepare(directMessagesSql).bind(...binds).all();
   const messages = await Promise.all((r.results as any[]).map((row) => messagePayload(c, row)));
   return c.json(messages);
@@ -9934,6 +9958,7 @@ api.get('/group-chats/:groupId/messages', authMiddleware, async (c) => {
   if (!await requireGroupMember(c, groupId, userId)) return c.json({ detail: 'Group not found' }, 404);
   const limit = clampNumber(c.req.query('limit') || '80', 1, 100, 80);
   const before = cleanText(c.req.query('before') || '', 60);
+  const after = cleanText(c.req.query('after') || '', 60);
 
   const group: any = await c.env.DB.prepare(`
     SELECT g.*, COUNT(m.user_id) AS member_count
@@ -9942,18 +9967,30 @@ api.get('/group-chats/:groupId/messages', authMiddleware, async (c) => {
     WHERE g.id = ?
     GROUP BY g.id
   `).bind(groupId).first();
-  const groupMessagesSql = `
-    SELECT gm.*, u.username, u.full_name, u.profile_image
-    FROM group_messages gm
-    JOIN users u ON u.id = gm.sender_id
-    WHERE gm.group_id = ?
-      ${before ? "AND datetime(gm.created_at) < datetime(?)" : ''}
-    ORDER BY gm.created_at DESC
-    LIMIT ?
-  `;
-  const messages = await c.env.DB.prepare(groupMessagesSql).bind(...(before ? [groupId, before, limit] : [groupId, limit])).all();
+  const groupMessagesSql = after
+    ? `
+      SELECT gm.*, u.username, u.full_name, u.profile_image
+      FROM group_messages gm
+      JOIN users u ON u.id = gm.sender_id
+      WHERE gm.group_id = ?
+        AND datetime(gm.created_at) > datetime(?)
+      ORDER BY gm.created_at ASC
+      LIMIT ?
+    `
+    : `
+      SELECT gm.*, u.username, u.full_name, u.profile_image
+      FROM group_messages gm
+      JOIN users u ON u.id = gm.sender_id
+      WHERE gm.group_id = ?
+        ${before ? "AND datetime(gm.created_at) < datetime(?)" : ''}
+      ORDER BY gm.created_at DESC
+      LIMIT ?
+    `;
+  const binds = after ? [groupId, after, limit] : before ? [groupId, before, limit] : [groupId, limit];
+  const messages = await c.env.DB.prepare(groupMessagesSql).bind(...binds).all();
 
-  const signedMessages = await Promise.all([...(messages.results as any[])].reverse().map((row) => messagePayload(c, row)));
+  const rows = after ? (messages.results as any[]) : [...(messages.results as any[])].reverse();
+  const signedMessages = await Promise.all(rows.map((row) => messagePayload(c, row)));
   return c.json({ group, messages: signedMessages });
 });
 

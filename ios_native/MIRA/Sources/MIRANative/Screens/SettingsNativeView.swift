@@ -642,6 +642,10 @@ private struct PreferenceSettingsNativeView: View {
   @AppStorage("mira.settings.autoplay_video") private var autoplayVideo = true
   @AppStorage("mira.settings.high_quality_uploads") private var highQualityUploads = true
   @AppStorage("mira.settings.reduce_motion") private var reduceMotion = false
+  @AppStorage("mira.chat.autodownload.images.wifi") private var chatImagesOnWiFi = true
+  @AppStorage("mira.chat.autodownload.videos.wifi") private var chatVideosOnWiFi = false
+  @AppStorage("mira.chat.autodownload.files.wifi") private var chatFilesOnWiFi = false
+  @AppStorage("mira.chat.media.cellular") private var chatMediaOnCellular = false
   @EnvironmentObject private var localization: MIRALocalization
   @State private var isClearingMediaCache = false
 
@@ -678,6 +682,10 @@ private struct PreferenceSettingsNativeView: View {
       SettingsCard(title: "Media") {
         SettingsToggleRow(title: "Autoplay videos", subtitle: "Play visible videos automatically.", systemImage: "play.circle", isOn: $autoplayVideo)
         SettingsToggleRow(title: "High quality uploads", subtitle: "Keep uploads sharp when possible.", systemImage: "arrow.up.circle", isOn: $highQualityUploads)
+        SettingsToggleRow(title: "Chat images on Wi-Fi", subtitle: "Download chat image previews automatically.", systemImage: "photo", isOn: $chatImagesOnWiFi)
+        SettingsToggleRow(title: "Chat videos on Wi-Fi", subtitle: "Download chat videos only when Wi-Fi allows.", systemImage: "video", isOn: $chatVideosOnWiFi)
+        SettingsToggleRow(title: "Chat files on Wi-Fi", subtitle: "Keep file downloads manual unless Wi-Fi allows.", systemImage: "doc", isOn: $chatFilesOnWiFi)
+        SettingsToggleRow(title: "Use cellular for chat media", subtitle: "Allow chat media downloads away from Wi-Fi.", systemImage: "antenna.radiowaves.left.and.right", isOn: $chatMediaOnCellular)
         SettingsToggleRow(title: "Reduce motion", subtitle: "Use simpler animations.", systemImage: "figure.walk.motion", isOn: $reduceMotion)
         SettingsButtonRow(
           title: isClearingMediaCache ? "Clearing media cache..." : "Clear media cache",

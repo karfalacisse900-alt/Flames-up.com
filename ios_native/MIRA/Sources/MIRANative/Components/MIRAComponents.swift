@@ -441,6 +441,13 @@ private actor MIRAImageLoadPipeline {
     }
 
     let task = Task.detached(priority: .userInitiated) { () -> MIRAImageLoadResult? in
+      if remoteURL.isFileURL,
+         let data = try? Data(contentsOf: remoteURL),
+         let decoded = await MIRAImageDiskCache.decode(data, maxPixelSize: resolvedMaxPixelSize) {
+        MIRAImageMemoryCache.shared.store(decoded, for: remoteURL, maxPixelSize: resolvedMaxPixelSize, cost: decoded.miraCacheCost)
+        return MIRAImageLoadResult(image: decoded, source: .disk)
+      }
+
       if let diskCached = await MIRAImageDiskCache.image(for: remoteURL, maxPixelSize: resolvedMaxPixelSize) {
         MIRAImageMemoryCache.shared.store(diskCached, for: remoteURL, maxPixelSize: resolvedMaxPixelSize, cost: diskCached.miraCacheCost)
         MIRAApplePerformanceLogger.event("media_cache_hit", detail: "disk")

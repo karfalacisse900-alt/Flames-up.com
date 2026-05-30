@@ -1088,12 +1088,23 @@ final class ChatNativeModel: ObservableObject {
   @Published var conversations: [MIRAConversation] = []
   @Published var isLoading = false
   let api: MIRAAPIClient
-  private let conversationsCacheKey = "native.chat.conversations.v2"
+  private let localStore = MIRAChatLocalStore.shared
+  private var currentUserId = ""
   private var hasLoadedFreshConversations = false
   private var isLoadingFreshConversations = false
 
   init(api: MIRAAPIClient) {
     self.api = api
+  }
+
+  func configure(currentUserId: String) {
+    let clean = currentUserId.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard clean != self.currentUserId else { return }
+    self.currentUserId = clean
+    hasLoadedFreshConversations = false
+    if !conversations.isEmpty {
+      conversations = []
+    }
   }
 
   func prepareForStartup() async {
@@ -1126,14 +1137,14 @@ final class ChatNativeModel: ObservableObject {
     if conversations != fresh {
       conversations = fresh
     }
-    await MIRALocalJSONCache.save(fresh, key: conversationsCacheKey)
+    await localStore.saveConversations(fresh, userId: currentUserId)
   }
 
   private func hydrateCachedConversationsIfNeeded() async {
     guard conversations.isEmpty,
-          let cached: [MIRAConversation] = await MIRALocalJSONCache.load([MIRAConversation].self, key: conversationsCacheKey)
+          let cached = await localStore.loadConversations(userId: currentUserId)
     else { return }
-    conversations = cached
+    conversations = cached.conversations
     isLoading = false
     MIRAPerformanceTimeline.markOnce("chat_first_content", detail: "cache")
   }
@@ -1181,7 +1192,10 @@ public struct ChatNativeView: View {
       .miraScrollFeel(.chat)
       .background(MIRATheme.Color.appBackground)
       .miraScreenEnter(.tab)
-      .task { await model.load() }
+      .task {
+        model.configure(currentUserId: currentUserId)
+        await model.load()
+      }
       .background {
         NavigationLink(
           isActive: Binding(

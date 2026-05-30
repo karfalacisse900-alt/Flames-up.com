@@ -30,6 +30,9 @@ final class ConversationNativeModel: ObservableObject {
   @Published var presence: MIRAPresence?
   @Published var draft = ""
   @Published var isLoading = false
+  @Published var isSyncing = false
+  @Published var isLoadingOlder = false
+  @Published var hasOlderMessages = false
   @Published var isSending = false
   @Published var isUploading = false
   @Published var errorMessage: String?
@@ -38,6 +41,10 @@ final class ConversationNativeModel: ObservableObject {
   let api: MIRAAPIClient
   let currentUserId: String
   private let uploadService: MIRAMediaUploadService
+  private let localStore = MIRAChatLocalStore.shared
+  private var didBeginInitialLoad = false
+  private var lastSyncedAt: String?
+  private var lastServerSequence: Int?
 
   init(kind: ConversationNativeKind, api: MIRAAPIClient, currentUserId: String = "") {
     self.kind = kind
@@ -56,41 +63,89 @@ final class ConversationNativeModel: ObservableObject {
     return nil
   }
 
-  private var messagesCacheKey: String {
-    switch kind {
-    case let .direct(peerId):
-      return "native.chat.messages.direct.\(currentUserId).\(peerId)"
-    case let .group(groupId):
-      return "native.chat.messages.group.\(groupId)"
+  func load() async {
+    if didBeginInitialLoad {
+      await syncNewMessages()
+      return
+    }
+    didBeginInitialLoad = true
+    await hydrateLocalMessages()
+    await syncNewMessages()
+    if case let .direct(peerId) = kind {
+      presence = try? await api.get("/messages/presence/\(peerId)")
     }
   }
 
-  func load() async {
-    if messages.isEmpty, let cached: [MIRAMessage] = await MIRALocalJSONCache.load([MIRAMessage].self, key: messagesCacheKey) {
-      messages = cached
-      prefetchMessageMedia(cached)
+  private func hydrateLocalMessages() async {
+    guard messages.isEmpty else { return }
+    if let snapshot = await localStore.loadThread(kind: kind, currentUserId: currentUserId, limit: 50) {
+      messages = snapshot.messages
+      lastSyncedAt = snapshot.lastSyncedAt ?? latestMessageCursor()
+      lastServerSequence = snapshot.lastServerSequence
+      hasOlderMessages = snapshot.hasOlderRemote
+      prefetchMessageMedia(snapshot.messages)
       MIRAPerformanceTimeline.markOnce("chat_room_first_content", detail: "cache")
     }
+  }
 
+  private func syncNewMessages() async {
+    guard !isSyncing else { return }
+    isSyncing = true
     isLoading = messages.isEmpty
-    defer { isLoading = false }
+    defer {
+      isLoading = false
+      isSyncing = false
+    }
     do {
+      let rows: [MIRAMessage]
+      let cursor = lastSyncedAt ?? latestMessageCursor()
       switch kind {
       case let .direct(peerId):
-        let rows: [MIRAMessage] = try await api.get("/messages/\(peerId)")
-        messages = rows
-        prefetchMessageMedia(rows)
-        await MIRALocalJSONCache.save(rows, key: messagesCacheKey)
-        presence = try? await api.get("/messages/presence/\(peerId)")
+        rows = try await api.get(messagesPath("/messages/\(peerId)", after: cursor, limit: 50))
       case let .group(groupId):
-        let response: MIRAGroupMessagesResponse = try await api.get("/group-chats/\(groupId)/messages")
-        messages = response.messages
-        prefetchMessageMedia(response.messages)
-        await MIRALocalJSONCache.save(response.messages, key: messagesCacheKey)
+        let response: MIRAGroupMessagesResponse = try await api.get(messagesPath("/group-chats/\(groupId)/messages", after: cursor, limit: 50))
+        rows = response.messages
+      }
+      if !rows.isEmpty || messages.isEmpty {
+        messages = await localStore.merge(messages, with: rows)
+        lastSyncedAt = latestMessageCursor() ?? lastSyncedAt
+        lastServerSequence = messages.compactMap(\.serverSequence).max() ?? lastServerSequence
+        if messages.count >= 50 { hasOlderMessages = true }
+        prefetchMessageMedia(messages)
+        await persistThread()
       }
       errorMessage = nil
     } catch {
-      errorMessage = "Could not load this chat."
+      if messages.isEmpty {
+        errorMessage = "Could not load this chat."
+      }
+    }
+  }
+
+  func loadOlderMessagesIfNeeded() async {
+    guard hasOlderMessages, !isLoadingOlder, let before = messages.first?.createdAt else { return }
+    isLoadingOlder = true
+    defer { isLoadingOlder = false }
+    do {
+      let rows: [MIRAMessage]
+      switch kind {
+      case let .direct(peerId):
+        rows = try await api.get(messagesPath("/messages/\(peerId)", before: before, limit: 50))
+      case let .group(groupId):
+        let response: MIRAGroupMessagesResponse = try await api.get(messagesPath("/group-chats/\(groupId)/messages", before: before, limit: 50))
+        rows = response.messages
+      }
+      guard !rows.isEmpty else {
+        hasOlderMessages = false
+        await persistThread()
+        return
+      }
+      messages = await localStore.merge(rows, with: messages)
+      hasOlderMessages = rows.count >= 50
+      prefetchMessageMedia(rows)
+      await persistThread()
+    } catch {
+      errorMessage = messages.isEmpty ? "Could not load earlier messages." : nil
     }
   }
 
@@ -105,9 +160,10 @@ final class ConversationNativeModel: ObservableObject {
   func sendText() async {
     let clean = draft.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !clean.isEmpty, !isSending else { return }
-    if await send(content: clean, mediaUrl: nil, mediaType: nil) {
-      draft = ""
-      updateTyping(false)
+    draft = ""
+    updateTyping(false)
+    if !await send(content: clean, mediaUrl: nil, mediaType: nil) {
+      draft = clean
     }
   }
 
@@ -115,11 +171,19 @@ final class ConversationNativeModel: ObservableObject {
     guard !isUploading else { return }
     isUploading = true
     defer { isUploading = false }
+    let (kind, fileName, mimeType) = pickedMediaKind(from: contentTypes, fallbackData: data)
+    let localURL = await localStore.storeOutgoingMedia(data: data, fileName: fileName)
+    let localId = appendLocalOutgoingMessage(
+      content: "",
+      mediaUrl: localURL?.absoluteString,
+      mediaType: kind == .video ? "video" : "image",
+      uploadStatus: "uploading"
+    )
     do {
-      let (kind, fileName, mimeType) = pickedMediaKind(from: contentTypes, fallbackData: data)
       let url = try await uploadService.upload(MIRAPickedMedia(data: data, kind: kind, fileName: fileName, mimeType: mimeType))
-      await send(content: "", mediaUrl: url, mediaType: kind == .video ? "video" : "image")
+      await send(content: "", mediaUrl: url, mediaType: kind == .video ? "video" : "image", replacingLocalId: localId)
     } catch {
+      updateLocalMessage(localId, status: "failed", uploadStatus: "failed")
       errorMessage = "Could not send this media."
     }
   }
@@ -138,14 +202,12 @@ final class ConversationNativeModel: ObservableObject {
 
   func deleteForMe(_ message: MIRAMessage) {
     messages.removeAll { $0.id == message.id }
-    let snapshot = messages
-    Task { await MIRALocalJSONCache.save(snapshot, key: messagesCacheKey) }
+    Task { await persistThread() }
   }
 
   func removeMessages(byUserId userId: String) {
     messages.removeAll { $0.senderId == userId || $0.receiverId == userId }
-    let snapshot = messages
-    Task { await MIRALocalJSONCache.save(snapshot, key: messagesCacheKey) }
+    Task { await persistThread() }
   }
 
   func blockPeer() async -> Bool {
@@ -153,7 +215,7 @@ final class ConversationNativeModel: ObservableObject {
     do {
       let _: EmptyResponse? = try await api.post("/users/\(peerId)/block", body: EmptyBody())
       messages = []
-      await MIRALocalJSONCache.save(messages, key: messagesCacheKey)
+      await persistThread()
       errorMessage = nil
       return true
     } catch {
@@ -163,46 +225,146 @@ final class ConversationNativeModel: ObservableObject {
   }
 
   @discardableResult
-  private func send(content: String, mediaUrl: String?, mediaType: String?) async -> Bool {
+  private func send(content: String, mediaUrl: String?, mediaType: String?, replacingLocalId: String? = nil) async -> Bool {
     guard !isSending else { return false }
     isSending = true
+    let localId = replacingLocalId ?? appendLocalOutgoingMessage(content: content, mediaUrl: mediaUrl, mediaType: mediaType, uploadStatus: mediaUrl == nil ? nil : "uploaded")
     defer { isSending = false }
     do {
+      let sent: MIRAMessage
       switch kind {
       case let .direct(peerId):
-        let sent: MIRAMessage = try await api.post(
+        sent = try await api.post(
           "/messages",
           body: SendMessageBody(receiverId: peerId, content: content, mediaUrl: mediaUrl, mediaType: mediaType)
         )
-        messages.append(sent)
-        await MIRALocalJSONCache.save(messages, key: messagesCacheKey)
       case let .group(groupId):
-        let sent: MIRAMessage = try await api.post(
+        sent = try await api.post(
           "/group-chats/\(groupId)/messages",
           body: GroupMessageBody(content: content, mediaUrl: mediaUrl, mediaType: mediaType)
         )
-        messages.append(sent)
-        await MIRALocalJSONCache.save(messages, key: messagesCacheKey)
       }
+      replaceLocalMessage(localId, with: sent.updating(status: "sent", uploadStatus: "uploaded"))
       errorMessage = nil
       return true
     } catch {
+      updateLocalMessage(localId, status: "failed", uploadStatus: mediaUrl == nil ? nil : "failed")
       errorMessage = "Could not send this message."
       return false
     }
   }
 
+  func retry(_ message: MIRAMessage) async {
+    guard message.status?.lowercased() == "failed" else { return }
+    messages.removeAll { $0.id == message.id }
+    await persistThread()
+    let mediaUrl = message.mediaUrl?.trimmingCharacters(in: .whitespacesAndNewlines)
+    if let mediaUrl,
+       let url = URL(string: mediaUrl),
+       url.isFileURL,
+       let data = try? Data(contentsOf: url) {
+      let type = message.mediaType?.lowercased() == "video" ? UTType.movie : UTType.image
+      await sendPickedMedia(data: data, contentTypes: [type])
+      return
+    }
+    _ = await send(
+      content: message.content ?? "",
+      mediaUrl: (mediaUrl?.isEmpty == false && URL(string: mediaUrl ?? "")?.isFileURL != true) ? mediaUrl : nil,
+      mediaType: message.mediaType
+    )
+  }
+
   private func prefetchMessageMedia(_ rows: [MIRAMessage]) {
-    let imageURLs = rows.suffix(24).compactMap { message -> String? in
+    guard shouldAutoDownloadChatImagePreviews else { return }
+    let imageURLs = rows.suffix(30).flatMap { message -> [String] in
       let mediaType = message.mediaType?.lowercased()
-      guard mediaType == "image" else { return nil }
-      guard let mediaUrl = message.mediaUrl?.trimmingCharacters(in: .whitespacesAndNewlines), !mediaUrl.isEmpty else { return nil }
-      return mediaUrl
+      guard mediaType == "image" || mediaType == "video" else { return [] }
+      return [message.thumbnailUrl, message.posterUrl, message.mediaType?.lowercased() == "image" ? message.mediaUrl : nil]
+        .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { !$0.isEmpty && !$0.isVideoURL }
     }
     guard !imageURLs.isEmpty else { return }
     Task.detached(priority: .utility) {
       await MIRAImagePrefetcher.prefetch(urls: imageURLs, maxPixelSize: 760, limit: 12)
     }
+  }
+
+  private func appendLocalOutgoingMessage(content: String, mediaUrl: String?, mediaType: String?, uploadStatus: String?) -> String {
+    let id = "local-\(UUID().uuidString)"
+    let timestamp = ISO8601DateFormatter.miraConversation.string(from: Date())
+    let message = MIRAMessage(
+      id: id,
+      groupId: groupId,
+      senderId: currentUserId,
+      receiverId: peerId,
+      content: content,
+      mediaUrl: mediaUrl,
+      mediaType: mediaType,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      status: "sending",
+      localCreatedAt: timestamp,
+      uploadStatus: uploadStatus
+    )
+    messages.append(message)
+    Task { await persistThread() }
+    return id
+  }
+
+  private func replaceLocalMessage(_ localId: String, with sent: MIRAMessage) {
+    if let index = messages.firstIndex(where: { $0.id == localId }) {
+      messages[index] = sent
+    } else {
+      messages.append(sent)
+    }
+    messages = messages.sortedForConversation()
+    lastSyncedAt = latestMessageCursor() ?? lastSyncedAt
+    lastServerSequence = messages.compactMap(\.serverSequence).max() ?? lastServerSequence
+    Task { await persistThread() }
+  }
+
+  private func updateLocalMessage(_ localId: String, status: String, uploadStatus: String?) {
+    guard let index = messages.firstIndex(where: { $0.id == localId }) else { return }
+    messages[index] = messages[index].updating(status: status, uploadStatus: uploadStatus)
+    Task { await persistThread() }
+  }
+
+  private func persistThread() async {
+    await localStore.saveThread(
+      kind: kind,
+      currentUserId: currentUserId,
+      messages: messages,
+      lastSyncedAt: lastSyncedAt ?? latestMessageCursor(),
+      lastServerSequence: lastServerSequence,
+      hasOlderRemote: hasOlderMessages
+    )
+  }
+
+  private func messagesPath(_ base: String, after: String? = nil, before: String? = nil, limit: Int) -> String {
+    var components = URLComponents()
+    var items = [URLQueryItem(name: "limit", value: "\(limit)")]
+    if let after, !after.isEmpty { items.append(URLQueryItem(name: "after", value: after)) }
+    if let before, !before.isEmpty { items.append(URLQueryItem(name: "before", value: before)) }
+    components.queryItems = items
+    return "\(base)?\(components.percentEncodedQuery ?? "limit=\(limit)")"
+  }
+
+  private func latestMessageCursor() -> String? {
+    messages
+      .filter { !$0.id.hasPrefix("local-") && ($0.status ?? "sent") != "failed" }
+      .compactMap(\.createdAt)
+      .max()
+  }
+
+  private var groupId: String? {
+    if case let .group(groupId) = kind { return groupId }
+    return nil
+  }
+
+  private var shouldAutoDownloadChatImagePreviews: Bool {
+    let key = "mira.chat.autodownload.images.wifi"
+    if UserDefaults.standard.object(forKey: key) == nil { return true }
+    return UserDefaults.standard.bool(forKey: key)
   }
 }
 
@@ -244,6 +406,9 @@ public struct ConversationNativeView: View {
             } else if model.messages.isEmpty {
               MIRAEmptyState(title: "Start the chat", message: "Send a message when you are ready.", systemImage: "message")
             } else {
+              if model.hasOlderMessages {
+                loadEarlierControl
+              }
               ForEach(model.messages) { message in
                 messageBubble(message)
                   .id(message.id)
@@ -464,7 +629,7 @@ public struct ConversationNativeView: View {
           message: message,
           outgoing: outgoing,
           maxWidth: bubbleMaxWidth,
-          timestamp: nil
+          timestamp: statusText(for: message, outgoing: outgoing)
         )
       }
       .frame(maxWidth: bubbleMaxWidth, alignment: outgoing ? .trailing : .leading)
@@ -472,6 +637,13 @@ public struct ConversationNativeView: View {
     }
     .transition(.move(edge: .bottom).combined(with: .opacity))
     .contextMenu {
+      if outgoing, message.status?.lowercased() == "failed" {
+        Button {
+          Task { await model.retry(message) }
+        } label: {
+          Label("Retry", systemImage: "arrow.clockwise")
+        }
+      }
       if !outgoing {
         Button(role: .destructive) {
           presentReport(for: message)
@@ -515,6 +687,48 @@ public struct ConversationNativeView: View {
       return message.senderId != peerId
     }
     return false
+  }
+
+  private var loadEarlierControl: some View {
+    Button {
+      Task { await model.loadOlderMessagesIfNeeded() }
+    } label: {
+      HStack(spacing: 8) {
+        if model.isLoadingOlder {
+          ProgressView()
+            .scaleEffect(0.75)
+        }
+        Text(model.isLoadingOlder ? "Loading earlier messages..." : "Load earlier messages")
+          .font(.system(size: 12, weight: .semibold))
+      }
+      .foregroundStyle(Color.black.opacity(0.58))
+      .padding(.horizontal, 12)
+      .padding(.vertical, 8)
+      .background(Color.black.opacity(0.045))
+      .clipShape(Capsule())
+    }
+    .buttonStyle(.plain)
+    .disabled(model.isLoadingOlder)
+    .onAppear {
+      guard model.messages.count >= 35 else { return }
+      Task { await model.loadOlderMessagesIfNeeded() }
+    }
+  }
+
+  private func statusText(for message: MIRAMessage, outgoing: Bool) -> String? {
+    guard outgoing else { return nil }
+    switch message.status?.lowercased() {
+    case "sending":
+      return message.uploadStatus == "uploading" ? "uploading" : "sending"
+    case "failed":
+      return "failed - tap to retry"
+    case "delivered":
+      return "delivered"
+    case "read":
+      return "read"
+    default:
+      return nil
+    }
   }
 
   private var composerContainer: some View {
@@ -848,14 +1062,66 @@ private struct MessageBubbleContent: View {
   private func mediaContent(url: String) -> some View {
     let type = message.mediaType?.lowercased() ?? ""
     let mediaWidth = min(maxWidth, 260)
-    if type == "file" || type == "voice" || type == "audio" {
+    if type == "file" {
+      fileCard
+    } else if type == "voice" || type == "audio" {
       EmptyView()
     } else {
-      RemoteMediaView(url: url, isVideo: type == "video" || url.isVideoURL, shouldPlay: false)
+      RemoteMediaView(
+        url: url,
+        isVideo: type == "video" || url.isVideoURL,
+        placeholderURL: type == "video" ? (message.posterUrl ?? message.thumbnailUrl) : (message.thumbnailUrl ?? message.posterUrl),
+        shouldPlay: false,
+        maxPixelSize: 900,
+        showsVideoPlaceholderIcon: true,
+        placeholderColor: ChatRoomPalette.backgroundWash
+      )
         .frame(width: mediaWidth, height: type == "video" || url.isVideoURL ? mediaWidth * 1.22 : mediaWidth * 0.86)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
   }
+
+  private var fileCard: some View {
+    HStack(spacing: 10) {
+      Image(systemName: "doc.fill")
+        .font(.system(size: 18, weight: .semibold))
+        .foregroundStyle(outgoing ? .white : .black)
+        .frame(width: 34, height: 34)
+        .background((outgoing ? Color.white : Color.black).opacity(0.12))
+        .clipShape(Circle())
+      VStack(alignment: .leading, spacing: 3) {
+        Text(message.fileName?.isEmpty == false ? message.fileName! : "File")
+          .font(.system(size: 13, weight: .semibold))
+          .foregroundStyle(outgoing ? .white : .black)
+          .lineLimit(1)
+        if let fileSize = message.fileSize, fileSize > 0 {
+          Text(ByteCountFormatter.string(fromByteCount: Int64(fileSize), countStyle: .file))
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(outgoing ? Color.white.opacity(0.72) : Color.black.opacity(0.55))
+        }
+      }
+    }
+    .padding(.vertical, 4)
+  }
+}
+
+private extension Array where Element == MIRAMessage {
+  func sortedForConversation() -> [MIRAMessage] {
+    sorted { lhs, rhs in
+      let left = lhs.createdAt ?? lhs.localCreatedAt ?? ""
+      let right = rhs.createdAt ?? rhs.localCreatedAt ?? ""
+      if left == right { return lhs.id < rhs.id }
+      return left < right
+    }
+  }
+}
+
+private extension ISO8601DateFormatter {
+  static let miraConversation: ISO8601DateFormatter = {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return formatter
+  }()
 }
 
 private struct ChatGIFPickerSheet: View {
