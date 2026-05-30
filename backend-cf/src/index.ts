@@ -22,6 +22,8 @@ interface Env {
   CLOUDFLARE_IMAGES_TOKEN?: string;
   CLOUDFLARE_IMAGES_FEED_VARIANT?: string;
   CLOUDFLARE_IMAGES_THUMBNAIL_VARIANT?: string;
+  CLOUDFLARE_IMAGE_TRANSFORMS_ENABLED?: string;
+  CLOUDFLARE_IMAGE_TRANSFORM_BASE_URL?: string;
   CLOUDFLARE_STREAM_TOKEN?: string;
   POST_ASSIST_MODEL?: string;
   MAPBOX_ACCESS_TOKEN?: string;
@@ -541,6 +543,7 @@ let adminModerationSchemaReady = false;
 let autoCategorySchemaReady = false;
 let autoCategoryBackfillReady = false;
 let locationSchemaReady = false;
+let statusThoughtSchemaReady = false;
 
 function normalizeSchemaSql(statement: string): string {
   return statement.replace(/\s+/g, ' ').trim().replace(/;$/, '');
@@ -833,6 +836,38 @@ async function ensurePrivacySchema(db: D1Database) {
   }
 
   privacySchemaReady = true;
+}
+
+async function ensureStatusThoughtSchema(db: D1Database) {
+  if (statusThoughtSchemaReady) return;
+  await ensurePrivacySchema(db);
+  await ensureAbuseProtectionSchema(db);
+
+  const statements = [
+    `CREATE TABLE IF NOT EXISTS status_thoughts (
+      id TEXT PRIMARY KEY,
+      status_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      body TEXT NOT NULL,
+      status TEXT DEFAULT 'active',
+      created_at TEXT NOT NULL,
+      removed_at TEXT
+    )`,
+    'CREATE INDEX IF NOT EXISTS idx_status_thoughts_status_created ON status_thoughts(status_id, status, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_status_thoughts_user_created ON status_thoughts(user_id, created_at)',
+  ];
+
+  for (const statement of statements) {
+    try {
+      await runSchemaStatement(db, statement);
+    } catch (error: any) {
+      if (!isIgnorableSchemaError(error, statement)) {
+        throw error;
+      }
+    }
+  }
+
+  statusThoughtSchemaReady = true;
 }
 
 async function ensurePostEditorSchema(db: D1Database) {
@@ -1858,6 +1893,39 @@ function cloudflareImageDeliveryUrl(env: Env, imageId: string, variant = 'public
   return accountHash && cleanImageId
     ? `https://imagedelivery.net/${accountHash}/${cleanImageId}/${cleanVariant}`
     : '';
+}
+
+function cloudflareImageTransformsEnabled(env?: Env): boolean {
+  const value = cleanText(env?.CLOUDFLARE_IMAGE_TRANSFORMS_ENABLED || '', 20).toLowerCase();
+  if (value === '0' || value === 'false' || value === 'no') return false;
+  return true;
+}
+
+function cloudflareImageTransformBaseUrl(env?: Env): string {
+  const configured = cleanText(env?.CLOUDFLARE_IMAGE_TRANSFORM_BASE_URL || '', 300).replace(/\/+$/, '');
+  if (configured && /^https:\/\//i.test(configured)) return configured;
+  return cloudflareImageTransformsEnabled(env) ? 'https://api.flames-up.com' : '';
+}
+
+function cloudflareImageTransformOptions(preset: 'feed' | 'thumbnail'): string {
+  if (preset === 'thumbnail') {
+    return 'width=480,quality=84,format=auto,metadata=none';
+  }
+  return 'width=1080,quality=92,format=auto,metadata=none';
+}
+
+function cloudflareTransformedImageUrl(env: Env | undefined, url: string, preset: 'feed' | 'thumbnail'): string {
+  if (!url || !cloudflareImageTransformsEnabled(env)) return url;
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'https:') return url;
+    if (parsed.pathname.includes('/cdn-cgi/image/')) return url;
+    const base = cloudflareImageTransformBaseUrl(env);
+    if (!base) return url;
+    return `${base}/cdn-cgi/image/${cloudflareImageTransformOptions(preset)}/${parsed.toString()}`;
+  } catch {
+    return url;
+  }
 }
 
 function cleanMultilineText(value: unknown, max = 5000): string {
@@ -4095,15 +4163,15 @@ function isVideoMediaUrl(url: string): boolean {
   return lower.startsWith('cfstream:') || /\.(mp4|mov|m4v|webm)(\?|#|$)/.test(lower);
 }
 
-function feedDeliveryUrl(url: string, mediaType: string, variant: string): string {
+function feedDeliveryUrl(url: string, mediaType: string, variant: string, env?: Env): string {
   if (!url) return '';
   if (mediaType === 'video') return url;
-  return replaceCloudflareImageVariant(url, variant);
+  return cloudflareTransformedImageUrl(env, replaceCloudflareImageVariant(url, variant), 'feed');
 }
 
-function posterDeliveryUrl(url: string, mediaType: string, variant: string): string {
+function posterDeliveryUrl(url: string, mediaType: string, variant: string, env?: Env): string {
   if (!url) return '';
-  if (mediaType !== 'video') return replaceCloudflareImageVariant(url, variant);
+  if (mediaType !== 'video') return cloudflareTransformedImageUrl(env, replaceCloudflareImageVariant(url, variant), 'thumbnail');
   return url;
 }
 
@@ -4198,9 +4266,9 @@ function postPayload(post: any, likedBy: string[] = [], env?: Env) {
   const dimensions = parseJsonArray(post.media_dimensions);
   const feedVariant = env?.CLOUDFLARE_IMAGES_FEED_VARIANT || '';
   const thumbnailVariant = env?.CLOUDFLARE_IMAGES_THUMBNAIL_VARIANT || '';
-  const feedMediaUrls = mediaUrls.map((url, index) => feedDeliveryUrl(url, mediaTypes[index] || 'image', feedVariant)).filter(Boolean);
-  const thumbnailUrls = mediaUrls.map((url, index) => posterDeliveryUrl(url, mediaTypes[index] || 'image', thumbnailVariant)).filter(Boolean);
-  const posterUrls = mediaUrls.map((url, index) => posterDeliveryUrl(url, mediaTypes[index] || 'image', thumbnailVariant)).filter(Boolean);
+  const feedMediaUrls = mediaUrls.map((url, index) => feedDeliveryUrl(url, mediaTypes[index] || 'image', feedVariant, env)).filter(Boolean);
+  const thumbnailUrls = mediaUrls.map((url, index) => posterDeliveryUrl(url, mediaTypes[index] || 'image', thumbnailVariant, env)).filter(Boolean);
+  const posterUrls = mediaUrls.map((url, index) => posterDeliveryUrl(url, mediaTypes[index] || 'image', thumbnailVariant, env)).filter(Boolean);
   const renderedMediaDimensions = feedMediaDimensions(mediaUrls, mediaTypes, dimensions);
   const primaryMediaDimensions = renderedMediaDimensions[0] || DEFAULT_FEED_MEDIA_RATIO;
   const primaryCategory = normalizeDiscoverCategory(post.primary_category || post.category || post.post_type || 'lifestyle', false) || 'lifestyle';
@@ -6665,7 +6733,7 @@ async function refinePostCategoryWithBackendAi(c: any, postId: string) {
   const feedVariant = c.env.CLOUDFLARE_IMAGES_FEED_VARIANT || '';
   const mediaPreviewUrl = primaryType === 'video'
     ? streamThumbnailUrl(primaryUrl)
-    : posterDeliveryUrl(primaryUrl, primaryType, thumbnailVariant) || feedDeliveryUrl(primaryUrl, primaryType, feedVariant);
+    : posterDeliveryUrl(primaryUrl, primaryType, thumbnailVariant, c.env) || feedDeliveryUrl(primaryUrl, primaryType, feedVariant, c.env);
   const backendLabels = await classifyImageWithWorkersAi(c.env, mediaPreviewUrl);
   const currentSignals = parseJsonObject(row.category_signals_json);
   const aiInput: AutoCategoryInput = {
@@ -9500,6 +9568,19 @@ function groupStatusRows(rows: any[], viewerId: string) {
   return Array.from(grouped.values());
 }
 
+function statusThoughtPayload(row: any) {
+  return {
+    id: row.id,
+    status_id: row.status_id,
+    user_id: row.user_id,
+    body: cleanText(row.body, 180),
+    created_at: row.created_at || '',
+    user_username: publicUsernameFor({ username: row.user_username }),
+    user_full_name: cleanText(row.user_full_name, 120),
+    user_profile_image: safeMediaReference(row.user_profile_image),
+  };
+}
+
 api.post('/statuses', authMiddleware, async (c) => {
   const phoneGate = await requirePhoneVerified(c, 'share stories');
   if (phoneGate) return phoneGate;
@@ -9583,6 +9664,76 @@ api.post('/statuses/:statusId/view', authMiddleware, async (c) => {
   const vb: string[] = JSON.parse(s.viewed_by || '[]');
   if (!vb.includes(userId)) { vb.push(userId); await c.env.DB.prepare('UPDATE statuses SET viewed_by = ? WHERE id = ?').bind(JSON.stringify(vb), statusId).run(); }
   return c.json({ viewed: true });
+});
+
+api.get('/statuses/:statusId/thoughts', authMiddleware, async (c) => {
+  await ensureStatusThoughtSchema(c.env.DB);
+  const userId = getUserId(c);
+  const statusId = publicId(c.req.param('statusId'), 120);
+  const limit = clampNumber(c.req.query('limit') || '24', 1, 40, 24);
+  const story: any = await c.env.DB.prepare(
+    [
+      'SELECT s.id FROM statuses s JOIN users u ON s.user_id = u.id',
+      `WHERE s.id = ? AND s.created_at >= datetime('now', '-7 days') AND ${visibleStatusWhere('u', 's')}`,
+      'LIMIT 1',
+    ].join(' ')
+  ).bind(statusId, userId, userId).first();
+  if (!story) return c.json({ detail: 'Story not found' }, 404);
+
+  const rows = await c.env.DB.prepare(
+    `SELECT st.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
+     FROM status_thoughts st
+     JOIN users u ON u.id = st.user_id
+     WHERE st.status_id = ?
+       AND COALESCE(st.status, 'active') = 'active'
+       AND NOT EXISTS (
+         SELECT 1 FROM blocks b
+         WHERE (b.blocker_id = ? AND b.blocked_id = st.user_id)
+            OR (b.blocker_id = st.user_id AND b.blocked_id = ?)
+       )
+     ORDER BY datetime(st.created_at) DESC
+     LIMIT ?`
+  ).bind(statusId, userId, userId, limit).all();
+  return c.json((rows.results as any[]).reverse().map(statusThoughtPayload));
+});
+
+api.post('/statuses/:statusId/thoughts', authMiddleware, async (c) => {
+  await ensureStatusThoughtSchema(c.env.DB);
+  const userId = getUserId(c);
+  const limited = await enforceRateLimit(c, 'story_thought_create', userId, 40, 60);
+  if (limited) return limited;
+  const statusId = publicId(c.req.param('statusId'), 120);
+  const body: any = await c.req.json().catch(() => ({}));
+  const text = cleanText(body.body || body.text || body.thought || '', 180);
+  if (!text) return c.json({ detail: 'Thought is required.' }, 400);
+
+  const story: any = await c.env.DB.prepare(
+    [
+      'SELECT s.id, s.user_id FROM statuses s JOIN users u ON s.user_id = u.id',
+      `WHERE s.id = ? AND s.created_at >= datetime('now', '-7 days') AND ${visibleStatusWhere('u', 's')}`,
+      'LIMIT 1',
+    ].join(' ')
+  ).bind(statusId, userId, userId).first();
+  if (!story) return c.json({ detail: 'Story not found' }, 404);
+  if (await usersAreBlocked(c.env.DB, userId, story.user_id)) {
+    return c.json({ detail: 'You cannot share a thought on this story.' }, 403);
+  }
+
+  const id = uuid();
+  const createdAt = now();
+  await c.env.DB.prepare(
+    `INSERT INTO status_thoughts (id, status_id, user_id, body, status, created_at)
+     VALUES (?, ?, ?, ?, 'active', ?)`
+  ).bind(id, statusId, userId, text, createdAt).run();
+  await logSecurityEvent(c, 'story_thought_created', userId, { status_id: statusId });
+
+  const row: any = await c.env.DB.prepare(
+    `SELECT st.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
+     FROM status_thoughts st
+     JOIN users u ON u.id = st.user_id
+     WHERE st.id = ?`
+  ).bind(id).first();
+  return c.json(statusThoughtPayload(row));
 });
 
 api.delete('/statuses/:statusId', authMiddleware, async (c) => {
@@ -12833,10 +12984,10 @@ function adminPostPayload(row: any, env: Env) {
   const normalizedDimensions = feedMediaDimensions(mediaUrls, normalizedTypes, dimensions);
   const media = mediaUrls.map((url, index) => {
     const mediaType = String(normalizedTypes[index] || 'image').toLowerCase().includes('video') || isVideoMediaUrl(url) ? 'video' : 'image';
-    const feedUrl = mediaType === 'video' ? streamPlaybackUrl(url) : feedDeliveryUrl(url, mediaType, feedVariant);
+    const feedUrl = mediaType === 'video' ? streamPlaybackUrl(url) : feedDeliveryUrl(url, mediaType, feedVariant, env);
     const thumbnailUrl = mediaType === 'video'
       ? streamThumbnailUrl(url)
-      : posterDeliveryUrl(url, mediaType, thumbnailVariant);
+      : posterDeliveryUrl(url, mediaType, thumbnailVariant, env);
     const original = normalizedDimensions[index] || dimensions[index] || {};
     const width = Number(original.feed_width || original.width || original.original_width || 0) || null;
     const height = Number(original.feed_height || original.height || original.original_height || 0) || null;

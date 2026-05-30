@@ -1654,6 +1654,12 @@ public struct CreatePostNativeView: View {
     do {
       let response: MIRABroadLocationReverseResponse = try await api.get("/mapbox-locations/reverse?lat=\(lat)&lng=\(lng)")
       guard let resolved = response.location?.displayLocation, resolved.hasVisibleLabel else {
+        if let fallback = await reverseGeocodeBroadLocationWithApple(location) {
+          broadLocation = fallback
+          showBroadLocation = true
+          broadLocationError = nil
+          return
+        }
         broadLocation = previousLocation
         broadLocationError = "Could not find your city."
         return
@@ -1662,9 +1668,39 @@ public struct CreatePostNativeView: View {
       showBroadLocation = true
       broadLocationError = nil
     } catch {
+      if let fallback = await reverseGeocodeBroadLocationWithApple(location) {
+        broadLocation = fallback
+        showBroadLocation = true
+        broadLocationError = nil
+        return
+      }
       broadLocation = previousLocation
       let message = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
-      broadLocationError = message.isEmpty ? "Mapbox city/country could not load." : message
+      broadLocationError = message.isEmpty ? "City/country could not load." : message
+    }
+  }
+
+  private func reverseGeocodeBroadLocationWithApple(_ location: CLLocation) async -> MIRABroadDisplayLocation? {
+    do {
+      let placemarks = try await CLGeocoder().reverseGeocodeLocation(location)
+      guard let place = placemarks.first else { return nil }
+      let city = place.locality ?? place.subLocality ?? place.administrativeArea
+      let region = place.administrativeArea
+      let country = place.country ?? place.isoCountryCode
+      let parts = [city, country]
+        .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { !$0.isEmpty }
+      guard !parts.isEmpty else { return nil }
+      return MIRABroadDisplayLocation(
+        city: city,
+        region: region,
+        country: country,
+        label: parts.joined(separator: ", "),
+        source: "manual",
+        visibility: "public"
+      )
+    } catch {
+      return nil
     }
   }
 

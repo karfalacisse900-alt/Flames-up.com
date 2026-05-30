@@ -305,6 +305,7 @@ public struct DiscoverNativeView: View {
       .miraFullScreenOverlay(item: $selectedStoryGroup, background: .black) { group, dismissStory in
         StoryViewerNativeView(
           group: group,
+          allGroups: model.stories,
           api: model.api,
           onClose: dismissStory,
           onReportStory: { target in
@@ -537,18 +538,55 @@ public struct DiscoverNativeView: View {
   }
 }
 
+private struct StoryThought: Codable, Identifiable, Hashable {
+  let id: String
+  let statusId: String?
+  let userId: String?
+  let body: String
+  let createdAt: String?
+  let userUsername: String?
+  let userFullName: String?
+  let userProfileImage: String?
+
+  var displayName: String {
+    if let userFullName, !userFullName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      return userFullName.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    if MIRAUsernameRules.isValidPublicUsername(userUsername) {
+      return MIRAUsernameRules.normalized(userUsername)
+    }
+    return "Someone"
+  }
+}
+
+private struct StoryThoughtSubmitBody: Encodable {
+  let body: String
+}
+
+private struct StoryThoughtBubbleState: Identifiable, Hashable {
+  let id = UUID()
+  let thought: StoryThought
+}
+
 private struct StoryViewerNativeView: View {
   let group: MIRAStoryGroup
+  let allGroups: [MIRAStoryGroup]
   let api: MIRAAPIClient
   let onClose: () -> Void
   let onReportStory: (MIRAReportTarget) -> Void
   @State private var selectedIndex = 0
   @State private var localStories: [MIRAStatusPreview]?
+  @State private var activeGroupOverride: MIRAStoryGroup?
   @State private var currentUserId: String?
   @State private var showStoryMenu = false
   @State private var isCanvasVisible = false
   @State private var isClosing = false
   @State private var replyText = ""
+  @State private var storyThoughts: [StoryThought] = []
+  @State private var visibleThoughts: [StoryThoughtBubbleState] = []
+  @State private var thoughtPlaybackTask: Task<Void, Never>?
+  @State private var isSendingThought = false
+  @State private var thoughtErrorText: String?
   @State private var storyAudioPlayer: AVPlayer?
   @State private var isStoryAudioPlaying = false
   @State private var isStoryAudioLoading = false
@@ -558,7 +596,16 @@ private struct StoryViewerNativeView: View {
   @Environment(\.scenePhase) private var scenePhase
 
   private var stories: [MIRAStatusPreview] {
-    localStories ?? (group.statuses?.isEmpty == false ? group.statuses! : [])
+    localStories ?? (activeGroup.statuses?.isEmpty == false ? activeGroup.statuses! : [])
+  }
+
+  private var activeGroup: MIRAStoryGroup {
+    activeGroupOverride ?? group
+  }
+
+  private var storyRailGroups: [MIRAStoryGroup] {
+    let available = allGroups.filter { $0.statuses?.isEmpty == false }
+    return available.isEmpty ? [activeGroup] : available
   }
 
   private var currentStory: MIRAStatusPreview? {
@@ -573,20 +620,62 @@ private struct StoryViewerNativeView: View {
       GeometryReader { proxy in
         let safeTop = proxy.safeAreaInsets.top
         let safeBottom = proxy.safeAreaInsets.bottom
-        let bottomChromeHeight = max(74, safeBottom + 62)
-        let topChromeHeight = max(2, safeTop + 2)
-        let mediaHeight = max(360, proxy.size.height - bottomChromeHeight - topChromeHeight)
 
-        VStack(spacing: 0) {
-          storyCanvas
-            .frame(width: proxy.size.width, height: mediaHeight)
-            .padding(.top, topChromeHeight)
+        ZStack {
+          storyMediaLayer
+            .frame(width: proxy.size.width, height: proxy.size.height)
+            .ignoresSafeArea()
 
-          Spacer(minLength: 0)
+          LinearGradient(
+            colors: [.black.opacity(0.28), .black.opacity(0.08), .clear],
+            startPoint: .top,
+            endPoint: .bottom
+          )
+          .frame(height: min(190, proxy.size.height * 0.26))
+          .frame(maxHeight: .infinity, alignment: .top)
+          .allowsHitTesting(false)
 
-          storyBottomActions
-            .padding(.horizontal, 13)
-            .padding(.bottom, max(7, safeBottom + 1))
+          LinearGradient(
+            colors: [.clear, .black.opacity(0.24), .black.opacity(0.58)],
+            startPoint: .top,
+            endPoint: .bottom
+          )
+          .frame(height: min(330, proxy.size.height * 0.42))
+          .frame(maxHeight: .infinity, alignment: .bottom)
+          .allowsHitTesting(false)
+
+          HStack(spacing: 0) {
+            Color.clear
+              .contentShape(Rectangle())
+              .onTapGesture { goToPreviousStory() }
+            Color.clear
+              .contentShape(Rectangle())
+              .onTapGesture { goToNextStory() }
+          }
+          .padding(.top, safeTop + 86)
+          .padding(.bottom, safeBottom + 164)
+
+          VStack(spacing: 10) {
+            progressRail
+            storyTopBar
+          }
+          .padding(.horizontal, 13)
+          .padding(.top, safeTop + 8)
+          .frame(maxHeight: .infinity, alignment: .top)
+
+          storyThoughtOverlay
+            .padding(.horizontal, 14)
+            .padding(.bottom, safeBottom + 154)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+            .allowsHitTesting(false)
+
+          VStack(spacing: 12) {
+            storyProfileCarousel
+            storyBottomActions
+              .padding(.horizontal, 13)
+          }
+          .padding(.bottom, max(8, safeBottom + 8))
+          .frame(maxHeight: .infinity, alignment: .bottom)
         }
         .frame(width: proxy.size.width, height: proxy.size.height)
       }
@@ -606,9 +695,12 @@ private struct StoryViewerNativeView: View {
     .task(id: currentStory?.id) {
       await prepareStoryAudioIfNeeded()
     }
+    .task(id: currentStory?.id) {
+      await loadStoryThoughtsForCurrentStory()
+    }
     .task {
       if localStories == nil {
-        localStories = group.statuses ?? []
+        localStories = activeGroup.statuses ?? []
       }
       if currentUserId == nil {
         let me: MIRAUser? = try? await api.get("/auth/me")
@@ -616,7 +708,7 @@ private struct StoryViewerNativeView: View {
       }
     }
     .confirmationDialog("Story options", isPresented: $showStoryMenu, titleVisibility: .visible) {
-      if currentUserId == group.userId {
+      if currentUserId == activeGroup.userId {
         Button("Delete story", role: .destructive) {
           Task { await deleteCurrentStory() }
         }
@@ -644,71 +736,95 @@ private struct StoryViewerNativeView: View {
     .onReceive(NotificationCenter.default.publisher(for: .miraPlaybackMayResume)) { _ in
       resumeStoryAudioIfNeeded()
     }
-    .onDisappear { stopStoryAudio() }
+    .onDisappear {
+      stopStoryAudio()
+      thoughtPlaybackTask?.cancel()
+      visibleThoughts.removeAll()
+    }
   }
 
-  private var storyCanvas: some View {
-    GeometryReader { proxy in
-      ZStack(alignment: .top) {
-        if let mediaURL = currentStory?.mediaURL {
-          RemoteMediaView(
-            url: mediaURL,
-            isVideo: mediaURL.isVideoURL,
-            contentMode: .fill,
-            shouldPlay: true,
-            placeholderColor: storyFallbackColor,
-            placeholderTint: MIRATheme.Color.textSecondary.opacity(0.68)
-          )
-            .frame(width: proxy.size.width, height: proxy.size.height)
-        } else {
-          RoundedRectangle(cornerRadius: 24, style: .continuous)
-            .fill(storyFallbackColor)
-            .overlay {
-              Text(currentStory?.content?.isEmpty == false ? currentStory!.content! : "Story")
-                .font(.system(size: 24, weight: .semibold))
-                .foregroundStyle(storyTextColor)
-                .multilineTextAlignment(.center)
-                .padding(28)
-            }
-        }
-
-        LinearGradient(
-          colors: [.black.opacity(0.34), .black.opacity(0.08), .clear],
-          startPoint: .top,
-          endPoint: .bottom
+  private var storyMediaLayer: some View {
+    ZStack {
+      if let mediaURL = currentStory?.mediaURL {
+        RemoteMediaView(
+          url: mediaURL,
+          isVideo: mediaURL.isVideoURL,
+          contentMode: .fill,
+          shouldPlay: true,
+          placeholderColor: storyFallbackColor,
+          placeholderTint: MIRATheme.Color.textSecondary.opacity(0.68)
         )
-        .frame(height: min(170, proxy.size.height * 0.26))
-
-        LinearGradient(
-          colors: [.clear, .black.opacity(0.22)],
-          startPoint: .top,
-          endPoint: .bottom
-        )
-        .frame(height: min(190, proxy.size.height * 0.30))
-        .frame(maxHeight: .infinity, alignment: .bottom)
-
-        HStack(spacing: 0) {
-          Color.clear
-            .contentShape(Rectangle())
-            .onTapGesture { goToPreviousStory() }
-          Color.clear
-            .contentShape(Rectangle())
-            .onTapGesture { goToNextStory() }
-        }
-        .padding(.top, 76)
-
-        VStack(spacing: 9) {
-          progressRail
-            .padding(.top, 13)
-          storyTopBar
-        }
-        .padding(.horizontal, 13)
+      } else {
+        Rectangle()
+          .fill(storyFallbackColor)
+          .overlay {
+            Text(currentStory?.content?.isEmpty == false ? currentStory!.content! : "Story")
+              .font(.system(size: 26, weight: .semibold))
+              .foregroundStyle(storyTextColor)
+              .multilineTextAlignment(.center)
+              .padding(28)
+          }
       }
-      .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
-    .frame(maxWidth: .infinity)
     .transition(.opacity)
     .animation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion), value: currentStory?.id)
+  }
+
+  private var storyThoughtOverlay: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      ForEach(visibleThoughts.suffix(3)) { item in
+        StoryThoughtBubbleView(thought: item.thought)
+          .transition(.asymmetric(
+            insertion: .opacity.combined(with: .move(edge: .bottom)).combined(with: .scale(scale: 0.98)),
+            removal: .opacity.combined(with: .move(edge: .top))
+          ))
+      }
+    }
+  }
+
+  private var storyProfileCarousel: some View {
+    ScrollView(.horizontal, showsIndicators: false) {
+      HStack(alignment: .bottom, spacing: 18) {
+        ForEach(storyRailGroups) { railGroup in
+          Button {
+            withAnimation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion)) {
+              activeGroupOverride = railGroup
+              localStories = railGroup.statuses ?? []
+              selectedIndex = 0
+            }
+          } label: {
+            StoryViewerCarouselBubble(
+              group: railGroup,
+              label: storyHandleLabel(for: railGroup),
+              isSelected: railGroup.userId == activeGroup.userId
+            )
+          }
+          .buttonStyle(.plain)
+        }
+      }
+      .padding(.horizontal, 22)
+      .frame(maxWidth: .infinity, alignment: .center)
+    }
+    .frame(height: 96)
+    .mask(
+      LinearGradient(
+        stops: [
+          .init(color: .clear, location: 0),
+          .init(color: .black, location: 0.08),
+          .init(color: .black, location: 0.92),
+          .init(color: .clear, location: 1),
+        ],
+        startPoint: .leading,
+        endPoint: .trailing
+      )
+    )
+  }
+
+  private func storyHandleLabel(for railGroup: MIRAStoryGroup) -> String {
+    if MIRAUsernameRules.isValidPublicUsername(railGroup.userUsername) {
+      return "@\(MIRAUsernameRules.normalized(railGroup.userUsername))"
+    }
+    return railGroup.displayName
   }
 
   private var progressRail: some View {
@@ -723,10 +839,10 @@ private struct StoryViewerNativeView: View {
 
   private var storyTopBar: some View {
     HStack(spacing: 9) {
-      RemoteAvatar(url: group.userProfileImage, size: 36)
+      RemoteAvatar(url: activeGroup.userProfileImage, size: 36)
 
       HStack(spacing: 7) {
-        Text(group.displayName)
+        Text(activeGroup.displayName)
           .font(.system(size: 15, weight: .semibold))
           .foregroundStyle(.white)
           .lineLimit(1)
@@ -763,6 +879,14 @@ private struct StoryViewerNativeView: View {
         .buttonStyle(.miraPress)
       }
 
+      Button { showStoryMenu = true } label: {
+        Image(systemName: "ellipsis")
+          .font(.system(size: 23, weight: .bold))
+          .foregroundStyle(.white)
+          .frame(width: 38, height: 38)
+      }
+      .buttonStyle(.miraPress)
+
       Button { closeStoryViewer() } label: {
         Image(systemName: "xmark")
           .font(.system(size: 25, weight: .regular))
@@ -776,26 +900,23 @@ private struct StoryViewerNativeView: View {
   private var storyBottomActions: some View {
     HStack(spacing: 12) {
       HStack(spacing: 10) {
-        TextField("Message...", text: $replyText)
+        TextField("Share thought", text: $replyText)
           .font(.system(size: 16, weight: .regular))
           .foregroundStyle(.white)
           .tint(.white)
           .focused($isReplyFocused)
           .submitLabel(.send)
-          .onSubmit(sendStoryReplyDraft)
+          .onSubmit(sendStoryThought)
 
         Spacer(minLength: 4)
 
-        if replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-          HStack(spacing: 14) {
-            Text("😍")
-            Text("😂")
-            Text("😳")
-          }
-          .font(.system(size: 25))
-          .lineLimit(1)
-        } else {
-          Button(action: sendStoryReplyDraft) {
+        if isSendingThought {
+          ProgressView()
+            .tint(.white)
+            .scaleEffect(0.72)
+            .frame(width: 30, height: 30)
+        } else if !replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+          Button(action: sendStoryThought) {
             Image(systemName: "paperplane.fill")
               .font(.system(size: 16, weight: .bold))
               .foregroundStyle(.white)
@@ -810,21 +931,25 @@ private struct StoryViewerNativeView: View {
       .background(Color.white.opacity(0.18))
       .clipShape(Capsule())
 
-      Button {} label: {
+      Button { CaptroHaptics.light() } label: {
         Image(systemName: "heart")
           .font(.system(size: 29, weight: .regular))
           .foregroundStyle(.white)
           .frame(width: 38, height: 48)
       }
       .buttonStyle(.miraPress)
-
-      Button { showStoryMenu = true } label: {
-        Image(systemName: "ellipsis")
-          .font(.system(size: 26, weight: .bold))
+    }
+    .overlay(alignment: .topLeading) {
+      if let thoughtErrorText {
+        Text(thoughtErrorText)
+          .font(.system(size: 12, weight: .semibold))
           .foregroundStyle(.white)
-          .frame(width: 36, height: 48)
+          .padding(.horizontal, 12)
+          .padding(.vertical, 6)
+          .background(.black.opacity(0.42), in: Capsule())
+          .offset(x: 4, y: -34)
+          .transition(.opacity.combined(with: .move(edge: .bottom)))
       }
-      .buttonStyle(.miraPress)
     }
   }
 
@@ -840,6 +965,98 @@ private struct StoryViewerNativeView: View {
       return .white
     }
     return Color(uiColor: UIColor(hex: value))
+  }
+
+  @MainActor
+  private func loadStoryThoughtsForCurrentStory() async {
+    thoughtPlaybackTask?.cancel()
+    visibleThoughts.removeAll()
+    thoughtErrorText = nil
+    guard let storyId = currentStory?.id else {
+      storyThoughts = []
+      return
+    }
+
+    do {
+      let loaded: [StoryThought] = try await api.get("/statuses/\(storyId)/thoughts")
+      storyThoughts = loaded.filter { !$0.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+      startStoryThoughtPlayback()
+    } catch {
+      storyThoughts = []
+    }
+  }
+
+  @MainActor
+  private func startStoryThoughtPlayback() {
+    thoughtPlaybackTask?.cancel()
+    let queuedThoughts = Array(storyThoughts.suffix(10))
+    guard !queuedThoughts.isEmpty else { return }
+
+    thoughtPlaybackTask = Task {
+      try? await Task.sleep(nanoseconds: 500_000_000)
+      for thought in queuedThoughts {
+        if Task.isCancelled { return }
+        await MainActor.run { showStoryThought(thought) }
+        try? await Task.sleep(nanoseconds: 1_650_000_000)
+      }
+    }
+  }
+
+  @MainActor
+  private func showStoryThought(_ thought: StoryThought) {
+    let bubble = StoryThoughtBubbleState(thought: thought)
+    withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
+      visibleThoughts.append(bubble)
+      if visibleThoughts.count > 3 {
+        visibleThoughts.removeFirst(visibleThoughts.count - 3)
+      }
+    }
+
+    DispatchQueue.main.asyncAfter(deadline: .now() + 3.2) {
+      Task { @MainActor in
+        withAnimation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion)) {
+          visibleThoughts.removeAll { $0.id == bubble.id }
+        }
+      }
+    }
+  }
+
+  @MainActor
+  private func sendStoryThought() {
+    let text = replyText.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !text.isEmpty, !isSendingThought, let storyId = currentStory?.id else { return }
+    isSendingThought = true
+    thoughtErrorText = nil
+
+    Task {
+      do {
+        let thought: StoryThought = try await api.post(
+          "/statuses/\(storyId)/thoughts",
+          body: StoryThoughtSubmitBody(body: text)
+        )
+        await MainActor.run {
+          replyText = ""
+          isReplyFocused = false
+          isSendingThought = false
+          storyThoughts.append(thought)
+          showStoryThought(thought)
+          CaptroHaptics.light()
+        }
+      } catch {
+        await MainActor.run {
+          isSendingThought = false
+          thoughtErrorText = "Could not share thought."
+          CaptroHaptics.warning()
+          DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) {
+            Task { @MainActor in
+              withAnimation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion)) {
+                thoughtErrorText = nil
+              }
+            }
+          }
+        }
+      }
+    }
   }
 
   @MainActor
@@ -932,15 +1149,15 @@ private struct StoryViewerNativeView: View {
       MIRAReportTarget(
         targetType: "story",
         targetId: story.id,
-        ownerUserId: story.userId ?? group.userId,
+        ownerUserId: story.userId ?? activeGroup.userId,
         title: "Report story",
-        subtitle: story.content?.isEmpty == false ? story.content : group.displayName
+        subtitle: story.content?.isEmpty == false ? story.content : activeGroup.displayName
       )
     )
   }
 
   private func blockStoryOwner() async {
-    let ownerId = currentStory?.userId ?? group.userId
+    let ownerId = currentStory?.userId ?? activeGroup.userId
     guard !ownerId.isEmpty, ownerId != currentUserId else { return }
     let _: EmptyResponse? = try? await api.post("/users/\(ownerId)/block", body: EmptyBody())
     closeStoryViewer()
@@ -956,13 +1173,6 @@ private struct StoryViewerNativeView: View {
     DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
       onClose()
     }
-  }
-
-  private func sendStoryReplyDraft() {
-    guard !replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-    CaptroHaptics.light()
-    replyText = ""
-    isReplyFocused = false
   }
 
   private func goToPreviousStory() {
@@ -981,6 +1191,93 @@ private struct StoryViewerNativeView: View {
     } else {
       closeStoryViewer()
     }
+  }
+}
+
+private struct StoryThoughtBubbleView: View {
+  let thought: StoryThought
+
+  var body: some View {
+    HStack(alignment: .top, spacing: 8) {
+      RemoteAvatar(url: thought.userProfileImage, size: 28)
+      VStack(alignment: .leading, spacing: 2) {
+        Text(thought.displayName)
+          .font(.system(size: 11, weight: .bold))
+          .foregroundStyle(.white.opacity(0.82))
+          .lineLimit(1)
+        Text(thought.body)
+          .font(.system(size: 13, weight: .semibold))
+          .foregroundStyle(.white)
+          .lineLimit(2)
+      }
+    }
+    .padding(.horizontal, 10)
+    .padding(.vertical, 8)
+    .frame(maxWidth: 260, alignment: .leading)
+    .background(.black.opacity(0.34), in: RoundedRectangle(cornerRadius: 17, style: .continuous))
+    .overlay(
+      RoundedRectangle(cornerRadius: 17, style: .continuous)
+        .stroke(.white.opacity(0.08), lineWidth: 1)
+    )
+  }
+}
+
+private struct StoryViewerCarouselBubble: View {
+  let group: MIRAStoryGroup
+  let label: String
+  let isSelected: Bool
+
+  private var bubbleSize: CGFloat { isSelected ? 72 : 50 }
+  private var previewStory: MIRAStatusPreview? { group.statuses?.first }
+
+  var body: some View {
+    VStack(spacing: 7) {
+      ZStack {
+        Circle()
+          .stroke(
+            isSelected
+              ? LinearGradient(colors: [Color.pink, Color.purple, MIRATheme.Color.forest], startPoint: .topLeading, endPoint: .bottomTrailing)
+              : LinearGradient(colors: [.white.opacity(0.38), .white.opacity(0.18)], startPoint: .topLeading, endPoint: .bottomTrailing),
+            lineWidth: isSelected ? 3 : 1
+          )
+          .frame(width: bubbleSize + 8, height: bubbleSize + 8)
+
+        if let mediaURL = previewStory?.mediaURL {
+          RemoteMediaView(
+            url: mediaURL,
+            isVideo: mediaURL.isVideoURL,
+            contentMode: .fill,
+            shouldPlay: false,
+            placeholderColor: MIRATheme.Color.mediaPlaceholder,
+            placeholderTint: .white.opacity(0.55)
+          )
+          .frame(width: bubbleSize, height: bubbleSize)
+          .clipShape(Circle())
+        } else {
+          RemoteAvatar(url: group.userProfileImage, size: bubbleSize)
+        }
+
+        if previewStory?.hasAudio == true {
+          Circle()
+            .fill(.white.opacity(0.88))
+            .frame(width: isSelected ? 22 : 18, height: isSelected ? 22 : 18)
+            .overlay(
+              Image(systemName: "music.note")
+                .font(.system(size: isSelected ? 10 : 8, weight: .bold))
+                .foregroundStyle(MIRATheme.Color.forest)
+            )
+            .offset(x: bubbleSize * 0.35, y: -bubbleSize * 0.32)
+        }
+      }
+
+      Text(label)
+        .font(.system(size: isSelected ? 13 : 11, weight: .semibold))
+        .foregroundStyle(.white.opacity(isSelected ? 0.95 : 0.64))
+        .lineLimit(1)
+        .frame(width: isSelected ? 104 : 72)
+    }
+    .frame(width: isSelected ? 112 : 74, height: 96, alignment: .bottom)
+    .animation(CaptroMotion.mediaFadeAnimation(reduceMotion: false), value: isSelected)
   }
 }
 
