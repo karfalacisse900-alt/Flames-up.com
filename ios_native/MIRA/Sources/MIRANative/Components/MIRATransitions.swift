@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 public enum MIRATransitionTiming {
   public static let buttonPress: Double = 0.12
@@ -85,6 +86,80 @@ public extension View {
         overlay: overlay
       )
     )
+  }
+
+  func miraHideTabBarOnAppear() -> some View {
+    modifier(MIRAHideTabBarModifier())
+  }
+}
+
+private struct MIRAHideTabBarModifier: ViewModifier {
+  @State private var token = UUID()
+
+  func body(content: Content) -> some View {
+    content
+      .toolbar(.hidden, for: .tabBar)
+      .onAppear {
+        Task { @MainActor in
+          MIRATabBarVisibilityStore.hide(token)
+        }
+      }
+      .onDisappear {
+        Task { @MainActor in
+          MIRATabBarVisibilityStore.show(token)
+        }
+      }
+  }
+}
+
+@MainActor
+private enum MIRATabBarVisibilityStore {
+  private static var hiddenTokens = Set<UUID>()
+
+  static func hide(_ token: UUID) {
+    hiddenTokens.insert(token)
+    setTabBarHidden(true)
+  }
+
+  static func show(_ token: UUID) {
+    hiddenTokens.remove(token)
+    setTabBarHidden(!hiddenTokens.isEmpty)
+  }
+
+  private static func setTabBarHidden(_ hidden: Bool) {
+    UIApplication.shared.connectedScenes
+      .compactMap { $0 as? UIWindowScene }
+      .flatMap(\.windows)
+      .compactMap(\.rootViewController)
+      .compactMap { $0.miraTabBarController }
+      .forEach { tabBarController in
+        guard tabBarController.tabBar.isHidden != hidden else { return }
+        tabBarController.tabBar.isHidden = hidden
+      }
+  }
+}
+
+private extension UIViewController {
+  var miraTabBarController: UITabBarController? {
+    if let tabBarController = self as? UITabBarController {
+      return tabBarController
+    }
+    if let owningTabBar = self.tabBarController {
+      return owningTabBar
+    }
+    if let navigationController = self as? UINavigationController {
+      return navigationController.visibleViewController?.miraTabBarController
+        ?? navigationController.topViewController?.miraTabBarController
+    }
+    if let presentedViewController {
+      return presentedViewController.miraTabBarController
+    }
+    for child in children {
+      if let found = child.miraTabBarController {
+        return found
+      }
+    }
+    return nil
   }
 }
 

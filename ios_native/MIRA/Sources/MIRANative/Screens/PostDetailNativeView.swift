@@ -402,7 +402,7 @@ public struct PostDetailNativeView: View {
     .background(MIRATheme.Color.surface)
     .miraScreenEnter(.push)
     .toolbar(.hidden, for: .navigationBar)
-    .toolbar(.hidden, for: .tabBar)
+    .miraHideTabBarOnAppear()
     .miraBottomSheet(
       isPresented: $isSaveSheetPresented,
       preferredHeightFraction: 0.46,
@@ -695,7 +695,7 @@ public struct DiscoverPostDetailNativeView: View {
     .background(MIRATheme.Color.surface)
     .miraScreenEnter(.push)
     .toolbar(.hidden, for: .navigationBar)
-    .toolbar(.hidden, for: .tabBar)
+    .miraHideTabBarOnAppear()
     .miraBottomSheet(
       isPresented: $isCommentsPresented,
       preferredHeightFraction: 0.72,

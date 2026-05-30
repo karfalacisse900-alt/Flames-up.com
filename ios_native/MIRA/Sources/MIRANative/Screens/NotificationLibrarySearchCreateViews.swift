@@ -53,7 +53,7 @@ public struct NotificationNativeView: View {
     .background(MIRATheme.Color.appBackground)
     .miraScreenEnter(.push)
     .navigationTitle("Notifications")
-    .toolbar(.hidden, for: .tabBar)
+    .miraHideTabBarOnAppear()
     .task { await model.load() }
   }
 
@@ -254,7 +254,7 @@ public struct LibraryNativeView: View {
     .miraScreenEnter(.push)
     .navigationBarBackButtonHidden(true)
     .toolbar(.hidden, for: .navigationBar)
-    .toolbar(.hidden, for: .tabBar)
+    .miraHideTabBarOnAppear()
     .task { await model.load() }
   }
 
@@ -477,7 +477,7 @@ public struct SearchUsersNativeView: View {
     .miraScreenEnter(.push)
     .navigationBarBackButtonHidden(true)
     .toolbar(.hidden, for: .navigationBar)
-    .toolbar(.hidden, for: .tabBar)
+    .miraHideTabBarOnAppear()
     .task(id: model.query) {
       try? await Task.sleep(nanoseconds: 250_000_000)
       await model.search()
@@ -815,7 +815,7 @@ public struct CreatePostNativeView: View {
       }
     }
     .toolbar(.hidden, for: .navigationBar)
-    .toolbar(.hidden, for: .tabBar)
+    .miraHideTabBarOnAppear()
     .miraScreenEnter(.modal)
     .navigationBarBackButtonHidden(true)
     .onAppear {
@@ -951,13 +951,10 @@ public struct CreatePostNativeView: View {
 
             Spacer(minLength: max(120, proxy.size.height * 0.22))
 
-            postDetailsQuickActions
-              .padding(.top, 24)
-
             Rectangle()
               .fill(MIRATheme.Color.hairline.opacity(0.75))
               .frame(height: 0.7)
-              .padding(.top, 20)
+              .padding(.top, 24)
 
             postOptionRow(
               icon: "mappin.circle",
@@ -1186,44 +1183,6 @@ public struct CreatePostNativeView: View {
     }
   }
 
-  private var postDetailsQuickActions: some View {
-    ScrollView(.horizontal, showsIndicators: false) {
-      HStack(spacing: 10) {
-        postDetailsChip(selectedPlace?.displayName ?? "Place", systemImage: "mappin.circle") {
-          activePostDetailSheet = .location
-        }
-        postDetailsChip(taggedUsers.isEmpty ? "@" : "@ \(taggedUsers.count)", systemImage: nil) {
-          activePostDetailSheet = .people
-        }
-        postDetailsChip(hashtags.isEmpty ? "#" : "# \(hashtags.count)", systemImage: nil) {
-          activePostDetailSheet = .tags
-        }
-        postDetailsChip(selectedAudioTrack == nil ? "Music" : "Sound", systemImage: "music.note") {
-          activePostDetailSheet = .music
-        }
-      }
-    }
-  }
-
-  private func postDetailsChip(_ title: String, systemImage: String?, action: @escaping () -> Void) -> some View {
-    Button(action: action) {
-      HStack(spacing: 8) {
-        if let systemImage {
-          Image(systemName: systemImage)
-            .font(.system(size: 19, weight: .regular))
-        }
-        Text(title)
-          .font(.system(size: title.count == 1 ? 23 : 17, weight: .semibold))
-      }
-      .foregroundStyle(MIRATheme.Color.textPrimary)
-      .padding(.horizontal, title.count == 1 ? 18 : 20)
-      .frame(height: 52)
-      .background(MIRATheme.Color.surfaceSoft.opacity(0.58))
-      .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
-    }
-    .buttonStyle(.plain)
-  }
-
   private func postOptionRow(icon: String, title: String, subtitle: String? = nil, action: @escaping () -> Void) -> some View {
     Button(action: action) {
       HStack(spacing: 18) {
@@ -1303,6 +1262,10 @@ public struct CreatePostNativeView: View {
       return showBroadLocation ? label : "\(label) hidden"
     }
     return showBroadLocation ? "Tap Allow to add your city/country" : "Hidden for this post"
+  }
+
+  private var shouldPublishBroadLocation: Bool {
+    showBroadLocation && broadLocation.hasVisibleLabel
   }
 
   @ViewBuilder
@@ -1398,12 +1361,12 @@ public struct CreatePostNativeView: View {
         mediaDimensions: mediaDimensions,
         editorOverlays: editorUploadMetadata(),
         location: selectedPlace?.addressText ?? selectedPlace?.displayName,
-        displayCity: showBroadLocation ? broadLocation.city : nil,
-        displayRegion: showBroadLocation ? broadLocation.region : nil,
-        displayCountry: showBroadLocation ? broadLocation.country : nil,
-        displayLocationLabel: showBroadLocation ? broadLocation.label : nil,
-        displayLocationSource: showBroadLocation ? broadLocation.source : "none",
-        displayLocationVisibility: showBroadLocation ? "public" : "hidden",
+        displayCity: shouldPublishBroadLocation ? broadLocation.city : nil,
+        displayRegion: shouldPublishBroadLocation ? broadLocation.region : nil,
+        displayCountry: shouldPublishBroadLocation ? broadLocation.country : nil,
+        displayLocationLabel: shouldPublishBroadLocation ? broadLocation.label : nil,
+        displayLocationSource: shouldPublishBroadLocation ? broadLocation.source : "none",
+        displayLocationVisibility: shouldPublishBroadLocation ? "public" : "hidden",
         postType: selectedPlace == nil ? "general" : "place",
         placeId: selectedPlace?.providerPlaceId,
         placeName: selectedPlace?.displayName,
@@ -1510,10 +1473,8 @@ public struct CreatePostNativeView: View {
       let user: MIRAUser = try await api.get("/auth/me")
       let location = parseProfileCity(user.city)
       broadLocation = location
-      showBroadLocation = false
     } catch {
       broadLocation = MIRABroadDisplayLocation()
-      showBroadLocation = false
     }
   }
 
@@ -1522,7 +1483,6 @@ public struct CreatePostNativeView: View {
     broadLocationError = nil
     let previousLocation = broadLocation
     guard let location = await broadLocationResolver.resolveCurrentLocation() else {
-      showBroadLocation = false
       broadLocation = previousLocation
       broadLocationError = "Allow location to show your city/country."
       return
@@ -1533,7 +1493,6 @@ public struct CreatePostNativeView: View {
     do {
       let response: MIRABroadLocationReverseResponse = try await api.get("/mapbox-locations/reverse?lat=\(lat)&lng=\(lng)")
       guard let resolved = response.location?.displayLocation, resolved.hasVisibleLabel else {
-        showBroadLocation = false
         broadLocation = previousLocation
         broadLocationError = "Could not find your city."
         return
@@ -1542,7 +1501,6 @@ public struct CreatePostNativeView: View {
       showBroadLocation = true
       broadLocationError = nil
     } catch {
-      showBroadLocation = false
       broadLocation = previousLocation
       broadLocationError = "City/country could not load."
     }
@@ -3445,7 +3403,7 @@ public struct CreateStoryNativeView: View {
       }
     }
     .toolbar(.hidden, for: .navigationBar)
-    .toolbar(.hidden, for: .tabBar)
+    .miraHideTabBarOnAppear()
     .navigationBarBackButtonHidden(true)
     .statusBarHidden(true)
     .miraScreenEnter(.modal)

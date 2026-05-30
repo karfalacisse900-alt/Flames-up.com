@@ -221,7 +221,7 @@ public struct ProfileNativeView: View {
             Image(systemName: "trophy")
               .accessibilityLabel("Contest prizes")
           }
-          NavigationLink(destination: SettingsNativeView(api: model.api, authSession: authSession)) {
+          NavigationLink(destination: SettingsNativeView(api: model.api, authSession: authSession).miraHideTabBarOnAppear()) {
             Image(systemName: "gearshape")
           }
         }

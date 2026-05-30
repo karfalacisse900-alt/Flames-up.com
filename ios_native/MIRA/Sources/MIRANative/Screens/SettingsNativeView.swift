@@ -289,7 +289,7 @@ public struct SettingsNativeView: View {
     .miraScreenEnter(.push)
     .navigationBarBackButtonHidden(true)
     .toolbar(.hidden, for: .navigationBar)
-    .toolbar(.hidden, for: .tabBar)
+    .miraHideTabBarOnAppear()
     .task { await model.load() }
   }
 
@@ -755,6 +755,7 @@ private struct SettingsDetailScaffold<Content: View>: View {
     .background(MIRATheme.Color.appBackground.ignoresSafeArea())
     .navigationBarBackButtonHidden(true)
     .toolbar(.hidden, for: .navigationBar)
+    .miraHideTabBarOnAppear()
   }
 }
 

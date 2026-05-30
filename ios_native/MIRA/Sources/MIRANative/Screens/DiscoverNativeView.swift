@@ -373,7 +373,7 @@ public struct DiscoverNativeView: View {
       } else {
         LazyVGrid(columns: galleryGridColumns, spacing: 1) {
           ForEach(filteredGalleryPosts) { post in
-            NavigationLink(destination: DiscoverPostDetailNativeView(post: post, api: model.api)) {
+            NavigationLink(destination: DiscoverPostDetailNativeView(post: post, api: model.api).miraHideTabBarOnAppear()) {
               DiscoverPostGalleryTile(post: post)
             }
             .buttonStyle(.plain)
@@ -473,7 +473,7 @@ public struct DiscoverNativeView: View {
   private var storyRail: some View {
     ScrollView(.horizontal, showsIndicators: false) {
       HStack(spacing: 10) {
-        NavigationLink(destination: CreateStoryNativeView(api: model.api)) {
+        NavigationLink(destination: CreateStoryNativeView(api: model.api).miraHideTabBarOnAppear()) {
           StoryBubbleNative(name: "You", avatarURL: nil, hasUnviewed: false, isAdd: true)
         }
         .buttonStyle(.miraPress)
