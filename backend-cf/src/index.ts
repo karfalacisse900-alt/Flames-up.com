@@ -4384,6 +4384,16 @@ function normalizePhone(input: string): string {
   return `+${digits}`;
 }
 
+function normalizeOptionalPhone(input: unknown): string {
+  const text = String(input || '').trim();
+  if (!text) return '';
+  try {
+    return normalizePhone(text);
+  } catch {
+    return '';
+  }
+}
+
 async function sha256Hex(value: string): Promise<string> {
   const data = new TextEncoder().encode(value);
   const hashBuffer = await crypto.subtle.digest('SHA-256', data);
@@ -6174,7 +6184,7 @@ function supabaseAuthCreatePayload(input: {
 }) {
   const provider = supabaseAuthProvider(input.provider);
   const email = normalizeOptionalEmail(input.email);
-  const phone = normalizePhone(String(input.phone || ''));
+  const phone = normalizeOptionalPhone(input.phone);
   const password = String(input.password || '');
   const body: any = {
     user_metadata: supabaseProfileMetadata({
@@ -6214,7 +6224,7 @@ async function findSupabaseAuthUser(c: any, input: { email?: unknown; phone?: un
   }
 
   const email = normalizeOptionalEmail(input.email);
-  const phone = normalizePhone(String(input.phone || ''));
+  const phone = normalizeOptionalPhone(input.phone);
   const filter = email || phone;
   if (!filter) return null;
   const response = await fetch(`${getSupabaseUrl(c)}/auth/v1/admin/users?page=1&per_page=100&filter=${encodeURIComponent(filter)}`, {
@@ -6228,7 +6238,7 @@ async function findSupabaseAuthUser(c: any, input: { email?: unknown; phone?: un
   const users = Array.isArray(data?.users) ? data.users : Array.isArray(data) ? data : [];
   return users.find((user: any) => {
     const userEmail = normalizeOptionalEmail(user?.email);
-    const userPhone = normalizePhone(user?.phone);
+    const userPhone = normalizeOptionalPhone(user?.phone);
     return (email && userEmail === email) || (phone && userPhone === phone);
   }) || null;
 }
@@ -6885,7 +6895,7 @@ async function backfillLegacyUsersToSupabaseAuth(c: any, limit: number, offset: 
     }
 
     const email = normalizeOptionalEmail(row.email);
-    const phone = Number(row.phone_verified || 0) === 1 ? normalizePhone(row.phone) : '';
+    const phone = Number(row.phone_verified || 0) === 1 ? normalizeOptionalPhone(row.phone) : '';
     const provider = supabaseAuthProvider(row.oauth_provider || (phone ? 'phone' : 'email'));
     if ((!email || isInternalOAuthEmail(email)) && !phone) {
       result.skipped += 1;
@@ -7019,6 +7029,7 @@ api.post('/auth/register', async (c) => {
     if (code.startsWith('SUPABASE_AUTH_CREATE_FAILED')) {
       return c.json({ detail: 'Could not create the Supabase Auth account.' }, 502);
     }
+    console.warn(JSON.stringify({ event: 'auth_register_failed', code: code.slice(0, 180) }));
     return c.json({ detail: 'Could not create account.' }, 500);
   }
 });
@@ -7435,7 +7446,7 @@ api.delete('/users/me', authMiddleware, async (c) => {
   if (limited) return limited;
   await ensureGovernanceSchema(c.env.DB);
   await ensurePremiumSchema(c.env.DB);
-  const user: any = await c.env.DB.prepare('SELECT id, is_admin FROM users WHERE id = ?').bind(userId).first();
+  const user: any = await c.env.DB.prepare('SELECT id, is_admin, supabase_user_id FROM users WHERE id = ?').bind(userId).first();
   if (!user) return c.json({ detail: 'User not found.' }, 404);
   if (user.is_admin) return c.json({ detail: 'Admin accounts must be removed by another admin.' }, 403);
 
@@ -7460,6 +7471,9 @@ api.delete('/users/me', authMiddleware, async (c) => {
   await c.env.DB.prepare("UPDATE posts SET status = 'removed', removed_at = ?, removed_reason = 'Account deleted' WHERE user_id = ? AND COALESCE(status, 'active') != 'removed'")
     .bind(ts, userId).run();
   await logSecurityEvent(c, 'account_soft_deleted', userId, {});
+  runBackgroundTask(c, 'supabase_auth_delete_user_failed', async () => {
+    if (user.supabase_user_id) await deleteSupabaseAuthUser(c, user.supabase_user_id);
+  });
   return c.json({ deleted: true, soft_deleted: true });
 });
 
