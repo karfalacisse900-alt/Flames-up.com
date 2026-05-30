@@ -162,7 +162,7 @@ final class ConversationNativeModel: ObservableObject {
     guard !clean.isEmpty, !isSending else { return }
     draft = ""
     updateTyping(false)
-    if !await send(content: clean, mediaUrl: nil, mediaType: nil) {
+    if !(await send(content: clean, mediaUrl: nil, mediaType: nil)) {
       draft = clean
     }
   }
