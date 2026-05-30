@@ -687,24 +687,20 @@ public struct DiscoverPostDetailNativeView: View {
   }
 
   public var body: some View {
-    ZStack(alignment: .bottom) {
+    ZStack {
       MIRATheme.Color.surface.ignoresSafeArea()
 
       ScrollView {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 14) {
           topBar
           captionBlock
           mediaCarousel
           actionRow
           postContext
         }
-        .padding(.bottom, 112)
+        .padding(.bottom, 32)
       }
       .scrollIndicators(.hidden)
-
-      bottomNowPlayingPanel
-        .padding(.horizontal, MIRATheme.Space.md)
-        .padding(.bottom, 10)
     }
     .background(MIRATheme.Color.surface)
     .miraScreenEnter(.push)
@@ -796,9 +792,9 @@ public struct DiscoverPostDetailNativeView: View {
       }
     } label: {
       captionLabel
-        .font(.system(size: 29, weight: .regular))
+        .font(.system(size: 19, weight: .regular))
         .foregroundStyle(MIRATheme.Color.textPrimary)
-        .lineSpacing(5)
+        .lineSpacing(3)
         .multilineTextAlignment(.leading)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -874,26 +870,7 @@ public struct DiscoverPostDetailNativeView: View {
       }
       .buttonStyle(.miraPress)
 
-      Button {
-        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-      } label: {
-        Image(systemName: "hand.thumbsdown")
-          .font(.system(size: 34, weight: .regular))
-          .foregroundStyle(MIRATheme.Color.textPrimary)
-          .frame(width: 70, height: 54)
-      }
-      .buttonStyle(.miraPress)
-      .accessibilityLabel("Not interested")
-
-      Spacer(minLength: 18)
-
-      ShareLink(item: shareURL(for: model.post), subject: Text(model.post.titleText), message: Text(captionText)) {
-        Image(systemName: "arrowshape.turn.up.right")
-          .font(.system(size: 34, weight: .regular))
-          .foregroundStyle(MIRATheme.Color.textPrimary)
-          .frame(width: 58, height: 54)
-      }
-      .buttonStyle(.miraPress)
+      Spacer(minLength: 24)
 
       Button {
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
@@ -956,39 +933,6 @@ public struct DiscoverPostDetailNativeView: View {
     }
   }
 
-  private var bottomNowPlayingPanel: some View {
-    HStack(spacing: 14) {
-      Image(systemName: "dot.radiowaves.left.and.right")
-        .font(.system(size: 26, weight: .semibold))
-        .foregroundStyle(MIRATheme.Color.textPrimary)
-        .frame(width: 42, height: 42)
-
-      VStack(alignment: .leading, spacing: 3) {
-        Text(bottomPanelTitle)
-          .font(.system(size: 17, weight: .semibold))
-          .foregroundStyle(MIRATheme.Color.textPrimary)
-          .lineLimit(1)
-        Text(bottomPanelSubtitle)
-          .font(.system(size: 15, weight: .regular))
-          .foregroundStyle(MIRATheme.Color.textSecondary)
-          .lineLimit(1)
-      }
-      Spacer(minLength: 8)
-      Image(systemName: "chevron.up")
-        .font(.system(size: 22, weight: .semibold))
-        .foregroundStyle(MIRATheme.Color.textPrimary)
-    }
-    .padding(.horizontal, MIRATheme.Space.md)
-    .padding(.vertical, 11)
-    .background(.ultraThinMaterial)
-    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-    .overlay {
-      RoundedRectangle(cornerRadius: 18, style: .continuous)
-        .stroke(MIRATheme.Color.hairline, lineWidth: 1)
-    }
-    .modifier(MIRATheme.floatingShadow())
-  }
-
   private var displayMediaURLs: [String] {
     let feed = model.post.feedMediaURLs
     return feed.isEmpty ? model.post.mediaURLs : feed
@@ -1017,23 +961,6 @@ public struct DiscoverPostDetailNativeView: View {
     let clean = captionText.replacingOccurrences(of: "\n", with: " ")
     guard clean.count > 82 else { return clean }
     return String(clean.prefix(82)).trimmingCharacters(in: .whitespacesAndNewlines)
-  }
-
-  private var bottomPanelTitle: String {
-    if let title = model.post.audioDisplayTitle {
-      return "Next: \(title)"
-    }
-    if let category = model.post.primaryCategory ?? model.post.category {
-      return "Next: \(category.capitalized) moments"
-    }
-    return "Next: Discover more"
-  }
-
-  private var bottomPanelSubtitle: String {
-    if let artist = model.post.audioDisplayArtist {
-      return "Mix - \(artist)"
-    }
-    return "Mix - Captro Discover"
   }
 
   private func isVideo(at index: Int, url: String) -> Bool {
