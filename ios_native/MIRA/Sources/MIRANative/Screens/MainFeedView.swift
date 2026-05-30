@@ -1282,8 +1282,8 @@ private struct MainNativePostCard: View {
     }
     .lineLimit(1)
     .padding(.horizontal, MIRATheme.Space.md)
-    .padding(.top, 4)
-    .padding(.bottom, hasCaptionContent ? 0 : 8)
+    .padding(.top, 2)
+    .padding(.bottom, hasCaptionContent ? 0 : 7)
   }
 
   private var engagementButtons: some View {
@@ -1317,7 +1317,7 @@ private struct MainNativePostCard: View {
   }
 
   private var captionBlock: some View {
-    VStack(alignment: .leading, spacing: 4) {
+    VStack(alignment: .leading, spacing: 3) {
       if let headlineText {
         Text(headlineText)
           .font(.system(size: 18, weight: .semibold))
@@ -1364,8 +1364,8 @@ private struct MainNativePostCard: View {
       }
     }
     .padding(.horizontal, MIRATheme.Space.md)
-    .padding(.top, 2)
-    .padding(.bottom, 10)
+    .padding(.top, 0)
+    .padding(.bottom, 8)
   }
 
   private var hasCaptionContent: Bool {
@@ -1584,10 +1584,7 @@ private struct MainNativePostCard: View {
   }
 
   private var authorSubtitle: String? {
-    let username = cleanedUsername(post.userUsername)
-    let location = cleanedLocation(post.displayLocationText)
-    let parts = [username, location].compactMap { $0 }
-    return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    cleanedLocation(post.displayLocationText)
   }
 
   private func cleanedLocation(_ value: String?) -> String? {
@@ -1596,14 +1593,6 @@ private struct MainNativePostCard: View {
       .replacingOccurrences(of: #"\s*,\s*"#, with: ", ", options: .regularExpression) ?? ""
     guard !clean.isEmpty else { return nil }
     return clean
-  }
-
-  private func cleanedUsername(_ value: String?) -> String? {
-    let clean = value?
-      .trimmingCharacters(in: .whitespacesAndNewlines)
-      .replacingOccurrences(of: "^@+", with: "", options: .regularExpression) ?? ""
-    guard !clean.isEmpty else { return nil }
-    return "@\(clean)"
   }
 
   private func debugTap(_ action: String) {

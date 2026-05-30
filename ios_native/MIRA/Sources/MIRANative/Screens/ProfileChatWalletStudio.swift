@@ -1231,7 +1231,6 @@ public struct ChatNativeView: View {
           .shadow(color: .black.opacity(0.04), radius: 12, y: 4)
       }
       .buttonStyle(.plain)
-      MIRAHeaderCircleButton(systemImage: "magnifyingglass", size: 44)
     }
     .padding(.horizontal, MIRATheme.Space.md)
   }

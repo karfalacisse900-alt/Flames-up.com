@@ -5452,10 +5452,17 @@ function mapboxFeatureToPlace(feature: any, fallbackId: string) {
 }
 
 function mapboxContextName(context: any, key: string): string {
-  const value = context?.[key];
+  let value = context?.[key];
+  if (!value && Array.isArray(context)) {
+    value = context.find((entry: any) => {
+      const id = cleanText(entry?.id || entry?.mapbox_id || '', 120).toLowerCase();
+      const type = cleanText(entry?.feature_type || entry?.type || '', 60).toLowerCase();
+      return type === key || id.startsWith(`${key}.`) || id.includes(`.${key}.`);
+    });
+  }
   if (!value) return '';
   if (typeof value === 'string') return cleanText(value, 80);
-  return cleanText(value.name || value.text || value.name_preferred || '', 80);
+  return cleanText(value.name || value.text || value.name_preferred || value.properties?.name || '', 80);
 }
 
 function mapboxFeatureToBroadLocation(feature: any) {
@@ -5463,11 +5470,23 @@ function mapboxFeatureToBroadLocation(feature: any) {
   const context = properties.context || {};
   const featureType = cleanText(properties.feature_type || properties.type || '', 40).toLowerCase();
   const name = cleanText(properties.name || properties.name_preferred || '', 80);
-  const city = featureType === 'place' || featureType === 'locality'
-    ? name
-    : (mapboxContextName(context, 'place') || mapboxContextName(context, 'locality') || name);
-  const region = mapboxContextName(context, 'region');
-  const country = mapboxContextName(context, 'country');
+  const cityFromContext = mapboxContextName(context, 'place')
+    || mapboxContextName(context, 'locality')
+    || mapboxContextName(context, 'neighborhood');
+  let city = cityFromContext;
+  let region = mapboxContextName(context, 'region');
+  let country = mapboxContextName(context, 'country');
+
+  if (['place', 'locality', 'neighborhood'].includes(featureType)) {
+    city = name || city;
+  } else if (featureType === 'region') {
+    region = name || region;
+  } else if (featureType === 'country') {
+    country = name || country;
+  } else if (!city && name) {
+    city = name;
+  }
+
   const label = normalizeDisplayLocationLabel(city, region, country, '');
   return {
     city,
@@ -14816,7 +14835,7 @@ async function mapboxCitySearchHandler(c: any) {
       q: query,
       language: 'en',
       limit: '8',
-      types: 'place,region,country',
+      types: 'place,locality,neighborhood,region,country',
       access_token: token,
     });
     const proximity = cleanText(c.req.query('proximity'), 80);
@@ -14848,7 +14867,7 @@ async function mapboxReverseBroadLocationHandler(c: any) {
       latitude: String(lat),
       longitude: String(lng),
       language: 'en',
-      types: 'place,region,country',
+      types: 'place,locality,neighborhood,region,country',
       access_token: token,
     });
     const res = await fetch(`${MAPBOX_GEOCODING_API_BASE}/reverse?${params.toString()}`);

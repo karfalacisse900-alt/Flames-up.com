@@ -1502,7 +1502,8 @@ public struct CreatePostNativeView: View {
       broadLocationError = nil
     } catch {
       broadLocation = previousLocation
-      broadLocationError = "City/country could not load."
+      let message = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+      broadLocationError = message.isEmpty ? "Mapbox city/country could not load." : message
     }
   }
 
