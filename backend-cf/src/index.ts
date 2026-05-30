@@ -4172,7 +4172,7 @@ function feedDeliveryUrl(url: string, mediaType: string, variant: string, env?: 
 function posterDeliveryUrl(url: string, mediaType: string, variant: string, env?: Env): string {
   if (!url) return '';
   if (mediaType !== 'video') return cloudflareTransformedImageUrl(env, replaceCloudflareImageVariant(url, variant), 'thumbnail');
-  return url;
+  return streamThumbnailUrl(url);
 }
 
 function cloudflareStreamUid(url: string): string {

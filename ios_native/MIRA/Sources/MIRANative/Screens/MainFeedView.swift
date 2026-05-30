@@ -1162,6 +1162,7 @@ private struct MainNativePostCard: View {
         url: url,
         isVideo: url.isVideoURL,
         placeholderURL: mediaPlaceholderURL(for: 0, mediaURL: url),
+        fallbackURL: mediaFallbackURL(for: 0, mediaURL: url),
         contentMode: .fill,
         shouldPlay: isVideoActive,
         maxPixelSize: MIRAMediaSizing.feedTargetHeight,
@@ -1180,6 +1181,7 @@ private struct MainNativePostCard: View {
               url: url,
               isVideo: url.isVideoURL,
               placeholderURL: mediaPlaceholderURL(for: index, mediaURL: url),
+              fallbackURL: mediaFallbackURL(for: index, mediaURL: url),
               contentMode: .fill,
               shouldPlay: isVideoActive && selectedMediaIndex == index,
               maxPixelSize: MIRAMediaSizing.feedTargetHeight,
@@ -1295,6 +1297,14 @@ private struct MainNativePostCard: View {
     let candidate = mediaURL.isVideoURL ? (poster ?? thumbnail) : (thumbnail ?? poster)
     let trimmed = candidate?.trimmingCharacters(in: .whitespacesAndNewlines)
     guard let trimmed, !trimmed.isEmpty, trimmed != mediaURL else { return nil }
+    return trimmed
+  }
+
+  private func mediaFallbackURL(for index: Int, mediaURL: String) -> String? {
+    let originals = post.mediaURLs
+    guard originals.indices.contains(index) else { return nil }
+    let trimmed = originals[index].trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty, trimmed != mediaURL, !trimmed.isVideoURL else { return nil }
     return trimmed
   }
 

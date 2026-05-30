@@ -492,6 +492,7 @@ private actor MIRAImageLoadPipeline {
 
 public struct MIRACachedImage<Content: View, Placeholder: View>: View {
   let url: String?
+  let fallbackURLs: [String]
   let maxPixelSize: CGFloat
   let onImageLoaded: (UIImage) -> Void
   let content: (Image) -> Content
@@ -503,12 +504,14 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
 
   public init(
     url: String?,
+    fallbackURLs: [String] = [],
     maxPixelSize: CGFloat = MIRAMediaSizing.feedTargetHeight,
     onImageLoaded: @escaping (UIImage) -> Void = { _ in },
     @ViewBuilder content: @escaping (Image) -> Content,
     @ViewBuilder placeholder: @escaping () -> Placeholder
   ) {
     self.url = url
+    self.fallbackURLs = fallbackURLs
     self.maxPixelSize = maxPixelSize
     self.onImageLoaded = onImageLoaded
     self.content = content
@@ -526,17 +529,38 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
         placeholder()
       }
     }
-    .task(id: url) { await loadImage() }
+    .task(id: loadTaskID) { await loadImage() }
   }
 
   private var memoryImageForCurrentURL: UIImage? {
-    guard let url, let remoteURL = URL(string: url) else { return nil }
-    return MIRAImageMemoryCache.shared.image(for: remoteURL, maxPixelSize: max(64, maxPixelSize))
+    let resolvedMaxPixelSize = max(64, maxPixelSize)
+    for remoteURL in candidateURLs {
+      if let image = MIRAImageMemoryCache.shared.image(for: remoteURL, maxPixelSize: resolvedMaxPixelSize) {
+        return image
+      }
+    }
+    return nil
+  }
+
+  private var loadTaskID: String {
+    candidateURLStrings.joined(separator: "|")
+  }
+
+  private var candidateURLStrings: [String] {
+    var seen = Set<String>()
+    return ([url ?? ""] + fallbackURLs)
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { !$0.isEmpty && seen.insert($0).inserted }
+  }
+
+  private var candidateURLs: [URL] {
+    candidateURLStrings.compactMap { URL(string: $0) }
   }
 
   @MainActor
   private func loadImage() async {
-    guard let url, let remoteURL = URL(string: url) else {
+    let remoteURLs = candidateURLs
+    guard !remoteURLs.isEmpty else {
       await MainActor.run {
         uiImage = nil
         loadedURL = nil
@@ -545,25 +569,33 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
     }
 
     let isAlreadyLoaded = await MainActor.run {
-      loadedURL == remoteURL && uiImage != nil
+      if let loadedURL {
+        return remoteURLs.contains(loadedURL) && uiImage != nil
+      }
+      return false
     }
     if isAlreadyLoaded { return }
 
     let resolvedMaxPixelSize = max(64, maxPixelSize)
 
-    if let memoryImage = MIRAImageMemoryCache.shared.image(for: remoteURL, maxPixelSize: resolvedMaxPixelSize) {
-      await MainActor.run {
-        uiImage = memoryImage
-        loadedURL = remoteURL
-        isImageVisible = true
-        onImageLoaded(memoryImage)
+    for remoteURL in remoteURLs {
+      if let memoryImage = MIRAImageMemoryCache.shared.image(for: remoteURL, maxPixelSize: resolvedMaxPixelSize) {
+        await MainActor.run {
+          uiImage = memoryImage
+          loadedURL = remoteURL
+          isImageVisible = true
+          onImageLoaded(memoryImage)
+        }
+        MIRAApplePerformanceLogger.event("media_cache_hit", detail: "memory_sync")
+        return
       }
-      MIRAApplePerformanceLogger.event("media_cache_hit", detail: "memory_sync")
-      return
     }
 
     let shouldClear = await MainActor.run {
-      loadedURL != remoteURL
+      if let loadedURL {
+        return !remoteURLs.contains(loadedURL)
+      }
+      return true
     }
     if shouldClear {
       await MainActor.run {
@@ -572,38 +604,52 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
       }
     }
 
-    if let result = await MIRAImageLoadPipeline.shared.image(for: remoteURL, maxPixelSize: resolvedMaxPixelSize) {
-      guard !Task.isCancelled else { return }
-      await MainActor.run {
-        uiImage = result.image
-        loadedURL = remoteURL
-        if result.source == .network {
-          withAnimation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion)) {
+    for remoteURL in remoteURLs {
+      if let result = await MIRAImageLoadPipeline.shared.image(for: remoteURL, maxPixelSize: resolvedMaxPixelSize) {
+        guard !Task.isCancelled else { return }
+        await MainActor.run {
+          uiImage = result.image
+          loadedURL = remoteURL
+          if result.source == .network {
+            withAnimation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion)) {
+              isImageVisible = true
+            }
+          } else {
             isImageVisible = true
           }
-        } else {
-          isImageVisible = true
+          onImageLoaded(result.image)
         }
-        onImageLoaded(result.image)
-      }
-      let detail: String
-      switch result.source {
-      case .memory: detail = "memory"
-      case .disk: detail = "disk"
-      case .network: detail = "network"
-      }
-      MIRAPerformanceTimeline.markOnce("time_to_first_thumbnail", detail: detail)
-    } else {
-      let shouldClear = await MainActor.run {
-        loadedURL != remoteURL
-      }
-      if shouldClear {
-        await MainActor.run {
-          uiImage = nil
-          isImageVisible = false
+        let detail: String
+        switch result.source {
+        case .memory: detail = "memory"
+        case .disk: detail = "disk"
+        case .network: detail = isPrimaryCandidate(remoteURL, in: remoteURLs) ? "network" : "fallback_network"
         }
+        MIRAPerformanceTimeline.markOnce("time_to_first_thumbnail", detail: detail)
+        return
+      }
+      if !isPrimaryCandidate(remoteURL, in: remoteURLs) {
+        MIRAApplePerformanceLogger.event("media_cache_miss", detail: "fallback_failed")
       }
     }
+
+    let shouldClearAfterFailure = await MainActor.run {
+      if let loadedURL {
+        return !remoteURLs.contains(loadedURL)
+      }
+      return true
+    }
+    if shouldClearAfterFailure {
+      await MainActor.run {
+        uiImage = nil
+        isImageVisible = false
+      }
+    }
+  }
+
+  private func isPrimaryCandidate(_ remoteURL: URL, in remoteURLs: [URL]) -> Bool {
+    guard let first = remoteURLs.first else { return false }
+    return remoteURL == first
   }
 }
 
@@ -747,6 +793,7 @@ public struct RemoteMediaView: View {
   let url: String
   let isVideo: Bool
   let placeholderURL: String?
+  let fallbackURL: String?
   let contentMode: ContentMode
   let shouldPlay: Bool
   let maxPixelSize: CGFloat
@@ -759,6 +806,7 @@ public struct RemoteMediaView: View {
     url: String,
     isVideo: Bool,
     placeholderURL: String? = nil,
+    fallbackURL: String? = nil,
     contentMode: ContentMode = .fill,
     shouldPlay: Bool = false,
     maxPixelSize: CGFloat = MIRAMediaSizing.feedTargetHeight,
@@ -770,6 +818,7 @@ public struct RemoteMediaView: View {
     self.url = url
     self.isVideo = isVideo
     self.placeholderURL = placeholderURL
+    self.fallbackURL = fallbackURL
     self.contentMode = contentMode
     self.shouldPlay = shouldPlay
     self.maxPixelSize = maxPixelSize
@@ -808,7 +857,7 @@ public struct RemoteMediaView: View {
               Color.clear
             }
           }
-          MIRACachedImage(url: url, maxPixelSize: maxPixelSize, onImageLoaded: reportRatio) { image in
+          MIRACachedImage(url: url, fallbackURLs: resolvedFallbackURLs, maxPixelSize: maxPixelSize, onImageLoaded: reportRatio) { image in
             image.resizable().aspectRatio(contentMode: contentMode)
           } placeholder: {
             Color.clear
@@ -842,6 +891,12 @@ public struct RemoteMediaView: View {
     let trimmed = placeholderURL?.trimmingCharacters(in: .whitespacesAndNewlines)
     guard let trimmed, !trimmed.isEmpty, trimmed != url else { return nil }
     return trimmed
+  }
+
+  private var resolvedFallbackURLs: [String] {
+    let trimmed = fallbackURL?.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let trimmed, !trimmed.isEmpty, trimmed != url, trimmed != resolvedPlaceholderURL else { return [] }
+    return [trimmed]
   }
 
   private func reportRatio(_ image: UIImage) {

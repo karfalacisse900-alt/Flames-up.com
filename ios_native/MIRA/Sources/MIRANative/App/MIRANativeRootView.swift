@@ -191,6 +191,7 @@ public struct MIRANativeRootView: View {
   @State private var selectedTab: MIRATab = .main
   @State private var loadedTabs: Set<MIRATab> = [.main]
   @State private var isPrivacyShieldVisible = false
+  @State private var featureStatusBarHidden = false
   @StateObject private var authSession: MIRAAuthSession
   @StateObject private var startup: MIRAStartupCoordinator
   @StateObject private var callCoordinator: MIRAAppCallCoordinator
@@ -239,7 +240,10 @@ public struct MIRANativeRootView: View {
     }
     .background(MIRATheme.Color.launchBackground.ignoresSafeArea())
     .environmentObject(localization)
-    .statusBarHidden(startup.isSplashMounted || (authSession.user != nil && selectedTab == .main))
+    .statusBarHidden(shouldHideStatusBar)
+    .onPreferenceChange(MIRAStatusBarHiddenPreferenceKey.self) { hidden in
+      featureStatusBarHidden = hidden
+    }
     .onAppear {
       MIRAMainThreadStallMonitor.shared.start()
       MIRAPerformanceTimeline.markOnce("time_to_first_screen")
@@ -283,6 +287,10 @@ public struct MIRANativeRootView: View {
       get: { callCoordinator.activeCall },
       set: { callCoordinator.activeCall = $0 }
     )
+  }
+
+  private var shouldHideStatusBar: Bool {
+    startup.isSplashMounted || featureStatusBarHidden || (authSession.user != nil && selectedTab == .main)
   }
 
   @ViewBuilder

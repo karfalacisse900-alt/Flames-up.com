@@ -167,6 +167,18 @@ public extension View {
   func miraHideTabBarOnAppear() -> some View {
     modifier(MIRAHideTabBarModifier())
   }
+
+  func miraStatusBarHidden(_ hidden: Bool) -> some View {
+    preference(key: MIRAStatusBarHiddenPreferenceKey.self, value: hidden)
+  }
+}
+
+struct MIRAStatusBarHiddenPreferenceKey: PreferenceKey {
+  static var defaultValue = false
+
+  static func reduce(value: inout Bool, nextValue: () -> Bool) {
+    value = value || nextValue()
+  }
 }
 
 private struct MIRAHideTabBarModifier: ViewModifier {

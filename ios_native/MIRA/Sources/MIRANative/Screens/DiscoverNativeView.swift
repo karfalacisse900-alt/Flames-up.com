@@ -301,7 +301,7 @@ public struct DiscoverNativeView: View {
       .miraScreenEnter(.tab)
       .toolbar(.hidden, for: .navigationBar)
       .toolbar((selectedStoryGroup == nil && !isReportSheetPresented) ? .visible : .hidden, for: .tabBar)
-      .statusBarHidden(selectedStoryGroup != nil)
+      .miraStatusBarHidden(selectedStoryGroup != nil)
       .task { await model.load() }
       .miraFullScreenOverlay(item: $selectedStoryGroup, background: .black) { group, dismissStory in
         StoryViewerNativeView(
@@ -681,7 +681,7 @@ private struct StoryViewerNativeView: View {
     .opacity(isCanvasVisible ? 1 : 0.001)
     .scaleEffect(reduceMotion || isCanvasVisible ? 1 : 0.992)
     .animation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion), value: isCanvasVisible)
-    .statusBarHidden(true)
+    .miraStatusBarHidden(true)
     .onAppear {
       withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
         isCanvasVisible = true
