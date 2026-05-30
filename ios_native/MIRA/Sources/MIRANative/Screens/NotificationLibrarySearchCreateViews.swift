@@ -331,7 +331,7 @@ public struct LibraryNativeView: View {
   }
 
   private func postGrid(posts: [MIRAPost]) -> some View {
-    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 2), spacing: 10) {
+    LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 0), spacing: 10), count: 2), spacing: 10) {
       ForEach(posts) { post in
         libraryPostTile(post)
       }
@@ -342,9 +342,12 @@ public struct LibraryNativeView: View {
   private func libraryPostTile(_ post: MIRAPost) -> some View {
     NavigationLink(destination: PostDetailNativeView(post: post, api: model.api)) {
       ZStack(alignment: .bottomLeading) {
+        MIRATheme.Color.mediaPlaceholder
+
         if let media = post.thumbnailMediaURLs.first ?? post.feedMediaURLs.first {
           RemoteMediaView(url: media, isVideo: media.isVideoURL)
-            .aspectRatio(3.0 / 4.0, contentMode: .fill)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipped()
         } else {
           ZStack {
             MIRATheme.Color.surfaceSoft
@@ -355,7 +358,6 @@ public struct LibraryNativeView: View {
               .multilineTextAlignment(.leading)
               .padding(12)
           }
-          .aspectRatio(3.0 / 4.0, contentMode: .fill)
         }
 
         LinearGradient(colors: [.clear, .black.opacity(0.52)], startPoint: .center, endPoint: .bottom)
@@ -368,8 +370,11 @@ public struct LibraryNativeView: View {
           .padding(10)
           .shadow(radius: 4)
       }
+      .aspectRatio(3.0 / 4.0, contentMode: .fit)
+      .frame(maxWidth: .infinity)
       .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
       .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(MIRATheme.Color.hairline, lineWidth: 1))
+      .clipped()
     }
     .buttonStyle(.plain)
   }
@@ -1231,19 +1236,6 @@ public struct CreatePostNativeView: View {
       Toggle("", isOn: $showBroadLocation)
         .labelsHidden()
         .disabled(broadLocationResolver.isResolving)
-
-      Button {
-        activePostDetailSheet = .city
-      } label: {
-        Text("Change")
-          .font(.system(size: 13, weight: .bold))
-          .foregroundStyle(MIRATheme.Color.forest)
-          .padding(.horizontal, 11)
-          .frame(height: 34)
-          .background(MIRATheme.Color.forestSoft)
-          .clipShape(Capsule())
-      }
-      .buttonStyle(.plain)
     }
     .frame(minHeight: 72)
     .overlay(alignment: .bottom) {
@@ -1472,9 +1464,11 @@ public struct CreatePostNativeView: View {
   @MainActor
   private func resolveCurrentBroadLocationForPost() async {
     broadLocationError = nil
+    let previousLocation = broadLocation
     guard let location = await broadLocationResolver.resolveCurrentLocation() else {
-      showBroadLocation = broadLocation.hasVisibleLabel
-      broadLocationError = "Location permission is needed."
+      showBroadLocation = false
+      broadLocation = previousLocation
+      broadLocationError = "Allow location to show your city/country."
       return
     }
 
@@ -1483,7 +1477,8 @@ public struct CreatePostNativeView: View {
     do {
       let response: MIRABroadLocationReverseResponse = try await api.get("/mapbox-locations/reverse?lat=\(lat)&lng=\(lng)")
       guard let resolved = response.location?.displayLocation, resolved.hasVisibleLabel else {
-        showBroadLocation = broadLocation.hasVisibleLabel
+        showBroadLocation = false
+        broadLocation = previousLocation
         broadLocationError = "Could not find your city."
         return
       }
@@ -1491,7 +1486,8 @@ public struct CreatePostNativeView: View {
       showBroadLocation = true
       broadLocationError = nil
     } catch {
-      showBroadLocation = broadLocation.hasVisibleLabel
+      showBroadLocation = false
+      broadLocation = previousLocation
       broadLocationError = "City/country could not load."
     }
   }

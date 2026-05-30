@@ -1266,14 +1266,14 @@ private struct MainNativePostCard: View {
 
   private var actionRow: some View {
     ViewThatFits(in: .horizontal) {
-      HStack(spacing: MIRATheme.Space.sm) {
+      HStack(spacing: 4) {
         engagementButtons
-        Spacer(minLength: MIRATheme.Space.xs)
+        Spacer(minLength: 4)
         captionExpansionButton
       }
 
-      VStack(alignment: .leading, spacing: 4) {
-        HStack(spacing: MIRATheme.Space.sm) {
+      VStack(alignment: .leading, spacing: 2) {
+        HStack(spacing: 4) {
           engagementButtons
           Spacer(minLength: 0)
         }
@@ -1282,12 +1282,12 @@ private struct MainNativePostCard: View {
     }
     .lineLimit(1)
     .padding(.horizontal, MIRATheme.Space.md)
-    .padding(.top, MIRATheme.Space.sm)
-    .padding(.bottom, hasCaptionContent ? MIRATheme.Space.xs : MIRATheme.Space.md)
+    .padding(.top, 4)
+    .padding(.bottom, hasCaptionContent ? 0 : 8)
   }
 
   private var engagementButtons: some View {
-    HStack(spacing: MIRATheme.Space.sm) {
+    HStack(spacing: 2) {
       CompactPostAction(systemImage: post.isLiked == true ? "heart.fill" : "heart", value: post.likesCount ?? 0, tint: post.isLiked == true ? MIRATheme.Color.like : MIRATheme.Color.textSecondary) {
         debugTap("tap_like")
         onLike()
@@ -1317,10 +1317,10 @@ private struct MainNativePostCard: View {
   }
 
   private var captionBlock: some View {
-    VStack(alignment: .leading, spacing: 6) {
+    VStack(alignment: .leading, spacing: 4) {
       if let headlineText {
         Text(headlineText)
-          .font(.system(size: 20, weight: .semibold))
+          .font(.system(size: 18, weight: .semibold))
           .foregroundStyle(MIRATheme.Color.textPrimary)
           .lineLimit(isShowingCaption ? nil : 1)
           .truncationMode(.tail)
@@ -1329,8 +1329,8 @@ private struct MainNativePostCard: View {
 
       if let captionBodyText {
         Text(captionBodyText)
-          .font(.system(size: 15, weight: .regular))
-          .lineSpacing(3)
+          .font(.system(size: 14, weight: .regular))
+          .lineSpacing(2)
           .foregroundStyle(MIRATheme.Color.textSecondary)
           .lineLimit(isShowingCaption ? nil : 2)
           .truncationMode(.tail)
@@ -1364,8 +1364,8 @@ private struct MainNativePostCard: View {
       }
     }
     .padding(.horizontal, MIRATheme.Space.md)
-    .padding(.top, MIRATheme.Space.xs)
-    .padding(.bottom, MIRATheme.Space.md)
+    .padding(.top, 2)
+    .padding(.bottom, 10)
   }
 
   private var hasCaptionContent: Bool {
@@ -2129,17 +2129,17 @@ private struct CompactPostAction: View {
       UIImpactFeedbackGenerator(style: .light).impactOccurred()
       action()
     } label: {
-      HStack(spacing: 5) {
+      HStack(spacing: 3) {
         Image(systemName: systemImage)
-          .font(.system(size: 19, weight: .regular))
+          .font(.system(size: 18, weight: .regular))
         Text(compact(value))
-          .font(.system(size: 12, weight: .medium))
+          .font(.system(size: 11, weight: .medium))
           .lineLimit(1)
           .minimumScaleFactor(0.78)
       }
       .foregroundStyle(tint)
-      .frame(minWidth: 44, minHeight: 44)
-      .padding(.horizontal, 2)
+      .frame(minWidth: 40, minHeight: 38)
+      .padding(.horizontal, 1)
       .contentShape(Rectangle())
     }
     .buttonStyle(.miraPress)
@@ -2170,8 +2170,8 @@ private struct CompactTextAction: View {
           .minimumScaleFactor(0.82)
       }
       .foregroundStyle(MIRATheme.Color.forest)
-      .frame(minWidth: 44, minHeight: 44)
-      .padding(.horizontal, MIRATheme.Space.md)
+      .frame(minWidth: 40, minHeight: 34)
+      .padding(.horizontal, 10)
       .background(MIRATheme.Color.surfaceSoft)
       .clipShape(Capsule())
       .contentShape(Rectangle())
