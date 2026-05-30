@@ -77,19 +77,25 @@ final class MainFeedModel: ObservableObject {
       return
     }
     let sorted = await sortedByNativeScore(loaded)
-    if posts != sorted {
-      posts = sorted
+    let merged = await MIRAAppCacheStore.shared.mergePostsPreservingVisibleState(existing: posts, fresh: sorted)
+    if posts != merged {
+      posts = merged
     }
     canLoadMore = loaded.count >= firstPageLimit
-    await MIRALocalJSONCache.save(sorted, key: feedCacheKey)
+    await MIRAAppCacheStore.shared.saveFeed(posts)
     MIRAPerformanceTimeline.markOnce("time_to_first_real_home_item", detail: "network")
     errorMessage = nil
     prefetchInitialMediaWindow()
-    prefetchNextPageIfNeeded(afterInitialCount: sorted.count)
+    prefetchNextPageIfNeeded(afterInitialCount: posts.count)
   }
 
   private func hydrateCachedFeedIfNeeded() async {
-    guard posts.isEmpty, let cached: [MIRAPost] = await MIRALocalJSONCache.load([MIRAPost].self, key: feedCacheKey) else { return }
+    guard posts.isEmpty else { return }
+    var cached = await MIRAAppCacheStore.shared.loadFeed()
+    if cached == nil {
+      cached = await MIRALocalJSONCache.load([MIRAPost].self, key: feedCacheKey, maxAge: 60 * 60 * 24 * 30)
+    }
+    guard let cached else { return }
     // Cached feed is already stored in display order, so show it immediately.
     posts = cached
     MIRAPerformanceTimeline.markOnce("time_to_first_real_home_item", detail: "cache")
@@ -527,7 +533,7 @@ final class MainFeedModel: ObservableObject {
 
   private func cacheCurrentPosts() {
     let snapshot = posts
-    Task { await MIRALocalJSONCache.save(snapshot, key: feedCacheKey) }
+    Task { await MIRAAppCacheStore.shared.saveFeed(snapshot) }
   }
 
   private func publishEngagement(for post: MIRAPost) {

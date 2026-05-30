@@ -30,19 +30,26 @@ final class PostDetailModel: ObservableObject {
   }
 
   func loadComments() async {
-    isLoadingComments = true
+    if comments.isEmpty, let cached = await MIRAAppCacheStore.shared.loadComments(postId: post.id) {
+      comments = cached
+      isLoadingComments = false
+    }
+    isLoadingComments = comments.isEmpty
     defer { isLoadingComments = false }
     do {
       await loadCurrentUserIfNeeded()
       let loaded: [MIRAComment] = try await api.get("/posts/\(post.id)/comments")
-      comments = loaded
-      let nextCount = loaded.count
+      comments = await MIRAAppCacheStore.shared.mergeComments(existing: comments, fresh: loaded)
+      await MIRAAppCacheStore.shared.saveComments(comments, postId: post.id)
+      let nextCount = comments.count
       if post.commentsCount != nextCount {
         post = post.updating(commentsCount: nextCount)
         publishEngagement()
       }
     } catch {
-      comments = []
+      if comments.isEmpty {
+        comments = []
+      }
     }
   }
 
@@ -52,6 +59,7 @@ final class PostDetailModel: ObservableObject {
     guard !clean.isEmpty else { return false }
     if let comment: MIRAComment = try? await api.post("/posts/\(post.id)/comments", body: PostCommentBody(content: clean, parentId: parentId)) {
       comments.append(comment)
+      await MIRAAppCacheStore.shared.saveComments(comments, postId: post.id)
       post = post.updating(commentsCount: max(comments.count, (post.commentsCount ?? 0) + 1))
       publishEngagement()
       return true
@@ -77,6 +85,7 @@ final class PostDetailModel: ObservableObject {
           liked: response.liked ?? nextLiked,
           likesCount: response.likesCount ?? nextCount
         )
+        await MIRAAppCacheStore.shared.saveComments(comments, postId: post.id)
       }
     } catch {
       if let currentIndex = comments.firstIndex(where: { $0.id == comment.id }) {
@@ -100,6 +109,7 @@ final class PostDetailModel: ObservableObject {
         if lhs.pinned != rhs.pinned { return lhs.pinned && !rhs.pinned }
         return (lhs.createdAt ?? "") < (rhs.createdAt ?? "")
       }
+      await MIRAAppCacheStore.shared.saveComments(comments, postId: post.id)
     } catch {}
   }
 
@@ -110,6 +120,7 @@ final class PostDetailModel: ObservableObject {
       let response: CommentMutationResponse = try await api.delete("/comments/\(comment.id)")
       let nextCount = response.commentsCount ?? max(0, (post.commentsCount ?? previous.count) - 1)
       post = post.updating(commentsCount: nextCount)
+      await MIRAAppCacheStore.shared.saveComments(comments, postId: post.id)
       publishEngagement()
     } catch {
       comments = previous
@@ -123,6 +134,7 @@ final class PostDetailModel: ObservableObject {
       let response: CommentMutationResponse = try await api.post("/comments/\(comment.id)/hide", body: EmptyBody())
       let nextCount = response.commentsCount ?? max(0, (post.commentsCount ?? previous.count) - 1)
       post = post.updating(commentsCount: nextCount)
+      await MIRAAppCacheStore.shared.saveComments(comments, postId: post.id)
       publishEngagement()
     } catch {
       comments = previous
@@ -145,10 +157,12 @@ final class PostDetailModel: ObservableObject {
 
   func removeCommentLocally(_ comment: MIRAComment) {
     comments.removeAll { $0.id == comment.id }
+    Task { await MIRAAppCacheStore.shared.saveComments(comments, postId: post.id) }
   }
 
   func removeComments(byUserId userId: String) {
     comments.removeAll { $0.userId == userId }
+    Task { await MIRAAppCacheStore.shared.saveComments(comments, postId: post.id) }
   }
 
   func blockCommentAuthor(_ comment: MIRAComment) async {

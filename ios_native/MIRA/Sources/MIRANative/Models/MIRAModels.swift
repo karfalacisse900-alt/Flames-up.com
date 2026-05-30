@@ -779,7 +779,7 @@ public struct MIRAStoryGroup: Codable, Identifiable, Hashable {
   }
 }
 
-public struct MIRAComment: Decodable, Identifiable, Hashable {
+public struct MIRAComment: Codable, Identifiable, Hashable {
   public let id: String
   public let userId: String?
   public let postId: String?
@@ -904,6 +904,23 @@ public struct MIRAComment: Decodable, Identifiable, Hashable {
         user = nil
       }
     }
+  }
+
+  public func encode(to encoder: Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(id, forKey: .id)
+    try container.encodeIfPresent(userId, forKey: .userId)
+    try container.encodeIfPresent(postId, forKey: .postId)
+    try container.encodeIfPresent(postUserId, forKey: .postUserId)
+    try container.encodeIfPresent(content, forKey: .content)
+    try container.encodeIfPresent(body, forKey: .body)
+    try container.encodeIfPresent(parentId, forKey: .parentId)
+    try container.encodeIfPresent(createdAt, forKey: .createdAt)
+    try container.encodeIfPresent(likesCount, forKey: .likesCount)
+    try container.encodeIfPresent(likedByMe, forKey: .likedByMe)
+    try container.encodeIfPresent(pinnedAt, forKey: .pinnedAt)
+    try container.encodeIfPresent(isPinned, forKey: .isPinned)
+    try container.encodeIfPresent(user, forKey: .user)
   }
 
   public func updating(liked: Bool? = nil, likesCount: Int? = nil, pinnedAt: String? = nil, clearPin: Bool = false) -> MIRAComment {
@@ -1279,7 +1296,7 @@ struct MIRAIncomingCallEnvelope: Decodable, Hashable {
   let call: MIRACallSession?
 }
 
-public struct MIRANotification: Decodable, Identifiable, Hashable {
+public struct MIRANotification: Codable, Identifiable, Hashable {
   public let id: String
   public let type: String?
   public let title: String?
@@ -1287,6 +1304,36 @@ public struct MIRANotification: Decodable, Identifiable, Hashable {
   public let data: FlexibleJSONText?
   public let isRead: FlexibleBool?
   public let createdAt: String?
+
+  public init(
+    id: String,
+    type: String?,
+    title: String?,
+    body: String?,
+    data: FlexibleJSONText?,
+    isRead: FlexibleBool?,
+    createdAt: String?
+  ) {
+    self.id = id
+    self.type = type
+    self.title = title
+    self.body = body
+    self.data = data
+    self.isRead = isRead
+    self.createdAt = createdAt
+  }
+
+  public func updatingRead(_ value: Bool) -> MIRANotification {
+    MIRANotification(
+      id: id,
+      type: type,
+      title: title,
+      body: body,
+      data: data,
+      isRead: FlexibleBool(value),
+      createdAt: createdAt
+    )
+  }
 }
 
 public struct MIRAAuthResponse: Decodable, Hashable {
@@ -1831,6 +1878,10 @@ public struct FlexibleMediaDimensions: Codable, Hashable {
 
 public struct FlexibleBool: Codable, Hashable {
   public let value: Bool
+
+  public init(_ value: Bool) {
+    self.value = value
+  }
 
   public init(from decoder: Decoder) throws {
     let container = try decoder.singleValueContainer()

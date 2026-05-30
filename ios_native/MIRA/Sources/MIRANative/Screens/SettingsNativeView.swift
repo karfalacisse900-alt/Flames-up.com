@@ -54,11 +54,18 @@ final class SettingsNativeModel: ObservableObject {
 
   func load() async {
     guard !isLoading else { return }
+    if user == nil, let cached = await MIRAAppCacheStore.shared.loadSettings() {
+      user = cached.user
+      isPrivate = cached.isPrivate
+      language = cached.language
+      email = cached.user?.email ?? email
+    }
     isLoading = true
     defer { isLoading = false }
     do {
       let fresh: MIRAUser = try await api.get("/auth/me")
       apply(user: fresh)
+      await MIRAAppCacheStore.shared.saveSettings(user: fresh, language: language, isPrivate: isPrivate)
       authSession?.replaceUser(fresh)
     } catch {
       if user == nil {
@@ -78,6 +85,7 @@ final class SettingsNativeModel: ObservableObject {
         body: SettingsProfileUpdateBody(isPrivate: value, language: nil)
       )
       apply(user: updated)
+      await MIRAAppCacheStore.shared.saveSettings(user: updated, language: language, isPrivate: isPrivate)
       authSession?.replaceUser(updated)
       show(value ? "Private account is on." : "Private account is off.")
     } catch {
@@ -99,6 +107,7 @@ final class SettingsNativeModel: ObservableObject {
         body: SettingsProfileUpdateBody(isPrivate: nil, language: backendLanguage)
       )
       apply(user: updated)
+      await MIRAAppCacheStore.shared.saveSettings(user: updated, language: value, isPrivate: isPrivate)
       authSession?.replaceUser(updated)
       language = value
       MIRALocalization.shared.setPreference(value)
@@ -124,6 +133,7 @@ final class SettingsNativeModel: ObservableObject {
         body: SettingsEmailBody(email: cleanEmail)
       )
       apply(user: updated)
+      await MIRAAppCacheStore.shared.saveSettings(user: updated, language: language, isPrivate: isPrivate)
       authSession?.replaceUser(updated)
       show("Email updated.")
       return true

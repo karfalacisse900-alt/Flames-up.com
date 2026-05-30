@@ -34,11 +34,13 @@ final class ProfileNativeModel: ObservableObject {
     if user != freshUser {
       user = freshUser
     }
+    await MIRAAppCacheStore.shared.saveCurrentProfile(freshUser)
     await MIRALocalJSONCache.save(freshUser, key: userCacheKey)
     let freshPosts: [MIRAPost] = (try? await api.get("/users/\(freshUser.id)/posts")) ?? posts
     if posts != freshPosts {
       posts = freshPosts
     }
+    await MIRAAppCacheStore.shared.saveProfilePosts(freshPosts, userId: freshUser.id)
     await MIRALocalJSONCache.save(freshPosts, key: postsCacheKey(for: freshUser.id))
   }
 
@@ -48,13 +50,23 @@ final class ProfileNativeModel: ObservableObject {
   }
 
   private func hydrateCachedProfileIfNeeded() async {
-    guard user == nil, let cachedUser: MIRAUser = await MIRALocalJSONCache.load(MIRAUser.self, key: userCacheKey) else { return }
+    guard user == nil else { return }
+    var cachedUser = await MIRAAppCacheStore.shared.loadCurrentProfile()
+    if cachedUser == nil {
+      cachedUser = await MIRALocalJSONCache.load(MIRAUser.self, key: userCacheKey, maxAge: 60 * 60 * 24 * 90)
+    }
+    guard let cachedUser else { return }
     user = cachedUser
-    posts = await MIRALocalJSONCache.load([MIRAPost].self, key: postsCacheKey(for: cachedUser.id)) ?? posts
+    var cachedPosts = await MIRAAppCacheStore.shared.loadProfilePosts(userId: cachedUser.id)
+    if cachedPosts == nil {
+      cachedPosts = await MIRALocalJSONCache.load([MIRAPost].self, key: postsCacheKey(for: cachedUser.id), maxAge: 60 * 60 * 24 * 90)
+    }
+    posts = cachedPosts ?? posts
   }
 
   func applyUpdatedUser(_ updated: MIRAUser) async {
     user = updated
+    await MIRAAppCacheStore.shared.saveCurrentProfile(updated)
     await MIRALocalJSONCache.save(updated, key: userCacheKey)
   }
 
@@ -64,6 +76,7 @@ final class ProfileNativeModel: ObservableObject {
     posts.removeAll { $0.id == post.id }
     do {
       let _: EmptyResponse = try await api.delete("/posts/\(post.id)")
+      await MIRAAppCacheStore.shared.saveProfilePosts(posts, userId: user.id)
       await MIRALocalJSONCache.save(posts, key: postsCacheKey(for: user.id))
       profileError = nil
     } catch {
@@ -82,6 +95,7 @@ final class ProfileNativeModel: ObservableObject {
       if let index = posts.firstIndex(where: { $0.id == post.id }) {
         posts[index] = updated
       }
+      await MIRAAppCacheStore.shared.saveProfilePosts(posts, userId: user.id)
       await MIRALocalJSONCache.save(posts, key: postsCacheKey(for: user.id))
       profileError = nil
     } catch {
@@ -104,6 +118,7 @@ final class ProfileNativeModel: ObservableObject {
         if lhs.isPinned != rhs.isPinned { return lhs.isPinned && !rhs.isPinned }
         return (lhs.createdAt ?? "") > (rhs.createdAt ?? "")
       }
+      await MIRAAppCacheStore.shared.saveProfilePosts(posts, userId: user.id)
       await MIRALocalJSONCache.save(posts, key: postsCacheKey(for: user.id))
       profileError = nil
     } catch {
@@ -310,9 +325,19 @@ final class UserProfileNativeModel: ObservableObject {
   }
 
   func load() async {
-    if user == nil, let cachedUser: MIRAUser = await MIRALocalJSONCache.load(MIRAUser.self, key: userCacheKey) {
-      apply(user: cachedUser)
-      posts = await MIRALocalJSONCache.load([MIRAPost].self, key: postsCacheKey) ?? posts
+    if user == nil {
+      var cachedUser = await MIRAAppCacheStore.shared.loadViewedProfile(userId: userId)
+      if cachedUser == nil {
+        cachedUser = await MIRALocalJSONCache.load(MIRAUser.self, key: userCacheKey, maxAge: 60 * 60 * 24 * 90)
+      }
+      if let cachedUser {
+        apply(user: cachedUser)
+        var cachedPosts = await MIRAAppCacheStore.shared.loadProfilePosts(userId: userId)
+        if cachedPosts == nil {
+          cachedPosts = await MIRALocalJSONCache.load([MIRAPost].self, key: postsCacheKey, maxAge: 60 * 60 * 24 * 90)
+        }
+        posts = cachedPosts ?? posts
+      }
     }
 
     isLoading = user == nil && posts.isEmpty
@@ -320,12 +345,14 @@ final class UserProfileNativeModel: ObservableObject {
 
     if let freshUser: MIRAUser = try? await api.get("/users/\(userId)") {
       apply(user: freshUser)
+      await MIRAAppCacheStore.shared.saveViewedProfile(freshUser, userId: userId)
       await MIRALocalJSONCache.save(freshUser, key: userCacheKey)
     }
     let freshPosts: [MIRAPost] = (try? await api.get("/users/\(userId)/posts")) ?? posts
     if posts != freshPosts {
       posts = freshPosts
     }
+    await MIRAAppCacheStore.shared.saveProfilePosts(freshPosts, userId: userId)
     await MIRALocalJSONCache.save(freshPosts, key: postsCacheKey)
   }
 

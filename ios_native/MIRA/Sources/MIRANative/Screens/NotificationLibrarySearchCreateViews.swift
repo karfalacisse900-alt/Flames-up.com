@@ -16,14 +16,24 @@ final class NotificationNativeModel: ObservableObject {
   }
 
   func load() async {
+    if notifications.isEmpty, let cached = await MIRAAppCacheStore.shared.loadNotifications() {
+      notifications = cached
+    }
     isLoading = notifications.isEmpty
     defer { isLoading = false }
     do {
-      notifications = try await api.get("/notifications?limit=60")
+      let fresh: [MIRANotification] = try await api.get("/notifications?limit=60")
+      if notifications != fresh {
+        notifications = fresh
+      }
+      await MIRAAppCacheStore.shared.saveNotifications(fresh)
       let _: EmptyResponse = try await api.post("/notifications/mark-read", body: EmptyBody())
+      notifications = await MIRAAppCacheStore.shared.markNotificationsRead(notifications)
       errorMessage = nil
     } catch {
-      errorMessage = "Notifications could not load."
+      if notifications.isEmpty {
+        errorMessage = "Notifications could not load."
+      }
     }
   }
 }
@@ -146,6 +156,7 @@ final class LibraryNativeModel: ObservableObject {
   @Published var errorMessage: String?
   let api: MIRAAPIClient
   private var postsBySection: [Section: [MIRAPost]] = [:]
+  private let countsCacheKey = "native.library.counts.v1.cache_first"
 
   init(api: MIRAAPIClient) {
     self.api = api
@@ -173,6 +184,11 @@ final class LibraryNativeModel: ObservableObject {
       errorMessage = nil
       return
     }
+    if !force, let cached: [MIRAPost] = await MIRALocalJSONCache.load([MIRAPost].self, key: sectionCacheKey(selectedSection), maxAge: 60 * 60 * 24 * 30) {
+      posts = cached
+      postsBySection[selectedSection] = cached
+      errorMessage = nil
+    }
     isLoading = true
     defer { isLoading = false }
     do {
@@ -187,6 +203,7 @@ final class LibraryNativeModel: ObservableObject {
       }
       posts = loaded
       postsBySection[selectedSection] = loaded
+      await MIRALocalJSONCache.save(loaded, key: sectionCacheKey(selectedSection))
       errorMessage = nil
     } catch {
       if posts.isEmpty {
@@ -196,6 +213,9 @@ final class LibraryNativeModel: ObservableObject {
   }
 
   private func loadCollectionCounts() async {
+    if collectionCounts.isEmpty, let cached: [String: Int] = await MIRALocalJSONCache.load([String: Int].self, key: countsCacheKey, maxAge: 60 * 60 * 24 * 30) {
+      collectionCounts = cached
+    }
     guard let collections: [MIRALibraryCollection] = try? await api.get("/library/collections") else { return }
     var counts: [String: Int] = [:]
     for item in collections {
@@ -204,11 +224,16 @@ final class LibraryNativeModel: ObservableObject {
       counts[name] = item.count ?? 0
     }
     collectionCounts = counts
+    await MIRALocalJSONCache.save(counts, key: countsCacheKey)
   }
 
   func count(for section: Section) -> Int {
     guard let collectionName = section.collectionName else { return 0 }
     return collectionCounts[collectionName] ?? 0
+  }
+
+  private func sectionCacheKey(_ section: Section) -> String {
+    "native.library.section.v1.cache_first.\(section.rawValue.lowercased())"
   }
 }
 
@@ -800,6 +825,8 @@ public struct CreatePostNativeView: View {
   @State private var postAssistResponse: MIRAPostAssistResponse?
   @State private var isGeneratingPostAssist = false
   @State private var postAssistError: String?
+  @State private var hasRestoredPostDraft = false
+  @State private var draftMediaSnapshots: [MIRAPostDraftMediaSnapshot] = []
 
   public init(api: MIRAAPIClient, onClose: (() -> Void)? = nil) {
     self.api = api
@@ -822,7 +849,19 @@ public struct CreatePostNativeView: View {
       MIRAPlaybackCoordinator.pauseAll(reason: "post_creation_open")
     }
     .task {
+      await restorePostDraftIfNeeded()
       await loadBroadLocationDefaultIfNeeded()
+    }
+    .onChange(of: title) { _, _ in cacheComposerDraft() }
+    .onChange(of: bodyText) { _, _ in cacheComposerDraft() }
+    .onChange(of: hashtags) { _, _ in cacheComposerDraft() }
+    .onChange(of: selectedAudioTrack) { _, _ in cacheComposerDraft() }
+    .onChange(of: selectedPlace) { _, _ in cacheComposerDraft() }
+    .onChange(of: broadLocation) { _, _ in cacheComposerDraft() }
+    .onChange(of: showBroadLocation) { _, _ in cacheComposerDraft() }
+    .onChange(of: mediaItems) { _, _ in
+      guard hasRestoredPostDraft else { return }
+      Task { await persistComposerDraft(uploadStatus: "draft", errorMessage: nil, includeMedia: true) }
     }
     .onChange(of: pickerItems) { _, newItems in
       Task { await loadPickerItems(newItems) }
@@ -1396,11 +1435,13 @@ public struct CreatePostNativeView: View {
         clientRequestId: UUID().uuidString
       )
       let _: MIRAPost = try await api.post("/posts", body: body)
+      await MIRAAppCacheStore.shared.clearPostDraft()
       MIRAPerformanceTimeline.mark("post_upload_complete", detail: "post")
       close()
     } catch {
       MIRAPerformanceTimeline.mark("post_upload_failed", detail: "post")
       errorMessage = "Post could not be created."
+      await persistComposerDraft(uploadStatus: "failed", errorMessage: "Post could not be created.", includeMedia: true)
     }
   }
 
@@ -1436,6 +1477,7 @@ public struct CreatePostNativeView: View {
     }
     mediaItems.append(contentsOf: loaded)
     if !loaded.isEmpty {
+      await persistComposerDraft(uploadStatus: "draft", errorMessage: nil, includeMedia: true)
       withAnimation(.snappy(duration: 0.2)) {
         isEditingPostDetails = true
       }
@@ -1445,6 +1487,7 @@ public struct CreatePostNativeView: View {
   private func addCapturedMediaAndContinue(_ media: MIRAPickedMedia) {
     editedCameraMedia = nil
     mediaItems.append(media)
+    Task { await persistComposerDraft(uploadStatus: "draft", errorMessage: nil, includeMedia: true) }
     withAnimation(.snappy(duration: 0.2)) {
       isEditingPostDetails = true
     }
@@ -1463,6 +1506,123 @@ public struct CreatePostNativeView: View {
       return MIRAEditorUploadMetadata(mediaIndex: index, metadata: editorMetadata)
     }
     return metadata.isEmpty ? nil : metadata
+  }
+
+  @MainActor
+  private func restorePostDraftIfNeeded() async {
+    guard !hasRestoredPostDraft else { return }
+    defer { hasRestoredPostDraft = true }
+    guard let draft = await MIRAAppCacheStore.shared.loadPostDraft() else { return }
+    title = draft.title
+    bodyText = draft.bodyText
+    hashtags = draft.hashtags
+    selectedAudioTrack = draft.selectedAudioTrack
+    draftMediaSnapshots = draft.media
+    if let place = draft.place {
+      selectedPlace = MIRAExactPostPlace(
+        provider: place.provider,
+        providerPlaceId: place.providerPlaceId,
+        name: place.name,
+        formattedAddress: place.formattedAddress,
+        latitude: place.latitude,
+        longitude: place.longitude,
+        category: place.category,
+        city: place.city,
+        region: place.region,
+        country: place.country
+      )
+    }
+    if let cachedLocation = draft.broadLocation {
+      broadLocation = MIRABroadDisplayLocation(
+        city: cachedLocation.city,
+        region: cachedLocation.region,
+        country: cachedLocation.country,
+        label: cachedLocation.label,
+        source: cachedLocation.source,
+        visibility: cachedLocation.visibility
+      )
+      showBroadLocation = draft.showBroadLocation
+      hasLoadedBroadLocation = true
+    }
+    let restoredMedia = await MIRAAppCacheStore.shared.loadPostDraftMedia(draft)
+    if !restoredMedia.isEmpty {
+      mediaItems = restoredMedia
+      isEditingPostDetails = true
+    } else if !title.isEmpty || !bodyText.isEmpty || !hashtags.isEmpty || selectedAudioTrack != nil || selectedPlace != nil {
+      isEditingPostDetails = true
+    }
+    if draft.uploadStatus == "failed" {
+      errorMessage = draft.errorMessage ?? "Your last upload failed. Review and post again."
+    }
+  }
+
+  private func cacheComposerDraft() {
+    guard hasRestoredPostDraft else { return }
+    Task { await persistComposerDraft(uploadStatus: "draft", errorMessage: nil, includeMedia: false) }
+  }
+
+  @MainActor
+  private func persistComposerDraft(uploadStatus: String, errorMessage: String?, includeMedia: Bool) async {
+    guard hasRestoredPostDraft else { return }
+    guard hasDraftContent else {
+      await MIRAAppCacheStore.shared.clearPostDraft()
+      draftMediaSnapshots = []
+      return
+    }
+    if includeMedia {
+      draftMediaSnapshots = await MIRAAppCacheStore.shared.storePostDraftMedia(mediaItems)
+    }
+    let draft = MIRAPostDraftSnapshot(
+      title: title,
+      bodyText: bodyText,
+      hashtags: hashtags,
+      selectedAudioTrack: selectedAudioTrack,
+      place: draftPlaceSnapshot,
+      broadLocation: draftBroadLocationSnapshot,
+      showBroadLocation: showBroadLocation,
+      media: draftMediaSnapshots,
+      uploadStatus: uploadStatus,
+      errorMessage: errorMessage,
+      savedAt: ISO8601DateFormatter.miraPostDraft.string(from: Date())
+    )
+    await MIRAAppCacheStore.shared.savePostDraft(draft)
+  }
+
+  private var hasDraftContent: Bool {
+    !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+      !bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+      !mediaItems.isEmpty ||
+      !hashtags.isEmpty ||
+      selectedAudioTrack != nil ||
+      selectedPlace != nil
+  }
+
+  private var draftPlaceSnapshot: MIRADraftPlaceSnapshot? {
+    guard let selectedPlace else { return nil }
+    return MIRADraftPlaceSnapshot(
+      provider: selectedPlace.provider,
+      providerPlaceId: selectedPlace.providerPlaceId,
+      name: selectedPlace.name,
+      formattedAddress: selectedPlace.formattedAddress,
+      latitude: selectedPlace.latitude,
+      longitude: selectedPlace.longitude,
+      category: selectedPlace.category,
+      city: selectedPlace.city,
+      region: selectedPlace.region,
+      country: selectedPlace.country
+    )
+  }
+
+  private var draftBroadLocationSnapshot: MIRADraftBroadLocationSnapshot? {
+    guard broadLocation.label?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else { return nil }
+    return MIRADraftBroadLocationSnapshot(
+      city: broadLocation.city,
+      region: broadLocation.region,
+      country: broadLocation.country,
+      label: broadLocation.label,
+      source: broadLocation.source,
+      visibility: broadLocation.visibility
+    )
   }
 
   @MainActor
@@ -1525,6 +1685,14 @@ public struct CreatePostNativeView: View {
       visibility: "public"
     )
   }
+}
+
+private extension ISO8601DateFormatter {
+  static let miraPostDraft: ISO8601DateFormatter = {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return formatter
+  }()
 }
 
 private struct PostAIAssistSheet: View {

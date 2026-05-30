@@ -35,7 +35,11 @@ public final class MIRAAuthSession: ObservableObject, MIRASessionProviding {
 
     token = storedToken
 
-    if let cachedUser: MIRAUser = await MIRALocalJSONCache.load(MIRAUser.self, key: cachedUserKey) {
+    var cachedUser = await MIRAAppCacheStore.shared.loadCurrentProfile()
+    if cachedUser == nil {
+      cachedUser = await MIRALocalJSONCache.load(MIRAUser.self, key: cachedUserKey)
+    }
+    if let cachedUser {
       user = cachedUser
       isBootstrapping = false
       MIRAPerformanceTimeline.mark("auth_cached_user_ready")
@@ -46,6 +50,7 @@ public final class MIRAAuthSession: ObservableObject, MIRASessionProviding {
     do {
       let freshUser: MIRAUser = try await api.get("/auth/me")
       user = freshUser
+      await MIRAAppCacheStore.shared.saveCurrentProfile(freshUser)
       await MIRALocalJSONCache.save(freshUser, key: cachedUserKey)
       errorMessage = nil
     } catch {
@@ -69,6 +74,7 @@ public final class MIRAAuthSession: ObservableObject, MIRASessionProviding {
     do {
       let freshUser: MIRAUser = try await api.get("/auth/me")
       user = freshUser
+      await MIRAAppCacheStore.shared.saveCurrentProfile(freshUser)
       await MIRALocalJSONCache.save(freshUser, key: cachedUserKey)
       errorMessage = nil
       MIRAPerformanceTimeline.mark("auth_cached_user_refreshed")
@@ -130,7 +136,10 @@ public final class MIRAAuthSession: ObservableObject, MIRASessionProviding {
   @MainActor
   public func replaceUser(_ updatedUser: MIRAUser) {
     user = updatedUser
-    Task { await MIRALocalJSONCache.save(updatedUser, key: cachedUserKey) }
+    Task {
+      await MIRAAppCacheStore.shared.saveCurrentProfile(updatedUser)
+      await MIRALocalJSONCache.save(updatedUser, key: cachedUserKey)
+    }
   }
 
   @MainActor
@@ -143,6 +152,7 @@ public final class MIRAAuthSession: ObservableObject, MIRASessionProviding {
       token = response.accessToken
       user = response.user
       keychain.saveAccessToken(response.accessToken)
+      await MIRAAppCacheStore.shared.saveCurrentProfile(response.user)
       await MIRALocalJSONCache.save(response.user, key: cachedUserKey)
     } catch {
       errorMessage = "Could not sign in. Check your account and try again."

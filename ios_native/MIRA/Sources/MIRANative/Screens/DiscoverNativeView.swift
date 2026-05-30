@@ -50,12 +50,12 @@ final class DiscoverNativeModel: ObservableObject {
   }
 
   private func hydrateCachedContentIfNeeded() async {
-    if posts.isEmpty, let cachedPosts: [MIRAPost] = await MIRALocalJSONCache.load([MIRAPost].self, key: postsCacheKey(for: activePostsCategory)) {
+    if posts.isEmpty, let cachedPosts = await cachedDiscoverPosts(for: activePostsCategory) {
       posts = cachedPosts
       isLoadingPosts = false
       MIRAPerformanceTimeline.markOnce("discover_first_content", detail: "posts_cache")
     }
-    if stories.isEmpty, let cachedStories: [MIRAStoryGroup] = await MIRALocalJSONCache.load([MIRAStoryGroup].self, key: storiesCacheKey) {
+    if stories.isEmpty, let cachedStories = await cachedDiscoverStories() {
       stories = cachedStories
       isLoadingStories = false
       MIRAPerformanceTimeline.markOnce("discover_first_content", detail: "stories_cache")
@@ -68,7 +68,7 @@ final class DiscoverNativeModel: ObservableObject {
     activePostsCategory = normalized
     hasLoadedFreshPosts = false
     hasScheduledPostsLoad = false
-    if let cachedPosts: [MIRAPost] = await MIRALocalJSONCache.load([MIRAPost].self, key: postsCacheKey(for: normalized)) {
+    if let cachedPosts = await cachedDiscoverPosts(for: normalized) {
       posts = cachedPosts
       isLoadingPosts = false
     } else {
@@ -104,7 +104,7 @@ final class DiscoverNativeModel: ObservableObject {
       if posts != loaded {
         posts = loaded
       }
-      await MIRALocalJSONCache.save(loaded, key: postsCacheKey(for: category))
+      await MIRAAppCacheStore.shared.saveDiscoverPosts(loaded, category: category)
       if !loaded.isEmpty {
         MIRAPerformanceTimeline.markOnce("discover_first_content", detail: "posts_network")
       }
@@ -113,7 +113,7 @@ final class DiscoverNativeModel: ObservableObject {
         if posts != fallback {
           posts = fallback
         }
-        await MIRALocalJSONCache.save(fallback, key: postsCacheKey(for: category))
+        await MIRAAppCacheStore.shared.saveDiscoverPosts(fallback, category: category)
         MIRAPerformanceTimeline.markOnce("discover_first_content", detail: "posts_fallback")
       } else if posts.isEmpty {
         hasLoadedFreshPosts = false
@@ -139,7 +139,7 @@ final class DiscoverNativeModel: ObservableObject {
       if stories != visibleStories {
         stories = visibleStories
       }
-      await MIRALocalJSONCache.save(visibleStories, key: storiesCacheKey)
+      await MIRAAppCacheStore.shared.saveDiscoverStories(visibleStories)
       if !visibleStories.isEmpty {
         MIRAPerformanceTimeline.markOnce("discover_first_content", detail: "stories_network")
       }
@@ -158,13 +158,13 @@ final class DiscoverNativeModel: ObservableObject {
   func hidePost(_ post: MIRAPost) {
     posts.removeAll { $0.id == post.id }
     let snapshot = posts
-    Task { await MIRALocalJSONCache.save(snapshot, key: postsCacheKey(for: activePostsCategory)) }
+    Task { await MIRAAppCacheStore.shared.saveDiscoverPosts(snapshot, category: activePostsCategory) }
   }
 
   func hidePosts(byUserId userId: String) {
     posts.removeAll { $0.userId == userId }
     let snapshot = posts
-    Task { await MIRALocalJSONCache.save(snapshot, key: postsCacheKey(for: activePostsCategory)) }
+    Task { await MIRAAppCacheStore.shared.saveDiscoverPosts(snapshot, category: activePostsCategory) }
   }
 
   func blockAuthor(_ post: MIRAPost) async {
@@ -174,7 +174,7 @@ final class DiscoverNativeModel: ObservableObject {
     do {
       let _: EmptyResponse? = try await api.post("/users/\(userId)/block", body: EmptyBody())
       let snapshot = posts
-      Task { await MIRALocalJSONCache.save(snapshot, key: postsCacheKey(for: activePostsCategory)) }
+      Task { await MIRAAppCacheStore.shared.saveDiscoverPosts(snapshot, category: activePostsCategory) }
       errorMessage = nil
     } catch {
       posts = previous
@@ -203,6 +203,20 @@ final class DiscoverNativeModel: ObservableObject {
     "\(postsCacheKeyPrefix).\(normalizedDiscoverCategory(category))"
   }
 
+  private func cachedDiscoverPosts(for category: String) async -> [MIRAPost]? {
+    if let cached = await MIRAAppCacheStore.shared.loadDiscoverPosts(category: category) {
+      return cached
+    }
+    return await MIRALocalJSONCache.load([MIRAPost].self, key: postsCacheKey(for: category), maxAge: 60 * 60 * 24 * 30)
+  }
+
+  private func cachedDiscoverStories() async -> [MIRAStoryGroup]? {
+    if let cached = await MIRAAppCacheStore.shared.loadDiscoverStories() {
+      return cached
+    }
+    return await MIRALocalJSONCache.load([MIRAStoryGroup].self, key: storiesCacheKey, maxAge: 60 * 60 * 24 * 30)
+  }
+
   private func normalizedDiscoverCategory(_ value: String) -> String {
     let allowed = Set(discoverGalleryFilters.map(\.id))
     let clean = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -215,6 +229,7 @@ private let discoverGalleryFilters: [DiscoverGalleryFilter] = [
   .init(id: "photography"),
   .init(id: "outdoors"),
   .init(id: "outfits"),
+  .init(id: "food"),
   .init(id: "travel"),
   .init(id: "events"),
   .init(id: "nightlife"),
