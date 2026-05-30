@@ -46,6 +46,7 @@ export interface Env {
   STRIPE_CANCEL_URL?: string;
   STRIPE_WEBHOOK_SECRET?: string;
   SUPABASE_URL?: string;
+  SUPABASE_ANON_KEY?: string;
   SUPABASE_JWT_ISSUER?: string;
   SUPABASE_SERVICE_ROLE_KEY?: string;
   ABUSE_SIGNAL_SECRET?: string;

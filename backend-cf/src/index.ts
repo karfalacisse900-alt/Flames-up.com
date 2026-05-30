@@ -32,6 +32,7 @@ interface Env {
   GOOGLE_OAUTH_CLIENT_ID?: string;
   GOOGLE_OAUTH_CLIENT_IDS?: string;
   SUPABASE_URL?: string;
+  SUPABASE_ANON_KEY?: string;
   SUPABASE_JWT_ISSUER?: string;
   SUPABASE_SERVICE_ROLE_KEY?: string;
   APPLE_OAUTH_AUDIENCE?: string;
@@ -5701,23 +5702,62 @@ async function sendLegacyPhoneCode(c: any, phone: string, code: string): Promise
 }
 
 async function findOrCreatePhoneUser(c: any, phone: string, fullName?: string) {
+  await ensureSupabaseAuthSchema(c.env.DB);
   let user: any = await c.env.DB.prepare('SELECT * FROM users WHERE phone = ?').bind(phone).first();
   if (!user) {
-    const id = uuid();
     const digits = phone.replace(/\D/g, '');
-    const username = pendingUsernameForUser(id);
     const safeName = String(fullName || '').trim() || 'Flames User';
     const email = `${digits}@phone.flames-up.local`;
     const generatedPasswordHash = await hashPassword(`phone_${phone}_${uuid()}`);
+    let supabaseUser: any = null;
+    try {
+      const result = await createOrFindSupabaseAuthUser(c, {
+        phone,
+        username: '',
+        fullName: safeName,
+        provider: 'phone',
+      });
+      supabaseUser = result.user;
+    } catch (error: any) {
+      console.warn(JSON.stringify({ event: 'supabase_phone_auth_mirror_failed', code: getErrorCode(error).slice(0, 160) }));
+    }
+    const preferredId = isUuidText(supabaseUser?.id);
+    const idOwner = preferredId ? await c.env.DB.prepare('SELECT id FROM users WHERE id = ?').bind(preferredId).first() : null;
+    const id = preferredId && !idOwner ? preferredId : uuid();
+    const username = pendingUsernameForUser(id);
 
     await c.env.DB.prepare(
-      'INSERT INTO users (id, email, username, full_name, password_hash, phone, phone_verified) VALUES (?, ?, ?, ?, ?, ?, 1)'
-    ).bind(id, email, username, safeName, generatedPasswordHash, phone).run();
+      'INSERT INTO users (id, email, username, full_name, password_hash, phone, phone_verified, supabase_user_id) VALUES (?, ?, ?, ?, ?, ?, 1, ?)'
+    ).bind(id, email, username, safeName, generatedPasswordHash, phone, supabaseUser?.id || null).run();
     user = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(id).first();
+    if (supabaseUser?.id) {
+      runBackgroundTask(c, 'supabase_phone_metadata_sync_failed', async () => {
+        await syncSupabaseAuthMetadataForUser(c, user);
+      });
+    }
     await recordAbuseSignals(c, id, 'phone_signup', { username, display_name: safeName });
   } else if (!user.phone_verified) {
     await c.env.DB.prepare('UPDATE users SET phone_verified = 1, updated_at = datetime(\'now\') WHERE id = ?').bind(user.id).run();
     user = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(user.id).first();
+  }
+
+  if (user && !user.supabase_user_id) {
+    try {
+      const result = await createOrFindSupabaseAuthUser(c, {
+        phone,
+        username: publicUsernameFor(user),
+        fullName: user.full_name,
+        profileImage: user.profile_image,
+        provider: 'phone',
+        appUserId: user.id,
+      });
+      if (result.user?.id) {
+        await linkSupabaseAuthUser(c, user.id, result.user.id);
+        user = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(user.id).first();
+      }
+    } catch (error: any) {
+      console.warn(JSON.stringify({ event: 'supabase_phone_auth_link_failed', code: getErrorCode(error).slice(0, 160) }));
+    }
   }
 
   return user;
@@ -5927,6 +5967,28 @@ async function findOrCreateOAuthUser(
   return c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(id).first();
 }
 
+async function mirrorOAuthUserToSupabaseAuth(c: any, user: any, provider: 'google' | 'apple', subject: string) {
+  if (!user?.id || user.supabase_user_id) return user;
+  const email = normalizeOptionalEmail(user.email);
+  if (!email || isInternalOAuthEmail(email)) return user;
+
+  const result = await createOrFindSupabaseAuthUser(c, {
+    email,
+    username: publicUsernameFor(user),
+    fullName: user.full_name,
+    profileImage: user.profile_image,
+    provider,
+    oauthSubject: subject,
+    appUserId: user.id,
+  });
+  if (result.user?.id) {
+    await linkSupabaseAuthUser(c, user.id, result.user.id);
+    await syncSupabaseAuthMetadataForUser(c, { ...user, supabase_user_id: result.user.id });
+    return c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(user.id).first();
+  }
+  return user;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 function getSupabaseUrl(c: any): string {
   const url = String(c.env.SUPABASE_URL || '').trim().replace(/\/+$/, '');
@@ -6014,21 +6076,307 @@ function getSupabaseServiceRoleKey(c: any): string {
   return key;
 }
 
-async function updateSupabaseAuthUser(c: any, supabaseUserId: unknown, payload: { email?: string; password?: string }) {
+function getSupabaseAuthClientKey(c: any): string {
+  const key = String(c.env.SUPABASE_ANON_KEY || c.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+  if (!key) throw new Error('SUPABASE_AUTH_KEY_MISSING');
+  return key;
+}
+
+function supabaseAuthProvider(provider: unknown): 'email' | 'phone' | 'google' | 'apple' | 'supabase' {
+  const clean = String(provider || '').trim().toLowerCase();
+  if (clean === 'phone' || clean === 'google' || clean === 'apple' || clean === 'supabase') return clean as any;
+  return 'email';
+}
+
+function supabasePublicAuthHeaders(c: any): HeadersInit {
+  const apiKey = getSupabaseAuthClientKey(c);
+  return {
+    apikey: apiKey,
+    Authorization: `Bearer ${apiKey}`,
+    'Content-Type': 'application/json',
+  };
+}
+
+function supabaseAdminAuthHeaders(c: any): HeadersInit {
+  const serviceRoleKey = getSupabaseServiceRoleKey(c);
+  return {
+    apikey: serviceRoleKey,
+    Authorization: `Bearer ${serviceRoleKey}`,
+    'Content-Type': 'application/json',
+  };
+}
+
+function supabaseAuthUserFromResponse(data: any): any {
+  if (data?.user?.id) return data.user;
+  if (data?.id) return data;
+  return null;
+}
+
+function supabaseProfileMetadata(input: {
+  appUserId?: unknown;
+  username?: unknown;
+  fullName?: unknown;
+  profileImage?: unknown;
+  language?: unknown;
+  phone?: unknown;
+}) {
+  const metadata: Record<string, string> = {};
+  const appUserId = cleanText(input.appUserId, 120);
+  const username = cleanText(input.username, 80);
+  const fullName = cleanText(input.fullName, 160);
+  const profileImage = cleanText(input.profileImage, 1200);
+  const language = normalizeLanguage(input.language);
+  const phone = cleanText(input.phone, 40);
+
+  if (appUserId) metadata.captro_user_id = appUserId;
+  if (username) {
+    metadata.username = username;
+    metadata.captro_username = username;
+  }
+  if (fullName) {
+    metadata.full_name = fullName;
+    metadata.name = fullName;
+    metadata.display_name = fullName;
+  }
+  if (profileImage) {
+    metadata.avatar_url = profileImage;
+    metadata.picture = profileImage;
+  }
+  if (language) metadata.language = language;
+  if (phone) metadata.phone = phone;
+  return metadata;
+}
+
+function supabaseProviderMetadata(provider: unknown, appUserId?: unknown, oauthSubject?: unknown) {
+  const cleanProvider = supabaseAuthProvider(provider);
+  const metadata: Record<string, any> = {
+    provider: cleanProvider,
+    providers: [cleanProvider],
+    captro_auth_source: 'captro_worker',
+  };
+  const cleanAppUserId = cleanText(appUserId, 120);
+  const cleanSubject = cleanText(oauthSubject, 240);
+  if (cleanAppUserId) metadata.captro_user_id = cleanAppUserId;
+  if (cleanSubject) metadata.oauth_subject = cleanSubject;
+  return metadata;
+}
+
+function supabaseAuthCreatePayload(input: {
+  email?: unknown;
+  phone?: unknown;
+  password?: unknown;
+  username?: unknown;
+  fullName?: unknown;
+  profileImage?: unknown;
+  provider?: 'email' | 'phone' | 'google' | 'apple' | 'supabase';
+  oauthSubject?: unknown;
+  appUserId?: unknown;
+}) {
+  const provider = supabaseAuthProvider(input.provider);
+  const email = normalizeOptionalEmail(input.email);
+  const phone = normalizePhone(String(input.phone || ''));
+  const password = String(input.password || '');
+  const body: any = {
+    user_metadata: supabaseProfileMetadata({
+      appUserId: input.appUserId,
+      username: input.username,
+      fullName: input.fullName,
+      profileImage: input.profileImage,
+      phone,
+    }),
+    app_metadata: supabaseProviderMetadata(provider, input.appUserId, input.oauthSubject),
+  };
+
+  if (email && !isInternalOAuthEmail(email)) {
+    body.email = email;
+    body.email_confirm = true;
+  }
+  if (phone) {
+    body.phone = phone;
+    body.phone_confirm = true;
+  }
+  if (password) body.password = password;
+  if (!body.email && !body.phone) throw new Error('SUPABASE_AUTH_IDENTIFIER_REQUIRED');
+  return body;
+}
+
+async function findSupabaseAuthUser(c: any, input: { email?: unknown; phone?: unknown; id?: unknown }) {
+  const id = isUuidText(input.id);
+  if (id) {
+    const response = await fetch(`${getSupabaseUrl(c)}/auth/v1/admin/users/${encodeURIComponent(id)}`, {
+      headers: supabaseAdminAuthHeaders(c),
+    });
+    if (response.ok) return supabaseAuthUserFromResponse(await response.json().catch(() => ({})));
+    if (response.status !== 404) {
+      const text = await response.text().catch(() => '');
+      throw new Error(`SUPABASE_AUTH_LOOKUP_FAILED:${response.status}:${text.slice(0, 200)}`);
+    }
+  }
+
+  const email = normalizeOptionalEmail(input.email);
+  const phone = normalizePhone(String(input.phone || ''));
+  const filter = email || phone;
+  if (!filter) return null;
+  const response = await fetch(`${getSupabaseUrl(c)}/auth/v1/admin/users?page=1&per_page=100&filter=${encodeURIComponent(filter)}`, {
+    headers: supabaseAdminAuthHeaders(c),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`SUPABASE_AUTH_LIST_FAILED:${response.status}:${text.slice(0, 200)}`);
+  }
+  const data: any = await response.json().catch(() => ({}));
+  const users = Array.isArray(data?.users) ? data.users : Array.isArray(data) ? data : [];
+  return users.find((user: any) => {
+    const userEmail = normalizeOptionalEmail(user?.email);
+    const userPhone = normalizePhone(user?.phone);
+    return (email && userEmail === email) || (phone && userPhone === phone);
+  }) || null;
+}
+
+async function createOrFindSupabaseAuthUser(c: any, input: {
+  email?: unknown;
+  phone?: unknown;
+  password?: unknown;
+  username?: unknown;
+  fullName?: unknown;
+  profileImage?: unknown;
+  provider?: 'email' | 'phone' | 'google' | 'apple' | 'supabase';
+  oauthSubject?: unknown;
+  appUserId?: unknown;
+}) {
+  const body = supabaseAuthCreatePayload(input);
+  const response = await fetch(`${getSupabaseUrl(c)}/auth/v1/admin/users`, {
+    method: 'POST',
+    headers: supabaseAdminAuthHeaders(c),
+    body: JSON.stringify(body),
+  });
+
+  if (response.ok) {
+    return { user: supabaseAuthUserFromResponse(await response.json().catch(() => ({}))), created: true };
+  }
+
+  const text = await response.text().catch(() => '');
+  if ([400, 409, 422].includes(response.status) && /already|registered|exists|duplicate|unique/i.test(text)) {
+    const existing = await findSupabaseAuthUser(c, { email: input.email, phone: input.phone });
+    if (existing?.id) {
+      const updatePayload: any = {
+        user_metadata: supabaseProfileMetadata({
+          appUserId: input.appUserId,
+          username: input.username,
+          fullName: input.fullName,
+          profileImage: input.profileImage,
+          phone: input.phone,
+        }),
+      };
+      if (input.password) updatePayload.password = String(input.password);
+      await updateSupabaseAuthUser(c, existing.id, updatePayload);
+      const refreshed = await findSupabaseAuthUser(c, { id: existing.id });
+      return { user: refreshed || existing, created: false };
+    }
+  }
+
+  throw new Error(`SUPABASE_AUTH_CREATE_FAILED:${response.status}:${text.slice(0, 200)}`);
+}
+
+async function deleteSupabaseAuthUser(c: any, supabaseUserId: unknown) {
   const id = String(supabaseUserId || '').trim();
-  const body = Object.fromEntries(
-    Object.entries(payload).filter(([, value]) => typeof value === 'string' && value.trim().length > 0)
-  );
+  if (!id) return;
+  const response = await fetch(`${getSupabaseUrl(c)}/auth/v1/admin/users/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: supabaseAdminAuthHeaders(c),
+  });
+  if (!response.ok && response.status !== 404) {
+    const text = await response.text().catch(() => '');
+    console.warn(JSON.stringify({ event: 'supabase_auth_cleanup_failed', status: response.status, code: text.slice(0, 120) }));
+  }
+}
+
+async function linkSupabaseAuthUser(c: any, appUserId: string, supabaseUserId: unknown) {
+  const supabaseId = String(supabaseUserId || '').trim();
+  if (!appUserId || !supabaseId) return;
+  await ensureSupabaseAuthSchema(c.env.DB);
+  const owner: any = await c.env.DB.prepare('SELECT id FROM users WHERE supabase_user_id = ? AND id != ? LIMIT 1')
+    .bind(supabaseId, appUserId)
+    .first();
+  if (owner) throw new Error('SUPABASE_AUTH_LINK_CONFLICT');
+  await c.env.DB.prepare('UPDATE users SET supabase_user_id = ?, updated_at = datetime(\'now\') WHERE id = ?')
+    .bind(supabaseId, appUserId)
+    .run();
+}
+
+async function syncSupabaseAuthMetadataForUser(c: any, user: any) {
+  if (!user?.supabase_user_id) return;
+  await updateSupabaseAuthUser(c, user.supabase_user_id, {
+    user_metadata: supabaseProfileMetadata({
+      appUserId: user.id,
+      username: publicUsernameFor(user),
+      fullName: user.full_name,
+      profileImage: user.profile_image,
+      language: user.language,
+      phone: user.phone,
+    }),
+  });
+}
+
+async function signInSupabasePassword(c: any, email: string, password: string) {
+  const response = await fetch(`${getSupabaseUrl(c)}/auth/v1/token?grant_type=password`, {
+    method: 'POST',
+    headers: supabasePublicAuthHeaders(c),
+    body: JSON.stringify({ email, password }),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`SUPABASE_PASSWORD_SIGN_IN_FAILED:${response.status}:${text.slice(0, 160)}`);
+  }
+  const data: any = await response.json().catch(() => ({}));
+  if (!data?.access_token) throw new Error('SUPABASE_PASSWORD_SESSION_MISSING');
+  return data;
+}
+
+async function signInSupabaseIdToken(c: any, provider: 'google' | 'apple', idToken: string, nonce?: string) {
+  const body: any = { provider, token: idToken };
+  if (nonce) body.nonce = nonce;
+  const response = await fetch(`${getSupabaseUrl(c)}/auth/v1/token?grant_type=id_token`, {
+    method: 'POST',
+    headers: supabasePublicAuthHeaders(c),
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`SUPABASE_ID_TOKEN_SIGN_IN_FAILED:${provider}:${response.status}:${text.slice(0, 180)}`);
+  }
+  const data: any = await response.json().catch(() => ({}));
+  if (!data?.access_token) throw new Error(`SUPABASE_ID_TOKEN_SESSION_MISSING:${provider}`);
+  return data;
+}
+
+async function issueCaptroTokenForSupabaseAccessToken(c: any, supabaseAccessToken: string, extras: any = {}) {
+  const payload = await verifySupabaseAccessToken(c, supabaseAccessToken);
+  const user = await findOrCreateSupabaseUser(c, payload, extras);
+  if (['banned', 'suspended', 'deleted'].includes(String(user.status || 'active'))) {
+    await logSecurityEvent(c, 'login_banned_blocked', user.id, { provider: 'supabase' });
+    throw new Error('ACCOUNT_DISABLED');
+  }
+  const token = await createToken(user.id, getJwtSecret(c));
+  runBackgroundTask(c, 'supabase_login_profile_write_through_failed', async () => {
+    await syncSupabaseAuthMetadataForUser(c, user);
+    await mirrorLegacyUserToSupabase(c, user.id);
+  });
+  return { token, user };
+}
+
+async function updateSupabaseAuthUser(c: any, supabaseUserId: unknown, payload: { email?: string; password?: string; phone?: string; user_metadata?: Record<string, unknown>; app_metadata?: Record<string, unknown> }) {
+  const id = String(supabaseUserId || '').trim();
+  const body: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(payload || {})) {
+    if (typeof value === 'string' && value.trim().length > 0) body[key] = value.trim();
+    else if (value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length > 0) body[key] = value;
+  }
   if (!id || Object.keys(body).length === 0) return;
 
-  const serviceRoleKey = getSupabaseServiceRoleKey(c);
   const response = await fetch(`${getSupabaseUrl(c)}/auth/v1/admin/users/${encodeURIComponent(id)}`, {
     method: 'PUT',
-    headers: {
-      apikey: serviceRoleKey,
-      Authorization: `Bearer ${serviceRoleKey}`,
-      'Content-Type': 'application/json',
-    },
+    headers: supabaseAdminAuthHeaders(c),
     body: JSON.stringify(body),
   });
 
@@ -6509,6 +6857,68 @@ async function transferLegacyFollowsToSupabase(c: any, limit: number, offset: nu
   return supabaseAdminUpsert(c, 'app_follows', payload, 'app_follower_id,app_following_id');
 }
 
+async function backfillLegacyUsersToSupabaseAuth(c: any, limit: number, offset: number) {
+  await ensureSupabaseAuthSchema(c.env.DB);
+  const rows = await c.env.DB.prepare(
+    `SELECT id, email, phone, phone_verified, username, full_name, profile_image, oauth_provider, oauth_subject, supabase_user_id, status
+     FROM users
+     WHERE COALESCE(status, 'active') != 'deleted'
+     ORDER BY created_at
+     LIMIT ? OFFSET ?`
+  ).bind(limit, offset).all();
+
+  const result = {
+    target: 'supabase_auth_users',
+    processed: 0,
+    linked: 0,
+    already_linked: 0,
+    skipped: 0,
+    failed: 0,
+    failures: [] as Array<{ user_id: string; code: string }>,
+  };
+
+  for (const row of (rows.results as any[])) {
+    result.processed += 1;
+    if (row.supabase_user_id) {
+      result.already_linked += 1;
+      continue;
+    }
+
+    const email = normalizeOptionalEmail(row.email);
+    const phone = Number(row.phone_verified || 0) === 1 ? normalizePhone(row.phone) : '';
+    const provider = supabaseAuthProvider(row.oauth_provider || (phone ? 'phone' : 'email'));
+    if ((!email || isInternalOAuthEmail(email)) && !phone) {
+      result.skipped += 1;
+      continue;
+    }
+
+    try {
+      const authResult = await createOrFindSupabaseAuthUser(c, {
+        email: email && !isInternalOAuthEmail(email) ? email : undefined,
+        phone: phone || undefined,
+        username: publicUsernameFor(row),
+        fullName: row.full_name,
+        profileImage: row.profile_image,
+        provider,
+        oauthSubject: row.oauth_subject,
+        appUserId: row.id,
+      });
+      if (!authResult.user?.id) throw new Error('SUPABASE_AUTH_CREATE_EMPTY');
+      await linkSupabaseAuthUser(c, row.id, authResult.user.id);
+      await syncSupabaseAuthMetadataForUser(c, { ...row, supabase_user_id: authResult.user.id });
+      await logSecurityEvent(c, 'supabase_auth_backfilled', row.id, { provider });
+      result.linked += 1;
+    } catch (error: any) {
+      result.failed += 1;
+      if (result.failures.length < 20) {
+        result.failures.push({ user_id: String(row.id || ''), code: getErrorCode(error).slice(0, 160) });
+      }
+    }
+  }
+
+  return result;
+}
+
 // AUTH
 // ═══════════════════════════════════════════════════════════════════════════════
 api.post('/auth/supabase', async (c) => {
@@ -6518,18 +6928,16 @@ api.post('/auth/supabase', async (c) => {
     const limited = await enforceRateLimit(c, 'auth_supabase', clientIp(c), 60, 300);
     if (limited) return limited;
     const body: any = await c.req.json().catch(() => ({}));
-    const payload = await verifySupabaseAccessToken(c, body.access_token || body.token);
-    const user = await findOrCreateSupabaseUser(c, payload, body);
-    const token = await createToken(user.id, getJwtSecret(c));
-    runBackgroundTask(c, 'supabase_login_profile_write_through_failed', async () => {
-      await mirrorLegacyUserToSupabase(c, user.id);
-    });
+    const session = await issueCaptroTokenForSupabaseAccessToken(c, body.access_token || body.token, body);
+    const token = session.token;
+    const user = session.user;
     return c.json({ access_token: token, token_type: 'bearer', user: authUserPayload(user) });
   } catch (error: any) {
     const code = getErrorCode(error);
     if (code === 'SUPABASE_NOT_CONFIGURED') return c.json({ detail: 'Supabase auth is not configured on the backend.' }, 503);
     if (code === 'SUPABASE_TOKEN_REQUIRED') return c.json({ detail: 'Supabase access token is required.' }, 400);
     if (code === 'EMAIL_REQUIRED') return c.json({ detail: 'Supabase account email is required.' }, 400);
+    if (code === 'ACCOUNT_DISABLED') return c.json({ detail: 'This account cannot be used.' }, 403);
     if (code === 'JWT_SECRET_MISSING') return c.json({ detail: 'Auth service is not configured.' }, 503);
     if (code.startsWith('ERR_JWS_') || code.startsWith('ERR_JWT_') || code.startsWith('ERR_JWKS_')) {
       return c.json({ detail: 'Invalid Supabase session.' }, 401);
@@ -6569,19 +6977,48 @@ api.post('/auth/register', async (c) => {
       await logSecurityEvent(c, 'signup_duplicate_blocked', '', { username: safeUsername });
       return c.json({ detail: 'Email or username already exists' }, 400);
     }
-    const id = uuid();
+
+    await ensureOAuthSchema(c.env.DB);
+    await ensureSupabaseAuthSchema(c.env.DB);
+    const authResult = await createOrFindSupabaseAuthUser(c, {
+      email,
+      password,
+      username: safeUsername,
+      fullName,
+      provider: 'email',
+    });
+    if (!authResult.user?.id) throw new Error('SUPABASE_AUTH_CREATE_EMPTY');
+    const preferredId = isUuidText(authResult.user.id);
+    const idOwner = preferredId ? await c.env.DB.prepare('SELECT id FROM users WHERE id = ?').bind(preferredId).first() : null;
+    const id = preferredId && !idOwner ? preferredId : uuid();
     const hash = await hashPassword(password);
-    await c.env.DB.prepare(
-      'INSERT INTO users (id, email, username, full_name, password_hash) VALUES (?, ?, ?, ?, ?)'
-    ).bind(id, email, safeUsername, fullName, hash).run();
+    try {
+      await c.env.DB.prepare(
+        'INSERT INTO users (id, email, username, full_name, password_hash, supabase_user_id, oauth_provider, oauth_subject) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+      ).bind(id, email, safeUsername, fullName, hash, authResult.user.id, 'supabase', authResult.user.id).run();
+    } catch (insertError) {
+      if (authResult.created) await deleteSupabaseAuthUser(c, authResult.user.id);
+      throw insertError;
+    }
     // Security-sensitive: store only hashed abuse signals for admin review of possible ban evasion.
     await recordAbuseSignals(c, id, 'signup', { username: safeUsername, display_name: fullName });
     await logSecurityEvent(c, 'signup_created', id, { username: safeUsername });
     const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(id).first();
+    runBackgroundTask(c, 'supabase_signup_metadata_sync_failed', async () => {
+      await syncSupabaseAuthMetadataForUser(c, user);
+      await mirrorLegacyUserToSupabase(c, user.id);
+    });
     const token = await createToken(id, jwtSecret);
     return c.json({ access_token: token, token_type: 'bearer', user: authUserPayload(user) });
   } catch (error: any) {
-    if (getErrorCode(error) === 'JWT_SECRET_MISSING') return c.json({ detail: 'Auth service is not configured.' }, 503);
+    const code = getErrorCode(error);
+    if (code === 'JWT_SECRET_MISSING') return c.json({ detail: 'Auth service is not configured.' }, 503);
+    if (code === 'SUPABASE_NOT_CONFIGURED' || code === 'SUPABASE_SERVICE_ROLE_MISSING') {
+      return c.json({ detail: 'Supabase Authentication is not configured for account creation.' }, 503);
+    }
+    if (code.startsWith('SUPABASE_AUTH_CREATE_FAILED')) {
+      return c.json({ detail: 'Could not create the Supabase Auth account.' }, 502);
+    }
     return c.json({ detail: 'Could not create account.' }, 500);
   }
 });
@@ -6602,7 +7039,23 @@ api.post('/auth/login', async (c) => {
     if (ipLimited) return ipLimited;
 
     const jwtSecret = getJwtSecret(c);
-    const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
+    try {
+      const supabaseSession = await signInSupabasePassword(c, email, password);
+      const session = await issueCaptroTokenForSupabaseAccessToken(c, supabaseSession.access_token, {
+        email,
+        full_name: supabaseSession.user?.user_metadata?.full_name || supabaseSession.user?.user_metadata?.name || '',
+        profile_image: supabaseSession.user?.user_metadata?.avatar_url || supabaseSession.user?.user_metadata?.picture || '',
+      });
+      return c.json({ access_token: session.token, token_type: 'bearer', user: authUserPayload(session.user) });
+    } catch (error: any) {
+      const code = getErrorCode(error);
+      if (code === 'ACCOUNT_DISABLED') return c.json({ detail: 'This account cannot be used.' }, 403);
+      if (!code.startsWith('SUPABASE_PASSWORD_SIGN_IN_FAILED') && code !== 'SUPABASE_AUTH_KEY_MISSING' && code !== 'SUPABASE_NOT_CONFIGURED' && code !== 'SUPABASE_SERVICE_ROLE_MISSING') {
+        console.warn(JSON.stringify({ event: 'supabase_password_login_bridge_failed', code: code.slice(0, 160) }));
+      }
+    }
+
+    let user: any = await c.env.DB.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
     if (!user || !(await verifyPassword(password, user.password_hash))) {
       if (user?.id) await recordAbuseSignals(c, user.id, 'failed_login', {});
       await logSecurityEvent(c, 'login_failed', user?.id || '', { reason: user ? 'password' : 'credentials' });
@@ -6619,6 +7072,25 @@ api.post('/auth/login', async (c) => {
         const bcryptHash = await hashPassword(password);
         await c.env.DB.prepare('UPDATE users SET password_hash = ? WHERE id = ?').bind(bcryptHash, user.id).run();
       } catch {}
+    }
+    if (!user.supabase_user_id) {
+      try {
+        const authResult = await createOrFindSupabaseAuthUser(c, {
+          email,
+          password,
+          username: publicUsernameFor(user),
+          fullName: user.full_name,
+          profileImage: user.profile_image,
+          provider: 'email',
+          appUserId: user.id,
+        });
+        if (authResult.user?.id) {
+          await linkSupabaseAuthUser(c, user.id, authResult.user.id);
+          user = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(user.id).first();
+        }
+      } catch (error: any) {
+        console.warn(JSON.stringify({ event: 'legacy_user_supabase_auth_link_failed', user_id: user.id, code: getErrorCode(error).slice(0, 160) }));
+      }
     }
     const token = await createToken(user.id, jwtSecret);
     return c.json({ access_token: token, token_type: 'bearer', user: authUserPayload(user) });
@@ -6760,13 +7232,26 @@ api.post('/auth/oauth/google', async (c) => {
     if (limited) return limited;
     await ensureOAuthSchema(c.env.DB);
     const body: any = await c.req.json().catch(() => ({}));
-    const unknown = rejectUnknownFields(c, body, ['id_token', 'idToken']);
+    const unknown = rejectUnknownFields(c, body, ['id_token', 'idToken', 'nonce', 'raw_nonce', 'rawNonce']);
     if (unknown) return unknown;
     const id_token = String(body.id_token || body.idToken || '');
     if (!id_token) return c.json({ detail: 'id_token is required' }, 400);
 
     const googleProfile = await verifyGoogleIdToken(c, id_token);
-    const user = await findOrCreateOAuthUser(
+    try {
+      const supabaseSession = await signInSupabaseIdToken(c, 'google', id_token, String(body.nonce || body.raw_nonce || body.rawNonce || ''));
+      const session = await issueCaptroTokenForSupabaseAccessToken(c, supabaseSession.access_token, {
+        email: googleProfile.email,
+        full_name: googleProfile.fullName,
+        profile_image: googleProfile.profileImage,
+      });
+      return c.json({ access_token: session.token, token_type: 'bearer', user: authUserPayload(session.user) });
+    } catch (error: any) {
+      if (getErrorCode(error) === 'ACCOUNT_DISABLED') throw error;
+      console.warn(JSON.stringify({ event: 'supabase_google_id_token_failed', code: getErrorCode(error).slice(0, 160) }));
+    }
+
+    let user = await findOrCreateOAuthUser(
       c,
       'google',
       googleProfile.subject,
@@ -6774,6 +7259,15 @@ api.post('/auth/oauth/google', async (c) => {
       googleProfile.fullName,
       googleProfile.profileImage
     );
+    try {
+      user = await mirrorOAuthUserToSupabaseAuth(c, user, 'google', googleProfile.subject);
+    } catch (error: any) {
+      console.warn(JSON.stringify({ event: 'supabase_google_auth_mirror_failed', code: getErrorCode(error).slice(0, 160) }));
+    }
+    if (['banned', 'suspended', 'deleted'].includes(String(user.status || 'active'))) {
+      await logSecurityEvent(c, 'login_banned_blocked', user.id, { provider: 'google' });
+      return c.json({ detail: 'This account cannot be used.' }, 403);
+    }
     const token = await createToken(user.id, getJwtSecret(c));
     return c.json({ access_token: token, token_type: 'bearer', user: authUserPayload(user) });
   } catch (error: any) {
@@ -6784,6 +7278,7 @@ api.post('/auth/oauth/google', async (c) => {
     if (code === 'GOOGLE_AUDIENCE_INVALID') return c.json({ detail: 'Google client audience mismatch' }, 401);
     if (code === 'GOOGLE_EMAIL_UNVERIFIED') return c.json({ detail: 'Google account email is not verified' }, 401);
     if (code.startsWith('GOOGLE_')) return c.json({ detail: 'Invalid Google token' }, 401);
+    if (code === 'ACCOUNT_DISABLED') return c.json({ detail: 'This account cannot be used.' }, 403);
     if (code === 'EMAIL_REQUIRED') return c.json({ detail: 'Google account email is required' }, 400);
     if (code === 'JWT_SECRET_MISSING') return c.json({ detail: 'Auth service is not configured.' }, 503);
     return c.json({ detail: 'Google OAuth login failed' }, 401);
@@ -6798,7 +7293,7 @@ api.post('/auth/oauth/apple', async (c) => {
     if (limited) return limited;
     await ensureOAuthSchema(c.env.DB);
     const body: any = await c.req.json().catch(() => ({}));
-    const unknown = rejectUnknownFields(c, body, ['id_token', 'idToken', 'email', 'full_name', 'fullName', 'apple_user', 'appleUser']);
+    const unknown = rejectUnknownFields(c, body, ['id_token', 'idToken', 'email', 'full_name', 'fullName', 'apple_user', 'appleUser', 'nonce', 'raw_nonce', 'rawNonce']);
     if (unknown) return unknown;
     const idToken = String(body.id_token || body.idToken || '');
     if (!idToken) return c.json({ detail: 'id_token is required' }, 400);
@@ -6807,7 +7302,19 @@ api.post('/auth/oauth/apple', async (c) => {
     const clientEmail = normalizeOptionalEmail(body.email);
     const clientFullName = normalizeOptionalName(body.full_name || body.fullName);
     const appleSubject = String(appleProfile.subject || body.apple_user || body.appleUser || '').trim();
-    const user = await findOrCreateOAuthUser(
+    try {
+      const supabaseSession = await signInSupabaseIdToken(c, 'apple', idToken, String(body.nonce || body.raw_nonce || body.rawNonce || ''));
+      const session = await issueCaptroTokenForSupabaseAccessToken(c, supabaseSession.access_token, {
+        email: appleProfile.email || clientEmail || internalOAuthEmail('apple', appleSubject),
+        full_name: clientFullName || appleProfile.fullName || 'Apple User',
+      });
+      return c.json({ access_token: session.token, token_type: 'bearer', user: authUserPayload(session.user) });
+    } catch (error: any) {
+      if (getErrorCode(error) === 'ACCOUNT_DISABLED') throw error;
+      console.warn(JSON.stringify({ event: 'supabase_apple_id_token_failed', code: getErrorCode(error).slice(0, 160) }));
+    }
+
+    let user = await findOrCreateOAuthUser(
       c,
       'apple',
       appleSubject,
@@ -6815,6 +7322,15 @@ api.post('/auth/oauth/apple', async (c) => {
       clientFullName || appleProfile.fullName || 'Apple User',
       appleProfile.profileImage
     );
+    try {
+      user = await mirrorOAuthUserToSupabaseAuth(c, user, 'apple', appleSubject);
+    } catch (error: any) {
+      console.warn(JSON.stringify({ event: 'supabase_apple_auth_mirror_failed', code: getErrorCode(error).slice(0, 160) }));
+    }
+    if (['banned', 'suspended', 'deleted'].includes(String(user.status || 'active'))) {
+      await logSecurityEvent(c, 'login_banned_blocked', user.id, { provider: 'apple' });
+      return c.json({ detail: 'This account cannot be used.' }, 403);
+    }
     const token = await createToken(user.id, getJwtSecret(c));
     return c.json({ access_token: token, token_type: 'bearer', user: authUserPayload(user) });
   } catch (error: any) {
@@ -6822,6 +7338,7 @@ api.post('/auth/oauth/apple', async (c) => {
     if (code === 'EMAIL_REQUIRED') return c.json({ detail: 'Apple account email is required on first sign-in' }, 400);
     if (code === 'OAUTH_SUBJECT_REQUIRED') return c.json({ detail: 'Apple account identifier was missing' }, 400);
     if (code === 'JWT_SECRET_MISSING') return c.json({ detail: 'Auth service is not configured.' }, 503);
+    if (code === 'ACCOUNT_DISABLED') return c.json({ detail: 'This account cannot be used.' }, 403);
     if (code === 'ERR_JWT_CLAIM_VALIDATION_FAILED' && error?.claim === 'aud') return c.json({ detail: 'Apple audience mismatch' }, 401);
     if (code === 'ERR_JWT_CLAIM_VALIDATION_FAILED') return c.json({ detail: 'Invalid Apple token claims' }, 401);
     if (code === 'ERR_JWS_SIGNATURE_VERIFICATION_FAILED') return c.json({ detail: 'Invalid Apple token signature' }, 401);
@@ -6906,6 +7423,9 @@ api.put('/users/me', authMiddleware, async (c) => {
     bio: user.bio,
     links: [user.social_website, user.social_tiktok, user.social_instagram].filter(Boolean),
   });
+  runBackgroundTask(c, 'supabase_profile_metadata_sync_failed', async () => {
+    await syncSupabaseAuthMetadataForUser(c, user);
+  });
   return c.json(safeUserPayload(user, { includePrivate: true }));
 });
 
@@ -6965,6 +7485,16 @@ api.put('/users/me/email', authMiddleware, async (c) => {
 
     if (currentUser.supabase_user_id) {
       await updateSupabaseAuthUser(c, currentUser.supabase_user_id, { email });
+    } else {
+      const result = await createOrFindSupabaseAuthUser(c, {
+        email,
+        username: publicUsernameFor(currentUser),
+        fullName: currentUser.full_name,
+        profileImage: currentUser.profile_image,
+        provider: 'email',
+        appUserId: currentUser.id,
+      });
+      if (result.user?.id) await linkSupabaseAuthUser(c, currentUser.id, result.user.id);
     }
 
     await c.env.DB.prepare('UPDATE users SET email = ?, updated_at = datetime(\'now\') WHERE id = ?')
@@ -7000,6 +7530,17 @@ api.put('/users/me/password', authMiddleware, async (c) => {
 
     if (user.supabase_user_id) {
       await updateSupabaseAuthUser(c, user.supabase_user_id, { password: newPassword });
+    } else if (normalizeOptionalEmail(user.email) && !isInternalOAuthEmail(user.email)) {
+      const result = await createOrFindSupabaseAuthUser(c, {
+        email: user.email,
+        password: newPassword,
+        username: publicUsernameFor(user),
+        fullName: user.full_name,
+        profileImage: user.profile_image,
+        provider: 'email',
+        appUserId: user.id,
+      });
+      if (result.user?.id) await linkSupabaseAuthUser(c, user.id, result.user.id);
     }
 
     const newHash = await hashPassword(newPassword);
@@ -7113,10 +7654,38 @@ api.post('/users/me/phone/verify', authMiddleware, async (c) => {
       await c.env.DB.prepare('UPDATE phone_login_codes SET consumed_at = datetime(\'now\') WHERE id = ?').bind(phoneCode.id).run();
     }
 
+    await ensureSupabaseAuthSchema(c.env.DB);
+    const currentUser: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
+
     await c.env.DB.prepare('UPDATE users SET phone = ?, phone_verified = 1, updated_at = datetime(\'now\') WHERE id = ?')
       .bind(normalizedPhone, userId)
       .run();
     const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
+    runBackgroundTask(c, 'supabase_phone_update_sync_failed', async () => {
+      if (currentUser?.supabase_user_id) {
+        await updateSupabaseAuthUser(c, currentUser.supabase_user_id, {
+          phone: normalizedPhone,
+          user_metadata: supabaseProfileMetadata({
+            appUserId: user.id,
+            username: publicUsernameFor(user),
+            fullName: user.full_name,
+            profileImage: user.profile_image,
+            language: user.language,
+            phone: normalizedPhone,
+          }),
+        });
+      } else {
+        const result = await createOrFindSupabaseAuthUser(c, {
+          phone: normalizedPhone,
+          username: publicUsernameFor(user),
+          fullName: user.full_name,
+          profileImage: user.profile_image,
+          provider: 'phone',
+          appUserId: user.id,
+        });
+        if (result.user?.id) await linkSupabaseAuthUser(c, user.id, result.user.id);
+      }
+    });
     return c.json(authUserPayload(user));
   } catch (error: any) {
     const code = String(error?.message || '');
@@ -7165,6 +7734,9 @@ api.put('/users/me/username', authMiddleware, async (c) => {
     const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
     await recordAbuseSignals(c, userId, 'username_claim', { username: usernameCheck.username });
     await logSecurityEvent(c, 'username_changed', userId, { previous_username: currentUser?.username || '', new_username: usernameCheck.username });
+    runBackgroundTask(c, 'supabase_username_metadata_sync_failed', async () => {
+      await syncSupabaseAuthMetadataForUser(c, user);
+    });
     return c.json(authUserPayload(user));
   } catch (error: any) {
     console.error('Username claim failed:', getErrorCode(error), error?.message || error);
@@ -14339,6 +14911,12 @@ api.get('/database/status', authMiddleware, async (c) => {
         service_role_secret_set: !!c.env.SUPABASE_SERVICE_ROLE_KEY,
         note: 'Supabase stores relational data in Postgres and flexible NoSQL-style app_documents/editor metadata in JSONB.',
       },
+      supabase_authentication: {
+        configured: !!c.env.SUPABASE_URL,
+        service_role_secret_set: !!c.env.SUPABASE_SERVICE_ROLE_KEY,
+        anon_key_set: !!c.env.SUPABASE_ANON_KEY,
+        note: 'Captro account creation and social sign-in are bridged into Supabase Authentication and linked by users.supabase_user_id.',
+      },
       timestamp: now(),
     });
   } catch (error: any) {
@@ -14850,6 +15428,32 @@ api.post('/admin/supabase/transfer', authMiddleware, async (c) => {
     }
     console.error('Supabase transfer failed:', code, error?.message || error);
     return c.json({ detail: 'Supabase transfer failed.', code }, 500);
+  }
+});
+
+api.post('/admin/supabase/auth/backfill', authMiddleware, async (c) => {
+  try {
+    const adminId = await requireAdmin(c);
+    const body: any = await c.req.json().catch(() => ({}));
+    const limit = clampNumber(body.limit || c.req.query('limit'), 1, 500, 100);
+    const offset = clampNumber(body.offset || c.req.query('offset'), 0, 1_000_000_000, 0);
+    const result = await backfillLegacyUsersToSupabaseAuth(c, limit, offset);
+    await logSecurityEvent(c, 'supabase_auth_backfill_run', adminId, { limit, offset, result });
+    return c.json({
+      ok: true,
+      limit,
+      offset,
+      next_offset: offset + limit,
+      result,
+      note: 'Run again with next_offset until processed returns 0. Existing password users are linked and their Supabase password is set on next successful login/password update.',
+    });
+  } catch (error: any) {
+    const code = getErrorCode(error);
+    if (code === 'FORBIDDEN') return c.json({ detail: 'Admin only' }, 403);
+    if (code === 'SUPABASE_NOT_CONFIGURED') return c.json({ detail: 'SUPABASE_URL is not configured.' }, 503);
+    if (code === 'SUPABASE_SERVICE_ROLE_MISSING') return c.json({ detail: 'SUPABASE_SERVICE_ROLE_KEY is not configured.' }, 503);
+    console.error('Supabase Auth backfill failed:', code, error?.message || error);
+    return c.json({ detail: 'Supabase Auth backfill failed.', code }, 500);
   }
 });
 
