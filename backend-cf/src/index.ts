@@ -4106,7 +4106,7 @@ async function storeMediaBackup(c: any, opts: {
 }
 
 async function attachMediaBackupsToPost(db: D1Database, userId: string, postId: string, backupIds: string[]) {
-  const ids = backupIds.map(String).filter(Boolean);
+  const ids = Array.from(new Set(backupIds.map(String).map((id) => id.trim()).filter(Boolean)));
   if (!ids.length) return;
   await ensureMediaBackupSchema(db);
 
@@ -4115,6 +4115,10 @@ async function attachMediaBackupsToPost(db: D1Database, userId: string, postId: 
       .bind(postId, now(), backupId, userId)
       .run();
   }
+}
+
+function mediaBackupIdsFromReferences(values: unknown[]): string[] {
+  return Array.from(new Set(values.map(mediaBackupIdFromReference).filter(Boolean)));
 }
 
 async function attachMediaBackupToMessage(
@@ -8947,7 +8951,10 @@ api.post('/posts', authMiddleware, async (c) => {
   });
   const placeLat = b.place_lat == null ? null : clampFloat(b.place_lat, -90, 90, 0);
   const placeLng = b.place_lng == null ? null : clampFloat(b.place_lng, -180, 180, 0);
-  const backupIds = parseJsonArray(b.media_backup_ids).map(String).filter(Boolean);
+  const backupIds = Array.from(new Set([
+    ...parseJsonArray(b.media_backup_ids).map(String).filter(Boolean),
+    ...mediaBackupIdsFromReferences([primaryImage, ...imageUrls]),
+  ]));
   const mediaDimensions = sanitizeMediaDimensions(b.media_dimensions);
   const editorOverlays = sanitizePostEditorOverlays(b.editor_overlays);
   const taggedUsers = sanitizeTaggedUsers(b.tagged_users);
