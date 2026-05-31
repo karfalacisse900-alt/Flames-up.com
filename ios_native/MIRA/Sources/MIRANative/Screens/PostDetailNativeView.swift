@@ -17,6 +17,11 @@ final class PostDetailModel: ObservableObject {
     self.api = api
   }
 
+  func hydrateFromLocalCache() async {
+    guard let cached = await MIRAAppCacheStore.shared.loadCachedPost(id: post.id) else { return }
+    applyCachedEngagement(from: cached)
+  }
+
   func refreshPost() async {
     do {
       let refreshed: MIRAPost = try await api.get("/posts/\(post.id)")
@@ -51,6 +56,17 @@ final class PostDetailModel: ObservableObject {
         comments = []
       }
     }
+  }
+
+  func applyEngagementUpdate(_ update: MIRAPostEngagementUpdate) {
+    guard update.postId == post.id else { return }
+    post = post.updating(
+      liked: update.liked,
+      likesCount: update.likesCount,
+      commentsCount: update.commentsCount,
+      saved: update.saved,
+      savesCount: update.savesCount
+    )
   }
 
   @discardableResult
@@ -270,6 +286,21 @@ final class PostDetailModel: ObservableObject {
     )
   }
 
+  private func applyCachedEngagement(from cached: MIRAPost) {
+    post = post.updating(
+      liked: cached.isLiked,
+      likesCount: bestCount(post.likesCount, cached.likesCount),
+      commentsCount: bestCount(post.commentsCount, cached.commentsCount),
+      saved: cached.isSaved ?? cached.saved?.value,
+      savesCount: bestCount(post.savesCount, cached.savesCount)
+    )
+  }
+
+  private func bestCount(_ current: Int?, _ cached: Int?) -> Int? {
+    guard current != nil || cached != nil else { return nil }
+    return max(current ?? 0, cached ?? 0)
+  }
+
   private func loadCurrentUserIfNeeded() async {
     guard currentUserId == nil else { return }
     let me: MIRAUser? = try? await api.get("/auth/me")
@@ -461,8 +492,13 @@ public struct PostDetailNativeView: View {
       }
     }
     .task {
+      await model.hydrateFromLocalCache()
       await model.refreshPost()
       await model.loadComments()
+    }
+    .onReceive(NotificationCenter.default.publisher(for: .miraPostEngagementDidChange)) { notification in
+      guard let update = MIRAPostEngagementSync.update(from: notification) else { return }
+      model.applyEngagementUpdate(update)
     }
   }
 
@@ -749,7 +785,12 @@ public struct DiscoverPostDetailNativeView: View {
       }
     }
     .task {
+      await model.hydrateFromLocalCache()
       await model.refreshPost()
+    }
+    .onReceive(NotificationCenter.default.publisher(for: .miraPostEngagementDidChange)) { notification in
+      guard let update = MIRAPostEngagementSync.update(from: notification) else { return }
+      model.applyEngagementUpdate(update)
     }
   }
 
@@ -839,6 +880,7 @@ public struct DiscoverPostDetailNativeView: View {
                 url: url,
                 isVideo: isVideo(at: index, url: url),
                 placeholderURL: placeholderURL(at: index),
+                fallbackURL: fallbackURL(at: index, url: url),
                 index: index,
                 totalCount: displayMediaURLs.count
               )
@@ -981,6 +1023,14 @@ public struct DiscoverPostDetailNativeView: View {
     return thumbnails.first ?? posters.first
   }
 
+  private func fallbackURL(at index: Int, url: String) -> String? {
+    let originals = model.post.mediaURLs
+    guard originals.indices.contains(index) else { return nil }
+    let fallback = originals[index].trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !fallback.isEmpty, fallback != url, !fallback.isVideoURL else { return nil }
+    return fallback
+  }
+
   private func presentReport(for comment: MIRAComment) {
     CaptroHaptics.medium()
     reportComment = comment
@@ -1012,6 +1062,7 @@ private struct DiscoverDetailMediaCard: View {
   let url: String
   let isVideo: Bool
   let placeholderURL: String?
+  let fallbackURL: String?
   let index: Int
   let totalCount: Int
 
@@ -1021,6 +1072,7 @@ private struct DiscoverDetailMediaCard: View {
         url: url,
         isVideo: isVideo,
         placeholderURL: placeholderURL,
+        fallbackURL: fallbackURL,
         contentMode: .fill,
         shouldPlay: false,
         maxPixelSize: MIRAMediaSizing.feedTargetHeight,

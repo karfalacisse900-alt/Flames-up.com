@@ -189,6 +189,19 @@ final class DiscoverNativeModel: ObservableObject {
     Task { await MIRAAppCacheStore.shared.saveDiscoverPosts(snapshot, category: activePostsCategory) }
   }
 
+  func applyEngagementUpdate(_ update: MIRAPostEngagementUpdate) {
+    guard let index = posts.firstIndex(where: { $0.id == update.postId }) else { return }
+    posts[index] = posts[index].updating(
+      liked: update.liked,
+      likesCount: update.likesCount,
+      commentsCount: update.commentsCount,
+      saved: update.saved,
+      savesCount: update.savesCount
+    )
+    let snapshot = posts
+    Task { await MIRAAppCacheStore.shared.saveDiscoverPosts(snapshot, category: activePostsCategory) }
+  }
+
   func blockAuthor(_ post: MIRAPost) async {
     guard let userId = post.userId, !userId.isEmpty else { return }
     let previous = posts
@@ -307,6 +320,10 @@ public struct DiscoverNativeView: View {
       .toolbar((selectedStoryGroup == nil && !isReportSheetPresented) ? .visible : .hidden, for: .tabBar)
       .miraStatusBarHidden(selectedStoryGroup != nil)
       .task { await model.load() }
+      .onReceive(NotificationCenter.default.publisher(for: .miraPostEngagementDidChange)) { notification in
+        guard let update = MIRAPostEngagementSync.update(from: notification) else { return }
+        model.applyEngagementUpdate(update)
+      }
       .miraFullScreenOverlay(item: $selectedStoryGroup, background: .black) { group, dismissStory in
         StoryViewerNativeView(
           group: group,
@@ -491,12 +508,18 @@ public struct DiscoverNativeView: View {
   }
 
   private var galleryPosts: [MIRAPost] {
-    let mediaPosts = model.posts.filter { !$0.mediaURLs.isEmpty }
-    return mediaPosts.isEmpty ? model.posts : mediaPosts
+    model.posts.filter(hasVisualPreview)
   }
 
   private var filteredGalleryPosts: [MIRAPost] {
     galleryPosts
+  }
+
+  private func hasVisualPreview(_ post: MIRAPost) -> Bool {
+    !(post.posterMediaURLs + post.thumbnailMediaURLs + post.feedMediaURLs + post.mediaURLs)
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { !$0.isEmpty }
+      .isEmpty
   }
 
   private func sectionHeader(title: String, subtitle: String) -> some View {

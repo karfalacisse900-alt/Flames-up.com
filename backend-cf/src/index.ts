@@ -4412,24 +4412,35 @@ function feedPostPayload(post: any, likedBy: string[] = [], env?: Env) {
 async function getPostEngagementState(db: D1Database, postId: string, userId: string) {
   const row: any = await db.prepare(
     `SELECT
-       (SELECT COUNT(*) FROM likes WHERE post_id = ?) AS likes_count,
-       (SELECT COUNT(*) FROM comments WHERE post_id = ? AND COALESCE(status, 'active') NOT IN ('removed', 'hidden')) AS comments_count,
-       (SELECT COUNT(*) FROM saved_posts WHERE post_id = ?) AS saves_count,
+       COALESCE(p.likes_count, 0) AS stored_likes_count,
+       COALESCE(p.comments_count, 0) AS stored_comments_count,
+       COALESCE(p.saves_count, 0) AS stored_saves_count,
+       (SELECT COUNT(*) FROM likes WHERE post_id = p.id) AS counted_likes_count,
+       (SELECT COUNT(*) FROM comments WHERE post_id = p.id AND COALESCE(status, 'active') NOT IN ('removed', 'hidden')) AS counted_comments_count,
+       (SELECT COUNT(*) FROM saved_posts WHERE post_id = p.id) AS counted_saves_count,
        EXISTS (SELECT 1 FROM likes WHERE user_id = ? AND post_id = ?) AS is_liked,
        EXISTS (SELECT 1 FROM saved_posts WHERE user_id = ? AND post_id = ?) AS saved`
-  ).bind(postId, postId, postId, userId, postId, userId, postId).first();
+  + ' FROM posts p WHERE p.id = ?'
+  ).bind(userId, postId, userId, postId, postId).first();
 
   const state = {
-    likes_count: Math.max(0, Number(row?.likes_count || 0)),
-    comments_count: Math.max(0, Number(row?.comments_count || 0)),
-    saves_count: Math.max(0, Number(row?.saves_count || 0)),
+    likes_count: Math.max(0, Number(row?.stored_likes_count || 0), Number(row?.counted_likes_count || 0)),
+    comments_count: Math.max(0, Number(row?.stored_comments_count || 0), Number(row?.counted_comments_count || 0)),
+    saves_count: Math.max(0, Number(row?.stored_saves_count || 0), Number(row?.counted_saves_count || 0)),
     liked: row?.is_liked === true || row?.is_liked === 1 || row?.is_liked === '1',
     saved: row?.saved === true || row?.saved === 1 || row?.saved === '1',
   };
 
-  // Keep the denormalized counters repaired, but never trust them as the source of truth.
+  // Keep denormalized counters repaired upward without erasing legacy counts that
+  // may not have matching interaction rows.
   try {
-    await db.prepare('UPDATE posts SET likes_count = ?, comments_count = ?, saves_count = ? WHERE id = ?')
+    await db.prepare(
+      `UPDATE posts
+       SET likes_count = MAX(COALESCE(likes_count, 0), ?),
+           comments_count = MAX(COALESCE(comments_count, 0), ?),
+           saves_count = MAX(COALESCE(saves_count, 0), ?)
+       WHERE id = ?`
+    )
       .bind(state.likes_count, state.comments_count, state.saves_count, postId)
       .run();
   } catch {}
@@ -9088,9 +9099,9 @@ api.get('/posts/:postId', authMiddleware, async (c) => {
        EXISTS (SELECT 1 FROM follows fl WHERE fl.follower_id = ? AND fl.following_id = p.user_id) AS is_following,
        EXISTS (SELECT 1 FROM likes lk WHERE lk.user_id = ? AND lk.post_id = p.id) AS is_liked,
        EXISTS (SELECT 1 FROM saved_posts sp WHERE sp.user_id = ? AND sp.post_id = p.id) AS saved,
-       (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
-       (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden')) AS live_comments_count,
-       (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id) AS live_saves_count
+       MAX(COALESCE(p.likes_count, 0), (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id)) AS live_likes_count,
+       MAX(COALESCE(p.comments_count, 0), (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden'))) AS live_comments_count,
+       MAX(COALESCE(p.saves_count, 0), (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id)) AS live_saves_count
      FROM posts p JOIN users u ON p.user_id = u.id`,
     `WHERE p.id = ? AND ${visiblePostWhere('u', 'p')}`,
   ].join(' ');
@@ -9131,6 +9142,13 @@ api.post('/posts/:postId/like', authMiddleware, async (c) => {
       .bind(userId, postId)
       .run();
     changed = d1Changes(result) > 0;
+  }
+  if (changed) {
+    await c.env.DB.prepare(
+      nextLiked
+        ? 'UPDATE posts SET likes_count = COALESCE(likes_count, 0) + 1 WHERE id = ?'
+        : 'UPDATE posts SET likes_count = MAX(0, COALESCE(likes_count, 0) - 1) WHERE id = ?'
+    ).bind(postId).run();
   }
   const engagement = await getPostEngagementState(c.env.DB, postId, userId);
 
@@ -10714,6 +10732,7 @@ api.post('/library/save/:postId', authMiddleware, async (c) => {
     await c.env.DB.prepare('UPDATE saved_posts SET collection = ? WHERE user_id = ? AND post_id = ?').bind(collection, userId, postId).run();
   } else {
     await c.env.DB.prepare('INSERT INTO saved_posts (id, user_id, post_id, collection) VALUES (?, ?, ?, ?)').bind(uuid(), userId, postId, collection).run();
+    await c.env.DB.prepare('UPDATE posts SET saves_count = COALESCE(saves_count, 0) + 1 WHERE id = ?').bind(postId).run();
   }
   try {
     await c.env.DB.prepare('INSERT INTO bookmarks (id, user_id, post_id, collection) VALUES (?, ?, ?, ?) ON CONFLICT(user_id, post_id) DO UPDATE SET collection = ?')
@@ -10742,6 +10761,7 @@ api.delete('/library/save/:postId', authMiddleware, async (c) => {
   const existingSave = await c.env.DB.prepare('SELECT id FROM saved_posts WHERE user_id = ? AND post_id = ?').bind(userId, postId).first();
   if (existingSave) {
     await c.env.DB.prepare('DELETE FROM saved_posts WHERE user_id = ? AND post_id = ?').bind(userId, postId).run();
+    await c.env.DB.prepare('UPDATE posts SET saves_count = MAX(0, COALESCE(saves_count, 0) - 1) WHERE id = ?').bind(postId).run();
   }
   try { await c.env.DB.prepare('DELETE FROM bookmarks WHERE user_id = ? AND post_id = ?').bind(userId, postId).run(); } catch {}
   const engagement = await getPostEngagementState(c.env.DB, postId, userId);
@@ -15300,6 +15320,7 @@ api.post('/bookmarks', authMiddleware, async (c) => {
       await c.env.DB.prepare('UPDATE saved_posts SET collection = ? WHERE user_id = ? AND post_id = ?').bind(collectionName, userId, postId).run();
     } else {
       await c.env.DB.prepare('INSERT INTO saved_posts (id, user_id, post_id, collection) VALUES (?, ?, ?, ?)').bind(uuid(), userId, postId, collectionName).run();
+      await c.env.DB.prepare('UPDATE posts SET saves_count = COALESCE(saves_count, 0) + 1 WHERE id = ?').bind(postId).run();
     }
     const engagement = await getPostEngagementState(c.env.DB, postId, userId);
     try {
@@ -15334,6 +15355,7 @@ api.delete('/bookmarks/:postId', authMiddleware, async (c) => {
   const existingSave = await c.env.DB.prepare('SELECT id FROM saved_posts WHERE user_id = ? AND post_id = ?').bind(userId, postId).first();
   if (existingSave) {
     await c.env.DB.prepare('DELETE FROM saved_posts WHERE user_id = ? AND post_id = ?').bind(userId, postId).run();
+    await c.env.DB.prepare('UPDATE posts SET saves_count = MAX(0, COALESCE(saves_count, 0) - 1) WHERE id = ?').bind(postId).run();
   }
   try { await c.env.DB.prepare('DELETE FROM bookmarks WHERE user_id = ? AND post_id = ?').bind(userId, postId).run(); } catch {}
   if (existingSave) {

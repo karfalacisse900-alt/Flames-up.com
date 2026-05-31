@@ -100,6 +100,19 @@ actor MIRAAppCacheStore {
     await MIRALocalJSONCache.save(Array(posts.prefix(maxDiscoverPosts)), key: CacheKey.discoverPosts(category))
   }
 
+  func loadCachedPost(id postId: String) async -> MIRAPost? {
+    var best: MIRAPost?
+    if let feed = await loadFeed() {
+      best = preferredPost(best, feed.first { $0.id == postId })
+    }
+    for category in CacheKey.discoverCategoryIds {
+      if let posts = await loadDiscoverPosts(category: category) {
+        best = preferredPost(best, posts.first { $0.id == postId })
+      }
+    }
+    return best
+  }
+
   func loadDiscoverStories() async -> [MIRAStoryGroup]? {
     await MIRALocalJSONCache.load([MIRAStoryGroup].self, key: CacheKey.discoverStories, maxAge: contentCacheAge)
   }
@@ -233,6 +246,14 @@ actor MIRAAppCacheStore {
     }
   }
 
+  private func preferredPost(_ lhs: MIRAPost?, _ rhs: MIRAPost?) -> MIRAPost? {
+    guard let lhs else { return rhs }
+    guard let rhs else { return lhs }
+    let lhsScore = (lhs.likesCount ?? 0) + (lhs.commentsCount ?? 0) + (lhs.savesCount ?? 0)
+    let rhsScore = (rhs.likesCount ?? 0) + (rhs.commentsCount ?? 0) + (rhs.savesCount ?? 0)
+    return rhsScore >= lhsScore ? rhs : lhs
+  }
+
   private func nowISO() -> String {
     ISO8601DateFormatter.miraCacheStore.string(from: Date())
   }
@@ -245,6 +266,19 @@ private enum CacheKey {
   static let notifications = "native.notifications.v2.cache_first"
   static let settings = "native.settings.v1.cache_first"
   static let postDraft = "native.post_draft.v1.cache_first"
+  static let discoverCategoryIds = [
+    "all",
+    "photography",
+    "outdoors",
+    "outfits",
+    "food",
+    "travel",
+    "events",
+    "nightlife",
+    "art",
+    "lifestyle",
+    "fitness"
+  ]
 
   static func discoverPosts(_ category: String) -> String {
     "native.discover.posts.v4.cache_first.\(category)"
