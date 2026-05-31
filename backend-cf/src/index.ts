@@ -908,6 +908,9 @@ async function ensurePostEditorSchema(db: D1Database) {
     "ALTER TABLE posts ADD COLUMN editor_overlays TEXT DEFAULT '[]'",
     "ALTER TABLE posts ADD COLUMN tagged_users TEXT DEFAULT '[]'",
     "ALTER TABLE posts ADD COLUMN media_dimensions TEXT DEFAULT '[]'",
+    'ALTER TABLE posts ADD COLUMN saves_count INTEGER DEFAULT 0',
+    'ALTER TABLE posts ADD COLUMN shares_count INTEGER DEFAULT 0',
+    'ALTER TABLE posts ADD COLUMN views_count INTEGER DEFAULT 0',
   ];
 
   for (const statement of statements) {

@@ -506,17 +506,14 @@ private struct CaptroWelcomePager: View {
     }
     .background(currentPage.background.ignoresSafeArea())
     .onAppear {
-      audio.resumeIfAllowed()
+      audio.prepare()
     }
     .onDisappear {
       audio.stop()
     }
     .onChange(of: scenePhase) { _, phase in
-      if phase == .active {
-        audio.resumeIfAllowed()
-      } else {
-        audio.pauseForInterruption()
-      }
+      guard phase != .active else { return }
+      audio.stop()
     }
   }
 }
@@ -802,18 +799,13 @@ private enum CaptroWelcomeActionStyle {
 private final class CaptroWelcomeAudioController: ObservableObject {
   @Published private(set) var isPlaying = false
   private var player: AVAudioPlayer?
-  private var userMuted = false
 
-  func resumeIfAllowed() {
-    guard !userMuted else { return }
-    startPlayback()
+  func prepare() {
+    configurePlayerIfNeeded(activateAudioSession: false)
   }
 
-  private func startPlayback() {
-    guard player == nil else {
-      play()
-      return
-    }
+  private func configurePlayerIfNeeded(activateAudioSession: Bool) {
+    guard player == nil else { return }
     guard let url = Bundle.main.url(forResource: "captro-welcome-loksii", withExtension: "mp3") ??
             Bundle.main.url(forResource: "captro-welcome-loksii", withExtension: "mp3", subdirectory: "Resources") else {
       isPlaying = false
@@ -821,32 +813,37 @@ private final class CaptroWelcomeAudioController: ObservableObject {
     }
 
     do {
-      let session = AVAudioSession.sharedInstance()
-      try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
-      try session.setActive(true)
+      if activateAudioSession {
+        let session = AVAudioSession.sharedInstance()
+        try session.setCategory(.ambient, mode: .default, options: [.mixWithOthers])
+        try session.setActive(true)
+      }
       let audioPlayer = try AVAudioPlayer(contentsOf: url)
       audioPlayer.numberOfLoops = -1
       audioPlayer.volume = 0.22
       audioPlayer.prepareToPlay()
       player = audioPlayer
-      play()
     } catch {
       isPlaying = false
     }
   }
 
-  func toggle() {
-    if isPlaying {
-      userMuted = true
-      pause()
-    } else {
-      userMuted = false
-      startPlayback()
-    }
+  private func startPlayback() {
+    configurePlayerIfNeeded(activateAudioSession: true)
+    do {
+      let session = AVAudioSession.sharedInstance()
+      try session.setCategory(.ambient, mode: .default, options: [.mixWithOthers])
+      try session.setActive(true)
+    } catch {}
+    play()
   }
 
-  func pauseForInterruption() {
-    pause()
+  func toggle() {
+    if isPlaying {
+      stop()
+    } else {
+      startPlayback()
+    }
   }
 
   func stop() {

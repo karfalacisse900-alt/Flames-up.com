@@ -122,21 +122,11 @@ protocol MIRAStoryCameraViewControllerDelegate: AnyObject {
   func storyCameraDidRequestEdit(_ media: MIRAPickedMedia, tool: MIRAStoryCameraEditTool)
 }
 
-final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptureDelegate, AVCaptureFileOutputRecordingDelegate, PHPickerViewControllerDelegate {
+final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptureDelegate, PHPickerViewControllerDelegate {
   weak var delegate: MIRAStoryCameraViewControllerDelegate?
 
   private enum CameraMode: String, CaseIterable {
     case photo = "Photo"
-    case video15 = "15s"
-    case video60 = "60s"
-
-    var maxDuration: TimeInterval? {
-      switch self {
-      case .video15: return 15
-      case .video60: return 60
-      default: return nil
-      }
-    }
   }
 
   private enum TimerSetting: CaseIterable {
@@ -182,12 +172,10 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
   private let session = AVCaptureSession()
   private let sessionQueue = DispatchQueue(label: "mira.camera.session")
   private let photoOutput = AVCapturePhotoOutput()
-  private let movieOutput = AVCaptureMovieFileOutput()
   private let previewLayer = AVCaptureVideoPreviewLayer()
   private let imageManager = PHCachingImageManager()
 
   private var currentInput: AVCaptureDeviceInput?
-  private var audioInput: AVCaptureDeviceInput?
   private var cameraPosition: AVCaptureDevice.Position = .back
   private var isConfigured = false
   private var selectedMode: CameraMode = .photo
@@ -197,9 +185,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
   private var countdownValue = 0
   private var rawCaptureSupported = false
   private var rawCaptureEnabled = false
-  private var pendingStopWorkItem: DispatchWorkItem?
   private var initialZoomFactor: CGFloat = 1
-  private var longPressDidRecord = false
   private var capturedMedia: MIRAPickedMedia?
   private var reviewVideoPlayer: AVPlayer?
   private var reviewVideoLayer: AVPlayerLayer?
@@ -299,10 +285,6 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
   override func viewWillDisappear(_ animated: Bool) {
     super.viewWillDisappear(animated)
     countdownTimer?.invalidate()
-    pendingStopWorkItem?.cancel()
-    if movieOutput.isRecording {
-      movieOutput.stopRecording()
-    }
     cleanupReviewVideoPlayer()
     sessionQueue.async { [session] in
       if session.isRunning {
@@ -434,10 +416,6 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     shutterFill.layer.cornerRadius = 31
     shutterFill.isUserInteractionEnabled = false
     shutterButton.addSubview(shutterFill)
-
-    let longPress = UILongPressGestureRecognizer(target: self, action: #selector(handleShutterLongPress(_:)))
-    longPress.minimumPressDuration = 0.22
-    shutterButton.addGestureRecognizer(longPress)
 
     modeStack.axis = .horizontal
     modeStack.alignment = .center
@@ -642,26 +620,15 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
   private func prepareCamera() {
     switch AVCaptureDevice.authorizationStatus(for: .video) {
     case .authorized:
-      requestMicrophoneThenConfigure()
+      configureSession()
     case .notDetermined:
       AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
         DispatchQueue.main.async {
-          granted ? self?.requestMicrophoneThenConfigure() : self?.showCameraUnavailableMessage()
+          granted ? self?.configureSession() : self?.showCameraUnavailableMessage()
         }
       }
     default:
       showCameraUnavailableMessage()
-    }
-  }
-
-  private func requestMicrophoneThenConfigure() {
-    switch AVCaptureDevice.authorizationStatus(for: .audio) {
-    case .notDetermined:
-      AVCaptureDevice.requestAccess(for: .audio) { [weak self] _ in
-        DispatchQueue.main.async { self?.configureSession() }
-      }
-    default:
-      configureSession()
     }
   }
 
@@ -687,14 +654,6 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
         self.currentInput = input
       }
 
-      if AVCaptureDevice.authorizationStatus(for: .audio) == .authorized,
-         let audioDevice = AVCaptureDevice.default(for: .audio),
-         let input = try? AVCaptureDeviceInput(device: audioDevice),
-         self.session.canAddInput(input) {
-        self.session.addInput(input)
-        self.audioInput = input
-      }
-
       if self.session.canAddOutput(self.photoOutput) {
         self.session.addOutput(self.photoOutput)
         self.photoOutput.isHighResolutionCaptureEnabled = true
@@ -704,14 +663,6 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
           self.rawCaptureSupported = rawSupported
           self.rawCaptureEnabled = self.rawCaptureEnabled && rawSupported
           self.updateRawButton()
-        }
-      }
-
-      if self.session.canAddOutput(self.movieOutput) {
-        self.session.addOutput(self.movieOutput)
-        self.movieOutput.movieFragmentInterval = .invalid
-        if let connection = self.movieOutput.connection(with: .video) {
-          self.applyPreferredVideoStabilization(to: connection)
         }
       }
 
@@ -767,18 +718,6 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
       }
       device.unlockForConfiguration()
     } catch {}
-  }
-
-  private func applyPreferredVideoStabilization(to connection: AVCaptureConnection) {
-    guard connection.isVideoStabilizationSupported else { return }
-    let activeFormat = currentInput?.device.activeFormat
-    if activeFormat?.isVideoStabilizationModeSupported(.cinematicExtended) == true {
-      connection.preferredVideoStabilizationMode = .cinematicExtended
-    } else if activeFormat?.isVideoStabilizationModeSupported(.cinematic) == true {
-      connection.preferredVideoStabilizationMode = .cinematic
-    } else {
-      connection.preferredVideoStabilizationMode = .auto
-    }
   }
 
   private func showCameraUnavailableMessage() {
@@ -942,14 +881,6 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     button.layer.cornerCurve = .continuous
     button.contentEdgeInsets = UIEdgeInsets(top: 8, left: 14, bottom: 8, right: 14)
     return button
-  }
-
-  private func setRecordingState(_ isRecording: Bool) {
-    UIView.animate(withDuration: 0.16) {
-      self.shutterFill.backgroundColor = isRecording ? UIColor.systemRed.withAlphaComponent(0.92) : UIColor.white.withAlphaComponent(0.82)
-      self.shutterFill.transform = isRecording ? CGAffineTransform(scaleX: 0.72, y: 0.72) : .identity
-      self.shutterFill.layer.cornerRadius = isRecording ? 12 : 31
-    }
   }
 
   @objc private func cancelTapped() {
@@ -1172,15 +1103,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
       retakeCapturedMedia()
       return
     }
-    if longPressDidRecord {
-      longPressDidRecord = false
-      return
-    }
     guard session.isRunning else { return }
-    if movieOutput.isRecording {
-      stopRecordingVideo()
-      return
-    }
     if timerSetting.seconds > 0 {
       startCountdown(seconds: timerSetting.seconds) { [weak self] in
         self?.performCaptureAction()
@@ -1191,12 +1114,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
   }
 
   private func performCaptureAction() {
-    switch selectedMode {
-    case .photo:
-      capturePhoto()
-    case .video15, .video60:
-      startRecordingVideo(maxDuration: selectedMode.maxDuration)
-    }
+    capturePhoto()
   }
 
   private func startCountdown(seconds: Int, completion: @escaping () -> Void) {
@@ -1228,7 +1146,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
   }
 
   private func capturePhoto() {
-    guard session.isRunning, !movieOutput.isRecording else { return }
+    guard session.isRunning else { return }
     let settings: AVCapturePhotoSettings
     let jpegFormat: [String: Any] = [AVVideoCodecKey: AVVideoCodecType.jpeg]
     if rawCaptureEnabled, let rawPixelFormat = photoOutput.availableRawPhotoPixelFormatTypes.first {
@@ -1257,65 +1175,6 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     }
     CaptroHaptics.success()
     photoOutput.capturePhoto(with: settings, delegate: self)
-  }
-
-  @objc private func handleShutterLongPress(_ recognizer: UILongPressGestureRecognizer) {
-    switch recognizer.state {
-    case .began:
-      guard selectedMode == .photo, session.isRunning, !movieOutput.isRecording else { return }
-      longPressDidRecord = true
-      startRecordingVideo(maxDuration: 60)
-    case .ended, .cancelled, .failed:
-      if movieOutput.isRecording {
-        stopRecordingVideo()
-      }
-    default:
-      break
-    }
-  }
-
-  private func startRecordingVideo(maxDuration: TimeInterval?) {
-    guard session.isRunning, !movieOutput.isRecording else { return }
-    if let connection = movieOutput.connection(with: .video), connection.isVideoOrientationSupported {
-      connection.videoOrientation = .portrait
-      if cameraPosition == .front, connection.isVideoMirroringSupported {
-        connection.isVideoMirrored = true
-      }
-      applyPreferredVideoStabilization(to: connection)
-    }
-    setTorch(active: flashSetting == .on)
-    setRecordingState(true)
-    CaptroHaptics.medium()
-    let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).mov")
-    movieOutput.startRecording(to: url, recordingDelegate: self)
-
-    pendingStopWorkItem?.cancel()
-    if let maxDuration {
-      let workItem = DispatchWorkItem { [weak self] in
-        guard let self, self.movieOutput.isRecording else { return }
-        self.stopRecordingVideo()
-      }
-      pendingStopWorkItem = workItem
-      DispatchQueue.main.asyncAfter(deadline: .now() + maxDuration, execute: workItem)
-    }
-  }
-
-  private func stopRecordingVideo() {
-    pendingStopWorkItem?.cancel()
-    if movieOutput.isRecording {
-      movieOutput.stopRecording()
-    }
-    setTorch(active: false)
-    setRecordingState(false)
-  }
-
-  private func setTorch(active: Bool) {
-    guard let device = currentInput?.device, device.hasTorch else { return }
-    do {
-      try device.lockForConfiguration()
-      device.torchMode = active ? .on : .off
-      device.unlockForConfiguration()
-    } catch {}
   }
 
   @objc private func flipCamera() {
@@ -1768,28 +1627,6 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
   }
 #endif
 
-  func fileOutput(
-    _ output: AVCaptureFileOutput,
-    didFinishRecordingTo outputFileURL: URL,
-    from connections: [AVCaptureConnection],
-    error: Error?
-  ) {
-    DispatchQueue.main.async {
-      self.setRecordingState(false)
-      self.setTorch(active: false)
-    }
-    defer { try? FileManager.default.removeItem(at: outputFileURL) }
-    guard error == nil, let data = try? Data(contentsOf: outputFileURL), !data.isEmpty else {
-      DispatchQueue.main.async {
-        self.showTransientMessage("That video could not be captured. Try again.")
-      }
-      return
-    }
-    let media = MIRAPickedMedia(data: data, kind: .video, fileName: "\(UUID().uuidString).mov", mimeType: "video/quicktime")
-    DispatchQueue.main.async {
-      self.showCapturedMedia(media)
-    }
-  }
 }
 
 private final class MIRACameraGridOverlayView: UIView {
