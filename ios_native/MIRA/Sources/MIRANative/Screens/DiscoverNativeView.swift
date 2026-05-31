@@ -592,6 +592,7 @@ private struct StoryViewerNativeView: View {
   @State private var isStoryAudioPlaying = false
   @State private var isStoryAudioLoading = false
   @State private var resumeStoryAudioAfterInterruption = false
+  @State private var isSubmittingStoryLike = false
   @FocusState private var isReplyFocused: Bool
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @Environment(\.scenePhase) private var scenePhase
@@ -655,10 +656,14 @@ private struct StoryViewerNativeView: View {
           }
           .padding(.top, safeTop + 86)
           .padding(.bottom, safeBottom + 164)
+          .simultaneousGesture(
+            DragGesture(minimumDistance: 32, coordinateSpace: .local)
+              .onEnded(handleStoryGroupSwipe)
+          )
 
           storyTopBar
             .padding(.horizontal, 13)
-            .padding(.top, safeTop + 8)
+            .padding(.top, safeTop + 22)
             .frame(maxHeight: .infinity, alignment: .top)
 
           storyThoughtOverlay
@@ -786,11 +791,7 @@ private struct StoryViewerNativeView: View {
       HStack(alignment: .bottom, spacing: 18) {
         ForEach(storyRailGroups) { railGroup in
           Button {
-            withAnimation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion)) {
-              activeGroupOverride = railGroup
-              localStories = railGroup.statuses ?? []
-              selectedIndex = 0
-            }
+            selectStoryGroup(railGroup)
           } label: {
             StoryViewerCarouselBubble(
               group: railGroup,
@@ -802,9 +803,10 @@ private struct StoryViewerNativeView: View {
         }
       }
       .padding(.horizontal, 22)
+      .padding(.top, 4)
       .frame(maxWidth: .infinity, alignment: .center)
     }
-    .frame(height: 96)
+    .frame(height: 112)
     .mask(
       LinearGradient(
         stops: [
@@ -824,6 +826,43 @@ private struct StoryViewerNativeView: View {
       return "@\(MIRAUsernameRules.normalized(railGroup.userUsername))"
     }
     return railGroup.displayName
+  }
+
+  private func selectStoryGroup(_ railGroup: MIRAStoryGroup) {
+    withAnimation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion)) {
+      activeGroupOverride = railGroup
+      localStories = railGroup.statuses ?? []
+      selectedIndex = 0
+      visibleThoughts.removeAll()
+      thoughtErrorText = nil
+    }
+  }
+
+  private func handleStoryGroupSwipe(_ value: DragGesture.Value) {
+    let horizontal = value.translation.width
+    let vertical = value.translation.height
+    guard abs(horizontal) > 44, abs(horizontal) > abs(vertical) * 1.35 else { return }
+    if horizontal < 0 {
+      goToNextStoryGroup()
+    } else {
+      goToPreviousStoryGroup()
+    }
+  }
+
+  private func goToNextStoryGroup() {
+    switchStoryGroup(offset: 1)
+  }
+
+  private func goToPreviousStoryGroup() {
+    switchStoryGroup(offset: -1)
+  }
+
+  private func switchStoryGroup(offset: Int) {
+    let groups = storyRailGroups
+    guard let currentIndex = groups.firstIndex(where: { $0.userId == activeGroup.userId }) else { return }
+    let nextIndex = currentIndex + offset
+    guard groups.indices.contains(nextIndex) else { return }
+    selectStoryGroup(groups[nextIndex])
   }
 
   private var storyTopBar: some View {
@@ -920,12 +959,14 @@ private struct StoryViewerNativeView: View {
       .background(Color.white.opacity(0.18))
       .clipShape(Capsule())
 
-      Button { CaptroHaptics.light() } label: {
-        Image(systemName: "heart")
+      Button { toggleStoryLike() } label: {
+        Image(systemName: currentStory?.viewerLiked == true ? "heart.fill" : "heart")
           .font(.system(size: 29, weight: .regular))
-          .foregroundStyle(.white)
+          .foregroundStyle(currentStory?.viewerLiked == true ? MIRATheme.Color.like : .white)
           .frame(width: 38, height: 48)
+          .scaleEffect(currentStory?.viewerLiked == true ? 1.06 : 1)
       }
+      .disabled(isSubmittingStoryLike || currentStory == nil)
       .buttonStyle(.miraPress)
     }
     .overlay(alignment: .topLeading) {
@@ -1046,6 +1087,43 @@ private struct StoryViewerNativeView: View {
         }
       }
     }
+  }
+
+  @MainActor
+  private func toggleStoryLike() {
+    guard !isSubmittingStoryLike, let story = currentStory else { return }
+    let nextLiked = !story.viewerLiked
+    let nextCount = max(0, (story.likesCount ?? 0) + (nextLiked ? 1 : -1))
+    updateCurrentStory(liked: nextLiked, likesCount: nextCount)
+    isSubmittingStoryLike = true
+    CaptroHaptics.light()
+
+    Task {
+      do {
+        let response: PostLikeResponse = try await api.post("/statuses/\(story.id)/like", body: LikeBody(liked: nextLiked))
+        await MainActor.run {
+          updateCurrentStory(
+            liked: response.liked ?? nextLiked,
+            likesCount: response.likesCount ?? nextCount
+          )
+          isSubmittingStoryLike = false
+        }
+      } catch {
+        await MainActor.run {
+          updateCurrentStory(liked: story.viewerLiked, likesCount: story.likesCount ?? 0)
+          isSubmittingStoryLike = false
+          CaptroHaptics.warning()
+        }
+      }
+    }
+  }
+
+  @MainActor
+  private func updateCurrentStory(liked: Bool, likesCount: Int) {
+    guard stories.indices.contains(selectedIndex) else { return }
+    var updatedStories = stories
+    updatedStories[selectedIndex] = updatedStories[selectedIndex].updating(liked: liked, likesCount: likesCount)
+    localStories = updatedStories
   }
 
   @MainActor
@@ -1264,7 +1342,7 @@ private struct StoryViewerCarouselBubble: View {
         .lineLimit(1)
         .frame(width: isSelected ? 104 : 72)
     }
-    .frame(width: isSelected ? 112 : 74, height: 96, alignment: .bottom)
+    .frame(width: isSelected ? 116 : 76, height: 108, alignment: .bottom)
     .animation(CaptroMotion.mediaFadeAnimation(reduceMotion: false), value: isSelected)
   }
 }

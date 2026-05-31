@@ -544,6 +544,7 @@ let autoCategorySchemaReady = false;
 let autoCategoryBackfillReady = false;
 let locationSchemaReady = false;
 let statusThoughtSchemaReady = false;
+let statusLikeSchemaReady = false;
 
 function normalizeSchemaSql(statement: string): string {
   return statement.replace(/\s+/g, ' ').trim().replace(/;$/, '');
@@ -868,6 +869,35 @@ async function ensureStatusThoughtSchema(db: D1Database) {
   }
 
   statusThoughtSchemaReady = true;
+}
+
+async function ensureStatusLikeSchema(db: D1Database) {
+  if (statusLikeSchemaReady) return;
+  await ensurePrivacySchema(db);
+
+  const statements = [
+    `CREATE TABLE IF NOT EXISTS status_likes (
+      id TEXT PRIMARY KEY,
+      status_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(status_id, user_id)
+    )`,
+    'CREATE INDEX IF NOT EXISTS idx_status_likes_status ON status_likes(status_id, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_status_likes_user ON status_likes(user_id, created_at)',
+  ];
+
+  for (const statement of statements) {
+    try {
+      await runSchemaStatement(db, statement);
+    } catch (error: any) {
+      if (!isIgnorableSchemaError(error, statement)) {
+        throw error;
+      }
+    }
+  }
+
+  statusLikeSchemaReady = true;
 }
 
 async function ensurePostEditorSchema(db: D1Database) {
@@ -9559,7 +9589,12 @@ function groupStatusRows(rows: any[], viewerId: string) {
         has_unviewed: false,
       });
     }
-    const parsed = { ...s, viewed_by: JSON.parse(s.viewed_by || '[]') };
+    const parsed = {
+      ...s,
+      viewed_by: JSON.parse(s.viewed_by || '[]'),
+      likes_count: Math.max(0, Number(s.likes_count || 0)),
+      liked_by_me: s.liked_by_me === true || s.liked_by_me === 1 || s.liked_by_me === '1',
+    };
     grouped.get(uid)!.statuses.push(parsed);
     if (!parsed.viewed_by.includes(viewerId)) {
       grouped.get(uid)!.has_unviewed = true;
@@ -9623,34 +9658,86 @@ api.post('/statuses', authMiddleware, async (c) => {
     visibility, user_username: publicUsernameFor(user), user_full_name: user?.full_name, user_profile_image: user?.profile_image,
     audio_provider: audioProvider, audio_track_id: audioTrackId, audio_title: audioTitle, audio_artist: audioArtist,
     audio_artwork_url: audioArtworkUrl, audio_stream_url: audioStreamUrl, audio_start_time: audioStartTime, audio_duration: audioDuration,
-    viewed_by: [], created_at: now(), expires_at: expiresAt,
+    viewed_by: [], likes_count: 0, liked_by_me: false, created_at: now(), expires_at: expiresAt,
   });
 });
 
 api.get('/statuses', authMiddleware, async (c) => {
+  await ensureStatusLikeSchema(c.env.DB);
   const userId = getUserId(c);
   const statusesSql = [
-    'SELECT s.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image',
+    `SELECT s.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
+       (SELECT COUNT(*) FROM status_likes sl_count WHERE sl_count.status_id = s.id) AS likes_count,
+       EXISTS(SELECT 1 FROM status_likes sl WHERE sl.status_id = s.id AND sl.user_id = ?) AS liked_by_me`,
     'FROM statuses s JOIN users u ON s.user_id = u.id',
     `WHERE s.created_at >= datetime('now', '-7 days') AND ${visibleStatusWhere('u', 's')}`,
     'ORDER BY s.created_at DESC',
   ].join(' ');
-  const r = await c.env.DB.prepare(statusesSql).bind(userId, userId).all();
+  const r = await c.env.DB.prepare(statusesSql).bind(userId, userId, userId).all();
   return c.json(groupStatusRows(r.results as any[], userId));
 });
 
 api.get('/statuses/friends', authMiddleware, async (c) => {
+  await ensureStatusLikeSchema(c.env.DB);
   const userId = getUserId(c);
   const r = await c.env.DB.prepare(
-    `SELECT s.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
+    `SELECT s.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
+       (SELECT COUNT(*) FROM status_likes sl_count WHERE sl_count.status_id = s.id) AS likes_count,
+       EXISTS(SELECT 1 FROM status_likes sl WHERE sl.status_id = s.id AND sl.user_id = ?) AS liked_by_me
      FROM statuses s JOIN users u ON s.user_id = u.id
      WHERE s.created_at >= datetime('now', '-7 days')
        AND s.user_id != ?
        AND COALESCE(s.visibility, 'public') != 'private'
        AND EXISTS (SELECT 1 FROM friendships f WHERE f.user_id = ? AND f.friend_id = s.user_id)
      ORDER BY s.created_at DESC`
-  ).bind(userId, userId).all();
+  ).bind(userId, userId, userId).all();
   return c.json(groupStatusRows(r.results as any[], userId));
+});
+
+api.post('/statuses/:statusId/like', authMiddleware, async (c) => {
+  await ensureStatusLikeSchema(c.env.DB);
+  const userId = getUserId(c);
+  const limited = await enforceRateLimit(c, 'story_like', userId, 300, 60);
+  if (limited) return limited;
+  const statusId = publicId(c.req.param('statusId'), 120);
+  const body: any = await c.req.json().catch(() => ({}));
+  const requested = optionalBoolean(body.liked ?? body.like ?? body.value);
+
+  const story: any = await c.env.DB.prepare(
+    [
+      'SELECT s.id, s.user_id FROM statuses s JOIN users u ON s.user_id = u.id',
+      `WHERE s.id = ? AND s.created_at >= datetime('now', '-7 days') AND ${visibleStatusWhere('u', 's')}`,
+      'LIMIT 1',
+    ].join(' ')
+  ).bind(statusId, userId, userId).first();
+  if (!story) return c.json({ detail: 'Story not found' }, 404);
+  if (await usersAreBlocked(c.env.DB, userId, story.user_id)) {
+    return c.json({ detail: 'You cannot like this story.' }, 403);
+  }
+
+  const existing: any = await c.env.DB.prepare('SELECT id FROM status_likes WHERE status_id = ? AND user_id = ?')
+    .bind(statusId, userId)
+    .first();
+  const nextLiked = requested ?? !existing;
+  if (nextLiked) {
+    await c.env.DB.prepare('INSERT OR IGNORE INTO status_likes (id, status_id, user_id, created_at) VALUES (?, ?, ?, ?)')
+      .bind(uuid(), statusId, userId, now())
+      .run();
+  } else {
+    await c.env.DB.prepare('DELETE FROM status_likes WHERE status_id = ? AND user_id = ?')
+      .bind(statusId, userId)
+      .run();
+  }
+
+  const row: any = await c.env.DB.prepare(
+    `SELECT COUNT(*) AS likes_count,
+      EXISTS(SELECT 1 FROM status_likes WHERE status_id = ? AND user_id = ?) AS liked_by_me
+     FROM status_likes WHERE status_id = ?`
+  ).bind(statusId, userId, statusId).first();
+  return c.json({
+    liked: row?.liked_by_me === true || row?.liked_by_me === 1 || row?.liked_by_me === '1',
+    likes_count: Math.max(0, Number(row?.likes_count || 0)),
+  });
 });
 
 api.post('/statuses/:statusId/view', authMiddleware, async (c) => {

@@ -736,6 +736,8 @@ public struct MIRAStatusPreview: Codable, Identifiable, Hashable {
   public let audioHidden: FlexibleBool?
   public let createdAt: String?
   public let expiresAt: String?
+  public let likesCount: Int?
+  public let likedByMe: Bool?
 
   public var mediaURL: String? {
     guard let image, !image.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
@@ -756,6 +758,34 @@ public struct MIRAStatusPreview: Codable, Identifiable, Hashable {
   public var audioDisplayArtist: String {
     let clean = audioArtist?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     return clean.isEmpty ? "Audius" : clean
+  }
+
+  public var viewerLiked: Bool {
+    likedByMe == true
+  }
+
+  public func updating(liked: Bool? = nil, likesCount: Int? = nil) -> MIRAStatusPreview {
+    MIRAStatusPreview(
+      id: id,
+      userId: userId,
+      content: content,
+      image: image,
+      backgroundColor: backgroundColor,
+      textColor: textColor,
+      audioProvider: audioProvider,
+      audioTrackId: audioTrackId,
+      audioTitle: audioTitle,
+      audioArtist: audioArtist,
+      audioArtworkUrl: audioArtworkUrl,
+      audioStreamUrl: audioStreamUrl,
+      audioStartTime: audioStartTime,
+      audioDuration: audioDuration,
+      audioHidden: audioHidden,
+      createdAt: createdAt,
+      expiresAt: expiresAt,
+      likesCount: likesCount ?? self.likesCount,
+      likedByMe: liked ?? likedByMe
+    )
   }
 }
 
