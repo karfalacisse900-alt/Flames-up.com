@@ -116,11 +116,13 @@ public final class MIRAVideoPrewarmManager {
   private func preparePlayer(for key: String, playbackURL: URL) {
     guard preparedPlayers[key] == nil else { return }
     let item = AVPlayerItem(url: playbackURL)
-    item.preferredForwardBufferDuration = 1.2
+    item.preferredForwardBufferDuration = 0.85
+    item.preferredPeakBitRate = 0
+    item.preferredMaximumResolution = CGSize(width: 1080, height: 1920)
     let player = AVPlayer(playerItem: item)
     player.isMuted = true
     player.volume = 0
-    player.automaticallyWaitsToMinimizeStalling = true
+    player.automaticallyWaitsToMinimizeStalling = false
     player.pause()
     preparedPlayers[key] = player
     preparedOrder.removeAll { $0 == key }

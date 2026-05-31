@@ -666,11 +666,15 @@ private struct StoryViewerNativeView: View {
       GeometryReader { proxy in
         let safeTop = proxy.safeAreaInsets.top
         let safeBottom = proxy.safeAreaInsets.bottom
+        let mediaTopInset = storyMediaTopInset(safeTop: safeTop)
 
         ZStack {
           storyMediaLayer
-            .frame(width: proxy.size.width, height: proxy.size.height)
-            .ignoresSafeArea()
+            .frame(width: proxy.size.width, height: max(1, proxy.size.height - mediaTopInset))
+            .clipShape(StoryTopRoundedRectangle(radius: 24))
+            .padding(.top, mediaTopInset)
+            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
+            .ignoresSafeArea(edges: [.horizontal, .bottom])
 
           LinearGradient(
             colors: [.black.opacity(0.28), .black.opacity(0.08), .clear],
@@ -707,7 +711,7 @@ private struct StoryViewerNativeView: View {
 
           storyTopBar
             .padding(.horizontal, 13)
-            .padding(.top, safeTop + 22)
+            .padding(.top, safeTop + 30)
             .frame(maxHeight: .infinity, alignment: .top)
 
           storyThoughtOverlay
@@ -739,6 +743,9 @@ private struct StoryViewerNativeView: View {
     .task(id: currentStory?.id) {
       guard let id = currentStory?.id else { return }
       let _: EmptyResponse? = try? await api.post("/statuses/\(id)/view", body: EmptyBody())
+    }
+    .task(id: storyPrewarmTaskID) {
+      await prewarmStoryMediaWindow()
     }
     .task(id: currentStory?.id) {
       await prepareStoryAudioIfNeeded()
@@ -799,6 +806,7 @@ private struct StoryViewerNativeView: View {
           isVideo: mediaURL.isVideoURL,
           contentMode: .fill,
           shouldPlay: true,
+          maxPixelSize: 1920,
           placeholderColor: storyFallbackColor,
           placeholderTint: MIRATheme.Color.textSecondary.opacity(0.68)
         )
@@ -831,26 +839,41 @@ private struct StoryViewerNativeView: View {
   }
 
   private var storyProfileCarousel: some View {
-    ScrollView(.horizontal, showsIndicators: false) {
-      HStack(alignment: .bottom, spacing: 18) {
-        ForEach(storyRailGroups) { railGroup in
-          Button {
-            selectStoryGroup(railGroup)
-          } label: {
-            StoryViewerCarouselBubble(
-              group: railGroup,
-              label: storyHandleLabel(for: railGroup),
-              isSelected: railGroup.userId == activeGroup.userId
-            )
+    GeometryReader { proxy in
+      ScrollViewReader { reader in
+        ScrollView(.horizontal, showsIndicators: false) {
+          HStack(alignment: .bottom, spacing: 18) {
+            ForEach(storyRailGroups) { railGroup in
+              Button {
+                selectStoryGroup(railGroup)
+              } label: {
+                StoryViewerCarouselBubble(
+                  group: railGroup,
+                  label: storyHandleLabel(for: railGroup),
+                  isSelected: railGroup.userId == activeGroup.userId
+                )
+              }
+              .buttonStyle(.plain)
+              .id(railGroup.userId)
+            }
           }
-          .buttonStyle(.plain)
+          .padding(.horizontal, max(22, (proxy.size.width - 116) / 2))
+          .padding(.top, 8)
+          .frame(maxWidth: .infinity, alignment: .center)
         }
+        .onAppear {
+          centerActiveStoryRail(in: reader, animated: false)
+        }
+        .onChange(of: activeGroup.userId) { _, _ in
+          centerActiveStoryRail(in: reader, animated: true)
+        }
+        .highPriorityGesture(
+          DragGesture(minimumDistance: 28, coordinateSpace: .local)
+            .onEnded(handleStoryGroupSwipe)
+        )
       }
-      .padding(.horizontal, 22)
-      .padding(.top, 4)
-      .frame(maxWidth: .infinity, alignment: .center)
     }
-    .frame(height: 112)
+    .frame(height: 124)
     .mask(
       LinearGradient(
         stops: [
@@ -863,6 +886,72 @@ private struct StoryViewerNativeView: View {
         endPoint: .trailing
       )
     )
+  }
+
+  private var storyPrewarmTaskID: String {
+    "\(activeGroup.userId)|\(selectedIndex)|\(currentStory?.id ?? "none")"
+  }
+
+  private func storyMediaTopInset(safeTop: CGFloat) -> CGFloat {
+    safeTop > 0 ? 10 : 8
+  }
+
+  @MainActor
+  private func centerActiveStoryRail(in reader: ScrollViewProxy, animated: Bool) {
+    let action = {
+      reader.scrollTo(activeGroup.userId, anchor: .center)
+    }
+    if animated, !reduceMotion {
+      withAnimation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion)) {
+        action()
+      }
+    } else {
+      action()
+    }
+  }
+
+  @MainActor
+  private func prewarmStoryMediaWindow() async {
+    let urls = storyMediaWindowURLs()
+    guard !urls.isEmpty else { return }
+    MIRAVideoPrewarmManager.shared.prewarm(urls: urls, keepOnly: Set(urls.prefix(4)))
+    await MIRAImagePrefetcher.prefetch(urls: urls, maxPixelSize: 1920, limit: 10)
+  }
+
+  private func storyMediaWindowURLs() -> [String] {
+    var urls: [String] = []
+
+    let lower = max(0, selectedIndex - 1)
+    let upper = min(stories.count - 1, selectedIndex + 3)
+    if lower <= upper {
+      for index in lower...upper {
+        if let url = stories[index].mediaURL {
+          urls.append(url)
+        }
+      }
+    }
+
+    let groups = storyRailGroups
+    if let groupIndex = groups.firstIndex(where: { $0.userId == activeGroup.userId }) {
+      for offset in [-1, 1, 2] {
+        let nextIndex = groupIndex + offset
+        guard groups.indices.contains(nextIndex) else { continue }
+        urls.append(contentsOf: (groups[nextIndex].statuses ?? []).prefix(2).compactMap(\.mediaURL))
+      }
+    }
+
+    return orderedUniqueStoryURLs(urls)
+  }
+
+  private func orderedUniqueStoryURLs(_ urls: [String]) -> [String] {
+    var seen = Set<String>()
+    var result: [String] = []
+    for url in urls {
+      let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !trimmed.isEmpty, seen.insert(trimmed).inserted else { continue }
+      result.append(trimmed)
+    }
+    return result
   }
 
   private func storyHandleLabel(for railGroup: MIRAStoryGroup) -> String {
@@ -1329,6 +1418,29 @@ private struct StoryThoughtBubbleView: View {
       RoundedRectangle(cornerRadius: 17, style: .continuous)
         .stroke(.white.opacity(0.08), lineWidth: 1)
     )
+  }
+}
+
+private struct StoryTopRoundedRectangle: Shape {
+  let radius: CGFloat
+
+  func path(in rect: CGRect) -> Path {
+    let r = min(radius, min(rect.width, rect.height) / 2)
+    var path = Path()
+    path.move(to: CGPoint(x: rect.minX, y: rect.maxY))
+    path.addLine(to: CGPoint(x: rect.minX, y: rect.minY + r))
+    path.addQuadCurve(
+      to: CGPoint(x: rect.minX + r, y: rect.minY),
+      control: CGPoint(x: rect.minX, y: rect.minY)
+    )
+    path.addLine(to: CGPoint(x: rect.maxX - r, y: rect.minY))
+    path.addQuadCurve(
+      to: CGPoint(x: rect.maxX, y: rect.minY + r),
+      control: CGPoint(x: rect.maxX, y: rect.minY)
+    )
+    path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+    path.closeSubpath()
+    return path
   }
 }
 

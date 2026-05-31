@@ -1080,7 +1080,7 @@ private struct MIRAResolvedVideoPlayer: View {
       }
       configurePlayback(for: prewarmedPlayer)
       player = prewarmedPlayer
-      isPlayerReady = false
+      isPlayerReady = prewarmedPlayer.currentItem?.status == .readyToPlay
       await startVideoMetric(label: "prewarmed")
       syncPlayback(prewarmedPlayer)
       Task { await markPlayerReady(prewarmedPlayer, expectedURL: url) }
@@ -1089,7 +1089,9 @@ private struct MIRAResolvedVideoPlayer: View {
     }
 
     if let directURL, directURL.isPlayableFileOrRemoteVideo {
-      let avPlayer = AVPlayer(url: directURL)
+      let item = AVPlayerItem(url: directURL)
+      configurePlayerItemForFastStoryPlayback(item)
+      let avPlayer = AVPlayer(playerItem: item)
       configurePlayback(for: avPlayer)
       player = avPlayer
       isPlayerReady = false
@@ -1147,7 +1149,9 @@ private struct MIRAResolvedVideoPlayer: View {
   private func applyStreamPlaybackInfo(_ info: MIRAStreamPlaybackInfo, createPlayer: Bool) {
     thumbnailURL = info.thumbnail
     if createPlayer, let hls = info.hls, let hlsURL = URL(string: hls), info.ready != false {
-      let avPlayer = AVPlayer(url: hlsURL)
+      let item = AVPlayerItem(url: hlsURL)
+      configurePlayerItemForFastStoryPlayback(item)
+      let avPlayer = AVPlayer(playerItem: item)
       configurePlayback(for: avPlayer)
       player = avPlayer
       isPlayerReady = false
@@ -1242,9 +1246,12 @@ private struct MIRAResolvedVideoPlayer: View {
   private func configurePlayback(for player: AVPlayer) {
     configureAudioSession()
     player.actionAtItemEnd = .none
-    player.automaticallyWaitsToMinimizeStalling = true
+    player.automaticallyWaitsToMinimizeStalling = false
     player.isMuted = false
     player.volume = 1
+    if let item = player.currentItem {
+      configurePlayerItemForFastStoryPlayback(item)
+    }
     removeLoopObserver()
     endObserver = NotificationCenter.default.addObserver(
       forName: .AVPlayerItemDidPlayToEndTime,
@@ -1280,6 +1287,12 @@ private struct MIRAResolvedVideoPlayer: View {
     } catch {
       // Keep the video visible even if iOS refuses the audio session.
     }
+  }
+
+  private func configurePlayerItemForFastStoryPlayback(_ item: AVPlayerItem) {
+    item.preferredForwardBufferDuration = 0.65
+    item.preferredPeakBitRate = 0
+    item.preferredMaximumResolution = CGSize(width: 1080, height: 1920)
   }
 
   @MainActor
