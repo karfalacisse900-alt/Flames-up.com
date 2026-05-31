@@ -1944,12 +1944,23 @@ function cloudflareImageTransformOptions(preset: 'feed' | 'thumbnail'): string {
   return 'width=1080,quality=92,format=auto,metadata=none';
 }
 
+function canProxyThroughCloudflareImageTransform(url: URL): boolean {
+  const host = url.hostname.toLowerCase();
+  if (hostMatches(host, 'imagedelivery.net')) return false;
+  if (hostMatches(host, 'videodelivery.net')) return false;
+  return hostMatches(host, 'flames-up.com')
+    || hostMatches(host, 'captro.app')
+    || hostMatches(host, 'r2.dev')
+    || hostMatches(host, 'workers.dev');
+}
+
 function cloudflareTransformedImageUrl(env: Env | undefined, url: string, preset: 'feed' | 'thumbnail'): string {
   if (!url || !cloudflareImageTransformsEnabled(env)) return url;
   try {
     const parsed = new URL(url);
     if (parsed.protocol !== 'https:') return url;
     if (parsed.pathname.includes('/cdn-cgi/image/')) return url;
+    if (!canProxyThroughCloudflareImageTransform(parsed)) return url;
     const base = cloudflareImageTransformBaseUrl(env);
     if (!base) return url;
     return `${base}/cdn-cgi/image/${cloudflareImageTransformOptions(preset)}/${parsed.toString()}`;

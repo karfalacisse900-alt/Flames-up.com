@@ -161,7 +161,11 @@ final class DiscoverNativeModel: ObservableObject {
   private func prefetchVisibleMedia(_ posts: [MIRAPost]) {
     let previewURLs = posts
       .prefix(30)
-      .flatMap { $0.posterMediaURLs + $0.thumbnailMediaURLs }
+      .flatMap { post in
+        post.posterMediaURLs
+          + post.thumbnailMediaURLs
+          + post.feedMediaURLs.filter { !$0.isVideoURL }
+      }
     let feedURLs = posts
       .prefix(12)
       .flatMap(\.feedMediaURLs)
@@ -1426,13 +1430,15 @@ private struct DiscoverPostGalleryTile: View {
     GeometryReader { proxy in
       let tileHeight = proxy.size.width * MIRAMediaSizing.profileGridRatio
       ZStack(alignment: .topTrailing) {
-        if let media = post.thumbnailMediaURLs.first {
+        if let media = displayMediaURL {
           RemoteMediaView(
             url: media,
             isVideo: media.isVideoURL,
+            placeholderURL: placeholderURL,
+            fallbackURL: fallbackURL(for: media),
             shouldPlay: false,
             maxPixelSize: 560,
-            showsVideoPlaceholderIcon: false
+            showsVideoPlaceholderIcon: sourceIsVideo
           )
             .frame(width: proxy.size.width, height: tileHeight)
         } else {
@@ -1448,7 +1454,7 @@ private struct DiscoverPostGalleryTile: View {
           .frame(width: proxy.size.width, height: tileHeight)
         }
 
-        if post.thumbnailMediaURLs.count > 1 {
+        if carouselCount > 1 {
           Image(systemName: "square.on.square")
             .font(.system(size: 11, weight: .bold))
             .foregroundStyle(.white)
@@ -1465,6 +1471,50 @@ private struct DiscoverPostGalleryTile: View {
     .clipped()
     .contentShape(Rectangle())
     .accessibilityLabel(post.titleText)
+  }
+
+  private var displayMediaURL: String? {
+    orderedMediaCandidates.first
+  }
+
+  private var placeholderURL: String? {
+    let candidate = (post.posterMediaURLs + post.thumbnailMediaURLs)
+      .map(cleanMediaURL)
+      .first { !$0.isEmpty && $0 != displayMediaURL }
+    return candidate
+  }
+
+  private var orderedMediaCandidates: [String] {
+    let preferredPreview = post.posterMediaURLs + post.thumbnailMediaURLs
+    let renderableFeed = post.feedMediaURLs.filter { !($0.isVideoURL && !sourceIsVideo) }
+    return uniqueMediaURLs(preferredPreview + renderableFeed + post.mediaURLs)
+  }
+
+  private var sourceIsVideo: Bool {
+    let types = post.mediaTypes?.values.map { $0.lowercased() } ?? []
+    return types.contains { $0.contains("video") }
+      || post.feedMediaURLs.contains { $0.isVideoURL }
+      || post.mediaURLs.contains { $0.isVideoURL }
+  }
+
+  private var carouselCount: Int {
+    max(post.feedMediaURLs.count, post.mediaURLs.count, post.thumbnailMediaURLs.count, post.posterMediaURLs.count)
+  }
+
+  private func fallbackURL(for media: String) -> String? {
+    uniqueMediaURLs(post.feedMediaURLs + post.mediaURLs)
+      .first { $0 != media && !$0.isVideoURL }
+  }
+
+  private func uniqueMediaURLs(_ values: [String]) -> [String] {
+    var seen = Set<String>()
+    return values
+      .map(cleanMediaURL)
+      .filter { !$0.isEmpty && seen.insert($0).inserted }
+  }
+
+  private func cleanMediaURL(_ value: String) -> String {
+    value.trimmingCharacters(in: .whitespacesAndNewlines)
   }
 }
 
