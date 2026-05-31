@@ -4201,7 +4201,61 @@ function replaceCloudflareImageVariant(url: string, variant: string): string {
 
 function isVideoMediaUrl(url: string): boolean {
   const lower = String(url || '').toLowerCase();
-  return lower.startsWith('cfstream:') || /\.(mp4|mov|m4v|webm)(\?|#|$)/.test(lower);
+  return lower.startsWith('cfstream:')
+    || lower.includes('videodelivery.net')
+    || lower.includes('cloudflarestream.com')
+    || lower.includes('tiktok')
+    || lower.includes('/manifest/video.m3u8')
+    || /\.(mp4|mov|m4v|webm|m3u8)(\?|#|$)/.test(lower);
+}
+
+function postContainsVideoMedia(post: any): boolean {
+  const mediaUrls = sanitizeMediaReferences(post?.images, post?.image);
+  const mediaTypes = parseJsonArray(post?.media_types).map((item) => String(item || '').toLowerCase());
+  const postType = String(post?.post_type || post?.media_type || post?.type || '').toLowerCase();
+  return postType.includes('video') || mediaTypes.some((type) => type.includes('video')) || mediaUrls.some(isVideoMediaUrl);
+}
+
+function normalizeStoryDurationSeconds(value: unknown): 15 | 30 | 60 | 0 {
+  const duration = Math.round(Number(value || 0));
+  if (duration === 15 || duration === 30 || duration === 60) return duration;
+  return 0;
+}
+
+function maxPostCounterAfterToggle(current: unknown, enabled: boolean, changed: boolean): number {
+  const count = Math.max(0, Number(current || 0));
+  if (!changed) return count;
+  return enabled ? count + 1 : Math.max(0, count - 1);
+}
+
+function feedPhotoPostsOnly(posts: any[]): any[] {
+  return posts.filter((post) => !postContainsVideoMedia(post));
+}
+
+function feedPhotoPostWhere(postAlias = 'p'): string {
+  const postType = `LOWER(COALESCE(${postAlias}.post_type, ''))`;
+  const mediaTypes = `LOWER(COALESCE(${postAlias}.media_types, ''))`;
+  const image = `LOWER(COALESCE(${postAlias}.image, ''))`;
+  const images = `LOWER(COALESCE(${postAlias}.images, ''))`;
+  const videoNeedles = [
+    "'%video%'",
+    "'%cfstream:%'",
+    "'%videodelivery.net%'",
+    "'%cloudflarestream.com%'",
+    "'%tiktok%'",
+    "'%.mp4%'",
+    "'%.mov%'",
+    "'%.m4v%'",
+    "'%.webm%'",
+    "'%.m3u8%'",
+  ];
+  const conditions = [
+    ...videoNeedles.map((needle) => `${postType} NOT LIKE ${needle}`),
+    ...videoNeedles.map((needle) => `${mediaTypes} NOT LIKE ${needle}`),
+    ...videoNeedles.slice(1).map((needle) => `${image} NOT LIKE ${needle}`),
+    ...videoNeedles.slice(1).map((needle) => `${images} NOT LIKE ${needle}`),
+  ];
+  return conditions.join(' AND ');
 }
 
 function feedDeliveryUrl(url: string, mediaType: string, variant: string, env?: Env): string {
@@ -8865,6 +8919,14 @@ api.post('/posts', authMiddleware, async (c) => {
   const imageUrls = sanitizeMediaReferences(b.images, b.image);
   const primaryImage = safeMediaReference(b.image) || imageUrls[0] || null;
   const mediaTypes = sanitizeMediaTypes(b.media_types, imageUrls.length || (primaryImage ? 1 : 0));
+  const requestedPostType = String(b.post_type || b.postType || b.media_type || b.mediaType || '').toLowerCase();
+  const hasVideoMedia = requestedPostType.includes('video') || mediaTypes.includes('video') || imageUrls.some(isVideoMediaUrl);
+  if (hasVideoMedia) {
+    return c.json({
+      detail: 'Feed posts support photos only. Share videos to Stories instead.',
+      code: 'FEED_POSTS_PHOTO_ONLY',
+    }, 400);
+  }
   const explicitTags = sanitizeAutoCategoryTags([...(parseJsonArray(b.tags)), ...(parseJsonArray(b.hashtags))]);
   const mediaTypeHint = mediaTypes.includes('video') ? 'video' : 'image';
   const categoryLocationSignals = [
@@ -9021,15 +9083,15 @@ api.get('/posts/feed', authMiddleware, async (c) => {
        EXISTS (SELECT 1 FROM follows fl WHERE fl.follower_id = ? AND fl.following_id = p.user_id) AS is_following,
        EXISTS (SELECT 1 FROM likes lk WHERE lk.user_id = ? AND lk.post_id = p.id) AS is_liked,
        EXISTS (SELECT 1 FROM saved_posts sp WHERE sp.user_id = ? AND sp.post_id = p.id) AS saved,
-       COALESCE(p.likes_count, 0) AS live_likes_count,
-       COALESCE(p.comments_count, 0) AS live_comments_count,
-       COALESCE(p.saves_count, 0) AS live_saves_count
+       MAX(COALESCE(p.likes_count, 0), (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id)) AS live_likes_count,
+       MAX(COALESCE(p.comments_count, 0), (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden'))) AS live_comments_count,
+       MAX(COALESCE(p.saves_count, 0), (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id)) AS live_saves_count
      FROM posts p JOIN users u ON p.user_id = u.id`,
-    `WHERE ${visiblePostWhere('u', 'p')}`,
+    `WHERE ${visiblePostWhere('u', 'p')} AND ${feedPhotoPostWhere('p')}`,
     'ORDER BY p.created_at DESC LIMIT ? OFFSET ?',
   ].join(' ');
   const posts = await c.env.DB.prepare(feedSql).bind(userId, userId, userId, ...visiblePostBindValues(userId), limit, skip).all();
-  const response = c.json((posts.results as any[]).map((p) => feedPostPayload(p, [], c.env)));
+  const response = c.json(feedPhotoPostsOnly(posts.results as any[]).map((p) => feedPostPayload(p, [], c.env)));
   response.headers.set('cache-control', 'private, max-age=6');
   return response;
 });
@@ -9044,18 +9106,18 @@ api.get('/posts/world-board', async (c) => {
     if (limited) return limited;
     const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
     const limit = clampNumber(c.req.query('limit') || '40', 1, 50, 40);
-    const payload = await cachedJson(c, `posts:world-board:v8:${skip}:${limit}`, 8, async () => {
+    const payload = await cachedJson(c, `posts:world-board:v9:${skip}:${limit}`, 8, async () => {
       const worldBoardSql = [
         `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
-           COALESCE(p.likes_count, 0) AS live_likes_count,
-           COALESCE(p.comments_count, 0) AS live_comments_count,
-           0 AS live_saves_count
+           MAX(COALESCE(p.likes_count, 0), (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id)) AS live_likes_count,
+           MAX(COALESCE(p.comments_count, 0), (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden'))) AS live_comments_count,
+           MAX(COALESCE(p.saves_count, 0), (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id)) AS live_saves_count
          FROM posts p JOIN users u ON p.user_id = u.id`,
-        `WHERE ${publicPostWhere('u', 'p')}`,
+        `WHERE ${publicPostWhere('u', 'p')} AND ${feedPhotoPostWhere('p')}`,
         'ORDER BY p.created_at DESC LIMIT ? OFFSET ?',
       ].join(' ');
       const posts = await c.env.DB.prepare(worldBoardSql).bind(limit, skip).all();
-      return (posts.results as any[]).map((p) => feedPostPayload(p, [], c.env));
+      return feedPhotoPostsOnly(posts.results as any[]).map((p) => feedPostPayload(p, [], c.env));
     });
     const response = c.json(payload);
     response.headers.set('cache-control', 'public, max-age=4, s-maxage=8');
@@ -9077,15 +9139,15 @@ api.get('/posts/nearby-feed', authMiddleware, async (c) => {
   const limit = clampNumber(c.req.query('limit') || '24', 1, 50, 24);
   const nearbyFeedSql = [
     `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
-       COALESCE(p.likes_count, 0) AS live_likes_count,
-       COALESCE(p.comments_count, 0) AS live_comments_count,
-       COALESCE(p.saves_count, 0) AS live_saves_count
+       MAX(COALESCE(p.likes_count, 0), (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id)) AS live_likes_count,
+       MAX(COALESCE(p.comments_count, 0), (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden'))) AS live_comments_count,
+       MAX(COALESCE(p.saves_count, 0), (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id)) AS live_saves_count
      FROM posts p JOIN users u ON p.user_id = u.id`,
-    `WHERE ${visiblePostWhere('u', 'p')}`,
+    `WHERE ${visiblePostWhere('u', 'p')} AND ${feedPhotoPostWhere('p')}`,
     'ORDER BY p.created_at DESC LIMIT ? OFFSET ?',
   ].join(' ');
   const posts = await c.env.DB.prepare(nearbyFeedSql).bind(...visiblePostBindValues(userId), limit, skip).all();
-  const response = c.json((posts.results as any[]).map((p) => feedPostPayload(p, [], c.env)));
+  const response = c.json(feedPhotoPostsOnly(posts.results as any[]).map((p) => feedPostPayload(p, [], c.env)));
   response.headers.set('cache-control', 'private, max-age=6');
   return response;
 });
@@ -9103,7 +9165,7 @@ api.get('/posts/:postId', authMiddleware, async (c) => {
        MAX(COALESCE(p.comments_count, 0), (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden'))) AS live_comments_count,
        MAX(COALESCE(p.saves_count, 0), (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id)) AS live_saves_count
      FROM posts p JOIN users u ON p.user_id = u.id`,
-    `WHERE p.id = ? AND ${visiblePostWhere('u', 'p')}`,
+    `WHERE p.id = ? AND ${visiblePostWhere('u', 'p')} AND ${feedPhotoPostWhere('p')}`,
   ].join(' ');
   const p: any = await c.env.DB.prepare(postByIdSql).bind(userId, userId, userId, postId, ...visiblePostBindValues(userId)).first();
   if (!p) return c.json({ detail: 'Post not found' }, 404);
@@ -9119,16 +9181,22 @@ api.post('/posts/:postId/like', authMiddleware, async (c) => {
   const body: any = await c.req.json().catch(() => ({}));
   const requested = optionalBoolean(body.liked ?? body.like ?? body.value);
   const likeVisiblePostSql = [
-    'SELECT p.id, p.user_id FROM posts p JOIN users u ON p.user_id = u.id',
-    `WHERE p.id = ? AND ${visiblePostWhere('u', 'p')}`,
+    `SELECT p.id, p.user_id,
+       MAX(COALESCE(p.likes_count, 0), (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id)) AS likes_count,
+       MAX(COALESCE(p.comments_count, 0), (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden'))) AS comments_count,
+       MAX(COALESCE(p.saves_count, 0), (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id)) AS saves_count,
+       EXISTS (SELECT 1 FROM likes lk WHERE lk.user_id = ? AND lk.post_id = p.id) AS is_liked,
+       EXISTS (SELECT 1 FROM saved_posts sp WHERE sp.user_id = ? AND sp.post_id = p.id) AS saved
+     FROM posts p JOIN users u ON p.user_id = u.id`,
+    `WHERE p.id = ? AND ${visiblePostWhere('u', 'p')} AND ${feedPhotoPostWhere('p')}`,
   ].join(' ');
-  const visiblePost = await c.env.DB.prepare(likeVisiblePostSql).bind(postId, ...visiblePostBindValues(userId)).first();
+  const visiblePost: any = await c.env.DB.prepare(likeVisiblePostSql).bind(userId, userId, postId, ...visiblePostBindValues(userId)).first();
   if (!visiblePost) return c.json({ detail: 'Post not found' }, 404);
 
   let nextLiked = requested;
+  const wasLiked = visiblePost.is_liked === true || visiblePost.is_liked === 1 || visiblePost.is_liked === '1';
   if (nextLiked === null) {
-    const ex = await c.env.DB.prepare('SELECT id FROM likes WHERE user_id = ? AND post_id = ?').bind(userId, postId).first();
-    nextLiked = !ex;
+    nextLiked = !wasLiked;
   }
 
   let changed = false;
@@ -9143,14 +9211,10 @@ api.post('/posts/:postId/like', authMiddleware, async (c) => {
       .run();
     changed = d1Changes(result) > 0;
   }
+  const nextLikesCount = maxPostCounterAfterToggle(visiblePost.likes_count, !!nextLiked, changed);
   if (changed) {
-    await c.env.DB.prepare(
-      nextLiked
-        ? 'UPDATE posts SET likes_count = COALESCE(likes_count, 0) + 1 WHERE id = ?'
-        : 'UPDATE posts SET likes_count = MAX(0, COALESCE(likes_count, 0) - 1) WHERE id = ?'
-    ).bind(postId).run();
+    await c.env.DB.prepare('UPDATE posts SET likes_count = ? WHERE id = ?').bind(nextLikesCount, postId).run();
   }
-  const engagement = await getPostEngagementState(c.env.DB, postId, userId);
 
   if (nextLiked && changed && (visiblePost as any).user_id !== userId) {
     try {
@@ -9173,11 +9237,11 @@ api.post('/posts/:postId/like', authMiddleware, async (c) => {
   }
 
   return c.json({
-    liked: engagement.liked,
-    likes_count: engagement.likes_count,
-    comments_count: engagement.comments_count,
-    saved: engagement.saved,
-    saves_count: engagement.saves_count,
+    liked: !!nextLiked,
+    likes_count: nextLikesCount,
+    comments_count: Math.max(0, Number(visiblePost.comments_count || 0)),
+    saved: visiblePost.saved === true || visiblePost.saved === 1 || visiblePost.saved === '1',
+    saves_count: Math.max(0, Number(visiblePost.saves_count || 0)),
   });
 });
 
@@ -9285,7 +9349,7 @@ api.get('/users/:userId/posts', authMiddleware, async (c) => {
        (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden')) AS live_comments_count,
        (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id) AS live_saves_count
      FROM posts p JOIN users u ON p.user_id = u.id
-     WHERE p.user_id = ? AND COALESCE(p.status, 'active') != 'removed' AND (
+     WHERE p.user_id = ? AND COALESCE(p.status, 'active') != 'removed' AND ${feedPhotoPostWhere('p')} AND (
        COALESCE(p.visibility, 'public') = 'public'
        OR p.user_id = ?
        OR (COALESCE(p.visibility, 'public') = 'followers' AND (
@@ -9297,7 +9361,7 @@ api.get('/users/:userId/posts', authMiddleware, async (c) => {
       ORDER BY p.pinned_at IS NULL, p.pinned_at DESC, p.created_at DESC
       LIMIT ? OFFSET ?`
   ).bind(viewerId, viewerId, targetId, viewerId, viewerId, viewerId, viewerId, limit, skip).all();
-  return c.json((posts.results as any[]).map((p) => feedPostPayload(p, [], c.env)));
+  return c.json(feedPhotoPostsOnly(posts.results as any[]).map((p) => feedPostPayload(p, [], c.env)));
 });
 
 // Comments
@@ -9324,7 +9388,7 @@ api.post('/posts/:postId/comments', authMiddleware, async (c) => {
 
     const commentVisiblePostSql = [
       'SELECT p.id, p.user_id FROM posts p JOIN users u ON p.user_id = u.id',
-      `WHERE p.id = ? AND ${visiblePostWhere('u', 'p')}`,
+    `WHERE p.id = ? AND ${visiblePostWhere('u', 'p')} AND ${feedPhotoPostWhere('p')}`,
     ].join(' ');
     const visiblePost: any = await c.env.DB.prepare(commentVisiblePostSql).bind(postId, ...visiblePostBindValues(userId)).first();
     if (!visiblePost) return c.json({ detail: 'Post not found' }, 404);
@@ -9662,6 +9726,12 @@ api.post('/statuses', authMiddleware, async (c) => {
   const audioStreamUrl = audioProvider ? cleanText(b.audio_stream_url, 2200) : '';
   const audioStartTime = audioProvider ? clampNumber(b.audio_start_time, 0, 60 * 60 * 6, 0) : 0;
   const audioDuration = audioProvider ? clampNumber(b.audio_duration, 5, 30, 15) : 0;
+  const storyDurationSeconds = normalizeStoryDurationSeconds(b.duration || b.video_duration || b.video_duration_seconds || b.duration_seconds);
+  const storyMediaType = String(b.media_type || b.mediaType || '').toLowerCase();
+  const storyIsVideo = storyMediaType.includes('video') || isVideoMediaUrl(String(b.image || ''));
+  if (storyIsVideo && !storyDurationSeconds) {
+    return c.json({ detail: 'Story videos must be 15, 30, or 60 seconds.', code: 'STORY_VIDEO_DURATION_REQUIRED' }, 400);
+  }
   if (audioProvider && !audioTrackId) {
     return c.json({ detail: 'Audio track id is required.' }, 400);
   }
@@ -10679,11 +10749,11 @@ api.get('/library/liked', authMiddleware, async (c) => {
        (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden')) AS live_comments_count,
        (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id) AS live_saves_count
      FROM likes l JOIN posts p ON l.post_id = p.id JOIN users u ON p.user_id = u.id`,
-    `WHERE l.user_id = ? AND ${visiblePostWhere('u', 'p')}`,
+    `WHERE l.user_id = ? AND ${visiblePostWhere('u', 'p')} AND ${feedPhotoPostWhere('p')}`,
     'ORDER BY l.created_at DESC LIMIT ? OFFSET ?',
   ].join(' ');
   const r = await c.env.DB.prepare(likedLibrarySql).bind(userId, userId, ...visiblePostBindValues(userId), limit, skip).all();
-  return c.json((r.results as any[]).map((p) => feedPostPayload(p, [], c.env)));
+  return c.json(feedPhotoPostsOnly(r.results as any[]).map((p) => feedPostPayload(p, [], c.env)));
 });
 api.get('/library/saved', authMiddleware, async (c) => {
   const userId = getUserId(c);
@@ -10700,7 +10770,7 @@ api.get('/library/saved', authMiddleware, async (c) => {
     FROM saved_posts sp
     JOIN posts p ON sp.post_id = p.id
     JOIN users u ON p.user_id = u.id`,
-    `WHERE sp.user_id = ? AND ${visiblePostWhere('u', 'p')}`,
+    `WHERE sp.user_id = ? AND ${visiblePostWhere('u', 'p')} AND ${feedPhotoPostWhere('p')}`,
   ];
   let sql = savedLibraryBaseSql.join(' ');
   const binds: any[] = [userId, userId, ...visiblePostBindValues(userId)];
@@ -10711,7 +10781,7 @@ api.get('/library/saved', authMiddleware, async (c) => {
   sql += ' ORDER BY sp.created_at DESC LIMIT ? OFFSET ?';
   binds.push(limit, skip);
   const r = await c.env.DB.prepare(sql).bind(...binds).all();
-  return c.json((r.results as any[]).map((p) => feedPostPayload(p, [], c.env)));
+  return c.json(feedPhotoPostsOnly(r.results as any[]).map((p) => feedPostPayload(p, [], c.env)));
 });
 api.post('/library/save/:postId', authMiddleware, async (c) => {
   const userId = getUserId(c);
@@ -10723,7 +10793,7 @@ api.post('/library/save/:postId', authMiddleware, async (c) => {
   const collection = cleanText((b as any).collection || 'My Library', 80) || 'My Library';
   const saveVisiblePostSql = [
     'SELECT p.id FROM posts p JOIN users u ON p.user_id = u.id',
-    `WHERE p.id = ? AND ${visiblePostWhere('u', 'p')} LIMIT 1`,
+    `WHERE p.id = ? AND ${visiblePostWhere('u', 'p')} AND ${feedPhotoPostWhere('p')} LIMIT 1`,
   ].join(' ');
   const post = await c.env.DB.prepare(saveVisiblePostSql).bind(postId, ...visiblePostBindValues(userId)).first();
   if (!post) return c.json({ detail: 'Post not found' }, 404);
@@ -11521,6 +11591,7 @@ api.get('/discover', authMiddleware, async (c) => {
   const conditions = [
     visiblePostWhere('u', 'p'),
     "COALESCE(p.discover_blocked_at, '') = ''",
+    feedPhotoPostWhere('p'),
   ];
   const binds: any[] = [userId, userId, userId, ...visiblePostBindValues(userId)];
   if (category !== 'all') {
@@ -11551,15 +11622,15 @@ api.get('/discover', authMiddleware, async (c) => {
        EXISTS (SELECT 1 FROM follows fl WHERE fl.follower_id = ? AND fl.following_id = p.user_id) AS is_following,
        EXISTS (SELECT 1 FROM likes lk WHERE lk.user_id = ? AND lk.post_id = p.id) AS is_liked,
        EXISTS (SELECT 1 FROM saved_posts sp WHERE sp.user_id = ? AND sp.post_id = p.id) AS saved,
-       COALESCE(p.likes_count, 0) AS live_likes_count,
-       COALESCE(p.comments_count, 0) AS live_comments_count,
-       COALESCE(p.saves_count, 0) AS live_saves_count
+       MAX(COALESCE(p.likes_count, 0), (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id)) AS live_likes_count,
+       MAX(COALESCE(p.comments_count, 0), (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden'))) AS live_comments_count,
+       MAX(COALESCE(p.saves_count, 0), (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id)) AS live_saves_count
      FROM posts p JOIN users u ON p.user_id = u.id`,
     `WHERE ${conditions.join(' AND ')}`,
     'ORDER BY p.created_at DESC LIMIT ? OFFSET ?',
   ].join(' ');
   const rows = await c.env.DB.prepare(sql).bind(...binds, limit, skip).all();
-  const response = c.json((rows.results as any[]).map((post) => feedPostPayload(post, [], c.env)));
+  const response = c.json(feedPhotoPostsOnly(rows.results as any[]).map((post) => feedPostPayload(post, [], c.env)));
   response.headers.set('cache-control', 'private, max-age=8');
   return response;
 });
@@ -11572,13 +11643,16 @@ api.get('/discover/trending', authMiddleware, async (c) => {
     await ensureLocationSchema(c.env.DB);
   const limit = clampNumber(c.req.query('limit') || '20', 1, 40, 20);
   const discoverTrendingSql = [
-    'SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image',
+    `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
+       MAX(COALESCE(p.likes_count, 0), (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id)) AS live_likes_count,
+       MAX(COALESCE(p.comments_count, 0), (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden'))) AS live_comments_count,
+       MAX(COALESCE(p.saves_count, 0), (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id)) AS live_saves_count`,
     'FROM posts p JOIN users u ON p.user_id = u.id',
-    `WHERE ${visiblePostWhere('u', 'p')}`,
+    `WHERE ${visiblePostWhere('u', 'p')} AND ${feedPhotoPostWhere('p')}`,
     'ORDER BY p.likes_count DESC, p.created_at DESC LIMIT ?',
   ].join(' ');
   const r = await c.env.DB.prepare(discoverTrendingSql).bind(...visiblePostBindValues(userId), limit).all();
-  return c.json((r.results as any[]).map((p) => feedPostPayload(p, [], c.env)));
+  return c.json(feedPhotoPostsOnly(r.results as any[]).map((p) => feedPostPayload(p, [], c.env)));
 });
 api.get('/discover/search', authMiddleware, async (c) => {
   const userId = getUserId(c);
@@ -11592,14 +11666,17 @@ api.get('/discover/search', authMiddleware, async (c) => {
   if (q.length < 2) return c.json({ posts: [], users: [] });
   const limit = clampNumber(c.req.query('limit') || '20', 1, 30, 20);
   const discoverSearchSql = [
-    'SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image',
+    `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
+       MAX(COALESCE(p.likes_count, 0), (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id)) AS live_likes_count,
+       MAX(COALESCE(p.comments_count, 0), (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden'))) AS live_comments_count,
+       MAX(COALESCE(p.saves_count, 0), (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id)) AS live_saves_count`,
     'FROM posts p JOIN users u ON p.user_id = u.id',
-    `WHERE p.content LIKE ? AND ${visiblePostWhere('u', 'p')}`,
+    `WHERE p.content LIKE ? AND ${visiblePostWhere('u', 'p')} AND ${feedPhotoPostWhere('p')}`,
     'LIMIT ?',
   ].join(' ');
   const posts = await c.env.DB.prepare(discoverSearchSql).bind(`%${q}%`, ...visiblePostBindValues(userId), limit).all();
   const users = await c.env.DB.prepare('SELECT id, username, full_name, profile_image, bio, is_private FROM users WHERE username LIKE ? OR full_name LIKE ? LIMIT 10').bind(`%${q}%`, `%${q}%`).all();
-  return c.json({ posts: (posts.results as any[]).map((p) => feedPostPayload(p, [], c.env)), users: (users.results as any[]).map((user) => safeUserPayload(user)) });
+  return c.json({ posts: feedPhotoPostsOnly(posts.results as any[]).map((p) => feedPostPayload(p, [], c.env)), users: (users.results as any[]).map((user) => safeUserPayload(user)) });
 });
 api.get('/discover/suggested-users', authMiddleware, async (c) => {
   const userId = getUserId(c);
@@ -11662,7 +11739,7 @@ api.post('/upload/video-direct', authMiddleware, async (c) => {
   if (!accountId || !token) {
     return c.json({ detail: 'Video upload is not configured.' }, 503);
   }
-  const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/direct_upload`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ maxDurationSeconds: 300, creator: userId }) });
+  const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/direct_upload`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ maxDurationSeconds: 60, creator: userId }) });
   const data: any = await res.json();
   if (!data.success) return c.json({ detail: 'Failed to get upload URL' }, 500);
   return c.json({ upload_url: data.result.uploadURL, video_uid: data.result.uid });
@@ -14866,7 +14943,7 @@ api.post('/upload/video', authMiddleware, async (c) => {
         'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ maxDurationSeconds: 300, creator: userId }),
+      body: JSON.stringify({ maxDurationSeconds: 60, creator: userId }),
     });
     const data: any = await res.json();
     if (!data.success) return c.json({ detail: 'Failed to get upload URL' }, 500);
@@ -14922,7 +14999,7 @@ api.post('/upload/video-with-backup', authMiddleware, async (c) => {
             'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({ maxDurationSeconds: 300, creator: userId }),
+          body: JSON.stringify({ maxDurationSeconds: 60, creator: userId }),
         });
         const directData: any = await directRes.json();
         if (directData.success) {

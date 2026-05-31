@@ -62,7 +62,7 @@ final class PostDetailModel: ObservableObject {
     guard update.postId == post.id else { return }
     post = post.updating(
       liked: update.liked,
-      likesCount: update.likesCount,
+      likesCount: stableEngagementCount(current: post.likesCount, incoming: update.likesCount, toggledOn: update.liked),
       commentsCount: update.commentsCount,
       saved: update.saved,
       savesCount: update.savesCount
@@ -200,9 +200,15 @@ final class PostDetailModel: ObservableObject {
     post = post.updating(liked: nextLiked, likesCount: nextCount)
     do {
       let response: PostLikeResponse = try await api.post("/posts/\(post.id)/like", body: LikeBody(liked: nextLiked))
+      let reconciledLikesCount = stableEngagementCount(
+        current: previous.likesCount,
+        incoming: response.likesCount,
+        optimistic: nextCount,
+        toggledOn: response.liked ?? nextLiked
+      )
       post = post.updating(
         liked: response.liked ?? nextLiked,
-        likesCount: response.likesCount ?? nextCount,
+        likesCount: reconciledLikesCount,
         commentsCount: response.commentsCount,
         saved: response.saved,
         savesCount: response.savesCount
@@ -299,6 +305,20 @@ final class PostDetailModel: ObservableObject {
   private func bestCount(_ current: Int?, _ cached: Int?) -> Int? {
     guard current != nil || cached != nil else { return nil }
     return max(current ?? 0, cached ?? 0)
+  }
+
+  private func stableEngagementCount(current: Int?, incoming: Int?, optimistic: Int? = nil, toggledOn: Bool? = nil) -> Int? {
+    guard let incoming else { return optimistic }
+    if incoming == 0 {
+      if let optimistic, optimistic > 0 { return optimistic }
+      let currentValue = current ?? 0
+      if toggledOn == true, currentValue > 0 { return currentValue }
+      if toggledOn == false, currentValue > 1 { return currentValue - 1 }
+    }
+    if let optimistic {
+      return max(incoming, optimistic)
+    }
+    return incoming
   }
 
   private func loadCurrentUserIfNeeded() async {
@@ -731,7 +751,9 @@ public struct DiscoverPostDetailNativeView: View {
       ScrollView {
         VStack(alignment: .leading, spacing: 14) {
           topBar
-          captionBlock
+          if hasCaptionText {
+            captionBlock
+          }
           mediaCarousel
           actionRow
           postContext
@@ -991,10 +1013,16 @@ public struct DiscoverPostDetailNativeView: View {
   }
 
   private var captionText: String {
-    let title = model.post.titleText.trimmingCharacters(in: .whitespacesAndNewlines)
-    let body = model.post.bodyText.trimmingCharacters(in: .whitespacesAndNewlines)
-    if body.isEmpty { return title }
-    return "\(title) \(body)"
+    let title = (model.post.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    let caption = (model.post.caption ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    let content = (model.post.content ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    return [title, caption.isEmpty ? content : caption]
+      .filter { !$0.isEmpty }
+      .joined(separator: " ")
+  }
+
+  private var hasCaptionText: Bool {
+    !captionText.isEmpty
   }
 
   private var shouldCollapseCaption: Bool {

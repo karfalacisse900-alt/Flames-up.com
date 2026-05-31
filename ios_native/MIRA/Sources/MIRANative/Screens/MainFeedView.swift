@@ -88,7 +88,7 @@ final class MainFeedModel: ObservableObject {
       }
       return
     }
-    let sorted = await sortedByNativeScore(loaded)
+    let sorted = await sortedByNativeScore(photoFeedPosts(loaded))
     let merged = await MIRAAppCacheStore.shared.mergePostsPreservingVisibleState(existing: posts, fresh: sorted)
     if posts != merged {
       posts = merged
@@ -109,7 +109,7 @@ final class MainFeedModel: ObservableObject {
     }
     guard let cached else { return }
     // Cached feed is already stored in display order, so show it immediately.
-    posts = cached
+    posts = photoFeedPosts(cached)
     MIRAPerformanceTimeline.markOnce("time_to_first_real_home_item", detail: "cache")
     errorMessage = nil
     isLoading = false
@@ -240,7 +240,7 @@ final class MainFeedModel: ObservableObject {
 
     let skip = posts.count
     MIRAPerformanceTimeline.mark("home_load_more_start", detail: "\(reason) skip=\(skip)")
-    let loaded = await fetchFeedPage(skip: skip)
+    let loaded = photoFeedPosts(await fetchFeedPage(skip: skip))
     guard !loaded.isEmpty else {
       canLoadMore = false
       MIRAPerformanceTimeline.mark("home_load_more_empty", detail: "skip=\(skip)")
@@ -250,7 +250,7 @@ final class MainFeedModel: ObservableObject {
     var unique = loaded.filter { !existing.contains($0.id) }
 
     if unique.isEmpty {
-      let fallback = await fetchPublicFeedPage(skip: skip)
+      let fallback = photoFeedPosts(await fetchPublicFeedPage(skip: skip))
       unique = fallback.filter { !existing.contains($0.id) }
       if unique.isEmpty {
         canLoadMore = fallback.count >= firstPageLimit
@@ -292,9 +292,15 @@ final class MainFeedModel: ObservableObject {
     do {
       let response: PostLikeResponse = try await api.post("/posts/\(post.id)/like", body: LikeBody(liked: nextLiked))
       if let currentIndex = posts.firstIndex(where: { $0.id == post.id }) {
+        let reconciledLikesCount = stableEngagementCount(
+          current: previous.likesCount,
+          incoming: response.likesCount,
+          optimistic: nextCount,
+          toggledOn: response.liked ?? nextLiked
+        )
         posts[currentIndex] = posts[currentIndex].updating(
           liked: response.liked ?? nextLiked,
-          likesCount: response.likesCount ?? nextCount,
+          likesCount: reconciledLikesCount,
           commentsCount: response.commentsCount,
           saved: response.saved,
           savesCount: response.savesCount
@@ -385,7 +391,7 @@ final class MainFeedModel: ObservableObject {
     guard let index = posts.firstIndex(where: { $0.id == update.postId }) else { return }
     posts[index] = posts[index].updating(
       liked: update.liked,
-      likesCount: update.likesCount,
+      likesCount: stableEngagementCount(current: posts[index].likesCount, incoming: update.likesCount, toggledOn: update.liked),
       commentsCount: update.commentsCount,
       saved: update.saved,
       savesCount: update.savesCount
@@ -580,6 +586,24 @@ final class MainFeedModel: ObservableObject {
       MIRAPerformanceTimeline.mark("home_feed_page_failed", detail: "public skip=\(skip)")
       return []
     }
+  }
+
+  private func photoFeedPosts(_ values: [MIRAPost]) -> [MIRAPost] {
+    values.filter { !$0.containsVideoMedia }
+  }
+
+  private func stableEngagementCount(current: Int?, incoming: Int?, optimistic: Int? = nil, toggledOn: Bool? = nil) -> Int? {
+    guard let incoming else { return optimistic }
+    if incoming == 0 {
+      if let optimistic, optimistic > 0 { return optimistic }
+      let currentValue = current ?? 0
+      if toggledOn == true, currentValue > 0 { return currentValue }
+      if toggledOn == false, currentValue > 1 { return currentValue - 1 }
+    }
+    if let optimistic {
+      return max(incoming, optimistic)
+    }
+    return incoming
   }
 
   private func sortedByNativeScore(_ posts: [MIRAPost]) async -> [MIRAPost] {

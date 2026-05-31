@@ -51,9 +51,9 @@ final class DiscoverNativeModel: ObservableObject {
 
   private func hydrateCachedContentIfNeeded() async {
     if posts.isEmpty, let cachedPosts = await cachedDiscoverPosts(for: activePostsCategory) {
-      posts = cachedPosts
+      posts = photoDiscoverPosts(cachedPosts)
       isLoadingPosts = false
-      prefetchVisibleMedia(cachedPosts)
+      prefetchVisibleMedia(posts)
       MIRAPerformanceTimeline.markOnce("discover_first_content", detail: "posts_cache")
     }
     if stories.isEmpty, let cachedStories = await cachedDiscoverStories() {
@@ -70,7 +70,7 @@ final class DiscoverNativeModel: ObservableObject {
     hasLoadedFreshPosts = false
     hasScheduledPostsLoad = false
     if let cachedPosts = await cachedDiscoverPosts(for: normalized) {
-      posts = cachedPosts
+      posts = photoDiscoverPosts(cachedPosts)
       isLoadingPosts = false
     } else {
       posts = []
@@ -95,12 +95,12 @@ final class DiscoverNativeModel: ObservableObject {
     }
     do {
       let encodedCategory = category.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "all"
-      var loaded: [MIRAPost] = try await api.get("/discover?category=\(encodedCategory)&limit=36")
+      var loaded: [MIRAPost] = photoDiscoverPosts(try await api.get("/discover?category=\(encodedCategory)&limit=36"))
       if loaded.isEmpty && category == "all" {
-        loaded = (try? await api.get("/posts/feed?limit=24")) ?? []
+        loaded = photoDiscoverPosts((try? await api.get("/posts/feed?limit=24")) ?? [])
       }
       if loaded.isEmpty && category == "all" {
-        loaded = (try? await api.get("/posts/world-board?limit=24")) ?? []
+        loaded = photoDiscoverPosts((try? await api.get("/posts/world-board?limit=24")) ?? [])
       }
       if posts != loaded {
         posts = loaded
@@ -112,11 +112,13 @@ final class DiscoverNativeModel: ObservableObject {
       }
     } catch {
       if category == "all", let fallback: [MIRAPost] = try? await api.get("/posts/world-board?limit=24"), !fallback.isEmpty {
-        if posts != fallback {
-          posts = fallback
+        let photoFallback = photoDiscoverPosts(fallback)
+        guard !photoFallback.isEmpty else { return }
+        if posts != photoFallback {
+          posts = photoFallback
         }
-        prefetchVisibleMedia(fallback)
-        await MIRAAppCacheStore.shared.saveDiscoverPosts(fallback, category: category)
+        prefetchVisibleMedia(photoFallback)
+        await MIRAAppCacheStore.shared.saveDiscoverPosts(photoFallback, category: category)
         MIRAPerformanceTimeline.markOnce("discover_first_content", detail: "posts_fallback")
       } else if posts.isEmpty {
         hasLoadedFreshPosts = false
@@ -177,6 +179,20 @@ final class DiscoverNativeModel: ObservableObject {
     }
   }
 
+  private func photoDiscoverPosts(_ values: [MIRAPost]) -> [MIRAPost] {
+    values.filter { !$0.containsVideoMedia }
+  }
+
+  private func stableEngagementCount(current: Int?, incoming: Int?, toggledOn: Bool? = nil) -> Int? {
+    guard let incoming else { return nil }
+    if incoming == 0 {
+      let currentValue = current ?? 0
+      if toggledOn == true, currentValue > 0 { return currentValue }
+      if toggledOn == false, currentValue > 1 { return currentValue - 1 }
+    }
+    return incoming
+  }
+
   func hidePost(_ post: MIRAPost) {
     posts.removeAll { $0.id == post.id }
     let snapshot = posts
@@ -193,7 +209,7 @@ final class DiscoverNativeModel: ObservableObject {
     guard let index = posts.firstIndex(where: { $0.id == update.postId }) else { return }
     posts[index] = posts[index].updating(
       liked: update.liked,
-      likesCount: update.likesCount,
+      likesCount: stableEngagementCount(current: posts[index].likesCount, incoming: update.likesCount, toggledOn: update.liked),
       commentsCount: update.commentsCount,
       saved: update.saved,
       savesCount: update.savesCount
@@ -516,6 +532,7 @@ public struct DiscoverNativeView: View {
   }
 
   private func hasVisualPreview(_ post: MIRAPost) -> Bool {
+    guard !post.containsVideoMedia else { return false }
     !(post.posterMediaURLs + post.thumbnailMediaURLs + post.feedMediaURLs + post.mediaURLs)
       .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
       .filter { !$0.isEmpty }

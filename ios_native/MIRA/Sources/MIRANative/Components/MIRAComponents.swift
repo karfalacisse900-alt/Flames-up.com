@@ -1704,7 +1704,16 @@ private struct MIRASaveCollectionOption: Identifiable {
 extension String {
   var isVideoURL: Bool {
     let lower = lowercased()
-    return lower.contains(".mp4") || lower.contains(".mov") || lower.contains(".m3u8") || lower.contains("stream")
+    return lower.hasPrefix("cfstream:")
+      || lower.contains(".mp4")
+      || lower.contains(".mov")
+      || lower.contains(".m4v")
+      || lower.contains(".webm")
+      || lower.contains(".m3u8")
+      || lower.contains("videodelivery.net")
+      || lower.contains("cloudflarestream.com")
+      || lower.contains("stream")
+      || lower.contains("tiktok")
   }
 }
 

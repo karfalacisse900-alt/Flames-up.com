@@ -1086,7 +1086,7 @@ public struct CreatePostNativeView: View {
         PhotosPicker(
           selection: $pickerItems,
           maxSelectionCount: 10,
-          matching: .any(of: [.images, .videos]),
+          matching: .images,
           preferredItemEncoding: .current
         ) {
           RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -1331,7 +1331,7 @@ public struct CreatePostNativeView: View {
       let cleanedTags = hashtags
         .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "#")) }
         .filter { !$0.isEmpty }
-      let mediaType = mediaItems.contains(where: { $0.kind == .video }) ? "video" : mediaItems.isEmpty ? nil : "image"
+      let mediaType = mediaItems.isEmpty ? nil : "image"
       let signals = await MIRAAutoCategoryService.analyze(
         mediaItems: mediaItems,
         title: title,
@@ -1360,6 +1360,10 @@ public struct CreatePostNativeView: View {
   }
 
   private func submit() async {
+    guard !mediaItems.contains(where: { $0.kind == .video }) else {
+      errorMessage = "Feed posts are photo-only. Share videos to Stories."
+      return
+    }
     isPosting = true
     MIRAPerformanceTimeline.mark("post_upload_start", detail: "post")
     defer { isPosting = false }
@@ -1463,15 +1467,22 @@ public struct CreatePostNativeView: View {
     }
     var loaded: [MIRAPickedMedia] = []
     var failedCount = 0
+    var skippedVideos = 0
     for item in items {
       guard let data = try? await item.loadTransferable(type: Data.self) else {
         failedCount += 1
         continue
       }
       let (kind, fileName, mimeType) = pickedMediaKind(from: item.supportedContentTypes, fallbackData: data)
+      guard kind == .image else {
+        skippedVideos += 1
+        continue
+      }
       loaded.append(MIRAPickedMedia(data: data, kind: kind, fileName: fileName, mimeType: mimeType))
     }
-    if failedCount > 0 {
+    if skippedVideos > 0 {
+      errorMessage = "Feed posts are photo-only. Share videos to Stories."
+    } else if failedCount > 0 {
       errorMessage = failedCount == 1 ? "One media item could not be loaded." : "\(failedCount) media items could not be loaded."
     } else {
       errorMessage = nil
@@ -1486,6 +1497,10 @@ public struct CreatePostNativeView: View {
   }
 
   private func addCapturedMediaAndContinue(_ media: MIRAPickedMedia) {
+    guard media.kind == .image else {
+      errorMessage = "Feed posts are photo-only. Share videos to Stories."
+      return
+    }
     editedCameraMedia = nil
     mediaItems.append(media)
     Task { await persistComposerDraft(uploadStatus: "draft", errorMessage: nil, includeMedia: true) }
@@ -3781,6 +3796,8 @@ public struct CreateStoryNativeView: View {
           backgroundColor: "#1B4332",
           textColor: "#FFFFFF",
           visibility: "public",
+          mediaType: media.kind == .video ? "video" : "image",
+          duration: media.kind == .video ? 15 : nil,
           editorMetadata: media.editorMetadata,
           audioProvider: selectedAudioTrack == nil ? nil : "audius",
           audioTrackId: selectedAudioTrack?.resolvedTrackId,

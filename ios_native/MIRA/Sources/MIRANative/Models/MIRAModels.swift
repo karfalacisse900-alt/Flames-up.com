@@ -251,6 +251,13 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
       audioDisplayTitle != nil
   }
 
+  public var containsVideoMedia: Bool {
+    let types = mediaTypes?.values.map { $0.lowercased() } ?? []
+    return types.contains { $0.contains("video") }
+      || mediaURLs.contains { $0.isVideoURL }
+      || feedMediaURLs.contains { $0.isVideoURL }
+  }
+
   public var authorDisplayName: String {
     if MIRAUsernameRules.isValidPublicUsername(userUsername) {
       return MIRAUsernameRules.normalized(userUsername)
@@ -1626,6 +1633,8 @@ public struct CreateStatusBody: Encodable {
   public let backgroundColor: String
   public let textColor: String
   public let visibility: String
+  public let mediaType: String?
+  public let duration: Int?
   public let editorMetadata: MIRANativeEditedMediaMetadata?
   public let audioProvider: String?
   public let audioTrackId: String?
@@ -1642,6 +1651,8 @@ public struct CreateStatusBody: Encodable {
     backgroundColor: String,
     textColor: String,
     visibility: String,
+    mediaType: String? = nil,
+    duration: Int? = nil,
     editorMetadata: MIRANativeEditedMediaMetadata? = nil,
     audioProvider: String? = nil,
     audioTrackId: String? = nil,
@@ -1657,6 +1668,8 @@ public struct CreateStatusBody: Encodable {
     self.backgroundColor = backgroundColor
     self.textColor = textColor
     self.visibility = visibility
+    self.mediaType = mediaType
+    self.duration = duration
     self.editorMetadata = editorMetadata
     self.audioProvider = audioProvider
     self.audioTrackId = audioTrackId
