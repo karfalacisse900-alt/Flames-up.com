@@ -262,7 +262,7 @@ final class ConversationNativeModel: ObservableObject {
     if let mediaUrl,
        let url = URL(string: mediaUrl),
        url.isFileURL,
-       let data = try? Data(contentsOf: url) {
+       let data = await loadLocalRetryData(from: url) {
       let type = message.mediaType?.lowercased() == "video" ? UTType.movie : UTType.image
       await sendPickedMedia(data: data, contentTypes: [type])
       return
@@ -370,6 +370,12 @@ final class ConversationNativeModel: ObservableObject {
     let key = "mira.chat.autodownload.images.wifi"
     if UserDefaults.standard.object(forKey: key) == nil { return true }
     return UserDefaults.standard.bool(forKey: key)
+  }
+
+  private nonisolated func loadLocalRetryData(from url: URL) async -> Data? {
+    await Task.detached(priority: .utility) {
+      try? Data(contentsOf: url)
+    }.value
   }
 }
 
@@ -608,7 +614,15 @@ public struct ConversationNativeView: View {
   }
 
   private var peerAvatarURL: String? {
-    model.messages.first { !isOutgoing($0) }?.profileImage ?? initialAvatarURL
+    let messageAvatar = model.messages
+      .first { !isOutgoing($0) }?
+      .profileImage?
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    if let messageAvatar, !messageAvatar.isEmpty {
+      return messageAvatar
+    }
+    let initial = initialAvatarURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return initial.isEmpty ? nil : initial
   }
 
   private var chatSkeleton: some View {
@@ -1124,14 +1138,29 @@ private extension Array where Element == MIRAMessage {
       if let lhsSequence = lhs.serverSequence, let rhsSequence = rhs.serverSequence, lhsSequence != rhsSequence {
         return lhsSequence < rhsSequence
       }
-      let left = conversationDateValue(lhs.localCreatedAt ?? lhs.createdAt ?? "")
-      let right = conversationDateValue(rhs.localCreatedAt ?? rhs.createdAt ?? "")
+      let left = conversationSortDate(lhs)
+      let right = conversationSortDate(rhs)
       if left == right {
         return lhs.id < rhs.id
       }
       return left < right
     }
   }
+}
+
+private func conversationSortDate(_ message: MIRAMessage) -> Date {
+  let status = message.status?.lowercased() ?? ""
+  let shouldUseLocalDate = message.id.hasPrefix("local-") || status == "sending" || status == "failed"
+  if shouldUseLocalDate, let localCreatedAt = message.localCreatedAt {
+    return conversationDateValue(localCreatedAt)
+  }
+  if let createdAt = message.createdAt {
+    return conversationDateValue(createdAt)
+  }
+  if let localCreatedAt = message.localCreatedAt {
+    return conversationDateValue(localCreatedAt)
+  }
+  return .distantPast
 }
 
 private func conversationDateValue(_ value: String) -> Date {

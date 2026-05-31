@@ -496,8 +496,8 @@ private struct CaptroWelcomePager: View {
         Spacer()
 
         HStack(spacing: MIRATheme.Space.md) {
-          CaptroWelcomeActionButton(title: localization.string("auth.login"), style: .filled, action: onLogin)
-          CaptroWelcomeActionButton(title: localization.string("auth.signup"), style: .light, action: onSignup)
+          CaptroWelcomeActionButton(title: localization.string("auth.login"), style: .filled, action: openLogin)
+          CaptroWelcomeActionButton(title: localization.string("auth.signup"), style: .light, action: openSignup)
         }
         .padding(.horizontal, 28)
         .padding(.bottom, 34)
@@ -515,6 +515,16 @@ private struct CaptroWelcomePager: View {
       guard phase != .active else { return }
       audio.stop()
     }
+  }
+
+  private func openLogin() {
+    audio.stop()
+    onLogin()
+  }
+
+  private func openSignup() {
+    audio.stop()
+    onSignup()
   }
 }
 

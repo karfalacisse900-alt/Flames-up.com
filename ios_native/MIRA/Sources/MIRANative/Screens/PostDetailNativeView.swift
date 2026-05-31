@@ -25,10 +25,19 @@ final class PostDetailModel: ObservableObject {
   func refreshPost() async {
     do {
       let refreshed: MIRAPost = try await api.get("/posts/\(post.id)")
+      let current = post
+      let merged = refreshed.updating(
+        liked: refreshed.isLiked ?? current.isLiked,
+        likesCount: bestCount(current.likesCount, refreshed.likesCount),
+        commentsCount: bestCount(current.commentsCount, refreshed.commentsCount),
+        saved: refreshed.isSaved ?? refreshed.saved?.value ?? current.viewerSaved,
+        savesCount: bestCount(current.savesCount, refreshed.savesCount),
+        following: refreshed.isFollowing ?? refreshed.following?.value ?? refreshed.followed?.value ?? current.viewerFollowing
+      )
       var transaction = Transaction()
       transaction.animation = nil
       withTransaction(transaction) {
-        post = refreshed
+        post = merged
       }
       publishEngagement()
     } catch {}
@@ -356,7 +365,7 @@ public struct PostDetailNativeView: View {
   private var mediaHeight: CGFloat {
     let maxHeight = max(300, UIScreen.main.bounds.height * 0.48)
     return min(
-      MIRAMediaSizing.detailHeight(for: model.post.mediaURLs, aspectRatios: model.post.mediaHeightToWidthRatios),
+      MIRAMediaSizing.detailHeight(for: detailMediaURLs, aspectRatios: model.post.mediaHeightToWidthRatios),
       maxHeight
     )
   }
@@ -365,28 +374,34 @@ public struct PostDetailNativeView: View {
     _model = StateObject(wrappedValue: PostDetailModel(post: post, api: api))
   }
 
+  private var detailMediaURLs: [String] {
+    let optimized = model.post.feedMediaURLs
+    return optimized.isEmpty ? model.post.mediaURLs : optimized
+  }
+
   public var body: some View {
     VStack(spacing: 0) {
       detailHeader
 
       ScrollView {
         VStack(alignment: .leading, spacing: 0) {
-          if !model.post.mediaURLs.isEmpty {
-            MIRAAdaptiveMediaView(
-              urls: model.post.mediaURLs,
-              maxSingleImageHeight: mediaHeight,
-              carouselHeight: mediaHeight,
-              singleImageContentMode: .fill
+          if !detailMediaURLs.isEmpty {
+            PostDetailOptimizedMediaCarousel(
+              urls: detailMediaURLs,
+              post: model.post,
+              height: mediaHeight
             )
             .frame(maxWidth: .infinity, minHeight: mediaHeight, maxHeight: mediaHeight)
           }
 
           VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
             VStack(alignment: .leading, spacing: MIRATheme.Space.sm) {
-              Text(model.post.titleText)
-                .font(.system(size: 24, weight: .semibold))
-                .foregroundStyle(MIRATheme.Color.textPrimary)
-                .lineSpacing(2)
+              if !model.post.titleText.isEmpty {
+                Text(model.post.titleText)
+                  .font(.system(size: 24, weight: .semibold))
+                  .foregroundStyle(MIRATheme.Color.textPrimary)
+                  .lineSpacing(2)
+              }
 
               if !model.post.bodyText.isEmpty {
                 Text(model.post.bodyText)
@@ -742,6 +757,73 @@ public struct PostDetailNativeView: View {
   }
 }
 
+private struct PostDetailOptimizedMediaCarousel: View {
+  let urls: [String]
+  let post: MIRAPost
+  let height: CGFloat
+  @State private var selectedIndex = 0
+
+  var body: some View {
+    TabView(selection: $selectedIndex) {
+      ForEach(Array(urls.enumerated()), id: \.offset) { index, url in
+        RemoteMediaView(
+          url: url,
+          isVideo: isVideo(at: index, url: url),
+          placeholderURL: placeholderURL(at: index, mediaURL: url),
+          fallbackURL: fallbackURL(at: index, mediaURL: url),
+          contentMode: .fill,
+          shouldPlay: false,
+          maxPixelSize: MIRAMediaSizing.feedTargetHeight,
+          placeholderColor: MIRATheme.Color.mediaPlaceholder
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .tag(index)
+      }
+    }
+    .tabViewStyle(.page(indexDisplayMode: urls.count > 1 ? .automatic : .never))
+    .frame(height: height)
+    .background(MIRATheme.Color.mediaPlaceholder)
+    .clipped()
+    .task(id: urls.joined(separator: "|")) {
+      await prefetchNearbyMedia()
+    }
+  }
+
+  private func isVideo(at index: Int, url: String) -> Bool {
+    let types = post.mediaTypes?.values ?? []
+    if types.indices.contains(index) {
+      return types[index].lowercased().contains("video")
+    }
+    return url.isVideoURL
+  }
+
+  private func placeholderURL(at index: Int, mediaURL: String) -> String? {
+    let posters = post.posterMediaURLs
+    if posters.indices.contains(index), posters[index] != mediaURL { return posters[index] }
+    let thumbnails = post.thumbnailMediaURLs
+    if thumbnails.indices.contains(index), thumbnails[index] != mediaURL { return thumbnails[index] }
+    return (post.posterMediaURLs + post.thumbnailMediaURLs)
+      .first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0 != mediaURL && !$0.isVideoURL }
+  }
+
+  private func fallbackURL(at index: Int, mediaURL: String) -> String? {
+    let originals = post.mediaURLs
+    guard originals.indices.contains(index) else { return nil }
+    let original = originals[index].trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !original.isEmpty, original != mediaURL, !original.isVideoURL else { return nil }
+    return original
+  }
+
+  private func prefetchNearbyMedia() async {
+    let previewURLs = (post.posterMediaURLs + post.thumbnailMediaURLs)
+      .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    await MIRAImagePrefetcher.prefetch(urls: previewURLs + urls.filter { !$0.isVideoURL }, maxPixelSize: MIRAMediaSizing.feedTargetHeight, limit: 10)
+    await MainActor.run {
+      MIRAVideoPrewarmManager.shared.prewarm(urls: urls.filter(\.isVideoURL), keepOnly: Set(urls.filter(\.isVideoURL).prefix(2)))
+    }
+  }
+}
+
 public struct DiscoverPostDetailNativeView: View {
   @Environment(\.dismiss) private var dismiss
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -754,6 +836,11 @@ public struct DiscoverPostDetailNativeView: View {
 
   public init(post: MIRAPost, api: MIRAAPIClient) {
     _model = StateObject(wrappedValue: PostDetailModel(post: post, api: api))
+  }
+
+  private var detailMediaURLs: [String] {
+    let optimized = model.post.feedMediaURLs
+    return optimized.isEmpty ? model.post.mediaURLs : optimized
   }
 
   public var body: some View {

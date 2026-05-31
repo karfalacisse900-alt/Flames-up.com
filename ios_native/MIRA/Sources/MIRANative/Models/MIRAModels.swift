@@ -169,7 +169,7 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
     }
     let raw = (caption?.isEmpty == false ? caption : content) ?? ""
     let first = raw.components(separatedBy: .newlines).first ?? raw
-    return first.isEmpty ? "MIRA post" : first
+    return first.trimmingCharacters(in: .whitespacesAndNewlines)
   }
 
   public var bodyText: String {
@@ -202,10 +202,15 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
 
   private func uniqueMediaURLs(from values: [String], fallback: String?) -> [String] {
     var urls: [String] = []
-    if let fallback, !fallback.isEmpty { urls.append(fallback) }
+    if let fallback {
+      let cleanFallback = fallback.trimmingCharacters(in: .whitespacesAndNewlines)
+      if !cleanFallback.isEmpty { urls.append(cleanFallback) }
+    }
     urls.append(contentsOf: values)
     var seen = Set<String>()
-    return urls.filter { seen.insert($0).inserted }
+    return urls
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { !$0.isEmpty && seen.insert($0).inserted }
   }
 
   public var mediaHeightToWidthRatios: [CGFloat] {

@@ -495,6 +495,7 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
   let fallbackURLs: [String]
   let maxPixelSize: CGFloat
   let animatesNetworkLoad: Bool
+  let keepsPreviousImageWhileLoading: Bool
   let onImageLoaded: (UIImage) -> Void
   let content: (Image) -> Content
   let placeholder: () -> Placeholder
@@ -508,6 +509,7 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
     fallbackURLs: [String] = [],
     maxPixelSize: CGFloat = MIRAMediaSizing.feedTargetHeight,
     animatesNetworkLoad: Bool = true,
+    keepsPreviousImageWhileLoading: Bool = false,
     onImageLoaded: @escaping (UIImage) -> Void = { _ in },
     @ViewBuilder content: @escaping (Image) -> Content,
     @ViewBuilder placeholder: @escaping () -> Placeholder
@@ -516,6 +518,7 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
     self.fallbackURLs = fallbackURLs
     self.maxPixelSize = maxPixelSize
     self.animatesNetworkLoad = animatesNetworkLoad
+    self.keepsPreviousImageWhileLoading = keepsPreviousImageWhileLoading
     self.onImageLoaded = onImageLoaded
     self.content = content
     self.placeholder = placeholder
@@ -551,8 +554,11 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
 
   private var candidateURLStrings: [String] {
     var seen = Set<String>()
-    return ([url ?? ""] + fallbackURLs)
+    let primary = ([url ?? ""] + fallbackURLs)
       .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { !$0.isEmpty }
+    let transformFallbacks = primary.compactMap(Self.cloudflareImageTransformSourceURL)
+    return (primary + transformFallbacks)
       .filter { !$0.isEmpty && seen.insert($0).inserted }
   }
 
@@ -602,8 +608,12 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
     }
     if shouldClear {
       await MainActor.run {
-        uiImage = nil
-        isImageVisible = false
+        if keepsPreviousImageWhileLoading {
+          isImageVisible = uiImage != nil
+        } else {
+          uiImage = nil
+          isImageVisible = false
+        }
       }
     }
 
@@ -664,8 +674,12 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
     }
     if shouldClearAfterFailure {
       await MainActor.run {
-        uiImage = nil
-        isImageVisible = false
+        if keepsPreviousImageWhileLoading {
+          isImageVisible = uiImage != nil
+        } else {
+          uiImage = nil
+          isImageVisible = false
+        }
       }
     }
   }
@@ -673,6 +687,17 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
   private func isPrimaryCandidate(_ remoteURL: URL, in remoteURLs: [URL]) -> Bool {
     guard let first = remoteURLs.first else { return false }
     return remoteURL == first
+  }
+
+  private static func cloudflareImageTransformSourceURL(_ value: String) -> String? {
+    guard value.contains("/cdn-cgi/image/"),
+          let sourceRange = value.range(of: "/https://", options: [], range: value.startIndex..<value.endIndex) else {
+      return nil
+    }
+    let encodedSource = String(value[sourceRange.lowerBound...].dropFirst())
+    let source = encodedSource.removingPercentEncoding ?? encodedSource
+    guard let url = URL(string: source), url.scheme?.lowercased() == "https" else { return nil }
+    return source
   }
 }
 
@@ -770,7 +795,12 @@ public struct RemoteAvatar: View {
   let size: CGFloat
 
   public var body: some View {
-    MIRACachedImage(url: url, maxPixelSize: max(96, size * 3), animatesNetworkLoad: false) { image in
+    MIRACachedImage(
+      url: cleanURL,
+      maxPixelSize: max(96, size * 3),
+      animatesNetworkLoad: false,
+      keepsPreviousImageWhileLoading: true
+    ) { image in
       image.resizable().scaledToFill()
     } placeholder: {
       ZStack {
@@ -781,6 +811,11 @@ public struct RemoteAvatar: View {
     }
     .frame(width: size, height: size)
     .clipShape(Circle())
+  }
+
+  private var cleanURL: String? {
+    let trimmed = url?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return trimmed.isEmpty ? nil : trimmed
   }
 }
 

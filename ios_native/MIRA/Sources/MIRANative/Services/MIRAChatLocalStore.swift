@@ -159,13 +159,28 @@ actor MIRAChatLocalStore {
       if let lhsSequence = lhs.serverSequence, let rhsSequence = rhs.serverSequence, lhsSequence != rhsSequence {
         return lhsSequence < rhsSequence
       }
-      let left = dateValue(lhs.localCreatedAt ?? lhs.createdAt ?? "")
-      let right = dateValue(rhs.localCreatedAt ?? rhs.createdAt ?? "")
+      let left = sortDate(lhs)
+      let right = sortDate(rhs)
       if left == right {
         return lhs.id < rhs.id
       }
       return left < right
     }
+  }
+
+  private func sortDate(_ message: MIRAMessage) -> Date {
+    let status = message.status?.lowercased() ?? ""
+    let shouldUseLocalDate = message.id.hasPrefix("local-") || status == "sending" || status == "failed"
+    if shouldUseLocalDate, let localCreatedAt = message.localCreatedAt {
+      return dateValue(localCreatedAt)
+    }
+    if let createdAt = message.createdAt {
+      return dateValue(createdAt)
+    }
+    if let localCreatedAt = message.localCreatedAt {
+      return dateValue(localCreatedAt)
+    }
+    return .distantPast
   }
 
   private func dateValue(_ value: String) -> Date {
