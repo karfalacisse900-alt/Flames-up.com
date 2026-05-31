@@ -211,6 +211,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
   private var reviewVideoEndObserver: NSObjectProtocol?
 
   private let previewContainer = UIView()
+  private let captureFlashView = UIView()
   private let gridOverlay = MIRACameraGridOverlayView()
   private let capturedImageView = UIImageView()
   private let textOverlayContainer = UIView()
@@ -341,6 +342,12 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     capturedImageView.isHidden = true
     previewContainer.addSubview(capturedImageView)
 
+    captureFlashView.translatesAutoresizingMaskIntoConstraints = false
+    captureFlashView.backgroundColor = UIColor.white.withAlphaComponent(0.18)
+    captureFlashView.alpha = 0
+    captureFlashView.isUserInteractionEnabled = false
+    previewContainer.addSubview(captureFlashView)
+
     textOverlayContainer.translatesAutoresizingMaskIntoConstraints = false
     textOverlayContainer.backgroundColor = .clear
     textOverlayContainer.clipsToBounds = true
@@ -377,6 +384,11 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
       capturedImageView.leadingAnchor.constraint(equalTo: previewContainer.leadingAnchor),
       capturedImageView.trailingAnchor.constraint(equalTo: previewContainer.trailingAnchor),
       capturedImageView.bottomAnchor.constraint(equalTo: previewContainer.bottomAnchor),
+
+      captureFlashView.topAnchor.constraint(equalTo: previewContainer.topAnchor),
+      captureFlashView.leadingAnchor.constraint(equalTo: previewContainer.leadingAnchor),
+      captureFlashView.trailingAnchor.constraint(equalTo: previewContainer.trailingAnchor),
+      captureFlashView.bottomAnchor.constraint(equalTo: previewContainer.bottomAnchor),
 
       textOverlayContainer.topAnchor.constraint(equalTo: previewContainer.topAnchor),
       textOverlayContainer.leadingAnchor.constraint(equalTo: previewContainer.leadingAnchor),
@@ -1187,6 +1199,9 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
       stopRecordingVideo()
       return
     }
+    MIRAApplePerformanceLogger.event("camera_shutter_tapped", detail: selectedMode.rawValue.lowercased())
+    CaptroHaptics.light()
+    showCaptureFeedback()
     if timerSetting.seconds > 0 {
       startCountdown(seconds: timerSetting.seconds) { [weak self] in
         self?.performCaptureAction()
@@ -1202,6 +1217,20 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
       capturePhoto()
     case .video:
       startRecordingVideo(maxDuration: 60)
+    }
+  }
+
+  private func showCaptureFeedback() {
+    shutterFill.layer.removeAllAnimations()
+    captureFlashView.layer.removeAllAnimations()
+    UIView.animate(withDuration: 0.07, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction]) {
+      self.shutterFill.transform = CGAffineTransform(scaleX: 0.82, y: 0.82)
+      self.captureFlashView.alpha = 0.16
+    } completion: { _ in
+      UIView.animate(withDuration: 0.18, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction]) {
+        self.shutterFill.transform = .identity
+        self.captureFlashView.alpha = 0
+      }
     }
   }
 
@@ -1235,6 +1264,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
 
   private func capturePhoto() {
     guard session.isRunning, !movieOutput.isRecording else { return }
+    MIRAApplePerformanceLogger.event("photo_capture_start")
     let settings: AVCapturePhotoSettings
     let jpegFormat: [String: Any] = [AVVideoCodecKey: AVVideoCodecType.jpeg]
     if rawCaptureEnabled, let rawPixelFormat = photoOutput.availableRawPhotoPixelFormatTypes.first {
@@ -1707,6 +1737,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     error: Error?
   ) {
     guard error == nil, let data = photo.fileDataRepresentation() else {
+      MIRAApplePerformanceLogger.event("photo_capture_failed")
       DispatchQueue.main.async {
         self.showTransientMessage("That photo could not be captured. Try again.")
       }
@@ -1722,6 +1753,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
       return
     }
     let imageType = capturedImageType(for: data)
+    MIRAApplePerformanceLogger.event("photo_capture_complete", detail: imageType.extensionName)
 #if DEBUG
     logCapturedPhotoQuality(data: data, imageType: imageType)
 #endif

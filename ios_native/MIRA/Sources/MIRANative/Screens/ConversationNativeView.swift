@@ -549,11 +549,14 @@ public struct ConversationNativeView: View {
         Image(systemName: "ellipsis.vertical")
           .font(.system(size: 19, weight: .bold))
           .foregroundStyle(.black)
-          .frame(width: 36, height: 40)
+          .frame(width: 44, height: 44)
+          .background(Color.black.opacity(0.055), in: Circle())
+          .overlay(Circle().stroke(Color.black.opacity(0.055), lineWidth: 1))
           .contentShape(Rectangle())
       }
       .buttonStyle(.miraPress)
       .accessibilityLabel("Chat options")
+      .zIndex(2)
     }
     .padding(.horizontal, 12)
     .padding(.vertical, 10)
@@ -967,6 +970,7 @@ private struct MessageBubbleContent: View {
   let outgoing: Bool
   let maxWidth: CGFloat
   let timestamp: String?
+  @State private var isVideoPlaying = false
 
   var body: some View {
     VStack(alignment: outgoing ? .trailing : .leading, spacing: hasLargeMedia ? 6 : 5) {
@@ -1089,22 +1093,52 @@ private struct MessageBubbleContent: View {
   private func mediaContent(url: String) -> some View {
     let type = message.mediaType?.lowercased() ?? ""
     let mediaWidth = min(maxWidth, 260)
+    let isVideo = type == "video" || url.isVideoURL
     if type == "file" {
       fileCard
     } else if type == "voice" || type == "audio" {
       EmptyView()
     } else {
-      RemoteMediaView(
-        url: url,
-        isVideo: type == "video" || url.isVideoURL,
-        placeholderURL: type == "video" ? (message.posterUrl ?? message.thumbnailUrl) : (message.thumbnailUrl ?? message.posterUrl),
-        shouldPlay: false,
-        maxPixelSize: 900,
-        showsVideoPlaceholderIcon: true,
-        placeholderColor: ChatRoomPalette.backgroundWash
-      )
-        .frame(width: mediaWidth, height: type == "video" || url.isVideoURL ? mediaWidth * 1.22 : mediaWidth * 0.86)
+      ZStack {
+        RemoteMediaView(
+          url: url,
+          isVideo: isVideo,
+          placeholderURL: isVideo ? (message.posterUrl ?? message.thumbnailUrl) : (message.thumbnailUrl ?? message.posterUrl),
+          shouldPlay: isVideo && isVideoPlaying,
+          maxPixelSize: 900,
+          showsVideoPlaceholderIcon: true,
+          placeholderColor: ChatRoomPalette.backgroundWash
+        )
+
+        if isVideo && !isVideoPlaying {
+          Button {
+            CaptroHaptics.light()
+            MIRAApplePerformanceLogger.event("chat_video_prepare")
+            withAnimation(CaptroMotion.smallMenuAnimation(reduceMotion: false)) {
+              isVideoPlaying = true
+            }
+          } label: {
+            Image(systemName: "play.fill")
+              .font(.system(size: 20, weight: .bold))
+              .foregroundStyle(.white)
+              .frame(width: 54, height: 54)
+              .background(.black.opacity(0.42), in: Circle())
+              .overlay(Circle().stroke(.white.opacity(0.28), lineWidth: 1))
+          }
+          .buttonStyle(.plain)
+          .accessibilityLabel("Play video message")
+        }
+      }
+        .frame(width: mediaWidth, height: isVideo ? mediaWidth * 1.22 : mediaWidth * 0.86)
+        .background(ChatRoomPalette.backgroundWash)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .onChange(of: url) { _, _ in
+          isVideoPlaying = false
+        }
+        .onDisappear {
+          isVideoPlaying = false
+        }
     }
   }
 

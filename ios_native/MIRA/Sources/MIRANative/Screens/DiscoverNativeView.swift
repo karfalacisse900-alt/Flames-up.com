@@ -711,7 +711,7 @@ private struct StoryViewerNativeView: View {
 
           storyTopBar
             .padding(.horizontal, 13)
-            .padding(.top, safeTop + 30)
+            .padding(.top, safeTop + 42)
             .frame(maxHeight: .infinity, alignment: .top)
 
           storyThoughtOverlay
@@ -839,52 +839,25 @@ private struct StoryViewerNativeView: View {
   }
 
   private var storyProfileCarousel: some View {
-    GeometryReader { proxy in
-      ScrollViewReader { reader in
-        ScrollView(.horizontal, showsIndicators: false) {
-          HStack(alignment: .bottom, spacing: 18) {
-            ForEach(storyRailGroups) { railGroup in
-              Button {
-                selectStoryGroup(railGroup)
-              } label: {
-                StoryViewerCarouselBubble(
-                  group: railGroup,
-                  label: storyHandleLabel(for: railGroup),
-                  isSelected: railGroup.userId == activeGroup.userId
-                )
-              }
-              .buttonStyle(.plain)
-              .id(railGroup.userId)
-            }
-          }
-          .padding(.horizontal, max(22, (proxy.size.width - 116) / 2))
-          .padding(.top, 8)
-          .frame(maxWidth: .infinity, alignment: .center)
-        }
-        .onAppear {
-          centerActiveStoryRail(in: reader, animated: false)
-        }
-        .onChange(of: activeGroup.userId) { _, _ in
-          centerActiveStoryRail(in: reader, animated: true)
-        }
-        .highPriorityGesture(
-          DragGesture(minimumDistance: 28, coordinateSpace: .local)
-            .onEnded(handleStoryGroupSwipe)
-        )
-      }
+    HStack(alignment: .bottom, spacing: 18) {
+      storyRailBubble(storyRailNeighbor(offset: -1), isSelected: false)
+        .frame(width: 76, height: 112)
+        .opacity(storyRailNeighbor(offset: -1) == nil ? 0 : 1)
+
+      storyRailBubble(activeGroup, isSelected: true)
+        .frame(width: 116, height: 116)
+        .zIndex(1)
+
+      storyRailBubble(storyRailNeighbor(offset: 1), isSelected: false)
+        .frame(width: 76, height: 112)
+        .opacity(storyRailNeighbor(offset: 1) == nil ? 0 : 1)
     }
-    .frame(height: 124)
-    .mask(
-      LinearGradient(
-        stops: [
-          .init(color: .clear, location: 0),
-          .init(color: .black, location: 0.08),
-          .init(color: .black, location: 0.92),
-          .init(color: .clear, location: 1),
-        ],
-        startPoint: .leading,
-        endPoint: .trailing
-      )
+    .frame(maxWidth: .infinity)
+    .frame(height: 128)
+    .padding(.top, 6)
+    .highPriorityGesture(
+      DragGesture(minimumDistance: 28, coordinateSpace: .local)
+        .onEnded(handleStoryGroupSwipe)
     )
   }
 
@@ -893,21 +866,34 @@ private struct StoryViewerNativeView: View {
   }
 
   private func storyMediaTopInset(safeTop: CGFloat) -> CGFloat {
-    safeTop > 0 ? 10 : 8
+    safeTop > 0 ? 18 : 14
   }
 
-  @MainActor
-  private func centerActiveStoryRail(in reader: ScrollViewProxy, animated: Bool) {
-    let action = {
-      reader.scrollTo(activeGroup.userId, anchor: .center)
-    }
-    if animated, !reduceMotion {
-      withAnimation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion)) {
-        action()
+  @ViewBuilder
+  private func storyRailBubble(_ railGroup: MIRAStoryGroup?, isSelected: Bool) -> some View {
+    if let railGroup {
+      Button {
+        selectStoryGroup(railGroup)
+      } label: {
+        StoryViewerCarouselBubble(
+          group: railGroup,
+          label: storyHandleLabel(for: railGroup),
+          isSelected: isSelected
+        )
       }
+      .buttonStyle(.plain)
+      .accessibilityLabel(isSelected ? "Current story" : "Switch story")
     } else {
-      action()
+      Color.clear
     }
+  }
+
+  private func storyRailNeighbor(offset: Int) -> MIRAStoryGroup? {
+    let groups = storyRailGroups
+    guard let index = groups.firstIndex(where: { $0.userId == activeGroup.userId }) else { return nil }
+    let neighborIndex = index + offset
+    guard groups.indices.contains(neighborIndex) else { return nil }
+    return groups[neighborIndex]
   }
 
   @MainActor
@@ -1366,6 +1352,7 @@ private struct StoryViewerNativeView: View {
   private func closeStoryViewer() {
     guard !isClosing else { return }
     isClosing = true
+    MIRAApplePerformanceLogger.event("story_viewer_close")
     let duration = reduceMotion ? CaptroMotion.Duration.reduced : CaptroMotion.Duration.fullScreenClose
     withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
       isCanvasVisible = false
