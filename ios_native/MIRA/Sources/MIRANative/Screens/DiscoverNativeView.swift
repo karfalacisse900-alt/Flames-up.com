@@ -533,7 +533,7 @@ public struct DiscoverNativeView: View {
 
   private func hasVisualPreview(_ post: MIRAPost) -> Bool {
     guard !post.containsVideoMedia else { return false }
-    !(post.posterMediaURLs + post.thumbnailMediaURLs + post.feedMediaURLs + post.mediaURLs)
+    return !(post.posterMediaURLs + post.thumbnailMediaURLs + post.feedMediaURLs + post.mediaURLs)
       .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
       .filter { !$0.isEmpty }
       .isEmpty
