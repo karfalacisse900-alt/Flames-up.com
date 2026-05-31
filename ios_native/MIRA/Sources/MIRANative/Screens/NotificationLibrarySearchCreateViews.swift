@@ -1183,7 +1183,7 @@ public struct CreatePostNativeView: View {
         .lineLimit(4...8)
 
       Button {
-        Task { await generatePostAssist() }
+        Task { await improveCaptionWithAI() }
       } label: {
         HStack(spacing: 8) {
           if isGeneratingPostAssist {
@@ -1193,7 +1193,7 @@ public struct CreatePostNativeView: View {
             Image(systemName: "sparkles")
               .font(.system(size: 15, weight: .bold))
           }
-          Text(isGeneratingPostAssist ? "Creating ideas" : "Help me write this")
+          Text(isGeneratingPostAssist ? "Improving caption" : "Improve caption")
             .font(.system(size: 15, weight: .bold))
           if let category = postAssistResponse?.resolvedCategory, !category.isEmpty {
             Text(category.capitalized)
@@ -1328,35 +1328,63 @@ public struct CreatePostNativeView: View {
     defer { isGeneratingPostAssist = false }
 
     do {
-      let cleanedTags = hashtags
-        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "#")) }
-        .filter { !$0.isEmpty }
-      let mediaType = mediaItems.isEmpty ? nil : "image"
-      let signals = await MIRAAutoCategoryService.analyze(
-        mediaItems: mediaItems,
-        title: title,
-        caption: bodyText,
-        hashtags: cleanedTags,
-        placeName: selectedPlace?.displayName,
-        location: selectedPlace?.addressText ?? broadLocation.label
-      )
-      let body = MIRAPostAssistBody(
-        title: title,
-        caption: bodyText,
-        mediaType: mediaType,
-        postType: selectedPlace == nil ? "general" : "place",
-        hashtags: cleanedTags,
-        location: selectedPlace?.addressText ?? broadLocation.label,
-        placeName: selectedPlace?.displayName,
-        appleVisionLabels: signals.appleVisionLabels.isEmpty ? nil : signals.appleVisionLabels,
-        appleVisionCategoryGuess: signals.appleVisionCategoryGuess,
-        appleVisionConfidence: signals.appleVisionConfidence
-      )
-      let response: MIRAPostAssistResponse = try await api.post("/ai/post-assist", body: body)
-      postAssistResponse = response
+      postAssistResponse = try await requestPostAssist()
     } catch {
       postAssistError = "Could not create ideas. Try again."
     }
+  }
+
+  @MainActor
+  private func improveCaptionWithAI() async {
+    guard !isGeneratingPostAssist else { return }
+    isGeneratingPostAssist = true
+    postAssistError = nil
+    defer { isGeneratingPostAssist = false }
+
+    do {
+      let response = try await requestPostAssist()
+      postAssistResponse = response
+      if let improved = response.captionSuggestions?
+        .map({ $0.trimmingCharacters(in: .whitespacesAndNewlines) })
+        .first(where: { !$0.isEmpty }) {
+        withAnimation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion)) {
+          bodyText = improved
+        }
+      } else {
+        postAssistError = "Could not improve this caption. Add a few words and try again."
+      }
+    } catch {
+      postAssistError = "Could not improve this caption. Try again."
+    }
+  }
+
+  @MainActor
+  private func requestPostAssist() async throws -> MIRAPostAssistResponse {
+    let cleanedTags = hashtags
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "#")) }
+      .filter { !$0.isEmpty }
+    let mediaType = mediaItems.isEmpty ? nil : "image"
+    let signals = await MIRAAutoCategoryService.analyze(
+      mediaItems: mediaItems,
+      title: title,
+      caption: bodyText,
+      hashtags: cleanedTags,
+      placeName: selectedPlace?.displayName,
+      location: selectedPlace?.addressText ?? broadLocation.label
+    )
+    let body = MIRAPostAssistBody(
+      title: title,
+      caption: bodyText,
+      mediaType: mediaType,
+      postType: selectedPlace == nil ? "general" : "place",
+      hashtags: cleanedTags,
+      location: selectedPlace?.addressText ?? broadLocation.label,
+      placeName: selectedPlace?.displayName,
+      appleVisionLabels: signals.appleVisionLabels.isEmpty ? nil : signals.appleVisionLabels,
+      appleVisionCategoryGuess: signals.appleVisionCategoryGuess,
+      appleVisionConfidence: signals.appleVisionConfidence
+    )
+    return try await api.post("/ai/post-assist", body: body)
   }
 
   private func submit() async {

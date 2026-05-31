@@ -277,7 +277,7 @@ public enum MIRAScrollFeel {
   fileprivate var decelerationRate: UIScrollView.DecelerationRate {
     switch self {
     case .feed:
-      return UIScrollView.DecelerationRate(rawValue: 0.988)
+      return UIScrollView.DecelerationRate(rawValue: 0.975)
     case .chat:
       return UIScrollView.DecelerationRate(rawValue: 0.992)
     case .sheet:
@@ -633,6 +633,26 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
       }
       if !isPrimaryCandidate(remoteURL, in: remoteURLs) {
         MIRAApplePerformanceLogger.event("media_cache_miss", detail: "fallback_failed")
+      }
+    }
+
+    // Cloudflare Images can take a brief moment to make a newly uploaded avatar/media
+    // variant available. Retry inside the same load task so the view does not stay
+    // stuck on a placeholder until it is recreated.
+    for attempt in 1...2 {
+      guard !Task.isCancelled else { return }
+      try? await Task.sleep(nanoseconds: UInt64(attempt) * 550_000_000)
+      for remoteURL in remoteURLs {
+        if let result = await MIRAImageLoadPipeline.shared.image(for: remoteURL, maxPixelSize: resolvedMaxPixelSize) {
+          guard !Task.isCancelled else { return }
+          await MainActor.run {
+            uiImage = result.image
+            loadedURL = remoteURL
+            isImageVisible = true
+            onImageLoaded(result.image)
+          }
+          return
+        }
       }
     }
 

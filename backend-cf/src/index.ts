@@ -1916,7 +1916,7 @@ function cloudflareStreamToken(env: Env): string {
 }
 
 function cloudflareImagesAccountHash(env: Env): string {
-  return cleanText(env.CLOUDFLARE_IMAGES_ACCOUNT_HASH || env.CF_ACCOUNT_HASH || 'DY-IgVdOm-0zb0K5ZFnpKA', 160);
+  return cleanText(env.CLOUDFLARE_IMAGES_ACCOUNT_HASH || env.CF_ACCOUNT_HASH || '', 160);
 }
 
 function cloudflareImageDeliveryUrl(env: Env, imageId: string, variant = 'public'): string {
@@ -1926,6 +1926,14 @@ function cloudflareImageDeliveryUrl(env: Env, imageId: string, variant = 'public
   return accountHash && cleanImageId
     ? `https://imagedelivery.net/${accountHash}/${cleanImageId}/${cleanVariant}`
     : '';
+}
+
+function cloudflareImageVariantUrl(env: Env, imageId: string, variants?: unknown, variant = 'public'): string {
+  const urls = parseJsonArray(variants)
+    .map((value) => safeMediaReference(value))
+    .filter(Boolean);
+  const preferred = urls.find((url) => url.endsWith(`/${variant}`)) || urls[0] || '';
+  return preferred || cloudflareImageDeliveryUrl(env, imageId, variant);
 }
 
 function cloudflareImageTransformsEnabled(env?: Env): boolean {
@@ -14756,19 +14764,19 @@ api.post('/upload/image', authMiddleware, async (c) => {
       const cfData: any = await cfRes.json();
       if (cfData.success) {
         const imageId = cfData.result.id;
-        const deliveryUrl = cloudflareImageDeliveryUrl(c.env, imageId);
+        const deliveryUrl = cloudflareImageVariantUrl(c.env, imageId, cfData.result?.variants);
         const backup = await storeMediaBackup(c, {
           userId,
           mediaKind: 'image',
           provider: 'cloudflare_images',
           providerId: imageId,
-          deliveryUrl,
+          deliveryUrl: deliveryUrl || undefined,
           contentType: processed.contentType,
           bytes: processed.bytes,
           originalFilename: body.filename || `upload.${fileExt}`,
         });
         return c.json({
-          url: deliveryUrl,
+          url: deliveryUrl || backup?.delivery_url || '',
           id: imageId,
           source: 'cloudflare_images',
           backup_id: backup?.id || null,

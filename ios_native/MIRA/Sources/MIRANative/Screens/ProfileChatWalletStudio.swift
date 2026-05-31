@@ -1021,6 +1021,9 @@ private struct EditProfileNativeView: View {
             mimeType: "image/jpeg"
           )
         )
+        if let uploadedImage, !uploadedImage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+          await MIRAImagePrefetcher.prefetch(urls: [uploadedImage], maxPixelSize: 420, limit: 1)
+        }
       }
       let updated: MIRAUser = try await api.put(
         "/users/me",
@@ -1030,6 +1033,9 @@ private struct EditProfileNativeView: View {
           profileImage: uploadedImage
         )
       )
+      if let freshProfileImage = updated.profileImage, !freshProfileImage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        await MIRAImagePrefetcher.prefetch(urls: [freshProfileImage], maxPixelSize: 420, limit: 1)
+      }
       onSaved(updated)
     } catch {
       errorMessage = profileSaveErrorMessage(for: error)
