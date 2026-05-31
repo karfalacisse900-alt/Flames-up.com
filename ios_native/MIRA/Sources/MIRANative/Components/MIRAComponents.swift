@@ -494,6 +494,7 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
   let url: String?
   let fallbackURLs: [String]
   let maxPixelSize: CGFloat
+  let animatesNetworkLoad: Bool
   let onImageLoaded: (UIImage) -> Void
   let content: (Image) -> Content
   let placeholder: () -> Placeholder
@@ -506,6 +507,7 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
     url: String?,
     fallbackURLs: [String] = [],
     maxPixelSize: CGFloat = MIRAMediaSizing.feedTargetHeight,
+    animatesNetworkLoad: Bool = true,
     onImageLoaded: @escaping (UIImage) -> Void = { _ in },
     @ViewBuilder content: @escaping (Image) -> Content,
     @ViewBuilder placeholder: @escaping () -> Placeholder
@@ -513,6 +515,7 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
     self.url = url
     self.fallbackURLs = fallbackURLs
     self.maxPixelSize = maxPixelSize
+    self.animatesNetworkLoad = animatesNetworkLoad
     self.onImageLoaded = onImageLoaded
     self.content = content
     self.placeholder = placeholder
@@ -610,7 +613,7 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
         await MainActor.run {
           uiImage = result.image
           loadedURL = remoteURL
-          if result.source == .network {
+          if result.source == .network, animatesNetworkLoad {
             withAnimation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion)) {
               isImageVisible = true
             }
@@ -747,7 +750,7 @@ public struct RemoteAvatar: View {
   let size: CGFloat
 
   public var body: some View {
-    MIRACachedImage(url: url, maxPixelSize: max(96, size * 3)) { image in
+    MIRACachedImage(url: url, maxPixelSize: max(96, size * 3), animatesNetworkLoad: false) { image in
       image.resizable().scaledToFill()
     } placeholder: {
       ZStack {

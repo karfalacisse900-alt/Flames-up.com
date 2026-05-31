@@ -1202,6 +1202,7 @@ public struct MIRAMessage: Codable, Identifiable, Hashable {
     createdAt: String? = nil,
     updatedAt: String? = nil,
     status: String? = nil,
+    localCreatedAt: String? = nil,
     uploadStatus: String? = nil
   ) -> MIRAMessage {
     MIRAMessage(
@@ -1215,7 +1216,7 @@ public struct MIRAMessage: Codable, Identifiable, Hashable {
       createdAt: createdAt ?? self.createdAt,
       updatedAt: updatedAt ?? self.updatedAt,
       status: status ?? self.status,
-      localCreatedAt: localCreatedAt,
+      localCreatedAt: localCreatedAt ?? self.localCreatedAt,
       serverSequence: serverSequence,
       thumbnailUrl: thumbnailUrl,
       posterUrl: posterUrl,

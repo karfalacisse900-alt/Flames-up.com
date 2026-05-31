@@ -145,16 +145,25 @@ actor MIRAChatLocalStore {
   private func dedupedMessages(_ messages: [MIRAMessage]) -> [MIRAMessage] {
     var byId: [String: MIRAMessage] = [:]
     for message in messages {
-      byId[message.id] = message
+      if let existing = byId[message.id] {
+        byId[message.id] = message.updating(localCreatedAt: existing.localCreatedAt)
+      } else {
+        byId[message.id] = message
+      }
     }
     return Array(byId.values)
   }
 
   private func sortedMessages(_ messages: [MIRAMessage]) -> [MIRAMessage] {
     messages.sorted { lhs, rhs in
-      let left = dateValue(lhs.createdAt ?? lhs.localCreatedAt ?? "")
-      let right = dateValue(rhs.createdAt ?? rhs.localCreatedAt ?? "")
-      if left == right { return lhs.id < rhs.id }
+      if let lhsSequence = lhs.serverSequence, let rhsSequence = rhs.serverSequence, lhsSequence != rhsSequence {
+        return lhsSequence < rhsSequence
+      }
+      let left = dateValue(lhs.localCreatedAt ?? lhs.createdAt ?? "")
+      let right = dateValue(rhs.localCreatedAt ?? rhs.createdAt ?? "")
+      if left == right {
+        return lhs.id < rhs.id
+      }
       return left < right
     }
   }

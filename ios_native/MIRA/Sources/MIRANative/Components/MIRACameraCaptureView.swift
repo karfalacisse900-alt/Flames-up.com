@@ -11,8 +11,18 @@ enum MIRAStoryCameraEditTool {
   case adjust
 }
 
+enum MIRAStoryCameraCaptureMode: Equatable {
+  case photoOnly
+  case videoOnly
+
+  var usesVideoCapture: Bool {
+    self == .videoOnly
+  }
+}
+
 struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
   var editedMedia: MIRAPickedMedia?
+  var captureMode: MIRAStoryCameraCaptureMode = .photoOnly
   var dismissesOnCapture = true
   var dismissesOnCancel = true
   let onCapture: (MIRAPickedMedia) -> Void
@@ -24,6 +34,7 @@ struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
 
   init(
     editedMedia: MIRAPickedMedia? = nil,
+    captureMode: MIRAStoryCameraCaptureMode = .photoOnly,
     dismissesOnCapture: Bool = true,
     dismissesOnCancel: Bool = true,
     onCapture: @escaping (MIRAPickedMedia) -> Void,
@@ -32,6 +43,7 @@ struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
     onEdit: @escaping (MIRAPickedMedia, MIRAStoryCameraEditTool) -> Void = { _, _ in }
   ) {
     self.editedMedia = editedMedia
+    self.captureMode = captureMode
     self.dismissesOnCapture = dismissesOnCapture
     self.dismissesOnCancel = dismissesOnCancel
     self.onCapture = onCapture
@@ -42,6 +54,7 @@ struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
 
   func makeUIViewController(context: Context) -> MIRAStoryCameraViewController {
     let controller = MIRAStoryCameraViewController()
+    controller.captureMode = captureMode
     controller.delegate = context.coordinator
     return controller
   }
@@ -122,11 +135,13 @@ protocol MIRAStoryCameraViewControllerDelegate: AnyObject {
   func storyCameraDidRequestEdit(_ media: MIRAPickedMedia, tool: MIRAStoryCameraEditTool)
 }
 
-final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptureDelegate, PHPickerViewControllerDelegate {
+final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptureDelegate, AVCaptureFileOutputRecordingDelegate, PHPickerViewControllerDelegate {
   weak var delegate: MIRAStoryCameraViewControllerDelegate?
+  var captureMode: MIRAStoryCameraCaptureMode = .photoOnly
 
   private enum CameraMode: String, CaseIterable {
     case photo = "Photo"
+    case video = "Video"
   }
 
   private enum TimerSetting: CaseIterable {
@@ -172,10 +187,12 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
   private let session = AVCaptureSession()
   private let sessionQueue = DispatchQueue(label: "mira.camera.session")
   private let photoOutput = AVCapturePhotoOutput()
+  private let movieOutput = AVCaptureMovieFileOutput()
   private let previewLayer = AVCaptureVideoPreviewLayer()
   private let imageManager = PHCachingImageManager()
 
   private var currentInput: AVCaptureDeviceInput?
+  private var audioInput: AVCaptureDeviceInput?
   private var cameraPosition: AVCaptureDevice.Position = .back
   private var isConfigured = false
   private var selectedMode: CameraMode = .photo
@@ -185,6 +202,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
   private var countdownValue = 0
   private var rawCaptureSupported = false
   private var rawCaptureEnabled = false
+  private var pendingStopWorkItem: DispatchWorkItem?
   private var initialZoomFactor: CGFloat = 1
   private var capturedMedia: MIRAPickedMedia?
   private var reviewVideoPlayer: AVPlayer?
@@ -264,6 +282,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
 
   override func viewDidLoad() {
     super.viewDidLoad()
+    selectedMode = captureMode == .videoOnly ? .video : .photo
     view.backgroundColor = UIColor(red: 0.025, green: 0.029, blue: 0.032, alpha: 1)
     installPreview()
     installControls()
@@ -285,6 +304,10 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
   override func viewWillDisappear(_ animated: Bool) {
     super.viewWillDisappear(animated)
     countdownTimer?.invalidate()
+    pendingStopWorkItem?.cancel()
+    if movieOutput.isRecording {
+      movieOutput.stopRecording()
+    }
     cleanupReviewVideoPlayer()
     sessionQueue.async { [session] in
       if session.isRunning {
@@ -421,7 +444,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     modeStack.alignment = .center
     modeStack.spacing = 8
     modeStack.translatesAutoresizingMaskIntoConstraints = false
-    CameraMode.allCases.forEach { mode in
+    availableCameraModes.forEach { mode in
       let button = UIButton(type: .system)
       button.setTitle(mode.rawValue, for: .normal)
       button.titleLabel?.font = .systemFont(ofSize: 14, weight: .semibold)
@@ -620,15 +643,30 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
   private func prepareCamera() {
     switch AVCaptureDevice.authorizationStatus(for: .video) {
     case .authorized:
-      configureSession()
+      requestMicrophoneIfNeededThenConfigure()
     case .notDetermined:
       AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
         DispatchQueue.main.async {
-          granted ? self?.configureSession() : self?.showCameraUnavailableMessage()
+          granted ? self?.requestMicrophoneIfNeededThenConfigure() : self?.showCameraUnavailableMessage()
         }
       }
     default:
       showCameraUnavailableMessage()
+    }
+  }
+
+  private func requestMicrophoneIfNeededThenConfigure() {
+    guard captureMode.usesVideoCapture else {
+      configureSession()
+      return
+    }
+    switch AVCaptureDevice.authorizationStatus(for: .audio) {
+    case .notDetermined:
+      AVCaptureDevice.requestAccess(for: .audio) { [weak self] _ in
+        DispatchQueue.main.async { self?.configureSession() }
+      }
+    default:
+      configureSession()
     }
   }
 
@@ -639,7 +677,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     sessionQueue.async { [weak self] in
       guard let self else { return }
       self.session.beginConfiguration()
-      if self.session.canSetSessionPreset(.photo) {
+      if self.captureMode == .photoOnly, self.session.canSetSessionPreset(.photo) {
         self.session.sessionPreset = .photo
       } else if self.session.canSetSessionPreset(.hd4K3840x2160) {
         self.session.sessionPreset = .hd4K3840x2160
@@ -654,6 +692,15 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
         self.currentInput = input
       }
 
+      if self.captureMode.usesVideoCapture,
+         AVCaptureDevice.authorizationStatus(for: .audio) == .authorized,
+         let audioDevice = AVCaptureDevice.default(for: .audio),
+         let input = try? AVCaptureDeviceInput(device: audioDevice),
+         self.session.canAddInput(input) {
+        self.session.addInput(input)
+        self.audioInput = input
+      }
+
       if self.session.canAddOutput(self.photoOutput) {
         self.session.addOutput(self.photoOutput)
         self.photoOutput.isHighResolutionCaptureEnabled = true
@@ -663,6 +710,14 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
           self.rawCaptureSupported = rawSupported
           self.rawCaptureEnabled = self.rawCaptureEnabled && rawSupported
           self.updateRawButton()
+        }
+      }
+
+      if self.captureMode.usesVideoCapture, self.session.canAddOutput(self.movieOutput) {
+        self.session.addOutput(self.movieOutput)
+        self.movieOutput.movieFragmentInterval = .invalid
+        if let connection = self.movieOutput.connection(with: .video) {
+          self.applyPreferredVideoStabilization(to: connection)
         }
       }
 
@@ -720,6 +775,18 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     } catch {}
   }
 
+  private func applyPreferredVideoStabilization(to connection: AVCaptureConnection) {
+    guard connection.isVideoStabilizationSupported else { return }
+    let activeFormat = currentInput?.device.activeFormat
+    if activeFormat?.isVideoStabilizationModeSupported(.cinematicExtended) == true {
+      connection.preferredVideoStabilizationMode = .cinematicExtended
+    } else if activeFormat?.isVideoStabilizationModeSupported(.cinematic) == true {
+      connection.preferredVideoStabilizationMode = .cinematic
+    } else {
+      connection.preferredVideoStabilizationMode = .auto
+    }
+  }
+
   private func showCameraUnavailableMessage() {
     loadingIndicator.stopAnimating()
     messageLabel.text = "Camera access is needed to create. Turn it on in Settings, then try again."
@@ -750,6 +817,10 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     }
   }
 
+  private var availableCameraModes: [CameraMode] {
+    captureMode == .videoOnly ? [.video] : [.photo]
+  }
+
   private func updateTimerButton() {
     let title = timerSetting == .off ? nil : "\(timerSetting.seconds)"
     timerButton.setTitle(title, for: .normal)
@@ -765,7 +836,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
   }
 
   private func updateRawButton() {
-    rawButton.isHidden = !rawCaptureSupported || capturedMedia != nil || selectedMode != .photo
+    rawButton.isHidden = !rawCaptureSupported || capturedMedia != nil || selectedMode != .photo || captureMode == .videoOnly
     rawButton.backgroundColor = rawCaptureEnabled ? UIColor.white.withAlphaComponent(0.26) : UIColor.black.withAlphaComponent(0.34)
     rawButton.setTitleColor(rawCaptureEnabled ? .white : UIColor.white.withAlphaComponent(0.86), for: .normal)
     rawButton.accessibilityLabel = rawCaptureEnabled ? "RAW capture on" : "RAW capture off"
@@ -790,7 +861,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     rightRail.isHidden = false
     flipButton.isHidden = false
     flashButton.isHidden = false
-    rawButton.isHidden = isReviewing || !rawCaptureSupported || selectedMode != .photo
+    rawButton.isHidden = isReviewing || !rawCaptureSupported || selectedMode != .photo || captureMode == .videoOnly
     gridButton.isHidden = false
     editRailButton.isHidden = false
     editRailButton.alpha = capturedMedia == nil ? 0.62 : 1
@@ -802,6 +873,14 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     modeStack.isHidden = false
     galleryButton.isHidden = false
     effectsButton.isHidden = true
+  }
+
+  private func setRecordingState(_ isRecording: Bool) {
+    UIView.animate(withDuration: 0.16) {
+      self.shutterFill.backgroundColor = isRecording ? UIColor.systemRed.withAlphaComponent(0.92) : UIColor.white.withAlphaComponent(0.82)
+      self.shutterFill.transform = isRecording ? CGAffineTransform(scaleX: 0.72, y: 0.72) : .identity
+      self.shutterFill.layer.cornerRadius = isRecording ? 12 : 31
+    }
   }
 
   private func showFilterPanel() {
@@ -1078,7 +1157,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
 
   @objc private func openGallery() {
     var configuration = PHPickerConfiguration(photoLibrary: .shared())
-    configuration.filter = .any(of: [.images, .videos])
+    configuration.filter = captureMode == .videoOnly ? .videos : .images
     configuration.selectionLimit = 1
     configuration.preferredAssetRepresentationMode = .current
     let picker = PHPickerViewController(configuration: configuration)
@@ -1104,6 +1183,10 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
       return
     }
     guard session.isRunning else { return }
+    if movieOutput.isRecording {
+      stopRecordingVideo()
+      return
+    }
     if timerSetting.seconds > 0 {
       startCountdown(seconds: timerSetting.seconds) { [weak self] in
         self?.performCaptureAction()
@@ -1114,7 +1197,12 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
   }
 
   private func performCaptureAction() {
-    capturePhoto()
+    switch selectedMode {
+    case .photo:
+      capturePhoto()
+    case .video:
+      startRecordingVideo(maxDuration: 60)
+    }
   }
 
   private func startCountdown(seconds: Int, completion: @escaping () -> Void) {
@@ -1146,7 +1234,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
   }
 
   private func capturePhoto() {
-    guard session.isRunning else { return }
+    guard session.isRunning, !movieOutput.isRecording else { return }
     let settings: AVCapturePhotoSettings
     let jpegFormat: [String: Any] = [AVVideoCodecKey: AVVideoCodecType.jpeg]
     if rawCaptureEnabled, let rawPixelFormat = photoOutput.availableRawPhotoPixelFormatTypes.first {
@@ -1175,6 +1263,50 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     }
     CaptroHaptics.success()
     photoOutput.capturePhoto(with: settings, delegate: self)
+  }
+
+  private func startRecordingVideo(maxDuration: TimeInterval?) {
+    guard captureMode.usesVideoCapture, session.isRunning, !movieOutput.isRecording else { return }
+    if let connection = movieOutput.connection(with: .video), connection.isVideoOrientationSupported {
+      connection.videoOrientation = .portrait
+      if cameraPosition == .front, connection.isVideoMirroringSupported {
+        connection.isVideoMirrored = true
+      }
+      applyPreferredVideoStabilization(to: connection)
+    }
+    setTorch(active: flashSetting == .on)
+    setRecordingState(true)
+    CaptroHaptics.medium()
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).mov")
+    movieOutput.startRecording(to: url, recordingDelegate: self)
+
+    pendingStopWorkItem?.cancel()
+    if let maxDuration {
+      let workItem = DispatchWorkItem { [weak self] in
+        guard let self, self.movieOutput.isRecording else { return }
+        self.stopRecordingVideo()
+      }
+      pendingStopWorkItem = workItem
+      DispatchQueue.main.asyncAfter(deadline: .now() + maxDuration, execute: workItem)
+    }
+  }
+
+  private func stopRecordingVideo() {
+    pendingStopWorkItem?.cancel()
+    if movieOutput.isRecording {
+      movieOutput.stopRecording()
+    }
+    setTorch(active: false)
+    setRecordingState(false)
+  }
+
+  private func setTorch(active: Bool) {
+    guard let device = currentInput?.device, device.hasTorch else { return }
+    do {
+      try device.lockForConfiguration()
+      device.torchMode = active ? .on : .off
+      device.unlockForConfiguration()
+    } catch {}
   }
 
   @objc private func flipCamera() {
@@ -1541,7 +1673,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     picker.dismiss(animated: true)
     guard let provider = results.first?.itemProvider else { return }
     let videoTypes = [UTType.movie.identifier, UTType.mpeg4Movie.identifier, UTType.quickTimeMovie.identifier]
-    if let type = videoTypes.first(where: { provider.hasItemConformingToTypeIdentifier($0) }) {
+    if captureMode == .videoOnly, let type = videoTypes.first(where: { provider.hasItemConformingToTypeIdentifier($0) }) {
       provider.loadFileRepresentation(forTypeIdentifier: type) { [weak self] url, _ in
         guard let self, let url, let data = try? Data(contentsOf: url) else { return }
         DispatchQueue.main.async {
@@ -1552,6 +1684,10 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
       return
     }
 
+    guard captureMode == .photoOnly else {
+      DispatchQueue.main.async { self.showTransientMessage("Choose a video for Stories.") }
+      return
+    }
     let imageType = provider.hasItemConformingToTypeIdentifier(UTType.png.identifier) ? UTType.png.identifier : UTType.image.identifier
     guard provider.hasItemConformingToTypeIdentifier(imageType) else { return }
     provider.loadDataRepresentation(forTypeIdentifier: imageType) { [weak self] data, _ in
@@ -1626,6 +1762,29 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     print("CaptroCameraQuality original_saved=\(debugURL.path)")
   }
 #endif
+
+  func fileOutput(
+    _ output: AVCaptureFileOutput,
+    didFinishRecordingTo outputFileURL: URL,
+    from connections: [AVCaptureConnection],
+    error: Error?
+  ) {
+    DispatchQueue.main.async {
+      self.setRecordingState(false)
+      self.setTorch(active: false)
+    }
+    defer { try? FileManager.default.removeItem(at: outputFileURL) }
+    guard error == nil, let data = try? Data(contentsOf: outputFileURL), !data.isEmpty else {
+      DispatchQueue.main.async {
+        self.showTransientMessage("That video could not be captured. Try again.")
+      }
+      return
+    }
+    let media = MIRAPickedMedia(data: data, kind: .video, fileName: "\(UUID().uuidString).mov", mimeType: "video/quicktime")
+    DispatchQueue.main.async {
+      self.showCapturedMedia(media)
+    }
+  }
 
 }
 

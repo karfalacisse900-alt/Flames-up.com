@@ -3638,6 +3638,7 @@ public struct CreateStoryNativeView: View {
     }
     .miraFullScreenOverlay(isPresented: $showCamera, background: .black) { closeCamera in
       MIRAStoryLiveCameraView(
+        captureMode: .videoOnly,
         dismissesOnCapture: false,
         dismissesOnCancel: false,
         onCapture: { media in
@@ -3783,6 +3784,10 @@ public struct CreateStoryNativeView: View {
   }
 
   private func submit(media: MIRAPickedMedia) async {
+    guard media.kind == .video else {
+      errorMessage = "Stories are video-only."
+      return
+    }
     isPosting = true
     MIRAPerformanceTimeline.mark("post_upload_start", detail: "story")
     defer { isPosting = false }

@@ -276,6 +276,9 @@ final class ConversationNativeModel: ObservableObject {
 
   private func prefetchMessageMedia(_ rows: [MIRAMessage]) {
     guard shouldAutoDownloadChatImagePreviews else { return }
+    let avatarURLs = rows.suffix(40)
+      .compactMap { $0.profileImage?.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { !$0.isEmpty }
     let imageURLs = rows.suffix(30).flatMap { message -> [String] in
       let mediaType = message.mediaType?.lowercased()
       guard mediaType == "image" || mediaType == "video" else { return [] }
@@ -283,9 +286,10 @@ final class ConversationNativeModel: ObservableObject {
         .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
         .filter { !$0.isEmpty && !$0.isVideoURL }
     }
-    guard !imageURLs.isEmpty else { return }
+    let urls = avatarURLs + imageURLs
+    guard !urls.isEmpty else { return }
     Task.detached(priority: .utility) {
-      await MIRAImagePrefetcher.prefetch(urls: imageURLs, maxPixelSize: 760, limit: 12)
+      await MIRAImagePrefetcher.prefetch(urls: urls, maxPixelSize: 760, limit: 18)
     }
   }
 
@@ -313,7 +317,8 @@ final class ConversationNativeModel: ObservableObject {
 
   private func replaceLocalMessage(_ localId: String, with sent: MIRAMessage) {
     if let index = messages.firstIndex(where: { $0.id == localId }) {
-      messages[index] = sent
+      let localCreatedAt = messages[index].localCreatedAt ?? messages[index].createdAt
+      messages[index] = sent.updating(localCreatedAt: localCreatedAt)
     } else {
       messages.append(sent)
     }
@@ -353,7 +358,7 @@ final class ConversationNativeModel: ObservableObject {
     messages
       .filter { !$0.id.hasPrefix("local-") && ($0.status ?? "sent") != "failed" }
       .compactMap(\.createdAt)
-      .max()
+      .max { lhs, rhs in conversationDateValue(lhs) < conversationDateValue(rhs) }
   }
 
   private var groupId: String? {
@@ -380,19 +385,23 @@ public struct ConversationNativeView: View {
   @Environment(\.dismiss) private var dismiss
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   private let title: String
+  private let initialAvatarURL: String?
 
-  public init(peerId: String, title: String, api: MIRAAPIClient, currentUserId: String = "") {
+  public init(peerId: String, title: String, api: MIRAAPIClient, currentUserId: String = "", initialAvatarURL: String? = nil) {
     self.title = title
+    self.initialAvatarURL = initialAvatarURL
     _model = StateObject(wrappedValue: ConversationNativeModel(kind: .direct(peerId: peerId), api: api, currentUserId: currentUserId))
   }
 
-  public init(groupId: String, title: String, api: MIRAAPIClient, currentUserId: String = "") {
+  public init(groupId: String, title: String, api: MIRAAPIClient, currentUserId: String = "", initialAvatarURL: String? = nil) {
     self.title = title
+    self.initialAvatarURL = initialAvatarURL
     _model = StateObject(wrappedValue: ConversationNativeModel(kind: .group(groupId: groupId), api: api, currentUserId: currentUserId))
   }
 
-  init(title: String, model: ConversationNativeModel) {
+  init(title: String, model: ConversationNativeModel, initialAvatarURL: String? = nil) {
     self.title = title
+    self.initialAvatarURL = initialAvatarURL
     _model = StateObject(wrappedValue: model)
   }
 
@@ -599,7 +608,7 @@ public struct ConversationNativeView: View {
   }
 
   private var peerAvatarURL: String? {
-    model.messages.first { !isOutgoing($0) }?.profileImage
+    model.messages.first { !isOutgoing($0) }?.profileImage ?? initialAvatarURL
   }
 
   private var chatSkeleton: some View {
@@ -1112,18 +1121,35 @@ private struct MessageBubbleContent: View {
 private extension Array where Element == MIRAMessage {
   func sortedForConversation() -> [MIRAMessage] {
     sorted { lhs, rhs in
-      let left = lhs.createdAt ?? lhs.localCreatedAt ?? ""
-      let right = rhs.createdAt ?? rhs.localCreatedAt ?? ""
-      if left == right { return lhs.id < rhs.id }
+      if let lhsSequence = lhs.serverSequence, let rhsSequence = rhs.serverSequence, lhsSequence != rhsSequence {
+        return lhsSequence < rhsSequence
+      }
+      let left = conversationDateValue(lhs.localCreatedAt ?? lhs.createdAt ?? "")
+      let right = conversationDateValue(rhs.localCreatedAt ?? rhs.createdAt ?? "")
+      if left == right {
+        return lhs.id < rhs.id
+      }
       return left < right
     }
   }
+}
+
+private func conversationDateValue(_ value: String) -> Date {
+  if let date = ISO8601DateFormatter.miraConversation.date(from: value) { return date }
+  if let date = ISO8601DateFormatter.miraConversationPlain.date(from: value) { return date }
+  return .distantPast
 }
 
 private extension ISO8601DateFormatter {
   static let miraConversation: ISO8601DateFormatter = {
     let formatter = ISO8601DateFormatter()
     formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return formatter
+  }()
+
+  static let miraConversationPlain: ISO8601DateFormatter = {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime]
     return formatter
   }()
 }

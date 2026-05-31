@@ -470,7 +470,7 @@ public struct UserProfileNativeView: View {
         )
       ) {
         if let route = messageRoute {
-          ConversationNativeView(title: route.title, model: route.model)
+          ConversationNativeView(title: route.title, model: route.model, initialAvatarURL: route.avatarURL)
         } else {
           EmptyView()
         }
@@ -631,10 +631,10 @@ public struct UserProfileNativeView: View {
     defer { isOpeningMessage = false }
 
     let roomModel = ConversationNativeModel(kind: .direct(peerId: model.userId), api: model.api, currentUserId: "")
-    await roomModel.load()
     messageRoute = ChatOpenRoute(
       id: "profile-\(model.userId)",
       title: model.user?.displayName ?? "Chat",
+      avatarURL: model.user?.profileImage,
       model: roomModel
     )
   }
@@ -1165,6 +1165,7 @@ final class ChatNativeModel: ObservableObject {
     if conversations != fresh {
       conversations = fresh
     }
+    prefetchConversationAvatars(fresh)
     await localStore.saveConversations(fresh, userId: currentUserId)
   }
 
@@ -1173,8 +1174,19 @@ final class ChatNativeModel: ObservableObject {
           let cached = await localStore.loadConversations(userId: currentUserId)
     else { return }
     conversations = cached.conversations
+    prefetchConversationAvatars(cached.conversations)
     isLoading = false
     MIRAPerformanceTimeline.markOnce("chat_first_content", detail: "cache")
+  }
+
+  private func prefetchConversationAvatars(_ rows: [MIRAConversation]) {
+    let urls = rows.prefix(40)
+      .compactMap { $0.otherProfileImage?.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { !$0.isEmpty }
+    guard !urls.isEmpty else { return }
+    Task.detached(priority: .utility) {
+      await MIRAImagePrefetcher.prefetch(urls: urls, maxPixelSize: 220, limit: 24)
+    }
   }
 }
 
@@ -1235,7 +1247,7 @@ public struct ChatNativeView: View {
           )
         ) {
           if let route = activeConversationRoute {
-            ConversationNativeView(title: route.title, model: route.model)
+            ConversationNativeView(title: route.title, model: route.model, initialAvatarURL: route.avatarURL)
           } else {
             EmptyView()
           }
@@ -1328,6 +1340,7 @@ public struct ChatNativeView: View {
       activeConversationRoute = ChatOpenRoute(
         id: conversation.id,
         title: conversation.displayName,
+        avatarURL: conversation.otherProfileImage,
         model: roomModel
       )
       openingConversationId = nil
@@ -1356,6 +1369,7 @@ public struct ChatNativeView: View {
 private struct ChatOpenRoute: Identifiable {
   let id: String
   let title: String
+  let avatarURL: String?
   let model: ConversationNativeModel
 }
 

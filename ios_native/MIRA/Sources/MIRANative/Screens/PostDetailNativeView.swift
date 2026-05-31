@@ -37,6 +37,7 @@ final class PostDetailModel: ObservableObject {
   func loadComments() async {
     if comments.isEmpty, let cached = await MIRAAppCacheStore.shared.loadComments(postId: post.id) {
       comments = cached
+      prefetchCommentAvatars(cached)
       isLoadingComments = false
     }
     isLoadingComments = comments.isEmpty
@@ -45,6 +46,7 @@ final class PostDetailModel: ObservableObject {
       await loadCurrentUserIfNeeded()
       let loaded: [MIRAComment] = try await api.get("/posts/\(post.id)/comments")
       comments = await MIRAAppCacheStore.shared.mergeComments(existing: comments, fresh: loaded)
+      prefetchCommentAvatars(comments)
       await MIRAAppCacheStore.shared.saveComments(comments, postId: post.id)
       let nextCount = comments.count
       if post.commentsCount != nextCount {
@@ -187,6 +189,16 @@ final class PostDetailModel: ObservableObject {
       let _: EmptyResponse? = try await api.post("/users/\(userId)/block", body: EmptyBody())
       removeComments(byUserId: userId)
     } catch {}
+  }
+
+  private func prefetchCommentAvatars(_ rows: [MIRAComment]) {
+    let urls = rows.prefix(80)
+      .compactMap { $0.user?.profileImage?.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { !$0.isEmpty }
+    guard !urls.isEmpty else { return }
+    Task.detached(priority: .utility) {
+      await MIRAImagePrefetcher.prefetch(urls: urls, maxPixelSize: 180, limit: 24)
+    }
   }
 
   func toggleLike() async {
