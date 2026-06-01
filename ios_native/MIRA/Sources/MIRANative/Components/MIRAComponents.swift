@@ -277,7 +277,7 @@ public enum MIRAScrollFeel {
   fileprivate var decelerationRate: UIScrollView.DecelerationRate {
     switch self {
     case .feed:
-      return UIScrollView.DecelerationRate(rawValue: 0.975)
+      return UIScrollView.DecelerationRate(rawValue: 0.955)
     case .chat:
       return UIScrollView.DecelerationRate(rawValue: 0.992)
     case .sheet:
