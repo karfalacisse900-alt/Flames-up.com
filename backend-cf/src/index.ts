@@ -6839,12 +6839,17 @@ async function refinePostCategoryWithBackendAi(c: any, postId: string) {
   await ensureAutoCategorySchema(c.env.DB);
   const row: any = await c.env.DB.prepare(
     `SELECT id, content, title, image, images, media_types, media_dimensions, location, place_name, post_type,
-            primary_category, category_confidence, category_signals_json, tags_json
+            primary_category, category_confidence, category_source, category_signals_json, tags_json
      FROM posts
      WHERE id = ?
      LIMIT 1`
   ).bind(postId).first();
   if (!row) return;
+
+  const currentSource = normalizeCategorySource(row.category_source);
+  if (currentSource === 'user_changed_optional' || currentSource === 'admin_changed') {
+    return;
+  }
 
   const currentConfidence = clampFloat(row.category_confidence, 0, 1, 0);
   const mediaUrls = sanitizeMediaReferences(row.images, row.image);

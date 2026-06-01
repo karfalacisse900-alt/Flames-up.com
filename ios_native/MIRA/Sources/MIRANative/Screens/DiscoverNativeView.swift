@@ -384,7 +384,28 @@ public struct DiscoverNativeView: View {
   }
 
   private func openStoryViewer(_ group: MIRAStoryGroup) {
+    prewarmStoryGroup(group)
     selectedStoryGroup = group
+  }
+
+  private func prewarmStoryGroup(_ group: MIRAStoryGroup) {
+    let urls = orderedUniqueStoryMediaURLs((group.statuses ?? []).prefix(5).compactMap(\.mediaURL))
+    guard !urls.isEmpty else { return }
+    MIRAVideoPrewarmManager.shared.prewarm(urls: urls, keepOnly: Set(urls.prefix(2)))
+    Task.detached(priority: .utility) {
+      await MIRAImagePrefetcher.prefetch(urls: urls, maxPixelSize: 1920, limit: 5)
+    }
+  }
+
+  private func orderedUniqueStoryMediaURLs(_ urls: [String]) -> [String] {
+    var seen = Set<String>()
+    var result: [String] = []
+    for url in urls {
+      let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !trimmed.isEmpty, seen.insert(trimmed).inserted else { continue }
+      result.append(trimmed)
+    }
+    return result
   }
 
   private func presentReport(for post: MIRAPost) {
@@ -752,6 +773,8 @@ private struct StoryViewerNativeView: View {
       await prepareStoryAudioIfNeeded()
     }
     .task(id: currentStory?.id) {
+      try? await Task.sleep(nanoseconds: 300_000_000)
+      guard !Task.isCancelled else { return }
       await loadStoryThoughtsForCurrentStory()
     }
     .task {
@@ -806,7 +829,7 @@ private struct StoryViewerNativeView: View {
           url: mediaURL,
           isVideo: mediaURL.isVideoURL,
           contentMode: .fill,
-          shouldPlay: true,
+          shouldPlay: isCanvasVisible && scenePhase == .active,
           maxPixelSize: 1920,
           placeholderColor: storyFallbackColor,
           placeholderTint: MIRATheme.Color.textSecondary.opacity(0.68)
@@ -921,8 +944,10 @@ private struct StoryViewerNativeView: View {
   private func prewarmStoryMediaWindow() async {
     let urls = storyMediaWindowURLs()
     guard !urls.isEmpty else { return }
-    MIRAVideoPrewarmManager.shared.prewarm(urls: urls, keepOnly: Set(urls.prefix(8)))
-    await MIRAImagePrefetcher.prefetch(urls: urls, maxPixelSize: 1920, limit: 14)
+    MIRAVideoPrewarmManager.shared.prewarm(urls: urls, keepOnly: Set(urls.prefix(3)))
+    Task.detached(priority: .utility) {
+      await MIRAImagePrefetcher.prefetch(urls: urls, maxPixelSize: 1920, limit: 10)
+    }
   }
 
   private func storyMediaWindowURLs() -> [String] {
@@ -950,6 +975,17 @@ private struct StoryViewerNativeView: View {
     return orderedUniqueStoryURLs(urls)
   }
 
+  private func prewarmStoriesStarting(at index: Int) {
+    guard stories.indices.contains(index) else { return }
+    let upper = min(stories.count - 1, index + 5)
+    let urls = orderedUniqueStoryURLs((index...upper).compactMap { stories[$0].mediaURL })
+    guard !urls.isEmpty else { return }
+    MIRAVideoPrewarmManager.shared.prewarm(urls: urls, keepOnly: Set(urls.prefix(2)))
+    Task.detached(priority: .utility) {
+      await MIRAImagePrefetcher.prefetch(urls: urls, maxPixelSize: 1920, limit: 6)
+    }
+  }
+
   private func orderedUniqueStoryURLs(_ urls: [String]) -> [String] {
     var seen = Set<String>()
     var result: [String] = []
@@ -969,6 +1005,13 @@ private struct StoryViewerNativeView: View {
   }
 
   private func selectStoryGroup(_ railGroup: MIRAStoryGroup) {
+    let urls = orderedUniqueStoryURLs((railGroup.statuses ?? []).prefix(5).compactMap(\.mediaURL))
+    if !urls.isEmpty {
+      MIRAVideoPrewarmManager.shared.prewarm(urls: urls, keepOnly: Set(urls.prefix(2)))
+      Task.detached(priority: .utility) {
+        await MIRAImagePrefetcher.prefetch(urls: urls, maxPixelSize: 1920, limit: 5)
+      }
+    }
     withAnimation(storyRailAnimation) {
       activeGroupOverride = railGroup
       localStories = railGroup.statuses ?? []
@@ -1006,7 +1049,7 @@ private struct StoryViewerNativeView: View {
   }
 
   private var storyTopBar: some View {
-    HStack(spacing: 9) {
+    HStack(spacing: 11) {
       RemoteAvatar(url: activeGroup.userProfileImage, size: 36)
 
       HStack(spacing: 7) {
@@ -1054,6 +1097,7 @@ private struct StoryViewerNativeView: View {
           .frame(width: 38, height: 38)
       }
       .buttonStyle(.miraPress)
+      .padding(.trailing, 8)
 
       Button { closeStoryViewer() } label: {
         Image(systemName: "xmark")
@@ -1385,6 +1429,7 @@ private struct StoryViewerNativeView: View {
 
   private func goToPreviousStory() {
     if selectedIndex > 0 {
+      prewarmStoriesStarting(at: selectedIndex - 1)
       withAnimation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion)) {
         selectedIndex -= 1
       }
@@ -1395,6 +1440,7 @@ private struct StoryViewerNativeView: View {
     guard selectedIndex < stories.count - 1 else {
       return
     }
+    prewarmStoriesStarting(at: selectedIndex + 1)
     withAnimation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion)) {
       selectedIndex += 1
     }

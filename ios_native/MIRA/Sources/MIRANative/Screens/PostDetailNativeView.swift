@@ -1121,13 +1121,10 @@ public struct DiscoverPostDetailNativeView: View {
   }
 
   private var singleMediaCardWidth: CGFloat {
-    max(300, UIScreen.main.bounds.width - (MIRATheme.Space.md * 2))
+    carouselCardWidth
   }
 
   private var carouselHeight: CGFloat {
-    if displayMediaURLs.count == 1 {
-      return min(singleMediaCardWidth * 0.88, UIScreen.main.bounds.height * 0.50)
-    }
     return min(carouselCardWidth * 1.03, UIScreen.main.bounds.height * 0.58)
   }
 

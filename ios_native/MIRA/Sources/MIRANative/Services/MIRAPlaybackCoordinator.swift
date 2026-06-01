@@ -25,18 +25,19 @@ public final class MIRAVideoPrewarmManager {
   private var preparedOrder: [String] = []
   private var inFlight = Set<String>()
   private let maxMetadataPreloads = 5
-  private let maxPreparedPlayers = 5
+  private let maxPreparedPlayers = 2
 
   private init() {}
 
   public func prewarm(urls: [String], keepOnly: Set<String> = []) {
     let candidates = Array(orderedUnique(urls).filter(\.isVideoURL).prefix(maxMetadataPreloads))
     guard !candidates.isEmpty else { return }
+    let playerCandidates = Set(candidates.prefix(maxPreparedPlayers).map { normalized($0) })
 
-    trimPreparedPlayers(keepOnly: Set(candidates).union(keepOnly.map { normalized($0) }))
+    trimPreparedPlayers(keepOnly: playerCandidates.union(keepOnly.map { normalized($0) }))
 
     for url in candidates {
-      prewarm(url: url)
+      prewarm(url: url, shouldPreparePlayer: playerCandidates.contains(normalized(url)))
     }
   }
 
@@ -52,9 +53,20 @@ public final class MIRAVideoPrewarmManager {
     cachedStreamInfo[normalized(url)]
   }
 
-  private func prewarm(url: String) {
+  private func prewarm(url: String, shouldPreparePlayer: Bool) {
     let key = normalized(url)
-    guard !key.isEmpty, cachedStreamInfo[key] == nil, !inFlight.contains(key) else { return }
+    guard !key.isEmpty, !inFlight.contains(key) else {
+      if shouldPreparePlayer, let info = cachedStreamInfo[key], info.ready != false, let hls = info.hls, let hlsURL = URL(string: hls) {
+        preparePlayer(for: key, playbackURL: hlsURL)
+      }
+      return
+    }
+    if cachedStreamInfo[key] != nil {
+      if shouldPreparePlayer, let info = cachedStreamInfo[key], info.ready != false, let hls = info.hls, let hlsURL = URL(string: hls) {
+        preparePlayer(for: key, playbackURL: hlsURL)
+      }
+      return
+    }
     inFlight.insert(key)
     MIRAApplePerformanceLogger.event("video_prewarm_started", detail: key.videoPrewarmLogLabel)
 
@@ -66,8 +78,13 @@ public final class MIRAVideoPrewarmManager {
 
     if key.lowercased().hasPrefix("cfstream:") {
       Task { [weak self] in
-        await self?.resolveCloudflareStream(for: key)
+        await self?.resolveCloudflareStream(for: key, shouldPreparePlayer: shouldPreparePlayer)
       }
+      return
+    }
+
+    guard shouldPreparePlayer else {
+      inFlight.remove(key)
       return
     }
 
@@ -81,7 +98,7 @@ public final class MIRAVideoPrewarmManager {
     inFlight.remove(key)
   }
 
-  private func resolveCloudflareStream(for key: String) async {
+  private func resolveCloudflareStream(for key: String, shouldPreparePlayer: Bool) async {
     let uid = String(key.dropFirst("cfstream:".count))
     let endpoint = MIRAProductionBackend.apiURL("stream/video/\(uid)")
 
@@ -103,7 +120,7 @@ public final class MIRAVideoPrewarmManager {
       inFlight.remove(key)
       if info.ready != false {
         MIRAApplePerformanceLogger.event("video_ready_to_play", detail: "stream_info")
-        if let hls = info.hls, let hlsURL = URL(string: hls) {
+        if shouldPreparePlayer, let hls = info.hls, let hlsURL = URL(string: hls) {
           preparePlayer(for: key, playbackURL: hlsURL)
         }
       }
