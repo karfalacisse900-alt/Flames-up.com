@@ -305,7 +305,10 @@ public struct SettingsNativeView: View {
 
   private var settingsHeader: some View {
     HStack(spacing: MIRATheme.Space.sm) {
-      Button { dismiss() } label: {
+      Button {
+        CaptroHaptics.light()
+        dismiss()
+      } label: {
         Image(systemName: "chevron.left")
           .font(.system(size: 18, weight: .semibold))
           .foregroundStyle(MIRATheme.Color.textPrimary)
@@ -740,7 +743,10 @@ private struct SettingsDetailScaffold<Content: View>: View {
   var body: some View {
     VStack(spacing: 0) {
       HStack(spacing: MIRATheme.Space.sm) {
-        Button { dismiss() } label: {
+        Button {
+          CaptroHaptics.light()
+          dismiss()
+        } label: {
           Image(systemName: "chevron.left")
             .font(.system(size: 18, weight: .semibold))
             .foregroundStyle(MIRATheme.Color.textPrimary)
@@ -820,7 +826,8 @@ private struct SettingsNavigationRow<Destination: View>: View {
           .foregroundStyle(MIRATheme.Color.textMuted)
       }
     }
-    .buttonStyle(.plain)
+    .buttonStyle(.miraPress)
+    .simultaneousGesture(TapGesture().onEnded { CaptroHaptics.light() })
   }
 }
 
@@ -832,14 +839,17 @@ private struct SettingsLinkRow: View {
   @Environment(\.openURL) private var openURL
 
   var body: some View {
-    Button { openURL(url) } label: {
+    Button {
+      CaptroHaptics.light()
+      openURL(url)
+    } label: {
       SettingsRowContent(title: title, subtitle: subtitle, systemImage: systemImage) {
         Image(systemName: "arrow.up.right")
           .font(.system(size: 13, weight: .semibold))
           .foregroundStyle(MIRATheme.Color.textMuted)
       }
     }
-    .buttonStyle(.plain)
+    .buttonStyle(.miraPress)
   }
 }
 
@@ -851,14 +861,17 @@ private struct SettingsButtonRow: View {
   let action: () -> Void
 
   var body: some View {
-    Button(action: action) {
+    Button {
+      CaptroHaptics.light()
+      action()
+    } label: {
       SettingsRowContent(title: title, subtitle: subtitle, systemImage: systemImage, tint: tint) {
         Image(systemName: "chevron.right")
           .font(.system(size: 13, weight: .semibold))
           .foregroundStyle(MIRATheme.Color.textMuted)
       }
     }
-    .buttonStyle(.plain)
+    .buttonStyle(.miraPress)
   }
 }
 
@@ -978,7 +991,10 @@ private struct SettingsActionButton: View {
   let action: () -> Void
 
   var body: some View {
-    Button(action: action) {
+    Button {
+      CaptroHaptics.light()
+      action()
+    } label: {
       Text(title)
         .font(.system(size: 15, weight: .semibold))
         .foregroundStyle(.white)
@@ -987,7 +1003,7 @@ private struct SettingsActionButton: View {
         .background(disabled ? MIRATheme.Color.textMuted.opacity(0.45) : MIRATheme.Color.forest)
         .clipShape(Capsule())
     }
-    .buttonStyle(.plain)
+    .buttonStyle(.miraPress)
     .disabled(disabled)
     .padding(.horizontal, MIRATheme.Space.md)
     .padding(.bottom, MIRATheme.Space.md)

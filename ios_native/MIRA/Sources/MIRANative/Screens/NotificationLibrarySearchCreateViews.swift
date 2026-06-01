@@ -285,7 +285,10 @@ public struct LibraryNativeView: View {
 
   private var libraryHeader: some View {
     HStack(spacing: MIRATheme.Space.sm) {
-      Button { dismiss() } label: {
+      Button {
+        CaptroHaptics.light()
+        dismiss()
+      } label: {
         Image(systemName: "chevron.left")
           .font(.system(size: 18, weight: .semibold))
           .foregroundStyle(MIRATheme.Color.textPrimary)

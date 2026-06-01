@@ -175,6 +175,7 @@ private struct ProfileGridSkeleton: View {
 public struct ProfileNativeView: View {
   @StateObject private var model: ProfileNativeModel
   @State private var showEditProfile = false
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   private let authSession: MIRAAuthSession?
   private var gridTileSize: CGFloat {
     floor((UIScreen.main.bounds.width - 2) / 3)
@@ -229,16 +230,21 @@ public struct ProfileNativeView: View {
       .toolbar(showEditProfile ? .hidden : .visible, for: .tabBar)
       .toolbar {
         ToolbarItemGroup(placement: .topBarTrailing) {
-          NavigationLink(destination: LibraryNativeView(api: model.api)) {
-            Image(systemName: "bookmark")
-          }
-          NavigationLink(destination: WalletNativeView(api: model.api)) {
-            Image(systemName: "trophy")
-              .accessibilityLabel("Contest prizes")
-          }
-          NavigationLink(destination: SettingsNativeView(api: model.api, authSession: authSession).miraHideTabBarOnAppear()) {
-            Image(systemName: "gearshape")
-          }
+          ProfileToolbarDestinationButton(
+            systemImage: "bookmark",
+            accessibilityLabel: "My Library",
+            destination: LibraryNativeView(api: model.api)
+          )
+          ProfileToolbarDestinationButton(
+            systemImage: "trophy",
+            accessibilityLabel: "Contest prizes",
+            destination: WalletNativeView(api: model.api)
+          )
+          ProfileToolbarDestinationButton(
+            systemImage: "gearshape",
+            accessibilityLabel: "Settings",
+            destination: SettingsNativeView(api: model.api, authSession: authSession)
+          )
         }
       }
       .task {
@@ -280,7 +286,10 @@ public struct ProfileNativeView: View {
         profileMetric("Following", model.user?.followingCount ?? 0)
       }
       MIRAPrimaryButton("Edit profile", systemImage: "pencil") {
-        showEditProfile = true
+        CaptroHaptics.light()
+        withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
+          showEditProfile = true
+        }
       }
     }
     .padding(MIRATheme.Space.xl)
@@ -301,6 +310,35 @@ public struct ProfileNativeView: View {
       return fullName
     }
     return model.user?.username ?? "mira"
+  }
+}
+
+private struct ProfileToolbarDestinationButton<Destination: View>: View {
+  let systemImage: String
+  let accessibilityLabel: String
+  let destination: Destination
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+  var body: some View {
+    NavigationLink(destination: destination) {
+      Image(systemName: systemImage)
+        .font(.system(size: 16, weight: .semibold))
+        .foregroundStyle(MIRATheme.Color.textPrimary)
+        .frame(width: 42, height: 42)
+        .background(MIRATheme.Color.surfaceSoft)
+        .clipShape(Circle())
+        .overlay(Circle().stroke(MIRATheme.Color.hairline.opacity(0.88), lineWidth: 1))
+        .contentShape(Circle())
+        .accessibilityLabel(accessibilityLabel)
+    }
+    .buttonStyle(.miraPress)
+    .simultaneousGesture(
+      TapGesture().onEnded {
+        CaptroHaptics.light()
+        MIRAApplePerformanceLogger.event("profile_route_open", detail: accessibilityLabel)
+      }
+    )
+    .animation(CaptroMotion.buttonPressAnimation(reduceMotion: reduceMotion), value: reduceMotion)
   }
 }
 
@@ -934,6 +972,8 @@ private struct EditProfileNativeView: View {
     NavigationStack {
       ScrollView {
         VStack(spacing: MIRATheme.Space.xl) {
+          editSheetHandle
+
           VStack(spacing: MIRATheme.Space.md) {
             profilePhoto
             PhotosPicker(selection: $pickerItem, matching: .images) {
@@ -942,8 +982,9 @@ private struct EditProfileNativeView: View {
                 .foregroundStyle(MIRATheme.Color.forest)
             }
             .disabled(isSaving)
+            .buttonStyle(.miraPress)
           }
-          .padding(.top, MIRATheme.Space.lg)
+          .padding(.top, MIRATheme.Space.sm)
 
           VStack(spacing: MIRATheme.Space.md) {
             editField(title: "Name", text: $fullName, placeholder: "Your name")
@@ -963,16 +1004,24 @@ private struct EditProfileNativeView: View {
         }
         .padding(MIRATheme.Space.lg)
       }
+      .scrollIndicators(.hidden)
+      .scrollDismissesKeyboard(.interactively)
+      .miraScrollFeel(.sheet)
       .background(MIRATheme.Color.appBackground)
+      .miraScreenEnter(.modal)
       .navigationTitle("Edit profile")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
         ToolbarItem(placement: .topBarLeading) {
-          Button("Cancel") { close() }
+          Button("Cancel") {
+            CaptroHaptics.light()
+            close()
+          }
             .disabled(isSaving)
         }
         ToolbarItem(placement: .topBarTrailing) {
           Button {
+            CaptroHaptics.light()
             Task { await save() }
           } label: {
             if isSaving {
@@ -1000,6 +1049,14 @@ private struct EditProfileNativeView: View {
       }
       .task { await hydrateMissingUserIfNeeded() }
     }
+  }
+
+  private var editSheetHandle: some View {
+    Capsule()
+      .fill(MIRATheme.Color.textMuted.opacity(0.22))
+      .frame(width: 42, height: 5)
+      .padding(.top, 2)
+      .accessibilityHidden(true)
   }
 
   @ViewBuilder
