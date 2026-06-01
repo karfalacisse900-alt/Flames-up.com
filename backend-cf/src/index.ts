@@ -2009,6 +2009,7 @@ type DiscoverCategory =
   | 'photography'
   | 'outdoors'
   | 'outfits'
+  | 'food'
   | 'travel'
   | 'events'
   | 'nightlife'
@@ -2053,6 +2054,7 @@ const DISCOVER_CATEGORIES: DiscoverCategory[] = [
   'photography',
   'outdoors',
   'outfits',
+  'food',
   'travel',
   'events',
   'nightlife',
@@ -2063,6 +2065,7 @@ const DISCOVER_CATEGORIES: DiscoverCategory[] = [
 
 const CATEGORY_KEYWORDS: Record<DiscoverCategory, string[]> = {
   outfits: ['outfit', 'fit', 'fit check', 'clothes', 'style', 'fashion', 'streetwear', 'shoes', 'shoe', 'jacket', 'mirror selfie', 'clothing', 'accessories', 'sneakers', 'dress', 'apparel', 'person'],
+  food: ['food', 'meal', 'restaurant', 'cafe', 'coffee', 'drink', 'dessert', 'pizza', 'burger', 'cooking', 'plate', 'bakery', 'breakfast', 'lunch', 'dinner', 'brunch', 'kitchen', 'recipe', 'snack'],
   outdoors: ['outdoors', 'outdoor', 'outside', 'park', 'beach', 'hiking', 'trail', 'nature', 'mountain', 'lake', 'sunset', 'sunrise', 'trees', 'tree', 'forest', 'walking', 'landscape', 'snow', 'sky', 'water', 'river', 'ocean', 'sea', 'flower', 'plant', 'grass', 'garden', 'field', 'woods', 'camping'],
   events: ['event', 'concert', 'festival', 'meetup', 'show', 'game', 'crowd', 'stadium', 'venue', 'performance', 'birthday', 'wedding', 'audience', 'stage', 'party', 'celebration'],
   nightlife: ['nightlife', 'night', 'club', 'bar', 'lounge', 'party', 'rooftop', 'dj', 'drinks', 'city night', 'after dark', 'dance', 'neon', 'dark', 'cocktail', 'evening'],
@@ -8952,7 +8955,7 @@ api.post('/posts', authMiddleware, async (c) => {
     displayCountry,
     placeCategory,
   ].filter(Boolean).join(' ');
-  const autoCategory = autoCategoryFromBody(b, {
+  let autoCategory = autoCategoryFromBody(b, {
     caption: [postTitle, postContent].filter(Boolean).join('\n\n'),
     mediaType: mediaTypeHint,
     postType,
@@ -8960,6 +8963,24 @@ api.post('/posts', authMiddleware, async (c) => {
     location: categoryLocationSignals || location,
     placeName: [placeName, placeCategory].filter(Boolean).join(' ') || null,
   });
+  const manualCategory = normalizeDiscoverCategory(
+    b.primary_category || b.primaryCategory || b.discover_category || b.discoverCategory,
+    false
+  ) as DiscoverCategory | '';
+  if (manualCategory) {
+    autoCategory = {
+      ...autoCategory,
+      primary_category: manualCategory,
+      category_confidence: 1,
+      category_source: 'user_changed_optional',
+      category_status: 'classified',
+      tags: Array.from(new Set([manualCategory, ...autoCategory.tags])).slice(0, 16),
+      signals: {
+        ...autoCategory.signals,
+        user_selected_category: manualCategory,
+      },
+    };
+  }
   const placeLat = b.place_lat == null ? null : clampFloat(b.place_lat, -90, 90, 0);
   const placeLng = b.place_lng == null ? null : clampFloat(b.place_lng, -180, 180, 0);
   const backupIds = Array.from(new Set([

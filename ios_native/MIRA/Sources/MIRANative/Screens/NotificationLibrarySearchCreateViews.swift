@@ -581,6 +581,24 @@ private enum PostDetailSheet: Identifiable, Equatable {
   }
 }
 
+private enum PostDetailsFocusField: Hashable {
+  case title
+  case caption
+}
+
+private let postComposerDiscoverCategories = [
+  "photography",
+  "outdoors",
+  "outfits",
+  "food",
+  "travel",
+  "events",
+  "nightlife",
+  "art",
+  "lifestyle",
+  "fitness"
+]
+
 private struct MIRABroadDisplayLocation: Codable, Hashable {
   var city: String?
   var region: String?
@@ -823,11 +841,13 @@ public struct CreatePostNativeView: View {
   @State private var taggedUsers: [MIRAUser] = []
   @State private var hashtags: [String] = []
   @State private var selectedAudioTrack: MIRAAudiusTrack?
+  @State private var selectedDiscoverCategory: String?
   @State private var postAssistResponse: MIRAPostAssistResponse?
   @State private var isGeneratingPostAssist = false
   @State private var postAssistError: String?
   @State private var hasRestoredPostDraft = false
   @State private var draftMediaSnapshots: [MIRAPostDraftMediaSnapshot] = []
+  @FocusState private var focusedPostDetailsField: PostDetailsFocusField?
 
   public init(api: MIRAAPIClient, onClose: (() -> Void)? = nil) {
     self.api = api
@@ -843,6 +863,15 @@ public struct CreatePostNativeView: View {
       }
     }
     .toolbar(.hidden, for: .navigationBar)
+    .toolbar {
+      ToolbarItemGroup(placement: .keyboard) {
+        Spacer()
+        Button("Done") {
+          focusedPostDetailsField = nil
+        }
+        .font(.system(size: 16, weight: .semibold))
+      }
+    }
     .miraHideTabBarOnAppear()
     .miraScreenEnter(.modal)
     .navigationBarBackButtonHidden(true)
@@ -857,6 +886,7 @@ public struct CreatePostNativeView: View {
     .onChange(of: bodyText) { _, _ in cacheComposerDraft() }
     .onChange(of: hashtags) { _, _ in cacheComposerDraft() }
     .onChange(of: selectedAudioTrack) { _, _ in cacheComposerDraft() }
+    .onChange(of: selectedDiscoverCategory) { _, _ in cacheComposerDraft() }
     .onChange(of: selectedPlace) { _, _ in cacheComposerDraft() }
     .onChange(of: broadLocation) { _, _ in cacheComposerDraft() }
     .onChange(of: showBroadLocation) { _, _ in cacheComposerDraft() }
@@ -984,17 +1014,20 @@ public struct CreatePostNativeView: View {
         ScrollView(showsIndicators: false) {
           VStack(alignment: .leading, spacing: 0) {
             postDetailsMediaStrip
-              .padding(.top, 24)
+              .padding(.top, 14)
 
             postDetailsTextFields
-              .padding(.top, 34)
+              .padding(.top, 22)
 
-            Spacer(minLength: max(120, proxy.size.height * 0.22))
+            discoverCategoryMenu
+              .padding(.top, 18)
+
+            Spacer(minLength: max(70, proxy.size.height * 0.13))
 
             Rectangle()
               .fill(MIRATheme.Color.hairline.opacity(0.75))
               .frame(height: 0.7)
-              .padding(.top, 24)
+              .padding(.top, 16)
 
             postOptionRow(
               icon: "mappin.circle",
@@ -1071,14 +1104,14 @@ public struct CreatePostNativeView: View {
         .disabled(isPosting || !canPost)
       }
     }
-    .padding(.horizontal, 20)
-    .padding(.top, 18)
-    .frame(height: 98)
+    .padding(.horizontal, 16)
+    .padding(.top, 10)
+    .frame(height: 82)
   }
 
   private var postDetailsMediaStrip: some View {
     ScrollView(.horizontal, showsIndicators: false) {
-      HStack(spacing: 14) {
+      HStack(spacing: 10) {
         ForEach(Array(mediaItems.enumerated()), id: \.offset) { index, item in
           postDetailsMediaTile(item, index: index)
         }
@@ -1091,10 +1124,10 @@ public struct CreatePostNativeView: View {
         ) {
           RoundedRectangle(cornerRadius: 14, style: .continuous)
             .fill(MIRATheme.Color.surfaceSoft.opacity(0.6))
-            .frame(width: 104, height: 108)
+            .frame(width: 88, height: 92)
             .overlay {
               Image(systemName: "plus")
-                .font(.system(size: 36, weight: .light))
+                .font(.system(size: 28, weight: .light))
                 .foregroundStyle(MIRATheme.Color.textMuted.opacity(0.82))
             }
             .overlay(alignment: .bottom) {
@@ -1110,7 +1143,7 @@ public struct CreatePostNativeView: View {
   }
 
   private func postDetailsMediaTile(_ media: MIRAPickedMedia, index: Int) -> some View {
-    postComposerMedia(media, width: 104, height: 108, cornerRadius: 14)
+    postComposerMedia(media, width: 88, height: 92, cornerRadius: 13)
       .overlay(alignment: .topTrailing) {
         if media.kind == .video {
           Image(systemName: "play.fill")
@@ -1124,10 +1157,10 @@ public struct CreatePostNativeView: View {
       }
       .overlay(alignment: .bottomLeading) {
         Text(index == 0 ? "Cover" : "\(index + 1)")
-          .font(.system(size: 13, weight: .semibold))
+          .font(.system(size: 11, weight: .semibold))
           .foregroundStyle(.white)
           .padding(.horizontal, 10)
-          .frame(height: 31)
+          .frame(height: 26)
           .background(.black.opacity(0.52))
           .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
           .padding(8)
@@ -1167,53 +1200,22 @@ public struct CreatePostNativeView: View {
   }
 
   private var postDetailsTextFields: some View {
-    VStack(alignment: .leading, spacing: 18) {
+    VStack(alignment: .leading, spacing: 14) {
       TextField("Add a catchy headline", text: $title)
-        .font(.system(size: 25, weight: .semibold))
+        .font(.system(size: 21, weight: .semibold))
         .foregroundStyle(MIRATheme.Color.textPrimary)
         .submitLabel(.next)
+        .focused($focusedPostDetailsField, equals: .title)
 
       Rectangle()
         .fill(MIRATheme.Color.hairline.opacity(0.78))
         .frame(height: 0.7)
 
       TextField("Write caption with details to get more views.", text: $bodyText, axis: .vertical)
-        .font(.system(size: 18, weight: .regular))
+        .font(.system(size: 16, weight: .regular))
         .foregroundStyle(MIRATheme.Color.textPrimary)
-        .lineLimit(4...8)
-
-      Button {
-        Task { await improveCaptionWithAI() }
-      } label: {
-        HStack(spacing: 8) {
-          if isGeneratingPostAssist {
-            ProgressView()
-              .scaleEffect(0.72)
-          } else {
-            Image(systemName: "sparkles")
-              .font(.system(size: 15, weight: .bold))
-          }
-          Text(isGeneratingPostAssist ? "Improving caption" : "Improve caption")
-            .font(.system(size: 15, weight: .bold))
-          if let category = postAssistResponse?.resolvedCategory, !category.isEmpty {
-            Text(category.capitalized)
-              .font(.system(size: 12, weight: .bold))
-              .foregroundStyle(MIRATheme.Color.forest)
-              .padding(.horizontal, 9)
-              .frame(height: 24)
-              .background(MIRATheme.Color.forestSoft)
-              .clipShape(Capsule())
-          }
-        }
-        .foregroundStyle(MIRATheme.Color.textPrimary)
-        .padding(.horizontal, 13)
-        .frame(height: 42)
-        .background(MIRATheme.Color.surfaceSoft.opacity(0.72))
-        .clipShape(Capsule())
-        .contentShape(Capsule())
-      }
-      .buttonStyle(.plain)
-      .disabled(isGeneratingPostAssist)
+        .lineLimit(3...6)
+        .focused($focusedPostDetailsField, equals: .caption)
 
       if let errorMessage {
         Text(errorMessage)
@@ -1223,21 +1225,65 @@ public struct CreatePostNativeView: View {
     }
   }
 
+  private var discoverCategoryMenu: some View {
+    Menu {
+      Button {
+        selectedDiscoverCategory = nil
+      } label: {
+        Label("Auto", systemImage: selectedDiscoverCategory == nil ? "checkmark" : "wand.and.stars")
+      }
+
+      ForEach(postComposerDiscoverCategories, id: \.self) { category in
+        Button {
+          selectedDiscoverCategory = category
+        } label: {
+          Label(categoryDisplayName(category), systemImage: selectedDiscoverCategory == category ? "checkmark" : "tag")
+        }
+      }
+    } label: {
+      HStack(spacing: 8) {
+        Image(systemName: "square.grid.2x2")
+          .font(.system(size: 13, weight: .bold))
+        Text("Discover")
+          .font(.system(size: 13, weight: .bold))
+        Text(selectedDiscoverCategory.map(categoryDisplayName) ?? "Auto")
+          .font(.system(size: 13, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.forest)
+        Image(systemName: "chevron.down")
+          .font(.system(size: 11, weight: .bold))
+      }
+      .foregroundStyle(MIRATheme.Color.textPrimary)
+      .padding(.horizontal, 12)
+      .frame(height: 36)
+      .background(MIRATheme.Color.surfaceSoft.opacity(0.78))
+      .clipShape(Capsule())
+      .contentShape(Capsule())
+    }
+    .buttonStyle(.plain)
+  }
+
+  private func categoryDisplayName(_ category: String) -> String {
+    category
+      .split(separator: "_")
+      .map { $0.prefix(1).uppercased() + String($0.dropFirst()) }
+      .joined(separator: " ")
+  }
+
   private func postOptionRow(icon: String, title: String, subtitle: String? = nil, action: @escaping () -> Void) -> some View {
     Button(action: action) {
-      HStack(spacing: 18) {
+      HStack(spacing: 12) {
         Image(systemName: icon)
-          .font(.system(size: icon == "ellipsis" ? 25 : 28, weight: .regular))
+          .font(.system(size: icon == "ellipsis" ? 20 : 22, weight: .regular))
           .foregroundStyle(MIRATheme.Color.textPrimary)
-          .frame(width: 34)
+          .frame(width: 28)
 
         VStack(alignment: .leading, spacing: 3) {
           Text(title)
-            .font(.system(size: 19, weight: .regular))
+            .font(.system(size: 16, weight: .regular))
             .foregroundStyle(MIRATheme.Color.textPrimary)
           if let subtitle {
             Text(subtitle)
-              .font(.system(size: 14, weight: .regular))
+              .font(.system(size: 12, weight: .regular))
               .foregroundStyle(MIRATheme.Color.textMuted)
           }
         }
@@ -1245,10 +1291,10 @@ public struct CreatePostNativeView: View {
         Spacer()
 
         Image(systemName: "chevron.right")
-          .font(.system(size: 27, weight: .regular))
+          .font(.system(size: 20, weight: .regular))
           .foregroundStyle(MIRATheme.Color.textMuted.opacity(0.82))
       }
-      .frame(minHeight: 72)
+      .frame(minHeight: 58)
       .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
@@ -1260,18 +1306,18 @@ public struct CreatePostNativeView: View {
   }
 
   private var broadLocationOptionRow: some View {
-    HStack(spacing: 18) {
+    HStack(spacing: 12) {
       Image(systemName: "location.circle")
-        .font(.system(size: 28, weight: .regular))
+        .font(.system(size: 22, weight: .regular))
         .foregroundStyle(MIRATheme.Color.textPrimary)
-        .frame(width: 34)
+        .frame(width: 28)
 
       VStack(alignment: .leading, spacing: 3) {
         Text("Show city/country")
-          .font(.system(size: 19, weight: .regular))
+          .font(.system(size: 16, weight: .regular))
           .foregroundStyle(MIRATheme.Color.textPrimary)
         Text(broadLocationStatusText)
-          .font(.system(size: 14, weight: .regular))
+          .font(.system(size: 12, weight: .regular))
           .foregroundStyle(MIRATheme.Color.textMuted)
           .lineLimit(1)
           .truncationMode(.tail)
@@ -1283,7 +1329,7 @@ public struct CreatePostNativeView: View {
         .labelsHidden()
         .disabled(broadLocationResolver.isResolving)
     }
-    .frame(minHeight: 72)
+    .frame(minHeight: 58)
     .overlay(alignment: .bottom) {
       Rectangle()
         .fill(MIRATheme.Color.hairline.opacity(0.72))
@@ -1453,6 +1499,9 @@ public struct CreatePostNativeView: View {
         placeLng: selectedPlace?.longitude,
         taggedUsers: taggedPayload.isEmpty ? nil : taggedPayload,
         tags: cleanedTags.isEmpty ? nil : cleanedTags,
+        primaryCategory: selectedDiscoverCategory,
+        categorySource: selectedDiscoverCategory == nil ? nil : "user_changed_optional",
+        categoryStatus: selectedDiscoverCategory == nil ? nil : "classified",
         appleVisionLabels: categorySignals.appleVisionLabels.isEmpty ? nil : categorySignals.appleVisionLabels,
         appleVisionCategoryGuess: categorySignals.appleVisionCategoryGuess,
         appleVisionConfidence: categorySignals.appleVisionConfidence,

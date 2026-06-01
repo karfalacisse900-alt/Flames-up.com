@@ -1508,6 +1508,9 @@ public struct CreatePostBody: Encodable {
   public let placeLng: Double?
   public let taggedUsers: [MIRATaggedUserPayload]?
   public let tags: [String]?
+  public let primaryCategory: String?
+  public let categorySource: String?
+  public let categoryStatus: String?
   public let appleVisionLabels: [MIRAAutoCategoryLabel]?
   public let appleVisionCategoryGuess: String?
   public let appleVisionConfidence: Double?
@@ -1551,6 +1554,9 @@ public struct CreatePostBody: Encodable {
     placeLng: Double? = nil,
     taggedUsers: [MIRATaggedUserPayload]? = nil,
     tags: [String]? = nil,
+    primaryCategory: String? = nil,
+    categorySource: String? = nil,
+    categoryStatus: String? = nil,
     appleVisionLabels: [MIRAAutoCategoryLabel]? = nil,
     appleVisionCategoryGuess: String? = nil,
     appleVisionConfidence: Double? = nil,
@@ -1593,6 +1599,9 @@ public struct CreatePostBody: Encodable {
     self.placeLng = placeLng
     self.taggedUsers = taggedUsers
     self.tags = tags
+    self.primaryCategory = primaryCategory
+    self.categorySource = categorySource
+    self.categoryStatus = categoryStatus
     self.appleVisionLabels = appleVisionLabels
     self.appleVisionCategoryGuess = appleVisionCategoryGuess
     self.appleVisionConfidence = appleVisionConfidence
