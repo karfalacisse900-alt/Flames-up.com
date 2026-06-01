@@ -3,6 +3,13 @@ export interface Env {
   KV: KVNamespace;
   HYPERDRIVE?: any;
   AI?: any;
+  MEDIA_MODERATION_QUEUE?: Queue<{
+    jobId: string;
+    mediaId: string;
+    userId: string;
+    reason: 'upload_complete' | 'manual_retry' | 'admin_retry';
+    caption?: string;
+  }>;
   MEDIA_BACKUP?: R2Bucket;
   JWT_SECRET: string;
   CF_API_TOKEN?: string;
@@ -17,6 +24,13 @@ export interface Env {
   CLOUDFLARE_IMAGE_TRANSFORMS_ENABLED?: string;
   CLOUDFLARE_IMAGE_TRANSFORM_BASE_URL?: string;
   CLOUDFLARE_STREAM_TOKEN?: string;
+  AI_IMAGE_MODERATION_MODEL?: string;
+  AI_TEXT_MODERATION_MODEL?: string;
+  AI_GENERATED_MEDIA_POLICY?: string;
+  MALWARE_SCANNER_URL?: string;
+  MALWARE_SCANNER_TOKEN?: string;
+  MEDIA_MAX_IMAGE_BYTES?: string;
+  MEDIA_MAX_VIDEO_BYTES?: string;
   MAPBOX_ACCESS_TOKEN?: string;
   ENVIRONMENT: string;
   OWNER_USERNAMES?: string;

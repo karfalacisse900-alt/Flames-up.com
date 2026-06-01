@@ -11,3 +11,12 @@ binding = "AI"
 binding = "DB"
 database_name = "flames-up"
 database_id = "ce387f44-33eb-42ac-85cb-46b6009b49f5"
+
+[[queues.producers]]
+binding = "MEDIA_MODERATION_QUEUE"
+queue = "captro-media-moderation"
+
+[[queues.consumers]]
+queue = "captro-media-moderation"
+max_batch_size = 5
+max_batch_timeout = 30

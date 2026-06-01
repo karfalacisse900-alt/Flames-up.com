@@ -5,12 +5,21 @@ import { cors } from 'hono/cors';
 import bcrypt from 'bcryptjs';
 import { RtcRole, RtcTokenBuilder } from 'agora-token';
 
+type MediaModerationJobMessage = {
+  jobId: string;
+  mediaId: string;
+  userId: string;
+  reason: 'upload_complete' | 'manual_retry' | 'admin_retry';
+  caption?: string;
+};
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 interface Env {
   DB: D1Database;
   KV?: KVNamespace;
   HYPERDRIVE?: any;
   AI?: any;
+  MEDIA_MODERATION_QUEUE?: Queue<MediaModerationJobMessage>;
   MEDIA_BACKUP?: R2Bucket;
   JWT_SECRET: string;
   CLOUDFLARE_ACCOUNT_ID: string;
@@ -25,6 +34,13 @@ interface Env {
   CLOUDFLARE_IMAGE_TRANSFORMS_ENABLED?: string;
   CLOUDFLARE_IMAGE_TRANSFORM_BASE_URL?: string;
   CLOUDFLARE_STREAM_TOKEN?: string;
+  AI_IMAGE_MODERATION_MODEL?: string;
+  AI_TEXT_MODERATION_MODEL?: string;
+  AI_GENERATED_MEDIA_POLICY?: string;
+  MALWARE_SCANNER_URL?: string;
+  MALWARE_SCANNER_TOKEN?: string;
+  MEDIA_MAX_IMAGE_BYTES?: string;
+  MEDIA_MAX_VIDEO_BYTES?: string;
   POST_ASSIST_MODEL?: string;
   MAPBOX_ACCESS_TOKEN?: string;
   ENVIRONMENT?: string;
@@ -545,6 +561,7 @@ let autoCategoryBackfillReady = false;
 let locationSchemaReady = false;
 let statusThoughtSchemaReady = false;
 let statusLikeSchemaReady = false;
+let mediaModerationSchemaReady = false;
 
 function normalizeSchemaSql(statement: string): string {
   return statement.replace(/\s+/g, ' ').trim().replace(/;$/, '');
@@ -1732,6 +1749,112 @@ async function ensureProductionReadinessSchema(db: D1Database) {
   productionReadinessSchemaReady = true;
 }
 
+async function ensureMediaModerationSchema(db: D1Database) {
+  if (mediaModerationSchemaReady) return;
+
+  const statements = [
+    "ALTER TABLE posts ADD COLUMN moderation_status TEXT DEFAULT 'approved'",
+    "ALTER TABLE posts ADD COLUMN moderation_media_ids TEXT DEFAULT '[]'",
+    'ALTER TABLE posts ADD COLUMN moderation_checked_at TEXT',
+    `CREATE TABLE IF NOT EXISTS media_assets (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      post_id TEXT,
+      media_type TEXT NOT NULL,
+      storage_provider TEXT NOT NULL,
+      storage_key TEXT NOT NULL,
+      public_url TEXT,
+      private_url TEXT,
+      mime_type TEXT NOT NULL,
+      file_size INTEGER DEFAULT 0,
+      sha256_hash TEXT DEFAULT '',
+      width INTEGER,
+      height INTEGER,
+      duration_seconds REAL,
+      upload_status TEXT NOT NULL DEFAULT 'uploading',
+      moderation_status TEXT NOT NULL DEFAULT 'uploading',
+      rejection_code TEXT,
+      rejection_message TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
+    `CREATE TABLE IF NOT EXISTS moderation_jobs (
+      id TEXT PRIMARY KEY,
+      media_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      job_type TEXT NOT NULL DEFAULT 'media_pre_publish',
+      status TEXT NOT NULL DEFAULT 'pending',
+      attempts INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT DEFAULT '',
+      queued_at TEXT NOT NULL,
+      started_at TEXT,
+      completed_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
+    `CREATE TABLE IF NOT EXISTS moderation_results (
+      id TEXT PRIMARY KEY,
+      media_id TEXT NOT NULL,
+      model_name TEXT NOT NULL,
+      adult_explicit_score REAL DEFAULT 0,
+      nudity_score REAL DEFAULT 0,
+      sexual_context_score REAL DEFAULT 0,
+      sexual_solicitation_score REAL DEFAULT 0,
+      minor_safety_risk_score REAL DEFAULT 0,
+      violence_score REAL DEFAULT 0,
+      gore_score REAL DEFAULT 0,
+      weapon_score REAL DEFAULT 0,
+      hate_symbol_score REAL DEFAULT 0,
+      ai_generated_likelihood REAL DEFAULT 0,
+      spam_scam_score REAL DEFAULT 0,
+      malware_status TEXT NOT NULL DEFAULT 'unknown',
+      link_risk_score REAL DEFAULT 0,
+      confidence REAL DEFAULT 0,
+      decision TEXT NOT NULL,
+      reasons TEXT NOT NULL DEFAULT '[]',
+      raw_result TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL
+    )`,
+    `CREATE TABLE IF NOT EXISTS moderation_events (
+      id TEXT PRIMARY KEY,
+      media_id TEXT NOT NULL,
+      actor_user_id TEXT DEFAULT '',
+      actor_role TEXT DEFAULT '',
+      event_type TEXT NOT NULL,
+      decision TEXT DEFAULT '',
+      reason TEXT DEFAULT '',
+      note TEXT DEFAULT '',
+      before_state TEXT DEFAULT '{}',
+      after_state TEXT DEFAULT '{}',
+      request_id TEXT DEFAULT '',
+      created_at TEXT NOT NULL
+    )`,
+    'CREATE INDEX IF NOT EXISTS idx_media_assets_user_created ON media_assets(user_id, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_media_assets_status_created ON media_assets(moderation_status, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_media_assets_post ON media_assets(post_id)',
+    'CREATE INDEX IF NOT EXISTS idx_media_assets_storage ON media_assets(storage_provider, storage_key)',
+    'CREATE INDEX IF NOT EXISTS idx_media_assets_hash ON media_assets(sha256_hash)',
+    'CREATE INDEX IF NOT EXISTS idx_media_assets_post_status ON media_assets(post_id, moderation_status)',
+    'CREATE INDEX IF NOT EXISTS idx_posts_moderation_status_created ON posts(moderation_status, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_moderation_jobs_status ON moderation_jobs(status, queued_at)',
+    'CREATE INDEX IF NOT EXISTS idx_moderation_jobs_media ON moderation_jobs(media_id)',
+    'CREATE INDEX IF NOT EXISTS idx_moderation_results_media_created ON moderation_results(media_id, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_moderation_events_media_created ON moderation_events(media_id, created_at)',
+  ];
+
+  for (const statement of statements) {
+    try {
+      await runSchemaStatement(db, statement);
+    } catch (error: any) {
+      if (!isIgnorableSchemaError(error, statement)) {
+        throw error;
+      }
+    }
+  }
+
+  mediaModerationSchemaReady = true;
+}
+
 async function ensureMediaBackupSchema(db: D1Database) {
   if (mediaBackupSchemaReady) return;
 
@@ -1869,7 +1992,7 @@ function visibleStatusWhere(userAlias = 'u', statusAlias = 's'): string {
 }
 
 function visiblePostWhere(userAlias = 'u', postAlias = 'p'): string {
-  return `COALESCE(${postAlias}.status, 'active') != 'removed' AND ${visibleAuthorWhere(userAlias)} AND (
+  return `COALESCE(${postAlias}.status, 'active') != 'removed' AND ${approvedPostModerationWhere(postAlias)} AND ${visibleAuthorWhere(userAlias)} AND (
     COALESCE(${postAlias}.visibility, 'public') = 'public'
     OR ${postAlias}.user_id = ?
     OR (COALESCE(${postAlias}.visibility, 'public') = 'followers' AND (
@@ -1885,7 +2008,11 @@ function visiblePostBindValues(userId: string): string[] {
 }
 
 function publicPostWhere(userAlias = 'u', postAlias = 'p'): string {
-  return `COALESCE(${postAlias}.status, 'active') != 'removed' AND COALESCE(${userAlias}.is_private, 0) = 0 AND COALESCE(${postAlias}.visibility, 'public') = 'public'`;
+  return `COALESCE(${postAlias}.status, 'active') != 'removed' AND ${approvedPostModerationWhere(postAlias)} AND COALESCE(${userAlias}.is_private, 0) = 0 AND COALESCE(${postAlias}.visibility, 'public') = 'public'`;
+}
+
+function approvedPostModerationWhere(postAlias = 'p'): string {
+  return `COALESCE(${postAlias}.moderation_status, 'approved') = 'approved'`;
 }
 
 function parseJsonArray(value: unknown): any[] {
@@ -3991,7 +4118,7 @@ function normalizedContentType(value: unknown): string {
   return String(value || '').split(';')[0].trim().toLowerCase();
 }
 
-const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/webp']);
+const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/heic', 'image/heif']);
 const ALLOWED_VIDEO_TYPES = new Set(['video/mp4', 'video/quicktime', 'video/webm']);
 const ALLOWED_AUDIO_TYPES = new Set(['audio/m4a', 'audio/mp4', 'audio/aac', 'audio/mpeg', 'audio/wav', 'audio/webm']);
 const ALLOWED_FILE_TYPES = new Set([
@@ -4004,7 +4131,7 @@ const ALLOWED_FILE_TYPES = new Set([
   'application/vnd.ms-excel',
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
 ]);
-const ALLOWED_IMAGE_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'webp']);
+const ALLOWED_IMAGE_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'webp', 'heic', 'heif']);
 const ALLOWED_VIDEO_EXTENSIONS = new Set(['mp4', 'mov', 'webm']);
 const ALLOWED_AUDIO_EXTENSIONS = new Set(['m4a', 'aac', 'mp3', 'wav', 'webm']);
 const ALLOWED_FILE_EXTENSIONS = new Set(['pdf', 'txt', 'doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx']);
@@ -7058,6 +7185,475 @@ async function classifyImageWithWorkersAi(env: Env, imageUrl: string): Promise<A
   return workersAiLabelsFromResult(result);
 }
 
+type CaptroMediaType = 'image' | 'video';
+type MediaModerationStatus = 'uploading' | 'pending_moderation' | 'approved' | 'review_required' | 'rejected' | 'failed';
+type MalwareStatus = 'clean' | 'malicious' | 'unknown' | 'not_scanned';
+type ModerationDecision = 'approved' | 'review_required' | 'rejected';
+
+type MediaModerationScores = {
+  adult_explicit_score: number;
+  nudity_score: number;
+  sexual_context_score: number;
+  sexual_solicitation_score: number;
+  minor_safety_risk_score: number;
+  violence_score: number;
+  gore_score: number;
+  weapon_score: number;
+  hate_symbol_score: number;
+  ai_generated_likelihood: number;
+  spam_scam_score: number;
+  malware_status: MalwareStatus;
+  link_risk_score: number;
+  confidence: number;
+};
+
+const MEDIA_MODERATION_STATUS_VALUES = new Set<MediaModerationStatus>([
+  'uploading',
+  'pending_moderation',
+  'approved',
+  'review_required',
+  'rejected',
+  'failed',
+]);
+
+function normalizeMediaModerationStatus(value: unknown): MediaModerationStatus {
+  const status = cleanText(value, 40) as MediaModerationStatus;
+  return MEDIA_MODERATION_STATUS_VALUES.has(status) ? status : 'pending_moderation';
+}
+
+function normalizeMediaAssetType(value: unknown): CaptroMediaType | '' {
+  const mediaType = cleanText(value, 40).toLowerCase();
+  return mediaType === 'image' || mediaType === 'video' ? mediaType : '';
+}
+
+function mediaModerationMaxBytes(env: Env, mediaType: CaptroMediaType): number {
+  const raw = Number(mediaType === 'video' ? env.MEDIA_MAX_VIDEO_BYTES : env.MEDIA_MAX_IMAGE_BYTES);
+  if (Number.isFinite(raw) && raw > 0) return Math.min(raw, mediaType === 'video' ? 500_000_000 : 50_000_000);
+  return mediaType === 'video' ? 250_000_000 : 25_000_000;
+}
+
+function isUnsafeUploadExtension(filename: unknown): boolean {
+  const ext = fileExtension(filename);
+  return ['exe', 'dll', 'bat', 'cmd', 'com', 'scr', 'ps1', 'sh', 'js', 'jar', 'zip', 'rar', '7z', 'tar', 'gz', 'svg', 'html', 'php'].includes(ext);
+}
+
+function validatePrePublishUploadInput(env: Env, body: any): { ok: true; mediaType: CaptroMediaType; mimeType: string; filename: string; fileSize: number } | { ok: false; detail: string; code: string; status: number } {
+  const mediaType = normalizeMediaAssetType(body.media_type || body.mediaType || body.type);
+  if (!mediaType) return { ok: false, detail: 'Upload must be an image or video.', code: 'invalid_media_type', status: 400 };
+
+  const filename = cleanText(body.filename || body.file_name || (mediaType === 'video' ? 'captro-video.mp4' : 'captro-image.jpg'), 180);
+  if (isUnsafeUploadExtension(filename)) return { ok: false, detail: 'This file type cannot be uploaded.', code: 'unsafe_extension', status: 400 };
+
+  const mimeType = normalizedContentType(body.mime_type || body.mimeType || body.content_type || body.contentType);
+  const allowedTypes = mediaType === 'video' ? ALLOWED_VIDEO_TYPES : ALLOWED_IMAGE_TYPES;
+  const allowedExtensions = mediaType === 'video' ? ALLOWED_VIDEO_EXTENSIONS : ALLOWED_IMAGE_EXTENSIONS;
+  if (!mimeType || !allowedTypes.has(mimeType) || !extensionAllowed(filename, allowedExtensions)) {
+    return {
+      ok: false,
+      detail: mediaType === 'video' ? 'Unsupported video type. Use MP4, MOV, or WebM.' : 'Unsupported image type. Use JPG, PNG, WebP, HEIC, or HEIF.',
+      code: 'unsupported_media_type',
+      status: 400,
+    };
+  }
+
+  const fileSize = Math.max(0, Math.round(Number(body.file_size || body.fileSize || body.size || 0)));
+  const maxBytes = mediaModerationMaxBytes(env, mediaType);
+  if (fileSize > maxBytes) {
+    return { ok: false, detail: 'This upload is too large.', code: 'file_too_large', status: 413 };
+  }
+
+  return { ok: true, mediaType, mimeType, filename, fileSize };
+}
+
+function defaultModerationScores(overrides: Partial<MediaModerationScores> = {}): MediaModerationScores {
+  return {
+    adult_explicit_score: 0,
+    nudity_score: 0,
+    sexual_context_score: 0,
+    sexual_solicitation_score: 0,
+    minor_safety_risk_score: 0,
+    violence_score: 0,
+    gore_score: 0,
+    weapon_score: 0,
+    hate_symbol_score: 0,
+    ai_generated_likelihood: 0,
+    spam_scam_score: 0,
+    malware_status: 'unknown',
+    link_risk_score: 0,
+    confidence: 0.7,
+    ...overrides,
+  };
+}
+
+function maxModerationScores(scores: MediaModerationScores[]): MediaModerationScores {
+  return scores.reduce((acc, score) => ({
+    adult_explicit_score: Math.max(acc.adult_explicit_score, score.adult_explicit_score),
+    nudity_score: Math.max(acc.nudity_score, score.nudity_score),
+    sexual_context_score: Math.max(acc.sexual_context_score, score.sexual_context_score),
+    sexual_solicitation_score: Math.max(acc.sexual_solicitation_score, score.sexual_solicitation_score),
+    minor_safety_risk_score: Math.max(acc.minor_safety_risk_score, score.minor_safety_risk_score),
+    violence_score: Math.max(acc.violence_score, score.violence_score),
+    gore_score: Math.max(acc.gore_score, score.gore_score),
+    weapon_score: Math.max(acc.weapon_score, score.weapon_score),
+    hate_symbol_score: Math.max(acc.hate_symbol_score, score.hate_symbol_score),
+    ai_generated_likelihood: Math.max(acc.ai_generated_likelihood, score.ai_generated_likelihood),
+    spam_scam_score: Math.max(acc.spam_scam_score, score.spam_scam_score),
+    malware_status: score.malware_status === 'malicious' || acc.malware_status === 'malicious'
+      ? 'malicious'
+      : score.malware_status === 'clean' || acc.malware_status === 'clean'
+        ? 'clean'
+        : acc.malware_status,
+    link_risk_score: Math.max(acc.link_risk_score, score.link_risk_score),
+    confidence: Math.max(acc.confidence, score.confidence),
+  }), defaultModerationScores({ confidence: 0 }));
+}
+
+function decideMediaModeration(scores: MediaModerationScores, mediaType: CaptroMediaType, aiGeneratedMediaPolicy = ''): { decision: ModerationDecision; reasons: string[]; rejectionCode: string; userMessage: string } {
+  const reasons: string[] = [];
+  const aiDisallowed = cleanText(aiGeneratedMediaPolicy, 60).toLowerCase() === 'disallow';
+  if (scores.malware_status === 'malicious') reasons.push('malware_detected');
+  if (scores.adult_explicit_score >= 0.85) reasons.push('explicit_sexual_content');
+  if (scores.minor_safety_risk_score >= 0.20) reasons.push('minor_safety_risk');
+  if (scores.gore_score >= 0.90) reasons.push('graphic_gore');
+  if (scores.hate_symbol_score >= 0.85) reasons.push('hate_symbol');
+  if (scores.spam_scam_score >= 0.90 || scores.link_risk_score >= 0.90) reasons.push('spam_or_scam');
+  if (aiDisallowed && scores.ai_generated_likelihood >= 0.92) reasons.push('ai_generated_media');
+
+  if (reasons.length) {
+    return {
+      decision: 'rejected',
+      reasons,
+      rejectionCode: reasons[0],
+      userMessage: "This upload can't be posted because it may break Captro's safety rules.",
+    };
+  }
+
+  if (scores.nudity_score >= 0.45
+    || scores.sexual_context_score >= 0.40
+    || scores.violence_score >= 0.55
+    || scores.ai_generated_likelihood >= 0.65
+    || scores.confidence < 0.65
+    || (scores.malware_status === 'unknown' && mediaType === 'video')) {
+    if (scores.nudity_score >= 0.45) reasons.push('nudity_review');
+    if (scores.sexual_context_score >= 0.40) reasons.push('sexual_context_review');
+    if (scores.violence_score >= 0.55) reasons.push('violence_review');
+    if (scores.ai_generated_likelihood >= 0.65) reasons.push('ai_generated_review');
+    if (scores.confidence < 0.65) reasons.push('low_model_confidence');
+    if (scores.malware_status === 'unknown' && mediaType === 'video') reasons.push('malware_scan_unknown_video');
+    return {
+      decision: 'review_required',
+      reasons,
+      rejectionCode: '',
+      userMessage: 'This upload needs a quick safety review before it can be posted.',
+    };
+  }
+
+  return { decision: 'approved', reasons: [], rejectionCode: '', userMessage: '' };
+}
+
+function parseModerationJson(value: any): any {
+  if (!value) return {};
+  if (typeof value === 'object') return value;
+  const text = String(value || '').trim();
+  const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(text)?.[1] || text;
+  const start = fenced.indexOf('{');
+  const end = fenced.lastIndexOf('}');
+  if (start >= 0 && end > start) {
+    try { return JSON.parse(fenced.slice(start, end + 1)); } catch {}
+  }
+  try { return JSON.parse(fenced); } catch {}
+  return {};
+}
+
+function textSafetyHeuristics(text: string): MediaModerationScores {
+  const lower = text.toLowerCase();
+  const unsafeLinks = /(bit\.ly|tinyurl|t\.me\/|telegram\.me|free\s+money|cashapp|crypto|airdrop|wallet\s+connect|login\s+here|verify\s+account)/i.test(text);
+  const explicit = /(onlyfans|nude|sex|escort|hookup|send nudes|xxx)/i.test(text);
+  const hate = /(swastika|kkk|nazi)/i.test(text);
+  const violence = /(kill|shoot|stab|blood|gore)/i.test(text);
+  return defaultModerationScores({
+    adult_explicit_score: explicit ? 0.55 : 0,
+    sexual_solicitation_score: explicit ? 0.75 : 0,
+    hate_symbol_score: hate ? 0.75 : 0,
+    violence_score: violence ? 0.55 : 0,
+    spam_scam_score: unsafeLinks ? 0.82 : 0,
+    link_risk_score: /https?:\/\//i.test(text) ? (unsafeLinks ? 0.85 : 0.25) : 0,
+    confidence: lower ? 0.78 : 0.72,
+    malware_status: 'not_scanned',
+  });
+}
+
+function sanitizeModerationScores(raw: any, fallback: MediaModerationScores): MediaModerationScores {
+  return defaultModerationScores({
+    adult_explicit_score: clampFloat(raw.adult_explicit_score ?? raw.explicit_sexual_content ?? raw.sexual_explicit_score, 0, 1, fallback.adult_explicit_score),
+    nudity_score: clampFloat(raw.nudity_score ?? raw.nudity, 0, 1, fallback.nudity_score),
+    sexual_context_score: clampFloat(raw.sexual_context_score ?? raw.sexual_context, 0, 1, fallback.sexual_context_score),
+    sexual_solicitation_score: clampFloat(raw.sexual_solicitation_score ?? raw.solicitation_score, 0, 1, fallback.sexual_solicitation_score),
+    minor_safety_risk_score: clampFloat(raw.minor_safety_risk_score ?? raw.minor_risk, 0, 1, fallback.minor_safety_risk_score),
+    violence_score: clampFloat(raw.violence_score ?? raw.violence, 0, 1, fallback.violence_score),
+    gore_score: clampFloat(raw.gore_score ?? raw.gore, 0, 1, fallback.gore_score),
+    weapon_score: clampFloat(raw.weapon_score ?? raw.weapons, 0, 1, fallback.weapon_score),
+    hate_symbol_score: clampFloat(raw.hate_symbol_score ?? raw.hate_symbols, 0, 1, fallback.hate_symbol_score),
+    ai_generated_likelihood: clampFloat(raw.ai_generated_likelihood ?? raw.ai_likelihood, 0, 1, fallback.ai_generated_likelihood),
+    spam_scam_score: clampFloat(raw.spam_scam_score ?? raw.scam_score, 0, 1, fallback.spam_scam_score),
+    malware_status: ['clean', 'malicious', 'unknown', 'not_scanned'].includes(cleanText(raw.malware_status, 30)) ? cleanText(raw.malware_status, 30) as MalwareStatus : fallback.malware_status,
+    link_risk_score: clampFloat(raw.link_risk_score ?? raw.unsafe_link_score, 0, 1, fallback.link_risk_score),
+    confidence: clampFloat(raw.confidence ?? raw.model_confidence, 0, 1, fallback.confidence),
+  });
+}
+
+function mediaAssetPublicUrl(env: Env, asset: any): string {
+  const provider = cleanText(asset?.storage_provider, 40);
+  const key = cleanText(asset?.storage_key, 220);
+  if (!key) return '';
+  if (provider === 'images') return cloudflareImageDeliveryUrl(env, key, env.CLOUDFLARE_IMAGES_FEED_VARIANT || 'public');
+  if (provider === 'stream') return `https://videodelivery.net/${key}/manifest/video.m3u8`;
+  return safeMediaReference(asset?.public_url) || safeMediaReference(asset?.private_url);
+}
+
+function mediaAssetPreviewUrl(env: Env, asset: any): string {
+  const provider = cleanText(asset?.storage_provider, 40);
+  const key = cleanText(asset?.storage_key, 220);
+  if (!key) return '';
+  if (provider === 'images') return cloudflareImageDeliveryUrl(env, key, env.CLOUDFLARE_IMAGES_THUMBNAIL_VARIANT || 'public');
+  if (provider === 'stream') return streamThumbnailUrl(`cfstream:${key}`);
+  return safeMediaReference(asset?.public_url) || safeMediaReference(asset?.private_url);
+}
+
+function moderationSampleUrls(env: Env, asset: any): string[] {
+  if (asset.media_type === 'video' && cleanText(asset.storage_provider, 40) === 'stream') {
+    const key = cleanText(asset.storage_key, 220);
+    return [0, 25, 50, 75, 95].map((pct) => `https://videodelivery.net/${key}/thumbnails/thumbnail.jpg?time=${pct}p&height=720`);
+  }
+  if (asset.media_type === 'image' && cleanText(asset.storage_provider, 40) === 'images') {
+    const key = cleanText(asset.storage_key, 220);
+    return key ? [`cfimage-api:${key}`] : [];
+  }
+  return [mediaAssetPreviewUrl(env, asset)].filter(Boolean);
+}
+
+async function runWorkersAiImageModeration(env: Env, imageUrl: string, caption: string): Promise<{ scores: MediaModerationScores; raw: any; modelName: string }> {
+  const fallback = textSafetyHeuristics(caption);
+  if (!env.AI || !imageUrl || (!/^https:\/\//i.test(imageUrl) && !imageUrl.startsWith('cfimage-api:'))) {
+    return { scores: defaultModerationScores({ ...fallback, confidence: Math.min(fallback.confidence, 0.6) }), raw: { ai_available: !!env.AI, image_available: !!imageUrl }, modelName: 'heuristic_no_image' };
+  }
+  const modelName = cleanText(env.AI_IMAGE_MODERATION_MODEL || '@cf/meta/llama-3.2-11b-vision-instruct', 160);
+  try {
+    const imageId = imageUrl.startsWith('cfimage-api:') ? cleanText(imageUrl.replace('cfimage-api:', ''), 220) : '';
+    const response = imageId
+      ? await fetch(`https://api.cloudflare.com/client/v4/accounts/${cloudflareAccountId(env)}/images/v1/${imageId}/blob`, {
+        headers: { Authorization: `Bearer ${cloudflareImagesToken(env)}`, accept: 'image/*' },
+      })
+      : await fetch(imageUrl, { headers: { accept: 'image/*' } });
+    if (!response.ok) throw new Error(`IMAGE_SAMPLE_FETCH_FAILED:${response.status}`);
+    const imageBytes = await response.arrayBuffer();
+    if (!imageBytes.byteLength || imageBytes.byteLength > 4_000_000) throw new Error('IMAGE_SAMPLE_TOO_LARGE');
+    const prompt = `You are Captro's pre-publish media safety classifier. Return strict JSON only with numbers 0..1 for adult_explicit_score, nudity_score, sexual_context_score, sexual_solicitation_score, minor_safety_risk_score, violence_score, gore_score, weapon_score, hate_symbol_score, ai_generated_likelihood, spam_scam_score, link_risk_score, confidence, malware_status as "not_scanned", and reasons as an array. Check nudity, explicit sexual content, sexual solicitation, sexualized minors, violence/gore, weapons, hate symbols, scams/spam, unsafe links in caption, and AI-generated likelihood. Caption: ${caption || '(none)'}`;
+    const result = await env.AI.run(modelName, {
+      messages: [{ role: 'user', content: prompt }],
+      image: Array.from(new Uint8Array(imageBytes)),
+    });
+    const raw = parseModerationJson(result?.response || result?.result || result?.text || result);
+    return { scores: sanitizeModerationScores(raw, fallback), raw: raw || result || {}, modelName };
+  } catch (error: any) {
+    return {
+      scores: defaultModerationScores({ ...fallback, confidence: Math.min(fallback.confidence, 0.55) }),
+      raw: { error: getErrorCode(error).slice(0, 180), fallback: true },
+      modelName,
+    };
+  }
+}
+
+async function scanMalwareInterface(env: Env, asset: any): Promise<MalwareStatus> {
+  const scannerUrl = cleanText(env.MALWARE_SCANNER_URL, 400);
+  if (!scannerUrl || !/^https:\/\//i.test(scannerUrl)) return 'unknown';
+  try {
+    const response = await fetch(scannerUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(env.MALWARE_SCANNER_TOKEN ? { Authorization: `Bearer ${env.MALWARE_SCANNER_TOKEN}` } : {}),
+      },
+      body: JSON.stringify({
+        media_id: asset.id,
+        provider: asset.storage_provider,
+        storage_key: asset.storage_key,
+        mime_type: asset.mime_type,
+        file_size: asset.file_size,
+        sha256_hash: asset.sha256_hash,
+      }),
+    });
+    if (!response.ok) return 'unknown';
+    const data: any = await response.json().catch(() => ({}));
+    return data.status === 'malicious' ? 'malicious' : data.status === 'clean' ? 'clean' : 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
+async function insertModerationEvent(db: D1Database, mediaId: string, eventType: string, input: { actorUserId?: string; actorRole?: string; decision?: string; reason?: string; note?: string; beforeState?: any; afterState?: any; requestId?: string } = {}) {
+  await db.prepare(
+    `INSERT INTO moderation_events
+     (id, media_id, actor_user_id, actor_role, event_type, decision, reason, note, before_state, after_state, request_id, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(
+    uuid(),
+    mediaId,
+    publicId(input.actorUserId || '', 120),
+    cleanText(input.actorRole || '', 40),
+    cleanText(eventType, 80),
+    cleanText(input.decision || '', 40),
+    cleanText(input.reason || '', 180),
+    cleanMultilineText(input.note || '', 1000),
+    safeJsonState(input.beforeState),
+    safeJsonState(input.afterState),
+    cleanText(input.requestId || '', 120),
+    now(),
+  ).run();
+}
+
+async function processMediaModerationJob(env: Env, message: MediaModerationJobMessage, requestId = '') {
+  await ensureMediaModerationSchema(env.DB);
+  const mediaId = publicId(message.mediaId, 160);
+  const jobId = publicId(message.jobId, 160);
+  const startedAt = now();
+  await env.DB.prepare("UPDATE moderation_jobs SET status = 'running', attempts = attempts + 1, started_at = ?, updated_at = ? WHERE id = ?")
+    .bind(startedAt, startedAt, jobId)
+    .run();
+
+  const asset: any = await env.DB.prepare('SELECT * FROM media_assets WHERE id = ? LIMIT 1').bind(mediaId).first();
+  if (!asset) throw new Error('MEDIA_ASSET_NOT_FOUND');
+
+  try {
+    const malwareStatus = await scanMalwareInterface(env, asset);
+    const caption = cleanMultilineText(message.caption || '', 1000);
+    const sampleScores: MediaModerationScores[] = [];
+    const rawSamples: any[] = [];
+    let modelName = 'heuristic';
+    for (const sampleUrl of moderationSampleUrls(env, asset)) {
+      const result = await runWorkersAiImageModeration(env, sampleUrl, caption);
+      modelName = result.modelName;
+      sampleScores.push(result.scores);
+      rawSamples.push({ sample_url: sampleUrl.replace(/\?.*/, ''), result: scrubLogMetadata(result.raw) });
+    }
+    if (!sampleScores.length) {
+      sampleScores.push(defaultModerationScores({ ...textSafetyHeuristics(caption), confidence: 0.55 }));
+      rawSamples.push({ fallback: 'no_sample_available' });
+    }
+    const scores = maxModerationScores(sampleScores);
+    scores.malware_status = malwareStatus === 'clean' || malwareStatus === 'malicious' ? malwareStatus : scores.malware_status;
+    const decision = decideMediaModeration(scores, normalizeMediaAssetType(asset.media_type) || 'image', env.AI_GENERATED_MEDIA_POLICY || '');
+    const publicUrl = decision.decision === 'approved' ? mediaAssetPublicUrl(env, asset) : '';
+    const ts = now();
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO moderation_results (
+          id, media_id, model_name, adult_explicit_score, nudity_score, sexual_context_score,
+          sexual_solicitation_score, minor_safety_risk_score, violence_score, gore_score, weapon_score,
+          hate_symbol_score, ai_generated_likelihood, spam_scam_score, malware_status, link_risk_score,
+          confidence, decision, reasons, raw_result, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(
+        uuid(), mediaId, modelName,
+        scores.adult_explicit_score, scores.nudity_score, scores.sexual_context_score,
+        scores.sexual_solicitation_score, scores.minor_safety_risk_score, scores.violence_score,
+        scores.gore_score, scores.weapon_score, scores.hate_symbol_score, scores.ai_generated_likelihood,
+        scores.spam_scam_score, scores.malware_status, scores.link_risk_score, scores.confidence,
+        decision.decision, JSON.stringify(decision.reasons), JSON.stringify({ samples: rawSamples }), ts,
+      ),
+      env.DB.prepare(
+        `UPDATE media_assets
+         SET moderation_status = ?, public_url = COALESCE(NULLIF(?, ''), public_url),
+             rejection_code = ?, rejection_message = ?, updated_at = ?
+         WHERE id = ?`
+      ).bind(decision.decision, publicUrl, decision.rejectionCode, decision.userMessage, ts, mediaId),
+      env.DB.prepare("UPDATE moderation_jobs SET status = 'completed', completed_at = ?, updated_at = ? WHERE id = ?")
+        .bind(ts, ts, jobId),
+    ]);
+    await insertModerationEvent(env.DB, mediaId, `moderation_${decision.decision}`, {
+      decision: decision.decision,
+      reason: decision.reasons.join(','),
+      afterState: { moderation_status: decision.decision, scores },
+      requestId,
+    });
+  } catch (error: any) {
+    const ts = now();
+    const code = getErrorCode(error).slice(0, 180);
+    await env.DB.batch([
+      env.DB.prepare("UPDATE moderation_jobs SET status = 'failed', last_error = ?, completed_at = ?, updated_at = ? WHERE id = ?")
+        .bind(code, ts, ts, jobId),
+      env.DB.prepare("UPDATE media_assets SET moderation_status = 'failed', rejection_code = 'moderation_failed', rejection_message = 'This upload could not be checked. Please try again.', updated_at = ? WHERE id = ?")
+        .bind(ts, mediaId),
+    ]);
+    await insertModerationEvent(env.DB, mediaId, 'moderation_failed', { reason: code, requestId });
+    throw error;
+  }
+}
+
+async function createMediaModerationJob(c: any, mediaId: string, userId: string, caption = ''): Promise<string> {
+  await ensureMediaModerationSchema(c.env.DB);
+  const jobId = uuid();
+  const ts = now();
+  await c.env.DB.prepare(
+    `INSERT INTO moderation_jobs (id, media_id, user_id, job_type, status, queued_at, created_at, updated_at)
+     VALUES (?, ?, ?, 'media_pre_publish', 'pending', ?, ?, ?)`
+  ).bind(jobId, mediaId, userId, ts, ts, ts).run();
+  const body: MediaModerationJobMessage = { jobId, mediaId, userId, reason: 'upload_complete', caption: cleanMultilineText(caption, 1000) };
+  if (c.env.MEDIA_MODERATION_QUEUE) {
+    await c.env.MEDIA_MODERATION_QUEUE.send(body);
+  } else {
+    runBackgroundTask(c, 'media_moderation_inline_failed', async () => {
+      await processMediaModerationJob(c.env, body, c.get?.('requestId') || '');
+    });
+  }
+  return jobId;
+}
+
+function parseMediaAssetIds(body: any): string[] {
+  return Array.from(new Set([
+    ...parseJsonArray(body.media_asset_ids),
+    ...parseJsonArray(body.mediaAssetIds),
+    ...parseJsonArray(body.media_ids),
+    ...parseJsonArray(body.mediaIds),
+    body.media_asset_id,
+    body.mediaAssetId,
+  ].flat().map((value) => publicId(value, 160)).filter(Boolean)));
+}
+
+async function approvedMediaAssetsForPost(c: any, userId: string, requestedMediaIds: string[], imageUrls: string[]) {
+  await ensureMediaModerationSchema(c.env.DB);
+  if (!requestedMediaIds.length && imageUrls.length) {
+    return {
+      ok: false,
+      status: 409,
+      detail: 'Checking your upload before posting...',
+      code: 'MEDIA_MODERATION_REQUIRED',
+      assets: [] as any[],
+    };
+  }
+  if (!requestedMediaIds.length) return { ok: true, status: 200, detail: '', code: '', assets: [] as any[] };
+
+  const placeholders = requestedMediaIds.map(() => '?').join(', ');
+  const rows = await c.env.DB.prepare(`SELECT * FROM media_assets WHERE user_id = ? AND id IN (${placeholders})`)
+    .bind(userId, ...requestedMediaIds)
+    .all();
+  const assets = rows.results as any[];
+  if (assets.length !== requestedMediaIds.length) {
+    return { ok: false, status: 404, detail: 'One upload was not found. Please upload again.', code: 'MEDIA_NOT_FOUND', assets };
+  }
+  const blocking = assets.find((asset) => normalizeMediaModerationStatus(asset.moderation_status) !== 'approved' || cleanText(asset.upload_status, 40) !== 'uploaded');
+  if (blocking) {
+    const status = normalizeMediaModerationStatus(blocking.moderation_status);
+    const detail = status === 'rejected'
+      ? "This upload can't be posted because it may break Captro's safety rules."
+      : status === 'review_required'
+        ? 'This upload needs a quick safety review before it can be posted.'
+        : 'Checking your upload before posting...';
+    return { ok: false, status: 409, detail, code: `MEDIA_${status.toUpperCase()}`, assets };
+  }
+  return { ok: true, status: 200, detail: '', code: '', assets };
+}
+
 async function refinePostCategoryWithBackendAi(c: any, postId: string) {
   if (!c.env.AI) return;
   await ensureAutoCategorySchema(c.env.DB);
@@ -9134,6 +9730,7 @@ api.post('/posts', authMiddleware, async (c) => {
   await ensureGovernanceSchema(c.env.DB);
   await ensureAutoCategorySchema(c.env.DB);
   await ensureLocationSchema(c.env.DB);
+  await ensureMediaModerationSchema(c.env.DB);
   const userId = getUserId(c);
   const limited = await enforceRateLimit(c, 'post_create', userId, 30, 60);
   if (limited) return limited;
@@ -9179,9 +9776,9 @@ api.post('/posts', authMiddleware, async (c) => {
   const visibility = normalizeVisibility(b.visibility);
   const postTitle = cleanText(b.title || b.headline, 180);
   const postContent = cleanMultilineText(b.content, 5000);
-  const imageUrls = sanitizeMediaReferences(b.images, b.image);
-  const primaryImage = safeMediaReference(b.image) || imageUrls[0] || null;
-  const mediaTypes = sanitizeMediaTypes(b.media_types, imageUrls.length || (primaryImage ? 1 : 0));
+  let imageUrls = sanitizeMediaReferences(b.images, b.image);
+  let primaryImage = safeMediaReference(b.image) || imageUrls[0] || null;
+  let mediaTypes = sanitizeMediaTypes(b.media_types, imageUrls.length || (primaryImage ? 1 : 0));
   const requestedPostType = String(b.post_type || b.postType || b.media_type || b.mediaType || '').toLowerCase();
   const hasVideoMedia = requestedPostType.includes('video') || mediaTypes.includes('video') || imageUrls.some(isVideoMediaUrl);
   if (hasVideoMedia) {
@@ -9189,6 +9786,25 @@ api.post('/posts', authMiddleware, async (c) => {
       detail: 'Feed posts support photos only. Share videos to Stories instead.',
       code: 'FEED_POSTS_PHOTO_ONLY',
     }, 400);
+  }
+  const mediaAssetIds = parseMediaAssetIds(b);
+  const mediaApproval = await approvedMediaAssetsForPost(c, userId, mediaAssetIds, imageUrls);
+  if (!mediaApproval.ok) {
+    return c.json({ detail: mediaApproval.detail, code: mediaApproval.code }, mediaApproval.status as any);
+  }
+  if (mediaApproval.assets.some((asset: any) => normalizeMediaAssetType(asset.media_type) === 'video')) {
+    return c.json({
+      detail: 'Feed posts support photos only. Share videos to Stories instead.',
+      code: 'FEED_POSTS_PHOTO_ONLY',
+    }, 400);
+  }
+  const moderatedImageUrls = mediaApproval.assets
+    .map((asset: any) => safeMediaReference(asset.public_url) || mediaAssetPublicUrl(c.env, asset))
+    .filter(Boolean);
+  if (moderatedImageUrls.length) {
+    imageUrls = moderatedImageUrls;
+    primaryImage = imageUrls[0] || null;
+    mediaTypes = sanitizeMediaTypes(b.media_types, imageUrls.length || (primaryImage ? 1 : 0));
   }
   const explicitTags = sanitizeAutoCategoryTags([...(parseJsonArray(b.tags)), ...(parseJsonArray(b.hashtags))]);
   const mediaTypeHint = mediaTypes.includes('video') ? 'video' : 'image';
@@ -9243,20 +9859,20 @@ api.post('/posts', authMiddleware, async (c) => {
        display_city, display_region, display_country, display_location_label, display_location_source, display_location_visibility,
        post_type,
        place_id, place_name, place_provider, place_provider_id, place_formatted_address, place_category, place_city, place_region, place_country,
-       place_lat, place_lng, is_verified_checkin, visibility,
+       place_lat, place_lng, is_verified_checkin, visibility, moderation_status, moderation_media_ids, moderation_checked_at,
        editor_overlays, tagged_users,
        primary_category, category_confidence, category_source, category_status, category_signals_json, tags_json,
        secondary_categories_json, category_scores_json, detected_objects_json, detected_scene, place_type, user_selected_category, caption_keywords_json,
        audio_provider, audio_track_id, audio_title, audio_artist, audio_artwork_url, audio_stream_url,
        audio_start_time, audio_duration, client_request_id
      )
-     VALUES (${Array(54).fill('?').join(', ')})`
+     VALUES (${Array(57).fill('?').join(', ')})`
     ).bind(id, userId, postTitle, postContent, primaryImage, JSON.stringify(imageUrls), JSON.stringify(mediaTypes),
     JSON.stringify(backupIds), JSON.stringify(mediaDimensions), location,
     displayCity, displayRegion, displayCountry, displayLocationLabel, displayLocationSource, displayLocationVisibility,
     postType,
     placeProviderId || null, placeName || null, placeProvider, placeProviderId, placeFormattedAddress, placeCategory, placeCity, placeRegion, placeCountry,
-    placeLat, placeLng, isCheckin, visibility,
+    placeLat, placeLng, isCheckin, visibility, 'approved', JSON.stringify(mediaAssetIds), now(),
     JSON.stringify(editorOverlays), JSON.stringify(taggedUsers),
     autoCategory.primary_category, autoCategory.category_confidence, autoCategory.category_source, autoCategory.category_status, JSON.stringify(autoCategory.signals), JSON.stringify(autoCategory.tags),
     JSON.stringify(autoCategory.secondary_categories), JSON.stringify(autoCategory.category_scores), JSON.stringify(autoCategory.detected_objects),
@@ -9275,6 +9891,12 @@ api.post('/posts', authMiddleware, async (c) => {
     if (existing) return c.json({ ...postPayload(existing, [], c.env), idempotent_replay: true });
   }
   if (!inserted) return c.json({ detail: 'Could not create post. Please retry.' }, 409);
+  if (mediaAssetIds.length) {
+    const placeholders = mediaAssetIds.map(() => '?').join(', ');
+    await c.env.DB.prepare(`UPDATE media_assets SET post_id = ?, updated_at = ? WHERE user_id = ? AND id IN (${placeholders})`)
+      .bind(id, now(), userId, ...mediaAssetIds)
+      .run();
+  }
   if (placeName || placeFormattedAddress || placeProviderId) {
     await c.env.DB.prepare(
       `INSERT OR REPLACE INTO post_places
@@ -9341,7 +9963,8 @@ api.post('/posts', authMiddleware, async (c) => {
     place_lat: placeLat, place_lng: placeLng, is_verified_checkin: !!isCheckin,
     audio_provider: audioProvider, audio_track_id: audioTrackId, audio_title: audioTitle, audio_artist: audioArtist,
     audio_artwork_url: audioArtworkUrl, audio_stream_url: audioStreamUrl, audio_start_time: audioStartTime, audio_duration: audioDuration,
-    client_request_id: clientRequestId, visibility, likes_count: 0, comments_count: 0, liked_by: [], created_at: now() };
+    client_request_id: clientRequestId, visibility, moderation_status: 'approved', moderation_media_ids: JSON.stringify(mediaAssetIds),
+    likes_count: 0, comments_count: 0, liked_by: [], created_at: now() };
   return c.json(postPayload(createdPost, [], c.env));
 });
 
@@ -9353,6 +9976,7 @@ api.get('/posts/feed', authMiddleware, async (c) => {
   await ensureGovernanceSchema(c.env.DB);
   await ensurePostEditorSchema(c.env.DB);
   await ensureLocationSchema(c.env.DB);
+  await ensureMediaModerationSchema(c.env.DB);
   const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
   const limit = clampNumber(c.req.query('limit') || '20', 1, 50, 20);
   const feedSql = [
@@ -9379,6 +10003,7 @@ api.get('/posts/world-board', async (c) => {
     await ensureGovernanceSchema(c.env.DB);
     await ensurePostEditorSchema(c.env.DB);
     await ensureLocationSchema(c.env.DB);
+    await ensureMediaModerationSchema(c.env.DB);
     const limited = await enforceRateLimit(c, 'public_world_board', clientIp(c), 180, 60);
     if (limited) return limited;
     const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
@@ -9412,6 +10037,7 @@ api.get('/posts/nearby-feed', authMiddleware, async (c) => {
   await ensureGovernanceSchema(c.env.DB);
   await ensurePostEditorSchema(c.env.DB);
   await ensureLocationSchema(c.env.DB);
+  await ensureMediaModerationSchema(c.env.DB);
   const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
   const limit = clampNumber(c.req.query('limit') || '24', 1, 50, 24);
   const nearbyFeedSql = [
@@ -9433,6 +10059,7 @@ api.get('/posts/:postId', authMiddleware, async (c) => {
   const userId = getUserId(c);
   const postId = c.req.param('postId');
   await ensureLocationSchema(c.env.DB);
+  await ensureMediaModerationSchema(c.env.DB);
   const postByIdSql = [
     `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
        EXISTS (SELECT 1 FROM follows fl WHERE fl.follower_id = ? AND fl.following_id = p.user_id) AS is_following,
@@ -9453,6 +10080,7 @@ api.get('/posts/:postId', authMiddleware, async (c) => {
 api.post('/posts/:postId/like', authMiddleware, async (c) => {
   const userId = getUserId(c); const postId = c.req.param('postId');
   await ensureGovernanceSchema(c.env.DB);
+  await ensureMediaModerationSchema(c.env.DB);
   const limited = await enforceRateLimit(c, 'post_like', userId, 300, 60);
   if (limited) return limited;
   const body: any = await c.req.json().catch(() => ({}));
@@ -9613,6 +10241,7 @@ api.get('/users/:userId/posts', authMiddleware, async (c) => {
   await ensurePrivacySchema(c.env.DB);
   await ensureGovernanceSchema(c.env.DB);
   await ensurePostEditorSchema(c.env.DB);
+  await ensureMediaModerationSchema(c.env.DB);
   const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
   const limit = clampNumber(c.req.query('limit') || '60', 1, 100, 60);
   const owner: any = await c.env.DB.prepare('SELECT id, is_private FROM users WHERE id = ?').bind(targetId).first();
@@ -9626,7 +10255,7 @@ api.get('/users/:userId/posts', authMiddleware, async (c) => {
        (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden')) AS live_comments_count,
        (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id) AS live_saves_count
      FROM posts p JOIN users u ON p.user_id = u.id
-     WHERE p.user_id = ? AND COALESCE(p.status, 'active') != 'removed' AND ${feedPhotoPostWhere('p')} AND (
+     WHERE p.user_id = ? AND COALESCE(p.status, 'active') != 'removed' AND ${approvedPostModerationWhere('p')} AND ${feedPhotoPostWhere('p')} AND (
        COALESCE(p.visibility, 'public') = 'public'
        OR p.user_id = ?
        OR (COALESCE(p.visibility, 'public') = 'followers' AND (
@@ -9650,6 +10279,7 @@ api.post('/posts/:postId/comments', authMiddleware, async (c) => {
     await ensureGovernanceSchema(c.env.DB);
     await ensureCommentSchema(c.env.DB);
     await ensureReliabilitySchema(c.env.DB);
+    await ensureMediaModerationSchema(c.env.DB);
     const userId = getUserId(c);
     const limited = await enforceRateLimit(c, 'comment_create', userId, 40, 60);
     if (limited) return limited;
@@ -11063,6 +11693,7 @@ api.get('/library/saved', authMiddleware, async (c) => {
 api.post('/library/save/:postId', authMiddleware, async (c) => {
   const userId = getUserId(c);
   await ensureGovernanceSchema(c.env.DB);
+  await ensureMediaModerationSchema(c.env.DB);
   const limited = await enforceRateLimit(c, 'save_post', userId, 240, 60);
   if (limited) return limited;
   const postId = c.req.param('postId');
@@ -11860,6 +12491,7 @@ api.get('/discover', authMiddleware, async (c) => {
   await ensurePostEditorSchema(c.env.DB);
   await ensureLocationSchema(c.env.DB);
   await ensureAutoCategorySchema(c.env.DB);
+  await ensureMediaModerationSchema(c.env.DB);
   const rawCategory = c.req.query('category') || 'all';
   const category = normalizeDiscoverCategory(rawCategory, true);
   if (!category) return c.json({ detail: 'Unknown Discover category.' }, 400);
@@ -11903,6 +12535,7 @@ api.get('/discover/trending', authMiddleware, async (c) => {
     await ensureGovernanceSchema(c.env.DB);
     await ensurePostEditorSchema(c.env.DB);
     await ensureLocationSchema(c.env.DB);
+    await ensureMediaModerationSchema(c.env.DB);
   const limit = clampNumber(c.req.query('limit') || '20', 1, 40, 20);
   const discoverTrendingSql = [
     `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
@@ -11924,6 +12557,7 @@ api.get('/discover/search', authMiddleware, async (c) => {
   await ensureGovernanceSchema(c.env.DB);
   await ensurePostEditorSchema(c.env.DB);
   await ensureLocationSchema(c.env.DB);
+  await ensureMediaModerationSchema(c.env.DB);
   const q = cleanText(c.req.query('q'), 80);
   if (q.length < 2) return c.json({ posts: [], users: [] });
   const limit = clampNumber(c.req.query('limit') || '20', 1, 30, 20);
@@ -11948,9 +12582,205 @@ api.get('/discover/suggested-users', authMiddleware, async (c) => {
   return c.json((r.results as any[]).map((user) => safeUserPayload(user)));
 });
 
+// Pre-publish media moderation upload flow.
+api.post('/media/upload-intent', authMiddleware, async (c) => {
+  const bodyTooLarge = rejectLargeRequest(c, 24_000);
+  if (bodyTooLarge) return bodyTooLarge;
+  await ensureMediaModerationSchema(c.env.DB);
+  const userId = getUserId(c);
+  const limited = await enforceRateLimit(c, 'media_upload_intent', userId, 80, 60);
+  if (limited) return limited;
+  const dailyLimited = await enforceRateLimit(c, 'media_upload_intent_daily', userId, 300, 86400);
+  if (dailyLimited) return dailyLimited;
+
+  const body: any = await c.req.json().catch(() => ({}));
+  const validation = validatePrePublishUploadInput(c.env, body);
+  if (!validation.ok) return c.json({ detail: validation.detail, code: validation.code }, validation.status as any);
+
+  const accountId = cloudflareAccountId(c.env);
+  const token = validation.mediaType === 'video' ? cloudflareStreamToken(c.env) : cloudflareImagesToken(c.env);
+  if (!accountId || !token) {
+    return c.json({ detail: validation.mediaType === 'video' ? 'Video upload is not configured.' : 'Image upload is not configured.' }, 503);
+  }
+
+  const sha256Hash = cleanText(body.sha256_hash || body.sha256Hash, 80).toLowerCase();
+  if (sha256Hash && !/^[a-f0-9]{64}$/.test(sha256Hash)) {
+    return c.json({ detail: 'Invalid upload checksum.', code: 'invalid_checksum' }, 400);
+  }
+  if (sha256Hash) {
+    const duplicate: any = await c.env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM media_assets WHERE user_id = ? AND sha256_hash = ? AND created_at > datetime('now', '-24 hours')"
+    ).bind(userId, sha256Hash).first();
+    if (Number(duplicate?.count || 0) >= 12) {
+      return c.json({ detail: 'Upload limit reached for this file. Try again later.', code: 'duplicate_upload_limit' }, 429);
+    }
+  }
+
+  let uploadUrl = '';
+  let storageKey = '';
+  let storageProvider: 'images' | 'stream' = 'images';
+  if (validation.mediaType === 'image') {
+    const formData = new FormData();
+    formData.append('requireSignedURLs', 'true');
+    formData.append('metadata', JSON.stringify({
+      userId,
+      filename: validation.filename,
+      mimeType: validation.mimeType,
+      moderation: 'pre_publish',
+      source: 'captro_ios',
+    }));
+    const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/images/v2/direct_upload`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: formData,
+    });
+    const data: any = await res.json().catch(() => ({}));
+    if (!data.success) {
+      console.warn(JSON.stringify({ event: 'cf_images_upload_intent_failed', status: res.status, code: cleanText(data.errors?.[0]?.code, 80) }));
+      return c.json({ detail: 'Could not prepare image upload.', code: 'upload_intent_failed' }, 502);
+    }
+    uploadUrl = String(data.result?.uploadURL || '');
+    storageKey = cleanText(data.result?.id, 220);
+    storageProvider = 'images';
+  } else {
+    const maxDurationSeconds = clampNumber(body.duration_seconds || body.durationSeconds || 60, 1, 60, 60);
+    const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/direct_upload`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        maxDurationSeconds,
+        creator: userId,
+        requireSignedURLs: true,
+        meta: { userId, moderation: 'pre_publish', filename: validation.filename },
+      }),
+    });
+    const data: any = await res.json().catch(() => ({}));
+    if (!data.success) {
+      console.warn(JSON.stringify({ event: 'cf_stream_upload_intent_failed', status: res.status, code: cleanText(data.errors?.[0]?.code, 80) }));
+      return c.json({ detail: 'Could not prepare video upload.', code: 'upload_intent_failed' }, 502);
+    }
+    uploadUrl = String(data.result?.uploadURL || '');
+    storageKey = cleanText(data.result?.uid, 220);
+    storageProvider = 'stream';
+  }
+
+  if (!uploadUrl || !storageKey) return c.json({ detail: 'Could not prepare upload.', code: 'upload_intent_failed' }, 502);
+  const mediaId = uuid();
+  const ts = now();
+  await c.env.DB.prepare(
+    `INSERT INTO media_assets (
+       id, user_id, media_type, storage_provider, storage_key, public_url, private_url,
+       mime_type, file_size, sha256_hash, width, height, duration_seconds,
+       upload_status, moderation_status, created_at, updated_at
+     ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, 'uploading', 'uploading', ?, ?)`
+  ).bind(
+    mediaId,
+    userId,
+    validation.mediaType,
+    storageProvider,
+    storageKey,
+    `${storageProvider}:${storageKey}`,
+    validation.mimeType,
+    validation.fileSize,
+    sha256Hash,
+    body.width == null ? null : clampNumber(body.width, 1, 10000, 0),
+    body.height == null ? null : clampNumber(body.height, 1, 10000, 0),
+    body.duration_seconds == null && body.durationSeconds == null ? null : clampFloat(body.duration_seconds ?? body.durationSeconds, 0, 3600, 0),
+    ts,
+    ts,
+  ).run();
+  await insertModerationEvent(c.env.DB, mediaId, 'upload_intent_created', {
+    actorUserId: userId,
+    reason: validation.mediaType,
+    afterState: { storage_provider: storageProvider, mime_type: validation.mimeType, file_size: validation.fileSize },
+    requestId: c.get?.('requestId') || '',
+  });
+  return c.json({
+    media_id: mediaId,
+    upload_url: uploadUrl,
+    upload_method: storageProvider === 'stream' ? 'cloudflare_stream_direct' : 'cloudflare_images_direct',
+    storage_provider: storageProvider,
+    media_type: validation.mediaType,
+    upload_status: 'uploading',
+    moderation_status: 'uploading',
+  }, 201);
+});
+
+api.post('/media/complete', authMiddleware, async (c) => {
+  const bodyTooLarge = rejectLargeRequest(c, 32_000);
+  if (bodyTooLarge) return bodyTooLarge;
+  await ensureMediaModerationSchema(c.env.DB);
+  const userId = getUserId(c);
+  const limited = await enforceRateLimit(c, 'media_upload_complete', userId, 120, 60);
+  if (limited) return limited;
+  const body: any = await c.req.json().catch(() => ({}));
+  const mediaId = publicId(body.media_id || body.mediaId || body.id, 160);
+  if (!mediaId) return c.json({ detail: 'Media id is required.', code: 'media_id_required' }, 400);
+
+  const asset: any = await c.env.DB.prepare('SELECT * FROM media_assets WHERE id = ? AND user_id = ? LIMIT 1').bind(mediaId, userId).first();
+  if (!asset) return c.json({ detail: 'Upload not found.', code: 'media_not_found' }, 404);
+  const currentStatus = normalizeMediaModerationStatus(asset.moderation_status);
+  if (currentStatus === 'approved' || currentStatus === 'review_required' || currentStatus === 'rejected') {
+    return c.json({ media_id: mediaId, upload_status: cleanText(asset.upload_status, 40), moderation_status: currentStatus });
+  }
+
+  const sha256Hash = cleanText(body.sha256_hash || body.sha256Hash || asset.sha256_hash, 80).toLowerCase();
+  if (sha256Hash && !/^[a-f0-9]{64}$/.test(sha256Hash)) return c.json({ detail: 'Invalid upload checksum.', code: 'invalid_checksum' }, 400);
+  const ts = now();
+  await c.env.DB.prepare(
+    `UPDATE media_assets
+     SET upload_status = 'uploaded', moderation_status = 'pending_moderation',
+         sha256_hash = COALESCE(NULLIF(?, ''), sha256_hash),
+         file_size = COALESCE(NULLIF(?, 0), file_size),
+         width = COALESCE(?, width),
+         height = COALESCE(?, height),
+         duration_seconds = COALESCE(?, duration_seconds),
+         updated_at = ?
+     WHERE id = ? AND user_id = ?`
+  ).bind(
+    sha256Hash,
+    Math.max(0, Math.round(Number(body.file_size || body.fileSize || 0))),
+    body.width == null ? null : clampNumber(body.width, 1, 10000, 0),
+    body.height == null ? null : clampNumber(body.height, 1, 10000, 0),
+    body.duration_seconds == null && body.durationSeconds == null ? null : clampFloat(body.duration_seconds ?? body.durationSeconds, 0, 3600, 0),
+    ts,
+    mediaId,
+    userId,
+  ).run();
+  await insertModerationEvent(c.env.DB, mediaId, 'upload_completed', {
+    actorUserId: userId,
+    beforeState: { upload_status: asset.upload_status, moderation_status: asset.moderation_status },
+    afterState: { upload_status: 'uploaded', moderation_status: 'pending_moderation' },
+    requestId: c.get?.('requestId') || '',
+  });
+  const jobId = await createMediaModerationJob(c, mediaId, userId, cleanMultilineText(body.caption || body.content || body.title || '', 1000));
+  return c.json({
+    media_id: mediaId,
+    job_id: jobId,
+    upload_status: 'uploaded',
+    moderation_status: 'pending_moderation',
+    message: 'Checking your upload before posting...',
+  });
+});
+
+api.get('/media/:mediaId/status', authMiddleware, async (c) => {
+  await ensureMediaModerationSchema(c.env.DB);
+  const userId = getUserId(c);
+  const mediaId = publicId(c.req.param('mediaId'), 160);
+  const asset: any = await c.env.DB.prepare(
+    'SELECT id, media_type, upload_status, moderation_status, rejection_code, rejection_message, public_url, created_at, updated_at FROM media_assets WHERE id = ? AND user_id = ? LIMIT 1'
+  ).bind(mediaId, userId).first();
+  if (!asset) return c.json({ detail: 'Upload not found.' }, 404);
+  return c.json({
+    ...asset,
+    public_url: normalizeMediaModerationStatus(asset.moderation_status) === 'approved' ? safeMediaReference(asset.public_url) : '',
+  });
+});
+
 // Uploads (Cloudflare Images + Stream direct upload)
 api.post('/upload/image-direct', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  await ensureMediaModerationSchema(c.env.DB);
   const limited = await enforceRateLimit(c, 'upload_image_direct', userId, 60, 60);
   if (limited) return limited;
   const dailyLimited = await enforceRateLimit(c, 'upload_image_direct_daily', userId, 250, 86400);
@@ -11967,8 +12797,8 @@ api.post('/upload/image-direct', authMiddleware, async (c) => {
     return c.json({ detail: 'Unsupported image type. Use JPG, PNG, or WebP.' }, 400);
   }
   const formData = new FormData();
-  formData.append('requireSignedURLs', 'false');
-  formData.append('metadata', JSON.stringify({ userId, filename, mimeType: mimeType || 'image/jpeg', source: 'captro_ios' }));
+  formData.append('requireSignedURLs', 'true');
+  formData.append('metadata', JSON.stringify({ userId, filename, mimeType: mimeType || 'image/jpeg', source: 'captro_ios', moderation: 'pre_publish' }));
   const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/images/v2/direct_upload`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}` },
@@ -11980,18 +12810,35 @@ api.post('/upload/image-direct', authMiddleware, async (c) => {
     return c.json({ detail: 'Failed to get upload URL' }, 500);
   }
   const imageId = cleanText(data.result?.id, 180);
-  const deliveryUrl = cloudflareImageDeliveryUrl(c.env, imageId);
+  const mediaId = uuid();
+  const ts = now();
+  await c.env.DB.prepare(
+    `INSERT INTO media_assets (
+       id, user_id, media_type, storage_provider, storage_key, public_url, private_url,
+       mime_type, file_size, sha256_hash, upload_status, moderation_status, created_at, updated_at
+     ) VALUES (?, ?, 'image', 'images', ?, NULL, ?, ?, 0, '', 'uploading', 'uploading', ?, ?)`
+  ).bind(mediaId, userId, imageId, `images:${imageId}`, mimeType || 'image/jpeg', ts, ts).run();
+  await insertModerationEvent(c.env.DB, mediaId, 'upload_intent_created', {
+    actorUserId: userId,
+    reason: 'legacy_image_direct',
+    afterState: { storage_provider: 'images', mime_type: mimeType || 'image/jpeg' },
+    requestId: c.get?.('requestId') || '',
+  });
   return c.json({
     upload_url: data.result.uploadURL,
+    media_id: mediaId,
     image_id: imageId,
     id: imageId,
-    url: deliveryUrl,
+    url: '',
+    moderation_status: 'uploading',
+    requires_moderation: true,
     source: 'cloudflare_images_direct',
   });
 });
 
 api.post('/upload/video-direct', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  await ensureMediaModerationSchema(c.env.DB);
   const limited = await enforceRateLimit(c, 'upload_video_direct', userId, 40, 60);
   if (limited) return limited;
   const dailyLimited = await enforceRateLimit(c, 'upload_video_direct_daily', userId, 100, 86400);
@@ -12001,10 +12848,25 @@ api.post('/upload/video-direct', authMiddleware, async (c) => {
   if (!accountId || !token) {
     return c.json({ detail: 'Video upload is not configured.' }, 503);
   }
-  const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/direct_upload`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ maxDurationSeconds: 60, creator: userId }) });
+  const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/direct_upload`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ maxDurationSeconds: 60, creator: userId, requireSignedURLs: true, meta: { userId, moderation: 'pre_publish' } }) });
   const data: any = await res.json();
   if (!data.success) return c.json({ detail: 'Failed to get upload URL' }, 500);
-  return c.json({ upload_url: data.result.uploadURL, video_uid: data.result.uid });
+  const videoUid = cleanText(data.result.uid, 220);
+  const mediaId = uuid();
+  const ts = now();
+  await c.env.DB.prepare(
+    `INSERT INTO media_assets (
+       id, user_id, media_type, storage_provider, storage_key, public_url, private_url,
+       mime_type, file_size, sha256_hash, upload_status, moderation_status, created_at, updated_at
+     ) VALUES (?, ?, 'video', 'stream', ?, NULL, ?, 'video/mp4', 0, '', 'uploading', 'uploading', ?, ?)`
+  ).bind(mediaId, userId, videoUid, `stream:${videoUid}`, ts, ts).run();
+  await insertModerationEvent(c.env.DB, mediaId, 'upload_intent_created', {
+    actorUserId: userId,
+    reason: 'legacy_video_direct',
+    afterState: { storage_provider: 'stream' },
+    requestId: c.get?.('requestId') || '',
+  });
+  return c.json({ upload_url: data.result.uploadURL, video_uid: videoUid, media_id: mediaId, moderation_status: 'uploading', requires_moderation: true });
 });
 
 // Stripe billing
@@ -13553,6 +14415,63 @@ function adminPostPayload(row: any, env: Env) {
   };
 }
 
+function adminMediaModerationPayload(row: any, env: Env) {
+  const result = row.result_raw_result ? parseJsonObject(row.result_raw_result) : {};
+  const reasons = parseJsonArray(row.result_reasons);
+  return {
+    id: row.id,
+    user_id: row.user_id,
+    user: {
+      id: row.user_id,
+      username: publicUsernameFor({ username: row.user_username }),
+      full_name: cleanText(row.user_full_name, 120),
+      email: publicUserEmail(row.user_email),
+      profile_image: safeMediaReference(row.user_profile_image),
+    },
+    post_id: row.post_id || null,
+    media_type: normalizeMediaAssetType(row.media_type) || 'image',
+    storage_provider: cleanText(row.storage_provider, 40),
+    storage_key: cleanText(row.storage_key, 220),
+    preview_url: mediaAssetPreviewUrl(env, row),
+    public_url: normalizeMediaModerationStatus(row.moderation_status) === 'approved' ? (safeMediaReference(row.public_url) || mediaAssetPublicUrl(env, row)) : '',
+    private_reference: cleanText(row.private_url, 260),
+    mime_type: cleanText(row.mime_type, 120),
+    file_size: Number(row.file_size || 0),
+    sha256_hash: cleanText(row.sha256_hash, 80),
+    width: row.width == null ? null : Number(row.width),
+    height: row.height == null ? null : Number(row.height),
+    duration_seconds: row.duration_seconds == null ? null : Number(row.duration_seconds),
+    upload_status: cleanText(row.upload_status, 40),
+    moderation_status: normalizeMediaModerationStatus(row.moderation_status),
+    rejection_code: cleanText(row.rejection_code, 120),
+    rejection_message: cleanMultilineText(row.rejection_message, 500),
+    scores: {
+      adult_explicit_score: clampFloat(row.adult_explicit_score, 0, 1, 0),
+      nudity_score: clampFloat(row.nudity_score, 0, 1, 0),
+      sexual_context_score: clampFloat(row.sexual_context_score, 0, 1, 0),
+      sexual_solicitation_score: clampFloat(row.sexual_solicitation_score, 0, 1, 0),
+      minor_safety_risk_score: clampFloat(row.minor_safety_risk_score, 0, 1, 0),
+      violence_score: clampFloat(row.violence_score, 0, 1, 0),
+      gore_score: clampFloat(row.gore_score, 0, 1, 0),
+      weapon_score: clampFloat(row.weapon_score, 0, 1, 0),
+      hate_symbol_score: clampFloat(row.hate_symbol_score, 0, 1, 0),
+      ai_generated_likelihood: clampFloat(row.ai_generated_likelihood, 0, 1, 0),
+      spam_scam_score: clampFloat(row.spam_scam_score, 0, 1, 0),
+      link_risk_score: clampFloat(row.link_risk_score, 0, 1, 0),
+      confidence: clampFloat(row.confidence, 0, 1, 0),
+      malware_status: cleanText(row.malware_status || 'unknown', 40),
+    },
+    model_name: cleanText(row.model_name, 160),
+    decision: cleanText(row.decision, 40),
+    reasons,
+    raw_result: scrubLogMetadata(result),
+    caption: cleanMultilineText(row.post_content || row.post_title || '', 1000),
+    created_at: row.created_at || '',
+    updated_at: row.updated_at || '',
+    result_created_at: row.result_created_at || null,
+  };
+}
+
 function adminCommentPayload(row: any) {
   return {
     id: row.id,
@@ -13804,6 +14723,7 @@ api.get('/admin/health', authMiddleware, async (c) => {
   try {
     await requireAdminRole(c, 'admin:read');
     await ensureAdminModerationSchema(c.env.DB);
+    await ensureMediaModerationSchema(c.env.DB);
     const db: any = await c.env.DB.prepare('SELECT 1 AS ok').first();
     return c.json({
       status: 'ok',
@@ -13813,6 +14733,133 @@ api.get('/admin/health', authMiddleware, async (c) => {
       commit: c.env.SOURCE_COMMIT || '',
       database: Number(db?.ok || 0) === 1 ? 'ok' : 'unknown',
     });
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+api.get('/admin/moderation', authMiddleware, async (c) => {
+  try {
+    await requireAdminRole(c, 'content:read');
+    await ensureMediaModerationSchema(c.env.DB);
+    const { limit, offset } = adminPageParams(c, 40, 100);
+    const statusParam = cleanText(c.req.query('status') || '', 40);
+    const status = statusParam ? normalizeMediaModerationStatus(statusParam) : '';
+    const mediaType = normalizeMediaAssetType(c.req.query('media_type') || c.req.query('type'));
+    const search = searchPattern(c.req.query('search'));
+    const conditions = ['1 = 1'];
+    const binds: any[] = [];
+    if (status) {
+      conditions.push('ma.moderation_status = ?');
+      binds.push(status);
+    } else {
+      conditions.push("ma.moderation_status IN ('review_required', 'failed')");
+    }
+    if (mediaType) {
+      conditions.push('ma.media_type = ?');
+      binds.push(mediaType);
+    }
+    if (search) {
+      conditions.push('(LOWER(ma.id) LIKE ? OR LOWER(ma.user_id) LIKE ? OR LOWER(u.username) LIKE ? OR LOWER(u.full_name) LIKE ? OR LOWER(ma.sha256_hash) LIKE ?)');
+      binds.push(search, search, search, search, search);
+    }
+    const rows = await c.env.DB.prepare(`
+      SELECT ma.*, u.username AS user_username, u.full_name AS user_full_name, u.email AS user_email, u.profile_image AS user_profile_image,
+             p.title AS post_title, p.content AS post_content,
+             mr.model_name, mr.adult_explicit_score, mr.nudity_score, mr.sexual_context_score,
+             mr.sexual_solicitation_score, mr.minor_safety_risk_score, mr.violence_score,
+             mr.gore_score, mr.weapon_score, mr.hate_symbol_score, mr.ai_generated_likelihood,
+             mr.spam_scam_score, mr.malware_status, mr.link_risk_score, mr.confidence,
+             mr.decision, mr.reasons AS result_reasons, mr.raw_result AS result_raw_result, mr.created_at AS result_created_at
+      FROM media_assets ma
+      LEFT JOIN users u ON u.id = ma.user_id
+      LEFT JOIN posts p ON p.id = ma.post_id
+      LEFT JOIN moderation_results mr ON mr.id = (
+        SELECT id FROM moderation_results latest WHERE latest.media_id = ma.id ORDER BY latest.created_at DESC LIMIT 1
+      )
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY CASE ma.moderation_status WHEN 'review_required' THEN 0 WHEN 'failed' THEN 1 WHEN 'pending_moderation' THEN 2 ELSE 3 END, ma.created_at DESC
+      LIMIT ? OFFSET ?
+    `).bind(...binds, limit, offset).all();
+    return c.json({
+      results: (rows.results as any[]).map((row) => adminMediaModerationPayload(row, c.env)),
+      pagination: { limit, offset, next_offset: offset + limit },
+    });
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+api.post('/admin/moderation/:id/approve', authMiddleware, async (c) => {
+  try {
+    const admin = await requireAdminRole(c, 'content:write');
+    const limited = await requireAdminWriteRateLimit(c, admin, 'admin_media_moderation_approve');
+    if (limited) return limited;
+    await ensureMediaModerationSchema(c.env.DB);
+    const mediaId = publicId(c.req.param('id'), 160);
+    const body: any = await c.req.json().catch(() => ({}));
+    const unknown = rejectUnknownFields(c, body, ['reason', 'note']);
+    if (unknown) return unknown;
+    const reason = cleanMultilineText(body.reason || 'Approved by admin review', 500);
+    const note = cleanMultilineText(body.note || '', 1000);
+    const before: any = await c.env.DB.prepare('SELECT * FROM media_assets WHERE id = ? LIMIT 1').bind(mediaId).first();
+    if (!before) return c.json({ detail: 'Media asset not found.' }, 404);
+    const publicUrl = mediaAssetPublicUrl(c.env, before);
+    const ts = now();
+    await c.env.DB.prepare(
+      "UPDATE media_assets SET moderation_status = 'approved', public_url = COALESCE(NULLIF(?, ''), public_url), rejection_code = '', rejection_message = '', updated_at = ? WHERE id = ?"
+    ).bind(publicUrl, ts, mediaId).run();
+    await insertModerationEvent(c.env.DB, mediaId, 'admin_approved', {
+      actorUserId: admin.userId,
+      actorRole: admin.role,
+      decision: 'approved',
+      reason,
+      note,
+      beforeState: before,
+      afterState: { moderation_status: 'approved', public_url: publicUrl },
+      requestId: c.get?.('requestId') || '',
+    });
+    await writeAdminAuditLog(c, admin, { actionType: 'media_approved', targetType: 'media_asset', targetId: mediaId, targetUserId: before.user_id, reason, note, beforeState: { moderation_status: before.moderation_status }, afterState: { moderation_status: 'approved' } });
+    const updated: any = await c.env.DB.prepare('SELECT * FROM media_assets WHERE id = ? LIMIT 1').bind(mediaId).first();
+    return c.json({ approved: true, media: adminMediaModerationPayload(updated, c.env) });
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+api.post('/admin/moderation/:id/reject', authMiddleware, async (c) => {
+  try {
+    const admin = await requireAdminRole(c, 'content:write');
+    const limited = await requireAdminWriteRateLimit(c, admin, 'admin_media_moderation_reject');
+    if (limited) return limited;
+    await ensureMediaModerationSchema(c.env.DB);
+    const mediaId = publicId(c.req.param('id'), 160);
+    const body: any = await c.req.json().catch(() => ({}));
+    const unknown = rejectUnknownFields(c, body, ['reason', 'note', 'rejection_code']);
+    if (unknown) return unknown;
+    const reason = cleanMultilineText(body.reason, 500);
+    if (!reason) return c.json({ detail: 'Reason is required.' }, 400);
+    const note = cleanMultilineText(body.note || '', 1000);
+    const rejectionCode = cleanText(body.rejection_code || 'admin_rejected', 120);
+    const before: any = await c.env.DB.prepare('SELECT * FROM media_assets WHERE id = ? LIMIT 1').bind(mediaId).first();
+    if (!before) return c.json({ detail: 'Media asset not found.' }, 404);
+    const userMessage = "This upload can't be posted because it may break Captro's safety rules.";
+    await c.env.DB.prepare(
+      "UPDATE media_assets SET moderation_status = 'rejected', public_url = NULL, rejection_code = ?, rejection_message = ?, updated_at = ? WHERE id = ?"
+    ).bind(rejectionCode, userMessage, now(), mediaId).run();
+    await insertModerationEvent(c.env.DB, mediaId, 'admin_rejected', {
+      actorUserId: admin.userId,
+      actorRole: admin.role,
+      decision: 'rejected',
+      reason,
+      note,
+      beforeState: before,
+      afterState: { moderation_status: 'rejected', rejection_code: rejectionCode },
+      requestId: c.get?.('requestId') || '',
+    });
+    await writeAdminAuditLog(c, admin, { actionType: 'media_rejected', targetType: 'media_asset', targetId: mediaId, targetUserId: before.user_id, reason, note, beforeState: { moderation_status: before.moderation_status }, afterState: { moderation_status: 'rejected', rejection_code: rejectionCode } });
+    const updated: any = await c.env.DB.prepare('SELECT * FROM media_assets WHERE id = ? LIMIT 1').bind(mediaId).first();
+    return c.json({ rejected: true, media: adminMediaModerationPayload(updated, c.env) });
   } catch (error: any) {
     return governanceError(c, error);
   }
@@ -16433,4 +17480,25 @@ api.get('/admin/stats', authMiddleware, async (c) => {
 // Mount API routes on app
 app.route('/api', api);
 
-export default app;
+async function handleMediaModerationQueue(batch: MessageBatch<MediaModerationJobMessage>, env: Env, _ctx: ExecutionContext) {
+  for (const message of batch.messages) {
+    try {
+      await processMediaModerationJob(env, message.body, 'queue');
+      message.ack();
+    } catch (error: any) {
+      console.warn(JSON.stringify({
+        event: 'media_moderation_queue_failed',
+        code: getErrorCode(error).slice(0, 180),
+        media_id: publicId(message.body?.mediaId || '', 160),
+      }));
+      message.retry();
+    }
+  }
+}
+
+export default {
+  fetch(request: Request, env: Env, ctx: ExecutionContext) {
+    return app.fetch(request, env, ctx);
+  },
+  queue: handleMediaModerationQueue,
+};

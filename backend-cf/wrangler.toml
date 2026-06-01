@@ -36,6 +36,15 @@ id = "cecde60b06c24da8abfa01a617aac9eb"
 binding = "MEDIA_BACKUP"
 bucket_name = "flames-up-media-backup"
 
+[[queues.producers]]
+binding = "MEDIA_MODERATION_QUEUE"
+queue = "captro-media-moderation"
+
+[[queues.consumers]]
+queue = "captro-media-moderation"
+max_batch_size = 5
+max_batch_timeout = 30
+
 [env.production]
 name = "flames-up-api"
 
@@ -70,3 +79,12 @@ id = "cecde60b06c24da8abfa01a617aac9eb"
 [[env.production.r2_buckets]]
 binding = "MEDIA_BACKUP"
 bucket_name = "flames-up-media-backup"
+
+[[env.production.queues.producers]]
+binding = "MEDIA_MODERATION_QUEUE"
+queue = "captro-media-moderation"
+
+[[env.production.queues.consumers]]
+queue = "captro-media-moderation"
+max_batch_size = 5
+max_batch_timeout = 30
