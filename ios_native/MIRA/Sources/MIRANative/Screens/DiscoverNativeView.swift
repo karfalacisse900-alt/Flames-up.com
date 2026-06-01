@@ -316,6 +316,8 @@ public struct DiscoverNativeView: View {
   @State private var reportTarget: MIRAReportTarget?
   @State private var reportSourcePost: MIRAPost?
   @State private var isReportSheetPresented = false
+  @State private var singlePhotoPreviewPost: MIRAPost?
+  @State private var isSinglePhotoPreviewPresented = false
   @EnvironmentObject private var localization: MIRALocalization
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -349,7 +351,7 @@ public struct DiscoverNativeView: View {
       .background(MIRATheme.Color.appBackground)
       .miraScreenEnter(.tab)
       .toolbar(.hidden, for: .navigationBar)
-      .toolbar((selectedStoryGroup == nil && !isReportSheetPresented) ? .visible : .hidden, for: .tabBar)
+      .toolbar((selectedStoryGroup == nil && !isReportSheetPresented && !isSinglePhotoPreviewPresented) ? .visible : .hidden, for: .tabBar)
       .miraStatusBarHidden(selectedStoryGroup != nil)
       .task { await model.load() }
       .onReceive(NotificationCenter.default.publisher(for: .miraPostEngagementDidChange)) { notification in
@@ -375,6 +377,28 @@ public struct DiscoverNativeView: View {
             }
           }
         )
+      }
+      .miraBottomSheet(
+        isPresented: $isSinglePhotoPreviewPresented,
+        preferredHeightFraction: 0.78,
+        maxHeight: 720,
+        onDismissed: { singlePhotoPreviewPost = nil }
+      ) { dismissPreview in
+        if let post = singlePhotoPreviewPost {
+          DiscoverSinglePhotoPreviewSheet(
+            post: post,
+            api: model.api,
+            onClose: dismissPreview,
+            onReportComment: { comment in
+              dismissPreview()
+              DispatchQueue.main.asyncAfter(deadline: .now() + MIRATransitionTiming.sheetClose) {
+                presentReport(for: comment)
+              }
+            }
+          )
+        } else {
+          Color.clear
+        }
       }
       .miraBottomSheet(
         isPresented: $isReportSheetPresented,
@@ -440,6 +464,22 @@ public struct DiscoverNativeView: View {
     }
   }
 
+  private func presentReport(for comment: MIRAComment) {
+    reportSourcePost = nil
+    reportTarget = MIRAReportTarget(
+      targetType: "comment",
+      targetId: comment.id,
+      ownerUserId: comment.userId,
+      title: "Report comment",
+      subtitle: comment.text
+    )
+    DispatchQueue.main.async {
+      withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
+        isReportSheetPresented = true
+      }
+    }
+  }
+
   private func handleReportResult(_ result: MIRAReportResult) {
     guard let post = reportSourcePost else { return }
     if result.blocked, let userId = post.userId {
@@ -484,17 +524,39 @@ public struct DiscoverNativeView: View {
       } else {
         LazyVGrid(columns: galleryGridColumns, spacing: 1) {
           ForEach(filteredGalleryPosts) { post in
-            NavigationLink(destination: DiscoverPostDetailNativeView(post: post, api: model.api).miraHideTabBarOnAppear()) {
-              DiscoverPostGalleryTile(post: post)
-            }
-            .buttonStyle(.plain)
-            .contextMenu {
-              discoverPostActions(post)
+            if shouldOpenSinglePhotoPreview(post) {
+              Button {
+                CaptroHaptics.light()
+                singlePhotoPreviewPost = post
+                withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
+                  isSinglePhotoPreviewPresented = true
+                }
+              } label: {
+                DiscoverPostGalleryTile(post: post)
+              }
+              .buttonStyle(.plain)
+              .contextMenu {
+                discoverPostActions(post)
+              }
+            } else {
+              NavigationLink(destination: DiscoverPostDetailNativeView(post: post, api: model.api).miraHideTabBarOnAppear()) {
+                DiscoverPostGalleryTile(post: post)
+              }
+              .buttonStyle(.plain)
+              .contextMenu {
+                discoverPostActions(post)
+              }
             }
           }
         }
       }
     }
+  }
+
+  private func shouldOpenSinglePhotoPreview(_ post: MIRAPost) -> Bool {
+    guard !post.containsVideoMedia else { return false }
+    let mediaCount = max(post.feedMediaURLs.count, post.mediaURLs.count)
+    return mediaCount <= 1
   }
 
   @ViewBuilder
@@ -617,6 +679,231 @@ public struct DiscoverNativeView: View {
       .padding(.top, 4)
       .padding(.bottom, 2)
     }
+  }
+}
+
+private struct DiscoverSinglePhotoPreviewSheet: View {
+  @StateObject private var model: PostDetailModel
+  @State private var isCommentsPresented = false
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  let onClose: () -> Void
+  let onReportComment: (MIRAComment) -> Void
+
+  init(post: MIRAPost, api: MIRAAPIClient, onClose: @escaping () -> Void, onReportComment: @escaping (MIRAComment) -> Void) {
+    _model = StateObject(wrappedValue: PostDetailModel(post: post, api: api))
+    self.onClose = onClose
+    self.onReportComment = onReportComment
+  }
+
+  var body: some View {
+    NavigationStack {
+      ScrollView {
+        VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
+          sheetChrome
+
+          if let mediaURL {
+            GeometryReader { proxy in
+              let width = proxy.size.width
+              RemoteMediaView(
+                url: mediaURL,
+                isVideo: false,
+                placeholderURL: placeholderURL,
+                fallbackURL: fallbackURL(for: mediaURL),
+                contentMode: .fill,
+                shouldPlay: false,
+                maxPixelSize: MIRAMediaSizing.feedTargetHeight,
+                showsVideoPlaceholderIcon: false
+              )
+              .frame(width: width, height: previewHeight(for: width))
+              .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+              .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            }
+            .frame(height: previewHeight(for: UIScreen.main.bounds.width - (MIRATheme.Space.md * 2)))
+          }
+
+          previewActions
+
+          if !headlineText.isEmpty {
+            Text(headlineText)
+              .font(.system(size: 22, weight: .semibold))
+              .foregroundStyle(MIRATheme.Color.textPrimary)
+              .fixedSize(horizontal: false, vertical: true)
+          }
+
+          if !captionText.isEmpty {
+            Text(captionText)
+              .font(.system(size: 15, weight: .regular))
+              .foregroundStyle(MIRATheme.Color.textSecondary)
+              .fixedSize(horizontal: false, vertical: true)
+          }
+        }
+        .padding(MIRATheme.Space.md)
+      }
+      .scrollIndicators(.hidden)
+      .background(MIRATheme.Color.appBackground)
+      .toolbar(.hidden, for: .navigationBar)
+      .miraBottomSheet(
+        isPresented: $isCommentsPresented,
+        preferredHeightFraction: 0.72,
+        maxHeight: 640
+      ) { dismissComments in
+        DiscoverDetailCommentsSheet(
+          model: model,
+          onClose: dismissComments,
+          onReportComment: { comment in
+            dismissComments()
+            DispatchQueue.main.asyncAfter(deadline: .now() + MIRATransitionTiming.sheetClose) {
+              onReportComment(comment)
+            }
+          },
+          onBlockCommentUser: { comment in
+            dismissComments()
+            Task { await model.blockCommentAuthor(comment) }
+          }
+        )
+      }
+      .task {
+        await model.hydrateFromLocalCache()
+        await model.refreshPost()
+      }
+      .onReceive(NotificationCenter.default.publisher(for: .miraPostEngagementDidChange)) { notification in
+        guard let update = MIRAPostEngagementSync.update(from: notification) else { return }
+        model.applyEngagementUpdate(update)
+      }
+    }
+  }
+
+  private var sheetChrome: some View {
+    HStack {
+      Capsule()
+        .fill(MIRATheme.Color.textMuted.opacity(0.24))
+        .frame(width: 42, height: 5)
+      Spacer()
+      Button {
+        CaptroHaptics.light()
+        onClose()
+      } label: {
+        Image(systemName: "xmark")
+          .font(.system(size: 13, weight: .bold))
+          .foregroundStyle(MIRATheme.Color.textSecondary)
+          .frame(width: 34, height: 34)
+          .background(MIRATheme.Color.surfaceSoft)
+          .clipShape(Circle())
+      }
+      .buttonStyle(.miraPress)
+    }
+  }
+
+  private var previewActions: some View {
+    HStack(spacing: 12) {
+      if let userId = model.post.userId, !userId.isEmpty {
+        NavigationLink(destination: UserProfileNativeView(userId: userId, api: model.api).miraHideTabBarOnAppear()) {
+          authorSummary
+        }
+        .buttonStyle(.plain)
+      } else {
+        authorSummary
+      }
+
+      Spacer(minLength: 8)
+
+      Button {
+        CaptroHaptics.light()
+        Task { await model.toggleLike() }
+      } label: {
+        HStack(spacing: 7) {
+          Image(systemName: model.post.isLiked == true ? "hand.thumbsup.fill" : "hand.thumbsup")
+            .font(.system(size: 20, weight: .regular))
+          Text(compactCount(model.post.likesCount ?? 0))
+            .font(.system(size: 15, weight: .semibold))
+        }
+        .foregroundStyle(model.post.isLiked == true ? MIRATheme.Color.like : MIRATheme.Color.textPrimary)
+        .frame(minWidth: 58, minHeight: 44)
+        .contentShape(Rectangle())
+      }
+      .buttonStyle(.miraPress)
+
+      Button {
+        CaptroHaptics.light()
+        isCommentsPresented = true
+      } label: {
+        HStack(spacing: 7) {
+          Image(systemName: "bubble.right")
+            .font(.system(size: 20, weight: .regular))
+          Text(compactCount(model.post.commentsCount ?? model.comments.count))
+            .font(.system(size: 15, weight: .semibold))
+        }
+        .foregroundStyle(MIRATheme.Color.textPrimary)
+        .frame(minWidth: 58, minHeight: 44)
+        .contentShape(Rectangle())
+      }
+      .buttonStyle(.miraPress)
+    }
+  }
+
+  private var authorSummary: some View {
+    HStack(spacing: 9) {
+      RemoteAvatar(url: model.post.userProfileImage, size: 34)
+      VStack(alignment: .leading, spacing: 1) {
+        Text(model.post.authorDisplayName)
+          .font(.system(size: 14, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .lineLimit(1)
+        Text(relativeAge(model.post.createdAt))
+          .font(.system(size: 11, weight: .medium))
+          .foregroundStyle(MIRATheme.Color.textMuted)
+          .lineLimit(1)
+      }
+    }
+    .frame(minHeight: 44)
+    .contentShape(Rectangle())
+  }
+
+  private var mediaURL: String? {
+    uniqueURLs(model.post.feedMediaURLs + model.post.mediaURLs).first { !$0.isVideoURL }
+  }
+
+  private var placeholderURL: String? {
+    let current = mediaURL
+    return uniqueURLs(model.post.thumbnailMediaURLs + model.post.posterMediaURLs)
+      .first { !$0.isVideoURL && $0 != current }
+  }
+
+  private var headlineText: String {
+    (model.post.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  private var captionText: String {
+    let caption = (model.post.caption ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    let content = (model.post.content ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    return caption.isEmpty ? content : caption
+  }
+
+  private func previewHeight(for width: CGFloat) -> CGFloat {
+    let height = MIRAMediaSizing.feedHeight(for: [mediaURL ?? ""], aspectRatios: model.post.mediaHeightToWidthRatios, width: width)
+    return min(height, UIScreen.main.bounds.height * 0.66)
+  }
+
+  private func fallbackURL(for media: String) -> String? {
+    uniqueURLs(model.post.mediaURLs + model.post.feedMediaURLs)
+      .first { !$0.isVideoURL && $0 != media && $0 != placeholderURL }
+  }
+
+  private func uniqueURLs(_ values: [String]) -> [String] {
+    var seen = Set<String>()
+    return values
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { !$0.isEmpty && seen.insert($0).inserted }
+  }
+
+  private func compactCount(_ value: Int) -> String {
+    if value >= 1_000_000 {
+      return String(format: "%.1fM", Double(value) / 1_000_000)
+    }
+    if value >= 1_000 {
+      return String(format: "%.1fK", Double(value) / 1_000)
+    }
+    return "\(value)"
   }
 }
 

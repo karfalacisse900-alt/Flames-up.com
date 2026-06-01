@@ -1225,7 +1225,7 @@ private struct DiscoverDetailMediaCard: View {
   }
 }
 
-private struct DiscoverDetailCommentsSheet: View {
+struct DiscoverDetailCommentsSheet: View {
   @ObservedObject var model: PostDetailModel
   @State private var draft = ""
   @State private var isSending = false
@@ -1576,7 +1576,7 @@ private struct PostDetailCommentSkeleton: View {
   }
 }
 
-private func relativeAge(_ value: String?) -> String {
+func relativeAge(_ value: String?) -> String {
   guard let value else { return "" }
   let formatter = ISO8601DateFormatter()
   guard let date = formatter.date(from: value) else { return "" }
