@@ -255,10 +255,10 @@ public struct ProfileNativeView: View {
       }
       .miraBottomSheet(isPresented: $showEditProfile, preferredHeightFraction: 0.86) { dismissEditProfile in
         EditProfileNativeView(user: model.user, api: model.api, onCancel: dismissEditProfile) { updated in
-          dismissEditProfile()
           Task { @MainActor in
             authSession?.replaceUser(updated)
             await model.applyUpdatedUser(updated)
+            dismissEditProfile()
           }
         }
       }
@@ -1130,6 +1130,7 @@ private struct EditProfileNativeView: View {
       if let freshProfileImage = updated.profileImage, !freshProfileImage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
         await MIRAImagePrefetcher.prefetch(urls: [freshProfileImage], maxPixelSize: 420, limit: 1)
       }
+      CaptroHaptics.success()
       onSaved(updated)
     } catch {
       errorMessage = profileSaveErrorMessage(for: error)

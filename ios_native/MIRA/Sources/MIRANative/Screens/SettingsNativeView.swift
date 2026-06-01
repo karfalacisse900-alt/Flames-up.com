@@ -205,128 +205,97 @@ final class SettingsNativeModel: ObservableObject {
 public struct SettingsNativeView: View {
   @StateObject private var model: SettingsNativeModel
   @EnvironmentObject private var localization: MIRALocalization
-  @Environment(\.dismiss) private var dismiss
 
   public init(api: MIRAAPIClient, authSession: MIRAAuthSession? = nil) {
     _model = StateObject(wrappedValue: SettingsNativeModel(api: api, authSession: authSession))
   }
 
   public var body: some View {
-    VStack(spacing: 0) {
-      settingsHeader
+    ScrollView(showsIndicators: false) {
+      VStack(alignment: .leading, spacing: MIRATheme.Space.lg) {
+        settingsHero
 
-      ScrollView(showsIndicators: false) {
-        VStack(alignment: .leading, spacing: MIRATheme.Space.lg) {
-          settingsHero
-
-          if let message = model.bannerMessage {
-            SettingsBanner(message: message, isError: model.bannerIsError)
-          }
-
-          SettingsCard(title: localization.string("settings.account")) {
-            SettingsNavigationRow(
-              title: localization.string("settings.privacy"),
-              subtitle: model.isPrivate ? "Private account is on" : "Public account",
-              systemImage: "lock",
-              destination: PrivacySettingsNativeView(model: model)
-            )
-            SettingsNavigationRow(
-              title: localization.string("settings.notifications"),
-              subtitle: "Push, likes, comments, messages",
-              systemImage: "bell",
-              destination: NotificationSettingsNativeView()
-            )
-            SettingsNavigationRow(
-              title: localization.string("settings.security"),
-              subtitle: "Email, password, account actions",
-              systemImage: "shield",
-              destination: SecuritySettingsNativeView(model: model)
-            )
-          }
-
-          SettingsCard(title: localization.string("settings.preferences")) {
-            SettingsNavigationRow(
-              title: localization.string("settings.language"),
-              subtitle: languageLabel(model.language, localization: localization),
-              systemImage: "globe",
-              destination: PreferenceSettingsNativeView(model: model)
-            )
-            SettingsNavigationRow(
-              title: localization.string("settings.app_permissions"),
-              subtitle: "Camera, photos, microphone, notifications",
-              systemImage: "switch.2",
-              destination: PermissionSettingsNativeView()
-            )
-          }
-
-          SettingsCard(title: localization.string("settings.legal_safety")) {
-            SettingsNavigationRow(
-              title: localization.string("legal.terms"),
-              subtitle: "Rules for using Captro",
-              systemImage: "doc.text",
-              destination: TermsOfServiceView()
-            )
-            SettingsNavigationRow(
-              title: localization.string("legal.privacy"),
-              subtitle: "How Captro handles data",
-              systemImage: "hand.raised",
-              destination: PrivacyPolicyView()
-            )
-            SettingsNavigationRow(
-              title: localization.string("legal.community"),
-              subtitle: "Posting, chat, and safety rules",
-              systemImage: "person.2",
-              destination: CommunityGuidelinesView()
-            )
-            SettingsNavigationRow(
-              title: localization.string("legal.safety"),
-              subtitle: "Report, block, and stay safe",
-              systemImage: "shield.lefthalf.filled",
-              destination: SafetyReportingView()
-            )
-          }
-
-          SettingsCard(title: localization.string("settings.support")) {
-            SettingsLinkRow(title: "Contact support", subtitle: "karfalacisse900@gmail.com", systemImage: "envelope", url: URL(string: "mailto:karfalacisse900@gmail.com")!)
-          }
+        if let message = model.bannerMessage {
+          SettingsBanner(message: message, isError: model.bannerIsError)
         }
-        .padding(.horizontal, MIRATheme.Space.md)
-        .padding(.top, MIRATheme.Space.md)
-        .padding(.bottom, MIRATheme.Space.xxl)
+
+        SettingsCard(title: localization.string("settings.account")) {
+          SettingsNavigationRow(
+            title: localization.string("settings.privacy"),
+            subtitle: model.isPrivate ? "Private account is on" : "Public account",
+            systemImage: "lock",
+            destination: PrivacySettingsNativeView(model: model)
+          )
+          SettingsNavigationRow(
+            title: localization.string("settings.notifications"),
+            subtitle: "Push, likes, comments, messages",
+            systemImage: "bell",
+            destination: NotificationSettingsNativeView()
+          )
+          SettingsNavigationRow(
+            title: localization.string("settings.security"),
+            subtitle: "Email, password, account actions",
+            systemImage: "shield",
+            destination: SecuritySettingsNativeView(model: model)
+          )
+        }
+
+        SettingsCard(title: localization.string("settings.preferences")) {
+          SettingsNavigationRow(
+            title: localization.string("settings.language"),
+            subtitle: languageLabel(model.language, localization: localization),
+            systemImage: "globe",
+            destination: PreferenceSettingsNativeView(model: model)
+          )
+          SettingsNavigationRow(
+            title: localization.string("settings.app_permissions"),
+            subtitle: "Camera, photos, microphone, notifications",
+            systemImage: "switch.2",
+            destination: PermissionSettingsNativeView()
+          )
+        }
+
+        SettingsCard(title: localization.string("settings.legal_safety")) {
+          SettingsNavigationRow(
+            title: localization.string("legal.terms"),
+            subtitle: "Rules for using Captro",
+            systemImage: "doc.text",
+            destination: TermsOfServiceView()
+          )
+          SettingsNavigationRow(
+            title: localization.string("legal.privacy"),
+            subtitle: "How Captro handles data",
+            systemImage: "hand.raised",
+            destination: PrivacyPolicyView()
+          )
+          SettingsNavigationRow(
+            title: localization.string("legal.community"),
+            subtitle: "Posting, chat, and safety rules",
+            systemImage: "person.2",
+            destination: CommunityGuidelinesView()
+          )
+          SettingsNavigationRow(
+            title: localization.string("legal.safety"),
+            subtitle: "Report, block, and stay safe",
+            systemImage: "shield.lefthalf.filled",
+            destination: SafetyReportingView()
+          )
+        }
+
+        SettingsCard(title: localization.string("settings.support")) {
+          SettingsLinkRow(title: "Contact support", subtitle: "karfalacisse900@gmail.com", systemImage: "envelope", url: URL(string: "mailto:karfalacisse900@gmail.com")!)
+        }
       }
+      .padding(.horizontal, MIRATheme.Space.md)
+      .padding(.top, MIRATheme.Space.md)
+      .padding(.bottom, MIRATheme.Space.xxl)
     }
     .background(MIRATheme.Color.appBackground.ignoresSafeArea())
     .miraScreenEnter(.push)
-    .navigationBarBackButtonHidden(true)
-    .toolbar(.hidden, for: .navigationBar)
+    .navigationTitle(localization.string("settings.title"))
+    .navigationBarTitleDisplayMode(.inline)
     .miraHideTabBarOnAppear()
     .task { await model.load() }
-  }
-
-  private var settingsHeader: some View {
-    HStack(spacing: MIRATheme.Space.sm) {
-      Button {
-        CaptroHaptics.light()
-        dismiss()
-      } label: {
-        Image(systemName: "chevron.left")
-          .font(.system(size: 18, weight: .semibold))
-          .foregroundStyle(MIRATheme.Color.textPrimary)
-          .frame(width: 44, height: 44)
-      }
-      .buttonStyle(.miraPress)
-
-      Text(localization.string("settings.title"))
-        .font(.system(size: 22, weight: .bold))
-        .foregroundStyle(MIRATheme.Color.textPrimary)
-      Spacer()
-    }
-    .padding(.horizontal, MIRATheme.Space.md)
-    .padding(.vertical, MIRATheme.Space.sm)
-    .background(MIRATheme.Color.surface)
-    .overlay(alignment: .bottom) {
-      Rectangle().fill(MIRATheme.Color.hairline).frame(height: 0.5)
-    }
   }
 
   private var settingsHero: some View {

@@ -1666,6 +1666,8 @@ private struct MainFeedPostOptionsSheet: View {
   let shareURL: URL
   let onReport: () -> Void
   let onNotInterested: () -> Void
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @State private var isContentVisible = false
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
@@ -1715,6 +1717,19 @@ private struct MainFeedPostOptionsSheet: View {
       Spacer(minLength: 0)
     }
     .background(MIRATheme.Color.surface)
+    .opacity(isContentVisible ? 1 : 0)
+    .offset(y: isContentVisible || reduceMotion ? 0 : 10)
+    .onAppear(perform: revealContent)
+    .onDisappear { isContentVisible = false }
+  }
+
+  private func revealContent() {
+    isContentVisible = false
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+      withAnimation(CaptroMotion.smallMenuAnimation(reduceMotion: reduceMotion)) {
+        isContentVisible = true
+      }
+    }
   }
 }
 
@@ -1764,6 +1779,7 @@ private struct MainFeedCommentsSheet: View {
   @State private var draft = ""
   @State private var isSending = false
   @State private var replyingTo: MIRAComment?
+  @State private var isContentVisible = false
   @FocusState private var isReplyFocused: Bool
   @EnvironmentObject private var localization: MIRALocalization
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -1843,9 +1859,13 @@ private struct MainFeedCommentsSheet: View {
       commentComposer
     }
     .background(MIRATheme.Color.surface)
+    .opacity(isContentVisible ? 1 : 0)
+    .offset(y: isContentVisible || reduceMotion ? 0 : 10)
     .task {
+      revealContent()
       await model.loadComments()
     }
+    .onDisappear { isContentVisible = false }
   }
 
   private var sheetHeader: some View {
@@ -1989,6 +2009,15 @@ private struct MainFeedCommentsSheet: View {
   private func closeSheet() {
     isReplyFocused = false
     onClose()
+  }
+
+  private func revealContent() {
+    isContentVisible = false
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+      withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
+        isContentVisible = true
+      }
+    }
   }
 }
 

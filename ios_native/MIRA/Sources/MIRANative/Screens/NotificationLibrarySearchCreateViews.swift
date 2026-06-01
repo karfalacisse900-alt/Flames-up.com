@@ -239,80 +239,56 @@ final class LibraryNativeModel: ObservableObject {
 
 public struct LibraryNativeView: View {
   @StateObject private var model: LibraryNativeModel
-  @Environment(\.dismiss) private var dismiss
 
   public init(api: MIRAAPIClient) {
     _model = StateObject(wrappedValue: LibraryNativeModel(api: api))
   }
 
   public var body: some View {
-    VStack(spacing: 0) {
-      libraryHeader
+    ScrollView(showsIndicators: false) {
+      VStack(alignment: .leading, spacing: MIRATheme.Space.lg) {
+        libraryIntro
+        sectionRail
 
-      ScrollView(showsIndicators: false) {
-        VStack(alignment: .leading, spacing: MIRATheme.Space.lg) {
-          sectionRail
-
-          if let errorMessage = model.errorMessage {
-            libraryErrorBanner(errorMessage)
-              .padding(.horizontal, MIRATheme.Space.md)
-          }
-
-          if model.isLoading && model.posts.isEmpty {
-            librarySkeleton
-          } else if model.posts.isEmpty {
-            MIRAEmptyState(
-              title: "Nothing saved here yet",
-              message: emptyMessage,
-              systemImage: model.selectedSection.systemImage
-            )
+        if let errorMessage = model.errorMessage {
+          libraryErrorBanner(errorMessage)
             .padding(.horizontal, MIRATheme.Space.md)
-          } else {
-            postGrid(posts: model.posts)
-          }
         }
-        .padding(.top, MIRATheme.Space.md)
-        .padding(.bottom, MIRATheme.Space.xxl)
+
+        if model.isLoading && model.posts.isEmpty {
+          librarySkeleton
+        } else if model.posts.isEmpty {
+          MIRAEmptyState(
+            title: "Nothing saved here yet",
+            message: emptyMessage,
+            systemImage: model.selectedSection.systemImage
+          )
+          .padding(.horizontal, MIRATheme.Space.md)
+        } else {
+          postGrid(posts: model.posts)
+        }
       }
+      .padding(.top, MIRATheme.Space.md)
+      .padding(.bottom, MIRATheme.Space.xxl)
     }
     .background(MIRATheme.Color.appBackground)
     .miraScreenEnter(.push)
-    .navigationBarBackButtonHidden(true)
-    .toolbar(.hidden, for: .navigationBar)
+    .navigationTitle("My Library")
+    .navigationBarTitleDisplayMode(.inline)
     .miraHideTabBarOnAppear()
     .task { await model.load() }
   }
 
-  private var libraryHeader: some View {
-    HStack(spacing: MIRATheme.Space.sm) {
-      Button {
-        CaptroHaptics.light()
-        dismiss()
-      } label: {
-        Image(systemName: "chevron.left")
-          .font(.system(size: 18, weight: .semibold))
-          .foregroundStyle(MIRATheme.Color.textPrimary)
-          .frame(width: 44, height: 44)
-      }
-      .buttonStyle(.miraPress)
-
-      VStack(alignment: .leading, spacing: 2) {
-        Text("My Library")
-          .font(.system(size: 22, weight: .bold))
-          .foregroundStyle(MIRATheme.Color.textPrimary)
-        Text("Saved posts organized by what inspired you.")
-          .font(.system(size: 12, weight: .medium))
-          .foregroundStyle(MIRATheme.Color.textMuted)
-      }
-
-      Spacer()
+  private var libraryIntro: some View {
+    VStack(alignment: .leading, spacing: 3) {
+      Text("My Library")
+        .font(.system(size: 26, weight: .bold))
+        .foregroundStyle(MIRATheme.Color.textPrimary)
+      Text("Saved posts organized by what inspired you.")
+        .font(.system(size: 13, weight: .medium))
+        .foregroundStyle(MIRATheme.Color.textMuted)
     }
     .padding(.horizontal, MIRATheme.Space.md)
-    .padding(.vertical, MIRATheme.Space.sm)
-    .background(MIRATheme.Color.surface)
-    .overlay(alignment: .bottom) {
-      Rectangle().fill(MIRATheme.Color.hairline).frame(height: 0.5)
-    }
   }
 
   private var sectionRail: some View {
