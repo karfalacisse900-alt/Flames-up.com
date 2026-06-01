@@ -51,7 +51,7 @@ final class DiscoverNativeModel: ObservableObject {
 
   private func hydrateCachedContentIfNeeded() async {
     if posts.isEmpty, let cachedPosts = await cachedDiscoverPosts(for: activePostsCategory) {
-      posts = photoDiscoverPosts(cachedPosts)
+      posts = scopedDiscoverPosts(cachedPosts, category: activePostsCategory)
       isLoadingPosts = false
       prefetchVisibleMedia(posts)
       MIRAPerformanceTimeline.markOnce("discover_first_content", detail: "posts_cache")
@@ -70,7 +70,7 @@ final class DiscoverNativeModel: ObservableObject {
     hasLoadedFreshPosts = false
     hasScheduledPostsLoad = false
     if let cachedPosts = await cachedDiscoverPosts(for: normalized) {
-      posts = photoDiscoverPosts(cachedPosts)
+      posts = scopedDiscoverPosts(cachedPosts, category: normalized)
       isLoadingPosts = false
     } else {
       posts = []
@@ -95,7 +95,7 @@ final class DiscoverNativeModel: ObservableObject {
     }
     do {
       let encodedCategory = category.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "all"
-      var loaded: [MIRAPost] = photoDiscoverPosts(try await api.get("/discover?category=\(encodedCategory)&limit=36"))
+      var loaded: [MIRAPost] = scopedDiscoverPosts(try await api.get("/discover?category=\(encodedCategory)&limit=36"), category: category)
       if loaded.isEmpty && category == "all" {
         loaded = photoDiscoverPosts((try? await api.get("/posts/feed?limit=24")) ?? [])
       }
@@ -272,6 +272,23 @@ final class DiscoverNativeModel: ObservableObject {
     let allowed = Set(discoverGalleryFilters.map(\.id))
     let clean = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     return allowed.contains(clean) ? clean : "all"
+  }
+
+  private func normalizedSavedDiscoverCategory(_ value: String?) -> String? {
+    guard let value else { return nil }
+    let allowed = Set(discoverGalleryFilters.map(\.id).filter { $0 != "all" })
+    let clean = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().replacingOccurrences(of: "-", with: "_")
+    return allowed.contains(clean) ? clean : nil
+  }
+
+  private func scopedDiscoverPosts(_ posts: [MIRAPost], category: String) -> [MIRAPost] {
+    let photoPosts = photoDiscoverPosts(posts)
+    let normalized = normalizedDiscoverCategory(category)
+    guard normalized != "all" else { return photoPosts }
+    return photoPosts.filter { post in
+      normalizedSavedDiscoverCategory(post.primaryCategory) == normalized ||
+        normalizedSavedDiscoverCategory(post.category) == normalized
+    }
   }
 }
 

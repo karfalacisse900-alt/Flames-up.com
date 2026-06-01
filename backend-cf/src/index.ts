@@ -11639,27 +11639,8 @@ api.get('/discover', authMiddleware, async (c) => {
   ];
   const binds: any[] = [userId, userId, userId, ...visiblePostBindValues(userId)];
   if (category !== 'all') {
-    const keywords = CATEGORY_KEYWORDS[category].slice(0, 18);
-    const searchableText = [
-      "COALESCE(p.title, '')",
-      "COALESCE(p.content, '')",
-      "COALESCE(p.location, '')",
-      "COALESCE(p.place_name, '')",
-      "COALESCE(p.place_category, '')",
-      "COALESCE(p.display_location_label, '')",
-      "COALESCE(p.display_city, '')",
-      "COALESCE(p.display_country, '')",
-      "COALESCE(p.tags_json, '')",
-      "COALESCE(p.category_signals_json, '')",
-    ].join(" || ' ' || ");
-    const searchableSql = `LOWER(${searchableText})`;
-    const keywordMatches = keywords.map(() => `${searchableSql} LIKE ?`).join(' OR ');
-    conditions.push(`(
-      LOWER(COALESCE(NULLIF(p.primary_category, ''), NULLIF(p.category, ''), 'lifestyle')) = ?
-      OR LOWER(COALESCE(p.category, '')) = ?
-      OR (${keywordMatches})
-    )`);
-    binds.push(category, category, ...keywords.map((keyword) => `%${keyword}%`));
+    conditions.push("LOWER(COALESCE(NULLIF(p.primary_category, ''), NULLIF(p.category, ''), 'lifestyle')) = ?");
+    binds.push(category);
   }
   const sql = [
     `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
