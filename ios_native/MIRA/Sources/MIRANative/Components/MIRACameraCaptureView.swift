@@ -882,7 +882,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     shutterFill.backgroundColor = isReviewing ? UIColor.white.withAlphaComponent(0.34) : UIColor.white.withAlphaComponent(0.82)
     shutterButton.accessibilityLabel = isReviewing ? "Retake" : "Capture"
     nextButton.isHidden = !isReviewing
-    modeStack.isHidden = false
+    modeStack.isHidden = availableCameraModes.count <= 1
     galleryButton.isHidden = false
     effectsButton.isHidden = true
   }

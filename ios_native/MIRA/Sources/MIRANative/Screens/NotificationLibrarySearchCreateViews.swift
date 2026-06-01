@@ -997,6 +997,14 @@ public struct CreatePostNativeView: View {
       )
       .ignoresSafeArea()
 
+      VStack {
+        Spacer()
+        firstPageMediaRail
+          .padding(.horizontal, 20)
+          .padding(.bottom, 124)
+      }
+      .allowsHitTesting(true)
+
       if isLoadingMedia {
         ProgressView()
           .tint(.white)
@@ -1004,6 +1012,82 @@ public struct CreatePostNativeView: View {
       }
     }
     .background(Color.black.ignoresSafeArea())
+  }
+
+  private var firstPageMediaRail: some View {
+    HStack(spacing: 10) {
+      ScrollView(.horizontal, showsIndicators: false) {
+        HStack(spacing: 10) {
+          ForEach(Array(mediaItems.enumerated()), id: \.offset) { index, item in
+            firstPageMediaTile(item, index: index)
+          }
+
+          PhotosPicker(
+            selection: $pickerItems,
+            maxSelectionCount: max(1, 10 - mediaItems.count),
+            matching: .images,
+            preferredItemEncoding: .current
+          ) {
+            RoundedRectangle(cornerRadius: 13, style: .continuous)
+              .fill(Color.white.opacity(0.16))
+              .frame(width: 70, height: 70)
+              .overlay {
+                Image(systemName: "plus")
+                  .font(.system(size: 32, weight: .regular))
+                  .foregroundStyle(.white)
+              }
+          }
+          .disabled(mediaItems.count >= 10)
+          .opacity(mediaItems.count >= 10 ? 0.42 : 1)
+        }
+        .padding(.horizontal, 4)
+      }
+
+      if !mediaItems.isEmpty {
+        Button {
+          continueToPostDetails()
+        } label: {
+          Text("Next")
+            .font(.system(size: 16, weight: .semibold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 18)
+            .frame(height: 48)
+            .background(MIRATheme.Color.forest)
+            .clipShape(Capsule())
+        }
+        .buttonStyle(.miraPress)
+      }
+    }
+    .padding(.horizontal, 8)
+    .padding(.vertical, 8)
+    .background(.black.opacity(0.34), in: Capsule())
+  }
+
+  private func firstPageMediaTile(_ media: MIRAPickedMedia, index: Int) -> some View {
+    LocalMediaThumb(media: media, width: 70, height: 70, cornerRadius: 13)
+      .overlay {
+        RoundedRectangle(cornerRadius: 13, style: .continuous)
+          .stroke(index == 0 ? Color.white : Color.white.opacity(0.18), lineWidth: index == 0 ? 2 : 1)
+          .allowsHitTesting(false)
+      }
+      .overlay(alignment: .topTrailing) {
+        Button {
+          removeMedia(at: index)
+        } label: {
+          Image(systemName: "xmark")
+            .font(.system(size: 9, weight: .bold))
+            .foregroundStyle(.white)
+            .frame(width: 22, height: 22)
+            .background(.black.opacity(0.62))
+            .clipShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .padding(5)
+      }
+      .contentShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+      .onTapGesture {
+        editingMedia = MIRAEditorPresentation(media: media, replacementIndex: index)
+      }
   }
 
   private var finalPostPage: some View {
@@ -1201,7 +1285,7 @@ public struct CreatePostNativeView: View {
 
   private var postDetailsTextFields: some View {
     VStack(alignment: .leading, spacing: 14) {
-      TextField("Add a catchy headline", text: $title)
+      TextField("Headline", text: $title)
         .font(.system(size: 21, weight: .semibold))
         .foregroundStyle(MIRATheme.Color.textPrimary)
         .submitLabel(.next)
@@ -1211,7 +1295,7 @@ public struct CreatePostNativeView: View {
         .fill(MIRATheme.Color.hairline.opacity(0.78))
         .frame(height: 0.7)
 
-      TextField("Write caption with details to get more views.", text: $bodyText, axis: .vertical)
+      TextField("Tell people about this post...", text: $bodyText, axis: .vertical)
         .font(.system(size: 16, weight: .regular))
         .foregroundStyle(MIRATheme.Color.textPrimary)
         .lineLimit(3...6)
@@ -1567,9 +1651,6 @@ public struct CreatePostNativeView: View {
     mediaItems.append(contentsOf: loaded)
     if !loaded.isEmpty {
       await persistComposerDraft(uploadStatus: "draft", errorMessage: nil, includeMedia: true)
-      withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
-        isEditingPostDetails = true
-      }
     }
   }
 
@@ -1581,6 +1662,14 @@ public struct CreatePostNativeView: View {
     editedCameraMedia = nil
     mediaItems.append(media)
     Task { await persistComposerDraft(uploadStatus: "draft", errorMessage: nil, includeMedia: true) }
+    withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
+      isEditingPostDetails = true
+    }
+  }
+
+  private func continueToPostDetails() {
+    guard !mediaItems.isEmpty else { return }
+    editedCameraMedia = nil
     withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
       isEditingPostDetails = true
     }
