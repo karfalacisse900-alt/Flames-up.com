@@ -769,6 +769,7 @@ private struct ProfilePostTile: View {
   var onDelete: (() -> Void)? = nil
   var onMakePublic: (() -> Void)? = nil
   var onMakePrivate: (() -> Void)? = nil
+  @State private var isDeleteConfirmationPresented = false
 
   private var height: CGFloat {
     size * MIRAMediaSizing.profileGridRatio
@@ -778,15 +779,33 @@ private struct ProfilePostTile: View {
     post.visibility?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "public"
   }
 
-  @ViewBuilder
+  private var isPrivate: Bool {
+    normalizedVisibility == "private"
+  }
+
   var body: some View {
-    if hasOwnerActions {
-      tileContent
-        .contextMenu {
-          ownerContextMenu
-        }
-    } else {
-      tileContent
+    Group {
+      if hasOwnerActions {
+        tileContent
+          .contextMenu {
+            ownerContextMenu
+          }
+      } else {
+        tileContent
+      }
+    }
+    .confirmationDialog(
+      "Are you sure you want to delete this post?",
+      isPresented: $isDeleteConfirmationPresented,
+      titleVisibility: .visible
+    ) {
+      Button("Delete post", role: .destructive) {
+        CaptroHaptics.medium()
+        onDelete?()
+      }
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      Text("This post will be removed from your profile.")
     }
   }
 
@@ -804,20 +823,38 @@ private struct ProfilePostTile: View {
         MIRATheme.Color.surfaceSoft
       }
 
-      if post.isPinned {
-        Image(systemName: "pin.fill")
-          .font(.system(size: 11, weight: .semibold))
-          .foregroundStyle(.white)
-          .frame(width: 24, height: 24)
-          .background(.black.opacity(0.48))
-          .clipShape(Circle())
-          .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-          .padding(6)
-      }
+      statusBadges
     }
     .frame(width: size, height: height)
     .clipped()
     .contentShape(Rectangle())
+  }
+
+  @ViewBuilder
+  private var statusBadges: some View {
+    if post.isPinned || isPrivate {
+      HStack(spacing: 5) {
+        if post.isPinned {
+          profileTileBadge(systemImage: "pin.fill", label: "Pinned post")
+        }
+        if isPrivate {
+          profileTileBadge(systemImage: "lock.fill", label: "Private post")
+        }
+      }
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+      .padding(6)
+      .allowsHitTesting(false)
+    }
+  }
+
+  private func profileTileBadge(systemImage: String, label: String) -> some View {
+    Image(systemName: systemImage)
+      .font(.system(size: 11, weight: .bold))
+      .foregroundStyle(.white)
+      .frame(width: 24, height: 24)
+      .background(.black.opacity(0.58))
+      .clipShape(Circle())
+      .accessibilityLabel(label)
   }
 
   private var hasOwnerActions: Bool {
@@ -853,10 +890,10 @@ private struct ProfilePostTile: View {
       }
     }
 
-    if let onDelete {
+    if onDelete != nil {
       Button(role: .destructive) {
-        CaptroHaptics.medium()
-        onDelete()
+        CaptroHaptics.light()
+        isDeleteConfirmationPresented = true
       } label: {
         Label("Delete post", systemImage: "trash")
       }
