@@ -1445,6 +1445,13 @@ async function ensureAutoCategorySchema(db: D1Database) {
     "ALTER TABLE posts ADD COLUMN category_status TEXT DEFAULT 'low_confidence'",
     "ALTER TABLE posts ADD COLUMN category_signals_json TEXT DEFAULT '{}'",
     "ALTER TABLE posts ADD COLUMN tags_json TEXT DEFAULT '[]'",
+    "ALTER TABLE posts ADD COLUMN secondary_categories_json TEXT DEFAULT '[]'",
+    "ALTER TABLE posts ADD COLUMN category_scores_json TEXT DEFAULT '{}'",
+    "ALTER TABLE posts ADD COLUMN detected_objects_json TEXT DEFAULT '[]'",
+    "ALTER TABLE posts ADD COLUMN detected_scene TEXT DEFAULT ''",
+    "ALTER TABLE posts ADD COLUMN place_type TEXT DEFAULT ''",
+    "ALTER TABLE posts ADD COLUMN user_selected_category TEXT DEFAULT ''",
+    "ALTER TABLE posts ADD COLUMN caption_keywords_json TEXT DEFAULT '[]'",
     'CREATE INDEX IF NOT EXISTS idx_posts_primary_category_created ON posts(primary_category, created_at DESC)',
     'CREATE INDEX IF NOT EXISTS idx_posts_category_status_created ON posts(category_status, created_at DESC)',
     'CREATE INDEX IF NOT EXISTS idx_posts_discover_category_created ON posts(primary_category, status, visibility, created_at DESC)',
@@ -1483,6 +1490,14 @@ async function backfillDiscoverCategories(db: D1Database) {
         UPDATE posts
         SET primary_category = ?,
             category_confidence = MAX(COALESCE(category_confidence, 0), 0.56),
+            secondary_categories_json = CASE
+              WHEN COALESCE(secondary_categories_json, '') IN ('', '[]') THEN ?
+              ELSE secondary_categories_json
+            END,
+            category_scores_json = CASE
+              WHEN COALESCE(category_scores_json, '') IN ('', '{}') THEN ?
+              ELSE category_scores_json
+            END,
             category_source = CASE
               WHEN COALESCE(category_source, '') IN ('', 'fallback') THEN 'fallback'
               ELSE category_source
@@ -1496,7 +1511,7 @@ async function backfillDiscoverCategories(db: D1Database) {
           OR COALESCE(category_confidence, 0) < 0.50
         )
         AND (${keywordMatches})
-      `).bind(category, ...keywords.map((keyword) => `%${keyword}%`)).run();
+      `).bind(category, JSON.stringify([category]), JSON.stringify({ [category]: 62 }), ...keywords.map((keyword) => `%${keyword}%`)).run();
     } catch (error) {
       console.warn('Discover category backfill skipped:', category, getErrorCode(error));
       break;
@@ -2010,12 +2025,14 @@ type DiscoverCategory =
   | 'outdoors'
   | 'outfits'
   | 'food'
+  | 'cafe'
   | 'travel'
-  | 'events'
   | 'nightlife'
   | 'art'
   | 'lifestyle'
-  | 'fitness';
+  | 'fitness'
+  | 'beauty'
+  | 'places';
 
 type AutoCategorySource = 'apple_vision' | 'backend_ai' | 'hybrid_ai' | 'fallback' | 'admin_changed' | 'user_changed_optional';
 type AutoCategoryStatus = 'pending' | 'classified' | 'low_confidence' | 'needs_review' | 'admin_corrected';
@@ -2033,6 +2050,11 @@ type AutoCategoryInput = {
   hashtags?: string[];
   location?: string | null;
   placeName?: string | null;
+  placeType?: string | null;
+  userSelectedCategory?: string;
+  detectedObjects?: string[];
+  detectedScene?: string;
+  captionKeywords?: string[];
   appleLabels?: AutoCategoryLabel[];
   appleCategoryGuess?: string;
   appleConfidence?: number;
@@ -2048,6 +2070,13 @@ type AutoCategoryResult = {
   category_status: AutoCategoryStatus;
   tags: string[];
   signals: Record<string, unknown>;
+  secondary_categories: DiscoverCategory[];
+  category_scores: Record<DiscoverCategory, number>;
+  detected_objects: string[];
+  detected_scene: string;
+  place_type: string;
+  user_selected_category: DiscoverCategory | '';
+  caption_keywords: string[];
 };
 
 const DISCOVER_CATEGORIES: DiscoverCategory[] = [
@@ -2055,31 +2084,45 @@ const DISCOVER_CATEGORIES: DiscoverCategory[] = [
   'outdoors',
   'outfits',
   'food',
+  'cafe',
   'travel',
-  'events',
   'nightlife',
   'art',
   'lifestyle',
   'fitness',
+  'beauty',
+  'places',
 ];
 
 const CATEGORY_KEYWORDS: Record<DiscoverCategory, string[]> = {
-  outfits: ['outfit', 'fit', 'fit check', 'clothes', 'style', 'fashion', 'streetwear', 'shoes', 'shoe', 'jacket', 'mirror selfie', 'clothing', 'accessories', 'sneakers', 'dress', 'apparel', 'person'],
-  food: ['food', 'meal', 'restaurant', 'cafe', 'coffee', 'drink', 'dessert', 'pizza', 'burger', 'cooking', 'plate', 'bakery', 'breakfast', 'lunch', 'dinner', 'brunch', 'kitchen', 'recipe', 'snack'],
+  outfits: ['outfit', 'fit', 'fit check', 'clothes', 'style', 'fashion', 'streetwear', 'shoes', 'shoe', 'jacket', 'mirror selfie', 'clothing', 'accessories', 'sneakers', 'dress', 'apparel', 'person', 'full body pose'],
+  food: ['food', 'meal', 'restaurant', 'drink', 'dessert', 'pizza', 'burger', 'cooking', 'plate', 'breakfast', 'lunch', 'dinner', 'brunch', 'kitchen', 'recipe', 'snack', 'dish', 'table'],
+  cafe: ['cafe', 'café', 'coffee', 'latte', 'espresso', 'bakery', 'pastry', 'brunch', 'tea', 'coffee shop'],
   outdoors: ['outdoors', 'outdoor', 'outside', 'park', 'beach', 'hiking', 'trail', 'nature', 'mountain', 'lake', 'sunset', 'sunrise', 'trees', 'tree', 'forest', 'walking', 'landscape', 'snow', 'sky', 'water', 'river', 'ocean', 'sea', 'flower', 'plant', 'grass', 'garden', 'field', 'woods', 'camping'],
-  events: ['event', 'concert', 'festival', 'meetup', 'show', 'game', 'crowd', 'stadium', 'venue', 'performance', 'birthday', 'wedding', 'audience', 'stage', 'party', 'celebration'],
   nightlife: ['nightlife', 'night', 'club', 'bar', 'lounge', 'party', 'rooftop', 'dj', 'drinks', 'city night', 'after dark', 'dance', 'neon', 'dark', 'cocktail', 'evening'],
   travel: ['travel', 'trip', 'vacation', 'hotel', 'airport', 'landmark', 'city visit', 'tourist', 'destination', 'road trip', 'passport', 'flight', 'city', 'street', 'architecture', 'building', 'castle', 'monument', 'bridge', 'train', 'station', 'historic', 'old town', 'view'],
   photography: ['photography', 'portrait', 'camera', 'photo shoot', 'street photo', 'aesthetic', 'landscape shot', 'creative shot', 'close up', 'close-up', 'lens', 'film', 'macro', 'black and white', 'monochrome', 'composition'],
   art: ['art', 'drawing', 'painting', 'design', 'sketch', 'illustration', 'mural', 'gallery', 'creative work', 'museum', 'artist', 'craft', 'sculpture', 'visual art'],
   fitness: ['gym', 'workout', 'running', 'fitness', 'sport', 'basketball', 'soccer', 'training', 'yoga', 'exercise', 'athlete', 'cycling', 'bike', 'bicycle'],
+  beauty: ['beauty', 'makeup', 'hair', 'skincare', 'nails', 'salon', 'lipstick', 'cosmetic', 'cosmetics', 'lash', 'lashes', 'barber'],
+  places: ['place', 'places', 'venue', 'store', 'shop', 'mall', 'museum', 'school', 'library', 'market', 'neighborhood', 'downtown', 'address', 'location', 'city spot'],
   lifestyle: ['daily life', 'friends', 'home', 'routine', 'random moment', 'personal moment', 'general capture', 'selfie', 'room', 'people', 'human', 'family'],
 };
 
 function normalizeDiscoverCategory(value: unknown, allowAll = false): DiscoverCategory | 'all' | '' {
-  const clean = cleanText(value, 40).toLowerCase().replace(/[\s-]+/g, '_');
+  const clean = cleanText(value, 40).toLowerCase().replace(/[éèê]/g, 'e').replace(/[\s-]+/g, '_');
   if (allowAll && clean === 'all') return 'all';
-  return DISCOVER_CATEGORIES.includes(clean as DiscoverCategory) ? clean as DiscoverCategory : '';
+  const aliases: Record<string, DiscoverCategory> = {
+    outfit: 'outfits',
+    outdoor: 'outdoors',
+    coffee: 'cafe',
+    cafes: 'cafe',
+    place: 'places',
+    event: 'places',
+    events: 'places',
+  };
+  const normalized = aliases[clean] || clean;
+  return DISCOVER_CATEGORIES.includes(normalized as DiscoverCategory) ? normalized as DiscoverCategory : '';
 }
 
 function normalizeCategorySource(value: unknown): AutoCategorySource {
@@ -2135,12 +2178,19 @@ function collectHashtagsFromText(text: string): string[] {
   return matches.map((tag) => tag.replace(/^#/, '').toLowerCase());
 }
 
-function scoreCategoryFromText(scores: Record<DiscoverCategory, number>, text: string, weight: number) {
+function scoreCategoryFromText(
+  scores: Record<DiscoverCategory, number>,
+  text: string,
+  weight: number,
+  reasons?: Record<DiscoverCategory, string[]>,
+  reasonPrefix = 'keyword'
+) {
   if (!text) return;
   for (const category of DISCOVER_CATEGORIES) {
     for (const keyword of CATEGORY_KEYWORDS[category]) {
       if (categoryTextMatches(text, keyword)) {
         scores[category] += weight;
+        reasons?.[category]?.push(`${reasonPrefix}: ${keyword}`);
       }
     }
   }
@@ -2165,12 +2215,113 @@ function categoryFromLabels(labels: AutoCategoryLabel[]): { category: DiscoverCa
     : { category: '', confidence: 0 };
 }
 
+function emptyCategoryScores(): Record<DiscoverCategory, number> {
+  return Object.fromEntries(DISCOVER_CATEGORIES.map((category) => [category, 0])) as Record<DiscoverCategory, number>;
+}
+
+function emptyCategoryReasons(): Record<DiscoverCategory, string[]> {
+  return Object.fromEntries(DISCOVER_CATEGORIES.map((category) => [category, [] as string[]])) as unknown as Record<DiscoverCategory, string[]>;
+}
+
+function addCategoryScore(
+  scores: Record<DiscoverCategory, number>,
+  reasons: Record<DiscoverCategory, string[]>,
+  category: DiscoverCategory | '',
+  amount: number,
+  reason: string
+) {
+  if (!category || amount <= 0) return;
+  scores[category] += amount;
+  if (reason) reasons[category].push(reason);
+}
+
+function topCaptionKeywords(text: string, hashtags: string[]): string[] {
+  const words = cleanMultilineText(text, 1200)
+    .toLowerCase()
+    .replace(/#[a-z0-9_.-]+/g, ' ')
+    .split(/[^a-z0-9_.]+/g)
+    .filter((word) => word.length >= 3 && !['the', 'and', 'for', 'with', 'this', 'that', 'from', 'today', 'about'].includes(word));
+  return sanitizeAutoCategoryTags([...hashtags, ...words]).slice(0, 20);
+}
+
+function normalizePlaceType(input: AutoCategoryInput): string {
+  return [
+    input.placeType,
+    input.placeName,
+    input.location,
+    input.postType,
+  ].map((item) => cleanText(item, 180).toLowerCase()).filter(Boolean).join(' ');
+}
+
+function boostFromPlaceType(
+  scores: Record<DiscoverCategory, number>,
+  reasons: Record<DiscoverCategory, string[]>,
+  placeType: string
+) {
+  if (!placeType) return;
+  const mappings: Array<{ category: DiscoverCategory; keywords: string[]; weight: number }> = [
+    { category: 'food', keywords: ['restaurant', 'food', 'meal', 'diner', 'kitchen'], weight: 55 },
+    { category: 'cafe', keywords: ['cafe', 'café', 'coffee', 'bakery', 'tea', 'brunch'], weight: 58 },
+    { category: 'fitness', keywords: ['gym', 'fitness', 'studio', 'sport', 'court', 'training'], weight: 55 },
+    { category: 'outdoors', keywords: ['park', 'beach', 'trail', 'hiking', 'lake', 'mountain', 'garden'], weight: 58 },
+    { category: 'nightlife', keywords: ['bar', 'club', 'lounge', 'nightclub', 'rooftop'], weight: 58 },
+    { category: 'places', keywords: ['venue', 'store', 'shop', 'museum', 'school', 'mall', 'market', 'address'], weight: 48 },
+    { category: 'art', keywords: ['gallery', 'museum', 'art', 'mural', 'studio'], weight: 52 },
+    { category: 'travel', keywords: ['hotel', 'airport', 'landmark', 'station', 'tourist', 'bridge'], weight: 50 },
+    { category: 'beauty', keywords: ['salon', 'beauty', 'makeup', 'hair', 'nails', 'barber'], weight: 56 },
+  ];
+  for (const mapping of mappings) {
+    if (mapping.keywords.some((keyword) => categoryTextMatches(placeType, keyword))) {
+      addCategoryScore(scores, reasons, mapping.category, mapping.weight, `place type: ${placeType.slice(0, 80)}`);
+    }
+  }
+}
+
+function boostFromDetectedObjects(
+  scores: Record<DiscoverCategory, number>,
+  reasons: Record<DiscoverCategory, string[]>,
+  labels: string[],
+  scene: string
+) {
+  const text = [...labels, scene].join(' ').toLowerCase();
+  if (!text.trim()) return;
+  scoreCategoryFromText(scores, text, 12, reasons, 'detected');
+
+  const hasPerson = /\b(person|people|human|man|woman|face|portrait|full body)\b/.test(text);
+  const hasClothing = /\b(clothing|clothes|shirt|pants|dress|shoes|sneaker|jacket|hat|fashion|accessory|outfit)\b/.test(text);
+  if (hasPerson && hasClothing) {
+    addCategoryScore(scores, reasons, 'outfits', 34, 'person + clothing/full-body signal');
+  }
+
+  if (/\b(tree|trees|sky|park|beach|trail|mountain|forest|lake|river|ocean|grass|flower|sunset)\b/.test(text)) {
+    addCategoryScore(scores, reasons, 'outdoors', 28, 'nature/outdoor objects');
+  }
+  if (/\b(food|plate|drink|cup|coffee|meal|table|dessert|pizza|burger)\b/.test(text)) {
+    addCategoryScore(scores, reasons, 'food', 26, 'food/drink objects');
+  }
+  if (/\b(coffee|latte|espresso|cafe|bakery|pastry)\b/.test(text)) {
+    addCategoryScore(scores, reasons, 'cafe', 26, 'cafe objects');
+  }
+  if (/\b(camera|lens|portrait|monochrome|macro|composition)\b/.test(text)) {
+    addCategoryScore(scores, reasons, 'photography', 24, 'photo/camera composition objects');
+  }
+  if (/\b(makeup|hair|nails|lipstick|cosmetic|salon)\b/.test(text)) {
+    addCategoryScore(scores, reasons, 'beauty', 28, 'beauty objects');
+  }
+}
+
 function autoCategoryEngine(input: AutoCategoryInput): AutoCategoryResult {
-  const scores = Object.fromEntries(DISCOVER_CATEGORIES.map((category) => [category, 0])) as Record<DiscoverCategory, number>;
+  const scores = emptyCategoryScores();
+  const reasons = emptyCategoryReasons();
   const tags = new Set<string>();
   const caption = cleanMultilineText(input.caption || '', 5000).toLowerCase();
   const hashtags = sanitizeAutoCategoryTags([...(input.hashtags || []), ...collectHashtagsFromText(caption)]);
-  const placeText = [input.location, input.placeName, input.postType].map((item) => cleanText(item, 160).toLowerCase()).filter(Boolean).join(' ');
+  const captionKeywords = topCaptionKeywords(caption, hashtags);
+  const placeType = normalizePlaceType(input);
+  const detectedObjects = sanitizeAutoCategoryTags(input.detectedObjects || []);
+  const detectedScene = cleanText(input.detectedScene, 80).toLowerCase();
+  const userSelectedCategory = normalizeDiscoverCategory(input.userSelectedCategory, false) as DiscoverCategory | '';
+  const placeText = [input.location, input.placeName, input.placeType, input.postType].map((item) => cleanText(item, 160).toLowerCase()).filter(Boolean).join(' ');
   const appleGuess = normalizeDiscoverCategory(input.appleCategoryGuess, false) as DiscoverCategory | '';
   const backendGuess = normalizeDiscoverCategory(input.backendCategoryGuess, false) as DiscoverCategory | '';
   const appleConfidence = clampFloat(input.appleConfidence, 0, 1, 0);
@@ -2178,17 +2329,30 @@ function autoCategoryEngine(input: AutoCategoryInput): AutoCategoryResult {
   const appleLabels = sanitizeAutoCategoryLabels(input.appleLabels || []);
   const backendLabels = sanitizeAutoCategoryLabels(input.backendLabels || []);
 
-  if (backendGuess) scores[backendGuess] += 45 * Math.max(backendConfidence, 0.55);
-  if (appleGuess) scores[appleGuess] += 30 * Math.max(appleConfidence, 0.55);
-  scoreCategoryFromText(scores, caption, 25);
-  scoreCategoryFromText(scores, hashtags.join(' '), 25);
-  scoreCategoryFromText(scores, placeText, placeText.includes('event') || placeText.includes('venue') ? 50 : 40);
+  if (userSelectedCategory) addCategoryScore(scores, reasons, userSelectedCategory, 38, 'user selected category');
+  if (backendGuess) addCategoryScore(scores, reasons, backendGuess, 45 * Math.max(backendConfidence, 0.55), 'backend AI category');
+  if (appleGuess) addCategoryScore(scores, reasons, appleGuess, 30 * Math.max(appleConfidence, 0.55), 'Apple Vision category');
+  scoreCategoryFromText(scores, caption, 18, reasons, 'caption');
+  scoreCategoryFromText(scores, hashtags.join(' '), 28, reasons, 'hashtag');
+  scoreCategoryFromText(scores, placeText, 18, reasons, 'place text');
+  boostFromPlaceType(scores, reasons, placeType);
 
   for (const { category, confidence } of [categoryFromLabels(appleLabels), categoryFromLabels(backendLabels)]) {
-    if (category) scores[category] += Math.round(confidence * 30);
+    if (category) addCategoryScore(scores, reasons, category, Math.round(confidence * 30), 'vision/object labels');
   }
+  boostFromDetectedObjects(
+    scores,
+    reasons,
+    [
+      ...detectedObjects,
+      ...appleLabels.map((item) => item.label),
+      ...backendLabels.map((item) => item.label),
+    ],
+    detectedScene
+  );
 
   for (const tag of hashtags) tags.add(tag);
+  for (const keyword of captionKeywords) tags.add(keyword);
   [...appleLabels, ...backendLabels]
     .sort((a, b) => b.confidence - a.confidence)
     .slice(0, 12)
@@ -2201,11 +2365,18 @@ function autoCategoryEngine(input: AutoCategoryInput): AutoCategoryResult {
     .map((category) => ({ category, score: scores[category] }))
     .sort((a, b) => b.score - a.score)[0];
   const winnerScore = winner?.score || 0;
-  const hasCategorySignal = winnerScore >= 20;
-  const rawConfidence = hasCategorySignal ? Math.min(0.99, Math.max(0, winnerScore / 65)) : 0;
+  const hasCategorySignal = winnerScore >= 24;
+  const rawConfidence = hasCategorySignal ? Math.min(0.99, Math.max(0, winnerScore / 85)) : 0;
   const confidence = Number(rawConfidence.toFixed(2));
   const isLow = !hasCategorySignal || confidence < 0.50;
   const primaryCategory = hasCategorySignal ? winner.category : 'lifestyle';
+  const normalizedScores = Object.fromEntries(
+    DISCOVER_CATEGORIES.map((category) => [category, Number(Math.max(0, scores[category]).toFixed(1))])
+  ) as Record<DiscoverCategory, number>;
+  const secondaryCategories = DISCOVER_CATEGORIES
+    .filter((category) => normalizedScores[category] >= 36 || category === primaryCategory)
+    .sort((a, b) => normalizedScores[b] - normalizedScores[a])
+    .slice(0, 5);
   const source: AutoCategorySource = backendGuess || backendLabels.length
     ? (appleGuess || appleLabels.length ? 'hybrid_ai' : 'backend_ai')
     : appleGuess || appleLabels.length
@@ -2219,6 +2390,16 @@ function autoCategoryEngine(input: AutoCategoryInput): AutoCategoryResult {
     category_source: hasCategorySignal ? source : 'fallback',
     category_status: status,
     tags: Array.from(tags).slice(0, 16),
+    secondary_categories: secondaryCategories,
+    category_scores: normalizedScores,
+    detected_objects: Array.from(new Set([...detectedObjects, ...appleLabels.map((item) => item.label), ...backendLabels.map((item) => item.label)]))
+      .map((item) => cleanText(item, 60).toLowerCase())
+      .filter(Boolean)
+      .slice(0, 24),
+    detected_scene: detectedScene || primaryCategory,
+    place_type: placeType.slice(0, 120),
+    user_selected_category: userSelectedCategory,
+    caption_keywords: captionKeywords,
     signals: {
       apple_category_guess: appleGuess || '',
       apple_confidence: appleConfidence || 0,
@@ -2227,7 +2408,15 @@ function autoCategoryEngine(input: AutoCategoryInput): AutoCategoryResult {
       backend_confidence: backendConfidence || 0,
       backend_labels: backendLabels,
       caption_hashtags: hashtags,
-      scores,
+      caption_keywords: captionKeywords,
+      detected_objects: detectedObjects,
+      detected_scene: detectedScene,
+      place_type: placeType,
+      user_selected_category: userSelectedCategory,
+      secondary_categories: secondaryCategories,
+      category_scores: normalizedScores,
+      scores: normalizedScores,
+      debug_reasons: reasons,
     },
   };
 }
@@ -2243,6 +2432,11 @@ function autoCategoryFromBody(body: any, input: Omit<AutoCategoryInput, 'appleLa
     appleLabels: sanitizeAutoCategoryLabels(body.apple_vision_labels || body.appleVisionLabels),
     appleCategoryGuess: body.apple_vision_category_guess || body.appleVisionCategoryGuess,
     appleConfidence: clampFloat(body.apple_vision_confidence ?? body.appleVisionConfidence, 0, 1, 0),
+    userSelectedCategory: body.primary_category || body.primaryCategory || body.discover_category || body.discoverCategory || body.user_selected_category || body.userSelectedCategory,
+    detectedObjects: sanitizeAutoCategoryTags(body.detected_objects || body.detectedObjects),
+    detectedScene: cleanText(body.detected_scene || body.detectedScene, 80),
+    placeType: cleanText(body.google_place_type || body.googlePlaceType || body.place_type || body.placeType || body.place_category || body.placeCategory, 120),
+    captionKeywords: sanitizeAutoCategoryTags(body.caption_keywords || body.captionKeywords),
   });
 }
 
@@ -4365,6 +4559,23 @@ function looksLikePrivatePlace(name: string, address: string, category: string):
     && !/\b(restaurant|cafe|coffee|gym|park|museum|bar|club|hotel|school|store|venue|stadium|gallery)\b/.test(text);
 }
 
+function normalizeCategoryScoresPayload(value: unknown): Record<string, number> {
+  const raw = parseJsonObject(value);
+  const scores: Record<string, number> = {};
+  for (const category of DISCOVER_CATEGORIES) {
+    const score = Number(raw[category] || 0);
+    scores[category] = Number(Math.max(0, Number.isFinite(score) ? score : 0).toFixed(1));
+  }
+  return scores;
+}
+
+function normalizeSecondaryCategoriesPayload(value: unknown, primary: DiscoverCategory): DiscoverCategory[] {
+  const categories = sanitizeAutoCategoryTags(value)
+    .map((item) => normalizeDiscoverCategory(item, false) as DiscoverCategory | '')
+    .filter((item): item is DiscoverCategory => !!item);
+  return Array.from(new Set([primary, ...categories])).slice(0, 5);
+}
+
 function postPayload(post: any, likedBy: string[] = [], env?: Env) {
   const audioHidden = Number(post.audio_hidden || 0) === 1;
   const likesCount = Math.max(0, Number(post.live_likes_count ?? post.likes_count ?? 0));
@@ -4384,8 +4595,14 @@ function postPayload(post: any, likedBy: string[] = [], env?: Env) {
   const posterUrls = mediaUrls.map((url, index) => posterDeliveryUrl(url, mediaTypes[index] || 'image', thumbnailVariant, env)).filter(Boolean);
   const renderedMediaDimensions = feedMediaDimensions(mediaUrls, mediaTypes, dimensions);
   const primaryMediaDimensions = renderedMediaDimensions[0] || DEFAULT_FEED_MEDIA_RATIO;
-  const primaryCategory = normalizeDiscoverCategory(post.primary_category || post.category || post.post_type || 'lifestyle', false) || 'lifestyle';
+  const primaryCategory = (normalizeDiscoverCategory(post.primary_category || post.category || post.post_type || 'lifestyle', false) || 'lifestyle') as DiscoverCategory;
   const categoryConfidence = clampFloat(post.category_confidence, 0, 1, 0);
+  const categoryScores = normalizeCategoryScoresPayload(post.category_scores_json || (parseJsonObject(post.category_signals_json) as any).category_scores);
+  if (!categoryScores[primaryCategory]) categoryScores[primaryCategory] = Number(Math.max(categoryConfidence * 100, 45).toFixed(1));
+  const secondaryCategories = normalizeSecondaryCategoriesPayload(post.secondary_categories_json, primaryCategory);
+  const detectedObjects = sanitizeAutoCategoryTags(post.detected_objects_json || (parseJsonObject(post.category_signals_json) as any).detected_objects);
+  const captionKeywords = sanitizeAutoCategoryTags(post.caption_keywords_json || (parseJsonObject(post.category_signals_json) as any).caption_keywords);
+  const categoryDebug = parseJsonObject(post.category_signals_json);
   const displayLocationVisibility = normalizeDisplayLocationVisibility(post.display_location_visibility);
   const canShowDisplayLocation = displayLocationVisibility === 'public'
     || (displayLocationVisibility === 'followers' && (post.is_following === true || post.is_following === 1 || post.is_following === '1'));
@@ -4420,7 +4637,14 @@ function postPayload(post: any, likedBy: string[] = [], env?: Env) {
     category_confidence: categoryConfidence,
     category_source: normalizeCategorySource(post.category_source),
     category_status: normalizeCategoryStatus(post.category_status),
-    category_signals: parseJsonObject(post.category_signals_json),
+    secondary_categories: secondaryCategories,
+    category_scores: categoryScores,
+    detected_objects: detectedObjects,
+    detected_scene: cleanText(post.detected_scene || (categoryDebug as any).detected_scene || '', 80),
+    place_type: cleanText(post.place_type || (categoryDebug as any).place_type || '', 120),
+    user_selected_category: normalizeDiscoverCategory(post.user_selected_category || (categoryDebug as any).user_selected_category, false),
+    caption_keywords: captionKeywords,
+    category_signals: categoryDebug,
     tags: sanitizeAutoCategoryTags(post.tags_json),
     display_city: canShowDisplayLocation ? cleanText(post.display_city, 80) : '',
     display_region: canShowDisplayLocation ? cleanText(post.display_region, 80) : '',
@@ -6698,7 +6922,7 @@ function legacyUserTransferPayload(row: any) {
 
 function legacyPostTransferPayload(row: any) {
   const editorOverlays = parseJsonArray(row.editor_overlays);
-  const primaryCategory = normalizeDiscoverCategory(row.primary_category || row.category || row.post_type || 'lifestyle', false) || 'lifestyle';
+  const primaryCategory = (normalizeDiscoverCategory(row.primary_category || row.category || row.post_type || 'lifestyle', false) || 'lifestyle') as DiscoverCategory;
   return {
     legacy_post_id: String(row.id || ''),
     user_id: isUuidText(row.supabase_user_id),
@@ -6838,8 +7062,9 @@ async function refinePostCategoryWithBackendAi(c: any, postId: string) {
   if (!c.env.AI) return;
   await ensureAutoCategorySchema(c.env.DB);
   const row: any = await c.env.DB.prepare(
-    `SELECT id, content, title, image, images, media_types, media_dimensions, location, place_name, post_type,
-            primary_category, category_confidence, category_source, category_signals_json, tags_json
+    `SELECT id, content, title, image, images, media_types, media_dimensions, location, place_name, place_category, post_type,
+            primary_category, category_confidence, category_source, category_signals_json, tags_json,
+            user_selected_category, detected_objects_json, detected_scene, place_type, caption_keywords_json
      FROM posts
      WHERE id = ?
      LIMIT 1`
@@ -6872,6 +7097,11 @@ async function refinePostCategoryWithBackendAi(c: any, postId: string) {
     hashtags: sanitizeAutoCategoryTags(row.tags_json),
     location: row.location,
     placeName: row.place_name,
+    placeType: row.place_type || row.place_category,
+    userSelectedCategory: row.user_selected_category || (currentSignals as any).user_selected_category,
+    detectedObjects: sanitizeAutoCategoryTags(row.detected_objects_json),
+    detectedScene: cleanText(row.detected_scene, 80),
+    captionKeywords: sanitizeAutoCategoryTags(row.caption_keywords_json),
     appleLabels: sanitizeAutoCategoryLabels((currentSignals as any).apple_labels),
     appleCategoryGuess: cleanText((currentSignals as any).apple_category_guess, 40),
     appleConfidence: clampFloat((currentSignals as any).apple_confidence, 0, 1, 0),
@@ -6895,7 +7125,10 @@ async function refinePostCategoryWithBackendAi(c: any, postId: string) {
   await c.env.DB.prepare(
     `UPDATE posts
      SET primary_category = ?, category_confidence = ?, category_source = ?, category_status = ?,
-         category_signals_json = ?, tags_json = ?, updated_at = datetime('now')
+         category_signals_json = ?, tags_json = ?,
+         secondary_categories_json = ?, category_scores_json = ?, detected_objects_json = ?,
+         detected_scene = ?, place_type = ?, user_selected_category = ?, caption_keywords_json = ?,
+         updated_at = datetime('now')
      WHERE id = ?`
   ).bind(
     result.primary_category,
@@ -6904,6 +7137,13 @@ async function refinePostCategoryWithBackendAi(c: any, postId: string) {
     result.category_status,
     JSON.stringify(result.signals),
     JSON.stringify(result.tags),
+    JSON.stringify(result.secondary_categories),
+    JSON.stringify(result.category_scores),
+    JSON.stringify(result.detected_objects),
+    result.detected_scene,
+    result.place_type,
+    result.user_selected_category,
+    JSON.stringify(result.caption_keywords),
     postId
   ).run();
 }
@@ -8966,26 +9206,9 @@ api.post('/posts', authMiddleware, async (c) => {
     postType,
     hashtags: explicitTags,
     location: categoryLocationSignals || location,
+    placeType: placeCategory,
     placeName: [placeName, placeCategory].filter(Boolean).join(' ') || null,
   });
-  const manualCategory = normalizeDiscoverCategory(
-    b.primary_category || b.primaryCategory || b.discover_category || b.discoverCategory,
-    false
-  ) as DiscoverCategory | '';
-  if (manualCategory) {
-    autoCategory = {
-      ...autoCategory,
-      primary_category: manualCategory,
-      category_confidence: 1,
-      category_source: 'user_changed_optional',
-      category_status: 'classified',
-      tags: Array.from(new Set([manualCategory, ...autoCategory.tags])).slice(0, 16),
-      signals: {
-        ...autoCategory.signals,
-        user_selected_category: manualCategory,
-      },
-    };
-  }
   const placeLat = b.place_lat == null ? null : clampFloat(b.place_lat, -90, 90, 0);
   const placeLng = b.place_lng == null ? null : clampFloat(b.place_lng, -180, 180, 0);
   const backupIds = Array.from(new Set([
@@ -9023,10 +9246,11 @@ api.post('/posts', authMiddleware, async (c) => {
        place_lat, place_lng, is_verified_checkin, visibility,
        editor_overlays, tagged_users,
        primary_category, category_confidence, category_source, category_status, category_signals_json, tags_json,
+       secondary_categories_json, category_scores_json, detected_objects_json, detected_scene, place_type, user_selected_category, caption_keywords_json,
        audio_provider, audio_track_id, audio_title, audio_artist, audio_artwork_url, audio_stream_url,
        audio_start_time, audio_duration, client_request_id
      )
-     VALUES (${Array(47).fill('?').join(', ')})`
+     VALUES (${Array(54).fill('?').join(', ')})`
     ).bind(id, userId, postTitle, postContent, primaryImage, JSON.stringify(imageUrls), JSON.stringify(mediaTypes),
     JSON.stringify(backupIds), JSON.stringify(mediaDimensions), location,
     displayCity, displayRegion, displayCountry, displayLocationLabel, displayLocationSource, displayLocationVisibility,
@@ -9035,6 +9259,8 @@ api.post('/posts', authMiddleware, async (c) => {
     placeLat, placeLng, isCheckin, visibility,
     JSON.stringify(editorOverlays), JSON.stringify(taggedUsers),
     autoCategory.primary_category, autoCategory.category_confidence, autoCategory.category_source, autoCategory.category_status, JSON.stringify(autoCategory.signals), JSON.stringify(autoCategory.tags),
+    JSON.stringify(autoCategory.secondary_categories), JSON.stringify(autoCategory.category_scores), JSON.stringify(autoCategory.detected_objects),
+    autoCategory.detected_scene, autoCategory.place_type, autoCategory.user_selected_category, JSON.stringify(autoCategory.caption_keywords),
     audioProvider, audioTrackId, audioTitle, audioArtist, audioArtworkUrl, audioStreamUrl, audioStartTime, audioDuration, clientRequestId),
     c.env.DB.prepare('UPDATE users SET posts_count = COALESCE(posts_count, 0) + 1 WHERE id = ? AND changes() > 0').bind(userId),
   ]);
@@ -9098,6 +9324,13 @@ api.post('/posts', authMiddleware, async (c) => {
     primary_category: autoCategory.primary_category, category_confidence: autoCategory.category_confidence,
     category_source: autoCategory.category_source, category_status: autoCategory.category_status,
     category_signals_json: JSON.stringify(autoCategory.signals), tags_json: JSON.stringify(autoCategory.tags),
+    secondary_categories_json: JSON.stringify(autoCategory.secondary_categories),
+    category_scores_json: JSON.stringify(autoCategory.category_scores),
+    detected_objects_json: JSON.stringify(autoCategory.detected_objects),
+    detected_scene: autoCategory.detected_scene,
+    place_type: autoCategory.place_type,
+    user_selected_category: autoCategory.user_selected_category,
+    caption_keywords_json: JSON.stringify(autoCategory.caption_keywords),
     location,
     display_city: displayCity, display_region: displayRegion, display_country: displayCountry,
     display_location_label: displayLocationLabel, display_location_source: displayLocationSource,
@@ -11639,8 +11872,12 @@ api.get('/discover', authMiddleware, async (c) => {
   ];
   const binds: any[] = [userId, userId, userId, ...visiblePostBindValues(userId)];
   if (category !== 'all') {
-    conditions.push("LOWER(COALESCE(NULLIF(p.primary_category, ''), NULLIF(p.category, ''), 'lifestyle')) = ?");
-    binds.push(category);
+    conditions.push(`(
+      COALESCE(json_extract(p.category_scores_json, '$.${category}'), 0) >= 36
+      OR LOWER(COALESCE(NULLIF(p.primary_category, ''), NULLIF(p.category, ''), 'lifestyle')) = ?
+      OR COALESCE(p.secondary_categories_json, '') LIKE ?
+    )`);
+    binds.push(category, `%"${category}"%`);
   }
   const sql = [
     `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
@@ -13194,10 +13431,12 @@ function adminPostPayload(row: any, env: Env) {
   const mediaUrls = sanitizeMediaReferences(row.images, row.image);
   const mediaTypes = parseJsonArray(row.media_types);
   const dimensions = parseJsonArray(row.media_dimensions);
-  const primaryCategory = normalizeDiscoverCategory(row.primary_category || row.category || row.post_type || 'lifestyle', false) || 'lifestyle';
+  const primaryCategory = (normalizeDiscoverCategory(row.primary_category || row.category || row.post_type || 'lifestyle', false) || 'lifestyle') as DiscoverCategory;
   const categoryConfidence = clampFloat(row.category_confidence, 0, 1, 0);
   const tags = sanitizeAutoCategoryTags(row.tags_json);
   const categorySignals = parseJsonObject(row.category_signals_json);
+  const categoryScores = normalizeCategoryScoresPayload(row.category_scores_json || (categorySignals as any).category_scores);
+  const secondaryCategories = normalizeSecondaryCategoriesPayload(row.secondary_categories_json, primaryCategory);
   const thumbnailVariant = env.CLOUDFLARE_IMAGES_THUMBNAIL_VARIANT || '';
   const feedVariant = env.CLOUDFLARE_IMAGES_FEED_VARIANT || '';
   const normalizedTypes = mediaTypes.length ? mediaTypes : mediaUrls.map((url) => isVideoMediaUrl(url) ? 'video' : 'image');
@@ -13253,6 +13492,21 @@ function adminPostPayload(row: any, env: Env) {
     category_confidence: categoryConfidence,
     category_source: normalizeCategorySource(row.category_source),
     category_status: normalizeCategoryStatus(row.category_status),
+    secondary_categories: secondaryCategories,
+    category_scores: categoryScores,
+    detected_objects: sanitizeAutoCategoryTags(row.detected_objects_json || (categorySignals as any).detected_objects),
+    detected_scene: cleanText(row.detected_scene || (categorySignals as any).detected_scene, 80),
+    place_type: cleanText(row.place_type || (categorySignals as any).place_type, 120),
+    user_selected_category: normalizeDiscoverCategory(row.user_selected_category || (categorySignals as any).user_selected_category, false),
+    caption_keywords: sanitizeAutoCategoryTags(row.caption_keywords_json || (categorySignals as any).caption_keywords),
+    category_debug: {
+      reasons: (categorySignals as any).debug_reasons || {},
+      summary: DISCOVER_CATEGORIES
+        .filter((category) => categoryScores[category] > 0)
+        .sort((a, b) => categoryScores[b] - categoryScores[a])
+        .slice(0, 5)
+        .map((category) => `${category} ${Math.round(categoryScores[category])} because ${(((categorySignals as any).debug_reasons || {})[category] || []).slice(0, 3).join(' + ') || 'saved category score'}`),
+    },
     category_signals: categorySignals,
     category_signals_json: categorySignals,
     tags,
@@ -14012,8 +14266,12 @@ api.get('/admin/posts', authMiddleware, async (c) => {
     if (category && category !== 'all') {
       const normalizedCategory = normalizeDiscoverCategory(category, false);
       if (!normalizedCategory) return c.json({ detail: 'Unknown category.' }, 400);
-      conditions.push("LOWER(COALESCE(NULLIF(p.primary_category, ''), NULLIF(p.category, ''), 'lifestyle')) = ?");
-      binds.push(normalizedCategory);
+      conditions.push(`(
+        COALESCE(json_extract(p.category_scores_json, '$.${normalizedCategory}'), 0) >= 36
+        OR LOWER(COALESCE(NULLIF(p.primary_category, ''), NULLIF(p.category, ''), 'lifestyle')) = ?
+        OR COALESCE(p.secondary_categories_json, '') LIKE ?
+      )`);
+      binds.push(normalizedCategory, `%"${normalizedCategory}"%`);
     }
     if (surface === 'discover') {
       conditions.push("COALESCE(p.discover_blocked_at, '') = ''");
@@ -14231,12 +14489,14 @@ api.post('/admin/posts/:postId/category', authMiddleware, async (c) => {
       admin_new_category: category,
       admin_reason: reason,
     };
+    const nextScores = { [category]: 100 };
     await c.env.DB.prepare(
       `UPDATE posts
        SET primary_category = ?, category_confidence = 1, category_source = 'admin_changed',
-           category_status = 'admin_corrected', category_signals_json = ?, updated_at = datetime('now')
+           category_status = 'admin_corrected', category_signals_json = ?,
+           secondary_categories_json = ?, category_scores_json = ?, updated_at = datetime('now')
        WHERE id = ?`
-    ).bind(category, JSON.stringify(nextSignals), postId).run();
+    ).bind(category, JSON.stringify(nextSignals), JSON.stringify([category]), JSON.stringify(nextScores), postId).run();
     await writeAdminAuditLog(c, admin, {
       actionType: 'category_changed',
       targetType: 'post',

@@ -285,25 +285,24 @@ final class DiscoverNativeModel: ObservableObject {
     let photoPosts = photoDiscoverPosts(posts)
     let normalized = normalizedDiscoverCategory(category)
     guard normalized != "all" else { return photoPosts }
-    return photoPosts.filter { post in
-      normalizedSavedDiscoverCategory(post.primaryCategory) == normalized ||
-        normalizedSavedDiscoverCategory(post.category) == normalized
-    }
+    return photoPosts
   }
 }
 
 private let discoverGalleryFilters: [DiscoverGalleryFilter] = [
   .init(id: "all"),
-  .init(id: "photography"),
-  .init(id: "outdoors"),
   .init(id: "outfits"),
+  .init(id: "outdoors"),
+  .init(id: "photography"),
   .init(id: "food"),
+  .init(id: "cafe"),
   .init(id: "travel"),
-  .init(id: "events"),
-  .init(id: "nightlife"),
+  .init(id: "fitness"),
+  .init(id: "beauty"),
   .init(id: "art"),
-  .init(id: "lifestyle"),
-  .init(id: "fitness")
+  .init(id: "nightlife"),
+  .init(id: "places"),
+  .init(id: "lifestyle")
 ]
 
 private struct DiscoverGalleryFilter: Identifiable {
@@ -317,6 +316,8 @@ public struct DiscoverNativeView: View {
   @State private var reportTarget: MIRAReportTarget?
   @State private var reportSourcePost: MIRAPost?
   @State private var isReportSheetPresented = false
+  @State private var singlePhotoPreviewPost: MIRAPost?
+  @State private var isSinglePhotoPreviewPresented = false
   @EnvironmentObject private var localization: MIRALocalization
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -376,6 +377,18 @@ public struct DiscoverNativeView: View {
             }
           }
         )
+      }
+      .miraBottomSheet(
+        isPresented: $isSinglePhotoPreviewPresented,
+        preferredHeightFraction: 0.78,
+        maxHeight: 720,
+        onDismissed: { singlePhotoPreviewPost = nil }
+      ) { dismissPreview in
+        if let post = singlePhotoPreviewPost {
+          DiscoverSinglePhotoPreviewSheet(post: post, onClose: dismissPreview)
+        } else {
+          Color.clear
+        }
       }
       .miraBottomSheet(
         isPresented: $isReportSheetPresented,
@@ -485,17 +498,39 @@ public struct DiscoverNativeView: View {
       } else {
         LazyVGrid(columns: galleryGridColumns, spacing: 1) {
           ForEach(filteredGalleryPosts) { post in
-            NavigationLink(destination: DiscoverPostDetailNativeView(post: post, api: model.api).miraHideTabBarOnAppear()) {
-              DiscoverPostGalleryTile(post: post)
-            }
-            .buttonStyle(.plain)
-            .contextMenu {
-              discoverPostActions(post)
+            if shouldOpenSinglePhotoPreview(post) {
+              Button {
+                CaptroHaptics.light()
+                singlePhotoPreviewPost = post
+                withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
+                  isSinglePhotoPreviewPresented = true
+                }
+              } label: {
+                DiscoverPostGalleryTile(post: post)
+              }
+              .buttonStyle(.plain)
+              .contextMenu {
+                discoverPostActions(post)
+              }
+            } else {
+              NavigationLink(destination: DiscoverPostDetailNativeView(post: post, api: model.api).miraHideTabBarOnAppear()) {
+                DiscoverPostGalleryTile(post: post)
+              }
+              .buttonStyle(.plain)
+              .contextMenu {
+                discoverPostActions(post)
+              }
             }
           }
         }
       }
     }
+  }
+
+  private func shouldOpenSinglePhotoPreview(_ post: MIRAPost) -> Bool {
+    guard !post.containsVideoMedia else { return false }
+    let mediaCount = max(post.feedMediaURLs.count, post.mediaURLs.count)
+    return mediaCount <= 1
   }
 
   @ViewBuilder
@@ -618,6 +653,99 @@ public struct DiscoverNativeView: View {
       .padding(.top, 4)
       .padding(.bottom, 2)
     }
+  }
+}
+
+private struct DiscoverSinglePhotoPreviewSheet: View {
+  let post: MIRAPost
+  let onClose: () -> Void
+
+  var body: some View {
+    NavigationStack {
+      ScrollView {
+        VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
+          if let mediaURL {
+            GeometryReader { proxy in
+              let width = proxy.size.width
+              RemoteMediaView(
+                url: mediaURL,
+                isVideo: false,
+                placeholderURL: placeholderURL,
+                fallbackURL: fallbackURL(for: mediaURL),
+                contentMode: .fill,
+                shouldPlay: false,
+                maxPixelSize: MIRAMediaSizing.feedTargetHeight,
+                showsVideoPlaceholderIcon: false
+              )
+              .frame(width: width, height: previewHeight(for: width))
+              .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+              .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            }
+            .frame(height: previewHeight(for: UIScreen.main.bounds.width - (MIRATheme.Space.md * 2)))
+          }
+
+          if !headlineText.isEmpty {
+            Text(headlineText)
+              .font(.system(size: 22, weight: .semibold))
+              .foregroundStyle(MIRATheme.Color.textPrimary)
+              .fixedSize(horizontal: false, vertical: true)
+          }
+
+          if !captionText.isEmpty {
+            Text(captionText)
+              .font(.system(size: 15, weight: .regular))
+              .foregroundStyle(MIRATheme.Color.textSecondary)
+              .fixedSize(horizontal: false, vertical: true)
+          }
+        }
+        .padding(MIRATheme.Space.md)
+      }
+      .background(MIRATheme.Color.appBackground)
+      .navigationTitle("Preview")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .topBarTrailing) {
+          Button("Done", action: onClose)
+        }
+      }
+    }
+  }
+
+  private var mediaURL: String? {
+    uniqueURLs(post.feedMediaURLs + post.mediaURLs).first { !$0.isVideoURL }
+  }
+
+  private var placeholderURL: String? {
+    let current = mediaURL
+    return uniqueURLs(post.thumbnailMediaURLs + post.posterMediaURLs)
+      .first { !$0.isVideoURL && $0 != current }
+  }
+
+  private var headlineText: String {
+    (post.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  private var captionText: String {
+    let caption = (post.caption ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    let content = (post.content ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    return caption.isEmpty ? content : caption
+  }
+
+  private func previewHeight(for width: CGFloat) -> CGFloat {
+    let height = MIRAMediaSizing.feedHeight(for: [mediaURL ?? ""], aspectRatios: post.mediaHeightToWidthRatios, width: width)
+    return min(height, UIScreen.main.bounds.height * 0.66)
+  }
+
+  private func fallbackURL(for media: String) -> String? {
+    uniqueURLs(post.mediaURLs + post.feedMediaURLs)
+      .first { !$0.isVideoURL && $0 != media && $0 != placeholderURL }
+  }
+
+  private func uniqueURLs(_ values: [String]) -> [String] {
+    var seen = Set<String>()
+    return values
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { !$0.isEmpty && seen.insert($0).inserted }
   }
 }
 

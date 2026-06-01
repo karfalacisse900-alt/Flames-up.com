@@ -587,16 +587,18 @@ private enum PostDetailsFocusField: Hashable {
 }
 
 private let postComposerDiscoverCategories = [
-  "photography",
-  "outdoors",
   "outfits",
+  "outdoors",
+  "photography",
   "food",
+  "cafe",
   "travel",
-  "events",
-  "nightlife",
+  "fitness",
+  "beauty",
   "art",
-  "lifestyle",
-  "fitness"
+  "nightlife",
+  "places",
+  "lifestyle"
 ]
 
 private struct MIRABroadDisplayLocation: Codable, Hashable {

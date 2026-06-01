@@ -748,6 +748,30 @@ button:disabled {
   font-size: 12px;
 }
 
+.category-debug-box {
+  display: grid;
+  gap: 8px;
+}
+
+.score-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.score-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line-soft);
+  background: var(--surface-soft);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 780;
+}
+
 .privacy-warning {
   background: var(--warning-soft);
   color: var(--warning);

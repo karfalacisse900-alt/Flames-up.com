@@ -94,6 +94,17 @@ export type AdminPost = {
   category_confidence?: number;
   category_source?: string;
   category_status?: string;
+  secondary_categories?: string[];
+  category_scores?: Record<string, number>;
+  detected_objects?: string[];
+  detected_scene?: string;
+  place_type?: string;
+  user_selected_category?: string;
+  caption_keywords?: string[];
+  category_debug?: {
+    reasons?: Record<string, string[]>;
+    summary?: string[];
+  };
   category_signals?: Record<string, unknown>;
   category_signals_json?: Record<string, unknown>;
   tags?: string[];

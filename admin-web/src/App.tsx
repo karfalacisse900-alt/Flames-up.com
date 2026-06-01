@@ -67,7 +67,7 @@ const reportReasons = [
   'other',
 ];
 
-const postCategories = ['all', 'photography', 'outdoors', 'outfits', 'travel', 'events', 'nightlife', 'art', 'lifestyle', 'fitness'];
+const postCategories = ['all', 'outfits', 'outdoors', 'photography', 'food', 'cafe', 'travel', 'fitness', 'beauty', 'art', 'nightlife', 'places', 'lifestyle'];
 const editablePostCategories = postCategories.filter((category) => category !== 'all');
 
 function formatDate(value?: string | null) {
@@ -101,6 +101,13 @@ function clampText(value?: string | null, fallback = 'No text') {
 
 function postCategory(post: AdminPost) {
   return post.primary_category || post.category || 'lifestyle';
+}
+
+function sortedCategoryScores(post: AdminPost) {
+  return Object.entries(post.category_scores || {})
+    .filter(([, score]) => Number(score) > 0)
+    .sort((a, b) => Number(b[1]) - Number(a[1]))
+    .slice(0, 8);
 }
 
 function formatConfidence(value?: number) {
@@ -971,6 +978,27 @@ function PostDetailPanel({
       <div className="preview-box">
         <strong>Discover tags</strong>
         <p>{post.tags?.length ? post.tags.map((tag) => `#${tag}`).join(' ') : 'No category tags saved yet.'}</p>
+      </div>
+      <div className="preview-box category-debug-box">
+        <strong>Discover category debug</strong>
+        <div className="score-chip-row">
+          {sortedCategoryScores(post).length ? sortedCategoryScores(post).map(([category, score]) => (
+            <span className="score-chip" key={category}>{titleCase(category)} {Math.round(Number(score))}</span>
+          )) : <span className="muted">No category scores saved yet.</span>}
+        </div>
+        <p>
+          {post.category_debug?.summary?.length
+            ? post.category_debug.summary.join(' | ')
+            : 'No debug explanation saved for this post yet.'}
+        </p>
+        <span className="muted">
+          Signals: {[post.user_selected_category && `selected ${post.user_selected_category}`, post.place_type && `place ${post.place_type}`, post.detected_scene && `scene ${post.detected_scene}`].filter(Boolean).join(' / ') || 'none'}
+        </span>
+        {post.detected_objects?.length || post.caption_keywords?.length ? (
+          <p className="muted">
+            {[...(post.detected_objects || []).slice(0, 8), ...(post.caption_keywords || []).slice(0, 8).map((item) => `#${item}`)].join(' ')}
+          </p>
+        ) : null}
       </div>
       {can(session, 'content:write') ? (
         <div className="category-correction">
