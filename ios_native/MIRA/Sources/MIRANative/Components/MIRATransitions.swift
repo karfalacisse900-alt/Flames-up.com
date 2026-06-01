@@ -20,7 +20,7 @@ public enum CaptroMotion {
 
   public enum Scale {
     public static let buttonPressed: CGFloat = 0.97
-    public static let smallMenuInitial: CGFloat = 0.975
+    public static let smallMenuInitial: CGFloat = 0.965
     public static let fullScreenInitial: CGFloat = 0.985
   }
 
@@ -39,7 +39,9 @@ public enum CaptroMotion {
   }
 
   public static func fullScreenAnimation(reduceMotion: Bool) -> Animation {
-    .easeOut(duration: reduceMotion ? Duration.reduced : Duration.fullScreenOpen)
+    reduceMotion
+      ? .easeOut(duration: Duration.reduced)
+      : .spring(response: Duration.fullScreenOpen, dampingFraction: 0.92, blendDuration: 0.02)
   }
 
   public static func mediaFadeAnimation(reduceMotion: Bool) -> Animation {
@@ -261,6 +263,7 @@ private struct MIRABottomSheetModifier<Sheet: View>: ViewModifier {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var isMounted = false
   @State private var isVisible = false
+  @State private var isContentVisible = false
   @GestureState private var dragOffset: CGFloat = 0
 
   func body(content: Content) -> some View {
@@ -280,12 +283,23 @@ private struct MIRABottomSheetModifier<Sheet: View>: ViewModifier {
                 .contentShape(Rectangle())
                 .onTapGesture(perform: dismiss)
 
-              sheet(dismiss)
+              ZStack(alignment: .top) {
+                MIRATheme.Color.surface
+
+                sheet(dismiss)
+                  .opacity(isContentVisible ? 1 : 0)
+                  .offset(y: isContentVisible || reduceMotion ? 0 : 10)
+              }
                 .frame(maxWidth: .infinity)
                 .frame(height: height)
                 .background(MIRATheme.Color.surface)
                 .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.sheet, style: .continuous))
-                .shadow(color: .black.opacity(isVisible ? 0.16 : 0), radius: 24, x: 0, y: -8)
+                .overlay(alignment: .top) {
+                  RoundedRectangle(cornerRadius: MIRATheme.Radius.sheet, style: .continuous)
+                    .strokeBorder(Color.white.opacity(isVisible ? 0.12 : 0), lineWidth: 0.6)
+                    .allowsHitTesting(false)
+                }
+                .shadow(color: .black.opacity(isVisible ? 0.18 : 0), radius: 26, x: 0, y: -8)
                 .padding(.horizontal, proxy.size.width > 700 ? 76 : 0)
                 .offset(y: sheetOffset(height: height, safeAreaBottom: proxy.safeAreaInsets.bottom))
                 .simultaneousGesture(sheetDragGesture(threshold: min(180, height * 0.24)))
@@ -306,11 +320,18 @@ private struct MIRABottomSheetModifier<Sheet: View>: ViewModifier {
         newValue ? present() : dismissFromExternalState()
       }
       .animation(sheetAnimation, value: isVisible)
+      .animation(sheetContentAnimation, value: isContentVisible)
       .animation(sheetAnimation, value: dragOffset)
   }
 
   private var sheetAnimation: Animation {
     CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)
+  }
+
+  private var sheetContentAnimation: Animation {
+    reduceMotion
+      ? .easeOut(duration: CaptroMotion.Duration.reduced)
+      : .easeOut(duration: 0.18)
   }
 
   private var dismissDelay: Double {
@@ -339,16 +360,20 @@ private struct MIRABottomSheetModifier<Sheet: View>: ViewModifier {
   private func present() {
     guard !isMounted else {
       if !isVisible {
+        isContentVisible = false
         withAnimation(sheetAnimation) { isVisible = true }
+        revealSheetContent()
       }
       return
     }
     isMounted = true
+    isContentVisible = false
     MIRAApplePerformanceLogger.event("modal_open", detail: "bottom_sheet")
     DispatchQueue.main.async {
       withAnimation(sheetAnimation) {
         isVisible = true
       }
+      revealSheetContent()
     }
   }
 
@@ -356,6 +381,7 @@ private struct MIRABottomSheetModifier<Sheet: View>: ViewModifier {
     guard isMounted, isVisible else { return }
     MIRAApplePerformanceLogger.event("modal_close", detail: "bottom_sheet")
     withAnimation(sheetAnimation) {
+      isContentVisible = false
       isVisible = false
     }
     DispatchQueue.main.asyncAfter(deadline: .now() + dismissDelay) {
@@ -369,12 +395,23 @@ private struct MIRABottomSheetModifier<Sheet: View>: ViewModifier {
     guard isMounted else { return }
     MIRAApplePerformanceLogger.event("modal_close", detail: "bottom_sheet_external")
     withAnimation(sheetAnimation) {
+      isContentVisible = false
       isVisible = false
     }
     DispatchQueue.main.asyncAfter(deadline: .now() + dismissDelay) {
       guard !isPresented else { return }
       isMounted = false
       onDismissed?()
+    }
+  }
+
+  private func revealSheetContent() {
+    let delay = reduceMotion ? 0 : 0.055
+    DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+      guard isMounted, isVisible else { return }
+      withAnimation(sheetContentAnimation) {
+        isContentVisible = true
+      }
     }
   }
 }
@@ -402,6 +439,8 @@ private struct MIRAFadeScaleOverlayModifier<Overlay: View>: ViewModifier {
             overlay(dismiss)
               .opacity(isVisible ? 1 : 0)
               .scaleEffect(reduceMotion || isVisible ? 1 : CaptroMotion.Scale.smallMenuInitial)
+              .offset(y: reduceMotion || isVisible ? 0 : 6)
+              .compositingGroup()
           }
           .zIndex(850)
           .allowsHitTesting(isMounted)
@@ -489,6 +528,8 @@ private struct MIRAFullScreenBoolOverlayModifier<Overlay: View>: ViewModifier {
             overlay(dismiss)
               .opacity(isVisible ? 1 : 0)
               .scaleEffect(reduceMotion || isVisible ? 1 : CaptroMotion.Scale.fullScreenInitial)
+              .offset(y: reduceMotion || isVisible ? 0 : 8)
+              .compositingGroup()
           }
           .ignoresSafeArea()
           .zIndex(950)
@@ -577,6 +618,8 @@ private struct MIRAFullScreenItemOverlayModifier<Item: Identifiable, Overlay: Vi
             overlay(presentedItem, dismiss)
               .opacity(isVisible ? 1 : 0)
               .scaleEffect(reduceMotion || isVisible ? 1 : CaptroMotion.Scale.fullScreenInitial)
+              .offset(y: reduceMotion || isVisible ? 0 : 8)
+              .compositingGroup()
           }
           .ignoresSafeArea()
           .zIndex(950)

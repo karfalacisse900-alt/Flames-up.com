@@ -1666,8 +1666,6 @@ public struct MIRASaveToCollectionSheet: View {
   let onSelect: (String) -> Void
   let onRemove: () -> Void
   let onClose: () -> Void
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  @State private var isContentVisible = false
 
   public init(
     isSaved: Bool,
@@ -1768,19 +1766,6 @@ public struct MIRASaveToCollectionSheet: View {
       Spacer(minLength: 0)
     }
     .background(MIRATheme.Color.surface)
-    .opacity(isContentVisible ? 1 : 0)
-    .offset(y: isContentVisible || reduceMotion ? 0 : 12)
-    .onAppear(perform: revealContent)
-    .onDisappear { isContentVisible = false }
-  }
-
-  private func revealContent() {
-    isContentVisible = false
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) {
-      withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
-        isContentVisible = true
-      }
-    }
   }
 }
 

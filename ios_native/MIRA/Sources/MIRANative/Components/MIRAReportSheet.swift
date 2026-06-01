@@ -65,7 +65,7 @@ private let miraReportReasons: [MIRAReportReasonChoice] = [
 ]
 
 public struct MIRAReportSheet: View {
-  private enum Step {
+  private enum Step: Hashable {
     case reasons
     case details
     case confirmation
@@ -115,6 +115,9 @@ public struct MIRAReportSheet: View {
             confirmationStep
           }
         }
+        .id(step)
+        .transition(.opacity.combined(with: .move(edge: .trailing)))
+        .animation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion), value: step)
         .padding(.horizontal, MIRATheme.Space.lg)
         .padding(.top, MIRATheme.Space.lg)
         .padding(.bottom, MIRATheme.Space.xxl)
@@ -145,7 +148,10 @@ public struct MIRAReportSheet: View {
             .lineLimit(2)
         }
         Spacer()
-        Button(action: onClose) {
+        Button {
+          CaptroHaptics.light()
+          onClose()
+        } label: {
           Image(systemName: "xmark")
             .font(.system(size: 14, weight: .bold))
             .foregroundStyle(MIRATheme.Color.textSecondary)
@@ -334,7 +340,10 @@ public struct MIRAReportSheet: View {
           .foregroundStyle(MIRATheme.Color.textSecondary)
           .frame(maxWidth: .infinity, minHeight: 38)
 
-          Button(localization.string("common.cancel"), action: onClose)
+          Button(localization.string("common.cancel")) {
+            CaptroHaptics.light()
+            onClose()
+          }
             .buttonStyle(.plain)
             .foregroundStyle(MIRATheme.Color.textSecondary)
             .frame(maxWidth: .infinity, minHeight: 38)
@@ -359,6 +368,7 @@ public struct MIRAReportSheet: View {
         .buttonStyle(.miraPress)
 
         Button {
+          CaptroHaptics.light()
           onClose()
         } label: {
           footerButtonLabel(localization.string("common.done"), systemImage: "checkmark", filled: true)
