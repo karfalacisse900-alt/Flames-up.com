@@ -994,21 +994,34 @@ public struct DiscoverPostDetailNativeView: View {
           .frame(width: carouselCardWidth, height: carouselHeight)
           .padding(.horizontal, MIRATheme.Space.md)
       } else {
-        ScrollView(.horizontal, showsIndicators: false) {
-          LazyHStack(spacing: 12) {
-            ForEach(Array(displayMediaURLs.enumerated()), id: \.offset) { index, url in
-              DiscoverDetailMediaCard(
-                url: url,
-                isVideo: isVideo(at: index, url: url),
-                placeholderURL: placeholderURL(at: index),
-                fallbackURL: fallbackURL(at: index, url: url),
-                index: index,
-                totalCount: displayMediaURLs.count
-              )
-              .frame(width: carouselCardWidth, height: carouselHeight)
-            }
-          }
+        if displayMediaURLs.count == 1, let url = displayMediaURLs.first {
+          DiscoverDetailMediaCard(
+            url: url,
+            isVideo: isVideo(at: 0, url: url),
+            placeholderURL: placeholderURL(at: 0),
+            fallbackURL: fallbackURL(at: 0, url: url),
+            index: 0,
+            totalCount: 1
+          )
+          .frame(width: singleMediaCardWidth, height: carouselHeight)
           .padding(.horizontal, MIRATheme.Space.md)
+        } else {
+          ScrollView(.horizontal, showsIndicators: false) {
+            LazyHStack(spacing: 12) {
+              ForEach(Array(displayMediaURLs.enumerated()), id: \.offset) { index, url in
+                DiscoverDetailMediaCard(
+                  url: url,
+                  isVideo: isVideo(at: index, url: url),
+                  placeholderURL: placeholderURL(at: index),
+                  fallbackURL: fallbackURL(at: index, url: url),
+                  index: index,
+                  totalCount: displayMediaURLs.count
+                )
+                .frame(width: carouselCardWidth, height: carouselHeight)
+              }
+            }
+            .padding(.horizontal, MIRATheme.Space.md)
+          }
         }
       }
     }
@@ -1107,8 +1120,13 @@ public struct DiscoverPostDetailNativeView: View {
     max(280, UIScreen.main.bounds.width - 66)
   }
 
+  private var singleMediaCardWidth: CGFloat {
+    max(300, UIScreen.main.bounds.width - (MIRATheme.Space.md * 2))
+  }
+
   private var carouselHeight: CGFloat {
-    min(carouselCardWidth * 1.03, UIScreen.main.bounds.height * 0.58)
+    let width = displayMediaURLs.count == 1 ? singleMediaCardWidth : carouselCardWidth
+    return min(width * 1.12, UIScreen.main.bounds.height * 0.62)
   }
 
   private var captionText: String {

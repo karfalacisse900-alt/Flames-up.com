@@ -637,6 +637,7 @@ private struct StoryViewerNativeView: View {
   @State private var isStoryAudioLoading = false
   @State private var resumeStoryAudioAfterInterruption = false
   @State private var isSubmittingStoryLike = false
+  @GestureState private var storyRailDragTranslation: CGFloat = 0
   @FocusState private var isReplyFocused: Bool
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @Environment(\.scenePhase) private var scenePhase
@@ -855,8 +856,17 @@ private struct StoryViewerNativeView: View {
     .frame(maxWidth: .infinity)
     .frame(height: 128)
     .padding(.top, 6)
+    .offset(x: clampedStoryRailDrag)
+    .animation(storyRailAnimation, value: activeGroup.userId)
+    .animation(.interactiveSpring(response: 0.18, dampingFraction: 0.92, blendDuration: 0.02), value: storyRailDragTranslation)
     .highPriorityGesture(
       DragGesture(minimumDistance: 28, coordinateSpace: .local)
+        .updating($storyRailDragTranslation) { value, state, _ in
+          let horizontal = value.translation.width
+          let vertical = value.translation.height
+          guard abs(horizontal) > abs(vertical) * 1.15 else { return }
+          state = horizontal
+        }
         .onEnded(handleStoryGroupSwipe)
     )
   }
@@ -867,6 +877,17 @@ private struct StoryViewerNativeView: View {
 
   private func storyMediaTopInset(safeTop: CGFloat) -> CGFloat {
     safeTop > 0 ? 18 : 14
+  }
+
+  private var clampedStoryRailDrag: CGFloat {
+    let limit: CGFloat = 104
+    return min(max(storyRailDragTranslation, -limit), limit)
+  }
+
+  private var storyRailAnimation: Animation {
+    reduceMotion
+      ? .easeOut(duration: CaptroMotion.Duration.reduced)
+      : .interactiveSpring(response: 0.24, dampingFraction: 0.86, blendDuration: 0.04)
   }
 
   @ViewBuilder
@@ -900,15 +921,15 @@ private struct StoryViewerNativeView: View {
   private func prewarmStoryMediaWindow() async {
     let urls = storyMediaWindowURLs()
     guard !urls.isEmpty else { return }
-    MIRAVideoPrewarmManager.shared.prewarm(urls: urls, keepOnly: Set(urls.prefix(4)))
-    await MIRAImagePrefetcher.prefetch(urls: urls, maxPixelSize: 1920, limit: 10)
+    MIRAVideoPrewarmManager.shared.prewarm(urls: urls, keepOnly: Set(urls.prefix(8)))
+    await MIRAImagePrefetcher.prefetch(urls: urls, maxPixelSize: 1920, limit: 14)
   }
 
   private func storyMediaWindowURLs() -> [String] {
     var urls: [String] = []
 
     let lower = max(0, selectedIndex - 1)
-    let upper = min(stories.count - 1, selectedIndex + 3)
+    let upper = min(stories.count - 1, selectedIndex + 5)
     if lower <= upper {
       for index in lower...upper {
         if let url = stories[index].mediaURL {
@@ -919,10 +940,10 @@ private struct StoryViewerNativeView: View {
 
     let groups = storyRailGroups
     if let groupIndex = groups.firstIndex(where: { $0.userId == activeGroup.userId }) {
-      for offset in [-1, 1, 2] {
+      for offset in [-1, 1, 2, 3, 4, 5] {
         let nextIndex = groupIndex + offset
         guard groups.indices.contains(nextIndex) else { continue }
-        urls.append(contentsOf: (groups[nextIndex].statuses ?? []).prefix(2).compactMap(\.mediaURL))
+        urls.append(contentsOf: (groups[nextIndex].statuses ?? []).prefix(5).compactMap(\.mediaURL))
       }
     }
 
@@ -948,7 +969,7 @@ private struct StoryViewerNativeView: View {
   }
 
   private func selectStoryGroup(_ railGroup: MIRAStoryGroup) {
-    withAnimation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion)) {
+    withAnimation(storyRailAnimation) {
       activeGroupOverride = railGroup
       localStories = railGroup.statuses ?? []
       selectedIndex = 0
