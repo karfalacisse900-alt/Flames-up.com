@@ -2154,6 +2154,7 @@ type DiscoverCategory =
   | 'food'
   | 'cafe'
   | 'travel'
+  | 'events'
   | 'nightlife'
   | 'art'
   | 'lifestyle'
@@ -2213,6 +2214,7 @@ const DISCOVER_CATEGORIES: DiscoverCategory[] = [
   'food',
   'cafe',
   'travel',
+  'events',
   'nightlife',
   'art',
   'lifestyle',
@@ -2225,6 +2227,7 @@ const CATEGORY_KEYWORDS: Record<DiscoverCategory, string[]> = {
   outfits: ['outfit', 'fit', 'fit check', 'clothes', 'style', 'fashion', 'streetwear', 'shoes', 'shoe', 'jacket', 'mirror selfie', 'clothing', 'accessories', 'sneakers', 'dress', 'apparel', 'person', 'full body pose'],
   food: ['food', 'meal', 'restaurant', 'drink', 'dessert', 'pizza', 'burger', 'cooking', 'plate', 'breakfast', 'lunch', 'dinner', 'brunch', 'kitchen', 'recipe', 'snack', 'dish', 'table'],
   cafe: ['cafe', 'café', 'coffee', 'latte', 'espresso', 'bakery', 'pastry', 'brunch', 'tea', 'coffee shop'],
+  events: ['event', 'events', 'concert', 'festival', 'meetup', 'show', 'game', 'crowd', 'stadium', 'venue', 'performance', 'birthday', 'wedding', 'audience', 'stage', 'party', 'celebration', 'ceremony', 'conference', 'ticket'],
   outdoors: ['outdoors', 'outdoor', 'outside', 'park', 'beach', 'hiking', 'trail', 'nature', 'mountain', 'lake', 'sunset', 'sunrise', 'trees', 'tree', 'forest', 'walking', 'landscape', 'snow', 'sky', 'water', 'river', 'ocean', 'sea', 'flower', 'plant', 'grass', 'garden', 'field', 'woods', 'camping'],
   nightlife: ['nightlife', 'night', 'club', 'bar', 'lounge', 'party', 'rooftop', 'dj', 'drinks', 'city night', 'after dark', 'dance', 'neon', 'dark', 'cocktail', 'evening'],
   travel: ['travel', 'trip', 'vacation', 'hotel', 'airport', 'landmark', 'city visit', 'tourist', 'destination', 'road trip', 'passport', 'flight', 'city', 'street', 'architecture', 'building', 'castle', 'monument', 'bridge', 'train', 'station', 'historic', 'old town', 'view'],
@@ -2245,11 +2248,64 @@ function normalizeDiscoverCategory(value: unknown, allowAll = false): DiscoverCa
     coffee: 'cafe',
     cafes: 'cafe',
     place: 'places',
-    event: 'places',
-    events: 'places',
+    event: 'events',
+    events: 'events',
   };
   const normalized = aliases[clean] || clean;
   return DISCOVER_CATEGORIES.includes(normalized as DiscoverCategory) ? normalized as DiscoverCategory : '';
+}
+
+function discoverCategorySearchTerms(category: DiscoverCategory): string[] {
+  const aliases: Partial<Record<DiscoverCategory, string[]>> = {
+    outfits: ['outfit', 'fit check', 'fashion', 'style', 'clothing'],
+    outdoors: ['outdoor', 'outside', 'nature', 'park', 'beach', 'trail'],
+    photography: ['photo', 'camera', 'portrait', 'street photo', 'landscape'],
+    cafe: ['coffee shop', 'coffee', 'bakery', 'brunch'],
+    events: ['event', 'concert', 'festival', 'venue', 'stadium', 'performance'],
+    nightlife: ['night life', 'club', 'bar', 'party', 'neon'],
+    places: ['place', 'city spot', 'location', 'store', 'museum'],
+  };
+  const seen = new Set<string>();
+  return [category, ...(CATEGORY_KEYWORDS[category] || []), ...(aliases[category] || [])]
+    .map((term) => cleanText(term, 80).toLowerCase().trim())
+    .filter((term) => term.length >= 3 && !seen.has(term) && seen.add(term))
+    .slice(0, 28);
+}
+
+function discoverCategoryCondition(postAlias: string, category: DiscoverCategory, scoreThreshold = 24): { sql: string; binds: any[] } {
+  const alias = postAlias.replace(/[^a-zA-Z0-9_]/g, '') || 'p';
+  const terms = discoverCategorySearchTerms(category);
+  const textExpression = `LOWER(
+    COALESCE(${alias}.tags_json, '') || ' ' ||
+    COALESCE(${alias}.caption_keywords_json, '') || ' ' ||
+    COALESCE(${alias}.detected_objects_json, '') || ' ' ||
+    COALESCE(${alias}.category_signals_json, '') || ' ' ||
+    COALESCE(${alias}.content, '') || ' ' ||
+    COALESCE(${alias}.title, '') || ' ' ||
+    COALESCE(${alias}.location, '') || ' ' ||
+    COALESCE(${alias}.display_location_label, '') || ' ' ||
+    COALESCE(${alias}.place_name, '') || ' ' ||
+    COALESCE(${alias}.place_category, '') || ' ' ||
+    COALESCE(${alias}.place_type, '') || ' ' ||
+    COALESCE(${alias}.detected_scene, '')
+  )`;
+  const keywordSql = terms.map(() => `${textExpression} LIKE ?`).join(' OR ');
+  return {
+    sql: `(
+      COALESCE(json_extract(${alias}.category_scores_json, '$.${category}'), 0) >= ?
+      OR LOWER(COALESCE(NULLIF(${alias}.primary_category, ''), NULLIF(${alias}.category, ''), 'lifestyle')) = ?
+      OR LOWER(COALESCE(${alias}.user_selected_category, '')) = ?
+      OR COALESCE(${alias}.secondary_categories_json, '') LIKE ?
+      OR ${keywordSql}
+    )`,
+    binds: [
+      scoreThreshold,
+      category,
+      category,
+      `%"${category}"%`,
+      ...terms.map((term) => `%${term}%`),
+    ],
+  };
 }
 
 function normalizeCategorySource(value: unknown): AutoCategorySource {
@@ -2392,7 +2448,8 @@ function boostFromPlaceType(
     { category: 'fitness', keywords: ['gym', 'fitness', 'studio', 'sport', 'court', 'training'], weight: 55 },
     { category: 'outdoors', keywords: ['park', 'beach', 'trail', 'hiking', 'lake', 'mountain', 'garden'], weight: 58 },
     { category: 'nightlife', keywords: ['bar', 'club', 'lounge', 'nightclub', 'rooftop'], weight: 58 },
-    { category: 'places', keywords: ['venue', 'store', 'shop', 'museum', 'school', 'mall', 'market', 'address'], weight: 48 },
+    { category: 'events', keywords: ['event', 'concert', 'festival', 'meetup', 'show', 'game', 'crowd', 'stadium', 'venue', 'performance', 'birthday', 'wedding', 'stage'], weight: 58 },
+    { category: 'places', keywords: ['store', 'shop', 'museum', 'school', 'mall', 'market', 'address', 'library'], weight: 48 },
     { category: 'art', keywords: ['gallery', 'museum', 'art', 'mural', 'studio'], weight: 52 },
     { category: 'travel', keywords: ['hotel', 'airport', 'landmark', 'station', 'tourist', 'bridge'], weight: 50 },
     { category: 'beauty', keywords: ['salon', 'beauty', 'makeup', 'hair', 'nails', 'barber'], weight: 56 },
@@ -12504,25 +12561,9 @@ api.get('/discover', authMiddleware, async (c) => {
   ];
   const binds: any[] = [userId, userId, userId, ...visiblePostBindValues(userId)];
   if (category !== 'all') {
-    conditions.push(`(
-      COALESCE(json_extract(p.category_scores_json, '$.${category}'), 0) >= 30
-      OR LOWER(COALESCE(NULLIF(p.primary_category, ''), NULLIF(p.category, ''), 'lifestyle')) = ?
-      OR LOWER(COALESCE(p.user_selected_category, '')) = ?
-      OR COALESCE(p.secondary_categories_json, '') LIKE ?
-      OR LOWER(COALESCE(p.tags_json, '')) LIKE ?
-      OR LOWER(COALESCE(p.caption_keywords_json, '')) LIKE ?
-      OR LOWER(COALESCE(p.detected_objects_json, '')) LIKE ?
-      OR LOWER(COALESCE(p.category_signals_json, '')) LIKE ?
-      OR LOWER(
-        COALESCE(p.content, '') || ' ' ||
-        COALESCE(p.location, '') || ' ' ||
-        COALESCE(p.place_name, '') || ' ' ||
-        COALESCE(p.place_category, '') || ' ' ||
-        COALESCE(p.place_type, '')
-      ) LIKE ?
-    )`);
-    const categoryPattern = `%${category}%`;
-    binds.push(category, category, `%"${category}"%`, categoryPattern, categoryPattern, categoryPattern, categoryPattern, categoryPattern);
+    const categoryMatch = discoverCategoryCondition('p', category);
+    conditions.push(categoryMatch.sql);
+    binds.push(...categoryMatch.binds);
   }
   const sql = [
     `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
@@ -15310,6 +15351,7 @@ api.get('/admin/posts', authMiddleware, async (c) => {
   try {
     await requireAdminRole(c, 'content:read');
     await ensureAdminModerationSchema(c.env.DB);
+    await ensurePostEditorSchema(c.env.DB);
     await ensureAutoCategorySchema(c.env.DB);
     await ensureLocationSchema(c.env.DB);
     const { limit, offset } = adminPageParams(c);
@@ -15325,26 +15367,10 @@ api.get('/admin/posts', authMiddleware, async (c) => {
     }
     if (category && category !== 'all') {
       const normalizedCategory = normalizeDiscoverCategory(category, false);
-      if (!normalizedCategory) return c.json({ detail: 'Unknown category.' }, 400);
-      conditions.push(`(
-        COALESCE(json_extract(p.category_scores_json, '$.${normalizedCategory}'), 0) >= 30
-        OR LOWER(COALESCE(NULLIF(p.primary_category, ''), NULLIF(p.category, ''), 'lifestyle')) = ?
-        OR LOWER(COALESCE(p.user_selected_category, '')) = ?
-        OR COALESCE(p.secondary_categories_json, '') LIKE ?
-        OR LOWER(COALESCE(p.tags_json, '')) LIKE ?
-        OR LOWER(COALESCE(p.caption_keywords_json, '')) LIKE ?
-        OR LOWER(COALESCE(p.detected_objects_json, '')) LIKE ?
-        OR LOWER(COALESCE(p.category_signals_json, '')) LIKE ?
-        OR LOWER(
-          COALESCE(p.content, '') || ' ' ||
-          COALESCE(p.location, '') || ' ' ||
-          COALESCE(p.place_name, '') || ' ' ||
-          COALESCE(p.place_category, '') || ' ' ||
-          COALESCE(p.place_type, '')
-        ) LIKE ?
-      )`);
-      const categoryPattern = `%${normalizedCategory}%`;
-      binds.push(normalizedCategory, normalizedCategory, `%"${normalizedCategory}"%`, categoryPattern, categoryPattern, categoryPattern, categoryPattern, categoryPattern);
+      if (!normalizedCategory || normalizedCategory === 'all') return c.json({ detail: 'Unknown category.' }, 400);
+      const categoryMatch = discoverCategoryCondition('p', normalizedCategory);
+      conditions.push(categoryMatch.sql);
+      binds.push(...categoryMatch.binds);
     }
     if (surface === 'discover') {
       conditions.push("COALESCE(p.discover_blocked_at, '') = ''");

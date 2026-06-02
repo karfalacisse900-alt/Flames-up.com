@@ -30,11 +30,15 @@ public enum MIRAAutoCategoryService {
     "outfits": ["outfit", "fit", "fit check", "clothes", "style", "fashion", "streetwear", "shoes", "shoe", "jacket", "mirror selfie", "clothing", "accessories", "sneakers", "dress", "apparel", "person"],
     "outdoors": ["outdoors", "outdoor", "outside", "park", "beach", "hiking", "trail", "nature", "mountain", "lake", "sunset", "sunrise", "trees", "tree", "forest", "walking", "landscape", "snow", "sky", "water", "river", "ocean", "sea", "flower", "plant", "grass", "garden", "field", "woods", "camping"],
     "events": ["event", "concert", "festival", "meetup", "show", "game", "crowd", "stadium", "venue", "performance", "birthday", "wedding", "audience", "stage", "party", "celebration"],
+    "food": ["food", "meal", "restaurant", "drink", "dessert", "pizza", "burger", "cooking", "plate", "breakfast", "lunch", "dinner", "brunch", "kitchen", "recipe", "snack", "dish", "table"],
+    "cafe": ["cafe", "coffee", "latte", "espresso", "bakery", "pastry", "brunch", "tea", "coffee shop"],
     "nightlife": ["nightlife", "night", "club", "bar", "lounge", "party", "rooftop", "dj", "drinks", "city night", "after dark", "dance", "neon", "dark", "cocktail", "evening"],
     "travel": ["travel", "trip", "vacation", "hotel", "airport", "landmark", "city visit", "tourist", "destination", "road trip", "passport", "flight", "city", "street", "architecture", "building", "castle", "monument", "bridge", "train", "station", "historic", "old town", "view"],
     "photography": ["photography", "portrait", "camera", "photo shoot", "street photo", "aesthetic", "landscape shot", "creative shot", "close up", "close-up", "lens", "film", "macro", "black and white", "monochrome", "composition"],
     "art": ["art", "drawing", "painting", "design", "sketch", "illustration", "mural", "gallery", "creative work", "museum", "artist", "craft", "sculpture", "visual art"],
     "fitness": ["gym", "workout", "running", "fitness", "sport", "basketball", "soccer", "training", "yoga", "exercise", "athlete", "cycling", "bike", "bicycle"],
+    "beauty": ["beauty", "makeup", "hair", "skincare", "nails", "salon", "lipstick", "cosmetic", "cosmetics", "lash", "lashes", "barber"],
+    "places": ["place", "places", "venue", "store", "shop", "mall", "museum", "school", "library", "market", "neighborhood", "downtown", "address", "location", "city spot"],
     "lifestyle": ["daily life", "friends", "home", "routine", "random moment", "personal moment", "general capture", "selfie", "room", "people", "human", "family"]
   ]
 

@@ -572,6 +572,7 @@ private let postComposerDiscoverCategories = [
   "food",
   "cafe",
   "travel",
+  "events",
   "fitness",
   "beauty",
   "art",
