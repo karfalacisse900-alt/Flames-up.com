@@ -127,6 +127,13 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
   public let categoryConfidence: Double?
   public let categorySource: String?
   public let categoryStatus: String?
+  public let secondaryCategories: FlexibleStringArray?
+  public let categoryScores: [String: Double]?
+  public let detectedObjects: FlexibleStringArray?
+  public let detectedScene: String?
+  public let placeType: String?
+  public let userSelectedCategory: String?
+  public let captionKeywords: FlexibleStringArray?
   public let tags: FlexibleStringArray?
   public let visibility: String?
   public let placeId: String?
@@ -324,6 +331,13 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
       categoryConfidence: categoryConfidence,
       categorySource: categorySource,
       categoryStatus: categoryStatus,
+      secondaryCategories: secondaryCategories,
+      categoryScores: categoryScores,
+      detectedObjects: detectedObjects,
+      detectedScene: detectedScene,
+      placeType: placeType,
+      userSelectedCategory: userSelectedCategory,
+      captionKeywords: captionKeywords,
       tags: tags,
       visibility: visibility,
       placeId: placeId,
@@ -392,6 +406,13 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
       categoryConfidence: categoryConfidence,
       categorySource: categorySource,
       categoryStatus: categoryStatus,
+      secondaryCategories: secondaryCategories,
+      categoryScores: categoryScores,
+      detectedObjects: detectedObjects,
+      detectedScene: detectedScene,
+      placeType: placeType,
+      userSelectedCategory: userSelectedCategory,
+      captionKeywords: captionKeywords,
       tags: tags,
       visibility: visibility,
       placeId: placeId,

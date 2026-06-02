@@ -848,23 +848,26 @@ private struct ProfilePostTile: View {
   }
 
   private var tileContent: some View {
-    ZStack {
-      if let media = post.thumbnailMediaURLs.first {
-        RemoteMediaView(
-          url: media,
-          isVideo: media.isVideoURL,
-          shouldPlay: false,
-          maxPixelSize: 520,
-          showsVideoPlaceholderIcon: false
-        )
-      } else {
-        MIRATheme.Color.surfaceSoft
+    ZStack(alignment: .topTrailing) {
+      Group {
+        if let media = post.thumbnailMediaURLs.first {
+          RemoteMediaView(
+            url: media,
+            isVideo: media.isVideoURL,
+            shouldPlay: false,
+            maxPixelSize: 520,
+            showsVideoPlaceholderIcon: false
+          )
+        } else {
+          MIRATheme.Color.surfaceSoft
+        }
       }
+      .frame(width: size, height: height)
+      .clipped()
 
       statusBadges
     }
     .frame(width: size, height: height)
-    .clipped()
     .contentShape(Rectangle())
   }
 
@@ -879,9 +882,10 @@ private struct ProfilePostTile: View {
           profileTileBadge(systemImage: "lock.fill", label: "Private post")
         }
       }
-      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-      .padding(6)
+      .padding(.top, 10)
+      .padding(.trailing, 10)
       .allowsHitTesting(false)
+      .zIndex(2)
     }
   }
 

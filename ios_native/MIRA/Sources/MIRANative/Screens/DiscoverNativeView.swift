@@ -72,6 +72,9 @@ final class DiscoverNativeModel: ObservableObject {
     if let cachedPosts = await cachedDiscoverPosts(for: normalized) {
       posts = scopedDiscoverPosts(cachedPosts, category: normalized)
       isLoadingPosts = false
+    } else if normalized != "all", let cachedAllPosts = await cachedDiscoverPosts(for: "all") {
+      posts = scopedDiscoverPosts(cachedAllPosts, category: normalized)
+      isLoadingPosts = posts.isEmpty
     } else {
       posts = []
       isLoadingPosts = true
@@ -96,8 +99,14 @@ final class DiscoverNativeModel: ObservableObject {
     do {
       let encodedCategory = category.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "all"
       var loaded: [MIRAPost] = scopedDiscoverPosts(try await api.get("/discover?category=\(encodedCategory)&limit=36"), category: category)
+      if loaded.isEmpty && category != "all" {
+        loaded = scopedDiscoverPosts((try? await api.get("/discover?category=all&limit=60")) ?? [], category: category)
+      }
       if loaded.isEmpty && category == "all" {
         loaded = photoDiscoverPosts((try? await api.get("/posts/feed?limit=24")) ?? [])
+      }
+      if loaded.isEmpty && category != "all" {
+        loaded = scopedDiscoverPosts((try? await api.get("/posts/feed?limit=60")) ?? [], category: category)
       }
       if loaded.isEmpty && category == "all" {
         loaded = photoDiscoverPosts((try? await api.get("/posts/world-board?limit=24")) ?? [])
@@ -285,7 +294,47 @@ final class DiscoverNativeModel: ObservableObject {
     let photoPosts = photoDiscoverPosts(posts)
     let normalized = normalizedDiscoverCategory(category)
     guard normalized != "all" else { return photoPosts }
-    return photoPosts
+    return photoPosts.filter { postMatchesDiscoverCategory($0, category: normalized) }
+  }
+
+  private func postMatchesDiscoverCategory(_ post: MIRAPost, category: String) -> Bool {
+    let normalized = normalizedDiscoverCategory(category)
+    let savedCategories = [
+      post.primaryCategory,
+      post.category,
+      post.userSelectedCategory,
+      post.postType
+    ].compactMap(normalizedSavedDiscoverCategory)
+    if savedCategories.contains(normalized) { return true }
+
+    let secondaryCategories = post.secondaryCategories?.values.compactMap(normalizedSavedDiscoverCategory) ?? []
+    if secondaryCategories.contains(normalized) { return true }
+
+    if let score = post.categoryScores?[normalized], score >= 30 { return true }
+
+    let arraySignals = [
+      post.tags?.values,
+      post.detectedObjects?.values,
+      post.captionKeywords?.values
+    ].compactMap { $0 }.flatMap { $0 }
+    let textSignals = [
+      post.title,
+      post.caption,
+      post.content,
+      post.location,
+      post.displayLocationLabel,
+      post.placeName,
+      post.placeCategory,
+      post.placeCity,
+      post.placeCountry,
+      post.detectedScene,
+      post.placeType
+    ].compactMap { $0 }
+    let searchable = (arraySignals + textSignals).joined(separator: " ").lowercased()
+
+    return discoverCategoryKeywords[normalized]?.contains { keyword in
+      searchable.contains(keyword)
+    } == true
   }
 }
 
@@ -303,6 +352,21 @@ private let discoverGalleryFilters: [DiscoverGalleryFilter] = [
   .init(id: "nightlife"),
   .init(id: "places"),
   .init(id: "lifestyle")
+]
+
+private let discoverCategoryKeywords: [String: [String]] = [
+  "outfits": ["outfit", "fit check", "clothes", "clothing", "style", "fashion", "streetwear", "shoes", "jacket", "dress"],
+  "outdoors": ["outdoor", "outside", "park", "beach", "trail", "hiking", "nature", "mountain", "lake", "sunset", "trees", "forest", "sky"],
+  "photography": ["photography", "camera", "portrait", "photo shoot", "street photo", "landscape", "lens", "film", "monochrome", "composition"],
+  "food": ["food", "meal", "restaurant", "plate", "drink", "dessert", "pizza", "burger", "breakfast", "dinner"],
+  "cafe": ["cafe", "coffee", "latte", "espresso", "bakery", "pastry", "brunch", "tea"],
+  "travel": ["travel", "trip", "vacation", "hotel", "airport", "landmark", "tourist", "city", "bridge", "street", "architecture"],
+  "fitness": ["gym", "workout", "running", "fitness", "sport", "training", "yoga", "bike", "cycling"],
+  "beauty": ["beauty", "makeup", "hair", "skincare", "nails", "salon", "cosmetic"],
+  "art": ["art", "drawing", "painting", "design", "sketch", "mural", "gallery", "museum"],
+  "nightlife": ["nightlife", "night", "club", "bar", "lounge", "party", "rooftop", "drinks", "neon"],
+  "places": ["place", "venue", "store", "shop", "museum", "school", "market", "downtown", "location"],
+  "lifestyle": ["lifestyle", "daily life", "friends", "home", "routine", "selfie", "people", "family"]
 ]
 
 private struct DiscoverGalleryFilter: Identifiable {

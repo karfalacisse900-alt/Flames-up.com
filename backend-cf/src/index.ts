@@ -2456,7 +2456,7 @@ function autoCategoryEngine(input: AutoCategoryInput): AutoCategoryResult {
   const appleLabels = sanitizeAutoCategoryLabels(input.appleLabels || []);
   const backendLabels = sanitizeAutoCategoryLabels(input.backendLabels || []);
 
-  if (userSelectedCategory) addCategoryScore(scores, reasons, userSelectedCategory, 38, 'user selected category');
+  if (userSelectedCategory) addCategoryScore(scores, reasons, userSelectedCategory, 64, 'user selected category');
   if (backendGuess) addCategoryScore(scores, reasons, backendGuess, 45 * Math.max(backendConfidence, 0.55), 'backend AI category');
   if (appleGuess) addCategoryScore(scores, reasons, appleGuess, 30 * Math.max(appleConfidence, 0.55), 'Apple Vision category');
   scoreCategoryFromText(scores, caption, 18, reasons, 'caption');
@@ -12505,11 +12505,24 @@ api.get('/discover', authMiddleware, async (c) => {
   const binds: any[] = [userId, userId, userId, ...visiblePostBindValues(userId)];
   if (category !== 'all') {
     conditions.push(`(
-      COALESCE(json_extract(p.category_scores_json, '$.${category}'), 0) >= 36
+      COALESCE(json_extract(p.category_scores_json, '$.${category}'), 0) >= 30
       OR LOWER(COALESCE(NULLIF(p.primary_category, ''), NULLIF(p.category, ''), 'lifestyle')) = ?
+      OR LOWER(COALESCE(p.user_selected_category, '')) = ?
       OR COALESCE(p.secondary_categories_json, '') LIKE ?
+      OR LOWER(COALESCE(p.tags_json, '')) LIKE ?
+      OR LOWER(COALESCE(p.caption_keywords_json, '')) LIKE ?
+      OR LOWER(COALESCE(p.detected_objects_json, '')) LIKE ?
+      OR LOWER(COALESCE(p.category_signals_json, '')) LIKE ?
+      OR LOWER(
+        COALESCE(p.content, '') || ' ' ||
+        COALESCE(p.location, '') || ' ' ||
+        COALESCE(p.place_name, '') || ' ' ||
+        COALESCE(p.place_category, '') || ' ' ||
+        COALESCE(p.place_type, '')
+      ) LIKE ?
     )`);
-    binds.push(category, `%"${category}"%`);
+    const categoryPattern = `%${category}%`;
+    binds.push(category, category, `%"${category}"%`, categoryPattern, categoryPattern, categoryPattern, categoryPattern, categoryPattern);
   }
   const sql = [
     `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
@@ -15314,11 +15327,24 @@ api.get('/admin/posts', authMiddleware, async (c) => {
       const normalizedCategory = normalizeDiscoverCategory(category, false);
       if (!normalizedCategory) return c.json({ detail: 'Unknown category.' }, 400);
       conditions.push(`(
-        COALESCE(json_extract(p.category_scores_json, '$.${normalizedCategory}'), 0) >= 36
+        COALESCE(json_extract(p.category_scores_json, '$.${normalizedCategory}'), 0) >= 30
         OR LOWER(COALESCE(NULLIF(p.primary_category, ''), NULLIF(p.category, ''), 'lifestyle')) = ?
+        OR LOWER(COALESCE(p.user_selected_category, '')) = ?
         OR COALESCE(p.secondary_categories_json, '') LIKE ?
+        OR LOWER(COALESCE(p.tags_json, '')) LIKE ?
+        OR LOWER(COALESCE(p.caption_keywords_json, '')) LIKE ?
+        OR LOWER(COALESCE(p.detected_objects_json, '')) LIKE ?
+        OR LOWER(COALESCE(p.category_signals_json, '')) LIKE ?
+        OR LOWER(
+          COALESCE(p.content, '') || ' ' ||
+          COALESCE(p.location, '') || ' ' ||
+          COALESCE(p.place_name, '') || ' ' ||
+          COALESCE(p.place_category, '') || ' ' ||
+          COALESCE(p.place_type, '')
+        ) LIKE ?
       )`);
-      binds.push(normalizedCategory, `%"${normalizedCategory}"%`);
+      const categoryPattern = `%${normalizedCategory}%`;
+      binds.push(normalizedCategory, normalizedCategory, `%"${normalizedCategory}"%`, categoryPattern, categoryPattern, categoryPattern, categoryPattern, categoryPattern);
     }
     if (surface === 'discover') {
       conditions.push("COALESCE(p.discover_blocked_at, '') = ''");

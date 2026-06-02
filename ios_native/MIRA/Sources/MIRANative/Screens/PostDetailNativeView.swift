@@ -1200,7 +1200,7 @@ private struct DiscoverDetailMediaCard: View {
         isVideo: isVideo,
         placeholderURL: placeholderURL,
         fallbackURL: fallbackURL,
-        contentMode: .fill,
+        contentMode: .fit,
         shouldPlay: false,
         maxPixelSize: MIRAMediaSizing.feedTargetHeight,
         showsVideoPlaceholderIcon: isVideo
