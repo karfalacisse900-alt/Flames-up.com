@@ -192,6 +192,7 @@ public struct MIRANativeRootView: View {
   @State private var loadedTabs: Set<MIRATab> = [.main]
   @State private var isPrivacyShieldVisible = false
   @State private var featureStatusBarHidden = false
+  @AppStorage(MIRAAppearanceResolver.preferenceKey) private var appearancePreference = MIRAAppearance.system.rawValue
   @StateObject private var authSession: MIRAAuthSession
   @StateObject private var startup: MIRAStartupCoordinator
   @StateObject private var callCoordinator: MIRAAppCallCoordinator
@@ -240,6 +241,7 @@ public struct MIRANativeRootView: View {
     }
     .background(MIRATheme.Color.launchBackground.ignoresSafeArea())
     .environmentObject(localization)
+    .preferredColorScheme(MIRAAppearanceResolver.colorScheme(for: appearancePreference))
     .statusBarHidden(shouldHideStatusBar)
     .onPreferenceChange(MIRAStatusBarHiddenPreferenceKey.self) { hidden in
       featureStatusBarHidden = hidden

@@ -1001,9 +1001,7 @@ public struct DiscoverPostDetailNativeView: View {
                 url: url,
                 isVideo: isVideo(at: index, url: url),
                 placeholderURL: placeholderURL(at: index),
-                fallbackURL: fallbackURL(at: index, url: url),
-                index: index,
-                totalCount: displayMediaURLs.count
+                fallbackURL: fallbackURL(at: index, url: url)
               )
               .frame(width: carouselCardWidth, height: carouselHeight)
             }
@@ -1190,34 +1188,20 @@ private struct DiscoverDetailMediaCard: View {
   let isVideo: Bool
   let placeholderURL: String?
   let fallbackURL: String?
-  let index: Int
-  let totalCount: Int
 
   var body: some View {
-    ZStack(alignment: .topTrailing) {
+    ZStack {
       RemoteMediaView(
         url: url,
         isVideo: isVideo,
         placeholderURL: placeholderURL,
         fallbackURL: fallbackURL,
-        contentMode: .fit,
+        contentMode: .fill,
         shouldPlay: false,
         maxPixelSize: MIRAMediaSizing.feedTargetHeight,
         showsVideoPlaceholderIcon: isVideo
       )
       .allowsHitTesting(false)
-
-      if totalCount > 1 {
-        Text("\(index + 1)/\(totalCount)")
-          .font(.system(size: 20, weight: .medium))
-          .foregroundStyle(.white)
-          .padding(.horizontal, 17)
-          .padding(.vertical, 10)
-          .background(Color.black.opacity(0.78))
-          .clipShape(Capsule())
-          .overlay(Capsule().stroke(Color.white.opacity(0.12), lineWidth: 1))
-          .padding(16)
-      }
     }
     .background(MIRATheme.Color.mediaPlaceholder)
     .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))

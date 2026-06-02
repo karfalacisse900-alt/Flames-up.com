@@ -149,14 +149,8 @@ private struct ProfileUsernameAvailabilityResponse: Decodable {
 }
 
 private struct ProfileGridSkeleton: View {
-  private var gridTileSize: CGFloat {
-    floor((UIScreen.main.bounds.width - 2) / 3)
-  }
-  private var gridTileHeight: CGFloat {
-    gridTileSize * MIRAMediaSizing.profileGridRatio
-  }
   private var columns: [GridItem] {
-    Array(repeating: GridItem(.fixed(gridTileSize), spacing: 1), count: 3)
+    Array(repeating: GridItem(.flexible(), spacing: 1), count: 3)
   }
 
   var body: some View {
@@ -164,10 +158,10 @@ private struct ProfileGridSkeleton: View {
       ForEach(0..<9, id: \.self) { _ in
         Rectangle()
           .fill(MIRATheme.Color.surfaceSoft)
-          .frame(width: gridTileSize, height: gridTileHeight)
+          .aspectRatio(1.0 / MIRAMediaSizing.profileGridRatio, contentMode: .fit)
       }
     }
-    .frame(width: UIScreen.main.bounds.width, alignment: .center)
+    .frame(maxWidth: .infinity, alignment: .center)
     .redacted(reason: .placeholder)
   }
 }
@@ -177,11 +171,8 @@ public struct ProfileNativeView: View {
   @State private var showEditProfile = false
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   private let authSession: MIRAAuthSession?
-  private var gridTileSize: CGFloat {
-    floor((UIScreen.main.bounds.width - 2) / 3)
-  }
   private var postGridColumns: [GridItem] {
-    Array(repeating: GridItem(.fixed(gridTileSize), spacing: 1), count: 3)
+    Array(repeating: GridItem(.flexible(), spacing: 1), count: 3)
   }
 
   public init(api: MIRAAPIClient, authSession: MIRAAuthSession? = nil) {
@@ -206,7 +197,6 @@ public struct ProfileNativeView: View {
               ForEach(model.posts) { post in
                 ProfilePostTile(
                   post: post,
-                  size: gridTileSize,
                   onPin: { Task { await model.togglePin(post) } },
                   onDelete: { Task { await model.deletePost(post) } },
                   onMakePublic: { Task { await model.updatePostVisibility(post, visibility: "public") } },
@@ -214,7 +204,7 @@ public struct ProfileNativeView: View {
                 )
               }
             }
-            .frame(width: UIScreen.main.bounds.width, alignment: .center)
+            .frame(maxWidth: .infinity, alignment: .center)
           }
           if let profileError = model.profileError {
             Text(profileError)
@@ -456,11 +446,8 @@ public struct UserProfileNativeView: View {
   @State private var isProfileOptionsPresented = false
   @State private var isOpeningMessage = false
   @State private var messageRoute: ChatOpenRoute?
-  private var gridTileSize: CGFloat {
-    floor((UIScreen.main.bounds.width - 2) / 3)
-  }
   private var postGridColumns: [GridItem] {
-    Array(repeating: GridItem(.fixed(gridTileSize), spacing: 1), count: 3)
+    Array(repeating: GridItem(.flexible(), spacing: 1), count: 3)
   }
 
   public init(userId: String, api: MIRAAPIClient) {
@@ -481,12 +468,11 @@ public struct UserProfileNativeView: View {
           LazyVGrid(columns: postGridColumns, spacing: 1) {
             ForEach(model.posts) { post in
               ProfilePostTile(
-                post: post,
-                size: gridTileSize
+                post: post
               )
             }
           }
-          .frame(width: UIScreen.main.bounds.width, alignment: .center)
+          .frame(maxWidth: .infinity, alignment: .center)
         }
       }
       .padding(.top, MIRATheme.Space.md)
@@ -802,16 +788,12 @@ private struct UserProfileOptionRow: View {
 
 private struct ProfilePostTile: View {
   let post: MIRAPost
-  let size: CGFloat
+  var size: CGFloat? = nil
   var onPin: (() -> Void)? = nil
   var onDelete: (() -> Void)? = nil
   var onMakePublic: (() -> Void)? = nil
   var onMakePrivate: (() -> Void)? = nil
   @State private var isDeleteConfirmationPresented = false
-
-  private var height: CGFloat {
-    size * MIRAMediaSizing.profileGridRatio
-  }
 
   private var normalizedVisibility: String {
     post.visibility?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "public"
@@ -848,26 +830,31 @@ private struct ProfilePostTile: View {
   }
 
   private var tileContent: some View {
-    ZStack(alignment: .topTrailing) {
-      Group {
-        if let media = post.thumbnailMediaURLs.first {
-          RemoteMediaView(
-            url: media,
-            isVideo: media.isVideoURL,
-            shouldPlay: false,
-            maxPixelSize: 520,
-            showsVideoPlaceholderIcon: false
-          )
-        } else {
-          MIRATheme.Color.surfaceSoft
+    GeometryReader { proxy in
+      let tileWidth = size ?? proxy.size.width
+      let tileHeight = tileWidth * MIRAMediaSizing.profileGridRatio
+      ZStack(alignment: .topTrailing) {
+        Group {
+          if let media = post.thumbnailMediaURLs.first {
+            RemoteMediaView(
+              url: media,
+              isVideo: media.isVideoURL,
+              shouldPlay: false,
+              maxPixelSize: 520,
+              showsVideoPlaceholderIcon: false
+            )
+          } else {
+            MIRATheme.Color.surfaceSoft
+          }
         }
-      }
-      .frame(width: size, height: height)
-      .clipped()
+        .frame(width: tileWidth, height: tileHeight)
+        .clipped()
 
-      statusBadges
+        statusBadges
+      }
+      .frame(width: tileWidth, height: tileHeight)
     }
-    .frame(width: size, height: height)
+    .aspectRatio(1.0 / MIRAMediaSizing.profileGridRatio, contentMode: .fit)
     .contentShape(Rectangle())
   }
 

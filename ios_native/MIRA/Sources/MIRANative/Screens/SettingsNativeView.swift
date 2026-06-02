@@ -621,6 +621,7 @@ private struct SecuritySettingsNativeView: View {
 
 private struct PreferenceSettingsNativeView: View {
   @ObservedObject var model: SettingsNativeModel
+  @AppStorage(MIRAAppearanceResolver.preferenceKey) private var appearancePreference = MIRAAppearance.system.rawValue
   @AppStorage("mira.settings.autoplay_video") private var autoplayVideo = true
   @AppStorage("mira.settings.high_quality_uploads") private var highQualityUploads = true
   @AppStorage("mira.settings.reduce_motion") private var reduceMotion = false
@@ -659,6 +660,36 @@ private struct PreferenceSettingsNativeView: View {
           .foregroundStyle(MIRATheme.Color.textMuted)
           .padding(.horizontal, MIRATheme.Space.md)
           .padding(.bottom, MIRATheme.Space.sm)
+      }
+
+      SettingsCard(title: "Appearance") {
+        HStack(spacing: MIRATheme.Space.sm) {
+          ForEach(MIRAAppearance.allCases) { option in
+            Button {
+              CaptroHaptics.light()
+              withAnimation(CaptroMotion.feedChromeAnimation(reduceMotion: false)) {
+                appearancePreference = option.rawValue
+              }
+            } label: {
+              VStack(spacing: 7) {
+                Image(systemName: option.systemImage)
+                  .font(.system(size: 16, weight: .semibold))
+                Text(option.title)
+                  .font(.system(size: 13, weight: .semibold))
+                  .lineLimit(1)
+                  .minimumScaleFactor(0.82)
+              }
+              .foregroundStyle(appearancePreference == option.rawValue ? .white : MIRATheme.Color.textPrimary)
+              .frame(maxWidth: .infinity)
+              .frame(height: 64)
+              .background(appearancePreference == option.rawValue ? MIRATheme.Color.forest : MIRATheme.Color.surfaceSoft)
+              .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            }
+            .buttonStyle(.miraPress)
+          }
+        }
+        .padding(.horizontal, MIRATheme.Space.md)
+        .padding(.bottom, MIRATheme.Space.md)
       }
 
       SettingsCard(title: "Media") {
