@@ -972,6 +972,9 @@ public struct CreatePostNativeView: View {
         onMusic: {
           activePostDetailSheet = .music
         },
+        onGallerySelection: { media in
+          addGalleryMedia(media)
+        },
         onEdit: { media, _ in
           editingMedia = MIRAEditorPresentation(media: media, returnsToCamera: true)
         }
@@ -997,35 +1000,18 @@ public struct CreatePostNativeView: View {
 
   private var firstPageMediaRail: some View {
     HStack(spacing: 10) {
-      ScrollView(.horizontal, showsIndicators: false) {
-        HStack(spacing: 10) {
-          ForEach(Array(mediaItems.enumerated()), id: \.offset) { index, item in
-            firstPageMediaTile(item, index: index)
+      if mediaItems.count > 1 {
+        ScrollView(.horizontal, showsIndicators: false) {
+          HStack(spacing: 10) {
+            ForEach(Array(mediaItems.enumerated()), id: \.offset) { index, item in
+              firstPageMediaTile(item, index: index)
+            }
           }
-
-          PhotosPicker(
-            selection: $pickerItems,
-            maxSelectionCount: max(1, 10 - mediaItems.count),
-            matching: .images,
-            preferredItemEncoding: .current
-          ) {
-            RoundedRectangle(cornerRadius: 13, style: .continuous)
-              .fill(Color.white.opacity(0.16))
-              .frame(width: 70, height: 70)
-              .overlay {
-                Image(systemName: "photo.on.rectangle.angled")
-                  .font(.system(size: 27, weight: .semibold))
-                  .foregroundStyle(.white)
-              }
-          }
-          .disabled(mediaItems.count >= 10)
-          .opacity(mediaItems.count >= 10 ? 0.42 : 1)
-          .accessibilityLabel("Choose photos from gallery")
+          .padding(.horizontal, 4)
         }
-        .padding(.horizontal, 4)
       }
 
-      if !mediaItems.isEmpty {
+      if mediaItems.count > 1 {
         Button {
           continueToPostDetails()
         } label: {
@@ -1042,7 +1028,9 @@ public struct CreatePostNativeView: View {
     }
     .padding(.horizontal, 8)
     .padding(.vertical, 8)
-    .background(.black.opacity(0.34), in: Capsule())
+    .background(.black.opacity(mediaItems.count > 1 ? 0.34 : 0), in: Capsule())
+    .opacity(mediaItems.count > 1 ? 1 : 0)
+    .allowsHitTesting(mediaItems.count > 1)
   }
 
   private func firstPageMediaTile(_ media: MIRAPickedMedia, index: Int) -> some View {
@@ -1181,29 +1169,6 @@ public struct CreatePostNativeView: View {
         ForEach(Array(mediaItems.enumerated()), id: \.offset) { index, item in
           postDetailsMediaTile(item, index: index)
         }
-
-        PhotosPicker(
-          selection: $pickerItems,
-          maxSelectionCount: 10,
-          matching: .images,
-          preferredItemEncoding: .current
-        ) {
-          RoundedRectangle(cornerRadius: 14, style: .continuous)
-            .fill(MIRATheme.Color.surfaceSoft.opacity(0.6))
-            .frame(width: 88, height: 92)
-            .overlay {
-              Image(systemName: "photo.on.rectangle.angled")
-                .font(.system(size: 24, weight: .semibold))
-                .foregroundStyle(MIRATheme.Color.textMuted.opacity(0.82))
-            }
-            .overlay(alignment: .bottom) {
-              Text("Photos")
-                .font(.system(size: 12, weight: .bold))
-                .foregroundStyle(MIRATheme.Color.textMuted)
-                .padding(.bottom, 10)
-            }
-        }
-        .accessibilityLabel("Choose more photos from gallery")
       }
       .padding(.horizontal, 1)
     }
@@ -1522,10 +1487,15 @@ public struct CreatePostNativeView: View {
         location: selectedPlace?.addressText
       )
       var uploaded: [String] = []
+      var mediaAssetIds: [String] = []
       var mediaTypes: [String] = []
       var mediaDimensions: [MIRAMediaDimension] = []
       for item in mediaItems {
-        uploaded.append(try await uploader.upload(item))
+        let upload = try await uploader.uploadResult(item)
+        uploaded.append(upload.url)
+        if let mediaAssetId = upload.mediaAssetId, !mediaAssetId.isEmpty {
+          mediaAssetIds.append(mediaAssetId)
+        }
         mediaTypes.append(item.kind.rawValue)
         mediaDimensions.append(await item.mediaDimension())
       }
@@ -1544,6 +1514,7 @@ public struct CreatePostNativeView: View {
         images: uploaded,
         mediaTypes: mediaTypes,
         mediaDimensions: mediaDimensions,
+        mediaAssetIds: mediaAssetIds.isEmpty ? nil : mediaAssetIds,
         editorOverlays: editorUploadMetadata(),
         location: selectedPlace?.addressText ?? selectedPlace?.displayName,
         displayCity: shouldPublishBroadLocation ? broadLocation.city : nil,
@@ -1589,8 +1560,9 @@ public struct CreatePostNativeView: View {
       close()
     } catch {
       MIRAPerformanceTimeline.mark("post_upload_failed", detail: "post")
-      errorMessage = "Post could not be created."
-      await persistComposerDraft(uploadStatus: "failed", errorMessage: "Post could not be created.", includeMedia: true)
+      let message = (error as? MIRAAPIError)?.errorDescription ?? "Post could not be created."
+      errorMessage = message
+      await persistComposerDraft(uploadStatus: "failed", errorMessage: message, includeMedia: true)
     }
   }
 
@@ -1648,6 +1620,19 @@ public struct CreatePostNativeView: View {
     withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
       isEditingPostDetails = true
     }
+  }
+
+  private func addGalleryMedia(_ media: [MIRAPickedMedia]) {
+    let photos = media.filter { $0.kind == .image }
+    guard !photos.isEmpty else {
+      errorMessage = "Feed posts are photo-only. Share videos to Stories."
+      return
+    }
+    editedCameraMedia = nil
+    withAnimation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion)) {
+      mediaItems.append(contentsOf: photos.prefix(max(0, 10 - mediaItems.count)))
+    }
+    Task { await persistComposerDraft(uploadStatus: "draft", errorMessage: nil, includeMedia: true) }
   }
 
   private func continueToPostDetails() {

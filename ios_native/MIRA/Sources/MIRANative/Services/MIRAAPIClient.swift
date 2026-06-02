@@ -50,10 +50,13 @@ public enum MIRAAPIError: Error, LocalizedError {
     case .insecureURL: return "The request was blocked because it is not a trusted secure connection."
     case .badStatus: return "The server could not finish this request."
     case .server(_, let code, let detail):
+      if let detail, !detail.isEmpty {
+        return detail
+      }
       if let code, !code.isEmpty {
         return MIRALanguageResolver.localizedAPIError(code: code)
       }
-      return detail?.isEmpty == false ? detail : MIRALanguageResolver.localizedAPIError(code: code)
+      return MIRALanguageResolver.localizedAPIError(code: code)
     case .decodingFailed: return "The app could not read the server response."
     case .emptyResponse: return "The server returned an empty response."
     }

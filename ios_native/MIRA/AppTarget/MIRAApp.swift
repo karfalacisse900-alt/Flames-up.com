@@ -13,7 +13,6 @@ struct MIRAApp: App {
   var body: some Scene {
     WindowGroup {
       MIRANativeRootView()
-        .preferredColorScheme(.light)
         .onAppear {
           MIRAPerformanceTimeline.markOnce("time_to_first_window")
         }

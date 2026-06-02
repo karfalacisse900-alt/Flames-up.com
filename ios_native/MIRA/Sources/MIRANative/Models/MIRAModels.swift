@@ -1443,9 +1443,13 @@ public struct MIRAUploadImageDirectBody: Encodable {
 public struct MIRAMediaUploadResponse: Decodable, Hashable {
   public let url: String?
   public let id: String?
+  public let mediaId: String?
   public let videoUid: String?
   public let uploadUrl: String?
   public let source: String?
+  public let moderationStatus: String?
+  public let publicUrl: String?
+  public let rejectionMessage: String?
 }
 
 public struct MIRAStreamPlaybackInfo: Decodable, Hashable, Sendable {
@@ -1507,6 +1511,7 @@ public struct CreatePostBody: Encodable {
   public let images: [String]
   public let mediaTypes: [String]
   public let mediaDimensions: [MIRAMediaDimension]
+  public let mediaAssetIds: [String]?
   public let editorOverlays: [MIRAEditorUploadMetadata]?
   public let location: String?
   public let displayCity: String?
@@ -1553,6 +1558,7 @@ public struct CreatePostBody: Encodable {
     images: [String],
     mediaTypes: [String],
     mediaDimensions: [MIRAMediaDimension],
+    mediaAssetIds: [String]? = nil,
     editorOverlays: [MIRAEditorUploadMetadata]? = nil,
     location: String? = nil,
     displayCity: String? = nil,
@@ -1598,6 +1604,7 @@ public struct CreatePostBody: Encodable {
     self.images = images
     self.mediaTypes = mediaTypes
     self.mediaDimensions = mediaDimensions
+    self.mediaAssetIds = mediaAssetIds
     self.editorOverlays = editorOverlays
     self.location = location
     self.displayCity = displayCity

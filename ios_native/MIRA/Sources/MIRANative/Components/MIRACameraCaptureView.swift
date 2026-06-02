@@ -28,6 +28,7 @@ struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
   let onCapture: (MIRAPickedMedia) -> Void
   let onCancel: () -> Void
   let onMusic: () -> Void
+  let onGallerySelection: ([MIRAPickedMedia]) -> Void
   let onEdit: (MIRAPickedMedia, MIRAStoryCameraEditTool) -> Void
 
   @Environment(\.dismiss) private var dismiss
@@ -40,6 +41,7 @@ struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
     onCapture: @escaping (MIRAPickedMedia) -> Void,
     onCancel: @escaping () -> Void = {},
     onMusic: @escaping () -> Void = {},
+    onGallerySelection: @escaping ([MIRAPickedMedia]) -> Void = { _ in },
     onEdit: @escaping (MIRAPickedMedia, MIRAStoryCameraEditTool) -> Void = { _, _ in }
   ) {
     self.editedMedia = editedMedia
@@ -49,6 +51,7 @@ struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
     self.onCapture = onCapture
     self.onCancel = onCancel
     self.onMusic = onMusic
+    self.onGallerySelection = onGallerySelection
     self.onEdit = onEdit
   }
 
@@ -70,6 +73,7 @@ struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
       onCapture: onCapture,
       onCancel: onCancel,
       onMusic: onMusic,
+      onGallerySelection: onGallerySelection,
       onEdit: onEdit,
       dismissesOnCapture: dismissesOnCapture,
       dismissesOnCancel: dismissesOnCancel,
@@ -81,6 +85,7 @@ struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
     private let onCapture: (MIRAPickedMedia) -> Void
     private let onCancel: () -> Void
     private let onMusic: () -> Void
+    private let onGallerySelection: ([MIRAPickedMedia]) -> Void
     private let onEdit: (MIRAPickedMedia, MIRAStoryCameraEditTool) -> Void
     private let dismissesOnCapture: Bool
     private let dismissesOnCancel: Bool
@@ -90,6 +95,7 @@ struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
       onCapture: @escaping (MIRAPickedMedia) -> Void,
       onCancel: @escaping () -> Void,
       onMusic: @escaping () -> Void,
+      onGallerySelection: @escaping ([MIRAPickedMedia]) -> Void,
       onEdit: @escaping (MIRAPickedMedia, MIRAStoryCameraEditTool) -> Void,
       dismissesOnCapture: Bool,
       dismissesOnCancel: Bool,
@@ -98,6 +104,7 @@ struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
       self.onCapture = onCapture
       self.onCancel = onCancel
       self.onMusic = onMusic
+      self.onGallerySelection = onGallerySelection
       self.onEdit = onEdit
       self.dismissesOnCapture = dismissesOnCapture
       self.dismissesOnCancel = dismissesOnCancel
@@ -122,6 +129,10 @@ struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
       onMusic()
     }
 
+    func storyCameraDidPickGalleryMedia(_ mediaItems: [MIRAPickedMedia]) {
+      onGallerySelection(mediaItems)
+    }
+
     func storyCameraDidRequestEdit(_ media: MIRAPickedMedia, tool: MIRAStoryCameraEditTool) {
       onEdit(media, tool)
     }
@@ -132,6 +143,7 @@ protocol MIRAStoryCameraViewControllerDelegate: AnyObject {
   func storyCameraDidCancel()
   func storyCameraDidCapture(_ media: MIRAPickedMedia)
   func storyCameraDidRequestMusic()
+  func storyCameraDidPickGalleryMedia(_ mediaItems: [MIRAPickedMedia])
   func storyCameraDidRequestEdit(_ media: MIRAPickedMedia, tool: MIRAStoryCameraEditTool)
 }
 
@@ -1170,7 +1182,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
   @objc private func openGallery() {
     var configuration = PHPickerConfiguration(photoLibrary: .shared())
     configuration.filter = captureMode == .videoOnly ? .videos : .images
-    configuration.selectionLimit = 1
+    configuration.selectionLimit = captureMode == .videoOnly ? 1 : 10
     configuration.preferredAssetRepresentationMode = .current
     let picker = PHPickerViewController(configuration: configuration)
     picker.delegate = self
@@ -1718,6 +1730,10 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
       DispatchQueue.main.async { self.showTransientMessage("Choose a video for Stories.") }
       return
     }
+    if results.count > 1 {
+      loadMultiplePickedImages(results)
+      return
+    }
     let imageType = provider.hasItemConformingToTypeIdentifier(UTType.png.identifier) ? UTType.png.identifier : UTType.image.identifier
     guard provider.hasItemConformingToTypeIdentifier(imageType) else { return }
     provider.loadDataRepresentation(forTypeIdentifier: imageType) { [weak self] data, _ in
@@ -1760,6 +1776,36 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     let media = MIRAPickedMedia(data: data, kind: .image, fileName: "\(UUID().uuidString).\(imageType.extensionName)", mimeType: imageType.mimeType)
     DispatchQueue.main.async {
       self.showCapturedMedia(media)
+    }
+  }
+
+  private func loadMultiplePickedImages(_ results: [PHPickerResult]) {
+    let group = DispatchGroup()
+    let lock = NSLock()
+    var mediaItems: [(Int, MIRAPickedMedia)] = []
+    for (index, result) in results.enumerated() {
+      let provider = result.itemProvider
+      let imageType = provider.hasItemConformingToTypeIdentifier(UTType.png.identifier) ? UTType.png.identifier : UTType.image.identifier
+      guard provider.hasItemConformingToTypeIdentifier(imageType) else { continue }
+      group.enter()
+      provider.loadDataRepresentation(forTypeIdentifier: imageType) { data, _ in
+        defer { group.leave() }
+        guard let data else { return }
+        let mimeType = imageType == UTType.png.identifier ? "image/png" : "image/jpeg"
+        let extensionName = imageType == UTType.png.identifier ? "png" : "jpg"
+        let media = MIRAPickedMedia(data: data, kind: .image, fileName: "\(UUID().uuidString).\(extensionName)", mimeType: mimeType)
+        lock.lock()
+        mediaItems.append((index, media))
+        lock.unlock()
+      }
+    }
+    group.notify(queue: .main) { [weak self] in
+      guard let self else { return }
+      if mediaItems.isEmpty {
+        self.showTransientMessage("Photos could not be loaded. Try again.")
+      } else {
+        self.delegate?.storyCameraDidPickGalleryMedia(mediaItems.sorted { $0.0 < $1.0 }.map { $0.1 })
+      }
     }
   }
 

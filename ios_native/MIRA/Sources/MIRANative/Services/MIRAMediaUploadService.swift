@@ -95,6 +95,11 @@ public enum MIRAMediaUploadTarget: Hashable {
   case feedPost
 }
 
+public struct MIRAMediaUploadResult: Hashable {
+  public let url: String
+  public let mediaAssetId: String?
+}
+
 public final class MIRAMediaUploadService {
   private let api: MIRAAPIClient
   private let target: MIRAMediaUploadTarget
@@ -105,11 +110,16 @@ public final class MIRAMediaUploadService {
   }
 
   public func upload(_ media: MIRAPickedMedia) async throws -> String {
+    let result = try await uploadResult(media)
+    return result.url
+  }
+
+  public func uploadResult(_ media: MIRAPickedMedia) async throws -> MIRAMediaUploadResult {
     switch media.kind {
     case .image:
-      return try await uploadImage(media)
+      return try await uploadImageResult(media)
     case .video:
-      return try await uploadVideo(media)
+      return MIRAMediaUploadResult(url: try await uploadVideo(media), mediaAssetId: nil)
     }
   }
 
@@ -145,8 +155,37 @@ public final class MIRAMediaUploadService {
     let fileName: String
   }
 
-  private func uploadImage(_ media: MIRAPickedMedia) async throws -> String {
+  private struct MIRAMediaUploadIntentBody: Encodable {
+    let mediaType: String
+    let filename: String
+    let mimeType: String
+    let fileSize: Int
+    let width: Double?
+    let height: Double?
+  }
+
+  private struct MIRAMediaUploadCompleteBody: Encodable {
+    let mediaId: String
+    let fileSize: Int
+    let width: Double?
+    let height: Double?
+  }
+
+  private struct MIRAMediaStatusResponse: Decodable, Hashable {
+    let mediaId: String?
+    let uploadStatus: String?
+    let moderationStatus: String?
+    let publicUrl: String?
+    let rejectionCode: String?
+    let rejectionMessage: String?
+  }
+
+  private func uploadImageResult(_ media: MIRAPickedMedia) async throws -> MIRAMediaUploadResult {
     let prepared = await prepareImageUpload(media)
+    if target == .feedPost {
+      return try await uploadModeratedFeedImage(media: media, prepared: prepared)
+    }
+
     return try await performUpload(kind: "image", bytes: prepared.data.count) {
       do {
         let setup: MIRAMediaUploadResponse = try await api.post(
@@ -169,7 +208,7 @@ public final class MIRAMediaUploadService {
             mimeType: prepared.mimeType,
             data: prepared.data
           )
-          return deliveryURL
+          return MIRAMediaUploadResult(url: deliveryURL, mediaAssetId: setup.mediaId)
         }
       } catch {
         // Fall back to the Worker-backed path if Cloudflare Images direct upload is not ready.
@@ -181,8 +220,91 @@ public final class MIRAMediaUploadService {
         body: MIRAUploadImageBody(image: base64, filename: prepared.fileName)
       )
       guard let url = response.url, !url.isEmpty else { throw MIRAAPIError.emptyResponse }
-      return url
+      return MIRAMediaUploadResult(url: url, mediaAssetId: response.mediaId)
     }
+  }
+
+  private func uploadModeratedFeedImage(media: MIRAPickedMedia, prepared: PreparedImageUpload) async throws -> MIRAMediaUploadResult {
+    let dimensions = await media.mediaDimension()
+    return try await performUpload(kind: "image", bytes: prepared.data.count) {
+      let intent: MIRAMediaUploadResponse = try await api.post(
+        "/media/upload-intent",
+        body: MIRAMediaUploadIntentBody(
+          mediaType: "image",
+          filename: prepared.fileName,
+          mimeType: prepared.mimeType,
+          fileSize: prepared.data.count,
+          width: dimensions.feedWidth ?? dimensions.width,
+          height: dimensions.feedHeight ?? dimensions.height
+        )
+      )
+      guard
+        let mediaId = intent.mediaId,
+        !mediaId.isEmpty,
+        let uploadURL = intent.uploadUrl.flatMap(URL.init(string:))
+      else {
+        throw MIRAAPIError.emptyResponse
+      }
+
+      let _: EmptyResponse = try await api.uploadMultipart(
+        to: uploadURL,
+        fieldName: "file",
+        fileName: prepared.fileName,
+        mimeType: prepared.mimeType,
+        data: prepared.data
+      )
+
+      let complete: MIRAMediaStatusResponse = try await api.post(
+        "/media/complete",
+        body: MIRAMediaUploadCompleteBody(
+          mediaId: mediaId,
+          fileSize: prepared.data.count,
+          width: dimensions.feedWidth ?? dimensions.width,
+          height: dimensions.feedHeight ?? dimensions.height
+        )
+      )
+      let approved = try await waitForModeratedImageApproval(mediaId: mediaId, initial: complete)
+      return MIRAMediaUploadResult(url: approved, mediaAssetId: mediaId)
+    }
+  }
+
+  private func waitForModeratedImageApproval(mediaId: String, initial: MIRAMediaStatusResponse) async throws -> String {
+    var status = initial
+    for attempt in 0..<18 {
+      let moderation = (status.moderationStatus ?? "").lowercased()
+      if moderation == "approved", let publicURL = status.publicUrl, !publicURL.isEmpty {
+        return publicURL
+      }
+      if moderation == "rejected" {
+        throw MIRAAPIError.server(
+          status: 409,
+          code: "MEDIA_REJECTED",
+          detail: status.rejectionMessage ?? "This upload can't be posted because it may break Captro's safety rules."
+        )
+      }
+      if moderation == "review_required" {
+        throw MIRAAPIError.server(
+          status: 409,
+          code: "MEDIA_REVIEW_REQUIRED",
+          detail: "This upload needs a quick safety review before it can be posted."
+        )
+      }
+      if moderation == "failed" {
+        throw MIRAAPIError.server(
+          status: 409,
+          code: "MEDIA_MODERATION_FAILED",
+          detail: status.rejectionMessage ?? "This upload could not be checked. Please try again."
+        )
+      }
+      guard attempt < 17 else { break }
+      try await Task.sleep(nanoseconds: 700_000_000)
+      status = try await api.get("/media/\(mediaId)/status")
+    }
+    throw MIRAAPIError.server(
+      status: 409,
+      code: "MEDIA_PENDING_MODERATION",
+      detail: "Checking your upload before posting..."
+    )
   }
 
   private func uploadVideo(_ media: MIRAPickedMedia) async throws -> String {
@@ -236,6 +358,9 @@ public final class MIRAMediaUploadService {
 
   private func shouldRetryUpload(_ error: Error) -> Bool {
     if case MIRAAPIError.badStatus(let status) = error {
+      return status == 408 || status == 425 || status == 429 || (500...599).contains(status)
+    }
+    if case MIRAAPIError.server(let status, _, _) = error {
       return status == 408 || status == 425 || status == 429 || (500...599).contains(status)
     }
     return true
