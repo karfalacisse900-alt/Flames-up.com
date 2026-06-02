@@ -188,11 +188,6 @@ final class ConversationNativeModel: ObservableObject {
     }
   }
 
-  func sendGIF(_ gif: MIRAGifItem) async {
-    guard let url = gif.mediaUrl ?? gif.previewUrl, !url.isEmpty else { return }
-    await send(content: gif.title ?? "", mediaUrl: url, mediaType: "image")
-  }
-
   func updateTyping(_ typing: Bool) {
     guard case let .direct(peerId) = kind else { return }
     Task {
@@ -382,7 +377,6 @@ final class ConversationNativeModel: ObservableObject {
 public struct ConversationNativeView: View {
   @StateObject private var model: ConversationNativeModel
   @State private var pickerItem: PhotosPickerItem?
-  @State private var showGIFPicker = false
   @State private var showAttachmentTray = false
   @State private var showProfileOptions = false
   @State private var reportTarget: MIRAReportTarget?
@@ -473,12 +467,6 @@ public struct ConversationNativeView: View {
         }
       )
     }
-    .miraBottomSheet(isPresented: $showGIFPicker, preferredHeightFraction: 0.72) { dismissGIFPicker in
-      ChatGIFPickerSheet(api: model.api, onClose: dismissGIFPicker) { gif in
-        dismissGIFPicker()
-        Task { await model.sendGIF(gif) }
-      }
-    }
     .miraBottomSheet(
       isPresented: $isReportSheetPresented,
       preferredHeightFraction: 0.78,
@@ -546,12 +534,13 @@ public struct ConversationNativeView: View {
           }
         }
       } label: {
-        Image(systemName: "ellipsis.vertical")
-          .font(.system(size: 19, weight: .bold))
-          .foregroundStyle(.black)
-          .frame(width: 44, height: 44)
-          .background(Color.black.opacity(0.055), in: Circle())
-          .overlay(Circle().stroke(Color.black.opacity(0.055), lineWidth: 1))
+        Image(systemName: "ellipsis")
+          .font(.system(size: 19, weight: .heavy))
+          .foregroundStyle(.white)
+          .frame(width: 46, height: 46)
+          .background(Color.black, in: Circle())
+          .overlay(Circle().stroke(Color.white.opacity(0.30), lineWidth: 1))
+          .shadow(color: .black.opacity(0.14), radius: 10, x: 0, y: 4)
           .contentShape(Rectangle())
       }
       .buttonStyle(.miraPress)
@@ -838,10 +827,6 @@ public struct ConversationNativeView: View {
         }
         .disabled(model.isUploading)
 
-        Button { showGIFPicker = true } label: {
-          trayButton("gift", "GIF")
-        }
-        .buttonStyle(.plain)
       }
       .padding(.horizontal, MIRATheme.Space.md)
     }
@@ -1109,36 +1094,42 @@ private struct MessageBubbleContent: View {
           showsVideoPlaceholderIcon: true,
           placeholderColor: ChatRoomPalette.backgroundWash
         )
+        .allowsHitTesting(false)
 
         if isVideo && !isVideoPlaying {
-          Button {
-            CaptroHaptics.light()
-            MIRAApplePerformanceLogger.event("chat_video_prepare")
-            withAnimation(CaptroMotion.smallMenuAnimation(reduceMotion: false)) {
-              isVideoPlaying = true
-            }
-          } label: {
-            Image(systemName: "play.fill")
-              .font(.system(size: 20, weight: .bold))
-              .foregroundStyle(.white)
-              .frame(width: 54, height: 54)
-              .background(.black.opacity(0.42), in: Circle())
-              .overlay(Circle().stroke(.white.opacity(0.28), lineWidth: 1))
-          }
-          .buttonStyle(.plain)
-          .accessibilityLabel("Play video message")
+          Image(systemName: "play.fill")
+            .font(.system(size: 20, weight: .bold))
+            .foregroundStyle(.white)
+            .frame(width: 54, height: 54)
+            .background(.black.opacity(0.48), in: Circle())
+            .overlay(Circle().stroke(.white.opacity(0.30), lineWidth: 1))
+            .shadow(color: .black.opacity(0.18), radius: 10, x: 0, y: 4)
+            .allowsHitTesting(false)
         }
       }
         .frame(width: mediaWidth, height: isVideo ? mediaWidth * 1.22 : mediaWidth * 0.86)
         .background(ChatRoomPalette.backgroundWash)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .onTapGesture {
+          guard isVideo else { return }
+          toggleVideoPlayback()
+        }
+        .accessibilityLabel(isVideo ? (isVideoPlaying ? "Pause video message" : "Play video message") : "Image message")
         .onChange(of: url) { _, _ in
           isVideoPlaying = false
         }
         .onDisappear {
           isVideoPlaying = false
         }
+    }
+  }
+
+  private func toggleVideoPlayback() {
+    CaptroHaptics.light()
+    MIRAApplePerformanceLogger.event(isVideoPlaying ? "chat_video_pause" : "chat_video_prepare")
+    withAnimation(CaptroMotion.smallMenuAnimation(reduceMotion: false)) {
+      isVideoPlaying.toggle()
     }
   }
 
@@ -1215,93 +1206,4 @@ private extension ISO8601DateFormatter {
     formatter.formatOptions = [.withInternetDateTime]
     return formatter
   }()
-}
-
-private struct ChatGIFPickerSheet: View {
-  let api: MIRAAPIClient
-  let onClose: (() -> Void)?
-  let onSelect: (MIRAGifItem) -> Void
-  @Environment(\.dismiss) private var dismiss
-  @State private var query = "reaction"
-  @State private var results: [MIRAGifItem] = []
-  @State private var isLoading = false
-
-  var body: some View {
-    NavigationStack {
-      VStack(spacing: MIRATheme.Space.md) {
-        HStack {
-          Image(systemName: "magnifyingglass")
-            .foregroundStyle(MIRATheme.Color.textMuted)
-          TextField("Search GIFs", text: $query)
-            .textInputAutocapitalization(.never)
-            .autocorrectionDisabled()
-            .onSubmit { Task { await search() } }
-        }
-        .padding(.horizontal, MIRATheme.Space.md)
-        .padding(.vertical, 12)
-        .background(MIRATheme.Color.surfaceSoft)
-        .clipShape(Capsule())
-        .padding(.horizontal, MIRATheme.Space.md)
-
-        if isLoading {
-          ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else {
-          ScrollView {
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: MIRATheme.Space.sm) {
-              ForEach(results) { gif in
-                Button {
-                  onSelect(gif)
-                } label: {
-                  RemoteMediaView(url: gif.previewUrl ?? gif.mediaUrl ?? "", isVideo: false)
-                    .frame(height: 140)
-                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                }
-                .buttonStyle(.plain)
-              }
-            }
-            .padding(MIRATheme.Space.md)
-          }
-        }
-      }
-      .navigationTitle("GIF")
-      .navigationBarTitleDisplayMode(.inline)
-      .toolbar {
-        ToolbarItem(placement: .topBarTrailing) {
-          Button("Done") { close() }
-        }
-      }
-      .task { await search() }
-      .onChange(of: query) { _ in
-        Task {
-          try? await Task.sleep(nanoseconds: 350_000_000)
-          if !Task.isCancelled { await search() }
-        }
-      }
-    }
-  }
-
-  @MainActor
-  private func search() async {
-    let clean = query.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard clean.count >= 2 else { return }
-    isLoading = results.isEmpty
-    defer { isLoading = false }
-    var components = URLComponents()
-    components.queryItems = [
-      URLQueryItem(name: "q", value: clean),
-      URLQueryItem(name: "limit", value: "24"),
-    ]
-    let encoded = components.percentEncodedQuery ?? "q=\(clean)"
-    if let response: MIRAGifSearchResponse = try? await api.get("/gifs/search?\(encoded)") {
-      results = response.gifs
-    }
-  }
-
-  private func close() {
-    if let onClose {
-      onClose()
-    } else {
-      dismiss()
-    }
-  }
 }

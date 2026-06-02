@@ -1013,13 +1013,14 @@ public struct CreatePostNativeView: View {
               .fill(Color.white.opacity(0.16))
               .frame(width: 70, height: 70)
               .overlay {
-                Image(systemName: "plus")
-                  .font(.system(size: 32, weight: .regular))
+                Image(systemName: "photo.on.rectangle.angled")
+                  .font(.system(size: 27, weight: .semibold))
                   .foregroundStyle(.white)
               }
           }
           .disabled(mediaItems.count >= 10)
           .opacity(mediaItems.count >= 10 ? 0.42 : 1)
+          .accessibilityLabel("Choose photos from gallery")
         }
         .padding(.horizontal, 4)
       }
@@ -1191,17 +1192,18 @@ public struct CreatePostNativeView: View {
             .fill(MIRATheme.Color.surfaceSoft.opacity(0.6))
             .frame(width: 88, height: 92)
             .overlay {
-              Image(systemName: "plus")
-                .font(.system(size: 28, weight: .light))
+              Image(systemName: "photo.on.rectangle.angled")
+                .font(.system(size: 24, weight: .semibold))
                 .foregroundStyle(MIRATheme.Color.textMuted.opacity(0.82))
             }
             .overlay(alignment: .bottom) {
-              Text("Add")
+              Text("Photos")
                 .font(.system(size: 12, weight: .bold))
                 .foregroundStyle(MIRATheme.Color.textMuted)
                 .padding(.bottom, 10)
             }
         }
+        .accessibilityLabel("Choose more photos from gallery")
       }
       .padding(.horizontal, 1)
     }
