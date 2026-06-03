@@ -1127,6 +1127,8 @@ private struct StoryViewerNativeView: View {
     .animation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion), value: isCanvasVisible)
     .miraStatusBarHidden(true)
     .onAppear {
+      MIRAPlaybackCoordinator.resumeVisible(reason: "story_view_open")
+      Task { await prewarmStoryMediaWindow() }
       withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
         isCanvasVisible = true
       }
@@ -1198,7 +1200,7 @@ private struct StoryViewerNativeView: View {
           url: mediaURL,
           isVideo: mediaURL.isVideoURL,
           contentMode: .fill,
-          shouldPlay: isCanvasVisible && scenePhase == .active,
+          shouldPlay: !isClosing && scenePhase == .active,
           maxPixelSize: 1920,
           placeholderColor: storyFallbackColor,
           placeholderTint: MIRATheme.Color.textSecondary.opacity(0.68)

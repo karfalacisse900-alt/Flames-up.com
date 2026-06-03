@@ -7342,6 +7342,10 @@ function defaultModerationScores(overrides: Partial<MediaModerationScores> = {})
   };
 }
 
+function moderationDelay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function maxModerationScores(scores: MediaModerationScores[]): MediaModerationScores {
   return scores.reduce((acc, score) => ({
     adult_explicit_score: Math.max(acc.adult_explicit_score, score.adult_explicit_score),
@@ -7497,12 +7501,18 @@ async function runWorkersAiImageModeration(env: Env, imageUrl: string, caption: 
   const modelName = cleanText(env.AI_IMAGE_MODERATION_MODEL || '@cf/meta/llama-3.2-11b-vision-instruct', 160);
   try {
     const imageId = imageUrl.startsWith('cfimage-api:') ? cleanText(imageUrl.replace('cfimage-api:', ''), 220) : '';
-    const response = imageId
-      ? await fetch(`https://api.cloudflare.com/client/v4/accounts/${cloudflareAccountId(env)}/images/v1/${imageId}/blob`, {
-        headers: { Authorization: `Bearer ${cloudflareImagesToken(env)}`, accept: 'image/*' },
-      })
-      : await fetch(imageUrl, { headers: { accept: 'image/*' } });
-    if (!response.ok) throw new Error(`IMAGE_SAMPLE_FETCH_FAILED:${response.status}`);
+    let response: Response | null = null;
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      response = imageId
+        ? await fetch(`https://api.cloudflare.com/client/v4/accounts/${cloudflareAccountId(env)}/images/v1/${imageId}/blob`, {
+          headers: { Authorization: `Bearer ${cloudflareImagesToken(env)}`, accept: 'image/*' },
+        })
+        : await fetch(imageUrl, { headers: { accept: 'image/*' } });
+      if (response.ok) break;
+      if (![404, 409, 425, 429, 500, 502, 503, 504].includes(response.status) || attempt === 3) break;
+      await moderationDelay(350 * (attempt + 1));
+    }
+    if (!response?.ok) throw new Error(`IMAGE_SAMPLE_FETCH_FAILED:${response?.status || 0}`);
     const imageBytes = await response.arrayBuffer();
     if (!imageBytes.byteLength || imageBytes.byteLength > 4_000_000) throw new Error('IMAGE_SAMPLE_TOO_LARGE');
     const prompt = `You are Captro's pre-publish media safety classifier. Return strict JSON only with numbers 0..1 for adult_explicit_score, nudity_score, sexual_context_score, sexual_solicitation_score, minor_safety_risk_score, violence_score, gore_score, weapon_score, hate_symbol_score, ai_generated_likelihood, spam_scam_score, link_risk_score, confidence, malware_status as "not_scanned", and reasons as an array. Check nudity, explicit sexual content, sexual solicitation, sexualized minors, violence/gore, weapons, hate symbols, scams/spam, unsafe links in caption, and AI-generated likelihood. Caption: ${caption || '(none)'}`;
@@ -7580,6 +7590,14 @@ async function processMediaModerationJob(env: Env, message: MediaModerationJobMe
 
   const asset: any = await env.DB.prepare('SELECT * FROM media_assets WHERE id = ? LIMIT 1').bind(mediaId).first();
   if (!asset) throw new Error('MEDIA_ASSET_NOT_FOUND');
+  const existingStatus = normalizeMediaModerationStatus(asset.moderation_status);
+  if (['approved', 'review_required', 'rejected'].includes(existingStatus) && cleanText(asset.upload_status, 40) === 'uploaded') {
+    const ts = now();
+    await env.DB.prepare("UPDATE moderation_jobs SET status = 'completed', completed_at = COALESCE(completed_at, ?), updated_at = ? WHERE id = ?")
+      .bind(ts, ts, jobId)
+      .run();
+    return;
+  }
 
   try {
     const malwareStatus = await scanMalwareInterface(env, asset);
@@ -7647,7 +7665,7 @@ async function processMediaModerationJob(env: Env, message: MediaModerationJobMe
   }
 }
 
-async function createMediaModerationJob(c: any, mediaId: string, userId: string, caption = ''): Promise<string> {
+async function createMediaModerationJob(c: any, mediaId: string, userId: string, caption = '', options: { enqueue?: boolean } = {}): Promise<string> {
   await ensureMediaModerationSchema(c.env.DB);
   const jobId = uuid();
   const ts = now();
@@ -7656,9 +7674,10 @@ async function createMediaModerationJob(c: any, mediaId: string, userId: string,
      VALUES (?, ?, ?, 'media_pre_publish', 'pending', ?, ?, ?)`
   ).bind(jobId, mediaId, userId, ts, ts, ts).run();
   const body: MediaModerationJobMessage = { jobId, mediaId, userId, reason: 'upload_complete', caption: cleanMultilineText(caption, 1000) };
-  if (c.env.MEDIA_MODERATION_QUEUE) {
+  const shouldEnqueue = options.enqueue !== false;
+  if (shouldEnqueue && c.env.MEDIA_MODERATION_QUEUE) {
     await c.env.MEDIA_MODERATION_QUEUE.send(body);
-  } else {
+  } else if (shouldEnqueue) {
     runBackgroundTask(c, 'media_moderation_inline_failed', async () => {
       await processMediaModerationJob(c.env, body, c.get?.('requestId') || '');
     });
@@ -12807,13 +12826,41 @@ api.post('/media/complete', authMiddleware, async (c) => {
     afterState: { upload_status: 'uploaded', moderation_status: 'pending_moderation' },
     requestId: c.get?.('requestId') || '',
   });
-  const jobId = await createMediaModerationJob(c, mediaId, userId, cleanMultilineText(body.caption || body.content || body.title || '', 1000));
+  const moderationCaption = cleanMultilineText(body.caption || body.content || body.title || '', 1000);
+  const jobId = await createMediaModerationJob(c, mediaId, userId, moderationCaption, { enqueue: false });
+  try {
+    await processMediaModerationJob(c.env, { jobId, mediaId, userId, reason: 'upload_complete', caption: moderationCaption }, c.get?.('requestId') || '');
+  } catch (error: any) {
+    console.warn(JSON.stringify({
+      event: 'media_moderation_complete_inline_failed',
+      code: getErrorCode(error).slice(0, 180),
+      media_id: mediaId,
+    }));
+  }
+  const latest: any = await c.env.DB.prepare(
+    'SELECT id, upload_status, moderation_status, rejection_code, rejection_message, public_url FROM media_assets WHERE id = ? AND user_id = ? LIMIT 1'
+  ).bind(mediaId, userId).first();
+  const latestStatus = normalizeMediaModerationStatus(latest?.moderation_status);
+  const latestUploadStatus = cleanText(latest?.upload_status, 40) || 'uploaded';
+  const latestPublicUrl = latestStatus === 'approved' ? safeMediaReference(latest?.public_url) : '';
+  const latestMessage = latestStatus === 'approved'
+    ? ''
+    : latestStatus === 'review_required'
+      ? 'This upload needs a quick safety review before it can be posted.'
+      : latestStatus === 'rejected'
+        ? "This upload can't be posted because it may break Captro's safety rules."
+        : latestStatus === 'failed'
+          ? (cleanText(latest?.rejection_message, 240) || 'This upload could not be checked. Please try again.')
+          : 'Checking your upload before posting...';
   return c.json({
     media_id: mediaId,
     job_id: jobId,
-    upload_status: 'uploaded',
-    moderation_status: 'pending_moderation',
-    message: 'Checking your upload before posting...',
+    upload_status: latestUploadStatus,
+    moderation_status: latestStatus,
+    public_url: latestPublicUrl,
+    rejection_code: cleanText(latest?.rejection_code || '', 80),
+    rejection_message: cleanText(latest?.rejection_message || '', 240),
+    message: latestMessage,
   });
 });
 
