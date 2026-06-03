@@ -31,6 +31,7 @@ interface Env {
   CLOUDFLARE_IMAGES_TOKEN?: string;
   CLOUDFLARE_IMAGES_FEED_VARIANT?: string;
   CLOUDFLARE_IMAGES_THUMBNAIL_VARIANT?: string;
+  CLOUDFLARE_IMAGES_REQUIRE_SIGNED_URLS?: string;
   CLOUDFLARE_IMAGE_TRANSFORMS_ENABLED?: string;
   CLOUDFLARE_IMAGE_TRANSFORM_BASE_URL?: string;
   CLOUDFLARE_STREAM_TOKEN?: string;
@@ -71,6 +72,7 @@ interface Env {
   APNS_VOIP_PRIVATE_KEY?: string;
   APNS_ENVIRONMENT?: string;
   MEDIA_BACKUP_MAX_VIDEO_BYTES?: string;
+  PUBLIC_API_BASE_URL?: string;
   SOURCE_COMMIT?: string;
   WORKER_VERSION?: string;
   STRIPE_SECRET_KEY?: string;
@@ -2068,6 +2070,41 @@ function cloudflareImageDeliveryUrl(env: Env, imageId: string, variant = 'public
   return accountHash && cleanImageId
     ? `https://imagedelivery.net/${accountHash}/${cleanImageId}/${cleanVariant}`
     : '';
+}
+
+function cloudflareImagesRequireSignedUrls(env: Env): boolean {
+  const value = cleanText(env.CLOUDFLARE_IMAGES_REQUIRE_SIGNED_URLS || '', 20).toLowerCase();
+  return value === '1' || value === 'true' || value === 'yes';
+}
+
+function publicApiBaseUrl(env?: Env): string {
+  const configured = cleanText(env?.PUBLIC_API_BASE_URL || '', 300).replace(/\/+$/, '');
+  if (configured && /^https:\/\//i.test(configured)) return configured;
+  return 'https://api.flames-up.com/api';
+}
+
+function cloudflareImageIdFromDeliveryUrl(env: Env | undefined, value: string): string {
+  try {
+    const parsed = new URL(value);
+    if (!hostMatches(parsed.hostname, 'imagedelivery.net')) return '';
+    const segments = parsed.pathname.split('/').filter(Boolean);
+    if (segments.length < 3) return '';
+    const accountHash = env ? cloudflareImagesAccountHash(env) : '';
+    if (accountHash && segments[0] !== accountHash) return '';
+    return cleanText(segments[1], 220);
+  } catch {
+    return '';
+  }
+}
+
+function cloudflareImageProxyUrl(env: Env | undefined, imageId: string): string {
+  const cleanImageId = cleanText(imageId, 220);
+  return cleanImageId ? `${publicApiBaseUrl(env)}/media/cf-image/${encodeURIComponent(cleanImageId)}` : '';
+}
+
+function cloudflareImageProxyFallbackUrl(env: Env | undefined, value: string): string {
+  const imageId = cloudflareImageIdFromDeliveryUrl(env, value);
+  return imageId ? cloudflareImageProxyUrl(env, imageId) : '';
 }
 
 function cloudflareImageVariantUrl(env: Env, imageId: string, variants?: unknown, variant = 'public'): string {
@@ -4786,6 +4823,10 @@ function postPayload(post: any, likedBy: string[] = [], env?: Env) {
   const feedMediaUrls = mediaUrls.map((url, index) => feedDeliveryUrl(url, mediaTypes[index] || 'image', feedVariant, env)).filter(Boolean);
   const thumbnailUrls = mediaUrls.map((url, index) => posterDeliveryUrl(url, mediaTypes[index] || 'image', thumbnailVariant, env)).filter(Boolean);
   const posterUrls = mediaUrls.map((url, index) => posterDeliveryUrl(url, mediaTypes[index] || 'image', thumbnailVariant, env)).filter(Boolean);
+  const fallbackMediaUrls = mediaUrls.map((url, index) => {
+    const renderedUrl = feedMediaUrls[index] || url;
+    return cloudflareImageProxyFallbackUrl(env, renderedUrl) || cloudflareImageProxyFallbackUrl(env, url) || url;
+  });
   const renderedMediaDimensions = feedMediaDimensions(mediaUrls, mediaTypes, dimensions);
   const primaryMediaDimensions = renderedMediaDimensions[0] || DEFAULT_FEED_MEDIA_RATIO;
   const primaryCategory = (normalizeDiscoverCategory(post.primary_category || post.category || post.post_type || 'lifestyle', false) || 'lifestyle') as DiscoverCategory;
@@ -4817,7 +4858,7 @@ function postPayload(post: any, likedBy: string[] = [], env?: Env) {
     feed_media_urls: feedMediaUrls,
     thumbnail_urls: thumbnailUrls,
     poster_urls: posterUrls,
-    media_fallback_urls: mediaUrls,
+    media_fallback_urls: fallbackMediaUrls,
     original_media_url: primaryMediaUrl,
     original_media_urls: mediaUrls,
     media_types: mediaTypes.slice(0, mediaUrls.length || mediaTypes.length),
@@ -12725,8 +12766,9 @@ api.post('/media/upload-intent', authMiddleware, async (c) => {
   let storageKey = '';
   let storageProvider: 'images' | 'stream' = 'images';
   if (validation.mediaType === 'image') {
+    const requireSignedURLs = cloudflareImagesRequireSignedUrls(c.env);
     const formData = new FormData();
-    formData.append('requireSignedURLs', 'true');
+    formData.append('requireSignedURLs', String(requireSignedURLs));
     formData.append('metadata', JSON.stringify({
       userId,
       filename: validation.filename,
@@ -12944,7 +12986,8 @@ api.post('/upload/image-direct', authMiddleware, async (c) => {
     return c.json({ detail: 'Unsupported image type. Use JPG, PNG, or WebP.' }, 400);
   }
   const formData = new FormData();
-  formData.append('requireSignedURLs', 'true');
+  const requireSignedURLs = cloudflareImagesRequireSignedUrls(c.env);
+  formData.append('requireSignedURLs', String(requireSignedURLs));
   formData.append('metadata', JSON.stringify({ userId, filename, mimeType: mimeType || 'image/jpeg', source: 'captro_ios', moderation: 'pre_publish' }));
   const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/images/v2/direct_upload`, {
     method: 'POST',
@@ -16186,6 +16229,84 @@ async function serveMediaBackup(c: any) {
   }
 }
 
+async function serveCloudflareImageProxy(c: any) {
+  const imageId = publicId(c.req.param('imageId'), 220);
+  if (!imageId) return c.json({ detail: 'Media not found' }, 404);
+
+  const limited = await enforceRateLimit(c, 'cf_image_proxy_read', clientIp(c), 900, 60);
+  if (limited) return limited;
+
+  const accountId = cloudflareAccountId(c.env);
+  const token = cloudflareImagesToken(c.env);
+  if (!accountId || !token) return c.json({ detail: 'Media delivery is not configured' }, 503);
+
+  await ensureGovernanceSchema(c.env.DB);
+  await ensureMediaModerationSchema(c.env.DB);
+
+  const visibleAsset: any = await c.env.DB.prepare(
+    `SELECT ma.id
+     FROM media_assets ma
+     JOIN posts p ON p.id = ma.post_id
+     JOIN users u ON u.id = p.user_id
+     WHERE ma.storage_provider = 'images'
+       AND ma.storage_key = ?
+       AND COALESCE(ma.upload_status, 'uploaded') = 'uploaded'
+       AND COALESCE(ma.moderation_status, 'approved') = 'approved'
+       AND ${publicPostWhere('u', 'p')}
+     LIMIT 1`
+  ).bind(imageId).first();
+
+  if (!visibleAsset) return c.json({ detail: 'Media not found' }, 404);
+
+  const cacheKey = new Request(c.req.url, { method: 'GET' });
+  try {
+    const cached = await caches.default.match(cacheKey);
+    if (cached) {
+      return c.req.method === 'HEAD'
+        ? new Response(null, { headers: cached.headers })
+        : cached;
+    }
+  } catch {
+    // Cache API is best-effort. The proxy still works without it.
+  }
+
+  const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/images/v1/${encodeURIComponent(imageId)}/blob`, {
+    headers: { Authorization: `Bearer ${token}`, accept: 'image/*' },
+  });
+
+  if (!res.ok) {
+    const status = [403, 404, 409, 425].includes(res.status) ? 404 : 502;
+    console.warn(JSON.stringify({
+      event: 'cf_image_proxy_fetch_failed',
+      status: res.status,
+      image_id: imageId.slice(0, 24),
+    }));
+    return c.json({ detail: 'Media not ready' }, status as any);
+  }
+
+  const headers = new Headers();
+  headers.set('content-type', res.headers.get('content-type') || 'image/jpeg');
+  const contentLength = res.headers.get('content-length');
+  if (contentLength) headers.set('content-length', contentLength);
+  const etag = res.headers.get('etag');
+  if (etag) headers.set('etag', etag);
+  headers.set('cache-control', 'public, max-age=86400, stale-while-revalidate=604800');
+  headers.set('cdn-cache-control', 'public, max-age=86400, stale-while-revalidate=604800');
+  headers.set('cloudflare-cdn-cache-control', 'public, max-age=86400, stale-while-revalidate=604800');
+  headers.set('x-content-type-options', 'nosniff');
+  headers.set('vary', 'accept');
+
+  const response = new Response(c.req.method === 'HEAD' ? null : res.body, { headers });
+  if (c.req.method !== 'HEAD') {
+    runBackgroundTask(c, 'cf_image_proxy_cache_put_failed', async () => {
+      await caches.default.put(cacheKey, response.clone());
+    });
+  }
+  return response;
+}
+
+api.get('/media/cf-image/:imageId', serveCloudflareImageProxy);
+api.on('HEAD', '/media/cf-image/:imageId', serveCloudflareImageProxy);
 api.get('/media/:backupId', serveMediaBackup);
 api.on('HEAD', '/media/:backupId', serveMediaBackup);
 
