@@ -1199,6 +1199,7 @@ private struct StoryViewerNativeView: View {
         RemoteMediaView(
           url: mediaURL,
           isVideo: mediaURL.isVideoURL,
+          placeholderURL: storyPosterURL(for: mediaURL),
           contentMode: .fill,
           shouldPlay: !isClosing && scenePhase == .active,
           maxPixelSize: 1920,
@@ -1366,6 +1367,27 @@ private struct StoryViewerNativeView: View {
       result.append(trimmed)
     }
     return result
+  }
+
+  private func storyPosterURL(for mediaURL: String) -> String? {
+    let clean = mediaURL.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard clean.isVideoURL, let uid = cloudflareStreamUID(from: clean) else { return nil }
+    return "https://videodelivery.net/\(uid)/thumbnails/thumbnail.jpg?time=1s&height=720"
+  }
+
+  private func cloudflareStreamUID(from value: String) -> String? {
+    let clean = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    if clean.lowercased().hasPrefix("cfstream:") {
+      let uid = String(clean.dropFirst("cfstream:".count))
+        .filter { $0.isLetter || $0.isNumber || $0 == "_" || $0 == "-" }
+      return uid.isEmpty ? nil : uid
+    }
+    guard let url = URL(string: clean), url.host?.lowercased().contains("videodelivery.net") == true else {
+      return nil
+    }
+    let segments = url.pathComponents.filter { $0 != "/" }
+    guard let uid = segments.first, !uid.isEmpty else { return nil }
+    return uid
   }
 
   private func storyHandleLabel(for railGroup: MIRAStoryGroup) -> String {

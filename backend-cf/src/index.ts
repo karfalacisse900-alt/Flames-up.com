@@ -7371,9 +7371,12 @@ function maxModerationScores(scores: MediaModerationScores[]): MediaModerationSc
 
 function decideMediaModeration(scores: MediaModerationScores, mediaType: CaptroMediaType, aiGeneratedMediaPolicy = ''): { decision: ModerationDecision; reasons: string[]; rejectionCode: string; userMessage: string } {
   const reasons: string[] = [];
-  const aiDisallowed = cleanText(aiGeneratedMediaPolicy, 60).toLowerCase() === 'disallow';
+  const aiPolicy = cleanText(aiGeneratedMediaPolicy, 60).toLowerCase();
+  const aiDisallowed = aiPolicy === 'disallow';
+  const aiReviewEnabled = aiDisallowed || aiPolicy === 'review';
   if (scores.malware_status === 'malicious') reasons.push('malware_detected');
   if (scores.adult_explicit_score >= 0.85) reasons.push('explicit_sexual_content');
+  if (scores.sexual_solicitation_score >= 0.90) reasons.push('sexual_solicitation');
   if (scores.minor_safety_risk_score >= 0.20) reasons.push('minor_safety_risk');
   if (scores.gore_score >= 0.90) reasons.push('graphic_gore');
   if (scores.hate_symbol_score >= 0.85) reasons.push('hate_symbol');
@@ -7389,18 +7392,34 @@ function decideMediaModeration(scores: MediaModerationScores, mediaType: CaptroM
     };
   }
 
-  if (scores.nudity_score >= 0.45
-    || scores.sexual_context_score >= 0.40
-    || scores.violence_score >= 0.55
-    || scores.ai_generated_likelihood >= 0.65
-    || scores.confidence < 0.65
-    || (scores.malware_status === 'unknown' && mediaType === 'video')) {
-    if (scores.nudity_score >= 0.45) reasons.push('nudity_review');
-    if (scores.sexual_context_score >= 0.40) reasons.push('sexual_context_review');
-    if (scores.violence_score >= 0.55) reasons.push('violence_review');
-    if (scores.ai_generated_likelihood >= 0.65) reasons.push('ai_generated_review');
-    if (scores.confidence < 0.65) reasons.push('low_model_confidence');
-    if (scores.malware_status === 'unknown' && mediaType === 'video') reasons.push('malware_scan_unknown_video');
+  const strongestSafetySignal = Math.max(
+    scores.adult_explicit_score,
+    scores.nudity_score,
+    scores.sexual_context_score,
+    scores.sexual_solicitation_score,
+    scores.minor_safety_risk_score,
+    scores.violence_score,
+    scores.gore_score,
+    scores.weapon_score,
+    scores.hate_symbol_score,
+    scores.spam_scam_score,
+    scores.link_risk_score,
+  );
+
+  if (scores.nudity_score >= 0.70
+    || scores.sexual_context_score >= 0.70
+    || scores.sexual_solicitation_score >= 0.60
+    || scores.violence_score >= 0.80
+    || scores.weapon_score >= 0.80
+    || (aiReviewEnabled && scores.ai_generated_likelihood >= 0.85)
+    || (scores.confidence < 0.45 && strongestSafetySignal >= 0.35)) {
+    if (scores.nudity_score >= 0.70) reasons.push('nudity_review');
+    if (scores.sexual_context_score >= 0.70) reasons.push('sexual_context_review');
+    if (scores.sexual_solicitation_score >= 0.60) reasons.push('sexual_solicitation_review');
+    if (scores.violence_score >= 0.80) reasons.push('violence_review');
+    if (scores.weapon_score >= 0.80) reasons.push('weapon_review');
+    if (aiReviewEnabled && scores.ai_generated_likelihood >= 0.85) reasons.push('ai_generated_review');
+    if (scores.confidence < 0.45 && strongestSafetySignal >= 0.35) reasons.push('low_confidence_with_risk');
     return {
       decision: 'review_required',
       reasons,
@@ -10665,8 +10684,11 @@ function groupStatusRows(rows: any[], viewerId: string) {
         has_unviewed: false,
       });
     }
+    const rawStatusImage = cleanText(s.image || '', 2200);
+    const playableStatusImage = isVideoMediaUrl(rawStatusImage) ? streamPlaybackUrl(rawStatusImage) : safeMediaReference(rawStatusImage);
     const parsed = {
       ...s,
+      image: playableStatusImage,
       viewed_by: JSON.parse(s.viewed_by || '[]'),
       likes_count: Math.max(0, Number(s.likes_count || 0)),
       liked_by_me: s.liked_by_me === true || s.liked_by_me === 1 || s.liked_by_me === '1',
@@ -10736,7 +10758,7 @@ api.post('/statuses', authMiddleware, async (c) => {
       audioProvider, audioTrackId, audioTitle, audioArtist, audioArtworkUrl, audioStreamUrl, audioStartTime, audioDuration
     ).run();
   return c.json({
-    id, user_id: userId, content: b.content, image: b.image, background_color: b.background_color, text_color: b.text_color,
+    id, user_id: userId, content: b.content, image: isVideoMediaUrl(String(b.image || '')) ? streamPlaybackUrl(String(b.image || '')) : safeMediaReference(String(b.image || '')), background_color: b.background_color, text_color: b.text_color,
     visibility, user_username: publicUsernameFor(user), user_full_name: user?.full_name, user_profile_image: user?.profile_image,
     audio_provider: audioProvider, audio_track_id: audioTrackId, audio_title: audioTitle, audio_artist: audioArtist,
     audio_artwork_url: audioArtworkUrl, audio_stream_url: audioStreamUrl, audio_start_time: audioStartTime, audio_duration: audioDuration,

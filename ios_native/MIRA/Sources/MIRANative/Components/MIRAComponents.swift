@@ -1025,8 +1025,11 @@ private struct MIRAResolvedVideoPlayer: View {
     }
     .task(id: playbackTaskID) { await configurePlayer() }
     .onChange(of: shouldPlay) { _, _ in
-      guard let player else { return }
-      syncPlayback(player)
+      if let player {
+        syncPlayback(player)
+      } else if shouldPlay {
+        Task { await configurePlayer() }
+      }
     }
     .onReceive(NotificationCenter.default.publisher(for: .miraPlaybackShouldPause)) { _ in
       pauseForGlobalInterruption()
@@ -1037,7 +1040,7 @@ private struct MIRAResolvedVideoPlayer: View {
   }
 
   private var playbackTaskID: String {
-    "\(url)|\(shouldPlay)"
+    url
   }
 
   private var placeholder: some View {
@@ -1092,10 +1095,6 @@ private struct MIRAResolvedVideoPlayer: View {
     if !shouldPlay {
       if let player {
         player.pause()
-        self.player = nil
-        isPlayerReady = false
-        removeLoopObserver()
-        stopVideoMetric(status: "not_visible")
       }
       if thumbnailURL == nil && url.lowercased().hasPrefix("cfstream:") {
         await resolveCloudflareStream(createPlayer: false)

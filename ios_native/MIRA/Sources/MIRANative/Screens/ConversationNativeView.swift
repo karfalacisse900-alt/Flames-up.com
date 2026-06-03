@@ -429,10 +429,21 @@ public struct ConversationNativeView: View {
           .padding(.top, 14)
           .padding(.bottom, 120)
         }
+        .defaultScrollAnchor(.bottom)
         .scrollDismissesKeyboard(.interactively)
         .miraScrollFeel(.chat)
         .onChange(of: model.messages.map(\.id)) { oldIDs, newIDs in
           guard let last = newIDs.last else { return }
+          if oldIDs.isEmpty {
+            DispatchQueue.main.async {
+              var transaction = Transaction()
+              transaction.disablesAnimations = true
+              withTransaction(transaction) {
+                proxy.scrollTo(last, anchor: .bottom)
+              }
+            }
+            return
+          }
           let shouldStayPinnedToBottom = oldIDs.isEmpty || oldIDs.last != last
           guard shouldStayPinnedToBottom else { return }
           DispatchQueue.main.async {

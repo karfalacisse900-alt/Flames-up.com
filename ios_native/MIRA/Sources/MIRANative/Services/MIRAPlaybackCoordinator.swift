@@ -24,8 +24,8 @@ public final class MIRAVideoPrewarmManager {
   private var preparedPlayers: [String: AVPlayer] = [:]
   private var preparedOrder: [String] = []
   private var inFlight = Set<String>()
-  private let maxMetadataPreloads = 5
-  private let maxPreparedPlayers = 2
+  private let maxMetadataPreloads = 8
+  private let maxPreparedPlayers = 5
 
   private init() {}
 
