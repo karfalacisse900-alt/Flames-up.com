@@ -490,12 +490,12 @@ public struct ConversationNativeView: View {
     .toolbar(.hidden, for: .tabBar)
     .task { await model.load() }
     .task { await model.pollPresence() }
-    .miraBottomSheet(isPresented: $showProfileOptions, preferredHeightFraction: 0.30, maxHeight: 260) { dismissOptions in
+    .miraActionModal(isPresented: $showProfileOptions) { dismissOptions in
       ChatProfileOptionsSheet(
         isGroup: model.isGroup,
         onReport: {
           dismissOptions()
-          DispatchQueue.main.asyncAfter(deadline: .now() + MIRATransitionTiming.sheetClose) {
+          DispatchQueue.main.asyncAfter(deadline: .now() + MIRATransitionTiming.actionModalClose) {
             presentProfileReport()
           }
         },
@@ -916,38 +916,30 @@ private struct ChatProfileOptionsSheet: View {
   let onBlock: () -> Void
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 0) {
-      Capsule()
-        .fill(Color.black.opacity(0.20))
-        .frame(width: 42, height: 5)
-        .frame(maxWidth: .infinity)
-        .padding(.top, 10)
-        .padding(.bottom, 16)
-
-      Text(isGroup ? "Chat options" : "Profile options")
-        .font(.system(size: 18, weight: .semibold))
-        .foregroundStyle(.black)
-        .padding(.horizontal, MIRATheme.Space.lg)
-        .padding(.bottom, 10)
-
+    MIRAActionModalCard {
       if !isGroup {
-        Button(role: .destructive, action: onReport) {
-          ChatProfileOptionRow(title: "Report profile", subtitle: "Send this profile to moderation.", systemImage: "flag", tint: .red)
-        }
-        .buttonStyle(.miraPress)
+        MIRAActionModalButton(
+          title: "Block",
+          systemImage: "nosign",
+          isDestructive: true,
+          staggerIndex: 0,
+          action: onBlock
+        )
 
-        Button(role: .destructive, action: onBlock) {
-          ChatProfileOptionRow(title: "Block user", subtitle: "Stop messages and unwanted contact.", systemImage: "hand.raised.fill", tint: .red)
-        }
-        .buttonStyle(.miraPress)
+        MIRAActionModalButton(
+          title: "Report",
+          systemImage: "exclamationmark.triangle",
+          staggerIndex: 1,
+          action: onReport
+        )
       } else {
-        ChatProfileOptionRow(title: "Group chat", subtitle: "Group moderation tools are coming soon.", systemImage: "person.3.fill", tint: .black.opacity(0.68))
+        MIRAActionModalPillLabel(
+          title: "Group chat",
+          systemImage: "person.3.fill"
+        )
           .opacity(0.72)
       }
-
-      Spacer(minLength: 0)
     }
-    .background(ChatRoomPalette.composer)
   }
 }
 

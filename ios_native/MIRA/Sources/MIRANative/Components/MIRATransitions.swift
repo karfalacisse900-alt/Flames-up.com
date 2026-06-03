@@ -16,12 +16,15 @@ public enum CaptroMotion {
     public static let pagePush: Double = 0.22
     public static let pageModal: Double = 0.26
     public static let pageTab: Double = 0.18
+    public static let actionModalOpen: Double = 0.28
+    public static let actionModalClose: Double = 0.22
   }
 
   public enum Scale {
     public static let buttonPressed: CGFloat = 0.97
     public static let smallMenuInitial: CGFloat = 0.965
     public static let fullScreenInitial: CGFloat = 0.985
+    public static let actionModalInitial: CGFloat = 0.96
   }
 
   public static func buttonPressAnimation(reduceMotion: Bool) -> Animation {
@@ -42,6 +45,12 @@ public enum CaptroMotion {
     reduceMotion
       ? .easeOut(duration: Duration.reduced)
       : .spring(response: Duration.fullScreenOpen, dampingFraction: 0.92, blendDuration: 0.02)
+  }
+
+  public static func actionModalAnimation(reduceMotion: Bool) -> Animation {
+    reduceMotion
+      ? .easeOut(duration: Duration.reduced)
+      : .spring(response: Duration.actionModalOpen, dampingFraction: 0.88, blendDuration: 0.02)
   }
 
   public static func mediaFadeAnimation(reduceMotion: Bool) -> Animation {
@@ -82,6 +91,8 @@ public enum MIRATransitionTiming {
   public static let sheetClose: Double = CaptroMotion.Duration.bottomSheetClose
   public static let fullScreenOpen: Double = CaptroMotion.Duration.fullScreenOpen
   public static let fullScreenClose: Double = CaptroMotion.Duration.fullScreenClose
+  public static let actionModalOpen: Double = CaptroMotion.Duration.actionModalOpen
+  public static let actionModalClose: Double = CaptroMotion.Duration.actionModalClose
 }
 
 private enum MIRAPresentationGeometry {
@@ -165,8 +176,133 @@ public extension View {
     modifier(MIRAHideTabBarModifier())
   }
 
+  func miraActionModal<ModalContent: View>(
+    isPresented: Binding<Bool>,
+    onDismissed: (() -> Void)? = nil,
+    @ViewBuilder content: @escaping (_ dismiss: @escaping () -> Void) -> ModalContent
+  ) -> some View {
+    modifier(
+      MIRAPremiumActionModalModifier(
+        isPresented: isPresented,
+        onDismissed: onDismissed,
+        modalContent: content
+      )
+    )
+  }
+
   func miraStatusBarHidden(_ hidden: Bool) -> some View {
     preference(key: MIRAStatusBarHiddenPreferenceKey.self, value: hidden)
+  }
+}
+
+public struct MIRAActionModalCard<Content: View>: View {
+  private let content: Content
+
+  public init(@ViewBuilder content: () -> Content) {
+    self.content = content()
+  }
+
+  public var body: some View {
+    VStack(spacing: 18) {
+      content
+    }
+    .padding(24)
+    .frame(maxWidth: 620)
+    .background {
+      RoundedRectangle(cornerRadius: 48, style: .continuous)
+        .fill(Color(red: 0.945, green: 0.933, blue: 0.929).opacity(0.94))
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 48, style: .continuous))
+    }
+    .shadow(color: .black.opacity(0.13), radius: 36, x: 0, y: 18)
+    .shadow(color: .white.opacity(0.28), radius: 1, x: 0, y: 1)
+    .accessibilityElement(children: .contain)
+  }
+}
+
+public struct MIRAActionModalButton: View {
+  let title: String
+  let systemImage: String
+  let isDestructive: Bool
+  let staggerIndex: Int
+  let action: () -> Void
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @State private var isVisible = false
+
+  public init(
+    title: String,
+    systemImage: String,
+    isDestructive: Bool = false,
+    staggerIndex: Int = 0,
+    action: @escaping () -> Void
+  ) {
+    self.title = title
+    self.systemImage = systemImage
+    self.isDestructive = isDestructive
+    self.staggerIndex = staggerIndex
+    self.action = action
+  }
+
+  public var body: some View {
+    Button {
+      CaptroHaptics.light()
+      action()
+    } label: {
+      MIRAActionModalPillLabel(
+        title: title,
+        systemImage: systemImage,
+        isDestructive: isDestructive
+      )
+      .opacity(isVisible || reduceMotion ? 1 : 0)
+      .offset(y: isVisible || reduceMotion ? 0 : 8)
+    }
+    .buttonStyle(.miraPress)
+    .accessibilityLabel(title)
+    .onAppear {
+      guard !reduceMotion else {
+        isVisible = true
+        return
+      }
+      let delay = min(0.12, Double(staggerIndex) * 0.035)
+      DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+        withAnimation(.easeOut(duration: 0.18)) {
+          isVisible = true
+        }
+      }
+    }
+  }
+}
+
+public struct MIRAActionModalPillLabel: View {
+  let title: String
+  let systemImage: String
+  let isDestructive: Bool
+
+  public init(title: String, systemImage: String, isDestructive: Bool = false) {
+    self.title = title
+    self.systemImage = systemImage
+    self.isDestructive = isDestructive
+  }
+
+  public var body: some View {
+    let tint = isDestructive ? Color(red: 1.0, green: 0.176, blue: 0.176) : Color(red: 0.02, green: 0.02, blue: 0.02)
+    HStack(spacing: 24) {
+      Image(systemName: systemImage)
+        .font(.system(size: 30, weight: .semibold))
+        .symbolRenderingMode(.monochrome)
+        .frame(width: 34, height: 34)
+
+      Text(title)
+        .font(.system(size: 25, weight: .bold))
+        .lineLimit(1)
+        .minimumScaleFactor(0.78)
+
+      Spacer(minLength: 0)
+    }
+    .foregroundStyle(tint)
+    .padding(.horizontal, 28)
+    .frame(maxWidth: .infinity, minHeight: 82)
+    .background(Color.white, in: Capsule())
+    .contentShape(Capsule())
   }
 }
 
@@ -194,6 +330,131 @@ private struct MIRAHideTabBarModifier: ViewModifier {
           MIRATabBarVisibilityStore.show(token)
         }
       }
+  }
+}
+
+private struct MIRAPremiumActionModalModifier<ModalContent: View>: ViewModifier {
+  @Binding var isPresented: Bool
+  let onDismissed: (() -> Void)?
+  let modalContent: (_ dismiss: @escaping () -> Void) -> ModalContent
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @State private var isMounted = false
+  @State private var isVisible = false
+  @GestureState private var dragOffset: CGFloat = 0
+
+  func body(content: Content) -> some View {
+    content
+      .overlay {
+        if isMounted {
+          GeometryReader { proxy in
+            ZStack(alignment: .bottom) {
+              Rectangle()
+                .fill(.ultraThinMaterial)
+                .opacity(isVisible ? 0.88 : 0)
+                .ignoresSafeArea()
+                .allowsHitTesting(false)
+
+              Color.black
+                .opacity(isVisible ? 0.24 : 0)
+                .ignoresSafeArea()
+                .contentShape(Rectangle())
+                .onTapGesture(perform: dismiss)
+
+              modalContent(dismiss)
+                .padding(.horizontal, proxy.size.width > 700 ? 52 : 12)
+                .padding(.bottom, max(18, proxy.safeAreaInsets.bottom + 12))
+                .opacity(isVisible ? 1 : 0)
+                .scaleEffect(reduceMotion || isVisible ? 1 : CaptroMotion.Scale.actionModalInitial)
+                .offset(y: modalOffset(proxy: proxy))
+                .compositingGroup()
+                .simultaneousGesture(actionModalDragGesture(threshold: 78))
+            }
+            .frame(width: proxy.size.width, height: proxy.size.height)
+          }
+          .ignoresSafeArea(.container, edges: [.horizontal, .bottom])
+          .zIndex(920)
+          .allowsHitTesting(isMounted)
+        }
+      }
+      .onAppear {
+        if isPresented {
+          present()
+        }
+      }
+      .onChange(of: isPresented) { _, newValue in
+        newValue ? present() : dismissFromExternalState()
+      }
+      .animation(animation, value: isVisible)
+      .animation(animation, value: dragOffset)
+  }
+
+  private var animation: Animation {
+    CaptroMotion.actionModalAnimation(reduceMotion: reduceMotion)
+  }
+
+  private var dismissDelay: Double {
+    reduceMotion ? CaptroMotion.Duration.reduced : CaptroMotion.Duration.actionModalClose
+  }
+
+  private func modalOffset(proxy: GeometryProxy) -> CGFloat {
+    guard isVisible else { return 28 }
+    return max(0, dragOffset)
+  }
+
+  private func actionModalDragGesture(threshold: CGFloat) -> some Gesture {
+    DragGesture(minimumDistance: 14, coordinateSpace: .global)
+      .updating($dragOffset) { value, state, _ in
+        guard value.translation.height > 0, abs(value.translation.height) > abs(value.translation.width) else { return }
+        state = value.translation.height
+      }
+      .onEnded { value in
+        let shouldDismiss = value.translation.height > threshold || value.predictedEndTranslation.height > threshold * 1.45
+        if shouldDismiss {
+          dismiss()
+        }
+      }
+  }
+
+  private func present() {
+    guard !isMounted else {
+      if !isVisible {
+        withAnimation(animation) { isVisible = true }
+      }
+      return
+    }
+    isMounted = true
+    MIRAApplePerformanceLogger.event("modal_open", detail: "premium_action")
+    DispatchQueue.main.async {
+      withAnimation(animation) {
+        isVisible = true
+      }
+    }
+  }
+
+  private func dismiss() {
+    guard isMounted, isVisible else { return }
+    MIRAApplePerformanceLogger.event("modal_close", detail: "premium_action")
+    withAnimation(animation) {
+      isVisible = false
+    }
+    DispatchQueue.main.asyncAfter(deadline: .now() + dismissDelay) {
+      isPresented = false
+      isMounted = false
+      onDismissed?()
+    }
+  }
+
+  private func dismissFromExternalState() {
+    guard isMounted else { return }
+    MIRAApplePerformanceLogger.event("modal_close", detail: "premium_action_external")
+    withAnimation(animation) {
+      isVisible = false
+    }
+    DispatchQueue.main.asyncAfter(deadline: .now() + dismissDelay) {
+      guard !isPresented else { return }
+      isMounted = false
+      onDismissed?()
+    }
   }
 }
 

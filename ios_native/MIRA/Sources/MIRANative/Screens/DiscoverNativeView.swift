@@ -1157,20 +1157,41 @@ private struct StoryViewerNativeView: View {
         currentUserId = me?.id
       }
     }
-    .confirmationDialog("Story options", isPresented: $showStoryMenu, titleVisibility: .visible) {
-      if currentUserId == activeGroup.userId {
-        Button("Delete story", role: .destructive) {
-          Task { await deleteCurrentStory() }
-        }
-      } else {
-        Button("Report story", role: .destructive) {
-          reportCurrentStory()
-        }
-        Button("Block user", role: .destructive) {
-          Task { await blockStoryOwner() }
+    .miraActionModal(isPresented: $showStoryMenu) { dismissMenu in
+      MIRAActionModalCard {
+        if currentUserId == activeGroup.userId {
+          MIRAActionModalButton(
+            title: "Delete story",
+            systemImage: "trash",
+            isDestructive: true,
+            staggerIndex: 0
+          ) {
+            dismissMenu()
+            Task { await deleteCurrentStory() }
+          }
+        } else {
+          MIRAActionModalButton(
+            title: "Block",
+            systemImage: "nosign",
+            isDestructive: true,
+            staggerIndex: 0
+          ) {
+            dismissMenu()
+            Task { await blockStoryOwner() }
+          }
+
+          MIRAActionModalButton(
+            title: "Report",
+            systemImage: "exclamationmark.triangle",
+            staggerIndex: 1
+          ) {
+            dismissMenu()
+            DispatchQueue.main.asyncAfter(deadline: .now() + MIRATransitionTiming.actionModalClose) {
+              reportCurrentStory()
+            }
+          }
         }
       }
-      Button("Cancel", role: .cancel) {}
     }
     .onChange(of: scenePhase) { _, phase in
       if phase == .active {

@@ -787,10 +787,8 @@ public struct MainFeedView: View {
           Color.clear
         }
       }
-      .miraBottomSheet(
+      .miraActionModal(
         isPresented: $isPostOptionsPresented,
-        preferredHeightFraction: 0.32,
-        maxHeight: 320,
         onDismissed: { postOptionsTarget = nil }
       ) { dismiss in
         if let post = postOptionsTarget {
@@ -1668,53 +1666,30 @@ private struct MainFeedPostOptionsSheet: View {
   let onNotInterested: () -> Void
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 0) {
-      Capsule()
-        .fill(MIRATheme.Color.textMuted.opacity(0.28))
-        .frame(width: 42, height: 5)
-        .frame(maxWidth: .infinity)
-        .padding(.top, 10)
-        .padding(.bottom, 16)
+    MIRAActionModalCard {
+      MIRAActionModalButton(
+        title: "Report",
+        systemImage: "exclamationmark.triangle",
+        staggerIndex: 0,
+        action: onReport
+      )
 
-      Text("Post options")
-        .font(.system(size: 18, weight: .semibold))
-        .foregroundStyle(MIRATheme.Color.textPrimary)
-        .padding(.horizontal, MIRATheme.Space.lg)
-        .padding(.bottom, 10)
-
-      Button(action: onReport) {
-        MainFeedPostOptionRow(
-          title: "Report",
-          subtitle: "Send this post to Captro moderation.",
-          systemImage: "flag",
-          tint: MIRATheme.Color.like
-        )
-      }
-      .buttonStyle(.miraPress)
-
-      Button(action: onNotInterested) {
-        MainFeedPostOptionRow(
-          title: "Not Interested",
-          subtitle: "Hide this post and tune your feed.",
-          systemImage: "hand.thumbsdown",
-          tint: MIRATheme.Color.textSecondary
-        )
-      }
-      .buttonStyle(.miraPress)
+      MIRAActionModalButton(
+        title: "Not Interested",
+        systemImage: "hand.thumbsdown",
+        staggerIndex: 1,
+        action: onNotInterested
+      )
 
       ShareLink(item: shareURL, subject: Text(post.titleText), message: Text(post.titleText)) {
-        MainFeedPostOptionRow(
+        MIRAActionModalPillLabel(
           title: "Share",
-          subtitle: "Share this Captro post.",
-          systemImage: "square.and.arrow.up",
-          tint: MIRATheme.Color.forest
+          systemImage: "square.and.arrow.up"
         )
       }
       .buttonStyle(.miraPress)
-
-      Spacer(minLength: 0)
+      .accessibilityLabel("Share")
     }
-    .background(MIRATheme.Color.surface)
   }
 }
 

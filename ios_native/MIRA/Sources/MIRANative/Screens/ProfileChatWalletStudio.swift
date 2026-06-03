@@ -526,24 +526,46 @@ public struct UserProfileNativeView: View {
         Color.clear
       }
     }
-    .miraBottomSheet(isPresented: $isProfileOptionsPresented, preferredHeightFraction: 0.34, maxHeight: 330) { dismissOptions in
-      UserProfileSafetyOptionsSheet(
-        isBlocked: model.isBlocked,
-        onReport: {
+    .miraActionModal(isPresented: $isProfileOptionsPresented) { dismissOptions in
+      MIRAActionModalCard {
+        MIRAActionModalButton(
+          title: model.isBlocked ? "Unblock" : "Block",
+          systemImage: model.isBlocked ? "hand.raised.slash" : "nosign",
+          isDestructive: !model.isBlocked,
+          staggerIndex: 0
+        ) {
           dismissOptions()
-          DispatchQueue.main.asyncAfter(deadline: .now() + MIRATransitionTiming.sheetClose) {
+          Task {
+            if model.isBlocked {
+              _ = await model.unblockUser()
+            } else {
+              _ = await model.blockUser()
+            }
+          }
+        }
+
+        MIRAActionModalButton(
+          title: "Report",
+          systemImage: "exclamationmark.triangle",
+          staggerIndex: 1
+        ) {
+          dismissOptions()
+          DispatchQueue.main.asyncAfter(deadline: .now() + MIRATransitionTiming.actionModalClose) {
             presentProfileReport()
           }
-        },
-        onBlock: {
-          dismissOptions()
-          Task { _ = await model.blockUser() }
-        },
-        onUnblock: {
-          dismissOptions()
-          Task { _ = await model.unblockUser() }
         }
-      )
+
+        if model.isFollowing {
+          MIRAActionModalButton(
+            title: "Unfollow",
+            systemImage: "person.badge.minus",
+            staggerIndex: 2
+          ) {
+            dismissOptions()
+            Task { await model.toggleFollow() }
+          }
+        }
+      }
     }
   }
 
