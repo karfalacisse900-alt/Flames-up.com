@@ -112,6 +112,7 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
   public let feedMediaUrls: FlexibleStringArray?
   public let thumbnailUrls: FlexibleStringArray?
   public let posterUrls: FlexibleStringArray?
+  public let mediaFallbackUrls: FlexibleStringArray?
   public let mediaTypes: FlexibleStringArray?
   public let mediaDimensions: FlexibleMediaDimensions?
   public let location: String?
@@ -205,6 +206,11 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
   public var posterMediaURLs: [String] {
     let posters = uniqueMediaURLs(from: posterUrls?.values ?? [], fallback: nil)
     return posters.isEmpty ? thumbnailMediaURLs : posters
+  }
+
+  public var fallbackMediaURLs: [String] {
+    let fallbacks = uniqueMediaURLs(from: mediaFallbackUrls?.values ?? [], fallback: nil)
+    return fallbacks.isEmpty ? mediaURLs : fallbacks
   }
 
   private func uniqueMediaURLs(from values: [String], fallback: String?) -> [String] {
@@ -316,6 +322,7 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
       feedMediaUrls: feedMediaUrls,
       thumbnailUrls: thumbnailUrls,
       posterUrls: posterUrls,
+      mediaFallbackUrls: mediaFallbackUrls,
       mediaTypes: mediaTypes,
       mediaDimensions: mediaDimensions,
       location: location,
@@ -391,6 +398,7 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
       feedMediaUrls: feedMediaUrls,
       thumbnailUrls: thumbnailUrls,
       posterUrls: posterUrls,
+      mediaFallbackUrls: mediaFallbackUrls,
       mediaTypes: mediaTypes,
       mediaDimensions: mediaDimensions,
       location: location,

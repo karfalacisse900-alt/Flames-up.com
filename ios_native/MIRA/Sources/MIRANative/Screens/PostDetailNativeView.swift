@@ -376,7 +376,7 @@ public struct PostDetailNativeView: View {
 
   private var detailMediaURLs: [String] {
     let optimized = model.post.feedMediaURLs
-    return optimized.isEmpty ? model.post.mediaURLs : optimized
+    return optimized.isEmpty ? model.post.fallbackMediaURLs : optimized
   }
 
   public var body: some View {
@@ -807,7 +807,7 @@ private struct PostDetailOptimizedMediaCarousel: View {
   }
 
   private func fallbackURL(at index: Int, mediaURL: String) -> String? {
-    let originals = post.mediaURLs
+    let originals = post.fallbackMediaURLs
     guard originals.indices.contains(index) else { return nil }
     let original = originals[index].trimmingCharacters(in: .whitespacesAndNewlines)
     guard !original.isEmpty, original != mediaURL, !original.isVideoURL else { return nil }
@@ -840,7 +840,7 @@ public struct DiscoverPostDetailNativeView: View {
 
   private var detailMediaURLs: [String] {
     let optimized = model.post.feedMediaURLs
-    return optimized.isEmpty ? model.post.mediaURLs : optimized
+    return optimized.isEmpty ? model.post.fallbackMediaURLs : optimized
   }
 
   public var body: some View {
@@ -1098,7 +1098,7 @@ public struct DiscoverPostDetailNativeView: View {
 
   private var displayMediaURLs: [String] {
     let feed = model.post.feedMediaURLs
-    return feed.isEmpty ? model.post.mediaURLs : feed
+    return feed.isEmpty ? model.post.fallbackMediaURLs : feed
   }
 
   private var carouselCardWidth: CGFloat {
@@ -1149,7 +1149,7 @@ public struct DiscoverPostDetailNativeView: View {
   }
 
   private func fallbackURL(at index: Int, url: String) -> String? {
-    let originals = model.post.mediaURLs
+    let originals = model.post.fallbackMediaURLs
     guard originals.indices.contains(index) else { return nil }
     let fallback = originals[index].trimmingCharacters(in: .whitespacesAndNewlines)
     guard !fallback.isEmpty, fallback != url, !fallback.isVideoURL else { return nil }

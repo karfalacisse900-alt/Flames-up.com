@@ -926,7 +926,7 @@ private struct DiscoverSinglePhotoPreviewSheet: View {
   }
 
   private var mediaURL: String? {
-    uniqueURLs(model.post.feedMediaURLs + model.post.mediaURLs).first { !$0.isVideoURL }
+    uniqueURLs(model.post.feedMediaURLs + model.post.fallbackMediaURLs + model.post.mediaURLs).first { !$0.isVideoURL }
   }
 
   private var placeholderURL: String? {
@@ -951,7 +951,7 @@ private struct DiscoverSinglePhotoPreviewSheet: View {
   }
 
   private func fallbackURL(for media: String) -> String? {
-    uniqueURLs(model.post.mediaURLs + model.post.feedMediaURLs)
+    uniqueURLs(model.post.fallbackMediaURLs + model.post.mediaURLs + model.post.feedMediaURLs)
       .first { !$0.isVideoURL && $0 != media && $0 != placeholderURL }
   }
 
@@ -2086,13 +2086,14 @@ private struct DiscoverPostGalleryTile: View {
   private var orderedMediaCandidates: [String] {
     let preferredPreview = post.posterMediaURLs + post.thumbnailMediaURLs
     let renderableFeed = post.feedMediaURLs.filter { !($0.isVideoURL && !sourceIsVideo) }
-    return uniqueMediaURLs(preferredPreview + renderableFeed + post.mediaURLs)
+    return uniqueMediaURLs(preferredPreview + renderableFeed + post.fallbackMediaURLs + post.mediaURLs)
   }
 
   private var sourceIsVideo: Bool {
     let types = post.mediaTypes?.values.map { $0.lowercased() } ?? []
     return types.contains { $0.contains("video") }
       || post.feedMediaURLs.contains { $0.isVideoURL }
+      || post.fallbackMediaURLs.contains { $0.isVideoURL }
       || post.mediaURLs.contains { $0.isVideoURL }
   }
 
@@ -2101,7 +2102,7 @@ private struct DiscoverPostGalleryTile: View {
   }
 
   private func fallbackURL(for media: String) -> String? {
-    uniqueMediaURLs(post.feedMediaURLs + post.mediaURLs)
+    uniqueMediaURLs(post.feedMediaURLs + post.fallbackMediaURLs + post.mediaURLs)
       .first { $0 != media && !$0.isVideoURL }
   }
 

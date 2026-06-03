@@ -70,6 +70,9 @@ final class ConversationNativeModel: ObservableObject {
     }
     didBeginInitialLoad = true
     await hydrateLocalMessages()
+    if !messages.isEmpty {
+      await refreshRecentMessages()
+    }
     await syncNewMessages()
     if case let .direct(peerId) = kind {
       presence = try? await api.get("/messages/presence/\(peerId)")
@@ -119,6 +122,30 @@ final class ConversationNativeModel: ObservableObject {
       if messages.isEmpty {
         errorMessage = "Could not load this chat."
       }
+    }
+  }
+
+  private func refreshRecentMessages() async {
+    guard !isSyncing else { return }
+    isSyncing = true
+    defer { isSyncing = false }
+    do {
+      let rows: [MIRAMessage]
+      switch kind {
+      case let .direct(peerId):
+        rows = try await api.get(messagesPath("/messages/\(peerId)", limit: 50))
+      case let .group(groupId):
+        let response: MIRAGroupMessagesResponse = try await api.get(messagesPath("/group-chats/\(groupId)/messages", limit: 50))
+        rows = response.messages
+      }
+      guard !rows.isEmpty else { return }
+      messages = await localStore.merge(messages, with: rows)
+      lastSyncedAt = latestMessageCursor() ?? lastSyncedAt
+      lastServerSequence = messages.compactMap(\.serverSequence).max() ?? lastServerSequence
+      prefetchMessageMedia(rows)
+      await persistThread()
+    } catch {
+      // Keep the cached chat visible; foreground sync will retry next open/poll.
     }
   }
 

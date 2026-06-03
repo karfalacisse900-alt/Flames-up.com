@@ -319,6 +319,7 @@ public final class MIRAMediaUploadService {
             mimeType: media.mimeType,
             data: media.data
           )
+          await waitForStreamReady(videoUID)
           return "cfstream:\(videoUID)"
         }
       } catch {
@@ -332,7 +333,28 @@ public final class MIRAMediaUploadService {
         data: media.data
       )
       guard let url = response.url, !url.isEmpty else { throw MIRAAPIError.emptyResponse }
+      if url.lowercased().hasPrefix("cfstream:"), let videoUID = response.videoUid, !videoUID.isEmpty {
+        await waitForStreamReady(videoUID)
+      }
       return url
+    }
+  }
+
+  private func waitForStreamReady(_ videoUID: String) async {
+    let cleanUID = videoUID.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !cleanUID.isEmpty else { return }
+    for attempt in 1...12 {
+      if Task.isCancelled { return }
+      do {
+        let info: MIRAStreamPlaybackInfo = try await api.get("/stream/video/\(cleanUID)")
+        if info.ready != false, let hls = info.hls, !hls.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+          MIRAApplePerformanceLogger.event("video_upload_stream_ready", detail: "attempt=\(attempt)")
+          return
+        }
+      } catch {
+        // Stream can briefly report not found/processing immediately after upload.
+      }
+      try? await Task.sleep(nanoseconds: UInt64(min(attempt, 3)) * 700_000_000)
     }
   }
 

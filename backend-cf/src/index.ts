@@ -4817,6 +4817,7 @@ function postPayload(post: any, likedBy: string[] = [], env?: Env) {
     feed_media_urls: feedMediaUrls,
     thumbnail_urls: thumbnailUrls,
     poster_urls: posterUrls,
+    media_fallback_urls: mediaUrls,
     original_media_url: primaryMediaUrl,
     original_media_urls: mediaUrls,
     media_types: mediaTypes.slice(0, mediaUrls.length || mediaTypes.length),
@@ -16125,6 +16126,20 @@ async function serveMediaBackup(c: any) {
       if (!visiblePost) return c.json({ detail: 'Media not found' }, 404);
     } else if (!viewerId) {
       return c.json({ detail: 'Media not found' }, 404);
+    } else if (cleanText(backup.message_id, 120)) {
+      const visibleMessage: any = await c.env.DB.prepare(
+        'SELECT id FROM messages WHERE id = ? AND (sender_id = ? OR receiver_id = ?) LIMIT 1'
+      ).bind(cleanText(backup.message_id, 120), viewerId, viewerId).first();
+      if (!visibleMessage) return c.json({ detail: 'Media not found' }, 404);
+    } else if (cleanText(backup.group_message_id, 120)) {
+      const visibleGroupMessage: any = await c.env.DB.prepare(
+        `SELECT gm.id
+         FROM group_messages gm
+         JOIN group_chat_members m ON m.group_id = gm.group_id
+         WHERE gm.id = ? AND m.user_id = ?
+         LIMIT 1`
+      ).bind(cleanText(backup.group_message_id, 120), viewerId).first();
+      if (!visibleGroupMessage) return c.json({ detail: 'Media not found' }, 404);
     } else if (backup.user_id !== viewerId) {
       const viewer: any = await c.env.DB.prepare('SELECT username, email, is_admin FROM users WHERE id = ?').bind(viewerId).first();
       if (!viewer?.is_admin && !isOwnerUsername(c, viewer?.username) && !isOwnerEmail(c, viewer?.email)) {

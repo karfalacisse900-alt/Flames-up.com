@@ -1325,7 +1325,7 @@ private struct MainNativePostCard: View {
   }
 
   private func mediaFallbackURL(for index: Int, mediaURL: String) -> String? {
-    let originals = post.mediaURLs
+    let originals = post.fallbackMediaURLs
     guard originals.indices.contains(index) else { return nil }
     let trimmed = originals[index].trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty, trimmed != mediaURL, !trimmed.isVideoURL else { return nil }

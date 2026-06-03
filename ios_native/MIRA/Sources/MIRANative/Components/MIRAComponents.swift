@@ -457,9 +457,9 @@ private actor MIRAImageLoadPipeline {
       do {
         MIRAApplePerformanceLogger.event("media_cache_miss", detail: "network")
         var request = URLRequest(url: remoteURL)
-        request.cachePolicy = .returnCacheDataElseLoad
+        request.cachePolicy = .reloadIgnoringLocalCacheData
         request.timeoutInterval = 14
-        request.setValue("image/jpeg,image/png,image/webp,*/*;q=0.5", forHTTPHeaderField: "Accept")
+        request.setValue("image/jpeg,image/png,*/*;q=0.2", forHTTPHeaderField: "Accept")
 
         let metric = await MIRAPerformanceMetric.begin(category: "image", label: remoteURL.host ?? remoteURL.path)
         let data: Data
@@ -990,6 +990,7 @@ private struct MIRAResolvedVideoPlayer: View {
   @State private var generatedThumbnail: UIImage?
   @State private var isPlayerReady = false
   @State private var globallyPaused = false
+  @State private var videoRetryAttempt = 0
 
   var body: some View {
     ZStack {
@@ -1092,7 +1093,14 @@ private struct MIRAResolvedVideoPlayer: View {
       generatedThumbnail = nil
       failed = false
       isPlayerReady = false
+      videoRetryAttempt = 0
       loadedVideoURL = url
+    } else if failed && shouldPlay {
+      player?.pause()
+      removeLoopObserver()
+      player = nil
+      isPlayerReady = false
+      failed = false
     }
 
     let directURL = URL(string: url)
@@ -1228,6 +1236,8 @@ private struct MIRAResolvedVideoPlayer: View {
         withAnimation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion)) {
           isPlayerReady = true
         }
+        failed = false
+        videoRetryAttempt = 0
         stopVideoMetric(status: "ready")
         return
       }
@@ -1235,6 +1245,7 @@ private struct MIRAResolvedVideoPlayer: View {
         failed = true
         isPlayerReady = false
         stopVideoMetric(status: "failed")
+        scheduleVideoRetry(expectedURL: expectedURL)
         return
       }
       try? await Task.sleep(nanoseconds: 100_000_000)
@@ -1244,10 +1255,33 @@ private struct MIRAResolvedVideoPlayer: View {
       withAnimation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion)) {
         isPlayerReady = true
       }
+      failed = false
+      videoRetryAttempt = 0
       stopVideoMetric(status: "ready_late")
     } else {
       isPlayerReady = false
       stopVideoMetric(status: "ready_timeout")
+      scheduleVideoRetry(expectedURL: expectedURL)
+    }
+  }
+
+  @MainActor
+  private func scheduleVideoRetry(expectedURL: String) {
+    guard shouldPlay, videoRetryAttempt < 6 else { return }
+    videoRetryAttempt += 1
+    let attempt = videoRetryAttempt
+    Task {
+      try? await Task.sleep(nanoseconds: UInt64(attempt) * 1_200_000_000)
+      await MainActor.run {
+        guard shouldPlay, loadedVideoURL == expectedURL, videoRetryAttempt == attempt else { return }
+        player?.pause()
+        removeLoopObserver()
+        player = nil
+        isPlayerReady = false
+        failed = false
+        MIRAApplePerformanceLogger.event("video_retry_prepare", detail: "attempt=\(attempt)")
+        Task { await configurePlayer() }
+      }
     }
   }
 
