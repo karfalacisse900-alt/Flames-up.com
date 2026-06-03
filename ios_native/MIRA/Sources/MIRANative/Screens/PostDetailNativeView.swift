@@ -817,7 +817,11 @@ private struct PostDetailOptimizedMediaCarousel: View {
   private func prefetchNearbyMedia() async {
     let previewURLs = (post.posterMediaURLs + post.thumbnailMediaURLs)
       .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-    await MIRAImagePrefetcher.prefetch(urls: previewURLs + urls.filter { !$0.isVideoURL }, maxPixelSize: MIRAMediaSizing.feedTargetHeight, limit: 10)
+    let fallbackURLs = post.fallbackMediaURLs
+      .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !$0.isVideoURL }
+    let imageURLs = urls.filter { !$0.isVideoURL }
+    await MIRAImagePrefetcher.prefetch(urls: previewURLs, maxPixelSize: 560, limit: max(12, previewURLs.count))
+    await MIRAImagePrefetcher.prefetch(urls: imageURLs + fallbackURLs, maxPixelSize: MIRAMediaSizing.feedTargetHeight, limit: max(18, imageURLs.count + fallbackURLs.count))
     await MainActor.run {
       MIRAVideoPrewarmManager.shared.prewarm(urls: urls.filter(\.isVideoURL), keepOnly: Set(urls.filter(\.isVideoURL).prefix(2)))
     }
@@ -1011,6 +1015,9 @@ public struct DiscoverPostDetailNativeView: View {
       }
     }
     .frame(height: carouselHeight)
+    .task(id: displayMediaURLs.joined(separator: "|")) {
+      await prefetchDisplayMedia()
+    }
   }
 
   private var actionRow: some View {
@@ -1154,6 +1161,16 @@ public struct DiscoverPostDetailNativeView: View {
     let fallback = originals[index].trimmingCharacters(in: .whitespacesAndNewlines)
     guard !fallback.isEmpty, fallback != url, !fallback.isVideoURL else { return nil }
     return fallback
+  }
+
+  private func prefetchDisplayMedia() async {
+    let previewURLs = (model.post.posterMediaURLs + model.post.thumbnailMediaURLs)
+      .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    let fallbackURLs = model.post.fallbackMediaURLs
+      .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !$0.isVideoURL }
+    let imageURLs = displayMediaURLs.filter { !$0.isVideoURL }
+    await MIRAImagePrefetcher.prefetch(urls: previewURLs, maxPixelSize: 560, limit: max(12, previewURLs.count))
+    await MIRAImagePrefetcher.prefetch(urls: imageURLs + fallbackURLs, maxPixelSize: MIRAMediaSizing.feedTargetHeight, limit: max(18, imageURLs.count + fallbackURLs.count))
   }
 
   private func presentReport(for comment: MIRAComment) {

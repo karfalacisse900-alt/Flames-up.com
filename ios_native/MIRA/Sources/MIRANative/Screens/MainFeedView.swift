@@ -150,7 +150,7 @@ final class MainFeedModel: ObservableObject {
       }
       if !plan.feedImageURLs.isEmpty {
         MIRAApplePerformanceLogger.event("media_prefetch_started", detail: "feed_full=\(plan.feedImageURLs.count)")
-        await MIRAImagePrefetcher.prefetch(urls: plan.feedImageURLs, maxPixelSize: MIRAMediaSizing.feedTargetHeight, limit: 12)
+        await MIRAImagePrefetcher.prefetch(urls: plan.feedImageURLs, maxPixelSize: MIRAMediaSizing.feedTargetHeight, limit: 22)
         MIRAApplePerformanceLogger.event("media_prefetch_completed", detail: "feed_full")
       }
     }
@@ -177,13 +177,12 @@ final class MainFeedModel: ObservableObject {
       previewURLs.append(contentsOf: post.thumbnailMediaURLs)
 
       let mediaURLs = post.feedMediaURLs
-      let imageURLs = mediaURLs.filter { !$0.isVideoURL }
+      let imageURLs = orderedMediaURLs(mediaURLs + post.fallbackMediaURLs).filter { !$0.isVideoURL }
       let videoURLs = mediaURLs.filter { $0.isVideoURL }
 
       if rank == 0 {
-        // Visible carousel: all previews, current/next optimized images, then remaining images if the cache has room.
-        feedImageURLs.append(contentsOf: imageURLs.prefix(3))
-        feedImageURLs.append(contentsOf: imageURLs.dropFirst(3).prefix(5))
+        // Visible carousel: preload every optimized/fallback image before the user swipes.
+        feedImageURLs.append(contentsOf: imageURLs)
         videoPrewarmURLs.append(contentsOf: videoURLs.prefix(2))
       } else if rank <= 3 {
         feedImageURLs.append(contentsOf: imageURLs.prefix(2))
@@ -1268,14 +1267,21 @@ private struct MainNativePostCard: View {
       if let placeholder = mediaPlaceholderURL(for: index, mediaURL: url) {
         previewURLs.append(placeholder)
       }
+      let fallback = mediaFallbackURL(for: index, mediaURL: url)
       if url.isVideoURL {
         if abs(index - selected) <= 1 {
           videoURLs.append(url)
         }
       } else if index >= selected && index <= min(mediaURLs.count - 1, selected + 2) {
         priorityImageURLs.append(url)
+        if let fallback = fallback {
+          priorityImageURLs.append(fallback)
+        }
       } else {
         remainingImageURLs.append(url)
+        if let fallback = fallback {
+          remainingImageURLs.append(fallback)
+        }
       }
     }
 
@@ -1295,7 +1301,7 @@ private struct MainNativePostCard: View {
       }
       if !fullImageURLs.isEmpty {
         MIRAApplePerformanceLogger.event("carousel_media_prefetched", detail: "full=\(fullImageURLs.count)")
-        await MIRAImagePrefetcher.prefetch(urls: fullImageURLs, maxPixelSize: MIRAMediaSizing.feedTargetHeight, limit: 10)
+        await MIRAImagePrefetcher.prefetch(urls: fullImageURLs, maxPixelSize: MIRAMediaSizing.feedTargetHeight, limit: max(18, fullImageURLs.count))
       }
     }
   }

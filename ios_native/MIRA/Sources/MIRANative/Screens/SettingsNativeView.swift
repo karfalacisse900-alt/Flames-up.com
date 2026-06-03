@@ -242,16 +242,10 @@ public struct SettingsNativeView: View {
 
         SettingsCard(title: localization.string("settings.preferences")) {
           SettingsNavigationRow(
-            title: localization.string("settings.language"),
-            subtitle: languageLabel(model.language, localization: localization),
-            systemImage: "globe",
-            destination: PreferenceSettingsNativeView(model: model)
-          )
-          SettingsNavigationRow(
-            title: localization.string("settings.app_permissions"),
-            subtitle: "Camera, photos, microphone, notifications",
-            systemImage: "switch.2",
-            destination: PermissionSettingsNativeView()
+            title: "Appearance & cache",
+            subtitle: "Dark mode and clear cache",
+            systemImage: "circle.lefthalf.filled",
+            destination: PreferenceSettingsNativeView()
           )
         }
 
@@ -280,10 +274,6 @@ public struct SettingsNativeView: View {
             systemImage: "shield.lefthalf.filled",
             destination: SafetyReportingView()
           )
-        }
-
-        SettingsCard(title: localization.string("settings.support")) {
-          SettingsLinkRow(title: "Contact support", subtitle: "karfalacisse900@gmail.com", systemImage: "envelope", url: URL(string: "mailto:karfalacisse900@gmail.com")!)
         }
       }
       .padding(.horizontal, MIRATheme.Space.md)
@@ -620,48 +610,11 @@ private struct SecuritySettingsNativeView: View {
 }
 
 private struct PreferenceSettingsNativeView: View {
-  @ObservedObject var model: SettingsNativeModel
   @AppStorage(MIRAAppearanceResolver.preferenceKey) private var appearancePreference = MIRAAppearance.system.rawValue
-  @AppStorage("mira.settings.autoplay_video") private var autoplayVideo = true
-  @AppStorage("mira.settings.high_quality_uploads") private var highQualityUploads = true
-  @AppStorage("mira.settings.reduce_motion") private var reduceMotion = false
-  @AppStorage("mira.chat.autodownload.images.wifi") private var chatImagesOnWiFi = true
-  @AppStorage("mira.chat.autodownload.videos.wifi") private var chatVideosOnWiFi = false
-  @AppStorage("mira.chat.autodownload.files.wifi") private var chatFilesOnWiFi = false
-  @AppStorage("mira.chat.media.cellular") private var chatMediaOnCellular = false
-  @EnvironmentObject private var localization: MIRALocalization
   @State private var isClearingMediaCache = false
 
   var body: some View {
-    SettingsDetailScaffold(title: localization.string("settings.preferences")) {
-      SettingsCard(title: localization.string("settings.language")) {
-        HStack(spacing: MIRATheme.Space.sm) {
-          ForEach(languageOptions.indices, id: \.self) { index in
-            let option = languageOptions[index]
-            Button {
-              Task { await model.updateLanguage(option.code) }
-            } label: {
-              Text(languageLabel(option.code, localization: localization))
-                .font(.system(size: 14, weight: .semibold))
-                .lineLimit(1)
-                .minimumScaleFactor(0.78)
-                .foregroundStyle(model.language == option.code ? .white : MIRATheme.Color.textPrimary)
-                .frame(maxWidth: .infinity)
-                .frame(height: 42)
-                .background(model.language == option.code ? MIRATheme.Color.forest : MIRATheme.Color.surfaceSoft)
-                .clipShape(Capsule())
-            }
-            .buttonStyle(.plain)
-            .disabled(model.isSavingLanguage)
-          }
-        }
-        Text(localization.string("settings.restart_to_apply"))
-          .font(.system(size: 12, weight: .medium))
-          .foregroundStyle(MIRATheme.Color.textMuted)
-          .padding(.horizontal, MIRATheme.Space.md)
-          .padding(.bottom, MIRATheme.Space.sm)
-      }
-
+    SettingsDetailScaffold(title: "Appearance & cache") {
       SettingsCard(title: "Appearance") {
         HStack(spacing: MIRATheme.Space.sm) {
           ForEach(MIRAAppearance.allCases) { option in
@@ -692,14 +645,7 @@ private struct PreferenceSettingsNativeView: View {
         .padding(.bottom, MIRATheme.Space.md)
       }
 
-      SettingsCard(title: "Media") {
-        SettingsToggleRow(title: "Autoplay videos", subtitle: "Play visible videos automatically.", systemImage: "play.circle", isOn: $autoplayVideo)
-        SettingsToggleRow(title: "High quality uploads", subtitle: "Keep uploads sharp when possible.", systemImage: "arrow.up.circle", isOn: $highQualityUploads)
-        SettingsToggleRow(title: "Chat images on Wi-Fi", subtitle: "Download chat image previews automatically.", systemImage: "photo", isOn: $chatImagesOnWiFi)
-        SettingsToggleRow(title: "Chat videos on Wi-Fi", subtitle: "Download chat videos only when Wi-Fi allows.", systemImage: "video", isOn: $chatVideosOnWiFi)
-        SettingsToggleRow(title: "Chat files on Wi-Fi", subtitle: "Keep file downloads manual unless Wi-Fi allows.", systemImage: "doc", isOn: $chatFilesOnWiFi)
-        SettingsToggleRow(title: "Use cellular for chat media", subtitle: "Allow chat media downloads away from Wi-Fi.", systemImage: "antenna.radiowaves.left.and.right", isOn: $chatMediaOnCellular)
-        SettingsToggleRow(title: "Reduce motion", subtitle: "Use simpler animations.", systemImage: "figure.walk.motion", isOn: $reduceMotion)
+      SettingsCard(title: "Storage") {
         SettingsButtonRow(
           title: isClearingMediaCache ? "Clearing media cache..." : "Clear media cache",
           subtitle: "Remove old cached thumbnails, posters, and feed images.",

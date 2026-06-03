@@ -176,15 +176,18 @@ final class DiscoverNativeModel: ObservableObject {
         post.posterMediaURLs
           + post.thumbnailMediaURLs
           + post.feedMediaURLs.filter { !$0.isVideoURL }
+          + post.fallbackMediaURLs.filter { !$0.isVideoURL }
       }
     let feedURLs = posts
-      .prefix(12)
-      .flatMap(\.feedMediaURLs)
-      .filter { !$0.isVideoURL }
+      .prefix(18)
+      .flatMap { post in
+        post.feedMediaURLs.filter { !$0.isVideoURL }
+          + post.fallbackMediaURLs.filter { !$0.isVideoURL }
+      }
     guard !previewURLs.isEmpty || !feedURLs.isEmpty else { return }
     Task.detached(priority: .utility) {
-      await MIRAImagePrefetcher.prefetch(urls: previewURLs, maxPixelSize: 520, limit: 30)
-      await MIRAImagePrefetcher.prefetch(urls: feedURLs, maxPixelSize: MIRAMediaSizing.feedTargetHeight, limit: 12)
+      await MIRAImagePrefetcher.prefetch(urls: previewURLs, maxPixelSize: 560, limit: 42)
+      await MIRAImagePrefetcher.prefetch(urls: feedURLs, maxPixelSize: MIRAMediaSizing.feedTargetHeight, limit: 24)
     }
   }
 

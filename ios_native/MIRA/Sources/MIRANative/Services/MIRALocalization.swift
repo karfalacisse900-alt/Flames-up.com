@@ -12,27 +12,17 @@ public enum MIRAAppLanguage: String, CaseIterable, Identifiable {
 
 public enum MIRALanguageResolver {
   public static let preferenceKey = "captro.language.preference"
-  private static let supported = ["en", "fr", "es"]
 
   public static func storedPreference() -> String {
-    let value = UserDefaults.standard.string(forKey: preferenceKey) ?? MIRAAppLanguage.system.rawValue
-    return value == "system" || supported.contains(value) ? value : MIRAAppLanguage.system.rawValue
+    MIRAAppLanguage.english.rawValue
   }
 
   public static func resolvedLanguageCode(for preference: String? = nil) -> String {
-    let value = preference ?? storedPreference()
-    if supported.contains(value) { return value }
-    let systemCode = Locale.preferredLanguages.first?
-      .split(separator: "-")
-      .first
-      .map(String.init)?
-      .lowercased() ?? "en"
-    return supported.contains(systemCode) ? systemCode : "en"
+    "en"
   }
 
   public static func acceptLanguageHeader() -> String {
-    let language = resolvedLanguageCode()
-    return "\(language), en;q=0.8"
+    "en"
   }
 
   static func localizedAPIError(code: String?) -> String {
@@ -62,14 +52,16 @@ public final class MIRALocalization: ObservableObject {
   }
 
   private init() {
-    preference = MIRAAppLanguage(rawValue: MIRALanguageResolver.storedPreference()) ?? .system
+    preference = .english
   }
 
   public func setPreference(_ rawValue: String) {
-    let next = MIRAAppLanguage(rawValue: rawValue) ?? .system
-    guard next != preference else { return }
-    preference = next
-    UserDefaults.standard.set(next.rawValue, forKey: MIRALanguageResolver.preferenceKey)
+    guard preference != .english else {
+      UserDefaults.standard.set(MIRAAppLanguage.english.rawValue, forKey: MIRALanguageResolver.preferenceKey)
+      return
+    }
+    preference = .english
+    UserDefaults.standard.set(MIRAAppLanguage.english.rawValue, forKey: MIRALanguageResolver.preferenceKey)
   }
 
   public func string(_ key: String) -> String {
