@@ -646,21 +646,29 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
       }
     }
 
-    // Cloudflare Images can take a brief moment to make a newly uploaded avatar/media
-    // variant available. Retry inside the same load task so the view does not stay
-    // stuck on a placeholder until it is recreated.
-    for attempt in 1...2 {
+    // Cloudflare Images can take a few seconds to make a newly uploaded media
+    // variant available. Keep retrying inside the same task so fresh posts do not
+    // remain stuck on the placeholder until the feed is rebuilt.
+    for attempt in 1...8 {
       guard !Task.isCancelled else { return }
-      try? await Task.sleep(nanoseconds: UInt64(attempt) * 550_000_000)
+      let delay = min(UInt64(attempt) * 650_000_000, UInt64(2_600_000_000))
+      try? await Task.sleep(nanoseconds: delay)
       for remoteURL in remoteURLs {
         if let result = await MIRAImageLoadPipeline.shared.image(for: remoteURL, maxPixelSize: resolvedMaxPixelSize) {
           guard !Task.isCancelled else { return }
           await MainActor.run {
             uiImage = result.image
             loadedURL = remoteURL
-            isImageVisible = true
+            if result.source == .network, animatesNetworkLoad {
+              withAnimation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion)) {
+                isImageVisible = true
+              }
+            } else {
+              isImageVisible = true
+            }
             onImageLoaded(result.image)
           }
+          MIRAApplePerformanceLogger.event("media_retry_loaded", detail: "attempt=\(attempt)")
           return
         }
       }
@@ -1214,7 +1222,7 @@ private struct MIRAResolvedVideoPlayer: View {
 
   @MainActor
   private func markPlayerReady(_ expectedPlayer: AVPlayer, expectedURL: String) async {
-    for _ in 0..<30 {
+    for _ in 0..<80 {
       guard loadedVideoURL == expectedURL, player === expectedPlayer else { return }
       if expectedPlayer.currentItem?.status == .readyToPlay {
         withAnimation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion)) {
@@ -1223,13 +1231,24 @@ private struct MIRAResolvedVideoPlayer: View {
         stopVideoMetric(status: "ready")
         return
       }
+      if expectedPlayer.currentItem?.status == .failed {
+        failed = true
+        isPlayerReady = false
+        stopVideoMetric(status: "failed")
+        return
+      }
       try? await Task.sleep(nanoseconds: 100_000_000)
     }
     guard loadedVideoURL == expectedURL, player === expectedPlayer else { return }
-    withAnimation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion)) {
-      isPlayerReady = true
+    if expectedPlayer.currentItem?.status == .readyToPlay {
+      withAnimation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion)) {
+        isPlayerReady = true
+      }
+      stopVideoMetric(status: "ready_late")
+    } else {
+      isPlayerReady = false
+      stopVideoMetric(status: "ready_timeout")
     }
-    stopVideoMetric(status: "ready_timeout")
   }
 
   private func reportRatio(_ image: UIImage) {

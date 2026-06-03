@@ -4529,19 +4529,28 @@ async function attachMediaBackupToMessage(
 }
 
 async function messagePayload(c: any, row: any): Promise<any> {
-  const mediaUrl = row.media_url ? await signedMessageMediaReference(c, row.media_url) : row.media_url;
+  const rawMediaUrl = cleanText(row.media_url || '', 2500);
+  let mediaUrl = rawMediaUrl ? await signedMessageMediaReference(c, rawMediaUrl) : rawMediaUrl;
+  const rawMediaType = cleanText(row.media_type || '', 40).toLowerCase();
+  const isVideoMessage = rawMediaType.includes('video') || isVideoMediaUrl(rawMediaUrl) || isVideoMediaUrl(mediaUrl);
+  const streamPosterUrl = isVideoMessage ? streamThumbnailUrl(rawMediaUrl) : '';
+  if (isVideoMessage && rawMediaUrl.startsWith('cfstream:')) {
+    mediaUrl = streamPlaybackUrl(rawMediaUrl);
+  }
   const rawCreatedAt = cleanText(row.created_at || '', 80);
   const parsedCreatedAt = rawCreatedAt
     ? Date.parse(rawCreatedAt.includes('T') ? rawCreatedAt : `${rawCreatedAt.replace(' ', 'T')}Z`)
     : NaN;
+  const thumbnailUrl = row.thumbnail_url || row.thumbnail || streamPosterUrl || null;
+  const posterUrl = row.poster_url || row.poster || streamPosterUrl || thumbnailUrl || null;
   return {
     ...row,
     media_url: mediaUrl,
     status: row.status || 'sent',
     updated_at: row.updated_at || row.created_at || null,
     server_sequence: Number.isFinite(parsedCreatedAt) ? parsedCreatedAt : null,
-    thumbnail_url: row.thumbnail_url || row.thumbnail || null,
-    poster_url: row.poster_url || row.poster || null,
+    thumbnail_url: thumbnailUrl,
+    poster_url: posterUrl,
   };
 }
 
@@ -12816,7 +12825,17 @@ api.post('/media/complete', authMiddleware, async (c) => {
   if (!asset) return c.json({ detail: 'Upload not found.', code: 'media_not_found' }, 404);
   const currentStatus = normalizeMediaModerationStatus(asset.moderation_status);
   if (currentStatus === 'approved' || currentStatus === 'review_required' || currentStatus === 'rejected') {
-    return c.json({ media_id: mediaId, upload_status: cleanText(asset.upload_status, 40), moderation_status: currentStatus });
+    const currentPublicUrl = currentStatus === 'approved'
+      ? (safeMediaReference(asset.public_url) || mediaAssetPublicUrl(c.env, asset))
+      : '';
+    return c.json({
+      media_id: mediaId,
+      upload_status: cleanText(asset.upload_status, 40),
+      moderation_status: currentStatus,
+      public_url: currentPublicUrl,
+      rejection_code: cleanText(asset.rejection_code || '', 80),
+      rejection_message: cleanText(asset.rejection_message || '', 240),
+    });
   }
 
   const sha256Hash = cleanText(body.sha256_hash || body.sha256Hash || asset.sha256_hash, 80).toLowerCase();
@@ -12860,11 +12879,13 @@ api.post('/media/complete', authMiddleware, async (c) => {
     }));
   }
   const latest: any = await c.env.DB.prepare(
-    'SELECT id, upload_status, moderation_status, rejection_code, rejection_message, public_url FROM media_assets WHERE id = ? AND user_id = ? LIMIT 1'
+    'SELECT id, media_type, storage_provider, storage_key, private_url, upload_status, moderation_status, rejection_code, rejection_message, public_url FROM media_assets WHERE id = ? AND user_id = ? LIMIT 1'
   ).bind(mediaId, userId).first();
   const latestStatus = normalizeMediaModerationStatus(latest?.moderation_status);
   const latestUploadStatus = cleanText(latest?.upload_status, 40) || 'uploaded';
-  const latestPublicUrl = latestStatus === 'approved' ? safeMediaReference(latest?.public_url) : '';
+  const latestPublicUrl = latestStatus === 'approved'
+    ? (safeMediaReference(latest?.public_url) || mediaAssetPublicUrl(c.env, latest))
+    : '';
   const latestMessage = latestStatus === 'approved'
     ? ''
     : latestStatus === 'review_required'
@@ -12891,12 +12912,14 @@ api.get('/media/:mediaId/status', authMiddleware, async (c) => {
   const userId = getUserId(c);
   const mediaId = publicId(c.req.param('mediaId'), 160);
   const asset: any = await c.env.DB.prepare(
-    'SELECT id, media_type, upload_status, moderation_status, rejection_code, rejection_message, public_url, created_at, updated_at FROM media_assets WHERE id = ? AND user_id = ? LIMIT 1'
+    'SELECT id, media_type, storage_provider, storage_key, private_url, upload_status, moderation_status, rejection_code, rejection_message, public_url, created_at, updated_at FROM media_assets WHERE id = ? AND user_id = ? LIMIT 1'
   ).bind(mediaId, userId).first();
   if (!asset) return c.json({ detail: 'Upload not found.' }, 404);
   return c.json({
     ...asset,
-    public_url: normalizeMediaModerationStatus(asset.moderation_status) === 'approved' ? safeMediaReference(asset.public_url) : '',
+    public_url: normalizeMediaModerationStatus(asset.moderation_status) === 'approved'
+      ? (safeMediaReference(asset.public_url) || mediaAssetPublicUrl(c.env, asset))
+      : '',
   });
 });
 
