@@ -1033,6 +1033,15 @@ private struct MIRAResolvedVideoPlayer: View {
       }
     }
     .task(id: playbackTaskID) { await configurePlayer() }
+    .onAppear {
+      guard shouldPlay else { return }
+      globallyPaused = false
+      if let player {
+        syncPlayback(player)
+      } else {
+        Task { await configurePlayer() }
+      }
+    }
     .onChange(of: shouldPlay) { _, _ in
       if let player {
         syncPlayback(player)
@@ -1049,7 +1058,7 @@ private struct MIRAResolvedVideoPlayer: View {
   }
 
   private var playbackTaskID: String {
-    url
+    "\(url)|\(shouldPlay ? "play" : "poster")"
   }
 
   private var placeholder: some View {
@@ -1239,6 +1248,7 @@ private struct MIRAResolvedVideoPlayer: View {
         failed = false
         videoRetryAttempt = 0
         stopVideoMetric(status: "ready")
+        syncPlayback(expectedPlayer)
         return
       }
       if expectedPlayer.currentItem?.status == .failed {
@@ -1258,6 +1268,7 @@ private struct MIRAResolvedVideoPlayer: View {
       failed = false
       videoRetryAttempt = 0
       stopVideoMetric(status: "ready_late")
+      syncPlayback(expectedPlayer)
     } else {
       isPlayerReady = false
       stopVideoMetric(status: "ready_timeout")
@@ -1323,7 +1334,7 @@ private struct MIRAResolvedVideoPlayer: View {
       configureAudioSession()
       player.isMuted = false
       player.volume = 1
-      player.play()
+      player.playImmediately(atRate: 1)
     } else {
       player.pause()
     }
@@ -1347,7 +1358,7 @@ private struct MIRAResolvedVideoPlayer: View {
     ) { _ in
       player.seek(to: .zero)
       if shouldPlay {
-        player.play()
+        player.playImmediately(atRate: 1)
       }
     }
   }
