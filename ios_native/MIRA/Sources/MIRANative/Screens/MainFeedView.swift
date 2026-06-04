@@ -807,8 +807,8 @@ public struct MainFeedView: View {
       }
       .miraBottomSheet(
         isPresented: $isReportSheetPresented,
-        preferredHeightFraction: 0.78,
-        maxHeight: 700,
+        preferredHeightFraction: 0.72,
+        maxHeight: 640,
         onDismissed: {
           reportTarget = nil
           reportSourcePost = nil

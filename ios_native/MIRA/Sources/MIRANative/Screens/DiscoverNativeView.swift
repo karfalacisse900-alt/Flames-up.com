@@ -387,6 +387,8 @@ public struct DiscoverNativeView: View {
   @State private var isReportSheetPresented = false
   @State private var singlePhotoPreviewPost: MIRAPost?
   @State private var isSinglePhotoPreviewPresented = false
+  @State private var discoverActionPost: MIRAPost?
+  @State private var isDiscoverActionModalPresented = false
   @EnvironmentObject private var localization: MIRALocalization
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -471,8 +473,8 @@ public struct DiscoverNativeView: View {
       }
       .miraBottomSheet(
         isPresented: $isReportSheetPresented,
-        preferredHeightFraction: 0.78,
-        maxHeight: 700,
+        preferredHeightFraction: 0.72,
+        maxHeight: 640,
         onDismissed: {
           reportTarget = nil
           reportSourcePost = nil
@@ -484,6 +486,35 @@ public struct DiscoverNativeView: View {
             api: model.api,
             onSubmitted: { result in handleReportResult(result) },
             onClose: dismissReport
+          )
+        } else {
+          Color.clear
+        }
+      }
+      .miraActionModal(
+        isPresented: $isDiscoverActionModalPresented,
+        onDismissed: { discoverActionPost = nil }
+      ) { dismissMenu in
+        if let post = discoverActionPost {
+          DiscoverPostActionModal(
+            onReport: {
+              dismissMenu()
+              DispatchQueue.main.asyncAfter(deadline: .now() + MIRATransitionTiming.actionModalClose) {
+                presentReport(for: post)
+              }
+            },
+            onBlock: {
+              dismissMenu()
+              Task { await model.blockAuthor(post) }
+            },
+            onHide: {
+              model.hidePost(post)
+              dismissMenu()
+            },
+            onNotInterested: {
+              model.hidePost(post)
+              dismissMenu()
+            }
           )
         } else {
           Color.clear
@@ -558,6 +589,14 @@ public struct DiscoverNativeView: View {
     }
   }
 
+  private func presentDiscoverActions(for post: MIRAPost) {
+    CaptroHaptics.light()
+    discoverActionPost = post
+    withAnimation(CaptroMotion.actionModalAnimation(reduceMotion: reduceMotion)) {
+      isDiscoverActionModalPresented = true
+    }
+  }
+
   private var discoverHeader: some View {
     HStack(spacing: MIRATheme.Space.sm) {
       Text(localization.string("discover.title"))
@@ -604,17 +643,17 @@ public struct DiscoverNativeView: View {
                 DiscoverPostGalleryTile(post: post)
               }
               .buttonStyle(.plain)
-              .contextMenu {
-                discoverPostActions(post)
-              }
+              .simultaneousGesture(LongPressGesture(minimumDuration: 0.38).onEnded { _ in
+                presentDiscoverActions(for: post)
+              })
             } else {
               NavigationLink(destination: DiscoverPostDetailNativeView(post: post, api: model.api).miraHideTabBarOnAppear()) {
                 DiscoverPostGalleryTile(post: post)
               }
               .buttonStyle(.plain)
-              .contextMenu {
-                discoverPostActions(post)
-              }
+              .simultaneousGesture(LongPressGesture(minimumDuration: 0.38).onEnded { _ in
+                presentDiscoverActions(for: post)
+              })
             }
           }
         }
@@ -626,37 +665,6 @@ public struct DiscoverNativeView: View {
     guard !post.containsVideoMedia else { return false }
     let mediaCount = max(post.feedMediaURLs.count, post.mediaURLs.count)
     return mediaCount <= 1
-  }
-
-  @ViewBuilder
-  private func discoverPostActions(_ post: MIRAPost) -> some View {
-    Button(role: .destructive) {
-      CaptroHaptics.medium()
-      presentReport(for: post)
-    } label: {
-      Label(localization.string("common.report"), systemImage: "flag")
-    }
-
-    Button(role: .destructive) {
-      CaptroHaptics.medium()
-      Task { await model.blockAuthor(post) }
-    } label: {
-      Label(localization.string("common.block_user"), systemImage: "hand.raised")
-    }
-
-    Button {
-      CaptroHaptics.light()
-      model.hidePost(post)
-    } label: {
-      Label(localization.string("report.hide_content"), systemImage: "eye.slash")
-    }
-
-    Button {
-      CaptroHaptics.light()
-      model.hidePost(post)
-    } label: {
-      Label(localization.string("common.not_interested"), systemImage: "hand.thumbsdown")
-    }
   }
 
   private var galleryGridColumns: [GridItem] {
@@ -747,6 +755,46 @@ public struct DiscoverNativeView: View {
       .padding(.horizontal, MIRATheme.Space.md)
       .padding(.top, 4)
       .padding(.bottom, 2)
+    }
+  }
+}
+
+private struct DiscoverPostActionModal: View {
+  let onReport: () -> Void
+  let onBlock: () -> Void
+  let onHide: () -> Void
+  let onNotInterested: () -> Void
+
+  var body: some View {
+    MIRAActionModalCard {
+      MIRAActionModalButton(
+        title: "Report",
+        systemImage: "exclamationmark.triangle",
+        staggerIndex: 0,
+        action: onReport
+      )
+
+      MIRAActionModalButton(
+        title: "Block user",
+        systemImage: "nosign",
+        isDestructive: true,
+        staggerIndex: 1,
+        action: onBlock
+      )
+
+      MIRAActionModalButton(
+        title: "Hide this post",
+        systemImage: "eye.slash",
+        staggerIndex: 2,
+        action: onHide
+      )
+
+      MIRAActionModalButton(
+        title: "Not interested",
+        systemImage: "hand.thumbsdown",
+        staggerIndex: 3,
+        action: onNotInterested
+      )
     }
   }
 }

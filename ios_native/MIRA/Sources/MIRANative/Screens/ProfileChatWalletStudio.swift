@@ -169,6 +169,10 @@ private struct ProfileGridSkeleton: View {
 public struct ProfileNativeView: View {
   @StateObject private var model: ProfileNativeModel
   @State private var showEditProfile = false
+  @State private var profilePostActionTarget: MIRAPost?
+  @State private var isProfilePostActionModalPresented = false
+  @State private var deletePostTarget: MIRAPost?
+  @State private var isDeletePostConfirmationPresented = false
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   private let authSession: MIRAAuthSession?
   private var postGridColumns: [GridItem] {
@@ -197,10 +201,7 @@ public struct ProfileNativeView: View {
               ForEach(model.posts) { post in
                 ProfilePostTile(
                   post: post,
-                  onPin: { Task { await model.togglePin(post) } },
-                  onDelete: { Task { await model.deletePost(post) } },
-                  onMakePublic: { Task { await model.updatePostVisibility(post, visibility: "public") } },
-                  onMakePrivate: { Task { await model.updatePostVisibility(post, visibility: "private") } }
+                  onOpenActions: { presentProfilePostActions(post) }
                 )
               }
             }
@@ -252,6 +253,62 @@ public struct ProfileNativeView: View {
           }
         }
       }
+      .miraActionModal(
+        isPresented: $isProfilePostActionModalPresented,
+        onDismissed: { profilePostActionTarget = nil }
+      ) { dismissMenu in
+        if let post = profilePostActionTarget {
+          ProfilePostOwnerActionModal(
+            post: post,
+            onPin: {
+              dismissMenu()
+              Task { await model.togglePin(post) }
+            },
+            onMakePublic: {
+              dismissMenu()
+              Task { await model.updatePostVisibility(post, visibility: "public") }
+            },
+            onMakePrivate: {
+              dismissMenu()
+              Task { await model.updatePostVisibility(post, visibility: "private") }
+            },
+            onDelete: {
+              dismissMenu()
+              deletePostTarget = post
+              DispatchQueue.main.asyncAfter(deadline: .now() + MIRATransitionTiming.actionModalClose) {
+                isDeletePostConfirmationPresented = true
+              }
+            }
+          )
+        } else {
+          Color.clear
+        }
+      }
+      .confirmationDialog(
+        "Are you sure you want to delete this post?",
+        isPresented: $isDeletePostConfirmationPresented,
+        titleVisibility: .visible
+      ) {
+        Button("Delete post", role: .destructive) {
+          if let deletePostTarget {
+            Task { await model.deletePost(deletePostTarget) }
+          }
+          deletePostTarget = nil
+        }
+        Button("Cancel", role: .cancel) {
+          deletePostTarget = nil
+        }
+      } message: {
+        Text("This post will be removed from your profile.")
+      }
+    }
+  }
+
+  private func presentProfilePostActions(_ post: MIRAPost) {
+    CaptroHaptics.light()
+    profilePostActionTarget = post
+    withAnimation(CaptroMotion.actionModalAnimation(reduceMotion: reduceMotion)) {
+      isProfilePostActionModalPresented = true
     }
   }
 
@@ -505,8 +562,8 @@ public struct UserProfileNativeView: View {
     }
     .miraBottomSheet(
       isPresented: $isReportSheetPresented,
-      preferredHeightFraction: 0.78,
-      maxHeight: 700,
+      preferredHeightFraction: 0.72,
+      maxHeight: 640,
       onDismissed: { reportTarget = nil }
     ) { dismissReport in
       if let reportTarget {
@@ -815,7 +872,7 @@ private struct ProfilePostTile: View {
   var onDelete: (() -> Void)? = nil
   var onMakePublic: (() -> Void)? = nil
   var onMakePrivate: (() -> Void)? = nil
-  @State private var isDeleteConfirmationPresented = false
+  var onOpenActions: (() -> Void)? = nil
 
   private var normalizedVisibility: String {
     post.visibility?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "public"
@@ -829,25 +886,13 @@ private struct ProfilePostTile: View {
     Group {
       if hasOwnerActions {
         tileContent
-          .contextMenu {
-            ownerContextMenu
-          }
+          .simultaneousGesture(LongPressGesture(minimumDuration: 0.38).onEnded { _ in
+            CaptroHaptics.light()
+            onOpenActions?()
+          })
       } else {
         tileContent
       }
-    }
-    .confirmationDialog(
-      "Are you sure you want to delete this post?",
-      isPresented: $isDeleteConfirmationPresented,
-      titleVisibility: .visible
-    ) {
-      Button("Delete post", role: .destructive) {
-        CaptroHaptics.medium()
-        onDelete?()
-      }
-      Button("Cancel", role: .cancel) {}
-    } message: {
-      Text("This post will be removed from your profile.")
     }
   }
 
@@ -909,45 +954,54 @@ private struct ProfilePostTile: View {
   }
 
   private var hasOwnerActions: Bool {
-    onPin != nil || onDelete != nil || onMakePublic != nil || onMakePrivate != nil
+    onOpenActions != nil || onPin != nil || onDelete != nil || onMakePublic != nil || onMakePrivate != nil
   }
 
-  @ViewBuilder
-  private var ownerContextMenu: some View {
-    if let onPin {
-      Button {
-        CaptroHaptics.light()
-        onPin()
-      } label: {
-        Label(post.isPinned ? "Unpin post" : "Pin post", systemImage: post.isPinned ? "pin.slash" : "pin")
-      }
-    }
+}
 
-    if normalizedVisibility != "private", let onMakePrivate {
-      Button {
-        CaptroHaptics.light()
-        onMakePrivate()
-      } label: {
-        Label("Make post private", systemImage: "lock")
-      }
-    }
+private struct ProfilePostOwnerActionModal: View {
+  let post: MIRAPost
+  let onPin: () -> Void
+  let onMakePublic: () -> Void
+  let onMakePrivate: () -> Void
+  let onDelete: () -> Void
 
-    if normalizedVisibility != "public", let onMakePublic {
-      Button {
-        CaptroHaptics.light()
-        onMakePublic()
-      } label: {
-        Label("Make post public", systemImage: "globe")
-      }
-    }
+  private var normalizedVisibility: String {
+    post.visibility?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "public"
+  }
 
-    if onDelete != nil {
-      Button(role: .destructive) {
-        CaptroHaptics.light()
-        isDeleteConfirmationPresented = true
-      } label: {
-        Label("Delete post", systemImage: "trash")
+  var body: some View {
+    MIRAActionModalCard {
+      MIRAActionModalButton(
+        title: post.isPinned ? "Unpin post" : "Pin post",
+        systemImage: post.isPinned ? "pin.slash" : "pin",
+        staggerIndex: 0,
+        action: onPin
+      )
+
+      if normalizedVisibility == "private" {
+        MIRAActionModalButton(
+          title: "Make post public",
+          systemImage: "globe",
+          staggerIndex: 1,
+          action: onMakePublic
+        )
+      } else {
+        MIRAActionModalButton(
+          title: "Make post private",
+          systemImage: "lock",
+          staggerIndex: 1,
+          action: onMakePrivate
+        )
       }
+
+      MIRAActionModalButton(
+        title: "Delete post",
+        systemImage: "trash",
+        isDestructive: true,
+        staggerIndex: 2,
+        action: onDelete
+      )
     }
   }
 }
