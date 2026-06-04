@@ -23,6 +23,7 @@ enum MIRAStoryCameraCaptureMode: Equatable {
 struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
   var editedMedia: MIRAPickedMedia?
   var captureMode: MIRAStoryCameraCaptureMode = .photoOnly
+  var showsMusicButton = true
   var dismissesOnCapture = true
   var dismissesOnCancel = true
   let onCapture: (MIRAPickedMedia) -> Void
@@ -36,6 +37,7 @@ struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
   init(
     editedMedia: MIRAPickedMedia? = nil,
     captureMode: MIRAStoryCameraCaptureMode = .photoOnly,
+    showsMusicButton: Bool = true,
     dismissesOnCapture: Bool = true,
     dismissesOnCancel: Bool = true,
     onCapture: @escaping (MIRAPickedMedia) -> Void,
@@ -46,6 +48,7 @@ struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
   ) {
     self.editedMedia = editedMedia
     self.captureMode = captureMode
+    self.showsMusicButton = showsMusicButton
     self.dismissesOnCapture = dismissesOnCapture
     self.dismissesOnCancel = dismissesOnCancel
     self.onCapture = onCapture
@@ -58,11 +61,13 @@ struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
   func makeUIViewController(context: Context) -> MIRAStoryCameraViewController {
     let controller = MIRAStoryCameraViewController()
     controller.captureMode = captureMode
+    controller.showsMusicButton = showsMusicButton
     controller.delegate = context.coordinator
     return controller
   }
 
   func updateUIViewController(_ uiViewController: MIRAStoryCameraViewController, context: Context) {
+    uiViewController.showsMusicButton = showsMusicButton
     if let editedMedia {
       uiViewController.applyEditedMedia(editedMedia)
     }
@@ -150,6 +155,9 @@ protocol MIRAStoryCameraViewControllerDelegate: AnyObject {
 final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptureDelegate, AVCaptureFileOutputRecordingDelegate, PHPickerViewControllerDelegate {
   weak var delegate: MIRAStoryCameraViewControllerDelegate?
   var captureMode: MIRAStoryCameraCaptureMode = .photoOnly
+  var showsMusicButton = true {
+    didSet { updateMusicButtonVisibility() }
+  }
 
   private enum CameraMode: String, CaseIterable {
     case photo = "Photo"
@@ -890,7 +898,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     flipButton.isHidden = false
     flashButton.isHidden = false
     rawButton.isHidden = isReviewing || !rawCaptureSupported || selectedMode != .photo || captureMode == .videoOnly
-    gridButton.isHidden = false
+    updateMusicButtonVisibility()
     editRailButton.isHidden = false
     editRailButton.alpha = capturedMedia == nil ? 0.62 : 1
     shutterButton.isHidden = false
@@ -1036,8 +1044,14 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
   }
 
   @objc private func musicTapped() {
+    guard showsMusicButton else { return }
     CaptroHaptics.light()
     delegate?.storyCameraDidRequestMusic()
+  }
+
+  private func updateMusicButtonVisibility() {
+    gridButton.isHidden = !showsMusicButton
+    gridButton.isEnabled = showsMusicButton
   }
 
   @objc private func filtersTapped() {

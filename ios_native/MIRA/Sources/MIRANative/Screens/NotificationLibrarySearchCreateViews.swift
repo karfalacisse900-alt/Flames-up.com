@@ -962,6 +962,7 @@ public struct CreatePostNativeView: View {
     ZStack {
       MIRAStoryLiveCameraView(
         editedMedia: editedCameraMedia,
+        showsMusicButton: false,
         dismissesOnCapture: false,
         dismissesOnCancel: false,
         onCapture: { media in
@@ -971,7 +972,7 @@ public struct CreatePostNativeView: View {
           close()
         },
         onMusic: {
-          activePostDetailSheet = .music
+          // Feed posts no longer use music in the post creation flow.
         },
         onGallerySelection: { media in
           addGalleryMedia(media)
@@ -1074,9 +1075,6 @@ public struct CreatePostNativeView: View {
             postDetailsTextFields
               .padding(.top, 22)
 
-            discoverCategoryMenu
-              .padding(.top, 18)
-
             Spacer(minLength: max(70, proxy.size.height * 0.13))
 
             Rectangle()
@@ -1091,12 +1089,6 @@ public struct CreatePostNativeView: View {
               action: { activePostDetailSheet = .location }
             )
             broadLocationOptionRow
-            postOptionRow(
-              icon: "music.note",
-              title: selectedAudioTrack?.displayTitle ?? "Add music",
-              subtitle: selectedAudioTrack?.displayArtist ?? "Search Audius tracks",
-              action: { activePostDetailSheet = .music }
-            )
           }
           .padding(.horizontal, 16)
           .padding(.bottom, max(proxy.safeAreaInsets.bottom + 28, 52))
@@ -1544,14 +1536,14 @@ public struct CreatePostNativeView: View {
         appleVisionLabels: categorySignals.appleVisionLabels.isEmpty ? nil : categorySignals.appleVisionLabels,
         appleVisionCategoryGuess: categorySignals.appleVisionCategoryGuess,
         appleVisionConfidence: categorySignals.appleVisionConfidence,
-        audioProvider: selectedAudioTrack == nil ? nil : "audius",
-        audioTrackId: selectedAudioTrack?.resolvedTrackId,
-        audioTitle: selectedAudioTrack?.displayTitle,
-        audioArtist: selectedAudioTrack?.displayArtist,
-        audioArtworkUrl: selectedAudioTrack?.artworkUrl,
-        audioStreamUrl: selectedAudioTrack?.streamUrl,
-        audioStartTime: selectedAudioTrack == nil ? nil : 0,
-        audioDuration: selectedAudioTrack.map { min(max($0.duration ?? 15, 5), 30) },
+        audioProvider: nil,
+        audioTrackId: nil,
+        audioTitle: nil,
+        audioArtist: nil,
+        audioArtworkUrl: nil,
+        audioStreamUrl: nil,
+        audioStartTime: nil,
+        audioDuration: nil,
         visibility: "public",
         clientRequestId: UUID().uuidString
       )
@@ -1667,7 +1659,7 @@ public struct CreatePostNativeView: View {
     title = draft.title
     bodyText = draft.bodyText
     hashtags = draft.hashtags
-    selectedAudioTrack = draft.selectedAudioTrack
+    selectedAudioTrack = nil
     draftMediaSnapshots = draft.media
     if let place = draft.place {
       selectedPlace = MIRAExactPostPlace(
@@ -1699,7 +1691,7 @@ public struct CreatePostNativeView: View {
     if !restoredMedia.isEmpty {
       mediaItems = restoredMedia
       isEditingPostDetails = true
-    } else if !title.isEmpty || !bodyText.isEmpty || !hashtags.isEmpty || selectedAudioTrack != nil || selectedPlace != nil {
+    } else if !title.isEmpty || !bodyText.isEmpty || !hashtags.isEmpty || selectedPlace != nil {
       isEditingPostDetails = true
     }
     if draft.uploadStatus == "failed" {
@@ -1727,7 +1719,7 @@ public struct CreatePostNativeView: View {
       title: title,
       bodyText: bodyText,
       hashtags: hashtags,
-      selectedAudioTrack: selectedAudioTrack,
+      selectedAudioTrack: nil,
       place: draftPlaceSnapshot,
       broadLocation: draftBroadLocationSnapshot,
       showBroadLocation: showBroadLocation,
@@ -1744,7 +1736,6 @@ public struct CreatePostNativeView: View {
       !bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
       !mediaItems.isEmpty ||
       !hashtags.isEmpty ||
-      selectedAudioTrack != nil ||
       selectedPlace != nil
   }
 
@@ -3691,6 +3682,7 @@ public struct CreateStoryNativeView: View {
   @State private var isPosting = false
   @State private var errorMessage: String?
   @State private var editingMedia: MIRAEditorPresentation?
+  @State private var editedStoryCameraMedia: MIRAPickedMedia?
   @State private var pendingStoryMedia: MIRAPickedMedia?
   @State private var selectedAudioTrack: MIRAAudiusTrack?
   @State private var showMusicPicker = false
@@ -3774,12 +3766,14 @@ public struct CreateStoryNativeView: View {
     }
     .miraFullScreenOverlay(isPresented: $showCamera, background: .black) { closeCamera in
       MIRAStoryLiveCameraView(
+        editedMedia: editedStoryCameraMedia,
         captureMode: .videoOnly,
         dismissesOnCapture: false,
         dismissesOnCancel: false,
         onCapture: { media in
           closeCamera()
-          presentStoryEditor(for: media)
+          editedStoryCameraMedia = nil
+          pendingStoryMedia = media
         },
         onCancel: {
           closeCamera()
@@ -3789,13 +3783,20 @@ public struct CreateStoryNativeView: View {
         },
         onMusic: {
           showMusicPicker = true
+        },
+        onEdit: { media, _ in
+          editingMedia = MIRAEditorPresentation(media: media, returnsToCamera: true)
         }
       )
       .ignoresSafeArea()
     }
     .miraFullScreenOverlay(item: $editingMedia, background: .black) { item, closeEditor in
       MIRANativeMediaEditorView(media: item.media, mode: .story, onClose: closeEditor) { edited in
-        pendingStoryMedia = edited
+        if item.returnsToCamera {
+          editedStoryCameraMedia = edited
+        } else {
+          pendingStoryMedia = edited
+        }
         closeEditor()
       }
       .ignoresSafeArea()
@@ -3813,6 +3814,7 @@ public struct CreateStoryNativeView: View {
         HStack {
           Button {
             pendingStoryMedia = nil
+            editedStoryCameraMedia = nil
             selectedAudioTrack = nil
             errorMessage = nil
             showCamera = true
@@ -3961,13 +3963,6 @@ public struct CreateStoryNativeView: View {
       errorMessage = "Story could not be posted."
     }
   }
-
-  private func presentStoryEditor(for media: MIRAPickedMedia) {
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-      editingMedia = MIRAEditorPresentation(media: media)
-    }
-  }
-
   private func close() {
     if let onClose {
       onClose()
