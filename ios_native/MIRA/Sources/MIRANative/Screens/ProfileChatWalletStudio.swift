@@ -223,7 +223,7 @@ public struct ProfileNativeView: View {
         ToolbarItemGroup(placement: .topBarTrailing) {
           ProfileToolbarDestinationButton(
             systemImage: "bookmark",
-            accessibilityLabel: "My Library",
+            accessibilityLabel: "Bookmarks",
             destination: LibraryNativeView(api: model.api)
           )
           ProfileToolbarDestinationButton(

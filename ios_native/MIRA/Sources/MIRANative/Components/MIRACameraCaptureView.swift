@@ -623,7 +623,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
 
   private func configureNextButton() {
     nextButton.translatesAutoresizingMaskIntoConstraints = false
-    nextButton.setTitle("Next", for: .normal)
+    nextButton.setTitle(confirmButtonTitle, for: .normal)
     nextButton.setTitleColor(.white, for: .normal)
     nextButton.titleLabel?.font = .systemFont(ofSize: 16, weight: .semibold)
     nextButton.backgroundColor = UIColor(red: 0.09, green: 0.175, blue: 0.105, alpha: 1)
@@ -634,9 +634,13 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     nextButton.layer.shadowRadius = 14
     nextButton.layer.shadowOffset = CGSize(width: 0, height: 8)
     nextButton.isHidden = true
-    nextButton.accessibilityLabel = "Next"
+    nextButton.accessibilityLabel = confirmButtonTitle
     nextButton.accessibilityTraits.insert(.button)
     nextButton.addTarget(self, action: #selector(confirmCapturedMedia), for: .touchUpInside)
+  }
+
+  private var confirmButtonTitle: String {
+    captureMode == .photoOnly ? "Post" : "Next"
   }
 
   private func configureAdjustmentSlider(_ slider: UISlider, value: Float, minimum: Float, maximum: Float) {

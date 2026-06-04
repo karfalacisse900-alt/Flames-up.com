@@ -273,7 +273,7 @@ public struct LibraryNativeView: View {
     }
     .background(MIRATheme.Color.appBackground)
     .miraScreenEnter(.push)
-    .navigationTitle("My Library")
+    .navigationTitle("Bookmarks")
     .navigationBarTitleDisplayMode(.inline)
     .miraHideTabBarOnAppear()
     .task { await model.load() }
@@ -281,7 +281,7 @@ public struct LibraryNativeView: View {
 
   private var libraryIntro: some View {
     VStack(alignment: .leading, spacing: 3) {
-      Text("My Library")
+      Text("Bookmarks")
         .font(.system(size: 26, weight: .bold))
         .foregroundStyle(MIRATheme.Color.textPrimary)
       Text("Saved posts organized by what inspired you.")
@@ -1016,7 +1016,7 @@ public struct CreatePostNativeView: View {
         Button {
           continueToPostDetails()
         } label: {
-          Text("Next")
+          Text("Post")
             .font(.system(size: 16, weight: .semibold))
             .foregroundStyle(.white)
             .padding(.horizontal, 18)
@@ -3762,6 +3762,7 @@ public struct CreateStoryNativeView: View {
     .miraHideTabBarOnAppear()
     .navigationBarBackButtonHidden(true)
     .statusBarHidden(true)
+    .miraStatusBarHidden(true)
     .miraScreenEnter(.modal)
     .onAppear {
       MIRAPlaybackCoordinator.pauseAll(reason: "story_creation_open")
@@ -3798,6 +3799,8 @@ public struct CreateStoryNativeView: View {
         closeEditor()
       }
       .ignoresSafeArea()
+      .statusBarHidden(true)
+      .miraStatusBarHidden(true)
     }
     .miraBottomSheet(isPresented: $showMusicPicker, preferredHeightFraction: 0.78) { closeSheet in
       MIRAAudiusMusicPickerSheet(api: api, selectedTrack: $selectedAudioTrack, onClose: closeSheet)
@@ -3916,6 +3919,8 @@ public struct CreateStoryNativeView: View {
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
+    .statusBarHidden(true)
+    .miraStatusBarHidden(true)
   }
 
   private func submit(media: MIRAPickedMedia) async {

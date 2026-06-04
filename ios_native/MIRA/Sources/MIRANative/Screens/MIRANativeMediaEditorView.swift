@@ -118,6 +118,8 @@ public struct MIRANativeMediaEditorView: View {
         }
       }
     }
+    .statusBarHidden(mode == .story)
+    .miraStatusBarHidden(mode == .story)
   }
 
   private var editorTopBar: some View {
