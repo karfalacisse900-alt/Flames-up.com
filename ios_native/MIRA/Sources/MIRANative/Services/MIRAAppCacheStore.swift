@@ -82,9 +82,9 @@ actor MIRAAppCacheStore {
       seen.insert(cached.id)
       guard let freshPost = freshById[cached.id] else { return cached }
       return freshPost.updating(
-        likesCount: maxOptionalCount(cached.likesCount, freshPost.likesCount),
-        commentsCount: maxOptionalCount(cached.commentsCount, freshPost.commentsCount),
-        savesCount: maxOptionalCount(cached.savesCount, freshPost.savesCount)
+        likesCount: freshPost.likesCount ?? cached.likesCount,
+        commentsCount: freshPost.commentsCount ?? cached.commentsCount,
+        savesCount: freshPost.savesCount ?? cached.savesCount
       )
     }
 
@@ -257,11 +257,6 @@ actor MIRAAppCacheStore {
     let lhsScore = (lhs.likesCount ?? 0) + (lhs.commentsCount ?? 0) + (lhs.savesCount ?? 0)
     let rhsScore = (rhs.likesCount ?? 0) + (rhs.commentsCount ?? 0) + (rhs.savesCount ?? 0)
     return rhsScore >= lhsScore ? rhs : lhs
-  }
-
-  private func maxOptionalCount(_ lhs: Int?, _ rhs: Int?) -> Int? {
-    guard lhs != nil || rhs != nil else { return nil }
-    return max(lhs ?? 0, rhs ?? 0)
   }
 
   private func nowISO() -> String {

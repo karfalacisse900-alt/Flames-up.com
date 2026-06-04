@@ -39,12 +39,19 @@ postRoutes.post('/:id/like', async (c) => {
   const existing = await c.env.DB.prepare('SELECT id FROM likes WHERE post_id = ? AND user_id = ?').bind(postId, user.id).first();
   if (existing) {
     await c.env.DB.prepare('DELETE FROM likes WHERE post_id = ? AND user_id = ?').bind(postId, user.id).run();
-    await c.env.DB.prepare('UPDATE posts SET likes_count = likes_count - 1 WHERE id = ?').bind(postId).run();
-    return c.json({ liked: false });
+    const row: any = await c.env.DB.prepare('SELECT COUNT(*) AS likes_count FROM likes WHERE post_id = ?').bind(postId).first();
+    const likesCount = Math.max(0, Number(row?.likes_count || 0));
+    await c.env.DB.prepare('UPDATE posts SET likes_count = ? WHERE id = ?').bind(likesCount, postId).run();
+    return c.json({ liked: false, likes_count: likesCount });
   }
-  await c.env.DB.prepare('INSERT INTO likes (id, post_id, user_id) VALUES (?, ?, ?)').bind(generateId(), postId, user.id).run();
-  await c.env.DB.prepare('UPDATE posts SET likes_count = likes_count + 1 WHERE id = ?').bind(postId).run();
-  return c.json({ liked: true });
+  await c.env.DB.batch([
+    c.env.DB.prepare('DELETE FROM likes WHERE post_id = ? AND user_id = ?').bind(postId, user.id),
+    c.env.DB.prepare('INSERT INTO likes (id, post_id, user_id) VALUES (?, ?, ?)').bind(generateId(), postId, user.id),
+  ]);
+  const row: any = await c.env.DB.prepare('SELECT COUNT(*) AS likes_count FROM likes WHERE post_id = ?').bind(postId).first();
+  const likesCount = Math.max(0, Number(row?.likes_count || 0));
+  await c.env.DB.prepare('UPDATE posts SET likes_count = ? WHERE id = ?').bind(likesCount, postId).run();
+  return c.json({ liked: true, likes_count: likesCount });
 });
 
 // Comment on post

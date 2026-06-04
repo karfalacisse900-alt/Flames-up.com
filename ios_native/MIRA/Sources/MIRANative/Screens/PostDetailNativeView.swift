@@ -28,7 +28,7 @@ final class PostDetailModel: ObservableObject {
       let current = post
       let merged = refreshed.updating(
         liked: refreshed.isLiked ?? current.isLiked,
-        likesCount: bestCount(current.likesCount, refreshed.likesCount),
+        likesCount: refreshed.likesCount ?? current.likesCount,
         commentsCount: bestCount(current.commentsCount, refreshed.commentsCount),
         saved: refreshed.isSaved ?? refreshed.saved?.value ?? current.viewerSaved,
         savesCount: bestCount(current.savesCount, refreshed.savesCount),
@@ -329,17 +329,8 @@ final class PostDetailModel: ObservableObject {
   }
 
   private func stableEngagementCount(current: Int?, incoming: Int?, optimistic: Int? = nil, toggledOn: Bool? = nil) -> Int? {
-    guard let incoming else { return optimistic }
-    if incoming == 0 {
-      if let optimistic, optimistic > 0 { return optimistic }
-      let currentValue = current ?? 0
-      if toggledOn == true, currentValue > 0 { return currentValue }
-      if toggledOn == false, currentValue > 1 { return currentValue - 1 }
-    }
-    if let optimistic {
-      return max(incoming, optimistic)
-    }
-    return incoming
+    guard let incoming else { return optimistic ?? current }
+    return max(0, incoming)
   }
 
   private func loadCurrentUserIfNeeded() async {

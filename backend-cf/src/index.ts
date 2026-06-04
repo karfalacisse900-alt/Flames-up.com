@@ -10250,17 +10250,16 @@ api.post('/posts/:postId/like', authMiddleware, async (c) => {
     nextLiked = !wasLiked;
   }
 
-  let changed = false;
+  const changed = nextLiked !== wasLiked;
   if (nextLiked) {
-    const result = await c.env.DB.prepare('INSERT OR IGNORE INTO likes (id, user_id, post_id) VALUES (?, ?, ?)')
-      .bind(uuid(), userId, postId)
-      .run();
-    changed = d1Changes(result) > 0;
+    await c.env.DB.batch([
+      c.env.DB.prepare('DELETE FROM likes WHERE user_id = ? AND post_id = ?').bind(userId, postId),
+      c.env.DB.prepare('INSERT INTO likes (id, user_id, post_id) VALUES (?, ?, ?)').bind(uuid(), userId, postId),
+    ]);
   } else {
-    const result = await c.env.DB.prepare('DELETE FROM likes WHERE user_id = ? AND post_id = ?')
+    await c.env.DB.prepare('DELETE FROM likes WHERE user_id = ? AND post_id = ?')
       .bind(userId, postId)
       .run();
-    changed = d1Changes(result) > 0;
   }
   const liveLikeRow: any = await c.env.DB.prepare(
     `SELECT COUNT(*) AS likes_count,
@@ -13633,7 +13632,10 @@ api.post('/discover/posts/:postId/like', authMiddleware, async (c) => {
   const post = await c.env.DB.prepare('SELECT id FROM discover_posts WHERE id = ?').bind(postId).first();
   if (!post) return c.json({ detail: 'Post not found' }, 404);
   if (nextLiked) {
-    await c.env.DB.prepare('INSERT OR IGNORE INTO discover_likes (id, user_id, post_id) VALUES (?, ?, ?)').bind(uuid(), userId, postId).run();
+    await c.env.DB.batch([
+      c.env.DB.prepare('DELETE FROM discover_likes WHERE user_id = ? AND post_id = ?').bind(userId, postId),
+      c.env.DB.prepare('INSERT INTO discover_likes (id, user_id, post_id) VALUES (?, ?, ?)').bind(uuid(), userId, postId),
+    ]);
   } else {
     await c.env.DB.prepare('DELETE FROM discover_likes WHERE user_id = ? AND post_id = ?').bind(userId, postId).run();
   }

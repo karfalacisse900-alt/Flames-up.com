@@ -1013,20 +1013,6 @@ public struct CreatePostNativeView: View {
         }
       }
 
-      if mediaItems.count > 1 {
-        Button {
-          continueToPostDetails()
-        } label: {
-          Text("Post")
-            .font(.system(size: 16, weight: .semibold))
-            .foregroundStyle(.white)
-            .padding(.horizontal, 18)
-            .frame(height: 48)
-            .background(MIRATheme.Color.forest)
-            .clipShape(Capsule())
-        }
-        .buttonStyle(.miraPress)
-      }
     }
     .padding(.horizontal, 8)
     .padding(.vertical, 8)
