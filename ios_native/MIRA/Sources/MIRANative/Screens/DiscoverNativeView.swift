@@ -643,7 +643,7 @@ public struct DiscoverNativeView: View {
                 DiscoverPostGalleryTile(post: post)
               }
               .buttonStyle(.plain)
-              .simultaneousGesture(LongPressGesture(minimumDuration: 0.38).onEnded { _ in
+              .highPriorityGesture(LongPressGesture(minimumDuration: 0.38).onEnded { _ in
                 presentDiscoverActions(for: post)
               })
             } else {
@@ -651,7 +651,7 @@ public struct DiscoverNativeView: View {
                 DiscoverPostGalleryTile(post: post)
               }
               .buttonStyle(.plain)
-              .simultaneousGesture(LongPressGesture(minimumDuration: 0.38).onEnded { _ in
+              .highPriorityGesture(LongPressGesture(minimumDuration: 0.38).onEnded { _ in
                 presentDiscoverActions(for: post)
               })
             }

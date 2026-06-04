@@ -203,17 +203,17 @@ public struct MIRAActionModalCard<Content: View>: View {
   }
 
   public var body: some View {
-    VStack(spacing: 13) {
+    VStack(spacing: 7) {
       content
     }
-    .padding(18)
-    .frame(maxWidth: 520)
+    .padding(10)
+    .frame(maxWidth: 320)
     .background {
-      RoundedRectangle(cornerRadius: 40, style: .continuous)
+      RoundedRectangle(cornerRadius: 24, style: .continuous)
         .fill(Color(red: 0.945, green: 0.933, blue: 0.929).opacity(0.94))
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 40, style: .continuous))
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
     }
-    .shadow(color: .black.opacity(0.11), radius: 24, x: 0, y: 12)
+    .shadow(color: .black.opacity(0.09), radius: 14, x: 0, y: 7)
     .shadow(color: .white.opacity(0.28), radius: 1, x: 0, y: 1)
     .accessibilityElement(children: .contain)
   }
@@ -285,22 +285,22 @@ public struct MIRAActionModalPillLabel: View {
 
   public var body: some View {
     let tint = isDestructive ? Color(red: 1.0, green: 0.176, blue: 0.176) : Color(red: 0.02, green: 0.02, blue: 0.02)
-    HStack(spacing: 18) {
+    HStack(spacing: 10) {
       Image(systemName: systemImage)
-        .font(.system(size: 25, weight: .semibold))
+        .font(.system(size: 18, weight: .semibold))
         .symbolRenderingMode(.monochrome)
-        .frame(width: 30, height: 30)
+        .frame(width: 21, height: 21)
 
       Text(title)
-        .font(.system(size: 22, weight: .bold))
+        .font(.system(size: 16, weight: .bold))
         .lineLimit(1)
         .minimumScaleFactor(0.78)
 
       Spacer(minLength: 0)
     }
     .foregroundStyle(tint)
-    .padding(.horizontal, 23)
-    .frame(maxWidth: .infinity, minHeight: 68)
+    .padding(.horizontal, 14)
+    .frame(maxWidth: .infinity, minHeight: 44)
     .background(Color.white, in: Capsule())
     .contentShape(Capsule())
   }
@@ -361,7 +361,7 @@ private struct MIRAPremiumActionModalModifier<ModalContent: View>: ViewModifier 
                 .onTapGesture(perform: dismiss)
 
               modalContent(dismiss)
-                .padding(.horizontal, proxy.size.width > 700 ? 96 : 24)
+                .padding(.horizontal, proxy.size.width > 700 ? 180 : 62)
                 .padding(.bottom, max(18, proxy.safeAreaInsets.bottom + 12))
                 .opacity(isVisible ? 1 : 0)
                 .scaleEffect(reduceMotion || isVisible ? 1 : CaptroMotion.Scale.actionModalInitial)

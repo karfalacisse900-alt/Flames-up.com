@@ -886,7 +886,7 @@ private struct ProfilePostTile: View {
     Group {
       if hasOwnerActions {
         tileContent
-          .simultaneousGesture(LongPressGesture(minimumDuration: 0.38).onEnded { _ in
+          .highPriorityGesture(LongPressGesture(minimumDuration: 0.38).onEnded { _ in
             CaptroHaptics.light()
             onOpenActions?()
           })
