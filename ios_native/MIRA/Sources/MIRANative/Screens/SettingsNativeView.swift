@@ -212,7 +212,7 @@ public struct SettingsNativeView: View {
 
   public var body: some View {
     ScrollView(showsIndicators: false) {
-      VStack(alignment: .leading, spacing: MIRATheme.Space.lg) {
+      VStack(alignment: .leading, spacing: 14) {
         settingsHero
 
         if let message = model.bannerMessage {
@@ -276,8 +276,8 @@ public struct SettingsNativeView: View {
           )
         }
       }
-      .padding(.horizontal, MIRATheme.Space.md)
-      .padding(.top, MIRATheme.Space.md)
+      .padding(.horizontal, 18)
+      .padding(.top, 12)
       .padding(.bottom, MIRATheme.Space.xxl)
     }
     .background(MIRATheme.Color.appBackground.ignoresSafeArea())
@@ -289,14 +289,14 @@ public struct SettingsNativeView: View {
   }
 
   private var settingsHero: some View {
-    HStack(spacing: MIRATheme.Space.md) {
-      RemoteAvatar(url: model.user?.profileImage, size: 58)
-      VStack(alignment: .leading, spacing: 3) {
+    HStack(spacing: 12) {
+      RemoteAvatar(url: model.user?.profileImage, size: 48)
+      VStack(alignment: .leading, spacing: 2) {
         Text(model.user?.displayName ?? "MIRA")
-          .font(.system(size: 22, weight: .semibold))
+          .font(.system(size: 20, weight: .bold))
           .foregroundStyle(MIRATheme.Color.textPrimary)
         Text(model.email.isEmpty ? localization.string("settings.manage_account") : model.email)
-          .font(.system(size: 13, weight: .medium))
+          .font(.system(size: 12, weight: .semibold))
           .foregroundStyle(MIRATheme.Color.textSecondary)
           .lineLimit(1)
       }
@@ -306,8 +306,9 @@ public struct SettingsNativeView: View {
           .tint(MIRATheme.Color.forest)
       }
     }
-    .padding(MIRATheme.Space.md)
-    .miraCardSurface(cornerRadius: 22)
+    .padding(.horizontal, 12)
+    .padding(.vertical, 11)
+    .settingsPillSurface(cornerRadius: 28)
   }
 }
 
@@ -410,7 +411,7 @@ private struct BlockedAccountsNativeView: View {
 
   private func blockedRow(_ row: SettingsBlockedAccount) -> some View {
     HStack(spacing: MIRATheme.Space.sm) {
-      RemoteAvatar(url: row.user?.profileImage, size: 42)
+      RemoteAvatar(url: row.user?.profileImage, size: 38)
       VStack(alignment: .leading, spacing: 3) {
         Text(row.user?.displayName ?? "Captro user")
           .font(.system(size: 15, weight: .semibold))
@@ -428,15 +429,17 @@ private struct BlockedAccountsNativeView: View {
         Text("Unblock")
           .font(.system(size: 12, weight: .bold))
           .foregroundStyle(.white)
-          .padding(.horizontal, 13)
-          .frame(height: 32)
+          .padding(.horizontal, 12)
+          .frame(height: 30)
           .background(MIRATheme.Color.forest)
           .clipShape(Capsule())
       }
       .buttonStyle(.miraPress)
     }
-    .padding(.horizontal, MIRATheme.Space.md)
-    .padding(.vertical, 12)
+    .padding(.horizontal, 12)
+    .padding(.vertical, 8)
+    .frame(minHeight: 58)
+    .settingsPillSurface(cornerRadius: 26)
   }
 
   @MainActor
@@ -557,8 +560,8 @@ private struct SecuritySettingsNativeView: View {
         Text("Uses your signed-in Captro session. Log out on shared devices.")
           .font(.system(size: 12, weight: .medium))
           .foregroundStyle(MIRATheme.Color.textMuted)
-          .padding(.horizontal, MIRATheme.Space.md)
-          .padding(.bottom, MIRATheme.Space.xs)
+          .padding(.horizontal, 8)
+          .padding(.bottom, 2)
         SettingsActionButton(title: model.isSavingEmail ? "Saving..." : "Update email", disabled: model.isSavingEmail) {
           Task {
             _ = await model.updateEmail(newEmail: newEmail)
@@ -571,8 +574,8 @@ private struct SecuritySettingsNativeView: View {
         Text("Minimum 8 characters. This updates the login password for your signed-in account.")
           .font(.system(size: 12, weight: .medium))
           .foregroundStyle(MIRATheme.Color.textMuted)
-          .padding(.horizontal, MIRATheme.Space.md)
-          .padding(.bottom, MIRATheme.Space.xs)
+          .padding(.horizontal, 8)
+          .padding(.bottom, 2)
         SettingsActionButton(title: model.isSavingPassword ? "Saving..." : "Update password", disabled: model.isSavingPassword) {
           Task {
             if await model.updatePassword(newPassword: newPassword) {
@@ -616,7 +619,7 @@ private struct PreferenceSettingsNativeView: View {
   var body: some View {
     SettingsDetailScaffold(title: "Appearance & cache") {
       SettingsCard(title: "Appearance") {
-        HStack(spacing: MIRATheme.Space.sm) {
+        HStack(spacing: 8) {
           ForEach(MIRAAppearance.allCases) { option in
             Button {
               CaptroHaptics.light()
@@ -626,23 +629,21 @@ private struct PreferenceSettingsNativeView: View {
             } label: {
               VStack(spacing: 7) {
                 Image(systemName: option.systemImage)
-                  .font(.system(size: 16, weight: .semibold))
+                  .font(.system(size: 15, weight: .semibold))
                 Text(option.title)
-                  .font(.system(size: 13, weight: .semibold))
+                  .font(.system(size: 12, weight: .bold))
                   .lineLimit(1)
                   .minimumScaleFactor(0.82)
               }
               .foregroundStyle(appearancePreference == option.rawValue ? .white : MIRATheme.Color.textPrimary)
               .frame(maxWidth: .infinity)
-              .frame(height: 64)
+              .frame(height: 52)
               .background(appearancePreference == option.rawValue ? MIRATheme.Color.forest : MIRATheme.Color.surfaceSoft)
-              .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+              .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
             }
             .buttonStyle(.miraPress)
           }
         }
-        .padding(.horizontal, MIRATheme.Space.md)
-        .padding(.bottom, MIRATheme.Space.md)
       }
 
       SettingsCard(title: "Storage") {
@@ -701,24 +702,24 @@ private struct SettingsDetailScaffold<Content: View>: View {
         .buttonStyle(.miraPress)
 
         Text(title)
-          .font(.system(size: 21, weight: .bold))
+          .font(.system(size: 20, weight: .bold))
           .foregroundStyle(MIRATheme.Color.textPrimary)
           .lineLimit(1)
         Spacer()
       }
-      .padding(.horizontal, MIRATheme.Space.md)
-      .padding(.vertical, MIRATheme.Space.sm)
-      .background(MIRATheme.Color.surface)
+      .padding(.horizontal, 18)
+      .padding(.vertical, 8)
+      .background(MIRATheme.Color.appBackground)
       .overlay(alignment: .bottom) {
-        Rectangle().fill(MIRATheme.Color.hairline).frame(height: 0.5)
+        Rectangle().fill(MIRATheme.Color.hairline.opacity(0.55)).frame(height: 0.5)
       }
 
       ScrollView(showsIndicators: false) {
-        VStack(alignment: .leading, spacing: MIRATheme.Space.lg) {
+        VStack(alignment: .leading, spacing: 14) {
           content
         }
-        .padding(.horizontal, MIRATheme.Space.md)
-        .padding(.top, MIRATheme.Space.md)
+        .padding(.horizontal, 18)
+        .padding(.top, 12)
         .padding(.bottom, MIRATheme.Space.xxl)
       }
     }
@@ -739,22 +740,16 @@ private struct SettingsCard<Content: View>: View {
   }
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 0) {
+    VStack(alignment: .leading, spacing: 8) {
       Text(title.uppercased())
-        .font(.system(size: 12, weight: .bold))
+        .font(.system(size: 11, weight: .bold))
         .foregroundStyle(MIRATheme.Color.textMuted)
-        .padding(.horizontal, MIRATheme.Space.md)
-        .padding(.top, MIRATheme.Space.md)
-        .padding(.bottom, MIRATheme.Space.xs)
+        .padding(.horizontal, 8)
 
-      VStack(spacing: 0) {
+      VStack(spacing: 8) {
         content
       }
     }
-    .background(MIRATheme.Color.surfaceRaised)
-    .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-    .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(MIRATheme.Color.hairline, lineWidth: 1))
-    .modifier(MIRATheme.softShadow())
   }
 }
 
@@ -866,18 +861,20 @@ private struct SettingsRowContent<Trailing: View>: View {
   var body: some View {
     HStack(spacing: MIRATheme.Space.sm) {
       Image(systemName: systemImage)
-        .font(.system(size: 17, weight: .semibold))
+        .font(.system(size: 15, weight: .semibold))
         .foregroundStyle(tint)
-        .frame(width: 42, height: 42)
+        .frame(width: 34, height: 34)
         .background(MIRATheme.Color.surfaceSoft)
         .clipShape(Circle())
 
-      VStack(alignment: .leading, spacing: 3) {
+      VStack(alignment: .leading, spacing: 2) {
         Text(title)
-          .font(.system(size: 16, weight: .semibold))
+          .font(.system(size: 15, weight: .bold))
           .foregroundStyle(tint)
+          .lineLimit(1)
+          .minimumScaleFactor(0.86)
         Text(subtitle)
-          .font(.system(size: 13, weight: .medium))
+          .font(.system(size: 12, weight: .semibold))
           .foregroundStyle(MIRATheme.Color.textSecondary)
           .lineLimit(2)
       }
@@ -885,9 +882,11 @@ private struct SettingsRowContent<Trailing: View>: View {
       Spacer(minLength: MIRATheme.Space.sm)
       trailing
     }
-    .padding(.horizontal, MIRATheme.Space.md)
-    .padding(.vertical, 13)
-    .contentShape(Rectangle())
+    .padding(.horizontal, 12)
+    .padding(.vertical, 8)
+    .frame(minHeight: 58)
+    .settingsPillSurface(cornerRadius: 26)
+    .contentShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
   }
 }
 
@@ -903,12 +902,11 @@ private struct SettingsTextField: View {
       .autocorrectionDisabled()
       .font(.system(size: 15, weight: .medium))
       .foregroundStyle(MIRATheme.Color.textPrimary)
-      .padding(.horizontal, MIRATheme.Space.md)
-      .frame(height: 48)
-      .background(MIRATheme.Color.surfaceSoft)
-      .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
-      .padding(.horizontal, MIRATheme.Space.md)
-      .padding(.bottom, MIRATheme.Space.sm)
+      .padding(.horizontal, 14)
+      .frame(maxWidth: .infinity)
+      .frame(height: 44)
+      .settingsPillSurface(cornerRadius: 22)
+      .padding(.bottom, 4)
   }
 }
 
@@ -922,12 +920,11 @@ private struct SettingsSecureField: View {
       .autocorrectionDisabled()
       .font(.system(size: 15, weight: .medium))
       .foregroundStyle(MIRATheme.Color.textPrimary)
-      .padding(.horizontal, MIRATheme.Space.md)
-      .frame(height: 48)
-      .background(MIRATheme.Color.surfaceSoft)
-      .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
-      .padding(.horizontal, MIRATheme.Space.md)
-      .padding(.bottom, MIRATheme.Space.sm)
+      .padding(.horizontal, 14)
+      .frame(maxWidth: .infinity)
+      .frame(height: 44)
+      .settingsPillSurface(cornerRadius: 22)
+      .padding(.bottom, 4)
   }
 }
 
@@ -945,14 +942,13 @@ private struct SettingsActionButton: View {
         .font(.system(size: 15, weight: .semibold))
         .foregroundStyle(.white)
         .frame(maxWidth: .infinity)
-        .frame(height: 48)
+        .frame(height: 44)
         .background(disabled ? MIRATheme.Color.textMuted.opacity(0.45) : MIRATheme.Color.forest)
         .clipShape(Capsule())
     }
     .buttonStyle(.miraPress)
     .disabled(disabled)
-    .padding(.horizontal, MIRATheme.Space.md)
-    .padding(.bottom, MIRATheme.Space.md)
+    .padding(.bottom, 4)
   }
 }
 
@@ -968,9 +964,33 @@ private struct SettingsBanner: View {
       Spacer()
     }
     .foregroundStyle(isError ? Color.red : MIRATheme.Color.forest)
-    .padding(MIRATheme.Space.md)
+    .padding(.horizontal, 14)
+    .padding(.vertical, 12)
     .background((isError ? Color.red : MIRATheme.Color.forest).opacity(0.08))
-    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+  }
+}
+
+private struct SettingsPillSurface: ViewModifier {
+  let cornerRadius: CGFloat
+
+  func body(content: Content) -> some View {
+    content
+      .background {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+          .fill(MIRATheme.Color.surfaceRaised)
+          .overlay(
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+              .stroke(MIRATheme.Color.hairline.opacity(0.65), lineWidth: 1)
+          )
+      }
+      .shadow(color: .black.opacity(0.045), radius: 12, x: 0, y: 5)
+  }
+}
+
+private extension View {
+  func settingsPillSurface(cornerRadius: CGFloat) -> some View {
+    modifier(SettingsPillSurface(cornerRadius: cornerRadius))
   }
 }
 
