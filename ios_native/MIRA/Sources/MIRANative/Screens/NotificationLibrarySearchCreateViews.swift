@@ -3,6 +3,7 @@ import CoreLocation
 import MapKit
 import PhotosUI
 import SwiftUI
+import UIKit
 
 @MainActor
 final class NotificationNativeModel: ObservableObject {
@@ -3282,7 +3283,527 @@ private struct PostHashtagSheet: View {
   }
 }
 
+enum CaptroNoteFontStyle: String, CaseIterable, Identifiable {
+  case cleanBold = "clean_bold"
+  case softSerif = "soft_serif"
+  case handwritten
+  case typewriter
+  case marker
+  case minimal
+  case magazine
+
+  var id: String { rawValue }
+
+  var title: String {
+    switch self {
+    case .cleanBold: return "Clean Bold"
+    case .softSerif: return "Soft Serif"
+    case .handwritten: return "Handwritten"
+    case .typewriter: return "Typewriter"
+    case .marker: return "Marker"
+    case .minimal: return "Minimal"
+    case .magazine: return "Magazine"
+    }
+  }
+
+  func font(size: CGFloat) -> Font {
+    switch self {
+    case .cleanBold: return .system(size: size, weight: .heavy, design: .rounded)
+    case .softSerif: return .system(size: size, weight: .semibold, design: .serif)
+    case .handwritten: return .system(size: size, weight: .semibold, design: .rounded)
+    case .typewriter: return .system(size: size, weight: .medium, design: .monospaced)
+    case .marker: return .system(size: size, weight: .black, design: .rounded)
+    case .minimal: return .system(size: size, weight: .medium, design: .default)
+    case .magazine: return .system(size: size, weight: .black, design: .serif)
+    }
+  }
+}
+
+enum CaptroNoteBackgroundStyle: String, CaseIterable, Identifiable {
+  case whitePaper = "white_paper"
+  case warmCream = "warm_cream"
+  case softPink = "soft_pink"
+  case skyBlue = "sky_blue"
+  case paleGreen = "pale_green"
+  case blackCard = "black_card"
+  case notebookPaper = "notebook_paper"
+
+  var id: String { rawValue }
+
+  var title: String {
+    switch self {
+    case .whitePaper: return "White Paper"
+    case .warmCream: return "Warm Cream"
+    case .softPink: return "Soft Pink"
+    case .skyBlue: return "Sky Blue"
+    case .paleGreen: return "Pale Green"
+    case .blackCard: return "Black Card"
+    case .notebookPaper: return "Notebook Paper"
+    }
+  }
+
+  var color: Color {
+    switch self {
+    case .whitePaper: return Color(red: 1, green: 1, blue: 1)
+    case .warmCream: return Color(red: 0.957, green: 0.937, blue: 0.906)
+    case .softPink: return Color(red: 0.969, green: 0.780, blue: 0.863)
+    case .skyBlue: return Color(red: 0.804, green: 0.922, blue: 1)
+    case .paleGreen: return Color(red: 0.867, green: 0.961, blue: 0.831)
+    case .blackCard: return Color(red: 0.02, green: 0.02, blue: 0.02)
+    case .notebookPaper: return Color(red: 0.984, green: 0.976, blue: 0.929)
+    }
+  }
+
+  var textColor: Color {
+    self == .blackCard ? .white : Color(red: 0.025, green: 0.025, blue: 0.025)
+  }
+
+  var textColorHex: String {
+    self == .blackCard ? "#FFFFFF" : "#050505"
+  }
+
+  var usesNotebookLines: Bool {
+    self == .notebookPaper
+  }
+}
+
+enum CaptroNoteTextSize: String, CaseIterable, Identifiable {
+  case small
+  case medium
+  case large
+
+  var id: String { rawValue }
+
+  var title: String {
+    switch self {
+    case .small: return "Small"
+    case .medium: return "Medium"
+    case .large: return "Large"
+    }
+  }
+
+  var points: CGFloat {
+    switch self {
+    case .small: return 28
+    case .medium: return 36
+    case .large: return 46
+    }
+  }
+}
+
+enum CaptroNoteAlignment: String, CaseIterable, Identifiable {
+  case left
+  case center
+  case right
+
+  var id: String { rawValue }
+
+  var title: String {
+    switch self {
+    case .left: return "Left"
+    case .center: return "Center"
+    case .right: return "Right"
+    }
+  }
+
+  var textAlignment: TextAlignment {
+    switch self {
+    case .left: return .leading
+    case .center: return .center
+    case .right: return .trailing
+    }
+  }
+
+  var horizontalAlignment: HorizontalAlignment {
+    switch self {
+    case .left: return .leading
+    case .center: return .center
+    case .right: return .trailing
+    }
+  }
+}
+
+struct CaptroNoteDisplayCard: View {
+  let text: String
+  let fontStyle: CaptroNoteFontStyle
+  let backgroundStyle: CaptroNoteBackgroundStyle
+  let textColorHex: String?
+  let alignment: CaptroNoteAlignment
+  var textSize: CaptroNoteTextSize = .medium
+  var cornerRadius: CGFloat = 30
+
+  var body: some View {
+    ZStack {
+      backgroundStyle.color
+      if backgroundStyle.usesNotebookLines {
+        notebookLines
+          .allowsHitTesting(false)
+      }
+
+      VStack(alignment: alignment.horizontalAlignment, spacing: 0) {
+        Text(text)
+          .font(fontStyle.font(size: textSize.points))
+          .foregroundStyle(noteTextColor)
+          .lineSpacing(4)
+          .multilineTextAlignment(alignment.textAlignment)
+          .minimumScaleFactor(0.62)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: cardAlignment)
+      .padding(.horizontal, 30)
+      .padding(.vertical, 34)
+    }
+    .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+    .shadow(color: .black.opacity(0.10), radius: 18, x: 0, y: 10)
+    .overlay(
+      RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        .stroke(.white.opacity(backgroundStyle == .blackCard ? 0.08 : 0.42), lineWidth: 1)
+    )
+  }
+
+  private var noteTextColor: Color {
+    guard let textColorHex, !textColorHex.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+      return backgroundStyle.textColor
+    }
+    return Color(uiColor: UIColor(hex: textColorHex))
+  }
+
+  private var cardAlignment: Alignment {
+    switch alignment {
+    case .left: return .centerLeading
+    case .center: return .center
+    case .right: return .centerTrailing
+    }
+  }
+
+  private var notebookLines: some View {
+    GeometryReader { proxy in
+      Path { path in
+        var y: CGFloat = 42
+        while y < proxy.size.height - 24 {
+          path.move(to: CGPoint(x: 22, y: y))
+          path.addLine(to: CGPoint(x: proxy.size.width - 22, y: y))
+          y += 34
+        }
+      }
+      .stroke(Color(red: 0.35, green: 0.43, blue: 0.58).opacity(0.18), lineWidth: 1)
+    }
+  }
+}
+
 public struct CreateNoteNativeView: View {
+  private let maxCharacters = 500
+  let api: MIRAAPIClient
+  private let onClose: (() -> Void)?
+  @Environment(\.dismiss) private var dismiss
+  @State private var noteText = ""
+  @State private var fontStyle: CaptroNoteFontStyle = .cleanBold
+  @State private var backgroundStyle: CaptroNoteBackgroundStyle = .warmCream
+  @State private var textSize: CaptroNoteTextSize = .medium
+  @State private var noteAlignment: CaptroNoteAlignment = .center
+  @State private var isPosting = false
+  @State private var errorMessage: String?
+  @FocusState private var isTextFocused: Bool
+
+  public init(api: MIRAAPIClient, onClose: (() -> Void)? = nil) {
+    self.api = api
+    self.onClose = onClose
+  }
+
+  public var body: some View {
+    VStack(spacing: 0) {
+      noteComposerHeader
+
+      ScrollView {
+        VStack(spacing: 18) {
+          editableNoteCard
+          noteMetaRow
+
+          if let errorMessage {
+            Text(errorMessage)
+              .font(.system(size: 13, weight: .semibold))
+              .foregroundStyle(.red)
+              .frame(maxWidth: .infinity, alignment: .leading)
+          }
+        }
+        .padding(.horizontal, MIRATheme.Space.md)
+        .padding(.top, 18)
+        .padding(.bottom, 22)
+      }
+      .scrollDismissesKeyboard(.interactively)
+
+      noteToolbar
+    }
+    .background(MIRATheme.Color.surface)
+    .miraScreenEnter(.modal)
+    .toolbar(.hidden, for: .navigationBar)
+    .toolbar(.hidden, for: .tabBar)
+    .toolbar {
+      ToolbarItemGroup(placement: .keyboard) {
+        Spacer()
+        Button("Done") {
+          isTextFocused = false
+        }
+        .font(.system(size: 16, weight: .semibold))
+      }
+    }
+    .onChange(of: noteText) { _, value in
+      if value.count > maxCharacters {
+        noteText = String(value.prefix(maxCharacters))
+      }
+    }
+  }
+
+  private var noteComposerHeader: some View {
+    HStack(spacing: 12) {
+      Button("Cancel") { close() }
+        .font(.system(size: 16, weight: .semibold))
+        .foregroundStyle(MIRATheme.Color.textPrimary)
+        .frame(width: 84, height: 46, alignment: .leading)
+
+      Spacer()
+
+      Text("New Note")
+        .font(.system(size: 17, weight: .bold))
+        .foregroundStyle(MIRATheme.Color.textPrimary)
+
+      Spacer()
+
+      Button {
+        Task { await submit() }
+      } label: {
+        if isPosting {
+          ProgressView().tint(.white)
+        } else {
+          Text("Post")
+            .font(.system(size: 15, weight: .bold))
+        }
+      }
+      .foregroundStyle(.white)
+      .frame(width: 84, height: 42)
+      .background(canPostNote ? MIRATheme.Color.forest : MIRATheme.Color.textMuted.opacity(0.40))
+      .clipShape(Capsule())
+      .disabled(isPosting || !canPostNote)
+      .buttonStyle(.miraPress)
+    }
+    .padding(.horizontal, MIRATheme.Space.md)
+    .padding(.top, 6)
+    .padding(.bottom, MIRATheme.Space.sm)
+    .background(MIRATheme.Color.surface)
+  }
+
+  private var editableNoteCard: some View {
+    ZStack {
+      backgroundStyle.color
+      if backgroundStyle.usesNotebookLines {
+        notebookLines
+          .allowsHitTesting(false)
+      }
+
+      ZStack(alignment: placeholderAlignment) {
+        if noteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+          Text("What do you want to say?")
+            .font(fontStyle.font(size: textSize.points))
+            .foregroundStyle(backgroundStyle.textColor.opacity(0.35))
+            .multilineTextAlignment(noteAlignment.textAlignment)
+            .padding(.horizontal, 24)
+            .allowsHitTesting(false)
+        }
+
+        TextEditor(text: $noteText)
+          .focused($isTextFocused)
+          .font(fontStyle.font(size: textSize.points))
+          .foregroundColor(backgroundStyle.textColor)
+          .tint(backgroundStyle.textColor)
+          .lineSpacing(4)
+          .multilineTextAlignment(noteAlignment.textAlignment)
+          .scrollContentBackground(.hidden)
+          .background(Color.clear)
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+          .padding(.horizontal, 22)
+          .padding(.vertical, 24)
+      }
+    }
+    .aspectRatio(4.0 / 5.0, contentMode: .fit)
+    .clipShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
+    .overlay(
+      RoundedRectangle(cornerRadius: 32, style: .continuous)
+        .stroke(.white.opacity(backgroundStyle == .blackCard ? 0.08 : 0.45), lineWidth: 1)
+    )
+    .shadow(color: .black.opacity(0.12), radius: 22, x: 0, y: 12)
+    .contentShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
+    .onTapGesture {
+      isTextFocused = true
+    }
+  }
+
+  private var noteMetaRow: some View {
+    HStack {
+      Text("\(remainingCharacters) characters left")
+        .font(.system(size: 13, weight: .semibold))
+        .foregroundStyle(MIRATheme.Color.textMuted)
+      Spacer()
+      Text("Preview")
+        .font(.system(size: 13, weight: .bold))
+        .foregroundStyle(MIRATheme.Color.forest)
+        .padding(.horizontal, 12)
+        .frame(height: 30)
+        .background(MIRATheme.Color.forestSoft)
+        .clipShape(Capsule())
+    }
+  }
+
+  private var noteToolbar: some View {
+    HStack(spacing: 8) {
+      Menu {
+        ForEach(CaptroNoteFontStyle.allCases) { option in
+          Button(option.title) { fontStyle = option }
+        }
+      } label: {
+        noteToolLabel("Fonts", systemImage: "textformat", value: fontStyle.title)
+      }
+
+      Menu {
+        ForEach(CaptroNoteBackgroundStyle.allCases) { option in
+          Button(option.title) { backgroundStyle = option }
+        }
+      } label: {
+        noteToolLabel("Background", systemImage: "paintpalette", value: backgroundStyle.title)
+      }
+
+      Menu {
+        ForEach(CaptroNoteTextSize.allCases) { option in
+          Button(option.title) { textSize = option }
+        }
+      } label: {
+        noteToolLabel("Size", systemImage: "textformat.size", value: textSize.title)
+      }
+
+      Menu {
+        ForEach(CaptroNoteAlignment.allCases) { option in
+          Button(option.title) { noteAlignment = option }
+        }
+      } label: {
+        noteToolLabel("Align", systemImage: "text.aligncenter", value: noteAlignment.title)
+      }
+    }
+    .padding(.horizontal, MIRATheme.Space.md)
+    .padding(.top, 10)
+    .padding(.bottom, 14)
+    .background(MIRATheme.Color.surface)
+  }
+
+  private func noteToolLabel(_ title: String, systemImage: String, value: String) -> some View {
+    VStack(spacing: 4) {
+      Image(systemName: systemImage)
+        .font(.system(size: 17, weight: .semibold))
+      Text(title)
+        .font(.system(size: 11, weight: .bold))
+      Text(value)
+        .font(.system(size: 9, weight: .semibold))
+        .foregroundStyle(MIRATheme.Color.textMuted)
+        .lineLimit(1)
+        .minimumScaleFactor(0.7)
+    }
+    .foregroundStyle(MIRATheme.Color.textPrimary)
+    .frame(maxWidth: .infinity)
+    .frame(height: 64)
+    .background(MIRATheme.Color.surfaceSoft)
+    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+  }
+
+  private var notebookLines: some View {
+    GeometryReader { proxy in
+      Path { path in
+        var y: CGFloat = 48
+        while y < proxy.size.height - 24 {
+          path.move(to: CGPoint(x: 24, y: y))
+          path.addLine(to: CGPoint(x: proxy.size.width - 24, y: y))
+          y += 34
+        }
+      }
+      .stroke(Color(red: 0.35, green: 0.43, blue: 0.58).opacity(0.18), lineWidth: 1)
+    }
+  }
+
+  private var placeholderAlignment: Alignment {
+    switch noteAlignment {
+    case .left: return .centerLeading
+    case .center: return .center
+    case .right: return .centerTrailing
+    }
+  }
+
+  private var canPostNote: Bool {
+    !noteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isPosting
+  }
+
+  private var remainingCharacters: Int {
+    max(0, maxCharacters - noteText.count)
+  }
+
+  private func submit() async {
+    let clean = noteText.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !clean.isEmpty else { return }
+    isPosting = true
+    MIRAPerformanceTimeline.mark("post_upload_start", detail: "note")
+    defer { isPosting = false }
+    do {
+      let body = CreatePostBody(
+        title: "",
+        content: clean,
+        image: nil,
+        images: [],
+        mediaTypes: [],
+        mediaDimensions: [
+          MIRAMediaDimension(
+            width: 1080,
+            height: 1350,
+            ratio: 1080.0 / 1350.0,
+            format: "4:5",
+            type: "note",
+            originalWidth: 1080,
+            originalHeight: 1350,
+            originalAspectRatio: 1080.0 / 1350.0,
+            feedWidth: 1080,
+            feedHeight: 1350,
+            feedAspectRatio: 1080.0 / 1350.0,
+            displayAspectRatio: 1080.0 / 1350.0,
+            cropMode: "none",
+            mediaType: "note"
+          )
+        ],
+        postType: "note",
+        noteFontStyle: fontStyle.rawValue,
+        noteBackgroundStyle: backgroundStyle.rawValue,
+        noteTextColor: backgroundStyle.textColorHex,
+        noteAlignment: noteAlignment.rawValue,
+        primaryCategory: "lifestyle",
+        categorySource: "note",
+        categoryStatus: "classified",
+        visibility: "public",
+        clientRequestId: UUID().uuidString
+      )
+      let _: MIRAPost = try await api.post("/posts", body: body)
+      MIRAPerformanceTimeline.mark("post_upload_complete", detail: "note")
+      close()
+    } catch {
+      MIRAPerformanceTimeline.mark("post_upload_failed", detail: "note")
+      errorMessage = "Could not post note. Please try again."
+    }
+  }
+
+  private func close() {
+    if let onClose {
+      onClose()
+    } else {
+      dismiss()
+    }
+  }
+}
+
+private struct LegacyThreadNoteNativeView: View {
   let api: MIRAAPIClient
   @Environment(\.dismiss) private var dismiss
   @State private var currentUser: MIRAUser?
@@ -3298,11 +3819,11 @@ public struct CreateNoteNativeView: View {
   @State private var isSearchingGIFs = false
   @State private var errorMessage: String?
 
-  public init(api: MIRAAPIClient) {
+  init(api: MIRAAPIClient) {
     self.api = api
   }
 
-  public var body: some View {
+  var body: some View {
     VStack(spacing: 0) {
       noteComposerHeader
       Divider().overlay(MIRATheme.Color.hairline)

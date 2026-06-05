@@ -935,7 +935,18 @@ private struct ProfilePostTile: View {
       let tileHeight = tileWidth * MIRAMediaSizing.profileGridRatio
       ZStack(alignment: .topTrailing) {
         Group {
-          if let media = post.thumbnailMediaURLs.first {
+          if post.isNotePost {
+            CaptroNoteDisplayCard(
+              text: post.noteText.isEmpty ? " " : post.noteText,
+              fontStyle: CaptroNoteFontStyle(rawValue: post.noteFontStyle ?? "") ?? .cleanBold,
+              backgroundStyle: CaptroNoteBackgroundStyle(rawValue: post.noteBackgroundStyle ?? "") ?? .warmCream,
+              textColorHex: post.noteTextColor,
+              alignment: CaptroNoteAlignment(rawValue: post.noteAlignment ?? "") ?? .center,
+              textSize: .small,
+              cornerRadius: 14
+            )
+            .padding(6)
+          } else if let media = post.thumbnailMediaURLs.first {
             RemoteMediaView(
               url: media,
               isVideo: media.isVideoURL,

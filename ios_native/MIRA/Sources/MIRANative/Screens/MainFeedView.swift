@@ -650,7 +650,9 @@ public struct MainFeedView: View {
   @State private var scrollState = MainFeedScrollState()
   @State private var activeVideoPostID: String?
   @State private var isHeaderHidden = false
+  @State private var isCreateMenuPresented = false
   @State private var isShowingCreatePost = false
+  @State private var isShowingCreateNote = false
   @State private var activeCommentsPost: MIRAPost?
   @State private var isCommentsPresented = false
   @State private var saveTargetPost: MIRAPost?
@@ -790,6 +792,24 @@ public struct MainFeedView: View {
         }
       }
       .miraActionModal(
+        isPresented: $isCreateMenuPresented
+      ) { dismiss in
+        MainFeedCreateMenu(
+          onPost: {
+            dismiss()
+            DispatchQueue.main.asyncAfter(deadline: .now() + MIRATransitionTiming.sheetClose) {
+              isShowingCreatePost = true
+            }
+          },
+          onNote: {
+            dismiss()
+            DispatchQueue.main.asyncAfter(deadline: .now() + MIRATransitionTiming.sheetClose) {
+              isShowingCreateNote = true
+            }
+          }
+        )
+      }
+      .miraActionModal(
         isPresented: $isPostOptionsPresented,
         onDismissed: { postOptionsTarget = nil }
       ) { dismiss in
@@ -830,6 +850,9 @@ public struct MainFeedView: View {
       }
       .miraFullScreenOverlay(isPresented: $isShowingCreatePost, background: .black) { dismiss in
         CreatePostNativeView(api: model.api, onClose: dismiss)
+      }
+      .miraFullScreenOverlay(isPresented: $isShowingCreateNote, background: MIRATheme.Color.surface) { dismiss in
+        CreateNoteNativeView(api: model.api, onClose: dismiss)
       }
       .task { await model.load() }
       .onReceive(NotificationCenter.default.publisher(for: .miraPostEngagementDidChange)) { notification in
@@ -1058,7 +1081,8 @@ public struct MainFeedView: View {
     HStack(spacing: MIRATheme.Space.sm) {
       Spacer()
       Button {
-        isShowingCreatePost = true
+        CaptroHaptics.light()
+        isCreateMenuPresented = true
       } label: {
         MIRAHeaderCircleButton(systemImage: "plus")
       }
@@ -1092,7 +1116,9 @@ public struct MainFeedView: View {
       postOptionsTarget != nil ||
       isReportSheetPresented ||
       reportTarget != nil ||
-      isShowingCreatePost
+      isCreateMenuPresented ||
+      isShowingCreatePost ||
+      isShowingCreateNote
   }
 }
 
@@ -1114,6 +1140,9 @@ private struct MainNativePostCard: View {
   @State private var isFollowConfirmationVisible = false
 
   private var mediaHeight: CGFloat {
+    if post.isNotePost {
+      return max(1, measuredCardWidth - (MIRATheme.Space.md * 2)) * 1.25
+    }
     return MIRAMediaSizing.mainFeedHeight(
       for: post.feedMediaURLs,
       aspectRatios: post.mediaHeightToWidthRatios,
@@ -1126,7 +1155,10 @@ private struct MainNativePostCard: View {
       postHeader
         .zIndex(3)
 
-      if !post.feedMediaURLs.isEmpty {
+      if post.isNotePost {
+        noteCard
+          .zIndex(1)
+      } else if !post.feedMediaURLs.isEmpty {
         mediaCarousel
           .zIndex(1)
       }
@@ -1190,6 +1222,28 @@ private struct MainNativePostCard: View {
     }
     .onChange(of: post.id) { _, _ in isShowingCaption = false }
     .animation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion), value: isShowingCaption)
+  }
+
+  @ViewBuilder
+  private var noteCard: some View {
+    let font = CaptroNoteFontStyle(rawValue: post.noteFontStyle ?? "") ?? .cleanBold
+    let background = CaptroNoteBackgroundStyle(rawValue: post.noteBackgroundStyle ?? "") ?? .warmCream
+    let alignment = CaptroNoteAlignment(rawValue: post.noteAlignment ?? "") ?? .center
+    CaptroNoteDisplayCard(
+      text: post.noteText.isEmpty ? " " : post.noteText,
+      fontStyle: font,
+      backgroundStyle: background,
+      textColorHex: post.noteTextColor,
+      alignment: alignment,
+      textSize: .medium,
+      cornerRadius: 30
+    )
+    .frame(maxWidth: .infinity)
+    .frame(minHeight: mediaHeight, maxHeight: mediaHeight)
+    .padding(.horizontal, MIRATheme.Space.md)
+    .padding(.top, 4)
+    .padding(.bottom, 6)
+    .allowsHitTesting(false)
   }
 
   @ViewBuilder
@@ -1448,10 +1502,12 @@ private struct MainNativePostCard: View {
   }
 
   private var hasCaptionContent: Bool {
+    guard !post.isNotePost else { return false }
     headlineText != nil || captionBodyText != nil || placeText != nil || taggedPeopleText != nil
   }
 
   private var captionNeedsExpansion: Bool {
+    guard !post.isNotePost else { return false }
     if let headlineText, headlineText.count > 58 { return true }
     if let captionBodyText {
       if captionBodyText.count > 118 { return true }
@@ -1686,6 +1742,68 @@ private struct MainNativePostCard: View {
     let author = post.userId?.isEmpty == false ? post.userId! : "missing"
     print("[Captro feed tap] action=\(action) post_id=\(post.id) author_id=\(author)")
     #endif
+  }
+}
+
+private struct MainFeedCreateMenu: View {
+  let onPost: () -> Void
+  let onNote: () -> Void
+
+  var body: some View {
+    VStack(spacing: 16) {
+      MainFeedCreateMenuButton(
+        title: "Photo / Video Post",
+        systemImage: "photo.on.rectangle",
+        action: onPost
+      )
+
+      MainFeedCreateMenuButton(
+        title: "Note",
+        systemImage: "note.text",
+        action: onNote
+      )
+    }
+    .padding(16)
+    .frame(maxWidth: 340)
+    .background {
+      RoundedRectangle(cornerRadius: 44, style: .continuous)
+        .fill(Color(red: 0.945, green: 0.933, blue: 0.929).opacity(0.94))
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 44, style: .continuous))
+    }
+    .shadow(color: .black.opacity(0.10), radius: 18, x: 0, y: 9)
+    .accessibilityElement(children: .contain)
+  }
+}
+
+private struct MainFeedCreateMenuButton: View {
+  let title: String
+  let systemImage: String
+  let action: () -> Void
+
+  var body: some View {
+    Button {
+      CaptroHaptics.light()
+      action()
+    } label: {
+      HStack(spacing: 22) {
+        Image(systemName: systemImage)
+          .font(.system(size: 28, weight: .semibold))
+          .frame(width: 32, height: 32)
+        Text(title)
+          .font(.system(size: 22, weight: .bold))
+          .lineLimit(1)
+          .minimumScaleFactor(0.74)
+        Spacer(minLength: 0)
+      }
+      .foregroundStyle(Color(red: 0.02, green: 0.02, blue: 0.02))
+      .padding(.horizontal, 26)
+      .frame(maxWidth: .infinity)
+      .frame(height: 80)
+      .background(.white, in: Capsule())
+      .contentShape(Capsule())
+    }
+    .buttonStyle(.miraPress)
+    .accessibilityLabel(title)
   }
 }
 

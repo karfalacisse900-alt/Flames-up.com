@@ -930,6 +930,11 @@ async function ensurePostEditorSchema(db: D1Database) {
     'ALTER TABLE posts ADD COLUMN saves_count INTEGER DEFAULT 0',
     'ALTER TABLE posts ADD COLUMN shares_count INTEGER DEFAULT 0',
     'ALTER TABLE posts ADD COLUMN views_count INTEGER DEFAULT 0',
+    "ALTER TABLE posts ADD COLUMN note_font_style TEXT DEFAULT ''",
+    "ALTER TABLE posts ADD COLUMN note_background_style TEXT DEFAULT ''",
+    "ALTER TABLE posts ADD COLUMN note_text_color TEXT DEFAULT ''",
+    "ALTER TABLE posts ADD COLUMN note_alignment TEXT DEFAULT ''",
+    'CREATE INDEX IF NOT EXISTS idx_posts_type_created ON posts(post_type, created_at DESC)',
   ];
 
   for (const statement of statements) {
@@ -3821,12 +3826,57 @@ function moderateCommunityText(value: string): { ok: boolean; detail?: string } 
     /\b(doxx|home address is|ssn|social security number|credit card number|private phone number)\b/i,
     /\b(child porn|minor sexual|underage sexual|sexual minor)\b/i,
     /\b(scamming|phishing|wire me money|guaranteed crypto profit)\b/i,
+    /\b(free money|cashapp flip|telegram investment|whatsapp investment|click this link|login to verify|airdrop claim)\b/i,
+    /\b(bit\.ly|tinyurl\.com|t\.me\/|wa\.me\/|grabify|iplogger)\b/i,
     /\b(nazi praise|exterminate all|racial slur)\b/i,
   ];
   if (blockedPatterns.some((pattern) => pattern.test(text))) {
     return { ok: false, detail: 'That needs moderation review before it can be posted.' };
   }
   return { ok: true };
+}
+
+const NOTE_FONT_STYLES = new Set([
+  'clean_bold',
+  'soft_serif',
+  'handwritten',
+  'typewriter',
+  'marker',
+  'minimal',
+  'magazine',
+]);
+
+const NOTE_BACKGROUND_STYLES = new Set([
+  'white_paper',
+  'warm_cream',
+  'soft_pink',
+  'sky_blue',
+  'pale_green',
+  'black_card',
+  'notebook_paper',
+]);
+
+const NOTE_ALIGNMENTS = new Set(['left', 'center', 'right']);
+
+function normalizeNoteFontStyle(value: unknown): string {
+  const clean = cleanText(value, 40).toLowerCase();
+  return NOTE_FONT_STYLES.has(clean) ? clean : 'clean_bold';
+}
+
+function normalizeNoteBackgroundStyle(value: unknown): string {
+  const clean = cleanText(value, 40).toLowerCase();
+  return NOTE_BACKGROUND_STYLES.has(clean) ? clean : 'warm_cream';
+}
+
+function normalizeNoteTextColor(value: unknown, backgroundStyle: string): string {
+  const clean = cleanText(value, 20).toUpperCase();
+  if (/^#[0-9A-F]{6}$/.test(clean)) return clean;
+  return backgroundStyle === 'black_card' ? '#FFFFFF' : '#050505';
+}
+
+function normalizeNoteAlignment(value: unknown): string {
+  const clean = cleanText(value, 20).toLowerCase();
+  return NOTE_ALIGNMENTS.has(clean) ? clean : 'center';
 }
 
 function publicNotePayload(row: any, opts: { reacted?: boolean; saved?: boolean } = {}) {
@@ -4887,6 +4937,10 @@ function postPayload(post: any, likedBy: string[] = [], env?: Env) {
     display_location_label: displayLocationLabel,
     display_location_source: displayLocationLabel ? normalizeDisplayLocationSource(post.display_location_source) : 'none',
     display_location_visibility: displayLocationVisibility,
+    note_font_style: normalizeNoteFontStyle(post.note_font_style),
+    note_background_style: normalizeNoteBackgroundStyle(post.note_background_style),
+    note_text_color: normalizeNoteTextColor(post.note_text_color, normalizeNoteBackgroundStyle(post.note_background_style)),
+    note_alignment: normalizeNoteAlignment(post.note_alignment),
     place_provider: cleanText(post.place_provider, 40),
     place_provider_id: cleanText(post.place_provider_id || post.place_id, 160),
     place_formatted_address: cleanText(post.place_formatted_address || post.location, 260),
@@ -9895,7 +9949,9 @@ api.post('/posts', authMiddleware, async (c) => {
     if (existing) return c.json({ ...postPayload(existing, [], c.env), idempotent_replay: true });
   }
   const id = uuid();
-  const postType = cleanText(b.post_type || b.category || 'general', 50) || 'general';
+  let postType = cleanText(b.post_type || b.postType || b.type || b.category || 'general', 50).toLowerCase() || 'general';
+  if (postType === 'media') postType = 'general';
+  const isNotePost = postType === 'note';
   const placeProvider = normalizeAppleMapKitProvider(b.place_provider || b.provider) || (b.place_name ? 'apple_mapkit' : '');
   const placeProviderId = cleanText(b.place_provider_id || b.place_id, 160);
   const placeName = cleanText(b.place_name, 180);
@@ -9920,8 +9976,22 @@ api.post('/posts', authMiddleware, async (c) => {
   }
   if (!displayLocationLabel) displayLocationVisibility = 'hidden';
   const visibility = normalizeVisibility(b.visibility);
-  const postTitle = cleanText(b.title || b.headline, 180);
-  const postContent = cleanMultilineText(b.content, 5000);
+  let postTitle = cleanText(b.title || b.headline, 180);
+  let postContent = cleanMultilineText(b.content || b.text || b.note_text || b.noteText, isNotePost ? 500 : 5000);
+  if (isNotePost) {
+    postTitle = '';
+    postContent = cleanMultilineText(postContent, 500).trim();
+    if (!postContent) {
+      return c.json({ detail: 'Write something first.', code: 'NOTE_EMPTY' }, 400);
+    }
+    const moderation = moderateCommunityText(postContent);
+    if (!moderation.ok) {
+      return c.json({
+        detail: 'This note needs review before it can be posted.',
+        code: 'NOTE_MODERATION_REJECTED',
+      }, 400);
+    }
+  }
   let imageUrls = sanitizeMediaReferences(b.images, b.image);
   let primaryImage = safeMediaReference(b.image) || imageUrls[0] || null;
   let mediaTypes = sanitizeMediaTypes(b.media_types, imageUrls.length || (primaryImage ? 1 : 0));
@@ -9934,6 +10004,9 @@ api.post('/posts', authMiddleware, async (c) => {
     }, 400);
   }
   const mediaAssetIds = parseMediaAssetIds(b);
+  if (isNotePost && (imageUrls.length || mediaAssetIds.length)) {
+    return c.json({ detail: 'Notes cannot include media attachments.', code: 'NOTE_MEDIA_UNSUPPORTED' }, 400);
+  }
   const mediaApproval = await approvedMediaAssetsForPost(c, userId, mediaAssetIds, imageUrls);
   if (!mediaApproval.ok) {
     return c.json({ detail: mediaApproval.detail, code: mediaApproval.code }, mediaApproval.status as any);
@@ -9988,6 +10061,10 @@ api.post('/posts', authMiddleware, async (c) => {
   const audioStreamUrl = audioProvider ? cleanText(b.audio_stream_url, 2200) : '';
   const audioStartTime = audioProvider ? clampNumber(b.audio_start_time, 0, 60 * 60 * 6, 0) : 0;
   const audioDuration = audioProvider ? clampNumber(b.audio_duration, 5, 30, 15) : 0;
+  const noteFontStyle = isNotePost ? normalizeNoteFontStyle(b.note_font_style || b.noteFontStyle || b.font_style || b.fontStyle) : '';
+  const noteBackgroundStyle = isNotePost ? normalizeNoteBackgroundStyle(b.note_background_style || b.noteBackgroundStyle || b.background_style || b.backgroundStyle) : '';
+  const noteTextColor = isNotePost ? normalizeNoteTextColor(b.note_text_color || b.noteTextColor || b.text_color || b.textColor, noteBackgroundStyle) : '';
+  const noteAlignment = isNotePost ? normalizeNoteAlignment(b.note_alignment || b.noteAlignment || b.alignment) : '';
 
   if (audioProvider && !audioTrackId) {
     return c.json({ detail: 'Audio track id is required.' }, 400);
@@ -10003,7 +10080,7 @@ api.post('/posts', authMiddleware, async (c) => {
       `INSERT OR IGNORE INTO posts (
        id, user_id, title, content, image, images, media_types, media_backup_ids, media_dimensions, location,
        display_city, display_region, display_country, display_location_label, display_location_source, display_location_visibility,
-       post_type,
+       post_type, note_font_style, note_background_style, note_text_color, note_alignment,
        place_id, place_name, place_provider, place_provider_id, place_formatted_address, place_category, place_city, place_region, place_country,
        place_lat, place_lng, is_verified_checkin, visibility, moderation_status, moderation_media_ids, moderation_checked_at,
        editor_overlays, tagged_users,
@@ -10012,11 +10089,11 @@ api.post('/posts', authMiddleware, async (c) => {
        audio_provider, audio_track_id, audio_title, audio_artist, audio_artwork_url, audio_stream_url,
        audio_start_time, audio_duration, client_request_id
      )
-     VALUES (${Array(57).fill('?').join(', ')})`
+     VALUES (${Array(61).fill('?').join(', ')})`
     ).bind(id, userId, postTitle, postContent, primaryImage, JSON.stringify(imageUrls), JSON.stringify(mediaTypes),
     JSON.stringify(backupIds), JSON.stringify(mediaDimensions), location,
     displayCity, displayRegion, displayCountry, displayLocationLabel, displayLocationSource, displayLocationVisibility,
-    postType,
+    postType, noteFontStyle, noteBackgroundStyle, noteTextColor, noteAlignment,
     placeProviderId || null, placeName || null, placeProvider, placeProviderId, placeFormattedAddress, placeCategory, placeCity, placeRegion, placeCountry,
     placeLat, placeLng, isCheckin, visibility, 'approved', JSON.stringify(mediaAssetIds), now(),
     JSON.stringify(editorOverlays), JSON.stringify(taggedUsers),
@@ -10061,9 +10138,11 @@ api.post('/posts', authMiddleware, async (c) => {
     await mirrorLegacyUserToSupabase(c, userId);
     await mirrorLegacyPostToSupabase(c, id);
   });
-  runBackgroundTask(c, 'post_category_refinement_failed', async () => {
-    await refinePostCategoryWithBackendAi(c, id);
-  });
+  if (!isNotePost) {
+    runBackgroundTask(c, 'post_category_refinement_failed', async () => {
+      await refinePostCategoryWithBackendAi(c, id);
+    });
+  }
   if (visibility === 'public' || visibility === 'followers') {
     runBackgroundTask(c, 'post_follower_notifications_failed', async () => {
       const followers = await c.env.DB.prepare(
@@ -10103,7 +10182,9 @@ api.post('/posts', authMiddleware, async (c) => {
     display_city: displayCity, display_region: displayRegion, display_country: displayCountry,
     display_location_label: displayLocationLabel, display_location_source: displayLocationSource,
     display_location_visibility: displayLocationVisibility,
-    post_type: postType, place_id: placeProviderId, place_name: placeName,
+    post_type: postType, note_font_style: noteFontStyle, note_background_style: noteBackgroundStyle,
+    note_text_color: noteTextColor, note_alignment: noteAlignment,
+    place_id: placeProviderId, place_name: placeName,
     place_provider: placeProvider, place_provider_id: placeProviderId, place_formatted_address: placeFormattedAddress,
     place_category: placeCategory, place_city: placeCity, place_region: placeRegion, place_country: placeCountry,
     place_lat: placeLat, place_lng: placeLng, is_verified_checkin: !!isCheckin,
