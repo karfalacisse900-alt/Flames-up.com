@@ -171,6 +171,12 @@ final class DiscoverNativeModel: ObservableObject {
     isLoading = isLoadingStories || isLoadingPosts
   }
 
+  func refreshVisiblePosts() async {
+    hasLoadedFreshPosts = false
+    hasScheduledPostsLoad = false
+    await loadPosts(category: activePostsCategory, force: true)
+  }
+
   private func prefetchVisibleMedia(_ posts: [MIRAPost]) {
     let previewURLs = posts
       .prefix(30)
@@ -228,6 +234,14 @@ final class DiscoverNativeModel: ObservableObject {
 
   func hidePost(_ post: MIRAPost) {
     posts.removeAll { $0.id == post.id }
+    let snapshot = posts
+    Task { await MIRAAppCacheStore.shared.saveDiscoverPosts(snapshot, category: activePostsCategory) }
+    MIRAPostRemovalSync.publish(MIRAPostRemovalUpdate(postId: post.id))
+  }
+
+  func removePostLocally(id postId: String) {
+    guard posts.contains(where: { $0.id == postId }) else { return }
+    posts.removeAll { $0.id == postId }
     let snapshot = posts
     Task { await MIRAAppCacheStore.shared.saveDiscoverPosts(snapshot, category: activePostsCategory) }
   }
@@ -412,6 +426,7 @@ public struct DiscoverNativeView: View {
   @State private var isDiscoverActionModalPresented = false
   @EnvironmentObject private var localization: MIRALocalization
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.scenePhase) private var scenePhase
 
   public init(api: MIRAAPIClient) {
     _model = StateObject(wrappedValue: DiscoverNativeModel(api: api))
@@ -443,12 +458,20 @@ public struct DiscoverNativeView: View {
       .background(MIRATheme.Color.appBackground)
       .miraScreenEnter(.tab)
       .toolbar(.hidden, for: .navigationBar)
-      .toolbar((selectedStoryGroup == nil && !isReportSheetPresented && !isSinglePhotoPreviewPresented) ? .visible : .hidden, for: .tabBar)
+      .toolbar(discoverTabBarVisibility, for: .tabBar)
       .miraStatusBarHidden(selectedStoryGroup != nil)
       .task { await model.load() }
       .onReceive(NotificationCenter.default.publisher(for: .miraPostEngagementDidChange)) { notification in
         guard let update = MIRAPostEngagementSync.update(from: notification) else { return }
         model.applyEngagementUpdate(update)
+      }
+      .onReceive(NotificationCenter.default.publisher(for: .miraPostWasRemoved)) { notification in
+        guard let update = MIRAPostRemovalSync.update(from: notification) else { return }
+        model.removePostLocally(id: update.postId)
+      }
+      .onChange(of: scenePhase) { _, phase in
+        guard phase == .active, !model.posts.isEmpty else { return }
+        Task { await model.refreshVisiblePosts() }
       }
       .miraFullScreenOverlay(item: $selectedStoryGroup, background: .black) { group, dismissStory in
         StoryViewerNativeView(
@@ -616,6 +639,13 @@ public struct DiscoverNativeView: View {
     withAnimation(CaptroMotion.actionModalAnimation(reduceMotion: reduceMotion)) {
       isDiscoverActionModalPresented = true
     }
+  }
+
+  private var discoverTabBarVisibility: Visibility {
+    selectedStoryGroup == nil &&
+    !isReportSheetPresented &&
+    !isSinglePhotoPreviewPresented &&
+    !isDiscoverActionModalPresented ? .visible : .hidden
   }
 
   private var discoverHeader: some View {

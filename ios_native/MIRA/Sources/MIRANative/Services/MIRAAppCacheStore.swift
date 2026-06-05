@@ -97,6 +97,19 @@ actor MIRAAppCacheStore {
     return Array(merged.prefix(maxFeedPosts))
   }
 
+  func mergeFreshFirstPage(existing: [MIRAPost], fresh: [MIRAPost], pageLimit: Int) -> [MIRAPost] {
+    guard !existing.isEmpty else { return Array(fresh.prefix(maxFeedPosts)) }
+    guard !fresh.isEmpty else { return existing }
+
+    let freshIds = Set(fresh.map(\.id))
+    let preservedTail = existing.enumerated().compactMap { index, post -> MIRAPost? in
+      if freshIds.contains(post.id) { return nil }
+      if index < pageLimit { return nil }
+      return post
+    }
+    return Array((fresh + preservedTail).prefix(maxFeedPosts))
+  }
+
   func loadDiscoverPosts(category: String) async -> [MIRAPost]? {
     await MIRALocalJSONCache.load([MIRAPost].self, key: CacheKey.discoverPosts(category), maxAge: contentCacheAge)
   }

@@ -89,7 +89,7 @@ final class MainFeedModel: ObservableObject {
       return
     }
     let sorted = await sortedByNativeScore(photoFeedPosts(loaded))
-    let merged = await MIRAAppCacheStore.shared.mergePostsPreservingVisibleState(existing: posts, fresh: sorted)
+    let merged = await MIRAAppCacheStore.shared.mergeFreshFirstPage(existing: posts, fresh: sorted, pageLimit: firstPageLimit)
     if posts != merged {
       posts = merged
     }
@@ -458,6 +458,7 @@ final class MainFeedModel: ObservableObject {
   func hidePost(_ post: MIRAPost) {
     posts.removeAll { $0.id == post.id }
     cacheCurrentPosts()
+    MIRAPostRemovalSync.publish(MIRAPostRemovalUpdate(postId: post.id))
   }
 
   func hidePosts(byUserId userId: String) {
@@ -501,6 +502,7 @@ final class MainFeedModel: ObservableObject {
     do {
       let _: EmptyResponse = try await api.delete("/posts/\(post.id)")
       cacheCurrentPosts()
+      MIRAPostRemovalSync.publish(MIRAPostRemovalUpdate(postId: post.id))
       errorMessage = nil
     } catch {
       posts = previous
@@ -519,6 +521,9 @@ final class MainFeedModel: ObservableObject {
         posts[index] = updated
       }
       cacheCurrentPosts()
+      if visibility == "private" {
+        MIRAPostRemovalSync.publish(MIRAPostRemovalUpdate(postId: post.id))
+      }
       errorMessage = nil
     } catch {
       errorMessage = "Could not update post visibility."
@@ -551,6 +556,12 @@ final class MainFeedModel: ObservableObject {
   private func cacheCurrentPosts() {
     let snapshot = posts
     Task { await MIRAAppCacheStore.shared.saveFeed(snapshot) }
+  }
+
+  func removePostLocally(id postId: String) {
+    guard posts.contains(where: { $0.id == postId }) else { return }
+    posts.removeAll { $0.id == postId }
+    cacheCurrentPosts()
   }
 
   private func publishEngagement(for post: MIRAPost) {
@@ -635,6 +646,7 @@ public struct MainFeedView: View {
   private let isTabActive: Bool
   @EnvironmentObject private var localization: MIRALocalization
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.scenePhase) private var scenePhase
   @State private var scrollState = MainFeedScrollState()
   @State private var activeVideoPostID: String?
   @State private var isHeaderHidden = false
@@ -824,9 +836,17 @@ public struct MainFeedView: View {
         guard let update = MIRAPostEngagementSync.update(from: notification) else { return }
         model.applyEngagementUpdate(update)
       }
+      .onReceive(NotificationCenter.default.publisher(for: .miraPostWasRemoved)) { notification in
+        guard let update = MIRAPostRemovalSync.update(from: notification) else { return }
+        model.removePostLocally(id: update.postId)
+      }
       .onReceive(NotificationCenter.default.publisher(for: .miraUserFollowDidChange)) { notification in
         guard let update = MIRAUserFollowSync.update(from: notification) else { return }
         model.applyFollowUpdate(update)
+      }
+      .onChange(of: scenePhase) { _, phase in
+        guard phase == .active, !model.posts.isEmpty else { return }
+        Task { await model.load(forceRefresh: true) }
       }
       .onPreferenceChange(MainFeedScrollOffsetPreferenceKey.self, perform: handleScroll)
       .onPreferenceChange(MainPostVisibilityPreferenceKey.self, perform: updateActiveVideo)
@@ -1145,6 +1165,12 @@ private struct MainNativePostCard: View {
     }
     .overlay(alignment: .bottom) {
       Rectangle().fill(MIRATheme.Color.hairline).frame(height: 0.75).allowsHitTesting(false)
+    }
+    .overlay(alignment: .topLeading) {
+      followingConfirmationBadge
+        .padding(.leading, 58)
+        .padding(.top, 50)
+        .zIndex(8)
     }
     .onChange(of: post.id) { _, _ in
       selectedMediaIndex = 0
@@ -1520,19 +1546,6 @@ private struct MainNativePostCard: View {
           isFollowing: post.viewerFollowing || isSubmittingFollow || isFollowConfirmationVisible
         )
         .scaleEffect(isFollowConfirmationVisible ? 1.08 : 1)
-        .overlay(alignment: .bottom) {
-          if isFollowConfirmationVisible {
-            Text("Following")
-              .font(.system(size: 10, weight: .semibold))
-              .foregroundStyle(.white)
-              .padding(.horizontal, 8)
-              .frame(height: 20)
-              .background(MIRATheme.Color.textPrimary.opacity(0.86))
-              .clipShape(Capsule())
-              .offset(y: 24)
-              .transition(.opacity.combined(with: .scale(scale: 0.92)))
-          }
-        }
       }
       .buttonStyle(.plain)
       .disabled(isSubmittingFollow)
@@ -1540,7 +1553,7 @@ private struct MainNativePostCard: View {
       .frame(minWidth: 44, minHeight: 44)
       .contentShape(Rectangle())
     } else if let userId = post.userId, !userId.isEmpty {
-      NavigationLink(destination: UserProfileNativeView(userId: userId, api: api)) {
+      NavigationLink(destination: UserProfileNativeView(userId: userId, api: api).miraHideTabBarOnAppear()) {
         RemoteAvatar(url: post.userProfileImage, size: 42)
       }
       .buttonStyle(.plain)
@@ -1558,7 +1571,7 @@ private struct MainNativePostCard: View {
   @ViewBuilder
   private var authorIdentity: some View {
     if let userId = post.userId, !userId.isEmpty {
-      NavigationLink(destination: UserProfileNativeView(userId: userId, api: api)) {
+      NavigationLink(destination: UserProfileNativeView(userId: userId, api: api).miraHideTabBarOnAppear()) {
         authorIdentityLabel
       }
       .buttonStyle(.plain)
@@ -1617,7 +1630,7 @@ private struct MainNativePostCard: View {
 
     Task {
       let didFollow = await onFollow()
-      let holdNanoseconds: UInt64 = didFollow ? 700_000_000 : 180_000_000
+      let holdNanoseconds: UInt64 = didFollow ? 1_050_000_000 : 180_000_000
       try? await Task.sleep(nanoseconds: holdNanoseconds)
       await MainActor.run {
         withAnimation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion)) {
@@ -1625,6 +1638,26 @@ private struct MainNativePostCard: View {
         }
         isSubmittingFollow = false
       }
+    }
+  }
+
+  @ViewBuilder
+  private var followingConfirmationBadge: some View {
+    if isFollowConfirmationVisible {
+      HStack(spacing: 7) {
+        Image(systemName: "checkmark")
+          .font(.system(size: 11, weight: .bold))
+        Text("Following")
+          .font(.system(size: 12, weight: .semibold))
+      }
+      .foregroundStyle(.white)
+      .padding(.horizontal, 11)
+      .frame(height: 28)
+      .background(MIRATheme.Color.forest.opacity(0.94))
+      .clipShape(Capsule())
+      .shadow(color: .black.opacity(0.12), radius: 10, x: 0, y: 5)
+      .transition(.opacity.combined(with: .scale(scale: 0.92, anchor: .leading)))
+      .allowsHitTesting(false)
     }
   }
 

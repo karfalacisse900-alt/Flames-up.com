@@ -78,6 +78,7 @@ final class ProfileNativeModel: ObservableObject {
       let _: EmptyResponse = try await api.delete("/posts/\(post.id)")
       await MIRAAppCacheStore.shared.saveProfilePosts(posts, userId: user.id)
       await MIRALocalJSONCache.save(posts, key: postsCacheKey(for: user.id))
+      MIRAPostRemovalSync.publish(MIRAPostRemovalUpdate(postId: post.id))
       profileError = nil
     } catch {
       posts = previousPosts
@@ -97,10 +98,20 @@ final class ProfileNativeModel: ObservableObject {
       }
       await MIRAAppCacheStore.shared.saveProfilePosts(posts, userId: user.id)
       await MIRALocalJSONCache.save(posts, key: postsCacheKey(for: user.id))
+      if visibility == "private" {
+        MIRAPostRemovalSync.publish(MIRAPostRemovalUpdate(postId: post.id))
+      }
       profileError = nil
     } catch {
       profileError = "Could not update post visibility."
     }
+  }
+
+  func removePostLocally(id postId: String) async {
+    guard let user, posts.contains(where: { $0.id == postId }) else { return }
+    posts.removeAll { $0.id == postId }
+    await MIRAAppCacheStore.shared.saveProfilePosts(posts, userId: user.id)
+    await MIRALocalJSONCache.save(posts, key: postsCacheKey(for: user.id))
   }
 
   func togglePin(_ post: MIRAPost) async {
@@ -218,7 +229,7 @@ public struct ProfileNativeView: View {
       .background(MIRATheme.Color.appBackground)
       .miraScreenEnter(.tab)
       .navigationTitle("")
-      .toolbar(showEditProfile ? .hidden : .visible, for: .tabBar)
+      .toolbar(profileTabBarVisibility, for: .tabBar)
       .toolbar {
         ToolbarItemGroup(placement: .topBarTrailing) {
           ProfileToolbarDestinationButton(
@@ -243,6 +254,10 @@ public struct ProfileNativeView: View {
           model.primeUser(authSession?.user)
         }
         await model.load()
+      }
+      .onReceive(NotificationCenter.default.publisher(for: .miraPostWasRemoved)) { notification in
+        guard let update = MIRAPostRemovalSync.update(from: notification) else { return }
+        Task { await model.removePostLocally(id: update.postId) }
       }
       .miraBottomSheet(isPresented: $showEditProfile, preferredHeightFraction: 0.86) { dismissEditProfile in
         EditProfileNativeView(user: model.user, api: model.api, onCancel: dismissEditProfile) { updated in
@@ -310,6 +325,12 @@ public struct ProfileNativeView: View {
     withAnimation(CaptroMotion.actionModalAnimation(reduceMotion: reduceMotion)) {
       isProfilePostActionModalPresented = true
     }
+  }
+
+  private var profileTabBarVisibility: Visibility {
+    showEditProfile ||
+    isProfilePostActionModalPresented ||
+    isDeletePostConfirmationPresented ? .hidden : .visible
   }
 
   private var profileHeader: some View {
@@ -441,6 +462,13 @@ final class UserProfileNativeModel: ObservableObject {
     await MIRALocalJSONCache.save(freshPosts, key: postsCacheKey)
   }
 
+  func removePostLocally(id postId: String) async {
+    guard posts.contains(where: { $0.id == postId }) else { return }
+    posts.removeAll { $0.id == postId }
+    await MIRAAppCacheStore.shared.saveProfilePosts(posts, userId: userId)
+    await MIRALocalJSONCache.save(posts, key: postsCacheKey)
+  }
+
   func toggleFollow() async {
     let previousFollowing = isFollowing
     let previousFollowers = followersCount
@@ -541,6 +569,10 @@ public struct UserProfileNativeView: View {
     .navigationBarTitleDisplayMode(.inline)
     .toolbar(.hidden, for: .tabBar)
     .task { await model.load() }
+    .onReceive(NotificationCenter.default.publisher(for: .miraPostWasRemoved)) { notification in
+      guard let update = MIRAPostRemovalSync.update(from: notification) else { return }
+      Task { await model.removePostLocally(id: update.postId) }
+    }
     .background {
       NavigationLink(
         isActive: Binding(
@@ -552,6 +584,7 @@ public struct UserProfileNativeView: View {
       ) {
         if let route = messageRoute {
           ConversationNativeView(title: route.title, model: route.model, initialAvatarURL: route.avatarURL)
+            .miraHideTabBarOnAppear()
         } else {
           EmptyView()
         }
@@ -1416,6 +1449,7 @@ public struct ChatNativeView: View {
         ) {
           if let route = activeConversationRoute {
             ConversationNativeView(title: route.title, model: route.model, initialAvatarURL: route.avatarURL)
+              .miraHideTabBarOnAppear()
           } else {
             EmptyView()
           }
