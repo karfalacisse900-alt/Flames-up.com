@@ -1503,7 +1503,7 @@ private struct MainNativePostCard: View {
 
   private var hasCaptionContent: Bool {
     guard !post.isNotePost else { return false }
-    headlineText != nil || captionBodyText != nil || placeText != nil || taggedPeopleText != nil
+    return headlineText != nil || captionBodyText != nil || placeText != nil || taggedPeopleText != nil
   }
 
   private var captionNeedsExpansion: Bool {

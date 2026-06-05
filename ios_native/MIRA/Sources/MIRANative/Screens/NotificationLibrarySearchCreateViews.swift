@@ -3470,9 +3470,9 @@ struct CaptroNoteDisplayCard: View {
 
   private var cardAlignment: Alignment {
     switch alignment {
-    case .left: return .centerLeading
+    case .left: return .leading
     case .center: return .center
-    case .right: return .centerTrailing
+    case .right: return .trailing
     }
   }
 
@@ -3729,9 +3729,9 @@ public struct CreateNoteNativeView: View {
 
   private var placeholderAlignment: Alignment {
     switch noteAlignment {
-    case .left: return .centerLeading
+    case .left: return .leading
     case .center: return .center
-    case .right: return .centerTrailing
+    case .right: return .trailing
     }
   }
 
