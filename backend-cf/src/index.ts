@@ -54,6 +54,9 @@ interface Env {
   SUPABASE_ANON_KEY?: string;
   SUPABASE_JWT_ISSUER?: string;
   SUPABASE_SERVICE_ROLE_KEY?: string;
+  APPLE_OAUTH_CLIENT_ID?: string;
+  APPLE_OAUTH_CLIENT_SECRET?: string;
+  APPLE_REVOKE_CLIENT_SECRET?: string;
   APPLE_OAUTH_AUDIENCE?: string;
   APPLE_OAUTH_AUDIENCES?: string;
   TWILIO_ACCOUNT_SID?: string;
@@ -291,15 +294,16 @@ const authMiddleware = async (c: any, next: () => Promise<void>) => {
   if (!userId) return c.json({ detail: 'Invalid token', code: 'INVALID_TOKEN' }, 401);
 
   try {
+    await ensureAccountDeletionSchema(c.env.DB);
     let user: any;
     try {
-      user = await c.env.DB.prepare('SELECT id, status, suspended_until FROM users WHERE id = ?').bind(userId).first();
+      user = await c.env.DB.prepare('SELECT id, status, suspended_until, session_revoked_at FROM users WHERE id = ?').bind(userId).first();
     } catch (error: any) {
       const message = String(error?.message || '');
       if (message.includes('no such column: suspended_until')) {
-        user = await c.env.DB.prepare('SELECT id, status, NULL AS suspended_until FROM users WHERE id = ?').bind(userId).first();
+        user = await c.env.DB.prepare('SELECT id, status, NULL AS suspended_until, NULL AS session_revoked_at FROM users WHERE id = ?').bind(userId).first();
       } else if (message.includes('no such column: status')) {
-        user = await c.env.DB.prepare("SELECT id, 'active' AS status, NULL AS suspended_until FROM users WHERE id = ?").bind(userId).first();
+        user = await c.env.DB.prepare("SELECT id, 'active' AS status, NULL AS suspended_until, NULL AS session_revoked_at FROM users WHERE id = ?").bind(userId).first();
       } else {
         throw error;
       }
@@ -308,6 +312,18 @@ const authMiddleware = async (c: any, next: () => Promise<void>) => {
     if (!user) return c.json({ detail: 'Session user was not found.', code: 'USER_NOT_FOUND' }, 401);
 
     const accountStatus = String(user?.status || 'active');
+    const revokedAt = Date.parse(String(user?.session_revoked_at || ''));
+    const issuedAt = Number((payload as any)?.iat || 0) * 1000;
+    if (Number.isFinite(revokedAt) && revokedAt > 0 && (!issuedAt || issuedAt + 1000 < revokedAt)) {
+      return c.json({ detail: 'Session expired. Please sign in again.', code: 'SESSION_REVOKED' }, 401);
+    }
+    const requestPath = new URL(c.req.url).pathname;
+    const deletionAccessAllowed = requestPath === '/api/auth/me'
+      || requestPath === '/api/account/restore'
+      || requestPath === '/api/account/deletion-status';
+    if (accountStatus === 'deletion_pending' && !deletionAccessAllowed) {
+      return c.json({ detail: 'This account is pending deletion.', code: 'ACCOUNT_DELETION_PENDING' }, 403);
+    }
     if (accountStatus === 'suspended') {
       const suspendedUntil = Date.parse(String(user?.suspended_until || ''));
       if (Number.isFinite(suspendedUntil) && suspendedUntil <= Date.now()) {
@@ -359,7 +375,7 @@ async function getOptionalUserId(c: any): Promise<string> {
     }
 
     const optionalStatus = String(user?.status || 'active');
-    if (!user || optionalStatus === 'banned' || optionalStatus === 'deleted') return '';
+    if (!user || optionalStatus === 'banned' || optionalStatus === 'deleted' || optionalStatus === 'deletion_pending') return '';
     if (optionalStatus === 'suspended') {
       const suspendedUntil = Date.parse(String(user?.suspended_until || ''));
       if (!Number.isFinite(suspendedUntil) || suspendedUntil > Date.now()) return '';
@@ -373,6 +389,7 @@ async function getOptionalUserId(c: any): Promise<string> {
   } catch {
     try {
       const resolved = await resolveSupabaseSessionUser(c, token);
+      if (['banned', 'deleted', 'deletion_pending'].includes(String(resolved.user?.status || 'active'))) return '';
       c.set('jwtPayload', resolved.payload);
       return resolved.userId;
     } catch {
@@ -385,6 +402,7 @@ async function createToken(userId: string, secret: string): Promise<string> {
   const { SignJWT } = await import('jose');
   return new SignJWT({ sub: userId })
     .setProtectedHeader({ alg: 'HS256' })
+    .setIssuedAt()
     .setExpirationTime('30d')
     .sign(new TextEncoder().encode(secret));
 }
@@ -549,7 +567,6 @@ let audioSchemaReady = false;
 let postEditorSchemaReady = false;
 let recommendationSchemaReady = false;
 let aiMusicSchemaReady = false;
-let notesSchemaReady = false;
 let peopleSchemaReady = false;
 let reliabilitySchemaReady = false;
 let walletSchemaReady = false;
@@ -564,6 +581,7 @@ let locationSchemaReady = false;
 let statusThoughtSchemaReady = false;
 let statusLikeSchemaReady = false;
 let mediaModerationSchemaReady = false;
+let accountDeletionSchemaReady = false;
 
 function normalizeSchemaSql(statement: string): string {
   return statement.replace(/\s+/g, ' ').trim().replace(/;$/, '');
@@ -930,10 +948,6 @@ async function ensurePostEditorSchema(db: D1Database) {
     'ALTER TABLE posts ADD COLUMN saves_count INTEGER DEFAULT 0',
     'ALTER TABLE posts ADD COLUMN shares_count INTEGER DEFAULT 0',
     'ALTER TABLE posts ADD COLUMN views_count INTEGER DEFAULT 0',
-    "ALTER TABLE posts ADD COLUMN note_font_style TEXT DEFAULT ''",
-    "ALTER TABLE posts ADD COLUMN note_background_style TEXT DEFAULT ''",
-    "ALTER TABLE posts ADD COLUMN note_text_color TEXT DEFAULT ''",
-    "ALTER TABLE posts ADD COLUMN note_alignment TEXT DEFAULT ''",
     'CREATE INDEX IF NOT EXISTS idx_posts_type_created ON posts(post_type, created_at DESC)',
   ];
 
@@ -1152,86 +1166,6 @@ async function ensureAiMusicSchema(db: D1Database) {
   }
 
   aiMusicSchemaReady = true;
-}
-
-async function ensureNotesSchema(db: D1Database) {
-  if (notesSchemaReady) return;
-
-  const statements = [
-    `CREATE TABLE IF NOT EXISTS notes (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      body TEXT NOT NULL,
-      note_type TEXT DEFAULT 'thought',
-      mood TEXT DEFAULT 'soft',
-      color TEXT DEFAULT '#F6E7D7',
-      media_url TEXT DEFAULT '',
-      media_type TEXT DEFAULT '',
-      anonymous INTEGER DEFAULT 0,
-      status TEXT DEFAULT 'active',
-      reactions_count INTEGER DEFAULT 0,
-      comments_count INTEGER DEFAULT 0,
-      saves_count INTEGER DEFAULT 0,
-      shares_count INTEGER DEFAULT 0,
-      reports_count INTEGER DEFAULT 0,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    )`,
-    `CREATE TABLE IF NOT EXISTS note_interactions (
-      id TEXT PRIMARY KEY,
-      note_id TEXT NOT NULL,
-      user_id TEXT NOT NULL,
-      kind TEXT NOT NULL,
-      value TEXT DEFAULT '',
-      created_at TEXT NOT NULL,
-      UNIQUE(note_id, user_id, kind)
-    )`,
-    `CREATE TABLE IF NOT EXISTS note_comments (
-      id TEXT PRIMARY KEY,
-      note_id TEXT NOT NULL,
-      user_id TEXT NOT NULL,
-      parent_id TEXT DEFAULT '',
-      body TEXT NOT NULL,
-      likes_count INTEGER DEFAULT 0,
-      status TEXT DEFAULT 'active',
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    )`,
-    `CREATE TABLE IF NOT EXISTS note_comment_likes (
-      id TEXT PRIMARY KEY,
-      comment_id TEXT NOT NULL,
-      user_id TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      UNIQUE(comment_id, user_id)
-    )`,
-    `CREATE TABLE IF NOT EXISTS note_reports (
-      id TEXT PRIMARY KEY,
-      note_id TEXT NOT NULL,
-      reporter_id TEXT NOT NULL,
-      reason TEXT DEFAULT '',
-      details TEXT DEFAULT '',
-      created_at TEXT NOT NULL,
-      UNIQUE(note_id, reporter_id)
-    )`,
-    "ALTER TABLE notes ADD COLUMN media_url TEXT DEFAULT ''",
-    "ALTER TABLE notes ADD COLUMN media_type TEXT DEFAULT ''",
-    'CREATE INDEX IF NOT EXISTS idx_notes_status_created ON notes(status, created_at)',
-    'CREATE INDEX IF NOT EXISTS idx_notes_user_created ON notes(user_id, created_at)',
-    'CREATE INDEX IF NOT EXISTS idx_note_interactions_user ON note_interactions(user_id, kind, created_at)',
-    'CREATE INDEX IF NOT EXISTS idx_note_comments_note ON note_comments(note_id, created_at)',
-    'CREATE INDEX IF NOT EXISTS idx_note_comment_likes_comment ON note_comment_likes(comment_id, created_at)',
-    'CREATE INDEX IF NOT EXISTS idx_note_reports_note ON note_reports(note_id, created_at)',
-  ];
-
-  for (const statement of statements) {
-    try {
-      await runSchemaStatement(db, statement);
-    } catch (error: any) {
-      if (!isIgnorableSchemaError(error, statement)) throw error;
-    }
-  }
-
-  notesSchemaReady = true;
 }
 
 async function ensurePeopleSchema(db: D1Database) {
@@ -1756,6 +1690,66 @@ async function ensureProductionReadinessSchema(db: D1Database) {
   productionReadinessSchemaReady = true;
 }
 
+async function ensureAccountDeletionSchema(db: D1Database) {
+  if (accountDeletionSchemaReady) return;
+  await ensureGovernanceSchema(db);
+  await ensureProductionReadinessSchema(db);
+
+  const statements = [
+    "ALTER TABLE users ADD COLUMN deletion_requested_at TEXT",
+    "ALTER TABLE users ADD COLUMN deletion_scheduled_at TEXT",
+    "ALTER TABLE users ADD COLUMN deleted_at TEXT",
+    "ALTER TABLE users ADD COLUMN session_revoked_at TEXT",
+    `CREATE TABLE IF NOT EXISTS account_identities (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      provider_user_id TEXT NOT NULL,
+      email_hash TEXT DEFAULT '',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(provider, provider_user_id)
+    )`,
+    `CREATE TABLE IF NOT EXISTS account_deletion_events (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      actor_user_id TEXT DEFAULT '',
+      reason TEXT DEFAULT '',
+      metadata TEXT DEFAULT '{}',
+      request_id TEXT DEFAULT '',
+      created_at TEXT NOT NULL
+    )`,
+    `CREATE TABLE IF NOT EXISTS deleted_account_safety_records (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      email_hash TEXT DEFAULT '',
+      provider TEXT DEFAULT '',
+      provider_user_id_hash TEXT DEFAULT '',
+      status_at_deletion TEXT DEFAULT '',
+      reason TEXT DEFAULT '',
+      created_at TEXT NOT NULL
+    )`,
+    'CREATE INDEX IF NOT EXISTS idx_users_deletion_pending ON users(status, deletion_scheduled_at)',
+    'CREATE INDEX IF NOT EXISTS idx_account_identities_user ON account_identities(user_id)',
+    'CREATE INDEX IF NOT EXISTS idx_account_identities_email_hash ON account_identities(email_hash)',
+    'CREATE INDEX IF NOT EXISTS idx_account_deletion_events_user ON account_deletion_events(user_id, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_deleted_account_safety_email ON deleted_account_safety_records(email_hash)',
+  ];
+
+  for (const statement of statements) {
+    try {
+      await runSchemaStatement(db, statement);
+    } catch (error: any) {
+      if (!isIgnorableSchemaError(error, statement)) {
+        throw error;
+      }
+    }
+  }
+
+  accountDeletionSchemaReady = true;
+}
+
 async function ensureMediaModerationSchema(db: D1Database) {
   if (mediaModerationSchemaReady) return;
 
@@ -1990,12 +1984,12 @@ function normalizeVisibility(value: unknown): PostVisibility {
 }
 
 function visibleAuthorWhere(alias = 'u'): string {
-  return `(${alias}.id = ? OR COALESCE(${alias}.is_private, 0) = 0 OR EXISTS (SELECT 1 FROM friendships f WHERE f.user_id = ? AND f.friend_id = ${alias}.id))
+  return `COALESCE(${alias}.status, 'active') = 'active' AND (${alias}.id = ? OR COALESCE(${alias}.is_private, 0) = 0 OR EXISTS (SELECT 1 FROM friendships f WHERE f.user_id = ? AND f.friend_id = ${alias}.id))
     AND NOT EXISTS (SELECT 1 FROM blocks b WHERE (b.blocker_id = ? AND b.blocked_id = ${alias}.id) OR (b.blocker_id = ${alias}.id AND b.blocked_id = ?))`;
 }
 
 function visibleStatusWhere(userAlias = 'u', statusAlias = 's'): string {
-  return `(${statusAlias}.user_id = ? OR (COALESCE(${statusAlias}.visibility, 'public') = 'public' AND COALESCE(${userAlias}.is_private, 0) = 0) OR EXISTS (SELECT 1 FROM friendships f WHERE f.user_id = ? AND f.friend_id = ${statusAlias}.user_id))`;
+  return `COALESCE(${userAlias}.status, 'active') = 'active' AND (${statusAlias}.user_id = ? OR (COALESCE(${statusAlias}.visibility, 'public') = 'public' AND COALESCE(${userAlias}.is_private, 0) = 0) OR EXISTS (SELECT 1 FROM friendships f WHERE f.user_id = ? AND f.friend_id = ${statusAlias}.user_id))`;
 }
 
 function visiblePostWhere(userAlias = 'u', postAlias = 'p'): string {
@@ -2015,7 +2009,7 @@ function visiblePostBindValues(userId: string): string[] {
 }
 
 function publicPostWhere(userAlias = 'u', postAlias = 'p'): string {
-  return `COALESCE(${postAlias}.status, 'active') != 'removed' AND ${approvedPostModerationWhere(postAlias)} AND COALESCE(${userAlias}.is_private, 0) = 0 AND COALESCE(${postAlias}.visibility, 'public') = 'public'`;
+  return `COALESCE(${postAlias}.status, 'active') != 'removed' AND ${approvedPostModerationWhere(postAlias)} AND COALESCE(${userAlias}.status, 'active') = 'active' AND COALESCE(${userAlias}.is_private, 0) = 0 AND COALESCE(${postAlias}.visibility, 'public') = 'public'`;
 }
 
 function approvedPostModerationWhere(postAlias = 'p'): string {
@@ -2899,7 +2893,7 @@ async function validateDirectMessagePeer(c: any, currentUserId: string, peerId: 
   if (!peerId || peerId === currentUserId) {
     return c.json({ detail: 'Choose a valid recipient.' }, 400);
   }
-  const peer = await c.env.DB.prepare('SELECT id FROM users WHERE id = ?').bind(peerId).first();
+  const peer = await c.env.DB.prepare("SELECT id FROM users WHERE id = ? AND COALESCE(status, 'active') = 'active'").bind(peerId).first();
   if (!peer) return c.json({ detail: 'Recipient not found.' }, 404);
   if (await usersAreBlocked(c.env.DB, currentUserId, peerId)) {
     await logSecurityEvent(c, 'blocked_message_access_denied', currentUserId, { peer_id: peerId });
@@ -3405,11 +3399,7 @@ async function resolveReportTarget(c: any, reporterId: string, type: string, rep
       return { ok: true, contentId: row.id, targetOwnerUserId: row.user_id };
     }
     if (type === 'note') {
-      await ensureNotesSchema(c.env.DB);
-      const row: any = await c.env.DB.prepare("SELECT id, user_id FROM notes WHERE id = ? AND COALESCE(status, 'active') = 'active' LIMIT 1").bind(reportedId).first();
-      if (!row) return { ok: false, status: 404, detail: 'Reported note was not found.' };
-      if (row.user_id === reporterId) return { ok: false, status: 400, detail: 'You cannot report your own note.' };
-      return { ok: true, contentId: row.id, targetOwnerUserId: row.user_id };
+      return { ok: false, status: 410, detail: 'Notes are no longer supported.' };
     }
     if (type === 'music') {
       await ensureAiMusicSchema(c.env.DB);
@@ -3626,8 +3616,8 @@ function sanitizeMediaDimensions(value: unknown): any[] {
 
 function normalizeRecommendationCategory(value: unknown): string {
   const clean = String(value || '').trim().toLowerCase().replace(/[^a-z0-9 _-]/g, '').replace(/\s+/g, ' ');
-  const allowed = new Set(['notes', 'vibe', 'music', 'people', 'artist', 'movies', 'books', 'artists', 'videos', 'podcasts', 'places', 'apps', 'other']);
-  if (clean === 'note' || clean === 'thought' || clean === 'poem') return 'notes';
+  const allowed = new Set(['vibe', 'music', 'people', 'artist', 'movies', 'books', 'artists', 'videos', 'podcasts', 'places', 'apps', 'other']);
+  if (clean === 'note' || clean === 'thought' || clean === 'poem') return 'other';
   if (clean === 'vibes' || clean === 'mood') return 'vibe';
   if (clean === 'new' || clean === 'article' || clean === 'articles') return 'other';
   if (clean === 'movie' || clean === 'film') return 'movies';
@@ -3790,32 +3780,6 @@ function publicRecommendationPayload(recommendation: any) {
   };
 }
 
-const NOTE_TYPES = new Set(['thought', 'feeling', 'advice', 'confession', 'question', 'quote', 'memory', 'mood', 'journal']);
-const NOTE_MOODS: Record<string, string> = {
-  soft: '#F6E7D7',
-  calm: '#E7F1DF',
-  blue: '#DCEAF8',
-  love: '#F8DDE7',
-  night: '#E7E1F5',
-  gold: '#F7E7B7',
-  green: '#DFF0D8',
-  gray: '#ECEBE6',
-};
-
-function normalizeNoteType(value: unknown): string {
-  const clean = String(value || '').trim().toLowerCase().replace(/[^a-z0-9 _-]/g, '').replace(/\s+/g, ' ');
-  if (clean === 'late night thoughts') return 'thought';
-  if (clean === 'anonymous feelings') return 'feeling';
-  if (clean === 'daily mood') return 'mood';
-  return NOTE_TYPES.has(clean) ? clean : 'thought';
-}
-
-function normalizeNoteMood(value: unknown): { mood: string; color: string } {
-  const clean = String(value || '').trim().toLowerCase().replace(/[^a-z0-9 _-]/g, '').replace(/\s+/g, ' ');
-  const mood = NOTE_MOODS[clean] ? clean : 'soft';
-  return { mood, color: NOTE_MOODS[mood] };
-}
-
 function moderateCommunityText(value: string): { ok: boolean; detail?: string } {
   const text = String(value || '').trim();
   if (!text) return { ok: false, detail: 'Write something first.' };
@@ -3834,84 +3798,6 @@ function moderateCommunityText(value: string): { ok: boolean; detail?: string } 
     return { ok: false, detail: 'That needs moderation review before it can be posted.' };
   }
   return { ok: true };
-}
-
-const NOTE_FONT_STYLES = new Set([
-  'clean_bold',
-  'soft_serif',
-  'handwritten',
-  'typewriter',
-  'marker',
-  'minimal',
-  'magazine',
-]);
-
-const NOTE_BACKGROUND_STYLES = new Set([
-  'white_paper',
-  'warm_cream',
-  'soft_pink',
-  'sky_blue',
-  'pale_green',
-  'black_card',
-  'notebook_paper',
-]);
-
-const NOTE_ALIGNMENTS = new Set(['left', 'center', 'right']);
-
-function normalizeNoteFontStyle(value: unknown): string {
-  const clean = cleanText(value, 40).toLowerCase();
-  return NOTE_FONT_STYLES.has(clean) ? clean : 'clean_bold';
-}
-
-function normalizeNoteBackgroundStyle(value: unknown): string {
-  const clean = cleanText(value, 40).toLowerCase();
-  return NOTE_BACKGROUND_STYLES.has(clean) ? clean : 'white_paper';
-}
-
-function normalizeNoteTextColor(value: unknown, backgroundStyle: string): string {
-  const clean = cleanText(value, 20).toUpperCase();
-  if (/^#[0-9A-F]{6}$/.test(clean)) return clean;
-  return backgroundStyle === 'black_card' ? '#FFFFFF' : '#050505';
-}
-
-function normalizeNoteAlignment(value: unknown): string {
-  const clean = cleanText(value, 20).toLowerCase();
-  return NOTE_ALIGNMENTS.has(clean) ? clean : 'left';
-}
-
-function publicNotePayload(row: any, opts: { reacted?: boolean; saved?: boolean } = {}) {
-  const anonymous = Number(row.anonymous || 0) === 1;
-  return {
-    id: row.id,
-    body: row.body || '',
-    note_type: row.note_type || 'thought',
-    mood: row.mood || 'soft',
-    color: row.color || NOTE_MOODS.soft,
-    media_url: row.media_url || '',
-    media_type: row.media_type || '',
-    anonymous,
-    status: row.status || 'active',
-    reactions_count: Number(row.reactions_count || 0),
-    comments_count: Number(row.comments_count || 0),
-    saves_count: Number(row.saves_count || 0),
-    shares_count: Number(row.shares_count || 0),
-    reports_count: Number(row.reports_count || 0),
-    created_at: row.created_at,
-    updated_at: row.updated_at,
-    reacted: !!opts.reacted || Number(row.reacted || 0) === 1,
-    saved: !!opts.saved || Number(row.saved || 0) === 1,
-    user: anonymous ? {
-      id: '',
-      username: 'anonymous',
-      full_name: 'Anonymous',
-      profile_image: '',
-    } : {
-      id: row.user_id,
-      username: row.user_username || '',
-      full_name: row.user_full_name || '',
-      profile_image: row.user_profile_image || '',
-    },
-  };
 }
 
 function publicPeoplePayload(row: any, opts: { followed?: boolean; saved?: boolean } = {}) {
@@ -4721,7 +4607,7 @@ function maxPostCounterAfterToggle(current: unknown, enabled: boolean, changed: 
 }
 
 function feedPhotoPostsOnly(posts: any[]): any[] {
-  return posts.filter((post) => !postContainsVideoMedia(post));
+  return posts.filter((post) => !postContainsVideoMedia(post) && String(post?.post_type || '').toLowerCase() !== 'note');
 }
 
 function feedPhotoPostWhere(postAlias = 'p'): string {
@@ -4742,6 +4628,7 @@ function feedPhotoPostWhere(postAlias = 'p'): string {
     "'%.m3u8%'",
   ];
   const conditions = [
+    `${postType} != 'note'`,
     ...videoNeedles.map((needle) => `${postType} NOT LIKE ${needle}`),
     ...videoNeedles.map((needle) => `${mediaTypes} NOT LIKE ${needle}`),
     ...videoNeedles.slice(1).map((needle) => `${image} NOT LIKE ${needle}`),
@@ -4937,10 +4824,6 @@ function postPayload(post: any, likedBy: string[] = [], env?: Env) {
     display_location_label: displayLocationLabel,
     display_location_source: displayLocationLabel ? normalizeDisplayLocationSource(post.display_location_source) : 'none',
     display_location_visibility: displayLocationVisibility,
-    note_font_style: normalizeNoteFontStyle(post.note_font_style),
-    note_background_style: normalizeNoteBackgroundStyle(post.note_background_style),
-    note_text_color: normalizeNoteTextColor(post.note_text_color, normalizeNoteBackgroundStyle(post.note_background_style)),
-    note_alignment: normalizeNoteAlignment(post.note_alignment),
     place_provider: cleanText(post.place_provider, 40),
     place_provider_id: cleanText(post.place_provider_id || post.place_id, 160),
     place_formatted_address: cleanText(post.place_formatted_address || post.location, 260),
@@ -5144,6 +5027,59 @@ function publicUserEmail(email: unknown): string {
   return isInternalOAuthEmail(email) ? '' : String(email || '');
 }
 
+async function privacyHash(c: any, value: unknown): Promise<string> {
+  const clean = String(value || '').trim().toLowerCase();
+  if (!clean) return '';
+  const pepper = String(c.env.ABUSE_SIGNAL_SECRET || c.env.JWT_SECRET || 'captro').trim();
+  return sha256Hex(`${pepper}:privacy:${clean}`);
+}
+
+function normalizeAuthProvider(value: unknown): 'email' | 'apple' | 'google' | 'phone' | 'supabase' {
+  const provider = String(value || '').trim().toLowerCase();
+  if (provider === 'apple' || provider === 'google' || provider === 'phone' || provider === 'supabase') return provider as any;
+  return 'email';
+}
+
+async function upsertAccountIdentity(
+  c: any,
+  input: { userId: string; provider: unknown; providerUserId?: unknown; email?: unknown }
+) {
+  const userId = String(input.userId || '').trim();
+  const provider = normalizeAuthProvider(input.provider);
+  const email = normalizeOptionalEmail(input.email);
+  const fallbackProviderId = provider === 'email' && email ? await privacyHash(c, email) : '';
+  const providerUserId = cleanText(input.providerUserId || fallbackProviderId, 240);
+  if (!userId || !providerUserId) return;
+  await ensureAccountDeletionSchema(c.env.DB);
+  const emailHash = email ? await privacyHash(c, email) : '';
+  const ts = now();
+  await c.env.DB.prepare(
+    `INSERT INTO account_identities (id, user_id, provider, provider_user_id, email_hash, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(provider, provider_user_id) DO UPDATE SET
+       user_id = excluded.user_id,
+       email_hash = COALESCE(NULLIF(excluded.email_hash, ''), account_identities.email_hash),
+       updated_at = excluded.updated_at`
+  ).bind(uuid(), userId, provider, providerUserId, emailHash, ts, ts).run();
+}
+
+async function writeAccountDeletionEvent(c: any, userId: string, eventType: string, metadata: Record<string, unknown> = {}, actorUserId = userId) {
+  await ensureAccountDeletionSchema(c.env.DB);
+  await c.env.DB.prepare(
+    `INSERT INTO account_deletion_events (id, user_id, event_type, actor_user_id, reason, metadata, request_id, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(
+    uuid(),
+    userId,
+    cleanText(eventType, 80),
+    publicId(actorUserId || '', 120),
+    cleanText((metadata.reason as any) || '', 180),
+    safeJsonState(scrubLogMetadata(metadata)),
+    cleanText(c.get?.('requestId') || '', 120),
+    now(),
+  ).run();
+}
+
 function safeDisplayNameFromEmail(email: unknown): string {
   const clean = normalizeOptionalEmail(email);
   if (!clean || isInternalOAuthEmail(clean) || isApplePrivateRelayEmail(clean)) return '';
@@ -5254,7 +5190,6 @@ const PREMIUM_PLAN = {
 };
 
 const PREMIUM_FEATURES = [
-  'Anonymous Notes up to 5 times per day',
   'Custom profile background',
   'Background music playback',
   'Premium profile badge',
@@ -5283,8 +5218,7 @@ function userHasActivePremium(user: any): boolean {
   return Number(user?.is_premium || 0) === 1 && premiumStatusIsActive(user?.premium_status || 'active', user?.premium_until);
 }
 
-function premiumPayloadFromUser(user: any, anonymousNotesUsed = 0) {
-  const used = Math.max(0, Number(anonymousNotesUsed || 0));
+function premiumPayloadFromUser(user: any) {
   return {
     is_premium: userHasActivePremium(user),
     plan: user?.premium_plan || '',
@@ -5294,22 +5228,8 @@ function premiumPayloadFromUser(user: any, anonymousNotesUsed = 0) {
     amount_cents: PREMIUM_PLAN.amount_cents,
     currency: PREMIUM_PLAN.currency,
     interval: PREMIUM_PLAN.interval,
-    anonymous_notes_used_today: used,
-    anonymous_notes_remaining_today: Math.max(0, 5 - used),
     features: PREMIUM_FEATURES,
   };
-}
-
-async function getAnonymousNotesUsedToday(db: D1Database, userId: string): Promise<number> {
-  await ensureNotesSchema(db);
-  const row: any = await db.prepare(
-    `SELECT COUNT(*) AS count
-     FROM notes
-     WHERE user_id = ? AND anonymous = 1
-       AND COALESCE(status, 'active') = 'active'
-       AND date(created_at) = date('now')`
-  ).bind(userId).first();
-  return Math.max(0, Number(row?.count || 0));
 }
 
 async function getPremiumUser(c: any, userId: string): Promise<any> {
@@ -6544,6 +6464,10 @@ function authUserPayload(user: any) {
     premium_plan: user.premium_plan || '',
     premium_until: user.premium_until || '',
     language: normalizeLanguage(user.language),
+    status: String(user.status || 'active'),
+    deletion_requested_at: user.deletion_requested_at || null,
+    deletion_scheduled_at: user.deletion_scheduled_at || null,
+    auth_provider: normalizeAuthProvider(user.oauth_provider || (user.phone ? 'phone' : 'email')),
   };
 }
 
@@ -6684,6 +6608,7 @@ async function findOrCreateOAuthUser(
         user = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(user.id).first();
       }
     }
+    await upsertAccountIdentity(c, { userId: user.id, provider, providerUserId: normalizedSubject, email: providedEmail || user.email });
     return user;
   }
 
@@ -6697,6 +6622,7 @@ async function findOrCreateOAuthUser(
       'UPDATE users SET oauth_provider = ?, oauth_subject = ?, full_name = CASE WHEN full_name = \'\' OR full_name IS NULL THEN ? ELSE full_name END, profile_image = CASE WHEN profile_image = \'\' OR profile_image IS NULL THEN ? ELSE profile_image END, updated_at = datetime(\'now\') WHERE id = ?'
     ).bind(provider, normalizedSubject, safeFullName || user.full_name || `${provider} user`, profileImage || '', user.id).run();
     const refreshed = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(user.id).first();
+    await upsertAccountIdentity(c, { userId: refreshed.id, provider, providerUserId: normalizedSubject, email: providedEmail || refreshed.email });
     return refreshed;
   }
 
@@ -6710,6 +6636,7 @@ async function findOrCreateOAuthUser(
   ).bind(id, normalizedEmail, username, safeName, generatedPasswordHash, profileImage || '', provider, normalizedSubject).run();
 
   await recordAbuseSignals(c, id, `${provider}_signup`, { username, display_name: safeName });
+  await upsertAccountIdentity(c, { userId: id, provider, providerUserId: normalizedSubject, email: providedEmail || normalizedEmail });
   return c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(id).first();
 }
 
@@ -6762,11 +6689,22 @@ async function findOrCreateSupabaseUser(c: any, payload: any, extras: any = {}) 
   const metadata = payload.user_metadata && typeof payload.user_metadata === 'object' ? payload.user_metadata : {};
   const safeFullName = normalizeOptionalName(extras.full_name || metadata.full_name || metadata.name || email.split('@')[0] || 'Flames User');
   const profileImage = cleanText(metadata.avatar_url || metadata.picture || extras.profile_image || '', 1000);
+  const authProvider = normalizeAuthProvider(extras.auth_provider || extras.provider || payload.app_metadata?.provider || payload.app_metadata?.providers?.[0] || metadata.provider || 'supabase');
+  const providerSubject = cleanText(extras.oauth_subject || extras.provider_user_id || (authProvider === 'supabase' ? supabaseUserId : ''), 240) || supabaseUserId;
 
   if (!supabaseUserId) throw new Error('SUPABASE_SUBJECT_MISSING');
 
   let user: any = await c.env.DB.prepare('SELECT * FROM users WHERE supabase_user_id = ?').bind(supabaseUserId).first();
-  if (user) return user;
+  if (user) {
+    if (['apple', 'google'].includes(authProvider) && providerSubject && (user.oauth_provider !== authProvider || user.oauth_subject !== providerSubject)) {
+      await c.env.DB.prepare('UPDATE users SET oauth_provider = ?, oauth_subject = ?, updated_at = datetime(\'now\') WHERE id = ?')
+        .bind(authProvider, providerSubject, user.id)
+        .run();
+      user = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(user.id).first();
+    }
+    await upsertAccountIdentity(c, { userId: user.id, provider: authProvider, providerUserId: providerSubject, email: email || user.email });
+    return user;
+  }
   if (!email) throw new Error('EMAIL_REQUIRED');
 
   user = await c.env.DB.prepare('SELECT * FROM users WHERE LOWER(email) = ?').bind(email).first();
@@ -6779,7 +6717,14 @@ async function findOrCreateSupabaseUser(c: any, payload: any, extras: any = {}) 
          updated_at = datetime('now')
        WHERE id = ?`
     ).bind(supabaseUserId, safeFullName, profileImage, user.id).run();
-    return c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(user.id).first();
+    if (['apple', 'google'].includes(authProvider) && providerSubject) {
+      await c.env.DB.prepare('UPDATE users SET oauth_provider = ?, oauth_subject = ?, updated_at = datetime(\'now\') WHERE id = ?')
+        .bind(authProvider, providerSubject, user.id)
+        .run();
+    }
+    const refreshed = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(user.id).first();
+    await upsertAccountIdentity(c, { userId: refreshed.id, provider: authProvider, providerUserId: providerSubject, email: email || refreshed.email });
+    return refreshed;
   }
 
   const idOwner = await c.env.DB.prepare('SELECT id FROM users WHERE id = ?').bind(supabaseUserId).first();
@@ -6789,9 +6734,10 @@ async function findOrCreateSupabaseUser(c: any, payload: any, extras: any = {}) 
 
   await c.env.DB.prepare(
     'INSERT INTO users (id, email, username, full_name, password_hash, profile_image, supabase_user_id, oauth_provider, oauth_subject) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
-  ).bind(id, email, username, safeFullName || username, generatedPasswordHash, profileImage, supabaseUserId, 'supabase', supabaseUserId).run();
+  ).bind(id, email, username, safeFullName || username, generatedPasswordHash, profileImage, supabaseUserId, authProvider, providerSubject).run();
 
   await recordAbuseSignals(c, id, 'supabase_signup', { username, display_name: safeFullName || username });
+  await upsertAccountIdentity(c, { userId: id, provider: authProvider, providerUserId: providerSubject, email });
   return c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(id).first();
 }
 
@@ -6810,6 +6756,7 @@ async function resolveSupabaseSessionUser(c: any, token: string) {
       userId,
       auth_provider: 'supabase',
       supabase_sub: String(supabasePayload.sub || ''),
+      iat: supabasePayload.iat,
       exp: supabasePayload.exp,
     },
     user,
@@ -7103,6 +7050,12 @@ async function issueCaptroTokenForSupabaseAccessToken(c: any, supabaseAccessToke
     await logSecurityEvent(c, 'login_banned_blocked', user.id, { provider: 'supabase' });
     throw new Error('ACCOUNT_DISABLED');
   }
+  await upsertAccountIdentity(c, {
+    userId: user.id,
+    provider: extras.auth_provider || extras.provider || payload.app_metadata?.provider || payload.app_metadata?.providers?.[0] || user.oauth_provider || 'supabase',
+    providerUserId: extras.oauth_subject || extras.provider_user_id || user.oauth_subject || payload.sub,
+    email: payload.email || user.email,
+  });
   const token = await createToken(user.id, getJwtSecret(c));
   runBackgroundTask(c, 'supabase_login_profile_write_through_failed', async () => {
     await syncSupabaseAuthMetadataForUser(c, user);
@@ -8245,10 +8198,18 @@ api.post('/auth/register', async (c) => {
     const usernameCheck = validateUsernameForAccount(username);
     if (!usernameCheck.ok) return c.json({ detail: usernameCheck.detail }, 400);
     const safeUsername = usernameCheck.username;
-    const existing = await c.env.DB.prepare('SELECT id FROM users WHERE LOWER(email) = ? OR LOWER(username) = ?')
+    await ensureAccountDeletionSchema(c.env.DB);
+    const existing: any = await c.env.DB.prepare('SELECT id, status, deletion_scheduled_at FROM users WHERE LOWER(email) = ? OR LOWER(username) = ?')
       .bind(email, safeUsername.toLowerCase()).first();
     if (existing) {
       await logSecurityEvent(c, 'signup_duplicate_blocked', '', { username: safeUsername });
+      if (String(existing.status || 'active') === 'deletion_pending') {
+        return c.json({
+          detail: 'This account is scheduled for deletion. Sign in to restore it.',
+          code: 'ACCOUNT_DELETION_PENDING',
+          deletion_scheduled_at: existing.deletion_scheduled_at || null,
+        }, 409);
+      }
       return c.json({ detail: 'Email or username already exists' }, 400);
     }
 
@@ -8276,6 +8237,7 @@ api.post('/auth/register', async (c) => {
     }
     // Security-sensitive: store only hashed abuse signals for admin review of possible ban evasion.
     await recordAbuseSignals(c, id, 'signup', { username: safeUsername, display_name: fullName });
+    await upsertAccountIdentity(c, { userId: id, provider: 'email', email });
     await logSecurityEvent(c, 'signup_created', id, { username: safeUsername });
     const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(id).first();
     runBackgroundTask(c, 'supabase_signup_metadata_sync_failed', async () => {
@@ -8341,6 +8303,7 @@ api.post('/auth/login', async (c) => {
       await logSecurityEvent(c, 'login_banned_blocked', user.id, {});
       return c.json({ detail: 'This account cannot be used.' }, 403);
     }
+    await upsertAccountIdentity(c, { userId: user.id, provider: 'email', email });
     // Auto-migrate legacy SHA-256 hash to bcrypt on successful login
     if (user.password_hash && !user.password_hash.startsWith('$2')) {
       try {
@@ -8519,6 +8482,8 @@ api.post('/auth/oauth/google', async (c) => {
         email: googleProfile.email,
         full_name: googleProfile.fullName,
         profile_image: googleProfile.profileImage,
+        auth_provider: 'google',
+        oauth_subject: googleProfile.subject,
       });
       return c.json({ access_token: session.token, token_type: 'bearer', user: authUserPayload(session.user) });
     } catch (error: any) {
@@ -8582,6 +8547,8 @@ api.post('/auth/oauth/apple', async (c) => {
       const session = await issueCaptroTokenForSupabaseAccessToken(c, supabaseSession.access_token, {
         email: appleProfile.email || clientEmail || internalOAuthEmail('apple', appleSubject),
         full_name: clientFullName || appleProfile.fullName || 'Apple User',
+        auth_provider: 'apple',
+        oauth_subject: appleSubject,
       });
       return c.json({ access_token: session.token, token_type: 'bearer', user: authUserPayload(session.user) });
     } catch (error: any) {
@@ -8633,6 +8600,204 @@ api.get('/auth/me', authMiddleware, async (c) => {
   if (!user) return c.json({ detail: 'User not found' }, 404);
   return c.json(authUserPayload(user));
 });
+
+async function accountIdentityMatches(c: any, user: any, provider: string, providerUserId: string): Promise<boolean> {
+  const cleanProvider = normalizeAuthProvider(provider);
+  const cleanProviderUserId = cleanText(providerUserId, 240);
+  if (!cleanProviderUserId) return false;
+  if (normalizeAuthProvider(user.oauth_provider) === cleanProvider && cleanText(user.oauth_subject, 240) === cleanProviderUserId) return true;
+  await ensureAccountDeletionSchema(c.env.DB);
+  const identity: any = await c.env.DB.prepare(
+    'SELECT id FROM account_identities WHERE user_id = ? AND provider = ? AND provider_user_id = ? LIMIT 1'
+  ).bind(user.id, cleanProvider, cleanProviderUserId).first();
+  return !!identity;
+}
+
+async function verifyAccountDeletionReauth(c: any, user: any, body: any): Promise<{ ok: boolean; detail?: string; provider: string }> {
+  const provider = normalizeAuthProvider(body.provider || user.oauth_provider || (user.phone ? 'phone' : 'email'));
+  const password = String(body.password || '').trim();
+  const idToken = String(body.id_token || body.idToken || '').trim();
+
+  if (provider === 'google') {
+    if (!idToken) return { ok: false, detail: 'Re-authenticate with Google before deleting this account.', provider };
+    const profile = await verifyGoogleIdToken(c, idToken);
+    if (!(await accountIdentityMatches(c, user, 'google', profile.subject))) {
+      return { ok: false, detail: 'Google account did not match this Captro account.', provider };
+    }
+    await upsertAccountIdentity(c, { userId: user.id, provider: 'google', providerUserId: profile.subject, email: profile.email || user.email });
+    return { ok: true, provider };
+  }
+
+  if (provider === 'apple') {
+    if (!idToken) return { ok: false, detail: 'Re-authenticate with Apple before deleting this account.', provider };
+    const profile = await verifyAppleIdToken(c, idToken);
+    if (!(await accountIdentityMatches(c, user, 'apple', profile.subject))) {
+      return { ok: false, detail: 'Apple account did not match this Captro account.', provider };
+    }
+    await upsertAccountIdentity(c, { userId: user.id, provider: 'apple', providerUserId: profile.subject, email: profile.email || user.email });
+    return { ok: true, provider };
+  }
+
+  if (!password) return { ok: false, detail: 'Enter your password to delete this account.', provider: 'email' };
+  const verified = await verifyPassword(password, String(user.password_hash || ''));
+  if (!verified) return { ok: false, detail: 'Password confirmation failed.', provider: 'email' };
+  await upsertAccountIdentity(c, { userId: user.id, provider: 'email', email: user.email });
+  return { ok: true, provider: 'email' };
+}
+
+async function revokeProviderAccessBestEffort(c: any, user: any, provider: string, body: any) {
+  const metadata: Record<string, unknown> = { provider };
+  try {
+    if (provider === 'google') {
+      const token = cleanText(body.access_token || body.accessToken || '', 4096);
+      if (token) {
+        await fetch(`https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(token)}`, { method: 'POST' }).catch(() => null);
+        metadata.google_revoke = 'requested';
+      } else {
+        metadata.google_revoke = 'token_not_available';
+      }
+    } else if (provider === 'apple') {
+      const token = cleanText(body.authorization_code || body.authorizationCode || body.refresh_token || body.refreshToken || '', 4096);
+      const clientId = cleanText(c.env.APPLE_OAUTH_CLIENT_ID || c.env.APPLE_OAUTH_AUDIENCE || c.env.APPLE_OAUTH_AUDIENCES?.split(',')?.[0] || '', 240);
+      const clientSecret = String(c.env.APPLE_REVOKE_CLIENT_SECRET || c.env.APPLE_OAUTH_CLIENT_SECRET || '').trim();
+      if (token && clientId && clientSecret) {
+        const form = new URLSearchParams();
+        form.set('client_id', clientId);
+        form.set('client_secret', clientSecret);
+        form.set('token', token);
+        form.set('token_type_hint', body.refresh_token || body.refreshToken ? 'refresh_token' : 'authorization_code');
+        await fetch('https://appleid.apple.com/auth/revoke', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: form.toString(),
+        }).catch(() => null);
+        metadata.apple_revoke = 'requested';
+      } else {
+        metadata.apple_revoke = token ? 'server_secret_not_configured' : 'token_not_available';
+      }
+    }
+    if (user.supabase_user_id) {
+      await updateSupabaseAuthUser(c, user.supabase_user_id, {
+        user_metadata: { captro_user_id: user.id, account_status: 'deletion_pending' },
+        app_metadata: { captro_account_status: 'deletion_pending' },
+      }).catch(() => {});
+      metadata.supabase_marked_pending = true;
+    }
+  } finally {
+    await writeAccountDeletionEvent(c, user.id, 'provider_revoke_best_effort', metadata);
+  }
+}
+
+async function requestAccountDeletion(c: any) {
+  const userId = getUserId(c);
+  const limited = await enforceRateLimit(c, 'account_delete', userId, 5, 86400);
+  if (limited) return limited;
+  const bodyTooLarge = rejectLargeRequest(c, 80_000);
+  if (bodyTooLarge) return bodyTooLarge;
+  await ensureAccountDeletionSchema(c.env.DB);
+  await ensurePremiumSchema(c.env.DB);
+  await ensureCommentSchema(c.env.DB);
+  const body: any = await c.req.json().catch(() => ({}));
+  if (String(body.confirmation || '').trim() !== 'DELETE') {
+    return c.json({ detail: 'Type DELETE to confirm account deletion.', code: 'confirmation_required' }, 400);
+  }
+
+  const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
+  if (!user) return c.json({ detail: 'User not found.' }, 404);
+  if (user.is_admin) return c.json({ detail: 'Admin accounts must be removed by another admin.' }, 403);
+  if (String(user.status || 'active') === 'deletion_pending') {
+    return c.json({
+      deletion_pending: true,
+      deletion_requested_at: user.deletion_requested_at || null,
+      deletion_scheduled_at: user.deletion_scheduled_at || null,
+    });
+  }
+  if (String(user.status || 'active') === 'deleted') {
+    return c.json({ detail: 'This account has already been deleted.', code: 'account_deleted' }, 410);
+  }
+
+  const reauth = await verifyAccountDeletionReauth(c, user, body);
+  if (!reauth.ok) return c.json({ detail: reauth.detail || 'Re-authentication is required.', code: 'reauth_required' }, 401);
+
+  const requestedAt = now();
+  const scheduledAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+  await c.env.DB.batch([
+    c.env.DB.prepare(
+      `UPDATE users SET
+         status = 'deletion_pending',
+         deletion_requested_at = ?,
+         deletion_scheduled_at = ?,
+         session_revoked_at = ?,
+         updated_at = datetime('now')
+       WHERE id = ?`
+    ).bind(requestedAt, scheduledAt, requestedAt, userId),
+    c.env.DB.prepare('UPDATE push_tokens SET is_active = 0, updated_at = ? WHERE user_id = ?').bind(requestedAt, userId),
+    c.env.DB.prepare('DELETE FROM notifications WHERE user_id = ? OR from_user_id = ?').bind(userId, userId),
+    c.env.DB.prepare('DELETE FROM likes WHERE user_id = ?').bind(userId),
+    c.env.DB.prepare('DELETE FROM saved_posts WHERE user_id = ?').bind(userId),
+    c.env.DB.prepare('DELETE FROM follows WHERE follower_id = ? OR following_id = ?').bind(userId, userId),
+    c.env.DB.prepare('DELETE FROM comment_likes WHERE user_id = ?').bind(userId),
+    c.env.DB.prepare("UPDATE comments SET status = 'hidden', hidden_at = ?, hidden_by_user_id = ?, removed_reason = 'Account deletion pending' WHERE user_id = ? AND COALESCE(status, 'active') NOT IN ('removed', 'hidden')")
+      .bind(requestedAt, userId, userId),
+  ]);
+  await Promise.all([
+    runDeletionStatement(c.env, 'DELETE FROM note_interactions WHERE user_id = ?', [userId]),
+    runDeletionStatement(c.env, 'DELETE FROM note_comment_likes WHERE user_id = ?', [userId]),
+    runDeletionStatement(c.env, "UPDATE notes SET status = 'hidden', updated_at = ? WHERE user_id = ? AND COALESCE(status, 'active') NOT IN ('removed', 'hidden')", [requestedAt, userId]),
+  ]);
+  await writeAccountDeletionEvent(c, userId, 'deletion_requested', {
+    provider: reauth.provider,
+    deletion_scheduled_at: scheduledAt,
+  });
+  await logSecurityEvent(c, 'account_deletion_requested', userId, { provider: reauth.provider });
+  runBackgroundTask(c, 'provider_revoke_best_effort_failed', async () => {
+    await revokeProviderAccessBestEffort(c, user, reauth.provider, body);
+  });
+  return c.json({
+    deletion_pending: true,
+    deletion_requested_at: requestedAt,
+    deletion_scheduled_at: scheduledAt,
+    detail: 'Account deletion is scheduled. Your public profile and content are hidden now.',
+  });
+}
+
+async function restorePendingAccount(c: any) {
+  const userId = getUserId(c);
+  await ensureAccountDeletionSchema(c.env.DB);
+  const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
+  if (!user) return c.json({ detail: 'User not found.' }, 404);
+  if (String(user.status || 'active') !== 'deletion_pending') {
+    return c.json({ restored: false, user: authUserPayload(user) });
+  }
+  await c.env.DB.prepare(
+    `UPDATE users SET
+       status = 'active',
+       deletion_requested_at = NULL,
+       deletion_scheduled_at = NULL,
+       session_revoked_at = NULL,
+       updated_at = datetime('now')
+     WHERE id = ? AND status = 'deletion_pending'`
+  ).bind(userId).run();
+  const restored: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
+  await writeAccountDeletionEvent(c, userId, 'deletion_restored', {});
+  await logSecurityEvent(c, 'account_deletion_restored', userId, {});
+  return c.json({ restored: true, user: authUserPayload(restored) });
+}
+
+api.get('/account/deletion-status', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  await ensureAccountDeletionSchema(c.env.DB);
+  const row: any = await c.env.DB.prepare('SELECT status, deletion_requested_at, deletion_scheduled_at FROM users WHERE id = ?').bind(userId).first();
+  return c.json({
+    status: row?.status || 'active',
+    deletion_pending: row?.status === 'deletion_pending',
+    deletion_requested_at: row?.deletion_requested_at || null,
+    deletion_scheduled_at: row?.deletion_scheduled_at || null,
+  });
+});
+
+api.post('/account/delete', authMiddleware, requestAccountDeletion);
+api.post('/account/restore', authMiddleware, restorePendingAccount);
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // USERS
@@ -8705,40 +8870,10 @@ api.put('/users/me', authMiddleware, async (c) => {
 });
 
 api.delete('/users/me', authMiddleware, async (c) => {
-  const userId = getUserId(c);
-  const limited = await enforceRateLimit(c, 'account_delete', userId, 3, 86400);
-  if (limited) return limited;
-  await ensureGovernanceSchema(c.env.DB);
-  await ensurePremiumSchema(c.env.DB);
-  const user: any = await c.env.DB.prepare('SELECT id, is_admin, supabase_user_id FROM users WHERE id = ?').bind(userId).first();
-  if (!user) return c.json({ detail: 'User not found.' }, 404);
-  if (user.is_admin) return c.json({ detail: 'Admin accounts must be removed by another admin.' }, 403);
-
-  const ts = now();
-  // Security-sensitive: soft-delete the account so moderation/audit records remain intact and unrelated data is not cascaded away.
-  await c.env.DB.prepare(
-    `UPDATE users SET
-       status = 'deleted',
-       email = ?,
-       username = ?,
-       full_name = 'Deleted user',
-       bio = '',
-       profile_image = '',
-       cover_image = '',
-       profile_background_image = '',
-       social_website = '',
-       social_tiktok = '',
-       social_instagram = '',
-       updated_at = datetime('now')
-     WHERE id = ?`
-  ).bind(`deleted_${userId}@deleted.flames-up.local`, `deleted_${userId.slice(0, 12)}`, userId).run();
-  await c.env.DB.prepare("UPDATE posts SET status = 'removed', removed_at = ?, removed_reason = 'Account deleted' WHERE user_id = ? AND COALESCE(status, 'active') != 'removed'")
-    .bind(ts, userId).run();
-  await logSecurityEvent(c, 'account_soft_deleted', userId, {});
-  runBackgroundTask(c, 'supabase_auth_delete_user_failed', async () => {
-    if (user.supabase_user_id) await deleteSupabaseAuthUser(c, user.supabase_user_id);
-  });
-  return c.json({ deleted: true, soft_deleted: true });
+  return c.json({
+    detail: 'Use POST /api/account/delete with DELETE confirmation and recent re-authentication.',
+    code: 'ACCOUNT_DELETE_REAUTH_REQUIRED',
+  }, 405);
 });
 
 api.put('/users/me/email', authMiddleware, async (c) => {
@@ -9027,7 +9162,9 @@ api.get('/users/search/:query', authMiddleware, async (c) => {
   if (limited) return limited;
   const q = cleanText(c.req.param('query'), 80);
   if (q.length < 2) return c.json([]);
-  const r = await c.env.DB.prepare('SELECT id, username, full_name, profile_image, bio FROM users WHERE username LIKE ? OR full_name LIKE ? LIMIT 20').bind(`%${q}%`, `%${q}%`).all();
+  const r = await c.env.DB.prepare(
+    "SELECT id, username, full_name, profile_image, bio FROM users WHERE COALESCE(status, 'active') = 'active' AND (username LIKE ? OR full_name LIKE ?) LIMIT 20"
+  ).bind(`%${q}%`, `%${q}%`).all();
   return c.json((r.results as any[]).map((user) => safeUserPayload(user)));
 });
 
@@ -9060,6 +9197,7 @@ api.get('/users/:userId', authMiddleware, async (c) => {
   const targetUserId = c.req.param('userId');
   const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(targetUserId).first();
   if (!user) return c.json({ detail: 'User not found' }, 404);
+  if (String(user.status || 'active') !== 'active') return c.json({ detail: 'User not found' }, 404);
   const safe = safeUserPayload(user);
   const follow: any = viewerId && viewerId !== targetUserId
     ? await c.env.DB.prepare('SELECT id FROM follows WHERE follower_id = ? AND following_id = ? LIMIT 1').bind(viewerId, targetUserId).first()
@@ -9099,7 +9237,7 @@ api.post('/users/:userId/follow', authMiddleware, async (c) => {
   if (limited) return limited;
   const body: any = await c.req.json().catch(() => ({}));
   const requested = optionalBoolean(body.following ?? body.followed ?? body.value);
-  const target: any = await c.env.DB.prepare('SELECT id FROM users WHERE id = ?').bind(targetId).first();
+  const target: any = await c.env.DB.prepare("SELECT id FROM users WHERE id = ? AND COALESCE(status, 'active') = 'active'").bind(targetId).first();
   if (!target) return c.json({ detail: 'User not found' }, 404);
   await ensureAbuseProtectionSchema(c.env.DB);
   const block: any = await c.env.DB.prepare('SELECT id FROM blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?) LIMIT 1')
@@ -9261,7 +9399,7 @@ api.get('/music/audius/search', async (c) => {
   }
 });
 
-// Server-side Giphy proxy for Notes GIF picking. The API key stays in Cloudflare secrets,
+// Server-side Giphy proxy. The API key stays in Cloudflare secrets,
 // never in the native app bundle or client code.
 api.get('/gifs/search', authMiddleware, async (c) => {
   try {
@@ -9951,7 +10089,9 @@ api.post('/posts', authMiddleware, async (c) => {
   const id = uuid();
   let postType = cleanText(b.post_type || b.postType || b.type || b.category || 'general', 50).toLowerCase() || 'general';
   if (postType === 'media') postType = 'general';
-  const isNotePost = postType === 'note';
+  if (postType === 'note') {
+    return c.json({ detail: 'Notes are no longer supported.', code: 'NOTES_RETIRED' }, 410);
+  }
   const placeProvider = normalizeAppleMapKitProvider(b.place_provider || b.provider) || (b.place_name ? 'apple_mapkit' : '');
   const placeProviderId = cleanText(b.place_provider_id || b.place_id, 160);
   const placeName = cleanText(b.place_name, 180);
@@ -9977,21 +10117,7 @@ api.post('/posts', authMiddleware, async (c) => {
   if (!displayLocationLabel) displayLocationVisibility = 'hidden';
   const visibility = normalizeVisibility(b.visibility);
   let postTitle = cleanText(b.title || b.headline, 180);
-  let postContent = cleanMultilineText(b.content || b.text || b.note_text || b.noteText, isNotePost ? 500 : 5000);
-  if (isNotePost) {
-    postTitle = '';
-    postContent = cleanMultilineText(postContent, 500).trim();
-    if (!postContent) {
-      return c.json({ detail: 'Write something first.', code: 'NOTE_EMPTY' }, 400);
-    }
-    const moderation = moderateCommunityText(postContent);
-    if (!moderation.ok) {
-      return c.json({
-        detail: 'This note needs review before it can be posted.',
-        code: 'NOTE_MODERATION_REJECTED',
-      }, 400);
-    }
-  }
+  let postContent = cleanMultilineText(b.content || b.text, 5000);
   let imageUrls = sanitizeMediaReferences(b.images, b.image);
   let primaryImage = safeMediaReference(b.image) || imageUrls[0] || null;
   let mediaTypes = sanitizeMediaTypes(b.media_types, imageUrls.length || (primaryImage ? 1 : 0));
@@ -10004,9 +10130,6 @@ api.post('/posts', authMiddleware, async (c) => {
     }, 400);
   }
   const mediaAssetIds = parseMediaAssetIds(b);
-  if (isNotePost && (imageUrls.length || mediaAssetIds.length)) {
-    return c.json({ detail: 'Notes cannot include media attachments.', code: 'NOTE_MEDIA_UNSUPPORTED' }, 400);
-  }
   const mediaApproval = await approvedMediaAssetsForPost(c, userId, mediaAssetIds, imageUrls);
   if (!mediaApproval.ok) {
     return c.json({ detail: mediaApproval.detail, code: mediaApproval.code }, mediaApproval.status as any);
@@ -10061,10 +10184,6 @@ api.post('/posts', authMiddleware, async (c) => {
   const audioStreamUrl = audioProvider ? cleanText(b.audio_stream_url, 2200) : '';
   const audioStartTime = audioProvider ? clampNumber(b.audio_start_time, 0, 60 * 60 * 6, 0) : 0;
   const audioDuration = audioProvider ? clampNumber(b.audio_duration, 5, 30, 15) : 0;
-  const noteFontStyle = isNotePost ? normalizeNoteFontStyle(b.note_font_style || b.noteFontStyle || b.font_style || b.fontStyle) : '';
-  const noteBackgroundStyle = isNotePost ? normalizeNoteBackgroundStyle(b.note_background_style || b.noteBackgroundStyle || b.background_style || b.backgroundStyle) : '';
-  const noteTextColor = isNotePost ? normalizeNoteTextColor(b.note_text_color || b.noteTextColor || b.text_color || b.textColor, noteBackgroundStyle) : '';
-  const noteAlignment = isNotePost ? normalizeNoteAlignment(b.note_alignment || b.noteAlignment || b.alignment) : '';
 
   if (audioProvider && !audioTrackId) {
     return c.json({ detail: 'Audio track id is required.' }, 400);
@@ -10080,7 +10199,7 @@ api.post('/posts', authMiddleware, async (c) => {
       `INSERT OR IGNORE INTO posts (
        id, user_id, title, content, image, images, media_types, media_backup_ids, media_dimensions, location,
        display_city, display_region, display_country, display_location_label, display_location_source, display_location_visibility,
-       post_type, note_font_style, note_background_style, note_text_color, note_alignment,
+       post_type,
        place_id, place_name, place_provider, place_provider_id, place_formatted_address, place_category, place_city, place_region, place_country,
        place_lat, place_lng, is_verified_checkin, visibility, moderation_status, moderation_media_ids, moderation_checked_at,
        editor_overlays, tagged_users,
@@ -10089,11 +10208,11 @@ api.post('/posts', authMiddleware, async (c) => {
        audio_provider, audio_track_id, audio_title, audio_artist, audio_artwork_url, audio_stream_url,
        audio_start_time, audio_duration, client_request_id
      )
-     VALUES (${Array(61).fill('?').join(', ')})`
+     VALUES (${Array(57).fill('?').join(', ')})`
     ).bind(id, userId, postTitle, postContent, primaryImage, JSON.stringify(imageUrls), JSON.stringify(mediaTypes),
     JSON.stringify(backupIds), JSON.stringify(mediaDimensions), location,
     displayCity, displayRegion, displayCountry, displayLocationLabel, displayLocationSource, displayLocationVisibility,
-    postType, noteFontStyle, noteBackgroundStyle, noteTextColor, noteAlignment,
+    postType,
     placeProviderId || null, placeName || null, placeProvider, placeProviderId, placeFormattedAddress, placeCategory, placeCity, placeRegion, placeCountry,
     placeLat, placeLng, isCheckin, visibility, 'approved', JSON.stringify(mediaAssetIds), now(),
     JSON.stringify(editorOverlays), JSON.stringify(taggedUsers),
@@ -10138,11 +10257,9 @@ api.post('/posts', authMiddleware, async (c) => {
     await mirrorLegacyUserToSupabase(c, userId);
     await mirrorLegacyPostToSupabase(c, id);
   });
-  if (!isNotePost) {
-    runBackgroundTask(c, 'post_category_refinement_failed', async () => {
-      await refinePostCategoryWithBackendAi(c, id);
-    });
-  }
+  runBackgroundTask(c, 'post_category_refinement_failed', async () => {
+    await refinePostCategoryWithBackendAi(c, id);
+  });
   if (visibility === 'public' || visibility === 'followers') {
     runBackgroundTask(c, 'post_follower_notifications_failed', async () => {
       const followers = await c.env.DB.prepare(
@@ -10182,8 +10299,7 @@ api.post('/posts', authMiddleware, async (c) => {
     display_city: displayCity, display_region: displayRegion, display_country: displayCountry,
     display_location_label: displayLocationLabel, display_location_source: displayLocationSource,
     display_location_visibility: displayLocationVisibility,
-    post_type: postType, note_font_style: noteFontStyle, note_background_style: noteBackgroundStyle,
-    note_text_color: noteTextColor, note_alignment: noteAlignment,
+    post_type: postType,
     place_id: placeProviderId, place_name: placeName,
     place_provider: placeProvider, place_provider_id: placeProviderId, place_formatted_address: placeFormattedAddress,
     place_category: placeCategory, place_city: placeCity, place_region: placeRegion, place_country: placeCountry,
@@ -10634,7 +10750,7 @@ api.get('/posts/:postId/comments', authMiddleware, async (c) => {
        JOIN users owner ON p.user_id = owner.id
        JOIN users u ON c.user_id = u.id
        LEFT JOIN comment_likes cl ON cl.comment_id = c.id AND cl.user_id = ?
-       WHERE c.post_id = ? AND COALESCE(c.status, 'active') NOT IN ('removed', 'hidden')`,
+       WHERE c.post_id = ? AND COALESCE(c.status, 'active') NOT IN ('removed', 'hidden') AND ${visibleAuthorWhere('u')}`,
       `AND ${visiblePostWhere('owner', 'p')}`,
       'ORDER BY c.pinned_at IS NULL, c.pinned_at DESC, COALESCE(c.parent_id, c.id), c.parent_id IS NOT NULL, c.created_at ASC',
       'LIMIT ?',
@@ -11120,6 +11236,7 @@ api.get('/conversations', authMiddleware, async (c) => {
     JOIN users u ON m.other_id = u.id
     LEFT JOIN user_presence up ON up.user_id = u.id
     WHERE m.rn = 1
+      AND COALESCE(u.status, 'active') = 'active'
       AND NOT EXISTS (
         SELECT 1 FROM blocks b
         WHERE (b.blocker_id = ? AND b.blocked_id = u.id)
@@ -12170,293 +12287,10 @@ api.post('/recommendations/:recommendationId/report', authMiddleware, async (c) 
   }
 });
 
-// Notes
-api.get('/notes', authMiddleware, async (c) => {
-  try {
-    await ensureNotesSchema(c.env.DB);
-    const userId = getUserId(c);
-    const limit = clampNumber(c.req.query('limit'), 5, 80, 36);
-    const type = normalizeNoteType(c.req.query('type') || '');
-    const rawType = cleanText(c.req.query('type'), 80).toLowerCase();
-    const binds: any[] = [userId, userId];
-    let where = "WHERE COALESCE(n.status, 'active') = 'active'";
-    if (rawType && rawType !== 'all') {
-      where += ' AND n.note_type = ?';
-      binds.push(type);
-    }
-    binds.push(limit);
-    const notesSql = `
-      SELECT n.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
-        EXISTS(SELECT 1 FROM note_interactions i WHERE i.note_id = n.id AND i.user_id = ? AND i.kind = 'reaction') AS reacted,
-        EXISTS(SELECT 1 FROM note_interactions i WHERE i.note_id = n.id AND i.user_id = ? AND i.kind = 'save') AS saved
-      FROM notes n
-      LEFT JOIN users u ON u.id = n.user_id
-      ${where}
-      ORDER BY n.created_at DESC
-      LIMIT ?
-    `;
-    const rows = await c.env.DB.prepare(notesSql).bind(...binds).all();
-    return c.json((rows.results as any[]).map((row) => publicNotePayload(row)));
-  } catch (error: any) {
-    console.error('Notes list failed:', getErrorCode(error), error?.message || error);
-    return c.json({ detail: 'Could not load notes.' }, 500);
-  }
-});
-
-api.get('/notes/:noteId', authMiddleware, async (c) => {
-  try {
-    await ensureNotesSchema(c.env.DB);
-    const userId = getUserId(c);
-    const noteId = cleanText(c.req.param('noteId'), 80);
-    const row: any = await c.env.DB.prepare(`
-      SELECT n.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
-        EXISTS(SELECT 1 FROM note_interactions i WHERE i.note_id = n.id AND i.user_id = ? AND i.kind = 'reaction') AS reacted,
-        EXISTS(SELECT 1 FROM note_interactions i WHERE i.note_id = n.id AND i.user_id = ? AND i.kind = 'save') AS saved
-      FROM notes n
-      LEFT JOIN users u ON u.id = n.user_id
-      WHERE n.id = ? AND COALESCE(n.status, 'active') = 'active'
-    `).bind(userId, userId, noteId).first();
-    if (!row) return c.json({ detail: 'Note not found.' }, 404);
-    return c.json(publicNotePayload(row));
-  } catch (error: any) {
-    console.error('Note detail failed:', getErrorCode(error), error?.message || error);
-    return c.json({ detail: 'Could not load note.' }, 500);
-  }
-});
-
-api.post('/notes', authMiddleware, async (c) => {
-  try {
-    const bodyTooLarge = rejectLargeRequest(c, 80_000);
-    if (bodyTooLarge) return bodyTooLarge;
-    await ensureNotesSchema(c.env.DB);
-    const userId = getUserId(c);
-    const limited = await enforceRateLimit(c, 'note_create', userId, 60, 60);
-    if (limited) return limited;
-    const body: any = await c.req.json().catch(() => ({}));
-    const noteBody = cleanText(body.body || body.text || body.content, 420);
-    const mediaUrl = safeMediaReference(body.media_url || body.image_url || body.image);
-    const mediaType = mediaUrl ? 'image' : '';
-    const moderation = moderateCommunityText(noteBody);
-    if (!moderation.ok) return c.json({ detail: moderation.detail || 'That note cannot be posted.' }, 400);
-    if (noteBody.length < 2 && !mediaUrl) return c.json({ detail: 'Add text or a photo first.' }, 400);
-    const noteType = normalizeNoteType(body.note_type || body.type);
-    const mood = normalizeNoteMood(body.mood || body.color);
-    const color = /^#[0-9a-f]{6}$/i.test(String(body.color || '')) ? String(body.color) : mood.color;
-    const anonymous = normalizeSqlBoolean(body.anonymous);
-    if (anonymous) {
-      await ensurePremiumSchema(c.env.DB);
-      const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
-      if (!userHasActivePremium(user)) {
-        return c.json({ detail: 'Anonymous Notes are a Premium feature.', code: 'PREMIUM_REQUIRED' }, 403);
-      }
-      const usedToday = await getAnonymousNotesUsedToday(c.env.DB, userId);
-      if (usedToday >= 5) {
-        return c.json({ detail: 'You used all 5 anonymous notes for today.', code: 'ANONYMOUS_NOTE_LIMIT' }, 429);
-      }
-    }
-    const ts = now();
-    const id = uuid();
-    await c.env.DB.prepare(
-      `INSERT INTO notes
-       (id, user_id, body, note_type, mood, color, media_url, media_type, anonymous, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`
-    ).bind(id, userId, noteBody, noteType, mood.mood, color, mediaUrl, mediaType, anonymous, ts, ts).run();
-    const row: any = await c.env.DB.prepare(`
-      SELECT n.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
-      FROM notes n LEFT JOIN users u ON u.id = n.user_id WHERE n.id = ?
-    `).bind(id).first();
-    return c.json(publicNotePayload(row), 201);
-  } catch (error: any) {
-    console.error('Note create failed:', getErrorCode(error), error?.message || error);
-    return c.json({ detail: 'Could not create note.' }, 500);
-  }
-});
-
-api.post('/notes/:noteId/interactions', authMiddleware, async (c) => {
-  try {
-    await ensureNotesSchema(c.env.DB);
-    const userId = getUserId(c);
-    const limited = await enforceRateLimit(c, 'note_interaction', userId, 300, 60);
-    if (limited) return limited;
-    const noteId = cleanText(c.req.param('noteId'), 80);
-    const body: any = await c.req.json().catch(() => ({}));
-    const kind = ['reaction', 'save', 'share'].includes(String(body.kind)) ? String(body.kind) : 'reaction';
-    const value = cleanText(body.value || (kind === 'reaction' ? 'heart' : ''), 40);
-    const note: any = await c.env.DB.prepare("SELECT id FROM notes WHERE id = ? AND COALESCE(status, 'active') = 'active'").bind(noteId).first();
-    if (!note) return c.json({ detail: 'Note not found.' }, 404);
-    const existing: any = await c.env.DB.prepare('SELECT id FROM note_interactions WHERE note_id = ? AND user_id = ? AND kind = ?')
-      .bind(noteId, userId, kind)
-      .first();
-    if (existing && kind !== 'share') {
-      await c.env.DB.prepare('DELETE FROM note_interactions WHERE id = ?').bind(existing.id).run();
-      const column = kind === 'save' ? 'saves_count' : 'reactions_count';
-      const decrementNoteSql = `UPDATE notes SET ${column} = MAX(0, COALESCE(${column}, 0) - 1), updated_at = ? WHERE id = ?`;
-      await c.env.DB.prepare(decrementNoteSql).bind(now(), noteId).run();
-      return c.json({ active: false, kind });
-    }
-    if (!existing || kind === 'share') {
-      await c.env.DB.prepare('INSERT OR IGNORE INTO note_interactions (id, note_id, user_id, kind, value, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-        .bind(uuid(), noteId, userId, kind, value, now())
-        .run();
-      const column = kind === 'save' ? 'saves_count' : kind === 'share' ? 'shares_count' : 'reactions_count';
-      const incrementNoteSql = `UPDATE notes SET ${column} = COALESCE(${column}, 0) + 1, updated_at = ? WHERE id = ?`;
-      await c.env.DB.prepare(incrementNoteSql).bind(now(), noteId).run();
-    }
-    return c.json({ active: true, kind });
-  } catch (error: any) {
-    console.error('Note interaction failed:', getErrorCode(error), error?.message || error);
-    return c.json({ detail: 'Could not update note.' }, 500);
-  }
-});
-
-api.get('/notes/:noteId/comments', authMiddleware, async (c) => {
-  try {
-    await ensureNotesSchema(c.env.DB);
-    const noteId = cleanText(c.req.param('noteId'), 80);
-    const rows = await c.env.DB.prepare(`
-      SELECT nc.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
-             EXISTS(SELECT 1 FROM note_comment_likes ncl WHERE ncl.comment_id = nc.id AND ncl.user_id = ?) AS liked_by_me
-      FROM note_comments nc
-      LEFT JOIN users u ON u.id = nc.user_id
-      WHERE nc.note_id = ? AND COALESCE(nc.status, 'active') = 'active'
-      ORDER BY nc.created_at ASC
-      LIMIT 80
-    `).bind(getUserId(c), noteId).all();
-    return c.json((rows.results as any[]).map((comment) => ({
-      id: comment.id,
-      body: comment.body,
-      parent_id: comment.parent_id || '',
-      likes_count: Number(comment.likes_count || 0),
-      liked_by_me: !!comment.liked_by_me,
-      created_at: comment.created_at,
-      user: {
-        id: comment.user_id,
-        username: comment.user_username || '',
-        full_name: comment.user_full_name || '',
-        profile_image: comment.user_profile_image || '',
-      },
-    })));
-  } catch (error: any) {
-    console.error('Note comments failed:', getErrorCode(error), error?.message || error);
-    return c.json({ detail: 'Could not load note comments.' }, 500);
-  }
-});
-
-api.post('/notes/:noteId/comments', authMiddleware, async (c) => {
-  try {
-    const bodyTooLarge = rejectLargeRequest(c, 80_000);
-    if (bodyTooLarge) return bodyTooLarge;
-    await ensureNotesSchema(c.env.DB);
-    const userId = getUserId(c);
-    const limited = await enforceRateLimit(c, 'note_comment', userId, 90, 60);
-    if (limited) return limited;
-    const noteId = cleanText(c.req.param('noteId'), 80);
-    const body: any = await c.req.json().catch(() => ({}));
-    const commentBody = cleanText(body.body || body.text, 500);
-    const moderation = moderateCommunityText(commentBody);
-    if (!moderation.ok) return c.json({ detail: moderation.detail || 'That comment cannot be posted.' }, 400);
-    const note: any = await c.env.DB.prepare("SELECT id FROM notes WHERE id = ? AND COALESCE(status, 'active') = 'active'").bind(noteId).first();
-    if (!note) return c.json({ detail: 'Note not found.' }, 404);
-    const ts = now();
-    const id = uuid();
-    await c.env.DB.prepare('INSERT INTO note_comments (id, note_id, user_id, parent_id, body, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-      .bind(id, noteId, userId, cleanText(body.parent_id, 80), commentBody, 'active', ts, ts)
-      .run();
-    await c.env.DB.prepare('UPDATE notes SET comments_count = COALESCE(comments_count, 0) + 1, updated_at = ? WHERE id = ?').bind(ts, noteId).run();
-    return c.json({ id, body: commentBody, created_at: ts }, 201);
-  } catch (error: any) {
-    console.error('Note comment create failed:', getErrorCode(error), error?.message || error);
-    return c.json({ detail: 'Could not add comment.' }, 500);
-  }
-});
-
-api.post('/note-comments/:commentId/like', authMiddleware, async (c) => {
-  try {
-    await ensureNotesSchema(c.env.DB);
-    const userId = getUserId(c);
-    const limited = await enforceRateLimit(c, 'note_comment_like', userId, 300, 60);
-    if (limited) return limited;
-    const commentId = cleanText(c.req.param('commentId'), 80);
-    const body: any = await c.req.json().catch(() => ({}));
-    const requested = optionalBoolean(body.liked ?? body.like ?? body.value);
-    const comment: any = await c.env.DB.prepare(
-      "SELECT id, likes_count FROM note_comments WHERE id = ? AND COALESCE(status, 'active') = 'active'"
-    ).bind(commentId).first();
-    if (!comment) return c.json({ detail: 'Comment not found.' }, 404);
-
-    let nextLiked = requested;
-    if (nextLiked === null) {
-      const existing: any = await c.env.DB.prepare('SELECT id FROM note_comment_likes WHERE user_id = ? AND comment_id = ?')
-        .bind(userId, commentId)
-        .first();
-      nextLiked = !existing;
-    }
-
-    const ts = now();
-    if (nextLiked) {
-      const inserted = await c.env.DB.prepare('INSERT OR IGNORE INTO note_comment_likes (id, comment_id, user_id, created_at) VALUES (?, ?, ?, ?)')
-        .bind(uuid(), commentId, userId, ts)
-        .run();
-      if (d1Changes(inserted) > 0) {
-        await c.env.DB.prepare('UPDATE note_comments SET likes_count = COALESCE(likes_count, 0) + 1, updated_at = ? WHERE id = ?')
-          .bind(ts, commentId)
-          .run();
-      }
-    } else {
-      const deleted = await c.env.DB.prepare('DELETE FROM note_comment_likes WHERE user_id = ? AND comment_id = ?')
-        .bind(userId, commentId)
-        .run();
-      if (d1Changes(deleted) > 0) {
-        await c.env.DB.prepare('UPDATE note_comments SET likes_count = MAX(0, COALESCE(likes_count, 0) - 1), updated_at = ? WHERE id = ?')
-          .bind(ts, commentId)
-          .run();
-      }
-    }
-
-    const row: any = await c.env.DB.prepare('SELECT likes_count FROM note_comments WHERE id = ?').bind(commentId).first();
-    return c.json({ liked: !!nextLiked, likes_count: Number(row?.likes_count || 0) });
-  } catch (error: any) {
-    console.error('Note comment like failed:', getErrorCode(error), error?.message || error);
-    return c.json({ detail: 'Could not update comment like.' }, 500);
-  }
-});
-
-api.post('/notes/:noteId/report', authMiddleware, async (c) => {
-  try {
-    await ensureNotesSchema(c.env.DB);
-    await ensureGovernanceSchema(c.env.DB);
-    const userId = getUserId(c);
-    const limited = await enforceRateLimit(c, 'note_report', userId, 12, 60);
-    if (limited) return limited;
-    const noteId = cleanText(c.req.param('noteId'), 80);
-    const body: any = await c.req.json().catch(() => ({}));
-    const note: any = await c.env.DB.prepare('SELECT id, user_id FROM notes WHERE id = ?').bind(noteId).first();
-    if (!note) return c.json({ detail: 'Note not found.' }, 404);
-    if (note.user_id === userId) return c.json({ detail: 'You cannot report your own note.' }, 400);
-    const ts = now();
-    const reason = normalizeReportReason(body.reason || 'other');
-    const details = cleanMultilineText(body.details || '', 1000);
-    const reportResults = await c.env.DB.batch([
-      c.env.DB.prepare('INSERT OR IGNORE INTO note_reports (id, note_id, reporter_id, reason, details, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-        .bind(uuid(), noteId, userId, reason, details, ts),
-      c.env.DB.prepare('UPDATE notes SET reports_count = COALESCE(reports_count, 0) + 1, updated_at = ? WHERE id = ? AND changes() > 0')
-        .bind(ts, noteId),
-    ]);
-    if (d1Changes(reportResults?.[0]) > 0) {
-      await c.env.DB.prepare(
-        `INSERT INTO reports
-         (id, reporter_id, reported_id, report_type, reported_type, reason, details, content_id, status, created_at, updated_at)
-         VALUES (?, ?, ?, 'note', 'note', ?, ?, ?, 'pending', ?, ?)`
-      ).bind(uuid(), userId, note.user_id, reason, details, noteId, ts, ts).run();
-    }
-    return c.json({ reported: true });
-  } catch (error: any) {
-    const message = String(error?.message || '').toLowerCase();
-    if (message.includes('unique constraint')) return c.json({ reported: true });
-    console.error('Note report failed:', getErrorCode(error), error?.message || error);
-    return c.json({ detail: 'Could not report note.' }, 500);
-  }
-});
+// Notes were removed from the product. Keep old tables for account deletion cleanup only.
+api.all('/notes', authMiddleware, async (c) => c.json({ detail: 'Notes are no longer supported.', code: 'NOTES_RETIRED' }, 410));
+api.all('/notes/*', authMiddleware, async (c) => c.json({ detail: 'Notes are no longer supported.', code: 'NOTES_RETIRED' }, 410));
+api.all('/note-comments/*', authMiddleware, async (c) => c.json({ detail: 'Notes are no longer supported.', code: 'NOTES_RETIRED' }, 410));
 
 // People
 api.get('/people', authMiddleware, async (c) => {
@@ -12801,14 +12635,18 @@ api.get('/discover/search', authMiddleware, async (c) => {
     'LIMIT ?',
   ].join(' ');
   const posts = await c.env.DB.prepare(discoverSearchSql).bind(`%${q}%`, ...visiblePostBindValues(userId), limit).all();
-  const users = await c.env.DB.prepare('SELECT id, username, full_name, profile_image, bio, is_private FROM users WHERE username LIKE ? OR full_name LIKE ? LIMIT 10').bind(`%${q}%`, `%${q}%`).all();
+  const users = await c.env.DB.prepare(
+    "SELECT id, username, full_name, profile_image, bio, is_private FROM users WHERE COALESCE(status, 'active') = 'active' AND (username LIKE ? OR full_name LIKE ?) LIMIT 10"
+  ).bind(`%${q}%`, `%${q}%`).all();
   return c.json({ posts: feedPhotoPostsOnly(posts.results as any[]).map((p) => feedPostPayload(p, [], c.env)), users: (users.results as any[]).map((user) => safeUserPayload(user)) });
 });
 api.get('/discover/suggested-users', authMiddleware, async (c) => {
   const userId = getUserId(c);
   const limited = await enforceRateLimit(c, 'suggested_users_read', userId, 120, 60);
   if (limited) return limited;
-  const r = await c.env.DB.prepare('SELECT id, username, full_name, profile_image, bio, followers_count FROM users WHERE id != ? ORDER BY followers_count DESC LIMIT 10').bind(userId).all();
+  const r = await c.env.DB.prepare(
+    "SELECT id, username, full_name, profile_image, bio, followers_count FROM users WHERE id != ? AND COALESCE(status, 'active') = 'active' ORDER BY followers_count DESC LIMIT 10"
+  ).bind(userId).all();
   return c.json((r.results as any[]).map((user) => safeUserPayload(user)));
 });
 
@@ -13232,10 +13070,9 @@ api.get('/premium', authMiddleware, async (c) => {
     const userId = getUserId(c);
     const user = await getPremiumUser(c, userId);
     if (!user) return c.json({ detail: 'User not found' }, 404);
-    const used = await getAnonymousNotesUsedToday(c.env.DB, userId).catch(() => 0);
     const stripe = getStripeConfig(c);
     return c.json({
-      ...premiumPayloadFromUser(user, used),
+      ...premiumPayloadFromUser(user),
       stripe_connected: stripe.configured,
       price_configured: !!getPremiumPriceId(c),
     });
@@ -13993,19 +13830,6 @@ async function enforceUserRestriction(c: any, userId: string, type: 'posting' | 
   if (!(await userHasActiveRestriction(c, userId, type))) return null;
   return c.json({ detail: `This account is temporarily restricted from ${type}.` }, 403);
 }
-
-api.delete('/admin/notes/:noteId', authMiddleware, async (c) => {
-  try {
-    const adminId = await requireGovernanceAdmin(c);
-    await ensureNotesSchema(c.env.DB);
-    const noteId = cleanText(c.req.param('noteId'), 80);
-    await c.env.DB.prepare("UPDATE notes SET status = 'removed', updated_at = ? WHERE id = ?").bind(now(), noteId).run();
-    await logGovernanceAction(c, adminId, 'remove_note', 'note', noteId);
-    return c.json({ removed: true });
-  } catch (error: any) {
-    return governanceError(c, error);
-  }
-});
 
 api.put('/admin/people/:profileId', authMiddleware, async (c) => {
   try {
@@ -17846,6 +17670,193 @@ api.get('/admin/stats', authMiddleware, async (c) => {
   } catch (e: any) { return c.json({ detail: e?.message === 'FORBIDDEN' ? 'Admin access required' : 'Request failed.' }, e?.message === 'FORBIDDEN' ? 403 : 500); }
 });
 
+async function runDeletionStatement(env: Env, sql: string, binds: any[] = []) {
+  try {
+    await env.DB.prepare(sql).bind(...binds).run();
+  } catch (error: any) {
+    const message = String(error?.message || '');
+    if (/no such (table|column)/i.test(message)) return;
+    console.warn(JSON.stringify({ event: 'account_deletion_statement_failed', code: getErrorCode(error).slice(0, 160) }));
+  }
+}
+
+async function queryDeletionRows(env: Env, sql: string, binds: any[] = []): Promise<any[]> {
+  try {
+    const result = await env.DB.prepare(sql).bind(...binds).all();
+    return result.results as any[] || [];
+  } catch (error: any) {
+    const message = String(error?.message || '');
+    if (/no such (table|column)/i.test(message)) return [];
+    console.warn(JSON.stringify({ event: 'account_deletion_query_failed', code: getErrorCode(error).slice(0, 160) }));
+    return [];
+  }
+}
+
+async function deleteCloudflareMediaAsset(env: Env, asset: any) {
+  const provider = cleanText(asset?.storage_provider || asset?.provider, 40);
+  const key = cleanText(asset?.storage_key || asset?.provider_id, 240);
+  if (!provider || !key) return;
+  const accountId = cloudflareAccountId(env);
+  const token = provider === 'stream' ? cloudflareStreamToken(env) : provider === 'images' ? cloudflareImagesToken(env) : '';
+  if (provider === 'r2') {
+    await env.MEDIA_BACKUP?.delete(key).catch(() => {});
+    return;
+  }
+  if (!accountId || !token) return;
+  const url = provider === 'stream'
+    ? `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/stream/${encodeURIComponent(key)}`
+    : provider === 'images'
+      ? `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/images/v1/${encodeURIComponent(key)}`
+      : '';
+  if (!url) return;
+  const response = await fetch(url, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  }).catch(() => null);
+  if (response && !response.ok && response.status !== 404) {
+    console.warn(JSON.stringify({
+      event: 'cloudflare_media_delete_failed',
+      provider,
+      status: response.status,
+      media_id: publicId(asset?.id || '', 120),
+    }));
+  }
+}
+
+async function permanentlyDeleteAccount(env: Env, user: any) {
+  const userId = publicId(user?.id, 120);
+  if (!userId || String(user?.status || '') === 'deleted') return;
+  await ensureAccountDeletionSchema(env.DB);
+  await ensureGovernanceSchema(env.DB);
+  await ensurePremiumSchema(env.DB);
+  await ensureCommentSchema(env.DB);
+  await ensureMediaBackupSchema(env.DB);
+  await ensureMediaModerationSchema(env.DB);
+
+  const deletedAt = now();
+  const identities = await queryDeletionRows(env, 'SELECT provider, provider_user_id, email_hash FROM account_identities WHERE user_id = ?', [userId]);
+  const identityRows = identities.length ? identities : [{
+    provider: cleanText(user.oauth_provider || (user.email ? 'email' : ''), 40),
+    provider_user_id: cleanText(user.oauth_subject || user.supabase_user_id || '', 240),
+    email_hash: user.email ? await privacyHash({ env }, normalizeOptionalEmail(user.email) || '') : '',
+  }];
+  for (const identity of identityRows) {
+    await runDeletionStatement(env,
+      `INSERT OR IGNORE INTO deleted_account_safety_records
+       (id, user_id, email_hash, provider, provider_user_id_hash, status_at_deletion, reason, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        uuid(),
+        userId,
+        cleanText(identity.email_hash || '', 160),
+        cleanText(identity.provider || '', 40),
+        await privacyHash({ env }, identity.provider_user_id || ''),
+        cleanText(user.status || 'deletion_pending', 40),
+        cleanText(user.ban_reason || 'account_deletion', 160),
+        deletedAt,
+      ],
+    );
+  }
+
+  const assets = await queryDeletionRows(env, 'SELECT * FROM media_assets WHERE user_id = ?', [userId]);
+  for (const asset of assets) await deleteCloudflareMediaAsset(env, asset);
+  const backups = await queryDeletionRows(env, 'SELECT id, r2_key FROM media_backups WHERE user_id = ?', [userId]);
+  for (const backup of backups) {
+    const key = cleanText(backup.r2_key, 500);
+    if (key) await env.MEDIA_BACKUP?.delete(key).catch(() => {});
+  }
+
+  const deletionStatements: Array<[string, any[]]> = [
+    ['DELETE FROM push_tokens WHERE user_id = ?', [userId]],
+    ['DELETE FROM saved_posts WHERE user_id = ?', [userId]],
+    ['DELETE FROM bookmarks WHERE user_id = ?', [userId]],
+    ['DELETE FROM likes WHERE user_id = ?', [userId]],
+    ['DELETE FROM comment_likes WHERE user_id = ?', [userId]],
+    ['DELETE FROM follows WHERE follower_id = ? OR following_id = ?', [userId, userId]],
+    ['DELETE FROM friendships WHERE user_id = ? OR friend_id = ?', [userId, userId]],
+    ['DELETE FROM friend_requests WHERE from_user_id = ? OR to_user_id = ?', [userId, userId]],
+    ['DELETE FROM blocks WHERE blocker_id = ? OR blocked_id = ?', [userId, userId]],
+    ['DELETE FROM notifications WHERE user_id = ? OR from_user_id = ?', [userId, userId]],
+    ['DELETE FROM comments WHERE user_id = ?', [userId]],
+    ['DELETE FROM note_comment_likes WHERE user_id = ?', [userId]],
+    ['DELETE FROM note_comments WHERE user_id = ?', [userId]],
+    ['DELETE FROM note_interactions WHERE user_id = ?', [userId]],
+    ['DELETE FROM note_reports WHERE reporter_id = ?', [userId]],
+    ['DELETE FROM notes WHERE user_id = ?', [userId]],
+    ['DELETE FROM statuses WHERE user_id = ?', [userId]],
+    ['DELETE FROM messages WHERE sender_id = ? OR receiver_id = ?', [userId, userId]],
+    ['DELETE FROM message_typing WHERE user_id = ? OR peer_id = ?', [userId, userId]],
+    ['DELETE FROM user_presence WHERE user_id = ?', [userId]],
+    ['DELETE FROM group_messages WHERE sender_id = ?', [userId]],
+    ['DELETE FROM group_chat_members WHERE user_id = ?', [userId]],
+    ['DELETE FROM media_assets WHERE user_id = ?', [userId]],
+    ['DELETE FROM media_backups WHERE user_id = ?', [userId]],
+    ['DELETE FROM posts WHERE user_id = ?', [userId]],
+    ['DELETE FROM account_identities WHERE user_id = ?', [userId]],
+  ];
+  for (const [sql, binds] of deletionStatements) await runDeletionStatement(env, sql, binds);
+
+  const deletedPasswordHash = await hashPassword(`deleted:${userId}:${uuid()}`);
+  await runDeletionStatement(env,
+    `UPDATE users SET
+       status = 'deleted',
+       email = ?,
+       username = ?,
+       full_name = 'Deleted user',
+       password_hash = ?,
+       bio = '',
+       profile_image = '',
+       cover_image = '',
+       city = '',
+       followers_count = 0,
+       following_count = 0,
+       posts_count = 0,
+       deleted_at = ?,
+       updated_at = datetime('now')
+     WHERE id = ?`,
+    [`deleted_${userId}@deleted.flames-up.local`, `deleted_${userId.slice(0, 12)}`, deletedPasswordHash, deletedAt, userId],
+  );
+  await runDeletionStatement(env, "UPDATE users SET oauth_provider = '' WHERE id = ?", [userId]);
+  await runDeletionStatement(env, "UPDATE users SET oauth_subject = '' WHERE id = ?", [userId]);
+  await runDeletionStatement(env, 'UPDATE users SET supabase_user_id = NULL WHERE id = ?', [userId]);
+  await runDeletionStatement(env, 'UPDATE users SET phone = NULL, phone_verified = 0 WHERE id = ?', [userId]);
+
+  await runDeletionStatement(env,
+    `INSERT INTO account_deletion_events (id, user_id, event_type, actor_user_id, reason, metadata, request_id, created_at)
+     VALUES (?, ?, 'deletion_permanent_completed', '', 'scheduled_30_day_cleanup', ?, '', ?)`,
+    [uuid(), userId, JSON.stringify({ deleted_at: deletedAt }), deletedAt],
+  );
+  if (user.supabase_user_id) {
+    await deleteSupabaseAuthUser({ env }, user.supabase_user_id).catch((error: any) => {
+      console.warn(JSON.stringify({ event: 'supabase_auth_permanent_delete_failed', code: getErrorCode(error).slice(0, 160), user_id: publicId(userId, 120) }));
+    });
+  }
+}
+
+async function processAccountDeletionQueue(env: Env, limit = 20) {
+  await ensureAccountDeletionSchema(env.DB);
+  const due = await queryDeletionRows(env,
+    `SELECT * FROM users
+     WHERE status = 'deletion_pending'
+       AND deletion_scheduled_at IS NOT NULL
+       AND datetime(deletion_scheduled_at) <= datetime(?)
+     ORDER BY deletion_scheduled_at ASC
+     LIMIT ?`,
+    [now(), limit],
+  );
+  for (const user of due) {
+    try {
+      await permanentlyDeleteAccount(env, user);
+    } catch (error: any) {
+      console.warn(JSON.stringify({
+        event: 'account_deletion_cleanup_failed',
+        code: getErrorCode(error).slice(0, 180),
+        user_id: publicId(user?.id || '', 120),
+      }));
+    }
+  }
+}
+
 // Mount API routes on app
 app.route('/api', api);
 
@@ -17870,4 +17881,7 @@ export default {
     return app.fetch(request, env, ctx);
   },
   queue: handleMediaModerationQueue,
+  scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
+    ctx.waitUntil(processAccountDeletionQueue(env));
+  },
 };

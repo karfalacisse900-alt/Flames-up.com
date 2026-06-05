@@ -1,3 +1,5 @@
+import AuthenticationServices
+import GoogleSignIn
 import SwiftUI
 import UIKit
 import UserNotifications
@@ -18,6 +20,22 @@ private struct SettingsPasswordBody: Encodable {
 private struct SettingsMessageResponse: Decodable {
   let detail: String?
   let deleted: Bool?
+}
+
+private struct SettingsAccountDeletionBody: Encodable {
+  let confirmation: String
+  let password: String?
+  let provider: String?
+  let idToken: String?
+  let accessToken: String?
+  let authorizationCode: String?
+}
+
+private struct SettingsAccountDeletionResponse: Decodable {
+  let deletionPending: Bool?
+  let deletionRequestedAt: String?
+  let deletionScheduledAt: String?
+  let detail: String?
 }
 
 private struct SettingsBlockedAccount: Decodable, Identifiable, Hashable {
@@ -167,15 +185,30 @@ final class SettingsNativeModel: ObservableObject {
     }
   }
 
-  func deleteAccount() async -> Bool {
+  func deleteAccount(confirmation: String, password: String?, provider: String?, idToken: String?, accessToken: String?, authorizationCode: String?) async -> Bool {
     isDeletingAccount = true
     defer { isDeletingAccount = false }
     do {
-      let _: SettingsMessageResponse = try await api.delete("/users/me")
+      let response: SettingsAccountDeletionResponse = try await api.post(
+        "/account/delete",
+        body: SettingsAccountDeletionBody(
+          confirmation: confirmation,
+          password: password?.isEmpty == false ? password : nil,
+          provider: provider?.isEmpty == false ? provider : nil,
+          idToken: idToken?.isEmpty == false ? idToken : nil,
+          accessToken: accessToken?.isEmpty == false ? accessToken : nil,
+          authorizationCode: authorizationCode?.isEmpty == false ? authorizationCode : nil
+        )
+      )
+      show(response.detail ?? "Account deletion is scheduled.")
       authSession?.logout()
       return true
     } catch {
-      show("Could not delete your account right now.", isError: true)
+      if let apiError = error as? MIRAAPIError, let message = apiError.errorDescription, !message.isEmpty {
+        show(message, isError: true)
+      } else {
+        show("Could not delete your account right now.", isError: true)
+      }
       return false
     }
   }
@@ -550,7 +583,6 @@ private struct SecuritySettingsNativeView: View {
   @ObservedObject var model: SettingsNativeModel
   @State private var newEmail = ""
   @State private var newPassword = ""
-  @State private var showDeleteConfirm = false
   @State private var showLogoutConfirm = false
 
   var body: some View {
@@ -589,9 +621,14 @@ private struct SecuritySettingsNativeView: View {
         SettingsButtonRow(title: "Log out", subtitle: "Sign out on this device.", systemImage: "rectangle.portrait.and.arrow.right", tint: .red) {
           showLogoutConfirm = true
         }
-        SettingsButtonRow(title: model.isDeletingAccount ? "Deleting..." : "Delete account", subtitle: "Soft-delete your account and remove public content.", systemImage: "trash", tint: .red) {
-          showDeleteConfirm = true
+        NavigationLink(destination: DeleteAccountNativeView(model: model)) {
+          SettingsRowContent(title: "Delete account", subtitle: "Hide now, permanently delete after 30 days.", systemImage: "trash", tint: .red) {
+            Image(systemName: "chevron.right")
+              .font(.system(size: 13, weight: .semibold))
+              .foregroundStyle(MIRATheme.Color.textMuted)
+          }
         }
+        .buttonStyle(.miraPress)
       }
     }
     .onAppear {
@@ -601,13 +638,201 @@ private struct SecuritySettingsNativeView: View {
       Button("Log out", role: .destructive) { model.logout() }
       Button("Cancel", role: .cancel) {}
     }
-    .confirmationDialog("Delete account?", isPresented: $showDeleteConfirm) {
-      Button("Delete account", role: .destructive) {
-        Task { _ = await model.deleteAccount() }
+  }
+}
+
+private struct DeleteAccountNativeView: View {
+  @ObservedObject var model: SettingsNativeModel
+  @Environment(\.dismiss) private var dismiss
+
+  @State private var confirmation = ""
+  @State private var password = ""
+  @State private var oauthProvider = ""
+  @State private var oauthIdToken = ""
+  @State private var oauthAccessToken = ""
+  @State private var oauthAuthorizationCode = ""
+  @State private var localError: String?
+
+  private var provider: String {
+    (model.user?.authProvider ?? "").lowercased()
+  }
+
+  private var needsOAuthReauth: Bool {
+    provider.contains("apple") || provider.contains("google")
+  }
+
+  private var canSubmit: Bool {
+    confirmation.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() == "DELETE"
+      && (needsOAuthReauth ? !oauthIdToken.isEmpty : !password.isEmpty)
+      && !model.isDeletingAccount
+  }
+
+  var body: some View {
+    SettingsDetailScaffold(title: "Delete account") {
+      SettingsCard(title: "What happens") {
+        VStack(alignment: .leading, spacing: 12) {
+          warningRow("Your profile, posts, comments, likes, follows, saved items, and push tokens are hidden immediately.")
+          warningRow("Captro schedules permanent deletion for 30 days from now.")
+          warningRow("Signing in during that window lets you restore the account.")
+          warningRow("After permanent deletion, old posts, followers, likes, messages, username, and media are not restored.")
+        }
+        .padding(16)
+        .settingsPillSurface(cornerRadius: 28)
       }
-      Button("Cancel", role: .cancel) {}
-    } message: {
-      Text("This removes your public account content and cannot be undone from the app.")
+
+      SettingsCard(title: "Confirm") {
+        Text("Type DELETE to continue.")
+          .font(.system(size: 13, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textSecondary)
+          .padding(.horizontal, 8)
+        SettingsTextField(title: "DELETE", text: $confirmation)
+          .textInputAutocapitalization(.characters)
+      }
+
+      if needsOAuthReauth {
+        SettingsCard(title: "Recent sign in") {
+          Text(provider.contains("apple") ? "Confirm with Sign in with Apple before deletion." : "Confirm with Google before deletion.")
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(MIRATheme.Color.textSecondary)
+            .padding(.horizontal, 8)
+
+          if provider.contains("apple") {
+            appleReauthButton
+          } else {
+            googleReauthButton
+          }
+
+          if !oauthIdToken.isEmpty {
+            Label("Recent sign in confirmed", systemImage: "checkmark.circle.fill")
+              .font(.system(size: 13, weight: .bold))
+              .foregroundStyle(.green)
+              .padding(.horizontal, 8)
+          }
+        }
+      } else {
+        SettingsCard(title: "Password") {
+          SettingsSecureField(title: "Current password", text: $password)
+          Text("Recent authentication is required before Captro can schedule deletion.")
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(MIRATheme.Color.textMuted)
+            .padding(.horizontal, 8)
+        }
+      }
+
+      if let message = localError ?? (model.bannerIsError ? model.bannerMessage : nil) {
+        SettingsBanner(message: message, isError: true)
+      }
+
+      SettingsActionButton(
+        title: model.isDeletingAccount ? "Scheduling deletion..." : "Delete account",
+        disabled: !canSubmit,
+        tint: .red
+      ) {
+        Task {
+          localError = nil
+          let success = await model.deleteAccount(
+            confirmation: confirmation.trimmingCharacters(in: .whitespacesAndNewlines).uppercased(),
+            password: needsOAuthReauth ? nil : password,
+            provider: needsOAuthReauth ? (oauthProvider.isEmpty ? provider : oauthProvider) : "email",
+            idToken: oauthIdToken,
+            accessToken: oauthAccessToken,
+            authorizationCode: oauthAuthorizationCode
+          )
+          if success {
+            dismiss()
+          } else {
+            localError = model.bannerMessage ?? "Could not delete your account right now."
+          }
+        }
+      }
+    }
+  }
+
+  private func warningRow(_ text: String) -> some View {
+    HStack(alignment: .top, spacing: 10) {
+      Image(systemName: "exclamationmark.circle")
+        .font(.system(size: 15, weight: .semibold))
+        .foregroundStyle(.red)
+        .frame(width: 20)
+      Text(text)
+        .font(.system(size: 13.5, weight: .semibold))
+        .foregroundStyle(MIRATheme.Color.textPrimary)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+  }
+
+  private var appleReauthButton: some View {
+    SignInWithAppleButton(.continue) { request in
+      request.requestedScopes = []
+    } onCompletion: { result in
+      switch result {
+      case .success(let authorization):
+        guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential,
+              let tokenData = credential.identityToken,
+              let token = String(data: tokenData, encoding: .utf8) else {
+          localError = "Apple could not confirm your sign in."
+          return
+        }
+        oauthProvider = "apple"
+        oauthIdToken = token
+        oauthAccessToken = ""
+        oauthAuthorizationCode = credential.authorizationCode.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+        localError = nil
+      case .failure:
+        localError = "Apple sign in could not finish."
+      }
+    }
+    .signInWithAppleButtonStyle(.black)
+    .frame(height: 52)
+    .clipShape(Capsule())
+  }
+
+  private var googleReauthButton: some View {
+    Button {
+      startGoogleReauth()
+    } label: {
+      HStack(spacing: 10) {
+        Image(systemName: "g.circle.fill")
+          .font(.system(size: 18, weight: .semibold))
+        Text(oauthIdToken.isEmpty ? "Confirm with Google" : "Google confirmed")
+          .font(.system(size: 15, weight: .bold))
+      }
+      .foregroundStyle(MIRATheme.Color.textPrimary)
+      .frame(maxWidth: .infinity)
+      .frame(height: 52)
+      .background(MIRATheme.Color.surface)
+      .clipShape(Capsule())
+    }
+    .buttonStyle(.miraPress)
+  }
+
+  private var googleClientID: String {
+    Bundle.main.object(forInfoDictionaryKey: "GIDClientID") as? String
+      ?? "702354172189-9gg83vd92n3s217n5pb4ddqqsnme8ocb.apps.googleusercontent.com"
+  }
+
+  @MainActor
+  private func startGoogleReauth() {
+    GIDSignIn.sharedInstance.configuration = GIDConfiguration(clientID: googleClientID)
+    guard let presenter = UIApplication.shared.miraSettingsTopPresentedViewController() else {
+      localError = "Google sign in is not ready. Please try again."
+      return
+    }
+    GIDSignIn.sharedInstance.signIn(withPresenting: presenter) { result, error in
+      if error != nil {
+        Task { @MainActor in localError = "Google sign in could not finish." }
+        return
+      }
+      guard let token = result?.user.idToken?.tokenString else {
+        Task { @MainActor in localError = "Google did not return a valid token." }
+        return
+      }
+      Task { @MainActor in
+        oauthProvider = "google"
+        oauthIdToken = token
+        oauthAccessToken = result?.user.accessToken.tokenString ?? ""
+        localError = nil
+      }
     }
   }
 }
@@ -931,6 +1156,7 @@ private struct SettingsSecureField: View {
 private struct SettingsActionButton: View {
   let title: String
   let disabled: Bool
+  var tint: Color = MIRATheme.Color.forest
   let action: () -> Void
 
   var body: some View {
@@ -943,7 +1169,7 @@ private struct SettingsActionButton: View {
         .foregroundStyle(.white)
         .frame(maxWidth: .infinity)
         .frame(height: 44)
-        .background(disabled ? MIRATheme.Color.textMuted.opacity(0.45) : MIRATheme.Color.forest)
+        .background(disabled ? MIRATheme.Color.textMuted.opacity(0.45) : tint)
         .clipShape(Capsule())
     }
     .buttonStyle(.miraPress)
@@ -991,6 +1217,36 @@ private struct SettingsPillSurface: ViewModifier {
 private extension View {
   func settingsPillSurface(cornerRadius: CGFloat) -> some View {
     modifier(SettingsPillSurface(cornerRadius: cornerRadius))
+  }
+}
+
+private extension UIApplication {
+  @MainActor
+  func miraSettingsTopPresentedViewController() -> UIViewController? {
+    connectedScenes
+      .compactMap { $0 as? UIWindowScene }
+      .flatMap(\.windows)
+      .first { $0.isKeyWindow }?
+      .rootViewController?
+      .miraSettingsTopPresentedViewController()
+  }
+}
+
+private extension UIViewController {
+  @MainActor
+  func miraSettingsTopPresentedViewController() -> UIViewController {
+    if let navigationController = self as? UINavigationController,
+       let visibleViewController = navigationController.visibleViewController {
+      return visibleViewController.miraSettingsTopPresentedViewController()
+    }
+    if let tabBarController = self as? UITabBarController,
+       let selectedViewController = tabBarController.selectedViewController {
+      return selectedViewController.miraSettingsTopPresentedViewController()
+    }
+    if let presentedViewController {
+      return presentedViewController.miraSettingsTopPresentedViewController()
+    }
+    return self
   }
 }
 

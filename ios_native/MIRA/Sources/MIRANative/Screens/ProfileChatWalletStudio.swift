@@ -3,6 +3,12 @@ import PhotosUI
 import SwiftUI
 import UIKit
 
+private func profileVisiblePosts(_ posts: [MIRAPost]) -> [MIRAPost] {
+  posts.filter {
+    ($0.postType ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased() != "note"
+  }
+}
+
 @MainActor
 final class ProfileNativeModel: ObservableObject {
   @Published var user: MIRAUser?
@@ -36,7 +42,7 @@ final class ProfileNativeModel: ObservableObject {
     }
     await MIRAAppCacheStore.shared.saveCurrentProfile(freshUser)
     await MIRALocalJSONCache.save(freshUser, key: userCacheKey)
-    let freshPosts: [MIRAPost] = (try? await api.get("/users/\(freshUser.id)/posts")) ?? posts
+    let freshPosts = profileVisiblePosts((try? await api.get("/users/\(freshUser.id)/posts")) ?? posts)
     if posts != freshPosts {
       posts = freshPosts
     }
@@ -61,7 +67,7 @@ final class ProfileNativeModel: ObservableObject {
     if cachedPosts == nil {
       cachedPosts = await MIRALocalJSONCache.load([MIRAPost].self, key: postsCacheKey(for: cachedUser.id), maxAge: 60 * 60 * 24 * 90)
     }
-    posts = cachedPosts ?? posts
+    posts = profileVisiblePosts(cachedPosts ?? posts)
   }
 
   func applyUpdatedUser(_ updated: MIRAUser) async {
@@ -442,7 +448,7 @@ final class UserProfileNativeModel: ObservableObject {
         if cachedPosts == nil {
           cachedPosts = await MIRALocalJSONCache.load([MIRAPost].self, key: postsCacheKey, maxAge: 60 * 60 * 24 * 90)
         }
-        posts = cachedPosts ?? posts
+        posts = profileVisiblePosts(cachedPosts ?? posts)
       }
     }
 
@@ -454,7 +460,7 @@ final class UserProfileNativeModel: ObservableObject {
       await MIRAAppCacheStore.shared.saveViewedProfile(freshUser, userId: userId)
       await MIRALocalJSONCache.save(freshUser, key: userCacheKey)
     }
-    let freshPosts: [MIRAPost] = (try? await api.get("/users/\(userId)/posts")) ?? posts
+    let freshPosts = profileVisiblePosts((try? await api.get("/users/\(userId)/posts")) ?? posts)
     if posts != freshPosts {
       posts = freshPosts
     }
@@ -935,19 +941,7 @@ private struct ProfilePostTile: View {
       let tileHeight = tileWidth * MIRAMediaSizing.profileGridRatio
       ZStack(alignment: .topTrailing) {
         Group {
-          if post.isNotePost {
-            CaptroNoteDisplayCard(
-              text: post.noteText.isEmpty ? " " : post.noteText,
-              fontStyle: CaptroNoteFontStyle(rawValue: post.noteFontStyle ?? "") ?? .cleanBold,
-              backgroundStyle: CaptroNoteBackgroundStyle(rawValue: post.noteBackgroundStyle ?? "") ?? .whitePaper,
-              textColorHex: post.noteTextColor,
-              alignment: CaptroNoteAlignment(rawValue: post.noteAlignment ?? "") ?? .left,
-              textSize: .small,
-              cornerRadius: 14,
-              isCompact: true
-            )
-            .padding(6)
-          } else if let media = post.thumbnailMediaURLs.first {
+          if let media = post.thumbnailMediaURLs.first {
             RemoteMediaView(
               url: media,
               isVideo: media.isVideoURL,

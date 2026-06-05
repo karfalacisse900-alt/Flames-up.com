@@ -1,6 +1,7 @@
 import SwiftUI
 import Darwin
 import Foundation
+import GoogleSignIn
 
 public enum MIRATab: Hashable {
   case main
@@ -282,6 +283,9 @@ public struct MIRANativeRootView: View {
       guard let token = notification.object as? String else { return }
       registerPushToken(token)
     }
+    .onOpenURL { url in
+      _ = GIDSignIn.sharedInstance.handle(url)
+    }
   }
 
   private var activeCallBinding: Binding<MIRAAgoraCallPresentation?> {
@@ -299,6 +303,9 @@ public struct MIRANativeRootView: View {
   private var destinationView: some View {
     if authSession.user == nil {
       AuthNativeView(session: authSession, api: api)
+        .transition(.opacity)
+    } else if let user = authSession.user, user.isDeletionPending {
+      RestoreAccountNativeView(user: user, api: api, session: authSession)
         .transition(.opacity)
     } else if let user = authSession.user, user.needsUsernameOnboarding {
       ChooseUsernameNativeView(user: user, api: api, session: authSession)
@@ -381,6 +388,130 @@ public struct MIRANativeRootView: View {
     guard authSession.user != nil else { return }
     Task {
       await MIRAPushTokenRegistry.shared.registerDeviceToken(token, api: api)
+    }
+  }
+}
+
+private struct RestoreAccountResponse: Decodable {
+  let restored: Bool?
+  let user: MIRAUser?
+}
+
+private struct RestoreAccountNativeView: View {
+  let user: MIRAUser
+  let api: MIRAAPIClient
+  @ObservedObject var session: MIRAAuthSession
+
+  @State private var isRestoring = false
+  @State private var errorMessage: String?
+
+  var body: some View {
+    ZStack {
+      MIRATheme.Color.appBackground.ignoresSafeArea()
+
+      VStack(spacing: 22) {
+        Spacer(minLength: 20)
+
+        VStack(spacing: 18) {
+          Image(systemName: "clock.arrow.circlepath")
+            .font(.system(size: 34, weight: .semibold))
+            .foregroundStyle(MIRATheme.Color.forest)
+            .frame(width: 72, height: 72)
+            .background(MIRATheme.Color.surfaceSoft)
+            .clipShape(Circle())
+
+          VStack(spacing: 8) {
+            Text("Restore your account?")
+              .font(.system(size: 28, weight: .black, design: .rounded))
+              .foregroundStyle(MIRATheme.Color.textPrimary)
+              .multilineTextAlignment(.center)
+
+            Text("This Captro account is scheduled for deletion. Restore it now to keep using it, or sign out and deletion will continue.")
+              .font(.system(size: 15, weight: .semibold))
+              .foregroundStyle(MIRATheme.Color.textSecondary)
+              .multilineTextAlignment(.center)
+              .fixedSize(horizontal: false, vertical: true)
+          }
+
+          if let scheduled = user.deletionScheduledAt, !scheduled.isEmpty {
+            Text("Scheduled deletion: \(scheduled)")
+              .font(.system(size: 12.5, weight: .bold))
+              .foregroundStyle(MIRATheme.Color.textMuted)
+              .padding(.horizontal, 14)
+              .padding(.vertical, 9)
+              .background(MIRATheme.Color.surfaceSoft)
+              .clipShape(Capsule())
+          }
+
+          if let errorMessage {
+            Text(errorMessage)
+              .font(.system(size: 13, weight: .semibold))
+              .foregroundStyle(.red)
+              .multilineTextAlignment(.center)
+              .fixedSize(horizontal: false, vertical: true)
+          }
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity)
+        .background(MIRATheme.Color.surfaceRaised)
+        .clipShape(RoundedRectangle(cornerRadius: 34, style: .continuous))
+        .shadow(color: .black.opacity(0.08), radius: 22, x: 0, y: 12)
+        .padding(.horizontal, 20)
+
+        VStack(spacing: 12) {
+          Button {
+            Task { await restore() }
+          } label: {
+            Text(isRestoring ? "Restoring..." : "Restore account")
+              .font(.system(size: 16, weight: .bold))
+              .foregroundStyle(.white)
+              .frame(maxWidth: .infinity)
+              .frame(height: 54)
+              .background(isRestoring ? MIRATheme.Color.textMuted.opacity(0.5) : MIRATheme.Color.forest)
+              .clipShape(Capsule())
+          }
+          .buttonStyle(.miraPress)
+          .disabled(isRestoring)
+
+          Button {
+            session.logout()
+          } label: {
+            Text("Sign out and keep deletion scheduled")
+              .font(.system(size: 14, weight: .bold))
+              .foregroundStyle(.red)
+              .frame(maxWidth: .infinity)
+              .frame(height: 50)
+              .background(MIRATheme.Color.surfaceSoft)
+              .clipShape(Capsule())
+          }
+          .buttonStyle(.miraPress)
+          .disabled(isRestoring)
+        }
+        .padding(.horizontal, 22)
+
+        Spacer(minLength: 20)
+      }
+    }
+  }
+
+  @MainActor
+  private func restore() async {
+    guard !isRestoring else { return }
+    isRestoring = true
+    defer { isRestoring = false }
+    do {
+      let response: RestoreAccountResponse = try await api.post("/account/restore", body: EmptyBody())
+      if let restoredUser = response.user {
+        session.replaceUser(restoredUser)
+      } else {
+        errorMessage = "Could not restore your account right now."
+      }
+    } catch {
+      if let apiError = error as? MIRAAPIError, let message = apiError.errorDescription, !message.isEmpty {
+        errorMessage = message
+      } else {
+        errorMessage = "Could not restore your account right now."
+      }
     }
   }
 }

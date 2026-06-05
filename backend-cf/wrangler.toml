@@ -20,6 +20,9 @@ MEDIA_BACKUP_MAX_VIDEO_BYTES = "95000000"
 enabled = true
 head_sampling_rate = 1
 
+[triggers]
+crons = ["17 5 * * *"]
+
 [ai]
 binding = "AI"
 
@@ -63,6 +66,9 @@ MEDIA_BACKUP_MAX_VIDEO_BYTES = "95000000"
 [env.production.observability]
 enabled = true
 head_sampling_rate = 1
+
+[env.production.triggers]
+crons = ["17 5 * * *"]
 
 [env.production.ai]
 binding = "AI"

@@ -224,7 +224,10 @@ final class DiscoverNativeModel: ObservableObject {
   }
 
   private func photoDiscoverPosts(_ values: [MIRAPost]) -> [MIRAPost] {
-    values.filter { !$0.containsVideoMedia && !$0.isNotePost }
+    values.filter {
+      !$0.containsVideoMedia &&
+        ($0.postType ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased() != "note"
+    }
   }
 
   private func stableEngagementCount(current: Int?, incoming: Int?, toggledOn: Bool? = nil) -> Int? {

@@ -78,6 +78,10 @@ public struct MIRAUser: Codable, Identifiable, Hashable {
   public let isPrivate: Bool?
   public let isPremium: Bool?
   public let language: String?
+  public let status: String?
+  public let deletionRequestedAt: String?
+  public let deletionScheduledAt: String?
+  public let authProvider: String?
 
   public var displayName: String {
     if MIRAUsernameRules.isValidPublicUsername(username) {
@@ -95,6 +99,10 @@ public struct MIRAUser: Codable, Identifiable, Hashable {
 
   public var viewerFollowing: Bool {
     isFollowing == true
+  }
+
+  public var isDeletionPending: Bool {
+    status?.lowercased() == "deletion_pending"
   }
 }
 
@@ -123,10 +131,6 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
   public let displayLocationSource: String?
   public let displayLocationVisibility: String?
   public let postType: String?
-  public let noteFontStyle: String?
-  public let noteBackgroundStyle: String?
-  public let noteTextColor: String?
-  public let noteAlignment: String?
   public let primaryCategory: String?
   public let category: String?
   public let categoryConfidence: Double?
@@ -273,16 +277,6 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
       audioDisplayTitle != nil
   }
 
-  public var isNotePost: Bool {
-    (postType ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "note"
-  }
-
-  public var noteText: String {
-    let raw = ((caption?.isEmpty == false ? caption : content) ?? "")
-      .trimmingCharacters(in: .whitespacesAndNewlines)
-    return raw
-  }
-
   public var containsVideoMedia: Bool {
     let types = mediaTypes?.values.map { $0.lowercased() } ?? []
     return types.contains { $0.contains("video") }
@@ -347,10 +341,6 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
       displayLocationSource: displayLocationSource,
       displayLocationVisibility: displayLocationVisibility,
       postType: postType,
-      noteFontStyle: noteFontStyle,
-      noteBackgroundStyle: noteBackgroundStyle,
-      noteTextColor: noteTextColor,
-      noteAlignment: noteAlignment,
       primaryCategory: primaryCategory,
       category: category,
       categoryConfidence: categoryConfidence,
@@ -427,10 +417,6 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
       displayLocationSource: displayLocationSource,
       displayLocationVisibility: displayLocationVisibility,
       postType: postType,
-      noteFontStyle: noteFontStyle,
-      noteBackgroundStyle: noteBackgroundStyle,
-      noteTextColor: noteTextColor,
-      noteAlignment: noteAlignment,
       primaryCategory: primaryCategory,
       category: category,
       categoryConfidence: categoryConfidence,
@@ -707,32 +693,6 @@ public struct MIRAMediaDimension: Codable, Hashable {
   }
 }
 
-public struct MIRANote: Codable, Identifiable, Hashable {
-  public let id: String
-  public let body: String?
-  public let mediaUrl: String?
-  public let createdAt: String?
-  public let reactionsCount: Int?
-  public let commentsCount: Int?
-  public let sharesCount: Int?
-  public let reacted: Bool?
-  public let user: MIRAUser?
-
-  public func updating(reactionsCount: Int? = nil, commentsCount: Int? = nil, sharesCount: Int? = nil, reacted: Bool? = nil) -> MIRANote {
-    MIRANote(
-      id: id,
-      body: body,
-      mediaUrl: mediaUrl,
-      createdAt: createdAt,
-      reactionsCount: reactionsCount ?? self.reactionsCount,
-      commentsCount: commentsCount ?? self.commentsCount,
-      sharesCount: sharesCount ?? self.sharesCount,
-      reacted: reacted ?? self.reacted,
-      user: user
-    )
-  }
-}
-
 public struct MIRAGifItem: Decodable, Identifiable, Hashable {
   public let id: String
   public let title: String?
@@ -991,7 +951,11 @@ public struct MIRAComment: Codable, Identifiable, Hashable {
           privacyLocked: nil,
           isPrivate: nil,
           isPremium: nil,
-          language: nil
+          language: nil,
+          status: nil,
+          deletionRequestedAt: nil,
+          deletionScheduledAt: nil,
+          authProvider: nil
         )
       } else {
         user = nil
@@ -1551,10 +1515,6 @@ public struct CreatePostBody: Encodable {
   public let displayLocationSource: String?
   public let displayLocationVisibility: String?
   public let postType: String?
-  public let noteFontStyle: String?
-  public let noteBackgroundStyle: String?
-  public let noteTextColor: String?
-  public let noteAlignment: String?
   public let placeId: String?
   public let placeName: String?
   public let placeProvider: String?
@@ -1602,10 +1562,6 @@ public struct CreatePostBody: Encodable {
     displayLocationSource: String? = nil,
     displayLocationVisibility: String? = nil,
     postType: String? = nil,
-    noteFontStyle: String? = nil,
-    noteBackgroundStyle: String? = nil,
-    noteTextColor: String? = nil,
-    noteAlignment: String? = nil,
     placeId: String? = nil,
     placeName: String? = nil,
     placeProvider: String? = nil,
@@ -1652,10 +1608,6 @@ public struct CreatePostBody: Encodable {
     self.displayLocationSource = displayLocationSource
     self.displayLocationVisibility = displayLocationVisibility
     self.postType = postType
-    self.noteFontStyle = noteFontStyle
-    self.noteBackgroundStyle = noteBackgroundStyle
-    self.noteTextColor = noteTextColor
-    self.noteAlignment = noteAlignment
     self.placeId = placeId
     self.placeName = placeName
     self.placeProvider = placeProvider
@@ -1704,12 +1656,6 @@ public struct MIRAEditorUploadMetadata: Encodable, Hashable {
     self.appliedFilter = metadata.appliedFilter
     self.hasTextOverlay = metadata.hasTextOverlay
   }
-}
-
-public struct CreateNoteBody: Encodable {
-  public let body: String
-  public let mediaUrl: String?
-  public let color: String?
 }
 
 public struct CreateStatusBody: Encodable {
@@ -1823,21 +1769,6 @@ public struct TypingBody: Encodable {
   public let isTyping: Bool
 }
 
-public struct NoteInteractionBody: Encodable {
-  public let kind: String
-  public let value: String?
-}
-
-public struct NoteInteractionResponse: Decodable {
-  public let active: Bool?
-  public let kind: String?
-}
-
-public struct NoteReportBody: Encodable {
-  public let reason: String
-  public let details: String?
-}
-
 public struct PostReportBody: Encodable {
   public let reportedType: String
   public let reportedId: String
@@ -1908,11 +1839,6 @@ public struct CommentMutationResponse: Decodable {
   public let deleted: Bool?
   public let hidden: Bool?
   public let commentsCount: Int?
-}
-
-public struct NoteCommentBody: Encodable {
-  public let body: String
-  public let parentId: String?
 }
 
 public struct PostCommentBody: Encodable {

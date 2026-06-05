@@ -599,7 +599,10 @@ final class MainFeedModel: ObservableObject {
   }
 
   private func photoFeedPosts(_ values: [MIRAPost]) -> [MIRAPost] {
-    values.filter { !$0.containsVideoMedia }
+    values.filter {
+      !$0.containsVideoMedia &&
+        ($0.postType ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased() != "note"
+    }
   }
 
   private func stableEngagementCount(current: Int?, incoming: Int?, optimistic: Int? = nil, toggledOn: Bool? = nil) -> Int? {
@@ -652,7 +655,6 @@ public struct MainFeedView: View {
   @State private var isHeaderHidden = false
   @State private var isCreateMenuPresented = false
   @State private var isShowingCreatePost = false
-  @State private var isShowingCreateNote = false
   @State private var activeCommentsPost: MIRAPost?
   @State private var isCommentsPresented = false
   @State private var saveTargetPost: MIRAPost?
@@ -800,12 +802,6 @@ public struct MainFeedView: View {
             DispatchQueue.main.asyncAfter(deadline: .now() + MIRATransitionTiming.sheetClose) {
               isShowingCreatePost = true
             }
-          },
-          onNote: {
-            dismiss()
-            DispatchQueue.main.asyncAfter(deadline: .now() + MIRATransitionTiming.sheetClose) {
-              isShowingCreateNote = true
-            }
           }
         )
       }
@@ -850,9 +846,6 @@ public struct MainFeedView: View {
       }
       .miraFullScreenOverlay(isPresented: $isShowingCreatePost, background: .black) { dismiss in
         CreatePostNativeView(api: model.api, onClose: dismiss)
-      }
-      .miraFullScreenOverlay(isPresented: $isShowingCreateNote, background: MIRATheme.Color.surface) { dismiss in
-        CreateNoteNativeView(api: model.api, onClose: dismiss)
       }
       .task { await model.load() }
       .onReceive(NotificationCenter.default.publisher(for: .miraPostEngagementDidChange)) { notification in
@@ -1117,8 +1110,7 @@ public struct MainFeedView: View {
       isReportSheetPresented ||
       reportTarget != nil ||
       isCreateMenuPresented ||
-      isShowingCreatePost ||
-      isShowingCreateNote
+      isShowingCreatePost
   }
 }
 
@@ -1140,9 +1132,6 @@ private struct MainNativePostCard: View {
   @State private var isFollowConfirmationVisible = false
 
   private var mediaHeight: CGFloat {
-    if post.isNotePost {
-      return max(1, measuredCardWidth - (MIRATheme.Space.md * 2)) * 1.25
-    }
     return MIRAMediaSizing.mainFeedHeight(
       for: post.feedMediaURLs,
       aspectRatios: post.mediaHeightToWidthRatios,
@@ -1155,10 +1144,7 @@ private struct MainNativePostCard: View {
       postHeader
         .zIndex(3)
 
-      if post.isNotePost {
-        noteCard
-          .zIndex(1)
-      } else if !post.feedMediaURLs.isEmpty {
+      if !post.feedMediaURLs.isEmpty {
         mediaCarousel
           .zIndex(1)
       }
@@ -1222,31 +1208,6 @@ private struct MainNativePostCard: View {
     }
     .onChange(of: post.id) { _, _ in isShowingCaption = false }
     .animation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion), value: isShowingCaption)
-  }
-
-  @ViewBuilder
-  private var noteCard: some View {
-    let font = CaptroNoteFontStyle(rawValue: post.noteFontStyle ?? "") ?? .cleanBold
-    let background = CaptroNoteBackgroundStyle(rawValue: post.noteBackgroundStyle ?? "") ?? .whitePaper
-    let alignment = CaptroNoteAlignment(rawValue: post.noteAlignment ?? "") ?? .left
-    CaptroNoteDisplayCard(
-      text: post.noteText.isEmpty ? " " : post.noteText,
-      fontStyle: font,
-      backgroundStyle: background,
-      textColorHex: post.noteTextColor,
-      alignment: alignment,
-      authorHandle: post.userUsername,
-      saveCount: post.savesCount,
-      textSize: .medium,
-      cornerRadius: 30,
-      isCompact: false
-    )
-    .frame(maxWidth: .infinity)
-    .frame(minHeight: mediaHeight, maxHeight: mediaHeight)
-    .padding(.horizontal, MIRATheme.Space.md)
-    .padding(.top, 4)
-    .padding(.bottom, 6)
-    .allowsHitTesting(false)
   }
 
   @ViewBuilder
@@ -1505,12 +1466,10 @@ private struct MainNativePostCard: View {
   }
 
   private var hasCaptionContent: Bool {
-    guard !post.isNotePost else { return false }
     return headlineText != nil || captionBodyText != nil || placeText != nil || taggedPeopleText != nil
   }
 
   private var captionNeedsExpansion: Bool {
-    guard !post.isNotePost else { return false }
     if let headlineText, headlineText.count > 58 { return true }
     if let captionBodyText {
       if captionBodyText.count > 118 { return true }
@@ -1750,20 +1709,13 @@ private struct MainNativePostCard: View {
 
 private struct MainFeedCreateMenu: View {
   let onPost: () -> Void
-  let onNote: () -> Void
 
   var body: some View {
     VStack(spacing: 16) {
       MainFeedCreateMenuButton(
-        title: "Photo / Video Post",
+        title: "Photo Post",
         systemImage: "photo.on.rectangle",
         action: onPost
-      )
-
-      MainFeedCreateMenuButton(
-        title: "Note",
-        systemImage: "note.text",
-        action: onNote
       )
     }
     .padding(16)
