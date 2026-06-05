@@ -939,11 +939,12 @@ private struct ProfilePostTile: View {
             CaptroNoteDisplayCard(
               text: post.noteText.isEmpty ? " " : post.noteText,
               fontStyle: CaptroNoteFontStyle(rawValue: post.noteFontStyle ?? "") ?? .cleanBold,
-              backgroundStyle: CaptroNoteBackgroundStyle(rawValue: post.noteBackgroundStyle ?? "") ?? .warmCream,
+              backgroundStyle: CaptroNoteBackgroundStyle(rawValue: post.noteBackgroundStyle ?? "") ?? .whitePaper,
               textColorHex: post.noteTextColor,
-              alignment: CaptroNoteAlignment(rawValue: post.noteAlignment ?? "") ?? .center,
+              alignment: CaptroNoteAlignment(rawValue: post.noteAlignment ?? "") ?? .left,
               textSize: .small,
-              cornerRadius: 14
+              cornerRadius: 14,
+              isCompact: true
             )
             .padding(6)
           } else if let media = post.thumbnailMediaURLs.first {

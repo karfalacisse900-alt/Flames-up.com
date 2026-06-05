@@ -1227,16 +1227,19 @@ private struct MainNativePostCard: View {
   @ViewBuilder
   private var noteCard: some View {
     let font = CaptroNoteFontStyle(rawValue: post.noteFontStyle ?? "") ?? .cleanBold
-    let background = CaptroNoteBackgroundStyle(rawValue: post.noteBackgroundStyle ?? "") ?? .warmCream
-    let alignment = CaptroNoteAlignment(rawValue: post.noteAlignment ?? "") ?? .center
+    let background = CaptroNoteBackgroundStyle(rawValue: post.noteBackgroundStyle ?? "") ?? .whitePaper
+    let alignment = CaptroNoteAlignment(rawValue: post.noteAlignment ?? "") ?? .left
     CaptroNoteDisplayCard(
       text: post.noteText.isEmpty ? " " : post.noteText,
       fontStyle: font,
       backgroundStyle: background,
       textColorHex: post.noteTextColor,
       alignment: alignment,
+      authorHandle: post.userUsername,
+      saveCount: post.savesCount,
       textSize: .medium,
-      cornerRadius: 30
+      cornerRadius: 30,
+      isCompact: false
     )
     .frame(maxWidth: .infinity)
     .frame(minHeight: mediaHeight, maxHeight: mediaHeight)

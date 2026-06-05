@@ -3865,7 +3865,7 @@ function normalizeNoteFontStyle(value: unknown): string {
 
 function normalizeNoteBackgroundStyle(value: unknown): string {
   const clean = cleanText(value, 40).toLowerCase();
-  return NOTE_BACKGROUND_STYLES.has(clean) ? clean : 'warm_cream';
+  return NOTE_BACKGROUND_STYLES.has(clean) ? clean : 'white_paper';
 }
 
 function normalizeNoteTextColor(value: unknown, backgroundStyle: string): string {
@@ -3876,7 +3876,7 @@ function normalizeNoteTextColor(value: unknown, backgroundStyle: string): string
 
 function normalizeNoteAlignment(value: unknown): string {
   const clean = cleanText(value, 20).toLowerCase();
-  return NOTE_ALIGNMENTS.has(clean) ? clean : 'center';
+  return NOTE_ALIGNMENTS.has(clean) ? clean : 'left';
 }
 
 function publicNotePayload(row: any, opts: { reacted?: boolean; saved?: boolean } = {}) {

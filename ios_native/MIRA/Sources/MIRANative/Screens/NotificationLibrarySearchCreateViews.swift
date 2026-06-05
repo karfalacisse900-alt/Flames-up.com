@@ -3429,8 +3429,11 @@ struct CaptroNoteDisplayCard: View {
   let backgroundStyle: CaptroNoteBackgroundStyle
   let textColorHex: String?
   let alignment: CaptroNoteAlignment
+  var authorHandle: String? = nil
+  var saveCount: Int? = nil
   var textSize: CaptroNoteTextSize = .medium
   var cornerRadius: CGFloat = 30
+  var isCompact: Bool = false
 
   var body: some View {
     ZStack {
@@ -3440,25 +3443,94 @@ struct CaptroNoteDisplayCard: View {
           .allowsHitTesting(false)
       }
 
-      VStack(alignment: alignment.horizontalAlignment, spacing: 0) {
-        Text(text)
-          .font(fontStyle.font(size: textSize.points))
-          .foregroundStyle(noteTextColor)
-          .lineSpacing(4)
-          .multilineTextAlignment(alignment.textAlignment)
-          .minimumScaleFactor(0.62)
-          .fixedSize(horizontal: false, vertical: true)
+      if usesPosterLayout {
+        posterContent
+      } else {
+        editorialContent
       }
-      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: cardAlignment)
-      .padding(.horizontal, 30)
-      .padding(.vertical, 34)
     }
     .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-    .shadow(color: .black.opacity(0.10), radius: 18, x: 0, y: 10)
+    .shadow(color: .black.opacity(isCompact ? 0.07 : 0.10), radius: isCompact ? 8 : 18, x: 0, y: isCompact ? 4 : 10)
     .overlay(
       RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-        .stroke(.white.opacity(backgroundStyle == .blackCard ? 0.08 : 0.42), lineWidth: 1)
+        .stroke(borderColor, lineWidth: 1)
     )
+  }
+
+  private var editorialContent: some View {
+    let parts = CaptroNoteTextParts(text: text)
+    return VStack(alignment: .leading, spacing: isCompact ? 6 : 12) {
+      if let headline = parts.headline {
+        Text(headline)
+          .font(.system(size: isCompact ? 20 : 42, weight: .black, design: .rounded))
+          .foregroundStyle(noteTextColor)
+          .lineLimit(isCompact ? 3 : 2)
+          .minimumScaleFactor(0.56)
+          .multilineTextAlignment(.leading)
+      }
+
+      if let eyebrow = parts.eyebrow, !isCompact {
+        Text(eyebrow.uppercased())
+          .font(.system(size: 17, weight: .bold, design: .rounded))
+          .foregroundStyle(noteTextColor.opacity(0.92))
+          .lineLimit(1)
+          .minimumScaleFactor(0.75)
+      }
+
+      if let badgeText = saveBadgeText, !isCompact {
+        Text(badgeText)
+          .font(.system(size: 16, weight: .black, design: .rounded))
+          .foregroundStyle(Color(red: 0.02, green: 0.02, blue: 0.02))
+          .padding(.horizontal, 12)
+          .frame(height: 32)
+          .background(Color(red: 0.97, green: 0.73, blue: 0.86))
+          .overlay(
+            Rectangle()
+              .stroke(Color(red: 0.02, green: 0.02, blue: 0.02), lineWidth: 1)
+          )
+      }
+
+      if let body = parts.body {
+        Text(formattedBody(body))
+          .font(.system(size: isCompact ? 12 : 25, weight: .regular, design: .rounded))
+          .foregroundStyle(noteTextColor)
+          .lineSpacing(isCompact ? 1 : 4)
+          .lineLimit(isCompact ? 5 : nil)
+          .minimumScaleFactor(0.68)
+          .multilineTextAlignment(.leading)
+          .fixedSize(horizontal: false, vertical: true)
+          .padding(.top, isCompact ? 0 : 8)
+      }
+
+      Spacer(minLength: 0)
+
+      if let handle = normalizedAuthorHandle, !isCompact {
+        Text(handle)
+          .font(.system(size: 20, weight: .black, design: .rounded))
+          .foregroundStyle(noteTextColor)
+          .lineLimit(1)
+          .minimumScaleFactor(0.75)
+      }
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    .padding(.horizontal, isCompact ? 12 : 24)
+    .padding(.vertical, isCompact ? 12 : 24)
+  }
+
+  private var posterContent: some View {
+    VStack(alignment: alignment.horizontalAlignment, spacing: 0) {
+      Text(text.trimmingCharacters(in: .whitespacesAndNewlines).uppercased())
+        .font(fontStyle.font(size: isCompact ? max(18, textSize.points * 0.62) : textSize.points * 1.18))
+        .foregroundStyle(noteTextColor)
+        .lineSpacing(0)
+        .multilineTextAlignment(alignment.textAlignment)
+        .minimumScaleFactor(0.46)
+        .lineLimit(isCompact ? 5 : 7)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: cardAlignment)
+    .padding(.horizontal, isCompact ? 12 : 20)
+    .padding(.vertical, isCompact ? 12 : 18)
   }
 
   private var noteTextColor: Color {
@@ -3466,6 +3538,39 @@ struct CaptroNoteDisplayCard: View {
       return backgroundStyle.textColor
     }
     return Color(uiColor: UIColor(hex: textColorHex))
+  }
+
+  private var usesPosterLayout: Bool {
+    fontStyle == .handwritten || fontStyle == .marker
+  }
+
+  private var borderColor: Color {
+    if backgroundStyle == .blackCard {
+      return .white.opacity(0.08)
+    }
+    return Color(red: 0.02, green: 0.02, blue: 0.02).opacity(usesPosterLayout ? 0.04 : 0.08)
+  }
+
+  private var normalizedAuthorHandle: String? {
+    guard let authorHandle else { return nil }
+    let trimmed = authorHandle.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return nil }
+    return trimmed.hasPrefix("@") ? trimmed : "@\(trimmed)"
+  }
+
+  private var saveBadgeText: String? {
+    guard let saveCount, saveCount > 0 else { return nil }
+    let unit = saveCount == 1 ? "SAVE" : "SAVES"
+    return "\(Self.compact(saveCount)) \(unit)"
+  }
+
+  private func formattedBody(_ value: String) -> String {
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return trimmed }
+    if trimmed.hasPrefix("\"") || trimmed.hasPrefix("'") {
+      return trimmed
+    }
+    return "\"\(trimmed)\""
   }
 
   private var cardAlignment: Alignment {
@@ -3489,6 +3594,51 @@ struct CaptroNoteDisplayCard: View {
       .stroke(Color(red: 0.35, green: 0.43, blue: 0.58).opacity(0.18), lineWidth: 1)
     }
   }
+
+  private static func compact(_ value: Int) -> String {
+    if value >= 1_000_000 {
+      let number = Double(value) / 1_000_000
+      return number.truncatingRemainder(dividingBy: 1) == 0 ? "\(Int(number))M" : String(format: "%.1fM", number)
+    }
+    if value >= 1_000 {
+      let number = Double(value) / 1_000
+      return number.truncatingRemainder(dividingBy: 1) == 0 ? "\(Int(number))K" : String(format: "%.1fK", number)
+    }
+    return "\(value)"
+  }
+}
+
+private struct CaptroNoteTextParts {
+  let headline: String?
+  let eyebrow: String?
+  let body: String?
+
+  init(text: String) {
+    let lines = text
+      .components(separatedBy: .newlines)
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { !$0.isEmpty }
+
+    if lines.isEmpty {
+      headline = nil
+      eyebrow = nil
+      body = nil
+      return
+    }
+
+    headline = lines.first
+
+    if lines.count >= 3 {
+      eyebrow = lines[1]
+      body = lines.dropFirst(2).joined(separator: "\n")
+    } else if lines.count == 2 {
+      eyebrow = nil
+      body = lines[1]
+    } else {
+      eyebrow = nil
+      body = nil
+    }
+  }
 }
 
 public struct CreateNoteNativeView: View {
@@ -3498,9 +3648,9 @@ public struct CreateNoteNativeView: View {
   @Environment(\.dismiss) private var dismiss
   @State private var noteText = ""
   @State private var fontStyle: CaptroNoteFontStyle = .cleanBold
-  @State private var backgroundStyle: CaptroNoteBackgroundStyle = .warmCream
+  @State private var backgroundStyle: CaptroNoteBackgroundStyle = .whitePaper
   @State private var textSize: CaptroNoteTextSize = .medium
-  @State private var noteAlignment: CaptroNoteAlignment = .center
+  @State private var noteAlignment: CaptroNoteAlignment = .left
   @State private var isPosting = false
   @State private var errorMessage: String?
   @FocusState private var isTextFocused: Bool
