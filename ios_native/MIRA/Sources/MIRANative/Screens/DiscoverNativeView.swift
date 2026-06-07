@@ -674,7 +674,7 @@ public struct DiscoverNativeView: View {
       } else {
         LazyVGrid(columns: galleryGridColumns, spacing: 1) {
           ForEach(filteredGalleryPosts) { post in
-            if shouldOpenSinglePhotoPreview(post) {
+            if miraShouldOpenSinglePhotoPreview(post) {
               Button {
                 CaptroHaptics.light()
                 singlePhotoPreviewPost = post
@@ -701,12 +701,6 @@ public struct DiscoverNativeView: View {
         }
       }
     }
-  }
-
-  private func shouldOpenSinglePhotoPreview(_ post: MIRAPost) -> Bool {
-    guard !post.containsVideoMedia else { return false }
-    let mediaCount = max(post.feedMediaURLs.count, post.mediaURLs.count)
-    return mediaCount <= 1
   }
 
   private var galleryGridColumns: [GridItem] {
@@ -841,7 +835,7 @@ private struct DiscoverPostActionModal: View {
   }
 }
 
-private struct DiscoverSinglePhotoPreviewSheet: View {
+struct DiscoverSinglePhotoPreviewSheet: View {
   @StateObject private var model: PostDetailModel
   @State private var isCommentsPresented = false
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -892,8 +886,9 @@ private struct DiscoverSinglePhotoPreviewSheet: View {
               .fixedSize(horizontal: false, vertical: true)
           }
         }
-        .padding(MIRATheme.Space.md)
-        .padding(.top, MIRATheme.Space.xs)
+        .padding(.horizontal, MIRATheme.Space.md)
+        .padding(.bottom, MIRATheme.Space.md)
+        .padding(.top, 4)
       }
       .scrollIndicators(.hidden)
       .background(MIRATheme.Color.appBackground)

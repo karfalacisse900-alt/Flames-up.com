@@ -582,6 +582,7 @@ let statusThoughtSchemaReady = false;
 let statusLikeSchemaReady = false;
 let mediaModerationSchemaReady = false;
 let accountDeletionSchemaReady = false;
+let groupChatSchemaReady = false;
 
 function normalizeSchemaSql(statement: string): string {
   return statement.replace(/\s+/g, ' ').trim().replace(/;$/, '');
@@ -717,6 +718,57 @@ async function ensureMessagePresenceSchema(db: D1Database) {
   }
 
   messagePresenceSchemaReady = true;
+}
+
+async function ensureGroupChatSchema(db: D1Database) {
+  if (groupChatSchemaReady) return;
+
+  const statements = [
+    `CREATE TABLE IF NOT EXISTS group_chats (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      created_by TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY(created_by) REFERENCES users(id)
+    )`,
+    `CREATE TABLE IF NOT EXISTS group_chat_members (
+      id TEXT PRIMARY KEY,
+      group_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      role TEXT DEFAULT 'member',
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(group_id, user_id),
+      FOREIGN KEY(group_id) REFERENCES group_chats(id),
+      FOREIGN KEY(user_id) REFERENCES users(id)
+    )`,
+    `CREATE TABLE IF NOT EXISTS group_messages (
+      id TEXT PRIMARY KEY,
+      group_id TEXT NOT NULL,
+      sender_id TEXT NOT NULL,
+      content TEXT NOT NULL,
+      media_url TEXT,
+      media_type TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY(group_id) REFERENCES group_chats(id),
+      FOREIGN KEY(sender_id) REFERENCES users(id)
+    )`,
+    'CREATE INDEX IF NOT EXISTS idx_group_chat_members_user ON group_chat_members(user_id)',
+    'CREATE INDEX IF NOT EXISTS idx_group_chat_members_group ON group_chat_members(group_id)',
+    'CREATE INDEX IF NOT EXISTS idx_group_messages_group ON group_messages(group_id, created_at)',
+  ];
+
+  for (const statement of statements) {
+    try {
+      await runSchemaStatement(db, statement);
+    } catch (error: any) {
+      if (!isIgnorableSchemaError(error, statement)) {
+        throw error;
+      }
+    }
+  }
+
+  groupChatSchemaReady = true;
 }
 
 async function touchUserPresence(db: D1Database, userId: string) {
@@ -11153,6 +11205,7 @@ api.delete('/statuses/:statusId', authMiddleware, async (c) => {
 
 // Messages (with media support)
 async function requireGroupMember(c: any, groupId: string, userId: string) {
+  await ensureGroupChatSchema(c.env.DB);
   const member = await c.env.DB.prepare('SELECT id FROM group_chat_members WHERE group_id = ? AND user_id = ?')
     .bind(groupId, userId)
     .first();
@@ -11163,6 +11216,7 @@ api.get('/conversations', authMiddleware, async (c) => {
   const userId = getUserId(c);
   await touchUserPresence(c.env.DB, userId);
   await ensureAbuseProtectionSchema(c.env.DB);
+  await ensureGroupChatSchema(c.env.DB);
   const limit = clampNumber(c.req.query('limit') || '60', 1, 100, 60);
   const msgs = await c.env.DB.prepare(`
     WITH ranked_messages AS (
@@ -11467,8 +11521,9 @@ api.post('/group-chats', authMiddleware, async (c) => {
     ? rawMemberIds.map((id: any) => publicId(id, 120)).filter((id: string) => id && id !== userId)
     : [];
   const uniqueMemberIds = Array.from(new Set(memberIds)).slice(0, 50);
-  if (uniqueMemberIds.length < 2) return c.json({ detail: 'Select at least two people for a group chat.' }, 400);
+  if (uniqueMemberIds.length < 1) return c.json({ detail: 'Select at least one person for a group chat.' }, 400);
   await ensureAbuseProtectionSchema(c.env.DB);
+  await ensureGroupChatSchema(c.env.DB);
   const memberPlaceholders = uniqueMemberIds.map(() => '?').join(', ');
   const existingMembersSql = `SELECT id FROM users WHERE id IN (${memberPlaceholders})`;
   const existingMembers = await c.env.DB.prepare(existingMembersSql)

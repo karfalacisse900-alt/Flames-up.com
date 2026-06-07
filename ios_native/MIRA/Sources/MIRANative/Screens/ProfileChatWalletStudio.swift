@@ -186,10 +186,14 @@ private struct ProfileGridSkeleton: View {
 public struct ProfileNativeView: View {
   @StateObject private var model: ProfileNativeModel
   @State private var showEditProfile = false
+  @State private var singlePhotoPreviewPost: MIRAPost?
+  @State private var isSinglePhotoPreviewPresented = false
   @State private var profilePostActionTarget: MIRAPost?
   @State private var isProfilePostActionModalPresented = false
   @State private var deletePostTarget: MIRAPost?
   @State private var isDeletePostConfirmationPresented = false
+  @State private var reportTarget: MIRAReportTarget?
+  @State private var isReportSheetPresented = false
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   private let authSession: MIRAAuthSession?
   private var postGridColumns: [GridItem] {
@@ -216,10 +220,7 @@ public struct ProfileNativeView: View {
           } else {
             LazyVGrid(columns: postGridColumns, spacing: 1) {
               ForEach(model.posts) { post in
-                ProfilePostTile(
-                  post: post,
-                  onOpenActions: { presentProfilePostActions(post) }
-                )
+                profilePostTile(post)
               }
             }
             .frame(maxWidth: .infinity, alignment: .center)
@@ -274,6 +275,44 @@ public struct ProfileNativeView: View {
           }
         }
       }
+      .miraBottomSheet(
+        isPresented: $isSinglePhotoPreviewPresented,
+        preferredHeightFraction: 0.78,
+        maxHeight: 720,
+        onDismissed: { singlePhotoPreviewPost = nil }
+      ) { dismissPreview in
+        if let post = singlePhotoPreviewPost {
+          DiscoverSinglePhotoPreviewSheet(
+            post: post,
+            api: model.api,
+            onReportComment: { comment in
+              dismissPreview()
+              DispatchQueue.main.asyncAfter(deadline: .now() + MIRATransitionTiming.sheetClose) {
+                presentReport(for: comment)
+              }
+            }
+          )
+        } else {
+          Color.clear
+        }
+      }
+      .miraBottomSheet(
+        isPresented: $isReportSheetPresented,
+        preferredHeightFraction: 0.72,
+        maxHeight: 640,
+        onDismissed: { reportTarget = nil }
+      ) { dismissReport in
+        if let reportTarget {
+          MIRAReportSheet(
+            target: reportTarget,
+            api: model.api,
+            onSubmitted: { _ in },
+            onClose: dismissReport
+          )
+        } else {
+          Color.clear
+        }
+      }
       .miraActionModal(
         isPresented: $isProfilePostActionModalPresented,
         onDismissed: { profilePostActionTarget = nil }
@@ -325,6 +364,52 @@ public struct ProfileNativeView: View {
     }
   }
 
+  @ViewBuilder
+  private func profilePostTile(_ post: MIRAPost) -> some View {
+    if miraShouldOpenSinglePhotoPreview(post) {
+      Button {
+        openSinglePhotoPreview(post)
+      } label: {
+        ProfilePostTile(post: post)
+      }
+      .buttonStyle(.plain)
+      .highPriorityGesture(LongPressGesture(minimumDuration: 0.38).onEnded { _ in
+        presentProfilePostActions(post)
+      })
+    } else {
+      NavigationLink(destination: DiscoverPostDetailNativeView(post: post, api: model.api).miraHideTabBarOnAppear()) {
+        ProfilePostTile(post: post)
+      }
+      .buttonStyle(.plain)
+      .highPriorityGesture(LongPressGesture(minimumDuration: 0.38).onEnded { _ in
+        presentProfilePostActions(post)
+      })
+    }
+  }
+
+  private func openSinglePhotoPreview(_ post: MIRAPost) {
+    CaptroHaptics.light()
+    singlePhotoPreviewPost = post
+    withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
+      isSinglePhotoPreviewPresented = true
+    }
+  }
+
+  private func presentReport(for comment: MIRAComment) {
+    reportTarget = MIRAReportTarget(
+      targetType: "comment",
+      targetId: comment.id,
+      ownerUserId: comment.userId,
+      title: "Report comment",
+      subtitle: comment.text
+    )
+    DispatchQueue.main.async {
+      withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
+        isReportSheetPresented = true
+      }
+    }
+  }
+
   private func presentProfilePostActions(_ post: MIRAPost) {
     CaptroHaptics.light()
     profilePostActionTarget = post
@@ -335,6 +420,8 @@ public struct ProfileNativeView: View {
 
   private var profileTabBarVisibility: Visibility {
     showEditProfile ||
+    isSinglePhotoPreviewPresented ||
+    isReportSheetPresented ||
     isProfilePostActionModalPresented ||
     isDeletePostConfirmationPresented ? .hidden : .visible
   }
@@ -535,6 +622,8 @@ public struct UserProfileNativeView: View {
   @State private var reportTarget: MIRAReportTarget?
   @State private var isReportSheetPresented = false
   @State private var isProfileOptionsPresented = false
+  @State private var singlePhotoPreviewPost: MIRAPost?
+  @State private var isSinglePhotoPreviewPresented = false
   @State private var isOpeningMessage = false
   @State private var messageRoute: ChatOpenRoute?
   private var postGridColumns: [GridItem] {
@@ -558,9 +647,7 @@ public struct UserProfileNativeView: View {
         } else {
           LazyVGrid(columns: postGridColumns, spacing: 1) {
             ForEach(model.posts) { post in
-              ProfilePostTile(
-                post: post
-              )
+              userProfilePostTile(post)
             }
           }
           .frame(maxWidth: .infinity, alignment: .center)
@@ -598,6 +685,27 @@ public struct UserProfileNativeView: View {
         EmptyView()
       }
       .hidden()
+    }
+    .miraBottomSheet(
+      isPresented: $isSinglePhotoPreviewPresented,
+      preferredHeightFraction: 0.78,
+      maxHeight: 720,
+      onDismissed: { singlePhotoPreviewPost = nil }
+    ) { dismissPreview in
+      if let post = singlePhotoPreviewPost {
+        DiscoverSinglePhotoPreviewSheet(
+          post: post,
+          api: model.api,
+          onReportComment: { comment in
+            dismissPreview()
+            DispatchQueue.main.asyncAfter(deadline: .now() + MIRATransitionTiming.sheetClose) {
+              presentReport(for: comment)
+            }
+          }
+        )
+      } else {
+        Color.clear
+      }
     }
     .miraBottomSheet(
       isPresented: $isReportSheetPresented,
@@ -661,6 +769,46 @@ public struct UserProfileNativeView: View {
             Task { await model.toggleFollow() }
           }
         }
+      }
+    }
+  }
+
+  @ViewBuilder
+  private func userProfilePostTile(_ post: MIRAPost) -> some View {
+    if miraShouldOpenSinglePhotoPreview(post) {
+      Button {
+        openSinglePhotoPreview(post)
+      } label: {
+        ProfilePostTile(post: post)
+      }
+      .buttonStyle(.plain)
+    } else {
+      NavigationLink(destination: DiscoverPostDetailNativeView(post: post, api: model.api).miraHideTabBarOnAppear()) {
+        ProfilePostTile(post: post)
+      }
+      .buttonStyle(.plain)
+    }
+  }
+
+  private func openSinglePhotoPreview(_ post: MIRAPost) {
+    CaptroHaptics.light()
+    singlePhotoPreviewPost = post
+    withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
+      isSinglePhotoPreviewPresented = true
+    }
+  }
+
+  private func presentReport(for comment: MIRAComment) {
+    reportTarget = MIRAReportTarget(
+      targetType: "comment",
+      targetId: comment.id,
+      ownerUserId: comment.userId,
+      title: "Report comment",
+      subtitle: comment.text
+    )
+    DispatchQueue.main.async {
+      withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
+        isReportSheetPresented = true
       }
     }
   }
@@ -1701,8 +1849,8 @@ private final class CreateGroupChatModel: ObservableObject {
   }
 
   func create() async -> Bool {
-    guard selected.count >= 2 else {
-      errorMessage = "Choose at least two people."
+    guard !selected.isEmpty else {
+      errorMessage = "Choose at least one person."
       return false
     }
     guard !isCreating else { return false }
@@ -1833,7 +1981,7 @@ private struct CreateGroupChatSheet: View {
             }
           }
           .font(.system(size: 15, weight: .semibold))
-          .disabled(model.isCreating || model.selected.count < 2)
+          .disabled(model.isCreating || model.selected.isEmpty)
         }
       }
       .task(id: model.query) {

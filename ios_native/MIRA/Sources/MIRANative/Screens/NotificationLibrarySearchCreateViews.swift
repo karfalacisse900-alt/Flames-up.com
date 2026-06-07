@@ -240,6 +240,11 @@ final class LibraryNativeModel: ObservableObject {
 
 public struct LibraryNativeView: View {
   @StateObject private var model: LibraryNativeModel
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @State private var singlePhotoPreviewPost: MIRAPost?
+  @State private var isSinglePhotoPreviewPresented = false
+  @State private var reportTarget: MIRAReportTarget?
+  @State private var isReportSheetPresented = false
 
   public init(api: MIRAAPIClient) {
     _model = StateObject(wrappedValue: LibraryNativeModel(api: api))
@@ -278,6 +283,44 @@ public struct LibraryNativeView: View {
     .navigationBarTitleDisplayMode(.inline)
     .miraHideTabBarOnAppear()
     .task { await model.load() }
+    .miraBottomSheet(
+      isPresented: $isSinglePhotoPreviewPresented,
+      preferredHeightFraction: 0.78,
+      maxHeight: 720,
+      onDismissed: { singlePhotoPreviewPost = nil }
+    ) { dismissPreview in
+      if let post = singlePhotoPreviewPost {
+        DiscoverSinglePhotoPreviewSheet(
+          post: post,
+          api: model.api,
+          onReportComment: { comment in
+            dismissPreview()
+            DispatchQueue.main.asyncAfter(deadline: .now() + MIRATransitionTiming.sheetClose) {
+              presentReport(for: comment)
+            }
+          }
+        )
+      } else {
+        Color.clear
+      }
+    }
+    .miraBottomSheet(
+      isPresented: $isReportSheetPresented,
+      preferredHeightFraction: 0.72,
+      maxHeight: 640,
+      onDismissed: { reportTarget = nil }
+    ) { dismissReport in
+      if let reportTarget {
+        MIRAReportSheet(
+          target: reportTarget,
+          api: model.api,
+          onSubmitted: { _ in },
+          onClose: dismissReport
+        )
+      } else {
+        Color.clear
+      }
+    }
   }
 
   private var libraryIntro: some View {
@@ -345,43 +388,81 @@ public struct LibraryNativeView: View {
   }
 
   private func libraryPostTile(_ post: MIRAPost) -> some View {
-    NavigationLink(destination: PostDetailNativeView(post: post, api: model.api)) {
-      ZStack(alignment: .bottomLeading) {
-        MIRATheme.Color.mediaPlaceholder
-
-        if let media = post.thumbnailMediaURLs.first ?? post.feedMediaURLs.first {
-          RemoteMediaView(url: media, isVideo: media.isVideoURL)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .clipped()
-        } else {
-          ZStack {
-            MIRATheme.Color.surfaceSoft
-            Text(post.titleText)
-              .font(.system(size: 12, weight: .semibold))
-              .foregroundStyle(MIRATheme.Color.textSecondary)
-              .lineLimit(4)
-              .multilineTextAlignment(.leading)
-              .padding(12)
-          }
+    Group {
+      if miraShouldOpenSinglePhotoPreview(post) {
+        Button {
+          openSinglePhotoPreview(post)
+        } label: {
+          libraryPostTileContent(post)
         }
-
-        LinearGradient(colors: [.clear, .black.opacity(0.52)], startPoint: .center, endPoint: .bottom)
-          .allowsHitTesting(false)
-
-        Text(post.titleText)
-          .font(.system(size: 12, weight: .semibold))
-          .foregroundStyle(.white)
-          .lineLimit(2)
-          .padding(10)
-          .shadow(radius: 4)
+        .buttonStyle(.plain)
+      } else {
+        NavigationLink(destination: DiscoverPostDetailNativeView(post: post, api: model.api).miraHideTabBarOnAppear()) {
+          libraryPostTileContent(post)
+        }
+        .buttonStyle(.plain)
       }
-      .aspectRatio(3.0 / 4.0, contentMode: .fit)
-      .frame(maxWidth: .infinity)
-      .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-      .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(MIRATheme.Color.hairline, lineWidth: 1))
-      .clipped()
     }
-    .buttonStyle(.plain)
+  }
+
+  private func libraryPostTileContent(_ post: MIRAPost) -> some View {
+    ZStack(alignment: .bottomLeading) {
+      MIRATheme.Color.mediaPlaceholder
+
+      if let media = post.thumbnailMediaURLs.first ?? post.feedMediaURLs.first {
+        RemoteMediaView(url: media, isVideo: media.isVideoURL)
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+          .clipped()
+      } else {
+        ZStack {
+          MIRATheme.Color.surfaceSoft
+          Text(post.titleText)
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(MIRATheme.Color.textSecondary)
+            .lineLimit(4)
+            .multilineTextAlignment(.leading)
+            .padding(12)
+        }
+      }
+
+      LinearGradient(colors: [.clear, .black.opacity(0.52)], startPoint: .center, endPoint: .bottom)
+        .allowsHitTesting(false)
+
+      Text(post.titleText)
+        .font(.system(size: 12, weight: .semibold))
+        .foregroundStyle(.white)
+        .lineLimit(2)
+        .padding(10)
+        .shadow(radius: 4)
+    }
+    .aspectRatio(3.0 / 4.0, contentMode: .fit)
+    .frame(maxWidth: .infinity)
+    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(MIRATheme.Color.hairline, lineWidth: 1))
+    .clipped()
+  }
+
+  private func openSinglePhotoPreview(_ post: MIRAPost) {
+    CaptroHaptics.light()
+    singlePhotoPreviewPost = post
+    withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
+      isSinglePhotoPreviewPresented = true
+    }
+  }
+
+  private func presentReport(for comment: MIRAComment) {
+    reportTarget = MIRAReportTarget(
+      targetType: "comment",
+      targetId: comment.id,
+      ownerUserId: comment.userId,
+      title: "Report comment",
+      subtitle: comment.text
+    )
+    DispatchQueue.main.async {
+      withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
+        isReportSheetPresented = true
+      }
+    }
   }
 
   private var librarySkeleton: some View {
