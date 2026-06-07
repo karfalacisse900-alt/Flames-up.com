@@ -570,16 +570,9 @@ private let postComposerDiscoverCategories = [
   "outfits",
   "outdoors",
   "photography",
-  "food",
-  "cafe",
-  "travel",
   "events",
-  "fitness",
-  "beauty",
   "art",
-  "nightlife",
-  "places",
-  "lifestyle"
+  "nightlife"
 ]
 
 private struct MIRABroadDisplayLocation: Codable, Hashable {

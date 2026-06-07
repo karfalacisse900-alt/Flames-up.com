@@ -286,16 +286,12 @@ private enum CacheKey {
   static let postDraft = "native.post_draft.v1.cache_first"
   static let discoverCategoryIds = [
     "all",
-    "photography",
-    "outdoors",
     "outfits",
-    "food",
-    "travel",
+    "outdoors",
+    "photography",
     "events",
-    "nightlife",
     "art",
-    "lifestyle",
-    "fitness"
+    "nightlife"
   ]
 
   static func discoverPosts(_ category: String) -> String {

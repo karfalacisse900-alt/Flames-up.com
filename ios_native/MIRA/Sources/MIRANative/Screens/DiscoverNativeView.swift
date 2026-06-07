@@ -340,13 +340,16 @@ final class DiscoverNativeModel: ObservableObject {
 
   private func postMatchesDiscoverCategory(_ post: MIRAPost, category: String) -> Bool {
     let normalized = normalizedDiscoverCategory(category)
-    let savedCategories = [
-      post.primaryCategory,
-      post.category,
-      post.userSelectedCategory,
-      post.postType
-    ].compactMap(normalizedSavedDiscoverCategory)
-    if savedCategories.contains(normalized) { return true }
+    let userSelectedCategories = [post.userSelectedCategory].compactMap(normalizedSavedDiscoverCategory)
+    if userSelectedCategories.contains(normalized) { return true }
+
+    if (post.categoryConfidence ?? 0) >= 0.50 {
+      let savedCategories = [
+        post.primaryCategory,
+        post.category
+      ].compactMap(normalizedSavedDiscoverCategory)
+      if savedCategories.contains(normalized) { return true }
+    }
 
     let secondaryCategories = post.secondaryCategories?.values.compactMap(normalizedSavedDiscoverCategory) ?? []
     if secondaryCategories.contains(normalized) { return true }
@@ -384,32 +387,18 @@ private let discoverGalleryFilters: [DiscoverGalleryFilter] = [
   .init(id: "outfits"),
   .init(id: "outdoors"),
   .init(id: "photography"),
-  .init(id: "food"),
-  .init(id: "cafe"),
-  .init(id: "travel"),
   .init(id: "events"),
-  .init(id: "fitness"),
-  .init(id: "beauty"),
   .init(id: "art"),
-  .init(id: "nightlife"),
-  .init(id: "places"),
-  .init(id: "lifestyle")
+  .init(id: "nightlife")
 ]
 
 private let discoverCategoryKeywords: [String: [String]] = [
   "outfits": ["outfit", "fit check", "clothes", "clothing", "style", "fashion", "streetwear", "shoes", "jacket", "dress"],
   "outdoors": ["outdoor", "outside", "park", "beach", "trail", "hiking", "nature", "mountain", "lake", "sunset", "trees", "forest", "sky"],
   "photography": ["photography", "camera", "portrait", "photo shoot", "street photo", "landscape", "lens", "film", "monochrome", "composition"],
-  "food": ["food", "meal", "restaurant", "plate", "drink", "dessert", "pizza", "burger", "breakfast", "dinner"],
-  "cafe": ["cafe", "coffee", "latte", "espresso", "bakery", "pastry", "brunch", "tea"],
-  "travel": ["travel", "trip", "vacation", "hotel", "airport", "landmark", "tourist", "city", "bridge", "street", "architecture"],
   "events": ["event", "events", "concert", "festival", "meetup", "show", "game", "crowd", "stadium", "venue", "performance", "birthday", "wedding", "stage", "celebration"],
-  "fitness": ["gym", "workout", "running", "fitness", "sport", "training", "yoga", "bike", "cycling"],
-  "beauty": ["beauty", "makeup", "hair", "skincare", "nails", "salon", "cosmetic"],
   "art": ["art", "drawing", "painting", "design", "sketch", "mural", "gallery", "museum"],
-  "nightlife": ["nightlife", "night", "club", "bar", "lounge", "party", "rooftop", "drinks", "neon"],
-  "places": ["place", "venue", "store", "shop", "museum", "school", "market", "downtown", "location"],
-  "lifestyle": ["lifestyle", "daily life", "friends", "home", "routine", "selfie", "people", "family"]
+  "nightlife": ["nightlife", "night", "club", "bar", "lounge", "party", "rooftop", "drinks", "neon"]
 ]
 
 private struct DiscoverGalleryFilter: Identifiable {
@@ -506,7 +495,6 @@ public struct DiscoverNativeView: View {
           DiscoverSinglePhotoPreviewSheet(
             post: post,
             api: model.api,
-            onClose: dismissPreview,
             onReportComment: { comment in
               dismissPreview()
               DispatchQueue.main.asyncAfter(deadline: .now() + MIRATransitionTiming.sheetClose) {
@@ -857,12 +845,10 @@ private struct DiscoverSinglePhotoPreviewSheet: View {
   @StateObject private var model: PostDetailModel
   @State private var isCommentsPresented = false
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  let onClose: () -> Void
   let onReportComment: (MIRAComment) -> Void
 
-  init(post: MIRAPost, api: MIRAAPIClient, onClose: @escaping () -> Void, onReportComment: @escaping (MIRAComment) -> Void) {
+  init(post: MIRAPost, api: MIRAAPIClient, onReportComment: @escaping (MIRAComment) -> Void) {
     _model = StateObject(wrappedValue: PostDetailModel(post: post, api: api))
-    self.onClose = onClose
     self.onReportComment = onReportComment
   }
 
@@ -870,8 +856,6 @@ private struct DiscoverSinglePhotoPreviewSheet: View {
     NavigationStack {
       ScrollView {
         VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
-          sheetChrome
-
           if let mediaURL {
             GeometryReader { proxy in
               let width = proxy.size.width
@@ -909,6 +893,7 @@ private struct DiscoverSinglePhotoPreviewSheet: View {
           }
         }
         .padding(MIRATheme.Space.md)
+        .padding(.top, MIRATheme.Space.xs)
       }
       .scrollIndicators(.hidden)
       .background(MIRATheme.Color.appBackground)
@@ -941,27 +926,6 @@ private struct DiscoverSinglePhotoPreviewSheet: View {
         guard let update = MIRAPostEngagementSync.update(from: notification) else { return }
         model.applyEngagementUpdate(update)
       }
-    }
-  }
-
-  private var sheetChrome: some View {
-    HStack {
-      Capsule()
-        .fill(MIRATheme.Color.textMuted.opacity(0.24))
-        .frame(width: 42, height: 5)
-      Spacer()
-      Button {
-        CaptroHaptics.light()
-        onClose()
-      } label: {
-        Image(systemName: "xmark")
-          .font(.system(size: 13, weight: .bold))
-          .foregroundStyle(MIRATheme.Color.textSecondary)
-          .frame(width: 34, height: 34)
-          .background(MIRATheme.Color.surfaceSoft)
-          .clipShape(Circle())
-      }
-      .buttonStyle(.miraPress)
     }
   }
 

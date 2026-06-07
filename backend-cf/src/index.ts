@@ -1397,7 +1397,7 @@ async function ensureAutoCategorySchema(db: D1Database) {
   if (autoCategorySchemaReady) return;
 
   const statements = [
-    "ALTER TABLE posts ADD COLUMN primary_category TEXT DEFAULT 'lifestyle'",
+    "ALTER TABLE posts ADD COLUMN primary_category TEXT DEFAULT ''",
     'ALTER TABLE posts ADD COLUMN category_confidence REAL DEFAULT 0',
     "ALTER TABLE posts ADD COLUMN category_source TEXT DEFAULT 'fallback'",
     "ALTER TABLE posts ADD COLUMN category_status TEXT DEFAULT 'low_confidence'",
@@ -1440,7 +1440,7 @@ async function backfillDiscoverCategories(db: D1Database) {
     "COALESCE(tags_json, '')",
     "COALESCE(category_signals_json, '')",
   ].join(" || ' ' || ");
-  for (const category of DISCOVER_CATEGORIES.filter((item) => item !== 'lifestyle')) {
+  for (const category of DISCOVER_CATEGORIES) {
     const keywords = CATEGORY_KEYWORDS[category].slice(0, 28);
     const keywordMatches = keywords.map(() => `LOWER(${searchableSql}) LIKE ?`).join(' OR ');
     try {
@@ -2187,16 +2187,9 @@ type DiscoverCategory =
   | 'photography'
   | 'outdoors'
   | 'outfits'
-  | 'food'
-  | 'cafe'
-  | 'travel'
   | 'events'
   | 'nightlife'
-  | 'art'
-  | 'lifestyle'
-  | 'fitness'
-  | 'beauty'
-  | 'places';
+  | 'art';
 
 type AutoCategorySource = 'apple_vision' | 'backend_ai' | 'hybrid_ai' | 'fallback' | 'admin_changed' | 'user_changed_optional';
 type AutoCategoryStatus = 'pending' | 'classified' | 'low_confidence' | 'needs_review' | 'admin_corrected';
@@ -2247,32 +2240,19 @@ const DISCOVER_CATEGORIES: DiscoverCategory[] = [
   'photography',
   'outdoors',
   'outfits',
-  'food',
-  'cafe',
-  'travel',
   'events',
   'nightlife',
   'art',
-  'lifestyle',
-  'fitness',
-  'beauty',
-  'places',
 ];
+const DEFAULT_DISCOVER_CATEGORY: DiscoverCategory = 'photography';
 
 const CATEGORY_KEYWORDS: Record<DiscoverCategory, string[]> = {
   outfits: ['outfit', 'fit', 'fit check', 'clothes', 'style', 'fashion', 'streetwear', 'shoes', 'shoe', 'jacket', 'mirror selfie', 'clothing', 'accessories', 'sneakers', 'dress', 'apparel', 'person', 'full body pose'],
-  food: ['food', 'meal', 'restaurant', 'drink', 'dessert', 'pizza', 'burger', 'cooking', 'plate', 'breakfast', 'lunch', 'dinner', 'brunch', 'kitchen', 'recipe', 'snack', 'dish', 'table'],
-  cafe: ['cafe', 'café', 'coffee', 'latte', 'espresso', 'bakery', 'pastry', 'brunch', 'tea', 'coffee shop'],
   events: ['event', 'events', 'concert', 'festival', 'meetup', 'show', 'game', 'crowd', 'stadium', 'venue', 'performance', 'birthday', 'wedding', 'audience', 'stage', 'party', 'celebration', 'ceremony', 'conference', 'ticket'],
   outdoors: ['outdoors', 'outdoor', 'outside', 'park', 'beach', 'hiking', 'trail', 'nature', 'mountain', 'lake', 'sunset', 'sunrise', 'trees', 'tree', 'forest', 'walking', 'landscape', 'snow', 'sky', 'water', 'river', 'ocean', 'sea', 'flower', 'plant', 'grass', 'garden', 'field', 'woods', 'camping'],
   nightlife: ['nightlife', 'night', 'club', 'bar', 'lounge', 'party', 'rooftop', 'dj', 'drinks', 'city night', 'after dark', 'dance', 'neon', 'dark', 'cocktail', 'evening'],
-  travel: ['travel', 'trip', 'vacation', 'hotel', 'airport', 'landmark', 'city visit', 'tourist', 'destination', 'road trip', 'passport', 'flight', 'city', 'street', 'architecture', 'building', 'castle', 'monument', 'bridge', 'train', 'station', 'historic', 'old town', 'view'],
   photography: ['photography', 'portrait', 'camera', 'photo shoot', 'street photo', 'aesthetic', 'landscape shot', 'creative shot', 'close up', 'close-up', 'lens', 'film', 'macro', 'black and white', 'monochrome', 'composition'],
   art: ['art', 'drawing', 'painting', 'design', 'sketch', 'illustration', 'mural', 'gallery', 'creative work', 'museum', 'artist', 'craft', 'sculpture', 'visual art'],
-  fitness: ['gym', 'workout', 'running', 'fitness', 'sport', 'basketball', 'soccer', 'training', 'yoga', 'exercise', 'athlete', 'cycling', 'bike', 'bicycle'],
-  beauty: ['beauty', 'makeup', 'hair', 'skincare', 'nails', 'salon', 'lipstick', 'cosmetic', 'cosmetics', 'lash', 'lashes', 'barber'],
-  places: ['place', 'places', 'venue', 'store', 'shop', 'mall', 'museum', 'school', 'library', 'market', 'neighborhood', 'downtown', 'address', 'location', 'city spot'],
-  lifestyle: ['daily life', 'friends', 'home', 'routine', 'random moment', 'personal moment', 'general capture', 'selfie', 'room', 'people', 'human', 'family'],
 };
 
 function normalizeDiscoverCategory(value: unknown, allowAll = false): DiscoverCategory | 'all' | '' {
@@ -2281,9 +2261,6 @@ function normalizeDiscoverCategory(value: unknown, allowAll = false): DiscoverCa
   const aliases: Record<string, DiscoverCategory> = {
     outfit: 'outfits',
     outdoor: 'outdoors',
-    coffee: 'cafe',
-    cafes: 'cafe',
-    place: 'places',
     event: 'events',
     events: 'events',
   };
@@ -2296,10 +2273,8 @@ function discoverCategorySearchTerms(category: DiscoverCategory): string[] {
     outfits: ['outfit', 'fit check', 'fashion', 'style', 'clothing'],
     outdoors: ['outdoor', 'outside', 'nature', 'park', 'beach', 'trail'],
     photography: ['photo', 'camera', 'portrait', 'street photo', 'landscape'],
-    cafe: ['coffee shop', 'coffee', 'bakery', 'brunch'],
     events: ['event', 'concert', 'festival', 'venue', 'stadium', 'performance'],
     nightlife: ['night life', 'club', 'bar', 'party', 'neon'],
-    places: ['place', 'city spot', 'location', 'store', 'museum'],
   };
   const seen = new Set<string>();
   return [category, ...(CATEGORY_KEYWORDS[category] || []), ...(aliases[category] || [])]
@@ -2329,7 +2304,10 @@ function discoverCategoryCondition(postAlias: string, category: DiscoverCategory
   return {
     sql: `(
       COALESCE(json_extract(${alias}.category_scores_json, '$.${category}'), 0) >= ?
-      OR LOWER(COALESCE(NULLIF(${alias}.primary_category, ''), NULLIF(${alias}.category, ''), 'lifestyle')) = ?
+      OR (
+        LOWER(COALESCE(NULLIF(${alias}.primary_category, ''), NULLIF(${alias}.category, ''), '')) = ?
+        AND COALESCE(${alias}.category_confidence, 0) >= 0.50
+      )
       OR LOWER(COALESCE(${alias}.user_selected_category, '')) = ?
       OR COALESCE(${alias}.secondary_categories_json, '') LIKE ?
       OR ${keywordSql}
@@ -2479,16 +2457,10 @@ function boostFromPlaceType(
 ) {
   if (!placeType) return;
   const mappings: Array<{ category: DiscoverCategory; keywords: string[]; weight: number }> = [
-    { category: 'food', keywords: ['restaurant', 'food', 'meal', 'diner', 'kitchen'], weight: 55 },
-    { category: 'cafe', keywords: ['cafe', 'café', 'coffee', 'bakery', 'tea', 'brunch'], weight: 58 },
-    { category: 'fitness', keywords: ['gym', 'fitness', 'studio', 'sport', 'court', 'training'], weight: 55 },
     { category: 'outdoors', keywords: ['park', 'beach', 'trail', 'hiking', 'lake', 'mountain', 'garden'], weight: 58 },
     { category: 'nightlife', keywords: ['bar', 'club', 'lounge', 'nightclub', 'rooftop'], weight: 58 },
     { category: 'events', keywords: ['event', 'concert', 'festival', 'meetup', 'show', 'game', 'crowd', 'stadium', 'venue', 'performance', 'birthday', 'wedding', 'stage'], weight: 58 },
-    { category: 'places', keywords: ['store', 'shop', 'museum', 'school', 'mall', 'market', 'address', 'library'], weight: 48 },
     { category: 'art', keywords: ['gallery', 'museum', 'art', 'mural', 'studio'], weight: 52 },
-    { category: 'travel', keywords: ['hotel', 'airport', 'landmark', 'station', 'tourist', 'bridge'], weight: 50 },
-    { category: 'beauty', keywords: ['salon', 'beauty', 'makeup', 'hair', 'nails', 'barber'], weight: 56 },
   ];
   for (const mapping of mappings) {
     if (mapping.keywords.some((keyword) => categoryTextMatches(placeType, keyword))) {
@@ -2516,17 +2488,8 @@ function boostFromDetectedObjects(
   if (/\b(tree|trees|sky|park|beach|trail|mountain|forest|lake|river|ocean|grass|flower|sunset)\b/.test(text)) {
     addCategoryScore(scores, reasons, 'outdoors', 28, 'nature/outdoor objects');
   }
-  if (/\b(food|plate|drink|cup|coffee|meal|table|dessert|pizza|burger)\b/.test(text)) {
-    addCategoryScore(scores, reasons, 'food', 26, 'food/drink objects');
-  }
-  if (/\b(coffee|latte|espresso|cafe|bakery|pastry)\b/.test(text)) {
-    addCategoryScore(scores, reasons, 'cafe', 26, 'cafe objects');
-  }
   if (/\b(camera|lens|portrait|monochrome|macro|composition)\b/.test(text)) {
     addCategoryScore(scores, reasons, 'photography', 24, 'photo/camera composition objects');
-  }
-  if (/\b(makeup|hair|nails|lipstick|cosmetic|salon)\b/.test(text)) {
-    addCategoryScore(scores, reasons, 'beauty', 28, 'beauty objects');
   }
 }
 
@@ -2589,7 +2552,7 @@ function autoCategoryEngine(input: AutoCategoryInput): AutoCategoryResult {
   const rawConfidence = hasCategorySignal ? Math.min(0.99, Math.max(0, winnerScore / 85)) : 0;
   const confidence = Number(rawConfidence.toFixed(2));
   const isLow = !hasCategorySignal || confidence < 0.50;
-  const primaryCategory = hasCategorySignal ? winner.category : 'lifestyle';
+  const primaryCategory = hasCategorySignal ? winner.category : DEFAULT_DISCOVER_CATEGORY;
   const normalizedScores = Object.fromEntries(
     DISCOVER_CATEGORIES.map((category) => [category, Number(Math.max(0, scores[category]).toFixed(1))])
   ) as Record<DiscoverCategory, number>;
@@ -4766,7 +4729,7 @@ function postPayload(post: any, likedBy: string[] = [], env?: Env) {
   });
   const renderedMediaDimensions = feedMediaDimensions(mediaUrls, mediaTypes, dimensions);
   const primaryMediaDimensions = renderedMediaDimensions[0] || DEFAULT_FEED_MEDIA_RATIO;
-  const primaryCategory = (normalizeDiscoverCategory(post.primary_category || post.category || post.post_type || 'lifestyle', false) || 'lifestyle') as DiscoverCategory;
+  const primaryCategory = (normalizeDiscoverCategory(post.primary_category || post.category || post.post_type, false) || DEFAULT_DISCOVER_CATEGORY) as DiscoverCategory;
   const categoryConfidence = clampFloat(post.category_confidence, 0, 1, 0);
   const categoryScores = normalizeCategoryScoresPayload(post.category_scores_json || (parseJsonObject(post.category_signals_json) as any).category_scores);
   if (!categoryScores[primaryCategory]) categoryScores[primaryCategory] = Number(Math.max(categoryConfidence * 100, 45).toFixed(1));
@@ -7164,7 +7127,7 @@ function legacyUserTransferPayload(row: any) {
 
 function legacyPostTransferPayload(row: any) {
   const editorOverlays = parseJsonArray(row.editor_overlays);
-  const primaryCategory = (normalizeDiscoverCategory(row.primary_category || row.category || row.post_type || 'lifestyle', false) || 'lifestyle') as DiscoverCategory;
+  const primaryCategory = (normalizeDiscoverCategory(row.primary_category || row.category || row.post_type, false) || DEFAULT_DISCOVER_CATEGORY) as DiscoverCategory;
   return {
     legacy_post_id: String(row.id || ''),
     user_id: isUuidText(row.supabase_user_id),
@@ -13574,12 +13537,9 @@ api.get('/discover/categories', async (c) => {
     { id: 'photography', name: 'Photography', icon: 'camera' },
     { id: 'outdoors', name: 'Outdoors', icon: 'leaf' },
     { id: 'outfits', name: 'Outfits', icon: 'tshirt' },
-    { id: 'travel', name: 'Travel', icon: 'airplane' },
     { id: 'events', name: 'Events', icon: 'calendar' },
     { id: 'nightlife', name: 'Nightlife', icon: 'moon.stars' },
     { id: 'art', name: 'Art', icon: 'paintpalette' },
-    { id: 'lifestyle', name: 'Lifestyle', icon: 'sparkles' },
-    { id: 'fitness', name: 'Fitness', icon: 'figure.run' },
   ]);
 });
 
@@ -14396,7 +14356,7 @@ function adminPostPayload(row: any, env: Env) {
   const mediaUrls = sanitizeMediaReferences(row.images, row.image);
   const mediaTypes = parseJsonArray(row.media_types);
   const dimensions = parseJsonArray(row.media_dimensions);
-  const primaryCategory = (normalizeDiscoverCategory(row.primary_category || row.category || row.post_type || 'lifestyle', false) || 'lifestyle') as DiscoverCategory;
+  const primaryCategory = (normalizeDiscoverCategory(row.primary_category || row.category || row.post_type, false) || DEFAULT_DISCOVER_CATEGORY) as DiscoverCategory;
   const categoryConfidence = clampFloat(row.category_confidence, 0, 1, 0);
   const tags = sanitizeAutoCategoryTags(row.tags_json);
   const categorySignals = parseJsonObject(row.category_signals_json);
@@ -15629,7 +15589,7 @@ api.post('/admin/posts/:postId/category', authMiddleware, async (c) => {
        LIMIT 1`
     ).bind(postId).first();
     if (!before) return c.json({ detail: 'Post not found.' }, 404);
-    const oldCategory = normalizeDiscoverCategory(before.primary_category || 'lifestyle', false) || 'lifestyle';
+    const oldCategory = normalizeDiscoverCategory(before.primary_category, false) || DEFAULT_DISCOVER_CATEGORY;
     const nextSignals = {
       ...parseJsonObject(before.category_signals_json),
       admin_changed_at: now(),

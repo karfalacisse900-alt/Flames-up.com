@@ -653,7 +653,6 @@ public struct MainFeedView: View {
   @State private var scrollState = MainFeedScrollState()
   @State private var activeVideoPostID: String?
   @State private var isHeaderHidden = false
-  @State private var isCreateMenuPresented = false
   @State private var isShowingCreatePost = false
   @State private var activeCommentsPost: MIRAPost?
   @State private var isCommentsPresented = false
@@ -793,18 +792,6 @@ public struct MainFeedView: View {
         } else {
           Color.clear
         }
-      }
-      .miraActionModal(
-        isPresented: $isCreateMenuPresented
-      ) { dismiss in
-        MainFeedCreateMenu(
-          onPost: {
-            dismiss()
-            DispatchQueue.main.asyncAfter(deadline: .now() + MIRATransitionTiming.sheetClose) {
-              isShowingCreatePost = true
-            }
-          }
-        )
       }
       .miraActionModal(
         isPresented: $isPostOptionsPresented,
@@ -1076,7 +1063,7 @@ public struct MainFeedView: View {
       Spacer()
       Button {
         CaptroHaptics.light()
-        isCreateMenuPresented = true
+        isShowingCreatePost = true
       } label: {
         MIRAHeaderCircleButton(systemImage: "plus")
       }
@@ -1110,7 +1097,6 @@ public struct MainFeedView: View {
       postOptionsTarget != nil ||
       isReportSheetPresented ||
       reportTarget != nil ||
-      isCreateMenuPresented ||
       isShowingCreatePost
   }
 }
@@ -1705,61 +1691,6 @@ private struct MainNativePostCard: View {
     let author = post.userId?.isEmpty == false ? post.userId! : "missing"
     print("[Captro feed tap] action=\(action) post_id=\(post.id) author_id=\(author)")
     #endif
-  }
-}
-
-private struct MainFeedCreateMenu: View {
-  let onPost: () -> Void
-
-  var body: some View {
-    VStack(spacing: 16) {
-      MainFeedCreateMenuButton(
-        title: "Photo Post",
-        systemImage: "photo.on.rectangle",
-        action: onPost
-      )
-    }
-    .padding(16)
-    .frame(maxWidth: 340)
-    .background {
-      RoundedRectangle(cornerRadius: 44, style: .continuous)
-        .fill(Color(red: 0.945, green: 0.933, blue: 0.929).opacity(0.94))
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 44, style: .continuous))
-    }
-    .shadow(color: .black.opacity(0.10), radius: 18, x: 0, y: 9)
-    .accessibilityElement(children: .contain)
-  }
-}
-
-private struct MainFeedCreateMenuButton: View {
-  let title: String
-  let systemImage: String
-  let action: () -> Void
-
-  var body: some View {
-    Button {
-      CaptroHaptics.light()
-      action()
-    } label: {
-      HStack(spacing: 22) {
-        Image(systemName: systemImage)
-          .font(.system(size: 28, weight: .semibold))
-          .frame(width: 32, height: 32)
-        Text(title)
-          .font(.system(size: 22, weight: .bold))
-          .lineLimit(1)
-          .minimumScaleFactor(0.74)
-        Spacer(minLength: 0)
-      }
-      .foregroundStyle(Color(red: 0.02, green: 0.02, blue: 0.02))
-      .padding(.horizontal, 26)
-      .frame(maxWidth: .infinity)
-      .frame(height: 80)
-      .background(.white, in: Capsule())
-      .contentShape(Capsule())
-    }
-    .buttonStyle(.miraPress)
-    .accessibilityLabel(title)
   }
 }
 
