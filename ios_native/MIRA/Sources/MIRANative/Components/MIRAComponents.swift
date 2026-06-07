@@ -991,6 +991,7 @@ private struct MIRAResolvedVideoPlayer: View {
   @State private var isPlayerReady = false
   @State private var globallyPaused = false
   @State private var videoRetryAttempt = 0
+  @State private var streamReadyRetryAttempt = 0
 
   var body: some View {
     ZStack {
@@ -1023,7 +1024,7 @@ private struct MIRAResolvedVideoPlayer: View {
       if failed {
         VStack(spacing: 8) {
           Image(systemName: "play.slash")
-          Text("Video is processing")
+          Text("Video could not play")
             .font(.system(size: 13, weight: .semibold))
         }
         .foregroundStyle(MIRATheme.Color.textSecondary)
@@ -1103,6 +1104,7 @@ private struct MIRAResolvedVideoPlayer: View {
       failed = false
       isPlayerReady = false
       videoRetryAttempt = 0
+      streamReadyRetryAttempt = 0
       loadedVideoURL = url
     } else if failed && shouldPlay {
       player?.pause()
@@ -1184,7 +1186,9 @@ private struct MIRAResolvedVideoPlayer: View {
       let data: Data
       let response: URLResponse
       do {
-        (data, response) = try await MIRAAPIClient.productionSession.data(from: endpoint)
+        var request = URLRequest(url: endpoint)
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        (data, response) = try await MIRAAPIClient.productionSession.data(for: request)
       } catch {
         await metric.finish(status: "error")
         throw error
@@ -1197,9 +1201,10 @@ private struct MIRAResolvedVideoPlayer: View {
       let info = try decoder.decode(MIRAStreamPlaybackInfo.self, from: data)
       applyStreamPlaybackInfo(info, createPlayer: createPlayer)
     } catch {
-      failed = createPlayer
       if createPlayer {
+        failed = false
         stopVideoMetric(status: "error")
+        scheduleStreamReadyRetry(expectedURL: url)
       }
     }
   }
@@ -1219,10 +1224,32 @@ private struct MIRAResolvedVideoPlayer: View {
       Task { await markPlayerReady(avPlayer, expectedURL: url) }
       MIRAPerformanceTimeline.markOnce("time_to_first_video_frame", detail: "stream")
     } else if createPlayer {
-      failed = true
+      failed = false
       stopVideoMetric(status: "not_ready")
+      scheduleStreamReadyRetry(expectedURL: url)
     } else {
       failed = false
+    }
+  }
+
+  @MainActor
+  private func scheduleStreamReadyRetry(expectedURL: String) {
+    guard shouldPlay, expectedURL.lowercased().hasPrefix("cfstream:"), streamReadyRetryAttempt < 18 else {
+      if shouldPlay, expectedURL.lowercased().hasPrefix("cfstream:") {
+        failed = true
+      }
+      return
+    }
+    streamReadyRetryAttempt += 1
+    let attempt = streamReadyRetryAttempt
+    let delay = UInt64(min(900 + attempt * 250, 4_000)) * 1_000_000
+    Task {
+      try? await Task.sleep(nanoseconds: delay)
+      await MainActor.run {
+        guard shouldPlay, loadedVideoURL == expectedURL, streamReadyRetryAttempt == attempt, player == nil else { return }
+        MIRAApplePerformanceLogger.event("stream_video_retry_ready", detail: "attempt=\(attempt)")
+        Task { await resolveCloudflareStream(createPlayer: true) }
+      }
     }
   }
 
@@ -1247,15 +1274,20 @@ private struct MIRAResolvedVideoPlayer: View {
         }
         failed = false
         videoRetryAttempt = 0
+        streamReadyRetryAttempt = 0
         stopVideoMetric(status: "ready")
         syncPlayback(expectedPlayer)
         return
       }
       if expectedPlayer.currentItem?.status == .failed {
-        failed = true
         isPlayerReady = false
         stopVideoMetric(status: "failed")
-        scheduleVideoRetry(expectedURL: expectedURL)
+        if canRetryVideo(expectedURL: expectedURL) {
+          failed = false
+          scheduleVideoRetry(expectedURL: expectedURL)
+        } else {
+          failed = true
+        }
         return
       }
       try? await Task.sleep(nanoseconds: 100_000_000)
@@ -1278,7 +1310,10 @@ private struct MIRAResolvedVideoPlayer: View {
 
   @MainActor
   private func scheduleVideoRetry(expectedURL: String) {
-    guard shouldPlay, videoRetryAttempt < 6 else { return }
+    guard shouldPlay, videoRetryAttempt < 6 else {
+      if shouldPlay { failed = true }
+      return
+    }
     videoRetryAttempt += 1
     let attempt = videoRetryAttempt
     Task {
@@ -1294,6 +1329,13 @@ private struct MIRAResolvedVideoPlayer: View {
         Task { await configurePlayer() }
       }
     }
+  }
+
+  private func canRetryVideo(expectedURL: String) -> Bool {
+    shouldPlay && videoRetryAttempt < 6 && (
+      expectedURL.lowercased().hasPrefix("cfstream:")
+        || expectedURL.isVideoURL
+    )
   }
 
   private func reportRatio(_ image: UIImage) {

@@ -16599,8 +16599,8 @@ api.get('/stream/video/:videoUid', async (c) => {
     const token = cloudflareStreamToken(c.env);
     if (!accountId || !token) return c.json({ detail: 'Cloudflare Stream is not configured.' }, 503);
     const cacheKey = `stream:video:${uid}`;
-    const cached = c.env.KV ? await c.env.KV.get(cacheKey, 'json').catch(() => null) : null;
-    if (cached) {
+    const cached: any = c.env.KV ? await c.env.KV.get(cacheKey, 'json').catch(() => null) : null;
+    if (cached && cached.ready !== false && cached.hls) {
       const response = c.json(cached);
       response.headers.set('cache-control', 'public, max-age=60, s-maxage=300');
       return response;
@@ -16612,22 +16612,26 @@ api.get('/stream/video/:videoUid', async (c) => {
     const data: any = await res.json();
     if (!data.success || !data.result) return c.json({ detail: 'Video not found' }, 404);
     const v = data.result;
+    const state = cleanText(v.status?.state || '', 40).toLowerCase();
+    const hls = cleanText(v.playback?.hls || '', 2200) || null;
+    const dash = cleanText(v.playback?.dash || '', 2200) || null;
+    const ready = Boolean(v.readyToStream || state === 'ready') && !!hls;
     const payload = {
       uid: v.uid,
-      status: v.status?.state || 'unknown',
+      status: state || 'unknown',
       duration: v.duration,
       thumbnail: v.thumbnail,
       preview: v.preview,
       playback: v.playback || {},
-      hls: v.playback?.hls || null,
-      dash: v.playback?.dash || null,
-      ready: v.readyToStream || false,
+      hls,
+      dash,
+      ready,
     };
-    if (c.env.KV) {
-      await c.env.KV.put(cacheKey, JSON.stringify(payload), { expirationTtl: payload.ready ? 300 : 20 }).catch(() => undefined);
+    if (c.env.KV && payload.ready) {
+      await c.env.KV.put(cacheKey, JSON.stringify(payload), { expirationTtl: 300 }).catch(() => undefined);
     }
     const response = c.json(payload);
-    response.headers.set('cache-control', payload.ready ? 'public, max-age=60, s-maxage=300' : 'public, max-age=5, s-maxage=20');
+    response.headers.set('cache-control', payload.ready ? 'public, max-age=60, s-maxage=300' : 'no-store');
     return response;
   } catch (e: any) {
     console.error('Stream fetch failed:', getErrorCode(e));

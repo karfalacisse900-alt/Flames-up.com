@@ -678,7 +678,7 @@ public struct MainFeedView: View {
   public var body: some View {
     NavigationStack {
       ZStack(alignment: .top) {
-        ScrollView {
+        ScrollView(showsIndicators: false) {
           GeometryReader { proxy in
             Color.clear.preference(key: MainFeedScrollOffsetPreferenceKey.self, value: proxy.frame(in: .named("mainFeedScroll")).minY)
           }
@@ -724,6 +724,7 @@ public struct MainFeedView: View {
           .padding(.bottom, MIRATheme.Space.xxl)
         }
         .coordinateSpace(name: "mainFeedScroll")
+        .scrollIndicators(.hidden)
         .miraScrollFeel(.feed)
         .simultaneousGesture(
           DragGesture(minimumDistance: 6, coordinateSpace: .local)

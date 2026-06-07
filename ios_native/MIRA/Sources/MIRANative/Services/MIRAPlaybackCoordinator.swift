@@ -50,7 +50,8 @@ public final class MIRAVideoPrewarmManager {
   }
 
   public func streamInfo(for url: String) -> MIRAStreamPlaybackInfo? {
-    cachedStreamInfo[normalized(url)]
+    guard let info = cachedStreamInfo[normalized(url)], info.ready != false else { return nil }
+    return info
   }
 
   private func prewarm(url: String, shouldPreparePlayer: Bool) {
@@ -61,8 +62,8 @@ public final class MIRAVideoPrewarmManager {
       }
       return
     }
-    if cachedStreamInfo[key] != nil {
-      if shouldPreparePlayer, let info = cachedStreamInfo[key], info.ready != false, let hls = info.hls, let hlsURL = URL(string: hls) {
+    if let info = cachedStreamInfo[key], info.ready != false {
+      if shouldPreparePlayer, let hls = info.hls, let hlsURL = URL(string: hls) {
         preparePlayer(for: key, playbackURL: hlsURL)
       }
       return
@@ -106,7 +107,9 @@ public final class MIRAVideoPrewarmManager {
       let data: Data
       let response: URLResponse
       do {
-        (data, response) = try await MIRAAPIClient.productionSession.data(from: endpoint)
+        var request = URLRequest(url: endpoint)
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        (data, response) = try await MIRAAPIClient.productionSession.data(for: request)
       } catch {
         throw error
       }
@@ -116,13 +119,15 @@ public final class MIRAVideoPrewarmManager {
       let decoder = JSONDecoder()
       decoder.keyDecodingStrategy = .convertFromSnakeCase
       let info = try decoder.decode(MIRAStreamPlaybackInfo.self, from: data)
-      cachedStreamInfo[key] = info
       inFlight.remove(key)
       if info.ready != false {
+        cachedStreamInfo[key] = info
         MIRAApplePerformanceLogger.event("video_ready_to_play", detail: "stream_info")
         if shouldPreparePlayer, let hls = info.hls, let hlsURL = URL(string: hls) {
           preparePlayer(for: key, playbackURL: hlsURL)
         }
+      } else {
+        MIRAApplePerformanceLogger.event("video_prewarm_processing", detail: key.videoPrewarmLogLabel)
       }
     } catch {
       inFlight.remove(key)
