@@ -354,7 +354,7 @@ final class DiscoverNativeModel: ObservableObject {
     let secondaryCategories = post.secondaryCategories?.values.compactMap(normalizedSavedDiscoverCategory) ?? []
     if secondaryCategories.contains(normalized) { return true }
 
-    if let score = post.categoryScores?[normalized], score >= 30 { return true }
+    if let score = post.categoryScores?[normalized], score >= 24 { return true }
 
     let arraySignals = [
       post.tags?.values,

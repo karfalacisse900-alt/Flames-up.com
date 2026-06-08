@@ -649,9 +649,9 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
     // Cloudflare Images can take a few seconds to make a newly uploaded media
     // variant available. Keep retrying inside the same task so fresh posts do not
     // remain stuck on the placeholder until the feed is rebuilt.
-    for attempt in 1...8 {
+    for attempt in 1...18 {
       guard !Task.isCancelled else { return }
-      let delay = min(UInt64(attempt) * 650_000_000, UInt64(2_600_000_000))
+      let delay = min(UInt64(attempt) * 550_000_000, UInt64(2_400_000_000))
       try? await Task.sleep(nanoseconds: delay)
       for remoteURL in remoteURLs {
         if let result = await MIRAImageLoadPipeline.shared.image(for: remoteURL, maxPixelSize: resolvedMaxPixelSize) {
@@ -1234,7 +1234,7 @@ private struct MIRAResolvedVideoPlayer: View {
 
   @MainActor
   private func scheduleStreamReadyRetry(expectedURL: String) {
-    guard shouldPlay, expectedURL.lowercased().hasPrefix("cfstream:"), streamReadyRetryAttempt < 18 else {
+    guard shouldPlay, expectedURL.lowercased().hasPrefix("cfstream:"), streamReadyRetryAttempt < 30 else {
       if shouldPlay, expectedURL.lowercased().hasPrefix("cfstream:") {
         failed = true
       }

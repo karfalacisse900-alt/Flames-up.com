@@ -583,6 +583,7 @@ let statusLikeSchemaReady = false;
 let mediaModerationSchemaReady = false;
 let accountDeletionSchemaReady = false;
 let groupChatSchemaReady = false;
+let likeUniquenessSchemaReady = false;
 
 function normalizeSchemaSql(statement: string): string {
   return statement.replace(/\s+/g, ' ').trim().replace(/;$/, '');
@@ -670,6 +671,104 @@ async function ensureReliabilitySchema(db: D1Database) {
   }
 
   reliabilitySchemaReady = true;
+}
+
+async function ensureLikeUniquenessSchema(db: D1Database) {
+  if (likeUniquenessSchemaReady) return;
+
+  const statements = [
+    `CREATE TABLE IF NOT EXISTS likes (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      post_id TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`,
+    `DELETE FROM likes
+     WHERE id IN (
+       SELECT id FROM (
+         SELECT id,
+                ROW_NUMBER() OVER (PARTITION BY user_id, post_id ORDER BY COALESCE(created_at, ''), id) AS rn
+         FROM likes
+       )
+       WHERE rn > 1
+     )`,
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_likes_user_post_unique ON likes(user_id, post_id)',
+    'ALTER TABLE posts ADD COLUMN likes_count INTEGER DEFAULT 0',
+    `CREATE TABLE IF NOT EXISTS discover_likes (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      post_id TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`,
+    `DELETE FROM discover_likes
+     WHERE id IN (
+       SELECT id FROM (
+         SELECT id,
+                ROW_NUMBER() OVER (PARTITION BY user_id, post_id ORDER BY COALESCE(created_at, ''), id) AS rn
+         FROM discover_likes
+       )
+       WHERE rn > 1
+     )`,
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_discover_likes_user_post_unique ON discover_likes(user_id, post_id)',
+    `CREATE TABLE IF NOT EXISTS comment_likes (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      comment_id TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`,
+    `DELETE FROM comment_likes
+     WHERE id IN (
+       SELECT id FROM (
+         SELECT id,
+                ROW_NUMBER() OVER (PARTITION BY user_id, comment_id ORDER BY COALESCE(created_at, ''), id) AS rn
+         FROM comment_likes
+       )
+       WHERE rn > 1
+     )`,
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_comment_likes_user_comment_unique ON comment_likes(user_id, comment_id)',
+    'ALTER TABLE comments ADD COLUMN likes_count INTEGER DEFAULT 0',
+    `CREATE TABLE IF NOT EXISTS status_likes (
+      id TEXT PRIMARY KEY,
+      status_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(status_id, user_id)
+    )`,
+    `DELETE FROM status_likes
+     WHERE id IN (
+       SELECT id FROM (
+         SELECT id,
+                ROW_NUMBER() OVER (PARTITION BY status_id, user_id ORDER BY COALESCE(created_at, ''), id) AS rn
+         FROM status_likes
+       )
+       WHERE rn > 1
+     )`,
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_status_likes_status_user_unique ON status_likes(status_id, user_id)',
+    `UPDATE posts
+     SET likes_count = (
+       SELECT COUNT(*)
+       FROM likes
+       WHERE likes.post_id = posts.id
+     )`,
+    `UPDATE comments
+     SET likes_count = (
+       SELECT COUNT(*)
+       FROM comment_likes
+       WHERE comment_likes.comment_id = comments.id
+     )`,
+  ];
+
+  for (const statement of statements) {
+    try {
+      await runSchemaStatement(db, statement);
+    } catch (error: any) {
+      if (!isIgnorableSchemaError(error, statement)) {
+        throw error;
+      }
+    }
+  }
+
+  likeUniquenessSchemaReady = true;
 }
 
 async function ensureMessagePresenceSchema(db: D1Database) {
@@ -4522,9 +4621,7 @@ async function messagePayload(c: any, row: any): Promise<any> {
   const rawMediaType = cleanText(row.media_type || '', 40).toLowerCase();
   const isVideoMessage = rawMediaType.includes('video') || isVideoMediaUrl(rawMediaUrl) || isVideoMediaUrl(mediaUrl);
   const streamPosterUrl = isVideoMessage ? streamThumbnailUrl(rawMediaUrl) : '';
-  if (isVideoMessage && rawMediaUrl.startsWith('cfstream:')) {
-    mediaUrl = streamPlaybackUrl(rawMediaUrl);
-  }
+  if (isVideoMessage && rawMediaUrl.startsWith('cfstream:')) mediaUrl = rawMediaUrl;
   const rawCreatedAt = cleanText(row.created_at || '', 80);
   const parsedCreatedAt = rawCreatedAt
     ? Date.parse(rawCreatedAt.includes('T') ? rawCreatedAt : `${rawCreatedAt.replace(' ', 'T')}Z`)
@@ -4893,6 +4990,7 @@ function feedPostPayload(post: any, likedBy: string[] = [], env?: Env) {
 }
 
 async function getPostEngagementState(db: D1Database, postId: string, userId: string) {
+  await ensureLikeUniquenessSchema(db);
   const row: any = await db.prepare(
     `SELECT
        COALESCE(p.likes_count, 0) AS stored_likes_count,
@@ -4907,21 +5005,21 @@ async function getPostEngagementState(db: D1Database, postId: string, userId: st
   ).bind(userId, postId, userId, postId, postId).first();
 
   const state = {
-    likes_count: Math.max(0, Number(row?.stored_likes_count || 0), Number(row?.counted_likes_count || 0)),
-    comments_count: Math.max(0, Number(row?.stored_comments_count || 0), Number(row?.counted_comments_count || 0)),
-    saves_count: Math.max(0, Number(row?.stored_saves_count || 0), Number(row?.counted_saves_count || 0)),
+    likes_count: Math.max(0, Number(row?.counted_likes_count || 0)),
+    comments_count: Math.max(0, Number(row?.counted_comments_count || 0)),
+    saves_count: Math.max(0, Number(row?.counted_saves_count || 0)),
     liked: row?.is_liked === true || row?.is_liked === 1 || row?.is_liked === '1',
     saved: row?.saved === true || row?.saved === 1 || row?.saved === '1',
   };
 
-  // Keep denormalized counters repaired upward without erasing legacy counts that
-  // may not have matching interaction rows.
+  // Keep denormalized counters repaired from canonical interaction rows so old
+  // duplicate/stale counters cannot make a post look liked more than once.
   try {
     await db.prepare(
       `UPDATE posts
-       SET likes_count = MAX(COALESCE(likes_count, 0), ?),
-           comments_count = MAX(COALESCE(comments_count, 0), ?),
-           saves_count = MAX(COALESCE(saves_count, 0), ?)
+       SET likes_count = ?,
+           comments_count = ?,
+           saves_count = ?
        WHERE id = ?`
     )
       .bind(state.likes_count, state.comments_count, state.saves_count, postId)
@@ -10342,7 +10440,7 @@ api.get('/posts/feed', authMiddleware, async (c) => {
        EXISTS (SELECT 1 FROM follows fl WHERE fl.follower_id = ? AND fl.following_id = p.user_id) AS is_following,
        EXISTS (SELECT 1 FROM likes lk WHERE lk.user_id = ? AND lk.post_id = p.id) AS is_liked,
        EXISTS (SELECT 1 FROM saved_posts sp WHERE sp.user_id = ? AND sp.post_id = p.id) AS saved,
-       MAX(COALESCE(p.likes_count, 0), (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id)) AS live_likes_count,
+       (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
        MAX(COALESCE(p.comments_count, 0), (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden'))) AS live_comments_count,
        MAX(COALESCE(p.saves_count, 0), (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id)) AS live_saves_count
      FROM posts p JOIN users u ON p.user_id = u.id`,
@@ -10369,7 +10467,7 @@ api.get('/posts/world-board', async (c) => {
     const payload = await cachedJson(c, `posts:world-board:v9:${skip}:${limit}`, 8, async () => {
       const worldBoardSql = [
         `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
-           MAX(COALESCE(p.likes_count, 0), (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id)) AS live_likes_count,
+           (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
            MAX(COALESCE(p.comments_count, 0), (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden'))) AS live_comments_count,
            MAX(COALESCE(p.saves_count, 0), (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id)) AS live_saves_count
          FROM posts p JOIN users u ON p.user_id = u.id`,
@@ -10400,7 +10498,7 @@ api.get('/posts/nearby-feed', authMiddleware, async (c) => {
   const limit = clampNumber(c.req.query('limit') || '24', 1, 50, 24);
   const nearbyFeedSql = [
     `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
-       MAX(COALESCE(p.likes_count, 0), (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id)) AS live_likes_count,
+       (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
        MAX(COALESCE(p.comments_count, 0), (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden'))) AS live_comments_count,
        MAX(COALESCE(p.saves_count, 0), (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id)) AS live_saves_count
      FROM posts p JOIN users u ON p.user_id = u.id`,
@@ -10423,7 +10521,7 @@ api.get('/posts/:postId', authMiddleware, async (c) => {
        EXISTS (SELECT 1 FROM follows fl WHERE fl.follower_id = ? AND fl.following_id = p.user_id) AS is_following,
        EXISTS (SELECT 1 FROM likes lk WHERE lk.user_id = ? AND lk.post_id = p.id) AS is_liked,
        EXISTS (SELECT 1 FROM saved_posts sp WHERE sp.user_id = ? AND sp.post_id = p.id) AS saved,
-       MAX(COALESCE(p.likes_count, 0), (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id)) AS live_likes_count,
+       (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
        MAX(COALESCE(p.comments_count, 0), (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden'))) AS live_comments_count,
        MAX(COALESCE(p.saves_count, 0), (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id)) AS live_saves_count
      FROM posts p JOIN users u ON p.user_id = u.id`,
@@ -10439,13 +10537,14 @@ api.post('/posts/:postId/like', authMiddleware, async (c) => {
   const userId = getUserId(c); const postId = c.req.param('postId');
   await ensureGovernanceSchema(c.env.DB);
   await ensureMediaModerationSchema(c.env.DB);
+  await ensureLikeUniquenessSchema(c.env.DB);
   const limited = await enforceRateLimit(c, 'post_like', userId, 300, 60);
   if (limited) return limited;
   const body: any = await c.req.json().catch(() => ({}));
   const requested = optionalBoolean(body.liked ?? body.like ?? body.value);
   const likeVisiblePostSql = [
     `SELECT p.id, p.user_id,
-       MAX(COALESCE(p.likes_count, 0), (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id)) AS likes_count,
+       (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS likes_count,
        MAX(COALESCE(p.comments_count, 0), (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden'))) AS comments_count,
        MAX(COALESCE(p.saves_count, 0), (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id)) AS saves_count,
        EXISTS (SELECT 1 FROM likes lk WHERE lk.user_id = ? AND lk.post_id = p.id) AS is_liked,
@@ -10462,25 +10561,18 @@ api.post('/posts/:postId/like', authMiddleware, async (c) => {
     nextLiked = !wasLiked;
   }
 
-  const changed = nextLiked !== wasLiked;
   if (nextLiked) {
-    await c.env.DB.batch([
-      c.env.DB.prepare('DELETE FROM likes WHERE user_id = ? AND post_id = ?').bind(userId, postId),
-      c.env.DB.prepare('INSERT INTO likes (id, user_id, post_id) VALUES (?, ?, ?)').bind(uuid(), userId, postId),
-    ]);
+    await c.env.DB.prepare('INSERT OR IGNORE INTO likes (id, user_id, post_id) VALUES (?, ?, ?)')
+      .bind(uuid(), userId, postId)
+      .run();
   } else {
     await c.env.DB.prepare('DELETE FROM likes WHERE user_id = ? AND post_id = ?')
       .bind(userId, postId)
       .run();
   }
-  const liveLikeRow: any = await c.env.DB.prepare(
-    `SELECT COUNT(*) AS likes_count,
-      EXISTS (SELECT 1 FROM likes WHERE user_id = ? AND post_id = ?) AS is_liked
-     FROM likes WHERE post_id = ?`
-  ).bind(userId, postId, postId).first();
-  const nextLikesCount = Math.max(0, Number(liveLikeRow?.likes_count || 0));
-  nextLiked = liveLikeRow?.is_liked === true || liveLikeRow?.is_liked === 1 || liveLikeRow?.is_liked === '1';
-  await c.env.DB.prepare('UPDATE posts SET likes_count = ? WHERE id = ?').bind(nextLikesCount, postId).run();
+  const state = await getPostEngagementState(c.env.DB, postId, userId);
+  nextLiked = state.liked;
+  const changed = state.liked !== wasLiked;
 
   if (nextLiked && changed && (visiblePost as any).user_id !== userId) {
     try {
@@ -10504,10 +10596,10 @@ api.post('/posts/:postId/like', authMiddleware, async (c) => {
 
   return c.json({
     liked: !!nextLiked,
-    likes_count: nextLikesCount,
-    comments_count: Math.max(0, Number(visiblePost.comments_count || 0)),
-    saved: visiblePost.saved === true || visiblePost.saved === 1 || visiblePost.saved === '1',
-    saves_count: Math.max(0, Number(visiblePost.saves_count || 0)),
+    likes_count: state.likes_count,
+    comments_count: state.comments_count,
+    saved: state.saved,
+    saves_count: state.saves_count,
   });
 });
 
@@ -10754,6 +10846,7 @@ api.get('/posts/:postId/comments', authMiddleware, async (c) => {
     await ensurePrivacySchema(c.env.DB);
     await ensureGovernanceSchema(c.env.DB);
     await ensureCommentSchema(c.env.DB);
+    await ensureLikeUniquenessSchema(c.env.DB);
     const userId = getUserId(c);
     const limit = clampNumber(c.req.query('limit') || '80', 1, 100, 80);
     const commentsSql = [
@@ -10816,28 +10909,26 @@ api.post('/comments/:commentId/like', authMiddleware, async (c) => {
       nextLiked = !existing;
     }
 
-    let likesCount = 0;
     if (nextLiked) {
-      const results = await c.env.DB.batch([
-        c.env.DB.prepare('INSERT OR IGNORE INTO comment_likes (id, user_id, comment_id) VALUES (?, ?, ?)')
-          .bind(uuid(), userId, commentId),
-        c.env.DB.prepare('UPDATE comments SET likes_count = COALESCE(likes_count, 0) + 1 WHERE id = ? AND changes() > 0')
-          .bind(commentId),
-        c.env.DB.prepare('SELECT likes_count FROM comments WHERE id = ?').bind(commentId),
-      ]);
-      likesCount = Number((results?.[2] as any)?.results?.[0]?.likes_count || 0);
+      await c.env.DB.prepare('INSERT OR IGNORE INTO comment_likes (id, user_id, comment_id) VALUES (?, ?, ?)')
+        .bind(uuid(), userId, commentId)
+        .run();
     } else {
-      const results = await c.env.DB.batch([
-        c.env.DB.prepare('DELETE FROM comment_likes WHERE user_id = ? AND comment_id = ?')
-          .bind(userId, commentId),
-        c.env.DB.prepare('UPDATE comments SET likes_count = MAX(0, COALESCE(likes_count, 0) - 1) WHERE id = ? AND changes() > 0')
-          .bind(commentId),
-        c.env.DB.prepare('SELECT likes_count FROM comments WHERE id = ?').bind(commentId),
-      ]);
-      likesCount = Number((results?.[2] as any)?.results?.[0]?.likes_count || 0);
+      await c.env.DB.prepare('DELETE FROM comment_likes WHERE user_id = ? AND comment_id = ?')
+        .bind(userId, commentId)
+        .run();
     }
 
-    return c.json({ liked: !!nextLiked, likes_count: likesCount });
+    const likeRow: any = await c.env.DB.prepare(
+      `SELECT COUNT(*) AS likes_count,
+        EXISTS (SELECT 1 FROM comment_likes WHERE user_id = ? AND comment_id = ?) AS liked
+       FROM comment_likes WHERE comment_id = ?`
+    ).bind(userId, commentId, commentId).first();
+    const likesCount = Math.max(0, Number(likeRow?.likes_count || 0));
+    const liked = likeRow?.liked === true || likeRow?.liked === 1 || likeRow?.liked === '1';
+    await c.env.DB.prepare('UPDATE comments SET likes_count = ? WHERE id = ?').bind(likesCount, commentId).run();
+
+    return c.json({ liked, likes_count: likesCount });
   } catch (error: any) {
     console.error('Comment like failed:', getErrorCode(error), error?.message || error);
     return c.json({ detail: 'Could not update comment like.' }, 500);
@@ -10951,7 +11042,9 @@ function groupStatusRows(rows: any[], viewerId: string) {
       });
     }
     const rawStatusImage = cleanText(s.image || '', 2200);
-    const playableStatusImage = isVideoMediaUrl(rawStatusImage) ? streamPlaybackUrl(rawStatusImage) : safeMediaReference(rawStatusImage);
+    const playableStatusImage = rawStatusImage.startsWith('cfstream:')
+      ? rawStatusImage
+      : isVideoMediaUrl(rawStatusImage) ? streamPlaybackUrl(rawStatusImage) : safeMediaReference(rawStatusImage);
     const parsed = {
       ...s,
       image: playableStatusImage,
@@ -11024,7 +11117,11 @@ api.post('/statuses', authMiddleware, async (c) => {
       audioProvider, audioTrackId, audioTitle, audioArtist, audioArtworkUrl, audioStreamUrl, audioStartTime, audioDuration
     ).run();
   return c.json({
-    id, user_id: userId, content: b.content, image: isVideoMediaUrl(String(b.image || '')) ? streamPlaybackUrl(String(b.image || '')) : safeMediaReference(String(b.image || '')), background_color: b.background_color, text_color: b.text_color,
+    id, user_id: userId, content: b.content,
+    image: String(b.image || '').startsWith('cfstream:')
+      ? String(b.image || '')
+      : isVideoMediaUrl(String(b.image || '')) ? streamPlaybackUrl(String(b.image || '')) : safeMediaReference(String(b.image || '')),
+    background_color: b.background_color, text_color: b.text_color,
     visibility, user_username: publicUsernameFor(user), user_full_name: user?.full_name, user_profile_image: user?.profile_image,
     audio_provider: audioProvider, audio_track_id: audioTrackId, audio_title: audioTitle, audio_artist: audioArtist,
     audio_artwork_url: audioArtworkUrl, audio_stream_url: audioStreamUrl, audio_start_time: audioStartTime, audio_duration: audioDuration,
@@ -11066,6 +11163,7 @@ api.get('/statuses/friends', authMiddleware, async (c) => {
 
 api.post('/statuses/:statusId/like', authMiddleware, async (c) => {
   await ensureStatusLikeSchema(c.env.DB);
+  await ensureLikeUniquenessSchema(c.env.DB);
   const userId = getUserId(c);
   const limited = await enforceRateLimit(c, 'story_like', userId, 300, 60);
   if (limited) return limited;
@@ -12598,7 +12696,7 @@ api.get('/discover', authMiddleware, async (c) => {
        EXISTS (SELECT 1 FROM follows fl WHERE fl.follower_id = ? AND fl.following_id = p.user_id) AS is_following,
        EXISTS (SELECT 1 FROM likes lk WHERE lk.user_id = ? AND lk.post_id = p.id) AS is_liked,
        EXISTS (SELECT 1 FROM saved_posts sp WHERE sp.user_id = ? AND sp.post_id = p.id) AS saved,
-       MAX(COALESCE(p.likes_count, 0), (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id)) AS live_likes_count,
+       (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
        MAX(COALESCE(p.comments_count, 0), (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden'))) AS live_comments_count,
        MAX(COALESCE(p.saves_count, 0), (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id)) AS live_saves_count
      FROM posts p JOIN users u ON p.user_id = u.id`,
@@ -12621,7 +12719,7 @@ api.get('/discover/trending', authMiddleware, async (c) => {
   const limit = clampNumber(c.req.query('limit') || '20', 1, 40, 20);
   const discoverTrendingSql = [
     `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
-       MAX(COALESCE(p.likes_count, 0), (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id)) AS live_likes_count,
+       (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
        MAX(COALESCE(p.comments_count, 0), (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden'))) AS live_comments_count,
        MAX(COALESCE(p.saves_count, 0), (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id)) AS live_saves_count`,
     'FROM posts p JOIN users u ON p.user_id = u.id',
@@ -12645,7 +12743,7 @@ api.get('/discover/search', authMiddleware, async (c) => {
   const limit = clampNumber(c.req.query('limit') || '20', 1, 30, 20);
   const discoverSearchSql = [
     `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
-       MAX(COALESCE(p.likes_count, 0), (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id)) AS live_likes_count,
+       (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
        MAX(COALESCE(p.comments_count, 0), (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden'))) AS live_comments_count,
        MAX(COALESCE(p.saves_count, 0), (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id)) AS live_saves_count`,
     'FROM posts p JOIN users u ON p.user_id = u.id',
@@ -13556,6 +13654,7 @@ api.get('/discover/feed', authMiddleware, async (c) => {
 
 api.post('/discover/posts/:postId/like', authMiddleware, async (c) => {
   const userId = getUserId(c); const postId = c.req.param('postId');
+  await ensureLikeUniquenessSchema(c.env.DB);
   const limited = await enforceRateLimit(c, 'discover_like', userId, 300, 60);
   if (limited) return limited;
   const body: any = await c.req.json().catch(() => ({}));
@@ -13568,10 +13667,9 @@ api.post('/discover/posts/:postId/like', authMiddleware, async (c) => {
   const post = await c.env.DB.prepare('SELECT id FROM discover_posts WHERE id = ?').bind(postId).first();
   if (!post) return c.json({ detail: 'Post not found' }, 404);
   if (nextLiked) {
-    await c.env.DB.batch([
-      c.env.DB.prepare('DELETE FROM discover_likes WHERE user_id = ? AND post_id = ?').bind(userId, postId),
-      c.env.DB.prepare('INSERT INTO discover_likes (id, user_id, post_id) VALUES (?, ?, ?)').bind(uuid(), userId, postId),
-    ]);
+    await c.env.DB.prepare('INSERT OR IGNORE INTO discover_likes (id, user_id, post_id) VALUES (?, ?, ?)')
+      .bind(uuid(), userId, postId)
+      .run();
   } else {
     await c.env.DB.prepare('DELETE FROM discover_likes WHERE user_id = ? AND post_id = ?').bind(userId, postId).run();
   }

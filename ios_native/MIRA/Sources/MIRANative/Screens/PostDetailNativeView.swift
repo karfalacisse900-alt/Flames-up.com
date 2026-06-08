@@ -325,7 +325,7 @@ final class PostDetailModel: ObservableObject {
 
   private func bestCount(_ current: Int?, _ cached: Int?) -> Int? {
     guard current != nil || cached != nil else { return nil }
-    return max(current ?? 0, cached ?? 0)
+    return max(0, cached ?? current ?? 0)
   }
 
   private func stableEngagementCount(current: Int?, incoming: Int?, optimistic: Int? = nil, toggledOn: Bool? = nil) -> Int? {
