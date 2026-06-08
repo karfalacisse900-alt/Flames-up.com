@@ -66,6 +66,7 @@ public struct MIRAUser: Codable, Identifiable, Hashable {
   public let bio: String?
   public let city: String?
   public let email: String?
+  public let emailVerified: Bool?
   public let phone: String?
   public let phoneVerified: Bool?
   public let followersCount: Int?

@@ -557,6 +557,7 @@ async function ensureUniqueUsername(db: D1Database, desired: string): Promise<st
 }
 
 let phoneAuthSchemaReady = false;
+let accountVerificationSchemaReady = false;
 let oauthSchemaReady = false;
 let supabaseAuthSchemaReady = false;
 let privacySchemaReady = false;
@@ -5132,6 +5133,7 @@ function safeUserPayload(user: any, opts: { includePrivate?: boolean } = {}) {
 
   if (opts.includePrivate) {
     publicPayload.email = publicUserEmail(user.email);
+    publicPayload.email_verified = accountEmailVerified(user);
     publicPayload.phone = user.phone || '';
     publicPayload.phone_verified = !!user.phone_verified;
     publicPayload.is_admin = !!user.is_admin;
@@ -5196,6 +5198,14 @@ function isApplePrivateRelayEmail(email: unknown): boolean {
 
 function publicUserEmail(email: unknown): string {
   return isInternalOAuthEmail(email) ? '' : String(email || '');
+}
+
+function accountEmailVerified(user: any): boolean {
+  if (user?.email_verified === true || user?.email_verified === 1 || user?.email_verified === '1') return true;
+  const email = normalizeOptionalEmail(user?.email);
+  if (!email || isInternalOAuthEmail(email)) return false;
+  const provider = normalizeAuthProvider(user?.oauth_provider || (user?.supabase_user_id ? 'supabase' : 'email'));
+  return provider === 'google' || provider === 'apple' || provider === 'supabase';
 }
 
 async function privacyHash(c: any, value: unknown): Promise<string> {
@@ -6307,6 +6317,8 @@ function mapboxFeatureToBroadLocation(feature: any) {
 }
 
 async function ensurePhoneAuthSchema(db: D1Database) {
+  if (phoneAuthSchemaReady) return;
+
   const statements = [
     'ALTER TABLE users ADD COLUMN phone TEXT',
     'ALTER TABLE users ADD COLUMN phone_verified INTEGER DEFAULT 0',
@@ -6334,6 +6346,30 @@ async function ensurePhoneAuthSchema(db: D1Database) {
   }
 
   phoneAuthSchemaReady = true;
+}
+
+async function ensureAccountVerificationSchema(db: D1Database) {
+  if (accountVerificationSchemaReady) return;
+
+  await ensurePhoneAuthSchema(db);
+
+  const statements = [
+    'ALTER TABLE users ADD COLUMN email_verified INTEGER DEFAULT 0',
+    'CREATE INDEX IF NOT EXISTS idx_users_email_verified ON users(email_verified)',
+    'CREATE INDEX IF NOT EXISTS idx_users_phone_verified ON users(phone_verified)',
+  ];
+
+  for (const statement of statements) {
+    try {
+      await runSchemaStatement(db, statement);
+    } catch (error: any) {
+      if (!isIgnorableSchemaError(error, statement)) {
+        throw error;
+      }
+    }
+  }
+
+  accountVerificationSchemaReady = true;
 }
 
 async function ensureCommentSchema(db: D1Database) {
@@ -6413,43 +6449,48 @@ function isTwilioVerifyRateLimited(failure: ReturnType<typeof parseTwilioVerifyF
   return failure.status === 429 || failure.twilioCode === '60203' || failure.twilioCode === '20429';
 }
 
-function twilioVerifyStartErrorResponse(c: any, errorMessage: string) {
+type TwilioVerifyChannel = 'sms' | 'email';
+
+function twilioVerifyStartErrorResponse(c: any, errorMessage: string, target: 'phone' | 'email' = 'phone') {
   const failure = parseTwilioVerifyFailure(errorMessage);
+  const isEmail = target === 'email';
+  const targetLabel = isEmail ? 'email address' : 'phone number';
+  const codePrefix = isEmail ? 'EMAIL' : 'PHONE';
   if (isTwilioVerifyRateLimited(failure)) {
     return c.json({
       detail: 'A verification code was already sent. Enter that code or wait before requesting a new one.',
-      code: 'PHONE_VERIFICATION_RATE_LIMITED',
+      code: `${codePrefix}_VERIFICATION_RATE_LIMITED`,
       retry_after: failure.retryAfter || 60,
     }, 429);
   }
 
   if (failure.status === 400) {
     return c.json({
-      detail: 'Twilio could not send a code to that phone number. Check the number and try again.',
-      code: 'PHONE_VERIFY_SEND_REJECTED',
+      detail: `Twilio could not send a code to that ${targetLabel}. Check it and try again.`,
+      code: `${codePrefix}_VERIFY_SEND_REJECTED`,
     }, 400);
   }
 
   if (failure.status === 401 || failure.status === 403 || failure.status === 404) {
     return c.json({
-      detail: 'Phone verification provider is not configured correctly. Check the Twilio Verify Service SID and auth settings.',
-      code: 'PHONE_PROVIDER_CONFIG',
+      detail: `${isEmail ? 'Email' : 'Phone'} verification provider is not configured correctly. Check the Twilio Verify Service SID and auth settings.`,
+      code: `${codePrefix}_PROVIDER_CONFIG`,
     }, 502);
   }
 
   return c.json({
     detail: 'Could not send verification code. Check Twilio Verify settings.',
-    code: 'PHONE_VERIFY_START_FAILED',
+    code: `${codePrefix}_VERIFY_START_FAILED`,
   }, 502);
 }
 
-async function startTwilioVerification(c: any, phone: string): Promise<boolean> {
+async function startTwilioChannelVerification(c: any, to: string, channel: TwilioVerifyChannel): Promise<boolean> {
   const config = getTwilioVerifyConfig(c);
   if (!config) return false;
 
   const body = new URLSearchParams({
-    To: phone,
-    Channel: 'sms',
+    To: to,
+    Channel: channel,
   });
 
   let response: Response;
@@ -6475,12 +6516,16 @@ async function startTwilioVerification(c: any, phone: string): Promise<boolean> 
   return true;
 }
 
-async function checkTwilioVerification(c: any, phone: string, code: string): Promise<boolean> {
+async function startTwilioVerification(c: any, phone: string): Promise<boolean> {
+  return startTwilioChannelVerification(c, phone, 'sms');
+}
+
+async function checkTwilioChannelVerification(c: any, to: string, code: string): Promise<boolean> {
   const config = getTwilioVerifyConfig(c);
   if (!config) return false;
 
   const body = new URLSearchParams({
-    To: phone,
+    To: to,
     Code: code,
   });
 
@@ -6508,6 +6553,10 @@ async function checkTwilioVerification(c: any, phone: string, code: string): Pro
 
   const data: any = await response.json().catch(() => ({}));
   return data.valid === true || data.status === 'approved';
+}
+
+async function checkTwilioVerification(c: any, phone: string, code: string): Promise<boolean> {
+  return checkTwilioChannelVerification(c, phone, code);
 }
 
 async function sendLegacyPhoneCode(c: any, phone: string, code: string): Promise<'legacy_sms' | 'development'> {
@@ -6605,6 +6654,7 @@ function authUserPayload(user: any) {
   return {
     id: user.id,
     email: publicUserEmail(user.email),
+    email_verified: accountEmailVerified(user),
     phone: user.phone,
     phone_verified: !!user.phone_verified,
     username: publicUsernameFor(user),
@@ -6983,6 +7033,7 @@ function supabaseProfileMetadata(input: {
   profileImage?: unknown;
   language?: unknown;
   phone?: unknown;
+  emailVerified?: unknown;
 }) {
   const metadata: Record<string, string> = {};
   const appUserId = cleanText(input.appUserId, 120);
@@ -7008,6 +7059,9 @@ function supabaseProfileMetadata(input: {
   }
   if (language) metadata.language = language;
   if (phone) metadata.phone = phone;
+  if (input.emailVerified === true || input.emailVerified === 1 || input.emailVerified === '1') {
+    metadata.email_verified = 'true';
+  }
   return metadata;
 }
 
@@ -7299,6 +7353,9 @@ function legacyUserTransferPayload(row: any) {
     id: String(row.id || ''),
     supabase_user_id: isUuidText(row.supabase_user_id),
     email: cleanText(row.email, 320) || null,
+    email_verified: accountEmailVerified(row),
+    phone: normalizeOptionalPhone(row.phone) || null,
+    phone_verified: Number(row.phone_verified || 0) === 1,
     username: cleanText(row.username, 80) || null,
     full_name: cleanText(row.full_name, 160) || null,
     avatar_url: cleanText(row.profile_image, 1200) || null,
@@ -9383,13 +9440,13 @@ api.post('/users/me/phone/start', authMiddleware, async (c) => {
     ).bind(uuid(), normalizedPhone, codeHash, expiresAt).run();
 
     const delivery = await sendLegacyPhoneCode(c, normalizedPhone, code);
+    if (delivery === 'development') {
+      return c.json({ detail: 'Phone verification is not configured yet.', code: 'PHONE_PROVIDER_CONFIG' }, 503);
+    }
     const payload: any = {
-      detail: delivery === 'legacy_sms'
-        ? 'We sent a verification code to your phone.'
-        : 'Twilio Verify is not configured yet, so use the development code shown here.',
+      detail: 'We sent a verification code to your phone.',
       delivery,
     };
-    if (delivery === 'development') payload.dev_code = code;
 
     return c.json(payload);
   } catch (error: any) {
@@ -9484,6 +9541,107 @@ api.post('/users/me/phone/verify', authMiddleware, async (c) => {
     if (code === 'JWT_SECRET_MISSING') return c.json({ detail: 'Auth service is not configured.' }, 503);
     if (code.startsWith('PHONE_VERIFY_CHECK_FAILED')) return c.json({ detail: 'Could not check verification code. Try again.', code }, 502);
     return c.json({ detail: 'Could not verify phone number.' }, 500);
+  }
+});
+
+api.post('/users/me/email/start', authMiddleware, async (c) => {
+  try {
+    const userId = getUserId(c);
+    const bodyTooLarge = rejectLargeRequest(c, 20_000);
+    if (bodyTooLarge) return bodyTooLarge;
+    const body: any = await c.req.json().catch(() => ({}));
+    await ensureAccountVerificationSchema(c.env.DB);
+
+    const currentUser: any = await c.env.DB.prepare('SELECT id, email, email_verified FROM users WHERE id = ?')
+      .bind(userId)
+      .first();
+    const accountEmail = normalizeOptionalEmail(currentUser?.email);
+    const requestedEmail = normalizeOptionalEmail(body.email || accountEmail);
+    if (!accountEmail || isInternalOAuthEmail(accountEmail)) {
+      return c.json({ detail: 'Add a real email address before verification.', code: 'EMAIL_MISSING' }, 400);
+    }
+    if (requestedEmail !== accountEmail) {
+      return c.json({ detail: 'Verify the email address already attached to this account.', code: 'EMAIL_MISMATCH' }, 400);
+    }
+    if (accountEmailVerified(currentUser)) {
+      return c.json({ detail: 'Email is already verified.', delivery: 'already_verified' });
+    }
+
+    const limited = await enforceRateLimit(c, 'account_email_start', `${userId}:${accountEmail || clientIp(c)}`, 5, 600);
+    if (limited) return limited;
+    if (!getTwilioVerifyConfig(c)) {
+      return c.json({ detail: 'Email verification is not configured yet.', code: 'EMAIL_PROVIDER_CONFIG' }, 503);
+    }
+
+    await startTwilioChannelVerification(c, accountEmail, 'email');
+    return c.json({
+      detail: 'We sent a verification code to your email.',
+      delivery: 'twilio_verify',
+    });
+  } catch (error: any) {
+    const code = String(error?.message || '');
+    if (code.startsWith('PHONE_VERIFY_START_FAILED')) return twilioVerifyStartErrorResponse(c, code, 'email');
+    console.error(JSON.stringify({ event: 'email_verification_start_failed', error: code.slice(0, 180) }));
+    return c.json({ detail: 'Could not start email verification. Please try again in a moment.', code: 'EMAIL_START_FAILED' }, 500);
+  }
+});
+
+api.post('/users/me/email/verify', authMiddleware, async (c) => {
+  try {
+    const userId = getUserId(c);
+    const bodyTooLarge = rejectLargeRequest(c, 20_000);
+    if (bodyTooLarge) return bodyTooLarge;
+    const body: any = await c.req.json().catch(() => ({}));
+    await ensureAccountVerificationSchema(c.env.DB);
+
+    const currentUser: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?')
+      .bind(userId)
+      .first();
+    const accountEmail = normalizeOptionalEmail(currentUser?.email);
+    const requestedEmail = normalizeOptionalEmail(body.email || accountEmail);
+    if (!accountEmail || isInternalOAuthEmail(accountEmail)) {
+      return c.json({ detail: 'Add a real email address before verification.', code: 'EMAIL_MISSING' }, 400);
+    }
+    if (requestedEmail !== accountEmail) {
+      return c.json({ detail: 'Verify the email address already attached to this account.', code: 'EMAIL_MISMATCH' }, 400);
+    }
+    const normalizedCode = String(body.code || '').replace(/\D/g, '');
+    if (normalizedCode.length !== 6) {
+      return c.json({ detail: 'Enter the 6-digit verification code.' }, 400);
+    }
+
+    const limited = await enforceRateLimit(c, 'account_email_verify', `${userId}:${accountEmail || clientIp(c)}`, 12, 600);
+    if (limited) return limited;
+    if (!getTwilioVerifyConfig(c)) {
+      return c.json({ detail: 'Email verification is not configured yet.', code: 'EMAIL_PROVIDER_CONFIG' }, 503);
+    }
+
+    const verified = await checkTwilioChannelVerification(c, accountEmail, normalizedCode);
+    if (!verified) return c.json({ detail: 'Invalid or expired verification code.' }, 401);
+
+    await c.env.DB.prepare('UPDATE users SET email_verified = 1, updated_at = datetime(\'now\') WHERE id = ?')
+      .bind(userId)
+      .run();
+    const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
+    runBackgroundTask(c, 'supabase_email_verify_metadata_sync_failed', async () => {
+      if (user?.supabase_user_id) {
+        await updateSupabaseAuthUser(c, user.supabase_user_id, {
+          user_metadata: supabaseProfileMetadata({
+            appUserId: user.id,
+            username: publicUsernameFor(user),
+            fullName: user.full_name,
+            profileImage: user.profile_image,
+            language: user.language,
+            emailVerified: true,
+          }),
+        });
+      }
+    });
+    return c.json(authUserPayload(user));
+  } catch (error: any) {
+    const code = String(error?.message || '');
+    if (code.startsWith('PHONE_VERIFY_CHECK_FAILED')) return c.json({ detail: 'Could not check verification code. Try again.', code: 'EMAIL_VERIFY_CHECK_FAILED' }, 502);
+    return c.json({ detail: 'Could not verify email address.' }, 500);
   }
 });
 

@@ -234,6 +234,7 @@ public struct ProfileNativeView: View {
         }
       }
       .background(MIRATheme.Color.appBackground)
+      .miraScrollFeel(.feed)
       .miraScreenEnter(.tab)
       .navigationTitle("")
       .toolbar(profileTabBarVisibility, for: .tabBar)
@@ -245,8 +246,8 @@ public struct ProfileNativeView: View {
             destination: LibraryNativeView(api: model.api)
           )
           ProfileToolbarDestinationButton(
-            systemImage: "trophy",
-            accessibilityLabel: "Contest prizes",
+            systemImage: "checkmark.shield",
+            accessibilityLabel: "Verification",
             destination: WalletNativeView(api: model.api)
           )
           ProfileToolbarDestinationButton(
@@ -657,6 +658,7 @@ public struct UserProfileNativeView: View {
       .padding(.bottom, MIRATheme.Space.xxl)
     }
     .background(MIRATheme.Color.appBackground)
+    .miraScrollFeel(.feed)
     .miraScreenEnter(.push)
     .navigationTitle(model.user?.displayName ?? "Profile")
     .navigationBarTitleDisplayMode(.inline)
@@ -2032,46 +2034,407 @@ final class WalletNativeModel: ObservableObject {
 }
 
 public struct WalletNativeView: View {
-  @StateObject private var model: WalletNativeModel
+  private let api: MIRAAPIClient
+  @State private var user: MIRAUser?
+  @State private var phoneInput = ""
+  @State private var phoneCode = ""
+  @State private var emailCode = ""
+  @State private var emailCodeSent = false
+  @State private var phoneCodeSent = false
+  @State private var isLoading = false
+  @State private var activeAction: VerificationAction?
+  @State private var successMessage: String?
+  @State private var errorMessage: String?
 
   public init(api: MIRAAPIClient) {
-    _model = StateObject(wrappedValue: WalletNativeModel(api: api))
+    self.api = api
   }
 
   public var body: some View {
-    ScrollView {
-      VStack(alignment: .leading, spacing: MIRATheme.Space.lg) {
-        VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
-          Text("Contest prizes")
-            .font(.system(size: 24, weight: .semibold))
-          Text("\(model.wallet?.balance ?? 0)")
-            .font(.system(size: 42, weight: .semibold))
-          Text("Prize credits")
-            .foregroundStyle(MIRATheme.Color.textSecondary)
-          MIRAPrimaryButton("View contests", systemImage: "trophy") {}
-        }
-        .padding(MIRATheme.Space.xl)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(MIRATheme.Color.forestSoft)
-        .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.sheet, style: .continuous))
-        .modifier(MIRATheme.softShadow())
+    ScrollView(showsIndicators: false) {
+      VStack(alignment: .leading, spacing: 16) {
+        verificationHero
+        statusRow
+        emailCard
+        phoneCard
 
-        VStack(alignment: .leading, spacing: MIRATheme.Space.sm) {
-          Text("Prize status")
-            .font(.system(size: 18, weight: .semibold))
-          Text(model.wallet?.premiumActive == true ? "Contest perks are active" : "No active prize perks")
-            .foregroundStyle(MIRATheme.Color.textSecondary)
-          MIRAPrimaryButton("Manage prize perks", systemImage: "crown") {}
+        if let successMessage {
+          verificationBanner(successMessage, systemImage: "checkmark.circle.fill", color: MIRATheme.Color.forest)
         }
-        .padding(MIRATheme.Space.xl)
-        .miraCardSurface()
+
+        if let errorMessage {
+          verificationBanner(errorMessage, systemImage: "exclamationmark.triangle.fill", color: .red)
+        }
       }
       .padding(MIRATheme.Space.md)
     }
-    .navigationTitle("Contest prizes")
+    .navigationTitle("Verification")
+    .navigationBarTitleDisplayMode(.inline)
     .toolbar(.hidden, for: .tabBar)
     .background(MIRATheme.Color.appBackground)
+    .miraScrollFeel(.feed)
     .miraScreenEnter(.push)
-    .task { await model.load() }
+    .task { await loadAccount() }
   }
+
+  private var verificationHero: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      Image(systemName: "checkmark.shield.fill")
+        .font(.system(size: 34, weight: .semibold))
+        .foregroundStyle(MIRATheme.Color.forest)
+        .frame(width: 58, height: 58)
+        .background(MIRATheme.Color.forestSoft)
+        .clipShape(Circle())
+      Text("Verify your account")
+        .font(.system(size: 26, weight: .bold))
+        .foregroundStyle(MIRATheme.Color.textPrimary)
+      Text("Confirm your email and phone number to protect your Captro account and make recovery easier.")
+        .font(.system(size: 14, weight: .medium))
+        .foregroundStyle(MIRATheme.Color.textSecondary)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+    .padding(22)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(MIRATheme.Color.surfaceRaised)
+    .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+    .modifier(MIRATheme.softShadow())
+  }
+
+  private var statusRow: some View {
+    HStack(spacing: 10) {
+      verificationStatusPill(title: "Email", verified: emailVerified)
+      verificationStatusPill(title: "Phone", verified: phoneVerified)
+      if isLoading {
+        ProgressView()
+          .tint(MIRATheme.Color.forest)
+          .frame(width: 34, height: 34)
+      }
+    }
+  }
+
+  private var emailCard: some View {
+    verificationCard(
+      title: "Email",
+      subtitle: emailAddress.isEmpty ? "No email address is attached to this account." : emailAddress,
+      systemImage: "envelope.fill",
+      verified: emailVerified
+    ) {
+      if emailVerified {
+        verifiedMessage("Email verified")
+      } else if emailAddress.isEmpty {
+        Text("Add an email address in account settings first.")
+          .font(.system(size: 13, weight: .medium))
+          .foregroundStyle(MIRATheme.Color.textMuted)
+      } else {
+        verificationButton(
+          title: emailCodeSent ? "Resend code" : "Send email code",
+          systemImage: "paperplane.fill",
+          isBusy: activeAction == .emailStart,
+          isDisabled: activeAction != nil
+        ) {
+          Task { await sendEmailCode() }
+        }
+        if emailCodeSent {
+          codeField(title: "Email code", text: $emailCode)
+          verificationButton(
+            title: "Verify email",
+            systemImage: "checkmark",
+            isBusy: activeAction == .emailVerify,
+            isDisabled: activeAction != nil || emailCode.trimmingCharacters(in: .whitespacesAndNewlines).count < 6
+          ) {
+            Task { await verifyEmailCode() }
+          }
+        }
+      }
+    }
+  }
+
+  private var phoneCard: some View {
+    verificationCard(
+      title: "Phone",
+      subtitle: phoneVerified ? cleanPhoneLabel : "Use country code, example +1 555 123 4567.",
+      systemImage: "phone.fill",
+      verified: phoneVerified
+    ) {
+      if phoneVerified {
+        verifiedMessage("Phone verified")
+      } else {
+        TextField("+1 555 123 4567", text: $phoneInput)
+          .keyboardType(.phonePad)
+          .textInputAutocapitalization(.never)
+          .padding(.horizontal, 14)
+          .frame(height: 48)
+          .background(MIRATheme.Color.surfaceSoft)
+          .clipShape(Capsule())
+
+        verificationButton(
+          title: phoneCodeSent ? "Resend code" : "Send SMS code",
+          systemImage: "message.fill",
+          isBusy: activeAction == .phoneStart,
+          isDisabled: activeAction != nil || phoneInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        ) {
+          Task { await sendPhoneCode() }
+        }
+        if phoneCodeSent {
+          codeField(title: "SMS code", text: $phoneCode)
+          verificationButton(
+            title: "Verify phone",
+            systemImage: "checkmark",
+            isBusy: activeAction == .phoneVerify,
+            isDisabled: activeAction != nil || phoneCode.trimmingCharacters(in: .whitespacesAndNewlines).count < 6
+          ) {
+            Task { await verifyPhoneCode() }
+          }
+        }
+      }
+    }
+  }
+
+  private func verificationCard<Content: View>(
+    title: String,
+    subtitle: String,
+    systemImage: String,
+    verified: Bool,
+    @ViewBuilder content: () -> Content
+  ) -> some View {
+    VStack(alignment: .leading, spacing: 14) {
+      HStack(spacing: 12) {
+        Image(systemName: systemImage)
+          .font(.system(size: 18, weight: .semibold))
+          .foregroundStyle(verified ? MIRATheme.Color.forest : MIRATheme.Color.textPrimary)
+          .frame(width: 42, height: 42)
+          .background(verified ? MIRATheme.Color.forestSoft : MIRATheme.Color.surfaceSoft)
+          .clipShape(Circle())
+        VStack(alignment: .leading, spacing: 3) {
+          Text(title)
+            .font(.system(size: 18, weight: .semibold))
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+          Text(subtitle)
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(MIRATheme.Color.textMuted)
+            .lineLimit(2)
+        }
+        Spacer()
+        Image(systemName: verified ? "checkmark.circle.fill" : "circle")
+          .font(.system(size: 22, weight: .semibold))
+          .foregroundStyle(verified ? MIRATheme.Color.forest : MIRATheme.Color.textMuted.opacity(0.5))
+      }
+
+      content()
+    }
+    .padding(18)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(MIRATheme.Color.surface)
+    .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+    .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).stroke(MIRATheme.Color.hairline, lineWidth: 1))
+  }
+
+  private func verificationStatusPill(title: String, verified: Bool) -> some View {
+    HStack(spacing: 7) {
+      Image(systemName: verified ? "checkmark.circle.fill" : "circle")
+      Text(verified ? "\(title) verified" : "\(title) pending")
+    }
+    .font(.system(size: 12, weight: .semibold))
+    .foregroundStyle(verified ? MIRATheme.Color.forest : MIRATheme.Color.textSecondary)
+    .padding(.horizontal, 12)
+    .frame(height: 36)
+    .background(verified ? MIRATheme.Color.forestSoft : MIRATheme.Color.surfaceRaised)
+    .clipShape(Capsule())
+  }
+
+  private func verifiedMessage(_ text: String) -> some View {
+    HStack(spacing: 8) {
+      Image(systemName: "checkmark.circle.fill")
+      Text(text)
+    }
+    .font(.system(size: 14, weight: .semibold))
+    .foregroundStyle(MIRATheme.Color.forest)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .padding(.horizontal, 14)
+    .frame(height: 44)
+    .background(MIRATheme.Color.forestSoft)
+    .clipShape(Capsule())
+  }
+
+  private func codeField(title: String, text: Binding<String>) -> some View {
+    TextField(title, text: text)
+      .keyboardType(.numberPad)
+      .textContentType(.oneTimeCode)
+      .padding(.horizontal, 14)
+      .frame(height: 48)
+      .background(MIRATheme.Color.surfaceSoft)
+      .clipShape(Capsule())
+  }
+
+  private func verificationButton(
+    title: String,
+    systemImage: String,
+    isBusy: Bool,
+    isDisabled: Bool,
+    action: @escaping () -> Void
+  ) -> some View {
+    Button(action: action) {
+      HStack(spacing: 8) {
+        if isBusy {
+          ProgressView()
+            .tint(.white)
+        } else {
+          Image(systemName: systemImage)
+        }
+        Text(title)
+      }
+      .font(.system(size: 15, weight: .semibold))
+      .foregroundStyle(.white)
+      .frame(maxWidth: .infinity)
+      .frame(height: 48)
+      .background(isDisabled ? MIRATheme.Color.textMuted.opacity(0.45) : MIRATheme.Color.forest)
+      .clipShape(Capsule())
+    }
+    .disabled(isDisabled)
+    .buttonStyle(.plain)
+  }
+
+  private func verificationBanner(_ text: String, systemImage: String, color: Color) -> some View {
+    HStack(alignment: .top, spacing: 10) {
+      Image(systemName: systemImage)
+      Text(text)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+    .font(.system(size: 13, weight: .semibold))
+    .foregroundStyle(color)
+    .padding(14)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(color.opacity(0.08))
+    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+  }
+
+  private func loadAccount() async {
+    isLoading = true
+    defer { isLoading = false }
+    do {
+      let fresh: MIRAUser = try await api.get("/auth/me")
+      applyUser(fresh)
+    } catch {
+      errorMessage = error.localizedDescription
+    }
+  }
+
+  private func sendEmailCode() async {
+    successMessage = nil
+    errorMessage = nil
+    activeAction = .emailStart
+    defer { activeAction = nil }
+    do {
+      let _: VerificationStartResponse = try await api.post(
+        "/users/me/email/start",
+        body: VerificationStartBody(email: emailAddress.isEmpty ? nil : emailAddress, phone: nil)
+      )
+      emailCodeSent = true
+      successMessage = "Check your email for a 6-digit code."
+    } catch {
+      errorMessage = error.localizedDescription
+    }
+  }
+
+  private func verifyEmailCode() async {
+    successMessage = nil
+    errorMessage = nil
+    activeAction = .emailVerify
+    defer { activeAction = nil }
+    do {
+      let updated: MIRAUser = try await api.post(
+        "/users/me/email/verify",
+        body: VerificationCodeBody(email: emailAddress.isEmpty ? nil : emailAddress, phone: nil, code: emailCode)
+      )
+      applyUser(updated)
+      emailCode = ""
+      emailCodeSent = false
+      successMessage = "Email verified."
+    } catch {
+      errorMessage = error.localizedDescription
+    }
+  }
+
+  private func sendPhoneCode() async {
+    successMessage = nil
+    errorMessage = nil
+    activeAction = .phoneStart
+    defer { activeAction = nil }
+    do {
+      let _: VerificationStartResponse = try await api.post(
+        "/users/me/phone/start",
+        body: VerificationStartBody(email: nil, phone: phoneInput)
+      )
+      phoneCodeSent = true
+      successMessage = "Check your phone for a 6-digit code."
+    } catch {
+      errorMessage = error.localizedDescription
+    }
+  }
+
+  private func verifyPhoneCode() async {
+    successMessage = nil
+    errorMessage = nil
+    activeAction = .phoneVerify
+    defer { activeAction = nil }
+    do {
+      let updated: MIRAUser = try await api.post(
+        "/users/me/phone/verify",
+        body: VerificationCodeBody(email: nil, phone: phoneInput, code: phoneCode)
+      )
+      applyUser(updated)
+      phoneCode = ""
+      phoneCodeSent = false
+      successMessage = "Phone verified."
+    } catch {
+      errorMessage = error.localizedDescription
+    }
+  }
+
+  private func applyUser(_ fresh: MIRAUser) {
+    user = fresh
+    if phoneInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      phoneInput = fresh.phone ?? ""
+    }
+  }
+
+  private var emailAddress: String {
+    user?.email?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+  }
+
+  private var cleanPhoneLabel: String {
+    let phone = user?.phone?.trimmingCharacters(in: .whitespacesAndNewlines) ?? phoneInput.trimmingCharacters(in: .whitespacesAndNewlines)
+    return phone.isEmpty ? "No phone number verified yet." : phone
+  }
+
+  private var emailVerified: Bool {
+    user?.emailVerified == true
+  }
+
+  private var phoneVerified: Bool {
+    user?.phoneVerified == true
+  }
+}
+
+private enum VerificationAction: Equatable {
+  case emailStart
+  case emailVerify
+  case phoneStart
+  case phoneVerify
+}
+
+private struct VerificationStartBody: Encodable {
+  let email: String?
+  let phone: String?
+}
+
+private struct VerificationCodeBody: Encodable {
+  let email: String?
+  let phone: String?
+  let code: String
+}
+
+private struct VerificationStartResponse: Decodable {
+  let detail: String?
+  let delivery: String?
 }

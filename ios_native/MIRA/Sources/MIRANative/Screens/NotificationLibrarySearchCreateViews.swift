@@ -278,6 +278,7 @@ public struct LibraryNativeView: View {
       .padding(.bottom, MIRATheme.Space.xxl)
     }
     .background(MIRATheme.Color.appBackground)
+    .miraScrollFeel(.feed)
     .miraScreenEnter(.push)
     .navigationTitle("Bookmarks")
     .navigationBarTitleDisplayMode(.inline)

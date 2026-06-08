@@ -28,7 +28,7 @@ Backend stack: Hono + Cloudflare Workers + legacy D1 + Supabase Auth/Postgres + 
    - `OWNER_USERNAMES` (optional comma-separated real usernames; do not use generated/temp usernames)
    - `GOOGLE_OAUTH_CLIENT_IDS` (comma-separated Google client IDs)
    - `APPLE_OAUTH_AUDIENCES` (comma-separated Apple audiences, bundle/service IDs)
-   - `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_VERIFY_SERVICE_SID` for Twilio Verify phone codes
+   - `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_VERIFY_SERVICE_SID` for Twilio Verify phone codes and account email verification when the Verify service has email configured
    - `TWILIO_FROM_PHONE` is only used by the legacy SMS fallback if Verify is not configured
    - `SUPABASE_URL` as a public Worker var, for example `https://your-project-ref.supabase.co`
    - `SUPABASE_SERVICE_ROLE_KEY` as a Worker secret only; never put this in the iOS app or public config
