@@ -20,7 +20,7 @@ public struct MIRANativeMediaEditorView: View {
   @State private var videoThumbnail: UIImage?
   @State private var player: AVPlayer?
   @State private var previewVideoURL: URL?
-  @State private var activePanel: EditorPanel = .crop
+  @State private var activePanel: EditorPanel
   @State private var videoDurationSeconds: Double = 0
   @State private var selectedTextID: String?
   @State private var editingText = false
@@ -43,6 +43,7 @@ public struct MIRANativeMediaEditorView: View {
       mediaType: mediaType,
       aspectRatio: mode == .story ? .story9x16 : .portrait3x4
     ))
+    _activePanel = State(initialValue: mode == .post ? .adjustments : .crop)
   }
 
   public var body: some View {
@@ -206,13 +207,8 @@ public struct MIRANativeMediaEditorView: View {
   private var editorPanel: some View {
     VStack(spacing: 14) {
       HStack(spacing: 12) {
-        panelButton(.crop, systemImage: "crop.rotate", title: "Crop")
-        panelButton(.adjustments, systemImage: "slider.horizontal.3", title: "Adjust")
-        panelButton(.filters, systemImage: "camera.filters", title: "Filters")
-        if media.kind == .video {
-          panelButton(.trim, systemImage: "scissors", title: "Trim")
-        } else if mode == .story {
-          panelButton(.text, systemImage: "textformat", title: "Text")
+        ForEach(availableEditorPanels, id: \.self) { panel in
+          panelButton(panel, systemImage: panel.systemImage, title: panel.title)
         }
       }
       .padding(.horizontal, 16)
@@ -254,6 +250,16 @@ public struct MIRANativeMediaEditorView: View {
         .clipShape(Capsule())
     }
     .buttonStyle(.plain)
+  }
+
+  private var availableEditorPanels: [EditorPanel] {
+    var panels: [EditorPanel] = mode == .post ? [.adjustments, .filters] : [.crop, .adjustments, .filters]
+    if media.kind == .video {
+      panels.append(.trim)
+    } else if mode == .story {
+      panels.append(.text)
+    }
+    return panels
   }
 
   private var cropToolPanel: some View {
@@ -616,12 +622,32 @@ public struct MIRANativeMediaEditorView: View {
     return "\(total / 60):\(String(format: "%02d", total % 60))"
   }
 
-  private enum EditorPanel {
+  private enum EditorPanel: Hashable {
     case crop
     case text
     case filters
     case adjustments
     case trim
+
+    var title: String {
+      switch self {
+      case .crop: return "Crop"
+      case .text: return "Text"
+      case .filters: return "Filters"
+      case .adjustments: return "Adjust"
+      case .trim: return "Trim"
+      }
+    }
+
+    var systemImage: String {
+      switch self {
+      case .crop: return "crop.rotate"
+      case .text: return "textformat"
+      case .filters: return "camera.filters"
+      case .adjustments: return "slider.horizontal.3"
+      case .trim: return "scissors"
+      }
+    }
   }
 }
 

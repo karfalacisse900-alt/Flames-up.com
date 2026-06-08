@@ -32,6 +32,7 @@ struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
   let onMusic: () -> Void
   let onGallerySelection: ([MIRAPickedMedia]) -> Void
   let onEdit: (MIRAPickedMedia, MIRAStoryCameraEditTool) -> Void
+  let onReviewStateChange: (Bool) -> Void
 
   @Environment(\.dismiss) private var dismiss
 
@@ -46,7 +47,8 @@ struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
     onCancel: @escaping () -> Void = {},
     onMusic: @escaping () -> Void = {},
     onGallerySelection: @escaping ([MIRAPickedMedia]) -> Void = { _ in },
-    onEdit: @escaping (MIRAPickedMedia, MIRAStoryCameraEditTool) -> Void = { _, _ in }
+    onEdit: @escaping (MIRAPickedMedia, MIRAStoryCameraEditTool) -> Void = { _, _ in },
+    onReviewStateChange: @escaping (Bool) -> Void = { _ in }
   ) {
     self.editedMedia = editedMedia
     self.captureMode = captureMode
@@ -59,6 +61,7 @@ struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
     self.onMusic = onMusic
     self.onGallerySelection = onGallerySelection
     self.onEdit = onEdit
+    self.onReviewStateChange = onReviewStateChange
   }
 
   func makeUIViewController(context: Context) -> MIRAStoryCameraViewController {
@@ -85,6 +88,7 @@ struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
       onMusic: onMusic,
       onGallerySelection: onGallerySelection,
       onEdit: onEdit,
+      onReviewStateChange: onReviewStateChange,
       dismissesOnCapture: dismissesOnCapture,
       dismissesOnCancel: dismissesOnCancel,
       dismiss: dismiss
@@ -97,6 +101,7 @@ struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
     private let onMusic: () -> Void
     private let onGallerySelection: ([MIRAPickedMedia]) -> Void
     private let onEdit: (MIRAPickedMedia, MIRAStoryCameraEditTool) -> Void
+    private let onReviewStateChange: (Bool) -> Void
     private let dismissesOnCapture: Bool
     private let dismissesOnCancel: Bool
     private let dismiss: DismissAction
@@ -107,6 +112,7 @@ struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
       onMusic: @escaping () -> Void,
       onGallerySelection: @escaping ([MIRAPickedMedia]) -> Void,
       onEdit: @escaping (MIRAPickedMedia, MIRAStoryCameraEditTool) -> Void,
+      onReviewStateChange: @escaping (Bool) -> Void,
       dismissesOnCapture: Bool,
       dismissesOnCancel: Bool,
       dismiss: DismissAction
@@ -116,6 +122,7 @@ struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
       self.onMusic = onMusic
       self.onGallerySelection = onGallerySelection
       self.onEdit = onEdit
+      self.onReviewStateChange = onReviewStateChange
       self.dismissesOnCapture = dismissesOnCapture
       self.dismissesOnCancel = dismissesOnCancel
       self.dismiss = dismiss
@@ -146,6 +153,10 @@ struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
     func storyCameraDidRequestEdit(_ media: MIRAPickedMedia, tool: MIRAStoryCameraEditTool) {
       onEdit(media, tool)
     }
+
+    func storyCameraReviewStateDidChange(_ isReviewing: Bool) {
+      onReviewStateChange(isReviewing)
+    }
   }
 }
 
@@ -155,6 +166,7 @@ protocol MIRAStoryCameraViewControllerDelegate: AnyObject {
   func storyCameraDidRequestMusic()
   func storyCameraDidPickGalleryMedia(_ mediaItems: [MIRAPickedMedia])
   func storyCameraDidRequestEdit(_ media: MIRAPickedMedia, tool: MIRAStoryCameraEditTool)
+  func storyCameraReviewStateDidChange(_ isReviewing: Bool)
 }
 
 final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptureDelegate, AVCaptureFileOutputRecordingDelegate, PHPickerViewControllerDelegate {
@@ -894,6 +906,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
   }
 
   private func setReviewMode(_ isReviewing: Bool) {
+    delegate?.storyCameraReviewStateDidChange(isReviewing)
     capturedImageView.isHidden = !isReviewing
     textOverlayContainer.isHidden = !isReviewing
     capturedPlayIcon.isHidden = !isReviewing || capturedMedia?.kind != .video
@@ -1462,13 +1475,17 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
   }
 
   @objc private func retakeCapturedMedia() {
+    clearCapturedReviewState()
+    CaptroHaptics.light()
+  }
+
+  private func clearCapturedReviewState() {
     cleanupReviewVideoPlayer()
     capturedMedia = nil
     lastAppliedEditedMediaSignature = nil
     resetInlineEdits()
     capturedImageView.image = nil
     setReviewMode(false)
-    CaptroHaptics.light()
   }
 
   @objc private func editCapturedMedia() {
@@ -1482,6 +1499,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     let recipe = currentEditRecipe(for: capturedMedia)
     guard recipe.hasEdits else {
       delegate?.storyCameraDidCapture(capturedMedia)
+      clearCapturedReviewState()
       return
     }
     showExportState(true)
@@ -1490,6 +1508,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
         let finalMedia = try await exportInlineEditedMedia(from: capturedMedia, recipe: recipe)
         showExportState(false)
         delegate?.storyCameraDidCapture(finalMedia)
+        clearCapturedReviewState()
       } catch {
         showExportState(false)
         showTransientMessage("Edits could not be applied. Try again.")

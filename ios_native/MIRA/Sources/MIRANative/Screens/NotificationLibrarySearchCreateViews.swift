@@ -877,6 +877,7 @@ public struct CreatePostNativeView: View {
   private let onClose: (() -> Void)?
   @Environment(\.dismiss) private var dismiss
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.scenePhase) private var scenePhase
   @StateObject private var broadLocationResolver = MIRABroadLocationResolver()
   @State private var title = ""
   @State private var bodyText = ""
@@ -904,6 +905,7 @@ public struct CreatePostNativeView: View {
   @State private var postAssistError: String?
   @State private var hasRestoredPostDraft = false
   @State private var draftMediaSnapshots: [MIRAPostDraftMediaSnapshot] = []
+  @State private var isCameraReviewingMedia = false
   @FocusState private var focusedPostDetailsField: PostDetailsFocusField?
 
   public init(api: MIRAAPIClient, onClose: (() -> Void)? = nil) {
@@ -957,6 +959,13 @@ public struct CreatePostNativeView: View {
     .onChange(of: showBroadLocation) { _, isOn in
       guard isOn else { return }
       Task { await resolveCurrentBroadLocationForPost() }
+    }
+    .onChange(of: scenePhase) { _, phase in
+      guard phase == .background, !isPosting else { return }
+      Task { @MainActor in
+        resetComposerAfterAbandoningDraft()
+        await MIRAAppCacheStore.shared.clearPostDraft()
+      }
     }
     .miraBottomSheet(isPresented: $showPreview, preferredHeightFraction: 0.72) { _ in
       ComposerPreviewSheet(title: title, bodyText: bodyText, mediaItems: mediaItems)
@@ -1055,6 +1064,9 @@ public struct CreatePostNativeView: View {
         },
         onEdit: { media, _ in
           editingMedia = MIRAEditorPresentation(media: media, returnsToCamera: true)
+        },
+        onReviewStateChange: { isReviewing in
+          isCameraReviewingMedia = isReviewing
         }
       )
       .ignoresSafeArea()
@@ -1067,7 +1079,7 @@ public struct CreatePostNativeView: View {
       }
       .allowsHitTesting(true)
 
-      if !mediaItems.isEmpty {
+      if !mediaItems.isEmpty && !isCameraReviewingMedia {
         VStack {
           Spacer()
           HStack {
@@ -1651,6 +1663,7 @@ public struct CreatePostNativeView: View {
   }
 
   private func close() {
+    Task { await MIRAAppCacheStore.shared.clearPostDraft() }
     if let onClose {
       onClose()
     } else {
@@ -1688,9 +1701,6 @@ public struct CreatePostNativeView: View {
       errorMessage = nil
     }
     mediaItems.append(contentsOf: loaded)
-    if !loaded.isEmpty {
-      await persistComposerDraft(uploadStatus: "draft", errorMessage: nil, includeMedia: true)
-    }
   }
 
   private func addCapturedMediaAndContinue(_ media: MIRAPickedMedia) {
@@ -1699,8 +1709,8 @@ public struct CreatePostNativeView: View {
       return
     }
     editedCameraMedia = nil
+    isCameraReviewingMedia = false
     mediaItems.append(media)
-    Task { await persistComposerDraft(uploadStatus: "draft", errorMessage: nil, includeMedia: true) }
     withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
       isEditingPostDetails = true
     }
@@ -1713,15 +1723,16 @@ public struct CreatePostNativeView: View {
       return
     }
     editedCameraMedia = nil
+    isCameraReviewingMedia = false
     withAnimation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion)) {
       mediaItems.append(contentsOf: photos.prefix(max(0, 10 - mediaItems.count)))
     }
-    Task { await persistComposerDraft(uploadStatus: "draft", errorMessage: nil, includeMedia: true) }
   }
 
   private func continueToPostDetails() {
     guard !mediaItems.isEmpty else { return }
     editedCameraMedia = nil
+    isCameraReviewingMedia = false
     withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
       isEditingPostDetails = true
     }
@@ -1729,6 +1740,7 @@ public struct CreatePostNativeView: View {
 
   private func returnToCapture() {
     editedCameraMedia = nil
+    isCameraReviewingMedia = false
     withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
       isEditingPostDetails = false
     }
@@ -1745,81 +1757,49 @@ public struct CreatePostNativeView: View {
   @MainActor
   private func restorePostDraftIfNeeded() async {
     guard !hasRestoredPostDraft else { return }
-    defer { hasRestoredPostDraft = true }
-    guard let draft = await MIRAAppCacheStore.shared.loadPostDraft() else { return }
-    title = draft.title
-    bodyText = draft.bodyText
-    hashtags = draft.hashtags
-    selectedAudioTrack = nil
-    draftMediaSnapshots = draft.media
-    if let place = draft.place {
-      selectedPlace = MIRAExactPostPlace(
-        provider: place.provider,
-        providerPlaceId: place.providerPlaceId,
-        name: place.name,
-        formattedAddress: place.formattedAddress,
-        latitude: place.latitude,
-        longitude: place.longitude,
-        category: place.category,
-        city: place.city,
-        region: place.region,
-        country: place.country
-      )
-    }
-    if let cachedLocation = draft.broadLocation {
-      broadLocation = MIRABroadDisplayLocation(
-        city: cachedLocation.city,
-        region: cachedLocation.region,
-        country: cachedLocation.country,
-        label: cachedLocation.label,
-        source: cachedLocation.source,
-        visibility: cachedLocation.visibility
-      )
-      showBroadLocation = draft.showBroadLocation
-      hasLoadedBroadLocation = true
-    }
-    let restoredMedia = await MIRAAppCacheStore.shared.loadPostDraftMedia(draft)
-    if !restoredMedia.isEmpty {
-      mediaItems = restoredMedia
-      isEditingPostDetails = true
-    } else if !title.isEmpty || !bodyText.isEmpty || !hashtags.isEmpty || selectedPlace != nil {
-      isEditingPostDetails = true
-    }
-    if draft.uploadStatus == "failed" {
-      errorMessage = draft.errorMessage ?? "Your last upload failed. Review and post again."
-    }
+    await MIRAAppCacheStore.shared.clearPostDraft()
+    draftMediaSnapshots = []
+    hasRestoredPostDraft = true
   }
 
   private func cacheComposerDraft() {
     guard hasRestoredPostDraft else { return }
-    Task { await persistComposerDraft(uploadStatus: "draft", errorMessage: nil, includeMedia: false) }
+    Task { await MIRAAppCacheStore.shared.clearPostDraft() }
   }
 
   @MainActor
   private func persistComposerDraft(uploadStatus: String, errorMessage: String?, includeMedia: Bool) async {
     guard hasRestoredPostDraft else { return }
-    guard hasDraftContent else {
-      await MIRAAppCacheStore.shared.clearPostDraft()
-      draftMediaSnapshots = []
-      return
-    }
-    if includeMedia {
-      draftMediaSnapshots = await MIRAAppCacheStore.shared.storePostDraftMedia(mediaItems)
-    }
-    let draft = MIRAPostDraftSnapshot(
-      title: title,
-      bodyText: bodyText,
-      hashtags: hashtags,
-      selectedAudioTrack: nil,
-      place: draftPlaceSnapshot,
-      broadLocation: draftBroadLocationSnapshot,
-      showBroadLocation: showBroadLocation,
-      media: draftMediaSnapshots,
-      uploadStatus: uploadStatus,
-      errorMessage: errorMessage,
-      savedAt: ISO8601DateFormatter.miraPostDraft.string(from: Date())
-    )
-    await MIRAAppCacheStore.shared.savePostDraft(draft)
+    await MIRAAppCacheStore.shared.clearPostDraft()
+    draftMediaSnapshots = []
+  }
+
+  @MainActor
+  private func resetComposerAfterAbandoningDraft() {
+    focusedPostDetailsField = nil
+    title = ""
+    bodyText = ""
+    mediaItems = []
+    pickerItems = []
+    showPreview = false
+    isEditingPostDetails = false
+    isLoadingMedia = false
+    errorMessage = nil
+    editingMedia = nil
+    editedCameraMedia = nil
+    activePostDetailSheet = nil
+    selectedPlace = nil
+    broadLocation = MIRABroadDisplayLocation()
+    showBroadLocation = false
+    broadLocationError = nil
+    taggedUsers = []
+    hashtags = []
+    selectedAudioTrack = nil
+    selectedDiscoverCategory = nil
+    postAssistResponse = nil
+    postAssistError = nil
+    draftMediaSnapshots = []
+    isCameraReviewingMedia = false
   }
 
   private var hasDraftContent: Bool {
