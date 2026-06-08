@@ -170,6 +170,8 @@ protocol MIRAStoryCameraViewControllerDelegate: AnyObject {
 }
 
 final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptureDelegate, AVCaptureFileOutputRecordingDelegate, PHPickerViewControllerDelegate {
+  private static let maxStoryRecordingDuration: TimeInterval = 60
+
   weak var delegate: MIRAStoryCameraViewControllerDelegate?
   var captureMode: MIRAStoryCameraCaptureMode = .photoOnly
   var showsMusicButton = true {
@@ -1272,7 +1274,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     case .photo:
       capturePhoto()
     case .video:
-      startRecordingVideo(maxDuration: 60)
+      startRecordingVideo(maxDuration: Self.maxStoryRecordingDuration)
     }
   }
 

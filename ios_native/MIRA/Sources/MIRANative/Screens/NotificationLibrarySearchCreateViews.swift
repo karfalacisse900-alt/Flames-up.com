@@ -2124,6 +2124,7 @@ private struct MIRAAudiusMusicPickerSheet: View {
   @State private var previewPlayer: AVPlayer?
   @State private var previewingTrackId: String?
   @State private var previewLoadingTrackId: String?
+  @State private var isShowingFavoritesOnly = false
 
   var body: some View {
     NavigationStack {
@@ -2170,6 +2171,8 @@ private struct MIRAAudiusMusicPickerSheet: View {
               )
             }
           }
+
+          musicLibraryToggle
         }
         .padding(.horizontal, MIRATheme.Space.md)
         .padding(.top, MIRATheme.Space.md)
@@ -2198,7 +2201,16 @@ private struct MIRAAudiusMusicPickerSheet: View {
         } else {
           ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-              if shouldShowFavoritesSection {
+              if isShowingFavoritesOnly {
+                musicSectionHeader("Favorite sounds")
+                if favoriteTracks.isEmpty {
+                  emptyFavoritesRow
+                } else {
+                  ForEach(favoriteTracks) { track in
+                    musicTrackRow(track)
+                  }
+                }
+              } else if shouldShowFavoritesSection {
                 musicSectionHeader("Favorite sounds")
                 if favoriteTracks.isEmpty {
                   emptyFavoritesRow
@@ -2213,9 +2225,9 @@ private struct MIRAAudiusMusicPickerSheet: View {
                 }
               }
 
-              if visibleTracks.isEmpty && !shouldShowFavoritesSection {
+              if visibleTracks.isEmpty && !shouldShowFavoritesSection && !isShowingFavoritesOnly {
                 emptySearchRow
-              } else {
+              } else if !isShowingFavoritesOnly {
                 ForEach(visibleTracks) { track in
                   musicTrackRow(track)
                 }
@@ -2251,8 +2263,59 @@ private struct MIRAAudiusMusicPickerSheet: View {
     }
   }
 
+  private var musicLibraryToggle: some View {
+    HStack(spacing: 8) {
+      musicLibraryToggleButton(title: "All music", systemImage: "music.note.list", isSelected: !isShowingFavoritesOnly) {
+        isShowingFavoritesOnly = false
+      }
+      musicLibraryToggleButton(
+        title: "Favorites",
+        systemImage: "heart.fill",
+        isSelected: isShowingFavoritesOnly,
+        count: favoriteTracks.count
+      ) {
+        query = ""
+        isSearchFocused = false
+        isShowingFavoritesOnly = true
+      }
+    }
+    .accessibilityElement(children: .contain)
+  }
+
+  private func musicLibraryToggleButton(
+    title: String,
+    systemImage: String,
+    isSelected: Bool,
+    count: Int? = nil,
+    action: @escaping () -> Void
+  ) -> some View {
+    Button(action: action) {
+      HStack(spacing: 7) {
+        Image(systemName: systemImage)
+          .font(.system(size: 13, weight: .bold))
+        Text(title)
+          .font(.system(size: 13, weight: .bold))
+        if let count, count > 0 {
+          Text("\(count)")
+            .font(.system(size: 11, weight: .heavy))
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(isSelected ? Color.white.opacity(0.18) : MIRATheme.Color.surface)
+            .clipShape(Capsule())
+        }
+      }
+      .foregroundStyle(isSelected ? Color.white : MIRATheme.Color.textPrimary)
+      .frame(maxWidth: .infinity)
+      .frame(height: 38)
+      .background(isSelected ? MIRATheme.Color.forest : MIRATheme.Color.surfaceSoft.opacity(0.84))
+      .clipShape(Capsule())
+    }
+    .buttonStyle(.plain)
+    .accessibilityLabel(title)
+  }
+
   private var shouldShowFavoritesSection: Bool {
-    query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isShowingFavoritesOnly
   }
 
   private var visibleTracks: [MIRAAudiusTrack] {
@@ -3459,6 +3522,7 @@ public struct CreateStoryNativeView: View {
       MIRAStoryLiveCameraView(
         editedMedia: editedStoryCameraMedia,
         captureMode: .videoOnly,
+        showsGridOverlay: false,
         dismissesOnCapture: false,
         dismissesOnCancel: false,
         onCapture: { media in
