@@ -2920,10 +2920,13 @@ private struct PostLocationPickerSheet: View {
   @Binding var selectedPlace: MIRAExactPostPlace?
   let onClose: (() -> Void)?
   @Environment(\.dismiss) private var dismiss
+  @StateObject private var placeLocationResolver = MIRABroadLocationResolver()
   @State private var query = ""
   @State private var places: [MIRAExactPostPlace] = []
   @State private var isLoading = false
   @State private var errorMessage: String?
+  @State private var searchRegion: MKCoordinateRegion?
+  @State private var hasLoadedSearchRegion = false
   @FocusState private var isSearchFocused: Bool
 
   var body: some View {
@@ -2969,17 +2972,15 @@ private struct PostLocationPickerSheet: View {
           LazyVStack(spacing: 10) {
             searchStatusView
 
-            if cleanQuery.count >= 2 {
-              Button {
-                selectManualPlace()
-              } label: {
-                placeRowTitle(
-                  systemImage: "plus.circle.fill",
-                  name: "Use \"\(cleanQuery)\"",
-                  subtitle: "Custom place or address"
-                )
+            if !places.isEmpty {
+              HStack {
+                Text("Apple Maps results")
+                  .font(.system(size: 13, weight: .semibold))
+                  .foregroundStyle(MIRATheme.Color.textMuted)
+                Spacer()
               }
-              .buttonStyle(.miraPress)
+              .padding(.horizontal, 4)
+              .padding(.top, 2)
             }
 
             ForEach(places) { place in
@@ -3015,6 +3016,9 @@ private struct PostLocationPickerSheet: View {
       }
       .onAppear {
         isSearchFocused = true
+      }
+      .task {
+        await loadLocalSearchRegion()
       }
       .task(id: cleanQuery) {
         let snapshot = cleanQuery
@@ -3069,7 +3073,7 @@ private struct PostLocationPickerSheet: View {
     } else if cleanQuery.count < 2 {
       placePickerMessage("Keep typing to search places.", systemImage: "text.cursor")
     } else if places.isEmpty {
-      placePickerMessage("No matching places yet. You can still use your typed place.", systemImage: "mappin.circle")
+      placePickerMessage("No Apple Maps places found yet. Try a place name plus city.", systemImage: "mappin.circle")
     }
   }
 
@@ -3134,35 +3138,24 @@ private struct PostLocationPickerSheet: View {
     query.trimmingCharacters(in: .whitespacesAndNewlines)
   }
 
-  private var manualPlaceId: String {
-    let slug = cleanQuery
-      .lowercased()
-      .filter { $0.isLetter || $0.isNumber }
-      .prefix(42)
-    return "manual-\(slug.isEmpty ? "place" : String(slug))"
-  }
-
-  private func selectManualPlace() {
-    selectedPlace = MIRAExactPostPlace(
-      providerPlaceId: manualPlaceId,
-      name: cleanQuery,
-      formattedAddress: cleanQuery,
-      latitude: nil,
-      longitude: nil,
-      category: "manual",
-      city: nil,
-      region: nil,
-      country: nil
-    )
-    close()
-  }
-
   private func close() {
     if let onClose {
       onClose()
     } else {
       dismiss()
     }
+  }
+
+  @MainActor
+  private func loadLocalSearchRegion() async {
+    guard !hasLoadedSearchRegion else { return }
+    hasLoadedSearchRegion = true
+    guard let location = await placeLocationResolver.resolveCurrentLocation() else { return }
+    searchRegion = MKCoordinateRegion(
+      center: location.coordinate,
+      latitudinalMeters: 35_000,
+      longitudinalMeters: 35_000
+    )
   }
 
   @MainActor
@@ -3178,6 +3171,9 @@ private struct PostLocationPickerSheet: View {
       let request = MKLocalSearch.Request()
       request.naturalLanguageQuery = clean
       request.resultTypes = [.pointOfInterest, .address]
+      if let searchRegion {
+        request.region = searchRegion
+      }
       let response = try await MKLocalSearch(request: request).start()
       let loaded = response.mapItems.map(MIRAExactPostPlace.init(mapItem:))
       guard !Task.isCancelled, clean == cleanQuery else { return }
@@ -3187,7 +3183,7 @@ private struct PostLocationPickerSheet: View {
     } catch {
       guard !Task.isCancelled, clean == cleanQuery else { return }
       places = []
-      errorMessage = "Apple Maps places could not load. You can still use your typed place."
+      errorMessage = "Apple Maps places could not load. Check your connection and try again."
       isLoading = false
     }
   }

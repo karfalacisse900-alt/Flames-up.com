@@ -2074,6 +2074,7 @@ public struct WalletNativeView: View {
     .background(MIRATheme.Color.appBackground)
     .miraScrollFeel(.feed)
     .miraScreenEnter(.push)
+    .miraHideTabBarOnAppear()
     .task { await loadAccount() }
   }
 
