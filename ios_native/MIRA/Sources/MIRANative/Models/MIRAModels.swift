@@ -941,6 +941,7 @@ public struct MIRAComment: Codable, Identifiable, Hashable {
           bio: nil,
           city: nil,
           email: nil,
+          emailVerified: nil,
           phone: nil,
           phoneVerified: nil,
           followersCount: nil,
