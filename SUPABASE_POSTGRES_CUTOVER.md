@@ -70,6 +70,17 @@ npx.cmd supabase link --project-ref cclgvxukwccvtgrbcwie
 npx.cmd supabase db push
 ```
 
+Or run the GitHub Actions workflow:
+
+```text
+Supabase Postgres Migrations
+```
+
+Required GitHub repository secrets:
+
+- `SUPABASE_ACCESS_TOKEN`
+- `SUPABASE_PROJECT_REF` (`cclgvxukwccvtgrbcwie` for the current production Supabase project)
+
 3. Confirm Worker secrets are configured.
 
 ```powershell
