@@ -3,6 +3,10 @@
 Captro builds are uploaded to TestFlight by the GitHub Actions workflow `Native iOS TestFlight`.
 Apple still requires the first external TestFlight build to pass TestFlight App Review before a public link can be opened.
 
+Production Captro iOS bundle ID: `com.captro.app`.
+
+Before running the first TestFlight upload for this new app record, create an App Store distribution provisioning profile for `com.captro.app` and update the GitHub Actions provisioning profile secret to match it.
+
 ## Recommended Public Beta Group
 
 - Group name: `Captro Public Beta`

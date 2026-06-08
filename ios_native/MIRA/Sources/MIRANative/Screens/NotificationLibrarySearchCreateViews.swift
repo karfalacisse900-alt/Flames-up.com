@@ -80,7 +80,7 @@ public struct NotificationNativeView: View {
         Text(item.title ?? "New activity")
           .font(.system(size: 16, weight: .semibold))
           .foregroundStyle(MIRATheme.Color.textPrimary)
-        Text(item.body ?? "Something new happened on MIRA.")
+        Text(item.body ?? "Something new happened on Captro.")
           .font(.system(size: 14, weight: .regular))
           .foregroundStyle(MIRATheme.Color.textSecondary)
           .lineLimit(2)

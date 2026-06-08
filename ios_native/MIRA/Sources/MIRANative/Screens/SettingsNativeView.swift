@@ -325,7 +325,7 @@ public struct SettingsNativeView: View {
     HStack(spacing: 12) {
       RemoteAvatar(url: model.user?.profileImage, size: 48)
       VStack(alignment: .leading, spacing: 2) {
-        Text(model.user?.displayName ?? "MIRA")
+        Text(model.user?.displayName ?? "Captro")
           .font(.system(size: 20, weight: .bold))
           .foregroundStyle(MIRATheme.Color.textPrimary)
         Text(model.email.isEmpty ? localization.string("settings.manage_account") : model.email)

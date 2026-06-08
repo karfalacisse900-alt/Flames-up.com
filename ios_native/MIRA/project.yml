@@ -1,4 +1,4 @@
-name: MIRA
+name: Captro
 
 options:
   minimumXcodeGenVersion: 2.42.0
@@ -19,7 +19,7 @@ settings:
     ENABLE_USER_SCRIPT_SANDBOXING: YES
 
 targets:
-  MIRA:
+  Captro:
     type: application
     platform: iOS
     deploymentTarget: "17.0"
@@ -32,10 +32,10 @@ targets:
         product: MIRACoreCpp
     settings:
       base:
-        PRODUCT_NAME: MIRA
-        PRODUCT_BUNDLE_IDENTIFIER: com.karfala90.frontend
+        PRODUCT_NAME: Captro
+        PRODUCT_BUNDLE_IDENTIFIER: com.captro.app
         INFOPLIST_FILE: AppTarget/Info.plist
-        CODE_SIGN_ENTITLEMENTS: AppTarget/MIRA.entitlements
+        CODE_SIGN_ENTITLEMENTS: AppTarget/Captro.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         TARGETED_DEVICE_FAMILY: "1"
         SUPPORTS_MACCATALYST: NO
@@ -63,10 +63,10 @@ targets:
           SWIFT_OPTIMIZATION_LEVEL: -O
 
 schemes:
-  MIRA:
+  Captro:
     build:
       targets:
-        MIRA: all
+        Captro: all
     run:
       config: Debug
     test:

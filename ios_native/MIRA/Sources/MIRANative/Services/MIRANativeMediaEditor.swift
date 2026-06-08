@@ -635,7 +635,7 @@ public enum MIRANativeMediaEditorExporter {
   private static func logExport(label: String, start: DispatchTime, bytes: Int) {
     #if DEBUG
     let elapsed = Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000
-    print("[MIRA editor] \(label) export \(Int(elapsed))ms bytes=\(bytes)")
+    print("[Captro editor] \(label) export \(Int(elapsed))ms bytes=\(bytes)")
     MIRAMemoryMetrics.log("editor_\(label)_export")
     #endif
   }
@@ -643,7 +643,7 @@ public enum MIRANativeMediaEditorExporter {
   private static func logExportFailure(label: String, start: DispatchTime, error: Error) {
     #if DEBUG
     let elapsed = Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000
-    print("[MIRA editor] \(label) export failed \(Int(elapsed))ms error=\(error.localizedDescription)")
+    print("[Captro editor] \(label) export failed \(Int(elapsed))ms error=\(error.localizedDescription)")
     #endif
   }
 }

@@ -677,7 +677,7 @@ public struct ConversationNativeView: View {
       if outgoing { Spacer(minLength: 68) }
       VStack(alignment: outgoing ? .trailing : .leading, spacing: 6) {
         if model.isGroup && !outgoing {
-          Text(message.fullName ?? message.username ?? "MIRA")
+          Text(message.fullName ?? message.username ?? "Captro")
             .font(.system(size: 11, weight: .semibold))
             .foregroundStyle(MIRATheme.Color.textMuted)
             .lineLimit(1)

@@ -2,8 +2,8 @@ import BackgroundTasks
 import Foundation
 
 public enum MIRABackgroundTaskIdentifiers {
-  public static let appRefresh = "com.karfala90.frontend.background-refresh"
-  public static let cacheCleanup = "com.karfala90.frontend.cache-cleanup"
+  public static let appRefresh = "com.captro.app.background-refresh"
+  public static let cacheCleanup = "com.captro.app.cache-cleanup"
 }
 
 public final class MIRABackgroundTaskCoordinator {

@@ -6,7 +6,7 @@ The `Native iOS TestFlight` workflow builds the production SwiftUI/C++/Rust app 
 
 1. Checks out the repo.
 2. Builds the Rust core for `aarch64-apple-ios`.
-3. Generates `MIRA.xcodeproj` from `project.yml` with XcodeGen.
+3. Generates `Captro.xcodeproj` from `project.yml` with XcodeGen.
 4. Builds the SwiftUI app and C++ package target.
 5. Archives and exports an `.ipa`.
 6. Uploads the `.ipa` artifact.
@@ -38,7 +38,7 @@ On a Mac with Apple Developer access:
 
 ```bash
 base64 -i Certificates.p12 | pbcopy
-base64 -i MIRA_App_Store.mobileprovision | pbcopy
+base64 -i Captro_App_Store.mobileprovision | pbcopy
 base64 -i AuthKey_XXXXXXXXXX.p8 | pbcopy
 ```
 
@@ -48,7 +48,7 @@ Paste those copied values into:
 - `IOS_PROVISIONING_PROFILE_BASE64`
 - `APP_STORE_CONNECT_API_KEY_BASE64`
 
-The provisioning profile must match the bundle ID configured in `project.yml` and `.github/workflows/native-ios-testflight.yml`.
+The provisioning profile must match the bundle ID `com.captro.app` configured in `project.yml` and `.github/workflows/native-ios-testflight.yml`.
 
 ## Run
 

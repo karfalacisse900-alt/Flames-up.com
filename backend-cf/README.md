@@ -92,9 +92,9 @@ Google OAuth setup:
 - Use the Web OAuth client ID and client secret in the Supabase Google provider. Native iOS/Android IDs can be used by the mobile app, but Supabase's provider secret belongs to the Web client.
 
 Apple native sign-in:
-- Enable Sign in with Apple on the iOS App ID `com.karfala90.frontend`.
+- Enable Sign in with Apple on the iOS App ID `com.captro.app`.
 - Configure the Apple Services ID in Supabase for web OAuth.
-- Set `APPLE_OAUTH_AUDIENCES` on the Worker to include both the iOS bundle ID and the Services ID, for example `com.karfala90.frontend,com.karfala90.frontend.auth`.
+- Set `APPLE_OAUTH_AUDIENCES` on the Worker to include both the iOS bundle ID and the Services ID, for example `com.captro.app,com.captro.app.auth`.
 
 ## Admin Moderation API
 

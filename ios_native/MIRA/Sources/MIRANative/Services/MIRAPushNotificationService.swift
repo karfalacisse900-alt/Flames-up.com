@@ -46,7 +46,7 @@ public enum MIRAPushNotificationRegistrar {
   }
 
   public static var bundleId: String {
-    Bundle.main.bundleIdentifier ?? "com.karfala90.frontend"
+    Bundle.main.bundleIdentifier ?? "com.captro.app"
   }
 
   public static var environment: String {

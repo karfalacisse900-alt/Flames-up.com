@@ -470,7 +470,7 @@ public struct ProfileNativeView: View {
     if let fullName = model.user?.fullName, !fullName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
       return fullName
     }
-    return model.user?.username ?? "mira"
+    return model.user?.username ?? "captro"
   }
 }
 
@@ -952,7 +952,7 @@ public struct UserProfileNativeView: View {
     if let fullName = model.user?.fullName, !fullName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
       return fullName
     }
-    return model.user?.username ?? "mira"
+    return model.user?.username ?? "captro"
   }
 }
 

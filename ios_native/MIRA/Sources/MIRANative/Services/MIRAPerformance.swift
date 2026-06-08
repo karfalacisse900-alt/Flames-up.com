@@ -109,7 +109,7 @@ public enum MIRAPerformanceTimeline {
     #if DEBUG
     let elapsed = Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000
     let detailText = detail.map { " \($0)" } ?? ""
-    print("[MIRA perf] mark \(name) \(Int(elapsed))ms\(detailText)")
+    print("[Captro perf] mark \(name) \(Int(elapsed))ms\(detailText)")
     #endif
   }
 
@@ -127,7 +127,7 @@ public enum MIRAMemoryMetrics {
   public static func log(_ label: String) {
     #if DEBUG
     guard let value = residentMemoryMB() else { return }
-    print("[MIRA perf] memory \(label) \(Int(value))MB")
+    print("[Captro perf] memory \(label) \(Int(value))MB")
     #endif
   }
 
@@ -160,7 +160,7 @@ public actor MIRAPerformanceMonitor {
     }
     let count = activeCount(for: category)
     #if DEBUG
-    print("[MIRA perf] begin \(category) active=\(count) \(label)")
+    print("[Captro perf] begin \(category) active=\(count) \(label)")
     #endif
     return count
   }
@@ -175,7 +175,7 @@ public actor MIRAPerformanceMonitor {
     #if DEBUG
     let statusText = status.map { " status=\($0)" } ?? ""
     let bytesText = bytes > 0 ? " bytes=\(bytes)" : ""
-    print("[MIRA perf] end \(category) active=\(activeCount(for: category)) \(Int(elapsedMilliseconds))ms\(statusText)\(bytesText) \(label)")
+      print("[Captro perf] end \(category) active=\(activeCount(for: category)) \(Int(elapsedMilliseconds))ms\(statusText)\(bytesText) \(label)")
     #endif
   }
 
@@ -241,7 +241,7 @@ public final class MIRAMainThreadStallMonitor {
       guard let self, self.isRunning else { return }
       let drift = Date().timeIntervalSince(expected)
       if drift > 0.10 {
-        print("[MIRA perf] main-thread stall \(Int(drift * 1000))ms")
+        print("[Captro perf] main-thread stall \(Int(drift * 1000))ms")
       }
       self.scheduleTick(expected: Date().addingTimeInterval(self.interval))
     }

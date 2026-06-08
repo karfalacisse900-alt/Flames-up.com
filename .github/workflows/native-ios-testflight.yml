@@ -10,8 +10,8 @@ on:
 
 env:
   IOS_NATIVE_DIR: ios_native/MIRA
-  BUNDLE_ID: com.karfala90.frontend
-  SCHEME: MIRA
+  BUNDLE_ID: com.captro.app
+  SCHEME: Captro
 
 jobs:
   build-testflight:
@@ -66,10 +66,10 @@ jobs:
           set -euo pipefail
 
           KEYCHAIN_PASSWORD="${KEYCHAIN_PASSWORD:-$(uuidgen)}"
-          KEYCHAIN_PATH="$RUNNER_TEMP/mira-signing.keychain-db"
+          KEYCHAIN_PATH="$RUNNER_TEMP/captro-signing.keychain-db"
           CERT_PATH="$RUNNER_TEMP/ios_distribution.p12"
-          PROFILE_PATH="$RUNNER_TEMP/mira.mobileprovision"
-          PROFILE_PLIST="$RUNNER_TEMP/mira-profile.plist"
+          PROFILE_PATH="$RUNNER_TEMP/captro.mobileprovision"
+          PROFILE_PLIST="$RUNNER_TEMP/captro-profile.plist"
 
           echo -n "$IOS_DISTRIBUTION_CERTIFICATE_BASE64" | base64 -D > "$CERT_PATH"
           echo -n "$IOS_PROVISIONING_PROFILE_BASE64" | base64 -D > "$PROFILE_PATH"
@@ -105,11 +105,11 @@ jobs:
           BUILD_NUMBER="${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
           echo "BUILD_NUMBER=$BUILD_NUMBER" >> "$GITHUB_ENV"
           xcodebuild \
-            -project MIRA.xcodeproj \
+            -project Captro.xcodeproj \
             -scheme "$SCHEME" \
             -configuration Release \
             -destination "generic/platform=iOS" \
-            -archivePath "$RUNNER_TEMP/MIRA.xcarchive" \
+            -archivePath "$RUNNER_TEMP/Captro.xcarchive" \
             CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
             MARKETING_VERSION="1.0.0" \
             OTHER_CODE_SIGN_FLAGS="--keychain $KEYCHAIN_PATH" \
@@ -149,14 +149,14 @@ jobs:
 
           xcodebuild \
             -exportArchive \
-            -archivePath "$RUNNER_TEMP/MIRA.xcarchive" \
+            -archivePath "$RUNNER_TEMP/Captro.xcarchive" \
             -exportPath "$RUNNER_TEMP/export" \
             -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist"
 
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v7
         with:
-          name: MIRA-native-ios-ipa
+          name: Captro-native-ios-ipa
           path: ${{ runner.temp }}/export/*.ipa
           if-no-files-found: error
 
