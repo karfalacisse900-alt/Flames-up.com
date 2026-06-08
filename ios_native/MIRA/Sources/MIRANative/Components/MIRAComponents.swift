@@ -1,6 +1,7 @@
 import AVFoundation
 import AVKit
 import Foundation
+import ObjectiveC
 import SwiftUI
 import UIKit
 
@@ -269,7 +270,7 @@ public extension View {
   }
 }
 
-public enum MIRAScrollFeel {
+public enum MIRAScrollFeel: Equatable {
   case feed
   case chat
   case sheet
@@ -277,11 +278,20 @@ public enum MIRAScrollFeel {
   fileprivate var decelerationRate: UIScrollView.DecelerationRate {
     switch self {
     case .feed:
-      return UIScrollView.DecelerationRate(rawValue: 0.955)
+      return UIScrollView.DecelerationRate(rawValue: 0.88)
     case .chat:
       return UIScrollView.DecelerationRate(rawValue: 0.992)
     case .sheet:
       return UIScrollView.DecelerationRate(rawValue: 0.995)
+    }
+  }
+
+  fileprivate var maxFlingDistanceScreens: CGFloat? {
+    switch self {
+    case .feed:
+      return 0.92
+    case .chat, .sheet:
+      return nil
     }
   }
 
@@ -292,6 +302,49 @@ public enum MIRAScrollFeel {
     case .chat, .sheet:
       return false
     }
+  }
+}
+
+private var miraScrollDelegateProxyKey: UInt8 = 0
+
+private final class MIRAScrollDelegateProxy: NSObject, UIScrollViewDelegate {
+  let feel: MIRAScrollFeel
+  weak var passthrough: UIScrollViewDelegate?
+
+  init(feel: MIRAScrollFeel) {
+    self.feel = feel
+  }
+
+  override func responds(to aSelector: Selector!) -> Bool {
+    super.responds(to: aSelector) || (passthrough?.responds(to: aSelector) ?? false)
+  }
+
+  override func forwardingTarget(for aSelector: Selector!) -> Any? {
+    if passthrough?.responds(to: aSelector) == true {
+      return passthrough
+    }
+    return super.forwardingTarget(for: aSelector)
+  }
+
+  func scrollViewWillEndDragging(
+    _ scrollView: UIScrollView,
+    withVelocity velocity: CGPoint,
+    targetContentOffset: UnsafeMutablePointer<CGPoint>
+  ) {
+    passthrough?.scrollViewWillEndDragging?(scrollView, withVelocity: velocity, targetContentOffset: targetContentOffset)
+    guard let maxScreens = feel.maxFlingDistanceScreens else { return }
+    guard scrollView.bounds.height > 0, scrollView.contentSize.height > scrollView.bounds.height else { return }
+
+    let currentY = scrollView.contentOffset.y
+    let proposedY = targetContentOffset.pointee.y
+    let maxDistance = scrollView.bounds.height * maxScreens
+    let boundedY = min(max(proposedY, currentY - maxDistance), currentY + maxDistance)
+    let maxOffsetY = max(
+      -scrollView.adjustedContentInset.top,
+      scrollView.contentSize.height - scrollView.bounds.height + scrollView.adjustedContentInset.bottom
+    )
+    let minOffsetY = -scrollView.adjustedContentInset.top
+    targetContentOffset.pointee.y = min(max(boundedY, minOffsetY), maxOffsetY)
   }
 }
 
@@ -328,10 +381,36 @@ private struct MIRAScrollTuningView: UIViewRepresentable {
         scrollView.canCancelContentTouches = true
         scrollView.isDirectionalLockEnabled = feel.directionalLockEnabled
         scrollView.backgroundColor = .clear
+        configureFlingLimiter(on: scrollView)
         return
       }
       parent = candidate.superview
     }
+  }
+
+  private func configureFlingLimiter(on scrollView: UIScrollView) {
+    guard feel.maxFlingDistanceScreens != nil else {
+      if let proxy = objc_getAssociatedObject(scrollView, &miraScrollDelegateProxyKey) as? MIRAScrollDelegateProxy,
+         scrollView.delegate === proxy {
+        scrollView.delegate = proxy.passthrough
+      }
+      objc_setAssociatedObject(scrollView, &miraScrollDelegateProxyKey, nil, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+      return
+    }
+    if let proxy = objc_getAssociatedObject(scrollView, &miraScrollDelegateProxyKey) as? MIRAScrollDelegateProxy,
+       proxy.feel == feel {
+      if let delegate = scrollView.delegate, delegate !== proxy {
+        proxy.passthrough = delegate
+      }
+      scrollView.delegate = proxy
+      return
+    }
+    let proxy = MIRAScrollDelegateProxy(feel: feel)
+    if let delegate = scrollView.delegate, delegate !== proxy {
+      proxy.passthrough = delegate
+    }
+    objc_setAssociatedObject(scrollView, &miraScrollDelegateProxyKey, proxy, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+    scrollView.delegate = proxy
   }
 }
 
