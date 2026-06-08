@@ -938,20 +938,7 @@ public struct CreatePostNativeView: View {
       MIRAPlaybackCoordinator.pauseAll(reason: "post_creation_open")
     }
     .task {
-      await restorePostDraftIfNeeded()
-      await loadBroadLocationDefaultIfNeeded()
-    }
-    .onChange(of: title) { _, _ in cacheComposerDraft() }
-    .onChange(of: bodyText) { _, _ in cacheComposerDraft() }
-    .onChange(of: hashtags) { _, _ in cacheComposerDraft() }
-    .onChange(of: selectedAudioTrack) { _, _ in cacheComposerDraft() }
-    .onChange(of: selectedDiscoverCategory) { _, _ in cacheComposerDraft() }
-    .onChange(of: selectedPlace) { _, _ in cacheComposerDraft() }
-    .onChange(of: broadLocation) { _, _ in cacheComposerDraft() }
-    .onChange(of: showBroadLocation) { _, _ in cacheComposerDraft() }
-    .onChange(of: mediaItems) { _, _ in
-      guard hasRestoredPostDraft else { return }
-      Task { await persistComposerDraft(uploadStatus: "draft", errorMessage: nil, includeMedia: true) }
+      await preparePostComposerForDisplay()
     }
     .onChange(of: pickerItems) { _, newItems in
       Task { await loadPickerItems(newItems) }
@@ -1672,6 +1659,12 @@ public struct CreatePostNativeView: View {
     guard phase == .background, !isPosting else { return }
     resetComposerAfterAbandoningDraft()
     Task { await MIRAAppCacheStore.shared.clearPostDraft() }
+  }
+
+  @MainActor
+  private func preparePostComposerForDisplay() async {
+    await restorePostDraftIfNeeded()
+    await loadBroadLocationDefaultIfNeeded()
   }
 
   @MainActor
