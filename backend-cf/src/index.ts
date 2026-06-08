@@ -708,8 +708,24 @@ async function ensureLikeUniquenessSchema(db: D1Database) {
          FROM discover_likes
        )
        WHERE rn > 1
-     )`,
+    )`,
     'CREATE UNIQUE INDEX IF NOT EXISTS idx_discover_likes_user_post_unique ON discover_likes(user_id, post_id)',
+    `INSERT OR IGNORE INTO likes (id, user_id, post_id, created_at)
+     SELECT 'discover:' || user_id || ':' || post_id,
+            user_id,
+            post_id,
+            COALESCE(created_at, datetime('now'))
+     FROM discover_likes
+     WHERE EXISTS (SELECT 1 FROM posts WHERE posts.id = discover_likes.post_id)`,
+    `DELETE FROM likes
+     WHERE id IN (
+       SELECT id FROM (
+         SELECT id,
+                ROW_NUMBER() OVER (PARTITION BY user_id, post_id ORDER BY COALESCE(created_at, ''), id) AS rn
+         FROM likes
+       )
+       WHERE rn > 1
+     )`,
     `CREATE TABLE IF NOT EXISTS comment_likes (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
@@ -756,6 +772,19 @@ async function ensureLikeUniquenessSchema(db: D1Database) {
        FROM comment_likes
        WHERE comment_likes.comment_id = comments.id
      )`,
+    `UPDATE discover_posts
+     SET likes_count = CASE
+       WHEN EXISTS (SELECT 1 FROM posts WHERE posts.id = discover_posts.id) THEN (
+         SELECT COUNT(*)
+         FROM likes
+         WHERE likes.post_id = discover_posts.id
+       )
+       ELSE (
+         SELECT COUNT(*)
+         FROM discover_likes
+         WHERE discover_likes.post_id = discover_posts.id
+       )
+     END`,
   ];
 
   for (const statement of statements) {
@@ -769,6 +798,34 @@ async function ensureLikeUniquenessSchema(db: D1Database) {
   }
 
   likeUniquenessSchemaReady = true;
+}
+
+async function reconcileLegacyDiscoverLikes(db: D1Database, postId: string) {
+  await db.batch([
+    db.prepare(
+      `INSERT OR IGNORE INTO likes (id, user_id, post_id, created_at)
+       SELECT 'discover:' || user_id || ':' || post_id,
+              user_id,
+              post_id,
+              COALESCE(created_at, datetime('now'))
+       FROM discover_likes
+       WHERE post_id = ?
+         AND EXISTS (SELECT 1 FROM posts WHERE posts.id = discover_likes.post_id)`
+    ).bind(postId),
+    db.prepare(
+      `DELETE FROM likes
+       WHERE post_id = ?
+         AND id IN (
+           SELECT id FROM (
+             SELECT id,
+                    ROW_NUMBER() OVER (PARTITION BY user_id, post_id ORDER BY COALESCE(created_at, ''), id) AS rn
+             FROM likes
+             WHERE post_id = ?
+           )
+           WHERE rn > 1
+         )`
+    ).bind(postId, postId),
+  ]);
 }
 
 async function ensureMessagePresenceSchema(db: D1Database) {
@@ -4991,6 +5048,7 @@ function feedPostPayload(post: any, likedBy: string[] = [], env?: Env) {
 
 async function getPostEngagementState(db: D1Database, postId: string, userId: string) {
   await ensureLikeUniquenessSchema(db);
+  await reconcileLegacyDiscoverLikes(db, postId);
   const row: any = await db.prepare(
     `SELECT
        COALESCE(p.likes_count, 0) AS stored_likes_count,
@@ -10565,12 +10623,22 @@ api.post('/posts/:postId/like', authMiddleware, async (c) => {
     await c.env.DB.prepare('INSERT OR IGNORE INTO likes (id, user_id, post_id) VALUES (?, ?, ?)')
       .bind(uuid(), userId, postId)
       .run();
+    await c.env.DB.prepare(
+      `INSERT OR IGNORE INTO discover_likes (id, user_id, post_id)
+       SELECT ?, ?, ?
+       WHERE EXISTS (SELECT 1 FROM discover_posts WHERE id = ?)`
+    ).bind(uuid(), userId, postId, postId).run();
   } else {
-    await c.env.DB.prepare('DELETE FROM likes WHERE user_id = ? AND post_id = ?')
-      .bind(userId, postId)
-      .run();
+    await c.env.DB.batch([
+      c.env.DB.prepare('DELETE FROM likes WHERE user_id = ? AND post_id = ?').bind(userId, postId),
+      c.env.DB.prepare('DELETE FROM discover_likes WHERE user_id = ? AND post_id = ?').bind(userId, postId),
+    ]);
   }
   const state = await getPostEngagementState(c.env.DB, postId, userId);
+  await c.env.DB.prepare('UPDATE discover_posts SET likes_count = ? WHERE id = ?')
+    .bind(state.likes_count, postId)
+    .run()
+    .catch(() => {});
   nextLiked = state.liked;
   const changed = state.liked !== wasLiked;
 
@@ -13659,6 +13727,80 @@ api.post('/discover/posts/:postId/like', authMiddleware, async (c) => {
   if (limited) return limited;
   const body: any = await c.req.json().catch(() => ({}));
   const requested = optionalBoolean(body.liked ?? body.like ?? body.value);
+
+  const canonicalPost = await c.env.DB.prepare('SELECT id FROM posts WHERE id = ?').bind(postId).first();
+  if (canonicalPost) {
+    await reconcileLegacyDiscoverLikes(c.env.DB, postId);
+    const likeVisiblePostSql = [
+      `SELECT p.id, p.user_id,
+         EXISTS (SELECT 1 FROM likes lk WHERE lk.user_id = ? AND lk.post_id = p.id) AS is_liked,
+         EXISTS (SELECT 1 FROM saved_posts sp WHERE sp.user_id = ? AND sp.post_id = p.id) AS saved
+       FROM posts p JOIN users u ON p.user_id = u.id`,
+      `WHERE p.id = ? AND ${visiblePostWhere('u', 'p')} AND ${feedPhotoPostWhere('p')}`,
+    ].join(' ');
+    const visiblePost: any = await c.env.DB.prepare(likeVisiblePostSql)
+      .bind(userId, userId, postId, ...visiblePostBindValues(userId))
+      .first();
+    if (!visiblePost) return c.json({ detail: 'Post not found' }, 404);
+
+    let nextLiked = requested;
+    const wasLiked = visiblePost.is_liked === true || visiblePost.is_liked === 1 || visiblePost.is_liked === '1';
+    if (nextLiked === null) {
+      nextLiked = !wasLiked;
+    }
+
+    if (nextLiked) {
+      await c.env.DB.prepare('INSERT OR IGNORE INTO likes (id, user_id, post_id) VALUES (?, ?, ?)')
+        .bind(uuid(), userId, postId)
+        .run();
+      await c.env.DB.prepare(
+        `INSERT OR IGNORE INTO discover_likes (id, user_id, post_id)
+         SELECT ?, ?, ?
+         WHERE EXISTS (SELECT 1 FROM discover_posts WHERE id = ?)`
+      ).bind(uuid(), userId, postId, postId).run();
+    } else {
+      await c.env.DB.batch([
+        c.env.DB.prepare('DELETE FROM likes WHERE user_id = ? AND post_id = ?').bind(userId, postId),
+        c.env.DB.prepare('DELETE FROM discover_likes WHERE user_id = ? AND post_id = ?').bind(userId, postId),
+      ]);
+    }
+
+    const state = await getPostEngagementState(c.env.DB, postId, userId);
+    await c.env.DB.prepare('UPDATE discover_posts SET likes_count = ? WHERE id = ?')
+      .bind(state.likes_count, postId)
+      .run()
+      .catch(() => {});
+    const changed = state.liked !== wasLiked;
+
+    if (state.liked && changed && visiblePost.user_id !== userId) {
+      try {
+        const me: any = await c.env.DB.prepare('SELECT full_name FROM users WHERE id = ?').bind(userId).first();
+        await insertNotificationOnce(c, {
+          userId: visiblePost.user_id,
+          type: 'like',
+          title: 'New Like',
+          body: `${me?.full_name || 'Someone'} liked your post`,
+          data: { post_id: postId, from_user_id: userId, actor_name: me?.full_name || 'Someone' },
+          dedupeKey: `like:${userId}:${postId}`,
+          dedupeSeconds: 86400,
+        });
+      } catch {}
+    }
+    if (changed) {
+      runBackgroundTask(c, 'supabase_like_write_through_failed', async () => {
+        await mirrorLegacyInteractionToSupabase(c, postId, userId, 'like', !!state.liked);
+      });
+    }
+
+    return c.json({
+      liked: !!state.liked,
+      likes_count: state.likes_count,
+      comments_count: state.comments_count,
+      saved: state.saved,
+      saves_count: state.saves_count,
+    });
+  }
+
   let nextLiked = requested;
   if (nextLiked === null) {
     const ex = await c.env.DB.prepare('SELECT id FROM discover_likes WHERE user_id = ? AND post_id = ?').bind(userId, postId).first();
