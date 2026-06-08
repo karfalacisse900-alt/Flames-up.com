@@ -1,6 +1,6 @@
-# Flames-Up API (Cloudflare Workers)
+# Captro API (Cloudflare Workers)
 
-Backend stack: Hono + D1 + Cloudflare Images/Stream.
+Backend stack: Hono + Cloudflare Workers + legacy D1 + Supabase Auth/Postgres + Cloudflare Images/R2/Stream.
 
 ## Setup
 
@@ -65,14 +65,31 @@ Supabase is used for production auth, PostgreSQL tables, and JSONB document stor
 Run or push the Supabase migrations from the repository root:
 
 ```powershell
-cd "C:\Users\The-s\Documents\New project\Flames-up.com"
+cd "C:\Users\The-s\Documents\New project\captro-production-cleanup"
 npx.cmd supabase db push
 ```
+
+The first Supabase schema migration is:
+
+```text
+supabase/migrations/202606080001_captro_core.sql
+```
+
+It creates the Postgres tables targeted by the existing Worker transfer/write-through paths:
+
+- `app_users`
+- `app_posts`
+- `post_comments`
+- `app_post_interactions`
+- `app_follows`
+- `app_documents`
+
+Read `SUPABASE_POSTGRES_CUTOVER.md` before production cutover. D1 is still the live legacy store until the transfer is complete, row counts are verified, and Supabase read paths are intentionally enabled route by route.
 
 Set the backend service-role secret for Cloudflare Workers:
 
 ```powershell
-cd "C:\Users\The-s\Documents\New project\Flames-up.com\backend-cf"
+cd "C:\Users\The-s\Documents\New project\captro-production-cleanup\backend-cf"
 npx.cmd wrangler secret put SUPABASE_SERVICE_ROLE_KEY --env production
 npx.cmd wrangler deploy --env production
 ```
@@ -90,6 +107,7 @@ Google OAuth setup:
 - Google Cloud authorized redirect URI should be the Supabase callback: `https://your-project-ref.supabase.co/auth/v1/callback`
 - Supabase Auth redirect URLs should include both `https://flames-up.com/auth/callback` and `captro://auth/callback`
 - Use the Web OAuth client ID and client secret in the Supabase Google provider. Native iOS/Android IDs can be used by the mobile app, but Supabase's provider secret belongs to the Web client.
+- If the Google account chooser says `continue with MIRA`, update the Google Cloud OAuth consent screen / branding app name to `Captro` and make sure Supabase's Google provider uses the Captro Web OAuth client. This wording is controlled by Google's OAuth app branding, not by a SwiftUI label.
 
 Apple native sign-in:
 - Enable Sign in with Apple on the iOS App ID `com.captro.app`.
