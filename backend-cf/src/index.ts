@@ -8255,6 +8255,213 @@ async function transferLegacyFollowsToSupabase(c: any, limit: number, offset: nu
   return supabaseAdminUpsert(c, 'app_follows', payload, 'app_follower_id,app_following_id');
 }
 
+function emptySupabaseTransferResult(target: string, skipped = false, detail = '') {
+  return { target, requested: 0, upserted: 0, skipped, detail };
+}
+
+async function transferLegacyBlocksToSupabase(c: any, limit: number, offset: number) {
+  try {
+    const rows = await c.env.DB.prepare('SELECT id, blocker_id, blocked_id, created_at FROM blocks ORDER BY created_at LIMIT ? OFFSET ?').bind(limit, offset).all();
+    const payload = (rows.results as any[]).map((row: any) => ({
+      id: cleanText(row.id, 120) || uuid(),
+      blocker_id: cleanText(row.blocker_id, 120),
+      blocked_id: cleanText(row.blocked_id, 120),
+      metadata: { source: 'cloudflare_d1_transfer' },
+      legacy_created_at: toPgTime(row.created_at),
+    })).filter((row) => row.blocker_id && row.blocked_id);
+    return payload.length ? supabaseAdminUpsert(c, 'app_blocks', payload, 'id') : emptySupabaseTransferResult('app_blocks');
+  } catch (error: any) {
+    return emptySupabaseTransferResult('app_blocks', true, getErrorCode(error).slice(0, 120));
+  }
+}
+
+async function transferLegacyNotificationsToSupabase(c: any, limit: number, offset: number) {
+  try {
+    const rows = await c.env.DB.prepare('SELECT * FROM notifications ORDER BY created_at LIMIT ? OFFSET ?').bind(limit, offset).all();
+    const payload = (rows.results as any[]).map((row: any) => ({
+      id: cleanText(row.id, 120) || uuid(),
+      user_id: cleanText(row.user_id, 120),
+      from_user_id: cleanText(row.from_user_id || row.actor_id || '', 120) || null,
+      type: cleanText(row.type || 'general', 80) || 'general',
+      title: cleanText(row.title || '', 160),
+      body: cleanText(row.body || row.content || '', 500),
+      content: cleanText(row.content || row.body || '', 500),
+      reference_id: cleanText(row.reference_id || row.post_id || row.target_id || '', 120) || null,
+      data: parseJsonObject(row.data),
+      is_read: Number(row.is_read || 0) === 1,
+      legacy_created_at: toPgTime(row.created_at),
+    })).filter((row) => row.user_id && row.id);
+    return payload.length ? supabaseAdminUpsert(c, 'app_notifications', payload, 'id') : emptySupabaseTransferResult('app_notifications');
+  } catch (error: any) {
+    return emptySupabaseTransferResult('app_notifications', true, getErrorCode(error).slice(0, 120));
+  }
+}
+
+async function transferLegacyReportsToSupabase(c: any, limit: number, offset: number) {
+  try {
+    const rows = await c.env.DB.prepare('SELECT * FROM reports ORDER BY created_at LIMIT ? OFFSET ?').bind(limit, offset).all();
+    const payload = (rows.results as any[]).map((row: any) => {
+      const targetType = cleanText(row.target_type || row.reported_type || row.report_type || 'other', 80) || 'other';
+      const targetId = cleanText(row.target_id || row.reported_id || row.content_id || '', 120);
+      return {
+        id: cleanText(row.id, 120) || uuid(),
+        reporter_id: cleanText(row.reporter_id, 120),
+        target_type: targetType,
+        target_id: targetId || cleanText(row.reported_id, 120) || 'unknown',
+        target_owner_user_id: cleanText(row.target_owner_user_id || row.reported_user_id || row.reported_id || '', 120) || null,
+        reason: cleanText(row.reason || 'other', 120) || 'other',
+        details: cleanText(row.details || '', 1200),
+        status: cleanText(row.status || 'open', 80) || 'open',
+        priority: cleanText(row.priority || 'normal', 40) || 'normal',
+        assigned_to: cleanText(row.assigned_to || '', 120) || null,
+        reviewed_by: cleanText(row.reviewed_by || '', 120) || null,
+        action_taken: cleanText(row.action_taken || '', 240) || null,
+        admin_notes: cleanText(row.admin_notes || '', 1200),
+        metadata: {
+          source: 'cloudflare_d1_transfer',
+          legacy_report_type: cleanText(row.report_type || '', 80),
+          legacy_reported_id: cleanText(row.reported_id || '', 120),
+        },
+        legacy_created_at: toPgTime(row.created_at),
+        legacy_updated_at: toPgTime(row.updated_at),
+        closed_at: toPgTime(row.closed_at),
+      };
+    }).filter((row) => row.reporter_id && row.id);
+    return payload.length ? supabaseAdminUpsert(c, 'app_reports', payload, 'id') : emptySupabaseTransferResult('app_reports');
+  } catch (error: any) {
+    return emptySupabaseTransferResult('app_reports', true, getErrorCode(error).slice(0, 120));
+  }
+}
+
+async function transferLegacyMessagesToSupabase(c: any, limit: number, offset: number) {
+  try {
+    const rows = await c.env.DB.prepare('SELECT * FROM messages ORDER BY created_at LIMIT ? OFFSET ?').bind(limit, offset).all();
+    const payload = (rows.results as any[]).map((row: any) => ({
+      id: cleanText(row.id, 120) || uuid(),
+      sender_id: cleanText(row.sender_id, 120),
+      receiver_id: cleanText(row.receiver_id, 120),
+      conversation_id: cleanText(row.conversation_id || '', 120) || null,
+      body: cleanText(row.content || row.body || '', 5000),
+      media_url: cleanText(row.media_url || row.video_url || row.image_url || '', 1200) || null,
+      media_type: cleanText(row.media_type || '', 80) || null,
+      media: {
+        source: 'cloudflare_d1_transfer',
+        media_url: cleanText(row.media_url || '', 1200),
+        media_type: cleanText(row.media_type || '', 80),
+      },
+      is_read: Number(row.is_read || 0) === 1,
+      status: cleanText(row.status || 'sent', 80) || 'sent',
+      legacy_created_at: toPgTime(row.created_at),
+    })).filter((row) => row.sender_id && row.receiver_id && row.id);
+    return payload.length ? supabaseAdminUpsert(c, 'app_messages', payload, 'id') : emptySupabaseTransferResult('app_messages');
+  } catch (error: any) {
+    return emptySupabaseTransferResult('app_messages', true, getErrorCode(error).slice(0, 120));
+  }
+}
+
+async function transferLegacyGroupChatsToSupabase(c: any, limit: number, offset: number) {
+  const results: any[] = [];
+  try {
+    const groups = await c.env.DB.prepare('SELECT * FROM group_chats ORDER BY created_at LIMIT ? OFFSET ?').bind(limit, offset).all();
+    const groupPayload = (groups.results as any[]).map((row: any) => ({
+      id: cleanText(row.id, 120) || uuid(),
+      name: cleanText(row.name || '', 160),
+      created_by: cleanText(row.created_by, 120),
+      metadata: { source: 'cloudflare_d1_transfer' },
+      legacy_created_at: toPgTime(row.created_at),
+    })).filter((row) => row.id && row.created_by);
+    results.push(groupPayload.length ? await supabaseAdminUpsert(c, 'app_group_chats', groupPayload, 'id') : emptySupabaseTransferResult('app_group_chats'));
+  } catch (error: any) {
+    results.push(emptySupabaseTransferResult('app_group_chats', true, getErrorCode(error).slice(0, 120)));
+  }
+  try {
+    const members = await c.env.DB.prepare('SELECT * FROM group_chat_members ORDER BY created_at LIMIT ? OFFSET ?').bind(limit, offset).all();
+    const memberPayload = (members.results as any[]).map((row: any) => ({
+      id: cleanText(row.id, 120) || uuid(),
+      group_id: cleanText(row.group_id, 120),
+      user_id: cleanText(row.user_id, 120),
+      role: cleanText(row.role || 'member', 80) || 'member',
+      legacy_created_at: toPgTime(row.created_at),
+    })).filter((row) => row.group_id && row.user_id);
+    results.push(memberPayload.length ? await supabaseAdminUpsert(c, 'app_group_chat_members', memberPayload, 'id') : emptySupabaseTransferResult('app_group_chat_members'));
+  } catch (error: any) {
+    results.push(emptySupabaseTransferResult('app_group_chat_members', true, getErrorCode(error).slice(0, 120)));
+  }
+  try {
+    const messages = await c.env.DB.prepare('SELECT * FROM group_messages ORDER BY created_at LIMIT ? OFFSET ?').bind(limit, offset).all();
+    const messagePayload = (messages.results as any[]).map((row: any) => ({
+      id: cleanText(row.id, 120) || uuid(),
+      group_id: cleanText(row.group_id, 120),
+      sender_id: cleanText(row.sender_id, 120),
+      body: cleanText(row.content || row.body || '', 5000),
+      media_url: cleanText(row.media_url || '', 1200) || null,
+      media_type: cleanText(row.media_type || '', 80) || null,
+      media: { source: 'cloudflare_d1_transfer' },
+      legacy_created_at: toPgTime(row.created_at),
+    })).filter((row) => row.group_id && row.sender_id && row.id);
+    results.push(messagePayload.length ? await supabaseAdminUpsert(c, 'app_group_messages', messagePayload, 'id') : emptySupabaseTransferResult('app_group_messages'));
+  } catch (error: any) {
+    results.push(emptySupabaseTransferResult('app_group_messages', true, getErrorCode(error).slice(0, 120)));
+  }
+  return { target: 'app_group_chat_bundle', results };
+}
+
+async function transferLegacyPostPlacesToSupabase(c: any, limit: number, offset: number) {
+  try {
+    const rows = await c.env.DB.prepare('SELECT * FROM post_places ORDER BY created_at LIMIT ? OFFSET ?').bind(limit, offset).all();
+    const payload = (rows.results as any[]).map((row: any) => ({
+      id: cleanText(row.id, 120) || uuid(),
+      legacy_post_id: cleanText(row.post_id, 120),
+      provider: cleanText(row.provider || 'apple_mapkit', 80) || 'apple_mapkit',
+      provider_place_id: cleanText(row.provider_place_id || '', 240) || null,
+      name: cleanText(row.name || '', 240),
+      formatted_address: cleanText(row.formatted_address || '', 500),
+      latitude: row.latitude === null || row.latitude === undefined ? null : Number(row.latitude),
+      longitude: row.longitude === null || row.longitude === undefined ? null : Number(row.longitude),
+      category: cleanText(row.category || '', 120) || null,
+      city: cleanText(row.city || '', 120) || null,
+      region: cleanText(row.region || '', 120) || null,
+      country: cleanText(row.country || '', 120) || null,
+      metadata: { source: 'cloudflare_d1_transfer' },
+      legacy_created_at: toPgTime(row.created_at),
+    })).filter((row) => row.legacy_post_id && row.id);
+    return payload.length ? supabaseAdminUpsert(c, 'app_post_places', payload, 'id') : emptySupabaseTransferResult('app_post_places');
+  } catch (error: any) {
+    return emptySupabaseTransferResult('app_post_places', true, getErrorCode(error).slice(0, 120));
+  }
+}
+
+async function transferLegacyMediaAssetsToSupabase(c: any, limit: number, offset: number) {
+  try {
+    const rows = await c.env.DB.prepare('SELECT * FROM media_assets ORDER BY created_at LIMIT ? OFFSET ?').bind(limit, offset).all();
+    const payload = (rows.results as any[]).map((row: any) => ({
+      id: cleanText(row.id, 120) || uuid(),
+      user_id: cleanText(row.user_id, 120),
+      legacy_post_id: cleanText(row.post_id || '', 120) || null,
+      media_type: cleanText(row.media_type || '', 40) || 'image',
+      storage_provider: cleanText(row.storage_provider || '', 40) || 'images',
+      storage_key: cleanText(row.storage_key || '', 600),
+      public_url: cleanText(row.public_url || '', 1200) || null,
+      private_url: cleanText(row.private_url || '', 1200) || null,
+      mime_type: cleanText(row.mime_type || '', 120),
+      file_size: Number(row.file_size || 0),
+      sha256_hash: cleanText(row.sha256_hash || '', 80),
+      width: row.width === null || row.width === undefined ? null : Number(row.width),
+      height: row.height === null || row.height === undefined ? null : Number(row.height),
+      duration_seconds: row.duration_seconds === null || row.duration_seconds === undefined ? null : Number(row.duration_seconds),
+      upload_status: cleanText(row.upload_status || 'uploading', 80) || 'uploading',
+      moderation_status: cleanText(row.moderation_status || 'uploading', 80) || 'uploading',
+      rejection_code: cleanText(row.rejection_code || '', 120) || null,
+      rejection_message: cleanText(row.rejection_message || '', 400) || null,
+      metadata: { source: 'cloudflare_d1_transfer' },
+      legacy_created_at: toPgTime(row.created_at),
+    })).filter((row) => row.user_id && row.storage_key && row.id);
+    return payload.length ? supabaseAdminUpsert(c, 'app_media_assets', payload, 'id') : emptySupabaseTransferResult('app_media_assets');
+  } catch (error: any) {
+    return emptySupabaseTransferResult('app_media_assets', true, getErrorCode(error).slice(0, 120));
+  }
+}
+
 async function backfillLegacyUsersToSupabaseAuth(c: any, limit: number, offset: number) {
   await ensureSupabaseAuthSchema(c.env.DB);
   const rows = await c.env.DB.prepare(
@@ -17581,7 +17788,20 @@ api.post('/admin/supabase/transfer', authMiddleware, async (c) => {
     const limit = clampNumber(body.limit || c.req.query('limit'), 1, 1000, 500);
     const offset = clampNumber(body.offset || c.req.query('offset'), 0, 1_000_000_000, 0);
     const requestedTables = Array.isArray(body.tables) ? body.tables.map(String) : [];
-    const allTables = ['users', 'posts', 'comments', 'interactions', 'follows'];
+    const allTables = [
+      'users',
+      'posts',
+      'comments',
+      'interactions',
+      'follows',
+      'blocks',
+      'notifications',
+      'reports',
+      'messages',
+      'group_chats',
+      'post_places',
+      'media_assets',
+    ];
     const tables = requestedTables.length ? allTables.filter((table) => requestedTables.includes(table)) : allTables;
     if (!tables.length) return c.json({ detail: 'No valid transfer tables requested.' }, 400);
 
@@ -17591,6 +17811,13 @@ api.post('/admin/supabase/transfer', authMiddleware, async (c) => {
     if (tables.includes('comments')) results.push(await transferLegacyCommentsToSupabase(c, limit, offset));
     if (tables.includes('interactions')) results.push(await transferLegacyInteractionsToSupabase(c, limit, offset));
     if (tables.includes('follows')) results.push(await transferLegacyFollowsToSupabase(c, limit, offset));
+    if (tables.includes('blocks')) results.push(await transferLegacyBlocksToSupabase(c, limit, offset));
+    if (tables.includes('notifications')) results.push(await transferLegacyNotificationsToSupabase(c, limit, offset));
+    if (tables.includes('reports')) results.push(await transferLegacyReportsToSupabase(c, limit, offset));
+    if (tables.includes('messages')) results.push(await transferLegacyMessagesToSupabase(c, limit, offset));
+    if (tables.includes('group_chats')) results.push(await transferLegacyGroupChatsToSupabase(c, limit, offset));
+    if (tables.includes('post_places')) results.push(await transferLegacyPostPlacesToSupabase(c, limit, offset));
+    if (tables.includes('media_assets')) results.push(await transferLegacyMediaAssetsToSupabase(c, limit, offset));
 
     try {
       await supabaseAdminUpsert(c, 'app_documents', [{

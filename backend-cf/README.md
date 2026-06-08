@@ -73,9 +73,10 @@ The first Supabase schema migration is:
 
 ```text
 supabase/migrations/202606080001_captro_core.sql
+supabase/migrations/202606080002_captro_operational.sql
 ```
 
-It creates the Postgres tables targeted by the existing Worker transfer/write-through paths:
+They create the Postgres tables targeted by the existing Worker transfer/write-through paths:
 
 - `app_users`
 - `app_posts`
@@ -83,6 +84,21 @@ It creates the Postgres tables targeted by the existing Worker transfer/write-th
 - `app_post_interactions`
 - `app_follows`
 - `app_documents`
+- `app_blocks`
+- `app_notifications`
+- `app_reports`
+- `app_messages`
+- `app_group_chats`
+- `app_group_chat_members`
+- `app_group_messages`
+- `app_post_places`
+- `app_media_assets`
+- `app_moderation_results`
+- `app_admin_roles`
+- `app_moderation_actions`
+- `app_audit_logs`
+- `app_push_tokens`
+- `app_account_identities`
 
 Read `SUPABASE_POSTGRES_CUTOVER.md` before production cutover. D1 is still the live legacy store until the transfer is complete, row counts are verified, and Supabase read paths are intentionally enabled route by route.
 

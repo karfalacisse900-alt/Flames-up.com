@@ -26,6 +26,7 @@ Migration:
 
 ```text
 supabase/migrations/202606080001_captro_core.sql
+supabase/migrations/202606080002_captro_operational.sql
 ```
 
 This creates:
@@ -36,6 +37,21 @@ This creates:
 - `app_post_interactions`
 - `app_follows`
 - `app_documents`
+- `app_blocks`
+- `app_notifications`
+- `app_reports`
+- `app_messages`
+- `app_group_chats`
+- `app_group_chat_members`
+- `app_group_messages`
+- `app_post_places`
+- `app_media_assets`
+- `app_moderation_results`
+- `app_admin_roles`
+- `app_moderation_actions`
+- `app_audit_logs`
+- `app_push_tokens`
+- `app_account_identities`
 
 RLS is enabled on these tables. By default, the iOS app should not read these tables directly. Captro clients should keep using the Cloudflare Worker API, which enforces auth, permissions, blocks, moderation, and response shaping.
 
@@ -100,7 +116,7 @@ Invoke-RestMethod `
   -Uri "https://api.flames-up.com/api/admin/supabase/transfer" `
   -Headers @{ Authorization = "Bearer $env:CAPTRO_ADMIN_TOKEN" } `
   -ContentType "application/json" `
-  -Body '{"limit":500,"offset":0,"tables":["users","posts","comments","interactions","follows"]}'
+  -Body '{"limit":500,"offset":0,"tables":["users","posts","comments","interactions","follows","blocks","notifications","reports","messages","group_chats","post_places","media_assets"]}'
 ```
 
 Repeat with the returned `next_offset` until every table returns zero transferred rows.
@@ -114,6 +130,10 @@ Check Supabase rows against D1 counts:
 - comments vs `post_comments`
 - likes/saves vs `app_post_interactions`
 - follows vs `app_follows`
+- blocks vs `app_blocks`
+- reports vs `app_reports`
+- messages vs `app_messages`
+- media_assets vs `app_media_assets`
 
 Also verify:
 
