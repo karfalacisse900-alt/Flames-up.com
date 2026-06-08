@@ -24,6 +24,7 @@ struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
   var editedMedia: MIRAPickedMedia?
   var captureMode: MIRAStoryCameraCaptureMode = .photoOnly
   var showsMusicButton = true
+  var showsGridOverlay = true
   var dismissesOnCapture = true
   var dismissesOnCancel = true
   let onCapture: (MIRAPickedMedia) -> Void
@@ -38,6 +39,7 @@ struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
     editedMedia: MIRAPickedMedia? = nil,
     captureMode: MIRAStoryCameraCaptureMode = .photoOnly,
     showsMusicButton: Bool = true,
+    showsGridOverlay: Bool = true,
     dismissesOnCapture: Bool = true,
     dismissesOnCancel: Bool = true,
     onCapture: @escaping (MIRAPickedMedia) -> Void,
@@ -49,6 +51,7 @@ struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
     self.editedMedia = editedMedia
     self.captureMode = captureMode
     self.showsMusicButton = showsMusicButton
+    self.showsGridOverlay = showsGridOverlay
     self.dismissesOnCapture = dismissesOnCapture
     self.dismissesOnCancel = dismissesOnCancel
     self.onCapture = onCapture
@@ -62,12 +65,14 @@ struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
     let controller = MIRAStoryCameraViewController()
     controller.captureMode = captureMode
     controller.showsMusicButton = showsMusicButton
+    controller.showsGridOverlay = showsGridOverlay
     controller.delegate = context.coordinator
     return controller
   }
 
   func updateUIViewController(_ uiViewController: MIRAStoryCameraViewController, context: Context) {
     uiViewController.showsMusicButton = showsMusicButton
+    uiViewController.showsGridOverlay = showsGridOverlay
     if let editedMedia {
       uiViewController.applyEditedMedia(editedMedia)
     }
@@ -157,6 +162,9 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
   var captureMode: MIRAStoryCameraCaptureMode = .photoOnly
   var showsMusicButton = true {
     didSet { updateMusicButtonVisibility() }
+  }
+  var showsGridOverlay = true {
+    didSet { updateGridOverlayVisibility() }
   }
 
   private enum CameraMode: String, CaseIterable {
@@ -353,7 +361,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     previewContainer.layer.addSublayer(previewLayer)
 
     gridOverlay.translatesAutoresizingMaskIntoConstraints = false
-    gridOverlay.isHidden = false
+    gridOverlay.isHidden = !showsGridOverlay
     previewContainer.addSubview(gridOverlay)
 
     capturedImageView.translatesAutoresizingMaskIntoConstraints = false
@@ -648,7 +656,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
   }
 
   private var confirmButtonTitle: String {
-    captureMode == .photoOnly ? "Post" : "Next"
+    "Next"
   }
 
   private func configureAdjustmentSlider(_ slider: UISlider, value: Float, minimum: Float, maximum: Float) {
@@ -1038,6 +1046,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
   }
 
   @objc private func toggleGrid() {
+    guard showsGridOverlay else { return }
     gridOverlay.isHidden.toggle()
     gridButton.backgroundColor = gridOverlay.isHidden ? UIColor.black.withAlphaComponent(0.30) : UIColor.white.withAlphaComponent(0.24)
     CaptroHaptics.light()
@@ -1052,6 +1061,10 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
   private func updateMusicButtonVisibility() {
     gridButton.isHidden = !showsMusicButton
     gridButton.isEnabled = showsMusicButton
+  }
+
+  private func updateGridOverlayVisibility() {
+    gridOverlay.isHidden = !showsGridOverlay
   }
 
   @objc private func filtersTapped() {

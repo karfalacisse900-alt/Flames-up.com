@@ -1038,6 +1038,7 @@ public struct CreatePostNativeView: View {
       MIRAStoryLiveCameraView(
         editedMedia: editedCameraMedia,
         showsMusicButton: false,
+        showsGridOverlay: false,
         dismissesOnCapture: false,
         dismissesOnCancel: false,
         onCapture: { media in
@@ -1066,6 +1067,19 @@ public struct CreatePostNativeView: View {
       }
       .allowsHitTesting(true)
 
+      if !mediaItems.isEmpty {
+        VStack {
+          Spacer()
+          HStack {
+            Spacer()
+            firstPageNextButton
+              .padding(.trailing, 28)
+              .padding(.bottom, 40)
+          }
+        }
+        .transition(.opacity.combined(with: .scale(scale: 0.96)))
+      }
+
       if isLoadingMedia {
         ProgressView()
           .tint(.white)
@@ -1073,6 +1087,22 @@ public struct CreatePostNativeView: View {
       }
     }
     .background(Color.black.ignoresSafeArea())
+  }
+
+  private var firstPageNextButton: some View {
+    Button {
+      continueToPostDetails()
+    } label: {
+      Text("Next")
+        .font(.system(size: 16, weight: .semibold))
+        .foregroundStyle(.white)
+        .frame(width: 86, height: 52)
+        .background(MIRATheme.Color.forest)
+        .clipShape(Capsule())
+        .shadow(color: .black.opacity(0.16), radius: 14, x: 0, y: 8)
+    }
+    .buttonStyle(.miraPress)
+    .accessibilityLabel("Next")
   }
 
   private var firstPageMediaRail: some View {
