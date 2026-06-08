@@ -36,15 +36,15 @@
   <key>LSRequiresIPhoneOS</key>
   <true/>
   <key>NSCameraUsageDescription</key>
-  <string>Take photos and videos for posts, stories, notes, and chat.</string>
+  <string>Take photos for posts and record story videos in Captro.</string>
   <key>NSMicrophoneUsageDescription</key>
-  <string>Record voice messages, story videos, and voice or video calls.</string>
+  <string>Record audio when you create story videos.</string>
   <key>NSPhotoLibraryUsageDescription</key>
-  <string>Choose photos and videos from your gallery.</string>
+  <string>Choose photos for posts and videos for stories or chat.</string>
   <key>NSPhotoLibraryAddUsageDescription</key>
   <string>Save edited media from Captro to your photo library.</string>
   <key>NSLocationWhenInUseUsageDescription</key>
-  <string>Add places and nearby context to posts.</string>
+  <string>Add optional place tags or city and country labels to posts.</string>
   <key>NSAppTransportSecurity</key>
   <dict>
     <key>NSAllowsArbitraryLoads</key>

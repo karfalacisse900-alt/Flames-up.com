@@ -1,9 +1,9 @@
 import SwiftUI
 
-private let captroLegalLastUpdated = "May 23, 2026"
+private let captroLegalLastUpdated = "June 8, 2026"
 private let captroSupportEmail = "karfalacisse900@gmail.com"
-private let captroWebsiteDomain = "[insert domain, for example captro.app or getcaptro.com]"
-private let captroLegalDisclaimer = "These pages are provided for general information and should be reviewed by a qualified legal professional before public launch."
+private let captroWebsiteDomain = "https://flames-up.com"
+private let captroLegalDisclaimer = "Captro may update these pages as the app, safety tools, or legal requirements change."
 
 private struct LegalSection: Identifiable {
   let title: String
@@ -292,67 +292,91 @@ private let termsSections: [LegalSection] = [
   LegalSection(
     title: "What Captro Is",
     paragraphs: [
-      "Captro is a social media, photo, and short-video sharing app for capturing moments, posting photos and videos, discovering visual content, and connecting with people through profiles, chat, feed posts, stories, notifications, and gallery-style discovery.",
-      "These Terms explain the rules for using Captro. If you do not agree, do not use the app."
+      "Captro is a social app for sharing photo posts, multi-photo posts, stories, comments, chat messages, profiles, bookmarks, Discover content, and other creative moments.",
+      "These Terms explain the rules for using Captro. By creating an account or using Captro, you agree to follow these Terms, the Privacy Policy, the Community Guidelines, and the Safety & Reporting rules."
     ],
     bullets: []
   ),
   LegalSection(
-    title: "Eligibility and Accounts",
+    title: "Age Requirement: 16+",
     paragraphs: [
-      "You must be at least 13 years old, or the minimum age required in your country if higher, to use Captro. If you are under the age of majority where you live, you should use Captro only with permission from a parent or guardian.",
-      "You are responsible for your account, login credentials, profile details, username, and activity. Keep your password private and tell us if you believe your account has been accessed without permission."
+      "You must be at least 16 years old to use Captro. Captro is not made for children under 16, and people under 16 are not allowed to create or use an account.",
+      "If we learn that an account belongs to someone under 16, we may remove the account and delete or limit related information. If you believe someone under 16 is using Captro, contact support."
     ],
     bullets: [
-      "Usernames, display names, profile photos, bios, and links must not impersonate others, mislead people, promote hate, or violate another person's rights.",
-      "You may not sell, transfer, automate, or misuse an account in a way that harms Captro or other users."
+      "If you are 16 or older but still under the legal age of majority where you live, use Captro only with permission from a parent or guardian.",
+      "Do not lie about your age, create accounts for someone under 16, or help someone bypass the age requirement."
+    ]
+  ),
+  LegalSection(
+    title: "Your Account",
+    paragraphs: [
+      "You are responsible for your account, username, profile, login credentials, and activity. Keep your password private and tell us if you believe your account was accessed without permission.",
+      "Captro may support email/password login, Sign in with Apple, Google sign-in, or other approved authentication methods. You must use accurate account information and may not impersonate another person."
+    ],
+    bullets: [
+      "Do not sell, transfer, rent, automate, scrape, spam, or misuse an account.",
+      "Usernames, display names, photos, bios, links, and profile details must not impersonate, mislead, harass, promote hate, or violate another person's rights.",
+      "Banned users may not create new accounts to avoid enforcement."
     ]
   ),
   LegalSection(
     title: "User Content and License",
     paragraphs: [
-      "You own the photos, videos, captions, comments, messages, profile information, stories, gallery posts, and other content you create or upload, subject to any rights held by others.",
-      "To operate Captro, you give Captro permission to host, store, process, resize, transcode, display, distribute inside the app, moderate, and otherwise use your content only as needed to provide, improve, protect, and promote Captro features."
+      "You own the content you create or upload, subject to any rights held by other people. This can include photos, story videos, captions, comments, profile details, messages, places, reports, and other content.",
+      "To run Captro, you give Captro a worldwide, non-exclusive, royalty-free license to host, store, process, resize, optimize, moderate, display, and distribute your content inside Captro and related Captro services. This permission is only for operating, protecting, improving, and promoting Captro features."
     ],
     bullets: [
-      "Public or shared content such as feed posts, profile posts, Discover posts, gallery posts, stories, comments, likes, saves, shares, and profile details may be visible to other users depending on app settings and feature behavior.",
-      "Private chat messages are not public posts. They may still be processed to deliver the service, enforce safety rules, investigate reports, prevent abuse, or comply with law.",
-      "Do not upload photos, videos, music, captions, screenshots, or other content unless you own it or have permission to use it."
+      "Public or shared content may appear in Feed, Discover, profiles, bookmarks, stories, comments, search, notifications, or other app surfaces depending on your settings and the feature used.",
+      "Private chat messages are not public posts, but they may still be processed to deliver messages, investigate reports, prevent abuse, enforce safety rules, and comply with law.",
+      "Do not upload media, music, screenshots, captions, or other content unless you own it or have permission to use it."
     ]
   ),
   LegalSection(
-    title: "Prohibited Content and Behavior",
+    title: "Posting, Stories, Chat, and Location",
     paragraphs: [
-      "You may not use Captro to harm people, abuse the platform, or violate the law. Captro may remove content, limit features, suspend accounts, or ban accounts when these rules are violated."
+      "Captro may allow photo posts, multi-photo posts, story videos, comments, direct messages, profile content, and optional location or place features. Use these features safely and respectfully.",
+      "Exact place tags and broad city/country labels are optional where available. Do not use location features to expose private places, stalk, harass, threaten, or mislead people."
     ],
     bullets: [
-      "No harassment, bullying, threats, hate speech, violence, incitement, exploitation, sexual content involving minors, doxxing, stalking, or sharing private personal information.",
-      "No scams, spam, fake engagement, impersonation, stolen content, copyright violations, illegal activity, dangerous behavior, ban evasion, or attempts to bypass safety systems.",
-      "Do not use chat to harass, threaten, scam, spam, exploit, pressure, send unwanted explicit content, ask for money, coerce, or share private information.",
-      "Do not use location, place, or check-in features to stalk, expose, threaten, harass, or mislead people about another person's location."
+      "Do not post someone else's private address, live location, phone number, financial information, private documents, or sensitive personal information.",
+      "Do not use chat for threats, scams, harassment, coercion, unwanted explicit content, spam, exploitation, or requests for money from strangers.",
+      "If you choose to share a place, city, country, or location label, you are responsible for what you share."
     ]
   ),
   LegalSection(
-    title: "Reporting, Blocking, and Moderation",
+    title: "Not Allowed",
     paragraphs: [
-      "Captro may provide reporting, blocking, moderation, and admin review tools. Reports may be reviewed by moderation systems, admins, or service providers helping us keep the app safe.",
-      "Captro may remove or restrict posts, comments, profiles, stories, Discover content, gallery content, messages, places, or accounts. Captro may also suspend or remove accounts, preserve safety records, and review ban evasion."
+      "You may not use Captro to harm people, abuse the service, or break the law. Captro may remove content, limit features, suspend accounts, ban accounts, or preserve safety records when rules are broken."
+    ],
+    bullets: [
+      "No harassment, bullying, threats, hate speech, violence, gore, sexual exploitation, sexual content involving minors, doxxing, stalking, or private information abuse.",
+      "No scams, spam, fake engagement, impersonation, stolen content, copyright violations, illegal activity, dangerous behavior, malware, phishing, or ban evasion.",
+      "No attempts to bypass security, moderation, account limits, upload limits, location privacy, reporting tools, or backend protections."
+    ]
+  ),
+  LegalSection(
+    title: "Moderation and Safety Review",
+    paragraphs: [
+      "Captro may use automated systems, human review, admin tools, user reports, safety signals, and service providers to review content and accounts. Media may be checked before becoming public.",
+      "Captro may remove or restrict posts, comments, profiles, stories, Discover content, messages, places, accounts, or other content if it may violate these Terms or safety rules."
     ],
     bullets: []
   ),
   LegalSection(
-    title: "Copyright, Availability, and Changes",
+    title: "Account Deletion",
+    paragraphs: [
+      "You may request account deletion inside the app where available or by contacting support. Captro may first place the account in a deletion-pending state, hide it from public areas, log out sessions, and permanently delete or anonymize eligible account data after a 30-day deletion period.",
+      "Some information may be kept when needed for safety, security, legal compliance, fraud prevention, dispute resolution, audit logs, or ban evasion prevention."
+    ],
+    bullets: []
+  ),
+  LegalSection(
+    title: "Copyright, Service Availability, and Changes",
     paragraphs: [
       "Respect copyright and intellectual property rights. If you believe content infringes your rights, contact support with enough detail for us to review it.",
-      "Captro is provided as available. We do not guarantee uninterrupted access, error-free service, or that every feature will remain available. Features may change, be removed, or be added over time."
-    ],
-    bullets: []
-  ),
-  LegalSection(
-    title: "Liability and Terms Changes",
-    paragraphs: [
-      "To the fullest extent allowed by law, Captro is not responsible for user-generated content, offline interactions, service interruptions, lost data, or indirect damages. Some rights cannot be limited by law, so these limits apply only where legally permitted.",
-      "We may update these Terms. If changes are material, we may provide notice in the app or by another reasonable method. Continued use of Captro after changes means you accept the updated Terms."
+      "Captro is provided as available. We do not guarantee uninterrupted service, error-free features, or that every feature will remain available. We may update, pause, remove, or add features over time.",
+      "To the fullest extent allowed by law, Captro is not responsible for user-generated content, offline interactions, service interruptions, lost data, or indirect damages. Some rights cannot be limited by law, so these limits apply only where legally permitted."
     ],
     bullets: []
   )
@@ -360,79 +384,121 @@ private let termsSections: [LegalSection] = [
 
 private let privacySections: [LegalSection] = [
   LegalSection(
-    title: "Information You Provide",
+    title: "Age and Children",
     paragraphs: [
-      "Captro may collect information you provide when creating or using an account, communicating with other users, posting media, reporting content, or contacting support."
+      "Captro is for people who are at least 16 years old. Captro is not directed to children under 16, and we do not knowingly allow people under 16 to create accounts.",
+      "If you believe a person under 16 created an account, contact support so we can review and take action."
+    ],
+    bullets: []
+  ),
+  LegalSection(
+    title: "Account and Identity Information",
+    paragraphs: [
+      "Captro collects information needed to create, protect, and manage your account."
     ],
     bullets: [
-      "Name or display name, username, email address, password or login credentials, profile photo, bio, links, and account details.",
-      "Posts, photos, videos, captions, comments, likes, saves, follows or friends, reports, support messages, and other activity you choose to create."
+      "Username, display name, email address, authentication provider information, user ID, profile photo, bio, links, password credentials if you use email/password, and account status.",
+      "Sign in with Apple or Google may provide identifiers, email address, name, or other login information according to your provider settings.",
+      "Supabase Auth and Supabase Postgres may be used for authentication, account identity, profiles, structured app records, user settings, reports, moderation records, and other text or metadata."
     ]
   ),
   LegalSection(
-    title: "Chat and Message Data",
+    title: "Content You Create",
     paragraphs: [
-      "Captro processes messages you send and receive so private chat can work. Private messages are not public posts, but they may be processed to provide the service, enforce safety, investigate reports, prevent abuse, or comply with law."
+      "Captro collects and processes content you create or choose to share so the app can work."
     ],
     bullets: [
-      "Message content and attachments.",
-      "Message metadata such as sender, receiver, timestamps, delivery status, read status if used, and safety signals."
+      "Photos, story videos, captions, comments, profile details, bookmarks, saves, likes, follows, reports, moderation notes, and support requests.",
+      "Messages and attachments you send in chat, including metadata such as sender, receiver, timestamps, delivery status, read status if used, and safety signals.",
+      "Photos, videos, avatars, thumbnails, posters, and media processing records may be stored, optimized, resized, transcoded, scanned for safety, and delivered through Cloudflare services such as Cloudflare Workers, Cloudflare Images, R2, Stream, Queues, CDN, and Workers AI where configured."
     ]
   ),
   LegalSection(
-    title: "Discover, Gallery, Stories, and Media Data",
+    title: "Photos, Videos, Camera, Microphone, and Gallery",
     paragraphs: [
-      "Captro may process posts shown in Feed, Discover, profile grids, stories, and gallery-style surfaces. We may generate thumbnails, previews, optimized feed versions, and playback versions while preserving the original upload when technically possible."
+      "Captro asks for camera, microphone, and photo library permissions only when needed for features such as creating posts, recording stories, choosing media, editing media, saving edited media, and sending media in chat."
     ],
     bullets: [
-      "Views, interactions, likes, saves, comments, shares, reports, and other usage activity may be used to operate and improve the app.",
-      "Public content may be visible to other users. Do not post private information you do not want others to see."
+      "Camera access is used to take photos for posts and record story videos.",
+      "Microphone access is used when recording story videos or other media features that include audio.",
+      "Photo library access is used to let you choose or save photos and videos. Captro does not need full-library access when a picker can provide selected media only."
     ]
   ),
   LegalSection(
     title: "Location and Check-In Data",
     paragraphs: [
-      "If Captro offers location, place, nearby, or check-in features, we may process approximate location, precise location with permission, place tags, check-ins, and related content.",
-      "You can control camera, photos, microphone, notifications, and location permissions in your device settings."
+      "Captro may offer two different location features: exact place tags and broad city/country labels. These are optional where available.",
+      "Exact place tags can be selected through Apple MapKit or device place search. Broad city/country labels may be created from your profile city, manual selection, or approximate device location with permission. Mapbox may be used to turn approximate coordinates into a city/country label."
+    ],
+    bullets: [
+      "Captro should not show your precise live location in Feed or Discover.",
+      "If you turn on a city/country label, other users may see that broad label, such as New York, USA.",
+      "If you add a place tag, other users may see that place name, such as a restaurant, park, cafe, venue, or gym.",
+      "You can remove or hide location features where the app provides controls, and you can turn off device location permission in iOS Settings."
+    ]
+  ),
+  LegalSection(
+    title: "Device, Usage, Notifications, and Diagnostics",
+    paragraphs: [
+      "Captro may collect device and usage information to keep the app working, secure, and fast."
+    ],
+    bullets: [
+      "Device type, operating system, app version, IP address, approximate network location, crash data, performance data, diagnostics, logs, security signals, and interaction data.",
+      "Notification tokens and notification settings so Captro can send alerts for messages, comments, follows, reports, safety events, or other app activity if you allow notifications.",
+      "Cache data may be stored on your device so Feed, Discover, profiles, chat, media previews, and settings can load faster."
+    ]
+  ),
+  LegalSection(
+    title: "How Captro Uses Information",
+    paragraphs: [
+      "Captro uses information to provide, protect, personalize, and improve the app."
+    ],
+    bullets: [
+      "Create accounts, authenticate users, show Feed, Discover, profiles, stories, comments, chat, bookmarks, notifications, and settings.",
+      "Upload, store, resize, transcode, optimize, cache, and deliver photos, videos, avatars, thumbnails, and posters through Cloudflare media services.",
+      "Recommend or organize content, including Discover categories, search, profiles, and local cache behavior.",
+      "Review reports, block abuse, enforce rules, prevent spam/scams, detect security issues, investigate policy violations, and comply with law.",
+      "Improve reliability, media loading, app performance, user experience, and safety systems."
+    ]
+  ),
+  LegalSection(
+    title: "Sharing and Service Providers",
+    paragraphs: [
+      "Captro does not sell your personal information. Captro does not use your data for third-party advertising tracking unless that is disclosed and consent is obtained where required.",
+      "Captro may share information only as needed to operate the app, protect users, comply with law, or support the service."
+    ],
+    bullets: [
+      "With other users when you post, comment, share a profile, appear in Discover, send messages, like, save, follow, or use public app features.",
+      "With service providers such as Supabase for authentication and structured Postgres data, Cloudflare for Worker API, media storage, media processing, CDN delivery, and safety jobs, Apple, Google, Mapbox, notification providers, analytics/diagnostics providers, moderation tools, and support tools where configured.",
+      "With law enforcement, courts, regulators, or safety partners when required by law, legal process, emergency, abuse prevention, or protection of users and the public.",
+      "If Captro is involved in a merger, sale, financing, acquisition, restructuring, or transfer of assets, information may transfer as part of that transaction."
+    ]
+  ),
+  LegalSection(
+    title: "Your Choices",
+    paragraphs: [
+      "You can control many parts of your data and experience."
+    ],
+    bullets: [
+      "Update profile details, username, profile photo, privacy settings, and notification preferences where available.",
+      "Use block, report, delete, hide, unsave, unfollow, or remove-place controls where available.",
+      "Turn off camera, microphone, photos, notifications, or location permissions in iOS Settings.",
+      "Clear local cache where the app provides a cache clearing control.",
+      "Request account deletion in Settings or by contacting support."
+    ]
+  ),
+  LegalSection(
+    title: "Retention and Account Deletion",
+    paragraphs: [
+      "Captro keeps information for as long as needed to provide the app, protect users, comply with law, resolve disputes, prevent fraud, enforce rules, and maintain safety records.",
+      "When you request deletion, Captro may place the account in a deletion-pending state, hide your profile and public content, log out sessions, delete push tokens, and permanently delete or anonymize eligible data after a 30-day deletion period. Some limited records may be kept for safety, security, legal, audit, or ban evasion reasons."
     ],
     bullets: []
   ),
   LegalSection(
-    title: "Device, Technical, and Usage Data",
+    title: "Security",
     paragraphs: [
-      "Captro may collect device type, operating system, app version, IP address, log data, crash reports, performance data, security signals, and usage activity."
-    ],
-    bullets: [
-      "We use this information to keep Captro reliable, secure, and smooth.",
-      "We may use logs and security signals to detect spam, abuse, scams, fraud, ban evasion, and unauthorized access."
-    ]
-  ),
-  LegalSection(
-    title: "How Information Is Used",
-    paragraphs: [
-      "Captro uses information to create and manage accounts, show Feed, Profile, Discover, chat, stories, posts, comments, notifications, gallery content, and support requests."
-    ],
-    bullets: [
-      "Improve app performance, media quality, loading states, safety, moderation, recommendations, and user experience.",
-      "Detect and respond to spam, abuse, scams, fraud, security issues, policy violations, and legal obligations."
-    ]
-  ),
-  LegalSection(
-    title: "How Information Is Shared",
-    paragraphs: [
-      "We do not sell personal information. Information may be shared when needed to operate the app, comply with law, keep people safe, or complete a business transfer if applicable."
-    ],
-    bullets: [
-      "With other users when your content, profile, comments, stories, posts, or interactions are public or shared through app features.",
-      "With service providers for hosting, storage, analytics, maps, notifications, media processing, security, support, and moderation.",
-      "If required by law, legal process, safety needs, or to protect Captro, users, or the public."
-    ]
-  ),
-  LegalSection(
-    title: "Deletion, Retention, and Choices",
-    paragraphs: [
-      "You can request account deletion through the app if available or by contacting support at karfalacisse900@gmail.com. Some information may be retained when needed for safety, security, fraud prevention, legal compliance, dispute resolution, or moderation records.",
-      "You can update profile information in the app and control device permissions such as camera, photos, microphone, notifications, and location from device settings."
+      "Captro uses technical and organizational safeguards to protect account, media, chat, and safety information. No system is perfectly secure, so you should use a strong password, protect your device, and report suspicious activity."
     ],
     bullets: []
   )
@@ -440,25 +506,28 @@ private let privacySections: [LegalSection] = [
 
 private let communitySections: [LegalSection] = [
   LegalSection(
-    title: "The Captro Culture",
+    title: "The Captro Standard",
     paragraphs: [
-      "Captro is for real people, original photos and videos, captured moments, creativity, respectful comments, safe messaging, useful Discover and gallery content, and genuine connection."
+      "Captro is for real people, original photos, story videos, creativity, respectful comments, safer chat, useful Discover content, and genuine connection. Keep it human, honest, and safe."
     ],
     bullets: [
+      "Use Captro only if you are at least 16 years old.",
       "Share content you created or have permission to share.",
       "Treat people with respect in comments, messages, profiles, stories, and Discover.",
-      "Avoid spammy, stolen, fake, or misleading content."
+      "Do not pressure people to respond, meet, send media, share private information, or send money."
     ]
   ),
   LegalSection(
-    title: "Content That Is Not Allowed",
+    title: "Content and Behavior That Are Not Allowed",
     paragraphs: [
       "The following content and behavior may be removed and may lead to account limits, suspension, or permanent bans."
     ],
     bullets: [
-      "Harassment, bullying, threats, hate speech, violence, incitement, sexual exploitation, sexual content involving minors, and dangerous behavior.",
-      "Doxxing, private personal information, stalking, impersonation, scams, spam, fake engagement, stolen content, copyright violations, illegal activity, and ban evasion.",
-      "Abuse of reporting, blocking, moderation, or safety tools."
+      "Harassment, bullying, threats, hate speech, violent threats, gore, praise or support for violence, and dangerous behavior.",
+      "Sexual exploitation, sexual solicitation, sexual content involving minors, grooming, coercion, non-consensual intimate media, and unwanted explicit content.",
+      "Doxxing, private personal information, stalking, impersonation, scams, spam, fake engagement, stolen content, copyright violations, illegal activity, malware, phishing, and ban evasion.",
+      "Content that promotes self-harm, suicide, eating disorder harm, dangerous challenges, or instructions for serious harm.",
+      "Abuse of reporting, blocking, moderation, location, chat, upload, or safety tools."
     ]
   ),
   LegalSection(
@@ -468,31 +537,33 @@ private let communitySections: [LegalSection] = [
     ],
     bullets: [
       "No harassment, threats, unwanted explicit content, sexual exploitation, scams, spam, coercion, or requests for money from strangers.",
-      "Do not share another person's private personal information, private photos, documents, address, phone number, or financial details."
+      "Do not share another person's private personal information, private photos, documents, address, phone number, or financial details.",
+      "If a message makes you uncomfortable, block and report the user where available."
     ]
   ),
   LegalSection(
-    title: "Discover, Gallery, Feed, and Stories",
+    title: "Posts, Discover, Profiles, and Stories",
     paragraphs: [
-      "Discover posts, gallery-style visual content, feed posts, stories, profile grids, comments, and media previews must follow these Guidelines."
+      "Posts, Discover content, profile grids, comments, stories, media previews, bookmarks, and location/place tags must follow these Guidelines."
     ],
     bullets: [
       "No stolen images or videos.",
       "No misleading content, spam galleries, unsafe content, abusive content, or manipulated engagement.",
-      "Use captions, tags, and locations honestly and respectfully."
+      "Use captions, tags, categories, places, and city/country labels honestly and respectfully.",
+      "Do not use exact place tags or broad location labels to expose someone's private location."
     ]
   ),
   LegalSection(
-    title: "Location and Check-In Safety",
+    title: "AI, Editing, and Authenticity",
     paragraphs: [
-      "If location, place, or check-in features are available, use them safely. Do not expose someone else's private location, stalk or follow people, fake harmful location claims, or use places/check-ins to harass businesses or people."
+      "Captro may use automated tools to help categorize Discover content, improve captions, moderate uploads, or protect safety. Do not use editing tools, AI-generated media, or misleading captions to impersonate people, deceive users, exploit others, or evade moderation."
     ],
     bullets: []
   ),
   LegalSection(
     title: "Enforcement",
     paragraphs: [
-      "Captro may use warnings, content removal, feature limits, account suspension, permanent bans, and device, IP, or behavior-based ban evasion review where available."
+      "Captro may use warnings, content removal, reduced visibility, feature limits, account suspension, permanent bans, deletion of unsafe media, and device, IP, identity, or behavior-based ban evasion review where available."
     ],
     bullets: []
   )
@@ -500,12 +571,20 @@ private let communitySections: [LegalSection] = [
 
 private let safetySections: [LegalSection] = [
   LegalSection(
+    title: "Age and Safety",
+    paragraphs: [
+      "Captro is for people 16 and older. If you are under 16, do not use Captro. If you believe someone under 16 is using Captro, report it or contact support."
+    ],
+    bullets: []
+  ),
+  LegalSection(
     title: "How to Report",
     paragraphs: [
-      "Use in-app reporting tools where available to report posts, comments, profiles, messages, chat conversations, stories, Discover posts, gallery posts, check-ins, places, or other unsafe activity."
+      "Use in-app reporting tools where available to report posts, comments, profiles, messages, chat conversations, stories, Discover posts, bookmarks, places, or other unsafe activity."
     ],
     bullets: [
       "Choose the closest report reason and include helpful context when the app allows it.",
+      "The reported user should not be told who reported them by Captro.",
       "For urgent support or account issues, contact karfalacisse900@gmail.com."
     ]
   ),
@@ -519,7 +598,7 @@ private let safetySections: [LegalSection] = [
   LegalSection(
     title: "After a Report",
     paragraphs: [
-      "Reports may be reviewed through moderation/admin tools. Captro may remove content, warn users, limit features, suspend accounts, or ban accounts. Reports may not always receive individual responses.",
+      "Reports may be reviewed through automated systems, moderation/admin tools, or human reviewers. Captro may remove content, warn users, limit features, suspend accounts, ban accounts, or preserve safety records. Reports may not always receive individual responses.",
       "If there is immediate danger, contact local emergency services first. Captro is not an emergency service."
     ],
     bullets: []
@@ -541,6 +620,21 @@ private let safetySections: [LegalSection] = [
     paragraphs: [
       "You can report messages and block abusive users where supported. Captro may review reported messages or safety-related content when necessary to investigate reports, enforce policies, protect users, or comply with law."
     ],
-    bullets: []
+    bullets: [
+      "Do not share passwords, verification codes, private documents, money details, your address, or live location.",
+      "Be careful meeting people from the app. Meet in public, tell someone you trust, and leave if you feel unsafe.",
+      "Never send money to strangers or people pressuring you in chat."
+    ]
+  ),
+  LegalSection(
+    title: "Location Safety",
+    paragraphs: [
+      "Location and place features can be useful, but they can also create risk. Only share a place, city, or country when you are comfortable with other users seeing it."
+    ],
+    bullets: [
+      "Do not tag a private home, school, workplace, or sensitive location unless it is safe and appropriate.",
+      "Do not reveal another person's location without permission.",
+      "Turn off location permission in iOS Settings if you do not want Captro to access location."
+    ]
   )
 ]
