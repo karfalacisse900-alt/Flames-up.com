@@ -961,11 +961,7 @@ public struct CreatePostNativeView: View {
       Task { await resolveCurrentBroadLocationForPost() }
     }
     .onChange(of: scenePhase) { _, phase in
-      guard phase == .background, !isPosting else { return }
-      Task { @MainActor in
-        resetComposerAfterAbandoningDraft()
-        await MIRAAppCacheStore.shared.clearPostDraft()
-      }
+      handleComposerScenePhaseChange(phase)
     }
     .miraBottomSheet(isPresented: $showPreview, preferredHeightFraction: 0.72) { _ in
       ComposerPreviewSheet(title: title, bodyText: bodyText, mediaItems: mediaItems)
@@ -1669,6 +1665,13 @@ public struct CreatePostNativeView: View {
     } else {
       dismiss()
     }
+  }
+
+  @MainActor
+  private func handleComposerScenePhaseChange(_ phase: ScenePhase) {
+    guard phase == .background, !isPosting else { return }
+    resetComposerAfterAbandoningDraft()
+    Task { await MIRAAppCacheStore.shared.clearPostDraft() }
   }
 
   @MainActor
