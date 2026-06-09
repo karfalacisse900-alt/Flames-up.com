@@ -1,4 +1,4 @@
-// Flames-Up Cloudflare Workers API — Hono + D1 + CF Images + CF Stream
+// Captro Cloudflare Workers API — Hono + Supabase Postgres + Cloudflare Images/R2/Stream
 // Deploy: wrangler deploy --env production --keep-vars
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
@@ -57,6 +57,7 @@ interface Env {
   SUPABASE_ANON_KEY?: string;
   SUPABASE_JWT_ISSUER?: string;
   SUPABASE_SERVICE_ROLE_KEY?: string;
+  DATABASE_PRIMARY?: string;
   APPLE_OAUTH_CLIENT_ID?: string;
   APPLE_OAUTH_CLIENT_SECRET?: string;
   APPLE_REVOKE_CLIENT_SECRET?: string;
@@ -5131,6 +5132,16 @@ function supabaseEngagementConfigured(c: any): boolean {
   return !!String(c.env.SUPABASE_URL || '').trim() && !!String(c.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
 }
 
+function databasePrimary(c: any): 'supabase_postgres' | 'legacy_d1' {
+  return String(c?.env?.DATABASE_PRIMARY || '').trim().toLowerCase() === 'supabase_postgres'
+    ? 'supabase_postgres'
+    : 'legacy_d1';
+}
+
+function supabasePrimaryConfigured(c: any): boolean {
+  return databasePrimary(c) === 'supabase_postgres' && supabaseEngagementConfigured(c);
+}
+
 async function supabaseAdminSelectRows(c: any, table: string, filters: Record<string, string>, select = '*', limit = 1000): Promise<any[]> {
   const url = new URL(`${getSupabaseUrl(c)}/rest/v1/${table}`);
   url.searchParams.set('select', select);
@@ -5251,9 +5262,12 @@ async function getSupabasePostEngagementState(c: any, postId: string, userId: st
     }),
   ]);
   const state = {
-    likes_count: Math.max(supabaseLikesCount, Number(d1State.likes_count || 0)),
+    // Supabase app_post_interactions is the canonical engagement table.
+    // D1 counters are legacy/cache only and must not inflate counts after
+    // refreshes or app restarts.
+    likes_count: Math.max(0, supabaseLikesCount),
     comments_count: Math.max(0, Number(d1State.comments_count || 0)),
-    saves_count: Math.max(supabaseSavesCount, Number(d1State.saves_count || 0)),
+    saves_count: Math.max(0, supabaseSavesCount),
     liked,
     saved,
     engagement_source: 'supabase',
@@ -8681,6 +8695,12 @@ async function mirrorLegacyUserToSupabase(c: any, userId: string) {
   await supabaseAdminUpsertSafe(c, 'app_users', [legacyUserTransferPayload(row)], 'id');
 }
 
+async function writeLegacyUserToSupabaseCanonical(c: any, userId: string) {
+  const row: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
+  if (!row) throw new Error('CANONICAL_USER_SOURCE_NOT_FOUND');
+  await supabaseAdminUpsert(c, 'app_users', [legacyUserTransferPayload(row)], 'id');
+}
+
 async function mirrorLegacyPostToSupabase(c: any, postId: string) {
   const row: any = await c.env.DB.prepare(`
     SELECT p.*, u.supabase_user_id
@@ -8691,6 +8711,29 @@ async function mirrorLegacyPostToSupabase(c: any, postId: string) {
   `).bind(postId).first();
   if (!row) return;
   await supabaseAdminUpsertSafe(c, 'app_posts', [legacyPostTransferPayload(row)], 'legacy_post_id');
+}
+
+async function writeLegacyPostToSupabaseCanonical(c: any, postId: string) {
+  const row: any = await c.env.DB.prepare(`
+    SELECT p.*, u.supabase_user_id
+    FROM posts p
+    LEFT JOIN users u ON u.id = p.user_id
+    WHERE p.id = ?
+    LIMIT 1
+  `).bind(postId).first();
+  if (!row) throw new Error('CANONICAL_POST_SOURCE_NOT_FOUND');
+  await supabaseAdminUpsert(c, 'app_posts', [legacyPostTransferPayload(row)], 'legacy_post_id');
+}
+
+async function removeLegacyPostCacheAfterCanonicalFailure(c: any, postId: string, userId: string, reason: string) {
+  const code = cleanText(reason || 'supabase_canonical_write_failed', 180);
+  await c.env.DB.prepare(
+    "UPDATE posts SET status = 'removed', removed_at = ?, removed_reason = ? WHERE id = ?"
+  ).bind(now(), code, postId).run().catch(() => undefined);
+  await c.env.DB.prepare('UPDATE users SET posts_count = MAX(0, COALESCE(posts_count, 0) - 1) WHERE id = ?')
+    .bind(userId)
+    .run()
+    .catch(() => undefined);
 }
 
 async function mirrorLegacyCommentToSupabase(c: any, commentId: string) {
@@ -11402,10 +11445,25 @@ api.post('/posts', authMiddleware, async (c) => {
   await recordAbuseSignals(c, userId, 'post_create', {
     product_links: editorOverlays.filter((item: any) => item?.type === 'product' && item.link).map((item: any) => item.link),
   });
-  runBackgroundTask(c, 'supabase_post_write_through_failed', async () => {
-    await mirrorLegacyUserToSupabase(c, userId);
-    await mirrorLegacyPostToSupabase(c, id);
-  });
+  if (supabasePrimaryConfigured(c)) {
+    try {
+      await writeLegacyUserToSupabaseCanonical(c, userId);
+      await writeLegacyPostToSupabaseCanonical(c, id);
+    } catch (error: any) {
+      const code = getErrorCode(error).slice(0, 180);
+      await removeLegacyPostCacheAfterCanonicalFailure(c, id, userId, code);
+      console.error(JSON.stringify({ event: 'supabase_primary_post_create_failed', post_id: id, user_id: userId, code }));
+      return c.json({
+        detail: 'Could not save this post to the production database. Please retry.',
+        code: 'SUPABASE_PRIMARY_WRITE_FAILED',
+      }, 503);
+    }
+  } else {
+    runBackgroundTask(c, 'supabase_post_write_through_failed', async () => {
+      await mirrorLegacyUserToSupabase(c, userId);
+      await mirrorLegacyPostToSupabase(c, id);
+    });
+  }
   runBackgroundTask(c, 'post_category_refinement_failed', async () => {
     await refinePostCategoryWithBackendAi(c, id);
   });
@@ -17972,14 +18030,21 @@ api.get('/mapbox-locations/cities', authMiddleware, mapboxCitySearchHandler);
 api.get('/mapbox-locations/reverse', authMiddleware, mapboxReverseBroadLocationHandler);
 
 // Health
-api.get('/', (c) => c.json({ message: 'Captro API', version: API_VERSION, runtime: 'Cloudflare Workers + Hono + D1 + Supabase' }));
+api.get('/', (c) => c.json({ message: 'Captro API', version: API_VERSION, runtime: 'Cloudflare Workers + Hono + Supabase Postgres + Cloudflare media storage' }));
 api.get('/health', async (c) => {
   const startedAt = Date.now();
   const dbStartedAt = Date.now();
   let databaseHealthy = false;
+  let primaryDatabase = databasePrimary(c);
   try {
-    const row: any = await c.env.DB.prepare('SELECT 1 AS ok').first();
-    databaseHealthy = Number(row?.ok || 0) === 1;
+    if (primaryDatabase === 'supabase_postgres' && c.env.SUPABASE_URL && c.env.SUPABASE_SERVICE_ROLE_KEY) {
+      await supabaseAdminSelectRows(c, 'app_users', {}, 'id', 1);
+      databaseHealthy = true;
+    } else {
+      primaryDatabase = 'legacy_d1';
+      const row: any = await c.env.DB.prepare('SELECT 1 AS ok').first();
+      databaseHealthy = Number(row?.ok || 0) === 1;
+    }
   } catch {
     databaseHealthy = false;
   }
@@ -17993,6 +18058,7 @@ api.get('/health', async (c) => {
     checks: {
       database: {
         configured: true,
+        primary: primaryDatabase,
         healthy: databaseHealthy,
         latency_ms: Date.now() - dbStartedAt,
       },
@@ -18014,8 +18080,27 @@ api.get('/database/status', authMiddleware, async (c) => {
       await c.env.KV.delete(key).catch(() => undefined);
       kvCheck = value === 'ok';
     }
+    let supabasePostgresHealthy = false;
+    if (c.env.SUPABASE_URL && c.env.SUPABASE_SERVICE_ROLE_KEY) {
+      try {
+        await supabaseAdminSelectRows(c, 'app_users', {}, 'id', 1);
+        supabasePostgresHealthy = true;
+      } catch {
+        supabasePostgresHealthy = false;
+      }
+    }
     return c.json({
-      d1_sqlite: { configured: true, healthy: d1Check },
+      primary_database: {
+        provider: 'supabase_postgres',
+        configured: databasePrimary(c) === 'supabase_postgres',
+        healthy: supabasePostgresHealthy,
+        note: 'Supabase Postgres is the canonical Captro app database for profiles, posts, interactions, reports, chat metadata, admin roles, and audit records.',
+      },
+      d1_sqlite_legacy_cache: {
+        configured: true,
+        healthy: d1Check,
+        role: 'legacy compatibility/cache only; do not treat D1 as the production source of truth.',
+      },
       kv_nosql: { configured: !!c.env.KV, healthy: kvCheck },
       postgres_hyperdrive: {
         configured: !!c.env.HYPERDRIVE,
@@ -18025,6 +18110,7 @@ api.get('/database/status', authMiddleware, async (c) => {
       supabase_postgres_jsonb: {
         configured: !!c.env.SUPABASE_URL,
         service_role_secret_set: !!c.env.SUPABASE_SERVICE_ROLE_KEY,
+        healthy: supabasePostgresHealthy,
         note: 'Supabase stores relational data in Postgres and flexible NoSQL-style app_documents/editor metadata in JSONB.',
       },
       supabase_authentication: {

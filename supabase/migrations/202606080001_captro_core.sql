@@ -1,6 +1,6 @@
 -- Captro Supabase Postgres core schema.
--- This migration creates the tables used by the Cloudflare Worker
--- Supabase transfer/write-through paths. Media binaries remain in
+-- This migration creates Captro's canonical production app tables
+-- used by the Cloudflare Worker API. Media binaries remain in
 -- Cloudflare Images/R2/Stream; Postgres stores structured data only.
 
 create extension if not exists pgcrypto;
@@ -195,7 +195,7 @@ alter table public.app_post_interactions enable row level security;
 alter table public.app_follows enable row level security;
 alter table public.app_documents enable row level security;
 
-comment on table public.app_users is 'Captro app profile mirror keyed by legacy app user id and linked to Supabase Auth.';
+comment on table public.app_users is 'Canonical Captro app profiles keyed by app user id and linked to Supabase Auth.';
 comment on table public.app_posts is 'Captro structured post metadata. Media files live in Cloudflare Images/R2/Stream.';
 comment on table public.app_post_interactions is 'Canonical Supabase uniqueness layer for likes, saves, and repost-like interactions.';
 comment on table public.app_documents is 'Private JSONB document layer for transfer logs and flexible app metadata. Access through Worker service role only by default.';

@@ -1,13 +1,15 @@
 # Captro API (Cloudflare Workers)
 
-Backend stack: Hono + Cloudflare Workers + legacy D1 + Supabase Auth/Postgres + Cloudflare Images/R2/Stream.
+Backend stack: Hono + Cloudflare Workers + Supabase Auth/Postgres as the canonical production database + Cloudflare Images/R2/Stream for media storage and delivery.
+
+Cloudflare D1 remains bound only for legacy compatibility/cache while old routes are migrated. Do not treat D1 as the production source of truth for Captro app data.
 
 ## Setup
 
 1. Install dependencies:
    `npm install`
 
-2. Run migrations (remote):
+2. Run legacy D1 compatibility migrations only when maintaining the D1 cache/fallback:
    `wrangler d1 execute flames-up-db --file=./migrations/0001_init.sql --remote`
    `wrangler d1 execute flames-up-db --file=./migrations/0002_additions.sql --remote`
    `wrangler d1 execute flames-up-db --file=./migrations/0003_creators.sql --remote`
@@ -60,9 +62,9 @@ If Twilio is not configured, `/api/auth/phone/start` returns a `dev_code` for lo
 
 ## Supabase Auth + Postgres/JSONB
 
-Supabase is used for production auth, PostgreSQL tables, and JSONB document storage. The JSONB `app_documents` table is the app's flexible NoSQL-style layer; it is still stored securely inside Postgres with RLS.
+Supabase is Captro's production database. It stores authentication identity through Supabase Auth and structured app data in Postgres tables. The JSONB `app_documents` table is the app's flexible NoSQL-style layer; it is still stored securely inside Postgres with RLS.
 
-Run or push the Supabase migrations from the repository root:
+Run or push the Supabase migrations from the repository root when testing locally:
 
 ```powershell
 cd "C:\Users\The-s\Documents\New project\captro-production-cleanup"
@@ -76,7 +78,7 @@ supabase/migrations/202606080001_captro_core.sql
 supabase/migrations/202606080002_captro_operational.sql
 ```
 
-They create the Postgres tables targeted by the existing Worker transfer/write-through paths:
+They create the canonical production tables used by the Worker:
 
 - `app_users`
 - `app_posts`
@@ -100,7 +102,13 @@ They create the Postgres tables targeted by the existing Worker transfer/write-t
 - `app_push_tokens`
 - `app_account_identities`
 
-Read `SUPABASE_POSTGRES_CUTOVER.md` before production cutover. D1 is still the live legacy store until the transfer is complete, row counts are verified, and Supabase read paths are intentionally enabled route by route.
+Production deploys push these migrations automatically through `.github/workflows/deploy-worker.yml` before the Worker deploys. The deploy requires:
+
+- `SUPABASE_ACCESS_TOKEN`
+- `SUPABASE_PROJECT_REF`
+- `SUPABASE_SERVICE_ROLE_KEY`
+
+`DATABASE_PRIMARY=supabase_postgres` is set in `wrangler.toml`. Cloudflare is the API/media edge layer; Supabase Postgres is the database.
 
 Set the backend service-role secret for Cloudflare Workers:
 
@@ -110,7 +118,9 @@ npx.cmd wrangler secret put SUPABASE_SERVICE_ROLE_KEY --env production
 npx.cmd wrangler deploy --env production
 ```
 
-The native app should only use public Supabase values:
+Never put `SUPABASE_SERVICE_ROLE_KEY` in the iOS app, admin frontend, GitHub logs, or public config. The native app should only use publishable Supabase values.
+
+Native app public Supabase values:
 
 ```text
 SUPABASE_URL=https://your-project-ref.supabase.co

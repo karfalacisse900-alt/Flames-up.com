@@ -3,7 +3,7 @@
 This repository is now scoped to the production Captro app:
 
 - `ios_native/MIRA` - native iOS app built with Swift, SwiftUI/UIKit, C++, and Rust.
-- `backend-cf` - Cloudflare Workers API, legacy D1 migrations, Supabase Auth/Postgres transfer paths, media/upload routes, auth/session support, calls, feed, chat, comments, reporting, and moderation endpoints.
+- `backend-cf` - Cloudflare Workers API, Supabase Auth/Postgres production database integration, legacy D1 compatibility migrations, Cloudflare media/upload routes, auth/session support, calls, feed, chat, comments, reporting, and moderation endpoints.
 - `.github/workflows` - production deployment, TestFlight, Dependabot, and security scanning automation.
 
 The old Emergent scaffold, Expo/React Native frontend, Python/FastAPI backend, generated test reports, and broken `original_app` submodule were removed from the production tree.
@@ -33,6 +33,6 @@ npx wrangler deploy --keep-vars
 
 ## Database Direction
 
-Captro is moving structured app data to Supabase Postgres while keeping Cloudflare Workers as the secure backend layer. D1 remains the legacy/live store until the Supabase schema is pushed, transfer is verified, and read routes are cut over safely. See `SUPABASE_POSTGRES_CUTOVER.md`.
+Supabase Postgres is Captro's production database for structured app data while Cloudflare Workers remain the secure backend layer. Cloudflare D1 remains only as a legacy compatibility/cache layer while old route groups are migrated. See `SUPABASE_POSTGRES_CUTOVER.md`.
 
 Supabase is PostgreSQL. Do not use MySQL as a second primary database for Captro app data. If a MySQL import or reporting connection is needed, use Cloudflare Hyperdrive as a separate bridge and migrate into Supabase Postgres.

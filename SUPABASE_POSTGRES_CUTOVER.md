@@ -8,16 +8,16 @@ Supabase is PostgreSQL. Do not run Supabase Postgres and MySQL as two active pri
 
 - Live API: `https://api.flames-up.com/api`
 - Worker: `backend-cf`
-- Current live operational store: Cloudflare D1
-- Target structured data store: Supabase Postgres
+- Current live operational store: Supabase Postgres
+- Legacy compatibility/cache store: Cloudflare D1
 - Auth target: Supabase Authentication
 - Media target: Cloudflare Images/R2 for photos and Cloudflare Stream for videos
 
 The Worker already has:
 
 - Supabase Auth bridging for email/password, Google, Apple, and phone where configured.
-- D1 to Supabase transfer endpoint: `POST /api/admin/supabase/transfer`
-- Supabase write-through helpers for users, posts, comments, interactions, follows, and bookmarks.
+- D1 to Supabase transfer endpoint for old rows: `POST /api/admin/supabase/transfer`
+- Supabase canonical write helpers for new production posts and interactions.
 - `/api/database/status` for owner/admin verification.
 
 ## What Was Added
@@ -55,9 +55,9 @@ This creates:
 
 RLS is enabled on these tables. By default, the iOS app should not read these tables directly. Captro clients should keep using the Cloudflare Worker API, which enforces auth, permissions, blocks, moderation, and response shaping.
 
-## Safe Cutover Order
+## Production Primary Order
 
-1. Link the local repo to the production Supabase project.
+1. Link the local repo to the production Supabase project when testing locally.
 
 ```powershell
 npx.cmd supabase login
@@ -70,7 +70,7 @@ npx.cmd supabase link --project-ref cclgvxukwccvtgrbcwie
 npx.cmd supabase db push
 ```
 
-Or run the GitHub Actions workflow:
+Production Worker deploys now run the Supabase migrations automatically before deployment. You can also run the manual GitHub Actions workflow:
 
 ```text
 Supabase Postgres Migrations
@@ -102,6 +102,8 @@ Invoke-RestMethod `
 
 Expected:
 
+- `primary_database.provider = "supabase_postgres"`
+- `primary_database.healthy = true`
 - `supabase_postgres_jsonb.configured = true`
 - `supabase_postgres_jsonb.service_role_secret_set = true`
 - `supabase_authentication.configured = true`
@@ -132,7 +134,7 @@ Invoke-RestMethod `
 
 Repeat with the returned `next_offset` until every table returns zero transferred rows.
 
-7. Validate counts before any read cutover.
+7. Validate legacy data transfer and route migration.
 
 Check Supabase rows against D1 counts:
 
@@ -152,14 +154,14 @@ Also verify:
 - Deleted/removed/banned content is not visible through Worker feed/discover/profile responses.
 - Media URLs still point to Cloudflare Images/R2/Stream, not Supabase storage.
 
-8. Cut reads over only after validation.
+8. Keep migrating remaining legacy route groups.
 
-The safe production path is:
+The production path is:
 
-- Keep D1 live while transfer/write-through is verified.
-- Add Supabase read paths behind a Worker env flag.
+- Keep Supabase Postgres as the canonical database.
+- Keep D1 only as a temporary compatibility/cache/fallback layer while route groups are migrated.
 - Compare D1 and Supabase responses for high-risk routes.
-- Switch one route group at a time: profiles, then interactions, then posts/feed, then comments/follows.
+- Finish switching one route group at a time: profiles, comments/follows, chat, reports/admin surfaces.
 - Keep D1 fallback until TestFlight confirms stability.
 
 Do not delete D1 until Supabase has served production traffic safely for a full retention window.
