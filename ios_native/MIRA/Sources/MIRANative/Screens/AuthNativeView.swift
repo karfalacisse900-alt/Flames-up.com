@@ -514,7 +514,6 @@ private struct CaptroWelcomePager: View {
 
 private struct CaptroWelcomeSlide: View {
   let page: CaptroWelcomePage
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @EnvironmentObject private var localization: MIRALocalization
 
   var body: some View {
@@ -556,7 +555,8 @@ private struct CaptroWelcomeSlide: View {
             .padding(.bottom, max(124, geometry.safeAreaInsets.bottom + 105))
         }
       }
-      .animation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion), value: page.id)
+      .frame(width: geometry.size.width, height: geometry.size.height)
+      .clipped()
     }
   }
 
@@ -567,36 +567,30 @@ private struct CaptroWelcomeSlide: View {
 
 private struct CaptroWelcomeTypographyScene: View {
   let page: CaptroWelcomePage
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   var body: some View {
-    TimelineView(.animation) { timeline in
-      GeometryReader { geometry in
-        let time = reduceMotion ? 0 : timeline.date.timeIntervalSinceReferenceDate
-        ZStack(alignment: .top) {
-          Ellipse()
-            .fill(page.heroShape)
-            .frame(width: geometry.size.width * 1.54, height: geometry.size.height * 0.46)
-            .offset(y: -geometry.size.height * 0.16 + CGFloat(sin(time * 0.18)) * 5)
+    GeometryReader { geometry in
+      ZStack(alignment: .top) {
+        Ellipse()
+          .fill(page.heroShape)
+          .frame(width: geometry.size.width * 1.54, height: geometry.size.height * 0.46)
+          .offset(y: -geometry.size.height * 0.16)
 
-          Circle()
-            .fill(page.lowerShape.opacity(page.visualStyle == .people ? 0.18 : 0.28))
-            .frame(width: geometry.size.width * 0.72, height: geometry.size.width * 0.72)
-            .position(
-              x: geometry.size.width * (page.visualStyle == .discover ? 0.14 : 0.88),
-              y: geometry.size.height * 0.78 + CGFloat(cos(time * 0.16)) * 6
-            )
+        Circle()
+          .fill(page.lowerShape.opacity(page.visualStyle == .people ? 0.18 : 0.28))
+          .frame(width: geometry.size.width * 0.72, height: geometry.size.width * 0.72)
+          .position(
+            x: geometry.size.width * (page.visualStyle == .discover ? 0.14 : 0.88),
+            y: geometry.size.height * 0.78
+          )
 
-          CaptroWelcomeSoftBand(color: page.accent.opacity(0.10))
-            .frame(width: geometry.size.width * 0.92, height: 112)
-            .rotationEffect(.degrees(page.visualStyle == .capture ? -4 : 5))
-            .position(x: geometry.size.width * 0.50, y: geometry.size.height * 0.57)
-
-          CaptroWelcomePageNumber(page: page)
-            .position(x: geometry.size.width * 0.50, y: geometry.size.height * 0.46)
-        }
-        .frame(width: geometry.size.width, height: geometry.size.height)
+        CaptroWelcomeSoftBand(color: page.accent.opacity(0.10))
+          .frame(width: geometry.size.width * 0.92, height: 112)
+          .rotationEffect(.degrees(page.visualStyle == .capture ? -4 : 5))
+          .position(x: geometry.size.width * 0.50, y: geometry.size.height * 0.57)
       }
+      .frame(width: geometry.size.width, height: geometry.size.height)
+      .clipped()
     }
   }
 }
@@ -608,21 +602,6 @@ private struct CaptroWelcomeSoftBand: View {
     Capsule()
       .fill(color)
       .overlay(Capsule().stroke(.white.opacity(0.18), lineWidth: 1))
-  }
-}
-
-private struct CaptroWelcomePageNumber: View {
-  let page: CaptroWelcomePage
-
-  var body: some View {
-    Text(String(format: "%02d", page.id + 1))
-      .font(.system(size: 15, weight: .bold, design: .serif))
-      .foregroundStyle(page.textColor.opacity(0.52))
-      .padding(.horizontal, 18)
-      .frame(height: 36)
-      .background(.white.opacity(0.22))
-      .clipShape(Capsule())
-      .overlay(Capsule().stroke(page.textColor.opacity(0.08), lineWidth: 1))
   }
 }
 
