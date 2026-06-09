@@ -5115,6 +5115,289 @@ async function getPostEngagementState(db: D1Database, postId: string, userId: st
   return state;
 }
 
+function postgrestInFilter(values: string[]): string {
+  const safeValues = values
+    .map((value) => cleanText(value, 240))
+    .filter(Boolean)
+    .map((value) => `"${value.replace(/"/g, '""')}"`);
+  return `in.(${safeValues.join(',')})`;
+}
+
+function postgrestEqFilter(value: string): string {
+  return `eq.${cleanText(value, 240)}`;
+}
+
+function supabaseEngagementConfigured(c: any): boolean {
+  return !!String(c.env.SUPABASE_URL || '').trim() && !!String(c.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+}
+
+async function supabaseAdminSelectRows(c: any, table: string, filters: Record<string, string>, select = '*', limit = 1000): Promise<any[]> {
+  const url = new URL(`${getSupabaseUrl(c)}/rest/v1/${table}`);
+  url.searchParams.set('select', select);
+  for (const [key, value] of Object.entries(filters)) {
+    url.searchParams.set(key, value);
+  }
+  if (limit > 0) url.searchParams.set('limit', String(limit));
+  const response = await fetch(url.toString(), {
+    headers: supabaseAdminAuthHeaders(c),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`SUPABASE_SELECT_FAILED:${table}:${response.status}:${text.slice(0, 300)}`);
+  }
+  const data = await response.json().catch(() => []);
+  return Array.isArray(data) ? data : [];
+}
+
+async function supabaseAdminCountRows(c: any, table: string, filters: Record<string, string>): Promise<number> {
+  const url = new URL(`${getSupabaseUrl(c)}/rest/v1/${table}`);
+  url.searchParams.set('select', 'legacy_post_id');
+  url.searchParams.set('limit', '1');
+  for (const [key, value] of Object.entries(filters)) {
+    url.searchParams.set(key, value);
+  }
+  const serviceRoleKey = getSupabaseServiceRoleKey(c);
+  const response = await fetch(url.toString(), {
+    headers: {
+      apikey: serviceRoleKey,
+      Authorization: `Bearer ${serviceRoleKey}`,
+      Prefer: 'count=exact',
+    },
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`SUPABASE_COUNT_FAILED:${table}:${response.status}:${text.slice(0, 300)}`);
+  }
+  const contentRange = response.headers.get('content-range') || response.headers.get('Content-Range') || '';
+  const total = Number(contentRange.split('/').pop() || NaN);
+  if (Number.isFinite(total)) return Math.max(0, total);
+  const data = await response.json().catch(() => []);
+  return Array.isArray(data) ? data.length : 0;
+}
+
+async function supabaseAdminDeleteRows(c: any, table: string, filters: Record<string, string>) {
+  const url = new URL(`${getSupabaseUrl(c)}/rest/v1/${table}`);
+  for (const [key, value] of Object.entries(filters)) {
+    url.searchParams.set(key, value);
+  }
+  const serviceRoleKey = getSupabaseServiceRoleKey(c);
+  const response = await fetch(url.toString(), {
+    method: 'DELETE',
+    headers: {
+      apikey: serviceRoleKey,
+      Authorization: `Bearer ${serviceRoleKey}`,
+      Prefer: 'return=minimal',
+    },
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`SUPABASE_DELETE_FAILED:${table}:${response.status}:${text.slice(0, 300)}`);
+  }
+}
+
+async function supabaseDeletePostInteractionsForUsers(c: any, postId: string, userIds: string[], kind: 'like' | 'save') {
+  if (!userIds.length) return;
+  await supabaseAdminDeleteRows(c, 'app_post_interactions', {
+    legacy_post_id: postgrestEqFilter(postId),
+    kind: postgrestEqFilter(kind),
+    app_user_id: postgrestInFilter(userIds),
+  });
+}
+
+async function supabaseUpsertPostInteraction(c: any, postId: string, userId: string, kind: 'like' | 'save', collection = '') {
+  await supabaseAdminUpsert(c, 'app_post_interactions', [{
+    legacy_post_id: cleanText(postId, 120),
+    app_user_id: cleanText(userId, 120),
+    kind,
+    collection: kind === 'save' ? (cleanText(collection, 120) || 'saved') : null,
+    metadata: { source: 'cloudflare_worker_primary' },
+    legacy_created_at: now(),
+  }], 'legacy_post_id,app_user_id,kind');
+}
+
+async function supabaseViewerPostInteractionExists(c: any, postId: string, userIds: string[], kind: 'like' | 'save'): Promise<boolean> {
+  if (!userIds.length) return false;
+  const rows = await supabaseAdminSelectRows(c, 'app_post_interactions', {
+    legacy_post_id: postgrestEqFilter(postId),
+    kind: postgrestEqFilter(kind),
+    app_user_id: postgrestInFilter(userIds),
+  }, 'legacy_post_id', 1);
+  return rows.length > 0;
+}
+
+async function getSupabasePostEngagementState(c: any, postId: string, userId: string) {
+  const relatedUserIds = await relatedInteractionUserIds(c.env.DB, userId);
+  const d1State = await getPostEngagementState(c.env.DB, postId, userId);
+  let liked = await supabaseViewerPostInteractionExists(c, postId, relatedUserIds, 'like');
+  let saved = await supabaseViewerPostInteractionExists(c, postId, relatedUserIds, 'save');
+  if (!liked && d1State.liked) {
+    await supabaseDeletePostInteractionsForUsers(c, postId, relatedUserIds, 'like');
+    await supabaseUpsertPostInteraction(c, postId, userId, 'like');
+    liked = true;
+  }
+  if (!saved && d1State.saved) {
+    await supabaseDeletePostInteractionsForUsers(c, postId, relatedUserIds, 'save');
+    await supabaseUpsertPostInteraction(c, postId, userId, 'save', 'saved');
+    saved = true;
+  }
+  const [supabaseLikesCount, supabaseSavesCount] = await Promise.all([
+    supabaseAdminCountRows(c, 'app_post_interactions', {
+      legacy_post_id: postgrestEqFilter(postId),
+      kind: postgrestEqFilter('like'),
+    }),
+    supabaseAdminCountRows(c, 'app_post_interactions', {
+      legacy_post_id: postgrestEqFilter(postId),
+      kind: postgrestEqFilter('save'),
+    }),
+  ]);
+  const state = {
+    likes_count: Math.max(supabaseLikesCount, Number(d1State.likes_count || 0)),
+    comments_count: Math.max(0, Number(d1State.comments_count || 0)),
+    saves_count: Math.max(supabaseSavesCount, Number(d1State.saves_count || 0)),
+    liked,
+    saved,
+    engagement_source: 'supabase',
+  };
+  try {
+    await c.env.DB.prepare(
+      `UPDATE posts
+       SET likes_count = ?,
+           comments_count = ?,
+           saves_count = ?
+       WHERE id = ?`
+    ).bind(state.likes_count, state.comments_count, state.saves_count, postId).run();
+    await c.env.DB.prepare('UPDATE discover_posts SET likes_count = ? WHERE id = ?')
+      .bind(state.likes_count, postId)
+      .run()
+      .catch(() => {});
+  } catch {}
+  return state;
+}
+
+async function getCanonicalPostEngagementState(c: any, postId: string, userId: string) {
+  if (supabaseEngagementConfigured(c)) {
+    try {
+      return await getSupabasePostEngagementState(c, postId, userId);
+    } catch (error: any) {
+      console.warn(JSON.stringify({ event: 'supabase_engagement_state_failed', code: getErrorCode(error).slice(0, 180) }));
+    }
+  }
+  return getPostEngagementState(c.env.DB, postId, userId);
+}
+
+async function setCanonicalPostLikeState(c: any, postId: string, userId: string, requested: boolean | null) {
+  const relatedUserIds = await coalesceViewerPostInteractions(c.env.DB, postId, userId);
+  const placeholders = inPlaceholders(relatedUserIds);
+  const d1LikedRow = await c.env.DB.prepare(
+    `SELECT 1 AS found FROM likes WHERE post_id = ? AND user_id IN (${placeholders}) LIMIT 1`
+  ).bind(postId, ...relatedUserIds).first();
+  const d1WasLiked = !!d1LikedRow;
+  const wasLiked = supabaseEngagementConfigured(c)
+    ? (await supabaseViewerPostInteractionExists(c, postId, relatedUserIds, 'like')) || d1WasLiked
+    : d1WasLiked;
+  const nextLiked = requested === null ? !wasLiked : requested;
+
+  if (supabaseEngagementConfigured(c)) {
+    await supabaseDeletePostInteractionsForUsers(c, postId, relatedUserIds, 'like');
+    if (nextLiked) {
+      await supabaseUpsertPostInteraction(c, postId, userId, 'like');
+    }
+  }
+
+  await deletePostLikesForUsers(c.env.DB, postId, relatedUserIds);
+  if (nextLiked) {
+    await c.env.DB.prepare('INSERT OR IGNORE INTO likes (id, user_id, post_id) VALUES (?, ?, ?)')
+      .bind(uuid(), userId, postId)
+      .run();
+    await c.env.DB.prepare(
+      `INSERT OR IGNORE INTO discover_likes (id, user_id, post_id)
+       SELECT ?, ?, ?
+       WHERE EXISTS (SELECT 1 FROM discover_posts WHERE id = ?)`
+    ).bind(uuid(), userId, postId, postId).run().catch(() => {});
+  }
+
+  const state = await getCanonicalPostEngagementState(c, postId, userId);
+  const changed = state.liked !== wasLiked;
+  return { state, wasLiked, changed };
+}
+
+async function setCanonicalPostSaveState(c: any, postId: string, userId: string, saved: boolean, collection = 'saved') {
+  const collectionName = cleanText(collection, 80) || 'saved';
+  const relatedUserIds = await coalesceViewerPostInteractions(c.env.DB, postId, userId);
+  const placeholders = inPlaceholders(relatedUserIds);
+  const d1SavedRow = await c.env.DB.prepare(
+    `SELECT 1 AS found FROM saved_posts WHERE post_id = ? AND user_id IN (${placeholders}) LIMIT 1`
+  ).bind(postId, ...relatedUserIds).first();
+  const d1WasSaved = !!d1SavedRow;
+  const wasSaved = supabaseEngagementConfigured(c)
+    ? (await supabaseViewerPostInteractionExists(c, postId, relatedUserIds, 'save')) || d1WasSaved
+    : d1WasSaved;
+
+  if (supabaseEngagementConfigured(c)) {
+    await supabaseDeletePostInteractionsForUsers(c, postId, relatedUserIds, 'save');
+    if (saved) {
+      await supabaseUpsertPostInteraction(c, postId, userId, 'save', collectionName);
+    }
+  }
+
+  await deletePostSavesForUsers(c.env.DB, postId, relatedUserIds);
+  if (saved) {
+    await c.env.DB.prepare('INSERT OR IGNORE INTO saved_posts (id, user_id, post_id, collection) VALUES (?, ?, ?, ?)')
+      .bind(uuid(), userId, postId, collectionName)
+      .run();
+    await c.env.DB.prepare(
+      'INSERT INTO bookmarks (id, user_id, post_id, collection) VALUES (?, ?, ?, ?) ON CONFLICT(user_id, post_id) DO UPDATE SET collection = ?'
+    ).bind(uuid(), userId, postId, collectionName, collectionName).run().catch(() => {});
+  }
+
+  const state = await getCanonicalPostEngagementState(c, postId, userId);
+  const changed = state.saved !== wasSaved;
+  return { state, wasSaved, changed, collection: collectionName };
+}
+
+async function overlaySupabaseViewerEngagement(c: any, posts: any[], userId: string): Promise<any[]> {
+  if (!posts.length || !supabaseEngagementConfigured(c)) return posts;
+  const postIds = Array.from(new Set(posts.map((post) => cleanText(post?.id || post?.legacy_post_id, 120)).filter(Boolean)));
+  if (!postIds.length) return posts;
+  try {
+    const relatedUserIds = await relatedInteractionUserIds(c.env.DB, userId);
+    const rows = await supabaseAdminSelectRows(c, 'app_post_interactions', {
+      legacy_post_id: postgrestInFilter(postIds),
+      app_user_id: postgrestInFilter(relatedUserIds),
+      kind: postgrestInFilter(['like', 'save']),
+    }, 'legacy_post_id,kind', Math.max(1, postIds.length * 2 * Math.max(1, relatedUserIds.length)));
+    const liked = new Set<string>();
+    const saved = new Set<string>();
+    for (const row of rows) {
+      const postId = cleanText(row?.legacy_post_id, 120);
+      const kind = cleanText(row?.kind, 20);
+      if (postId && kind === 'like') liked.add(postId);
+      if (postId && kind === 'save') saved.add(postId);
+    }
+    return posts.map((post) => {
+      const postId = cleanText(post?.id || post?.legacy_post_id, 120);
+      if (!postId) return post;
+      const d1Liked = post?.is_liked === true || post?.is_liked === 1 || post?.is_liked === '1' || post?.liked === true || post?.liked === 1 || post?.liked === '1';
+      const d1Saved = post?.is_saved === true || post?.is_saved === 1 || post?.is_saved === '1' || post?.saved === true || post?.saved === 1 || post?.saved === '1';
+      const viewerLiked = liked.has(postId) || d1Liked;
+      const viewerSaved = saved.has(postId) || d1Saved;
+      return {
+        ...post,
+        is_liked: viewerLiked ? 1 : 0,
+        viewer_liked: viewerLiked,
+        liked_by_me: viewerLiked,
+        saved: viewerSaved ? 1 : 0,
+        is_saved: viewerSaved,
+        viewer_saved: viewerSaved,
+        saved_by_me: viewerSaved,
+      };
+    });
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_engagement_overlay_failed', code: getErrorCode(error).slice(0, 180) }));
+    return posts;
+  }
+}
+
 function postEngagementResponse(state: any, extra: Record<string, unknown> = {}) {
   const liked = state?.liked === true || state?.liked === 1 || state?.liked === '1';
   const saved = state?.saved === true || state?.saved === 1 || state?.saved === '1';
@@ -5134,6 +5417,7 @@ function postEngagementResponse(state: any, extra: Record<string, unknown> = {})
     saved_by_me: saved,
     viewer_saved: saved,
     saves_count: savesCount,
+    engagement_source: cleanText(state?.engagement_source, 40) || undefined,
   };
 }
 
@@ -11203,7 +11487,8 @@ api.get('/posts/feed', authMiddleware, async (c) => {
     'ORDER BY p.created_at DESC LIMIT ? OFFSET ?',
   ].join(' ');
   const posts = await c.env.DB.prepare(feedSql).bind(userId, ...relatedUserIds, ...relatedUserIds, ...visiblePostBindValues(userId), limit, skip).all();
-  const response = c.json(feedPhotoPostsOnly(posts.results as any[]).map((p) => feedPostPayload(p, [], c.env)));
+  const feedRows = await overlaySupabaseViewerEngagement(c, feedPhotoPostsOnly(posts.results as any[]), userId);
+  const response = c.json(feedRows.map((p) => feedPostPayload(p, [], c.env)));
   response.headers.set('cache-control', 'private, max-age=6');
   return response;
 });
@@ -11261,7 +11546,8 @@ api.get('/posts/nearby-feed', authMiddleware, async (c) => {
     'ORDER BY p.created_at DESC LIMIT ? OFFSET ?',
   ].join(' ');
   const posts = await c.env.DB.prepare(nearbyFeedSql).bind(...visiblePostBindValues(userId), limit, skip).all();
-  const response = c.json(feedPhotoPostsOnly(posts.results as any[]).map((p) => feedPostPayload(p, [], c.env)));
+  const feedRows = await overlaySupabaseViewerEngagement(c, feedPhotoPostsOnly(posts.results as any[]), userId);
+  const response = c.json(feedRows.map((p) => feedPostPayload(p, [], c.env)));
   response.headers.set('cache-control', 'private, max-age=6');
   return response;
 });
@@ -11287,8 +11573,9 @@ api.get('/posts/:postId', authMiddleware, async (c) => {
   ].join(' ');
   const p: any = await c.env.DB.prepare(postByIdSql).bind(userId, ...relatedUserIds, ...relatedUserIds, postId, ...visiblePostBindValues(userId)).first();
   if (!p) return c.json({ detail: 'Post not found' }, 404);
+  const [postWithViewerState] = await overlaySupabaseViewerEngagement(c, [p], userId);
   const likes = await c.env.DB.prepare('SELECT user_id FROM likes WHERE post_id = ?').bind(postId).all();
-  return c.json(postPayload(p, likes.results.map((l: any) => l.user_id), c.env));
+  return c.json(postPayload(postWithViewerState || p, likes.results.map((l: any) => l.user_id), c.env));
 });
 
 api.post('/posts/:postId/like', authMiddleware, async (c) => {
@@ -11300,7 +11587,6 @@ api.post('/posts/:postId/like', authMiddleware, async (c) => {
   if (limited) return limited;
   const body: any = await c.req.json().catch(() => ({}));
   const requested = optionalBoolean(body.liked ?? body.like ?? body.value);
-  const relatedUserIds = await coalesceViewerPostInteractions(c.env.DB, postId, userId);
   const likeVisiblePostSql = [
     `SELECT p.id, p.user_id,
        (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS likes_count,
@@ -11314,34 +11600,13 @@ api.post('/posts/:postId/like', authMiddleware, async (c) => {
   const visiblePost: any = await c.env.DB.prepare(likeVisiblePostSql).bind(userId, userId, postId, ...visiblePostBindValues(userId)).first();
   if (!visiblePost) return c.json({ detail: 'Post not found' }, 404);
 
-  let nextLiked = requested;
-  const wasLiked = visiblePost.is_liked === true || visiblePost.is_liked === 1 || visiblePost.is_liked === '1';
-  if (nextLiked === null) {
-    nextLiked = !wasLiked;
-  }
-
-  if (nextLiked) {
-    await deletePostLikesForUsers(c.env.DB, postId, relatedUserIds);
-    await c.env.DB.prepare('INSERT OR IGNORE INTO likes (id, user_id, post_id) VALUES (?, ?, ?)')
-      .bind(uuid(), userId, postId)
-      .run();
-    await c.env.DB.prepare(
-      `INSERT OR IGNORE INTO discover_likes (id, user_id, post_id)
-       SELECT ?, ?, ?
-       WHERE EXISTS (SELECT 1 FROM discover_posts WHERE id = ?)`
-    ).bind(uuid(), userId, postId, postId).run();
-  } else {
-    await deletePostLikesForUsers(c.env.DB, postId, relatedUserIds);
-  }
-  const state = await getPostEngagementState(c.env.DB, postId, userId);
+  const { state, changed } = await setCanonicalPostLikeState(c, postId, userId, requested);
   await c.env.DB.prepare('UPDATE discover_posts SET likes_count = ? WHERE id = ?')
     .bind(state.likes_count, postId)
     .run()
     .catch(() => {});
-  nextLiked = state.liked;
-  const changed = state.liked !== wasLiked;
 
-  if (nextLiked && changed && (visiblePost as any).user_id !== userId) {
+  if (state.liked && changed && (visiblePost as any).user_id !== userId) {
     try {
       const me: any = await c.env.DB.prepare('SELECT full_name FROM users WHERE id = ?').bind(userId).first();
       await insertNotificationOnce(c, {
@@ -11354,11 +11619,6 @@ api.post('/posts/:postId/like', authMiddleware, async (c) => {
         dedupeSeconds: 86400,
       });
     } catch {}
-  }
-  if (changed) {
-    runBackgroundTask(c, 'supabase_like_write_through_failed', async () => {
-      await mirrorLegacyInteractionToSupabase(c, postId, userId, 'like', !!nextLiked);
-    });
   }
 
   return c.json(postEngagementResponse(state));
@@ -11482,7 +11742,8 @@ api.get('/users/:userId/posts', authMiddleware, async (c) => {
       ORDER BY p.pinned_at IS NULL, p.pinned_at DESC, p.created_at DESC
       LIMIT ? OFFSET ?`
   ).bind(viewerId, viewerId, targetId, viewerId, viewerId, viewerId, viewerId, limit, skip).all();
-  return c.json(feedPhotoPostsOnly(posts.results as any[]).map((p) => feedPostPayload(p, [], c.env)));
+  const rows = await overlaySupabaseViewerEngagement(c, feedPhotoPostsOnly(posts.results as any[]), viewerId);
+  return c.json(rows.map((p) => feedPostPayload(p, [], c.env)));
 });
 
 // Comments
@@ -11557,7 +11818,7 @@ api.post('/posts/:postId/comments', authMiddleware, async (c) => {
       });
     }
     if (!inserted) return c.json({ detail: 'Could not post comment. Please retry.' }, 409);
-    const engagement = await getPostEngagementState(c.env.DB, postId, userId);
+    const engagement = await getCanonicalPostEngagementState(c, postId, userId);
 
     try {
       const notifyUserId = parent?.user_id && parent.user_id !== userId ? parent.user_id : visiblePost.user_id;
@@ -12891,7 +13152,8 @@ api.get('/library/liked', authMiddleware, async (c) => {
     'GROUP BY p.id ORDER BY MAX(l.created_at) DESC LIMIT ? OFFSET ?',
   ].join(' ');
   const r = await c.env.DB.prepare(likedLibrarySql).bind(...relatedUserIds, ...relatedUserIds, ...visiblePostBindValues(userId), limit, skip).all();
-  return c.json(feedPhotoPostsOnly(r.results as any[]).map((p) => feedPostPayload(p, [], c.env)));
+  const rows = await overlaySupabaseViewerEngagement(c, feedPhotoPostsOnly(r.results as any[]), userId);
+  return c.json(rows.map((p) => feedPostPayload(p, [], c.env)));
 });
 api.get('/library/saved', authMiddleware, async (c) => {
   await ensureLikeUniquenessSchema(c.env.DB);
@@ -12922,7 +13184,8 @@ api.get('/library/saved', authMiddleware, async (c) => {
   sql += ' GROUP BY p.id ORDER BY MAX(sp.created_at) DESC LIMIT ? OFFSET ?';
   binds.push(limit, skip);
   const r = await c.env.DB.prepare(sql).bind(...binds).all();
-  return c.json(feedPhotoPostsOnly(r.results as any[]).map((p) => feedPostPayload(p, [], c.env)));
+  const rows = await overlaySupabaseViewerEngagement(c, feedPhotoPostsOnly(r.results as any[]), userId);
+  return c.json(rows.map((p) => feedPostPayload(p, [], c.env)));
 });
 api.post('/library/save/:postId', authMiddleware, async (c) => {
   const userId = getUserId(c);
@@ -12940,22 +13203,7 @@ api.post('/library/save/:postId', authMiddleware, async (c) => {
   ].join(' ');
   const post = await c.env.DB.prepare(saveVisiblePostSql).bind(postId, ...visiblePostBindValues(userId)).first();
   if (!post) return c.json({ detail: 'Post not found' }, 404);
-  await coalesceViewerPostInteractions(c.env.DB, postId, userId);
-  const existingSave = await c.env.DB.prepare('SELECT id FROM saved_posts WHERE user_id = ? AND post_id = ?').bind(userId, postId).first();
-  if (existingSave) {
-    await c.env.DB.prepare('UPDATE saved_posts SET collection = ? WHERE user_id = ? AND post_id = ?').bind(collection, userId, postId).run();
-  } else {
-    await c.env.DB.prepare('INSERT OR IGNORE INTO saved_posts (id, user_id, post_id, collection) VALUES (?, ?, ?, ?)').bind(uuid(), userId, postId, collection).run();
-  }
-  try {
-    await c.env.DB.prepare('INSERT INTO bookmarks (id, user_id, post_id, collection) VALUES (?, ?, ?, ?) ON CONFLICT(user_id, post_id) DO UPDATE SET collection = ?')
-      .bind(uuid(), userId, postId, collection, collection).run();
-  } catch {}
-  const engagement = await getPostEngagementState(c.env.DB, postId, userId);
-  runBackgroundTask(c, 'supabase_save_write_through_failed', async () => {
-    await mirrorLegacyInteractionToSupabase(c, postId, userId, 'save', true, collection);
-    await mirrorLegacyPostToSupabase(c, postId);
-  });
+  const { state: engagement } = await setCanonicalPostSaveState(c, postId, userId, true, collection);
   return c.json(postEngagementResponse(engagement, { collection }));
 });
 api.delete('/library/save/:postId', authMiddleware, async (c) => {
@@ -12965,18 +13213,7 @@ api.delete('/library/save/:postId', authMiddleware, async (c) => {
   const limited = await enforceRateLimit(c, 'save_post', userId, 240, 60);
   if (limited) return limited;
   const postId = c.req.param('postId');
-  const relatedUserIds = await coalesceViewerPostInteractions(c.env.DB, postId, userId);
-  const existingSave = await c.env.DB.prepare('SELECT id FROM saved_posts WHERE user_id = ? AND post_id = ?').bind(userId, postId).first();
-  if (existingSave) {
-    await deletePostSavesForUsers(c.env.DB, postId, relatedUserIds);
-  }
-  const engagement = await getPostEngagementState(c.env.DB, postId, userId);
-  if (existingSave) {
-    runBackgroundTask(c, 'supabase_unsave_write_through_failed', async () => {
-      await mirrorLegacyInteractionToSupabase(c, postId, userId, 'save', false);
-      await mirrorLegacyPostToSupabase(c, postId);
-    });
-  }
+  const { state: engagement } = await setCanonicalPostSaveState(c, postId, userId, false);
   return c.json(postEngagementResponse(engagement, { unsaved: true }));
 });
 api.get('/library/collections', authMiddleware, async (c) => {
@@ -13474,7 +13711,8 @@ api.get('/discover', authMiddleware, async (c) => {
     'ORDER BY p.created_at DESC LIMIT ? OFFSET ?',
   ].join(' ');
   const rows = await c.env.DB.prepare(sql).bind(...binds, limit, skip).all();
-  const response = c.json(feedPhotoPostsOnly(rows.results as any[]).map((post) => feedPostPayload(post, [], c.env)));
+  const discoverRows = await overlaySupabaseViewerEngagement(c, feedPhotoPostsOnly(rows.results as any[]), userId);
+  const response = c.json(discoverRows.map((post) => feedPostPayload(post, [], c.env)));
   response.headers.set('cache-control', 'private, max-age=8');
   return response;
 });
@@ -13497,7 +13735,8 @@ api.get('/discover/trending', authMiddleware, async (c) => {
     'ORDER BY p.likes_count DESC, p.created_at DESC LIMIT ?',
   ].join(' ');
   const r = await c.env.DB.prepare(discoverTrendingSql).bind(...visiblePostBindValues(userId), limit).all();
-  return c.json(feedPhotoPostsOnly(r.results as any[]).map((p) => feedPostPayload(p, [], c.env)));
+  const rows = await overlaySupabaseViewerEngagement(c, feedPhotoPostsOnly(r.results as any[]), userId);
+  return c.json(rows.map((p) => feedPostPayload(p, [], c.env)));
 });
 api.get('/discover/search', authMiddleware, async (c) => {
   const userId = getUserId(c);
@@ -14433,7 +14672,6 @@ api.post('/discover/posts/:postId/like', authMiddleware, async (c) => {
   const canonicalPost = await c.env.DB.prepare('SELECT id FROM posts WHERE id = ?').bind(postId).first();
   if (canonicalPost) {
     await reconcileLegacyDiscoverLikes(c.env.DB, postId);
-    const relatedUserIds = await coalesceViewerPostInteractions(c.env.DB, postId, userId);
     const likeVisiblePostSql = [
       `SELECT p.id, p.user_id,
          EXISTS (SELECT 1 FROM likes lk WHERE lk.user_id = ? AND lk.post_id = p.id) AS is_liked,
@@ -14446,32 +14684,11 @@ api.post('/discover/posts/:postId/like', authMiddleware, async (c) => {
       .first();
     if (!visiblePost) return c.json({ detail: 'Post not found' }, 404);
 
-    let nextLiked = requested;
-    const wasLiked = visiblePost.is_liked === true || visiblePost.is_liked === 1 || visiblePost.is_liked === '1';
-    if (nextLiked === null) {
-      nextLiked = !wasLiked;
-    }
-
-    if (nextLiked) {
-      await deletePostLikesForUsers(c.env.DB, postId, relatedUserIds);
-      await c.env.DB.prepare('INSERT OR IGNORE INTO likes (id, user_id, post_id) VALUES (?, ?, ?)')
-        .bind(uuid(), userId, postId)
-        .run();
-      await c.env.DB.prepare(
-        `INSERT OR IGNORE INTO discover_likes (id, user_id, post_id)
-         SELECT ?, ?, ?
-       WHERE EXISTS (SELECT 1 FROM discover_posts WHERE id = ?)`
-      ).bind(uuid(), userId, postId, postId).run();
-    } else {
-      await deletePostLikesForUsers(c.env.DB, postId, relatedUserIds);
-    }
-
-    const state = await getPostEngagementState(c.env.DB, postId, userId);
+    const { state, changed } = await setCanonicalPostLikeState(c, postId, userId, requested);
     await c.env.DB.prepare('UPDATE discover_posts SET likes_count = ? WHERE id = ?')
       .bind(state.likes_count, postId)
       .run()
       .catch(() => {});
-    const changed = state.liked !== wasLiked;
 
     if (state.liked && changed && visiblePost.user_id !== userId) {
       try {
@@ -14486,11 +14703,6 @@ api.post('/discover/posts/:postId/like', authMiddleware, async (c) => {
           dedupeSeconds: 86400,
         });
       } catch {}
-    }
-    if (changed) {
-      runBackgroundTask(c, 'supabase_like_write_through_failed', async () => {
-        await mirrorLegacyInteractionToSupabase(c, postId, userId, 'like', !!state.liked);
-      });
     }
 
     return c.json(postEngagementResponse(state));
@@ -17876,27 +18088,11 @@ api.post('/bookmarks', authMiddleware, async (c) => {
   const { post_id, collection } = await c.req.json().catch(() => ({}));
   const postId = publicId(post_id, 120);
   if (!postId) return c.json({ detail: 'post_id required' }, 400);
-  const id = uuid();
   try {
     const post = await c.env.DB.prepare('SELECT id FROM posts WHERE id = ?').bind(postId).first();
     if (!post) return c.json({ detail: 'Post not found' }, 404);
     const collectionName = cleanText(collection || 'saved', 80) || 'saved';
-    await coalesceViewerPostInteractions(c.env.DB, postId, userId);
-    const existingSave = await c.env.DB.prepare('SELECT id FROM saved_posts WHERE user_id = ? AND post_id = ?').bind(userId, postId).first();
-    if (existingSave) {
-      await c.env.DB.prepare('UPDATE saved_posts SET collection = ? WHERE user_id = ? AND post_id = ?').bind(collectionName, userId, postId).run();
-    } else {
-      await c.env.DB.prepare('INSERT OR IGNORE INTO saved_posts (id, user_id, post_id, collection) VALUES (?, ?, ?, ?)').bind(uuid(), userId, postId, collectionName).run();
-    }
-    const engagement = await getPostEngagementState(c.env.DB, postId, userId);
-    try {
-      await c.env.DB.prepare('INSERT INTO bookmarks (id, user_id, post_id, collection) VALUES (?, ?, ?, ?) ON CONFLICT(user_id, post_id) DO UPDATE SET collection = ?')
-        .bind(id, userId, postId, collectionName, collectionName).run();
-    } catch {}
-    runBackgroundTask(c, 'supabase_bookmark_write_through_failed', async () => {
-      await mirrorLegacyInteractionToSupabase(c, postId, userId, 'save', true, collectionName);
-      await mirrorLegacyPostToSupabase(c, postId);
-    });
+    const { state: engagement } = await setCanonicalPostSaveState(c, postId, userId, true, collectionName);
     return c.json(postEngagementResponse(engagement, { collection: collectionName }));
   } catch (e: any) {
     console.error('Bookmark save failed:', getErrorCode(e));
@@ -17912,18 +18108,7 @@ api.delete('/bookmarks/:postId', authMiddleware, async (c) => {
   const limited = await enforceRateLimit(c, 'save_post', userId, 240, 60);
   if (limited) return limited;
   const postId = publicId(c.req.param('postId'), 120);
-  const relatedUserIds = await coalesceViewerPostInteractions(c.env.DB, postId, userId);
-  const existingSave = await c.env.DB.prepare('SELECT id FROM saved_posts WHERE user_id = ? AND post_id = ?').bind(userId, postId).first();
-  if (existingSave) {
-    await deletePostSavesForUsers(c.env.DB, postId, relatedUserIds);
-  }
-  if (existingSave) {
-    runBackgroundTask(c, 'supabase_bookmark_delete_write_through_failed', async () => {
-      await mirrorLegacyInteractionToSupabase(c, postId, userId, 'save', false);
-      await mirrorLegacyPostToSupabase(c, postId);
-    });
-  }
-  const engagement = await getPostEngagementState(c.env.DB, postId, userId);
+  const { state: engagement } = await setCanonicalPostSaveState(c, postId, userId, false);
   return c.json(postEngagementResponse(engagement));
 });
 
@@ -17952,6 +18137,18 @@ api.get('/bookmarks/check/:postId', authMiddleware, async (c) => {
   await ensureLikeUniquenessSchema(c.env.DB);
   const postId = c.req.param('postId');
   const relatedUserIds = await relatedInteractionUserIds(c.env.DB, userId);
+  if (supabaseEngagementConfigured(c)) {
+    try {
+      const rows = await supabaseAdminSelectRows(c, 'app_post_interactions', {
+        legacy_post_id: postgrestEqFilter(postId),
+        kind: postgrestEqFilter('save'),
+        app_user_id: postgrestInFilter(relatedUserIds),
+      }, 'collection', 1);
+      if (rows.length) return c.json({ saved: true, collection: rows[0]?.collection || 'saved' });
+    } catch (error: any) {
+      console.warn(JSON.stringify({ event: 'supabase_bookmark_check_failed', code: getErrorCode(error).slice(0, 180) }));
+    }
+  }
   const relatedPlaceholders = inPlaceholders(relatedUserIds);
   const r: any = await c.env.DB.prepare(
     `SELECT collection FROM bookmarks WHERE post_id = ? AND user_id IN (${relatedPlaceholders})
