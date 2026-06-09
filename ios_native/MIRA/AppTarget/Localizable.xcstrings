@@ -80,9 +80,9 @@
     },
     "welcome.capture.title" : {
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Capture\nyour moment" } },
-        "es" : { "stringUnit" : { "state" : "translated", "value" : "Captura\ntu momento" } },
-        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Capturez\nvotre moment" } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "CAPTURE\nYOUR\nMOMENTS" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "CAPTURA\nTUS\nMOMENTOS" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "CAPTUREZ\nVOS\nMOMENTS" } }
       }
     }
   },
