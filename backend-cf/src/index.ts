@@ -68,7 +68,6 @@ interface Env {
   TWILIO_VERIFY_SERVICE_SID?: string;
   TWILIO_SERVICE_SID?: string;
   TWILIO_FROM_PHONE?: string;
-  GIPHY_API_KEY?: string;
   AGORA_APP_ID?: string;
   AGORA_APP_CERTIFICATE?: string;
   AGORA_TOKEN_TTL_SECONDS?: string;
@@ -105,7 +104,7 @@ type HonoApp = { Bindings: Env; Variables: { userId: string; requestId: string }
 
 const app = new Hono<HonoApp>();
 const API_VERSION = '2.0';
-const WORKER_NAME = 'flames-up-api';
+const WORKER_NAME = 'captro-api';
 
 // Root handler
 app.get('/', (c) => c.json({ name: 'Captro API', version: API_VERSION, status: 'live', docs: '/api/health' }));
@@ -210,7 +209,7 @@ app.use('*', securityHeaders);
 api.use('*', securityHeaders);
 
 const retiredFeature = (feature: string) => (c: any) => c.json({
-  detail: `${feature} has been removed from Flames Up.`,
+  detail: `${feature} has been removed from Captro.`,
 }, 410);
 
 api.all('/publisher/*', retiredFeature('Publisher tools'));
@@ -237,9 +236,6 @@ api.use('/music/*', async (c, next) => {
 });
 api.all('/admin/music', retiredFeature('Music admin tools'));
 api.all('/admin/music/*', retiredFeature('Music admin tools'));
-api.all('/admin/notes', retiredFeature('Notes admin tools'));
-api.all('/admin/notes/*', retiredFeature('Notes admin tools'));
-
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 const uuid = () => crypto.randomUUID();
 const now = () => new Date().toISOString();
@@ -3591,9 +3587,6 @@ async function resolveReportTarget(c: any, reporterId: string, type: string, rep
       if (row.user_id === reporterId) return { ok: false, status: 400, detail: 'You cannot report your own story.' };
       return { ok: true, contentId: row.id, targetOwnerUserId: row.user_id };
     }
-    if (type === 'note') {
-      return { ok: false, status: 410, detail: 'Notes are no longer supported.' };
-    }
     if (type === 'music') {
       await ensureAiMusicSchema(c.env.DB);
       const row: any = await c.env.DB.prepare("SELECT id, user_id FROM ai_music_posts WHERE id = ? AND COALESCE(status, 'active') != 'removed' LIMIT 1").bind(reportedId).first();
@@ -5833,7 +5826,7 @@ async function stripeApiGet(c: any, path: string) {
 
 const PREMIUM_PLAN = {
   id: 'monthly',
-  label: 'Flames Up Premium',
+  label: 'Captro Premium',
   amount_cents: 499,
   currency: 'usd',
   interval: 'month',
@@ -6211,7 +6204,7 @@ async function applyCoinDelta(c: any, input: {
     created_at: ts,
   };
 
-  // Wallet ledger: every backend balance mutation is recorded here for audit/history.
+  // Legacy coin ledger: every backend balance mutation is recorded here for audit/history.
   await c.env.DB.prepare(
     `INSERT INTO coin_transactions
      (id, user_id, type, amount, balance_after, status, related_user_id, related_id, stripe_session_id, stripe_payment_intent_id, idempotency_key, metadata, created_at)
@@ -10591,56 +10584,6 @@ api.get('/music/audius/search', async (c) => {
   }
 });
 
-// Server-side Giphy proxy. The API key stays in Cloudflare secrets,
-// never in the native app bundle or client code.
-api.get('/gifs/search', authMiddleware, async (c) => {
-  try {
-    const userId = getUserId(c);
-    const limited = await enforceRateLimit(c, 'giphy_search', userId || clientIp(c), 80, 60);
-    if (limited) return limited;
-    const apiKey = String(c.env.GIPHY_API_KEY || '').trim();
-    if (!apiKey) return c.json({ detail: 'GIF search is not configured yet.', gifs: [] }, 503);
-    const query = cleanText(c.req.query('q') || c.req.query('query'), 80);
-    if (query.length < 2) return c.json({ gifs: [] });
-    const limit = clampNumber(c.req.query('limit'), 1, 32, 24);
-    const offset = clampNumber(c.req.query('offset'), 0, 500, 0);
-    const cacheKey = `giphy:search:${query.toLowerCase()}:${limit}:${offset}`;
-    const gifs = await cachedJson(c, cacheKey, 180, async () => {
-      const params = new URLSearchParams({
-        api_key: apiKey,
-        q: query,
-        limit: String(limit),
-        offset: String(offset),
-        rating: 'pg-13',
-        lang: 'en',
-      });
-      const response = await fetch(`https://api.giphy.com/v1/gifs/search?${params.toString()}`, {
-        headers: { Accept: 'application/json' },
-      });
-      if (!response.ok) throw new Error(`Giphy returned ${response.status}`);
-      const data: any = await response.json();
-      const rows = Array.isArray(data?.data) ? data.data : [];
-      return rows.map((gif: any) => {
-        const images = gif?.images || {};
-        const original = images.original || {};
-        const preview = images.fixed_width_small || images.fixed_width || images.downsized || original;
-        return {
-          id: publicId(gif?.id, 80),
-          title: cleanText(gif?.title, 120),
-          preview_url: String(preview.webp || preview.url || '').slice(0, 500),
-          media_url: String(original.webp || original.url || preview.webp || preview.url || '').slice(0, 500),
-          width: clampNumber(original.width, 1, 4096, 0),
-          height: clampNumber(original.height, 1, 4096, 0),
-        };
-      }).filter((gif: any) => gif.id && gif.media_url);
-    });
-    return c.json({ gifs });
-  } catch (error: any) {
-    console.log('Giphy search failed:', error?.message || error);
-    return c.json({ detail: 'GIF search is temporarily unavailable.', gifs: [] }, 503);
-  }
-});
-
 api.get('/music/audius/stream/:trackId', async (c) => {
   try {
     await ensureAudioSchema(c.env.DB);
@@ -13465,11 +13408,6 @@ api.post('/recommendations/:recommendationId/report', authMiddleware, async (c) 
   }
 });
 
-// Notes were removed from the product. Keep old tables for account deletion cleanup only.
-api.all('/notes', authMiddleware, async (c) => c.json({ detail: 'Notes are no longer supported.', code: 'NOTES_RETIRED' }, 410));
-api.all('/notes/*', authMiddleware, async (c) => c.json({ detail: 'Notes are no longer supported.', code: 'NOTES_RETIRED' }, 410));
-api.all('/note-comments/*', authMiddleware, async (c) => c.json({ detail: 'Notes are no longer supported.', code: 'NOTES_RETIRED' }, 410));
-
 // People
 api.get('/people', authMiddleware, async (c) => {
   try {
@@ -14229,7 +14167,7 @@ api.post('/stripe/checkout/sessions', authMiddleware, async (c) => {
       'line_items[0][price]': priceId,
       'line_items[0][quantity]': quantity,
       'metadata[user_id]': userId,
-      'metadata[source]': 'flames-up',
+      'metadata[source]': 'captro',
     }, requestId);
 
     if (!session.ok) {
@@ -14287,8 +14225,8 @@ api.post('/premium/checkout', authMiddleware, async (c) => {
     }
 
     const priceId = getPremiumPriceId(c);
-    const successUrl = allowedStripeReturnUrl(c, body.success_url || c.env.STRIPE_SUCCESS_URL, '/wallet?premium=success&session_id={CHECKOUT_SESSION_ID}');
-    const cancelUrl = allowedStripeReturnUrl(c, body.cancel_url || c.env.STRIPE_CANCEL_URL, '/wallet?premium=cancelled');
+    const successUrl = allowedStripeReturnUrl(c, body.success_url || c.env.STRIPE_SUCCESS_URL, '/profile?premium=success&session_id={CHECKOUT_SESSION_ID}');
+    const cancelUrl = allowedStripeReturnUrl(c, body.cancel_url || c.env.STRIPE_CANCEL_URL, '/profile?premium=cancelled');
     const requestId = getClientRequestId(c, body) || `premium_${userId}_${Date.now()}`;
     const existingCustomer = cleanText(user.premium_stripe_customer_id, 140);
     const publicEmail = publicUserEmail(user.email);
@@ -14298,11 +14236,11 @@ api.post('/premium/checkout', authMiddleware, async (c) => {
       cancel_url: cancelUrl,
       client_reference_id: userId,
       'line_items[0][quantity]': 1,
-      'metadata[source]': 'flames-up-premium',
+      'metadata[source]': 'captro-premium',
       'metadata[user_id]': userId,
       'metadata[plan]': PREMIUM_PLAN.id,
       'metadata[price_id]': priceId,
-      'subscription_data[metadata][source]': 'flames-up-premium',
+      'subscription_data[metadata][source]': 'captro-premium',
       'subscription_data[metadata][user_id]': userId,
       'subscription_data[metadata][plan]': PREMIUM_PLAN.id,
     };
@@ -14315,7 +14253,7 @@ api.post('/premium/checkout', authMiddleware, async (c) => {
       checkoutParams['line_items[0][price_data][unit_amount]'] = PREMIUM_PLAN.amount_cents;
       checkoutParams['line_items[0][price_data][recurring][interval]'] = PREMIUM_PLAN.interval;
       checkoutParams['line_items[0][price_data][product_data][name]'] = PREMIUM_PLAN.label;
-      checkoutParams['line_items[0][price_data][product_data][metadata][source]'] = 'flames-up-premium';
+      checkoutParams['line_items[0][price_data][product_data][metadata][source]'] = 'captro-premium';
     }
 
     const session = await stripeApiRequest(c, '/checkout/sessions', checkoutParams, requestId);
@@ -14346,256 +14284,6 @@ api.post('/premium/checkout', authMiddleware, async (c) => {
   }
 });
 
-api.get('/wallet', authMiddleware, async (c) => {
-  try {
-    const userId = getUserId(c);
-    const balance = await getCoinBalance(c.env.DB, userId);
-    const txRows: any = await c.env.DB.prepare(
-      `SELECT * FROM coin_transactions
-       WHERE user_id = ?
-       ORDER BY created_at DESC
-       LIMIT 30`
-    ).bind(userId).all();
-    const stripe = getStripeConfig(c);
-    return c.json({
-      balance: Number(balance.balance || 0),
-      lifetime_purchased: Number(balance.lifetime_purchased || 0),
-      lifetime_spent: Number(balance.lifetime_spent || 0),
-      updated_at: balance.updated_at,
-      packages: publicCoinPackages(),
-      custom_purchase: { min_coins: 100, max_coins: 50000, cents_per_coin: 1 },
-      stripe_connected: stripe.configured,
-      transactions: (txRows.results || []).map(sanitizeCoinTransaction),
-    });
-  } catch (error: any) {
-    console.error('Wallet load failed:', getErrorCode(error), error?.message || error);
-    return c.json({ detail: 'Could not load wallet.', code: 'WALLET_LOAD_FAILED' }, 500);
-  }
-});
-
-api.get('/wallet/transactions', authMiddleware, async (c) => {
-  try {
-    await ensureWalletSchema(c.env.DB);
-    const userId = getUserId(c);
-    const limit = clampNumber(c.req.query('limit'), 1, 100, 50);
-    const rows: any = await c.env.DB.prepare(
-      `SELECT * FROM coin_transactions
-       WHERE user_id = ?
-       ORDER BY created_at DESC
-       LIMIT ?`
-    ).bind(userId, limit).all();
-    return c.json({ transactions: (rows.results || []).map(sanitizeCoinTransaction) });
-  } catch (error: any) {
-    console.error('Wallet history failed:', getErrorCode(error), error?.message || error);
-    return c.json({ detail: 'Could not load wallet history.', code: 'WALLET_HISTORY_FAILED' }, 500);
-  }
-});
-
-api.post('/wallet/checkout', authMiddleware, async (c) => {
-  try {
-    const bodyTooLarge = rejectLargeRequest(c, 20_000);
-    if (bodyTooLarge) return bodyTooLarge;
-    const userId = getUserId(c);
-    const limited = await enforceRateLimit(c, 'wallet_checkout', userId, 12, 60);
-    if (limited) return limited;
-
-    await ensureWalletSchema(c.env.DB);
-    const body: any = await c.req.json().catch(() => ({}));
-    const purchase = resolveCoinPurchase(body);
-    if (!purchase) {
-      return c.json({ detail: 'Choose a coin package or enter at least 100 custom coins.', code: 'COIN_PACKAGE_REQUIRED' }, 400);
-    }
-
-    const stripe = getStripeConfig(c);
-    if (!stripe.configured) {
-      return c.json({ detail: 'Stripe is not configured yet.', code: 'STRIPE_NOT_CONFIGURED' }, 503);
-    }
-
-    const ts = now();
-    const orderId = uuid();
-    await c.env.DB.prepare(
-      `INSERT INTO coin_purchase_orders
-       (id, user_id, package_id, coins, amount_cents, currency, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, 'usd', 'pending', ?, ?)`
-    ).bind(orderId, userId, purchase.package_id, purchase.coins, purchase.amount_cents, ts, ts).run();
-
-    const successUrl = allowedStripeReturnUrl(c, body.success_url || c.env.STRIPE_SUCCESS_URL, '/wallet?checkout=success&session_id={CHECKOUT_SESSION_ID}');
-    const cancelUrl = allowedStripeReturnUrl(c, body.cancel_url || c.env.STRIPE_CANCEL_URL, '/wallet?checkout=cancelled');
-    const requestId = getClientRequestId(c, body) || `wallet_checkout_${orderId}`;
-    const session = await stripeApiRequest(c, '/checkout/sessions', {
-      mode: 'payment',
-      success_url: successUrl,
-      cancel_url: cancelUrl,
-      client_reference_id: userId,
-      'line_items[0][price_data][currency]': 'usd',
-      'line_items[0][price_data][product_data][name]': purchase.label,
-      'line_items[0][price_data][product_data][metadata][coin_package]': purchase.package_id,
-      'line_items[0][price_data][unit_amount]': purchase.amount_cents,
-      'line_items[0][quantity]': 1,
-      'metadata[source]': 'flames-up-wallet',
-      'metadata[user_id]': userId,
-      'metadata[wallet_order_id]': orderId,
-      'metadata[coin_package]': purchase.package_id,
-      'metadata[coins]': purchase.coins,
-      'payment_intent_data[metadata][source]': 'flames-up-wallet',
-      'payment_intent_data[metadata][user_id]': userId,
-      'payment_intent_data[metadata][wallet_order_id]': orderId,
-    }, requestId);
-
-    if (!session.ok) {
-      await c.env.DB.prepare("UPDATE coin_purchase_orders SET status = 'failed', updated_at = ? WHERE id = ?")
-        .bind(now(), orderId)
-        .run();
-      const message = session.data?.error?.message || session.data?.detail || 'Could not create coin checkout.';
-      return c.json({ detail: message, code: session.data?.error?.code || 'COIN_CHECKOUT_FAILED' }, session.status as any);
-    }
-
-    await c.env.DB.prepare('UPDATE coin_purchase_orders SET stripe_session_id = ?, updated_at = ? WHERE id = ?')
-      .bind(session.data.id || '', now(), orderId)
-      .run();
-
-    return c.json({
-      id: session.data.id,
-      url: session.data.url,
-      mode: session.data.mode,
-      status: session.data.status,
-      order_id: orderId,
-      coins: purchase.coins,
-      amount_cents: purchase.amount_cents,
-    });
-  } catch (error: any) {
-    console.error('Coin checkout failed:', getErrorCode(error), error?.message || error);
-    return c.json({ detail: 'Could not start coin checkout.', code: 'COIN_CHECKOUT_FAILED' }, 500);
-  }
-});
-
-api.post('/wallet/gifts', authMiddleware, async (c) => {
-  try {
-    const bodyTooLarge = rejectLargeRequest(c, 20_000);
-    if (bodyTooLarge) return bodyTooLarge;
-    const senderId = getUserId(c);
-    const limited = await enforceRateLimit(c, 'coin_gift', senderId, 30, 60);
-    if (limited) return limited;
-    const body: any = await c.req.json().catch(() => ({}));
-    const receiverId = cleanText(body.to_user_id || body.receiver_id, 80);
-    const amount = clampNumber(body.coins || body.amount, 1, 100000, 0);
-    if (!receiverId || receiverId === senderId || amount <= 0) {
-      return c.json({ detail: 'Choose a user and coin amount to send.', code: 'GIFT_INVALID' }, 400);
-    }
-    const receiver: any = await c.env.DB.prepare('SELECT id FROM users WHERE id = ?').bind(receiverId).first();
-    if (!receiver) return c.json({ detail: 'That user was not found.', code: 'USER_NOT_FOUND' }, 404);
-    const giftId = uuid();
-    const requestId = getClientRequestId(c, body) || giftId;
-    const note = cleanText(body.note, 240);
-    const giftType = cleanText(body.gift_type || body.gift_label, 60);
-    const postId = cleanText(body.post_id || body.related_post_id, 120);
-
-    await applyCoinDelta(c, {
-      userId: senderId,
-      type: 'gift_sent',
-      amount: -amount,
-      relatedUserId: receiverId,
-      relatedId: giftId,
-      idempotencyKey: `gift_sent_${requestId}`,
-      metadata: { note, gift_type: giftType, post_id: postId },
-    });
-    const received = await applyCoinDelta(c, {
-      userId: receiverId,
-      type: 'gift_received',
-      amount,
-      relatedUserId: senderId,
-      relatedId: giftId,
-      idempotencyKey: `gift_received_${requestId}`,
-      metadata: { note, gift_type: giftType, post_id: postId },
-    });
-
-    try {
-      const sender: any = await c.env.DB.prepare('SELECT username, full_name FROM users WHERE id = ?').bind(senderId).first();
-      const senderName = sender?.full_name || sender?.username || 'Someone';
-      await insertNotificationOnce(c, {
-        userId: receiverId,
-        type: 'coin_gift',
-        title: 'New Gift',
-        body: `${senderName} sent you ${amount} coins`,
-        data: { gift_id: giftId, from_user_id: senderId, coins: amount, gift_type: giftType, post_id: postId },
-        dedupeKey: `gift:${requestId}`,
-        dedupeSeconds: 86400,
-      });
-    } catch {}
-
-    return c.json({ sent: true, gift_id: giftId, balance: Number((await getCoinBalance(c.env.DB, senderId)).balance || 0), receiver_balance: Number(received.balance.balance || 0) });
-  } catch (error: any) {
-    if (String(error?.message || '') === 'COINS_INSUFFICIENT') {
-      return c.json({ detail: 'Not enough coins for this gift.', code: 'COINS_INSUFFICIENT' }, 409);
-    }
-    console.error('Coin gift failed:', getErrorCode(error), error?.message || error);
-    return c.json({ detail: 'Could not send gift.', code: 'GIFT_FAILED' }, 500);
-  }
-});
-
-api.post('/wallet/spend', authMiddleware, async (c) => {
-  try {
-    const bodyTooLarge = rejectLargeRequest(c, 20_000);
-    if (bodyTooLarge) return bodyTooLarge;
-    const userId = getUserId(c);
-    const limited = await enforceRateLimit(c, 'coin_spend', userId, 60, 60);
-    if (limited) return limited;
-    const body: any = await c.req.json().catch(() => ({}));
-    const amount = clampNumber(body.coins || body.amount, 1, 100000, 0);
-    const purpose = cleanText(body.purpose || body.reason, 40);
-    const type = purpose === 'boost' ? 'boost' : 'spend';
-    if (amount <= 0) return c.json({ detail: 'Enter a coin amount to spend.', code: 'SPEND_INVALID' }, 400);
-    const result = await applyCoinDelta(c, {
-      userId,
-      type,
-      amount: -amount,
-      relatedId: cleanText(body.related_id || body.post_id, 120),
-      idempotencyKey: getClientRequestId(c, body) || `${type}_${userId}_${uuid()}`,
-      metadata: { purpose },
-    });
-    return c.json({ spent: true, balance: Number(result.balance.balance || 0), transaction: sanitizeCoinTransaction(result.transaction) });
-  } catch (error: any) {
-    if (String(error?.message || '') === 'COINS_INSUFFICIENT') {
-      return c.json({ detail: 'Not enough coins.', code: 'COINS_INSUFFICIENT' }, 409);
-    }
-    console.error('Coin spend failed:', getErrorCode(error), error?.message || error);
-    return c.json({ detail: 'Could not spend coins.', code: 'SPEND_FAILED' }, 500);
-  }
-});
-
-api.post('/admin/wallet/adjust', authMiddleware, async (c) => {
-  try {
-    await requireOwnerOrAdmin(c);
-    const bodyTooLarge = rejectLargeRequest(c, 20_000);
-    if (bodyTooLarge) return bodyTooLarge;
-    const body: any = await c.req.json().catch(() => ({}));
-    const userId = cleanText(body.user_id, 80);
-    const amount = clampNumber(body.coins || body.amount, -1000000, 1000000, 0);
-    if (!userId || amount === 0) {
-      return c.json({ detail: 'Choose a user and a non-zero coin adjustment.', code: 'ADJUSTMENT_INVALID' }, 400);
-    }
-    const adjustmentType = amount > 0 && cleanText(body.type, 40) === 'bonus' ? 'bonus' : 'admin_adjustment';
-    const target: any = await c.env.DB.prepare('SELECT id FROM users WHERE id = ?').bind(userId).first();
-    if (!target) return c.json({ detail: 'That user was not found.', code: 'USER_NOT_FOUND' }, 404);
-    const result = await applyCoinDelta(c, {
-      userId,
-      type: adjustmentType,
-      amount,
-      relatedUserId: getUserId(c),
-      idempotencyKey: getClientRequestId(c, body) || `admin_adjust_${uuid()}`,
-      metadata: { reason: cleanText(body.reason, 500) },
-    });
-    return c.json({ adjusted: true, balance: Number(result.balance.balance || 0), transaction: sanitizeCoinTransaction(result.transaction) });
-  } catch (error: any) {
-    if (String(error?.message || '') === 'COINS_INSUFFICIENT') {
-      return c.json({ detail: 'Adjustment would make the user balance negative.', code: 'COINS_INSUFFICIENT' }, 409);
-    }
-    const forbidden = String(error?.message || '') === 'FORBIDDEN';
-    console.error('Coin admin adjustment failed:', getErrorCode(error), error?.message || error);
-    return c.json({ detail: forbidden ? 'Owner access required.' : 'Could not adjust wallet.', code: forbidden ? 'FORBIDDEN' : 'ADJUSTMENT_FAILED' }, forbidden ? 403 : 500);
-  }
-});
-
 api.post('/stripe/webhook', async (c) => {
   const bodyTooLarge = rejectLargeRequest(c, 500_000);
   if (bodyTooLarge) return bodyTooLarge;
@@ -14616,14 +14304,14 @@ api.post('/stripe/webhook', async (c) => {
     const object = event?.data?.object || {};
     if (event.type === 'checkout.session.completed') {
       const source = cleanText(object?.metadata?.source, 80);
-      if (source === 'flames-up-premium' || object?.mode === 'subscription') {
+      if (source === 'captro-premium' || source === 'flames-up-premium' || object?.mode === 'subscription') {
         await activatePremiumFromCheckoutSession(c, object);
       } else {
         await completeCoinPurchaseFromSession(c, object);
       }
     } else if (event.type === 'checkout.session.expired') {
       const source = cleanText(object?.metadata?.source, 80);
-      if (source === 'flames-up-premium' || object?.mode === 'subscription') {
+      if (source === 'captro-premium' || source === 'flames-up-premium' || object?.mode === 'subscription') {
         await expirePremiumCheckout(c, object);
       } else {
         await markCoinPurchaseExpired(c, object);
@@ -18729,7 +18417,7 @@ api.post('/applications', authMiddleware, async (c) => {
   const body = await c.req.json();
   const { type } = body; // type: 'creator' | 'publisher'
   if (!type || !['creator', 'publisher'].includes(type)) return c.json({ detail: 'Invalid type' }, 400);
-  return c.json({ detail: 'Creator and publisher applications have been removed from Flames Up.' }, 410);
+  return c.json({ detail: 'Creator and publisher applications have been removed from Captro.' }, 410);
 });
 
 // List applications (admin)

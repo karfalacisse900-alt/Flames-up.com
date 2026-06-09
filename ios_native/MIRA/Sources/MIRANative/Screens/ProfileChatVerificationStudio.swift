@@ -253,7 +253,7 @@ public struct ProfileNativeView: View {
           ProfileToolbarDestinationButton(
             systemImage: "checkmark.shield",
             accessibilityLabel: "Verification",
-            destination: WalletNativeView(api: model.api)
+            destination: VerificationNativeView(api: model.api)
           )
           ProfileToolbarDestinationButton(
             systemImage: "gearshape",
@@ -2023,27 +2023,7 @@ private func chatTime(_ value: String?) -> String {
   return "\(max(1, days / 7))w"
 }
 
-@MainActor
-final class WalletNativeModel: ObservableObject {
-  @Published var wallet: MIRAWallet?
-  private let api: MIRAAPIClient
-  private let walletCacheKey = "native.wallet.v2"
-
-  init(api: MIRAAPIClient) {
-    self.api = api
-  }
-
-  func load() async {
-    if wallet == nil {
-      wallet = await MIRALocalJSONCache.load(MIRAWallet.self, key: walletCacheKey)
-    }
-    guard let fresh: MIRAWallet = try? await api.get("/wallet") else { return }
-    wallet = fresh
-    await MIRALocalJSONCache.save(fresh, key: walletCacheKey)
-  }
-}
-
-public struct WalletNativeView: View {
+public struct VerificationNativeView: View {
   private let api: MIRAAPIClient
   @State private var user: MIRAUser?
   @State private var phoneInput = ""

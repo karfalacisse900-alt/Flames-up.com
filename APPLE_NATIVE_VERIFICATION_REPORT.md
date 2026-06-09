@@ -129,7 +129,7 @@ Files changed/verified:
 - `ios_native/MIRA/Sources/MIRANative/Components/MIRACameraCaptureView.swift`
 - `ios_native/MIRA/Sources/MIRANative/Screens/NotificationLibrarySearchCreateViews.swift`
 - `ios_native/MIRA/Sources/MIRANative/Screens/ConversationNativeView.swift`
-- `ios_native/MIRA/Sources/MIRANative/Screens/ProfileChatWalletStudio.swift`
+- `ios_native/MIRA/Sources/MIRANative/Screens/ProfileChatVerificationStudio.swift`
 
 How it works:
 
@@ -341,7 +341,7 @@ Status: implemented
 
 Files changed/verified:
 
-- `ios_native/MIRA/Sources/MIRANative/Screens/ProfileChatWalletStudio.swift`
+- `ios_native/MIRA/Sources/MIRANative/Screens/ProfileChatVerificationStudio.swift`
 
 How it works:
 

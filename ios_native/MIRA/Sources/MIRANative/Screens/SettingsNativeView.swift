@@ -54,7 +54,6 @@ final class SettingsNativeModel: ObservableObject {
   @Published var email = ""
   @Published var isLoading = false
   @Published var isSavingPrivacy = false
-  @Published var isSavingLanguage = false
   @Published var isSavingEmail = false
   @Published var isSavingPassword = false
   @Published var isDeletingAccount = false
@@ -109,31 +108,6 @@ final class SettingsNativeModel: ObservableObject {
     } catch {
       isPrivate = previous
       show(MIRALocalization.shared.string("common.error"), isError: true)
-    }
-  }
-
-  func updateLanguage(_ value: String) async {
-    let previous = language
-    language = value
-    MIRALocalization.shared.setPreference(value)
-    isSavingLanguage = true
-    defer { isSavingLanguage = false }
-    do {
-      let backendLanguage = MIRALanguageResolver.resolvedLanguageCode(for: value)
-      let updated: MIRAUser = try await api.put(
-        "/users/me",
-        body: SettingsProfileUpdateBody(isPrivate: nil, language: backendLanguage)
-      )
-      apply(user: updated)
-      await MIRAAppCacheStore.shared.saveSettings(user: updated, language: value, isPrivate: isPrivate)
-      authSession?.replaceUser(updated)
-      language = value
-      MIRALocalization.shared.setPreference(value)
-      show(MIRALocalization.shared.string("settings.language_updated"))
-    } catch {
-      language = previous
-      MIRALocalization.shared.setPreference(previous)
-      show(MIRALocalization.shared.string("settings.language_failed"), isError: true)
     }
   }
 
@@ -534,7 +508,7 @@ private struct NotificationSettingsNativeView: View {
       }
 
       SettingsCard(title: "Activity") {
-        SettingsToggleRow(title: "Likes", subtitle: "When someone likes your post or note.", systemImage: "heart", isOn: $notifyLikes)
+        SettingsToggleRow(title: "Likes", subtitle: "When someone likes your post.", systemImage: "heart", isOn: $notifyLikes)
         SettingsToggleRow(title: "Comments and replies", subtitle: "When someone comments or replies.", systemImage: "bubble.left", isOn: $notifyComments)
         SettingsToggleRow(title: "Follows", subtitle: "When someone follows you.", systemImage: "person.badge.plus", isOn: $notifyFollows)
         SettingsToggleRow(title: "Messages", subtitle: "New chat messages and calls.", systemImage: "message", isOn: $notifyMessages)
@@ -889,19 +863,6 @@ private struct PreferenceSettingsNativeView: View {
   }
 }
 
-private struct PermissionSettingsNativeView: View {
-  var body: some View {
-    SettingsDetailScaffold(title: "App permissions") {
-      SettingsCard(title: "iPhone access") {
-        SettingsButtonRow(title: "Camera", subtitle: "Used to create posts and stories.", systemImage: "camera") { openAppSettings() }
-        SettingsButtonRow(title: "Photos", subtitle: "Used to choose media from your library.", systemImage: "photo") { openAppSettings() }
-        SettingsButtonRow(title: "Microphone", subtitle: "Used for videos and calls.", systemImage: "mic") { openAppSettings() }
-        SettingsButtonRow(title: "Notifications", subtitle: "Used for likes, comments, messages, and follows.", systemImage: "bell") { openAppSettings() }
-      }
-    }
-  }
-}
-
 private struct SettingsDetailScaffold<Content: View>: View {
   let title: String
   private let content: Content
@@ -1248,17 +1209,6 @@ private extension UIViewController {
     }
     return self
   }
-}
-
-private let languageOptions: [(code: String, label: String)] = [
-  ("system", "System Default"),
-  ("en", "English"),
-  ("fr", "Français"),
-  ("es", "Español"),
-]
-
-private func languageLabel(_ code: String, localization: MIRALocalization) -> String {
-  localization.languageDisplayName(code)
 }
 
 private func openAppSettings() {

@@ -698,19 +698,6 @@ public struct MIRAMediaDimension: Codable, Hashable {
   }
 }
 
-public struct MIRAGifItem: Decodable, Identifiable, Hashable {
-  public let id: String
-  public let title: String?
-  public let previewUrl: String?
-  public let mediaUrl: String?
-  public let width: Int?
-  public let height: Int?
-}
-
-public struct MIRAGifSearchResponse: Decodable, Hashable {
-  public let gifs: [MIRAGifItem]
-}
-
 public struct MIRAAudiusTrack: Codable, Identifiable, Hashable {
   public let id: String
   public let trackId: String?
@@ -1003,12 +990,6 @@ public struct MIRAComment: Codable, Identifiable, Hashable {
       user: user
     )
   }
-}
-
-public struct MIRAWallet: Codable, Hashable {
-  public let balance: Int?
-  public let premiumActive: Bool?
-  public let premiumPlan: String?
 }
 
 public struct MIRAConversation: Codable, Identifiable, Hashable {
@@ -1494,14 +1475,6 @@ public struct MIRALibraryCollection: Decodable, Identifiable, Hashable {
   public let collection: String?
   public let name: String?
   public let count: Int?
-}
-
-public struct MIRAWalletTransaction: Decodable, Identifiable, Hashable {
-  public let id: String
-  public let amount: Int?
-  public let direction: String?
-  public let reason: String?
-  public let createdAt: String?
 }
 
 public struct CreatePostBody: Encodable {
