@@ -323,12 +323,18 @@ final class MainFeedModel: ObservableObject {
     do {
       let response: PostSaveResponse = try await api.post("/library/save/\(post.id)", body: SaveCollectionBody(collection: collection))
       if let currentIndex = posts.firstIndex(where: { $0.id == post.id }) {
+        let reconciledSavesCount = stableEngagementCount(
+          current: previous.savesCount,
+          incoming: response.savesCount,
+          optimistic: nextCount,
+          toggledOn: response.saved ?? true
+        )
         posts[currentIndex] = posts[currentIndex].updating(
           liked: response.liked,
           likesCount: response.likesCount,
           commentsCount: response.commentsCount,
           saved: response.saved ?? true,
-          savesCount: response.savesCount ?? nextCount
+          savesCount: reconciledSavesCount
         )
         publishEngagement(for: posts[currentIndex])
         cacheCurrentPosts()
@@ -350,12 +356,18 @@ final class MainFeedModel: ObservableObject {
     do {
       let response: PostSaveResponse = try await api.delete("/library/save/\(post.id)")
       if let currentIndex = posts.firstIndex(where: { $0.id == post.id }) {
+        let reconciledSavesCount = stableEngagementCount(
+          current: previous.savesCount,
+          incoming: response.savesCount,
+          optimistic: nextCount,
+          toggledOn: response.saved ?? false
+        )
         posts[currentIndex] = posts[currentIndex].updating(
           liked: response.liked,
           likesCount: response.likesCount,
           commentsCount: response.commentsCount,
           saved: response.saved ?? false,
-          savesCount: response.savesCount ?? nextCount
+          savesCount: reconciledSavesCount
         )
         publishEngagement(for: posts[currentIndex])
         cacheCurrentPosts()
@@ -606,8 +618,14 @@ final class MainFeedModel: ObservableObject {
   }
 
   private func stableEngagementCount(current: Int?, incoming: Int?, optimistic: Int? = nil, toggledOn: Bool? = nil) -> Int? {
-    guard let incoming else { return optimistic ?? current }
-    return max(0, incoming)
+    let fallback = optimistic ?? current
+    guard let incoming else { return fallback }
+    let normalizedIncoming = max(0, incoming)
+    guard let optimistic, let toggledOn else { return normalizedIncoming }
+    let normalizedOptimistic = max(0, optimistic)
+    return toggledOn
+      ? max(normalizedIncoming, normalizedOptimistic)
+      : min(normalizedIncoming, normalizedOptimistic)
   }
 
   private func sortedByNativeScore(_ posts: [MIRAPost]) async -> [MIRAPost] {

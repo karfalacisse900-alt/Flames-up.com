@@ -5075,6 +5075,9 @@ function feedPostPayload(post: any, likedBy: string[] = [], env?: Env) {
 async function getPostEngagementState(db: D1Database, postId: string, userId: string) {
   await ensureLikeUniquenessSchema(db);
   await reconcileLegacyDiscoverLikes(db, postId);
+  await coalesceViewerPostInteractions(db, postId, userId);
+  const relatedUserIds = await relatedInteractionUserIds(db, userId);
+  const relatedPlaceholders = inPlaceholders(relatedUserIds);
   const row: any = await db.prepare(
     `SELECT
        COALESCE(p.likes_count, 0) AS stored_likes_count,
@@ -5083,10 +5086,10 @@ async function getPostEngagementState(db: D1Database, postId: string, userId: st
        (SELECT COUNT(*) FROM likes WHERE post_id = p.id) AS counted_likes_count,
        (SELECT COUNT(*) FROM comments WHERE post_id = p.id AND COALESCE(status, 'active') NOT IN ('removed', 'hidden')) AS counted_comments_count,
        (SELECT COUNT(*) FROM saved_posts WHERE post_id = p.id) AS counted_saves_count,
-       EXISTS (SELECT 1 FROM likes WHERE user_id = ? AND post_id = ?) AS is_liked,
-       EXISTS (SELECT 1 FROM saved_posts WHERE user_id = ? AND post_id = ?) AS saved`
+       EXISTS (SELECT 1 FROM likes WHERE post_id = ? AND user_id IN (${relatedPlaceholders})) AS is_liked,
+       EXISTS (SELECT 1 FROM saved_posts WHERE post_id = ? AND user_id IN (${relatedPlaceholders})) AS saved`
   + ' FROM posts p WHERE p.id = ?'
-  ).bind(userId, postId, userId, postId, postId).first();
+  ).bind(postId, ...relatedUserIds, postId, ...relatedUserIds, postId).first();
 
   const state = {
     likes_count: Math.max(0, Number(row?.counted_likes_count || 0)),
@@ -5132,6 +5135,127 @@ function postEngagementResponse(state: any, extra: Record<string, unknown> = {})
     viewer_saved: saved,
     saves_count: savesCount,
   };
+}
+
+async function relatedInteractionUserIds(db: D1Database, userId: string): Promise<string[]> {
+  const cleanUserId = publicId(userId, 120);
+  if (!cleanUserId) return [];
+  const ids = new Set<string>([cleanUserId]);
+
+  try {
+    const user: any = await db.prepare(
+      'SELECT id, email, supabase_user_id, oauth_provider, oauth_subject FROM users WHERE id = ?'
+    ).bind(cleanUserId).first();
+    const email = normalizeOptionalEmail(user?.email);
+    const supabaseUserId = cleanText(user?.supabase_user_id, 120);
+    const oauthProvider = normalizeAuthProvider(user?.oauth_provider);
+    const oauthSubject = cleanText(user?.oauth_subject, 240);
+    const conditions = ['id = ?'];
+    const binds: any[] = [cleanUserId];
+    if (supabaseUserId) {
+      conditions.push('supabase_user_id = ?');
+      binds.push(supabaseUserId);
+    }
+    if (email && !isInternalOAuthEmail(email)) {
+      conditions.push('LOWER(email) = ?');
+      binds.push(email);
+    }
+    if (oauthSubject) {
+      conditions.push('(oauth_provider = ? AND oauth_subject = ?)');
+      binds.push(oauthProvider, oauthSubject);
+    }
+    const rows = await db.prepare(`SELECT id FROM users WHERE ${conditions.join(' OR ')} LIMIT 20`)
+      .bind(...binds)
+      .all();
+    for (const row of rows.results as any[]) {
+      const id = publicId(row?.id, 120);
+      if (id) ids.add(id);
+    }
+  } catch {}
+
+  try {
+    const rows = await db.prepare(
+      `SELECT DISTINCT ai2.user_id
+       FROM account_identities ai1
+       JOIN account_identities ai2
+         ON ai2.provider = ai1.provider
+        AND ai2.provider_user_id = ai1.provider_user_id
+       WHERE ai1.user_id = ?
+       LIMIT 20`
+    ).bind(cleanUserId).all();
+    for (const row of rows.results as any[]) {
+      const id = publicId(row?.user_id, 120);
+      if (id) ids.add(id);
+    }
+  } catch {}
+
+  return Array.from(ids).slice(0, 20);
+}
+
+function inPlaceholders(values: unknown[]): string {
+  return values.map(() => '?').join(', ');
+}
+
+async function deletePostLikesForUsers(db: D1Database, postId: string, userIds: string[]) {
+  if (!userIds.length) return;
+  const placeholders = inPlaceholders(userIds);
+  await db.batch([
+    db.prepare(`DELETE FROM likes WHERE post_id = ? AND user_id IN (${placeholders})`).bind(postId, ...userIds),
+    db.prepare(`DELETE FROM discover_likes WHERE post_id = ? AND user_id IN (${placeholders})`).bind(postId, ...userIds),
+  ]);
+}
+
+async function deletePostSavesForUsers(db: D1Database, postId: string, userIds: string[]) {
+  if (!userIds.length) return;
+  const placeholders = inPlaceholders(userIds);
+  await db.prepare(`DELETE FROM saved_posts WHERE post_id = ? AND user_id IN (${placeholders})`)
+    .bind(postId, ...userIds)
+    .run();
+  try {
+    await db.prepare(`DELETE FROM bookmarks WHERE post_id = ? AND user_id IN (${placeholders})`)
+      .bind(postId, ...userIds)
+      .run();
+  } catch {}
+}
+
+async function coalesceViewerPostInteractions(db: D1Database, postId: string, userId: string): Promise<string[]> {
+  const userIds = await relatedInteractionUserIds(db, userId);
+  if (userIds.length <= 1) return userIds;
+  const placeholders = inPlaceholders(userIds);
+
+  const likeRow: any = await db.prepare(
+    `SELECT 1 AS found FROM likes WHERE post_id = ? AND user_id IN (${placeholders}) LIMIT 1`
+  ).bind(postId, ...userIds).first();
+  if (likeRow) {
+    await deletePostLikesForUsers(db, postId, userIds);
+    await db.prepare('INSERT OR IGNORE INTO likes (id, user_id, post_id) VALUES (?, ?, ?)')
+      .bind(uuid(), userId, postId)
+      .run();
+    await db.prepare(
+      `INSERT OR IGNORE INTO discover_likes (id, user_id, post_id)
+       SELECT ?, ?, ?
+       WHERE EXISTS (SELECT 1 FROM discover_posts WHERE id = ?)`
+    ).bind(uuid(), userId, postId, postId).run().catch(() => {});
+  }
+
+  const saveRow: any = await db.prepare(
+    `SELECT collection FROM saved_posts
+     WHERE post_id = ? AND user_id IN (${placeholders})
+     ORDER BY COALESCE(created_at, '') DESC
+     LIMIT 1`
+  ).bind(postId, ...userIds).first();
+  if (saveRow) {
+    const collection = cleanText(saveRow.collection || 'saved', 80) || 'saved';
+    await deletePostSavesForUsers(db, postId, userIds);
+    await db.prepare('INSERT OR IGNORE INTO saved_posts (id, user_id, post_id, collection) VALUES (?, ?, ?, ?)')
+      .bind(uuid(), userId, postId, collection)
+      .run();
+    await db.prepare(
+      'INSERT INTO bookmarks (id, user_id, post_id, collection) VALUES (?, ?, ?, ?) ON CONFLICT(user_id, post_id) DO UPDATE SET collection = ?'
+    ).bind(uuid(), userId, postId, collection, collection).run().catch(() => {});
+  }
+
+  return userIds;
 }
 
 async function isFriend(db: D1Database, userId: string, targetId: string): Promise<boolean> {
@@ -11062,13 +11186,15 @@ api.get('/posts/feed', authMiddleware, async (c) => {
   await ensureLocationSchema(c.env.DB);
   await ensureMediaModerationSchema(c.env.DB);
   await ensureLikeUniquenessSchema(c.env.DB);
+  const relatedUserIds = await relatedInteractionUserIds(c.env.DB, userId);
+  const relatedPlaceholders = inPlaceholders(relatedUserIds);
   const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
   const limit = clampNumber(c.req.query('limit') || '20', 1, 50, 20);
   const feedSql = [
     `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
        EXISTS (SELECT 1 FROM follows fl WHERE fl.follower_id = ? AND fl.following_id = p.user_id) AS is_following,
-       EXISTS (SELECT 1 FROM likes lk WHERE lk.user_id = ? AND lk.post_id = p.id) AS is_liked,
-       EXISTS (SELECT 1 FROM saved_posts sp WHERE sp.user_id = ? AND sp.post_id = p.id) AS saved,
+       EXISTS (SELECT 1 FROM likes lk WHERE lk.post_id = p.id AND lk.user_id IN (${relatedPlaceholders})) AS is_liked,
+       EXISTS (SELECT 1 FROM saved_posts sp WHERE sp.post_id = p.id AND sp.user_id IN (${relatedPlaceholders})) AS saved,
        (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
        MAX(COALESCE(p.comments_count, 0), (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden'))) AS live_comments_count,
        MAX(COALESCE(p.saves_count, 0), (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id)) AS live_saves_count
@@ -11076,7 +11202,7 @@ api.get('/posts/feed', authMiddleware, async (c) => {
     `WHERE ${visiblePostWhere('u', 'p')} AND ${feedPhotoPostWhere('p')}`,
     'ORDER BY p.created_at DESC LIMIT ? OFFSET ?',
   ].join(' ');
-  const posts = await c.env.DB.prepare(feedSql).bind(userId, userId, userId, ...visiblePostBindValues(userId), limit, skip).all();
+  const posts = await c.env.DB.prepare(feedSql).bind(userId, ...relatedUserIds, ...relatedUserIds, ...visiblePostBindValues(userId), limit, skip).all();
   const response = c.json(feedPhotoPostsOnly(posts.results as any[]).map((p) => feedPostPayload(p, [], c.env)));
   response.headers.set('cache-control', 'private, max-age=6');
   return response;
@@ -11146,18 +11272,20 @@ api.get('/posts/:postId', authMiddleware, async (c) => {
   await ensureLocationSchema(c.env.DB);
   await ensureMediaModerationSchema(c.env.DB);
   await ensureLikeUniquenessSchema(c.env.DB);
+  const relatedUserIds = await relatedInteractionUserIds(c.env.DB, userId);
+  const relatedPlaceholders = inPlaceholders(relatedUserIds);
   const postByIdSql = [
     `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
        EXISTS (SELECT 1 FROM follows fl WHERE fl.follower_id = ? AND fl.following_id = p.user_id) AS is_following,
-       EXISTS (SELECT 1 FROM likes lk WHERE lk.user_id = ? AND lk.post_id = p.id) AS is_liked,
-       EXISTS (SELECT 1 FROM saved_posts sp WHERE sp.user_id = ? AND sp.post_id = p.id) AS saved,
+       EXISTS (SELECT 1 FROM likes lk WHERE lk.post_id = p.id AND lk.user_id IN (${relatedPlaceholders})) AS is_liked,
+       EXISTS (SELECT 1 FROM saved_posts sp WHERE sp.post_id = p.id AND sp.user_id IN (${relatedPlaceholders})) AS saved,
        (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
        MAX(COALESCE(p.comments_count, 0), (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden'))) AS live_comments_count,
        MAX(COALESCE(p.saves_count, 0), (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id)) AS live_saves_count
      FROM posts p JOIN users u ON p.user_id = u.id`,
     `WHERE p.id = ? AND ${visiblePostWhere('u', 'p')} AND ${feedPhotoPostWhere('p')}`,
   ].join(' ');
-  const p: any = await c.env.DB.prepare(postByIdSql).bind(userId, userId, userId, postId, ...visiblePostBindValues(userId)).first();
+  const p: any = await c.env.DB.prepare(postByIdSql).bind(userId, ...relatedUserIds, ...relatedUserIds, postId, ...visiblePostBindValues(userId)).first();
   if (!p) return c.json({ detail: 'Post not found' }, 404);
   const likes = await c.env.DB.prepare('SELECT user_id FROM likes WHERE post_id = ?').bind(postId).all();
   return c.json(postPayload(p, likes.results.map((l: any) => l.user_id), c.env));
@@ -11172,6 +11300,7 @@ api.post('/posts/:postId/like', authMiddleware, async (c) => {
   if (limited) return limited;
   const body: any = await c.req.json().catch(() => ({}));
   const requested = optionalBoolean(body.liked ?? body.like ?? body.value);
+  const relatedUserIds = await coalesceViewerPostInteractions(c.env.DB, postId, userId);
   const likeVisiblePostSql = [
     `SELECT p.id, p.user_id,
        (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS likes_count,
@@ -11192,6 +11321,7 @@ api.post('/posts/:postId/like', authMiddleware, async (c) => {
   }
 
   if (nextLiked) {
+    await deletePostLikesForUsers(c.env.DB, postId, relatedUserIds);
     await c.env.DB.prepare('INSERT OR IGNORE INTO likes (id, user_id, post_id) VALUES (?, ?, ?)')
       .bind(uuid(), userId, postId)
       .run();
@@ -11201,10 +11331,7 @@ api.post('/posts/:postId/like', authMiddleware, async (c) => {
        WHERE EXISTS (SELECT 1 FROM discover_posts WHERE id = ?)`
     ).bind(uuid(), userId, postId, postId).run();
   } else {
-    await c.env.DB.batch([
-      c.env.DB.prepare('DELETE FROM likes WHERE user_id = ? AND post_id = ?').bind(userId, postId),
-      c.env.DB.prepare('DELETE FROM discover_likes WHERE user_id = ? AND post_id = ?').bind(userId, postId),
-    ]);
+    await deletePostLikesForUsers(c.env.DB, postId, relatedUserIds);
   }
   const state = await getPostEngagementState(c.env.DB, postId, userId);
   await c.env.DB.prepare('UPDATE discover_posts SET likes_count = ? WHERE id = ?')
@@ -12748,31 +12875,35 @@ api.post('/client/events', async (c) => {
 api.get('/library/liked', authMiddleware, async (c) => {
   await ensureLikeUniquenessSchema(c.env.DB);
   const userId = getUserId(c);
+  const relatedUserIds = await relatedInteractionUserIds(c.env.DB, userId);
+  const relatedPlaceholders = inPlaceholders(relatedUserIds);
   const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
   const limit = clampNumber(c.req.query('limit') || '40', 1, 80, 40);
   const likedLibrarySql = [
     `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
        1 AS is_liked,
-       EXISTS (SELECT 1 FROM saved_posts sp WHERE sp.user_id = ? AND sp.post_id = p.id) AS saved,
+       EXISTS (SELECT 1 FROM saved_posts sp WHERE sp.post_id = p.id AND sp.user_id IN (${relatedPlaceholders})) AS saved,
        (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
        (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden')) AS live_comments_count,
        (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id) AS live_saves_count
      FROM likes l JOIN posts p ON l.post_id = p.id JOIN users u ON p.user_id = u.id`,
-    `WHERE l.user_id = ? AND ${visiblePostWhere('u', 'p')} AND ${feedPhotoPostWhere('p')}`,
-    'ORDER BY l.created_at DESC LIMIT ? OFFSET ?',
+    `WHERE l.user_id IN (${relatedPlaceholders}) AND ${visiblePostWhere('u', 'p')} AND ${feedPhotoPostWhere('p')}`,
+    'GROUP BY p.id ORDER BY MAX(l.created_at) DESC LIMIT ? OFFSET ?',
   ].join(' ');
-  const r = await c.env.DB.prepare(likedLibrarySql).bind(userId, userId, ...visiblePostBindValues(userId), limit, skip).all();
+  const r = await c.env.DB.prepare(likedLibrarySql).bind(...relatedUserIds, ...relatedUserIds, ...visiblePostBindValues(userId), limit, skip).all();
   return c.json(feedPhotoPostsOnly(r.results as any[]).map((p) => feedPostPayload(p, [], c.env)));
 });
 api.get('/library/saved', authMiddleware, async (c) => {
   await ensureLikeUniquenessSchema(c.env.DB);
   const userId = getUserId(c);
+  const relatedUserIds = await relatedInteractionUserIds(c.env.DB, userId);
+  const relatedPlaceholders = inPlaceholders(relatedUserIds);
   const collection = c.req.query('collection');
   const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
   const limit = clampNumber(c.req.query('limit') || '40', 1, 80, 40);
   const savedLibraryBaseSql = [
     `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image, sp.collection,
-      EXISTS (SELECT 1 FROM likes lk WHERE lk.user_id = ? AND lk.post_id = p.id) AS is_liked,
+      EXISTS (SELECT 1 FROM likes lk WHERE lk.post_id = p.id AND lk.user_id IN (${relatedPlaceholders})) AS is_liked,
       1 AS saved,
       (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
       (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden')) AS live_comments_count,
@@ -12780,15 +12911,15 @@ api.get('/library/saved', authMiddleware, async (c) => {
     FROM saved_posts sp
     JOIN posts p ON sp.post_id = p.id
     JOIN users u ON p.user_id = u.id`,
-    `WHERE sp.user_id = ? AND ${visiblePostWhere('u', 'p')} AND ${feedPhotoPostWhere('p')}`,
+    `WHERE sp.user_id IN (${relatedPlaceholders}) AND ${visiblePostWhere('u', 'p')} AND ${feedPhotoPostWhere('p')}`,
   ];
   let sql = savedLibraryBaseSql.join(' ');
-  const binds: any[] = [userId, userId, ...visiblePostBindValues(userId)];
+  const binds: any[] = [...relatedUserIds, ...relatedUserIds, ...visiblePostBindValues(userId)];
   if (collection) {
     sql += ' AND sp.collection = ?';
     binds.push(collection);
   }
-  sql += ' ORDER BY sp.created_at DESC LIMIT ? OFFSET ?';
+  sql += ' GROUP BY p.id ORDER BY MAX(sp.created_at) DESC LIMIT ? OFFSET ?';
   binds.push(limit, skip);
   const r = await c.env.DB.prepare(sql).bind(...binds).all();
   return c.json(feedPhotoPostsOnly(r.results as any[]).map((p) => feedPostPayload(p, [], c.env)));
@@ -12809,12 +12940,12 @@ api.post('/library/save/:postId', authMiddleware, async (c) => {
   ].join(' ');
   const post = await c.env.DB.prepare(saveVisiblePostSql).bind(postId, ...visiblePostBindValues(userId)).first();
   if (!post) return c.json({ detail: 'Post not found' }, 404);
+  await coalesceViewerPostInteractions(c.env.DB, postId, userId);
   const existingSave = await c.env.DB.prepare('SELECT id FROM saved_posts WHERE user_id = ? AND post_id = ?').bind(userId, postId).first();
   if (existingSave) {
     await c.env.DB.prepare('UPDATE saved_posts SET collection = ? WHERE user_id = ? AND post_id = ?').bind(collection, userId, postId).run();
   } else {
     await c.env.DB.prepare('INSERT OR IGNORE INTO saved_posts (id, user_id, post_id, collection) VALUES (?, ?, ?, ?)').bind(uuid(), userId, postId, collection).run();
-    await c.env.DB.prepare('UPDATE posts SET saves_count = COALESCE(saves_count, 0) + 1 WHERE id = ?').bind(postId).run();
   }
   try {
     await c.env.DB.prepare('INSERT INTO bookmarks (id, user_id, post_id, collection) VALUES (?, ?, ?, ?) ON CONFLICT(user_id, post_id) DO UPDATE SET collection = ?')
@@ -12834,12 +12965,11 @@ api.delete('/library/save/:postId', authMiddleware, async (c) => {
   const limited = await enforceRateLimit(c, 'save_post', userId, 240, 60);
   if (limited) return limited;
   const postId = c.req.param('postId');
+  const relatedUserIds = await coalesceViewerPostInteractions(c.env.DB, postId, userId);
   const existingSave = await c.env.DB.prepare('SELECT id FROM saved_posts WHERE user_id = ? AND post_id = ?').bind(userId, postId).first();
   if (existingSave) {
-    await c.env.DB.prepare('DELETE FROM saved_posts WHERE user_id = ? AND post_id = ?').bind(userId, postId).run();
-    await c.env.DB.prepare('UPDATE posts SET saves_count = MAX(0, COALESCE(saves_count, 0) - 1) WHERE id = ?').bind(postId).run();
+    await deletePostSavesForUsers(c.env.DB, postId, relatedUserIds);
   }
-  try { await c.env.DB.prepare('DELETE FROM bookmarks WHERE user_id = ? AND post_id = ?').bind(userId, postId).run(); } catch {}
   const engagement = await getPostEngagementState(c.env.DB, postId, userId);
   if (existingSave) {
     runBackgroundTask(c, 'supabase_unsave_write_through_failed', async () => {
@@ -12851,7 +12981,15 @@ api.delete('/library/save/:postId', authMiddleware, async (c) => {
 });
 api.get('/library/collections', authMiddleware, async (c) => {
   await ensureLikeUniquenessSchema(c.env.DB);
-  const r = await c.env.DB.prepare('SELECT collection, COUNT(*) as count FROM saved_posts WHERE user_id = ? GROUP BY collection').bind(getUserId(c)).all();
+  const userId = getUserId(c);
+  const relatedUserIds = await relatedInteractionUserIds(c.env.DB, userId);
+  const relatedPlaceholders = inPlaceholders(relatedUserIds);
+  const r = await c.env.DB.prepare(
+    `SELECT collection, COUNT(DISTINCT post_id) as count
+     FROM saved_posts
+     WHERE user_id IN (${relatedPlaceholders})
+     GROUP BY collection`
+  ).bind(...relatedUserIds).all();
   return c.json(r.results);
 });
 
@@ -13305,6 +13443,8 @@ api.get('/discover', authMiddleware, async (c) => {
   await ensureAutoCategorySchema(c.env.DB);
   await ensureMediaModerationSchema(c.env.DB);
   await ensureLikeUniquenessSchema(c.env.DB);
+  const relatedUserIds = await relatedInteractionUserIds(c.env.DB, userId);
+  const relatedPlaceholders = inPlaceholders(relatedUserIds);
   const rawCategory = c.req.query('category') || 'all';
   const category = normalizeDiscoverCategory(rawCategory, true);
   if (!category) return c.json({ detail: 'Unknown Discover category.' }, 400);
@@ -13315,7 +13455,7 @@ api.get('/discover', authMiddleware, async (c) => {
     "COALESCE(p.discover_blocked_at, '') = ''",
     feedPhotoPostWhere('p'),
   ];
-  const binds: any[] = [userId, userId, userId, ...visiblePostBindValues(userId)];
+  const binds: any[] = [userId, ...relatedUserIds, ...relatedUserIds, ...visiblePostBindValues(userId)];
   if (category !== 'all') {
     const categoryMatch = discoverCategoryCondition('p', category);
     conditions.push(categoryMatch.sql);
@@ -13324,8 +13464,8 @@ api.get('/discover', authMiddleware, async (c) => {
   const sql = [
     `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
        EXISTS (SELECT 1 FROM follows fl WHERE fl.follower_id = ? AND fl.following_id = p.user_id) AS is_following,
-       EXISTS (SELECT 1 FROM likes lk WHERE lk.user_id = ? AND lk.post_id = p.id) AS is_liked,
-       EXISTS (SELECT 1 FROM saved_posts sp WHERE sp.user_id = ? AND sp.post_id = p.id) AS saved,
+       EXISTS (SELECT 1 FROM likes lk WHERE lk.post_id = p.id AND lk.user_id IN (${relatedPlaceholders})) AS is_liked,
+       EXISTS (SELECT 1 FROM saved_posts sp WHERE sp.post_id = p.id AND sp.user_id IN (${relatedPlaceholders})) AS saved,
        (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
        MAX(COALESCE(p.comments_count, 0), (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden'))) AS live_comments_count,
        MAX(COALESCE(p.saves_count, 0), (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id)) AS live_saves_count
@@ -14293,6 +14433,7 @@ api.post('/discover/posts/:postId/like', authMiddleware, async (c) => {
   const canonicalPost = await c.env.DB.prepare('SELECT id FROM posts WHERE id = ?').bind(postId).first();
   if (canonicalPost) {
     await reconcileLegacyDiscoverLikes(c.env.DB, postId);
+    const relatedUserIds = await coalesceViewerPostInteractions(c.env.DB, postId, userId);
     const likeVisiblePostSql = [
       `SELECT p.id, p.user_id,
          EXISTS (SELECT 1 FROM likes lk WHERE lk.user_id = ? AND lk.post_id = p.id) AS is_liked,
@@ -14312,19 +14453,17 @@ api.post('/discover/posts/:postId/like', authMiddleware, async (c) => {
     }
 
     if (nextLiked) {
+      await deletePostLikesForUsers(c.env.DB, postId, relatedUserIds);
       await c.env.DB.prepare('INSERT OR IGNORE INTO likes (id, user_id, post_id) VALUES (?, ?, ?)')
         .bind(uuid(), userId, postId)
         .run();
       await c.env.DB.prepare(
         `INSERT OR IGNORE INTO discover_likes (id, user_id, post_id)
          SELECT ?, ?, ?
-         WHERE EXISTS (SELECT 1 FROM discover_posts WHERE id = ?)`
+       WHERE EXISTS (SELECT 1 FROM discover_posts WHERE id = ?)`
       ).bind(uuid(), userId, postId, postId).run();
     } else {
-      await c.env.DB.batch([
-        c.env.DB.prepare('DELETE FROM likes WHERE user_id = ? AND post_id = ?').bind(userId, postId),
-        c.env.DB.prepare('DELETE FROM discover_likes WHERE user_id = ? AND post_id = ?').bind(userId, postId),
-      ]);
+      await deletePostLikesForUsers(c.env.DB, postId, relatedUserIds);
     }
 
     const state = await getPostEngagementState(c.env.DB, postId, userId);
@@ -14358,24 +14497,33 @@ api.post('/discover/posts/:postId/like', authMiddleware, async (c) => {
   }
 
   let nextLiked = requested;
+  const relatedUserIds = await relatedInteractionUserIds(c.env.DB, userId);
+  const relatedPlaceholders = inPlaceholders(relatedUserIds);
   if (nextLiked === null) {
-    const ex = await c.env.DB.prepare('SELECT id FROM discover_likes WHERE user_id = ? AND post_id = ?').bind(userId, postId).first();
+    const ex = await c.env.DB.prepare(
+      `SELECT id FROM discover_likes WHERE post_id = ? AND user_id IN (${relatedPlaceholders}) LIMIT 1`
+    ).bind(postId, ...relatedUserIds).first();
     nextLiked = !ex;
   }
   const post = await c.env.DB.prepare('SELECT id FROM discover_posts WHERE id = ?').bind(postId).first();
   if (!post) return c.json({ detail: 'Post not found' }, 404);
   if (nextLiked) {
+    await c.env.DB.prepare(`DELETE FROM discover_likes WHERE post_id = ? AND user_id IN (${relatedPlaceholders})`)
+      .bind(postId, ...relatedUserIds)
+      .run();
     await c.env.DB.prepare('INSERT OR IGNORE INTO discover_likes (id, user_id, post_id) VALUES (?, ?, ?)')
       .bind(uuid(), userId, postId)
       .run();
   } else {
-    await c.env.DB.prepare('DELETE FROM discover_likes WHERE user_id = ? AND post_id = ?').bind(userId, postId).run();
+    await c.env.DB.prepare(`DELETE FROM discover_likes WHERE post_id = ? AND user_id IN (${relatedPlaceholders})`)
+      .bind(postId, ...relatedUserIds)
+      .run();
   }
   const likeRow: any = await c.env.DB.prepare(
     `SELECT COUNT(*) AS likes_count,
-      EXISTS (SELECT 1 FROM discover_likes WHERE user_id = ? AND post_id = ?) AS liked
+      EXISTS (SELECT 1 FROM discover_likes WHERE post_id = ? AND user_id IN (${relatedPlaceholders})) AS liked
      FROM discover_likes WHERE post_id = ?`
-  ).bind(userId, postId, postId).first();
+  ).bind(postId, ...relatedUserIds, postId).first();
   const likesCount = Math.max(0, Number(likeRow?.likes_count || 0));
   const liked = likeRow?.liked === true || likeRow?.liked === 1 || likeRow?.liked === '1';
   await c.env.DB.prepare('UPDATE discover_posts SET likes_count = ? WHERE id = ?').bind(likesCount, postId).run();
@@ -17733,12 +17881,12 @@ api.post('/bookmarks', authMiddleware, async (c) => {
     const post = await c.env.DB.prepare('SELECT id FROM posts WHERE id = ?').bind(postId).first();
     if (!post) return c.json({ detail: 'Post not found' }, 404);
     const collectionName = cleanText(collection || 'saved', 80) || 'saved';
+    await coalesceViewerPostInteractions(c.env.DB, postId, userId);
     const existingSave = await c.env.DB.prepare('SELECT id FROM saved_posts WHERE user_id = ? AND post_id = ?').bind(userId, postId).first();
     if (existingSave) {
       await c.env.DB.prepare('UPDATE saved_posts SET collection = ? WHERE user_id = ? AND post_id = ?').bind(collectionName, userId, postId).run();
     } else {
       await c.env.DB.prepare('INSERT OR IGNORE INTO saved_posts (id, user_id, post_id, collection) VALUES (?, ?, ?, ?)').bind(uuid(), userId, postId, collectionName).run();
-      await c.env.DB.prepare('UPDATE posts SET saves_count = COALESCE(saves_count, 0) + 1 WHERE id = ?').bind(postId).run();
     }
     const engagement = await getPostEngagementState(c.env.DB, postId, userId);
     try {
@@ -17764,12 +17912,11 @@ api.delete('/bookmarks/:postId', authMiddleware, async (c) => {
   const limited = await enforceRateLimit(c, 'save_post', userId, 240, 60);
   if (limited) return limited;
   const postId = publicId(c.req.param('postId'), 120);
+  const relatedUserIds = await coalesceViewerPostInteractions(c.env.DB, postId, userId);
   const existingSave = await c.env.DB.prepare('SELECT id FROM saved_posts WHERE user_id = ? AND post_id = ?').bind(userId, postId).first();
   if (existingSave) {
-    await c.env.DB.prepare('DELETE FROM saved_posts WHERE user_id = ? AND post_id = ?').bind(userId, postId).run();
-    await c.env.DB.prepare('UPDATE posts SET saves_count = MAX(0, COALESCE(saves_count, 0) - 1) WHERE id = ?').bind(postId).run();
+    await deletePostSavesForUsers(c.env.DB, postId, relatedUserIds);
   }
-  try { await c.env.DB.prepare('DELETE FROM bookmarks WHERE user_id = ? AND post_id = ?').bind(userId, postId).run(); } catch {}
   if (existingSave) {
     runBackgroundTask(c, 'supabase_bookmark_delete_write_through_failed', async () => {
       await mirrorLegacyInteractionToSupabase(c, postId, userId, 'save', false);
@@ -17784,11 +17931,17 @@ api.delete('/bookmarks/:postId', authMiddleware, async (c) => {
 api.get('/bookmarks', authMiddleware, async (c) => {
   const userId = getUserId(c);
   await ensureLikeUniquenessSchema(c.env.DB);
+  const relatedUserIds = await relatedInteractionUserIds(c.env.DB, userId);
+  const relatedPlaceholders = inPlaceholders(relatedUserIds);
   const collection = cleanText(c.req.query('collection'), 80);
-  let q = 'SELECT b.*, p.content, p.image, p.images, p.likes_count, p.post_type, p.created_at as post_date, u.full_name, u.username, u.profile_image FROM bookmarks b JOIN posts p ON b.post_id = p.id JOIN users u ON p.user_id = u.id WHERE b.user_id = ?';
-  const binds: any[] = [userId];
+  let q = `SELECT b.*, p.content, p.image, p.images, p.likes_count, p.post_type, p.created_at as post_date, u.full_name, u.username, u.profile_image
+    FROM bookmarks b
+    JOIN posts p ON b.post_id = p.id
+    JOIN users u ON p.user_id = u.id
+    WHERE b.user_id IN (${relatedPlaceholders})`;
+  const binds: any[] = [...relatedUserIds];
   if (collection) { q += ' AND b.collection = ?'; binds.push(collection); }
-  q += ' ORDER BY b.created_at DESC';
+  q += ' GROUP BY p.id ORDER BY MAX(b.created_at) DESC';
   const { results } = await c.env.DB.prepare(q).bind(...binds).all();
   return c.json({ bookmarks: results || [] });
 });
@@ -17798,12 +17951,14 @@ api.get('/bookmarks/check/:postId', authMiddleware, async (c) => {
   const userId = getUserId(c);
   await ensureLikeUniquenessSchema(c.env.DB);
   const postId = c.req.param('postId');
+  const relatedUserIds = await relatedInteractionUserIds(c.env.DB, userId);
+  const relatedPlaceholders = inPlaceholders(relatedUserIds);
   const r: any = await c.env.DB.prepare(
-    `SELECT collection FROM bookmarks WHERE user_id = ? AND post_id = ?
+    `SELECT collection FROM bookmarks WHERE post_id = ? AND user_id IN (${relatedPlaceholders})
      UNION
-     SELECT collection FROM saved_posts WHERE user_id = ? AND post_id = ?
+     SELECT collection FROM saved_posts WHERE post_id = ? AND user_id IN (${relatedPlaceholders})
      LIMIT 1`
-  ).bind(userId, postId, userId, postId).first();
+  ).bind(postId, ...relatedUserIds, postId, ...relatedUserIds).first();
   return c.json({ saved: !!r, collection: r?.collection || null });
 });
 
