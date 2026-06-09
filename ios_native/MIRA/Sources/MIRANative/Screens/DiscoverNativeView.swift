@@ -112,23 +112,33 @@ final class DiscoverNativeModel: ObservableObject {
       if loaded.isEmpty && category == "all" {
         loaded = photoDiscoverPosts((try? await api.get("/posts/world-board?limit=24")) ?? [])
       }
-      if posts != loaded {
-        posts = loaded
+      let merged = await MIRAAppCacheStore.shared.mergeFreshPostsPreservingViewerState(
+        existing: posts,
+        fresh: loaded,
+        maxCount: 90
+      )
+      if posts != merged {
+        posts = merged
       }
-      prefetchVisibleMedia(loaded)
-      await MIRAAppCacheStore.shared.saveDiscoverPosts(loaded, category: category)
-      if !loaded.isEmpty {
+      prefetchVisibleMedia(merged)
+      await MIRAAppCacheStore.shared.saveDiscoverPosts(merged, category: category)
+      if !merged.isEmpty {
         MIRAPerformanceTimeline.markOnce("discover_first_content", detail: "posts_network")
       }
     } catch {
       if category == "all", let fallback: [MIRAPost] = try? await api.get("/posts/world-board?limit=24"), !fallback.isEmpty {
         let photoFallback = photoDiscoverPosts(fallback)
         guard !photoFallback.isEmpty else { return }
-        if posts != photoFallback {
-          posts = photoFallback
+        let merged = await MIRAAppCacheStore.shared.mergeFreshPostsPreservingViewerState(
+          existing: posts,
+          fresh: photoFallback,
+          maxCount: 90
+        )
+        if posts != merged {
+          posts = merged
         }
-        prefetchVisibleMedia(photoFallback)
-        await MIRAAppCacheStore.shared.saveDiscoverPosts(photoFallback, category: category)
+        prefetchVisibleMedia(merged)
+        await MIRAAppCacheStore.shared.saveDiscoverPosts(merged, category: category)
         MIRAPerformanceTimeline.markOnce("discover_first_content", detail: "posts_fallback")
       } else if posts.isEmpty {
         hasLoadedFreshPosts = false
@@ -384,12 +394,12 @@ final class DiscoverNativeModel: ObservableObject {
 
 private let discoverGalleryFilters: [DiscoverGalleryFilter] = [
   .init(id: "all"),
-  .init(id: "outfits"),
-  .init(id: "outdoors"),
   .init(id: "photography"),
-  .init(id: "events"),
+  .init(id: "outdoors"),
   .init(id: "art"),
-  .init(id: "nightlife")
+  .init(id: "nightlife"),
+  .init(id: "outfits"),
+  .init(id: "events")
 ]
 
 private let discoverCategoryKeywords: [String: [String]] = [
@@ -942,12 +952,12 @@ struct DiscoverSinglePhotoPreviewSheet: View {
         Task { await model.toggleLike() }
       } label: {
         HStack(spacing: 7) {
-          Image(systemName: model.post.isLiked == true ? "hand.thumbsup.fill" : "hand.thumbsup")
+          Image(systemName: model.post.viewerLiked ? "hand.thumbsup.fill" : "hand.thumbsup")
             .font(.system(size: 20, weight: .regular))
           Text(compactCount(model.post.likesCount ?? 0))
             .font(.system(size: 15, weight: .semibold))
         }
-        .foregroundStyle(model.post.isLiked == true ? MIRATheme.Color.like : MIRATheme.Color.textPrimary)
+        .foregroundStyle(model.post.viewerLiked ? MIRATheme.Color.like : MIRATheme.Color.textPrimary)
         .frame(minWidth: 58, minHeight: 44)
         .contentShape(Rectangle())
       }

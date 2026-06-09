@@ -43,11 +43,16 @@ final class ProfileNativeModel: ObservableObject {
     await MIRAAppCacheStore.shared.saveCurrentProfile(freshUser)
     await MIRALocalJSONCache.save(freshUser, key: userCacheKey)
     let freshPosts = profileVisiblePosts((try? await api.get("/users/\(freshUser.id)/posts")) ?? posts)
-    if posts != freshPosts {
-      posts = freshPosts
+    let mergedPosts = await MIRAAppCacheStore.shared.mergeFreshPostsPreservingViewerState(
+      existing: posts,
+      fresh: freshPosts,
+      maxCount: 120
+    )
+    if posts != mergedPosts {
+      posts = mergedPosts
     }
-    await MIRAAppCacheStore.shared.saveProfilePosts(freshPosts, userId: freshUser.id)
-    await MIRALocalJSONCache.save(freshPosts, key: postsCacheKey(for: freshUser.id))
+    await MIRAAppCacheStore.shared.saveProfilePosts(mergedPosts, userId: freshUser.id)
+    await MIRALocalJSONCache.save(mergedPosts, key: postsCacheKey(for: freshUser.id))
   }
 
   func primeUser(_ signedInUser: MIRAUser?) {
@@ -549,11 +554,16 @@ final class UserProfileNativeModel: ObservableObject {
       await MIRALocalJSONCache.save(freshUser, key: userCacheKey)
     }
     let freshPosts = profileVisiblePosts((try? await api.get("/users/\(userId)/posts")) ?? posts)
-    if posts != freshPosts {
-      posts = freshPosts
+    let mergedPosts = await MIRAAppCacheStore.shared.mergeFreshPostsPreservingViewerState(
+      existing: posts,
+      fresh: freshPosts,
+      maxCount: 120
+    )
+    if posts != mergedPosts {
+      posts = mergedPosts
     }
-    await MIRAAppCacheStore.shared.saveProfilePosts(freshPosts, userId: userId)
-    await MIRALocalJSONCache.save(freshPosts, key: postsCacheKey)
+    await MIRAAppCacheStore.shared.saveProfilePosts(mergedPosts, userId: userId)
+    await MIRALocalJSONCache.save(mergedPosts, key: postsCacheKey)
   }
 
   func removePostLocally(id postId: String) async {

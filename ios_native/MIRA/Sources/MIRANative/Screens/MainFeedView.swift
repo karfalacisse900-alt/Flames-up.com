@@ -284,7 +284,7 @@ final class MainFeedModel: ObservableObject {
     defer { likingPostIds.remove(post.id) }
 
     let previous = posts[index]
-    let nextLiked = !(previous.isLiked ?? false)
+    let nextLiked = !previous.viewerLiked
     let nextCount = max(0, (previous.likesCount ?? 0) + (nextLiked ? 1 : -1))
     posts[index] = previous.updating(liked: nextLiked, likesCount: nextCount)
 
@@ -568,7 +568,7 @@ final class MainFeedModel: ObservableObject {
     MIRAPostEngagementSync.publish(
       MIRAPostEngagementUpdate(
         postId: post.id,
-        liked: post.isLiked,
+        liked: post.viewerLiked,
         likesCount: post.likesCount,
         saved: post.viewerSaved,
         savesCount: post.savesCount,
@@ -1372,7 +1372,7 @@ private struct MainNativePostCard: View {
 
   private var engagementButtons: some View {
     HStack(spacing: 2) {
-      CompactPostAction(systemImage: post.isLiked == true ? "heart.fill" : "heart", value: post.likesCount ?? 0, tint: post.isLiked == true ? MIRATheme.Color.like : MIRATheme.Color.textSecondary) {
+      CompactPostAction(systemImage: post.viewerLiked ? "heart.fill" : "heart", value: post.likesCount ?? 0, tint: post.viewerLiked ? MIRATheme.Color.like : MIRATheme.Color.textSecondary) {
         debugTap("tap_like")
         onLike()
       }

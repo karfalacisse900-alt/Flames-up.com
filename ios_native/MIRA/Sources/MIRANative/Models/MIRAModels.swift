@@ -300,6 +300,10 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
     return saved?.value == true
   }
 
+  public var viewerLiked: Bool {
+    isLiked == true
+  }
+
   public var viewerFollowing: Bool {
     if let isFollowing { return isFollowing }
     return following?.value == true || followed?.value == true

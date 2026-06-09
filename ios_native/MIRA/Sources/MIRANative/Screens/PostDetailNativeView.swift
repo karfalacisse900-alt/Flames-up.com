@@ -216,7 +216,7 @@ final class PostDetailModel: ObservableObject {
     defer { likingPostIds.remove(post.id) }
 
     let previous = post
-    let nextLiked = !(post.isLiked ?? false)
+    let nextLiked = !post.viewerLiked
     let nextCount = max(0, (post.likesCount ?? 0) + (nextLiked ? 1 : -1))
     post = post.updating(liked: nextLiked, likesCount: nextCount)
     do {
@@ -304,7 +304,7 @@ final class PostDetailModel: ObservableObject {
     MIRAPostEngagementSync.publish(
       MIRAPostEngagementUpdate(
         postId: post.id,
-        liked: post.isLiked,
+        liked: post.viewerLiked,
         likesCount: post.likesCount,
         saved: post.viewerSaved,
         savesCount: post.savesCount,
@@ -685,14 +685,14 @@ public struct PostDetailNativeView: View {
             Task { await model.toggleLike() }
           } label: {
             HStack(spacing: 7) {
-              Image(systemName: model.post.isLiked == true ? "heart.fill" : "heart")
+              Image(systemName: model.post.viewerLiked ? "heart.fill" : "heart")
                 .font(.system(size: 22, weight: .semibold))
               Text(compact(model.post.likesCount ?? 0))
                 .font(.system(size: 14, weight: .semibold))
                 .lineLimit(1)
                 .minimumScaleFactor(0.76)
             }
-            .foregroundStyle(model.post.isLiked == true ? MIRATheme.Color.like : MIRATheme.Color.textSecondary)
+            .foregroundStyle(model.post.viewerLiked ? MIRATheme.Color.like : MIRATheme.Color.textSecondary)
             .frame(minWidth: 54, minHeight: 44)
           }
           .buttonStyle(.plain)
@@ -1018,14 +1018,14 @@ public struct DiscoverPostDetailNativeView: View {
         Task { await model.toggleLike() }
       } label: {
         HStack(spacing: 12) {
-          Image(systemName: model.post.isLiked == true ? "hand.thumbsup.fill" : "hand.thumbsup")
+          Image(systemName: model.post.viewerLiked ? "hand.thumbsup.fill" : "hand.thumbsup")
             .font(.system(size: 34, weight: .regular))
           Text(compact(model.post.likesCount ?? 0))
             .font(.system(size: 24, weight: .regular))
             .lineLimit(1)
             .minimumScaleFactor(0.72)
         }
-        .foregroundStyle(model.post.isLiked == true ? MIRATheme.Color.like : MIRATheme.Color.textPrimary)
+        .foregroundStyle(model.post.viewerLiked ? MIRATheme.Color.like : MIRATheme.Color.textPrimary)
         .frame(minWidth: 112, minHeight: 54, alignment: .leading)
         .contentShape(Rectangle())
       }

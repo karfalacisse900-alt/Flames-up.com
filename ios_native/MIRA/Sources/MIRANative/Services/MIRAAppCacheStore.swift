@@ -81,11 +81,7 @@ actor MIRAAppCacheStore {
     var merged = existing.map { cached -> MIRAPost in
       seen.insert(cached.id)
       guard let freshPost = freshById[cached.id] else { return cached }
-      return freshPost.updating(
-        likesCount: freshPost.likesCount ?? cached.likesCount,
-        commentsCount: freshPost.commentsCount ?? cached.commentsCount,
-        savesCount: freshPost.savesCount ?? cached.savesCount
-      )
+      return mergedPostPreservingViewerState(cached: cached, fresh: freshPost)
     }
 
     let newItems = fresh.filter { seen.insert($0.id).inserted }
@@ -107,7 +103,23 @@ actor MIRAAppCacheStore {
       if index < pageLimit { return nil }
       return post
     }
-    return Array((fresh + preservedTail).prefix(maxFeedPosts))
+    let mergedFresh = mergeFreshPostsPreservingViewerState(existing: existing, fresh: fresh)
+    return Array((mergedFresh + preservedTail).prefix(maxFeedPosts))
+  }
+
+  func mergeFreshPostsPreservingViewerState(existing: [MIRAPost], fresh: [MIRAPost], maxCount: Int? = nil) -> [MIRAPost] {
+    guard !existing.isEmpty, !fresh.isEmpty else {
+      return Array(fresh.prefix(maxCount ?? fresh.count))
+    }
+    var existingById: [String: MIRAPost] = [:]
+    for post in existing {
+      existingById[post.id] = post
+    }
+    let merged = fresh.map { freshPost -> MIRAPost in
+      guard let cached = existingById[freshPost.id] else { return freshPost }
+      return mergedPostPreservingViewerState(cached: cached, fresh: freshPost)
+    }
+    return Array(merged.prefix(maxCount ?? merged.count))
   }
 
   func loadDiscoverPosts(category: String) async -> [MIRAPost]? {
@@ -272,6 +284,16 @@ actor MIRAAppCacheStore {
     return rhsScore >= lhsScore ? rhs : lhs
   }
 
+  private func mergedPostPreservingViewerState(cached: MIRAPost, fresh: MIRAPost) -> MIRAPost {
+    fresh.updating(
+      liked: fresh.isLiked ?? cached.isLiked,
+      likesCount: fresh.likesCount ?? cached.likesCount,
+      commentsCount: fresh.commentsCount ?? cached.commentsCount,
+      saved: fresh.isSaved ?? cached.isSaved ?? cached.saved?.value,
+      savesCount: fresh.savesCount ?? cached.savesCount
+    )
+  }
+
   private func nowISO() -> String {
     ISO8601DateFormatter.miraCacheStore.string(from: Date())
   }
@@ -286,12 +308,12 @@ private enum CacheKey {
   static let postDraft = "native.post_draft.v1.cache_first"
   static let discoverCategoryIds = [
     "all",
-    "outfits",
-    "outdoors",
     "photography",
-    "events",
+    "outdoors",
     "art",
-    "nightlife"
+    "nightlife",
+    "outfits",
+    "events"
   ]
 
   static func discoverPosts(_ category: String) -> String {

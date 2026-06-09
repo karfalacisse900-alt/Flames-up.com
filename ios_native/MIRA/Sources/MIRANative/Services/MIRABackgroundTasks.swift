@@ -111,13 +111,17 @@ private enum MIRABackgroundRefreshWorker {
 
   private static func refreshFeed(api: MIRAAPIClient) async -> Bool {
     guard let posts: [MIRAPost] = try? await api.get("/posts/feed?limit=8"), !posts.isEmpty else { return false }
-    await MIRAAppCacheStore.shared.saveFeed(posts)
+    let cached = await MIRAAppCacheStore.shared.loadFeed() ?? []
+    let merged = await MIRAAppCacheStore.shared.mergeFreshFirstPage(existing: cached, fresh: posts, pageLimit: 8)
+    await MIRAAppCacheStore.shared.saveFeed(merged)
     return true
   }
 
   private static func refreshDiscover(api: MIRAAPIClient) async -> Bool {
     guard let posts: [MIRAPost] = try? await api.get("/discover?category=all&limit=18"), !posts.isEmpty else { return false }
-    await MIRAAppCacheStore.shared.saveDiscoverPosts(posts, category: "all")
+    let cached = await MIRAAppCacheStore.shared.loadDiscoverPosts(category: "all") ?? []
+    let merged = await MIRAAppCacheStore.shared.mergeFreshPostsPreservingViewerState(existing: cached, fresh: posts, maxCount: 90)
+    await MIRAAppCacheStore.shared.saveDiscoverPosts(merged, category: "all")
     return true
   }
 
@@ -125,7 +129,9 @@ private enum MIRABackgroundRefreshWorker {
     guard let user: MIRAUser = try? await api.get("/auth/me") else { return false }
     await MIRAAppCacheStore.shared.saveCurrentProfile(user)
     if let posts: [MIRAPost] = try? await api.get("/users/\(user.id)/posts") {
-      await MIRAAppCacheStore.shared.saveProfilePosts(posts, userId: user.id)
+      let cached = await MIRAAppCacheStore.shared.loadProfilePosts(userId: user.id) ?? []
+      let merged = await MIRAAppCacheStore.shared.mergeFreshPostsPreservingViewerState(existing: cached, fresh: posts, maxCount: 120)
+      await MIRAAppCacheStore.shared.saveProfilePosts(merged, userId: user.id)
     }
     return true
   }

@@ -2468,10 +2468,10 @@ type AutoCategoryResult = {
 const DISCOVER_CATEGORIES: DiscoverCategory[] = [
   'photography',
   'outdoors',
+  'art',
+  'nightlife',
   'outfits',
   'events',
-  'nightlife',
-  'art',
 ];
 const DEFAULT_DISCOVER_CATEGORY: DiscoverCategory = 'photography';
 
@@ -11061,6 +11061,7 @@ api.get('/posts/feed', authMiddleware, async (c) => {
   await ensurePostEditorSchema(c.env.DB);
   await ensureLocationSchema(c.env.DB);
   await ensureMediaModerationSchema(c.env.DB);
+  await ensureLikeUniquenessSchema(c.env.DB);
   const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
   const limit = clampNumber(c.req.query('limit') || '20', 1, 50, 20);
   const feedSql = [
@@ -11144,6 +11145,7 @@ api.get('/posts/:postId', authMiddleware, async (c) => {
   const postId = c.req.param('postId');
   await ensureLocationSchema(c.env.DB);
   await ensureMediaModerationSchema(c.env.DB);
+  await ensureLikeUniquenessSchema(c.env.DB);
   const postByIdSql = [
     `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
        EXISTS (SELECT 1 FROM follows fl WHERE fl.follower_id = ? AND fl.following_id = p.user_id) AS is_following,
@@ -11327,6 +11329,7 @@ api.get('/users/:userId/posts', authMiddleware, async (c) => {
   await ensureGovernanceSchema(c.env.DB);
   await ensurePostEditorSchema(c.env.DB);
   await ensureMediaModerationSchema(c.env.DB);
+  await ensureLikeUniquenessSchema(c.env.DB);
   const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
   const limit = clampNumber(c.req.query('limit') || '60', 1, 100, 60);
   const owner: any = await c.env.DB.prepare('SELECT id, is_private FROM users WHERE id = ?').bind(targetId).first();
@@ -12743,6 +12746,7 @@ api.post('/client/events', async (c) => {
 
 // Library
 api.get('/library/liked', authMiddleware, async (c) => {
+  await ensureLikeUniquenessSchema(c.env.DB);
   const userId = getUserId(c);
   const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
   const limit = clampNumber(c.req.query('limit') || '40', 1, 80, 40);
@@ -12761,6 +12765,7 @@ api.get('/library/liked', authMiddleware, async (c) => {
   return c.json(feedPhotoPostsOnly(r.results as any[]).map((p) => feedPostPayload(p, [], c.env)));
 });
 api.get('/library/saved', authMiddleware, async (c) => {
+  await ensureLikeUniquenessSchema(c.env.DB);
   const userId = getUserId(c);
   const collection = c.req.query('collection');
   const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
@@ -12792,6 +12797,7 @@ api.post('/library/save/:postId', authMiddleware, async (c) => {
   const userId = getUserId(c);
   await ensureGovernanceSchema(c.env.DB);
   await ensureMediaModerationSchema(c.env.DB);
+  await ensureLikeUniquenessSchema(c.env.DB);
   const limited = await enforceRateLimit(c, 'save_post', userId, 240, 60);
   if (limited) return limited;
   const postId = c.req.param('postId');
@@ -12807,7 +12813,7 @@ api.post('/library/save/:postId', authMiddleware, async (c) => {
   if (existingSave) {
     await c.env.DB.prepare('UPDATE saved_posts SET collection = ? WHERE user_id = ? AND post_id = ?').bind(collection, userId, postId).run();
   } else {
-    await c.env.DB.prepare('INSERT INTO saved_posts (id, user_id, post_id, collection) VALUES (?, ?, ?, ?)').bind(uuid(), userId, postId, collection).run();
+    await c.env.DB.prepare('INSERT OR IGNORE INTO saved_posts (id, user_id, post_id, collection) VALUES (?, ?, ?, ?)').bind(uuid(), userId, postId, collection).run();
     await c.env.DB.prepare('UPDATE posts SET saves_count = COALESCE(saves_count, 0) + 1 WHERE id = ?').bind(postId).run();
   }
   try {
@@ -12824,6 +12830,7 @@ api.post('/library/save/:postId', authMiddleware, async (c) => {
 api.delete('/library/save/:postId', authMiddleware, async (c) => {
   const userId = getUserId(c);
   await ensureGovernanceSchema(c.env.DB);
+  await ensureLikeUniquenessSchema(c.env.DB);
   const limited = await enforceRateLimit(c, 'save_post', userId, 240, 60);
   if (limited) return limited;
   const postId = c.req.param('postId');
@@ -12842,7 +12849,11 @@ api.delete('/library/save/:postId', authMiddleware, async (c) => {
   }
   return c.json(postEngagementResponse(engagement, { unsaved: true }));
 });
-api.get('/library/collections', authMiddleware, async (c) => { const r = await c.env.DB.prepare('SELECT collection, COUNT(*) as count FROM saved_posts WHERE user_id = ? GROUP BY collection').bind(getUserId(c)).all(); return c.json(r.results); });
+api.get('/library/collections', authMiddleware, async (c) => {
+  await ensureLikeUniquenessSchema(c.env.DB);
+  const r = await c.env.DB.prepare('SELECT collection, COUNT(*) as count FROM saved_posts WHERE user_id = ? GROUP BY collection').bind(getUserId(c)).all();
+  return c.json(r.results);
+});
 
 // Friends
 api.post('/friends/request/:userId', authMiddleware, async (c) => {
@@ -13293,6 +13304,7 @@ api.get('/discover', authMiddleware, async (c) => {
   await ensureLocationSchema(c.env.DB);
   await ensureAutoCategorySchema(c.env.DB);
   await ensureMediaModerationSchema(c.env.DB);
+  await ensureLikeUniquenessSchema(c.env.DB);
   const rawCategory = c.req.query('category') || 'all';
   const category = normalizeDiscoverCategory(rawCategory, true);
   if (!category) return c.json({ detail: 'Unknown Discover category.' }, 400);
@@ -14375,10 +14387,10 @@ api.get('/discover/categories', async (c) => {
     { id: 'all', name: 'All', icon: 'square.grid.2x2' },
     { id: 'photography', name: 'Photography', icon: 'camera' },
     { id: 'outdoors', name: 'Outdoors', icon: 'leaf' },
+    { id: 'art', name: 'Art', icon: 'paintpalette' },
+    { id: 'nightlife', name: 'Nightlife', icon: 'moon.stars' },
     { id: 'outfits', name: 'Outfits', icon: 'tshirt' },
     { id: 'events', name: 'Events', icon: 'calendar' },
-    { id: 'nightlife', name: 'Nightlife', icon: 'moon.stars' },
-    { id: 'art', name: 'Art', icon: 'paintpalette' },
   ]);
 });
 
@@ -17710,6 +17722,7 @@ api.post('/bookmarks/setup-db', authMiddleware, async (c) => {
 api.post('/bookmarks', authMiddleware, async (c) => {
   const userId = getUserId(c);
   await ensureGovernanceSchema(c.env.DB);
+  await ensureLikeUniquenessSchema(c.env.DB);
   const limited = await enforceRateLimit(c, 'save_post', userId, 240, 60);
   if (limited) return limited;
   const { post_id, collection } = await c.req.json().catch(() => ({}));
@@ -17724,7 +17737,7 @@ api.post('/bookmarks', authMiddleware, async (c) => {
     if (existingSave) {
       await c.env.DB.prepare('UPDATE saved_posts SET collection = ? WHERE user_id = ? AND post_id = ?').bind(collectionName, userId, postId).run();
     } else {
-      await c.env.DB.prepare('INSERT INTO saved_posts (id, user_id, post_id, collection) VALUES (?, ?, ?, ?)').bind(uuid(), userId, postId, collectionName).run();
+      await c.env.DB.prepare('INSERT OR IGNORE INTO saved_posts (id, user_id, post_id, collection) VALUES (?, ?, ?, ?)').bind(uuid(), userId, postId, collectionName).run();
       await c.env.DB.prepare('UPDATE posts SET saves_count = COALESCE(saves_count, 0) + 1 WHERE id = ?').bind(postId).run();
     }
     const engagement = await getPostEngagementState(c.env.DB, postId, userId);
@@ -17747,6 +17760,7 @@ api.post('/bookmarks', authMiddleware, async (c) => {
 api.delete('/bookmarks/:postId', authMiddleware, async (c) => {
   const userId = getUserId(c);
   await ensureGovernanceSchema(c.env.DB);
+  await ensureLikeUniquenessSchema(c.env.DB);
   const limited = await enforceRateLimit(c, 'save_post', userId, 240, 60);
   if (limited) return limited;
   const postId = publicId(c.req.param('postId'), 120);
@@ -17769,6 +17783,7 @@ api.delete('/bookmarks/:postId', authMiddleware, async (c) => {
 // Get saved posts by collection
 api.get('/bookmarks', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  await ensureLikeUniquenessSchema(c.env.DB);
   const collection = cleanText(c.req.query('collection'), 80);
   let q = 'SELECT b.*, p.content, p.image, p.images, p.likes_count, p.post_type, p.created_at as post_date, u.full_name, u.username, u.profile_image FROM bookmarks b JOIN posts p ON b.post_id = p.id JOIN users u ON p.user_id = u.id WHERE b.user_id = ?';
   const binds: any[] = [userId];
@@ -17781,6 +17796,7 @@ api.get('/bookmarks', authMiddleware, async (c) => {
 // Check if post is saved
 api.get('/bookmarks/check/:postId', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  await ensureLikeUniquenessSchema(c.env.DB);
   const postId = c.req.param('postId');
   const r: any = await c.env.DB.prepare(
     `SELECT collection FROM bookmarks WHERE user_id = ? AND post_id = ?
