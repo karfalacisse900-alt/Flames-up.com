@@ -1292,6 +1292,7 @@ private struct StoryViewerNativeView: View {
           placeholderURL: storyPosterURL(for: mediaURL),
           contentMode: .fill,
           shouldPlay: shouldPlayCurrentStory,
+          videoMuted: currentStory?.hasAudio == true,
           maxPixelSize: 1920,
           placeholderColor: storyFallbackColor,
           placeholderTint: MIRATheme.Color.textSecondary.opacity(0.68)

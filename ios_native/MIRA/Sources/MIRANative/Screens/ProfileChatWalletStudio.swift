@@ -2038,8 +2038,7 @@ public struct WalletNativeView: View {
   @State private var user: MIRAUser?
   @State private var phoneInput = ""
   @State private var phoneCode = ""
-  @State private var emailCode = ""
-  @State private var emailCodeSent = false
+  @State private var emailLinkSent = false
   @State private var phoneCodeSent = false
   @State private var isLoading = false
   @State private var activeAction: VerificationAction?
@@ -2128,23 +2127,18 @@ public struct WalletNativeView: View {
           .foregroundStyle(MIRATheme.Color.textMuted)
       } else {
         verificationButton(
-          title: emailCodeSent ? "Resend code" : "Send email code",
+          title: emailLinkSent ? "Resend verification link" : "Send verification link",
           systemImage: "paperplane.fill",
           isBusy: activeAction == .emailStart,
           isDisabled: activeAction != nil
         ) {
-          Task { await sendEmailCode() }
+          Task { await sendEmailLink() }
         }
-        if emailCodeSent {
-          codeField(title: "Email code", text: $emailCode)
-          verificationButton(
-            title: "Verify email",
-            systemImage: "checkmark",
-            isBusy: activeAction == .emailVerify,
-            isDisabled: activeAction != nil || emailCode.trimmingCharacters(in: .whitespacesAndNewlines).count < 6
-          ) {
-            Task { await verifyEmailCode() }
-          }
+        if emailLinkSent {
+          Text("Open Gmail or your email app, tap the Captro verification link, then return here.")
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(MIRATheme.Color.textMuted)
+            .fixedSize(horizontal: false, vertical: true)
         }
       }
     }
@@ -2320,37 +2314,18 @@ public struct WalletNativeView: View {
     }
   }
 
-  private func sendEmailCode() async {
+  private func sendEmailLink() async {
     successMessage = nil
     errorMessage = nil
     activeAction = .emailStart
     defer { activeAction = nil }
     do {
       let _: VerificationStartResponse = try await api.post(
-        "/users/me/email/start",
+        "/users/me/email/link/start",
         body: VerificationStartBody(email: emailAddress.isEmpty ? nil : emailAddress, phone: nil)
       )
-      emailCodeSent = true
-      successMessage = "Check your email for a 6-digit code."
-    } catch {
-      errorMessage = error.localizedDescription
-    }
-  }
-
-  private func verifyEmailCode() async {
-    successMessage = nil
-    errorMessage = nil
-    activeAction = .emailVerify
-    defer { activeAction = nil }
-    do {
-      let updated: MIRAUser = try await api.post(
-        "/users/me/email/verify",
-        body: VerificationCodeBody(email: emailAddress.isEmpty ? nil : emailAddress, phone: nil, code: emailCode)
-      )
-      applyUser(updated)
-      emailCode = ""
-      emailCodeSent = false
-      successMessage = "Email verified."
+      emailLinkSent = true
+      successMessage = "Check your email for a Captro verification link."
     } catch {
       errorMessage = error.localizedDescription
     }
@@ -2419,7 +2394,6 @@ public struct WalletNativeView: View {
 
 private enum VerificationAction: Equatable {
   case emailStart
-  case emailVerify
   case phoneStart
   case phoneVerify
 }

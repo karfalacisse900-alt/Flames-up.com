@@ -3428,8 +3428,7 @@ public struct CreateStoryNativeView: View {
   private let onClose: (() -> Void)?
   @Environment(\.dismiss) private var dismiss
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  @State private var showCamera = false
-  @State private var didOpenInitialCamera = false
+  @State private var showCamera = true
   @State private var isPosting = false
   @State private var errorMessage: String?
   @State private var editingMedia: MIRAEditorPresentation?
@@ -3489,11 +3488,8 @@ public struct CreateStoryNativeView: View {
                 .clipShape(Capsule())
             }
           } else {
-            ProgressView()
-              .tint(.white)
-            Text("Opening camera...")
-              .font(.system(size: 15, weight: .semibold))
-              .foregroundStyle(.white.opacity(0.72))
+            Color.clear
+              .frame(width: 1, height: 1)
           }
         }
 
@@ -3509,11 +3505,6 @@ public struct CreateStoryNativeView: View {
     .miraScreenEnter(.modal)
     .onAppear {
       MIRAPlaybackCoordinator.pauseAll(reason: "story_creation_open")
-    }
-    .task {
-      guard !didOpenInitialCamera else { return }
-      didOpenInitialCamera = true
-      showCamera = true
     }
     .miraFullScreenOverlay(isPresented: $showCamera, background: .black) { closeCamera in
       MIRAStoryLiveCameraView(

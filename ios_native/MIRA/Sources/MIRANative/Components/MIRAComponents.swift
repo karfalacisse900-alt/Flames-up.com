@@ -941,6 +941,7 @@ public struct RemoteMediaView: View {
   let fallbackURL: String?
   let contentMode: ContentMode
   let shouldPlay: Bool
+  let videoMuted: Bool
   let maxPixelSize: CGFloat
   let showsVideoPlaceholderIcon: Bool
   let placeholderColor: Color
@@ -954,6 +955,7 @@ public struct RemoteMediaView: View {
     fallbackURL: String? = nil,
     contentMode: ContentMode = .fill,
     shouldPlay: Bool = false,
+    videoMuted: Bool = false,
     maxPixelSize: CGFloat = MIRAMediaSizing.feedTargetHeight,
     showsVideoPlaceholderIcon: Bool = true,
     placeholderColor: Color = MIRATheme.Color.mediaPlaceholder,
@@ -966,6 +968,7 @@ public struct RemoteMediaView: View {
     self.fallbackURL = fallbackURL
     self.contentMode = contentMode
     self.shouldPlay = shouldPlay
+    self.videoMuted = videoMuted
     self.maxPixelSize = maxPixelSize
     self.showsVideoPlaceholderIcon = showsVideoPlaceholderIcon
     self.placeholderColor = placeholderColor
@@ -981,6 +984,7 @@ public struct RemoteMediaView: View {
           posterURL: resolvedPlaceholderURL,
           contentMode: contentMode,
           shouldPlay: shouldPlay,
+          isMuted: videoMuted,
           showsPlaceholderIcon: showsVideoPlaceholderIcon,
           placeholderColor: placeholderColor,
           placeholderTint: placeholderTint,
@@ -1055,6 +1059,7 @@ private struct MIRAResolvedVideoPlayer: View {
   let posterURL: String?
   let contentMode: ContentMode
   let shouldPlay: Bool
+  let isMuted: Bool
   let showsPlaceholderIcon: Bool
   let placeholderColor: Color
   let placeholderTint: Color
@@ -1138,7 +1143,7 @@ private struct MIRAResolvedVideoPlayer: View {
   }
 
   private var playbackTaskID: String {
-    "\(url)|\(shouldPlay ? "play" : "poster")"
+    "\(url)|\(shouldPlay ? "play" : "poster")|\(isMuted ? "muted" : "sound")"
   }
 
   private var placeholder: some View {
@@ -1219,6 +1224,8 @@ private struct MIRAResolvedVideoPlayer: View {
         thumbnailURL = info.thumbnail
       }
       configurePlayback(for: prewarmedPlayer)
+      prewarmedPlayer.isMuted = isMuted
+      prewarmedPlayer.volume = isMuted ? 0 : 1
       player = prewarmedPlayer
       isPlayerReady = prewarmedPlayer.currentItem?.status == .readyToPlay
       await startVideoMetric(label: "prewarmed")
@@ -1453,8 +1460,8 @@ private struct MIRAResolvedVideoPlayer: View {
   private func syncPlayback(_ player: AVPlayer) {
     if shouldPlay && !globallyPaused {
       configureAudioSession()
-      player.isMuted = false
-      player.volume = 1
+      player.isMuted = isMuted
+      player.volume = isMuted ? 0 : 1
       player.playImmediately(atRate: 1)
     } else {
       player.pause()
@@ -1466,8 +1473,8 @@ private struct MIRAResolvedVideoPlayer: View {
     configureAudioSession()
     player.actionAtItemEnd = .none
     player.automaticallyWaitsToMinimizeStalling = false
-    player.isMuted = false
-    player.volume = 1
+    player.isMuted = isMuted
+    player.volume = isMuted ? 0 : 1
     if let item = player.currentItem {
       configurePlayerItemForFastStoryPlayback(item)
     }

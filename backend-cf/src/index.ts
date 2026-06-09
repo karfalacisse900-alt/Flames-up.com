@@ -35,6 +35,9 @@ interface Env {
   CLOUDFLARE_IMAGE_TRANSFORMS_ENABLED?: string;
   CLOUDFLARE_IMAGE_TRANSFORM_BASE_URL?: string;
   CLOUDFLARE_STREAM_TOKEN?: string;
+  RESEND_API_KEY?: string;
+  EMAIL_FROM?: string;
+  EMAIL_VERIFICATION_BASE_URL?: string;
   AI_IMAGE_MODERATION_MODEL?: string;
   AI_TEXT_MODERATION_MODEL?: string;
   AI_GENERATED_MEDIA_POLICY?: string;
@@ -711,6 +714,23 @@ async function ensureLikeUniquenessSchema(db: D1Database) {
        WHERE rn > 1
     )`,
     'CREATE UNIQUE INDEX IF NOT EXISTS idx_discover_likes_user_post_unique ON discover_likes(user_id, post_id)',
+    `CREATE TABLE IF NOT EXISTS saved_posts (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      post_id TEXT NOT NULL,
+      collection TEXT DEFAULT 'saved',
+      created_at TEXT DEFAULT (datetime('now'))
+    )`,
+    `DELETE FROM saved_posts
+     WHERE id IN (
+       SELECT id FROM (
+         SELECT id,
+                ROW_NUMBER() OVER (PARTITION BY user_id, post_id ORDER BY COALESCE(created_at, ''), id) AS rn
+         FROM saved_posts
+       )
+       WHERE rn > 1
+     )`,
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_saved_posts_user_post_unique ON saved_posts(user_id, post_id)',
     `INSERT OR IGNORE INTO likes (id, user_id, post_id, created_at)
      SELECT 'discover:' || user_id || ':' || post_id,
             user_id,
@@ -4957,9 +4977,14 @@ function postPayload(post: any, likedBy: string[] = [], env?: Env) {
     likes_count: likesCount,
     comments_count: commentsCount,
     saves_count: savesCount,
+    liked: isLiked,
     is_liked: isLiked,
+    liked_by_me: isLiked,
+    viewer_liked: isLiked,
     is_saved: isSaved,
     saved: isSaved,
+    saved_by_me: isSaved,
+    viewer_saved: isSaved,
     image: primaryMediaUrl,
     images: mediaUrls,
     feed_media_urls: feedMediaUrls,
@@ -5085,6 +5110,28 @@ async function getPostEngagementState(db: D1Database, postId: string, userId: st
       .run();
   } catch {}
   return state;
+}
+
+function postEngagementResponse(state: any, extra: Record<string, unknown> = {}) {
+  const liked = state?.liked === true || state?.liked === 1 || state?.liked === '1';
+  const saved = state?.saved === true || state?.saved === 1 || state?.saved === '1';
+  const likesCount = Math.max(0, Number(state?.likes_count || 0));
+  const commentsCount = Math.max(0, Number(state?.comments_count || 0));
+  const savesCount = Math.max(0, Number(state?.saves_count || 0));
+  return {
+    ...extra,
+    liked,
+    is_liked: liked,
+    liked_by_me: liked,
+    viewer_liked: liked,
+    likes_count: likesCount,
+    comments_count: commentsCount,
+    saved,
+    is_saved: saved,
+    saved_by_me: saved,
+    viewer_saved: saved,
+    saves_count: savesCount,
+  };
 }
 
 async function isFriend(db: D1Database, userId: string, targetId: string): Promise<boolean> {
@@ -6357,6 +6404,17 @@ async function ensureAccountVerificationSchema(db: D1Database) {
     'ALTER TABLE users ADD COLUMN email_verified INTEGER DEFAULT 0',
     'CREATE INDEX IF NOT EXISTS idx_users_email_verified ON users(email_verified)',
     'CREATE INDEX IF NOT EXISTS idx_users_phone_verified ON users(phone_verified)',
+    `CREATE TABLE IF NOT EXISTS email_verification_links (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      email TEXT NOT NULL,
+      token_hash TEXT NOT NULL UNIQUE,
+      expires_at TEXT NOT NULL,
+      used_at TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    )`,
+    'CREATE INDEX IF NOT EXISTS idx_email_verification_links_user ON email_verification_links(user_id, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_email_verification_links_token ON email_verification_links(token_hash)',
   ];
 
   for (const statement of statements) {
@@ -6482,6 +6540,61 @@ function twilioVerifyStartErrorResponse(c: any, errorMessage: string, target: 'p
     detail: 'Could not send verification code. Check Twilio Verify settings.',
     code: `${codePrefix}_VERIFY_START_FAILED`,
   }, 502);
+}
+
+function randomUrlToken(bytes = 32): string {
+  const values = new Uint8Array(bytes);
+  crypto.getRandomValues(values);
+  let binary = '';
+  for (const value of values) binary += String.fromCharCode(value);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function emailVerificationBaseUrl(c: any): string {
+  const configured = String(c.env.EMAIL_VERIFICATION_BASE_URL || c.env.PUBLIC_API_BASE_URL || '').trim();
+  if (configured) return configured.replace(/\/+$/g, '');
+  const url = new URL(c.req.url);
+  return `${url.origin}/api`;
+}
+
+function emailVerificationLink(c: any, token: string): string {
+  return `${emailVerificationBaseUrl(c)}/users/me/email/verify-link?token=${encodeURIComponent(token)}`;
+}
+
+async function sendEmailVerificationLink(c: any, email: string, link: string): Promise<boolean> {
+  const apiKey = String(c.env.RESEND_API_KEY || '').trim();
+  const from = String(c.env.EMAIL_FROM || '').trim();
+  if (!apiKey || !from) return false;
+
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      from,
+      to: [email],
+      subject: 'Verify your Captro email',
+      text: `Tap this link to verify your Captro email:\n\n${link}\n\nThis link expires in 30 minutes. If you did not request it, you can ignore this email.`,
+      html: `
+        <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;line-height:1.55;color:#111;padding:24px">
+          <h1 style="font-size:24px;margin:0 0 12px">Verify your Captro email</h1>
+          <p>Tap the button below to verify your Captro account email.</p>
+          <p style="margin:24px 0">
+            <a href="${link}" style="display:inline-block;background:#0f2d18;color:#fff;text-decoration:none;padding:13px 20px;border-radius:999px;font-weight:700">Verify email</a>
+          </p>
+          <p style="color:#555;font-size:14px">This link expires in 30 minutes. If you did not request it, you can ignore this email.</p>
+        </div>
+      `,
+    }),
+  });
+
+  if (!response.ok) {
+    const safeStatus = response.status;
+    throw new Error(`EMAIL_LINK_SEND_FAILED:${safeStatus}`);
+  }
+  return true;
 }
 
 async function startTwilioChannelVerification(c: any, to: string, channel: TwilioVerifyChannel): Promise<boolean> {
@@ -9544,6 +9657,98 @@ api.post('/users/me/phone/verify', authMiddleware, async (c) => {
   }
 });
 
+api.post('/users/me/email/link/start', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  await ensureAccountVerificationSchema(c.env.DB);
+  const limited = await enforceRateLimit(c, 'email_verify_link', userId, 8, 60);
+  if (limited) return limited;
+
+  try {
+    const body: any = await c.req.json().catch(() => ({}));
+    const currentUser: any = await c.env.DB.prepare('SELECT id, email, email_verified FROM users WHERE id = ?')
+      .bind(userId)
+      .first();
+    const accountEmail = normalizeOptionalEmail(currentUser?.email);
+    const requestedEmail = normalizeOptionalEmail(body.email);
+    if (!accountEmail) {
+      return c.json({ detail: 'Add a real email address before verification.', code: 'EMAIL_MISSING' }, 400);
+    }
+    if (requestedEmail && requestedEmail !== accountEmail) {
+      return c.json({ detail: 'Verify the email address already attached to this account.', code: 'EMAIL_MISMATCH' }, 400);
+    }
+    if (accountEmailVerified(currentUser)) {
+      return c.json({ detail: 'Email is already verified.', verified: true });
+    }
+
+    const token = randomUrlToken(32);
+    const tokenHash = await sha256Hex(`${token}:${c.env.JWT_SECRET}`);
+    const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+    await c.env.DB.batch([
+      c.env.DB.prepare('UPDATE email_verification_links SET used_at = datetime(\'now\') WHERE user_id = ? AND used_at IS NULL')
+        .bind(userId),
+      c.env.DB.prepare(
+        `INSERT INTO email_verification_links (id, user_id, email, token_hash, expires_at)
+         VALUES (?, ?, ?, ?, ?)`
+      ).bind(uuid(), userId, accountEmail, tokenHash, expiresAt),
+    ]);
+
+    const sent = await sendEmailVerificationLink(c, accountEmail, emailVerificationLink(c, token));
+    if (!sent) {
+      return c.json({
+        detail: 'Email verification links are not configured yet.',
+        code: 'EMAIL_LINK_PROVIDER_CONFIG',
+      }, 503);
+    }
+
+    return c.json({
+      detail: 'We sent a verification link to your email.',
+      delivery: 'email_link',
+      expires_at: expiresAt,
+    });
+  } catch (error: any) {
+    const code = getErrorCode(error);
+    console.error(JSON.stringify({ event: 'email_verification_link_start_failed', error: code.slice(0, 180) }));
+    if (code.startsWith('EMAIL_LINK_SEND_FAILED')) {
+      return c.json({ detail: 'Could not send verification link. Try again in a moment.', code: 'EMAIL_LINK_SEND_FAILED' }, 502);
+    }
+    return c.json({ detail: 'Could not start email verification. Please try again in a moment.', code: 'EMAIL_LINK_START_FAILED' }, 500);
+  }
+});
+
+api.get('/users/me/email/verify-link', async (c) => {
+  await ensureAccountVerificationSchema(c.env.DB);
+  const token = cleanText(c.req.query('token'), 512);
+  const fail = (message = 'This email verification link is invalid or expired.') => c.html(
+    `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Captro Email Verification</title></head><body style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f6f4f1;color:#111"><main style="min-height:100vh;display:grid;place-items:center;padding:24px"><section style="max-width:520px;background:#fff;border-radius:28px;padding:28px;box-shadow:0 20px 60px rgba(0,0,0,.08)"><h1 style="margin:0 0 10px;font-size:26px">Email not verified</h1><p style="font-size:16px;line-height:1.55;color:#555">${message}</p></section></main></body></html>`,
+    400
+  );
+  if (!token || token.length < 24) return fail();
+
+  const tokenHash = await sha256Hex(`${token}:${c.env.JWT_SECRET}`);
+  const row: any = await c.env.DB.prepare(
+    `SELECT id, user_id, email, expires_at, used_at
+     FROM email_verification_links
+     WHERE token_hash = ?
+     LIMIT 1`
+  ).bind(tokenHash).first();
+  if (!row || row.used_at) return fail();
+  if (!row.expires_at || Date.parse(row.expires_at) < Date.now()) {
+    await c.env.DB.prepare('UPDATE email_verification_links SET used_at = datetime(\'now\') WHERE id = ?').bind(row.id).run().catch(() => {});
+    return fail();
+  }
+
+  await c.env.DB.batch([
+    c.env.DB.prepare('UPDATE users SET email_verified = 1, updated_at = datetime(\'now\') WHERE id = ? AND LOWER(email) = LOWER(?)')
+      .bind(row.user_id, row.email),
+    c.env.DB.prepare('UPDATE email_verification_links SET used_at = datetime(\'now\') WHERE id = ?')
+      .bind(row.id),
+  ]);
+
+  return c.html(
+    `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Captro Email Verified</title></head><body style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f6f4f1;color:#111"><main style="min-height:100vh;display:grid;place-items:center;padding:24px"><section style="max-width:520px;background:#fff;border-radius:28px;padding:28px;box-shadow:0 20px 60px rgba(0,0,0,.08)"><h1 style="margin:0 0 10px;font-size:26px">Email verified</h1><p style="font-size:16px;line-height:1.55;color:#555">Your Captro email is verified. You can return to the app.</p></section></main></body></html>`
+  );
+});
+
 api.post('/users/me/email/start', authMiddleware, async (c) => {
   try {
     const userId = getUserId(c);
@@ -11027,13 +11232,7 @@ api.post('/posts/:postId/like', authMiddleware, async (c) => {
     });
   }
 
-  return c.json({
-    liked: !!nextLiked,
-    likes_count: state.likes_count,
-    comments_count: state.comments_count,
-    saved: state.saved,
-    saves_count: state.saves_count,
-  });
+  return c.json(postEngagementResponse(state));
 });
 
 api.delete('/posts/:postId', authMiddleware, async (c) => {
@@ -12620,14 +12819,7 @@ api.post('/library/save/:postId', authMiddleware, async (c) => {
     await mirrorLegacyInteractionToSupabase(c, postId, userId, 'save', true, collection);
     await mirrorLegacyPostToSupabase(c, postId);
   });
-  return c.json({
-    saved: engagement.saved,
-    collection,
-    saves_count: engagement.saves_count,
-    liked: engagement.liked,
-    likes_count: engagement.likes_count,
-    comments_count: engagement.comments_count,
-  });
+  return c.json(postEngagementResponse(engagement, { collection }));
 });
 api.delete('/library/save/:postId', authMiddleware, async (c) => {
   const userId = getUserId(c);
@@ -12648,14 +12840,7 @@ api.delete('/library/save/:postId', authMiddleware, async (c) => {
       await mirrorLegacyPostToSupabase(c, postId);
     });
   }
-  return c.json({
-    saved: engagement.saved,
-    unsaved: true,
-    saves_count: engagement.saves_count,
-    liked: engagement.liked,
-    likes_count: engagement.likes_count,
-    comments_count: engagement.comments_count,
-  });
+  return c.json(postEngagementResponse(engagement, { unsaved: true }));
 });
 api.get('/library/collections', authMiddleware, async (c) => { const r = await c.env.DB.prepare('SELECT collection, COUNT(*) as count FROM saved_posts WHERE user_id = ? GROUP BY collection').bind(getUserId(c)).all(); return c.json(r.results); });
 
@@ -14157,13 +14342,7 @@ api.post('/discover/posts/:postId/like', authMiddleware, async (c) => {
       });
     }
 
-    return c.json({
-      liked: !!state.liked,
-      likes_count: state.likes_count,
-      comments_count: state.comments_count,
-      saved: state.saved,
-      saves_count: state.saves_count,
-    });
+    return c.json(postEngagementResponse(state));
   }
 
   let nextLiked = requested;
@@ -14188,7 +14367,7 @@ api.post('/discover/posts/:postId/like', authMiddleware, async (c) => {
   const likesCount = Math.max(0, Number(likeRow?.likes_count || 0));
   const liked = likeRow?.liked === true || likeRow?.liked === 1 || likeRow?.liked === '1';
   await c.env.DB.prepare('UPDATE discover_posts SET likes_count = ? WHERE id = ?').bind(likesCount, postId).run();
-  return c.json({ liked, likes_count: likesCount });
+  return c.json(postEngagementResponse({ liked, saved: false, likes_count: likesCount, comments_count: 0, saves_count: 0 }));
 });
 
 api.get('/discover/categories', async (c) => {
@@ -17557,14 +17736,7 @@ api.post('/bookmarks', authMiddleware, async (c) => {
       await mirrorLegacyInteractionToSupabase(c, postId, userId, 'save', true, collectionName);
       await mirrorLegacyPostToSupabase(c, postId);
     });
-    return c.json({
-      saved: engagement.saved,
-      collection: collectionName,
-      saves_count: engagement.saves_count,
-      liked: engagement.liked,
-      likes_count: engagement.likes_count,
-      comments_count: engagement.comments_count,
-    });
+    return c.json(postEngagementResponse(engagement, { collection: collectionName }));
   } catch (e: any) {
     console.error('Bookmark save failed:', getErrorCode(e));
     return c.json({ detail: 'Save failed. Please try again.' }, 500);
@@ -17591,13 +17763,7 @@ api.delete('/bookmarks/:postId', authMiddleware, async (c) => {
     });
   }
   const engagement = await getPostEngagementState(c.env.DB, postId, userId);
-  return c.json({
-    saved: engagement.saved,
-    saves_count: engagement.saves_count,
-    liked: engagement.liked,
-    likes_count: engagement.likes_count,
-    comments_count: engagement.comments_count,
-  });
+  return c.json(postEngagementResponse(engagement));
 });
 
 // Get saved posts by collection
