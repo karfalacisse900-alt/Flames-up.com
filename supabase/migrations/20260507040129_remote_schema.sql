@@ -1,0 +1,2 @@
+-- Remote baseline migration already applied in production Supabase.
+-- Kept locally so `supabase db push` can reconcile migration history.
