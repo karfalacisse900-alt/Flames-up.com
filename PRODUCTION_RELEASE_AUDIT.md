@@ -4,40 +4,56 @@ Date: 2026-06-11
 
 ## Status
 
-Captro is not ready to mark as production-ready until the backend production deploy blocker is fixed and the reset is run safely.
+Captro's production backend deploy blocker is resolved. Captro is not ready to mark as fully production-clean until the protected data/media reset is executed and a real-device smoke test passes on the latest TestFlight build.
 
 ## Verified
 
-- Latest TestFlight workflow succeeded for commit `b59209e21e96e890ebb8e9e2a86af1f4ac98cb66`.
+- Latest completed TestFlight workflow succeeded for commit `2f306f1f07c1e9b5b5a04e374ed5e712eeb37643`.
+- Production backend deploy succeeded for commit `2f306f1f07c1e9b5b5a04e374ed5e712eeb37643`.
+- Production `/api/health` reports `environment = "production"`, `service = "captro-api"`, `primary = "supabase_postgres"`, and `healthy = true`.
 - `backend-cf` TypeScript check passes with `npx.cmd tsc --noEmit`.
 - Pre-publish moderation tests pass with `npm.cmd run test:moderation`.
 - `git diff --check` has no whitespace errors.
-- Supabase Postgres migrations exist for core app data and operational tables.
+- Supabase Postgres production migrations are applied through `202606080003_account_verification`.
 - Worker config sets `DATABASE_PRIMARY = "supabase_postgres"`.
 - Cloudflare remains the media layer for Images/R2/Stream.
+- Unauthenticated `/api/posts/feed` and `/api/admin/me` return `401`, as expected.
+- `admin-web` production build passes.
 
 ## Blockers
 
-1. Backend production deploy failed.
+1. Production reset has not been executed.
 
-   GitHub Actions run:
-   `https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/27224181931`
+   Reset tooling exists under `scripts/production-reset`, but it must be run only after backup and final confirmation.
 
-   Missing repository secrets:
-
-   - `SUPABASE_ACCESS_TOKEN`
-   - `SUPABASE_PROJECT_REF`
-   - `SUPABASE_SERVICE_ROLE_KEY`
-
-   Until this is fixed, production may still serve older Worker behavior. That can explain persistent like/save bugs, stale feed data, and media processing behavior after a TestFlight update.
-
-2. Production reset has not been executed.
-
-   Reset tooling now exists under `scripts/production-reset`, but it must be run only after backup and confirmation.
-
-3. Full iOS device QA cannot be completed on this Windows machine.
+2. Full iOS device QA cannot be completed on this Windows machine.
 
    TestFlight succeeded through GitHub Actions, but App Store readiness still requires real-device validation for login, upload, feed, Discover, chat, stories, report/block, delete account, and legal links.
+
+3. Production still contains test data.
+
+   Supabase dry-run counts:
+
+   - `auth.users`: 14
+   - `app_users`: 6
+   - `app_posts`: 26
+   - `app_post_interactions`: 28
+   - `post_comments`: 1
+   - `app_follows`: 1
+
+   Legacy D1 dry-run counts:
+
+   - `users`: 16
+   - `posts`: 108
+   - `likes`: 142
+   - `saved_posts`: 40
+   - `comments`: 36
+   - `messages`: 46
+   - `statuses`: 20
+   - `media_assets`: 73
+
+   D1 duplicate like check returned zero duplicate `(user_id, post_id)` pairs.
+   Supabase duplicate `app_post_interactions` check returned zero duplicate `(legacy_post_id, app_user_id, kind)` rows.
 
 ## Database Reset Scope
 
