@@ -127,6 +127,12 @@ create table if not exists public.app_follows (
   constraint app_follows_pk primary key (app_follower_id, app_following_id)
 );
 
+alter table public.app_follows add column if not exists status text not null default 'active';
+alter table public.app_follows add column if not exists metadata jsonb not null default '{}'::jsonb;
+alter table public.app_follows add column if not exists legacy_created_at timestamptz;
+alter table public.app_follows add column if not exists created_at timestamptz not null default now();
+alter table public.app_follows add column if not exists updated_at timestamptz not null default now();
+
 create index if not exists app_follows_following_idx
   on public.app_follows (app_following_id, status, created_at desc);
 
