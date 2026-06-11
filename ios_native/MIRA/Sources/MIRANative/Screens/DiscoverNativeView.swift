@@ -242,12 +242,7 @@ final class DiscoverNativeModel: ObservableObject {
 
   private func stableEngagementCount(current: Int?, incoming: Int?, toggledOn: Bool? = nil) -> Int? {
     guard let incoming else { return current }
-    let normalizedIncoming = max(0, incoming)
-    guard let current, let toggledOn else { return normalizedIncoming }
-    let normalizedCurrent = max(0, current)
-    return toggledOn
-      ? max(normalizedIncoming, normalizedCurrent)
-      : min(normalizedIncoming, max(0, normalizedCurrent - 1))
+    return max(0, incoming)
   }
 
   func hidePost(_ post: MIRAPost) {

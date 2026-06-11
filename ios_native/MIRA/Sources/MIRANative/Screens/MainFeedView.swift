@@ -620,12 +620,7 @@ final class MainFeedModel: ObservableObject {
   private func stableEngagementCount(current: Int?, incoming: Int?, optimistic: Int? = nil, toggledOn: Bool? = nil) -> Int? {
     let fallback = optimistic ?? current
     guard let incoming else { return fallback }
-    let normalizedIncoming = max(0, incoming)
-    guard let optimistic, let toggledOn else { return normalizedIncoming }
-    let normalizedOptimistic = max(0, optimistic)
-    return toggledOn
-      ? max(normalizedIncoming, normalizedOptimistic)
-      : min(normalizedIncoming, normalizedOptimistic)
+    return max(0, incoming)
   }
 
   private func sortedByNativeScore(_ posts: [MIRAPost]) async -> [MIRAPost] {
