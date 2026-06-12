@@ -11,6 +11,7 @@ This pass fixed three high-risk backend/iOS issues:
 - Like/save state now canonicalizes legacy app user ids and Supabase auth ids before reading, counting, deleting, or inserting engagement rows.
 - Cloudflare Stream direct uploads no longer force signed/private playback unless `CLOUDFLARE_STREAM_REQUIRE_SIGNED_URLS=true` is explicitly configured.
 - iOS Cloudflare Stream playback and prewarm now resolve Stream metadata through an authenticated API request, and `/api/stream/video/:uid` now requires a valid app session.
+- Like/save state now also reads, deletes, and counts both legacy text interaction columns and native Supabase UUID interaction columns, preventing drift between `legacy_post_id/app_user_id` and `post_id/user_id`.
 
 ## Bugs Fixed In This Pass
 
@@ -32,6 +33,7 @@ Fix:
 - `app_post_interactions` counts now dedupe actors by canonical Supabase auth id when possible.
 - Like/save delete paths now remove both app-id and auth-id aliases before inserting the requested state.
 - Viewer-state lookup now checks app ids, auth ids, and app ids mapped back from auth ids.
+- Native Supabase interaction rows using `post_id/user_id/kind` are now included in state checks, actor counts, and bookmark checks alongside legacy `legacy_post_id/app_user_id/kind` rows.
 - D1 engagement rows remain best-effort legacy cache only.
 
 Validation:

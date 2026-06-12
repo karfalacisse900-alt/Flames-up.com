@@ -29,6 +29,7 @@ Captro's Supabase security/RLS hardening is applied in production and the app da
 - Follow-up hardening on 2026-06-12 added Supabase-auth/app-user alias cleanup for like/save reads, deletes, inserts, and actor counts so one person cannot inflate engagement through legacy id drift.
 - Follow-up hardening on 2026-06-12 made Cloudflare Stream signed playback explicit with `CLOUDFLARE_STREAM_REQUIRE_SIGNED_URLS=false` by default, preventing new videos from being uploaded into an unplayable signed-only state before a signed playback resolver exists.
 - Follow-up hardening on 2026-06-12 moved iOS Stream metadata resolution into shared `MIRAStreamPlaybackResolver`, attaches the Keychain bearer token for video player/prewarm calls, and requires auth on `/api/stream/video/:uid`.
+- Follow-up hardening on 2026-06-12 made like/save state bridge both legacy text interaction columns and native Supabase UUID columns, including bookmark checks.
 
 ## Blockers
 
