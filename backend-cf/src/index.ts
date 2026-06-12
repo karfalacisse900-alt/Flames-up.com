@@ -295,18 +295,23 @@ const authMiddleware = async (c: any, next: () => Promise<void>) => {
   if (!userId) return c.json({ detail: 'Invalid token', code: 'INVALID_TOKEN' }, 401);
 
   try {
-    await ensureAccountDeletionSchema(c.env.DB);
-    let user: any;
-    try {
-      user = await c.env.DB.prepare('SELECT id, status, suspended_until, session_revoked_at FROM users WHERE id = ?').bind(userId).first();
-    } catch (error: any) {
-      const message = String(error?.message || '');
-      if (message.includes('no such column: suspended_until')) {
-        user = await c.env.DB.prepare('SELECT id, status, NULL AS suspended_until, NULL AS session_revoked_at FROM users WHERE id = ?').bind(userId).first();
-      } else if (message.includes('no such column: status')) {
-        user = await c.env.DB.prepare("SELECT id, 'active' AS status, NULL AS suspended_until, NULL AS session_revoked_at FROM users WHERE id = ?").bind(userId).first();
-      } else {
-        throw error;
+    let user: any = null;
+    if (supabasePrimaryConfigured(c)) {
+      user = await getSupabaseSessionUserByAnyId(c, userId);
+    }
+    if (!user) {
+      await ensureAccountDeletionSchema(c.env.DB);
+      try {
+        user = await c.env.DB.prepare('SELECT id, status, suspended_until, session_revoked_at FROM users WHERE id = ?').bind(userId).first();
+      } catch (error: any) {
+        const message = String(error?.message || '');
+        if (message.includes('no such column: suspended_until')) {
+          user = await c.env.DB.prepare('SELECT id, status, NULL AS suspended_until, NULL AS session_revoked_at FROM users WHERE id = ?').bind(userId).first();
+        } else if (message.includes('no such column: status')) {
+          user = await c.env.DB.prepare("SELECT id, 'active' AS status, NULL AS suspended_until, NULL AS session_revoked_at FROM users WHERE id = ?").bind(userId).first();
+        } else {
+          throw error;
+        }
       }
     }
 
@@ -363,7 +368,8 @@ async function getOptionalUserId(c: any): Promise<string> {
 
     let user: any;
     try {
-      user = await c.env.DB.prepare('SELECT id, status, suspended_until FROM users WHERE id = ?').bind(userId).first();
+      user = supabasePrimaryConfigured(c) ? await getSupabaseSessionUserByAnyId(c, userId) : null;
+      if (!user) user = await c.env.DB.prepare('SELECT id, status, suspended_until FROM users WHERE id = ?').bind(userId).first();
     } catch (error: any) {
       const message = String(error?.message || '');
       if (message.includes('no such column: suspended_until')) {
@@ -5289,6 +5295,196 @@ async function supabasePostCommentCount(c: any, postId: string): Promise<number>
   return rows.get(postId) || 0;
 }
 
+function supabaseCommentPayload(row: any, author: any, fallbackPostId: string) {
+  const metadata = parseJsonObject(row?.metadata);
+  const commentId = publicId(row?.legacy_comment_id || row?.id, 120);
+  const appUserId = publicId(row?.app_user_id || author?.id, 120);
+  const parentId = publicId((metadata as any).parent_legacy_id || row?.parent_id, 120);
+  const likesCount = Math.max(0, Number((metadata as any).likes_count || 0));
+  const pinnedAt = cleanText((metadata as any).pinned_at, 80) || null;
+  return {
+    id: commentId,
+    supabase_comment_id: isUuidText(row?.id),
+    user_id: appUserId,
+    post_id: publicId(row?.legacy_post_id || row?.post_id || fallbackPostId, 120),
+    parent_id: parentId || null,
+    content: cleanMultilineText(row?.body, 1200),
+    body: cleanMultilineText(row?.body, 1200),
+    likes_count: likesCount,
+    post_user_id: publicId((metadata as any).post_user_id, 120),
+    liked_by_me: false,
+    pinned_at: pinnedAt,
+    is_pinned: !!pinnedAt,
+    user_username: publicUsernameFor(author),
+    user_full_name: author?.full_name,
+    user_profile_image: safeMediaReference(author?.avatar_url),
+    created_at: row?.legacy_created_at || row?.created_at,
+    updated_at: row?.updated_at || row?.created_at,
+  };
+}
+
+async function supabaseVisiblePostForComments(c: any, viewerId: string, postId: string) {
+  const [post] = await supabaseReadVisiblePosts(c, viewerId, { postId, limit: 1 });
+  return post || null;
+}
+
+function supabaseCommentPostFilter(post: any, postId: string): string {
+  const legacyPostId = publicId(postId || post?.id, 120);
+  const supabasePostId = isUuidText(post?.supabase_post_id || postId);
+  const parts: string[] = [];
+  if (legacyPostId) parts.push(`legacy_post_id.eq.${legacyPostId}`);
+  if (supabasePostId) parts.push(`post_id.eq.${supabasePostId}`);
+  return `(${parts.join(',')})`;
+}
+
+async function supabaseCreatePostComment(c: any, input: {
+  postId: string;
+  userId: string;
+  content: string;
+  parentId?: string | null;
+  clientRequestId?: string;
+}) {
+  const visiblePost = await supabaseVisiblePostForComments(c, input.userId, input.postId);
+  if (!visiblePost) return { status: 404 as const, body: { detail: 'Post not found' } };
+
+  const nowIso = now();
+  const userRows = await supabaseUsersByAnyIds(c, [input.userId]);
+  const user = userRows.get(input.userId) || await getSupabaseSessionUserByAnyId(c, input.userId);
+  let parent: any = null;
+  if (input.parentId) {
+    const parentRows = await supabaseAdminQueryRows(c, 'post_comments', {
+      select: 'id,legacy_comment_id,app_user_id,user_id,status,metadata',
+      filters: {
+        or: isUuidText(input.parentId)
+          ? `(legacy_comment_id.eq.${input.parentId},id.eq.${input.parentId})`
+          : `(legacy_comment_id.eq.${input.parentId})`,
+        status: postgrestEqFilter('active'),
+      },
+      limit: 1,
+    });
+    parent = parentRows[0] || null;
+    if (!parent) return { status: 404 as const, body: { detail: 'Comment to reply to was not found.' } };
+  }
+
+  const duplicateRows = await supabaseAdminQueryRows(c, 'post_comments', {
+    select: 'id,legacy_comment_id,legacy_post_id,app_user_id,user_id,body,status,metadata,legacy_created_at,created_at,updated_at',
+    filters: {
+      legacy_post_id: postgrestEqFilter(input.postId),
+      app_user_id: postgrestEqFilter(input.userId),
+      body: postgrestEqFilter(input.content),
+      created_at: `gte.${new Date(Date.now() - 30_000).toISOString()}`,
+    },
+    order: 'created_at.desc',
+    limit: 1,
+  }).catch(() => []);
+  if (duplicateRows[0]) {
+    return {
+      status: 200 as const,
+      body: {
+        ...supabaseCommentPayload(duplicateRows[0], user, input.postId),
+        post_comments_count: await supabasePostCommentCount(c, input.postId),
+        idempotent_replay: true,
+      },
+    };
+  }
+
+  const id = uuid();
+  const authUserId = await supabaseAuthUserIdForAppUserId(c, input.userId);
+  const parentUuid = isUuidText(parent?.id);
+  const row: any = {
+    id,
+    legacy_comment_id: id,
+    legacy_post_id: input.postId,
+    post_id: isUuidText(visiblePost?.supabase_post_id || ''),
+    app_user_id: input.userId,
+    user_id: authUserId || null,
+    parent_id: parentUuid || null,
+    body: input.content,
+    status: 'active',
+    metadata: {
+      source: 'cloudflare_worker_primary',
+      parent_legacy_id: publicId(input.parentId, 120),
+      client_request_id: cleanText(input.clientRequestId, 160),
+      post_user_id: publicId(visiblePost?.user_id, 120),
+      likes_count: 0,
+    },
+    legacy_created_at: nowIso,
+    created_at: nowIso,
+    updated_at: nowIso,
+  };
+  await supabaseAdminUpsert(c, 'post_comments', [row], 'legacy_comment_id');
+  const engagement = await getSupabasePostEngagementState(c, input.postId, input.userId);
+  return {
+    status: 200 as const,
+    body: {
+      ...supabaseCommentPayload(row, user, input.postId),
+      post_user_id: visiblePost.user_id,
+      post_comments_count: engagement.comments_count,
+    },
+  };
+}
+
+async function supabaseReadPostComments(c: any, postId: string, userId: string, limit: number) {
+  const visiblePost = await supabaseVisiblePostForComments(c, userId, postId);
+  if (!visiblePost) return { status: 404 as const, body: { detail: 'Post not found' } };
+  const rows = await supabaseAdminQueryRows(c, 'post_comments', {
+    select: 'id,post_id,user_id,parent_id,body,status,metadata,created_at,updated_at,legacy_comment_id,legacy_post_id,app_user_id,legacy_created_at',
+    filters: {
+      or: supabaseCommentPostFilter(visiblePost, postId),
+      status: postgrestEqFilter('active'),
+    },
+    order: 'legacy_created_at.asc.nullslast,created_at.asc',
+    limit,
+  });
+  const userIds = rows.flatMap((row) => [publicId(row?.app_user_id, 120), isUuidText(row?.user_id) || '']).filter(Boolean);
+  const authors = await supabaseUsersByAnyIds(c, userIds);
+  const comments = rows.map((row) => {
+    const author = authors.get(publicId(row?.app_user_id, 120)) || authors.get(isUuidText(row?.user_id) || '') || {};
+    return supabaseCommentPayload(row, author, postId);
+  });
+  comments.sort((a, b) => {
+    if (a.is_pinned !== b.is_pinned) return a.is_pinned ? -1 : 1;
+    const aParent = String(a.parent_id || a.id);
+    const bParent = String(b.parent_id || b.id);
+    if (aParent !== bParent) return aParent.localeCompare(bParent);
+    return (Date.parse(String(a.created_at || '')) || 0) - (Date.parse(String(b.created_at || '')) || 0);
+  });
+  return { status: 200 as const, body: comments };
+}
+
+async function supabaseUpdateCommentStatus(c: any, commentId: string, userId: string, status: 'removed' | 'hidden') {
+  const rows = await supabaseAdminQueryRows(c, 'post_comments', {
+    select: 'id,legacy_comment_id,legacy_post_id,post_id,app_user_id,user_id,status,metadata',
+    filters: {
+      or: isUuidText(commentId)
+        ? `(legacy_comment_id.eq.${commentId},id.eq.${commentId})`
+        : `(legacy_comment_id.eq.${commentId})`,
+    },
+    limit: 1,
+  });
+  const comment = rows[0];
+  if (!comment || cleanText(comment.status || 'active', 40) !== 'active') return { status: 404 as const, body: { detail: 'Comment not found' } };
+  const commentOwner = publicId(comment.app_user_id, 120);
+  const metadata = parseJsonObject(comment.metadata);
+  const postOwner = publicId((metadata as any).post_user_id, 120);
+  if (status === 'removed' && commentOwner !== userId) return { status: 403 as const, body: { detail: 'Not your comment' } };
+  if (status === 'hidden' && postOwner !== userId) return { status: 403 as const, body: { detail: 'Only the creator can hide comments.' } };
+  const patch = {
+    status: 'removed',
+    metadata: {
+      ...metadata,
+      hidden_by_user_id: status === 'hidden' ? userId : undefined,
+      removed_reason: status === 'hidden' ? 'Hidden by creator' : 'Deleted by commenter',
+      removed_at: now(),
+    },
+    updated_at: now(),
+  };
+  await supabaseAdminPatchRows(c, 'post_comments', { legacy_comment_id: postgrestEqFilter(publicId(comment.legacy_comment_id || commentId, 120)) }, patch);
+  const postId = publicId(comment.legacy_post_id || comment.post_id, 120);
+  const engagement = await getSupabasePostEngagementState(c, postId, userId);
+  return { status: 200 as const, body: status === 'hidden' ? { hidden: true, comments_count: engagement.comments_count } : { deleted: true, comments_count: engagement.comments_count } };
+}
+
 async function supabaseViewerInteractionPostIds(c: any, userId: string, kind: 'like' | 'save', input: {
   collection?: string;
   limit?: number;
@@ -8366,11 +8562,120 @@ async function findOrCreateSupabaseUser(c: any, payload: any, extras: any = {}) 
   return c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(id).first();
 }
 
+function supabaseAppUserToLegacyUser(row: any): any {
+  const metadata = parseJsonObject(row?.metadata);
+  const profile = parseJsonObject(row?.profile);
+  const status = cleanText((metadata as any).status || 'active', 40) || 'active';
+  return {
+    id: publicId(row?.id, 120),
+    supabase_user_id: isUuidText(row?.supabase_user_id),
+    email: normalizeOptionalEmail(row?.email),
+    username: cleanText(row?.username, 80),
+    full_name: cleanText(row?.full_name, 160),
+    profile_image: safeMediaReference(row?.avatar_url),
+    cover_image: safeMediaReference(row?.cover_url),
+    bio: cleanText(row?.bio, 800),
+    city: cleanText(row?.city, 160),
+    is_private: row?.is_private ? 1 : 0,
+    is_verified: row?.is_verified ? 1 : 0,
+    phone: normalizeOptionalPhone(row?.phone),
+    phone_verified: row?.phone_verified ? 1 : 0,
+    email_verified: row?.email_verified ? 1 : 0,
+    language: normalizeLanguage((profile as any).language),
+    status,
+    suspended_until: cleanText((metadata as any).suspended_until, 80),
+    session_revoked_at: cleanText((metadata as any).session_revoked_at, 80),
+    banned_at: cleanText((metadata as any).banned_at, 80),
+    ban_reason: cleanText((metadata as any).ban_reason, 240),
+    created_at: row?.legacy_created_at || row?.created_at,
+    updated_at: row?.legacy_updated_at || row?.updated_at,
+    source: 'supabase_postgres',
+  };
+}
+
+async function getSupabaseSessionUserByAnyId(c: any, inputId: string): Promise<any | null> {
+  const cleanId = publicId(inputId, 120);
+  if (!cleanId || !supabasePrimaryConfigured(c)) return null;
+  const filters: Record<string, string> = isUuidText(cleanId)
+    ? { or: `(id.eq.${cleanId},supabase_user_id.eq.${cleanId})` }
+    : { id: postgrestEqFilter(cleanId) };
+  const rows = await supabaseAdminQueryRows(c, 'app_users', {
+    select: 'id,supabase_user_id,email,username,full_name,avatar_url,cover_url,bio,city,is_private,is_verified,counts,profile,metadata,phone,phone_verified,email_verified,legacy_created_at,legacy_updated_at,created_at,updated_at',
+    filters,
+    limit: 1,
+  }).catch((error: any) => {
+    console.warn(JSON.stringify({ event: 'supabase_session_user_lookup_failed', code: getErrorCode(error).slice(0, 180) }));
+    return [];
+  });
+  return rows[0] ? supabaseAppUserToLegacyUser(rows[0]) : null;
+}
+
+async function findOrCreateSupabaseAppUser(c: any, payload: any, extras: any = {}) {
+  const supabaseUserId = isUuidText(payload?.sub);
+  if (!supabaseUserId) throw new Error('SUPABASE_SUBJECT_MISSING');
+  const email = normalizeOptionalEmail(payload.email || extras.email);
+  const metadata = payload.user_metadata && typeof payload.user_metadata === 'object' ? payload.user_metadata : {};
+  const safeFullName = normalizeOptionalName(extras.full_name || (metadata as any).full_name || (metadata as any).name || (email ? email.split('@')[0] : '') || 'Captro User');
+  const profileImage = cleanText((metadata as any).avatar_url || (metadata as any).picture || extras.profile_image || '', 1000);
+  const authProvider = normalizeAuthProvider(extras.auth_provider || extras.provider || payload.app_metadata?.provider || payload.app_metadata?.providers?.[0] || (metadata as any).provider || 'supabase');
+  const providerSubject = cleanText(extras.oauth_subject || extras.provider_user_id || supabaseUserId, 240);
+  const select = 'id,supabase_user_id,email,username,full_name,avatar_url,cover_url,bio,city,is_private,is_verified,counts,profile,metadata,phone,phone_verified,email_verified,legacy_created_at,legacy_updated_at,created_at,updated_at';
+
+  let rows = await supabaseAdminQueryRows(c, 'app_users', {
+    select,
+    filters: { supabase_user_id: postgrestEqFilter(supabaseUserId) },
+    limit: 1,
+  });
+  if (!rows.length && email) {
+    rows = await supabaseAdminQueryRows(c, 'app_users', {
+      select,
+      filters: { email: postgrestEqFilter(email) },
+      limit: 1,
+    });
+    if (rows[0] && !isUuidText(rows[0].supabase_user_id)) {
+      await supabaseAdminPatchRows(c, 'app_users', { id: postgrestEqFilter(publicId(rows[0].id, 120)) }, {
+        supabase_user_id: supabaseUserId,
+        updated_at: now(),
+      });
+      rows[0].supabase_user_id = supabaseUserId;
+    }
+  }
+  if (rows[0]) return supabaseAppUserToLegacyUser(rows[0]);
+
+  const appUserId = supabaseUserId;
+  const username = pendingUsernameForUser(appUserId);
+  const row = {
+    id: appUserId,
+    supabase_user_id: supabaseUserId,
+    email: email || null,
+    username,
+    full_name: safeFullName || username,
+    avatar_url: profileImage || null,
+    cover_url: null,
+    bio: '',
+    city: '',
+    is_private: false,
+    is_verified: false,
+    counts: { followers_count: 0, following_count: 0, posts_count: 0 },
+    profile: { language: normalizeLanguage(extras.language), phone_verified: false },
+    metadata: {
+      source: 'supabase_auth_primary',
+      status: 'active',
+      oauth_provider: authProvider,
+      oauth_subject: providerSubject,
+    },
+    created_at: now(),
+    updated_at: now(),
+  };
+  await supabaseAdminUpsert(c, 'app_users', [row], 'id');
+  return supabaseAppUserToLegacyUser(row);
+}
+
 async function resolveSupabaseSessionUser(c: any, token: string) {
   const supabasePayload = await verifySupabaseAccessToken(c, token);
-  const user = await findOrCreateSupabaseUser(c, supabasePayload, {
-    email: supabasePayload.email,
-  });
+  const user = supabasePrimaryConfigured(c)
+    ? await findOrCreateSupabaseAppUser(c, supabasePayload, { email: supabasePayload.email })
+    : await findOrCreateSupabaseUser(c, supabasePayload, { email: supabasePayload.email });
   const userId = String(user?.id || '');
   if (!userId) throw new Error('USER_NOT_FOUND');
 
@@ -8674,7 +8979,9 @@ async function signInSupabaseIdToken(c: any, provider: 'google' | 'apple', idTok
 
 async function issueCaptroTokenForSupabaseAccessToken(c: any, supabaseAccessToken: string, extras: any = {}) {
   const payload = await verifySupabaseAccessToken(c, supabaseAccessToken);
-  const user = await findOrCreateSupabaseUser(c, payload, extras);
+  const user = supabasePrimaryConfigured(c)
+    ? await findOrCreateSupabaseAppUser(c, payload, extras)
+    : await findOrCreateSupabaseUser(c, payload, extras);
   if (['banned', 'suspended', 'deleted'].includes(String(user.status || 'active'))) {
     await logSecurityEvent(c, 'login_banned_blocked', user.id, { provider: 'supabase' });
     throw new Error('ACCOUNT_DISABLED');
@@ -8688,7 +8995,7 @@ async function issueCaptroTokenForSupabaseAccessToken(c: any, supabaseAccessToke
   const token = await createToken(user.id, getJwtSecret(c));
   runBackgroundTask(c, 'supabase_login_profile_write_through_failed', async () => {
     await syncSupabaseAuthMetadataForUser(c, user);
-    await mirrorLegacyUserToSupabase(c, user.id);
+    if (!supabasePrimaryConfigured(c)) await mirrorLegacyUserToSupabase(c, user.id);
   });
   return { token, user };
 }
@@ -12675,6 +12982,10 @@ api.post('/posts/:postId/comments', authMiddleware, async (c) => {
     const clientRequestId = getClientRequestId(c, body);
     if (!content) return c.json({ detail: 'Comment cannot be empty.' }, 400);
     if (content.length > 1200) return c.json({ detail: 'Comment is too long.' }, 400);
+    if (supabasePrimaryConfigured(c)) {
+      const result = await supabaseCreatePostComment(c, { postId, userId, content, parentId, clientRequestId: clientRequestId || undefined });
+      return c.json(result.body, result.status);
+    }
 
     const commentVisiblePostSql = [
       'SELECT p.id, p.user_id FROM posts p JOIN users u ON p.user_id = u.id',
@@ -12779,6 +13090,10 @@ api.get('/posts/:postId/comments', authMiddleware, async (c) => {
     await ensureLikeUniquenessSchema(c.env.DB);
     const userId = getUserId(c);
     const limit = clampNumber(c.req.query('limit') || '80', 1, 100, 80);
+    if (supabasePrimaryConfigured(c)) {
+      const result = await supabaseReadPostComments(c, c.req.param('postId'), userId, limit);
+      return c.json(result.body, result.status);
+    }
     const commentsSql = [
       `SELECT c.*, p.user_id AS post_user_id, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
               CASE WHEN c.pinned_at IS NULL THEN 0 ELSE 1 END AS is_pinned,
@@ -12908,6 +13223,10 @@ api.delete('/comments/:commentId', authMiddleware, async (c) => {
     await ensureCommentSchema(c.env.DB);
     const userId = getUserId(c);
     const commentId = c.req.param('commentId');
+    if (supabasePrimaryConfigured(c)) {
+      const result = await supabaseUpdateCommentStatus(c, commentId, userId, 'removed');
+      return c.json(result.body, result.status);
+    }
     const comment: any = await c.env.DB.prepare(
       `SELECT c.id, c.user_id, c.post_id
        FROM comments c
@@ -12919,7 +13238,7 @@ api.delete('/comments/:commentId', authMiddleware, async (c) => {
     await c.env.DB.prepare("UPDATE comments SET status = 'removed', removed_at = ?, removed_reason = 'Deleted by commenter', pinned_at = NULL WHERE id = ?")
       .bind(now(), commentId)
       .run();
-    const engagement = await getPostEngagementState(c.env.DB, comment.post_id, userId);
+    const engagement = await getCanonicalPostEngagementState(c, comment.post_id, userId);
     await logSecurityEvent(c, 'comment_deleted', userId, { comment_id: commentId, post_id: comment.post_id });
     return c.json({ deleted: true, comments_count: engagement.comments_count });
   } catch (error: any) {
@@ -12935,6 +13254,10 @@ api.post('/comments/:commentId/hide', authMiddleware, async (c) => {
     await ensureCommentSchema(c.env.DB);
     const userId = getUserId(c);
     const commentId = c.req.param('commentId');
+    if (supabasePrimaryConfigured(c)) {
+      const result = await supabaseUpdateCommentStatus(c, commentId, userId, 'hidden');
+      return c.json(result.body, result.status);
+    }
     const comment: any = await c.env.DB.prepare(
       `SELECT c.id, c.post_id, p.user_id AS post_user_id
        FROM comments c
@@ -12947,7 +13270,7 @@ api.post('/comments/:commentId/hide', authMiddleware, async (c) => {
     await c.env.DB.prepare("UPDATE comments SET status = 'hidden', hidden_at = ?, hidden_by_user_id = ?, removed_reason = 'Hidden by creator', pinned_at = NULL WHERE id = ?")
       .bind(now(), userId, commentId)
       .run();
-    const engagement = await getPostEngagementState(c.env.DB, comment.post_id, userId);
+    const engagement = await getCanonicalPostEngagementState(c, comment.post_id, userId);
     await logSecurityEvent(c, 'comment_hidden', userId, { comment_id: commentId, post_id: comment.post_id });
     return c.json({ hidden: true, comments_count: engagement.comments_count });
   } catch (error: any) {
