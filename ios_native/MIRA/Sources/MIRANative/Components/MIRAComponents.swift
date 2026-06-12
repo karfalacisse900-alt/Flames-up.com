@@ -1265,27 +1265,17 @@ private struct MIRAResolvedVideoPlayer: View {
     }
 
     let uid = String(url.dropFirst("cfstream:".count))
-    let endpoint = MIRAProductionBackend.apiURL("stream/video/\(uid)")
 
     do {
       let metric = await MIRAPerformanceMetric.begin(category: "network", label: "STREAM \(uid)")
-      let data: Data
-      let response: URLResponse
       do {
-        var request = URLRequest(url: endpoint)
-        request.cachePolicy = .reloadIgnoringLocalCacheData
-        (data, response) = try await MIRAAPIClient.productionSession.data(for: request)
+        let result = try await MIRAStreamPlaybackResolver.playbackInfo(for: uid)
+        await metric.finish(status: "\(result.status)", bytes: result.bytes)
+        applyStreamPlaybackInfo(result.info, createPlayer: createPlayer)
       } catch {
         await metric.finish(status: "error")
         throw error
       }
-      let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-      await metric.finish(status: "\(status)", bytes: data.count)
-      guard (200..<300).contains(status) else { throw MIRAAPIError.badStatus(status) }
-      let decoder = JSONDecoder()
-      decoder.keyDecodingStrategy = .convertFromSnakeCase
-      let info = try decoder.decode(MIRAStreamPlaybackInfo.self, from: data)
-      applyStreamPlaybackInfo(info, createPlayer: createPlayer)
     } catch {
       if createPlayer {
         failed = false

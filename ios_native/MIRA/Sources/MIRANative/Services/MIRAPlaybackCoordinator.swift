@@ -16,6 +16,31 @@ public extension Notification.Name {
   static let miraPlaybackMayResume = Notification.Name("mira.playback.resumeVisible")
 }
 
+public enum MIRAStreamPlaybackResolver {
+  private static let keychain = MIRAKeychainSessionProvider()
+
+  public static func playbackInfo(for uid: String) async throws -> (info: MIRAStreamPlaybackInfo, status: Int, bytes: Int) {
+    let cleanUID = uid.trimmingCharacters(in: .whitespacesAndNewlines)
+    let endpoint = MIRAProductionBackend.apiURL("stream/video/\(cleanUID)")
+    var request = URLRequest(url: endpoint)
+    request.cachePolicy = .reloadIgnoringLocalCacheData
+    request.setValue("application/json", forHTTPHeaderField: "Accept")
+    request.setValue(MIRALanguageResolver.acceptLanguageHeader(), forHTTPHeaderField: "Accept-Language")
+    request.setValue(UUID().uuidString, forHTTPHeaderField: "X-Request-ID")
+    if let token = await keychain.accessToken(), !token.isEmpty {
+      request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+    }
+
+    let (data, response) = try await MIRAAPIClient.productionSession.data(for: request)
+    let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+    guard (200..<300).contains(status) else { throw MIRAAPIError.badStatus(status) }
+    let decoder = JSONDecoder()
+    decoder.keyDecodingStrategy = .convertFromSnakeCase
+    let info = try decoder.decode(MIRAStreamPlaybackInfo.self, from: data)
+    return (info, status, data.count)
+  }
+}
+
 @MainActor
 public final class MIRAVideoPrewarmManager {
   public static let shared = MIRAVideoPrewarmManager()
@@ -101,24 +126,10 @@ public final class MIRAVideoPrewarmManager {
 
   private func resolveCloudflareStream(for key: String, shouldPreparePlayer: Bool) async {
     let uid = String(key.dropFirst("cfstream:".count))
-    let endpoint = MIRAProductionBackend.apiURL("stream/video/\(uid)")
 
     do {
-      let data: Data
-      let response: URLResponse
-      do {
-        var request = URLRequest(url: endpoint)
-        request.cachePolicy = .reloadIgnoringLocalCacheData
-        (data, response) = try await MIRAAPIClient.productionSession.data(for: request)
-      } catch {
-        throw error
-      }
-      let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-      guard (200..<300).contains(status) else { throw MIRAAPIError.badStatus(status) }
-
-      let decoder = JSONDecoder()
-      decoder.keyDecodingStrategy = .convertFromSnakeCase
-      let info = try decoder.decode(MIRAStreamPlaybackInfo.self, from: data)
+      let result = try await MIRAStreamPlaybackResolver.playbackInfo(for: uid)
+      let info = result.info
       inFlight.remove(key)
       if info.ready != false {
         cachedStreamInfo[key] = info

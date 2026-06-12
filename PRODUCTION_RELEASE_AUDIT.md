@@ -28,6 +28,7 @@ Captro's Supabase security/RLS hardening is applied in production and the app da
 - No Supabase service-role JWT is present in `ios_native/MIRA` or `admin-web`; service-role usage is restricted to Worker/GitHub secret wiring.
 - Follow-up hardening on 2026-06-12 added Supabase-auth/app-user alias cleanup for like/save reads, deletes, inserts, and actor counts so one person cannot inflate engagement through legacy id drift.
 - Follow-up hardening on 2026-06-12 made Cloudflare Stream signed playback explicit with `CLOUDFLARE_STREAM_REQUIRE_SIGNED_URLS=false` by default, preventing new videos from being uploaded into an unplayable signed-only state before a signed playback resolver exists.
+- Follow-up hardening on 2026-06-12 moved iOS Stream metadata resolution into shared `MIRAStreamPlaybackResolver`, attaches the Keychain bearer token for video player/prewarm calls, and requires auth on `/api/stream/video/:uid`.
 
 ## Blockers
 
@@ -38,6 +39,8 @@ Captro's Supabase security/RLS hardening is applied in production and the app da
 2. Full iOS device QA cannot be completed on this Windows machine.
 
    TestFlight succeeded through GitHub Actions, but App Store readiness still requires real-device validation for login, upload, feed, Discover, chat, stories, report/block, delete account, and legal links.
+
+   Latest iOS video resolver changes must be validated by the next GitHub Actions/TestFlight build because no local Xcode/Swift toolchain is available on this Windows machine.
 
 3. Production still contains test data.
 
@@ -72,7 +75,11 @@ Captro's Supabase security/RLS hardening is applied in production and the app da
 
    Current code search still shows over 1,000 D1/`c.env.DB` references in `backend-cf/src/index.ts`; treat D1 as active legacy infrastructure until the route groups are fully cut over.
 
-5. Protected reset workflow is staged on the working branch.
+5. Stream playback route is authenticated but not fully object-authorized.
+
+   `/api/stream/video/:uid` now requires a valid app session. The next media-security hardening pass should verify the requesting user can actually view the specific story/chat/post media before returning Stream playback metadata.
+
+6. Protected reset workflow is staged on the working branch.
 
    Added `.github/workflows/production-data-reset.yml`. GitHub will allow manual dispatch after this workflow file is present on the default branch. It supports:
 

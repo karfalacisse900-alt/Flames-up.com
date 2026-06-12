@@ -17756,7 +17756,7 @@ api.post('/upload/video-with-backup', authMiddleware, async (c) => {
 });
 
 // Get video playback info from Cloudflare Stream
-api.get('/stream/video/:videoUid', async (c) => {
+api.get('/stream/video/:videoUid', authMiddleware, async (c) => {
   const uid = c.req.param('videoUid');
   try {
     const accountId = cloudflareAccountId(c.env);

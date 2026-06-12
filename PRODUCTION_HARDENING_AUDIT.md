@@ -6,10 +6,11 @@ Date: 2026-06-12
 
 Captro is closer to production readiness, but it should not be considered fully production-clean until the remaining D1-backed app-data routes are migrated to Supabase Postgres, the protected production reset is executed after backup, and a real-device TestFlight smoke test passes.
 
-This pass fixed two high-risk backend issues:
+This pass fixed three high-risk backend/iOS issues:
 
 - Like/save state now canonicalizes legacy app user ids and Supabase auth ids before reading, counting, deleting, or inserting engagement rows.
 - Cloudflare Stream direct uploads no longer force signed/private playback unless `CLOUDFLARE_STREAM_REQUIRE_SIGNED_URLS=true` is explicitly configured.
+- iOS Cloudflare Stream playback and prewarm now resolve Stream metadata through an authenticated API request, and `/api/stream/video/:uid` now requires a valid app session.
 
 ## Bugs Fixed In This Pass
 
@@ -54,15 +55,19 @@ Fix:
 - Added `CLOUDFLARE_STREAM_REQUIRE_SIGNED_URLS`.
 - Defaulted it to `false` in development and production Worker vars.
 - Video upload intent and direct video upload now use that explicit flag.
+- The iOS video player and prewarm manager now share `MIRAStreamPlaybackResolver`, which attaches the Keychain bearer token before calling `/api/stream/video/:uid`.
+- `/api/stream/video/:uid` now uses `authMiddleware`.
 
 Validation:
 
 - `backend-cf`: `npx.cmd tsc --noEmit` passes.
+- `backend-cf`: `npm.cmd run test:moderation` passes.
+- `admin-web`: `npm.cmd --prefix admin-web run build` passes.
 
 Remaining risk:
 
 - Existing videos already uploaded with signed playback may still need re-upload, admin repair, or a signed playback-token implementation.
-- `/api/stream/video/:uid` is still public for compatibility. For private chat/story media, move the iOS prewarm resolver to authenticated API requests and require auth on this route.
+- `/api/stream/video/:uid` now authenticates the caller, but a future hardening pass should add object-level authorization so only story/chat/post viewers allowed to see that media can resolve the Stream UID.
 
 ## Production Readiness Matrix
 
@@ -76,8 +81,8 @@ Remaining risk:
 | Comments | Needs QA | D1 comment counts are still used in the canonical engagement response. |
 | Feed performance | Partial | iOS has URLCache/prewarm infrastructure; still needs Instruments/device proof under slow network. |
 | Discover filters | Needs QA | Backend multi-signal category logic exists, but category accuracy needs real production sample review. |
-| Chat video | Patched for new Stream uploads | Existing signed videos may remain broken until repaired/reuploaded. |
-| Stories video | Patched for new Stream uploads | First-play instant behavior still requires real-device profiling. |
+| Chat video | Patched for new Stream uploads | iOS resolver now sends auth. Existing signed videos may remain broken until repaired/reuploaded. |
+| Stories video | Patched for new Stream uploads | iOS resolver now sends auth. First-play instant behavior still requires real-device profiling. |
 | Moderation | Partial | Pre-publish moderation exists. False-positive review rates need monitoring and admin override workflow. |
 | Account deletion | Partial | In-app flow and backend routes exist; provider revocation and full Supabase-only cleanup must be verified. |
 | Admin moderation | Partial | Admin app exists; D1-backed moderation storage remains. |
@@ -111,7 +116,7 @@ Run these on the latest TestFlight build before App Store submission:
 - Keep `DATABASE_PRIMARY=supabase_postgres`, but do not remove D1 binding until D1 route references are migrated.
 - Preserve rate limits for upload, comments, messages, reports, login, and moderation actions.
 - Keep Cloudflare KV only for temporary cache/rate-limit data.
-- Before enabling signed Stream playback, implement signed playback URL/token generation and make the iOS Stream resolver authorized.
+- Before enabling signed Stream playback, implement signed playback URL/token generation and object-level media authorization.
 
 ## Production Reset Requirements
 
