@@ -5201,55 +5201,219 @@ async function supabaseAdminDeleteRows(c: any, table: string, filters: Record<st
 
 async function supabaseDeletePostInteractionsForUsers(c: any, postId: string, userIds: string[], kind: 'like' | 'save') {
   if (!userIds.length) return;
+  const authUserIds = await supabaseAuthUserIdsForAppUserIds(c, userIds);
+  const appUserIds = Array.from(new Set([...userIds, ...authUserIds])).filter(Boolean);
   await supabaseAdminDeleteRows(c, 'app_post_interactions', {
     legacy_post_id: postgrestEqFilter(postId),
     kind: postgrestEqFilter(kind),
-    app_user_id: postgrestInFilter(userIds),
+    app_user_id: postgrestInFilter(appUserIds),
   });
+  if (authUserIds.length) {
+    try {
+      await supabaseAdminDeleteRows(c, 'app_post_interactions', {
+        legacy_post_id: postgrestEqFilter(postId),
+        kind: postgrestEqFilter(kind),
+        user_id: postgrestInFilter(authUserIds),
+      });
+    } catch (error: any) {
+      const code = getErrorCode(error);
+      if (!code.includes('PGRST204') && !code.toLowerCase().includes('column')) {
+        throw error;
+      }
+    }
+  }
 }
 
 async function supabaseUpsertPostInteraction(c: any, postId: string, userId: string, kind: 'like' | 'save', collection = '') {
-  await supabaseAdminUpsert(c, 'app_post_interactions', [{
+  const baseRow: any = {
     legacy_post_id: cleanText(postId, 120),
     app_user_id: cleanText(userId, 120),
     kind,
     collection: kind === 'save' ? (cleanText(collection, 120) || 'saved') : null,
     metadata: { source: 'cloudflare_worker_primary' },
     legacy_created_at: now(),
-  }], 'legacy_post_id,app_user_id,kind');
+  };
+  const authUserId = await supabaseAuthUserIdForAppUserId(c, userId);
+  if (authUserId) baseRow.user_id = authUserId;
+  try {
+    await supabaseAdminUpsert(c, 'app_post_interactions', [baseRow], 'legacy_post_id,app_user_id,kind');
+  } catch (error: any) {
+    const code = getErrorCode(error);
+    if (!('user_id' in baseRow) || (!code.includes('PGRST204') && !code.toLowerCase().includes('column'))) {
+      throw error;
+    }
+    delete baseRow.user_id;
+    await supabaseAdminUpsert(c, 'app_post_interactions', [baseRow], 'legacy_post_id,app_user_id,kind');
+  }
 }
 
 async function supabaseViewerPostInteractionExists(c: any, postId: string, userIds: string[], kind: 'like' | 'save'): Promise<boolean> {
   if (!userIds.length) return false;
+  const keys = await supabaseInteractionIdentityKeys(c, userIds);
   const rows = await supabaseAdminSelectRows(c, 'app_post_interactions', {
     legacy_post_id: postgrestEqFilter(postId),
     kind: postgrestEqFilter(kind),
-    app_user_id: postgrestInFilter(userIds),
+    app_user_id: postgrestInFilter(keys.appUserIds),
   }, 'legacy_post_id', 1);
-  return rows.length > 0;
+  if (rows.length > 0) return true;
+  if (!keys.authUserIds.length) return false;
+  try {
+    const nativeRows = await supabaseAdminSelectRows(c, 'app_post_interactions', {
+      legacy_post_id: postgrestEqFilter(postId),
+      kind: postgrestEqFilter(kind),
+      user_id: postgrestInFilter(keys.authUserIds),
+    }, 'legacy_post_id', 1);
+    return nativeRows.length > 0;
+  } catch (error: any) {
+    const code = getErrorCode(error);
+    if (!code.includes('PGRST204') && !code.toLowerCase().includes('column')) throw error;
+    return false;
+  }
+}
+
+async function supabaseAuthUserIdForAppUserId(c: any, userId: string): Promise<string> {
+  const cleanUserId = publicId(userId, 120);
+  if (!cleanUserId) return '';
+  const [authUserId] = await supabaseAuthUserIdsForAppUserIds(c, [cleanUserId]);
+  return authUserId || '';
+}
+
+async function legacyD1AuthUserIdsForAppUserIds(c: any, ids: string[]): Promise<string[]> {
+  const authIds = new Set<string>();
+  if (!ids.length) return [];
+  try {
+    const placeholders = inPlaceholders(ids);
+    const rows = await c.env.DB.prepare(`SELECT supabase_user_id FROM users WHERE id IN (${placeholders})`)
+      .bind(...ids)
+      .all();
+    for (const row of rows.results as any[]) {
+      const authId = isUuidText(row?.supabase_user_id);
+      if (authId) authIds.add(authId);
+    }
+  } catch {}
+  return Array.from(authIds);
+}
+
+async function supabaseAuthUserIdsForAppUserIds(c: any, userIds: string[]): Promise<string[]> {
+  const ids = Array.from(new Set(userIds.map((value) => publicId(value, 120)).filter(Boolean)));
+  const authIds = new Set<string>();
+  const payloadSupabaseSub = isUuidText(c.get?.('jwtPayload')?.supabase_sub);
+  if (payloadSupabaseSub) authIds.add(payloadSupabaseSub);
+  if (!ids.length) return Array.from(authIds);
+  try {
+    const rows = await supabaseAdminSelectRows(c, 'app_users', {
+      id: postgrestInFilter(ids),
+    }, 'id,supabase_user_id', Math.max(1, ids.length));
+    for (const row of rows) {
+      const authId = isUuidText(row?.supabase_user_id);
+      if (authId) authIds.add(authId);
+    }
+  } catch {
+    for (const authId of await legacyD1AuthUserIdsForAppUserIds(c, ids)) {
+      authIds.add(authId);
+    }
+  }
+  return Array.from(authIds);
+}
+
+async function supabaseInteractionIdentityKeys(c: any, userIds: string[]) {
+  const authUserIds = await supabaseAuthUserIdsForAppUserIds(c, userIds);
+  return {
+    appUserIds: Array.from(new Set([...userIds, ...authUserIds])).filter(Boolean),
+    authUserIds,
+  };
+}
+
+async function supabasePostInteractionActorCount(c: any, postId: string, kind: 'like' | 'save'): Promise<number> {
+  const filters = {
+    legacy_post_id: postgrestEqFilter(postId),
+    kind: postgrestEqFilter(kind),
+  };
+  let rows: any[];
+  try {
+    rows = await supabaseAdminSelectRows(c, 'app_post_interactions', filters, 'app_user_id,user_id', 10000);
+  } catch (error: any) {
+    const code = getErrorCode(error);
+    if (!code.includes('PGRST204') && !code.toLowerCase().includes('column')) throw error;
+    rows = await supabaseAdminSelectRows(c, 'app_post_interactions', filters, 'app_user_id', 10000);
+  }
+  const actors = new Set<string>();
+  for (const row of rows) {
+    const actor = cleanText(row?.app_user_id || row?.user_id, 160);
+    if (actor) actors.add(actor);
+  }
+  return actors.size;
+}
+
+async function supabasePostInteractionActorCounts(c: any, postIds: string[]) {
+  const cleanPostIds = Array.from(new Set(postIds.map((value) => publicId(value, 120)).filter(Boolean)));
+  const counts = new Map<string, { likes_count: number; saves_count: number }>();
+  for (const postId of cleanPostIds) {
+    counts.set(postId, { likes_count: 0, saves_count: 0 });
+  }
+  if (!cleanPostIds.length) return counts;
+
+  const filters = {
+    legacy_post_id: postgrestInFilter(cleanPostIds),
+    kind: postgrestInFilter(['like', 'save']),
+  };
+  let rows: any[];
+  try {
+    rows = await supabaseAdminSelectRows(c, 'app_post_interactions', filters, 'legacy_post_id,kind,app_user_id,user_id', Math.max(1000, cleanPostIds.length * 500));
+  } catch (error: any) {
+    const code = getErrorCode(error);
+    if (!code.includes('PGRST204') && !code.toLowerCase().includes('column')) throw error;
+    rows = await supabaseAdminSelectRows(c, 'app_post_interactions', filters, 'legacy_post_id,kind,app_user_id', Math.max(1000, cleanPostIds.length * 500));
+  }
+
+  const actorsByPostAndKind = new Map<string, Set<string>>();
+  for (const row of rows) {
+    const postId = publicId(row?.legacy_post_id, 120);
+    const kind = cleanText(row?.kind, 20);
+    if (!postId || (kind !== 'like' && kind !== 'save')) continue;
+    const actor = cleanText(row?.app_user_id || row?.user_id, 160);
+    if (!actor) continue;
+    const key = `${postId}:${kind}`;
+    const actors = actorsByPostAndKind.get(key) || new Set<string>();
+    actors.add(actor);
+    actorsByPostAndKind.set(key, actors);
+  }
+
+  for (const postId of cleanPostIds) {
+    counts.set(postId, {
+      likes_count: actorsByPostAndKind.get(`${postId}:like`)?.size || 0,
+      saves_count: actorsByPostAndKind.get(`${postId}:save`)?.size || 0,
+    });
+  }
+  return counts;
+}
+
+async function d1PostCommentCount(db: D1Database, postId: string): Promise<number> {
+  try {
+    const row: any = await db.prepare(
+      "SELECT COUNT(*) AS count FROM comments WHERE post_id = ? AND COALESCE(status, 'active') NOT IN ('removed', 'hidden')"
+    ).bind(postId).first();
+    return Math.max(0, Number(row?.count || 0));
+  } catch {
+    return 0;
+  }
 }
 
 async function getSupabasePostEngagementState(c: any, postId: string, userId: string) {
   const relatedUserIds = await relatedInteractionUserIds(c.env.DB, userId);
-  const d1State = await getPostEngagementState(c.env.DB, postId, userId);
+  const commentsCount = await d1PostCommentCount(c.env.DB, postId);
   let liked = await supabaseViewerPostInteractionExists(c, postId, relatedUserIds, 'like');
   let saved = await supabaseViewerPostInteractionExists(c, postId, relatedUserIds, 'save');
   const [supabaseLikesCount, supabaseSavesCount] = await Promise.all([
-    supabaseAdminCountRows(c, 'app_post_interactions', {
-      legacy_post_id: postgrestEqFilter(postId),
-      kind: postgrestEqFilter('like'),
-    }),
-    supabaseAdminCountRows(c, 'app_post_interactions', {
-      legacy_post_id: postgrestEqFilter(postId),
-      kind: postgrestEqFilter('save'),
-    }),
+    supabasePostInteractionActorCount(c, postId, 'like'),
+    supabasePostInteractionActorCount(c, postId, 'save'),
   ]);
   const state = {
     // Supabase app_post_interactions is the canonical engagement table.
     // D1 counters are legacy/cache only and must not inflate counts after
     // refreshes or app restarts.
     likes_count: Math.max(0, supabaseLikesCount),
-    comments_count: Math.max(0, Number(d1State.comments_count || 0)),
+    comments_count: commentsCount,
     saves_count: Math.max(0, supabaseSavesCount),
     liked,
     saved,
@@ -5283,34 +5447,47 @@ async function getCanonicalPostEngagementState(c: any, postId: string, userId: s
 }
 
 async function setCanonicalPostLikeState(c: any, postId: string, userId: string, requested: boolean | null) {
-  const relatedUserIds = await coalesceViewerPostInteractions(c.env.DB, postId, userId);
-  const placeholders = inPlaceholders(relatedUserIds);
-  const d1LikedRow = await c.env.DB.prepare(
-    `SELECT 1 AS found FROM likes WHERE post_id = ? AND user_id IN (${placeholders}) LIMIT 1`
-  ).bind(postId, ...relatedUserIds).first();
-  const d1WasLiked = !!d1LikedRow;
-  const wasLiked = supabaseEngagementConfigured(c)
+  const useSupabase = supabaseEngagementConfigured(c);
+  const relatedUserIds = useSupabase
+    ? await relatedInteractionUserIds(c.env.DB, userId)
+    : await coalesceViewerPostInteractions(c.env.DB, postId, userId);
+  let d1WasLiked = false;
+  if (!useSupabase) {
+    const placeholders = inPlaceholders(relatedUserIds);
+    const d1LikedRow = await c.env.DB.prepare(
+      `SELECT 1 AS found FROM likes WHERE post_id = ? AND user_id IN (${placeholders}) LIMIT 1`
+    ).bind(postId, ...relatedUserIds).first();
+    d1WasLiked = !!d1LikedRow;
+  }
+  const wasLiked = useSupabase
     ? await supabaseViewerPostInteractionExists(c, postId, relatedUserIds, 'like')
     : d1WasLiked;
   const nextLiked = requested === null ? !wasLiked : requested;
 
-  if (supabaseEngagementConfigured(c)) {
+  if (useSupabase) {
     await supabaseDeletePostInteractionsForUsers(c, postId, relatedUserIds, 'like');
     if (nextLiked) {
       await supabaseUpsertPostInteraction(c, postId, userId, 'like');
     }
   }
 
-  await deletePostLikesForUsers(c.env.DB, postId, relatedUserIds);
-  if (nextLiked) {
-    await c.env.DB.prepare('INSERT OR IGNORE INTO likes (id, user_id, post_id) VALUES (?, ?, ?)')
-      .bind(uuid(), userId, postId)
-      .run();
-    await c.env.DB.prepare(
-      `INSERT OR IGNORE INTO discover_likes (id, user_id, post_id)
-       SELECT ?, ?, ?
-       WHERE EXISTS (SELECT 1 FROM discover_posts WHERE id = ?)`
-    ).bind(uuid(), userId, postId, postId).run().catch(() => {});
+  const syncLegacyD1LikeCache = async () => {
+    await deletePostLikesForUsers(c.env.DB, postId, relatedUserIds);
+    if (nextLiked) {
+      await c.env.DB.prepare('INSERT OR IGNORE INTO likes (id, user_id, post_id) VALUES (?, ?, ?)')
+        .bind(uuid(), userId, postId)
+        .run();
+      await c.env.DB.prepare(
+        `INSERT OR IGNORE INTO discover_likes (id, user_id, post_id)
+         SELECT ?, ?, ?
+         WHERE EXISTS (SELECT 1 FROM discover_posts WHERE id = ?)`
+      ).bind(uuid(), userId, postId, postId).run().catch(() => {});
+    }
+  };
+  if (useSupabase) {
+    await syncLegacyD1LikeCache().catch(() => undefined);
+  } else {
+    await syncLegacyD1LikeCache();
   }
 
   const state = await getCanonicalPostEngagementState(c, postId, userId);
@@ -5320,31 +5497,44 @@ async function setCanonicalPostLikeState(c: any, postId: string, userId: string,
 
 async function setCanonicalPostSaveState(c: any, postId: string, userId: string, saved: boolean, collection = 'saved') {
   const collectionName = cleanText(collection, 80) || 'saved';
-  const relatedUserIds = await coalesceViewerPostInteractions(c.env.DB, postId, userId);
-  const placeholders = inPlaceholders(relatedUserIds);
-  const d1SavedRow = await c.env.DB.prepare(
-    `SELECT 1 AS found FROM saved_posts WHERE post_id = ? AND user_id IN (${placeholders}) LIMIT 1`
-  ).bind(postId, ...relatedUserIds).first();
-  const d1WasSaved = !!d1SavedRow;
-  const wasSaved = supabaseEngagementConfigured(c)
+  const useSupabase = supabaseEngagementConfigured(c);
+  const relatedUserIds = useSupabase
+    ? await relatedInteractionUserIds(c.env.DB, userId)
+    : await coalesceViewerPostInteractions(c.env.DB, postId, userId);
+  let d1WasSaved = false;
+  if (!useSupabase) {
+    const placeholders = inPlaceholders(relatedUserIds);
+    const d1SavedRow = await c.env.DB.prepare(
+      `SELECT 1 AS found FROM saved_posts WHERE post_id = ? AND user_id IN (${placeholders}) LIMIT 1`
+    ).bind(postId, ...relatedUserIds).first();
+    d1WasSaved = !!d1SavedRow;
+  }
+  const wasSaved = useSupabase
     ? await supabaseViewerPostInteractionExists(c, postId, relatedUserIds, 'save')
     : d1WasSaved;
 
-  if (supabaseEngagementConfigured(c)) {
+  if (useSupabase) {
     await supabaseDeletePostInteractionsForUsers(c, postId, relatedUserIds, 'save');
     if (saved) {
       await supabaseUpsertPostInteraction(c, postId, userId, 'save', collectionName);
     }
   }
 
-  await deletePostSavesForUsers(c.env.DB, postId, relatedUserIds);
-  if (saved) {
-    await c.env.DB.prepare('INSERT OR IGNORE INTO saved_posts (id, user_id, post_id, collection) VALUES (?, ?, ?, ?)')
-      .bind(uuid(), userId, postId, collectionName)
-      .run();
-    await c.env.DB.prepare(
-      'INSERT INTO bookmarks (id, user_id, post_id, collection) VALUES (?, ?, ?, ?) ON CONFLICT(user_id, post_id) DO UPDATE SET collection = ?'
-    ).bind(uuid(), userId, postId, collectionName, collectionName).run().catch(() => {});
+  const syncLegacyD1SaveCache = async () => {
+    await deletePostSavesForUsers(c.env.DB, postId, relatedUserIds);
+    if (saved) {
+      await c.env.DB.prepare('INSERT OR IGNORE INTO saved_posts (id, user_id, post_id, collection) VALUES (?, ?, ?, ?)')
+        .bind(uuid(), userId, postId, collectionName)
+        .run();
+      await c.env.DB.prepare(
+        'INSERT INTO bookmarks (id, user_id, post_id, collection) VALUES (?, ?, ?, ?) ON CONFLICT(user_id, post_id) DO UPDATE SET collection = ?'
+      ).bind(uuid(), userId, postId, collectionName, collectionName).run().catch(() => {});
+    }
+  };
+  if (useSupabase) {
+    await syncLegacyD1SaveCache().catch(() => undefined);
+  } else {
+    await syncLegacyD1SaveCache();
   }
 
   const state = await getCanonicalPostEngagementState(c, postId, userId);
@@ -5358,11 +5548,28 @@ async function overlaySupabaseViewerEngagement(c: any, posts: any[], userId: str
   if (!postIds.length) return posts;
   try {
     const relatedUserIds = await relatedInteractionUserIds(c.env.DB, userId);
-    const rows = await supabaseAdminSelectRows(c, 'app_post_interactions', {
-      legacy_post_id: postgrestInFilter(postIds),
-      app_user_id: postgrestInFilter(relatedUserIds),
-      kind: postgrestInFilter(['like', 'save']),
-    }, 'legacy_post_id,kind', Math.max(1, postIds.length * 2 * Math.max(1, relatedUserIds.length)));
+    const keys = await supabaseInteractionIdentityKeys(c, relatedUserIds);
+    const [rows, counts] = await Promise.all([
+      supabaseAdminSelectRows(c, 'app_post_interactions', {
+        legacy_post_id: postgrestInFilter(postIds),
+        app_user_id: postgrestInFilter(keys.appUserIds),
+        kind: postgrestInFilter(['like', 'save']),
+      }, 'legacy_post_id,kind', Math.max(1, postIds.length * 2 * Math.max(1, relatedUserIds.length))),
+      supabasePostInteractionActorCounts(c, postIds),
+    ]);
+    if (keys.authUserIds.length) {
+      try {
+        const nativeRows = await supabaseAdminSelectRows(c, 'app_post_interactions', {
+          legacy_post_id: postgrestInFilter(postIds),
+          user_id: postgrestInFilter(keys.authUserIds),
+          kind: postgrestInFilter(['like', 'save']),
+        }, 'legacy_post_id,kind', Math.max(1, postIds.length * 2 * keys.authUserIds.length));
+        rows.push(...nativeRows);
+      } catch (error: any) {
+        const code = getErrorCode(error);
+        if (!code.includes('PGRST204') && !code.toLowerCase().includes('column')) throw error;
+      }
+    }
     const liked = new Set<string>();
     const saved = new Set<string>();
     for (const row of rows) {
@@ -5378,6 +5585,8 @@ async function overlaySupabaseViewerEngagement(c: any, posts: any[], userId: str
       const viewerSaved = saved.has(postId);
       return {
         ...post,
+        likes_count: counts.get(postId)?.likes_count ?? Math.max(0, Number(post?.likes_count || 0)),
+        saves_count: counts.get(postId)?.saves_count ?? Math.max(0, Number(post?.saves_count || 0)),
         is_liked: viewerLiked ? 1 : 0,
         viewer_liked: viewerLiked,
         liked_by_me: viewerLiked,

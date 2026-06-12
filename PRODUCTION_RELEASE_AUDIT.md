@@ -1,6 +1,6 @@
 # Captro Production Release Audit
 
-Date: 2026-06-11
+Date: 2026-06-12
 
 ## Status
 
@@ -19,6 +19,10 @@ Captro's production backend deploy blocker is resolved. Captro is not ready to m
 - Cloudflare remains the media layer for Images/R2/Stream.
 - Unauthenticated `/api/posts/feed` and `/api/admin/me` return `401`, as expected.
 - `admin-web` production build passes.
+- Production Supabase RLS policies are applied for app users, posts, likes/saves, comments, follows, blocks, messages, reports, media assets, push tokens, and admin/moderation tables.
+- Supabase security advisor no longer reports missing RLS policies or disabled RLS on public app tables. Remaining warnings: `citext` extension in `public`, and Auth leaked-password protection disabled in the dashboard.
+- Worker engagement logic now treats Supabase `app_post_interactions` as canonical for like/save state and counts; D1 engagement rows are best-effort legacy cache only.
+- `backend-cf` TypeScript check passes after the Supabase engagement/RLS changes.
 
 ## Blockers
 
@@ -55,7 +59,11 @@ Captro's production backend deploy blocker is resolved. Captro is not ready to m
    D1 duplicate like check returned zero duplicate `(user_id, post_id)` pairs.
    Supabase duplicate `app_post_interactions` check returned zero duplicate `(legacy_post_id, app_user_id, kind)` rows.
 
-4. Protected reset workflow is staged on the working branch.
+4. Legacy D1 database code is still present in the Worker.
+
+   Captro's target architecture is Supabase for app data and Cloudflare for media/security only. The codebase still contains many `c.env.DB`/`D1Database` references, so the D1 binding and D1 migration workflow must stay until each route group is cut over and verified.
+
+5. Protected reset workflow is staged on the working branch.
 
    Added `.github/workflows/production-data-reset.yml`. GitHub will allow manual dispatch after this workflow file is present on the default branch. It supports:
 
