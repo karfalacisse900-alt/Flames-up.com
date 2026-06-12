@@ -8,7 +8,7 @@ Captro's production backend deploy blocker is resolved. Captro is not ready to m
 
 ## Verified
 
-- Latest completed TestFlight workflow succeeded for commit `2f306f1f07c1e9b5b5a04e374ed5e712eeb37643`.
+- Latest completed TestFlight workflow succeeded for commit `b6d929008c3e09f1f1c8e3bcacf12b18c51a257c`.
 - Production backend deploy succeeded for commit `2f306f1f07c1e9b5b5a04e374ed5e712eeb37643`.
 - Production `/api/health` reports `environment = "production"`, `service = "captro-api"`, `primary = "supabase_postgres"`, and `healthy = true`.
 - `backend-cf` TypeScript check passes with `npx.cmd tsc --noEmit`.
@@ -55,6 +55,17 @@ Captro's production backend deploy blocker is resolved. Captro is not ready to m
    D1 duplicate like check returned zero duplicate `(user_id, post_id)` pairs.
    Supabase duplicate `app_post_interactions` check returned zero duplicate `(legacy_post_id, app_user_id, kind)` rows.
 
+4. Protected reset workflow is staged on the working branch.
+
+   Added `.github/workflows/production-data-reset.yml`. GitHub will allow manual dispatch after this workflow file is present on the default branch. It supports:
+
+   - dry-run by default
+   - exact `CONFIRM_PRODUCTION_RESET` gate for execute mode
+   - backup confirmation gate for execute mode
+   - Cloudflare Images/Stream cleanup before database row deletion
+   - legacy D1 media export so old image assets are included
+   - optional legacy D1 row reset after Supabase reset
+
 ## Database Reset Scope
 
 The protected Supabase reset script targets user/test/generated data only:
@@ -89,6 +100,7 @@ The Cloudflare cleanup script reads `app_media_assets` and can delete:
 
 - Cloudflare Images assets
 - Cloudflare Stream videos
+- legacy D1 `media_assets` rows exported from Wrangler JSON
 
 It dry-runs by default and requires:
 
@@ -99,16 +111,13 @@ R2 objects need separate cleanup if rows use `storage_provider = r2`.
 
 ## Required Next Steps
 
-1. Add missing Supabase GitHub repository secrets.
-2. Re-run the backend deploy workflow.
-3. Confirm `/api/database/status` reports Supabase Postgres as healthy.
-4. Back up Supabase Postgres.
-5. Run Supabase reset dry-run and review row counts.
-6. Run Cloudflare media cleanup dry-run and review asset list.
-7. Execute reset only after confirming preserved admin/reviewer accounts.
-8. Run legacy D1 reset if production can still serve D1 rows.
-9. Upload a fresh TestFlight build.
-10. Smoke test the App Store review checklist on a real iPhone.
+1. Back up Supabase Postgres.
+2. Run Supabase reset dry-run and review row counts.
+3. Run Cloudflare media cleanup dry-run and review asset list.
+4. Execute reset only after confirming preserved admin/reviewer accounts.
+5. Run legacy D1 reset if production can still serve D1 rows.
+6. Upload a fresh TestFlight build after any app-code changes.
+7. Smoke test the App Store review checklist on a real iPhone.
 
 ## App Store Review Checklist
 
