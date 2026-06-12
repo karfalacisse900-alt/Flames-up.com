@@ -13012,13 +13012,24 @@ api.get('/posts/:postId', authMiddleware, async (c) => {
 
 api.post('/posts/:postId/like', authMiddleware, async (c) => {
   const userId = getUserId(c); const postId = c.req.param('postId');
-  await ensureGovernanceSchema(c.env.DB);
-  await ensureMediaModerationSchema(c.env.DB);
-  await ensureLikeUniquenessSchema(c.env.DB);
   const limited = await enforceRateLimit(c, 'post_like', userId, 300, 60);
   if (limited) return limited;
   const body: any = await c.req.json().catch(() => ({}));
   const requested = optionalBoolean(body.liked ?? body.like ?? body.value);
+  if (supabasePrimaryConfigured(c)) {
+    try {
+      const [visiblePost] = await supabaseReadVisiblePosts(c, userId, { postId, limit: 1 });
+      if (!visiblePost) return c.json({ detail: 'Post not found' }, 404);
+      const { state } = await setCanonicalPostLikeState(c, postId, userId, requested);
+      return c.json(postEngagementResponse(state));
+    } catch (error: any) {
+      console.warn(JSON.stringify({ event: 'supabase_post_like_failed', code: getErrorCode(error).slice(0, 180) }));
+      return c.json({ detail: 'Could not update like.' }, 500);
+    }
+  }
+  await ensureGovernanceSchema(c.env.DB);
+  await ensureMediaModerationSchema(c.env.DB);
+  await ensureLikeUniquenessSchema(c.env.DB);
   const likeVisiblePostSql = [
     `SELECT p.id, p.user_id,
        (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS likes_count,
