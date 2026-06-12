@@ -4938,8 +4938,15 @@ function postPayload(post: any, likedBy: string[] = [], env?: Env) {
   const likesCount = Math.max(0, Number(post.live_likes_count ?? post.likes_count ?? 0));
   const commentsCount = Math.max(0, Number(post.live_comments_count ?? post.comments_count ?? 0));
   const savesCount = Math.max(0, Number(post.live_saves_count ?? post.saves_count ?? 0));
-  const isLiked = post.is_liked === true || post.is_liked === 1 || post.is_liked === '1';
-  const isSaved = post.is_saved === true || post.is_saved === 1 || post.is_saved === '1' || post.saved === true || post.saved === 1 || post.saved === '1';
+  const isLiked =
+    post.is_liked === true || post.is_liked === 1 || post.is_liked === '1' ||
+    post.viewer_liked === true || post.viewer_liked === 1 || post.viewer_liked === '1' ||
+    post.liked_by_me === true || post.liked_by_me === 1 || post.liked_by_me === '1';
+  const isSaved =
+    post.is_saved === true || post.is_saved === 1 || post.is_saved === '1' ||
+    post.saved === true || post.saved === 1 || post.saved === '1' ||
+    post.viewer_saved === true || post.viewer_saved === 1 || post.viewer_saved === '1' ||
+    post.saved_by_me === true || post.saved_by_me === 1 || post.saved_by_me === '1';
   const mediaUrls = sanitizeMediaReferences(post.images, post.image);
   const primaryMediaUrl = safeMediaReference(post.image) || mediaUrls[0] || '';
   const mediaTypes = parseJsonArray(post.media_types).map((item) => String(item || '').toLowerCase().includes('video') ? 'video' : 'image');
@@ -14095,7 +14102,8 @@ api.get('/discover/search', authMiddleware, async (c) => {
   const users = await c.env.DB.prepare(
     "SELECT id, username, full_name, profile_image, bio, is_private FROM users WHERE COALESCE(status, 'active') = 'active' AND (username LIKE ? OR full_name LIKE ?) LIMIT 10"
   ).bind(`%${q}%`, `%${q}%`).all();
-  return c.json({ posts: feedPhotoPostsOnly(posts.results as any[]).map((p) => feedPostPayload(p, [], c.env)), users: (users.results as any[]).map((user) => safeUserPayload(user)) });
+  const searchRows = await overlaySupabaseViewerEngagement(c, feedPhotoPostsOnly(posts.results as any[]), userId);
+  return c.json({ posts: searchRows.map((p) => feedPostPayload(p, [], c.env)), users: (users.results as any[]).map((user) => safeUserPayload(user)) });
 });
 api.get('/discover/suggested-users', authMiddleware, async (c) => {
   const userId = getUserId(c);

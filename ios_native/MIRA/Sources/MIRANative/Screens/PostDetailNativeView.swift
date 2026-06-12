@@ -27,10 +27,10 @@ final class PostDetailModel: ObservableObject {
       let refreshed: MIRAPost = try await api.get("/posts/\(post.id)")
       let current = post
       let merged = refreshed.updating(
-        liked: refreshed.isLiked ?? current.isLiked,
+        liked: mergedViewerFlag(cached: current.viewerLikedValue, fresh: refreshed.viewerLikedValue, cachedCount: current.likesCount, freshCount: refreshed.likesCount),
         likesCount: refreshed.likesCount ?? current.likesCount,
         commentsCount: bestCount(current.commentsCount, refreshed.commentsCount),
-        saved: refreshed.isSaved ?? refreshed.saved?.value ?? current.viewerSaved,
+        saved: mergedViewerFlag(cached: current.viewerSavedValue, fresh: refreshed.viewerSavedValue, cachedCount: current.savesCount, freshCount: refreshed.savesCount),
         savesCount: bestCount(current.savesCount, refreshed.savesCount),
         following: refreshed.isFollowing ?? refreshed.following?.value ?? refreshed.followed?.value ?? current.viewerFollowing
       )
@@ -327,10 +327,10 @@ final class PostDetailModel: ObservableObject {
 
   private func applyCachedEngagement(from cached: MIRAPost) {
     post = post.updating(
-      liked: cached.isLiked,
+      liked: cached.viewerLikedValue,
       likesCount: bestCount(post.likesCount, cached.likesCount),
       commentsCount: bestCount(post.commentsCount, cached.commentsCount),
-      saved: cached.isSaved ?? cached.saved?.value,
+      saved: cached.viewerSavedValue,
       savesCount: bestCount(post.savesCount, cached.savesCount)
     )
   }
@@ -344,6 +344,15 @@ final class PostDetailModel: ObservableObject {
     let fallback = optimistic ?? current
     guard let incoming else { return fallback }
     return max(0, incoming)
+  }
+
+  private func mergedViewerFlag(cached: Bool?, fresh: Bool?, cachedCount: Int?, freshCount: Int?) -> Bool? {
+    guard let fresh else { return cached }
+    guard cached == true, fresh == false else { return fresh }
+    if let cachedCount, let freshCount, freshCount >= cachedCount {
+      return true
+    }
+    return fresh
   }
 
   private func loadCurrentUserIfNeeded() async {

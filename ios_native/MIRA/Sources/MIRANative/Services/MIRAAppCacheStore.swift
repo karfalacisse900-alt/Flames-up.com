@@ -286,12 +286,21 @@ actor MIRAAppCacheStore {
 
   private func mergedPostPreservingViewerState(cached: MIRAPost, fresh: MIRAPost) -> MIRAPost {
     fresh.updating(
-      liked: fresh.isLiked ?? cached.isLiked,
+      liked: mergedViewerFlag(cached: cached.viewerLikedValue, fresh: fresh.viewerLikedValue, cachedCount: cached.likesCount, freshCount: fresh.likesCount),
       likesCount: fresh.likesCount ?? cached.likesCount,
       commentsCount: fresh.commentsCount ?? cached.commentsCount,
-      saved: fresh.isSaved ?? cached.isSaved ?? cached.saved?.value,
+      saved: mergedViewerFlag(cached: cached.viewerSavedValue, fresh: fresh.viewerSavedValue, cachedCount: cached.savesCount, freshCount: fresh.savesCount),
       savesCount: fresh.savesCount ?? cached.savesCount
     )
+  }
+
+  private func mergedViewerFlag(cached: Bool?, fresh: Bool?, cachedCount: Int?, freshCount: Int?) -> Bool? {
+    guard let fresh else { return cached }
+    guard cached == true, fresh == false else { return fresh }
+    if let cachedCount, let freshCount, freshCount >= cachedCount {
+      return true
+    }
+    return fresh
   }
 
   private func nowISO() -> String {
