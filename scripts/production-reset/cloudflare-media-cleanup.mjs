@@ -14,6 +14,7 @@
  *
  * Optional:
  *   EXECUTE_DELETE=true
+ *   CLOUDFLARE_MEDIA_ASSETS_FILE=/path/to/wrangler-d1-media-assets.json
  */
 
 const required = [
@@ -66,6 +67,29 @@ async function fetchAssets() {
   return assets;
 }
 
+async function fetchLegacyAssetsFromFile() {
+  const filePath = process.env.CLOUDFLARE_MEDIA_ASSETS_FILE;
+  if (!filePath) return [];
+  const fs = await import('node:fs/promises');
+  const buffer = await fs.readFile(filePath);
+  const raw = buffer[0] === 0xff && buffer[1] === 0xfe
+    ? buffer.toString('utf16le').replace(/^\uFEFF/, '')
+    : buffer.toString('utf8').replace(/^\uFEFF/, '');
+  const parsed = JSON.parse(raw);
+  const commandResults = Array.isArray(parsed) ? parsed : [];
+  return commandResults
+    .flatMap((entry) => Array.isArray(entry?.results) ? entry.results : [])
+    .map((row) => ({
+      id: row.id,
+      storage_provider: row.storage_provider,
+      storage_key: row.storage_key,
+      media_type: row.media_type,
+      public_url: row.public_url,
+      source: 'legacy_d1',
+    }))
+    .filter((asset) => asset.storage_provider && asset.storage_key);
+}
+
 function normalizeProvider(provider = '') {
   return String(provider).toLowerCase().replace(/^cloudflare_/, '');
 }
@@ -94,10 +118,19 @@ async function deleteCloudflareStream(asset) {
   return { ok: res.ok, status: res.status, body: await res.text() };
 }
 
-const assets = await fetchAssets();
+const supabaseAssets = await fetchAssets();
+const legacyAssets = await fetchLegacyAssetsFromFile();
+const uniqueAssets = new Map();
+for (const asset of [...supabaseAssets, ...legacyAssets]) {
+  const key = `${normalizeProvider(asset.storage_provider)}:${asset.storage_key}`;
+  if (!uniqueAssets.has(key)) uniqueAssets.set(key, asset);
+}
+const assets = Array.from(uniqueAssets.values());
 const summary = {
   executeDelete,
   total: assets.length,
+  supabaseAssets: supabaseAssets.length,
+  legacyAssets: legacyAssets.length,
   images: 0,
   stream: 0,
   r2OrUnknown: 0,

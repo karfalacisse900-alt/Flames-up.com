@@ -91,6 +91,12 @@ jobs:
           CONFIRM_PRODUCTION_RESET: ${{ inputs.confirmation }}
         run: |
           set -euo pipefail
+          cd backend-cf
+          npx wrangler d1 execute DB --env production --remote --json --command \
+            "SELECT id, media_type, storage_provider, storage_key, public_url FROM media_assets;" \
+            > /tmp/captro-legacy-d1-media-assets.json
+          cd ..
+          export CLOUDFLARE_MEDIA_ASSETS_FILE=/tmp/captro-legacy-d1-media-assets.json
           node scripts/production-reset/cloudflare-media-cleanup.mjs
 
       - name: Build Supabase reset SQL

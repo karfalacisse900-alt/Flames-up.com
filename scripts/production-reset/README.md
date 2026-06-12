@@ -68,6 +68,16 @@ $env:CLOUDFLARE_API_TOKEN="<api-token>"
 node scripts/production-reset/cloudflare-media-cleanup.mjs
 ```
 
+To include legacy D1 media rows:
+
+```powershell
+cd backend-cf
+npx.cmd wrangler d1 execute DB --env production --remote --json --command "SELECT id, media_type, storage_provider, storage_key, public_url FROM media_assets;" > ..\legacy-d1-media-assets.json
+cd ..
+$env:CLOUDFLARE_MEDIA_ASSETS_FILE="legacy-d1-media-assets.json"
+node scripts/production-reset/cloudflare-media-cleanup.mjs
+```
+
 ## Cloudflare Media Execute
 
 ```powershell
