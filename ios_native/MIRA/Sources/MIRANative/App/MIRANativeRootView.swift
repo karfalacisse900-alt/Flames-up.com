@@ -1,6 +1,7 @@
 import SwiftUI
 import Darwin
 import Foundation
+import GoogleSignIn
 
 public enum MIRATab: Hashable {
   case main
@@ -191,9 +192,12 @@ public struct MIRANativeRootView: View {
   @State private var selectedTab: MIRATab = .main
   @State private var loadedTabs: Set<MIRATab> = [.main]
   @State private var isPrivacyShieldVisible = false
+  @State private var featureStatusBarHidden = false
+  @AppStorage(MIRAAppearanceResolver.preferenceKey) private var appearancePreference = MIRAAppearance.system.rawValue
   @StateObject private var authSession: MIRAAuthSession
   @StateObject private var startup: MIRAStartupCoordinator
   @StateObject private var callCoordinator: MIRAAppCallCoordinator
+  @StateObject private var localization: MIRALocalization
   private let api: MIRAAPIClient
 
   public init() {
@@ -202,6 +206,7 @@ public struct MIRANativeRootView: View {
     _authSession = StateObject(wrappedValue: session)
     _startup = StateObject(wrappedValue: MIRAStartupCoordinator(api: client))
     _callCoordinator = StateObject(wrappedValue: MIRAAppCallCoordinator.shared)
+    _localization = StateObject(wrappedValue: MIRALocalization.shared)
     self.api = client
     MIRAPerformanceTimeline.mark("native_root_init")
   }
@@ -236,7 +241,12 @@ public struct MIRANativeRootView: View {
       }
     }
     .background(MIRATheme.Color.launchBackground.ignoresSafeArea())
-    .statusBarHidden(startup.isSplashMounted || (authSession.user != nil && selectedTab == .main))
+    .environmentObject(localization)
+    .preferredColorScheme(MIRAAppearanceResolver.colorScheme(for: appearancePreference))
+    .statusBarHidden(shouldHideStatusBar)
+    .onPreferenceChange(MIRAStatusBarHiddenPreferenceKey.self) { hidden in
+      featureStatusBarHidden = hidden
+    }
     .onAppear {
       MIRAMainThreadStallMonitor.shared.start()
       MIRAPerformanceTimeline.markOnce("time_to_first_screen")
@@ -262,11 +272,19 @@ public struct MIRANativeRootView: View {
       }
       if phase == .active {
         registerCachedPushTokenIfPossible()
+        if selectedTab == .main {
+          MIRAPlaybackCoordinator.resumeVisible(reason: "app_active_home")
+        }
+      } else {
+        MIRAPlaybackCoordinator.pauseAll(reason: "app_inactive")
       }
     }
     .onReceive(NotificationCenter.default.publisher(for: .miraRemotePushTokenReceived)) { notification in
       guard let token = notification.object as? String else { return }
       registerPushToken(token)
+    }
+    .onOpenURL { url in
+      _ = GIDSignIn.sharedInstance.handle(url)
     }
   }
 
@@ -277,10 +295,17 @@ public struct MIRANativeRootView: View {
     )
   }
 
+  private var shouldHideStatusBar: Bool {
+    startup.isSplashMounted || featureStatusBarHidden || (authSession.user != nil && selectedTab == .main)
+  }
+
   @ViewBuilder
   private var destinationView: some View {
     if authSession.user == nil {
       AuthNativeView(session: authSession, api: api)
+        .transition(.opacity)
+    } else if let user = authSession.user, user.isDeletionPending {
+      RestoreAccountNativeView(user: user, api: api, session: authSession)
         .transition(.opacity)
     } else if let user = authSession.user, user.needsUsernameOnboarding {
       ChooseUsernameNativeView(user: user, api: api, session: authSession)
@@ -294,7 +319,7 @@ public struct MIRANativeRootView: View {
   private var mainTabs: some View {
     TabView(selection: $selectedTab) {
       lazyTab(.main) {
-        MainFeedView(api: api, model: startup.feedModel)
+        MainFeedView(api: api, model: startup.feedModel, isTabActive: selectedTab == .main)
       }
         .tag(MIRATab.main)
         .tabItem { Label("Home", systemImage: "house.fill") }
@@ -324,6 +349,11 @@ public struct MIRANativeRootView: View {
     .onChange(of: selectedTab) { _, tab in
       MIRAPerformanceTimeline.mark("tab_switch", detail: "\(tab)")
       loadedTabs.insert(tab)
+      if tab == .main {
+        MIRAPlaybackCoordinator.resumeVisible(reason: "home_tab_selected")
+      } else {
+        MIRAPlaybackCoordinator.pauseAll(reason: "tab_changed")
+      }
     }
   }
 
@@ -358,6 +388,130 @@ public struct MIRANativeRootView: View {
     guard authSession.user != nil else { return }
     Task {
       await MIRAPushTokenRegistry.shared.registerDeviceToken(token, api: api)
+    }
+  }
+}
+
+private struct RestoreAccountResponse: Decodable {
+  let restored: Bool?
+  let user: MIRAUser?
+}
+
+private struct RestoreAccountNativeView: View {
+  let user: MIRAUser
+  let api: MIRAAPIClient
+  @ObservedObject var session: MIRAAuthSession
+
+  @State private var isRestoring = false
+  @State private var errorMessage: String?
+
+  var body: some View {
+    ZStack {
+      MIRATheme.Color.appBackground.ignoresSafeArea()
+
+      VStack(spacing: 22) {
+        Spacer(minLength: 20)
+
+        VStack(spacing: 18) {
+          Image(systemName: "clock.arrow.circlepath")
+            .font(.system(size: 34, weight: .semibold))
+            .foregroundStyle(MIRATheme.Color.forest)
+            .frame(width: 72, height: 72)
+            .background(MIRATheme.Color.surfaceSoft)
+            .clipShape(Circle())
+
+          VStack(spacing: 8) {
+            Text("Restore your account?")
+              .font(.system(size: 28, weight: .black, design: .rounded))
+              .foregroundStyle(MIRATheme.Color.textPrimary)
+              .multilineTextAlignment(.center)
+
+            Text("This Captro account is scheduled for deletion. Restore it now to keep using it, or sign out and deletion will continue.")
+              .font(.system(size: 15, weight: .semibold))
+              .foregroundStyle(MIRATheme.Color.textSecondary)
+              .multilineTextAlignment(.center)
+              .fixedSize(horizontal: false, vertical: true)
+          }
+
+          if let scheduled = user.deletionScheduledAt, !scheduled.isEmpty {
+            Text("Scheduled deletion: \(scheduled)")
+              .font(.system(size: 12.5, weight: .bold))
+              .foregroundStyle(MIRATheme.Color.textMuted)
+              .padding(.horizontal, 14)
+              .padding(.vertical, 9)
+              .background(MIRATheme.Color.surfaceSoft)
+              .clipShape(Capsule())
+          }
+
+          if let errorMessage {
+            Text(errorMessage)
+              .font(.system(size: 13, weight: .semibold))
+              .foregroundStyle(.red)
+              .multilineTextAlignment(.center)
+              .fixedSize(horizontal: false, vertical: true)
+          }
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity)
+        .background(MIRATheme.Color.surfaceRaised)
+        .clipShape(RoundedRectangle(cornerRadius: 34, style: .continuous))
+        .shadow(color: .black.opacity(0.08), radius: 22, x: 0, y: 12)
+        .padding(.horizontal, 20)
+
+        VStack(spacing: 12) {
+          Button {
+            Task { await restore() }
+          } label: {
+            Text(isRestoring ? "Restoring..." : "Restore account")
+              .font(.system(size: 16, weight: .bold))
+              .foregroundStyle(.white)
+              .frame(maxWidth: .infinity)
+              .frame(height: 54)
+              .background(isRestoring ? MIRATheme.Color.textMuted.opacity(0.5) : MIRATheme.Color.forest)
+              .clipShape(Capsule())
+          }
+          .buttonStyle(.miraPress)
+          .disabled(isRestoring)
+
+          Button {
+            session.logout()
+          } label: {
+            Text("Sign out and keep deletion scheduled")
+              .font(.system(size: 14, weight: .bold))
+              .foregroundStyle(.red)
+              .frame(maxWidth: .infinity)
+              .frame(height: 50)
+              .background(MIRATheme.Color.surfaceSoft)
+              .clipShape(Capsule())
+          }
+          .buttonStyle(.miraPress)
+          .disabled(isRestoring)
+        }
+        .padding(.horizontal, 22)
+
+        Spacer(minLength: 20)
+      }
+    }
+  }
+
+  @MainActor
+  private func restore() async {
+    guard !isRestoring else { return }
+    isRestoring = true
+    defer { isRestoring = false }
+    do {
+      let response: RestoreAccountResponse = try await api.post("/account/restore", body: EmptyBody())
+      if let restoredUser = response.user {
+        session.replaceUser(restoredUser)
+      } else {
+        errorMessage = "Could not restore your account right now."
+      }
+    } catch {
+      if let apiError = error as? MIRAAPIError, let message = apiError.errorDescription, !message.isEmpty {
+        errorMessage = message
+      } else {
+        errorMessage = "Could not restore your account right now."
+      }
     }
   }
 }
@@ -429,16 +583,11 @@ private struct CaptroStartupView: View {
 
 private struct CaptroWordmarkView: View {
   var body: some View {
-    HStack(alignment: .firstTextBaseline, spacing: 0) {
-      Text("Cap")
-      Text("Tro")
-        .italic()
-    }
-    .font(.system(size: 58, weight: .regular, design: .serif))
-    .foregroundStyle(Color.black.opacity(0.90))
-    .lineLimit(1)
-    .minimumScaleFactor(0.75)
-    .accessibilityLabel("Captro")
+    Image("CaptroLaunchLogo", bundle: .main)
+      .resizable()
+      .scaledToFit()
+      .frame(width: 292, height: 98)
+    .accessibilityLabel("Cap Tro")
   }
 }
 

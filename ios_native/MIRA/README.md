@@ -19,7 +19,7 @@ Local Mac build:
 cd ios_native/MIRA
 brew install xcodegen
 xcodegen generate --spec project.yml
-xcodebuild -project MIRA.xcodeproj -scheme MIRA -configuration Debug -destination "generic/platform=iOS Simulator" CODE_SIGNING_ALLOWED=NO build
+xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug -destination "generic/platform=iOS Simulator" CODE_SIGNING_ALLOWED=NO build
 ```
 
 ## Production Notes

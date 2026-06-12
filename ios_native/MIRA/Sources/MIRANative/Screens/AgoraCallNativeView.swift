@@ -136,7 +136,7 @@ final class MIRAAgoraCallModel: NSObject, ObservableObject, AgoraRtcEngineDelega
     let next = !micMuted
     micMuted = next
     engine?.muteLocalAudioStream(next)
-    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    CaptroHaptics.light()
   }
 
   @MainActor
@@ -150,7 +150,7 @@ final class MIRAAgoraCallModel: NSObject, ObservableObject, AgoraRtcEngineDelega
     } else {
       engine?.startPreview()
     }
-    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    CaptroHaptics.light()
   }
 
   @MainActor
@@ -158,7 +158,7 @@ final class MIRAAgoraCallModel: NSObject, ObservableObject, AgoraRtcEngineDelega
     guard presentation.mode.needsVideo, !cameraOff else { return }
     engine?.switchCamera()
     usingFrontCamera.toggle()
-    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    CaptroHaptics.light()
   }
 
   private func joinCall() async {
@@ -578,7 +578,7 @@ struct MIRAAgoraCallView: View {
   }
 
   private func close() {
-    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+    CaptroHaptics.medium()
     model.end()
     withAnimation(.easeInOut(duration: reduceMotion ? 0.05 : 0.22)) {
       isVisible = false

@@ -3,10 +3,12 @@ import Security
 
 public final class MIRAKeychainSessionProvider: MIRASessionProviding {
   private let service: String
+  private let legacyService: String?
   private let account: String
 
-  public init(service: String = "com.mira.auth", account: String = "access-token") {
+  public init(service: String = "com.captro.auth", legacyService: String? = "com.mira.auth", account: String = "access-token") {
     self.service = service
+    self.legacyService = legacyService
     self.account = account
   }
 
@@ -36,6 +38,13 @@ public final class MIRAKeychainSessionProvider: MIRASessionProviding {
   }
 
   public func clearAccessToken() {
+    deleteToken(service: service)
+    if let legacyService {
+      deleteToken(service: legacyService)
+    }
+  }
+
+  private func deleteToken(service: String) {
     let query: [String: Any] = [
       kSecClass as String: kSecClassGenericPassword,
       kSecAttrService as String: service,
@@ -45,6 +54,18 @@ public final class MIRAKeychainSessionProvider: MIRASessionProviding {
   }
 
   private func loadToken() -> String? {
+    if let token = loadToken(service: service) {
+      return token
+    }
+    if let legacyService, let legacyToken = loadToken(service: legacyService) {
+      saveAccessToken(legacyToken)
+      deleteToken(service: legacyService)
+      return legacyToken
+    }
+    return nil
+  }
+
+  private func loadToken(service: String) -> String? {
     let query: [String: Any] = [
       kSecClass as String: kSecClassGenericPassword,
       kSecAttrService as String: service,

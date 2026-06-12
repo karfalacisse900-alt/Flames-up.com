@@ -1,0 +1,90 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "auth.login" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Log in" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Iniciar sesión" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Connexion" } }
+      }
+    },
+    "auth.signup" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Sign up" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Registrarse" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "S’inscrire" } }
+      }
+    },
+    "common.cancel" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Cancel" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Cancelar" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Annuler" } }
+      }
+    },
+    "common.done" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Done" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Listo" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Terminé" } }
+      }
+    },
+    "discover.category.all" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "All" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Todo" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Tout" } }
+      }
+    },
+    "discover.category.food" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Food" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Comida" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Nourriture" } }
+      }
+    },
+    "discover.title" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Discover" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Descubrir" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Découvrir" } }
+      }
+    },
+    "report.submit" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Submit report" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Enviar reporte" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Envoyer le signalement" } }
+      }
+    },
+    "report.title" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Report" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Reportar" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Signaler" } }
+      }
+    },
+    "settings.language" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "App Language" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Idioma de la app" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Langue de l’app" } }
+      }
+    },
+    "settings.title" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Settings" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Configuración" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Réglages" } }
+      }
+    },
+    "welcome.capture.title" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "CAPTURE\nYOUR\nMOMENTS" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "CAPTURA\nTUS\nMOMENTOS" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "CAPTUREZ\nVOS\nMOMENTS" } }
+      }
+    }
+  },
+  "version" : "1.0"
+}

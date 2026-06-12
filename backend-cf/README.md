@@ -1,13 +1,15 @@
-# Flames-Up API (Cloudflare Workers)
+# Captro API (Cloudflare Workers)
 
-Backend stack: Hono + D1 + Cloudflare Images/Stream.
+Backend stack: Hono + Cloudflare Workers + Supabase Auth/Postgres as the canonical production database + Cloudflare Images/R2/Stream for media storage and delivery.
+
+Cloudflare D1 remains bound only for legacy compatibility/cache while old routes are migrated. Do not treat D1 as the production source of truth for Captro app data.
 
 ## Setup
 
 1. Install dependencies:
    `npm install`
 
-2. Run migrations (remote):
+2. Run legacy D1 compatibility migrations only when maintaining the D1 cache/fallback:
    `wrangler d1 execute flames-up-db --file=./migrations/0001_init.sql --remote`
    `wrangler d1 execute flames-up-db --file=./migrations/0002_additions.sql --remote`
    `wrangler d1 execute flames-up-db --file=./migrations/0003_creators.sql --remote`
@@ -20,14 +22,15 @@ Backend stack: Hono + D1 + Cloudflare Images/Stream.
 3. Configure vars:
    - `JWT_SECRET`
    - `CLOUDFLARE_ACCOUNT_ID`
-   - `CLOUDFLARE_IMAGES_TOKEN`
-   - `CLOUDFLARE_STREAM_TOKEN`
+   - `CLOUDFLARE_IMAGES_TOKEN` and `CLOUDFLARE_STREAM_TOKEN` as Worker secrets, or a shared `CLOUDFLARE_API_TOKEN` that has Cloudflare Images and Stream permissions
+   - `CLOUDFLARE_IMAGES_ACCOUNT_HASH` for `https://imagedelivery.net/...` delivery URLs
+   - Workers AI is enabled with the `AI` binding in `wrangler.toml`; optional `POST_ASSIST_MODEL` controls the caption/headline/category helper model
    - `MAPBOX_ACCESS_TOKEN`
    - `OWNER_EMAILS` (comma-separated verified account emails that receive owner admin role)
    - `OWNER_USERNAMES` (optional comma-separated real usernames; do not use generated/temp usernames)
    - `GOOGLE_OAUTH_CLIENT_IDS` (comma-separated Google client IDs)
    - `APPLE_OAUTH_AUDIENCES` (comma-separated Apple audiences, bundle/service IDs)
-   - `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_VERIFY_SERVICE_SID` for Twilio Verify phone codes
+   - `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_VERIFY_SERVICE_SID` for Twilio Verify phone codes and account email verification when the Verify service has email configured
    - `TWILIO_FROM_PHONE` is only used by the legacy SMS fallback if Verify is not configured
    - `SUPABASE_URL` as a public Worker var, for example `https://your-project-ref.supabase.co`
    - `SUPABASE_SERVICE_ROLE_KEY` as a Worker secret only; never put this in the iOS app or public config
@@ -59,24 +62,65 @@ If Twilio is not configured, `/api/auth/phone/start` returns a `dev_code` for lo
 
 ## Supabase Auth + Postgres/JSONB
 
-Supabase is used for production auth, PostgreSQL tables, and JSONB document storage. The JSONB `app_documents` table is the app's flexible NoSQL-style layer; it is still stored securely inside Postgres with RLS.
+Supabase is Captro's production database. It stores authentication identity through Supabase Auth and structured app data in Postgres tables. The JSONB `app_documents` table is the app's flexible NoSQL-style layer; it is still stored securely inside Postgres with RLS.
 
-Run or push the Supabase migrations from the repository root:
+Run or push the Supabase migrations from the repository root when testing locally:
 
 ```powershell
-cd "C:\Users\The-s\Documents\New project\Flames-up.com"
+cd "C:\Users\The-s\Documents\New project\captro-production-cleanup"
 npx.cmd supabase db push
 ```
+
+The first Supabase schema migration is:
+
+```text
+supabase/migrations/202606080001_captro_core.sql
+supabase/migrations/202606080002_captro_operational.sql
+```
+
+They create the canonical production tables used by the Worker:
+
+- `app_users`
+- `app_posts`
+- `post_comments`
+- `app_post_interactions`
+- `app_follows`
+- `app_documents`
+- `app_blocks`
+- `app_notifications`
+- `app_reports`
+- `app_messages`
+- `app_group_chats`
+- `app_group_chat_members`
+- `app_group_messages`
+- `app_post_places`
+- `app_media_assets`
+- `app_moderation_results`
+- `app_admin_roles`
+- `app_moderation_actions`
+- `app_audit_logs`
+- `app_push_tokens`
+- `app_account_identities`
+
+Production deploys push these migrations automatically through `.github/workflows/deploy-worker.yml` before the Worker deploys. The deploy requires:
+
+- `SUPABASE_ACCESS_TOKEN`
+- `SUPABASE_PROJECT_REF`
+- `SUPABASE_SERVICE_ROLE_KEY`
+
+`DATABASE_PRIMARY=supabase_postgres` is set in `wrangler.toml`. Cloudflare is the API/media edge layer; Supabase Postgres is the database.
 
 Set the backend service-role secret for Cloudflare Workers:
 
 ```powershell
-cd "C:\Users\The-s\Documents\New project\Flames-up.com\backend-cf"
+cd "C:\Users\The-s\Documents\New project\captro-production-cleanup\backend-cf"
 npx.cmd wrangler secret put SUPABASE_SERVICE_ROLE_KEY --env production
 npx.cmd wrangler deploy --env production
 ```
 
-The native app should only use public Supabase values:
+Never put `SUPABASE_SERVICE_ROLE_KEY` in the iOS app, admin frontend, GitHub logs, or public config. The native app should only use publishable Supabase values.
+
+Native app public Supabase values:
 
 ```text
 SUPABASE_URL=https://your-project-ref.supabase.co
@@ -89,11 +133,12 @@ Google OAuth setup:
 - Google Cloud authorized redirect URI should be the Supabase callback: `https://your-project-ref.supabase.co/auth/v1/callback`
 - Supabase Auth redirect URLs should include both `https://flames-up.com/auth/callback` and `captro://auth/callback`
 - Use the Web OAuth client ID and client secret in the Supabase Google provider. Native iOS/Android IDs can be used by the mobile app, but Supabase's provider secret belongs to the Web client.
+- If the Google account chooser says `continue with MIRA`, update the Google Cloud OAuth consent screen / branding app name to `Captro` and make sure Supabase's Google provider uses the Captro Web OAuth client. This wording is controlled by Google's OAuth app branding, not by a SwiftUI label.
 
 Apple native sign-in:
-- Enable Sign in with Apple on the iOS App ID `com.karfala90.frontend`.
+- Enable Sign in with Apple on the iOS App ID `com.captro.app`.
 - Configure the Apple Services ID in Supabase for web OAuth.
-- Set `APPLE_OAUTH_AUDIENCES` on the Worker to include both the iOS bundle ID and the Services ID, for example `com.karfala90.frontend,com.karfala90.frontend.auth`.
+- Set `APPLE_OAUTH_AUDIENCES` on the Worker to include both the iOS bundle ID and the Services ID, for example `com.captro.app,com.captro.app.auth`.
 
 ## Admin Moderation API
 

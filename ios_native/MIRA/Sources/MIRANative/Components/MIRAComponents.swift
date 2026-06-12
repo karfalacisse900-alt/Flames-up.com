@@ -1,6 +1,7 @@
 import AVFoundation
 import AVKit
 import Foundation
+import ObjectiveC
 import SwiftUI
 import UIKit
 
@@ -50,6 +51,142 @@ public struct MIRAIconButton: View {
   }
 }
 
+public struct MIRAAudioPreviewButton: View {
+  public let api: MIRAAPIClient?
+  public let trackId: String?
+  public let title: String
+  public let artist: String
+  public let artworkUrl: String?
+  public let streamUrl: String?
+  public let compact: Bool
+
+  @State private var player: AVPlayer?
+  @State private var isPlaying = false
+  @State private var isLoading = false
+
+  public init(
+    api: MIRAAPIClient? = nil,
+    trackId: String?,
+    title: String,
+    artist: String,
+    artworkUrl: String? = nil,
+    streamUrl: String? = nil,
+    compact: Bool = false
+  ) {
+    self.api = api
+    self.trackId = trackId
+    self.title = title
+    self.artist = artist
+    self.artworkUrl = artworkUrl
+    self.streamUrl = streamUrl
+    self.compact = compact
+  }
+
+  public var body: some View {
+    Button {
+      Task { await togglePlayback() }
+    } label: {
+      HStack(spacing: compact ? 9 : 12) {
+        artworkView
+          .frame(width: compact ? 34 : 44, height: compact ? 34 : 44)
+          .clipShape(RoundedRectangle(cornerRadius: compact ? 10 : 12, style: .continuous))
+
+        VStack(alignment: .leading, spacing: 2) {
+          Text(title)
+            .font(.system(size: compact ? 13 : 15, weight: .semibold))
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+            .lineLimit(1)
+          Text(artist)
+            .font(.system(size: compact ? 11 : 12, weight: .medium))
+            .foregroundStyle(MIRATheme.Color.textSecondary)
+            .lineLimit(1)
+        }
+
+        Spacer(minLength: 8)
+
+        ZStack {
+          if isLoading {
+            ProgressView()
+              .scaleEffect(0.76)
+              .tint(MIRATheme.Color.forest)
+          } else {
+            Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+              .font(.system(size: compact ? 11 : 13, weight: .bold))
+              .foregroundStyle(.white)
+          }
+        }
+        .frame(width: compact ? 28 : 34, height: compact ? 28 : 34)
+        .background(MIRATheme.Color.forest)
+        .clipShape(Circle())
+      }
+      .padding(.leading, compact ? 8 : 10)
+      .padding(.trailing, compact ? 8 : 10)
+      .frame(height: compact ? 46 : 58)
+      .background(MIRATheme.Color.forestSoft.opacity(0.72))
+      .clipShape(RoundedRectangle(cornerRadius: compact ? 14 : 18, style: .continuous))
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.miraPress)
+    .onDisappear { stopPlayback() }
+  }
+
+  @ViewBuilder
+  private var artworkView: some View {
+    if let artworkUrl, !artworkUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      RemoteMediaView(url: artworkUrl, isVideo: false)
+    } else {
+      ZStack {
+        MIRATheme.Color.forestSoft
+        Image(systemName: "music.note")
+          .font(.system(size: compact ? 15 : 18, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.forest)
+      }
+    }
+  }
+
+  @MainActor
+  private func togglePlayback() async {
+    if isPlaying {
+      stopPlayback()
+      return
+    }
+
+    isLoading = true
+    defer { isLoading = false }
+    guard let urlString = await resolveStreamURL(), let url = URL(string: urlString) else { return }
+    let nextPlayer = AVPlayer(url: url)
+    player = nextPlayer
+    nextPlayer.play()
+    isPlaying = true
+  }
+
+  private func resolveStreamURL() async -> String? {
+    let cleanStream = streamUrl?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    if !cleanStream.isEmpty { return cleanStream }
+    guard
+      let api,
+      let encoded = trackId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        .addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+      !encoded.isEmpty
+    else {
+      return nil
+    }
+    do {
+      let track: MIRAAudiusTrack = try await api.get("/music/audius/stream/\(encoded)")
+      return track.streamUrl
+    } catch {
+      return nil
+    }
+  }
+
+  @MainActor
+  private func stopPlayback() {
+    player?.pause()
+    player = nil
+    isPlaying = false
+  }
+}
+
 public struct MIRAHeaderCircleButton: View {
   let systemImage: String
   let size: CGFloat
@@ -92,9 +229,9 @@ public enum MIRAScreenEnterStyle {
 
   fileprivate var duration: Double {
     switch self {
-    case .push: return 0.22
-    case .modal: return 0.26
-    case .tab: return 0.18
+    case .push: return CaptroMotion.Duration.pagePush
+    case .modal: return CaptroMotion.Duration.pageModal
+    case .tab: return CaptroMotion.Duration.pageTab
     }
   }
 
@@ -120,7 +257,7 @@ private struct MIRAScreenEnterModifier: ViewModifier {
       .offset(x: isVisible ? 0 : offset.width, y: isVisible ? 0 : offset.height)
       .onAppear {
         guard !isVisible else { return }
-        withAnimation(.easeOut(duration: reduceMotion ? 0.08 : style.duration)) {
+        withAnimation(CaptroMotion.pageEnterAnimation(reduceMotion: reduceMotion, duration: style.duration)) {
           isVisible = true
         }
       }
@@ -133,6 +270,150 @@ public extension View {
   }
 }
 
+public enum MIRAScrollFeel: Equatable {
+  case feed
+  case chat
+  case sheet
+
+  fileprivate var decelerationRate: UIScrollView.DecelerationRate {
+    switch self {
+    case .feed:
+      return UIScrollView.DecelerationRate(rawValue: 0.88)
+    case .chat:
+      return UIScrollView.DecelerationRate(rawValue: 0.992)
+    case .sheet:
+      return UIScrollView.DecelerationRate(rawValue: 0.995)
+    }
+  }
+
+  fileprivate var maxFlingDistanceScreens: CGFloat? {
+    switch self {
+    case .feed:
+      return 0.92
+    case .chat, .sheet:
+      return nil
+    }
+  }
+
+  fileprivate var directionalLockEnabled: Bool {
+    switch self {
+    case .feed:
+      return true
+    case .chat, .sheet:
+      return false
+    }
+  }
+}
+
+private var miraScrollDelegateProxyKey: UInt8 = 0
+
+private final class MIRAScrollDelegateProxy: NSObject, UIScrollViewDelegate {
+  let feel: MIRAScrollFeel
+  weak var passthrough: UIScrollViewDelegate?
+
+  init(feel: MIRAScrollFeel) {
+    self.feel = feel
+  }
+
+  override func responds(to aSelector: Selector!) -> Bool {
+    super.responds(to: aSelector) || (passthrough?.responds(to: aSelector) ?? false)
+  }
+
+  override func forwardingTarget(for aSelector: Selector!) -> Any? {
+    if passthrough?.responds(to: aSelector) == true {
+      return passthrough
+    }
+    return super.forwardingTarget(for: aSelector)
+  }
+
+  func scrollViewWillEndDragging(
+    _ scrollView: UIScrollView,
+    withVelocity velocity: CGPoint,
+    targetContentOffset: UnsafeMutablePointer<CGPoint>
+  ) {
+    passthrough?.scrollViewWillEndDragging?(scrollView, withVelocity: velocity, targetContentOffset: targetContentOffset)
+    guard let maxScreens = feel.maxFlingDistanceScreens else { return }
+    guard scrollView.bounds.height > 0, scrollView.contentSize.height > scrollView.bounds.height else { return }
+
+    let currentY = scrollView.contentOffset.y
+    let proposedY = targetContentOffset.pointee.y
+    let maxDistance = scrollView.bounds.height * maxScreens
+    let boundedY = min(max(proposedY, currentY - maxDistance), currentY + maxDistance)
+    let maxOffsetY = max(
+      -scrollView.adjustedContentInset.top,
+      scrollView.contentSize.height - scrollView.bounds.height + scrollView.adjustedContentInset.bottom
+    )
+    let minOffsetY = -scrollView.adjustedContentInset.top
+    targetContentOffset.pointee.y = min(max(boundedY, minOffsetY), maxOffsetY)
+  }
+}
+
+public extension View {
+  func miraScrollFeel(_ feel: MIRAScrollFeel) -> some View {
+    background(MIRAScrollTuningView(feel: feel).frame(width: 0, height: 0))
+  }
+}
+
+private struct MIRAScrollTuningView: UIViewRepresentable {
+  let feel: MIRAScrollFeel
+
+  func makeUIView(context: Context) -> UIView {
+    let view = UIView(frame: .zero)
+    view.isUserInteractionEnabled = false
+    DispatchQueue.main.async {
+      configureScrollView(from: view)
+    }
+    return view
+  }
+
+  func updateUIView(_ uiView: UIView, context: Context) {
+    DispatchQueue.main.async {
+      configureScrollView(from: uiView)
+    }
+  }
+
+  private func configureScrollView(from view: UIView) {
+    var parent = view.superview
+    while let candidate = parent {
+      if let scrollView = candidate as? UIScrollView {
+        scrollView.decelerationRate = feel.decelerationRate
+        scrollView.delaysContentTouches = false
+        scrollView.canCancelContentTouches = true
+        scrollView.isDirectionalLockEnabled = feel.directionalLockEnabled
+        scrollView.backgroundColor = .clear
+        configureFlingLimiter(on: scrollView)
+        return
+      }
+      parent = candidate.superview
+    }
+  }
+
+  private func configureFlingLimiter(on scrollView: UIScrollView) {
+    guard feel.maxFlingDistanceScreens != nil else {
+      if let proxy = objc_getAssociatedObject(scrollView, &miraScrollDelegateProxyKey) as? MIRAScrollDelegateProxy,
+         scrollView.delegate === proxy {
+        scrollView.delegate = proxy.passthrough
+      }
+      objc_setAssociatedObject(scrollView, &miraScrollDelegateProxyKey, nil, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+      return
+    }
+    if let proxy = objc_getAssociatedObject(scrollView, &miraScrollDelegateProxyKey) as? MIRAScrollDelegateProxy,
+       proxy.feel == feel {
+      if let delegate = scrollView.delegate, delegate !== proxy {
+        proxy.passthrough = delegate
+      }
+      scrollView.delegate = proxy
+      return
+    }
+    let proxy = MIRAScrollDelegateProxy(feel: feel)
+    if let delegate = scrollView.delegate, delegate !== proxy {
+      proxy.passthrough = delegate
+    }
+    objc_setAssociatedObject(scrollView, &miraScrollDelegateProxyKey, proxy, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+    scrollView.delegate = proxy
+  }
+}
+
 public struct MIRAPressButtonStyle: ButtonStyle {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -140,9 +421,9 @@ public struct MIRAPressButtonStyle: ButtonStyle {
 
   public func makeBody(configuration: Configuration) -> some View {
     configuration.label
-      .scaleEffect(configuration.isPressed && !reduceMotion ? 0.94 : 1)
-      .opacity(configuration.isPressed ? 0.82 : 1)
-      .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+      .scaleEffect(configuration.isPressed && !reduceMotion ? CaptroMotion.Scale.buttonPressed : 1)
+      .opacity(configuration.isPressed ? 0.88 : 1)
+      .animation(CaptroMotion.buttonPressAnimation(reduceMotion: reduceMotion), value: configuration.isPressed)
   }
 }
 
@@ -190,30 +471,133 @@ private final class MIRAImageMemoryCache {
     cache.setObject(image, forKey: cacheKey(for: url, maxPixelSize: maxPixelSize), cost: cost)
   }
 
+  func removeAll() {
+    cache.removeAllObjects()
+  }
+
   private func cacheKey(for url: URL, maxPixelSize: CGFloat) -> NSString {
     "\(url.absoluteString)#\(Int(maxPixelSize.rounded()))" as NSString
   }
 }
 
+public enum MIRAMediaCacheMaintenance {
+  public static func clearMediaCaches() {
+    MIRAImageMemoryCache.shared.removeAll()
+    MIRAAPIClient.productionSession.configuration.urlCache?.removeAllCachedResponses()
+    Task {
+      await MIRAImageDiskCache.clear()
+      MIRAApplePerformanceLogger.event("media_cache_cleared", detail: "manual")
+    }
+  }
+}
+
+private enum MIRAImageLoadSource: Equatable {
+  case memory
+  case disk
+  case network
+}
+
+private struct MIRAImageLoadResult {
+  let image: UIImage
+  let source: MIRAImageLoadSource
+}
+
+private actor MIRAImageLoadPipeline {
+  static let shared = MIRAImageLoadPipeline()
+  private var inFlight: [String: Task<MIRAImageLoadResult?, Never>] = [:]
+
+  func image(for remoteURL: URL, maxPixelSize: CGFloat) async -> MIRAImageLoadResult? {
+    let resolvedMaxPixelSize = max(64, maxPixelSize)
+    let key = "\(remoteURL.absoluteString)#\(Int(resolvedMaxPixelSize.rounded()))"
+
+    if let cached = MIRAImageMemoryCache.shared.image(for: remoteURL, maxPixelSize: resolvedMaxPixelSize) {
+      MIRAApplePerformanceLogger.event("media_cache_hit", detail: "memory")
+      return MIRAImageLoadResult(image: cached, source: .memory)
+    }
+
+    if let existing = inFlight[key] {
+      return await existing.value
+    }
+
+    let task = Task.detached(priority: .userInitiated) { () -> MIRAImageLoadResult? in
+      if remoteURL.isFileURL,
+         let data = try? Data(contentsOf: remoteURL),
+         let decoded = await MIRAImageDiskCache.decode(data, maxPixelSize: resolvedMaxPixelSize) {
+        MIRAImageMemoryCache.shared.store(decoded, for: remoteURL, maxPixelSize: resolvedMaxPixelSize, cost: decoded.miraCacheCost)
+        return MIRAImageLoadResult(image: decoded, source: .disk)
+      }
+
+      if let diskCached = await MIRAImageDiskCache.image(for: remoteURL, maxPixelSize: resolvedMaxPixelSize) {
+        MIRAImageMemoryCache.shared.store(diskCached, for: remoteURL, maxPixelSize: resolvedMaxPixelSize, cost: diskCached.miraCacheCost)
+        MIRAApplePerformanceLogger.event("media_cache_hit", detail: "disk")
+        return MIRAImageLoadResult(image: diskCached, source: .disk)
+      }
+
+      do {
+        MIRAApplePerformanceLogger.event("media_cache_miss", detail: "network")
+        var request = URLRequest(url: remoteURL)
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.timeoutInterval = 14
+        request.setValue("image/jpeg,image/png,*/*;q=0.2", forHTTPHeaderField: "Accept")
+
+        let metric = await MIRAPerformanceMetric.begin(category: "image", label: remoteURL.host ?? remoteURL.path)
+        let data: Data
+        let response: URLResponse
+        do {
+          (data, response) = try await MIRAAPIClient.productionSession.data(for: request)
+        } catch {
+          await metric.finish(status: "error")
+          throw error
+        }
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 200
+        await metric.finish(status: String(status), bytes: data.count)
+        guard (200..<300).contains(status), data.count <= 24 * 1024 * 1024 else { return nil }
+        guard let decoded = await MIRAImageDiskCache.decode(data, maxPixelSize: resolvedMaxPixelSize) else { return nil }
+
+        MIRAImageMemoryCache.shared.store(decoded, for: remoteURL, maxPixelSize: resolvedMaxPixelSize, cost: decoded.miraCacheCost)
+        await MIRAImageDiskCache.store(data: data, for: remoteURL)
+        return MIRAImageLoadResult(image: decoded, source: .network)
+      } catch {
+        return nil
+      }
+    }
+
+    inFlight[key] = task
+    let result = await task.value
+    inFlight[key] = nil
+    return result
+  }
+}
+
 public struct MIRACachedImage<Content: View, Placeholder: View>: View {
   let url: String?
+  let fallbackURLs: [String]
   let maxPixelSize: CGFloat
+  let animatesNetworkLoad: Bool
+  let keepsPreviousImageWhileLoading: Bool
   let onImageLoaded: (UIImage) -> Void
   let content: (Image) -> Content
   let placeholder: () -> Placeholder
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var uiImage: UIImage?
   @State private var loadedURL: URL?
   @State private var isImageVisible = false
 
   public init(
     url: String?,
+    fallbackURLs: [String] = [],
     maxPixelSize: CGFloat = MIRAMediaSizing.feedTargetHeight,
+    animatesNetworkLoad: Bool = true,
+    keepsPreviousImageWhileLoading: Bool = false,
     onImageLoaded: @escaping (UIImage) -> Void = { _ in },
     @ViewBuilder content: @escaping (Image) -> Content,
     @ViewBuilder placeholder: @escaping () -> Placeholder
   ) {
     self.url = url
+    self.fallbackURLs = fallbackURLs
     self.maxPixelSize = maxPixelSize
+    self.animatesNetworkLoad = animatesNetworkLoad
+    self.keepsPreviousImageWhileLoading = keepsPreviousImageWhileLoading
     self.onImageLoaded = onImageLoaded
     self.content = content
     self.placeholder = placeholder
@@ -224,15 +608,47 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
       if let uiImage {
         content(Image(uiImage: uiImage))
           .opacity(isImageVisible ? 1 : 0)
+      } else if let memoryImage = memoryImageForCurrentURL {
+        content(Image(uiImage: memoryImage))
       } else {
         placeholder()
       }
     }
-    .task(id: url) { await loadImage() }
+    .task(id: loadTaskID) { await loadImage() }
   }
 
+  private var memoryImageForCurrentURL: UIImage? {
+    let resolvedMaxPixelSize = max(64, maxPixelSize)
+    for remoteURL in candidateURLs {
+      if let image = MIRAImageMemoryCache.shared.image(for: remoteURL, maxPixelSize: resolvedMaxPixelSize) {
+        return image
+      }
+    }
+    return nil
+  }
+
+  private var loadTaskID: String {
+    candidateURLStrings.joined(separator: "|")
+  }
+
+  private var candidateURLStrings: [String] {
+    var seen = Set<String>()
+    let primary = ([url ?? ""] + fallbackURLs)
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { !$0.isEmpty }
+    let transformFallbacks = primary.compactMap(Self.cloudflareImageTransformSourceURL)
+    return (primary + transformFallbacks)
+      .filter { !$0.isEmpty && seen.insert($0).inserted }
+  }
+
+  private var candidateURLs: [URL] {
+    candidateURLStrings.compactMap { URL(string: $0) }
+  }
+
+  @MainActor
   private func loadImage() async {
-    guard let url, let remoteURL = URL(string: url) else {
+    let remoteURLs = candidateURLs
+    guard !remoteURLs.isEmpty else {
       await MainActor.run {
         uiImage = nil
         loadedURL = nil
@@ -241,85 +657,134 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
     }
 
     let isAlreadyLoaded = await MainActor.run {
-      loadedURL == remoteURL && uiImage != nil
+      if let loadedURL {
+        return remoteURLs.contains(loadedURL) && uiImage != nil
+      }
+      return false
     }
     if isAlreadyLoaded { return }
 
     let resolvedMaxPixelSize = max(64, maxPixelSize)
 
-    if let cached = MIRAImageMemoryCache.shared.image(for: remoteURL, maxPixelSize: resolvedMaxPixelSize) {
-      await MainActor.run {
-        uiImage = cached
-        loadedURL = remoteURL
-        isImageVisible = true
-        onImageLoaded(cached)
+    for remoteURL in remoteURLs {
+      if let memoryImage = MIRAImageMemoryCache.shared.image(for: remoteURL, maxPixelSize: resolvedMaxPixelSize) {
+        await MainActor.run {
+          uiImage = memoryImage
+          loadedURL = remoteURL
+          isImageVisible = true
+          onImageLoaded(memoryImage)
+        }
+        MIRAApplePerformanceLogger.event("media_cache_hit", detail: "memory_sync")
+        return
       }
-      MIRAPerformanceTimeline.markOnce("time_to_first_thumbnail", detail: "memory")
-      return
-    }
-
-    if let diskCached = await MIRAImageDiskCache.image(for: remoteURL, maxPixelSize: resolvedMaxPixelSize) {
-      MIRAImageMemoryCache.shared.store(diskCached, for: remoteURL, maxPixelSize: resolvedMaxPixelSize, cost: diskCached.miraCacheCost)
-      await MainActor.run {
-        uiImage = diskCached
-        loadedURL = remoteURL
-        isImageVisible = true
-        onImageLoaded(diskCached)
-      }
-      MIRAPerformanceTimeline.markOnce("time_to_first_thumbnail", detail: "disk")
-      return
     }
 
     let shouldClear = await MainActor.run {
-      loadedURL != remoteURL
+      if let loadedURL {
+        return !remoteURLs.contains(loadedURL)
+      }
+      return true
     }
     if shouldClear {
       await MainActor.run {
-        uiImage = nil
-        isImageVisible = false
-      }
-    }
-
-    do {
-      var request = URLRequest(url: remoteURL)
-      request.cachePolicy = .returnCacheDataElseLoad
-      request.timeoutInterval = 20
-      let metric = await MIRAPerformanceMetric.begin(category: "image", label: remoteURL.host ?? remoteURL.path)
-      let data: Data
-      let response: URLResponse
-      do {
-        (data, response) = try await MIRAAPIClient.productionSession.data(for: request)
-      } catch {
-        await metric.finish(status: "error")
-        throw error
-      }
-      await metric.finish(status: String((response as? HTTPURLResponse)?.statusCode ?? 200), bytes: data.count)
-      let status = (response as? HTTPURLResponse)?.statusCode ?? 200
-      guard (200..<300).contains(status) else { return }
-      let decoded = await MIRAImageDiskCache.decode(data, maxPixelSize: resolvedMaxPixelSize)
-      guard !Task.isCancelled, let decoded else { return }
-      MIRAImageMemoryCache.shared.store(decoded, for: remoteURL, maxPixelSize: resolvedMaxPixelSize, cost: decoded.miraCacheCost)
-      await MIRAImageDiskCache.store(data: data, for: remoteURL)
-      await MainActor.run {
-        uiImage = decoded
-        loadedURL = remoteURL
-        withAnimation(.easeOut(duration: 0.16)) {
-          isImageVisible = true
-        }
-        onImageLoaded(decoded)
-      }
-      MIRAPerformanceTimeline.markOnce("time_to_first_thumbnail", detail: "network")
-    } catch {
-      let shouldClear = await MainActor.run {
-        loadedURL != remoteURL
-      }
-      if shouldClear {
-        await MainActor.run {
+        if keepsPreviousImageWhileLoading {
+          isImageVisible = uiImage != nil
+        } else {
           uiImage = nil
           isImageVisible = false
         }
       }
     }
+
+    for remoteURL in remoteURLs {
+      if let result = await MIRAImageLoadPipeline.shared.image(for: remoteURL, maxPixelSize: resolvedMaxPixelSize) {
+        guard !Task.isCancelled else { return }
+        await MainActor.run {
+          uiImage = result.image
+          loadedURL = remoteURL
+          if result.source == .network, animatesNetworkLoad {
+            withAnimation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion)) {
+              isImageVisible = true
+            }
+          } else {
+            isImageVisible = true
+          }
+          onImageLoaded(result.image)
+        }
+        let detail: String
+        switch result.source {
+        case .memory: detail = "memory"
+        case .disk: detail = "disk"
+        case .network: detail = isPrimaryCandidate(remoteURL, in: remoteURLs) ? "network" : "fallback_network"
+        }
+        MIRAPerformanceTimeline.markOnce("time_to_first_thumbnail", detail: detail)
+        return
+      }
+      if !isPrimaryCandidate(remoteURL, in: remoteURLs) {
+        MIRAApplePerformanceLogger.event("media_cache_miss", detail: "fallback_failed")
+      }
+    }
+
+    // Cloudflare Images can take a few seconds to make a newly uploaded media
+    // variant available. Keep retrying inside the same task so fresh posts do not
+    // remain stuck on the placeholder until the feed is rebuilt.
+    for attempt in 1...18 {
+      guard !Task.isCancelled else { return }
+      let delay = min(UInt64(attempt) * 550_000_000, UInt64(2_400_000_000))
+      try? await Task.sleep(nanoseconds: delay)
+      for remoteURL in remoteURLs {
+        if let result = await MIRAImageLoadPipeline.shared.image(for: remoteURL, maxPixelSize: resolvedMaxPixelSize) {
+          guard !Task.isCancelled else { return }
+          await MainActor.run {
+            uiImage = result.image
+            loadedURL = remoteURL
+            if result.source == .network, animatesNetworkLoad {
+              withAnimation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion)) {
+                isImageVisible = true
+              }
+            } else {
+              isImageVisible = true
+            }
+            onImageLoaded(result.image)
+          }
+          MIRAApplePerformanceLogger.event("media_retry_loaded", detail: "attempt=\(attempt)")
+          return
+        }
+      }
+    }
+
+    let shouldClearAfterFailure = await MainActor.run {
+      if let loadedURL {
+        return !remoteURLs.contains(loadedURL)
+      }
+      return true
+    }
+    if shouldClearAfterFailure {
+      await MainActor.run {
+        if keepsPreviousImageWhileLoading {
+          isImageVisible = uiImage != nil
+        } else {
+          uiImage = nil
+          isImageVisible = false
+        }
+      }
+    }
+  }
+
+  private func isPrimaryCandidate(_ remoteURL: URL, in remoteURLs: [URL]) -> Bool {
+    guard let first = remoteURLs.first else { return false }
+    return remoteURL == first
+  }
+
+  private static func cloudflareImageTransformSourceURL(_ value: String) -> String? {
+    guard value.contains("/cdn-cgi/image/"),
+          let sourceRange = value.range(of: "/https://", options: [], range: value.startIndex..<value.endIndex) else {
+      return nil
+    }
+    let encodedSource = String(value[sourceRange.lowerBound...].dropFirst())
+    let source = encodedSource.removingPercentEncoding ?? encodedSource
+    guard let url = URL(string: source), url.scheme?.lowercased() == "https" else { return nil }
+    return source
   }
 }
 
@@ -349,20 +814,37 @@ public enum MIRAImagePrefetcher {
     maxPixelSize: CGFloat = MIRAMediaSizing.feedTargetHeight,
     limit: Int = 10
   ) async {
-    let uniqueURLs = orderedUnique(urls)
+    let uniqueURLs = Array(orderedUnique(urls)
       .filter { !$0.isVideoURL }
-      .prefix(limit)
+      .prefix(limit))
+    guard !uniqueURLs.isEmpty else { return }
 
     await withTaskGroup(of: Void.self) { group in
-      for value in uniqueURLs {
-        group.addTask {
-          await prefetchImage(value, maxPixelSize: maxPixelSize)
+      let maxConcurrent = min(4, uniqueURLs.count)
+      var nextIndex = 0
+
+      for _ in 0..<maxConcurrent {
+        guard !Task.isCancelled else { break }
+        let value = uniqueURLs[nextIndex]
+        nextIndex += 1
+        group.addTask(priority: .utility) {
+          await MIRAImagePrefetcher.prefetchImage(value, maxPixelSize: maxPixelSize)
+        }
+      }
+
+      while await group.next() != nil {
+        guard nextIndex < uniqueURLs.count, !Task.isCancelled else { continue }
+        let value = uniqueURLs[nextIndex]
+        nextIndex += 1
+        group.addTask(priority: .utility) {
+          await MIRAImagePrefetcher.prefetchImage(value, maxPixelSize: maxPixelSize)
         }
       }
     }
   }
 
   private static func prefetchImage(_ value: String, maxPixelSize: CGFloat) async {
+    guard !Task.isCancelled else { return }
     guard let remoteURL = URL(string: value) else { return }
     guard MIRANetworkSecurityPolicy.isSecureMediaURL(remoteURL) else { return }
 
@@ -379,19 +861,8 @@ public enum MIRAImagePrefetcher {
       return
     }
 
-    do {
-      var request = URLRequest(url: remoteURL)
-      request.cachePolicy = .returnCacheDataElseLoad
-      request.timeoutInterval = 8
-      let (data, response) = try await MIRAAPIClient.productionSession.data(for: request)
-      let status = (response as? HTTPURLResponse)?.statusCode ?? 200
-      guard (200..<300).contains(status), data.count <= 12 * 1024 * 1024 else { return }
-      guard let decoded = await MIRAImageDiskCache.decode(data, maxPixelSize: resolvedMaxPixelSize) else { return }
-      MIRAImageMemoryCache.shared.store(decoded, for: remoteURL, maxPixelSize: resolvedMaxPixelSize, cost: decoded.miraCacheCost)
-      await MIRAImageDiskCache.store(data: data, for: remoteURL)
-    } catch {
-      return
-    }
+    guard !Task.isCancelled else { return }
+    _ = await MIRAImageLoadPipeline.shared.image(for: remoteURL, maxPixelSize: resolvedMaxPixelSize)
   }
 
   private static func orderedUnique(_ values: [String]) -> [String] {
@@ -411,7 +882,12 @@ public struct RemoteAvatar: View {
   let size: CGFloat
 
   public var body: some View {
-    MIRACachedImage(url: url, maxPixelSize: max(96, size * 3)) { image in
+    MIRACachedImage(
+      url: cleanURL,
+      maxPixelSize: max(96, size * 3),
+      animatesNetworkLoad: false,
+      keepsPreviousImageWhileLoading: true
+    ) { image in
       image.resizable().scaledToFill()
     } placeholder: {
       ZStack {
@@ -422,6 +898,11 @@ public struct RemoteAvatar: View {
     }
     .frame(width: size, height: size)
     .clipShape(Circle())
+  }
+
+  private var cleanURL: String? {
+    let trimmed = url?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return trimmed.isEmpty ? nil : trimmed
   }
 }
 
@@ -457,8 +938,10 @@ public struct RemoteMediaView: View {
   let url: String
   let isVideo: Bool
   let placeholderURL: String?
+  let fallbackURL: String?
   let contentMode: ContentMode
   let shouldPlay: Bool
+  let videoMuted: Bool
   let maxPixelSize: CGFloat
   let showsVideoPlaceholderIcon: Bool
   let placeholderColor: Color
@@ -469,8 +952,10 @@ public struct RemoteMediaView: View {
     url: String,
     isVideo: Bool,
     placeholderURL: String? = nil,
+    fallbackURL: String? = nil,
     contentMode: ContentMode = .fill,
     shouldPlay: Bool = false,
+    videoMuted: Bool = false,
     maxPixelSize: CGFloat = MIRAMediaSizing.feedTargetHeight,
     showsVideoPlaceholderIcon: Bool = true,
     placeholderColor: Color = MIRATheme.Color.mediaPlaceholder,
@@ -480,8 +965,10 @@ public struct RemoteMediaView: View {
     self.url = url
     self.isVideo = isVideo
     self.placeholderURL = placeholderURL
+    self.fallbackURL = fallbackURL
     self.contentMode = contentMode
     self.shouldPlay = shouldPlay
+    self.videoMuted = videoMuted
     self.maxPixelSize = maxPixelSize
     self.showsVideoPlaceholderIcon = showsVideoPlaceholderIcon
     self.placeholderColor = placeholderColor
@@ -497,6 +984,7 @@ public struct RemoteMediaView: View {
           posterURL: resolvedPlaceholderURL,
           contentMode: contentMode,
           shouldPlay: shouldPlay,
+          isMuted: videoMuted,
           showsPlaceholderIcon: showsVideoPlaceholderIcon,
           placeholderColor: placeholderColor,
           placeholderTint: placeholderTint,
@@ -518,7 +1006,7 @@ public struct RemoteMediaView: View {
               Color.clear
             }
           }
-          MIRACachedImage(url: url, maxPixelSize: maxPixelSize, onImageLoaded: reportRatio) { image in
+          MIRACachedImage(url: url, fallbackURLs: resolvedFallbackURLs, maxPixelSize: maxPixelSize, onImageLoaded: reportRatio) { image in
             image.resizable().aspectRatio(contentMode: contentMode)
           } placeholder: {
             Color.clear
@@ -537,7 +1025,7 @@ public struct RemoteMediaView: View {
         colors: [
           MIRATheme.Color.mediaPlaceholderRaised.opacity(0.76),
           placeholderColor,
-          MIRATheme.Color.forestSoft.opacity(0.68)
+          MIRATheme.Color.textMuted.opacity(0.18)
         ],
         startPoint: .topLeading,
         endPoint: .bottomTrailing
@@ -554,6 +1042,12 @@ public struct RemoteMediaView: View {
     return trimmed
   }
 
+  private var resolvedFallbackURLs: [String] {
+    let trimmed = fallbackURL?.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let trimmed, !trimmed.isEmpty, trimmed != url, trimmed != resolvedPlaceholderURL else { return [] }
+    return [trimmed]
+  }
+
   private func reportRatio(_ image: UIImage) {
     guard image.size.width > 0, image.size.height > 0 else { return }
     onMeasuredRatio(image.size.height / image.size.width)
@@ -565,10 +1059,12 @@ private struct MIRAResolvedVideoPlayer: View {
   let posterURL: String?
   let contentMode: ContentMode
   let shouldPlay: Bool
+  let isMuted: Bool
   let showsPlaceholderIcon: Bool
   let placeholderColor: Color
   let placeholderTint: Color
   let onMeasuredRatio: (CGFloat) -> Void
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var player: AVPlayer?
   @State private var thumbnailURL: String?
   @State private var failed = false
@@ -577,6 +1073,9 @@ private struct MIRAResolvedVideoPlayer: View {
   @State private var videoMetric: MIRAPerformanceMetric?
   @State private var generatedThumbnail: UIImage?
   @State private var isPlayerReady = false
+  @State private var globallyPaused = false
+  @State private var videoRetryAttempt = 0
+  @State private var streamReadyRetryAttempt = 0
 
   var body: some View {
     ZStack {
@@ -597,7 +1096,7 @@ private struct MIRAResolvedVideoPlayer: View {
       if let player {
         MIRAVideoPlayerView(player: player, contentMode: contentMode)
           .opacity(isPlayerReady ? 1 : 0)
-          .animation(.easeOut(duration: 0.18), value: isPlayerReady)
+          .animation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion), value: isPlayerReady)
           .onAppear { syncPlayback(player) }
           .onDisappear {
             player.pause()
@@ -609,7 +1108,7 @@ private struct MIRAResolvedVideoPlayer: View {
       if failed {
         VStack(spacing: 8) {
           Image(systemName: "play.slash")
-          Text("Video is processing")
+          Text("Video could not play")
             .font(.system(size: 13, weight: .semibold))
         }
         .foregroundStyle(MIRATheme.Color.textSecondary)
@@ -619,14 +1118,32 @@ private struct MIRAResolvedVideoPlayer: View {
       }
     }
     .task(id: playbackTaskID) { await configurePlayer() }
+    .onAppear {
+      guard shouldPlay else { return }
+      globallyPaused = false
+      if let player {
+        syncPlayback(player)
+      } else {
+        Task { await configurePlayer() }
+      }
+    }
     .onChange(of: shouldPlay) { _, _ in
-      guard let player else { return }
-      syncPlayback(player)
+      if let player {
+        syncPlayback(player)
+      } else if shouldPlay {
+        Task { await configurePlayer() }
+      }
+    }
+    .onReceive(NotificationCenter.default.publisher(for: .miraPlaybackShouldPause)) { _ in
+      pauseForGlobalInterruption()
+    }
+    .onReceive(NotificationCenter.default.publisher(for: .miraPlaybackMayResume)) { _ in
+      resumeAfterGlobalInterruption()
     }
   }
 
   private var playbackTaskID: String {
-    "\(url)|\(shouldPlay)"
+    "\(url)|\(shouldPlay ? "play" : "poster")|\(isMuted ? "muted" : "sound")"
   }
 
   private var placeholder: some View {
@@ -636,7 +1153,7 @@ private struct MIRAResolvedVideoPlayer: View {
         colors: [
           MIRATheme.Color.mediaPlaceholderRaised.opacity(0.72),
           placeholderColor,
-          MIRATheme.Color.forestSoft.opacity(0.62)
+          MIRATheme.Color.textMuted.opacity(0.16)
         ],
         startPoint: .topLeading,
         endPoint: .bottomTrailing
@@ -670,7 +1187,15 @@ private struct MIRAResolvedVideoPlayer: View {
       generatedThumbnail = nil
       failed = false
       isPlayerReady = false
+      videoRetryAttempt = 0
+      streamReadyRetryAttempt = 0
       loadedVideoURL = url
+    } else if failed && shouldPlay {
+      player?.pause()
+      removeLoopObserver()
+      player = nil
+      isPlayerReady = false
+      failed = false
     }
 
     let directURL = URL(string: url)
@@ -681,10 +1206,6 @@ private struct MIRAResolvedVideoPlayer: View {
     if !shouldPlay {
       if let player {
         player.pause()
-        self.player = nil
-        isPlayerReady = false
-        removeLoopObserver()
-        stopVideoMetric(status: "not_visible")
       }
       if thumbnailURL == nil && url.lowercased().hasPrefix("cfstream:") {
         await resolveCloudflareStream(createPlayer: false)
@@ -698,8 +1219,26 @@ private struct MIRAResolvedVideoPlayer: View {
       return
     }
 
+    if let prewarmedPlayer = MIRAVideoPrewarmManager.shared.consumePreparedPlayer(for: url) {
+      if let info = MIRAVideoPrewarmManager.shared.streamInfo(for: url) {
+        thumbnailURL = info.thumbnail
+      }
+      configurePlayback(for: prewarmedPlayer)
+      prewarmedPlayer.isMuted = isMuted
+      prewarmedPlayer.volume = isMuted ? 0 : 1
+      player = prewarmedPlayer
+      isPlayerReady = prewarmedPlayer.currentItem?.status == .readyToPlay
+      await startVideoMetric(label: "prewarmed")
+      syncPlayback(prewarmedPlayer)
+      Task { await markPlayerReady(prewarmedPlayer, expectedURL: url) }
+      MIRAPerformanceTimeline.markOnce("time_to_first_video_frame", detail: "prewarmed")
+      return
+    }
+
     if let directURL, directURL.isPlayableFileOrRemoteVideo {
-      let avPlayer = AVPlayer(url: directURL)
+      let item = AVPlayerItem(url: directURL)
+      configurePlayerItemForFastStoryPlayback(item)
+      let avPlayer = AVPlayer(playerItem: item)
       configurePlayback(for: avPlayer)
       player = avPlayer
       isPlayerReady = false
@@ -720,6 +1259,11 @@ private struct MIRAResolvedVideoPlayer: View {
 
   @MainActor
   private func resolveCloudflareStream(createPlayer: Bool) async {
+    if let cachedInfo = MIRAVideoPrewarmManager.shared.streamInfo(for: url) {
+      applyStreamPlaybackInfo(cachedInfo, createPlayer: createPlayer)
+      return
+    }
+
     let uid = String(url.dropFirst("cfstream:".count))
     let endpoint = MIRAProductionBackend.apiURL("stream/video/\(uid)")
 
@@ -728,7 +1272,9 @@ private struct MIRAResolvedVideoPlayer: View {
       let data: Data
       let response: URLResponse
       do {
-        (data, response) = try await MIRAAPIClient.productionSession.data(from: endpoint)
+        var request = URLRequest(url: endpoint)
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        (data, response) = try await MIRAAPIClient.productionSession.data(for: request)
       } catch {
         await metric.finish(status: "error")
         throw error
@@ -739,26 +1285,56 @@ private struct MIRAResolvedVideoPlayer: View {
       let decoder = JSONDecoder()
       decoder.keyDecodingStrategy = .convertFromSnakeCase
       let info = try decoder.decode(MIRAStreamPlaybackInfo.self, from: data)
-      thumbnailURL = info.thumbnail
-      if createPlayer, let hls = info.hls, let hlsURL = URL(string: hls), info.ready != false {
-        let avPlayer = AVPlayer(url: hlsURL)
-        configurePlayback(for: avPlayer)
-        player = avPlayer
-        isPlayerReady = false
-        await startVideoMetric(label: "stream \(uid)")
-        syncPlayback(avPlayer)
-        Task { await markPlayerReady(avPlayer, expectedURL: url) }
-        MIRAPerformanceTimeline.markOnce("time_to_first_video_frame", detail: "stream")
-      } else if createPlayer {
-        failed = true
-        stopVideoMetric(status: "not_ready")
-      } else {
-        failed = false
-      }
+      applyStreamPlaybackInfo(info, createPlayer: createPlayer)
     } catch {
-      failed = createPlayer
       if createPlayer {
+        failed = false
         stopVideoMetric(status: "error")
+        scheduleStreamReadyRetry(expectedURL: url)
+      }
+    }
+  }
+
+  @MainActor
+  private func applyStreamPlaybackInfo(_ info: MIRAStreamPlaybackInfo, createPlayer: Bool) {
+    thumbnailURL = info.thumbnail
+    if createPlayer, let hls = info.hls, let hlsURL = URL(string: hls), info.ready != false {
+      let item = AVPlayerItem(url: hlsURL)
+      configurePlayerItemForFastStoryPlayback(item)
+      let avPlayer = AVPlayer(playerItem: item)
+      configurePlayback(for: avPlayer)
+      player = avPlayer
+      isPlayerReady = false
+      Task { await startVideoMetric(label: "stream \(info.uid ?? "video")") }
+      syncPlayback(avPlayer)
+      Task { await markPlayerReady(avPlayer, expectedURL: url) }
+      MIRAPerformanceTimeline.markOnce("time_to_first_video_frame", detail: "stream")
+    } else if createPlayer {
+      failed = false
+      stopVideoMetric(status: "not_ready")
+      scheduleStreamReadyRetry(expectedURL: url)
+    } else {
+      failed = false
+    }
+  }
+
+  @MainActor
+  private func scheduleStreamReadyRetry(expectedURL: String) {
+    guard shouldPlay, expectedURL.lowercased().hasPrefix("cfstream:"), streamReadyRetryAttempt < 30 else {
+      if shouldPlay, expectedURL.lowercased().hasPrefix("cfstream:") {
+        failed = true
+      }
+      return
+    }
+    streamReadyRetryAttempt += 1
+    let attempt = streamReadyRetryAttempt
+    let delay = UInt64(min(900 + attempt * 250, 4_000)) * 1_000_000
+    Task {
+      try? await Task.sleep(nanoseconds: delay)
+      await MainActor.run {
+        guard shouldPlay, loadedVideoURL == expectedURL, streamReadyRetryAttempt == attempt, player == nil else { return }
+        MIRAApplePerformanceLogger.event("stream_video_retry_ready", detail: "attempt=\(attempt)")
+        Task { await resolveCloudflareStream(createPlayer: true) }
       }
     }
   }
@@ -776,22 +1352,76 @@ private struct MIRAResolvedVideoPlayer: View {
 
   @MainActor
   private func markPlayerReady(_ expectedPlayer: AVPlayer, expectedURL: String) async {
-    for _ in 0..<30 {
+    for _ in 0..<80 {
       guard loadedVideoURL == expectedURL, player === expectedPlayer else { return }
       if expectedPlayer.currentItem?.status == .readyToPlay {
-        withAnimation(.easeOut(duration: 0.18)) {
+        withAnimation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion)) {
           isPlayerReady = true
         }
+        failed = false
+        videoRetryAttempt = 0
+        streamReadyRetryAttempt = 0
         stopVideoMetric(status: "ready")
+        syncPlayback(expectedPlayer)
+        return
+      }
+      if expectedPlayer.currentItem?.status == .failed {
+        isPlayerReady = false
+        stopVideoMetric(status: "failed")
+        if canRetryVideo(expectedURL: expectedURL) {
+          failed = false
+          scheduleVideoRetry(expectedURL: expectedURL)
+        } else {
+          failed = true
+        }
         return
       }
       try? await Task.sleep(nanoseconds: 100_000_000)
     }
     guard loadedVideoURL == expectedURL, player === expectedPlayer else { return }
-    withAnimation(.easeOut(duration: 0.18)) {
-      isPlayerReady = true
+    if expectedPlayer.currentItem?.status == .readyToPlay {
+      withAnimation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion)) {
+        isPlayerReady = true
+      }
+      failed = false
+      videoRetryAttempt = 0
+      stopVideoMetric(status: "ready_late")
+      syncPlayback(expectedPlayer)
+    } else {
+      isPlayerReady = false
+      stopVideoMetric(status: "ready_timeout")
+      scheduleVideoRetry(expectedURL: expectedURL)
     }
-    stopVideoMetric(status: "ready_timeout")
+  }
+
+  @MainActor
+  private func scheduleVideoRetry(expectedURL: String) {
+    guard shouldPlay, videoRetryAttempt < 6 else {
+      if shouldPlay { failed = true }
+      return
+    }
+    videoRetryAttempt += 1
+    let attempt = videoRetryAttempt
+    Task {
+      try? await Task.sleep(nanoseconds: UInt64(attempt) * 1_200_000_000)
+      await MainActor.run {
+        guard shouldPlay, loadedVideoURL == expectedURL, videoRetryAttempt == attempt else { return }
+        player?.pause()
+        removeLoopObserver()
+        player = nil
+        isPlayerReady = false
+        failed = false
+        MIRAApplePerformanceLogger.event("video_retry_prepare", detail: "attempt=\(attempt)")
+        Task { await configurePlayer() }
+      }
+    }
+  }
+
+  private func canRetryVideo(expectedURL: String) -> Bool {
+    shouldPlay && videoRetryAttempt < 6 && (
+      expectedURL.lowercased().hasPrefix("cfstream:")
+        || expectedURL.isVideoURL
+    )
   }
 
   private func reportRatio(_ image: UIImage) {
@@ -828,11 +1458,11 @@ private struct MIRAResolvedVideoPlayer: View {
 
   @MainActor
   private func syncPlayback(_ player: AVPlayer) {
-    if shouldPlay {
+    if shouldPlay && !globallyPaused {
       configureAudioSession()
-      player.isMuted = false
-      player.volume = 1
-      player.play()
+      player.isMuted = isMuted
+      player.volume = isMuted ? 0 : 1
+      player.playImmediately(atRate: 1)
     } else {
       player.pause()
     }
@@ -842,9 +1472,12 @@ private struct MIRAResolvedVideoPlayer: View {
   private func configurePlayback(for player: AVPlayer) {
     configureAudioSession()
     player.actionAtItemEnd = .none
-    player.automaticallyWaitsToMinimizeStalling = true
-    player.isMuted = false
-    player.volume = 1
+    player.automaticallyWaitsToMinimizeStalling = false
+    player.isMuted = isMuted
+    player.volume = isMuted ? 0 : 1
+    if let item = player.currentItem {
+      configurePlayerItemForFastStoryPlayback(item)
+    }
     removeLoopObserver()
     endObserver = NotificationCenter.default.addObserver(
       forName: .AVPlayerItemDidPlayToEndTime,
@@ -853,9 +1486,22 @@ private struct MIRAResolvedVideoPlayer: View {
     ) { _ in
       player.seek(to: .zero)
       if shouldPlay {
-        player.play()
+        player.playImmediately(atRate: 1)
       }
     }
+  }
+
+  @MainActor
+  private func pauseForGlobalInterruption() {
+    globallyPaused = true
+    player?.pause()
+  }
+
+  @MainActor
+  private func resumeAfterGlobalInterruption() {
+    globallyPaused = false
+    guard let player else { return }
+    syncPlayback(player)
   }
 
   @MainActor
@@ -867,6 +1513,12 @@ private struct MIRAResolvedVideoPlayer: View {
     } catch {
       // Keep the video visible even if iOS refuses the audio session.
     }
+  }
+
+  private func configurePlayerItemForFastStoryPlayback(_ item: AVPlayerItem) {
+    item.preferredForwardBufferDuration = 0.65
+    item.preferredPeakBitRate = 0
+    item.preferredMaximumResolution = CGSize(width: 1080, height: 1920)
   }
 
   @MainActor
@@ -996,8 +1648,9 @@ public enum MIRAMediaSizing {
   public static let feedTargetWidth: CGFloat = 1080
   public static let feedTargetHeight: CGFloat = 1440
   public static let feedPreviewRatio: CGFloat = 4.0 / 3.0
-  public static let feedTallRatio: CGFloat = 4.0 / 3.0
-  public static let feedImmersiveRatio: CGFloat = 4.0 / 3.0
+  public static let feedShortPortraitRatio: CGFloat = 5.0 / 4.0
+  public static let feedTallRatio: CGFloat = 3.0 / 2.0
+  public static let feedImmersiveRatio: CGFloat = 3.0 / 2.0
   public static let profileGridRatio: CGFloat = 5.0 / 4.0
   public static let fullVerticalRatio: CGFloat = 16.0 / 9.0
   public static let maxMainFeedScreenHeightFraction: CGFloat = 0.78
@@ -1008,29 +1661,15 @@ public enum MIRAMediaSizing {
     width: CGFloat = UIScreen.main.bounds.width
   ) -> CGFloat {
     if let ratio = aspectRatios.first(where: { $0.isFinite && $0 > 0 }) {
-      return boundedHeight(width * ratio, width: width)
+      return boundedHeight(width * supportedFeedHeightToWidthRatio(ratio), width: width)
     }
 
     let lowercased = urls.map { $0.lowercased() }
     if let ratio = lowercased.compactMap({ flexibleDimensionsRatio(in: $0) ?? aspectRatioHint(in: $0) }).first {
-      return boundedHeight(width * ratio, width: width)
+      return boundedHeight(width * supportedFeedHeightToWidthRatio(ratio), width: width)
     }
 
-    let prefersSquare = lowercased.contains { value in
-      value.contains("1x1") || value.contains("1:1") || value.contains("square")
-    }
-    let prefersLongVertical = lowercased.contains { value in
-      value.contains("9x16") || value.contains("9:16") || value.contains("story") || value.contains("vertical")
-    }
-    let height: CGFloat
-    if prefersSquare {
-      height = width
-    } else if prefersLongVertical {
-      height = width * (16.0 / 9.0)
-    } else {
-      height = width * feedPreviewRatio
-    }
-    return boundedHeight(height, width: width)
+    return boundedHeight(width * feedPreviewRatio, width: width)
   }
 
   public static func mainFeedHeight(
@@ -1049,10 +1688,13 @@ public enum MIRAMediaSizing {
     for urls: [String],
     aspectRatios: [CGFloat] = []
   ) -> CGFloat {
-    _ = urls
-    _ = aspectRatios
-    // Main feed cards intentionally reserve one stable 3:4 surface.
-    // The original upload stays intact; the feed uses aspect-fill optimized previews.
+    if let ratio = aspectRatios.first(where: { $0.isFinite && $0 > 0 }) {
+      return supportedFeedHeightToWidthRatio(ratio)
+    }
+    let lowercased = urls.map { $0.lowercased() }
+    if let ratio = lowercased.compactMap({ flexibleDimensionsRatio(in: $0) ?? aspectRatioHint(in: $0) }).first {
+      return supportedFeedHeightToWidthRatio(ratio)
+    }
     return feedPreviewRatio
   }
 
@@ -1063,14 +1705,14 @@ public enum MIRAMediaSizing {
   ) -> CGFloat {
     let ideal = feedHeight(for: urls, aspectRatios: aspectRatios, width: width)
     // Detail pages need room for the title/caption and the fixed action/comment bar.
-    // Tall 9:16 media is still displayed large, but it cannot push controls off-screen.
+    // Tall 2:3 media is still displayed large, but it cannot push controls off-screen.
     let readableDetailHeight = UIScreen.main.bounds.height * 0.48
     return min(ideal, readableDetailHeight)
   }
 
   public static func heightToWidthRatio(forFormat format: String?) -> CGFloat? {
     guard let format else { return nil }
-    return aspectRatioHint(in: format.lowercased())
+    return aspectRatioHint(in: format.lowercased()).map(supportedFeedHeightToWidthRatio)
   }
 
   private static func flexibleDimensionsRatio(in value: String) -> CGFloat? {
@@ -1090,13 +1732,21 @@ public enum MIRAMediaSizing {
     let mediaWidth = CGFloat(Double(String(normalized[widthRange])) ?? 0)
     let mediaHeight = CGFloat(Double(String(normalized[heightRange])) ?? 0)
     guard mediaWidth > 0, mediaHeight > 0 else { return namedDimensionsRatio(in: normalized) ?? dimensionsRatio(in: value) }
-    return min(max(mediaHeight / mediaWidth, 1.0 / 1.91), 16.0 / 9.0)
+    return supportedFeedHeightToWidthRatio(mediaHeight / mediaWidth)
   }
 
   private static func boundedHeight(_ height: CGFloat, width: CGFloat) -> CGFloat {
-    let minHeight = width / 1.91
-    let maxHeight = UIScreen.main.bounds.height * maxMainFeedScreenHeightFraction
+    let minHeight = width * feedShortPortraitRatio
+    let maxHeight = min(width * feedTallRatio, UIScreen.main.bounds.height * maxMainFeedScreenHeightFraction)
     return min(max(height, minHeight), maxHeight)
+  }
+
+  private static func supportedFeedHeightToWidthRatio(_ ratio: CGFloat) -> CGFloat {
+    guard ratio.isFinite, ratio > 0 else { return feedPreviewRatio }
+    let supported = MIRASupportedPostAspectRatio.allCases.map(\.heightToWidthRatio)
+    return supported.min { lhs, rhs in
+      abs(lhs - ratio) < abs(rhs - ratio)
+    } ?? feedPreviewRatio
   }
 
   private static func dimensionsRatio(in value: String) -> CGFloat? {
@@ -1111,14 +1761,14 @@ public enum MIRAMediaSizing {
     let mediaWidth = CGFloat(Double(String(value[widthRange])) ?? 0)
     let mediaHeight = CGFloat(Double(String(value[heightRange])) ?? 0)
     guard mediaWidth > 0, mediaHeight > 0 else { return nil }
-    return min(max(mediaHeight / mediaWidth, 1.0 / 1.91), 16.0 / 9.0)
+    return supportedFeedHeightToWidthRatio(mediaHeight / mediaWidth)
   }
 
   private static func namedDimensionsRatio(in value: String) -> CGFloat? {
     let width = captureNumber(in: value, pattern: #"(?i)(?:width|w)[=:_-](\d{2,5})"#)
     let height = captureNumber(in: value, pattern: #"(?i)(?:height|h)[=:_-](\d{2,5})"#)
     guard width > 0, height > 0 else { return nil }
-    return min(max(height / width, 1.0 / 1.91), 16.0 / 9.0)
+    return supportedFeedHeightToWidthRatio(height / width)
   }
 
   private static func captureNumber(in value: String, pattern: String) -> CGFloat {
@@ -1137,22 +1787,10 @@ public enum MIRAMediaSizing {
       .lowercased()
       .replacingOccurrences(of: "×", with: "x")
       .replacingOccurrences(of: "Ã—", with: "x")
-    if decoded.contains("1.91:1")
-      || decoded.contains("1_91_1")
-      || decoded.contains("1-91-1")
-      || decoded.contains("191:100")
-      || decoded.contains("191x100") {
-      return 1.0 / 1.91
-    }
-    if containsRatio("16", "9", in: decoded) { return 9.0 / 16.0 }
     if containsRatio("4", "5", in: decoded) { return 5.0 / 4.0 }
     if containsRatio("3", "4", in: decoded) { return 4.0 / 3.0 }
     if containsRatio("2", "3", in: decoded) { return 3.0 / 2.0 }
-    if containsRatio("1", "1", in: decoded) { return 1.0 }
-    if containsRatio("9", "16", in: decoded) { return 16.0 / 9.0 }
-    if decoded.contains("square") { return 1.0 }
-    if decoded.contains("portrait") { return 5.0 / 4.0 }
-    if decoded.contains("landscape") { return 9.0 / 16.0 }
+    if decoded.contains("portrait") { return feedPreviewRatio }
     return nil
   }
 
@@ -1250,7 +1888,10 @@ public struct MIRASaveToCollectionSheet: View {
             .foregroundStyle(MIRATheme.Color.textMuted)
         }
         Spacer()
-        Button(action: onClose) {
+        Button {
+          CaptroHaptics.light()
+          onClose()
+        } label: {
           Image(systemName: "xmark")
             .font(.system(size: 14, weight: .bold))
             .foregroundStyle(MIRATheme.Color.textSecondary)
@@ -1266,7 +1907,7 @@ public struct MIRASaveToCollectionSheet: View {
       LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
         ForEach(options) { option in
           Button {
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            CaptroHaptics.light()
             onSelect(option.title)
           } label: {
             HStack(spacing: 10) {
@@ -1298,7 +1939,7 @@ public struct MIRASaveToCollectionSheet: View {
 
       if isSaved {
         Button(role: .destructive) {
-          UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+          CaptroHaptics.medium()
           onRemove()
         } label: {
           Label("Remove from saved", systemImage: "bookmark.slash")
@@ -1328,7 +1969,16 @@ private struct MIRASaveCollectionOption: Identifiable {
 extension String {
   var isVideoURL: Bool {
     let lower = lowercased()
-    return lower.contains(".mp4") || lower.contains(".mov") || lower.contains(".m3u8") || lower.contains("stream")
+    return lower.hasPrefix("cfstream:")
+      || lower.contains(".mp4")
+      || lower.contains(".mov")
+      || lower.contains(".m4v")
+      || lower.contains(".webm")
+      || lower.contains(".m3u8")
+      || lower.contains("videodelivery.net")
+      || lower.contains("cloudflarestream.com")
+      || lower.contains("stream")
+      || lower.contains("tiktok")
   }
 }
 

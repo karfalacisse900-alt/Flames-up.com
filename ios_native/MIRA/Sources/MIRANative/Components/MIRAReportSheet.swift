@@ -45,28 +45,27 @@ private struct MIRAReportSubmitResponse: Decodable {
 
 private struct MIRAReportReasonChoice: Identifiable, Hashable {
   let id: String
-  let title: String
   let systemImage: String
 }
 
 private let miraReportReasons: [MIRAReportReasonChoice] = [
-  .init(id: "harassment_or_bullying", title: "Harassment or bullying", systemImage: "person.crop.circle.badge.exclamationmark"),
-  .init(id: "hate_speech", title: "Hate speech", systemImage: "exclamationmark.bubble"),
-  .init(id: "threats_or_violence", title: "Threats or violence", systemImage: "bolt.trianglebadge.exclamationmark"),
-  .init(id: "doxxing_or_private_information", title: "Doxxing or private information", systemImage: "lock.trianglebadge.exclamationmark"),
-  .init(id: "spam_or_scam", title: "Spam or scam", systemImage: "shield.lefthalf.filled.badge.checkmark"),
-  .init(id: "impersonation", title: "Impersonation", systemImage: "person.text.rectangle"),
-  .init(id: "stolen_content_or_copyright", title: "Stolen content or copyright", systemImage: "doc.on.doc"),
-  .init(id: "sexual_content_or_exploitation", title: "Sexual content or exploitation", systemImage: "exclamationmark.shield"),
-  .init(id: "illegal_or_dangerous_activity", title: "Illegal or dangerous activity", systemImage: "flame"),
-  .init(id: "self_harm_concern", title: "Self-harm concern", systemImage: "heart.text.square"),
-  .init(id: "false_or_misleading_content", title: "False or misleading content", systemImage: "questionmark.diamond"),
-  .init(id: "dont_want_to_see", title: "I don't want to see this", systemImage: "eye.slash"),
-  .init(id: "other", title: "Other", systemImage: "ellipsis.circle")
+  .init(id: "harassment", systemImage: "person.crop.circle.badge.exclamationmark"),
+  .init(id: "hate_speech", systemImage: "exclamationmark.bubble"),
+  .init(id: "threats_violence", systemImage: "bolt.trianglebadge.exclamationmark"),
+  .init(id: "doxxing_private_info", systemImage: "lock.trianglebadge.exclamationmark"),
+  .init(id: "spam_scam", systemImage: "shield.lefthalf.filled.badge.checkmark"),
+  .init(id: "impersonation", systemImage: "person.text.rectangle"),
+  .init(id: "stolen_content", systemImage: "doc.on.doc"),
+  .init(id: "sexual_exploitation", systemImage: "exclamationmark.shield"),
+  .init(id: "illegal_dangerous_activity", systemImage: "flame"),
+  .init(id: "self_harm", systemImage: "heart.text.square"),
+  .init(id: "misleading_content", systemImage: "questionmark.diamond"),
+  .init(id: "dont_want_to_see", systemImage: "eye.slash"),
+  .init(id: "other", systemImage: "ellipsis.circle")
 ]
 
 public struct MIRAReportSheet: View {
-  private enum Step {
+  private enum Step: Hashable {
     case reasons
     case details
     case confirmation
@@ -84,6 +83,8 @@ public struct MIRAReportSheet: View {
   @State private var errorMessage: String?
   @State private var lastResult: MIRAReportResult?
   @FocusState private var detailsFocused: Bool
+  @EnvironmentObject private var localization: MIRALocalization
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   public init(
     target: MIRAReportTarget,
@@ -114,6 +115,9 @@ public struct MIRAReportSheet: View {
             confirmationStep
           }
         }
+        .id(step)
+        .transition(.opacity.combined(with: .move(edge: .trailing)))
+        .animation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion), value: step)
         .padding(.horizontal, MIRATheme.Space.lg)
         .padding(.top, MIRATheme.Space.lg)
         .padding(.bottom, MIRATheme.Space.xxl)
@@ -144,7 +148,10 @@ public struct MIRAReportSheet: View {
             .lineLimit(2)
         }
         Spacer()
-        Button(action: onClose) {
+        Button {
+          CaptroHaptics.light()
+          onClose()
+        } label: {
           Image(systemName: "xmark")
             .font(.system(size: 14, weight: .bold))
             .foregroundStyle(MIRATheme.Color.textSecondary)
@@ -195,9 +202,9 @@ public struct MIRAReportSheet: View {
     VStack(alignment: .leading, spacing: MIRATheme.Space.sm) {
       ForEach(miraReportReasons) { reason in
         Button {
-          UIImpactFeedbackGenerator(style: .light).impactOccurred()
+          CaptroHaptics.light()
           selectedReason = reason
-          withAnimation(.easeInOut(duration: 0.18)) {
+          withAnimation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion)) {
             step = .details
           }
         } label: {
@@ -206,7 +213,7 @@ public struct MIRAReportSheet: View {
               .font(.system(size: 15, weight: .semibold))
               .foregroundStyle(MIRATheme.Color.textSecondary)
               .frame(width: 28, height: 28)
-            Text(reason.title)
+            Text(localization.reportReasonLabel(reason.id))
               .font(.system(size: 15, weight: .semibold))
               .foregroundStyle(MIRATheme.Color.textPrimary)
               .frame(maxWidth: .infinity, alignment: .leading)
@@ -231,12 +238,12 @@ public struct MIRAReportSheet: View {
   private var detailsStep: some View {
     VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
       if let selectedReason {
-        Text(selectedReason.title)
+        Text(localization.reportReasonLabel(selectedReason.id))
           .font(.system(size: 16, weight: .semibold))
           .foregroundStyle(MIRATheme.Color.textPrimary)
       }
 
-      Text("You can add more information to help us review this report.")
+      Text(localization.string("report.details.body"))
         .font(.system(size: 14, weight: .regular))
         .foregroundStyle(MIRATheme.Color.textSecondary)
         .fixedSize(horizontal: false, vertical: true)
@@ -251,7 +258,7 @@ public struct MIRAReportSheet: View {
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(alignment: .topLeading) {
           if details.isEmpty {
-            Text("Add details...")
+            Text(localization.string("report.details.placeholder"))
               .font(.system(size: 15))
               .foregroundStyle(MIRATheme.Color.textMuted)
               .padding(.horizontal, 16)
@@ -283,11 +290,11 @@ public struct MIRAReportSheet: View {
           .font(.system(size: 36, weight: .semibold))
           .foregroundStyle(MIRATheme.Color.forest)
 
-        Text(lastResult?.duplicate == true ? "Already reported" : "Report submitted")
+        Text(lastResult?.duplicate == true ? localization.string("report.duplicate") : localization.string("report.submitted"))
           .font(.system(size: 22, weight: .semibold))
           .foregroundStyle(MIRATheme.Color.textPrimary)
 
-        Text(lastResult?.duplicate == true ? "You already reported this. Thanks, we're reviewing it." : "Thanks for helping keep Captro safe. We'll review this and take action if it breaks our rules.")
+        Text(lastResult?.duplicate == true ? localization.string("report.duplicate") : localization.string("report.submitted.body"))
           .font(.system(size: 15, weight: .regular))
           .lineSpacing(3)
           .foregroundStyle(MIRATheme.Color.textSecondary)
@@ -295,7 +302,7 @@ public struct MIRAReportSheet: View {
       }
 
       if lastResult?.blocked == true {
-        MIRAReportNotice(message: "You blocked this user. They won't be able to message you.", isError: false)
+        MIRAReportNotice(message: localization.string("report.blocked"), isError: false)
       }
     }
   }
@@ -307,7 +314,7 @@ public struct MIRAReportSheet: View {
         Button {
           Task { await submit(blockUser: false) }
         } label: {
-          footerButtonLabel("Submit report", systemImage: "paperplane.fill", filled: true)
+          footerButtonLabel(localization.string("report.submit"), systemImage: "paperplane.fill", filled: true)
         }
         .disabled(isSubmitting || selectedReason == nil)
         .buttonStyle(.miraPress)
@@ -316,16 +323,16 @@ public struct MIRAReportSheet: View {
           Button {
             Task { await submit(blockUser: true) }
           } label: {
-            footerButtonLabel("Submit and block user", systemImage: "hand.raised.fill", filled: false)
+            footerButtonLabel(localization.string("report.submit_and_block"), systemImage: "hand.raised.fill", filled: false)
           }
           .disabled(isSubmitting || selectedReason == nil)
           .buttonStyle(.miraPress)
         }
 
         HStack(spacing: MIRATheme.Space.sm) {
-          Button("Back") {
+          Button(localization.string("common.back")) {
             detailsFocused = false
-            withAnimation(.easeInOut(duration: 0.18)) {
+            withAnimation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion)) {
               step = .reasons
             }
           }
@@ -333,7 +340,10 @@ public struct MIRAReportSheet: View {
           .foregroundStyle(MIRATheme.Color.textSecondary)
           .frame(maxWidth: .infinity, minHeight: 38)
 
-          Button("Cancel", action: onClose)
+          Button(localization.string("common.cancel")) {
+            CaptroHaptics.light()
+            onClose()
+          }
             .buttonStyle(.plain)
             .foregroundStyle(MIRATheme.Color.textSecondary)
             .frame(maxWidth: .infinity, minHeight: 38)
@@ -344,7 +354,7 @@ public struct MIRAReportSheet: View {
           Button {
             Task { await blockTargetAfterReport() }
           } label: {
-            footerButtonLabel("Block this user", systemImage: "hand.raised.fill", filled: false)
+            footerButtonLabel(localization.string("common.block_user"), systemImage: "hand.raised.fill", filled: false)
           }
           .disabled(isSubmitting)
           .buttonStyle(.miraPress)
@@ -353,14 +363,15 @@ public struct MIRAReportSheet: View {
         Button {
           hideContentAndClose()
         } label: {
-          footerButtonLabel("Hide this content", systemImage: "eye.slash", filled: false)
+          footerButtonLabel(localization.string("report.hide_content"), systemImage: "eye.slash", filled: false)
         }
         .buttonStyle(.miraPress)
 
         Button {
+          CaptroHaptics.light()
           onClose()
         } label: {
-          footerButtonLabel("Done", systemImage: "checkmark", filled: true)
+          footerButtonLabel(localization.string("common.done"), systemImage: "checkmark", filled: true)
         }
         .buttonStyle(.miraPress)
       }
@@ -376,7 +387,7 @@ public struct MIRAReportSheet: View {
 
   private func footerButtonLabel(_ title: String, systemImage: String, filled: Bool) -> some View {
     HStack(spacing: MIRATheme.Space.xs) {
-      if isSubmitting && (title.contains("Submit") || title.contains("Block")) {
+      if isSubmitting {
         ProgressView()
           .tint(filled ? .white : MIRATheme.Color.textPrimary)
           .scaleEffect(0.86)
@@ -396,17 +407,17 @@ public struct MIRAReportSheet: View {
 
   private var headerTitle: String {
     switch step {
-    case .reasons: return "Report"
-    case .details: return "Add details"
-    case .confirmation: return "Report submitted"
+    case .reasons: return localization.string("report.title")
+    case .details: return localization.string("report.details.title")
+    case .confirmation: return localization.string("report.submitted")
     }
   }
 
   private var headerSubtitle: String {
     switch step {
-    case .reasons: return "Help us understand what happened."
-    case .details: return "This is optional and private to Captro moderation."
-    case .confirmation: return "Your report was sent to moderation."
+    case .reasons: return localization.string("report.subtitle")
+    case .details: return localization.string("report.details.body")
+    case .confirmation: return localization.string("report.submitted.body")
     }
   }
 
@@ -452,13 +463,13 @@ public struct MIRAReportSheet: View {
       )
       lastResult = result
       onSubmitted(result)
-      UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-      withAnimation(.easeInOut(duration: 0.20)) {
+      CaptroHaptics.medium()
+      withAnimation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion)) {
         step = .confirmation
       }
     } catch {
-      errorMessage = "Couldn't submit report. Please try again."
-      UINotificationFeedbackGenerator().notificationOccurred(.error)
+      errorMessage = localization.string("report.failed")
+      CaptroHaptics.error()
     }
   }
 
@@ -471,10 +482,10 @@ public struct MIRAReportSheet: View {
       let result = MIRAReportResult(reportId: lastResult?.reportId, duplicate: lastResult?.duplicate == true, blocked: true, hidden: lastResult?.hidden == true)
       lastResult = result
       onSubmitted(result)
-      UINotificationFeedbackGenerator().notificationOccurred(.success)
+      CaptroHaptics.success()
     } catch {
-      errorMessage = "Couldn't block this user. Please try again."
-      UINotificationFeedbackGenerator().notificationOccurred(.error)
+      errorMessage = localization.string("report.failed")
+      CaptroHaptics.error()
     }
   }
 

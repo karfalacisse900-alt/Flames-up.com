@@ -64,7 +64,9 @@ public struct MIRAUser: Codable, Identifiable, Hashable {
   public let fullName: String?
   public let profileImage: String?
   public let bio: String?
+  public let city: String?
   public let email: String?
+  public let emailVerified: Bool?
   public let phone: String?
   public let phoneVerified: Bool?
   public let followersCount: Int?
@@ -77,6 +79,10 @@ public struct MIRAUser: Codable, Identifiable, Hashable {
   public let isPrivate: Bool?
   public let isPremium: Bool?
   public let language: String?
+  public let status: String?
+  public let deletionRequestedAt: String?
+  public let deletionScheduledAt: String?
+  public let authProvider: String?
 
   public var displayName: String {
     if MIRAUsernameRules.isValidPublicUsername(username) {
@@ -95,6 +101,10 @@ public struct MIRAUser: Codable, Identifiable, Hashable {
   public var viewerFollowing: Bool {
     isFollowing == true
   }
+
+  public var isDeletionPending: Bool {
+    status?.lowercased() == "deletion_pending"
+  }
 }
 
 public struct MIRAPost: Codable, Identifiable, Hashable {
@@ -111,15 +121,50 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
   public let feedMediaUrls: FlexibleStringArray?
   public let thumbnailUrls: FlexibleStringArray?
   public let posterUrls: FlexibleStringArray?
+  public let mediaFallbackUrls: FlexibleStringArray?
   public let mediaTypes: FlexibleStringArray?
   public let mediaDimensions: FlexibleMediaDimensions?
   public let location: String?
+  public let displayCity: String?
+  public let displayRegion: String?
+  public let displayCountry: String?
+  public let displayLocationLabel: String?
+  public let displayLocationSource: String?
+  public let displayLocationVisibility: String?
   public let postType: String?
+  public let primaryCategory: String?
+  public let category: String?
+  public let categoryConfidence: Double?
+  public let categorySource: String?
+  public let categoryStatus: String?
+  public let secondaryCategories: FlexibleStringArray?
+  public let categoryScores: [String: Double]?
+  public let detectedObjects: FlexibleStringArray?
+  public let detectedScene: String?
+  public let placeType: String?
+  public let userSelectedCategory: String?
+  public let captionKeywords: FlexibleStringArray?
+  public let tags: FlexibleStringArray?
   public let visibility: String?
   public let placeId: String?
   public let placeName: String?
+  public let placeProvider: String?
+  public let placeProviderId: String?
+  public let placeFormattedAddress: String?
+  public let placeCategory: String?
+  public let placeCity: String?
+  public let placeRegion: String?
+  public let placeCountry: String?
   public let placeLat: Double?
   public let placeLng: Double?
+  public let audioProvider: String?
+  public let audioTrackId: String?
+  public let audioTitle: String?
+  public let audioArtist: String?
+  public let audioArtworkUrl: String?
+  public let audioStreamUrl: String?
+  public let audioStartTime: Int?
+  public let audioDuration: Int?
   public let taggedUsers: [MIRATaggedUserPayload]?
   public let createdAt: String?
   public let likesCount: Int?
@@ -141,7 +186,7 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
     }
     let raw = (caption?.isEmpty == false ? caption : content) ?? ""
     let first = raw.components(separatedBy: .newlines).first ?? raw
-    return first.isEmpty ? "MIRA post" : first
+    return first.trimmingCharacters(in: .whitespacesAndNewlines)
   }
 
   public var bodyText: String {
@@ -172,12 +217,22 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
     return posters.isEmpty ? thumbnailMediaURLs : posters
   }
 
+  public var fallbackMediaURLs: [String] {
+    let fallbacks = uniqueMediaURLs(from: mediaFallbackUrls?.values ?? [], fallback: nil)
+    return fallbacks.isEmpty ? mediaURLs : fallbacks
+  }
+
   private func uniqueMediaURLs(from values: [String], fallback: String?) -> [String] {
     var urls: [String] = []
-    if let fallback, !fallback.isEmpty { urls.append(fallback) }
+    if let fallback {
+      let cleanFallback = fallback.trimmingCharacters(in: .whitespacesAndNewlines)
+      if !cleanFallback.isEmpty { urls.append(cleanFallback) }
+    }
     urls.append(contentsOf: values)
     var seen = Set<String>()
-    return urls.filter { seen.insert($0).inserted }
+    return urls
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { !$0.isEmpty && seen.insert($0).inserted }
   }
 
   public var mediaHeightToWidthRatios: [CGFloat] {
@@ -186,20 +241,48 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
 
   public var placeDisplayName: String? {
     let name = placeName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-    if !name.isEmpty { return name }
-    let fallback = location?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-    return fallback.isEmpty ? nil : fallback
+    return name.isEmpty ? nil : name
   }
 
   public var placeDisplaySubtitle: String? {
-    guard
-      let location,
-      !location.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-      location.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() != (placeDisplayName ?? "").lowercased()
-    else {
-      return nil
-    }
-    return location.trimmingCharacters(in: .whitespacesAndNewlines)
+    let address = (placeFormattedAddress ?? location)?
+      .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    guard !address.isEmpty, address.lowercased() != (placeDisplayName ?? "").lowercased() else { return nil }
+    return address
+  }
+
+  public var displayLocationText: String? {
+    let visibility = (displayLocationVisibility ?? "hidden").lowercased()
+    guard visibility != "hidden" else { return nil }
+    let label = displayLocationLabel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    if !label.isEmpty { return label }
+    let parts = [displayCity, displayRegion, displayCountry]
+      .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { !$0.isEmpty }
+    return parts.isEmpty ? nil : parts.joined(separator: ", ")
+  }
+
+  public var audioDisplayTitle: String? {
+    let clean = audioTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return clean.isEmpty ? nil : clean
+  }
+
+  public var audioDisplayArtist: String? {
+    let clean = audioArtist?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return clean.isEmpty ? "Audius" : clean
+  }
+
+  public var hasAudio: Bool {
+    (audioProvider?.lowercased() == "audius") &&
+      !(audioTrackId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) &&
+      audioDisplayTitle != nil
+  }
+
+  public var containsVideoMedia: Bool {
+    let types = mediaTypes?.values.map { $0.lowercased() } ?? []
+    return types.contains { $0.contains("video") }
+      || mediaURLs.contains { $0.isVideoURL }
+      || feedMediaURLs.contains { $0.isVideoURL }
   }
 
   public var authorDisplayName: String {
@@ -215,6 +298,10 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
   public var viewerSaved: Bool {
     if let isSaved { return isSaved }
     return saved?.value == true
+  }
+
+  public var viewerLiked: Bool {
+    isLiked == true
   }
 
   public var viewerFollowing: Bool {
@@ -248,15 +335,50 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
       feedMediaUrls: feedMediaUrls,
       thumbnailUrls: thumbnailUrls,
       posterUrls: posterUrls,
+      mediaFallbackUrls: mediaFallbackUrls,
       mediaTypes: mediaTypes,
       mediaDimensions: mediaDimensions,
       location: location,
+      displayCity: displayCity,
+      displayRegion: displayRegion,
+      displayCountry: displayCountry,
+      displayLocationLabel: displayLocationLabel,
+      displayLocationSource: displayLocationSource,
+      displayLocationVisibility: displayLocationVisibility,
       postType: postType,
+      primaryCategory: primaryCategory,
+      category: category,
+      categoryConfidence: categoryConfidence,
+      categorySource: categorySource,
+      categoryStatus: categoryStatus,
+      secondaryCategories: secondaryCategories,
+      categoryScores: categoryScores,
+      detectedObjects: detectedObjects,
+      detectedScene: detectedScene,
+      placeType: placeType,
+      userSelectedCategory: userSelectedCategory,
+      captionKeywords: captionKeywords,
+      tags: tags,
       visibility: visibility,
       placeId: placeId,
       placeName: placeName,
+      placeProvider: placeProvider,
+      placeProviderId: placeProviderId,
+      placeFormattedAddress: placeFormattedAddress,
+      placeCategory: placeCategory,
+      placeCity: placeCity,
+      placeRegion: placeRegion,
+      placeCountry: placeCountry,
       placeLat: placeLat,
       placeLng: placeLng,
+      audioProvider: audioProvider,
+      audioTrackId: audioTrackId,
+      audioTitle: audioTitle,
+      audioArtist: audioArtist,
+      audioArtworkUrl: audioArtworkUrl,
+      audioStreamUrl: audioStreamUrl,
+      audioStartTime: audioStartTime,
+      audioDuration: audioDuration,
       taggedUsers: taggedUsers,
       createdAt: createdAt,
       likesCount: likesCount ?? self.likesCount,
@@ -289,15 +411,50 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
       feedMediaUrls: feedMediaUrls,
       thumbnailUrls: thumbnailUrls,
       posterUrls: posterUrls,
+      mediaFallbackUrls: mediaFallbackUrls,
       mediaTypes: mediaTypes,
       mediaDimensions: mediaDimensions,
       location: location,
+      displayCity: displayCity,
+      displayRegion: displayRegion,
+      displayCountry: displayCountry,
+      displayLocationLabel: displayLocationLabel,
+      displayLocationSource: displayLocationSource,
+      displayLocationVisibility: displayLocationVisibility,
       postType: postType,
+      primaryCategory: primaryCategory,
+      category: category,
+      categoryConfidence: categoryConfidence,
+      categorySource: categorySource,
+      categoryStatus: categoryStatus,
+      secondaryCategories: secondaryCategories,
+      categoryScores: categoryScores,
+      detectedObjects: detectedObjects,
+      detectedScene: detectedScene,
+      placeType: placeType,
+      userSelectedCategory: userSelectedCategory,
+      captionKeywords: captionKeywords,
+      tags: tags,
       visibility: visibility,
       placeId: placeId,
       placeName: placeName,
+      placeProvider: placeProvider,
+      placeProviderId: placeProviderId,
+      placeFormattedAddress: placeFormattedAddress,
+      placeCategory: placeCategory,
+      placeCity: placeCity,
+      placeRegion: placeRegion,
+      placeCountry: placeCountry,
       placeLat: placeLat,
       placeLng: placeLng,
+      audioProvider: audioProvider,
+      audioTrackId: audioTrackId,
+      audioTitle: audioTitle,
+      audioArtist: audioArtist,
+      audioArtworkUrl: audioArtworkUrl,
+      audioStreamUrl: audioStreamUrl,
+      audioStartTime: audioStartTime,
+      audioDuration: audioDuration,
       taggedUsers: taggedUsers,
       createdAt: createdAt,
       likesCount: likesCount,
@@ -330,12 +487,69 @@ public struct MIRATaggedUserPayload: Codable, Hashable, Identifiable {
   }
 }
 
+public enum MIRASupportedPostAspectRatio: String, CaseIterable, Codable, Hashable {
+  case threeFour = "3:4"
+  case fourFive = "4:5"
+  case twoThree = "2:3"
+
+  public static let defaultRatio: MIRASupportedPostAspectRatio = .threeFour
+
+  public var feedWidth: Double { 1080 }
+
+  public var feedHeight: Double {
+    switch self {
+    case .threeFour: return 1440
+    case .fourFive: return 1350
+    case .twoThree: return 1620
+    }
+  }
+
+  public var widthToHeightRatio: Double {
+    feedWidth / feedHeight
+  }
+
+  public var heightToWidthRatio: CGFloat {
+    CGFloat(feedHeight / feedWidth)
+  }
+
+  public static func nearest(width: Double?, height: Double?, preferred: MIRASupportedPostAspectRatio = .threeFour) -> MIRASupportedPostAspectRatio {
+    guard let width, let height, width > 0, height > 0 else { return preferred }
+    let original = width / height
+    guard original < 1 else { return preferred }
+    return allCases.min { lhs, rhs in
+      abs(lhs.widthToHeightRatio - original) < abs(rhs.widthToHeightRatio - original)
+    } ?? preferred
+  }
+
+  public static func nearest(widthToHeightRatio ratio: Double?) -> MIRASupportedPostAspectRatio {
+    guard let ratio, ratio.isFinite, ratio > 0, ratio < 1 else { return defaultRatio }
+    return allCases.min { lhs, rhs in
+      abs(lhs.widthToHeightRatio - ratio) < abs(rhs.widthToHeightRatio - ratio)
+    } ?? defaultRatio
+  }
+
+  public static func from(format: String?) -> MIRASupportedPostAspectRatio? {
+    guard let format else { return nil }
+    let normalized = format.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    return allCases.first { $0.rawValue.lowercased() == normalized }
+  }
+}
+
 public struct MIRAMediaDimension: Codable, Hashable {
   public let width: Double?
   public let height: Double?
   public let ratio: Double?
   public let format: String?
   public let type: String?
+  public let originalWidth: Double?
+  public let originalHeight: Double?
+  public let originalAspectRatio: Double?
+  public let feedWidth: Double?
+  public let feedHeight: Double?
+  public let feedAspectRatio: Double?
+  public let displayAspectRatio: Double?
+  public let cropMode: String?
+  public let mediaType: String?
 
   enum CodingKeys: String, CodingKey {
     case width
@@ -345,14 +559,56 @@ public struct MIRAMediaDimension: Codable, Hashable {
     case aspectRatioSnake = "aspect_ratio"
     case format
     case type
+    case originalWidth
+    case originalWidthSnake = "original_width"
+    case originalHeight
+    case originalHeightSnake = "original_height"
+    case originalAspectRatio
+    case originalAspectRatioSnake = "original_aspect_ratio"
+    case feedWidth
+    case feedWidthSnake = "feed_width"
+    case feedHeight
+    case feedHeightSnake = "feed_height"
+    case feedAspectRatio
+    case feedAspectRatioSnake = "feed_aspect_ratio"
+    case displayAspectRatio
+    case displayAspectRatioSnake = "display_aspect_ratio"
+    case cropMode
+    case cropModeSnake = "crop_mode"
+    case mediaType
+    case mediaTypeSnake = "media_type"
   }
 
-  public init(width: Double?, height: Double?, ratio: Double?, format: String?, type: String?) {
+  public init(
+    width: Double?,
+    height: Double?,
+    ratio: Double?,
+    format: String?,
+    type: String?,
+    originalWidth: Double? = nil,
+    originalHeight: Double? = nil,
+    originalAspectRatio: Double? = nil,
+    feedWidth: Double? = nil,
+    feedHeight: Double? = nil,
+    feedAspectRatio: Double? = nil,
+    displayAspectRatio: Double? = nil,
+    cropMode: String? = nil,
+    mediaType: String? = nil
+  ) {
     self.width = width
     self.height = height
     self.ratio = ratio
     self.format = format
     self.type = type
+    self.originalWidth = originalWidth
+    self.originalHeight = originalHeight
+    self.originalAspectRatio = originalAspectRatio
+    self.feedWidth = feedWidth
+    self.feedHeight = feedHeight
+    self.feedAspectRatio = feedAspectRatio
+    self.displayAspectRatio = displayAspectRatio
+    self.cropMode = cropMode
+    self.mediaType = mediaType
   }
 
   public init(from decoder: Decoder) throws {
@@ -364,6 +620,15 @@ public struct MIRAMediaDimension: Codable, Hashable {
     let ratioText = Self.decodeString(container, keys: [.ratio, .aspectRatio, .aspectRatioSnake])
     format = explicitFormat ?? ratioText
     type = try? container.decodeIfPresent(String.self, forKey: .type)
+    originalWidth = Self.decodeDouble(container, keys: [.originalWidth, .originalWidthSnake])
+    originalHeight = Self.decodeDouble(container, keys: [.originalHeight, .originalHeightSnake])
+    originalAspectRatio = Self.decodeDouble(container, keys: [.originalAspectRatio, .originalAspectRatioSnake])
+    feedWidth = Self.decodeDouble(container, keys: [.feedWidth, .feedWidthSnake])
+    feedHeight = Self.decodeDouble(container, keys: [.feedHeight, .feedHeightSnake])
+    feedAspectRatio = Self.decodeDouble(container, keys: [.feedAspectRatio, .feedAspectRatioSnake])
+    displayAspectRatio = Self.decodeDouble(container, keys: [.displayAspectRatio, .displayAspectRatioSnake])
+    cropMode = Self.decodeString(container, keys: [.cropMode, .cropModeSnake])
+    mediaType = Self.decodeString(container, keys: [.mediaType, .mediaTypeSnake])
   }
 
   public func encode(to encoder: Encoder) throws {
@@ -373,17 +638,35 @@ public struct MIRAMediaDimension: Codable, Hashable {
     try container.encodeIfPresent(ratio, forKey: .ratio)
     try container.encodeIfPresent(format, forKey: .format)
     try container.encodeIfPresent(type, forKey: .type)
+    try container.encodeIfPresent(originalWidth, forKey: .originalWidthSnake)
+    try container.encodeIfPresent(originalHeight, forKey: .originalHeightSnake)
+    try container.encodeIfPresent(originalAspectRatio, forKey: .originalAspectRatioSnake)
+    try container.encodeIfPresent(feedWidth, forKey: .feedWidthSnake)
+    try container.encodeIfPresent(feedHeight, forKey: .feedHeightSnake)
+    try container.encodeIfPresent(feedAspectRatio, forKey: .feedAspectRatioSnake)
+    try container.encodeIfPresent(displayAspectRatio, forKey: .displayAspectRatioSnake)
+    try container.encodeIfPresent(cropMode, forKey: .cropModeSnake)
+    try container.encodeIfPresent(mediaType, forKey: .mediaTypeSnake)
   }
 
   public var heightToWidthRatio: CGFloat? {
-    let widthValue = width ?? 0
-    let heightValue = height ?? 0
+    if let formatRatio = MIRASupportedPostAspectRatio.from(format: format) {
+      return formatRatio.heightToWidthRatio
+    }
+    if let displayAspectRatio, displayAspectRatio > 0 {
+      return MIRASupportedPostAspectRatio.nearest(widthToHeightRatio: displayAspectRatio).heightToWidthRatio
+    }
+    if let feedAspectRatio, feedAspectRatio > 0 {
+      return MIRASupportedPostAspectRatio.nearest(widthToHeightRatio: feedAspectRatio).heightToWidthRatio
+    }
+    let widthValue = feedWidth ?? width ?? originalWidth ?? 0
+    let heightValue = feedHeight ?? height ?? originalHeight ?? 0
     if widthValue > 0, heightValue > 0 {
-      return CGFloat(heightValue / widthValue)
+      return MIRASupportedPostAspectRatio.nearest(width: widthValue, height: heightValue).heightToWidthRatio
     }
     if let ratio, ratio > 0 {
       // Backend stores ratio as width / height. Feed sizing needs height / width.
-      return CGFloat(1 / ratio)
+      return MIRASupportedPostAspectRatio.nearest(widthToHeightRatio: ratio).heightToWidthRatio
     }
     return MIRAMediaSizing.heightToWidthRatio(forFormat: format)
   }
@@ -415,43 +698,39 @@ public struct MIRAMediaDimension: Codable, Hashable {
   }
 }
 
-public struct MIRANote: Codable, Identifiable, Hashable {
+public struct MIRAAudiusTrack: Codable, Identifiable, Hashable {
   public let id: String
-  public let body: String?
-  public let mediaUrl: String?
-  public let createdAt: String?
-  public let reactionsCount: Int?
-  public let commentsCount: Int?
-  public let sharesCount: Int?
-  public let reacted: Bool?
-  public let user: MIRAUser?
+  public let trackId: String?
+  public let title: String?
+  public let artist: String?
+  public let artistId: String?
+  public let artistHandle: String?
+  public let artistProfileImage: String?
+  public let artworkUrl: String?
+  public let duration: Int?
+  public let genre: String?
+  public let playCount: Int?
+  public let favoriteCount: Int?
+  public let streamUrl: String?
 
-  public func updating(reactionsCount: Int? = nil, commentsCount: Int? = nil, sharesCount: Int? = nil, reacted: Bool? = nil) -> MIRANote {
-    MIRANote(
-      id: id,
-      body: body,
-      mediaUrl: mediaUrl,
-      createdAt: createdAt,
-      reactionsCount: reactionsCount ?? self.reactionsCount,
-      commentsCount: commentsCount ?? self.commentsCount,
-      sharesCount: sharesCount ?? self.sharesCount,
-      reacted: reacted ?? self.reacted,
-      user: user
-    )
+  public var resolvedTrackId: String {
+    let cleanTrackId = trackId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return cleanTrackId.isEmpty ? id : cleanTrackId
+  }
+
+  public var displayTitle: String {
+    let clean = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return clean.isEmpty ? "Untitled track" : clean
+  }
+
+  public var displayArtist: String {
+    let clean = artist?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return clean.isEmpty ? "Audius artist" : clean
   }
 }
 
-public struct MIRAGifItem: Decodable, Identifiable, Hashable {
-  public let id: String
-  public let title: String?
-  public let previewUrl: String?
-  public let mediaUrl: String?
-  public let width: Int?
-  public let height: Int?
-}
-
-public struct MIRAGifSearchResponse: Decodable, Hashable {
-  public let gifs: [MIRAGifItem]
+public struct MIRAAudiusTrackResponse: Decodable, Hashable {
+  public let tracks: [MIRAAudiusTrack]
 }
 
 public struct MIRAStatusPreview: Codable, Identifiable, Hashable {
@@ -461,12 +740,67 @@ public struct MIRAStatusPreview: Codable, Identifiable, Hashable {
   public let image: String?
   public let backgroundColor: String?
   public let textColor: String?
+  public let audioProvider: String?
+  public let audioTrackId: String?
+  public let audioTitle: String?
+  public let audioArtist: String?
+  public let audioArtworkUrl: String?
+  public let audioStreamUrl: String?
+  public let audioStartTime: Int?
+  public let audioDuration: Int?
+  public let audioHidden: FlexibleBool?
   public let createdAt: String?
   public let expiresAt: String?
+  public let likesCount: Int?
+  public let likedByMe: Bool?
 
   public var mediaURL: String? {
     guard let image, !image.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
     return image
+  }
+
+  public var hasAudio: Bool {
+    audioHidden?.value != true &&
+      audioProvider?.lowercased() == "audius" &&
+      !(audioTrackId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+  }
+
+  public var audioDisplayTitle: String {
+    let clean = audioTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return clean.isEmpty ? "Story sound" : clean
+  }
+
+  public var audioDisplayArtist: String {
+    let clean = audioArtist?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return clean.isEmpty ? "Audius" : clean
+  }
+
+  public var viewerLiked: Bool {
+    likedByMe == true
+  }
+
+  public func updating(liked: Bool? = nil, likesCount: Int? = nil) -> MIRAStatusPreview {
+    MIRAStatusPreview(
+      id: id,
+      userId: userId,
+      content: content,
+      image: image,
+      backgroundColor: backgroundColor,
+      textColor: textColor,
+      audioProvider: audioProvider,
+      audioTrackId: audioTrackId,
+      audioTitle: audioTitle,
+      audioArtist: audioArtist,
+      audioArtworkUrl: audioArtworkUrl,
+      audioStreamUrl: audioStreamUrl,
+      audioStartTime: audioStartTime,
+      audioDuration: audioDuration,
+      audioHidden: audioHidden,
+      createdAt: createdAt,
+      expiresAt: expiresAt,
+      likesCount: likesCount ?? self.likesCount,
+      likedByMe: liked ?? likedByMe
+    )
   }
 }
 
@@ -490,7 +824,7 @@ public struct MIRAStoryGroup: Codable, Identifiable, Hashable {
   }
 }
 
-public struct MIRAComment: Decodable, Identifiable, Hashable {
+public struct MIRAComment: Codable, Identifiable, Hashable {
   public let id: String
   public let userId: String?
   public let postId: String?
@@ -596,7 +930,9 @@ public struct MIRAComment: Decodable, Identifiable, Hashable {
           fullName: fullName,
           profileImage: profileImage,
           bio: nil,
+          city: nil,
           email: nil,
+          emailVerified: nil,
           phone: nil,
           phoneVerified: nil,
           followersCount: nil,
@@ -608,12 +944,33 @@ public struct MIRAComment: Decodable, Identifiable, Hashable {
           privacyLocked: nil,
           isPrivate: nil,
           isPremium: nil,
-          language: nil
+          language: nil,
+          status: nil,
+          deletionRequestedAt: nil,
+          deletionScheduledAt: nil,
+          authProvider: nil
         )
       } else {
         user = nil
       }
     }
+  }
+
+  public func encode(to encoder: Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(id, forKey: .id)
+    try container.encodeIfPresent(userId, forKey: .userId)
+    try container.encodeIfPresent(postId, forKey: .postId)
+    try container.encodeIfPresent(postUserId, forKey: .postUserId)
+    try container.encodeIfPresent(content, forKey: .content)
+    try container.encodeIfPresent(body, forKey: .body)
+    try container.encodeIfPresent(parentId, forKey: .parentId)
+    try container.encodeIfPresent(createdAt, forKey: .createdAt)
+    try container.encodeIfPresent(likesCount, forKey: .likesCount)
+    try container.encodeIfPresent(likedByMe, forKey: .likedByMe)
+    try container.encodeIfPresent(pinnedAt, forKey: .pinnedAt)
+    try container.encodeIfPresent(isPinned, forKey: .isPinned)
+    try container.encodeIfPresent(user, forKey: .user)
   }
 
   public func updating(liked: Bool? = nil, likesCount: Int? = nil, pinnedAt: String? = nil, clearPin: Bool = false) -> MIRAComment {
@@ -633,12 +990,6 @@ public struct MIRAComment: Decodable, Identifiable, Hashable {
       user: user
     )
   }
-}
-
-public struct MIRAWallet: Codable, Hashable {
-  public let balance: Int?
-  public let premiumActive: Bool?
-  public let premiumPlan: String?
 }
 
 public struct MIRAConversation: Codable, Identifiable, Hashable {
@@ -775,9 +1126,121 @@ public struct MIRAMessage: Codable, Identifiable, Hashable {
   public let mediaUrl: String?
   public let mediaType: String?
   public let createdAt: String?
+  public let updatedAt: String?
+  public let status: String?
+  public let localCreatedAt: String?
+  public let serverSequence: Int?
+  public let thumbnailUrl: String?
+  public let posterUrl: String?
+  public let localFilePath: String?
+  public let localThumbnailPath: String?
+  public let fileName: String?
+  public let fileSize: Int?
+  public let width: Int?
+  public let height: Int?
+  public let durationMs: Int?
+  public let downloadStatus: String?
+  public let uploadStatus: String?
   public let username: String?
   public let fullName: String?
   public let profileImage: String?
+
+  public init(
+    id: String,
+    groupId: String? = nil,
+    senderId: String? = nil,
+    receiverId: String? = nil,
+    content: String? = nil,
+    mediaUrl: String? = nil,
+    mediaType: String? = nil,
+    createdAt: String? = nil,
+    updatedAt: String? = nil,
+    status: String? = nil,
+    localCreatedAt: String? = nil,
+    serverSequence: Int? = nil,
+    thumbnailUrl: String? = nil,
+    posterUrl: String? = nil,
+    localFilePath: String? = nil,
+    localThumbnailPath: String? = nil,
+    fileName: String? = nil,
+    fileSize: Int? = nil,
+    width: Int? = nil,
+    height: Int? = nil,
+    durationMs: Int? = nil,
+    downloadStatus: String? = nil,
+    uploadStatus: String? = nil,
+    username: String? = nil,
+    fullName: String? = nil,
+    profileImage: String? = nil
+  ) {
+    self.id = id
+    self.groupId = groupId
+    self.senderId = senderId
+    self.receiverId = receiverId
+    self.content = content
+    self.mediaUrl = mediaUrl
+    self.mediaType = mediaType
+    self.createdAt = createdAt
+    self.updatedAt = updatedAt
+    self.status = status
+    self.localCreatedAt = localCreatedAt
+    self.serverSequence = serverSequence
+    self.thumbnailUrl = thumbnailUrl
+    self.posterUrl = posterUrl
+    self.localFilePath = localFilePath
+    self.localThumbnailPath = localThumbnailPath
+    self.fileName = fileName
+    self.fileSize = fileSize
+    self.width = width
+    self.height = height
+    self.durationMs = durationMs
+    self.downloadStatus = downloadStatus
+    self.uploadStatus = uploadStatus
+    self.username = username
+    self.fullName = fullName
+    self.profileImage = profileImage
+  }
+
+  public func updating(
+    id: String? = nil,
+    content: String? = nil,
+    mediaUrl: String? = nil,
+    mediaType: String? = nil,
+    createdAt: String? = nil,
+    updatedAt: String? = nil,
+    status: String? = nil,
+    localCreatedAt: String? = nil,
+    uploadStatus: String? = nil
+  ) -> MIRAMessage {
+    MIRAMessage(
+      id: id ?? self.id,
+      groupId: groupId,
+      senderId: senderId,
+      receiverId: receiverId,
+      content: content ?? self.content,
+      mediaUrl: mediaUrl ?? self.mediaUrl,
+      mediaType: mediaType ?? self.mediaType,
+      createdAt: createdAt ?? self.createdAt,
+      updatedAt: updatedAt ?? self.updatedAt,
+      status: status ?? self.status,
+      localCreatedAt: localCreatedAt ?? self.localCreatedAt,
+      serverSequence: serverSequence,
+      thumbnailUrl: thumbnailUrl,
+      posterUrl: posterUrl,
+      localFilePath: localFilePath,
+      localThumbnailPath: localThumbnailPath,
+      fileName: fileName,
+      fileSize: fileSize,
+      width: width,
+      height: height,
+      durationMs: durationMs,
+      downloadStatus: downloadStatus,
+      uploadStatus: uploadStatus ?? self.uploadStatus,
+      username: username,
+      fullName: fullName,
+      profileImage: profileImage
+    )
+  }
 }
 
 public struct MIRAPresence: Decodable, Hashable {
@@ -878,7 +1341,7 @@ struct MIRAIncomingCallEnvelope: Decodable, Hashable {
   let call: MIRACallSession?
 }
 
-public struct MIRANotification: Decodable, Identifiable, Hashable {
+public struct MIRANotification: Codable, Identifiable, Hashable {
   public let id: String
   public let type: String?
   public let title: String?
@@ -886,6 +1349,36 @@ public struct MIRANotification: Decodable, Identifiable, Hashable {
   public let data: FlexibleJSONText?
   public let isRead: FlexibleBool?
   public let createdAt: String?
+
+  public init(
+    id: String,
+    type: String?,
+    title: String?,
+    body: String?,
+    data: FlexibleJSONText?,
+    isRead: FlexibleBool?,
+    createdAt: String?
+  ) {
+    self.id = id
+    self.type = type
+    self.title = title
+    self.body = body
+    self.data = data
+    self.isRead = isRead
+    self.createdAt = createdAt
+  }
+
+  public func updatingRead(_ value: Bool) -> MIRANotification {
+    MIRANotification(
+      id: id,
+      type: type,
+      title: title,
+      body: body,
+      data: data,
+      isRead: FlexibleBool(value),
+      createdAt: createdAt
+    )
+  }
 }
 
 public struct MIRAAuthResponse: Decodable, Hashable {
@@ -913,25 +1406,68 @@ public struct MIRAAppleOAuthBody: Encodable {
   public let appleUser: String?
 }
 
+public struct MIRAGoogleOAuthBody: Encodable {
+  public let idToken: String
+}
+
 public struct MIRAUploadImageBody: Encodable {
   public let image: String
   public let filename: String
 }
 
+public struct MIRAUploadImageDirectBody: Encodable {
+  public let filename: String
+  public let mimeType: String
+  public let target: String
+}
+
 public struct MIRAMediaUploadResponse: Decodable, Hashable {
   public let url: String?
   public let id: String?
+  public let mediaId: String?
   public let videoUid: String?
   public let uploadUrl: String?
   public let source: String?
+  public let moderationStatus: String?
+  public let publicUrl: String?
+  public let rejectionMessage: String?
 }
 
-public struct MIRAStreamPlaybackInfo: Decodable, Hashable {
+public struct MIRAStreamPlaybackInfo: Decodable, Hashable, Sendable {
   public let uid: String?
   public let hls: String?
   public let dash: String?
   public let thumbnail: String?
   public let ready: Bool?
+}
+
+public struct MIRAPostAssistBody: Encodable {
+  public let title: String
+  public let caption: String
+  public let mediaType: String?
+  public let postType: String?
+  public let hashtags: [String]
+  public let location: String?
+  public let placeName: String?
+  public let appleVisionLabels: [MIRAAutoCategoryLabel]?
+  public let appleVisionCategoryGuess: String?
+  public let appleVisionConfidence: Double?
+}
+
+public struct MIRAPostAssistResponse: Decodable, Hashable {
+  public let source: String?
+  public let aiAvailable: Bool?
+  public let primaryCategory: String?
+  public let category: String?
+  public let categoryConfidence: Double?
+  public let categoryStatus: String?
+  public let headlineSuggestions: [String]?
+  public let captionSuggestions: [String]?
+  public let tags: [String]?
+
+  public var resolvedCategory: String {
+    (primaryCategory?.isEmpty == false ? primaryCategory : category) ?? "lifestyle"
+  }
 }
 
 public struct MIRALibraryCollection: Decodable, Identifiable, Hashable {
@@ -941,14 +1477,6 @@ public struct MIRALibraryCollection: Decodable, Identifiable, Hashable {
   public let count: Int?
 }
 
-public struct MIRAWalletTransaction: Decodable, Identifiable, Hashable {
-  public let id: String
-  public let amount: Int?
-  public let direction: String?
-  public let reason: String?
-  public let createdAt: String?
-}
-
 public struct CreatePostBody: Encodable {
   public let title: String
   public let content: String
@@ -956,14 +1484,43 @@ public struct CreatePostBody: Encodable {
   public let images: [String]
   public let mediaTypes: [String]
   public let mediaDimensions: [MIRAMediaDimension]
+  public let mediaAssetIds: [String]?
   public let editorOverlays: [MIRAEditorUploadMetadata]?
   public let location: String?
+  public let displayCity: String?
+  public let displayRegion: String?
+  public let displayCountry: String?
+  public let displayLocationLabel: String?
+  public let displayLocationSource: String?
+  public let displayLocationVisibility: String?
   public let postType: String?
   public let placeId: String?
   public let placeName: String?
+  public let placeProvider: String?
+  public let placeProviderId: String?
+  public let placeFormattedAddress: String?
+  public let placeCategory: String?
+  public let placeCity: String?
+  public let placeRegion: String?
+  public let placeCountry: String?
   public let placeLat: Double?
   public let placeLng: Double?
   public let taggedUsers: [MIRATaggedUserPayload]?
+  public let tags: [String]?
+  public let primaryCategory: String?
+  public let categorySource: String?
+  public let categoryStatus: String?
+  public let appleVisionLabels: [MIRAAutoCategoryLabel]?
+  public let appleVisionCategoryGuess: String?
+  public let appleVisionConfidence: Double?
+  public let audioProvider: String?
+  public let audioTrackId: String?
+  public let audioTitle: String?
+  public let audioArtist: String?
+  public let audioArtworkUrl: String?
+  public let audioStreamUrl: String?
+  public let audioStartTime: Int?
+  public let audioDuration: Int?
   public let visibility: String
   public let clientRequestId: String
 
@@ -974,14 +1531,43 @@ public struct CreatePostBody: Encodable {
     images: [String],
     mediaTypes: [String],
     mediaDimensions: [MIRAMediaDimension],
+    mediaAssetIds: [String]? = nil,
     editorOverlays: [MIRAEditorUploadMetadata]? = nil,
     location: String? = nil,
+    displayCity: String? = nil,
+    displayRegion: String? = nil,
+    displayCountry: String? = nil,
+    displayLocationLabel: String? = nil,
+    displayLocationSource: String? = nil,
+    displayLocationVisibility: String? = nil,
     postType: String? = nil,
     placeId: String? = nil,
     placeName: String? = nil,
+    placeProvider: String? = nil,
+    placeProviderId: String? = nil,
+    placeFormattedAddress: String? = nil,
+    placeCategory: String? = nil,
+    placeCity: String? = nil,
+    placeRegion: String? = nil,
+    placeCountry: String? = nil,
     placeLat: Double? = nil,
     placeLng: Double? = nil,
     taggedUsers: [MIRATaggedUserPayload]? = nil,
+    tags: [String]? = nil,
+    primaryCategory: String? = nil,
+    categorySource: String? = nil,
+    categoryStatus: String? = nil,
+    appleVisionLabels: [MIRAAutoCategoryLabel]? = nil,
+    appleVisionCategoryGuess: String? = nil,
+    appleVisionConfidence: Double? = nil,
+    audioProvider: String? = nil,
+    audioTrackId: String? = nil,
+    audioTitle: String? = nil,
+    audioArtist: String? = nil,
+    audioArtworkUrl: String? = nil,
+    audioStreamUrl: String? = nil,
+    audioStartTime: Int? = nil,
+    audioDuration: Int? = nil,
     visibility: String,
     clientRequestId: String
   ) {
@@ -991,14 +1577,43 @@ public struct CreatePostBody: Encodable {
     self.images = images
     self.mediaTypes = mediaTypes
     self.mediaDimensions = mediaDimensions
+    self.mediaAssetIds = mediaAssetIds
     self.editorOverlays = editorOverlays
     self.location = location
+    self.displayCity = displayCity
+    self.displayRegion = displayRegion
+    self.displayCountry = displayCountry
+    self.displayLocationLabel = displayLocationLabel
+    self.displayLocationSource = displayLocationSource
+    self.displayLocationVisibility = displayLocationVisibility
     self.postType = postType
     self.placeId = placeId
     self.placeName = placeName
+    self.placeProvider = placeProvider
+    self.placeProviderId = placeProviderId
+    self.placeFormattedAddress = placeFormattedAddress
+    self.placeCategory = placeCategory
+    self.placeCity = placeCity
+    self.placeRegion = placeRegion
+    self.placeCountry = placeCountry
     self.placeLat = placeLat
     self.placeLng = placeLng
     self.taggedUsers = taggedUsers
+    self.tags = tags
+    self.primaryCategory = primaryCategory
+    self.categorySource = categorySource
+    self.categoryStatus = categoryStatus
+    self.appleVisionLabels = appleVisionLabels
+    self.appleVisionCategoryGuess = appleVisionCategoryGuess
+    self.appleVisionConfidence = appleVisionConfidence
+    self.audioProvider = audioProvider
+    self.audioTrackId = audioTrackId
+    self.audioTitle = audioTitle
+    self.audioArtist = audioArtist
+    self.audioArtworkUrl = audioArtworkUrl
+    self.audioStreamUrl = audioStreamUrl
+    self.audioStartTime = audioStartTime
+    self.audioDuration = audioDuration
     self.visibility = visibility
     self.clientRequestId = clientRequestId
   }
@@ -1022,19 +1637,23 @@ public struct MIRAEditorUploadMetadata: Encodable, Hashable {
   }
 }
 
-public struct CreateNoteBody: Encodable {
-  public let body: String
-  public let mediaUrl: String?
-  public let color: String?
-}
-
 public struct CreateStatusBody: Encodable {
   public let content: String
   public let image: String?
   public let backgroundColor: String
   public let textColor: String
   public let visibility: String
+  public let mediaType: String?
+  public let duration: Int?
   public let editorMetadata: MIRANativeEditedMediaMetadata?
+  public let audioProvider: String?
+  public let audioTrackId: String?
+  public let audioTitle: String?
+  public let audioArtist: String?
+  public let audioArtworkUrl: String?
+  public let audioStreamUrl: String?
+  public let audioStartTime: Int?
+  public let audioDuration: Int?
 
   public init(
     content: String,
@@ -1042,14 +1661,34 @@ public struct CreateStatusBody: Encodable {
     backgroundColor: String,
     textColor: String,
     visibility: String,
-    editorMetadata: MIRANativeEditedMediaMetadata? = nil
+    mediaType: String? = nil,
+    duration: Int? = nil,
+    editorMetadata: MIRANativeEditedMediaMetadata? = nil,
+    audioProvider: String? = nil,
+    audioTrackId: String? = nil,
+    audioTitle: String? = nil,
+    audioArtist: String? = nil,
+    audioArtworkUrl: String? = nil,
+    audioStreamUrl: String? = nil,
+    audioStartTime: Int? = nil,
+    audioDuration: Int? = nil
   ) {
     self.content = content
     self.image = image
     self.backgroundColor = backgroundColor
     self.textColor = textColor
     self.visibility = visibility
+    self.mediaType = mediaType
+    self.duration = duration
     self.editorMetadata = editorMetadata
+    self.audioProvider = audioProvider
+    self.audioTrackId = audioTrackId
+    self.audioTitle = audioTitle
+    self.audioArtist = audioArtist
+    self.audioArtworkUrl = audioArtworkUrl
+    self.audioStreamUrl = audioStreamUrl
+    self.audioStartTime = audioStartTime
+    self.audioDuration = audioDuration
   }
 }
 
@@ -1107,21 +1746,6 @@ public struct MIRAGroupMessagesResponse: Decodable, Hashable {
 public struct TypingBody: Encodable {
   public let peerId: String
   public let isTyping: Bool
-}
-
-public struct NoteInteractionBody: Encodable {
-  public let kind: String
-  public let value: String?
-}
-
-public struct NoteInteractionResponse: Decodable {
-  public let active: Bool?
-  public let kind: String?
-}
-
-public struct NoteReportBody: Encodable {
-  public let reason: String
-  public let details: String?
 }
 
 public struct PostReportBody: Encodable {
@@ -1194,11 +1818,6 @@ public struct CommentMutationResponse: Decodable {
   public let deleted: Bool?
   public let hidden: Bool?
   public let commentsCount: Int?
-}
-
-public struct NoteCommentBody: Encodable {
-  public let body: String
-  public let parentId: String?
 }
 
 public struct PostCommentBody: Encodable {
@@ -1292,6 +1911,10 @@ public struct FlexibleMediaDimensions: Codable, Hashable {
 
 public struct FlexibleBool: Codable, Hashable {
   public let value: Bool
+
+  public init(_ value: Bool) {
+    self.value = value
+  }
 
   public init(from decoder: Decoder) throws {
     let container = try decoder.singleValueContainer()

@@ -11,11 +11,42 @@ public enum MIRANativeEditorMediaType: String, Codable, Hashable {
 
 public enum MIRANativeEditorAspectRatio: String, Codable, Hashable, CaseIterable, Identifiable {
   case original
-  case square = "1:1"
+  case portrait3x4 = "3:4"
   case portrait4x5 = "4:5"
+  case portrait2x3 = "2:3"
   case story9x16 = "9:16"
 
   public var id: String { rawValue }
+
+  public var title: String {
+    switch self {
+    case .original: return "Original"
+    case .portrait3x4: return "3:4"
+    case .portrait4x5: return "4:5"
+    case .portrait2x3: return "2:3"
+    case .story9x16: return "Story"
+    }
+  }
+
+  public var widthToHeightRatio: CGFloat? {
+    switch self {
+    case .original: return nil
+    case .portrait3x4: return 3 / 4
+    case .portrait4x5: return 4 / 5
+    case .portrait2x3: return 2 / 3
+    case .story9x16: return 9 / 16
+    }
+  }
+
+  public var exportSize: CGSize? {
+    switch self {
+    case .original: return nil
+    case .portrait3x4: return CGSize(width: 1080, height: 1440)
+    case .portrait4x5: return CGSize(width: 1080, height: 1350)
+    case .portrait2x3: return CGSize(width: 1080, height: 1620)
+    case .story9x16: return CGSize(width: 1080, height: 1920)
+    }
+  }
 }
 
 public enum MIRANativeEditorFilter: String, Codable, Hashable, CaseIterable, Identifiable {
@@ -91,7 +122,13 @@ public struct MIRANativeEditRecipe: Codable, Hashable {
   public var selectedFilter: MIRANativeEditorFilter
   public var brightness: Double
   public var contrast: Double
+  public var exposure: Double
+  public var warmth: Double
   public var saturation: Double
+  public var sharpness: Double
+  public var rotationQuarterTurns: Int
+  public var trimStartSeconds: Double
+  public var trimEndSeconds: Double
   public var textLayers: [MIRANativeTextLayer]
 
   public init(
@@ -101,7 +138,13 @@ public struct MIRANativeEditRecipe: Codable, Hashable {
     selectedFilter: MIRANativeEditorFilter = .original,
     brightness: Double = 0,
     contrast: Double = 1,
+    exposure: Double = 0,
+    warmth: Double = 0,
     saturation: Double = 1,
+    sharpness: Double = 0,
+    rotationQuarterTurns: Int = 0,
+    trimStartSeconds: Double = 0,
+    trimEndSeconds: Double = 0,
     textLayers: [MIRANativeTextLayer] = []
   ) {
     self.mediaId = mediaId
@@ -110,15 +153,27 @@ public struct MIRANativeEditRecipe: Codable, Hashable {
     self.selectedFilter = selectedFilter
     self.brightness = brightness
     self.contrast = contrast
+    self.exposure = exposure
+    self.warmth = warmth
     self.saturation = saturation
+    self.sharpness = sharpness
+    self.rotationQuarterTurns = rotationQuarterTurns
+    self.trimStartSeconds = trimStartSeconds
+    self.trimEndSeconds = trimEndSeconds
     self.textLayers = textLayers
   }
 
   public var hasEdits: Bool {
     selectedFilter != .original ||
+      aspectRatio != .original ||
       abs(brightness) > 0.001 ||
       abs(contrast - 1) > 0.001 ||
+      abs(exposure) > 0.001 ||
+      abs(warmth) > 0.001 ||
       abs(saturation - 1) > 0.001 ||
+      abs(sharpness) > 0.001 ||
+      rotationQuarterTurns % 4 != 0 ||
+      trimEndSeconds > trimStartSeconds ||
       !textLayers.isEmpty
   }
 }
@@ -129,7 +184,7 @@ public struct MIRANativeEditedMediaMetadata: Codable, Hashable {
   public let appliedFilter: String
   public let hasTextOverlay: Bool
 
-  public init(wasEdited: Bool, editorVersion: String = "native_v1", appliedFilter: String, hasTextOverlay: Bool) {
+  public init(wasEdited: Bool, editorVersion: String = "native_v2", appliedFilter: String, hasTextOverlay: Bool) {
     self.wasEdited = wasEdited
     self.editorVersion = editorVersion
     self.appliedFilter = appliedFilter
@@ -157,8 +212,7 @@ public enum MIRANativeMediaEditorRenderer {
   public static func previewImage(from data: Data, recipe: MIRANativeEditRecipe, maxSide: CGFloat = 1280) async -> UIImage? {
     await Task.detached(priority: .userInitiated) {
       guard let image = UIImage(data: data) else { return nil }
-      let resized = downscaled(image, maxSide: maxSide)
-      return applyPhotoFilter(to: resized, recipe: recipe)
+      return renderPhotoBase(image, recipe: recipe, maxSide: maxSide, includeText: false)
     }.value
   }
 
@@ -243,23 +297,113 @@ public enum MIRANativeMediaEditorRenderer {
     controls.saturation = Float(recipe.saturation)
     output = controls.outputImage ?? output
 
+    if abs(recipe.exposure) > 0.001 {
+      let exposure = CIFilter.exposureAdjust()
+      exposure.inputImage = output
+      exposure.ev = Float(recipe.exposure)
+      output = exposure.outputImage ?? output
+    }
+
+    if abs(recipe.warmth) > 0.001 {
+      let warmth = CIFilter.temperatureAndTint()
+      warmth.inputImage = output
+      warmth.neutral = CIVector(x: 6500, y: 0)
+      warmth.targetNeutral = CIVector(x: CGFloat(6500 + recipe.warmth * 1300), y: 0)
+      output = warmth.outputImage ?? output
+    }
+
+    if recipe.sharpness > 0.001 {
+      let sharpen = CIFilter.sharpenLuminance()
+      sharpen.inputImage = output
+      sharpen.sharpness = Float(min(max(recipe.sharpness, 0), 1.2))
+      output = sharpen.outputImage ?? output
+    }
+
     guard let cgImage = ciContext.createCGImage(output, from: output.extent) else { return image }
     return UIImage(cgImage: cgImage, scale: image.scale, orientation: .up)
   }
 
   public static func renderPhoto(_ image: UIImage, recipe: MIRANativeEditRecipe, maxSide: CGFloat = 2160) -> UIImage {
+    renderPhotoBase(image, recipe: recipe, maxSide: maxSide, includeText: true)
+  }
+
+  private static func renderPhotoBase(_ image: UIImage, recipe: MIRANativeEditRecipe, maxSide: CGFloat, includeText: Bool) -> UIImage {
     let resized = downscaled(image, maxSide: maxSide)
-    let filtered = applyPhotoFilter(to: resized, recipe: recipe)
-    let size = filtered.size
+    let rotated = rotatedImage(resized, quarterTurns: recipe.rotationQuarterTurns)
+    let filtered = applyPhotoFilter(to: rotated, recipe: recipe)
+    let sourceRect = cropRect(for: filtered.size, aspectRatio: recipe.aspectRatio.widthToHeightRatio)
+    let size = targetSize(for: sourceRect.size, recipe: recipe)
     let format = UIGraphicsImageRendererFormat()
     format.scale = 1
     format.opaque = true
     return UIGraphicsImageRenderer(size: size, format: format).image { context in
-      UIColor.white.setFill()
+      UIColor.black.setFill()
       context.fill(CGRect(origin: .zero, size: size))
-      filtered.draw(in: CGRect(origin: .zero, size: size))
-      drawTextLayers(recipe.textLayers, in: size)
+      context.cgContext.saveGState()
+      let scaleX = size.width / max(1, sourceRect.width)
+      let scaleY = size.height / max(1, sourceRect.height)
+      context.cgContext.translateBy(x: -sourceRect.minX * scaleX, y: -sourceRect.minY * scaleY)
+      filtered.draw(in: CGRect(
+        x: 0,
+        y: 0,
+        width: filtered.size.width * scaleX,
+        height: filtered.size.height * scaleY
+      ))
+      context.cgContext.restoreGState()
+      if includeText {
+        drawTextLayers(recipe.textLayers, in: size)
+      }
     }
+  }
+
+  private static func rotatedImage(_ image: UIImage, quarterTurns: Int) -> UIImage {
+    let normalized = image.normalizedOrientation()
+    let turns = ((quarterTurns % 4) + 4) % 4
+    guard turns != 0 else { return normalized }
+
+    let angle = CGFloat(turns) * .pi / 2
+    let targetSize: CGSize = turns.isMultiple(of: 2)
+      ? normalized.size
+      : CGSize(width: normalized.size.height, height: normalized.size.width)
+    let format = UIGraphicsImageRendererFormat()
+    format.scale = 1
+    format.opaque = true
+    return UIGraphicsImageRenderer(size: targetSize, format: format).image { context in
+      UIColor.black.setFill()
+      context.fill(CGRect(origin: .zero, size: targetSize))
+      context.cgContext.translateBy(x: targetSize.width / 2, y: targetSize.height / 2)
+      context.cgContext.rotate(by: angle)
+      normalized.draw(in: CGRect(
+        x: -normalized.size.width / 2,
+        y: -normalized.size.height / 2,
+        width: normalized.size.width,
+        height: normalized.size.height
+      ))
+    }
+  }
+
+  private static func cropRect(for size: CGSize, aspectRatio: CGFloat?) -> CGRect {
+    guard let aspectRatio, aspectRatio > 0, size.width > 0, size.height > 0 else {
+      return CGRect(origin: .zero, size: size)
+    }
+    let currentRatio = size.width / size.height
+    if currentRatio > aspectRatio {
+      let width = size.height * aspectRatio
+      return CGRect(x: (size.width - width) / 2, y: 0, width: width, height: size.height)
+    } else {
+      let height = size.width / aspectRatio
+      return CGRect(x: 0, y: (size.height - height) / 2, width: size.width, height: height)
+    }
+  }
+
+  private static func targetSize(for sourceSize: CGSize, recipe: MIRANativeEditRecipe) -> CGSize {
+    if let exportSize = recipe.aspectRatio.exportSize {
+      return exportSize
+    }
+    let side = max(sourceSize.width, sourceSize.height)
+    guard side > 0 else { return CGSize(width: 1080, height: 1440) }
+    let scale = min(1, 2160 / side)
+    return CGSize(width: max(1, sourceSize.width * scale), height: max(1, sourceSize.height * scale))
   }
 
   private static func drawTextLayers(_ layers: [MIRANativeTextLayer], in size: CGSize) {
@@ -367,21 +511,36 @@ public enum MIRANativeMediaEditorExporter {
     }
 
     let duration = try await asset.load(.duration)
-    try videoTrack.insertTimeRange(CMTimeRange(start: .zero, duration: duration), of: sourceVideoTrack, at: .zero)
+    let durationSeconds = max(0, CMTimeGetSeconds(duration))
+    let trimStartSeconds = min(max(recipe.trimStartSeconds, 0), max(0, durationSeconds - 0.2))
+    let requestedEnd = recipe.trimEndSeconds > trimStartSeconds ? recipe.trimEndSeconds : durationSeconds
+    let trimEndSeconds = min(max(requestedEnd, trimStartSeconds + 0.2), durationSeconds)
+    let sourceStart = CMTime(seconds: trimStartSeconds, preferredTimescale: duration.timescale)
+    let exportDuration = CMTime(seconds: max(0.2, trimEndSeconds - trimStartSeconds), preferredTimescale: duration.timescale)
+    let sourceTimeRange = CMTimeRange(start: sourceStart, duration: exportDuration)
+
+    try videoTrack.insertTimeRange(sourceTimeRange, of: sourceVideoTrack, at: .zero)
 
     if let sourceAudioTrack = try await asset.loadTracks(withMediaType: .audio).first,
        let audioTrack = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid) {
-      try? audioTrack.insertTimeRange(CMTimeRange(start: .zero, duration: duration), of: sourceAudioTrack, at: .zero)
+      try? audioTrack.insertTimeRange(sourceTimeRange, of: sourceAudioTrack, at: .zero)
     }
 
     let naturalSize = try await sourceVideoTrack.load(.naturalSize)
     let transform = try await sourceVideoTrack.load(.preferredTransform)
-    let renderSize = transformedSize(naturalSize: naturalSize, transform: transform)
+    let sourceRenderSize = transformedSize(naturalSize: naturalSize, transform: transform)
+    let renderSize = recipe.aspectRatio.exportSize ?? sourceRenderSize
+    let layerTransform = fittedVideoTransform(
+      preferredTransform: transform,
+      naturalSize: naturalSize,
+      sourceRenderSize: sourceRenderSize,
+      targetSize: renderSize
+    )
 
     let instruction = AVMutableVideoCompositionInstruction()
-    instruction.timeRange = CMTimeRange(start: .zero, duration: duration)
+    instruction.timeRange = CMTimeRange(start: .zero, duration: exportDuration)
     let layerInstruction = AVMutableVideoCompositionLayerInstruction(assetTrack: videoTrack)
-    layerInstruction.setTransform(transform, at: .zero)
+    layerInstruction.setTransform(layerTransform, at: .zero)
     instruction.layerInstructions = [layerInstruction]
 
     let videoComposition = AVMutableVideoComposition()
@@ -450,10 +609,33 @@ public enum MIRANativeMediaEditorExporter {
     return CGSize(width: max(1, abs(rect.width)), height: max(1, abs(rect.height)))
   }
 
+  private static func fittedVideoTransform(
+    preferredTransform: CGAffineTransform,
+    naturalSize: CGSize,
+    sourceRenderSize: CGSize,
+    targetSize: CGSize
+  ) -> CGAffineTransform {
+    let transformedRect = CGRect(origin: .zero, size: naturalSize).applying(preferredTransform)
+    let normalize = CGAffineTransform(translationX: -transformedRect.origin.x, y: -transformedRect.origin.y)
+    let scale = max(
+      targetSize.width / max(1, sourceRenderSize.width),
+      targetSize.height / max(1, sourceRenderSize.height)
+    )
+    let scaledSize = CGSize(width: sourceRenderSize.width * scale, height: sourceRenderSize.height * scale)
+    let center = CGAffineTransform(
+      translationX: (targetSize.width - scaledSize.width) / 2,
+      y: (targetSize.height - scaledSize.height) / 2
+    )
+    return preferredTransform
+      .concatenating(normalize)
+      .concatenating(CGAffineTransform(scaleX: scale, y: scale))
+      .concatenating(center)
+  }
+
   private static func logExport(label: String, start: DispatchTime, bytes: Int) {
     #if DEBUG
     let elapsed = Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000
-    print("[MIRA editor] \(label) export \(Int(elapsed))ms bytes=\(bytes)")
+    print("[Captro editor] \(label) export \(Int(elapsed))ms bytes=\(bytes)")
     MIRAMemoryMetrics.log("editor_\(label)_export")
     #endif
   }
@@ -461,7 +643,7 @@ public enum MIRANativeMediaEditorExporter {
   private static func logExportFailure(label: String, start: DispatchTime, error: Error) {
     #if DEBUG
     let elapsed = Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000
-    print("[MIRA editor] \(label) export failed \(Int(elapsed))ms error=\(error.localizedDescription)")
+    print("[Captro editor] \(label) export failed \(Int(elapsed))ms error=\(error.localizedDescription)")
     #endif
   }
 }

@@ -1,6 +1,9 @@
 import AVFoundation
+import CoreLocation
+import MapKit
 import PhotosUI
 import SwiftUI
+import UIKit
 
 @MainActor
 final class NotificationNativeModel: ObservableObject {
@@ -14,14 +17,24 @@ final class NotificationNativeModel: ObservableObject {
   }
 
   func load() async {
+    if notifications.isEmpty, let cached = await MIRAAppCacheStore.shared.loadNotifications() {
+      notifications = cached
+    }
     isLoading = notifications.isEmpty
     defer { isLoading = false }
     do {
-      notifications = try await api.get("/notifications?limit=60")
+      let fresh: [MIRANotification] = try await api.get("/notifications?limit=60")
+      if notifications != fresh {
+        notifications = fresh
+      }
+      await MIRAAppCacheStore.shared.saveNotifications(fresh)
       let _: EmptyResponse = try await api.post("/notifications/mark-read", body: EmptyBody())
+      notifications = await MIRAAppCacheStore.shared.markNotificationsRead(notifications)
       errorMessage = nil
     } catch {
-      errorMessage = "Notifications could not load."
+      if notifications.isEmpty {
+        errorMessage = "Notifications could not load."
+      }
     }
   }
 }
@@ -51,6 +64,7 @@ public struct NotificationNativeView: View {
     .background(MIRATheme.Color.appBackground)
     .miraScreenEnter(.push)
     .navigationTitle("Notifications")
+    .miraHideTabBarOnAppear()
     .task { await model.load() }
   }
 
@@ -66,7 +80,7 @@ public struct NotificationNativeView: View {
         Text(item.title ?? "New activity")
           .font(.system(size: 16, weight: .semibold))
           .foregroundStyle(MIRATheme.Color.textPrimary)
-        Text(item.body ?? "Something new happened on MIRA.")
+        Text(item.body ?? "Something new happened on Captro.")
           .font(.system(size: 14, weight: .regular))
           .foregroundStyle(MIRATheme.Color.textSecondary)
           .lineLimit(2)
@@ -108,117 +122,367 @@ public struct NotificationNativeView: View {
 
 @MainActor
 final class LibraryNativeModel: ObservableObject {
-  enum Tab: String, CaseIterable {
-    case saved = "Saved"
+  enum Section: String, CaseIterable, Identifiable, Hashable {
+    case inspiration = "Inspiration"
+    case outfits = "Outfits"
+    case places = "Places"
+    case food = "Food"
+    case photos = "Photos"
+    case videos = "Videos"
     case liked = "Liked"
-    case collections = "Collections"
+
+    var id: String { rawValue }
+
+    var systemImage: String {
+      switch self {
+      case .inspiration: return "lightbulb"
+      case .outfits: return "tshirt"
+      case .places: return "mappin.and.ellipse"
+      case .food: return "fork.knife"
+      case .photos: return "photo.on.rectangle"
+      case .videos: return "play.rectangle"
+      case .liked: return "heart"
+      }
+    }
+
+    var collectionName: String? {
+      self == .liked ? nil : rawValue
+    }
   }
 
-  @Published var tab: Tab = .saved
-  @Published var savedPosts: [MIRAPost] = []
-  @Published var likedPosts: [MIRAPost] = []
-  @Published var collections: [MIRALibraryCollection] = []
+  @Published var selectedSection: Section = .inspiration
+  @Published var posts: [MIRAPost] = []
+  @Published var collectionCounts: [String: Int] = [:]
   @Published var isLoading = false
+  @Published var errorMessage: String?
   let api: MIRAAPIClient
+  private var postsBySection: [Section: [MIRAPost]] = [:]
+  private let countsCacheKey = "native.library.counts.v1.cache_first"
 
   init(api: MIRAAPIClient) {
     self.api = api
   }
 
-  func load() async {
+  func load(force: Bool = false) async {
+    await loadCollectionCounts()
+    await loadSelectedSection(force: force)
+  }
+
+  func select(_ section: Section) async {
+    guard selectedSection != section || posts.isEmpty else { return }
+    selectedSection = section
+    if let cached = postsBySection[section] {
+      posts = cached
+      errorMessage = nil
+      return
+    }
+    await loadSelectedSection(force: false)
+  }
+
+  private func loadSelectedSection(force: Bool) async {
+    if let cached = postsBySection[selectedSection], !force {
+      posts = cached
+      errorMessage = nil
+      return
+    }
+    if !force, let cached: [MIRAPost] = await MIRALocalJSONCache.load([MIRAPost].self, key: sectionCacheKey(selectedSection), maxAge: 60 * 60 * 24 * 30) {
+      posts = cached
+      postsBySection[selectedSection] = cached
+      errorMessage = nil
+    }
     isLoading = true
     defer { isLoading = false }
     do {
-      switch tab {
-      case .saved:
-        savedPosts = try await api.get("/library/saved")
-      case .liked:
-        likedPosts = try await api.get("/library/liked")
-      case .collections:
-        collections = try await api.get("/library/collections")
+      let loaded: [MIRAPost]
+      if selectedSection == .liked {
+        loaded = try await api.get("/library/liked")
+      } else if let collectionName = selectedSection.collectionName {
+        let encoded = collectionName.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? collectionName
+        loaded = try await api.get("/library/saved?collection=\(encoded)")
+      } else {
+        loaded = []
       }
-    } catch {}
+      posts = loaded
+      postsBySection[selectedSection] = loaded
+      await MIRALocalJSONCache.save(loaded, key: sectionCacheKey(selectedSection))
+      errorMessage = nil
+    } catch {
+      if posts.isEmpty {
+        errorMessage = "Could not load this library section."
+      }
+    }
+  }
+
+  private func loadCollectionCounts() async {
+    if collectionCounts.isEmpty, let cached: [String: Int] = await MIRALocalJSONCache.load([String: Int].self, key: countsCacheKey, maxAge: 60 * 60 * 24 * 30) {
+      collectionCounts = cached
+    }
+    guard let collections: [MIRALibraryCollection] = try? await api.get("/library/collections") else { return }
+    var counts: [String: Int] = [:]
+    for item in collections {
+      let name = item.collection ?? item.name ?? ""
+      guard !name.isEmpty else { continue }
+      counts[name] = item.count ?? 0
+    }
+    collectionCounts = counts
+    await MIRALocalJSONCache.save(counts, key: countsCacheKey)
+  }
+
+  func count(for section: Section) -> Int {
+    guard let collectionName = section.collectionName else { return 0 }
+    return collectionCounts[collectionName] ?? 0
+  }
+
+  private func sectionCacheKey(_ section: Section) -> String {
+    "native.library.section.v1.cache_first.\(section.rawValue.lowercased())"
   }
 }
 
 public struct LibraryNativeView: View {
   @StateObject private var model: LibraryNativeModel
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @State private var singlePhotoPreviewPost: MIRAPost?
+  @State private var isSinglePhotoPreviewPresented = false
+  @State private var reportTarget: MIRAReportTarget?
+  @State private var isReportSheetPresented = false
 
   public init(api: MIRAAPIClient) {
     _model = StateObject(wrappedValue: LibraryNativeModel(api: api))
   }
 
   public var body: some View {
-    ScrollView {
-      VStack(spacing: MIRATheme.Space.lg) {
-        Picker("Library", selection: $model.tab) {
-          ForEach(LibraryNativeModel.Tab.allCases, id: \.self) { tab in
-            Text(tab.rawValue).tag(tab)
-          }
-        }
-        .pickerStyle(.segmented)
-        .padding(.horizontal, MIRATheme.Space.md)
+    ScrollView(showsIndicators: false) {
+      VStack(alignment: .leading, spacing: MIRATheme.Space.lg) {
+        libraryIntro
+        sectionRail
 
-        if model.tab == .collections {
-          collectionList
+        if let errorMessage = model.errorMessage {
+          libraryErrorBanner(errorMessage)
+            .padding(.horizontal, MIRATheme.Space.md)
+        }
+
+        if model.isLoading && model.posts.isEmpty {
+          librarySkeleton
+        } else if model.posts.isEmpty {
+          MIRAEmptyState(
+            title: "Nothing saved here yet",
+            message: emptyMessage,
+            systemImage: model.selectedSection.systemImage
+          )
+          .padding(.horizontal, MIRATheme.Space.md)
         } else {
-          postGrid(posts: model.tab == .saved ? model.savedPosts : model.likedPosts)
+          postGrid(posts: model.posts)
         }
       }
       .padding(.top, MIRATheme.Space.md)
+      .padding(.bottom, MIRATheme.Space.xxl)
     }
     .background(MIRATheme.Color.appBackground)
+    .miraScrollFeel(.feed)
     .miraScreenEnter(.push)
-    .navigationTitle("My Library")
-    .toolbar(.hidden, for: .tabBar)
+    .navigationTitle("Bookmarks")
+    .navigationBarTitleDisplayMode(.inline)
+    .miraHideTabBarOnAppear()
     .task { await model.load() }
-    .onChange(of: model.tab) { _ in Task { await model.load() } }
+    .miraBottomSheet(
+      isPresented: $isSinglePhotoPreviewPresented,
+      preferredHeightFraction: 0.78,
+      maxHeight: 720,
+      onDismissed: { singlePhotoPreviewPost = nil }
+    ) { dismissPreview in
+      if let post = singlePhotoPreviewPost {
+        DiscoverSinglePhotoPreviewSheet(
+          post: post,
+          api: model.api,
+          onReportComment: { comment in
+            dismissPreview()
+            DispatchQueue.main.asyncAfter(deadline: .now() + MIRATransitionTiming.sheetClose) {
+              presentReport(for: comment)
+            }
+          }
+        )
+      } else {
+        Color.clear
+      }
+    }
+    .miraBottomSheet(
+      isPresented: $isReportSheetPresented,
+      preferredHeightFraction: 0.72,
+      maxHeight: 640,
+      onDismissed: { reportTarget = nil }
+    ) { dismissReport in
+      if let reportTarget {
+        MIRAReportSheet(
+          target: reportTarget,
+          api: model.api,
+          onSubmitted: { _ in },
+          onClose: dismissReport
+        )
+      } else {
+        Color.clear
+      }
+    }
+  }
+
+  private var libraryIntro: some View {
+    VStack(alignment: .leading, spacing: 3) {
+      Text("Bookmarks")
+        .font(.system(size: 26, weight: .bold))
+        .foregroundStyle(MIRATheme.Color.textPrimary)
+      Text("Saved posts organized by what inspired you.")
+        .font(.system(size: 13, weight: .medium))
+        .foregroundStyle(MIRATheme.Color.textMuted)
+    }
+    .padding(.horizontal, MIRATheme.Space.md)
+  }
+
+  private var sectionRail: some View {
+    ScrollView(.horizontal, showsIndicators: false) {
+      HStack(spacing: MIRATheme.Space.sm) {
+        ForEach(LibraryNativeModel.Section.allCases) { section in
+          let isSelected = model.selectedSection == section
+          Button {
+            Task { await model.select(section) }
+          } label: {
+            HStack(spacing: 8) {
+              Image(systemName: section.systemImage)
+                .font(.system(size: 14, weight: .semibold))
+              Text(section.rawValue)
+                .font(.system(size: 14, weight: .semibold))
+              if section != .liked {
+                Text("\(model.count(for: section))")
+                  .font(.system(size: 11, weight: .bold))
+                  .foregroundStyle(isSelected ? .white.opacity(0.78) : MIRATheme.Color.textMuted)
+              }
+            }
+            .foregroundStyle(isSelected ? .white : MIRATheme.Color.textPrimary)
+            .padding(.horizontal, 14)
+            .frame(height: 42)
+            .background(isSelected ? MIRATheme.Color.forest : MIRATheme.Color.surfaceRaised)
+            .clipShape(Capsule())
+            .overlay(Capsule().stroke(isSelected ? Color.clear : MIRATheme.Color.hairline, lineWidth: 1))
+          }
+          .buttonStyle(.miraPress)
+        }
+      }
+      .padding(.horizontal, MIRATheme.Space.md)
+    }
+  }
+
+  private func libraryErrorBanner(_ message: String) -> some View {
+    Text(message)
+      .font(.system(size: 13, weight: .semibold))
+      .foregroundStyle(.red)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .padding(MIRATheme.Space.md)
+      .background(Color.red.opacity(0.08))
+      .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
   }
 
   private func postGrid(posts: [MIRAPost]) -> some View {
-    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 2), count: 3), spacing: 2) {
+    LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 0), spacing: 10), count: 2), spacing: 10) {
       ForEach(posts) { post in
-        if let media = post.mediaURLs.first {
-          RemoteMediaView(url: media, isVideo: media.isVideoURL)
-            .aspectRatio(1, contentMode: .fill)
-        } else {
-          ZStack {
-            MIRATheme.Color.surfaceSoft
-            Text(post.titleText)
-              .font(.system(size: 12, weight: .medium))
-              .foregroundStyle(MIRATheme.Color.textSecondary)
-              .padding(8)
-          }
-          .aspectRatio(1, contentMode: .fill)
+        libraryPostTile(post)
+      }
+    }
+    .padding(.horizontal, MIRATheme.Space.md)
+  }
+
+  private func libraryPostTile(_ post: MIRAPost) -> some View {
+    Group {
+      if miraShouldOpenSinglePhotoPreview(post) {
+        Button {
+          openSinglePhotoPreview(post)
+        } label: {
+          libraryPostTileContent(post)
         }
+        .buttonStyle(.plain)
+      } else {
+        NavigationLink(destination: DiscoverPostDetailNativeView(post: post, api: model.api).miraHideTabBarOnAppear()) {
+          libraryPostTileContent(post)
+        }
+        .buttonStyle(.plain)
       }
     }
   }
 
-  private var collectionList: some View {
-    LazyVStack(spacing: MIRATheme.Space.sm) {
-      if model.collections.isEmpty {
-        MIRAEmptyState(title: "No collections yet", message: "Saved posts can be organized here.", systemImage: "folder")
+  private func libraryPostTileContent(_ post: MIRAPost) -> some View {
+    ZStack(alignment: .bottomLeading) {
+      MIRATheme.Color.mediaPlaceholder
+
+      if let media = post.thumbnailMediaURLs.first ?? post.feedMediaURLs.first {
+        RemoteMediaView(url: media, isVideo: media.isVideoURL)
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+          .clipped()
       } else {
-        ForEach(model.collections) { collection in
-          HStack {
-            Image(systemName: "folder.fill")
-              .foregroundStyle(MIRATheme.Color.forest)
-              .frame(width: 44, height: 44)
-              .background(MIRATheme.Color.forestSoft)
-              .clipShape(Circle())
-            Text(collection.collection ?? collection.name ?? "Collection")
-              .font(.system(size: 17, weight: .semibold))
-            Spacer()
-            Text("\(collection.count ?? 0)")
-              .foregroundStyle(MIRATheme.Color.textMuted)
-          }
-          .padding(MIRATheme.Space.md)
-          .miraCardSurface()
-          .padding(.horizontal, MIRATheme.Space.md)
+        ZStack {
+          MIRATheme.Color.surfaceSoft
+          Text(post.titleText)
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(MIRATheme.Color.textSecondary)
+            .lineLimit(4)
+            .multilineTextAlignment(.leading)
+            .padding(12)
         }
       }
+
+      LinearGradient(colors: [.clear, .black.opacity(0.52)], startPoint: .center, endPoint: .bottom)
+        .allowsHitTesting(false)
+
+      Text(post.titleText)
+        .font(.system(size: 12, weight: .semibold))
+        .foregroundStyle(.white)
+        .lineLimit(2)
+        .padding(10)
+        .shadow(radius: 4)
     }
+    .aspectRatio(3.0 / 4.0, contentMode: .fit)
+    .frame(maxWidth: .infinity)
+    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(MIRATheme.Color.hairline, lineWidth: 1))
+    .clipped()
+  }
+
+  private func openSinglePhotoPreview(_ post: MIRAPost) {
+    CaptroHaptics.light()
+    singlePhotoPreviewPost = post
+    withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
+      isSinglePhotoPreviewPresented = true
+    }
+  }
+
+  private func presentReport(for comment: MIRAComment) {
+    reportTarget = MIRAReportTarget(
+      targetType: "comment",
+      targetId: comment.id,
+      ownerUserId: comment.userId,
+      title: "Report comment",
+      subtitle: comment.text
+    )
+    DispatchQueue.main.async {
+      withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
+        isReportSheetPresented = true
+      }
+    }
+  }
+
+  private var librarySkeleton: some View {
+    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 2), spacing: 10) {
+      ForEach(0..<6, id: \.self) { _ in
+        RoundedRectangle(cornerRadius: 18, style: .continuous)
+          .fill(MIRATheme.Color.surfaceSoft)
+          .aspectRatio(3.0 / 4.0, contentMode: .fit)
+          .redacted(reason: .placeholder)
+      }
+    }
+    .padding(.horizontal, MIRATheme.Space.md)
+  }
+
+  private var emptyMessage: String {
+    if model.selectedSection == .liked {
+      return "Posts you like will show here."
+    }
+    return "Tap save on a post and choose \(model.selectedSection.rawValue) to organize it here."
   }
 }
 
@@ -247,34 +511,107 @@ final class SearchUsersNativeModel: ObservableObject {
 
 public struct SearchUsersNativeView: View {
   @StateObject private var model: SearchUsersNativeModel
+  @Environment(\.dismiss) private var dismiss
 
   public init(api: MIRAAPIClient) {
     _model = StateObject(wrappedValue: SearchUsersNativeModel(api: api))
   }
 
   public var body: some View {
-    List {
-      ForEach(model.users) { user in
-        HStack(spacing: MIRATheme.Space.md) {
-          RemoteAvatar(url: user.profileImage, size: 44)
-          VStack(alignment: .leading) {
-            Text(user.displayName).font(.system(size: 16, weight: .semibold))
-            if let bio = user.bio, !bio.isEmpty {
-              Text(bio).font(.system(size: 13)).foregroundStyle(MIRATheme.Color.textMuted).lineLimit(1)
+    VStack(spacing: 0) {
+      searchHeader
+
+      List {
+        if model.query.trimmingCharacters(in: .whitespacesAndNewlines).count < 2 {
+          Text("Search people by name or username.")
+            .font(.system(size: 14, weight: .medium))
+            .foregroundStyle(MIRATheme.Color.textMuted)
+            .listRowBackground(MIRATheme.Color.appBackground)
+        } else if model.isLoading && model.users.isEmpty {
+          HStack {
+            ProgressView()
+            Text("Searching...")
+              .font(.system(size: 14, weight: .medium))
+              .foregroundStyle(MIRATheme.Color.textMuted)
+          }
+          .listRowBackground(MIRATheme.Color.appBackground)
+        } else if model.users.isEmpty {
+          Text("No people found.")
+            .font(.system(size: 14, weight: .medium))
+            .foregroundStyle(MIRATheme.Color.textMuted)
+            .listRowBackground(MIRATheme.Color.appBackground)
+        } else {
+          ForEach(model.users) { user in
+            NavigationLink(destination: UserProfileNativeView(userId: user.id, api: model.api)) {
+              HStack(spacing: MIRATheme.Space.md) {
+                RemoteAvatar(url: user.profileImage, size: 44)
+                VStack(alignment: .leading) {
+                  Text(user.displayName).font(.system(size: 16, weight: .semibold))
+                  if let bio = user.bio, !bio.isEmpty {
+                    Text(bio).font(.system(size: 13)).foregroundStyle(MIRATheme.Color.textMuted).lineLimit(1)
+                  }
+                }
+              }
             }
+            .buttonStyle(.plain)
+            .listRowBackground(MIRATheme.Color.surface)
           }
         }
-        .listRowBackground(MIRATheme.Color.surface)
       }
+      .scrollContentBackground(.hidden)
     }
-    .scrollContentBackground(.hidden)
     .background(MIRATheme.Color.appBackground)
     .miraScreenEnter(.push)
-    .navigationTitle("Search")
-    .searchable(text: $model.query, prompt: "Search users")
+    .navigationBarBackButtonHidden(true)
+    .toolbar(.hidden, for: .navigationBar)
+    .miraHideTabBarOnAppear()
     .task(id: model.query) {
       try? await Task.sleep(nanoseconds: 250_000_000)
       await model.search()
+    }
+  }
+
+  private var searchHeader: some View {
+    HStack(spacing: MIRATheme.Space.sm) {
+      Button { dismiss() } label: {
+        Image(systemName: "chevron.left")
+          .font(.system(size: 18, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .frame(width: 44, height: 44)
+      }
+      .buttonStyle(.miraPress)
+
+      HStack(spacing: 10) {
+        Image(systemName: "magnifyingglass")
+          .font(.system(size: 15, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textMuted)
+        TextField("Search people", text: $model.query)
+          .textInputAutocapitalization(.never)
+          .autocorrectionDisabled()
+          .font(.system(size: 16, weight: .medium))
+        if !model.query.isEmpty {
+          Button {
+            model.query = ""
+            model.users = []
+          } label: {
+            Image(systemName: "xmark.circle.fill")
+              .font(.system(size: 16, weight: .semibold))
+              .foregroundStyle(MIRATheme.Color.textMuted)
+          }
+          .buttonStyle(.plain)
+        }
+      }
+      .padding(.horizontal, 14)
+      .frame(height: 44)
+      .background(MIRATheme.Color.surfaceRaised)
+      .clipShape(Capsule())
+      .overlay(Capsule().stroke(MIRATheme.Color.hairline, lineWidth: 1))
+    }
+    .padding(.horizontal, MIRATheme.Space.md)
+    .padding(.vertical, MIRATheme.Space.sm)
+    .background(MIRATheme.Color.surface)
+    .overlay(alignment: .bottom) {
+      Rectangle().fill(MIRATheme.Color.hairline).frame(height: 0.5)
     }
   }
 }
@@ -288,43 +625,251 @@ private struct MIRAEditorPresentation: Identifiable {
 
 private enum PostDetailSheet: Identifiable, Equatable {
   case location
+  case city
   case people
   case tags
+  case music
+  case aiAssist
 
   var id: String {
     switch self {
     case .location: return "location"
+    case .city: return "city"
     case .people: return "people"
     case .tags: return "tags"
+    case .music: return "music"
+    case .aiAssist: return "aiAssist"
     }
   }
 }
 
-private struct MIRAMapboxPlace: Decodable, Identifiable, Hashable {
-  let placeId: String?
-  let mapboxId: String?
-  let name: String?
-  let formattedAddress: String?
-  let address: String?
-  let vicinity: String?
-  let lat: Double?
-  let lng: Double?
+private enum PostDetailsFocusField: Hashable {
+  case title
+  case caption
+}
+
+private let postComposerDiscoverCategories = [
+  "photography",
+  "outdoors",
+  "art",
+  "nightlife",
+  "outfits",
+  "events"
+]
+
+private struct MIRABroadDisplayLocation: Codable, Hashable {
+  var city: String?
+  var region: String?
+  var country: String?
+  var label: String?
+  var source: String = "none"
+  var visibility: String = "hidden"
+
+  var hasVisibleLabel: Bool {
+    let clean = label?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return visibility != "hidden" && !clean.isEmpty
+  }
+}
+
+private struct MIRABroadLocationReverseResponse: Decodable {
+  let location: MIRABroadLocationSearchResult?
+}
+
+private struct MIRABroadLocationSearchResponse: Decodable {
+  let locations: [MIRABroadLocationSearchResult]
+}
+
+private struct MIRABroadLocationSearchResult: Decodable, Identifiable, Hashable {
+  let city: String?
+  let region: String?
+  let country: String?
+  let label: String?
+  let displayLocationLabel: String?
+  let displayLocationSource: String?
 
   var id: String {
-    placeId ?? mapboxId ?? [displayName, addressText].compactMap { $0 }.joined(separator: "-")
+    [resolvedLabel, city, region, country].compactMap { $0 }.joined(separator: "-")
+  }
+
+  var resolvedLabel: String {
+    let explicit = (displayLocationLabel ?? label)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    if !explicit.isEmpty { return explicit }
+    return [city, region, country]
+      .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { !$0.isEmpty }
+      .joined(separator: ", ")
+  }
+
+  var displayLocation: MIRABroadDisplayLocation {
+    MIRABroadDisplayLocation(
+      city: city,
+      region: region,
+      country: country,
+      label: resolvedLabel,
+      source: displayLocationSource ?? "mapbox_reverse_geocode",
+      visibility: "public"
+    )
+  }
+}
+
+private struct MIRAExactPostPlace: Identifiable, Hashable {
+  let provider: String
+  let providerPlaceId: String?
+  let name: String
+  let formattedAddress: String?
+  let latitude: Double?
+  let longitude: Double?
+  let category: String?
+  let city: String?
+  let region: String?
+  let country: String?
+
+  var id: String {
+    providerPlaceId ?? [displayName, addressText].compactMap { $0 }.joined(separator: "-")
   }
 
   var displayName: String {
-    let clean = name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
     return clean.isEmpty ? "Place" : clean
   }
 
   var addressText: String? {
-    for value in [formattedAddress, address, vicinity] {
+    for value in [formattedAddress, cityCountryText] {
       let clean = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
       if !clean.isEmpty { return clean }
     }
     return nil
+  }
+
+  private var cityCountryText: String? {
+    let parts = [city, region, country]
+      .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { !$0.isEmpty }
+    return parts.isEmpty ? nil : parts.joined(separator: ", ")
+  }
+
+  init(
+    provider: String = "apple_mapkit",
+    providerPlaceId: String?,
+    name: String,
+    formattedAddress: String?,
+    latitude: Double?,
+    longitude: Double?,
+    category: String?,
+    city: String?,
+    region: String?,
+    country: String?
+  ) {
+    self.provider = provider
+    self.providerPlaceId = providerPlaceId
+    self.name = name
+    self.formattedAddress = formattedAddress
+    self.latitude = latitude
+    self.longitude = longitude
+    self.category = category
+    self.city = city
+    self.region = region
+    self.country = country
+  }
+
+  init(mapItem: MKMapItem) {
+    let placemark = mapItem.placemark
+    let coordinate = placemark.coordinate
+    let name = (mapItem.name ?? placemark.name ?? placemark.title ?? "Place")
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    let addressParts = [
+      [placemark.subThoroughfare, placemark.thoroughfare].compactMap { $0 }.joined(separator: " "),
+      placemark.locality,
+      placemark.administrativeArea,
+      placemark.country
+    ]
+      .map { $0?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "" }
+      .filter { !$0.isEmpty }
+    let address = addressParts.joined(separator: ", ")
+    let providerIdBase = [
+      name,
+      placemark.locality ?? "",
+      String(format: "%.5f", coordinate.latitude),
+      String(format: "%.5f", coordinate.longitude)
+    ]
+      .joined(separator: "-")
+      .lowercased()
+      .replacingOccurrences(of: #"[^a-z0-9_.-]+"#, with: "-", options: .regularExpression)
+    self.init(
+      providerPlaceId: "apple-mapkit-\(providerIdBase)",
+      name: name.isEmpty ? "Place" : name,
+      formattedAddress: address.isEmpty ? nil : address,
+      latitude: CLLocationCoordinate2DIsValid(coordinate) ? coordinate.latitude : nil,
+      longitude: CLLocationCoordinate2DIsValid(coordinate) ? coordinate.longitude : nil,
+      category: mapItem.pointOfInterestCategory?.rawValue,
+      city: placemark.locality,
+      region: placemark.administrativeArea,
+      country: placemark.country
+    )
+  }
+}
+
+@MainActor
+private final class MIRABroadLocationResolver: NSObject, ObservableObject, CLLocationManagerDelegate {
+  @Published var isResolving = false
+  private let manager = CLLocationManager()
+  private var continuation: CheckedContinuation<CLLocation?, Never>?
+
+  override init() {
+    super.init()
+    manager.delegate = self
+    manager.desiredAccuracy = kCLLocationAccuracyThreeKilometers
+  }
+
+  func resolveCurrentLocation() async -> CLLocation? {
+    guard !isResolving else { return nil }
+    isResolving = true
+    return await withCheckedContinuation { continuation in
+      self.continuation = continuation
+      Task { [weak self] in
+        try? await Task.sleep(nanoseconds: 10_000_000_000)
+        await self?.finish(nil)
+      }
+      switch manager.authorizationStatus {
+      case .notDetermined:
+        manager.requestWhenInUseAuthorization()
+      case .authorizedAlways, .authorizedWhenInUse:
+        manager.requestLocation()
+      case .denied, .restricted:
+        finish(nil)
+      @unknown default:
+        finish(nil)
+      }
+    }
+  }
+
+  func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+    guard continuation != nil else { return }
+    switch manager.authorizationStatus {
+    case .authorizedAlways, .authorizedWhenInUse:
+      manager.requestLocation()
+    case .denied, .restricted:
+      finish(nil)
+    case .notDetermined:
+      break
+    @unknown default:
+      finish(nil)
+    }
+  }
+
+  func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+    finish(locations.last)
+  }
+
+  func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+    finish(nil)
+  }
+
+  private func finish(_ location: CLLocation?) {
+    guard let continuation else { return }
+    self.continuation = nil
+    isResolving = false
+    continuation.resume(returning: location)
   }
 }
 
@@ -332,6 +877,9 @@ public struct CreatePostNativeView: View {
   let api: MIRAAPIClient
   private let onClose: (() -> Void)?
   @Environment(\.dismiss) private var dismiss
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.scenePhase) private var scenePhase
+  @StateObject private var broadLocationResolver = MIRABroadLocationResolver()
   @State private var title = ""
   @State private var bodyText = ""
   @State private var mediaItems: [MIRAPickedMedia] = []
@@ -344,9 +892,22 @@ public struct CreatePostNativeView: View {
   @State private var editingMedia: MIRAEditorPresentation?
   @State private var editedCameraMedia: MIRAPickedMedia?
   @State private var activePostDetailSheet: PostDetailSheet?
-  @State private var selectedPlace: MIRAMapboxPlace?
+  @State private var selectedPlace: MIRAExactPostPlace?
+  @State private var broadLocation = MIRABroadDisplayLocation()
+  @State private var showBroadLocation = false
+  @State private var broadLocationError: String?
+  @State private var hasLoadedBroadLocation = false
   @State private var taggedUsers: [MIRAUser] = []
   @State private var hashtags: [String] = []
+  @State private var selectedAudioTrack: MIRAAudiusTrack?
+  @State private var selectedDiscoverCategory: String?
+  @State private var postAssistResponse: MIRAPostAssistResponse?
+  @State private var isGeneratingPostAssist = false
+  @State private var postAssistError: String?
+  @State private var hasRestoredPostDraft = false
+  @State private var draftMediaSnapshots: [MIRAPostDraftMediaSnapshot] = []
+  @State private var isCameraReviewingMedia = false
+  @FocusState private var focusedPostDetailsField: PostDetailsFocusField?
 
   public init(api: MIRAAPIClient, onClose: (() -> Void)? = nil) {
     self.api = api
@@ -362,11 +923,33 @@ public struct CreatePostNativeView: View {
       }
     }
     .toolbar(.hidden, for: .navigationBar)
-    .toolbar(.hidden, for: .tabBar)
+    .toolbar {
+      ToolbarItemGroup(placement: .keyboard) {
+        Spacer()
+        Button("Done") {
+          focusedPostDetailsField = nil
+        }
+        .font(.system(size: 16, weight: .semibold))
+      }
+    }
+    .miraHideTabBarOnAppear()
     .miraScreenEnter(.modal)
     .navigationBarBackButtonHidden(true)
+    .onAppear {
+      MIRAPlaybackCoordinator.pauseAll(reason: "post_creation_open")
+    }
+    .task {
+      await preparePostComposerForDisplay()
+    }
     .onChange(of: pickerItems) { _, newItems in
       Task { await loadPickerItems(newItems) }
+    }
+    .onChange(of: showBroadLocation) { _, isOn in
+      guard isOn else { return }
+      Task { await resolveCurrentBroadLocationForPost() }
+    }
+    .onChange(of: scenePhase) { _, phase in
+      handleComposerScenePhaseChange(phase)
     }
     .miraBottomSheet(isPresented: $showPreview, preferredHeightFraction: 0.72) { _ in
       ComposerPreviewSheet(title: title, bodyText: bodyText, mediaItems: mediaItems)
@@ -375,10 +958,32 @@ public struct CreatePostNativeView: View {
       switch activePostDetailSheet {
       case .location:
         PostLocationPickerSheet(api: api, selectedPlace: $selectedPlace, onClose: closeSheet)
+      case .city:
+        PostBroadLocationPickerSheet(api: api, broadLocation: $broadLocation, showBroadLocation: $showBroadLocation, onClose: closeSheet)
       case .people:
         PostPeopleTagSheet(api: api, selectedUsers: $taggedUsers, onClose: closeSheet)
       case .tags:
         PostHashtagSheet(hashtags: $hashtags, onClose: closeSheet)
+      case .music:
+        MIRAAudiusMusicPickerSheet(api: api, selectedTrack: $selectedAudioTrack, onClose: closeSheet)
+      case .aiAssist:
+        PostAIAssistSheet(
+          response: postAssistResponse,
+          isLoading: isGeneratingPostAssist,
+          errorMessage: postAssistError,
+          onGenerate: {
+            Task { await generatePostAssist() }
+          },
+          onApplyHeadline: { suggestion in
+            title = suggestion
+            activePostDetailSheet = nil
+          },
+          onApplyCaption: { suggestion in
+            bodyText = suggestion
+            activePostDetailSheet = nil
+          },
+          onClose: closeSheet
+        )
       case nil:
         Color.clear
       }
@@ -391,7 +996,7 @@ public struct CreatePostNativeView: View {
           mediaItems[index] = edited
         } else {
           mediaItems.append(edited)
-          withAnimation(.snappy(duration: 0.2)) {
+          withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
             isEditingPostDetails = true
           }
         }
@@ -412,13 +1017,21 @@ public struct CreatePostNativeView: View {
   }
 
   private var postDetailSheetHeightFraction: CGFloat {
-    activePostDetailSheet == .tags ? 0.50 : 0.76
+    switch activePostDetailSheet {
+    case .tags: return 0.50
+    case .city: return 0.62
+    case .music: return 0.78
+    case .aiAssist: return 0.70
+    default: return 0.76
+    }
   }
 
   private var mediaFirstPage: some View {
     ZStack {
       MIRAStoryLiveCameraView(
         editedMedia: editedCameraMedia,
+        showsMusicButton: false,
+        showsGridOverlay: false,
         dismissesOnCapture: false,
         dismissesOnCancel: false,
         onCapture: { media in
@@ -427,11 +1040,41 @@ public struct CreatePostNativeView: View {
         onCancel: {
           close()
         },
+        onMusic: {
+          // Feed posts no longer use music in the post creation flow.
+        },
+        onGallerySelection: { media in
+          addGalleryMedia(media)
+        },
         onEdit: { media, _ in
           editingMedia = MIRAEditorPresentation(media: media, returnsToCamera: true)
+        },
+        onReviewStateChange: { isReviewing in
+          isCameraReviewingMedia = isReviewing
         }
       )
       .ignoresSafeArea()
+
+      VStack {
+        Spacer()
+        firstPageMediaRail
+          .padding(.horizontal, 20)
+          .padding(.bottom, 124)
+      }
+      .allowsHitTesting(true)
+
+      if !mediaItems.isEmpty && !isCameraReviewingMedia {
+        VStack {
+          Spacer()
+          HStack {
+            Spacer()
+            firstPageNextButton
+              .padding(.trailing, 28)
+              .padding(.bottom, 40)
+          }
+        }
+        .transition(.opacity.combined(with: .scale(scale: 0.96)))
+      }
 
       if isLoadingMedia {
         ProgressView()
@@ -442,6 +1085,70 @@ public struct CreatePostNativeView: View {
     .background(Color.black.ignoresSafeArea())
   }
 
+  private var firstPageNextButton: some View {
+    Button {
+      continueToPostDetails()
+    } label: {
+      Text("Next")
+        .font(.system(size: 16, weight: .semibold))
+        .foregroundStyle(.white)
+        .frame(width: 86, height: 52)
+        .background(MIRATheme.Color.forest)
+        .clipShape(Capsule())
+        .shadow(color: .black.opacity(0.16), radius: 14, x: 0, y: 8)
+    }
+    .buttonStyle(.miraPress)
+    .accessibilityLabel("Next")
+  }
+
+  private var firstPageMediaRail: some View {
+    HStack(spacing: 10) {
+      if mediaItems.count > 1 {
+        ScrollView(.horizontal, showsIndicators: false) {
+          HStack(spacing: 10) {
+            ForEach(Array(mediaItems.enumerated()), id: \.offset) { index, item in
+              firstPageMediaTile(item, index: index)
+            }
+          }
+          .padding(.horizontal, 4)
+        }
+      }
+
+    }
+    .padding(.horizontal, 8)
+    .padding(.vertical, 8)
+    .background(.black.opacity(mediaItems.count > 1 ? 0.34 : 0), in: Capsule())
+    .opacity(mediaItems.count > 1 ? 1 : 0)
+    .allowsHitTesting(mediaItems.count > 1)
+  }
+
+  private func firstPageMediaTile(_ media: MIRAPickedMedia, index: Int) -> some View {
+    LocalMediaThumb(media: media, width: 70, height: 70, cornerRadius: 13)
+      .overlay {
+        RoundedRectangle(cornerRadius: 13, style: .continuous)
+          .stroke(index == 0 ? Color.white : Color.white.opacity(0.18), lineWidth: index == 0 ? 2 : 1)
+          .allowsHitTesting(false)
+      }
+      .overlay(alignment: .topTrailing) {
+        Button {
+          removeMedia(at: index)
+        } label: {
+          Image(systemName: "xmark")
+            .font(.system(size: 9, weight: .bold))
+            .foregroundStyle(.white)
+            .frame(width: 22, height: 22)
+            .background(.black.opacity(0.62))
+            .clipShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .padding(5)
+      }
+      .contentShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+      .onTapGesture {
+        editingMedia = MIRAEditorPresentation(media: media, replacementIndex: index)
+      }
+  }
+
   private var finalPostPage: some View {
     GeometryReader { proxy in
       VStack(spacing: 0) {
@@ -450,27 +1157,25 @@ public struct CreatePostNativeView: View {
         ScrollView(showsIndicators: false) {
           VStack(alignment: .leading, spacing: 0) {
             postDetailsMediaStrip
-              .padding(.top, 24)
+              .padding(.top, 14)
 
             postDetailsTextFields
-              .padding(.top, 34)
+              .padding(.top, 22)
 
-            Spacer(minLength: max(120, proxy.size.height * 0.22))
-
-            postDetailsQuickActions
-              .padding(.top, 24)
+            Spacer(minLength: max(70, proxy.size.height * 0.13))
 
             Rectangle()
               .fill(MIRATheme.Color.hairline.opacity(0.75))
               .frame(height: 0.7)
-              .padding(.top, 20)
+              .padding(.top, 16)
 
             postOptionRow(
               icon: "mappin.circle",
-              title: selectedPlace?.displayName ?? "Add Location",
-              subtitle: selectedPlace?.addressText ?? "Search places or add an address",
+              title: selectedPlace?.displayName ?? "Add place",
+              subtitle: selectedPlace?.addressText ?? "Restaurant, gym, cafe, park, or venue",
               action: { activePostDetailSheet = .location }
             )
+            broadLocationOptionRow
           }
           .padding(.horizontal, 16)
           .padding(.bottom, max(proxy.safeAreaInsets.bottom + 28, 52))
@@ -533,60 +1238,96 @@ public struct CreatePostNativeView: View {
         .disabled(isPosting || !canPost)
       }
     }
-    .padding(.horizontal, 20)
-    .padding(.top, 18)
-    .frame(height: 98)
+    .padding(.horizontal, 16)
+    .padding(.top, 10)
+    .frame(height: 82)
   }
 
   private var postDetailsMediaStrip: some View {
-    HStack(spacing: 14) {
-      if let first = mediaItems.first {
-        postComposerMedia(first, width: 104, height: 108, cornerRadius: 14)
-          .overlay(alignment: .bottomLeading) {
-            Text("Cover")
-              .font(.system(size: 15, weight: .semibold))
-              .foregroundStyle(.white)
-              .padding(.horizontal, 10)
-              .frame(height: 31)
-              .background(.black.opacity(0.52))
-              .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-              .padding(8)
-          }
-          .onTapGesture {
-            if first.kind == .image {
-              editingMedia = MIRAEditorPresentation(media: first, replacementIndex: 0)
-            }
-          }
+    ScrollView(.horizontal, showsIndicators: false) {
+      HStack(spacing: 10) {
+        ForEach(Array(mediaItems.enumerated()), id: \.offset) { index, item in
+          postDetailsMediaTile(item, index: index)
+        }
       }
+      .padding(.horizontal, 1)
+    }
+  }
 
-      PhotosPicker(selection: $pickerItems, maxSelectionCount: 10, matching: .any(of: [.images, .videos])) {
-        RoundedRectangle(cornerRadius: 14, style: .continuous)
-          .fill(MIRATheme.Color.surfaceSoft.opacity(0.6))
-          .frame(width: 104, height: 108)
-          .overlay {
-            Image(systemName: "plus")
-              .font(.system(size: 36, weight: .light))
-              .foregroundStyle(MIRATheme.Color.textMuted.opacity(0.82))
+  private func postDetailsMediaTile(_ media: MIRAPickedMedia, index: Int) -> some View {
+    postComposerMedia(media, width: 88, height: 92, cornerRadius: 13)
+      .overlay(alignment: .topTrailing) {
+        if media.kind == .video {
+          Image(systemName: "play.fill")
+            .font(.system(size: 11, weight: .bold))
+            .foregroundStyle(.white)
+            .frame(width: 26, height: 26)
+            .background(.black.opacity(0.58))
+            .clipShape(Circle())
+            .padding(8)
+        }
+      }
+      .overlay(alignment: .bottomLeading) {
+        Text(index == 0 ? "Cover" : "\(index + 1)")
+          .font(.system(size: 11, weight: .semibold))
+          .foregroundStyle(.white)
+          .padding(.horizontal, 10)
+          .frame(height: 26)
+          .background(.black.opacity(0.52))
+          .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+          .padding(8)
+          .allowsHitTesting(false)
+      }
+      .overlay(alignment: .topLeading) {
+        if mediaItems.count > 1 {
+          Button {
+            removeMedia(at: index)
+          } label: {
+            Image(systemName: "xmark")
+              .font(.system(size: 10, weight: .bold))
+              .foregroundStyle(.white)
+              .frame(width: 24, height: 24)
+              .background(.black.opacity(0.58))
+              .clipShape(Circle())
           }
+          .buttonStyle(.plain)
+          .padding(8)
+        }
+      }
+      .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+      .onTapGesture {
+        editingMedia = MIRAEditorPresentation(media: media, replacementIndex: index)
+      }
+      .accessibilityLabel(index == 0 ? "Edit cover media" : "Edit media \(index + 1)")
+  }
+
+  private func removeMedia(at index: Int) {
+    guard mediaItems.indices.contains(index) else { return }
+    withAnimation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion)) {
+      mediaItems.remove(at: index)
+      if mediaItems.isEmpty {
+        isEditingPostDetails = false
       }
     }
   }
 
   private var postDetailsTextFields: some View {
-    VStack(alignment: .leading, spacing: 18) {
-      TextField("Add a catchy headline", text: $title)
-        .font(.system(size: 25, weight: .semibold))
+    VStack(alignment: .leading, spacing: 14) {
+      TextField("Headline", text: $title)
+        .font(.system(size: 21, weight: .semibold))
         .foregroundStyle(MIRATheme.Color.textPrimary)
         .submitLabel(.next)
+        .focused($focusedPostDetailsField, equals: .title)
 
       Rectangle()
         .fill(MIRATheme.Color.hairline.opacity(0.78))
         .frame(height: 0.7)
 
-      TextField("Write caption with details to get more views.", text: $bodyText, axis: .vertical)
-        .font(.system(size: 18, weight: .regular))
+      TextField("Tell people about this post...", text: $bodyText, axis: .vertical)
+        .font(.system(size: 16, weight: .regular))
         .foregroundStyle(MIRATheme.Color.textPrimary)
-        .lineLimit(4...8)
+        .lineLimit(3...6)
+        .focused($focusedPostDetailsField, equals: .caption)
 
       if let errorMessage {
         Text(errorMessage)
@@ -596,54 +1337,65 @@ public struct CreatePostNativeView: View {
     }
   }
 
-  private var postDetailsQuickActions: some View {
-    HStack(spacing: 10) {
-      postDetailsChip(selectedPlace?.displayName ?? "Places", systemImage: "mappin.circle") {
-        activePostDetailSheet = .location
+  private var discoverCategoryMenu: some View {
+    Menu {
+      Button {
+        selectedDiscoverCategory = nil
+      } label: {
+        Label("Auto", systemImage: selectedDiscoverCategory == nil ? "checkmark" : "wand.and.stars")
       }
-      postDetailsChip(taggedUsers.isEmpty ? "@" : "@ \(taggedUsers.count)", systemImage: nil) {
-        activePostDetailSheet = .people
-      }
-      postDetailsChip(hashtags.isEmpty ? "#" : "# \(hashtags.count)", systemImage: nil) {
-        activePostDetailSheet = .tags
-      }
-    }
-  }
 
-  private func postDetailsChip(_ title: String, systemImage: String?, action: @escaping () -> Void) -> some View {
-    Button(action: action) {
-      HStack(spacing: 8) {
-        if let systemImage {
-          Image(systemName: systemImage)
-            .font(.system(size: 19, weight: .regular))
+      ForEach(postComposerDiscoverCategories, id: \.self) { category in
+        Button {
+          selectedDiscoverCategory = category
+        } label: {
+          Label(categoryDisplayName(category), systemImage: selectedDiscoverCategory == category ? "checkmark" : "tag")
         }
-        Text(title)
-          .font(.system(size: title.count == 1 ? 23 : 17, weight: .semibold))
+      }
+    } label: {
+      HStack(spacing: 8) {
+        Image(systemName: "square.grid.2x2")
+          .font(.system(size: 13, weight: .bold))
+        Text("Discover")
+          .font(.system(size: 13, weight: .bold))
+        Text(selectedDiscoverCategory.map(categoryDisplayName) ?? "Auto")
+          .font(.system(size: 13, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.forest)
+        Image(systemName: "chevron.down")
+          .font(.system(size: 11, weight: .bold))
       }
       .foregroundStyle(MIRATheme.Color.textPrimary)
-      .padding(.horizontal, title.count == 1 ? 18 : 20)
-      .frame(height: 52)
-      .background(MIRATheme.Color.surfaceSoft.opacity(0.58))
-      .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+      .padding(.horizontal, 12)
+      .frame(height: 36)
+      .background(MIRATheme.Color.surfaceSoft.opacity(0.78))
+      .clipShape(Capsule())
+      .contentShape(Capsule())
     }
     .buttonStyle(.plain)
   }
 
+  private func categoryDisplayName(_ category: String) -> String {
+    category
+      .split(separator: "_")
+      .map { $0.prefix(1).uppercased() + String($0.dropFirst()) }
+      .joined(separator: " ")
+  }
+
   private func postOptionRow(icon: String, title: String, subtitle: String? = nil, action: @escaping () -> Void) -> some View {
     Button(action: action) {
-      HStack(spacing: 18) {
+      HStack(spacing: 12) {
         Image(systemName: icon)
-          .font(.system(size: icon == "ellipsis" ? 25 : 28, weight: .regular))
+          .font(.system(size: icon == "ellipsis" ? 20 : 22, weight: .regular))
           .foregroundStyle(MIRATheme.Color.textPrimary)
-          .frame(width: 34)
+          .frame(width: 28)
 
         VStack(alignment: .leading, spacing: 3) {
           Text(title)
-            .font(.system(size: 19, weight: .regular))
+            .font(.system(size: 16, weight: .regular))
             .foregroundStyle(MIRATheme.Color.textPrimary)
           if let subtitle {
             Text(subtitle)
-              .font(.system(size: 14, weight: .regular))
+              .font(.system(size: 12, weight: .regular))
               .foregroundStyle(MIRATheme.Color.textMuted)
           }
         }
@@ -651,10 +1403,10 @@ public struct CreatePostNativeView: View {
         Spacer()
 
         Image(systemName: "chevron.right")
-          .font(.system(size: 27, weight: .regular))
+          .font(.system(size: 20, weight: .regular))
           .foregroundStyle(MIRATheme.Color.textMuted.opacity(0.82))
       }
-      .frame(minHeight: 72)
+      .frame(minHeight: 58)
       .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
@@ -663,6 +1415,55 @@ public struct CreatePostNativeView: View {
         .fill(MIRATheme.Color.hairline.opacity(0.72))
         .frame(height: 0.7)
     }
+  }
+
+  private var broadLocationOptionRow: some View {
+    HStack(spacing: 12) {
+      Image(systemName: "location.circle")
+        .font(.system(size: 22, weight: .regular))
+        .foregroundStyle(MIRATheme.Color.textPrimary)
+        .frame(width: 28)
+
+      VStack(alignment: .leading, spacing: 3) {
+        Text("Show city/country")
+          .font(.system(size: 16, weight: .regular))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+        Text(broadLocationStatusText)
+          .font(.system(size: 12, weight: .regular))
+          .foregroundStyle(MIRATheme.Color.textMuted)
+          .lineLimit(1)
+          .truncationMode(.tail)
+      }
+
+      Spacer()
+
+      Toggle("", isOn: $showBroadLocation)
+        .labelsHidden()
+        .disabled(broadLocationResolver.isResolving)
+    }
+    .frame(minHeight: 58)
+    .overlay(alignment: .bottom) {
+      Rectangle()
+        .fill(MIRATheme.Color.hairline.opacity(0.72))
+        .frame(height: 0.7)
+    }
+  }
+
+  private var broadLocationStatusText: String {
+    if broadLocationResolver.isResolving {
+      return "Finding your city..."
+    }
+    if let broadLocationError, !broadLocationError.isEmpty {
+      return broadLocationError
+    }
+    if let label = broadLocation.label?.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty {
+      return showBroadLocation ? label : "\(label) hidden"
+    }
+    return showBroadLocation ? "Tap Allow to add your city/country" : "Hidden for this post"
+  }
+
+  private var shouldPublishBroadLocation: Bool {
+    showBroadLocation && broadLocation.hasVisibleLabel
   }
 
   @ViewBuilder
@@ -676,26 +1477,113 @@ public struct CreatePostNativeView: View {
       !bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
   }
 
+  @MainActor
+  private func generatePostAssist() async {
+    guard !isGeneratingPostAssist else { return }
+    activePostDetailSheet = .aiAssist
+    isGeneratingPostAssist = true
+    postAssistError = nil
+    defer { isGeneratingPostAssist = false }
+
+    do {
+      postAssistResponse = try await requestPostAssist()
+    } catch {
+      postAssistError = "Could not create ideas. Try again."
+    }
+  }
+
+  @MainActor
+  private func improveCaptionWithAI() async {
+    guard !isGeneratingPostAssist else { return }
+    isGeneratingPostAssist = true
+    postAssistError = nil
+    defer { isGeneratingPostAssist = false }
+
+    do {
+      let response = try await requestPostAssist()
+      postAssistResponse = response
+      if let improved = response.captionSuggestions?
+        .map({ $0.trimmingCharacters(in: .whitespacesAndNewlines) })
+        .first(where: { !$0.isEmpty }) {
+        withAnimation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion)) {
+          bodyText = improved
+        }
+      } else {
+        postAssistError = "Could not improve this caption. Add a few words and try again."
+      }
+    } catch {
+      postAssistError = "Could not improve this caption. Try again."
+    }
+  }
+
+  @MainActor
+  private func requestPostAssist() async throws -> MIRAPostAssistResponse {
+    let cleanedTags = hashtags
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "#")) }
+      .filter { !$0.isEmpty }
+    let mediaType = mediaItems.isEmpty ? nil : "image"
+    let signals = await MIRAAutoCategoryService.analyze(
+      mediaItems: mediaItems,
+      title: title,
+      caption: bodyText,
+      hashtags: cleanedTags,
+      placeName: selectedPlace?.displayName,
+      location: selectedPlace?.addressText ?? broadLocation.label
+    )
+    let body = MIRAPostAssistBody(
+      title: title,
+      caption: bodyText,
+      mediaType: mediaType,
+      postType: selectedPlace == nil ? "general" : "place",
+      hashtags: cleanedTags,
+      location: selectedPlace?.addressText ?? broadLocation.label,
+      placeName: selectedPlace?.displayName,
+      appleVisionLabels: signals.appleVisionLabels.isEmpty ? nil : signals.appleVisionLabels,
+      appleVisionCategoryGuess: signals.appleVisionCategoryGuess,
+      appleVisionConfidence: signals.appleVisionConfidence
+    )
+    return try await api.post("/ai/post-assist", body: body)
+  }
+
   private func submit() async {
+    guard !mediaItems.contains(where: { $0.kind == .video }) else {
+      errorMessage = "Feed posts are photo-only. Share videos to Stories."
+      return
+    }
     isPosting = true
+    MIRAPerformanceTimeline.mark("post_upload_start", detail: "post")
     defer { isPosting = false }
     do {
-      let uploader = MIRAMediaUploadService(api: api)
-      var uploaded: [String] = []
-      var mediaTypes: [String] = []
-      var mediaDimensions: [MIRAMediaDimension] = []
-      for item in mediaItems {
-        uploaded.append(try await uploader.upload(item))
-        mediaTypes.append(item.kind.rawValue)
-        mediaDimensions.append(await item.mediaDimension())
-      }
+      let uploader = MIRAMediaUploadService(api: api, target: .feedPost)
       let cleanedTags = hashtags
         .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "#")) }
         .filter { !$0.isEmpty }
+      async let autoCategorySignals = MIRAAutoCategoryService.analyze(
+        mediaItems: mediaItems,
+        title: title,
+        caption: bodyText,
+        hashtags: cleanedTags,
+        placeName: selectedPlace?.displayName,
+        location: selectedPlace?.addressText
+      )
+      var uploaded: [String] = []
+      var mediaAssetIds: [String] = []
+      var mediaTypes: [String] = []
+      var mediaDimensions: [MIRAMediaDimension] = []
+      for item in mediaItems {
+        let upload = try await uploader.uploadResult(item)
+        uploaded.append(upload.url)
+        if let mediaAssetId = upload.mediaAssetId, !mediaAssetId.isEmpty {
+          mediaAssetIds.append(mediaAssetId)
+        }
+        mediaTypes.append(item.kind.rawValue)
+        mediaDimensions.append(await item.mediaDimension())
+      }
       let tagLine = cleanedTags.isEmpty ? "" : cleanedTags.map { "#\($0)" }.joined(separator: " ")
       let postContent = [bodyText.trimmingCharacters(in: .whitespacesAndNewlines), tagLine]
         .filter { !$0.isEmpty }
         .joined(separator: "\n\n")
+      let categorySignals = await autoCategorySignals
       let taggedPayload = taggedUsers.map {
         MIRATaggedUserPayload(id: $0.id, username: $0.username, fullName: $0.fullName, profileImage: $0.profileImage)
       }
@@ -706,30 +1594,78 @@ public struct CreatePostNativeView: View {
         images: uploaded,
         mediaTypes: mediaTypes,
         mediaDimensions: mediaDimensions,
+        mediaAssetIds: mediaAssetIds.isEmpty ? nil : mediaAssetIds,
         editorOverlays: editorUploadMetadata(),
         location: selectedPlace?.addressText ?? selectedPlace?.displayName,
+        displayCity: shouldPublishBroadLocation ? broadLocation.city : nil,
+        displayRegion: shouldPublishBroadLocation ? broadLocation.region : nil,
+        displayCountry: shouldPublishBroadLocation ? broadLocation.country : nil,
+        displayLocationLabel: shouldPublishBroadLocation ? broadLocation.label : nil,
+        displayLocationSource: shouldPublishBroadLocation ? broadLocation.source : "none",
+        displayLocationVisibility: shouldPublishBroadLocation ? "public" : "hidden",
         postType: selectedPlace == nil ? "general" : "place",
-        placeId: selectedPlace?.placeId ?? selectedPlace?.mapboxId,
+        placeId: selectedPlace?.providerPlaceId,
         placeName: selectedPlace?.displayName,
-        placeLat: selectedPlace?.lat,
-        placeLng: selectedPlace?.lng,
+        placeProvider: selectedPlace?.provider,
+        placeProviderId: selectedPlace?.providerPlaceId,
+        placeFormattedAddress: selectedPlace?.addressText,
+        placeCategory: selectedPlace?.category,
+        placeCity: selectedPlace?.city,
+        placeRegion: selectedPlace?.region,
+        placeCountry: selectedPlace?.country,
+        placeLat: selectedPlace?.latitude,
+        placeLng: selectedPlace?.longitude,
         taggedUsers: taggedPayload.isEmpty ? nil : taggedPayload,
+        tags: cleanedTags.isEmpty ? nil : cleanedTags,
+        primaryCategory: selectedDiscoverCategory,
+        categorySource: selectedDiscoverCategory == nil ? nil : "user_changed_optional",
+        categoryStatus: selectedDiscoverCategory == nil ? nil : "classified",
+        appleVisionLabels: categorySignals.appleVisionLabels.isEmpty ? nil : categorySignals.appleVisionLabels,
+        appleVisionCategoryGuess: categorySignals.appleVisionCategoryGuess,
+        appleVisionConfidence: categorySignals.appleVisionConfidence,
+        audioProvider: nil,
+        audioTrackId: nil,
+        audioTitle: nil,
+        audioArtist: nil,
+        audioArtworkUrl: nil,
+        audioStreamUrl: nil,
+        audioStartTime: nil,
+        audioDuration: nil,
         visibility: "public",
         clientRequestId: UUID().uuidString
       )
       let _: MIRAPost = try await api.post("/posts", body: body)
+      await MIRAAppCacheStore.shared.clearPostDraft()
+      MIRAPerformanceTimeline.mark("post_upload_complete", detail: "post")
       close()
     } catch {
-      errorMessage = "Post could not be created."
+      MIRAPerformanceTimeline.mark("post_upload_failed", detail: "post")
+      let message = (error as? MIRAAPIError)?.errorDescription ?? "Post could not be created."
+      errorMessage = message
+      await persistComposerDraft(uploadStatus: "failed", errorMessage: message, includeMedia: true)
     }
   }
 
   private func close() {
+    Task { await MIRAAppCacheStore.shared.clearPostDraft() }
     if let onClose {
       onClose()
     } else {
       dismiss()
     }
+  }
+
+  @MainActor
+  private func handleComposerScenePhaseChange(_ phase: ScenePhase) {
+    guard phase == .background, !isPosting else { return }
+    resetComposerAfterAbandoningDraft()
+    Task { await MIRAAppCacheStore.shared.clearPostDraft() }
+  }
+
+  @MainActor
+  private func preparePostComposerForDisplay() async {
+    await restorePostDraftIfNeeded()
+    await loadBroadLocationDefaultIfNeeded()
   }
 
   @MainActor
@@ -740,30 +1676,69 @@ public struct CreatePostNativeView: View {
       pickerItems = []
     }
     var loaded: [MIRAPickedMedia] = []
+    var failedCount = 0
+    var skippedVideos = 0
     for item in items {
-      guard let data = try? await item.loadTransferable(type: Data.self) else { continue }
+      guard let data = try? await item.loadTransferable(type: Data.self) else {
+        failedCount += 1
+        continue
+      }
       let (kind, fileName, mimeType) = pickedMediaKind(from: item.supportedContentTypes, fallbackData: data)
+      guard kind == .image else {
+        skippedVideos += 1
+        continue
+      }
       loaded.append(MIRAPickedMedia(data: data, kind: kind, fileName: fileName, mimeType: mimeType))
     }
-    mediaItems.append(contentsOf: loaded)
-    if !loaded.isEmpty {
-      withAnimation(.snappy(duration: 0.2)) {
-        isEditingPostDetails = true
-      }
+    if skippedVideos > 0 {
+      errorMessage = "Feed posts are photo-only. Share videos to Stories."
+    } else if failedCount > 0 {
+      errorMessage = failedCount == 1 ? "One media item could not be loaded." : "\(failedCount) media items could not be loaded."
+    } else {
+      errorMessage = nil
     }
+    mediaItems.append(contentsOf: loaded)
   }
 
   private func addCapturedMediaAndContinue(_ media: MIRAPickedMedia) {
+    guard media.kind == .image else {
+      errorMessage = "Feed posts are photo-only. Share videos to Stories."
+      return
+    }
     editedCameraMedia = nil
+    isCameraReviewingMedia = false
     mediaItems.append(media)
-    withAnimation(.snappy(duration: 0.2)) {
+    withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
+      isEditingPostDetails = true
+    }
+  }
+
+  private func addGalleryMedia(_ media: [MIRAPickedMedia]) {
+    let photos = media.filter { $0.kind == .image }
+    guard !photos.isEmpty else {
+      errorMessage = "Feed posts are photo-only. Share videos to Stories."
+      return
+    }
+    editedCameraMedia = nil
+    isCameraReviewingMedia = false
+    withAnimation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion)) {
+      mediaItems.append(contentsOf: photos.prefix(max(0, 10 - mediaItems.count)))
+    }
+  }
+
+  private func continueToPostDetails() {
+    guard !mediaItems.isEmpty else { return }
+    editedCameraMedia = nil
+    isCameraReviewingMedia = false
+    withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
       isEditingPostDetails = true
     }
   }
 
   private func returnToCapture() {
     editedCameraMedia = nil
-    withAnimation(.snappy(duration: 0.2)) {
+    isCameraReviewingMedia = false
+    withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
       isEditingPostDetails = false
     }
   }
@@ -775,17 +1750,1183 @@ public struct CreatePostNativeView: View {
     }
     return metadata.isEmpty ? nil : metadata
   }
+
+  @MainActor
+  private func restorePostDraftIfNeeded() async {
+    guard !hasRestoredPostDraft else { return }
+    await MIRAAppCacheStore.shared.clearPostDraft()
+    draftMediaSnapshots = []
+    hasRestoredPostDraft = true
+  }
+
+  private func cacheComposerDraft() {
+    guard hasRestoredPostDraft else { return }
+    Task { await MIRAAppCacheStore.shared.clearPostDraft() }
+  }
+
+  @MainActor
+  private func persistComposerDraft(uploadStatus: String, errorMessage: String?, includeMedia: Bool) async {
+    guard hasRestoredPostDraft else { return }
+    await MIRAAppCacheStore.shared.clearPostDraft()
+    draftMediaSnapshots = []
+  }
+
+  @MainActor
+  private func resetComposerAfterAbandoningDraft() {
+    focusedPostDetailsField = nil
+    title = ""
+    bodyText = ""
+    mediaItems = []
+    pickerItems = []
+    showPreview = false
+    isEditingPostDetails = false
+    isLoadingMedia = false
+    errorMessage = nil
+    editingMedia = nil
+    editedCameraMedia = nil
+    activePostDetailSheet = nil
+    selectedPlace = nil
+    broadLocation = MIRABroadDisplayLocation()
+    showBroadLocation = false
+    broadLocationError = nil
+    taggedUsers = []
+    hashtags = []
+    selectedAudioTrack = nil
+    selectedDiscoverCategory = nil
+    postAssistResponse = nil
+    postAssistError = nil
+    draftMediaSnapshots = []
+    isCameraReviewingMedia = false
+  }
+
+  private var hasDraftContent: Bool {
+    !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+      !bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+      !mediaItems.isEmpty ||
+      !hashtags.isEmpty ||
+      selectedPlace != nil
+  }
+
+  private var draftPlaceSnapshot: MIRADraftPlaceSnapshot? {
+    guard let selectedPlace else { return nil }
+    return MIRADraftPlaceSnapshot(
+      provider: selectedPlace.provider,
+      providerPlaceId: selectedPlace.providerPlaceId,
+      name: selectedPlace.name,
+      formattedAddress: selectedPlace.formattedAddress,
+      latitude: selectedPlace.latitude,
+      longitude: selectedPlace.longitude,
+      category: selectedPlace.category,
+      city: selectedPlace.city,
+      region: selectedPlace.region,
+      country: selectedPlace.country
+    )
+  }
+
+  private var draftBroadLocationSnapshot: MIRADraftBroadLocationSnapshot? {
+    guard broadLocation.label?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else { return nil }
+    return MIRADraftBroadLocationSnapshot(
+      city: broadLocation.city,
+      region: broadLocation.region,
+      country: broadLocation.country,
+      label: broadLocation.label,
+      source: broadLocation.source,
+      visibility: broadLocation.visibility
+    )
+  }
+
+  @MainActor
+  private func loadBroadLocationDefaultIfNeeded() async {
+    guard !hasLoadedBroadLocation else { return }
+    hasLoadedBroadLocation = true
+    do {
+      let user: MIRAUser = try await api.get("/auth/me")
+      let location = parseProfileCity(user.city)
+      broadLocation = location
+    } catch {
+      broadLocation = MIRABroadDisplayLocation()
+    }
+  }
+
+  @MainActor
+  private func resolveCurrentBroadLocationForPost() async {
+    broadLocationError = nil
+    let previousLocation = broadLocation
+    guard let location = await broadLocationResolver.resolveCurrentLocation() else {
+      broadLocation = previousLocation
+      broadLocationError = "Allow location to show your city/country."
+      return
+    }
+
+    let lat = String(format: "%.5f", location.coordinate.latitude)
+    let lng = String(format: "%.5f", location.coordinate.longitude)
+    do {
+      let response: MIRABroadLocationReverseResponse = try await api.get("/mapbox-locations/reverse?lat=\(lat)&lng=\(lng)")
+      guard let resolved = response.location?.displayLocation, resolved.hasVisibleLabel else {
+        if let fallback = await reverseGeocodeBroadLocationWithApple(location) {
+          broadLocation = fallback
+          showBroadLocation = true
+          broadLocationError = nil
+          return
+        }
+        broadLocation = previousLocation
+        broadLocationError = "Could not find your city."
+        return
+      }
+      broadLocation = resolved
+      showBroadLocation = true
+      broadLocationError = nil
+    } catch {
+      if let fallback = await reverseGeocodeBroadLocationWithApple(location) {
+        broadLocation = fallback
+        showBroadLocation = true
+        broadLocationError = nil
+        return
+      }
+      broadLocation = previousLocation
+      let message = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+      broadLocationError = message.isEmpty ? "City/country could not load." : message
+    }
+  }
+
+  private func reverseGeocodeBroadLocationWithApple(_ location: CLLocation) async -> MIRABroadDisplayLocation? {
+    do {
+      let placemarks = try await CLGeocoder().reverseGeocodeLocation(location)
+      guard let place = placemarks.first else { return nil }
+      let city = place.locality ?? place.subLocality ?? place.administrativeArea
+      let region = place.administrativeArea
+      let country = place.country ?? place.isoCountryCode
+      let parts = [city, country]
+        .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { !$0.isEmpty }
+      guard !parts.isEmpty else { return nil }
+      return MIRABroadDisplayLocation(
+        city: city,
+        region: region,
+        country: country,
+        label: parts.joined(separator: ", "),
+        source: "manual",
+        visibility: "public"
+      )
+    } catch {
+      return nil
+    }
+  }
+
+  private func parseProfileCity(_ value: String?) -> MIRABroadDisplayLocation {
+    let clean = value?
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+      .replacingOccurrences(of: #"\s*,\s*"#, with: ", ", options: .regularExpression) ?? ""
+    guard !clean.isEmpty else { return MIRABroadDisplayLocation() }
+    let parts = clean
+      .split(separator: ",")
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { !$0.isEmpty }
+    return MIRABroadDisplayLocation(
+      city: parts.first,
+      region: parts.count > 2 ? parts[1] : nil,
+      country: parts.count > 1 ? parts.last : nil,
+      label: clean,
+      source: "user_profile",
+      visibility: "public"
+    )
+  }
+}
+
+private extension ISO8601DateFormatter {
+  static let miraPostDraft: ISO8601DateFormatter = {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return formatter
+  }()
+}
+
+private struct PostAIAssistSheet: View {
+  let response: MIRAPostAssistResponse?
+  let isLoading: Bool
+  let errorMessage: String?
+  let onGenerate: () -> Void
+  let onApplyHeadline: (String) -> Void
+  let onApplyCaption: (String) -> Void
+  let onClose: () -> Void
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 18) {
+      HStack {
+        VStack(alignment: .leading, spacing: 5) {
+          Text("Post Assist")
+            .font(.system(size: 24, weight: .bold))
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+          Text("Caption, headline, and Discover category ideas.")
+            .font(.system(size: 14, weight: .medium))
+            .foregroundStyle(MIRATheme.Color.textMuted)
+        }
+
+        Spacer()
+
+        Button(action: onClose) {
+          Image(systemName: "xmark")
+            .font(.system(size: 15, weight: .bold))
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+            .frame(width: 38, height: 38)
+            .background(MIRATheme.Color.surfaceSoft)
+            .clipShape(Circle())
+        }
+        .buttonStyle(.plain)
+      }
+
+      if isLoading {
+        VStack(spacing: 13) {
+          ProgressView()
+          Text("Creating natural suggestions...")
+            .font(.system(size: 15, weight: .semibold))
+            .foregroundStyle(MIRATheme.Color.textMuted)
+        }
+        .frame(maxWidth: .infinity, minHeight: 190)
+      } else if let errorMessage {
+        VStack(alignment: .leading, spacing: 14) {
+          Text(errorMessage)
+            .font(.system(size: 15, weight: .semibold))
+            .foregroundStyle(.red.opacity(0.9))
+          Button(action: onGenerate) {
+            Text("Try again")
+              .font(.system(size: 15, weight: .bold))
+              .foregroundStyle(.white)
+              .padding(.horizontal, 18)
+              .frame(height: 42)
+              .background(MIRATheme.Color.forest)
+              .clipShape(Capsule())
+          }
+          .buttonStyle(.plain)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 24)
+      } else if let response {
+        ScrollView(showsIndicators: false) {
+          VStack(alignment: .leading, spacing: 22) {
+            categoryRow(response)
+            suggestionSection(
+              title: "Headlines",
+              suggestions: response.headlineSuggestions ?? [],
+              applyTitle: "Use headline",
+              onApply: onApplyHeadline
+            )
+            suggestionSection(
+              title: "Captions",
+              suggestions: response.captionSuggestions ?? [],
+              applyTitle: "Use caption",
+              onApply: onApplyCaption
+            )
+          }
+          .padding(.bottom, 28)
+        }
+      } else {
+        Button(action: onGenerate) {
+          HStack(spacing: 9) {
+            Image(systemName: "sparkles")
+            Text("Generate ideas")
+          }
+          .font(.system(size: 16, weight: .bold))
+          .foregroundStyle(.white)
+          .frame(maxWidth: .infinity)
+          .frame(height: 52)
+          .background(MIRATheme.Color.forest)
+          .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
+        .buttonStyle(.plain)
+      }
+    }
+    .padding(.horizontal, 22)
+    .padding(.top, 18)
+  }
+
+  private func categoryRow(_ response: MIRAPostAssistResponse) -> some View {
+    HStack(spacing: 10) {
+      Image(systemName: "sparkles")
+        .font(.system(size: 18, weight: .bold))
+        .foregroundStyle(MIRATheme.Color.forest)
+      VStack(alignment: .leading, spacing: 3) {
+        Text("Discover category")
+          .font(.system(size: 13, weight: .bold))
+          .foregroundStyle(MIRATheme.Color.textMuted)
+        Text(response.resolvedCategory.capitalized)
+          .font(.system(size: 18, weight: .bold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+      }
+      Spacer()
+      if let confidence = response.categoryConfidence {
+        Text("\(Int(confidence * 100))%")
+          .font(.system(size: 12, weight: .bold))
+          .foregroundStyle(MIRATheme.Color.forest)
+          .padding(.horizontal, 9)
+          .frame(height: 28)
+          .background(MIRATheme.Color.forestSoft)
+          .clipShape(Capsule())
+      }
+    }
+    .padding(14)
+    .background(MIRATheme.Color.surfaceSoft.opacity(0.64))
+    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+  }
+
+  private func suggestionSection(
+    title: String,
+    suggestions: [String],
+    applyTitle: String,
+    onApply: @escaping (String) -> Void
+  ) -> some View {
+    VStack(alignment: .leading, spacing: 10) {
+      Text(title)
+        .font(.system(size: 14, weight: .bold))
+        .foregroundStyle(MIRATheme.Color.textMuted)
+
+      ForEach(Array(suggestions.enumerated()), id: \.offset) { _, suggestion in
+        VStack(alignment: .leading, spacing: 11) {
+          Text(suggestion)
+            .font(.system(size: 16, weight: .semibold))
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+            .fixedSize(horizontal: false, vertical: true)
+
+          Button {
+            onApply(suggestion)
+          } label: {
+            Text(applyTitle)
+              .font(.system(size: 13, weight: .bold))
+              .foregroundStyle(MIRATheme.Color.forest)
+              .frame(height: 32)
+              .padding(.horizontal, 12)
+              .background(MIRATheme.Color.forestSoft)
+              .clipShape(Capsule())
+          }
+          .buttonStyle(.plain)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(MIRATheme.Color.surfaceSoft.opacity(0.54))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+      }
+    }
+  }
+}
+
+private struct MIRAAudiusMusicPickerSheet: View {
+  let api: MIRAAPIClient
+  @Binding var selectedTrack: MIRAAudiusTrack?
+  let onClose: (() -> Void)?
+  @Environment(\.dismiss) private var dismiss
+  @FocusState private var isSearchFocused: Bool
+  @State private var query = ""
+  @State private var tracks: [MIRAAudiusTrack] = []
+  @State private var favoriteTracks: [MIRAAudiusTrack] = []
+  @State private var favoriteTrackIds: Set<String> = []
+  @State private var favoriteMutationIds: Set<String> = []
+  @State private var isLoading = true
+  @State private var errorMessage: String?
+  @State private var previewPlayer: AVPlayer?
+  @State private var previewingTrackId: String?
+  @State private var previewLoadingTrackId: String?
+  @State private var isShowingFavoritesOnly = false
+
+  var body: some View {
+    NavigationStack {
+      VStack(spacing: 0) {
+        VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
+          HStack(spacing: MIRATheme.Space.sm) {
+            Image(systemName: "magnifyingglass")
+              .font(.system(size: 15, weight: .semibold))
+              .foregroundStyle(MIRATheme.Color.textMuted)
+            TextField("Search Audius music", text: $query)
+              .focused($isSearchFocused)
+              .textInputAutocapitalization(.never)
+              .autocorrectionDisabled()
+              .submitLabel(.search)
+              .onSubmit { Task { await searchTracks() } }
+            Button {
+              query = ""
+              Task { await loadTrending() }
+            } label: {
+              Image(systemName: "xmark.circle.fill")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(MIRATheme.Color.textMuted.opacity(query.isEmpty ? 0 : 0.75))
+            }
+            .disabled(query.isEmpty)
+          }
+          .padding(.horizontal, MIRATheme.Space.md)
+          .frame(height: 46)
+          .background(MIRATheme.Color.surfaceSoft.opacity(0.74))
+          .clipShape(Capsule())
+
+          if let selectedTrack {
+            VStack(alignment: .leading, spacing: MIRATheme.Space.xs) {
+              Text("Selected sound")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(MIRATheme.Color.textMuted)
+                .textCase(.uppercase)
+              MIRAAudioPreviewButton(
+                api: api,
+                trackId: selectedTrack.resolvedTrackId,
+                title: selectedTrack.displayTitle,
+                artist: selectedTrack.displayArtist,
+                artworkUrl: selectedTrack.artworkUrl,
+                streamUrl: selectedTrack.streamUrl
+              )
+            }
+          }
+
+          musicLibraryToggle
+        }
+        .padding(.horizontal, MIRATheme.Space.md)
+        .padding(.top, MIRATheme.Space.md)
+        .padding(.bottom, MIRATheme.Space.sm)
+
+        if isLoading && tracks.isEmpty && favoriteTracks.isEmpty {
+          ScrollView {
+            LazyVStack(spacing: 0) {
+              ForEach(0..<8, id: \.self) { _ in
+                musicSkeletonRow
+              }
+            }
+          }
+        } else if tracks.isEmpty && favoriteTracks.isEmpty && errorMessage != nil {
+          VStack(spacing: MIRATheme.Space.sm) {
+            Image(systemName: "music.note.list")
+              .font(.system(size: 30, weight: .semibold))
+              .foregroundStyle(MIRATheme.Color.forest)
+            Text(errorMessage ?? "Search for a song or pick from trending tracks.")
+              .font(.system(size: 15, weight: .semibold))
+              .foregroundStyle(MIRATheme.Color.textSecondary)
+              .multilineTextAlignment(.center)
+              .padding(.horizontal, MIRATheme.Space.xl)
+          }
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+          ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+              if isShowingFavoritesOnly {
+                musicSectionHeader("Favorite sounds")
+                if favoriteTracks.isEmpty {
+                  emptyFavoritesRow
+                } else {
+                  ForEach(favoriteTracks) { track in
+                    musicTrackRow(track)
+                  }
+                }
+              } else if shouldShowFavoritesSection {
+                musicSectionHeader("Favorite sounds")
+                if favoriteTracks.isEmpty {
+                  emptyFavoritesRow
+                } else {
+                  ForEach(favoriteTracks) { track in
+                    musicTrackRow(track)
+                  }
+                }
+
+                if !visibleTracks.isEmpty {
+                  musicSectionHeader("Trending")
+                }
+              }
+
+              if visibleTracks.isEmpty && !shouldShowFavoritesSection && !isShowingFavoritesOnly {
+                emptySearchRow
+              } else if !isShowingFavoritesOnly {
+                ForEach(visibleTracks) { track in
+                  musicTrackRow(track)
+                }
+              }
+            }
+            .padding(.bottom, MIRATheme.Space.xl)
+          }
+        }
+      }
+      .background(MIRATheme.Color.surface.ignoresSafeArea())
+      .navigationTitle("Music")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .topBarLeading) {
+          Button("Cancel") { close() }
+        }
+        ToolbarItem(placement: .topBarTrailing) {
+          HStack(spacing: MIRATheme.Space.xs) {
+            if selectedTrack != nil {
+              Button("Remove") {
+                selectedTrack = nil
+                stopPreview()
+              }
+                .foregroundStyle(.red.opacity(0.85))
+            }
+            Button("Done") { close() }
+              .fontWeight(.semibold)
+          }
+        }
+      }
+      .task { await loadInitialMusic() }
+      .onDisappear { stopPreview() }
+    }
+  }
+
+  private var musicLibraryToggle: some View {
+    HStack(spacing: 8) {
+      musicLibraryToggleButton(title: "All music", systemImage: "music.note.list", isSelected: !isShowingFavoritesOnly) {
+        isShowingFavoritesOnly = false
+      }
+      musicLibraryToggleButton(
+        title: "Favorites",
+        systemImage: "heart.fill",
+        isSelected: isShowingFavoritesOnly,
+        count: favoriteTracks.count
+      ) {
+        query = ""
+        isSearchFocused = false
+        isShowingFavoritesOnly = true
+      }
+    }
+    .accessibilityElement(children: .contain)
+  }
+
+  private func musicLibraryToggleButton(
+    title: String,
+    systemImage: String,
+    isSelected: Bool,
+    count: Int? = nil,
+    action: @escaping () -> Void
+  ) -> some View {
+    Button(action: action) {
+      HStack(spacing: 7) {
+        Image(systemName: systemImage)
+          .font(.system(size: 13, weight: .bold))
+        Text(title)
+          .font(.system(size: 13, weight: .bold))
+        if let count, count > 0 {
+          Text("\(count)")
+            .font(.system(size: 11, weight: .heavy))
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(isSelected ? Color.white.opacity(0.18) : MIRATheme.Color.surface)
+            .clipShape(Capsule())
+        }
+      }
+      .foregroundStyle(isSelected ? Color.white : MIRATheme.Color.textPrimary)
+      .frame(maxWidth: .infinity)
+      .frame(height: 38)
+      .background(isSelected ? MIRATheme.Color.forest : MIRATheme.Color.surfaceSoft.opacity(0.84))
+      .clipShape(Capsule())
+    }
+    .buttonStyle(.plain)
+    .accessibilityLabel(title)
+  }
+
+  private var shouldShowFavoritesSection: Bool {
+    query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isShowingFavoritesOnly
+  }
+
+  private var visibleTracks: [MIRAAudiusTrack] {
+    guard shouldShowFavoritesSection else { return tracks }
+    return tracks.filter { !favoriteTrackIds.contains($0.resolvedTrackId) }
+  }
+
+  private func musicSectionHeader(_ title: String) -> some View {
+    Text(title)
+      .font(.system(size: 12, weight: .bold))
+      .foregroundStyle(MIRATheme.Color.textMuted)
+      .textCase(.uppercase)
+      .padding(.horizontal, MIRATheme.Space.md)
+      .padding(.top, title.hasPrefix("Favorite") ? MIRATheme.Space.sm : MIRATheme.Space.md)
+      .padding(.bottom, 6)
+  }
+
+  private var emptyFavoritesRow: some View {
+    HStack(spacing: MIRATheme.Space.sm) {
+      Image(systemName: "heart")
+        .font(.system(size: 18, weight: .semibold))
+        .foregroundStyle(MIRATheme.Color.forest)
+        .frame(width: 42, height: 42)
+        .background(MIRATheme.Color.forestSoft.opacity(0.72))
+        .clipShape(Circle())
+      VStack(alignment: .leading, spacing: 3) {
+        Text("No favorite sounds yet")
+          .font(.system(size: 14, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+        Text("Tap the heart on any track to save it here.")
+          .font(.system(size: 12, weight: .medium))
+          .foregroundStyle(MIRATheme.Color.textSecondary)
+      }
+      Spacer()
+    }
+    .padding(.horizontal, MIRATheme.Space.md)
+    .padding(.vertical, 10)
+  }
+
+  private var emptySearchRow: some View {
+    VStack(spacing: MIRATheme.Space.xs) {
+      Image(systemName: "magnifyingglass")
+        .font(.system(size: 24, weight: .semibold))
+        .foregroundStyle(MIRATheme.Color.forest)
+      Text("No tracks found")
+        .font(.system(size: 15, weight: .semibold))
+        .foregroundStyle(MIRATheme.Color.textPrimary)
+      Text("Try another song, artist, or mood.")
+        .font(.system(size: 13, weight: .medium))
+        .foregroundStyle(MIRATheme.Color.textSecondary)
+    }
+    .frame(maxWidth: .infinity)
+    .padding(.vertical, MIRATheme.Space.xl)
+  }
+
+  private var musicSkeletonRow: some View {
+    HStack(spacing: MIRATheme.Space.sm) {
+      RoundedRectangle(cornerRadius: 12, style: .continuous)
+        .fill(MIRATheme.Color.forestSoft.opacity(0.75))
+        .frame(width: 52, height: 52)
+      VStack(alignment: .leading, spacing: 8) {
+        RoundedRectangle(cornerRadius: 6, style: .continuous)
+          .fill(MIRATheme.Color.surfaceSoft)
+          .frame(width: 180, height: 13)
+        RoundedRectangle(cornerRadius: 6, style: .continuous)
+          .fill(MIRATheme.Color.surfaceSoft.opacity(0.72))
+          .frame(width: 112, height: 11)
+      }
+      Spacer()
+    }
+    .padding(.horizontal, MIRATheme.Space.md)
+    .padding(.vertical, 10)
+    .redacted(reason: .placeholder)
+  }
+
+  private func musicTrackRow(_ track: MIRAAudiusTrack) -> some View {
+    let trackId = track.resolvedTrackId
+    let isSelected = selectedTrack?.resolvedTrackId == trackId
+    let isFavorite = favoriteTrackIds.contains(trackId)
+    let isMutating = favoriteMutationIds.contains(trackId)
+    let isPreviewing = previewingTrackId == trackId
+    let isPreviewLoading = previewLoadingTrackId == trackId
+
+    return HStack(spacing: MIRATheme.Space.sm) {
+        if let artwork = track.artworkUrl, !artwork.isEmpty {
+          RemoteMediaView(url: artwork, isVideo: false)
+            .frame(width: 52, height: 52)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        } else {
+          RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .fill(MIRATheme.Color.forestSoft)
+            .frame(width: 52, height: 52)
+            .overlay {
+              Image(systemName: "music.note")
+                .font(.system(size: 19, weight: .semibold))
+                .foregroundStyle(MIRATheme.Color.forest)
+            }
+        }
+
+        VStack(alignment: .leading, spacing: 3) {
+          Text(track.displayTitle)
+            .font(.system(size: 15, weight: .semibold))
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+            .lineLimit(1)
+          HStack(spacing: 6) {
+            Text(track.displayArtist)
+              .lineLimit(1)
+            if let duration = durationText(track.duration) {
+              Text("- \(duration)")
+            }
+          }
+          .font(.system(size: 12, weight: .medium))
+          .foregroundStyle(MIRATheme.Color.textSecondary)
+        }
+
+        Spacer(minLength: MIRATheme.Space.sm)
+
+        Button {
+          Task { await togglePreview(track) }
+        } label: {
+          ZStack {
+            if isPreviewLoading {
+              ProgressView()
+                .scaleEffect(0.72)
+                .tint(.white)
+            } else {
+              Image(systemName: isPreviewing ? "pause.fill" : "play.fill")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(.white)
+                .offset(x: isPreviewing ? 0 : 1)
+            }
+          }
+          .frame(width: 38, height: 38)
+          .background(MIRATheme.Color.textPrimary)
+          .clipShape(Circle())
+          .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(trackId.isEmpty || isPreviewLoading)
+
+        Button {
+          Task { await toggleFavorite(track) }
+        } label: {
+          Image(systemName: isFavorite ? "heart.fill" : "heart")
+            .font(.system(size: 20, weight: .semibold))
+            .foregroundStyle(isFavorite ? Color.red.opacity(0.86) : MIRATheme.Color.textMuted)
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(isMutating)
+
+        Button {
+          selectTrackAndClose(track)
+        } label: {
+          Image(systemName: isSelected ? "checkmark.circle.fill" : "plus.circle.fill")
+            .font(.system(size: 23, weight: .semibold))
+            .foregroundStyle(isSelected ? MIRATheme.Color.forest : MIRATheme.Color.textPrimary)
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+      }
+      .padding(.horizontal, MIRATheme.Space.md)
+      .padding(.vertical, 10)
+      .contentShape(Rectangle())
+  }
+
+  @MainActor
+  private func selectTrackAndClose(_ track: MIRAAudiusTrack) {
+    stopPreview()
+    selectedTrack = track
+    CaptroHaptics.light()
+    close()
+  }
+
+  @MainActor
+  private func togglePreview(_ track: MIRAAudiusTrack) async {
+    let trackId = track.resolvedTrackId
+    guard !trackId.isEmpty else { return }
+    if previewingTrackId == trackId {
+      stopPreview()
+      return
+    }
+
+    stopPreview()
+    previewLoadingTrackId = trackId
+    defer { previewLoadingTrackId = nil }
+    guard let stream = await resolvePreviewURL(for: track), let url = URL(string: stream) else {
+      errorMessage = "Could not preview this track."
+      return
+    }
+    let player = AVPlayer(url: url)
+    previewPlayer = player
+    previewingTrackId = trackId
+    player.play()
+    CaptroHaptics.light()
+  }
+
+  private func resolvePreviewURL(for track: MIRAAudiusTrack) async -> String? {
+    let cleanStream = track.streamUrl?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    if !cleanStream.isEmpty { return cleanStream }
+    let encoded = encodedPathComponent(track.resolvedTrackId)
+    guard !encoded.isEmpty else { return nil }
+    do {
+      let resolved: MIRAAudiusTrack = try await api.get("/music/audius/stream/\(encoded)")
+      return resolved.streamUrl
+    } catch {
+      return nil
+    }
+  }
+
+  @MainActor
+  private func stopPreview() {
+    previewPlayer?.pause()
+    previewPlayer = nil
+    previewingTrackId = nil
+    previewLoadingTrackId = nil
+  }
+
+  @MainActor
+  private func loadInitialMusic() async {
+    await loadFavorites()
+    await loadTrending(force: true)
+  }
+
+  @MainActor
+  private func loadFavorites() async {
+    do {
+      let response: MIRAAudiusTrackResponse = try await api.get("/music/audius/favorites")
+      favoriteTracks = response.tracks
+      favoriteTrackIds = Set(response.tracks.map(\.resolvedTrackId))
+    } catch {
+      favoriteTracks = []
+      favoriteTrackIds = []
+    }
+  }
+
+  @MainActor
+  private func loadTrending(force: Bool = false) async {
+    guard force || !isLoading else { return }
+    isLoading = true
+    defer { isLoading = false }
+    do {
+      let response: MIRAAudiusTrackResponse = try await api.get("/music/audius/trending?limit=24")
+      tracks = response.tracks
+      errorMessage = nil
+    } catch {
+      if tracks.isEmpty {
+        errorMessage = "Music is temporarily unavailable."
+      }
+    }
+  }
+
+  @MainActor
+  private func searchTracks() async {
+    let clean = query.trimmingCharacters(in: .whitespacesAndNewlines)
+    if clean.count < 2 {
+      await loadTrending()
+      return
+    }
+    guard !isLoading else { return }
+    isLoading = true
+    defer { isLoading = false }
+    var components = URLComponents()
+    components.queryItems = [
+      URLQueryItem(name: "q", value: clean),
+      URLQueryItem(name: "limit", value: "24"),
+    ]
+    let queryString = components.percentEncodedQuery ?? ""
+    do {
+      let response: MIRAAudiusTrackResponse = try await api.get("/music/audius/search?\(queryString)")
+      tracks = response.tracks
+      errorMessage = nil
+    } catch {
+      errorMessage = "Could not search music. Try again."
+    }
+  }
+
+  @MainActor
+  private func toggleFavorite(_ track: MIRAAudiusTrack) async {
+    let trackId = track.resolvedTrackId
+    guard !trackId.isEmpty, !favoriteMutationIds.contains(trackId) else { return }
+    favoriteMutationIds.insert(trackId)
+    defer { favoriteMutationIds.remove(trackId) }
+
+    let wasFavorite = favoriteTrackIds.contains(trackId)
+    if wasFavorite {
+      favoriteTrackIds.remove(trackId)
+      favoriteTracks.removeAll { $0.resolvedTrackId == trackId }
+    } else {
+      favoriteTrackIds.insert(trackId)
+      favoriteTracks.removeAll { $0.resolvedTrackId == trackId }
+      favoriteTracks.insert(track, at: 0)
+    }
+
+    do {
+      if wasFavorite {
+        let encoded = encodedPathComponent(trackId)
+        let _: EmptyResponse = try await api.delete("/music/audius/favorites/\(encoded)")
+      } else {
+        let _: MIRAAudiusFavoriteSaveResponse = try await api.post(
+          "/music/audius/favorites",
+          body: MIRAAudiusFavoriteBody(track: track)
+        )
+      }
+      CaptroHaptics.light()
+    } catch {
+      if wasFavorite {
+        favoriteTrackIds.insert(trackId)
+        favoriteTracks.removeAll { $0.resolvedTrackId == trackId }
+        favoriteTracks.insert(track, at: 0)
+        errorMessage = "Could not remove this favorite."
+      } else {
+        favoriteTrackIds.remove(trackId)
+        favoriteTracks.removeAll { $0.resolvedTrackId == trackId }
+        errorMessage = "Could not save this favorite."
+      }
+    }
+  }
+
+  private func durationText(_ seconds: Int?) -> String? {
+    guard let seconds, seconds > 0 else { return nil }
+    return "\(seconds / 60):\(String(format: "%02d", seconds % 60))"
+  }
+
+  private func encodedPathComponent(_ value: String) -> String {
+    var allowed = CharacterSet.urlPathAllowed
+    allowed.remove(charactersIn: "/?#[]@!$&'()*+,;=")
+    return value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
+  }
+
+  @MainActor
+  private func close() {
+    stopPreview()
+    if let onClose {
+      onClose()
+    } else {
+      dismiss()
+    }
+  }
+}
+
+private struct MIRAAudiusFavoriteBody: Encodable {
+  let id: String
+  let trackId: String
+  let title: String
+  let artist: String
+  let artistId: String?
+  let artistHandle: String?
+  let artistProfileImage: String?
+  let artworkUrl: String?
+  let duration: Int?
+  let genre: String?
+  let playCount: Int?
+  let favoriteCount: Int?
+
+  init(track: MIRAAudiusTrack) {
+    id = track.resolvedTrackId
+    trackId = track.resolvedTrackId
+    title = track.displayTitle
+    artist = track.displayArtist
+    artistId = track.artistId
+    artistHandle = track.artistHandle
+    artistProfileImage = track.artistProfileImage
+    artworkUrl = track.artworkUrl
+    duration = track.duration
+    genre = track.genre
+    playCount = track.playCount
+    favoriteCount = track.favoriteCount
+  }
+}
+
+private struct MIRAAudiusFavoriteSaveResponse: Decodable {
+  let favorite: Bool
+  let track: MIRAAudiusTrack?
+}
+
+private struct PostBroadLocationPickerSheet: View {
+  let api: MIRAAPIClient
+  @Binding var broadLocation: MIRABroadDisplayLocation
+  @Binding var showBroadLocation: Bool
+  let onClose: (() -> Void)?
+  @Environment(\.dismiss) private var dismiss
+  @FocusState private var isSearchFocused: Bool
+  @State private var query = ""
+  @State private var results: [MIRABroadLocationSearchResult] = []
+  @State private var isLoading = false
+  @State private var errorMessage: String?
+
+  var body: some View {
+    NavigationStack {
+      VStack(spacing: 0) {
+        VStack(spacing: MIRATheme.Space.md) {
+          HStack(spacing: 10) {
+            Image(systemName: "magnifyingglass")
+              .foregroundStyle(MIRATheme.Color.textMuted)
+            TextField("Search city or country", text: $query)
+              .textInputAutocapitalization(.words)
+              .autocorrectionDisabled()
+              .submitLabel(.search)
+              .focused($isSearchFocused)
+              .onSubmit { Task { await searchCities(for: cleanQuery) } }
+            if !cleanQuery.isEmpty {
+              Button {
+                query = ""
+                results = []
+                errorMessage = nil
+              } label: {
+                Image(systemName: "xmark.circle.fill")
+                  .foregroundStyle(MIRATheme.Color.textMuted.opacity(0.75))
+              }
+              .buttonStyle(.plain)
+            }
+          }
+          .padding(.horizontal, MIRATheme.Space.md)
+          .frame(height: 48)
+          .background(MIRATheme.Color.surfaceSoft)
+          .clipShape(Capsule())
+
+          if let label = broadLocation.label, !label.isEmpty {
+            HStack(spacing: 10) {
+              Image(systemName: "location.circle.fill")
+                .foregroundStyle(MIRATheme.Color.forest)
+              Text(label)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(MIRATheme.Color.textPrimary)
+                .lineLimit(1)
+              Spacer()
+              Text(showBroadLocation ? "Visible" : "Hidden")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(showBroadLocation ? MIRATheme.Color.forest : MIRATheme.Color.textMuted)
+            }
+            .padding(MIRATheme.Space.md)
+            .background(MIRATheme.Color.surfaceSoft.opacity(0.72))
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+          }
+        }
+        .padding(MIRATheme.Space.md)
+
+        ScrollView {
+          LazyVStack(spacing: 10) {
+            if isLoading {
+              ProgressView("Finding cities...")
+                .tint(MIRATheme.Color.forest)
+                .frame(maxWidth: .infinity, minHeight: 64)
+            } else if let errorMessage {
+              placePickerMessage(errorMessage, systemImage: "exclamationmark.triangle")
+            } else if cleanQuery.isEmpty {
+              placePickerMessage("Search a broad city/country label like New York, USA. Exact places stay in Add place.", systemImage: "location.circle")
+            } else if cleanQuery.count < 2 {
+              placePickerMessage("Keep typing to search cities.", systemImage: "text.cursor")
+            } else if results.isEmpty {
+              placePickerMessage("No city results yet.", systemImage: "mappin.circle")
+            }
+
+            ForEach(results) { result in
+              Button {
+                broadLocation = result.displayLocation
+                showBroadLocation = true
+                close()
+              } label: {
+                placeRowTitle(systemImage: "location.circle.fill", name: result.resolvedLabel, subtitle: "City/country label")
+              }
+              .buttonStyle(.miraPress)
+            }
+          }
+          .padding(.horizontal, MIRATheme.Space.md)
+          .padding(.bottom, 28)
+        }
+      }
+      .background(MIRATheme.Color.surface.ignoresSafeArea())
+      .navigationTitle("City/country")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .topBarLeading) {
+          Button("Cancel") { close() }
+        }
+        ToolbarItem(placement: .topBarTrailing) {
+          Button("Hide") {
+            showBroadLocation = false
+            close()
+          }
+          .foregroundStyle(MIRATheme.Color.textMuted)
+        }
+      }
+      .onAppear { isSearchFocused = true }
+      .task(id: cleanQuery) {
+        let snapshot = cleanQuery
+        try? await Task.sleep(nanoseconds: 260_000_000)
+        guard !Task.isCancelled else { return }
+        await searchCities(for: snapshot)
+      }
+    }
+    .presentationDetents([.medium, .large])
+    .presentationDragIndicator(.visible)
+  }
+
+  private var cleanQuery: String {
+    query.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  private func placePickerMessage(_ text: String, systemImage: String) -> some View {
+    HStack(spacing: MIRATheme.Space.sm) {
+      Image(systemName: systemImage)
+        .font(.system(size: 17, weight: .semibold))
+        .foregroundStyle(MIRATheme.Color.textMuted)
+        .frame(width: 34, height: 34)
+        .background(MIRATheme.Color.surfaceSoft)
+        .clipShape(Circle())
+      Text(text)
+        .font(.system(size: 14, weight: .medium))
+        .foregroundStyle(MIRATheme.Color.textSecondary)
+        .fixedSize(horizontal: false, vertical: true)
+      Spacer()
+    }
+    .padding(MIRATheme.Space.md)
+    .background(MIRATheme.Color.surface)
+    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    .overlay {
+      RoundedRectangle(cornerRadius: 18, style: .continuous)
+        .stroke(MIRATheme.Color.hairline, lineWidth: 1)
+    }
+  }
+
+  private func placeRowTitle(systemImage: String, name: String, subtitle: String?) -> some View {
+    HStack(spacing: MIRATheme.Space.md) {
+      Image(systemName: systemImage)
+        .font(.system(size: 18, weight: .semibold))
+        .foregroundStyle(MIRATheme.Color.forest)
+        .frame(width: 42, height: 42)
+        .background(MIRATheme.Color.forestSoft)
+        .clipShape(Circle())
+      VStack(alignment: .leading, spacing: 3) {
+        Text(name)
+          .font(.system(size: 16, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .lineLimit(1)
+        if let subtitle, !subtitle.isEmpty {
+          Text(subtitle)
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(MIRATheme.Color.textMuted)
+            .lineLimit(1)
+        }
+      }
+      Spacer(minLength: MIRATheme.Space.sm)
+      Image(systemName: "chevron.right")
+        .font(.system(size: 12, weight: .bold))
+        .foregroundStyle(MIRATheme.Color.textMuted.opacity(0.65))
+    }
+    .padding(MIRATheme.Space.md)
+    .background(MIRATheme.Color.surface)
+    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    .overlay {
+      RoundedRectangle(cornerRadius: 18, style: .continuous)
+        .stroke(MIRATheme.Color.hairline, lineWidth: 1)
+    }
+  }
+
+  @MainActor
+  private func searchCities(for clean: String) async {
+    guard clean.count >= 2 else {
+      results = []
+      errorMessage = nil
+      isLoading = false
+      return
+    }
+    isLoading = true
+    do {
+      let encoded = clean.addingPercentEncoding(withAllowedCharacters: urlQueryComponentAllowed) ?? clean
+      let response: MIRABroadLocationSearchResponse = try await api.get("/mapbox-locations/cities?q=\(encoded)")
+      guard !Task.isCancelled, clean == cleanQuery else { return }
+      results = response.locations
+      errorMessage = nil
+      isLoading = false
+    } catch {
+      guard !Task.isCancelled, clean == cleanQuery else { return }
+      results = []
+      errorMessage = "City search could not load."
+      isLoading = false
+    }
+  }
+
+  private func close() {
+    if let onClose {
+      onClose()
+    } else {
+      dismiss()
+    }
+  }
+
+  private var urlQueryComponentAllowed: CharacterSet {
+    var allowed = CharacterSet.urlQueryAllowed
+    allowed.remove(charactersIn: "&=?+")
+    return allowed
+  }
 }
 
 private struct PostLocationPickerSheet: View {
   let api: MIRAAPIClient
-  @Binding var selectedPlace: MIRAMapboxPlace?
+  @Binding var selectedPlace: MIRAExactPostPlace?
   let onClose: (() -> Void)?
   @Environment(\.dismiss) private var dismiss
+  @StateObject private var placeLocationResolver = MIRABroadLocationResolver()
   @State private var query = ""
-  @State private var places: [MIRAMapboxPlace] = []
+  @State private var places: [MIRAExactPostPlace] = []
   @State private var isLoading = false
   @State private var errorMessage: String?
+  @State private var searchRegion: MKCoordinateRegion?
+  @State private var hasLoadedSearchRegion = false
   @FocusState private var isSearchFocused: Bool
 
   var body: some View {
@@ -795,7 +2936,7 @@ private struct PostLocationPickerSheet: View {
           HStack(spacing: 10) {
             Image(systemName: "magnifyingglass")
               .foregroundStyle(MIRATheme.Color.textMuted)
-            TextField("Search place or address", text: $query)
+            TextField("Search Apple Maps places", text: $query)
               .textInputAutocapitalization(.words)
               .autocorrectionDisabled()
               .submitLabel(.search)
@@ -831,17 +2972,15 @@ private struct PostLocationPickerSheet: View {
           LazyVStack(spacing: 10) {
             searchStatusView
 
-            if cleanQuery.count >= 2 {
-              Button {
-                selectManualPlace()
-              } label: {
-                placeRowTitle(
-                  systemImage: "plus.circle.fill",
-                  name: "Use \"\(cleanQuery)\"",
-                  subtitle: "Custom place or address"
-                )
+            if !places.isEmpty {
+              HStack {
+                Text("Apple Maps results")
+                  .font(.system(size: 13, weight: .semibold))
+                  .foregroundStyle(MIRATheme.Color.textMuted)
+                Spacer()
               }
-              .buttonStyle(.miraPress)
+              .padding(.horizontal, 4)
+              .padding(.top, 2)
             }
 
             ForEach(places) { place in
@@ -859,7 +2998,7 @@ private struct PostLocationPickerSheet: View {
         }
       }
       .background(MIRATheme.Color.surface.ignoresSafeArea())
-      .navigationTitle("Add Location")
+      .navigationTitle("Add place")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
         ToolbarItem(placement: .topBarLeading) {
@@ -878,6 +3017,9 @@ private struct PostLocationPickerSheet: View {
       .onAppear {
         isSearchFocused = true
       }
+      .task {
+        await loadLocalSearchRegion()
+      }
       .task(id: cleanQuery) {
         let snapshot = cleanQuery
         try? await Task.sleep(nanoseconds: 260_000_000)
@@ -889,7 +3031,7 @@ private struct PostLocationPickerSheet: View {
     .presentationDragIndicator(.visible)
   }
 
-  private func selectedPlacePill(_ place: MIRAMapboxPlace) -> some View {
+  private func selectedPlacePill(_ place: MIRAExactPostPlace) -> some View {
     HStack(spacing: 10) {
       Image(systemName: "mappin.circle.fill")
         .foregroundStyle(MIRATheme.Color.forest)
@@ -927,11 +3069,11 @@ private struct PostLocationPickerSheet: View {
     } else if let errorMessage {
       placePickerMessage(errorMessage, systemImage: "exclamationmark.triangle")
     } else if cleanQuery.isEmpty {
-      placePickerMessage("Search for a restaurant, venue, city, or type any address.", systemImage: "magnifyingglass.circle")
+      placePickerMessage("Search for a restaurant, gym, cafe, park, venue, or address.", systemImage: "magnifyingglass.circle")
     } else if cleanQuery.count < 2 {
       placePickerMessage("Keep typing to search places.", systemImage: "text.cursor")
     } else if places.isEmpty {
-      placePickerMessage("No matching places yet. You can still use your typed location.", systemImage: "mappin.circle")
+      placePickerMessage("No Apple Maps places found yet. Try a place name plus city.", systemImage: "mappin.circle")
     }
   }
 
@@ -996,34 +3138,24 @@ private struct PostLocationPickerSheet: View {
     query.trimmingCharacters(in: .whitespacesAndNewlines)
   }
 
-  private var manualPlaceId: String {
-    let slug = cleanQuery
-      .lowercased()
-      .filter { $0.isLetter || $0.isNumber }
-      .prefix(42)
-    return "manual-\(slug.isEmpty ? "place" : String(slug))"
-  }
-
-  private func selectManualPlace() {
-    selectedPlace = MIRAMapboxPlace(
-      placeId: manualPlaceId,
-      mapboxId: nil,
-      name: cleanQuery,
-      formattedAddress: cleanQuery,
-      address: cleanQuery,
-      vicinity: nil,
-      lat: nil,
-      lng: nil
-    )
-    close()
-  }
-
   private func close() {
     if let onClose {
       onClose()
     } else {
       dismiss()
     }
+  }
+
+  @MainActor
+  private func loadLocalSearchRegion() async {
+    guard !hasLoadedSearchRegion else { return }
+    hasLoadedSearchRegion = true
+    guard let location = await placeLocationResolver.resolveCurrentLocation() else { return }
+    searchRegion = MKCoordinateRegion(
+      center: location.coordinate,
+      latitudinalMeters: 35_000,
+      longitudinalMeters: 35_000
+    )
   }
 
   @MainActor
@@ -1036,8 +3168,14 @@ private struct PostLocationPickerSheet: View {
     }
     isLoading = true
     do {
-      let encoded = clean.addingPercentEncoding(withAllowedCharacters: urlQueryComponentAllowed) ?? clean
-      let loaded: [MIRAMapboxPlace] = try await api.get("/mapbox-places/nearby?keyword=\(encoded)&type=place")
+      let request = MKLocalSearch.Request()
+      request.naturalLanguageQuery = clean
+      request.resultTypes = [.pointOfInterest, .address]
+      if let searchRegion {
+        request.region = searchRegion
+      }
+      let response = try await MKLocalSearch(request: request).start()
+      let loaded = response.mapItems.map(MIRAExactPostPlace.init(mapItem:))
       guard !Task.isCancelled, clean == cleanQuery else { return }
       places = loaded
       errorMessage = nil
@@ -1045,15 +3183,9 @@ private struct PostLocationPickerSheet: View {
     } catch {
       guard !Task.isCancelled, clean == cleanQuery else { return }
       places = []
-      errorMessage = "Mapbox places could not load. You can still use your typed address."
+      errorMessage = "Apple Maps places could not load. Check your connection and try again."
       isLoading = false
     }
-  }
-
-  private var urlQueryComponentAllowed: CharacterSet {
-    var allowed = CharacterSet.urlQueryAllowed
-    allowed.remove(charactersIn: "&=?+")
-    return allowed
   }
 }
 
@@ -1291,389 +3423,19 @@ private struct PostHashtagSheet: View {
   }
 }
 
-public struct CreateNoteNativeView: View {
-  let api: MIRAAPIClient
-  @Environment(\.dismiss) private var dismiss
-  @State private var currentUser: MIRAUser?
-  @State private var noteText = ""
-  @State private var mediaItem: MIRAPickedMedia?
-  @State private var pickerItem: PhotosPickerItem?
-  @State private var gifURL = ""
-  @State private var gifQuery = ""
-  @State private var gifResults: [MIRAGifItem] = []
-  @State private var showGIFField = false
-  @State private var isPosting = false
-  @State private var isLoadingMedia = false
-  @State private var isSearchingGIFs = false
-  @State private var errorMessage: String?
-
-  public init(api: MIRAAPIClient) {
-    self.api = api
-  }
-
-  public var body: some View {
-    VStack(spacing: 0) {
-      noteComposerHeader
-      Divider().overlay(MIRATheme.Color.hairline)
-
-      ScrollView {
-        noteEditorContent
-          .padding(.horizontal, MIRATheme.Space.md)
-          .padding(.top, MIRATheme.Space.lg)
-          .padding(.bottom, 140)
-      }
-
-      noteBottomBar
-    }
-    .background(MIRATheme.Color.surface)
-    .miraScreenEnter(.modal)
-    .toolbar(.hidden, for: .navigationBar)
-    .task {
-      await loadCurrentUser()
-      restoreDraft()
-    }
-    .onChange(of: pickerItem) { _, newItem in
-      Task { await loadPickerItem(newItem) }
-    }
-  }
-
-  private var noteComposerHeader: some View {
-    HStack {
-      Button("Cancel") { dismiss() }
-        .font(.system(size: 20, weight: .semibold))
-        .foregroundStyle(MIRATheme.Color.textPrimary)
-        .frame(minHeight: 56)
-
-      Spacer()
-
-      Button("Save") {
-        saveDraft()
-      }
-        .font(.system(size: 16, weight: .semibold))
-      .foregroundStyle(canSaveDraft ? MIRATheme.Color.forest : MIRATheme.Color.textMuted)
-      .frame(width: 92, height: 46)
-      .background(canSaveDraft ? MIRATheme.Color.forestSoft : MIRATheme.Color.surfaceSoft.opacity(0.72))
-      .clipShape(Capsule())
-      .disabled(!canSaveDraft)
-    }
-    .padding(.horizontal, MIRATheme.Space.md)
-    .padding(.top, MIRATheme.Space.xs)
-    .padding(.bottom, MIRATheme.Space.sm)
-    .background(MIRATheme.Color.surface)
-  }
-
-  private var noteEditorContent: some View {
-    HStack(alignment: .top, spacing: MIRATheme.Space.md) {
-      VStack(spacing: 0) {
-        RemoteAvatar(url: currentUser?.profileImage, size: 48)
-        Rectangle()
-          .fill(MIRATheme.Color.surfaceSoft)
-          .frame(width: 5)
-          .frame(minHeight: 460)
-          .clipShape(Capsule())
-          .padding(.top, MIRATheme.Space.sm)
-        Text((currentUser?.displayName.first.map(String.init) ?? "M").uppercased())
-          .font(.system(size: 12, weight: .semibold))
-          .foregroundStyle(MIRATheme.Color.textMuted.opacity(0.45))
-          .frame(width: 34, height: 34)
-          .background(MIRATheme.Color.surfaceSoft.opacity(0.35))
-          .clipShape(Circle())
-          .padding(.top, MIRATheme.Space.sm)
-      }
-
-      VStack(alignment: .leading, spacing: MIRATheme.Space.sm) {
-        Text(currentUser?.displayName ?? "karfala900")
-          .font(.system(size: 19, weight: .semibold))
-          .foregroundStyle(MIRATheme.Color.textPrimary)
-          .lineLimit(1)
-          .minimumScaleFactor(0.78)
-
-        ZStack(alignment: .topLeading) {
-          if noteText.isEmpty {
-            Text("What's new?")
-              .font(.system(size: 19, weight: .semibold))
-              .foregroundStyle(MIRATheme.Color.textMuted.opacity(0.72))
-              .padding(.top, 7)
-              .allowsHitTesting(false)
-          }
-
-          TextEditor(text: $noteText)
-            .font(.system(size: 16, weight: .medium))
-            .foregroundStyle(MIRATheme.Color.textPrimary)
-            .lineSpacing(2)
-            .scrollContentBackground(.hidden)
-            .frame(minHeight: 130)
-            .padding(.leading, -5)
-        }
-
-        HStack(spacing: MIRATheme.Space.xl) {
-          PhotosPicker(selection: $pickerItem, matching: .images) {
-            Image(systemName: "photo")
-              .font(.system(size: 24, weight: .regular))
-              .frame(width: 42, height: 42)
-          }
-
-          Button {
-            openGIFPicker()
-          } label: {
-            Text("GIF")
-              .font(.system(size: 16, weight: .heavy))
-              .frame(width: 56, height: 40)
-              .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).stroke(lineWidth: 2.4))
-          }
-
-          if isLoadingMedia {
-            ProgressView()
-              .tint(MIRATheme.Color.textMuted)
-          }
-        }
-        .foregroundStyle(MIRATheme.Color.textMuted)
-        .buttonStyle(.plain)
-        .padding(.top, MIRATheme.Space.sm)
-
-        if showGIFField {
-          gifSearchPanel
-            .transition(.move(edge: .top).combined(with: .opacity))
-        }
-
-        noteMediaPreview
-          .padding(.top, MIRATheme.Space.sm)
-
-        if let errorMessage {
-          Text(errorMessage)
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(.red)
-            .padding(.top, MIRATheme.Space.xs)
-        }
-      }
-    }
-  }
-
-  private var noteBottomBar: some View {
-    HStack(spacing: MIRATheme.Space.sm) {
-      Image(systemName: "slider.horizontal.3")
-        .font(.system(size: 19, weight: .medium))
-        .foregroundStyle(MIRATheme.Color.textMuted)
-
-      Text("Reply options")
-        .font(.system(size: 15, weight: .semibold))
-        .foregroundStyle(MIRATheme.Color.textMuted)
-        .lineLimit(1)
-        .minimumScaleFactor(0.78)
-
-      Spacer()
-
-      Button {} label: {
-        Image(systemName: "chevron.down")
-          .font(.system(size: 17, weight: .semibold))
-          .foregroundStyle(MIRATheme.Color.textSecondary)
-          .frame(width: 46, height: 46)
-          .background(MIRATheme.Color.surface)
-          .overlay(Circle().stroke(MIRATheme.Color.hairline, lineWidth: 1))
-          .clipShape(Circle())
-      }
-      .buttonStyle(.plain)
-
-      Button {
-        Task { await submit() }
-      } label: {
-        if isPosting {
-          ProgressView().tint(.white)
-        } else {
-          Text("Post")
-            .font(.system(size: 16, weight: .semibold))
-        }
-      }
-      .foregroundStyle(.white)
-      .frame(width: 98, height: 50)
-      .background(canPostNote ? MIRATheme.Color.forest : MIRATheme.Color.textMuted.opacity(0.55))
-      .clipShape(Capsule())
-      .disabled(isPosting || !canPostNote)
-    }
-    .padding(.horizontal, MIRATheme.Space.md)
-    .padding(.top, MIRATheme.Space.sm)
-    .padding(.bottom, MIRATheme.Space.md)
-    .background(MIRATheme.Color.surface)
-  }
-
-  private var gifSearchPanel: some View {
-    VStack(alignment: .leading, spacing: MIRATheme.Space.sm) {
-      HStack(spacing: MIRATheme.Space.sm) {
-        TextField("Search GIFs", text: $gifQuery)
-          .textInputAutocapitalization(.never)
-          .autocorrectionDisabled()
-          .font(.system(size: 15, weight: .medium))
-          .padding(.horizontal, MIRATheme.Space.md)
-          .frame(height: 44)
-          .background(MIRATheme.Color.surfaceSoft.opacity(0.80))
-          .clipShape(Capsule())
-          .onSubmit { Task { await searchGIFs() } }
-
-        Button {
-          Task { await searchGIFs() }
-        } label: {
-          if isSearchingGIFs {
-            ProgressView().tint(MIRATheme.Color.forest)
-          } else {
-            Image(systemName: "magnifyingglass")
-              .font(.system(size: 17, weight: .semibold))
-          }
-        }
-        .foregroundStyle(MIRATheme.Color.forest)
-        .frame(width: 44, height: 44)
-        .background(MIRATheme.Color.forestSoft)
-        .clipShape(Circle())
-        .buttonStyle(.plain)
-      }
-
-      if !gifResults.isEmpty {
-        ScrollView(.horizontal, showsIndicators: false) {
-          HStack(spacing: MIRATheme.Space.sm) {
-            ForEach(gifResults) { gif in
-              Button {
-                gifURL = gif.mediaUrl ?? gif.previewUrl ?? ""
-              } label: {
-                RemoteMediaView(url: gif.previewUrl ?? gif.mediaUrl ?? "", isVideo: false)
-                  .frame(width: 92, height: 92)
-                  .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.small, style: .continuous))
-                  .overlay(
-                    RoundedRectangle(cornerRadius: MIRATheme.Radius.small, style: .continuous)
-                      .stroke((gif.mediaUrl == gifURL || gif.previewUrl == gifURL) ? MIRATheme.Color.forest : .clear, lineWidth: 2)
-                  )
-              }
-              .buttonStyle(.plain)
-            }
-          }
-          .padding(.vertical, 2)
-        }
-      } else {
-        Text(isSearchingGIFs ? "Loading GIFs..." : "Tap search or type a word to find GIFs.")
-          .font(.system(size: 13, weight: .medium))
-          .foregroundStyle(MIRATheme.Color.textMuted)
-      }
-    }
-  }
-
-  private func submit() async {
-    isPosting = true
-    defer { isPosting = false }
-    do {
-      let uploadedURL: String?
-      if let mediaItem {
-        uploadedURL = try await MIRAMediaUploadService(api: api).upload(mediaItem)
-      } else {
-        let cleanGIF = gifURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        uploadedURL = cleanGIF.isEmpty ? nil : cleanGIF
-      }
-      let _: MIRANote = try await api.post("/notes", body: CreateNoteBody(body: noteText, mediaUrl: uploadedURL, color: "#FFFFFF"))
-      dismiss()
-    } catch {
-      errorMessage = "Note could not be created."
-    }
-  }
-
-  private var canPostNote: Bool {
-    noteText.trimmingCharacters(in: .whitespacesAndNewlines).count >= 2 ||
-      mediaItem != nil ||
-      !gifURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-  }
-
-  private var canSaveDraft: Bool {
-    canPostNote
-  }
-
-  private var noteMediaPreview: some View {
-    Group {
-      if let mediaItem {
-        LocalMediaThumb(media: mediaItem, width: UIScreen.main.bounds.width - 94, height: 260)
-      } else if !gifURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-        RemoteMediaView(url: gifURL, isVideo: false)
-          .frame(maxWidth: .infinity)
-          .frame(height: 260)
-          .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.large, style: .continuous))
-      }
-    }
-  }
-
-  @MainActor
-  private func loadCurrentUser() async {
-    guard currentUser == nil else { return }
-    currentUser = try? await api.get("/auth/me")
-  }
-
-  private func saveDraft() {
-    UserDefaults.standard.set(noteText, forKey: "mira.noteDraft.text")
-    UserDefaults.standard.set(gifURL, forKey: "mira.noteDraft.gifURL")
-  }
-
-  private func restoreDraft() {
-    guard noteText.isEmpty && gifURL.isEmpty && mediaItem == nil else { return }
-    noteText = UserDefaults.standard.string(forKey: "mira.noteDraft.text") ?? ""
-    gifURL = UserDefaults.standard.string(forKey: "mira.noteDraft.gifURL") ?? ""
-    showGIFField = !gifURL.isEmpty
-  }
-
-  @MainActor
-  private func openGIFPicker() {
-    let shouldLoadInitialResults = gifResults.isEmpty
-    withAnimation(.snappy(duration: 0.18)) {
-      showGIFField = true
-    }
-    guard shouldLoadInitialResults else { return }
-    if gifQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-      gifQuery = "reaction"
-    }
-    Task { await searchGIFs() }
-  }
-
-  @MainActor
-  private func searchGIFs() async {
-    let clean = gifQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard clean.count >= 2 else {
-      gifResults = []
-      return
-    }
-    isSearchingGIFs = true
-    defer { isSearchingGIFs = false }
-    var components = URLComponents()
-    components.queryItems = [
-      URLQueryItem(name: "q", value: clean),
-      URLQueryItem(name: "limit", value: "18"),
-    ]
-    let query = components.percentEncodedQuery ?? "q=\(clean)"
-    do {
-      let response: MIRAGifSearchResponse = try await api.get("/gifs/search?\(query)")
-      gifResults = response.gifs
-      errorMessage = nil
-    } catch {
-      errorMessage = "GIF search is not available yet."
-    }
-  }
-
-  @MainActor
-  private func loadPickerItem(_ item: PhotosPickerItem?) async {
-    guard let item else { return }
-    isLoadingMedia = true
-    defer {
-      isLoadingMedia = false
-      pickerItem = nil
-    }
-    guard let data = try? await item.loadTransferable(type: Data.self) else { return }
-    let (kind, fileName, mimeType) = pickedMediaKind(from: item.supportedContentTypes, fallbackData: data)
-    mediaItem = MIRAPickedMedia(data: data, kind: kind, fileName: fileName, mimeType: mimeType)
-  }
-}
-
 public struct CreateStoryNativeView: View {
   let api: MIRAAPIClient
   private let onClose: (() -> Void)?
   @Environment(\.dismiss) private var dismiss
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  @State private var showCamera = false
-  @State private var didOpenInitialCamera = false
+  @State private var showCamera = true
   @State private var isPosting = false
   @State private var errorMessage: String?
   @State private var editingMedia: MIRAEditorPresentation?
+  @State private var editedStoryCameraMedia: MIRAPickedMedia?
+  @State private var pendingStoryMedia: MIRAPickedMedia?
+  @State private var selectedAudioTrack: MIRAAudiusTrack?
+  @State private var showMusicPicker = false
 
   public init(api: MIRAAPIClient, onClose: (() -> Void)? = nil) {
     self.api = api
@@ -1684,7 +3446,10 @@ public struct CreateStoryNativeView: View {
     ZStack {
       Color.black.ignoresSafeArea()
 
-      VStack {
+      if let pendingStoryMedia {
+        storyPublishPage(media: pendingStoryMedia)
+      } else {
+        VStack {
         HStack {
           Button { close() } label: {
             Image(systemName: "xmark")
@@ -1723,54 +3488,193 @@ public struct CreateStoryNativeView: View {
                 .clipShape(Capsule())
             }
           } else {
-            ProgressView()
-              .tint(.white)
-            Text("Opening camera...")
-              .font(.system(size: 15, weight: .semibold))
-              .foregroundStyle(.white.opacity(0.72))
+            Color.clear
+              .frame(width: 1, height: 1)
           }
         }
 
         Spacer()
       }
+      }
     }
     .toolbar(.hidden, for: .navigationBar)
-    .toolbar(.hidden, for: .tabBar)
+    .miraHideTabBarOnAppear()
     .navigationBarBackButtonHidden(true)
     .statusBarHidden(true)
+    .miraStatusBarHidden(true)
     .miraScreenEnter(.modal)
-    .task {
-      guard !didOpenInitialCamera else { return }
-      didOpenInitialCamera = true
-      showCamera = true
+    .onAppear {
+      MIRAPlaybackCoordinator.pauseAll(reason: "story_creation_open")
     }
     .miraFullScreenOverlay(isPresented: $showCamera, background: .black) { closeCamera in
       MIRAStoryLiveCameraView(
+        editedMedia: editedStoryCameraMedia,
+        captureMode: .videoOnly,
+        showsGridOverlay: false,
         dismissesOnCapture: false,
         dismissesOnCancel: false,
         onCapture: { media in
           closeCamera()
-          presentStoryEditor(for: media)
+          editedStoryCameraMedia = nil
+          pendingStoryMedia = media
         },
         onCancel: {
           closeCamera()
           DispatchQueue.main.asyncAfter(deadline: .now() + (reduceMotion ? 0.08 : MIRATransitionTiming.fullScreenClose)) {
             close()
           }
+        },
+        onMusic: {
+          showMusicPicker = true
+        },
+        onEdit: { media, _ in
+          editingMedia = MIRAEditorPresentation(media: media, returnsToCamera: true)
         }
       )
       .ignoresSafeArea()
     }
     .miraFullScreenOverlay(item: $editingMedia, background: .black) { item, closeEditor in
       MIRANativeMediaEditorView(media: item.media, mode: .story, onClose: closeEditor) { edited in
-        Task { await submit(media: edited) }
+        if item.returnsToCamera {
+          editedStoryCameraMedia = edited
+        } else {
+          pendingStoryMedia = edited
+        }
+        closeEditor()
       }
       .ignoresSafeArea()
+      .statusBarHidden(true)
+      .miraStatusBarHidden(true)
+    }
+    .miraBottomSheet(isPresented: $showMusicPicker, preferredHeightFraction: 0.78) { closeSheet in
+      MIRAAudiusMusicPickerSheet(api: api, selectedTrack: $selectedAudioTrack, onClose: closeSheet)
     }
   }
 
+  private func storyPublishPage(media: MIRAPickedMedia) -> some View {
+    GeometryReader { proxy in
+      VStack(spacing: 0) {
+        HStack {
+          Button {
+            pendingStoryMedia = nil
+            editedStoryCameraMedia = nil
+            selectedAudioTrack = nil
+            errorMessage = nil
+            showCamera = true
+          } label: {
+            Image(systemName: "chevron.left")
+              .font(.system(size: 28, weight: .medium))
+              .foregroundStyle(.white)
+              .frame(width: 50, height: 50)
+          }
+          .buttonStyle(.plain)
+
+          Spacer()
+
+          Button { close() } label: {
+            Image(systemName: "xmark")
+              .font(.system(size: 22, weight: .semibold))
+              .foregroundStyle(.white)
+              .frame(width: 50, height: 50)
+          }
+          .buttonStyle(.plain)
+        }
+        .padding(.horizontal, MIRATheme.Space.sm)
+        .padding(.top, proxy.safeAreaInsets.top + 4)
+
+        LocalMediaThumb(
+          media: media,
+          width: min(proxy.size.width - 28, 430),
+          height: min(proxy.size.height * 0.70, (proxy.size.width - 28) * 16 / 9),
+          cornerRadius: 24
+        )
+        .padding(.top, MIRATheme.Space.sm)
+        .shadow(color: .black.opacity(0.28), radius: 18, x: 0, y: 10)
+
+        if let errorMessage {
+          Text(errorMessage)
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(.white.opacity(0.86))
+            .multilineTextAlignment(.center)
+            .padding(.horizontal, MIRATheme.Space.md)
+            .padding(.top, MIRATheme.Space.md)
+        }
+
+        Spacer(minLength: MIRATheme.Space.md)
+
+        VStack(spacing: MIRATheme.Space.sm) {
+          Button {
+            showMusicPicker = true
+          } label: {
+            HStack(spacing: MIRATheme.Space.sm) {
+              Image(systemName: "music.note")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 36, height: 36)
+                .background(MIRATheme.Color.forest)
+                .clipShape(Circle())
+
+              VStack(alignment: .leading, spacing: 2) {
+                Text(selectedAudioTrack?.displayTitle ?? "Add music")
+                  .font(.system(size: 15, weight: .semibold))
+                  .foregroundStyle(.white)
+                  .lineLimit(1)
+                Text(selectedAudioTrack?.displayArtist ?? "Search Audius tracks")
+                  .font(.system(size: 12, weight: .medium))
+                  .foregroundStyle(.white.opacity(0.68))
+                  .lineLimit(1)
+              }
+
+              Spacer()
+
+              Image(systemName: "chevron.right")
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(.white.opacity(0.68))
+            }
+            .padding(.horizontal, MIRATheme.Space.md)
+            .frame(height: 58)
+            .background(.white.opacity(0.14))
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+          }
+          .buttonStyle(.miraPress)
+
+          Button {
+            Task { await submit(media: media) }
+          } label: {
+            HStack(spacing: 8) {
+              if isPosting {
+                ProgressView()
+                  .tint(.white)
+                  .scaleEffect(0.74)
+              }
+              Text(isPosting ? "Posting" : "Share story")
+                .font(.system(size: 16, weight: .bold))
+            }
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity)
+            .frame(height: 54)
+            .background(MIRATheme.Color.forest)
+            .clipShape(Capsule())
+          }
+          .buttonStyle(.miraPress)
+          .disabled(isPosting)
+        }
+        .padding(.horizontal, MIRATheme.Space.md)
+        .padding(.bottom, max(proxy.safeAreaInsets.bottom + 12, 26))
+      }
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+    .statusBarHidden(true)
+    .miraStatusBarHidden(true)
+  }
+
   private func submit(media: MIRAPickedMedia) async {
+    guard media.kind == .video else {
+      errorMessage = "Stories are video-only."
+      return
+    }
     isPosting = true
+    MIRAPerformanceTimeline.mark("post_upload_start", detail: "story")
     defer { isPosting = false }
     do {
       let uploaded = try await MIRAMediaUploadService(api: api).upload(media)
@@ -1782,21 +3686,26 @@ public struct CreateStoryNativeView: View {
           backgroundColor: "#1B4332",
           textColor: "#FFFFFF",
           visibility: "public",
-          editorMetadata: media.editorMetadata
+          mediaType: media.kind == .video ? "video" : "image",
+          duration: media.kind == .video ? 15 : nil,
+          editorMetadata: media.editorMetadata,
+          audioProvider: selectedAudioTrack == nil ? nil : "audius",
+          audioTrackId: selectedAudioTrack?.resolvedTrackId,
+          audioTitle: selectedAudioTrack?.displayTitle,
+          audioArtist: selectedAudioTrack?.displayArtist,
+          audioArtworkUrl: selectedAudioTrack?.artworkUrl,
+          audioStreamUrl: selectedAudioTrack?.streamUrl,
+          audioStartTime: selectedAudioTrack == nil ? nil : 0,
+          audioDuration: selectedAudioTrack.map { min(max($0.duration ?? 15, 5), 30) }
         )
       )
+      MIRAPerformanceTimeline.mark("post_upload_complete", detail: "story")
       close()
     } catch {
+      MIRAPerformanceTimeline.mark("post_upload_failed", detail: "story")
       errorMessage = "Story could not be posted."
     }
   }
-
-  private func presentStoryEditor(for media: MIRAPickedMedia) {
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-      editingMedia = MIRAEditorPresentation(media: media)
-    }
-  }
-
   private func close() {
     if let onClose {
       onClose()
@@ -1951,6 +3860,7 @@ private struct LocalMediaThumb: View {
   var width: CGFloat = 96
   var height: CGFloat = 96
   var cornerRadius: CGFloat = 18
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var isVideoPlaying = false
 
   var body: some View {
@@ -1977,8 +3887,8 @@ private struct LocalMediaThumb: View {
     .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
     .onTapGesture {
       guard media.kind == .video else { return }
-      UIImpactFeedbackGenerator(style: .light).impactOccurred()
-      withAnimation(.easeInOut(duration: 0.14)) {
+      CaptroHaptics.light()
+      withAnimation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion)) {
         isVideoPlaying.toggle()
       }
     }

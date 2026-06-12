@@ -1,23 +1,51 @@
-// Flames-Up Cloudflare Workers API — Hono + D1 + CF Images + CF Stream
+// Captro Cloudflare Workers API — Hono + Supabase Postgres + Cloudflare Images/R2/Stream
 // Deploy: wrangler deploy --env production --keep-vars
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import bcrypt from 'bcryptjs';
 import { RtcRole, RtcTokenBuilder } from 'agora-token';
 
+type MediaModerationJobMessage = {
+  jobId: string;
+  mediaId: string;
+  userId: string;
+  reason: 'upload_complete' | 'manual_retry' | 'admin_retry';
+  caption?: string;
+};
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 interface Env {
   DB: D1Database;
   KV?: KVNamespace;
   HYPERDRIVE?: any;
+  AI?: any;
+  MEDIA_MODERATION_QUEUE?: Queue<MediaModerationJobMessage>;
   MEDIA_BACKUP?: R2Bucket;
   JWT_SECRET: string;
   CLOUDFLARE_ACCOUNT_ID: string;
+  CLOUDFLARE_API_TOKEN?: string;
+  CF_API_TOKEN?: string;
+  CF_ACCOUNT_ID?: string;
+  CF_ACCOUNT_HASH?: string;
   CLOUDFLARE_IMAGES_ACCOUNT_HASH?: string;
-  CLOUDFLARE_IMAGES_TOKEN: string;
+  CLOUDFLARE_IMAGES_TOKEN?: string;
   CLOUDFLARE_IMAGES_FEED_VARIANT?: string;
   CLOUDFLARE_IMAGES_THUMBNAIL_VARIANT?: string;
-  CLOUDFLARE_STREAM_TOKEN: string;
+  CLOUDFLARE_IMAGES_REQUIRE_SIGNED_URLS?: string;
+  CLOUDFLARE_IMAGE_TRANSFORMS_ENABLED?: string;
+  CLOUDFLARE_IMAGE_TRANSFORM_BASE_URL?: string;
+  CLOUDFLARE_STREAM_TOKEN?: string;
+  RESEND_API_KEY?: string;
+  EMAIL_FROM?: string;
+  EMAIL_VERIFICATION_BASE_URL?: string;
+  AI_IMAGE_MODERATION_MODEL?: string;
+  AI_TEXT_MODERATION_MODEL?: string;
+  AI_GENERATED_MEDIA_POLICY?: string;
+  MALWARE_SCANNER_URL?: string;
+  MALWARE_SCANNER_TOKEN?: string;
+  MEDIA_MAX_IMAGE_BYTES?: string;
+  MEDIA_MAX_VIDEO_BYTES?: string;
+  POST_ASSIST_MODEL?: string;
   MAPBOX_ACCESS_TOKEN?: string;
   ENVIRONMENT?: string;
   FRONTEND_URL: string;
@@ -26,8 +54,13 @@ interface Env {
   GOOGLE_OAUTH_CLIENT_ID?: string;
   GOOGLE_OAUTH_CLIENT_IDS?: string;
   SUPABASE_URL?: string;
+  SUPABASE_ANON_KEY?: string;
   SUPABASE_JWT_ISSUER?: string;
   SUPABASE_SERVICE_ROLE_KEY?: string;
+  DATABASE_PRIMARY?: string;
+  APPLE_OAUTH_CLIENT_ID?: string;
+  APPLE_OAUTH_CLIENT_SECRET?: string;
+  APPLE_REVOKE_CLIENT_SECRET?: string;
   APPLE_OAUTH_AUDIENCE?: string;
   APPLE_OAUTH_AUDIENCES?: string;
   TWILIO_ACCOUNT_SID?: string;
@@ -35,7 +68,6 @@ interface Env {
   TWILIO_VERIFY_SERVICE_SID?: string;
   TWILIO_SERVICE_SID?: string;
   TWILIO_FROM_PHONE?: string;
-  GIPHY_API_KEY?: string;
   AGORA_APP_ID?: string;
   AGORA_APP_CERTIFICATE?: string;
   AGORA_TOKEN_TTL_SECONDS?: string;
@@ -46,6 +78,7 @@ interface Env {
   APNS_VOIP_PRIVATE_KEY?: string;
   APNS_ENVIRONMENT?: string;
   MEDIA_BACKUP_MAX_VIDEO_BYTES?: string;
+  PUBLIC_API_BASE_URL?: string;
   SOURCE_COMMIT?: string;
   WORKER_VERSION?: string;
   STRIPE_SECRET_KEY?: string;
@@ -71,7 +104,7 @@ type HonoApp = { Bindings: Env; Variables: { userId: string; requestId: string }
 
 const app = new Hono<HonoApp>();
 const API_VERSION = '2.0';
-const WORKER_NAME = 'flames-up-api';
+const WORKER_NAME = 'captro-api';
 
 // Root handler
 app.get('/', (c) => c.json({ name: 'Captro API', version: API_VERSION, status: 'live', docs: '/api/health' }));
@@ -107,7 +140,18 @@ function allowedCorsOrigin(origin: string, c?: any) {
 const corsOpts = {
   origin: allowedCorsOrigin,
   allowMethods: ['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowHeaders: ['Authorization', 'Content-Type', 'Range', 'Idempotency-Key', 'X-Idempotency-Key', 'X-Request-ID'],
+  allowHeaders: [
+    'Authorization',
+    'Content-Type',
+    'Range',
+    'Idempotency-Key',
+    'X-Idempotency-Key',
+    'X-Request-ID',
+    'X-Captro-Device-Trust-Mode',
+    'X-Captro-Device-Trust-Action',
+    'X-Captro-App-Attest-Supported',
+    'X-Captro-DeviceCheck-Token'
+  ],
   exposeHeaders: ['Accept-Ranges', 'Content-Length', 'Content-Range', 'Content-Type', 'ETag', 'Server-Timing', 'X-Request-ID', 'X-Response-Time'],
   maxAge: 600,
 };
@@ -165,7 +209,7 @@ app.use('*', securityHeaders);
 api.use('*', securityHeaders);
 
 const retiredFeature = (feature: string) => (c: any) => c.json({
-  detail: `${feature} has been removed from Flames Up.`,
+  detail: `${feature} has been removed from Captro.`,
 }, 410);
 
 api.all('/publisher/*', retiredFeature('Publisher tools'));
@@ -182,12 +226,16 @@ api.all('/challenge-entries/*', retiredFeature('Challenge entries'));
 api.all('/admin/challenges', retiredFeature('Challenge admin tools'));
 api.all('/admin/challenges/*', retiredFeature('Challenge admin tools'));
 api.all('/music', retiredFeature('Music'));
-api.all('/music/*', retiredFeature('Music'));
+api.use('/music/*', async (c, next) => {
+  const path = new URL(c.req.url).pathname;
+  if (path.startsWith('/api/music/audius/')) {
+    await next();
+    return;
+  }
+  return retiredFeature('Music')(c);
+});
 api.all('/admin/music', retiredFeature('Music admin tools'));
 api.all('/admin/music/*', retiredFeature('Music admin tools'));
-api.all('/admin/notes', retiredFeature('Notes admin tools'));
-api.all('/admin/notes/*', retiredFeature('Notes admin tools'));
-
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 const uuid = () => crypto.randomUUID();
 const now = () => new Date().toISOString();
@@ -246,15 +294,16 @@ const authMiddleware = async (c: any, next: () => Promise<void>) => {
   if (!userId) return c.json({ detail: 'Invalid token', code: 'INVALID_TOKEN' }, 401);
 
   try {
+    await ensureAccountDeletionSchema(c.env.DB);
     let user: any;
     try {
-      user = await c.env.DB.prepare('SELECT id, status, suspended_until FROM users WHERE id = ?').bind(userId).first();
+      user = await c.env.DB.prepare('SELECT id, status, suspended_until, session_revoked_at FROM users WHERE id = ?').bind(userId).first();
     } catch (error: any) {
       const message = String(error?.message || '');
       if (message.includes('no such column: suspended_until')) {
-        user = await c.env.DB.prepare('SELECT id, status, NULL AS suspended_until FROM users WHERE id = ?').bind(userId).first();
+        user = await c.env.DB.prepare('SELECT id, status, NULL AS suspended_until, NULL AS session_revoked_at FROM users WHERE id = ?').bind(userId).first();
       } else if (message.includes('no such column: status')) {
-        user = await c.env.DB.prepare("SELECT id, 'active' AS status, NULL AS suspended_until FROM users WHERE id = ?").bind(userId).first();
+        user = await c.env.DB.prepare("SELECT id, 'active' AS status, NULL AS suspended_until, NULL AS session_revoked_at FROM users WHERE id = ?").bind(userId).first();
       } else {
         throw error;
       }
@@ -263,6 +312,18 @@ const authMiddleware = async (c: any, next: () => Promise<void>) => {
     if (!user) return c.json({ detail: 'Session user was not found.', code: 'USER_NOT_FOUND' }, 401);
 
     const accountStatus = String(user?.status || 'active');
+    const revokedAt = Date.parse(String(user?.session_revoked_at || ''));
+    const issuedAt = Number((payload as any)?.iat || 0) * 1000;
+    if (Number.isFinite(revokedAt) && revokedAt > 0 && (!issuedAt || issuedAt + 1000 < revokedAt)) {
+      return c.json({ detail: 'Session expired. Please sign in again.', code: 'SESSION_REVOKED' }, 401);
+    }
+    const requestPath = new URL(c.req.url).pathname;
+    const deletionAccessAllowed = requestPath === '/api/auth/me'
+      || requestPath === '/api/account/restore'
+      || requestPath === '/api/account/deletion-status';
+    if (accountStatus === 'deletion_pending' && !deletionAccessAllowed) {
+      return c.json({ detail: 'This account is pending deletion.', code: 'ACCOUNT_DELETION_PENDING' }, 403);
+    }
     if (accountStatus === 'suspended') {
       const suspendedUntil = Date.parse(String(user?.suspended_until || ''));
       if (Number.isFinite(suspendedUntil) && suspendedUntil <= Date.now()) {
@@ -314,7 +375,7 @@ async function getOptionalUserId(c: any): Promise<string> {
     }
 
     const optionalStatus = String(user?.status || 'active');
-    if (!user || optionalStatus === 'banned' || optionalStatus === 'deleted') return '';
+    if (!user || optionalStatus === 'banned' || optionalStatus === 'deleted' || optionalStatus === 'deletion_pending') return '';
     if (optionalStatus === 'suspended') {
       const suspendedUntil = Date.parse(String(user?.suspended_until || ''));
       if (!Number.isFinite(suspendedUntil) || suspendedUntil > Date.now()) return '';
@@ -328,6 +389,7 @@ async function getOptionalUserId(c: any): Promise<string> {
   } catch {
     try {
       const resolved = await resolveSupabaseSessionUser(c, token);
+      if (['banned', 'deleted', 'deletion_pending'].includes(String(resolved.user?.status || 'active'))) return '';
       c.set('jwtPayload', resolved.payload);
       return resolved.userId;
     } catch {
@@ -340,6 +402,7 @@ async function createToken(userId: string, secret: string): Promise<string> {
   const { SignJWT } = await import('jose');
   return new SignJWT({ sub: userId })
     .setProtectedHeader({ alg: 'HS256' })
+    .setIssuedAt()
     .setExpirationTime('30d')
     .sign(new TextEncoder().encode(secret));
 }
@@ -494,6 +557,7 @@ async function ensureUniqueUsername(db: D1Database, desired: string): Promise<st
 }
 
 let phoneAuthSchemaReady = false;
+let accountVerificationSchemaReady = false;
 let oauthSchemaReady = false;
 let supabaseAuthSchemaReady = false;
 let privacySchemaReady = false;
@@ -504,7 +568,6 @@ let audioSchemaReady = false;
 let postEditorSchemaReady = false;
 let recommendationSchemaReady = false;
 let aiMusicSchemaReady = false;
-let notesSchemaReady = false;
 let peopleSchemaReady = false;
 let reliabilitySchemaReady = false;
 let walletSchemaReady = false;
@@ -513,6 +576,15 @@ let abuseProtectionSchemaReady = false;
 let messagePresenceSchemaReady = false;
 let productionReadinessSchemaReady = false;
 let adminModerationSchemaReady = false;
+let autoCategorySchemaReady = false;
+let autoCategoryBackfillReady = false;
+let locationSchemaReady = false;
+let statusThoughtSchemaReady = false;
+let statusLikeSchemaReady = false;
+let mediaModerationSchemaReady = false;
+let accountDeletionSchemaReady = false;
+let groupChatSchemaReady = false;
+let likeUniquenessSchemaReady = false;
 
 function normalizeSchemaSql(statement: string): string {
   return statement.replace(/\s+/g, ' ').trim().replace(/;$/, '');
@@ -602,6 +674,178 @@ async function ensureReliabilitySchema(db: D1Database) {
   reliabilitySchemaReady = true;
 }
 
+async function ensureLikeUniquenessSchema(db: D1Database) {
+  if (likeUniquenessSchemaReady) return;
+
+  const statements = [
+    `CREATE TABLE IF NOT EXISTS likes (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      post_id TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`,
+    `DELETE FROM likes
+     WHERE id IN (
+       SELECT id FROM (
+         SELECT id,
+                ROW_NUMBER() OVER (PARTITION BY user_id, post_id ORDER BY COALESCE(created_at, ''), id) AS rn
+         FROM likes
+       )
+       WHERE rn > 1
+     )`,
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_likes_user_post_unique ON likes(user_id, post_id)',
+    'ALTER TABLE posts ADD COLUMN likes_count INTEGER DEFAULT 0',
+    `CREATE TABLE IF NOT EXISTS discover_likes (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      post_id TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`,
+    `DELETE FROM discover_likes
+     WHERE id IN (
+       SELECT id FROM (
+         SELECT id,
+                ROW_NUMBER() OVER (PARTITION BY user_id, post_id ORDER BY COALESCE(created_at, ''), id) AS rn
+         FROM discover_likes
+       )
+       WHERE rn > 1
+    )`,
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_discover_likes_user_post_unique ON discover_likes(user_id, post_id)',
+    `CREATE TABLE IF NOT EXISTS saved_posts (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      post_id TEXT NOT NULL,
+      collection TEXT DEFAULT 'saved',
+      created_at TEXT DEFAULT (datetime('now'))
+    )`,
+    `DELETE FROM saved_posts
+     WHERE id IN (
+       SELECT id FROM (
+         SELECT id,
+                ROW_NUMBER() OVER (PARTITION BY user_id, post_id ORDER BY COALESCE(created_at, ''), id) AS rn
+         FROM saved_posts
+       )
+       WHERE rn > 1
+     )`,
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_saved_posts_user_post_unique ON saved_posts(user_id, post_id)',
+    `INSERT OR IGNORE INTO likes (id, user_id, post_id, created_at)
+     SELECT 'discover:' || user_id || ':' || post_id,
+            user_id,
+            post_id,
+            COALESCE(created_at, datetime('now'))
+     FROM discover_likes
+     WHERE EXISTS (SELECT 1 FROM posts WHERE posts.id = discover_likes.post_id)`,
+    `DELETE FROM likes
+     WHERE id IN (
+       SELECT id FROM (
+         SELECT id,
+                ROW_NUMBER() OVER (PARTITION BY user_id, post_id ORDER BY COALESCE(created_at, ''), id) AS rn
+         FROM likes
+       )
+       WHERE rn > 1
+     )`,
+    `CREATE TABLE IF NOT EXISTS comment_likes (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      comment_id TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`,
+    `DELETE FROM comment_likes
+     WHERE id IN (
+       SELECT id FROM (
+         SELECT id,
+                ROW_NUMBER() OVER (PARTITION BY user_id, comment_id ORDER BY COALESCE(created_at, ''), id) AS rn
+         FROM comment_likes
+       )
+       WHERE rn > 1
+     )`,
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_comment_likes_user_comment_unique ON comment_likes(user_id, comment_id)',
+    'ALTER TABLE comments ADD COLUMN likes_count INTEGER DEFAULT 0',
+    `CREATE TABLE IF NOT EXISTS status_likes (
+      id TEXT PRIMARY KEY,
+      status_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(status_id, user_id)
+    )`,
+    `DELETE FROM status_likes
+     WHERE id IN (
+       SELECT id FROM (
+         SELECT id,
+                ROW_NUMBER() OVER (PARTITION BY status_id, user_id ORDER BY COALESCE(created_at, ''), id) AS rn
+         FROM status_likes
+       )
+       WHERE rn > 1
+     )`,
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_status_likes_status_user_unique ON status_likes(status_id, user_id)',
+    `UPDATE posts
+     SET likes_count = (
+       SELECT COUNT(*)
+       FROM likes
+       WHERE likes.post_id = posts.id
+     )`,
+    `UPDATE comments
+     SET likes_count = (
+       SELECT COUNT(*)
+       FROM comment_likes
+       WHERE comment_likes.comment_id = comments.id
+     )`,
+    `UPDATE discover_posts
+     SET likes_count = CASE
+       WHEN EXISTS (SELECT 1 FROM posts WHERE posts.id = discover_posts.id) THEN (
+         SELECT COUNT(*)
+         FROM likes
+         WHERE likes.post_id = discover_posts.id
+       )
+       ELSE (
+         SELECT COUNT(*)
+         FROM discover_likes
+         WHERE discover_likes.post_id = discover_posts.id
+       )
+     END`,
+  ];
+
+  for (const statement of statements) {
+    try {
+      await runSchemaStatement(db, statement);
+    } catch (error: any) {
+      if (!isIgnorableSchemaError(error, statement)) {
+        throw error;
+      }
+    }
+  }
+
+  likeUniquenessSchemaReady = true;
+}
+
+async function reconcileLegacyDiscoverLikes(db: D1Database, postId: string) {
+  await db.batch([
+    db.prepare(
+      `INSERT OR IGNORE INTO likes (id, user_id, post_id, created_at)
+       SELECT 'discover:' || user_id || ':' || post_id,
+              user_id,
+              post_id,
+              COALESCE(created_at, datetime('now'))
+       FROM discover_likes
+       WHERE post_id = ?
+         AND EXISTS (SELECT 1 FROM posts WHERE posts.id = discover_likes.post_id)`
+    ).bind(postId),
+    db.prepare(
+      `DELETE FROM likes
+       WHERE post_id = ?
+         AND id IN (
+           SELECT id FROM (
+             SELECT id,
+                    ROW_NUMBER() OVER (PARTITION BY user_id, post_id ORDER BY COALESCE(created_at, ''), id) AS rn
+             FROM likes
+             WHERE post_id = ?
+           )
+           WHERE rn > 1
+         )`
+    ).bind(postId, postId),
+  ]);
+}
+
 async function ensureMessagePresenceSchema(db: D1Database) {
   if (messagePresenceSchemaReady) return;
 
@@ -648,6 +892,57 @@ async function ensureMessagePresenceSchema(db: D1Database) {
   }
 
   messagePresenceSchemaReady = true;
+}
+
+async function ensureGroupChatSchema(db: D1Database) {
+  if (groupChatSchemaReady) return;
+
+  const statements = [
+    `CREATE TABLE IF NOT EXISTS group_chats (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      created_by TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY(created_by) REFERENCES users(id)
+    )`,
+    `CREATE TABLE IF NOT EXISTS group_chat_members (
+      id TEXT PRIMARY KEY,
+      group_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      role TEXT DEFAULT 'member',
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(group_id, user_id),
+      FOREIGN KEY(group_id) REFERENCES group_chats(id),
+      FOREIGN KEY(user_id) REFERENCES users(id)
+    )`,
+    `CREATE TABLE IF NOT EXISTS group_messages (
+      id TEXT PRIMARY KEY,
+      group_id TEXT NOT NULL,
+      sender_id TEXT NOT NULL,
+      content TEXT NOT NULL,
+      media_url TEXT,
+      media_type TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY(group_id) REFERENCES group_chats(id),
+      FOREIGN KEY(sender_id) REFERENCES users(id)
+    )`,
+    'CREATE INDEX IF NOT EXISTS idx_group_chat_members_user ON group_chat_members(user_id)',
+    'CREATE INDEX IF NOT EXISTS idx_group_chat_members_group ON group_chat_members(group_id)',
+    'CREATE INDEX IF NOT EXISTS idx_group_messages_group ON group_messages(group_id, created_at)',
+  ];
+
+  for (const statement of statements) {
+    try {
+      await runSchemaStatement(db, statement);
+    } catch (error: any) {
+      if (!isIgnorableSchemaError(error, statement)) {
+        throw error;
+      }
+    }
+  }
+
+  groupChatSchemaReady = true;
 }
 
 async function touchUserPresence(db: D1Database, userId: string) {
@@ -807,6 +1102,67 @@ async function ensurePrivacySchema(db: D1Database) {
   privacySchemaReady = true;
 }
 
+async function ensureStatusThoughtSchema(db: D1Database) {
+  if (statusThoughtSchemaReady) return;
+  await ensurePrivacySchema(db);
+  await ensureAbuseProtectionSchema(db);
+
+  const statements = [
+    `CREATE TABLE IF NOT EXISTS status_thoughts (
+      id TEXT PRIMARY KEY,
+      status_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      body TEXT NOT NULL,
+      status TEXT DEFAULT 'active',
+      created_at TEXT NOT NULL,
+      removed_at TEXT
+    )`,
+    'CREATE INDEX IF NOT EXISTS idx_status_thoughts_status_created ON status_thoughts(status_id, status, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_status_thoughts_user_created ON status_thoughts(user_id, created_at)',
+  ];
+
+  for (const statement of statements) {
+    try {
+      await runSchemaStatement(db, statement);
+    } catch (error: any) {
+      if (!isIgnorableSchemaError(error, statement)) {
+        throw error;
+      }
+    }
+  }
+
+  statusThoughtSchemaReady = true;
+}
+
+async function ensureStatusLikeSchema(db: D1Database) {
+  if (statusLikeSchemaReady) return;
+  await ensurePrivacySchema(db);
+
+  const statements = [
+    `CREATE TABLE IF NOT EXISTS status_likes (
+      id TEXT PRIMARY KEY,
+      status_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(status_id, user_id)
+    )`,
+    'CREATE INDEX IF NOT EXISTS idx_status_likes_status ON status_likes(status_id, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_status_likes_user ON status_likes(user_id, created_at)',
+  ];
+
+  for (const statement of statements) {
+    try {
+      await runSchemaStatement(db, statement);
+    } catch (error: any) {
+      if (!isIgnorableSchemaError(error, statement)) {
+        throw error;
+      }
+    }
+  }
+
+  statusLikeSchemaReady = true;
+}
+
 async function ensurePostEditorSchema(db: D1Database) {
   if (postEditorSchemaReady) return;
 
@@ -815,6 +1171,10 @@ async function ensurePostEditorSchema(db: D1Database) {
     "ALTER TABLE posts ADD COLUMN editor_overlays TEXT DEFAULT '[]'",
     "ALTER TABLE posts ADD COLUMN tagged_users TEXT DEFAULT '[]'",
     "ALTER TABLE posts ADD COLUMN media_dimensions TEXT DEFAULT '[]'",
+    'ALTER TABLE posts ADD COLUMN saves_count INTEGER DEFAULT 0',
+    'ALTER TABLE posts ADD COLUMN shares_count INTEGER DEFAULT 0',
+    'ALTER TABLE posts ADD COLUMN views_count INTEGER DEFAULT 0',
+    'CREATE INDEX IF NOT EXISTS idx_posts_type_created ON posts(post_type, created_at DESC)',
   ];
 
   for (const statement of statements) {
@@ -1032,86 +1392,6 @@ async function ensureAiMusicSchema(db: D1Database) {
   }
 
   aiMusicSchemaReady = true;
-}
-
-async function ensureNotesSchema(db: D1Database) {
-  if (notesSchemaReady) return;
-
-  const statements = [
-    `CREATE TABLE IF NOT EXISTS notes (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      body TEXT NOT NULL,
-      note_type TEXT DEFAULT 'thought',
-      mood TEXT DEFAULT 'soft',
-      color TEXT DEFAULT '#F6E7D7',
-      media_url TEXT DEFAULT '',
-      media_type TEXT DEFAULT '',
-      anonymous INTEGER DEFAULT 0,
-      status TEXT DEFAULT 'active',
-      reactions_count INTEGER DEFAULT 0,
-      comments_count INTEGER DEFAULT 0,
-      saves_count INTEGER DEFAULT 0,
-      shares_count INTEGER DEFAULT 0,
-      reports_count INTEGER DEFAULT 0,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    )`,
-    `CREATE TABLE IF NOT EXISTS note_interactions (
-      id TEXT PRIMARY KEY,
-      note_id TEXT NOT NULL,
-      user_id TEXT NOT NULL,
-      kind TEXT NOT NULL,
-      value TEXT DEFAULT '',
-      created_at TEXT NOT NULL,
-      UNIQUE(note_id, user_id, kind)
-    )`,
-    `CREATE TABLE IF NOT EXISTS note_comments (
-      id TEXT PRIMARY KEY,
-      note_id TEXT NOT NULL,
-      user_id TEXT NOT NULL,
-      parent_id TEXT DEFAULT '',
-      body TEXT NOT NULL,
-      likes_count INTEGER DEFAULT 0,
-      status TEXT DEFAULT 'active',
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    )`,
-    `CREATE TABLE IF NOT EXISTS note_comment_likes (
-      id TEXT PRIMARY KEY,
-      comment_id TEXT NOT NULL,
-      user_id TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      UNIQUE(comment_id, user_id)
-    )`,
-    `CREATE TABLE IF NOT EXISTS note_reports (
-      id TEXT PRIMARY KEY,
-      note_id TEXT NOT NULL,
-      reporter_id TEXT NOT NULL,
-      reason TEXT DEFAULT '',
-      details TEXT DEFAULT '',
-      created_at TEXT NOT NULL,
-      UNIQUE(note_id, reporter_id)
-    )`,
-    "ALTER TABLE notes ADD COLUMN media_url TEXT DEFAULT ''",
-    "ALTER TABLE notes ADD COLUMN media_type TEXT DEFAULT ''",
-    'CREATE INDEX IF NOT EXISTS idx_notes_status_created ON notes(status, created_at)',
-    'CREATE INDEX IF NOT EXISTS idx_notes_user_created ON notes(user_id, created_at)',
-    'CREATE INDEX IF NOT EXISTS idx_note_interactions_user ON note_interactions(user_id, kind, created_at)',
-    'CREATE INDEX IF NOT EXISTS idx_note_comments_note ON note_comments(note_id, created_at)',
-    'CREATE INDEX IF NOT EXISTS idx_note_comment_likes_comment ON note_comment_likes(comment_id, created_at)',
-    'CREATE INDEX IF NOT EXISTS idx_note_reports_note ON note_reports(note_id, created_at)',
-  ];
-
-  for (const statement of statements) {
-    try {
-      await runSchemaStatement(db, statement);
-    } catch (error: any) {
-      if (!isIgnorableSchemaError(error, statement)) throw error;
-    }
-  }
-
-  notesSchemaReady = true;
 }
 
 async function ensurePeopleSchema(db: D1Database) {
@@ -1339,6 +1619,141 @@ async function ensureAdminModerationSchema(db: D1Database) {
   adminModerationSchemaReady = true;
 }
 
+async function ensureAutoCategorySchema(db: D1Database) {
+  if (autoCategorySchemaReady) return;
+
+  const statements = [
+    "ALTER TABLE posts ADD COLUMN primary_category TEXT DEFAULT ''",
+    'ALTER TABLE posts ADD COLUMN category_confidence REAL DEFAULT 0',
+    "ALTER TABLE posts ADD COLUMN category_source TEXT DEFAULT 'fallback'",
+    "ALTER TABLE posts ADD COLUMN category_status TEXT DEFAULT 'low_confidence'",
+    "ALTER TABLE posts ADD COLUMN category_signals_json TEXT DEFAULT '{}'",
+    "ALTER TABLE posts ADD COLUMN tags_json TEXT DEFAULT '[]'",
+    "ALTER TABLE posts ADD COLUMN secondary_categories_json TEXT DEFAULT '[]'",
+    "ALTER TABLE posts ADD COLUMN category_scores_json TEXT DEFAULT '{}'",
+    "ALTER TABLE posts ADD COLUMN detected_objects_json TEXT DEFAULT '[]'",
+    "ALTER TABLE posts ADD COLUMN detected_scene TEXT DEFAULT ''",
+    "ALTER TABLE posts ADD COLUMN place_type TEXT DEFAULT ''",
+    "ALTER TABLE posts ADD COLUMN user_selected_category TEXT DEFAULT ''",
+    "ALTER TABLE posts ADD COLUMN caption_keywords_json TEXT DEFAULT '[]'",
+    'CREATE INDEX IF NOT EXISTS idx_posts_primary_category_created ON posts(primary_category, created_at DESC)',
+    'CREATE INDEX IF NOT EXISTS idx_posts_category_status_created ON posts(category_status, created_at DESC)',
+    'CREATE INDEX IF NOT EXISTS idx_posts_discover_category_created ON posts(primary_category, status, visibility, created_at DESC)',
+  ];
+
+  for (const statement of statements) {
+    try {
+      await runSchemaStatement(db, statement);
+    } catch (error: any) {
+      if (!isIgnorableSchemaError(error, statement)) {
+        throw error;
+      }
+    }
+  }
+
+  autoCategorySchemaReady = true;
+  await backfillDiscoverCategories(db);
+}
+
+async function backfillDiscoverCategories(db: D1Database) {
+  if (autoCategoryBackfillReady) return;
+  const searchableSql = [
+    "COALESCE(title, '')",
+    "COALESCE(content, '')",
+    "COALESCE(location, '')",
+    "COALESCE(category, '')",
+    "COALESCE(post_type, '')",
+    "COALESCE(tags_json, '')",
+    "COALESCE(category_signals_json, '')",
+  ].join(" || ' ' || ");
+  for (const category of DISCOVER_CATEGORIES) {
+    const keywords = CATEGORY_KEYWORDS[category].slice(0, 28);
+    const keywordMatches = keywords.map(() => `LOWER(${searchableSql}) LIKE ?`).join(' OR ');
+    try {
+      await db.prepare(`
+        UPDATE posts
+        SET primary_category = ?,
+            category_confidence = MAX(COALESCE(category_confidence, 0), 0.56),
+            secondary_categories_json = CASE
+              WHEN COALESCE(secondary_categories_json, '') IN ('', '[]') THEN ?
+              ELSE secondary_categories_json
+            END,
+            category_scores_json = CASE
+              WHEN COALESCE(category_scores_json, '') IN ('', '{}') THEN ?
+              ELSE category_scores_json
+            END,
+            category_source = CASE
+              WHEN COALESCE(category_source, '') IN ('', 'fallback') THEN 'fallback'
+              ELSE category_source
+            END,
+            category_status = CASE
+              WHEN COALESCE(category_status, '') IN ('', 'pending') THEN 'low_confidence'
+              ELSE category_status
+            END
+        WHERE (
+          COALESCE(primary_category, '') IN ('', 'lifestyle', 'general', 'place')
+          OR COALESCE(category_confidence, 0) < 0.50
+        )
+        AND (${keywordMatches})
+      `).bind(category, JSON.stringify([category]), JSON.stringify({ [category]: 62 }), ...keywords.map((keyword) => `%${keyword}%`)).run();
+    } catch (error) {
+      console.warn('Discover category backfill skipped:', category, getErrorCode(error));
+      break;
+    }
+  }
+  autoCategoryBackfillReady = true;
+}
+
+async function ensureLocationSchema(db: D1Database) {
+  if (locationSchemaReady) return;
+
+  const statements = [
+    "ALTER TABLE posts ADD COLUMN display_city TEXT DEFAULT ''",
+    "ALTER TABLE posts ADD COLUMN display_region TEXT DEFAULT ''",
+    "ALTER TABLE posts ADD COLUMN display_country TEXT DEFAULT ''",
+    "ALTER TABLE posts ADD COLUMN display_location_label TEXT DEFAULT ''",
+    "ALTER TABLE posts ADD COLUMN display_location_source TEXT DEFAULT 'none'",
+    "ALTER TABLE posts ADD COLUMN display_location_visibility TEXT DEFAULT 'hidden'",
+    "ALTER TABLE posts ADD COLUMN place_provider TEXT DEFAULT ''",
+    "ALTER TABLE posts ADD COLUMN place_provider_id TEXT DEFAULT ''",
+    "ALTER TABLE posts ADD COLUMN place_formatted_address TEXT DEFAULT ''",
+    "ALTER TABLE posts ADD COLUMN place_category TEXT DEFAULT ''",
+    "ALTER TABLE posts ADD COLUMN place_city TEXT DEFAULT ''",
+    "ALTER TABLE posts ADD COLUMN place_region TEXT DEFAULT ''",
+    "ALTER TABLE posts ADD COLUMN place_country TEXT DEFAULT ''",
+    `CREATE TABLE IF NOT EXISTS post_places (
+      id TEXT PRIMARY KEY,
+      post_id TEXT NOT NULL,
+      provider TEXT DEFAULT 'apple_mapkit',
+      provider_place_id TEXT DEFAULT '',
+      name TEXT DEFAULT '',
+      formatted_address TEXT DEFAULT '',
+      latitude REAL,
+      longitude REAL,
+      category TEXT DEFAULT '',
+      city TEXT DEFAULT '',
+      region TEXT DEFAULT '',
+      country TEXT DEFAULT '',
+      created_at TEXT NOT NULL
+    )`,
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_post_places_post_provider ON post_places(post_id, provider)',
+    'CREATE INDEX IF NOT EXISTS idx_post_places_post ON post_places(post_id)',
+    'CREATE INDEX IF NOT EXISTS idx_posts_display_location ON posts(display_location_visibility, display_city, display_country, created_at)',
+  ];
+
+  for (const statement of statements) {
+    try {
+      await runSchemaStatement(db, statement);
+    } catch (error: any) {
+      if (!isIgnorableSchemaError(error, statement)) {
+        throw error;
+      }
+    }
+  }
+
+  locationSchemaReady = true;
+}
+
 async function ensureAbuseProtectionSchema(db: D1Database) {
   if (abuseProtectionSchemaReady) return;
   await ensureGovernanceSchema(db);
@@ -1501,6 +1916,172 @@ async function ensureProductionReadinessSchema(db: D1Database) {
   productionReadinessSchemaReady = true;
 }
 
+async function ensureAccountDeletionSchema(db: D1Database) {
+  if (accountDeletionSchemaReady) return;
+  await ensureGovernanceSchema(db);
+  await ensureProductionReadinessSchema(db);
+
+  const statements = [
+    "ALTER TABLE users ADD COLUMN deletion_requested_at TEXT",
+    "ALTER TABLE users ADD COLUMN deletion_scheduled_at TEXT",
+    "ALTER TABLE users ADD COLUMN deleted_at TEXT",
+    "ALTER TABLE users ADD COLUMN session_revoked_at TEXT",
+    `CREATE TABLE IF NOT EXISTS account_identities (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      provider_user_id TEXT NOT NULL,
+      email_hash TEXT DEFAULT '',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(provider, provider_user_id)
+    )`,
+    `CREATE TABLE IF NOT EXISTS account_deletion_events (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      actor_user_id TEXT DEFAULT '',
+      reason TEXT DEFAULT '',
+      metadata TEXT DEFAULT '{}',
+      request_id TEXT DEFAULT '',
+      created_at TEXT NOT NULL
+    )`,
+    `CREATE TABLE IF NOT EXISTS deleted_account_safety_records (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      email_hash TEXT DEFAULT '',
+      provider TEXT DEFAULT '',
+      provider_user_id_hash TEXT DEFAULT '',
+      status_at_deletion TEXT DEFAULT '',
+      reason TEXT DEFAULT '',
+      created_at TEXT NOT NULL
+    )`,
+    'CREATE INDEX IF NOT EXISTS idx_users_deletion_pending ON users(status, deletion_scheduled_at)',
+    'CREATE INDEX IF NOT EXISTS idx_account_identities_user ON account_identities(user_id)',
+    'CREATE INDEX IF NOT EXISTS idx_account_identities_email_hash ON account_identities(email_hash)',
+    'CREATE INDEX IF NOT EXISTS idx_account_deletion_events_user ON account_deletion_events(user_id, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_deleted_account_safety_email ON deleted_account_safety_records(email_hash)',
+  ];
+
+  for (const statement of statements) {
+    try {
+      await runSchemaStatement(db, statement);
+    } catch (error: any) {
+      if (!isIgnorableSchemaError(error, statement)) {
+        throw error;
+      }
+    }
+  }
+
+  accountDeletionSchemaReady = true;
+}
+
+async function ensureMediaModerationSchema(db: D1Database) {
+  if (mediaModerationSchemaReady) return;
+
+  const statements = [
+    "ALTER TABLE posts ADD COLUMN moderation_status TEXT DEFAULT 'approved'",
+    "ALTER TABLE posts ADD COLUMN moderation_media_ids TEXT DEFAULT '[]'",
+    'ALTER TABLE posts ADD COLUMN moderation_checked_at TEXT',
+    `CREATE TABLE IF NOT EXISTS media_assets (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      post_id TEXT,
+      media_type TEXT NOT NULL,
+      storage_provider TEXT NOT NULL,
+      storage_key TEXT NOT NULL,
+      public_url TEXT,
+      private_url TEXT,
+      mime_type TEXT NOT NULL,
+      file_size INTEGER DEFAULT 0,
+      sha256_hash TEXT DEFAULT '',
+      width INTEGER,
+      height INTEGER,
+      duration_seconds REAL,
+      upload_status TEXT NOT NULL DEFAULT 'uploading',
+      moderation_status TEXT NOT NULL DEFAULT 'uploading',
+      rejection_code TEXT,
+      rejection_message TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
+    `CREATE TABLE IF NOT EXISTS moderation_jobs (
+      id TEXT PRIMARY KEY,
+      media_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      job_type TEXT NOT NULL DEFAULT 'media_pre_publish',
+      status TEXT NOT NULL DEFAULT 'pending',
+      attempts INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT DEFAULT '',
+      queued_at TEXT NOT NULL,
+      started_at TEXT,
+      completed_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
+    `CREATE TABLE IF NOT EXISTS moderation_results (
+      id TEXT PRIMARY KEY,
+      media_id TEXT NOT NULL,
+      model_name TEXT NOT NULL,
+      adult_explicit_score REAL DEFAULT 0,
+      nudity_score REAL DEFAULT 0,
+      sexual_context_score REAL DEFAULT 0,
+      sexual_solicitation_score REAL DEFAULT 0,
+      minor_safety_risk_score REAL DEFAULT 0,
+      violence_score REAL DEFAULT 0,
+      gore_score REAL DEFAULT 0,
+      weapon_score REAL DEFAULT 0,
+      hate_symbol_score REAL DEFAULT 0,
+      ai_generated_likelihood REAL DEFAULT 0,
+      spam_scam_score REAL DEFAULT 0,
+      malware_status TEXT NOT NULL DEFAULT 'unknown',
+      link_risk_score REAL DEFAULT 0,
+      confidence REAL DEFAULT 0,
+      decision TEXT NOT NULL,
+      reasons TEXT NOT NULL DEFAULT '[]',
+      raw_result TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL
+    )`,
+    `CREATE TABLE IF NOT EXISTS moderation_events (
+      id TEXT PRIMARY KEY,
+      media_id TEXT NOT NULL,
+      actor_user_id TEXT DEFAULT '',
+      actor_role TEXT DEFAULT '',
+      event_type TEXT NOT NULL,
+      decision TEXT DEFAULT '',
+      reason TEXT DEFAULT '',
+      note TEXT DEFAULT '',
+      before_state TEXT DEFAULT '{}',
+      after_state TEXT DEFAULT '{}',
+      request_id TEXT DEFAULT '',
+      created_at TEXT NOT NULL
+    )`,
+    'CREATE INDEX IF NOT EXISTS idx_media_assets_user_created ON media_assets(user_id, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_media_assets_status_created ON media_assets(moderation_status, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_media_assets_post ON media_assets(post_id)',
+    'CREATE INDEX IF NOT EXISTS idx_media_assets_storage ON media_assets(storage_provider, storage_key)',
+    'CREATE INDEX IF NOT EXISTS idx_media_assets_hash ON media_assets(sha256_hash)',
+    'CREATE INDEX IF NOT EXISTS idx_media_assets_post_status ON media_assets(post_id, moderation_status)',
+    'CREATE INDEX IF NOT EXISTS idx_posts_moderation_status_created ON posts(moderation_status, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_moderation_jobs_status ON moderation_jobs(status, queued_at)',
+    'CREATE INDEX IF NOT EXISTS idx_moderation_jobs_media ON moderation_jobs(media_id)',
+    'CREATE INDEX IF NOT EXISTS idx_moderation_results_media_created ON moderation_results(media_id, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_moderation_events_media_created ON moderation_events(media_id, created_at)',
+  ];
+
+  for (const statement of statements) {
+    try {
+      await runSchemaStatement(db, statement);
+    } catch (error: any) {
+      if (!isIgnorableSchemaError(error, statement)) {
+        throw error;
+      }
+    }
+  }
+
+  mediaModerationSchemaReady = true;
+}
+
 async function ensureMediaBackupSchema(db: D1Database) {
   if (mediaBackupSchemaReady) return;
 
@@ -1560,6 +2141,15 @@ async function ensureAudioSchema(db: D1Database) {
     'ALTER TABLE posts ADD COLUMN audio_start_time INTEGER DEFAULT 0',
     'ALTER TABLE posts ADD COLUMN audio_duration INTEGER DEFAULT 0',
     'ALTER TABLE posts ADD COLUMN audio_hidden INTEGER DEFAULT 0',
+    "ALTER TABLE statuses ADD COLUMN audio_provider TEXT DEFAULT ''",
+    "ALTER TABLE statuses ADD COLUMN audio_track_id TEXT DEFAULT ''",
+    "ALTER TABLE statuses ADD COLUMN audio_title TEXT DEFAULT ''",
+    "ALTER TABLE statuses ADD COLUMN audio_artist TEXT DEFAULT ''",
+    "ALTER TABLE statuses ADD COLUMN audio_artwork_url TEXT DEFAULT ''",
+    "ALTER TABLE statuses ADD COLUMN audio_stream_url TEXT DEFAULT ''",
+    'ALTER TABLE statuses ADD COLUMN audio_start_time INTEGER DEFAULT 0',
+    'ALTER TABLE statuses ADD COLUMN audio_duration INTEGER DEFAULT 0',
+    'ALTER TABLE statuses ADD COLUMN audio_hidden INTEGER DEFAULT 0',
     `CREATE TABLE IF NOT EXISTS hidden_sounds (
       track_id TEXT PRIMARY KEY,
       provider TEXT DEFAULT 'audius',
@@ -1587,6 +2177,7 @@ async function ensureAudioSchema(db: D1Database) {
     'ALTER TABLE favorite_sounds ADD COLUMN play_count INTEGER DEFAULT 0',
     'ALTER TABLE favorite_sounds ADD COLUMN favorite_count INTEGER DEFAULT 0',
     'CREATE INDEX IF NOT EXISTS idx_posts_audio_track ON posts(audio_provider, audio_track_id)',
+    'CREATE INDEX IF NOT EXISTS idx_statuses_audio_track ON statuses(audio_provider, audio_track_id)',
     'CREATE INDEX IF NOT EXISTS idx_hidden_sounds_provider ON hidden_sounds(provider, track_id)',
     'CREATE INDEX IF NOT EXISTS idx_favorite_sounds_user ON favorite_sounds(user_id, provider, created_at)',
   ];
@@ -1619,16 +2210,16 @@ function normalizeVisibility(value: unknown): PostVisibility {
 }
 
 function visibleAuthorWhere(alias = 'u'): string {
-  return `(${alias}.id = ? OR COALESCE(${alias}.is_private, 0) = 0 OR EXISTS (SELECT 1 FROM friendships f WHERE f.user_id = ? AND f.friend_id = ${alias}.id))
+  return `COALESCE(${alias}.status, 'active') = 'active' AND (${alias}.id = ? OR COALESCE(${alias}.is_private, 0) = 0 OR EXISTS (SELECT 1 FROM friendships f WHERE f.user_id = ? AND f.friend_id = ${alias}.id))
     AND NOT EXISTS (SELECT 1 FROM blocks b WHERE (b.blocker_id = ? AND b.blocked_id = ${alias}.id) OR (b.blocker_id = ${alias}.id AND b.blocked_id = ?))`;
 }
 
 function visibleStatusWhere(userAlias = 'u', statusAlias = 's'): string {
-  return `(${statusAlias}.user_id = ? OR (COALESCE(${statusAlias}.visibility, 'public') = 'public' AND COALESCE(${userAlias}.is_private, 0) = 0) OR EXISTS (SELECT 1 FROM friendships f WHERE f.user_id = ? AND f.friend_id = ${statusAlias}.user_id))`;
+  return `COALESCE(${userAlias}.status, 'active') = 'active' AND (${statusAlias}.user_id = ? OR (COALESCE(${statusAlias}.visibility, 'public') = 'public' AND COALESCE(${userAlias}.is_private, 0) = 0) OR EXISTS (SELECT 1 FROM friendships f WHERE f.user_id = ? AND f.friend_id = ${statusAlias}.user_id))`;
 }
 
 function visiblePostWhere(userAlias = 'u', postAlias = 'p'): string {
-  return `COALESCE(${postAlias}.status, 'active') != 'removed' AND ${visibleAuthorWhere(userAlias)} AND (
+  return `COALESCE(${postAlias}.status, 'active') != 'removed' AND ${approvedPostModerationWhere(postAlias)} AND ${visibleAuthorWhere(userAlias)} AND (
     COALESCE(${postAlias}.visibility, 'public') = 'public'
     OR ${postAlias}.user_id = ?
     OR (COALESCE(${postAlias}.visibility, 'public') = 'followers' AND (
@@ -1644,7 +2235,11 @@ function visiblePostBindValues(userId: string): string[] {
 }
 
 function publicPostWhere(userAlias = 'u', postAlias = 'p'): string {
-  return `COALESCE(${postAlias}.status, 'active') != 'removed' AND COALESCE(${userAlias}.is_private, 0) = 0 AND COALESCE(${postAlias}.visibility, 'public') = 'public'`;
+  return `COALESCE(${postAlias}.status, 'active') != 'removed' AND ${approvedPostModerationWhere(postAlias)} AND COALESCE(${userAlias}.status, 'active') = 'active' AND COALESCE(${userAlias}.is_private, 0) = 0 AND COALESCE(${postAlias}.visibility, 'public') = 'public'`;
+}
+
+function approvedPostModerationWhere(postAlias = 'p'): string {
+  return `COALESCE(${postAlias}.moderation_status, 'approved') = 'approved'`;
 }
 
 function parseJsonArray(value: unknown): any[] {
@@ -1677,6 +2272,118 @@ function cleanText(value: unknown, max = 500): string {
     .slice(0, max);
 }
 
+function cloudflareAccountId(env: Env): string {
+  return cleanText(env.CLOUDFLARE_ACCOUNT_ID || env.CF_ACCOUNT_ID || '', 140);
+}
+
+function cloudflareImagesToken(env: Env): string {
+  return cleanText(env.CLOUDFLARE_IMAGES_TOKEN || env.CLOUDFLARE_API_TOKEN || env.CF_API_TOKEN || '', 4096);
+}
+
+function cloudflareStreamToken(env: Env): string {
+  return cleanText(env.CLOUDFLARE_STREAM_TOKEN || env.CLOUDFLARE_API_TOKEN || env.CF_API_TOKEN || '', 4096);
+}
+
+function cloudflareImagesAccountHash(env: Env): string {
+  return cleanText(env.CLOUDFLARE_IMAGES_ACCOUNT_HASH || env.CF_ACCOUNT_HASH || '', 160);
+}
+
+function cloudflareImageDeliveryUrl(env: Env, imageId: string, variant = 'public'): string {
+  const accountHash = cloudflareImagesAccountHash(env);
+  const cleanImageId = cleanText(imageId, 180);
+  const cleanVariant = cleanText(variant || 'public', 120) || 'public';
+  return accountHash && cleanImageId
+    ? `https://imagedelivery.net/${accountHash}/${cleanImageId}/${cleanVariant}`
+    : '';
+}
+
+function cloudflareImagesRequireSignedUrls(env: Env): boolean {
+  const value = cleanText(env.CLOUDFLARE_IMAGES_REQUIRE_SIGNED_URLS || '', 20).toLowerCase();
+  return value === '1' || value === 'true' || value === 'yes';
+}
+
+function publicApiBaseUrl(env?: Env): string {
+  const configured = cleanText(env?.PUBLIC_API_BASE_URL || '', 300).replace(/\/+$/, '');
+  if (configured && /^https:\/\//i.test(configured)) return configured;
+  return 'https://api.flames-up.com/api';
+}
+
+function cloudflareImageIdFromDeliveryUrl(env: Env | undefined, value: string): string {
+  try {
+    const parsed = new URL(value);
+    if (!hostMatches(parsed.hostname, 'imagedelivery.net')) return '';
+    const segments = parsed.pathname.split('/').filter(Boolean);
+    if (segments.length < 3) return '';
+    const accountHash = env ? cloudflareImagesAccountHash(env) : '';
+    if (accountHash && segments[0] !== accountHash) return '';
+    return cleanText(segments[1], 220);
+  } catch {
+    return '';
+  }
+}
+
+function cloudflareImageProxyUrl(env: Env | undefined, imageId: string): string {
+  const cleanImageId = cleanText(imageId, 220);
+  return cleanImageId ? `${publicApiBaseUrl(env)}/media/cf-image/${encodeURIComponent(cleanImageId)}` : '';
+}
+
+function cloudflareImageProxyFallbackUrl(env: Env | undefined, value: string): string {
+  const imageId = cloudflareImageIdFromDeliveryUrl(env, value);
+  return imageId ? cloudflareImageProxyUrl(env, imageId) : '';
+}
+
+function cloudflareImageVariantUrl(env: Env, imageId: string, variants?: unknown, variant = 'public'): string {
+  const urls = parseJsonArray(variants)
+    .map((value) => safeMediaReference(value))
+    .filter(Boolean);
+  const preferred = urls.find((url) => url.endsWith(`/${variant}`)) || urls[0] || '';
+  return preferred || cloudflareImageDeliveryUrl(env, imageId, variant);
+}
+
+function cloudflareImageTransformsEnabled(env?: Env): boolean {
+  const value = cleanText(env?.CLOUDFLARE_IMAGE_TRANSFORMS_ENABLED || '', 20).toLowerCase();
+  if (value === '0' || value === 'false' || value === 'no') return false;
+  return true;
+}
+
+function cloudflareImageTransformBaseUrl(env?: Env): string {
+  const configured = cleanText(env?.CLOUDFLARE_IMAGE_TRANSFORM_BASE_URL || '', 300).replace(/\/+$/, '');
+  if (configured && /^https:\/\//i.test(configured)) return configured;
+  return cloudflareImageTransformsEnabled(env) ? 'https://api.flames-up.com' : '';
+}
+
+function cloudflareImageTransformOptions(preset: 'feed' | 'thumbnail'): string {
+  if (preset === 'thumbnail') {
+    return 'width=480,quality=84,format=auto,metadata=none';
+  }
+  return 'width=1080,quality=92,format=auto,metadata=none';
+}
+
+function canProxyThroughCloudflareImageTransform(url: URL): boolean {
+  const host = url.hostname.toLowerCase();
+  if (hostMatches(host, 'imagedelivery.net')) return false;
+  if (hostMatches(host, 'videodelivery.net')) return false;
+  return hostMatches(host, 'flames-up.com')
+    || hostMatches(host, 'captro.app')
+    || hostMatches(host, 'r2.dev')
+    || hostMatches(host, 'workers.dev');
+}
+
+function cloudflareTransformedImageUrl(env: Env | undefined, url: string, preset: 'feed' | 'thumbnail'): string {
+  if (!url || !cloudflareImageTransformsEnabled(env)) return url;
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'https:') return url;
+    if (parsed.pathname.includes('/cdn-cgi/image/')) return url;
+    if (!canProxyThroughCloudflareImageTransform(parsed)) return url;
+    const base = cloudflareImageTransformBaseUrl(env);
+    if (!base) return url;
+    return `${base}/cdn-cgi/image/${cloudflareImageTransformOptions(preset)}/${parsed.toString()}`;
+  } catch {
+    return url;
+  }
+}
+
 function cleanMultilineText(value: unknown, max = 5000): string {
   return stripHtmlMetaCharacters(String(value || ''))
     .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, ' ')
@@ -1700,6 +2407,602 @@ function rejectUnknownFields(c: any, body: any, allowedFields: string[]) {
     }, 400);
   }
   return null;
+}
+
+type DiscoverCategory =
+  | 'photography'
+  | 'outdoors'
+  | 'outfits'
+  | 'events'
+  | 'nightlife'
+  | 'art';
+
+type AutoCategorySource = 'apple_vision' | 'backend_ai' | 'hybrid_ai' | 'fallback' | 'admin_changed' | 'user_changed_optional';
+type AutoCategoryStatus = 'pending' | 'classified' | 'low_confidence' | 'needs_review' | 'admin_corrected';
+
+type AutoCategoryLabel = {
+  label: string;
+  confidence: number;
+  source?: string;
+};
+
+type AutoCategoryInput = {
+  caption?: string;
+  mediaType?: string;
+  postType?: string;
+  hashtags?: string[];
+  location?: string | null;
+  placeName?: string | null;
+  placeType?: string | null;
+  userSelectedCategory?: string;
+  detectedObjects?: string[];
+  detectedScene?: string;
+  captionKeywords?: string[];
+  appleLabels?: AutoCategoryLabel[];
+  appleCategoryGuess?: string;
+  appleConfidence?: number;
+  backendLabels?: AutoCategoryLabel[];
+  backendCategoryGuess?: string;
+  backendConfidence?: number;
+};
+
+type AutoCategoryResult = {
+  primary_category: DiscoverCategory;
+  category_confidence: number;
+  category_source: AutoCategorySource;
+  category_status: AutoCategoryStatus;
+  tags: string[];
+  signals: Record<string, unknown>;
+  secondary_categories: DiscoverCategory[];
+  category_scores: Record<DiscoverCategory, number>;
+  detected_objects: string[];
+  detected_scene: string;
+  place_type: string;
+  user_selected_category: DiscoverCategory | '';
+  caption_keywords: string[];
+};
+
+const DISCOVER_CATEGORIES: DiscoverCategory[] = [
+  'photography',
+  'outdoors',
+  'art',
+  'nightlife',
+  'outfits',
+  'events',
+];
+const DEFAULT_DISCOVER_CATEGORY: DiscoverCategory = 'photography';
+
+const CATEGORY_KEYWORDS: Record<DiscoverCategory, string[]> = {
+  outfits: ['outfit', 'fit', 'fit check', 'clothes', 'style', 'fashion', 'streetwear', 'shoes', 'shoe', 'jacket', 'mirror selfie', 'clothing', 'accessories', 'sneakers', 'dress', 'apparel', 'person', 'full body pose'],
+  events: ['event', 'events', 'concert', 'festival', 'meetup', 'show', 'game', 'crowd', 'stadium', 'venue', 'performance', 'birthday', 'wedding', 'audience', 'stage', 'party', 'celebration', 'ceremony', 'conference', 'ticket'],
+  outdoors: ['outdoors', 'outdoor', 'outside', 'park', 'beach', 'hiking', 'trail', 'nature', 'mountain', 'lake', 'sunset', 'sunrise', 'trees', 'tree', 'forest', 'walking', 'landscape', 'snow', 'sky', 'water', 'river', 'ocean', 'sea', 'flower', 'plant', 'grass', 'garden', 'field', 'woods', 'camping'],
+  nightlife: ['nightlife', 'night', 'club', 'bar', 'lounge', 'party', 'rooftop', 'dj', 'drinks', 'city night', 'after dark', 'dance', 'neon', 'dark', 'cocktail', 'evening'],
+  photography: ['photography', 'portrait', 'camera', 'photo shoot', 'street photo', 'aesthetic', 'landscape shot', 'creative shot', 'close up', 'close-up', 'lens', 'film', 'macro', 'black and white', 'monochrome', 'composition'],
+  art: ['art', 'drawing', 'painting', 'design', 'sketch', 'illustration', 'mural', 'gallery', 'creative work', 'museum', 'artist', 'craft', 'sculpture', 'visual art'],
+};
+
+function normalizeDiscoverCategory(value: unknown, allowAll = false): DiscoverCategory | 'all' | '' {
+  const clean = cleanText(value, 40).toLowerCase().replace(/[éèê]/g, 'e').replace(/[\s-]+/g, '_');
+  if (allowAll && clean === 'all') return 'all';
+  const aliases: Record<string, DiscoverCategory> = {
+    outfit: 'outfits',
+    outdoor: 'outdoors',
+    event: 'events',
+    events: 'events',
+  };
+  const normalized = aliases[clean] || clean;
+  return DISCOVER_CATEGORIES.includes(normalized as DiscoverCategory) ? normalized as DiscoverCategory : '';
+}
+
+function discoverCategorySearchTerms(category: DiscoverCategory): string[] {
+  const aliases: Partial<Record<DiscoverCategory, string[]>> = {
+    outfits: ['outfit', 'fit check', 'fashion', 'style', 'clothing'],
+    outdoors: ['outdoor', 'outside', 'nature', 'park', 'beach', 'trail'],
+    photography: ['photo', 'camera', 'portrait', 'street photo', 'landscape'],
+    events: ['event', 'concert', 'festival', 'venue', 'stadium', 'performance'],
+    nightlife: ['night life', 'club', 'bar', 'party', 'neon'],
+  };
+  const seen = new Set<string>();
+  return [category, ...(CATEGORY_KEYWORDS[category] || []), ...(aliases[category] || [])]
+    .map((term) => cleanText(term, 80).toLowerCase().trim())
+    .filter((term) => term.length >= 3 && !seen.has(term) && seen.add(term))
+    .slice(0, 28);
+}
+
+function discoverCategoryCondition(postAlias: string, category: DiscoverCategory, scoreThreshold = 24): { sql: string; binds: any[] } {
+  const alias = postAlias.replace(/[^a-zA-Z0-9_]/g, '') || 'p';
+  const terms = discoverCategorySearchTerms(category);
+  const textExpression = `LOWER(
+    COALESCE(${alias}.tags_json, '') || ' ' ||
+    COALESCE(${alias}.caption_keywords_json, '') || ' ' ||
+    COALESCE(${alias}.detected_objects_json, '') || ' ' ||
+    COALESCE(${alias}.category_signals_json, '') || ' ' ||
+    COALESCE(${alias}.content, '') || ' ' ||
+    COALESCE(${alias}.title, '') || ' ' ||
+    COALESCE(${alias}.location, '') || ' ' ||
+    COALESCE(${alias}.display_location_label, '') || ' ' ||
+    COALESCE(${alias}.place_name, '') || ' ' ||
+    COALESCE(${alias}.place_category, '') || ' ' ||
+    COALESCE(${alias}.place_type, '') || ' ' ||
+    COALESCE(${alias}.detected_scene, '')
+  )`;
+  const keywordSql = terms.map(() => `${textExpression} LIKE ?`).join(' OR ');
+  return {
+    sql: `(
+      COALESCE(json_extract(${alias}.category_scores_json, '$.${category}'), 0) >= ?
+      OR (
+        LOWER(COALESCE(NULLIF(${alias}.primary_category, ''), NULLIF(${alias}.category, ''), '')) = ?
+        AND COALESCE(${alias}.category_confidence, 0) >= 0.50
+      )
+      OR LOWER(COALESCE(${alias}.user_selected_category, '')) = ?
+      OR COALESCE(${alias}.secondary_categories_json, '') LIKE ?
+      OR ${keywordSql}
+    )`,
+    binds: [
+      scoreThreshold,
+      category,
+      category,
+      `%"${category}"%`,
+      ...terms.map((term) => `%${term}%`),
+    ],
+  };
+}
+
+function normalizeCategorySource(value: unknown): AutoCategorySource {
+  const clean = cleanText(value, 40).toLowerCase().replace(/[\s-]+/g, '_');
+  return ['apple_vision', 'backend_ai', 'hybrid_ai', 'fallback', 'admin_changed', 'user_changed_optional'].includes(clean)
+    ? clean as AutoCategorySource
+    : 'fallback';
+}
+
+function normalizeCategoryStatus(value: unknown): AutoCategoryStatus {
+  const clean = cleanText(value, 40).toLowerCase().replace(/[\s-]+/g, '_');
+  return ['pending', 'classified', 'low_confidence', 'needs_review', 'admin_corrected'].includes(clean)
+    ? clean as AutoCategoryStatus
+    : 'low_confidence';
+}
+
+function sanitizeAutoCategoryTags(value: unknown): string[] {
+  const raw = Array.isArray(value) ? value : parseJsonArray(value);
+  const seen = new Set<string>();
+  return raw
+    .flatMap((item) => String(item || '').split(/[#,]/g))
+    .map((item) => cleanText(item, 40).toLowerCase().replace(/[^a-z0-9_. -]/g, '').trim())
+    .filter((item) => item.length >= 2 && item.length <= 40 && !seen.has(item) && seen.add(item))
+    .slice(0, 20);
+}
+
+function sanitizeAutoCategoryLabels(value: unknown): AutoCategoryLabel[] {
+  const raw = Array.isArray(value) ? value : parseJsonArray(value);
+  const labels: AutoCategoryLabel[] = [];
+  for (const item of raw) {
+    const label = typeof item === 'string'
+      ? cleanText(item, 80).toLowerCase()
+      : cleanText((item as any)?.label || (item as any)?.identifier || (item as any)?.name, 80).toLowerCase();
+    if (!label) continue;
+    const confidence = typeof item === 'string'
+      ? 0.72
+      : clampFloat((item as any)?.confidence ?? (item as any)?.score ?? (item as any)?.probability, 0, 1, 0.70);
+    labels.push({ label, confidence, source: cleanText((item as any)?.source || '', 40) || undefined });
+  }
+  return labels.slice(0, 24);
+}
+
+function categoryTextMatches(text: string, keyword: string): boolean {
+  const cleanTextValue = text.toLowerCase();
+  const cleanKeyword = keyword.toLowerCase();
+  return cleanKeyword.includes(' ')
+    ? cleanTextValue.includes(cleanKeyword)
+    : new RegExp(`(^|[^a-z0-9])${cleanKeyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^a-z0-9]|$)`, 'i').test(cleanTextValue);
+}
+
+function collectHashtagsFromText(text: string): string[] {
+  const matches = text.match(/#[a-zA-Z0-9_.]{2,40}/g) || [];
+  return matches.map((tag) => tag.replace(/^#/, '').toLowerCase());
+}
+
+function scoreCategoryFromText(
+  scores: Record<DiscoverCategory, number>,
+  text: string,
+  weight: number,
+  reasons?: Record<DiscoverCategory, string[]>,
+  reasonPrefix = 'keyword'
+) {
+  if (!text) return;
+  for (const category of DISCOVER_CATEGORIES) {
+    for (const keyword of CATEGORY_KEYWORDS[category]) {
+      if (categoryTextMatches(text, keyword)) {
+        scores[category] += weight;
+        reasons?.[category]?.push(`${reasonPrefix}: ${keyword}`);
+      }
+    }
+  }
+}
+
+function categoryFromLabels(labels: AutoCategoryLabel[]): { category: DiscoverCategory | ''; confidence: number } {
+  const scores = Object.fromEntries(DISCOVER_CATEGORIES.map((category) => [category, 0])) as Record<DiscoverCategory, number>;
+  for (const label of labels) {
+    for (const category of DISCOVER_CATEGORIES) {
+      for (const keyword of CATEGORY_KEYWORDS[category]) {
+        if (categoryTextMatches(label.label, keyword)) {
+          scores[category] += Math.max(0.1, label.confidence);
+        }
+      }
+    }
+  }
+  const winner = DISCOVER_CATEGORIES
+    .map((category) => ({ category, score: scores[category] }))
+    .sort((a, b) => b.score - a.score)[0];
+  return winner && winner.score > 0
+    ? { category: winner.category, confidence: Math.min(1, winner.score / 2.4) }
+    : { category: '', confidence: 0 };
+}
+
+function emptyCategoryScores(): Record<DiscoverCategory, number> {
+  return Object.fromEntries(DISCOVER_CATEGORIES.map((category) => [category, 0])) as Record<DiscoverCategory, number>;
+}
+
+function emptyCategoryReasons(): Record<DiscoverCategory, string[]> {
+  return Object.fromEntries(DISCOVER_CATEGORIES.map((category) => [category, [] as string[]])) as unknown as Record<DiscoverCategory, string[]>;
+}
+
+function addCategoryScore(
+  scores: Record<DiscoverCategory, number>,
+  reasons: Record<DiscoverCategory, string[]>,
+  category: DiscoverCategory | '',
+  amount: number,
+  reason: string
+) {
+  if (!category || amount <= 0) return;
+  scores[category] += amount;
+  if (reason) reasons[category].push(reason);
+}
+
+function topCaptionKeywords(text: string, hashtags: string[]): string[] {
+  const words = cleanMultilineText(text, 1200)
+    .toLowerCase()
+    .replace(/#[a-z0-9_.-]+/g, ' ')
+    .split(/[^a-z0-9_.]+/g)
+    .filter((word) => word.length >= 3 && !['the', 'and', 'for', 'with', 'this', 'that', 'from', 'today', 'about'].includes(word));
+  return sanitizeAutoCategoryTags([...hashtags, ...words]).slice(0, 20);
+}
+
+function normalizePlaceType(input: AutoCategoryInput): string {
+  return [
+    input.placeType,
+    input.placeName,
+    input.location,
+    input.postType,
+  ].map((item) => cleanText(item, 180).toLowerCase()).filter(Boolean).join(' ');
+}
+
+function boostFromPlaceType(
+  scores: Record<DiscoverCategory, number>,
+  reasons: Record<DiscoverCategory, string[]>,
+  placeType: string
+) {
+  if (!placeType) return;
+  const mappings: Array<{ category: DiscoverCategory; keywords: string[]; weight: number }> = [
+    { category: 'outdoors', keywords: ['park', 'beach', 'trail', 'hiking', 'lake', 'mountain', 'garden'], weight: 58 },
+    { category: 'nightlife', keywords: ['bar', 'club', 'lounge', 'nightclub', 'rooftop'], weight: 58 },
+    { category: 'events', keywords: ['event', 'concert', 'festival', 'meetup', 'show', 'game', 'crowd', 'stadium', 'venue', 'performance', 'birthday', 'wedding', 'stage'], weight: 58 },
+    { category: 'art', keywords: ['gallery', 'museum', 'art', 'mural', 'studio'], weight: 52 },
+  ];
+  for (const mapping of mappings) {
+    if (mapping.keywords.some((keyword) => categoryTextMatches(placeType, keyword))) {
+      addCategoryScore(scores, reasons, mapping.category, mapping.weight, `place type: ${placeType.slice(0, 80)}`);
+    }
+  }
+}
+
+function boostFromDetectedObjects(
+  scores: Record<DiscoverCategory, number>,
+  reasons: Record<DiscoverCategory, string[]>,
+  labels: string[],
+  scene: string
+) {
+  const text = [...labels, scene].join(' ').toLowerCase();
+  if (!text.trim()) return;
+  scoreCategoryFromText(scores, text, 12, reasons, 'detected');
+
+  const hasPerson = /\b(person|people|human|man|woman|face|portrait|full body)\b/.test(text);
+  const hasClothing = /\b(clothing|clothes|shirt|pants|dress|shoes|sneaker|jacket|hat|fashion|accessory|outfit)\b/.test(text);
+  if (hasPerson && hasClothing) {
+    addCategoryScore(scores, reasons, 'outfits', 34, 'person + clothing/full-body signal');
+  }
+
+  if (/\b(tree|trees|sky|park|beach|trail|mountain|forest|lake|river|ocean|grass|flower|sunset)\b/.test(text)) {
+    addCategoryScore(scores, reasons, 'outdoors', 28, 'nature/outdoor objects');
+  }
+  if (/\b(camera|lens|portrait|monochrome|macro|composition)\b/.test(text)) {
+    addCategoryScore(scores, reasons, 'photography', 24, 'photo/camera composition objects');
+  }
+}
+
+function autoCategoryEngine(input: AutoCategoryInput): AutoCategoryResult {
+  const scores = emptyCategoryScores();
+  const reasons = emptyCategoryReasons();
+  const tags = new Set<string>();
+  const caption = cleanMultilineText(input.caption || '', 5000).toLowerCase();
+  const hashtags = sanitizeAutoCategoryTags([...(input.hashtags || []), ...collectHashtagsFromText(caption)]);
+  const captionKeywords = topCaptionKeywords(caption, hashtags);
+  const placeType = normalizePlaceType(input);
+  const detectedObjects = sanitizeAutoCategoryTags(input.detectedObjects || []);
+  const detectedScene = cleanText(input.detectedScene, 80).toLowerCase();
+  const userSelectedCategory = normalizeDiscoverCategory(input.userSelectedCategory, false) as DiscoverCategory | '';
+  const placeText = [input.location, input.placeName, input.placeType, input.postType].map((item) => cleanText(item, 160).toLowerCase()).filter(Boolean).join(' ');
+  const appleGuess = normalizeDiscoverCategory(input.appleCategoryGuess, false) as DiscoverCategory | '';
+  const backendGuess = normalizeDiscoverCategory(input.backendCategoryGuess, false) as DiscoverCategory | '';
+  const appleConfidence = clampFloat(input.appleConfidence, 0, 1, 0);
+  const backendConfidence = clampFloat(input.backendConfidence, 0, 1, 0);
+  const appleLabels = sanitizeAutoCategoryLabels(input.appleLabels || []);
+  const backendLabels = sanitizeAutoCategoryLabels(input.backendLabels || []);
+
+  if (userSelectedCategory) addCategoryScore(scores, reasons, userSelectedCategory, 64, 'user selected category');
+  if (backendGuess) addCategoryScore(scores, reasons, backendGuess, 45 * Math.max(backendConfidence, 0.55), 'backend AI category');
+  if (appleGuess) addCategoryScore(scores, reasons, appleGuess, 30 * Math.max(appleConfidence, 0.55), 'Apple Vision category');
+  scoreCategoryFromText(scores, caption, 18, reasons, 'caption');
+  scoreCategoryFromText(scores, hashtags.join(' '), 28, reasons, 'hashtag');
+  scoreCategoryFromText(scores, placeText, 18, reasons, 'place text');
+  boostFromPlaceType(scores, reasons, placeType);
+
+  for (const { category, confidence } of [categoryFromLabels(appleLabels), categoryFromLabels(backendLabels)]) {
+    if (category) addCategoryScore(scores, reasons, category, Math.round(confidence * 30), 'vision/object labels');
+  }
+  boostFromDetectedObjects(
+    scores,
+    reasons,
+    [
+      ...detectedObjects,
+      ...appleLabels.map((item) => item.label),
+      ...backendLabels.map((item) => item.label),
+    ],
+    detectedScene
+  );
+
+  for (const tag of hashtags) tags.add(tag);
+  for (const keyword of captionKeywords) tags.add(keyword);
+  [...appleLabels, ...backendLabels]
+    .sort((a, b) => b.confidence - a.confidence)
+    .slice(0, 12)
+    .forEach((item) => {
+      const label = cleanText(item.label, 40).toLowerCase().replace(/[^a-z0-9_. -]/g, '').trim();
+      if (label.length >= 2) tags.add(label);
+    });
+
+  const winner = DISCOVER_CATEGORIES
+    .map((category) => ({ category, score: scores[category] }))
+    .sort((a, b) => b.score - a.score)[0];
+  const winnerScore = winner?.score || 0;
+  const hasCategorySignal = winnerScore >= 24;
+  const rawConfidence = hasCategorySignal ? Math.min(0.99, Math.max(0, winnerScore / 85)) : 0;
+  const confidence = Number(rawConfidence.toFixed(2));
+  const isLow = !hasCategorySignal || confidence < 0.50;
+  const primaryCategory = hasCategorySignal ? winner.category : DEFAULT_DISCOVER_CATEGORY;
+  const normalizedScores = Object.fromEntries(
+    DISCOVER_CATEGORIES.map((category) => [category, Number(Math.max(0, scores[category]).toFixed(1))])
+  ) as Record<DiscoverCategory, number>;
+  const secondaryCategories = DISCOVER_CATEGORIES
+    .filter((category) => normalizedScores[category] >= 36 || category === primaryCategory)
+    .sort((a, b) => normalizedScores[b] - normalizedScores[a])
+    .slice(0, 5);
+  const source: AutoCategorySource = backendGuess || backendLabels.length
+    ? (appleGuess || appleLabels.length ? 'hybrid_ai' : 'backend_ai')
+    : appleGuess || appleLabels.length
+      ? 'apple_vision'
+      : 'fallback';
+  const status: AutoCategoryStatus = isLow ? 'low_confidence' : 'classified';
+
+  return {
+    primary_category: primaryCategory,
+    category_confidence: hasCategorySignal ? Math.max(confidence, 0.35) : 0.35,
+    category_source: hasCategorySignal ? source : 'fallback',
+    category_status: status,
+    tags: Array.from(tags).slice(0, 16),
+    secondary_categories: secondaryCategories,
+    category_scores: normalizedScores,
+    detected_objects: Array.from(new Set([...detectedObjects, ...appleLabels.map((item) => item.label), ...backendLabels.map((item) => item.label)]))
+      .map((item) => cleanText(item, 60).toLowerCase())
+      .filter(Boolean)
+      .slice(0, 24),
+    detected_scene: detectedScene || primaryCategory,
+    place_type: placeType.slice(0, 120),
+    user_selected_category: userSelectedCategory,
+    caption_keywords: captionKeywords,
+    signals: {
+      apple_category_guess: appleGuess || '',
+      apple_confidence: appleConfidence || 0,
+      apple_labels: appleLabels,
+      backend_category_guess: backendGuess || '',
+      backend_confidence: backendConfidence || 0,
+      backend_labels: backendLabels,
+      caption_hashtags: hashtags,
+      caption_keywords: captionKeywords,
+      detected_objects: detectedObjects,
+      detected_scene: detectedScene,
+      place_type: placeType,
+      user_selected_category: userSelectedCategory,
+      secondary_categories: secondaryCategories,
+      category_scores: normalizedScores,
+      scores: normalizedScores,
+      debug_reasons: reasons,
+    },
+  };
+}
+
+function autoCategoryFromBody(body: any, input: Omit<AutoCategoryInput, 'appleLabels' | 'appleCategoryGuess' | 'appleConfidence'>): AutoCategoryResult {
+  return autoCategoryEngine({
+    ...input,
+    hashtags: sanitizeAutoCategoryTags([
+      ...(input.hashtags || []),
+      ...sanitizeAutoCategoryTags(body.tags),
+      ...sanitizeAutoCategoryTags(body.hashtags),
+    ]),
+    appleLabels: sanitizeAutoCategoryLabels(body.apple_vision_labels || body.appleVisionLabels),
+    appleCategoryGuess: body.apple_vision_category_guess || body.appleVisionCategoryGuess,
+    appleConfidence: clampFloat(body.apple_vision_confidence ?? body.appleVisionConfidence, 0, 1, 0),
+    userSelectedCategory: body.primary_category || body.primaryCategory || body.discover_category || body.discoverCategory || body.user_selected_category || body.userSelectedCategory,
+    detectedObjects: sanitizeAutoCategoryTags(body.detected_objects || body.detectedObjects),
+    detectedScene: cleanText(body.detected_scene || body.detectedScene, 80),
+    placeType: cleanText(body.google_place_type || body.googlePlaceType || body.place_type || body.placeType || body.place_category || body.placeCategory, 120),
+    captionKeywords: sanitizeAutoCategoryTags(body.caption_keywords || body.captionKeywords),
+  });
+}
+
+type PostAssistResult = {
+  source: 'workers_ai' | 'fallback';
+  ai_available: boolean;
+  primary_category: DiscoverCategory;
+  category_confidence: number;
+  category_status: AutoCategoryStatus;
+  headline_suggestions: string[];
+  caption_suggestions: string[];
+  tags: string[];
+};
+
+function postAssistModel(env: Env): string {
+  return cleanText(env.POST_ASSIST_MODEL || '@cf/meta/llama-3.1-8b-instruct-fast', 120);
+}
+
+function cleanSuggestionList(value: unknown, maxItems: number, maxLength: number): string[] {
+  const raw = Array.isArray(value) ? value : parseJsonArray(value);
+  const seen = new Set<string>();
+  return raw
+    .map((item) => cleanMultilineText(item, maxLength).replace(/\s+/g, ' ').trim())
+    .filter((item) => item.length >= 3 && !seen.has(item.toLowerCase()) && seen.add(item.toLowerCase()))
+    .slice(0, maxItems);
+}
+
+function fallbackPostAssist(input: AutoCategoryInput, category: AutoCategoryResult): PostAssistResult {
+  const place = cleanText(input.placeName || input.location || '', 80);
+  const categoryLabel = category.primary_category.replace(/_/g, ' ');
+  const captionSeed = cleanMultilineText(input.caption || '', 180).replace(/\s+/g, ' ').trim();
+  const placeSuffix = place ? ` in ${place}` : '';
+  const headlineSuggestions = cleanSuggestionList([
+    captionSeed ? captionSeed.split(/[.!?\n]/)[0] : '',
+    `${categoryLabel.charAt(0).toUpperCase()}${categoryLabel.slice(1)} moment${placeSuffix}`,
+    place ? `A moment from ${place}` : 'Captured for today',
+  ], 3, 72);
+  const captionSuggestions = cleanSuggestionList([
+    captionSeed,
+    `A real ${categoryLabel} moment${placeSuffix}.`,
+    place ? `Caught this at ${place}.` : 'Keeping this one for the memory.',
+  ], 3, 260);
+  return {
+    source: 'fallback',
+    ai_available: false,
+    primary_category: category.primary_category,
+    category_confidence: category.category_confidence,
+    category_status: category.category_status,
+    headline_suggestions: headlineSuggestions.length ? headlineSuggestions : ['Captured for today'],
+    caption_suggestions: captionSuggestions.length ? captionSuggestions : ['Keeping this one for the memory.'],
+    tags: category.tags,
+  };
+}
+
+function workersAiText(result: any): string {
+  if (typeof result === 'string') return result;
+  if (typeof result?.response === 'string') return result.response;
+  if (typeof result?.result?.response === 'string') return result.result.response;
+  if (typeof result?.text === 'string') return result.text;
+  if (typeof result?.result?.text === 'string') return result.result.text;
+  const choice = result?.choices?.[0]?.message?.content || result?.result?.choices?.[0]?.message?.content;
+  return typeof choice === 'string' ? choice : '';
+}
+
+function parseJsonObjectFromAi(value: unknown): Record<string, unknown> {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const response = (value as any).response;
+    if (response && typeof response === 'object' && !Array.isArray(response)) return response;
+  }
+  const text = workersAiText(value).trim();
+  if (!text) return {};
+  const direct = parseJsonObject(text);
+  if (Object.keys(direct).length) return direct;
+  const match = text.match(/\{[\s\S]*\}/);
+  return match ? parseJsonObject(match[0]) : {};
+}
+
+function normalizePostAssistAiPayload(raw: Record<string, unknown>, fallback: PostAssistResult): PostAssistResult {
+  const aiCategory = normalizeDiscoverCategory(raw.primary_category || raw.category, false) as DiscoverCategory | '';
+  const confidence = clampFloat(raw.category_confidence ?? raw.confidence, 0, 1, fallback.category_confidence);
+  const headlineSuggestions = cleanSuggestionList(raw.headline_suggestions || raw.headlines || raw.titles, 4, 72);
+  const captionSuggestions = cleanSuggestionList(raw.caption_suggestions || raw.captions, 4, 280);
+  const tags = sanitizeAutoCategoryTags([...(fallback.tags || []), ...sanitizeAutoCategoryTags(raw.tags)]);
+  return {
+    source: 'workers_ai',
+    ai_available: true,
+    primary_category: aiCategory || fallback.primary_category,
+    category_confidence: Number(Math.max(confidence, fallback.category_confidence).toFixed(2)),
+    category_status: Math.max(confidence, fallback.category_confidence) >= 0.50 ? 'classified' : 'low_confidence',
+    headline_suggestions: headlineSuggestions.length ? headlineSuggestions : fallback.headline_suggestions,
+    caption_suggestions: captionSuggestions.length ? captionSuggestions : fallback.caption_suggestions,
+    tags: tags.length ? tags : fallback.tags,
+  };
+}
+
+async function generatePostAssistWithWorkersAi(env: Env, input: AutoCategoryInput, fallback: PostAssistResult): Promise<PostAssistResult> {
+  if (!env.AI) return fallback;
+  const payload = {
+    existing_headline: cleanText((input as any).title || '', 120),
+    existing_caption: cleanMultilineText(input.caption || '', 700),
+    media_type: cleanText(input.mediaType || input.postType || 'image', 40),
+    place: cleanText(input.placeName || '', 120),
+    location: cleanText(input.location || '', 140),
+    hashtags: sanitizeAutoCategoryTags(input.hashtags),
+    apple_vision_guess: normalizeDiscoverCategory(input.appleCategoryGuess, false),
+    apple_vision_confidence: clampFloat(input.appleConfidence, 0, 1, 0),
+    apple_vision_labels: sanitizeAutoCategoryLabels(input.appleLabels).slice(0, 12),
+    fallback_category: fallback.primary_category,
+    allowed_categories: DISCOVER_CATEGORIES,
+  };
+  const result = await env.AI.run(postAssistModel(env), {
+    messages: [
+      {
+        role: 'system',
+        content: [
+          'You are Captro Post Assist for a real social photo and short-video app.',
+          'Write natural, human captions and short headlines. Keep it premium, simple, and not fake.',
+          'Classify the post into exactly one allowed category. Do not invent unsupported categories.',
+          'Return JSON only. Do not include markdown.',
+        ].join(' '),
+      },
+      {
+        role: 'user',
+        content: JSON.stringify(payload),
+      },
+    ],
+    max_tokens: 420,
+    response_format: {
+      type: 'json_schema',
+      json_schema: {
+        type: 'object',
+        properties: {
+          primary_category: { type: 'string', enum: DISCOVER_CATEGORIES },
+          category_confidence: { type: 'number' },
+          headline_suggestions: { type: 'array', items: { type: 'string' } },
+          caption_suggestions: { type: 'array', items: { type: 'string' } },
+          tags: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['primary_category', 'category_confidence', 'headline_suggestions', 'caption_suggestions', 'tags'],
+      },
+    },
+  });
+  const parsed = parseJsonObjectFromAi(result);
+  return Object.keys(parsed).length ? normalizePostAssistAiPayload(parsed, fallback) : fallback;
+}
+
+async function classifyPostMetadataWithWorkersAi(env: Env, input: AutoCategoryInput): Promise<{ category: DiscoverCategory | ''; confidence: number; labels: AutoCategoryLabel[] }> {
+  if (!env.AI) return { category: '', confidence: 0, labels: [] };
+  const base = autoCategoryEngine(input);
+  const fallback = fallbackPostAssist(input, base);
+  const assist = await generatePostAssistWithWorkersAi(env, input, fallback);
+  const labels = sanitizeAutoCategoryLabels(assist.tags.map((tag) => ({ label: tag, confidence: 0.74, source: 'workers_ai_text' })));
+  return {
+    category: assist.primary_category,
+    confidence: assist.category_confidence,
+    labels,
+  };
 }
 
 function safeRateLimitPart(value: unknown): string {
@@ -1779,7 +3082,7 @@ async function validateDirectMessagePeer(c: any, currentUserId: string, peerId: 
   if (!peerId || peerId === currentUserId) {
     return c.json({ detail: 'Choose a valid recipient.' }, 400);
   }
-  const peer = await c.env.DB.prepare('SELECT id FROM users WHERE id = ?').bind(peerId).first();
+  const peer = await c.env.DB.prepare("SELECT id FROM users WHERE id = ? AND COALESCE(status, 'active') = 'active'").bind(peerId).first();
   if (!peer) return c.json({ detail: 'Recipient not found.' }, 404);
   if (await usersAreBlocked(c.env.DB, currentUserId, peerId)) {
     await logSecurityEvent(c, 'blocked_message_access_denied', currentUserId, { peer_id: peerId });
@@ -1923,6 +3226,7 @@ function normalizeReportReason(value: unknown): string {
     threats: 'threats_or_violence',
     threats_violence: 'threats_or_violence',
     threats_or_violence: 'threats_or_violence',
+    doxxing_private_info: 'doxxing_or_private_information',
     doxxing_private_information: 'doxxing_or_private_information',
     doxxing_or_private_information: 'doxxing_or_private_information',
     private_info: 'doxxing_or_private_information',
@@ -1936,6 +3240,7 @@ function normalizeReportReason(value: unknown): string {
     illegal_dangerous_activity: 'illegal_or_dangerous_activity',
     illegal_or_dangerous_activity: 'illegal_or_dangerous_activity',
     self_harm: 'self_harm_concern',
+    misleading_content: 'false_or_misleading_content',
     false_or_misleading: 'false_or_misleading_content',
     misleading: 'false_or_misleading_content',
     not_interested: 'dont_want_to_see',
@@ -2162,6 +3467,8 @@ async function insertNotificationOnce(c: any, input: {
   const type = cleanText(input.type || 'general', 60);
   const dedupeKey = cleanText(input.dedupeKey || '', 160);
   const data = safeNotificationData({ ...(input.data || {}), ...(dedupeKey ? { dedupe_key: dedupeKey } : {}) });
+  const language = await preferredNotificationLanguage(c, input.userId);
+  const copy = localizedNotificationCopy(language, type, input.title, input.body, data);
 
   if (dedupeKey) {
     try {
@@ -2176,13 +3483,13 @@ async function insertNotificationOnce(c: any, input: {
 
   await c.env.DB.prepare(
     'INSERT INTO notifications (id, user_id, type, title, body, data, is_read, created_at) VALUES (?, ?, ?, ?, ?, ?, 0, datetime(\'now\'))'
-  ).bind(uuid(), input.userId, type, cleanText(input.title, 120), cleanText(input.body, 300), JSON.stringify(data)).run();
+  ).bind(uuid(), input.userId, type, cleanText(copy.title, 120), cleanText(copy.body, 300), JSON.stringify(data)).run();
   runBackgroundTask(c, 'alert_push_failed', async () => {
     const status = await sendAlertPushForNotification(c, {
       userId: input.userId,
       type,
-      title: input.title,
-      body: input.body,
+      title: copy.title,
+      body: copy.body,
       data,
     });
     if (status.startsWith('apns_failed')) {
@@ -2190,6 +3497,37 @@ async function insertNotificationOnce(c: any, input: {
     }
   });
   return true;
+}
+
+async function preferredNotificationLanguage(c: any, userId: string): Promise<'en' | 'fr' | 'es'> {
+  try {
+    const row: any = await c.env.DB.prepare('SELECT language FROM users WHERE id = ? LIMIT 1').bind(userId).first();
+    const language = cleanText(row?.language || '', 8).toLowerCase().split('-')[0];
+    return language === 'fr' || language === 'es' ? language : 'en';
+  } catch {
+    return 'en';
+  }
+}
+
+function localizedNotificationCopy(language: 'en' | 'fr' | 'es', type: string, title: string, body: string, data: Record<string, unknown>): { title: string; body: string } {
+  const actorName = cleanText((data.actor_name || data.from_user_name || data.from_username || '') as string, 80) || (language === 'fr' ? 'Quelqu’un' : language === 'es' ? 'Alguien' : 'Someone');
+  if (type === 'like') {
+    if (language === 'fr') return { title: 'Nouveau J’aime', body: `${actorName} a aimé votre publication.` };
+    if (language === 'es') return { title: 'Nuevo me gusta', body: `A ${actorName} le gustó tu publicación.` };
+    return { title: 'New Like', body: `${actorName} liked your post.` };
+  }
+  if (type === 'comment' || type === 'comment_reply') {
+    const isReply = type === 'comment_reply';
+    if (language === 'fr') return { title: isReply ? 'Nouvelle réponse' : 'Nouveau commentaire', body: `${actorName} ${isReply ? 'a répondu à votre commentaire' : 'a commenté votre publication'}.` };
+    if (language === 'es') return { title: isReply ? 'Nueva respuesta' : 'Nuevo comentario', body: `${actorName} ${isReply ? 'respondió a tu comentario' : 'comentó tu publicación'}.` };
+    return { title: isReply ? 'New Reply' : 'New Comment', body: `${actorName} ${isReply ? 'replied to your comment' : 'commented on your post'}.` };
+  }
+  if (type === 'message') {
+    if (language === 'fr') return { title: 'Nouveau message', body: `Nouveau message de ${actorName}` };
+    if (language === 'es') return { title: 'Nuevo mensaje', body: `Nuevo mensaje de ${actorName}` };
+    return { title: 'New message', body: `New message from ${actorName}` };
+  }
+  return { title, body };
 }
 
 async function resolveReportTarget(c: any, reporterId: string, type: string, reportedId: string, body: any): Promise<{ ok: boolean; status?: number; detail?: string; contentId?: string; targetOwnerUserId?: string }> {
@@ -2247,13 +3585,6 @@ async function resolveReportTarget(c: any, reporterId: string, type: string, rep
       const row: any = await c.env.DB.prepare(storySql).bind(reportedId, reporterId, reporterId).first();
       if (!row) return { ok: false, status: 404, detail: 'Reported story was not found.' };
       if (row.user_id === reporterId) return { ok: false, status: 400, detail: 'You cannot report your own story.' };
-      return { ok: true, contentId: row.id, targetOwnerUserId: row.user_id };
-    }
-    if (type === 'note') {
-      await ensureNotesSchema(c.env.DB);
-      const row: any = await c.env.DB.prepare("SELECT id, user_id FROM notes WHERE id = ? AND COALESCE(status, 'active') = 'active' LIMIT 1").bind(reportedId).first();
-      if (!row) return { ok: false, status: 404, detail: 'Reported note was not found.' };
-      if (row.user_id === reporterId) return { ok: false, status: 400, detail: 'You cannot report your own note.' };
       return { ok: true, contentId: row.id, targetOwnerUserId: row.user_id };
     }
     if (type === 'music') {
@@ -2316,7 +3647,7 @@ async function submitReportRequest(c: any) {
   const wantsBlock = optionalBoolean(body.block_user ?? body.blockUser ?? body.block) === true;
   const wantsHideContent = optionalBoolean(body.hide_content ?? body.hideContent ?? body.hide) !== false;
   const target = await resolveReportTarget(c, reporterId, reportedType, reportedId, body);
-  if (!target.ok) return c.json({ detail: target.detail || 'Reported content was not found.' }, target.status || 400);
+  if (!target.ok) return c.json({ error_code: 'target_not_found', detail: target.detail || 'Reported content was not found.' }, target.status || 400);
 
   const existing: any = await c.env.DB.prepare(
     "SELECT id FROM reports WHERE reporter_id = ? AND reported_type = ? AND reported_id = ? AND COALESCE(status, 'open') IN ('open', 'pending', 'under_review', 'reviewing', 'escalated') LIMIT 1"
@@ -2324,7 +3655,7 @@ async function submitReportRequest(c: any) {
   if (existing) {
     await logSecurityEvent(c, 'duplicate_report_blocked', reporterId, { reported_type: reportedType, reason });
     const blocked = wantsBlock && target.targetOwnerUserId ? await blockUserForReporter(c, reporterId, target.targetOwnerUserId) : false;
-    return c.json({ id: existing.id, reported: true, duplicate: true, blocked, hidden: wantsHideContent });
+    return c.json({ id: existing.id, reported: true, duplicate: true, blocked, hidden: wantsHideContent, error_code: 'report_duplicate' });
   }
 
   const id = uuid();
@@ -2431,11 +3762,39 @@ function sanitizeMediaDimensions(value: unknown): any[] {
     .map((item: any) => {
       const width = clampNumber(item?.width, 0, 12000, 0);
       const height = clampNumber(item?.height, 0, 12000, 0);
-      const ratio = clampFloat(item?.ratio || (width > 0 && height > 0 ? width / height : 0), 0, 4, 0);
-      const format = cleanText(item?.format, 16);
-      const type = String(item?.type || '').toLowerCase().includes('video') ? 'video' : 'image';
-      if (!width && !height && !ratio && !format) return null;
-      return { width, height, ratio, format, type };
+      const originalWidth = clampNumber(item?.original_width ?? item?.originalWidth ?? width, 0, 12000, 0);
+      const originalHeight = clampNumber(item?.original_height ?? item?.originalHeight ?? height, 0, 12000, 0);
+      const originalAspectRatio = clampFloat(
+        item?.original_aspect_ratio
+        ?? item?.originalAspectRatio
+        ?? item?.aspect_ratio
+        ?? item?.aspectRatio
+        ?? item?.ratio
+        ?? (originalWidth > 0 && originalHeight > 0 ? originalWidth / originalHeight : 0),
+        0,
+        4,
+        0
+      );
+      const variant = supportedFeedMediaVariant({ ...item, width, height, original_width: originalWidth, original_height: originalHeight, original_aspect_ratio: originalAspectRatio });
+      const ratio = clampFloat(item?.ratio || originalAspectRatio || (width > 0 && height > 0 ? width / height : 0), 0, 4, 0);
+      const type = String(item?.media_type || item?.mediaType || item?.type || '').toLowerCase().includes('video') ? 'video' : 'image';
+      if (!width && !height && !ratio && !originalWidth && !originalHeight && !item?.format) return null;
+      return {
+        width,
+        height,
+        ratio,
+        format: variant.format,
+        type,
+        original_width: originalWidth || width || null,
+        original_height: originalHeight || height || null,
+        original_aspect_ratio: originalAspectRatio || ratio || null,
+        feed_width: variant.feed_width,
+        feed_height: variant.feed_height,
+        feed_aspect_ratio: variant.feed_aspect_ratio,
+        display_aspect_ratio: variant.feed_aspect_ratio,
+        crop_mode: cleanText(item?.crop_mode || item?.cropMode || 'center_crop', 40),
+        media_type: type,
+      };
     })
     .filter(Boolean)
     .slice(0, 12);
@@ -2443,8 +3802,8 @@ function sanitizeMediaDimensions(value: unknown): any[] {
 
 function normalizeRecommendationCategory(value: unknown): string {
   const clean = String(value || '').trim().toLowerCase().replace(/[^a-z0-9 _-]/g, '').replace(/\s+/g, ' ');
-  const allowed = new Set(['notes', 'vibe', 'music', 'people', 'artist', 'movies', 'books', 'artists', 'videos', 'podcasts', 'places', 'apps', 'other']);
-  if (clean === 'note' || clean === 'thought' || clean === 'poem') return 'notes';
+  const allowed = new Set(['vibe', 'music', 'people', 'artist', 'movies', 'books', 'artists', 'videos', 'podcasts', 'places', 'apps', 'other']);
+  if (clean === 'note' || clean === 'thought' || clean === 'poem') return 'other';
   if (clean === 'vibes' || clean === 'mood') return 'vibe';
   if (clean === 'new' || clean === 'article' || clean === 'articles') return 'other';
   if (clean === 'movie' || clean === 'film') return 'movies';
@@ -2607,32 +3966,6 @@ function publicRecommendationPayload(recommendation: any) {
   };
 }
 
-const NOTE_TYPES = new Set(['thought', 'feeling', 'advice', 'confession', 'question', 'quote', 'memory', 'mood', 'journal']);
-const NOTE_MOODS: Record<string, string> = {
-  soft: '#F6E7D7',
-  calm: '#E7F1DF',
-  blue: '#DCEAF8',
-  love: '#F8DDE7',
-  night: '#E7E1F5',
-  gold: '#F7E7B7',
-  green: '#DFF0D8',
-  gray: '#ECEBE6',
-};
-
-function normalizeNoteType(value: unknown): string {
-  const clean = String(value || '').trim().toLowerCase().replace(/[^a-z0-9 _-]/g, '').replace(/\s+/g, ' ');
-  if (clean === 'late night thoughts') return 'thought';
-  if (clean === 'anonymous feelings') return 'feeling';
-  if (clean === 'daily mood') return 'mood';
-  return NOTE_TYPES.has(clean) ? clean : 'thought';
-}
-
-function normalizeNoteMood(value: unknown): { mood: string; color: string } {
-  const clean = String(value || '').trim().toLowerCase().replace(/[^a-z0-9 _-]/g, '').replace(/\s+/g, ' ');
-  const mood = NOTE_MOODS[clean] ? clean : 'soft';
-  return { mood, color: NOTE_MOODS[mood] };
-}
-
 function moderateCommunityText(value: string): { ok: boolean; detail?: string } {
   const text = String(value || '').trim();
   if (!text) return { ok: false, detail: 'Write something first.' };
@@ -2643,47 +3976,14 @@ function moderateCommunityText(value: string): { ok: boolean; detail?: string } 
     /\b(doxx|home address is|ssn|social security number|credit card number|private phone number)\b/i,
     /\b(child porn|minor sexual|underage sexual|sexual minor)\b/i,
     /\b(scamming|phishing|wire me money|guaranteed crypto profit)\b/i,
+    /\b(free money|cashapp flip|telegram investment|whatsapp investment|click this link|login to verify|airdrop claim)\b/i,
+    /\b(bit\.ly|tinyurl\.com|t\.me\/|wa\.me\/|grabify|iplogger)\b/i,
     /\b(nazi praise|exterminate all|racial slur)\b/i,
   ];
   if (blockedPatterns.some((pattern) => pattern.test(text))) {
     return { ok: false, detail: 'That needs moderation review before it can be posted.' };
   }
   return { ok: true };
-}
-
-function publicNotePayload(row: any, opts: { reacted?: boolean; saved?: boolean } = {}) {
-  const anonymous = Number(row.anonymous || 0) === 1;
-  return {
-    id: row.id,
-    body: row.body || '',
-    note_type: row.note_type || 'thought',
-    mood: row.mood || 'soft',
-    color: row.color || NOTE_MOODS.soft,
-    media_url: row.media_url || '',
-    media_type: row.media_type || '',
-    anonymous,
-    status: row.status || 'active',
-    reactions_count: Number(row.reactions_count || 0),
-    comments_count: Number(row.comments_count || 0),
-    saves_count: Number(row.saves_count || 0),
-    shares_count: Number(row.shares_count || 0),
-    reports_count: Number(row.reports_count || 0),
-    created_at: row.created_at,
-    updated_at: row.updated_at,
-    reacted: !!opts.reacted || Number(row.reacted || 0) === 1,
-    saved: !!opts.saved || Number(row.saved || 0) === 1,
-    user: anonymous ? {
-      id: '',
-      username: 'anonymous',
-      full_name: 'Anonymous',
-      profile_image: '',
-    } : {
-      id: row.user_id,
-      username: row.user_username || '',
-      full_name: row.user_full_name || '',
-      profile_image: row.user_profile_image || '',
-    },
-  };
 }
 
 function publicPeoplePayload(row: any, opts: { followed?: boolean; saved?: boolean } = {}) {
@@ -2893,8 +4193,8 @@ function publicAiMusicPayload(row: any, opts: { liked?: boolean; saved?: boolean
   };
 }
 
-const AUDIUS_APP_NAME = 'Flames Up';
-const AUDIUS_BASE_URL = 'https://discoveryprovider.audius.co/v1';
+const AUDIUS_APP_NAME = 'Captro';
+const AUDIUS_BASE_URL = 'https://api.audius.co/v1';
 
 function audiusUrl(path: string, params: Record<string, string | number | undefined>) {
   const url = new URL(`${AUDIUS_BASE_URL}${path}`);
@@ -3034,7 +4334,7 @@ function normalizedContentType(value: unknown): string {
   return String(value || '').split(';')[0].trim().toLowerCase();
 }
 
-const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/webp']);
+const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/heic', 'image/heif']);
 const ALLOWED_VIDEO_TYPES = new Set(['video/mp4', 'video/quicktime', 'video/webm']);
 const ALLOWED_AUDIO_TYPES = new Set(['audio/m4a', 'audio/mp4', 'audio/aac', 'audio/mpeg', 'audio/wav', 'audio/webm']);
 const ALLOWED_FILE_TYPES = new Set([
@@ -3047,7 +4347,7 @@ const ALLOWED_FILE_TYPES = new Set([
   'application/vnd.ms-excel',
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
 ]);
-const ALLOWED_IMAGE_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'webp']);
+const ALLOWED_IMAGE_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'webp', 'heic', 'heif']);
 const ALLOWED_VIDEO_EXTENSIONS = new Set(['mp4', 'mov', 'webm']);
 const ALLOWED_AUDIO_EXTENSIONS = new Set(['m4a', 'aac', 'mp3', 'wav', 'webm']);
 const ALLOWED_FILE_EXTENSIONS = new Set(['pdf', 'txt', 'doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx']);
@@ -3357,7 +4657,7 @@ async function storeMediaBackup(c: any, opts: {
 }
 
 async function attachMediaBackupsToPost(db: D1Database, userId: string, postId: string, backupIds: string[]) {
-  const ids = backupIds.map(String).filter(Boolean);
+  const ids = Array.from(new Set(backupIds.map(String).map((id) => id.trim()).filter(Boolean)));
   if (!ids.length) return;
   await ensureMediaBackupSchema(db);
 
@@ -3366,6 +4666,10 @@ async function attachMediaBackupsToPost(db: D1Database, userId: string, postId: 
       .bind(postId, now(), backupId, userId)
       .run();
   }
+}
+
+function mediaBackupIdsFromReferences(values: unknown[]): string[] {
+  return Array.from(new Set(values.map(mediaBackupIdFromReference).filter(Boolean)));
 }
 
 async function attachMediaBackupToMessage(
@@ -3384,13 +4688,62 @@ async function attachMediaBackupToMessage(
 }
 
 async function messagePayload(c: any, row: any): Promise<any> {
-  const mediaUrl = row.media_url ? await signedMessageMediaReference(c, row.media_url) : row.media_url;
-  return { ...row, media_url: mediaUrl };
+  const rawMediaUrl = cleanText(row.media_url || '', 2500);
+  let mediaUrl = rawMediaUrl ? await signedMessageMediaReference(c, rawMediaUrl) : rawMediaUrl;
+  const rawMediaType = cleanText(row.media_type || '', 40).toLowerCase();
+  const isVideoMessage = rawMediaType.includes('video') || isVideoMediaUrl(rawMediaUrl) || isVideoMediaUrl(mediaUrl);
+  const streamPosterUrl = isVideoMessage ? streamThumbnailUrl(rawMediaUrl) : '';
+  if (isVideoMessage && rawMediaUrl.startsWith('cfstream:')) mediaUrl = rawMediaUrl;
+  const rawCreatedAt = cleanText(row.created_at || '', 80);
+  const parsedCreatedAt = rawCreatedAt
+    ? Date.parse(rawCreatedAt.includes('T') ? rawCreatedAt : `${rawCreatedAt.replace(' ', 'T')}Z`)
+    : NaN;
+  const thumbnailUrl = row.thumbnail_url || row.thumbnail || streamPosterUrl || null;
+  const posterUrl = row.poster_url || row.poster || streamPosterUrl || thumbnailUrl || null;
+  return {
+    ...row,
+    media_url: mediaUrl,
+    status: row.status || 'sent',
+    updated_at: row.updated_at || row.created_at || null,
+    server_sequence: Number.isFinite(parsedCreatedAt) ? parsedCreatedAt : null,
+    thumbnail_url: thumbnailUrl,
+    poster_url: posterUrl,
+  };
 }
 
 const FEED_MEDIA_WIDTH = 1080;
 const FEED_MEDIA_HEIGHT = 1440;
 const FEED_MEDIA_ASPECT_RATIO = FEED_MEDIA_WIDTH / FEED_MEDIA_HEIGHT;
+const SUPPORTED_FEED_MEDIA_RATIOS = [
+  { format: '3:4', feed_width: 1080, feed_height: 1440, feed_aspect_ratio: 1080 / 1440 },
+  { format: '4:5', feed_width: 1080, feed_height: 1350, feed_aspect_ratio: 1080 / 1350 },
+  { format: '2:3', feed_width: 1080, feed_height: 1620, feed_aspect_ratio: 1080 / 1620 },
+];
+const DEFAULT_FEED_MEDIA_RATIO = SUPPORTED_FEED_MEDIA_RATIOS[0];
+
+function supportedFeedMediaVariant(source: any = {}) {
+  const format = cleanText(source?.format, 16);
+  const explicit = SUPPORTED_FEED_MEDIA_RATIOS.find((item) => item.format === format);
+  if (explicit) return explicit;
+  const width = Number(source?.original_width || source?.originalWidth || source?.width || 0);
+  const height = Number(source?.original_height || source?.originalHeight || source?.height || 0);
+  const ratio = Number(
+    source?.display_aspect_ratio
+    || source?.displayAspectRatio
+    || source?.feed_aspect_ratio
+    || source?.feedAspectRatio
+    || source?.original_aspect_ratio
+    || source?.originalAspectRatio
+    || source?.aspect_ratio
+    || source?.aspectRatio
+    || source?.ratio
+    || (width > 0 && height > 0 ? width / height : 0)
+  );
+  if (!Number.isFinite(ratio) || ratio <= 0 || ratio >= 1) return DEFAULT_FEED_MEDIA_RATIO;
+  return SUPPORTED_FEED_MEDIA_RATIOS.reduce((best, candidate) => (
+    Math.abs(candidate.feed_aspect_ratio - ratio) < Math.abs(best.feed_aspect_ratio - ratio) ? candidate : best
+  ), DEFAULT_FEED_MEDIA_RATIO);
+}
 
 function replaceCloudflareImageVariant(url: string, variant: string): string {
   const cleanVariant = cleanText(variant, 80);
@@ -3410,19 +4763,74 @@ function replaceCloudflareImageVariant(url: string, variant: string): string {
 
 function isVideoMediaUrl(url: string): boolean {
   const lower = String(url || '').toLowerCase();
-  return lower.startsWith('cfstream:') || /\.(mp4|mov|m4v|webm)(\?|#|$)/.test(lower);
+  return lower.startsWith('cfstream:')
+    || lower.includes('videodelivery.net')
+    || lower.includes('cloudflarestream.com')
+    || lower.includes('tiktok')
+    || lower.includes('/manifest/video.m3u8')
+    || /\.(mp4|mov|m4v|webm|m3u8)(\?|#|$)/.test(lower);
 }
 
-function feedDeliveryUrl(url: string, mediaType: string, variant: string): string {
+function postContainsVideoMedia(post: any): boolean {
+  const mediaUrls = sanitizeMediaReferences(post?.images, post?.image);
+  const mediaTypes = parseJsonArray(post?.media_types).map((item) => String(item || '').toLowerCase());
+  const postType = String(post?.post_type || post?.media_type || post?.type || '').toLowerCase();
+  return postType.includes('video') || mediaTypes.some((type) => type.includes('video')) || mediaUrls.some(isVideoMediaUrl);
+}
+
+function normalizeStoryDurationSeconds(value: unknown): 15 | 30 | 60 | 0 {
+  const duration = Math.round(Number(value || 0));
+  if (duration === 15 || duration === 30 || duration === 60) return duration;
+  return 0;
+}
+
+function maxPostCounterAfterToggle(current: unknown, enabled: boolean, changed: boolean): number {
+  const count = Math.max(0, Number(current || 0));
+  if (!changed) return count;
+  return enabled ? count + 1 : Math.max(0, count - 1);
+}
+
+function feedPhotoPostsOnly(posts: any[]): any[] {
+  return posts.filter((post) => !postContainsVideoMedia(post) && String(post?.post_type || '').toLowerCase() !== 'note');
+}
+
+function feedPhotoPostWhere(postAlias = 'p'): string {
+  const postType = `LOWER(COALESCE(${postAlias}.post_type, ''))`;
+  const mediaTypes = `LOWER(COALESCE(${postAlias}.media_types, ''))`;
+  const image = `LOWER(COALESCE(${postAlias}.image, ''))`;
+  const images = `LOWER(COALESCE(${postAlias}.images, ''))`;
+  const videoNeedles = [
+    "'%video%'",
+    "'%cfstream:%'",
+    "'%videodelivery.net%'",
+    "'%cloudflarestream.com%'",
+    "'%tiktok%'",
+    "'%.mp4%'",
+    "'%.mov%'",
+    "'%.m4v%'",
+    "'%.webm%'",
+    "'%.m3u8%'",
+  ];
+  const conditions = [
+    `${postType} != 'note'`,
+    ...videoNeedles.map((needle) => `${postType} NOT LIKE ${needle}`),
+    ...videoNeedles.map((needle) => `${mediaTypes} NOT LIKE ${needle}`),
+    ...videoNeedles.slice(1).map((needle) => `${image} NOT LIKE ${needle}`),
+    ...videoNeedles.slice(1).map((needle) => `${images} NOT LIKE ${needle}`),
+  ];
+  return conditions.join(' AND ');
+}
+
+function feedDeliveryUrl(url: string, mediaType: string, variant: string, env?: Env): string {
   if (!url) return '';
   if (mediaType === 'video') return url;
-  return replaceCloudflareImageVariant(url, variant);
+  return cloudflareTransformedImageUrl(env, replaceCloudflareImageVariant(url, variant), 'feed');
 }
 
-function posterDeliveryUrl(url: string, mediaType: string, variant: string): string {
+function posterDeliveryUrl(url: string, mediaType: string, variant: string, env?: Env): string {
   if (!url) return '';
-  if (mediaType !== 'video') return replaceCloudflareImageVariant(url, variant);
-  return url;
+  if (mediaType !== 'video') return cloudflareTransformedImageUrl(env, replaceCloudflareImageVariant(url, variant), 'thumbnail');
+  return streamThumbnailUrl(url);
 }
 
 function cloudflareStreamUid(url: string): string {
@@ -3449,18 +4857,74 @@ function feedMediaDimensions(mediaUrls: string[], mediaTypes: string[], dimensio
     const originalAspectRatio = Number(original.ratio || original.aspect_ratio || (originalWidth && originalHeight ? originalWidth / originalHeight : 0)) || null;
     const rawType = String(mediaTypes[index] || original.type || '').toLowerCase();
     const mediaType = rawType.includes('video') || isVideoMediaUrl(url) ? 'video' : 'image';
+    const variant = supportedFeedMediaVariant({ ...original, original_width: originalWidth, original_height: originalHeight, original_aspect_ratio: originalAspectRatio });
     return {
       ...original,
       original_width: originalWidth,
       original_height: originalHeight,
       original_aspect_ratio: originalAspectRatio,
-      feed_width: FEED_MEDIA_WIDTH,
-      feed_height: FEED_MEDIA_HEIGHT,
-      feed_aspect_ratio: FEED_MEDIA_ASPECT_RATIO,
+      width: originalWidth,
+      height: originalHeight,
+      ratio: originalAspectRatio,
+      format: variant.format,
+      feed_width: variant.feed_width,
+      feed_height: variant.feed_height,
+      feed_aspect_ratio: variant.feed_aspect_ratio,
+      display_aspect_ratio: variant.feed_aspect_ratio,
+      crop_mode: cleanText(original.crop_mode || original.cropMode || 'center_crop', 40),
       media_type: mediaType,
       type: mediaType,
     };
   });
+}
+
+function normalizeDisplayLocationSource(value: unknown): string {
+  const clean = cleanText(value, 40).toLowerCase();
+  return ['user_profile', 'mapbox_reverse_geocode', 'manual', 'none'].includes(clean) ? clean : 'none';
+}
+
+function normalizeDisplayLocationVisibility(value: unknown): string {
+  const clean = cleanText(value, 40).toLowerCase();
+  return ['public', 'followers', 'hidden'].includes(clean) ? clean : 'hidden';
+}
+
+function normalizeAppleMapKitProvider(value: unknown): string {
+  const clean = cleanText(value, 40).toLowerCase();
+  return clean === 'apple_mapkit' ? 'apple_mapkit' : '';
+}
+
+function normalizeDisplayLocationLabel(city: string, region: string, country: string, fallback: string): string {
+  const label = cleanText(fallback, 120);
+  if (label) return label;
+  const parts = [city, region, country].map((part) => cleanText(part, 80)).filter(Boolean);
+  if (!parts.length) return '';
+  if (parts.length === 3) return `${parts[0]}, ${parts[1]}, ${parts[2]}`;
+  return parts.join(', ');
+}
+
+function looksLikePrivatePlace(name: string, address: string, category: string): boolean {
+  const text = `${name} ${address} ${category}`.toLowerCase();
+  if (!text.trim()) return false;
+  if (/\b(home|house|apartment|apt|unit|private residence|residential)\b/.test(text)) return true;
+  return /\b\d{1,6}\s+[a-z0-9.' -]+\s+(street|st|avenue|ave|road|rd|lane|ln|drive|dr|court|ct|way|boulevard|blvd)\b/.test(text)
+    && !/\b(restaurant|cafe|coffee|gym|park|museum|bar|club|hotel|school|store|venue|stadium|gallery)\b/.test(text);
+}
+
+function normalizeCategoryScoresPayload(value: unknown): Record<string, number> {
+  const raw = parseJsonObject(value);
+  const scores: Record<string, number> = {};
+  for (const category of DISCOVER_CATEGORIES) {
+    const score = Number(raw[category] || 0);
+    scores[category] = Number(Math.max(0, Number.isFinite(score) ? score : 0).toFixed(1));
+  }
+  return scores;
+}
+
+function normalizeSecondaryCategoriesPayload(value: unknown, primary: DiscoverCategory): DiscoverCategory[] {
+  const categories = sanitizeAutoCategoryTags(value)
+    .map((item) => normalizeDiscoverCategory(item, false) as DiscoverCategory | '')
+    .filter((item): item is DiscoverCategory => !!item);
+  return Array.from(new Set([primary, ...categories])).slice(0, 5);
 }
 
 function postPayload(post: any, likedBy: string[] = [], env?: Env) {
@@ -3477,9 +4941,29 @@ function postPayload(post: any, likedBy: string[] = [], env?: Env) {
   const dimensions = parseJsonArray(post.media_dimensions);
   const feedVariant = env?.CLOUDFLARE_IMAGES_FEED_VARIANT || '';
   const thumbnailVariant = env?.CLOUDFLARE_IMAGES_THUMBNAIL_VARIANT || '';
-  const feedMediaUrls = mediaUrls.map((url, index) => feedDeliveryUrl(url, mediaTypes[index] || 'image', feedVariant)).filter(Boolean);
-  const thumbnailUrls = mediaUrls.map((url, index) => posterDeliveryUrl(url, mediaTypes[index] || 'image', thumbnailVariant)).filter(Boolean);
-  const posterUrls = mediaUrls.map((url, index) => posterDeliveryUrl(url, mediaTypes[index] || 'image', thumbnailVariant)).filter(Boolean);
+  const feedMediaUrls = mediaUrls.map((url, index) => feedDeliveryUrl(url, mediaTypes[index] || 'image', feedVariant, env)).filter(Boolean);
+  const thumbnailUrls = mediaUrls.map((url, index) => posterDeliveryUrl(url, mediaTypes[index] || 'image', thumbnailVariant, env)).filter(Boolean);
+  const posterUrls = mediaUrls.map((url, index) => posterDeliveryUrl(url, mediaTypes[index] || 'image', thumbnailVariant, env)).filter(Boolean);
+  const fallbackMediaUrls = mediaUrls.map((url, index) => {
+    const renderedUrl = feedMediaUrls[index] || url;
+    return cloudflareImageProxyFallbackUrl(env, renderedUrl) || cloudflareImageProxyFallbackUrl(env, url) || url;
+  });
+  const renderedMediaDimensions = feedMediaDimensions(mediaUrls, mediaTypes, dimensions);
+  const primaryMediaDimensions = renderedMediaDimensions[0] || DEFAULT_FEED_MEDIA_RATIO;
+  const primaryCategory = (normalizeDiscoverCategory(post.primary_category || post.category || post.post_type, false) || DEFAULT_DISCOVER_CATEGORY) as DiscoverCategory;
+  const categoryConfidence = clampFloat(post.category_confidence, 0, 1, 0);
+  const categoryScores = normalizeCategoryScoresPayload(post.category_scores_json || (parseJsonObject(post.category_signals_json) as any).category_scores);
+  if (!categoryScores[primaryCategory]) categoryScores[primaryCategory] = Number(Math.max(categoryConfidence * 100, 45).toFixed(1));
+  const secondaryCategories = normalizeSecondaryCategoriesPayload(post.secondary_categories_json, primaryCategory);
+  const detectedObjects = sanitizeAutoCategoryTags(post.detected_objects_json || (parseJsonObject(post.category_signals_json) as any).detected_objects);
+  const captionKeywords = sanitizeAutoCategoryTags(post.caption_keywords_json || (parseJsonObject(post.category_signals_json) as any).caption_keywords);
+  const categoryDebug = parseJsonObject(post.category_signals_json);
+  const displayLocationVisibility = normalizeDisplayLocationVisibility(post.display_location_visibility);
+  const canShowDisplayLocation = displayLocationVisibility === 'public'
+    || (displayLocationVisibility === 'followers' && (post.is_following === true || post.is_following === 1 || post.is_following === '1'));
+  const displayLocationLabel = !canShowDisplayLocation
+    ? ''
+    : normalizeDisplayLocationLabel(post.display_city || '', post.display_region || '', post.display_country || '', post.display_location_label || '');
   const payload = {
     ...post,
     user_username: publicUsernameFor({ username: post.user_username }),
@@ -3487,22 +4971,55 @@ function postPayload(post: any, likedBy: string[] = [], env?: Env) {
     likes_count: likesCount,
     comments_count: commentsCount,
     saves_count: savesCount,
+    liked: isLiked,
     is_liked: isLiked,
+    liked_by_me: isLiked,
+    viewer_liked: isLiked,
     is_saved: isSaved,
     saved: isSaved,
+    saved_by_me: isSaved,
+    viewer_saved: isSaved,
     image: primaryMediaUrl,
     images: mediaUrls,
     feed_media_urls: feedMediaUrls,
     thumbnail_urls: thumbnailUrls,
     poster_urls: posterUrls,
+    media_fallback_urls: fallbackMediaUrls,
     original_media_url: primaryMediaUrl,
     original_media_urls: mediaUrls,
     media_types: mediaTypes.slice(0, mediaUrls.length || mediaTypes.length),
     media_backup_ids: parseJsonArray(post.media_backup_ids),
-    media_dimensions: feedMediaDimensions(mediaUrls, mediaTypes, dimensions),
-    feed_width: FEED_MEDIA_WIDTH,
-    feed_height: FEED_MEDIA_HEIGHT,
-    feed_aspect_ratio: FEED_MEDIA_ASPECT_RATIO,
+    media_dimensions: renderedMediaDimensions,
+    feed_width: Number(primaryMediaDimensions.feed_width || FEED_MEDIA_WIDTH),
+    feed_height: Number(primaryMediaDimensions.feed_height || FEED_MEDIA_HEIGHT),
+    feed_aspect_ratio: Number(primaryMediaDimensions.feed_aspect_ratio || FEED_MEDIA_ASPECT_RATIO),
+    primary_category: primaryCategory,
+    category: primaryCategory,
+    category_confidence: categoryConfidence,
+    category_source: normalizeCategorySource(post.category_source),
+    category_status: normalizeCategoryStatus(post.category_status),
+    secondary_categories: secondaryCategories,
+    category_scores: categoryScores,
+    detected_objects: detectedObjects,
+    detected_scene: cleanText(post.detected_scene || (categoryDebug as any).detected_scene || '', 80),
+    place_type: cleanText(post.place_type || (categoryDebug as any).place_type || '', 120),
+    user_selected_category: normalizeDiscoverCategory(post.user_selected_category || (categoryDebug as any).user_selected_category, false),
+    caption_keywords: captionKeywords,
+    category_signals: categoryDebug,
+    tags: sanitizeAutoCategoryTags(post.tags_json),
+    display_city: canShowDisplayLocation ? cleanText(post.display_city, 80) : '',
+    display_region: canShowDisplayLocation ? cleanText(post.display_region, 80) : '',
+    display_country: canShowDisplayLocation ? cleanText(post.display_country, 80) : '',
+    display_location_label: displayLocationLabel,
+    display_location_source: displayLocationLabel ? normalizeDisplayLocationSource(post.display_location_source) : 'none',
+    display_location_visibility: displayLocationVisibility,
+    place_provider: cleanText(post.place_provider, 40),
+    place_provider_id: cleanText(post.place_provider_id || post.place_id, 160),
+    place_formatted_address: cleanText(post.place_formatted_address || post.location, 260),
+    place_category: cleanText(post.place_category, 80),
+    place_city: cleanText(post.place_city, 80),
+    place_region: cleanText(post.place_region, 80),
+    place_country: cleanText(post.place_country, 80),
     editor_overlays: parseJsonArray(post.editor_overlays),
     tagged_users: parseJsonArray(post.tagged_users),
     liked_by: likedBy,
@@ -3511,6 +5028,8 @@ function postPayload(post: any, likedBy: string[] = [], env?: Env) {
   delete payload.live_likes_count;
   delete payload.live_comments_count;
   delete payload.live_saves_count;
+  delete payload.place_lat;
+  delete payload.place_lng;
   if (audioHidden) {
     payload.audio_provider = '';
     payload.audio_track_id = '';
@@ -3540,34 +5059,494 @@ function feedPostPayload(post: any, likedBy: string[] = [], env?: Env) {
   delete payload.hidden_at;
   delete payload.hidden_by_user_id;
   delete payload.user_email;
+  delete payload.place_lat;
+  delete payload.place_lng;
+  delete payload.category_signals_json;
+  delete payload.category_signals;
   return payload;
 }
 
 async function getPostEngagementState(db: D1Database, postId: string, userId: string) {
+  await ensureLikeUniquenessSchema(db);
+  await reconcileLegacyDiscoverLikes(db, postId);
+  await coalesceViewerPostInteractions(db, postId, userId);
+  const relatedUserIds = await relatedInteractionUserIds(db, userId);
+  const relatedPlaceholders = inPlaceholders(relatedUserIds);
   const row: any = await db.prepare(
     `SELECT
-       (SELECT COUNT(*) FROM likes WHERE post_id = ?) AS likes_count,
-       (SELECT COUNT(*) FROM comments WHERE post_id = ? AND COALESCE(status, 'active') NOT IN ('removed', 'hidden')) AS comments_count,
-       (SELECT COUNT(*) FROM saved_posts WHERE post_id = ?) AS saves_count,
-       EXISTS (SELECT 1 FROM likes WHERE user_id = ? AND post_id = ?) AS is_liked,
-       EXISTS (SELECT 1 FROM saved_posts WHERE user_id = ? AND post_id = ?) AS saved`
-  ).bind(postId, postId, postId, userId, postId, userId, postId).first();
+       COALESCE(p.likes_count, 0) AS stored_likes_count,
+       COALESCE(p.comments_count, 0) AS stored_comments_count,
+       COALESCE(p.saves_count, 0) AS stored_saves_count,
+       (SELECT COUNT(*) FROM likes WHERE post_id = p.id) AS counted_likes_count,
+       (SELECT COUNT(*) FROM comments WHERE post_id = p.id AND COALESCE(status, 'active') NOT IN ('removed', 'hidden')) AS counted_comments_count,
+       (SELECT COUNT(*) FROM saved_posts WHERE post_id = p.id) AS counted_saves_count,
+       EXISTS (SELECT 1 FROM likes WHERE post_id = ? AND user_id IN (${relatedPlaceholders})) AS is_liked,
+       EXISTS (SELECT 1 FROM saved_posts WHERE post_id = ? AND user_id IN (${relatedPlaceholders})) AS saved`
+  + ' FROM posts p WHERE p.id = ?'
+  ).bind(postId, ...relatedUserIds, postId, ...relatedUserIds, postId).first();
 
   const state = {
-    likes_count: Math.max(0, Number(row?.likes_count || 0)),
-    comments_count: Math.max(0, Number(row?.comments_count || 0)),
-    saves_count: Math.max(0, Number(row?.saves_count || 0)),
+    likes_count: Math.max(0, Number(row?.counted_likes_count || 0)),
+    comments_count: Math.max(0, Number(row?.counted_comments_count || 0)),
+    saves_count: Math.max(0, Number(row?.counted_saves_count || 0)),
     liked: row?.is_liked === true || row?.is_liked === 1 || row?.is_liked === '1',
     saved: row?.saved === true || row?.saved === 1 || row?.saved === '1',
   };
 
-  // Keep the denormalized counters repaired, but never trust them as the source of truth.
+  // Keep denormalized counters repaired from canonical interaction rows so old
+  // duplicate/stale counters cannot make a post look liked more than once.
   try {
-    await db.prepare('UPDATE posts SET likes_count = ?, comments_count = ?, saves_count = ? WHERE id = ?')
+    await db.prepare(
+      `UPDATE posts
+       SET likes_count = ?,
+           comments_count = ?,
+           saves_count = ?
+       WHERE id = ?`
+    )
       .bind(state.likes_count, state.comments_count, state.saves_count, postId)
       .run();
   } catch {}
   return state;
+}
+
+function postgrestInFilter(values: string[]): string {
+  const safeValues = values
+    .map((value) => cleanText(value, 240))
+    .filter(Boolean)
+    .map((value) => `"${value.replace(/"/g, '""')}"`);
+  return `in.(${safeValues.join(',')})`;
+}
+
+function postgrestEqFilter(value: string): string {
+  return `eq.${cleanText(value, 240)}`;
+}
+
+function supabaseEngagementConfigured(c: any): boolean {
+  return !!String(c.env.SUPABASE_URL || '').trim() && !!String(c.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+}
+
+function databasePrimary(c: any): 'supabase_postgres' | 'legacy_d1' {
+  return String(c?.env?.DATABASE_PRIMARY || '').trim().toLowerCase() === 'supabase_postgres'
+    ? 'supabase_postgres'
+    : 'legacy_d1';
+}
+
+function supabasePrimaryConfigured(c: any): boolean {
+  return databasePrimary(c) === 'supabase_postgres' && supabaseEngagementConfigured(c);
+}
+
+async function supabaseAdminSelectRows(c: any, table: string, filters: Record<string, string>, select = '*', limit = 1000): Promise<any[]> {
+  const url = new URL(`${getSupabaseUrl(c)}/rest/v1/${table}`);
+  url.searchParams.set('select', select);
+  for (const [key, value] of Object.entries(filters)) {
+    url.searchParams.set(key, value);
+  }
+  if (limit > 0) url.searchParams.set('limit', String(limit));
+  const response = await fetch(url.toString(), {
+    headers: supabaseAdminAuthHeaders(c),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`SUPABASE_SELECT_FAILED:${table}:${response.status}:${text.slice(0, 300)}`);
+  }
+  const data = await response.json().catch(() => []);
+  return Array.isArray(data) ? data : [];
+}
+
+async function supabaseAdminCountRows(c: any, table: string, filters: Record<string, string>): Promise<number> {
+  const url = new URL(`${getSupabaseUrl(c)}/rest/v1/${table}`);
+  url.searchParams.set('select', 'legacy_post_id');
+  url.searchParams.set('limit', '1');
+  for (const [key, value] of Object.entries(filters)) {
+    url.searchParams.set(key, value);
+  }
+  const serviceRoleKey = getSupabaseServiceRoleKey(c);
+  const response = await fetch(url.toString(), {
+    headers: {
+      apikey: serviceRoleKey,
+      Authorization: `Bearer ${serviceRoleKey}`,
+      Prefer: 'count=exact',
+    },
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`SUPABASE_COUNT_FAILED:${table}:${response.status}:${text.slice(0, 300)}`);
+  }
+  const contentRange = response.headers.get('content-range') || response.headers.get('Content-Range') || '';
+  const total = Number(contentRange.split('/').pop() || NaN);
+  if (Number.isFinite(total)) return Math.max(0, total);
+  const data = await response.json().catch(() => []);
+  return Array.isArray(data) ? data.length : 0;
+}
+
+async function supabaseAdminDeleteRows(c: any, table: string, filters: Record<string, string>) {
+  const url = new URL(`${getSupabaseUrl(c)}/rest/v1/${table}`);
+  for (const [key, value] of Object.entries(filters)) {
+    url.searchParams.set(key, value);
+  }
+  const serviceRoleKey = getSupabaseServiceRoleKey(c);
+  const response = await fetch(url.toString(), {
+    method: 'DELETE',
+    headers: {
+      apikey: serviceRoleKey,
+      Authorization: `Bearer ${serviceRoleKey}`,
+      Prefer: 'return=minimal',
+    },
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`SUPABASE_DELETE_FAILED:${table}:${response.status}:${text.slice(0, 300)}`);
+  }
+}
+
+async function supabaseDeletePostInteractionsForUsers(c: any, postId: string, userIds: string[], kind: 'like' | 'save') {
+  if (!userIds.length) return;
+  await supabaseAdminDeleteRows(c, 'app_post_interactions', {
+    legacy_post_id: postgrestEqFilter(postId),
+    kind: postgrestEqFilter(kind),
+    app_user_id: postgrestInFilter(userIds),
+  });
+}
+
+async function supabaseUpsertPostInteraction(c: any, postId: string, userId: string, kind: 'like' | 'save', collection = '') {
+  await supabaseAdminUpsert(c, 'app_post_interactions', [{
+    legacy_post_id: cleanText(postId, 120),
+    app_user_id: cleanText(userId, 120),
+    kind,
+    collection: kind === 'save' ? (cleanText(collection, 120) || 'saved') : null,
+    metadata: { source: 'cloudflare_worker_primary' },
+    legacy_created_at: now(),
+  }], 'legacy_post_id,app_user_id,kind');
+}
+
+async function supabaseViewerPostInteractionExists(c: any, postId: string, userIds: string[], kind: 'like' | 'save'): Promise<boolean> {
+  if (!userIds.length) return false;
+  const rows = await supabaseAdminSelectRows(c, 'app_post_interactions', {
+    legacy_post_id: postgrestEqFilter(postId),
+    kind: postgrestEqFilter(kind),
+    app_user_id: postgrestInFilter(userIds),
+  }, 'legacy_post_id', 1);
+  return rows.length > 0;
+}
+
+async function getSupabasePostEngagementState(c: any, postId: string, userId: string) {
+  const relatedUserIds = await relatedInteractionUserIds(c.env.DB, userId);
+  const d1State = await getPostEngagementState(c.env.DB, postId, userId);
+  let liked = await supabaseViewerPostInteractionExists(c, postId, relatedUserIds, 'like');
+  let saved = await supabaseViewerPostInteractionExists(c, postId, relatedUserIds, 'save');
+  if (!liked && d1State.liked) {
+    await supabaseDeletePostInteractionsForUsers(c, postId, relatedUserIds, 'like');
+    await supabaseUpsertPostInteraction(c, postId, userId, 'like');
+    liked = true;
+  }
+  if (!saved && d1State.saved) {
+    await supabaseDeletePostInteractionsForUsers(c, postId, relatedUserIds, 'save');
+    await supabaseUpsertPostInteraction(c, postId, userId, 'save', 'saved');
+    saved = true;
+  }
+  const [supabaseLikesCount, supabaseSavesCount] = await Promise.all([
+    supabaseAdminCountRows(c, 'app_post_interactions', {
+      legacy_post_id: postgrestEqFilter(postId),
+      kind: postgrestEqFilter('like'),
+    }),
+    supabaseAdminCountRows(c, 'app_post_interactions', {
+      legacy_post_id: postgrestEqFilter(postId),
+      kind: postgrestEqFilter('save'),
+    }),
+  ]);
+  const state = {
+    // Supabase app_post_interactions is the canonical engagement table.
+    // D1 counters are legacy/cache only and must not inflate counts after
+    // refreshes or app restarts.
+    likes_count: Math.max(0, supabaseLikesCount),
+    comments_count: Math.max(0, Number(d1State.comments_count || 0)),
+    saves_count: Math.max(0, supabaseSavesCount),
+    liked,
+    saved,
+    engagement_source: 'supabase',
+  };
+  try {
+    await c.env.DB.prepare(
+      `UPDATE posts
+       SET likes_count = ?,
+           comments_count = ?,
+           saves_count = ?
+       WHERE id = ?`
+    ).bind(state.likes_count, state.comments_count, state.saves_count, postId).run();
+    await c.env.DB.prepare('UPDATE discover_posts SET likes_count = ? WHERE id = ?')
+      .bind(state.likes_count, postId)
+      .run()
+      .catch(() => {});
+  } catch {}
+  return state;
+}
+
+async function getCanonicalPostEngagementState(c: any, postId: string, userId: string) {
+  if (supabaseEngagementConfigured(c)) {
+    try {
+      return await getSupabasePostEngagementState(c, postId, userId);
+    } catch (error: any) {
+      console.warn(JSON.stringify({ event: 'supabase_engagement_state_failed', code: getErrorCode(error).slice(0, 180) }));
+    }
+  }
+  return getPostEngagementState(c.env.DB, postId, userId);
+}
+
+async function setCanonicalPostLikeState(c: any, postId: string, userId: string, requested: boolean | null) {
+  const relatedUserIds = await coalesceViewerPostInteractions(c.env.DB, postId, userId);
+  const placeholders = inPlaceholders(relatedUserIds);
+  const d1LikedRow = await c.env.DB.prepare(
+    `SELECT 1 AS found FROM likes WHERE post_id = ? AND user_id IN (${placeholders}) LIMIT 1`
+  ).bind(postId, ...relatedUserIds).first();
+  const d1WasLiked = !!d1LikedRow;
+  const wasLiked = supabaseEngagementConfigured(c)
+    ? (await supabaseViewerPostInteractionExists(c, postId, relatedUserIds, 'like')) || d1WasLiked
+    : d1WasLiked;
+  const nextLiked = requested === null ? !wasLiked : requested;
+
+  if (supabaseEngagementConfigured(c)) {
+    await supabaseDeletePostInteractionsForUsers(c, postId, relatedUserIds, 'like');
+    if (nextLiked) {
+      await supabaseUpsertPostInteraction(c, postId, userId, 'like');
+    }
+  }
+
+  await deletePostLikesForUsers(c.env.DB, postId, relatedUserIds);
+  if (nextLiked) {
+    await c.env.DB.prepare('INSERT OR IGNORE INTO likes (id, user_id, post_id) VALUES (?, ?, ?)')
+      .bind(uuid(), userId, postId)
+      .run();
+    await c.env.DB.prepare(
+      `INSERT OR IGNORE INTO discover_likes (id, user_id, post_id)
+       SELECT ?, ?, ?
+       WHERE EXISTS (SELECT 1 FROM discover_posts WHERE id = ?)`
+    ).bind(uuid(), userId, postId, postId).run().catch(() => {});
+  }
+
+  const state = await getCanonicalPostEngagementState(c, postId, userId);
+  const changed = state.liked !== wasLiked;
+  return { state, wasLiked, changed };
+}
+
+async function setCanonicalPostSaveState(c: any, postId: string, userId: string, saved: boolean, collection = 'saved') {
+  const collectionName = cleanText(collection, 80) || 'saved';
+  const relatedUserIds = await coalesceViewerPostInteractions(c.env.DB, postId, userId);
+  const placeholders = inPlaceholders(relatedUserIds);
+  const d1SavedRow = await c.env.DB.prepare(
+    `SELECT 1 AS found FROM saved_posts WHERE post_id = ? AND user_id IN (${placeholders}) LIMIT 1`
+  ).bind(postId, ...relatedUserIds).first();
+  const d1WasSaved = !!d1SavedRow;
+  const wasSaved = supabaseEngagementConfigured(c)
+    ? (await supabaseViewerPostInteractionExists(c, postId, relatedUserIds, 'save')) || d1WasSaved
+    : d1WasSaved;
+
+  if (supabaseEngagementConfigured(c)) {
+    await supabaseDeletePostInteractionsForUsers(c, postId, relatedUserIds, 'save');
+    if (saved) {
+      await supabaseUpsertPostInteraction(c, postId, userId, 'save', collectionName);
+    }
+  }
+
+  await deletePostSavesForUsers(c.env.DB, postId, relatedUserIds);
+  if (saved) {
+    await c.env.DB.prepare('INSERT OR IGNORE INTO saved_posts (id, user_id, post_id, collection) VALUES (?, ?, ?, ?)')
+      .bind(uuid(), userId, postId, collectionName)
+      .run();
+    await c.env.DB.prepare(
+      'INSERT INTO bookmarks (id, user_id, post_id, collection) VALUES (?, ?, ?, ?) ON CONFLICT(user_id, post_id) DO UPDATE SET collection = ?'
+    ).bind(uuid(), userId, postId, collectionName, collectionName).run().catch(() => {});
+  }
+
+  const state = await getCanonicalPostEngagementState(c, postId, userId);
+  const changed = state.saved !== wasSaved;
+  return { state, wasSaved, changed, collection: collectionName };
+}
+
+async function overlaySupabaseViewerEngagement(c: any, posts: any[], userId: string): Promise<any[]> {
+  if (!posts.length || !supabaseEngagementConfigured(c)) return posts;
+  const postIds = Array.from(new Set(posts.map((post) => cleanText(post?.id || post?.legacy_post_id, 120)).filter(Boolean)));
+  if (!postIds.length) return posts;
+  try {
+    const relatedUserIds = await relatedInteractionUserIds(c.env.DB, userId);
+    const rows = await supabaseAdminSelectRows(c, 'app_post_interactions', {
+      legacy_post_id: postgrestInFilter(postIds),
+      app_user_id: postgrestInFilter(relatedUserIds),
+      kind: postgrestInFilter(['like', 'save']),
+    }, 'legacy_post_id,kind', Math.max(1, postIds.length * 2 * Math.max(1, relatedUserIds.length)));
+    const liked = new Set<string>();
+    const saved = new Set<string>();
+    for (const row of rows) {
+      const postId = cleanText(row?.legacy_post_id, 120);
+      const kind = cleanText(row?.kind, 20);
+      if (postId && kind === 'like') liked.add(postId);
+      if (postId && kind === 'save') saved.add(postId);
+    }
+    return posts.map((post) => {
+      const postId = cleanText(post?.id || post?.legacy_post_id, 120);
+      if (!postId) return post;
+      const d1Liked = post?.is_liked === true || post?.is_liked === 1 || post?.is_liked === '1' || post?.liked === true || post?.liked === 1 || post?.liked === '1';
+      const d1Saved = post?.is_saved === true || post?.is_saved === 1 || post?.is_saved === '1' || post?.saved === true || post?.saved === 1 || post?.saved === '1';
+      const viewerLiked = liked.has(postId) || d1Liked;
+      const viewerSaved = saved.has(postId) || d1Saved;
+      return {
+        ...post,
+        is_liked: viewerLiked ? 1 : 0,
+        viewer_liked: viewerLiked,
+        liked_by_me: viewerLiked,
+        saved: viewerSaved ? 1 : 0,
+        is_saved: viewerSaved,
+        viewer_saved: viewerSaved,
+        saved_by_me: viewerSaved,
+      };
+    });
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_engagement_overlay_failed', code: getErrorCode(error).slice(0, 180) }));
+    return posts;
+  }
+}
+
+function postEngagementResponse(state: any, extra: Record<string, unknown> = {}) {
+  const liked = state?.liked === true || state?.liked === 1 || state?.liked === '1';
+  const saved = state?.saved === true || state?.saved === 1 || state?.saved === '1';
+  const likesCount = Math.max(0, Number(state?.likes_count || 0));
+  const commentsCount = Math.max(0, Number(state?.comments_count || 0));
+  const savesCount = Math.max(0, Number(state?.saves_count || 0));
+  return {
+    ...extra,
+    liked,
+    is_liked: liked,
+    liked_by_me: liked,
+    viewer_liked: liked,
+    likes_count: likesCount,
+    comments_count: commentsCount,
+    saved,
+    is_saved: saved,
+    saved_by_me: saved,
+    viewer_saved: saved,
+    saves_count: savesCount,
+    engagement_source: cleanText(state?.engagement_source, 40) || undefined,
+  };
+}
+
+async function relatedInteractionUserIds(db: D1Database, userId: string): Promise<string[]> {
+  const cleanUserId = publicId(userId, 120);
+  if (!cleanUserId) return [];
+  const ids = new Set<string>([cleanUserId]);
+
+  try {
+    const user: any = await db.prepare(
+      'SELECT id, email, supabase_user_id, oauth_provider, oauth_subject FROM users WHERE id = ?'
+    ).bind(cleanUserId).first();
+    const email = normalizeOptionalEmail(user?.email);
+    const supabaseUserId = cleanText(user?.supabase_user_id, 120);
+    const oauthProvider = normalizeAuthProvider(user?.oauth_provider);
+    const oauthSubject = cleanText(user?.oauth_subject, 240);
+    const conditions = ['id = ?'];
+    const binds: any[] = [cleanUserId];
+    if (supabaseUserId) {
+      conditions.push('supabase_user_id = ?');
+      binds.push(supabaseUserId);
+    }
+    if (email && !isInternalOAuthEmail(email)) {
+      conditions.push('LOWER(email) = ?');
+      binds.push(email);
+    }
+    if (oauthSubject) {
+      conditions.push('(oauth_provider = ? AND oauth_subject = ?)');
+      binds.push(oauthProvider, oauthSubject);
+    }
+    const rows = await db.prepare(`SELECT id FROM users WHERE ${conditions.join(' OR ')} LIMIT 20`)
+      .bind(...binds)
+      .all();
+    for (const row of rows.results as any[]) {
+      const id = publicId(row?.id, 120);
+      if (id) ids.add(id);
+    }
+  } catch {}
+
+  try {
+    const rows = await db.prepare(
+      `SELECT DISTINCT ai2.user_id
+       FROM account_identities ai1
+       JOIN account_identities ai2
+         ON ai2.provider = ai1.provider
+        AND ai2.provider_user_id = ai1.provider_user_id
+       WHERE ai1.user_id = ?
+       LIMIT 20`
+    ).bind(cleanUserId).all();
+    for (const row of rows.results as any[]) {
+      const id = publicId(row?.user_id, 120);
+      if (id) ids.add(id);
+    }
+  } catch {}
+
+  return Array.from(ids).slice(0, 20);
+}
+
+function inPlaceholders(values: unknown[]): string {
+  return values.map(() => '?').join(', ');
+}
+
+async function deletePostLikesForUsers(db: D1Database, postId: string, userIds: string[]) {
+  if (!userIds.length) return;
+  const placeholders = inPlaceholders(userIds);
+  await db.batch([
+    db.prepare(`DELETE FROM likes WHERE post_id = ? AND user_id IN (${placeholders})`).bind(postId, ...userIds),
+    db.prepare(`DELETE FROM discover_likes WHERE post_id = ? AND user_id IN (${placeholders})`).bind(postId, ...userIds),
+  ]);
+}
+
+async function deletePostSavesForUsers(db: D1Database, postId: string, userIds: string[]) {
+  if (!userIds.length) return;
+  const placeholders = inPlaceholders(userIds);
+  await db.prepare(`DELETE FROM saved_posts WHERE post_id = ? AND user_id IN (${placeholders})`)
+    .bind(postId, ...userIds)
+    .run();
+  try {
+    await db.prepare(`DELETE FROM bookmarks WHERE post_id = ? AND user_id IN (${placeholders})`)
+      .bind(postId, ...userIds)
+      .run();
+  } catch {}
+}
+
+async function coalesceViewerPostInteractions(db: D1Database, postId: string, userId: string): Promise<string[]> {
+  const userIds = await relatedInteractionUserIds(db, userId);
+  if (userIds.length <= 1) return userIds;
+  const placeholders = inPlaceholders(userIds);
+
+  const likeRow: any = await db.prepare(
+    `SELECT 1 AS found FROM likes WHERE post_id = ? AND user_id IN (${placeholders}) LIMIT 1`
+  ).bind(postId, ...userIds).first();
+  if (likeRow) {
+    await deletePostLikesForUsers(db, postId, userIds);
+    await db.prepare('INSERT OR IGNORE INTO likes (id, user_id, post_id) VALUES (?, ?, ?)')
+      .bind(uuid(), userId, postId)
+      .run();
+    await db.prepare(
+      `INSERT OR IGNORE INTO discover_likes (id, user_id, post_id)
+       SELECT ?, ?, ?
+       WHERE EXISTS (SELECT 1 FROM discover_posts WHERE id = ?)`
+    ).bind(uuid(), userId, postId, postId).run().catch(() => {});
+  }
+
+  const saveRow: any = await db.prepare(
+    `SELECT collection FROM saved_posts
+     WHERE post_id = ? AND user_id IN (${placeholders})
+     ORDER BY COALESCE(created_at, '') DESC
+     LIMIT 1`
+  ).bind(postId, ...userIds).first();
+  if (saveRow) {
+    const collection = cleanText(saveRow.collection || 'saved', 80) || 'saved';
+    await deletePostSavesForUsers(db, postId, userIds);
+    await db.prepare('INSERT OR IGNORE INTO saved_posts (id, user_id, post_id, collection) VALUES (?, ?, ?, ?)')
+      .bind(uuid(), userId, postId, collection)
+      .run();
+    await db.prepare(
+      'INSERT INTO bookmarks (id, user_id, post_id, collection) VALUES (?, ?, ?, ?) ON CONFLICT(user_id, post_id) DO UPDATE SET collection = ?'
+    ).bind(uuid(), userId, postId, collection, collection).run().catch(() => {});
+  }
+
+  return userIds;
 }
 
 async function isFriend(db: D1Database, userId: string, targetId: string): Promise<boolean> {
@@ -3616,6 +5595,7 @@ function safeUserPayload(user: any, opts: { includePrivate?: boolean } = {}) {
 
   if (opts.includePrivate) {
     publicPayload.email = publicUserEmail(user.email);
+    publicPayload.email_verified = accountEmailVerified(user);
     publicPayload.phone = user.phone || '';
     publicPayload.phone_verified = !!user.phone_verified;
     publicPayload.is_admin = !!user.is_admin;
@@ -3637,6 +5617,16 @@ function normalizePhone(input: string): string {
   if (trimmed.startsWith('+')) return `+${digits}`;
   if (digits.length === 10) return `+1${digits}`;
   return `+${digits}`;
+}
+
+function normalizeOptionalPhone(input: unknown): string {
+  const text = String(input || '').trim();
+  if (!text) return '';
+  try {
+    return normalizePhone(text);
+  } catch {
+    return '';
+  }
 }
 
 async function sha256Hex(value: string): Promise<string> {
@@ -3670,6 +5660,67 @@ function isApplePrivateRelayEmail(email: unknown): boolean {
 
 function publicUserEmail(email: unknown): string {
   return isInternalOAuthEmail(email) ? '' : String(email || '');
+}
+
+function accountEmailVerified(user: any): boolean {
+  if (user?.email_verified === true || user?.email_verified === 1 || user?.email_verified === '1') return true;
+  const email = normalizeOptionalEmail(user?.email);
+  if (!email || isInternalOAuthEmail(email)) return false;
+  const provider = normalizeAuthProvider(user?.oauth_provider || (user?.supabase_user_id ? 'supabase' : 'email'));
+  return provider === 'google' || provider === 'apple' || provider === 'supabase';
+}
+
+async function privacyHash(c: any, value: unknown): Promise<string> {
+  const clean = String(value || '').trim().toLowerCase();
+  if (!clean) return '';
+  const pepper = String(c.env.ABUSE_SIGNAL_SECRET || c.env.JWT_SECRET || 'captro').trim();
+  return sha256Hex(`${pepper}:privacy:${clean}`);
+}
+
+function normalizeAuthProvider(value: unknown): 'email' | 'apple' | 'google' | 'phone' | 'supabase' {
+  const provider = String(value || '').trim().toLowerCase();
+  if (provider === 'apple' || provider === 'google' || provider === 'phone' || provider === 'supabase') return provider as any;
+  return 'email';
+}
+
+async function upsertAccountIdentity(
+  c: any,
+  input: { userId: string; provider: unknown; providerUserId?: unknown; email?: unknown }
+) {
+  const userId = String(input.userId || '').trim();
+  const provider = normalizeAuthProvider(input.provider);
+  const email = normalizeOptionalEmail(input.email);
+  const fallbackProviderId = provider === 'email' && email ? await privacyHash(c, email) : '';
+  const providerUserId = cleanText(input.providerUserId || fallbackProviderId, 240);
+  if (!userId || !providerUserId) return;
+  await ensureAccountDeletionSchema(c.env.DB);
+  const emailHash = email ? await privacyHash(c, email) : '';
+  const ts = now();
+  await c.env.DB.prepare(
+    `INSERT INTO account_identities (id, user_id, provider, provider_user_id, email_hash, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(provider, provider_user_id) DO UPDATE SET
+       user_id = excluded.user_id,
+       email_hash = COALESCE(NULLIF(excluded.email_hash, ''), account_identities.email_hash),
+       updated_at = excluded.updated_at`
+  ).bind(uuid(), userId, provider, providerUserId, emailHash, ts, ts).run();
+}
+
+async function writeAccountDeletionEvent(c: any, userId: string, eventType: string, metadata: Record<string, unknown> = {}, actorUserId = userId) {
+  await ensureAccountDeletionSchema(c.env.DB);
+  await c.env.DB.prepare(
+    `INSERT INTO account_deletion_events (id, user_id, event_type, actor_user_id, reason, metadata, request_id, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(
+    uuid(),
+    userId,
+    cleanText(eventType, 80),
+    publicId(actorUserId || '', 120),
+    cleanText((metadata.reason as any) || '', 180),
+    safeJsonState(scrubLogMetadata(metadata)),
+    cleanText(c.get?.('requestId') || '', 120),
+    now(),
+  ).run();
 }
 
 function safeDisplayNameFromEmail(email: unknown): string {
@@ -3775,14 +5826,13 @@ async function stripeApiGet(c: any, path: string) {
 
 const PREMIUM_PLAN = {
   id: 'monthly',
-  label: 'Flames Up Premium',
+  label: 'Captro Premium',
   amount_cents: 499,
   currency: 'usd',
   interval: 'month',
 };
 
 const PREMIUM_FEATURES = [
-  'Anonymous Notes up to 5 times per day',
   'Custom profile background',
   'Background music playback',
   'Premium profile badge',
@@ -3811,8 +5861,7 @@ function userHasActivePremium(user: any): boolean {
   return Number(user?.is_premium || 0) === 1 && premiumStatusIsActive(user?.premium_status || 'active', user?.premium_until);
 }
 
-function premiumPayloadFromUser(user: any, anonymousNotesUsed = 0) {
-  const used = Math.max(0, Number(anonymousNotesUsed || 0));
+function premiumPayloadFromUser(user: any) {
   return {
     is_premium: userHasActivePremium(user),
     plan: user?.premium_plan || '',
@@ -3822,22 +5871,8 @@ function premiumPayloadFromUser(user: any, anonymousNotesUsed = 0) {
     amount_cents: PREMIUM_PLAN.amount_cents,
     currency: PREMIUM_PLAN.currency,
     interval: PREMIUM_PLAN.interval,
-    anonymous_notes_used_today: used,
-    anonymous_notes_remaining_today: Math.max(0, 5 - used),
     features: PREMIUM_FEATURES,
   };
-}
-
-async function getAnonymousNotesUsedToday(db: D1Database, userId: string): Promise<number> {
-  await ensureNotesSchema(db);
-  const row: any = await db.prepare(
-    `SELECT COUNT(*) AS count
-     FROM notes
-     WHERE user_id = ? AND anonymous = 1
-       AND COALESCE(status, 'active') = 'active'
-       AND date(created_at) = date('now')`
-  ).bind(userId).first();
-  return Math.max(0, Number(row?.count || 0));
 }
 
 async function getPremiumUser(c: any, userId: string): Promise<any> {
@@ -4169,7 +6204,7 @@ async function applyCoinDelta(c: any, input: {
     created_at: ts,
   };
 
-  // Wallet ledger: every backend balance mutation is recorded here for audit/history.
+  // Legacy coin ledger: every backend balance mutation is recorded here for audit/history.
   await c.env.DB.prepare(
     `INSERT INTO coin_transactions
      (id, user_id, type, amount, balance_after, status, related_user_id, related_id, stripe_session_id, stripe_payment_intent_id, idempotency_key, metadata, created_at)
@@ -4624,6 +6659,7 @@ async function sendAlertPushForNotification(c: any, input: {
 }
 
 const MAPBOX_SEARCH_BOX_API_BASE = 'https://api.mapbox.com/search/searchbox/v1';
+const MAPBOX_GEOCODING_API_BASE = 'https://api.mapbox.com/search/geocode/v6';
 
 function uniq(values: string[]): string[] {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
@@ -4695,7 +6731,56 @@ function mapboxFeatureToPlace(feature: any, fallbackId: string) {
   };
 }
 
+function mapboxContextName(context: any, key: string): string {
+  let value = context?.[key];
+  if (!value && Array.isArray(context)) {
+    value = context.find((entry: any) => {
+      const id = cleanText(entry?.id || entry?.mapbox_id || '', 120).toLowerCase();
+      const type = cleanText(entry?.feature_type || entry?.type || '', 60).toLowerCase();
+      return type === key || id.startsWith(`${key}.`) || id.includes(`.${key}.`);
+    });
+  }
+  if (!value) return '';
+  if (typeof value === 'string') return cleanText(value, 80);
+  return cleanText(value.name || value.text || value.name_preferred || value.properties?.name || '', 80);
+}
+
+function mapboxFeatureToBroadLocation(feature: any) {
+  const properties = feature?.properties || {};
+  const context = properties.context || {};
+  const featureType = cleanText(properties.feature_type || properties.type || '', 40).toLowerCase();
+  const name = cleanText(properties.name || properties.name_preferred || '', 80);
+  const cityFromContext = mapboxContextName(context, 'place')
+    || mapboxContextName(context, 'locality')
+    || mapboxContextName(context, 'neighborhood');
+  let city = cityFromContext;
+  let region = mapboxContextName(context, 'region');
+  let country = mapboxContextName(context, 'country');
+
+  if (['place', 'locality', 'neighborhood'].includes(featureType)) {
+    city = name || city;
+  } else if (featureType === 'region') {
+    region = name || region;
+  } else if (featureType === 'country') {
+    country = name || country;
+  } else if (!city && name) {
+    city = name;
+  }
+
+  const label = normalizeDisplayLocationLabel(city, region, country, '');
+  return {
+    city,
+    region,
+    country,
+    label,
+    display_location_label: label,
+    display_location_source: 'mapbox_reverse_geocode',
+  };
+}
+
 async function ensurePhoneAuthSchema(db: D1Database) {
+  if (phoneAuthSchemaReady) return;
+
   const statements = [
     'ALTER TABLE users ADD COLUMN phone TEXT',
     'ALTER TABLE users ADD COLUMN phone_verified INTEGER DEFAULT 0',
@@ -4723,6 +6808,41 @@ async function ensurePhoneAuthSchema(db: D1Database) {
   }
 
   phoneAuthSchemaReady = true;
+}
+
+async function ensureAccountVerificationSchema(db: D1Database) {
+  if (accountVerificationSchemaReady) return;
+
+  await ensurePhoneAuthSchema(db);
+
+  const statements = [
+    'ALTER TABLE users ADD COLUMN email_verified INTEGER DEFAULT 0',
+    'CREATE INDEX IF NOT EXISTS idx_users_email_verified ON users(email_verified)',
+    'CREATE INDEX IF NOT EXISTS idx_users_phone_verified ON users(phone_verified)',
+    `CREATE TABLE IF NOT EXISTS email_verification_links (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      email TEXT NOT NULL,
+      token_hash TEXT NOT NULL UNIQUE,
+      expires_at TEXT NOT NULL,
+      used_at TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    )`,
+    'CREATE INDEX IF NOT EXISTS idx_email_verification_links_user ON email_verification_links(user_id, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_email_verification_links_token ON email_verification_links(token_hash)',
+  ];
+
+  for (const statement of statements) {
+    try {
+      await runSchemaStatement(db, statement);
+    } catch (error: any) {
+      if (!isIgnorableSchemaError(error, statement)) {
+        throw error;
+      }
+    }
+  }
+
+  accountVerificationSchemaReady = true;
 }
 
 async function ensureCommentSchema(db: D1Database) {
@@ -4802,43 +6922,103 @@ function isTwilioVerifyRateLimited(failure: ReturnType<typeof parseTwilioVerifyF
   return failure.status === 429 || failure.twilioCode === '60203' || failure.twilioCode === '20429';
 }
 
-function twilioVerifyStartErrorResponse(c: any, errorMessage: string) {
+type TwilioVerifyChannel = 'sms' | 'email';
+
+function twilioVerifyStartErrorResponse(c: any, errorMessage: string, target: 'phone' | 'email' = 'phone') {
   const failure = parseTwilioVerifyFailure(errorMessage);
+  const isEmail = target === 'email';
+  const targetLabel = isEmail ? 'email address' : 'phone number';
+  const codePrefix = isEmail ? 'EMAIL' : 'PHONE';
   if (isTwilioVerifyRateLimited(failure)) {
     return c.json({
       detail: 'A verification code was already sent. Enter that code or wait before requesting a new one.',
-      code: 'PHONE_VERIFICATION_RATE_LIMITED',
+      code: `${codePrefix}_VERIFICATION_RATE_LIMITED`,
       retry_after: failure.retryAfter || 60,
     }, 429);
   }
 
   if (failure.status === 400) {
     return c.json({
-      detail: 'Twilio could not send a code to that phone number. Check the number and try again.',
-      code: 'PHONE_VERIFY_SEND_REJECTED',
+      detail: `Twilio could not send a code to that ${targetLabel}. Check it and try again.`,
+      code: `${codePrefix}_VERIFY_SEND_REJECTED`,
     }, 400);
   }
 
   if (failure.status === 401 || failure.status === 403 || failure.status === 404) {
     return c.json({
-      detail: 'Phone verification provider is not configured correctly. Check the Twilio Verify Service SID and auth settings.',
-      code: 'PHONE_PROVIDER_CONFIG',
+      detail: `${isEmail ? 'Email' : 'Phone'} verification provider is not configured correctly. Check the Twilio Verify Service SID and auth settings.`,
+      code: `${codePrefix}_PROVIDER_CONFIG`,
     }, 502);
   }
 
   return c.json({
     detail: 'Could not send verification code. Check Twilio Verify settings.',
-    code: 'PHONE_VERIFY_START_FAILED',
+    code: `${codePrefix}_VERIFY_START_FAILED`,
   }, 502);
 }
 
-async function startTwilioVerification(c: any, phone: string): Promise<boolean> {
+function randomUrlToken(bytes = 32): string {
+  const values = new Uint8Array(bytes);
+  crypto.getRandomValues(values);
+  let binary = '';
+  for (const value of values) binary += String.fromCharCode(value);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function emailVerificationBaseUrl(c: any): string {
+  const configured = String(c.env.EMAIL_VERIFICATION_BASE_URL || c.env.PUBLIC_API_BASE_URL || '').trim();
+  if (configured) return configured.replace(/\/+$/g, '');
+  const url = new URL(c.req.url);
+  return `${url.origin}/api`;
+}
+
+function emailVerificationLink(c: any, token: string): string {
+  return `${emailVerificationBaseUrl(c)}/users/me/email/verify-link?token=${encodeURIComponent(token)}`;
+}
+
+async function sendEmailVerificationLink(c: any, email: string, link: string): Promise<boolean> {
+  const apiKey = String(c.env.RESEND_API_KEY || '').trim();
+  const from = String(c.env.EMAIL_FROM || '').trim();
+  if (!apiKey || !from) return false;
+
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      from,
+      to: [email],
+      subject: 'Verify your Captro email',
+      text: `Tap this link to verify your Captro email:\n\n${link}\n\nThis link expires in 30 minutes. If you did not request it, you can ignore this email.`,
+      html: `
+        <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;line-height:1.55;color:#111;padding:24px">
+          <h1 style="font-size:24px;margin:0 0 12px">Verify your Captro email</h1>
+          <p>Tap the button below to verify your Captro account email.</p>
+          <p style="margin:24px 0">
+            <a href="${link}" style="display:inline-block;background:#0f2d18;color:#fff;text-decoration:none;padding:13px 20px;border-radius:999px;font-weight:700">Verify email</a>
+          </p>
+          <p style="color:#555;font-size:14px">This link expires in 30 minutes. If you did not request it, you can ignore this email.</p>
+        </div>
+      `,
+    }),
+  });
+
+  if (!response.ok) {
+    const safeStatus = response.status;
+    throw new Error(`EMAIL_LINK_SEND_FAILED:${safeStatus}`);
+  }
+  return true;
+}
+
+async function startTwilioChannelVerification(c: any, to: string, channel: TwilioVerifyChannel): Promise<boolean> {
   const config = getTwilioVerifyConfig(c);
   if (!config) return false;
 
   const body = new URLSearchParams({
-    To: phone,
-    Channel: 'sms',
+    To: to,
+    Channel: channel,
   });
 
   let response: Response;
@@ -4864,12 +7044,16 @@ async function startTwilioVerification(c: any, phone: string): Promise<boolean> 
   return true;
 }
 
-async function checkTwilioVerification(c: any, phone: string, code: string): Promise<boolean> {
+async function startTwilioVerification(c: any, phone: string): Promise<boolean> {
+  return startTwilioChannelVerification(c, phone, 'sms');
+}
+
+async function checkTwilioChannelVerification(c: any, to: string, code: string): Promise<boolean> {
   const config = getTwilioVerifyConfig(c);
   if (!config) return false;
 
   const body = new URLSearchParams({
-    To: phone,
+    To: to,
     Code: code,
   });
 
@@ -4897,6 +7081,10 @@ async function checkTwilioVerification(c: any, phone: string, code: string): Pro
 
   const data: any = await response.json().catch(() => ({}));
   return data.valid === true || data.status === 'approved';
+}
+
+async function checkTwilioVerification(c: any, phone: string, code: string): Promise<boolean> {
+  return checkTwilioChannelVerification(c, phone, code);
 }
 
 async function sendLegacyPhoneCode(c: any, phone: string, code: string): Promise<'legacy_sms' | 'development'> {
@@ -4928,23 +7116,62 @@ async function sendLegacyPhoneCode(c: any, phone: string, code: string): Promise
 }
 
 async function findOrCreatePhoneUser(c: any, phone: string, fullName?: string) {
+  await ensureSupabaseAuthSchema(c.env.DB);
   let user: any = await c.env.DB.prepare('SELECT * FROM users WHERE phone = ?').bind(phone).first();
   if (!user) {
-    const id = uuid();
     const digits = phone.replace(/\D/g, '');
-    const username = pendingUsernameForUser(id);
     const safeName = String(fullName || '').trim() || 'Flames User';
     const email = `${digits}@phone.flames-up.local`;
     const generatedPasswordHash = await hashPassword(`phone_${phone}_${uuid()}`);
+    let supabaseUser: any = null;
+    try {
+      const result = await createOrFindSupabaseAuthUser(c, {
+        phone,
+        username: '',
+        fullName: safeName,
+        provider: 'phone',
+      });
+      supabaseUser = result.user;
+    } catch (error: any) {
+      console.warn(JSON.stringify({ event: 'supabase_phone_auth_mirror_failed', code: getErrorCode(error).slice(0, 160) }));
+    }
+    const preferredId = isUuidText(supabaseUser?.id);
+    const idOwner = preferredId ? await c.env.DB.prepare('SELECT id FROM users WHERE id = ?').bind(preferredId).first() : null;
+    const id = preferredId && !idOwner ? preferredId : uuid();
+    const username = pendingUsernameForUser(id);
 
     await c.env.DB.prepare(
-      'INSERT INTO users (id, email, username, full_name, password_hash, phone, phone_verified) VALUES (?, ?, ?, ?, ?, ?, 1)'
-    ).bind(id, email, username, safeName, generatedPasswordHash, phone).run();
+      'INSERT INTO users (id, email, username, full_name, password_hash, phone, phone_verified, supabase_user_id) VALUES (?, ?, ?, ?, ?, ?, 1, ?)'
+    ).bind(id, email, username, safeName, generatedPasswordHash, phone, supabaseUser?.id || null).run();
     user = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(id).first();
+    if (supabaseUser?.id) {
+      runBackgroundTask(c, 'supabase_phone_metadata_sync_failed', async () => {
+        await syncSupabaseAuthMetadataForUser(c, user);
+      });
+    }
     await recordAbuseSignals(c, id, 'phone_signup', { username, display_name: safeName });
   } else if (!user.phone_verified) {
     await c.env.DB.prepare('UPDATE users SET phone_verified = 1, updated_at = datetime(\'now\') WHERE id = ?').bind(user.id).run();
     user = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(user.id).first();
+  }
+
+  if (user && !user.supabase_user_id) {
+    try {
+      const result = await createOrFindSupabaseAuthUser(c, {
+        phone,
+        username: publicUsernameFor(user),
+        fullName: user.full_name,
+        profileImage: user.profile_image,
+        provider: 'phone',
+        appUserId: user.id,
+      });
+      if (result.user?.id) {
+        await linkSupabaseAuthUser(c, user.id, result.user.id);
+        user = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(user.id).first();
+      }
+    } catch (error: any) {
+      console.warn(JSON.stringify({ event: 'supabase_phone_auth_link_failed', code: getErrorCode(error).slice(0, 160) }));
+    }
   }
 
   return user;
@@ -4955,6 +7182,7 @@ function authUserPayload(user: any) {
   return {
     id: user.id,
     email: publicUserEmail(user.email),
+    email_verified: accountEmailVerified(user),
     phone: user.phone,
     phone_verified: !!user.phone_verified,
     username: publicUsernameFor(user),
@@ -4985,6 +7213,10 @@ function authUserPayload(user: any) {
     premium_plan: user.premium_plan || '',
     premium_until: user.premium_until || '',
     language: normalizeLanguage(user.language),
+    status: String(user.status || 'active'),
+    deletion_requested_at: user.deletion_requested_at || null,
+    deletion_scheduled_at: user.deletion_scheduled_at || null,
+    auth_provider: normalizeAuthProvider(user.oauth_provider || (user.phone ? 'phone' : 'email')),
   };
 }
 
@@ -5125,6 +7357,7 @@ async function findOrCreateOAuthUser(
         user = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(user.id).first();
       }
     }
+    await upsertAccountIdentity(c, { userId: user.id, provider, providerUserId: normalizedSubject, email: providedEmail || user.email });
     return user;
   }
 
@@ -5138,6 +7371,7 @@ async function findOrCreateOAuthUser(
       'UPDATE users SET oauth_provider = ?, oauth_subject = ?, full_name = CASE WHEN full_name = \'\' OR full_name IS NULL THEN ? ELSE full_name END, profile_image = CASE WHEN profile_image = \'\' OR profile_image IS NULL THEN ? ELSE profile_image END, updated_at = datetime(\'now\') WHERE id = ?'
     ).bind(provider, normalizedSubject, safeFullName || user.full_name || `${provider} user`, profileImage || '', user.id).run();
     const refreshed = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(user.id).first();
+    await upsertAccountIdentity(c, { userId: refreshed.id, provider, providerUserId: normalizedSubject, email: providedEmail || refreshed.email });
     return refreshed;
   }
 
@@ -5151,7 +7385,30 @@ async function findOrCreateOAuthUser(
   ).bind(id, normalizedEmail, username, safeName, generatedPasswordHash, profileImage || '', provider, normalizedSubject).run();
 
   await recordAbuseSignals(c, id, `${provider}_signup`, { username, display_name: safeName });
+  await upsertAccountIdentity(c, { userId: id, provider, providerUserId: normalizedSubject, email: providedEmail || normalizedEmail });
   return c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(id).first();
+}
+
+async function mirrorOAuthUserToSupabaseAuth(c: any, user: any, provider: 'google' | 'apple', subject: string) {
+  if (!user?.id || user.supabase_user_id) return user;
+  const email = normalizeOptionalEmail(user.email);
+  if (!email || isInternalOAuthEmail(email)) return user;
+
+  const result = await createOrFindSupabaseAuthUser(c, {
+    email,
+    username: publicUsernameFor(user),
+    fullName: user.full_name,
+    profileImage: user.profile_image,
+    provider,
+    oauthSubject: subject,
+    appUserId: user.id,
+  });
+  if (result.user?.id) {
+    await linkSupabaseAuthUser(c, user.id, result.user.id);
+    await syncSupabaseAuthMetadataForUser(c, { ...user, supabase_user_id: result.user.id });
+    return c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(user.id).first();
+  }
+  return user;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -5181,11 +7438,22 @@ async function findOrCreateSupabaseUser(c: any, payload: any, extras: any = {}) 
   const metadata = payload.user_metadata && typeof payload.user_metadata === 'object' ? payload.user_metadata : {};
   const safeFullName = normalizeOptionalName(extras.full_name || metadata.full_name || metadata.name || email.split('@')[0] || 'Flames User');
   const profileImage = cleanText(metadata.avatar_url || metadata.picture || extras.profile_image || '', 1000);
+  const authProvider = normalizeAuthProvider(extras.auth_provider || extras.provider || payload.app_metadata?.provider || payload.app_metadata?.providers?.[0] || metadata.provider || 'supabase');
+  const providerSubject = cleanText(extras.oauth_subject || extras.provider_user_id || (authProvider === 'supabase' ? supabaseUserId : ''), 240) || supabaseUserId;
 
   if (!supabaseUserId) throw new Error('SUPABASE_SUBJECT_MISSING');
 
   let user: any = await c.env.DB.prepare('SELECT * FROM users WHERE supabase_user_id = ?').bind(supabaseUserId).first();
-  if (user) return user;
+  if (user) {
+    if (['apple', 'google'].includes(authProvider) && providerSubject && (user.oauth_provider !== authProvider || user.oauth_subject !== providerSubject)) {
+      await c.env.DB.prepare('UPDATE users SET oauth_provider = ?, oauth_subject = ?, updated_at = datetime(\'now\') WHERE id = ?')
+        .bind(authProvider, providerSubject, user.id)
+        .run();
+      user = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(user.id).first();
+    }
+    await upsertAccountIdentity(c, { userId: user.id, provider: authProvider, providerUserId: providerSubject, email: email || user.email });
+    return user;
+  }
   if (!email) throw new Error('EMAIL_REQUIRED');
 
   user = await c.env.DB.prepare('SELECT * FROM users WHERE LOWER(email) = ?').bind(email).first();
@@ -5198,7 +7466,14 @@ async function findOrCreateSupabaseUser(c: any, payload: any, extras: any = {}) 
          updated_at = datetime('now')
        WHERE id = ?`
     ).bind(supabaseUserId, safeFullName, profileImage, user.id).run();
-    return c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(user.id).first();
+    if (['apple', 'google'].includes(authProvider) && providerSubject) {
+      await c.env.DB.prepare('UPDATE users SET oauth_provider = ?, oauth_subject = ?, updated_at = datetime(\'now\') WHERE id = ?')
+        .bind(authProvider, providerSubject, user.id)
+        .run();
+    }
+    const refreshed = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(user.id).first();
+    await upsertAccountIdentity(c, { userId: refreshed.id, provider: authProvider, providerUserId: providerSubject, email: email || refreshed.email });
+    return refreshed;
   }
 
   const idOwner = await c.env.DB.prepare('SELECT id FROM users WHERE id = ?').bind(supabaseUserId).first();
@@ -5208,9 +7483,10 @@ async function findOrCreateSupabaseUser(c: any, payload: any, extras: any = {}) 
 
   await c.env.DB.prepare(
     'INSERT INTO users (id, email, username, full_name, password_hash, profile_image, supabase_user_id, oauth_provider, oauth_subject) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
-  ).bind(id, email, username, safeFullName || username, generatedPasswordHash, profileImage, supabaseUserId, 'supabase', supabaseUserId).run();
+  ).bind(id, email, username, safeFullName || username, generatedPasswordHash, profileImage, supabaseUserId, authProvider, providerSubject).run();
 
   await recordAbuseSignals(c, id, 'supabase_signup', { username, display_name: safeFullName || username });
+  await upsertAccountIdentity(c, { userId: id, provider: authProvider, providerUserId: providerSubject, email });
   return c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(id).first();
 }
 
@@ -5229,6 +7505,7 @@ async function resolveSupabaseSessionUser(c: any, token: string) {
       userId,
       auth_provider: 'supabase',
       supabase_sub: String(supabasePayload.sub || ''),
+      iat: supabasePayload.iat,
       exp: supabasePayload.exp,
     },
     user,
@@ -5239,6 +7516,326 @@ function getSupabaseServiceRoleKey(c: any): string {
   const key = String(c.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
   if (!key) throw new Error('SUPABASE_SERVICE_ROLE_MISSING');
   return key;
+}
+
+function getSupabaseAuthClientKey(c: any): string {
+  const key = String(c.env.SUPABASE_ANON_KEY || c.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+  if (!key) throw new Error('SUPABASE_AUTH_KEY_MISSING');
+  return key;
+}
+
+function supabaseAuthProvider(provider: unknown): 'email' | 'phone' | 'google' | 'apple' | 'supabase' {
+  const clean = String(provider || '').trim().toLowerCase();
+  if (clean === 'phone' || clean === 'google' || clean === 'apple' || clean === 'supabase') return clean as any;
+  return 'email';
+}
+
+function supabasePublicAuthHeaders(c: any): HeadersInit {
+  const apiKey = getSupabaseAuthClientKey(c);
+  return {
+    apikey: apiKey,
+    Authorization: `Bearer ${apiKey}`,
+    'Content-Type': 'application/json',
+  };
+}
+
+function supabaseAdminAuthHeaders(c: any): HeadersInit {
+  const serviceRoleKey = getSupabaseServiceRoleKey(c);
+  return {
+    apikey: serviceRoleKey,
+    Authorization: `Bearer ${serviceRoleKey}`,
+    'Content-Type': 'application/json',
+  };
+}
+
+function supabaseAuthUserFromResponse(data: any): any {
+  if (data?.user?.id) return data.user;
+  if (data?.id) return data;
+  return null;
+}
+
+function supabaseProfileMetadata(input: {
+  appUserId?: unknown;
+  username?: unknown;
+  fullName?: unknown;
+  profileImage?: unknown;
+  language?: unknown;
+  phone?: unknown;
+  emailVerified?: unknown;
+}) {
+  const metadata: Record<string, string> = {};
+  const appUserId = cleanText(input.appUserId, 120);
+  const username = cleanText(input.username, 80);
+  const fullName = cleanText(input.fullName, 160);
+  const profileImage = cleanText(input.profileImage, 1200);
+  const language = normalizeLanguage(input.language);
+  const phone = cleanText(input.phone, 40);
+
+  if (appUserId) metadata.captro_user_id = appUserId;
+  if (username) {
+    metadata.username = username;
+    metadata.captro_username = username;
+  }
+  if (fullName) {
+    metadata.full_name = fullName;
+    metadata.name = fullName;
+    metadata.display_name = fullName;
+  }
+  if (profileImage) {
+    metadata.avatar_url = profileImage;
+    metadata.picture = profileImage;
+  }
+  if (language) metadata.language = language;
+  if (phone) metadata.phone = phone;
+  if (input.emailVerified === true || input.emailVerified === 1 || input.emailVerified === '1') {
+    metadata.email_verified = 'true';
+  }
+  return metadata;
+}
+
+function supabaseProviderMetadata(provider: unknown, appUserId?: unknown, oauthSubject?: unknown) {
+  const cleanProvider = supabaseAuthProvider(provider);
+  const metadata: Record<string, any> = {
+    provider: cleanProvider,
+    providers: [cleanProvider],
+    captro_auth_source: 'captro_worker',
+  };
+  const cleanAppUserId = cleanText(appUserId, 120);
+  const cleanSubject = cleanText(oauthSubject, 240);
+  if (cleanAppUserId) metadata.captro_user_id = cleanAppUserId;
+  if (cleanSubject) metadata.oauth_subject = cleanSubject;
+  return metadata;
+}
+
+function supabaseAuthCreatePayload(input: {
+  email?: unknown;
+  phone?: unknown;
+  password?: unknown;
+  username?: unknown;
+  fullName?: unknown;
+  profileImage?: unknown;
+  provider?: 'email' | 'phone' | 'google' | 'apple' | 'supabase';
+  oauthSubject?: unknown;
+  appUserId?: unknown;
+}) {
+  const provider = supabaseAuthProvider(input.provider);
+  const email = normalizeOptionalEmail(input.email);
+  const phone = normalizeOptionalPhone(input.phone);
+  const password = String(input.password || '');
+  const body: any = {
+    user_metadata: supabaseProfileMetadata({
+      appUserId: input.appUserId,
+      username: input.username,
+      fullName: input.fullName,
+      profileImage: input.profileImage,
+      phone,
+    }),
+    app_metadata: supabaseProviderMetadata(provider, input.appUserId, input.oauthSubject),
+  };
+
+  if (email && !isInternalOAuthEmail(email)) {
+    body.email = email;
+    body.email_confirm = true;
+  }
+  if (phone) {
+    body.phone = phone;
+    body.phone_confirm = true;
+  }
+  if (password) body.password = password;
+  if (!body.email && !body.phone) throw new Error('SUPABASE_AUTH_IDENTIFIER_REQUIRED');
+  return body;
+}
+
+async function findSupabaseAuthUser(c: any, input: { email?: unknown; phone?: unknown; id?: unknown }) {
+  const id = isUuidText(input.id);
+  if (id) {
+    const response = await fetch(`${getSupabaseUrl(c)}/auth/v1/admin/users/${encodeURIComponent(id)}`, {
+      headers: supabaseAdminAuthHeaders(c),
+    });
+    if (response.ok) return supabaseAuthUserFromResponse(await response.json().catch(() => ({})));
+    if (response.status !== 404) {
+      const text = await response.text().catch(() => '');
+      throw new Error(`SUPABASE_AUTH_LOOKUP_FAILED:${response.status}:${text.slice(0, 200)}`);
+    }
+  }
+
+  const email = normalizeOptionalEmail(input.email);
+  const phone = normalizeOptionalPhone(input.phone);
+  const filter = email || phone;
+  if (!filter) return null;
+  const response = await fetch(`${getSupabaseUrl(c)}/auth/v1/admin/users?page=1&per_page=100&filter=${encodeURIComponent(filter)}`, {
+    headers: supabaseAdminAuthHeaders(c),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`SUPABASE_AUTH_LIST_FAILED:${response.status}:${text.slice(0, 200)}`);
+  }
+  const data: any = await response.json().catch(() => ({}));
+  const users = Array.isArray(data?.users) ? data.users : Array.isArray(data) ? data : [];
+  return users.find((user: any) => {
+    const userEmail = normalizeOptionalEmail(user?.email);
+    const userPhone = normalizeOptionalPhone(user?.phone);
+    return (email && userEmail === email) || (phone && userPhone === phone);
+  }) || null;
+}
+
+async function createOrFindSupabaseAuthUser(c: any, input: {
+  email?: unknown;
+  phone?: unknown;
+  password?: unknown;
+  username?: unknown;
+  fullName?: unknown;
+  profileImage?: unknown;
+  provider?: 'email' | 'phone' | 'google' | 'apple' | 'supabase';
+  oauthSubject?: unknown;
+  appUserId?: unknown;
+}) {
+  const body = supabaseAuthCreatePayload(input);
+  const response = await fetch(`${getSupabaseUrl(c)}/auth/v1/admin/users`, {
+    method: 'POST',
+    headers: supabaseAdminAuthHeaders(c),
+    body: JSON.stringify(body),
+  });
+
+  if (response.ok) {
+    return { user: supabaseAuthUserFromResponse(await response.json().catch(() => ({}))), created: true };
+  }
+
+  const text = await response.text().catch(() => '');
+  if ([400, 409, 422].includes(response.status) && /already|registered|exists|duplicate|unique/i.test(text)) {
+    const existing = await findSupabaseAuthUser(c, { email: input.email, phone: input.phone });
+    if (existing?.id) {
+      const updatePayload: any = {
+        user_metadata: supabaseProfileMetadata({
+          appUserId: input.appUserId,
+          username: input.username,
+          fullName: input.fullName,
+          profileImage: input.profileImage,
+          phone: input.phone,
+        }),
+      };
+      if (input.password) updatePayload.password = String(input.password);
+      await updateSupabaseAuthUser(c, existing.id, updatePayload);
+      const refreshed = await findSupabaseAuthUser(c, { id: existing.id });
+      return { user: refreshed || existing, created: false };
+    }
+  }
+
+  throw new Error(`SUPABASE_AUTH_CREATE_FAILED:${response.status}:${text.slice(0, 200)}`);
+}
+
+async function deleteSupabaseAuthUser(c: any, supabaseUserId: unknown) {
+  const id = String(supabaseUserId || '').trim();
+  if (!id) return;
+  const response = await fetch(`${getSupabaseUrl(c)}/auth/v1/admin/users/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: supabaseAdminAuthHeaders(c),
+  });
+  if (!response.ok && response.status !== 404) {
+    const text = await response.text().catch(() => '');
+    console.warn(JSON.stringify({ event: 'supabase_auth_cleanup_failed', status: response.status, code: text.slice(0, 120) }));
+  }
+}
+
+async function linkSupabaseAuthUser(c: any, appUserId: string, supabaseUserId: unknown) {
+  const supabaseId = String(supabaseUserId || '').trim();
+  if (!appUserId || !supabaseId) return;
+  await ensureSupabaseAuthSchema(c.env.DB);
+  const owner: any = await c.env.DB.prepare('SELECT id FROM users WHERE supabase_user_id = ? AND id != ? LIMIT 1')
+    .bind(supabaseId, appUserId)
+    .first();
+  if (owner) throw new Error('SUPABASE_AUTH_LINK_CONFLICT');
+  await c.env.DB.prepare('UPDATE users SET supabase_user_id = ?, updated_at = datetime(\'now\') WHERE id = ?')
+    .bind(supabaseId, appUserId)
+    .run();
+}
+
+async function syncSupabaseAuthMetadataForUser(c: any, user: any) {
+  if (!user?.supabase_user_id) return;
+  await updateSupabaseAuthUser(c, user.supabase_user_id, {
+    user_metadata: supabaseProfileMetadata({
+      appUserId: user.id,
+      username: publicUsernameFor(user),
+      fullName: user.full_name,
+      profileImage: user.profile_image,
+      language: user.language,
+      phone: user.phone,
+    }),
+  });
+}
+
+async function signInSupabasePassword(c: any, email: string, password: string) {
+  const response = await fetch(`${getSupabaseUrl(c)}/auth/v1/token?grant_type=password`, {
+    method: 'POST',
+    headers: supabasePublicAuthHeaders(c),
+    body: JSON.stringify({ email, password }),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`SUPABASE_PASSWORD_SIGN_IN_FAILED:${response.status}:${text.slice(0, 160)}`);
+  }
+  const data: any = await response.json().catch(() => ({}));
+  if (!data?.access_token) throw new Error('SUPABASE_PASSWORD_SESSION_MISSING');
+  return data;
+}
+
+async function signInSupabaseIdToken(c: any, provider: 'google' | 'apple', idToken: string, nonce?: string) {
+  const body: any = { provider, token: idToken };
+  if (nonce) body.nonce = nonce;
+  const response = await fetch(`${getSupabaseUrl(c)}/auth/v1/token?grant_type=id_token`, {
+    method: 'POST',
+    headers: supabasePublicAuthHeaders(c),
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`SUPABASE_ID_TOKEN_SIGN_IN_FAILED:${provider}:${response.status}:${text.slice(0, 180)}`);
+  }
+  const data: any = await response.json().catch(() => ({}));
+  if (!data?.access_token) throw new Error(`SUPABASE_ID_TOKEN_SESSION_MISSING:${provider}`);
+  return data;
+}
+
+async function issueCaptroTokenForSupabaseAccessToken(c: any, supabaseAccessToken: string, extras: any = {}) {
+  const payload = await verifySupabaseAccessToken(c, supabaseAccessToken);
+  const user = await findOrCreateSupabaseUser(c, payload, extras);
+  if (['banned', 'suspended', 'deleted'].includes(String(user.status || 'active'))) {
+    await logSecurityEvent(c, 'login_banned_blocked', user.id, { provider: 'supabase' });
+    throw new Error('ACCOUNT_DISABLED');
+  }
+  await upsertAccountIdentity(c, {
+    userId: user.id,
+    provider: extras.auth_provider || extras.provider || payload.app_metadata?.provider || payload.app_metadata?.providers?.[0] || user.oauth_provider || 'supabase',
+    providerUserId: extras.oauth_subject || extras.provider_user_id || user.oauth_subject || payload.sub,
+    email: payload.email || user.email,
+  });
+  const token = await createToken(user.id, getJwtSecret(c));
+  runBackgroundTask(c, 'supabase_login_profile_write_through_failed', async () => {
+    await syncSupabaseAuthMetadataForUser(c, user);
+    await mirrorLegacyUserToSupabase(c, user.id);
+  });
+  return { token, user };
+}
+
+async function updateSupabaseAuthUser(c: any, supabaseUserId: unknown, payload: { email?: string; password?: string; phone?: string; user_metadata?: Record<string, unknown>; app_metadata?: Record<string, unknown> }) {
+  const id = String(supabaseUserId || '').trim();
+  const body: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(payload || {})) {
+    if (typeof value === 'string' && value.trim().length > 0) body[key] = value.trim();
+    else if (value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length > 0) body[key] = value;
+  }
+  if (!id || Object.keys(body).length === 0) return;
+
+  const response = await fetch(`${getSupabaseUrl(c)}/auth/v1/admin/users/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    headers: supabaseAdminAuthHeaders(c),
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`SUPABASE_AUTH_UPDATE_FAILED:${response.status}:${text.slice(0, 200)}`);
+  }
 }
 
 function isUuidText(value: unknown): string | null {
@@ -5284,6 +7881,9 @@ function legacyUserTransferPayload(row: any) {
     id: String(row.id || ''),
     supabase_user_id: isUuidText(row.supabase_user_id),
     email: cleanText(row.email, 320) || null,
+    email_verified: accountEmailVerified(row),
+    phone: normalizeOptionalPhone(row.phone) || null,
+    phone_verified: Number(row.phone_verified || 0) === 1,
     username: cleanText(row.username, 80) || null,
     full_name: cleanText(row.full_name, 160) || null,
     avatar_url: cleanText(row.profile_image, 1200) || null,
@@ -5320,6 +7920,7 @@ function legacyUserTransferPayload(row: any) {
 
 function legacyPostTransferPayload(row: any) {
   const editorOverlays = parseJsonArray(row.editor_overlays);
+  const primaryCategory = (normalizeDiscoverCategory(row.primary_category || row.category || row.post_type, false) || DEFAULT_DISCOVER_CATEGORY) as DiscoverCategory;
   return {
     legacy_post_id: String(row.id || ''),
     user_id: isUuidText(row.supabase_user_id),
@@ -5329,7 +7930,7 @@ function legacyPostTransferPayload(row: any) {
     visibility: normalizeVisibility(row.visibility),
     status: cleanText(row.status || 'active', 40) === 'removed' ? 'removed' : 'active',
     post_type: cleanText(row.post_type || row.category || 'general', 80),
-    category: cleanText(row.category, 80) || null,
+    category: primaryCategory,
     location: cleanText(row.location || row.place_name, 180) || null,
     media: legacyMediaPayload(row),
     media_dimensions: parseJsonArray(row.media_dimensions),
@@ -5344,6 +7945,13 @@ function legacyPostTransferPayload(row: any) {
       source: 'cloudflare_d1_transfer',
       image: cleanText(row.image, 1200),
       media_backup_ids: parseJsonArray(row.media_backup_ids),
+      discover_category: {
+        primary_category: primaryCategory,
+        confidence: clampFloat(row.category_confidence, 0, 1, 0),
+        source: normalizeCategorySource(row.category_source),
+        status: normalizeCategoryStatus(row.category_status),
+        tags: sanitizeAutoCategoryTags(row.tags_json),
+      },
       place: {
         id: cleanText(row.place_id, 160),
         name: cleanText(row.place_name, 180),
@@ -5415,6 +8023,636 @@ function runBackgroundTask(c: any, label: string, task: () => Promise<void>) {
   }
 }
 
+function workersAiLabelsFromResult(result: any): AutoCategoryLabel[] {
+  const raw = Array.isArray(result)
+    ? result
+    : Array.isArray(result?.result)
+      ? result.result
+      : Array.isArray(result?.labels)
+        ? result.labels
+        : Array.isArray(result?.predictions)
+          ? result.predictions
+          : [];
+  return sanitizeAutoCategoryLabels(raw.map((item: any) => ({
+    label: item?.label || item?.class || item?.name,
+    confidence: item?.score ?? item?.confidence ?? item?.probability,
+    source: 'workers_ai',
+  }))).slice(0, 12);
+}
+
+async function classifyImageWithWorkersAi(env: Env, imageUrl: string): Promise<AutoCategoryLabel[]> {
+  if (!env.AI || !imageUrl || !/^https:\/\//i.test(imageUrl)) return [];
+  const response = await fetch(imageUrl, {
+    headers: { accept: 'image/*' },
+  });
+  if (!response.ok) return [];
+  const contentLength = Number(response.headers.get('content-length') || 0);
+  if (contentLength > 4_000_000) return [];
+  const imageBytes = await response.arrayBuffer();
+  if (!imageBytes.byteLength || imageBytes.byteLength > 4_000_000) return [];
+  const result = await env.AI.run('@cf/microsoft/resnet-50', {
+    image: Array.from(new Uint8Array(imageBytes)),
+  });
+  return workersAiLabelsFromResult(result);
+}
+
+type CaptroMediaType = 'image' | 'video';
+type MediaModerationStatus = 'uploading' | 'pending_moderation' | 'approved' | 'review_required' | 'rejected' | 'failed';
+type MalwareStatus = 'clean' | 'malicious' | 'unknown' | 'not_scanned';
+type ModerationDecision = 'approved' | 'review_required' | 'rejected';
+
+type MediaModerationScores = {
+  adult_explicit_score: number;
+  nudity_score: number;
+  sexual_context_score: number;
+  sexual_solicitation_score: number;
+  minor_safety_risk_score: number;
+  violence_score: number;
+  gore_score: number;
+  weapon_score: number;
+  hate_symbol_score: number;
+  ai_generated_likelihood: number;
+  spam_scam_score: number;
+  malware_status: MalwareStatus;
+  link_risk_score: number;
+  confidence: number;
+};
+
+const MEDIA_MODERATION_STATUS_VALUES = new Set<MediaModerationStatus>([
+  'uploading',
+  'pending_moderation',
+  'approved',
+  'review_required',
+  'rejected',
+  'failed',
+]);
+
+function normalizeMediaModerationStatus(value: unknown): MediaModerationStatus {
+  const status = cleanText(value, 40) as MediaModerationStatus;
+  return MEDIA_MODERATION_STATUS_VALUES.has(status) ? status : 'pending_moderation';
+}
+
+function normalizeMediaAssetType(value: unknown): CaptroMediaType | '' {
+  const mediaType = cleanText(value, 40).toLowerCase();
+  return mediaType === 'image' || mediaType === 'video' ? mediaType : '';
+}
+
+function mediaModerationMaxBytes(env: Env, mediaType: CaptroMediaType): number {
+  const raw = Number(mediaType === 'video' ? env.MEDIA_MAX_VIDEO_BYTES : env.MEDIA_MAX_IMAGE_BYTES);
+  if (Number.isFinite(raw) && raw > 0) return Math.min(raw, mediaType === 'video' ? 500_000_000 : 50_000_000);
+  return mediaType === 'video' ? 250_000_000 : 25_000_000;
+}
+
+function isUnsafeUploadExtension(filename: unknown): boolean {
+  const ext = fileExtension(filename);
+  return ['exe', 'dll', 'bat', 'cmd', 'com', 'scr', 'ps1', 'sh', 'js', 'jar', 'zip', 'rar', '7z', 'tar', 'gz', 'svg', 'html', 'php'].includes(ext);
+}
+
+function validatePrePublishUploadInput(env: Env, body: any): { ok: true; mediaType: CaptroMediaType; mimeType: string; filename: string; fileSize: number } | { ok: false; detail: string; code: string; status: number } {
+  const mediaType = normalizeMediaAssetType(body.media_type || body.mediaType || body.type);
+  if (!mediaType) return { ok: false, detail: 'Upload must be an image or video.', code: 'invalid_media_type', status: 400 };
+
+  const filename = cleanText(body.filename || body.file_name || (mediaType === 'video' ? 'captro-video.mp4' : 'captro-image.jpg'), 180);
+  if (isUnsafeUploadExtension(filename)) return { ok: false, detail: 'This file type cannot be uploaded.', code: 'unsafe_extension', status: 400 };
+
+  const mimeType = normalizedContentType(body.mime_type || body.mimeType || body.content_type || body.contentType);
+  const allowedTypes = mediaType === 'video' ? ALLOWED_VIDEO_TYPES : ALLOWED_IMAGE_TYPES;
+  const allowedExtensions = mediaType === 'video' ? ALLOWED_VIDEO_EXTENSIONS : ALLOWED_IMAGE_EXTENSIONS;
+  if (!mimeType || !allowedTypes.has(mimeType) || !extensionAllowed(filename, allowedExtensions)) {
+    return {
+      ok: false,
+      detail: mediaType === 'video' ? 'Unsupported video type. Use MP4, MOV, or WebM.' : 'Unsupported image type. Use JPG, PNG, WebP, HEIC, or HEIF.',
+      code: 'unsupported_media_type',
+      status: 400,
+    };
+  }
+
+  const fileSize = Math.max(0, Math.round(Number(body.file_size || body.fileSize || body.size || 0)));
+  const maxBytes = mediaModerationMaxBytes(env, mediaType);
+  if (fileSize > maxBytes) {
+    return { ok: false, detail: 'This upload is too large.', code: 'file_too_large', status: 413 };
+  }
+
+  return { ok: true, mediaType, mimeType, filename, fileSize };
+}
+
+function defaultModerationScores(overrides: Partial<MediaModerationScores> = {}): MediaModerationScores {
+  return {
+    adult_explicit_score: 0,
+    nudity_score: 0,
+    sexual_context_score: 0,
+    sexual_solicitation_score: 0,
+    minor_safety_risk_score: 0,
+    violence_score: 0,
+    gore_score: 0,
+    weapon_score: 0,
+    hate_symbol_score: 0,
+    ai_generated_likelihood: 0,
+    spam_scam_score: 0,
+    malware_status: 'unknown',
+    link_risk_score: 0,
+    confidence: 0.7,
+    ...overrides,
+  };
+}
+
+function moderationDelay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function maxModerationScores(scores: MediaModerationScores[]): MediaModerationScores {
+  return scores.reduce((acc, score) => ({
+    adult_explicit_score: Math.max(acc.adult_explicit_score, score.adult_explicit_score),
+    nudity_score: Math.max(acc.nudity_score, score.nudity_score),
+    sexual_context_score: Math.max(acc.sexual_context_score, score.sexual_context_score),
+    sexual_solicitation_score: Math.max(acc.sexual_solicitation_score, score.sexual_solicitation_score),
+    minor_safety_risk_score: Math.max(acc.minor_safety_risk_score, score.minor_safety_risk_score),
+    violence_score: Math.max(acc.violence_score, score.violence_score),
+    gore_score: Math.max(acc.gore_score, score.gore_score),
+    weapon_score: Math.max(acc.weapon_score, score.weapon_score),
+    hate_symbol_score: Math.max(acc.hate_symbol_score, score.hate_symbol_score),
+    ai_generated_likelihood: Math.max(acc.ai_generated_likelihood, score.ai_generated_likelihood),
+    spam_scam_score: Math.max(acc.spam_scam_score, score.spam_scam_score),
+    malware_status: score.malware_status === 'malicious' || acc.malware_status === 'malicious'
+      ? 'malicious'
+      : score.malware_status === 'clean' || acc.malware_status === 'clean'
+        ? 'clean'
+        : acc.malware_status,
+    link_risk_score: Math.max(acc.link_risk_score, score.link_risk_score),
+    confidence: Math.max(acc.confidence, score.confidence),
+  }), defaultModerationScores({ confidence: 0 }));
+}
+
+function decideMediaModeration(scores: MediaModerationScores, mediaType: CaptroMediaType, aiGeneratedMediaPolicy = ''): { decision: ModerationDecision; reasons: string[]; rejectionCode: string; userMessage: string } {
+  const reasons: string[] = [];
+  const aiPolicy = cleanText(aiGeneratedMediaPolicy, 60).toLowerCase();
+  const aiDisallowed = aiPolicy === 'disallow';
+  const aiReviewEnabled = aiDisallowed || aiPolicy === 'review';
+  if (scores.malware_status === 'malicious') reasons.push('malware_detected');
+  if (scores.adult_explicit_score >= 0.85) reasons.push('explicit_sexual_content');
+  if (scores.sexual_solicitation_score >= 0.90) reasons.push('sexual_solicitation');
+  if (scores.minor_safety_risk_score >= 0.20) reasons.push('minor_safety_risk');
+  if (scores.gore_score >= 0.90) reasons.push('graphic_gore');
+  if (scores.hate_symbol_score >= 0.85) reasons.push('hate_symbol');
+  if (scores.spam_scam_score >= 0.90 || scores.link_risk_score >= 0.90) reasons.push('spam_or_scam');
+  if (aiDisallowed && scores.ai_generated_likelihood >= 0.92) reasons.push('ai_generated_media');
+
+  if (reasons.length) {
+    return {
+      decision: 'rejected',
+      reasons,
+      rejectionCode: reasons[0],
+      userMessage: "This upload can't be posted because it may break Captro's safety rules.",
+    };
+  }
+
+  const strongestSafetySignal = Math.max(
+    scores.adult_explicit_score,
+    scores.nudity_score,
+    scores.sexual_context_score,
+    scores.sexual_solicitation_score,
+    scores.minor_safety_risk_score,
+    scores.violence_score,
+    scores.gore_score,
+    scores.weapon_score,
+    scores.hate_symbol_score,
+    scores.spam_scam_score,
+    scores.link_risk_score,
+  );
+
+  if (scores.nudity_score >= 0.70
+    || scores.sexual_context_score >= 0.70
+    || scores.sexual_solicitation_score >= 0.60
+    || scores.violence_score >= 0.80
+    || scores.weapon_score >= 0.80
+    || (aiReviewEnabled && scores.ai_generated_likelihood >= 0.85)
+    || (scores.confidence < 0.45 && strongestSafetySignal >= 0.35)) {
+    if (scores.nudity_score >= 0.70) reasons.push('nudity_review');
+    if (scores.sexual_context_score >= 0.70) reasons.push('sexual_context_review');
+    if (scores.sexual_solicitation_score >= 0.60) reasons.push('sexual_solicitation_review');
+    if (scores.violence_score >= 0.80) reasons.push('violence_review');
+    if (scores.weapon_score >= 0.80) reasons.push('weapon_review');
+    if (aiReviewEnabled && scores.ai_generated_likelihood >= 0.85) reasons.push('ai_generated_review');
+    if (scores.confidence < 0.45 && strongestSafetySignal >= 0.35) reasons.push('low_confidence_with_risk');
+    return {
+      decision: 'review_required',
+      reasons,
+      rejectionCode: '',
+      userMessage: 'This upload needs a quick safety review before it can be posted.',
+    };
+  }
+
+  return { decision: 'approved', reasons: [], rejectionCode: '', userMessage: '' };
+}
+
+function parseModerationJson(value: any): any {
+  if (!value) return {};
+  if (typeof value === 'object') return value;
+  const text = String(value || '').trim();
+  const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(text)?.[1] || text;
+  const start = fenced.indexOf('{');
+  const end = fenced.lastIndexOf('}');
+  if (start >= 0 && end > start) {
+    try { return JSON.parse(fenced.slice(start, end + 1)); } catch {}
+  }
+  try { return JSON.parse(fenced); } catch {}
+  return {};
+}
+
+function textSafetyHeuristics(text: string): MediaModerationScores {
+  const lower = text.toLowerCase();
+  const unsafeLinks = /(bit\.ly|tinyurl|t\.me\/|telegram\.me|free\s+money|cashapp|crypto|airdrop|wallet\s+connect|login\s+here|verify\s+account)/i.test(text);
+  const explicit = /(onlyfans|nude|sex|escort|hookup|send nudes|xxx)/i.test(text);
+  const hate = /(swastika|kkk|nazi)/i.test(text);
+  const violence = /(kill|shoot|stab|blood|gore)/i.test(text);
+  return defaultModerationScores({
+    adult_explicit_score: explicit ? 0.55 : 0,
+    sexual_solicitation_score: explicit ? 0.75 : 0,
+    hate_symbol_score: hate ? 0.75 : 0,
+    violence_score: violence ? 0.55 : 0,
+    spam_scam_score: unsafeLinks ? 0.82 : 0,
+    link_risk_score: /https?:\/\//i.test(text) ? (unsafeLinks ? 0.85 : 0.25) : 0,
+    confidence: lower ? 0.78 : 0.72,
+    malware_status: 'not_scanned',
+  });
+}
+
+function sanitizeModerationScores(raw: any, fallback: MediaModerationScores): MediaModerationScores {
+  return defaultModerationScores({
+    adult_explicit_score: clampFloat(raw.adult_explicit_score ?? raw.explicit_sexual_content ?? raw.sexual_explicit_score, 0, 1, fallback.adult_explicit_score),
+    nudity_score: clampFloat(raw.nudity_score ?? raw.nudity, 0, 1, fallback.nudity_score),
+    sexual_context_score: clampFloat(raw.sexual_context_score ?? raw.sexual_context, 0, 1, fallback.sexual_context_score),
+    sexual_solicitation_score: clampFloat(raw.sexual_solicitation_score ?? raw.solicitation_score, 0, 1, fallback.sexual_solicitation_score),
+    minor_safety_risk_score: clampFloat(raw.minor_safety_risk_score ?? raw.minor_risk, 0, 1, fallback.minor_safety_risk_score),
+    violence_score: clampFloat(raw.violence_score ?? raw.violence, 0, 1, fallback.violence_score),
+    gore_score: clampFloat(raw.gore_score ?? raw.gore, 0, 1, fallback.gore_score),
+    weapon_score: clampFloat(raw.weapon_score ?? raw.weapons, 0, 1, fallback.weapon_score),
+    hate_symbol_score: clampFloat(raw.hate_symbol_score ?? raw.hate_symbols, 0, 1, fallback.hate_symbol_score),
+    ai_generated_likelihood: clampFloat(raw.ai_generated_likelihood ?? raw.ai_likelihood, 0, 1, fallback.ai_generated_likelihood),
+    spam_scam_score: clampFloat(raw.spam_scam_score ?? raw.scam_score, 0, 1, fallback.spam_scam_score),
+    malware_status: ['clean', 'malicious', 'unknown', 'not_scanned'].includes(cleanText(raw.malware_status, 30)) ? cleanText(raw.malware_status, 30) as MalwareStatus : fallback.malware_status,
+    link_risk_score: clampFloat(raw.link_risk_score ?? raw.unsafe_link_score, 0, 1, fallback.link_risk_score),
+    confidence: clampFloat(raw.confidence ?? raw.model_confidence, 0, 1, fallback.confidence),
+  });
+}
+
+function mediaAssetPublicUrl(env: Env, asset: any): string {
+  const provider = cleanText(asset?.storage_provider, 40);
+  const key = cleanText(asset?.storage_key, 220);
+  if (!key) return '';
+  if (provider === 'images') return cloudflareImageDeliveryUrl(env, key, env.CLOUDFLARE_IMAGES_FEED_VARIANT || 'public');
+  if (provider === 'stream') return `https://videodelivery.net/${key}/manifest/video.m3u8`;
+  return safeMediaReference(asset?.public_url) || safeMediaReference(asset?.private_url);
+}
+
+function mediaAssetPreviewUrl(env: Env, asset: any): string {
+  const provider = cleanText(asset?.storage_provider, 40);
+  const key = cleanText(asset?.storage_key, 220);
+  if (!key) return '';
+  if (provider === 'images') return cloudflareImageDeliveryUrl(env, key, env.CLOUDFLARE_IMAGES_THUMBNAIL_VARIANT || 'public');
+  if (provider === 'stream') return streamThumbnailUrl(`cfstream:${key}`);
+  return safeMediaReference(asset?.public_url) || safeMediaReference(asset?.private_url);
+}
+
+function moderationSampleUrls(env: Env, asset: any): string[] {
+  if (asset.media_type === 'video' && cleanText(asset.storage_provider, 40) === 'stream') {
+    const key = cleanText(asset.storage_key, 220);
+    return [0, 25, 50, 75, 95].map((pct) => `https://videodelivery.net/${key}/thumbnails/thumbnail.jpg?time=${pct}p&height=720`);
+  }
+  if (asset.media_type === 'image' && cleanText(asset.storage_provider, 40) === 'images') {
+    const key = cleanText(asset.storage_key, 220);
+    return key ? [`cfimage-api:${key}`] : [];
+  }
+  return [mediaAssetPreviewUrl(env, asset)].filter(Boolean);
+}
+
+async function runWorkersAiImageModeration(env: Env, imageUrl: string, caption: string): Promise<{ scores: MediaModerationScores; raw: any; modelName: string }> {
+  const fallback = textSafetyHeuristics(caption);
+  if (!env.AI || !imageUrl || (!/^https:\/\//i.test(imageUrl) && !imageUrl.startsWith('cfimage-api:'))) {
+    return { scores: defaultModerationScores({ ...fallback, confidence: Math.min(fallback.confidence, 0.6) }), raw: { ai_available: !!env.AI, image_available: !!imageUrl }, modelName: 'heuristic_no_image' };
+  }
+  const modelName = cleanText(env.AI_IMAGE_MODERATION_MODEL || '@cf/meta/llama-3.2-11b-vision-instruct', 160);
+  try {
+    const imageId = imageUrl.startsWith('cfimage-api:') ? cleanText(imageUrl.replace('cfimage-api:', ''), 220) : '';
+    let response: Response | null = null;
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      response = imageId
+        ? await fetch(`https://api.cloudflare.com/client/v4/accounts/${cloudflareAccountId(env)}/images/v1/${imageId}/blob`, {
+          headers: { Authorization: `Bearer ${cloudflareImagesToken(env)}`, accept: 'image/*' },
+        })
+        : await fetch(imageUrl, { headers: { accept: 'image/*' } });
+      if (response.ok) break;
+      if (![404, 409, 425, 429, 500, 502, 503, 504].includes(response.status) || attempt === 3) break;
+      await moderationDelay(350 * (attempt + 1));
+    }
+    if (!response?.ok) throw new Error(`IMAGE_SAMPLE_FETCH_FAILED:${response?.status || 0}`);
+    const imageBytes = await response.arrayBuffer();
+    if (!imageBytes.byteLength || imageBytes.byteLength > 4_000_000) throw new Error('IMAGE_SAMPLE_TOO_LARGE');
+    const prompt = `You are Captro's pre-publish media safety classifier. Return strict JSON only with numbers 0..1 for adult_explicit_score, nudity_score, sexual_context_score, sexual_solicitation_score, minor_safety_risk_score, violence_score, gore_score, weapon_score, hate_symbol_score, ai_generated_likelihood, spam_scam_score, link_risk_score, confidence, malware_status as "not_scanned", and reasons as an array. Check nudity, explicit sexual content, sexual solicitation, sexualized minors, violence/gore, weapons, hate symbols, scams/spam, unsafe links in caption, and AI-generated likelihood. Caption: ${caption || '(none)'}`;
+    const result = await env.AI.run(modelName, {
+      messages: [{ role: 'user', content: prompt }],
+      image: Array.from(new Uint8Array(imageBytes)),
+    });
+    const raw = parseModerationJson(result?.response || result?.result || result?.text || result);
+    return { scores: sanitizeModerationScores(raw, fallback), raw: raw || result || {}, modelName };
+  } catch (error: any) {
+    return {
+      scores: defaultModerationScores({ ...fallback, confidence: Math.min(fallback.confidence, 0.55) }),
+      raw: { error: getErrorCode(error).slice(0, 180), fallback: true },
+      modelName,
+    };
+  }
+}
+
+async function scanMalwareInterface(env: Env, asset: any): Promise<MalwareStatus> {
+  const scannerUrl = cleanText(env.MALWARE_SCANNER_URL, 400);
+  if (!scannerUrl || !/^https:\/\//i.test(scannerUrl)) return 'unknown';
+  try {
+    const response = await fetch(scannerUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(env.MALWARE_SCANNER_TOKEN ? { Authorization: `Bearer ${env.MALWARE_SCANNER_TOKEN}` } : {}),
+      },
+      body: JSON.stringify({
+        media_id: asset.id,
+        provider: asset.storage_provider,
+        storage_key: asset.storage_key,
+        mime_type: asset.mime_type,
+        file_size: asset.file_size,
+        sha256_hash: asset.sha256_hash,
+      }),
+    });
+    if (!response.ok) return 'unknown';
+    const data: any = await response.json().catch(() => ({}));
+    return data.status === 'malicious' ? 'malicious' : data.status === 'clean' ? 'clean' : 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
+async function insertModerationEvent(db: D1Database, mediaId: string, eventType: string, input: { actorUserId?: string; actorRole?: string; decision?: string; reason?: string; note?: string; beforeState?: any; afterState?: any; requestId?: string } = {}) {
+  await db.prepare(
+    `INSERT INTO moderation_events
+     (id, media_id, actor_user_id, actor_role, event_type, decision, reason, note, before_state, after_state, request_id, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(
+    uuid(),
+    mediaId,
+    publicId(input.actorUserId || '', 120),
+    cleanText(input.actorRole || '', 40),
+    cleanText(eventType, 80),
+    cleanText(input.decision || '', 40),
+    cleanText(input.reason || '', 180),
+    cleanMultilineText(input.note || '', 1000),
+    safeJsonState(input.beforeState),
+    safeJsonState(input.afterState),
+    cleanText(input.requestId || '', 120),
+    now(),
+  ).run();
+}
+
+async function processMediaModerationJob(env: Env, message: MediaModerationJobMessage, requestId = '') {
+  await ensureMediaModerationSchema(env.DB);
+  const mediaId = publicId(message.mediaId, 160);
+  const jobId = publicId(message.jobId, 160);
+  const startedAt = now();
+  await env.DB.prepare("UPDATE moderation_jobs SET status = 'running', attempts = attempts + 1, started_at = ?, updated_at = ? WHERE id = ?")
+    .bind(startedAt, startedAt, jobId)
+    .run();
+
+  const asset: any = await env.DB.prepare('SELECT * FROM media_assets WHERE id = ? LIMIT 1').bind(mediaId).first();
+  if (!asset) throw new Error('MEDIA_ASSET_NOT_FOUND');
+  const existingStatus = normalizeMediaModerationStatus(asset.moderation_status);
+  if (['approved', 'review_required', 'rejected'].includes(existingStatus) && cleanText(asset.upload_status, 40) === 'uploaded') {
+    const ts = now();
+    await env.DB.prepare("UPDATE moderation_jobs SET status = 'completed', completed_at = COALESCE(completed_at, ?), updated_at = ? WHERE id = ?")
+      .bind(ts, ts, jobId)
+      .run();
+    return;
+  }
+
+  try {
+    const malwareStatus = await scanMalwareInterface(env, asset);
+    const caption = cleanMultilineText(message.caption || '', 1000);
+    const sampleScores: MediaModerationScores[] = [];
+    const rawSamples: any[] = [];
+    let modelName = 'heuristic';
+    for (const sampleUrl of moderationSampleUrls(env, asset)) {
+      const result = await runWorkersAiImageModeration(env, sampleUrl, caption);
+      modelName = result.modelName;
+      sampleScores.push(result.scores);
+      rawSamples.push({ sample_url: sampleUrl.replace(/\?.*/, ''), result: scrubLogMetadata(result.raw) });
+    }
+    if (!sampleScores.length) {
+      sampleScores.push(defaultModerationScores({ ...textSafetyHeuristics(caption), confidence: 0.55 }));
+      rawSamples.push({ fallback: 'no_sample_available' });
+    }
+    const scores = maxModerationScores(sampleScores);
+    scores.malware_status = malwareStatus === 'clean' || malwareStatus === 'malicious' ? malwareStatus : scores.malware_status;
+    const decision = decideMediaModeration(scores, normalizeMediaAssetType(asset.media_type) || 'image', env.AI_GENERATED_MEDIA_POLICY || '');
+    const publicUrl = decision.decision === 'approved' ? mediaAssetPublicUrl(env, asset) : '';
+    const ts = now();
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO moderation_results (
+          id, media_id, model_name, adult_explicit_score, nudity_score, sexual_context_score,
+          sexual_solicitation_score, minor_safety_risk_score, violence_score, gore_score, weapon_score,
+          hate_symbol_score, ai_generated_likelihood, spam_scam_score, malware_status, link_risk_score,
+          confidence, decision, reasons, raw_result, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(
+        uuid(), mediaId, modelName,
+        scores.adult_explicit_score, scores.nudity_score, scores.sexual_context_score,
+        scores.sexual_solicitation_score, scores.minor_safety_risk_score, scores.violence_score,
+        scores.gore_score, scores.weapon_score, scores.hate_symbol_score, scores.ai_generated_likelihood,
+        scores.spam_scam_score, scores.malware_status, scores.link_risk_score, scores.confidence,
+        decision.decision, JSON.stringify(decision.reasons), JSON.stringify({ samples: rawSamples }), ts,
+      ),
+      env.DB.prepare(
+        `UPDATE media_assets
+         SET moderation_status = ?, public_url = COALESCE(NULLIF(?, ''), public_url),
+             rejection_code = ?, rejection_message = ?, updated_at = ?
+         WHERE id = ?`
+      ).bind(decision.decision, publicUrl, decision.rejectionCode, decision.userMessage, ts, mediaId),
+      env.DB.prepare("UPDATE moderation_jobs SET status = 'completed', completed_at = ?, updated_at = ? WHERE id = ?")
+        .bind(ts, ts, jobId),
+    ]);
+    await insertModerationEvent(env.DB, mediaId, `moderation_${decision.decision}`, {
+      decision: decision.decision,
+      reason: decision.reasons.join(','),
+      afterState: { moderation_status: decision.decision, scores },
+      requestId,
+    });
+  } catch (error: any) {
+    const ts = now();
+    const code = getErrorCode(error).slice(0, 180);
+    await env.DB.batch([
+      env.DB.prepare("UPDATE moderation_jobs SET status = 'failed', last_error = ?, completed_at = ?, updated_at = ? WHERE id = ?")
+        .bind(code, ts, ts, jobId),
+      env.DB.prepare("UPDATE media_assets SET moderation_status = 'failed', rejection_code = 'moderation_failed', rejection_message = 'This upload could not be checked. Please try again.', updated_at = ? WHERE id = ?")
+        .bind(ts, mediaId),
+    ]);
+    await insertModerationEvent(env.DB, mediaId, 'moderation_failed', { reason: code, requestId });
+    throw error;
+  }
+}
+
+async function createMediaModerationJob(c: any, mediaId: string, userId: string, caption = '', options: { enqueue?: boolean } = {}): Promise<string> {
+  await ensureMediaModerationSchema(c.env.DB);
+  const jobId = uuid();
+  const ts = now();
+  await c.env.DB.prepare(
+    `INSERT INTO moderation_jobs (id, media_id, user_id, job_type, status, queued_at, created_at, updated_at)
+     VALUES (?, ?, ?, 'media_pre_publish', 'pending', ?, ?, ?)`
+  ).bind(jobId, mediaId, userId, ts, ts, ts).run();
+  const body: MediaModerationJobMessage = { jobId, mediaId, userId, reason: 'upload_complete', caption: cleanMultilineText(caption, 1000) };
+  const shouldEnqueue = options.enqueue !== false;
+  if (shouldEnqueue && c.env.MEDIA_MODERATION_QUEUE) {
+    await c.env.MEDIA_MODERATION_QUEUE.send(body);
+  } else if (shouldEnqueue) {
+    runBackgroundTask(c, 'media_moderation_inline_failed', async () => {
+      await processMediaModerationJob(c.env, body, c.get?.('requestId') || '');
+    });
+  }
+  return jobId;
+}
+
+function parseMediaAssetIds(body: any): string[] {
+  return Array.from(new Set([
+    ...parseJsonArray(body.media_asset_ids),
+    ...parseJsonArray(body.mediaAssetIds),
+    ...parseJsonArray(body.media_ids),
+    ...parseJsonArray(body.mediaIds),
+    body.media_asset_id,
+    body.mediaAssetId,
+  ].flat().map((value) => publicId(value, 160)).filter(Boolean)));
+}
+
+async function approvedMediaAssetsForPost(c: any, userId: string, requestedMediaIds: string[], imageUrls: string[]) {
+  await ensureMediaModerationSchema(c.env.DB);
+  if (!requestedMediaIds.length && imageUrls.length) {
+    return {
+      ok: false,
+      status: 409,
+      detail: 'Checking your upload before posting...',
+      code: 'MEDIA_MODERATION_REQUIRED',
+      assets: [] as any[],
+    };
+  }
+  if (!requestedMediaIds.length) return { ok: true, status: 200, detail: '', code: '', assets: [] as any[] };
+
+  const placeholders = requestedMediaIds.map(() => '?').join(', ');
+  const rows = await c.env.DB.prepare(`SELECT * FROM media_assets WHERE user_id = ? AND id IN (${placeholders})`)
+    .bind(userId, ...requestedMediaIds)
+    .all();
+  const assets = rows.results as any[];
+  if (assets.length !== requestedMediaIds.length) {
+    return { ok: false, status: 404, detail: 'One upload was not found. Please upload again.', code: 'MEDIA_NOT_FOUND', assets };
+  }
+  const blocking = assets.find((asset) => normalizeMediaModerationStatus(asset.moderation_status) !== 'approved' || cleanText(asset.upload_status, 40) !== 'uploaded');
+  if (blocking) {
+    const status = normalizeMediaModerationStatus(blocking.moderation_status);
+    const detail = status === 'rejected'
+      ? "This upload can't be posted because it may break Captro's safety rules."
+      : status === 'review_required'
+        ? 'This upload needs a quick safety review before it can be posted.'
+        : 'Checking your upload before posting...';
+    return { ok: false, status: 409, detail, code: `MEDIA_${status.toUpperCase()}`, assets };
+  }
+  return { ok: true, status: 200, detail: '', code: '', assets };
+}
+
+async function refinePostCategoryWithBackendAi(c: any, postId: string) {
+  if (!c.env.AI) return;
+  await ensureAutoCategorySchema(c.env.DB);
+  const row: any = await c.env.DB.prepare(
+    `SELECT id, content, title, image, images, media_types, media_dimensions, location, place_name, place_category, post_type,
+            primary_category, category_confidence, category_source, category_signals_json, tags_json,
+            user_selected_category, detected_objects_json, detected_scene, place_type, caption_keywords_json
+     FROM posts
+     WHERE id = ?
+     LIMIT 1`
+  ).bind(postId).first();
+  if (!row) return;
+
+  const currentSource = normalizeCategorySource(row.category_source);
+  if (currentSource === 'user_changed_optional' || currentSource === 'admin_changed') {
+    return;
+  }
+
+  const currentConfidence = clampFloat(row.category_confidence, 0, 1, 0);
+  const mediaUrls = sanitizeMediaReferences(row.images, row.image);
+  const mediaTypes = sanitizeMediaTypes(row.media_types, mediaUrls.length || 1);
+  const primaryUrl = mediaUrls[0] || safeMediaReference(row.image);
+  const primaryType = mediaTypes[0] || (isVideoMediaUrl(primaryUrl) ? 'video' : 'image');
+  if (currentConfidence >= 0.75 && primaryType !== 'video') return;
+
+  const thumbnailVariant = c.env.CLOUDFLARE_IMAGES_THUMBNAIL_VARIANT || '';
+  const feedVariant = c.env.CLOUDFLARE_IMAGES_FEED_VARIANT || '';
+  const mediaPreviewUrl = primaryType === 'video'
+    ? streamThumbnailUrl(primaryUrl)
+    : posterDeliveryUrl(primaryUrl, primaryType, thumbnailVariant, c.env) || feedDeliveryUrl(primaryUrl, primaryType, feedVariant, c.env);
+  const backendLabels = await classifyImageWithWorkersAi(c.env, mediaPreviewUrl);
+  const currentSignals = parseJsonObject(row.category_signals_json);
+  const aiInput: AutoCategoryInput = {
+    caption: [row.title, row.content].filter(Boolean).join('\n\n'),
+    mediaType: primaryType,
+    postType: row.post_type,
+    hashtags: sanitizeAutoCategoryTags(row.tags_json),
+    location: row.location,
+    placeName: row.place_name,
+    placeType: row.place_type || row.place_category,
+    userSelectedCategory: row.user_selected_category || (currentSignals as any).user_selected_category,
+    detectedObjects: sanitizeAutoCategoryTags(row.detected_objects_json),
+    detectedScene: cleanText(row.detected_scene, 80),
+    captionKeywords: sanitizeAutoCategoryTags(row.caption_keywords_json),
+    appleLabels: sanitizeAutoCategoryLabels((currentSignals as any).apple_labels),
+    appleCategoryGuess: cleanText((currentSignals as any).apple_category_guess, 40),
+    appleConfidence: clampFloat((currentSignals as any).apple_confidence, 0, 1, 0),
+  };
+  const backendCategory = categoryFromLabels(backendLabels);
+  let textAiCategory: { category: DiscoverCategory | ''; confidence: number; labels: AutoCategoryLabel[] } = { category: '', confidence: 0, labels: [] };
+  try {
+    textAiCategory = await classifyPostMetadataWithWorkersAi(c.env, { ...aiInput, backendLabels, backendCategoryGuess: backendCategory.category, backendConfidence: backendCategory.confidence });
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'post_category_text_ai_failed', code: getErrorCode(error).slice(0, 160) }));
+  }
+  const combinedBackendLabels = [...backendLabels, ...textAiCategory.labels].slice(0, 24);
+  if (!combinedBackendLabels.length && !backendCategory.category && !textAiCategory.category) return;
+
+  const result = autoCategoryEngine({
+    ...aiInput,
+    backendLabels: combinedBackendLabels,
+    backendCategoryGuess: textAiCategory.category || backendCategory.category,
+    backendConfidence: Math.max(textAiCategory.confidence, backendCategory.confidence),
+  });
+  await c.env.DB.prepare(
+    `UPDATE posts
+     SET primary_category = ?, category_confidence = ?, category_source = ?, category_status = ?,
+         category_signals_json = ?, tags_json = ?,
+         secondary_categories_json = ?, category_scores_json = ?, detected_objects_json = ?,
+         detected_scene = ?, place_type = ?, user_selected_category = ?, caption_keywords_json = ?,
+         updated_at = datetime('now')
+     WHERE id = ?`
+  ).bind(
+    result.primary_category,
+    result.category_confidence,
+    result.category_source,
+    result.category_status,
+    JSON.stringify(result.signals),
+    JSON.stringify(result.tags),
+    JSON.stringify(result.secondary_categories),
+    JSON.stringify(result.category_scores),
+    JSON.stringify(result.detected_objects),
+    result.detected_scene,
+    result.place_type,
+    result.user_selected_category,
+    JSON.stringify(result.caption_keywords),
+    postId
+  ).run();
+}
+
 async function supabaseAdminDeleteSafe(c: any, table: string, filters: Record<string, string>) {
   try {
     const query = Object.entries(filters)
@@ -5450,6 +8688,12 @@ async function mirrorLegacyUserToSupabase(c: any, userId: string) {
   await supabaseAdminUpsertSafe(c, 'app_users', [legacyUserTransferPayload(row)], 'id');
 }
 
+async function writeLegacyUserToSupabaseCanonical(c: any, userId: string) {
+  const row: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
+  if (!row) throw new Error('CANONICAL_USER_SOURCE_NOT_FOUND');
+  await supabaseAdminUpsert(c, 'app_users', [legacyUserTransferPayload(row)], 'id');
+}
+
 async function mirrorLegacyPostToSupabase(c: any, postId: string) {
   const row: any = await c.env.DB.prepare(`
     SELECT p.*, u.supabase_user_id
@@ -5460,6 +8704,29 @@ async function mirrorLegacyPostToSupabase(c: any, postId: string) {
   `).bind(postId).first();
   if (!row) return;
   await supabaseAdminUpsertSafe(c, 'app_posts', [legacyPostTransferPayload(row)], 'legacy_post_id');
+}
+
+async function writeLegacyPostToSupabaseCanonical(c: any, postId: string) {
+  const row: any = await c.env.DB.prepare(`
+    SELECT p.*, u.supabase_user_id
+    FROM posts p
+    LEFT JOIN users u ON u.id = p.user_id
+    WHERE p.id = ?
+    LIMIT 1
+  `).bind(postId).first();
+  if (!row) throw new Error('CANONICAL_POST_SOURCE_NOT_FOUND');
+  await supabaseAdminUpsert(c, 'app_posts', [legacyPostTransferPayload(row)], 'legacy_post_id');
+}
+
+async function removeLegacyPostCacheAfterCanonicalFailure(c: any, postId: string, userId: string, reason: string) {
+  const code = cleanText(reason || 'supabase_canonical_write_failed', 180);
+  await c.env.DB.prepare(
+    "UPDATE posts SET status = 'removed', removed_at = ?, removed_reason = ? WHERE id = ?"
+  ).bind(now(), code, postId).run().catch(() => undefined);
+  await c.env.DB.prepare('UPDATE users SET posts_count = MAX(0, COALESCE(posts_count, 0) - 1) WHERE id = ?')
+    .bind(userId)
+    .run()
+    .catch(() => undefined);
 }
 
 async function mirrorLegacyCommentToSupabase(c: any, commentId: string) {
@@ -5602,6 +8869,275 @@ async function transferLegacyFollowsToSupabase(c: any, limit: number, offset: nu
   return supabaseAdminUpsert(c, 'app_follows', payload, 'app_follower_id,app_following_id');
 }
 
+function emptySupabaseTransferResult(target: string, skipped = false, detail = '') {
+  return { target, requested: 0, upserted: 0, skipped, detail };
+}
+
+async function transferLegacyBlocksToSupabase(c: any, limit: number, offset: number) {
+  try {
+    const rows = await c.env.DB.prepare('SELECT id, blocker_id, blocked_id, created_at FROM blocks ORDER BY created_at LIMIT ? OFFSET ?').bind(limit, offset).all();
+    const payload = (rows.results as any[]).map((row: any) => ({
+      id: cleanText(row.id, 120) || uuid(),
+      blocker_id: cleanText(row.blocker_id, 120),
+      blocked_id: cleanText(row.blocked_id, 120),
+      metadata: { source: 'cloudflare_d1_transfer' },
+      legacy_created_at: toPgTime(row.created_at),
+    })).filter((row) => row.blocker_id && row.blocked_id);
+    return payload.length ? supabaseAdminUpsert(c, 'app_blocks', payload, 'id') : emptySupabaseTransferResult('app_blocks');
+  } catch (error: any) {
+    return emptySupabaseTransferResult('app_blocks', true, getErrorCode(error).slice(0, 120));
+  }
+}
+
+async function transferLegacyNotificationsToSupabase(c: any, limit: number, offset: number) {
+  try {
+    const rows = await c.env.DB.prepare('SELECT * FROM notifications ORDER BY created_at LIMIT ? OFFSET ?').bind(limit, offset).all();
+    const payload = (rows.results as any[]).map((row: any) => ({
+      id: cleanText(row.id, 120) || uuid(),
+      user_id: cleanText(row.user_id, 120),
+      from_user_id: cleanText(row.from_user_id || row.actor_id || '', 120) || null,
+      type: cleanText(row.type || 'general', 80) || 'general',
+      title: cleanText(row.title || '', 160),
+      body: cleanText(row.body || row.content || '', 500),
+      content: cleanText(row.content || row.body || '', 500),
+      reference_id: cleanText(row.reference_id || row.post_id || row.target_id || '', 120) || null,
+      data: parseJsonObject(row.data),
+      is_read: Number(row.is_read || 0) === 1,
+      legacy_created_at: toPgTime(row.created_at),
+    })).filter((row) => row.user_id && row.id);
+    return payload.length ? supabaseAdminUpsert(c, 'app_notifications', payload, 'id') : emptySupabaseTransferResult('app_notifications');
+  } catch (error: any) {
+    return emptySupabaseTransferResult('app_notifications', true, getErrorCode(error).slice(0, 120));
+  }
+}
+
+async function transferLegacyReportsToSupabase(c: any, limit: number, offset: number) {
+  try {
+    const rows = await c.env.DB.prepare('SELECT * FROM reports ORDER BY created_at LIMIT ? OFFSET ?').bind(limit, offset).all();
+    const payload = (rows.results as any[]).map((row: any) => {
+      const targetType = cleanText(row.target_type || row.reported_type || row.report_type || 'other', 80) || 'other';
+      const targetId = cleanText(row.target_id || row.reported_id || row.content_id || '', 120);
+      return {
+        id: cleanText(row.id, 120) || uuid(),
+        reporter_id: cleanText(row.reporter_id, 120),
+        target_type: targetType,
+        target_id: targetId || cleanText(row.reported_id, 120) || 'unknown',
+        target_owner_user_id: cleanText(row.target_owner_user_id || row.reported_user_id || row.reported_id || '', 120) || null,
+        reason: cleanText(row.reason || 'other', 120) || 'other',
+        details: cleanText(row.details || '', 1200),
+        status: cleanText(row.status || 'open', 80) || 'open',
+        priority: cleanText(row.priority || 'normal', 40) || 'normal',
+        assigned_to: cleanText(row.assigned_to || '', 120) || null,
+        reviewed_by: cleanText(row.reviewed_by || '', 120) || null,
+        action_taken: cleanText(row.action_taken || '', 240) || null,
+        admin_notes: cleanText(row.admin_notes || '', 1200),
+        metadata: {
+          source: 'cloudflare_d1_transfer',
+          legacy_report_type: cleanText(row.report_type || '', 80),
+          legacy_reported_id: cleanText(row.reported_id || '', 120),
+        },
+        legacy_created_at: toPgTime(row.created_at),
+        legacy_updated_at: toPgTime(row.updated_at),
+        closed_at: toPgTime(row.closed_at),
+      };
+    }).filter((row) => row.reporter_id && row.id);
+    return payload.length ? supabaseAdminUpsert(c, 'app_reports', payload, 'id') : emptySupabaseTransferResult('app_reports');
+  } catch (error: any) {
+    return emptySupabaseTransferResult('app_reports', true, getErrorCode(error).slice(0, 120));
+  }
+}
+
+async function transferLegacyMessagesToSupabase(c: any, limit: number, offset: number) {
+  try {
+    const rows = await c.env.DB.prepare('SELECT * FROM messages ORDER BY created_at LIMIT ? OFFSET ?').bind(limit, offset).all();
+    const payload = (rows.results as any[]).map((row: any) => ({
+      id: cleanText(row.id, 120) || uuid(),
+      sender_id: cleanText(row.sender_id, 120),
+      receiver_id: cleanText(row.receiver_id, 120),
+      conversation_id: cleanText(row.conversation_id || '', 120) || null,
+      body: cleanText(row.content || row.body || '', 5000),
+      media_url: cleanText(row.media_url || row.video_url || row.image_url || '', 1200) || null,
+      media_type: cleanText(row.media_type || '', 80) || null,
+      media: {
+        source: 'cloudflare_d1_transfer',
+        media_url: cleanText(row.media_url || '', 1200),
+        media_type: cleanText(row.media_type || '', 80),
+      },
+      is_read: Number(row.is_read || 0) === 1,
+      status: cleanText(row.status || 'sent', 80) || 'sent',
+      legacy_created_at: toPgTime(row.created_at),
+    })).filter((row) => row.sender_id && row.receiver_id && row.id);
+    return payload.length ? supabaseAdminUpsert(c, 'app_messages', payload, 'id') : emptySupabaseTransferResult('app_messages');
+  } catch (error: any) {
+    return emptySupabaseTransferResult('app_messages', true, getErrorCode(error).slice(0, 120));
+  }
+}
+
+async function transferLegacyGroupChatsToSupabase(c: any, limit: number, offset: number) {
+  const results: any[] = [];
+  try {
+    const groups = await c.env.DB.prepare('SELECT * FROM group_chats ORDER BY created_at LIMIT ? OFFSET ?').bind(limit, offset).all();
+    const groupPayload = (groups.results as any[]).map((row: any) => ({
+      id: cleanText(row.id, 120) || uuid(),
+      name: cleanText(row.name || '', 160),
+      created_by: cleanText(row.created_by, 120),
+      metadata: { source: 'cloudflare_d1_transfer' },
+      legacy_created_at: toPgTime(row.created_at),
+    })).filter((row) => row.id && row.created_by);
+    results.push(groupPayload.length ? await supabaseAdminUpsert(c, 'app_group_chats', groupPayload, 'id') : emptySupabaseTransferResult('app_group_chats'));
+  } catch (error: any) {
+    results.push(emptySupabaseTransferResult('app_group_chats', true, getErrorCode(error).slice(0, 120)));
+  }
+  try {
+    const members = await c.env.DB.prepare('SELECT * FROM group_chat_members ORDER BY created_at LIMIT ? OFFSET ?').bind(limit, offset).all();
+    const memberPayload = (members.results as any[]).map((row: any) => ({
+      id: cleanText(row.id, 120) || uuid(),
+      group_id: cleanText(row.group_id, 120),
+      user_id: cleanText(row.user_id, 120),
+      role: cleanText(row.role || 'member', 80) || 'member',
+      legacy_created_at: toPgTime(row.created_at),
+    })).filter((row) => row.group_id && row.user_id);
+    results.push(memberPayload.length ? await supabaseAdminUpsert(c, 'app_group_chat_members', memberPayload, 'id') : emptySupabaseTransferResult('app_group_chat_members'));
+  } catch (error: any) {
+    results.push(emptySupabaseTransferResult('app_group_chat_members', true, getErrorCode(error).slice(0, 120)));
+  }
+  try {
+    const messages = await c.env.DB.prepare('SELECT * FROM group_messages ORDER BY created_at LIMIT ? OFFSET ?').bind(limit, offset).all();
+    const messagePayload = (messages.results as any[]).map((row: any) => ({
+      id: cleanText(row.id, 120) || uuid(),
+      group_id: cleanText(row.group_id, 120),
+      sender_id: cleanText(row.sender_id, 120),
+      body: cleanText(row.content || row.body || '', 5000),
+      media_url: cleanText(row.media_url || '', 1200) || null,
+      media_type: cleanText(row.media_type || '', 80) || null,
+      media: { source: 'cloudflare_d1_transfer' },
+      legacy_created_at: toPgTime(row.created_at),
+    })).filter((row) => row.group_id && row.sender_id && row.id);
+    results.push(messagePayload.length ? await supabaseAdminUpsert(c, 'app_group_messages', messagePayload, 'id') : emptySupabaseTransferResult('app_group_messages'));
+  } catch (error: any) {
+    results.push(emptySupabaseTransferResult('app_group_messages', true, getErrorCode(error).slice(0, 120)));
+  }
+  return { target: 'app_group_chat_bundle', results };
+}
+
+async function transferLegacyPostPlacesToSupabase(c: any, limit: number, offset: number) {
+  try {
+    const rows = await c.env.DB.prepare('SELECT * FROM post_places ORDER BY created_at LIMIT ? OFFSET ?').bind(limit, offset).all();
+    const payload = (rows.results as any[]).map((row: any) => ({
+      id: cleanText(row.id, 120) || uuid(),
+      legacy_post_id: cleanText(row.post_id, 120),
+      provider: cleanText(row.provider || 'apple_mapkit', 80) || 'apple_mapkit',
+      provider_place_id: cleanText(row.provider_place_id || '', 240) || null,
+      name: cleanText(row.name || '', 240),
+      formatted_address: cleanText(row.formatted_address || '', 500),
+      latitude: row.latitude === null || row.latitude === undefined ? null : Number(row.latitude),
+      longitude: row.longitude === null || row.longitude === undefined ? null : Number(row.longitude),
+      category: cleanText(row.category || '', 120) || null,
+      city: cleanText(row.city || '', 120) || null,
+      region: cleanText(row.region || '', 120) || null,
+      country: cleanText(row.country || '', 120) || null,
+      metadata: { source: 'cloudflare_d1_transfer' },
+      legacy_created_at: toPgTime(row.created_at),
+    })).filter((row) => row.legacy_post_id && row.id);
+    return payload.length ? supabaseAdminUpsert(c, 'app_post_places', payload, 'id') : emptySupabaseTransferResult('app_post_places');
+  } catch (error: any) {
+    return emptySupabaseTransferResult('app_post_places', true, getErrorCode(error).slice(0, 120));
+  }
+}
+
+async function transferLegacyMediaAssetsToSupabase(c: any, limit: number, offset: number) {
+  try {
+    const rows = await c.env.DB.prepare('SELECT * FROM media_assets ORDER BY created_at LIMIT ? OFFSET ?').bind(limit, offset).all();
+    const payload = (rows.results as any[]).map((row: any) => ({
+      id: cleanText(row.id, 120) || uuid(),
+      user_id: cleanText(row.user_id, 120),
+      legacy_post_id: cleanText(row.post_id || '', 120) || null,
+      media_type: cleanText(row.media_type || '', 40) || 'image',
+      storage_provider: cleanText(row.storage_provider || '', 40) || 'images',
+      storage_key: cleanText(row.storage_key || '', 600),
+      public_url: cleanText(row.public_url || '', 1200) || null,
+      private_url: cleanText(row.private_url || '', 1200) || null,
+      mime_type: cleanText(row.mime_type || '', 120),
+      file_size: Number(row.file_size || 0),
+      sha256_hash: cleanText(row.sha256_hash || '', 80),
+      width: row.width === null || row.width === undefined ? null : Number(row.width),
+      height: row.height === null || row.height === undefined ? null : Number(row.height),
+      duration_seconds: row.duration_seconds === null || row.duration_seconds === undefined ? null : Number(row.duration_seconds),
+      upload_status: cleanText(row.upload_status || 'uploading', 80) || 'uploading',
+      moderation_status: cleanText(row.moderation_status || 'uploading', 80) || 'uploading',
+      rejection_code: cleanText(row.rejection_code || '', 120) || null,
+      rejection_message: cleanText(row.rejection_message || '', 400) || null,
+      metadata: { source: 'cloudflare_d1_transfer' },
+      legacy_created_at: toPgTime(row.created_at),
+    })).filter((row) => row.user_id && row.storage_key && row.id);
+    return payload.length ? supabaseAdminUpsert(c, 'app_media_assets', payload, 'id') : emptySupabaseTransferResult('app_media_assets');
+  } catch (error: any) {
+    return emptySupabaseTransferResult('app_media_assets', true, getErrorCode(error).slice(0, 120));
+  }
+}
+
+async function backfillLegacyUsersToSupabaseAuth(c: any, limit: number, offset: number) {
+  await ensureSupabaseAuthSchema(c.env.DB);
+  const rows = await c.env.DB.prepare(
+    `SELECT id, email, phone, phone_verified, username, full_name, profile_image, oauth_provider, oauth_subject, supabase_user_id, status
+     FROM users
+     WHERE COALESCE(status, 'active') != 'deleted'
+     ORDER BY created_at
+     LIMIT ? OFFSET ?`
+  ).bind(limit, offset).all();
+
+  const result = {
+    target: 'supabase_auth_users',
+    processed: 0,
+    linked: 0,
+    already_linked: 0,
+    skipped: 0,
+    failed: 0,
+    failures: [] as Array<{ user_id: string; code: string }>,
+  };
+
+  for (const row of (rows.results as any[])) {
+    result.processed += 1;
+    if (row.supabase_user_id) {
+      result.already_linked += 1;
+      continue;
+    }
+
+    const email = normalizeOptionalEmail(row.email);
+    const phone = Number(row.phone_verified || 0) === 1 ? normalizeOptionalPhone(row.phone) : '';
+    const provider = supabaseAuthProvider(row.oauth_provider || (phone ? 'phone' : 'email'));
+    if ((!email || isInternalOAuthEmail(email)) && !phone) {
+      result.skipped += 1;
+      continue;
+    }
+
+    try {
+      const authResult = await createOrFindSupabaseAuthUser(c, {
+        email: email && !isInternalOAuthEmail(email) ? email : undefined,
+        phone: phone || undefined,
+        username: publicUsernameFor(row),
+        fullName: row.full_name,
+        profileImage: row.profile_image,
+        provider,
+        oauthSubject: row.oauth_subject,
+        appUserId: row.id,
+      });
+      if (!authResult.user?.id) throw new Error('SUPABASE_AUTH_CREATE_EMPTY');
+      await linkSupabaseAuthUser(c, row.id, authResult.user.id);
+      await syncSupabaseAuthMetadataForUser(c, { ...row, supabase_user_id: authResult.user.id });
+      await logSecurityEvent(c, 'supabase_auth_backfilled', row.id, { provider });
+      result.linked += 1;
+    } catch (error: any) {
+      result.failed += 1;
+      if (result.failures.length < 20) {
+        result.failures.push({ user_id: String(row.id || ''), code: getErrorCode(error).slice(0, 160) });
+      }
+    }
+  }
+
+  return result;
+}
+
 // AUTH
 // ═══════════════════════════════════════════════════════════════════════════════
 api.post('/auth/supabase', async (c) => {
@@ -5611,18 +9147,16 @@ api.post('/auth/supabase', async (c) => {
     const limited = await enforceRateLimit(c, 'auth_supabase', clientIp(c), 60, 300);
     if (limited) return limited;
     const body: any = await c.req.json().catch(() => ({}));
-    const payload = await verifySupabaseAccessToken(c, body.access_token || body.token);
-    const user = await findOrCreateSupabaseUser(c, payload, body);
-    const token = await createToken(user.id, getJwtSecret(c));
-    runBackgroundTask(c, 'supabase_login_profile_write_through_failed', async () => {
-      await mirrorLegacyUserToSupabase(c, user.id);
-    });
+    const session = await issueCaptroTokenForSupabaseAccessToken(c, body.access_token || body.token, body);
+    const token = session.token;
+    const user = session.user;
     return c.json({ access_token: token, token_type: 'bearer', user: authUserPayload(user) });
   } catch (error: any) {
     const code = getErrorCode(error);
     if (code === 'SUPABASE_NOT_CONFIGURED') return c.json({ detail: 'Supabase auth is not configured on the backend.' }, 503);
     if (code === 'SUPABASE_TOKEN_REQUIRED') return c.json({ detail: 'Supabase access token is required.' }, 400);
     if (code === 'EMAIL_REQUIRED') return c.json({ detail: 'Supabase account email is required.' }, 400);
+    if (code === 'ACCOUNT_DISABLED') return c.json({ detail: 'This account cannot be used.' }, 403);
     if (code === 'JWT_SECRET_MISSING') return c.json({ detail: 'Auth service is not configured.' }, 503);
     if (code.startsWith('ERR_JWS_') || code.startsWith('ERR_JWT_') || code.startsWith('ERR_JWKS_')) {
       return c.json({ detail: 'Invalid Supabase session.' }, 401);
@@ -5656,25 +9190,64 @@ api.post('/auth/register', async (c) => {
     const usernameCheck = validateUsernameForAccount(username);
     if (!usernameCheck.ok) return c.json({ detail: usernameCheck.detail }, 400);
     const safeUsername = usernameCheck.username;
-    const existing = await c.env.DB.prepare('SELECT id FROM users WHERE LOWER(email) = ? OR LOWER(username) = ?')
+    await ensureAccountDeletionSchema(c.env.DB);
+    const existing: any = await c.env.DB.prepare('SELECT id, status, deletion_scheduled_at FROM users WHERE LOWER(email) = ? OR LOWER(username) = ?')
       .bind(email, safeUsername.toLowerCase()).first();
     if (existing) {
       await logSecurityEvent(c, 'signup_duplicate_blocked', '', { username: safeUsername });
+      if (String(existing.status || 'active') === 'deletion_pending') {
+        return c.json({
+          detail: 'This account is scheduled for deletion. Sign in to restore it.',
+          code: 'ACCOUNT_DELETION_PENDING',
+          deletion_scheduled_at: existing.deletion_scheduled_at || null,
+        }, 409);
+      }
       return c.json({ detail: 'Email or username already exists' }, 400);
     }
-    const id = uuid();
+
+    await ensureOAuthSchema(c.env.DB);
+    await ensureSupabaseAuthSchema(c.env.DB);
+    const authResult = await createOrFindSupabaseAuthUser(c, {
+      email,
+      password,
+      username: safeUsername,
+      fullName,
+      provider: 'email',
+    });
+    if (!authResult.user?.id) throw new Error('SUPABASE_AUTH_CREATE_EMPTY');
+    const preferredId = isUuidText(authResult.user.id);
+    const idOwner = preferredId ? await c.env.DB.prepare('SELECT id FROM users WHERE id = ?').bind(preferredId).first() : null;
+    const id = preferredId && !idOwner ? preferredId : uuid();
     const hash = await hashPassword(password);
-    await c.env.DB.prepare(
-      'INSERT INTO users (id, email, username, full_name, password_hash) VALUES (?, ?, ?, ?, ?)'
-    ).bind(id, email, safeUsername, fullName, hash).run();
+    try {
+      await c.env.DB.prepare(
+        'INSERT INTO users (id, email, username, full_name, password_hash, supabase_user_id, oauth_provider, oauth_subject) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+      ).bind(id, email, safeUsername, fullName, hash, authResult.user.id, 'supabase', authResult.user.id).run();
+    } catch (insertError) {
+      if (authResult.created) await deleteSupabaseAuthUser(c, authResult.user.id);
+      throw insertError;
+    }
     // Security-sensitive: store only hashed abuse signals for admin review of possible ban evasion.
     await recordAbuseSignals(c, id, 'signup', { username: safeUsername, display_name: fullName });
+    await upsertAccountIdentity(c, { userId: id, provider: 'email', email });
     await logSecurityEvent(c, 'signup_created', id, { username: safeUsername });
     const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(id).first();
+    runBackgroundTask(c, 'supabase_signup_metadata_sync_failed', async () => {
+      await syncSupabaseAuthMetadataForUser(c, user);
+      await mirrorLegacyUserToSupabase(c, user.id);
+    });
     const token = await createToken(id, jwtSecret);
     return c.json({ access_token: token, token_type: 'bearer', user: authUserPayload(user) });
   } catch (error: any) {
-    if (getErrorCode(error) === 'JWT_SECRET_MISSING') return c.json({ detail: 'Auth service is not configured.' }, 503);
+    const code = getErrorCode(error);
+    if (code === 'JWT_SECRET_MISSING') return c.json({ detail: 'Auth service is not configured.' }, 503);
+    if (code === 'SUPABASE_NOT_CONFIGURED' || code === 'SUPABASE_SERVICE_ROLE_MISSING') {
+      return c.json({ detail: 'Supabase Authentication is not configured for account creation.' }, 503);
+    }
+    if (code.startsWith('SUPABASE_AUTH_CREATE_FAILED')) {
+      return c.json({ detail: 'Could not create the Supabase Auth account.' }, 502);
+    }
+    console.warn(JSON.stringify({ event: 'auth_register_failed', code: code.slice(0, 180) }));
     return c.json({ detail: 'Could not create account.' }, 500);
   }
 });
@@ -5695,7 +9268,23 @@ api.post('/auth/login', async (c) => {
     if (ipLimited) return ipLimited;
 
     const jwtSecret = getJwtSecret(c);
-    const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
+    try {
+      const supabaseSession = await signInSupabasePassword(c, email, password);
+      const session = await issueCaptroTokenForSupabaseAccessToken(c, supabaseSession.access_token, {
+        email,
+        full_name: supabaseSession.user?.user_metadata?.full_name || supabaseSession.user?.user_metadata?.name || '',
+        profile_image: supabaseSession.user?.user_metadata?.avatar_url || supabaseSession.user?.user_metadata?.picture || '',
+      });
+      return c.json({ access_token: session.token, token_type: 'bearer', user: authUserPayload(session.user) });
+    } catch (error: any) {
+      const code = getErrorCode(error);
+      if (code === 'ACCOUNT_DISABLED') return c.json({ detail: 'This account cannot be used.' }, 403);
+      if (!code.startsWith('SUPABASE_PASSWORD_SIGN_IN_FAILED') && code !== 'SUPABASE_AUTH_KEY_MISSING' && code !== 'SUPABASE_NOT_CONFIGURED' && code !== 'SUPABASE_SERVICE_ROLE_MISSING') {
+        console.warn(JSON.stringify({ event: 'supabase_password_login_bridge_failed', code: code.slice(0, 160) }));
+      }
+    }
+
+    let user: any = await c.env.DB.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
     if (!user || !(await verifyPassword(password, user.password_hash))) {
       if (user?.id) await recordAbuseSignals(c, user.id, 'failed_login', {});
       await logSecurityEvent(c, 'login_failed', user?.id || '', { reason: user ? 'password' : 'credentials' });
@@ -5706,12 +9295,32 @@ api.post('/auth/login', async (c) => {
       await logSecurityEvent(c, 'login_banned_blocked', user.id, {});
       return c.json({ detail: 'This account cannot be used.' }, 403);
     }
+    await upsertAccountIdentity(c, { userId: user.id, provider: 'email', email });
     // Auto-migrate legacy SHA-256 hash to bcrypt on successful login
     if (user.password_hash && !user.password_hash.startsWith('$2')) {
       try {
         const bcryptHash = await hashPassword(password);
         await c.env.DB.prepare('UPDATE users SET password_hash = ? WHERE id = ?').bind(bcryptHash, user.id).run();
       } catch {}
+    }
+    if (!user.supabase_user_id) {
+      try {
+        const authResult = await createOrFindSupabaseAuthUser(c, {
+          email,
+          password,
+          username: publicUsernameFor(user),
+          fullName: user.full_name,
+          profileImage: user.profile_image,
+          provider: 'email',
+          appUserId: user.id,
+        });
+        if (authResult.user?.id) {
+          await linkSupabaseAuthUser(c, user.id, authResult.user.id);
+          user = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(user.id).first();
+        }
+      } catch (error: any) {
+        console.warn(JSON.stringify({ event: 'legacy_user_supabase_auth_link_failed', user_id: user.id, code: getErrorCode(error).slice(0, 160) }));
+      }
     }
     const token = await createToken(user.id, jwtSecret);
     return c.json({ access_token: token, token_type: 'bearer', user: authUserPayload(user) });
@@ -5853,13 +9462,28 @@ api.post('/auth/oauth/google', async (c) => {
     if (limited) return limited;
     await ensureOAuthSchema(c.env.DB);
     const body: any = await c.req.json().catch(() => ({}));
-    const unknown = rejectUnknownFields(c, body, ['id_token', 'idToken']);
+    const unknown = rejectUnknownFields(c, body, ['id_token', 'idToken', 'nonce', 'raw_nonce', 'rawNonce']);
     if (unknown) return unknown;
     const id_token = String(body.id_token || body.idToken || '');
     if (!id_token) return c.json({ detail: 'id_token is required' }, 400);
 
     const googleProfile = await verifyGoogleIdToken(c, id_token);
-    const user = await findOrCreateOAuthUser(
+    try {
+      const supabaseSession = await signInSupabaseIdToken(c, 'google', id_token, String(body.nonce || body.raw_nonce || body.rawNonce || ''));
+      const session = await issueCaptroTokenForSupabaseAccessToken(c, supabaseSession.access_token, {
+        email: googleProfile.email,
+        full_name: googleProfile.fullName,
+        profile_image: googleProfile.profileImage,
+        auth_provider: 'google',
+        oauth_subject: googleProfile.subject,
+      });
+      return c.json({ access_token: session.token, token_type: 'bearer', user: authUserPayload(session.user) });
+    } catch (error: any) {
+      if (getErrorCode(error) === 'ACCOUNT_DISABLED') throw error;
+      console.warn(JSON.stringify({ event: 'supabase_google_id_token_failed', code: getErrorCode(error).slice(0, 160) }));
+    }
+
+    let user = await findOrCreateOAuthUser(
       c,
       'google',
       googleProfile.subject,
@@ -5867,6 +9491,15 @@ api.post('/auth/oauth/google', async (c) => {
       googleProfile.fullName,
       googleProfile.profileImage
     );
+    try {
+      user = await mirrorOAuthUserToSupabaseAuth(c, user, 'google', googleProfile.subject);
+    } catch (error: any) {
+      console.warn(JSON.stringify({ event: 'supabase_google_auth_mirror_failed', code: getErrorCode(error).slice(0, 160) }));
+    }
+    if (['banned', 'suspended', 'deleted'].includes(String(user.status || 'active'))) {
+      await logSecurityEvent(c, 'login_banned_blocked', user.id, { provider: 'google' });
+      return c.json({ detail: 'This account cannot be used.' }, 403);
+    }
     const token = await createToken(user.id, getJwtSecret(c));
     return c.json({ access_token: token, token_type: 'bearer', user: authUserPayload(user) });
   } catch (error: any) {
@@ -5877,6 +9510,7 @@ api.post('/auth/oauth/google', async (c) => {
     if (code === 'GOOGLE_AUDIENCE_INVALID') return c.json({ detail: 'Google client audience mismatch' }, 401);
     if (code === 'GOOGLE_EMAIL_UNVERIFIED') return c.json({ detail: 'Google account email is not verified' }, 401);
     if (code.startsWith('GOOGLE_')) return c.json({ detail: 'Invalid Google token' }, 401);
+    if (code === 'ACCOUNT_DISABLED') return c.json({ detail: 'This account cannot be used.' }, 403);
     if (code === 'EMAIL_REQUIRED') return c.json({ detail: 'Google account email is required' }, 400);
     if (code === 'JWT_SECRET_MISSING') return c.json({ detail: 'Auth service is not configured.' }, 503);
     return c.json({ detail: 'Google OAuth login failed' }, 401);
@@ -5891,7 +9525,7 @@ api.post('/auth/oauth/apple', async (c) => {
     if (limited) return limited;
     await ensureOAuthSchema(c.env.DB);
     const body: any = await c.req.json().catch(() => ({}));
-    const unknown = rejectUnknownFields(c, body, ['id_token', 'idToken', 'email', 'full_name', 'fullName', 'apple_user', 'appleUser']);
+    const unknown = rejectUnknownFields(c, body, ['id_token', 'idToken', 'email', 'full_name', 'fullName', 'apple_user', 'appleUser', 'nonce', 'raw_nonce', 'rawNonce']);
     if (unknown) return unknown;
     const idToken = String(body.id_token || body.idToken || '');
     if (!idToken) return c.json({ detail: 'id_token is required' }, 400);
@@ -5900,7 +9534,21 @@ api.post('/auth/oauth/apple', async (c) => {
     const clientEmail = normalizeOptionalEmail(body.email);
     const clientFullName = normalizeOptionalName(body.full_name || body.fullName);
     const appleSubject = String(appleProfile.subject || body.apple_user || body.appleUser || '').trim();
-    const user = await findOrCreateOAuthUser(
+    try {
+      const supabaseSession = await signInSupabaseIdToken(c, 'apple', idToken, String(body.nonce || body.raw_nonce || body.rawNonce || ''));
+      const session = await issueCaptroTokenForSupabaseAccessToken(c, supabaseSession.access_token, {
+        email: appleProfile.email || clientEmail || internalOAuthEmail('apple', appleSubject),
+        full_name: clientFullName || appleProfile.fullName || 'Apple User',
+        auth_provider: 'apple',
+        oauth_subject: appleSubject,
+      });
+      return c.json({ access_token: session.token, token_type: 'bearer', user: authUserPayload(session.user) });
+    } catch (error: any) {
+      if (getErrorCode(error) === 'ACCOUNT_DISABLED') throw error;
+      console.warn(JSON.stringify({ event: 'supabase_apple_id_token_failed', code: getErrorCode(error).slice(0, 160) }));
+    }
+
+    let user = await findOrCreateOAuthUser(
       c,
       'apple',
       appleSubject,
@@ -5908,6 +9556,15 @@ api.post('/auth/oauth/apple', async (c) => {
       clientFullName || appleProfile.fullName || 'Apple User',
       appleProfile.profileImage
     );
+    try {
+      user = await mirrorOAuthUserToSupabaseAuth(c, user, 'apple', appleSubject);
+    } catch (error: any) {
+      console.warn(JSON.stringify({ event: 'supabase_apple_auth_mirror_failed', code: getErrorCode(error).slice(0, 160) }));
+    }
+    if (['banned', 'suspended', 'deleted'].includes(String(user.status || 'active'))) {
+      await logSecurityEvent(c, 'login_banned_blocked', user.id, { provider: 'apple' });
+      return c.json({ detail: 'This account cannot be used.' }, 403);
+    }
     const token = await createToken(user.id, getJwtSecret(c));
     return c.json({ access_token: token, token_type: 'bearer', user: authUserPayload(user) });
   } catch (error: any) {
@@ -5915,6 +9572,7 @@ api.post('/auth/oauth/apple', async (c) => {
     if (code === 'EMAIL_REQUIRED') return c.json({ detail: 'Apple account email is required on first sign-in' }, 400);
     if (code === 'OAUTH_SUBJECT_REQUIRED') return c.json({ detail: 'Apple account identifier was missing' }, 400);
     if (code === 'JWT_SECRET_MISSING') return c.json({ detail: 'Auth service is not configured.' }, 503);
+    if (code === 'ACCOUNT_DISABLED') return c.json({ detail: 'This account cannot be used.' }, 403);
     if (code === 'ERR_JWT_CLAIM_VALIDATION_FAILED' && error?.claim === 'aud') return c.json({ detail: 'Apple audience mismatch' }, 401);
     if (code === 'ERR_JWT_CLAIM_VALIDATION_FAILED') return c.json({ detail: 'Invalid Apple token claims' }, 401);
     if (code === 'ERR_JWS_SIGNATURE_VERIFICATION_FAILED') return c.json({ detail: 'Invalid Apple token signature' }, 401);
@@ -5934,6 +9592,204 @@ api.get('/auth/me', authMiddleware, async (c) => {
   if (!user) return c.json({ detail: 'User not found' }, 404);
   return c.json(authUserPayload(user));
 });
+
+async function accountIdentityMatches(c: any, user: any, provider: string, providerUserId: string): Promise<boolean> {
+  const cleanProvider = normalizeAuthProvider(provider);
+  const cleanProviderUserId = cleanText(providerUserId, 240);
+  if (!cleanProviderUserId) return false;
+  if (normalizeAuthProvider(user.oauth_provider) === cleanProvider && cleanText(user.oauth_subject, 240) === cleanProviderUserId) return true;
+  await ensureAccountDeletionSchema(c.env.DB);
+  const identity: any = await c.env.DB.prepare(
+    'SELECT id FROM account_identities WHERE user_id = ? AND provider = ? AND provider_user_id = ? LIMIT 1'
+  ).bind(user.id, cleanProvider, cleanProviderUserId).first();
+  return !!identity;
+}
+
+async function verifyAccountDeletionReauth(c: any, user: any, body: any): Promise<{ ok: boolean; detail?: string; provider: string }> {
+  const provider = normalizeAuthProvider(body.provider || user.oauth_provider || (user.phone ? 'phone' : 'email'));
+  const password = String(body.password || '').trim();
+  const idToken = String(body.id_token || body.idToken || '').trim();
+
+  if (provider === 'google') {
+    if (!idToken) return { ok: false, detail: 'Re-authenticate with Google before deleting this account.', provider };
+    const profile = await verifyGoogleIdToken(c, idToken);
+    if (!(await accountIdentityMatches(c, user, 'google', profile.subject))) {
+      return { ok: false, detail: 'Google account did not match this Captro account.', provider };
+    }
+    await upsertAccountIdentity(c, { userId: user.id, provider: 'google', providerUserId: profile.subject, email: profile.email || user.email });
+    return { ok: true, provider };
+  }
+
+  if (provider === 'apple') {
+    if (!idToken) return { ok: false, detail: 'Re-authenticate with Apple before deleting this account.', provider };
+    const profile = await verifyAppleIdToken(c, idToken);
+    if (!(await accountIdentityMatches(c, user, 'apple', profile.subject))) {
+      return { ok: false, detail: 'Apple account did not match this Captro account.', provider };
+    }
+    await upsertAccountIdentity(c, { userId: user.id, provider: 'apple', providerUserId: profile.subject, email: profile.email || user.email });
+    return { ok: true, provider };
+  }
+
+  if (!password) return { ok: false, detail: 'Enter your password to delete this account.', provider: 'email' };
+  const verified = await verifyPassword(password, String(user.password_hash || ''));
+  if (!verified) return { ok: false, detail: 'Password confirmation failed.', provider: 'email' };
+  await upsertAccountIdentity(c, { userId: user.id, provider: 'email', email: user.email });
+  return { ok: true, provider: 'email' };
+}
+
+async function revokeProviderAccessBestEffort(c: any, user: any, provider: string, body: any) {
+  const metadata: Record<string, unknown> = { provider };
+  try {
+    if (provider === 'google') {
+      const token = cleanText(body.access_token || body.accessToken || '', 4096);
+      if (token) {
+        await fetch(`https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(token)}`, { method: 'POST' }).catch(() => null);
+        metadata.google_revoke = 'requested';
+      } else {
+        metadata.google_revoke = 'token_not_available';
+      }
+    } else if (provider === 'apple') {
+      const token = cleanText(body.authorization_code || body.authorizationCode || body.refresh_token || body.refreshToken || '', 4096);
+      const clientId = cleanText(c.env.APPLE_OAUTH_CLIENT_ID || c.env.APPLE_OAUTH_AUDIENCE || c.env.APPLE_OAUTH_AUDIENCES?.split(',')?.[0] || '', 240);
+      const clientSecret = String(c.env.APPLE_REVOKE_CLIENT_SECRET || c.env.APPLE_OAUTH_CLIENT_SECRET || '').trim();
+      if (token && clientId && clientSecret) {
+        const form = new URLSearchParams();
+        form.set('client_id', clientId);
+        form.set('client_secret', clientSecret);
+        form.set('token', token);
+        form.set('token_type_hint', body.refresh_token || body.refreshToken ? 'refresh_token' : 'authorization_code');
+        await fetch('https://appleid.apple.com/auth/revoke', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: form.toString(),
+        }).catch(() => null);
+        metadata.apple_revoke = 'requested';
+      } else {
+        metadata.apple_revoke = token ? 'server_secret_not_configured' : 'token_not_available';
+      }
+    }
+    if (user.supabase_user_id) {
+      await updateSupabaseAuthUser(c, user.supabase_user_id, {
+        user_metadata: { captro_user_id: user.id, account_status: 'deletion_pending' },
+        app_metadata: { captro_account_status: 'deletion_pending' },
+      }).catch(() => {});
+      metadata.supabase_marked_pending = true;
+    }
+  } finally {
+    await writeAccountDeletionEvent(c, user.id, 'provider_revoke_best_effort', metadata);
+  }
+}
+
+async function requestAccountDeletion(c: any) {
+  const userId = getUserId(c);
+  const limited = await enforceRateLimit(c, 'account_delete', userId, 5, 86400);
+  if (limited) return limited;
+  const bodyTooLarge = rejectLargeRequest(c, 80_000);
+  if (bodyTooLarge) return bodyTooLarge;
+  await ensureAccountDeletionSchema(c.env.DB);
+  await ensurePremiumSchema(c.env.DB);
+  await ensureCommentSchema(c.env.DB);
+  const body: any = await c.req.json().catch(() => ({}));
+  if (String(body.confirmation || '').trim() !== 'DELETE') {
+    return c.json({ detail: 'Type DELETE to confirm account deletion.', code: 'confirmation_required' }, 400);
+  }
+
+  const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
+  if (!user) return c.json({ detail: 'User not found.' }, 404);
+  if (user.is_admin) return c.json({ detail: 'Admin accounts must be removed by another admin.' }, 403);
+  if (String(user.status || 'active') === 'deletion_pending') {
+    return c.json({
+      deletion_pending: true,
+      deletion_requested_at: user.deletion_requested_at || null,
+      deletion_scheduled_at: user.deletion_scheduled_at || null,
+    });
+  }
+  if (String(user.status || 'active') === 'deleted') {
+    return c.json({ detail: 'This account has already been deleted.', code: 'account_deleted' }, 410);
+  }
+
+  const reauth = await verifyAccountDeletionReauth(c, user, body);
+  if (!reauth.ok) return c.json({ detail: reauth.detail || 'Re-authentication is required.', code: 'reauth_required' }, 401);
+
+  const requestedAt = now();
+  const scheduledAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+  await c.env.DB.batch([
+    c.env.DB.prepare(
+      `UPDATE users SET
+         status = 'deletion_pending',
+         deletion_requested_at = ?,
+         deletion_scheduled_at = ?,
+         session_revoked_at = ?,
+         updated_at = datetime('now')
+       WHERE id = ?`
+    ).bind(requestedAt, scheduledAt, requestedAt, userId),
+    c.env.DB.prepare('UPDATE push_tokens SET is_active = 0, updated_at = ? WHERE user_id = ?').bind(requestedAt, userId),
+    c.env.DB.prepare('DELETE FROM notifications WHERE user_id = ? OR from_user_id = ?').bind(userId, userId),
+    c.env.DB.prepare('DELETE FROM likes WHERE user_id = ?').bind(userId),
+    c.env.DB.prepare('DELETE FROM saved_posts WHERE user_id = ?').bind(userId),
+    c.env.DB.prepare('DELETE FROM follows WHERE follower_id = ? OR following_id = ?').bind(userId, userId),
+    c.env.DB.prepare('DELETE FROM comment_likes WHERE user_id = ?').bind(userId),
+    c.env.DB.prepare("UPDATE comments SET status = 'hidden', hidden_at = ?, hidden_by_user_id = ?, removed_reason = 'Account deletion pending' WHERE user_id = ? AND COALESCE(status, 'active') NOT IN ('removed', 'hidden')")
+      .bind(requestedAt, userId, userId),
+  ]);
+  await Promise.all([
+    runDeletionStatement(c.env, 'DELETE FROM note_interactions WHERE user_id = ?', [userId]),
+    runDeletionStatement(c.env, 'DELETE FROM note_comment_likes WHERE user_id = ?', [userId]),
+    runDeletionStatement(c.env, "UPDATE notes SET status = 'hidden', updated_at = ? WHERE user_id = ? AND COALESCE(status, 'active') NOT IN ('removed', 'hidden')", [requestedAt, userId]),
+  ]);
+  await writeAccountDeletionEvent(c, userId, 'deletion_requested', {
+    provider: reauth.provider,
+    deletion_scheduled_at: scheduledAt,
+  });
+  await logSecurityEvent(c, 'account_deletion_requested', userId, { provider: reauth.provider });
+  runBackgroundTask(c, 'provider_revoke_best_effort_failed', async () => {
+    await revokeProviderAccessBestEffort(c, user, reauth.provider, body);
+  });
+  return c.json({
+    deletion_pending: true,
+    deletion_requested_at: requestedAt,
+    deletion_scheduled_at: scheduledAt,
+    detail: 'Account deletion is scheduled. Your public profile and content are hidden now.',
+  });
+}
+
+async function restorePendingAccount(c: any) {
+  const userId = getUserId(c);
+  await ensureAccountDeletionSchema(c.env.DB);
+  const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
+  if (!user) return c.json({ detail: 'User not found.' }, 404);
+  if (String(user.status || 'active') !== 'deletion_pending') {
+    return c.json({ restored: false, user: authUserPayload(user) });
+  }
+  await c.env.DB.prepare(
+    `UPDATE users SET
+       status = 'active',
+       deletion_requested_at = NULL,
+       deletion_scheduled_at = NULL,
+       session_revoked_at = NULL,
+       updated_at = datetime('now')
+     WHERE id = ? AND status = 'deletion_pending'`
+  ).bind(userId).run();
+  const restored: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
+  await writeAccountDeletionEvent(c, userId, 'deletion_restored', {});
+  await logSecurityEvent(c, 'account_deletion_restored', userId, {});
+  return c.json({ restored: true, user: authUserPayload(restored) });
+}
+
+api.get('/account/deletion-status', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  await ensureAccountDeletionSchema(c.env.DB);
+  const row: any = await c.env.DB.prepare('SELECT status, deletion_requested_at, deletion_scheduled_at FROM users WHERE id = ?').bind(userId).first();
+  return c.json({
+    status: row?.status || 'active',
+    deletion_pending: row?.status === 'deletion_pending',
+    deletion_requested_at: row?.deletion_requested_at || null,
+    deletion_scheduled_at: row?.deletion_scheduled_at || null,
+  });
+});
+
+api.post('/account/delete', authMiddleware, requestAccountDeletion);
+api.post('/account/restore', authMiddleware, restorePendingAccount);
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // USERS
@@ -5999,41 +9855,17 @@ api.put('/users/me', authMiddleware, async (c) => {
     bio: user.bio,
     links: [user.social_website, user.social_tiktok, user.social_instagram].filter(Boolean),
   });
+  runBackgroundTask(c, 'supabase_profile_metadata_sync_failed', async () => {
+    await syncSupabaseAuthMetadataForUser(c, user);
+  });
   return c.json(safeUserPayload(user, { includePrivate: true }));
 });
 
 api.delete('/users/me', authMiddleware, async (c) => {
-  const userId = getUserId(c);
-  const limited = await enforceRateLimit(c, 'account_delete', userId, 3, 86400);
-  if (limited) return limited;
-  await ensureGovernanceSchema(c.env.DB);
-  await ensurePremiumSchema(c.env.DB);
-  const user: any = await c.env.DB.prepare('SELECT id, is_admin FROM users WHERE id = ?').bind(userId).first();
-  if (!user) return c.json({ detail: 'User not found.' }, 404);
-  if (user.is_admin) return c.json({ detail: 'Admin accounts must be removed by another admin.' }, 403);
-
-  const ts = now();
-  // Security-sensitive: soft-delete the account so moderation/audit records remain intact and unrelated data is not cascaded away.
-  await c.env.DB.prepare(
-    `UPDATE users SET
-       status = 'deleted',
-       email = ?,
-       username = ?,
-       full_name = 'Deleted user',
-       bio = '',
-       profile_image = '',
-       cover_image = '',
-       profile_background_image = '',
-       social_website = '',
-       social_tiktok = '',
-       social_instagram = '',
-       updated_at = datetime('now')
-     WHERE id = ?`
-  ).bind(`deleted_${userId}@deleted.flames-up.local`, `deleted_${userId.slice(0, 12)}`, userId).run();
-  await c.env.DB.prepare("UPDATE posts SET status = 'removed', removed_at = ?, removed_reason = 'Account deleted' WHERE user_id = ? AND COALESCE(status, 'active') != 'removed'")
-    .bind(ts, userId).run();
-  await logSecurityEvent(c, 'account_soft_deleted', userId, {});
-  return c.json({ deleted: true, soft_deleted: true });
+  return c.json({
+    detail: 'Use POST /api/account/delete with DELETE confirmation and recent re-authentication.',
+    code: 'ACCOUNT_DELETE_REAUTH_REQUIRED',
+  }, 405);
 });
 
 api.put('/users/me/email', authMiddleware, async (c) => {
@@ -6045,28 +9877,42 @@ api.put('/users/me/email', authMiddleware, async (c) => {
     if (limited) return limited;
     const body: any = await c.req.json().catch(() => ({}));
     const email = normalizeOptionalEmail(body.email || body.new_email);
-    const password = String(body.password || body.current_password || '');
 
     if (!email) return c.json({ detail: 'Enter a valid email address.' }, 400);
-    if (!password) return c.json({ detail: 'Enter your current password to change email.' }, 400);
 
     const currentUser: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
     if (!currentUser) return c.json({ detail: 'User not found' }, 404);
-    if (!(await verifyPassword(password, currentUser.password_hash))) {
-      return c.json({ detail: 'Current password is incorrect.' }, 401);
-    }
 
     const owner: any = await c.env.DB.prepare('SELECT id FROM users WHERE LOWER(email) = ? AND id != ?')
       .bind(email, userId)
       .first();
     if (owner) return c.json({ detail: 'That email is already used by another account.' }, 409);
 
+    if (currentUser.supabase_user_id) {
+      await updateSupabaseAuthUser(c, currentUser.supabase_user_id, { email });
+    } else {
+      const result = await createOrFindSupabaseAuthUser(c, {
+        email,
+        username: publicUsernameFor(currentUser),
+        fullName: currentUser.full_name,
+        profileImage: currentUser.profile_image,
+        provider: 'email',
+        appUserId: currentUser.id,
+      });
+      if (result.user?.id) await linkSupabaseAuthUser(c, currentUser.id, result.user.id);
+    }
+
     await c.env.DB.prepare('UPDATE users SET email = ?, updated_at = datetime(\'now\') WHERE id = ?')
       .bind(email, userId)
       .run();
     const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
+    await logSecurityEvent(c, 'email_updated', userId, {});
     return c.json(authUserPayload(user));
-  } catch {
+  } catch (error: any) {
+    const code = getErrorCode(error);
+    if (code.startsWith('SUPABASE_AUTH_UPDATE_FAILED') || code === 'SUPABASE_SERVICE_ROLE_MISSING' || code === 'SUPABASE_NOT_CONFIGURED') {
+      return c.json({ detail: 'Could not update the login email right now.' }, 503);
+    }
     return c.json({ detail: 'Could not update email.' }, 500);
   }
 });
@@ -6074,25 +9920,45 @@ api.put('/users/me/email', authMiddleware, async (c) => {
 api.put('/users/me/password', authMiddleware, async (c) => {
   try {
     const userId = getUserId(c);
+    const bodyTooLarge = rejectLargeRequest(c, 60_000);
+    if (bodyTooLarge) return bodyTooLarge;
+    const limited = await enforceRateLimit(c, 'account_password', userId, 8, 600);
+    if (limited) return limited;
     const body: any = await c.req.json().catch(() => ({}));
-    const currentPassword = String(body.old_password || body.current_password || '');
-    const newPassword = String(body.new_password || '');
+    const newPassword = String(body.new_password || body.password || '');
 
-    if (!currentPassword || !newPassword) return c.json({ detail: 'Current password and new password are required.' }, 400);
+    if (!newPassword) return c.json({ detail: 'New password is required.' }, 400);
     if (newPassword.length < 8) return c.json({ detail: 'New password must be at least 8 characters.' }, 400);
 
     const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
     if (!user) return c.json({ detail: 'User not found' }, 404);
-    if (!(await verifyPassword(currentPassword, user.password_hash))) {
-      return c.json({ detail: 'Current password is incorrect.' }, 401);
+
+    if (user.supabase_user_id) {
+      await updateSupabaseAuthUser(c, user.supabase_user_id, { password: newPassword });
+    } else if (normalizeOptionalEmail(user.email) && !isInternalOAuthEmail(user.email)) {
+      const result = await createOrFindSupabaseAuthUser(c, {
+        email: user.email,
+        password: newPassword,
+        username: publicUsernameFor(user),
+        fullName: user.full_name,
+        profileImage: user.profile_image,
+        provider: 'email',
+        appUserId: user.id,
+      });
+      if (result.user?.id) await linkSupabaseAuthUser(c, user.id, result.user.id);
     }
 
     const newHash = await hashPassword(newPassword);
     await c.env.DB.prepare('UPDATE users SET password_hash = ?, updated_at = datetime(\'now\') WHERE id = ?')
       .bind(newHash, userId)
       .run();
+    await logSecurityEvent(c, 'password_updated', userId, {});
     return c.json({ detail: 'Password updated.' });
-  } catch {
+  } catch (error: any) {
+    const code = getErrorCode(error);
+    if (code.startsWith('SUPABASE_AUTH_UPDATE_FAILED') || code === 'SUPABASE_SERVICE_ROLE_MISSING' || code === 'SUPABASE_NOT_CONFIGURED') {
+      return c.json({ detail: 'Could not update the login password right now.' }, 503);
+    }
     return c.json({ detail: 'Could not update password.' }, 500);
   }
 });
@@ -6131,13 +9997,13 @@ api.post('/users/me/phone/start', authMiddleware, async (c) => {
     ).bind(uuid(), normalizedPhone, codeHash, expiresAt).run();
 
     const delivery = await sendLegacyPhoneCode(c, normalizedPhone, code);
+    if (delivery === 'development') {
+      return c.json({ detail: 'Phone verification is not configured yet.', code: 'PHONE_PROVIDER_CONFIG' }, 503);
+    }
     const payload: any = {
-      detail: delivery === 'legacy_sms'
-        ? 'We sent a verification code to your phone.'
-        : 'Twilio Verify is not configured yet, so use the development code shown here.',
+      detail: 'We sent a verification code to your phone.',
       delivery,
     };
-    if (delivery === 'development') payload.dev_code = code;
 
     return c.json(payload);
   } catch (error: any) {
@@ -6193,10 +10059,38 @@ api.post('/users/me/phone/verify', authMiddleware, async (c) => {
       await c.env.DB.prepare('UPDATE phone_login_codes SET consumed_at = datetime(\'now\') WHERE id = ?').bind(phoneCode.id).run();
     }
 
+    await ensureSupabaseAuthSchema(c.env.DB);
+    const currentUser: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
+
     await c.env.DB.prepare('UPDATE users SET phone = ?, phone_verified = 1, updated_at = datetime(\'now\') WHERE id = ?')
       .bind(normalizedPhone, userId)
       .run();
     const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
+    runBackgroundTask(c, 'supabase_phone_update_sync_failed', async () => {
+      if (currentUser?.supabase_user_id) {
+        await updateSupabaseAuthUser(c, currentUser.supabase_user_id, {
+          phone: normalizedPhone,
+          user_metadata: supabaseProfileMetadata({
+            appUserId: user.id,
+            username: publicUsernameFor(user),
+            fullName: user.full_name,
+            profileImage: user.profile_image,
+            language: user.language,
+            phone: normalizedPhone,
+          }),
+        });
+      } else {
+        const result = await createOrFindSupabaseAuthUser(c, {
+          phone: normalizedPhone,
+          username: publicUsernameFor(user),
+          fullName: user.full_name,
+          profileImage: user.profile_image,
+          provider: 'phone',
+          appUserId: user.id,
+        });
+        if (result.user?.id) await linkSupabaseAuthUser(c, user.id, result.user.id);
+      }
+    });
     return c.json(authUserPayload(user));
   } catch (error: any) {
     const code = String(error?.message || '');
@@ -6204,6 +10098,199 @@ api.post('/users/me/phone/verify', authMiddleware, async (c) => {
     if (code === 'JWT_SECRET_MISSING') return c.json({ detail: 'Auth service is not configured.' }, 503);
     if (code.startsWith('PHONE_VERIFY_CHECK_FAILED')) return c.json({ detail: 'Could not check verification code. Try again.', code }, 502);
     return c.json({ detail: 'Could not verify phone number.' }, 500);
+  }
+});
+
+api.post('/users/me/email/link/start', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  await ensureAccountVerificationSchema(c.env.DB);
+  const limited = await enforceRateLimit(c, 'email_verify_link', userId, 8, 60);
+  if (limited) return limited;
+
+  try {
+    const body: any = await c.req.json().catch(() => ({}));
+    const currentUser: any = await c.env.DB.prepare('SELECT id, email, email_verified FROM users WHERE id = ?')
+      .bind(userId)
+      .first();
+    const accountEmail = normalizeOptionalEmail(currentUser?.email);
+    const requestedEmail = normalizeOptionalEmail(body.email);
+    if (!accountEmail) {
+      return c.json({ detail: 'Add a real email address before verification.', code: 'EMAIL_MISSING' }, 400);
+    }
+    if (requestedEmail && requestedEmail !== accountEmail) {
+      return c.json({ detail: 'Verify the email address already attached to this account.', code: 'EMAIL_MISMATCH' }, 400);
+    }
+    if (accountEmailVerified(currentUser)) {
+      return c.json({ detail: 'Email is already verified.', verified: true });
+    }
+
+    const token = randomUrlToken(32);
+    const tokenHash = await sha256Hex(`${token}:${c.env.JWT_SECRET}`);
+    const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+    await c.env.DB.batch([
+      c.env.DB.prepare('UPDATE email_verification_links SET used_at = datetime(\'now\') WHERE user_id = ? AND used_at IS NULL')
+        .bind(userId),
+      c.env.DB.prepare(
+        `INSERT INTO email_verification_links (id, user_id, email, token_hash, expires_at)
+         VALUES (?, ?, ?, ?, ?)`
+      ).bind(uuid(), userId, accountEmail, tokenHash, expiresAt),
+    ]);
+
+    const sent = await sendEmailVerificationLink(c, accountEmail, emailVerificationLink(c, token));
+    if (!sent) {
+      return c.json({
+        detail: 'Email verification links are not configured yet.',
+        code: 'EMAIL_LINK_PROVIDER_CONFIG',
+      }, 503);
+    }
+
+    return c.json({
+      detail: 'We sent a verification link to your email.',
+      delivery: 'email_link',
+      expires_at: expiresAt,
+    });
+  } catch (error: any) {
+    const code = getErrorCode(error);
+    console.error(JSON.stringify({ event: 'email_verification_link_start_failed', error: code.slice(0, 180) }));
+    if (code.startsWith('EMAIL_LINK_SEND_FAILED')) {
+      return c.json({ detail: 'Could not send verification link. Try again in a moment.', code: 'EMAIL_LINK_SEND_FAILED' }, 502);
+    }
+    return c.json({ detail: 'Could not start email verification. Please try again in a moment.', code: 'EMAIL_LINK_START_FAILED' }, 500);
+  }
+});
+
+api.get('/users/me/email/verify-link', async (c) => {
+  await ensureAccountVerificationSchema(c.env.DB);
+  const token = cleanText(c.req.query('token'), 512);
+  const fail = (message = 'This email verification link is invalid or expired.') => c.html(
+    `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Captro Email Verification</title></head><body style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f6f4f1;color:#111"><main style="min-height:100vh;display:grid;place-items:center;padding:24px"><section style="max-width:520px;background:#fff;border-radius:28px;padding:28px;box-shadow:0 20px 60px rgba(0,0,0,.08)"><h1 style="margin:0 0 10px;font-size:26px">Email not verified</h1><p style="font-size:16px;line-height:1.55;color:#555">${message}</p></section></main></body></html>`,
+    400
+  );
+  if (!token || token.length < 24) return fail();
+
+  const tokenHash = await sha256Hex(`${token}:${c.env.JWT_SECRET}`);
+  const row: any = await c.env.DB.prepare(
+    `SELECT id, user_id, email, expires_at, used_at
+     FROM email_verification_links
+     WHERE token_hash = ?
+     LIMIT 1`
+  ).bind(tokenHash).first();
+  if (!row || row.used_at) return fail();
+  if (!row.expires_at || Date.parse(row.expires_at) < Date.now()) {
+    await c.env.DB.prepare('UPDATE email_verification_links SET used_at = datetime(\'now\') WHERE id = ?').bind(row.id).run().catch(() => {});
+    return fail();
+  }
+
+  await c.env.DB.batch([
+    c.env.DB.prepare('UPDATE users SET email_verified = 1, updated_at = datetime(\'now\') WHERE id = ? AND LOWER(email) = LOWER(?)')
+      .bind(row.user_id, row.email),
+    c.env.DB.prepare('UPDATE email_verification_links SET used_at = datetime(\'now\') WHERE id = ?')
+      .bind(row.id),
+  ]);
+
+  return c.html(
+    `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Captro Email Verified</title></head><body style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f6f4f1;color:#111"><main style="min-height:100vh;display:grid;place-items:center;padding:24px"><section style="max-width:520px;background:#fff;border-radius:28px;padding:28px;box-shadow:0 20px 60px rgba(0,0,0,.08)"><h1 style="margin:0 0 10px;font-size:26px">Email verified</h1><p style="font-size:16px;line-height:1.55;color:#555">Your Captro email is verified. You can return to the app.</p></section></main></body></html>`
+  );
+});
+
+api.post('/users/me/email/start', authMiddleware, async (c) => {
+  try {
+    const userId = getUserId(c);
+    const bodyTooLarge = rejectLargeRequest(c, 20_000);
+    if (bodyTooLarge) return bodyTooLarge;
+    const body: any = await c.req.json().catch(() => ({}));
+    await ensureAccountVerificationSchema(c.env.DB);
+
+    const currentUser: any = await c.env.DB.prepare('SELECT id, email, email_verified FROM users WHERE id = ?')
+      .bind(userId)
+      .first();
+    const accountEmail = normalizeOptionalEmail(currentUser?.email);
+    const requestedEmail = normalizeOptionalEmail(body.email || accountEmail);
+    if (!accountEmail || isInternalOAuthEmail(accountEmail)) {
+      return c.json({ detail: 'Add a real email address before verification.', code: 'EMAIL_MISSING' }, 400);
+    }
+    if (requestedEmail !== accountEmail) {
+      return c.json({ detail: 'Verify the email address already attached to this account.', code: 'EMAIL_MISMATCH' }, 400);
+    }
+    if (accountEmailVerified(currentUser)) {
+      return c.json({ detail: 'Email is already verified.', delivery: 'already_verified' });
+    }
+
+    const limited = await enforceRateLimit(c, 'account_email_start', `${userId}:${accountEmail || clientIp(c)}`, 5, 600);
+    if (limited) return limited;
+    if (!getTwilioVerifyConfig(c)) {
+      return c.json({ detail: 'Email verification is not configured yet.', code: 'EMAIL_PROVIDER_CONFIG' }, 503);
+    }
+
+    await startTwilioChannelVerification(c, accountEmail, 'email');
+    return c.json({
+      detail: 'We sent a verification code to your email.',
+      delivery: 'twilio_verify',
+    });
+  } catch (error: any) {
+    const code = String(error?.message || '');
+    if (code.startsWith('PHONE_VERIFY_START_FAILED')) return twilioVerifyStartErrorResponse(c, code, 'email');
+    console.error(JSON.stringify({ event: 'email_verification_start_failed', error: code.slice(0, 180) }));
+    return c.json({ detail: 'Could not start email verification. Please try again in a moment.', code: 'EMAIL_START_FAILED' }, 500);
+  }
+});
+
+api.post('/users/me/email/verify', authMiddleware, async (c) => {
+  try {
+    const userId = getUserId(c);
+    const bodyTooLarge = rejectLargeRequest(c, 20_000);
+    if (bodyTooLarge) return bodyTooLarge;
+    const body: any = await c.req.json().catch(() => ({}));
+    await ensureAccountVerificationSchema(c.env.DB);
+
+    const currentUser: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?')
+      .bind(userId)
+      .first();
+    const accountEmail = normalizeOptionalEmail(currentUser?.email);
+    const requestedEmail = normalizeOptionalEmail(body.email || accountEmail);
+    if (!accountEmail || isInternalOAuthEmail(accountEmail)) {
+      return c.json({ detail: 'Add a real email address before verification.', code: 'EMAIL_MISSING' }, 400);
+    }
+    if (requestedEmail !== accountEmail) {
+      return c.json({ detail: 'Verify the email address already attached to this account.', code: 'EMAIL_MISMATCH' }, 400);
+    }
+    const normalizedCode = String(body.code || '').replace(/\D/g, '');
+    if (normalizedCode.length !== 6) {
+      return c.json({ detail: 'Enter the 6-digit verification code.' }, 400);
+    }
+
+    const limited = await enforceRateLimit(c, 'account_email_verify', `${userId}:${accountEmail || clientIp(c)}`, 12, 600);
+    if (limited) return limited;
+    if (!getTwilioVerifyConfig(c)) {
+      return c.json({ detail: 'Email verification is not configured yet.', code: 'EMAIL_PROVIDER_CONFIG' }, 503);
+    }
+
+    const verified = await checkTwilioChannelVerification(c, accountEmail, normalizedCode);
+    if (!verified) return c.json({ detail: 'Invalid or expired verification code.' }, 401);
+
+    await c.env.DB.prepare('UPDATE users SET email_verified = 1, updated_at = datetime(\'now\') WHERE id = ?')
+      .bind(userId)
+      .run();
+    const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
+    runBackgroundTask(c, 'supabase_email_verify_metadata_sync_failed', async () => {
+      if (user?.supabase_user_id) {
+        await updateSupabaseAuthUser(c, user.supabase_user_id, {
+          user_metadata: supabaseProfileMetadata({
+            appUserId: user.id,
+            username: publicUsernameFor(user),
+            fullName: user.full_name,
+            profileImage: user.profile_image,
+            language: user.language,
+            emailVerified: true,
+          }),
+        });
+      }
+    });
+    return c.json(authUserPayload(user));
+  } catch (error: any) {
+    const code = String(error?.message || '');
+    if (code.startsWith('PHONE_VERIFY_CHECK_FAILED')) return c.json({ detail: 'Could not check verification code. Try again.', code: 'EMAIL_VERIFY_CHECK_FAILED' }, 502);
+    return c.json({ detail: 'Could not verify email address.' }, 500);
   }
 });
 
@@ -6245,6 +10332,9 @@ api.put('/users/me/username', authMiddleware, async (c) => {
     const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
     await recordAbuseSignals(c, userId, 'username_claim', { username: usernameCheck.username });
     await logSecurityEvent(c, 'username_changed', userId, { previous_username: currentUser?.username || '', new_username: usernameCheck.username });
+    runBackgroundTask(c, 'supabase_username_metadata_sync_failed', async () => {
+      await syncSupabaseAuthMetadataForUser(c, user);
+    });
     return c.json(authUserPayload(user));
   } catch (error: any) {
     console.error('Username claim failed:', getErrorCode(error), error?.message || error);
@@ -6257,7 +10347,9 @@ api.get('/users/search/:query', authMiddleware, async (c) => {
   if (limited) return limited;
   const q = cleanText(c.req.param('query'), 80);
   if (q.length < 2) return c.json([]);
-  const r = await c.env.DB.prepare('SELECT id, username, full_name, profile_image, bio FROM users WHERE username LIKE ? OR full_name LIKE ? LIMIT 20').bind(`%${q}%`, `%${q}%`).all();
+  const r = await c.env.DB.prepare(
+    "SELECT id, username, full_name, profile_image, bio FROM users WHERE COALESCE(status, 'active') = 'active' AND (username LIKE ? OR full_name LIKE ?) LIMIT 20"
+  ).bind(`%${q}%`, `%${q}%`).all();
   return c.json((r.results as any[]).map((user) => safeUserPayload(user)));
 });
 
@@ -6290,6 +10382,7 @@ api.get('/users/:userId', authMiddleware, async (c) => {
   const targetUserId = c.req.param('userId');
   const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(targetUserId).first();
   if (!user) return c.json({ detail: 'User not found' }, 404);
+  if (String(user.status || 'active') !== 'active') return c.json({ detail: 'User not found' }, 404);
   const safe = safeUserPayload(user);
   const follow: any = viewerId && viewerId !== targetUserId
     ? await c.env.DB.prepare('SELECT id FROM follows WHERE follower_id = ? AND following_id = ? LIMIT 1').bind(viewerId, targetUserId).first()
@@ -6329,7 +10422,7 @@ api.post('/users/:userId/follow', authMiddleware, async (c) => {
   if (limited) return limited;
   const body: any = await c.req.json().catch(() => ({}));
   const requested = optionalBoolean(body.following ?? body.followed ?? body.value);
-  const target: any = await c.env.DB.prepare('SELECT id FROM users WHERE id = ?').bind(targetId).first();
+  const target: any = await c.env.DB.prepare("SELECT id FROM users WHERE id = ? AND COALESCE(status, 'active') = 'active'").bind(targetId).first();
   if (!target) return c.json({ detail: 'User not found' }, 404);
   await ensureAbuseProtectionSchema(c.env.DB);
   const block: any = await c.env.DB.prepare('SELECT id FROM blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?) LIMIT 1')
@@ -6488,56 +10581,6 @@ api.get('/music/audius/search', async (c) => {
   } catch (error: any) {
     console.log('Audius search failed:', error?.message || error);
     return c.json({ detail: 'Music search is temporarily unavailable.', tracks: [] }, 503);
-  }
-});
-
-// Server-side Giphy proxy for Notes GIF picking. The API key stays in Cloudflare secrets,
-// never in the native app bundle or client code.
-api.get('/gifs/search', authMiddleware, async (c) => {
-  try {
-    const userId = getUserId(c);
-    const limited = await enforceRateLimit(c, 'giphy_search', userId || clientIp(c), 80, 60);
-    if (limited) return limited;
-    const apiKey = String(c.env.GIPHY_API_KEY || '').trim();
-    if (!apiKey) return c.json({ detail: 'GIF search is not configured yet.', gifs: [] }, 503);
-    const query = cleanText(c.req.query('q') || c.req.query('query'), 80);
-    if (query.length < 2) return c.json({ gifs: [] });
-    const limit = clampNumber(c.req.query('limit'), 1, 32, 24);
-    const offset = clampNumber(c.req.query('offset'), 0, 500, 0);
-    const cacheKey = `giphy:search:${query.toLowerCase()}:${limit}:${offset}`;
-    const gifs = await cachedJson(c, cacheKey, 180, async () => {
-      const params = new URLSearchParams({
-        api_key: apiKey,
-        q: query,
-        limit: String(limit),
-        offset: String(offset),
-        rating: 'pg-13',
-        lang: 'en',
-      });
-      const response = await fetch(`https://api.giphy.com/v1/gifs/search?${params.toString()}`, {
-        headers: { Accept: 'application/json' },
-      });
-      if (!response.ok) throw new Error(`Giphy returned ${response.status}`);
-      const data: any = await response.json();
-      const rows = Array.isArray(data?.data) ? data.data : [];
-      return rows.map((gif: any) => {
-        const images = gif?.images || {};
-        const original = images.original || {};
-        const preview = images.fixed_width_small || images.fixed_width || images.downsized || original;
-        return {
-          id: publicId(gif?.id, 80),
-          title: cleanText(gif?.title, 120),
-          preview_url: String(preview.webp || preview.url || '').slice(0, 500),
-          media_url: String(original.webp || original.url || preview.webp || preview.url || '').slice(0, 500),
-          width: clampNumber(original.width, 1, 4096, 0),
-          height: clampNumber(original.height, 1, 4096, 0),
-        };
-      }).filter((gif: any) => gif.id && gif.media_url);
-    });
-    return c.json({ gifs });
-  } catch (error: any) {
-    console.log('Giphy search failed:', error?.message || error);
-    return c.json({ detail: 'GIF search is temporarily unavailable.', gifs: [] }, 503);
   }
 });
 
@@ -7093,6 +11136,61 @@ api.get('/music/:musicId', authMiddleware, async (c) => {
   }
 });
 
+api.post('/ai/post-assist', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const limited = await enforceRateLimit(c, 'post_ai_assist', userId, 45, 60);
+  if (limited) return limited;
+  const tooLarge = rejectLargeRequest(c, 24_000);
+  if (tooLarge) return tooLarge;
+  const body = await c.req.json().catch(() => ({}));
+  const unknown = rejectUnknownFields(c, body, [
+    'title', 'headline', 'caption', 'content', 'media_type', 'mediaType', 'post_type', 'postType',
+    'hashtags', 'tags', 'location', 'place_name', 'placeName',
+    'apple_vision_labels', 'appleVisionLabels',
+    'apple_vision_category_guess', 'appleVisionCategoryGuess',
+    'apple_vision_confidence', 'appleVisionConfidence',
+  ]);
+  if (unknown) return unknown;
+
+  const title = cleanText(body.title || body.headline, 120);
+  const caption = cleanMultilineText(body.caption || body.content, 900);
+  const hashtags = sanitizeAutoCategoryTags([...(parseJsonArray(body.hashtags)), ...(parseJsonArray(body.tags))]);
+  const input: AutoCategoryInput & { title?: string } = {
+    title,
+    caption: [title, caption].filter(Boolean).join('\n\n'),
+    mediaType: cleanText(body.media_type || body.mediaType, 40),
+    postType: cleanText(body.post_type || body.postType, 60),
+    hashtags,
+    location: cleanText(body.location, 140),
+    placeName: cleanText(body.place_name || body.placeName, 140),
+    appleLabels: sanitizeAutoCategoryLabels(body.apple_vision_labels || body.appleVisionLabels),
+    appleCategoryGuess: body.apple_vision_category_guess || body.appleVisionCategoryGuess,
+    appleConfidence: clampFloat(body.apple_vision_confidence ?? body.appleVisionConfidence, 0, 1, 0),
+  };
+  const deterministicCategory = autoCategoryEngine(input);
+  const fallback = fallbackPostAssist(input, deterministicCategory);
+
+  try {
+    const result = await generatePostAssistWithWorkersAi(c.env, input, fallback);
+    return c.json({
+      ...result,
+      category: result.primary_category,
+      ai_available: !!c.env.AI,
+    });
+  } catch (error: any) {
+    console.warn(JSON.stringify({
+      event: 'post_assist_ai_failed',
+      request_id: c.get?.('requestId') || '',
+      code: getErrorCode(error).slice(0, 160),
+    }));
+    return c.json({
+      ...fallback,
+      category: fallback.primary_category,
+      ai_available: !!c.env.AI,
+    });
+  }
+});
+
 api.post('/posts', authMiddleware, async (c) => {
   const phoneGate = await requirePhoneVerified(c, 'create posts');
   if (phoneGate) return phoneGate;
@@ -7102,12 +11200,16 @@ api.post('/posts', authMiddleware, async (c) => {
   await ensureAudioSchema(c.env.DB);
   await ensurePostEditorSchema(c.env.DB);
   await ensureReliabilitySchema(c.env.DB);
+  await ensureGovernanceSchema(c.env.DB);
+  await ensureAutoCategorySchema(c.env.DB);
+  await ensureLocationSchema(c.env.DB);
+  await ensureMediaModerationSchema(c.env.DB);
   const userId = getUserId(c);
   const limited = await enforceRateLimit(c, 'post_create', userId, 30, 60);
   if (limited) return limited;
   const restricted = await enforceUserRestriction(c, userId, 'posting');
   if (restricted) return restricted;
-  const user: any = await c.env.DB.prepare('SELECT username, full_name, profile_image FROM users WHERE id = ?').bind(userId).first();
+  const user: any = await c.env.DB.prepare('SELECT username, full_name, profile_image, city FROM users WHERE id = ?').bind(userId).first();
   const b = await c.req.json().catch(() => ({}));
   const clientRequestId = getClientRequestId(c, b);
   if (clientRequestId) {
@@ -7120,18 +11222,92 @@ api.post('/posts', authMiddleware, async (c) => {
     if (existing) return c.json({ ...postPayload(existing, [], c.env), idempotent_replay: true });
   }
   const id = uuid();
-  const postType = cleanText(b.post_type || b.category || 'general', 50) || 'general';
-  const isCheckin = postType === 'check_in' && b.place_id ? 1 : 0;
-  const location = cleanText(b.location || b.place_name, 180) || null;
+  let postType = cleanText(b.post_type || b.postType || b.type || b.category || 'general', 50).toLowerCase() || 'general';
+  if (postType === 'media') postType = 'general';
+  if (postType === 'note') {
+    return c.json({ detail: 'Notes are no longer supported.', code: 'NOTES_RETIRED' }, 410);
+  }
+  const placeProvider = normalizeAppleMapKitProvider(b.place_provider || b.provider) || (b.place_name ? 'apple_mapkit' : '');
+  const placeProviderId = cleanText(b.place_provider_id || b.place_id, 160);
+  const placeName = cleanText(b.place_name, 180);
+  const placeFormattedAddress = cleanText(b.place_formatted_address || b.location, 260);
+  const placeCategory = cleanText(b.place_category || b.category_hint, 80);
+  const placeCity = cleanText(b.place_city, 80);
+  const placeRegion = cleanText(b.place_region, 80);
+  const placeCountry = cleanText(b.place_country, 80);
+  if ((placeName || placeFormattedAddress) && looksLikePrivatePlace(placeName, placeFormattedAddress, placeCategory)) {
+    return c.json({ detail: 'Private home-style addresses cannot be added as public place tags.' }, 400);
+  }
+  const isCheckin = postType === 'check_in' && placeProviderId ? 1 : 0;
+  const location = placeFormattedAddress || placeName || null;
+  const displayCity = cleanText(b.display_city, 80);
+  const displayRegion = cleanText(b.display_region, 80);
+  const displayCountry = cleanText(b.display_country, 80);
+  const displayLocationSource = normalizeDisplayLocationSource(b.display_location_source || (displayCity || displayCountry ? 'manual' : 'none'));
+  let displayLocationVisibility = normalizeDisplayLocationVisibility(b.display_location_visibility);
+  let displayLocationLabel = normalizeDisplayLocationLabel(displayCity, displayRegion, displayCountry, cleanText(b.display_location_label, 120));
+  if (!displayLocationLabel && displayLocationVisibility !== 'hidden') {
+    displayLocationLabel = normalizeDisplayLocationLabel(cleanText(user?.city, 120), '', '', '');
+  }
+  if (!displayLocationLabel) displayLocationVisibility = 'hidden';
   const visibility = normalizeVisibility(b.visibility);
-  const postTitle = cleanText(b.title || b.headline, 180);
-  const postContent = cleanMultilineText(b.content, 5000);
-  const imageUrls = sanitizeMediaReferences(b.images, b.image);
-  const primaryImage = safeMediaReference(b.image) || imageUrls[0] || null;
-  const mediaTypes = sanitizeMediaTypes(b.media_types, imageUrls.length || (primaryImage ? 1 : 0));
+  let postTitle = cleanText(b.title || b.headline, 180);
+  let postContent = cleanMultilineText(b.content || b.text, 5000);
+  let imageUrls = sanitizeMediaReferences(b.images, b.image);
+  let primaryImage = safeMediaReference(b.image) || imageUrls[0] || null;
+  let mediaTypes = sanitizeMediaTypes(b.media_types, imageUrls.length || (primaryImage ? 1 : 0));
+  const requestedPostType = String(b.post_type || b.postType || b.media_type || b.mediaType || '').toLowerCase();
+  const hasVideoMedia = requestedPostType.includes('video') || mediaTypes.includes('video') || imageUrls.some(isVideoMediaUrl);
+  if (hasVideoMedia) {
+    return c.json({
+      detail: 'Feed posts support photos only. Share videos to Stories instead.',
+      code: 'FEED_POSTS_PHOTO_ONLY',
+    }, 400);
+  }
+  const mediaAssetIds = parseMediaAssetIds(b);
+  const mediaApproval = await approvedMediaAssetsForPost(c, userId, mediaAssetIds, imageUrls);
+  if (!mediaApproval.ok) {
+    return c.json({ detail: mediaApproval.detail, code: mediaApproval.code }, mediaApproval.status as any);
+  }
+  if (mediaApproval.assets.some((asset: any) => normalizeMediaAssetType(asset.media_type) === 'video')) {
+    return c.json({
+      detail: 'Feed posts support photos only. Share videos to Stories instead.',
+      code: 'FEED_POSTS_PHOTO_ONLY',
+    }, 400);
+  }
+  const moderatedImageUrls = mediaApproval.assets
+    .map((asset: any) => safeMediaReference(asset.public_url) || mediaAssetPublicUrl(c.env, asset))
+    .filter(Boolean);
+  if (moderatedImageUrls.length) {
+    imageUrls = moderatedImageUrls;
+    primaryImage = imageUrls[0] || null;
+    mediaTypes = sanitizeMediaTypes(b.media_types, imageUrls.length || (primaryImage ? 1 : 0));
+  }
+  const explicitTags = sanitizeAutoCategoryTags([...(parseJsonArray(b.tags)), ...(parseJsonArray(b.hashtags))]);
+  const mediaTypeHint = mediaTypes.includes('video') ? 'video' : 'image';
+  const categoryLocationSignals = [
+    location,
+    displayLocationLabel,
+    displayCity,
+    displayRegion,
+    displayCountry,
+    placeCategory,
+  ].filter(Boolean).join(' ');
+  let autoCategory = autoCategoryFromBody(b, {
+    caption: [postTitle, postContent].filter(Boolean).join('\n\n'),
+    mediaType: mediaTypeHint,
+    postType,
+    hashtags: explicitTags,
+    location: categoryLocationSignals || location,
+    placeType: placeCategory,
+    placeName: [placeName, placeCategory].filter(Boolean).join(' ') || null,
+  });
   const placeLat = b.place_lat == null ? null : clampFloat(b.place_lat, -90, 90, 0);
   const placeLng = b.place_lng == null ? null : clampFloat(b.place_lng, -180, 180, 0);
-  const backupIds = parseJsonArray(b.media_backup_ids).map(String).filter(Boolean);
+  const backupIds = Array.from(new Set([
+    ...parseJsonArray(b.media_backup_ids).map(String).filter(Boolean),
+    ...mediaBackupIdsFromReferences([primaryImage, ...imageUrls]),
+  ]));
   const mediaDimensions = sanitizeMediaDimensions(b.media_dimensions);
   const editorOverlays = sanitizePostEditorOverlays(b.editor_overlays);
   const taggedUsers = sanitizeTaggedUsers(b.tagged_users);
@@ -7156,17 +11332,28 @@ api.post('/posts', authMiddleware, async (c) => {
   const insertResults = await c.env.DB.batch([
     c.env.DB.prepare(
       `INSERT OR IGNORE INTO posts (
-       id, user_id, title, content, image, images, media_types, media_backup_ids, media_dimensions, location, post_type,
-       place_id, place_name, place_lat, place_lng, is_verified_checkin, visibility,
+       id, user_id, title, content, image, images, media_types, media_backup_ids, media_dimensions, location,
+       display_city, display_region, display_country, display_location_label, display_location_source, display_location_visibility,
+       post_type,
+       place_id, place_name, place_provider, place_provider_id, place_formatted_address, place_category, place_city, place_region, place_country,
+       place_lat, place_lng, is_verified_checkin, visibility, moderation_status, moderation_media_ids, moderation_checked_at,
        editor_overlays, tagged_users,
+       primary_category, category_confidence, category_source, category_status, category_signals_json, tags_json,
+       secondary_categories_json, category_scores_json, detected_objects_json, detected_scene, place_type, user_selected_category, caption_keywords_json,
        audio_provider, audio_track_id, audio_title, audio_artist, audio_artwork_url, audio_stream_url,
        audio_start_time, audio_duration, client_request_id
      )
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+     VALUES (${Array(57).fill('?').join(', ')})`
     ).bind(id, userId, postTitle, postContent, primaryImage, JSON.stringify(imageUrls), JSON.stringify(mediaTypes),
-    JSON.stringify(backupIds), JSON.stringify(mediaDimensions), location, postType,
-    cleanText(b.place_id, 120) || null, cleanText(b.place_name, 180) || null, placeLat, placeLng, isCheckin, visibility,
+    JSON.stringify(backupIds), JSON.stringify(mediaDimensions), location,
+    displayCity, displayRegion, displayCountry, displayLocationLabel, displayLocationSource, displayLocationVisibility,
+    postType,
+    placeProviderId || null, placeName || null, placeProvider, placeProviderId, placeFormattedAddress, placeCategory, placeCity, placeRegion, placeCountry,
+    placeLat, placeLng, isCheckin, visibility, 'approved', JSON.stringify(mediaAssetIds), now(),
     JSON.stringify(editorOverlays), JSON.stringify(taggedUsers),
+    autoCategory.primary_category, autoCategory.category_confidence, autoCategory.category_source, autoCategory.category_status, JSON.stringify(autoCategory.signals), JSON.stringify(autoCategory.tags),
+    JSON.stringify(autoCategory.secondary_categories), JSON.stringify(autoCategory.category_scores), JSON.stringify(autoCategory.detected_objects),
+    autoCategory.detected_scene, autoCategory.place_type, autoCategory.user_selected_category, JSON.stringify(autoCategory.caption_keywords),
     audioProvider, audioTrackId, audioTitle, audioArtist, audioArtworkUrl, audioStreamUrl, audioStartTime, audioDuration, clientRequestId),
     c.env.DB.prepare('UPDATE users SET posts_count = COALESCE(posts_count, 0) + 1 WHERE id = ? AND changes() > 0').bind(userId),
   ]);
@@ -7181,13 +11368,47 @@ api.post('/posts', authMiddleware, async (c) => {
     if (existing) return c.json({ ...postPayload(existing, [], c.env), idempotent_replay: true });
   }
   if (!inserted) return c.json({ detail: 'Could not create post. Please retry.' }, 409);
+  if (mediaAssetIds.length) {
+    const placeholders = mediaAssetIds.map(() => '?').join(', ');
+    await c.env.DB.prepare(`UPDATE media_assets SET post_id = ?, updated_at = ? WHERE user_id = ? AND id IN (${placeholders})`)
+      .bind(id, now(), userId, ...mediaAssetIds)
+      .run();
+  }
+  if (placeName || placeFormattedAddress || placeProviderId) {
+    await c.env.DB.prepare(
+      `INSERT OR REPLACE INTO post_places
+       (id, post_id, provider, provider_place_id, name, formatted_address, latitude, longitude, category, city, region, country, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      uuid(), id, placeProvider || 'apple_mapkit', placeProviderId, placeName, placeFormattedAddress,
+      placeLat, placeLng, placeCategory, placeCity, placeRegion, placeCountry, now()
+    ).run();
+  }
   await attachMediaBackupsToPost(c.env.DB, userId, id, backupIds);
   await recordAbuseSignals(c, userId, 'post_create', {
     product_links: editorOverlays.filter((item: any) => item?.type === 'product' && item.link).map((item: any) => item.link),
   });
-  runBackgroundTask(c, 'supabase_post_write_through_failed', async () => {
-    await mirrorLegacyUserToSupabase(c, userId);
-    await mirrorLegacyPostToSupabase(c, id);
+  if (supabasePrimaryConfigured(c)) {
+    try {
+      await writeLegacyUserToSupabaseCanonical(c, userId);
+      await writeLegacyPostToSupabaseCanonical(c, id);
+    } catch (error: any) {
+      const code = getErrorCode(error).slice(0, 180);
+      await removeLegacyPostCacheAfterCanonicalFailure(c, id, userId, code);
+      console.error(JSON.stringify({ event: 'supabase_primary_post_create_failed', post_id: id, user_id: userId, code }));
+      return c.json({
+        detail: 'Could not save this post to the production database. Please retry.',
+        code: 'SUPABASE_PRIMARY_WRITE_FAILED',
+      }, 503);
+    }
+  } else {
+    runBackgroundTask(c, 'supabase_post_write_through_failed', async () => {
+      await mirrorLegacyUserToSupabase(c, userId);
+      await mirrorLegacyPostToSupabase(c, id);
+    });
+  }
+  runBackgroundTask(c, 'post_category_refinement_failed', async () => {
+    await refinePostCategoryWithBackendAi(c, id);
   });
   if (visibility === 'public' || visibility === 'followers') {
     runBackgroundTask(c, 'post_follower_notifications_failed', async () => {
@@ -7214,11 +11435,29 @@ api.post('/posts', authMiddleware, async (c) => {
   const createdPost = { id, user_id: userId, user_username: user?.username, user_full_name: user?.full_name,
     user_profile_image: user?.profile_image, title: postTitle, content: postContent, image: primaryImage, images: imageUrls,
     media_types: mediaTypes, media_backup_ids: backupIds, media_dimensions: mediaDimensions, editor_overlays: editorOverlays, tagged_users: taggedUsers,
-    location, post_type: postType, place_id: cleanText(b.place_id, 120), place_name: cleanText(b.place_name, 180),
+    primary_category: autoCategory.primary_category, category_confidence: autoCategory.category_confidence,
+    category_source: autoCategory.category_source, category_status: autoCategory.category_status,
+    category_signals_json: JSON.stringify(autoCategory.signals), tags_json: JSON.stringify(autoCategory.tags),
+    secondary_categories_json: JSON.stringify(autoCategory.secondary_categories),
+    category_scores_json: JSON.stringify(autoCategory.category_scores),
+    detected_objects_json: JSON.stringify(autoCategory.detected_objects),
+    detected_scene: autoCategory.detected_scene,
+    place_type: autoCategory.place_type,
+    user_selected_category: autoCategory.user_selected_category,
+    caption_keywords_json: JSON.stringify(autoCategory.caption_keywords),
+    location,
+    display_city: displayCity, display_region: displayRegion, display_country: displayCountry,
+    display_location_label: displayLocationLabel, display_location_source: displayLocationSource,
+    display_location_visibility: displayLocationVisibility,
+    post_type: postType,
+    place_id: placeProviderId, place_name: placeName,
+    place_provider: placeProvider, place_provider_id: placeProviderId, place_formatted_address: placeFormattedAddress,
+    place_category: placeCategory, place_city: placeCity, place_region: placeRegion, place_country: placeCountry,
     place_lat: placeLat, place_lng: placeLng, is_verified_checkin: !!isCheckin,
     audio_provider: audioProvider, audio_track_id: audioTrackId, audio_title: audioTitle, audio_artist: audioArtist,
     audio_artwork_url: audioArtworkUrl, audio_stream_url: audioStreamUrl, audio_start_time: audioStartTime, audio_duration: audioDuration,
-    client_request_id: clientRequestId, visibility, likes_count: 0, comments_count: 0, liked_by: [], created_at: now() };
+    client_request_id: clientRequestId, visibility, moderation_status: 'approved', moderation_media_ids: JSON.stringify(mediaAssetIds),
+    likes_count: 0, comments_count: 0, liked_by: [], created_at: now() };
   return c.json(postPayload(createdPost, [], c.env));
 });
 
@@ -7229,22 +11468,30 @@ api.get('/posts/feed', authMiddleware, async (c) => {
   await ensurePrivacySchema(c.env.DB);
   await ensureGovernanceSchema(c.env.DB);
   await ensurePostEditorSchema(c.env.DB);
+  await ensureLocationSchema(c.env.DB);
+  await ensureMediaModerationSchema(c.env.DB);
+  await ensureLikeUniquenessSchema(c.env.DB);
+  const relatedUserIds = await relatedInteractionUserIds(c.env.DB, userId);
+  const relatedPlaceholders = inPlaceholders(relatedUserIds);
   const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
   const limit = clampNumber(c.req.query('limit') || '20', 1, 50, 20);
   const feedSql = [
     `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
        EXISTS (SELECT 1 FROM follows fl WHERE fl.follower_id = ? AND fl.following_id = p.user_id) AS is_following,
-       EXISTS (SELECT 1 FROM likes lk WHERE lk.user_id = ? AND lk.post_id = p.id) AS is_liked,
-       EXISTS (SELECT 1 FROM saved_posts sp WHERE sp.user_id = ? AND sp.post_id = p.id) AS saved,
+       EXISTS (SELECT 1 FROM likes lk WHERE lk.post_id = p.id AND lk.user_id IN (${relatedPlaceholders})) AS is_liked,
+       EXISTS (SELECT 1 FROM saved_posts sp WHERE sp.post_id = p.id AND sp.user_id IN (${relatedPlaceholders})) AS saved,
        (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
-       (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden')) AS live_comments_count,
-       (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id) AS live_saves_count
+       MAX(COALESCE(p.comments_count, 0), (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden'))) AS live_comments_count,
+       MAX(COALESCE(p.saves_count, 0), (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id)) AS live_saves_count
      FROM posts p JOIN users u ON p.user_id = u.id`,
-    `WHERE ${visiblePostWhere('u', 'p')}`,
+    `WHERE ${visiblePostWhere('u', 'p')} AND ${feedPhotoPostWhere('p')}`,
     'ORDER BY p.created_at DESC LIMIT ? OFFSET ?',
   ].join(' ');
-  const posts = await c.env.DB.prepare(feedSql).bind(userId, userId, userId, ...visiblePostBindValues(userId), limit, skip).all();
-  return c.json((posts.results as any[]).map((p) => feedPostPayload(p, [], c.env)));
+  const posts = await c.env.DB.prepare(feedSql).bind(userId, ...relatedUserIds, ...relatedUserIds, ...visiblePostBindValues(userId), limit, skip).all();
+  const feedRows = await overlaySupabaseViewerEngagement(c, feedPhotoPostsOnly(posts.results as any[]), userId);
+  const response = c.json(feedRows.map((p) => feedPostPayload(p, [], c.env)));
+  response.headers.set('cache-control', 'private, max-age=6');
+  return response;
 });
 
 api.get('/posts/world-board', async (c) => {
@@ -7252,22 +11499,24 @@ api.get('/posts/world-board', async (c) => {
     await ensurePrivacySchema(c.env.DB);
     await ensureGovernanceSchema(c.env.DB);
     await ensurePostEditorSchema(c.env.DB);
+    await ensureLocationSchema(c.env.DB);
+    await ensureMediaModerationSchema(c.env.DB);
     const limited = await enforceRateLimit(c, 'public_world_board', clientIp(c), 180, 60);
     if (limited) return limited;
     const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
     const limit = clampNumber(c.req.query('limit') || '40', 1, 50, 40);
-    const payload = await cachedJson(c, `posts:world-board:v8:${skip}:${limit}`, 8, async () => {
+    const payload = await cachedJson(c, `posts:world-board:v9:${skip}:${limit}`, 8, async () => {
       const worldBoardSql = [
         `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
-           COALESCE(p.likes_count, 0) AS live_likes_count,
-           COALESCE(p.comments_count, 0) AS live_comments_count,
-           0 AS live_saves_count
+           (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
+           MAX(COALESCE(p.comments_count, 0), (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden'))) AS live_comments_count,
+           MAX(COALESCE(p.saves_count, 0), (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id)) AS live_saves_count
          FROM posts p JOIN users u ON p.user_id = u.id`,
-        `WHERE ${publicPostWhere('u', 'p')}`,
+        `WHERE ${publicPostWhere('u', 'p')} AND ${feedPhotoPostWhere('p')}`,
         'ORDER BY p.created_at DESC LIMIT ? OFFSET ?',
       ].join(' ');
       const posts = await c.env.DB.prepare(worldBoardSql).bind(limit, skip).all();
-      return (posts.results as any[]).map((p) => feedPostPayload(p, [], c.env));
+      return feedPhotoPostsOnly(posts.results as any[]).map((p) => feedPostPayload(p, [], c.env));
     });
     const response = c.json(payload);
     response.headers.set('cache-control', 'public, max-age=4, s-maxage=8');
@@ -7284,76 +11533,81 @@ api.get('/posts/nearby-feed', authMiddleware, async (c) => {
   await ensurePrivacySchema(c.env.DB);
   await ensureGovernanceSchema(c.env.DB);
   await ensurePostEditorSchema(c.env.DB);
+  await ensureLocationSchema(c.env.DB);
+  await ensureMediaModerationSchema(c.env.DB);
   const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
   const limit = clampNumber(c.req.query('limit') || '24', 1, 50, 24);
   const nearbyFeedSql = [
     `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
        (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
-       (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden')) AS live_comments_count,
-       (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id) AS live_saves_count
+       MAX(COALESCE(p.comments_count, 0), (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden'))) AS live_comments_count,
+       MAX(COALESCE(p.saves_count, 0), (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id)) AS live_saves_count
      FROM posts p JOIN users u ON p.user_id = u.id`,
-    `WHERE ${visiblePostWhere('u', 'p')}`,
+    `WHERE ${visiblePostWhere('u', 'p')} AND ${feedPhotoPostWhere('p')}`,
     'ORDER BY p.created_at DESC LIMIT ? OFFSET ?',
   ].join(' ');
   const posts = await c.env.DB.prepare(nearbyFeedSql).bind(...visiblePostBindValues(userId), limit, skip).all();
-  return c.json((posts.results as any[]).map((p) => feedPostPayload(p, [], c.env)));
+  const feedRows = await overlaySupabaseViewerEngagement(c, feedPhotoPostsOnly(posts.results as any[]), userId);
+  const response = c.json(feedRows.map((p) => feedPostPayload(p, [], c.env)));
+  response.headers.set('cache-control', 'private, max-age=6');
+  return response;
 });
 
 api.get('/posts/:postId', authMiddleware, async (c) => {
   const userId = getUserId(c);
   const postId = c.req.param('postId');
+  await ensureLocationSchema(c.env.DB);
+  await ensureMediaModerationSchema(c.env.DB);
+  await ensureLikeUniquenessSchema(c.env.DB);
+  const relatedUserIds = await relatedInteractionUserIds(c.env.DB, userId);
+  const relatedPlaceholders = inPlaceholders(relatedUserIds);
   const postByIdSql = [
     `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
        EXISTS (SELECT 1 FROM follows fl WHERE fl.follower_id = ? AND fl.following_id = p.user_id) AS is_following,
-       EXISTS (SELECT 1 FROM likes lk WHERE lk.user_id = ? AND lk.post_id = p.id) AS is_liked,
-       EXISTS (SELECT 1 FROM saved_posts sp WHERE sp.user_id = ? AND sp.post_id = p.id) AS saved,
+       EXISTS (SELECT 1 FROM likes lk WHERE lk.post_id = p.id AND lk.user_id IN (${relatedPlaceholders})) AS is_liked,
+       EXISTS (SELECT 1 FROM saved_posts sp WHERE sp.post_id = p.id AND sp.user_id IN (${relatedPlaceholders})) AS saved,
        (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
-       (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden')) AS live_comments_count,
-       (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id) AS live_saves_count
+       MAX(COALESCE(p.comments_count, 0), (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden'))) AS live_comments_count,
+       MAX(COALESCE(p.saves_count, 0), (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id)) AS live_saves_count
      FROM posts p JOIN users u ON p.user_id = u.id`,
-    `WHERE p.id = ? AND ${visiblePostWhere('u', 'p')}`,
+    `WHERE p.id = ? AND ${visiblePostWhere('u', 'p')} AND ${feedPhotoPostWhere('p')}`,
   ].join(' ');
-  const p: any = await c.env.DB.prepare(postByIdSql).bind(userId, userId, userId, postId, ...visiblePostBindValues(userId)).first();
+  const p: any = await c.env.DB.prepare(postByIdSql).bind(userId, ...relatedUserIds, ...relatedUserIds, postId, ...visiblePostBindValues(userId)).first();
   if (!p) return c.json({ detail: 'Post not found' }, 404);
+  const [postWithViewerState] = await overlaySupabaseViewerEngagement(c, [p], userId);
   const likes = await c.env.DB.prepare('SELECT user_id FROM likes WHERE post_id = ?').bind(postId).all();
-  return c.json(postPayload(p, likes.results.map((l: any) => l.user_id), c.env));
+  return c.json(postPayload(postWithViewerState || p, likes.results.map((l: any) => l.user_id), c.env));
 });
 
 api.post('/posts/:postId/like', authMiddleware, async (c) => {
   const userId = getUserId(c); const postId = c.req.param('postId');
   await ensureGovernanceSchema(c.env.DB);
+  await ensureMediaModerationSchema(c.env.DB);
+  await ensureLikeUniquenessSchema(c.env.DB);
   const limited = await enforceRateLimit(c, 'post_like', userId, 300, 60);
   if (limited) return limited;
   const body: any = await c.req.json().catch(() => ({}));
   const requested = optionalBoolean(body.liked ?? body.like ?? body.value);
   const likeVisiblePostSql = [
-    'SELECT p.id, p.user_id FROM posts p JOIN users u ON p.user_id = u.id',
-    `WHERE p.id = ? AND ${visiblePostWhere('u', 'p')}`,
+    `SELECT p.id, p.user_id,
+       (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS likes_count,
+       MAX(COALESCE(p.comments_count, 0), (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden'))) AS comments_count,
+       MAX(COALESCE(p.saves_count, 0), (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id)) AS saves_count,
+       EXISTS (SELECT 1 FROM likes lk WHERE lk.user_id = ? AND lk.post_id = p.id) AS is_liked,
+       EXISTS (SELECT 1 FROM saved_posts sp WHERE sp.user_id = ? AND sp.post_id = p.id) AS saved
+     FROM posts p JOIN users u ON p.user_id = u.id`,
+    `WHERE p.id = ? AND ${visiblePostWhere('u', 'p')} AND ${feedPhotoPostWhere('p')}`,
   ].join(' ');
-  const visiblePost = await c.env.DB.prepare(likeVisiblePostSql).bind(postId, ...visiblePostBindValues(userId)).first();
+  const visiblePost: any = await c.env.DB.prepare(likeVisiblePostSql).bind(userId, userId, postId, ...visiblePostBindValues(userId)).first();
   if (!visiblePost) return c.json({ detail: 'Post not found' }, 404);
 
-  let nextLiked = requested;
-  if (nextLiked === null) {
-    const ex = await c.env.DB.prepare('SELECT id FROM likes WHERE user_id = ? AND post_id = ?').bind(userId, postId).first();
-    nextLiked = !ex;
-  }
+  const { state, changed } = await setCanonicalPostLikeState(c, postId, userId, requested);
+  await c.env.DB.prepare('UPDATE discover_posts SET likes_count = ? WHERE id = ?')
+    .bind(state.likes_count, postId)
+    .run()
+    .catch(() => {});
 
-  let changed = false;
-  if (nextLiked) {
-    const result = await c.env.DB.prepare('INSERT OR IGNORE INTO likes (id, user_id, post_id) VALUES (?, ?, ?)')
-      .bind(uuid(), userId, postId)
-      .run();
-    changed = d1Changes(result) > 0;
-  } else {
-    const result = await c.env.DB.prepare('DELETE FROM likes WHERE user_id = ? AND post_id = ?')
-      .bind(userId, postId)
-      .run();
-    changed = d1Changes(result) > 0;
-  }
-  const engagement = await getPostEngagementState(c.env.DB, postId, userId);
-
-  if (nextLiked && changed && (visiblePost as any).user_id !== userId) {
+  if (state.liked && changed && (visiblePost as any).user_id !== userId) {
     try {
       const me: any = await c.env.DB.prepare('SELECT full_name FROM users WHERE id = ?').bind(userId).first();
       await insertNotificationOnce(c, {
@@ -7361,25 +11615,14 @@ api.post('/posts/:postId/like', authMiddleware, async (c) => {
         type: 'like',
         title: 'New Like',
         body: `${me?.full_name || 'Someone'} liked your post`,
-        data: { post_id: postId, from_user_id: userId },
+        data: { post_id: postId, from_user_id: userId, actor_name: me?.full_name || 'Someone' },
         dedupeKey: `like:${userId}:${postId}`,
         dedupeSeconds: 86400,
       });
     } catch {}
   }
-  if (changed) {
-    runBackgroundTask(c, 'supabase_like_write_through_failed', async () => {
-      await mirrorLegacyInteractionToSupabase(c, postId, userId, 'like', !!nextLiked);
-    });
-  }
 
-  return c.json({
-    liked: engagement.liked,
-    likes_count: engagement.likes_count,
-    comments_count: engagement.comments_count,
-    saved: engagement.saved,
-    saves_count: engagement.saves_count,
-  });
+  return c.json(postEngagementResponse(state));
 });
 
 api.delete('/posts/:postId', authMiddleware, async (c) => {
@@ -7473,6 +11716,8 @@ api.get('/users/:userId/posts', authMiddleware, async (c) => {
   await ensurePrivacySchema(c.env.DB);
   await ensureGovernanceSchema(c.env.DB);
   await ensurePostEditorSchema(c.env.DB);
+  await ensureMediaModerationSchema(c.env.DB);
+  await ensureLikeUniquenessSchema(c.env.DB);
   const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
   const limit = clampNumber(c.req.query('limit') || '60', 1, 100, 60);
   const owner: any = await c.env.DB.prepare('SELECT id, is_private FROM users WHERE id = ?').bind(targetId).first();
@@ -7486,7 +11731,7 @@ api.get('/users/:userId/posts', authMiddleware, async (c) => {
        (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden')) AS live_comments_count,
        (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id) AS live_saves_count
      FROM posts p JOIN users u ON p.user_id = u.id
-     WHERE p.user_id = ? AND COALESCE(p.status, 'active') != 'removed' AND (
+     WHERE p.user_id = ? AND COALESCE(p.status, 'active') != 'removed' AND ${approvedPostModerationWhere('p')} AND ${feedPhotoPostWhere('p')} AND (
        COALESCE(p.visibility, 'public') = 'public'
        OR p.user_id = ?
        OR (COALESCE(p.visibility, 'public') = 'followers' AND (
@@ -7498,7 +11743,8 @@ api.get('/users/:userId/posts', authMiddleware, async (c) => {
       ORDER BY p.pinned_at IS NULL, p.pinned_at DESC, p.created_at DESC
       LIMIT ? OFFSET ?`
   ).bind(viewerId, viewerId, targetId, viewerId, viewerId, viewerId, viewerId, limit, skip).all();
-  return c.json((posts.results as any[]).map((p) => feedPostPayload(p, [], c.env)));
+  const rows = await overlaySupabaseViewerEngagement(c, feedPhotoPostsOnly(posts.results as any[]), viewerId);
+  return c.json(rows.map((p) => feedPostPayload(p, [], c.env)));
 });
 
 // Comments
@@ -7510,6 +11756,7 @@ api.post('/posts/:postId/comments', authMiddleware, async (c) => {
     await ensureGovernanceSchema(c.env.DB);
     await ensureCommentSchema(c.env.DB);
     await ensureReliabilitySchema(c.env.DB);
+    await ensureMediaModerationSchema(c.env.DB);
     const userId = getUserId(c);
     const limited = await enforceRateLimit(c, 'comment_create', userId, 40, 60);
     if (limited) return limited;
@@ -7525,7 +11772,7 @@ api.post('/posts/:postId/comments', authMiddleware, async (c) => {
 
     const commentVisiblePostSql = [
       'SELECT p.id, p.user_id FROM posts p JOIN users u ON p.user_id = u.id',
-      `WHERE p.id = ? AND ${visiblePostWhere('u', 'p')}`,
+    `WHERE p.id = ? AND ${visiblePostWhere('u', 'p')} AND ${feedPhotoPostWhere('p')}`,
     ].join(' ');
     const visiblePost: any = await c.env.DB.prepare(commentVisiblePostSql).bind(postId, ...visiblePostBindValues(userId)).first();
     if (!visiblePost) return c.json({ detail: 'Post not found' }, 404);
@@ -7572,7 +11819,7 @@ api.post('/posts/:postId/comments', authMiddleware, async (c) => {
       });
     }
     if (!inserted) return c.json({ detail: 'Could not post comment. Please retry.' }, 409);
-    const engagement = await getPostEngagementState(c.env.DB, postId, userId);
+    const engagement = await getCanonicalPostEngagementState(c, postId, userId);
 
     try {
       const notifyUserId = parent?.user_id && parent.user_id !== userId ? parent.user_id : visiblePost.user_id;
@@ -7582,7 +11829,7 @@ api.post('/posts/:postId/comments', authMiddleware, async (c) => {
           type: parentId ? 'comment_reply' : 'comment',
           title: parentId ? 'New Reply' : 'New Comment',
           body: `${user?.full_name || 'Someone'} ${parentId ? 'replied to your comment' : 'commented on your post'}`,
-          data: { post_id: postId, comment_id: id, parent_id: parentId, from_user_id: userId },
+          data: { post_id: postId, comment_id: id, parent_id: parentId, from_user_id: userId, actor_name: user?.full_name || 'Someone' },
           dedupeKey: `comment:${userId}:${postId}:${parentId || 'root'}:${content.slice(0, 80)}`,
           dedupeSeconds: 300,
         });
@@ -7623,6 +11870,7 @@ api.get('/posts/:postId/comments', authMiddleware, async (c) => {
     await ensurePrivacySchema(c.env.DB);
     await ensureGovernanceSchema(c.env.DB);
     await ensureCommentSchema(c.env.DB);
+    await ensureLikeUniquenessSchema(c.env.DB);
     const userId = getUserId(c);
     const limit = clampNumber(c.req.query('limit') || '80', 1, 100, 80);
     const commentsSql = [
@@ -7634,7 +11882,7 @@ api.get('/posts/:postId/comments', authMiddleware, async (c) => {
        JOIN users owner ON p.user_id = owner.id
        JOIN users u ON c.user_id = u.id
        LEFT JOIN comment_likes cl ON cl.comment_id = c.id AND cl.user_id = ?
-       WHERE c.post_id = ? AND COALESCE(c.status, 'active') NOT IN ('removed', 'hidden')`,
+       WHERE c.post_id = ? AND COALESCE(c.status, 'active') NOT IN ('removed', 'hidden') AND ${visibleAuthorWhere('u')}`,
       `AND ${visiblePostWhere('owner', 'p')}`,
       'ORDER BY c.pinned_at IS NULL, c.pinned_at DESC, COALESCE(c.parent_id, c.id), c.parent_id IS NOT NULL, c.created_at ASC',
       'LIMIT ?',
@@ -7685,28 +11933,26 @@ api.post('/comments/:commentId/like', authMiddleware, async (c) => {
       nextLiked = !existing;
     }
 
-    let likesCount = 0;
     if (nextLiked) {
-      const results = await c.env.DB.batch([
-        c.env.DB.prepare('INSERT OR IGNORE INTO comment_likes (id, user_id, comment_id) VALUES (?, ?, ?)')
-          .bind(uuid(), userId, commentId),
-        c.env.DB.prepare('UPDATE comments SET likes_count = COALESCE(likes_count, 0) + 1 WHERE id = ? AND changes() > 0')
-          .bind(commentId),
-        c.env.DB.prepare('SELECT likes_count FROM comments WHERE id = ?').bind(commentId),
-      ]);
-      likesCount = Number((results?.[2] as any)?.results?.[0]?.likes_count || 0);
+      await c.env.DB.prepare('INSERT OR IGNORE INTO comment_likes (id, user_id, comment_id) VALUES (?, ?, ?)')
+        .bind(uuid(), userId, commentId)
+        .run();
     } else {
-      const results = await c.env.DB.batch([
-        c.env.DB.prepare('DELETE FROM comment_likes WHERE user_id = ? AND comment_id = ?')
-          .bind(userId, commentId),
-        c.env.DB.prepare('UPDATE comments SET likes_count = MAX(0, COALESCE(likes_count, 0) - 1) WHERE id = ? AND changes() > 0')
-          .bind(commentId),
-        c.env.DB.prepare('SELECT likes_count FROM comments WHERE id = ?').bind(commentId),
-      ]);
-      likesCount = Number((results?.[2] as any)?.results?.[0]?.likes_count || 0);
+      await c.env.DB.prepare('DELETE FROM comment_likes WHERE user_id = ? AND comment_id = ?')
+        .bind(userId, commentId)
+        .run();
     }
 
-    return c.json({ liked: !!nextLiked, likes_count: likesCount });
+    const likeRow: any = await c.env.DB.prepare(
+      `SELECT COUNT(*) AS likes_count,
+        EXISTS (SELECT 1 FROM comment_likes WHERE user_id = ? AND comment_id = ?) AS liked
+       FROM comment_likes WHERE comment_id = ?`
+    ).bind(userId, commentId, commentId).first();
+    const likesCount = Math.max(0, Number(likeRow?.likes_count || 0));
+    const liked = likeRow?.liked === true || likeRow?.liked === 1 || likeRow?.liked === '1';
+    await c.env.DB.prepare('UPDATE comments SET likes_count = ? WHERE id = ?').bind(likesCount, commentId).run();
+
+    return c.json({ liked, likes_count: likesCount });
   } catch (error: any) {
     console.error('Comment like failed:', getErrorCode(error), error?.message || error);
     return c.json({ detail: 'Could not update comment like.' }, 500);
@@ -7819,7 +12065,17 @@ function groupStatusRows(rows: any[], viewerId: string) {
         has_unviewed: false,
       });
     }
-    const parsed = { ...s, viewed_by: JSON.parse(s.viewed_by || '[]') };
+    const rawStatusImage = cleanText(s.image || '', 2200);
+    const playableStatusImage = rawStatusImage.startsWith('cfstream:')
+      ? rawStatusImage
+      : isVideoMediaUrl(rawStatusImage) ? streamPlaybackUrl(rawStatusImage) : safeMediaReference(rawStatusImage);
+    const parsed = {
+      ...s,
+      image: playableStatusImage,
+      viewed_by: JSON.parse(s.viewed_by || '[]'),
+      likes_count: Math.max(0, Number(s.likes_count || 0)),
+      liked_by_me: s.liked_by_me === true || s.liked_by_me === 1 || s.liked_by_me === '1',
+    };
     grouped.get(uid)!.statuses.push(parsed);
     if (!parsed.viewed_by.includes(viewerId)) {
       grouped.get(uid)!.has_unviewed = true;
@@ -7828,43 +12084,152 @@ function groupStatusRows(rows: any[], viewerId: string) {
   return Array.from(grouped.values());
 }
 
+function statusThoughtPayload(row: any) {
+  return {
+    id: row.id,
+    status_id: row.status_id,
+    user_id: row.user_id,
+    body: cleanText(row.body, 180),
+    created_at: row.created_at || '',
+    user_username: publicUsernameFor({ username: row.user_username }),
+    user_full_name: cleanText(row.user_full_name, 120),
+    user_profile_image: safeMediaReference(row.user_profile_image),
+  };
+}
+
 api.post('/statuses', authMiddleware, async (c) => {
   const phoneGate = await requirePhoneVerified(c, 'share stories');
   if (phoneGate) return phoneGate;
+  await ensureAudioSchema(c.env.DB);
   const userId = getUserId(c); const b = await c.req.json();
-  const user: any = await c.env.DB.prepare('SELECT username, full_name, profile_image FROM users WHERE id = ?').bind(userId).first();
+  const user: any = await c.env.DB.prepare('SELECT username, full_name, profile_image, city FROM users WHERE id = ?').bind(userId).first();
   const storyLifetimeMs = 7 * 24 * 60 * 60 * 1000;
   const id = uuid(); const expiresAt = new Date(Date.now() + storyLifetimeMs).toISOString();
   const visibility = normalizeVisibility(b.visibility);
-  await c.env.DB.prepare('INSERT INTO statuses (id, user_id, content, image, background_color, text_color, visibility, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-    .bind(id, userId, b.content || '', b.image || null, b.background_color || '#1B4332', b.text_color || '#FFFFFF', visibility, expiresAt).run();
-  return c.json({ id, user_id: userId, content: b.content, image: b.image, background_color: b.background_color, text_color: b.text_color, visibility, user_username: publicUsernameFor(user), user_full_name: user?.full_name, user_profile_image: user?.profile_image, viewed_by: [], created_at: now(), expires_at: expiresAt });
+  const audioProvider = b.audio_provider === 'audius' ? 'audius' : '';
+  const audioTrackId = audioProvider ? cleanText(b.audio_track_id, 80) : '';
+  const audioTitle = audioProvider ? cleanText(b.audio_title, 180) : '';
+  const audioArtist = audioProvider ? cleanText(b.audio_artist, 120) : '';
+  const audioArtworkUrl = audioProvider ? cleanText(b.audio_artwork_url, 1000) : '';
+  const audioStreamUrl = audioProvider ? cleanText(b.audio_stream_url, 2200) : '';
+  const audioStartTime = audioProvider ? clampNumber(b.audio_start_time, 0, 60 * 60 * 6, 0) : 0;
+  const audioDuration = audioProvider ? clampNumber(b.audio_duration, 5, 30, 15) : 0;
+  const storyDurationSeconds = normalizeStoryDurationSeconds(b.duration || b.video_duration || b.video_duration_seconds || b.duration_seconds);
+  const storyMediaType = String(b.media_type || b.mediaType || '').toLowerCase();
+  const storyIsVideo = storyMediaType.includes('video') || isVideoMediaUrl(String(b.image || ''));
+  if (storyIsVideo && !storyDurationSeconds) {
+    return c.json({ detail: 'Story videos must be 15, 30, or 60 seconds.', code: 'STORY_VIDEO_DURATION_REQUIRED' }, 400);
+  }
+  if (audioProvider && !audioTrackId) {
+    return c.json({ detail: 'Audio track id is required.' }, 400);
+  }
+  if (audioProvider) {
+    const hidden = await c.env.DB.prepare("SELECT track_id FROM hidden_sounds WHERE provider = 'audius' AND track_id = ?")
+      .bind(audioTrackId)
+      .first();
+    if (hidden) return c.json({ detail: 'This sound is unavailable.' }, 400);
+  }
+  await c.env.DB.prepare(
+    `INSERT INTO statuses (
+      id, user_id, content, image, background_color, text_color, visibility, expires_at,
+      audio_provider, audio_track_id, audio_title, audio_artist, audio_artwork_url, audio_stream_url,
+      audio_start_time, audio_duration
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  )
+    .bind(
+      id, userId, b.content || '', b.image || null, b.background_color || '#1B4332', b.text_color || '#FFFFFF', visibility, expiresAt,
+      audioProvider, audioTrackId, audioTitle, audioArtist, audioArtworkUrl, audioStreamUrl, audioStartTime, audioDuration
+    ).run();
+  return c.json({
+    id, user_id: userId, content: b.content,
+    image: String(b.image || '').startsWith('cfstream:')
+      ? String(b.image || '')
+      : isVideoMediaUrl(String(b.image || '')) ? streamPlaybackUrl(String(b.image || '')) : safeMediaReference(String(b.image || '')),
+    background_color: b.background_color, text_color: b.text_color,
+    visibility, user_username: publicUsernameFor(user), user_full_name: user?.full_name, user_profile_image: user?.profile_image,
+    audio_provider: audioProvider, audio_track_id: audioTrackId, audio_title: audioTitle, audio_artist: audioArtist,
+    audio_artwork_url: audioArtworkUrl, audio_stream_url: audioStreamUrl, audio_start_time: audioStartTime, audio_duration: audioDuration,
+    viewed_by: [], likes_count: 0, liked_by_me: false, created_at: now(), expires_at: expiresAt,
+  });
 });
 
 api.get('/statuses', authMiddleware, async (c) => {
+  await ensureStatusLikeSchema(c.env.DB);
   const userId = getUserId(c);
   const statusesSql = [
-    'SELECT s.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image',
+    `SELECT s.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
+       (SELECT COUNT(*) FROM status_likes sl_count WHERE sl_count.status_id = s.id) AS likes_count,
+       EXISTS(SELECT 1 FROM status_likes sl WHERE sl.status_id = s.id AND sl.user_id = ?) AS liked_by_me`,
     'FROM statuses s JOIN users u ON s.user_id = u.id',
     `WHERE s.created_at >= datetime('now', '-7 days') AND ${visibleStatusWhere('u', 's')}`,
     'ORDER BY s.created_at DESC',
   ].join(' ');
-  const r = await c.env.DB.prepare(statusesSql).bind(userId, userId).all();
+  const r = await c.env.DB.prepare(statusesSql).bind(userId, userId, userId).all();
   return c.json(groupStatusRows(r.results as any[], userId));
 });
 
 api.get('/statuses/friends', authMiddleware, async (c) => {
+  await ensureStatusLikeSchema(c.env.DB);
   const userId = getUserId(c);
   const r = await c.env.DB.prepare(
-    `SELECT s.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
+    `SELECT s.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
+       (SELECT COUNT(*) FROM status_likes sl_count WHERE sl_count.status_id = s.id) AS likes_count,
+       EXISTS(SELECT 1 FROM status_likes sl WHERE sl.status_id = s.id AND sl.user_id = ?) AS liked_by_me
      FROM statuses s JOIN users u ON s.user_id = u.id
      WHERE s.created_at >= datetime('now', '-7 days')
        AND s.user_id != ?
        AND COALESCE(s.visibility, 'public') != 'private'
        AND EXISTS (SELECT 1 FROM friendships f WHERE f.user_id = ? AND f.friend_id = s.user_id)
      ORDER BY s.created_at DESC`
-  ).bind(userId, userId).all();
+  ).bind(userId, userId, userId).all();
   return c.json(groupStatusRows(r.results as any[], userId));
+});
+
+api.post('/statuses/:statusId/like', authMiddleware, async (c) => {
+  await ensureStatusLikeSchema(c.env.DB);
+  await ensureLikeUniquenessSchema(c.env.DB);
+  const userId = getUserId(c);
+  const limited = await enforceRateLimit(c, 'story_like', userId, 300, 60);
+  if (limited) return limited;
+  const statusId = publicId(c.req.param('statusId'), 120);
+  const body: any = await c.req.json().catch(() => ({}));
+  const requested = optionalBoolean(body.liked ?? body.like ?? body.value);
+
+  const story: any = await c.env.DB.prepare(
+    [
+      'SELECT s.id, s.user_id FROM statuses s JOIN users u ON s.user_id = u.id',
+      `WHERE s.id = ? AND s.created_at >= datetime('now', '-7 days') AND ${visibleStatusWhere('u', 's')}`,
+      'LIMIT 1',
+    ].join(' ')
+  ).bind(statusId, userId, userId).first();
+  if (!story) return c.json({ detail: 'Story not found' }, 404);
+  if (await usersAreBlocked(c.env.DB, userId, story.user_id)) {
+    return c.json({ detail: 'You cannot like this story.' }, 403);
+  }
+
+  const existing: any = await c.env.DB.prepare('SELECT id FROM status_likes WHERE status_id = ? AND user_id = ?')
+    .bind(statusId, userId)
+    .first();
+  const nextLiked = requested ?? !existing;
+  if (nextLiked) {
+    await c.env.DB.prepare('INSERT OR IGNORE INTO status_likes (id, status_id, user_id, created_at) VALUES (?, ?, ?, ?)')
+      .bind(uuid(), statusId, userId, now())
+      .run();
+  } else {
+    await c.env.DB.prepare('DELETE FROM status_likes WHERE status_id = ? AND user_id = ?')
+      .bind(statusId, userId)
+      .run();
+  }
+
+  const row: any = await c.env.DB.prepare(
+    `SELECT COUNT(*) AS likes_count,
+      EXISTS(SELECT 1 FROM status_likes WHERE status_id = ? AND user_id = ?) AS liked_by_me
+     FROM status_likes WHERE status_id = ?`
+  ).bind(statusId, userId, statusId).first();
+  return c.json({
+    liked: row?.liked_by_me === true || row?.liked_by_me === 1 || row?.liked_by_me === '1',
+    likes_count: Math.max(0, Number(row?.likes_count || 0)),
+  });
 });
 
 api.post('/statuses/:statusId/view', authMiddleware, async (c) => {
@@ -7880,6 +12245,76 @@ api.post('/statuses/:statusId/view', authMiddleware, async (c) => {
   return c.json({ viewed: true });
 });
 
+api.get('/statuses/:statusId/thoughts', authMiddleware, async (c) => {
+  await ensureStatusThoughtSchema(c.env.DB);
+  const userId = getUserId(c);
+  const statusId = publicId(c.req.param('statusId'), 120);
+  const limit = clampNumber(c.req.query('limit') || '24', 1, 40, 24);
+  const story: any = await c.env.DB.prepare(
+    [
+      'SELECT s.id FROM statuses s JOIN users u ON s.user_id = u.id',
+      `WHERE s.id = ? AND s.created_at >= datetime('now', '-7 days') AND ${visibleStatusWhere('u', 's')}`,
+      'LIMIT 1',
+    ].join(' ')
+  ).bind(statusId, userId, userId).first();
+  if (!story) return c.json({ detail: 'Story not found' }, 404);
+
+  const rows = await c.env.DB.prepare(
+    `SELECT st.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
+     FROM status_thoughts st
+     JOIN users u ON u.id = st.user_id
+     WHERE st.status_id = ?
+       AND COALESCE(st.status, 'active') = 'active'
+       AND NOT EXISTS (
+         SELECT 1 FROM blocks b
+         WHERE (b.blocker_id = ? AND b.blocked_id = st.user_id)
+            OR (b.blocker_id = st.user_id AND b.blocked_id = ?)
+       )
+     ORDER BY datetime(st.created_at) DESC
+     LIMIT ?`
+  ).bind(statusId, userId, userId, limit).all();
+  return c.json((rows.results as any[]).reverse().map(statusThoughtPayload));
+});
+
+api.post('/statuses/:statusId/thoughts', authMiddleware, async (c) => {
+  await ensureStatusThoughtSchema(c.env.DB);
+  const userId = getUserId(c);
+  const limited = await enforceRateLimit(c, 'story_thought_create', userId, 40, 60);
+  if (limited) return limited;
+  const statusId = publicId(c.req.param('statusId'), 120);
+  const body: any = await c.req.json().catch(() => ({}));
+  const text = cleanText(body.body || body.text || body.thought || '', 180);
+  if (!text) return c.json({ detail: 'Thought is required.' }, 400);
+
+  const story: any = await c.env.DB.prepare(
+    [
+      'SELECT s.id, s.user_id FROM statuses s JOIN users u ON s.user_id = u.id',
+      `WHERE s.id = ? AND s.created_at >= datetime('now', '-7 days') AND ${visibleStatusWhere('u', 's')}`,
+      'LIMIT 1',
+    ].join(' ')
+  ).bind(statusId, userId, userId).first();
+  if (!story) return c.json({ detail: 'Story not found' }, 404);
+  if (await usersAreBlocked(c.env.DB, userId, story.user_id)) {
+    return c.json({ detail: 'You cannot share a thought on this story.' }, 403);
+  }
+
+  const id = uuid();
+  const createdAt = now();
+  await c.env.DB.prepare(
+    `INSERT INTO status_thoughts (id, status_id, user_id, body, status, created_at)
+     VALUES (?, ?, ?, ?, 'active', ?)`
+  ).bind(id, statusId, userId, text, createdAt).run();
+  await logSecurityEvent(c, 'story_thought_created', userId, { status_id: statusId });
+
+  const row: any = await c.env.DB.prepare(
+    `SELECT st.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
+     FROM status_thoughts st
+     JOIN users u ON u.id = st.user_id
+     WHERE st.id = ?`
+  ).bind(id).first();
+  return c.json(statusThoughtPayload(row));
+});
+
 api.delete('/statuses/:statusId', authMiddleware, async (c) => {
   const userId = getUserId(c); const statusId = c.req.param('statusId');
   const story: any = await c.env.DB.prepare('SELECT user_id FROM statuses WHERE id = ?').bind(statusId).first();
@@ -7892,6 +12327,7 @@ api.delete('/statuses/:statusId', authMiddleware, async (c) => {
 
 // Messages (with media support)
 async function requireGroupMember(c: any, groupId: string, userId: string) {
+  await ensureGroupChatSchema(c.env.DB);
   const member = await c.env.DB.prepare('SELECT id FROM group_chat_members WHERE group_id = ? AND user_id = ?')
     .bind(groupId, userId)
     .first();
@@ -7902,6 +12338,7 @@ api.get('/conversations', authMiddleware, async (c) => {
   const userId = getUserId(c);
   await touchUserPresence(c.env.DB, userId);
   await ensureAbuseProtectionSchema(c.env.DB);
+  await ensureGroupChatSchema(c.env.DB);
   const limit = clampNumber(c.req.query('limit') || '60', 1, 100, 60);
   const msgs = await c.env.DB.prepare(`
     WITH ranked_messages AS (
@@ -7938,6 +12375,7 @@ api.get('/conversations', authMiddleware, async (c) => {
     JOIN users u ON m.other_id = u.id
     LEFT JOIN user_presence up ON up.user_id = u.id
     WHERE m.rn = 1
+      AND COALESCE(u.status, 'active') = 'active'
       AND NOT EXISTS (
         SELECT 1 FROM blocks b
         WHERE (b.blocker_id = ? AND b.blocked_id = u.id)
@@ -8087,7 +12525,7 @@ api.post('/messages', authMiddleware, async (c) => {
       type: 'message',
       title: `${senderName} messaged you`,
       body: privatePreview,
-      data: { sender_id: userId, conversation_id: userId, message_id: id },
+      data: { sender_id: userId, conversation_id: userId, message_id: id, actor_name: senderName },
       dedupeKey: `message:${id}`,
       dedupeSeconds: 86400,
     });
@@ -8159,19 +12597,31 @@ api.get('/messages/:userId', authMiddleware, async (c) => {
   if (invalidPeer) return invalidPeer;
   const limit = clampNumber(c.req.query('limit') || '80', 1, 100, 80);
   const before = cleanText(c.req.query('before') || '', 60);
+  const after = cleanText(c.req.query('after') || '', 60);
   await c.env.DB.prepare('UPDATE messages SET is_read = 1 WHERE sender_id = ? AND receiver_id = ? AND is_read = 0').bind(oid, myId).run();
-  const beforeClause = before ? "AND datetime(created_at) < datetime(?)" : '';
-  const binds = before ? [myId, oid, oid, myId, before, limit] : [myId, oid, oid, myId, limit];
-  const directMessagesSql = `
-    SELECT * FROM (
+  const directMessagesSql = after
+    ? `
       SELECT * FROM messages
       WHERE ((sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?))
-        ${beforeClause}
-      ORDER BY created_at DESC
+        AND datetime(created_at) > datetime(?)
+      ORDER BY created_at ASC
       LIMIT ?
-    )
-    ORDER BY created_at ASC
-  `;
+    `
+    : `
+      SELECT * FROM (
+        SELECT * FROM messages
+        WHERE ((sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?))
+          ${before ? "AND datetime(created_at) < datetime(?)" : ''}
+        ORDER BY created_at DESC
+        LIMIT ?
+      )
+      ORDER BY created_at ASC
+    `;
+  const binds = after
+    ? [myId, oid, oid, myId, after, limit]
+    : before
+      ? [myId, oid, oid, myId, before, limit]
+      : [myId, oid, oid, myId, limit];
   const r = await c.env.DB.prepare(directMessagesSql).bind(...binds).all();
   const messages = await Promise.all((r.results as any[]).map((row) => messagePayload(c, row)));
   return c.json(messages);
@@ -8193,8 +12643,9 @@ api.post('/group-chats', authMiddleware, async (c) => {
     ? rawMemberIds.map((id: any) => publicId(id, 120)).filter((id: string) => id && id !== userId)
     : [];
   const uniqueMemberIds = Array.from(new Set(memberIds)).slice(0, 50);
-  if (uniqueMemberIds.length < 2) return c.json({ detail: 'Select at least two people for a group chat.' }, 400);
+  if (uniqueMemberIds.length < 1) return c.json({ detail: 'Select at least one person for a group chat.' }, 400);
   await ensureAbuseProtectionSchema(c.env.DB);
+  await ensureGroupChatSchema(c.env.DB);
   const memberPlaceholders = uniqueMemberIds.map(() => '?').join(', ');
   const existingMembersSql = `SELECT id FROM users WHERE id IN (${memberPlaceholders})`;
   const existingMembers = await c.env.DB.prepare(existingMembersSql)
@@ -8241,6 +12692,7 @@ api.get('/group-chats/:groupId/messages', authMiddleware, async (c) => {
   if (!await requireGroupMember(c, groupId, userId)) return c.json({ detail: 'Group not found' }, 404);
   const limit = clampNumber(c.req.query('limit') || '80', 1, 100, 80);
   const before = cleanText(c.req.query('before') || '', 60);
+  const after = cleanText(c.req.query('after') || '', 60);
 
   const group: any = await c.env.DB.prepare(`
     SELECT g.*, COUNT(m.user_id) AS member_count
@@ -8249,18 +12701,30 @@ api.get('/group-chats/:groupId/messages', authMiddleware, async (c) => {
     WHERE g.id = ?
     GROUP BY g.id
   `).bind(groupId).first();
-  const groupMessagesSql = `
-    SELECT gm.*, u.username, u.full_name, u.profile_image
-    FROM group_messages gm
-    JOIN users u ON u.id = gm.sender_id
-    WHERE gm.group_id = ?
-      ${before ? "AND datetime(gm.created_at) < datetime(?)" : ''}
-    ORDER BY gm.created_at DESC
-    LIMIT ?
-  `;
-  const messages = await c.env.DB.prepare(groupMessagesSql).bind(...(before ? [groupId, before, limit] : [groupId, limit])).all();
+  const groupMessagesSql = after
+    ? `
+      SELECT gm.*, u.username, u.full_name, u.profile_image
+      FROM group_messages gm
+      JOIN users u ON u.id = gm.sender_id
+      WHERE gm.group_id = ?
+        AND datetime(gm.created_at) > datetime(?)
+      ORDER BY gm.created_at ASC
+      LIMIT ?
+    `
+    : `
+      SELECT gm.*, u.username, u.full_name, u.profile_image
+      FROM group_messages gm
+      JOIN users u ON u.id = gm.sender_id
+      WHERE gm.group_id = ?
+        ${before ? "AND datetime(gm.created_at) < datetime(?)" : ''}
+      ORDER BY gm.created_at DESC
+      LIMIT ?
+    `;
+  const binds = after ? [groupId, after, limit] : before ? [groupId, before, limit] : [groupId, limit];
+  const messages = await c.env.DB.prepare(groupMessagesSql).bind(...binds).all();
 
-  const signedMessages = await Promise.all([...(messages.results as any[])].reverse().map((row) => messagePayload(c, row)));
+  const rows = after ? (messages.results as any[]) : [...(messages.results as any[])].reverse();
+  const signedMessages = await Promise.all(rows.map((row) => messagePayload(c, row)));
   return c.json({ group, messages: signedMessages });
 });
 
@@ -8671,31 +13135,38 @@ api.post('/client/events', async (c) => {
 
 // Library
 api.get('/library/liked', authMiddleware, async (c) => {
+  await ensureLikeUniquenessSchema(c.env.DB);
   const userId = getUserId(c);
+  const relatedUserIds = await relatedInteractionUserIds(c.env.DB, userId);
+  const relatedPlaceholders = inPlaceholders(relatedUserIds);
   const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
   const limit = clampNumber(c.req.query('limit') || '40', 1, 80, 40);
   const likedLibrarySql = [
     `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
        1 AS is_liked,
-       EXISTS (SELECT 1 FROM saved_posts sp WHERE sp.user_id = ? AND sp.post_id = p.id) AS saved,
+       EXISTS (SELECT 1 FROM saved_posts sp WHERE sp.post_id = p.id AND sp.user_id IN (${relatedPlaceholders})) AS saved,
        (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
        (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden')) AS live_comments_count,
        (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id) AS live_saves_count
      FROM likes l JOIN posts p ON l.post_id = p.id JOIN users u ON p.user_id = u.id`,
-    `WHERE l.user_id = ? AND ${visiblePostWhere('u', 'p')}`,
-    'ORDER BY l.created_at DESC LIMIT ? OFFSET ?',
+    `WHERE l.user_id IN (${relatedPlaceholders}) AND ${visiblePostWhere('u', 'p')} AND ${feedPhotoPostWhere('p')}`,
+    'GROUP BY p.id ORDER BY MAX(l.created_at) DESC LIMIT ? OFFSET ?',
   ].join(' ');
-  const r = await c.env.DB.prepare(likedLibrarySql).bind(userId, userId, ...visiblePostBindValues(userId), limit, skip).all();
-  return c.json((r.results as any[]).map((p) => feedPostPayload(p, [], c.env)));
+  const r = await c.env.DB.prepare(likedLibrarySql).bind(...relatedUserIds, ...relatedUserIds, ...visiblePostBindValues(userId), limit, skip).all();
+  const rows = await overlaySupabaseViewerEngagement(c, feedPhotoPostsOnly(r.results as any[]), userId);
+  return c.json(rows.map((p) => feedPostPayload(p, [], c.env)));
 });
 api.get('/library/saved', authMiddleware, async (c) => {
+  await ensureLikeUniquenessSchema(c.env.DB);
   const userId = getUserId(c);
+  const relatedUserIds = await relatedInteractionUserIds(c.env.DB, userId);
+  const relatedPlaceholders = inPlaceholders(relatedUserIds);
   const collection = c.req.query('collection');
   const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
   const limit = clampNumber(c.req.query('limit') || '40', 1, 80, 40);
   const savedLibraryBaseSql = [
     `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image, sp.collection,
-      EXISTS (SELECT 1 FROM likes lk WHERE lk.user_id = ? AND lk.post_id = p.id) AS is_liked,
+      EXISTS (SELECT 1 FROM likes lk WHERE lk.post_id = p.id AND lk.user_id IN (${relatedPlaceholders})) AS is_liked,
       1 AS saved,
       (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
       (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden')) AS live_comments_count,
@@ -8703,22 +13174,25 @@ api.get('/library/saved', authMiddleware, async (c) => {
     FROM saved_posts sp
     JOIN posts p ON sp.post_id = p.id
     JOIN users u ON p.user_id = u.id`,
-    `WHERE sp.user_id = ? AND ${visiblePostWhere('u', 'p')}`,
+    `WHERE sp.user_id IN (${relatedPlaceholders}) AND ${visiblePostWhere('u', 'p')} AND ${feedPhotoPostWhere('p')}`,
   ];
   let sql = savedLibraryBaseSql.join(' ');
-  const binds: any[] = [userId, userId, ...visiblePostBindValues(userId)];
+  const binds: any[] = [...relatedUserIds, ...relatedUserIds, ...visiblePostBindValues(userId)];
   if (collection) {
     sql += ' AND sp.collection = ?';
     binds.push(collection);
   }
-  sql += ' ORDER BY sp.created_at DESC LIMIT ? OFFSET ?';
+  sql += ' GROUP BY p.id ORDER BY MAX(sp.created_at) DESC LIMIT ? OFFSET ?';
   binds.push(limit, skip);
   const r = await c.env.DB.prepare(sql).bind(...binds).all();
-  return c.json((r.results as any[]).map((p) => feedPostPayload(p, [], c.env)));
+  const rows = await overlaySupabaseViewerEngagement(c, feedPhotoPostsOnly(r.results as any[]), userId);
+  return c.json(rows.map((p) => feedPostPayload(p, [], c.env)));
 });
 api.post('/library/save/:postId', authMiddleware, async (c) => {
   const userId = getUserId(c);
   await ensureGovernanceSchema(c.env.DB);
+  await ensureMediaModerationSchema(c.env.DB);
+  await ensureLikeUniquenessSchema(c.env.DB);
   const limited = await enforceRateLimit(c, 'save_post', userId, 240, 60);
   if (limited) return limited;
   const postId = c.req.param('postId');
@@ -8726,62 +13200,36 @@ api.post('/library/save/:postId', authMiddleware, async (c) => {
   const collection = cleanText((b as any).collection || 'My Library', 80) || 'My Library';
   const saveVisiblePostSql = [
     'SELECT p.id FROM posts p JOIN users u ON p.user_id = u.id',
-    `WHERE p.id = ? AND ${visiblePostWhere('u', 'p')} LIMIT 1`,
+    `WHERE p.id = ? AND ${visiblePostWhere('u', 'p')} AND ${feedPhotoPostWhere('p')} LIMIT 1`,
   ].join(' ');
   const post = await c.env.DB.prepare(saveVisiblePostSql).bind(postId, ...visiblePostBindValues(userId)).first();
   if (!post) return c.json({ detail: 'Post not found' }, 404);
-  const existingSave = await c.env.DB.prepare('SELECT id FROM saved_posts WHERE user_id = ? AND post_id = ?').bind(userId, postId).first();
-  if (existingSave) {
-    await c.env.DB.prepare('UPDATE saved_posts SET collection = ? WHERE user_id = ? AND post_id = ?').bind(collection, userId, postId).run();
-  } else {
-    await c.env.DB.prepare('INSERT INTO saved_posts (id, user_id, post_id, collection) VALUES (?, ?, ?, ?)').bind(uuid(), userId, postId, collection).run();
-  }
-  try {
-    await c.env.DB.prepare('INSERT INTO bookmarks (id, user_id, post_id, collection) VALUES (?, ?, ?, ?) ON CONFLICT(user_id, post_id) DO UPDATE SET collection = ?')
-      .bind(uuid(), userId, postId, collection, collection).run();
-  } catch {}
-  const engagement = await getPostEngagementState(c.env.DB, postId, userId);
-  runBackgroundTask(c, 'supabase_save_write_through_failed', async () => {
-    await mirrorLegacyInteractionToSupabase(c, postId, userId, 'save', true, collection);
-    await mirrorLegacyPostToSupabase(c, postId);
-  });
-  return c.json({
-    saved: engagement.saved,
-    collection,
-    saves_count: engagement.saves_count,
-    liked: engagement.liked,
-    likes_count: engagement.likes_count,
-    comments_count: engagement.comments_count,
-  });
+  const { state: engagement } = await setCanonicalPostSaveState(c, postId, userId, true, collection);
+  return c.json(postEngagementResponse(engagement, { collection }));
 });
 api.delete('/library/save/:postId', authMiddleware, async (c) => {
   const userId = getUserId(c);
   await ensureGovernanceSchema(c.env.DB);
+  await ensureLikeUniquenessSchema(c.env.DB);
   const limited = await enforceRateLimit(c, 'save_post', userId, 240, 60);
   if (limited) return limited;
   const postId = c.req.param('postId');
-  const existingSave = await c.env.DB.prepare('SELECT id FROM saved_posts WHERE user_id = ? AND post_id = ?').bind(userId, postId).first();
-  if (existingSave) {
-    await c.env.DB.prepare('DELETE FROM saved_posts WHERE user_id = ? AND post_id = ?').bind(userId, postId).run();
-  }
-  try { await c.env.DB.prepare('DELETE FROM bookmarks WHERE user_id = ? AND post_id = ?').bind(userId, postId).run(); } catch {}
-  const engagement = await getPostEngagementState(c.env.DB, postId, userId);
-  if (existingSave) {
-    runBackgroundTask(c, 'supabase_unsave_write_through_failed', async () => {
-      await mirrorLegacyInteractionToSupabase(c, postId, userId, 'save', false);
-      await mirrorLegacyPostToSupabase(c, postId);
-    });
-  }
-  return c.json({
-    saved: engagement.saved,
-    unsaved: true,
-    saves_count: engagement.saves_count,
-    liked: engagement.liked,
-    likes_count: engagement.likes_count,
-    comments_count: engagement.comments_count,
-  });
+  const { state: engagement } = await setCanonicalPostSaveState(c, postId, userId, false);
+  return c.json(postEngagementResponse(engagement, { unsaved: true }));
 });
-api.get('/library/collections', authMiddleware, async (c) => { const r = await c.env.DB.prepare('SELECT collection, COUNT(*) as count FROM saved_posts WHERE user_id = ? GROUP BY collection').bind(getUserId(c)).all(); return c.json(r.results); });
+api.get('/library/collections', authMiddleware, async (c) => {
+  await ensureLikeUniquenessSchema(c.env.DB);
+  const userId = getUserId(c);
+  const relatedUserIds = await relatedInteractionUserIds(c.env.DB, userId);
+  const relatedPlaceholders = inPlaceholders(relatedUserIds);
+  const r = await c.env.DB.prepare(
+    `SELECT collection, COUNT(DISTINCT post_id) as count
+     FROM saved_posts
+     WHERE user_id IN (${relatedPlaceholders})
+     GROUP BY collection`
+  ).bind(...relatedUserIds).all();
+  return c.json(r.results);
+});
 
 // Friends
 api.post('/friends/request/:userId', authMiddleware, async (c) => {
@@ -8957,294 +13405,6 @@ api.post('/recommendations/:recommendationId/report', authMiddleware, async (c) 
     if (message.includes('unique constraint')) return c.json({ reported: true });
     console.error('Recommendation report failed:', getErrorCode(error), error?.message || error);
     return c.json({ detail: 'Could not report recommendation.' }, 500);
-  }
-});
-
-// Notes
-api.get('/notes', authMiddleware, async (c) => {
-  try {
-    await ensureNotesSchema(c.env.DB);
-    const userId = getUserId(c);
-    const limit = clampNumber(c.req.query('limit'), 5, 80, 36);
-    const type = normalizeNoteType(c.req.query('type') || '');
-    const rawType = cleanText(c.req.query('type'), 80).toLowerCase();
-    const binds: any[] = [userId, userId];
-    let where = "WHERE COALESCE(n.status, 'active') = 'active'";
-    if (rawType && rawType !== 'all') {
-      where += ' AND n.note_type = ?';
-      binds.push(type);
-    }
-    binds.push(limit);
-    const notesSql = `
-      SELECT n.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
-        EXISTS(SELECT 1 FROM note_interactions i WHERE i.note_id = n.id AND i.user_id = ? AND i.kind = 'reaction') AS reacted,
-        EXISTS(SELECT 1 FROM note_interactions i WHERE i.note_id = n.id AND i.user_id = ? AND i.kind = 'save') AS saved
-      FROM notes n
-      LEFT JOIN users u ON u.id = n.user_id
-      ${where}
-      ORDER BY n.created_at DESC
-      LIMIT ?
-    `;
-    const rows = await c.env.DB.prepare(notesSql).bind(...binds).all();
-    return c.json((rows.results as any[]).map((row) => publicNotePayload(row)));
-  } catch (error: any) {
-    console.error('Notes list failed:', getErrorCode(error), error?.message || error);
-    return c.json({ detail: 'Could not load notes.' }, 500);
-  }
-});
-
-api.get('/notes/:noteId', authMiddleware, async (c) => {
-  try {
-    await ensureNotesSchema(c.env.DB);
-    const userId = getUserId(c);
-    const noteId = cleanText(c.req.param('noteId'), 80);
-    const row: any = await c.env.DB.prepare(`
-      SELECT n.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
-        EXISTS(SELECT 1 FROM note_interactions i WHERE i.note_id = n.id AND i.user_id = ? AND i.kind = 'reaction') AS reacted,
-        EXISTS(SELECT 1 FROM note_interactions i WHERE i.note_id = n.id AND i.user_id = ? AND i.kind = 'save') AS saved
-      FROM notes n
-      LEFT JOIN users u ON u.id = n.user_id
-      WHERE n.id = ? AND COALESCE(n.status, 'active') = 'active'
-    `).bind(userId, userId, noteId).first();
-    if (!row) return c.json({ detail: 'Note not found.' }, 404);
-    return c.json(publicNotePayload(row));
-  } catch (error: any) {
-    console.error('Note detail failed:', getErrorCode(error), error?.message || error);
-    return c.json({ detail: 'Could not load note.' }, 500);
-  }
-});
-
-api.post('/notes', authMiddleware, async (c) => {
-  try {
-    const bodyTooLarge = rejectLargeRequest(c, 80_000);
-    if (bodyTooLarge) return bodyTooLarge;
-    await ensureNotesSchema(c.env.DB);
-    const userId = getUserId(c);
-    const limited = await enforceRateLimit(c, 'note_create', userId, 60, 60);
-    if (limited) return limited;
-    const body: any = await c.req.json().catch(() => ({}));
-    const noteBody = cleanText(body.body || body.text || body.content, 420);
-    const mediaUrl = safeMediaReference(body.media_url || body.image_url || body.image);
-    const mediaType = mediaUrl ? 'image' : '';
-    const moderation = moderateCommunityText(noteBody);
-    if (!moderation.ok) return c.json({ detail: moderation.detail || 'That note cannot be posted.' }, 400);
-    if (noteBody.length < 2 && !mediaUrl) return c.json({ detail: 'Add text or a photo first.' }, 400);
-    const noteType = normalizeNoteType(body.note_type || body.type);
-    const mood = normalizeNoteMood(body.mood || body.color);
-    const color = /^#[0-9a-f]{6}$/i.test(String(body.color || '')) ? String(body.color) : mood.color;
-    const anonymous = normalizeSqlBoolean(body.anonymous);
-    if (anonymous) {
-      await ensurePremiumSchema(c.env.DB);
-      const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
-      if (!userHasActivePremium(user)) {
-        return c.json({ detail: 'Anonymous Notes are a Premium feature.', code: 'PREMIUM_REQUIRED' }, 403);
-      }
-      const usedToday = await getAnonymousNotesUsedToday(c.env.DB, userId);
-      if (usedToday >= 5) {
-        return c.json({ detail: 'You used all 5 anonymous notes for today.', code: 'ANONYMOUS_NOTE_LIMIT' }, 429);
-      }
-    }
-    const ts = now();
-    const id = uuid();
-    await c.env.DB.prepare(
-      `INSERT INTO notes
-       (id, user_id, body, note_type, mood, color, media_url, media_type, anonymous, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`
-    ).bind(id, userId, noteBody, noteType, mood.mood, color, mediaUrl, mediaType, anonymous, ts, ts).run();
-    const row: any = await c.env.DB.prepare(`
-      SELECT n.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
-      FROM notes n LEFT JOIN users u ON u.id = n.user_id WHERE n.id = ?
-    `).bind(id).first();
-    return c.json(publicNotePayload(row), 201);
-  } catch (error: any) {
-    console.error('Note create failed:', getErrorCode(error), error?.message || error);
-    return c.json({ detail: 'Could not create note.' }, 500);
-  }
-});
-
-api.post('/notes/:noteId/interactions', authMiddleware, async (c) => {
-  try {
-    await ensureNotesSchema(c.env.DB);
-    const userId = getUserId(c);
-    const limited = await enforceRateLimit(c, 'note_interaction', userId, 300, 60);
-    if (limited) return limited;
-    const noteId = cleanText(c.req.param('noteId'), 80);
-    const body: any = await c.req.json().catch(() => ({}));
-    const kind = ['reaction', 'save', 'share'].includes(String(body.kind)) ? String(body.kind) : 'reaction';
-    const value = cleanText(body.value || (kind === 'reaction' ? 'heart' : ''), 40);
-    const note: any = await c.env.DB.prepare("SELECT id FROM notes WHERE id = ? AND COALESCE(status, 'active') = 'active'").bind(noteId).first();
-    if (!note) return c.json({ detail: 'Note not found.' }, 404);
-    const existing: any = await c.env.DB.prepare('SELECT id FROM note_interactions WHERE note_id = ? AND user_id = ? AND kind = ?')
-      .bind(noteId, userId, kind)
-      .first();
-    if (existing && kind !== 'share') {
-      await c.env.DB.prepare('DELETE FROM note_interactions WHERE id = ?').bind(existing.id).run();
-      const column = kind === 'save' ? 'saves_count' : 'reactions_count';
-      const decrementNoteSql = `UPDATE notes SET ${column} = MAX(0, COALESCE(${column}, 0) - 1), updated_at = ? WHERE id = ?`;
-      await c.env.DB.prepare(decrementNoteSql).bind(now(), noteId).run();
-      return c.json({ active: false, kind });
-    }
-    if (!existing || kind === 'share') {
-      await c.env.DB.prepare('INSERT OR IGNORE INTO note_interactions (id, note_id, user_id, kind, value, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-        .bind(uuid(), noteId, userId, kind, value, now())
-        .run();
-      const column = kind === 'save' ? 'saves_count' : kind === 'share' ? 'shares_count' : 'reactions_count';
-      const incrementNoteSql = `UPDATE notes SET ${column} = COALESCE(${column}, 0) + 1, updated_at = ? WHERE id = ?`;
-      await c.env.DB.prepare(incrementNoteSql).bind(now(), noteId).run();
-    }
-    return c.json({ active: true, kind });
-  } catch (error: any) {
-    console.error('Note interaction failed:', getErrorCode(error), error?.message || error);
-    return c.json({ detail: 'Could not update note.' }, 500);
-  }
-});
-
-api.get('/notes/:noteId/comments', authMiddleware, async (c) => {
-  try {
-    await ensureNotesSchema(c.env.DB);
-    const noteId = cleanText(c.req.param('noteId'), 80);
-    const rows = await c.env.DB.prepare(`
-      SELECT nc.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
-             EXISTS(SELECT 1 FROM note_comment_likes ncl WHERE ncl.comment_id = nc.id AND ncl.user_id = ?) AS liked_by_me
-      FROM note_comments nc
-      LEFT JOIN users u ON u.id = nc.user_id
-      WHERE nc.note_id = ? AND COALESCE(nc.status, 'active') = 'active'
-      ORDER BY nc.created_at ASC
-      LIMIT 80
-    `).bind(getUserId(c), noteId).all();
-    return c.json((rows.results as any[]).map((comment) => ({
-      id: comment.id,
-      body: comment.body,
-      parent_id: comment.parent_id || '',
-      likes_count: Number(comment.likes_count || 0),
-      liked_by_me: !!comment.liked_by_me,
-      created_at: comment.created_at,
-      user: {
-        id: comment.user_id,
-        username: comment.user_username || '',
-        full_name: comment.user_full_name || '',
-        profile_image: comment.user_profile_image || '',
-      },
-    })));
-  } catch (error: any) {
-    console.error('Note comments failed:', getErrorCode(error), error?.message || error);
-    return c.json({ detail: 'Could not load note comments.' }, 500);
-  }
-});
-
-api.post('/notes/:noteId/comments', authMiddleware, async (c) => {
-  try {
-    const bodyTooLarge = rejectLargeRequest(c, 80_000);
-    if (bodyTooLarge) return bodyTooLarge;
-    await ensureNotesSchema(c.env.DB);
-    const userId = getUserId(c);
-    const limited = await enforceRateLimit(c, 'note_comment', userId, 90, 60);
-    if (limited) return limited;
-    const noteId = cleanText(c.req.param('noteId'), 80);
-    const body: any = await c.req.json().catch(() => ({}));
-    const commentBody = cleanText(body.body || body.text, 500);
-    const moderation = moderateCommunityText(commentBody);
-    if (!moderation.ok) return c.json({ detail: moderation.detail || 'That comment cannot be posted.' }, 400);
-    const note: any = await c.env.DB.prepare("SELECT id FROM notes WHERE id = ? AND COALESCE(status, 'active') = 'active'").bind(noteId).first();
-    if (!note) return c.json({ detail: 'Note not found.' }, 404);
-    const ts = now();
-    const id = uuid();
-    await c.env.DB.prepare('INSERT INTO note_comments (id, note_id, user_id, parent_id, body, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-      .bind(id, noteId, userId, cleanText(body.parent_id, 80), commentBody, 'active', ts, ts)
-      .run();
-    await c.env.DB.prepare('UPDATE notes SET comments_count = COALESCE(comments_count, 0) + 1, updated_at = ? WHERE id = ?').bind(ts, noteId).run();
-    return c.json({ id, body: commentBody, created_at: ts }, 201);
-  } catch (error: any) {
-    console.error('Note comment create failed:', getErrorCode(error), error?.message || error);
-    return c.json({ detail: 'Could not add comment.' }, 500);
-  }
-});
-
-api.post('/note-comments/:commentId/like', authMiddleware, async (c) => {
-  try {
-    await ensureNotesSchema(c.env.DB);
-    const userId = getUserId(c);
-    const limited = await enforceRateLimit(c, 'note_comment_like', userId, 300, 60);
-    if (limited) return limited;
-    const commentId = cleanText(c.req.param('commentId'), 80);
-    const body: any = await c.req.json().catch(() => ({}));
-    const requested = optionalBoolean(body.liked ?? body.like ?? body.value);
-    const comment: any = await c.env.DB.prepare(
-      "SELECT id, likes_count FROM note_comments WHERE id = ? AND COALESCE(status, 'active') = 'active'"
-    ).bind(commentId).first();
-    if (!comment) return c.json({ detail: 'Comment not found.' }, 404);
-
-    let nextLiked = requested;
-    if (nextLiked === null) {
-      const existing: any = await c.env.DB.prepare('SELECT id FROM note_comment_likes WHERE user_id = ? AND comment_id = ?')
-        .bind(userId, commentId)
-        .first();
-      nextLiked = !existing;
-    }
-
-    const ts = now();
-    if (nextLiked) {
-      const inserted = await c.env.DB.prepare('INSERT OR IGNORE INTO note_comment_likes (id, comment_id, user_id, created_at) VALUES (?, ?, ?, ?)')
-        .bind(uuid(), commentId, userId, ts)
-        .run();
-      if (d1Changes(inserted) > 0) {
-        await c.env.DB.prepare('UPDATE note_comments SET likes_count = COALESCE(likes_count, 0) + 1, updated_at = ? WHERE id = ?')
-          .bind(ts, commentId)
-          .run();
-      }
-    } else {
-      const deleted = await c.env.DB.prepare('DELETE FROM note_comment_likes WHERE user_id = ? AND comment_id = ?')
-        .bind(userId, commentId)
-        .run();
-      if (d1Changes(deleted) > 0) {
-        await c.env.DB.prepare('UPDATE note_comments SET likes_count = MAX(0, COALESCE(likes_count, 0) - 1), updated_at = ? WHERE id = ?')
-          .bind(ts, commentId)
-          .run();
-      }
-    }
-
-    const row: any = await c.env.DB.prepare('SELECT likes_count FROM note_comments WHERE id = ?').bind(commentId).first();
-    return c.json({ liked: !!nextLiked, likes_count: Number(row?.likes_count || 0) });
-  } catch (error: any) {
-    console.error('Note comment like failed:', getErrorCode(error), error?.message || error);
-    return c.json({ detail: 'Could not update comment like.' }, 500);
-  }
-});
-
-api.post('/notes/:noteId/report', authMiddleware, async (c) => {
-  try {
-    await ensureNotesSchema(c.env.DB);
-    await ensureGovernanceSchema(c.env.DB);
-    const userId = getUserId(c);
-    const limited = await enforceRateLimit(c, 'note_report', userId, 12, 60);
-    if (limited) return limited;
-    const noteId = cleanText(c.req.param('noteId'), 80);
-    const body: any = await c.req.json().catch(() => ({}));
-    const note: any = await c.env.DB.prepare('SELECT id, user_id FROM notes WHERE id = ?').bind(noteId).first();
-    if (!note) return c.json({ detail: 'Note not found.' }, 404);
-    if (note.user_id === userId) return c.json({ detail: 'You cannot report your own note.' }, 400);
-    const ts = now();
-    const reason = normalizeReportReason(body.reason || 'other');
-    const details = cleanMultilineText(body.details || '', 1000);
-    const reportResults = await c.env.DB.batch([
-      c.env.DB.prepare('INSERT OR IGNORE INTO note_reports (id, note_id, reporter_id, reason, details, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-        .bind(uuid(), noteId, userId, reason, details, ts),
-      c.env.DB.prepare('UPDATE notes SET reports_count = COALESCE(reports_count, 0) + 1, updated_at = ? WHERE id = ? AND changes() > 0')
-        .bind(ts, noteId),
-    ]);
-    if (d1Changes(reportResults?.[0]) > 0) {
-      await c.env.DB.prepare(
-        `INSERT INTO reports
-         (id, reporter_id, reported_id, report_type, reported_type, reason, details, content_id, status, created_at, updated_at)
-         VALUES (?, ?, ?, 'note', 'note', ?, ?, ?, 'pending', ?, ?)`
-      ).bind(uuid(), userId, note.user_id, reason, details, noteId, ts, ts).run();
-    }
-    return c.json({ reported: true });
-  } catch (error: any) {
-    const message = String(error?.message || '').toLowerCase();
-    if (message.includes('unique constraint')) return c.json({ reported: true });
-    console.error('Note report failed:', getErrorCode(error), error?.message || error);
-    return c.json({ detail: 'Could not report note.' }, 500);
   }
 });
 
@@ -9505,20 +13665,74 @@ api.post('/people/:profileId/report', authMiddleware, async (c) => {
 });
 
 // Discover
-api.get('/discover/trending', authMiddleware, async (c) => {
+api.get('/discover', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const limited = await enforceRateLimit(c, 'discover_category_read', userId, 180, 60);
+  if (limited) return limited;
   await ensurePrivacySchema(c.env.DB);
   await ensureGovernanceSchema(c.env.DB);
   await ensurePostEditorSchema(c.env.DB);
+  await ensureLocationSchema(c.env.DB);
+  await ensureAutoCategorySchema(c.env.DB);
+  await ensureMediaModerationSchema(c.env.DB);
+  await ensureLikeUniquenessSchema(c.env.DB);
+  const relatedUserIds = await relatedInteractionUserIds(c.env.DB, userId);
+  const relatedPlaceholders = inPlaceholders(relatedUserIds);
+  const rawCategory = c.req.query('category') || 'all';
+  const category = normalizeDiscoverCategory(rawCategory, true);
+  if (!category) return c.json({ detail: 'Unknown Discover category.' }, 400);
+  const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
+  const limit = clampNumber(c.req.query('limit') || '36', 1, 60, 36);
+  const conditions = [
+    visiblePostWhere('u', 'p'),
+    "COALESCE(p.discover_blocked_at, '') = ''",
+    feedPhotoPostWhere('p'),
+  ];
+  const binds: any[] = [userId, ...relatedUserIds, ...relatedUserIds, ...visiblePostBindValues(userId)];
+  if (category !== 'all') {
+    const categoryMatch = discoverCategoryCondition('p', category);
+    conditions.push(categoryMatch.sql);
+    binds.push(...categoryMatch.binds);
+  }
+  const sql = [
+    `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
+       EXISTS (SELECT 1 FROM follows fl WHERE fl.follower_id = ? AND fl.following_id = p.user_id) AS is_following,
+       EXISTS (SELECT 1 FROM likes lk WHERE lk.post_id = p.id AND lk.user_id IN (${relatedPlaceholders})) AS is_liked,
+       EXISTS (SELECT 1 FROM saved_posts sp WHERE sp.post_id = p.id AND sp.user_id IN (${relatedPlaceholders})) AS saved,
+       (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
+       MAX(COALESCE(p.comments_count, 0), (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden'))) AS live_comments_count,
+       MAX(COALESCE(p.saves_count, 0), (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id)) AS live_saves_count
+     FROM posts p JOIN users u ON p.user_id = u.id`,
+    `WHERE ${conditions.join(' AND ')}`,
+    'ORDER BY p.created_at DESC LIMIT ? OFFSET ?',
+  ].join(' ');
+  const rows = await c.env.DB.prepare(sql).bind(...binds, limit, skip).all();
+  const discoverRows = await overlaySupabaseViewerEngagement(c, feedPhotoPostsOnly(rows.results as any[]), userId);
+  const response = c.json(discoverRows.map((post) => feedPostPayload(post, [], c.env)));
+  response.headers.set('cache-control', 'private, max-age=8');
+  return response;
+});
+
+api.get('/discover/trending', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+    await ensurePrivacySchema(c.env.DB);
+    await ensureGovernanceSchema(c.env.DB);
+    await ensurePostEditorSchema(c.env.DB);
+    await ensureLocationSchema(c.env.DB);
+    await ensureMediaModerationSchema(c.env.DB);
   const limit = clampNumber(c.req.query('limit') || '20', 1, 40, 20);
   const discoverTrendingSql = [
-    'SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image',
+    `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
+       (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
+       MAX(COALESCE(p.comments_count, 0), (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden'))) AS live_comments_count,
+       MAX(COALESCE(p.saves_count, 0), (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id)) AS live_saves_count`,
     'FROM posts p JOIN users u ON p.user_id = u.id',
-    `WHERE ${visiblePostWhere('u', 'p')}`,
+    `WHERE ${visiblePostWhere('u', 'p')} AND ${feedPhotoPostWhere('p')}`,
     'ORDER BY p.likes_count DESC, p.created_at DESC LIMIT ?',
   ].join(' ');
   const r = await c.env.DB.prepare(discoverTrendingSql).bind(...visiblePostBindValues(userId), limit).all();
-  return c.json((r.results as any[]).map((p) => feedPostPayload(p, [], c.env)));
+  const rows = await overlaySupabaseViewerEngagement(c, feedPhotoPostsOnly(r.results as any[]), userId);
+  return c.json(rows.map((p) => feedPostPayload(p, [], c.env)));
 });
 api.get('/discover/search', authMiddleware, async (c) => {
   const userId = getUserId(c);
@@ -9527,56 +13741,365 @@ api.get('/discover/search', authMiddleware, async (c) => {
   await ensurePrivacySchema(c.env.DB);
   await ensureGovernanceSchema(c.env.DB);
   await ensurePostEditorSchema(c.env.DB);
+  await ensureLocationSchema(c.env.DB);
+  await ensureMediaModerationSchema(c.env.DB);
   const q = cleanText(c.req.query('q'), 80);
   if (q.length < 2) return c.json({ posts: [], users: [] });
   const limit = clampNumber(c.req.query('limit') || '20', 1, 30, 20);
   const discoverSearchSql = [
-    'SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image',
+    `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
+       (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
+       MAX(COALESCE(p.comments_count, 0), (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden'))) AS live_comments_count,
+       MAX(COALESCE(p.saves_count, 0), (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id)) AS live_saves_count`,
     'FROM posts p JOIN users u ON p.user_id = u.id',
-    `WHERE p.content LIKE ? AND ${visiblePostWhere('u', 'p')}`,
+    `WHERE p.content LIKE ? AND ${visiblePostWhere('u', 'p')} AND ${feedPhotoPostWhere('p')}`,
     'LIMIT ?',
   ].join(' ');
   const posts = await c.env.DB.prepare(discoverSearchSql).bind(`%${q}%`, ...visiblePostBindValues(userId), limit).all();
-  const users = await c.env.DB.prepare('SELECT id, username, full_name, profile_image, bio, is_private FROM users WHERE username LIKE ? OR full_name LIKE ? LIMIT 10').bind(`%${q}%`, `%${q}%`).all();
-  return c.json({ posts: (posts.results as any[]).map((p) => feedPostPayload(p, [], c.env)), users: (users.results as any[]).map((user) => safeUserPayload(user)) });
+  const users = await c.env.DB.prepare(
+    "SELECT id, username, full_name, profile_image, bio, is_private FROM users WHERE COALESCE(status, 'active') = 'active' AND (username LIKE ? OR full_name LIKE ?) LIMIT 10"
+  ).bind(`%${q}%`, `%${q}%`).all();
+  return c.json({ posts: feedPhotoPostsOnly(posts.results as any[]).map((p) => feedPostPayload(p, [], c.env)), users: (users.results as any[]).map((user) => safeUserPayload(user)) });
 });
 api.get('/discover/suggested-users', authMiddleware, async (c) => {
   const userId = getUserId(c);
   const limited = await enforceRateLimit(c, 'suggested_users_read', userId, 120, 60);
   if (limited) return limited;
-  const r = await c.env.DB.prepare('SELECT id, username, full_name, profile_image, bio, followers_count FROM users WHERE id != ? ORDER BY followers_count DESC LIMIT 10').bind(userId).all();
+  const r = await c.env.DB.prepare(
+    "SELECT id, username, full_name, profile_image, bio, followers_count FROM users WHERE id != ? AND COALESCE(status, 'active') = 'active' ORDER BY followers_count DESC LIMIT 10"
+  ).bind(userId).all();
   return c.json((r.results as any[]).map((user) => safeUserPayload(user)));
+});
+
+// Pre-publish media moderation upload flow.
+api.post('/media/upload-intent', authMiddleware, async (c) => {
+  const bodyTooLarge = rejectLargeRequest(c, 24_000);
+  if (bodyTooLarge) return bodyTooLarge;
+  await ensureMediaModerationSchema(c.env.DB);
+  const userId = getUserId(c);
+  const limited = await enforceRateLimit(c, 'media_upload_intent', userId, 80, 60);
+  if (limited) return limited;
+  const dailyLimited = await enforceRateLimit(c, 'media_upload_intent_daily', userId, 300, 86400);
+  if (dailyLimited) return dailyLimited;
+
+  const body: any = await c.req.json().catch(() => ({}));
+  const validation = validatePrePublishUploadInput(c.env, body);
+  if (!validation.ok) return c.json({ detail: validation.detail, code: validation.code }, validation.status as any);
+
+  const accountId = cloudflareAccountId(c.env);
+  const token = validation.mediaType === 'video' ? cloudflareStreamToken(c.env) : cloudflareImagesToken(c.env);
+  if (!accountId || !token) {
+    return c.json({ detail: validation.mediaType === 'video' ? 'Video upload is not configured.' : 'Image upload is not configured.' }, 503);
+  }
+
+  const sha256Hash = cleanText(body.sha256_hash || body.sha256Hash, 80).toLowerCase();
+  if (sha256Hash && !/^[a-f0-9]{64}$/.test(sha256Hash)) {
+    return c.json({ detail: 'Invalid upload checksum.', code: 'invalid_checksum' }, 400);
+  }
+  if (sha256Hash) {
+    const duplicate: any = await c.env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM media_assets WHERE user_id = ? AND sha256_hash = ? AND created_at > datetime('now', '-24 hours')"
+    ).bind(userId, sha256Hash).first();
+    if (Number(duplicate?.count || 0) >= 12) {
+      return c.json({ detail: 'Upload limit reached for this file. Try again later.', code: 'duplicate_upload_limit' }, 429);
+    }
+  }
+
+  let uploadUrl = '';
+  let storageKey = '';
+  let storageProvider: 'images' | 'stream' = 'images';
+  if (validation.mediaType === 'image') {
+    const requireSignedURLs = cloudflareImagesRequireSignedUrls(c.env);
+    const formData = new FormData();
+    formData.append('requireSignedURLs', String(requireSignedURLs));
+    formData.append('metadata', JSON.stringify({
+      userId,
+      filename: validation.filename,
+      mimeType: validation.mimeType,
+      moderation: 'pre_publish',
+      source: 'captro_ios',
+    }));
+    const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/images/v2/direct_upload`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: formData,
+    });
+    const data: any = await res.json().catch(() => ({}));
+    if (!data.success) {
+      console.warn(JSON.stringify({ event: 'cf_images_upload_intent_failed', status: res.status, code: cleanText(data.errors?.[0]?.code, 80) }));
+      return c.json({ detail: 'Could not prepare image upload.', code: 'upload_intent_failed' }, 502);
+    }
+    uploadUrl = String(data.result?.uploadURL || '');
+    storageKey = cleanText(data.result?.id, 220);
+    storageProvider = 'images';
+  } else {
+    const maxDurationSeconds = clampNumber(body.duration_seconds || body.durationSeconds || 60, 1, 60, 60);
+    const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/direct_upload`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        maxDurationSeconds,
+        creator: userId,
+        requireSignedURLs: true,
+        meta: { userId, moderation: 'pre_publish', filename: validation.filename },
+      }),
+    });
+    const data: any = await res.json().catch(() => ({}));
+    if (!data.success) {
+      console.warn(JSON.stringify({ event: 'cf_stream_upload_intent_failed', status: res.status, code: cleanText(data.errors?.[0]?.code, 80) }));
+      return c.json({ detail: 'Could not prepare video upload.', code: 'upload_intent_failed' }, 502);
+    }
+    uploadUrl = String(data.result?.uploadURL || '');
+    storageKey = cleanText(data.result?.uid, 220);
+    storageProvider = 'stream';
+  }
+
+  if (!uploadUrl || !storageKey) return c.json({ detail: 'Could not prepare upload.', code: 'upload_intent_failed' }, 502);
+  const mediaId = uuid();
+  const ts = now();
+  await c.env.DB.prepare(
+    `INSERT INTO media_assets (
+       id, user_id, media_type, storage_provider, storage_key, public_url, private_url,
+       mime_type, file_size, sha256_hash, width, height, duration_seconds,
+       upload_status, moderation_status, created_at, updated_at
+     ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, 'uploading', 'uploading', ?, ?)`
+  ).bind(
+    mediaId,
+    userId,
+    validation.mediaType,
+    storageProvider,
+    storageKey,
+    `${storageProvider}:${storageKey}`,
+    validation.mimeType,
+    validation.fileSize,
+    sha256Hash,
+    body.width == null ? null : clampNumber(body.width, 1, 10000, 0),
+    body.height == null ? null : clampNumber(body.height, 1, 10000, 0),
+    body.duration_seconds == null && body.durationSeconds == null ? null : clampFloat(body.duration_seconds ?? body.durationSeconds, 0, 3600, 0),
+    ts,
+    ts,
+  ).run();
+  await insertModerationEvent(c.env.DB, mediaId, 'upload_intent_created', {
+    actorUserId: userId,
+    reason: validation.mediaType,
+    afterState: { storage_provider: storageProvider, mime_type: validation.mimeType, file_size: validation.fileSize },
+    requestId: c.get?.('requestId') || '',
+  });
+  return c.json({
+    media_id: mediaId,
+    upload_url: uploadUrl,
+    upload_method: storageProvider === 'stream' ? 'cloudflare_stream_direct' : 'cloudflare_images_direct',
+    storage_provider: storageProvider,
+    media_type: validation.mediaType,
+    upload_status: 'uploading',
+    moderation_status: 'uploading',
+  }, 201);
+});
+
+api.post('/media/complete', authMiddleware, async (c) => {
+  const bodyTooLarge = rejectLargeRequest(c, 32_000);
+  if (bodyTooLarge) return bodyTooLarge;
+  await ensureMediaModerationSchema(c.env.DB);
+  const userId = getUserId(c);
+  const limited = await enforceRateLimit(c, 'media_upload_complete', userId, 120, 60);
+  if (limited) return limited;
+  const body: any = await c.req.json().catch(() => ({}));
+  const mediaId = publicId(body.media_id || body.mediaId || body.id, 160);
+  if (!mediaId) return c.json({ detail: 'Media id is required.', code: 'media_id_required' }, 400);
+
+  const asset: any = await c.env.DB.prepare('SELECT * FROM media_assets WHERE id = ? AND user_id = ? LIMIT 1').bind(mediaId, userId).first();
+  if (!asset) return c.json({ detail: 'Upload not found.', code: 'media_not_found' }, 404);
+  const currentStatus = normalizeMediaModerationStatus(asset.moderation_status);
+  if (currentStatus === 'approved' || currentStatus === 'review_required' || currentStatus === 'rejected') {
+    const currentPublicUrl = currentStatus === 'approved'
+      ? (safeMediaReference(asset.public_url) || mediaAssetPublicUrl(c.env, asset))
+      : '';
+    return c.json({
+      media_id: mediaId,
+      upload_status: cleanText(asset.upload_status, 40),
+      moderation_status: currentStatus,
+      public_url: currentPublicUrl,
+      rejection_code: cleanText(asset.rejection_code || '', 80),
+      rejection_message: cleanText(asset.rejection_message || '', 240),
+    });
+  }
+
+  const sha256Hash = cleanText(body.sha256_hash || body.sha256Hash || asset.sha256_hash, 80).toLowerCase();
+  if (sha256Hash && !/^[a-f0-9]{64}$/.test(sha256Hash)) return c.json({ detail: 'Invalid upload checksum.', code: 'invalid_checksum' }, 400);
+  const ts = now();
+  await c.env.DB.prepare(
+    `UPDATE media_assets
+     SET upload_status = 'uploaded', moderation_status = 'pending_moderation',
+         sha256_hash = COALESCE(NULLIF(?, ''), sha256_hash),
+         file_size = COALESCE(NULLIF(?, 0), file_size),
+         width = COALESCE(?, width),
+         height = COALESCE(?, height),
+         duration_seconds = COALESCE(?, duration_seconds),
+         updated_at = ?
+     WHERE id = ? AND user_id = ?`
+  ).bind(
+    sha256Hash,
+    Math.max(0, Math.round(Number(body.file_size || body.fileSize || 0))),
+    body.width == null ? null : clampNumber(body.width, 1, 10000, 0),
+    body.height == null ? null : clampNumber(body.height, 1, 10000, 0),
+    body.duration_seconds == null && body.durationSeconds == null ? null : clampFloat(body.duration_seconds ?? body.durationSeconds, 0, 3600, 0),
+    ts,
+    mediaId,
+    userId,
+  ).run();
+  await insertModerationEvent(c.env.DB, mediaId, 'upload_completed', {
+    actorUserId: userId,
+    beforeState: { upload_status: asset.upload_status, moderation_status: asset.moderation_status },
+    afterState: { upload_status: 'uploaded', moderation_status: 'pending_moderation' },
+    requestId: c.get?.('requestId') || '',
+  });
+  const moderationCaption = cleanMultilineText(body.caption || body.content || body.title || '', 1000);
+  const jobId = await createMediaModerationJob(c, mediaId, userId, moderationCaption, { enqueue: false });
+  try {
+    await processMediaModerationJob(c.env, { jobId, mediaId, userId, reason: 'upload_complete', caption: moderationCaption }, c.get?.('requestId') || '');
+  } catch (error: any) {
+    console.warn(JSON.stringify({
+      event: 'media_moderation_complete_inline_failed',
+      code: getErrorCode(error).slice(0, 180),
+      media_id: mediaId,
+    }));
+  }
+  const latest: any = await c.env.DB.prepare(
+    'SELECT id, media_type, storage_provider, storage_key, private_url, upload_status, moderation_status, rejection_code, rejection_message, public_url FROM media_assets WHERE id = ? AND user_id = ? LIMIT 1'
+  ).bind(mediaId, userId).first();
+  const latestStatus = normalizeMediaModerationStatus(latest?.moderation_status);
+  const latestUploadStatus = cleanText(latest?.upload_status, 40) || 'uploaded';
+  const latestPublicUrl = latestStatus === 'approved'
+    ? (safeMediaReference(latest?.public_url) || mediaAssetPublicUrl(c.env, latest))
+    : '';
+  const latestMessage = latestStatus === 'approved'
+    ? ''
+    : latestStatus === 'review_required'
+      ? 'This upload needs a quick safety review before it can be posted.'
+      : latestStatus === 'rejected'
+        ? "This upload can't be posted because it may break Captro's safety rules."
+        : latestStatus === 'failed'
+          ? (cleanText(latest?.rejection_message, 240) || 'This upload could not be checked. Please try again.')
+          : 'Checking your upload before posting...';
+  return c.json({
+    media_id: mediaId,
+    job_id: jobId,
+    upload_status: latestUploadStatus,
+    moderation_status: latestStatus,
+    public_url: latestPublicUrl,
+    rejection_code: cleanText(latest?.rejection_code || '', 80),
+    rejection_message: cleanText(latest?.rejection_message || '', 240),
+    message: latestMessage,
+  });
+});
+
+api.get('/media/:mediaId/status', authMiddleware, async (c) => {
+  await ensureMediaModerationSchema(c.env.DB);
+  const userId = getUserId(c);
+  const mediaId = publicId(c.req.param('mediaId'), 160);
+  const asset: any = await c.env.DB.prepare(
+    'SELECT id, media_type, storage_provider, storage_key, private_url, upload_status, moderation_status, rejection_code, rejection_message, public_url, created_at, updated_at FROM media_assets WHERE id = ? AND user_id = ? LIMIT 1'
+  ).bind(mediaId, userId).first();
+  if (!asset) return c.json({ detail: 'Upload not found.' }, 404);
+  return c.json({
+    ...asset,
+    public_url: normalizeMediaModerationStatus(asset.moderation_status) === 'approved'
+      ? (safeMediaReference(asset.public_url) || mediaAssetPublicUrl(c.env, asset))
+      : '',
+  });
 });
 
 // Uploads (Cloudflare Images + Stream direct upload)
 api.post('/upload/image-direct', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  await ensureMediaModerationSchema(c.env.DB);
   const limited = await enforceRateLimit(c, 'upload_image_direct', userId, 60, 60);
   if (limited) return limited;
   const dailyLimited = await enforceRateLimit(c, 'upload_image_direct_daily', userId, 250, 86400);
   if (dailyLimited) return dailyLimited;
-  if (!c.env.CLOUDFLARE_ACCOUNT_ID || !c.env.CLOUDFLARE_IMAGES_TOKEN) {
+  const accountId = cloudflareAccountId(c.env);
+  const token = cloudflareImagesToken(c.env);
+  if (!accountId || !token) {
     return c.json({ detail: 'Image upload is not configured.' }, 503);
   }
-  const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${c.env.CLOUDFLARE_ACCOUNT_ID}/images/v2/direct_upload`, { method: 'POST', headers: { Authorization: `Bearer ${c.env.CLOUDFLARE_IMAGES_TOKEN}` } });
+  const body: any = await c.req.json().catch(() => ({}));
+  const filename = cleanText(body.filename || body.file_name || 'captro-upload.jpg', 180);
+  const mimeType = normalizedContentType(body.mime_type || body.mimeType || 'image/jpeg');
+  if (mimeType && (!ALLOWED_IMAGE_TYPES.has(mimeType) || !extensionAllowed(filename, ALLOWED_IMAGE_EXTENSIONS))) {
+    return c.json({ detail: 'Unsupported image type. Use JPG, PNG, or WebP.' }, 400);
+  }
+  const formData = new FormData();
+  const requireSignedURLs = cloudflareImagesRequireSignedUrls(c.env);
+  formData.append('requireSignedURLs', String(requireSignedURLs));
+  formData.append('metadata', JSON.stringify({ userId, filename, mimeType: mimeType || 'image/jpeg', source: 'captro_ios', moderation: 'pre_publish' }));
+  const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/images/v2/direct_upload`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body: formData,
+  });
   const data: any = await res.json();
-  if (!data.success) return c.json({ detail: 'Failed to get upload URL' }, 500);
-  return c.json({ upload_url: data.result.uploadURL, image_id: data.result.id });
+  if (!data.success) {
+    console.warn('CF Images direct upload setup failed:', res.status, data.errors?.[0]?.code || 'cloudflare_images_error');
+    return c.json({ detail: 'Failed to get upload URL' }, 500);
+  }
+  const imageId = cleanText(data.result?.id, 180);
+  const mediaId = uuid();
+  const ts = now();
+  await c.env.DB.prepare(
+    `INSERT INTO media_assets (
+       id, user_id, media_type, storage_provider, storage_key, public_url, private_url,
+       mime_type, file_size, sha256_hash, upload_status, moderation_status, created_at, updated_at
+     ) VALUES (?, ?, 'image', 'images', ?, NULL, ?, ?, 0, '', 'uploading', 'uploading', ?, ?)`
+  ).bind(mediaId, userId, imageId, `images:${imageId}`, mimeType || 'image/jpeg', ts, ts).run();
+  await insertModerationEvent(c.env.DB, mediaId, 'upload_intent_created', {
+    actorUserId: userId,
+    reason: 'legacy_image_direct',
+    afterState: { storage_provider: 'images', mime_type: mimeType || 'image/jpeg' },
+    requestId: c.get?.('requestId') || '',
+  });
+  return c.json({
+    upload_url: data.result.uploadURL,
+    media_id: mediaId,
+    image_id: imageId,
+    id: imageId,
+    url: '',
+    moderation_status: 'uploading',
+    requires_moderation: true,
+    source: 'cloudflare_images_direct',
+  });
 });
 
 api.post('/upload/video-direct', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  await ensureMediaModerationSchema(c.env.DB);
   const limited = await enforceRateLimit(c, 'upload_video_direct', userId, 40, 60);
   if (limited) return limited;
   const dailyLimited = await enforceRateLimit(c, 'upload_video_direct_daily', userId, 100, 86400);
   if (dailyLimited) return dailyLimited;
-  if (!c.env.CLOUDFLARE_ACCOUNT_ID || !c.env.CLOUDFLARE_STREAM_TOKEN) {
+  const accountId = cloudflareAccountId(c.env);
+  const token = cloudflareStreamToken(c.env);
+  if (!accountId || !token) {
     return c.json({ detail: 'Video upload is not configured.' }, 503);
   }
-  const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${c.env.CLOUDFLARE_ACCOUNT_ID}/stream/direct_upload`, { method: 'POST', headers: { Authorization: `Bearer ${c.env.CLOUDFLARE_STREAM_TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ maxDurationSeconds: 300, creator: userId }) });
+  const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/direct_upload`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ maxDurationSeconds: 60, creator: userId, requireSignedURLs: true, meta: { userId, moderation: 'pre_publish' } }) });
   const data: any = await res.json();
   if (!data.success) return c.json({ detail: 'Failed to get upload URL' }, 500);
-  return c.json({ upload_url: data.result.uploadURL, video_uid: data.result.uid });
+  const videoUid = cleanText(data.result.uid, 220);
+  const mediaId = uuid();
+  const ts = now();
+  await c.env.DB.prepare(
+    `INSERT INTO media_assets (
+       id, user_id, media_type, storage_provider, storage_key, public_url, private_url,
+       mime_type, file_size, sha256_hash, upload_status, moderation_status, created_at, updated_at
+     ) VALUES (?, ?, 'video', 'stream', ?, NULL, ?, 'video/mp4', 0, '', 'uploading', 'uploading', ?, ?)`
+  ).bind(mediaId, userId, videoUid, `stream:${videoUid}`, ts, ts).run();
+  await insertModerationEvent(c.env.DB, mediaId, 'upload_intent_created', {
+    actorUserId: userId,
+    reason: 'legacy_video_direct',
+    afterState: { storage_provider: 'stream' },
+    requestId: c.get?.('requestId') || '',
+  });
+  return c.json({ upload_url: data.result.uploadURL, video_uid: videoUid, media_id: mediaId, moderation_status: 'uploading', requires_moderation: true });
 });
 
 // Stripe billing
@@ -9644,7 +14167,7 @@ api.post('/stripe/checkout/sessions', authMiddleware, async (c) => {
       'line_items[0][price]': priceId,
       'line_items[0][quantity]': quantity,
       'metadata[user_id]': userId,
-      'metadata[source]': 'flames-up',
+      'metadata[source]': 'captro',
     }, requestId);
 
     if (!session.ok) {
@@ -9668,10 +14191,9 @@ api.get('/premium', authMiddleware, async (c) => {
     const userId = getUserId(c);
     const user = await getPremiumUser(c, userId);
     if (!user) return c.json({ detail: 'User not found' }, 404);
-    const used = await getAnonymousNotesUsedToday(c.env.DB, userId).catch(() => 0);
     const stripe = getStripeConfig(c);
     return c.json({
-      ...premiumPayloadFromUser(user, used),
+      ...premiumPayloadFromUser(user),
       stripe_connected: stripe.configured,
       price_configured: !!getPremiumPriceId(c),
     });
@@ -9703,8 +14225,8 @@ api.post('/premium/checkout', authMiddleware, async (c) => {
     }
 
     const priceId = getPremiumPriceId(c);
-    const successUrl = allowedStripeReturnUrl(c, body.success_url || c.env.STRIPE_SUCCESS_URL, '/wallet?premium=success&session_id={CHECKOUT_SESSION_ID}');
-    const cancelUrl = allowedStripeReturnUrl(c, body.cancel_url || c.env.STRIPE_CANCEL_URL, '/wallet?premium=cancelled');
+    const successUrl = allowedStripeReturnUrl(c, body.success_url || c.env.STRIPE_SUCCESS_URL, '/profile?premium=success&session_id={CHECKOUT_SESSION_ID}');
+    const cancelUrl = allowedStripeReturnUrl(c, body.cancel_url || c.env.STRIPE_CANCEL_URL, '/profile?premium=cancelled');
     const requestId = getClientRequestId(c, body) || `premium_${userId}_${Date.now()}`;
     const existingCustomer = cleanText(user.premium_stripe_customer_id, 140);
     const publicEmail = publicUserEmail(user.email);
@@ -9714,11 +14236,11 @@ api.post('/premium/checkout', authMiddleware, async (c) => {
       cancel_url: cancelUrl,
       client_reference_id: userId,
       'line_items[0][quantity]': 1,
-      'metadata[source]': 'flames-up-premium',
+      'metadata[source]': 'captro-premium',
       'metadata[user_id]': userId,
       'metadata[plan]': PREMIUM_PLAN.id,
       'metadata[price_id]': priceId,
-      'subscription_data[metadata][source]': 'flames-up-premium',
+      'subscription_data[metadata][source]': 'captro-premium',
       'subscription_data[metadata][user_id]': userId,
       'subscription_data[metadata][plan]': PREMIUM_PLAN.id,
     };
@@ -9731,7 +14253,7 @@ api.post('/premium/checkout', authMiddleware, async (c) => {
       checkoutParams['line_items[0][price_data][unit_amount]'] = PREMIUM_PLAN.amount_cents;
       checkoutParams['line_items[0][price_data][recurring][interval]'] = PREMIUM_PLAN.interval;
       checkoutParams['line_items[0][price_data][product_data][name]'] = PREMIUM_PLAN.label;
-      checkoutParams['line_items[0][price_data][product_data][metadata][source]'] = 'flames-up-premium';
+      checkoutParams['line_items[0][price_data][product_data][metadata][source]'] = 'captro-premium';
     }
 
     const session = await stripeApiRequest(c, '/checkout/sessions', checkoutParams, requestId);
@@ -9762,256 +14284,6 @@ api.post('/premium/checkout', authMiddleware, async (c) => {
   }
 });
 
-api.get('/wallet', authMiddleware, async (c) => {
-  try {
-    const userId = getUserId(c);
-    const balance = await getCoinBalance(c.env.DB, userId);
-    const txRows: any = await c.env.DB.prepare(
-      `SELECT * FROM coin_transactions
-       WHERE user_id = ?
-       ORDER BY created_at DESC
-       LIMIT 30`
-    ).bind(userId).all();
-    const stripe = getStripeConfig(c);
-    return c.json({
-      balance: Number(balance.balance || 0),
-      lifetime_purchased: Number(balance.lifetime_purchased || 0),
-      lifetime_spent: Number(balance.lifetime_spent || 0),
-      updated_at: balance.updated_at,
-      packages: publicCoinPackages(),
-      custom_purchase: { min_coins: 100, max_coins: 50000, cents_per_coin: 1 },
-      stripe_connected: stripe.configured,
-      transactions: (txRows.results || []).map(sanitizeCoinTransaction),
-    });
-  } catch (error: any) {
-    console.error('Wallet load failed:', getErrorCode(error), error?.message || error);
-    return c.json({ detail: 'Could not load wallet.', code: 'WALLET_LOAD_FAILED' }, 500);
-  }
-});
-
-api.get('/wallet/transactions', authMiddleware, async (c) => {
-  try {
-    await ensureWalletSchema(c.env.DB);
-    const userId = getUserId(c);
-    const limit = clampNumber(c.req.query('limit'), 1, 100, 50);
-    const rows: any = await c.env.DB.prepare(
-      `SELECT * FROM coin_transactions
-       WHERE user_id = ?
-       ORDER BY created_at DESC
-       LIMIT ?`
-    ).bind(userId, limit).all();
-    return c.json({ transactions: (rows.results || []).map(sanitizeCoinTransaction) });
-  } catch (error: any) {
-    console.error('Wallet history failed:', getErrorCode(error), error?.message || error);
-    return c.json({ detail: 'Could not load wallet history.', code: 'WALLET_HISTORY_FAILED' }, 500);
-  }
-});
-
-api.post('/wallet/checkout', authMiddleware, async (c) => {
-  try {
-    const bodyTooLarge = rejectLargeRequest(c, 20_000);
-    if (bodyTooLarge) return bodyTooLarge;
-    const userId = getUserId(c);
-    const limited = await enforceRateLimit(c, 'wallet_checkout', userId, 12, 60);
-    if (limited) return limited;
-
-    await ensureWalletSchema(c.env.DB);
-    const body: any = await c.req.json().catch(() => ({}));
-    const purchase = resolveCoinPurchase(body);
-    if (!purchase) {
-      return c.json({ detail: 'Choose a coin package or enter at least 100 custom coins.', code: 'COIN_PACKAGE_REQUIRED' }, 400);
-    }
-
-    const stripe = getStripeConfig(c);
-    if (!stripe.configured) {
-      return c.json({ detail: 'Stripe is not configured yet.', code: 'STRIPE_NOT_CONFIGURED' }, 503);
-    }
-
-    const ts = now();
-    const orderId = uuid();
-    await c.env.DB.prepare(
-      `INSERT INTO coin_purchase_orders
-       (id, user_id, package_id, coins, amount_cents, currency, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, 'usd', 'pending', ?, ?)`
-    ).bind(orderId, userId, purchase.package_id, purchase.coins, purchase.amount_cents, ts, ts).run();
-
-    const successUrl = allowedStripeReturnUrl(c, body.success_url || c.env.STRIPE_SUCCESS_URL, '/wallet?checkout=success&session_id={CHECKOUT_SESSION_ID}');
-    const cancelUrl = allowedStripeReturnUrl(c, body.cancel_url || c.env.STRIPE_CANCEL_URL, '/wallet?checkout=cancelled');
-    const requestId = getClientRequestId(c, body) || `wallet_checkout_${orderId}`;
-    const session = await stripeApiRequest(c, '/checkout/sessions', {
-      mode: 'payment',
-      success_url: successUrl,
-      cancel_url: cancelUrl,
-      client_reference_id: userId,
-      'line_items[0][price_data][currency]': 'usd',
-      'line_items[0][price_data][product_data][name]': purchase.label,
-      'line_items[0][price_data][product_data][metadata][coin_package]': purchase.package_id,
-      'line_items[0][price_data][unit_amount]': purchase.amount_cents,
-      'line_items[0][quantity]': 1,
-      'metadata[source]': 'flames-up-wallet',
-      'metadata[user_id]': userId,
-      'metadata[wallet_order_id]': orderId,
-      'metadata[coin_package]': purchase.package_id,
-      'metadata[coins]': purchase.coins,
-      'payment_intent_data[metadata][source]': 'flames-up-wallet',
-      'payment_intent_data[metadata][user_id]': userId,
-      'payment_intent_data[metadata][wallet_order_id]': orderId,
-    }, requestId);
-
-    if (!session.ok) {
-      await c.env.DB.prepare("UPDATE coin_purchase_orders SET status = 'failed', updated_at = ? WHERE id = ?")
-        .bind(now(), orderId)
-        .run();
-      const message = session.data?.error?.message || session.data?.detail || 'Could not create coin checkout.';
-      return c.json({ detail: message, code: session.data?.error?.code || 'COIN_CHECKOUT_FAILED' }, session.status as any);
-    }
-
-    await c.env.DB.prepare('UPDATE coin_purchase_orders SET stripe_session_id = ?, updated_at = ? WHERE id = ?')
-      .bind(session.data.id || '', now(), orderId)
-      .run();
-
-    return c.json({
-      id: session.data.id,
-      url: session.data.url,
-      mode: session.data.mode,
-      status: session.data.status,
-      order_id: orderId,
-      coins: purchase.coins,
-      amount_cents: purchase.amount_cents,
-    });
-  } catch (error: any) {
-    console.error('Coin checkout failed:', getErrorCode(error), error?.message || error);
-    return c.json({ detail: 'Could not start coin checkout.', code: 'COIN_CHECKOUT_FAILED' }, 500);
-  }
-});
-
-api.post('/wallet/gifts', authMiddleware, async (c) => {
-  try {
-    const bodyTooLarge = rejectLargeRequest(c, 20_000);
-    if (bodyTooLarge) return bodyTooLarge;
-    const senderId = getUserId(c);
-    const limited = await enforceRateLimit(c, 'coin_gift', senderId, 30, 60);
-    if (limited) return limited;
-    const body: any = await c.req.json().catch(() => ({}));
-    const receiverId = cleanText(body.to_user_id || body.receiver_id, 80);
-    const amount = clampNumber(body.coins || body.amount, 1, 100000, 0);
-    if (!receiverId || receiverId === senderId || amount <= 0) {
-      return c.json({ detail: 'Choose a user and coin amount to send.', code: 'GIFT_INVALID' }, 400);
-    }
-    const receiver: any = await c.env.DB.prepare('SELECT id FROM users WHERE id = ?').bind(receiverId).first();
-    if (!receiver) return c.json({ detail: 'That user was not found.', code: 'USER_NOT_FOUND' }, 404);
-    const giftId = uuid();
-    const requestId = getClientRequestId(c, body) || giftId;
-    const note = cleanText(body.note, 240);
-    const giftType = cleanText(body.gift_type || body.gift_label, 60);
-    const postId = cleanText(body.post_id || body.related_post_id, 120);
-
-    await applyCoinDelta(c, {
-      userId: senderId,
-      type: 'gift_sent',
-      amount: -amount,
-      relatedUserId: receiverId,
-      relatedId: giftId,
-      idempotencyKey: `gift_sent_${requestId}`,
-      metadata: { note, gift_type: giftType, post_id: postId },
-    });
-    const received = await applyCoinDelta(c, {
-      userId: receiverId,
-      type: 'gift_received',
-      amount,
-      relatedUserId: senderId,
-      relatedId: giftId,
-      idempotencyKey: `gift_received_${requestId}`,
-      metadata: { note, gift_type: giftType, post_id: postId },
-    });
-
-    try {
-      const sender: any = await c.env.DB.prepare('SELECT username, full_name FROM users WHERE id = ?').bind(senderId).first();
-      const senderName = sender?.full_name || sender?.username || 'Someone';
-      await insertNotificationOnce(c, {
-        userId: receiverId,
-        type: 'coin_gift',
-        title: 'New Gift',
-        body: `${senderName} sent you ${amount} coins`,
-        data: { gift_id: giftId, from_user_id: senderId, coins: amount, gift_type: giftType, post_id: postId },
-        dedupeKey: `gift:${requestId}`,
-        dedupeSeconds: 86400,
-      });
-    } catch {}
-
-    return c.json({ sent: true, gift_id: giftId, balance: Number((await getCoinBalance(c.env.DB, senderId)).balance || 0), receiver_balance: Number(received.balance.balance || 0) });
-  } catch (error: any) {
-    if (String(error?.message || '') === 'COINS_INSUFFICIENT') {
-      return c.json({ detail: 'Not enough coins for this gift.', code: 'COINS_INSUFFICIENT' }, 409);
-    }
-    console.error('Coin gift failed:', getErrorCode(error), error?.message || error);
-    return c.json({ detail: 'Could not send gift.', code: 'GIFT_FAILED' }, 500);
-  }
-});
-
-api.post('/wallet/spend', authMiddleware, async (c) => {
-  try {
-    const bodyTooLarge = rejectLargeRequest(c, 20_000);
-    if (bodyTooLarge) return bodyTooLarge;
-    const userId = getUserId(c);
-    const limited = await enforceRateLimit(c, 'coin_spend', userId, 60, 60);
-    if (limited) return limited;
-    const body: any = await c.req.json().catch(() => ({}));
-    const amount = clampNumber(body.coins || body.amount, 1, 100000, 0);
-    const purpose = cleanText(body.purpose || body.reason, 40);
-    const type = purpose === 'boost' ? 'boost' : 'spend';
-    if (amount <= 0) return c.json({ detail: 'Enter a coin amount to spend.', code: 'SPEND_INVALID' }, 400);
-    const result = await applyCoinDelta(c, {
-      userId,
-      type,
-      amount: -amount,
-      relatedId: cleanText(body.related_id || body.post_id, 120),
-      idempotencyKey: getClientRequestId(c, body) || `${type}_${userId}_${uuid()}`,
-      metadata: { purpose },
-    });
-    return c.json({ spent: true, balance: Number(result.balance.balance || 0), transaction: sanitizeCoinTransaction(result.transaction) });
-  } catch (error: any) {
-    if (String(error?.message || '') === 'COINS_INSUFFICIENT') {
-      return c.json({ detail: 'Not enough coins.', code: 'COINS_INSUFFICIENT' }, 409);
-    }
-    console.error('Coin spend failed:', getErrorCode(error), error?.message || error);
-    return c.json({ detail: 'Could not spend coins.', code: 'SPEND_FAILED' }, 500);
-  }
-});
-
-api.post('/admin/wallet/adjust', authMiddleware, async (c) => {
-  try {
-    await requireOwnerOrAdmin(c);
-    const bodyTooLarge = rejectLargeRequest(c, 20_000);
-    if (bodyTooLarge) return bodyTooLarge;
-    const body: any = await c.req.json().catch(() => ({}));
-    const userId = cleanText(body.user_id, 80);
-    const amount = clampNumber(body.coins || body.amount, -1000000, 1000000, 0);
-    if (!userId || amount === 0) {
-      return c.json({ detail: 'Choose a user and a non-zero coin adjustment.', code: 'ADJUSTMENT_INVALID' }, 400);
-    }
-    const adjustmentType = amount > 0 && cleanText(body.type, 40) === 'bonus' ? 'bonus' : 'admin_adjustment';
-    const target: any = await c.env.DB.prepare('SELECT id FROM users WHERE id = ?').bind(userId).first();
-    if (!target) return c.json({ detail: 'That user was not found.', code: 'USER_NOT_FOUND' }, 404);
-    const result = await applyCoinDelta(c, {
-      userId,
-      type: adjustmentType,
-      amount,
-      relatedUserId: getUserId(c),
-      idempotencyKey: getClientRequestId(c, body) || `admin_adjust_${uuid()}`,
-      metadata: { reason: cleanText(body.reason, 500) },
-    });
-    return c.json({ adjusted: true, balance: Number(result.balance.balance || 0), transaction: sanitizeCoinTransaction(result.transaction) });
-  } catch (error: any) {
-    if (String(error?.message || '') === 'COINS_INSUFFICIENT') {
-      return c.json({ detail: 'Adjustment would make the user balance negative.', code: 'COINS_INSUFFICIENT' }, 409);
-    }
-    const forbidden = String(error?.message || '') === 'FORBIDDEN';
-    console.error('Coin admin adjustment failed:', getErrorCode(error), error?.message || error);
-    return c.json({ detail: forbidden ? 'Owner access required.' : 'Could not adjust wallet.', code: forbidden ? 'FORBIDDEN' : 'ADJUSTMENT_FAILED' }, forbidden ? 403 : 500);
-  }
-});
-
 api.post('/stripe/webhook', async (c) => {
   const bodyTooLarge = rejectLargeRequest(c, 500_000);
   if (bodyTooLarge) return bodyTooLarge;
@@ -10032,14 +14304,14 @@ api.post('/stripe/webhook', async (c) => {
     const object = event?.data?.object || {};
     if (event.type === 'checkout.session.completed') {
       const source = cleanText(object?.metadata?.source, 80);
-      if (source === 'flames-up-premium' || object?.mode === 'subscription') {
+      if (source === 'captro-premium' || source === 'flames-up-premium' || object?.mode === 'subscription') {
         await activatePremiumFromCheckoutSession(c, object);
       } else {
         await completeCoinPurchaseFromSession(c, object);
       }
     } else if (event.type === 'checkout.session.expired') {
       const source = cleanText(object?.metadata?.source, 80);
-      if (source === 'flames-up-premium' || object?.mode === 'subscription') {
+      if (source === 'captro-premium' || source === 'flames-up-premium' || object?.mode === 'subscription') {
         await expirePremiumCheckout(c, object);
       } else {
         await markCoinPurchaseExpired(c, object);
@@ -10137,38 +14409,94 @@ api.get('/discover/feed', authMiddleware, async (c) => {
 
 api.post('/discover/posts/:postId/like', authMiddleware, async (c) => {
   const userId = getUserId(c); const postId = c.req.param('postId');
+  await ensureLikeUniquenessSchema(c.env.DB);
   const limited = await enforceRateLimit(c, 'discover_like', userId, 300, 60);
   if (limited) return limited;
   const body: any = await c.req.json().catch(() => ({}));
   const requested = optionalBoolean(body.liked ?? body.like ?? body.value);
+
+  const canonicalPost = await c.env.DB.prepare('SELECT id FROM posts WHERE id = ?').bind(postId).first();
+  if (canonicalPost) {
+    await reconcileLegacyDiscoverLikes(c.env.DB, postId);
+    const likeVisiblePostSql = [
+      `SELECT p.id, p.user_id,
+         EXISTS (SELECT 1 FROM likes lk WHERE lk.user_id = ? AND lk.post_id = p.id) AS is_liked,
+         EXISTS (SELECT 1 FROM saved_posts sp WHERE sp.user_id = ? AND sp.post_id = p.id) AS saved
+       FROM posts p JOIN users u ON p.user_id = u.id`,
+      `WHERE p.id = ? AND ${visiblePostWhere('u', 'p')} AND ${feedPhotoPostWhere('p')}`,
+    ].join(' ');
+    const visiblePost: any = await c.env.DB.prepare(likeVisiblePostSql)
+      .bind(userId, userId, postId, ...visiblePostBindValues(userId))
+      .first();
+    if (!visiblePost) return c.json({ detail: 'Post not found' }, 404);
+
+    const { state, changed } = await setCanonicalPostLikeState(c, postId, userId, requested);
+    await c.env.DB.prepare('UPDATE discover_posts SET likes_count = ? WHERE id = ?')
+      .bind(state.likes_count, postId)
+      .run()
+      .catch(() => {});
+
+    if (state.liked && changed && visiblePost.user_id !== userId) {
+      try {
+        const me: any = await c.env.DB.prepare('SELECT full_name FROM users WHERE id = ?').bind(userId).first();
+        await insertNotificationOnce(c, {
+          userId: visiblePost.user_id,
+          type: 'like',
+          title: 'New Like',
+          body: `${me?.full_name || 'Someone'} liked your post`,
+          data: { post_id: postId, from_user_id: userId, actor_name: me?.full_name || 'Someone' },
+          dedupeKey: `like:${userId}:${postId}`,
+          dedupeSeconds: 86400,
+        });
+      } catch {}
+    }
+
+    return c.json(postEngagementResponse(state));
+  }
+
   let nextLiked = requested;
+  const relatedUserIds = await relatedInteractionUserIds(c.env.DB, userId);
+  const relatedPlaceholders = inPlaceholders(relatedUserIds);
   if (nextLiked === null) {
-    const ex = await c.env.DB.prepare('SELECT id FROM discover_likes WHERE user_id = ? AND post_id = ?').bind(userId, postId).first();
+    const ex = await c.env.DB.prepare(
+      `SELECT id FROM discover_likes WHERE post_id = ? AND user_id IN (${relatedPlaceholders}) LIMIT 1`
+    ).bind(postId, ...relatedUserIds).first();
     nextLiked = !ex;
   }
   const post = await c.env.DB.prepare('SELECT id FROM discover_posts WHERE id = ?').bind(postId).first();
   if (!post) return c.json({ detail: 'Post not found' }, 404);
-  const results = nextLiked
-    ? await c.env.DB.batch([
-      c.env.DB.prepare('INSERT OR IGNORE INTO discover_likes (id, user_id, post_id) VALUES (?, ?, ?)').bind(uuid(), userId, postId),
-      c.env.DB.prepare('UPDATE discover_posts SET likes_count = COALESCE(likes_count, 0) + 1 WHERE id = ? AND changes() > 0').bind(postId),
-      c.env.DB.prepare('SELECT likes_count FROM discover_posts WHERE id = ?').bind(postId),
-    ])
-    : await c.env.DB.batch([
-      c.env.DB.prepare('DELETE FROM discover_likes WHERE user_id = ? AND post_id = ?').bind(userId, postId),
-      c.env.DB.prepare('UPDATE discover_posts SET likes_count = MAX(0, COALESCE(likes_count, 0) - 1) WHERE id = ? AND changes() > 0').bind(postId),
-      c.env.DB.prepare('SELECT likes_count FROM discover_posts WHERE id = ?').bind(postId),
-    ]);
-  return c.json({ liked: !!nextLiked, likes_count: Number((results?.[2] as any)?.results?.[0]?.likes_count || 0) });
+  if (nextLiked) {
+    await c.env.DB.prepare(`DELETE FROM discover_likes WHERE post_id = ? AND user_id IN (${relatedPlaceholders})`)
+      .bind(postId, ...relatedUserIds)
+      .run();
+    await c.env.DB.prepare('INSERT OR IGNORE INTO discover_likes (id, user_id, post_id) VALUES (?, ?, ?)')
+      .bind(uuid(), userId, postId)
+      .run();
+  } else {
+    await c.env.DB.prepare(`DELETE FROM discover_likes WHERE post_id = ? AND user_id IN (${relatedPlaceholders})`)
+      .bind(postId, ...relatedUserIds)
+      .run();
+  }
+  const likeRow: any = await c.env.DB.prepare(
+    `SELECT COUNT(*) AS likes_count,
+      EXISTS (SELECT 1 FROM discover_likes WHERE post_id = ? AND user_id IN (${relatedPlaceholders})) AS liked
+     FROM discover_likes WHERE post_id = ?`
+  ).bind(postId, ...relatedUserIds, postId).first();
+  const likesCount = Math.max(0, Number(likeRow?.likes_count || 0));
+  const liked = likeRow?.liked === true || likeRow?.liked === 1 || likeRow?.liked === '1';
+  await c.env.DB.prepare('UPDATE discover_posts SET likes_count = ? WHERE id = ?').bind(likesCount, postId).run();
+  return c.json(postEngagementResponse({ liked, saved: false, likes_count: likesCount, comments_count: 0, saves_count: 0 }));
 });
 
 api.get('/discover/categories', async (c) => {
   return c.json([
+    { id: 'all', name: 'All', icon: 'square.grid.2x2' },
+    { id: 'photography', name: 'Photography', icon: 'camera' },
+    { id: 'outdoors', name: 'Outdoors', icon: 'leaf' },
+    { id: 'art', name: 'Art', icon: 'paintpalette' },
+    { id: 'nightlife', name: 'Nightlife', icon: 'moon.stars' },
+    { id: 'outfits', name: 'Outfits', icon: 'tshirt' },
     { id: 'events', name: 'Events', icon: 'calendar' },
-    { id: 'food_reviews', name: 'Food Reviews', icon: 'restaurant' },
-    { id: 'culture', name: 'Culture', icon: 'color-palette' },
-    { id: 'tips', name: 'Tips & Recs', icon: 'bulb' },
-    { id: 'spotlights', name: 'Spotlights', icon: 'flash' },
   ]);
 });
 
@@ -10420,19 +14748,6 @@ async function enforceUserRestriction(c: any, userId: string, type: 'posting' | 
   return c.json({ detail: `This account is temporarily restricted from ${type}.` }, 403);
 }
 
-api.delete('/admin/notes/:noteId', authMiddleware, async (c) => {
-  try {
-    const adminId = await requireGovernanceAdmin(c);
-    await ensureNotesSchema(c.env.DB);
-    const noteId = cleanText(c.req.param('noteId'), 80);
-    await c.env.DB.prepare("UPDATE notes SET status = 'removed', updated_at = ? WHERE id = ?").bind(now(), noteId).run();
-    await logGovernanceAction(c, adminId, 'remove_note', 'note', noteId);
-    return c.json({ removed: true });
-  } catch (error: any) {
-    return governanceError(c, error);
-  }
-});
-
 api.put('/admin/people/:profileId', authMiddleware, async (c) => {
   try {
     const adminId = await requireGovernanceAdmin(c);
@@ -10514,7 +14829,9 @@ async function maybeDeleteStreamAssets(c: any, post: any) {
     .map((value) => value.replace('cfstream:', '').trim())
     .filter(Boolean);
 
-  if (!c.env.CLOUDFLARE_ACCOUNT_ID || !c.env.CLOUDFLARE_STREAM_TOKEN) {
+  const accountId = cloudflareAccountId(c.env);
+  const token = cloudflareStreamToken(c.env);
+  if (!accountId || !token) {
     return { attempted: false, deleted: [], failed: streamIds };
   }
 
@@ -10522,9 +14839,9 @@ async function maybeDeleteStreamAssets(c: any, post: any) {
   const failed: string[] = [];
   for (const uid of streamIds) {
     try {
-      const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${c.env.CLOUDFLARE_ACCOUNT_ID}/stream/${uid}`, {
+      const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/${uid}`, {
         method: 'DELETE',
-        headers: { Authorization: `Bearer ${c.env.CLOUDFLARE_STREAM_TOKEN}` },
+        headers: { Authorization: `Bearer ${token}` },
       });
       if (response.ok) deleted.push(uid);
       else failed.push(uid);
@@ -10996,16 +15313,23 @@ function adminPostPayload(row: any, env: Env) {
   const mediaUrls = sanitizeMediaReferences(row.images, row.image);
   const mediaTypes = parseJsonArray(row.media_types);
   const dimensions = parseJsonArray(row.media_dimensions);
+  const primaryCategory = (normalizeDiscoverCategory(row.primary_category || row.category || row.post_type, false) || DEFAULT_DISCOVER_CATEGORY) as DiscoverCategory;
+  const categoryConfidence = clampFloat(row.category_confidence, 0, 1, 0);
+  const tags = sanitizeAutoCategoryTags(row.tags_json);
+  const categorySignals = parseJsonObject(row.category_signals_json);
+  const categoryScores = normalizeCategoryScoresPayload(row.category_scores_json || (categorySignals as any).category_scores);
+  const secondaryCategories = normalizeSecondaryCategoriesPayload(row.secondary_categories_json, primaryCategory);
   const thumbnailVariant = env.CLOUDFLARE_IMAGES_THUMBNAIL_VARIANT || '';
   const feedVariant = env.CLOUDFLARE_IMAGES_FEED_VARIANT || '';
   const normalizedTypes = mediaTypes.length ? mediaTypes : mediaUrls.map((url) => isVideoMediaUrl(url) ? 'video' : 'image');
+  const normalizedDimensions = feedMediaDimensions(mediaUrls, normalizedTypes, dimensions);
   const media = mediaUrls.map((url, index) => {
     const mediaType = String(normalizedTypes[index] || 'image').toLowerCase().includes('video') || isVideoMediaUrl(url) ? 'video' : 'image';
-    const feedUrl = mediaType === 'video' ? streamPlaybackUrl(url) : feedDeliveryUrl(url, mediaType, feedVariant);
+    const feedUrl = mediaType === 'video' ? streamPlaybackUrl(url) : feedDeliveryUrl(url, mediaType, feedVariant, env);
     const thumbnailUrl = mediaType === 'video'
       ? streamThumbnailUrl(url)
-      : posterDeliveryUrl(url, mediaType, thumbnailVariant);
-    const original = dimensions[index] || {};
+      : posterDeliveryUrl(url, mediaType, thumbnailVariant, env);
+    const original = normalizedDimensions[index] || dimensions[index] || {};
     const width = Number(original.feed_width || original.width || original.original_width || 0) || null;
     const height = Number(original.feed_height || original.height || original.original_height || 0) || null;
     const aspectRatio = Number(original.feed_aspect_ratio || original.ratio || original.aspect_ratio || (width && height ? width / height : 0)) || null;
@@ -11022,6 +15346,15 @@ function adminPostPayload(row: any, env: Env) {
       height,
       aspect_ratio: aspectRatio,
       aspectRatio,
+      original_width: original.original_width || null,
+      original_height: original.original_height || null,
+      original_aspect_ratio: original.original_aspect_ratio || null,
+      feed_width: original.feed_width || width,
+      feed_height: original.feed_height || height,
+      feed_aspect_ratio: original.feed_aspect_ratio || aspectRatio,
+      display_aspect_ratio: original.display_aspect_ratio || aspectRatio,
+      format: original.format || supportedFeedMediaVariant(original).format,
+      crop_mode: original.crop_mode || 'center_crop',
     };
   });
   const first: any = media[0] || {};
@@ -11036,13 +15369,50 @@ function adminPostPayload(row: any, env: Env) {
     },
     title: cleanText(row.title || '', 180),
     content: cleanMultilineText(row.content, 1200),
-    category: cleanText(row.post_type || row.category || 'general', 60),
+    category: primaryCategory,
+    primary_category: primaryCategory,
+    category_confidence: categoryConfidence,
+    category_source: normalizeCategorySource(row.category_source),
+    category_status: normalizeCategoryStatus(row.category_status),
+    secondary_categories: secondaryCategories,
+    category_scores: categoryScores,
+    detected_objects: sanitizeAutoCategoryTags(row.detected_objects_json || (categorySignals as any).detected_objects),
+    detected_scene: cleanText(row.detected_scene || (categorySignals as any).detected_scene, 80),
+    place_type: cleanText(row.place_type || (categorySignals as any).place_type, 120),
+    user_selected_category: normalizeDiscoverCategory(row.user_selected_category || (categorySignals as any).user_selected_category, false),
+    caption_keywords: sanitizeAutoCategoryTags(row.caption_keywords_json || (categorySignals as any).caption_keywords),
+    category_debug: {
+      reasons: (categorySignals as any).debug_reasons || {},
+      summary: DISCOVER_CATEGORIES
+        .filter((category) => categoryScores[category] > 0)
+        .sort((a, b) => categoryScores[b] - categoryScores[a])
+        .slice(0, 5)
+        .map((category) => `${category} ${Math.round(categoryScores[category])} because ${(((categorySignals as any).debug_reasons || {})[category] || []).slice(0, 3).join(' + ') || 'saved category score'}`),
+    },
+    category_signals: categorySignals,
+    category_signals_json: categorySignals,
+    tags,
     visibility: cleanText(row.visibility || 'public', 40),
     status: cleanText(row.status || 'active', 40),
     removed_at: row.removed_at || null,
     removed_reason: cleanMultilineText(row.removed_reason, 500),
     discover_blocked_at: row.discover_blocked_at || null,
     discover_blocked_reason: cleanMultilineText(row.discover_blocked_reason, 500),
+    display_location_label: normalizeDisplayLocationLabel(row.display_city || '', row.display_region || '', row.display_country || '', row.display_location_label || ''),
+    display_location_visibility: normalizeDisplayLocationVisibility(row.display_location_visibility),
+    display_location_source: normalizeDisplayLocationSource(row.display_location_source),
+    exact_place: {
+      provider: cleanText(row.place_provider, 40),
+      provider_place_id: cleanText(row.place_provider_id || row.place_id, 160),
+      name: cleanText(row.place_name, 180),
+      formatted_address: cleanText(row.place_formatted_address || row.location, 260),
+      category: cleanText(row.place_category, 80),
+      city: cleanText(row.place_city, 80),
+      region: cleanText(row.place_region, 80),
+      country: cleanText(row.place_country, 80),
+      latitude: row.place_lat == null ? null : clampFloat(row.place_lat, -90, 90, 0),
+      longitude: row.place_lng == null ? null : clampFloat(row.place_lng, -180, 180, 0),
+    },
     media_type: first.media_type || '',
     feed_media_url: first.feed_media_url || '',
     thumbnail_url: first.thumbnail_url || '',
@@ -11062,6 +15432,63 @@ function adminPostPayload(row: any, env: Env) {
     saves_count: Number(row.saves_count || 0),
     created_at: row.created_at || '',
     updated_at: row.updated_at || '',
+  };
+}
+
+function adminMediaModerationPayload(row: any, env: Env) {
+  const result = row.result_raw_result ? parseJsonObject(row.result_raw_result) : {};
+  const reasons = parseJsonArray(row.result_reasons);
+  return {
+    id: row.id,
+    user_id: row.user_id,
+    user: {
+      id: row.user_id,
+      username: publicUsernameFor({ username: row.user_username }),
+      full_name: cleanText(row.user_full_name, 120),
+      email: publicUserEmail(row.user_email),
+      profile_image: safeMediaReference(row.user_profile_image),
+    },
+    post_id: row.post_id || null,
+    media_type: normalizeMediaAssetType(row.media_type) || 'image',
+    storage_provider: cleanText(row.storage_provider, 40),
+    storage_key: cleanText(row.storage_key, 220),
+    preview_url: mediaAssetPreviewUrl(env, row),
+    public_url: normalizeMediaModerationStatus(row.moderation_status) === 'approved' ? (safeMediaReference(row.public_url) || mediaAssetPublicUrl(env, row)) : '',
+    private_reference: cleanText(row.private_url, 260),
+    mime_type: cleanText(row.mime_type, 120),
+    file_size: Number(row.file_size || 0),
+    sha256_hash: cleanText(row.sha256_hash, 80),
+    width: row.width == null ? null : Number(row.width),
+    height: row.height == null ? null : Number(row.height),
+    duration_seconds: row.duration_seconds == null ? null : Number(row.duration_seconds),
+    upload_status: cleanText(row.upload_status, 40),
+    moderation_status: normalizeMediaModerationStatus(row.moderation_status),
+    rejection_code: cleanText(row.rejection_code, 120),
+    rejection_message: cleanMultilineText(row.rejection_message, 500),
+    scores: {
+      adult_explicit_score: clampFloat(row.adult_explicit_score, 0, 1, 0),
+      nudity_score: clampFloat(row.nudity_score, 0, 1, 0),
+      sexual_context_score: clampFloat(row.sexual_context_score, 0, 1, 0),
+      sexual_solicitation_score: clampFloat(row.sexual_solicitation_score, 0, 1, 0),
+      minor_safety_risk_score: clampFloat(row.minor_safety_risk_score, 0, 1, 0),
+      violence_score: clampFloat(row.violence_score, 0, 1, 0),
+      gore_score: clampFloat(row.gore_score, 0, 1, 0),
+      weapon_score: clampFloat(row.weapon_score, 0, 1, 0),
+      hate_symbol_score: clampFloat(row.hate_symbol_score, 0, 1, 0),
+      ai_generated_likelihood: clampFloat(row.ai_generated_likelihood, 0, 1, 0),
+      spam_scam_score: clampFloat(row.spam_scam_score, 0, 1, 0),
+      link_risk_score: clampFloat(row.link_risk_score, 0, 1, 0),
+      confidence: clampFloat(row.confidence, 0, 1, 0),
+      malware_status: cleanText(row.malware_status || 'unknown', 40),
+    },
+    model_name: cleanText(row.model_name, 160),
+    decision: cleanText(row.decision, 40),
+    reasons,
+    raw_result: scrubLogMetadata(result),
+    caption: cleanMultilineText(row.post_content || row.post_title || '', 1000),
+    created_at: row.created_at || '',
+    updated_at: row.updated_at || '',
+    result_created_at: row.result_created_at || null,
   };
 }
 
@@ -11316,6 +15743,7 @@ api.get('/admin/health', authMiddleware, async (c) => {
   try {
     await requireAdminRole(c, 'admin:read');
     await ensureAdminModerationSchema(c.env.DB);
+    await ensureMediaModerationSchema(c.env.DB);
     const db: any = await c.env.DB.prepare('SELECT 1 AS ok').first();
     return c.json({
       status: 'ok',
@@ -11325,6 +15753,133 @@ api.get('/admin/health', authMiddleware, async (c) => {
       commit: c.env.SOURCE_COMMIT || '',
       database: Number(db?.ok || 0) === 1 ? 'ok' : 'unknown',
     });
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+api.get('/admin/moderation', authMiddleware, async (c) => {
+  try {
+    await requireAdminRole(c, 'content:read');
+    await ensureMediaModerationSchema(c.env.DB);
+    const { limit, offset } = adminPageParams(c, 40, 100);
+    const statusParam = cleanText(c.req.query('status') || '', 40);
+    const status = statusParam ? normalizeMediaModerationStatus(statusParam) : '';
+    const mediaType = normalizeMediaAssetType(c.req.query('media_type') || c.req.query('type'));
+    const search = searchPattern(c.req.query('search'));
+    const conditions = ['1 = 1'];
+    const binds: any[] = [];
+    if (status) {
+      conditions.push('ma.moderation_status = ?');
+      binds.push(status);
+    } else {
+      conditions.push("ma.moderation_status IN ('review_required', 'failed')");
+    }
+    if (mediaType) {
+      conditions.push('ma.media_type = ?');
+      binds.push(mediaType);
+    }
+    if (search) {
+      conditions.push('(LOWER(ma.id) LIKE ? OR LOWER(ma.user_id) LIKE ? OR LOWER(u.username) LIKE ? OR LOWER(u.full_name) LIKE ? OR LOWER(ma.sha256_hash) LIKE ?)');
+      binds.push(search, search, search, search, search);
+    }
+    const rows = await c.env.DB.prepare(`
+      SELECT ma.*, u.username AS user_username, u.full_name AS user_full_name, u.email AS user_email, u.profile_image AS user_profile_image,
+             p.title AS post_title, p.content AS post_content,
+             mr.model_name, mr.adult_explicit_score, mr.nudity_score, mr.sexual_context_score,
+             mr.sexual_solicitation_score, mr.minor_safety_risk_score, mr.violence_score,
+             mr.gore_score, mr.weapon_score, mr.hate_symbol_score, mr.ai_generated_likelihood,
+             mr.spam_scam_score, mr.malware_status, mr.link_risk_score, mr.confidence,
+             mr.decision, mr.reasons AS result_reasons, mr.raw_result AS result_raw_result, mr.created_at AS result_created_at
+      FROM media_assets ma
+      LEFT JOIN users u ON u.id = ma.user_id
+      LEFT JOIN posts p ON p.id = ma.post_id
+      LEFT JOIN moderation_results mr ON mr.id = (
+        SELECT id FROM moderation_results latest WHERE latest.media_id = ma.id ORDER BY latest.created_at DESC LIMIT 1
+      )
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY CASE ma.moderation_status WHEN 'review_required' THEN 0 WHEN 'failed' THEN 1 WHEN 'pending_moderation' THEN 2 ELSE 3 END, ma.created_at DESC
+      LIMIT ? OFFSET ?
+    `).bind(...binds, limit, offset).all();
+    return c.json({
+      results: (rows.results as any[]).map((row) => adminMediaModerationPayload(row, c.env)),
+      pagination: { limit, offset, next_offset: offset + limit },
+    });
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+api.post('/admin/moderation/:id/approve', authMiddleware, async (c) => {
+  try {
+    const admin = await requireAdminRole(c, 'content:write');
+    const limited = await requireAdminWriteRateLimit(c, admin, 'admin_media_moderation_approve');
+    if (limited) return limited;
+    await ensureMediaModerationSchema(c.env.DB);
+    const mediaId = publicId(c.req.param('id'), 160);
+    const body: any = await c.req.json().catch(() => ({}));
+    const unknown = rejectUnknownFields(c, body, ['reason', 'note']);
+    if (unknown) return unknown;
+    const reason = cleanMultilineText(body.reason || 'Approved by admin review', 500);
+    const note = cleanMultilineText(body.note || '', 1000);
+    const before: any = await c.env.DB.prepare('SELECT * FROM media_assets WHERE id = ? LIMIT 1').bind(mediaId).first();
+    if (!before) return c.json({ detail: 'Media asset not found.' }, 404);
+    const publicUrl = mediaAssetPublicUrl(c.env, before);
+    const ts = now();
+    await c.env.DB.prepare(
+      "UPDATE media_assets SET moderation_status = 'approved', public_url = COALESCE(NULLIF(?, ''), public_url), rejection_code = '', rejection_message = '', updated_at = ? WHERE id = ?"
+    ).bind(publicUrl, ts, mediaId).run();
+    await insertModerationEvent(c.env.DB, mediaId, 'admin_approved', {
+      actorUserId: admin.userId,
+      actorRole: admin.role,
+      decision: 'approved',
+      reason,
+      note,
+      beforeState: before,
+      afterState: { moderation_status: 'approved', public_url: publicUrl },
+      requestId: c.get?.('requestId') || '',
+    });
+    await writeAdminAuditLog(c, admin, { actionType: 'media_approved', targetType: 'media_asset', targetId: mediaId, targetUserId: before.user_id, reason, note, beforeState: { moderation_status: before.moderation_status }, afterState: { moderation_status: 'approved' } });
+    const updated: any = await c.env.DB.prepare('SELECT * FROM media_assets WHERE id = ? LIMIT 1').bind(mediaId).first();
+    return c.json({ approved: true, media: adminMediaModerationPayload(updated, c.env) });
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+api.post('/admin/moderation/:id/reject', authMiddleware, async (c) => {
+  try {
+    const admin = await requireAdminRole(c, 'content:write');
+    const limited = await requireAdminWriteRateLimit(c, admin, 'admin_media_moderation_reject');
+    if (limited) return limited;
+    await ensureMediaModerationSchema(c.env.DB);
+    const mediaId = publicId(c.req.param('id'), 160);
+    const body: any = await c.req.json().catch(() => ({}));
+    const unknown = rejectUnknownFields(c, body, ['reason', 'note', 'rejection_code']);
+    if (unknown) return unknown;
+    const reason = cleanMultilineText(body.reason, 500);
+    if (!reason) return c.json({ detail: 'Reason is required.' }, 400);
+    const note = cleanMultilineText(body.note || '', 1000);
+    const rejectionCode = cleanText(body.rejection_code || 'admin_rejected', 120);
+    const before: any = await c.env.DB.prepare('SELECT * FROM media_assets WHERE id = ? LIMIT 1').bind(mediaId).first();
+    if (!before) return c.json({ detail: 'Media asset not found.' }, 404);
+    const userMessage = "This upload can't be posted because it may break Captro's safety rules.";
+    await c.env.DB.prepare(
+      "UPDATE media_assets SET moderation_status = 'rejected', public_url = NULL, rejection_code = ?, rejection_message = ?, updated_at = ? WHERE id = ?"
+    ).bind(rejectionCode, userMessage, now(), mediaId).run();
+    await insertModerationEvent(c.env.DB, mediaId, 'admin_rejected', {
+      actorUserId: admin.userId,
+      actorRole: admin.role,
+      decision: 'rejected',
+      reason,
+      note,
+      beforeState: before,
+      afterState: { moderation_status: 'rejected', rejection_code: rejectionCode },
+      requestId: c.get?.('requestId') || '',
+    });
+    await writeAdminAuditLog(c, admin, { actionType: 'media_rejected', targetType: 'media_asset', targetId: mediaId, targetUserId: before.user_id, reason, note, beforeState: { moderation_status: before.moderation_status }, afterState: { moderation_status: 'rejected', rejection_code: rejectionCode } });
+    const updated: any = await c.env.DB.prepare('SELECT * FROM media_assets WHERE id = ? LIMIT 1').bind(mediaId).first();
+    return c.json({ rejected: true, media: adminMediaModerationPayload(updated, c.env) });
   } catch (error: any) {
     return governanceError(c, error);
   }
@@ -11762,6 +16317,9 @@ api.get('/admin/posts', authMiddleware, async (c) => {
   try {
     await requireAdminRole(c, 'content:read');
     await ensureAdminModerationSchema(c.env.DB);
+    await ensurePostEditorSchema(c.env.DB);
+    await ensureAutoCategorySchema(c.env.DB);
+    await ensureLocationSchema(c.env.DB);
     const { limit, offset } = adminPageParams(c);
     const status = cleanText(c.req.query('status') || 'all', 40);
     const category = cleanText(c.req.query('category') || '', 60).toLowerCase();
@@ -11774,8 +16332,11 @@ api.get('/admin/posts', authMiddleware, async (c) => {
       binds.push(status);
     }
     if (category && category !== 'all') {
-      conditions.push('LOWER(COALESCE(p.post_type, ?)) = ?');
-      binds.push('general', category);
+      const normalizedCategory = normalizeDiscoverCategory(category, false);
+      if (!normalizedCategory || normalizedCategory === 'all') return c.json({ detail: 'Unknown category.' }, 400);
+      const categoryMatch = discoverCategoryCondition('p', normalizedCategory);
+      conditions.push(categoryMatch.sql);
+      binds.push(...categoryMatch.binds);
     }
     if (surface === 'discover') {
       conditions.push("COALESCE(p.discover_blocked_at, '') = ''");
@@ -11803,6 +16364,8 @@ api.get('/admin/posts/:postId', authMiddleware, async (c) => {
   try {
     await requireAdminRole(c, 'content:read');
     await ensureAdminModerationSchema(c.env.DB);
+    await ensureAutoCategorySchema(c.env.DB);
+    await ensureLocationSchema(c.env.DB);
     const postId = publicId(c.req.param('postId'), 120);
     const row: any = await c.env.DB.prepare(`
       SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
@@ -11904,6 +16467,118 @@ api.post('/admin/posts/:postId/remove-from-discover', authMiddleware, async (c) 
       .bind(now(), admin.userId, reason, postId).run();
     await writeAdminAuditLog(c, admin, { actionType: 'post_removed_from_discover', targetType: 'post', targetId: postId, targetUserId: before.user_id, reason, note: body.note, beforeState: before, afterState: { discover_blocked: true } });
     return c.json({ removed_from_discover: true });
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+api.post('/admin/posts/:postId/location/clear', authMiddleware, async (c) => {
+  try {
+    const admin = await requireAdminRole(c, 'content:write');
+    await ensureAdminModerationSchema(c.env.DB);
+    await ensureLocationSchema(c.env.DB);
+    const limited = await requireAdminWriteRateLimit(c, admin, 'admin_post_location_clear');
+    if (limited) return limited;
+    const postId = publicId(c.req.param('postId'), 120);
+    const body: any = await c.req.json().catch(() => ({}));
+    const unknown = rejectUnknownFields(c, body, ['reason', 'note']);
+    if (unknown) return unknown;
+    const reason = cleanMultilineText(body.reason, 500);
+    if (!reason) return c.json({ detail: 'Reason is required.' }, 400);
+    const before: any = await c.env.DB.prepare(
+      `SELECT id, user_id, display_location_label, display_location_visibility, place_name, place_formatted_address, place_lat, place_lng
+       FROM posts WHERE id = ? LIMIT 1`
+    ).bind(postId).first();
+    if (!before) return c.json({ detail: 'Post not found.' }, 404);
+    await c.env.DB.batch([
+      c.env.DB.prepare(
+        `UPDATE posts
+         SET display_city = '', display_region = '', display_country = '', display_location_label = '',
+             display_location_source = 'none', display_location_visibility = 'hidden',
+             location = NULL, place_id = NULL, place_name = NULL, place_lat = NULL, place_lng = NULL,
+             place_provider = '', place_provider_id = '', place_formatted_address = '', place_category = '',
+             place_city = '', place_region = '', place_country = '', updated_at = datetime('now')
+         WHERE id = ?`
+      ).bind(postId),
+      c.env.DB.prepare('DELETE FROM post_places WHERE post_id = ?').bind(postId),
+    ]);
+    await writeAdminAuditLog(c, admin, {
+      actionType: 'post_location_cleared',
+      targetType: 'post',
+      targetId: postId,
+      targetUserId: before.user_id,
+      reason,
+      note: body.note,
+      beforeState: before,
+      afterState: { display_location_visibility: 'hidden', place_removed: true },
+    });
+    const row: any = await c.env.DB.prepare(`
+      SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
+      FROM posts p LEFT JOIN users u ON u.id = p.user_id
+      WHERE p.id = ?
+      LIMIT 1
+    `).bind(postId).first();
+    return c.json({ post: adminPostPayload(row, c.env) });
+  } catch (error: any) {
+    return governanceError(c, error);
+  }
+});
+
+api.post('/admin/posts/:postId/category', authMiddleware, async (c) => {
+  try {
+    const admin = await requireAdminRole(c, 'content:write');
+    await ensureAdminModerationSchema(c.env.DB);
+    await ensureAutoCategorySchema(c.env.DB);
+    const limited = await requireAdminWriteRateLimit(c, admin, 'admin_post_category_change');
+    if (limited) return limited;
+    const postId = publicId(c.req.param('postId'), 120);
+    const body: any = await c.req.json().catch(() => ({}));
+    const unknown = rejectUnknownFields(c, body, ['primary_category', 'category', 'reason', 'note']);
+    if (unknown) return unknown;
+    const category = normalizeDiscoverCategory(body.primary_category || body.category, false);
+    if (!category) return c.json({ detail: 'Choose a valid Discover category.' }, 400);
+    const reason = cleanMultilineText(body.reason, 500);
+    if (!reason) return c.json({ detail: 'Reason is required.' }, 400);
+    const before: any = await c.env.DB.prepare(
+      `SELECT id, user_id, primary_category, category_confidence, category_source, category_status, category_signals_json, tags_json
+       FROM posts
+       WHERE id = ?
+       LIMIT 1`
+    ).bind(postId).first();
+    if (!before) return c.json({ detail: 'Post not found.' }, 404);
+    const oldCategory = normalizeDiscoverCategory(before.primary_category, false) || DEFAULT_DISCOVER_CATEGORY;
+    const nextSignals = {
+      ...parseJsonObject(before.category_signals_json),
+      admin_changed_at: now(),
+      admin_previous_category: oldCategory,
+      admin_new_category: category,
+      admin_reason: reason,
+    };
+    const nextScores = { [category]: 100 };
+    await c.env.DB.prepare(
+      `UPDATE posts
+       SET primary_category = ?, category_confidence = 1, category_source = 'admin_changed',
+           category_status = 'admin_corrected', category_signals_json = ?,
+           secondary_categories_json = ?, category_scores_json = ?, updated_at = datetime('now')
+       WHERE id = ?`
+    ).bind(category, JSON.stringify(nextSignals), JSON.stringify([category]), JSON.stringify(nextScores), postId).run();
+    await writeAdminAuditLog(c, admin, {
+      actionType: 'category_changed',
+      targetType: 'post',
+      targetId: postId,
+      targetUserId: before.user_id,
+      reason,
+      note: body.note,
+      beforeState: { old_category: oldCategory, category_source: before.category_source, category_status: before.category_status },
+      afterState: { new_category: category, category_source: 'admin_changed', category_status: 'admin_corrected' },
+    });
+    const row: any = await c.env.DB.prepare(`
+      SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
+      FROM posts p LEFT JOIN users u ON u.id = p.user_id
+      WHERE p.id = ?
+      LIMIT 1
+    `).bind(postId).first();
+    return c.json({ post: adminPostPayload(row, c.env) });
   } catch (error: any) {
     return governanceError(c, error);
   }
@@ -12324,6 +16999,20 @@ async function serveMediaBackup(c: any) {
       if (!visiblePost) return c.json({ detail: 'Media not found' }, 404);
     } else if (!viewerId) {
       return c.json({ detail: 'Media not found' }, 404);
+    } else if (cleanText(backup.message_id, 120)) {
+      const visibleMessage: any = await c.env.DB.prepare(
+        'SELECT id FROM messages WHERE id = ? AND (sender_id = ? OR receiver_id = ?) LIMIT 1'
+      ).bind(cleanText(backup.message_id, 120), viewerId, viewerId).first();
+      if (!visibleMessage) return c.json({ detail: 'Media not found' }, 404);
+    } else if (cleanText(backup.group_message_id, 120)) {
+      const visibleGroupMessage: any = await c.env.DB.prepare(
+        `SELECT gm.id
+         FROM group_messages gm
+         JOIN group_chat_members m ON m.group_id = gm.group_id
+         WHERE gm.id = ? AND m.user_id = ?
+         LIMIT 1`
+      ).bind(cleanText(backup.group_message_id, 120), viewerId).first();
+      if (!visibleGroupMessage) return c.json({ detail: 'Media not found' }, 404);
     } else if (backup.user_id !== viewerId) {
       const viewer: any = await c.env.DB.prepare('SELECT username, email, is_admin FROM users WHERE id = ?').bind(viewerId).first();
       if (!viewer?.is_admin && !isOwnerUsername(c, viewer?.username) && !isOwnerEmail(c, viewer?.email)) {
@@ -12370,6 +17059,84 @@ async function serveMediaBackup(c: any) {
   }
 }
 
+async function serveCloudflareImageProxy(c: any) {
+  const imageId = publicId(c.req.param('imageId'), 220);
+  if (!imageId) return c.json({ detail: 'Media not found' }, 404);
+
+  const limited = await enforceRateLimit(c, 'cf_image_proxy_read', clientIp(c), 900, 60);
+  if (limited) return limited;
+
+  const accountId = cloudflareAccountId(c.env);
+  const token = cloudflareImagesToken(c.env);
+  if (!accountId || !token) return c.json({ detail: 'Media delivery is not configured' }, 503);
+
+  await ensureGovernanceSchema(c.env.DB);
+  await ensureMediaModerationSchema(c.env.DB);
+
+  const visibleAsset: any = await c.env.DB.prepare(
+    `SELECT ma.id
+     FROM media_assets ma
+     JOIN posts p ON p.id = ma.post_id
+     JOIN users u ON u.id = p.user_id
+     WHERE ma.storage_provider = 'images'
+       AND ma.storage_key = ?
+       AND COALESCE(ma.upload_status, 'uploaded') = 'uploaded'
+       AND COALESCE(ma.moderation_status, 'approved') = 'approved'
+       AND ${publicPostWhere('u', 'p')}
+     LIMIT 1`
+  ).bind(imageId).first();
+
+  if (!visibleAsset) return c.json({ detail: 'Media not found' }, 404);
+
+  const cacheKey = new Request(c.req.url, { method: 'GET' });
+  try {
+    const cached = await caches.default.match(cacheKey);
+    if (cached) {
+      return c.req.method === 'HEAD'
+        ? new Response(null, { headers: cached.headers })
+        : cached;
+    }
+  } catch {
+    // Cache API is best-effort. The proxy still works without it.
+  }
+
+  const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/images/v1/${encodeURIComponent(imageId)}/blob`, {
+    headers: { Authorization: `Bearer ${token}`, accept: 'image/*' },
+  });
+
+  if (!res.ok) {
+    const status = [403, 404, 409, 425].includes(res.status) ? 404 : 502;
+    console.warn(JSON.stringify({
+      event: 'cf_image_proxy_fetch_failed',
+      status: res.status,
+      image_id: imageId.slice(0, 24),
+    }));
+    return c.json({ detail: 'Media not ready' }, status as any);
+  }
+
+  const headers = new Headers();
+  headers.set('content-type', res.headers.get('content-type') || 'image/jpeg');
+  const contentLength = res.headers.get('content-length');
+  if (contentLength) headers.set('content-length', contentLength);
+  const etag = res.headers.get('etag');
+  if (etag) headers.set('etag', etag);
+  headers.set('cache-control', 'public, max-age=86400, stale-while-revalidate=604800');
+  headers.set('cdn-cache-control', 'public, max-age=86400, stale-while-revalidate=604800');
+  headers.set('cloudflare-cdn-cache-control', 'public, max-age=86400, stale-while-revalidate=604800');
+  headers.set('x-content-type-options', 'nosniff');
+  headers.set('vary', 'accept');
+
+  const response = new Response(c.req.method === 'HEAD' ? null : res.body, { headers });
+  if (c.req.method !== 'HEAD') {
+    runBackgroundTask(c, 'cf_image_proxy_cache_put_failed', async () => {
+      await caches.default.put(cacheKey, response.clone());
+    });
+  }
+  return response;
+}
+
+api.get('/media/cf-image/:imageId', serveCloudflareImageProxy);
+api.on('HEAD', '/media/cf-image/:imageId', serveCloudflareImageProxy);
 api.get('/media/:backupId', serveMediaBackup);
 api.on('HEAD', '/media/:backupId', serveMediaBackup);
 
@@ -12410,29 +17177,30 @@ api.post('/upload/image', authMiddleware, async (c) => {
     formData.append('file', blob, `${uuid()}.${fileExt}`);
     formData.append('metadata', JSON.stringify({ userId, backup: true, image_processing: processed.status }));
 
-    if (c.env.CLOUDFLARE_ACCOUNT_ID && c.env.CLOUDFLARE_IMAGES_TOKEN) {
-      const cfRes = await fetch(`https://api.cloudflare.com/client/v4/accounts/${c.env.CLOUDFLARE_ACCOUNT_ID}/images/v1`, {
+    const accountId = cloudflareAccountId(c.env);
+    const token = cloudflareImagesToken(c.env);
+    if (accountId && token) {
+      const cfRes = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/images/v1`, {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${c.env.CLOUDFLARE_IMAGES_TOKEN}` },
+        headers: { 'Authorization': `Bearer ${token}` },
         body: formData,
       });
       const cfData: any = await cfRes.json();
       if (cfData.success) {
         const imageId = cfData.result.id;
-        const ACCOUNT_HASH = c.env.CLOUDFLARE_IMAGES_ACCOUNT_HASH || 'DY-IgVdOm-0zb0K5ZFnpKA';
-        const deliveryUrl = `https://imagedelivery.net/${ACCOUNT_HASH}/${imageId}/public`;
+        const deliveryUrl = cloudflareImageVariantUrl(c.env, imageId, cfData.result?.variants);
         const backup = await storeMediaBackup(c, {
           userId,
           mediaKind: 'image',
           provider: 'cloudflare_images',
           providerId: imageId,
-          deliveryUrl,
+          deliveryUrl: deliveryUrl || undefined,
           contentType: processed.contentType,
           bytes: processed.bytes,
           originalFilename: body.filename || `upload.${fileExt}`,
         });
         return c.json({
-          url: deliveryUrl,
+          url: deliveryUrl || backup?.delivery_url || '',
           id: imageId,
           source: 'cloudflare_images',
           backup_id: backup?.id || null,
@@ -12605,17 +17373,19 @@ api.post('/upload/video', authMiddleware, async (c) => {
     if (limited) return limited;
     const dailyLimited = await enforceRateLimit(c, 'upload_video_direct_daily', userId, 100, 86400);
     if (dailyLimited) return dailyLimited;
-    if (!c.env.CLOUDFLARE_ACCOUNT_ID || !c.env.CLOUDFLARE_STREAM_TOKEN) {
+    const accountId = cloudflareAccountId(c.env);
+    const token = cloudflareStreamToken(c.env);
+    if (!accountId || !token) {
       return c.json({ detail: 'Cloudflare Stream is not configured.' }, 503);
     }
     // Get a direct upload URL from Cloudflare Stream
-    const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${c.env.CLOUDFLARE_ACCOUNT_ID}/stream/direct_upload`, {
+    const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/direct_upload`, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${c.env.CLOUDFLARE_STREAM_TOKEN}`,
+        'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ maxDurationSeconds: 300 }),
+      body: JSON.stringify({ maxDurationSeconds: 60, creator: userId }),
     });
     const data: any = await res.json();
     if (!data.success) return c.json({ detail: 'Failed to get upload URL' }, 500);
@@ -12659,17 +17429,19 @@ api.post('/upload/video-with-backup', authMiddleware, async (c) => {
     }
 
     const videoBytes = await file.arrayBuffer();
-    const hasStreamConfig = !!(c.env.CLOUDFLARE_ACCOUNT_ID && c.env.CLOUDFLARE_STREAM_TOKEN);
+    const accountId = cloudflareAccountId(c.env);
+    const token = cloudflareStreamToken(c.env);
+    const hasStreamConfig = !!(accountId && token);
 
     if (hasStreamConfig) {
       try {
-        const directRes = await fetch(`https://api.cloudflare.com/client/v4/accounts/${c.env.CLOUDFLARE_ACCOUNT_ID}/stream/direct_upload`, {
+        const directRes = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/direct_upload`, {
           method: 'POST',
           headers: {
-            'Authorization': `Bearer ${c.env.CLOUDFLARE_STREAM_TOKEN}`,
+            'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({ maxDurationSeconds: 300, creator: userId }),
+          body: JSON.stringify({ maxDurationSeconds: 60, creator: userId }),
         });
         const directData: any = await directRes.json();
         if (directData.success) {
@@ -12740,36 +17512,43 @@ api.post('/upload/video-with-backup', authMiddleware, async (c) => {
 api.get('/stream/video/:videoUid', async (c) => {
   const uid = c.req.param('videoUid');
   try {
+    const accountId = cloudflareAccountId(c.env);
+    const token = cloudflareStreamToken(c.env);
+    if (!accountId || !token) return c.json({ detail: 'Cloudflare Stream is not configured.' }, 503);
     const cacheKey = `stream:video:${uid}`;
-    const cached = c.env.KV ? await c.env.KV.get(cacheKey, 'json').catch(() => null) : null;
-    if (cached) {
+    const cached: any = c.env.KV ? await c.env.KV.get(cacheKey, 'json').catch(() => null) : null;
+    if (cached && cached.ready !== false && cached.hls) {
       const response = c.json(cached);
       response.headers.set('cache-control', 'public, max-age=60, s-maxage=300');
       return response;
     }
 
-    const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${c.env.CLOUDFLARE_ACCOUNT_ID}/stream/${uid}`, {
-      headers: { 'Authorization': `Bearer ${c.env.CLOUDFLARE_STREAM_TOKEN}` },
+    const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/${uid}`, {
+      headers: { 'Authorization': `Bearer ${token}` },
     });
     const data: any = await res.json();
     if (!data.success || !data.result) return c.json({ detail: 'Video not found' }, 404);
     const v = data.result;
+    const state = cleanText(v.status?.state || '', 40).toLowerCase();
+    const hls = cleanText(v.playback?.hls || '', 2200) || null;
+    const dash = cleanText(v.playback?.dash || '', 2200) || null;
+    const ready = Boolean(v.readyToStream || state === 'ready') && !!hls;
     const payload = {
       uid: v.uid,
-      status: v.status?.state || 'unknown',
+      status: state || 'unknown',
       duration: v.duration,
       thumbnail: v.thumbnail,
       preview: v.preview,
       playback: v.playback || {},
-      hls: v.playback?.hls || null,
-      dash: v.playback?.dash || null,
-      ready: v.readyToStream || false,
+      hls,
+      dash,
+      ready,
     };
-    if (c.env.KV) {
-      await c.env.KV.put(cacheKey, JSON.stringify(payload), { expirationTtl: payload.ready ? 300 : 20 }).catch(() => undefined);
+    if (c.env.KV && payload.ready) {
+      await c.env.KV.put(cacheKey, JSON.stringify(payload), { expirationTtl: 300 }).catch(() => undefined);
     }
     const response = c.json(payload);
-    response.headers.set('cache-control', payload.ready ? 'public, max-age=60, s-maxage=300' : 'public, max-age=5, s-maxage=20');
+    response.headers.set('cache-control', payload.ready ? 'public, max-age=60, s-maxage=300' : 'no-store');
     return response;
   } catch (e: any) {
     console.error('Stream fetch failed:', getErrorCode(e));
@@ -12873,18 +17652,87 @@ async function mapboxPlaceDetailHandler(c: any) {
   });
 }
 
+async function mapboxCitySearchHandler(c: any) {
+  try {
+    const userId = getUserId(c);
+    const limited = await enforceRateLimit(c, 'mapbox_city_search', userId, 45, 60);
+    if (limited) return limited;
+    const query = cleanText(c.req.query('q') || c.req.query('query') || '', 80);
+    if (query.length < 2) return c.json({ locations: [] });
+    const token = getMapboxAccessToken(c);
+    const params = new URLSearchParams({
+      q: query,
+      language: 'en',
+      limit: '8',
+      types: 'place,locality,neighborhood,region,country',
+      access_token: token,
+    });
+    const proximity = cleanText(c.req.query('proximity'), 80);
+    if (proximity) params.set('proximity', proximity);
+    const res = await fetch(`${MAPBOX_SEARCH_BOX_API_BASE}/forward?${params.toString()}`);
+    if (!res.ok) return c.json({ detail: 'Mapbox city search failed.', locations: [] }, 502);
+    const data: any = await res.json();
+    const locations = Array.isArray(data.features)
+      ? data.features.map(mapboxFeatureToBroadLocation).filter((item: any) => item.label)
+      : [];
+    return c.json({ locations });
+  } catch (error: any) {
+    const code = getErrorCode(error);
+    if (code === 'MAPBOX_ACCESS_TOKEN_MISSING') return c.json({ detail: 'Mapbox is not configured.', locations: [] }, 503);
+    return c.json({ detail: 'City search could not load.', locations: [] }, 500);
+  }
+}
+
+async function mapboxReverseBroadLocationHandler(c: any) {
+  try {
+    const userId = getUserId(c);
+    const limited = await enforceRateLimit(c, 'mapbox_reverse_city', userId, 45, 60);
+    if (limited) return limited;
+    const lat = clampFloat(c.req.query('lat'), -90, 90, NaN);
+    const lng = clampFloat(c.req.query('lng'), -180, 180, NaN);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return c.json({ detail: 'Approximate latitude and longitude are required.' }, 400);
+    const token = getMapboxAccessToken(c);
+    const params = new URLSearchParams({
+      latitude: String(lat),
+      longitude: String(lng),
+      language: 'en',
+      types: 'place,locality,neighborhood,region,country',
+      access_token: token,
+    });
+    const res = await fetch(`${MAPBOX_GEOCODING_API_BASE}/reverse?${params.toString()}`);
+    if (!res.ok) return c.json({ detail: 'Mapbox reverse geocoding failed.' }, 502);
+    const data: any = await res.json();
+    const feature = Array.isArray(data.features) ? data.features[0] : null;
+    if (!feature) return c.json({ location: null });
+    return c.json({ location: mapboxFeatureToBroadLocation(feature) });
+  } catch (error: any) {
+    const code = getErrorCode(error);
+    if (code === 'MAPBOX_ACCESS_TOKEN_MISSING') return c.json({ detail: 'Mapbox is not configured.' }, 503);
+    return c.json({ detail: 'Broad location could not load.' }, 500);
+  }
+}
+
 api.get('/mapbox-places/nearby', mapboxPlacesNearbyHandler);
 api.get('/mapbox-places/:placeId', mapboxPlaceDetailHandler);
+api.get('/mapbox-locations/cities', authMiddleware, mapboxCitySearchHandler);
+api.get('/mapbox-locations/reverse', authMiddleware, mapboxReverseBroadLocationHandler);
 
 // Health
-api.get('/', (c) => c.json({ message: 'Captro API', version: API_VERSION, runtime: 'Cloudflare Workers + Hono + D1 + Supabase' }));
+api.get('/', (c) => c.json({ message: 'Captro API', version: API_VERSION, runtime: 'Cloudflare Workers + Hono + Supabase Postgres + Cloudflare media storage' }));
 api.get('/health', async (c) => {
   const startedAt = Date.now();
   const dbStartedAt = Date.now();
   let databaseHealthy = false;
+  let primaryDatabase = databasePrimary(c);
   try {
-    const row: any = await c.env.DB.prepare('SELECT 1 AS ok').first();
-    databaseHealthy = Number(row?.ok || 0) === 1;
+    if (primaryDatabase === 'supabase_postgres' && c.env.SUPABASE_URL && c.env.SUPABASE_SERVICE_ROLE_KEY) {
+      await supabaseAdminSelectRows(c, 'app_users', {}, 'id', 1);
+      databaseHealthy = true;
+    } else {
+      primaryDatabase = 'legacy_d1';
+      const row: any = await c.env.DB.prepare('SELECT 1 AS ok').first();
+      databaseHealthy = Number(row?.ok || 0) === 1;
+    }
   } catch {
     databaseHealthy = false;
   }
@@ -12898,6 +17746,7 @@ api.get('/health', async (c) => {
     checks: {
       database: {
         configured: true,
+        primary: primaryDatabase,
         healthy: databaseHealthy,
         latency_ms: Date.now() - dbStartedAt,
       },
@@ -12919,8 +17768,27 @@ api.get('/database/status', authMiddleware, async (c) => {
       await c.env.KV.delete(key).catch(() => undefined);
       kvCheck = value === 'ok';
     }
+    let supabasePostgresHealthy = false;
+    if (c.env.SUPABASE_URL && c.env.SUPABASE_SERVICE_ROLE_KEY) {
+      try {
+        await supabaseAdminSelectRows(c, 'app_users', {}, 'id', 1);
+        supabasePostgresHealthy = true;
+      } catch {
+        supabasePostgresHealthy = false;
+      }
+    }
     return c.json({
-      d1_sqlite: { configured: true, healthy: d1Check },
+      primary_database: {
+        provider: 'supabase_postgres',
+        configured: databasePrimary(c) === 'supabase_postgres',
+        healthy: supabasePostgresHealthy,
+        note: 'Supabase Postgres is the canonical Captro app database for profiles, posts, interactions, reports, chat metadata, admin roles, and audit records.',
+      },
+      d1_sqlite_legacy_cache: {
+        configured: true,
+        healthy: d1Check,
+        role: 'legacy compatibility/cache only; do not treat D1 as the production source of truth.',
+      },
       kv_nosql: { configured: !!c.env.KV, healthy: kvCheck },
       postgres_hyperdrive: {
         configured: !!c.env.HYPERDRIVE,
@@ -12930,7 +17798,14 @@ api.get('/database/status', authMiddleware, async (c) => {
       supabase_postgres_jsonb: {
         configured: !!c.env.SUPABASE_URL,
         service_role_secret_set: !!c.env.SUPABASE_SERVICE_ROLE_KEY,
+        healthy: supabasePostgresHealthy,
         note: 'Supabase stores relational data in Postgres and flexible NoSQL-style app_documents/editor metadata in JSONB.',
+      },
+      supabase_authentication: {
+        configured: !!c.env.SUPABASE_URL,
+        service_role_secret_set: !!c.env.SUPABASE_SERVICE_ROLE_KEY,
+        anon_key_set: !!c.env.SUPABASE_ANON_KEY,
+        note: 'Captro account creation and social sign-in are bridged into Supabase Authentication and linked by users.supabase_user_id.',
       },
       timestamp: now(),
     });
@@ -12981,39 +17856,18 @@ api.post('/bookmarks/setup-db', authMiddleware, async (c) => {
 api.post('/bookmarks', authMiddleware, async (c) => {
   const userId = getUserId(c);
   await ensureGovernanceSchema(c.env.DB);
+  await ensureLikeUniquenessSchema(c.env.DB);
   const limited = await enforceRateLimit(c, 'save_post', userId, 240, 60);
   if (limited) return limited;
   const { post_id, collection } = await c.req.json().catch(() => ({}));
   const postId = publicId(post_id, 120);
   if (!postId) return c.json({ detail: 'post_id required' }, 400);
-  const id = uuid();
   try {
     const post = await c.env.DB.prepare('SELECT id FROM posts WHERE id = ?').bind(postId).first();
     if (!post) return c.json({ detail: 'Post not found' }, 404);
     const collectionName = cleanText(collection || 'saved', 80) || 'saved';
-    const existingSave = await c.env.DB.prepare('SELECT id FROM saved_posts WHERE user_id = ? AND post_id = ?').bind(userId, postId).first();
-    if (existingSave) {
-      await c.env.DB.prepare('UPDATE saved_posts SET collection = ? WHERE user_id = ? AND post_id = ?').bind(collectionName, userId, postId).run();
-    } else {
-      await c.env.DB.prepare('INSERT INTO saved_posts (id, user_id, post_id, collection) VALUES (?, ?, ?, ?)').bind(uuid(), userId, postId, collectionName).run();
-    }
-    const engagement = await getPostEngagementState(c.env.DB, postId, userId);
-    try {
-      await c.env.DB.prepare('INSERT INTO bookmarks (id, user_id, post_id, collection) VALUES (?, ?, ?, ?) ON CONFLICT(user_id, post_id) DO UPDATE SET collection = ?')
-        .bind(id, userId, postId, collectionName, collectionName).run();
-    } catch {}
-    runBackgroundTask(c, 'supabase_bookmark_write_through_failed', async () => {
-      await mirrorLegacyInteractionToSupabase(c, postId, userId, 'save', true, collectionName);
-      await mirrorLegacyPostToSupabase(c, postId);
-    });
-    return c.json({
-      saved: engagement.saved,
-      collection: collectionName,
-      saves_count: engagement.saves_count,
-      liked: engagement.liked,
-      likes_count: engagement.likes_count,
-      comments_count: engagement.comments_count,
-    });
+    const { state: engagement } = await setCanonicalPostSaveState(c, postId, userId, true, collectionName);
+    return c.json(postEngagementResponse(engagement, { collection: collectionName }));
   } catch (e: any) {
     console.error('Bookmark save failed:', getErrorCode(e));
     return c.json({ detail: 'Save failed. Please try again.' }, 500);
@@ -13024,38 +17878,29 @@ api.post('/bookmarks', authMiddleware, async (c) => {
 api.delete('/bookmarks/:postId', authMiddleware, async (c) => {
   const userId = getUserId(c);
   await ensureGovernanceSchema(c.env.DB);
+  await ensureLikeUniquenessSchema(c.env.DB);
   const limited = await enforceRateLimit(c, 'save_post', userId, 240, 60);
   if (limited) return limited;
   const postId = publicId(c.req.param('postId'), 120);
-  const existingSave = await c.env.DB.prepare('SELECT id FROM saved_posts WHERE user_id = ? AND post_id = ?').bind(userId, postId).first();
-  if (existingSave) {
-    await c.env.DB.prepare('DELETE FROM saved_posts WHERE user_id = ? AND post_id = ?').bind(userId, postId).run();
-  }
-  try { await c.env.DB.prepare('DELETE FROM bookmarks WHERE user_id = ? AND post_id = ?').bind(userId, postId).run(); } catch {}
-  if (existingSave) {
-    runBackgroundTask(c, 'supabase_bookmark_delete_write_through_failed', async () => {
-      await mirrorLegacyInteractionToSupabase(c, postId, userId, 'save', false);
-      await mirrorLegacyPostToSupabase(c, postId);
-    });
-  }
-  const engagement = await getPostEngagementState(c.env.DB, postId, userId);
-  return c.json({
-    saved: engagement.saved,
-    saves_count: engagement.saves_count,
-    liked: engagement.liked,
-    likes_count: engagement.likes_count,
-    comments_count: engagement.comments_count,
-  });
+  const { state: engagement } = await setCanonicalPostSaveState(c, postId, userId, false);
+  return c.json(postEngagementResponse(engagement));
 });
 
 // Get saved posts by collection
 api.get('/bookmarks', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  await ensureLikeUniquenessSchema(c.env.DB);
+  const relatedUserIds = await relatedInteractionUserIds(c.env.DB, userId);
+  const relatedPlaceholders = inPlaceholders(relatedUserIds);
   const collection = cleanText(c.req.query('collection'), 80);
-  let q = 'SELECT b.*, p.content, p.image, p.images, p.likes_count, p.post_type, p.created_at as post_date, u.full_name, u.username, u.profile_image FROM bookmarks b JOIN posts p ON b.post_id = p.id JOIN users u ON p.user_id = u.id WHERE b.user_id = ?';
-  const binds: any[] = [userId];
+  let q = `SELECT b.*, p.content, p.image, p.images, p.likes_count, p.post_type, p.created_at as post_date, u.full_name, u.username, u.profile_image
+    FROM bookmarks b
+    JOIN posts p ON b.post_id = p.id
+    JOIN users u ON p.user_id = u.id
+    WHERE b.user_id IN (${relatedPlaceholders})`;
+  const binds: any[] = [...relatedUserIds];
   if (collection) { q += ' AND b.collection = ?'; binds.push(collection); }
-  q += ' ORDER BY b.created_at DESC';
+  q += ' GROUP BY p.id ORDER BY MAX(b.created_at) DESC';
   const { results } = await c.env.DB.prepare(q).bind(...binds).all();
   return c.json({ bookmarks: results || [] });
 });
@@ -13063,13 +17908,28 @@ api.get('/bookmarks', authMiddleware, async (c) => {
 // Check if post is saved
 api.get('/bookmarks/check/:postId', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  await ensureLikeUniquenessSchema(c.env.DB);
   const postId = c.req.param('postId');
+  const relatedUserIds = await relatedInteractionUserIds(c.env.DB, userId);
+  if (supabaseEngagementConfigured(c)) {
+    try {
+      const rows = await supabaseAdminSelectRows(c, 'app_post_interactions', {
+        legacy_post_id: postgrestEqFilter(postId),
+        kind: postgrestEqFilter('save'),
+        app_user_id: postgrestInFilter(relatedUserIds),
+      }, 'collection', 1);
+      if (rows.length) return c.json({ saved: true, collection: rows[0]?.collection || 'saved' });
+    } catch (error: any) {
+      console.warn(JSON.stringify({ event: 'supabase_bookmark_check_failed', code: getErrorCode(error).slice(0, 180) }));
+    }
+  }
+  const relatedPlaceholders = inPlaceholders(relatedUserIds);
   const r: any = await c.env.DB.prepare(
-    `SELECT collection FROM bookmarks WHERE user_id = ? AND post_id = ?
+    `SELECT collection FROM bookmarks WHERE post_id = ? AND user_id IN (${relatedPlaceholders})
      UNION
-     SELECT collection FROM saved_posts WHERE user_id = ? AND post_id = ?
+     SELECT collection FROM saved_posts WHERE post_id = ? AND user_id IN (${relatedPlaceholders})
      LIMIT 1`
-  ).bind(userId, postId, userId, postId).first();
+  ).bind(postId, ...relatedUserIds, postId, ...relatedUserIds).first();
   return c.json({ saved: !!r, collection: r?.collection || null });
 });
 
@@ -13394,7 +18254,20 @@ api.post('/admin/supabase/transfer', authMiddleware, async (c) => {
     const limit = clampNumber(body.limit || c.req.query('limit'), 1, 1000, 500);
     const offset = clampNumber(body.offset || c.req.query('offset'), 0, 1_000_000_000, 0);
     const requestedTables = Array.isArray(body.tables) ? body.tables.map(String) : [];
-    const allTables = ['users', 'posts', 'comments', 'interactions', 'follows'];
+    const allTables = [
+      'users',
+      'posts',
+      'comments',
+      'interactions',
+      'follows',
+      'blocks',
+      'notifications',
+      'reports',
+      'messages',
+      'group_chats',
+      'post_places',
+      'media_assets',
+    ];
     const tables = requestedTables.length ? allTables.filter((table) => requestedTables.includes(table)) : allTables;
     if (!tables.length) return c.json({ detail: 'No valid transfer tables requested.' }, 400);
 
@@ -13404,6 +18277,13 @@ api.post('/admin/supabase/transfer', authMiddleware, async (c) => {
     if (tables.includes('comments')) results.push(await transferLegacyCommentsToSupabase(c, limit, offset));
     if (tables.includes('interactions')) results.push(await transferLegacyInteractionsToSupabase(c, limit, offset));
     if (tables.includes('follows')) results.push(await transferLegacyFollowsToSupabase(c, limit, offset));
+    if (tables.includes('blocks')) results.push(await transferLegacyBlocksToSupabase(c, limit, offset));
+    if (tables.includes('notifications')) results.push(await transferLegacyNotificationsToSupabase(c, limit, offset));
+    if (tables.includes('reports')) results.push(await transferLegacyReportsToSupabase(c, limit, offset));
+    if (tables.includes('messages')) results.push(await transferLegacyMessagesToSupabase(c, limit, offset));
+    if (tables.includes('group_chats')) results.push(await transferLegacyGroupChatsToSupabase(c, limit, offset));
+    if (tables.includes('post_places')) results.push(await transferLegacyPostPlacesToSupabase(c, limit, offset));
+    if (tables.includes('media_assets')) results.push(await transferLegacyMediaAssetsToSupabase(c, limit, offset));
 
     try {
       await supabaseAdminUpsert(c, 'app_documents', [{
@@ -13443,6 +18323,32 @@ api.post('/admin/supabase/transfer', authMiddleware, async (c) => {
     }
     console.error('Supabase transfer failed:', code, error?.message || error);
     return c.json({ detail: 'Supabase transfer failed.', code }, 500);
+  }
+});
+
+api.post('/admin/supabase/auth/backfill', authMiddleware, async (c) => {
+  try {
+    const adminId = await requireAdmin(c);
+    const body: any = await c.req.json().catch(() => ({}));
+    const limit = clampNumber(body.limit || c.req.query('limit'), 1, 500, 100);
+    const offset = clampNumber(body.offset || c.req.query('offset'), 0, 1_000_000_000, 0);
+    const result = await backfillLegacyUsersToSupabaseAuth(c, limit, offset);
+    await logSecurityEvent(c, 'supabase_auth_backfill_run', adminId, { limit, offset, result });
+    return c.json({
+      ok: true,
+      limit,
+      offset,
+      next_offset: offset + limit,
+      result,
+      note: 'Run again with next_offset until processed returns 0. Existing password users are linked and their Supabase password is set on next successful login/password update.',
+    });
+  } catch (error: any) {
+    const code = getErrorCode(error);
+    if (code === 'FORBIDDEN') return c.json({ detail: 'Admin only' }, 403);
+    if (code === 'SUPABASE_NOT_CONFIGURED') return c.json({ detail: 'SUPABASE_URL is not configured.' }, 503);
+    if (code === 'SUPABASE_SERVICE_ROLE_MISSING') return c.json({ detail: 'SUPABASE_SERVICE_ROLE_KEY is not configured.' }, 503);
+    console.error('Supabase Auth backfill failed:', code, error?.message || error);
+    return c.json({ detail: 'Supabase Auth backfill failed.', code }, 500);
   }
 });
 
@@ -13511,7 +18417,7 @@ api.post('/applications', authMiddleware, async (c) => {
   const body = await c.req.json();
   const { type } = body; // type: 'creator' | 'publisher'
   if (!type || !['creator', 'publisher'].includes(type)) return c.json({ detail: 'Invalid type' }, 400);
-  return c.json({ detail: 'Creator and publisher applications have been removed from Flames Up.' }, 410);
+  return c.json({ detail: 'Creator and publisher applications have been removed from Captro.' }, 410);
 });
 
 // List applications (admin)
@@ -13716,7 +18622,218 @@ api.get('/admin/stats', authMiddleware, async (c) => {
   } catch (e: any) { return c.json({ detail: e?.message === 'FORBIDDEN' ? 'Admin access required' : 'Request failed.' }, e?.message === 'FORBIDDEN' ? 403 : 500); }
 });
 
+async function runDeletionStatement(env: Env, sql: string, binds: any[] = []) {
+  try {
+    await env.DB.prepare(sql).bind(...binds).run();
+  } catch (error: any) {
+    const message = String(error?.message || '');
+    if (/no such (table|column)/i.test(message)) return;
+    console.warn(JSON.stringify({ event: 'account_deletion_statement_failed', code: getErrorCode(error).slice(0, 160) }));
+  }
+}
+
+async function queryDeletionRows(env: Env, sql: string, binds: any[] = []): Promise<any[]> {
+  try {
+    const result = await env.DB.prepare(sql).bind(...binds).all();
+    return result.results as any[] || [];
+  } catch (error: any) {
+    const message = String(error?.message || '');
+    if (/no such (table|column)/i.test(message)) return [];
+    console.warn(JSON.stringify({ event: 'account_deletion_query_failed', code: getErrorCode(error).slice(0, 160) }));
+    return [];
+  }
+}
+
+async function deleteCloudflareMediaAsset(env: Env, asset: any) {
+  const provider = cleanText(asset?.storage_provider || asset?.provider, 40);
+  const key = cleanText(asset?.storage_key || asset?.provider_id, 240);
+  if (!provider || !key) return;
+  const accountId = cloudflareAccountId(env);
+  const token = provider === 'stream' ? cloudflareStreamToken(env) : provider === 'images' ? cloudflareImagesToken(env) : '';
+  if (provider === 'r2') {
+    await env.MEDIA_BACKUP?.delete(key).catch(() => {});
+    return;
+  }
+  if (!accountId || !token) return;
+  const url = provider === 'stream'
+    ? `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/stream/${encodeURIComponent(key)}`
+    : provider === 'images'
+      ? `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/images/v1/${encodeURIComponent(key)}`
+      : '';
+  if (!url) return;
+  const response = await fetch(url, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  }).catch(() => null);
+  if (response && !response.ok && response.status !== 404) {
+    console.warn(JSON.stringify({
+      event: 'cloudflare_media_delete_failed',
+      provider,
+      status: response.status,
+      media_id: publicId(asset?.id || '', 120),
+    }));
+  }
+}
+
+async function permanentlyDeleteAccount(env: Env, user: any) {
+  const userId = publicId(user?.id, 120);
+  if (!userId || String(user?.status || '') === 'deleted') return;
+  await ensureAccountDeletionSchema(env.DB);
+  await ensureGovernanceSchema(env.DB);
+  await ensurePremiumSchema(env.DB);
+  await ensureCommentSchema(env.DB);
+  await ensureMediaBackupSchema(env.DB);
+  await ensureMediaModerationSchema(env.DB);
+
+  const deletedAt = now();
+  const identities = await queryDeletionRows(env, 'SELECT provider, provider_user_id, email_hash FROM account_identities WHERE user_id = ?', [userId]);
+  const identityRows = identities.length ? identities : [{
+    provider: cleanText(user.oauth_provider || (user.email ? 'email' : ''), 40),
+    provider_user_id: cleanText(user.oauth_subject || user.supabase_user_id || '', 240),
+    email_hash: user.email ? await privacyHash({ env }, normalizeOptionalEmail(user.email) || '') : '',
+  }];
+  for (const identity of identityRows) {
+    await runDeletionStatement(env,
+      `INSERT OR IGNORE INTO deleted_account_safety_records
+       (id, user_id, email_hash, provider, provider_user_id_hash, status_at_deletion, reason, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        uuid(),
+        userId,
+        cleanText(identity.email_hash || '', 160),
+        cleanText(identity.provider || '', 40),
+        await privacyHash({ env }, identity.provider_user_id || ''),
+        cleanText(user.status || 'deletion_pending', 40),
+        cleanText(user.ban_reason || 'account_deletion', 160),
+        deletedAt,
+      ],
+    );
+  }
+
+  const assets = await queryDeletionRows(env, 'SELECT * FROM media_assets WHERE user_id = ?', [userId]);
+  for (const asset of assets) await deleteCloudflareMediaAsset(env, asset);
+  const backups = await queryDeletionRows(env, 'SELECT id, r2_key FROM media_backups WHERE user_id = ?', [userId]);
+  for (const backup of backups) {
+    const key = cleanText(backup.r2_key, 500);
+    if (key) await env.MEDIA_BACKUP?.delete(key).catch(() => {});
+  }
+
+  const deletionStatements: Array<[string, any[]]> = [
+    ['DELETE FROM push_tokens WHERE user_id = ?', [userId]],
+    ['DELETE FROM saved_posts WHERE user_id = ?', [userId]],
+    ['DELETE FROM bookmarks WHERE user_id = ?', [userId]],
+    ['DELETE FROM likes WHERE user_id = ?', [userId]],
+    ['DELETE FROM comment_likes WHERE user_id = ?', [userId]],
+    ['DELETE FROM follows WHERE follower_id = ? OR following_id = ?', [userId, userId]],
+    ['DELETE FROM friendships WHERE user_id = ? OR friend_id = ?', [userId, userId]],
+    ['DELETE FROM friend_requests WHERE from_user_id = ? OR to_user_id = ?', [userId, userId]],
+    ['DELETE FROM blocks WHERE blocker_id = ? OR blocked_id = ?', [userId, userId]],
+    ['DELETE FROM notifications WHERE user_id = ? OR from_user_id = ?', [userId, userId]],
+    ['DELETE FROM comments WHERE user_id = ?', [userId]],
+    ['DELETE FROM note_comment_likes WHERE user_id = ?', [userId]],
+    ['DELETE FROM note_comments WHERE user_id = ?', [userId]],
+    ['DELETE FROM note_interactions WHERE user_id = ?', [userId]],
+    ['DELETE FROM note_reports WHERE reporter_id = ?', [userId]],
+    ['DELETE FROM notes WHERE user_id = ?', [userId]],
+    ['DELETE FROM statuses WHERE user_id = ?', [userId]],
+    ['DELETE FROM messages WHERE sender_id = ? OR receiver_id = ?', [userId, userId]],
+    ['DELETE FROM message_typing WHERE user_id = ? OR peer_id = ?', [userId, userId]],
+    ['DELETE FROM user_presence WHERE user_id = ?', [userId]],
+    ['DELETE FROM group_messages WHERE sender_id = ?', [userId]],
+    ['DELETE FROM group_chat_members WHERE user_id = ?', [userId]],
+    ['DELETE FROM media_assets WHERE user_id = ?', [userId]],
+    ['DELETE FROM media_backups WHERE user_id = ?', [userId]],
+    ['DELETE FROM posts WHERE user_id = ?', [userId]],
+    ['DELETE FROM account_identities WHERE user_id = ?', [userId]],
+  ];
+  for (const [sql, binds] of deletionStatements) await runDeletionStatement(env, sql, binds);
+
+  const deletedPasswordHash = await hashPassword(`deleted:${userId}:${uuid()}`);
+  await runDeletionStatement(env,
+    `UPDATE users SET
+       status = 'deleted',
+       email = ?,
+       username = ?,
+       full_name = 'Deleted user',
+       password_hash = ?,
+       bio = '',
+       profile_image = '',
+       cover_image = '',
+       city = '',
+       followers_count = 0,
+       following_count = 0,
+       posts_count = 0,
+       deleted_at = ?,
+       updated_at = datetime('now')
+     WHERE id = ?`,
+    [`deleted_${userId}@deleted.flames-up.local`, `deleted_${userId.slice(0, 12)}`, deletedPasswordHash, deletedAt, userId],
+  );
+  await runDeletionStatement(env, "UPDATE users SET oauth_provider = '' WHERE id = ?", [userId]);
+  await runDeletionStatement(env, "UPDATE users SET oauth_subject = '' WHERE id = ?", [userId]);
+  await runDeletionStatement(env, 'UPDATE users SET supabase_user_id = NULL WHERE id = ?', [userId]);
+  await runDeletionStatement(env, 'UPDATE users SET phone = NULL, phone_verified = 0 WHERE id = ?', [userId]);
+
+  await runDeletionStatement(env,
+    `INSERT INTO account_deletion_events (id, user_id, event_type, actor_user_id, reason, metadata, request_id, created_at)
+     VALUES (?, ?, 'deletion_permanent_completed', '', 'scheduled_30_day_cleanup', ?, '', ?)`,
+    [uuid(), userId, JSON.stringify({ deleted_at: deletedAt }), deletedAt],
+  );
+  if (user.supabase_user_id) {
+    await deleteSupabaseAuthUser({ env }, user.supabase_user_id).catch((error: any) => {
+      console.warn(JSON.stringify({ event: 'supabase_auth_permanent_delete_failed', code: getErrorCode(error).slice(0, 160), user_id: publicId(userId, 120) }));
+    });
+  }
+}
+
+async function processAccountDeletionQueue(env: Env, limit = 20) {
+  await ensureAccountDeletionSchema(env.DB);
+  const due = await queryDeletionRows(env,
+    `SELECT * FROM users
+     WHERE status = 'deletion_pending'
+       AND deletion_scheduled_at IS NOT NULL
+       AND datetime(deletion_scheduled_at) <= datetime(?)
+     ORDER BY deletion_scheduled_at ASC
+     LIMIT ?`,
+    [now(), limit],
+  );
+  for (const user of due) {
+    try {
+      await permanentlyDeleteAccount(env, user);
+    } catch (error: any) {
+      console.warn(JSON.stringify({
+        event: 'account_deletion_cleanup_failed',
+        code: getErrorCode(error).slice(0, 180),
+        user_id: publicId(user?.id || '', 120),
+      }));
+    }
+  }
+}
+
 // Mount API routes on app
 app.route('/api', api);
 
-export default app;
+async function handleMediaModerationQueue(batch: MessageBatch<MediaModerationJobMessage>, env: Env, _ctx: ExecutionContext) {
+  for (const message of batch.messages) {
+    try {
+      await processMediaModerationJob(env, message.body, 'queue');
+      message.ack();
+    } catch (error: any) {
+      console.warn(JSON.stringify({
+        event: 'media_moderation_queue_failed',
+        code: getErrorCode(error).slice(0, 180),
+        media_id: publicId(message.body?.mediaId || '', 160),
+      }));
+      message.retry();
+    }
+  }
+}
+
+export default {
+  fetch(request: Request, env: Env, ctx: ExecutionContext) {
+    return app.fetch(request, env, ctx);
+  },
+  queue: handleMediaModerationQueue,
+  scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
+    ctx.waitUntil(processAccountDeletionQueue(env));
+  },
+};

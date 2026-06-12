@@ -3,6 +3,97 @@ import Darwin
 import Foundation
 import ImageIO
 import UIKit
+import os
+#if canImport(MetricKit)
+import MetricKit
+#endif
+
+public enum MIRAApplePerformanceLogger {
+  private static let subsystem = Bundle.main.bundleIdentifier ?? "com.captro.ios"
+  private static let logger = Logger(subsystem: subsystem, category: "performance")
+  private static let signpostLog = OSLog(subsystem: subsystem, category: "performance")
+
+  public static func event(_ name: String, detail: String? = nil) {
+    let cleanName = sanitized(name, max: 80)
+    let cleanDetail = sanitized(detail ?? "", max: 160)
+    if cleanDetail.isEmpty {
+      logger.info("\(cleanName, privacy: .public)")
+      os_signpost(.event, log: signpostLog, name: "Captro Event", "%{public}@", cleanName as NSString)
+    } else {
+      logger.info("\(cleanName, privacy: .public) \(cleanDetail, privacy: .public)")
+      os_signpost(.event, log: signpostLog, name: "Captro Event", "%{public}@ %{public}@", cleanName as NSString, cleanDetail as NSString)
+    }
+  }
+
+  public static func beginInterval(_ name: String, detail: String? = nil) -> MIRAApplePerformanceInterval {
+    let cleanName = sanitized(name, max: 80)
+    let cleanDetail = sanitized(detail ?? "", max: 160)
+    let id = OSSignpostID(log: signpostLog)
+    os_signpost(.begin, log: signpostLog, name: "Captro Interval", signpostID: id, "%{public}@ %{public}@", cleanName as NSString, cleanDetail as NSString)
+    logger.debug("begin \(cleanName, privacy: .public) \(cleanDetail, privacy: .public)")
+    return MIRAApplePerformanceInterval(id: id, name: cleanName)
+  }
+
+  fileprivate static func endInterval(_ interval: MIRAApplePerformanceInterval, status: String?) {
+    let cleanStatus = sanitized(status ?? "", max: 80)
+    os_signpost(.end, log: signpostLog, name: "Captro Interval", signpostID: interval.id, "%{public}@ %{public}@", interval.name as NSString, cleanStatus as NSString)
+    logger.debug("end \(interval.name, privacy: .public) \(cleanStatus, privacy: .public)")
+  }
+
+  private static func sanitized(_ value: String, max: Int) -> String {
+    let lowered = value.lowercased()
+    guard !lowered.contains("token"),
+          !lowered.contains("password"),
+          !lowered.contains("secret"),
+          !lowered.contains("authorization"),
+          !lowered.contains("message"),
+          !lowered.contains("caption")
+    else { return "redacted" }
+    return String(value.replacingOccurrences(of: "\n", with: " ").prefix(max))
+  }
+}
+
+public struct MIRAApplePerformanceInterval {
+  fileprivate let id: OSSignpostID
+  fileprivate let name: String
+
+  public func end(status: String? = nil) {
+    MIRAApplePerformanceLogger.endInterval(self, status: status)
+  }
+}
+
+#if canImport(MetricKit)
+public final class MIRAMetricKitSubscriber: NSObject, MXMetricManagerSubscriber {
+  public static let shared = MIRAMetricKitSubscriber()
+  private var isStarted = false
+
+  private override init() {}
+
+  public func start() {
+    guard !isStarted else { return }
+    isStarted = true
+    MXMetricManager.shared.add(self)
+    MIRAApplePerformanceLogger.event("metrickit_started")
+  }
+
+  public func didReceive(_ payloads: [MXMetricPayload]) {
+    MIRAApplePerformanceLogger.event("metrickit_metrics_received", detail: "count=\(payloads.count)")
+  }
+
+  public func didReceive(_ payloads: [MXDiagnosticPayload]) {
+    MIRAApplePerformanceLogger.event("metrickit_diagnostics_received", detail: "count=\(payloads.count)")
+  }
+}
+#endif
+
+public enum MIRAAppleRuntimeDiagnostics {
+  public static func start() {
+    MIRAApplePerformanceLogger.event("runtime_diagnostics_start")
+    #if canImport(MetricKit)
+    MIRAMetricKitSubscriber.shared.start()
+    #endif
+  }
+}
 
 public enum MIRAPerformanceTimeline {
   private final class Storage: @unchecked Sendable {
@@ -14,22 +105,21 @@ public enum MIRAPerformanceTimeline {
   private static let storage = Storage()
 
   public static func mark(_ name: String, detail: String? = nil) {
+    MIRAApplePerformanceLogger.event(name, detail: detail)
     #if DEBUG
     let elapsed = Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000
     let detailText = detail.map { " \($0)" } ?? ""
-    print("[MIRA perf] mark \(name) \(Int(elapsed))ms\(detailText)")
+    print("[Captro perf] mark \(name) \(Int(elapsed))ms\(detailText)")
     #endif
   }
 
   public static func markOnce(_ name: String, detail: String? = nil) {
-    #if DEBUG
     storage.lock.lock()
     let shouldEmit = storage.emittedOnce.insert(name).inserted
     storage.lock.unlock()
     if shouldEmit {
       mark(name, detail: detail)
     }
-    #endif
   }
 }
 
@@ -37,7 +127,7 @@ public enum MIRAMemoryMetrics {
   public static func log(_ label: String) {
     #if DEBUG
     guard let value = residentMemoryMB() else { return }
-    print("[MIRA perf] memory \(label) \(Int(value))MB")
+    print("[Captro perf] memory \(label) \(Int(value))MB")
     #endif
   }
 
@@ -70,7 +160,7 @@ public actor MIRAPerformanceMonitor {
     }
     let count = activeCount(for: category)
     #if DEBUG
-    print("[MIRA perf] begin \(category) active=\(count) \(label)")
+    print("[Captro perf] begin \(category) active=\(count) \(label)")
     #endif
     return count
   }
@@ -85,7 +175,7 @@ public actor MIRAPerformanceMonitor {
     #if DEBUG
     let statusText = status.map { " status=\($0)" } ?? ""
     let bytesText = bytes > 0 ? " bytes=\(bytes)" : ""
-    print("[MIRA perf] end \(category) active=\(activeCount(for: category)) \(Int(elapsedMilliseconds))ms\(statusText)\(bytesText) \(label)")
+      print("[Captro perf] end \(category) active=\(activeCount(for: category)) \(Int(elapsedMilliseconds))ms\(statusText)\(bytesText) \(label)")
     #endif
   }
 
@@ -125,6 +215,7 @@ public struct MIRAPerformanceMetric {
       status: status,
       bytes: bytes
     )
+    MIRAApplePerformanceLogger.event("\(category)_complete", detail: "status=\(status ?? "unknown") bytes=\(bytes)")
   }
 }
 
@@ -150,7 +241,7 @@ public final class MIRAMainThreadStallMonitor {
       guard let self, self.isRunning else { return }
       let drift = Date().timeIntervalSince(expected)
       if drift > 0.10 {
-        print("[MIRA perf] main-thread stall \(Int(drift * 1000))ms")
+        print("[Captro perf] main-thread stall \(Int(drift * 1000))ms")
       }
       self.scheduleTick(expected: Date().addingTimeInterval(self.interval))
     }
@@ -186,6 +277,25 @@ public enum MIRALocalJSONCache {
     }.value
   }
 
+  public static func trim(maxAge: TimeInterval = 60 * 60 * 24 * 7) async {
+    await Task.detached(priority: .utility) {
+      guard let directory = cacheDirectory(),
+            let files = try? FileManager.default.contentsOfDirectory(
+              at: directory,
+              includingPropertiesForKeys: [.contentModificationDateKey],
+              options: [.skipsHiddenFiles]
+            )
+      else { return }
+      let cutoff = Date().addingTimeInterval(-maxAge)
+      for file in files {
+        let modified = (try? file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+        if modified < cutoff {
+          try? FileManager.default.removeItem(at: file)
+        }
+      }
+    }.value
+  }
+
   private static func cacheFileURL(for key: String) -> URL? {
     guard let directory = cacheDirectory() else { return nil }
     let digest = SHA256.hash(data: Data(key.utf8)).map { String(format: "%02x", $0) }.joined()
@@ -216,6 +326,54 @@ public enum MIRAImageDiskCache {
     await Task.detached(priority: .utility) {
       guard let fileURL = cacheFileURL(for: url.absoluteString) else { return }
       try? data.write(to: fileURL, options: [.atomic])
+    }.value
+  }
+
+  public static func clear() async {
+    await Task.detached(priority: .utility) {
+      guard let directory = cacheDirectory(),
+            let files = try? FileManager.default.contentsOfDirectory(
+              at: directory,
+              includingPropertiesForKeys: nil,
+              options: [.skipsHiddenFiles]
+            )
+      else { return }
+      for file in files {
+        try? FileManager.default.removeItem(at: file)
+      }
+    }.value
+  }
+
+  public static func trim(maxAge: TimeInterval = 60 * 60 * 24 * 14, maxBytes: Int = 700 * 1024 * 1024) async {
+    await Task.detached(priority: .utility) {
+      guard let directory = cacheDirectory(),
+            let files = try? FileManager.default.contentsOfDirectory(
+              at: directory,
+              includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey],
+              options: [.skipsHiddenFiles]
+            )
+      else { return }
+      let cutoff = Date().addingTimeInterval(-maxAge)
+      var totalBytes = 0
+      let entries = files.map { file -> (url: URL, modified: Date, size: Int) in
+        let values = try? file.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+        return (file, values?.contentModificationDate ?? .distantPast, values?.fileSize ?? 0)
+      }.sorted { $0.modified < $1.modified }
+
+      for entry in entries {
+        totalBytes += entry.size
+        if entry.modified < cutoff {
+          try? FileManager.default.removeItem(at: entry.url)
+        }
+      }
+
+      if totalBytes > maxBytes {
+        var bytesToRemove = totalBytes - maxBytes
+        for entry in entries where bytesToRemove > 0 {
+          try? FileManager.default.removeItem(at: entry.url)
+          bytesToRemove -= entry.size
+        }
+      }
     }.value
   }
 

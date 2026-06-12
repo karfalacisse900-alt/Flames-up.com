@@ -15,7 +15,7 @@ import type {
 } from './types';
 
 type ViewKey = 'dashboard' | 'reports' | 'posts' | 'comments' | 'users' | 'messages' | 'discover' | 'audit' | 'settings';
-type PostAction = 'remove' | 'restore' | 'discover' | 'safe';
+type PostAction = 'remove' | 'restore' | 'discover' | 'safe' | 'clearLocation';
 
 type ActionDialogState = {
   title: string;
@@ -67,7 +67,8 @@ const reportReasons = [
   'other',
 ];
 
-const postCategories = ['all', 'photography', 'outdoors', 'outfits', 'food', 'travel', 'art', 'lifestyle', 'events', 'nightlife'];
+const postCategories = ['all', 'outfits', 'outdoors', 'photography', 'food', 'cafe', 'travel', 'fitness', 'beauty', 'art', 'nightlife', 'places', 'lifestyle'];
+const editablePostCategories = postCategories.filter((category) => category !== 'all');
 
 function formatDate(value?: string | null) {
   if (!value) return '-';
@@ -96,6 +97,22 @@ function compactId(value?: string) {
 function clampText(value?: string | null, fallback = 'No text') {
   const clean = String(value || '').trim();
   return clean || fallback;
+}
+
+function postCategory(post: AdminPost) {
+  return post.primary_category || post.category || 'lifestyle';
+}
+
+function sortedCategoryScores(post: AdminPost) {
+  return Object.entries(post.category_scores || {})
+    .filter(([, score]) => Number(score) > 0)
+    .sort((a, b) => Number(b[1]) - Number(a[1]))
+    .slice(0, 8);
+}
+
+function formatConfidence(value?: number) {
+  if (typeof value !== 'number' || Number.isNaN(value)) return '0%';
+  return `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
 }
 
 function statusClass(value?: string) {
@@ -777,6 +794,21 @@ function PostModerationPage({
         if (action === 'restore') await AdminApi.restorePost(token, post.id, body);
         if (action === 'discover') await AdminApi.removeFromDiscover(token, post.id, body);
         if (action === 'safe') await AdminApi.markPostSafe(token, post.id, body);
+        if (action === 'clearLocation') await AdminApi.clearPostLocation(token, post.id, body);
+        await list.reload();
+        if (selectedPostId) await detail.reload();
+      },
+    });
+  }
+
+  function changeCategory(post: AdminPost, category: string) {
+    openAction({
+      title: 'Change Discover category',
+      message: `Move post ${compactId(post.id)} to ${titleCase(category)}.`,
+      confirmLabel: 'Change category',
+      targetPreview: <PostActionPreview post={post} />,
+      onConfirm: async (reason, note) => {
+        await AdminApi.changePostCategory(token, post.id, { primary_category: category, reason, note });
         await list.reload();
         if (selectedPostId) await detail.reload();
       },
@@ -831,7 +863,7 @@ function PostModerationPage({
       </div>
       <aside className="detail-panel">
         {detail.loading ? <LoadingRows compact /> : detail.data?.post ? (
-          <PostDetailPanel post={detail.data.post} actions={detail.data.actions || []} session={session} onAction={act} onViewAuthor={() => onViewAuthor(detail.data?.post.author.id || '')} />
+          <PostDetailPanel post={detail.data.post} actions={detail.data.actions || []} session={session} onAction={act} onCategoryChange={changeCategory} onViewAuthor={() => onViewAuthor(detail.data?.post.author.id || '')} />
         ) : <EmptyState title="Select a post" body="Media preview, caption, metadata, and actions will appear here." />}
       </aside>
     </section>
@@ -843,7 +875,7 @@ function PostActionPreview({ post }: { post: AdminPost }) {
     <div className="action-preview">
       <MediaPreview post={post} size="table" />
       <div>
-        <strong>@{post.author.username || 'unknown'} - {titleCase(post.category)}</strong>
+        <strong>@{post.author.username || 'unknown'} - {titleCase(postCategory(post))}</strong>
         <span>{clampText(post.content || post.title, 'No caption')}</span>
       </div>
     </div>
@@ -872,7 +904,7 @@ function PostRow({
       </button>
       <button className="text-cell" onClick={onView}>
         <strong>{clampText(post.title || post.content, 'Untitled post')}</strong>
-        <span>{titleCase(post.category)} - {formatDate(post.created_at)}</span>
+        <span>{titleCase(postCategory(post))} - {formatDate(post.created_at)}</span>
       </button>
       <button className="author-cell" onClick={onViewAuthor}>
         <Avatar src={post.author.profile_image} label={post.author.full_name || post.author.username || 'U'} />
@@ -897,14 +929,21 @@ function PostDetailPanel({
   actions,
   session,
   onAction,
+  onCategoryChange,
   onViewAuthor,
 }: {
   post: AdminPost;
   actions: AuditLog[];
   session: AdminSession;
   onAction: (post: AdminPost, label: string, action: PostAction) => void;
+  onCategoryChange: (post: AdminPost, category: string) => void;
   onViewAuthor: () => void;
 }) {
+  const [selectedCategory, setSelectedCategory] = useState(postCategory(post));
+  useEffect(() => {
+    setSelectedCategory(postCategory(post));
+  }, [post.id, post.primary_category, post.category]);
+
   return (
     <div className="detail-stack">
       <div className="detail-title">
@@ -915,18 +954,79 @@ function PostDetailPanel({
       <MediaPreview post={post} size="detail" />
       <div className="detail-meta">
         <span>Category</span>
-        <strong>{titleCase(post.category)}</strong>
+        <strong>{titleCase(postCategory(post))}</strong>
+        <span>AI confidence</span>
+        <strong>{formatConfidence(post.category_confidence)} / {titleCase(post.category_status || 'low_confidence')}</strong>
+        <span>Source</span>
+        <strong>{titleCase(post.category_source || 'fallback')}</strong>
         <span>Visibility</span>
         <strong>{titleCase(post.visibility)}</strong>
+        <span>Display location</span>
+        <strong>{post.display_location_label ? `${post.display_location_label} (${titleCase(post.display_location_visibility || 'hidden')})` : 'Hidden'}</strong>
+        <span>Exact place</span>
+        <strong>{post.exact_place?.name || 'None'}</strong>
         <span>Counts</span>
         <strong>{post.likes_count || 0} likes / {post.comments_count || 0} comments / {post.saves_count || 0} saves</strong>
       </div>
+      {post.exact_place?.name || post.exact_place?.formatted_address ? (
+        <div className="preview-box">
+          <strong>Place tag</strong>
+          <p>{[post.exact_place?.name, post.exact_place?.formatted_address].filter(Boolean).join(' - ')}</p>
+          <span className="muted">{post.exact_place?.provider || 'apple_mapkit'} / {post.exact_place?.category || 'uncategorized'}</span>
+        </div>
+      ) : null}
+      <div className="preview-box">
+        <strong>Discover tags</strong>
+        <p>{post.tags?.length ? post.tags.map((tag) => `#${tag}`).join(' ') : 'No category tags saved yet.'}</p>
+      </div>
+      <div className="preview-box category-debug-box">
+        <strong>Discover category debug</strong>
+        <div className="score-chip-row">
+          {sortedCategoryScores(post).length ? sortedCategoryScores(post).map(([category, score]) => (
+            <span className="score-chip" key={category}>{titleCase(category)} {Math.round(Number(score))}</span>
+          )) : <span className="muted">No category scores saved yet.</span>}
+        </div>
+        <p>
+          {post.category_debug?.summary?.length
+            ? post.category_debug.summary.join(' | ')
+            : 'No debug explanation saved for this post yet.'}
+        </p>
+        <span className="muted">
+          Signals: {[post.user_selected_category && `selected ${post.user_selected_category}`, post.place_type && `place ${post.place_type}`, post.detected_scene && `scene ${post.detected_scene}`].filter(Boolean).join(' / ') || 'none'}
+        </span>
+        {post.detected_objects?.length || post.caption_keywords?.length ? (
+          <p className="muted">
+            {[...(post.detected_objects || []).slice(0, 8), ...(post.caption_keywords || []).slice(0, 8).map((item) => `#${item}`)].join(' ')}
+          </p>
+        ) : null}
+      </div>
+      {can(session, 'content:write') ? (
+        <div className="category-correction">
+          <div>
+            <strong>Correct Discover category</strong>
+            <span>Requires a reason and writes a category_changed audit log.</span>
+          </div>
+          <select value={selectedCategory} onChange={(event) => setSelectedCategory(event.target.value)}>
+            {editablePostCategories.map((item) => <option value={item} key={item}>{titleCase(item)}</option>)}
+          </select>
+          <button
+            className="secondary-button"
+            disabled={selectedCategory === postCategory(post)}
+            onClick={() => onCategoryChange(post, selectedCategory)}
+          >
+            Change
+          </button>
+        </div>
+      ) : null}
       <div className="preview-box">
         <strong>Caption</strong>
         <p>{clampText(post.content, 'No caption')}</p>
       </div>
       <div className="action-grid">
         <button className="secondary-button" onClick={onViewAuthor}>View author</button>
+        {(post.display_location_label || post.exact_place?.name) && can(session, 'content:write') ? (
+          <button className="secondary-button" onClick={() => onAction(post, 'Clear location', 'clearLocation')}>Clear location</button>
+        ) : null}
         {can(session, 'content:write') ? <button className="secondary-button" onClick={() => onAction(post, 'Mark safe', 'safe')}>Mark safe</button> : null}
         {can(session, 'content:write') && post.status === 'removed'
           ? <button className="primary-button" onClick={() => onAction(post, 'Restore', 'restore')}>Restore</button>

@@ -1,3 +1,4 @@
+import AVFoundation
 import SwiftUI
 import UIKit
 
@@ -11,7 +12,8 @@ final class DiscoverNativeModel: ObservableObject {
   @Published var errorMessage: String?
   let api: MIRAAPIClient
   private let storiesCacheKey = "native.discover.stories.v3"
-  private let postsCacheKey = "native.discover.posts.v2"
+  private let postsCacheKeyPrefix = "native.discover.posts.v3"
+  private var activePostsCategory = "all"
   private var hasLoadedFreshStories = false
   private var hasLoadedFreshPosts = false
   private var hasScheduledPostsLoad = false
@@ -39,7 +41,7 @@ final class DiscoverNativeModel: ObservableObject {
     updateLoadingState()
     if !hasScheduledPostsLoad {
       hasScheduledPostsLoad = true
-      Task { await self.loadPosts() }
+      Task { await self.loadPosts(category: self.activePostsCategory) }
     }
     if !hasScheduledStoriesLoad {
       hasScheduledStoriesLoad = true
@@ -48,20 +50,44 @@ final class DiscoverNativeModel: ObservableObject {
   }
 
   private func hydrateCachedContentIfNeeded() async {
-    if posts.isEmpty, let cachedPosts: [MIRAPost] = await MIRALocalJSONCache.load([MIRAPost].self, key: postsCacheKey) {
-      posts = cachedPosts
+    if posts.isEmpty, let cachedPosts = await cachedDiscoverPosts(for: activePostsCategory) {
+      posts = scopedDiscoverPosts(cachedPosts, category: activePostsCategory)
       isLoadingPosts = false
+      prefetchVisibleMedia(posts)
       MIRAPerformanceTimeline.markOnce("discover_first_content", detail: "posts_cache")
     }
-    if stories.isEmpty, let cachedStories: [MIRAStoryGroup] = await MIRALocalJSONCache.load([MIRAStoryGroup].self, key: storiesCacheKey) {
+    if stories.isEmpty, let cachedStories = await cachedDiscoverStories() {
       stories = cachedStories
       isLoadingStories = false
+      prewarmStoryRailMedia(cachedStories)
       MIRAPerformanceTimeline.markOnce("discover_first_content", detail: "stories_cache")
     }
   }
 
-  private func loadPosts() async {
-    guard !hasLoadedFreshPosts else { return }
+  func selectCategory(_ category: String) async {
+    let normalized = normalizedDiscoverCategory(category)
+    guard normalized != activePostsCategory || posts.isEmpty else { return }
+    activePostsCategory = normalized
+    hasLoadedFreshPosts = false
+    hasScheduledPostsLoad = false
+    if let cachedPosts = await cachedDiscoverPosts(for: normalized) {
+      posts = scopedDiscoverPosts(cachedPosts, category: normalized)
+      isLoadingPosts = false
+    } else if normalized != "all", let cachedAllPosts = await cachedDiscoverPosts(for: "all") {
+      posts = scopedDiscoverPosts(cachedAllPosts, category: normalized)
+      isLoadingPosts = posts.isEmpty
+    } else {
+      posts = []
+      isLoadingPosts = true
+    }
+    updateLoadingState()
+    await loadPosts(category: normalized, force: true)
+  }
+
+  private func loadPosts(category requestedCategory: String = "all", force: Bool = false) async {
+    let category = normalizedDiscoverCategory(requestedCategory)
+    guard force || !hasLoadedFreshPosts else { return }
+    activePostsCategory = category
     hasLoadedFreshPosts = true
     if posts.isEmpty {
       isLoadingPosts = true
@@ -72,23 +98,47 @@ final class DiscoverNativeModel: ObservableObject {
       updateLoadingState()
     }
     do {
-      var loaded: [MIRAPost] = try await api.get("/posts/feed?limit=24")
-      if loaded.isEmpty {
-        loaded = (try? await api.get("/posts/world-board?limit=24")) ?? []
+      let encodedCategory = category.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "all"
+      var loaded: [MIRAPost] = scopedDiscoverPosts(try await api.get("/discover?category=\(encodedCategory)&limit=36"), category: category)
+      if loaded.isEmpty && category != "all" {
+        loaded = scopedDiscoverPosts((try? await api.get("/discover?category=all&limit=60")) ?? [], category: category)
       }
-      if posts != loaded {
-        posts = loaded
+      if loaded.isEmpty && category == "all" {
+        loaded = photoDiscoverPosts((try? await api.get("/posts/feed?limit=24")) ?? [])
       }
-      await MIRALocalJSONCache.save(loaded, key: postsCacheKey)
-      if !loaded.isEmpty {
+      if loaded.isEmpty && category != "all" {
+        loaded = scopedDiscoverPosts((try? await api.get("/posts/feed?limit=60")) ?? [], category: category)
+      }
+      if loaded.isEmpty && category == "all" {
+        loaded = photoDiscoverPosts((try? await api.get("/posts/world-board?limit=24")) ?? [])
+      }
+      let merged = await MIRAAppCacheStore.shared.mergeFreshPostsPreservingViewerState(
+        existing: posts,
+        fresh: loaded,
+        maxCount: 90
+      )
+      if posts != merged {
+        posts = merged
+      }
+      prefetchVisibleMedia(merged)
+      await MIRAAppCacheStore.shared.saveDiscoverPosts(merged, category: category)
+      if !merged.isEmpty {
         MIRAPerformanceTimeline.markOnce("discover_first_content", detail: "posts_network")
       }
     } catch {
-      if let fallback: [MIRAPost] = try? await api.get("/posts/world-board?limit=24"), !fallback.isEmpty {
-        if posts != fallback {
-          posts = fallback
+      if category == "all", let fallback: [MIRAPost] = try? await api.get("/posts/world-board?limit=24"), !fallback.isEmpty {
+        let photoFallback = photoDiscoverPosts(fallback)
+        guard !photoFallback.isEmpty else { return }
+        let merged = await MIRAAppCacheStore.shared.mergeFreshPostsPreservingViewerState(
+          existing: posts,
+          fresh: photoFallback,
+          maxCount: 90
+        )
+        if posts != merged {
+          posts = merged
         }
-        await MIRALocalJSONCache.save(fallback, key: postsCacheKey)
+        prefetchVisibleMedia(merged)
+        await MIRAAppCacheStore.shared.saveDiscoverPosts(merged, category: category)
         MIRAPerformanceTimeline.markOnce("discover_first_content", detail: "posts_fallback")
       } else if posts.isEmpty {
         hasLoadedFreshPosts = false
@@ -114,7 +164,8 @@ final class DiscoverNativeModel: ObservableObject {
       if stories != visibleStories {
         stories = visibleStories
       }
-      await MIRALocalJSONCache.save(visibleStories, key: storiesCacheKey)
+      prewarmStoryRailMedia(visibleStories)
+      await MIRAAppCacheStore.shared.saveDiscoverStories(visibleStories)
       if !visibleStories.isEmpty {
         MIRAPerformanceTimeline.markOnce("discover_first_content", detail: "stories_network")
       }
@@ -130,16 +181,101 @@ final class DiscoverNativeModel: ObservableObject {
     isLoading = isLoadingStories || isLoadingPosts
   }
 
+  func refreshVisiblePosts() async {
+    hasLoadedFreshPosts = false
+    hasScheduledPostsLoad = false
+    await loadPosts(category: activePostsCategory, force: true)
+  }
+
+  private func prefetchVisibleMedia(_ posts: [MIRAPost]) {
+    let previewURLs = posts
+      .prefix(30)
+      .flatMap { post in
+        post.posterMediaURLs
+          + post.thumbnailMediaURLs
+          + post.feedMediaURLs.filter { !$0.isVideoURL }
+          + post.fallbackMediaURLs.filter { !$0.isVideoURL }
+      }
+    let feedURLs = posts
+      .prefix(18)
+      .flatMap { post in
+        post.feedMediaURLs.filter { !$0.isVideoURL }
+          + post.fallbackMediaURLs.filter { !$0.isVideoURL }
+      }
+    guard !previewURLs.isEmpty || !feedURLs.isEmpty else { return }
+    Task.detached(priority: .utility) {
+      await MIRAImagePrefetcher.prefetch(urls: previewURLs, maxPixelSize: 560, limit: 42)
+      await MIRAImagePrefetcher.prefetch(urls: feedURLs, maxPixelSize: MIRAMediaSizing.feedTargetHeight, limit: 24)
+    }
+  }
+
+  private func prewarmStoryRailMedia(_ groups: [MIRAStoryGroup]) {
+    let urls = orderedUniqueMediaURLs(
+      groups
+        .prefix(12)
+        .flatMap { ($0.statuses ?? []).prefix(2).compactMap(\.mediaURL) }
+    )
+    guard !urls.isEmpty else { return }
+    MIRAVideoPrewarmManager.shared.prewarm(urls: urls, keepOnly: Set(urls.filter(\.isVideoURL).prefix(5)))
+    Task.detached(priority: .utility) {
+      await MIRAImagePrefetcher.prefetch(urls: urls, maxPixelSize: 1920, limit: 24)
+    }
+  }
+
+  private func orderedUniqueMediaURLs(_ urls: [String]) -> [String] {
+    var seen = Set<String>()
+    var result: [String] = []
+    for url in urls {
+      let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !trimmed.isEmpty, seen.insert(trimmed).inserted else { continue }
+      result.append(trimmed)
+    }
+    return result
+  }
+
+  private func photoDiscoverPosts(_ values: [MIRAPost]) -> [MIRAPost] {
+    values.filter {
+      !$0.containsVideoMedia &&
+        ($0.postType ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased() != "note"
+    }
+  }
+
+  private func stableEngagementCount(current: Int?, incoming: Int?, toggledOn: Bool? = nil) -> Int? {
+    guard let incoming else { return current }
+    return max(0, incoming)
+  }
+
   func hidePost(_ post: MIRAPost) {
     posts.removeAll { $0.id == post.id }
     let snapshot = posts
-    Task { await MIRALocalJSONCache.save(snapshot, key: postsCacheKey) }
+    Task { await MIRAAppCacheStore.shared.saveDiscoverPosts(snapshot, category: activePostsCategory) }
+    MIRAPostRemovalSync.publish(MIRAPostRemovalUpdate(postId: post.id))
+  }
+
+  func removePostLocally(id postId: String) {
+    guard posts.contains(where: { $0.id == postId }) else { return }
+    posts.removeAll { $0.id == postId }
+    let snapshot = posts
+    Task { await MIRAAppCacheStore.shared.saveDiscoverPosts(snapshot, category: activePostsCategory) }
   }
 
   func hidePosts(byUserId userId: String) {
     posts.removeAll { $0.userId == userId }
     let snapshot = posts
-    Task { await MIRALocalJSONCache.save(snapshot, key: postsCacheKey) }
+    Task { await MIRAAppCacheStore.shared.saveDiscoverPosts(snapshot, category: activePostsCategory) }
+  }
+
+  func applyEngagementUpdate(_ update: MIRAPostEngagementUpdate) {
+    guard let index = posts.firstIndex(where: { $0.id == update.postId }) else { return }
+    posts[index] = posts[index].updating(
+      liked: update.liked,
+      likesCount: stableEngagementCount(current: posts[index].likesCount, incoming: update.likesCount, toggledOn: update.liked),
+      commentsCount: update.commentsCount,
+      saved: update.saved,
+      savesCount: update.savesCount
+    )
+    let snapshot = posts
+    Task { await MIRAAppCacheStore.shared.saveDiscoverPosts(snapshot, category: activePostsCategory) }
   }
 
   func blockAuthor(_ post: MIRAPost) async {
@@ -149,7 +285,7 @@ final class DiscoverNativeModel: ObservableObject {
     do {
       let _: EmptyResponse? = try await api.post("/users/\(userId)/block", body: EmptyBody())
       let snapshot = posts
-      Task { await MIRALocalJSONCache.save(snapshot, key: postsCacheKey) }
+      Task { await MIRAAppCacheStore.shared.saveDiscoverPosts(snapshot, category: activePostsCategory) }
       errorMessage = nil
     } catch {
       posts = previous
@@ -173,26 +309,111 @@ final class DiscoverNativeModel: ObservableObject {
       errorMessage = "Could not send report. Try again in a moment."
     }
   }
-}
 
-private struct DiscoverGalleryFilter: Identifiable {
-  let id: String
-  let title: String
-  let keywords: [String]
+  private func postsCacheKey(for category: String) -> String {
+    "\(postsCacheKeyPrefix).\(normalizedDiscoverCategory(category))"
+  }
+
+  private func cachedDiscoverPosts(for category: String) async -> [MIRAPost]? {
+    if let cached = await MIRAAppCacheStore.shared.loadDiscoverPosts(category: category) {
+      return cached
+    }
+    return await MIRALocalJSONCache.load([MIRAPost].self, key: postsCacheKey(for: category), maxAge: 60 * 60 * 24 * 30)
+  }
+
+  private func cachedDiscoverStories() async -> [MIRAStoryGroup]? {
+    if let cached = await MIRAAppCacheStore.shared.loadDiscoverStories() {
+      return cached
+    }
+    return await MIRALocalJSONCache.load([MIRAStoryGroup].self, key: storiesCacheKey, maxAge: 60 * 60 * 24 * 30)
+  }
+
+  private func normalizedDiscoverCategory(_ value: String) -> String {
+    let allowed = Set(discoverGalleryFilters.map(\.id))
+    let clean = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    return allowed.contains(clean) ? clean : "all"
+  }
+
+  private func normalizedSavedDiscoverCategory(_ value: String?) -> String? {
+    guard let value else { return nil }
+    let allowed = Set(discoverGalleryFilters.map(\.id).filter { $0 != "all" })
+    let clean = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().replacingOccurrences(of: "-", with: "_")
+    return allowed.contains(clean) ? clean : nil
+  }
+
+  private func scopedDiscoverPosts(_ posts: [MIRAPost], category: String) -> [MIRAPost] {
+    let photoPosts = photoDiscoverPosts(posts)
+    let normalized = normalizedDiscoverCategory(category)
+    guard normalized != "all" else { return photoPosts }
+    return photoPosts.filter { postMatchesDiscoverCategory($0, category: normalized) }
+  }
+
+  private func postMatchesDiscoverCategory(_ post: MIRAPost, category: String) -> Bool {
+    let normalized = normalizedDiscoverCategory(category)
+    let userSelectedCategories = [post.userSelectedCategory].compactMap(normalizedSavedDiscoverCategory)
+    if userSelectedCategories.contains(normalized) { return true }
+
+    if (post.categoryConfidence ?? 0) >= 0.50 {
+      let savedCategories = [
+        post.primaryCategory,
+        post.category
+      ].compactMap(normalizedSavedDiscoverCategory)
+      if savedCategories.contains(normalized) { return true }
+    }
+
+    let secondaryCategories = post.secondaryCategories?.values.compactMap(normalizedSavedDiscoverCategory) ?? []
+    if secondaryCategories.contains(normalized) { return true }
+
+    if let score = post.categoryScores?[normalized], score >= 24 { return true }
+
+    let arraySignals = [
+      post.tags?.values,
+      post.detectedObjects?.values,
+      post.captionKeywords?.values
+    ].compactMap { $0 }.flatMap { $0 }
+    let textSignals = [
+      post.title,
+      post.caption,
+      post.content,
+      post.location,
+      post.displayLocationLabel,
+      post.placeName,
+      post.placeCategory,
+      post.placeCity,
+      post.placeCountry,
+      post.detectedScene,
+      post.placeType
+    ].compactMap { $0 }
+    let searchable = (arraySignals + textSignals).joined(separator: " ").lowercased()
+
+    return discoverCategoryKeywords[normalized]?.contains { keyword in
+      searchable.contains(keyword)
+    } == true
+  }
 }
 
 private let discoverGalleryFilters: [DiscoverGalleryFilter] = [
-  .init(id: "all", title: "All", keywords: []),
-  .init(id: "photography", title: "Photography", keywords: ["photo", "photography", "portrait", "camera", "shoot", "shot", "film", "lens", "street photo"]),
-  .init(id: "outdoors", title: "Outdoors", keywords: ["outdoors", "outside", "nature", "hike", "hiking", "mountain", "park", "beach", "lake", "trail", "sunset"]),
-  .init(id: "outfits", title: "Outfits", keywords: ["fit", "outfit", "style", "fashion", "look", "wear", "dress", "sneakers", "jacket"]),
-  .init(id: "food", title: "Food", keywords: ["food", "restaurant", "dinner", "lunch", "brunch", "eat", "cafe", "coffee", "meal", "dessert"]),
-  .init(id: "travel", title: "Travel", keywords: ["trip", "travel", "vacation", "hotel", "flight", "airport", "city", "passport", "road trip"]),
-  .init(id: "art", title: "Art", keywords: ["art", "artist", "drawing", "painting", "design", "creative", "gallery", "museum", "illustration"]),
-  .init(id: "lifestyle", title: "Lifestyle", keywords: ["lifestyle", "daily", "routine", "home", "room", "apartment", "friends", "selfie", "moment"]),
-  .init(id: "events", title: "Events", keywords: ["event", "events", "party", "concert", "festival", "show", "birthday", "wedding", "meetup"]),
-  .init(id: "nightlife", title: "Nightlife", keywords: ["nightlife", "night", "club", "bar", "lounge", "dj", "dance", "after dark"])
+  .init(id: "all"),
+  .init(id: "photography"),
+  .init(id: "outdoors"),
+  .init(id: "art"),
+  .init(id: "nightlife"),
+  .init(id: "outfits"),
+  .init(id: "events")
 ]
+
+private let discoverCategoryKeywords: [String: [String]] = [
+  "outfits": ["outfit", "fit check", "clothes", "clothing", "style", "fashion", "streetwear", "shoes", "jacket", "dress"],
+  "outdoors": ["outdoor", "outside", "park", "beach", "trail", "hiking", "nature", "mountain", "lake", "sunset", "trees", "forest", "sky"],
+  "photography": ["photography", "camera", "portrait", "photo shoot", "street photo", "landscape", "lens", "film", "monochrome", "composition"],
+  "events": ["event", "events", "concert", "festival", "meetup", "show", "game", "crowd", "stadium", "venue", "performance", "birthday", "wedding", "stage", "celebration"],
+  "art": ["art", "drawing", "painting", "design", "sketch", "mural", "gallery", "museum"],
+  "nightlife": ["nightlife", "night", "club", "bar", "lounge", "party", "rooftop", "drinks", "neon"]
+]
+
+private struct DiscoverGalleryFilter: Identifiable {
+  let id: String
+}
 
 public struct DiscoverNativeView: View {
   @StateObject private var model: DiscoverNativeModel
@@ -201,6 +422,13 @@ public struct DiscoverNativeView: View {
   @State private var reportTarget: MIRAReportTarget?
   @State private var reportSourcePost: MIRAPost?
   @State private var isReportSheetPresented = false
+  @State private var singlePhotoPreviewPost: MIRAPost?
+  @State private var isSinglePhotoPreviewPresented = false
+  @State private var discoverActionPost: MIRAPost?
+  @State private var isDiscoverActionModalPresented = false
+  @EnvironmentObject private var localization: MIRALocalization
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.scenePhase) private var scenePhase
 
   public init(api: MIRAAPIClient) {
     _model = StateObject(wrappedValue: DiscoverNativeModel(api: api))
@@ -225,17 +453,32 @@ public struct DiscoverNativeView: View {
             .padding(.top, MIRATheme.Space.xs)
             .padding(.bottom, MIRATheme.Space.xxl + MIRATheme.Space.lg)
           }
+          .miraScrollFeel(.feed)
         }
         .background(MIRATheme.Color.appBackground)
       }
       .background(MIRATheme.Color.appBackground)
       .miraScreenEnter(.tab)
       .toolbar(.hidden, for: .navigationBar)
-      .toolbar(selectedStoryGroup == nil ? .visible : .hidden, for: .tabBar)
+      .toolbar(discoverTabBarVisibility, for: .tabBar)
+      .miraStatusBarHidden(selectedStoryGroup != nil)
       .task { await model.load() }
+      .onReceive(NotificationCenter.default.publisher(for: .miraPostEngagementDidChange)) { notification in
+        guard let update = MIRAPostEngagementSync.update(from: notification) else { return }
+        model.applyEngagementUpdate(update)
+      }
+      .onReceive(NotificationCenter.default.publisher(for: .miraPostWasRemoved)) { notification in
+        guard let update = MIRAPostRemovalSync.update(from: notification) else { return }
+        model.removePostLocally(id: update.postId)
+      }
+      .onChange(of: scenePhase) { _, phase in
+        guard phase == .active, !model.posts.isEmpty else { return }
+        Task { await model.refreshVisiblePosts() }
+      }
       .miraFullScreenOverlay(item: $selectedStoryGroup, background: .black) { group, dismissStory in
         StoryViewerNativeView(
           group: group,
+          allGroups: model.stories,
           api: model.api,
           onClose: dismissStory,
           onReportStory: { target in
@@ -243,15 +486,40 @@ public struct DiscoverNativeView: View {
             DispatchQueue.main.asyncAfter(deadline: .now() + MIRATransitionTiming.fullScreenClose) {
               reportSourcePost = nil
               reportTarget = target
-              isReportSheetPresented = true
+              DispatchQueue.main.async {
+                withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
+                  isReportSheetPresented = true
+                }
+              }
             }
           }
         )
       }
       .miraBottomSheet(
-        isPresented: $isReportSheetPresented,
+        isPresented: $isSinglePhotoPreviewPresented,
         preferredHeightFraction: 0.78,
-        maxHeight: 700,
+        maxHeight: 720,
+        onDismissed: { singlePhotoPreviewPost = nil }
+      ) { dismissPreview in
+        if let post = singlePhotoPreviewPost {
+          DiscoverSinglePhotoPreviewSheet(
+            post: post,
+            api: model.api,
+            onReportComment: { comment in
+              dismissPreview()
+              DispatchQueue.main.asyncAfter(deadline: .now() + MIRATransitionTiming.sheetClose) {
+                presentReport(for: comment)
+              }
+            }
+          )
+        } else {
+          Color.clear
+        }
+      }
+      .miraBottomSheet(
+        isPresented: $isReportSheetPresented,
+        preferredHeightFraction: 0.72,
+        maxHeight: 640,
         onDismissed: {
           reportTarget = nil
           reportSourcePost = nil
@@ -268,11 +536,61 @@ public struct DiscoverNativeView: View {
           Color.clear
         }
       }
+      .miraActionModal(
+        isPresented: $isDiscoverActionModalPresented,
+        onDismissed: { discoverActionPost = nil }
+      ) { dismissMenu in
+        if let post = discoverActionPost {
+          DiscoverPostActionModal(
+            onReport: {
+              dismissMenu()
+              DispatchQueue.main.asyncAfter(deadline: .now() + MIRATransitionTiming.actionModalClose) {
+                presentReport(for: post)
+              }
+            },
+            onBlock: {
+              dismissMenu()
+              Task { await model.blockAuthor(post) }
+            },
+            onHide: {
+              model.hidePost(post)
+              dismissMenu()
+            },
+            onNotInterested: {
+              model.hidePost(post)
+              dismissMenu()
+            }
+          )
+        } else {
+          Color.clear
+        }
+      }
     }
   }
 
   private func openStoryViewer(_ group: MIRAStoryGroup) {
+    prewarmStoryGroup(group)
     selectedStoryGroup = group
+  }
+
+  private func prewarmStoryGroup(_ group: MIRAStoryGroup) {
+    let urls = orderedUniqueStoryMediaURLs((group.statuses ?? []).prefix(5).compactMap(\.mediaURL))
+    guard !urls.isEmpty else { return }
+    MIRAVideoPrewarmManager.shared.prewarm(urls: urls, keepOnly: Set(urls.filter(\.isVideoURL).prefix(5)))
+    Task.detached(priority: .utility) {
+      await MIRAImagePrefetcher.prefetch(urls: urls, maxPixelSize: 1920, limit: 5)
+    }
+  }
+
+  private func orderedUniqueStoryMediaURLs(_ urls: [String]) -> [String] {
+    var seen = Set<String>()
+    var result: [String] = []
+    for url in urls {
+      let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !trimmed.isEmpty, seen.insert(trimmed).inserted else { continue }
+      result.append(trimmed)
+    }
+    return result
   }
 
   private func presentReport(for post: MIRAPost) {
@@ -284,8 +602,26 @@ public struct DiscoverNativeView: View {
       title: "Report post",
       subtitle: post.titleText
     )
-    withAnimation(.spring(response: 0.30, dampingFraction: 0.90)) {
-      isReportSheetPresented = true
+    DispatchQueue.main.async {
+      withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
+        isReportSheetPresented = true
+      }
+    }
+  }
+
+  private func presentReport(for comment: MIRAComment) {
+    reportSourcePost = nil
+    reportTarget = MIRAReportTarget(
+      targetType: "comment",
+      targetId: comment.id,
+      ownerUserId: comment.userId,
+      title: "Report comment",
+      subtitle: comment.text
+    )
+    DispatchQueue.main.async {
+      withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
+        isReportSheetPresented = true
+      }
     }
   }
 
@@ -298,9 +634,24 @@ public struct DiscoverNativeView: View {
     }
   }
 
+  private func presentDiscoverActions(for post: MIRAPost) {
+    CaptroHaptics.light()
+    discoverActionPost = post
+    withAnimation(CaptroMotion.actionModalAnimation(reduceMotion: reduceMotion)) {
+      isDiscoverActionModalPresented = true
+    }
+  }
+
+  private var discoverTabBarVisibility: Visibility {
+    selectedStoryGroup == nil &&
+    !isReportSheetPresented &&
+    !isSinglePhotoPreviewPresented &&
+    !isDiscoverActionModalPresented ? .visible : .hidden
+  }
+
   private var discoverHeader: some View {
     HStack(spacing: MIRATheme.Space.sm) {
-      Text("Discover")
+      Text(localization.string("discover.title"))
         .font(.system(size: 18, weight: .semibold))
         .foregroundStyle(MIRATheme.Color.textPrimary)
       Spacer()
@@ -333,47 +684,32 @@ public struct DiscoverNativeView: View {
       } else {
         LazyVGrid(columns: galleryGridColumns, spacing: 1) {
           ForEach(filteredGalleryPosts) { post in
-            NavigationLink(destination: PostDetailNativeView(post: post, api: model.api)) {
-              DiscoverPostGalleryTile(post: post)
-            }
-            .buttonStyle(.plain)
-            .contextMenu {
-              discoverPostActions(post)
+            if miraShouldOpenSinglePhotoPreview(post) {
+              Button {
+                CaptroHaptics.light()
+                singlePhotoPreviewPost = post
+                withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
+                  isSinglePhotoPreviewPresented = true
+                }
+              } label: {
+                DiscoverPostGalleryTile(post: post)
+              }
+              .buttonStyle(.plain)
+              .highPriorityGesture(LongPressGesture(minimumDuration: 0.38).onEnded { _ in
+                presentDiscoverActions(for: post)
+              })
+            } else {
+              NavigationLink(destination: DiscoverPostDetailNativeView(post: post, api: model.api).miraHideTabBarOnAppear()) {
+                DiscoverPostGalleryTile(post: post)
+              }
+              .buttonStyle(.plain)
+              .highPriorityGesture(LongPressGesture(minimumDuration: 0.38).onEnded { _ in
+                presentDiscoverActions(for: post)
+              })
             }
           }
         }
       }
-    }
-  }
-
-  @ViewBuilder
-  private func discoverPostActions(_ post: MIRAPost) -> some View {
-    Button(role: .destructive) {
-      UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-      presentReport(for: post)
-    } label: {
-      Label("Report", systemImage: "flag")
-    }
-
-    Button(role: .destructive) {
-      UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-      Task { await model.blockAuthor(post) }
-    } label: {
-      Label("Block user", systemImage: "hand.raised")
-    }
-
-    Button {
-      UIImpactFeedbackGenerator(style: .light).impactOccurred()
-      model.hidePost(post)
-    } label: {
-      Label("Hide this post", systemImage: "eye.slash")
-    }
-
-    Button {
-      UIImpactFeedbackGenerator(style: .light).impactOccurred()
-      model.hidePost(post)
-    } label: {
-      Label("Not interested", systemImage: "hand.thumbsdown")
     }
   }
 
@@ -386,11 +722,12 @@ public struct DiscoverNativeView: View {
       HStack(spacing: 34) {
         ForEach(discoverGalleryFilters) { filter in
           Button {
-            withAnimation(.easeInOut(duration: 0.18)) {
+            withAnimation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion)) {
               selectedGalleryFilter = filter.id
             }
+            Task { await model.selectCategory(filter.id) }
           } label: {
-            Text(filter.title)
+            Text(localization.discoverCategoryLabel(filter.id))
               .font(.system(size: 18, weight: selectedGalleryFilter == filter.id ? .semibold : .regular))
               .foregroundStyle(selectedGalleryFilter == filter.id ? MIRATheme.Color.textPrimary : MIRATheme.Color.textMuted)
               .frame(height: 36)
@@ -409,31 +746,19 @@ public struct DiscoverNativeView: View {
   }
 
   private var galleryPosts: [MIRAPost] {
-    let mediaPosts = model.posts.filter { !$0.mediaURLs.isEmpty }
-    return mediaPosts.isEmpty ? model.posts : mediaPosts
+    model.posts.filter(hasVisualPreview)
   }
 
   private var filteredGalleryPosts: [MIRAPost] {
-    guard
-      selectedGalleryFilter != "all",
-      let filter = discoverGalleryFilters.first(where: { $0.id == selectedGalleryFilter })
-    else {
-      return galleryPosts
-    }
-    let matches = galleryPosts.filter { post in
-      let haystack = [
-        post.title,
-        post.caption,
-        post.content,
-        post.location,
-        post.placeName,
-        post.postType
-      ]
-      .compactMap { $0?.lowercased() }
-      .joined(separator: " ")
-      return filter.keywords.contains { haystack.contains($0) }
-    }
-    return matches.isEmpty ? galleryPosts : matches
+    galleryPosts
+  }
+
+  private func hasVisualPreview(_ post: MIRAPost) -> Bool {
+    guard !post.containsVideoMedia else { return false }
+    return !(post.posterMediaURLs + post.thumbnailMediaURLs + post.feedMediaURLs + post.mediaURLs)
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { !$0.isEmpty }
+      .isEmpty
   }
 
   private func sectionHeader(title: String, subtitle: String) -> some View {
@@ -451,7 +776,7 @@ public struct DiscoverNativeView: View {
   private var storyRail: some View {
     ScrollView(.horizontal, showsIndicators: false) {
       HStack(spacing: 10) {
-        NavigationLink(destination: CreateStoryNativeView(api: model.api)) {
+        NavigationLink(destination: CreateStoryNativeView(api: model.api).miraHideTabBarOnAppear()) {
           StoryBubbleNative(name: "You", avatarURL: nil, hasUnviewed: false, isAdd: true)
         }
         .buttonStyle(.miraPress)
@@ -480,23 +805,320 @@ public struct DiscoverNativeView: View {
   }
 }
 
+private struct DiscoverPostActionModal: View {
+  let onReport: () -> Void
+  let onBlock: () -> Void
+  let onHide: () -> Void
+  let onNotInterested: () -> Void
+
+  var body: some View {
+    MIRAActionModalCard {
+      MIRAActionModalButton(
+        title: "Report",
+        systemImage: "exclamationmark.triangle",
+        staggerIndex: 0,
+        action: onReport
+      )
+
+      MIRAActionModalButton(
+        title: "Block user",
+        systemImage: "nosign",
+        isDestructive: true,
+        staggerIndex: 1,
+        action: onBlock
+      )
+
+      MIRAActionModalButton(
+        title: "Hide this post",
+        systemImage: "eye.slash",
+        staggerIndex: 2,
+        action: onHide
+      )
+
+      MIRAActionModalButton(
+        title: "Not interested",
+        systemImage: "hand.thumbsdown",
+        staggerIndex: 3,
+        action: onNotInterested
+      )
+    }
+  }
+}
+
+struct DiscoverSinglePhotoPreviewSheet: View {
+  @StateObject private var model: PostDetailModel
+  @State private var isCommentsPresented = false
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  let onReportComment: (MIRAComment) -> Void
+
+  init(post: MIRAPost, api: MIRAAPIClient, onReportComment: @escaping (MIRAComment) -> Void) {
+    _model = StateObject(wrappedValue: PostDetailModel(post: post, api: api))
+    self.onReportComment = onReportComment
+  }
+
+  var body: some View {
+    NavigationStack {
+      ScrollView {
+        VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
+          if let mediaURL {
+            GeometryReader { proxy in
+              let width = proxy.size.width
+              RemoteMediaView(
+                url: mediaURL,
+                isVideo: false,
+                placeholderURL: placeholderURL,
+                fallbackURL: fallbackURL(for: mediaURL),
+                contentMode: .fill,
+                shouldPlay: false,
+                maxPixelSize: MIRAMediaSizing.feedTargetHeight,
+                showsVideoPlaceholderIcon: false
+              )
+              .frame(width: width, height: previewHeight(for: width))
+              .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+              .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            }
+            .frame(height: previewHeight(for: UIScreen.main.bounds.width - (MIRATheme.Space.md * 2)))
+          }
+
+          previewActions
+
+          if !headlineText.isEmpty {
+            Text(headlineText)
+              .font(.system(size: 22, weight: .semibold))
+              .foregroundStyle(MIRATheme.Color.textPrimary)
+              .fixedSize(horizontal: false, vertical: true)
+          }
+
+          if !captionText.isEmpty {
+            Text(captionText)
+              .font(.system(size: 15, weight: .regular))
+              .foregroundStyle(MIRATheme.Color.textSecondary)
+              .fixedSize(horizontal: false, vertical: true)
+          }
+        }
+        .padding(.horizontal, MIRATheme.Space.md)
+        .padding(.bottom, MIRATheme.Space.md)
+        .padding(.top, 4)
+      }
+      .scrollIndicators(.hidden)
+      .background(MIRATheme.Color.appBackground)
+      .toolbar(.hidden, for: .navigationBar)
+      .miraBottomSheet(
+        isPresented: $isCommentsPresented,
+        preferredHeightFraction: 0.72,
+        maxHeight: 640
+      ) { dismissComments in
+        DiscoverDetailCommentsSheet(
+          model: model,
+          onClose: dismissComments,
+          onReportComment: { comment in
+            dismissComments()
+            DispatchQueue.main.asyncAfter(deadline: .now() + MIRATransitionTiming.sheetClose) {
+              onReportComment(comment)
+            }
+          },
+          onBlockCommentUser: { comment in
+            dismissComments()
+            Task { await model.blockCommentAuthor(comment) }
+          }
+        )
+      }
+      .task {
+        await model.hydrateFromLocalCache()
+        await model.refreshPost()
+      }
+      .onReceive(NotificationCenter.default.publisher(for: .miraPostEngagementDidChange)) { notification in
+        guard let update = MIRAPostEngagementSync.update(from: notification) else { return }
+        model.applyEngagementUpdate(update)
+      }
+    }
+  }
+
+  private var previewActions: some View {
+    HStack(spacing: 12) {
+      if let userId = model.post.userId, !userId.isEmpty {
+        NavigationLink(destination: UserProfileNativeView(userId: userId, api: model.api).miraHideTabBarOnAppear()) {
+          authorSummary
+        }
+        .buttonStyle(.plain)
+      } else {
+        authorSummary
+      }
+
+      Spacer(minLength: 8)
+
+      Button {
+        CaptroHaptics.light()
+        Task { await model.toggleLike() }
+      } label: {
+        HStack(spacing: 7) {
+          Image(systemName: model.post.viewerLiked ? "hand.thumbsup.fill" : "hand.thumbsup")
+            .font(.system(size: 20, weight: .regular))
+          Text(compactCount(model.post.likesCount ?? 0))
+            .font(.system(size: 15, weight: .semibold))
+        }
+        .foregroundStyle(model.post.viewerLiked ? MIRATheme.Color.like : MIRATheme.Color.textPrimary)
+        .frame(minWidth: 58, minHeight: 44)
+        .contentShape(Rectangle())
+      }
+      .buttonStyle(.miraPress)
+
+      Button {
+        CaptroHaptics.light()
+        isCommentsPresented = true
+      } label: {
+        HStack(spacing: 7) {
+          Image(systemName: "bubble.right")
+            .font(.system(size: 20, weight: .regular))
+          Text(compactCount(model.post.commentsCount ?? model.comments.count))
+            .font(.system(size: 15, weight: .semibold))
+        }
+        .foregroundStyle(MIRATheme.Color.textPrimary)
+        .frame(minWidth: 58, minHeight: 44)
+        .contentShape(Rectangle())
+      }
+      .buttonStyle(.miraPress)
+    }
+  }
+
+  private var authorSummary: some View {
+    HStack(spacing: 9) {
+      RemoteAvatar(url: model.post.userProfileImage, size: 34)
+      VStack(alignment: .leading, spacing: 1) {
+        Text(model.post.authorDisplayName)
+          .font(.system(size: 14, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .lineLimit(1)
+        Text(relativeAge(model.post.createdAt))
+          .font(.system(size: 11, weight: .medium))
+          .foregroundStyle(MIRATheme.Color.textMuted)
+          .lineLimit(1)
+      }
+    }
+    .frame(minHeight: 44)
+    .contentShape(Rectangle())
+  }
+
+  private var mediaURL: String? {
+    uniqueURLs(model.post.feedMediaURLs + model.post.fallbackMediaURLs + model.post.mediaURLs).first { !$0.isVideoURL }
+  }
+
+  private var placeholderURL: String? {
+    let current = mediaURL
+    return uniqueURLs(model.post.thumbnailMediaURLs + model.post.posterMediaURLs)
+      .first { !$0.isVideoURL && $0 != current }
+  }
+
+  private var headlineText: String {
+    (model.post.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  private var captionText: String {
+    let caption = (model.post.caption ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    let content = (model.post.content ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    return caption.isEmpty ? content : caption
+  }
+
+  private func previewHeight(for width: CGFloat) -> CGFloat {
+    let height = MIRAMediaSizing.feedHeight(for: [mediaURL ?? ""], aspectRatios: model.post.mediaHeightToWidthRatios, width: width)
+    return min(height, UIScreen.main.bounds.height * 0.66)
+  }
+
+  private func fallbackURL(for media: String) -> String? {
+    uniqueURLs(model.post.fallbackMediaURLs + model.post.mediaURLs + model.post.feedMediaURLs)
+      .first { !$0.isVideoURL && $0 != media && $0 != placeholderURL }
+  }
+
+  private func uniqueURLs(_ values: [String]) -> [String] {
+    var seen = Set<String>()
+    return values
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { !$0.isEmpty && seen.insert($0).inserted }
+  }
+
+  private func compactCount(_ value: Int) -> String {
+    if value >= 1_000_000 {
+      return String(format: "%.1fM", Double(value) / 1_000_000)
+    }
+    if value >= 1_000 {
+      return String(format: "%.1fK", Double(value) / 1_000)
+    }
+    return "\(value)"
+  }
+}
+
+private struct StoryThought: Codable, Identifiable, Hashable {
+  let id: String
+  let statusId: String?
+  let userId: String?
+  let body: String
+  let createdAt: String?
+  let userUsername: String?
+  let userFullName: String?
+  let userProfileImage: String?
+
+  var displayName: String {
+    if let userFullName, !userFullName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      return userFullName.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    if MIRAUsernameRules.isValidPublicUsername(userUsername) {
+      return MIRAUsernameRules.normalized(userUsername)
+    }
+    return "Someone"
+  }
+}
+
+private struct StoryThoughtSubmitBody: Encodable {
+  let body: String
+}
+
+private struct StoryThoughtBubbleState: Identifiable, Hashable {
+  let id = UUID()
+  let thought: StoryThought
+}
+
 private struct StoryViewerNativeView: View {
   let group: MIRAStoryGroup
+  let allGroups: [MIRAStoryGroup]
   let api: MIRAAPIClient
   let onClose: () -> Void
   let onReportStory: (MIRAReportTarget) -> Void
   @State private var selectedIndex = 0
   @State private var localStories: [MIRAStatusPreview]?
+  @State private var activeGroupOverride: MIRAStoryGroup?
   @State private var currentUserId: String?
   @State private var showStoryMenu = false
   @State private var isCanvasVisible = false
+  @State private var isStoryPlaybackArmed = false
+  @State private var storyPlaybackToken = 0
   @State private var isClosing = false
   @State private var replyText = ""
+  @State private var storyThoughts: [StoryThought] = []
+  @State private var visibleThoughts: [StoryThoughtBubbleState] = []
+  @State private var thoughtPlaybackTask: Task<Void, Never>?
+  @State private var isSendingThought = false
+  @State private var thoughtErrorText: String?
+  @State private var storyAudioPlayer: AVPlayer?
+  @State private var isStoryAudioPlaying = false
+  @State private var isStoryAudioLoading = false
+  @State private var resumeStoryAudioAfterInterruption = false
+  @State private var isSubmittingStoryLike = false
+  @GestureState private var storyRailDragTranslation: CGFloat = 0
   @FocusState private var isReplyFocused: Bool
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.scenePhase) private var scenePhase
 
   private var stories: [MIRAStatusPreview] {
-    localStories ?? (group.statuses?.isEmpty == false ? group.statuses! : [])
+    localStories ?? (activeGroup.statuses?.isEmpty == false ? activeGroup.statuses! : [])
+  }
+
+  private var activeGroup: MIRAStoryGroup {
+    activeGroupOverride ?? group
+  }
+
+  private var storyRailGroups: [MIRAStoryGroup] {
+    let available = allGroups.filter { $0.statuses?.isEmpty == false }
+    return available.isEmpty ? [activeGroup] : available
   }
 
   private var currentStory: MIRAStatusPreview? {
@@ -511,29 +1133,78 @@ private struct StoryViewerNativeView: View {
       GeometryReader { proxy in
         let safeTop = proxy.safeAreaInsets.top
         let safeBottom = proxy.safeAreaInsets.bottom
-        let bottomChromeHeight = max(74, safeBottom + 62)
-        let topChromeHeight = max(2, safeTop + 2)
-        let mediaHeight = max(360, proxy.size.height - bottomChromeHeight - topChromeHeight)
+        let mediaTopInset = storyMediaTopInset(safeTop: safeTop)
 
-        VStack(spacing: 0) {
-          storyCanvas
-            .frame(width: proxy.size.width, height: mediaHeight)
-            .padding(.top, topChromeHeight)
+        ZStack {
+          storyMediaLayer
+            .frame(width: proxy.size.width, height: max(1, proxy.size.height - mediaTopInset))
+            .clipShape(StoryTopRoundedRectangle(radius: 24))
+            .padding(.top, mediaTopInset)
+            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
+            .ignoresSafeArea(edges: [.horizontal, .bottom])
 
-          Spacer(minLength: 0)
+          LinearGradient(
+            colors: [.black.opacity(0.28), .black.opacity(0.08), .clear],
+            startPoint: .top,
+            endPoint: .bottom
+          )
+          .frame(height: min(190, proxy.size.height * 0.26))
+          .frame(maxHeight: .infinity, alignment: .top)
+          .allowsHitTesting(false)
 
-          storyBottomActions
+          LinearGradient(
+            colors: [.clear, .black.opacity(0.24), .black.opacity(0.58)],
+            startPoint: .top,
+            endPoint: .bottom
+          )
+          .frame(height: min(330, proxy.size.height * 0.42))
+          .frame(maxHeight: .infinity, alignment: .bottom)
+          .allowsHitTesting(false)
+
+          HStack(spacing: 0) {
+            Color.clear
+              .contentShape(Rectangle())
+              .onTapGesture { goToPreviousStory() }
+            Color.clear
+              .contentShape(Rectangle())
+              .onTapGesture { goToNextStory() }
+          }
+          .padding(.top, safeTop + 86)
+          .padding(.bottom, safeBottom + 164)
+          .simultaneousGesture(
+            DragGesture(minimumDistance: 32, coordinateSpace: .local)
+              .onEnded(handleStoryGroupSwipe)
+          )
+
+          storyTopBar
             .padding(.horizontal, 13)
-            .padding(.bottom, max(7, safeBottom + 1))
+            .padding(.top, safeTop + 42)
+            .frame(maxHeight: .infinity, alignment: .top)
+
+          storyThoughtOverlay
+            .padding(.horizontal, 14)
+            .padding(.bottom, safeBottom + 154)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+            .allowsHitTesting(false)
+
+          VStack(spacing: 12) {
+            storyProfileCarousel
+            storyBottomActions
+              .padding(.horizontal, 13)
+          }
+          .padding(.bottom, max(8, safeBottom + 8))
+          .frame(maxHeight: .infinity, alignment: .bottom)
         }
         .frame(width: proxy.size.width, height: proxy.size.height)
       }
     }
     .opacity(isCanvasVisible ? 1 : 0.001)
     .scaleEffect(reduceMotion || isCanvasVisible ? 1 : 0.992)
-    .animation(.easeOut(duration: reduceMotion ? 0.1 : 0.24), value: isCanvasVisible)
+    .animation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion), value: isCanvasVisible)
+    .miraStatusBarHidden(true)
     .onAppear {
-      withAnimation(.easeOut(duration: reduceMotion ? 0.1 : 0.24)) {
+      armStoryPlaybackForCurrentStory(reason: "story_view_open")
+      withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
         isCanvasVisible = true
       }
     }
@@ -541,112 +1212,371 @@ private struct StoryViewerNativeView: View {
       guard let id = currentStory?.id else { return }
       let _: EmptyResponse? = try? await api.post("/statuses/\(id)/view", body: EmptyBody())
     }
+    .task(id: storyPrewarmTaskID) {
+      await prewarmStoryMediaWindow()
+    }
+    .task(id: currentStory?.id) {
+      await prepareStoryAudioIfNeeded()
+    }
+    .task(id: currentStory?.id) {
+      try? await Task.sleep(nanoseconds: 300_000_000)
+      guard !Task.isCancelled else { return }
+      await loadStoryThoughtsForCurrentStory()
+    }
     .task {
       if localStories == nil {
-        localStories = group.statuses ?? []
+        localStories = activeGroup.statuses ?? []
       }
       if currentUserId == nil {
         let me: MIRAUser? = try? await api.get("/auth/me")
         currentUserId = me?.id
       }
     }
-    .confirmationDialog("Story options", isPresented: $showStoryMenu, titleVisibility: .visible) {
-      if currentUserId == group.userId {
-        Button("Delete story", role: .destructive) {
-          Task { await deleteCurrentStory() }
-        }
-      } else {
-        Button("Report story", role: .destructive) {
-          reportCurrentStory()
-        }
-        Button("Block user", role: .destructive) {
-          Task { await blockStoryOwner() }
+    .miraActionModal(isPresented: $showStoryMenu) { dismissMenu in
+      MIRAActionModalCard {
+        if currentUserId == activeGroup.userId {
+          MIRAActionModalButton(
+            title: "Delete story",
+            systemImage: "trash",
+            isDestructive: true,
+            staggerIndex: 0
+          ) {
+            dismissMenu()
+            Task { await deleteCurrentStory() }
+          }
+        } else {
+          MIRAActionModalButton(
+            title: "Block",
+            systemImage: "nosign",
+            isDestructive: true,
+            staggerIndex: 0
+          ) {
+            dismissMenu()
+            Task { await blockStoryOwner() }
+          }
+
+          MIRAActionModalButton(
+            title: "Report",
+            systemImage: "exclamationmark.triangle",
+            staggerIndex: 1
+          ) {
+            dismissMenu()
+            DispatchQueue.main.asyncAfter(deadline: .now() + MIRATransitionTiming.actionModalClose) {
+              reportCurrentStory()
+            }
+          }
         }
       }
-      Button("Cancel", role: .cancel) {}
+    }
+    .onChange(of: scenePhase) { _, phase in
+      if phase == .active {
+        armStoryPlaybackForCurrentStory(reason: "story_active")
+        resumeStoryAudioIfNeeded()
+      } else {
+        isStoryPlaybackArmed = false
+        pauseStoryAudioForInterruption()
+      }
+    }
+    .onChange(of: currentStory?.id) { _, _ in
+      armStoryPlaybackForCurrentStory(reason: "story_changed")
+    }
+    .onReceive(NotificationCenter.default.publisher(for: .miraPlaybackShouldPause)) { _ in
+      pauseStoryAudioForInterruption()
+    }
+    .onReceive(NotificationCenter.default.publisher(for: .miraPlaybackMayResume)) { _ in
+      resumeStoryAudioIfNeeded()
+    }
+    .onDisappear {
+      stopStoryAudio()
+      thoughtPlaybackTask?.cancel()
+      visibleThoughts.removeAll()
     }
   }
 
-  private var storyCanvas: some View {
-    GeometryReader { proxy in
-      ZStack(alignment: .top) {
-        if let mediaURL = currentStory?.mediaURL {
-          RemoteMediaView(
-            url: mediaURL,
-            isVideo: mediaURL.isVideoURL,
-            contentMode: .fill,
-            shouldPlay: true,
-            placeholderColor: storyFallbackColor,
-            placeholderTint: MIRATheme.Color.textSecondary.opacity(0.68)
-          )
-            .frame(width: proxy.size.width, height: proxy.size.height)
-        } else {
-          RoundedRectangle(cornerRadius: 24, style: .continuous)
-            .fill(storyFallbackColor)
-            .overlay {
-              Text(currentStory?.content?.isEmpty == false ? currentStory!.content! : "Story")
-                .font(.system(size: 24, weight: .semibold))
-                .foregroundStyle(storyTextColor)
-                .multilineTextAlignment(.center)
-                .padding(28)
-            }
-        }
-
-        LinearGradient(
-          colors: [.black.opacity(0.34), .black.opacity(0.08), .clear],
-          startPoint: .top,
-          endPoint: .bottom
+  private var storyMediaLayer: some View {
+    ZStack {
+      if let mediaURL = currentStory?.mediaURL {
+        RemoteMediaView(
+          url: mediaURL,
+          isVideo: mediaURL.isVideoURL,
+          placeholderURL: storyPosterURL(for: mediaURL),
+          contentMode: .fill,
+          shouldPlay: shouldPlayCurrentStory,
+          videoMuted: currentStory?.hasAudio == true,
+          maxPixelSize: 1920,
+          placeholderColor: storyFallbackColor,
+          placeholderTint: MIRATheme.Color.textSecondary.opacity(0.68)
         )
-        .frame(height: min(170, proxy.size.height * 0.26))
-
-        LinearGradient(
-          colors: [.clear, .black.opacity(0.22)],
-          startPoint: .top,
-          endPoint: .bottom
-        )
-        .frame(height: min(190, proxy.size.height * 0.30))
-        .frame(maxHeight: .infinity, alignment: .bottom)
-
-        HStack(spacing: 0) {
-          Color.clear
-            .contentShape(Rectangle())
-            .onTapGesture { goToPreviousStory() }
-          Color.clear
-            .contentShape(Rectangle())
-            .onTapGesture { goToNextStory() }
-        }
-        .padding(.top, 76)
-
-        VStack(spacing: 9) {
-          progressRail
-            .padding(.top, 13)
-          storyTopBar
-        }
-        .padding(.horizontal, 13)
+        .id(storyPlaybackIdentity(for: mediaURL))
+      } else {
+        Rectangle()
+          .fill(storyFallbackColor)
+          .overlay {
+            Text(currentStory?.content?.isEmpty == false ? currentStory!.content! : "Story")
+              .font(.system(size: 26, weight: .semibold))
+              .foregroundStyle(storyTextColor)
+              .multilineTextAlignment(.center)
+              .padding(28)
+          }
       }
-      .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+    }
+    .transition(.opacity)
+    .animation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion), value: currentStory?.id)
+  }
+
+  private var storyThoughtOverlay: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      ForEach(visibleThoughts.suffix(3)) { item in
+        StoryThoughtBubbleView(thought: item.thought)
+          .transition(.asymmetric(
+            insertion: .opacity.combined(with: .move(edge: .bottom)).combined(with: .scale(scale: 0.98)),
+            removal: .opacity.combined(with: .move(edge: .top))
+          ))
+      }
+    }
+  }
+
+  private var storyProfileCarousel: some View {
+    HStack(alignment: .bottom, spacing: 18) {
+      storyRailBubble(storyRailNeighbor(offset: -1), isSelected: false)
+        .frame(width: 76, height: 112)
+        .opacity(storyRailNeighbor(offset: -1) == nil ? 0 : 1)
+
+      storyRailBubble(activeGroup, isSelected: true)
+        .frame(width: 116, height: 116)
+        .zIndex(1)
+
+      storyRailBubble(storyRailNeighbor(offset: 1), isSelected: false)
+        .frame(width: 76, height: 112)
+        .opacity(storyRailNeighbor(offset: 1) == nil ? 0 : 1)
     }
     .frame(maxWidth: .infinity)
-    .transition(.opacity)
-    .animation(.easeInOut(duration: reduceMotion ? 0.08 : 0.16), value: currentStory?.id)
+    .frame(height: 128)
+    .padding(.top, 6)
+    .offset(x: clampedStoryRailDrag)
+    .animation(storyRailAnimation, value: activeGroup.userId)
+    .animation(.interactiveSpring(response: 0.18, dampingFraction: 0.92, blendDuration: 0.02), value: storyRailDragTranslation)
+    .highPriorityGesture(
+      DragGesture(minimumDistance: 28, coordinateSpace: .local)
+        .updating($storyRailDragTranslation) { value, state, _ in
+          let horizontal = value.translation.width
+          let vertical = value.translation.height
+          guard abs(horizontal) > abs(vertical) * 1.15 else { return }
+          state = horizontal
+        }
+        .onEnded(handleStoryGroupSwipe)
+    )
   }
 
-  private var progressRail: some View {
-    HStack(spacing: 6) {
-      ForEach(0..<max(stories.count, 1), id: \.self) { index in
-        Capsule()
-          .fill(index <= selectedIndex ? Color.white.opacity(0.96) : Color.white.opacity(0.36))
-          .frame(height: 3.2)
+  private var storyPrewarmTaskID: String {
+    "\(activeGroup.userId)|\(selectedIndex)|\(currentStory?.id ?? "none")"
+  }
+
+  private var shouldPlayCurrentStory: Bool {
+    isStoryPlaybackArmed && isCanvasVisible && !isClosing && scenePhase == .active
+  }
+
+  private func storyPlaybackIdentity(for mediaURL: String) -> String {
+    "\(activeGroup.userId)|\(currentStory?.id ?? "story")|\(mediaURL)|\(storyPlaybackToken)"
+  }
+
+  @MainActor
+  private func armStoryPlaybackForCurrentStory(reason: String) {
+    guard !isClosing else { return }
+    isStoryPlaybackArmed = false
+    let urls = storyMediaWindowURLs()
+    if !urls.isEmpty {
+      MIRAVideoPrewarmManager.shared.prewarm(urls: urls, keepOnly: Set(urls.filter(\.isVideoURL).prefix(5)))
+      Task.detached(priority: .utility) {
+        await MIRAImagePrefetcher.prefetch(urls: urls, maxPixelSize: 1920, limit: 12)
       }
     }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.035) {
+      guard !isClosing, scenePhase == .active else { return }
+      isStoryPlaybackArmed = true
+      storyPlaybackToken += 1
+      MIRAPlaybackCoordinator.resumeVisible(reason: reason)
+      MIRAApplePerformanceLogger.event("story_playback_armed", detail: reason)
+    }
+  }
+
+  private func storyMediaTopInset(safeTop: CGFloat) -> CGFloat {
+    safeTop > 0 ? 18 : 14
+  }
+
+  private var clampedStoryRailDrag: CGFloat {
+    let limit: CGFloat = 104
+    return min(max(storyRailDragTranslation, -limit), limit)
+  }
+
+  private var storyRailAnimation: Animation {
+    reduceMotion
+      ? .easeOut(duration: CaptroMotion.Duration.reduced)
+      : .interactiveSpring(response: 0.24, dampingFraction: 0.86, blendDuration: 0.04)
+  }
+
+  @ViewBuilder
+  private func storyRailBubble(_ railGroup: MIRAStoryGroup?, isSelected: Bool) -> some View {
+    if let railGroup {
+      Button {
+        selectStoryGroup(railGroup)
+      } label: {
+        StoryViewerCarouselBubble(
+          group: railGroup,
+          label: storyHandleLabel(for: railGroup),
+          isSelected: isSelected
+        )
+      }
+      .buttonStyle(.plain)
+      .accessibilityLabel(isSelected ? "Current story" : "Switch story")
+    } else {
+      Color.clear
+    }
+  }
+
+  private func storyRailNeighbor(offset: Int) -> MIRAStoryGroup? {
+    let groups = storyRailGroups
+    guard let index = groups.firstIndex(where: { $0.userId == activeGroup.userId }) else { return nil }
+    let neighborIndex = index + offset
+    guard groups.indices.contains(neighborIndex) else { return nil }
+    return groups[neighborIndex]
+  }
+
+  @MainActor
+  private func prewarmStoryMediaWindow() async {
+    let urls = storyMediaWindowURLs()
+    guard !urls.isEmpty else { return }
+    MIRAVideoPrewarmManager.shared.prewarm(urls: urls, keepOnly: Set(urls.filter(\.isVideoURL).prefix(5)))
+    Task.detached(priority: .utility) {
+      await MIRAImagePrefetcher.prefetch(urls: urls, maxPixelSize: 1920, limit: 10)
+    }
+  }
+
+  private func storyMediaWindowURLs() -> [String] {
+    var urls: [String] = []
+
+    let lower = max(0, selectedIndex - 1)
+    let upper = min(stories.count - 1, selectedIndex + 5)
+    if lower <= upper {
+      for index in lower...upper {
+        if let url = stories[index].mediaURL {
+          urls.append(url)
+        }
+      }
+    }
+
+    let groups = storyRailGroups
+    if let groupIndex = groups.firstIndex(where: { $0.userId == activeGroup.userId }) {
+      for offset in [-1, 1, 2, 3, 4, 5] {
+        let nextIndex = groupIndex + offset
+        guard groups.indices.contains(nextIndex) else { continue }
+        urls.append(contentsOf: (groups[nextIndex].statuses ?? []).prefix(5).compactMap(\.mediaURL))
+      }
+    }
+
+    return orderedUniqueStoryURLs(urls)
+  }
+
+  private func prewarmStoriesStarting(at index: Int) {
+    guard stories.indices.contains(index) else { return }
+    let upper = min(stories.count - 1, index + 5)
+    let urls = orderedUniqueStoryURLs((index...upper).compactMap { stories[$0].mediaURL })
+    guard !urls.isEmpty else { return }
+    MIRAVideoPrewarmManager.shared.prewarm(urls: urls, keepOnly: Set(urls.filter(\.isVideoURL).prefix(5)))
+    Task.detached(priority: .utility) {
+      await MIRAImagePrefetcher.prefetch(urls: urls, maxPixelSize: 1920, limit: 6)
+    }
+  }
+
+  private func orderedUniqueStoryURLs(_ urls: [String]) -> [String] {
+    var seen = Set<String>()
+    var result: [String] = []
+    for url in urls {
+      let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !trimmed.isEmpty, seen.insert(trimmed).inserted else { continue }
+      result.append(trimmed)
+    }
+    return result
+  }
+
+  private func storyPosterURL(for mediaURL: String) -> String? {
+    let clean = mediaURL.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard clean.isVideoURL, let uid = cloudflareStreamUID(from: clean) else { return nil }
+    return "https://videodelivery.net/\(uid)/thumbnails/thumbnail.jpg?time=1s&height=720"
+  }
+
+  private func cloudflareStreamUID(from value: String) -> String? {
+    let clean = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    if clean.lowercased().hasPrefix("cfstream:") {
+      let uid = String(clean.dropFirst("cfstream:".count))
+        .filter { $0.isLetter || $0.isNumber || $0 == "_" || $0 == "-" }
+      return uid.isEmpty ? nil : uid
+    }
+    guard let url = URL(string: clean), url.host?.lowercased().contains("videodelivery.net") == true else {
+      return nil
+    }
+    let segments = url.pathComponents.filter { $0 != "/" }
+    guard let uid = segments.first, !uid.isEmpty else { return nil }
+    return uid
+  }
+
+  private func storyHandleLabel(for railGroup: MIRAStoryGroup) -> String {
+    if MIRAUsernameRules.isValidPublicUsername(railGroup.userUsername) {
+      return "@\(MIRAUsernameRules.normalized(railGroup.userUsername))"
+    }
+    return railGroup.displayName
+  }
+
+  private func selectStoryGroup(_ railGroup: MIRAStoryGroup) {
+    let urls = orderedUniqueStoryURLs((railGroup.statuses ?? []).prefix(5).compactMap(\.mediaURL))
+    if !urls.isEmpty {
+      MIRAVideoPrewarmManager.shared.prewarm(urls: urls, keepOnly: Set(urls.filter(\.isVideoURL).prefix(5)))
+      Task.detached(priority: .utility) {
+        await MIRAImagePrefetcher.prefetch(urls: urls, maxPixelSize: 1920, limit: 5)
+      }
+    }
+    withAnimation(storyRailAnimation) {
+      activeGroupOverride = railGroup
+      localStories = railGroup.statuses ?? []
+      selectedIndex = 0
+      visibleThoughts.removeAll()
+      thoughtErrorText = nil
+    }
+  }
+
+  private func handleStoryGroupSwipe(_ value: DragGesture.Value) {
+    let horizontal = value.translation.width
+    let vertical = value.translation.height
+    guard abs(horizontal) > 44, abs(horizontal) > abs(vertical) * 1.35 else { return }
+    if horizontal < 0 {
+      goToNextStoryGroup()
+    } else {
+      goToPreviousStoryGroup()
+    }
+  }
+
+  private func goToNextStoryGroup() {
+    switchStoryGroup(offset: 1)
+  }
+
+  private func goToPreviousStoryGroup() {
+    switchStoryGroup(offset: -1)
+  }
+
+  private func switchStoryGroup(offset: Int) {
+    let groups = storyRailGroups
+    guard let currentIndex = groups.firstIndex(where: { $0.userId == activeGroup.userId }) else { return }
+    let nextIndex = currentIndex + offset
+    guard groups.indices.contains(nextIndex) else { return }
+    selectStoryGroup(groups[nextIndex])
   }
 
   private var storyTopBar: some View {
-    HStack(spacing: 9) {
-      RemoteAvatar(url: group.userProfileImage, size: 36)
+    HStack(spacing: 11) {
+      RemoteAvatar(url: activeGroup.userProfileImage, size: 36)
 
       HStack(spacing: 7) {
-        Text(group.displayName)
+        Text(activeGroup.displayName)
           .font(.system(size: 15, weight: .semibold))
           .foregroundStyle(.white)
           .lineLimit(1)
@@ -659,19 +1589,38 @@ private struct StoryViewerNativeView: View {
 
       Spacer()
 
-      Button {} label: {
-        ZStack(alignment: .bottomTrailing) {
-          RoundedRectangle(cornerRadius: 9, style: .continuous)
-            .fill(.black.opacity(0.34))
-            .frame(width: 32, height: 32)
-          Image(systemName: "music.note")
-            .font(.system(size: 13, weight: .bold))
-            .foregroundStyle(.white)
-            .offset(x: 3, y: 3)
+      if currentStory?.hasAudio == true {
+        Button {
+          toggleStoryAudio()
+        } label: {
+          ZStack(alignment: .bottomTrailing) {
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+              .fill(.black.opacity(0.34))
+              .frame(width: 32, height: 32)
+            if isStoryAudioLoading {
+              ProgressView()
+                .tint(.white)
+                .scaleEffect(0.58)
+            } else {
+              Image(systemName: isStoryAudioPlaying ? "pause.fill" : "music.note")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(.white)
+                .offset(x: isStoryAudioPlaying ? 0 : 3, y: isStoryAudioPlaying ? 0 : 3)
+            }
+          }
+          .frame(width: 36, height: 36)
         }
-        .frame(width: 36, height: 36)
+        .buttonStyle(.miraPress)
+      }
+
+      Button { showStoryMenu = true } label: {
+        Image(systemName: "ellipsis")
+          .font(.system(size: 23, weight: .bold))
+          .foregroundStyle(.white)
+          .frame(width: 38, height: 38)
       }
       .buttonStyle(.miraPress)
+      .padding(.trailing, 8)
 
       Button { closeStoryViewer() } label: {
         Image(systemName: "xmark")
@@ -686,26 +1635,23 @@ private struct StoryViewerNativeView: View {
   private var storyBottomActions: some View {
     HStack(spacing: 12) {
       HStack(spacing: 10) {
-        TextField("Message...", text: $replyText)
+        TextField("Share thought", text: $replyText)
           .font(.system(size: 16, weight: .regular))
           .foregroundStyle(.white)
           .tint(.white)
           .focused($isReplyFocused)
           .submitLabel(.send)
-          .onSubmit(sendStoryReplyDraft)
+          .onSubmit(sendStoryThought)
 
         Spacer(minLength: 4)
 
-        if replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-          HStack(spacing: 14) {
-            Text("😍")
-            Text("😂")
-            Text("😳")
-          }
-          .font(.system(size: 25))
-          .lineLimit(1)
-        } else {
-          Button(action: sendStoryReplyDraft) {
+        if isSendingThought {
+          ProgressView()
+            .tint(.white)
+            .scaleEffect(0.72)
+            .frame(width: 30, height: 30)
+        } else if !replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+          Button(action: sendStoryThought) {
             Image(systemName: "paperplane.fill")
               .font(.system(size: 16, weight: .bold))
               .foregroundStyle(.white)
@@ -720,21 +1666,27 @@ private struct StoryViewerNativeView: View {
       .background(Color.white.opacity(0.18))
       .clipShape(Capsule())
 
-      Button {} label: {
-        Image(systemName: "heart")
+      Button { toggleStoryLike() } label: {
+        Image(systemName: currentStory?.viewerLiked == true ? "heart.fill" : "heart")
           .font(.system(size: 29, weight: .regular))
-          .foregroundStyle(.white)
+          .foregroundStyle(currentStory?.viewerLiked == true ? MIRATheme.Color.like : .white)
           .frame(width: 38, height: 48)
+          .scaleEffect(currentStory?.viewerLiked == true ? 1.06 : 1)
       }
+      .disabled(isSubmittingStoryLike || currentStory == nil)
       .buttonStyle(.miraPress)
-
-      Button { showStoryMenu = true } label: {
-        Image(systemName: "ellipsis")
-          .font(.system(size: 26, weight: .bold))
+    }
+    .overlay(alignment: .topLeading) {
+      if let thoughtErrorText {
+        Text(thoughtErrorText)
+          .font(.system(size: 12, weight: .semibold))
           .foregroundStyle(.white)
-          .frame(width: 36, height: 48)
+          .padding(.horizontal, 12)
+          .padding(.vertical, 6)
+          .background(.black.opacity(0.42), in: Capsule())
+          .offset(x: 4, y: -34)
+          .transition(.opacity.combined(with: .move(edge: .bottom)))
       }
-      .buttonStyle(.miraPress)
     }
   }
 
@@ -752,6 +1704,200 @@ private struct StoryViewerNativeView: View {
     return Color(uiColor: UIColor(hex: value))
   }
 
+  @MainActor
+  private func loadStoryThoughtsForCurrentStory() async {
+    thoughtPlaybackTask?.cancel()
+    visibleThoughts.removeAll()
+    thoughtErrorText = nil
+    guard let storyId = currentStory?.id else {
+      storyThoughts = []
+      return
+    }
+
+    do {
+      let loaded: [StoryThought] = try await api.get("/statuses/\(storyId)/thoughts")
+      storyThoughts = loaded.filter { !$0.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+      startStoryThoughtPlayback()
+    } catch {
+      storyThoughts = []
+    }
+  }
+
+  @MainActor
+  private func startStoryThoughtPlayback() {
+    thoughtPlaybackTask?.cancel()
+    let queuedThoughts = Array(storyThoughts.suffix(10))
+    guard !queuedThoughts.isEmpty else { return }
+
+    thoughtPlaybackTask = Task {
+      try? await Task.sleep(nanoseconds: 500_000_000)
+      for thought in queuedThoughts {
+        if Task.isCancelled { return }
+        await MainActor.run { showStoryThought(thought) }
+        try? await Task.sleep(nanoseconds: 1_650_000_000)
+      }
+    }
+  }
+
+  @MainActor
+  private func showStoryThought(_ thought: StoryThought) {
+    let bubble = StoryThoughtBubbleState(thought: thought)
+    withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
+      visibleThoughts.append(bubble)
+      if visibleThoughts.count > 3 {
+        visibleThoughts.removeFirst(visibleThoughts.count - 3)
+      }
+    }
+
+    DispatchQueue.main.asyncAfter(deadline: .now() + 3.2) {
+      Task { @MainActor in
+        withAnimation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion)) {
+          visibleThoughts.removeAll { $0.id == bubble.id }
+        }
+      }
+    }
+  }
+
+  @MainActor
+  private func sendStoryThought() {
+    let text = replyText.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !text.isEmpty, !isSendingThought, let storyId = currentStory?.id else { return }
+    isSendingThought = true
+    thoughtErrorText = nil
+
+    Task {
+      do {
+        let thought: StoryThought = try await api.post(
+          "/statuses/\(storyId)/thoughts",
+          body: StoryThoughtSubmitBody(body: text)
+        )
+        await MainActor.run {
+          replyText = ""
+          isReplyFocused = false
+          isSendingThought = false
+          storyThoughts.append(thought)
+          showStoryThought(thought)
+          CaptroHaptics.light()
+        }
+      } catch {
+        await MainActor.run {
+          isSendingThought = false
+          thoughtErrorText = "Could not share thought."
+          CaptroHaptics.warning()
+          DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) {
+            Task { @MainActor in
+              withAnimation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion)) {
+                thoughtErrorText = nil
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  @MainActor
+  private func toggleStoryLike() {
+    guard !isSubmittingStoryLike, let story = currentStory else { return }
+    let nextLiked = !story.viewerLiked
+    let nextCount = max(0, (story.likesCount ?? 0) + (nextLiked ? 1 : -1))
+    updateCurrentStory(liked: nextLiked, likesCount: nextCount)
+    isSubmittingStoryLike = true
+    CaptroHaptics.light()
+
+    Task {
+      do {
+        let response: PostLikeResponse = try await api.post("/statuses/\(story.id)/like", body: LikeBody(liked: nextLiked))
+        await MainActor.run {
+          updateCurrentStory(
+            liked: response.liked ?? nextLiked,
+            likesCount: response.likesCount ?? nextCount
+          )
+          isSubmittingStoryLike = false
+        }
+      } catch {
+        await MainActor.run {
+          updateCurrentStory(liked: story.viewerLiked, likesCount: story.likesCount ?? 0)
+          isSubmittingStoryLike = false
+          CaptroHaptics.warning()
+        }
+      }
+    }
+  }
+
+  @MainActor
+  private func updateCurrentStory(liked: Bool, likesCount: Int) {
+    guard stories.indices.contains(selectedIndex) else { return }
+    var updatedStories = stories
+    updatedStories[selectedIndex] = updatedStories[selectedIndex].updating(liked: liked, likesCount: likesCount)
+    localStories = updatedStories
+  }
+
+  @MainActor
+  private func prepareStoryAudioIfNeeded() async {
+    stopStoryAudio()
+    guard let story = currentStory, story.hasAudio else { return }
+    isStoryAudioLoading = true
+    defer { isStoryAudioLoading = false }
+    guard let stream = await storyAudioStreamURL(for: story), let url = URL(string: stream) else { return }
+    let player = AVPlayer(url: url)
+    storyAudioPlayer = player
+    player.play()
+    isStoryAudioPlaying = true
+  }
+
+  private func storyAudioStreamURL(for story: MIRAStatusPreview) async -> String? {
+    let stream = story.audioStreamUrl?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    if !stream.isEmpty { return stream }
+    guard
+      let encoded = story.audioTrackId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        .addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+      !encoded.isEmpty
+    else {
+      return nil
+    }
+    do {
+      let track: MIRAAudiusTrack = try await api.get("/music/audius/stream/\(encoded)")
+      return track.streamUrl
+    } catch {
+      return nil
+    }
+  }
+
+  private func toggleStoryAudio() {
+    if isStoryAudioPlaying {
+      resumeStoryAudioAfterInterruption = false
+      storyAudioPlayer?.pause()
+      isStoryAudioPlaying = false
+    } else if let storyAudioPlayer {
+      storyAudioPlayer.play()
+      isStoryAudioPlaying = true
+    } else {
+      Task { await prepareStoryAudioIfNeeded() }
+    }
+  }
+
+  private func stopStoryAudio() {
+    storyAudioPlayer?.pause()
+    storyAudioPlayer = nil
+    isStoryAudioPlaying = false
+    isStoryAudioLoading = false
+    resumeStoryAudioAfterInterruption = false
+  }
+
+  private func pauseStoryAudioForInterruption() {
+    resumeStoryAudioAfterInterruption = isStoryAudioPlaying
+    storyAudioPlayer?.pause()
+    isStoryAudioPlaying = false
+  }
+
+  private func resumeStoryAudioIfNeeded() {
+    guard resumeStoryAudioAfterInterruption, let storyAudioPlayer else { return }
+    storyAudioPlayer.play()
+    isStoryAudioPlaying = true
+    resumeStoryAudioAfterInterruption = false
+  }
+
   private func deleteCurrentStory() async {
     guard let id = currentStory?.id else { return }
     do {
@@ -762,7 +1908,7 @@ private struct StoryViewerNativeView: View {
       if nextStories.isEmpty {
         closeStoryViewer()
       } else {
-        withAnimation(.easeInOut(duration: 0.18)) {
+        withAnimation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion)) {
           selectedIndex = min(selectedIndex, max(0, nextStories.count - 1))
         }
       }
@@ -777,15 +1923,15 @@ private struct StoryViewerNativeView: View {
       MIRAReportTarget(
         targetType: "story",
         targetId: story.id,
-        ownerUserId: story.userId ?? group.userId,
+        ownerUserId: story.userId ?? activeGroup.userId,
         title: "Report story",
-        subtitle: story.content?.isEmpty == false ? story.content : group.displayName
+        subtitle: story.content?.isEmpty == false ? story.content : activeGroup.displayName
       )
     )
   }
 
   private func blockStoryOwner() async {
-    let ownerId = currentStory?.userId ?? group.userId
+    let ownerId = currentStory?.userId ?? activeGroup.userId
     guard !ownerId.isEmpty, ownerId != currentUserId else { return }
     let _: EmptyResponse? = try? await api.post("/users/\(ownerId)/block", body: EmptyBody())
     closeStoryViewer()
@@ -794,8 +1940,9 @@ private struct StoryViewerNativeView: View {
   private func closeStoryViewer() {
     guard !isClosing else { return }
     isClosing = true
-    let duration = reduceMotion ? 0.08 : 0.22
-    withAnimation(.easeInOut(duration: duration)) {
+    MIRAApplePerformanceLogger.event("story_viewer_close")
+    let duration = reduceMotion ? CaptroMotion.Duration.reduced : CaptroMotion.Duration.fullScreenClose
+    withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
       isCanvasVisible = false
     }
     DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
@@ -803,29 +1950,135 @@ private struct StoryViewerNativeView: View {
     }
   }
 
-  private func sendStoryReplyDraft() {
-    guard !replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-    UIImpactFeedbackGenerator(style: .light).impactOccurred()
-    replyText = ""
-    isReplyFocused = false
-  }
-
   private func goToPreviousStory() {
     if selectedIndex > 0 {
-      withAnimation(.easeInOut(duration: 0.18)) {
+      prewarmStoriesStarting(at: selectedIndex - 1)
+      isStoryPlaybackArmed = false
+      withAnimation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion)) {
         selectedIndex -= 1
       }
     }
   }
 
   private func goToNextStory() {
-    if selectedIndex < stories.count - 1 {
-      withAnimation(.easeInOut(duration: 0.18)) {
-        selectedIndex += 1
-      }
-    } else {
-      closeStoryViewer()
+    guard selectedIndex < stories.count - 1 else {
+      return
     }
+    prewarmStoriesStarting(at: selectedIndex + 1)
+    isStoryPlaybackArmed = false
+    withAnimation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion)) {
+      selectedIndex += 1
+    }
+  }
+}
+
+private struct StoryThoughtBubbleView: View {
+  let thought: StoryThought
+
+  var body: some View {
+    HStack(alignment: .top, spacing: 8) {
+      RemoteAvatar(url: thought.userProfileImage, size: 28)
+      VStack(alignment: .leading, spacing: 2) {
+        Text(thought.displayName)
+          .font(.system(size: 11, weight: .bold))
+          .foregroundStyle(.white.opacity(0.82))
+          .lineLimit(1)
+        Text(thought.body)
+          .font(.system(size: 13, weight: .semibold))
+          .foregroundStyle(.white)
+          .lineLimit(2)
+      }
+    }
+    .padding(.horizontal, 10)
+    .padding(.vertical, 8)
+    .frame(maxWidth: 260, alignment: .leading)
+    .background(.black.opacity(0.34), in: RoundedRectangle(cornerRadius: 17, style: .continuous))
+    .overlay(
+      RoundedRectangle(cornerRadius: 17, style: .continuous)
+        .stroke(.white.opacity(0.08), lineWidth: 1)
+    )
+  }
+}
+
+private struct StoryTopRoundedRectangle: Shape {
+  let radius: CGFloat
+
+  func path(in rect: CGRect) -> Path {
+    let r = min(radius, min(rect.width, rect.height) / 2)
+    var path = Path()
+    path.move(to: CGPoint(x: rect.minX, y: rect.maxY))
+    path.addLine(to: CGPoint(x: rect.minX, y: rect.minY + r))
+    path.addQuadCurve(
+      to: CGPoint(x: rect.minX + r, y: rect.minY),
+      control: CGPoint(x: rect.minX, y: rect.minY)
+    )
+    path.addLine(to: CGPoint(x: rect.maxX - r, y: rect.minY))
+    path.addQuadCurve(
+      to: CGPoint(x: rect.maxX, y: rect.minY + r),
+      control: CGPoint(x: rect.maxX, y: rect.minY)
+    )
+    path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+    path.closeSubpath()
+    return path
+  }
+}
+
+private struct StoryViewerCarouselBubble: View {
+  let group: MIRAStoryGroup
+  let label: String
+  let isSelected: Bool
+
+  private var bubbleSize: CGFloat { isSelected ? 72 : 50 }
+  private var previewStory: MIRAStatusPreview? { group.statuses?.first }
+
+  var body: some View {
+    VStack(spacing: 7) {
+      ZStack {
+        Circle()
+          .stroke(
+            isSelected
+              ? LinearGradient(colors: [Color.pink, Color.purple, MIRATheme.Color.forest], startPoint: .topLeading, endPoint: .bottomTrailing)
+              : LinearGradient(colors: [.white.opacity(0.38), .white.opacity(0.18)], startPoint: .topLeading, endPoint: .bottomTrailing),
+            lineWidth: isSelected ? 3 : 1
+          )
+          .frame(width: bubbleSize + 8, height: bubbleSize + 8)
+
+        if let mediaURL = previewStory?.mediaURL {
+          RemoteMediaView(
+            url: mediaURL,
+            isVideo: mediaURL.isVideoURL,
+            contentMode: .fill,
+            shouldPlay: false,
+            placeholderColor: MIRATheme.Color.mediaPlaceholder,
+            placeholderTint: .white.opacity(0.55)
+          )
+          .frame(width: bubbleSize, height: bubbleSize)
+          .clipShape(Circle())
+        } else {
+          RemoteAvatar(url: group.userProfileImage, size: bubbleSize)
+        }
+
+        if previewStory?.hasAudio == true {
+          Circle()
+            .fill(.white.opacity(0.88))
+            .frame(width: isSelected ? 22 : 18, height: isSelected ? 22 : 18)
+            .overlay(
+              Image(systemName: "music.note")
+                .font(.system(size: isSelected ? 10 : 8, weight: .bold))
+                .foregroundStyle(MIRATheme.Color.forest)
+            )
+            .offset(x: bubbleSize * 0.35, y: -bubbleSize * 0.32)
+        }
+      }
+
+      Text(label)
+        .font(.system(size: isSelected ? 13 : 11, weight: .semibold))
+        .foregroundStyle(.white.opacity(isSelected ? 0.95 : 0.64))
+        .lineLimit(1)
+        .frame(width: isSelected ? 104 : 72)
+    }
+    .frame(width: isSelected ? 116 : 76, height: 108, alignment: .bottom)
+    .animation(CaptroMotion.mediaFadeAnimation(reduceMotion: false), value: isSelected)
   }
 }
 
@@ -908,13 +2161,15 @@ private struct DiscoverPostGalleryTile: View {
     GeometryReader { proxy in
       let tileHeight = proxy.size.width * MIRAMediaSizing.profileGridRatio
       ZStack(alignment: .topTrailing) {
-        if let media = post.thumbnailMediaURLs.first {
+        if let media = displayMediaURL {
           RemoteMediaView(
             url: media,
             isVideo: media.isVideoURL,
+            placeholderURL: placeholderURL,
+            fallbackURL: fallbackURL(for: media),
             shouldPlay: false,
             maxPixelSize: 560,
-            showsVideoPlaceholderIcon: false
+            showsVideoPlaceholderIcon: sourceIsVideo
           )
             .frame(width: proxy.size.width, height: tileHeight)
         } else {
@@ -930,7 +2185,7 @@ private struct DiscoverPostGalleryTile: View {
           .frame(width: proxy.size.width, height: tileHeight)
         }
 
-        if post.thumbnailMediaURLs.count > 1 {
+        if carouselCount > 1 {
           Image(systemName: "square.on.square")
             .font(.system(size: 11, weight: .bold))
             .foregroundStyle(.white)
@@ -947,6 +2202,51 @@ private struct DiscoverPostGalleryTile: View {
     .clipped()
     .contentShape(Rectangle())
     .accessibilityLabel(post.titleText)
+  }
+
+  private var displayMediaURL: String? {
+    orderedMediaCandidates.first
+  }
+
+  private var placeholderURL: String? {
+    let candidate = (post.posterMediaURLs + post.thumbnailMediaURLs)
+      .map(cleanMediaURL)
+      .first { !$0.isEmpty && $0 != displayMediaURL }
+    return candidate
+  }
+
+  private var orderedMediaCandidates: [String] {
+    let preferredPreview = post.posterMediaURLs + post.thumbnailMediaURLs
+    let renderableFeed = post.feedMediaURLs.filter { !($0.isVideoURL && !sourceIsVideo) }
+    return uniqueMediaURLs(preferredPreview + renderableFeed + post.fallbackMediaURLs + post.mediaURLs)
+  }
+
+  private var sourceIsVideo: Bool {
+    let types = post.mediaTypes?.values.map { $0.lowercased() } ?? []
+    return types.contains { $0.contains("video") }
+      || post.feedMediaURLs.contains { $0.isVideoURL }
+      || post.fallbackMediaURLs.contains { $0.isVideoURL }
+      || post.mediaURLs.contains { $0.isVideoURL }
+  }
+
+  private var carouselCount: Int {
+    max(post.feedMediaURLs.count, post.mediaURLs.count, post.thumbnailMediaURLs.count, post.posterMediaURLs.count)
+  }
+
+  private func fallbackURL(for media: String) -> String? {
+    uniqueMediaURLs(post.feedMediaURLs + post.fallbackMediaURLs + post.mediaURLs)
+      .first { $0 != media && !$0.isVideoURL }
+  }
+
+  private func uniqueMediaURLs(_ values: [String]) -> [String] {
+    var seen = Set<String>()
+    return values
+      .map(cleanMediaURL)
+      .filter { !$0.isEmpty && seen.insert($0).inserted }
+  }
+
+  private func cleanMediaURL(_ value: String) -> String {
+    value.trimmingCharacters(in: .whitespacesAndNewlines)
   }
 }
 

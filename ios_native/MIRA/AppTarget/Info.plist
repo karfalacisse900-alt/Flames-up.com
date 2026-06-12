@@ -14,24 +14,37 @@
   <string>6.0</string>
   <key>CFBundleName</key>
   <string>Captro</string>
+  <key>GIDClientID</key>
+  <string>702354172189-9gg83vd92n3s217n5pb4ddqqsnme8ocb.apps.googleusercontent.com</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
   <string>$(MARKETING_VERSION)</string>
   <key>CFBundleVersion</key>
   <string>$(CURRENT_PROJECT_VERSION)</string>
+  <key>CFBundleURLTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeRole</key>
+      <string>Editor</string>
+      <key>CFBundleURLSchemes</key>
+      <array>
+        <string>com.googleusercontent.apps.702354172189-9gg83vd92n3s217n5pb4ddqqsnme8ocb</string>
+      </array>
+    </dict>
+  </array>
   <key>LSRequiresIPhoneOS</key>
   <true/>
   <key>NSCameraUsageDescription</key>
-  <string>Take photos and videos for posts, stories, notes, and chat.</string>
+  <string>Take photos for posts and record story videos in Captro.</string>
   <key>NSMicrophoneUsageDescription</key>
-  <string>Record voice messages, story videos, and voice or video calls.</string>
+  <string>Record audio when you create story videos.</string>
   <key>NSPhotoLibraryUsageDescription</key>
-  <string>Choose photos and videos from your gallery.</string>
+  <string>Choose photos for posts and videos for stories or chat.</string>
   <key>NSPhotoLibraryAddUsageDescription</key>
   <string>Save edited media from Captro to your photo library.</string>
   <key>NSLocationWhenInUseUsageDescription</key>
-  <string>Add places and nearby context to posts.</string>
+  <string>Add optional place tags or city and country labels to posts.</string>
   <key>NSAppTransportSecurity</key>
   <dict>
     <key>NSAllowsArbitraryLoads</key>
@@ -70,8 +83,13 @@
   <false/>
   <key>UIBackgroundModes</key>
   <array>
-    <string>audio</string>
+    <string>fetch</string>
     <string>voip</string>
+  </array>
+  <key>BGTaskSchedulerPermittedIdentifiers</key>
+  <array>
+    <string>com.captro.app.background-refresh</string>
+    <string>com.captro.app.cache-cleanup</string>
   </array>
   <key>UILaunchScreen</key>
   <dict>

@@ -1,4 +1,3 @@
-import AVFoundation
 import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
@@ -6,15 +5,6 @@ import UniformTypeIdentifiers
 enum ConversationNativeKind: Hashable {
   case direct(peerId: String)
   case group(groupId: String)
-}
-
-struct MIRAVoiceDraft: Identifiable, Hashable {
-  let url: URL
-  let duration: TimeInterval
-
-  var id: String {
-    url.absoluteString
-  }
 }
 
 private enum ChatRoomPalette {
@@ -26,7 +16,6 @@ private enum ChatRoomPalette {
   static let outgoingBubble = Color.black
   static let outgoingSoft = Color.black.opacity(0.82)
   static let accent = Color.black
-  static let voice = Color.black
   static let hairline = Color.black.opacity(0.075)
   static let incomingStroke = Color.clear
   static let outgoingStroke = Color.clear
@@ -40,18 +29,22 @@ final class ConversationNativeModel: ObservableObject {
   @Published var messages: [MIRAMessage] = []
   @Published var presence: MIRAPresence?
   @Published var draft = ""
-  @Published var pendingVoiceDraft: MIRAVoiceDraft?
   @Published var isLoading = false
+  @Published var isSyncing = false
+  @Published var isLoadingOlder = false
+  @Published var hasOlderMessages = false
   @Published var isSending = false
   @Published var isUploading = false
-  @Published var isRecording = false
   @Published var errorMessage: String?
 
   let kind: ConversationNativeKind
   let api: MIRAAPIClient
   let currentUserId: String
   private let uploadService: MIRAMediaUploadService
-  private let recorder = MIRAVoiceRecorder()
+  private let localStore = MIRAChatLocalStore.shared
+  private var didBeginInitialLoad = false
+  private var lastSyncedAt: String?
+  private var lastServerSequence: Int?
 
   init(kind: ConversationNativeKind, api: MIRAAPIClient, currentUserId: String = "") {
     self.kind = kind
@@ -70,38 +63,116 @@ final class ConversationNativeModel: ObservableObject {
     return nil
   }
 
-  private var messagesCacheKey: String {
-    switch kind {
-    case let .direct(peerId):
-      return "native.chat.messages.direct.\(currentUserId).\(peerId)"
-    case let .group(groupId):
-      return "native.chat.messages.group.\(groupId)"
+  func load() async {
+    if didBeginInitialLoad {
+      await syncNewMessages()
+      return
+    }
+    didBeginInitialLoad = true
+    await hydrateLocalMessages()
+    if !messages.isEmpty {
+      await refreshRecentMessages()
+    }
+    await syncNewMessages()
+    if case let .direct(peerId) = kind {
+      presence = try? await api.get("/messages/presence/\(peerId)")
     }
   }
 
-  func load() async {
-    if messages.isEmpty, let cached: [MIRAMessage] = await MIRALocalJSONCache.load([MIRAMessage].self, key: messagesCacheKey) {
-      messages = cached
+  private func hydrateLocalMessages() async {
+    guard messages.isEmpty else { return }
+    if let snapshot = await localStore.loadThread(kind: kind, currentUserId: currentUserId, limit: 50) {
+      messages = snapshot.messages
+      lastSyncedAt = snapshot.lastSyncedAt ?? latestMessageCursor()
+      lastServerSequence = snapshot.lastServerSequence
+      hasOlderMessages = snapshot.hasOlderRemote
+      prefetchMessageMedia(snapshot.messages)
       MIRAPerformanceTimeline.markOnce("chat_room_first_content", detail: "cache")
     }
+  }
 
+  private func syncNewMessages() async {
+    guard !isSyncing else { return }
+    isSyncing = true
     isLoading = messages.isEmpty
-    defer { isLoading = false }
+    defer {
+      isLoading = false
+      isSyncing = false
+    }
     do {
+      let rows: [MIRAMessage]
+      let cursor = lastSyncedAt ?? latestMessageCursor()
       switch kind {
       case let .direct(peerId):
-        let rows: [MIRAMessage] = try await api.get("/messages/\(peerId)")
-        messages = rows
-        await MIRALocalJSONCache.save(rows, key: messagesCacheKey)
-        presence = try? await api.get("/messages/presence/\(peerId)")
+        rows = try await api.get(messagesPath("/messages/\(peerId)", after: cursor, limit: 50))
       case let .group(groupId):
-        let response: MIRAGroupMessagesResponse = try await api.get("/group-chats/\(groupId)/messages")
-        messages = response.messages
-        await MIRALocalJSONCache.save(response.messages, key: messagesCacheKey)
+        let response: MIRAGroupMessagesResponse = try await api.get(messagesPath("/group-chats/\(groupId)/messages", after: cursor, limit: 50))
+        rows = response.messages
+      }
+      if !rows.isEmpty || messages.isEmpty {
+        messages = await localStore.merge(messages, with: rows)
+        lastSyncedAt = latestMessageCursor() ?? lastSyncedAt
+        lastServerSequence = messages.compactMap(\.serverSequence).max() ?? lastServerSequence
+        if messages.count >= 50 { hasOlderMessages = true }
+        prefetchMessageMedia(messages)
+        await persistThread()
       }
       errorMessage = nil
     } catch {
-      errorMessage = "Could not load this chat."
+      if messages.isEmpty {
+        errorMessage = "Could not load this chat."
+      }
+    }
+  }
+
+  private func refreshRecentMessages() async {
+    guard !isSyncing else { return }
+    isSyncing = true
+    defer { isSyncing = false }
+    do {
+      let rows: [MIRAMessage]
+      switch kind {
+      case let .direct(peerId):
+        rows = try await api.get(messagesPath("/messages/\(peerId)", limit: 50))
+      case let .group(groupId):
+        let response: MIRAGroupMessagesResponse = try await api.get(messagesPath("/group-chats/\(groupId)/messages", limit: 50))
+        rows = response.messages
+      }
+      guard !rows.isEmpty else { return }
+      messages = await localStore.merge(messages, with: rows)
+      lastSyncedAt = latestMessageCursor() ?? lastSyncedAt
+      lastServerSequence = messages.compactMap(\.serverSequence).max() ?? lastServerSequence
+      prefetchMessageMedia(rows)
+      await persistThread()
+    } catch {
+      // Keep the cached chat visible; foreground sync will retry next open/poll.
+    }
+  }
+
+  func loadOlderMessagesIfNeeded() async {
+    guard hasOlderMessages, !isLoadingOlder, let before = messages.first?.createdAt else { return }
+    isLoadingOlder = true
+    defer { isLoadingOlder = false }
+    do {
+      let rows: [MIRAMessage]
+      switch kind {
+      case let .direct(peerId):
+        rows = try await api.get(messagesPath("/messages/\(peerId)", before: before, limit: 50))
+      case let .group(groupId):
+        let response: MIRAGroupMessagesResponse = try await api.get(messagesPath("/group-chats/\(groupId)/messages", before: before, limit: 50))
+        rows = response.messages
+      }
+      guard !rows.isEmpty else {
+        hasOlderMessages = false
+        await persistThread()
+        return
+      }
+      messages = await localStore.merge(rows, with: messages)
+      hasOlderMessages = rows.count >= 50
+      prefetchMessageMedia(rows)
+      await persistThread()
+    } catch {
+      errorMessage = messages.isEmpty ? "Could not load earlier messages." : nil
     }
   }
 
@@ -116,9 +187,10 @@ final class ConversationNativeModel: ObservableObject {
   func sendText() async {
     let clean = draft.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !clean.isEmpty, !isSending else { return }
-    if await send(content: clean, mediaUrl: nil, mediaType: nil) {
-      draft = ""
-      updateTyping(false)
+    draft = ""
+    updateTyping(false)
+    if !(await send(content: clean, mediaUrl: nil, mediaType: nil)) {
+      draft = clean
     }
   }
 
@@ -126,99 +198,20 @@ final class ConversationNativeModel: ObservableObject {
     guard !isUploading else { return }
     isUploading = true
     defer { isUploading = false }
+    let (kind, fileName, mimeType) = pickedMediaKind(from: contentTypes, fallbackData: data)
+    let localURL = await localStore.storeOutgoingMedia(data: data, fileName: fileName)
+    let localId = appendLocalOutgoingMessage(
+      content: "",
+      mediaUrl: localURL?.absoluteString,
+      mediaType: kind == .video ? "video" : "image",
+      uploadStatus: "uploading"
+    )
     do {
-      let (kind, fileName, mimeType) = pickedMediaKind(from: contentTypes, fallbackData: data)
       let url = try await uploadService.upload(MIRAPickedMedia(data: data, kind: kind, fileName: fileName, mimeType: mimeType))
-      await send(content: "", mediaUrl: url, mediaType: kind == .video ? "video" : "image")
+      await send(content: "", mediaUrl: url, mediaType: kind == .video ? "video" : "image", replacingLocalId: localId)
     } catch {
+      updateLocalMessage(localId, status: "failed", uploadStatus: "failed")
       errorMessage = "Could not send this media."
-    }
-  }
-
-  func sendFile(url: URL) async {
-    guard !isUploading else { return }
-    isUploading = true
-    defer { isUploading = false }
-    let access = url.startAccessingSecurityScopedResource()
-    defer {
-      if access { url.stopAccessingSecurityScopedResource() }
-    }
-    do {
-      let data = try await loadDataOffMain(url)
-      let type = UTType(filenameExtension: url.pathExtension)
-      let mimeType = type?.preferredMIMEType ?? "application/octet-stream"
-      let uploaded = try await uploadService.uploadFile(data: data, fileName: url.lastPathComponent, mimeType: mimeType)
-      await send(content: url.lastPathComponent, mediaUrl: uploaded, mediaType: "file")
-    } catch {
-      errorMessage = "Could not send this file."
-    }
-  }
-
-  func sendGIF(_ gif: MIRAGifItem) async {
-    guard let url = gif.mediaUrl ?? gif.previewUrl, !url.isEmpty else { return }
-    await send(content: gif.title ?? "", mediaUrl: url, mediaType: "image")
-  }
-
-  func startVoiceRecording() async {
-    guard !isRecording, pendingVoiceDraft == nil else { return }
-    do {
-      try await recorder.start()
-      isRecording = true
-      errorMessage = nil
-    } catch {
-      errorMessage = "Microphone permission is needed for voice messages."
-    }
-  }
-
-  func stopVoiceRecording() {
-    guard isRecording else { return }
-    isRecording = false
-    guard let draft = recorder.stop() else {
-      errorMessage = "No voice was recorded."
-      return
-    }
-    guard draft.duration >= 0.4 else {
-      try? FileManager.default.removeItem(at: draft.url)
-      errorMessage = "Hold a little longer to record a voice message."
-      return
-    }
-    pendingVoiceDraft = draft
-    errorMessage = nil
-  }
-
-  func cancelVoiceRecording() {
-    if isRecording {
-      isRecording = false
-      if let draft = recorder.stop() {
-        try? FileManager.default.removeItem(at: draft.url)
-      }
-    }
-    discardVoiceDraft()
-  }
-
-  func discardVoiceDraft() {
-    if let draft = pendingVoiceDraft {
-      try? FileManager.default.removeItem(at: draft.url)
-    }
-    pendingVoiceDraft = nil
-  }
-
-  func sendVoiceDraft() async {
-    guard let draft = pendingVoiceDraft, !isUploading, !isSending else { return }
-    isUploading = true
-    defer { isUploading = false }
-    do {
-      let data = try await loadDataOffMain(draft.url)
-      let remote = try await uploadService.uploadAudio(data: data, fileName: draft.url.lastPathComponent)
-      if await send(content: "Voice message", mediaUrl: remote, mediaType: "voice") {
-        pendingVoiceDraft = nil
-        try? FileManager.default.removeItem(at: draft.url)
-        errorMessage = nil
-      } else {
-        errorMessage = "Could not send the voice message."
-      }
-    } catch {
-      errorMessage = "Could not send the voice message."
     }
   }
 
@@ -231,14 +224,12 @@ final class ConversationNativeModel: ObservableObject {
 
   func deleteForMe(_ message: MIRAMessage) {
     messages.removeAll { $0.id == message.id }
-    let snapshot = messages
-    Task { await MIRALocalJSONCache.save(snapshot, key: messagesCacheKey) }
+    Task { await persistThread() }
   }
 
   func removeMessages(byUserId userId: String) {
     messages.removeAll { $0.senderId == userId || $0.receiverId == userId }
-    let snapshot = messages
-    Task { await MIRALocalJSONCache.save(snapshot, key: messagesCacheKey) }
+    Task { await persistThread() }
   }
 
   func blockPeer() async -> Bool {
@@ -246,7 +237,7 @@ final class ConversationNativeModel: ObservableObject {
     do {
       let _: EmptyResponse? = try await api.post("/users/\(peerId)/block", body: EmptyBody())
       messages = []
-      await MIRALocalJSONCache.save(messages, key: messagesCacheKey)
+      await persistThread()
       errorMessage = nil
       return true
     } catch {
@@ -256,38 +247,156 @@ final class ConversationNativeModel: ObservableObject {
   }
 
   @discardableResult
-  private func send(content: String, mediaUrl: String?, mediaType: String?) async -> Bool {
+  private func send(content: String, mediaUrl: String?, mediaType: String?, replacingLocalId: String? = nil) async -> Bool {
     guard !isSending else { return false }
     isSending = true
+    let localId = replacingLocalId ?? appendLocalOutgoingMessage(content: content, mediaUrl: mediaUrl, mediaType: mediaType, uploadStatus: mediaUrl == nil ? nil : "uploaded")
     defer { isSending = false }
     do {
+      let sent: MIRAMessage
       switch kind {
       case let .direct(peerId):
-        let sent: MIRAMessage = try await api.post(
+        sent = try await api.post(
           "/messages",
           body: SendMessageBody(receiverId: peerId, content: content, mediaUrl: mediaUrl, mediaType: mediaType)
         )
-        messages.append(sent)
-        await MIRALocalJSONCache.save(messages, key: messagesCacheKey)
       case let .group(groupId):
-        let sent: MIRAMessage = try await api.post(
+        sent = try await api.post(
           "/group-chats/\(groupId)/messages",
           body: GroupMessageBody(content: content, mediaUrl: mediaUrl, mediaType: mediaType)
         )
-        messages.append(sent)
-        await MIRALocalJSONCache.save(messages, key: messagesCacheKey)
       }
+      replaceLocalMessage(localId, with: sent.updating(status: "sent", uploadStatus: "uploaded"))
       errorMessage = nil
       return true
     } catch {
+      updateLocalMessage(localId, status: "failed", uploadStatus: mediaUrl == nil ? nil : "failed")
       errorMessage = "Could not send this message."
       return false
     }
   }
 
-  private func loadDataOffMain(_ url: URL) async throws -> Data {
-    try await Task.detached(priority: .utility) {
-      try Data(contentsOf: url)
+  func retry(_ message: MIRAMessage) async {
+    guard message.status?.lowercased() == "failed" else { return }
+    messages.removeAll { $0.id == message.id }
+    await persistThread()
+    let mediaUrl = message.mediaUrl?.trimmingCharacters(in: .whitespacesAndNewlines)
+    if let mediaUrl,
+       let url = URL(string: mediaUrl),
+       url.isFileURL,
+       let data = await loadLocalRetryData(from: url) {
+      let type = message.mediaType?.lowercased() == "video" ? UTType.movie : UTType.image
+      await sendPickedMedia(data: data, contentTypes: [type])
+      return
+    }
+    _ = await send(
+      content: message.content ?? "",
+      mediaUrl: (mediaUrl?.isEmpty == false && URL(string: mediaUrl ?? "")?.isFileURL != true) ? mediaUrl : nil,
+      mediaType: message.mediaType
+    )
+  }
+
+  private func prefetchMessageMedia(_ rows: [MIRAMessage]) {
+    guard shouldAutoDownloadChatImagePreviews else { return }
+    let avatarURLs = rows.suffix(40)
+      .compactMap { $0.profileImage?.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { !$0.isEmpty }
+    let imageURLs = rows.suffix(30).flatMap { message -> [String] in
+      let mediaType = message.mediaType?.lowercased()
+      guard mediaType == "image" || mediaType == "video" else { return [] }
+      return [message.thumbnailUrl, message.posterUrl, message.mediaType?.lowercased() == "image" ? message.mediaUrl : nil]
+        .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { !$0.isEmpty && !$0.isVideoURL }
+    }
+    let urls = avatarURLs + imageURLs
+    guard !urls.isEmpty else { return }
+    Task.detached(priority: .utility) {
+      await MIRAImagePrefetcher.prefetch(urls: urls, maxPixelSize: 760, limit: 18)
+    }
+  }
+
+  private func appendLocalOutgoingMessage(content: String, mediaUrl: String?, mediaType: String?, uploadStatus: String?) -> String {
+    let id = "local-\(UUID().uuidString)"
+    let timestamp = ISO8601DateFormatter.miraConversation.string(from: Date())
+    let message = MIRAMessage(
+      id: id,
+      groupId: groupId,
+      senderId: currentUserId,
+      receiverId: peerId,
+      content: content,
+      mediaUrl: mediaUrl,
+      mediaType: mediaType,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      status: "sending",
+      localCreatedAt: timestamp,
+      uploadStatus: uploadStatus
+    )
+    messages.append(message)
+    Task { await persistThread() }
+    return id
+  }
+
+  private func replaceLocalMessage(_ localId: String, with sent: MIRAMessage) {
+    if let index = messages.firstIndex(where: { $0.id == localId }) {
+      let localCreatedAt = messages[index].localCreatedAt ?? messages[index].createdAt
+      messages[index] = sent.updating(localCreatedAt: localCreatedAt)
+    } else {
+      messages.append(sent)
+    }
+    messages = messages.sortedForConversation()
+    lastSyncedAt = latestMessageCursor() ?? lastSyncedAt
+    lastServerSequence = messages.compactMap(\.serverSequence).max() ?? lastServerSequence
+    Task { await persistThread() }
+  }
+
+  private func updateLocalMessage(_ localId: String, status: String, uploadStatus: String?) {
+    guard let index = messages.firstIndex(where: { $0.id == localId }) else { return }
+    messages[index] = messages[index].updating(status: status, uploadStatus: uploadStatus)
+    Task { await persistThread() }
+  }
+
+  private func persistThread() async {
+    await localStore.saveThread(
+      kind: kind,
+      currentUserId: currentUserId,
+      messages: messages,
+      lastSyncedAt: lastSyncedAt ?? latestMessageCursor(),
+      lastServerSequence: lastServerSequence,
+      hasOlderRemote: hasOlderMessages
+    )
+  }
+
+  private func messagesPath(_ base: String, after: String? = nil, before: String? = nil, limit: Int) -> String {
+    var components = URLComponents()
+    var items = [URLQueryItem(name: "limit", value: "\(limit)")]
+    if let after, !after.isEmpty { items.append(URLQueryItem(name: "after", value: after)) }
+    if let before, !before.isEmpty { items.append(URLQueryItem(name: "before", value: before)) }
+    components.queryItems = items
+    return "\(base)?\(components.percentEncodedQuery ?? "limit=\(limit)")"
+  }
+
+  private func latestMessageCursor() -> String? {
+    messages
+      .filter { !$0.id.hasPrefix("local-") && ($0.status ?? "sent") != "failed" }
+      .compactMap(\.createdAt)
+      .max { lhs, rhs in conversationDateValue(lhs) < conversationDateValue(rhs) }
+  }
+
+  private var groupId: String? {
+    if case let .group(groupId) = kind { return groupId }
+    return nil
+  }
+
+  private var shouldAutoDownloadChatImagePreviews: Bool {
+    let key = "mira.chat.autodownload.images.wifi"
+    if UserDefaults.standard.object(forKey: key) == nil { return true }
+    return UserDefaults.standard.bool(forKey: key)
+  }
+
+  private nonisolated func loadLocalRetryData(from url: URL) async -> Data? {
+    await Task.detached(priority: .utility) {
+      try? Data(contentsOf: url)
     }.value
   }
 }
@@ -295,23 +404,32 @@ final class ConversationNativeModel: ObservableObject {
 public struct ConversationNativeView: View {
   @StateObject private var model: ConversationNativeModel
   @State private var pickerItem: PhotosPickerItem?
-  @State private var showFileImporter = false
-  @State private var showGIFPicker = false
   @State private var showAttachmentTray = false
+  @State private var showProfileOptions = false
   @State private var reportTarget: MIRAReportTarget?
   @State private var reportMessage: MIRAMessage?
   @State private var isReportSheetPresented = false
   @Environment(\.dismiss) private var dismiss
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   private let title: String
+  private let initialAvatarURL: String?
 
-  public init(peerId: String, title: String, api: MIRAAPIClient, currentUserId: String = "") {
+  public init(peerId: String, title: String, api: MIRAAPIClient, currentUserId: String = "", initialAvatarURL: String? = nil) {
     self.title = title
+    self.initialAvatarURL = initialAvatarURL
     _model = StateObject(wrappedValue: ConversationNativeModel(kind: .direct(peerId: peerId), api: api, currentUserId: currentUserId))
   }
 
-  public init(groupId: String, title: String, api: MIRAAPIClient, currentUserId: String = "") {
+  public init(groupId: String, title: String, api: MIRAAPIClient, currentUserId: String = "", initialAvatarURL: String? = nil) {
     self.title = title
+    self.initialAvatarURL = initialAvatarURL
     _model = StateObject(wrappedValue: ConversationNativeModel(kind: .group(groupId: groupId), api: api, currentUserId: currentUserId))
+  }
+
+  init(title: String, model: ConversationNativeModel, initialAvatarURL: String? = nil) {
+    self.title = title
+    self.initialAvatarURL = initialAvatarURL
+    _model = StateObject(wrappedValue: model)
   }
 
   public var body: some View {
@@ -325,6 +443,9 @@ public struct ConversationNativeView: View {
             } else if model.messages.isEmpty {
               MIRAEmptyState(title: "Start the chat", message: "Send a message when you are ready.", systemImage: "message")
             } else {
+              if model.hasOlderMessages {
+                loadEarlierControl
+              }
               ForEach(model.messages) { message in
                 messageBubble(message)
                   .id(message.id)
@@ -335,10 +456,25 @@ public struct ConversationNativeView: View {
           .padding(.top, 14)
           .padding(.bottom, 120)
         }
+        .defaultScrollAnchor(.bottom)
         .scrollDismissesKeyboard(.interactively)
-        .onChange(of: model.messages.count) { _ in
-          if let last = model.messages.last?.id {
-            withAnimation(.easeOut(duration: 0.2)) {
+        .miraScrollFeel(.chat)
+        .onChange(of: model.messages.map(\.id)) { oldIDs, newIDs in
+          guard let last = newIDs.last else { return }
+          if oldIDs.isEmpty {
+            DispatchQueue.main.async {
+              var transaction = Transaction()
+              transaction.disablesAnimations = true
+              withTransaction(transaction) {
+                proxy.scrollTo(last, anchor: .bottom)
+              }
+            }
+            return
+          }
+          let shouldStayPinnedToBottom = oldIDs.isEmpty || oldIDs.last != last
+          guard shouldStayPinnedToBottom else { return }
+          DispatchQueue.main.async {
+            withAnimation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion)) {
               proxy.scrollTo(last, anchor: .bottom)
             }
           }
@@ -354,11 +490,20 @@ public struct ConversationNativeView: View {
     .toolbar(.hidden, for: .tabBar)
     .task { await model.load() }
     .task { await model.pollPresence() }
-    .miraBottomSheet(isPresented: $showGIFPicker, preferredHeightFraction: 0.72) { dismissGIFPicker in
-      ChatGIFPickerSheet(api: model.api, onClose: dismissGIFPicker) { gif in
-        dismissGIFPicker()
-        Task { await model.sendGIF(gif) }
-      }
+    .miraActionModal(isPresented: $showProfileOptions) { dismissOptions in
+      ChatProfileOptionsSheet(
+        isGroup: model.isGroup,
+        onReport: {
+          dismissOptions()
+          DispatchQueue.main.asyncAfter(deadline: .now() + MIRATransitionTiming.actionModalClose) {
+            presentProfileReport()
+          }
+        },
+        onBlock: {
+          dismissOptions()
+          Task { _ = await model.blockPeer() }
+        }
+      )
     }
     .miraBottomSheet(
       isPresented: $isReportSheetPresented,
@@ -380,10 +525,6 @@ public struct ConversationNativeView: View {
         Color.clear
       }
     }
-    .fileImporter(isPresented: $showFileImporter, allowedContentTypes: [.item], allowsMultipleSelection: false) { result in
-      guard case let .success(urls) = result, let url = urls.first else { return }
-      Task { await model.sendFile(url: url) }
-    }
     .onChange(of: pickerItem) { item in
       guard let item else { return }
       Task {
@@ -397,7 +538,7 @@ public struct ConversationNativeView: View {
   private var chatHeader: some View {
     HStack(spacing: 10) {
       Button {
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        CaptroHaptics.light()
         dismiss()
       } label: {
         Image(systemName: "chevron.left")
@@ -423,49 +564,26 @@ public struct ConversationNativeView: View {
       }
       .frame(maxWidth: .infinity, alignment: .leading)
 
-      if model.peerId != nil {
-        Button {
-          startCall(mode: .video)
-        } label: {
-          Image(systemName: "video.fill")
-            .font(.system(size: 16, weight: .bold))
-            .foregroundStyle(.white)
-            .frame(width: 40, height: 40)
-            .background(Color.black)
-            .clipShape(Circle())
-        }
-        .buttonStyle(.miraPress)
-        .accessibilityLabel("Video Call")
-      }
-
-      Menu {
-        if model.peerId != nil {
-          Button {
-            startCall(mode: .video)
-          } label: {
-            Label("Video Call", systemImage: "video.fill")
+      Button {
+        CaptroHaptics.light()
+        DispatchQueue.main.async {
+          withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
+            showProfileOptions = true
           }
-          Button(role: .destructive) {
-            presentProfileReport()
-          } label: {
-            Label("Report profile", systemImage: "flag")
-          }
-          Button(role: .destructive) {
-            Task { _ = await model.blockPeer() }
-          } label: {
-            Label("Block user", systemImage: "hand.raised")
-          }
-        } else {
-          Text("Group chat")
         }
       } label: {
-        Image(systemName: "ellipsis.vertical")
-          .font(.system(size: 19, weight: .bold))
-          .foregroundStyle(.black)
-          .frame(width: 36, height: 40)
+        Image(systemName: "ellipsis")
+          .font(.system(size: 19, weight: .heavy))
+          .foregroundStyle(.white)
+          .frame(width: 46, height: 46)
+          .background(Color.black, in: Circle())
+          .overlay(Circle().stroke(Color.white.opacity(0.30), lineWidth: 1))
+          .shadow(color: .black.opacity(0.14), radius: 10, x: 0, y: 4)
           .contentShape(Rectangle())
       }
       .buttonStyle(.miraPress)
+      .accessibilityLabel("Chat options")
+      .zIndex(2)
     }
     .padding(.horizontal, 12)
     .padding(.vertical, 10)
@@ -482,22 +600,9 @@ public struct ConversationNativeView: View {
     return "chat"
   }
 
-  private func startCall(mode: MIRAAgoraCallMode) {
-    guard let peerId = model.peerId, !peerId.isEmpty else { return }
-    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-    guard mode == .video else { return }
-    Task {
-      await MIRAAppCallCoordinator.shared.startVideoCall(
-        peerId: peerId,
-        peerName: title,
-        peerAvatar: peerAvatarURL
-      )
-    }
-  }
-
   private func presentProfileReport() {
     guard let peerId = model.peerId, !peerId.isEmpty else { return }
-    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+    CaptroHaptics.medium()
     reportMessage = nil
     reportTarget = MIRAReportTarget(
       targetType: "profile",
@@ -506,13 +611,15 @@ public struct ConversationNativeView: View {
       title: "Report profile",
       subtitle: title
     )
-    withAnimation(.spring(response: 0.30, dampingFraction: 0.90)) {
-      isReportSheetPresented = true
+    DispatchQueue.main.async {
+      withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
+        isReportSheetPresented = true
+      }
     }
   }
 
   private func presentReport(for message: MIRAMessage) {
-    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+    CaptroHaptics.medium()
     reportMessage = message
     reportTarget = MIRAReportTarget(
       targetType: "message",
@@ -521,8 +628,10 @@ public struct ConversationNativeView: View {
       title: "Report message",
       subtitle: message.content?.isEmpty == false ? message.content : "Media message"
     )
-    withAnimation(.spring(response: 0.30, dampingFraction: 0.90)) {
-      isReportSheetPresented = true
+    DispatchQueue.main.async {
+      withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
+        isReportSheetPresented = true
+      }
     }
   }
 
@@ -535,7 +644,15 @@ public struct ConversationNativeView: View {
   }
 
   private var peerAvatarURL: String? {
-    model.messages.first { !isOutgoing($0) }?.profileImage
+    let messageAvatar = model.messages
+      .first { !isOutgoing($0) }?
+      .profileImage?
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    if let messageAvatar, !messageAvatar.isEmpty {
+      return messageAvatar
+    }
+    let initial = initialAvatarURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return initial.isEmpty ? nil : initial
   }
 
   private var chatSkeleton: some View {
@@ -560,7 +677,7 @@ public struct ConversationNativeView: View {
       if outgoing { Spacer(minLength: 68) }
       VStack(alignment: outgoing ? .trailing : .leading, spacing: 6) {
         if model.isGroup && !outgoing {
-          Text(message.fullName ?? message.username ?? "MIRA")
+          Text(message.fullName ?? message.username ?? "Captro")
             .font(.system(size: 11, weight: .semibold))
             .foregroundStyle(MIRATheme.Color.textMuted)
             .lineLimit(1)
@@ -569,7 +686,7 @@ public struct ConversationNativeView: View {
           message: message,
           outgoing: outgoing,
           maxWidth: bubbleMaxWidth,
-          timestamp: nil
+          timestamp: statusText(for: message, outgoing: outgoing)
         )
       }
       .frame(maxWidth: bubbleMaxWidth, alignment: outgoing ? .trailing : .leading)
@@ -577,6 +694,13 @@ public struct ConversationNativeView: View {
     }
     .transition(.move(edge: .bottom).combined(with: .opacity))
     .contextMenu {
+      if outgoing, message.status?.lowercased() == "failed" {
+        Button {
+          Task { await model.retry(message) }
+        } label: {
+          Label("Retry", systemImage: "arrow.clockwise")
+        }
+      }
       if !outgoing {
         Button(role: .destructive) {
           presentReport(for: message)
@@ -622,6 +746,48 @@ public struct ConversationNativeView: View {
     return false
   }
 
+  private var loadEarlierControl: some View {
+    Button {
+      Task { await model.loadOlderMessagesIfNeeded() }
+    } label: {
+      HStack(spacing: 8) {
+        if model.isLoadingOlder {
+          ProgressView()
+            .scaleEffect(0.75)
+        }
+        Text(model.isLoadingOlder ? "Loading earlier messages..." : "Load earlier messages")
+          .font(.system(size: 12, weight: .semibold))
+      }
+      .foregroundStyle(Color.black.opacity(0.58))
+      .padding(.horizontal, 12)
+      .padding(.vertical, 8)
+      .background(Color.black.opacity(0.045))
+      .clipShape(Capsule())
+    }
+    .buttonStyle(.plain)
+    .disabled(model.isLoadingOlder)
+    .onAppear {
+      guard model.messages.count >= 35 else { return }
+      Task { await model.loadOlderMessagesIfNeeded() }
+    }
+  }
+
+  private func statusText(for message: MIRAMessage, outgoing: Bool) -> String? {
+    guard outgoing else { return nil }
+    switch message.status?.lowercased() {
+    case "sending":
+      return message.uploadStatus == "uploading" ? "uploading" : "sending"
+    case "failed":
+      return "failed - tap to retry"
+    case "delivered":
+      return "delivered"
+    case "read":
+      return "read"
+    default:
+      return nil
+    }
+  }
+
   private var composerContainer: some View {
     VStack(spacing: 0) {
       if let error = model.errorMessage {
@@ -648,38 +814,6 @@ public struct ConversationNativeView: View {
           .padding(.horizontal, MIRATheme.Space.md)
       }
 
-      if model.isRecording {
-        VoiceRecordingComposerBar(
-          onCancel: {
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
-            model.cancelVoiceRecording()
-          },
-          onStop: {
-            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-            model.stopVoiceRecording()
-          }
-        )
-        .padding(.horizontal, MIRATheme.Space.md)
-        .transition(.move(edge: .bottom).combined(with: .opacity))
-      }
-
-      if let voiceDraft = model.pendingVoiceDraft {
-        VoiceDraftComposerPreview(
-          draft: voiceDraft,
-          isSending: model.isUploading || model.isSending,
-          onDelete: {
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
-            model.discardVoiceDraft()
-          },
-          onSend: {
-            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-            Task { await model.sendVoiceDraft() }
-          }
-        )
-        .padding(.horizontal, MIRATheme.Space.md)
-        .transition(.move(edge: .bottom).combined(with: .opacity))
-      }
-
       if showAttachmentTray {
         attachmentTray
           .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -687,8 +821,8 @@ public struct ConversationNativeView: View {
 
       HStack(spacing: 10) {
         Button {
-          UIImpactFeedbackGenerator(style: .light).impactOccurred()
-          withAnimation(.spring(response: 0.24, dampingFraction: 0.9)) {
+          CaptroHaptics.light()
+          withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
             showAttachmentTray.toggle()
           }
         } label: {
@@ -720,48 +854,17 @@ public struct ConversationNativeView: View {
     .overlay(alignment: .top) {
       Rectangle().fill(ChatRoomPalette.hairline).frame(height: 0.5)
     }
-    .animation(.spring(response: 0.24, dampingFraction: 0.9), value: showAttachmentTray)
-    .animation(.spring(response: 0.24, dampingFraction: 0.9), value: model.isRecording)
-    .animation(.spring(response: 0.24, dampingFraction: 0.9), value: model.pendingVoiceDraft)
+    .animation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion), value: showAttachmentTray)
   }
 
   private var attachmentTray: some View {
     ScrollView(.horizontal, showsIndicators: false) {
       HStack(spacing: 10) {
-        PhotosPicker(selection: $pickerItem, matching: .any(of: [.images, .videos])) {
+        PhotosPicker(selection: $pickerItem, matching: .any(of: [.images, .videos]), preferredItemEncoding: .current) {
           trayButton("photo.on.rectangle", "Media")
         }
         .disabled(model.isUploading)
 
-        Button { showGIFPicker = true } label: {
-          trayButton("gift", "GIF")
-        }
-        .buttonStyle(.plain)
-
-        Button { showFileImporter = true } label: {
-          trayButton("paperclip", "File")
-        }
-        .buttonStyle(.plain)
-
-        Button {
-          toggleVoiceRecording()
-        } label: {
-          trayButton(
-            model.isRecording ? "stop.fill" : "mic.fill",
-            model.isRecording ? "Stop" : "Voice",
-            tint: model.isRecording ? ChatRoomPalette.voice : Color.black.opacity(0.62)
-          )
-        }
-        .buttonStyle(.plain)
-
-        if model.peerId != nil {
-          Button {
-            startCall(mode: .video)
-          } label: {
-            trayButton("video.fill", "Video", tint: ChatRoomPalette.accent)
-          }
-          .buttonStyle(.plain)
-        }
       }
       .padding(.horizontal, MIRATheme.Space.md)
     }
@@ -769,39 +872,23 @@ public struct ConversationNativeView: View {
 
   private var composerPrimaryButton: some View {
     let hasDraft = !model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    let hasVoiceDraft = model.pendingVoiceDraft != nil
     return Button {
-      UIImpactFeedbackGenerator(style: .light).impactOccurred()
+      CaptroHaptics.light()
       Task {
         if hasDraft {
           await model.sendText()
-        } else if hasVoiceDraft {
-          await model.sendVoiceDraft()
-        } else if model.isRecording {
-          model.stopVoiceRecording()
-        } else {
-          await model.startVoiceRecording()
         }
       }
     } label: {
-      Image(systemName: hasDraft || hasVoiceDraft ? "arrow.up" : (model.isRecording ? "stop.fill" : "mic.fill"))
+      Image(systemName: "arrow.up")
         .font(.system(size: 15, weight: .bold))
         .foregroundStyle(.white)
         .frame(width: 34, height: 34)
-        .background(model.isRecording ? ChatRoomPalette.voice : ChatRoomPalette.accent)
+        .background(hasDraft ? ChatRoomPalette.accent : Color.black.opacity(0.18))
         .clipShape(Circle())
     }
     .buttonStyle(.miraPress)
-    .disabled((hasDraft && model.isSending) || (hasVoiceDraft && (model.isUploading || model.isSending)))
-  }
-
-  private func toggleVoiceRecording() {
-    UIImpactFeedbackGenerator(style: .light).impactOccurred()
-    if model.isRecording {
-      model.stopVoiceRecording()
-    } else {
-      Task { await model.startVoiceRecording() }
-    }
+    .disabled(!hasDraft || model.isSending)
   }
 
   private func trayButton(_ systemImage: String, _ title: String, tint: Color = MIRATheme.Color.textMuted) -> some View {
@@ -823,182 +910,73 @@ public struct ConversationNativeView: View {
 
 }
 
-private struct VoiceRecordingComposerBar: View {
-  let onCancel: () -> Void
-  let onStop: () -> Void
-  @State private var pulse = false
+private struct ChatProfileOptionsSheet: View {
+  let isGroup: Bool
+  let onReport: () -> Void
+  let onBlock: () -> Void
 
   var body: some View {
-    HStack(spacing: MIRATheme.Space.sm) {
-      Circle()
-        .fill(ChatRoomPalette.voice)
-        .frame(width: 10, height: 10)
-        .scaleEffect(pulse ? 1.28 : 0.86)
-        .opacity(pulse ? 0.55 : 1)
-        .animation(.easeInOut(duration: 0.72).repeatForever(autoreverses: true), value: pulse)
+    MIRAActionModalCard {
+      if !isGroup {
+        MIRAActionModalButton(
+          title: "Block",
+          systemImage: "nosign",
+          isDestructive: true,
+          staggerIndex: 0,
+          action: onBlock
+        )
 
-      Image(systemName: "waveform")
-        .font(.system(size: 17, weight: .semibold))
-        .foregroundStyle(ChatRoomPalette.voice)
-
-      Text("Recording voice")
-        .font(.system(size: 14, weight: .semibold))
-        .foregroundStyle(MIRATheme.Color.textPrimary)
-        .lineLimit(1)
-
-      Spacer()
-
-      Button(action: onCancel) {
-        Image(systemName: "xmark")
-          .font(.system(size: 13, weight: .bold))
-          .foregroundStyle(MIRATheme.Color.textMuted)
-          .frame(width: 34, height: 34)
-          .background(ChatRoomPalette.input)
-          .clipShape(Circle())
+        MIRAActionModalButton(
+          title: "Report",
+          systemImage: "exclamationmark.triangle",
+          staggerIndex: 1,
+          action: onReport
+        )
+      } else {
+        MIRAActionModalPillLabel(
+          title: "Group chat",
+          systemImage: "person.3.fill"
+        )
+          .opacity(0.72)
       }
-      .buttonStyle(.miraPress)
-
-      Button(action: onStop) {
-        Image(systemName: "stop.fill")
-          .font(.system(size: 13, weight: .bold))
-          .foregroundStyle(.white)
-          .frame(width: 38, height: 34)
-          .background(ChatRoomPalette.voice)
-          .clipShape(Capsule())
-      }
-      .buttonStyle(.miraPress)
     }
-    .padding(.horizontal, MIRATheme.Space.md)
-    .padding(.vertical, 10)
-    .background(Color.white)
-    .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-    .overlay {
-      RoundedRectangle(cornerRadius: 22, style: .continuous)
-        .stroke(ChatRoomPalette.hairline, lineWidth: 1)
-    }
-    .onAppear { pulse = true }
   }
 }
 
-private struct VoiceDraftComposerPreview: View {
-  let draft: MIRAVoiceDraft
-  let isSending: Bool
-  let onDelete: () -> Void
-  let onSend: () -> Void
-  @State private var player: AVPlayer?
-  @State private var isPlaying = false
-  @State private var endObserver: NSObjectProtocol?
+private struct ChatProfileOptionRow: View {
+  let title: String
+  let subtitle: String
+  let systemImage: String
+  let tint: Color
 
   var body: some View {
-    HStack(spacing: MIRATheme.Space.sm) {
-      Button {
-        togglePlayback()
-      } label: {
-        Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-          .font(.system(size: 13, weight: .bold))
-          .foregroundStyle(.white)
-          .frame(width: 34, height: 34)
-          .background(ChatRoomPalette.accent)
-          .clipShape(Circle())
+    HStack(spacing: MIRATheme.Space.md) {
+      Image(systemName: systemImage)
+        .font(.system(size: 17, weight: .semibold))
+        .foregroundStyle(tint)
+        .frame(width: 38, height: 38)
+        .background(tint.opacity(0.10))
+        .clipShape(Circle())
+
+      VStack(alignment: .leading, spacing: 3) {
+        Text(title)
+          .font(.system(size: 16, weight: .semibold))
+          .foregroundStyle(.black)
+        Text(subtitle)
+          .font(.system(size: 13, weight: .medium))
+          .foregroundStyle(Color.black.opacity(0.56))
+          .lineLimit(1)
+          .truncationMode(.tail)
       }
-      .buttonStyle(.miraPress)
+      .frame(maxWidth: .infinity, alignment: .leading)
 
-      Image(systemName: "waveform")
-        .font(.system(size: 18, weight: .semibold))
-        .foregroundStyle(ChatRoomPalette.voice)
-
-      VStack(alignment: .leading, spacing: 2) {
-        Text("Voice message")
-          .font(.system(size: 14, weight: .semibold))
-          .foregroundStyle(MIRATheme.Color.textPrimary)
-        Text(voiceDurationLabel(draft.duration))
-          .font(.system(size: 12, weight: .medium))
-          .foregroundStyle(MIRATheme.Color.textMuted)
-      }
-
-      Spacer()
-
-      Button(action: onDelete) {
-        Image(systemName: "trash")
-          .font(.system(size: 14, weight: .semibold))
-          .foregroundStyle(MIRATheme.Color.textMuted)
-          .frame(width: 36, height: 36)
-          .background(ChatRoomPalette.input)
-          .clipShape(Circle())
-      }
-      .buttonStyle(.miraPress)
-      .disabled(isSending)
-
-      Button(action: onSend) {
-        Group {
-          if isSending {
-            ProgressView()
-              .tint(.white)
-          } else {
-            Image(systemName: "arrow.up")
-              .font(.system(size: 14, weight: .bold))
-          }
-        }
-        .foregroundStyle(.white)
-        .frame(width: 40, height: 36)
-        .background(ChatRoomPalette.accent)
-        .clipShape(Capsule())
-      }
-      .buttonStyle(.miraPress)
-      .disabled(isSending)
+      Image(systemName: "chevron.right")
+        .font(.system(size: 12, weight: .bold))
+        .foregroundStyle(Color.black.opacity(0.32))
     }
-    .padding(.horizontal, MIRATheme.Space.md)
-    .padding(.vertical, 10)
-    .background(Color.white)
-    .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-    .overlay {
-      RoundedRectangle(cornerRadius: 22, style: .continuous)
-        .stroke(ChatRoomPalette.hairline, lineWidth: 1)
-    }
-    .onDisappear {
-      cleanup()
-    }
-  }
-
-  private func togglePlayback() {
-    if player == nil {
-      let item = AVPlayerItem(url: draft.url)
-      player = AVPlayer(playerItem: item)
-      player?.volume = 1
-      endObserver = NotificationCenter.default.addObserver(
-        forName: .AVPlayerItemDidPlayToEndTime,
-        object: item,
-        queue: .main
-      ) { _ in
-        isPlaying = false
-        player?.seek(to: .zero)
-      }
-    }
-    if isPlaying {
-      player?.pause()
-      isPlaying = false
-    } else {
-      do {
-        let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playback, mode: .spokenAudio)
-        try session.setActive(true)
-      } catch {
-        return
-      }
-      player?.seek(to: .zero)
-      player?.play()
-      isPlaying = true
-    }
-  }
-
-  private func cleanup() {
-    player?.pause()
-    isPlaying = false
-    if let endObserver {
-      NotificationCenter.default.removeObserver(endObserver)
-      self.endObserver = nil
-    }
-    player = nil
+    .padding(.horizontal, MIRATheme.Space.lg)
+    .frame(minHeight: 58)
+    .contentShape(Rectangle())
   }
 }
 
@@ -1007,6 +985,7 @@ private struct MessageBubbleContent: View {
   let outgoing: Bool
   let maxWidth: CGFloat
   let timestamp: String?
+  @State private var isVideoPlaying = false
 
   var body: some View {
     VStack(alignment: outgoing ? .trailing : .leading, spacing: hasLargeMedia ? 6 : 5) {
@@ -1050,32 +1029,26 @@ private struct MessageBubbleContent: View {
     return !mediaUrl.isEmpty
   }
 
-  private var isVoiceMessage: Bool {
-    let mediaType = message.mediaType?.lowercased()
-    return mediaType == "voice" || mediaType == "audio"
-  }
-
   private var normalizedText: String? {
-    guard let content = message.content?.trimmingCharacters(in: .whitespacesAndNewlines), !content.isEmpty else {
-      return nil
+    if let content = message.content?.trimmingCharacters(in: .whitespacesAndNewlines), !content.isEmpty {
+      return content
     }
-    return content
+    return nil
   }
 
   private var bubbleFill: Color {
-    outgoing || isVoiceMessage ? ChatRoomPalette.outgoingBubble : ChatRoomPalette.incomingBubble
+    outgoing ? ChatRoomPalette.outgoingBubble : ChatRoomPalette.incomingBubble
   }
 
   private var bubbleTextColor: Color {
-    outgoing || isVoiceMessage ? .white : .black
+    outgoing ? .white : .black
   }
 
   private var bubbleRadius: CGFloat {
-    isVoiceMessage ? 25 : (hasLargeMedia ? 18 : 22)
+    hasLargeMedia ? 18 : 22
   }
 
   private var bubbleVerticalPadding: CGFloat {
-    if isVoiceMessage { return 6 }
     return hasLargeMedia ? 6 : 12
   }
 
@@ -1084,25 +1057,22 @@ private struct MessageBubbleContent: View {
   }
 
   private var bubbleFrameMaxWidth: CGFloat? {
-    if isVoiceMessage || isCompactTextOnly { return nil }
+    if isCompactTextOnly { return nil }
     return maxWidth
   }
 
   private var bubbleLeadingPadding: CGFloat {
     if hasLargeMedia { return outgoing ? 10 : 14 }
-    if isVoiceMessage { return 8 }
     return 18
   }
 
   private var bubbleTrailingPadding: CGFloat {
     if hasLargeMedia { return outgoing ? 14 : 10 }
-    if isVoiceMessage { return 8 }
     return 18
   }
 
   private var shouldShowTextContent: Bool {
-    let mediaType = message.mediaType?.lowercased()
-    return mediaType != "voice" && mediaType != "audio"
+    true
   }
 
   private var isCompactTextOnly: Bool {
@@ -1138,298 +1108,132 @@ private struct MessageBubbleContent: View {
   private func mediaContent(url: String) -> some View {
     let type = message.mediaType?.lowercased() ?? ""
     let mediaWidth = min(maxWidth, 260)
-    if type == "voice" || type == "audio" {
-      VoicePlaybackPill(url: url, outgoing: outgoing)
-    } else if type == "file" {
-      HStack(spacing: MIRATheme.Space.sm) {
-        Image(systemName: "doc.fill")
-          .font(.system(size: 13, weight: .bold))
-          .foregroundStyle(outgoing ? ChatRoomPalette.outgoingBubble : .white)
-          .frame(width: 28, height: 28)
-          .background(outgoing ? Color.white.opacity(0.92) : ChatRoomPalette.accent)
-          .clipShape(Circle())
-        Text(message.content?.isEmpty == false ? message.content! : "File")
-          .lineLimit(1)
-          .truncationMode(.middle)
-      }
-      .font(.system(size: 14, weight: .semibold))
-      .foregroundStyle(outgoing ? .white : MIRATheme.Color.textPrimary)
-      .frame(maxWidth: textMaxWidth, alignment: outgoing ? .trailing : .leading)
+    let isVideo = type == "video" || url.isVideoURL
+    if type == "file" {
+      fileCard
+    } else if type == "voice" || type == "audio" {
+      EmptyView()
     } else {
-      RemoteMediaView(url: url, isVideo: type == "video" || url.isVideoURL, shouldPlay: false)
-        .frame(width: mediaWidth, height: type == "video" || url.isVideoURL ? mediaWidth * 1.22 : mediaWidth * 0.86)
+      ZStack {
+        RemoteMediaView(
+          url: url,
+          isVideo: isVideo,
+          placeholderURL: isVideo ? (message.posterUrl ?? message.thumbnailUrl) : (message.thumbnailUrl ?? message.posterUrl),
+          shouldPlay: isVideo && isVideoPlaying,
+          maxPixelSize: 900,
+          showsVideoPlaceholderIcon: true,
+          placeholderColor: ChatRoomPalette.backgroundWash
+        )
+        .allowsHitTesting(false)
+
+        if isVideo && !isVideoPlaying {
+          Image(systemName: "play.fill")
+            .font(.system(size: 20, weight: .bold))
+            .foregroundStyle(.white)
+            .frame(width: 54, height: 54)
+            .background(.black.opacity(0.48), in: Circle())
+            .overlay(Circle().stroke(.white.opacity(0.30), lineWidth: 1))
+            .shadow(color: .black.opacity(0.18), radius: 10, x: 0, y: 4)
+            .allowsHitTesting(false)
+        }
+      }
+        .frame(width: mediaWidth, height: isVideo ? mediaWidth * 1.22 : mediaWidth * 0.86)
+        .background(ChatRoomPalette.backgroundWash)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-    }
-  }
-}
-
-private struct VoicePlaybackPill: View {
-  let url: String
-  let outgoing: Bool
-  @State private var player: AVPlayer?
-  @State private var isPlaying = false
-  @State private var playbackError = false
-  @State private var endObserver: NSObjectProtocol?
-
-  var body: some View {
-    Button {
-      toggle()
-    } label: {
-      HStack(spacing: 8) {
-        Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-          .font(.system(size: 13, weight: .bold))
-          .foregroundStyle(.black)
-          .frame(width: 36, height: 36)
-          .background(Color.white)
-          .clipShape(Circle())
-        VoiceWaveformBars(color: .white.opacity(0.88))
-          .frame(width: 86, height: 28)
-        if playbackError {
-          Image(systemName: "exclamationmark.circle.fill")
-            .font(.system(size: 15, weight: .bold))
-            .foregroundStyle(Color.white.opacity(0.88))
+        .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .onTapGesture {
+          guard isVideo else { return }
+          toggleVideoPlayback()
         }
-      }
-      .frame(width: playbackError ? 154 : 136, alignment: outgoing ? .trailing : .leading)
-    }
-    .buttonStyle(.plain)
-    .contentShape(Rectangle())
-    .onDisappear {
-      cleanup()
-    }
-  }
-
-  private func toggle() {
-    guard let remoteURL = resolvedVoicePlaybackURL(url) else {
-      playbackError = true
-      return
-    }
-    playbackError = false
-    if player == nil {
-      let item = AVPlayerItem(url: remoteURL)
-      player = AVPlayer(playerItem: item)
-      player?.volume = 1
-      endObserver = NotificationCenter.default.addObserver(
-        forName: .AVPlayerItemDidPlayToEndTime,
-        object: item,
-        queue: .main
-      ) { _ in
-        isPlaying = false
-        player?.seek(to: .zero)
-      }
-    }
-    if isPlaying {
-      stop()
-    } else {
-      do {
-        let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playback, mode: .spokenAudio)
-        try session.setActive(true)
-      } catch {
-        playbackError = true
-        return
-      }
-      player?.seek(to: .zero)
-      player?.play()
-      isPlaying = true
-    }
-  }
-
-  private func stop() {
-    player?.pause()
-    isPlaying = false
-  }
-
-  private func cleanup() {
-    stop()
-    if let endObserver {
-      NotificationCenter.default.removeObserver(endObserver)
-      self.endObserver = nil
-    }
-    player = nil
-  }
-}
-
-private struct VoiceWaveformBars: View {
-  let color: Color
-
-  private let heights: [CGFloat] = [
-    4, 5, 4, 7, 10, 15, 20, 24, 14, 26,
-    22, 18, 25, 17, 12, 20, 14, 9
-  ]
-
-  var body: some View {
-    HStack(alignment: .center, spacing: 2) {
-      ForEach(Array(heights.enumerated()), id: \.offset) { _, height in
-        RoundedRectangle(cornerRadius: 2, style: .continuous)
-          .fill(color)
-          .frame(width: 3, height: height)
-      }
-    }
-    .frame(maxHeight: .infinity)
-    .accessibilityHidden(true)
-  }
-}
-
-private struct ChatGIFPickerSheet: View {
-  let api: MIRAAPIClient
-  let onClose: (() -> Void)?
-  let onSelect: (MIRAGifItem) -> Void
-  @Environment(\.dismiss) private var dismiss
-  @State private var query = "reaction"
-  @State private var results: [MIRAGifItem] = []
-  @State private var isLoading = false
-
-  var body: some View {
-    NavigationStack {
-      VStack(spacing: MIRATheme.Space.md) {
-        HStack {
-          Image(systemName: "magnifyingglass")
-            .foregroundStyle(MIRATheme.Color.textMuted)
-          TextField("Search GIFs", text: $query)
-            .textInputAutocapitalization(.never)
-            .autocorrectionDisabled()
-            .onSubmit { Task { await search() } }
+        .accessibilityLabel(isVideo ? (isVideoPlaying ? "Pause video message" : "Play video message") : "Image message")
+        .onChange(of: url) { _, _ in
+          isVideoPlaying = false
         }
-        .padding(.horizontal, MIRATheme.Space.md)
-        .padding(.vertical, 12)
-        .background(MIRATheme.Color.surfaceSoft)
-        .clipShape(Capsule())
-        .padding(.horizontal, MIRATheme.Space.md)
+        .onDisappear {
+          isVideoPlaying = false
+        }
+    }
+  }
 
-        if isLoading {
-          ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else {
-          ScrollView {
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: MIRATheme.Space.sm) {
-              ForEach(results) { gif in
-                Button {
-                  onSelect(gif)
-                } label: {
-                  RemoteMediaView(url: gif.previewUrl ?? gif.mediaUrl ?? "", isVideo: false)
-                    .frame(height: 140)
-                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                }
-                .buttonStyle(.plain)
-              }
-            }
-            .padding(MIRATheme.Space.md)
-          }
-        }
-      }
-      .navigationTitle("GIF")
-      .navigationBarTitleDisplayMode(.inline)
-      .toolbar {
-        ToolbarItem(placement: .topBarTrailing) {
-          Button("Done") { close() }
-        }
-      }
-      .task { await search() }
-      .onChange(of: query) { _ in
-        Task {
-          try? await Task.sleep(nanoseconds: 350_000_000)
-          if !Task.isCancelled { await search() }
+  private func toggleVideoPlayback() {
+    CaptroHaptics.light()
+    MIRAApplePerformanceLogger.event(isVideoPlaying ? "chat_video_pause" : "chat_video_prepare")
+    withAnimation(CaptroMotion.smallMenuAnimation(reduceMotion: false)) {
+      isVideoPlaying.toggle()
+    }
+  }
+
+  private var fileCard: some View {
+    HStack(spacing: 10) {
+      Image(systemName: "doc.fill")
+        .font(.system(size: 18, weight: .semibold))
+        .foregroundStyle(outgoing ? .white : .black)
+        .frame(width: 34, height: 34)
+        .background((outgoing ? Color.white : Color.black).opacity(0.12))
+        .clipShape(Circle())
+      VStack(alignment: .leading, spacing: 3) {
+        Text(message.fileName?.isEmpty == false ? message.fileName! : "File")
+          .font(.system(size: 13, weight: .semibold))
+          .foregroundStyle(outgoing ? .white : .black)
+          .lineLimit(1)
+        if let fileSize = message.fileSize, fileSize > 0 {
+          Text(ByteCountFormatter.string(fromByteCount: Int64(fileSize), countStyle: .file))
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(outgoing ? Color.white.opacity(0.72) : Color.black.opacity(0.55))
         }
       }
     }
-  }
-
-  @MainActor
-  private func search() async {
-    let clean = query.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard clean.count >= 2 else { return }
-    isLoading = results.isEmpty
-    defer { isLoading = false }
-    var components = URLComponents()
-    components.queryItems = [
-      URLQueryItem(name: "q", value: clean),
-      URLQueryItem(name: "limit", value: "24"),
-    ]
-    let encoded = components.percentEncodedQuery ?? "q=\(clean)"
-    if let response: MIRAGifSearchResponse = try? await api.get("/gifs/search?\(encoded)") {
-      results = response.gifs
-    }
-  }
-
-  private func close() {
-    if let onClose {
-      onClose()
-    } else {
-      dismiss()
-    }
+    .padding(.vertical, 4)
   }
 }
 
-private func voiceDurationLabel(_ duration: TimeInterval) -> String {
-  let totalSeconds = max(0, Int(duration.rounded()))
-  let minutes = totalSeconds / 60
-  let seconds = totalSeconds % 60
-  return "\(minutes):\(String(format: "%02d", seconds))"
-}
-
-private func resolvedVoicePlaybackURL(_ value: String) -> URL? {
-  let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-  guard !trimmed.isEmpty else { return nil }
-  if trimmed.hasPrefix("//") {
-    return URL(string: "https:\(trimmed)")
-  }
-  if let absolute = URL(string: trimmed), absolute.scheme != nil {
-    return absolute
-  }
-  let cleanPath = trimmed.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-  guard !cleanPath.isEmpty else { return nil }
-  if cleanPath.hasPrefix("api/") {
-    return MIRAProductionBackend.apiURL(String(cleanPath.dropFirst(4)))
-  }
-  return MIRAProductionBackend.apiURL(cleanPath)
-}
-
-private final class MIRAVoiceRecorder: NSObject, AVAudioRecorderDelegate {
-  private var recorder: AVAudioRecorder?
-  private var startedAt: Date?
-
-  func start() async throws {
-    let granted = await withCheckedContinuation { continuation in
-      AVAudioSession.sharedInstance().requestRecordPermission { allowed in
-        continuation.resume(returning: allowed)
+private extension Array where Element == MIRAMessage {
+  func sortedForConversation() -> [MIRAMessage] {
+    sorted { lhs, rhs in
+      if let lhsSequence = lhs.serverSequence, let rhsSequence = rhs.serverSequence, lhsSequence != rhsSequence {
+        return lhsSequence < rhsSequence
       }
+      let left = conversationSortDate(lhs)
+      let right = conversationSortDate(rhs)
+      if left == right {
+        return lhs.id < rhs.id
+      }
+      return left < right
     }
-    guard granted else { throw MIRARecorderError.permissionDenied }
-    let session = AVAudioSession.sharedInstance()
-    try session.setCategory(.playAndRecord, mode: .spokenAudio, options: [.defaultToSpeaker, .allowBluetoothHFP])
-    try session.setActive(true)
-    let url = FileManager.default.temporaryDirectory.appendingPathComponent("mira-voice-\(UUID().uuidString).m4a")
-    let settings: [String: Any] = [
-      AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
-      AVSampleRateKey: 44_100,
-      AVNumberOfChannelsKey: 1,
-      AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue,
-    ]
-    recorder = try AVAudioRecorder(url: url, settings: settings)
-    recorder?.delegate = self
-    recorder?.isMeteringEnabled = true
-    recorder?.prepareToRecord()
-    startedAt = Date()
-    guard recorder?.record() == true else {
-      recorder = nil
-      startedAt = nil
-      throw MIRARecorderError.failedToStart
-    }
-  }
-
-  func stop() -> MIRAVoiceDraft? {
-    guard let activeRecorder = recorder else { return nil }
-    let url = activeRecorder.url
-    let duration = max(activeRecorder.currentTime, startedAt.map { Date().timeIntervalSince($0) } ?? 0)
-    activeRecorder.stop()
-    self.recorder = nil
-    startedAt = nil
-    try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-    return MIRAVoiceDraft(url: url, duration: duration)
   }
 }
 
-private enum MIRARecorderError: Error {
-  case permissionDenied
-  case failedToStart
+private func conversationSortDate(_ message: MIRAMessage) -> Date {
+  let status = message.status?.lowercased() ?? ""
+  let shouldUseLocalDate = message.id.hasPrefix("local-") || status == "sending" || status == "failed"
+  if shouldUseLocalDate, let localCreatedAt = message.localCreatedAt {
+    return conversationDateValue(localCreatedAt)
+  }
+  if let createdAt = message.createdAt {
+    return conversationDateValue(createdAt)
+  }
+  if let localCreatedAt = message.localCreatedAt {
+    return conversationDateValue(localCreatedAt)
+  }
+  return .distantPast
+}
+
+private func conversationDateValue(_ value: String) -> Date {
+  if let date = ISO8601DateFormatter.miraConversation.date(from: value) { return date }
+  if let date = ISO8601DateFormatter.miraConversationPlain.date(from: value) { return date }
+  return .distantPast
+}
+
+private extension ISO8601DateFormatter {
+  static let miraConversation: ISO8601DateFormatter = {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return formatter
+  }()
+
+  static let miraConversationPlain: ISO8601DateFormatter = {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime]
+    return formatter
+  }()
 }

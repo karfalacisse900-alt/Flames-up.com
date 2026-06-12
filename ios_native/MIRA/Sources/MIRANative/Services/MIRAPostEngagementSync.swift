@@ -37,9 +37,18 @@ public struct MIRAUserFollowUpdate {
   }
 }
 
+public struct MIRAPostRemovalUpdate {
+  public let postId: String
+
+  public init(postId: String) {
+    self.postId = postId
+  }
+}
+
 public extension Notification.Name {
   static let miraPostEngagementDidChange = Notification.Name("mira.post.engagement.didChange")
   static let miraUserFollowDidChange = Notification.Name("mira.user.follow.didChange")
+  static let miraPostWasRemoved = Notification.Name("mira.post.wasRemoved")
 }
 
 @MainActor
@@ -61,5 +70,16 @@ public enum MIRAUserFollowSync {
 
   public static func update(from notification: Notification) -> MIRAUserFollowUpdate? {
     notification.object as? MIRAUserFollowUpdate
+  }
+}
+
+@MainActor
+public enum MIRAPostRemovalSync {
+  public static func publish(_ update: MIRAPostRemovalUpdate) {
+    NotificationCenter.default.post(name: .miraPostWasRemoved, object: update)
+  }
+
+  public static func update(from notification: Notification) -> MIRAPostRemovalUpdate? {
+    notification.object as? MIRAPostRemovalUpdate
   }
 }

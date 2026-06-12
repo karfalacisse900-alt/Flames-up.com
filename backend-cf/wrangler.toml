@@ -9,15 +9,23 @@ ENVIRONMENT = "development"
 FRONTEND_URL = "https://flames-up.com"
 CLOUDFLARE_ACCOUNT_ID = "2ca88b3551321681a5f9434814f38ec8"
 SUPABASE_URL = "https://cclgvxukwccvtgrbcwie.supabase.co"
+DATABASE_PRIMARY = "supabase_postgres"
 GOOGLE_OAUTH_CLIENT_IDS = "702354172189-dcg22qr9dqln7mqd1gi3q3bdbl9dajcd.apps.googleusercontent.com,702354172189-9gg83vd92n3s217n5pb4ddqqsnme8ocb.apps.googleusercontent.com"
-APPLE_OAUTH_AUDIENCES = "com.karfala90.frontend"
-MAPBOX_ACCESS_TOKEN = ""
+APPLE_OAUTH_AUDIENCES = "com.captro.app"
 CLOUDFLARE_IMAGES_ACCOUNT_HASH = "DY-IgVdOm-0zb0K5ZFnpKA"
+CLOUDFLARE_IMAGE_TRANSFORMS_ENABLED = "true"
+CLOUDFLARE_IMAGE_TRANSFORM_BASE_URL = "https://api.flames-up.com"
 MEDIA_BACKUP_MAX_VIDEO_BYTES = "95000000"
 
 [observability]
 enabled = true
 head_sampling_rate = 1
+
+[triggers]
+crons = ["17 5 * * *"]
+
+[ai]
+binding = "AI"
 
 [[d1_databases]]
 binding = "DB"
@@ -32,6 +40,15 @@ id = "cecde60b06c24da8abfa01a617aac9eb"
 binding = "MEDIA_BACKUP"
 bucket_name = "flames-up-media-backup"
 
+[[queues.producers]]
+binding = "MEDIA_MODERATION_QUEUE"
+queue = "captro-media-moderation"
+
+[[queues.consumers]]
+queue = "captro-media-moderation"
+max_batch_size = 5
+max_batch_timeout = 30
+
 [env.production]
 name = "flames-up-api"
 
@@ -40,15 +57,23 @@ ENVIRONMENT = "production"
 FRONTEND_URL = "https://flames-up.com"
 CLOUDFLARE_ACCOUNT_ID = "2ca88b3551321681a5f9434814f38ec8"
 SUPABASE_URL = "https://cclgvxukwccvtgrbcwie.supabase.co"
+DATABASE_PRIMARY = "supabase_postgres"
 GOOGLE_OAUTH_CLIENT_IDS = "702354172189-dcg22qr9dqln7mqd1gi3q3bdbl9dajcd.apps.googleusercontent.com,702354172189-9gg83vd92n3s217n5pb4ddqqsnme8ocb.apps.googleusercontent.com"
-APPLE_OAUTH_AUDIENCES = "com.karfala90.frontend"
-MAPBOX_ACCESS_TOKEN = ""
+APPLE_OAUTH_AUDIENCES = "com.captro.app"
 CLOUDFLARE_IMAGES_ACCOUNT_HASH = "DY-IgVdOm-0zb0K5ZFnpKA"
+CLOUDFLARE_IMAGE_TRANSFORMS_ENABLED = "true"
+CLOUDFLARE_IMAGE_TRANSFORM_BASE_URL = "https://api.flames-up.com"
 MEDIA_BACKUP_MAX_VIDEO_BYTES = "95000000"
 
 [env.production.observability]
 enabled = true
 head_sampling_rate = 1
+
+[env.production.triggers]
+crons = ["17 5 * * *"]
+
+[env.production.ai]
+binding = "AI"
 
 [[env.production.d1_databases]]
 binding = "DB"
@@ -62,3 +87,12 @@ id = "cecde60b06c24da8abfa01a617aac9eb"
 [[env.production.r2_buckets]]
 binding = "MEDIA_BACKUP"
 bucket_name = "flames-up-media-backup"
+
+[[env.production.queues.producers]]
+binding = "MEDIA_MODERATION_QUEUE"
+queue = "captro-media-moderation"
+
+[[env.production.queues.consumers]]
+queue = "captro-media-moderation"
+max_batch_size = 5
+max_batch_timeout = 30

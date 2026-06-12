@@ -9,39 +9,75 @@ final class PostDetailModel: ObservableObject {
   @Published var currentUserId: String?
 
   let api: MIRAAPIClient
+  private var likingPostIds = Set<String>()
+  private var likingCommentIds = Set<String>()
 
   init(post: MIRAPost, api: MIRAAPIClient) {
     self.post = post
     self.api = api
   }
 
+  func hydrateFromLocalCache() async {
+    guard let cached = await MIRAAppCacheStore.shared.loadCachedPost(id: post.id) else { return }
+    applyCachedEngagement(from: cached)
+  }
+
   func refreshPost() async {
     do {
       let refreshed: MIRAPost = try await api.get("/posts/\(post.id)")
+      let current = post
+      let merged = refreshed.updating(
+        liked: refreshed.isLiked ?? current.isLiked,
+        likesCount: refreshed.likesCount ?? current.likesCount,
+        commentsCount: bestCount(current.commentsCount, refreshed.commentsCount),
+        saved: refreshed.isSaved ?? refreshed.saved?.value ?? current.viewerSaved,
+        savesCount: bestCount(current.savesCount, refreshed.savesCount),
+        following: refreshed.isFollowing ?? refreshed.following?.value ?? refreshed.followed?.value ?? current.viewerFollowing
+      )
       var transaction = Transaction()
       transaction.animation = nil
       withTransaction(transaction) {
-        post = refreshed
+        post = merged
       }
       publishEngagement()
     } catch {}
   }
 
   func loadComments() async {
-    isLoadingComments = true
+    if comments.isEmpty, let cached = await MIRAAppCacheStore.shared.loadComments(postId: post.id) {
+      comments = cached
+      prefetchCommentAvatars(cached)
+      isLoadingComments = false
+    }
+    isLoadingComments = comments.isEmpty
     defer { isLoadingComments = false }
     do {
       await loadCurrentUserIfNeeded()
       let loaded: [MIRAComment] = try await api.get("/posts/\(post.id)/comments")
-      comments = loaded
-      let nextCount = loaded.count
+      comments = await MIRAAppCacheStore.shared.mergeComments(existing: comments, fresh: loaded)
+      prefetchCommentAvatars(comments)
+      await MIRAAppCacheStore.shared.saveComments(comments, postId: post.id)
+      let nextCount = comments.count
       if post.commentsCount != nextCount {
         post = post.updating(commentsCount: nextCount)
         publishEngagement()
       }
     } catch {
-      comments = []
+      if comments.isEmpty {
+        comments = []
+      }
     }
+  }
+
+  func applyEngagementUpdate(_ update: MIRAPostEngagementUpdate) {
+    guard update.postId == post.id else { return }
+    post = post.updating(
+      liked: update.liked,
+      likesCount: stableEngagementCount(current: post.likesCount, incoming: update.likesCount, toggledOn: update.liked),
+      commentsCount: update.commentsCount,
+      saved: update.saved,
+      savesCount: update.savesCount
+    )
   }
 
   @discardableResult
@@ -50,6 +86,7 @@ final class PostDetailModel: ObservableObject {
     guard !clean.isEmpty else { return false }
     if let comment: MIRAComment = try? await api.post("/posts/\(post.id)/comments", body: PostCommentBody(content: clean, parentId: parentId)) {
       comments.append(comment)
+      await MIRAAppCacheStore.shared.saveComments(comments, postId: post.id)
       post = post.updating(commentsCount: max(comments.count, (post.commentsCount ?? 0) + 1))
       publishEngagement()
       return true
@@ -59,6 +96,10 @@ final class PostDetailModel: ObservableObject {
 
   func toggleCommentLike(_ comment: MIRAComment) async {
     guard let index = comments.firstIndex(where: { $0.id == comment.id }) else { return }
+    guard !likingCommentIds.contains(comment.id) else { return }
+    likingCommentIds.insert(comment.id)
+    defer { likingCommentIds.remove(comment.id) }
+
     let previous = comments[index]
     let nextLiked = !previous.viewerLiked
     let nextCount = max(0, (previous.likesCount ?? 0) + (nextLiked ? 1 : -1))
@@ -71,6 +112,7 @@ final class PostDetailModel: ObservableObject {
           liked: response.liked ?? nextLiked,
           likesCount: response.likesCount ?? nextCount
         )
+        await MIRAAppCacheStore.shared.saveComments(comments, postId: post.id)
       }
     } catch {
       if let currentIndex = comments.firstIndex(where: { $0.id == comment.id }) {
@@ -94,6 +136,7 @@ final class PostDetailModel: ObservableObject {
         if lhs.pinned != rhs.pinned { return lhs.pinned && !rhs.pinned }
         return (lhs.createdAt ?? "") < (rhs.createdAt ?? "")
       }
+      await MIRAAppCacheStore.shared.saveComments(comments, postId: post.id)
     } catch {}
   }
 
@@ -104,6 +147,7 @@ final class PostDetailModel: ObservableObject {
       let response: CommentMutationResponse = try await api.delete("/comments/\(comment.id)")
       let nextCount = response.commentsCount ?? max(0, (post.commentsCount ?? previous.count) - 1)
       post = post.updating(commentsCount: nextCount)
+      await MIRAAppCacheStore.shared.saveComments(comments, postId: post.id)
       publishEngagement()
     } catch {
       comments = previous
@@ -117,6 +161,7 @@ final class PostDetailModel: ObservableObject {
       let response: CommentMutationResponse = try await api.post("/comments/\(comment.id)/hide", body: EmptyBody())
       let nextCount = response.commentsCount ?? max(0, (post.commentsCount ?? previous.count) - 1)
       post = post.updating(commentsCount: nextCount)
+      await MIRAAppCacheStore.shared.saveComments(comments, postId: post.id)
       publishEngagement()
     } catch {
       comments = previous
@@ -139,10 +184,12 @@ final class PostDetailModel: ObservableObject {
 
   func removeCommentLocally(_ comment: MIRAComment) {
     comments.removeAll { $0.id == comment.id }
+    Task { await MIRAAppCacheStore.shared.saveComments(comments, postId: post.id) }
   }
 
   func removeComments(byUserId userId: String) {
     comments.removeAll { $0.userId == userId }
+    Task { await MIRAAppCacheStore.shared.saveComments(comments, postId: post.id) }
   }
 
   func blockCommentAuthor(_ comment: MIRAComment) async {
@@ -153,16 +200,36 @@ final class PostDetailModel: ObservableObject {
     } catch {}
   }
 
+  private func prefetchCommentAvatars(_ rows: [MIRAComment]) {
+    let urls = rows.prefix(80)
+      .compactMap { $0.user?.profileImage?.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { !$0.isEmpty }
+    guard !urls.isEmpty else { return }
+    Task.detached(priority: .utility) {
+      await MIRAImagePrefetcher.prefetch(urls: urls, maxPixelSize: 180, limit: 24)
+    }
+  }
+
   func toggleLike() async {
+    guard !likingPostIds.contains(post.id) else { return }
+    likingPostIds.insert(post.id)
+    defer { likingPostIds.remove(post.id) }
+
     let previous = post
-    let nextLiked = !(post.isLiked ?? false)
+    let nextLiked = !post.viewerLiked
     let nextCount = max(0, (post.likesCount ?? 0) + (nextLiked ? 1 : -1))
     post = post.updating(liked: nextLiked, likesCount: nextCount)
     do {
       let response: PostLikeResponse = try await api.post("/posts/\(post.id)/like", body: LikeBody(liked: nextLiked))
+      let reconciledLikesCount = stableEngagementCount(
+        current: previous.likesCount,
+        incoming: response.likesCount,
+        optimistic: nextCount,
+        toggledOn: response.liked ?? nextLiked
+      )
       post = post.updating(
         liked: response.liked ?? nextLiked,
-        likesCount: response.likesCount ?? nextCount,
+        likesCount: reconciledLikesCount,
         commentsCount: response.commentsCount,
         saved: response.saved,
         savesCount: response.savesCount
@@ -179,12 +246,18 @@ final class PostDetailModel: ObservableObject {
     post = post.updating(saved: true, savesCount: nextCount)
     do {
       let response: PostSaveResponse = try await api.post("/library/save/\(post.id)", body: SaveCollectionBody(collection: collection))
+      let reconciledSavesCount = stableEngagementCount(
+        current: previous.savesCount,
+        incoming: response.savesCount,
+        optimistic: nextCount,
+        toggledOn: response.saved ?? true
+      )
       post = post.updating(
         liked: response.liked,
         likesCount: response.likesCount,
         commentsCount: response.commentsCount,
         saved: response.saved ?? true,
-        savesCount: response.savesCount ?? nextCount
+        savesCount: reconciledSavesCount
       )
       publishEngagement()
     } catch {
@@ -199,12 +272,18 @@ final class PostDetailModel: ObservableObject {
     post = post.updating(saved: false, savesCount: nextCount)
     do {
       let response: PostSaveResponse = try await api.delete("/library/save/\(post.id)")
+      let reconciledSavesCount = stableEngagementCount(
+        current: previous.savesCount,
+        incoming: response.savesCount,
+        optimistic: nextCount,
+        toggledOn: response.saved ?? false
+      )
       post = post.updating(
         liked: response.liked,
         likesCount: response.likesCount,
         commentsCount: response.commentsCount,
         saved: response.saved ?? false,
-        savesCount: response.savesCount ?? nextCount
+        savesCount: reconciledSavesCount
       )
       publishEngagement()
     } catch {
@@ -237,13 +316,34 @@ final class PostDetailModel: ObservableObject {
     MIRAPostEngagementSync.publish(
       MIRAPostEngagementUpdate(
         postId: post.id,
-        liked: post.isLiked,
+        liked: post.viewerLiked,
         likesCount: post.likesCount,
         saved: post.viewerSaved,
         savesCount: post.savesCount,
         commentsCount: post.commentsCount
       )
     )
+  }
+
+  private func applyCachedEngagement(from cached: MIRAPost) {
+    post = post.updating(
+      liked: cached.isLiked,
+      likesCount: bestCount(post.likesCount, cached.likesCount),
+      commentsCount: bestCount(post.commentsCount, cached.commentsCount),
+      saved: cached.isSaved ?? cached.saved?.value,
+      savesCount: bestCount(post.savesCount, cached.savesCount)
+    )
+  }
+
+  private func bestCount(_ current: Int?, _ cached: Int?) -> Int? {
+    guard current != nil || cached != nil else { return nil }
+    return max(0, cached ?? current ?? 0)
+  }
+
+  private func stableEngagementCount(current: Int?, incoming: Int?, optimistic: Int? = nil, toggledOn: Bool? = nil) -> Int? {
+    let fallback = optimistic ?? current
+    guard let incoming else { return fallback }
+    return max(0, incoming)
   }
 
   private func loadCurrentUserIfNeeded() async {
@@ -255,6 +355,8 @@ final class PostDetailModel: ObservableObject {
 
 public struct PostDetailNativeView: View {
   @Environment(\.dismiss) private var dismiss
+  @EnvironmentObject private var localization: MIRALocalization
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @StateObject private var model: PostDetailModel
   @State private var draft = ""
   @State private var isSendingComment = false
@@ -267,7 +369,7 @@ public struct PostDetailNativeView: View {
   private var mediaHeight: CGFloat {
     let maxHeight = max(300, UIScreen.main.bounds.height * 0.48)
     return min(
-      MIRAMediaSizing.detailHeight(for: model.post.mediaURLs, aspectRatios: model.post.mediaHeightToWidthRatios),
+      MIRAMediaSizing.detailHeight(for: detailMediaURLs, aspectRatios: model.post.mediaHeightToWidthRatios),
       maxHeight
     )
   }
@@ -276,28 +378,34 @@ public struct PostDetailNativeView: View {
     _model = StateObject(wrappedValue: PostDetailModel(post: post, api: api))
   }
 
+  private var detailMediaURLs: [String] {
+    let optimized = model.post.feedMediaURLs
+    return optimized.isEmpty ? model.post.fallbackMediaURLs : optimized
+  }
+
   public var body: some View {
     VStack(spacing: 0) {
       detailHeader
 
       ScrollView {
         VStack(alignment: .leading, spacing: 0) {
-          if !model.post.mediaURLs.isEmpty {
-            MIRAAdaptiveMediaView(
-              urls: model.post.mediaURLs,
-              maxSingleImageHeight: mediaHeight,
-              carouselHeight: mediaHeight,
-              singleImageContentMode: .fill
+          if !detailMediaURLs.isEmpty {
+            PostDetailOptimizedMediaCarousel(
+              urls: detailMediaURLs,
+              post: model.post,
+              height: mediaHeight
             )
             .frame(maxWidth: .infinity, minHeight: mediaHeight, maxHeight: mediaHeight)
           }
 
           VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
             VStack(alignment: .leading, spacing: MIRATheme.Space.sm) {
-              Text(model.post.titleText)
-                .font(.system(size: 24, weight: .semibold))
-                .foregroundStyle(MIRATheme.Color.textPrimary)
-                .lineSpacing(2)
+              if !model.post.titleText.isEmpty {
+                Text(model.post.titleText)
+                  .font(.system(size: 24, weight: .semibold))
+                  .foregroundStyle(MIRATheme.Color.textPrimary)
+                  .lineSpacing(2)
+              }
 
               if !model.post.bodyText.isEmpty {
                 Text(model.post.bodyText)
@@ -391,7 +499,7 @@ public struct PostDetailNativeView: View {
     .background(MIRATheme.Color.surface)
     .miraScreenEnter(.push)
     .toolbar(.hidden, for: .navigationBar)
-    .toolbar(.hidden, for: .tabBar)
+    .miraHideTabBarOnAppear()
     .miraBottomSheet(
       isPresented: $isSaveSheetPresented,
       preferredHeightFraction: 0.46,
@@ -435,13 +543,18 @@ public struct PostDetailNativeView: View {
       }
     }
     .task {
+      await model.hydrateFromLocalCache()
       await model.refreshPost()
       await model.loadComments()
+    }
+    .onReceive(NotificationCenter.default.publisher(for: .miraPostEngagementDidChange)) { notification in
+      guard let update = MIRAPostEngagementSync.update(from: notification) else { return }
+      model.applyEngagementUpdate(update)
     }
   }
 
   private func presentReport(for comment: MIRAComment) {
-    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+    CaptroHaptics.medium()
     reportComment = comment
     reportTarget = MIRAReportTarget(
       targetType: "comment",
@@ -450,8 +563,10 @@ public struct PostDetailNativeView: View {
       title: "Report comment",
       subtitle: comment.text
     )
-    withAnimation(.spring(response: 0.30, dampingFraction: 0.90)) {
-      isReportSheetPresented = true
+    DispatchQueue.main.async {
+      withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
+        isReportSheetPresented = true
+      }
     }
   }
 
@@ -522,7 +637,7 @@ public struct PostDetailNativeView: View {
             .truncationMode(.tail)
           Spacer(minLength: 0)
           Button {
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            CaptroHaptics.light()
             self.replyingTo = nil
           } label: {
             Image(systemName: "xmark")
@@ -537,7 +652,7 @@ public struct PostDetailNativeView: View {
       }
 
       HStack(alignment: .bottom, spacing: MIRATheme.Space.sm) {
-        TextField(replyingTo == nil ? "Add a comment..." : "Write a reply...", text: $draft, axis: .vertical)
+        TextField(replyingTo == nil ? localization.string("comments.add_placeholder") : localization.string("comments.reply_placeholder"), text: $draft, axis: .vertical)
           .font(.system(size: 15, weight: .regular))
           .textInputAutocapitalization(.sentences)
           .submitLabel(.send)
@@ -553,7 +668,7 @@ public struct PostDetailNativeView: View {
               .stroke(isCommentFocused ? MIRATheme.Color.forest.opacity(0.18) : MIRATheme.Color.hairline, lineWidth: 1)
           }
           .onSubmit(sendDraftComment)
-          .animation(.easeOut(duration: 0.18), value: isCommentFocused)
+          .animation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion), value: isCommentFocused)
 
         if canSendComment || isSendingComment {
           Button {
@@ -583,20 +698,20 @@ public struct PostDetailNativeView: View {
             Task { await model.toggleLike() }
           } label: {
             HStack(spacing: 7) {
-              Image(systemName: model.post.isLiked == true ? "heart.fill" : "heart")
+              Image(systemName: model.post.viewerLiked ? "heart.fill" : "heart")
                 .font(.system(size: 22, weight: .semibold))
               Text(compact(model.post.likesCount ?? 0))
                 .font(.system(size: 14, weight: .semibold))
                 .lineLimit(1)
                 .minimumScaleFactor(0.76)
             }
-            .foregroundStyle(model.post.isLiked == true ? MIRATheme.Color.like : MIRATheme.Color.textSecondary)
+            .foregroundStyle(model.post.viewerLiked ? MIRATheme.Color.like : MIRATheme.Color.textSecondary)
             .frame(minWidth: 54, minHeight: 44)
           }
           .buttonStyle(.plain)
 
           Button {
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            CaptroHaptics.light()
             isSaveSheetPresented = true
           } label: {
             HStack(spacing: 7) {
@@ -630,7 +745,7 @@ public struct PostDetailNativeView: View {
   private func sendDraftComment() {
     let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !text.isEmpty, !isSendingComment else { return }
-    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    CaptroHaptics.light()
     isSendingComment = true
     draft = ""
     Task {
@@ -642,6 +757,687 @@ public struct PostDetailNativeView: View {
         replyingTo = nil
       }
       isSendingComment = false
+    }
+  }
+}
+
+private struct PostDetailOptimizedMediaCarousel: View {
+  let urls: [String]
+  let post: MIRAPost
+  let height: CGFloat
+  @State private var selectedIndex = 0
+
+  var body: some View {
+    TabView(selection: $selectedIndex) {
+      ForEach(Array(urls.enumerated()), id: \.offset) { index, url in
+        RemoteMediaView(
+          url: url,
+          isVideo: isVideo(at: index, url: url),
+          placeholderURL: placeholderURL(at: index, mediaURL: url),
+          fallbackURL: fallbackURL(at: index, mediaURL: url),
+          contentMode: .fill,
+          shouldPlay: false,
+          maxPixelSize: MIRAMediaSizing.feedTargetHeight,
+          placeholderColor: MIRATheme.Color.mediaPlaceholder
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .tag(index)
+      }
+    }
+    .tabViewStyle(.page(indexDisplayMode: urls.count > 1 ? .automatic : .never))
+    .frame(height: height)
+    .background(MIRATheme.Color.mediaPlaceholder)
+    .clipped()
+    .task(id: urls.joined(separator: "|")) {
+      await prefetchNearbyMedia()
+    }
+  }
+
+  private func isVideo(at index: Int, url: String) -> Bool {
+    let types = post.mediaTypes?.values ?? []
+    if types.indices.contains(index) {
+      return types[index].lowercased().contains("video")
+    }
+    return url.isVideoURL
+  }
+
+  private func placeholderURL(at index: Int, mediaURL: String) -> String? {
+    let posters = post.posterMediaURLs
+    if posters.indices.contains(index), posters[index] != mediaURL { return posters[index] }
+    let thumbnails = post.thumbnailMediaURLs
+    if thumbnails.indices.contains(index), thumbnails[index] != mediaURL { return thumbnails[index] }
+    return (post.posterMediaURLs + post.thumbnailMediaURLs)
+      .first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0 != mediaURL && !$0.isVideoURL }
+  }
+
+  private func fallbackURL(at index: Int, mediaURL: String) -> String? {
+    let originals = post.fallbackMediaURLs
+    guard originals.indices.contains(index) else { return nil }
+    let original = originals[index].trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !original.isEmpty, original != mediaURL, !original.isVideoURL else { return nil }
+    return original
+  }
+
+  private func prefetchNearbyMedia() async {
+    let previewURLs = (post.posterMediaURLs + post.thumbnailMediaURLs)
+      .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    let fallbackURLs = post.fallbackMediaURLs
+      .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !$0.isVideoURL }
+    let imageURLs = urls.filter { !$0.isVideoURL }
+    await MIRAImagePrefetcher.prefetch(urls: previewURLs, maxPixelSize: 560, limit: max(12, previewURLs.count))
+    await MIRAImagePrefetcher.prefetch(urls: imageURLs + fallbackURLs, maxPixelSize: MIRAMediaSizing.feedTargetHeight, limit: max(18, imageURLs.count + fallbackURLs.count))
+    await MainActor.run {
+      MIRAVideoPrewarmManager.shared.prewarm(urls: urls.filter(\.isVideoURL), keepOnly: Set(urls.filter(\.isVideoURL).prefix(2)))
+    }
+  }
+}
+
+public struct DiscoverPostDetailNativeView: View {
+  @Environment(\.dismiss) private var dismiss
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @StateObject private var model: PostDetailModel
+  @State private var isCaptionExpanded = false
+  @State private var isCommentsPresented = false
+  @State private var reportTarget: MIRAReportTarget?
+  @State private var reportComment: MIRAComment?
+  @State private var isReportSheetPresented = false
+
+  public init(post: MIRAPost, api: MIRAAPIClient) {
+    _model = StateObject(wrappedValue: PostDetailModel(post: post, api: api))
+  }
+
+  private var detailMediaURLs: [String] {
+    let optimized = model.post.feedMediaURLs
+    return optimized.isEmpty ? model.post.fallbackMediaURLs : optimized
+  }
+
+  public var body: some View {
+    ZStack {
+      MIRATheme.Color.surface.ignoresSafeArea()
+
+      ScrollView {
+        VStack(alignment: .leading, spacing: 14) {
+          topBar
+          if hasCaptionText {
+            captionBlock
+          }
+          mediaCarousel
+          actionRow
+          postContext
+        }
+        .padding(.bottom, 32)
+      }
+      .scrollIndicators(.hidden)
+    }
+    .background(MIRATheme.Color.surface)
+    .miraScreenEnter(.push)
+    .toolbar(.hidden, for: .navigationBar)
+    .miraHideTabBarOnAppear()
+    .miraBottomSheet(
+      isPresented: $isCommentsPresented,
+      preferredHeightFraction: 0.72,
+      maxHeight: 640
+    ) { dismissComments in
+      DiscoverDetailCommentsSheet(
+        model: model,
+        onClose: dismissComments,
+        onReportComment: { comment in
+          dismissComments()
+          DispatchQueue.main.asyncAfter(deadline: .now() + MIRATransitionTiming.sheetClose) {
+            presentReport(for: comment)
+          }
+        },
+        onBlockCommentUser: { comment in
+          dismissComments()
+          Task { await model.blockCommentAuthor(comment) }
+        }
+      )
+    }
+    .miraBottomSheet(
+      isPresented: $isReportSheetPresented,
+      preferredHeightFraction: 0.78,
+      maxHeight: 700,
+      onDismissed: {
+        reportTarget = nil
+        reportComment = nil
+      }
+    ) { dismissReport in
+      if let reportTarget {
+        MIRAReportSheet(
+          target: reportTarget,
+          api: model.api,
+          onSubmitted: { result in handleReportResult(result) },
+          onClose: dismissReport
+        )
+      } else {
+        Color.clear
+      }
+    }
+    .task {
+      await model.hydrateFromLocalCache()
+      await model.refreshPost()
+    }
+    .onReceive(NotificationCenter.default.publisher(for: .miraPostEngagementDidChange)) { notification in
+      guard let update = MIRAPostEngagementSync.update(from: notification) else { return }
+      model.applyEngagementUpdate(update)
+    }
+  }
+
+  private var topBar: some View {
+    HStack {
+      Button {
+        CaptroHaptics.light()
+        dismiss()
+      } label: {
+        Image(systemName: "chevron.left")
+          .font(.system(size: 18, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .frame(width: 44, height: 44)
+          .background(MIRATheme.Color.surfaceSoft)
+          .clipShape(Circle())
+      }
+      .buttonStyle(.miraPress)
+
+      Spacer()
+
+      if let place = model.post.placeDisplayName {
+        Label(place, systemImage: "mappin.circle.fill")
+          .font(.system(size: 13, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.forest.opacity(0.82))
+          .lineLimit(1)
+          .padding(.horizontal, 12)
+          .padding(.vertical, 8)
+          .background(MIRATheme.Color.forestSoft.opacity(0.92))
+          .clipShape(Capsule())
+      }
+    }
+    .padding(.horizontal, MIRATheme.Space.md)
+    .padding(.top, MIRATheme.Space.xs)
+  }
+
+  private var captionBlock: some View {
+    Button {
+      guard shouldCollapseCaption else { return }
+      CaptroHaptics.light()
+      withAnimation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion)) {
+        isCaptionExpanded.toggle()
+      }
+    } label: {
+      captionLabel
+        .font(.system(size: 19, weight: .regular))
+        .foregroundStyle(MIRATheme.Color.textPrimary)
+        .lineSpacing(3)
+        .multilineTextAlignment(.leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+    .buttonStyle(.plain)
+    .padding(.horizontal, MIRATheme.Space.md)
+    .accessibilityLabel(captionText)
+  }
+
+  private var captionLabel: Text {
+    guard shouldCollapseCaption else {
+      return Text(captionText)
+    }
+    if isCaptionExpanded {
+      return Text(captionText) + Text("  Read less").foregroundColor(MIRATheme.Color.textSecondary).fontWeight(.semibold)
+    }
+    return Text(captionPreviewText) + Text("...Read more").foregroundColor(MIRATheme.Color.textSecondary).fontWeight(.semibold)
+  }
+
+  private var mediaCarousel: some View {
+    Group {
+      if displayMediaURLs.isEmpty {
+        RoundedRectangle(cornerRadius: 18, style: .continuous)
+          .fill(MIRATheme.Color.mediaPlaceholder)
+          .overlay {
+            VStack(spacing: 8) {
+              Image(systemName: "photo")
+                .font(.system(size: 26, weight: .light))
+              Text("No media")
+                .font(.system(size: 13, weight: .semibold))
+            }
+            .foregroundStyle(MIRATheme.Color.textSecondary.opacity(0.72))
+          }
+          .frame(width: carouselCardWidth, height: carouselHeight)
+          .padding(.horizontal, MIRATheme.Space.md)
+      } else {
+        ScrollView(.horizontal, showsIndicators: false) {
+          LazyHStack(spacing: 12) {
+            ForEach(Array(displayMediaURLs.enumerated()), id: \.offset) { index, url in
+              DiscoverDetailMediaCard(
+                url: url,
+                isVideo: isVideo(at: index, url: url),
+                placeholderURL: placeholderURL(at: index),
+                fallbackURL: fallbackURL(at: index, url: url)
+              )
+              .frame(width: carouselCardWidth, height: carouselHeight)
+            }
+          }
+          .padding(.horizontal, MIRATheme.Space.md)
+        }
+      }
+    }
+    .frame(height: carouselHeight)
+    .task(id: displayMediaURLs.joined(separator: "|")) {
+      await prefetchDisplayMedia()
+    }
+  }
+
+  private var actionRow: some View {
+    HStack(alignment: .center, spacing: 0) {
+      Button {
+        CaptroHaptics.light()
+        Task { await model.toggleLike() }
+      } label: {
+        HStack(spacing: 12) {
+          Image(systemName: model.post.viewerLiked ? "hand.thumbsup.fill" : "hand.thumbsup")
+            .font(.system(size: 34, weight: .regular))
+          Text(compact(model.post.likesCount ?? 0))
+            .font(.system(size: 24, weight: .regular))
+            .lineLimit(1)
+            .minimumScaleFactor(0.72)
+        }
+        .foregroundStyle(model.post.viewerLiked ? MIRATheme.Color.like : MIRATheme.Color.textPrimary)
+        .frame(minWidth: 112, minHeight: 54, alignment: .leading)
+        .contentShape(Rectangle())
+      }
+      .buttonStyle(.miraPress)
+
+      Spacer(minLength: 24)
+
+      Button {
+        CaptroHaptics.light()
+        isCommentsPresented = true
+      } label: {
+        HStack(spacing: 10) {
+          Image(systemName: "bubble.right")
+            .font(.system(size: 34, weight: .regular))
+          Text(compact(model.post.commentsCount ?? model.comments.count))
+            .font(.system(size: 24, weight: .regular))
+            .lineLimit(1)
+            .minimumScaleFactor(0.72)
+        }
+        .foregroundStyle(MIRATheme.Color.textPrimary)
+        .frame(minWidth: 92, minHeight: 54, alignment: .trailing)
+        .contentShape(Rectangle())
+      }
+      .buttonStyle(.miraPress)
+    }
+    .padding(.horizontal, MIRATheme.Space.md)
+  }
+
+  private var postContext: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      HStack(spacing: 10) {
+        if let userId = model.post.userId, !userId.isEmpty {
+          NavigationLink(destination: UserProfileNativeView(userId: userId, api: model.api)) {
+            authorSummary
+          }
+          .buttonStyle(.plain)
+        } else {
+          authorSummary
+        }
+        Spacer()
+      }
+
+      if let subtitle = model.post.placeDisplaySubtitle {
+        Text(subtitle)
+          .font(.system(size: 14, weight: .medium))
+          .foregroundStyle(MIRATheme.Color.textMuted)
+          .lineLimit(2)
+      }
+    }
+    .padding(.horizontal, MIRATheme.Space.md)
+  }
+
+  private var authorSummary: some View {
+    HStack(spacing: 10) {
+      RemoteAvatar(url: model.post.userProfileImage, size: 38)
+      VStack(alignment: .leading, spacing: 2) {
+        Text(model.post.authorDisplayName)
+          .font(.system(size: 15, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .lineLimit(1)
+        Text(relativeAge(model.post.createdAt))
+          .font(.system(size: 12, weight: .medium))
+          .foregroundStyle(MIRATheme.Color.textMuted)
+          .lineLimit(1)
+      }
+    }
+  }
+
+  private var displayMediaURLs: [String] {
+    let feed = model.post.feedMediaURLs
+    return feed.isEmpty ? model.post.fallbackMediaURLs : feed
+  }
+
+  private var carouselCardWidth: CGFloat {
+    max(280, UIScreen.main.bounds.width - 66)
+  }
+
+  private var carouselHeight: CGFloat {
+    return min(carouselCardWidth * 1.03, UIScreen.main.bounds.height * 0.58)
+  }
+
+  private var captionText: String {
+    let title = (model.post.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    let caption = (model.post.caption ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    let content = (model.post.content ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    return [title, caption.isEmpty ? content : caption]
+      .filter { !$0.isEmpty }
+      .joined(separator: " ")
+  }
+
+  private var hasCaptionText: Bool {
+    !captionText.isEmpty
+  }
+
+  private var shouldCollapseCaption: Bool {
+    captionText.count > 82 || captionText.contains("\n")
+  }
+
+  private var captionPreviewText: String {
+    let clean = captionText.replacingOccurrences(of: "\n", with: " ")
+    guard clean.count > 82 else { return clean }
+    return String(clean.prefix(82)).trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  private func isVideo(at index: Int, url: String) -> Bool {
+    let types = model.post.mediaTypes?.values ?? []
+    if types.indices.contains(index) {
+      return types[index].lowercased().contains("video")
+    }
+    return url.isVideoURL
+  }
+
+  private func placeholderURL(at index: Int) -> String? {
+    let posters = model.post.posterMediaURLs
+    if posters.indices.contains(index) { return posters[index] }
+    let thumbnails = model.post.thumbnailMediaURLs
+    if thumbnails.indices.contains(index) { return thumbnails[index] }
+    return thumbnails.first ?? posters.first
+  }
+
+  private func fallbackURL(at index: Int, url: String) -> String? {
+    let originals = model.post.fallbackMediaURLs
+    guard originals.indices.contains(index) else { return nil }
+    let fallback = originals[index].trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !fallback.isEmpty, fallback != url, !fallback.isVideoURL else { return nil }
+    return fallback
+  }
+
+  private func prefetchDisplayMedia() async {
+    let previewURLs = (model.post.posterMediaURLs + model.post.thumbnailMediaURLs)
+      .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    let fallbackURLs = model.post.fallbackMediaURLs
+      .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !$0.isVideoURL }
+    let imageURLs = displayMediaURLs.filter { !$0.isVideoURL }
+    await MIRAImagePrefetcher.prefetch(urls: previewURLs, maxPixelSize: 560, limit: max(12, previewURLs.count))
+    await MIRAImagePrefetcher.prefetch(urls: imageURLs + fallbackURLs, maxPixelSize: MIRAMediaSizing.feedTargetHeight, limit: max(18, imageURLs.count + fallbackURLs.count))
+  }
+
+  private func presentReport(for comment: MIRAComment) {
+    CaptroHaptics.medium()
+    reportComment = comment
+    reportTarget = MIRAReportTarget(
+      targetType: "comment",
+      targetId: comment.id,
+      ownerUserId: comment.userId,
+      title: "Report comment",
+      subtitle: comment.text
+    )
+    DispatchQueue.main.async {
+      withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
+        isReportSheetPresented = true
+      }
+    }
+  }
+
+  private func handleReportResult(_ result: MIRAReportResult) {
+    guard let reportComment else { return }
+    if result.blocked, let userId = reportComment.userId {
+      model.removeComments(byUserId: userId)
+    } else if result.hidden {
+      model.removeCommentLocally(reportComment)
+    }
+  }
+}
+
+private struct DiscoverDetailMediaCard: View {
+  let url: String
+  let isVideo: Bool
+  let placeholderURL: String?
+  let fallbackURL: String?
+
+  var body: some View {
+    ZStack {
+      RemoteMediaView(
+        url: url,
+        isVideo: isVideo,
+        placeholderURL: placeholderURL,
+        fallbackURL: fallbackURL,
+        contentMode: .fill,
+        shouldPlay: false,
+        maxPixelSize: MIRAMediaSizing.feedTargetHeight,
+        showsVideoPlaceholderIcon: isVideo
+      )
+      .allowsHitTesting(false)
+    }
+    .background(MIRATheme.Color.mediaPlaceholder)
+    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+  }
+}
+
+struct DiscoverDetailCommentsSheet: View {
+  @ObservedObject var model: PostDetailModel
+  @State private var draft = ""
+  @State private var isSending = false
+  @State private var replyingTo: MIRAComment?
+  @FocusState private var isReplyFocused: Bool
+  @EnvironmentObject private var localization: MIRALocalization
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  let onClose: () -> Void
+  let onReportComment: (MIRAComment) -> Void
+  let onBlockCommentUser: (MIRAComment) -> Void
+
+  var body: some View {
+    VStack(spacing: 0) {
+      sheetHeader
+
+      ScrollView {
+        LazyVStack(alignment: .leading, spacing: MIRATheme.Space.lg) {
+          if model.isLoadingComments && model.comments.isEmpty {
+            ForEach(0..<5, id: \.self) { _ in
+              PostDetailCommentSkeleton()
+            }
+          } else if model.comments.isEmpty {
+            MIRAEmptyState(title: localization.string("comments.empty.title"), message: localization.string("comments.empty.message"), systemImage: "bubble.left")
+              .frame(maxWidth: .infinity)
+              .padding(.top, 28)
+          } else {
+            ForEach(model.comments) { comment in
+              CommentRow(
+                comment: comment,
+                currentUserId: model.currentUserId,
+                postOwnerId: model.post.userId,
+                onReply: {
+                  replyingTo = comment
+                  isReplyFocused = true
+                },
+                onLike: {
+                  Task { await model.toggleCommentLike(comment) }
+                },
+                onPin: {
+                  Task { await model.toggleCommentPin(comment) }
+                },
+                onReport: {
+                  onReportComment(comment)
+                },
+                onBlockUser: {
+                  onBlockCommentUser(comment)
+                },
+                onDelete: {
+                  Task { await model.deleteComment(comment) }
+                },
+                onHide: {
+                  Task { await model.hideComment(comment) }
+                }
+              )
+            }
+          }
+        }
+        .padding(.horizontal, MIRATheme.Space.md)
+        .padding(.top, MIRATheme.Space.md)
+        .padding(.bottom, 18)
+      }
+      .scrollIndicators(.hidden)
+      .scrollDismissesKeyboard(.interactively)
+      .miraScrollFeel(.sheet)
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+    .safeAreaInset(edge: .bottom, spacing: 0) {
+      commentComposer
+    }
+    .background(MIRATheme.Color.surface)
+    .task {
+      await model.loadComments()
+    }
+  }
+
+  private var sheetHeader: some View {
+    VStack(spacing: MIRATheme.Space.sm) {
+      Capsule()
+        .fill(MIRATheme.Color.textMuted.opacity(0.22))
+        .frame(width: 42, height: 5)
+        .padding(.top, 10)
+
+      HStack(spacing: MIRATheme.Space.sm) {
+        Text(localization.string("comments.title"))
+          .font(.system(size: 18, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+        Text(compact(model.post.commentsCount ?? model.comments.count))
+          .font(.system(size: 12, weight: .medium))
+          .foregroundStyle(MIRATheme.Color.textMuted)
+          .padding(.horizontal, 7)
+          .padding(.vertical, 3)
+          .background(MIRATheme.Color.surfaceSoft)
+          .clipShape(Capsule())
+        Spacer()
+        Button {
+          isReplyFocused = false
+          onClose()
+        } label: {
+          Image(systemName: "xmark")
+            .font(.system(size: 14, weight: .bold))
+            .foregroundStyle(MIRATheme.Color.textSecondary)
+            .frame(width: 34, height: 34)
+            .background(MIRATheme.Color.surfaceSoft)
+            .clipShape(Circle())
+        }
+        .buttonStyle(.miraPress)
+      }
+      .padding(.horizontal, MIRATheme.Space.md)
+    }
+    .padding(.bottom, MIRATheme.Space.sm)
+    .overlay(alignment: .bottom) {
+      Rectangle().fill(MIRATheme.Color.hairline).frame(height: 0.5)
+    }
+  }
+
+  private var commentComposer: some View {
+    VStack(spacing: 0) {
+      if let replyingTo {
+        HStack(spacing: 8) {
+          Image(systemName: "arrowshape.turn.up.left")
+            .font(.system(size: 12, weight: .semibold))
+          Text("Replying to \(replyingTo.user?.displayName ?? "comment")")
+            .font(.system(size: 12, weight: .semibold))
+            .lineLimit(1)
+            .truncationMode(.tail)
+          Spacer(minLength: 0)
+          Button {
+            CaptroHaptics.light()
+            self.replyingTo = nil
+          } label: {
+            Image(systemName: "xmark")
+              .font(.system(size: 11, weight: .bold))
+              .frame(width: 24, height: 24)
+          }
+          .buttonStyle(.miraPress)
+        }
+        .foregroundStyle(MIRATheme.Color.textMuted)
+        .padding(.horizontal, MIRATheme.Space.md)
+        .padding(.top, MIRATheme.Space.sm)
+      }
+
+      HStack(alignment: .bottom, spacing: MIRATheme.Space.sm) {
+        TextField(replyingTo == nil ? localization.string("comments.add_placeholder") : localization.string("comments.reply_placeholder"), text: $draft, axis: .vertical)
+          .font(.system(size: 15, weight: .regular))
+          .textInputAutocapitalization(.sentences)
+          .submitLabel(.send)
+          .focused($isReplyFocused)
+          .lineLimit(1...5)
+          .padding(.horizontal, MIRATheme.Space.md)
+          .padding(.vertical, 11)
+          .background(MIRATheme.Color.surfaceSoft)
+          .clipShape(RoundedRectangle(cornerRadius: 21, style: .continuous))
+          .overlay {
+            RoundedRectangle(cornerRadius: 21, style: .continuous)
+              .stroke(isReplyFocused ? MIRATheme.Color.forest.opacity(0.18) : MIRATheme.Color.hairline, lineWidth: 1)
+          }
+          .onSubmit(sendComment)
+          .animation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion), value: isReplyFocused)
+
+        Button(action: sendComment) {
+          Group {
+            if isSending {
+              ProgressView()
+                .tint(.white)
+                .frame(width: 17, height: 17)
+            } else {
+              Image(systemName: "arrow.up")
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(.white)
+            }
+          }
+          .frame(width: 40, height: 40)
+          .background(canSend ? MIRATheme.Color.forest : MIRATheme.Color.textMuted.opacity(0.28))
+          .clipShape(Circle())
+        }
+        .buttonStyle(.miraPress)
+        .disabled(!canSend || isSending)
+      }
+      .padding(.horizontal, MIRATheme.Space.md)
+      .padding(.top, MIRATheme.Space.sm)
+      .padding(.bottom, MIRATheme.Space.md)
+    }
+    .background(MIRATheme.Color.surface)
+    .overlay(alignment: .top) {
+      Rectangle().fill(MIRATheme.Color.hairline).frame(height: 0.5)
+    }
+  }
+
+  private var canSend: Bool {
+    !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isSending
+  }
+
+  private func sendComment() {
+    let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !text.isEmpty, !isSending else { return }
+    CaptroHaptics.light()
+    isSending = true
+    draft = ""
+    Task {
+      let parentId = replyingTo?.id
+      let didSend = await model.sendComment(text, parentId: parentId)
+      if !didSend {
+        draft = text
+      } else {
+        replyingTo = nil
+      }
+      isSending = false
     }
   }
 }
@@ -708,12 +1504,12 @@ private struct CommentRow: View {
 
         HStack(spacing: MIRATheme.Space.lg) {
           Button("Reply") {
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            CaptroHaptics.light()
             onReply()
           }
           .buttonStyle(.plain)
           Button {
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            CaptroHaptics.light()
             onLike()
           } label: {
             HStack(spacing: 4) {
@@ -785,7 +1581,7 @@ private struct PostDetailCommentSkeleton: View {
   }
 }
 
-private func relativeAge(_ value: String?) -> String {
+func relativeAge(_ value: String?) -> String {
   guard let value else { return "" }
   let formatter = ISO8601DateFormatter()
   guard let date = formatter.date(from: value) else { return "" }

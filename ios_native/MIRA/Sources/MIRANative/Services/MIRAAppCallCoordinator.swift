@@ -51,7 +51,7 @@ final class MIRAAppCallCoordinator: NSObject, ObservableObject {
     }
 
     statusText = "Creating video call..."
-    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+    CaptroHaptics.medium()
 
     do {
       let session: MIRACallSession = try await api.post(
@@ -64,7 +64,7 @@ final class MIRAAppCallCoordinator: NSObject, ObservableObject {
       startOutgoingPolling(for: session)
     } catch {
       statusText = callErrorText(for: error)
-      UINotificationFeedbackGenerator().notificationOccurred(.error)
+      CaptroHaptics.error()
     }
   }
 
@@ -76,10 +76,10 @@ final class MIRAAppCallCoordinator: NSObject, ObservableObject {
       incomingCall = nil
       activeCall = updated.agoraPresentation(currentUserId: currentUserId)
       statusText = nil
-      UINotificationFeedbackGenerator().notificationOccurred(.success)
+      CaptroHaptics.success()
     } catch {
       statusText = callErrorText(for: error)
-      UINotificationFeedbackGenerator().notificationOccurred(.error)
+      CaptroHaptics.error()
     }
   }
 
@@ -92,7 +92,7 @@ final class MIRAAppCallCoordinator: NSObject, ObservableObject {
     endReportedCallKitCall(for: call, reason: .declinedElsewhere)
     incomingCall = nil
     statusText = nil
-    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    CaptroHaptics.light()
   }
 
   func cancelOutgoingCall() async {
@@ -104,7 +104,7 @@ final class MIRAAppCallCoordinator: NSObject, ObservableObject {
     outgoingPollTask = nil
     outgoingCall = nil
     statusText = nil
-    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    CaptroHaptics.light()
   }
 
   func endActiveCall() async {
@@ -177,17 +177,17 @@ final class MIRAAppCallCoordinator: NSObject, ObservableObject {
             self.outgoingCall = nil
             self.statusText = nil
             self.activeCall = updated.agoraPresentation(currentUserId: self.currentUserId)
-            UINotificationFeedbackGenerator().notificationOccurred(.success)
+            CaptroHaptics.success()
             return
           case .declined:
             self.statusText = "Call declined."
-            UINotificationFeedbackGenerator().notificationOccurred(.warning)
+            CaptroHaptics.warning()
             try? await Task.sleep(nanoseconds: 900_000_000)
             self.outgoingCall = nil
             return
           case .missed:
             self.statusText = "No answer."
-            UINotificationFeedbackGenerator().notificationOccurred(.warning)
+            CaptroHaptics.warning()
             try? await Task.sleep(nanoseconds: 900_000_000)
             self.outgoingCall = nil
             return
