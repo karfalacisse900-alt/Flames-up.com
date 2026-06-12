@@ -10978,6 +10978,11 @@ api.post('/auth/oauth/apple', async (c) => {
 
 api.get('/auth/me', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  if (supabasePrimaryConfigured(c)) {
+    const user = await getSupabaseSessionUserByAnyId(c, userId);
+    if (!user) return c.json({ detail: 'User not found' }, 404);
+    return c.json(authUserPayload(user));
+  }
   await ensurePremiumSchema(c.env.DB);
   const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
   if (!user) return c.json({ detail: 'User not found' }, 404);
