@@ -5485,6 +5485,214 @@ async function supabaseUpdateCommentStatus(c: any, commentId: string, userId: st
   return { status: 200 as const, body: status === 'hidden' ? { hidden: true, comments_count: engagement.comments_count } : { deleted: true, comments_count: engagement.comments_count } };
 }
 
+async function supabaseUserByAnyId(c: any, userId: string): Promise<any | null> {
+  const rows = await supabaseUsersByAnyIds(c, [userId]);
+  return rows.get(publicId(userId, 120)) || rows.get(isUuidText(userId) || '') || null;
+}
+
+async function supabaseFollowStats(c: any, userId: string) {
+  const cleanUserId = publicId(userId, 120);
+  if (!cleanUserId) return { followers_count: 0, following_count: 0 };
+  const [followers, following] = await Promise.all([
+    supabaseAdminQueryRows(c, 'app_follows', {
+      select: 'app_follower_id,status',
+      filters: { app_following_id: postgrestEqFilter(cleanUserId), status: postgrestEqFilter('active') },
+      limit: 10000,
+    }).catch(() => []),
+    supabaseAdminQueryRows(c, 'app_follows', {
+      select: 'app_following_id,status',
+      filters: { app_follower_id: postgrestEqFilter(cleanUserId), status: postgrestEqFilter('active') },
+      limit: 10000,
+    }).catch(() => []),
+  ]);
+  return {
+    followers_count: followers.length,
+    following_count: following.length,
+  };
+}
+
+async function supabaseBlockPair(c: any, firstUserId: string, secondUserId: string): Promise<any | null> {
+  const first = publicId(firstUserId, 120);
+  const second = publicId(secondUserId, 120);
+  if (!first || !second || first === second) return null;
+  const [forward, reverse] = await Promise.all([
+    supabaseAdminQueryRows(c, 'app_blocks', {
+      select: 'id,blocker_id,blocked_id,created_at',
+      filters: { blocker_id: postgrestEqFilter(first), blocked_id: postgrestEqFilter(second) },
+      limit: 1,
+    }).catch(() => []),
+    supabaseAdminQueryRows(c, 'app_blocks', {
+      select: 'id,blocker_id,blocked_id,created_at',
+      filters: { blocker_id: postgrestEqFilter(second), blocked_id: postgrestEqFilter(first) },
+      limit: 1,
+    }).catch(() => []),
+  ]);
+  return forward[0] || reverse[0] || null;
+}
+
+async function supabaseIsFollowing(c: any, followerId: string, followingId: string): Promise<boolean> {
+  const follower = publicId(followerId, 120);
+  const following = publicId(followingId, 120);
+  if (!follower || !following || follower === following) return false;
+  const rows = await supabaseAdminQueryRows(c, 'app_follows', {
+    select: 'app_follower_id',
+    filters: {
+      app_follower_id: postgrestEqFilter(follower),
+      app_following_id: postgrestEqFilter(following),
+      status: postgrestEqFilter('active'),
+    },
+    limit: 1,
+  }).catch(() => []);
+  return rows.length > 0;
+}
+
+async function supabasePublicUserPayload(c: any, viewerId: string, targetId: string) {
+  const target = await supabaseUserByAnyId(c, targetId);
+  if (!target || supabaseUserStatus(target) !== 'active') return { status: 404 as const, body: { detail: 'User not found' } };
+  const targetAppId = publicId(target.id, 120);
+  const [followStats, isFollowing, block] = await Promise.all([
+    supabaseFollowStats(c, targetAppId),
+    viewerId && viewerId !== targetAppId ? supabaseIsFollowing(c, viewerId, targetAppId) : Promise.resolve(false),
+    viewerId && viewerId !== targetAppId ? supabaseBlockPair(c, viewerId, targetAppId) : Promise.resolve(null),
+  ]);
+  const viewerHasBlocked = publicId(block?.blocker_id, 120) === viewerId && publicId(block?.blocked_id, 120) === targetAppId;
+  const viewerBlockedBy = publicId(block?.blocker_id, 120) === targetAppId && publicId(block?.blocked_id, 120) === viewerId;
+  const counts = parseJsonObject(target.counts);
+  const safe = safeUserPayload({
+    id: targetAppId,
+    username: target.username,
+    full_name: target.full_name,
+    profile_image: target.avatar_url,
+    cover_image: target.cover_url,
+    bio: target.bio,
+    city: target.city,
+    is_private: target.is_private ? 1 : 0,
+    is_verified: target.is_verified ? 1 : 0,
+    followers_count: followStats.followers_count,
+    following_count: followStats.following_count,
+    posts_count: Number((counts as any).posts_count || 0),
+  });
+  const privacyLocked = !!target.is_private && viewerId !== targetAppId && !isFollowing;
+  if (viewerBlockedBy || privacyLocked) {
+    return {
+      status: 200 as const,
+      body: {
+        id: safe.id,
+        username: safe.username,
+        full_name: safe.full_name,
+        profile_image: safe.profile_image,
+        followers_count: safe.followers_count,
+        following_count: safe.following_count,
+        posts_count: safe.posts_count,
+        is_following: isFollowing,
+        viewer_has_blocked: viewerHasBlocked,
+        viewer_blocked_by: viewerBlockedBy,
+        is_private: true,
+        privacy_locked: true,
+      },
+    };
+  }
+  return { status: 200 as const, body: { ...safe, is_following: isFollowing, viewer_has_blocked: viewerHasBlocked, viewer_blocked_by: viewerBlockedBy } };
+}
+
+async function supabaseSetFollowState(c: any, followerId: string, followingId: string, requested: boolean | null) {
+  const follower = publicId(followerId, 120);
+  const following = publicId(followingId, 120);
+  if (!follower || !following || follower === following) return { status: 400 as const, body: { detail: 'Cannot follow yourself' } };
+  const target = await supabaseUserByAnyId(c, following);
+  if (!target || supabaseUserStatus(target) !== 'active') return { status: 404 as const, body: { detail: 'User not found' } };
+  if (await supabaseBlockPair(c, follower, following)) return { status: 403 as const, body: { detail: 'You cannot follow this profile.' } };
+  const wasFollowing = await supabaseIsFollowing(c, follower, following);
+  const nextFollowing = requested === null ? !wasFollowing : requested;
+  if (nextFollowing) {
+    const [followerAuth, followingAuth] = await Promise.all([
+      supabaseAuthUserIdForAppUserId(c, follower),
+      supabaseAuthUserIdForAppUserId(c, following),
+    ]);
+    await supabaseAdminUpsert(c, 'app_follows', [{
+      app_follower_id: follower,
+      app_following_id: following,
+      follower_id: followerAuth || null,
+      following_id: followingAuth || null,
+      status: 'active',
+      metadata: { source: 'cloudflare_worker_primary' },
+      legacy_created_at: now(),
+      updated_at: now(),
+    }], 'app_follower_id,app_following_id');
+  } else {
+    await supabaseAdminDeleteRows(c, 'app_follows', {
+      app_follower_id: postgrestEqFilter(follower),
+      app_following_id: postgrestEqFilter(following),
+    });
+  }
+  const [followerStats, followingStats] = await Promise.all([
+    supabaseFollowStats(c, follower),
+    supabaseFollowStats(c, following),
+  ]);
+  return {
+    status: 200 as const,
+    body: {
+      following: nextFollowing,
+      following_count: followerStats.following_count,
+      followers_count: followingStats.followers_count,
+    },
+  };
+}
+
+async function supabaseBlockUser(c: any, blockerId: string, blockedId: string) {
+  const blocker = publicId(blockerId, 120);
+  const blocked = publicId(blockedId, 120);
+  if (!blocker || !blocked || blocker === blocked) return { status: 400 as const, body: { detail: 'You cannot block yourself.' } };
+  const target = await supabaseUserByAnyId(c, blocked);
+  if (!target) return { status: 404 as const, body: { detail: 'User not found' } };
+  await supabaseAdminUpsert(c, 'app_blocks', [{
+    id: `${blocker}:${blocked}`,
+    blocker_id: blocker,
+    blocked_id: blocked,
+    metadata: { source: 'cloudflare_worker_primary' },
+    legacy_created_at: now(),
+    updated_at: now(),
+  }], 'id');
+  await Promise.all([
+    supabaseAdminDeleteRows(c, 'app_follows', { app_follower_id: postgrestEqFilter(blocker), app_following_id: postgrestEqFilter(blocked) }).catch(() => undefined),
+    supabaseAdminDeleteRows(c, 'app_follows', { app_follower_id: postgrestEqFilter(blocked), app_following_id: postgrestEqFilter(blocker) }).catch(() => undefined),
+  ]);
+  await logSecurityEvent(c, 'user_blocked', blocker, { blocked_id: blocked });
+  return { status: 200 as const, body: { blocked: true } };
+}
+
+async function supabaseUnblockUser(c: any, blockerId: string, blockedId: string) {
+  const blocker = publicId(blockerId, 120);
+  const blocked = publicId(blockedId, 120);
+  if (!blocker || !blocked) return { status: 400 as const, body: { detail: 'Invalid user.' } };
+  await supabaseAdminDeleteRows(c, 'app_blocks', {
+    blocker_id: postgrestEqFilter(blocker),
+    blocked_id: postgrestEqFilter(blocked),
+  });
+  return { status: 200 as const, body: { blocked: false } };
+}
+
+async function supabaseListBlocks(c: any, userId: string) {
+  const blocker = publicId(userId, 120);
+  const rows = await supabaseAdminQueryRows(c, 'app_blocks', {
+    select: 'blocked_id,created_at',
+    filters: { blocker_id: postgrestEqFilter(blocker) },
+    order: 'created_at.desc',
+    limit: 100,
+  });
+  const blockedIds = rows.map((row) => publicId(row?.blocked_id, 120)).filter(Boolean);
+  const users = await supabaseUsersByAnyIds(c, blockedIds);
+  return rows.map((row) => {
+    const blockedId = publicId(row?.blocked_id, 120);
+    const user = users.get(blockedId) || {};
+    return {
+      blocked_id: blockedId,
+      created_at: row.created_at,
+      user: safeUserPayload({ id: blockedId, username: user.username, full_name: user.full_name, profile_image: user.avatar_url }),
+    };
+  });
+}
+
 async function supabaseViewerInteractionPostIds(c: any, userId: string, kind: 'like' | 'save', input: {
   collection?: string;
   limit?: number;
@@ -11561,8 +11769,12 @@ api.get('/users/check-username/:username', async (c) => {
 
 api.get('/users/:userId', authMiddleware, async (c) => {
   const viewerId = getUserId(c);
-  await ensurePremiumSchema(c.env.DB);
   const targetUserId = c.req.param('userId');
+  if (supabasePrimaryConfigured(c)) {
+    const result = await supabasePublicUserPayload(c, viewerId, targetUserId);
+    return c.json(result.body, result.status);
+  }
+  await ensurePremiumSchema(c.env.DB);
   const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(targetUserId).first();
   if (!user) return c.json({ detail: 'User not found' }, 404);
   if (String(user.status || 'active') !== 'active') return c.json({ detail: 'User not found' }, 404);
@@ -11605,6 +11817,10 @@ api.post('/users/:userId/follow', authMiddleware, async (c) => {
   if (limited) return limited;
   const body: any = await c.req.json().catch(() => ({}));
   const requested = optionalBoolean(body.following ?? body.followed ?? body.value);
+  if (supabasePrimaryConfigured(c)) {
+    const result = await supabaseSetFollowState(c, userId, targetId, requested);
+    return c.json(result.body, result.status);
+  }
   const target: any = await c.env.DB.prepare("SELECT id FROM users WHERE id = ? AND COALESCE(status, 'active') = 'active'").bind(targetId).first();
   if (!target) return c.json({ detail: 'User not found' }, 404);
   await ensureAbuseProtectionSchema(c.env.DB);
@@ -11676,6 +11892,10 @@ api.post('/users/:userId/block', authMiddleware, async (c) => {
   if (blockerId === blockedId) return c.json({ detail: 'You cannot block yourself.' }, 400);
   const limited = await enforceRateLimit(c, 'block_user', blockerId, 40, 60);
   if (limited) return limited;
+  if (supabasePrimaryConfigured(c)) {
+    const result = await supabaseBlockUser(c, blockerId, blockedId);
+    return c.json(result.body, result.status);
+  }
   await ensureAbuseProtectionSchema(c.env.DB);
   const target: any = await c.env.DB.prepare('SELECT id FROM users WHERE id = ? LIMIT 1').bind(blockedId).first();
   if (!target) return c.json({ detail: 'User not found' }, 404);
@@ -11692,6 +11912,10 @@ api.delete('/users/:userId/block', authMiddleware, async (c) => {
   const blockedId = c.req.param('userId');
   const limited = await enforceRateLimit(c, 'unblock_user', blockerId, 40, 60);
   if (limited) return limited;
+  if (supabasePrimaryConfigured(c)) {
+    const result = await supabaseUnblockUser(c, blockerId, blockedId);
+    return c.json(result.body, result.status);
+  }
   await ensureAbuseProtectionSchema(c.env.DB);
   await c.env.DB.prepare('DELETE FROM blocks WHERE blocker_id = ? AND blocked_id = ?').bind(blockerId, blockedId).run();
   return c.json({ blocked: false });
@@ -11701,6 +11925,9 @@ api.get('/blocks', authMiddleware, async (c) => {
   const userId = getUserId(c);
   const limited = await enforceRateLimit(c, 'blocks_read', userId, 60, 60);
   if (limited) return limited;
+  if (supabasePrimaryConfigured(c)) {
+    return c.json(await supabaseListBlocks(c, userId));
+  }
   await ensureAbuseProtectionSchema(c.env.DB);
   const rows = await c.env.DB.prepare(
     `SELECT b.blocked_id, b.created_at, u.username, u.full_name, u.profile_image
