@@ -35,6 +35,7 @@ interface Env {
   CLOUDFLARE_IMAGE_TRANSFORMS_ENABLED?: string;
   CLOUDFLARE_IMAGE_TRANSFORM_BASE_URL?: string;
   CLOUDFLARE_STREAM_TOKEN?: string;
+  CLOUDFLARE_STREAM_REQUIRE_SIGNED_URLS?: string;
   RESEND_API_KEY?: string;
   EMAIL_FROM?: string;
   EMAIL_VERIFICATION_BASE_URL?: string;
@@ -2299,6 +2300,11 @@ function cloudflareImageDeliveryUrl(env: Env, imageId: string, variant = 'public
 
 function cloudflareImagesRequireSignedUrls(env: Env): boolean {
   const value = cleanText(env.CLOUDFLARE_IMAGES_REQUIRE_SIGNED_URLS || '', 20).toLowerCase();
+  return value === '1' || value === 'true' || value === 'yes';
+}
+
+function cloudflareStreamRequireSignedUrls(env: Env): boolean {
+  const value = cleanText(env.CLOUDFLARE_STREAM_REQUIRE_SIGNED_URLS || '', 20).toLowerCase();
   return value === '1' || value === 'true' || value === 'yes';
 }
 
@@ -5202,7 +5208,8 @@ async function supabaseAdminDeleteRows(c: any, table: string, filters: Record<st
 async function supabaseDeletePostInteractionsForUsers(c: any, postId: string, userIds: string[], kind: 'like' | 'save') {
   if (!userIds.length) return;
   const authUserIds = await supabaseAuthUserIdsForAppUserIds(c, userIds);
-  const appUserIds = Array.from(new Set([...userIds, ...authUserIds])).filter(Boolean);
+  const appUserIdsFromAuth = await supabaseAppUserIdsForAuthUserIds(c, [...userIds, ...authUserIds]);
+  const appUserIds = Array.from(new Set([...userIds, ...authUserIds, ...appUserIdsFromAuth])).filter(Boolean);
   await supabaseAdminDeleteRows(c, 'app_post_interactions', {
     legacy_post_id: postgrestEqFilter(postId),
     kind: postgrestEqFilter(kind),
@@ -5278,6 +5285,36 @@ async function supabaseAuthUserIdForAppUserId(c: any, userId: string): Promise<s
   return authUserId || '';
 }
 
+async function supabaseAuthUserIdMapForAppUserIds(c: any, userIds: string[]): Promise<Map<string, string>> {
+  const ids = Array.from(new Set(userIds.map((value) => publicId(value, 120)).filter(Boolean)));
+  const map = new Map<string, string>();
+  if (!ids.length) return map;
+  try {
+    const rows = await supabaseAdminSelectRows(c, 'app_users', {
+      id: postgrestInFilter(ids),
+    }, 'id,supabase_user_id', Math.max(1, ids.length));
+    for (const row of rows) {
+      const appUserId = publicId(row?.id, 120);
+      const authUserId = isUuidText(row?.supabase_user_id);
+      if (appUserId && authUserId) map.set(appUserId, authUserId);
+    }
+  } catch {}
+  return map;
+}
+
+async function supabaseAppUserIdsForAuthUserIds(c: any, authUserIds: string[]): Promise<string[]> {
+  const ids = Array.from(new Set(authUserIds.map((value) => isUuidText(value)).filter((value): value is string => !!value)));
+  if (!ids.length) return [];
+  try {
+    const rows = await supabaseAdminSelectRows(c, 'app_users', {
+      supabase_user_id: postgrestInFilter(ids),
+    }, 'id,supabase_user_id', Math.max(1, ids.length * 3));
+    return Array.from(new Set(rows.map((row) => publicId(row?.id, 120)).filter((value): value is string => !!value)));
+  } catch {
+    return [];
+  }
+}
+
 async function legacyD1AuthUserIdsForAppUserIds(c: any, ids: string[]): Promise<string[]> {
   const authIds = new Set<string>();
   if (!ids.length) return [];
@@ -5318,8 +5355,9 @@ async function supabaseAuthUserIdsForAppUserIds(c: any, userIds: string[]): Prom
 
 async function supabaseInteractionIdentityKeys(c: any, userIds: string[]) {
   const authUserIds = await supabaseAuthUserIdsForAppUserIds(c, userIds);
+  const appUserIdsFromAuth = await supabaseAppUserIdsForAuthUserIds(c, [...userIds, ...authUserIds]);
   return {
-    appUserIds: Array.from(new Set([...userIds, ...authUserIds])).filter(Boolean),
+    appUserIds: Array.from(new Set([...userIds, ...authUserIds, ...appUserIdsFromAuth])).filter(Boolean),
     authUserIds,
   };
 }
@@ -5337,9 +5375,13 @@ async function supabasePostInteractionActorCount(c: any, postId: string, kind: '
     if (!code.includes('PGRST204') && !code.toLowerCase().includes('column')) throw error;
     rows = await supabaseAdminSelectRows(c, 'app_post_interactions', filters, 'app_user_id', 10000);
   }
+  const appUserIds = rows.map((row) => publicId(row?.app_user_id, 120)).filter(Boolean);
+  const appToAuth = await supabaseAuthUserIdMapForAppUserIds(c, appUserIds);
   const actors = new Set<string>();
   for (const row of rows) {
-    const actor = cleanText(row?.app_user_id || row?.user_id, 160);
+    const appUserId = publicId(row?.app_user_id, 120);
+    const authUserId = isUuidText(row?.user_id) || appToAuth.get(appUserId) || '';
+    const actor = cleanText(authUserId || appUserId, 160);
     if (actor) actors.add(actor);
   }
   return actors.size;
@@ -5366,12 +5408,16 @@ async function supabasePostInteractionActorCounts(c: any, postIds: string[]) {
     rows = await supabaseAdminSelectRows(c, 'app_post_interactions', filters, 'legacy_post_id,kind,app_user_id', Math.max(1000, cleanPostIds.length * 500));
   }
 
+  const appUserIds = rows.map((row) => publicId(row?.app_user_id, 120)).filter(Boolean);
+  const appToAuth = await supabaseAuthUserIdMapForAppUserIds(c, appUserIds);
   const actorsByPostAndKind = new Map<string, Set<string>>();
   for (const row of rows) {
     const postId = publicId(row?.legacy_post_id, 120);
     const kind = cleanText(row?.kind, 20);
     if (!postId || (kind !== 'like' && kind !== 'save')) continue;
-    const actor = cleanText(row?.app_user_id || row?.user_id, 160);
+    const appUserId = publicId(row?.app_user_id, 120);
+    const authUserId = isUuidText(row?.user_id) || appToAuth.get(appUserId) || '';
+    const actor = cleanText(authUserId || appUserId, 160);
     if (!actor) continue;
     const key = `${postId}:${kind}`;
     const actors = actorsByPostAndKind.get(key) || new Set<string>();
@@ -5632,14 +5678,16 @@ async function relatedInteractionUserIds(db: D1Database, userId: string): Promis
 
   try {
     const user: any = await db.prepare(
-      'SELECT id, email, supabase_user_id, oauth_provider, oauth_subject FROM users WHERE id = ?'
-    ).bind(cleanUserId).first();
+      'SELECT id, email, supabase_user_id, oauth_provider, oauth_subject FROM users WHERE id = ? OR supabase_user_id = ? LIMIT 1'
+    ).bind(cleanUserId, cleanUserId).first();
+    const primaryId = publicId(user?.id, 120);
+    if (primaryId) ids.add(primaryId);
     const email = normalizeOptionalEmail(user?.email);
     const supabaseUserId = cleanText(user?.supabase_user_id, 120);
     const oauthProvider = normalizeAuthProvider(user?.oauth_provider);
     const oauthSubject = cleanText(user?.oauth_subject, 240);
-    const conditions = ['id = ?'];
-    const binds: any[] = [cleanUserId];
+    const conditions = ['id = ?', 'supabase_user_id = ?'];
+    const binds: any[] = [cleanUserId, cleanUserId];
     if (supabaseUserId) {
       conditions.push('supabase_user_id = ?');
       binds.push(supabaseUserId);
@@ -14031,13 +14079,14 @@ api.post('/media/upload-intent', authMiddleware, async (c) => {
     storageProvider = 'images';
   } else {
     const maxDurationSeconds = clampNumber(body.duration_seconds || body.durationSeconds || 60, 1, 60, 60);
+    const requireSignedURLs = cloudflareStreamRequireSignedUrls(c.env);
     const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/direct_upload`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         maxDurationSeconds,
         creator: userId,
-        requireSignedURLs: true,
+        requireSignedURLs,
         meta: { userId, moderation: 'pre_publish', filename: validation.filename },
       }),
     });
@@ -14278,7 +14327,8 @@ api.post('/upload/video-direct', authMiddleware, async (c) => {
   if (!accountId || !token) {
     return c.json({ detail: 'Video upload is not configured.' }, 503);
   }
-  const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/direct_upload`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ maxDurationSeconds: 60, creator: userId, requireSignedURLs: true, meta: { userId, moderation: 'pre_publish' } }) });
+  const requireSignedURLs = cloudflareStreamRequireSignedUrls(c.env);
+  const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/direct_upload`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ maxDurationSeconds: 60, creator: userId, requireSignedURLs, meta: { userId, moderation: 'pre_publish' } }) });
   const data: any = await res.json();
   if (!data.success) return c.json({ detail: 'Failed to get upload URL' }, 500);
   const videoUid = cleanText(data.result.uid, 220);

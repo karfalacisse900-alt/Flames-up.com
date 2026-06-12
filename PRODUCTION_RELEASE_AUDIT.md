@@ -26,6 +26,8 @@ Captro's Supabase security/RLS hardening is applied in production and the app da
 - `backend-cf` TypeScript check passes after the Supabase engagement/RLS changes.
 - `npm.cmd run test:moderation` passes after the Supabase engagement/RLS changes.
 - No Supabase service-role JWT is present in `ios_native/MIRA` or `admin-web`; service-role usage is restricted to Worker/GitHub secret wiring.
+- Follow-up hardening on 2026-06-12 added Supabase-auth/app-user alias cleanup for like/save reads, deletes, inserts, and actor counts so one person cannot inflate engagement through legacy id drift.
+- Follow-up hardening on 2026-06-12 made Cloudflare Stream signed playback explicit with `CLOUDFLARE_STREAM_REQUIRE_SIGNED_URLS=false` by default, preventing new videos from being uploaded into an unplayable signed-only state before a signed playback resolver exists.
 
 ## Blockers
 
@@ -67,6 +69,8 @@ Captro's Supabase security/RLS hardening is applied in production and the app da
    Captro's target architecture is Supabase for app data and Cloudflare for media/security only. The codebase still contains many `c.env.DB`/`D1Database` references, so the D1 binding and D1 migration workflow must stay until each route group is cut over and verified.
 
    Current examples still on D1 include older auth/session helpers, report/block legacy routes, admin legacy routes, media moderation tables, legacy chat/messages, creator/application routes, and production reset D1 cleanup. These must be moved to Supabase before D1 can be removed from `backend-cf/wrangler.toml` and GitHub deploy.
+
+   Current code search still shows over 1,000 D1/`c.env.DB` references in `backend-cf/src/index.ts`; treat D1 as active legacy infrastructure until the route groups are fully cut over.
 
 5. Protected reset workflow is staged on the working branch.
 
