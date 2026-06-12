@@ -5234,16 +5234,6 @@ async function getSupabasePostEngagementState(c: any, postId: string, userId: st
   const d1State = await getPostEngagementState(c.env.DB, postId, userId);
   let liked = await supabaseViewerPostInteractionExists(c, postId, relatedUserIds, 'like');
   let saved = await supabaseViewerPostInteractionExists(c, postId, relatedUserIds, 'save');
-  if (!liked && d1State.liked) {
-    await supabaseDeletePostInteractionsForUsers(c, postId, relatedUserIds, 'like');
-    await supabaseUpsertPostInteraction(c, postId, userId, 'like');
-    liked = true;
-  }
-  if (!saved && d1State.saved) {
-    await supabaseDeletePostInteractionsForUsers(c, postId, relatedUserIds, 'save');
-    await supabaseUpsertPostInteraction(c, postId, userId, 'save', 'saved');
-    saved = true;
-  }
   const [supabaseLikesCount, supabaseSavesCount] = await Promise.all([
     supabaseAdminCountRows(c, 'app_post_interactions', {
       legacy_post_id: postgrestEqFilter(postId),
@@ -5300,7 +5290,7 @@ async function setCanonicalPostLikeState(c: any, postId: string, userId: string,
   ).bind(postId, ...relatedUserIds).first();
   const d1WasLiked = !!d1LikedRow;
   const wasLiked = supabaseEngagementConfigured(c)
-    ? (await supabaseViewerPostInteractionExists(c, postId, relatedUserIds, 'like')) || d1WasLiked
+    ? await supabaseViewerPostInteractionExists(c, postId, relatedUserIds, 'like')
     : d1WasLiked;
   const nextLiked = requested === null ? !wasLiked : requested;
 
@@ -5337,7 +5327,7 @@ async function setCanonicalPostSaveState(c: any, postId: string, userId: string,
   ).bind(postId, ...relatedUserIds).first();
   const d1WasSaved = !!d1SavedRow;
   const wasSaved = supabaseEngagementConfigured(c)
-    ? (await supabaseViewerPostInteractionExists(c, postId, relatedUserIds, 'save')) || d1WasSaved
+    ? await supabaseViewerPostInteractionExists(c, postId, relatedUserIds, 'save')
     : d1WasSaved;
 
   if (supabaseEngagementConfigured(c)) {
@@ -5384,10 +5374,8 @@ async function overlaySupabaseViewerEngagement(c: any, posts: any[], userId: str
     return posts.map((post) => {
       const postId = cleanText(post?.id || post?.legacy_post_id, 120);
       if (!postId) return post;
-      const d1Liked = post?.is_liked === true || post?.is_liked === 1 || post?.is_liked === '1' || post?.liked === true || post?.liked === 1 || post?.liked === '1';
-      const d1Saved = post?.is_saved === true || post?.is_saved === 1 || post?.is_saved === '1' || post?.saved === true || post?.saved === 1 || post?.saved === '1';
-      const viewerLiked = liked.has(postId) || d1Liked;
-      const viewerSaved = saved.has(postId) || d1Saved;
+      const viewerLiked = liked.has(postId);
+      const viewerSaved = saved.has(postId);
       return {
         ...post,
         is_liked: viewerLiked ? 1 : 0,
