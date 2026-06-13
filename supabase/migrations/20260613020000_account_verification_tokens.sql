@@ -24,4 +24,4 @@ alter table public.app_account_verification_tokens enable row level security;
 drop trigger if exists app_account_verification_tokens_set_updated_at on public.app_account_verification_tokens;
 create trigger app_account_verification_tokens_set_updated_at
 before update on public.app_account_verification_tokens
-for each row execute function public.set_updated_at();
+for each row execute function public.set_captro_updated_at();
