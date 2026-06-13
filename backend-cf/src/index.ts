@@ -5397,6 +5397,13 @@ async function supabaseBlockedUserIds(c: any, viewerId: string): Promise<Set<str
   return blocked;
 }
 
+async function supabaseUserIdsAreBlocked(c: any, leftUserId: string, rightUserId: string): Promise<boolean> {
+  const rightId = publicId(rightUserId, 120);
+  if (!rightId) return false;
+  const blocked = await supabaseBlockedUserIds(c, leftUserId);
+  return blocked.has(rightId);
+}
+
 async function supabaseFollowingUserIds(c: any, viewerId: string, targetIds: string[]): Promise<Set<string>> {
   const aliases = await supabaseRelatedInteractionUserIds(c, viewerId);
   const cleanTargets = Array.from(new Set(targetIds.map((value) => publicId(value, 120)).filter(Boolean)));
@@ -14340,12 +14347,149 @@ function statusThoughtPayload(row: any) {
   };
 }
 
+function supabaseUserIsActive(row: any): boolean {
+  const metadata = parseJsonObject(row?.metadata);
+  return cleanText((metadata as any).status || 'active', 40) === 'active';
+}
+
+function supabaseStoryToStatusRow(row: any, user: any, likesCount = 0, likedByMe = false, viewedByMe = false) {
+  const audio = parseJsonObject(row?.audio);
+  const metadata = parseJsonObject(row?.metadata);
+  const createdAt = row?.legacy_created_at || row?.created_at || now();
+  return {
+    id: publicId(row?.id, 120),
+    user_id: publicId(row?.user_id, 120),
+    content: cleanMultilineText(row?.content || '', 2000),
+    image: safeMediaReference(row?.media_url || ''),
+    media_type: cleanText(row?.media_type || (metadata as any).media_type || '', 80),
+    background_color: cleanText(row?.background_color || '#1B4332', 40),
+    text_color: cleanText(row?.text_color || '#FFFFFF', 40),
+    visibility: normalizeVisibility(row?.visibility),
+    status: cleanText(row?.status || 'active', 40),
+    duration_seconds: clampNumber(row?.duration_seconds, 0, 60, 0),
+    expires_at: row?.expires_at || '',
+    created_at: createdAt,
+    updated_at: row?.updated_at || createdAt,
+    viewed_by: JSON.stringify(viewedByMe ? [publicId(row?.viewer_id || '', 120)].filter(Boolean) : []),
+    likes_count: Math.max(0, Number(likesCount || 0)),
+    liked_by_me: !!likedByMe,
+    user_username: publicUsernameFor({ username: user?.username }),
+    user_full_name: cleanText(user?.full_name, 120),
+    user_profile_image: safeMediaReference(user?.avatar_url || user?.profile_image || ''),
+    audio_provider: cleanText((audio as any).provider, 40),
+    audio_track_id: cleanText((audio as any).track_id, 120),
+    audio_title: cleanText((audio as any).title, 180),
+    audio_artist: cleanText((audio as any).artist, 180),
+    audio_artwork_url: safeMediaReference((audio as any).artwork_url || ''),
+    audio_stream_url: safeMediaReference((audio as any).stream_url || ''),
+    audio_start_time: clampNumber((audio as any).start_time, 0, 60 * 60 * 6, 0),
+    audio_duration: clampNumber((audio as any).duration, 0, 60, 0),
+  };
+}
+
+function supabaseStoryIsVisibleToViewer(row: any, user: any, viewerId: string, blockedIds: Set<string>, followingIds: Set<string>, friendsOnly = false): boolean {
+  const storyUserId = publicId(row?.user_id, 120);
+  if (!storyUserId) return false;
+  const viewerOwnStory = storyUserId === viewerId;
+  if (!viewerOwnStory && blockedIds.has(storyUserId)) return false;
+  if (!viewerOwnStory && !supabaseUserIsActive(user)) return false;
+  if (cleanText(row?.status || 'active', 40) !== 'active') return false;
+  const expiresAt = Date.parse(String(row?.expires_at || ''));
+  if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) return false;
+  if (viewerOwnStory) return !friendsOnly;
+  const visibility = normalizeVisibility(row?.visibility);
+  if (visibility === 'private') return false;
+  const followsAuthor = followingIds.has(storyUserId);
+  if (friendsOnly) return followsAuthor;
+  if (visibility === 'followers' || visibility === 'friends') return followsAuthor;
+  return !user?.is_private;
+}
+
+async function supabaseReadVisibleStories(c: any, viewerId: string, friendsOnly = false): Promise<any[]> {
+  const rows = await supabaseAdminQueryRows(c, 'app_stories', {
+    select: '*',
+    filters: {
+      status: postgrestEqFilter('active'),
+      expires_at: `gt.${now()}`,
+    },
+    order: 'created_at.desc',
+    limit: 120,
+  });
+  if (!rows.length) return [];
+
+  const authorIds = Array.from(new Set(rows.map((row) => publicId(row?.user_id, 120)).filter(Boolean)));
+  const [users, blockedIds, followingIds] = await Promise.all([
+    supabaseUsersByAnyIds(c, authorIds),
+    supabaseBlockedUserIds(c, viewerId),
+    supabaseFollowingUserIds(c, viewerId, authorIds),
+  ]);
+  const visible = rows.filter((row) => supabaseStoryIsVisibleToViewer(row, users.get(publicId(row?.user_id, 120)), viewerId, blockedIds, followingIds, friendsOnly));
+  if (!visible.length) return [];
+
+  const storyIds = visible.map((row) => publicId(row?.id, 120)).filter(Boolean);
+  const [likeRows, viewRows] = await Promise.all([
+    supabaseAdminQueryRows(c, 'app_story_likes', {
+      select: 'story_id,user_id',
+      filters: { story_id: postgrestInFilter(storyIds) },
+      limit: Math.max(1000, storyIds.length * 200),
+    }),
+    supabaseAdminQueryRows(c, 'app_story_views', {
+      select: 'story_id,user_id',
+      filters: {
+        story_id: postgrestInFilter(storyIds),
+        user_id: postgrestEqFilter(viewerId),
+      },
+      limit: Math.max(50, storyIds.length),
+    }),
+  ]);
+
+  const counts = new Map<string, number>();
+  const likedByMe = new Set<string>();
+  for (const row of likeRows) {
+    const storyId = publicId(row?.story_id, 120);
+    if (!storyId) continue;
+    counts.set(storyId, (counts.get(storyId) || 0) + 1);
+    if (publicId(row?.user_id, 120) === viewerId) likedByMe.add(storyId);
+  }
+  const viewedByMe = new Set(viewRows.map((row) => publicId(row?.story_id, 120)).filter(Boolean));
+
+  return visible.map((row) => {
+    const storyId = publicId(row?.id, 120);
+    const user = users.get(publicId(row?.user_id, 120));
+    return {
+      ...supabaseStoryToStatusRow(row, user, counts.get(storyId) || 0, likedByMe.has(storyId), viewedByMe.has(storyId)),
+      viewer_id: viewerId,
+      viewed_by: JSON.stringify(viewedByMe.has(storyId) ? [viewerId] : []),
+    };
+  });
+}
+
+async function supabaseGetVisibleStory(c: any, storyId: string, viewerId: string): Promise<any | null> {
+  const rows = await supabaseAdminQueryRows(c, 'app_stories', {
+    select: '*',
+    filters: {
+      id: postgrestEqFilter(storyId),
+      status: postgrestEqFilter('active'),
+      expires_at: `gt.${now()}`,
+    },
+    limit: 1,
+  });
+  const row = rows[0];
+  if (!row) return null;
+  const userId = publicId(row?.user_id, 120);
+  const [users, blockedIds, followingIds] = await Promise.all([
+    supabaseUsersByAnyIds(c, [userId]),
+    supabaseBlockedUserIds(c, viewerId),
+    supabaseFollowingUserIds(c, viewerId, [userId]),
+  ]);
+  const user = users.get(userId);
+  return supabaseStoryIsVisibleToViewer(row, user, viewerId, blockedIds, followingIds) ? row : null;
+}
+
 api.post('/statuses', authMiddleware, async (c) => {
   const phoneGate = await requirePhoneVerified(c, 'share stories');
   if (phoneGate) return phoneGate;
-  await ensureAudioSchema(c.env.DB);
   const userId = getUserId(c); const b = await c.req.json();
-  const user: any = await c.env.DB.prepare('SELECT username, full_name, profile_image, city FROM users WHERE id = ?').bind(userId).first();
   const storyLifetimeMs = 7 * 24 * 60 * 60 * 1000;
   const id = uuid(); const expiresAt = new Date(Date.now() + storyLifetimeMs).toISOString();
   const visibility = normalizeVisibility(b.visibility);
@@ -14366,6 +14510,59 @@ api.post('/statuses', authMiddleware, async (c) => {
   if (audioProvider && !audioTrackId) {
     return c.json({ detail: 'Audio track id is required.' }, 400);
   }
+
+  if (supabasePrimaryConfigured(c)) {
+    const users = await supabaseUsersByAnyIds(c, [userId]);
+    const user = users.get(userId) || {};
+    const createdAt = now();
+    const mediaUrl = String(b.image || '').startsWith('cfstream:')
+      ? String(b.image || '')
+      : isVideoMediaUrl(String(b.image || '')) ? streamPlaybackUrl(String(b.image || '')) : safeMediaReference(String(b.image || ''));
+    const audio = {
+      provider: audioProvider,
+      track_id: audioTrackId,
+      title: audioTitle,
+      artist: audioArtist,
+      artwork_url: audioArtworkUrl,
+      stream_url: audioStreamUrl,
+      start_time: audioStartTime,
+      duration: audioDuration,
+    };
+    await supabaseAdminUpsert(c, 'app_stories', [{
+      id,
+      user_id: userId,
+      content: cleanMultilineText(b.content || '', 2000),
+      media_url: mediaUrl || null,
+      media_type: storyIsVideo ? 'video' : cleanText(storyMediaType || 'image', 40),
+      background_color: cleanText(b.background_color || '#1B4332', 40),
+      text_color: cleanText(b.text_color || '#FFFFFF', 40),
+      visibility,
+      status: 'active',
+      duration_seconds: storyDurationSeconds || null,
+      audio,
+      metadata: {
+        source: 'worker_status_create',
+        original_media_url: cleanText(b.image || '', 2200),
+      },
+      legacy_created_at: createdAt,
+      created_at: createdAt,
+      updated_at: createdAt,
+      expires_at: expiresAt,
+    }], 'id');
+
+    return c.json({
+      id, user_id: userId, content: cleanMultilineText(b.content || '', 2000),
+      image: mediaUrl,
+      background_color: b.background_color, text_color: b.text_color,
+      visibility, user_username: publicUsernameFor(user), user_full_name: user?.full_name, user_profile_image: user?.avatar_url || user?.profile_image,
+      audio_provider: audioProvider, audio_track_id: audioTrackId, audio_title: audioTitle, audio_artist: audioArtist,
+      audio_artwork_url: audioArtworkUrl, audio_stream_url: audioStreamUrl, audio_start_time: audioStartTime, audio_duration: audioDuration,
+      viewed_by: [], likes_count: 0, liked_by_me: false, created_at: createdAt, expires_at: expiresAt,
+    });
+  }
+
+  await ensureAudioSchema(c.env.DB);
+  const user: any = await c.env.DB.prepare('SELECT username, full_name, profile_image, city FROM users WHERE id = ?').bind(userId).first();
   if (audioProvider) {
     const hidden = await c.env.DB.prepare("SELECT track_id FROM hidden_sounds WHERE provider = 'audius' AND track_id = ?")
       .bind(audioTrackId)
@@ -14397,8 +14594,12 @@ api.post('/statuses', authMiddleware, async (c) => {
 });
 
 api.get('/statuses', authMiddleware, async (c) => {
-  await ensureStatusLikeSchema(c.env.DB);
   const userId = getUserId(c);
+  if (supabasePrimaryConfigured(c)) {
+    const rows = await supabaseReadVisibleStories(c, userId);
+    return c.json(groupStatusRows(rows, userId));
+  }
+  await ensureStatusLikeSchema(c.env.DB);
   const statusesSql = [
     `SELECT s.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
        (SELECT COUNT(*) FROM status_likes sl_count WHERE sl_count.status_id = s.id) AS likes_count,
@@ -14412,8 +14613,12 @@ api.get('/statuses', authMiddleware, async (c) => {
 });
 
 api.get('/statuses/friends', authMiddleware, async (c) => {
-  await ensureStatusLikeSchema(c.env.DB);
   const userId = getUserId(c);
+  if (supabasePrimaryConfigured(c)) {
+    const rows = await supabaseReadVisibleStories(c, userId, true);
+    return c.json(groupStatusRows(rows, userId));
+  }
+  await ensureStatusLikeSchema(c.env.DB);
   const r = await c.env.DB.prepare(
     `SELECT s.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
        (SELECT COUNT(*) FROM status_likes sl_count WHERE sl_count.status_id = s.id) AS likes_count,
@@ -14429,8 +14634,6 @@ api.get('/statuses/friends', authMiddleware, async (c) => {
 });
 
 api.post('/statuses/:statusId/like', authMiddleware, async (c) => {
-  await ensureStatusLikeSchema(c.env.DB);
-  await ensureLikeUniquenessSchema(c.env.DB);
   const userId = getUserId(c);
   const limited = await enforceRateLimit(c, 'story_like', userId, 300, 60);
   if (limited) return limited;
@@ -14438,6 +14641,52 @@ api.post('/statuses/:statusId/like', authMiddleware, async (c) => {
   const body: any = await c.req.json().catch(() => ({}));
   const requested = optionalBoolean(body.liked ?? body.like ?? body.value);
 
+  if (supabasePrimaryConfigured(c)) {
+    const story = await supabaseGetVisibleStory(c, statusId, userId);
+    if (!story) return c.json({ detail: 'Story not found' }, 404);
+    if (publicId(story?.user_id, 120) === userId) {
+      return c.json({ detail: 'You cannot like your own story.' }, 400);
+    }
+    const existingRows = await supabaseAdminQueryRows(c, 'app_story_likes', {
+      select: 'story_id',
+      filters: {
+        story_id: postgrestEqFilter(statusId),
+        user_id: postgrestEqFilter(userId),
+      },
+      limit: 1,
+    });
+    const nextLiked = requested ?? !existingRows[0];
+    if (nextLiked) {
+      await supabaseAdminUpsert(c, 'app_story_likes', [{
+        story_id: statusId,
+        user_id: userId,
+        created_at: now(),
+      }], 'story_id,user_id');
+    } else {
+      await supabaseAdminDeleteRows(c, 'app_story_likes', {
+        story_id: postgrestEqFilter(statusId),
+        user_id: postgrestEqFilter(userId),
+      });
+    }
+    const [count, likedRows] = await Promise.all([
+      supabaseAdminCountRows(c, 'app_story_likes', { story_id: postgrestEqFilter(statusId) }),
+      supabaseAdminQueryRows(c, 'app_story_likes', {
+        select: 'story_id',
+        filters: {
+          story_id: postgrestEqFilter(statusId),
+          user_id: postgrestEqFilter(userId),
+        },
+        limit: 1,
+      }),
+    ]);
+    return c.json({
+      liked: !!likedRows[0],
+      likes_count: Math.max(0, Number(count || 0)),
+    });
+  }
+
+  await ensureStatusLikeSchema(c.env.DB);
+  await ensureLikeUniquenessSchema(c.env.DB);
   const story: any = await c.env.DB.prepare(
     [
       'SELECT s.id, s.user_id FROM statuses s JOIN users u ON s.user_id = u.id',
@@ -14477,6 +14726,17 @@ api.post('/statuses/:statusId/like', authMiddleware, async (c) => {
 
 api.post('/statuses/:statusId/view', authMiddleware, async (c) => {
   const userId = getUserId(c); const statusId = c.req.param('statusId');
+  if (supabasePrimaryConfigured(c)) {
+    const cleanStatusId = publicId(statusId, 120);
+    const story = await supabaseGetVisibleStory(c, cleanStatusId, userId);
+    if (!story) return c.json({ detail: 'Not found' }, 404);
+    await supabaseAdminUpsert(c, 'app_story_views', [{
+      story_id: cleanStatusId,
+      user_id: userId,
+      created_at: now(),
+    }], 'story_id,user_id');
+    return c.json({ viewed: true });
+  }
   const statusViewSql = [
     'SELECT s.viewed_by FROM statuses s JOIN users u ON s.user_id = u.id',
     `WHERE s.id = ? AND ${visibleStatusWhere('u', 's')}`,
@@ -14489,10 +14749,45 @@ api.post('/statuses/:statusId/view', authMiddleware, async (c) => {
 });
 
 api.get('/statuses/:statusId/thoughts', authMiddleware, async (c) => {
-  await ensureStatusThoughtSchema(c.env.DB);
   const userId = getUserId(c);
   const statusId = publicId(c.req.param('statusId'), 120);
   const limit = clampNumber(c.req.query('limit') || '24', 1, 40, 24);
+  if (supabasePrimaryConfigured(c)) {
+    const story = await supabaseGetVisibleStory(c, statusId, userId);
+    if (!story) return c.json({ detail: 'Story not found' }, 404);
+    const rows = await supabaseAdminQueryRows(c, 'app_story_thoughts', {
+      select: '*',
+      filters: {
+        story_id: postgrestEqFilter(statusId),
+        status: postgrestEqFilter('active'),
+      },
+      order: 'created_at.desc',
+      limit,
+    });
+    const senderIds = Array.from(new Set(rows.map((row) => publicId(row?.user_id, 120)).filter(Boolean)));
+    const [users, blockedIds] = await Promise.all([
+      supabaseUsersByAnyIds(c, senderIds),
+      supabaseBlockedUserIds(c, userId),
+    ]);
+    const payload = rows
+      .filter((row) => {
+        const thoughtUserId = publicId(row?.user_id, 120);
+        return thoughtUserId && !blockedIds.has(thoughtUserId) && supabaseUserIsActive(users.get(thoughtUserId));
+      })
+      .reverse()
+      .map((row) => {
+        const user = users.get(publicId(row?.user_id, 120)) || {};
+        return statusThoughtPayload({
+          ...row,
+          status_id: row.story_id,
+          user_username: user.username,
+          user_full_name: user.full_name,
+          user_profile_image: user.avatar_url,
+        });
+      });
+    return c.json(payload);
+  }
+  await ensureStatusThoughtSchema(c.env.DB);
   const story: any = await c.env.DB.prepare(
     [
       'SELECT s.id FROM statuses s JOIN users u ON s.user_id = u.id',
@@ -14520,7 +14815,6 @@ api.get('/statuses/:statusId/thoughts', authMiddleware, async (c) => {
 });
 
 api.post('/statuses/:statusId/thoughts', authMiddleware, async (c) => {
-  await ensureStatusThoughtSchema(c.env.DB);
   const userId = getUserId(c);
   const limited = await enforceRateLimit(c, 'story_thought_create', userId, 40, 60);
   if (limited) return limited;
@@ -14529,6 +14823,41 @@ api.post('/statuses/:statusId/thoughts', authMiddleware, async (c) => {
   const text = cleanText(body.body || body.text || body.thought || '', 180);
   if (!text) return c.json({ detail: 'Thought is required.' }, 400);
 
+  if (supabasePrimaryConfigured(c)) {
+    const story = await supabaseGetVisibleStory(c, statusId, userId);
+    if (!story) return c.json({ detail: 'Story not found' }, 404);
+    const storyOwnerId = publicId(story?.user_id, 120);
+    if (storyOwnerId && (await supabaseUserIdsAreBlocked(c, userId, storyOwnerId))) {
+      return c.json({ detail: 'You cannot share a thought on this story.' }, 403);
+    }
+    const id = uuid();
+    const createdAt = now();
+    await supabaseAdminUpsert(c, 'app_story_thoughts', [{
+      id,
+      story_id: statusId,
+      user_id: userId,
+      body: text,
+      status: 'active',
+      created_at: createdAt,
+      updated_at: createdAt,
+    }], 'id');
+    await logSecurityEvent(c, 'story_thought_created', userId, { status_id: statusId });
+
+    const users = await supabaseUsersByAnyIds(c, [userId]);
+    const user = users.get(userId) || {};
+    return c.json(statusThoughtPayload({
+      id,
+      status_id: statusId,
+      user_id: userId,
+      body: text,
+      created_at: createdAt,
+      user_username: user.username,
+      user_full_name: user.full_name,
+      user_profile_image: user.avatar_url,
+    }));
+  }
+
+  await ensureStatusThoughtSchema(c.env.DB);
   const story: any = await c.env.DB.prepare(
     [
       'SELECT s.id, s.user_id FROM statuses s JOIN users u ON s.user_id = u.id',
@@ -14560,6 +14889,23 @@ api.post('/statuses/:statusId/thoughts', authMiddleware, async (c) => {
 
 api.delete('/statuses/:statusId', authMiddleware, async (c) => {
   const userId = getUserId(c); const statusId = c.req.param('statusId');
+  if (supabasePrimaryConfigured(c)) {
+    const cleanStatusId = publicId(statusId, 120);
+    const rows = await supabaseAdminQueryRows(c, 'app_stories', {
+      select: 'id,user_id',
+      filters: { id: postgrestEqFilter(cleanStatusId) },
+      limit: 1,
+    });
+    const story = rows[0];
+    if (!story) return c.json({ detail: 'Story not found' }, 404);
+    if (publicId(story?.user_id, 120) !== userId) return c.json({ detail: 'Not your story' }, 403);
+    await supabaseAdminPatchRows(c, 'app_stories', { id: postgrestEqFilter(cleanStatusId) }, {
+      status: 'removed',
+      updated_at: now(),
+    });
+    await logSecurityEvent(c, 'story_deleted', userId, { status_id: cleanStatusId });
+    return c.json({ deleted: true });
+  }
   const story: any = await c.env.DB.prepare('SELECT user_id FROM statuses WHERE id = ?').bind(statusId).first();
   if (!story) return c.json({ detail: 'Story not found' }, 404);
   if (story.user_id !== userId) return c.json({ detail: 'Not your story' }, 403);
