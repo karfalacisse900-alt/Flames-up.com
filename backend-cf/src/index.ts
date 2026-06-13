@@ -10094,7 +10094,214 @@ async function insertModerationEvent(db: D1Database, mediaId: string, eventType:
   ).run();
 }
 
+function supabaseCtxFromEnv(env: Env): any {
+  return { env };
+}
+
+function supabasePrimaryConfiguredForEnv(env: Env): boolean {
+  return databasePrimary({ env }) === 'supabase_postgres'
+    && !!String(env.SUPABASE_URL || '').trim()
+    && !!String(env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+}
+
+function supabaseMediaAssetToLegacy(row: any): any {
+  return {
+    ...row,
+    post_id: row?.post_id || row?.legacy_post_id || null,
+    created_at: row?.created_at || row?.legacy_created_at || '',
+    updated_at: row?.updated_at || '',
+  };
+}
+
+async function supabaseReadMediaAsset(c: any, mediaId: string, userId = ''): Promise<any | null> {
+  const filters: Record<string, string> = { id: postgrestEqFilter(mediaId) };
+  if (userId) filters.user_id = postgrestEqFilter(userId);
+  const rows = await supabaseAdminQueryRows(c, 'app_media_assets', {
+    select: '*',
+    filters,
+    limit: 1,
+  });
+  return rows[0] ? supabaseMediaAssetToLegacy(rows[0]) : null;
+}
+
+async function supabaseInsertMediaAsset(c: any, input: {
+  id: string;
+  userId: string;
+  mediaType: CaptroMediaType;
+  storageProvider: 'images' | 'stream';
+  storageKey: string;
+  privateUrl: string;
+  mimeType: string;
+  fileSize?: number;
+  sha256Hash?: string;
+  width?: number | null;
+  height?: number | null;
+  durationSeconds?: number | null;
+  metadata?: Record<string, unknown>;
+}) {
+  const ts = now();
+  await supabaseAdminUpsert(c, 'app_media_assets', [{
+    id: input.id,
+    user_id: input.userId,
+    legacy_post_id: null,
+    media_type: input.mediaType,
+    storage_provider: input.storageProvider,
+    storage_key: input.storageKey,
+    public_url: null,
+    private_url: input.privateUrl,
+    mime_type: input.mimeType,
+    file_size: Math.max(0, Math.round(Number(input.fileSize || 0))),
+    sha256_hash: cleanText(input.sha256Hash || '', 80).toLowerCase(),
+    width: input.width ?? null,
+    height: input.height ?? null,
+    duration_seconds: input.durationSeconds ?? null,
+    upload_status: 'uploading',
+    moderation_status: 'uploading',
+    rejection_code: null,
+    rejection_message: null,
+    metadata: input.metadata || {},
+    created_at: ts,
+    updated_at: ts,
+  }], 'id');
+}
+
+async function supabaseInsertModerationEvent(cOrEnv: any, mediaId: string, eventType: string, input: { actorUserId?: string; actorRole?: string; decision?: string; reason?: string; note?: string; beforeState?: any; afterState?: any; requestId?: string } = {}) {
+  const c = cOrEnv?.env ? cOrEnv : supabaseCtxFromEnv(cOrEnv as Env);
+  await supabaseAdminUpsert(c, 'app_moderation_events', [{
+    id: uuid(),
+    media_id: mediaId,
+    actor_user_id: publicId(input.actorUserId || '', 120) || null,
+    actor_role: cleanText(input.actorRole || '', 40) || null,
+    event_type: cleanText(eventType, 80),
+    decision: cleanText(input.decision || '', 40) || null,
+    reason: cleanText(input.reason || '', 180) || null,
+    note: cleanMultilineText(input.note || '', 1000) || null,
+    before_state: parseJsonObject(safeJsonState(input.beforeState)),
+    after_state: parseJsonObject(safeJsonState(input.afterState)),
+    request_id: cleanText(input.requestId || '', 120) || null,
+    created_at: now(),
+  }], 'id');
+}
+
+async function processSupabaseMediaModerationJob(env: Env, message: MediaModerationJobMessage, requestId = '') {
+  const c = supabaseCtxFromEnv(env);
+  const mediaId = publicId(message.mediaId, 160);
+  const jobId = publicId(message.jobId, 160);
+  const startedAt = now();
+  const jobRows = await supabaseAdminQueryRows(c, 'app_moderation_jobs', {
+    select: 'id,attempts',
+    filters: { id: postgrestEqFilter(jobId) },
+    limit: 1,
+  });
+  await supabaseAdminPatchRows(c, 'app_moderation_jobs', { id: postgrestEqFilter(jobId) }, {
+    status: 'running',
+    attempts: Math.max(0, Number(jobRows[0]?.attempts || 0)) + 1,
+    started_at: startedAt,
+    updated_at: startedAt,
+  });
+
+  const asset = await supabaseReadMediaAsset(c, mediaId);
+  if (!asset) throw new Error('MEDIA_ASSET_NOT_FOUND');
+  const existingStatus = normalizeMediaModerationStatus(asset.moderation_status);
+  if (['approved', 'review_required', 'rejected'].includes(existingStatus) && cleanText(asset.upload_status, 40) === 'uploaded') {
+    const ts = now();
+    await supabaseAdminPatchRows(c, 'app_moderation_jobs', { id: postgrestEqFilter(jobId) }, {
+      status: 'completed',
+      completed_at: ts,
+      updated_at: ts,
+    });
+    return;
+  }
+
+  try {
+    const malwareStatus = await scanMalwareInterface(env, asset);
+    const caption = cleanMultilineText(message.caption || '', 1000);
+    const sampleScores: MediaModerationScores[] = [];
+    const rawSamples: any[] = [];
+    let modelName = 'heuristic';
+    for (const sampleUrl of moderationSampleUrls(env, asset)) {
+      const result = await runWorkersAiImageModeration(env, sampleUrl, caption);
+      modelName = result.modelName;
+      sampleScores.push(result.scores);
+      rawSamples.push({ sample_url: sampleUrl.replace(/\?.*/, ''), result: scrubLogMetadata(result.raw) });
+    }
+    if (!sampleScores.length) {
+      sampleScores.push(defaultModerationScores({ ...textSafetyHeuristics(caption), confidence: 0.55 }));
+      rawSamples.push({ fallback: 'no_sample_available' });
+    }
+    const scores = maxModerationScores(sampleScores);
+    scores.malware_status = malwareStatus === 'clean' || malwareStatus === 'malicious' ? malwareStatus : scores.malware_status;
+    const decision = decideMediaModeration(scores, normalizeMediaAssetType(asset.media_type) || 'image', env.AI_GENERATED_MEDIA_POLICY || '');
+    const publicUrl = decision.decision === 'approved' ? mediaAssetPublicUrl(env, asset) : '';
+    const ts = now();
+    await supabaseAdminUpsert(c, 'app_moderation_results', [{
+      id: uuid(),
+      media_id: mediaId,
+      model_name: modelName,
+      adult_explicit_score: scores.adult_explicit_score,
+      nudity_score: scores.nudity_score,
+      sexual_context_score: scores.sexual_context_score,
+      sexual_solicitation_score: scores.sexual_solicitation_score,
+      minor_safety_risk_score: scores.minor_safety_risk_score,
+      violence_score: scores.violence_score,
+      gore_score: scores.gore_score,
+      weapon_score: scores.weapon_score,
+      hate_symbol_score: scores.hate_symbol_score,
+      ai_generated_likelihood: scores.ai_generated_likelihood,
+      spam_scam_score: scores.spam_scam_score,
+      malware_status: scores.malware_status,
+      link_risk_score: scores.link_risk_score,
+      confidence: scores.confidence,
+      decision: decision.decision,
+      reasons: decision.reasons,
+      raw_result: { samples: rawSamples },
+      created_at: ts,
+    }], 'id');
+    await supabaseAdminPatchRows(c, 'app_media_assets', { id: postgrestEqFilter(mediaId) }, {
+      moderation_status: decision.decision,
+      ...(publicUrl ? { public_url: publicUrl } : {}),
+      rejection_code: decision.rejectionCode || null,
+      rejection_message: decision.userMessage || null,
+      updated_at: ts,
+    });
+    await supabaseAdminPatchRows(c, 'app_moderation_jobs', { id: postgrestEqFilter(jobId) }, {
+      status: 'completed',
+      completed_at: ts,
+      updated_at: ts,
+    });
+    await supabaseInsertModerationEvent(c, mediaId, `moderation_${decision.decision}`, {
+      decision: decision.decision,
+      reason: decision.reasons.join(','),
+      afterState: { moderation_status: decision.decision, scores },
+      requestId,
+    });
+  } catch (error: any) {
+    const ts = now();
+    const code = getErrorCode(error).slice(0, 180);
+    await Promise.allSettled([
+      supabaseAdminPatchRows(c, 'app_moderation_jobs', { id: postgrestEqFilter(jobId) }, {
+        status: 'failed',
+        last_error: code,
+        completed_at: ts,
+        updated_at: ts,
+      }),
+      supabaseAdminPatchRows(c, 'app_media_assets', { id: postgrestEqFilter(mediaId) }, {
+        moderation_status: 'failed',
+        rejection_code: 'moderation_failed',
+        rejection_message: 'This upload could not be checked. Please try again.',
+        updated_at: ts,
+      }),
+    ]);
+    await supabaseInsertModerationEvent(c, mediaId, 'moderation_failed', { reason: code, requestId });
+    throw error;
+  }
+}
+
 async function processMediaModerationJob(env: Env, message: MediaModerationJobMessage, requestId = '') {
+  if (supabasePrimaryConfiguredForEnv(env)) {
+    await processSupabaseMediaModerationJob(env, message, requestId);
+    return;
+  }
   await ensureMediaModerationSchema(env.DB);
   const mediaId = publicId(message.mediaId, 160);
   const jobId = publicId(message.jobId, 160);
@@ -10181,6 +10388,32 @@ async function processMediaModerationJob(env: Env, message: MediaModerationJobMe
 }
 
 async function createMediaModerationJob(c: any, mediaId: string, userId: string, caption = '', options: { enqueue?: boolean } = {}): Promise<string> {
+  if (supabasePrimaryConfigured(c)) {
+    const jobId = uuid();
+    const ts = now();
+    await supabaseAdminUpsert(c, 'app_moderation_jobs', [{
+      id: jobId,
+      media_id: mediaId,
+      user_id: userId,
+      job_type: 'media_pre_publish',
+      status: 'pending',
+      attempts: 0,
+      queued_at: ts,
+      created_at: ts,
+      updated_at: ts,
+      metadata: { reason: 'upload_complete' },
+    }], 'id');
+    const body: MediaModerationJobMessage = { jobId, mediaId, userId, reason: 'upload_complete', caption: cleanMultilineText(caption, 1000) };
+    const shouldEnqueue = options.enqueue !== false;
+    if (shouldEnqueue && c.env.MEDIA_MODERATION_QUEUE) {
+      await c.env.MEDIA_MODERATION_QUEUE.send(body);
+    } else if (shouldEnqueue) {
+      runBackgroundTask(c, 'supabase_media_moderation_inline_failed', async () => {
+        await processMediaModerationJob(c.env, body, c.get?.('requestId') || '');
+      });
+    }
+    return jobId;
+  }
   await ensureMediaModerationSchema(c.env.DB);
   const jobId = uuid();
   const ts = now();
@@ -10212,7 +10445,6 @@ function parseMediaAssetIds(body: any): string[] {
 }
 
 async function approvedMediaAssetsForPost(c: any, userId: string, requestedMediaIds: string[], imageUrls: string[]) {
-  await ensureMediaModerationSchema(c.env.DB);
   if (!requestedMediaIds.length && imageUrls.length) {
     return {
       ok: false,
@@ -10224,11 +10456,24 @@ async function approvedMediaAssetsForPost(c: any, userId: string, requestedMedia
   }
   if (!requestedMediaIds.length) return { ok: true, status: 200, detail: '', code: '', assets: [] as any[] };
 
-  const placeholders = requestedMediaIds.map(() => '?').join(', ');
-  const rows = await c.env.DB.prepare(`SELECT * FROM media_assets WHERE user_id = ? AND id IN (${placeholders})`)
-    .bind(userId, ...requestedMediaIds)
-    .all();
-  const assets = rows.results as any[];
+  let assets: any[] = [];
+  if (supabasePrimaryConfigured(c)) {
+    assets = (await supabaseAdminQueryRows(c, 'app_media_assets', {
+      select: '*',
+      filters: {
+        user_id: postgrestEqFilter(userId),
+        id: postgrestInFilter(requestedMediaIds),
+      },
+      limit: requestedMediaIds.length,
+    })).map(supabaseMediaAssetToLegacy);
+  } else {
+    await ensureMediaModerationSchema(c.env.DB);
+    const placeholders = requestedMediaIds.map(() => '?').join(', ');
+    const rows = await c.env.DB.prepare(`SELECT * FROM media_assets WHERE user_id = ? AND id IN (${placeholders})`)
+      .bind(userId, ...requestedMediaIds)
+      .all();
+    assets = rows.results as any[];
+  }
   if (assets.length !== requestedMediaIds.length) {
     return { ok: false, status: 404, detail: 'One upload was not found. Please upload again.', code: 'MEDIA_NOT_FOUND', assets };
   }
@@ -13655,10 +13900,20 @@ api.post('/posts', authMiddleware, async (c) => {
   }
   if (!inserted) return c.json({ detail: 'Could not create post. Please retry.' }, 409);
   if (mediaAssetIds.length) {
-    const placeholders = mediaAssetIds.map(() => '?').join(', ');
-    await c.env.DB.prepare(`UPDATE media_assets SET post_id = ?, updated_at = ? WHERE user_id = ? AND id IN (${placeholders})`)
-      .bind(id, now(), userId, ...mediaAssetIds)
-      .run();
+    if (supabasePrimaryConfigured(c)) {
+      await supabaseAdminPatchRows(c, 'app_media_assets', {
+        user_id: postgrestEqFilter(userId),
+        id: postgrestInFilter(mediaAssetIds),
+      }, {
+        legacy_post_id: id,
+        updated_at: now(),
+      });
+    } else {
+      const placeholders = mediaAssetIds.map(() => '?').join(', ');
+      await c.env.DB.prepare(`UPDATE media_assets SET post_id = ?, updated_at = ? WHERE user_id = ? AND id IN (${placeholders})`)
+        .bind(id, now(), userId, ...mediaAssetIds)
+        .run();
+    }
   }
   if (placeName || placeFormattedAddress || placeProviderId) {
     await c.env.DB.prepare(
@@ -16983,7 +17238,7 @@ api.get('/discover/suggested-users', authMiddleware, async (c) => {
 api.post('/media/upload-intent', authMiddleware, async (c) => {
   const bodyTooLarge = rejectLargeRequest(c, 24_000);
   if (bodyTooLarge) return bodyTooLarge;
-  await ensureMediaModerationSchema(c.env.DB);
+  if (!supabasePrimaryConfigured(c)) await ensureMediaModerationSchema(c.env.DB);
   const userId = getUserId(c);
   const limited = await enforceRateLimit(c, 'media_upload_intent', userId, 80, 60);
   if (limited) return limited;
@@ -17005,10 +17260,20 @@ api.post('/media/upload-intent', authMiddleware, async (c) => {
     return c.json({ detail: 'Invalid upload checksum.', code: 'invalid_checksum' }, 400);
   }
   if (sha256Hash) {
-    const duplicate: any = await c.env.DB.prepare(
-      "SELECT COUNT(*) AS count FROM media_assets WHERE user_id = ? AND sha256_hash = ? AND created_at > datetime('now', '-24 hours')"
-    ).bind(userId, sha256Hash).first();
-    if (Number(duplicate?.count || 0) >= 12) {
+    const duplicateCount = supabasePrimaryConfigured(c)
+      ? (await supabaseAdminQueryRows(c, 'app_media_assets', {
+        select: 'id',
+        filters: {
+          user_id: postgrestEqFilter(userId),
+          sha256_hash: postgrestEqFilter(sha256Hash),
+          created_at: `gte.${new Date(Date.now() - 86400_000).toISOString()}`,
+        },
+        limit: 12,
+      })).length
+      : Number((await c.env.DB.prepare(
+        "SELECT COUNT(*) AS count FROM media_assets WHERE user_id = ? AND sha256_hash = ? AND created_at > datetime('now', '-24 hours')"
+      ).bind(userId, sha256Hash).first() as any)?.count || 0);
+    if (duplicateCount >= 12) {
       return c.json({ detail: 'Upload limit reached for this file. Try again later.', code: 'duplicate_upload_limit' }, 429);
     }
   }
@@ -17066,34 +17331,59 @@ api.post('/media/upload-intent', authMiddleware, async (c) => {
   if (!uploadUrl || !storageKey) return c.json({ detail: 'Could not prepare upload.', code: 'upload_intent_failed' }, 502);
   const mediaId = uuid();
   const ts = now();
-  await c.env.DB.prepare(
-    `INSERT INTO media_assets (
-       id, user_id, media_type, storage_provider, storage_key, public_url, private_url,
-       mime_type, file_size, sha256_hash, width, height, duration_seconds,
-       upload_status, moderation_status, created_at, updated_at
-     ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, 'uploading', 'uploading', ?, ?)`
-  ).bind(
-    mediaId,
+  const assetInput = {
+    id: mediaId,
     userId,
-    validation.mediaType,
+    mediaType: validation.mediaType,
     storageProvider,
     storageKey,
-    `${storageProvider}:${storageKey}`,
-    validation.mimeType,
-    validation.fileSize,
+    privateUrl: `${storageProvider}:${storageKey}`,
+    mimeType: validation.mimeType,
+    fileSize: validation.fileSize,
     sha256Hash,
-    body.width == null ? null : clampNumber(body.width, 1, 10000, 0),
-    body.height == null ? null : clampNumber(body.height, 1, 10000, 0),
-    body.duration_seconds == null && body.durationSeconds == null ? null : clampFloat(body.duration_seconds ?? body.durationSeconds, 0, 3600, 0),
-    ts,
-    ts,
-  ).run();
-  await insertModerationEvent(c.env.DB, mediaId, 'upload_intent_created', {
-    actorUserId: userId,
-    reason: validation.mediaType,
-    afterState: { storage_provider: storageProvider, mime_type: validation.mimeType, file_size: validation.fileSize },
-    requestId: c.get?.('requestId') || '',
-  });
+    width: body.width == null ? null : clampNumber(body.width, 1, 10000, 0),
+    height: body.height == null ? null : clampNumber(body.height, 1, 10000, 0),
+    durationSeconds: body.duration_seconds == null && body.durationSeconds == null ? null : clampFloat(body.duration_seconds ?? body.durationSeconds, 0, 3600, 0),
+    metadata: { source: 'media_upload_intent' },
+  };
+  if (supabasePrimaryConfigured(c)) {
+    await supabaseInsertMediaAsset(c, assetInput);
+    await supabaseInsertModerationEvent(c, mediaId, 'upload_intent_created', {
+      actorUserId: userId,
+      reason: validation.mediaType,
+      afterState: { storage_provider: storageProvider, mime_type: validation.mimeType, file_size: validation.fileSize },
+      requestId: c.get?.('requestId') || '',
+    });
+  } else {
+    await c.env.DB.prepare(
+      `INSERT INTO media_assets (
+         id, user_id, media_type, storage_provider, storage_key, public_url, private_url,
+         mime_type, file_size, sha256_hash, width, height, duration_seconds,
+         upload_status, moderation_status, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, 'uploading', 'uploading', ?, ?)`
+    ).bind(
+      mediaId,
+      userId,
+      validation.mediaType,
+      storageProvider,
+      storageKey,
+      `${storageProvider}:${storageKey}`,
+      validation.mimeType,
+      validation.fileSize,
+      sha256Hash,
+      assetInput.width,
+      assetInput.height,
+      assetInput.durationSeconds,
+      ts,
+      ts,
+    ).run();
+    await insertModerationEvent(c.env.DB, mediaId, 'upload_intent_created', {
+      actorUserId: userId,
+      reason: validation.mediaType,
+      afterState: { storage_provider: storageProvider, mime_type: validation.mimeType, file_size: validation.fileSize },
+      requestId: c.get?.('requestId') || '',
+    });
+  }
   return c.json({
     media_id: mediaId,
     upload_url: uploadUrl,
@@ -17108,7 +17398,7 @@ api.post('/media/upload-intent', authMiddleware, async (c) => {
 api.post('/media/complete', authMiddleware, async (c) => {
   const bodyTooLarge = rejectLargeRequest(c, 32_000);
   if (bodyTooLarge) return bodyTooLarge;
-  await ensureMediaModerationSchema(c.env.DB);
+  if (!supabasePrimaryConfigured(c)) await ensureMediaModerationSchema(c.env.DB);
   const userId = getUserId(c);
   const limited = await enforceRateLimit(c, 'media_upload_complete', userId, 120, 60);
   if (limited) return limited;
@@ -17116,7 +17406,9 @@ api.post('/media/complete', authMiddleware, async (c) => {
   const mediaId = publicId(body.media_id || body.mediaId || body.id, 160);
   if (!mediaId) return c.json({ detail: 'Media id is required.', code: 'media_id_required' }, 400);
 
-  const asset: any = await c.env.DB.prepare('SELECT * FROM media_assets WHERE id = ? AND user_id = ? LIMIT 1').bind(mediaId, userId).first();
+  const asset: any = supabasePrimaryConfigured(c)
+    ? await supabaseReadMediaAsset(c, mediaId, userId)
+    : await c.env.DB.prepare('SELECT * FROM media_assets WHERE id = ? AND user_id = ? LIMIT 1').bind(mediaId, userId).first();
   if (!asset) return c.json({ detail: 'Upload not found.', code: 'media_not_found' }, 404);
   const currentStatus = normalizeMediaModerationStatus(asset.moderation_status);
   if (currentStatus === 'approved' || currentStatus === 'review_required' || currentStatus === 'rejected') {
@@ -17136,32 +17428,52 @@ api.post('/media/complete', authMiddleware, async (c) => {
   const sha256Hash = cleanText(body.sha256_hash || body.sha256Hash || asset.sha256_hash, 80).toLowerCase();
   if (sha256Hash && !/^[a-f0-9]{64}$/.test(sha256Hash)) return c.json({ detail: 'Invalid upload checksum.', code: 'invalid_checksum' }, 400);
   const ts = now();
-  await c.env.DB.prepare(
-    `UPDATE media_assets
-     SET upload_status = 'uploaded', moderation_status = 'pending_moderation',
-         sha256_hash = COALESCE(NULLIF(?, ''), sha256_hash),
-         file_size = COALESCE(NULLIF(?, 0), file_size),
-         width = COALESCE(?, width),
-         height = COALESCE(?, height),
-         duration_seconds = COALESCE(?, duration_seconds),
-         updated_at = ?
-     WHERE id = ? AND user_id = ?`
-  ).bind(
-    sha256Hash,
-    Math.max(0, Math.round(Number(body.file_size || body.fileSize || 0))),
-    body.width == null ? null : clampNumber(body.width, 1, 10000, 0),
-    body.height == null ? null : clampNumber(body.height, 1, 10000, 0),
-    body.duration_seconds == null && body.durationSeconds == null ? null : clampFloat(body.duration_seconds ?? body.durationSeconds, 0, 3600, 0),
-    ts,
-    mediaId,
-    userId,
-  ).run();
-  await insertModerationEvent(c.env.DB, mediaId, 'upload_completed', {
-    actorUserId: userId,
-    beforeState: { upload_status: asset.upload_status, moderation_status: asset.moderation_status },
-    afterState: { upload_status: 'uploaded', moderation_status: 'pending_moderation' },
-    requestId: c.get?.('requestId') || '',
-  });
+  const updatePatch = {
+    upload_status: 'uploaded',
+    moderation_status: 'pending_moderation',
+    ...(sha256Hash ? { sha256_hash: sha256Hash } : {}),
+    ...(Number(body.file_size || body.fileSize || 0) > 0 ? { file_size: Math.max(0, Math.round(Number(body.file_size || body.fileSize || 0))) } : {}),
+    ...(body.width == null ? {} : { width: clampNumber(body.width, 1, 10000, 0) }),
+    ...(body.height == null ? {} : { height: clampNumber(body.height, 1, 10000, 0) }),
+    ...(body.duration_seconds == null && body.durationSeconds == null ? {} : { duration_seconds: clampFloat(body.duration_seconds ?? body.durationSeconds, 0, 3600, 0) }),
+    updated_at: ts,
+  };
+  if (supabasePrimaryConfigured(c)) {
+    await supabaseAdminPatchRows(c, 'app_media_assets', { id: postgrestEqFilter(mediaId), user_id: postgrestEqFilter(userId) }, updatePatch);
+    await supabaseInsertModerationEvent(c, mediaId, 'upload_completed', {
+      actorUserId: userId,
+      beforeState: { upload_status: asset.upload_status, moderation_status: asset.moderation_status },
+      afterState: { upload_status: 'uploaded', moderation_status: 'pending_moderation' },
+      requestId: c.get?.('requestId') || '',
+    });
+  } else {
+    await c.env.DB.prepare(
+      `UPDATE media_assets
+       SET upload_status = 'uploaded', moderation_status = 'pending_moderation',
+           sha256_hash = COALESCE(NULLIF(?, ''), sha256_hash),
+           file_size = COALESCE(NULLIF(?, 0), file_size),
+           width = COALESCE(?, width),
+           height = COALESCE(?, height),
+           duration_seconds = COALESCE(?, duration_seconds),
+           updated_at = ?
+       WHERE id = ? AND user_id = ?`
+    ).bind(
+      sha256Hash,
+      Math.max(0, Math.round(Number(body.file_size || body.fileSize || 0))),
+      body.width == null ? null : clampNumber(body.width, 1, 10000, 0),
+      body.height == null ? null : clampNumber(body.height, 1, 10000, 0),
+      body.duration_seconds == null && body.durationSeconds == null ? null : clampFloat(body.duration_seconds ?? body.durationSeconds, 0, 3600, 0),
+      ts,
+      mediaId,
+      userId,
+    ).run();
+    await insertModerationEvent(c.env.DB, mediaId, 'upload_completed', {
+      actorUserId: userId,
+      beforeState: { upload_status: asset.upload_status, moderation_status: asset.moderation_status },
+      afterState: { upload_status: 'uploaded', moderation_status: 'pending_moderation' },
+      requestId: c.get?.('requestId') || '',
+    });
+  }
   const moderationCaption = cleanMultilineText(body.caption || body.content || body.title || '', 1000);
   const jobId = await createMediaModerationJob(c, mediaId, userId, moderationCaption, { enqueue: false });
   try {
@@ -17173,9 +17485,11 @@ api.post('/media/complete', authMiddleware, async (c) => {
       media_id: mediaId,
     }));
   }
-  const latest: any = await c.env.DB.prepare(
-    'SELECT id, media_type, storage_provider, storage_key, private_url, upload_status, moderation_status, rejection_code, rejection_message, public_url FROM media_assets WHERE id = ? AND user_id = ? LIMIT 1'
-  ).bind(mediaId, userId).first();
+  const latest: any = supabasePrimaryConfigured(c)
+    ? await supabaseReadMediaAsset(c, mediaId, userId)
+    : await c.env.DB.prepare(
+      'SELECT id, media_type, storage_provider, storage_key, private_url, upload_status, moderation_status, rejection_code, rejection_message, public_url FROM media_assets WHERE id = ? AND user_id = ? LIMIT 1'
+    ).bind(mediaId, userId).first();
   const latestStatus = normalizeMediaModerationStatus(latest?.moderation_status);
   const latestUploadStatus = cleanText(latest?.upload_status, 40) || 'uploaded';
   const latestPublicUrl = latestStatus === 'approved'
@@ -17203,12 +17517,14 @@ api.post('/media/complete', authMiddleware, async (c) => {
 });
 
 api.get('/media/:mediaId/status', authMiddleware, async (c) => {
-  await ensureMediaModerationSchema(c.env.DB);
+  if (!supabasePrimaryConfigured(c)) await ensureMediaModerationSchema(c.env.DB);
   const userId = getUserId(c);
   const mediaId = publicId(c.req.param('mediaId'), 160);
-  const asset: any = await c.env.DB.prepare(
-    'SELECT id, media_type, storage_provider, storage_key, private_url, upload_status, moderation_status, rejection_code, rejection_message, public_url, created_at, updated_at FROM media_assets WHERE id = ? AND user_id = ? LIMIT 1'
-  ).bind(mediaId, userId).first();
+  const asset: any = supabasePrimaryConfigured(c)
+    ? await supabaseReadMediaAsset(c, mediaId, userId)
+    : await c.env.DB.prepare(
+      'SELECT id, media_type, storage_provider, storage_key, private_url, upload_status, moderation_status, rejection_code, rejection_message, public_url, created_at, updated_at FROM media_assets WHERE id = ? AND user_id = ? LIMIT 1'
+    ).bind(mediaId, userId).first();
   if (!asset) return c.json({ detail: 'Upload not found.' }, 404);
   return c.json({
     ...asset,
@@ -17221,7 +17537,7 @@ api.get('/media/:mediaId/status', authMiddleware, async (c) => {
 // Uploads (Cloudflare Images + Stream direct upload)
 api.post('/upload/image-direct', authMiddleware, async (c) => {
   const userId = getUserId(c);
-  await ensureMediaModerationSchema(c.env.DB);
+  if (!supabasePrimaryConfigured(c)) await ensureMediaModerationSchema(c.env.DB);
   const limited = await enforceRateLimit(c, 'upload_image_direct', userId, 60, 60);
   if (limited) return limited;
   const dailyLimited = await enforceRateLimit(c, 'upload_image_direct_daily', userId, 250, 86400);
@@ -17254,18 +17570,37 @@ api.post('/upload/image-direct', authMiddleware, async (c) => {
   const imageId = cleanText(data.result?.id, 180);
   const mediaId = uuid();
   const ts = now();
-  await c.env.DB.prepare(
-    `INSERT INTO media_assets (
-       id, user_id, media_type, storage_provider, storage_key, public_url, private_url,
-       mime_type, file_size, sha256_hash, upload_status, moderation_status, created_at, updated_at
-     ) VALUES (?, ?, 'image', 'images', ?, NULL, ?, ?, 0, '', 'uploading', 'uploading', ?, ?)`
-  ).bind(mediaId, userId, imageId, `images:${imageId}`, mimeType || 'image/jpeg', ts, ts).run();
-  await insertModerationEvent(c.env.DB, mediaId, 'upload_intent_created', {
-    actorUserId: userId,
-    reason: 'legacy_image_direct',
-    afterState: { storage_provider: 'images', mime_type: mimeType || 'image/jpeg' },
-    requestId: c.get?.('requestId') || '',
-  });
+  if (supabasePrimaryConfigured(c)) {
+    await supabaseInsertMediaAsset(c, {
+      id: mediaId,
+      userId,
+      mediaType: 'image',
+      storageProvider: 'images',
+      storageKey: imageId,
+      privateUrl: `images:${imageId}`,
+      mimeType: mimeType || 'image/jpeg',
+      metadata: { source: 'legacy_image_direct' },
+    });
+    await supabaseInsertModerationEvent(c, mediaId, 'upload_intent_created', {
+      actorUserId: userId,
+      reason: 'legacy_image_direct',
+      afterState: { storage_provider: 'images', mime_type: mimeType || 'image/jpeg' },
+      requestId: c.get?.('requestId') || '',
+    });
+  } else {
+    await c.env.DB.prepare(
+      `INSERT INTO media_assets (
+         id, user_id, media_type, storage_provider, storage_key, public_url, private_url,
+         mime_type, file_size, sha256_hash, upload_status, moderation_status, created_at, updated_at
+       ) VALUES (?, ?, 'image', 'images', ?, NULL, ?, ?, 0, '', 'uploading', 'uploading', ?, ?)`
+    ).bind(mediaId, userId, imageId, `images:${imageId}`, mimeType || 'image/jpeg', ts, ts).run();
+    await insertModerationEvent(c.env.DB, mediaId, 'upload_intent_created', {
+      actorUserId: userId,
+      reason: 'legacy_image_direct',
+      afterState: { storage_provider: 'images', mime_type: mimeType || 'image/jpeg' },
+      requestId: c.get?.('requestId') || '',
+    });
+  }
   return c.json({
     upload_url: data.result.uploadURL,
     media_id: mediaId,
@@ -17280,7 +17615,7 @@ api.post('/upload/image-direct', authMiddleware, async (c) => {
 
 api.post('/upload/video-direct', authMiddleware, async (c) => {
   const userId = getUserId(c);
-  await ensureMediaModerationSchema(c.env.DB);
+  if (!supabasePrimaryConfigured(c)) await ensureMediaModerationSchema(c.env.DB);
   const limited = await enforceRateLimit(c, 'upload_video_direct', userId, 40, 60);
   if (limited) return limited;
   const dailyLimited = await enforceRateLimit(c, 'upload_video_direct_daily', userId, 100, 86400);
@@ -17297,18 +17632,37 @@ api.post('/upload/video-direct', authMiddleware, async (c) => {
   const videoUid = cleanText(data.result.uid, 220);
   const mediaId = uuid();
   const ts = now();
-  await c.env.DB.prepare(
-    `INSERT INTO media_assets (
-       id, user_id, media_type, storage_provider, storage_key, public_url, private_url,
-       mime_type, file_size, sha256_hash, upload_status, moderation_status, created_at, updated_at
-     ) VALUES (?, ?, 'video', 'stream', ?, NULL, ?, 'video/mp4', 0, '', 'uploading', 'uploading', ?, ?)`
-  ).bind(mediaId, userId, videoUid, `stream:${videoUid}`, ts, ts).run();
-  await insertModerationEvent(c.env.DB, mediaId, 'upload_intent_created', {
-    actorUserId: userId,
-    reason: 'legacy_video_direct',
-    afterState: { storage_provider: 'stream' },
-    requestId: c.get?.('requestId') || '',
-  });
+  if (supabasePrimaryConfigured(c)) {
+    await supabaseInsertMediaAsset(c, {
+      id: mediaId,
+      userId,
+      mediaType: 'video',
+      storageProvider: 'stream',
+      storageKey: videoUid,
+      privateUrl: `stream:${videoUid}`,
+      mimeType: 'video/mp4',
+      metadata: { source: 'legacy_video_direct' },
+    });
+    await supabaseInsertModerationEvent(c, mediaId, 'upload_intent_created', {
+      actorUserId: userId,
+      reason: 'legacy_video_direct',
+      afterState: { storage_provider: 'stream' },
+      requestId: c.get?.('requestId') || '',
+    });
+  } else {
+    await c.env.DB.prepare(
+      `INSERT INTO media_assets (
+         id, user_id, media_type, storage_provider, storage_key, public_url, private_url,
+         mime_type, file_size, sha256_hash, upload_status, moderation_status, created_at, updated_at
+       ) VALUES (?, ?, 'video', 'stream', ?, NULL, ?, 'video/mp4', 0, '', 'uploading', 'uploading', ?, ?)`
+    ).bind(mediaId, userId, videoUid, `stream:${videoUid}`, ts, ts).run();
+    await insertModerationEvent(c.env.DB, mediaId, 'upload_intent_created', {
+      actorUserId: userId,
+      reason: 'legacy_video_direct',
+      afterState: { storage_provider: 'stream' },
+      requestId: c.get?.('requestId') || '',
+    });
+  }
   return c.json({ upload_url: data.result.uploadURL, video_uid: videoUid, media_id: mediaId, moderation_status: 'uploading', requires_moderation: true });
 });
 
@@ -18813,6 +19167,100 @@ function adminMediaModerationPayload(row: any, env: Env) {
   };
 }
 
+async function supabaseAdminMediaModerationRows(c: any, input: {
+  status?: MediaModerationStatus | '';
+  mediaType?: CaptroMediaType | '';
+  search?: string;
+  limit: number;
+  offset: number;
+}): Promise<any[]> {
+  const filters: Record<string, string> = {};
+  if (input.status) {
+    filters.moderation_status = postgrestEqFilter(input.status);
+  } else {
+    filters.moderation_status = postgrestInFilter(['review_required', 'failed']);
+  }
+  if (input.mediaType) filters.media_type = postgrestEqFilter(input.mediaType);
+  const cleanSearch = String(input.search || '').replace(/^%|%$/g, '').trim().toLowerCase();
+  if (cleanSearch) {
+    const pattern = `*${cleanSearch.replace(/[*,()]/g, '')}*`;
+    filters.or = `(id.ilike.${pattern},user_id.ilike.${pattern},sha256_hash.ilike.${pattern})`;
+  }
+  const assets = (await supabaseAdminQueryRows(c, 'app_media_assets', {
+    select: '*',
+    filters,
+    order: 'created_at.desc',
+    limit: input.limit,
+    offset: input.offset,
+  })).map(supabaseMediaAssetToLegacy);
+  if (!assets.length) return [];
+
+  const mediaIds = Array.from(new Set(assets.map((row) => publicId(row.id, 160)).filter(Boolean)));
+  const userIds = Array.from(new Set(assets.map((row) => publicId(row.user_id, 120)).filter(Boolean)));
+  const postIds = Array.from(new Set(assets.map((row) => publicId(row.legacy_post_id || row.post_id, 160)).filter(Boolean)));
+  const [results, users, posts] = await Promise.all([
+    mediaIds.length ? supabaseAdminQueryRows(c, 'app_moderation_results', {
+      select: '*',
+      filters: { media_id: postgrestInFilter(mediaIds) },
+      order: 'created_at.desc',
+      limit: Math.max(100, mediaIds.length * 6),
+    }) : Promise.resolve([]),
+    userIds.length ? supabaseAdminQueryRows(c, 'app_users', {
+      select: 'id,email,username,full_name,avatar_url',
+      filters: { id: postgrestInFilter(userIds) },
+      limit: userIds.length,
+    }) : Promise.resolve([]),
+    postIds.length ? supabaseAdminQueryRows(c, 'app_posts', {
+      select: 'legacy_post_id,title,content',
+      filters: { legacy_post_id: postgrestInFilter(postIds) },
+      limit: postIds.length,
+    }) : Promise.resolve([]),
+  ]);
+
+  const latestResultByMedia = new Map<string, any>();
+  for (const result of results) {
+    const mediaId = publicId(result.media_id, 160);
+    if (mediaId && !latestResultByMedia.has(mediaId)) latestResultByMedia.set(mediaId, result);
+  }
+  const userById = new Map(users.map((user: any) => [publicId(user.id, 120), user]));
+  const postById = new Map(posts.map((post: any) => [publicId(post.legacy_post_id, 160), post]));
+
+  return assets.map((asset) => {
+    const result = latestResultByMedia.get(publicId(asset.id, 160)) || {};
+    const user = userById.get(publicId(asset.user_id, 120)) || {};
+    const post = postById.get(publicId(asset.legacy_post_id || asset.post_id, 160)) || {};
+    return {
+      ...asset,
+      post_id: asset.legacy_post_id || asset.post_id || null,
+      user_username: user.username,
+      user_full_name: user.full_name,
+      user_email: user.email,
+      user_profile_image: user.avatar_url,
+      post_title: post.title,
+      post_content: post.content,
+      model_name: result.model_name,
+      adult_explicit_score: result.adult_explicit_score,
+      nudity_score: result.nudity_score,
+      sexual_context_score: result.sexual_context_score,
+      sexual_solicitation_score: result.sexual_solicitation_score,
+      minor_safety_risk_score: result.minor_safety_risk_score,
+      violence_score: result.violence_score,
+      gore_score: result.gore_score,
+      weapon_score: result.weapon_score,
+      hate_symbol_score: result.hate_symbol_score,
+      ai_generated_likelihood: result.ai_generated_likelihood,
+      spam_scam_score: result.spam_scam_score,
+      malware_status: result.malware_status,
+      link_risk_score: result.link_risk_score,
+      confidence: result.confidence,
+      decision: result.decision,
+      result_reasons: JSON.stringify(result.reasons || []),
+      result_raw_result: JSON.stringify(result.raw_result || {}),
+      result_created_at: result.created_at || null,
+    };
+  });
+}
+
 function adminCommentPayload(row: any) {
   return {
     id: row.id,
@@ -19316,12 +19764,25 @@ api.get('/admin/health', authMiddleware, async (c) => {
 api.get('/admin/moderation', authMiddleware, async (c) => {
   try {
     await requireAdminRole(c, 'content:read');
-    await ensureMediaModerationSchema(c.env.DB);
     const { limit, offset } = adminPageParams(c, 40, 100);
     const statusParam = cleanText(c.req.query('status') || '', 40);
     const status = statusParam ? normalizeMediaModerationStatus(statusParam) : '';
     const mediaType = normalizeMediaAssetType(c.req.query('media_type') || c.req.query('type'));
     const search = searchPattern(c.req.query('search'));
+    if (supabasePrimaryConfigured(c)) {
+      const rows = await supabaseAdminMediaModerationRows(c, {
+        status,
+        mediaType,
+        search,
+        limit,
+        offset,
+      });
+      return c.json({
+        results: rows.map((row) => adminMediaModerationPayload(row, c.env)),
+        pagination: { limit, offset, next_offset: offset + limit },
+      });
+    }
+    await ensureMediaModerationSchema(c.env.DB);
     const conditions = ['1 = 1'];
     const binds: any[] = [];
     if (status) {
@@ -19370,13 +19831,39 @@ api.post('/admin/moderation/:id/approve', authMiddleware, async (c) => {
     const admin = await requireAdminRole(c, 'content:write');
     const limited = await requireAdminWriteRateLimit(c, admin, 'admin_media_moderation_approve');
     if (limited) return limited;
-    await ensureMediaModerationSchema(c.env.DB);
     const mediaId = publicId(c.req.param('id'), 160);
     const body: any = await c.req.json().catch(() => ({}));
     const unknown = rejectUnknownFields(c, body, ['reason', 'note']);
     if (unknown) return unknown;
     const reason = cleanMultilineText(body.reason || 'Approved by admin review', 500);
     const note = cleanMultilineText(body.note || '', 1000);
+    if (supabasePrimaryConfigured(c)) {
+      const before: any = await supabaseReadMediaAsset(c, mediaId);
+      if (!before) return c.json({ detail: 'Media asset not found.' }, 404);
+      const publicUrl = mediaAssetPublicUrl(c.env, before);
+      const ts = now();
+      await supabaseAdminPatchRows(c, 'app_media_assets', { id: postgrestEqFilter(mediaId) }, {
+        moderation_status: 'approved',
+        ...(publicUrl ? { public_url: publicUrl } : {}),
+        rejection_code: null,
+        rejection_message: null,
+        updated_at: ts,
+      });
+      await supabaseInsertModerationEvent(c, mediaId, 'admin_approved', {
+        actorUserId: admin.userId,
+        actorRole: admin.role,
+        decision: 'approved',
+        reason,
+        note,
+        beforeState: before,
+        afterState: { moderation_status: 'approved', public_url: publicUrl },
+        requestId: c.get?.('requestId') || '',
+      });
+      await writeAdminAuditLog(c, admin, { actionType: 'media_approved', targetType: 'media_asset', targetId: mediaId, targetUserId: before.user_id, reason, note, beforeState: { moderation_status: before.moderation_status }, afterState: { moderation_status: 'approved' } });
+      const updated: any = await supabaseReadMediaAsset(c, mediaId);
+      return c.json({ approved: true, media: adminMediaModerationPayload(updated, c.env) });
+    }
+    await ensureMediaModerationSchema(c.env.DB);
     const before: any = await c.env.DB.prepare('SELECT * FROM media_assets WHERE id = ? LIMIT 1').bind(mediaId).first();
     if (!before) return c.json({ detail: 'Media asset not found.' }, 404);
     const publicUrl = mediaAssetPublicUrl(c.env, before);
@@ -19407,7 +19894,6 @@ api.post('/admin/moderation/:id/reject', authMiddleware, async (c) => {
     const admin = await requireAdminRole(c, 'content:write');
     const limited = await requireAdminWriteRateLimit(c, admin, 'admin_media_moderation_reject');
     if (limited) return limited;
-    await ensureMediaModerationSchema(c.env.DB);
     const mediaId = publicId(c.req.param('id'), 160);
     const body: any = await c.req.json().catch(() => ({}));
     const unknown = rejectUnknownFields(c, body, ['reason', 'note', 'rejection_code']);
@@ -19416,6 +19902,32 @@ api.post('/admin/moderation/:id/reject', authMiddleware, async (c) => {
     if (!reason) return c.json({ detail: 'Reason is required.' }, 400);
     const note = cleanMultilineText(body.note || '', 1000);
     const rejectionCode = cleanText(body.rejection_code || 'admin_rejected', 120);
+    if (supabasePrimaryConfigured(c)) {
+      const before: any = await supabaseReadMediaAsset(c, mediaId);
+      if (!before) return c.json({ detail: 'Media asset not found.' }, 404);
+      const userMessage = "This upload can't be posted because it may break Captro's safety rules.";
+      await supabaseAdminPatchRows(c, 'app_media_assets', { id: postgrestEqFilter(mediaId) }, {
+        moderation_status: 'rejected',
+        public_url: null,
+        rejection_code: rejectionCode,
+        rejection_message: userMessage,
+        updated_at: now(),
+      });
+      await supabaseInsertModerationEvent(c, mediaId, 'admin_rejected', {
+        actorUserId: admin.userId,
+        actorRole: admin.role,
+        decision: 'rejected',
+        reason,
+        note,
+        beforeState: before,
+        afterState: { moderation_status: 'rejected', rejection_code: rejectionCode },
+        requestId: c.get?.('requestId') || '',
+      });
+      await writeAdminAuditLog(c, admin, { actionType: 'media_rejected', targetType: 'media_asset', targetId: mediaId, targetUserId: before.user_id, reason, note, beforeState: { moderation_status: before.moderation_status }, afterState: { moderation_status: 'rejected', rejection_code: rejectionCode } });
+      const updated: any = await supabaseReadMediaAsset(c, mediaId);
+      return c.json({ rejected: true, media: adminMediaModerationPayload(updated, c.env) });
+    }
+    await ensureMediaModerationSchema(c.env.DB);
     const before: any = await c.env.DB.prepare('SELECT * FROM media_assets WHERE id = ? LIMIT 1').bind(mediaId).first();
     if (!before) return c.json({ detail: 'Media asset not found.' }, 404);
     const userMessage = "This upload can't be posted because it may break Captro's safety rules.";
