@@ -3466,6 +3466,15 @@ function safeNotificationPayload(row: any) {
   };
 }
 
+async function supabasePreferredNotificationLanguage(c: any, userId: string): Promise<'en' | 'fr' | 'es' | null> {
+  if (!supabasePrimaryConfigured(c)) return null;
+  const row = await getSupabaseAppUserRowByAnyId(c, userId);
+  if (!row) return null;
+  const profile = parseJsonObject(row.profile);
+  const language = cleanText((profile as any).language || row.language || '', 8).toLowerCase().split('-')[0];
+  return language === 'fr' || language === 'es' ? language : 'en';
+}
+
 async function insertNotificationOnce(c: any, input: {
   userId: string;
   type: string;
@@ -3482,7 +3491,38 @@ async function insertNotificationOnce(c: any, input: {
   const language = await preferredNotificationLanguage(c, input.userId);
   const copy = localizedNotificationCopy(language, type, input.title, input.body, data);
 
-  if (dedupeKey) {
+  if (supabasePrimaryConfigured(c)) {
+    if (dedupeKey) {
+      const windowStart = new Date(Date.now() - Math.max(60, input.dedupeSeconds || 86400) * 1000).toISOString();
+      const existing = await supabaseAdminQueryRows(c, 'app_notifications', {
+        select: 'id,data',
+        filters: {
+          user_id: postgrestEqFilter(input.userId),
+          type: postgrestEqFilter(type),
+          created_at: `gte.${windowStart}`,
+        },
+        limit: 100,
+      }).catch((error: any) => {
+        console.warn(JSON.stringify({ event: 'supabase_notification_dedupe_failed', code: getErrorCode(error).slice(0, 180) }));
+        return [];
+      });
+      if (existing.some((row) => cleanText((parseJsonObject(row.data) as any).dedupe_key, 160) === dedupeKey)) return false;
+    }
+
+    await supabaseAdminUpsert(c, 'app_notifications', [{
+      id: uuid(),
+      user_id: input.userId,
+      type,
+      title: cleanText(copy.title, 120),
+      body: cleanText(copy.body, 300),
+      content: cleanText(copy.body, 300),
+      reference_id: cleanText((data.reference_id || data.post_id || data.message_id || '') as string, 160),
+      data,
+      is_read: false,
+      created_at: now(),
+      updated_at: now(),
+    }], 'id');
+  } else if (dedupeKey) {
     try {
       const existing = await c.env.DB.prepare(
         "SELECT id FROM notifications WHERE user_id = ? AND type = ? AND json_extract(data, '$.dedupe_key') = ? AND created_at > datetime('now', ?) LIMIT 1"
@@ -3491,11 +3531,15 @@ async function insertNotificationOnce(c: any, input: {
     } catch {
       // Older local D1 builds may not expose JSON functions; insert remains safe because engagement rows are idempotent.
     }
+    await c.env.DB.prepare(
+      'INSERT INTO notifications (id, user_id, type, title, body, data, is_read, created_at) VALUES (?, ?, ?, ?, ?, ?, 0, datetime(\'now\'))'
+    ).bind(uuid(), input.userId, type, cleanText(copy.title, 120), cleanText(copy.body, 300), JSON.stringify(data)).run();
+  } else {
+    await c.env.DB.prepare(
+      'INSERT INTO notifications (id, user_id, type, title, body, data, is_read, created_at) VALUES (?, ?, ?, ?, ?, ?, 0, datetime(\'now\'))'
+    ).bind(uuid(), input.userId, type, cleanText(copy.title, 120), cleanText(copy.body, 300), JSON.stringify(data)).run();
   }
 
-  await c.env.DB.prepare(
-    'INSERT INTO notifications (id, user_id, type, title, body, data, is_read, created_at) VALUES (?, ?, ?, ?, ?, ?, 0, datetime(\'now\'))'
-  ).bind(uuid(), input.userId, type, cleanText(copy.title, 120), cleanText(copy.body, 300), JSON.stringify(data)).run();
   runBackgroundTask(c, 'alert_push_failed', async () => {
     const status = await sendAlertPushForNotification(c, {
       userId: input.userId,
@@ -3512,6 +3556,8 @@ async function insertNotificationOnce(c: any, input: {
 }
 
 async function preferredNotificationLanguage(c: any, userId: string): Promise<'en' | 'fr' | 'es'> {
+  const supabaseLanguage = await supabasePreferredNotificationLanguage(c, userId).catch(() => null);
+  if (supabaseLanguage) return supabaseLanguage;
   try {
     const row: any = await c.env.DB.prepare('SELECT language FROM users WHERE id = ? LIMIT 1').bind(userId).first();
     const language = cleanText(row?.language || '', 8).toLowerCase().split('-')[0];
@@ -6075,7 +6121,7 @@ async function supabaseAdminQueryRows(c: any, table: string, input: {
 
 async function supabaseAdminCountRows(c: any, table: string, filters: Record<string, string>): Promise<number> {
   const url = new URL(`${getSupabaseUrl(c)}/rest/v1/${table}`);
-  url.searchParams.set('select', 'legacy_post_id');
+  url.searchParams.set('select', '*');
   url.searchParams.set('limit', '1');
   for (const [key, value] of Object.entries(filters)) {
     url.searchParams.set(key, value);
@@ -7877,16 +7923,32 @@ async function sendAlertPushForNotification(c: any, input: {
 }): Promise<string> {
   const config = getApnsConfig(c);
   if (!config) return 'apns_not_configured';
-  await ensureProductionReadinessSchema(c.env.DB);
 
-  const tokens = await c.env.DB.prepare(
-    `SELECT token, bundle_id, environment
-     FROM push_tokens
-     WHERE user_id = ? AND is_active = 1
-     ORDER BY last_seen_at DESC
-     LIMIT 8`
-  ).bind(input.userId).all();
-  const rows = (tokens.results || []) as any[];
+  let rows: any[] = [];
+  if (supabasePrimaryConfigured(c)) {
+    rows = await supabaseAdminQueryRows(c, 'app_push_tokens', {
+      select: 'id,token,bundle_id,environment',
+      filters: {
+        user_id: postgrestEqFilter(input.userId),
+        is_active: 'eq.true',
+      },
+      order: 'last_seen_at.desc',
+      limit: 8,
+    }).catch((error: any) => {
+      console.warn(JSON.stringify({ event: 'supabase_push_token_lookup_failed', code: getErrorCode(error).slice(0, 180) }));
+      return [];
+    });
+  } else {
+    await ensureProductionReadinessSchema(c.env.DB);
+    const tokens = await c.env.DB.prepare(
+      `SELECT token, bundle_id, environment
+       FROM push_tokens
+       WHERE user_id = ? AND is_active = 1
+       ORDER BY last_seen_at DESC
+       LIMIT 8`
+    ).bind(input.userId).all();
+    rows = (tokens.results || []) as any[];
+  }
   if (!rows.length) return 'no_push_tokens';
 
   const jwt = await signApnsJwt(config);
@@ -7926,9 +7988,14 @@ async function sendAlertPushForNotification(c: any, input: {
     } else {
       failed += 1;
       if (response.status === 400 || response.status === 410) {
-        await c.env.DB.prepare('UPDATE push_tokens SET is_active = 0, updated_at = ? WHERE token = ?')
-          .bind(now(), token)
-          .run();
+        if (supabasePrimaryConfigured(c)) {
+          await supabaseAdminPatchRows(c, 'app_push_tokens', { id: postgrestEqFilter(cleanText(row.id, 120)) }, { is_active: false, updated_at: now() })
+            .catch((error: any) => console.warn(JSON.stringify({ event: 'supabase_push_token_deactivate_failed', code: getErrorCode(error).slice(0, 180) })));
+        } else {
+          await c.env.DB.prepare('UPDATE push_tokens SET is_active = 0, updated_at = ? WHERE token = ?')
+            .bind(now(), token)
+            .run();
+        }
       }
     }
   }
@@ -14816,9 +14883,20 @@ api.get('/notifications', authMiddleware, async (c) => {
     const userId = getUserId(c);
     const limited = await enforceRateLimit(c, 'notifications_read', userId, 180, 60);
     if (limited) return limited;
-    await ensureAbuseProtectionSchema(c.env.DB);
     const limit = clampNumber(c.req.query('limit') || '50', 1, 80, 50);
     const before = cleanText(c.req.query('before') || '', 60);
+    if (supabasePrimaryConfigured(c)) {
+      const filters: Record<string, string> = { user_id: postgrestEqFilter(userId) };
+      if (before) filters.created_at = `lt.${toPgTime(before) || before}`;
+      const rows = await supabaseAdminQueryRows(c, 'app_notifications', {
+        select: 'id,user_id,from_user_id,type,title,body,content,reference_id,data,is_read,created_at,updated_at',
+        filters,
+        order: 'created_at.desc',
+        limit,
+      });
+      return c.json(rows.map(safeNotificationPayload));
+    }
+    await ensureAbuseProtectionSchema(c.env.DB);
     const notificationsSql = `SELECT * FROM notifications WHERE user_id = ? ${before ? 'AND datetime(created_at) < datetime(?)' : ''} ORDER BY created_at DESC LIMIT ?`;
     const r = await c.env.DB.prepare(notificationsSql).bind(...(before ? [userId, before, limit] : [userId, limit])).all();
     return c.json((r.results as any[]).map(safeNotificationPayload));
@@ -14830,11 +14908,27 @@ api.get('/notifications', authMiddleware, async (c) => {
 });
 api.get('/notifications/unread-count', authMiddleware, async (c) => {
   try {
+    const userId = getUserId(c);
+    if (supabasePrimaryConfigured(c)) {
+      const count = await supabaseAdminCountRows(c, 'app_notifications', {
+        user_id: postgrestEqFilter(userId),
+        is_read: 'eq.false',
+      });
+      return c.json({ count });
+    }
     const r = await c.env.DB.prepare('SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND is_read = 0').bind(getUserId(c)).first();
     return c.json({ count: (r as any)?.count || 0 });
   } catch { return c.json({ count: 0 }); }
 });
-api.post('/notifications/mark-read', authMiddleware, async (c) => { await c.env.DB.prepare('UPDATE notifications SET is_read = 1 WHERE user_id = ?').bind(getUserId(c)).run(); return c.json({ marked: true }); });
+api.post('/notifications/mark-read', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  if (supabasePrimaryConfigured(c)) {
+    await supabaseAdminPatchRows(c, 'app_notifications', { user_id: postgrestEqFilter(userId) }, { is_read: true, updated_at: now() });
+    return c.json({ marked: true });
+  }
+  await c.env.DB.prepare('UPDATE notifications SET is_read = 1 WHERE user_id = ?').bind(userId).run();
+  return c.json({ marked: true });
+});
 
 api.post('/notifications/device-token', authMiddleware, async (c) => {
   const userId = getUserId(c);
@@ -14845,8 +14939,26 @@ api.post('/notifications/device-token', authMiddleware, async (c) => {
   const body: any = await c.req.json().catch(() => ({}));
   const token = String(body.token || '').trim().replace(/[^a-fA-F0-9]/g, '');
   if (token.length < 32 || token.length > 512) return c.json({ detail: 'Invalid device token.' }, 400);
-  await ensureProductionReadinessSchema(c.env.DB);
   const timestamp = now();
+  if (supabasePrimaryConfigured(c)) {
+    const normalizedToken = token.toLowerCase();
+    const tokenHash = await sha256Hex(normalizedToken);
+    await supabaseAdminUpsert(c, 'app_push_tokens', [{
+      id: await sha256Hex(`${userId}:${tokenHash}`),
+      user_id: userId,
+      token_hash: tokenHash,
+      token: normalizedToken,
+      device_id: cleanText(body.device_id || body.deviceId || '', 160),
+      bundle_id: cleanText(body.bundle_id || body.bundleId || c.env.APNS_BUNDLE_ID || '', 160),
+      environment: cleanText(body.environment || c.env.APNS_ENVIRONMENT || 'production', 32),
+      platform: 'ios',
+      is_active: true,
+      last_seen_at: timestamp,
+      updated_at: timestamp,
+    }], 'user_id,token_hash');
+    return c.json({ ok: true });
+  }
+  await ensureProductionReadinessSchema(c.env.DB);
   await c.env.DB.prepare(
     `INSERT INTO push_tokens (id, user_id, token, device_id, bundle_id, environment, platform, is_active, last_seen_at, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, 'ios', 1, ?, ?, ?)
@@ -14876,6 +14988,14 @@ api.delete('/notifications/device-token', authMiddleware, async (c) => {
   const body: any = await c.req.json().catch(() => ({}));
   const token = String(body.token || '').trim().replace(/[^a-fA-F0-9]/g, '').toLowerCase();
   if (!token) return c.json({ ok: true });
+  if (supabasePrimaryConfigured(c)) {
+    const tokenHash = await sha256Hex(token);
+    await supabaseAdminPatchRows(c, 'app_push_tokens', {
+      user_id: postgrestEqFilter(userId),
+      token_hash: postgrestEqFilter(tokenHash),
+    }, { is_active: false, updated_at: now() });
+    return c.json({ ok: true });
+  }
   await ensureProductionReadinessSchema(c.env.DB);
   await c.env.DB.prepare('UPDATE push_tokens SET is_active = 0, updated_at = ? WHERE user_id = ? AND token = ?')
     .bind(now(), userId, token)
