@@ -12306,6 +12306,37 @@ api.put('/users/me/username', authMiddleware, async (c) => {
         reason: usernameCheck.detail,
       }, 400);
     }
+    if (supabasePrimaryConfigured(c)) {
+      const currentRow = await getSupabaseAppUserRowByAnyId(c, userId);
+      if (!currentRow) return c.json({ detail: 'User not found' }, 404);
+      const appUserId = publicId(currentRow.id, 120);
+      const existing = await supabaseAdminQueryRows(c, 'app_users', {
+        select: 'id',
+        filters: { username: postgrestEqFilter(usernameCheck.username) },
+        limit: 2,
+      });
+      if (existing.some((row) => publicId(row.id, 120) !== appUserId)) {
+        return c.json({
+          available: false,
+          username: usernameCheck.username,
+          code: 'taken',
+          reason: 'Username is already taken.',
+        }, 409);
+      }
+
+      await supabaseAdminPatchRows(c, 'app_users', { id: postgrestEqFilter(appUserId) }, {
+        username: usernameCheck.username,
+        updated_at: now(),
+      });
+      const refreshed = await getSupabaseAppUserRowByAnyId(c, appUserId);
+      const user = supabaseAppUserToLegacyUser(refreshed || { ...currentRow, username: usernameCheck.username });
+      runBackgroundTask(c, 'username_security_log_failed', async () => {
+        await recordAbuseSignals(c, appUserId, 'username_claim', { username: usernameCheck.username });
+        await logSecurityEvent(c, 'username_changed', appUserId, { previous_username: currentRow?.username || '', new_username: usernameCheck.username });
+        await syncSupabaseAuthMetadataForUser(c, user);
+      });
+      return c.json(authUserPayload(user));
+    }
     const currentUser: any = await c.env.DB.prepare('SELECT username FROM users WHERE id = ?').bind(userId).first();
     const existing: any = await c.env.DB.prepare('SELECT id FROM users WHERE LOWER(username) = ? AND id != ?')
       .bind(usernameCheck.username.toLowerCase(), userId)
@@ -12340,6 +12371,19 @@ api.get('/users/search/:query', authMiddleware, async (c) => {
   if (limited) return limited;
   const q = cleanText(c.req.param('query'), 80);
   if (q.length < 2) return c.json([]);
+  if (supabasePrimaryConfigured(c)) {
+    const search = q.replace(/[%*,()]/g, '').slice(0, 80);
+    if (search.length < 2) return c.json([]);
+    const rows = await supabaseAdminQueryRows(c, 'app_users', {
+      select: SUPABASE_APP_USER_SELECT,
+      filters: { or: `(username.ilike.*${search}*,full_name.ilike.*${search}*)` },
+      limit: 20,
+    });
+    return c.json(rows
+      .map(supabaseAppUserToLegacyUser)
+      .filter((user) => String(user.status || 'active') === 'active')
+      .map((user) => safeUserPayload(user)));
+  }
   const r = await c.env.DB.prepare(
     "SELECT id, username, full_name, profile_image, bio FROM users WHERE COALESCE(status, 'active') = 'active' AND (username LIKE ? OR full_name LIKE ?) LIMIT 20"
   ).bind(`%${q}%`, `%${q}%`).all();
@@ -12360,7 +12404,13 @@ api.get('/users/check-username/:username', async (c) => {
       reason: usernameCheck.detail,
     });
   }
-  const user: any = await c.env.DB.prepare('SELECT id FROM users WHERE LOWER(username) = ?').bind(username.toLowerCase()).first();
+  const user: any = supabasePrimaryConfigured(c)
+    ? (await supabaseAdminQueryRows(c, 'app_users', {
+      select: 'id',
+      filters: { username: postgrestEqFilter(username) },
+      limit: 1,
+    }))[0]
+    : await c.env.DB.prepare('SELECT id FROM users WHERE LOWER(username) = ?').bind(username.toLowerCase()).first();
   return c.json({
     available: !user,
     username,
