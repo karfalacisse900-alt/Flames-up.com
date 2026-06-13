@@ -8773,6 +8773,7 @@ async function findOrCreateSupabaseUser(c: any, payload: any, extras: any = {}) 
 function supabaseAppUserToLegacyUser(row: any): any {
   const metadata = parseJsonObject(row?.metadata);
   const profile = parseJsonObject(row?.profile);
+  const counts = parseJsonObject(row?.counts);
   const status = cleanText((metadata as any).status || 'active', 40) || 'active';
   return {
     id: publicId(row?.id, 120),
@@ -8784,6 +8785,18 @@ function supabaseAppUserToLegacyUser(row: any): any {
     cover_image: safeMediaReference(row?.cover_url),
     bio: cleanText(row?.bio, 800),
     city: cleanText(row?.city, 160),
+    social_website: safeExternalUrl((profile as any).social_website),
+    social_tiktok: cleanText((profile as any).social_tiktok, 120),
+    social_instagram: cleanText((profile as any).social_instagram, 120),
+    age: clampNumber((profile as any).age, 13, 120, 0),
+    looking_for: cleanText((profile as any).looking_for, 120),
+    interests: Array.isArray((profile as any).interests)
+      ? JSON.stringify((profile as any).interests.map((item: unknown) => cleanText(item, 60)).filter(Boolean).slice(0, 24))
+      : cleanText((profile as any).interests, 1000),
+    profile_background_image: safeMediaReference((profile as any).profile_background_image || row?.cover_url),
+    followers_count: Math.max(0, Number((counts as any).followers_count || 0)),
+    following_count: Math.max(0, Number((counts as any).following_count || 0)),
+    posts_count: Math.max(0, Number((counts as any).posts_count || 0)),
     is_private: row?.is_private ? 1 : 0,
     is_verified: row?.is_verified ? 1 : 0,
     phone: normalizeOptionalPhone(row?.phone),
@@ -11196,7 +11209,6 @@ api.put('/users/me', authMiddleware, async (c) => {
   if (bodyTooLarge) return bodyTooLarge;
   const limited = await enforceRateLimit(c, 'account_update', userId, 60, 60);
   if (limited) return limited;
-  await ensurePremiumSchema(c.env.DB);
   const body = await c.req.json();
   const unknown = rejectUnknownFields(c, body, ['full_name', 'fullName', 'bio', 'profile_image', 'profileImage', 'cover_image', 'coverImage', 'profile_background_image', 'profileBackgroundImage', 'city', 'username', 'age', 'looking_for', 'lookingFor', 'interests', 'social_website', 'socialWebsite', 'social_tiktok', 'socialTiktok', 'social_instagram', 'socialInstagram', 'is_private', 'isPrivate', 'language']);
   if (unknown) return unknown;
@@ -11209,6 +11221,106 @@ api.put('/users/me', authMiddleware, async (c) => {
   if (body.socialTiktok !== undefined && body.social_tiktok === undefined) body.social_tiktok = body.socialTiktok;
   if (body.socialInstagram !== undefined && body.social_instagram === undefined) body.social_instagram = body.socialInstagram;
   if (body.isPrivate !== undefined && body.is_private === undefined) body.is_private = body.isPrivate;
+
+  if (supabasePrimaryConfigured(c)) {
+    const payload: any = (c as any).get?.('jwtPayload') || {};
+    const payloadSupabaseSub = isUuidText(payload?.supabase_sub || payload?.supabaseSub);
+    const userFilters: Record<string, string> = isUuidText(userId) || payloadSupabaseSub
+      ? { or: `(${[
+        `id.eq.${cleanText(userId, 120)}`,
+        isUuidText(userId) ? `supabase_user_id.eq.${cleanText(userId, 120)}` : '',
+        payloadSupabaseSub ? `supabase_user_id.eq.${payloadSupabaseSub}` : '',
+      ].filter(Boolean).join(',')})` }
+      : { id: postgrestEqFilter(userId) };
+    const select = 'id,supabase_user_id,email,username,full_name,avatar_url,cover_url,bio,city,is_private,is_verified,counts,profile,metadata,phone,phone_verified,email_verified,legacy_created_at,legacy_updated_at,created_at,updated_at';
+    const rows = await supabaseAdminQueryRows(c, 'app_users', {
+      select,
+      filters: userFilters,
+      limit: 1,
+    });
+    const currentRow = rows[0];
+    if (!currentRow) return c.json({ detail: 'User not found' }, 404);
+
+    const appUserId = publicId(currentRow.id, 120);
+    const profile = parseJsonObject(currentRow.profile);
+    const patch: Record<string, unknown> = {};
+    let usernameChanged = false;
+
+    if (body.full_name !== undefined) patch.full_name = cleanText(body.full_name, 160);
+    if (body.bio !== undefined) patch.bio = cleanMultilineText(body.bio, 500);
+    if (body.profile_image !== undefined) patch.avatar_url = safeMediaReference(body.profile_image) || null;
+    if (body.cover_image !== undefined) patch.cover_url = safeMediaReference(body.cover_image) || null;
+    if (body.city !== undefined) patch.city = cleanText(body.city, 160);
+    if (body.is_private !== undefined) patch.is_private = normalizeSqlBoolean(body.is_private) === 1;
+
+    if (body.username !== undefined) {
+      const usernameCheck = validateUsernameForAccount(body.username);
+      if (!usernameCheck.ok) return c.json({ detail: usernameCheck.detail }, 400);
+      const existing = await supabaseAdminQueryRows(c, 'app_users', {
+        select: 'id',
+        filters: {
+          username: postgrestEqFilter(usernameCheck.username),
+          id: `neq.${cleanText(appUserId, 120)}`,
+        },
+        limit: 1,
+      });
+      if (existing.length) return c.json({ detail: 'Username is not available.' }, 409);
+      patch.username = usernameCheck.username;
+      usernameChanged = strictUsernameSlug(currentRow.username) !== strictUsernameSlug(usernameCheck.username);
+    }
+
+    if (body.language !== undefined) profile.language = normalizeLanguage(body.language);
+    if (body.age !== undefined) profile.age = clampNumber(body.age, 13, 120, 0);
+    if (body.looking_for !== undefined) profile.looking_for = cleanText(body.looking_for, 120);
+    if (body.interests !== undefined) {
+      const rawInterests = Array.isArray(body.interests)
+        ? body.interests
+        : String(body.interests || '').split(',');
+      profile.interests = rawInterests
+        .map((item: unknown) => cleanText(item, 60))
+        .filter(Boolean)
+        .slice(0, 24);
+    }
+    if (body.social_website !== undefined) profile.social_website = safeExternalUrl(body.social_website);
+    if (body.social_tiktok !== undefined) profile.social_tiktok = cleanText(body.social_tiktok, 120);
+    if (body.social_instagram !== undefined) profile.social_instagram = cleanText(body.social_instagram, 120);
+    if (body.profile_background_image !== undefined) {
+      profile.profile_background_image = safeMediaReference(body.profile_background_image);
+    }
+
+    const profileFields = ['language', 'age', 'looking_for', 'interests', 'social_website', 'social_tiktok', 'social_instagram', 'profile_background_image'];
+    const profileChanged = profileFields.some((field) => body[field] !== undefined);
+    if (profileChanged) patch.profile = profile;
+    if (Object.keys(patch).length === 0) return c.json({ detail: 'Nothing to update' }, 400);
+    patch.updated_at = now();
+
+    await supabaseAdminPatchRows(c, 'app_users', { id: postgrestEqFilter(appUserId) }, patch);
+    const refreshedRows = await supabaseAdminQueryRows(c, 'app_users', {
+      select,
+      filters: { id: postgrestEqFilter(appUserId) },
+      limit: 1,
+    });
+    const user = refreshedRows[0] ? supabaseAppUserToLegacyUser(refreshedRows[0]) : supabaseAppUserToLegacyUser({ ...currentRow, ...patch });
+    if (usernameChanged) {
+      runBackgroundTask(c, 'username_change_security_log_failed', async () => {
+        await logSecurityEvent(c, 'username_changed', appUserId, { previous_username: currentRow.username || '', new_username: user.username || '' });
+      });
+    }
+    runBackgroundTask(c, 'profile_update_abuse_signal_failed', async () => {
+      await recordAbuseSignals(c, appUserId, 'profile_update', {
+        username: user.username,
+        display_name: user.full_name,
+        bio: user.bio,
+        links: [user.social_website, user.social_tiktok, user.social_instagram].filter(Boolean),
+      });
+    });
+    runBackgroundTask(c, 'supabase_profile_metadata_sync_failed', async () => {
+      await syncSupabaseAuthMetadataForUser(c, user);
+    });
+    return c.json(safeUserPayload(user, { includePrivate: true }));
+  }
+
+  await ensurePremiumSchema(c.env.DB);
   const currentUser: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
   const wantsCustomBackground = body.profile_background_image !== undefined || body.cover_image !== undefined;
   if (wantsCustomBackground && !userHasActivePremium(currentUser)) {
