@@ -3091,6 +3091,7 @@ async function usersAreBlocked(db: D1Database, firstUserId: string, secondUserId
 }
 
 async function validateDirectMessagePeer(c: any, currentUserId: string, peerId: string) {
+  if (supabasePrimaryConfigured(c)) return supabaseValidateDirectMessagePeer(c, currentUserId, peerId);
   if (!peerId || peerId === currentUserId) {
     return c.json({ detail: 'Choose a valid recipient.' }, 400);
   }
@@ -3589,6 +3590,11 @@ function localizedNotificationCopy(language: 'en' | 'fr' | 'es', type: string, t
 }
 
 async function resolveReportTarget(c: any, reporterId: string, type: string, reportedId: string, body: any): Promise<{ ok: boolean; status?: number; detail?: string; contentId?: string; targetOwnerUserId?: string }> {
+  if (supabasePrimaryConfigured(c)) {
+    const supabaseTarget = await supabaseResolveReportTarget(c, reporterId, type, reportedId);
+    if (supabaseTarget) return supabaseTarget;
+  }
+
   try {
     if (!reportedId) return { ok: false, status: 400, detail: 'Choose something to report.' };
     if (type === 'post') {
@@ -3672,9 +3678,92 @@ async function resolveReportTarget(c: any, reporterId: string, type: string, rep
   }
 }
 
+async function supabaseResolveReportTarget(
+  c: any,
+  reporterId: string,
+  type: string,
+  reportedId: string
+): Promise<{ ok: boolean; status?: number; detail?: string; contentId?: string; targetOwnerUserId?: string } | null> {
+  if (!reportedId) return { ok: false, status: 400, detail: 'Choose something to report.' };
+  const reporterAliases = await supabaseRelatedInteractionUserIds(c, reporterId);
+  const reporterAliasSet = new Set(reporterAliases.map((value) => publicId(value, 120)).filter(Boolean));
+  const isReporter = (value: unknown) => {
+    const clean = publicId(value, 120);
+    return !!clean && reporterAliasSet.has(clean);
+  };
+
+  try {
+    if (type === 'post' || type === 'discover_post') {
+      const [post] = await supabaseReadVisiblePosts(c, reporterId, { postId: reportedId, limit: 1 });
+      if (!post) {
+        return { ok: false, status: 404, detail: type === 'discover_post' ? 'Reported Discover post was not found.' : 'Reported post was not found.' };
+      }
+      const ownerId = publicId(post.user_id, 120);
+      if (isReporter(ownerId)) return { ok: false, status: 400, detail: 'You cannot report your own content.' };
+      return { ok: true, contentId: publicId(post.id || reportedId, 120), targetOwnerUserId: ownerId };
+    }
+
+    if (type === 'comment') {
+      const rows = await supabaseAdminQueryRows(c, 'post_comments', {
+        select: 'legacy_comment_id,legacy_post_id,app_user_id,user_id,status',
+        filters: { legacy_comment_id: postgrestEqFilter(reportedId) },
+        limit: 1,
+      });
+      const comment = rows[0];
+      if (!comment || ['removed', 'hidden'].includes(cleanText(comment.status || 'active', 40))) {
+        return { ok: false, status: 404, detail: 'Reported comment was not found.' };
+      }
+      const commentOwnerId = publicId(comment.app_user_id || comment.user_id, 120);
+      if (isReporter(commentOwnerId)) return { ok: false, status: 400, detail: 'You cannot report your own comment.' };
+      const postId = publicId(comment.legacy_post_id, 120);
+      if (!postId) return { ok: false, status: 404, detail: 'Reported comment was not found.' };
+      const visiblePost = await supabaseReadVisiblePosts(c, reporterId, { postId, limit: 1 });
+      if (!visiblePost.length) return { ok: false, status: 404, detail: 'Reported comment was not found.' };
+      return { ok: true, contentId: postId, targetOwnerUserId: commentOwnerId };
+    }
+
+    if (type === 'profile' || type === 'user') {
+      const target = await supabaseUserByAnyId(c, reportedId);
+      const targetId = publicId(target?.id, 120);
+      if (!targetId) return { ok: false, status: 404, detail: 'Reported profile was not found.' };
+      if (isReporter(targetId)) return { ok: false, status: 400, detail: 'You cannot report your own profile.' };
+      return { ok: true, contentId: targetId, targetOwnerUserId: targetId };
+    }
+
+    if (type === 'message') {
+      const rows = await supabaseAdminQueryRows(c, 'app_messages', {
+        select: 'id,sender_id,receiver_id,status',
+        filters: {
+          id: postgrestEqFilter(reportedId),
+          or: `(sender_id.${postgrestInFilter(reporterAliases)},receiver_id.${postgrestInFilter(reporterAliases)})`,
+        },
+        limit: 1,
+      });
+      const message = rows[0];
+      if (!message || cleanText(message.status || 'sent', 40) === 'deleted') {
+        return { ok: false, status: 404, detail: 'Reported message was not found.' };
+      }
+      const senderId = publicId(message.sender_id, 120);
+      const receiverId = publicId(message.receiver_id, 120);
+      const targetOwnerUserId = isReporter(senderId) ? receiverId : senderId;
+      if (!targetOwnerUserId || isReporter(targetOwnerUserId)) return { ok: false, status: 400, detail: 'You cannot report your own message.' };
+      return { ok: true, contentId: publicId(message.id || reportedId, 120), targetOwnerUserId };
+    }
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_report_target_check_failed', type, code: getErrorCode(error).slice(0, 180) }));
+    return { ok: false, status: 404, detail: 'Reported content was not found.' };
+  }
+
+  return null;
+}
+
 async function blockUserForReporter(c: any, blockerId: string, blockedId: string): Promise<boolean> {
   const cleanBlockedId = publicId(blockedId, 120);
   if (!cleanBlockedId || cleanBlockedId === blockerId) return false;
+  if (supabasePrimaryConfigured(c)) {
+    const result = await supabaseBlockUser(c, blockerId, cleanBlockedId);
+    return result.status >= 200 && result.status < 300;
+  }
   await ensureAbuseProtectionSchema(c.env.DB);
   const target: any = await c.env.DB.prepare('SELECT id FROM users WHERE id = ? LIMIT 1').bind(cleanBlockedId).first();
   if (!target) return false;
@@ -3687,7 +3776,7 @@ async function blockUserForReporter(c: any, blockerId: string, blockedId: string
 }
 
 async function submitReportRequest(c: any) {
-  await ensureAdminModerationSchema(c.env.DB);
+  if (!supabasePrimaryConfigured(c)) await ensureAdminModerationSchema(c.env.DB);
   const bodyTooLarge = rejectLargeRequest(c, 50_000);
   if (bodyTooLarge) return bodyTooLarge;
   const reporterId = getUserId(c);
@@ -3707,9 +3796,21 @@ async function submitReportRequest(c: any) {
   const target = await resolveReportTarget(c, reporterId, reportedType, reportedId, body);
   if (!target.ok) return c.json({ error_code: 'target_not_found', detail: target.detail || 'Reported content was not found.' }, target.status || 400);
 
-  const existing: any = await c.env.DB.prepare(
-    "SELECT id FROM reports WHERE reporter_id = ? AND reported_type = ? AND reported_id = ? AND COALESCE(status, 'open') IN ('open', 'pending', 'under_review', 'reviewing', 'escalated') LIMIT 1"
-  ).bind(reporterId, reportedType, reportedId).first();
+  const reporterAliases = supabasePrimaryConfigured(c) ? await supabaseRelatedInteractionUserIds(c, reporterId) : [reporterId];
+  const existing: any = supabasePrimaryConfigured(c)
+    ? (await supabaseAdminQueryRows(c, 'app_reports', {
+      select: 'id',
+      filters: {
+        reporter_id: postgrestInFilter(reporterAliases),
+        target_type: postgrestEqFilter(reportedType),
+        target_id: postgrestEqFilter(reportedId),
+        status: postgrestInFilter(['open', 'pending', 'under_review', 'reviewing', 'in_review', 'escalated']),
+      },
+      limit: 1,
+    }))[0]
+    : await c.env.DB.prepare(
+      "SELECT id FROM reports WHERE reporter_id = ? AND reported_type = ? AND reported_id = ? AND COALESCE(status, 'open') IN ('open', 'pending', 'under_review', 'reviewing', 'escalated') LIMIT 1"
+    ).bind(reporterId, reportedType, reportedId).first();
   if (existing) {
     await logSecurityEvent(c, 'duplicate_report_blocked', reporterId, { reported_type: reportedType, reason });
     const blocked = wantsBlock && target.targetOwnerUserId ? await blockUserForReporter(c, reporterId, target.targetOwnerUserId) : false;
@@ -3718,11 +3819,34 @@ async function submitReportRequest(c: any) {
 
   const id = uuid();
   const ts = now();
-  await c.env.DB.prepare(
-    `INSERT INTO reports (
-      id, reporter_id, reported_id, report_type, reported_type, reason, details, content_id, status, priority, target_owner_user_id, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?)`
-  ).bind(id, reporterId, reportedId, reportedType, reportedType, reason, details, target.contentId || '', priority, target.targetOwnerUserId || '', ts, ts).run();
+  if (supabasePrimaryConfigured(c)) {
+    await supabaseAdminUpsert(c, 'app_reports', [{
+      id,
+      reporter_id: reporterId,
+      target_type: reportedType,
+      target_id: reportedId,
+      target_owner_user_id: target.targetOwnerUserId || null,
+      reason,
+      details,
+      status: 'open',
+      priority,
+      metadata: {
+        content_id: target.contentId || '',
+        hide_content_for_reporter: wantsHideContent,
+        source: 'captro_user_report_flow',
+      },
+      legacy_created_at: ts,
+      legacy_updated_at: ts,
+      created_at: ts,
+      updated_at: ts,
+    }], 'id');
+  } else {
+    await c.env.DB.prepare(
+      `INSERT INTO reports (
+        id, reporter_id, reported_id, report_type, reported_type, reason, details, content_id, status, priority, target_owner_user_id, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?)`
+    ).bind(id, reporterId, reportedId, reportedType, reportedType, reason, details, target.contentId || '', priority, target.targetOwnerUserId || '', ts, ts).run();
+  }
   const blocked = wantsBlock && target.targetOwnerUserId ? await blockUserForReporter(c, reporterId, target.targetOwnerUserId) : false;
   await logSecurityEvent(c, priority === 'urgent' ? 'urgent_report_submitted' : priority === 'high' ? 'high_priority_report_submitted' : 'report_submitted', reporterId, { reported_type: reportedType, reason, priority, target_owner: target.targetOwnerUserId || '' });
   await recordAbuseSignals(c, reporterId, 'report_submit', {});
@@ -14446,6 +14570,17 @@ api.delete('/statuses/:statusId', authMiddleware, async (c) => {
 
 // Messages (with media support)
 async function requireGroupMember(c: any, groupId: string, userId: string) {
+  if (supabasePrimaryConfigured(c)) {
+    const rows = await supabaseAdminQueryRows(c, 'app_group_chat_members', {
+      select: 'id',
+      filters: {
+        group_id: postgrestEqFilter(groupId),
+        user_id: postgrestEqFilter(userId),
+      },
+      limit: 1,
+    });
+    return !!rows[0];
+  }
   await ensureGroupChatSchema(c.env.DB);
   const member = await c.env.DB.prepare('SELECT id FROM group_chat_members WHERE group_id = ? AND user_id = ?')
     .bind(groupId, userId)
@@ -14453,8 +14588,196 @@ async function requireGroupMember(c: any, groupId: string, userId: string) {
   return !!member;
 }
 
+function supabaseMessageToLegacy(row: any): any {
+  const media = parseJsonObject(row?.media);
+  return {
+    ...row,
+    content: cleanMultilineText(row?.content || row?.body, 2000),
+    media_url: safeMediaReference(row?.media_url || (media as any).url || (media as any).playback_url || ''),
+    media_type: cleanText(row?.media_type || (media as any).type, 40),
+    thumbnail_url: safeMediaReference((media as any).thumbnail_url || (media as any).thumbnailUrl || ''),
+    poster_url: safeMediaReference((media as any).poster_url || (media as any).posterUrl || ''),
+    is_read: row?.is_read === true || row?.is_read === 1 || row?.is_read === '1' ? 1 : 0,
+    created_at: row?.legacy_created_at || row?.created_at,
+    updated_at: row?.updated_at || row?.created_at,
+  };
+}
+
+async function supabaseValidateDirectMessagePeer(c: any, currentUserId: string, peerId: string) {
+  if (!peerId || peerId === currentUserId) {
+    return c.json({ detail: 'Choose a valid recipient.' }, 400);
+  }
+  const peer = await supabaseUserByAnyId(c, peerId);
+  const peerStatus = cleanText(parseJsonObject(peer?.metadata).status || peer?.status || 'active', 40);
+  if (!peer || peerStatus !== 'active') return c.json({ detail: 'Recipient not found.' }, 404);
+  if (await supabaseBlockPair(c, currentUserId, peerId)) {
+    await logSecurityEvent(c, 'blocked_message_access_denied', currentUserId, { peer_id: peerId });
+    return c.json({ detail: 'You cannot message this profile.' }, 403);
+  }
+  return null;
+}
+
+async function supabaseDirectMessageRows(c: any, firstUserId: string, secondUserId: string, input: { limit: number; before?: string; after?: string }) {
+  const first = publicId(firstUserId, 120);
+  const second = publicId(secondUserId, 120);
+  const limit = clampNumber(input.limit, 1, 100, 80);
+  const baseFilters: Record<string, string> = {
+    or: `(and(sender_id.eq.${first},receiver_id.eq.${second}),and(sender_id.eq.${second},receiver_id.eq.${first}))`,
+  };
+  const after = cleanText(input.after || '', 80);
+  const before = cleanText(input.before || '', 80);
+  if (after) baseFilters.created_at = `gt.${after}`;
+  if (before) baseFilters.created_at = `lt.${before}`;
+  const rows = await supabaseAdminQueryRows(c, 'app_messages', {
+    select: '*',
+    filters: baseFilters,
+    order: after ? 'created_at.asc' : 'created_at.desc',
+    limit,
+  });
+  const ordered = after ? rows : rows.reverse();
+  return Promise.all(ordered.map((row) => messagePayload(c, supabaseMessageToLegacy(row))));
+}
+
+async function supabaseGroupMessageRows(c: any, groupId: string, input: { limit: number; before?: string; after?: string }) {
+  const limit = clampNumber(input.limit, 1, 100, 80);
+  const filters: Record<string, string> = { group_id: postgrestEqFilter(groupId) };
+  const after = cleanText(input.after || '', 80);
+  const before = cleanText(input.before || '', 80);
+  if (after) filters.created_at = `gt.${after}`;
+  if (before) filters.created_at = `lt.${before}`;
+  const rows = await supabaseAdminQueryRows(c, 'app_group_messages', {
+    select: '*',
+    filters,
+    order: after ? 'created_at.asc' : 'created_at.desc',
+    limit,
+  });
+  const ordered = after ? rows : rows.reverse();
+  return Promise.all(ordered.map((row) => messagePayload(c, supabaseMessageToLegacy(row))));
+}
+
 api.get('/conversations', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  if (supabasePrimaryConfigured(c)) {
+    const limit = clampNumber(c.req.query('limit') || '60', 1, 100, 60);
+    const blockedIds = await supabaseBlockedUserIds(c, userId);
+    const directRows = await supabaseAdminQueryRows(c, 'app_messages', {
+      select: '*',
+      filters: { or: `(sender_id.eq.${userId},receiver_id.eq.${userId})` },
+      order: 'created_at.desc',
+      limit: Math.max(120, limit * 6),
+    });
+    const otherIds = Array.from(new Set(directRows.map((row) => publicId(row.sender_id === userId ? row.receiver_id : row.sender_id, 120)).filter(Boolean)));
+    const users = await supabaseUsersByAnyIds(c, otherIds);
+    const directMap = new Map<string, any>();
+    const unreadCounts = new Map<string, number>();
+    for (const row of directRows) {
+      const otherId = publicId(row.sender_id === userId ? row.receiver_id : row.sender_id, 120);
+      if (!otherId || blockedIds.has(otherId)) continue;
+      if (row.receiver_id === userId && row.is_read !== true) unreadCounts.set(otherId, (unreadCounts.get(otherId) || 0) + 1);
+      if (directMap.has(otherId)) continue;
+      const user = users.get(otherId) || {};
+      const legacyMessage = supabaseMessageToLegacy(row);
+      let preview = legacyMessage.content || '';
+      if (!preview && legacyMessage.media_type === 'video') preview = 'Sent a video';
+      else if (!preview && legacyMessage.media_type === 'voice') preview = 'Sent a voice message';
+      else if (!preview && legacyMessage.media_type === 'file') preview = 'Sent a file';
+      else if (!preview && legacyMessage.media_url) preview = 'Sent a photo';
+      directMap.set(otherId, {
+        id: `conv-${otherId}`,
+        participants: [userId, otherId],
+        other_user: {
+          id: otherId,
+          username: user?.username,
+          full_name: user?.full_name,
+          profile_image: safeMediaReference(user?.avatar_url),
+          last_seen_at: null,
+          is_online: false,
+          is_typing: false,
+        },
+        last_message: preview,
+        last_message_time: legacyMessage.created_at,
+        unread_count: unreadCounts.get(otherId) || 0,
+      });
+    }
+    for (const [otherId, count] of unreadCounts.entries()) {
+      const existing = directMap.get(otherId);
+      if (existing) existing.unread_count = count;
+    }
+
+    const memberships = await supabaseAdminQueryRows(c, 'app_group_chat_members', {
+      select: 'group_id',
+      filters: { user_id: postgrestEqFilter(userId) },
+      order: 'created_at.desc',
+      limit: 100,
+    }).catch(() => []);
+    const groupIds = Array.from(new Set(memberships.map((row) => publicId(row.group_id, 120)).filter(Boolean)));
+    let groupConversations: any[] = [];
+    if (groupIds.length) {
+      const [groups, members, messages] = await Promise.all([
+        supabaseAdminQueryRows(c, 'app_group_chats', {
+          select: '*',
+          filters: { id: postgrestInFilter(groupIds) },
+          limit: groupIds.length,
+        }).catch(() => []),
+        supabaseAdminQueryRows(c, 'app_group_chat_members', {
+          select: 'group_id,user_id',
+          filters: { group_id: postgrestInFilter(groupIds) },
+          limit: Math.max(100, groupIds.length * 60),
+        }).catch(() => []),
+        supabaseAdminQueryRows(c, 'app_group_messages', {
+          select: '*',
+          filters: { group_id: postgrestInFilter(groupIds) },
+          order: 'created_at.desc',
+          limit: Math.max(100, groupIds.length * 20),
+        }).catch(() => []),
+      ]);
+      const memberCount = new Map<string, number>();
+      for (const member of members) {
+        const groupId = publicId(member.group_id, 120);
+        memberCount.set(groupId, (memberCount.get(groupId) || 0) + 1);
+      }
+      const lastMessage = new Map<string, any>();
+      for (const message of messages) {
+        const groupId = publicId(message.group_id, 120);
+        if (!lastMessage.has(groupId)) lastMessage.set(groupId, message);
+      }
+      const senderIds = Array.from(new Set(messages.map((row) => publicId(row.sender_id, 120)).filter(Boolean)));
+      const senders = await supabaseUsersByAnyIds(c, senderIds);
+      groupConversations = groups.map((group: any) => {
+        const groupId = publicId(group.id, 120);
+        const msg = lastMessage.get(groupId);
+        const legacyMessage = msg ? supabaseMessageToLegacy(msg) : null;
+        const sender = msg ? senders.get(publicId(msg.sender_id, 120)) || {} : {};
+        const senderName = publicUsernameFor({ username: sender?.username }) || cleanText(sender?.full_name, 80) || 'Someone';
+        return {
+          id: `group-${groupId}`,
+          type: 'group',
+          group_id: groupId,
+          group_name: cleanText(group.name || 'New group', 120),
+          member_count: memberCount.get(groupId) || 0,
+          last_message: legacyMessage
+            ? legacyMessage.content
+              ? `${senderName}: ${legacyMessage.content}`
+              : legacyMessage.media_type === 'video'
+                ? `${senderName}: Sent a video`
+                : legacyMessage.media_type === 'voice'
+                  ? `${senderName}: Sent a voice message`
+                  : legacyMessage.media_type === 'file'
+                    ? `${senderName}: Sent a file`
+                    : legacyMessage.media_url
+                      ? `${senderName}: Sent a photo`
+                      : 'Group created'
+            : 'Group created',
+          last_message_time: legacyMessage?.created_at || group.legacy_created_at || group.created_at,
+          unread_count: 0,
+        };
+      });
+    }
+
+    return c.json([...directMap.values(), ...groupConversations]
+      .sort((a, b) => Date.parse(b.last_message_time || '') - Date.parse(a.last_message_time || ''))
+      .slice(0, limit));
+  }
   await touchUserPresence(c.env.DB, userId);
   await ensureAbuseProtectionSchema(c.env.DB);
   await ensureGroupChatSchema(c.env.DB);
@@ -14589,7 +14912,7 @@ api.post('/presence/touch', authMiddleware, async (c) => {
 
 api.post('/messages', authMiddleware, async (c) => {
   const userId = getUserId(c);
-  await touchUserPresence(c.env.DB, userId);
+  if (!supabasePrimaryConfigured(c)) await touchUserPresence(c.env.DB, userId);
   const limited = await enforceRateLimit(c, 'message_send', userId, 45, 60);
   if (limited) return limited;
   const dailyLimited = await enforceRateLimit(c, 'message_send_daily', userId, 600, 86400);
@@ -14615,6 +14938,66 @@ api.post('/messages', authMiddleware, async (c) => {
   const invalidPeer = await validateDirectMessagePeer(c, userId, receiverId);
   if (invalidPeer) return invalidPeer;
   if (!content && !mediaUrl) return c.json({ detail: 'Message is empty.' }, 400);
+  if (supabasePrimaryConfigured(c)) {
+    if (content && !mediaUrl) {
+      const recentDuplicate = await supabaseAdminQueryRows(c, 'app_messages', {
+        select: 'id',
+        filters: {
+          sender_id: postgrestEqFilter(userId),
+          receiver_id: postgrestEqFilter(receiverId),
+          body: postgrestEqFilter(content),
+          created_at: `gt.${new Date(Date.now() - 30_000).toISOString()}`,
+        },
+        limit: 1,
+      });
+      if (recentDuplicate[0]) {
+        await logSecurityEvent(c, 'duplicate_message_blocked', userId, { receiver_id: receiverId });
+        return c.json({ detail: 'You already sent that message. Try again in a moment.' }, 429);
+      }
+    }
+    const id = uuid();
+    const ts = now();
+    const media: Record<string, unknown> = {};
+    if (mediaUrl) media.url = mediaUrl;
+    if (mediaType) media.type = mediaType;
+    await supabaseAdminUpsert(c, 'app_messages', [{
+      id,
+      sender_id: userId,
+      receiver_id: receiverId,
+      body: content,
+      media_url: mediaUrl || null,
+      media_type: mediaType,
+      media,
+      is_read: false,
+      status: 'sent',
+      legacy_created_at: ts,
+      created_at: ts,
+      updated_at: ts,
+    }], 'id');
+    runBackgroundTask(c, 'message_notification_failed', async () => {
+      const sender = await supabaseUserByAnyId(c, userId);
+      const senderName = cleanText(sender?.full_name || sender?.username || 'Someone', 80);
+      const privatePreview = mediaType === 'voice'
+        ? 'Sent you a voice message'
+        : mediaType === 'video'
+          ? 'Sent you a video'
+          : mediaType === 'file'
+            ? 'Sent you a file'
+            : mediaUrl
+              ? 'Sent you a photo'
+              : 'Sent you a message';
+      await insertNotificationOnce(c, {
+        userId: receiverId,
+        type: 'message',
+        title: `${senderName} messaged you`,
+        body: privatePreview,
+        data: { sender_id: userId, conversation_id: userId, message_id: id, actor_name: senderName },
+        dedupeKey: `message:${id}`,
+        dedupeSeconds: 86400,
+      });
+    });
+    return c.json(await messagePayload(c, supabaseMessageToLegacy({ id, sender_id: userId, receiver_id: receiverId, body: content, media_url: mediaUrl || null, media_type: mediaType, media, created_at: ts, updated_at: ts, status: 'sent' })));
+  }
   if (content && !mediaUrl) {
     const recentDuplicate: any = await c.env.DB.prepare(
       "SELECT id FROM messages WHERE sender_id = ? AND receiver_id = ? AND content = ? AND created_at > datetime('now', '-30 seconds') LIMIT 1"
@@ -14709,7 +15092,7 @@ api.post('/messages/typing', authMiddleware, async (c) => {
 api.get('/messages/:userId', authMiddleware, async (c) => {
   const myId = getUserId(c);
   const oid = publicId(c.req.param('userId'), 120);
-  await touchUserPresence(c.env.DB, myId);
+  if (!supabasePrimaryConfigured(c)) await touchUserPresence(c.env.DB, myId);
   const limited = await enforceRateLimit(c, 'message_read', myId, 160, 60);
   if (limited) return limited;
   const invalidPeer = await validateDirectMessagePeer(c, myId, oid);
@@ -14717,6 +15100,14 @@ api.get('/messages/:userId', authMiddleware, async (c) => {
   const limit = clampNumber(c.req.query('limit') || '80', 1, 100, 80);
   const before = cleanText(c.req.query('before') || '', 60);
   const after = cleanText(c.req.query('after') || '', 60);
+  if (supabasePrimaryConfigured(c)) {
+    await supabaseAdminPatchRows(c, 'app_messages', {
+      sender_id: postgrestEqFilter(oid),
+      receiver_id: postgrestEqFilter(myId),
+      is_read: 'eq.false',
+    }, { is_read: true, updated_at: now() }).catch(() => undefined);
+    return c.json(await supabaseDirectMessageRows(c, myId, oid, { limit, before, after }));
+  }
   await c.env.DB.prepare('UPDATE messages SET is_read = 1 WHERE sender_id = ? AND receiver_id = ? AND is_read = 0').bind(oid, myId).run();
   const directMessagesSql = after
     ? `
@@ -14763,6 +15154,51 @@ api.post('/group-chats', authMiddleware, async (c) => {
     : [];
   const uniqueMemberIds = Array.from(new Set(memberIds)).slice(0, 50);
   if (uniqueMemberIds.length < 1) return c.json({ detail: 'Select at least one person for a group chat.' }, 400);
+  if (supabasePrimaryConfigured(c)) {
+    const users = await supabaseUsersByAnyIds(c, uniqueMemberIds);
+    if (uniqueMemberIds.some((memberId) => !users.has(memberId))) {
+      return c.json({ detail: 'One or more selected people could not be found.' }, 400);
+    }
+    for (const memberId of uniqueMemberIds) {
+      if (await supabaseBlockPair(c, userId, memberId)) return c.json({ detail: 'A blocked profile cannot be added to this group.' }, 403);
+    }
+    const groupId = uuid();
+    const name = cleanText(body.name || '', 80) || 'New group';
+    const ts = now();
+    await supabaseAdminUpsert(c, 'app_group_chats', [{
+      id: groupId,
+      name,
+      created_by: userId,
+      metadata: { source: 'cloudflare_worker_primary' },
+      legacy_created_at: ts,
+      created_at: ts,
+      updated_at: ts,
+    }], 'id');
+    await supabaseAdminUpsert(c, 'app_group_chat_members', [
+      { id: uuid(), group_id: groupId, user_id: userId, role: 'owner', legacy_created_at: ts, created_at: ts, updated_at: ts },
+      ...uniqueMemberIds.map((memberId) => ({
+        id: uuid(),
+        group_id: groupId,
+        user_id: memberId,
+        role: 'member',
+        legacy_created_at: ts,
+        created_at: ts,
+        updated_at: ts,
+      })),
+    ], 'group_id,user_id');
+    const messageId = uuid();
+    await supabaseAdminUpsert(c, 'app_group_messages', [{
+      id: messageId,
+      group_id: groupId,
+      sender_id: userId,
+      body: 'Created the group',
+      media: {},
+      legacy_created_at: ts,
+      created_at: ts,
+      updated_at: ts,
+    }], 'id');
+    return c.json({ id: groupId, name, member_count: uniqueMemberIds.length + 1, created_by: userId, created_at: ts });
+  }
   await ensureAbuseProtectionSchema(c.env.DB);
   await ensureGroupChatSchema(c.env.DB);
   const memberPlaceholders = uniqueMemberIds.map(() => '?').join(', ');
@@ -14812,6 +15248,31 @@ api.get('/group-chats/:groupId/messages', authMiddleware, async (c) => {
   const limit = clampNumber(c.req.query('limit') || '80', 1, 100, 80);
   const before = cleanText(c.req.query('before') || '', 60);
   const after = cleanText(c.req.query('after') || '', 60);
+  if (supabasePrimaryConfigured(c)) {
+    const [groups, members] = await Promise.all([
+      supabaseAdminQueryRows(c, 'app_group_chats', {
+        select: '*',
+        filters: { id: postgrestEqFilter(groupId) },
+        limit: 1,
+      }),
+      supabaseAdminQueryRows(c, 'app_group_chat_members', {
+        select: 'user_id',
+        filters: { group_id: postgrestEqFilter(groupId) },
+        limit: 200,
+      }),
+    ]);
+    const group = groups[0];
+    if (!group) return c.json({ detail: 'Group not found' }, 404);
+    const messages = await supabaseGroupMessageRows(c, groupId, { limit, before, after });
+    return c.json({
+      group: {
+        ...group,
+        member_count: members.length,
+        created_at: group.legacy_created_at || group.created_at,
+      },
+      messages,
+    });
+  }
 
   const group: any = await c.env.DB.prepare(`
     SELECT g.*, COUNT(m.user_id) AS member_count
@@ -14871,6 +15332,43 @@ api.post('/group-chats/:groupId/messages', authMiddleware, async (c) => {
         ? 'file'
         : mediaUrl ? 'image' : null;
   if (!content && !mediaUrl) return c.json({ detail: 'Message is empty' }, 400);
+  if (supabasePrimaryConfigured(c)) {
+    if (content && !mediaUrl) {
+      const recentDuplicate = await supabaseAdminQueryRows(c, 'app_group_messages', {
+        select: 'id',
+        filters: {
+          group_id: postgrestEqFilter(groupId),
+          sender_id: postgrestEqFilter(userId),
+          body: postgrestEqFilter(content),
+          created_at: `gt.${new Date(Date.now() - 30_000).toISOString()}`,
+        },
+        limit: 1,
+      });
+      if (recentDuplicate[0]) {
+        await logSecurityEvent(c, 'duplicate_group_message_blocked', userId, { group_id: groupId });
+        return c.json({ detail: 'You already sent that message. Try again in a moment.' }, 429);
+      }
+    }
+    const id = uuid();
+    const ts = now();
+    const media: Record<string, unknown> = {};
+    if (mediaUrl) media.url = mediaUrl;
+    if (mediaType) media.type = mediaType;
+    await supabaseAdminUpsert(c, 'app_group_messages', [{
+      id,
+      group_id: groupId,
+      sender_id: userId,
+      body: content,
+      media_url: mediaUrl || null,
+      media_type: mediaType,
+      media,
+      legacy_created_at: ts,
+      created_at: ts,
+      updated_at: ts,
+    }], 'id');
+    await supabaseAdminPatchRows(c, 'app_group_chats', { id: postgrestEqFilter(groupId) }, { updated_at: ts }).catch(() => undefined);
+    return c.json(await messagePayload(c, supabaseMessageToLegacy({ id, group_id: groupId, sender_id: userId, body: content, media_url: mediaUrl || null, media_type: mediaType, media, created_at: ts, updated_at: ts, status: 'sent' })));
+  }
   if (content && !mediaUrl) {
     const recentDuplicate: any = await c.env.DB.prepare(
       "SELECT id FROM group_messages WHERE group_id = ? AND sender_id = ? AND content = ? AND created_at > datetime('now', '-30 seconds') LIMIT 1"
@@ -16984,17 +17482,55 @@ async function writeAdminAuditLog(c: any, admin: AdminContext, input: {
   beforeState?: Record<string, unknown>;
   afterState?: Record<string, unknown>;
 }) {
-  await ensureAdminModerationSchema(c.env.DB);
   const ts = now();
   const reason = cleanMultilineText(input.reason || '', 800);
   const note = cleanMultilineText(input.note || '', 1000);
   const targetUserId = publicId(input.targetUserId || '', 120);
   const requestId = cleanText(c.get?.('requestId') || c.req.header('X-Request-ID') || '', 120);
-  const ipHash = await safeRequestIpHash(c);
   const actionType = cleanText(input.actionType, 80);
   const targetType = cleanText(input.targetType, 60);
   const targetId = publicId(input.targetId, 160);
 
+  if (supabasePrimaryConfigured(c)) {
+    await Promise.all([
+      supabaseAdminUpsert(c, 'app_audit_logs', [{
+        id: uuid(),
+        actor_admin_user_id: admin.userId,
+        actor_role: admin.role,
+        action_type: actionType,
+        target_type: targetType,
+        target_id: targetId,
+        target_user_id: targetUserId,
+        reason,
+        internal_note: note,
+        before_state: scrubLogMetadata(input.beforeState || {}),
+        after_state: scrubLogMetadata(input.afterState || {}),
+        request_id: requestId,
+        metadata: { source: 'cloudflare_worker_primary' },
+        legacy_created_at: ts,
+        created_at: ts,
+      }], 'id'),
+      supabaseAdminUpsert(c, 'app_moderation_actions', [{
+        id: uuid(),
+        actor_admin_user_id: admin.userId,
+        actor_role: admin.role,
+        action_type: actionType,
+        target_type: targetType,
+        target_id: targetId,
+        target_user_id: targetUserId,
+        reason,
+        note,
+        metadata: { request_id: requestId, source: 'cloudflare_worker_primary' },
+        legacy_created_at: ts,
+        created_at: ts,
+        updated_at: ts,
+      }], 'id'),
+    ]);
+    return;
+  }
+
+  await ensureAdminModerationSchema(c.env.DB);
+  const ipHash = await safeRequestIpHash(c);
   await c.env.DB.batch([
     c.env.DB.prepare(
       `INSERT INTO audit_logs (
@@ -17811,7 +18347,7 @@ function adminCommentPayload(row: any) {
 }
 
 function reportTargetType(row: any): string {
-  return normalizeReportTargetType(row?.reported_type || row?.report_type || 'other');
+  return normalizeReportTargetType(row?.target_type || row?.reported_type || row?.report_type || 'other');
 }
 
 function adminReportSummary(row: any, env?: Env) {
@@ -17833,9 +18369,9 @@ function adminReportSummary(row: any, env?: Env) {
   return {
     id: row.id,
     reporter_id: row.reporter_id,
-    reported_id: row.reported_id,
+    reported_id: row.reported_id || row.target_id,
     target_type: type,
-    target_id: row.reported_id,
+    target_id: row.target_id || row.reported_id,
     target_owner_user_id: row.target_owner_user_id || row.post_user_id || row.comment_user_id || row.message_sender_id || '',
     reason: normalizeReportReason(row.reason),
     details: cleanMultilineText(row.details, 1000),
@@ -17863,7 +18399,124 @@ function adminReportSummary(row: any, env?: Env) {
   };
 }
 
+async function supabaseEnrichAdminReportRows(c: any, reports: any[]): Promise<any[]> {
+  if (!reports.length) return [];
+  const reporterIds = reports.map((row) => publicId(row?.reporter_id, 120)).filter(Boolean);
+  const ownerIds = reports.map((row) => publicId(row?.target_owner_user_id, 120)).filter(Boolean);
+  const postIds = new Set<string>();
+  const commentIds = new Set<string>();
+  const messageIds = new Set<string>();
+
+  for (const report of reports) {
+    const targetType = normalizeReportTargetType(report?.target_type);
+    const targetId = publicId(report?.target_id, 160);
+    const metadata = parseJsonObject(report?.metadata);
+    const contentId = publicId((metadata as any).content_id, 160);
+    if ((targetType === 'post' || targetType === 'discover_post') && targetId) postIds.add(targetId);
+    if (contentId) postIds.add(contentId);
+    if (targetType === 'comment' && targetId) commentIds.add(targetId);
+    if (targetType === 'message' && targetId) messageIds.add(targetId);
+  }
+
+  const [users, posts, comments, messages] = await Promise.all([
+    supabaseUsersByAnyIds(c, [...reporterIds, ...ownerIds]),
+    postIds.size
+      ? supabaseAdminQueryRows(c, 'app_posts', {
+        select: SUPABASE_APP_POST_SELECT,
+        filters: { legacy_post_id: postgrestInFilter(Array.from(postIds)) },
+        limit: Math.max(1, postIds.size),
+      }).catch((error: any) => {
+        console.warn(JSON.stringify({ event: 'supabase_admin_report_posts_failed', code: getErrorCode(error).slice(0, 180) }));
+        return [];
+      })
+      : Promise.resolve([]),
+    commentIds.size
+      ? supabaseAdminQueryRows(c, 'post_comments', {
+        select: 'legacy_comment_id,legacy_post_id,app_user_id,user_id,body,status,created_at,legacy_created_at',
+        filters: { legacy_comment_id: postgrestInFilter(Array.from(commentIds)) },
+        limit: Math.max(1, commentIds.size),
+      }).catch((error: any) => {
+        console.warn(JSON.stringify({ event: 'supabase_admin_report_comments_failed', code: getErrorCode(error).slice(0, 180) }));
+        return [];
+      })
+      : Promise.resolve([]),
+    messageIds.size
+      ? supabaseAdminQueryRows(c, 'app_messages', {
+        select: 'id,sender_id,receiver_id,body,media_url,media_type,status,created_at,legacy_created_at',
+        filters: { id: postgrestInFilter(Array.from(messageIds)) },
+        limit: Math.max(1, messageIds.size),
+      }).catch((error: any) => {
+        console.warn(JSON.stringify({ event: 'supabase_admin_report_messages_failed', code: getErrorCode(error).slice(0, 180) }));
+        return [];
+      })
+      : Promise.resolve([]),
+  ]);
+
+  const postMap = new Map(posts.map((row: any) => [publicId(row?.legacy_post_id || row?.id, 160), row]));
+  const commentMap = new Map(comments.map((row: any) => [publicId(row?.legacy_comment_id, 160), row]));
+  const messageMap = new Map(messages.map((row: any) => [publicId(row?.id, 160), row]));
+
+  return reports.map((report) => {
+    const targetType = normalizeReportTargetType(report?.target_type);
+    const targetId = publicId(report?.target_id, 160);
+    const metadata = parseJsonObject(report?.metadata);
+    const contentId = publicId((metadata as any).content_id, 160);
+    const post = postMap.get(targetId) || postMap.get(contentId) || null;
+    const comment = commentMap.get(targetId) || null;
+    const message = messageMap.get(targetId) || null;
+    const targetUserId = publicId(report?.target_owner_user_id || post?.app_user_id || comment?.app_user_id || message?.sender_id || targetId, 120);
+    const reporter = users.get(publicId(report?.reporter_id, 120)) || {};
+    const targetUser = users.get(targetUserId) || {};
+    const media = post ? supabaseAppPostMedia(post) : { mediaUrls: [], mediaTypes: [], mediaDimensions: [] };
+    return {
+      ...report,
+      reported_id: targetId,
+      reported_type: targetType,
+      report_type: targetType,
+      content_id: contentId,
+      created_at: report?.legacy_created_at || report?.created_at,
+      updated_at: report?.legacy_updated_at || report?.updated_at,
+      reporter_username: reporter?.username,
+      reporter_full_name: reporter?.full_name,
+      reporter_profile_image: reporter?.avatar_url,
+      post_id: post ? publicId(post?.legacy_post_id || post?.id, 160) : '',
+      post_user_id: publicId(post?.app_user_id || post?.user_id, 120),
+      post_content: cleanMultilineText(post?.content, 4000),
+      post_title: cleanText(post?.title, 180),
+      post_image: media.mediaUrls[0] || '',
+      post_images: JSON.stringify(media.mediaUrls),
+      post_media_types: JSON.stringify(media.mediaTypes),
+      post_media_dimensions: JSON.stringify(media.mediaDimensions),
+      post_status: cleanText(post?.status, 40),
+      comment_id: publicId(comment?.legacy_comment_id, 160),
+      comment_user_id: publicId(comment?.app_user_id || comment?.user_id, 120),
+      comment_content: cleanMultilineText(comment?.body, 1000),
+      comment_status: cleanText(comment?.status, 40),
+      message_id: publicId(message?.id, 160),
+      message_sender_id: publicId(message?.sender_id, 120),
+      message_receiver_id: publicId(message?.receiver_id, 120),
+      message_content: cleanMultilineText(message?.body, 1000),
+      message_media_type: cleanText(message?.media_type, 40),
+      message_status: cleanText(message?.status, 40),
+      target_user_id: targetUserId,
+      target_username: targetUser?.username,
+      target_full_name: targetUser?.full_name,
+      target_profile_image: targetUser?.avatar_url,
+      target_status: cleanText(parseJsonObject(targetUser?.metadata).status || 'active', 40),
+    };
+  });
+}
+
 async function getAdminReportRow(c: any, reportId: string) {
+  if (supabasePrimaryConfigured(c)) {
+    const rows = await supabaseAdminQueryRows(c, 'app_reports', {
+      select: '*',
+      filters: { id: postgrestEqFilter(reportId) },
+      limit: 1,
+    });
+    const enriched = await supabaseEnrichAdminReportRows(c, rows);
+    return enriched[0] || null;
+  }
   return c.env.DB.prepare(`
     SELECT
       r.*,
@@ -17966,6 +18619,90 @@ async function reportTargetPreview(c: any, report: any) {
 }
 
 async function adminReportDetail(c: any, report: any) {
+  if (supabasePrimaryConfigured(c)) {
+    const type = reportTargetType(report);
+    let target: any = { type, missing: true };
+    if ((type === 'post' || type === 'discover_post') && (report.post_id || report.reported_id)) {
+      target = {
+        type: 'post',
+        post: adminPostPayload({
+          id: report.post_id || report.reported_id,
+          user_id: report.post_user_id || report.target_owner_user_id || '',
+          content: report.post_content || '',
+          title: report.post_title || '',
+          image: report.post_image || '',
+          images: report.post_images || '',
+          media_types: report.post_media_types || '',
+          media_dimensions: report.post_media_dimensions || '',
+          status: report.post_status || '',
+          user_username: report.target_username || '',
+          user_full_name: report.target_full_name || '',
+          user_profile_image: report.target_profile_image || '',
+        }, c.env),
+      };
+    } else if (type === 'comment' && (report.comment_id || report.reported_id)) {
+      target = {
+        type: 'comment',
+        comment: {
+          id: report.comment_id || report.reported_id,
+          post_id: report.content_id || '',
+          user_id: report.comment_user_id || report.target_owner_user_id || '',
+          content: cleanMultilineText(report.comment_content, 1000),
+          status: cleanText(report.comment_status, 40),
+        },
+      };
+    } else if (type === 'message' && (report.message_id || report.reported_id)) {
+      target = {
+        type: 'message',
+        privacy_warning: true,
+        message: {
+          id: report.message_id || report.reported_id,
+          sender_id: report.message_sender_id || '',
+          receiver_id: report.message_receiver_id || '',
+          content: cleanMultilineText(report.message_content, 1000),
+          media_type: cleanText(report.message_media_type, 40),
+          status: cleanText(report.message_status, 40),
+        },
+      };
+    } else if ((type === 'profile' || type === 'user') && report.target_user_id) {
+      target = {
+        type: 'user',
+        user: {
+          id: report.target_user_id,
+          username: publicUsernameFor({ username: report.target_username }),
+          full_name: cleanText(report.target_full_name, 120),
+          profile_image: safeMediaReference(report.target_profile_image),
+          status: cleanText(report.target_status, 40),
+        },
+      };
+    }
+    const actionTargetId = publicId(report.reported_id || report.target_id || report.id, 160);
+    const actionTargetUserId = publicId(report.target_owner_user_id || report.reported_id || '', 120);
+    const actionFilters: Record<string, string> = actionTargetUserId
+      ? { or: `(target_id.eq.${actionTargetId},target_user_id.eq.${actionTargetUserId})` }
+      : { target_id: postgrestEqFilter(actionTargetId) };
+    const actionRows = await supabaseAdminQueryRows(c, 'app_moderation_actions', {
+      select: '*',
+      filters: actionFilters,
+      order: 'created_at.desc',
+      limit: 30,
+    }).catch(() => []);
+    return {
+      ...adminReportSummary(report, c.env),
+      admin_notes: cleanMultilineText(report.admin_notes, 1000),
+      action_taken: cleanText(report.action_taken, 120),
+      reviewed_by: report.reviewed_by || '',
+      reviewed_at: report.reviewed_at || null,
+      target,
+      notes: [],
+      previous_actions: actionRows.map((action: any) => ({
+        ...action,
+        reason: cleanMultilineText(action.reason, 500),
+        note: cleanMultilineText(action.note, 800),
+      })),
+    };
+  }
+
   const notes = await c.env.DB.prepare(`
     SELECT n.*, u.username AS admin_username, u.full_name AS admin_full_name
     FROM moderation_notes n
@@ -18008,6 +18745,39 @@ async function adminReportDetail(c: any, report: any) {
 }
 
 async function setReportStatus(c: any, admin: AdminContext, reportId: string, status: string, reason: string, note: string) {
+  if (supabasePrimaryConfigured(c)) {
+    const beforeRows = await supabaseAdminQueryRows(c, 'app_reports', {
+      select: '*',
+      filters: { id: postgrestEqFilter(reportId) },
+      limit: 1,
+    });
+    const before = beforeRows[0];
+    if (!before) return c.json({ detail: 'Report not found.' }, 404);
+    const normalizedStatus = normalizeReportStatus(status, 'under_review');
+    const ts = now();
+    const patch: Record<string, unknown> = {
+      status: normalizedStatus,
+      admin_notes: note,
+      action_taken: normalizedStatus,
+      reviewed_by: admin.userId,
+      updated_at: ts,
+    };
+    if (['action_taken', 'dismissed', 'closed', 'duplicate'].includes(normalizedStatus)) patch.closed_at = ts;
+    await supabaseAdminPatchRows(c, 'app_reports', { id: postgrestEqFilter(reportId) }, patch);
+    await writeAdminAuditLog(c, admin, {
+      actionType: `report_${normalizedStatus}`,
+      targetType: 'report',
+      targetId: reportId,
+      targetUserId: before.target_owner_user_id || before.target_id || '',
+      reason,
+      note,
+      beforeState: { status: before.status },
+      afterState: { status: normalizedStatus },
+    });
+    const updated = await getAdminReportRow(c, reportId);
+    return c.json({ report: await adminReportDetail(c, updated) });
+  }
+
   const before: any = await c.env.DB.prepare('SELECT id, status, reported_id, reported_type, report_type FROM reports WHERE id = ?').bind(reportId).first();
   if (!before) return c.json({ detail: 'Report not found.' }, 404);
   const normalizedStatus = normalizeReportStatus(status, 'under_review');
@@ -18242,8 +19012,42 @@ api.get('/admin/dashboard', authMiddleware, async (c) => {
 api.get('/admin/reports', authMiddleware, async (c) => {
   try {
     await requireAdminRole(c, 'reports:read');
-    await ensureAdminModerationSchema(c.env.DB);
     const { limit, offset } = adminPageParams(c);
+    if (supabasePrimaryConfigured(c)) {
+      const filters: Record<string, string> = {};
+      const statusQuery = cleanText(c.req.query('status') || 'open', 40).toLowerCase();
+      if (statusQuery && statusQuery !== 'all') {
+        filters.status = statusQuery === 'open'
+          ? postgrestInFilter(['open', 'pending', 'under_review', 'in_review', 'escalated'])
+          : postgrestEqFilter(normalizeReportStatus(statusQuery, 'open'));
+      }
+      const reason = cleanText(c.req.query('reason') || '', 80);
+      if (reason && reason !== 'all') filters.reason = postgrestEqFilter(normalizeReportReason(reason));
+      const targetType = cleanText(c.req.query('target_type') || c.req.query('type') || '', 60);
+      if (targetType && targetType !== 'all') filters.target_type = postgrestEqFilter(normalizeReportTargetType(targetType));
+      const fromDate = cleanText(c.req.query('from') || '', 40);
+      if (/^\d{4}-\d{2}-\d{2}/.test(fromDate)) filters.created_at = `gte.${fromDate}`;
+      const search = postgrestSearchTerm(c.req.query('search') || '');
+      if (search) {
+        filters.or = `(id.ilike.*${search}*,target_id.ilike.*${search}*,reporter_id.ilike.*${search}*,target_owner_user_id.ilike.*${search}*)`;
+      }
+      const rows = await supabaseAdminQueryRows(c, 'app_reports', {
+        select: '*',
+        filters,
+        order: 'created_at.desc',
+        limit,
+        offset,
+      });
+      const enriched = await supabaseEnrichAdminReportRows(c, rows);
+      const rank: Record<string, number> = { urgent: 0, high: 1, medium: 2, normal: 3 };
+      enriched.sort((a, b) => (rank[cleanText(a.priority || 'normal', 20)] ?? 4) - (rank[cleanText(b.priority || 'normal', 20)] ?? 4));
+      return c.json({
+        results: enriched.map((row) => adminReportSummary(row, c.env)),
+        pagination: { limit, offset, next_offset: offset + limit },
+      });
+    }
+
+    await ensureAdminModerationSchema(c.env.DB);
     const conditions: string[] = [];
     const binds: any[] = [];
     const statusQuery = cleanText(c.req.query('status') || 'open', 40).toLowerCase();
@@ -18306,7 +19110,7 @@ api.get('/admin/reports', authMiddleware, async (c) => {
 api.get('/admin/reports/:reportId', authMiddleware, async (c) => {
   try {
     await requireAdminRole(c, 'reports:read');
-    await ensureAdminModerationSchema(c.env.DB);
+    if (!supabasePrimaryConfigured(c)) await ensureAdminModerationSchema(c.env.DB);
     const reportId = publicId(c.req.param('reportId'), 120);
     const report = await getAdminReportRow(c, reportId);
     if (!report) return c.json({ detail: 'Report not found.' }, 404);
