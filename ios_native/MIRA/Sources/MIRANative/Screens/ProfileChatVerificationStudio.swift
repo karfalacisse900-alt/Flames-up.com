@@ -125,6 +125,19 @@ final class ProfileNativeModel: ObservableObject {
     await MIRALocalJSONCache.save(posts, key: postsCacheKey(for: user.id))
   }
 
+  func applyEngagementUpdate(_ update: MIRAPostEngagementUpdate) async {
+    guard let user, let index = posts.firstIndex(where: { $0.id == update.postId }) else { return }
+    posts[index] = posts[index].updating(
+      liked: update.liked,
+      likesCount: update.likesCount,
+      commentsCount: update.commentsCount,
+      saved: update.saved,
+      savesCount: update.savesCount
+    )
+    await MIRAAppCacheStore.shared.saveProfilePosts(posts, userId: user.id)
+    await MIRALocalJSONCache.save(posts, key: postsCacheKey(for: user.id))
+  }
+
   func togglePin(_ post: MIRAPost) async {
     guard let user else { return }
     guard let index = posts.firstIndex(where: { $0.id == post.id }) else { return }
@@ -271,6 +284,10 @@ public struct ProfileNativeView: View {
       .onReceive(NotificationCenter.default.publisher(for: .miraPostWasRemoved)) { notification in
         guard let update = MIRAPostRemovalSync.update(from: notification) else { return }
         Task { await model.removePostLocally(id: update.postId) }
+      }
+      .onReceive(NotificationCenter.default.publisher(for: .miraPostEngagementDidChange)) { notification in
+        guard let update = MIRAPostEngagementSync.update(from: notification) else { return }
+        Task { await model.applyEngagementUpdate(update) }
       }
       .miraBottomSheet(isPresented: $showEditProfile, preferredHeightFraction: 0.86) { dismissEditProfile in
         EditProfileNativeView(user: model.user, api: model.api, onCancel: dismissEditProfile) { updated in
@@ -573,6 +590,19 @@ final class UserProfileNativeModel: ObservableObject {
     await MIRALocalJSONCache.save(posts, key: postsCacheKey)
   }
 
+  func applyEngagementUpdate(_ update: MIRAPostEngagementUpdate) async {
+    guard let index = posts.firstIndex(where: { $0.id == update.postId }) else { return }
+    posts[index] = posts[index].updating(
+      liked: update.liked,
+      likesCount: update.likesCount,
+      commentsCount: update.commentsCount,
+      saved: update.saved,
+      savesCount: update.savesCount
+    )
+    await MIRAAppCacheStore.shared.saveProfilePosts(posts, userId: userId)
+    await MIRALocalJSONCache.save(posts, key: postsCacheKey)
+  }
+
   func toggleFollow() async {
     let previousFollowing = isFollowing
     let previousFollowers = followersCount
@@ -677,6 +707,10 @@ public struct UserProfileNativeView: View {
     .onReceive(NotificationCenter.default.publisher(for: .miraPostWasRemoved)) { notification in
       guard let update = MIRAPostRemovalSync.update(from: notification) else { return }
       Task { await model.removePostLocally(id: update.postId) }
+    }
+    .onReceive(NotificationCenter.default.publisher(for: .miraPostEngagementDidChange)) { notification in
+      guard let update = MIRAPostEngagementSync.update(from: notification) else { return }
+      Task { await model.applyEngagementUpdate(update) }
     }
     .background {
       NavigationLink(

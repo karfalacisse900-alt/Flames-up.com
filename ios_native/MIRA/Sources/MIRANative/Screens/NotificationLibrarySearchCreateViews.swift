@@ -233,6 +233,34 @@ final class LibraryNativeModel: ObservableObject {
     return collectionCounts[collectionName] ?? 0
   }
 
+  func applyEngagementUpdate(_ update: MIRAPostEngagementUpdate) async {
+    func apply(to values: [MIRAPost], in section: Section) -> [MIRAPost] {
+      values.compactMap { post in
+        guard post.id == update.postId else { return post }
+        if section == .liked, update.liked == false { return nil }
+        if section.collectionName != nil, update.saved == false { return nil }
+        return post.updating(
+          liked: update.liked,
+          likesCount: update.likesCount,
+          commentsCount: update.commentsCount,
+          saved: update.saved,
+          savesCount: update.savesCount
+        )
+      }
+    }
+
+    for section in postsBySection.keys {
+      postsBySection[section] = apply(to: postsBySection[section] ?? [], in: section)
+    }
+
+    posts = apply(to: posts, in: selectedSection)
+    if let collectionName = selectedSection.collectionName, update.saved == false {
+      collectionCounts[collectionName] = max(0, (collectionCounts[collectionName] ?? 1) - 1)
+      await MIRALocalJSONCache.save(collectionCounts, key: countsCacheKey)
+    }
+    await MIRALocalJSONCache.save(posts, key: sectionCacheKey(selectedSection))
+  }
+
   private func sectionCacheKey(_ section: Section) -> String {
     "native.library.section.v1.cache_first.\(section.rawValue.lowercased())"
   }
@@ -284,6 +312,10 @@ public struct LibraryNativeView: View {
     .navigationBarTitleDisplayMode(.inline)
     .miraHideTabBarOnAppear()
     .task { await model.load() }
+    .onReceive(NotificationCenter.default.publisher(for: .miraPostEngagementDidChange)) { notification in
+      guard let update = MIRAPostEngagementSync.update(from: notification) else { return }
+      Task { await model.applyEngagementUpdate(update) }
+    }
     .miraBottomSheet(
       isPresented: $isSinglePhotoPreviewPresented,
       preferredHeightFraction: 0.78,
