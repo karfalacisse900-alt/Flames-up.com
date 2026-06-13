@@ -8770,6 +8770,8 @@ async function findOrCreateSupabaseUser(c: any, payload: any, extras: any = {}) 
   return c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(id).first();
 }
 
+const SUPABASE_APP_USER_SELECT = 'id,supabase_user_id,email,username,full_name,avatar_url,cover_url,bio,city,is_private,is_verified,counts,profile,metadata,phone,phone_verified,email_verified,legacy_created_at,legacy_updated_at,created_at,updated_at';
+
 function supabaseAppUserToLegacyUser(row: any): any {
   const metadata = parseJsonObject(row?.metadata);
   const profile = parseJsonObject(row?.profile);
@@ -8815,20 +8817,25 @@ function supabaseAppUserToLegacyUser(row: any): any {
 }
 
 async function getSupabaseSessionUserByAnyId(c: any, inputId: string): Promise<any | null> {
+  const row = await getSupabaseAppUserRowByAnyId(c, inputId);
+  return row ? supabaseAppUserToLegacyUser(row) : null;
+}
+
+async function getSupabaseAppUserRowByAnyId(c: any, inputId: string): Promise<any | null> {
   const cleanId = publicId(inputId, 120);
   if (!cleanId || !supabasePrimaryConfigured(c)) return null;
   const filters: Record<string, string> = isUuidText(cleanId)
     ? { or: `(id.eq.${cleanId},supabase_user_id.eq.${cleanId})` }
     : { id: postgrestEqFilter(cleanId) };
   const rows = await supabaseAdminQueryRows(c, 'app_users', {
-    select: 'id,supabase_user_id,email,username,full_name,avatar_url,cover_url,bio,city,is_private,is_verified,counts,profile,metadata,phone,phone_verified,email_verified,legacy_created_at,legacy_updated_at,created_at,updated_at',
+    select: SUPABASE_APP_USER_SELECT,
     filters,
     limit: 1,
   }).catch((error: any) => {
     console.warn(JSON.stringify({ event: 'supabase_session_user_lookup_failed', code: getErrorCode(error).slice(0, 180) }));
     return [];
   });
-  return rows[0] ? supabaseAppUserToLegacyUser(rows[0]) : null;
+  return rows[0] || null;
 }
 
 async function findOrCreateSupabaseAppUser(c: any, payload: any, extras: any = {}) {
@@ -11223,22 +11230,7 @@ api.put('/users/me', authMiddleware, async (c) => {
   if (body.isPrivate !== undefined && body.is_private === undefined) body.is_private = body.isPrivate;
 
   if (supabasePrimaryConfigured(c)) {
-    const payload: any = (c as any).get?.('jwtPayload') || {};
-    const payloadSupabaseSub = isUuidText(payload?.supabase_sub || payload?.supabaseSub);
-    const userFilters: Record<string, string> = isUuidText(userId) || payloadSupabaseSub
-      ? { or: `(${[
-        `id.eq.${cleanText(userId, 120)}`,
-        isUuidText(userId) ? `supabase_user_id.eq.${cleanText(userId, 120)}` : '',
-        payloadSupabaseSub ? `supabase_user_id.eq.${payloadSupabaseSub}` : '',
-      ].filter(Boolean).join(',')})` }
-      : { id: postgrestEqFilter(userId) };
-    const select = 'id,supabase_user_id,email,username,full_name,avatar_url,cover_url,bio,city,is_private,is_verified,counts,profile,metadata,phone,phone_verified,email_verified,legacy_created_at,legacy_updated_at,created_at,updated_at';
-    const rows = await supabaseAdminQueryRows(c, 'app_users', {
-      select,
-      filters: userFilters,
-      limit: 1,
-    });
-    const currentRow = rows[0];
+    const currentRow = await getSupabaseAppUserRowByAnyId(c, userId);
     if (!currentRow) return c.json({ detail: 'User not found' }, 404);
 
     const appUserId = publicId(currentRow.id, 120);
@@ -11296,7 +11288,7 @@ api.put('/users/me', authMiddleware, async (c) => {
 
     await supabaseAdminPatchRows(c, 'app_users', { id: postgrestEqFilter(appUserId) }, patch);
     const refreshedRows = await supabaseAdminQueryRows(c, 'app_users', {
-      select,
+      select: SUPABASE_APP_USER_SELECT,
       filters: { id: postgrestEqFilter(appUserId) },
       limit: 1,
     });
@@ -11388,6 +11380,54 @@ api.put('/users/me/email', authMiddleware, async (c) => {
 
     if (!email) return c.json({ detail: 'Enter a valid email address.' }, 400);
 
+    if (supabasePrimaryConfigured(c)) {
+      const currentRow = await getSupabaseAppUserRowByAnyId(c, userId);
+      if (!currentRow) return c.json({ detail: 'User not found' }, 404);
+      const appUserId = publicId(currentRow.id, 120);
+      const owner = await supabaseAdminQueryRows(c, 'app_users', {
+        select: 'id',
+        filters: {
+          email: postgrestEqFilter(email),
+          id: `neq.${cleanText(appUserId, 120)}`,
+        },
+        limit: 1,
+      });
+      if (owner.length) return c.json({ detail: 'That email is already used by another account.' }, 409);
+
+      let supabaseUserId = isUuidText(currentRow.supabase_user_id);
+      if (supabaseUserId) {
+        await updateSupabaseAuthUser(c, supabaseUserId, { email });
+      } else {
+        const user = supabaseAppUserToLegacyUser(currentRow);
+        const result = await createOrFindSupabaseAuthUser(c, {
+          email,
+          username: publicUsernameFor(user),
+          fullName: user.full_name,
+          profileImage: user.profile_image,
+          provider: 'email',
+          appUserId,
+        });
+        supabaseUserId = isUuidText(result.user?.id);
+      }
+
+      await supabaseAdminPatchRows(c, 'app_users', { id: postgrestEqFilter(appUserId) }, {
+        email,
+        email_verified: false,
+        ...(supabaseUserId ? { supabase_user_id: supabaseUserId } : {}),
+        updated_at: now(),
+      });
+      const refreshedRows = await supabaseAdminQueryRows(c, 'app_users', {
+        select: SUPABASE_APP_USER_SELECT,
+        filters: { id: postgrestEqFilter(appUserId) },
+        limit: 1,
+      });
+      const user = refreshedRows[0] ? supabaseAppUserToLegacyUser(refreshedRows[0]) : supabaseAppUserToLegacyUser({ ...currentRow, email, supabase_user_id: supabaseUserId });
+      runBackgroundTask(c, 'email_update_security_log_failed', async () => {
+        await logSecurityEvent(c, 'email_updated', appUserId, {});
+      });
+      return c.json(authUserPayload(user));
+    }
+
     const currentUser: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
     if (!currentUser) return c.json({ detail: 'User not found' }, 404);
 
@@ -11437,6 +11477,44 @@ api.put('/users/me/password', authMiddleware, async (c) => {
 
     if (!newPassword) return c.json({ detail: 'New password is required.' }, 400);
     if (newPassword.length < 8) return c.json({ detail: 'New password must be at least 8 characters.' }, 400);
+
+    if (supabasePrimaryConfigured(c)) {
+      const currentRow = await getSupabaseAppUserRowByAnyId(c, userId);
+      if (!currentRow) return c.json({ detail: 'User not found' }, 404);
+      const appUserId = publicId(currentRow.id, 120);
+      let supabaseUserId = isUuidText(currentRow.supabase_user_id);
+
+      if (!supabaseUserId) {
+        const user = supabaseAppUserToLegacyUser(currentRow);
+        const email = normalizeOptionalEmail(user.email);
+        if (!email || isInternalOAuthEmail(email)) {
+          return c.json({ detail: 'Add a real email address before setting a password.', code: 'EMAIL_REQUIRED' }, 400);
+        }
+        const result = await createOrFindSupabaseAuthUser(c, {
+          email,
+          password: newPassword,
+          username: publicUsernameFor(user),
+          fullName: user.full_name,
+          profileImage: user.profile_image,
+          provider: 'email',
+          appUserId,
+        });
+        supabaseUserId = isUuidText(result.user?.id);
+        if (supabaseUserId) {
+          await supabaseAdminPatchRows(c, 'app_users', { id: postgrestEqFilter(appUserId) }, {
+            supabase_user_id: supabaseUserId,
+            updated_at: now(),
+          });
+        }
+      }
+
+      if (!supabaseUserId) return c.json({ detail: 'Could not update the login password right now.' }, 503);
+      await updateSupabaseAuthUser(c, supabaseUserId, { password: newPassword });
+      runBackgroundTask(c, 'password_update_security_log_failed', async () => {
+        await logSecurityEvent(c, 'password_updated', appUserId, {});
+      });
+      return c.json({ detail: 'Password updated.' });
+    }
 
     const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
     if (!user) return c.json({ detail: 'User not found' }, 404);
