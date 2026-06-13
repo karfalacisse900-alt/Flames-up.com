@@ -5915,6 +5915,48 @@ async function supabaseViewerInteractionPostIds(c: any, userId: string, kind: 'l
     .filter((postId) => !!postId && !seen.has(postId) && seen.add(postId));
 }
 
+async function supabaseViewerSaveCollectionCounts(c: any, userId: string): Promise<Array<{ collection: string; count: number }>> {
+  const aliases = await supabaseRelatedInteractionUserIds(c, userId);
+  const keys = await supabaseInteractionIdentityKeys(c, aliases);
+  const rows: any[] = [];
+  const select = 'legacy_post_id,post_id,collection,app_user_id,user_id';
+  const appendRows = async (filters: Record<string, string>) => {
+    rows.push(...await supabaseAdminQueryRows(c, 'app_post_interactions', {
+      select,
+      filters,
+      order: 'created_at.desc.nullslast,legacy_created_at.desc.nullslast',
+      limit: 10000,
+    }));
+  };
+
+  if (keys.appUserIds.length) {
+    await appendRows({
+      app_user_id: postgrestInFilter(keys.appUserIds),
+      kind: postgrestEqFilter('save'),
+    });
+  }
+  if (keys.authUserIds.length) {
+    await appendRows({
+      user_id: postgrestInFilter(keys.authUserIds),
+      kind: postgrestEqFilter('save'),
+    });
+  }
+
+  const byCollection = new Map<string, Set<string>>();
+  for (const row of rows) {
+    const postId = publicId(row?.legacy_post_id || row?.post_id, 120);
+    if (!postId) continue;
+    const collection = cleanText(row?.collection || 'saved', 80) || 'saved';
+    const posts = byCollection.get(collection) || new Set<string>();
+    posts.add(postId);
+    byCollection.set(collection, posts);
+  }
+
+  return Array.from(byCollection.entries())
+    .map(([collection, posts]) => ({ collection, count: posts.size }))
+    .sort((a, b) => a.collection.localeCompare(b.collection));
+}
+
 function supabaseAppPostMedia(row: any) {
   const metadata = parseJsonObject(row?.metadata);
   const fallbackImage = safeMediaReference((metadata as any).image);
@@ -16749,8 +16791,16 @@ api.delete('/library/save/:postId', authMiddleware, async (c) => {
   return c.json(postEngagementResponse(engagement, { unsaved: true }));
 });
 api.get('/library/collections', authMiddleware, async (c) => {
-  await ensureLikeUniquenessSchema(c.env.DB);
   const userId = getUserId(c);
+  if (supabasePrimaryConfigured(c)) {
+    try {
+      return c.json(await supabaseViewerSaveCollectionCounts(c, userId));
+    } catch (error: any) {
+      console.warn(JSON.stringify({ event: 'supabase_library_collections_failed', code: getErrorCode(error).slice(0, 180) }));
+      return c.json({ detail: 'Could not load bookmark collections.' }, 500);
+    }
+  }
+  await ensureLikeUniquenessSchema(c.env.DB);
   const relatedUserIds = await relatedInteractionUserIds(c.env.DB, userId);
   const relatedPlaceholders = inPlaceholders(relatedUserIds);
   const r = await c.env.DB.prepare(
@@ -22181,29 +22231,15 @@ api.get('/bookmarks/check/:postId', authMiddleware, async (c) => {
     try {
       const relatedUserIds = await supabaseRelatedInteractionUserIds(c, userId);
       const keys = await supabaseInteractionIdentityKeys(c, relatedUserIds);
-      const postUuid = isUuidText(postId);
+      const identity = await supabaseResolvePostIdentity(c, postId);
       const rows = await supabaseAdminSelectRows(c, 'app_post_interactions', {
-        legacy_post_id: postgrestEqFilter(postId),
+        or: supabasePostIdentityOrFilter(identity),
         kind: postgrestEqFilter('save'),
         app_user_id: postgrestInFilter(keys.appUserIds),
       }, 'collection', 1);
-      if (!rows.length && postUuid) {
-        rows.push(...await supabaseAdminSelectRowsIfShapeExists(c, 'app_post_interactions', {
-          post_id: postgrestEqFilter(postUuid),
-          kind: postgrestEqFilter('save'),
-          app_user_id: postgrestInFilter(keys.appUserIds),
-        }, 'collection', 1));
-      }
       if (!rows.length && keys.authUserIds.length) {
-        rows.push(...await supabaseAdminSelectRowsIfShapeExists(c, 'app_post_interactions', {
-          legacy_post_id: postgrestEqFilter(postId),
-          kind: postgrestEqFilter('save'),
-          user_id: postgrestInFilter(keys.authUserIds),
-        }, 'collection', 1));
-      }
-      if (!rows.length && postUuid && keys.authUserIds.length) {
-        rows.push(...await supabaseAdminSelectRowsIfShapeExists(c, 'app_post_interactions', {
-          post_id: postgrestEqFilter(postUuid),
+        rows.push(...await supabaseAdminSelectRows(c, 'app_post_interactions', {
+          or: supabasePostIdentityOrFilter(identity),
           kind: postgrestEqFilter('save'),
           user_id: postgrestInFilter(keys.authUserIds),
         }, 'collection', 1));
