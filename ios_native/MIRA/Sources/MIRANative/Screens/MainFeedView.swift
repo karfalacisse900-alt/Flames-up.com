@@ -249,13 +249,9 @@ final class MainFeedModel: ObservableObject {
     var unique = loaded.filter { !existing.contains($0.id) }
 
     if unique.isEmpty {
-      let fallback = photoFeedPosts(await fetchPublicFeedPage(skip: skip))
-      unique = fallback.filter { !existing.contains($0.id) }
-      if unique.isEmpty {
-        canLoadMore = fallback.count >= firstPageLimit
-        MIRAPerformanceTimeline.mark("home_load_more_duplicate_page", detail: "skip=\(skip)")
-        return
-      }
+      canLoadMore = loaded.count >= firstPageLimit
+      MIRAPerformanceTimeline.mark("home_load_more_duplicate_page", detail: "skip=\(skip)")
+      return
     }
 
     posts.append(contentsOf: await sortedByNativeScore(unique))
@@ -597,17 +593,7 @@ final class MainFeedModel: ObservableObject {
     } catch {
       MIRAPerformanceTimeline.mark("home_feed_page_failed", detail: "authenticated skip=\(skip)")
     }
-    return await fetchPublicFeedPage(skip: skip)
-  }
-
-  private func fetchPublicFeedPage(skip: Int) async -> [MIRAPost] {
-    do {
-      let loaded: [MIRAPost] = try await api.get("/posts/world-board?limit=\(firstPageLimit)&skip=\(skip)")
-      return loaded
-    } catch {
-      MIRAPerformanceTimeline.mark("home_feed_page_failed", detail: "public skip=\(skip)")
-      return []
-    }
+    return []
   }
 
   private func photoFeedPosts(_ values: [MIRAPost]) -> [MIRAPost] {
