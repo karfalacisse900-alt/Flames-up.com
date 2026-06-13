@@ -12728,10 +12728,46 @@ api.get('/blocks', authMiddleware, async (c) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 // POSTS (with Check-In support)
 // ═══════════════════════════════════════════════════════════════════════════════
+async function supabaseAudiusHiddenTrackIds(c: any, trackIds: string[] = []): Promise<Set<string>> {
+  const filters: Record<string, string> = { provider: postgrestEqFilter('audius') };
+  const cleanIds = Array.from(new Set(trackIds.map((id) => cleanText(id, 80)).filter(Boolean)));
+  if (cleanIds.length) filters.track_id = postgrestInFilter(cleanIds);
+  const rows = await supabaseAdminQueryRows(c, 'app_hidden_sounds', {
+    select: 'track_id',
+    filters,
+    limit: cleanIds.length || 1000,
+  });
+  return new Set(rows.map((row) => cleanText(row?.track_id, 80)).filter(Boolean));
+}
+
+async function supabaseAudiusTrackIsHidden(c: any, trackId: string): Promise<boolean> {
+  if (!trackId) return false;
+  const hidden = await supabaseAudiusHiddenTrackIds(c, [trackId]);
+  return hidden.has(trackId);
+}
+
+function audiusFavoriteTrackPayload(row: any) {
+  const trackId = String(row?.track_id || '');
+  return {
+    id: trackId,
+    track_id: trackId,
+    title: String(row?.title || 'Untitled track'),
+    artist: String(row?.artist || 'Audius artist'),
+    artist_id: String(row?.artist_id || ''),
+    artist_handle: String(row?.artist_handle || ''),
+    artist_profile_image: String(row?.artist_profile_image || ''),
+    artwork_url: String(row?.artwork_url || ''),
+    duration: Number(row?.duration || 0),
+    genre: String(row?.genre || ''),
+    play_count: Number(row?.play_count || 0),
+    favorite_count: Number(row?.favorite_count || 0),
+  };
+}
+
 // Music proxy: Audius powers the post creation sound picker without exposing provider internals.
 api.get('/music/audius/trending', async (c) => {
   try {
-    await ensureAudioSchema(c.env.DB);
+    if (!supabasePrimaryConfigured(c)) await ensureAudioSchema(c.env.DB);
     const limited = await enforceRateLimit(c, 'audius_trending', (await getOptionalUserId(c)) || clientIp(c), 120, 60);
     if (limited) return limited;
     const limit = clampNumber(c.req.query('limit'), 1, 50, 50);
@@ -12744,8 +12780,9 @@ api.get('/music/audius/trending', async (c) => {
       600,
       () => fetchAudiusTracks('/tracks/trending', { time, limit })
     );
-    const hidden = await c.env.DB.prepare("SELECT track_id FROM hidden_sounds WHERE provider = 'audius'").all();
-    const hiddenIds = new Set((hidden.results as any[]).map((row) => String(row.track_id)));
+    const hiddenIds = supabasePrimaryConfigured(c)
+      ? await supabaseAudiusHiddenTrackIds(c)
+      : new Set(((await c.env.DB.prepare("SELECT track_id FROM hidden_sounds WHERE provider = 'audius'").all()).results as any[]).map((row) => String(row.track_id)));
     return c.json({ tracks: (tracks as any[]).filter((track) => !hiddenIds.has(String(track.track_id))) });
   } catch (error: any) {
     console.log('Audius trending failed:', error?.message || error);
@@ -12755,7 +12792,7 @@ api.get('/music/audius/trending', async (c) => {
 
 api.get('/music/audius/search', async (c) => {
   try {
-    await ensureAudioSchema(c.env.DB);
+    if (!supabasePrimaryConfigured(c)) await ensureAudioSchema(c.env.DB);
     const limited = await enforceRateLimit(c, 'audius_search', (await getOptionalUserId(c)) || clientIp(c), 90, 60);
     if (limited) return limited;
     const q = cleanText(c.req.query('q') || c.req.query('query'), 90);
@@ -12768,8 +12805,9 @@ api.get('/music/audius/search', async (c) => {
       300,
       () => fetchAudiusTracks('/tracks/search', { query: q, limit })
     );
-    const hidden = await c.env.DB.prepare("SELECT track_id FROM hidden_sounds WHERE provider = 'audius'").all();
-    const hiddenIds = new Set((hidden.results as any[]).map((row) => String(row.track_id)));
+    const hiddenIds = supabasePrimaryConfigured(c)
+      ? await supabaseAudiusHiddenTrackIds(c)
+      : new Set(((await c.env.DB.prepare("SELECT track_id FROM hidden_sounds WHERE provider = 'audius'").all()).results as any[]).map((row) => String(row.track_id)));
     return c.json({ tracks: (tracks as any[]).filter((track) => !hiddenIds.has(String(track.track_id))) });
   } catch (error: any) {
     console.log('Audius search failed:', error?.message || error);
@@ -12779,14 +12817,16 @@ api.get('/music/audius/search', async (c) => {
 
 api.get('/music/audius/stream/:trackId', async (c) => {
   try {
-    await ensureAudioSchema(c.env.DB);
+    if (!supabasePrimaryConfigured(c)) await ensureAudioSchema(c.env.DB);
     const limited = await enforceRateLimit(c, 'audius_stream_lookup', (await getOptionalUserId(c)) || clientIp(c), 180, 60);
     if (limited) return limited;
     const trackId = cleanText(c.req.param('trackId'), 80);
     if (!trackId) return c.json({ detail: 'Track id is required.' }, 400);
-    const hidden = await c.env.DB.prepare("SELECT track_id FROM hidden_sounds WHERE provider = 'audius' AND track_id = ?")
-      .bind(trackId)
-      .first();
+    const hidden = supabasePrimaryConfigured(c)
+      ? await supabaseAudiusTrackIsHidden(c, trackId)
+      : !!(await c.env.DB.prepare("SELECT track_id FROM hidden_sounds WHERE provider = 'audius' AND track_id = ?")
+        .bind(trackId)
+        .first());
     if (hidden) return c.json({ detail: 'This sound is unavailable.' }, 404);
 
     const response = await fetch(audiusUrl(`/tracks/${encodeURIComponent(trackId)}`, {}), {
@@ -12805,8 +12845,19 @@ api.get('/music/audius/stream/:trackId', async (c) => {
 
 api.get('/music/audius/favorites', authMiddleware, async (c) => {
   try {
-    await ensureAudioSchema(c.env.DB);
     const userId = getUserId(c);
+    if (supabasePrimaryConfigured(c)) {
+      const rows = await supabaseAdminQueryRows(c, 'app_favorite_sounds', {
+        select: 'track_id,title,artist,artist_id,artist_handle,artist_profile_image,artwork_url,duration,genre,play_count,favorite_count',
+        filters: { user_id: postgrestEqFilter(userId), provider: postgrestEqFilter('audius') },
+        order: 'created_at.desc',
+        limit: 100,
+      });
+      const hiddenIds = await supabaseAudiusHiddenTrackIds(c, rows.map((row) => String(row.track_id || '')));
+      return c.json({ tracks: rows.map(audiusFavoriteTrackPayload).filter((track) => track.id && !hiddenIds.has(track.id)) });
+    }
+
+    await ensureAudioSchema(c.env.DB);
     const rows = await c.env.DB.prepare(
       `SELECT fs.track_id, fs.title, fs.artist, fs.artist_id, fs.artist_handle, fs.artist_profile_image,
               fs.artwork_url, fs.duration, fs.genre, fs.play_count, fs.favorite_count
@@ -12839,16 +12890,10 @@ api.get('/music/audius/favorites', authMiddleware, async (c) => {
 
 api.post('/music/audius/favorites', authMiddleware, async (c) => {
   try {
-    await ensureAudioSchema(c.env.DB);
     const userId = getUserId(c);
     const body: any = await c.req.json().catch(() => ({}));
     const trackId = cleanText(body.track_id || body.id || body.audio_track_id, 80);
     if (!trackId) return c.json({ detail: 'Track id is required.' }, 400);
-
-    const hidden = await c.env.DB.prepare("SELECT track_id FROM hidden_sounds WHERE provider = 'audius' AND track_id = ?")
-      .bind(trackId)
-      .first();
-    if (hidden) return c.json({ detail: 'This sound is unavailable.' }, 400);
 
     const title = cleanText(body.title || body.audio_title || 'Untitled track', 180);
     const artist = cleanText(body.artist || body.audio_artist || 'Audius artist', 120);
@@ -12861,6 +12906,43 @@ api.post('/music/audius/favorites', authMiddleware, async (c) => {
     const playCount = clampNumber(body.play_count, 0, 1000000000, 0);
     const favoriteCount = clampNumber(body.favorite_count, 0, 1000000000, 0);
     const ts = now();
+
+    if (supabasePrimaryConfigured(c)) {
+      if (await supabaseAudiusTrackIsHidden(c, trackId)) return c.json({ detail: 'This sound is unavailable.' }, 400);
+      await supabaseAdminUpsert(c, 'app_favorite_sounds', [{
+        id: uuid(),
+        user_id: userId,
+        provider: 'audius',
+        track_id: trackId,
+        title,
+        artist,
+        artist_id: artistId,
+        artist_handle: artistHandle,
+        artist_profile_image: artistProfileImage,
+        artwork_url: artworkUrl,
+        duration,
+        genre,
+        play_count: playCount,
+        favorite_count: favoriteCount,
+        metadata: { source: 'worker_audius_favorite' },
+        created_at: ts,
+        updated_at: ts,
+      }], 'user_id,provider,track_id');
+      return c.json({
+        favorite: true,
+        track: {
+          id: trackId, track_id: trackId, title, artist, artist_id: artistId, artist_handle: artistHandle,
+          artist_profile_image: artistProfileImage, artwork_url: artworkUrl, duration, genre, play_count: playCount,
+          favorite_count: favoriteCount,
+        },
+      });
+    }
+
+    await ensureAudioSchema(c.env.DB);
+    const hidden = await c.env.DB.prepare("SELECT track_id FROM hidden_sounds WHERE provider = 'audius' AND track_id = ?")
+      .bind(trackId)
+      .first();
+    if (hidden) return c.json({ detail: 'This sound is unavailable.' }, 400);
 
     await c.env.DB.prepare(
       `INSERT INTO favorite_sounds (
@@ -12901,10 +12983,19 @@ api.post('/music/audius/favorites', authMiddleware, async (c) => {
 
 api.delete('/music/audius/favorites/:trackId', authMiddleware, async (c) => {
   try {
-    await ensureAudioSchema(c.env.DB);
     const userId = getUserId(c);
     const trackId = cleanText(c.req.param('trackId'), 80);
     if (!trackId) return c.json({ detail: 'Track id is required.' }, 400);
+    if (supabasePrimaryConfigured(c)) {
+      await supabaseAdminDeleteRows(c, 'app_favorite_sounds', {
+        user_id: postgrestEqFilter(userId),
+        provider: postgrestEqFilter('audius'),
+        track_id: postgrestEqFilter(trackId),
+      });
+      return c.json({ favorite: false, track_id: trackId });
+    }
+
+    await ensureAudioSchema(c.env.DB);
     await c.env.DB.prepare("DELETE FROM favorite_sounds WHERE user_id = ? AND provider = 'audius' AND track_id = ?")
       .bind(userId, trackId)
       .run();
@@ -13517,9 +13608,11 @@ api.post('/posts', authMiddleware, async (c) => {
     return c.json({ detail: 'Audio track id is required.' }, 400);
   }
   if (audioProvider) {
-    const hidden = await c.env.DB.prepare("SELECT track_id FROM hidden_sounds WHERE provider = 'audius' AND track_id = ?")
-      .bind(audioTrackId)
-      .first();
+    const hidden = supabasePrimaryConfigured(c)
+      ? await supabaseAudiusTrackIsHidden(c, audioTrackId)
+      : !!(await c.env.DB.prepare("SELECT track_id FROM hidden_sounds WHERE provider = 'audius' AND track_id = ?")
+        .bind(audioTrackId)
+        .first());
     if (hidden) return c.json({ detail: 'This sound is unavailable.' }, 400);
   }
   const insertResults = await c.env.DB.batch([
@@ -14509,6 +14602,9 @@ api.post('/statuses', authMiddleware, async (c) => {
   }
   if (audioProvider && !audioTrackId) {
     return c.json({ detail: 'Audio track id is required.' }, 400);
+  }
+  if (audioProvider && supabasePrimaryConfigured(c) && await supabaseAudiusTrackIsHidden(c, audioTrackId)) {
+    return c.json({ detail: 'This sound is unavailable.' }, 400);
   }
 
   if (supabasePrimaryConfigured(c)) {
@@ -18030,11 +18126,23 @@ async function maybeDeleteStreamAssets(c: any, post: any) {
 api.post('/admin/music/sounds/:trackId/hide', authMiddleware, async (c) => {
   try {
     const adminId = await requireGovernanceAdmin(c);
-    await ensureAudioSchema(c.env.DB);
     const trackId = cleanText(c.req.param('trackId'), 80);
     if (!trackId) return c.json({ detail: 'Track id is required.' }, 400);
     const body: any = await c.req.json().catch(() => ({}));
     const reason = cleanText(body.reason || 'Hidden by moderation', 300);
+    if (supabasePrimaryConfigured(c)) {
+      await supabaseAdminUpsert(c, 'app_hidden_sounds', [{
+        provider: 'audius',
+        track_id: trackId,
+        reason,
+        hidden_by: adminId,
+        created_at: now(),
+      }], 'provider,track_id');
+      await logGovernanceAction(c, adminId, 'hide_sound', 'sound', trackId, { provider: 'audius', reason });
+      return c.json({ hidden: true, track_id: trackId });
+    }
+
+    await ensureAudioSchema(c.env.DB);
     await c.env.DB.prepare(
       "INSERT OR REPLACE INTO hidden_sounds (track_id, provider, reason, hidden_by, created_at) VALUES (?, 'audius', ?, ?, ?)"
     ).bind(trackId, reason, adminId, now()).run();
@@ -18051,9 +18159,18 @@ api.post('/admin/music/sounds/:trackId/hide', authMiddleware, async (c) => {
 api.delete('/admin/music/sounds/:trackId/hide', authMiddleware, async (c) => {
   try {
     const adminId = await requireGovernanceAdmin(c);
-    await ensureAudioSchema(c.env.DB);
     const trackId = cleanText(c.req.param('trackId'), 80);
     if (!trackId) return c.json({ detail: 'Track id is required.' }, 400);
+    if (supabasePrimaryConfigured(c)) {
+      await supabaseAdminDeleteRows(c, 'app_hidden_sounds', {
+        provider: postgrestEqFilter('audius'),
+        track_id: postgrestEqFilter(trackId),
+      });
+      await logGovernanceAction(c, adminId, 'unhide_sound', 'sound', trackId, { provider: 'audius' });
+      return c.json({ hidden: false, track_id: trackId });
+    }
+
+    await ensureAudioSchema(c.env.DB);
     await c.env.DB.prepare("DELETE FROM hidden_sounds WHERE provider = 'audius' AND track_id = ?")
       .bind(trackId)
       .run();
@@ -18125,9 +18242,38 @@ api.delete('/admin/music/:musicId', authMiddleware, async (c) => {
 api.post('/admin/governance/posts/:postId/audio/remove', authMiddleware, async (c) => {
   try {
     const adminId = await requireGovernanceAdmin(c);
-    await ensureAudioSchema(c.env.DB);
     const postId = c.req.param('postId');
     const body: any = await c.req.json().catch(() => ({}));
+    if (supabasePrimaryConfigured(c)) {
+      const rows = await supabaseAdminQueryRows(c, 'app_posts', {
+        select: 'legacy_post_id,metadata',
+        filters: { legacy_post_id: postgrestEqFilter(cleanText(postId, 120)) },
+        limit: 1,
+      });
+      if (!rows.length) return c.json({ detail: 'Post not found.' }, 404);
+      const metadata = parseJsonObject(rows[0]?.metadata);
+      await supabaseAdminPatchRows(c, 'app_posts', { legacy_post_id: postgrestEqFilter(cleanText(postId, 120)) }, {
+        metadata: {
+          ...metadata,
+          audio: {
+            provider: '',
+            track_id: '',
+            title: '',
+            artist: '',
+            artwork_url: '',
+            stream_url: '',
+            start_time: 0,
+            duration: 0,
+          },
+          audio_hidden: true,
+        },
+        updated_at: now(),
+      });
+      await logGovernanceAction(c, adminId, 'remove_post_sound', 'post', postId, { reason: cleanText(body.reason, 300) });
+      return c.json({ removed: true, post_id: postId });
+    }
+
+    await ensureAudioSchema(c.env.DB);
     await c.env.DB.prepare(
       `UPDATE posts
        SET audio_hidden = 1, audio_provider = '', audio_track_id = '', audio_title = '', audio_artist = '',
