@@ -8806,10 +8806,14 @@ function supabaseAppUserToLegacyUser(row: any): any {
     email_verified: row?.email_verified ? 1 : 0,
     language: normalizeLanguage((profile as any).language),
     status,
+    deletion_requested_at: cleanText((metadata as any).deletion_requested_at, 80),
+    deletion_scheduled_at: cleanText((metadata as any).deletion_scheduled_at, 80),
     suspended_until: cleanText((metadata as any).suspended_until, 80),
     session_revoked_at: cleanText((metadata as any).session_revoked_at, 80),
     banned_at: cleanText((metadata as any).banned_at, 80),
     ban_reason: cleanText((metadata as any).ban_reason, 240),
+    oauth_provider: cleanText((metadata as any).oauth_provider, 40),
+    oauth_subject: cleanText((metadata as any).oauth_subject, 240),
     created_at: row?.legacy_created_at || row?.created_at,
     updated_at: row?.legacy_updated_at || row?.updated_at,
     source: 'supabase_postgres',
@@ -11047,6 +11051,20 @@ async function verifyAccountDeletionReauth(c: any, user: any, body: any): Promis
   }
 
   if (!password) return { ok: false, detail: 'Enter your password to delete this account.', provider: 'email' };
+  if (supabasePrimaryConfigured(c) && user.supabase_user_id) {
+    const email = normalizeOptionalEmail(user.email);
+    if (!email || isInternalOAuthEmail(email)) return { ok: false, detail: 'Add a real email address before deleting this account.', provider: 'email' };
+    try {
+      const session = await signInSupabasePassword(c, email, password);
+      const sessionUserId = isUuidText(session?.user?.id || session?.user?.sub);
+      if (sessionUserId && sessionUserId !== user.supabase_user_id) {
+        return { ok: false, detail: 'Password confirmation did not match this Captro account.', provider: 'email' };
+      }
+      return { ok: true, provider: 'email' };
+    } catch {
+      return { ok: false, detail: 'Password confirmation failed.', provider: 'email' };
+    }
+  }
   const verified = await verifyPassword(password, String(user.password_hash || ''));
   if (!verified) return { ok: false, detail: 'Password confirmation failed.', provider: 'email' };
   await upsertAccountIdentity(c, { userId: user.id, provider: 'email', email: user.email });
@@ -11102,14 +11120,76 @@ async function requestAccountDeletion(c: any) {
   if (limited) return limited;
   const bodyTooLarge = rejectLargeRequest(c, 80_000);
   if (bodyTooLarge) return bodyTooLarge;
-  await ensureAccountDeletionSchema(c.env.DB);
-  await ensurePremiumSchema(c.env.DB);
-  await ensureCommentSchema(c.env.DB);
   const body: any = await c.req.json().catch(() => ({}));
   if (String(body.confirmation || '').trim() !== 'DELETE') {
     return c.json({ detail: 'Type DELETE to confirm account deletion.', code: 'confirmation_required' }, 400);
   }
 
+  if (supabasePrimaryConfigured(c)) {
+    const currentRow = await getSupabaseAppUserRowByAnyId(c, userId);
+    if (!currentRow) return c.json({ detail: 'User not found.' }, 404);
+    const user = supabaseAppUserToLegacyUser(currentRow);
+    const appUserId = publicId(user.id, 120);
+    if (user.is_admin) return c.json({ detail: 'Admin accounts must be removed by another admin.' }, 403);
+    if (String(user.status || 'active') === 'deletion_pending') {
+      return c.json({
+        deletion_pending: true,
+        deletion_requested_at: user.deletion_requested_at || null,
+        deletion_scheduled_at: user.deletion_scheduled_at || null,
+      });
+    }
+    if (String(user.status || 'active') === 'deleted') {
+      return c.json({ detail: 'This account has already been deleted.', code: 'account_deleted' }, 410);
+    }
+
+    const reauth = await verifyAccountDeletionReauth(c, user, body);
+    if (!reauth.ok) return c.json({ detail: reauth.detail || 'Re-authentication is required.', code: 'reauth_required' }, 401);
+
+    const requestedAt = now();
+    const scheduledAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+    const metadata = parseJsonObject(currentRow.metadata);
+    metadata.status = 'deletion_pending';
+    metadata.deletion_requested_at = requestedAt;
+    metadata.deletion_scheduled_at = scheduledAt;
+    metadata.session_revoked_at = requestedAt;
+    await supabaseAdminPatchRows(c, 'app_users', { id: postgrestEqFilter(appUserId) }, {
+      metadata,
+      updated_at: requestedAt,
+    });
+    await Promise.all([
+      supabaseAdminPatchRows(c, 'app_push_tokens', { user_id: postgrestEqFilter(appUserId) }, { is_active: false, updated_at: requestedAt }).catch(() => undefined),
+      supabaseAdminDeleteRowsIfShapeExists(c, 'app_notifications', { user_id: postgrestEqFilter(appUserId) }).catch(() => undefined),
+      supabaseAdminDeleteRowsIfShapeExists(c, 'app_notifications', { from_user_id: postgrestEqFilter(appUserId) }).catch(() => undefined),
+      supabaseAdminDeleteRowsIfShapeExists(c, 'app_post_interactions', { app_user_id: postgrestEqFilter(appUserId) }).catch(() => undefined),
+      supabaseAdminDeleteRowsIfShapeExists(c, 'app_follows', { app_follower_id: postgrestEqFilter(appUserId) }).catch(() => undefined),
+      supabaseAdminDeleteRowsIfShapeExists(c, 'app_follows', { app_following_id: postgrestEqFilter(appUserId) }).catch(() => undefined),
+      supabaseAdminPatchRows(c, 'post_comments', { app_user_id: postgrestEqFilter(appUserId) }, { status: 'hidden', updated_at: requestedAt }).catch(() => undefined),
+    ]);
+    await updateSupabaseAuthUser(c, user.supabase_user_id, {
+      user_metadata: { captro_user_id: appUserId, account_status: 'deletion_pending' },
+      app_metadata: { captro_account_status: 'deletion_pending' },
+    }).catch(() => {});
+    runBackgroundTask(c, 'account_deletion_audit_failed', async () => {
+      await writeAccountDeletionEvent(c, appUserId, 'deletion_requested', {
+        provider: reauth.provider,
+        deletion_scheduled_at: scheduledAt,
+      });
+      await logSecurityEvent(c, 'account_deletion_requested', appUserId, { provider: reauth.provider });
+    });
+    runBackgroundTask(c, 'provider_revoke_best_effort_failed', async () => {
+      await revokeProviderAccessBestEffort(c, user, reauth.provider, body);
+    });
+    return c.json({
+      deletion_pending: true,
+      deletion_requested_at: requestedAt,
+      deletion_scheduled_at: scheduledAt,
+      detail: 'Account deletion is scheduled. Your public profile and content are hidden now.',
+    });
+  }
+
+  await ensureAccountDeletionSchema(c.env.DB);
+  await ensurePremiumSchema(c.env.DB);
+  await ensureCommentSchema(c.env.DB);
   const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
   if (!user) return c.json({ detail: 'User not found.' }, 404);
   if (user.is_admin) return c.json({ detail: 'Admin accounts must be removed by another admin.' }, 403);
@@ -11171,6 +11251,34 @@ async function requestAccountDeletion(c: any) {
 
 async function restorePendingAccount(c: any) {
   const userId = getUserId(c);
+  if (supabasePrimaryConfigured(c)) {
+    const currentRow = await getSupabaseAppUserRowByAnyId(c, userId);
+    if (!currentRow) return c.json({ detail: 'User not found.' }, 404);
+    const user = supabaseAppUserToLegacyUser(currentRow);
+    if (String(user.status || 'active') !== 'deletion_pending') {
+      return c.json({ restored: false, user: authUserPayload(user) });
+    }
+    const metadata = parseJsonObject(currentRow.metadata);
+    metadata.status = 'active';
+    delete metadata.deletion_requested_at;
+    delete metadata.deletion_scheduled_at;
+    delete metadata.session_revoked_at;
+    await supabaseAdminPatchRows(c, 'app_users', { id: postgrestEqFilter(publicId(user.id, 120)) }, {
+      metadata,
+      updated_at: now(),
+    });
+    await updateSupabaseAuthUser(c, user.supabase_user_id, {
+      user_metadata: { captro_user_id: user.id, account_status: 'active' },
+      app_metadata: { captro_account_status: 'active' },
+    }).catch(() => {});
+    const refreshed = await getSupabaseAppUserRowByAnyId(c, user.id);
+    const restored = refreshed ? supabaseAppUserToLegacyUser(refreshed) : { ...user, status: 'active', deletion_requested_at: null, deletion_scheduled_at: null };
+    runBackgroundTask(c, 'account_restore_audit_failed', async () => {
+      await writeAccountDeletionEvent(c, user.id, 'deletion_restored', {});
+      await logSecurityEvent(c, 'account_deletion_restored', user.id, {});
+    });
+    return c.json({ restored: true, user: authUserPayload(restored) });
+  }
   await ensureAccountDeletionSchema(c.env.DB);
   const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
   if (!user) return c.json({ detail: 'User not found.' }, 404);
@@ -11194,6 +11302,16 @@ async function restorePendingAccount(c: any) {
 
 api.get('/account/deletion-status', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  if (supabasePrimaryConfigured(c)) {
+    const row = await getSupabaseAppUserRowByAnyId(c, userId);
+    const user = row ? supabaseAppUserToLegacyUser(row) : null;
+    return c.json({
+      status: user?.status || 'active',
+      deletion_pending: user?.status === 'deletion_pending',
+      deletion_requested_at: user?.deletion_requested_at || null,
+      deletion_scheduled_at: user?.deletion_scheduled_at || null,
+    });
+  }
   await ensureAccountDeletionSchema(c.env.DB);
   const row: any = await c.env.DB.prepare('SELECT status, deletion_requested_at, deletion_scheduled_at FROM users WHERE id = ?').bind(userId).first();
   return c.json({
