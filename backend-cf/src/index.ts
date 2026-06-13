@@ -8909,6 +8909,75 @@ async function getSupabaseAppUserRowByAnyId(c: any, inputId: string): Promise<an
   return rows[0] || null;
 }
 
+async function supabasePhoneOwnerId(c: any, phone: string): Promise<string> {
+  if (!supabasePrimaryConfigured(c)) return '';
+  const rows = await supabaseAdminQueryRows(c, 'app_users', {
+    select: 'id',
+    filters: { phone: postgrestEqFilter(phone) },
+    limit: 2,
+  }).catch((error: any) => {
+    console.warn(JSON.stringify({ event: 'supabase_phone_owner_lookup_failed', code: getErrorCode(error).slice(0, 180) }));
+    return [];
+  });
+  return cleanText(rows[0]?.id || '', 120);
+}
+
+async function supabaseExpireAccountVerificationTokens(c: any, userId: string, tokenType: string, target: string) {
+  await supabaseAdminPatchRows(c, 'app_account_verification_tokens', {
+    user_id: postgrestEqFilter(userId),
+    token_type: postgrestEqFilter(tokenType),
+    target: postgrestEqFilter(target),
+    used_at: 'is.null',
+  }, { used_at: now(), updated_at: now() });
+}
+
+async function supabaseCreateAccountVerificationToken(c: any, input: {
+  userId: string;
+  tokenType: string;
+  target: string;
+  tokenHash: string;
+  expiresAt: string;
+}) {
+  await supabaseAdminUpsert(c, 'app_account_verification_tokens', [{
+    id: uuid(),
+    user_id: input.userId,
+    token_type: input.tokenType,
+    target: input.target,
+    token_hash: input.tokenHash,
+    attempts: 0,
+    expires_at: input.expiresAt,
+    created_at: now(),
+    updated_at: now(),
+  }], 'id');
+}
+
+async function supabaseLatestAccountVerificationToken(c: any, tokenType: string, target: string): Promise<any | null> {
+  const rows = await supabaseAdminQueryRows(c, 'app_account_verification_tokens', {
+    select: 'id,user_id,target,token_hash,attempts,expires_at,used_at,created_at',
+    filters: {
+      token_type: postgrestEqFilter(tokenType),
+      target: postgrestEqFilter(target),
+      used_at: 'is.null',
+    },
+    order: 'created_at.desc',
+    limit: 1,
+  });
+  return rows[0] || null;
+}
+
+async function supabaseAccountVerificationTokenByHash(c: any, tokenType: string, tokenHash: string): Promise<any | null> {
+  const rows = await supabaseAdminQueryRows(c, 'app_account_verification_tokens', {
+    select: 'id,user_id,target,token_hash,attempts,expires_at,used_at,created_at',
+    filters: {
+      token_type: postgrestEqFilter(tokenType),
+      token_hash: postgrestEqFilter(tokenHash),
+      used_at: 'is.null',
+    },
+    limit: 1,
+  });
+  return rows[0] || null;
+}
+
 async function findOrCreateSupabaseAppUser(c: any, payload: any, extras: any = {}) {
   const supabaseUserId = isUuidText(payload?.sub);
   if (!supabaseUserId) throw new Error('SUPABASE_SUBJECT_MISSING');
@@ -11743,12 +11812,17 @@ api.post('/users/me/phone/start', authMiddleware, async (c) => {
     const normalizedPhone = normalizePhone(body.phone);
     const limited = await enforceRateLimit(c, 'account_phone_start', `${userId}:${normalizedPhone || clientIp(c)}`, 5, 600);
     if (limited) return limited;
-    await ensurePhoneAuthSchema(c.env.DB);
 
-    const owner: any = await c.env.DB.prepare('SELECT id FROM users WHERE phone = ? AND id != ?')
-      .bind(normalizedPhone, userId)
-      .first();
-    if (owner) return c.json({ detail: 'That phone number is already verified on another account.' }, 409);
+    if (supabasePrimaryConfigured(c)) {
+      const ownerId = await supabasePhoneOwnerId(c, normalizedPhone);
+      if (ownerId && ownerId !== userId) return c.json({ detail: 'That phone number is already verified on another account.' }, 409);
+    } else {
+      await ensurePhoneAuthSchema(c.env.DB);
+      const owner: any = await c.env.DB.prepare('SELECT id FROM users WHERE phone = ? AND id != ?')
+        .bind(normalizedPhone, userId)
+        .first();
+      if (owner) return c.json({ detail: 'That phone number is already verified on another account.' }, 409);
+    }
 
     const startedWithVerify = await startTwilioVerification(c, normalizedPhone);
     if (startedWithVerify) {
@@ -11763,9 +11837,21 @@ api.post('/users/me/phone/start', authMiddleware, async (c) => {
     const codeHash = await sha256Hex(`${normalizedPhone}:${code}:${jwtSecret}`);
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
 
-    await c.env.DB.prepare(
-      'INSERT INTO phone_login_codes (id, phone, code_hash, expires_at) VALUES (?, ?, ?, ?)'
-    ).bind(uuid(), normalizedPhone, codeHash, expiresAt).run();
+    if (supabasePrimaryConfigured(c)) {
+      await supabaseExpireAccountVerificationTokens(c, userId, 'phone', normalizedPhone).catch(() => undefined);
+      await supabaseCreateAccountVerificationToken(c, {
+        userId,
+        tokenType: 'phone',
+        target: normalizedPhone,
+        tokenHash: codeHash,
+        expiresAt,
+      });
+    } else {
+      await ensurePhoneAuthSchema(c.env.DB);
+      await c.env.DB.prepare(
+        'INSERT INTO phone_login_codes (id, phone, code_hash, expires_at) VALUES (?, ?, ?, ?)'
+      ).bind(uuid(), normalizedPhone, codeHash, expiresAt).run();
+    }
 
     const delivery = await sendLegacyPhoneCode(c, normalizedPhone, code);
     if (delivery === 'development') {
@@ -11801,17 +11887,48 @@ api.post('/users/me/phone/verify', authMiddleware, async (c) => {
     if (normalizedCode.length !== 6) {
       return c.json({ detail: 'Enter the 6-digit verification code.' }, 400);
     }
-    await ensurePhoneAuthSchema(c.env.DB);
 
-    const owner: any = await c.env.DB.prepare('SELECT id FROM users WHERE phone = ? AND id != ?')
-      .bind(normalizedPhone, userId)
-      .first();
-    if (owner) return c.json({ detail: 'That phone number is already verified on another account.' }, 409);
+    const currentSupabaseRow = supabasePrimaryConfigured(c) ? await getSupabaseAppUserRowByAnyId(c, userId) : null;
+    if (supabasePrimaryConfigured(c)) {
+      if (!currentSupabaseRow) return c.json({ detail: 'User not found' }, 404);
+      const ownerId = await supabasePhoneOwnerId(c, normalizedPhone);
+      if (ownerId && ownerId !== publicId(currentSupabaseRow.id, 120)) {
+        return c.json({ detail: 'That phone number is already verified on another account.' }, 409);
+      }
+    } else {
+      await ensurePhoneAuthSchema(c.env.DB);
+      const owner: any = await c.env.DB.prepare('SELECT id FROM users WHERE phone = ? AND id != ?')
+        .bind(normalizedPhone, userId)
+        .first();
+      if (owner) return c.json({ detail: 'That phone number is already verified on another account.' }, 409);
+    }
 
     if (getTwilioVerifyConfig(c)) {
       const verified = await checkTwilioVerification(c, normalizedPhone, normalizedCode);
       if (!verified) return c.json({ detail: 'Invalid or expired verification code.' }, 401);
+    } else if (supabasePrimaryConfigured(c)) {
+      const phoneCode = await supabaseLatestAccountVerificationToken(c, 'phone', normalizedPhone);
+      if (!phoneCode) return c.json({ detail: 'No active code for this phone number.' }, 401);
+      if (publicId(phoneCode.user_id, 120) !== publicId(currentSupabaseRow?.id, 120)) return c.json({ detail: 'Invalid verification code.' }, 401);
+      if ((Number(phoneCode.attempts || 0)) >= 5) return c.json({ detail: 'Too many attempts. Request a new code.' }, 429);
+      if (Date.parse(phoneCode.expires_at) < Date.now()) return c.json({ detail: 'Code expired. Request a new code.' }, 401);
+
+      const jwtSecret = getJwtSecret(c);
+      const expectedHash = await sha256Hex(`${normalizedPhone}:${normalizedCode}:${jwtSecret}`);
+      if (expectedHash !== phoneCode.token_hash) {
+        await supabaseAdminPatchRows(c, 'app_account_verification_tokens', { id: postgrestEqFilter(cleanText(phoneCode.id, 120)) }, {
+          attempts: Number(phoneCode.attempts || 0) + 1,
+          updated_at: now(),
+        });
+        return c.json({ detail: 'Invalid verification code.' }, 401);
+      }
+
+      await supabaseAdminPatchRows(c, 'app_account_verification_tokens', { id: postgrestEqFilter(cleanText(phoneCode.id, 120)) }, {
+        used_at: now(),
+        updated_at: now(),
+      });
     } else {
+      await ensurePhoneAuthSchema(c.env.DB);
       const phoneCode: any = await c.env.DB.prepare(
         'SELECT * FROM phone_login_codes WHERE phone = ? AND consumed_at IS NULL ORDER BY created_at DESC LIMIT 1'
       ).bind(normalizedPhone).first();
@@ -11828,6 +11945,44 @@ api.post('/users/me/phone/verify', authMiddleware, async (c) => {
       }
 
       await c.env.DB.prepare('UPDATE phone_login_codes SET consumed_at = datetime(\'now\') WHERE id = ?').bind(phoneCode.id).run();
+    }
+
+    if (supabasePrimaryConfigured(c)) {
+      const appUserId = publicId(currentSupabaseRow.id, 120);
+      await supabaseAdminPatchRows(c, 'app_users', { id: postgrestEqFilter(appUserId) }, {
+        phone: normalizedPhone,
+        phone_verified: true,
+        updated_at: now(),
+      });
+      const refreshed = await getSupabaseAppUserRowByAnyId(c, appUserId);
+      const user = supabaseAppUserToLegacyUser(refreshed || { ...currentSupabaseRow, phone: normalizedPhone, phone_verified: true });
+      runBackgroundTask(c, 'supabase_phone_auth_metadata_update_failed', async () => {
+        const supabaseUserId = isUuidText(currentSupabaseRow.supabase_user_id);
+        if (supabaseUserId) {
+          await updateSupabaseAuthUser(c, supabaseUserId, {
+            phone: normalizedPhone,
+            user_metadata: supabaseProfileMetadata({
+              appUserId,
+              username: publicUsernameFor(user),
+              fullName: user.full_name,
+              profileImage: user.profile_image,
+              language: user.language,
+              phone: normalizedPhone,
+            }),
+          });
+        } else {
+          const result = await createOrFindSupabaseAuthUser(c, {
+            phone: normalizedPhone,
+            username: publicUsernameFor(user),
+            fullName: user.full_name,
+            profileImage: user.profile_image,
+            provider: 'phone',
+            appUserId,
+          });
+          if (result.user?.id) await supabaseAdminPatchRows(c, 'app_users', { id: postgrestEqFilter(appUserId) }, { supabase_user_id: result.user.id, updated_at: now() });
+        }
+      });
+      return c.json(authUserPayload(user));
     }
 
     await ensureSupabaseAuthSchema(c.env.DB);
@@ -11874,15 +12029,17 @@ api.post('/users/me/phone/verify', authMiddleware, async (c) => {
 
 api.post('/users/me/email/link/start', authMiddleware, async (c) => {
   const userId = getUserId(c);
-  await ensureAccountVerificationSchema(c.env.DB);
   const limited = await enforceRateLimit(c, 'email_verify_link', userId, 8, 60);
   if (limited) return limited;
 
   try {
     const body: any = await c.req.json().catch(() => ({}));
-    const currentUser: any = await c.env.DB.prepare('SELECT id, email, email_verified FROM users WHERE id = ?')
-      .bind(userId)
-      .first();
+    const currentSupabaseRow = supabasePrimaryConfigured(c) ? await getSupabaseAppUserRowByAnyId(c, userId) : null;
+    const currentUser: any = currentSupabaseRow
+      ? supabaseAppUserToLegacyUser(currentSupabaseRow)
+      : await c.env.DB.prepare('SELECT id, email, email_verified FROM users WHERE id = ?')
+        .bind(userId)
+        .first();
     const accountEmail = normalizeOptionalEmail(currentUser?.email);
     const requestedEmail = normalizeOptionalEmail(body.email);
     if (!accountEmail) {
@@ -11898,14 +12055,26 @@ api.post('/users/me/email/link/start', authMiddleware, async (c) => {
     const token = randomUrlToken(32);
     const tokenHash = await sha256Hex(`${token}:${c.env.JWT_SECRET}`);
     const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString();
-    await c.env.DB.batch([
-      c.env.DB.prepare('UPDATE email_verification_links SET used_at = datetime(\'now\') WHERE user_id = ? AND used_at IS NULL')
-        .bind(userId),
-      c.env.DB.prepare(
-        `INSERT INTO email_verification_links (id, user_id, email, token_hash, expires_at)
-         VALUES (?, ?, ?, ?, ?)`
-      ).bind(uuid(), userId, accountEmail, tokenHash, expiresAt),
-    ]);
+    if (supabasePrimaryConfigured(c)) {
+      await supabaseExpireAccountVerificationTokens(c, publicId(currentUser.id, 120), 'email_link', accountEmail).catch(() => undefined);
+      await supabaseCreateAccountVerificationToken(c, {
+        userId: publicId(currentUser.id, 120),
+        tokenType: 'email_link',
+        target: accountEmail,
+        tokenHash,
+        expiresAt,
+      });
+    } else {
+      await ensureAccountVerificationSchema(c.env.DB);
+      await c.env.DB.batch([
+        c.env.DB.prepare('UPDATE email_verification_links SET used_at = datetime(\'now\') WHERE user_id = ? AND used_at IS NULL')
+          .bind(userId),
+        c.env.DB.prepare(
+          `INSERT INTO email_verification_links (id, user_id, email, token_hash, expires_at)
+           VALUES (?, ?, ?, ?, ?)`
+        ).bind(uuid(), userId, accountEmail, tokenHash, expiresAt),
+      ]);
+    }
 
     const sent = await sendEmailVerificationLink(c, accountEmail, emailVerificationLink(c, token));
     if (!sent) {
@@ -11931,7 +12100,6 @@ api.post('/users/me/email/link/start', authMiddleware, async (c) => {
 });
 
 api.get('/users/me/email/verify-link', async (c) => {
-  await ensureAccountVerificationSchema(c.env.DB);
   const token = cleanText(c.req.query('token'), 512);
   const fail = (message = 'This email verification link is invalid or expired.') => c.html(
     `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Captro Email Verification</title></head><body style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f6f4f1;color:#111"><main style="min-height:100vh;display:grid;place-items:center;padding:24px"><section style="max-width:520px;background:#fff;border-radius:28px;padding:28px;box-shadow:0 20px 60px rgba(0,0,0,.08)"><h1 style="margin:0 0 10px;font-size:26px">Email not verified</h1><p style="font-size:16px;line-height:1.55;color:#555">${message}</p></section></main></body></html>`,
@@ -11940,6 +12108,40 @@ api.get('/users/me/email/verify-link', async (c) => {
   if (!token || token.length < 24) return fail();
 
   const tokenHash = await sha256Hex(`${token}:${c.env.JWT_SECRET}`);
+  if (supabasePrimaryConfigured(c)) {
+    const row = await supabaseAccountVerificationTokenByHash(c, 'email_link', tokenHash).catch(() => null);
+    if (!row || row.used_at) return fail();
+    if (!row.expires_at || Date.parse(row.expires_at) < Date.now()) {
+      if (row?.id) await supabaseAdminPatchRows(c, 'app_account_verification_tokens', { id: postgrestEqFilter(cleanText(row.id, 120)) }, { used_at: now(), updated_at: now() }).catch(() => undefined);
+      return fail();
+    }
+    const appUser = await getSupabaseAppUserRowByAnyId(c, row.user_id);
+    const accountEmail = normalizeOptionalEmail(appUser?.email);
+    const tokenEmail = normalizeOptionalEmail(row.target);
+    if (!appUser || !accountEmail || accountEmail !== tokenEmail) return fail();
+
+    await supabaseAdminPatchRows(c, 'app_users', { id: postgrestEqFilter(publicId(appUser.id, 120)) }, {
+      email_verified: true,
+      updated_at: now(),
+    });
+    await supabaseAdminPatchRows(c, 'app_account_verification_tokens', { id: postgrestEqFilter(cleanText(row.id, 120)) }, {
+      used_at: now(),
+      updated_at: now(),
+    });
+    runBackgroundTask(c, 'supabase_email_auth_metadata_update_failed', async () => {
+      const supabaseUserId = isUuidText(appUser.supabase_user_id);
+      if (supabaseUserId) {
+        await updateSupabaseAuthUser(c, supabaseUserId, {
+          user_metadata: { email_verified: true },
+        });
+      }
+    });
+    return c.html(
+      `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Captro Email Verified</title></head><body style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f6f4f1;color:#111"><main style="min-height:100vh;display:grid;place-items:center;padding:24px"><section style="max-width:520px;background:#fff;border-radius:28px;padding:28px;box-shadow:0 20px 60px rgba(0,0,0,.08)"><h1 style="margin:0 0 10px;font-size:26px">Email verified</h1><p style="font-size:16px;line-height:1.55;color:#555">Your Captro email is verified. You can return to the app.</p></section></main></body></html>`
+    );
+  }
+
+  await ensureAccountVerificationSchema(c.env.DB);
   const row: any = await c.env.DB.prepare(
     `SELECT id, user_id, email, expires_at, used_at
      FROM email_verification_links
@@ -11970,11 +12172,13 @@ api.post('/users/me/email/start', authMiddleware, async (c) => {
     const bodyTooLarge = rejectLargeRequest(c, 20_000);
     if (bodyTooLarge) return bodyTooLarge;
     const body: any = await c.req.json().catch(() => ({}));
-    await ensureAccountVerificationSchema(c.env.DB);
 
-    const currentUser: any = await c.env.DB.prepare('SELECT id, email, email_verified FROM users WHERE id = ?')
-      .bind(userId)
-      .first();
+    const currentSupabaseRow = supabasePrimaryConfigured(c) ? await getSupabaseAppUserRowByAnyId(c, userId) : null;
+    const currentUser: any = currentSupabaseRow
+      ? supabaseAppUserToLegacyUser(currentSupabaseRow)
+      : await c.env.DB.prepare('SELECT id, email, email_verified FROM users WHERE id = ?')
+        .bind(userId)
+        .first();
     const accountEmail = normalizeOptionalEmail(currentUser?.email);
     const requestedEmail = normalizeOptionalEmail(body.email || accountEmail);
     if (!accountEmail || isInternalOAuthEmail(accountEmail)) {
@@ -12012,11 +12216,13 @@ api.post('/users/me/email/verify', authMiddleware, async (c) => {
     const bodyTooLarge = rejectLargeRequest(c, 20_000);
     if (bodyTooLarge) return bodyTooLarge;
     const body: any = await c.req.json().catch(() => ({}));
-    await ensureAccountVerificationSchema(c.env.DB);
 
-    const currentUser: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?')
-      .bind(userId)
-      .first();
+    const currentSupabaseRow = supabasePrimaryConfigured(c) ? await getSupabaseAppUserRowByAnyId(c, userId) : null;
+    const currentUser: any = currentSupabaseRow
+      ? supabaseAppUserToLegacyUser(currentSupabaseRow)
+      : await c.env.DB.prepare('SELECT * FROM users WHERE id = ?')
+        .bind(userId)
+        .first();
     const accountEmail = normalizeOptionalEmail(currentUser?.email);
     const requestedEmail = normalizeOptionalEmail(body.email || accountEmail);
     if (!accountEmail || isInternalOAuthEmail(accountEmail)) {
@@ -12039,6 +12245,22 @@ api.post('/users/me/email/verify', authMiddleware, async (c) => {
     const verified = await checkTwilioChannelVerification(c, accountEmail, normalizedCode);
     if (!verified) return c.json({ detail: 'Invalid or expired verification code.' }, 401);
 
+    if (supabasePrimaryConfigured(c)) {
+      const appUserId = publicId(currentUser.id, 120);
+      await supabaseAdminPatchRows(c, 'app_users', { id: postgrestEqFilter(appUserId) }, {
+        email_verified: true,
+        updated_at: now(),
+      });
+      const refreshed = await getSupabaseAppUserRowByAnyId(c, appUserId);
+      const user = supabaseAppUserToLegacyUser(refreshed || { ...currentSupabaseRow, email_verified: true });
+      runBackgroundTask(c, 'supabase_email_verify_metadata_sync_failed', async () => {
+        const supabaseUserId = isUuidText(currentSupabaseRow?.supabase_user_id);
+        if (supabaseUserId) await updateSupabaseAuthUser(c, supabaseUserId, { user_metadata: { email_verified: true } });
+      });
+      return c.json(authUserPayload(user));
+    }
+
+    await ensureAccountVerificationSchema(c.env.DB);
     await c.env.DB.prepare('UPDATE users SET email_verified = 1, updated_at = datetime(\'now\') WHERE id = ?')
       .bind(userId)
       .run();
