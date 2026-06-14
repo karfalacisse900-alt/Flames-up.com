@@ -18815,9 +18815,40 @@ function adminPermissionList(role: AdminRole): string[] {
 }
 
 async function getAdminContext(c: any): Promise<AdminContext | null> {
-  await ensureAdminModerationSchema(c.env.DB);
   const userId = getUserId(c);
   if (!userId) return null;
+
+  if (supabasePrimaryConfigured(c)) {
+    const row = await getSupabaseAppUserRowByAnyId(c, userId);
+    if (!row) return null;
+    const legacy = supabaseAppUserToLegacyUser(row);
+    if (['banned', 'deleted', 'deletion_pending'].includes(String(legacy.status || 'active'))) return null;
+
+    const metadata = parseJsonObject(row?.metadata);
+    let role = normalizeAdminRole((metadata as any).admin_role || (metadata as any).role);
+    const candidateIds = Array.from(new Set([
+      publicId(row?.id, 120),
+      isUuidText(row?.supabase_user_id) || '',
+      publicId(userId, 120),
+    ].filter(Boolean)));
+    if (candidateIds.length) {
+      const roleRows = await supabaseAdminQueryRows(c, 'app_admin_roles', {
+        select: 'user_id,role',
+        filters: { user_id: postgrestInFilter(candidateIds) },
+        limit: 10,
+      }).catch((error: any) => {
+        console.warn(JSON.stringify({ event: 'supabase_admin_role_lookup_failed', code: getErrorCode(error).slice(0, 180) }));
+        return [];
+      });
+      role = normalizeAdminRole(roleRows.find((roleRow: any) => normalizeAdminRole(roleRow?.role))?.role) || role;
+    }
+    if (isOwnerUsername(c, legacy.username) || isOwnerEmail(c, legacy.email)) role = 'owner';
+    if (!role && ((metadata as any).is_admin === true || Number((metadata as any).is_admin || 0) === 1)) role = 'admin';
+    if (!role) return null;
+    return { userId: publicId(row.id, 120), role, user: { ...legacy, admin_role: role } };
+  }
+
+  await ensureAdminModerationSchema(c.env.DB);
   const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
   if (!user || ['banned', 'deleted'].includes(String(user.status || 'active'))) return null;
 
@@ -18982,7 +19013,40 @@ function normalizeRestrictionType(value: unknown): string {
   return ['all', 'posting', 'commenting', 'messaging', 'discover', 'handshake'].includes(type) ? type : 'all';
 }
 
+function supabaseUserRestrictionsFromMetadata(metadataValue: unknown): any[] {
+  const metadata = parseJsonObject(metadataValue);
+  const restrictions = Array.isArray((metadata as any).restrictions) ? (metadata as any).restrictions : [];
+  return restrictions
+    .map((restriction: any) => ({
+      id: publicId(restriction?.id || '', 120) || uuid(),
+      user_id: publicId(restriction?.user_id || '', 120),
+      restriction_type: normalizeRestrictionType(restriction?.restriction_type || restriction?.type),
+      reason: cleanMultilineText(restriction?.reason, 500),
+      note: cleanMultilineText(restriction?.note, 500),
+      starts_at: cleanText(restriction?.starts_at || restriction?.created_at || '', 80),
+      ends_at: cleanText(restriction?.ends_at || '', 80),
+      created_by: publicId(restriction?.created_by || '', 120),
+      created_at: cleanText(restriction?.created_at || restriction?.starts_at || '', 80),
+    }))
+    .filter((restriction: any) => restriction.reason || restriction.ends_at || restriction.created_at)
+    .sort((a: any, b: any) => (Date.parse(b.created_at || b.starts_at || '') || 0) - (Date.parse(a.created_at || a.starts_at || '') || 0))
+    .slice(0, 100);
+}
+
 async function userHasActiveRestriction(c: any, userId: string, type: 'posting' | 'commenting' | 'messaging' | 'discover' | 'handshake'): Promise<boolean> {
+  if (supabasePrimaryConfigured(c)) {
+    const row = await getSupabaseAppUserRowByAnyId(c, userId);
+    const restrictions = supabaseUserRestrictionsFromMetadata(row?.metadata);
+    const currentTime = Date.now();
+    return restrictions.some((restriction: any) => {
+      const restrictionType = normalizeRestrictionType(restriction?.restriction_type || restriction?.type);
+      if (restrictionType !== 'all' && restrictionType !== type) return false;
+      const startsAt = Date.parse(String(restriction?.starts_at || restriction?.created_at || ''));
+      const endsAt = Date.parse(String(restriction?.ends_at || ''));
+      return (!Number.isFinite(startsAt) || startsAt <= currentTime)
+        && (!Number.isFinite(endsAt) || endsAt > currentTime);
+    });
+  }
   await ensureAdminModerationSchema(c.env.DB);
   const row = await c.env.DB.prepare(
     `SELECT id FROM user_restrictions
@@ -19609,6 +19673,74 @@ function adminUserPayload(row: any, role: AdminRole) {
     payload.phone = row.phone || '';
   }
   return payload;
+}
+
+function adminSupabaseUserPayload(row: any, role: AdminRole, reportCount = 0) {
+  const legacy = supabaseAppUserToLegacyUser(row);
+  const metadata = parseJsonObject(row?.metadata);
+  return adminUserPayload({
+    ...legacy,
+    report_count: reportCount,
+    warning_count: Number((metadata as any).warning_count || 0),
+    suspended_until: cleanText((metadata as any).suspended_until, 80),
+    banned_at: cleanText((metadata as any).banned_at, 80),
+    ban_reason: cleanMultilineText((metadata as any).ban_reason, 500),
+  }, role);
+}
+
+async function supabaseAdminReportCountsForUsers(c: any, userIds: string[]): Promise<Map<string, number>> {
+  const ids = Array.from(new Set(userIds.map((value) => publicId(value, 120)).filter(Boolean)));
+  const counts = new Map<string, number>();
+  if (!ids.length) return counts;
+  const rows = await supabaseAdminQueryRows(c, 'app_reports', {
+    select: 'target_owner_user_id',
+    filters: { target_owner_user_id: postgrestInFilter(ids) },
+    limit: Math.max(100, ids.length * 100),
+  }).catch((error: any) => {
+    console.warn(JSON.stringify({ event: 'supabase_admin_user_report_counts_failed', code: getErrorCode(error).slice(0, 180) }));
+    return [];
+  });
+  for (const row of rows) {
+    const id = publicId(row?.target_owner_user_id, 120);
+    if (id) counts.set(id, (counts.get(id) || 0) + 1);
+  }
+  return counts;
+}
+
+async function supabaseAdminUserRows(c: any, input: { search?: string; status?: string; limit: number; offset: number }) {
+  const search = cleanText(input.search || '', 120).toLowerCase();
+  const status = cleanText(input.status || '', 40).toLowerCase();
+  const rowLimit = Math.min(500, Math.max(input.limit + input.offset + 50, input.limit));
+  const rows = await supabaseAdminQueryRows(c, 'app_users', {
+    select: SUPABASE_APP_USER_SELECT,
+    order: 'created_at.desc',
+    limit: rowLimit,
+  });
+  return rows
+    .filter((row) => {
+      const legacy = supabaseAppUserToLegacyUser(row);
+      if (status && status !== 'all' && cleanText(legacy.status || 'active', 40).toLowerCase() !== status) return false;
+      if (!search) return true;
+      return [
+        legacy.id,
+        legacy.username,
+        legacy.full_name,
+        legacy.email,
+      ].some((value) => String(value || '').toLowerCase().includes(search));
+    })
+    .slice(input.offset, input.offset + input.limit);
+}
+
+async function supabasePatchUserModerationMetadata(c: any, targetUserId: string, mutate: (metadata: Record<string, any>, row: any) => Record<string, any>) {
+  const row = await getSupabaseAppUserRowByAnyId(c, targetUserId);
+  if (!row) return { row: null, before: null, metadata: null };
+  const before = supabaseAppUserToLegacyUser(row);
+  const metadata = mutate(parseJsonObject(row?.metadata) as Record<string, any>, row);
+  await supabaseAdminPatchRows(c, 'app_users', { id: postgrestEqFilter(publicId(row.id, 120)) }, {
+    metadata: scrubLogMetadata(metadata),
+    updated_at: now(),
+  });
+  return { row, before, metadata };
 }
 
 function adminPostPayload(row: any, env: Env) {
@@ -20972,10 +21104,19 @@ api.post('/admin/reports/:reportId/action', authMiddleware, async (c) => {
 api.get('/admin/users', authMiddleware, async (c) => {
   try {
     const admin = await requireAdminRole(c, 'users:read');
-    await ensureAdminModerationSchema(c.env.DB);
     const { limit, offset } = adminPageParams(c);
-    const search = searchPattern(c.req.query('search'));
+    const rawSearch = cleanText(c.req.query('search') || '', 120);
     const status = cleanText(c.req.query('status') || '', 40);
+    if (supabasePrimaryConfigured(c)) {
+      const rows = await supabaseAdminUserRows(c, { search: rawSearch, status, limit, offset });
+      const reportCounts = await supabaseAdminReportCountsForUsers(c, rows.map((row) => publicId(row?.id, 120)));
+      return c.json({
+        results: rows.map((row) => adminSupabaseUserPayload(row, admin.role, reportCounts.get(publicId(row?.id, 120)) || 0)),
+        pagination: { limit, offset, next_offset: offset + limit },
+      });
+    }
+    await ensureAdminModerationSchema(c.env.DB);
+    const search = searchPattern(c.req.query('search'));
     const conditions: string[] = [];
     const binds: any[] = [];
     if (search) {
@@ -21004,8 +21145,35 @@ api.get('/admin/users', authMiddleware, async (c) => {
 api.get('/admin/users/:userId', authMiddleware, async (c) => {
   try {
     const admin = await requireAdminRole(c, 'users:read');
-    await ensureAdminModerationSchema(c.env.DB);
     const targetUserId = publicId(c.req.param('userId'), 120);
+    if (supabasePrimaryConfigured(c)) {
+      const row = await getSupabaseAppUserRowByAnyId(c, targetUserId);
+      if (!row) return c.json({ detail: 'User not found.' }, 404);
+      const rowId = publicId(row.id, 120);
+      const [reportCounts, actions, posts] = await Promise.all([
+        supabaseAdminReportCountsForUsers(c, [rowId]),
+        supabaseAdminQueryRows(c, 'app_moderation_actions', {
+          select: '*',
+          filters: { or: `(target_user_id.eq.${rowId},target_id.eq.${rowId})` },
+          order: 'created_at.desc',
+          limit: 50,
+        }).catch((error: any) => {
+          console.warn(JSON.stringify({ event: 'supabase_admin_user_actions_failed', code: getErrorCode(error).slice(0, 180) }));
+          return [];
+        }),
+        supabaseReadVisiblePosts(c, rowId, { ownerId: rowId, limit: 12 }).catch((error: any) => {
+          console.warn(JSON.stringify({ event: 'supabase_admin_user_posts_failed', code: getErrorCode(error).slice(0, 180) }));
+          return [];
+        }),
+      ]);
+      return c.json({
+        user: adminSupabaseUserPayload(row, admin.role, reportCounts.get(rowId) || 0),
+        restrictions: supabaseUserRestrictionsFromMetadata(row.metadata),
+        actions,
+        recent_posts: posts.map((post) => adminPostPayload(post, c.env)),
+      });
+    }
+    await ensureAdminModerationSchema(c.env.DB);
     const row: any = await c.env.DB.prepare(`
       SELECT u.*,
              (SELECT COUNT(*) FROM reports r WHERE r.reported_id = u.id OR r.target_owner_user_id = u.id) AS report_count
@@ -21046,6 +21214,38 @@ api.post('/admin/users/:userId/warn', authMiddleware, async (c) => {
     if (unknown) return unknown;
     const reason = cleanMultilineText(body.reason, 500);
     if (!reason) return c.json({ detail: 'Reason is required.' }, 400);
+    if (supabasePrimaryConfigured(c)) {
+      const patched = await supabasePatchUserModerationMetadata(c, targetUserId, (metadata) => ({
+        ...metadata,
+        warning_count: Math.max(0, Number((metadata as any).warning_count || 0)) + 1,
+        last_warning_reason: reason,
+        last_warned_at: now(),
+      }));
+      if (!patched.row) return c.json({ detail: 'User not found.' }, 404);
+      const canonicalUserId = publicId(patched.row.id, 120);
+      await insertNotificationOnce(c, {
+        userId: canonicalUserId,
+        type: 'moderation_warning',
+        title: 'Captro safety warning',
+        body: reason,
+        data: { moderation_action: 'warning' },
+        dedupeKey: `warn:${canonicalUserId}:${Date.now()}`,
+        dedupeSeconds: 60,
+      }).catch((error: any) => {
+        console.warn(JSON.stringify({ event: 'supabase_admin_warning_notification_failed', code: getErrorCode(error).slice(0, 180) }));
+      });
+      await writeAdminAuditLog(c, admin, {
+        actionType: 'user_warned',
+        targetType: 'user',
+        targetId: canonicalUserId,
+        targetUserId: canonicalUserId,
+        reason,
+        note: body.note,
+        beforeState: { warning_count: Number((parseJsonObject(patched.row.metadata) as any).warning_count || 0) },
+        afterState: { warning_count: Number((patched.metadata as any).warning_count || 0) },
+      });
+      return c.json({ warned: true });
+    }
     const target: any = await c.env.DB.prepare('SELECT id, warning_count FROM users WHERE id = ?').bind(targetUserId).first();
     if (!target) return c.json({ detail: 'User not found.' }, 404);
     await c.env.DB.prepare('UPDATE users SET warning_count = COALESCE(warning_count, 0) + 1, updated_at = datetime(\'now\') WHERE id = ?').bind(targetUserId).run();
@@ -21075,13 +21275,38 @@ api.post('/admin/users/:userId/restrict', authMiddleware, async (c) => {
     const body: any = await c.req.json().catch(() => ({}));
     const unknown = rejectUnknownFields(c, body, ['restriction_type', 'type', 'reason', 'note', 'duration_hours', 'ends_at']);
     if (unknown) return unknown;
-    const target = await c.env.DB.prepare('SELECT id FROM users WHERE id = ?').bind(targetUserId).first();
-    if (!target) return c.json({ detail: 'User not found.' }, 404);
     const restrictionType = normalizeRestrictionType(body.restriction_type || body.type);
     const hours = clampNumber(body.duration_hours || 24, 1, 24 * 90, 24);
     const endsAt = cleanText(body.ends_at || '', 60) || new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
     const reason = cleanMultilineText(body.reason, 500);
     if (!reason) return c.json({ detail: 'Reason is required.' }, 400);
+    if (supabasePrimaryConfigured(c)) {
+      const createdAt = now();
+      const patched = await supabasePatchUserModerationMetadata(c, targetUserId, (metadata, row) => {
+        const existing = supabaseUserRestrictionsFromMetadata(metadata);
+        const canonicalUserId = publicId(row?.id, 120);
+        return {
+          ...metadata,
+          restrictions: [{
+            id: uuid(),
+            user_id: canonicalUserId,
+            restriction_type: restrictionType,
+            reason,
+            note: cleanMultilineText(body.note, 500),
+            starts_at: createdAt,
+            ends_at: endsAt,
+            created_by: admin.userId,
+            created_at: createdAt,
+          }, ...existing].slice(0, 100),
+        };
+      });
+      if (!patched.row) return c.json({ detail: 'User not found.' }, 404);
+      const canonicalUserId = publicId(patched.row.id, 120);
+      await writeAdminAuditLog(c, admin, { actionType: 'user_restricted', targetType: 'user', targetId: canonicalUserId, targetUserId: canonicalUserId, reason, note: body.note, afterState: { restriction_type: restrictionType, ends_at: endsAt } });
+      return c.json({ restricted: true, restriction_type: restrictionType, ends_at: endsAt });
+    }
+    const target = await c.env.DB.prepare('SELECT id FROM users WHERE id = ?').bind(targetUserId).first();
+    if (!target) return c.json({ detail: 'User not found.' }, 404);
     await c.env.DB.prepare(
       'INSERT INTO user_restrictions (id, user_id, restriction_type, reason, starts_at, ends_at, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
     ).bind(uuid(), targetUserId, restrictionType, reason, now(), endsAt, admin.userId, now()).run();
@@ -21106,6 +21331,18 @@ api.post('/admin/users/:userId/suspend', authMiddleware, async (c) => {
     if (!reason) return c.json({ detail: 'Reason is required.' }, 400);
     const hours = clampNumber(body.duration_hours || 24, 1, 24 * 90, 24);
     const suspendedUntil = cleanText(body.ends_at || '', 60) || new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
+    if (supabasePrimaryConfigured(c)) {
+      const patched = await supabasePatchUserModerationMetadata(c, targetUserId, (metadata) => ({
+        ...metadata,
+        status: 'suspended',
+        suspended_until: suspendedUntil,
+        ban_reason: reason,
+      }));
+      if (!patched.row) return c.json({ detail: 'User not found.' }, 404);
+      const canonicalUserId = publicId(patched.row.id, 120);
+      await writeAdminAuditLog(c, admin, { actionType: 'user_suspended', targetType: 'user', targetId: canonicalUserId, targetUserId: canonicalUserId, reason, note: body.note, beforeState: patched.before || {}, afterState: { status: 'suspended', suspended_until: suspendedUntil } });
+      return c.json({ suspended: true, suspended_until: suspendedUntil });
+    }
     const before: any = await c.env.DB.prepare('SELECT id, status FROM users WHERE id = ?').bind(targetUserId).first();
     if (!before) return c.json({ detail: 'User not found.' }, 404);
     await c.env.DB.prepare("UPDATE users SET status = 'suspended', suspended_until = ?, ban_reason = ?, updated_at = datetime('now') WHERE id = ?")
@@ -21129,6 +21366,19 @@ api.post('/admin/users/:userId/ban', authMiddleware, async (c) => {
     if (unknown) return unknown;
     const reason = cleanMultilineText(body.reason, 500);
     if (!reason) return c.json({ detail: 'Reason is required.' }, 400);
+    if (supabasePrimaryConfigured(c)) {
+      const bannedAt = now();
+      const patched = await supabasePatchUserModerationMetadata(c, targetUserId, (metadata) => ({
+        ...metadata,
+        status: 'banned',
+        banned_at: bannedAt,
+        ban_reason: reason,
+      }));
+      if (!patched.row) return c.json({ detail: 'User not found.' }, 404);
+      const canonicalUserId = publicId(patched.row.id, 120);
+      await writeAdminAuditLog(c, admin, { actionType: 'user_banned', targetType: 'user', targetId: canonicalUserId, targetUserId: canonicalUserId, reason, note: body.note, beforeState: patched.before || {}, afterState: { status: 'banned', banned_at: bannedAt } });
+      return c.json({ banned: true });
+    }
     const before: any = await c.env.DB.prepare('SELECT id, status, username, full_name FROM users WHERE id = ?').bind(targetUserId).first();
     if (!before) return c.json({ detail: 'User not found.' }, 404);
     await c.env.DB.prepare("UPDATE users SET status = 'banned', banned_at = ?, ban_reason = ?, updated_at = datetime('now') WHERE id = ?")
@@ -21151,6 +21401,20 @@ api.post('/admin/users/:userId/unban', authMiddleware, async (c) => {
     if (unknown) return unknown;
     const reason = cleanMultilineText(body.reason, 500);
     if (!reason) return c.json({ detail: 'Reason is required.' }, 400);
+    if (supabasePrimaryConfigured(c)) {
+      const patched = await supabasePatchUserModerationMetadata(c, targetUserId, (metadata) => {
+        const next = { ...metadata };
+        next.status = 'active';
+        delete next.banned_at;
+        delete next.suspended_until;
+        delete next.ban_reason;
+        return next;
+      });
+      if (!patched.row) return c.json({ detail: 'User not found.' }, 404);
+      const canonicalUserId = publicId(patched.row.id, 120);
+      await writeAdminAuditLog(c, admin, { actionType: 'user_unbanned', targetType: 'user', targetId: canonicalUserId, targetUserId: canonicalUserId, reason, note: body.note, beforeState: patched.before || {}, afterState: { status: 'active' } });
+      return c.json({ unbanned: true });
+    }
     const before: any = await c.env.DB.prepare('SELECT id, status FROM users WHERE id = ?').bind(targetUserId).first();
     if (!before) return c.json({ detail: 'User not found.' }, 404);
     await c.env.DB.prepare("UPDATE users SET status = 'active', banned_at = NULL, suspended_until = NULL, ban_reason = '', updated_at = datetime('now') WHERE id = ?")
@@ -21171,6 +21435,26 @@ api.post('/admin/users/:userId/force-username-change', authMiddleware, async (c)
     const body: any = await c.req.json().catch(() => ({}));
     const reason = cleanMultilineText(body.reason, 500);
     if (!reason) return c.json({ detail: 'Reason is required.' }, 400);
+    if (supabasePrimaryConfigured(c)) {
+      const row = await getSupabaseAppUserRowByAnyId(c, targetUserId);
+      if (!row) return c.json({ detail: 'User not found.' }, 404);
+      const canonicalUserId = publicId(row.id, 120);
+      const before = supabaseAppUserToLegacyUser(row);
+      const pending = pendingUsernameForUser(canonicalUserId);
+      const metadata = parseJsonObject(row.metadata);
+      await supabaseAdminPatchRows(c, 'app_users', { id: postgrestEqFilter(canonicalUserId) }, {
+        username: pending,
+        metadata: scrubLogMetadata({
+          ...metadata,
+          username_required: true,
+          username_force_change_reason: reason,
+          username_force_changed_at: now(),
+        }),
+        updated_at: now(),
+      });
+      await writeAdminAuditLog(c, admin, { actionType: 'username_force_changed', targetType: 'user', targetId: canonicalUserId, targetUserId: canonicalUserId, reason, note: body.note, beforeState: { username: before.username }, afterState: { username_required: true, username: pending } });
+      return c.json({ username_required: true });
+    }
     const before: any = await c.env.DB.prepare('SELECT id, username FROM users WHERE id = ?').bind(targetUserId).first();
     if (!before) return c.json({ detail: 'User not found.' }, 404);
     const pending = pendingUsernameForUser(targetUserId);
