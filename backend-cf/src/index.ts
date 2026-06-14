@@ -7031,10 +7031,23 @@ async function supabaseAuthUserIdsForAppUserIds(c: any, userIds: string[]): Prom
 }
 
 async function supabaseInteractionIdentityKeys(c: any, userIds: string[]) {
-  const authUserIds = await supabaseAuthUserIdsForAppUserIds(c, userIds);
-  const appUserIdsFromAuth = await supabaseAppUserIdsForAuthUserIds(c, [...userIds, ...authUserIds]);
+  const relatedUserIds = new Set<string>();
+  for (const userId of userIds) {
+    const cleanUserId = publicId(userId, 120);
+    if (cleanUserId) relatedUserIds.add(cleanUserId);
+    for (const relatedUserId of await supabaseRelatedInteractionUserIds(c, cleanUserId)) {
+      relatedUserIds.add(relatedUserId);
+    }
+  }
+  const related = Array.from(relatedUserIds);
+  const mappedAuthUserIds = await supabaseAuthUserIdsForAppUserIds(c, related);
+  const authUserIds = Array.from(new Set([
+    ...related.map((value) => isUuidText(value)).filter((value): value is string => !!value),
+    ...mappedAuthUserIds,
+  ]));
+  const appUserIdsFromAuth = await supabaseAppUserIdsForAuthUserIds(c, [...related, ...authUserIds]);
   return {
-    appUserIds: Array.from(new Set([...userIds, ...authUserIds, ...appUserIdsFromAuth])).filter(Boolean),
+    appUserIds: Array.from(new Set([...related, ...appUserIdsFromAuth])).filter(Boolean),
     authUserIds,
   };
 }
