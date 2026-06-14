@@ -12290,6 +12290,18 @@ async function accountIdentityMatches(c: any, user: any, provider: string, provi
   const cleanProviderUserId = cleanText(providerUserId, 240);
   if (!cleanProviderUserId) return false;
   if (normalizeAuthProvider(user.oauth_provider) === cleanProvider && cleanText(user.oauth_subject, 240) === cleanProviderUserId) return true;
+  if (supabasePrimaryConfigured(c)) {
+    const rows = await supabaseAdminQueryRows(c, 'app_account_identities', {
+      select: 'id',
+      filters: {
+        user_id: postgrestEqFilter(publicId(user.id, 120)),
+        provider: postgrestEqFilter(cleanProvider),
+        provider_user_id: postgrestEqFilter(cleanProviderUserId),
+      },
+      limit: 1,
+    });
+    return rows.length > 0;
+  }
   await ensureAccountDeletionSchema(c.env.DB);
   const identity: any = await c.env.DB.prepare(
     'SELECT id FROM account_identities WHERE user_id = ? AND provider = ? AND provider_user_id = ? LIMIT 1'
