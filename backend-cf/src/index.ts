@@ -17855,6 +17855,33 @@ api.get('/discover/suggested-users', authMiddleware, async (c) => {
   const userId = getUserId(c);
   const limited = await enforceRateLimit(c, 'suggested_users_read', userId, 120, 60);
   if (limited) return limited;
+  if (supabasePrimaryConfigured(c)) {
+    try {
+      const [viewerAliases, blockedIds, rows] = await Promise.all([
+        supabaseRelatedInteractionUserIds(c, userId),
+        supabaseBlockedUserIds(c, userId),
+        supabaseAdminQueryRows(c, 'app_users', {
+          select: SUPABASE_APP_USER_SELECT,
+          order: 'created_at.desc',
+          limit: 80,
+        }),
+      ]);
+      const hiddenIds = new Set([...viewerAliases, ...blockedIds].filter(Boolean));
+      const suggestions = rows
+        .filter((row: any) => {
+          const appUserId = publicId(row?.id, 120);
+          const authUserId = isUuidText(row?.supabase_user_id);
+          return appUserId && supabaseUserStatus(row) === 'active' && !hiddenIds.has(appUserId) && (!authUserId || !hiddenIds.has(authUserId));
+        })
+        .sort((a: any, b: any) => Number(parseJsonObject(b?.counts).followers_count || 0) - Number(parseJsonObject(a?.counts).followers_count || 0))
+        .slice(0, 10)
+        .map((row: any) => safeUserPayload(supabaseAppUserToLegacyUser(row)));
+      return c.json(suggestions);
+    } catch (error: any) {
+      console.warn(JSON.stringify({ event: 'supabase_suggested_users_failed', code: getErrorCode(error).slice(0, 180) }));
+      return c.json({ detail: 'Could not load suggested users.' }, 500);
+    }
+  }
   const r = await c.env.DB.prepare(
     "SELECT id, username, full_name, profile_image, bio, followers_count FROM users WHERE id != ? AND COALESCE(status, 'active') = 'active' ORDER BY followers_count DESC LIMIT 10"
   ).bind(userId).all();
