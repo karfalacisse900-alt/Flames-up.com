@@ -20771,6 +20771,40 @@ api.post('/admin/reports/:reportId/note', authMiddleware, async (c) => {
     if (unknown) return unknown;
     const note = cleanMultilineText(body.note, 1000);
     if (!note) return c.json({ detail: 'Internal note is required.' }, 400);
+    if (supabasePrimaryConfigured(c)) {
+      const report = await getAdminReportRow(c, reportId);
+      if (!report) return c.json({ detail: 'Report not found.' }, 404);
+      const ts = now();
+      const metadata = parseJsonObject(report.metadata);
+      const existingNotes = Array.isArray(metadata.internal_notes) ? metadata.internal_notes : [];
+      const structuredNote = {
+        id: uuid(),
+        admin_user_id: admin.userId,
+        admin_role: admin.role,
+        note,
+        created_at: ts,
+      };
+      const adminNotes = [cleanMultilineText(report.admin_notes, 4000), `[${ts}] ${note}`]
+        .filter(Boolean)
+        .join('\n\n')
+        .slice(-8000);
+      await supabaseAdminPatchRows(c, 'app_reports', { id: postgrestEqFilter(reportId) }, {
+        admin_notes: adminNotes,
+        metadata: {
+          ...metadata,
+          internal_notes: [...existingNotes, structuredNote].slice(-100),
+        },
+        updated_at: ts,
+      });
+      await writeAdminAuditLog(c, admin, {
+        actionType: 'internal_note_added',
+        targetType: 'report',
+        targetId: reportId,
+        targetUserId: report.target_owner_user_id || report.target_id || '',
+        note,
+      });
+      return c.json({ added: true });
+    }
     const report: any = await c.env.DB.prepare('SELECT id, reported_id, reported_type, report_type FROM reports WHERE id = ?').bind(reportId).first();
     if (!report) return c.json({ detail: 'Report not found.' }, 404);
     await c.env.DB.prepare(
@@ -20799,6 +20833,113 @@ api.post('/admin/reports/:reportId/action', authMiddleware, async (c) => {
     const note = cleanMultilineText(body.note || body.admin_notes || '', 1000);
     if (action === 'remove_content') {
       const type = reportTargetType(report);
+      if (supabasePrimaryConfigured(c)) {
+        const ts = now();
+        if ((type === 'post' || type === 'discover_post') && (report.post_id || report.target_id || report.reported_id)) {
+          const postId = report.post_id || report.target_id || report.reported_id;
+          const identity = await supabaseResolvePostIdentity(c, postId);
+          let existingPostRows: any[] = [];
+          if (identity.legacyPostId || identity.requestedPostId) {
+            existingPostRows = await supabaseAdminQueryRows(c, 'app_posts', {
+              select: 'metadata',
+              filters: { legacy_post_id: postgrestEqFilter(identity.legacyPostId || identity.requestedPostId) },
+              limit: 1,
+            }).catch(() => []);
+          }
+          if (!existingPostRows.length && identity.postUuid) {
+            existingPostRows = await supabaseAdminQueryRows(c, 'app_posts', {
+              select: 'metadata',
+              filters: { id: postgrestEqFilter(identity.postUuid) },
+              limit: 1,
+            }).catch((error: any) => {
+              if (!isSupabaseColumnShapeError(error)) throw error;
+              return [];
+            });
+          }
+          const metadata = parseJsonObject(existingPostRows[0]?.metadata);
+          const patch = {
+            status: 'removed',
+            metadata: {
+              ...metadata,
+              removed_at: ts,
+              removed_by: admin.userId,
+              removal_reason: reason,
+            },
+            updated_at: ts,
+          };
+          if (identity.legacyPostId || identity.requestedPostId) {
+            await supabaseAdminPatchRows(c, 'app_posts', { legacy_post_id: postgrestEqFilter(identity.legacyPostId || identity.requestedPostId) }, patch);
+          }
+          if (identity.postUuid) {
+            await supabaseAdminPatchRows(c, 'app_posts', { id: postgrestEqFilter(identity.postUuid) }, patch).catch((error: any) => {
+              if (!isSupabaseColumnShapeError(error)) throw error;
+            });
+          }
+          await writeAdminAuditLog(c, admin, {
+            actionType: 'content_removed_from_report',
+            targetType: 'post',
+            targetId: identity.legacyPostId || identity.requestedPostId || postId,
+            targetUserId: report.post_user_id || report.target_owner_user_id || '',
+            reason,
+            note,
+            afterState: { status: 'removed' },
+          });
+        } else if (type === 'comment' && (report.comment_id || report.target_id || report.reported_id)) {
+          const commentId = report.comment_id || report.target_id || report.reported_id;
+          const commentRows = await supabaseAdminQueryRows(c, 'post_comments', {
+            select: 'metadata',
+            filters: { legacy_comment_id: postgrestEqFilter(commentId) },
+            limit: 1,
+          }).catch(() => []);
+          const metadata = parseJsonObject(commentRows[0]?.metadata);
+          await supabaseAdminPatchRows(c, 'post_comments', { legacy_comment_id: postgrestEqFilter(commentId) }, {
+            status: 'removed',
+            metadata: {
+              ...metadata,
+              removed_at: ts,
+              removed_by: admin.userId,
+              removal_reason: reason,
+            },
+            updated_at: ts,
+          });
+          await writeAdminAuditLog(c, admin, {
+            actionType: 'content_removed_from_report',
+            targetType: 'comment',
+            targetId: commentId,
+            targetUserId: report.comment_user_id || report.target_owner_user_id || '',
+            reason,
+            note,
+            afterState: { status: 'removed' },
+          });
+        } else if (type === 'message' && (report.message_id || report.target_id || report.reported_id)) {
+          const messageId = report.message_id || report.target_id || report.reported_id;
+          const messageRows = await supabaseAdminQueryRows(c, 'app_messages', {
+            select: 'media',
+            filters: { id: postgrestEqFilter(messageId) },
+            limit: 1,
+          }).catch(() => []);
+          await supabaseAdminPatchRows(c, 'app_messages', { id: postgrestEqFilter(messageId) }, {
+            status: 'removed',
+            media: {
+              ...parseJsonObject(messageRows[0]?.media),
+              removed_at: ts,
+              removed_by: admin.userId,
+              removal_reason: reason,
+            },
+            updated_at: ts,
+          });
+          await writeAdminAuditLog(c, admin, {
+            actionType: 'message_removed_from_report',
+            targetType: 'message',
+            targetId: messageId,
+            targetUserId: report.message_sender_id || report.target_owner_user_id || '',
+            reason,
+            note,
+            afterState: { status: 'removed' },
+          });
+        }
+        return setReportStatus(c, admin, reportId, 'action_taken', reason, note);
+      }
       if (type === 'post' && (report.post_id || report.reported_id)) {
         await c.env.DB.prepare("UPDATE posts SET status = 'removed', removed_at = ?, removed_reason = ? WHERE id = ?")
           .bind(now(), reason, report.post_id || report.reported_id).run();
@@ -23260,11 +23401,6 @@ api.put('/admin/applications/:id', authMiddleware, async (c) => {
 });
 
 // ── Reports ──
-
-// Submit report (from main app)
-api.post('/reports', authMiddleware, async (c) => {
-  return await submitReportRequest(c);
-});
 
 // List reports (admin)
 api.get('/admin/reports', authMiddleware, async (c) => {
