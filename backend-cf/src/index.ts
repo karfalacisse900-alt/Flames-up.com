@@ -6365,6 +6365,172 @@ async function supabaseSetFollowState(c: any, followerId: string, followingId: s
   };
 }
 
+async function supabaseFriendshipExists(c: any, userId: string, friendId: string): Promise<boolean> {
+  const user = publicId(userId, 120);
+  const friend = publicId(friendId, 120);
+  if (!user || !friend || user === friend) return false;
+  const rows = await supabaseAdminQueryRows(c, 'app_friendships', {
+    select: 'user_id',
+    filters: {
+      user_id: postgrestEqFilter(user),
+      friend_id: postgrestEqFilter(friend),
+    },
+    limit: 1,
+  }).catch(() => []);
+  return rows.length > 0;
+}
+
+async function supabaseFriendRequestRows(c: any, filters: Record<string, string>, limit = 1): Promise<any[]> {
+  return supabaseAdminQueryRows(c, 'app_friend_requests', {
+    select: '*',
+    filters,
+    order: 'created_at.desc',
+    limit,
+  }).catch(() => []);
+}
+
+async function supabaseCreateFriendRequest(c: any, fromUserId: string, toUserId: string) {
+  const [fromRow, toRow] = await Promise.all([
+    supabaseUserByAnyId(c, fromUserId),
+    supabaseUserByAnyId(c, toUserId),
+  ]);
+  const from = publicId(fromRow?.id || fromUserId, 120);
+  const to = publicId(toRow?.id || toUserId, 120);
+  if (!from || !to || from === to) return { status: 400 as const, body: { detail: 'Cannot friend yourself' } };
+  if (!fromRow || supabaseUserStatus(fromRow) !== 'active') return { status: 403 as const, body: { detail: 'Your account cannot add friends right now.' } };
+  if (!toRow || supabaseUserStatus(toRow) !== 'active') return { status: 404 as const, body: { detail: 'User not found' } };
+  if (await supabaseBlockPair(c, from, to)) return { status: 403 as const, body: { detail: 'You cannot add this profile.' } };
+  if (await supabaseFriendshipExists(c, from, to)) return { status: 400 as const, body: { detail: 'Already friends', status: 'friends' } };
+
+  const [outgoing, incoming] = await Promise.all([
+    supabaseFriendRequestRows(c, { from_user_id: postgrestEqFilter(from), to_user_id: postgrestEqFilter(to) }, 1),
+    supabaseFriendRequestRows(c, { from_user_id: postgrestEqFilter(to), to_user_id: postgrestEqFilter(from), status: postgrestEqFilter('pending') }, 1),
+  ]);
+  if (incoming[0]) return { status: 400 as const, body: { detail: 'This user already sent you a request.', status: 'request_received', request_id: publicId(incoming[0].id, 120) } };
+  const existing = outgoing[0];
+  if (existing?.status === 'pending') return { status: 400 as const, body: { detail: 'Already sent', status: 'pending', request_id: publicId(existing.id, 120) } };
+
+  const id = publicId(existing?.id, 120) || uuid();
+  const ts = now();
+  await supabaseAdminUpsert(c, 'app_friend_requests', [{
+    id,
+    from_user_id: from,
+    to_user_id: to,
+    status: 'pending',
+    metadata: { source: 'cloudflare_worker_primary' },
+    updated_at: ts,
+    created_at: existing?.created_at || ts,
+  }], 'from_user_id,to_user_id');
+  return { status: 200 as const, body: { id, status: 'pending' } };
+}
+
+async function supabaseAcceptFriendRequest(c: any, userId: string, requestId: string) {
+  const uid = publicId(userId, 120);
+  const rid = publicId(requestId, 120);
+  const rows = await supabaseFriendRequestRows(c, {
+    id: postgrestEqFilter(rid),
+    to_user_id: postgrestEqFilter(uid),
+    status: postgrestEqFilter('pending'),
+  }, 1);
+  const request = rows[0];
+  if (!request) return { status: 404 as const, body: { detail: 'Not found' } };
+  const from = publicId(request.from_user_id, 120);
+  const ts = now();
+  await supabaseAdminPatchRows(c, 'app_friend_requests', { id: postgrestEqFilter(rid) }, { status: 'accepted', updated_at: ts });
+  await supabaseAdminUpsert(c, 'app_friendships', [
+    { user_id: uid, friend_id: from, metadata: { source: 'friend_request', request_id: rid }, created_at: ts, updated_at: ts },
+    { user_id: from, friend_id: uid, metadata: { source: 'friend_request', request_id: rid }, created_at: ts, updated_at: ts },
+  ], 'user_id,friend_id');
+  return { status: 200 as const, body: { accepted: true } };
+}
+
+async function supabaseRejectFriendRequest(c: any, userId: string, requestId: string) {
+  const uid = publicId(userId, 120);
+  const rid = publicId(requestId, 120);
+  const rows = await supabaseFriendRequestRows(c, {
+    id: postgrestEqFilter(rid),
+    to_user_id: postgrestEqFilter(uid),
+    status: postgrestEqFilter('pending'),
+  }, 1);
+  if (!rows[0]) return { status: 404 as const, body: { detail: 'Request not found' } };
+  await supabaseAdminPatchRows(c, 'app_friend_requests', { id: postgrestEqFilter(rid) }, { status: 'rejected', updated_at: now() });
+  return { status: 200 as const, body: { rejected: true } };
+}
+
+async function supabaseFriendRequestsPayload(c: any, userId: string) {
+  const uid = publicId(userId, 120);
+  const rows = await supabaseFriendRequestRows(c, {
+    to_user_id: postgrestEqFilter(uid),
+    status: postgrestEqFilter('pending'),
+  }, 80);
+  const fromIds = Array.from(new Set(rows.map((row) => publicId(row.from_user_id, 120)).filter(Boolean)));
+  const users = await supabaseUsersByAnyIds(c, fromIds);
+  return rows.map((row) => {
+    const sender = users.get(publicId(row.from_user_id, 120)) || {};
+    return {
+      id: publicId(row.id, 120),
+      from_user_id: publicId(row.from_user_id, 120),
+      to_user_id: publicId(row.to_user_id, 120),
+      status: cleanText(row.status, 40) || 'pending',
+      created_at: row.created_at,
+      username: publicUsernameFor({ username: sender?.username }),
+      full_name: cleanText(sender?.full_name, 160),
+      profile_image: safeMediaReference(sender?.avatar_url),
+    };
+  });
+}
+
+async function supabaseFriendsPayload(c: any, userId: string) {
+  const uid = publicId(userId, 120);
+  const rows = await supabaseAdminQueryRows(c, 'app_friendships', {
+    select: 'friend_id,created_at',
+    filters: { user_id: postgrestEqFilter(uid) },
+    order: 'created_at.desc',
+    limit: 200,
+  }).catch(() => []);
+  const friendIds = Array.from(new Set(rows.map((row) => publicId(row.friend_id, 120)).filter(Boolean)));
+  const users = await supabaseUsersByAnyIds(c, friendIds);
+  return friendIds.map((friendId) => {
+    const user = users.get(friendId) || {};
+    return safeUserPayload({
+      id: friendId,
+      username: user?.username,
+      full_name: user?.full_name,
+      profile_image: user?.avatar_url,
+      bio: user?.bio,
+    });
+  });
+}
+
+async function supabaseFriendStatus(c: any, viewerId: string, otherUserId: string) {
+  const viewerRow = await supabaseUserByAnyId(c, viewerId);
+  const otherRow = await supabaseUserByAnyId(c, otherUserId);
+  const viewer = publicId(viewerRow?.id || viewerId, 120);
+  const other = publicId(otherRow?.id || otherUserId, 120);
+  if (!viewer || !other || viewer === other || !otherRow) return { status: 'none' };
+  if (await supabaseFriendshipExists(c, viewer, other)) return { status: 'friends' };
+  const [sent, received] = await Promise.all([
+    supabaseFriendRequestRows(c, { from_user_id: postgrestEqFilter(viewer), to_user_id: postgrestEqFilter(other), status: postgrestEqFilter('pending') }, 1),
+    supabaseFriendRequestRows(c, { from_user_id: postgrestEqFilter(other), to_user_id: postgrestEqFilter(viewer), status: postgrestEqFilter('pending') }, 1),
+  ]);
+  if (sent[0]) return { status: 'request_sent', request_id: publicId(sent[0].id, 120) };
+  if (received[0]) return { status: 'request_received', request_id: publicId(received[0].id, 120) };
+  return { status: 'none' };
+}
+
+async function supabaseRemoveFriend(c: any, userId: string, otherUserId: string) {
+  const viewerRow = await supabaseUserByAnyId(c, userId);
+  const otherRow = await supabaseUserByAnyId(c, otherUserId);
+  const viewer = publicId(viewerRow?.id || userId, 120);
+  const other = publicId(otherRow?.id || otherUserId, 120);
+  if (!viewer || !other || viewer === other) return { removed: true };
+  await Promise.all([
+    supabaseAdminDeleteRows(c, 'app_friendships', { user_id: postgrestEqFilter(viewer), friend_id: postgrestEqFilter(other) }).catch(() => undefined),
+    supabaseAdminDeleteRows(c, 'app_friendships', { user_id: postgrestEqFilter(other), friend_id: postgrestEqFilter(viewer) }).catch(() => undefined),
+  ]);
+  return { removed: true };
+}
+
 async function supabaseBlockUser(c: any, blockerId: string, blockedId: string) {
   const inputBlocker = publicId(blockerId, 120);
   const inputBlocked = publicId(blockedId, 120);
@@ -18085,6 +18251,10 @@ api.post('/friends/request/:userId', authMiddleware, async (c) => {
   if (fid === tid) return c.json({ detail: 'Cannot friend yourself' }, 400);
   const limited = await enforceRateLimit(c, 'friend_request', fid, 60, 60);
   if (limited) return limited;
+  if (supabasePrimaryConfigured(c)) {
+    const result = await supabaseCreateFriendRequest(c, fid, tid);
+    return c.json(result.body, result.status);
+  }
   const target = await c.env.DB.prepare('SELECT id FROM users WHERE id = ?').bind(tid).first();
   if (!target) return c.json({ detail: 'User not found' }, 404);
   const ex = await c.env.DB.prepare('SELECT id, status FROM friend_requests WHERE from_user_id = ? AND to_user_id = ?').bind(fid, tid).first();
@@ -18093,22 +18263,66 @@ api.post('/friends/request/:userId', authMiddleware, async (c) => {
   await c.env.DB.prepare('INSERT INTO friend_requests (id, from_user_id, to_user_id) VALUES (?, ?, ?)').bind(id, fid, tid).run();
   return c.json({ id, status: 'pending' });
 });
-api.post('/friends/accept/:requestId', authMiddleware, async (c) => { const uid = getUserId(c); const rid = c.req.param('requestId'); const r: any = await c.env.DB.prepare('SELECT * FROM friend_requests WHERE id = ? AND to_user_id = ?').bind(rid, uid).first(); if (!r) return c.json({ detail: 'Not found' }, 404); await c.env.DB.prepare("UPDATE friend_requests SET status = 'accepted' WHERE id = ?").bind(rid).run(); await c.env.DB.prepare('INSERT OR IGNORE INTO friendships (id, user_id, friend_id) VALUES (?, ?, ?)').bind(uuid(), uid, r.from_user_id).run(); await c.env.DB.prepare('INSERT OR IGNORE INTO friendships (id, user_id, friend_id) VALUES (?, ?, ?)').bind(uuid(), r.from_user_id, uid).run(); return c.json({ accepted: true }); });
+api.post('/friends/accept/:requestId', authMiddleware, async (c) => {
+  const uid = getUserId(c);
+  const rid = c.req.param('requestId');
+  if (supabasePrimaryConfigured(c)) {
+    const result = await supabaseAcceptFriendRequest(c, uid, rid);
+    return c.json(result.body, result.status);
+  }
+  const r: any = await c.env.DB.prepare('SELECT * FROM friend_requests WHERE id = ? AND to_user_id = ?').bind(rid, uid).first();
+  if (!r) return c.json({ detail: 'Not found' }, 404);
+  await c.env.DB.prepare("UPDATE friend_requests SET status = 'accepted' WHERE id = ?").bind(rid).run();
+  await c.env.DB.prepare('INSERT OR IGNORE INTO friendships (id, user_id, friend_id) VALUES (?, ?, ?)').bind(uuid(), uid, r.from_user_id).run();
+  await c.env.DB.prepare('INSERT OR IGNORE INTO friendships (id, user_id, friend_id) VALUES (?, ?, ?)').bind(uuid(), r.from_user_id, uid).run();
+  return c.json({ accepted: true });
+});
 api.post('/friends/reject/:requestId', authMiddleware, async (c) => {
   const userId = getUserId(c);
   const requestId = publicId(c.req.param('requestId'), 120);
   const limited = await enforceRateLimit(c, 'friend_reject', userId, 120, 60);
   if (limited) return limited;
+  if (supabasePrimaryConfigured(c)) {
+    const result = await supabaseRejectFriendRequest(c, userId, requestId);
+    return c.json(result.body, result.status);
+  }
   const result = await c.env.DB.prepare("UPDATE friend_requests SET status = 'rejected' WHERE id = ? AND to_user_id = ?")
     .bind(requestId, userId)
     .run();
   if (d1Changes(result) === 0) return c.json({ detail: 'Request not found' }, 404);
   return c.json({ rejected: true });
 });
-api.get('/friends/requests', authMiddleware, async (c) => { const r = await c.env.DB.prepare(`SELECT fr.*, u.username, u.full_name, u.profile_image FROM friend_requests fr JOIN users u ON fr.from_user_id = u.id WHERE fr.to_user_id = ? AND fr.status = 'pending'`).bind(getUserId(c)).all(); return c.json(r.results); });
-api.get('/friends', authMiddleware, async (c) => { const r = await c.env.DB.prepare('SELECT u.id, u.username, u.full_name, u.profile_image, u.bio FROM friendships f JOIN users u ON f.friend_id = u.id WHERE f.user_id = ?').bind(getUserId(c)).all(); return c.json(r.results); });
-api.get('/friends/status/:userId', authMiddleware, async (c) => { const mid = getUserId(c); const oid = c.req.param('userId'); const f = await c.env.DB.prepare('SELECT id FROM friendships WHERE user_id = ? AND friend_id = ?').bind(mid, oid).first(); if (f) return c.json({ status: 'friends' }); const sr: any = await c.env.DB.prepare("SELECT id FROM friend_requests WHERE from_user_id = ? AND to_user_id = ? AND status = 'pending'").bind(mid, oid).first(); if (sr) return c.json({ status: 'request_sent', request_id: sr.id }); const rr: any = await c.env.DB.prepare("SELECT id FROM friend_requests WHERE from_user_id = ? AND to_user_id = ? AND status = 'pending'").bind(oid, mid).first(); if (rr) return c.json({ status: 'request_received', request_id: rr.id }); return c.json({ status: 'none' }); });
-api.delete('/friends/:userId', authMiddleware, async (c) => { const mid = getUserId(c); const oid = c.req.param('userId'); await c.env.DB.prepare('DELETE FROM friendships WHERE (user_id = ? AND friend_id = ?) OR (user_id = ? AND friend_id = ?)').bind(mid, oid, oid, mid).run(); return c.json({ removed: true }); });
+api.get('/friends/requests', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  if (supabasePrimaryConfigured(c)) return c.json(await supabaseFriendRequestsPayload(c, userId));
+  const r = await c.env.DB.prepare(`SELECT fr.*, u.username, u.full_name, u.profile_image FROM friend_requests fr JOIN users u ON fr.from_user_id = u.id WHERE fr.to_user_id = ? AND fr.status = 'pending'`).bind(userId).all();
+  return c.json(r.results);
+});
+api.get('/friends', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  if (supabasePrimaryConfigured(c)) return c.json(await supabaseFriendsPayload(c, userId));
+  const r = await c.env.DB.prepare('SELECT u.id, u.username, u.full_name, u.profile_image, u.bio FROM friendships f JOIN users u ON f.friend_id = u.id WHERE f.user_id = ?').bind(userId).all();
+  return c.json(r.results);
+});
+api.get('/friends/status/:userId', authMiddleware, async (c) => {
+  const mid = getUserId(c);
+  const oid = c.req.param('userId');
+  if (supabasePrimaryConfigured(c)) return c.json(await supabaseFriendStatus(c, mid, oid));
+  const f = await c.env.DB.prepare('SELECT id FROM friendships WHERE user_id = ? AND friend_id = ?').bind(mid, oid).first();
+  if (f) return c.json({ status: 'friends' });
+  const sr: any = await c.env.DB.prepare("SELECT id FROM friend_requests WHERE from_user_id = ? AND to_user_id = ? AND status = 'pending'").bind(mid, oid).first();
+  if (sr) return c.json({ status: 'request_sent', request_id: sr.id });
+  const rr: any = await c.env.DB.prepare("SELECT id FROM friend_requests WHERE from_user_id = ? AND to_user_id = ? AND status = 'pending'").bind(oid, mid).first();
+  if (rr) return c.json({ status: 'request_received', request_id: rr.id });
+  return c.json({ status: 'none' });
+});
+api.delete('/friends/:userId', authMiddleware, async (c) => {
+  const mid = getUserId(c);
+  const oid = c.req.param('userId');
+  if (supabasePrimaryConfigured(c)) return c.json(await supabaseRemoveFriend(c, mid, oid));
+  await c.env.DB.prepare('DELETE FROM friendships WHERE (user_id = ? AND friend_id = ?) OR (user_id = ? AND friend_id = ?)').bind(mid, oid, oid, mid).run();
+  return c.json({ removed: true });
+});
 
 // Recommendations
 api.get('/recommendations', authMiddleware, async (c) => {
