@@ -6327,6 +6327,7 @@ function supabaseAppPostToLegacy(row: any, author: any, isFollowing: boolean, co
   const raw = parseJsonObject((metadata as any).raw);
   const place = parseJsonObject((metadata as any).place);
   const audio = parseJsonObject((metadata as any).audio);
+  const pinnedAt = cleanText((metadata as any).pinned_at, 80) || null;
   const { mediaUrls, mediaTypes, mediaDimensions } = supabaseAppPostMedia(row);
   const primaryCategory = (normalizeDiscoverCategory(row?.category || (discover as any).primary_category || row?.post_type, false) || DEFAULT_DISCOVER_CATEGORY) as DiscoverCategory;
   const appUserId = publicId(row?.app_user_id || author?.id, 120);
@@ -6386,6 +6387,8 @@ function supabaseAppPostToLegacy(row: any, author: any, isFollowing: boolean, co
     audio_start_time: Number((audio as any).start_time || 0),
     audio_duration: Number((audio as any).duration || 0),
     visibility: normalizeVisibility(row?.visibility),
+    pinned_at: pinnedAt,
+    is_pinned: !!pinnedAt,
     moderation_status: 'approved',
     likes_count: Math.max(0, Number(row?.likes_count || 0)),
     comments_count: Math.max(0, commentCount || Number(row?.comments_count || 0)),
@@ -6446,11 +6449,21 @@ async function supabaseReadVisiblePosts(c: any, viewerId: string, options: Supab
   ]);
   const followingIds = await supabaseFollowingUserIds(c, viewerId, Array.from(new Set(authorIds.map((id) => publicId(id, 120)).filter(Boolean))));
   const viewerSet = new Set(viewerAliases);
-  const visibleRows = candidateRows
+  const rowsVisibleToViewer = candidateRows
     .filter((row) => {
       const author = authorMap.get(publicId(row?.app_user_id, 120)) || authorMap.get(isUuidText(row?.user_id) || '');
       return supabaseAppPostVisibleToViewer(row, author, viewerSet, followingIds, blockedIds);
-    })
+    });
+  if (ownerId) {
+    rowsVisibleToViewer.sort((a, b) => {
+      const aPinned = cleanText((parseJsonObject(a?.metadata) as any).pinned_at, 80);
+      const bPinned = cleanText((parseJsonObject(b?.metadata) as any).pinned_at, 80);
+      if (!!aPinned !== !!bPinned) return aPinned ? -1 : 1;
+      if (aPinned && bPinned) return (Date.parse(bPinned) || 0) - (Date.parse(aPinned) || 0);
+      return 0;
+    });
+  }
+  const visibleRows = rowsVisibleToViewer
     .slice(postIds.length || postId || ownerId || search || (options.category && options.category !== 'all') ? offset : 0)
     .slice(0, limit);
 
@@ -6863,6 +6876,14 @@ function supabasePostIdentityOrFilter(identity: SupabasePostIdentity): string {
   return `(${parts.join(',')})`;
 }
 
+function supabaseAppPostIdentityOrFilter(identity: SupabasePostIdentity): string {
+  const parts: string[] = [];
+  if (identity.legacyPostId) parts.push(`legacy_post_id.eq.${identity.legacyPostId}`);
+  if (identity.postUuid) parts.push(`id.eq.${identity.postUuid}`);
+  if (!parts.length && identity.requestedPostId) parts.push(`legacy_post_id.eq.${identity.requestedPostId}`);
+  return `(${parts.join(',')})`;
+}
+
 async function supabaseResolvePostIdentity(c: any, postId: string): Promise<SupabasePostIdentity> {
   const requestedPostId = publicId(postId, 120);
   const requestedUuid = isUuidText(requestedPostId);
@@ -6965,6 +6986,28 @@ async function supabasePostInteractionActorCount(c: any, postId: string, kind: '
     if (actor) actors.add(actor);
   }
   return actors.size;
+}
+
+async function supabaseOwnedAppPost(c: any, postId: string, userId: string): Promise<{ status: 200; row: any; identity: SupabasePostIdentity } | { status: 403 | 404; body: any }> {
+  const identity = await supabaseResolvePostIdentity(c, postId);
+  const rows = await supabaseAdminQueryRows(c, 'app_posts', {
+    select: SUPABASE_APP_POST_SELECT,
+    filters: { or: supabaseAppPostIdentityOrFilter(identity) },
+    limit: 1,
+  });
+  const row = rows[0];
+  if (!row || cleanText(row?.status || 'active', 40) === 'removed') {
+    return { status: 404, body: { detail: 'Post not found' } };
+  }
+
+  const ownerAliases = new Set(await supabaseRelatedInteractionUserIds(c, userId));
+  ownerAliases.add(publicId(userId, 120));
+  const appOwnerId = publicId(row?.app_user_id, 120);
+  const authOwnerId = isUuidText(row?.user_id) || '';
+  if (!ownerAliases.has(appOwnerId) && (!authOwnerId || !ownerAliases.has(authOwnerId))) {
+    return { status: 403, body: { detail: 'Not your post' } };
+  }
+  return { status: 200, row, identity };
 }
 
 async function supabasePostInteractionActorCounts(c: any, postIds: string[]) {
@@ -7217,7 +7260,7 @@ async function setCanonicalPostSaveState(c: any, postId: string, userId: string,
 }
 
 async function overlaySupabaseViewerEngagement(c: any, posts: any[], userId: string): Promise<any[]> {
-  if (!posts.length || !supabaseEngagementConfigured(c)) return posts;
+  if (!posts.length || !supabaseEngagementConfigured(c) || !publicId(userId, 120)) return posts;
   const postIds = Array.from(new Set(posts.flatMap((post) => [
     cleanText(post?.id, 120),
     cleanText(post?.legacy_post_id, 120),
@@ -14528,15 +14571,22 @@ api.get('/posts/feed', authMiddleware, async (c) => {
 
 api.get('/posts/world-board', async (c) => {
   try {
+    const limited = await enforceRateLimit(c, 'public_world_board', clientIp(c), 180, 60);
+    if (limited) return limited;
+    const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
+    const limit = clampNumber(c.req.query('limit') || '40', 1, 50, 40);
+    if (supabasePrimaryConfigured(c)) {
+      const viewerId = await getOptionalUserId(c);
+      const posts = await supabaseReadVisiblePosts(c, viewerId, { limit, offset: skip, order: 'newest' });
+      const response = c.json(posts.map((p) => feedPostPayload(p, [], c.env)));
+      response.headers.set('cache-control', viewerId ? 'private, max-age=6' : 'public, max-age=4, s-maxage=8');
+      return response;
+    }
     await ensurePrivacySchema(c.env.DB);
     await ensureGovernanceSchema(c.env.DB);
     await ensurePostEditorSchema(c.env.DB);
     await ensureLocationSchema(c.env.DB);
     await ensureMediaModerationSchema(c.env.DB);
-    const limited = await enforceRateLimit(c, 'public_world_board', clientIp(c), 180, 60);
-    if (limited) return limited;
-    const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
-    const limit = clampNumber(c.req.query('limit') || '40', 1, 50, 40);
     const payload = await cachedJson(c, `posts:world-board:v9:${skip}:${limit}`, 8, async () => {
       const worldBoardSql = [
         `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
@@ -14562,13 +14612,24 @@ api.get('/posts/nearby-feed', authMiddleware, async (c) => {
   const userId = getUserId(c);
   const limited = await enforceRateLimit(c, 'nearby_feed_read', userId, 180, 60);
   if (limited) return limited;
+  const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
+  const limit = clampNumber(c.req.query('limit') || '24', 1, 50, 24);
+  if (supabasePrimaryConfigured(c)) {
+    try {
+      const posts = await supabaseReadVisiblePosts(c, userId, { limit, offset: skip, order: 'newest' });
+      const response = c.json(posts.map((p) => feedPostPayload(p, [], c.env)));
+      response.headers.set('cache-control', 'private, max-age=6');
+      return response;
+    } catch (error: any) {
+      console.warn(JSON.stringify({ event: 'supabase_nearby_feed_read_failed', code: getErrorCode(error).slice(0, 180) }));
+      return c.json({ detail: 'Could not load nearby posts.' }, 500);
+    }
+  }
   await ensurePrivacySchema(c.env.DB);
   await ensureGovernanceSchema(c.env.DB);
   await ensurePostEditorSchema(c.env.DB);
   await ensureLocationSchema(c.env.DB);
   await ensureMediaModerationSchema(c.env.DB);
-  const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
-  const limit = clampNumber(c.req.query('limit') || '24', 1, 50, 24);
   const nearbyFeedSql = [
     `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
        (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
@@ -14680,6 +14741,27 @@ api.post('/posts/:postId/like', authMiddleware, async (c) => {
 
 api.delete('/posts/:postId', authMiddleware, async (c) => {
   const userId = getUserId(c); const postId = c.req.param('postId');
+  if (supabasePrimaryConfigured(c)) {
+    try {
+      const owned = await supabaseOwnedAppPost(c, postId, userId);
+      if (owned.status !== 200) return c.json(owned.body, owned.status);
+      const metadata = parseJsonObject(owned.row?.metadata);
+      await supabaseAdminPatchRows(c, 'app_posts', { or: supabaseAppPostIdentityOrFilter(owned.identity) }, {
+        status: 'removed',
+        metadata: {
+          ...metadata,
+          removed_at: now(),
+          removed_reason: 'Deleted by creator',
+        },
+        updated_at: now(),
+      });
+      await logSecurityEvent(c, 'post_soft_deleted', userId, { post_id: postId });
+      return c.json({ deleted: true, soft_deleted: true });
+    } catch (error: any) {
+      console.warn(JSON.stringify({ event: 'supabase_post_delete_failed', code: getErrorCode(error).slice(0, 180) }));
+      return c.json({ detail: 'Could not delete post.' }, 500);
+    }
+  }
   await ensureGovernanceSchema(c.env.DB);
   const post: any = await c.env.DB.prepare('SELECT user_id FROM posts WHERE id = ?').bind(postId).first();
   if (!post) return c.json({ detail: 'Post not found' }, 404);
@@ -14701,6 +14783,24 @@ api.put('/posts/:postId/visibility', authMiddleware, async (c) => {
     return c.json({ detail: 'Invalid visibility.' }, 400);
   }
   const visibility = normalizeVisibility(requestedVisibility);
+
+  if (supabasePrimaryConfigured(c)) {
+    try {
+      const owned = await supabaseOwnedAppPost(c, postId, userId);
+      if (owned.status !== 200) return c.json(owned.body, owned.status);
+      await supabaseAdminPatchRows(c, 'app_posts', { or: supabaseAppPostIdentityOrFilter(owned.identity) }, {
+        visibility,
+        updated_at: now(),
+      });
+      await logSecurityEvent(c, 'post_visibility_updated', userId, { post_id: postId, visibility });
+      const [updated] = await supabaseReadVisiblePosts(c, userId, { postId, limit: 1 });
+      if (!updated) return c.json({ detail: 'Post not found' }, 404);
+      return c.json(postPayload(updated, [], c.env));
+    } catch (error: any) {
+      console.warn(JSON.stringify({ event: 'supabase_post_visibility_failed', code: getErrorCode(error).slice(0, 180) }));
+      return c.json({ detail: 'Could not update post visibility.' }, 500);
+    }
+  }
 
   const post: any = await c.env.DB.prepare(
     "SELECT id, user_id FROM posts WHERE id = ? AND COALESCE(status, 'active') != 'removed'"
@@ -14734,6 +14834,29 @@ api.put('/posts/:postId/pin', authMiddleware, async (c) => {
   const body: any = await c.req.json().catch(() => ({}));
   const requested = optionalBoolean(body.pinned ?? body.pin ?? body.value);
   const shouldPin = requested === null ? true : requested;
+
+  if (supabasePrimaryConfigured(c)) {
+    try {
+      const owned = await supabaseOwnedAppPost(c, postId, userId);
+      if (owned.status !== 200) return c.json(owned.body, owned.status);
+      const pinnedAt = shouldPin ? now() : null;
+      const metadata = parseJsonObject(owned.row?.metadata);
+      await supabaseAdminPatchRows(c, 'app_posts', { or: supabaseAppPostIdentityOrFilter(owned.identity) }, {
+        metadata: {
+          ...metadata,
+          pinned_at: pinnedAt,
+        },
+        updated_at: now(),
+      });
+      await logSecurityEvent(c, shouldPin ? 'post_pinned' : 'post_unpinned', userId, { post_id: postId });
+      const [updated] = await supabaseReadVisiblePosts(c, userId, { postId, limit: 1 });
+      if (!updated) return c.json({ detail: 'Post not found' }, 404);
+      return c.json(postPayload(updated, [], c.env));
+    } catch (error: any) {
+      console.warn(JSON.stringify({ event: 'supabase_post_pin_failed', code: getErrorCode(error).slice(0, 180) }));
+      return c.json({ detail: 'Could not update pinned post.' }, 500);
+    }
+  }
 
   const post: any = await c.env.DB.prepare(
     "SELECT id, user_id FROM posts WHERE id = ? AND COALESCE(status, 'active') != 'removed'"
