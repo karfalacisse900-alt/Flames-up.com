@@ -73,7 +73,7 @@ public extension Notification.Name {
 @MainActor
 public enum MIRAPostEngagementSync {
   private static let cacheKey = "native.post.engagement.confirmed.v1"
-  private static let maxSnapshotAge: TimeInterval = 60 * 60 * 24 * 365
+  private static let maxSnapshotAge: TimeInterval = 60 * 15
   private static let maxSnapshots = 1_000
 
   public static func publish(_ update: MIRAPostEngagementUpdate) {
@@ -164,26 +164,15 @@ public enum MIRAPostEngagementSync {
     )
   }
 
-  private static func mergedViewerFlag(cached: Bool?, fresh: Bool?, cachedCount: Int?, freshCount: Int?) -> Bool? {
+  private static func mergedViewerFlag(cached: Bool?, fresh: Bool?, cachedCount _: Int?, freshCount _: Int?) -> Bool? {
     guard let fresh else { return cached }
-    guard let cached else { return fresh }
-    if cached == true,
-       fresh == false,
-       let freshCount,
-       freshCount >= (cachedCount ?? 0) {
-      return true
-    }
     return fresh
   }
 
-  private static func mergedCount(cached: Int?, fresh: Int?, cachedFlag: Bool?, freshFlag: Bool?) -> Int? {
+  private static func mergedCount(cached: Int?, fresh: Int?, cachedFlag _: Bool?, freshFlag _: Bool?) -> Int? {
     guard cached != nil || fresh != nil else { return nil }
-    let freshValue = max(0, fresh ?? 0)
-    let cachedValue = max(0, cached ?? 0)
-    if cachedFlag == true, freshFlag == false {
-      return max(freshValue, cachedValue)
-    }
-    return fresh ?? cached
+    if let fresh { return max(0, fresh) }
+    return max(0, cached ?? 0)
   }
 
   private static func maxKnown(_ lhs: Int?, _ rhs: Int?) -> Int? {

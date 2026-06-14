@@ -348,15 +348,8 @@ final class PostDetailModel: ObservableObject {
     return max(0, incoming)
   }
 
-  private func mergedViewerFlag(cached: Bool?, fresh: Bool?, cachedCount: Int?, freshCount: Int?) -> Bool? {
+  private func mergedViewerFlag(cached: Bool?, fresh: Bool?, cachedCount _: Int?, freshCount _: Int?) -> Bool? {
     guard let fresh else { return cached }
-    guard let cached else { return fresh }
-    if cached == true,
-       fresh == false,
-       let freshCount,
-       freshCount >= (cachedCount ?? 0) {
-      return true
-    }
     return fresh
   }
 
