@@ -3060,11 +3060,24 @@ function d1Changes(result: any): number {
 }
 
 async function enforceRateLimit(c: any, bucket: string, identity: string, limit: number, windowSeconds: number) {
-  await ensureReliabilitySchema(c.env.DB);
   const nowSeconds = Math.floor(Date.now() / 1000);
   const windowStart = Math.floor(nowSeconds / windowSeconds) * windowSeconds;
   const key = `${safeRateLimitPart(bucket)}:${safeRateLimitPart(identity)}:${windowStart}`;
   const updatedAt = now();
+  if (c.env.KV) {
+    const cached: any = await c.env.KV.get(key, 'json').catch(() => null);
+    const count = Math.max(0, Number(cached?.count || 0)) + 1;
+    await c.env.KV.put(key, JSON.stringify({ window_start: windowStart, count, updated_at: updatedAt }), {
+      expirationTtl: Math.max(60, windowSeconds + 30),
+    });
+    if (count > limit) {
+      console.warn(JSON.stringify({ event: 'rate_limit_hit', request_id: c.get?.('requestId') || '', bucket: safeRateLimitPart(bucket), identity: safeRateLimitPart(identity), count, limit }));
+      return c.json({ detail: 'Too many requests. Try again in a moment.', retry_after_seconds: windowSeconds }, 429);
+    }
+    return null;
+  }
+
+  await ensureReliabilitySchema(c.env.DB);
   const results = await c.env.DB.batch([
     c.env.DB.prepare('INSERT INTO request_rate_limits (key, window_start, count, updated_at) VALUES (?, ?, 0, ?) ON CONFLICT(key) DO NOTHING')
       .bind(key, windowStart, updatedAt),
