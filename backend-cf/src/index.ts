@@ -6749,12 +6749,14 @@ async function supabaseViewerPostInteractionExists(c: any, postId: string, userI
   if (!userIds.length) return false;
   const identity = await supabaseResolvePostIdentity(c, postId);
   const keys = await supabaseInteractionIdentityKeys(c, userIds);
-  const rows = await supabaseAdminSelectRows(c, 'app_post_interactions', {
-    or: supabasePostIdentityOrFilter(identity),
-    kind: postgrestEqFilter(kind),
-    app_user_id: postgrestInFilter(keys.appUserIds),
-  }, 'legacy_post_id', 1);
-  if (rows.length > 0) return true;
+  if (keys.appUserIds.length) {
+    const rows = await supabaseAdminSelectRows(c, 'app_post_interactions', {
+      or: supabasePostIdentityOrFilter(identity),
+      kind: postgrestEqFilter(kind),
+      app_user_id: postgrestInFilter(keys.appUserIds),
+    }, 'legacy_post_id', 1);
+    if (rows.length > 0) return true;
+  }
   if (!keys.authUserIds.length) return false;
   try {
     const legacyAuthRows = await supabaseAdminSelectRows(c, 'app_post_interactions', {
@@ -7283,15 +7285,18 @@ async function overlaySupabaseViewerEngagement(c: any, posts: any[], userId: str
         keyAliases.set(key, aliases);
       }
     }
-    const [rows, counts] = await Promise.all([
-      supabaseAdminSelectRows(c, 'app_post_interactions', {
+    const [counts, appRows] = await Promise.all([
+      supabasePostInteractionActorCounts(c, postIds),
+      keys.appUserIds.length
+        ? supabaseAdminSelectRows(c, 'app_post_interactions', {
         legacy_post_id: postgrestInFilter(legacyPostIds.length ? legacyPostIds : postIds),
         app_user_id: postgrestInFilter(keys.appUserIds),
         kind: postgrestInFilter(['like', 'save']),
-      }, 'legacy_post_id,post_id,kind', Math.max(1, postIds.length * 2 * Math.max(1, relatedUserIds.length))),
-      supabasePostInteractionActorCounts(c, postIds),
+          }, 'legacy_post_id,post_id,kind', Math.max(1, postIds.length * 2 * Math.max(1, relatedUserIds.length)))
+        : Promise.resolve([] as any[]),
     ]);
-    if (uuidPostIds.length) {
+    const rows: any[] = [...appRows];
+    if (uuidPostIds.length && keys.appUserIds.length) {
       const nativeAppRows = await supabaseAdminSelectRowsIfShapeExists(c, 'app_post_interactions', {
         post_id: postgrestInFilter(uuidPostIds),
         app_user_id: postgrestInFilter(keys.appUserIds),

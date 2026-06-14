@@ -18,13 +18,15 @@ final class PostDetailModel: ObservableObject {
   }
 
   func hydrateFromLocalCache() async {
+    post = await MIRAPostEngagementSync.apply(to: post)
     guard let cached = await MIRAAppCacheStore.shared.loadCachedPost(id: post.id) else { return }
     applyCachedEngagement(from: cached)
   }
 
   func refreshPost() async {
     do {
-      let refreshed: MIRAPost = try await api.get("/posts/\(post.id)")
+      let apiPost: MIRAPost = try await api.get("/posts/\(post.id)")
+      let refreshed = await MIRAPostEngagementSync.apply(to: apiPost)
       let current = post
       let merged = refreshed.updating(
         liked: mergedViewerFlag(cached: current.viewerLikedValue, fresh: refreshed.viewerLikedValue, cachedCount: current.likesCount, freshCount: refreshed.likesCount),
