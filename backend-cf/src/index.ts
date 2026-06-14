@@ -11999,6 +11999,12 @@ api.post('/auth/login', async (c) => {
 
 api.post('/auth/phone/start', async (c) => {
   try {
+    if (supabasePrimaryConfigured(c)) {
+      return c.json({
+        detail: 'Phone sign in is not available. Use email, Google, or Apple sign in.',
+        code: 'PHONE_SIGN_IN_DISABLED',
+      }, 410);
+    }
     const bodyTooLarge = rejectLargeRequest(c, 40_000);
     if (bodyTooLarge) return bodyTooLarge;
     const body: any = await c.req.json().catch(() => ({}));
@@ -12051,6 +12057,12 @@ api.post('/auth/phone/start', async (c) => {
 
 api.post('/auth/phone/verify', async (c) => {
   try {
+    if (supabasePrimaryConfigured(c)) {
+      return c.json({
+        detail: 'Phone sign in is not available. Use email, Google, or Apple sign in.',
+        code: 'PHONE_SIGN_IN_DISABLED',
+      }, 410);
+    }
     const bodyTooLarge = rejectLargeRequest(c, 40_000);
     if (bodyTooLarge) return bodyTooLarge;
     const body: any = await c.req.json().catch(() => ({}));
