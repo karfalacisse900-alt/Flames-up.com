@@ -65,7 +65,10 @@ actor MIRAAppCacheStore {
   private let maxNotifications = 120
 
   func loadFeed() async -> [MIRAPost]? {
-    await MIRALocalJSONCache.load([MIRAPost].self, key: CacheKey.feed, maxAge: contentCacheAge)
+    guard let posts = await MIRALocalJSONCache.load([MIRAPost].self, key: CacheKey.feed, maxAge: contentCacheAge) else {
+      return nil
+    }
+    return await MIRAPostEngagementSync.apply(to: posts)
   }
 
   func saveFeed(_ posts: [MIRAPost]) async {
@@ -93,9 +96,13 @@ actor MIRAAppCacheStore {
     return Array(merged.prefix(maxFeedPosts))
   }
 
-  func mergeFreshFirstPage(existing: [MIRAPost], fresh: [MIRAPost], pageLimit: Int) -> [MIRAPost] {
-    guard !existing.isEmpty else { return Array(fresh.prefix(maxFeedPosts)) }
-    guard !fresh.isEmpty else { return existing }
+  func mergeFreshFirstPage(existing: [MIRAPost], fresh: [MIRAPost], pageLimit: Int) async -> [MIRAPost] {
+    guard !existing.isEmpty else {
+      return await MIRAPostEngagementSync.apply(to: Array(fresh.prefix(maxFeedPosts)))
+    }
+    guard !fresh.isEmpty else {
+      return await MIRAPostEngagementSync.apply(to: existing)
+    }
 
     let freshIds = Set(fresh.map(\.id))
     let preservedTail = existing.enumerated().compactMap { index, post -> MIRAPost? in
@@ -103,13 +110,13 @@ actor MIRAAppCacheStore {
       if index < pageLimit { return nil }
       return post
     }
-    let mergedFresh = mergeFreshPostsPreservingViewerState(existing: existing, fresh: fresh)
-    return Array((mergedFresh + preservedTail).prefix(maxFeedPosts))
+    let mergedFresh = await mergeFreshPostsPreservingViewerState(existing: existing, fresh: fresh)
+    return await MIRAPostEngagementSync.apply(to: Array((mergedFresh + preservedTail).prefix(maxFeedPosts)))
   }
 
-  func mergeFreshPostsPreservingViewerState(existing: [MIRAPost], fresh: [MIRAPost], maxCount: Int? = nil) -> [MIRAPost] {
+  func mergeFreshPostsPreservingViewerState(existing: [MIRAPost], fresh: [MIRAPost], maxCount: Int? = nil) async -> [MIRAPost] {
     guard !existing.isEmpty, !fresh.isEmpty else {
-      return Array(fresh.prefix(maxCount ?? fresh.count))
+      return await MIRAPostEngagementSync.apply(to: Array(fresh.prefix(maxCount ?? fresh.count)))
     }
     var existingById: [String: MIRAPost] = [:]
     for post in existing {
@@ -119,11 +126,14 @@ actor MIRAAppCacheStore {
       guard let cached = existingById[freshPost.id] else { return freshPost }
       return mergedPostPreservingViewerState(cached: cached, fresh: freshPost)
     }
-    return Array(merged.prefix(maxCount ?? merged.count))
+    return await MIRAPostEngagementSync.apply(to: Array(merged.prefix(maxCount ?? merged.count)))
   }
 
   func loadDiscoverPosts(category: String) async -> [MIRAPost]? {
-    await MIRALocalJSONCache.load([MIRAPost].self, key: CacheKey.discoverPosts(category), maxAge: contentCacheAge)
+    guard let posts = await MIRALocalJSONCache.load([MIRAPost].self, key: CacheKey.discoverPosts(category), maxAge: contentCacheAge) else {
+      return nil
+    }
+    return await MIRAPostEngagementSync.apply(to: posts)
   }
 
   func saveDiscoverPosts(_ posts: [MIRAPost], category: String) async {
@@ -140,7 +150,8 @@ actor MIRAAppCacheStore {
         best = preferredPost(best, posts.first { $0.id == postId })
       }
     }
-    return best
+    guard let best else { return nil }
+    return await MIRAPostEngagementSync.apply(to: best)
   }
 
   func loadDiscoverStories() async -> [MIRAStoryGroup]? {
@@ -160,7 +171,10 @@ actor MIRAAppCacheStore {
   }
 
   func loadProfilePosts(userId: String) async -> [MIRAPost]? {
-    await MIRALocalJSONCache.load([MIRAPost].self, key: CacheKey.profilePosts(userId), maxAge: profileCacheAge)
+    guard let posts = await MIRALocalJSONCache.load([MIRAPost].self, key: CacheKey.profilePosts(userId), maxAge: profileCacheAge) else {
+      return nil
+    }
+    return await MIRAPostEngagementSync.apply(to: posts)
   }
 
   func saveProfilePosts(_ posts: [MIRAPost], userId: String) async {

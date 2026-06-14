@@ -186,8 +186,9 @@ final class LibraryNativeModel: ObservableObject {
       return
     }
     if !force, let cached: [MIRAPost] = await MIRALocalJSONCache.load([MIRAPost].self, key: sectionCacheKey(selectedSection), maxAge: 60 * 60 * 24 * 30) {
-      posts = cached
-      postsBySection[selectedSection] = cached
+      let hydrated = await MIRAPostEngagementSync.apply(to: cached)
+      posts = hydrated
+      postsBySection[selectedSection] = hydrated
       errorMessage = nil
     }
     isLoading = true
@@ -202,9 +203,10 @@ final class LibraryNativeModel: ObservableObject {
       } else {
         loaded = []
       }
-      posts = loaded
-      postsBySection[selectedSection] = loaded
-      await MIRALocalJSONCache.save(loaded, key: sectionCacheKey(selectedSection))
+      let hydrated = await MIRAPostEngagementSync.apply(to: loaded)
+      posts = hydrated
+      postsBySection[selectedSection] = hydrated
+      await MIRALocalJSONCache.save(hydrated, key: sectionCacheKey(selectedSection))
       errorMessage = nil
     } catch {
       if posts.isEmpty {

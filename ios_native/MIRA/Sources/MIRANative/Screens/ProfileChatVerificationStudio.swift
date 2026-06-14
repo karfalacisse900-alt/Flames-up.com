@@ -72,7 +72,7 @@ final class ProfileNativeModel: ObservableObject {
     if cachedPosts == nil {
       cachedPosts = await MIRALocalJSONCache.load([MIRAPost].self, key: postsCacheKey(for: cachedUser.id), maxAge: 60 * 60 * 24 * 90)
     }
-    posts = profileVisiblePosts(cachedPosts ?? posts)
+    posts = await MIRAPostEngagementSync.apply(to: profileVisiblePosts(cachedPosts ?? posts))
   }
 
   func applyUpdatedUser(_ updated: MIRAUser) async {
@@ -558,7 +558,7 @@ final class UserProfileNativeModel: ObservableObject {
         if cachedPosts == nil {
           cachedPosts = await MIRALocalJSONCache.load([MIRAPost].self, key: postsCacheKey, maxAge: 60 * 60 * 24 * 90)
         }
-        posts = profileVisiblePosts(cachedPosts ?? posts)
+        posts = await MIRAPostEngagementSync.apply(to: profileVisiblePosts(cachedPosts ?? posts))
       }
     }
 

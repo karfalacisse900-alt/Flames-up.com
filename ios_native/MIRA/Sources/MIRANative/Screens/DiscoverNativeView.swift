@@ -318,7 +318,14 @@ final class DiscoverNativeModel: ObservableObject {
     if let cached = await MIRAAppCacheStore.shared.loadDiscoverPosts(category: category) {
       return cached
     }
-    return await MIRALocalJSONCache.load([MIRAPost].self, key: postsCacheKey(for: category), maxAge: 60 * 60 * 24 * 30)
+    guard let cached = await MIRALocalJSONCache.load(
+      [MIRAPost].self,
+      key: postsCacheKey(for: category),
+      maxAge: 60 * 60 * 24 * 30
+    ) else {
+      return nil
+    }
+    return await MIRAPostEngagementSync.apply(to: cached)
   }
 
   private func cachedDiscoverStories() async -> [MIRAStoryGroup]? {

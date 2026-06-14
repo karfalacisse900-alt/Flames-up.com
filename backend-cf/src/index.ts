@@ -6697,16 +6697,21 @@ async function supabaseDeletePostInteractionsForUsers(c: any, postId: string, us
 
 async function supabaseUpsertPostInteraction(c: any, postId: string, userId: string, kind: 'like' | 'save', collection = '') {
   const identity = await supabaseResolvePostIdentity(c, postId);
+  const requestedUserId = cleanText(userId, 120);
+  const authUserIds = await supabaseAuthUserIdsForAppUserIds(c, [requestedUserId]);
+  const appUserIdsFromAuth = await supabaseAppUserIdsForAuthUserIds(c, [requestedUserId, ...authUserIds]);
+  const canonicalAppUserId = cleanText(appUserIdsFromAuth[0] || requestedUserId, 120);
+  const authUserId = authUserIds[0] || isUuidText(requestedUserId);
+  await supabaseDeletePostInteractionsForUsers(c, postId, [requestedUserId, canonicalAppUserId, ...(authUserId ? [authUserId] : [])], kind);
   const baseRow: any = {
     legacy_post_id: cleanText(identity.legacyPostId || identity.requestedPostId, 120),
-    app_user_id: cleanText(userId, 120),
+    app_user_id: canonicalAppUserId,
     kind,
     collection: kind === 'save' ? (cleanText(collection, 120) || 'saved') : null,
     metadata: { source: 'cloudflare_worker_primary' },
     legacy_created_at: now(),
   };
   if (identity.postUuid) baseRow.post_id = identity.postUuid;
-  const authUserId = await supabaseAuthUserIdForAppUserId(c, userId);
   if (authUserId) baseRow.user_id = authUserId;
   if (identity.postUuid && authUserId) {
     await supabaseAdminDeleteRowsIfShapeExists(c, 'app_post_interactions', {

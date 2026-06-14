@@ -130,7 +130,10 @@ public final class MIRAAuthSession: ObservableObject, MIRASessionProviding {
     errorMessage = nil
     keychain.clearAccessToken()
     MIRAAPIClient.productionSession.configuration.urlCache?.removeAllCachedResponses()
-    Task { await MIRALocalJSONCache.remove(key: cachedUserKey) }
+    Task {
+      await MIRALocalJSONCache.remove(key: cachedUserKey)
+      await MIRAPostEngagementSync.clearCachedState()
+    }
   }
 
   @MainActor

@@ -109,7 +109,7 @@ final class MainFeedModel: ObservableObject {
     }
     guard let cached else { return }
     // Cached feed is already stored in display order, so show it immediately.
-    posts = photoFeedPosts(cached)
+    posts = await MIRAPostEngagementSync.apply(to: photoFeedPosts(cached))
     MIRAPerformanceTimeline.markOnce("time_to_first_real_home_item", detail: "cache")
     errorMessage = nil
     isLoading = false
