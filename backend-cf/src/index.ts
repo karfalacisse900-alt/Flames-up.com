@@ -977,6 +977,68 @@ async function touchUserPresence(db: D1Database, userId: string) {
   `).bind(userId, timestamp, timestamp).run();
 }
 
+function presenceKvKey(userId: string): string {
+  return `presence:user:${safeRateLimitPart(userId)}`;
+}
+
+function typingKvKey(userId: string, peerId: string): string {
+  return `presence:typing:${safeRateLimitPart(userId)}:${safeRateLimitPart(peerId)}`;
+}
+
+async function touchSupabasePrimaryPresence(c: any, userId: string): Promise<string> {
+  const timestamp = now();
+  if (!userId || !c.env.KV) return timestamp;
+  await c.env.KV.put(presenceKvKey(userId), JSON.stringify({ last_seen_at: timestamp }), {
+    expirationTtl: 4 * 60,
+  }).catch((error: any) => {
+    console.warn(JSON.stringify({
+      event: 'kv_presence_touch_failed',
+      request_id: c.get?.('requestId') || '',
+      code: getErrorCode(error).slice(0, 160),
+    }));
+  });
+  return timestamp;
+}
+
+async function readSupabasePrimaryPresence(c: any, userId: string): Promise<string | null> {
+  if (!userId || !c.env.KV) return null;
+  const cached: any = await c.env.KV.get(presenceKvKey(userId), 'json').catch(() => null);
+  const lastSeenAt = cleanText(cached?.last_seen_at, 80);
+  return lastSeenAt || null;
+}
+
+async function setSupabasePrimaryTyping(c: any, userId: string, peerId: string, isTyping: boolean): Promise<string> {
+  const timestamp = now();
+  if (!userId || !peerId || !c.env.KV) return timestamp;
+  const key = typingKvKey(userId, peerId);
+  if (isTyping) {
+    await c.env.KV.put(key, JSON.stringify({ is_typing: true, updated_at: timestamp }), {
+      expirationTtl: 15,
+    }).catch((error: any) => {
+      console.warn(JSON.stringify({
+        event: 'kv_typing_write_failed',
+        request_id: c.get?.('requestId') || '',
+        code: getErrorCode(error).slice(0, 160),
+      }));
+    });
+  } else {
+    await c.env.KV.delete(key).catch((error: any) => {
+      console.warn(JSON.stringify({
+        event: 'kv_typing_delete_failed',
+        request_id: c.get?.('requestId') || '',
+        code: getErrorCode(error).slice(0, 160),
+      }));
+    });
+  }
+  return timestamp;
+}
+
+async function readSupabasePrimaryTyping(c: any, userId: string, peerId: string): Promise<boolean> {
+  if (!userId || !peerId || !c.env.KV) return false;
+  const cached: any = await c.env.KV.get(typingKvKey(userId, peerId), 'json').catch(() => null);
+  return cached?.is_typing === true;
+}
+
 function isPresenceOnline(lastSeenAt?: string | null): boolean {
   if (!lastSeenAt) return false;
   const lastSeen = Date.parse(lastSeenAt);
@@ -3087,6 +3149,15 @@ async function enforceRateLimit(c: any, bucket: string, identity: string, limit:
       return c.json({ detail: 'Too many requests. Try again in a moment.', retry_after_seconds: windowSeconds }, 429);
     }
     return null;
+  }
+
+  if (supabasePrimaryConfigured(c) && isProductionEnv(c)) {
+    console.error(JSON.stringify({
+      event: 'rate_limit_kv_missing',
+      request_id: c.get?.('requestId') || '',
+      bucket: safeRateLimitPart(bucket),
+    }));
+    return c.json({ detail: 'Temporary protection is unavailable. Please try again in a moment.' }, 503);
   }
 
   await ensureReliabilitySchema(c.env.DB);
@@ -15493,7 +15564,6 @@ api.delete('/posts/:postId', authMiddleware, async (c) => {
 api.put('/posts/:postId/visibility', authMiddleware, async (c) => {
   const userId = getUserId(c);
   const postId = c.req.param('postId');
-  await ensurePrivacySchema(c.env.DB);
   const body: any = await c.req.json().catch(() => ({}));
   const requestedVisibility = typeof body.visibility === 'string' ? body.visibility.trim().toLowerCase() : '';
   if (!['public', 'followers', 'friends', 'private'].includes(requestedVisibility)) {
@@ -15519,6 +15589,7 @@ api.put('/posts/:postId/visibility', authMiddleware, async (c) => {
     }
   }
 
+  await ensurePrivacySchema(c.env.DB);
   const post: any = await c.env.DB.prepare(
     "SELECT id, user_id FROM posts WHERE id = ? AND COALESCE(status, 'active') != 'removed'"
   ).bind(postId).first();
@@ -15547,7 +15618,6 @@ api.put('/posts/:postId/visibility', authMiddleware, async (c) => {
 api.put('/posts/:postId/pin', authMiddleware, async (c) => {
   const userId = getUserId(c);
   const postId = c.req.param('postId');
-  await ensurePrivacySchema(c.env.DB);
   const body: any = await c.req.json().catch(() => ({}));
   const requested = optionalBoolean(body.pinned ?? body.pin ?? body.value);
   const shouldPin = requested === null ? true : requested;
@@ -15575,6 +15645,7 @@ api.put('/posts/:postId/pin', authMiddleware, async (c) => {
     }
   }
 
+  await ensurePrivacySchema(c.env.DB);
   const post: any = await c.env.DB.prepare(
     "SELECT id, user_id FROM posts WHERE id = ? AND COALESCE(status, 'active') != 'removed'"
   ).bind(postId).first();
@@ -15654,11 +15725,6 @@ api.post('/posts/:postId/comments', authMiddleware, async (c) => {
   try {
     const bodyTooLarge = rejectLargeRequest(c, 100_000);
     if (bodyTooLarge) return bodyTooLarge;
-    await ensurePrivacySchema(c.env.DB);
-    await ensureGovernanceSchema(c.env.DB);
-    await ensureCommentSchema(c.env.DB);
-    await ensureReliabilitySchema(c.env.DB);
-    await ensureMediaModerationSchema(c.env.DB);
     const userId = getUserId(c);
     const limited = await enforceRateLimit(c, 'comment_create', userId, 40, 60);
     if (limited) return limited;
@@ -15676,6 +15742,11 @@ api.post('/posts/:postId/comments', authMiddleware, async (c) => {
       return c.json(result.body, result.status);
     }
 
+    await ensurePrivacySchema(c.env.DB);
+    await ensureGovernanceSchema(c.env.DB);
+    await ensureCommentSchema(c.env.DB);
+    await ensureReliabilitySchema(c.env.DB);
+    await ensureMediaModerationSchema(c.env.DB);
     const commentVisiblePostSql = [
       'SELECT p.id, p.user_id FROM posts p JOIN users u ON p.user_id = u.id',
     `WHERE p.id = ? AND ${visiblePostWhere('u', 'p')} AND ${feedPhotoPostWhere('p')}`,
@@ -15773,16 +15844,16 @@ api.post('/posts/:postId/comments', authMiddleware, async (c) => {
 
 api.get('/posts/:postId/comments', authMiddleware, async (c) => {
   try {
-    await ensurePrivacySchema(c.env.DB);
-    await ensureGovernanceSchema(c.env.DB);
-    await ensureCommentSchema(c.env.DB);
-    await ensureLikeUniquenessSchema(c.env.DB);
     const userId = getUserId(c);
     const limit = clampNumber(c.req.query('limit') || '80', 1, 100, 80);
     if (supabasePrimaryConfigured(c)) {
       const result = await supabaseReadPostComments(c, c.req.param('postId'), userId, limit);
       return c.json(result.body, result.status);
     }
+    await ensurePrivacySchema(c.env.DB);
+    await ensureGovernanceSchema(c.env.DB);
+    await ensureCommentSchema(c.env.DB);
+    await ensureLikeUniquenessSchema(c.env.DB);
     const commentsSql = [
       `SELECT c.*, p.user_id AS post_user_id, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
               CASE WHEN c.pinned_at IS NULL THEN 0 ELSE 1 END AS is_pinned,
@@ -15815,9 +15886,6 @@ api.get('/posts/:postId/comments', authMiddleware, async (c) => {
 
 api.post('/comments/:commentId/like', authMiddleware, async (c) => {
   try {
-    await ensurePrivacySchema(c.env.DB);
-    await ensureGovernanceSchema(c.env.DB);
-    await ensureCommentSchema(c.env.DB);
     const userId = getUserId(c);
     const limited = await enforceRateLimit(c, 'comment_like', userId, 300, 60);
     if (limited) return limited;
@@ -15828,6 +15896,9 @@ api.post('/comments/:commentId/like', authMiddleware, async (c) => {
       const result = await supabaseSetCommentLike(c, commentId, userId, requested);
       return c.json(result.body, result.status);
     }
+    await ensurePrivacySchema(c.env.DB);
+    await ensureGovernanceSchema(c.env.DB);
+    await ensureCommentSchema(c.env.DB);
     const visibleCommentSql = [
       `SELECT c.id, c.likes_count
        FROM comments c
@@ -15875,9 +15946,6 @@ api.post('/comments/:commentId/like', authMiddleware, async (c) => {
 
 api.post('/comments/:commentId/pin', authMiddleware, async (c) => {
   try {
-    await ensurePrivacySchema(c.env.DB);
-    await ensureGovernanceSchema(c.env.DB);
-    await ensureCommentSchema(c.env.DB);
     const userId = getUserId(c);
     const commentId = c.req.param('commentId');
     const body: any = await c.req.json().catch(() => ({}));
@@ -15890,6 +15958,9 @@ api.post('/comments/:commentId/pin', authMiddleware, async (c) => {
       }
       return c.json(result.body, result.status);
     }
+    await ensurePrivacySchema(c.env.DB);
+    await ensureGovernanceSchema(c.env.DB);
+    await ensureCommentSchema(c.env.DB);
     const comment: any = await c.env.DB.prepare(
       `SELECT c.id, c.post_id, c.pinned_at, p.user_id AS post_user_id
        FROM comments c
@@ -15918,15 +15989,15 @@ api.post('/comments/:commentId/pin', authMiddleware, async (c) => {
 
 api.delete('/comments/:commentId', authMiddleware, async (c) => {
   try {
-    await ensurePrivacySchema(c.env.DB);
-    await ensureGovernanceSchema(c.env.DB);
-    await ensureCommentSchema(c.env.DB);
     const userId = getUserId(c);
     const commentId = c.req.param('commentId');
     if (supabasePrimaryConfigured(c)) {
       const result = await supabaseUpdateCommentStatus(c, commentId, userId, 'removed');
       return c.json(result.body, result.status);
     }
+    await ensurePrivacySchema(c.env.DB);
+    await ensureGovernanceSchema(c.env.DB);
+    await ensureCommentSchema(c.env.DB);
     const comment: any = await c.env.DB.prepare(
       `SELECT c.id, c.user_id, c.post_id
        FROM comments c
@@ -15949,15 +16020,15 @@ api.delete('/comments/:commentId', authMiddleware, async (c) => {
 
 api.post('/comments/:commentId/hide', authMiddleware, async (c) => {
   try {
-    await ensurePrivacySchema(c.env.DB);
-    await ensureGovernanceSchema(c.env.DB);
-    await ensureCommentSchema(c.env.DB);
     const userId = getUserId(c);
     const commentId = c.req.param('commentId');
     if (supabasePrimaryConfigured(c)) {
       const result = await supabaseUpdateCommentStatus(c, commentId, userId, 'hidden');
       return c.json(result.body, result.status);
     }
+    await ensurePrivacySchema(c.env.DB);
+    await ensureGovernanceSchema(c.env.DB);
+    await ensureCommentSchema(c.env.DB);
     const comment: any = await c.env.DB.prepare(
       `SELECT c.id, c.post_id, p.user_id AS post_user_id
        FROM comments c
@@ -16731,6 +16802,17 @@ api.get('/conversations', authMiddleware, async (c) => {
       const existing = directMap.get(otherId);
       if (existing) existing.unread_count = count;
     }
+    if (directMap.size) {
+      await Promise.all(Array.from(directMap.entries()).map(async ([otherId, conversation]) => {
+        const [lastSeenAt, isTyping] = await Promise.all([
+          readSupabasePrimaryPresence(c, otherId),
+          readSupabasePrimaryTyping(c, otherId, userId),
+        ]);
+        conversation.other_user.last_seen_at = lastSeenAt;
+        conversation.other_user.is_online = isPresenceOnline(lastSeenAt);
+        conversation.other_user.is_typing = isTyping;
+      }));
+    }
 
     const memberships = await supabaseAdminQueryRows(c, 'app_group_chat_members', {
       select: 'group_id',
@@ -16934,8 +17016,11 @@ api.get('/conversations', authMiddleware, async (c) => {
 });
 
 api.post('/presence/touch', authMiddleware, async (c) => {
-  await touchUserPresence(c.env.DB, getUserId(c));
-  return c.json({ ok: true, touched_at: now() });
+  const userId = getUserId(c);
+  const touchedAt = supabasePrimaryConfigured(c)
+    ? await touchSupabasePrimaryPresence(c, userId)
+    : (await touchUserPresence(c.env.DB, userId), now());
+  return c.json({ ok: true, touched_at: touchedAt });
 });
 
 api.post('/messages', authMiddleware, async (c) => {
@@ -17002,6 +17087,7 @@ api.post('/messages', authMiddleware, async (c) => {
       created_at: ts,
       updated_at: ts,
     }], 'id');
+    await setSupabasePrimaryTyping(c, userId, receiverId, false);
     runBackgroundTask(c, 'message_notification_failed', async () => {
       const sender = await supabaseUserByAnyId(c, userId);
       const senderName = cleanText(sender?.full_name || sender?.username || 'Someone', 80);
@@ -17070,11 +17156,21 @@ api.post('/messages', authMiddleware, async (c) => {
 api.get('/messages/presence/:userId', authMiddleware, async (c) => {
   const myId = getUserId(c);
   const peerId = publicId(c.req.param('userId'), 120);
-  await touchUserPresence(c.env.DB, myId);
+  if (supabasePrimaryConfigured(c)) await touchSupabasePrimaryPresence(c, myId);
+  else await touchUserPresence(c.env.DB, myId);
   const limited = await enforceRateLimit(c, 'message_presence', myId, 160, 60);
   if (limited) return limited;
   const invalidPeer = await validateDirectMessagePeer(c, myId, peerId);
   if (invalidPeer) return invalidPeer;
+  if (supabasePrimaryConfigured(c)) {
+    const lastSeenAt = await readSupabasePrimaryPresence(c, peerId);
+    return c.json({
+      user_id: peerId,
+      last_seen_at: lastSeenAt,
+      is_online: isPresenceOnline(lastSeenAt),
+      is_typing: await readSupabasePrimaryTyping(c, peerId, myId),
+    });
+  }
   const presence: any = await c.env.DB.prepare('SELECT last_seen_at FROM user_presence WHERE user_id = ?')
     .bind(peerId)
     .first();
@@ -17093,7 +17189,8 @@ api.get('/messages/presence/:userId', authMiddleware, async (c) => {
 
 api.post('/messages/typing', authMiddleware, async (c) => {
   const userId = getUserId(c);
-  await touchUserPresence(c.env.DB, userId);
+  if (supabasePrimaryConfigured(c)) await touchSupabasePrimaryPresence(c, userId);
+  else await touchUserPresence(c.env.DB, userId);
   const limited = await enforceRateLimit(c, 'message_typing', userId, 120, 60);
   if (limited) return limited;
   const bodyTooLarge = rejectLargeRequest(c, 20_000);
@@ -17107,6 +17204,10 @@ api.post('/messages/typing', authMiddleware, async (c) => {
   const invalidPeer = await validateDirectMessagePeer(c, userId, peerId);
   if (invalidPeer) return invalidPeer;
   const timestamp = now();
+  if (supabasePrimaryConfigured(c)) {
+    const updatedAt = await setSupabasePrimaryTyping(c, userId, peerId, isTyping);
+    return c.json({ typing: isTyping, updated_at: updatedAt });
+  }
   await c.env.DB.prepare(`
     INSERT INTO message_typing (id, user_id, peer_id, is_typing, updated_at)
     VALUES (?, ?, ?, ?, ?)
