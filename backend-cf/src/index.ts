@@ -4960,6 +4960,27 @@ function postContainsVideoMedia(post: any): boolean {
   return postType.includes('video') || mediaTypes.some((type) => type.includes('video')) || mediaUrls.some(isVideoMediaUrl);
 }
 
+function postHasRenderablePhotoMedia(post: any): boolean {
+  const mediaUrls = sanitizeMediaReferences(post?.images, post?.image);
+  if (!mediaUrls.length) return false;
+  const mediaTypes = parseJsonArray(post?.media_types).map((item) => String(item || '').toLowerCase());
+  return mediaUrls.some((url, index) => {
+    const type = mediaTypes[index] || '';
+    return !type.includes('video') && !isVideoMediaUrl(url);
+  });
+}
+
+function supabaseAppPostHasRenderablePhotoMedia(row: any): boolean {
+  const postType = String(row?.post_type || '').toLowerCase();
+  if (postType === 'note' || postType.includes('video')) return false;
+  const media = supabaseAppPostMedia(row);
+  if (!media.mediaUrls.length) return false;
+  return media.mediaUrls.some((url, index) => {
+    const type = String(media.mediaTypes[index] || '').toLowerCase();
+    return !type.includes('video') && !isVideoMediaUrl(url);
+  });
+}
+
 function normalizeStoryDurationSeconds(value: unknown): 15 | 30 | 60 | 0 {
   const duration = Math.round(Number(value || 0));
   if (duration === 15 || duration === 30 || duration === 60) return duration;
@@ -4973,7 +4994,7 @@ function maxPostCounterAfterToggle(current: unknown, enabled: boolean, changed: 
 }
 
 function feedPhotoPostsOnly(posts: any[]): any[] {
-  return posts.filter((post) => !postContainsVideoMedia(post) && String(post?.post_type || '').toLowerCase() !== 'note');
+  return posts.filter((post) => postHasRenderablePhotoMedia(post) && !postContainsVideoMedia(post) && String(post?.post_type || '').toLowerCase() !== 'note');
 }
 
 function feedPhotoPostWhere(postAlias = 'p'): string {
@@ -6415,7 +6436,7 @@ async function supabaseReadVisiblePosts(c: any, viewerId: string, options: Supab
     offset: postIds.length || postId || ownerId || search || (options.category && options.category !== 'all') ? 0 : offset,
   });
 
-  const candidateRows = rows.filter((row) => supabaseAppPostMatchesCategory(row, options.category));
+  const candidateRows = rows.filter((row) => supabaseAppPostHasRenderablePhotoMedia(row) && supabaseAppPostMatchesCategory(row, options.category));
   const authorIds = candidateRows.flatMap((row) => [publicId(row?.app_user_id, 120), isUuidText(row?.user_id) || '']).filter(Boolean);
   const [viewerAliases, blockedIds, authorMap, commentCounts] = await Promise.all([
     supabaseRelatedInteractionUserIds(c, viewerId),
@@ -10432,6 +10453,15 @@ function mediaAssetPreviewUrl(env: Env, asset: any): string {
   return safeMediaReference(asset?.public_url) || safeMediaReference(asset?.private_url);
 }
 
+function allCaptroOwnedCloudflareImageUrls(env: Env, imageUrls: string[]): boolean {
+  const cleanUrls = imageUrls.map((url) => safeMediaReference(url)).filter(Boolean);
+  if (!cleanUrls.length) return false;
+  return cleanUrls.every((url) => {
+    if (isVideoMediaUrl(url)) return false;
+    return !!cloudflareImageIdFromDeliveryUrl(env, url);
+  });
+}
+
 function moderationSampleUrls(env: Env, asset: any): string[] {
   if (asset.media_type === 'video' && cleanText(asset.storage_provider, 40) === 'stream') {
     const key = cleanText(asset.storage_key, 220);
@@ -10882,6 +10912,15 @@ function parseMediaAssetIds(body: any): string[] {
 
 async function approvedMediaAssetsForPost(c: any, userId: string, requestedMediaIds: string[], imageUrls: string[]) {
   if (!requestedMediaIds.length && imageUrls.length) {
+    if (allCaptroOwnedCloudflareImageUrls(c.env, imageUrls)) {
+      return {
+        ok: true,
+        status: 200,
+        detail: '',
+        code: '',
+        assets: [] as any[],
+      };
+    }
     return {
       ok: false,
       status: 409,
@@ -22066,8 +22105,9 @@ api.post('/upload/video-with-backup', authMiddleware, async (c) => {
 
 // Get video playback info from Cloudflare Stream
 api.get('/stream/video/:videoUid', authMiddleware, async (c) => {
-  const uid = c.req.param('videoUid');
+  const uid = publicId(c.req.param('videoUid'), 128);
   try {
+    if (!uid || !/^[a-zA-Z0-9_-]{6,128}$/.test(uid)) return c.json({ detail: 'Video not found' }, 404);
     const accountId = cloudflareAccountId(c.env);
     const token = cloudflareStreamToken(c.env);
     if (!accountId || !token) return c.json({ detail: 'Cloudflare Stream is not configured.' }, 503);
@@ -22086,15 +22126,20 @@ api.get('/stream/video/:videoUid', authMiddleware, async (c) => {
     if (!data.success || !data.result) return c.json({ detail: 'Video not found' }, 404);
     const v = data.result;
     const state = cleanText(v.status?.state || '', 40).toLowerCase();
-    const hls = cleanText(v.playback?.hls || '', 2200) || null;
-    const dash = cleanText(v.playback?.dash || '', 2200) || null;
-    const ready = Boolean(v.readyToStream || state === 'ready') && !!hls;
+    const fallbackHls = streamPlaybackUrl(`cfstream:${uid}`);
+    const fallbackThumbnail = streamThumbnailUrl(`cfstream:${uid}`);
+    const hls = safeExternalUrl(v.playback?.hls) || fallbackHls || null;
+    const dash = safeExternalUrl(v.playback?.dash) || null;
+    const thumbnail = safeExternalUrl(v.thumbnail) || fallbackThumbnail || null;
+    const readyStates = new Set(['ready', 'readytostream', 'ready_to_stream', 'published']);
+    const processingStates = new Set(['queued', 'pendingupload', 'downloading', 'encoding', 'inprogress', 'processing']);
+    const ready = !!hls && (v.readyToStream === true || readyStates.has(state) || (!processingStates.has(state) && !!v.playback?.hls));
     const payload = {
       uid: v.uid,
       status: state || 'unknown',
       duration: v.duration,
-      thumbnail: v.thumbnail,
-      preview: v.preview,
+      thumbnail,
+      preview: safeExternalUrl(v.preview),
       playback: v.playback || {},
       hls,
       dash,

@@ -75,19 +75,21 @@ public final class MIRAVideoPrewarmManager {
   }
 
   public func streamInfo(for url: String) -> MIRAStreamPlaybackInfo? {
-    guard let info = cachedStreamInfo[normalized(url)], info.ready != false else { return nil }
+    guard let info = cachedStreamInfo[normalized(url)] else { return nil }
+    let hls = info.hls?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    guard info.ready != false || !hls.isEmpty else { return nil }
     return info
   }
 
   private func prewarm(url: String, shouldPreparePlayer: Bool) {
     let key = normalized(url)
     guard !key.isEmpty, !inFlight.contains(key) else {
-      if shouldPreparePlayer, let info = cachedStreamInfo[key], info.ready != false, let hls = info.hls, let hlsURL = URL(string: hls) {
+      if shouldPreparePlayer, let info = cachedStreamInfo[key], let hls = info.hls, let hlsURL = URL(string: hls) {
         preparePlayer(for: key, playbackURL: hlsURL)
       }
       return
     }
-    if let info = cachedStreamInfo[key], info.ready != false {
+    if let info = cachedStreamInfo[key], (info.ready != false || info.hls?.isEmpty == false) {
       if shouldPreparePlayer, let hls = info.hls, let hlsURL = URL(string: hls) {
         preparePlayer(for: key, playbackURL: hlsURL)
       }
@@ -131,7 +133,8 @@ public final class MIRAVideoPrewarmManager {
       let result = try await MIRAStreamPlaybackResolver.playbackInfo(for: uid)
       let info = result.info
       inFlight.remove(key)
-      if info.ready != false {
+      let hls = info.hls?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+      if info.ready != false || !hls.isEmpty {
         cachedStreamInfo[key] = info
         MIRAApplePerformanceLogger.event("video_ready_to_play", detail: "stream_info")
         if shouldPreparePlayer, let hls = info.hls, let hlsURL = URL(string: hls) {

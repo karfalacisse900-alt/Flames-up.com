@@ -343,11 +343,11 @@ public final class MIRAMediaUploadService {
   private func waitForStreamReady(_ videoUID: String) async {
     let cleanUID = videoUID.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !cleanUID.isEmpty else { return }
-    for attempt in 1...30 {
+    for attempt in 1...10 {
       if Task.isCancelled { return }
       do {
         let info: MIRAStreamPlaybackInfo = try await api.get("/stream/video/\(cleanUID)")
-        if info.ready != false, let hls = info.hls, !hls.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if let hls = info.hls, !hls.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
           MIRAApplePerformanceLogger.event("video_upload_stream_ready", detail: "attempt=\(attempt)")
           return
         }

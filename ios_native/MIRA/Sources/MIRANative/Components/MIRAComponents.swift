@@ -1288,7 +1288,7 @@ private struct MIRAResolvedVideoPlayer: View {
   @MainActor
   private func applyStreamPlaybackInfo(_ info: MIRAStreamPlaybackInfo, createPlayer: Bool) {
     thumbnailURL = info.thumbnail
-    if createPlayer, let hls = info.hls, let hlsURL = URL(string: hls), info.ready != false {
+    if createPlayer, let hls = info.hls?.trimmingCharacters(in: .whitespacesAndNewlines), !hls.isEmpty, let hlsURL = URL(string: hls) {
       let item = AVPlayerItem(url: hlsURL)
       configurePlayerItemForFastStoryPlayback(item)
       let avPlayer = AVPlayer(playerItem: item)
