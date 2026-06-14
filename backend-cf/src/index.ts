@@ -5472,7 +5472,7 @@ async function supabasePostCommentCount(c: any, postId: string): Promise<number>
   return rows.get(postId) || 0;
 }
 
-function supabaseCommentPayload(row: any, author: any, fallbackPostId: string) {
+function supabaseCommentPayload(row: any, author: any, fallbackPostId: string, likedByMe = false) {
   const metadata = parseJsonObject(row?.metadata);
   const commentId = publicId(row?.legacy_comment_id || row?.id, 120);
   const appUserId = publicId(row?.app_user_id || author?.id, 120);
@@ -5489,7 +5489,7 @@ function supabaseCommentPayload(row: any, author: any, fallbackPostId: string) {
     body: cleanMultilineText(row?.body, 1200),
     likes_count: likesCount,
     post_user_id: publicId((metadata as any).post_user_id, 120),
-    liked_by_me: false,
+    liked_by_me: likedByMe,
     pinned_at: pinnedAt,
     is_pinned: !!pinnedAt,
     user_username: publicUsernameFor(author),
@@ -5512,6 +5512,270 @@ function supabaseCommentPostFilter(post: any, postId: string): string {
   if (legacyPostId) parts.push(`legacy_post_id.eq.${legacyPostId}`);
   if (supabasePostId) parts.push(`post_id.eq.${supabasePostId}`);
   return `(${parts.join(',')})`;
+}
+
+type SupabaseCommentIdentity = {
+  requestedCommentId: string;
+  legacyCommentId: string;
+  commentUuid: string;
+  legacyPostId: string;
+  postUuid: string;
+  metadata: Record<string, unknown>;
+  row: any;
+};
+
+function supabaseCommentIdentityFromRow(row: any, requestedCommentId: string): SupabaseCommentIdentity {
+  const requested = publicId(requestedCommentId, 120);
+  const requestedUuid = isUuidText(requested);
+  return {
+    requestedCommentId: requested,
+    legacyCommentId: publicId(row?.legacy_comment_id || (requestedUuid ? '' : requested), 120),
+    commentUuid: isUuidText(row?.id) || requestedUuid || '',
+    legacyPostId: publicId(row?.legacy_post_id, 120),
+    postUuid: isUuidText(row?.post_id) || '',
+    metadata: parseJsonObject(row?.metadata),
+    row,
+  };
+}
+
+function supabaseCommentRowOrFilter(identity: SupabaseCommentIdentity): string {
+  const parts: string[] = [];
+  if (identity.legacyCommentId) parts.push(`legacy_comment_id.eq.${identity.legacyCommentId}`);
+  if (identity.commentUuid) parts.push(`id.eq.${identity.commentUuid}`);
+  if (!parts.length && identity.requestedCommentId) parts.push(`legacy_comment_id.eq.${identity.requestedCommentId}`);
+  return `(${parts.join(',')})`;
+}
+
+function supabaseCommentLikeOrFilter(identity: SupabaseCommentIdentity): string {
+  const parts: string[] = [];
+  if (identity.legacyCommentId) parts.push(`legacy_comment_id.eq.${identity.legacyCommentId}`);
+  if (identity.commentUuid) parts.push(`comment_id.eq.${identity.commentUuid}`);
+  if (!parts.length && identity.requestedCommentId) parts.push(`legacy_comment_id.eq.${identity.requestedCommentId}`);
+  return `(${parts.join(',')})`;
+}
+
+async function supabaseResolveCommentIdentity(c: any, commentId: string): Promise<SupabaseCommentIdentity | null> {
+  const cleanCommentId = publicId(commentId, 120);
+  if (!cleanCommentId) return null;
+  const rows = await supabaseAdminQueryRows(c, 'post_comments', {
+    select: 'id,legacy_comment_id,legacy_post_id,post_id,app_user_id,user_id,body,status,metadata,created_at,updated_at,legacy_created_at',
+    filters: {
+      or: isUuidText(cleanCommentId)
+        ? `(legacy_comment_id.eq.${cleanCommentId},id.eq.${cleanCommentId})`
+        : `(legacy_comment_id.eq.${cleanCommentId})`,
+    },
+    limit: 1,
+  });
+  return rows[0] ? supabaseCommentIdentityFromRow(rows[0], cleanCommentId) : null;
+}
+
+async function supabaseViewerLikedCommentIds(c: any, commentRows: any[], userId: string): Promise<Set<string>> {
+  const liked = new Set<string>();
+  if (!commentRows.length) return liked;
+  const legacyCommentIds = Array.from(new Set(commentRows.map((row) => publicId(row?.legacy_comment_id, 120)).filter(Boolean)));
+  const commentUuids = Array.from(new Set(commentRows.map((row) => isUuidText(row?.id)).filter((value): value is string => !!value)));
+  const orParts: string[] = [];
+  if (legacyCommentIds.length) orParts.push(`legacy_comment_id.${postgrestInFilter(legacyCommentIds)}`);
+  if (commentUuids.length) orParts.push(`comment_id.${postgrestInFilter(commentUuids)}`);
+  if (!orParts.length) return liked;
+
+  const addRows = (rows: any[]) => {
+    for (const row of rows) {
+      const legacyCommentId = publicId(row?.legacy_comment_id, 120);
+      const commentUuid = isUuidText(row?.comment_id);
+      if (legacyCommentId) liked.add(legacyCommentId);
+      if (commentUuid) liked.add(commentUuid);
+    }
+  };
+
+  try {
+    const keys = await supabaseInteractionIdentityKeys(c, [userId]);
+    if (keys.appUserIds.length) {
+      addRows(await supabaseAdminSelectRows(c, 'post_comment_likes', {
+        or: `(${orParts.join(',')})`,
+        app_user_id: postgrestInFilter(keys.appUserIds),
+      }, 'legacy_comment_id,comment_id', Math.max(1, commentRows.length * 2)));
+    }
+    if (keys.authUserIds.length) {
+      addRows(await supabaseAdminSelectRows(c, 'post_comment_likes', {
+        or: `(${orParts.join(',')})`,
+        user_id: postgrestInFilter(keys.authUserIds),
+      }, 'legacy_comment_id,comment_id', Math.max(1, commentRows.length * 2)));
+    }
+  } catch (error: any) {
+    if (!isSupabaseColumnShapeError(error)) {
+      console.warn(JSON.stringify({ event: 'supabase_comment_like_state_failed', code: getErrorCode(error).slice(0, 180) }));
+    }
+  }
+
+  return liked;
+}
+
+async function supabaseViewerCommentLikeExists(c: any, identity: SupabaseCommentIdentity, userId: string): Promise<boolean> {
+  try {
+    const keys = await supabaseInteractionIdentityKeys(c, [userId]);
+    if (keys.appUserIds.length) {
+      const appRows = await supabaseAdminSelectRows(c, 'post_comment_likes', {
+        or: supabaseCommentLikeOrFilter(identity),
+        app_user_id: postgrestInFilter(keys.appUserIds),
+      }, 'id', 1);
+      if (appRows.length > 0) return true;
+    }
+    if (keys.authUserIds.length) {
+      const authRows = await supabaseAdminSelectRows(c, 'post_comment_likes', {
+        or: supabaseCommentLikeOrFilter(identity),
+        user_id: postgrestInFilter(keys.authUserIds),
+      }, 'id', 1);
+      return authRows.length > 0;
+    }
+  } catch (error: any) {
+    if (!isSupabaseColumnShapeError(error)) throw error;
+  }
+  return false;
+}
+
+async function supabaseDeleteCommentLikesForViewer(c: any, identity: SupabaseCommentIdentity, userId: string) {
+  const keys = await supabaseInteractionIdentityKeys(c, [userId]);
+  if (keys.appUserIds.length) {
+    await supabaseAdminDeleteRows(c, 'post_comment_likes', {
+      or: supabaseCommentLikeOrFilter(identity),
+      app_user_id: postgrestInFilter(keys.appUserIds),
+    });
+  }
+  if (keys.authUserIds.length) {
+    await supabaseAdminDeleteRows(c, 'post_comment_likes', {
+      or: supabaseCommentLikeOrFilter(identity),
+      user_id: postgrestInFilter(keys.authUserIds),
+    });
+  }
+}
+
+async function supabaseCommentLikeActorCount(c: any, identity: SupabaseCommentIdentity): Promise<number> {
+  let rows: any[] = [];
+  try {
+    rows = await supabaseAdminSelectRows(c, 'post_comment_likes', {
+      or: supabaseCommentLikeOrFilter(identity),
+    }, 'app_user_id,user_id,legacy_comment_id,comment_id', 10000);
+  } catch (error: any) {
+    if (!isSupabaseColumnShapeError(error)) throw error;
+    return Math.max(0, Number((identity.metadata as any).likes_count || 0));
+  }
+  const appUserIds = rows.map((row) => publicId(row?.app_user_id, 120)).filter(Boolean);
+  const appToAuth = await supabaseAuthUserIdMapForAppUserIds(c, appUserIds);
+  const actors = new Set<string>();
+  for (const row of rows) {
+    const appUserId = publicId(row?.app_user_id, 120);
+    const authUserId = isUuidText(row?.user_id) || appToAuth.get(appUserId) || '';
+    const actor = cleanText(authUserId || appUserId, 160);
+    if (actor) actors.add(actor);
+  }
+  return actors.size;
+}
+
+async function supabasePatchCommentMetadata(c: any, identity: SupabaseCommentIdentity, patch: Record<string, unknown>) {
+  const metadata = { ...identity.metadata, ...patch };
+  await supabaseAdminPatchRows(c, 'post_comments', { or: supabaseCommentRowOrFilter(identity) }, {
+    metadata,
+    updated_at: now(),
+  });
+  identity.metadata = metadata;
+}
+
+async function supabaseSetCommentLike(c: any, commentId: string, userId: string, requested: boolean | null) {
+  const identity = await supabaseResolveCommentIdentity(c, commentId);
+  if (!identity || cleanText(identity.row?.status || 'active', 40) !== 'active') {
+    return { status: 404 as const, body: { detail: 'Comment not found' } };
+  }
+  const postKey = identity.legacyPostId || identity.postUuid;
+  const visiblePost = await supabaseVisiblePostForComments(c, userId, postKey);
+  if (!visiblePost) return { status: 404 as const, body: { detail: 'Comment not found' } };
+
+  let nextLiked = requested;
+  if (nextLiked === null) {
+    nextLiked = !(await supabaseViewerCommentLikeExists(c, identity, userId));
+  }
+
+  await supabaseDeleteCommentLikesForViewer(c, identity, userId);
+  if (nextLiked) {
+    const authUserId = await supabaseAuthUserIdForAppUserId(c, userId);
+    const row: any = {
+      legacy_comment_id: identity.legacyCommentId || identity.requestedCommentId,
+      app_user_id: publicId(userId, 120),
+      metadata: { source: 'cloudflare_worker_primary' },
+      legacy_created_at: now(),
+    };
+    if (identity.commentUuid) row.comment_id = identity.commentUuid;
+    if (authUserId) row.user_id = authUserId;
+    await supabaseAdminUpsert(c, 'post_comment_likes', [row], 'legacy_comment_id,app_user_id');
+  }
+
+  const likesCount = await supabaseCommentLikeActorCount(c, identity);
+  await supabasePatchCommentMetadata(c, identity, { likes_count: likesCount });
+
+  try {
+    const legacyCommentId = identity.legacyCommentId || identity.requestedCommentId;
+    if (nextLiked) {
+      await c.env.DB.prepare('INSERT OR IGNORE INTO comment_likes (id, user_id, comment_id) VALUES (?, ?, ?)')
+        .bind(uuid(), userId, legacyCommentId)
+        .run();
+    } else {
+      await c.env.DB.prepare('DELETE FROM comment_likes WHERE user_id = ? AND comment_id = ?')
+        .bind(userId, legacyCommentId)
+        .run();
+    }
+    await c.env.DB.prepare('UPDATE comments SET likes_count = ? WHERE id = ?').bind(likesCount, legacyCommentId).run();
+  } catch {}
+
+  return { status: 200 as const, body: { liked: !!nextLiked, likes_count: likesCount } };
+}
+
+async function supabaseSetCommentPinned(c: any, commentId: string, userId: string, requested: boolean | null) {
+  const identity = await supabaseResolveCommentIdentity(c, commentId);
+  if (!identity || cleanText(identity.row?.status || 'active', 40) !== 'active') {
+    return { status: 404 as const, body: { detail: 'Comment not found' } };
+  }
+  const postKey = identity.legacyPostId || identity.postUuid;
+  const visiblePost = await supabaseVisiblePostForComments(c, userId, postKey);
+  if (!visiblePost) return { status: 404 as const, body: { detail: 'Comment not found' } };
+  if (publicId(visiblePost?.user_id, 120) !== publicId(userId, 120)) {
+    return { status: 403 as const, body: { detail: 'Only the creator can pin comments.' } };
+  }
+
+  const shouldPin = requested === null ? true : requested;
+  const pinnedAt = shouldPin ? now() : null;
+  if (shouldPin) {
+    const rows = await supabaseAdminQueryRows(c, 'post_comments', {
+      select: 'id,legacy_comment_id,legacy_post_id,post_id,metadata,status',
+      filters: {
+        or: supabaseCommentPostFilter(visiblePost, postKey),
+        status: postgrestEqFilter('active'),
+      },
+      limit: 500,
+    });
+    for (const row of rows) {
+      const rowIdentity = supabaseCommentIdentityFromRow(row, publicId(row?.legacy_comment_id || row?.id, 120));
+      const isCurrent = (rowIdentity.legacyCommentId && rowIdentity.legacyCommentId === identity.legacyCommentId)
+        || (rowIdentity.commentUuid && rowIdentity.commentUuid === identity.commentUuid);
+      await supabasePatchCommentMetadata(c, rowIdentity, { pinned_at: isCurrent ? pinnedAt : null });
+    }
+  } else {
+    await supabasePatchCommentMetadata(c, identity, { pinned_at: null });
+  }
+
+  try {
+    const legacyCommentId = identity.legacyCommentId || identity.requestedCommentId;
+    const legacyPostId = identity.legacyPostId || publicId(visiblePost?.id, 120);
+    if (shouldPin) {
+      await c.env.DB.batch([
+        c.env.DB.prepare('UPDATE comments SET pinned_at = NULL WHERE post_id = ?').bind(legacyPostId),
+        c.env.DB.prepare('UPDATE comments SET pinned_at = ? WHERE id = ?').bind(pinnedAt, legacyCommentId),
+      ]);
+    } else {
+      await c.env.DB.prepare('UPDATE comments SET pinned_at = NULL WHERE id = ?').bind(legacyCommentId).run();
+    }
+  } catch {}
+
+  return { status: 200 as const, body: { pinned: shouldPin, pinned_at: pinnedAt } };
 }
 
 async function supabaseCreatePostComment(c: any, input: {
@@ -5615,9 +5879,13 @@ async function supabaseReadPostComments(c: any, postId: string, userId: string, 
   });
   const userIds = rows.flatMap((row) => [publicId(row?.app_user_id, 120), isUuidText(row?.user_id) || '']).filter(Boolean);
   const authors = await supabaseUsersByAnyIds(c, userIds);
+  const likedCommentIds = await supabaseViewerLikedCommentIds(c, rows, userId);
   const comments = rows.map((row) => {
     const author = authors.get(publicId(row?.app_user_id, 120)) || authors.get(isUuidText(row?.user_id) || '') || {};
-    return supabaseCommentPayload(row, author, postId);
+    const legacyCommentId = publicId(row?.legacy_comment_id, 120);
+    const commentUuid = isUuidText(row?.id);
+    const likedByMe = !!((legacyCommentId && likedCommentIds.has(legacyCommentId)) || (commentUuid && likedCommentIds.has(commentUuid)));
+    return supabaseCommentPayload(row, author, postId, likedByMe);
   });
   comments.sort((a, b) => {
     if (a.is_pinned !== b.is_pinned) return a.is_pinned ? -1 : 1;
@@ -5641,22 +5909,24 @@ async function supabaseUpdateCommentStatus(c: any, commentId: string, userId: st
   });
   const comment = rows[0];
   if (!comment || cleanText(comment.status || 'active', 40) !== 'active') return { status: 404 as const, body: { detail: 'Comment not found' } };
+  const identity = supabaseCommentIdentityFromRow(comment, commentId);
   const commentOwner = publicId(comment.app_user_id, 120);
   const metadata = parseJsonObject(comment.metadata);
   const postOwner = publicId((metadata as any).post_user_id, 120);
   if (status === 'removed' && commentOwner !== userId) return { status: 403 as const, body: { detail: 'Not your comment' } };
   if (status === 'hidden' && postOwner !== userId) return { status: 403 as const, body: { detail: 'Only the creator can hide comments.' } };
   const patch = {
-    status: 'removed',
+    status,
     metadata: {
       ...metadata,
       hidden_by_user_id: status === 'hidden' ? userId : undefined,
       removed_reason: status === 'hidden' ? 'Hidden by creator' : 'Deleted by commenter',
       removed_at: now(),
+      pinned_at: null,
     },
     updated_at: now(),
   };
-  await supabaseAdminPatchRows(c, 'post_comments', { legacy_comment_id: postgrestEqFilter(publicId(comment.legacy_comment_id || commentId, 120)) }, patch);
+  await supabaseAdminPatchRows(c, 'post_comments', { or: supabaseCommentRowOrFilter(identity) }, patch);
   const postId = publicId(comment.legacy_post_id || comment.post_id, 120);
   const engagement = await getSupabasePostEngagementState(c, postId, userId);
   return { status: 200 as const, body: status === 'hidden' ? { hidden: true, comments_count: engagement.comments_count } : { deleted: true, comments_count: engagement.comments_count } };
@@ -14670,6 +14940,10 @@ api.post('/comments/:commentId/like', authMiddleware, async (c) => {
     const body: any = await c.req.json().catch(() => ({}));
     const requested = optionalBoolean(body.liked ?? body.like ?? body.value);
     const commentId = c.req.param('commentId');
+    if (supabasePrimaryConfigured(c)) {
+      const result = await supabaseSetCommentLike(c, commentId, userId, requested);
+      return c.json(result.body, result.status);
+    }
     const visibleCommentSql = [
       `SELECT c.id, c.likes_count
        FROM comments c
@@ -14725,6 +14999,13 @@ api.post('/comments/:commentId/pin', authMiddleware, async (c) => {
     const body: any = await c.req.json().catch(() => ({}));
     const requested = optionalBoolean(body.pinned ?? body.pin ?? body.value);
     const shouldPin = requested === null ? true : requested;
+    if (supabasePrimaryConfigured(c)) {
+      const result = await supabaseSetCommentPinned(c, commentId, userId, requested);
+      if (result.status === 200) {
+        await logSecurityEvent(c, shouldPin ? 'comment_pinned' : 'comment_unpinned', userId, { comment_id: commentId });
+      }
+      return c.json(result.body, result.status);
+    }
     const comment: any = await c.env.DB.prepare(
       `SELECT c.id, c.post_id, c.pinned_at, p.user_id AS post_user_id
        FROM comments c
