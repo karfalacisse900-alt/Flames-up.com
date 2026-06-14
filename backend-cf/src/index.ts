@@ -5405,6 +5405,78 @@ function postgrestSearchTerm(value: string): string {
   return cleanText(value, 80).replace(/[(),*]/g, ' ').trim();
 }
 
+function supabaseAccountIdentityKeys(row: any): string[] {
+  const keys: string[] = [];
+  const provider = cleanText(row?.provider, 40);
+  const providerUserId = cleanText(row?.provider_user_id, 240);
+  const emailHash = cleanText(row?.email_hash, 160);
+  if (provider && providerUserId) keys.push(`provider:${provider}:${providerUserId}`);
+  if (emailHash) keys.push(`email:${emailHash}`);
+  return keys;
+}
+
+async function supabaseAccountIdentityAliasUserIds(c: any, userIds: string[]): Promise<string[]> {
+  const cleanUserIds = Array.from(new Set(userIds.map((value) => publicId(value, 120)).filter(Boolean)));
+  if (!cleanUserIds.length) return [];
+
+  try {
+    const ownedIdentities = await supabaseAdminQueryRows(c, 'app_account_identities', {
+      select: 'user_id,provider,provider_user_id,email_hash',
+      filters: { user_id: postgrestInFilter(cleanUserIds) },
+      limit: Math.max(20, cleanUserIds.length * 8),
+    });
+    const identityKeys = new Set(ownedIdentities.flatMap(supabaseAccountIdentityKeys));
+    if (!identityKeys.size) return [];
+
+    const providerUserIds = Array.from(new Set(ownedIdentities.map((row) => cleanText(row?.provider_user_id, 240)).filter(Boolean)));
+    const emailHashes = Array.from(new Set(ownedIdentities.map((row) => cleanText(row?.email_hash, 160)).filter(Boolean)));
+    const orParts: string[] = [];
+    if (providerUserIds.length) orParts.push(`provider_user_id.${postgrestInFilter(providerUserIds)}`);
+    if (emailHashes.length) orParts.push(`email_hash.${postgrestInFilter(emailHashes)}`);
+    if (!orParts.length) return [];
+
+    const matchingIdentities = await supabaseAdminQueryRows(c, 'app_account_identities', {
+      select: 'user_id,provider,provider_user_id,email_hash',
+      filters: { or: `(${orParts.join(',')})` },
+      limit: Math.max(100, (providerUserIds.length + emailHashes.length) * 20),
+    });
+    return Array.from(new Set(matchingIdentities
+      .filter((row) => supabaseAccountIdentityKeys(row).some((key) => identityKeys.has(key)))
+      .map((row) => publicId(row?.user_id, 120))
+      .filter(Boolean)));
+  } catch (error: any) {
+    if (!isSupabaseColumnShapeError(error)) {
+      console.warn(JSON.stringify({ event: 'supabase_account_identity_alias_failed', code: getErrorCode(error).slice(0, 180) }));
+    }
+    return [];
+  }
+}
+
+async function supabaseAccountIdentityActorKeyMap(c: any, userIds: string[]): Promise<Map<string, string>> {
+  const cleanUserIds = Array.from(new Set(userIds.map((value) => publicId(value, 120)).filter(Boolean)));
+  const actorKeys = new Map<string, string>();
+  if (!cleanUserIds.length) return actorKeys;
+
+  try {
+    const rows = await supabaseAdminQueryRows(c, 'app_account_identities', {
+      select: 'user_id,provider,provider_user_id,email_hash',
+      filters: { user_id: postgrestInFilter(cleanUserIds) },
+      limit: Math.max(50, cleanUserIds.length * 8),
+    });
+    for (const row of rows) {
+      const userId = publicId(row?.user_id, 120);
+      const [key] = supabaseAccountIdentityKeys(row);
+      if (userId && key && !actorKeys.has(userId)) actorKeys.set(userId, key);
+    }
+  } catch (error: any) {
+    if (!isSupabaseColumnShapeError(error)) {
+      console.warn(JSON.stringify({ event: 'supabase_account_identity_actor_map_failed', code: getErrorCode(error).slice(0, 180) }));
+    }
+  }
+
+  return actorKeys;
+}
+
 async function supabaseRelatedInteractionUserIds(c: any, userId: string): Promise<string[]> {
   const ids = new Set<string>();
   const cleanUserId = publicId(userId, 120);
@@ -5435,6 +5507,26 @@ async function supabaseRelatedInteractionUserIds(c: any, userId: string): Promis
       }
     } catch (error: any) {
       console.warn(JSON.stringify({ event: 'supabase_identity_alias_read_failed', code: getErrorCode(error).slice(0, 180) }));
+    }
+  }
+
+  const identityAliasUserIds = await supabaseAccountIdentityAliasUserIds(c, Array.from(ids));
+  for (const aliasUserId of identityAliasUserIds) ids.add(aliasUserId);
+  if (identityAliasUserIds.length) {
+    try {
+      const rows = await supabaseAdminQueryRows(c, 'app_users', {
+        select: 'id,supabase_user_id',
+        filters: { id: postgrestInFilter(identityAliasUserIds) },
+        limit: Math.max(20, identityAliasUserIds.length),
+      });
+      for (const row of rows) {
+        const appUserId = publicId(row?.id, 120);
+        const authUserId = isUuidText(row?.supabase_user_id);
+        if (appUserId) ids.add(appUserId);
+        if (authUserId) ids.add(authUserId);
+      }
+    } catch (error: any) {
+      console.warn(JSON.stringify({ event: 'supabase_identity_alias_user_read_failed', code: getErrorCode(error).slice(0, 180) }));
     }
   }
 
@@ -5770,11 +5862,12 @@ async function supabaseCommentLikeActorCount(c: any, identity: SupabaseCommentId
   }
   const appUserIds = rows.map((row) => publicId(row?.app_user_id, 120)).filter(Boolean);
   const appToAuth = await supabaseAuthUserIdMapForAppUserIds(c, appUserIds);
+  const appToIdentityActor = await supabaseAccountIdentityActorKeyMap(c, appUserIds);
   const actors = new Set<string>();
   for (const row of rows) {
     const appUserId = publicId(row?.app_user_id, 120);
     const authUserId = isUuidText(row?.user_id) || appToAuth.get(appUserId) || '';
-    const actor = cleanText(authUserId || appUserId, 160);
+    const actor = cleanText(authUserId || appToIdentityActor.get(appUserId) || appUserId, 160);
     if (actor) actors.add(actor);
   }
   return actors.size;
@@ -7070,11 +7163,12 @@ async function supabasePostInteractionActorCount(c: any, postId: string, kind: '
   }
   const appUserIds = rows.map((row) => publicId(row?.app_user_id, 120)).filter(Boolean);
   const appToAuth = await supabaseAuthUserIdMapForAppUserIds(c, appUserIds);
+  const appToIdentityActor = await supabaseAccountIdentityActorKeyMap(c, appUserIds);
   const actors = new Set<string>();
   for (const row of rows) {
     const appUserId = publicId(row?.app_user_id, 120);
     const authUserId = isUuidText(row?.user_id) || appToAuth.get(appUserId) || '';
-    const actor = cleanText(authUserId || appUserId, 160);
+    const actor = cleanText(authUserId || appToIdentityActor.get(appUserId) || appUserId, 160);
     if (actor) actors.add(actor);
   }
   return actors.size;
@@ -7145,6 +7239,7 @@ async function supabasePostInteractionActorCounts(c: any, postIds: string[]) {
 
   const appUserIds = rows.map((row) => publicId(row?.app_user_id, 120)).filter(Boolean);
   const appToAuth = await supabaseAuthUserIdMapForAppUserIds(c, appUserIds);
+  const appToIdentityActor = await supabaseAccountIdentityActorKeyMap(c, appUserIds);
   const actorsByPostAndKind = new Map<string, Set<string>>();
   for (const row of rows) {
     const rowPostKeys = Array.from(new Set([
@@ -7155,7 +7250,7 @@ async function supabasePostInteractionActorCounts(c: any, postIds: string[]) {
     if (!rowPostKeys.length || (kind !== 'like' && kind !== 'save')) continue;
     const appUserId = publicId(row?.app_user_id, 120);
     const authUserId = isUuidText(row?.user_id) || appToAuth.get(appUserId) || '';
-    const actor = cleanText(authUserId || appUserId, 160);
+    const actor = cleanText(authUserId || appToIdentityActor.get(appUserId) || appUserId, 160);
     if (!actor) continue;
     const targetKeys = new Set<string>();
     for (const rowPostKey of rowPostKeys) {
