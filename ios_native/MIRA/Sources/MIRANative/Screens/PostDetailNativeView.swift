@@ -347,7 +347,15 @@ final class PostDetailModel: ObservableObject {
   }
 
   private func mergedViewerFlag(cached: Bool?, fresh: Bool?, cachedCount: Int?, freshCount: Int?) -> Bool? {
-    fresh ?? cached
+    guard let fresh else { return cached }
+    guard let cached else { return fresh }
+    if cached == true,
+       fresh == false,
+       let freshCount,
+       freshCount >= (cachedCount ?? 0) {
+      return true
+    }
+    return fresh
   }
 
   private func loadCurrentUserIfNeeded() async {
