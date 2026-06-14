@@ -308,17 +308,8 @@ actor MIRAAppCacheStore {
     )
   }
 
-  private func mergedViewerFlag(cached: Bool?, fresh: Bool?, cachedCount: Int?, freshCount: Int?) -> Bool? {
+  private func mergedViewerFlag(cached: Bool?, fresh: Bool?, cachedCount _: Int?, freshCount _: Int?) -> Bool? {
     guard let fresh else { return cached }
-    guard let cached else { return fresh }
-    if cached == true,
-       fresh == false,
-       let freshCount,
-       freshCount >= (cachedCount ?? 0) {
-      // Public/fallback feed responses know global counts but not viewer state.
-      // Do not erase a confirmed local like/save when the count still includes it.
-      return true
-    }
     return fresh
   }
 
@@ -328,7 +319,7 @@ actor MIRAAppCacheStore {
 }
 
 private enum CacheKey {
-  static let feed = "native.main.feed.v4.cache_first"
+  static let feed = "native.main.feed.v5.cache_first"
   static let discoverStories = "native.discover.stories.v4.cache_first"
   static let currentProfile = "native.profile.me.v3.cache_first"
   static let notifications = "native.notifications.v2.cache_first"
@@ -345,11 +336,11 @@ private enum CacheKey {
   ]
 
   static func discoverPosts(_ category: String) -> String {
-    "native.discover.posts.v4.cache_first.\(category)"
+    "native.discover.posts.v5.cache_first.\(category)"
   }
 
   static func profilePosts(_ userId: String) -> String {
-    "native.profile.posts.v3.cache_first.\(userId)"
+    "native.profile.posts.v4.cache_first.\(userId)"
   }
 
   static func viewedProfile(_ userId: String) -> String {

@@ -163,7 +163,7 @@ final class ProfileNativeModel: ObservableObject {
   }
 
   private func postsCacheKey(for userID: String) -> String {
-    "native.profile.posts.\(userID).v2"
+    "native.profile.posts.\(userID).v3"
   }
 }
 
@@ -539,7 +539,7 @@ final class UserProfileNativeModel: ObservableObject {
   let userId: String
   let api: MIRAAPIClient
   private var userCacheKey: String { "native.profile.user.\(userId).v2" }
-  private var postsCacheKey: String { "native.profile.posts.\(userId).v2" }
+  private var postsCacheKey: String { "native.profile.posts.\(userId).v3" }
 
   init(userId: String, api: MIRAAPIClient) {
     self.userId = userId

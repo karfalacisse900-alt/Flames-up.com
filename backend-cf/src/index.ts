@@ -6184,14 +6184,16 @@ async function supabaseViewerInteractionPostIds(c: any, userId: string, kind: 'l
   const collection = cleanText(input.collection, 80);
   const rows: any[] = [];
   const select = 'legacy_post_id,post_id,collection,created_at,legacy_created_at,app_user_id,user_id';
-  const limit = Math.max(100, clampNumber(input.limit || 40, 1, 100, 40) + Math.max(0, Math.round(Number(input.offset || 0))) + 40);
+  const pageLimit = clampNumber(input.limit || 40, 1, 100, 40);
+  const offset = Math.max(0, Math.round(Number(input.offset || 0)));
+  const queryLimit = Math.max(100, pageLimit + offset + 40);
   const appendRows = async (filters: Record<string, string>) => {
     if (collection) filters.collection = postgrestEqFilter(collection);
     rows.push(...await supabaseAdminQueryRows(c, 'app_post_interactions', {
       select,
       filters,
       order: 'created_at.desc.nullslast,legacy_created_at.desc.nullslast',
-      limit,
+      limit: queryLimit,
     }));
   };
 
@@ -6216,7 +6218,8 @@ async function supabaseViewerInteractionPostIds(c: any, userId: string, kind: 'l
   const seen = new Set<string>();
   return rows
     .map((row) => publicId(row?.legacy_post_id || row?.post_id, 120))
-    .filter((postId) => !!postId && !seen.has(postId) && seen.add(postId));
+    .filter((postId) => !!postId && !seen.has(postId) && seen.add(postId))
+    .slice(offset, offset + pageLimit);
 }
 
 async function supabaseViewerSaveCollectionCounts(c: any, userId: string): Promise<Array<{ collection: string; count: number }>> {
@@ -17139,7 +17142,7 @@ api.get('/library/liked', authMiddleware, async (c) => {
   const limit = clampNumber(c.req.query('limit') || '40', 1, 80, 40);
   if (supabasePrimaryConfigured(c)) {
     try {
-      const postIds = (await supabaseViewerInteractionPostIds(c, userId, 'like', { limit, offset: skip })).slice(skip, skip + limit);
+      const postIds = await supabaseViewerInteractionPostIds(c, userId, 'like', { limit, offset: skip });
       const rows = postIds.length ? await supabaseReadVisiblePosts(c, userId, { postIds, limit: postIds.length }) : [];
       return c.json(rows.map((p) => feedPostPayload(p, [], c.env)));
     } catch (error: any) {
@@ -17172,7 +17175,7 @@ api.get('/library/saved', authMiddleware, async (c) => {
   const limit = clampNumber(c.req.query('limit') || '40', 1, 80, 40);
   if (supabasePrimaryConfigured(c)) {
     try {
-      const postIds = (await supabaseViewerInteractionPostIds(c, userId, 'save', { collection, limit, offset: skip })).slice(skip, skip + limit);
+      const postIds = await supabaseViewerInteractionPostIds(c, userId, 'save', { collection, limit, offset: skip });
       const rows = postIds.length ? await supabaseReadVisiblePosts(c, userId, { postIds, limit: postIds.length }) : [];
       return c.json(rows.map((p) => feedPostPayload(p, [], c.env)));
     } catch (error: any) {
@@ -18756,22 +18759,28 @@ api.get('/discover/categories', async (c) => {
 
 // Places (user-created)
 api.post('/places', authMiddleware, async (c) => {
+  if (supabasePrimaryConfigured(c)) {
+    return c.json({ detail: 'Legacy place creation is disabled. Use post place tagging instead.' }, 410);
+  }
   const userId = getUserId(c); const b = await c.req.json(); const id = uuid();
   await c.env.DB.prepare('INSERT INTO places (id, name, description, category, lat, lng, address, image, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(id, b.name, b.description || '', b.category || '', b.lat || null, b.lng || null, b.address || '', b.image || null, userId).run();
   return c.json({ id, name: b.name, created_at: now() });
 });
 
 api.get('/places', authMiddleware, async (c) => {
+  if (supabasePrimaryConfigured(c)) return c.json([]);
   const r = await c.env.DB.prepare('SELECT * FROM places ORDER BY created_at DESC LIMIT 50').all();
   return c.json(r.results);
 });
 
 api.get('/places/nearby', authMiddleware, async (c) => {
+  if (supabasePrimaryConfigured(c)) return c.json([]);
   const r = await c.env.DB.prepare('SELECT * FROM places ORDER BY created_at DESC LIMIT 50').all();
   return c.json(r.results);
 });
 
 api.get('/places/:placeId', authMiddleware, async (c) => {
+  if (supabasePrimaryConfigured(c)) return c.json({ detail: 'Not found' }, 404);
   const p = await c.env.DB.prepare('SELECT * FROM places WHERE id = ?').bind(c.req.param('placeId')).first();
   if (!p) return c.json({ detail: 'Not found' }, 404);
   return c.json(p);
@@ -23022,6 +23031,9 @@ api.get('/database/status', authMiddleware, async (c) => {
 api.post('/bookmarks/setup-db', authMiddleware, async (c) => {
   try {
     await requireOwnerOrAdmin(c);
+    if (supabasePrimaryConfigured(c)) {
+      return c.json({ success: true, message: 'Supabase is primary; legacy D1 bookmark setup is disabled.' });
+    }
     await c.env.DB.exec(`
       CREATE TABLE IF NOT EXISTS bookmarks (
         id TEXT PRIMARY KEY, user_id TEXT NOT NULL, post_id TEXT NOT NULL,
@@ -23114,7 +23126,7 @@ api.get('/bookmarks', authMiddleware, async (c) => {
   const limit = clampNumber(c.req.query('limit') || '40', 1, 80, 40);
   if (supabasePrimaryConfigured(c)) {
     try {
-      const postIds = (await supabaseViewerInteractionPostIds(c, userId, 'save', { collection, limit, offset: skip })).slice(skip, skip + limit);
+      const postIds = await supabaseViewerInteractionPostIds(c, userId, 'save', { collection, limit, offset: skip });
       const rows = postIds.length ? await supabaseReadVisiblePosts(c, userId, { postIds, limit: postIds.length }) : [];
       return c.json({
         bookmarks: rows.map((post) => {
@@ -23196,6 +23208,9 @@ api.post('/saved-places', authMiddleware, async (c) => {
   const { place_id, place_name, place_type, save_type } = await c.req.json().catch(() => ({}));
   const placeId = cleanText(place_id, 160);
   if (!placeId) return c.json({ detail: 'place_id required' }, 400);
+  if (supabasePrimaryConfigured(c)) {
+    return c.json({ detail: 'Saved places are not available in this production build.' }, 410);
+  }
   const id = uuid();
   try {
     await c.env.DB.prepare('INSERT INTO saved_places (id, user_id, place_id, place_name, place_type, save_type) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(user_id, place_id) DO UPDATE SET save_type = ?')
@@ -23210,6 +23225,7 @@ api.post('/saved-places', authMiddleware, async (c) => {
 // Get saved places (My Spots)
 api.get('/saved-places', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  if (supabasePrimaryConfigured(c)) return c.json({ places: [] });
   const save_type = c.req.query('type');
   let q = 'SELECT * FROM saved_places WHERE user_id = ?';
   const binds: any[] = [userId];
@@ -23222,6 +23238,7 @@ api.get('/saved-places', authMiddleware, async (c) => {
 // Remove saved place
 api.delete('/saved-places/:placeId', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  if (supabasePrimaryConfigured(c)) return c.json({ saved: false });
   await c.env.DB.prepare('DELETE FROM saved_places WHERE user_id = ? AND place_id = ?').bind(userId, cleanText(c.req.param('placeId'), 160)).run();
   return c.json({ saved: false });
 });

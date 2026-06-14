@@ -72,7 +72,7 @@ public extension Notification.Name {
 
 @MainActor
 public enum MIRAPostEngagementSync {
-  private static let cacheKey = "native.post.engagement.confirmed.v1"
+  private static let cacheKey = "native.post.engagement.confirmed.v2"
   private static let maxSnapshotAge: TimeInterval = 60 * 15
   private static let maxSnapshots = 1_000
 
