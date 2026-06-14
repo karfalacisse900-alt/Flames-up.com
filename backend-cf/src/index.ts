@@ -6244,10 +6244,17 @@ async function supabasePublicUserPayload(c: any, viewerId: string, targetId: str
 }
 
 async function supabaseSetFollowState(c: any, followerId: string, followingId: string, requested: boolean | null) {
-  const follower = publicId(followerId, 120);
-  const following = publicId(followingId, 120);
+  const inputFollower = publicId(followerId, 120);
+  const inputFollowing = publicId(followingId, 120);
+  if (!inputFollower || !inputFollowing) return { status: 400 as const, body: { detail: 'Cannot follow yourself' } };
+  const [followerRow, target] = await Promise.all([
+    supabaseUserByAnyId(c, inputFollower),
+    supabaseUserByAnyId(c, inputFollowing),
+  ]);
+  const follower = publicId(followerRow?.id || inputFollower, 120);
+  const following = publicId(target?.id || inputFollowing, 120);
   if (!follower || !following || follower === following) return { status: 400 as const, body: { detail: 'Cannot follow yourself' } };
-  const target = await supabaseUserByAnyId(c, following);
+  if (!followerRow || supabaseUserStatus(followerRow) !== 'active') return { status: 403 as const, body: { detail: 'Your account cannot follow profiles right now.' } };
   if (!target || supabaseUserStatus(target) !== 'active') return { status: 404 as const, body: { detail: 'User not found' } };
   if (await supabaseBlockPair(c, follower, following)) return { status: 403 as const, body: { detail: 'You cannot follow this profile.' } };
   const wasFollowing = await supabaseIsFollowing(c, follower, following);
@@ -6288,10 +6295,17 @@ async function supabaseSetFollowState(c: any, followerId: string, followingId: s
 }
 
 async function supabaseBlockUser(c: any, blockerId: string, blockedId: string) {
-  const blocker = publicId(blockerId, 120);
-  const blocked = publicId(blockedId, 120);
+  const inputBlocker = publicId(blockerId, 120);
+  const inputBlocked = publicId(blockedId, 120);
+  if (!inputBlocker || !inputBlocked) return { status: 400 as const, body: { detail: 'You cannot block yourself.' } };
+  const [blockerRow, target] = await Promise.all([
+    supabaseUserByAnyId(c, inputBlocker),
+    supabaseUserByAnyId(c, inputBlocked),
+  ]);
+  const blocker = publicId(blockerRow?.id || inputBlocker, 120);
+  const blocked = publicId(target?.id || inputBlocked, 120);
   if (!blocker || !blocked || blocker === blocked) return { status: 400 as const, body: { detail: 'You cannot block yourself.' } };
-  const target = await supabaseUserByAnyId(c, blocked);
+  if (!blockerRow || supabaseUserStatus(blockerRow) !== 'active') return { status: 403 as const, body: { detail: 'Your account cannot block profiles right now.' } };
   if (!target) return { status: 404 as const, body: { detail: 'User not found' } };
   await supabaseAdminUpsert(c, 'app_blocks', [{
     id: `${blocker}:${blocked}`,
@@ -6310,8 +6324,10 @@ async function supabaseBlockUser(c: any, blockerId: string, blockedId: string) {
 }
 
 async function supabaseUnblockUser(c: any, blockerId: string, blockedId: string) {
-  const blocker = publicId(blockerId, 120);
-  const blocked = publicId(blockedId, 120);
+  const blockerRow = await supabaseUserByAnyId(c, blockerId).catch(() => null);
+  const blockedRow = await supabaseUserByAnyId(c, blockedId).catch(() => null);
+  const blocker = publicId(blockerRow?.id || blockerId, 120);
+  const blocked = publicId(blockedRow?.id || blockedId, 120);
   if (!blocker || !blocked) return { status: 400 as const, body: { detail: 'Invalid user.' } };
   await supabaseAdminDeleteRows(c, 'app_blocks', {
     blocker_id: postgrestEqFilter(blocker),
