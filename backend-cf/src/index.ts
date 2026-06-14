@@ -23116,11 +23116,14 @@ api.get('/bookmarks/check/:postId', authMiddleware, async (c) => {
       const relatedUserIds = await supabaseRelatedInteractionUserIds(c, userId);
       const keys = await supabaseInteractionIdentityKeys(c, relatedUserIds);
       const identity = await supabaseResolvePostIdentity(c, postId);
-      const rows = await supabaseAdminSelectRows(c, 'app_post_interactions', {
-        or: supabasePostIdentityOrFilter(identity),
-        kind: postgrestEqFilter('save'),
-        app_user_id: postgrestInFilter(keys.appUserIds),
-      }, 'collection', 1);
+      const rows: any[] = [];
+      if (keys.appUserIds.length) {
+        rows.push(...await supabaseAdminSelectRows(c, 'app_post_interactions', {
+          or: supabasePostIdentityOrFilter(identity),
+          kind: postgrestEqFilter('save'),
+          app_user_id: postgrestInFilter(keys.appUserIds),
+        }, 'collection', 1));
+      }
       if (!rows.length && keys.authUserIds.length) {
         rows.push(...await supabaseAdminSelectRows(c, 'app_post_interactions', {
           or: supabasePostIdentityOrFilter(identity),
@@ -23129,8 +23132,10 @@ api.get('/bookmarks/check/:postId', authMiddleware, async (c) => {
         }, 'collection', 1));
       }
       if (rows.length) return c.json({ saved: true, collection: rows[0]?.collection || 'saved' });
+      if (supabasePrimaryConfigured(c)) return c.json({ saved: false, collection: null });
     } catch (error: any) {
       console.warn(JSON.stringify({ event: 'supabase_bookmark_check_failed', code: getErrorCode(error).slice(0, 180) }));
+      if (supabasePrimaryConfigured(c)) return c.json({ detail: 'Could not check bookmark state.' }, 500);
     }
   }
   await ensureLikeUniquenessSchema(c.env.DB);
