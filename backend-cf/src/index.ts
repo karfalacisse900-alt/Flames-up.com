@@ -10300,6 +10300,230 @@ function legacyPostTransferPayload(row: any) {
   };
 }
 
+function supabaseCreatePostTransferPayload(input: any) {
+  const mediaUrls = sanitizeMediaReferences(input.imageUrls, input.primaryImage);
+  const mediaTypes = sanitizeMediaTypes(input.mediaTypes, mediaUrls.length || 1);
+  const mediaDimensions = feedMediaDimensions(mediaUrls, mediaTypes, input.mediaDimensions || []);
+  const autoCategory = input.autoCategory || {};
+  const primaryCategory = (normalizeDiscoverCategory(autoCategory.primary_category || input.postType, false) || DEFAULT_DISCOVER_CATEGORY) as DiscoverCategory;
+  const editorOverlays = parseJsonArray(input.editorOverlays);
+  const place = {
+    id: cleanText(input.placeProviderId, 160),
+    provider: cleanText(input.placeProvider || 'apple_mapkit', 40),
+    name: cleanText(input.placeName, 180),
+    formatted_address: cleanText(input.placeFormattedAddress, 260),
+    category: cleanText(input.placeCategory, 80),
+    city: cleanText(input.placeCity, 80),
+    region: cleanText(input.placeRegion, 80),
+    country: cleanText(input.placeCountry, 80),
+    lat: input.placeLat ?? null,
+    lng: input.placeLng ?? null,
+    verified_checkin: !!input.isCheckin,
+  };
+  const audio = {
+    provider: cleanText(input.audioProvider, 40),
+    track_id: cleanText(input.audioTrackId, 120),
+    title: cleanText(input.audioTitle, 180),
+    artist: cleanText(input.audioArtist, 180),
+    artwork_url: cleanText(input.audioArtworkUrl, 1200),
+    stream_url: cleanText(input.audioStreamUrl, 2200),
+    start_time: Number(input.audioStartTime || 0),
+    duration: Number(input.audioDuration || 0),
+  };
+  const discoverCategory = {
+    primary_category: primaryCategory,
+    confidence: clampFloat(autoCategory.category_confidence, 0, 1, 0),
+    source: normalizeCategorySource(autoCategory.category_source),
+    status: normalizeCategoryStatus(autoCategory.category_status),
+    tags: sanitizeAutoCategoryTags(autoCategory.tags),
+    signals: parseJsonObject(autoCategory.signals),
+    secondary_categories: sanitizeAutoCategoryTags(autoCategory.secondary_categories),
+    category_scores: normalizeCategoryScoresPayload(autoCategory.category_scores),
+    detected_objects: sanitizeAutoCategoryTags(autoCategory.detected_objects),
+    detected_scene: cleanText(autoCategory.detected_scene, 80),
+    place_type: cleanText(autoCategory.place_type || input.placeCategory, 120),
+    user_selected_category: normalizeDiscoverCategory(autoCategory.user_selected_category, false),
+    caption_keywords: sanitizeAutoCategoryTags(autoCategory.caption_keywords),
+  };
+  const raw = {
+    image: mediaUrls[0] || '',
+    images: mediaUrls,
+    media_types: mediaTypes,
+    media_backup_ids: parseJsonArray(input.backupIds),
+    media_asset_ids: parseJsonArray(input.mediaAssetIds),
+    display_city: cleanText(input.displayCity, 80),
+    display_region: cleanText(input.displayRegion, 80),
+    display_country: cleanText(input.displayCountry, 80),
+    display_location_label: cleanText(input.displayLocationLabel, 120),
+    display_location_source: cleanText(input.displayLocationSource, 40),
+    display_location_visibility: cleanText(input.displayLocationVisibility, 40),
+    client_request_id: cleanText(input.clientRequestId, 120),
+  };
+  return {
+    id: isUuidText(input.id) || uuid(),
+    legacy_post_id: cleanText(input.id, 120),
+    user_id: isUuidText(input.authUserId || input.userId),
+    app_user_id: cleanText(input.userId, 120) || null,
+    title: cleanText(input.postTitle, 180) || null,
+    content: cleanMultilineText(input.postContent, 4000),
+    visibility: normalizeVisibility(input.visibility),
+    status: 'active',
+    post_type: cleanText(input.postType || 'general', 80),
+    category: primaryCategory,
+    location: cleanText(input.location || input.placeName, 180) || null,
+    media: mediaUrls.map((url, index) => ({
+      url,
+      type: mediaTypes[index] || (isVideoMediaUrl(url) ? 'video' : 'image'),
+      width: Number(mediaDimensions[index]?.width || mediaDimensions[index]?.feed_width || 0),
+      height: Number(mediaDimensions[index]?.height || mediaDimensions[index]?.feed_height || 0),
+      ratio: Number(mediaDimensions[index]?.ratio || mediaDimensions[index]?.feed_aspect_ratio || 0),
+      feed_width: Number(mediaDimensions[index]?.feed_width || 0),
+      feed_height: Number(mediaDimensions[index]?.feed_height || 0),
+      feed_aspect_ratio: Number(mediaDimensions[index]?.feed_aspect_ratio || 0),
+      display_aspect_ratio: Number(mediaDimensions[index]?.display_aspect_ratio || 0),
+      crop_mode: cleanText(mediaDimensions[index]?.crop_mode || 'center_crop', 40),
+    })),
+    media_dimensions: mediaDimensions,
+    editor_data: {
+      overlays: editorOverlays,
+      filterData: editorOverlays.find((item: any) => item?.type === 'filter') || null,
+      textOverlays: editorOverlays.filter((item: any) => item?.type === 'text'),
+      moderation: {
+        status: 'approved',
+        media_ids: parseJsonArray(input.mediaAssetIds),
+        checked_at: input.createdAt,
+      },
+    },
+    product_tags: editorOverlays.filter((item: any) => item?.type === 'product'),
+    tagged_users: parseJsonArray(input.taggedUsers),
+    metadata: {
+      source: 'cloudflare_worker_supabase_primary',
+      image: mediaUrls[0] || '',
+      client_request_id: cleanText(input.clientRequestId, 120),
+      media_backup_ids: parseJsonArray(input.backupIds),
+      media_asset_ids: parseJsonArray(input.mediaAssetIds),
+      discover_category: discoverCategory,
+      category_scores: discoverCategory.category_scores,
+      secondary_categories: discoverCategory.secondary_categories,
+      detected_objects: discoverCategory.detected_objects,
+      detected_scene: discoverCategory.detected_scene,
+      place_type: discoverCategory.place_type,
+      user_selected_category: discoverCategory.user_selected_category,
+      caption_keywords: discoverCategory.caption_keywords,
+      display_city: raw.display_city,
+      display_region: raw.display_region,
+      display_country: raw.display_country,
+      display_location_label: raw.display_location_label,
+      display_location_source: raw.display_location_source,
+      display_location_visibility: raw.display_location_visibility,
+      moderation_status: 'approved',
+      place,
+      audio,
+      raw,
+    },
+    likes_count: 0,
+    comments_count: 0,
+    saves_count: 0,
+    legacy_created_at: toPgTime(input.createdAt),
+    legacy_updated_at: toPgTime(input.createdAt),
+    created_at: toPgTime(input.createdAt),
+    updated_at: toPgTime(input.createdAt),
+  };
+}
+
+async function supabaseExistingPostByClientRequest(c: any, userId: string, clientRequestId: string, authorRow: any): Promise<any | null> {
+  const cleanRequestId = cleanText(clientRequestId, 120);
+  if (!cleanRequestId) return null;
+  const rows = await supabaseAdminQueryRows(c, 'app_posts', {
+    select: '*',
+    filters: {
+      app_user_id: postgrestEqFilter(userId),
+      'metadata->>client_request_id': postgrestEqFilter(cleanRequestId),
+    },
+    order: 'created_at.desc',
+    limit: 1,
+  }).catch((error: any) => {
+    console.warn(JSON.stringify({ event: 'supabase_post_idempotency_lookup_failed', code: getErrorCode(error).slice(0, 180) }));
+    return [];
+  });
+  if (!rows[0]) return null;
+  const commentCount = await supabasePostCommentCount(c, cleanText(rows[0].legacy_post_id || rows[0].id, 120)).catch(() => Number(rows[0].comments_count || 0));
+  return supabaseAppPostToLegacy(rows[0], authorRow, false, commentCount);
+}
+
+async function supabaseIncrementAppUserPostCount(c: any, userId: string) {
+  const row = await getSupabaseAppUserRowByAnyId(c, userId);
+  if (!row?.id) return;
+  const counts = parseJsonObject(row.counts);
+  const current = Math.max(0, Number((counts as any).posts_count ?? (counts as any).posts ?? 0));
+  await supabaseAdminPatchRows(c, 'app_users', { id: postgrestEqFilter(cleanText(row.id, 120)) }, {
+    counts: {
+      ...counts,
+      posts_count: current + 1,
+      posts: current + 1,
+    },
+    updated_at: now(),
+  });
+}
+
+async function writeSupabasePrimaryPostPlace(c: any, input: any) {
+  if (!input.placeName && !input.placeFormattedAddress && !input.placeProviderId) return;
+  await supabaseAdminUpsert(c, 'app_post_places', [{
+    id: uuid(),
+    legacy_post_id: cleanText(input.id, 120),
+    provider: cleanText(input.placeProvider || 'apple_mapkit', 40) || 'apple_mapkit',
+    provider_place_id: cleanText(input.placeProviderId, 160) || null,
+    name: cleanText(input.placeName, 180),
+    formatted_address: cleanText(input.placeFormattedAddress, 260),
+    latitude: input.placeLat ?? null,
+    longitude: input.placeLng ?? null,
+    category: cleanText(input.placeCategory, 80) || null,
+    city: cleanText(input.placeCity, 80) || null,
+    region: cleanText(input.placeRegion, 80) || null,
+    country: cleanText(input.placeCountry, 80) || null,
+    metadata: { source: 'cloudflare_worker_supabase_primary' },
+    legacy_created_at: toPgTime(input.createdAt),
+    updated_at: toPgTime(input.createdAt),
+  }], 'legacy_post_id,provider');
+}
+
+async function notifySupabaseFollowersOfNewPost(c: any, input: {
+  userId: string;
+  postId: string;
+  visibility: string;
+  authorName: string;
+  body: string;
+}) {
+  if (!(input.visibility === 'public' || input.visibility === 'followers')) return;
+  const followers = await supabaseAdminQueryRows(c, 'app_follows', {
+    select: 'app_follower_id',
+    filters: {
+      app_following_id: postgrestEqFilter(input.userId),
+      status: postgrestEqFilter('active'),
+    },
+    order: 'created_at.desc',
+    limit: 250,
+  }).catch(() => []);
+  const ts = now();
+  await Promise.allSettled(followers
+    .map((row) => cleanText(row?.app_follower_id, 120))
+    .filter((id) => id && id !== input.userId)
+    .map((followerId) => supabaseAdminUpsertSafe(c, 'app_notifications', [{
+      id: `new_post:${input.postId}:${followerId}`,
+      user_id: followerId,
+      from_user_id: input.userId,
+      type: 'new_post',
+      title: `${cleanText(input.authorName, 80) || 'Someone you follow'} posted`,
+      body: cleanText(input.body, 120) || 'Shared a new post',
+      content: cleanText(input.body, 120) || 'Shared a new post',
+      reference_id: input.postId,
+      data: { post_id: input.postId, from_user_id: input.userId },
+      is_read: false,
+      legacy_created_at: ts,
+      updated_at: ts,
+    }], 'id')));
+}
+
 async function supabaseAdminUpsert(c: any, table: string, rows: any[], onConflict: string) {
   if (!rows.length) return { table, count: 0 };
   const url = `${getSupabaseUrl(c)}/rest/v1/${table}?on_conflict=${encodeURIComponent(onConflict)}`;
@@ -14509,23 +14733,34 @@ api.post('/posts', authMiddleware, async (c) => {
   if (phoneGate) return phoneGate;
   const bodyTooLarge = rejectLargeRequest(c, 1_500_000);
   if (bodyTooLarge) return bodyTooLarge;
-  await ensureMediaBackupSchema(c.env.DB);
-  await ensureAudioSchema(c.env.DB);
-  await ensurePostEditorSchema(c.env.DB);
-  await ensureReliabilitySchema(c.env.DB);
-  await ensureGovernanceSchema(c.env.DB);
-  await ensureAutoCategorySchema(c.env.DB);
-  await ensureLocationSchema(c.env.DB);
-  await ensureMediaModerationSchema(c.env.DB);
+  const isSupabasePrimary = supabasePrimaryConfigured(c);
+  if (!isSupabasePrimary) {
+    await ensureMediaBackupSchema(c.env.DB);
+    await ensureAudioSchema(c.env.DB);
+    await ensurePostEditorSchema(c.env.DB);
+    await ensureReliabilitySchema(c.env.DB);
+    await ensureGovernanceSchema(c.env.DB);
+    await ensureAutoCategorySchema(c.env.DB);
+    await ensureLocationSchema(c.env.DB);
+    await ensureMediaModerationSchema(c.env.DB);
+  }
   const userId = getUserId(c);
   const limited = await enforceRateLimit(c, 'post_create', userId, 30, 60);
   if (limited) return limited;
   const restricted = await enforceUserRestriction(c, userId, 'posting');
   if (restricted) return restricted;
-  const user: any = await c.env.DB.prepare('SELECT username, full_name, profile_image, city FROM users WHERE id = ?').bind(userId).first();
   const b = await c.req.json().catch(() => ({}));
+  const supabaseAuthorRow = isSupabasePrimary ? await getSupabaseAppUserRowByAnyId(c, userId) : null;
+  const user: any = isSupabasePrimary
+    ? (supabaseAuthorRow ? supabaseAppUserToLegacyUser(supabaseAuthorRow) : null)
+    : await c.env.DB.prepare('SELECT username, full_name, profile_image, city FROM users WHERE id = ?').bind(userId).first();
+  if (!user) return c.json({ detail: 'User not found.' }, 404);
   const clientRequestId = getClientRequestId(c, b);
   if (clientRequestId) {
+    if (isSupabasePrimary) {
+      const existing = await supabaseExistingPostByClientRequest(c, userId, clientRequestId, supabaseAuthorRow);
+      if (existing) return c.json({ ...postPayload(existing, [], c.env), idempotent_replay: true });
+    } else {
     const existing: any = await c.env.DB.prepare(
       `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
        FROM posts p JOIN users u ON p.user_id = u.id
@@ -14533,6 +14768,7 @@ api.post('/posts', authMiddleware, async (c) => {
        LIMIT 1`
     ).bind(userId, clientRequestId).first();
     if (existing) return c.json({ ...postPayload(existing, [], c.env), idempotent_replay: true });
+    }
   }
   const id = uuid();
   let postType = cleanText(b.post_type || b.postType || b.type || b.category || 'general', 50).toLowerCase() || 'general';
@@ -14644,6 +14880,102 @@ api.post('/posts', authMiddleware, async (c) => {
         .first());
     if (hidden) return c.json({ detail: 'This sound is unavailable.' }, 400);
   }
+
+  if (isSupabasePrimary) {
+    const createdAt = now();
+    const supabaseInput = {
+      id,
+      userId,
+      authUserId: supabaseAuthorRow?.supabase_user_id || userId,
+      postTitle,
+      postContent,
+      primaryImage,
+      imageUrls,
+      mediaTypes,
+      backupIds,
+      mediaDimensions,
+      location,
+      displayCity,
+      displayRegion,
+      displayCountry,
+      displayLocationLabel,
+      displayLocationSource,
+      displayLocationVisibility,
+      postType,
+      placeProvider,
+      placeProviderId,
+      placeName,
+      placeFormattedAddress,
+      placeCategory,
+      placeCity,
+      placeRegion,
+      placeCountry,
+      placeLat,
+      placeLng,
+      isCheckin,
+      visibility,
+      mediaAssetIds,
+      editorOverlays,
+      taggedUsers,
+      autoCategory,
+      audioProvider,
+      audioTrackId,
+      audioTitle,
+      audioArtist,
+      audioArtworkUrl,
+      audioStreamUrl,
+      audioStartTime,
+      audioDuration,
+      clientRequestId,
+      createdAt,
+    };
+    const supabasePostRow = supabaseCreatePostTransferPayload(supabaseInput);
+    try {
+      await supabaseAdminUpsert(c, 'app_posts', [supabasePostRow], 'legacy_post_id');
+      if (mediaAssetIds.length) {
+        await supabaseAdminPatchRows(c, 'app_media_assets', {
+          user_id: postgrestEqFilter(userId),
+          id: postgrestInFilter(mediaAssetIds),
+        }, {
+          legacy_post_id: id,
+          updated_at: createdAt,
+        });
+      }
+      await writeSupabasePrimaryPostPlace(c, supabaseInput);
+      await recordAbuseSignals(c, userId, 'post_create', {
+        product_links: editorOverlays.filter((item: any) => item?.type === 'product' && item.link).map((item: any) => item.link),
+      });
+      await supabaseIncrementAppUserPostCount(c, userId).catch((error: any) => {
+        console.warn(JSON.stringify({ event: 'supabase_post_count_increment_failed', code: getErrorCode(error).slice(0, 180) }));
+      });
+    } catch (error: any) {
+      const code = getErrorCode(error).slice(0, 180);
+      console.error(JSON.stringify({ event: 'supabase_primary_post_create_failed', post_id: id, user_id: userId, code }));
+      return c.json({
+        detail: 'Could not save this post to the production database. Please retry.',
+        code: 'SUPABASE_PRIMARY_WRITE_FAILED',
+      }, 503);
+    }
+
+    runBackgroundTask(c, 'supabase_post_follower_notifications_failed', async () => {
+      await notifySupabaseFollowersOfNewPost(c, {
+        userId,
+        postId: id,
+        visibility,
+        authorName: cleanText(user?.full_name || user?.username || 'Someone you follow', 80),
+        body: cleanText(postTitle || postContent || 'Shared a new post', 120),
+      });
+    });
+
+    const createdPost = {
+      ...supabaseAppPostToLegacy(supabasePostRow, supabaseAuthorRow, false, 0),
+      client_request_id: clientRequestId,
+      moderation_status: 'approved',
+      moderation_media_ids: JSON.stringify(mediaAssetIds),
+    };
+    return c.json(postPayload(createdPost, [], c.env));
+  }
+
   const insertResults = await c.env.DB.batch([
     c.env.DB.prepare(
       `INSERT OR IGNORE INTO posts (
