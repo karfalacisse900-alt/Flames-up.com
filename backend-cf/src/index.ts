@@ -7120,38 +7120,38 @@ async function supabaseAdminSelectRowsIfShapeExists(c: any, table: string, filte
 async function supabaseDeletePostInteractionsForUsers(c: any, postId: string, userIds: string[], kind: 'like' | 'save') {
   if (!userIds.length) return;
   const identity = await supabaseResolvePostIdentity(c, postId);
-  const authUserIds = await supabaseAuthUserIdsForAppUserIds(c, userIds);
-  const appUserIdsFromAuth = await supabaseAppUserIdsForAuthUserIds(c, [...userIds, ...authUserIds]);
-  const appUserIds = Array.from(new Set([...userIds, ...authUserIds, ...appUserIdsFromAuth])).filter(Boolean);
-  await supabaseAdminDeleteRows(c, 'app_post_interactions', {
-    or: supabasePostIdentityOrFilter(identity),
-    kind: postgrestEqFilter(kind),
-    app_user_id: postgrestInFilter(appUserIds),
-  });
-  if (authUserIds.length) {
-    try {
-      await supabaseAdminDeleteRows(c, 'app_post_interactions', {
-        or: supabasePostIdentityOrFilter(identity),
-        kind: postgrestEqFilter(kind),
-        user_id: postgrestInFilter(authUserIds),
-      });
-    } catch (error: any) {
-      const code = getErrorCode(error);
-      if (!code.includes('PGRST204') && !code.toLowerCase().includes('column')) {
-        throw error;
-      }
-    }
+  const keys = await supabaseInteractionActorKeys(c, userIds);
+  if (keys.actorKeys.length) {
+    await supabaseAdminDeleteRowsIfShapeExists(c, 'app_post_interactions', {
+      or: supabasePostIdentityOrFilter(identity),
+      kind: postgrestEqFilter(kind),
+      actor_key: postgrestInFilter(keys.actorKeys),
+    });
+  }
+  if (keys.appUserIds.length) {
+    await supabaseAdminDeleteRows(c, 'app_post_interactions', {
+      or: supabasePostIdentityOrFilter(identity),
+      kind: postgrestEqFilter(kind),
+      app_user_id: postgrestInFilter(keys.appUserIds),
+    });
+  }
+  if (keys.authUserIds.length) {
+    await supabaseAdminDeleteRowsIfShapeExists(c, 'app_post_interactions', {
+      or: supabasePostIdentityOrFilter(identity),
+      kind: postgrestEqFilter(kind),
+      user_id: postgrestInFilter(keys.authUserIds),
+    });
   }
 }
 
 async function supabaseUpsertPostInteraction(c: any, postId: string, userId: string, kind: 'like' | 'save', collection = '') {
   const identity = await supabaseResolvePostIdentity(c, postId);
   const requestedUserId = cleanText(userId, 120);
-  const authUserIds = await supabaseAuthUserIdsForAppUserIds(c, [requestedUserId]);
-  const appUserIdsFromAuth = await supabaseAppUserIdsForAuthUserIds(c, [requestedUserId, ...authUserIds]);
-  const canonicalAppUserId = cleanText(appUserIdsFromAuth[0] || requestedUserId, 120);
-  const authUserId = authUserIds[0] || isUuidText(requestedUserId);
-  await supabaseDeletePostInteractionsForUsers(c, postId, [requestedUserId, canonicalAppUserId, ...(authUserId ? [authUserId] : [])], kind);
+  const keys = await supabaseInteractionActorKeys(c, [requestedUserId]);
+  const canonicalAppUserId = cleanText(keys.appUserIds.find((id) => !isUuidText(id)) || keys.appUserIds[0] || requestedUserId, 120);
+  const authUserId = keys.authUserIds[0] || isUuidText(requestedUserId);
+  const actorKey = cleanText(keys.actorKeys[0] || supabaseInteractionActorKey(authUserId || '', '', canonicalAppUserId), 220);
+  await supabaseDeletePostInteractionsForUsers(c, postId, [requestedUserId, canonicalAppUserId, ...(authUserId ? [authUserId] : []), ...keys.appUserIds, ...keys.authUserIds], kind);
   const baseRow: any = {
     legacy_post_id: cleanText(identity.legacyPostId || identity.requestedPostId, 120),
     app_user_id: canonicalAppUserId,
@@ -7162,6 +7162,7 @@ async function supabaseUpsertPostInteraction(c: any, postId: string, userId: str
   };
   if (identity.postUuid) baseRow.post_id = identity.postUuid;
   if (authUserId) baseRow.user_id = authUserId;
+  if (actorKey) baseRow.actor_key = actorKey;
   if (identity.postUuid && authUserId) {
     await supabaseAdminDeleteRowsIfShapeExists(c, 'app_post_interactions', {
       post_id: postgrestEqFilter(identity.postUuid),
@@ -7169,12 +7170,23 @@ async function supabaseUpsertPostInteraction(c: any, postId: string, userId: str
       kind: postgrestEqFilter(kind),
     });
   }
+  if (actorKey) {
+    try {
+      await supabaseAdminUpsert(c, 'app_post_interactions', [baseRow], 'legacy_post_id,kind,actor_key');
+      return;
+    } catch (error: any) {
+      if (!isSupabaseColumnShapeError(error) && !getErrorCode(error).includes('42P10')) {
+        throw error;
+      }
+    }
+  }
   try {
     await supabaseAdminUpsert(c, 'app_post_interactions', [baseRow], 'legacy_post_id,app_user_id,kind');
   } catch (error: any) {
     if (!isSupabaseColumnShapeError(error)) {
       throw error;
     }
+    delete baseRow.actor_key;
     delete baseRow.user_id;
     delete baseRow.post_id;
     await supabaseAdminUpsert(c, 'app_post_interactions', [baseRow], 'legacy_post_id,app_user_id,kind');
@@ -7184,7 +7196,15 @@ async function supabaseUpsertPostInteraction(c: any, postId: string, userId: str
 async function supabaseViewerPostInteractionExists(c: any, postId: string, userIds: string[], kind: 'like' | 'save'): Promise<boolean> {
   if (!userIds.length) return false;
   const identity = await supabaseResolvePostIdentity(c, postId);
-  const keys = await supabaseInteractionIdentityKeys(c, userIds);
+  const keys = await supabaseInteractionActorKeys(c, userIds);
+  if (keys.actorKeys.length) {
+    const actorRows = await supabaseAdminSelectRowsIfShapeExists(c, 'app_post_interactions', {
+      or: supabasePostIdentityOrFilter(identity),
+      kind: postgrestEqFilter(kind),
+      actor_key: postgrestInFilter(keys.actorKeys),
+    }, 'legacy_post_id', 1);
+    if (actorRows.length > 0) return true;
+  }
   if (keys.appUserIds.length) {
     const rows = await supabaseAdminSelectRows(c, 'app_post_interactions', {
       or: supabasePostIdentityOrFilter(identity),
@@ -7305,6 +7325,34 @@ async function supabaseInteractionIdentityKeys(c: any, userIds: string[]) {
   };
 }
 
+function supabaseInteractionActorKey(authUserId: string, identityActor: string, appUserId: string): string {
+  const authId = isUuidText(authUserId);
+  if (authId) return `auth:${authId}`;
+  const identity = cleanText(identityActor, 220);
+  if (identity) return identity;
+  const appId = publicId(appUserId, 120);
+  return appId ? `app:${appId}` : '';
+}
+
+async function supabaseInteractionActorKeys(c: any, userIds: string[]) {
+  const keys = await supabaseInteractionIdentityKeys(c, userIds);
+  const appToAuth = await supabaseAuthUserIdMapForAppUserIds(c, keys.appUserIds);
+  const appToIdentityActor = await supabaseAccountIdentityActorKeyMap(c, keys.appUserIds);
+  const actorKeys = new Set<string>();
+  for (const authUserId of keys.authUserIds) {
+    const actorKey = supabaseInteractionActorKey(authUserId, '', '');
+    if (actorKey) actorKeys.add(actorKey);
+  }
+  for (const appUserId of keys.appUserIds) {
+    const actorKey = supabaseInteractionActorKey(appToAuth.get(appUserId) || '', appToIdentityActor.get(appUserId) || '', appUserId);
+    if (actorKey) actorKeys.add(actorKey);
+  }
+  return {
+    ...keys,
+    actorKeys: Array.from(actorKeys),
+  };
+}
+
 type SupabasePostIdentity = {
   requestedPostId: string;
   legacyPostId: string;
@@ -7418,7 +7466,7 @@ async function supabasePostInteractionActorCount(c: any, postId: string, kind: '
   };
   let rows: any[];
   try {
-    rows = await supabaseAdminSelectRows(c, 'app_post_interactions', filters, 'app_user_id,user_id,legacy_post_id,post_id', 10000);
+    rows = await supabaseAdminSelectRows(c, 'app_post_interactions', filters, 'app_user_id,user_id,actor_key,legacy_post_id,post_id', 10000);
   } catch (error: any) {
     if (!isSupabaseColumnShapeError(error)) throw error;
     const fallbackFilters = {
@@ -7434,7 +7482,7 @@ async function supabasePostInteractionActorCount(c: any, postId: string, kind: '
   for (const row of rows) {
     const appUserId = publicId(row?.app_user_id, 120);
     const authUserId = isUuidText(row?.user_id) || appToAuth.get(appUserId) || '';
-    const actor = cleanText(authUserId || appToIdentityActor.get(appUserId) || appUserId, 160);
+    const actor = cleanText(row?.actor_key, 220) || supabaseInteractionActorKey(authUserId, appToIdentityActor.get(appUserId) || '', appUserId);
     if (actor) actors.add(actor);
   }
   return actors.size;
@@ -7490,7 +7538,7 @@ async function supabasePostInteractionActorCounts(c: any, postIds: string[]) {
     kind: postgrestInFilter(['like', 'save']),
   };
   try {
-    rows.push(...await supabaseAdminSelectRows(c, 'app_post_interactions', filters, 'legacy_post_id,post_id,kind,app_user_id,user_id', Math.max(1000, cleanPostIds.length * 500)));
+    rows.push(...await supabaseAdminSelectRows(c, 'app_post_interactions', filters, 'legacy_post_id,post_id,kind,app_user_id,user_id,actor_key', Math.max(1000, cleanPostIds.length * 500)));
   } catch (error: any) {
     if (!isSupabaseColumnShapeError(error)) throw error;
     rows.push(...await supabaseAdminSelectRows(c, 'app_post_interactions', filters, 'legacy_post_id,kind,app_user_id', Math.max(1000, cleanPostIds.length * 500)));
@@ -7499,7 +7547,7 @@ async function supabasePostInteractionActorCounts(c: any, postIds: string[]) {
     const nativeRows = await supabaseAdminSelectRowsIfShapeExists(c, 'app_post_interactions', {
       post_id: postgrestInFilter(uuidPostIds),
       kind: postgrestInFilter(['like', 'save']),
-    }, 'legacy_post_id,post_id,kind,app_user_id,user_id', Math.max(1000, uuidPostIds.length * 500));
+    }, 'legacy_post_id,post_id,kind,app_user_id,user_id,actor_key', Math.max(1000, uuidPostIds.length * 500));
     rows.push(...nativeRows);
   }
 
@@ -7516,7 +7564,7 @@ async function supabasePostInteractionActorCounts(c: any, postIds: string[]) {
     if (!rowPostKeys.length || (kind !== 'like' && kind !== 'save')) continue;
     const appUserId = publicId(row?.app_user_id, 120);
     const authUserId = isUuidText(row?.user_id) || appToAuth.get(appUserId) || '';
-    const actor = cleanText(authUserId || appToIdentityActor.get(appUserId) || appUserId, 160);
+    const actor = cleanText(row?.actor_key, 220) || supabaseInteractionActorKey(authUserId, appToIdentityActor.get(appUserId) || '', appUserId);
     if (!actor) continue;
     const targetKeys = new Set<string>();
     for (const rowPostKey of rowPostKeys) {
@@ -7722,7 +7770,7 @@ async function overlaySupabaseViewerEngagement(c: any, posts: any[], userId: str
   if (!postIds.length) return posts;
   try {
     const relatedUserIds = await supabaseRelatedInteractionUserIds(c, userId);
-    const keys = await supabaseInteractionIdentityKeys(c, relatedUserIds);
+    const keys = await supabaseInteractionActorKeys(c, relatedUserIds);
     const identityMap = await supabaseResolvePostIdentities(c, postIds);
     const identities = Array.from(identityMap.values());
     const legacyPostIds = Array.from(new Set(identities.map((identity) => identity.legacyPostId).filter(Boolean)));
@@ -7747,6 +7795,22 @@ async function overlaySupabaseViewerEngagement(c: any, posts: any[], userId: str
         : Promise.resolve([] as any[]),
     ]);
     const rows: any[] = [...appRows];
+    if (keys.actorKeys.length) {
+      const actorRows = await supabaseAdminSelectRowsIfShapeExists(c, 'app_post_interactions', {
+        legacy_post_id: postgrestInFilter(legacyPostIds.length ? legacyPostIds : postIds),
+        actor_key: postgrestInFilter(keys.actorKeys),
+        kind: postgrestInFilter(['like', 'save']),
+      }, 'legacy_post_id,post_id,kind', Math.max(1, postIds.length * 2 * keys.actorKeys.length));
+      rows.push(...actorRows);
+      if (uuidPostIds.length) {
+        const nativeActorRows = await supabaseAdminSelectRowsIfShapeExists(c, 'app_post_interactions', {
+          post_id: postgrestInFilter(uuidPostIds),
+          actor_key: postgrestInFilter(keys.actorKeys),
+          kind: postgrestInFilter(['like', 'save']),
+        }, 'legacy_post_id,post_id,kind', Math.max(1, uuidPostIds.length * 2 * keys.actorKeys.length));
+        rows.push(...nativeActorRows);
+      }
+    }
     if (uuidPostIds.length && keys.appUserIds.length) {
       const nativeAppRows = await supabaseAdminSelectRowsIfShapeExists(c, 'app_post_interactions', {
         post_id: postgrestInFilter(uuidPostIds),
