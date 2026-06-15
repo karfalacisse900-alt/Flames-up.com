@@ -7389,10 +7389,8 @@ async function supabaseAuthUserIdsForAppUserIds(c: any, userIds: string[]): Prom
       const authId = isUuidText(row?.supabase_user_id);
       if (authId) authIds.add(authId);
     }
-  } catch {
-    for (const authId of await legacyD1AuthUserIdsForAppUserIds(c, ids)) {
-      authIds.add(authId);
-    }
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_auth_alias_read_failed', code: getErrorCode(error).slice(0, 180) }));
   }
   return Array.from(authIds);
 }
@@ -7820,6 +7818,8 @@ async function getCanonicalPostEngagementState(c: any, postId: string, userId: s
 
 async function setCanonicalPostLikeState(c: any, postId: string, userId: string, requested: boolean | null) {
   const useSupabase = supabaseEngagementConfigured(c);
+  const identity = useSupabase ? await supabaseResolvePostIdentity(c, postId) : null;
+  const canonicalPostId = identity ? (identity.legacyPostId || identity.postUuid || identity.requestedPostId || postId) : postId;
   const relatedUserIds = useSupabase
     ? await supabaseRelatedInteractionUserIds(c, userId)
     : await coalesceViewerPostInteractions(c.env.DB, postId, userId);
@@ -7832,14 +7832,14 @@ async function setCanonicalPostLikeState(c: any, postId: string, userId: string,
     d1WasLiked = !!d1LikedRow;
   }
   const wasLiked = useSupabase
-    ? await supabaseViewerPostInteractionExists(c, postId, relatedUserIds, 'like')
+    ? await supabaseViewerPostInteractionExists(c, canonicalPostId, relatedUserIds, 'like')
     : d1WasLiked;
   const nextLiked = requested === null ? !wasLiked : requested;
 
   if (useSupabase) {
-    await supabaseDeletePostInteractionsForUsers(c, postId, relatedUserIds, 'like');
+    await supabaseDeletePostInteractionsForUsers(c, canonicalPostId, relatedUserIds, 'like');
     if (nextLiked) {
-      await supabaseUpsertPostInteraction(c, postId, userId, 'like');
+      await supabaseUpsertPostInteraction(c, canonicalPostId, userId, 'like');
     }
   }
 
@@ -7857,7 +7857,7 @@ async function setCanonicalPostLikeState(c: any, postId: string, userId: string,
     }
   }
 
-  const state = await getCanonicalPostEngagementState(c, postId, userId);
+  const state = await getCanonicalPostEngagementState(c, canonicalPostId, userId);
   const changed = state.liked !== wasLiked;
   return { state, wasLiked, changed };
 }
@@ -7865,6 +7865,8 @@ async function setCanonicalPostLikeState(c: any, postId: string, userId: string,
 async function setCanonicalPostSaveState(c: any, postId: string, userId: string, saved: boolean, collection = 'saved') {
   const collectionName = cleanText(collection, 80) || 'saved';
   const useSupabase = supabaseEngagementConfigured(c);
+  const identity = useSupabase ? await supabaseResolvePostIdentity(c, postId) : null;
+  const canonicalPostId = identity ? (identity.legacyPostId || identity.postUuid || identity.requestedPostId || postId) : postId;
   const relatedUserIds = useSupabase
     ? await supabaseRelatedInteractionUserIds(c, userId)
     : await coalesceViewerPostInteractions(c.env.DB, postId, userId);
@@ -7877,13 +7879,13 @@ async function setCanonicalPostSaveState(c: any, postId: string, userId: string,
     d1WasSaved = !!d1SavedRow;
   }
   const wasSaved = useSupabase
-    ? await supabaseViewerPostInteractionExists(c, postId, relatedUserIds, 'save')
+    ? await supabaseViewerPostInteractionExists(c, canonicalPostId, relatedUserIds, 'save')
     : d1WasSaved;
 
   if (useSupabase) {
-    await supabaseDeletePostInteractionsForUsers(c, postId, relatedUserIds, 'save');
+    await supabaseDeletePostInteractionsForUsers(c, canonicalPostId, relatedUserIds, 'save');
     if (saved) {
-      await supabaseUpsertPostInteraction(c, postId, userId, 'save', collectionName);
+      await supabaseUpsertPostInteraction(c, canonicalPostId, userId, 'save', collectionName);
     }
   }
 
@@ -7899,7 +7901,7 @@ async function setCanonicalPostSaveState(c: any, postId: string, userId: string,
     }
   }
 
-  const state = await getCanonicalPostEngagementState(c, postId, userId);
+  const state = await getCanonicalPostEngagementState(c, canonicalPostId, userId);
   const changed = state.saved !== wasSaved;
   return { state, wasSaved, changed, collection: collectionName };
 }
@@ -14916,42 +14918,15 @@ api.get('/posts/feed', authMiddleware, async (c) => {
   if (limited) return limited;
   const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
   const limit = clampNumber(c.req.query('limit') || '20', 1, 50, 20);
-  if (supabasePrimaryConfigured(c)) {
-    try {
-      const feedRows = await supabaseReadVisiblePosts(c, userId, { limit, offset: skip, order: 'newest' });
-      const response = c.json(feedRows.map((p) => feedPostPayload(p, [], c.env)));
-      response.headers.set('cache-control', 'private, max-age=6');
-      return response;
-    } catch (error: any) {
-      console.warn(JSON.stringify({ event: 'supabase_feed_read_failed', code: getErrorCode(error).slice(0, 180) }));
-      return c.json({ detail: 'Could not load feed.' }, 500);
-    }
+  try {
+    const feedRows = await supabaseReadVisiblePosts(c, userId, { limit, offset: skip, order: 'newest' });
+    const response = c.json(feedRows.map((p) => feedPostPayload(p, [], c.env)));
+    response.headers.set('cache-control', 'private, max-age=6');
+    return response;
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_feed_read_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not load feed.' }, 500);
   }
-  await ensurePrivacySchema(c.env.DB);
-  await ensureGovernanceSchema(c.env.DB);
-  await ensurePostEditorSchema(c.env.DB);
-  await ensureLocationSchema(c.env.DB);
-  await ensureMediaModerationSchema(c.env.DB);
-  await ensureLikeUniquenessSchema(c.env.DB);
-  const relatedUserIds = await relatedInteractionUserIds(c.env.DB, userId);
-  const relatedPlaceholders = inPlaceholders(relatedUserIds);
-  const feedSql = [
-    `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
-       EXISTS (SELECT 1 FROM follows fl WHERE fl.follower_id = ? AND fl.following_id = p.user_id) AS is_following,
-       EXISTS (SELECT 1 FROM likes lk WHERE lk.post_id = p.id AND lk.user_id IN (${relatedPlaceholders})) AS is_liked,
-       EXISTS (SELECT 1 FROM saved_posts sp WHERE sp.post_id = p.id AND sp.user_id IN (${relatedPlaceholders})) AS saved,
-       (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
-       MAX(COALESCE(p.comments_count, 0), (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden'))) AS live_comments_count,
-       MAX(COALESCE(p.saves_count, 0), (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id)) AS live_saves_count
-     FROM posts p JOIN users u ON p.user_id = u.id`,
-    `WHERE ${visiblePostWhere('u', 'p')} AND ${feedPhotoPostWhere('p')}`,
-    'ORDER BY p.created_at DESC LIMIT ? OFFSET ?',
-  ].join(' ');
-  const posts = await c.env.DB.prepare(feedSql).bind(userId, ...relatedUserIds, ...relatedUserIds, ...visiblePostBindValues(userId), limit, skip).all();
-  const feedRows = await overlaySupabaseViewerEngagement(c, feedPhotoPostsOnly(posts.results as any[]), userId);
-  const response = c.json(feedRows.map((p) => feedPostPayload(p, [], c.env)));
-  response.headers.set('cache-control', 'private, max-age=6');
-  return response;
 });
 
 api.get('/posts/world-board', async (c) => {
@@ -14962,33 +14937,10 @@ api.get('/posts/world-board', async (c) => {
     if (limited) return limited;
     const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
     const limit = clampNumber(c.req.query('limit') || '40', 1, 50, 40);
-    if (supabasePrimaryConfigured(c)) {
-      const viewerId = await getOptionalUserId(c);
-      const posts = await supabaseReadVisiblePosts(c, viewerId, { limit, offset: skip, order: 'newest' });
-      const response = c.json(posts.map((p) => feedPostPayload(p, [], c.env)));
-      response.headers.set('cache-control', viewerId ? 'private, max-age=6' : 'public, max-age=4, s-maxage=8');
-      return response;
-    }
-    await ensurePrivacySchema(c.env.DB);
-    await ensureGovernanceSchema(c.env.DB);
-    await ensurePostEditorSchema(c.env.DB);
-    await ensureLocationSchema(c.env.DB);
-    await ensureMediaModerationSchema(c.env.DB);
-    const payload = await cachedJson(c, `posts:world-board:v9:${skip}:${limit}`, 8, async () => {
-      const worldBoardSql = [
-        `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
-           (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
-           MAX(COALESCE(p.comments_count, 0), (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden'))) AS live_comments_count,
-           MAX(COALESCE(p.saves_count, 0), (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id)) AS live_saves_count
-         FROM posts p JOIN users u ON p.user_id = u.id`,
-        `WHERE ${publicPostWhere('u', 'p')} AND ${feedPhotoPostWhere('p')}`,
-        'ORDER BY p.created_at DESC LIMIT ? OFFSET ?',
-      ].join(' ');
-      const posts = await c.env.DB.prepare(worldBoardSql).bind(limit, skip).all();
-      return feedPhotoPostsOnly(posts.results as any[]).map((p) => feedPostPayload(p, [], c.env));
-    });
-    const response = c.json(payload);
-    response.headers.set('cache-control', 'public, max-age=4, s-maxage=8');
+    const viewerId = await getOptionalUserId(c);
+    const posts = await supabaseReadVisiblePosts(c, viewerId, { limit, offset: skip, order: 'newest' });
+    const response = c.json(posts.map((p) => feedPostPayload(p, [], c.env)));
+    response.headers.set('cache-control', viewerId ? 'private, max-age=6' : 'public, max-age=4, s-maxage=8');
     return response;
   } catch {
     return c.json({ detail: 'Could not load world board.' }, 500);
@@ -15003,36 +14955,15 @@ api.get('/posts/nearby-feed', authMiddleware, async (c) => {
   if (limited) return limited;
   const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
   const limit = clampNumber(c.req.query('limit') || '24', 1, 50, 24);
-  if (supabasePrimaryConfigured(c)) {
-    try {
-      const posts = await supabaseReadVisiblePosts(c, userId, { limit, offset: skip, order: 'newest' });
-      const response = c.json(posts.map((p) => feedPostPayload(p, [], c.env)));
-      response.headers.set('cache-control', 'private, max-age=6');
-      return response;
-    } catch (error: any) {
-      console.warn(JSON.stringify({ event: 'supabase_nearby_feed_read_failed', code: getErrorCode(error).slice(0, 180) }));
-      return c.json({ detail: 'Could not load nearby posts.' }, 500);
-    }
+  try {
+    const posts = await supabaseReadVisiblePosts(c, userId, { limit, offset: skip, order: 'newest' });
+    const response = c.json(posts.map((p) => feedPostPayload(p, [], c.env)));
+    response.headers.set('cache-control', 'private, max-age=6');
+    return response;
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_nearby_feed_read_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not load nearby posts.' }, 500);
   }
-  await ensurePrivacySchema(c.env.DB);
-  await ensureGovernanceSchema(c.env.DB);
-  await ensurePostEditorSchema(c.env.DB);
-  await ensureLocationSchema(c.env.DB);
-  await ensureMediaModerationSchema(c.env.DB);
-  const nearbyFeedSql = [
-    `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
-       (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
-       MAX(COALESCE(p.comments_count, 0), (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden'))) AS live_comments_count,
-       MAX(COALESCE(p.saves_count, 0), (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id)) AS live_saves_count
-     FROM posts p JOIN users u ON p.user_id = u.id`,
-    `WHERE ${visiblePostWhere('u', 'p')} AND ${feedPhotoPostWhere('p')}`,
-    'ORDER BY p.created_at DESC LIMIT ? OFFSET ?',
-  ].join(' ');
-  const posts = await c.env.DB.prepare(nearbyFeedSql).bind(...visiblePostBindValues(userId), limit, skip).all();
-  const feedRows = await overlaySupabaseViewerEngagement(c, feedPhotoPostsOnly(posts.results as any[]), userId);
-  const response = c.json(feedRows.map((p) => feedPostPayload(p, [], c.env)));
-  response.headers.set('cache-control', 'private, max-age=6');
-  return response;
 });
 
 api.get('/posts/:postId', authMiddleware, async (c) => {
@@ -15040,37 +14971,14 @@ api.get('/posts/:postId', authMiddleware, async (c) => {
   const supabaseRequired = requireSupabasePrimaryDatabase(c, 'post_read');
   if (supabaseRequired) return supabaseRequired;
   const postId = c.req.param('postId');
-  if (supabasePrimaryConfigured(c)) {
-    try {
-      const [post] = await supabaseReadVisiblePosts(c, userId, { postId, limit: 1 });
-      if (!post) return c.json({ detail: 'Post not found' }, 404);
-      return c.json(postPayload(post, [], c.env));
-    } catch (error: any) {
-      console.warn(JSON.stringify({ event: 'supabase_post_read_failed', code: getErrorCode(error).slice(0, 180) }));
-      return c.json({ detail: 'Could not load post.' }, 500);
-    }
+  try {
+    const [post] = await supabaseReadVisiblePosts(c, userId, { postId, limit: 1 });
+    if (!post) return c.json({ detail: 'Post not found' }, 404);
+    return c.json(postPayload(post, [], c.env));
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_post_read_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not load post.' }, 500);
   }
-  await ensureLocationSchema(c.env.DB);
-  await ensureMediaModerationSchema(c.env.DB);
-  await ensureLikeUniquenessSchema(c.env.DB);
-  const relatedUserIds = await relatedInteractionUserIds(c.env.DB, userId);
-  const relatedPlaceholders = inPlaceholders(relatedUserIds);
-  const postByIdSql = [
-    `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
-       EXISTS (SELECT 1 FROM follows fl WHERE fl.follower_id = ? AND fl.following_id = p.user_id) AS is_following,
-       EXISTS (SELECT 1 FROM likes lk WHERE lk.post_id = p.id AND lk.user_id IN (${relatedPlaceholders})) AS is_liked,
-       EXISTS (SELECT 1 FROM saved_posts sp WHERE sp.post_id = p.id AND sp.user_id IN (${relatedPlaceholders})) AS saved,
-       (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
-       MAX(COALESCE(p.comments_count, 0), (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden'))) AS live_comments_count,
-       MAX(COALESCE(p.saves_count, 0), (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id)) AS live_saves_count
-     FROM posts p JOIN users u ON p.user_id = u.id`,
-    `WHERE p.id = ? AND ${visiblePostWhere('u', 'p')} AND ${feedPhotoPostWhere('p')}`,
-  ].join(' ');
-  const p: any = await c.env.DB.prepare(postByIdSql).bind(userId, ...relatedUserIds, ...relatedUserIds, postId, ...visiblePostBindValues(userId)).first();
-  if (!p) return c.json({ detail: 'Post not found' }, 404);
-  const [postWithViewerState] = await overlaySupabaseViewerEngagement(c, [p], userId);
-  const likes = await c.env.DB.prepare('SELECT user_id FROM likes WHERE post_id = ?').bind(postId).all();
-  return c.json(postPayload(postWithViewerState || p, likes.results.map((l: any) => l.user_id), c.env));
 });
 
 api.post('/posts/:postId/like', authMiddleware, async (c) => {
@@ -15081,91 +14989,54 @@ api.post('/posts/:postId/like', authMiddleware, async (c) => {
   if (limited) return limited;
   const body: any = await c.req.json().catch(() => ({}));
   const requested = optionalBoolean(body.liked ?? body.like ?? body.value);
-  if (supabasePrimaryConfigured(c)) {
-    try {
-      const [visiblePost] = await supabaseReadVisiblePosts(c, userId, { postId, limit: 1 });
-      if (!visiblePost) return c.json({ detail: 'Post not found' }, 404);
-      const { state } = await setCanonicalPostLikeState(c, postId, userId, requested);
-      return c.json(postEngagementResponse(state));
-    } catch (error: any) {
-      console.warn(JSON.stringify({ event: 'supabase_post_like_failed', code: getErrorCode(error).slice(0, 180) }));
-      return c.json({ detail: 'Could not update like.' }, 500);
-    }
-  }
-  await ensureGovernanceSchema(c.env.DB);
-  await ensureMediaModerationSchema(c.env.DB);
-  await ensureLikeUniquenessSchema(c.env.DB);
-  const likeVisiblePostSql = [
-    `SELECT p.id, p.user_id,
-       (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS likes_count,
-       MAX(COALESCE(p.comments_count, 0), (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden'))) AS comments_count,
-       MAX(COALESCE(p.saves_count, 0), (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id)) AS saves_count,
-       EXISTS (SELECT 1 FROM likes lk WHERE lk.user_id = ? AND lk.post_id = p.id) AS is_liked,
-       EXISTS (SELECT 1 FROM saved_posts sp WHERE sp.user_id = ? AND sp.post_id = p.id) AS saved
-     FROM posts p JOIN users u ON p.user_id = u.id`,
-    `WHERE p.id = ? AND ${visiblePostWhere('u', 'p')} AND ${feedPhotoPostWhere('p')}`,
-  ].join(' ');
-  const visiblePost: any = await c.env.DB.prepare(likeVisiblePostSql).bind(userId, userId, postId, ...visiblePostBindValues(userId)).first();
-  if (!visiblePost) return c.json({ detail: 'Post not found' }, 404);
-
-  const { state, changed } = await setCanonicalPostLikeState(c, postId, userId, requested);
-  await c.env.DB.prepare('UPDATE discover_posts SET likes_count = ? WHERE id = ?')
-    .bind(state.likes_count, postId)
-    .run()
-    .catch(() => {});
-
-  if (state.liked && changed && (visiblePost as any).user_id !== userId) {
-    try {
-      const me: any = await c.env.DB.prepare('SELECT full_name FROM users WHERE id = ?').bind(userId).first();
-      await insertNotificationOnce(c, {
-        userId: (visiblePost as any).user_id,
-        type: 'like',
-        title: 'New Like',
-        body: `${me?.full_name || 'Someone'} liked your post`,
-        data: { post_id: postId, from_user_id: userId, actor_name: me?.full_name || 'Someone' },
-        dedupeKey: `like:${userId}:${postId}`,
-        dedupeSeconds: 86400,
+  try {
+    const [visiblePost] = await supabaseReadVisiblePosts(c, userId, { postId, limit: 1 });
+    if (!visiblePost) return c.json({ detail: 'Post not found' }, 404);
+    const { state, changed } = await setCanonicalPostLikeState(c, postId, userId, requested);
+    if (state.liked && changed && publicId((visiblePost as any).user_id, 120) !== userId) {
+      runBackgroundTask(c, 'supabase_like_notification_failed', async () => {
+        const me = await supabaseUserByAnyId(c, userId).catch(() => null);
+        await insertNotificationOnce(c, {
+          userId: publicId((visiblePost as any).user_id, 120),
+          type: 'like',
+          title: 'New Like',
+          body: `${cleanText(me?.full_name || me?.username || 'Someone', 80)} liked your post`,
+          data: { post_id: postId, from_user_id: userId, actor_name: cleanText(me?.full_name || me?.username || 'Someone', 80) },
+          dedupeKey: `like:${userId}:${postId}`,
+          dedupeSeconds: 86400,
+        });
       });
-    } catch {}
+    }
+    return c.json(postEngagementResponse(state));
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_post_like_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not update like.' }, 500);
   }
-
-  return c.json(postEngagementResponse(state));
 });
 
 api.delete('/posts/:postId', authMiddleware, async (c) => {
   const userId = getUserId(c); const postId = c.req.param('postId');
   const supabaseRequired = requireSupabasePrimaryDatabase(c, 'post_delete');
   if (supabaseRequired) return supabaseRequired;
-  if (supabasePrimaryConfigured(c)) {
-    try {
-      const owned = await supabaseOwnedAppPost(c, postId, userId);
-      if (owned.status !== 200) return c.json(owned.body, owned.status);
-      const metadata = parseJsonObject(owned.row?.metadata);
-      await supabaseAdminPatchRows(c, 'app_posts', { or: supabaseAppPostIdentityOrFilter(owned.identity) }, {
-        status: 'removed',
-        metadata: {
-          ...metadata,
-          removed_at: now(),
-          removed_reason: 'Deleted by creator',
-        },
-        updated_at: now(),
-      });
-      await logSecurityEvent(c, 'post_soft_deleted', userId, { post_id: postId });
-      return c.json({ deleted: true, soft_deleted: true });
-    } catch (error: any) {
-      console.warn(JSON.stringify({ event: 'supabase_post_delete_failed', code: getErrorCode(error).slice(0, 180) }));
-      return c.json({ detail: 'Could not delete post.' }, 500);
-    }
+  try {
+    const owned = await supabaseOwnedAppPost(c, postId, userId);
+    if (owned.status !== 200) return c.json(owned.body, owned.status);
+    const metadata = parseJsonObject(owned.row?.metadata);
+    await supabaseAdminPatchRows(c, 'app_posts', { or: supabaseAppPostIdentityOrFilter(owned.identity) }, {
+      status: 'removed',
+      metadata: {
+        ...metadata,
+        removed_at: now(),
+        removed_reason: 'Deleted by creator',
+      },
+      updated_at: now(),
+    });
+    await logSecurityEvent(c, 'post_soft_deleted', userId, { post_id: postId });
+    return c.json({ deleted: true, soft_deleted: true });
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_post_delete_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not delete post.' }, 500);
   }
-  await ensureGovernanceSchema(c.env.DB);
-  const post: any = await c.env.DB.prepare('SELECT user_id FROM posts WHERE id = ?').bind(postId).first();
-  if (!post) return c.json({ detail: 'Post not found' }, 404);
-  if (post.user_id !== userId) return c.json({ detail: 'Not your post' }, 403);
-  await c.env.DB.prepare("UPDATE posts SET status = 'removed', removed_at = ?, removed_reason = 'Deleted by creator' WHERE id = ?")
-    .bind(now(), postId).run();
-  await c.env.DB.prepare('UPDATE users SET posts_count = MAX(0, posts_count - 1) WHERE id = ?').bind(userId).run();
-  await logSecurityEvent(c, 'post_soft_deleted', userId, { post_id: postId });
-  return c.json({ deleted: true, soft_deleted: true });
 });
 
 api.put('/posts/:postId/visibility', authMiddleware, async (c) => {
@@ -15180,48 +15051,21 @@ api.put('/posts/:postId/visibility', authMiddleware, async (c) => {
   }
   const visibility = normalizeVisibility(requestedVisibility);
 
-  if (supabasePrimaryConfigured(c)) {
-    try {
-      const owned = await supabaseOwnedAppPost(c, postId, userId);
-      if (owned.status !== 200) return c.json(owned.body, owned.status);
-      await supabaseAdminPatchRows(c, 'app_posts', { or: supabaseAppPostIdentityOrFilter(owned.identity) }, {
-        visibility,
-        updated_at: now(),
-      });
-      await logSecurityEvent(c, 'post_visibility_updated', userId, { post_id: postId, visibility });
-      const [updated] = await supabaseReadVisiblePosts(c, userId, { postId, limit: 1 });
-      if (!updated) return c.json({ detail: 'Post not found' }, 404);
-      return c.json(postPayload(updated, [], c.env));
-    } catch (error: any) {
-      console.warn(JSON.stringify({ event: 'supabase_post_visibility_failed', code: getErrorCode(error).slice(0, 180) }));
-      return c.json({ detail: 'Could not update post visibility.' }, 500);
-    }
+  try {
+    const owned = await supabaseOwnedAppPost(c, postId, userId);
+    if (owned.status !== 200) return c.json(owned.body, owned.status);
+    await supabaseAdminPatchRows(c, 'app_posts', { or: supabaseAppPostIdentityOrFilter(owned.identity) }, {
+      visibility,
+      updated_at: now(),
+    });
+    await logSecurityEvent(c, 'post_visibility_updated', userId, { post_id: postId, visibility });
+    const [updated] = await supabaseReadVisiblePosts(c, userId, { postId, limit: 1 });
+    if (!updated) return c.json({ detail: 'Post not found' }, 404);
+    return c.json(postPayload(updated, [], c.env));
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_post_visibility_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not update post visibility.' }, 500);
   }
-
-  await ensurePrivacySchema(c.env.DB);
-  const post: any = await c.env.DB.prepare(
-    "SELECT id, user_id FROM posts WHERE id = ? AND COALESCE(status, 'active') != 'removed'"
-  ).bind(postId).first();
-  if (!post) return c.json({ detail: 'Post not found' }, 404);
-  if (post.user_id !== userId) return c.json({ detail: 'Not your post' }, 403);
-
-  await c.env.DB.prepare('UPDATE posts SET visibility = ? WHERE id = ?').bind(visibility, postId).run();
-  await logSecurityEvent(c, 'post_visibility_updated', userId, { post_id: postId, visibility });
-
-  const updated: any = await c.env.DB.prepare(
-    `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
-       EXISTS (SELECT 1 FROM follows fl WHERE fl.follower_id = ? AND fl.following_id = p.user_id) AS is_following,
-       EXISTS (SELECT 1 FROM likes lk WHERE lk.user_id = ? AND lk.post_id = p.id) AS is_liked,
-       EXISTS (SELECT 1 FROM saved_posts sp WHERE sp.user_id = ? AND sp.post_id = p.id) AS saved,
-       (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
-       (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden')) AS live_comments_count,
-       (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id) AS live_saves_count
-     FROM posts p JOIN users u ON p.user_id = u.id
-     WHERE p.id = ?`
-  ).bind(userId, userId, userId, postId).first();
-  if (!updated) return c.json({ detail: 'Post not found' }, 404);
-
-  return c.json(postPayload(updated, [], c.env));
 });
 
 api.put('/posts/:postId/pin', authMiddleware, async (c) => {
@@ -15233,56 +15077,26 @@ api.put('/posts/:postId/pin', authMiddleware, async (c) => {
   const requested = optionalBoolean(body.pinned ?? body.pin ?? body.value);
   const shouldPin = requested === null ? true : requested;
 
-  if (supabasePrimaryConfigured(c)) {
-    try {
-      const owned = await supabaseOwnedAppPost(c, postId, userId);
-      if (owned.status !== 200) return c.json(owned.body, owned.status);
-      const pinnedAt = shouldPin ? now() : null;
-      const metadata = parseJsonObject(owned.row?.metadata);
-      await supabaseAdminPatchRows(c, 'app_posts', { or: supabaseAppPostIdentityOrFilter(owned.identity) }, {
-        metadata: {
-          ...metadata,
-          pinned_at: pinnedAt,
-        },
-        updated_at: now(),
-      });
-      await logSecurityEvent(c, shouldPin ? 'post_pinned' : 'post_unpinned', userId, { post_id: postId });
-      const [updated] = await supabaseReadVisiblePosts(c, userId, { postId, limit: 1 });
-      if (!updated) return c.json({ detail: 'Post not found' }, 404);
-      return c.json(postPayload(updated, [], c.env));
-    } catch (error: any) {
-      console.warn(JSON.stringify({ event: 'supabase_post_pin_failed', code: getErrorCode(error).slice(0, 180) }));
-      return c.json({ detail: 'Could not update pinned post.' }, 500);
-    }
+  try {
+    const owned = await supabaseOwnedAppPost(c, postId, userId);
+    if (owned.status !== 200) return c.json(owned.body, owned.status);
+    const pinnedAt = shouldPin ? now() : null;
+    const metadata = parseJsonObject(owned.row?.metadata);
+    await supabaseAdminPatchRows(c, 'app_posts', { or: supabaseAppPostIdentityOrFilter(owned.identity) }, {
+      metadata: {
+        ...metadata,
+        pinned_at: pinnedAt,
+      },
+      updated_at: now(),
+    });
+    await logSecurityEvent(c, shouldPin ? 'post_pinned' : 'post_unpinned', userId, { post_id: postId });
+    const [updated] = await supabaseReadVisiblePosts(c, userId, { postId, limit: 1 });
+    if (!updated) return c.json({ detail: 'Post not found' }, 404);
+    return c.json(postPayload(updated, [], c.env));
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_post_pin_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not update pinned post.' }, 500);
   }
-
-  await ensurePrivacySchema(c.env.DB);
-  const post: any = await c.env.DB.prepare(
-    "SELECT id, user_id FROM posts WHERE id = ? AND COALESCE(status, 'active') != 'removed'"
-  ).bind(postId).first();
-  if (!post) return c.json({ detail: 'Post not found' }, 404);
-  if (post.user_id !== userId) return c.json({ detail: 'Not your post' }, 403);
-
-  const pinnedAt = shouldPin ? now() : null;
-  await c.env.DB.prepare('UPDATE posts SET pinned_at = ? WHERE id = ? AND user_id = ?')
-    .bind(pinnedAt, postId, userId)
-    .run();
-  await logSecurityEvent(c, shouldPin ? 'post_pinned' : 'post_unpinned', userId, { post_id: postId });
-
-  const updated: any = await c.env.DB.prepare(
-    `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
-       EXISTS (SELECT 1 FROM follows fl WHERE fl.follower_id = ? AND fl.following_id = p.user_id) AS is_following,
-       EXISTS (SELECT 1 FROM likes lk WHERE lk.user_id = ? AND lk.post_id = p.id) AS is_liked,
-       EXISTS (SELECT 1 FROM saved_posts sp WHERE sp.user_id = ? AND sp.post_id = p.id) AS saved,
-       (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
-       (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden')) AS live_comments_count,
-       (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id) AS live_saves_count
-     FROM posts p JOIN users u ON p.user_id = u.id
-     WHERE p.id = ?`
-  ).bind(userId, userId, userId, postId).first();
-  if (!updated) return c.json({ detail: 'Post not found' }, 404);
-
-  return c.json(postPayload(updated, [], c.env));
 });
 
 api.get('/users/:userId/posts', authMiddleware, async (c) => {
@@ -15292,45 +15106,13 @@ api.get('/users/:userId/posts', authMiddleware, async (c) => {
   const targetId = c.req.param('userId');
   const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
   const limit = clampNumber(c.req.query('limit') || '60', 1, 100, 60);
-  if (supabasePrimaryConfigured(c)) {
-    try {
-      const rows = await supabaseReadVisiblePosts(c, viewerId, { ownerId: targetId, limit, offset: skip, order: 'newest' });
-      return c.json(rows.map((p) => feedPostPayload(p, [], c.env)));
-    } catch (error: any) {
-      console.warn(JSON.stringify({ event: 'supabase_user_posts_read_failed', code: getErrorCode(error).slice(0, 180) }));
-      return c.json({ detail: 'Could not load profile posts.' }, 500);
-    }
+  try {
+    const rows = await supabaseReadVisiblePosts(c, viewerId, { ownerId: targetId, limit, offset: skip, order: 'newest' });
+    return c.json(rows.map((p) => feedPostPayload(p, [], c.env)));
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_user_posts_read_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not load profile posts.' }, 500);
   }
-  await ensurePrivacySchema(c.env.DB);
-  await ensureGovernanceSchema(c.env.DB);
-  await ensurePostEditorSchema(c.env.DB);
-  await ensureMediaModerationSchema(c.env.DB);
-  await ensureLikeUniquenessSchema(c.env.DB);
-  const owner: any = await c.env.DB.prepare('SELECT id, is_private FROM users WHERE id = ?').bind(targetId).first();
-  if (!owner) return c.json({ detail: 'User not found' }, 404);
-  if (!(await canViewUserContent(c.env.DB, viewerId, owner))) return c.json([]);
-  const posts = await c.env.DB.prepare(
-    `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
-       EXISTS (SELECT 1 FROM likes lk WHERE lk.user_id = ? AND lk.post_id = p.id) AS is_liked,
-       EXISTS (SELECT 1 FROM saved_posts sp WHERE sp.user_id = ? AND sp.post_id = p.id) AS saved,
-       (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
-       (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden')) AS live_comments_count,
-       (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id) AS live_saves_count
-     FROM posts p JOIN users u ON p.user_id = u.id
-     WHERE p.user_id = ? AND COALESCE(p.status, 'active') != 'removed' AND ${approvedPostModerationWhere('p')} AND ${feedPhotoPostWhere('p')} AND (
-       COALESCE(p.visibility, 'public') = 'public'
-       OR p.user_id = ?
-       OR (COALESCE(p.visibility, 'public') = 'followers' AND (
-         EXISTS (SELECT 1 FROM follows fl WHERE fl.follower_id = ? AND fl.following_id = p.user_id)
-         OR EXISTS (SELECT 1 FROM friendships f2 WHERE f2.user_id = ? AND f2.friend_id = p.user_id)
-       ))
-       OR (COALESCE(p.visibility, 'public') = 'friends' AND EXISTS (SELECT 1 FROM friendships f3 WHERE f3.user_id = ? AND f3.friend_id = p.user_id))
-     )
-      ORDER BY p.pinned_at IS NULL, p.pinned_at DESC, p.created_at DESC
-      LIMIT ? OFFSET ?`
-  ).bind(viewerId, viewerId, targetId, viewerId, viewerId, viewerId, viewerId, limit, skip).all();
-  const rows = await overlaySupabaseViewerEngagement(c, feedPhotoPostsOnly(posts.results as any[]), viewerId);
-  return c.json(rows.map((p) => feedPostPayload(p, [], c.env)));
 });
 
 // Comments
@@ -17645,33 +17427,14 @@ api.get('/library/liked', authMiddleware, async (c) => {
   if (supabaseRequired) return supabaseRequired;
   const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
   const limit = clampNumber(c.req.query('limit') || '40', 1, 80, 40);
-  if (supabasePrimaryConfigured(c)) {
-    try {
-      const postIds = await supabaseViewerInteractionPostIds(c, userId, 'like', { limit, offset: skip });
-      const rows = postIds.length ? await supabaseReadVisiblePosts(c, userId, { postIds, limit: postIds.length }) : [];
-      return c.json(rows.map((p) => feedPostPayload(p, [], c.env)));
-    } catch (error: any) {
-      console.warn(JSON.stringify({ event: 'supabase_liked_library_failed', code: getErrorCode(error).slice(0, 180) }));
-      return c.json({ detail: 'Could not load liked posts.' }, 500);
-    }
+  try {
+    const postIds = await supabaseViewerInteractionPostIds(c, userId, 'like', { limit, offset: skip });
+    const rows = postIds.length ? await supabaseReadVisiblePosts(c, userId, { postIds, limit: postIds.length }) : [];
+    return c.json(rows.map((p) => feedPostPayload(p, [], c.env)));
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_liked_library_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not load liked posts.' }, 500);
   }
-  await ensureLikeUniquenessSchema(c.env.DB);
-  const relatedUserIds = await relatedInteractionUserIds(c.env.DB, userId);
-  const relatedPlaceholders = inPlaceholders(relatedUserIds);
-  const likedLibrarySql = [
-    `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
-       1 AS is_liked,
-       EXISTS (SELECT 1 FROM saved_posts sp WHERE sp.post_id = p.id AND sp.user_id IN (${relatedPlaceholders})) AS saved,
-       (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
-       (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden')) AS live_comments_count,
-       (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id) AS live_saves_count
-     FROM likes l JOIN posts p ON l.post_id = p.id JOIN users u ON p.user_id = u.id`,
-    `WHERE l.user_id IN (${relatedPlaceholders}) AND ${visiblePostWhere('u', 'p')} AND ${feedPhotoPostWhere('p')}`,
-    'GROUP BY p.id ORDER BY MAX(l.created_at) DESC LIMIT ? OFFSET ?',
-  ].join(' ');
-  const r = await c.env.DB.prepare(likedLibrarySql).bind(...relatedUserIds, ...relatedUserIds, ...visiblePostBindValues(userId), limit, skip).all();
-  const rows = await overlaySupabaseViewerEngagement(c, feedPhotoPostsOnly(r.results as any[]), userId);
-  return c.json(rows.map((p) => feedPostPayload(p, [], c.env)));
 });
 api.get('/library/saved', authMiddleware, async (c) => {
   const userId = getUserId(c);
@@ -17680,42 +17443,14 @@ api.get('/library/saved', authMiddleware, async (c) => {
   const collection = c.req.query('collection');
   const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
   const limit = clampNumber(c.req.query('limit') || '40', 1, 80, 40);
-  if (supabasePrimaryConfigured(c)) {
-    try {
-      const postIds = await supabaseViewerInteractionPostIds(c, userId, 'save', { collection, limit, offset: skip });
-      const rows = postIds.length ? await supabaseReadVisiblePosts(c, userId, { postIds, limit: postIds.length }) : [];
-      return c.json(rows.map((p) => feedPostPayload(p, [], c.env)));
-    } catch (error: any) {
-      console.warn(JSON.stringify({ event: 'supabase_saved_library_failed', code: getErrorCode(error).slice(0, 180) }));
-      return c.json({ detail: 'Could not load bookmarks.' }, 500);
-    }
+  try {
+    const postIds = await supabaseViewerInteractionPostIds(c, userId, 'save', { collection, limit, offset: skip });
+    const rows = postIds.length ? await supabaseReadVisiblePosts(c, userId, { postIds, limit: postIds.length }) : [];
+    return c.json(rows.map((p) => feedPostPayload(p, [], c.env)));
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_saved_library_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not load bookmarks.' }, 500);
   }
-  await ensureLikeUniquenessSchema(c.env.DB);
-  const relatedUserIds = await relatedInteractionUserIds(c.env.DB, userId);
-  const relatedPlaceholders = inPlaceholders(relatedUserIds);
-  const savedLibraryBaseSql = [
-    `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image, sp.collection,
-      EXISTS (SELECT 1 FROM likes lk WHERE lk.post_id = p.id AND lk.user_id IN (${relatedPlaceholders})) AS is_liked,
-      1 AS saved,
-      (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
-      (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden')) AS live_comments_count,
-      (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id) AS live_saves_count
-    FROM saved_posts sp
-    JOIN posts p ON sp.post_id = p.id
-    JOIN users u ON p.user_id = u.id`,
-    `WHERE sp.user_id IN (${relatedPlaceholders}) AND ${visiblePostWhere('u', 'p')} AND ${feedPhotoPostWhere('p')}`,
-  ];
-  let sql = savedLibraryBaseSql.join(' ');
-  const binds: any[] = [...relatedUserIds, ...relatedUserIds, ...visiblePostBindValues(userId)];
-  if (collection) {
-    sql += ' AND sp.collection = ?';
-    binds.push(collection);
-  }
-  sql += ' GROUP BY p.id ORDER BY MAX(sp.created_at) DESC LIMIT ? OFFSET ?';
-  binds.push(limit, skip);
-  const r = await c.env.DB.prepare(sql).bind(...binds).all();
-  const rows = await overlaySupabaseViewerEngagement(c, feedPhotoPostsOnly(r.results as any[]), userId);
-  return c.json(rows.map((p) => feedPostPayload(p, [], c.env)));
 });
 api.post('/library/save/:postId', authMiddleware, async (c) => {
   const userId = getUserId(c);
@@ -17726,28 +17461,15 @@ api.post('/library/save/:postId', authMiddleware, async (c) => {
   const collection = cleanText((b as any).collection || 'Bookmarks', 80) || 'Bookmarks';
   const limited = await enforceRateLimit(c, 'save_post', userId, 240, 60);
   if (limited) return limited;
-  if (supabasePrimaryConfigured(c)) {
-    try {
-      const [post] = await supabaseReadVisiblePosts(c, userId, { postId, limit: 1 });
-      if (!post) return c.json({ detail: 'Post not found' }, 404);
-      const { state: engagement } = await setCanonicalPostSaveState(c, postId, userId, true, collection);
-      return c.json(postEngagementResponse(engagement, { collection }));
-    } catch (error: any) {
-      console.warn(JSON.stringify({ event: 'supabase_library_save_failed', code: getErrorCode(error).slice(0, 180) }));
-      return c.json({ detail: 'Could not save post.' }, 500);
-    }
+  try {
+    const [post] = await supabaseReadVisiblePosts(c, userId, { postId, limit: 1 });
+    if (!post) return c.json({ detail: 'Post not found' }, 404);
+    const { state: engagement } = await setCanonicalPostSaveState(c, postId, userId, true, collection);
+    return c.json(postEngagementResponse(engagement, { collection }));
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_library_save_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not save post.' }, 500);
   }
-  await ensureGovernanceSchema(c.env.DB);
-  await ensureMediaModerationSchema(c.env.DB);
-  await ensureLikeUniquenessSchema(c.env.DB);
-  const saveVisiblePostSql = [
-    'SELECT p.id FROM posts p JOIN users u ON p.user_id = u.id',
-    `WHERE p.id = ? AND ${visiblePostWhere('u', 'p')} AND ${feedPhotoPostWhere('p')} LIMIT 1`,
-  ].join(' ');
-  const post = await c.env.DB.prepare(saveVisiblePostSql).bind(postId, ...visiblePostBindValues(userId)).first();
-  if (!post) return c.json({ detail: 'Post not found' }, 404);
-  const { state: engagement } = await setCanonicalPostSaveState(c, postId, userId, true, collection);
-  return c.json(postEngagementResponse(engagement, { collection }));
 });
 api.delete('/library/save/:postId', authMiddleware, async (c) => {
   const userId = getUserId(c);
@@ -17756,42 +17478,24 @@ api.delete('/library/save/:postId', authMiddleware, async (c) => {
   const limited = await enforceRateLimit(c, 'save_post', userId, 240, 60);
   if (limited) return limited;
   const postId = c.req.param('postId');
-  if (supabasePrimaryConfigured(c)) {
-    try {
-      const { state: engagement } = await setCanonicalPostSaveState(c, postId, userId, false);
-      return c.json(postEngagementResponse(engagement, { unsaved: true }));
-    } catch (error: any) {
-      console.warn(JSON.stringify({ event: 'supabase_library_unsave_failed', code: getErrorCode(error).slice(0, 180) }));
-      return c.json({ detail: 'Could not remove bookmark.' }, 500);
-    }
+  try {
+    const { state: engagement } = await setCanonicalPostSaveState(c, postId, userId, false);
+    return c.json(postEngagementResponse(engagement, { unsaved: true }));
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_library_unsave_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not remove bookmark.' }, 500);
   }
-  await ensureGovernanceSchema(c.env.DB);
-  await ensureLikeUniquenessSchema(c.env.DB);
-  const { state: engagement } = await setCanonicalPostSaveState(c, postId, userId, false);
-  return c.json(postEngagementResponse(engagement, { unsaved: true }));
 });
 api.get('/library/collections', authMiddleware, async (c) => {
   const userId = getUserId(c);
   const supabaseRequired = requireSupabasePrimaryDatabase(c, 'library_collections_read');
   if (supabaseRequired) return supabaseRequired;
-  if (supabasePrimaryConfigured(c)) {
-    try {
-      return c.json(await supabaseViewerSaveCollectionCounts(c, userId));
-    } catch (error: any) {
-      console.warn(JSON.stringify({ event: 'supabase_library_collections_failed', code: getErrorCode(error).slice(0, 180) }));
-      return c.json({ detail: 'Could not load bookmark collections.' }, 500);
-    }
+  try {
+    return c.json(await supabaseViewerSaveCollectionCounts(c, userId));
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_library_collections_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not load bookmark collections.' }, 500);
   }
-  await ensureLikeUniquenessSchema(c.env.DB);
-  const relatedUserIds = await relatedInteractionUserIds(c.env.DB, userId);
-  const relatedPlaceholders = inPlaceholders(relatedUserIds);
-  const r = await c.env.DB.prepare(
-    `SELECT collection, COUNT(DISTINCT post_id) as count
-     FROM saved_posts
-     WHERE user_id IN (${relatedPlaceholders})
-     GROUP BY collection`
-  ).bind(...relatedUserIds).all();
-  return c.json(r.results);
 });
 
 // Friends
@@ -19252,90 +18956,29 @@ api.post('/discover/posts/:postId/like', authMiddleware, async (c) => {
   const requested = optionalBoolean(body.liked ?? body.like ?? body.value);
   const limited = await enforceRateLimit(c, 'discover_like', userId, 300, 60);
   if (limited) return limited;
-  if (supabasePrimaryConfigured(c)) {
-    try {
-      const [visiblePost] = await supabaseReadVisiblePosts(c, userId, { postId, limit: 1 });
-      if (!visiblePost) return c.json({ detail: 'Post not found' }, 404);
-      const { state } = await setCanonicalPostLikeState(c, postId, userId, requested);
-      return c.json(postEngagementResponse(state));
-    } catch (error: any) {
-      console.warn(JSON.stringify({ event: 'supabase_discover_like_failed', code: getErrorCode(error).slice(0, 180) }));
-      return c.json({ detail: 'Could not update like.' }, 500);
-    }
-  }
-  await ensureLikeUniquenessSchema(c.env.DB);
-
-  const canonicalPost = await c.env.DB.prepare('SELECT id FROM posts WHERE id = ?').bind(postId).first();
-  if (canonicalPost) {
-    await reconcileLegacyDiscoverLikes(c.env.DB, postId);
-    const likeVisiblePostSql = [
-      `SELECT p.id, p.user_id,
-         EXISTS (SELECT 1 FROM likes lk WHERE lk.user_id = ? AND lk.post_id = p.id) AS is_liked,
-         EXISTS (SELECT 1 FROM saved_posts sp WHERE sp.user_id = ? AND sp.post_id = p.id) AS saved
-       FROM posts p JOIN users u ON p.user_id = u.id`,
-      `WHERE p.id = ? AND ${visiblePostWhere('u', 'p')} AND ${feedPhotoPostWhere('p')}`,
-    ].join(' ');
-    const visiblePost: any = await c.env.DB.prepare(likeVisiblePostSql)
-      .bind(userId, userId, postId, ...visiblePostBindValues(userId))
-      .first();
+  try {
+    const [visiblePost] = await supabaseReadVisiblePosts(c, userId, { postId, limit: 1 });
     if (!visiblePost) return c.json({ detail: 'Post not found' }, 404);
-
     const { state, changed } = await setCanonicalPostLikeState(c, postId, userId, requested);
-    await c.env.DB.prepare('UPDATE discover_posts SET likes_count = ? WHERE id = ?')
-      .bind(state.likes_count, postId)
-      .run()
-      .catch(() => {});
-
-    if (state.liked && changed && visiblePost.user_id !== userId) {
-      try {
-        const me: any = await c.env.DB.prepare('SELECT full_name FROM users WHERE id = ?').bind(userId).first();
+    if (state.liked && changed && publicId((visiblePost as any).user_id, 120) !== userId) {
+      runBackgroundTask(c, 'supabase_discover_like_notification_failed', async () => {
+        const me = await supabaseUserByAnyId(c, userId).catch(() => null);
         await insertNotificationOnce(c, {
-          userId: visiblePost.user_id,
+          userId: publicId((visiblePost as any).user_id, 120),
           type: 'like',
           title: 'New Like',
-          body: `${me?.full_name || 'Someone'} liked your post`,
-          data: { post_id: postId, from_user_id: userId, actor_name: me?.full_name || 'Someone' },
+          body: `${cleanText(me?.full_name || me?.username || 'Someone', 80)} liked your post`,
+          data: { post_id: postId, from_user_id: userId, actor_name: cleanText(me?.full_name || me?.username || 'Someone', 80) },
           dedupeKey: `like:${userId}:${postId}`,
           dedupeSeconds: 86400,
         });
-      } catch {}
+      });
     }
-
     return c.json(postEngagementResponse(state));
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_discover_like_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not update like.' }, 500);
   }
-
-  let nextLiked = requested;
-  const relatedUserIds = await relatedInteractionUserIds(c.env.DB, userId);
-  const relatedPlaceholders = inPlaceholders(relatedUserIds);
-  if (nextLiked === null) {
-    const ex = await c.env.DB.prepare(
-      `SELECT id FROM discover_likes WHERE post_id = ? AND user_id IN (${relatedPlaceholders}) LIMIT 1`
-    ).bind(postId, ...relatedUserIds).first();
-    nextLiked = !ex;
-  }
-  const post = await c.env.DB.prepare('SELECT id FROM discover_posts WHERE id = ?').bind(postId).first();
-  if (!post) return c.json({ detail: 'Post not found' }, 404);
-  if (nextLiked) {
-    await c.env.DB.prepare(`DELETE FROM discover_likes WHERE post_id = ? AND user_id IN (${relatedPlaceholders})`)
-      .bind(postId, ...relatedUserIds)
-      .run();
-    await c.env.DB.prepare('INSERT OR IGNORE INTO discover_likes (id, user_id, post_id) VALUES (?, ?, ?)')
-      .bind(uuid(), userId, postId)
-      .run();
-  } else {
-    await c.env.DB.prepare(`DELETE FROM discover_likes WHERE post_id = ? AND user_id IN (${relatedPlaceholders})`)
-      .bind(postId, ...relatedUserIds)
-      .run();
-  }
-  const likeRow: any = await c.env.DB.prepare(
-    `SELECT COUNT(*) AS likes_count,
-      EXISTS (SELECT 1 FROM discover_likes WHERE post_id = ? AND user_id IN (${relatedPlaceholders})) AS liked
-     FROM discover_likes WHERE post_id = ?`
-  ).bind(postId, ...relatedUserIds, postId).first();
-  const likesCount = Math.max(0, Number(likeRow?.likes_count || 0));
-  const liked = likeRow?.liked === true || likeRow?.liked === 1 || likeRow?.liked === '1';
-  await c.env.DB.prepare('UPDATE discover_posts SET likes_count = ? WHERE id = ?').bind(likesCount, postId).run();
-  return c.json(postEngagementResponse({ liked, saved: false, likes_count: likesCount, comments_count: 0, saves_count: 0 }));
 });
 
 api.get('/discover/categories', async (c) => {
@@ -24246,28 +23889,14 @@ api.post('/bookmarks', authMiddleware, async (c) => {
   if (!postId) return c.json({ detail: 'post_id required' }, 400);
   const limited = await enforceRateLimit(c, 'save_post', userId, 240, 60);
   if (limited) return limited;
-  if (supabasePrimaryConfigured(c)) {
-    try {
-      const [post] = await supabaseReadVisiblePosts(c, userId, { postId, limit: 1 });
-      if (!post) return c.json({ detail: 'Post not found' }, 404);
-      const collectionName = cleanText(collection || 'saved', 80) || 'saved';
-      const { state: engagement } = await setCanonicalPostSaveState(c, postId, userId, true, collectionName);
-      return c.json(postEngagementResponse(engagement, { collection: collectionName }));
-    } catch (e: any) {
-      console.warn(JSON.stringify({ event: 'supabase_bookmark_save_failed', code: getErrorCode(e).slice(0, 180) }));
-      return c.json({ detail: 'Save failed. Please try again.' }, 500);
-    }
-  }
-  await ensureGovernanceSchema(c.env.DB);
-  await ensureLikeUniquenessSchema(c.env.DB);
   try {
-    const post = await c.env.DB.prepare('SELECT id FROM posts WHERE id = ?').bind(postId).first();
+    const [post] = await supabaseReadVisiblePosts(c, userId, { postId, limit: 1 });
     if (!post) return c.json({ detail: 'Post not found' }, 404);
     const collectionName = cleanText(collection || 'saved', 80) || 'saved';
     const { state: engagement } = await setCanonicalPostSaveState(c, postId, userId, true, collectionName);
     return c.json(postEngagementResponse(engagement, { collection: collectionName }));
   } catch (e: any) {
-    console.error('Bookmark save failed:', getErrorCode(e));
+    console.warn(JSON.stringify({ event: 'supabase_bookmark_save_failed', code: getErrorCode(e).slice(0, 180) }));
     return c.json({ detail: 'Save failed. Please try again.' }, 500);
   }
 });
@@ -24280,19 +23909,13 @@ api.delete('/bookmarks/:postId', authMiddleware, async (c) => {
   const limited = await enforceRateLimit(c, 'save_post', userId, 240, 60);
   if (limited) return limited;
   const postId = publicId(c.req.param('postId'), 120);
-  if (supabasePrimaryConfigured(c)) {
-    try {
-      const { state: engagement } = await setCanonicalPostSaveState(c, postId, userId, false);
-      return c.json(postEngagementResponse(engagement));
-    } catch (error: any) {
-      console.warn(JSON.stringify({ event: 'supabase_bookmark_delete_failed', code: getErrorCode(error).slice(0, 180) }));
-      return c.json({ detail: 'Could not remove bookmark.' }, 500);
-    }
+  try {
+    const { state: engagement } = await setCanonicalPostSaveState(c, postId, userId, false);
+    return c.json(postEngagementResponse(engagement));
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_bookmark_delete_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not remove bookmark.' }, 500);
   }
-  await ensureGovernanceSchema(c.env.DB);
-  await ensureLikeUniquenessSchema(c.env.DB);
-  const { state: engagement } = await setCanonicalPostSaveState(c, postId, userId, false);
-  return c.json(postEngagementResponse(engagement));
 });
 
 // Get saved posts by collection
@@ -24303,39 +23926,24 @@ api.get('/bookmarks', authMiddleware, async (c) => {
   const collection = cleanText(c.req.query('collection'), 80);
   const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
   const limit = clampNumber(c.req.query('limit') || '40', 1, 80, 40);
-  if (supabasePrimaryConfigured(c)) {
-    try {
-      const postIds = await supabaseViewerInteractionPostIds(c, userId, 'save', { collection, limit, offset: skip });
-      const rows = postIds.length ? await supabaseReadVisiblePosts(c, userId, { postIds, limit: postIds.length }) : [];
-      return c.json({
-        bookmarks: rows.map((post) => {
-          const payload = feedPostPayload(post, [], c.env);
-          return {
-            ...payload,
-            post_id: payload.id,
-            post_date: payload.created_at,
-            collection: collection || 'saved',
-          };
-        }),
-      });
-    } catch (error: any) {
-      console.warn(JSON.stringify({ event: 'supabase_bookmarks_read_failed', code: getErrorCode(error).slice(0, 180) }));
-      return c.json({ detail: 'Could not load bookmarks.' }, 500);
-    }
+  try {
+    const postIds = await supabaseViewerInteractionPostIds(c, userId, 'save', { collection, limit, offset: skip });
+    const rows = postIds.length ? await supabaseReadVisiblePosts(c, userId, { postIds, limit: postIds.length }) : [];
+    return c.json({
+      bookmarks: rows.map((post) => {
+        const payload = feedPostPayload(post, [], c.env);
+        return {
+          ...payload,
+          post_id: payload.id,
+          post_date: payload.created_at,
+          collection: collection || 'saved',
+        };
+      }),
+    });
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_bookmarks_read_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not load bookmarks.' }, 500);
   }
-  await ensureLikeUniquenessSchema(c.env.DB);
-  const relatedUserIds = await relatedInteractionUserIds(c.env.DB, userId);
-  const relatedPlaceholders = inPlaceholders(relatedUserIds);
-  let q = `SELECT b.*, p.content, p.image, p.images, p.likes_count, p.post_type, p.created_at as post_date, u.full_name, u.username, u.profile_image
-    FROM bookmarks b
-    JOIN posts p ON b.post_id = p.id
-    JOIN users u ON p.user_id = u.id
-    WHERE b.user_id IN (${relatedPlaceholders})`;
-  const binds: any[] = [...relatedUserIds];
-  if (collection) { q += ' AND b.collection = ?'; binds.push(collection); }
-  q += ' GROUP BY p.id ORDER BY MAX(b.created_at) DESC';
-  const { results } = await c.env.DB.prepare(q).bind(...binds).all();
-  return c.json({ bookmarks: results || [] });
 });
 
 // Check if post is saved
@@ -24343,44 +23951,31 @@ api.get('/bookmarks/check/:postId', authMiddleware, async (c) => {
   const userId = getUserId(c);
   const supabaseRequired = requireSupabasePrimaryDatabase(c, 'bookmark_check');
   if (supabaseRequired) return supabaseRequired;
-  const postId = c.req.param('postId');
-  if (supabaseEngagementConfigured(c)) {
-    try {
-      const relatedUserIds = await supabaseRelatedInteractionUserIds(c, userId);
-      const keys = await supabaseInteractionIdentityKeys(c, relatedUserIds);
-      const identity = await supabaseResolvePostIdentity(c, postId);
-      const rows: any[] = [];
-      if (keys.appUserIds.length) {
-        rows.push(...await supabaseAdminSelectRows(c, 'app_post_interactions', {
-          or: supabasePostIdentityOrFilter(identity),
-          kind: postgrestEqFilter('save'),
-          app_user_id: postgrestInFilter(keys.appUserIds),
-        }, 'collection', 1));
-      }
-      if (!rows.length && keys.authUserIds.length) {
-        rows.push(...await supabaseAdminSelectRows(c, 'app_post_interactions', {
-          or: supabasePostIdentityOrFilter(identity),
-          kind: postgrestEqFilter('save'),
-          user_id: postgrestInFilter(keys.authUserIds),
-        }, 'collection', 1));
-      }
-      if (rows.length) return c.json({ saved: true, collection: rows[0]?.collection || 'saved' });
-      if (supabasePrimaryConfigured(c)) return c.json({ saved: false, collection: null });
-    } catch (error: any) {
-      console.warn(JSON.stringify({ event: 'supabase_bookmark_check_failed', code: getErrorCode(error).slice(0, 180) }));
-      if (supabasePrimaryConfigured(c)) return c.json({ detail: 'Could not check bookmark state.' }, 500);
+  const postId = publicId(c.req.param('postId'), 120);
+  try {
+    const relatedUserIds = await supabaseRelatedInteractionUserIds(c, userId);
+    const keys = await supabaseInteractionIdentityKeys(c, relatedUserIds);
+    const identity = await supabaseResolvePostIdentity(c, postId);
+    const rows: any[] = [];
+    if (keys.appUserIds.length) {
+      rows.push(...await supabaseAdminSelectRows(c, 'app_post_interactions', {
+        or: supabasePostIdentityOrFilter(identity),
+        kind: postgrestEqFilter('save'),
+        app_user_id: postgrestInFilter(keys.appUserIds),
+      }, 'collection', 1));
     }
+    if (!rows.length && keys.authUserIds.length) {
+      rows.push(...await supabaseAdminSelectRows(c, 'app_post_interactions', {
+        or: supabasePostIdentityOrFilter(identity),
+        kind: postgrestEqFilter('save'),
+        user_id: postgrestInFilter(keys.authUserIds),
+      }, 'collection', 1));
+    }
+    return c.json({ saved: rows.length > 0, collection: rows[0]?.collection || null });
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_bookmark_check_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not check bookmark state.' }, 500);
   }
-  await ensureLikeUniquenessSchema(c.env.DB);
-  const relatedUserIds = await relatedInteractionUserIds(c.env.DB, userId);
-  const relatedPlaceholders = inPlaceholders(relatedUserIds);
-  const r: any = await c.env.DB.prepare(
-    `SELECT collection FROM bookmarks WHERE post_id = ? AND user_id IN (${relatedPlaceholders})
-     UNION
-     SELECT collection FROM saved_posts WHERE post_id = ? AND user_id IN (${relatedPlaceholders})
-     LIMIT 1`
-  ).bind(postId, ...relatedUserIds, postId, ...relatedUserIds).first();
-  return c.json({ saved: !!r, collection: r?.collection || null });
 });
 
 // Save a place (My Spots)
