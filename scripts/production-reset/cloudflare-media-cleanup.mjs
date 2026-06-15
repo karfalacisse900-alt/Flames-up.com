@@ -103,7 +103,9 @@ async function deleteCloudflareImage(asset) {
     method: 'DELETE',
     headers: authHeaders,
   });
-  return { ok: res.ok, status: res.status, body: await res.text() };
+  const body = await res.text();
+  if (res.status === 404) return { ok: true, alreadyDeleted: true, status: res.status, body };
+  return { ok: res.ok, status: res.status, body };
 }
 
 async function deleteCloudflareStream(asset) {
@@ -115,7 +117,9 @@ async function deleteCloudflareStream(asset) {
     method: 'DELETE',
     headers: authHeaders,
   });
-  return { ok: res.ok, status: res.status, body: await res.text() };
+  const body = await res.text();
+  if (res.status === 404) return { ok: true, alreadyDeleted: true, status: res.status, body };
+  return { ok: res.ok, status: res.status, body };
 }
 
 const supabaseAssets = await fetchAssets();
