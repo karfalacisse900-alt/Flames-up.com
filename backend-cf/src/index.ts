@@ -244,6 +244,12 @@ api.all('/people/*', retiredFeature('People profiles'));
 api.all('/admin/people/*', retiredFeature('People profile admin tools'));
 api.all('/premium', retiredFeature('Premium checkout'));
 api.all('/premium/*', retiredFeature('Premium checkout'));
+api.all('/calls', retiredFeature('Calls'));
+api.all('/calls/*', retiredFeature('Calls'));
+api.all('/places', retiredFeature('Legacy custom places'));
+api.all('/places/*', retiredFeature('Legacy custom places'));
+api.all('/saved-places', retiredFeature('Legacy saved places'));
+api.all('/saved-places/*', retiredFeature('Legacy saved places'));
 api.all('/discover/posts', retiredFeature('Legacy Discover posts'));
 api.all('/discover/posts/*', retiredFeature('Legacy Discover posts'));
 api.all('/admin/governance', retiredFeature('Legacy governance admin tools'));
@@ -12497,6 +12503,8 @@ api.post('/auth/supabase', async (c) => {
   try {
     const bodyTooLarge = rejectLargeRequest(c, 140_000);
     if (bodyTooLarge) return bodyTooLarge;
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'auth_supabase');
+    if (supabaseRequired) return supabaseRequired;
     const limited = await enforceRateLimit(c, 'auth_supabase', clientIp(c), 60, 300);
     if (limited) return limited;
     const body: any = await c.req.json().catch(() => ({}));
@@ -12523,6 +12531,8 @@ api.post('/auth/register', async (c) => {
   try {
     const bodyTooLarge = rejectLargeRequest(c, 80_000);
     if (bodyTooLarge) return bodyTooLarge;
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'auth_register');
+    if (supabaseRequired) return supabaseRequired;
     const limited = await enforceRateLimit(c, 'auth_register', clientIp(c), 8, 300);
     if (limited) return limited;
     const dailyLimited = await enforceRateLimit(c, 'auth_register_daily', clientIp(c), 20, 86400);
@@ -12681,6 +12691,8 @@ api.post('/auth/login', async (c) => {
   try {
     const bodyTooLarge = rejectLargeRequest(c, 60_000);
     if (bodyTooLarge) return bodyTooLarge;
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'auth_login');
+    if (supabaseRequired) return supabaseRequired;
     const body: any = await c.req.json().catch(() => ({}));
     const unknown = rejectUnknownFields(c, body, ['email', 'password']);
     if (unknown) return unknown;
@@ -12768,6 +12780,8 @@ api.post('/auth/login', async (c) => {
 
 api.post('/auth/phone/start', async (c) => {
   try {
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'phone_sign_in_start');
+    if (supabaseRequired) return supabaseRequired;
     if (supabasePrimaryConfigured(c)) {
       return c.json({
         detail: 'Phone sign in is not available. Use email, Google, or Apple sign in.',
@@ -12826,6 +12840,8 @@ api.post('/auth/phone/start', async (c) => {
 
 api.post('/auth/phone/verify', async (c) => {
   try {
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'phone_sign_in_verify');
+    if (supabaseRequired) return supabaseRequired;
     if (supabasePrimaryConfigured(c)) {
       return c.json({
         detail: 'Phone sign in is not available. Use email, Google, or Apple sign in.',
@@ -12906,6 +12922,8 @@ api.post('/auth/oauth/google', async (c) => {
   try {
     const bodyTooLarge = rejectLargeRequest(c, 120_000);
     if (bodyTooLarge) return bodyTooLarge;
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'oauth_google');
+    if (supabaseRequired) return supabaseRequired;
     const limited = await enforceRateLimit(c, 'oauth_google', clientIp(c), 30, 300);
     if (limited) return limited;
     if (!supabasePrimaryConfigured(c)) await ensureOAuthSchema(c.env.DB);
@@ -12979,6 +12997,8 @@ api.post('/auth/oauth/apple', async (c) => {
   try {
     const bodyTooLarge = rejectLargeRequest(c, 120_000);
     if (bodyTooLarge) return bodyTooLarge;
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'oauth_apple');
+    if (supabaseRequired) return supabaseRequired;
     const limited = await enforceRateLimit(c, 'oauth_apple', clientIp(c), 30, 300);
     if (limited) return limited;
     if (!supabasePrimaryConfigured(c)) await ensureOAuthSchema(c.env.DB);
@@ -13055,6 +13075,8 @@ api.post('/auth/oauth/apple', async (c) => {
 
 api.get('/auth/me', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'auth_me');
+  if (supabaseRequired) return supabaseRequired;
   if (supabasePrimaryConfigured(c)) {
     const user = await getSupabaseSessionUserByAnyId(c, userId);
     if (!user) return c.json({ detail: 'User not found' }, 404);
@@ -14087,30 +14109,7 @@ api.get('/users/me/email/verify-link', async (c) => {
       `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Captro Email Verified</title></head><body style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f6f4f1;color:#111"><main style="min-height:100vh;display:grid;place-items:center;padding:24px"><section style="max-width:520px;background:#fff;border-radius:28px;padding:28px;box-shadow:0 20px 60px rgba(0,0,0,.08)"><h1 style="margin:0 0 10px;font-size:26px">Email verified</h1><p style="font-size:16px;line-height:1.55;color:#555">Your Captro email is verified. You can return to the app.</p></section></main></body></html>`
     );
   }
-
-  await ensureAccountVerificationSchema(c.env.DB);
-  const row: any = await c.env.DB.prepare(
-    `SELECT id, user_id, email, expires_at, used_at
-     FROM email_verification_links
-     WHERE token_hash = ?
-     LIMIT 1`
-  ).bind(tokenHash).first();
-  if (!row || row.used_at) return fail();
-  if (!row.expires_at || Date.parse(row.expires_at) < Date.now()) {
-    await c.env.DB.prepare('UPDATE email_verification_links SET used_at = datetime(\'now\') WHERE id = ?').bind(row.id).run().catch(() => {});
-    return fail();
-  }
-
-  await c.env.DB.batch([
-    c.env.DB.prepare('UPDATE users SET email_verified = 1, updated_at = datetime(\'now\') WHERE id = ? AND LOWER(email) = LOWER(?)')
-      .bind(row.user_id, row.email),
-    c.env.DB.prepare('UPDATE email_verification_links SET used_at = datetime(\'now\') WHERE id = ?')
-      .bind(row.id),
-  ]);
-
-  return c.html(
-    `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Captro Email Verified</title></head><body style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f6f4f1;color:#111"><main style="min-height:100vh;display:grid;place-items:center;padding:24px"><section style="max-width:520px;background:#fff;border-radius:28px;padding:28px;box-shadow:0 20px 60px rgba(0,0,0,.08)"><h1 style="margin:0 0 10px;font-size:26px">Email verified</h1><p style="font-size:16px;line-height:1.55;color:#555">Your Captro email is verified. You can return to the app.</p></section></main></body></html>`
-  );
+  return fail('Email verification is temporarily unavailable. Please try again later.');
 });
 
 api.post('/users/me/email/start', authMiddleware, async (c) => {
@@ -19829,6 +19828,7 @@ api.get('/publisher/status', authMiddleware, async (c) => {
 
 // Discover posts (publisher content)
 api.post('/discover/posts', authMiddleware, async (c) => {
+  if (supabasePrimaryConfigured(c)) return retiredFeature('Legacy publisher Discover posts')(c);
   const bodyTooLarge = rejectLargeRequest(c, 1_000_000);
   if (bodyTooLarge) return bodyTooLarge;
   const userId = getUserId(c);
