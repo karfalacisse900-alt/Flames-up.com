@@ -15405,89 +15405,56 @@ api.post('/statuses', authMiddleware, async (c) => {
   if (audioProvider && !audioTrackId) {
     return c.json({ detail: 'Audio track id is required.' }, 400);
   }
-  if (audioProvider && supabasePrimaryConfigured(c) && await supabaseAudiusTrackIsHidden(c, audioTrackId)) {
+  if (audioProvider && await supabaseAudiusTrackIsHidden(c, audioTrackId)) {
     return c.json({ detail: 'This sound is unavailable.' }, 400);
   }
 
-  if (supabasePrimaryConfigured(c)) {
-    const users = await supabaseUsersByAnyIds(c, [userId]);
-    const user = users.get(userId) || {};
-    const createdAt = now();
-    const mediaUrl = String(b.image || '').startsWith('cfstream:')
-      ? String(b.image || '')
-      : isVideoMediaUrl(String(b.image || '')) ? streamPlaybackUrl(String(b.image || '')) : safeMediaReference(String(b.image || ''));
-    const audio = {
-      provider: audioProvider,
-      track_id: audioTrackId,
-      title: audioTitle,
-      artist: audioArtist,
-      artwork_url: audioArtworkUrl,
-      stream_url: audioStreamUrl,
-      start_time: audioStartTime,
-      duration: audioDuration,
-    };
-    await supabaseAdminUpsert(c, 'app_stories', [{
-      id,
-      user_id: userId,
-      content: cleanMultilineText(b.content || '', 2000),
-      media_url: mediaUrl || null,
-      media_type: storyIsVideo ? 'video' : cleanText(storyMediaType || 'image', 40),
-      background_color: cleanText(b.background_color || '#1B4332', 40),
-      text_color: cleanText(b.text_color || '#FFFFFF', 40),
-      visibility,
-      status: 'active',
-      duration_seconds: storyDurationSeconds || null,
-      audio,
-      metadata: {
-        source: 'worker_status_create',
-        original_media_url: cleanText(b.image || '', 2200),
-      },
-      legacy_created_at: createdAt,
-      created_at: createdAt,
-      updated_at: createdAt,
-      expires_at: expiresAt,
-    }], 'id');
+  const users = await supabaseUsersByAnyIds(c, [userId]);
+  const user = users.get(userId) || {};
+  const createdAt = now();
+  const mediaUrl = String(b.image || '').startsWith('cfstream:')
+    ? String(b.image || '')
+    : isVideoMediaUrl(String(b.image || '')) ? streamPlaybackUrl(String(b.image || '')) : safeMediaReference(String(b.image || ''));
+  const audio = {
+    provider: audioProvider,
+    track_id: audioTrackId,
+    title: audioTitle,
+    artist: audioArtist,
+    artwork_url: audioArtworkUrl,
+    stream_url: audioStreamUrl,
+    start_time: audioStartTime,
+    duration: audioDuration,
+  };
+  await supabaseAdminUpsert(c, 'app_stories', [{
+    id,
+    user_id: userId,
+    content: cleanMultilineText(b.content || '', 2000),
+    media_url: mediaUrl || null,
+    media_type: storyIsVideo ? 'video' : cleanText(storyMediaType || 'image', 40),
+    background_color: cleanText(b.background_color || '#1B4332', 40),
+    text_color: cleanText(b.text_color || '#FFFFFF', 40),
+    visibility,
+    status: 'active',
+    duration_seconds: storyDurationSeconds || null,
+    audio,
+    metadata: {
+      source: 'worker_status_create',
+      original_media_url: cleanText(b.image || '', 2200),
+    },
+    legacy_created_at: createdAt,
+    created_at: createdAt,
+    updated_at: createdAt,
+    expires_at: expiresAt,
+  }], 'id');
 
-    return c.json({
-      id, user_id: userId, content: cleanMultilineText(b.content || '', 2000),
-      image: mediaUrl,
-      background_color: b.background_color, text_color: b.text_color,
-      visibility, user_username: publicUsernameFor(user), user_full_name: user?.full_name, user_profile_image: user?.avatar_url || user?.profile_image,
-      audio_provider: audioProvider, audio_track_id: audioTrackId, audio_title: audioTitle, audio_artist: audioArtist,
-      audio_artwork_url: audioArtworkUrl, audio_stream_url: audioStreamUrl, audio_start_time: audioStartTime, audio_duration: audioDuration,
-      viewed_by: [], likes_count: 0, liked_by_me: false, created_at: createdAt, expires_at: expiresAt,
-    });
-  }
-
-  await ensureAudioSchema(c.env.DB);
-  const user: any = await c.env.DB.prepare('SELECT username, full_name, profile_image, city FROM users WHERE id = ?').bind(userId).first();
-  if (audioProvider) {
-    const hidden = await c.env.DB.prepare("SELECT track_id FROM hidden_sounds WHERE provider = 'audius' AND track_id = ?")
-      .bind(audioTrackId)
-      .first();
-    if (hidden) return c.json({ detail: 'This sound is unavailable.' }, 400);
-  }
-  await c.env.DB.prepare(
-    `INSERT INTO statuses (
-      id, user_id, content, image, background_color, text_color, visibility, expires_at,
-      audio_provider, audio_track_id, audio_title, audio_artist, audio_artwork_url, audio_stream_url,
-      audio_start_time, audio_duration
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  )
-    .bind(
-      id, userId, b.content || '', b.image || null, b.background_color || '#1B4332', b.text_color || '#FFFFFF', visibility, expiresAt,
-      audioProvider, audioTrackId, audioTitle, audioArtist, audioArtworkUrl, audioStreamUrl, audioStartTime, audioDuration
-    ).run();
   return c.json({
-    id, user_id: userId, content: b.content,
-    image: String(b.image || '').startsWith('cfstream:')
-      ? String(b.image || '')
-      : isVideoMediaUrl(String(b.image || '')) ? streamPlaybackUrl(String(b.image || '')) : safeMediaReference(String(b.image || '')),
+    id, user_id: userId, content: cleanMultilineText(b.content || '', 2000),
+    image: mediaUrl,
     background_color: b.background_color, text_color: b.text_color,
-    visibility, user_username: publicUsernameFor(user), user_full_name: user?.full_name, user_profile_image: user?.profile_image,
+    visibility, user_username: publicUsernameFor(user), user_full_name: user?.full_name, user_profile_image: user?.avatar_url || user?.profile_image,
     audio_provider: audioProvider, audio_track_id: audioTrackId, audio_title: audioTitle, audio_artist: audioArtist,
     audio_artwork_url: audioArtworkUrl, audio_stream_url: audioStreamUrl, audio_start_time: audioStartTime, audio_duration: audioDuration,
-    viewed_by: [], likes_count: 0, liked_by_me: false, created_at: now(), expires_at: expiresAt,
+    viewed_by: [], likes_count: 0, liked_by_me: false, created_at: createdAt, expires_at: expiresAt,
   });
 });
 
@@ -15495,44 +15462,16 @@ api.get('/statuses', authMiddleware, async (c) => {
   const userId = getUserId(c);
   const supabaseRequired = requireSupabasePrimaryDatabase(c, 'stories_read');
   if (supabaseRequired) return supabaseRequired;
-  if (supabasePrimaryConfigured(c)) {
-    const rows = await supabaseReadVisibleStories(c, userId);
-    return c.json(groupStatusRows(rows, userId));
-  }
-  await ensureStatusLikeSchema(c.env.DB);
-  const statusesSql = [
-    `SELECT s.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
-       (SELECT COUNT(*) FROM status_likes sl_count WHERE sl_count.status_id = s.id) AS likes_count,
-       EXISTS(SELECT 1 FROM status_likes sl WHERE sl.status_id = s.id AND sl.user_id = ?) AS liked_by_me`,
-    'FROM statuses s JOIN users u ON s.user_id = u.id',
-    `WHERE s.created_at >= datetime('now', '-7 days') AND ${visibleStatusWhere('u', 's')}`,
-    'ORDER BY s.created_at DESC',
-  ].join(' ');
-  const r = await c.env.DB.prepare(statusesSql).bind(userId, userId, userId).all();
-  return c.json(groupStatusRows(r.results as any[], userId));
+  const rows = await supabaseReadVisibleStories(c, userId);
+  return c.json(groupStatusRows(rows, userId));
 });
 
 api.get('/statuses/friends', authMiddleware, async (c) => {
   const userId = getUserId(c);
   const supabaseRequired = requireSupabasePrimaryDatabase(c, 'friends_stories_read');
   if (supabaseRequired) return supabaseRequired;
-  if (supabasePrimaryConfigured(c)) {
-    const rows = await supabaseReadVisibleStories(c, userId, true);
-    return c.json(groupStatusRows(rows, userId));
-  }
-  await ensureStatusLikeSchema(c.env.DB);
-  const r = await c.env.DB.prepare(
-    `SELECT s.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
-       (SELECT COUNT(*) FROM status_likes sl_count WHERE sl_count.status_id = s.id) AS likes_count,
-       EXISTS(SELECT 1 FROM status_likes sl WHERE sl.status_id = s.id AND sl.user_id = ?) AS liked_by_me
-     FROM statuses s JOIN users u ON s.user_id = u.id
-     WHERE s.created_at >= datetime('now', '-7 days')
-       AND s.user_id != ?
-       AND COALESCE(s.visibility, 'public') != 'private'
-       AND EXISTS (SELECT 1 FROM friendships f WHERE f.user_id = ? AND f.friend_id = s.user_id)
-     ORDER BY s.created_at DESC`
-  ).bind(userId, userId, userId).all();
-  return c.json(groupStatusRows(r.results as any[], userId));
+  const rows = await supabaseReadVisibleStories(c, userId, true);
+  return c.json(groupStatusRows(rows, userId));
 });
 
 api.post('/statuses/:statusId/like', authMiddleware, async (c) => {
@@ -15545,86 +15484,46 @@ api.post('/statuses/:statusId/like', authMiddleware, async (c) => {
   const body: any = await c.req.json().catch(() => ({}));
   const requested = optionalBoolean(body.liked ?? body.like ?? body.value);
 
-  if (supabasePrimaryConfigured(c)) {
-    const story = await supabaseGetVisibleStory(c, statusId, userId);
-    if (!story) return c.json({ detail: 'Story not found' }, 404);
-    if (publicId(story?.user_id, 120) === userId) {
-      return c.json({ detail: 'You cannot like your own story.' }, 400);
-    }
-    const existingRows = await supabaseAdminQueryRows(c, 'app_story_likes', {
+  const story = await supabaseGetVisibleStory(c, statusId, userId);
+  if (!story) return c.json({ detail: 'Story not found' }, 404);
+  if (publicId(story?.user_id, 120) === userId) {
+    return c.json({ detail: 'You cannot like your own story.' }, 400);
+  }
+  const existingRows = await supabaseAdminQueryRows(c, 'app_story_likes', {
+    select: 'story_id',
+    filters: {
+      story_id: postgrestEqFilter(statusId),
+      user_id: postgrestEqFilter(userId),
+    },
+    limit: 1,
+  });
+  const nextLiked = requested ?? !existingRows[0];
+  if (nextLiked) {
+    await supabaseAdminUpsert(c, 'app_story_likes', [{
+      story_id: statusId,
+      user_id: userId,
+      created_at: now(),
+    }], 'story_id,user_id');
+  } else {
+    await supabaseAdminDeleteRows(c, 'app_story_likes', {
+      story_id: postgrestEqFilter(statusId),
+      user_id: postgrestEqFilter(userId),
+    });
+  }
+  const [count, likedRows] = await Promise.all([
+    supabaseAdminCountRows(c, 'app_story_likes', { story_id: postgrestEqFilter(statusId) }),
+    supabaseAdminQueryRows(c, 'app_story_likes', {
       select: 'story_id',
       filters: {
         story_id: postgrestEqFilter(statusId),
         user_id: postgrestEqFilter(userId),
       },
       limit: 1,
-    });
-    const nextLiked = requested ?? !existingRows[0];
-    if (nextLiked) {
-      await supabaseAdminUpsert(c, 'app_story_likes', [{
-        story_id: statusId,
-        user_id: userId,
-        created_at: now(),
-      }], 'story_id,user_id');
-    } else {
-      await supabaseAdminDeleteRows(c, 'app_story_likes', {
-        story_id: postgrestEqFilter(statusId),
-        user_id: postgrestEqFilter(userId),
-      });
-    }
-    const [count, likedRows] = await Promise.all([
-      supabaseAdminCountRows(c, 'app_story_likes', { story_id: postgrestEqFilter(statusId) }),
-      supabaseAdminQueryRows(c, 'app_story_likes', {
-        select: 'story_id',
-        filters: {
-          story_id: postgrestEqFilter(statusId),
-          user_id: postgrestEqFilter(userId),
-        },
-        limit: 1,
-      }),
-    ]);
-    return c.json({
-      liked: !!likedRows[0],
-      likes_count: Math.max(0, Number(count || 0)),
-    });
-  }
-
-  await ensureStatusLikeSchema(c.env.DB);
-  await ensureLikeUniquenessSchema(c.env.DB);
-  const story: any = await c.env.DB.prepare(
-    [
-      'SELECT s.id, s.user_id FROM statuses s JOIN users u ON s.user_id = u.id',
-      `WHERE s.id = ? AND s.created_at >= datetime('now', '-7 days') AND ${visibleStatusWhere('u', 's')}`,
-      'LIMIT 1',
-    ].join(' ')
-  ).bind(statusId, userId, userId).first();
-  if (!story) return c.json({ detail: 'Story not found' }, 404);
-  if (await usersAreBlocked(c.env.DB, userId, story.user_id)) {
-    return c.json({ detail: 'You cannot like this story.' }, 403);
-  }
-
-  const existing: any = await c.env.DB.prepare('SELECT id FROM status_likes WHERE status_id = ? AND user_id = ?')
-    .bind(statusId, userId)
-    .first();
-  const nextLiked = requested ?? !existing;
-  if (nextLiked) {
-    await c.env.DB.prepare('INSERT OR IGNORE INTO status_likes (id, status_id, user_id, created_at) VALUES (?, ?, ?, ?)')
-      .bind(uuid(), statusId, userId, now())
-      .run();
-  } else {
-    await c.env.DB.prepare('DELETE FROM status_likes WHERE status_id = ? AND user_id = ?')
-      .bind(statusId, userId)
-      .run();
-  }
-
-  const row: any = await c.env.DB.prepare(
-    `SELECT COUNT(*) AS likes_count,
-      EXISTS(SELECT 1 FROM status_likes WHERE status_id = ? AND user_id = ?) AS liked_by_me
-     FROM status_likes WHERE status_id = ?`
-  ).bind(statusId, userId, statusId).first();
+    }),
+  ]);
   return c.json({
-    liked: row?.liked_by_me === true || row?.liked_by_me === 1 || row?.liked_by_me === '1',
-    likes_count: Math.max(0, Number(row?.likes_count || 0)),
+    liked: !!likedRows[0],
+    likes_count: Math.max(0, Number(count || 0)),
   });
 });
 
@@ -15632,25 +15531,14 @@ api.post('/statuses/:statusId/view', authMiddleware, async (c) => {
   const userId = getUserId(c); const statusId = c.req.param('statusId');
   const supabaseRequired = requireSupabasePrimaryDatabase(c, 'story_view');
   if (supabaseRequired) return supabaseRequired;
-  if (supabasePrimaryConfigured(c)) {
-    const cleanStatusId = publicId(statusId, 120);
-    const story = await supabaseGetVisibleStory(c, cleanStatusId, userId);
-    if (!story) return c.json({ detail: 'Not found' }, 404);
-    await supabaseAdminUpsert(c, 'app_story_views', [{
-      story_id: cleanStatusId,
-      user_id: userId,
-      created_at: now(),
-    }], 'story_id,user_id');
-    return c.json({ viewed: true });
-  }
-  const statusViewSql = [
-    'SELECT s.viewed_by FROM statuses s JOIN users u ON s.user_id = u.id',
-    `WHERE s.id = ? AND ${visibleStatusWhere('u', 's')}`,
-  ].join(' ');
-  const s: any = await c.env.DB.prepare(statusViewSql).bind(statusId, userId, userId).first();
-  if (!s) return c.json({ detail: 'Not found' }, 404);
-  const vb: string[] = JSON.parse(s.viewed_by || '[]');
-  if (!vb.includes(userId)) { vb.push(userId); await c.env.DB.prepare('UPDATE statuses SET viewed_by = ? WHERE id = ?').bind(JSON.stringify(vb), statusId).run(); }
+  const cleanStatusId = publicId(statusId, 120);
+  const story = await supabaseGetVisibleStory(c, cleanStatusId, userId);
+  if (!story) return c.json({ detail: 'Not found' }, 404);
+  await supabaseAdminUpsert(c, 'app_story_views', [{
+    story_id: cleanStatusId,
+    user_id: userId,
+    created_at: now(),
+  }], 'story_id,user_id');
   return c.json({ viewed: true });
 });
 
@@ -15660,66 +15548,39 @@ api.get('/statuses/:statusId/thoughts', authMiddleware, async (c) => {
   if (supabaseRequired) return supabaseRequired;
   const statusId = publicId(c.req.param('statusId'), 120);
   const limit = clampNumber(c.req.query('limit') || '24', 1, 40, 24);
-  if (supabasePrimaryConfigured(c)) {
-    const story = await supabaseGetVisibleStory(c, statusId, userId);
-    if (!story) return c.json({ detail: 'Story not found' }, 404);
-    const rows = await supabaseAdminQueryRows(c, 'app_story_thoughts', {
-      select: '*',
-      filters: {
-        story_id: postgrestEqFilter(statusId),
-        status: postgrestEqFilter('active'),
-      },
-      order: 'created_at.desc',
-      limit,
-    });
-    const senderIds = Array.from(new Set(rows.map((row) => publicId(row?.user_id, 120)).filter(Boolean)));
-    const [users, blockedIds] = await Promise.all([
-      supabaseUsersByAnyIds(c, senderIds),
-      supabaseBlockedUserIds(c, userId),
-    ]);
-    const payload = rows
-      .filter((row) => {
-        const thoughtUserId = publicId(row?.user_id, 120);
-        return thoughtUserId && !blockedIds.has(thoughtUserId) && supabaseUserIsActive(users.get(thoughtUserId));
-      })
-      .reverse()
-      .map((row) => {
-        const user = users.get(publicId(row?.user_id, 120)) || {};
-        return statusThoughtPayload({
-          ...row,
-          status_id: row.story_id,
-          user_username: user.username,
-          user_full_name: user.full_name,
-          user_profile_image: user.avatar_url,
-        });
-      });
-    return c.json(payload);
-  }
-  await ensureStatusThoughtSchema(c.env.DB);
-  const story: any = await c.env.DB.prepare(
-    [
-      'SELECT s.id FROM statuses s JOIN users u ON s.user_id = u.id',
-      `WHERE s.id = ? AND s.created_at >= datetime('now', '-7 days') AND ${visibleStatusWhere('u', 's')}`,
-      'LIMIT 1',
-    ].join(' ')
-  ).bind(statusId, userId, userId).first();
+  const story = await supabaseGetVisibleStory(c, statusId, userId);
   if (!story) return c.json({ detail: 'Story not found' }, 404);
-
-  const rows = await c.env.DB.prepare(
-    `SELECT st.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
-     FROM status_thoughts st
-     JOIN users u ON u.id = st.user_id
-     WHERE st.status_id = ?
-       AND COALESCE(st.status, 'active') = 'active'
-       AND NOT EXISTS (
-         SELECT 1 FROM blocks b
-         WHERE (b.blocker_id = ? AND b.blocked_id = st.user_id)
-            OR (b.blocker_id = st.user_id AND b.blocked_id = ?)
-       )
-     ORDER BY datetime(st.created_at) DESC
-     LIMIT ?`
-  ).bind(statusId, userId, userId, limit).all();
-  return c.json((rows.results as any[]).reverse().map(statusThoughtPayload));
+  const rows = await supabaseAdminQueryRows(c, 'app_story_thoughts', {
+    select: '*',
+    filters: {
+      story_id: postgrestEqFilter(statusId),
+      status: postgrestEqFilter('active'),
+    },
+    order: 'created_at.desc',
+    limit,
+  });
+  const senderIds = Array.from(new Set(rows.map((row) => publicId(row?.user_id, 120)).filter(Boolean)));
+  const [users, blockedIds] = await Promise.all([
+    supabaseUsersByAnyIds(c, senderIds),
+    supabaseBlockedUserIds(c, userId),
+  ]);
+  const payload = rows
+    .filter((row) => {
+      const thoughtUserId = publicId(row?.user_id, 120);
+      return thoughtUserId && !blockedIds.has(thoughtUserId) && supabaseUserIsActive(users.get(thoughtUserId));
+    })
+    .reverse()
+    .map((row) => {
+      const user = users.get(publicId(row?.user_id, 120)) || {};
+      return statusThoughtPayload({
+        ...row,
+        status_id: row.story_id,
+        user_username: user.username,
+        user_full_name: user.full_name,
+        user_profile_image: user.avatar_url,
+      });
+    });
+  return c.json(payload);
 });
 
 api.post('/statuses/:statusId/thoughts', authMiddleware, async (c) => {
@@ -15733,96 +15594,57 @@ api.post('/statuses/:statusId/thoughts', authMiddleware, async (c) => {
   const text = cleanText(body.body || body.text || body.thought || '', 180);
   if (!text) return c.json({ detail: 'Thought is required.' }, 400);
 
-  if (supabasePrimaryConfigured(c)) {
-    const story = await supabaseGetVisibleStory(c, statusId, userId);
-    if (!story) return c.json({ detail: 'Story not found' }, 404);
-    const storyOwnerId = publicId(story?.user_id, 120);
-    if (storyOwnerId && (await supabaseUserIdsAreBlocked(c, userId, storyOwnerId))) {
-      return c.json({ detail: 'You cannot share a thought on this story.' }, 403);
-    }
-    const id = uuid();
-    const createdAt = now();
-    await supabaseAdminUpsert(c, 'app_story_thoughts', [{
-      id,
-      story_id: statusId,
-      user_id: userId,
-      body: text,
-      status: 'active',
-      created_at: createdAt,
-      updated_at: createdAt,
-    }], 'id');
-    await logSecurityEvent(c, 'story_thought_created', userId, { status_id: statusId });
-
-    const users = await supabaseUsersByAnyIds(c, [userId]);
-    const user = users.get(userId) || {};
-    return c.json(statusThoughtPayload({
-      id,
-      status_id: statusId,
-      user_id: userId,
-      body: text,
-      created_at: createdAt,
-      user_username: user.username,
-      user_full_name: user.full_name,
-      user_profile_image: user.avatar_url,
-    }));
-  }
-
-  await ensureStatusThoughtSchema(c.env.DB);
-  const story: any = await c.env.DB.prepare(
-    [
-      'SELECT s.id, s.user_id FROM statuses s JOIN users u ON s.user_id = u.id',
-      `WHERE s.id = ? AND s.created_at >= datetime('now', '-7 days') AND ${visibleStatusWhere('u', 's')}`,
-      'LIMIT 1',
-    ].join(' ')
-  ).bind(statusId, userId, userId).first();
+  const story = await supabaseGetVisibleStory(c, statusId, userId);
   if (!story) return c.json({ detail: 'Story not found' }, 404);
-  if (await usersAreBlocked(c.env.DB, userId, story.user_id)) {
+  const storyOwnerId = publicId(story?.user_id, 120);
+  if (storyOwnerId && (await supabaseUserIdsAreBlocked(c, userId, storyOwnerId))) {
     return c.json({ detail: 'You cannot share a thought on this story.' }, 403);
   }
-
   const id = uuid();
   const createdAt = now();
-  await c.env.DB.prepare(
-    `INSERT INTO status_thoughts (id, status_id, user_id, body, status, created_at)
-     VALUES (?, ?, ?, ?, 'active', ?)`
-  ).bind(id, statusId, userId, text, createdAt).run();
+  await supabaseAdminUpsert(c, 'app_story_thoughts', [{
+    id,
+    story_id: statusId,
+    user_id: userId,
+    body: text,
+    status: 'active',
+    created_at: createdAt,
+    updated_at: createdAt,
+  }], 'id');
   await logSecurityEvent(c, 'story_thought_created', userId, { status_id: statusId });
 
-  const row: any = await c.env.DB.prepare(
-    `SELECT st.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
-     FROM status_thoughts st
-     JOIN users u ON u.id = st.user_id
-     WHERE st.id = ?`
-  ).bind(id).first();
-  return c.json(statusThoughtPayload(row));
+  const users = await supabaseUsersByAnyIds(c, [userId]);
+  const user = users.get(userId) || {};
+  return c.json(statusThoughtPayload({
+    id,
+    status_id: statusId,
+    user_id: userId,
+    body: text,
+    created_at: createdAt,
+    user_username: user.username,
+    user_full_name: user.full_name,
+    user_profile_image: user.avatar_url,
+  }));
 });
 
 api.delete('/statuses/:statusId', authMiddleware, async (c) => {
   const userId = getUserId(c); const statusId = c.req.param('statusId');
   const supabaseRequired = requireSupabasePrimaryDatabase(c, 'story_delete');
   if (supabaseRequired) return supabaseRequired;
-  if (supabasePrimaryConfigured(c)) {
-    const cleanStatusId = publicId(statusId, 120);
-    const rows = await supabaseAdminQueryRows(c, 'app_stories', {
-      select: 'id,user_id',
-      filters: { id: postgrestEqFilter(cleanStatusId) },
-      limit: 1,
-    });
-    const story = rows[0];
-    if (!story) return c.json({ detail: 'Story not found' }, 404);
-    if (publicId(story?.user_id, 120) !== userId) return c.json({ detail: 'Not your story' }, 403);
-    await supabaseAdminPatchRows(c, 'app_stories', { id: postgrestEqFilter(cleanStatusId) }, {
-      status: 'removed',
-      updated_at: now(),
-    });
-    await logSecurityEvent(c, 'story_deleted', userId, { status_id: cleanStatusId });
-    return c.json({ deleted: true });
-  }
-  const story: any = await c.env.DB.prepare('SELECT user_id FROM statuses WHERE id = ?').bind(statusId).first();
+  const cleanStatusId = publicId(statusId, 120);
+  const rows = await supabaseAdminQueryRows(c, 'app_stories', {
+    select: 'id,user_id',
+    filters: { id: postgrestEqFilter(cleanStatusId) },
+    limit: 1,
+  });
+  const story = rows[0];
   if (!story) return c.json({ detail: 'Story not found' }, 404);
-  if (story.user_id !== userId) return c.json({ detail: 'Not your story' }, 403);
-  await c.env.DB.prepare('DELETE FROM statuses WHERE id = ? AND user_id = ?').bind(statusId, userId).run();
-  await logSecurityEvent(c, 'story_deleted', userId, { status_id: statusId });
+  if (publicId(story?.user_id, 120) !== userId) return c.json({ detail: 'Not your story' }, 403);
+  await supabaseAdminPatchRows(c, 'app_stories', { id: postgrestEqFilter(cleanStatusId) }, {
+    status: 'removed',
+    updated_at: now(),
+  });
+  await logSecurityEvent(c, 'story_deleted', userId, { status_id: cleanStatusId });
   return c.json({ deleted: true });
 });
 
