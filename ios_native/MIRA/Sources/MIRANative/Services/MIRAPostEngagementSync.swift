@@ -166,7 +166,10 @@ public enum MIRAPostEngagementSync {
 
   private static func mergedViewerFlag(cached: Bool?, fresh: Bool?, cachedCount _: Int?, freshCount _: Int?) -> Bool? {
     guard let fresh else { return cached }
-    return fresh
+    // Confirmed local engagement is the current-device viewer truth. Server
+    // counts are still applied separately, so aggregate state stays aligned
+    // with Supabase without allowing duplicate likes after refresh.
+    return cached ?? fresh
   }
 
   private static func mergedCount(cached: Int?, fresh: Int?, cachedFlag _: Bool?, freshFlag _: Bool?) -> Int? {

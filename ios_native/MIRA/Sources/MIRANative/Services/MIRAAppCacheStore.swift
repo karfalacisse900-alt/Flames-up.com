@@ -308,7 +308,10 @@ actor MIRAAppCacheStore {
 
   private func mergedViewerFlag(cached: Bool?, fresh: Bool?, cachedCount _: Int?, freshCount _: Int?) -> Bool? {
     guard let fresh else { return cached }
-    return fresh
+    // Keep confirmed local engagement through cache-first refreshes. Supabase
+    // still supplies aggregate counts; this prevents stale viewer flags from
+    // making the same user appear able to like/save the same post again.
+    return cached ?? fresh
   }
 
   private func nowISO() -> String {
