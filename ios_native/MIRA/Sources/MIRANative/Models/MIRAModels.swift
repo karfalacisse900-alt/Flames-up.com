@@ -176,6 +176,7 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
   public let isLiked: Bool?
   public let isSaved: Bool?
   public let likedByMe: Bool?
+  public let liked: Bool?
   public let savedByMe: Bool?
   public let isFollowing: Bool?
   public let saved: FlexibleBool?
@@ -306,7 +307,7 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
   }
 
   public var viewerLikedValue: Bool? {
-    isLiked ?? likedByMe
+    isLiked ?? likedByMe ?? liked
   }
 
   public var viewerSavedValue: Bool? {
@@ -399,6 +400,7 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
       isLiked: liked ?? isLiked,
       isSaved: saved ?? isSaved,
       likedByMe: liked ?? likedByMe,
+      liked: liked ?? self.liked,
       savedByMe: saved ?? savedByMe,
       isFollowing: following ?? isFollowing,
       saved: self.saved,
@@ -477,6 +479,7 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
       isLiked: isLiked,
       isSaved: isSaved,
       likedByMe: likedByMe,
+      liked: liked,
       savedByMe: savedByMe,
       isFollowing: isFollowing,
       saved: saved,
