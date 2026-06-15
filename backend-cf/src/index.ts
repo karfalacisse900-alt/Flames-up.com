@@ -237,6 +237,15 @@ api.use('/music/*', async (c, next) => {
 });
 api.all('/admin/music', retiredFeature('Music admin tools'));
 api.all('/admin/music/*', retiredFeature('Music admin tools'));
+api.all('/recommendations', retiredFeature('Recommendations'));
+api.all('/recommendations/*', retiredFeature('Recommendations'));
+api.all('/people', retiredFeature('People profiles'));
+api.all('/people/*', retiredFeature('People profiles'));
+api.all('/admin/people/*', retiredFeature('People profile admin tools'));
+api.all('/premium', retiredFeature('Premium checkout'));
+api.all('/premium/*', retiredFeature('Premium checkout'));
+api.all('/discover/posts', retiredFeature('Legacy Discover posts'));
+api.all('/discover/posts/*', retiredFeature('Legacy Discover posts'));
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 const uuid = () => crypto.randomUUID();
 const now = () => new Date().toISOString();
@@ -17825,6 +17834,7 @@ api.post('/calls/voip-token', authMiddleware, async (c) => {
   const body: any = await c.req.json().catch(() => ({}));
   const token = String(body.token || '').trim().replace(/[^a-fA-F0-9]/g, '');
   if (token.length < 32) return c.json({ detail: 'Invalid VoIP token.' }, 400);
+  if (supabasePrimaryConfigured(c)) return c.json({ ok: true, disabled: true });
   await ensureAbuseProtectionSchema(c.env.DB);
   const timestamp = now();
   await c.env.DB.prepare(
@@ -17851,6 +17861,7 @@ api.post('/calls/voip-token', authMiddleware, async (c) => {
 
 api.post('/calls', authMiddleware, async (c) => {
   try {
+    if (supabasePrimaryConfigured(c)) return retiredFeature('Calls')(c);
     const phoneGate = await requirePhoneVerified(c, 'start video calls');
     if (phoneGate) return phoneGate;
     await ensureAbuseProtectionSchema(c.env.DB);
@@ -17922,6 +17933,7 @@ api.post('/calls', authMiddleware, async (c) => {
 });
 
 api.get('/calls/incoming', authMiddleware, async (c) => {
+  if (supabasePrimaryConfigured(c)) return c.json({ call: null });
   await ensureAbuseProtectionSchema(c.env.DB);
   const userId = getUserId(c);
   await expireRingingCalls(c.env.DB);
@@ -17935,6 +17947,7 @@ api.get('/calls/incoming', authMiddleware, async (c) => {
 });
 
 api.get('/calls/:callId', authMiddleware, async (c) => {
+  if (supabasePrimaryConfigured(c)) return c.json({ detail: 'Call not found.' }, 404);
   await ensureAbuseProtectionSchema(c.env.DB);
   const row: any = await getVisibleCallForUser(c.env.DB, c.req.param('callId'), getUserId(c));
   if (!row) return c.json({ detail: 'Call not found.' }, 404);
@@ -17942,6 +17955,7 @@ api.get('/calls/:callId', authMiddleware, async (c) => {
 });
 
 api.post('/calls/:callId/accept', authMiddleware, async (c) => {
+  if (supabasePrimaryConfigured(c)) return c.json({ detail: 'Call not found.' }, 404);
   await ensureAbuseProtectionSchema(c.env.DB);
   const userId = getUserId(c);
   const row: any = await getVisibleCallForUser(c.env.DB, c.req.param('callId'), userId);
@@ -17965,6 +17979,7 @@ api.post('/calls/:callId/accept', authMiddleware, async (c) => {
 });
 
 api.post('/calls/:callId/decline', authMiddleware, async (c) => {
+  if (supabasePrimaryConfigured(c)) return c.json({ detail: 'Call not found.' }, 404);
   await ensureAbuseProtectionSchema(c.env.DB);
   const userId = getUserId(c);
   const row: any = await getVisibleCallForUser(c.env.DB, c.req.param('callId'), userId);
@@ -17989,6 +18004,7 @@ api.post('/calls/:callId/decline', authMiddleware, async (c) => {
 });
 
 api.post('/calls/:callId/cancel', authMiddleware, async (c) => {
+  if (supabasePrimaryConfigured(c)) return c.json({ detail: 'Call not found.' }, 404);
   await ensureAbuseProtectionSchema(c.env.DB);
   const userId = getUserId(c);
   const row: any = await getVisibleCallForUser(c.env.DB, c.req.param('callId'), userId);
@@ -18010,6 +18026,7 @@ api.post('/calls/:callId/cancel', authMiddleware, async (c) => {
 });
 
 api.post('/calls/:callId/active', authMiddleware, async (c) => {
+  if (supabasePrimaryConfigured(c)) return c.json({ detail: 'Call not found.' }, 404);
   await ensureAbuseProtectionSchema(c.env.DB);
   const userId = getUserId(c);
   const row: any = await getVisibleCallForUser(c.env.DB, c.req.param('callId'), userId);
@@ -18024,6 +18041,7 @@ api.post('/calls/:callId/active', authMiddleware, async (c) => {
 });
 
 api.post('/calls/:callId/end', authMiddleware, async (c) => {
+  if (supabasePrimaryConfigured(c)) return c.json({ detail: 'Call not found.' }, 404);
   await ensureAbuseProtectionSchema(c.env.DB);
   const userId = getUserId(c);
   const row: any = await getVisibleCallForUser(c.env.DB, c.req.param('callId'), userId);
@@ -18041,6 +18059,7 @@ api.post('/calls/:callId/end', authMiddleware, async (c) => {
 
 api.post('/calls/agora/token', authMiddleware, async (c) => {
   try {
+    if (supabasePrimaryConfigured(c)) return retiredFeature('Calls')(c);
     const phoneGate = await requirePhoneVerified(c, 'start video calls');
     if (phoneGate) return phoneGate;
     const userId = getUserId(c);
