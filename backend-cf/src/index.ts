@@ -17741,54 +17741,15 @@ api.get('/discover', authMiddleware, async (c) => {
   if (!category) return c.json({ detail: 'Unknown Discover category.' }, 400);
   const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
   const limit = clampNumber(c.req.query('limit') || '36', 1, 60, 36);
-  if (supabasePrimaryConfigured(c)) {
-    try {
-      const discoverRows = await supabaseReadVisiblePosts(c, userId, { category, limit, offset: skip, order: 'newest' });
-      const response = c.json(discoverRows.map((post) => feedPostPayload(post, [], c.env)));
-      response.headers.set('cache-control', 'private, max-age=8');
-      return response;
-    } catch (error: any) {
-      console.warn(JSON.stringify({ event: 'supabase_discover_read_failed', code: getErrorCode(error).slice(0, 180) }));
-      return c.json({ detail: 'Could not load Discover.' }, 500);
-    }
+  try {
+    const discoverRows = await supabaseReadVisiblePosts(c, userId, { category, limit, offset: skip, order: 'newest' });
+    const response = c.json(discoverRows.map((post) => feedPostPayload(post, [], c.env)));
+    response.headers.set('cache-control', 'private, max-age=8');
+    return response;
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_discover_read_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not load Discover.' }, 500);
   }
-  await ensurePrivacySchema(c.env.DB);
-  await ensureGovernanceSchema(c.env.DB);
-  await ensurePostEditorSchema(c.env.DB);
-  await ensureLocationSchema(c.env.DB);
-  await ensureAutoCategorySchema(c.env.DB);
-  await ensureMediaModerationSchema(c.env.DB);
-  await ensureLikeUniquenessSchema(c.env.DB);
-  const relatedUserIds = await relatedInteractionUserIds(c.env.DB, userId);
-  const relatedPlaceholders = inPlaceholders(relatedUserIds);
-  const conditions = [
-    visiblePostWhere('u', 'p'),
-    "COALESCE(p.discover_blocked_at, '') = ''",
-    feedPhotoPostWhere('p'),
-  ];
-  const binds: any[] = [userId, ...relatedUserIds, ...relatedUserIds, ...visiblePostBindValues(userId)];
-  if (category !== 'all') {
-    const categoryMatch = discoverCategoryCondition('p', category);
-    conditions.push(categoryMatch.sql);
-    binds.push(...categoryMatch.binds);
-  }
-  const sql = [
-    `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
-       EXISTS (SELECT 1 FROM follows fl WHERE fl.follower_id = ? AND fl.following_id = p.user_id) AS is_following,
-       EXISTS (SELECT 1 FROM likes lk WHERE lk.post_id = p.id AND lk.user_id IN (${relatedPlaceholders})) AS is_liked,
-       EXISTS (SELECT 1 FROM saved_posts sp WHERE sp.post_id = p.id AND sp.user_id IN (${relatedPlaceholders})) AS saved,
-       (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
-       MAX(COALESCE(p.comments_count, 0), (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden'))) AS live_comments_count,
-       MAX(COALESCE(p.saves_count, 0), (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id)) AS live_saves_count
-     FROM posts p JOIN users u ON p.user_id = u.id`,
-    `WHERE ${conditions.join(' AND ')}`,
-    'ORDER BY p.created_at DESC LIMIT ? OFFSET ?',
-  ].join(' ');
-  const rows = await c.env.DB.prepare(sql).bind(...binds, limit, skip).all();
-  const discoverRows = await overlaySupabaseViewerEngagement(c, feedPhotoPostsOnly(rows.results as any[]), userId);
-  const response = c.json(discoverRows.map((post) => feedPostPayload(post, [], c.env)));
-  response.headers.set('cache-control', 'private, max-age=8');
-  return response;
 });
 
 api.get('/discover/trending', authMiddleware, async (c) => {
@@ -17796,32 +17757,13 @@ api.get('/discover/trending', authMiddleware, async (c) => {
   const supabaseRequired = requireSupabasePrimaryDatabase(c, 'discover_trending_read');
   if (supabaseRequired) return supabaseRequired;
   const limit = clampNumber(c.req.query('limit') || '20', 1, 40, 20);
-  if (supabasePrimaryConfigured(c)) {
-    try {
-      const rows = await supabaseReadVisiblePosts(c, userId, { limit, order: 'trending' });
-      return c.json(rows.map((p) => feedPostPayload(p, [], c.env)));
-    } catch (error: any) {
-      console.warn(JSON.stringify({ event: 'supabase_discover_trending_failed', code: getErrorCode(error).slice(0, 180) }));
-      return c.json({ detail: 'Could not load trending posts.' }, 500);
-    }
+  try {
+    const rows = await supabaseReadVisiblePosts(c, userId, { limit, order: 'trending' });
+    return c.json(rows.map((p) => feedPostPayload(p, [], c.env)));
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_discover_trending_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not load trending posts.' }, 500);
   }
-    await ensurePrivacySchema(c.env.DB);
-    await ensureGovernanceSchema(c.env.DB);
-    await ensurePostEditorSchema(c.env.DB);
-    await ensureLocationSchema(c.env.DB);
-    await ensureMediaModerationSchema(c.env.DB);
-  const discoverTrendingSql = [
-    `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
-       (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
-       MAX(COALESCE(p.comments_count, 0), (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden'))) AS live_comments_count,
-       MAX(COALESCE(p.saves_count, 0), (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id)) AS live_saves_count`,
-    'FROM posts p JOIN users u ON p.user_id = u.id',
-    `WHERE ${visiblePostWhere('u', 'p')} AND ${feedPhotoPostWhere('p')}`,
-    'ORDER BY p.likes_count DESC, p.created_at DESC LIMIT ?',
-  ].join(' ');
-  const r = await c.env.DB.prepare(discoverTrendingSql).bind(...visiblePostBindValues(userId), limit).all();
-  const rows = await overlaySupabaseViewerEngagement(c, feedPhotoPostsOnly(r.results as any[]), userId);
-  return c.json(rows.map((p) => feedPostPayload(p, [], c.env)));
 });
 api.get('/discover/search', authMiddleware, async (c) => {
   const userId = getUserId(c);
@@ -17832,61 +17774,39 @@ api.get('/discover/search', authMiddleware, async (c) => {
   const q = cleanText(c.req.query('q'), 80);
   if (q.length < 2) return c.json({ posts: [], users: [] });
   const limit = clampNumber(c.req.query('limit') || '20', 1, 30, 20);
-  if (supabasePrimaryConfigured(c)) {
-    try {
-      const [posts, users] = await Promise.all([
-        supabaseReadVisiblePosts(c, userId, { search: q, limit, order: 'newest' }),
-        supabaseAdminQueryRows(c, 'app_users', {
-          select: 'id,username,full_name,avatar_url,bio,city,is_private,is_verified,counts,profile,metadata',
-          filters: {
-            or: `(username.ilike.*${postgrestSearchTerm(q)}*,full_name.ilike.*${postgrestSearchTerm(q)}*)`,
-          },
-          limit: 10,
-        }).catch(() => []),
-      ]);
-      return c.json({
-        posts: posts.map((p) => feedPostPayload(p, [], c.env)),
-        users: users
-          .filter((user: any) => supabaseUserStatus(user) === 'active')
-          .map((user: any) => safeUserPayload({
-            id: user.id,
-            username: user.username,
-            full_name: user.full_name,
-            profile_image: user.avatar_url,
-            bio: user.bio,
-            city: user.city,
-            is_private: user.is_private,
-            is_verified: user.is_verified,
-            followers_count: Number(parseJsonObject(user.counts).followers_count || 0),
-            following_count: Number(parseJsonObject(user.counts).following_count || 0),
-            posts_count: Number(parseJsonObject(user.counts).posts_count || 0),
-          })),
-      });
-    } catch (error: any) {
-      console.warn(JSON.stringify({ event: 'supabase_discover_search_failed', code: getErrorCode(error).slice(0, 180) }));
-      return c.json({ detail: 'Could not search Discover.' }, 500);
-    }
+  try {
+    const [posts, users] = await Promise.all([
+      supabaseReadVisiblePosts(c, userId, { search: q, limit, order: 'newest' }),
+      supabaseAdminQueryRows(c, 'app_users', {
+        select: 'id,username,full_name,avatar_url,bio,city,is_private,is_verified,counts,profile,metadata',
+        filters: {
+          or: `(username.ilike.*${postgrestSearchTerm(q)}*,full_name.ilike.*${postgrestSearchTerm(q)}*)`,
+        },
+        limit: 10,
+      }).catch(() => []),
+    ]);
+    return c.json({
+      posts: posts.map((p) => feedPostPayload(p, [], c.env)),
+      users: users
+        .filter((user: any) => supabaseUserStatus(user) === 'active')
+        .map((user: any) => safeUserPayload({
+          id: user.id,
+          username: user.username,
+          full_name: user.full_name,
+          profile_image: user.avatar_url,
+          bio: user.bio,
+          city: user.city,
+          is_private: user.is_private,
+          is_verified: user.is_verified,
+          followers_count: Number(parseJsonObject(user.counts).followers_count || 0),
+          following_count: Number(parseJsonObject(user.counts).following_count || 0),
+          posts_count: Number(parseJsonObject(user.counts).posts_count || 0),
+        })),
+    });
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_discover_search_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not search Discover.' }, 500);
   }
-  await ensurePrivacySchema(c.env.DB);
-  await ensureGovernanceSchema(c.env.DB);
-  await ensurePostEditorSchema(c.env.DB);
-  await ensureLocationSchema(c.env.DB);
-  await ensureMediaModerationSchema(c.env.DB);
-  const discoverSearchSql = [
-    `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
-       (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
-       MAX(COALESCE(p.comments_count, 0), (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden'))) AS live_comments_count,
-       MAX(COALESCE(p.saves_count, 0), (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id)) AS live_saves_count`,
-    'FROM posts p JOIN users u ON p.user_id = u.id',
-    `WHERE p.content LIKE ? AND ${visiblePostWhere('u', 'p')} AND ${feedPhotoPostWhere('p')}`,
-    'LIMIT ?',
-  ].join(' ');
-  const posts = await c.env.DB.prepare(discoverSearchSql).bind(`%${q}%`, ...visiblePostBindValues(userId), limit).all();
-  const users = await c.env.DB.prepare(
-    "SELECT id, username, full_name, profile_image, bio, is_private FROM users WHERE COALESCE(status, 'active') = 'active' AND (username LIKE ? OR full_name LIKE ?) LIMIT 10"
-  ).bind(`%${q}%`, `%${q}%`).all();
-  const searchRows = await overlaySupabaseViewerEngagement(c, feedPhotoPostsOnly(posts.results as any[]), userId);
-  return c.json({ posts: searchRows.map((p) => feedPostPayload(p, [], c.env)), users: (users.results as any[]).map((user) => safeUserPayload(user)) });
 });
 api.get('/discover/suggested-users', authMiddleware, async (c) => {
   const userId = getUserId(c);
@@ -17894,37 +17814,31 @@ api.get('/discover/suggested-users', authMiddleware, async (c) => {
   if (supabaseRequired) return supabaseRequired;
   const limited = await enforceRateLimit(c, 'suggested_users_read', userId, 120, 60);
   if (limited) return limited;
-  if (supabasePrimaryConfigured(c)) {
-    try {
-      const [viewerAliases, blockedIds, rows] = await Promise.all([
-        supabaseRelatedInteractionUserIds(c, userId),
-        supabaseBlockedUserIds(c, userId),
-        supabaseAdminQueryRows(c, 'app_users', {
-          select: SUPABASE_APP_USER_SELECT,
-          order: 'created_at.desc',
-          limit: 80,
-        }),
-      ]);
-      const hiddenIds = new Set([...viewerAliases, ...blockedIds].filter(Boolean));
-      const suggestions = rows
-        .filter((row: any) => {
-          const appUserId = publicId(row?.id, 120);
-          const authUserId = isUuidText(row?.supabase_user_id);
-          return appUserId && supabaseUserStatus(row) === 'active' && !hiddenIds.has(appUserId) && (!authUserId || !hiddenIds.has(authUserId));
-        })
-        .sort((a: any, b: any) => Number(parseJsonObject(b?.counts).followers_count || 0) - Number(parseJsonObject(a?.counts).followers_count || 0))
-        .slice(0, 10)
-        .map((row: any) => safeUserPayload(supabaseAppUserToLegacyUser(row)));
-      return c.json(suggestions);
-    } catch (error: any) {
-      console.warn(JSON.stringify({ event: 'supabase_suggested_users_failed', code: getErrorCode(error).slice(0, 180) }));
-      return c.json({ detail: 'Could not load suggested users.' }, 500);
-    }
+  try {
+    const [viewerAliases, blockedIds, rows] = await Promise.all([
+      supabaseRelatedInteractionUserIds(c, userId),
+      supabaseBlockedUserIds(c, userId),
+      supabaseAdminQueryRows(c, 'app_users', {
+        select: SUPABASE_APP_USER_SELECT,
+        order: 'created_at.desc',
+        limit: 80,
+      }),
+    ]);
+    const hiddenIds = new Set([...viewerAliases, ...blockedIds].filter(Boolean));
+    const suggestions = rows
+      .filter((row: any) => {
+        const appUserId = publicId(row?.id, 120);
+        const authUserId = isUuidText(row?.supabase_user_id);
+        return appUserId && supabaseUserStatus(row) === 'active' && !hiddenIds.has(appUserId) && (!authUserId || !hiddenIds.has(authUserId));
+      })
+      .sort((a: any, b: any) => Number(parseJsonObject(b?.counts).followers_count || 0) - Number(parseJsonObject(a?.counts).followers_count || 0))
+      .slice(0, 10)
+      .map((row: any) => safeUserPayload(supabaseAppUserToLegacyUser(row)));
+    return c.json(suggestions);
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_suggested_users_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not load suggested users.' }, 500);
   }
-  const r = await c.env.DB.prepare(
-    "SELECT id, username, full_name, profile_image, bio, followers_count FROM users WHERE id != ? AND COALESCE(status, 'active') = 'active' ORDER BY followers_count DESC LIMIT 10"
-  ).bind(userId).all();
-  return c.json((r.results as any[]).map((user) => safeUserPayload(user)));
 });
 
 // Pre-publish media moderation upload flow.
@@ -18653,35 +18567,14 @@ api.get('/discover/feed', authMiddleware, async (c) => {
   const limit = clampNumber(c.req.query('limit') || '30', 1, 60, 30);
   const normalizedCategory = normalizeDiscoverCategory(category, true);
   if (!normalizedCategory) return c.json({ detail: 'Unknown Discover category.' }, 400);
-  if (supabasePrimaryConfigured(c)) {
-    try {
-      const userId = getUserId(c);
-      const rows = await supabaseReadVisiblePosts(c, userId, { category: normalizedCategory, limit, offset: skip, order: 'newest' });
-      return c.json(rows.map((p) => feedPostPayload(p, [], c.env)));
-    } catch (error: any) {
-      console.warn(JSON.stringify({ event: 'supabase_discover_feed_failed', code: getErrorCode(error).slice(0, 180) }));
-      return c.json({ detail: 'Could not load Discover.' }, 500);
-    }
+  try {
+    const userId = getUserId(c);
+    const rows = await supabaseReadVisiblePosts(c, userId, { category: normalizedCategory, limit, offset: skip, order: 'newest' });
+    return c.json(rows.map((p) => feedPostPayload(p, [], c.env)));
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_discover_feed_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not load Discover.' }, 500);
   }
-  let sql = `SELECT dp.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image FROM discover_posts dp JOIN users u ON dp.user_id = u.id`;
-  const binds: any[] = [];
-  if (category !== 'all') {
-    sql += ' WHERE dp.category = ?';
-    binds.push(category);
-  }
-  sql += ' ORDER BY dp.created_at DESC LIMIT ? OFFSET ?';
-  binds.push(limit, skip);
-  const r = binds.length ? await c.env.DB.prepare(sql).bind(...binds).all() : await c.env.DB.prepare(sql).all();
-  return c.json((r.results as any[]).map(p => {
-    const images = sanitizeMediaReferences(p.images, p.image);
-    return {
-      ...p,
-      image: safeMediaReference(p.image) || images[0] || '',
-      images,
-      user_username: publicUsernameFor({ username: p.user_username }),
-      user_profile_image: safeMediaReference(p.user_profile_image),
-    };
-  }));
 });
 
 api.post('/discover/posts/:postId/like', authMiddleware, async (c) => {
