@@ -3775,6 +3775,7 @@ async function resolveReportTarget(c: any, reporterId: string, type: string, rep
   if (supabasePrimaryConfigured(c)) {
     const supabaseTarget = await supabaseResolveReportTarget(c, reporterId, type, reportedId);
     if (supabaseTarget) return supabaseTarget;
+    return { ok: false, status: 404, detail: 'Reported content was not found.' };
   }
 
   try {
@@ -3958,7 +3959,8 @@ async function blockUserForReporter(c: any, blockerId: string, blockedId: string
 }
 
 async function submitReportRequest(c: any) {
-  if (!supabasePrimaryConfigured(c)) await ensureAdminModerationSchema(c.env.DB);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'report_submit');
+  if (supabaseRequired) return supabaseRequired;
   const bodyTooLarge = rejectLargeRequest(c, 50_000);
   if (bodyTooLarge) return bodyTooLarge;
   const reporterId = getUserId(c);
@@ -14392,6 +14394,8 @@ api.post('/users/:userId/follow', authMiddleware, async (c) => {
   const userId = getUserId(c);
   const targetId = c.req.param('userId');
   if (userId === targetId) return c.json({ detail: 'Cannot follow yourself' }, 400);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'follow');
+  if (supabaseRequired) return supabaseRequired;
   const limited = await enforceRateLimit(c, 'follow', userId, 120, 60);
   if (limited) return limited;
   const body: any = await c.req.json().catch(() => ({}));
@@ -14469,6 +14473,8 @@ api.post('/users/:userId/block', authMiddleware, async (c) => {
   const blockerId = getUserId(c);
   const blockedId = c.req.param('userId');
   if (blockerId === blockedId) return c.json({ detail: 'You cannot block yourself.' }, 400);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'block_user');
+  if (supabaseRequired) return supabaseRequired;
   const limited = await enforceRateLimit(c, 'block_user', blockerId, 40, 60);
   if (limited) return limited;
   if (supabasePrimaryConfigured(c)) {
@@ -14489,6 +14495,8 @@ api.post('/users/:userId/block', authMiddleware, async (c) => {
 api.delete('/users/:userId/block', authMiddleware, async (c) => {
   const blockerId = getUserId(c);
   const blockedId = c.req.param('userId');
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'unblock_user');
+  if (supabaseRequired) return supabaseRequired;
   const limited = await enforceRateLimit(c, 'unblock_user', blockerId, 40, 60);
   if (limited) return limited;
   if (supabasePrimaryConfigured(c)) {
@@ -14502,6 +14510,8 @@ api.delete('/users/:userId/block', authMiddleware, async (c) => {
 
 api.get('/blocks', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'blocks_read');
+  if (supabaseRequired) return supabaseRequired;
   const limited = await enforceRateLimit(c, 'blocks_read', userId, 60, 60);
   if (limited) return limited;
   if (supabasePrimaryConfigured(c)) {
@@ -16118,6 +16128,8 @@ api.get('/posts/:postId/comments', authMiddleware, async (c) => {
 api.post('/comments/:commentId/like', authMiddleware, async (c) => {
   try {
     const userId = getUserId(c);
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'comment_like');
+    if (supabaseRequired) return supabaseRequired;
     const limited = await enforceRateLimit(c, 'comment_like', userId, 300, 60);
     if (limited) return limited;
     const body: any = await c.req.json().catch(() => ({}));
@@ -16178,6 +16190,8 @@ api.post('/comments/:commentId/like', authMiddleware, async (c) => {
 api.post('/comments/:commentId/pin', authMiddleware, async (c) => {
   try {
     const userId = getUserId(c);
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'comment_pin');
+    if (supabaseRequired) return supabaseRequired;
     const commentId = c.req.param('commentId');
     const body: any = await c.req.json().catch(() => ({}));
     const requested = optionalBoolean(body.pinned ?? body.pin ?? body.value);
@@ -16221,6 +16235,8 @@ api.post('/comments/:commentId/pin', authMiddleware, async (c) => {
 api.delete('/comments/:commentId', authMiddleware, async (c) => {
   try {
     const userId = getUserId(c);
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'comment_delete');
+    if (supabaseRequired) return supabaseRequired;
     const commentId = c.req.param('commentId');
     if (supabasePrimaryConfigured(c)) {
       const result = await supabaseUpdateCommentStatus(c, commentId, userId, 'removed');
@@ -16252,6 +16268,8 @@ api.delete('/comments/:commentId', authMiddleware, async (c) => {
 api.post('/comments/:commentId/hide', authMiddleware, async (c) => {
   try {
     const userId = getUserId(c);
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'comment_hide');
+    if (supabaseRequired) return supabaseRequired;
     const commentId = c.req.param('commentId');
     if (supabasePrimaryConfigured(c)) {
       const result = await supabaseUpdateCommentStatus(c, commentId, userId, 'hidden');
