@@ -15520,147 +15520,6 @@ api.post('/posts', authMiddleware, async (c) => {
     };
     return c.json(postPayload(createdPost, [], c.env));
   }
-
-  const insertResults = await c.env.DB.batch([
-    c.env.DB.prepare(
-      `INSERT OR IGNORE INTO posts (
-       id, user_id, title, content, image, images, media_types, media_backup_ids, media_dimensions, location,
-       display_city, display_region, display_country, display_location_label, display_location_source, display_location_visibility,
-       post_type,
-       place_id, place_name, place_provider, place_provider_id, place_formatted_address, place_category, place_city, place_region, place_country,
-       place_lat, place_lng, is_verified_checkin, visibility, moderation_status, moderation_media_ids, moderation_checked_at,
-       editor_overlays, tagged_users,
-       primary_category, category_confidence, category_source, category_status, category_signals_json, tags_json,
-       secondary_categories_json, category_scores_json, detected_objects_json, detected_scene, place_type, user_selected_category, caption_keywords_json,
-       audio_provider, audio_track_id, audio_title, audio_artist, audio_artwork_url, audio_stream_url,
-       audio_start_time, audio_duration, client_request_id
-     )
-     VALUES (${Array(57).fill('?').join(', ')})`
-    ).bind(id, userId, postTitle, postContent, primaryImage, JSON.stringify(imageUrls), JSON.stringify(mediaTypes),
-    JSON.stringify(backupIds), JSON.stringify(mediaDimensions), location,
-    displayCity, displayRegion, displayCountry, displayLocationLabel, displayLocationSource, displayLocationVisibility,
-    postType,
-    placeProviderId || null, placeName || null, placeProvider, placeProviderId, placeFormattedAddress, placeCategory, placeCity, placeRegion, placeCountry,
-    placeLat, placeLng, isCheckin, visibility, 'approved', JSON.stringify(mediaAssetIds), now(),
-    JSON.stringify(editorOverlays), JSON.stringify(taggedUsers),
-    autoCategory.primary_category, autoCategory.category_confidence, autoCategory.category_source, autoCategory.category_status, JSON.stringify(autoCategory.signals), JSON.stringify(autoCategory.tags),
-    JSON.stringify(autoCategory.secondary_categories), JSON.stringify(autoCategory.category_scores), JSON.stringify(autoCategory.detected_objects),
-    autoCategory.detected_scene, autoCategory.place_type, autoCategory.user_selected_category, JSON.stringify(autoCategory.caption_keywords),
-    audioProvider, audioTrackId, audioTitle, audioArtist, audioArtworkUrl, audioStreamUrl, audioStartTime, audioDuration, clientRequestId),
-    c.env.DB.prepare('UPDATE users SET posts_count = COALESCE(posts_count, 0) + 1 WHERE id = ? AND changes() > 0').bind(userId),
-  ]);
-  const inserted = d1Changes(insertResults?.[0]) > 0;
-  if (!inserted && clientRequestId) {
-    const existing: any = await c.env.DB.prepare(
-      `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
-       FROM posts p JOIN users u ON p.user_id = u.id
-       WHERE p.user_id = ? AND p.client_request_id = ?
-       LIMIT 1`
-    ).bind(userId, clientRequestId).first();
-    if (existing) return c.json({ ...postPayload(existing, [], c.env), idempotent_replay: true });
-  }
-  if (!inserted) return c.json({ detail: 'Could not create post. Please retry.' }, 409);
-  if (mediaAssetIds.length) {
-    if (supabasePrimaryConfigured(c)) {
-      await supabaseAdminPatchRows(c, 'app_media_assets', {
-        user_id: postgrestEqFilter(userId),
-        id: postgrestInFilter(mediaAssetIds),
-      }, {
-        legacy_post_id: id,
-        updated_at: now(),
-      });
-    } else {
-      const placeholders = mediaAssetIds.map(() => '?').join(', ');
-      await c.env.DB.prepare(`UPDATE media_assets SET post_id = ?, updated_at = ? WHERE user_id = ? AND id IN (${placeholders})`)
-        .bind(id, now(), userId, ...mediaAssetIds)
-        .run();
-    }
-  }
-  if (placeName || placeFormattedAddress || placeProviderId) {
-    await c.env.DB.prepare(
-      `INSERT OR REPLACE INTO post_places
-       (id, post_id, provider, provider_place_id, name, formatted_address, latitude, longitude, category, city, region, country, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(
-      uuid(), id, placeProvider || 'apple_mapkit', placeProviderId, placeName, placeFormattedAddress,
-      placeLat, placeLng, placeCategory, placeCity, placeRegion, placeCountry, now()
-    ).run();
-  }
-  await attachMediaBackupsToPost(c.env.DB, userId, id, backupIds);
-  await recordAbuseSignals(c, userId, 'post_create', {
-    product_links: editorOverlays.filter((item: any) => item?.type === 'product' && item.link).map((item: any) => item.link),
-  });
-  if (supabasePrimaryConfigured(c)) {
-    try {
-      await writeLegacyUserToSupabaseCanonical(c, userId);
-      await writeLegacyPostToSupabaseCanonical(c, id);
-    } catch (error: any) {
-      const code = getErrorCode(error).slice(0, 180);
-      await removeLegacyPostCacheAfterCanonicalFailure(c, id, userId, code);
-      console.error(JSON.stringify({ event: 'supabase_primary_post_create_failed', post_id: id, user_id: userId, code }));
-      return c.json({
-        detail: 'Could not save this post to the production database. Please retry.',
-        code: 'SUPABASE_PRIMARY_WRITE_FAILED',
-      }, 503);
-    }
-  } else {
-    runBackgroundTask(c, 'supabase_post_write_through_failed', async () => {
-      await mirrorLegacyUserToSupabase(c, userId);
-      await mirrorLegacyPostToSupabase(c, id);
-    });
-  }
-  runBackgroundTask(c, 'post_category_refinement_failed', async () => {
-    await refinePostCategoryWithBackendAi(c, id);
-  });
-  if (visibility === 'public' || visibility === 'followers') {
-    runBackgroundTask(c, 'post_follower_notifications_failed', async () => {
-      const followers = await c.env.DB.prepare(
-        `SELECT follower_id
-         FROM follows
-         WHERE following_id = ? AND follower_id != ?
-         ORDER BY created_at DESC
-         LIMIT 250`
-      ).bind(userId, userId).all();
-      const authorName = cleanText(user?.full_name || user?.username || 'Someone you follow', 80);
-      const body = cleanText(postTitle || postContent || 'Shared a new post', 120);
-      await Promise.allSettled((followers.results as any[]).map((row) => insertNotificationOnce(c, {
-        userId: cleanText(row.follower_id, 120),
-        type: 'new_post',
-        title: `${authorName} posted`,
-        body,
-        data: { post_id: id, from_user_id: userId },
-        dedupeKey: `new_post:${id}:${row.follower_id}`,
-        dedupeSeconds: 604800,
-      })));
-    });
-  }
-  const createdPost = { id, user_id: userId, user_username: user?.username, user_full_name: user?.full_name,
-    user_profile_image: user?.profile_image, title: postTitle, content: postContent, image: primaryImage, images: imageUrls,
-    media_types: mediaTypes, media_backup_ids: backupIds, media_dimensions: mediaDimensions, editor_overlays: editorOverlays, tagged_users: taggedUsers,
-    primary_category: autoCategory.primary_category, category_confidence: autoCategory.category_confidence,
-    category_source: autoCategory.category_source, category_status: autoCategory.category_status,
-    category_signals_json: JSON.stringify(autoCategory.signals), tags_json: JSON.stringify(autoCategory.tags),
-    secondary_categories_json: JSON.stringify(autoCategory.secondary_categories),
-    category_scores_json: JSON.stringify(autoCategory.category_scores),
-    detected_objects_json: JSON.stringify(autoCategory.detected_objects),
-    detected_scene: autoCategory.detected_scene,
-    place_type: autoCategory.place_type,
-    user_selected_category: autoCategory.user_selected_category,
-    caption_keywords_json: JSON.stringify(autoCategory.caption_keywords),
-    location,
-    display_city: displayCity, display_region: displayRegion, display_country: displayCountry,
-    display_location_label: displayLocationLabel, display_location_source: displayLocationSource,
-    display_location_visibility: displayLocationVisibility,
-    post_type: postType,
-    place_id: placeProviderId, place_name: placeName,
-    place_provider: placeProvider, place_provider_id: placeProviderId, place_formatted_address: placeFormattedAddress,
-    place_category: placeCategory, place_city: placeCity, place_region: placeRegion, place_country: placeCountry,
-    place_lat: placeLat, place_lng: placeLng, is_verified_checkin: !!isCheckin,
-    audio_provider: audioProvider, audio_track_id: audioTrackId, audio_title: audioTitle, audio_artist: audioArtist,
-    audio_artwork_url: audioArtworkUrl, audio_stream_url: audioStreamUrl, audio_start_time: audioStartTime, audio_duration: audioDuration,
-    client_request_id: clientRequestId, visibility, moderation_status: 'approved', moderation_media_ids: JSON.stringify(mediaAssetIds),
-    likes_count: 0, comments_count: 0, liked_by: [], created_at: now() };
-  return c.json(postPayload(createdPost, [], c.env));
 });
 
 api.get('/posts/feed', authMiddleware, async (c) => {
@@ -19168,7 +19027,8 @@ api.get('/discover/suggested-users', authMiddleware, async (c) => {
 api.post('/media/upload-intent', authMiddleware, async (c) => {
   const bodyTooLarge = rejectLargeRequest(c, 24_000);
   if (bodyTooLarge) return bodyTooLarge;
-  if (!supabasePrimaryConfigured(c)) await ensureMediaModerationSchema(c.env.DB);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'media_upload_intent');
+  if (supabaseRequired) return supabaseRequired;
   const userId = getUserId(c);
   const limited = await enforceRateLimit(c, 'media_upload_intent', userId, 80, 60);
   if (limited) return limited;
@@ -19328,7 +19188,8 @@ api.post('/media/upload-intent', authMiddleware, async (c) => {
 api.post('/media/complete', authMiddleware, async (c) => {
   const bodyTooLarge = rejectLargeRequest(c, 32_000);
   if (bodyTooLarge) return bodyTooLarge;
-  if (!supabasePrimaryConfigured(c)) await ensureMediaModerationSchema(c.env.DB);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'media_upload_complete');
+  if (supabaseRequired) return supabaseRequired;
   const userId = getUserId(c);
   const limited = await enforceRateLimit(c, 'media_upload_complete', userId, 120, 60);
   if (limited) return limited;
@@ -19447,7 +19308,8 @@ api.post('/media/complete', authMiddleware, async (c) => {
 });
 
 api.get('/media/:mediaId/status', authMiddleware, async (c) => {
-  if (!supabasePrimaryConfigured(c)) await ensureMediaModerationSchema(c.env.DB);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'media_status_read');
+  if (supabaseRequired) return supabaseRequired;
   const userId = getUserId(c);
   const mediaId = publicId(c.req.param('mediaId'), 160);
   const asset: any = supabasePrimaryConfigured(c)
@@ -19467,7 +19329,8 @@ api.get('/media/:mediaId/status', authMiddleware, async (c) => {
 // Uploads (Cloudflare Images + Stream direct upload)
 api.post('/upload/image-direct', authMiddleware, async (c) => {
   const userId = getUserId(c);
-  if (!supabasePrimaryConfigured(c)) await ensureMediaModerationSchema(c.env.DB);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'image_direct_upload');
+  if (supabaseRequired) return supabaseRequired;
   const limited = await enforceRateLimit(c, 'upload_image_direct', userId, 60, 60);
   if (limited) return limited;
   const dailyLimited = await enforceRateLimit(c, 'upload_image_direct_daily', userId, 250, 86400);
@@ -19545,7 +19408,8 @@ api.post('/upload/image-direct', authMiddleware, async (c) => {
 
 api.post('/upload/video-direct', authMiddleware, async (c) => {
   const userId = getUserId(c);
-  if (!supabasePrimaryConfigured(c)) await ensureMediaModerationSchema(c.env.DB);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'video_direct_upload');
+  if (supabaseRequired) return supabaseRequired;
   const limited = await enforceRateLimit(c, 'upload_video_direct', userId, 40, 60);
   if (limited) return limited;
   const dailyLimited = await enforceRateLimit(c, 'upload_video_direct_daily', userId, 100, 86400);
