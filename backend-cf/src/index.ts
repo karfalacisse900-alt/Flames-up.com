@@ -16662,33 +16662,16 @@ api.post('/friends/request/:userId', authMiddleware, async (c) => {
   if (fid === tid) return c.json({ detail: 'Cannot friend yourself' }, 400);
   const limited = await enforceRateLimit(c, 'friend_request', fid, 60, 60);
   if (limited) return limited;
-  if (supabasePrimaryConfigured(c)) {
-    const result = await supabaseCreateFriendRequest(c, fid, tid);
-    return c.json(result.body, result.status);
-  }
-  const target = await c.env.DB.prepare('SELECT id FROM users WHERE id = ?').bind(tid).first();
-  if (!target) return c.json({ detail: 'User not found' }, 404);
-  const ex = await c.env.DB.prepare('SELECT id, status FROM friend_requests WHERE from_user_id = ? AND to_user_id = ?').bind(fid, tid).first();
-  if (ex) return c.json({ detail: 'Already sent', status: (ex as any).status }, 400);
-  const id = uuid();
-  await c.env.DB.prepare('INSERT INTO friend_requests (id, from_user_id, to_user_id) VALUES (?, ?, ?)').bind(id, fid, tid).run();
-  return c.json({ id, status: 'pending' });
+  const result = await supabaseCreateFriendRequest(c, fid, tid);
+  return c.json(result.body, result.status);
 });
 api.post('/friends/accept/:requestId', authMiddleware, async (c) => {
   const uid = getUserId(c);
   const rid = c.req.param('requestId');
   const supabaseRequired = requireSupabasePrimaryDatabase(c, 'friend_accept');
   if (supabaseRequired) return supabaseRequired;
-  if (supabasePrimaryConfigured(c)) {
-    const result = await supabaseAcceptFriendRequest(c, uid, rid);
-    return c.json(result.body, result.status);
-  }
-  const r: any = await c.env.DB.prepare('SELECT * FROM friend_requests WHERE id = ? AND to_user_id = ?').bind(rid, uid).first();
-  if (!r) return c.json({ detail: 'Not found' }, 404);
-  await c.env.DB.prepare("UPDATE friend_requests SET status = 'accepted' WHERE id = ?").bind(rid).run();
-  await c.env.DB.prepare('INSERT OR IGNORE INTO friendships (id, user_id, friend_id) VALUES (?, ?, ?)').bind(uuid(), uid, r.from_user_id).run();
-  await c.env.DB.prepare('INSERT OR IGNORE INTO friendships (id, user_id, friend_id) VALUES (?, ?, ?)').bind(uuid(), r.from_user_id, uid).run();
-  return c.json({ accepted: true });
+  const result = await supabaseAcceptFriendRequest(c, uid, rid);
+  return c.json(result.body, result.status);
 });
 api.post('/friends/reject/:requestId', authMiddleware, async (c) => {
   const userId = getUserId(c);
@@ -16697,54 +16680,34 @@ api.post('/friends/reject/:requestId', authMiddleware, async (c) => {
   if (supabaseRequired) return supabaseRequired;
   const limited = await enforceRateLimit(c, 'friend_reject', userId, 120, 60);
   if (limited) return limited;
-  if (supabasePrimaryConfigured(c)) {
-    const result = await supabaseRejectFriendRequest(c, userId, requestId);
-    return c.json(result.body, result.status);
-  }
-  const result = await c.env.DB.prepare("UPDATE friend_requests SET status = 'rejected' WHERE id = ? AND to_user_id = ?")
-    .bind(requestId, userId)
-    .run();
-  if (d1Changes(result) === 0) return c.json({ detail: 'Request not found' }, 404);
-  return c.json({ rejected: true });
+  const result = await supabaseRejectFriendRequest(c, userId, requestId);
+  return c.json(result.body, result.status);
 });
 api.get('/friends/requests', authMiddleware, async (c) => {
   const userId = getUserId(c);
   const supabaseRequired = requireSupabasePrimaryDatabase(c, 'friend_requests_read');
   if (supabaseRequired) return supabaseRequired;
-  if (supabasePrimaryConfigured(c)) return c.json(await supabaseFriendRequestsPayload(c, userId));
-  const r = await c.env.DB.prepare(`SELECT fr.*, u.username, u.full_name, u.profile_image FROM friend_requests fr JOIN users u ON fr.from_user_id = u.id WHERE fr.to_user_id = ? AND fr.status = 'pending'`).bind(userId).all();
-  return c.json(r.results);
+  return c.json(await supabaseFriendRequestsPayload(c, userId));
 });
 api.get('/friends', authMiddleware, async (c) => {
   const userId = getUserId(c);
   const supabaseRequired = requireSupabasePrimaryDatabase(c, 'friends_read');
   if (supabaseRequired) return supabaseRequired;
-  if (supabasePrimaryConfigured(c)) return c.json(await supabaseFriendsPayload(c, userId));
-  const r = await c.env.DB.prepare('SELECT u.id, u.username, u.full_name, u.profile_image, u.bio FROM friendships f JOIN users u ON f.friend_id = u.id WHERE f.user_id = ?').bind(userId).all();
-  return c.json(r.results);
+  return c.json(await supabaseFriendsPayload(c, userId));
 });
 api.get('/friends/status/:userId', authMiddleware, async (c) => {
   const mid = getUserId(c);
   const oid = c.req.param('userId');
   const supabaseRequired = requireSupabasePrimaryDatabase(c, 'friend_status_read');
   if (supabaseRequired) return supabaseRequired;
-  if (supabasePrimaryConfigured(c)) return c.json(await supabaseFriendStatus(c, mid, oid));
-  const f = await c.env.DB.prepare('SELECT id FROM friendships WHERE user_id = ? AND friend_id = ?').bind(mid, oid).first();
-  if (f) return c.json({ status: 'friends' });
-  const sr: any = await c.env.DB.prepare("SELECT id FROM friend_requests WHERE from_user_id = ? AND to_user_id = ? AND status = 'pending'").bind(mid, oid).first();
-  if (sr) return c.json({ status: 'request_sent', request_id: sr.id });
-  const rr: any = await c.env.DB.prepare("SELECT id FROM friend_requests WHERE from_user_id = ? AND to_user_id = ? AND status = 'pending'").bind(oid, mid).first();
-  if (rr) return c.json({ status: 'request_received', request_id: rr.id });
-  return c.json({ status: 'none' });
+  return c.json(await supabaseFriendStatus(c, mid, oid));
 });
 api.delete('/friends/:userId', authMiddleware, async (c) => {
   const mid = getUserId(c);
   const oid = c.req.param('userId');
   const supabaseRequired = requireSupabasePrimaryDatabase(c, 'friend_remove');
   if (supabaseRequired) return supabaseRequired;
-  if (supabasePrimaryConfigured(c)) return c.json(await supabaseRemoveFriend(c, mid, oid));
-  await c.env.DB.prepare('DELETE FROM friendships WHERE (user_id = ? AND friend_id = ?) OR (user_id = ? AND friend_id = ?)').bind(mid, oid, oid, mid).run();
-  return c.json({ removed: true });
+  return c.json(await supabaseRemoveFriend(c, mid, oid));
 });
 
 // Recommendations
