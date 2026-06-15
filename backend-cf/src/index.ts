@@ -6813,6 +6813,12 @@ function supabaseAppPostToLegacy(row: any, author: any, isFollowing: boolean, co
     place_city: cleanText((place as any).city, 80),
     place_region: cleanText((place as any).region, 80),
     place_country: cleanText((place as any).country, 80),
+    place_lat: (place as any).latitude == null ? null : clampFloat((place as any).latitude, -90, 90, 0),
+    place_lng: (place as any).longitude == null ? null : clampFloat((place as any).longitude, -180, 180, 0),
+    removed_at: cleanText((metadata as any).removed_at, 80) || null,
+    removed_reason: cleanMultilineText((metadata as any).removed_reason, 500),
+    discover_blocked_at: cleanText((metadata as any).discover_blocked_at, 80) || null,
+    discover_blocked_reason: cleanMultilineText((metadata as any).discover_blocked_reason, 500),
     is_verified_checkin: !!(place as any).verified_checkin,
     audio_provider: cleanText((audio as any).provider, 40),
     audio_track_id: cleanText((audio as any).track_id, 120),
@@ -7519,7 +7525,7 @@ async function supabaseOwnedAppPost(c: any, postId: string, userId: string): Pro
 async function supabaseAdminPostForModeration(c: any, postId: string): Promise<{ row: any; identity: SupabasePostIdentity } | null> {
   const identity = await supabaseResolvePostIdentity(c, postId);
   const rows = await supabaseAdminQueryRows(c, 'app_posts', {
-    select: 'id,legacy_post_id,app_user_id,user_id,status,metadata',
+    select: SUPABASE_APP_POST_SELECT,
     filters: { or: supabaseAppPostIdentityOrFilter(identity) },
     limit: 1,
   });
@@ -7529,6 +7535,51 @@ async function supabaseAdminPostForModeration(c: any, postId: string): Promise<{
 
 function supabasePostModerationTargetUserId(row: any): string {
   return publicId(row?.app_user_id, 120) || isUuidText(row?.user_id) || '';
+}
+
+async function supabaseAdminPostPayloads(c: any, rows: any[]): Promise<any[]> {
+  const cleanRows = Array.isArray(rows) ? rows.filter(Boolean) : [];
+  if (!cleanRows.length) return [];
+  const authorIds = cleanRows
+    .flatMap((row) => [publicId(row?.app_user_id, 120), isUuidText(row?.user_id) || ''])
+    .filter(Boolean);
+  const [authorMap, commentCounts] = await Promise.all([
+    supabaseUsersByAnyIds(c, authorIds),
+    supabasePostCommentCounts(c, cleanRows),
+  ]);
+  return cleanRows.map((row) => {
+    const author = authorMap.get(publicId(row?.app_user_id, 120)) || authorMap.get(isUuidText(row?.user_id) || '') || {};
+    const legacyPost = supabaseAppPostToLegacy(
+      row,
+      author,
+      false,
+      commentCounts.get(publicId(row?.legacy_post_id || row?.id, 120)) || Number(row?.comments_count || 0),
+    );
+    return adminPostPayload(legacyPost, c.env);
+  });
+}
+
+async function supabaseAdminPostPayload(c: any, row: any): Promise<any | null> {
+  const payloads = await supabaseAdminPostPayloads(c, row ? [row] : []);
+  return payloads[0] || null;
+}
+
+function supabaseAdminPostPayloadMatchesSearch(payload: any, search: string): boolean {
+  const query = cleanText(search, 120).toLowerCase();
+  if (!query) return true;
+  return [
+    payload?.id,
+    payload?.supabase_post_id,
+    payload?.content,
+    payload?.title,
+    payload?.category,
+    payload?.primary_category,
+    payload?.display_location_label,
+    payload?.exact_place?.name,
+    payload?.author?.id,
+    payload?.author?.username,
+    payload?.author?.full_name,
+  ].some((value) => String(value || '').toLowerCase().includes(query));
 }
 
 async function supabasePostInteractionActorCounts(c: any, postIds: string[]) {
@@ -21205,6 +21256,65 @@ function adminCommentPayload(row: any) {
   };
 }
 
+async function supabaseAdminCommentPayloads(c: any, rows: any[]): Promise<any[]> {
+  const cleanRows = Array.isArray(rows) ? rows.filter(Boolean) : [];
+  if (!cleanRows.length) return [];
+  const authorIds = cleanRows
+    .flatMap((row) => [publicId(row?.app_user_id, 120), isUuidText(row?.user_id) || ''])
+    .filter(Boolean);
+  const postIds = Array.from(new Set(cleanRows.map((row) => publicId(row?.legacy_post_id, 120)).filter(Boolean)));
+  const [authorMap, postRows] = await Promise.all([
+    supabaseUsersByAnyIds(c, authorIds),
+    postIds.length ? supabaseAdminQueryRows(c, 'app_posts', {
+      select: 'legacy_post_id,app_user_id,user_id',
+      filters: { legacy_post_id: postgrestInFilter(postIds) },
+      limit: Math.max(1, postIds.length),
+    }).catch((error: any) => {
+      console.warn(JSON.stringify({ event: 'supabase_admin_comment_posts_failed', code: getErrorCode(error).slice(0, 180) }));
+      return [];
+    }) : Promise.resolve([]),
+  ]);
+  const postMap = new Map(postRows.map((row: any) => [publicId(row?.legacy_post_id, 120), row]));
+  return cleanRows.map((row) => {
+    const metadata = parseJsonObject(row?.metadata);
+    const appUserId = publicId(row?.app_user_id, 120);
+    const author = authorMap.get(appUserId) || authorMap.get(isUuidText(row?.user_id) || '') || {};
+    const post = postMap.get(publicId(row?.legacy_post_id, 120)) || {};
+    return adminCommentPayload({
+      id: publicId(row?.legacy_comment_id || row?.id, 120),
+      user_id: appUserId || isUuidText(row?.user_id) || '',
+      post_id: publicId(row?.legacy_post_id || row?.post_id, 120),
+      parent_id: publicId((metadata as any).parent_legacy_id || row?.parent_id, 120),
+      content: cleanMultilineText(row?.body, 1200),
+      status: cleanText(row?.status || 'active', 40),
+      removed_at: cleanText((metadata as any).removed_at, 80) || null,
+      removed_reason: cleanMultilineText((metadata as any).removed_reason, 500),
+      hidden_at: cleanText((metadata as any).hidden_at, 80) || null,
+      hidden_by_user_id: publicId((metadata as any).hidden_by_user_id, 120),
+      likes_count: Number((metadata as any).likes_count || 0),
+      user_username: author?.username,
+      user_full_name: author?.full_name,
+      user_profile_image: author?.avatar_url,
+      post_user_id: publicId(post?.app_user_id || post?.user_id || (metadata as any).post_user_id, 120),
+      created_at: row?.legacy_created_at || row?.created_at,
+      updated_at: row?.updated_at || row?.created_at,
+    });
+  });
+}
+
+function supabaseAdminCommentPayloadMatchesSearch(payload: any, search: string): boolean {
+  const query = cleanText(search, 120).toLowerCase();
+  if (!query) return true;
+  return [
+    payload?.id,
+    payload?.post_id,
+    payload?.content,
+    payload?.author?.id,
+    payload?.author?.username,
+    payload?.author?.full_name,
+  ].some((value) => String(value || '').toLowerCase().includes(query));
+}
+
 function reportTargetType(row: any): string {
   return normalizeReportTargetType(row?.target_type || row?.reported_type || row?.report_type || 'other');
 }
@@ -22669,14 +22779,45 @@ api.post('/admin/users/:userId/force-username-change', authMiddleware, async (c)
 api.get('/admin/posts', authMiddleware, async (c) => {
   try {
     await requireAdminRole(c, 'content:read');
-    await ensureAdminModerationSchema(c.env.DB);
-    await ensurePostEditorSchema(c.env.DB);
-    await ensureAutoCategorySchema(c.env.DB);
-    await ensureLocationSchema(c.env.DB);
     const { limit, offset } = adminPageParams(c);
     const status = cleanText(c.req.query('status') || 'all', 40);
     const category = cleanText(c.req.query('category') || '', 60).toLowerCase();
     const surface = cleanText(c.req.query('surface') || '', 40).toLowerCase();
+    const rawSearch = cleanText(c.req.query('search') || '', 120);
+
+    if (supabasePrimaryConfigured(c)) {
+      const normalizedCategory = category && category !== 'all'
+        ? normalizeDiscoverCategory(category, false)
+        : '';
+      if (category && category !== 'all' && !normalizedCategory) return c.json({ detail: 'Unknown category.' }, 400);
+      const filters: Record<string, string> = {};
+      if (status !== 'all') filters.status = postgrestEqFilter(status);
+      const needsMemoryFilter = !!normalizedCategory || surface === 'discover' || !!rawSearch;
+      const rows = await supabaseAdminQueryRows(c, 'app_posts', {
+        select: SUPABASE_APP_POST_SELECT,
+        filters,
+        order: 'legacy_created_at.desc.nullslast,created_at.desc',
+        limit: needsMemoryFilter ? Math.min(1000, Math.max(offset + limit + 100, (offset + limit) * 5)) : limit,
+        offset: needsMemoryFilter ? 0 : offset,
+      });
+      const postRows = rows.filter((row) => {
+        if (normalizedCategory && !supabaseAppPostMatchesCategory(row, normalizedCategory)) return false;
+        if (surface === 'discover') {
+          const metadata = parseJsonObject(row?.metadata);
+          if (cleanText((metadata as any).discover_blocked_at, 80)) return false;
+        }
+        return true;
+      });
+      const payloads = await supabaseAdminPostPayloads(c, postRows);
+      const filtered = rawSearch ? payloads.filter((payload) => supabaseAdminPostPayloadMatchesSearch(payload, rawSearch)) : payloads;
+      const results = needsMemoryFilter ? filtered.slice(offset, offset + limit) : filtered;
+      return c.json({ results, pagination: { limit, offset, next_offset: offset + limit } });
+    }
+
+    await ensureAdminModerationSchema(c.env.DB);
+    await ensurePostEditorSchema(c.env.DB);
+    await ensureAutoCategorySchema(c.env.DB);
+    await ensureLocationSchema(c.env.DB);
     const search = searchPattern(c.req.query('search'));
     const conditions: string[] = [];
     const binds: any[] = [];
@@ -22716,10 +22857,29 @@ api.get('/admin/posts', authMiddleware, async (c) => {
 api.get('/admin/posts/:postId', authMiddleware, async (c) => {
   try {
     await requireAdminRole(c, 'content:read');
+    const postId = publicId(c.req.param('postId'), 120);
+    if (supabasePrimaryConfigured(c)) {
+      const target = await supabaseAdminPostForModeration(c, postId);
+      if (!target) return c.json({ detail: 'Post not found.' }, 404);
+      const post = await supabaseAdminPostPayload(c, target.row);
+      const actionTargetIds = supabasePostIdentityKeys(target.identity);
+      const actions = await supabaseAdminQueryRows(c, 'app_moderation_actions', {
+        select: '*',
+        filters: {
+          target_type: postgrestEqFilter('post'),
+          target_id: postgrestInFilter(actionTargetIds.length ? actionTargetIds : [postId]),
+        },
+        order: 'created_at.desc',
+        limit: 30,
+      }).catch((error: any) => {
+        console.warn(JSON.stringify({ event: 'supabase_admin_post_actions_failed', code: getErrorCode(error).slice(0, 180) }));
+        return [];
+      });
+      return c.json({ post, actions });
+    }
     await ensureAdminModerationSchema(c.env.DB);
     await ensureAutoCategorySchema(c.env.DB);
     await ensureLocationSchema(c.env.DB);
-    const postId = publicId(c.req.param('postId'), 120);
     const row: any = await c.env.DB.prepare(`
       SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
       FROM posts p LEFT JOIN users u ON u.id = p.user_id
@@ -22896,8 +23056,6 @@ api.post('/admin/posts/:postId/remove-from-discover', authMiddleware, async (c) 
 api.post('/admin/posts/:postId/location/clear', authMiddleware, async (c) => {
   try {
     const admin = await requireAdminRole(c, 'content:write');
-    await ensureAdminModerationSchema(c.env.DB);
-    await ensureLocationSchema(c.env.DB);
     const limited = await requireAdminWriteRateLimit(c, admin, 'admin_post_location_clear');
     if (limited) return limited;
     const postId = publicId(c.req.param('postId'), 120);
@@ -22906,6 +23064,62 @@ api.post('/admin/posts/:postId/location/clear', authMiddleware, async (c) => {
     if (unknown) return unknown;
     const reason = cleanMultilineText(body.reason, 500);
     if (!reason) return c.json({ detail: 'Reason is required.' }, 400);
+    if (supabasePrimaryConfigured(c)) {
+      const target = await supabaseAdminPostForModeration(c, postId);
+      if (!target) return c.json({ detail: 'Post not found.' }, 404);
+      const before = target.row;
+      const metadata = parseJsonObject(before?.metadata);
+      const raw = parseJsonObject((metadata as any).raw);
+      delete (metadata as any).place;
+      await supabaseAdminPatchRows(c, 'app_posts', { or: supabaseAppPostIdentityOrFilter(target.identity) }, {
+        location: '',
+        metadata: {
+          ...metadata,
+          raw: {
+            ...raw,
+            display_city: '',
+            display_region: '',
+            display_country: '',
+            display_location_label: '',
+            display_location_source: 'none',
+            display_location_visibility: 'hidden',
+          },
+          display_city: '',
+          display_region: '',
+          display_country: '',
+          display_location_label: '',
+          display_location_source: 'none',
+          display_location_visibility: 'hidden',
+          place_type: '',
+          location_cleared_at: now(),
+          location_cleared_by: admin.userId,
+          location_cleared_reason: reason,
+        },
+        updated_at: now(),
+      });
+      const legacyPostId = publicId(before?.legacy_post_id || postId, 120);
+      if (legacyPostId) {
+        await supabaseAdminDeleteRows(c, 'app_post_places', { legacy_post_id: postgrestEqFilter(legacyPostId) }).catch((error: any) => {
+          console.warn(JSON.stringify({ event: 'supabase_admin_post_places_delete_failed', code: getErrorCode(error).slice(0, 180) }));
+        });
+      }
+      await writeAdminAuditLog(c, admin, {
+        actionType: 'post_location_cleared',
+        targetType: 'post',
+        targetId: postId,
+        targetUserId: supabasePostModerationTargetUserId(before),
+        reason,
+        note: body.note,
+        beforeState: before,
+        afterState: { display_location_visibility: 'hidden', place_removed: true },
+      });
+      const refreshed = await supabaseAdminPostForModeration(c, postId);
+      const post = refreshed ? await supabaseAdminPostPayload(c, refreshed.row) : null;
+      return c.json({ post });
+    }
+
+    await ensureAdminModerationSchema(c.env.DB);
+    await ensureLocationSchema(c.env.DB);
     const before: any = await c.env.DB.prepare(
       `SELECT id, user_id, display_location_label, display_location_visibility, place_name, place_formatted_address, place_lat, place_lng
        FROM posts WHERE id = ? LIMIT 1`
@@ -22948,8 +23162,6 @@ api.post('/admin/posts/:postId/location/clear', authMiddleware, async (c) => {
 api.post('/admin/posts/:postId/category', authMiddleware, async (c) => {
   try {
     const admin = await requireAdminRole(c, 'content:write');
-    await ensureAdminModerationSchema(c.env.DB);
-    await ensureAutoCategorySchema(c.env.DB);
     const limited = await requireAdminWriteRateLimit(c, admin, 'admin_post_category_change');
     if (limited) return limited;
     const postId = publicId(c.req.param('postId'), 120);
@@ -22960,6 +23172,56 @@ api.post('/admin/posts/:postId/category', authMiddleware, async (c) => {
     if (!category) return c.json({ detail: 'Choose a valid Discover category.' }, 400);
     const reason = cleanMultilineText(body.reason, 500);
     if (!reason) return c.json({ detail: 'Reason is required.' }, 400);
+    if (supabasePrimaryConfigured(c)) {
+      const target = await supabaseAdminPostForModeration(c, postId);
+      if (!target) return c.json({ detail: 'Post not found.' }, 404);
+      const before = target.row;
+      const metadata = parseJsonObject(before?.metadata);
+      const discover = parseJsonObject((metadata as any).discover_category);
+      const oldCategory = normalizeDiscoverCategory(before?.category || (discover as any).primary_category || before?.post_type, false) || DEFAULT_DISCOVER_CATEGORY;
+      const changedAt = now();
+      const nextScores = { [category]: 100 };
+      const nextDiscover = {
+        ...discover,
+        primary_category: category,
+        confidence: 1,
+        source: 'admin_changed',
+        status: 'admin_corrected',
+        secondary_categories: [category],
+        category_scores: nextScores,
+        admin_changed_at: changedAt,
+        admin_previous_category: oldCategory,
+        admin_new_category: category,
+        admin_reason: reason,
+      };
+      await supabaseAdminPatchRows(c, 'app_posts', { or: supabaseAppPostIdentityOrFilter(target.identity) }, {
+        category,
+        metadata: {
+          ...metadata,
+          discover_category: nextDiscover,
+          category_scores: nextScores,
+          secondary_categories: [category],
+          user_selected_category: category,
+        },
+        updated_at: changedAt,
+      });
+      await writeAdminAuditLog(c, admin, {
+        actionType: 'category_changed',
+        targetType: 'post',
+        targetId: postId,
+        targetUserId: supabasePostModerationTargetUserId(before),
+        reason,
+        note: body.note,
+        beforeState: { old_category: oldCategory, category_source: (discover as any).source, category_status: (discover as any).status },
+        afterState: { new_category: category, category_source: 'admin_changed', category_status: 'admin_corrected' },
+      });
+      const refreshed = await supabaseAdminPostForModeration(c, postId);
+      const post = refreshed ? await supabaseAdminPostPayload(c, refreshed.row) : null;
+      return c.json({ post });
+    }
+
+    await ensureAdminModerationSchema(c.env.DB);
+    await ensureAutoCategorySchema(c.env.DB);
     const before: any = await c.env.DB.prepare(
       `SELECT id, user_id, primary_category, category_confidence, category_source, category_status, category_signals_json, tags_json
        FROM posts
@@ -23008,9 +23270,28 @@ api.post('/admin/posts/:postId/category', authMiddleware, async (c) => {
 api.get('/admin/comments', authMiddleware, async (c) => {
   try {
     await requireAdminRole(c, 'content:read');
-    await ensureAdminModerationSchema(c.env.DB);
     const { limit, offset } = adminPageParams(c);
     const status = cleanText(c.req.query('status') || 'all', 40);
+    const rawSearch = cleanText(c.req.query('search') || '', 120);
+
+    if (supabasePrimaryConfigured(c)) {
+      const filters: Record<string, string> = {};
+      if (status !== 'all') filters.status = postgrestEqFilter(status);
+      const needsMemoryFilter = !!rawSearch;
+      const rows = await supabaseAdminQueryRows(c, 'post_comments', {
+        select: 'legacy_comment_id,legacy_post_id,app_user_id,user_id,body,status,metadata,legacy_created_at,created_at,updated_at',
+        filters,
+        order: 'legacy_created_at.desc.nullslast,created_at.desc',
+        limit: needsMemoryFilter ? Math.min(1000, Math.max(offset + limit + 100, (offset + limit) * 5)) : limit,
+        offset: needsMemoryFilter ? 0 : offset,
+      });
+      const payloads = await supabaseAdminCommentPayloads(c, rows);
+      const filtered = rawSearch ? payloads.filter((payload) => supabaseAdminCommentPayloadMatchesSearch(payload, rawSearch)) : payloads;
+      const results = needsMemoryFilter ? filtered.slice(offset, offset + limit) : filtered;
+      return c.json({ results, pagination: { limit, offset, next_offset: offset + limit } });
+    }
+
+    await ensureAdminModerationSchema(c.env.DB);
     const search = searchPattern(c.req.query('search'));
     const conditions: string[] = [];
     const binds: any[] = [];
@@ -23047,6 +23328,33 @@ api.post('/admin/comments/:commentId/remove', authMiddleware, async (c) => {
     const body: any = await c.req.json().catch(() => ({}));
     const reason = cleanMultilineText(body.reason, 500);
     if (!reason) return c.json({ detail: 'Reason is required.' }, 400);
+    if (supabasePrimaryConfigured(c)) {
+      const identity = await supabaseResolveCommentIdentity(c, commentId);
+      if (!identity) return c.json({ detail: 'Comment not found.' }, 404);
+      const removedAt = now();
+      await supabaseAdminPatchRows(c, 'post_comments', { or: supabaseCommentRowOrFilter(identity) }, {
+        status: 'removed',
+        metadata: {
+          ...identity.metadata,
+          removed_at: removedAt,
+          removed_reason: reason,
+          pinned_at: null,
+        },
+        updated_at: removedAt,
+      });
+      if (identity.legacyPostId) await getSupabasePostEngagementState(c, identity.legacyPostId, admin.userId).catch(() => undefined);
+      await writeAdminAuditLog(c, admin, {
+        actionType: 'comment_removed',
+        targetType: 'comment',
+        targetId: commentId,
+        targetUserId: publicId(identity.row?.app_user_id || identity.row?.user_id, 120),
+        reason,
+        note: body.note,
+        beforeState: identity.row,
+        afterState: { status: 'removed' },
+      });
+      return c.json({ removed: true });
+    }
     const before: any = await c.env.DB.prepare('SELECT id, user_id, post_id, status FROM comments WHERE id = ?').bind(commentId).first();
     if (!before) return c.json({ detail: 'Comment not found.' }, 404);
     await c.env.DB.prepare("UPDATE comments SET status = 'removed', removed_at = ?, removed_reason = ?, pinned_at = NULL WHERE id = ?")
@@ -23067,6 +23375,31 @@ api.post('/admin/comments/:commentId/restore', authMiddleware, async (c) => {
     const body: any = await c.req.json().catch(() => ({}));
     const reason = cleanMultilineText(body.reason, 500);
     if (!reason) return c.json({ detail: 'Reason is required.' }, 400);
+    if (supabasePrimaryConfigured(c)) {
+      const identity = await supabaseResolveCommentIdentity(c, commentId);
+      if (!identity) return c.json({ detail: 'Comment not found.' }, 404);
+      const metadata = { ...identity.metadata };
+      for (const key of ['removed_at', 'removed_reason', 'hidden_at', 'hidden_by_user_id', 'pinned_at']) {
+        delete (metadata as any)[key];
+      }
+      await supabaseAdminPatchRows(c, 'post_comments', { or: supabaseCommentRowOrFilter(identity) }, {
+        status: 'active',
+        metadata,
+        updated_at: now(),
+      });
+      if (identity.legacyPostId) await getSupabasePostEngagementState(c, identity.legacyPostId, admin.userId).catch(() => undefined);
+      await writeAdminAuditLog(c, admin, {
+        actionType: 'comment_restored',
+        targetType: 'comment',
+        targetId: commentId,
+        targetUserId: publicId(identity.row?.app_user_id || identity.row?.user_id, 120),
+        reason,
+        note: body.note,
+        beforeState: identity.row,
+        afterState: { status: 'active' },
+      });
+      return c.json({ restored: true });
+    }
     const before: any = await c.env.DB.prepare('SELECT id, user_id, post_id, status FROM comments WHERE id = ?').bind(commentId).first();
     if (!before) return c.json({ detail: 'Comment not found.' }, 404);
     await c.env.DB.prepare("UPDATE comments SET status = 'active', removed_at = NULL, removed_reason = '', hidden_at = NULL, hidden_by_user_id = '', pinned_at = NULL WHERE id = ?")
@@ -23169,11 +23502,51 @@ api.post('/admin/messages/reported/:reportId/action', authMiddleware, async (c) 
 api.get('/admin/audit-logs', authMiddleware, async (c) => {
   try {
     await requireAdminRole(c, 'audit:read');
-    await ensureAdminModerationSchema(c.env.DB);
     const { limit, offset } = adminPageParams(c, 80, 150);
     const action = cleanText(c.req.query('action') || '', 80);
     const targetType = cleanText(c.req.query('target_type') || '', 60);
     const adminId = publicId(c.req.query('admin_id') || '', 120);
+
+    if (supabasePrimaryConfigured(c)) {
+      const filters: Record<string, string> = {};
+      if (action) filters.action_type = postgrestEqFilter(action);
+      if (targetType) filters.target_type = postgrestEqFilter(targetType);
+      if (adminId) filters.actor_admin_user_id = postgrestEqFilter(adminId);
+      const rows = await supabaseAdminQueryRows(c, 'app_audit_logs', {
+        select: '*',
+        filters,
+        order: 'created_at.desc',
+        limit,
+        offset,
+      });
+      const actorIds = rows.map((row: any) => publicId(row?.actor_admin_user_id, 120)).filter(Boolean);
+      const actors = await supabaseUsersByAnyIds(c, actorIds);
+      return c.json({
+        results: rows.map((row: any) => {
+          const actor = actors.get(publicId(row?.actor_admin_user_id, 120)) || {};
+          return {
+            id: row.id,
+            actor_admin_user_id: row.actor_admin_user_id,
+            actor_role: row.actor_role,
+            actor_username: publicUsernameFor(actor),
+            actor_full_name: cleanText(actor?.full_name, 120),
+            action_type: row.action_type,
+            target_type: row.target_type,
+            target_id: row.target_id,
+            target_user_id: row.target_user_id || '',
+            reason: cleanMultilineText(row.reason, 500),
+            internal_note: cleanMultilineText(row.internal_note, 800),
+            before_state: parseJsonObject(row.before_state),
+            after_state: parseJsonObject(row.after_state),
+            request_id: row.request_id || '',
+            created_at: row.created_at,
+          };
+        }),
+        pagination: { limit, offset, next_offset: offset + limit },
+      });
+    }
+
+    await ensureAdminModerationSchema(c.env.DB);
     const conditions: string[] = [];
     const binds: any[] = [];
     if (action) { conditions.push('a.action_type = ?'); binds.push(action); }
