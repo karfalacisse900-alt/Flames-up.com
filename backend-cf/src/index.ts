@@ -10861,7 +10861,7 @@ function legacyPostTransferPayload(row: any) {
   };
 }
 
-function supabaseCreatePostTransferPayload(input: any) {
+function supabasePrimaryPostCreatePayload(input: any) {
   const mediaUrls = sanitizeMediaReferences(input.imageUrls, input.primaryImage);
   const mediaTypes = sanitizeMediaTypes(input.mediaTypes, mediaUrls.length || 1);
   const mediaDimensions = feedMediaDimensions(mediaUrls, mediaTypes, input.mediaDimensions || []);
@@ -11104,6 +11104,29 @@ async function supabaseAdminUpsert(c: any, table: string, rows: any[], onConflic
     throw new Error(`SUPABASE_UPSERT_FAILED:${table}:${response.status}:${text.slice(0, 500)}`);
   }
   return { table, count: rows.length };
+}
+
+async function supabaseAdminInsertRows(c: any, table: string, rows: any[], select = '*'): Promise<any[]> {
+  if (!rows.length) return [];
+  const url = new URL(`${getSupabaseUrl(c)}/rest/v1/${table}`);
+  if (select) url.searchParams.set('select', select);
+  const serviceRoleKey = getSupabaseServiceRoleKey(c);
+  const response = await fetch(url.toString(), {
+    method: 'POST',
+    headers: {
+      apikey: serviceRoleKey,
+      Authorization: `Bearer ${serviceRoleKey}`,
+      'Content-Type': 'application/json',
+      Prefer: 'return=representation',
+    },
+    body: JSON.stringify(rows),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`SUPABASE_INSERT_FAILED:${table}:${response.status}:${text.slice(0, 500)}`);
+  }
+  const data = await response.json().catch(() => []);
+  return Array.isArray(data) ? data : [];
 }
 
 async function supabaseAdminUpsertSafe(c: any, table: string, rows: any[], onConflict: string) {
@@ -15395,42 +15418,19 @@ api.post('/posts', authMiddleware, async (c) => {
   if (bodyTooLarge) return bodyTooLarge;
   const supabaseRequired = requireSupabasePrimaryDatabase(c, 'post_create');
   if (supabaseRequired) return supabaseRequired;
-  const isSupabasePrimary = supabasePrimaryConfigured(c);
-  if (!isSupabasePrimary) {
-    await ensureMediaBackupSchema(c.env.DB);
-    await ensureAudioSchema(c.env.DB);
-    await ensurePostEditorSchema(c.env.DB);
-    await ensureReliabilitySchema(c.env.DB);
-    await ensureGovernanceSchema(c.env.DB);
-    await ensureAutoCategorySchema(c.env.DB);
-    await ensureLocationSchema(c.env.DB);
-    await ensureMediaModerationSchema(c.env.DB);
-  }
   const userId = getUserId(c);
   const limited = await enforceRateLimit(c, 'post_create', userId, 30, 60);
   if (limited) return limited;
   const restricted = await enforceUserRestriction(c, userId, 'posting');
   if (restricted) return restricted;
   const b = await c.req.json().catch(() => ({}));
-  const supabaseAuthorRow = isSupabasePrimary ? await getSupabaseAppUserRowByAnyId(c, userId) : null;
-  const user: any = isSupabasePrimary
-    ? (supabaseAuthorRow ? supabaseAppUserToLegacyUser(supabaseAuthorRow) : null)
-    : await c.env.DB.prepare('SELECT username, full_name, profile_image, city FROM users WHERE id = ?').bind(userId).first();
+  const supabaseAuthorRow = await getSupabaseAppUserRowByAnyId(c, userId);
+  const user: any = supabaseAuthorRow ? supabaseAppUserToLegacyUser(supabaseAuthorRow) : null;
   if (!user) return c.json({ detail: 'User not found.' }, 404);
   const clientRequestId = getClientRequestId(c, b);
   if (clientRequestId) {
-    if (isSupabasePrimary) {
-      const existing = await supabaseExistingPostByClientRequest(c, userId, clientRequestId, supabaseAuthorRow);
-      if (existing) return c.json({ ...postPayload(existing, [], c.env), idempotent_replay: true });
-    } else {
-    const existing: any = await c.env.DB.prepare(
-      `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
-       FROM posts p JOIN users u ON p.user_id = u.id
-       WHERE p.user_id = ? AND p.client_request_id = ?
-       LIMIT 1`
-    ).bind(userId, clientRequestId).first();
+    const existing = await supabaseExistingPostByClientRequest(c, userId, clientRequestId, supabaseAuthorRow);
     if (existing) return c.json({ ...postPayload(existing, [], c.env), idempotent_replay: true });
-    }
   }
   const id = uuid();
   let postType = cleanText(b.post_type || b.postType || b.type || b.category || 'general', 50).toLowerCase() || 'general';
@@ -15539,108 +15539,108 @@ api.post('/posts', authMiddleware, async (c) => {
     return c.json({ detail: 'Audio track id is required.' }, 400);
   }
   if (audioProvider) {
-    const hidden = supabasePrimaryConfigured(c)
-      ? await supabaseAudiusTrackIsHidden(c, audioTrackId)
-      : !!(await c.env.DB.prepare("SELECT track_id FROM hidden_sounds WHERE provider = 'audius' AND track_id = ?")
-        .bind(audioTrackId)
-        .first());
+    const hidden = await supabaseAudiusTrackIsHidden(c, audioTrackId);
     if (hidden) return c.json({ detail: 'This sound is unavailable.' }, 400);
   }
 
-  if (isSupabasePrimary) {
-    const createdAt = now();
-    const supabaseInput = {
-      id,
-      userId,
-      authUserId: supabaseAuthorRow?.supabase_user_id || userId,
-      postTitle,
-      postContent,
-      primaryImage,
-      imageUrls,
-      mediaTypes,
-      backupIds,
-      mediaDimensions,
-      location,
-      displayCity,
-      displayRegion,
-      displayCountry,
-      displayLocationLabel,
-      displayLocationSource,
-      displayLocationVisibility,
-      postType,
-      placeProvider,
-      placeProviderId,
-      placeName,
-      placeFormattedAddress,
-      placeCategory,
-      placeCity,
-      placeRegion,
-      placeCountry,
-      placeLat,
-      placeLng,
-      isCheckin,
-      visibility,
-      mediaAssetIds: approvedMediaAssetIds,
-      editorOverlays,
-      taggedUsers,
-      autoCategory,
-      audioProvider,
-      audioTrackId,
-      audioTitle,
-      audioArtist,
-      audioArtworkUrl,
-      audioStreamUrl,
-      audioStartTime,
-      audioDuration,
-      clientRequestId,
-      createdAt,
-    };
-    const supabasePostRow = supabaseCreatePostTransferPayload(supabaseInput);
-    try {
-      await supabaseAdminUpsert(c, 'app_posts', [supabasePostRow], 'legacy_post_id');
-      if (approvedMediaAssetIds.length) {
-        await supabaseAdminPatchRows(c, 'app_media_assets', {
-          user_id: postgrestEqFilter(userId),
-          id: postgrestInFilter(approvedMediaAssetIds),
-        }, {
-          legacy_post_id: id,
-          updated_at: createdAt,
-        });
-      }
-      await writeSupabasePrimaryPostPlace(c, supabaseInput);
-      await recordAbuseSignals(c, userId, 'post_create', {
-        product_links: editorOverlays.filter((item: any) => item?.type === 'product' && item.link).map((item: any) => item.link),
+  const createdAt = now();
+  const supabaseInput = {
+    id,
+    userId,
+    authUserId: supabaseAuthorRow?.supabase_user_id || userId,
+    postTitle,
+    postContent,
+    primaryImage,
+    imageUrls,
+    mediaTypes,
+    backupIds,
+    mediaDimensions,
+    location,
+    displayCity,
+    displayRegion,
+    displayCountry,
+    displayLocationLabel,
+    displayLocationSource,
+    displayLocationVisibility,
+    postType,
+    placeProvider,
+    placeProviderId,
+    placeName,
+    placeFormattedAddress,
+    placeCategory,
+    placeCity,
+    placeRegion,
+    placeCountry,
+    placeLat,
+    placeLng,
+    isCheckin,
+    visibility,
+    mediaAssetIds: approvedMediaAssetIds,
+    editorOverlays,
+    taggedUsers,
+    autoCategory,
+    audioProvider,
+    audioTrackId,
+    audioTitle,
+    audioArtist,
+    audioArtworkUrl,
+    audioStreamUrl,
+    audioStartTime,
+    audioDuration,
+    clientRequestId,
+    createdAt,
+  };
+  const supabasePostRow = supabasePrimaryPostCreatePayload(supabaseInput);
+  let insertedPostRow = supabasePostRow;
+  try {
+    const insertedRows = await supabaseAdminInsertRows(c, 'app_posts', [supabasePostRow], SUPABASE_APP_POST_SELECT);
+    insertedPostRow = insertedRows[0] || supabasePostRow;
+    if (approvedMediaAssetIds.length) {
+      await supabaseAdminPatchRows(c, 'app_media_assets', {
+        user_id: postgrestEqFilter(userId),
+        id: postgrestInFilter(approvedMediaAssetIds),
+      }, {
+        legacy_post_id: id,
+        updated_at: createdAt,
       });
-      await supabaseIncrementAppUserPostCount(c, userId).catch((error: any) => {
-        console.warn(JSON.stringify({ event: 'supabase_post_count_increment_failed', code: getErrorCode(error).slice(0, 180) }));
-      });
-    } catch (error: any) {
-      const code = getErrorCode(error).slice(0, 180);
-      console.error(JSON.stringify({ event: 'supabase_primary_post_create_failed', post_id: id, user_id: userId, code }));
-      return c.json({
-        detail: 'Could not save this post to the production database. Please retry.',
-        code: 'SUPABASE_PRIMARY_WRITE_FAILED',
-      }, 503);
     }
-
-    runBackgroundTask(c, 'supabase_post_follower_notifications_failed', async () => {
-      await notifySupabaseFollowersOfNewPost(c, {
-        userId,
-        postId: id,
-        visibility,
-        authorName: cleanText(user?.full_name || user?.username || 'Someone you follow', 80),
-        body: cleanText(postTitle || postContent || 'Shared a new post', 120),
-      });
+    await writeSupabasePrimaryPostPlace(c, supabaseInput);
+    await recordAbuseSignals(c, userId, 'post_create', {
+      product_links: editorOverlays.filter((item: any) => item?.type === 'product' && item.link).map((item: any) => item.link),
     });
-
-    const createdPost = {
-      ...supabaseAppPostToLegacy(supabasePostRow, supabaseAuthorRow, false, 0),
-      client_request_id: clientRequestId,
-      moderation_status: 'approved',
-      moderation_media_ids: JSON.stringify(approvedMediaAssetIds),
-    };
-    return c.json(postPayload(createdPost, [], c.env));
+    await supabaseIncrementAppUserPostCount(c, userId).catch((error: any) => {
+      console.warn(JSON.stringify({ event: 'supabase_post_count_increment_failed', code: getErrorCode(error).slice(0, 180) }));
+    });
+  } catch (error: any) {
+    const code = getErrorCode(error).slice(0, 180);
+    if (clientRequestId && code.includes('23505')) {
+      const existing = await supabaseExistingPostByClientRequest(c, userId, clientRequestId, supabaseAuthorRow);
+      if (existing) return c.json({ ...postPayload(existing, [], c.env), idempotent_replay: true });
+    }
+    console.error(JSON.stringify({ event: 'supabase_primary_post_create_failed', post_id: id, user_id: userId, code }));
+    return c.json({
+      detail: 'Could not save this post to the production database. Please retry.',
+      code: 'SUPABASE_PRIMARY_WRITE_FAILED',
+    }, 503);
   }
+
+  runBackgroundTask(c, 'supabase_post_follower_notifications_failed', async () => {
+    await notifySupabaseFollowersOfNewPost(c, {
+      userId,
+      postId: id,
+      visibility,
+      authorName: cleanText(user?.full_name || user?.username || 'Someone you follow', 80),
+      body: cleanText(postTitle || postContent || 'Shared a new post', 120),
+    });
+  });
+
+  const createdPost = {
+    ...supabaseAppPostToLegacy(insertedPostRow, supabaseAuthorRow, false, 0),
+    client_request_id: clientRequestId,
+    moderation_status: 'approved',
+    moderation_media_ids: JSON.stringify(approvedMediaAssetIds),
+  };
+  return c.json(postPayload(createdPost, [], c.env));
 });
 
 api.get('/posts/feed', authMiddleware, async (c) => {
