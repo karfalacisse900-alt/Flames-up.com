@@ -311,6 +311,13 @@ const authMiddleware = async (c: any, next: () => Promise<void>) => {
   if (!userId) return c.json({ detail: 'Invalid token', code: 'INVALID_TOKEN' }, 401);
 
   try {
+    if (supabasePrimaryRequested(c) && !supabaseEngagementConfigured(c)) {
+      return c.json({
+        detail: 'Captro production database is not configured. Please try again later.',
+        code: 'SUPABASE_PRIMARY_REQUIRED',
+        feature: 'auth_context',
+      }, 503);
+    }
     let user: any = null;
     if (supabasePrimaryConfigured(c)) {
       user = await getSupabaseSessionUserByAnyId(c, userId);
@@ -388,6 +395,7 @@ async function getOptionalUserId(c: any): Promise<string> {
     const payload: any = verified.payload;
     const userId = String(payload?.sub || payload?.userId || '');
     if (!userId) return '';
+    if (supabasePrimaryRequested(c) && !supabaseEngagementConfigured(c)) return '';
 
     let user: any;
     try {
@@ -7012,8 +7020,21 @@ function databasePrimary(c: any): 'supabase_postgres' | 'legacy_d1' {
     : 'legacy_d1';
 }
 
+function supabasePrimaryRequested(c: any): boolean {
+  return databasePrimary(c) === 'supabase_postgres';
+}
+
 function supabasePrimaryConfigured(c: any): boolean {
-  return databasePrimary(c) === 'supabase_postgres' && supabaseEngagementConfigured(c);
+  return supabasePrimaryRequested(c) && supabaseEngagementConfigured(c);
+}
+
+function requireSupabasePrimaryDatabase(c: any, feature = 'app data') {
+  if (supabasePrimaryConfigured(c)) return null;
+  return c.json({
+    detail: 'Captro production database is not configured. Please try again later.',
+    code: 'SUPABASE_PRIMARY_REQUIRED',
+    feature,
+  }, 503);
 }
 
 async function supabaseAdminSelectRows(c: any, table: string, filters: Record<string, string>, select = '*', limit = 1000): Promise<any[]> {
@@ -7722,19 +7743,21 @@ async function getSupabasePostEngagementState(c: any, postId: string, userId: st
   } catch (error: any) {
     console.warn(JSON.stringify({ event: 'supabase_post_counter_repair_failed', code: getErrorCode(error).slice(0, 180) }));
   }
-  try {
-    await c.env.DB.prepare(
-      `UPDATE posts
-       SET likes_count = ?,
-           comments_count = ?,
-           saves_count = ?
-       WHERE id = ?`
-    ).bind(state.likes_count, state.comments_count, state.saves_count, legacyPostId || postId).run();
-    await c.env.DB.prepare('UPDATE discover_posts SET likes_count = ? WHERE id = ?')
-      .bind(state.likes_count, legacyPostId || postId)
-      .run()
-      .catch(() => {});
-  } catch {}
+  if (!supabasePrimaryRequested(c)) {
+    try {
+      await c.env.DB.prepare(
+        `UPDATE posts
+         SET likes_count = ?,
+             comments_count = ?,
+             saves_count = ?
+         WHERE id = ?`
+      ).bind(state.likes_count, state.comments_count, state.saves_count, legacyPostId || postId).run();
+      await c.env.DB.prepare('UPDATE discover_posts SET likes_count = ? WHERE id = ?')
+        .bind(state.likes_count, legacyPostId || postId)
+        .run()
+        .catch(() => {});
+    } catch {}
+  }
   return state;
 }
 
@@ -7744,6 +7767,7 @@ async function getCanonicalPostEngagementState(c: any, postId: string, userId: s
       return await getSupabasePostEngagementState(c, postId, userId);
     } catch (error: any) {
       console.warn(JSON.stringify({ event: 'supabase_engagement_state_failed', code: getErrorCode(error).slice(0, 180) }));
+      if (supabasePrimaryRequested(c)) throw error;
     }
   }
   return getPostEngagementState(c.env.DB, postId, userId);
@@ -7788,7 +7812,7 @@ async function setCanonicalPostLikeState(c: any, postId: string, userId: string,
     }
   };
   if (useSupabase) {
-    await syncLegacyD1LikeCache().catch(() => undefined);
+    if (!supabasePrimaryRequested(c)) await syncLegacyD1LikeCache().catch(() => undefined);
   } else {
     await syncLegacyD1LikeCache();
   }
@@ -7835,7 +7859,7 @@ async function setCanonicalPostSaveState(c: any, postId: string, userId: string,
     }
   };
   if (useSupabase) {
-    await syncLegacyD1SaveCache().catch(() => undefined);
+    if (!supabasePrimaryRequested(c)) await syncLegacyD1SaveCache().catch(() => undefined);
   } else {
     await syncLegacyD1SaveCache();
   }
@@ -15243,6 +15267,8 @@ api.post('/posts', authMiddleware, async (c) => {
   if (phoneGate) return phoneGate;
   const bodyTooLarge = rejectLargeRequest(c, 1_500_000);
   if (bodyTooLarge) return bodyTooLarge;
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'post_create');
+  if (supabaseRequired) return supabaseRequired;
   const isSupabasePrimary = supabasePrimaryConfigured(c);
   if (!isSupabasePrimary) {
     await ensureMediaBackupSchema(c.env.DB);
@@ -15630,6 +15656,8 @@ api.post('/posts', authMiddleware, async (c) => {
 
 api.get('/posts/feed', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'feed_read');
+  if (supabaseRequired) return supabaseRequired;
   const limited = await enforceRateLimit(c, 'feed_read', userId, 240, 60);
   if (limited) return limited;
   const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
@@ -15674,6 +15702,8 @@ api.get('/posts/feed', authMiddleware, async (c) => {
 
 api.get('/posts/world-board', async (c) => {
   try {
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'world_board_read');
+    if (supabaseRequired) return supabaseRequired;
     const limited = await enforceRateLimit(c, 'public_world_board', clientIp(c), 180, 60);
     if (limited) return limited;
     const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
@@ -15713,6 +15743,8 @@ api.get('/posts/world-board', async (c) => {
 
 api.get('/posts/nearby-feed', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'nearby_feed_read');
+  if (supabaseRequired) return supabaseRequired;
   const limited = await enforceRateLimit(c, 'nearby_feed_read', userId, 180, 60);
   if (limited) return limited;
   const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
@@ -15751,6 +15783,8 @@ api.get('/posts/nearby-feed', authMiddleware, async (c) => {
 
 api.get('/posts/:postId', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'post_read');
+  if (supabaseRequired) return supabaseRequired;
   const postId = c.req.param('postId');
   if (supabasePrimaryConfigured(c)) {
     try {
@@ -15787,6 +15821,8 @@ api.get('/posts/:postId', authMiddleware, async (c) => {
 
 api.post('/posts/:postId/like', authMiddleware, async (c) => {
   const userId = getUserId(c); const postId = c.req.param('postId');
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'post_like');
+  if (supabaseRequired) return supabaseRequired;
   const limited = await enforceRateLimit(c, 'post_like', userId, 300, 60);
   if (limited) return limited;
   const body: any = await c.req.json().catch(() => ({}));
@@ -15844,6 +15880,8 @@ api.post('/posts/:postId/like', authMiddleware, async (c) => {
 
 api.delete('/posts/:postId', authMiddleware, async (c) => {
   const userId = getUserId(c); const postId = c.req.param('postId');
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'post_delete');
+  if (supabaseRequired) return supabaseRequired;
   if (supabasePrimaryConfigured(c)) {
     try {
       const owned = await supabaseOwnedAppPost(c, postId, userId);
@@ -15878,6 +15916,8 @@ api.delete('/posts/:postId', authMiddleware, async (c) => {
 
 api.put('/posts/:postId/visibility', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'post_visibility');
+  if (supabaseRequired) return supabaseRequired;
   const postId = c.req.param('postId');
   const body: any = await c.req.json().catch(() => ({}));
   const requestedVisibility = typeof body.visibility === 'string' ? body.visibility.trim().toLowerCase() : '';
@@ -15932,6 +15972,8 @@ api.put('/posts/:postId/visibility', authMiddleware, async (c) => {
 
 api.put('/posts/:postId/pin', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'post_pin');
+  if (supabaseRequired) return supabaseRequired;
   const postId = c.req.param('postId');
   const body: any = await c.req.json().catch(() => ({}));
   const requested = optionalBoolean(body.pinned ?? body.pin ?? body.value);
@@ -15991,6 +16033,8 @@ api.put('/posts/:postId/pin', authMiddleware, async (c) => {
 
 api.get('/users/:userId/posts', authMiddleware, async (c) => {
   const viewerId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'profile_posts_read');
+  if (supabaseRequired) return supabaseRequired;
   const targetId = c.req.param('userId');
   const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
   const limit = clampNumber(c.req.query('limit') || '60', 1, 100, 60);
@@ -16041,6 +16085,8 @@ api.post('/posts/:postId/comments', authMiddleware, async (c) => {
     const bodyTooLarge = rejectLargeRequest(c, 100_000);
     if (bodyTooLarge) return bodyTooLarge;
     const userId = getUserId(c);
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'comment_create');
+    if (supabaseRequired) return supabaseRequired;
     const limited = await enforceRateLimit(c, 'comment_create', userId, 40, 60);
     if (limited) return limited;
     const restricted = await enforceUserRestriction(c, userId, 'commenting');
@@ -16160,6 +16206,8 @@ api.post('/posts/:postId/comments', authMiddleware, async (c) => {
 api.get('/posts/:postId/comments', authMiddleware, async (c) => {
   try {
     const userId = getUserId(c);
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'comments_read');
+    if (supabaseRequired) return supabaseRequired;
     const limit = clampNumber(c.req.query('limit') || '80', 1, 100, 80);
     if (supabasePrimaryConfigured(c)) {
       const result = await supabaseReadPostComments(c, c.req.param('postId'), userId, limit);
@@ -18275,6 +18323,8 @@ api.post('/client/events', async (c) => {
 // Library
 api.get('/library/liked', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'liked_library_read');
+  if (supabaseRequired) return supabaseRequired;
   const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
   const limit = clampNumber(c.req.query('limit') || '40', 1, 80, 40);
   if (supabasePrimaryConfigured(c)) {
@@ -18307,6 +18357,8 @@ api.get('/library/liked', authMiddleware, async (c) => {
 });
 api.get('/library/saved', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'saved_library_read');
+  if (supabaseRequired) return supabaseRequired;
   const collection = c.req.query('collection');
   const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
   const limit = clampNumber(c.req.query('limit') || '40', 1, 80, 40);
@@ -18349,6 +18401,8 @@ api.get('/library/saved', authMiddleware, async (c) => {
 });
 api.post('/library/save/:postId', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'library_save');
+  if (supabaseRequired) return supabaseRequired;
   const postId = c.req.param('postId');
   const b = await c.req.json().catch(() => ({}));
   const collection = cleanText((b as any).collection || 'Bookmarks', 80) || 'Bookmarks';
@@ -18379,6 +18433,8 @@ api.post('/library/save/:postId', authMiddleware, async (c) => {
 });
 api.delete('/library/save/:postId', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'library_unsave');
+  if (supabaseRequired) return supabaseRequired;
   const limited = await enforceRateLimit(c, 'save_post', userId, 240, 60);
   if (limited) return limited;
   const postId = c.req.param('postId');
@@ -18398,6 +18454,8 @@ api.delete('/library/save/:postId', authMiddleware, async (c) => {
 });
 api.get('/library/collections', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'library_collections_read');
+  if (supabaseRequired) return supabaseRequired;
   if (supabasePrimaryConfigured(c)) {
     try {
       return c.json(await supabaseViewerSaveCollectionCounts(c, userId));
@@ -18902,6 +18960,8 @@ api.post('/people/:profileId/report', authMiddleware, async (c) => {
 // Discover
 api.get('/discover', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'discover_read');
+  if (supabaseRequired) return supabaseRequired;
   const limited = await enforceRateLimit(c, 'discover_category_read', userId, 180, 60);
   if (limited) return limited;
   const rawCategory = c.req.query('category') || 'all';
@@ -18961,6 +19021,8 @@ api.get('/discover', authMiddleware, async (c) => {
 
 api.get('/discover/trending', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'discover_trending_read');
+  if (supabaseRequired) return supabaseRequired;
   const limit = clampNumber(c.req.query('limit') || '20', 1, 40, 20);
   if (supabasePrimaryConfigured(c)) {
     try {
@@ -18991,6 +19053,8 @@ api.get('/discover/trending', authMiddleware, async (c) => {
 });
 api.get('/discover/search', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'discover_search');
+  if (supabaseRequired) return supabaseRequired;
   const limited = await enforceRateLimit(c, 'discover_search', userId, 100, 60);
   if (limited) return limited;
   const q = cleanText(c.req.query('q'), 80);
@@ -19054,6 +19118,8 @@ api.get('/discover/search', authMiddleware, async (c) => {
 });
 api.get('/discover/suggested-users', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'suggested_users_read');
+  if (supabaseRequired) return supabaseRequired;
   const limited = await enforceRateLimit(c, 'suggested_users_read', userId, 120, 60);
   if (limited) return limited;
   if (supabasePrimaryConfigured(c)) {
@@ -19802,6 +19868,8 @@ api.post('/discover/posts', authMiddleware, async (c) => {
 });
 
 api.get('/discover/feed', authMiddleware, async (c) => {
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'discover_feed_read');
+  if (supabaseRequired) return supabaseRequired;
   const category = c.req.query('category') || 'all';
   const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
   const limit = clampNumber(c.req.query('limit') || '30', 1, 60, 30);
@@ -19840,6 +19908,8 @@ api.get('/discover/feed', authMiddleware, async (c) => {
 
 api.post('/discover/posts/:postId/like', authMiddleware, async (c) => {
   const userId = getUserId(c); const postId = c.req.param('postId');
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'discover_like');
+  if (supabaseRequired) return supabaseRequired;
   const body: any = await c.req.json().catch(() => ({}));
   const requested = optionalBoolean(body.liked ?? body.like ?? body.value);
   const limited = await enforceRateLimit(c, 'discover_like', userId, 300, 60);
@@ -24846,6 +24916,8 @@ api.post('/bookmarks/setup-db', authMiddleware, async (c) => {
 // Save/Bookmark a post
 api.post('/bookmarks', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'bookmark_save');
+  if (supabaseRequired) return supabaseRequired;
   const { post_id, collection } = await c.req.json().catch(() => ({}));
   const postId = publicId(post_id, 120);
   if (!postId) return c.json({ detail: 'post_id required' }, 400);
@@ -24880,6 +24952,8 @@ api.post('/bookmarks', authMiddleware, async (c) => {
 // Unsave/Remove bookmark
 api.delete('/bookmarks/:postId', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'bookmark_delete');
+  if (supabaseRequired) return supabaseRequired;
   const limited = await enforceRateLimit(c, 'save_post', userId, 240, 60);
   if (limited) return limited;
   const postId = publicId(c.req.param('postId'), 120);
@@ -24901,6 +24975,8 @@ api.delete('/bookmarks/:postId', authMiddleware, async (c) => {
 // Get saved posts by collection
 api.get('/bookmarks', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'bookmarks_read');
+  if (supabaseRequired) return supabaseRequired;
   const collection = cleanText(c.req.query('collection'), 80);
   const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
   const limit = clampNumber(c.req.query('limit') || '40', 1, 80, 40);
@@ -24942,6 +25018,8 @@ api.get('/bookmarks', authMiddleware, async (c) => {
 // Check if post is saved
 api.get('/bookmarks/check/:postId', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'bookmark_check');
+  if (supabaseRequired) return supabaseRequired;
   const postId = c.req.param('postId');
   if (supabaseEngagementConfigured(c)) {
     try {
