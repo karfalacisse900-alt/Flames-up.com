@@ -259,6 +259,12 @@ api.all('/admin/applications', retiredFeature('Creator and publisher application
 api.all('/admin/applications/*', retiredFeature('Creator and publisher applications'));
 api.all('/admin/media-backups', retiredFeature('Legacy media backups'));
 api.all('/admin/media-backups/*', retiredFeature('Legacy media backups'));
+
+api.use('/admin/*', async (c, next) => {
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'admin');
+  if (supabaseRequired) return supabaseRequired;
+  await next();
+});
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 const uuid = () => crypto.randomUUID();
 const now = () => new Date().toISOString();
@@ -24893,7 +24899,9 @@ api.get('/health', async (c) => {
 api.get('/database/status', authMiddleware, async (c) => {
   try {
     await requireOwnerOrAdmin(c);
-    const d1Check = await c.env.DB.prepare('SELECT 1 AS ok').first().then(() => true).catch(() => false);
+    const d1Check = databasePrimary(c) === 'legacy_d1'
+      ? await c.env.DB.prepare('SELECT 1 AS ok').first().then(() => true).catch(() => false)
+      : null;
     let kvCheck = false;
     if (c.env.KV) {
       const key = `health:database:${uuid()}`;
@@ -24921,7 +24929,9 @@ api.get('/database/status', authMiddleware, async (c) => {
       d1_sqlite_legacy_cache: {
         configured: true,
         healthy: d1Check,
-        role: 'legacy compatibility/cache only; do not treat D1 as the production source of truth.',
+        role: databasePrimary(c) === 'legacy_d1'
+          ? 'legacy database mode only'
+          : 'disabled for Supabase-primary production; Cloudflare D1 is not the Captro source of truth.',
       },
       kv_nosql: { configured: !!c.env.KV, healthy: kvCheck },
       postgres_hyperdrive: {
@@ -24953,40 +24963,12 @@ api.get('/database/status', authMiddleware, async (c) => {
 // BOOKMARKS / SAVE SYSTEM
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// Setup bookmarks table
 api.post('/bookmarks/setup-db', authMiddleware, async (c) => {
-  try {
-    await requireOwnerOrAdmin(c);
-    if (supabasePrimaryConfigured(c)) {
-      return c.json({ success: true, message: 'Supabase is primary; legacy D1 bookmark setup is disabled.' });
-    }
-    await c.env.DB.exec(`
-      CREATE TABLE IF NOT EXISTS bookmarks (
-        id TEXT PRIMARY KEY, user_id TEXT NOT NULL, post_id TEXT NOT NULL,
-        collection TEXT DEFAULT 'saved', created_at TEXT DEFAULT (datetime('now')),
-        UNIQUE(user_id, post_id), FOREIGN KEY (user_id) REFERENCES users(id), FOREIGN KEY (post_id) REFERENCES posts(id)
-      );
-      CREATE TABLE IF NOT EXISTS saved_places (
-        id TEXT PRIMARY KEY, user_id TEXT NOT NULL, place_id TEXT NOT NULL,
-        place_name TEXT DEFAULT '', place_type TEXT DEFAULT '',
-        save_type TEXT DEFAULT 'want_to_go', created_at TEXT DEFAULT (datetime('now')),
-        UNIQUE(user_id, place_id), FOREIGN KEY (user_id) REFERENCES users(id)
-      );
-      CREATE INDEX IF NOT EXISTS idx_bookmarks_user ON bookmarks(user_id);
-      CREATE INDEX IF NOT EXISTS idx_bookmarks_post ON bookmarks(post_id);
-      CREATE INDEX IF NOT EXISTS idx_saved_places_user ON saved_places(user_id);
-    `);
-    // Add category column to posts if not exists
-    try { await c.env.DB.exec(`ALTER TABLE posts ADD COLUMN category TEXT DEFAULT 'all';`); } catch {}
-    try { await c.env.DB.exec(`ALTER TABLE posts ADD COLUMN place_id TEXT DEFAULT NULL;`); } catch {}
-    try { await c.env.DB.exec(`ALTER TABLE posts ADD COLUMN place_name TEXT DEFAULT NULL;`); } catch {}
-    return c.json({ success: true, message: 'Bookmarks + Saved Places tables created' });
-  } catch (e: any) {
-    const forbidden = String(e?.message || '') === 'FORBIDDEN';
-    if (forbidden) return c.json({ detail: 'Owner access required.' }, 403);
-    console.error('Bookmarks setup failed:', getErrorCode(e));
-    return c.json({ success: true, message: 'Tables already exist or could not be changed now' });
-  }
+  await requireOwnerOrAdmin(c);
+  return c.json({
+    detail: 'Legacy D1 bookmark setup is retired. Captro bookmarks are managed in Supabase.',
+    code: 'LEGACY_D1_SETUP_RETIRED',
+  }, 410);
 });
 
 // Save/Bookmark a post
@@ -26202,6 +26184,13 @@ async function processAccountDeletionQueue(env: Env, limit = 20) {
         }));
       }
     }
+    return;
+  }
+  if (supabasePrimaryRequestedForEnv(env)) {
+    console.warn(JSON.stringify({
+      event: 'supabase_primary_required',
+      feature: 'account_deletion_queue',
+    }));
     return;
   }
   await ensureAccountDeletionSchema(env.DB);
