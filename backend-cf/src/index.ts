@@ -23061,6 +23061,15 @@ api.get('/admin/audit-logs', authMiddleware, async (c) => {
 });
 
 api.get('/admin/stats', authMiddleware, adminGuard, async (c) => {
+  if (supabasePrimaryConfigured(c)) {
+    const [users, posts, reports, pendingApplications] = await Promise.all([
+      supabaseAdminCountRows(c, 'app_users', {}),
+      supabaseAdminCountRows(c, 'app_posts', { status: postgrestInFilter(['active', 'under_review', 'removed']) }),
+      supabaseAdminCountRows(c, 'app_reports', {}),
+      supabaseAdminCountRows(c, 'app_documents', { collection: postgrestEqFilter('publisher_applications'), visibility: postgrestEqFilter('private') }).catch(() => 0),
+    ]);
+    return c.json({ total_users: users, total_posts: posts, total_reports: reports, pending_applications: pendingApplications });
+  }
   const users = await c.env.DB.prepare('SELECT COUNT(*) as c FROM users').first() as any;
   const posts = await c.env.DB.prepare('SELECT COUNT(*) as c FROM posts').first() as any;
   const reports = await c.env.DB.prepare('SELECT COUNT(*) as c FROM reports').first() as any;
@@ -23069,17 +23078,53 @@ api.get('/admin/stats', authMiddleware, adminGuard, async (c) => {
 });
 
 api.get('/admin/reported-posts', authMiddleware, adminGuard, async (c) => {
+  if (supabasePrimaryConfigured(c)) {
+    const rows = await supabaseAdminQueryRows(c, 'app_reports', {
+      filters: { target_type: postgrestEqFilter('post') },
+      order: 'created_at.desc',
+      limit: 100,
+    });
+    return c.json(await supabaseEnrichAdminReportRows(c, rows));
+  }
   const r = await c.env.DB.prepare(`SELECT r.*, p.content AS post_content, p.image AS post_image, u.username AS reporter_name FROM reports r LEFT JOIN posts p ON r.content_id = p.id LEFT JOIN users u ON r.reporter_id = u.id WHERE r.report_type = 'post' ORDER BY r.created_at DESC`).all();
   return c.json(r.results);
 });
 
 api.get('/admin/reported-accounts', authMiddleware, adminGuard, async (c) => {
+  if (supabasePrimaryConfigured(c)) {
+    const rows = await supabaseAdminQueryRows(c, 'app_reports', {
+      filters: { target_type: postgrestEqFilter('user') },
+      order: 'created_at.desc',
+      limit: 100,
+    });
+    return c.json(await supabaseEnrichAdminReportRows(c, rows));
+  }
   const r = await c.env.DB.prepare(`SELECT r.reported_id, u.username, u.full_name, u.profile_image, COUNT(*) as report_count FROM reports r JOIN users u ON r.reported_id = u.id WHERE r.report_type = 'user' GROUP BY r.reported_id`).all();
   return c.json(r.results);
 });
 
 api.post('/admin/remove-post/:postId', authMiddleware, adminGuard, async (c) => {
   const postId = c.req.param('postId');
+  if (supabasePrimaryConfigured(c)) {
+    const identity = await supabaseResolvePostIdentity(c, postId);
+    const patch = {
+      status: 'removed',
+      metadata: {
+        removed_at: now(),
+        removed_reason: 'Removed by admin',
+        removed_by: getUserId(c),
+      },
+      updated_at: now(),
+    };
+    if (identity.legacyPostId || identity.requestedPostId) {
+      await supabaseAdminPatchRows(c, 'app_posts', { legacy_post_id: postgrestEqFilter(identity.legacyPostId || identity.requestedPostId) }, patch).catch(() => undefined);
+    }
+    if (identity.postUuid) {
+      await supabaseAdminPatchRows(c, 'app_posts', { id: postgrestEqFilter(identity.postUuid) }, patch).catch(() => undefined);
+    }
+    await logGovernanceAction(c, getUserId(c), 'remove_post', 'post', postId, { legacy_route: true, supabase_primary: true });
+    return c.json({ removed: true, soft_deleted: true });
+  }
   await ensureGovernanceSchema(c.env.DB);
   await c.env.DB.prepare("UPDATE posts SET status = 'removed', removed_at = ?, removed_reason = 'Removed by admin' WHERE id = ?")
     .bind(now(), postId).run();
@@ -23104,6 +23149,17 @@ api.post('/admin/publisher-applications/:appId/decide', authMiddleware, adminGua
 });
 
 api.post('/admin/make-admin/:userId', authMiddleware, adminGuard, async (c) => {
+  if (supabasePrimaryConfigured(c)) {
+    const targetUserId = publicId(c.req.param('userId'), 120);
+    await supabaseAdminUpsert(c, 'app_admin_roles', [{
+      user_id: targetUserId,
+      role: 'admin',
+      created_by: getUserId(c),
+      updated_at: now(),
+    }], 'user_id');
+    await logGovernanceAction(c, getUserId(c), 'assign_admin_role', 'user', targetUserId, { legacy_route: true, supabase_primary: true });
+    return c.json({ success: true });
+  }
   await c.env.DB.prepare('UPDATE users SET is_admin = 1 WHERE id = ?').bind(c.req.param('userId')).run();
   return c.json({ success: true });
 });
@@ -25010,6 +25066,173 @@ async function deleteCloudflareMediaAsset(env: Env, asset: any) {
   }
 }
 
+function chunkDeletionValues<T>(values: T[], size = 50): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < values.length; i += size) out.push(values.slice(i, i + size));
+  return out;
+}
+
+function dueDeletionScheduledAt(value: unknown, cutoffMs = Date.now()): boolean {
+  const text = cleanText(value, 80);
+  if (!text) return false;
+  const scheduledMs = Date.parse(text);
+  return Number.isFinite(scheduledMs) && scheduledMs <= cutoffMs;
+}
+
+async function supabaseDeleteRowsByAnyField(c: any, table: string, fieldValues: Array<[string, string]>) {
+  for (const [field, value] of fieldValues) {
+    const cleanValue = cleanText(value, 240);
+    if (!field || !cleanValue) continue;
+    await supabaseAdminDeleteRowsIfShapeExists(c, table, { [field]: postgrestEqFilter(cleanValue) })
+      .catch((error: any) => console.warn(JSON.stringify({
+        event: 'supabase_account_deletion_table_cleanup_failed',
+        table,
+        field,
+        code: getErrorCode(error).slice(0, 180),
+      })));
+  }
+}
+
+async function supabaseDeleteRowsForPostIds(c: any, table: string, field: string, postIds: string[]) {
+  const cleanPostIds = Array.from(new Set(postIds.map((postId) => cleanText(postId, 120)).filter(Boolean)));
+  for (const chunk of chunkDeletionValues(cleanPostIds)) {
+    await supabaseAdminDeleteRowsIfShapeExists(c, table, { [field]: postgrestInFilter(chunk) })
+      .catch((error: any) => console.warn(JSON.stringify({
+        event: 'supabase_account_deletion_post_cleanup_failed',
+        table,
+        field,
+        code: getErrorCode(error).slice(0, 180),
+      })));
+  }
+}
+
+async function permanentlyDeleteSupabaseAccount(env: Env, row: any) {
+  const c: any = { env };
+  const user = supabaseAppUserToLegacyUser(row);
+  const userId = publicId(user?.id, 120);
+  if (!userId || String(user?.status || '') === 'deleted') return;
+  const deletedAt = now();
+  const authUserId = isUuidText(row?.supabase_user_id || user?.supabase_user_id);
+
+  const identities = await supabaseAdminQueryRows(c, 'app_account_identities', {
+    select: 'provider,provider_user_id,email_hash',
+    filters: { user_id: postgrestEqFilter(userId) },
+    limit: 200,
+  }).catch(() => []);
+  const identityRows = identities.length ? identities : [{
+    provider: cleanText(user.oauth_provider || (user.email ? 'email' : ''), 40),
+    provider_user_id: cleanText(user.oauth_subject || authUserId || '', 240),
+    email_hash: user.email ? await privacyHash(c, normalizeOptionalEmail(user.email) || '') : '',
+  }];
+  for (const identity of identityRows) {
+    await supabaseAdminUpsertSafe(c, 'app_deleted_account_safety_records', [{
+      id: uuid(),
+      user_id: userId,
+      email_hash: cleanText(identity.email_hash || '', 160) || null,
+      provider: cleanText(identity.provider || '', 40) || null,
+      provider_user_id_hash: identity.provider_user_id ? await privacyHash(c, identity.provider_user_id) : null,
+      status_at_deletion: cleanText(user.status || 'deletion_pending', 40),
+      reason: cleanText(user.ban_reason || 'account_deletion', 160),
+      metadata: {
+        source: 'supabase_primary_scheduled_cleanup',
+        deleted_at: deletedAt,
+      },
+      created_at: deletedAt,
+    }], 'id');
+  }
+
+  const assets = await supabaseAdminQueryRows(c, 'app_media_assets', {
+    select: 'id,storage_provider,storage_key,media_type',
+    filters: { user_id: postgrestEqFilter(userId) },
+    limit: 10000,
+  }).catch(() => []);
+  for (const asset of assets) await deleteCloudflareMediaAsset(env, asset);
+
+  const postRows = await supabaseAdminQueryRows(c, 'app_posts', {
+    select: 'legacy_post_id',
+    filters: { app_user_id: postgrestEqFilter(userId) },
+    limit: 10000,
+  }).catch(() => []);
+  const postIds = postRows.map((post: any) => cleanText(post.legacy_post_id, 120)).filter(Boolean);
+  for (const table of ['app_post_places', 'post_comments', 'app_post_interactions', 'app_media_assets']) {
+    await supabaseDeleteRowsForPostIds(c, table, 'legacy_post_id', postIds);
+  }
+
+  await supabaseDeleteRowsByAnyField(c, 'app_moderation_results', assets.map((asset: any) => ['media_id', cleanText(asset.id, 120)]));
+  await supabaseDeleteRowsByAnyField(c, 'app_moderation_jobs', assets.map((asset: any) => ['media_id', cleanText(asset.id, 120)]));
+  await supabaseDeleteRowsByAnyField(c, 'app_moderation_events', assets.map((asset: any) => ['media_id', cleanText(asset.id, 120)]));
+
+  const userScopedDeletes: Array<[string, Array<[string, string]>]> = [
+    ['app_push_tokens', [['user_id', userId]]],
+    ['app_notifications', [['user_id', userId], ['from_user_id', userId]]],
+    ['app_post_interactions', [['app_user_id', userId], ['user_id', authUserId || userId]]],
+    ['post_comment_likes', [['app_user_id', userId], ['user_id', authUserId || userId]]],
+    ['post_comments', [['app_user_id', userId], ['user_id', authUserId || userId]]],
+    ['app_follows', [['app_follower_id', userId], ['app_following_id', userId]]],
+    ['app_blocks', [['blocker_id', userId], ['blocked_id', userId]]],
+    ['app_friend_requests', [['from_user_id', userId], ['to_user_id', userId]]],
+    ['app_friendships', [['user_id', userId], ['friend_id', userId]]],
+    ['app_reports', [['reporter_id', userId], ['target_owner_user_id', userId], ['assigned_to', userId], ['reviewed_by', userId]]],
+    ['app_messages', [['sender_id', userId], ['receiver_id', userId]]],
+    ['app_group_messages', [['sender_id', userId]]],
+    ['app_group_chat_members', [['user_id', userId]]],
+    ['app_group_chats', [['created_by', userId]]],
+    ['app_stories', [['user_id', userId]]],
+    ['app_story_likes', [['user_id', userId]]],
+    ['app_story_views', [['user_id', userId]]],
+    ['app_story_thoughts', [['user_id', userId]]],
+    ['app_favorite_sounds', [['user_id', userId]]],
+    ['app_client_events', [['user_id', userId]]],
+    ['app_account_identities', [['user_id', userId]]],
+  ];
+  for (const [table, filters] of userScopedDeletes) await supabaseDeleteRowsByAnyField(c, table, filters);
+  await supabaseDeleteRowsForPostIds(c, 'app_posts', 'legacy_post_id', postIds);
+
+  await supabaseAdminPatchRows(c, 'app_users', { id: postgrestEqFilter(userId) }, {
+    supabase_user_id: null,
+    email: null,
+    username: `deleted_${userId.slice(0, 12)}`,
+    full_name: 'Deleted user',
+    avatar_url: null,
+    cover_url: null,
+    bio: '',
+    city: '',
+    is_private: true,
+    is_verified: false,
+    counts: { followers_count: 0, following_count: 0, posts_count: 0 },
+    profile: {},
+    metadata: {
+      status: 'deleted',
+      deleted_at: deletedAt,
+      permanent_deletion_completed_at: deletedAt,
+    },
+    updated_at: deletedAt,
+  });
+
+  await writeSupabaseAuditLog(c, {
+    actionType: 'account_deletion_permanent_completed',
+    actorUserId: 'system',
+    actorRole: 'system',
+    targetType: 'user',
+    targetId: userId,
+    targetUserId: userId,
+    metadata: {
+      deleted_at: deletedAt,
+      deleted_media_count: assets.length,
+      deleted_post_count: postIds.length,
+    },
+  }).catch((error: any) => console.warn(JSON.stringify({
+    event: 'supabase_account_deletion_audit_failed',
+    code: getErrorCode(error).slice(0, 180),
+  })));
+
+  if (authUserId) {
+    await deleteSupabaseAuthUser(c, authUserId).catch((error: any) => {
+      console.warn(JSON.stringify({ event: 'supabase_auth_permanent_delete_failed', code: getErrorCode(error).slice(0, 160), user_id: publicId(userId, 120) }));
+    });
+  }
+}
+
 async function permanentlyDeleteAccount(env: Env, user: any) {
   const userId = publicId(user?.id, 120);
   if (!userId || String(user?.status || '') === 'deleted') return;
@@ -25121,6 +25344,33 @@ async function permanentlyDeleteAccount(env: Env, user: any) {
 }
 
 async function processAccountDeletionQueue(env: Env, limit = 20) {
+  const c: any = { env };
+  if (supabasePrimaryConfigured(c)) {
+    const rows = await supabaseAdminQueryRows(c, 'app_users', {
+      select: SUPABASE_APP_USER_SELECT,
+      filters: { 'metadata->>status': postgrestEqFilter('deletion_pending') },
+      order: 'updated_at.asc',
+      limit: Math.max(limit * 5, limit),
+    }).catch((error: any) => {
+      console.warn(JSON.stringify({ event: 'supabase_account_deletion_due_lookup_failed', code: getErrorCode(error).slice(0, 180) }));
+      return [];
+    });
+    const due = rows
+      .filter((account: any) => dueDeletionScheduledAt((parseJsonObject(account?.metadata) as any).deletion_scheduled_at))
+      .slice(0, limit);
+    for (const account of due) {
+      try {
+        await permanentlyDeleteSupabaseAccount(env, account);
+      } catch (error: any) {
+        console.warn(JSON.stringify({
+          event: 'supabase_account_deletion_cleanup_failed',
+          code: getErrorCode(error).slice(0, 180),
+          user_id: publicId(account?.id || '', 120),
+        }));
+      }
+    }
+    return;
+  }
   await ensureAccountDeletionSchema(env.DB);
   const due = await queryDeletionRows(env,
     `SELECT * FROM users
