@@ -15650,22 +15650,15 @@ api.delete('/statuses/:statusId', authMiddleware, async (c) => {
 
 // Messages (with media support)
 async function requireGroupMember(c: any, groupId: string, userId: string) {
-  if (supabasePrimaryConfigured(c)) {
-    const rows = await supabaseAdminQueryRows(c, 'app_group_chat_members', {
-      select: 'id',
-      filters: {
-        group_id: postgrestEqFilter(groupId),
-        user_id: postgrestEqFilter(userId),
-      },
-      limit: 1,
-    });
-    return !!rows[0];
-  }
-  await ensureGroupChatSchema(c.env.DB);
-  const member = await c.env.DB.prepare('SELECT id FROM group_chat_members WHERE group_id = ? AND user_id = ?')
-    .bind(groupId, userId)
-    .first();
-  return !!member;
+  const rows = await supabaseAdminQueryRows(c, 'app_group_chat_members', {
+    select: 'id',
+    filters: {
+      group_id: postgrestEqFilter(groupId),
+      user_id: postgrestEqFilter(userId),
+    },
+    limit: 1,
+  });
+  return !!rows[0];
 }
 
 function supabaseMessageToLegacy(row: any): any {
@@ -15739,272 +15732,143 @@ api.get('/conversations', authMiddleware, async (c) => {
   const userId = getUserId(c);
   const supabaseRequired = requireSupabasePrimaryDatabase(c, 'conversations_read');
   if (supabaseRequired) return supabaseRequired;
-  if (supabasePrimaryConfigured(c)) {
-    const limit = clampNumber(c.req.query('limit') || '60', 1, 100, 60);
-    const blockedIds = await supabaseBlockedUserIds(c, userId);
-    const directRows = await supabaseAdminQueryRows(c, 'app_messages', {
-      select: '*',
-      filters: { or: `(sender_id.eq.${userId},receiver_id.eq.${userId})` },
-      order: 'created_at.desc',
-      limit: Math.max(120, limit * 6),
-    });
-    const otherIds = Array.from(new Set(directRows.map((row) => publicId(row.sender_id === userId ? row.receiver_id : row.sender_id, 120)).filter(Boolean)));
-    const users = await supabaseUsersByAnyIds(c, otherIds);
-    const directMap = new Map<string, any>();
-    const unreadCounts = new Map<string, number>();
-    for (const row of directRows) {
-      const otherId = publicId(row.sender_id === userId ? row.receiver_id : row.sender_id, 120);
-      if (!otherId || blockedIds.has(otherId)) continue;
-      if (row.receiver_id === userId && row.is_read !== true) unreadCounts.set(otherId, (unreadCounts.get(otherId) || 0) + 1);
-      if (directMap.has(otherId)) continue;
-      const user = users.get(otherId) || {};
-      const legacyMessage = supabaseMessageToLegacy(row);
-      let preview = legacyMessage.content || '';
-      if (!preview && legacyMessage.media_type === 'video') preview = 'Sent a video';
-      else if (!preview && legacyMessage.media_type === 'voice') preview = 'Sent a voice message';
-      else if (!preview && legacyMessage.media_type === 'file') preview = 'Sent a file';
-      else if (!preview && legacyMessage.media_url) preview = 'Sent a photo';
-      directMap.set(otherId, {
-        id: `conv-${otherId}`,
-        participants: [userId, otherId],
-        other_user: {
-          id: otherId,
-          username: user?.username,
-          full_name: user?.full_name,
-          profile_image: safeMediaReference(user?.avatar_url),
-          last_seen_at: null,
-          is_online: false,
-          is_typing: false,
-        },
-        last_message: preview,
-        last_message_time: legacyMessage.created_at,
-        unread_count: unreadCounts.get(otherId) || 0,
-      });
-    }
-    for (const [otherId, count] of unreadCounts.entries()) {
-      const existing = directMap.get(otherId);
-      if (existing) existing.unread_count = count;
-    }
-    if (directMap.size) {
-      await Promise.all(Array.from(directMap.entries()).map(async ([otherId, conversation]) => {
-        const [lastSeenAt, isTyping] = await Promise.all([
-          readSupabasePrimaryPresence(c, otherId),
-          readSupabasePrimaryTyping(c, otherId, userId),
-        ]);
-        conversation.other_user.last_seen_at = lastSeenAt;
-        conversation.other_user.is_online = isPresenceOnline(lastSeenAt);
-        conversation.other_user.is_typing = isTyping;
-      }));
-    }
-
-    const memberships = await supabaseAdminQueryRows(c, 'app_group_chat_members', {
-      select: 'group_id',
-      filters: { user_id: postgrestEqFilter(userId) },
-      order: 'created_at.desc',
-      limit: 100,
-    }).catch(() => []);
-    const groupIds = Array.from(new Set(memberships.map((row) => publicId(row.group_id, 120)).filter(Boolean)));
-    let groupConversations: any[] = [];
-    if (groupIds.length) {
-      const [groups, members, messages] = await Promise.all([
-        supabaseAdminQueryRows(c, 'app_group_chats', {
-          select: '*',
-          filters: { id: postgrestInFilter(groupIds) },
-          limit: groupIds.length,
-        }).catch(() => []),
-        supabaseAdminQueryRows(c, 'app_group_chat_members', {
-          select: 'group_id,user_id',
-          filters: { group_id: postgrestInFilter(groupIds) },
-          limit: Math.max(100, groupIds.length * 60),
-        }).catch(() => []),
-        supabaseAdminQueryRows(c, 'app_group_messages', {
-          select: '*',
-          filters: { group_id: postgrestInFilter(groupIds) },
-          order: 'created_at.desc',
-          limit: Math.max(100, groupIds.length * 20),
-        }).catch(() => []),
-      ]);
-      const memberCount = new Map<string, number>();
-      for (const member of members) {
-        const groupId = publicId(member.group_id, 120);
-        memberCount.set(groupId, (memberCount.get(groupId) || 0) + 1);
-      }
-      const lastMessage = new Map<string, any>();
-      for (const message of messages) {
-        const groupId = publicId(message.group_id, 120);
-        if (!lastMessage.has(groupId)) lastMessage.set(groupId, message);
-      }
-      const senderIds = Array.from(new Set(messages.map((row) => publicId(row.sender_id, 120)).filter(Boolean)));
-      const senders = await supabaseUsersByAnyIds(c, senderIds);
-      groupConversations = groups.map((group: any) => {
-        const groupId = publicId(group.id, 120);
-        const msg = lastMessage.get(groupId);
-        const legacyMessage = msg ? supabaseMessageToLegacy(msg) : null;
-        const sender = msg ? senders.get(publicId(msg.sender_id, 120)) || {} : {};
-        const senderName = publicUsernameFor({ username: sender?.username }) || cleanText(sender?.full_name, 80) || 'Someone';
-        return {
-          id: `group-${groupId}`,
-          type: 'group',
-          group_id: groupId,
-          group_name: cleanText(group.name || 'New group', 120),
-          member_count: memberCount.get(groupId) || 0,
-          last_message: legacyMessage
-            ? legacyMessage.content
-              ? `${senderName}: ${legacyMessage.content}`
-              : legacyMessage.media_type === 'video'
-                ? `${senderName}: Sent a video`
-                : legacyMessage.media_type === 'voice'
-                  ? `${senderName}: Sent a voice message`
-                  : legacyMessage.media_type === 'file'
-                    ? `${senderName}: Sent a file`
-                    : legacyMessage.media_url
-                      ? `${senderName}: Sent a photo`
-                      : 'Group created'
-            : 'Group created',
-          last_message_time: legacyMessage?.created_at || group.legacy_created_at || group.created_at,
-          unread_count: 0,
-        };
-      });
-    }
-
-    return c.json([...directMap.values(), ...groupConversations]
-      .sort((a, b) => Date.parse(b.last_message_time || '') - Date.parse(a.last_message_time || ''))
-      .slice(0, limit));
-  }
-  await touchUserPresence(c.env.DB, userId);
-  await ensureAbuseProtectionSchema(c.env.DB);
-  await ensureGroupChatSchema(c.env.DB);
   const limit = clampNumber(c.req.query('limit') || '60', 1, 100, 60);
-  const msgs = await c.env.DB.prepare(`
-    WITH ranked_messages AS (
-      SELECT
-        m.*,
-        CASE WHEN m.sender_id = ? THEN m.receiver_id ELSE m.sender_id END AS other_id,
-        ROW_NUMBER() OVER (
-          PARTITION BY CASE WHEN m.sender_id = ? THEN m.receiver_id ELSE m.sender_id END
-          ORDER BY datetime(m.created_at) DESC
-        ) AS rn
-      FROM messages m
-      WHERE (m.sender_id = ? OR m.receiver_id = ?)
-    )
-    SELECT
-      m.*,
-      u.username,
-      u.full_name,
-      u.profile_image,
-      up.last_seen_at AS other_last_seen_at,
-      EXISTS (
-        SELECT 1 FROM message_typing mt
-        WHERE mt.user_id = u.id
-          AND mt.peer_id = ?
-          AND mt.is_typing = 1
-          AND datetime(mt.updated_at) > datetime('now', '-10 seconds')
-      ) AS other_is_typing
-      ,
-      (SELECT COUNT(*)
-       FROM messages unread
-       WHERE unread.sender_id = u.id
-         AND unread.receiver_id = ?
-         AND unread.is_read = 0) AS unread_total
-    FROM ranked_messages m
-    JOIN users u ON m.other_id = u.id
-    LEFT JOIN user_presence up ON up.user_id = u.id
-    WHERE m.rn = 1
-      AND COALESCE(u.status, 'active') = 'active'
-      AND NOT EXISTS (
-        SELECT 1 FROM blocks b
-        WHERE (b.blocker_id = ? AND b.blocked_id = u.id)
-           OR (b.blocker_id = u.id AND b.blocked_id = ?)
-      )
-    ORDER BY m.created_at DESC
-    LIMIT ?
-  `).bind(userId, userId, userId, userId, userId, userId, userId, userId, limit).all();
-  const map = new Map<string, any>();
-  for (const m of msgs.results as any[]) {
-    const oid = m.sender_id === userId ? m.receiver_id : m.sender_id;
-    if (!map.has(oid)) {
-      let preview = m.content || '';
-      if (!preview && m.media_type === 'video') preview = 'Sent a video';
-      else if (!preview && m.media_type === 'voice') preview = 'Sent a voice message';
-      else if (!preview && m.media_type === 'file') preview = 'Sent a file';
-      else if (!preview && (m.media_url || m.image)) preview = 'Sent a photo';
-      map.set(oid, {
-        id: `conv-${oid}`,
-        participants: [userId, oid],
-        other_user: {
-          id: oid,
-          username: m.username,
-          full_name: m.full_name,
-          profile_image: safeMediaReference(m.profile_image),
-          last_seen_at: m.other_last_seen_at || null,
-          is_online: isPresenceOnline(m.other_last_seen_at),
-          is_typing: Number(m.other_is_typing || 0) > 0,
-        },
-        last_message: preview,
-        last_message_time: m.created_at,
-        unread_count: Number(m.unread_total || 0),
-      });
-    }
+  const blockedIds = await supabaseBlockedUserIds(c, userId);
+  const directRows = await supabaseAdminQueryRows(c, 'app_messages', {
+    select: '*',
+    filters: { or: `(sender_id.eq.${userId},receiver_id.eq.${userId})` },
+    order: 'created_at.desc',
+    limit: Math.max(120, limit * 6),
+  });
+  const otherIds = Array.from(new Set(directRows.map((row) => publicId(row.sender_id === userId ? row.receiver_id : row.sender_id, 120)).filter(Boolean)));
+  const users = await supabaseUsersByAnyIds(c, otherIds);
+  const directMap = new Map<string, any>();
+  const unreadCounts = new Map<string, number>();
+  for (const row of directRows) {
+    const otherId = publicId(row.sender_id === userId ? row.receiver_id : row.sender_id, 120);
+    if (!otherId || blockedIds.has(otherId)) continue;
+    if (row.receiver_id === userId && row.is_read !== true) unreadCounts.set(otherId, (unreadCounts.get(otherId) || 0) + 1);
+    if (directMap.has(otherId)) continue;
+    const user = users.get(otherId) || {};
+    const legacyMessage = supabaseMessageToLegacy(row);
+    let preview = legacyMessage.content || '';
+    if (!preview && legacyMessage.media_type === 'video') preview = 'Sent a video';
+    else if (!preview && legacyMessage.media_type === 'voice') preview = 'Sent a voice message';
+    else if (!preview && legacyMessage.media_type === 'file') preview = 'Sent a file';
+    else if (!preview && legacyMessage.media_url) preview = 'Sent a photo';
+    directMap.set(otherId, {
+      id: `conv-${otherId}`,
+      participants: [userId, otherId],
+      other_user: {
+        id: otherId,
+        username: user?.username,
+        full_name: user?.full_name,
+        profile_image: safeMediaReference(user?.avatar_url),
+        last_seen_at: null,
+        is_online: false,
+        is_typing: false,
+      },
+      last_message: preview,
+      last_message_time: legacyMessage.created_at,
+      unread_count: unreadCounts.get(otherId) || 0,
+    });
   }
-  const directConversations = Array.from(map.values());
-
-  let groupConversations: any[] = [];
-  try {
-    const groups = await c.env.DB.prepare(`
-      SELECT
-        g.id,
-        g.name,
-        g.created_at,
-        COUNT(all_members.user_id) AS member_count,
-        last_message.content AS last_message,
-        last_message.media_url AS last_media_url,
-        last_message.media_type AS last_media_type,
-        last_message.created_at AS last_message_time,
-        sender.username AS last_sender_username
-      FROM group_chats g
-      JOIN group_chat_members my_membership ON my_membership.group_id = g.id AND my_membership.user_id = ?
-      LEFT JOIN group_chat_members all_members ON all_members.group_id = g.id
-      LEFT JOIN group_messages last_message ON last_message.id = (
-        SELECT id FROM group_messages WHERE group_id = g.id ORDER BY created_at DESC LIMIT 1
-      )
-      LEFT JOIN users sender ON sender.id = last_message.sender_id
-      GROUP BY g.id
-      ORDER BY COALESCE(last_message.created_at, g.created_at) DESC
-      LIMIT ?
-    `).bind(userId, limit).all();
-
-    groupConversations = (groups.results as any[]).map((g) => ({
-      id: `group-${g.id}`,
-      type: 'group',
-      group_id: g.id,
-      group_name: g.name,
-      member_count: Number(g.member_count || 0),
-      last_message: (() => {
-        const sender = g.last_sender_username || 'Someone';
-        if (g.last_message) return `${sender}: ${g.last_message}`;
-        if (g.last_media_type === 'video') return `${sender}: Sent a video`;
-        if (g.last_media_type === 'voice') return `${sender}: Sent a voice message`;
-        if (g.last_media_type === 'file') return `${sender}: Sent a file`;
-        if (g.last_media_url) return `${sender}: Sent a photo`;
-        return 'Group created';
-      })(),
-      last_message_time: g.last_message_time || g.created_at,
-      unread_count: 0,
+  for (const [otherId, count] of unreadCounts.entries()) {
+    const existing = directMap.get(otherId);
+    if (existing) existing.unread_count = count;
+  }
+  if (directMap.size) {
+    await Promise.all(Array.from(directMap.entries()).map(async ([otherId, conversation]) => {
+      const [lastSeenAt, isTyping] = await Promise.all([
+        readSupabasePrimaryPresence(c, otherId),
+        readSupabasePrimaryTyping(c, otherId, userId),
+      ]);
+      conversation.other_user.last_seen_at = lastSeenAt;
+      conversation.other_user.is_online = isPresenceOnline(lastSeenAt);
+      conversation.other_user.is_typing = isTyping;
     }));
-  } catch {
-    groupConversations = [];
   }
 
-  return c.json([...directConversations, ...groupConversations].sort((a, b) => Date.parse(b.last_message_time || '') - Date.parse(a.last_message_time || '')));
+  const memberships = await supabaseAdminQueryRows(c, 'app_group_chat_members', {
+    select: 'group_id',
+    filters: { user_id: postgrestEqFilter(userId) },
+    order: 'created_at.desc',
+    limit: 100,
+  }).catch(() => []);
+  const groupIds = Array.from(new Set(memberships.map((row) => publicId(row.group_id, 120)).filter(Boolean)));
+  let groupConversations: any[] = [];
+  if (groupIds.length) {
+    const [groups, members, messages] = await Promise.all([
+      supabaseAdminQueryRows(c, 'app_group_chats', {
+        select: '*',
+        filters: { id: postgrestInFilter(groupIds) },
+        limit: groupIds.length,
+      }).catch(() => []),
+      supabaseAdminQueryRows(c, 'app_group_chat_members', {
+        select: 'group_id,user_id',
+        filters: { group_id: postgrestInFilter(groupIds) },
+        limit: Math.max(100, groupIds.length * 60),
+      }).catch(() => []),
+      supabaseAdminQueryRows(c, 'app_group_messages', {
+        select: '*',
+        filters: { group_id: postgrestInFilter(groupIds) },
+        order: 'created_at.desc',
+        limit: Math.max(100, groupIds.length * 20),
+      }).catch(() => []),
+    ]);
+    const memberCount = new Map<string, number>();
+    for (const member of members) {
+      const groupId = publicId(member.group_id, 120);
+      memberCount.set(groupId, (memberCount.get(groupId) || 0) + 1);
+    }
+    const lastMessage = new Map<string, any>();
+    for (const message of messages) {
+      const groupId = publicId(message.group_id, 120);
+      if (!lastMessage.has(groupId)) lastMessage.set(groupId, message);
+    }
+    const senderIds = Array.from(new Set(messages.map((row) => publicId(row.sender_id, 120)).filter(Boolean)));
+    const senders = await supabaseUsersByAnyIds(c, senderIds);
+    groupConversations = groups.map((group: any) => {
+      const groupId = publicId(group.id, 120);
+      const msg = lastMessage.get(groupId);
+      const legacyMessage = msg ? supabaseMessageToLegacy(msg) : null;
+      const sender = msg ? senders.get(publicId(msg.sender_id, 120)) || {} : {};
+      const senderName = publicUsernameFor({ username: sender?.username }) || cleanText(sender?.full_name, 80) || 'Someone';
+      return {
+        id: `group-${groupId}`,
+        type: 'group',
+        group_id: groupId,
+        group_name: cleanText(group.name || 'New group', 120),
+        member_count: memberCount.get(groupId) || 0,
+        last_message: legacyMessage
+          ? legacyMessage.content
+            ? `${senderName}: ${legacyMessage.content}`
+            : legacyMessage.media_type === 'video'
+              ? `${senderName}: Sent a video`
+              : legacyMessage.media_type === 'voice'
+                ? `${senderName}: Sent a voice message`
+                : legacyMessage.media_type === 'file'
+                  ? `${senderName}: Sent a file`
+                  : legacyMessage.media_url
+                    ? `${senderName}: Sent a photo`
+                    : 'Group created'
+          : 'Group created',
+        last_message_time: legacyMessage?.created_at || group.legacy_created_at || group.created_at,
+        unread_count: 0,
+      };
+    });
+  }
+
+  return c.json([...directMap.values(), ...groupConversations]
+    .sort((a, b) => Date.parse(b.last_message_time || '') - Date.parse(a.last_message_time || ''))
+    .slice(0, limit));
 });
 
 api.post('/presence/touch', authMiddleware, async (c) => {
   const userId = getUserId(c);
   const supabaseRequired = requireSupabasePrimaryDatabase(c, 'presence_touch');
   if (supabaseRequired) return supabaseRequired;
-  const touchedAt = supabasePrimaryConfigured(c)
-    ? await touchSupabasePrimaryPresence(c, userId)
-    : (await touchUserPresence(c.env.DB, userId), now());
+  const touchedAt = await touchSupabasePrimaryPresence(c, userId);
   return c.json({ ok: true, touched_at: touchedAt });
 });
 
@@ -16012,7 +15876,6 @@ api.post('/messages', authMiddleware, async (c) => {
   const userId = getUserId(c);
   const supabaseRequired = requireSupabasePrimaryDatabase(c, 'message_send');
   if (supabaseRequired) return supabaseRequired;
-  if (!supabasePrimaryConfigured(c)) await touchUserPresence(c.env.DB, userId);
   const limited = await enforceRateLimit(c, 'message_send', userId, 45, 60);
   if (limited) return limited;
   const dailyLimited = await enforceRateLimit(c, 'message_send_daily', userId, 600, 86400);
@@ -16038,81 +15901,44 @@ api.post('/messages', authMiddleware, async (c) => {
   const invalidPeer = await validateDirectMessagePeer(c, userId, receiverId);
   if (invalidPeer) return invalidPeer;
   if (!content && !mediaUrl) return c.json({ detail: 'Message is empty.' }, 400);
-  if (supabasePrimaryConfigured(c)) {
-    if (content && !mediaUrl) {
-      const recentDuplicate = await supabaseAdminQueryRows(c, 'app_messages', {
-        select: 'id',
-        filters: {
-          sender_id: postgrestEqFilter(userId),
-          receiver_id: postgrestEqFilter(receiverId),
-          body: postgrestEqFilter(content),
-          created_at: `gt.${new Date(Date.now() - 30_000).toISOString()}`,
-        },
-        limit: 1,
-      });
-      if (recentDuplicate[0]) {
-        await logSecurityEvent(c, 'duplicate_message_blocked', userId, { receiver_id: receiverId });
-        return c.json({ detail: 'You already sent that message. Try again in a moment.' }, 429);
-      }
-    }
-    const id = uuid();
-    const ts = now();
-    const media: Record<string, unknown> = {};
-    if (mediaUrl) media.url = mediaUrl;
-    if (mediaType) media.type = mediaType;
-    await supabaseAdminUpsert(c, 'app_messages', [{
-      id,
-      sender_id: userId,
-      receiver_id: receiverId,
-      body: content,
-      media_url: mediaUrl || null,
-      media_type: mediaType,
-      media,
-      is_read: false,
-      status: 'sent',
-      legacy_created_at: ts,
-      created_at: ts,
-      updated_at: ts,
-    }], 'id');
-    await setSupabasePrimaryTyping(c, userId, receiverId, false);
-    runBackgroundTask(c, 'message_notification_failed', async () => {
-      const sender = await supabaseUserByAnyId(c, userId);
-      const senderName = cleanText(sender?.full_name || sender?.username || 'Someone', 80);
-      const privatePreview = mediaType === 'voice'
-        ? 'Sent you a voice message'
-        : mediaType === 'video'
-          ? 'Sent you a video'
-          : mediaType === 'file'
-            ? 'Sent you a file'
-            : mediaUrl
-              ? 'Sent you a photo'
-              : 'Sent you a message';
-      await insertNotificationOnce(c, {
-        userId: receiverId,
-        type: 'message',
-        title: `${senderName} messaged you`,
-        body: privatePreview,
-        data: { sender_id: userId, conversation_id: userId, message_id: id, actor_name: senderName },
-        dedupeKey: `message:${id}`,
-        dedupeSeconds: 86400,
-      });
-    });
-    return c.json(await messagePayload(c, supabaseMessageToLegacy({ id, sender_id: userId, receiver_id: receiverId, body: content, media_url: mediaUrl || null, media_type: mediaType, media, created_at: ts, updated_at: ts, status: 'sent' })));
-  }
   if (content && !mediaUrl) {
-    const recentDuplicate: any = await c.env.DB.prepare(
-      "SELECT id FROM messages WHERE sender_id = ? AND receiver_id = ? AND content = ? AND created_at > datetime('now', '-30 seconds') LIMIT 1"
-    ).bind(userId, receiverId, content).first();
-    if (recentDuplicate) {
+    const recentDuplicate = await supabaseAdminQueryRows(c, 'app_messages', {
+      select: 'id',
+      filters: {
+        sender_id: postgrestEqFilter(userId),
+        receiver_id: postgrestEqFilter(receiverId),
+        body: postgrestEqFilter(content),
+        created_at: `gt.${new Date(Date.now() - 30_000).toISOString()}`,
+      },
+      limit: 1,
+    });
+    if (recentDuplicate[0]) {
       await logSecurityEvent(c, 'duplicate_message_blocked', userId, { receiver_id: receiverId });
       return c.json({ detail: 'You already sent that message. Try again in a moment.' }, 429);
     }
   }
   const id = uuid();
-  await c.env.DB.prepare('INSERT INTO messages (id, sender_id, receiver_id, content, media_url, media_type) VALUES (?, ?, ?, ?, ?, ?)').bind(id, userId, receiverId, content, mediaUrl || null, mediaType).run();
-  await attachMediaBackupToMessage(c.env.DB, userId, id, mediaUrl, 'message_id');
+  const ts = now();
+  const media: Record<string, unknown> = {};
+  if (mediaUrl) media.url = mediaUrl;
+  if (mediaType) media.type = mediaType;
+  await supabaseAdminUpsert(c, 'app_messages', [{
+    id,
+    sender_id: userId,
+    receiver_id: receiverId,
+    body: content,
+    media_url: mediaUrl || null,
+    media_type: mediaType,
+    media,
+    is_read: false,
+    status: 'sent',
+    legacy_created_at: ts,
+    created_at: ts,
+    updated_at: ts,
+  }], 'id');
+  await setSupabasePrimaryTyping(c, userId, receiverId, false);
   runBackgroundTask(c, 'message_notification_failed', async () => {
-    const sender: any = await c.env.DB.prepare('SELECT username, full_name FROM users WHERE id = ?').bind(userId).first();
+    const sender = await supabaseUserByAnyId(c, userId);
     const senderName = cleanText(sender?.full_name || sender?.username || 'Someone', 80);
     const privatePreview = mediaType === 'voice'
       ? 'Sent you a voice message'
@@ -16133,11 +15959,7 @@ api.post('/messages', authMiddleware, async (c) => {
       dedupeSeconds: 86400,
     });
   });
-  await c.env.DB.prepare('UPDATE message_typing SET is_typing = 0, updated_at = ? WHERE user_id = ? AND peer_id = ?')
-    .bind(now(), userId, receiverId)
-    .run()
-    .catch(() => {});
-  return c.json(await messagePayload(c, { id, sender_id: userId, receiver_id: receiverId, content, media_url: mediaUrl || null, media_type: mediaType, created_at: now() }));
+  return c.json(await messagePayload(c, supabaseMessageToLegacy({ id, sender_id: userId, receiver_id: receiverId, body: content, media_url: mediaUrl || null, media_type: mediaType, media, created_at: ts, updated_at: ts, status: 'sent' })));
 });
 
 api.get('/messages/presence/:userId', authMiddleware, async (c) => {
@@ -16145,34 +15967,17 @@ api.get('/messages/presence/:userId', authMiddleware, async (c) => {
   const supabaseRequired = requireSupabasePrimaryDatabase(c, 'message_presence');
   if (supabaseRequired) return supabaseRequired;
   const peerId = publicId(c.req.param('userId'), 120);
-  if (supabasePrimaryConfigured(c)) await touchSupabasePrimaryPresence(c, myId);
-  else await touchUserPresence(c.env.DB, myId);
+  await touchSupabasePrimaryPresence(c, myId);
   const limited = await enforceRateLimit(c, 'message_presence', myId, 160, 60);
   if (limited) return limited;
   const invalidPeer = await validateDirectMessagePeer(c, myId, peerId);
   if (invalidPeer) return invalidPeer;
-  if (supabasePrimaryConfigured(c)) {
-    const lastSeenAt = await readSupabasePrimaryPresence(c, peerId);
-    return c.json({
-      user_id: peerId,
-      last_seen_at: lastSeenAt,
-      is_online: isPresenceOnline(lastSeenAt),
-      is_typing: await readSupabasePrimaryTyping(c, peerId, myId),
-    });
-  }
-  const presence: any = await c.env.DB.prepare('SELECT last_seen_at FROM user_presence WHERE user_id = ?')
-    .bind(peerId)
-    .first();
-  const typing: any = await c.env.DB.prepare(`
-    SELECT id FROM message_typing
-    WHERE user_id = ? AND peer_id = ? AND is_typing = 1 AND datetime(updated_at) > datetime('now', '-10 seconds')
-    LIMIT 1
-  `).bind(peerId, myId).first();
+  const lastSeenAt = await readSupabasePrimaryPresence(c, peerId);
   return c.json({
     user_id: peerId,
-    last_seen_at: presence?.last_seen_at || null,
-    is_online: isPresenceOnline(presence?.last_seen_at),
-    is_typing: !!typing,
+    last_seen_at: lastSeenAt,
+    is_online: isPresenceOnline(lastSeenAt),
+    is_typing: await readSupabasePrimaryTyping(c, peerId, myId),
   });
 });
 
@@ -16180,8 +15985,7 @@ api.post('/messages/typing', authMiddleware, async (c) => {
   const userId = getUserId(c);
   const supabaseRequired = requireSupabasePrimaryDatabase(c, 'message_typing');
   if (supabaseRequired) return supabaseRequired;
-  if (supabasePrimaryConfigured(c)) await touchSupabasePrimaryPresence(c, userId);
-  else await touchUserPresence(c.env.DB, userId);
+  await touchSupabasePrimaryPresence(c, userId);
   const limited = await enforceRateLimit(c, 'message_typing', userId, 120, 60);
   if (limited) return limited;
   const bodyTooLarge = rejectLargeRequest(c, 20_000);
@@ -16194,19 +15998,8 @@ api.post('/messages/typing', authMiddleware, async (c) => {
   if (!peerId || peerId === userId) return c.json({ typing: false });
   const invalidPeer = await validateDirectMessagePeer(c, userId, peerId);
   if (invalidPeer) return invalidPeer;
-  const timestamp = now();
-  if (supabasePrimaryConfigured(c)) {
-    const updatedAt = await setSupabasePrimaryTyping(c, userId, peerId, isTyping);
-    return c.json({ typing: isTyping, updated_at: updatedAt });
-  }
-  await c.env.DB.prepare(`
-    INSERT INTO message_typing (id, user_id, peer_id, is_typing, updated_at)
-    VALUES (?, ?, ?, ?, ?)
-    ON CONFLICT(user_id, peer_id) DO UPDATE SET
-      is_typing = excluded.is_typing,
-      updated_at = excluded.updated_at
-  `).bind(uuid(), userId, peerId, isTyping ? 1 : 0, timestamp).run();
-  return c.json({ typing: isTyping, updated_at: timestamp });
+  const updatedAt = await setSupabasePrimaryTyping(c, userId, peerId, isTyping);
+  return c.json({ typing: isTyping, updated_at: updatedAt });
 });
 
 api.get('/messages/:userId', authMiddleware, async (c) => {
@@ -16214,7 +16007,6 @@ api.get('/messages/:userId', authMiddleware, async (c) => {
   const supabaseRequired = requireSupabasePrimaryDatabase(c, 'message_read');
   if (supabaseRequired) return supabaseRequired;
   const oid = publicId(c.req.param('userId'), 120);
-  if (!supabasePrimaryConfigured(c)) await touchUserPresence(c.env.DB, myId);
   const limited = await enforceRateLimit(c, 'message_read', myId, 160, 60);
   if (limited) return limited;
   const invalidPeer = await validateDirectMessagePeer(c, myId, oid);
@@ -16222,41 +16014,12 @@ api.get('/messages/:userId', authMiddleware, async (c) => {
   const limit = clampNumber(c.req.query('limit') || '80', 1, 100, 80);
   const before = cleanText(c.req.query('before') || '', 60);
   const after = cleanText(c.req.query('after') || '', 60);
-  if (supabasePrimaryConfigured(c)) {
-    await supabaseAdminPatchRows(c, 'app_messages', {
-      sender_id: postgrestEqFilter(oid),
-      receiver_id: postgrestEqFilter(myId),
-      is_read: 'eq.false',
-    }, { is_read: true, updated_at: now() }).catch(() => undefined);
-    return c.json(await supabaseDirectMessageRows(c, myId, oid, { limit, before, after }));
-  }
-  await c.env.DB.prepare('UPDATE messages SET is_read = 1 WHERE sender_id = ? AND receiver_id = ? AND is_read = 0').bind(oid, myId).run();
-  const directMessagesSql = after
-    ? `
-      SELECT * FROM messages
-      WHERE ((sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?))
-        AND datetime(created_at) > datetime(?)
-      ORDER BY created_at ASC
-      LIMIT ?
-    `
-    : `
-      SELECT * FROM (
-        SELECT * FROM messages
-        WHERE ((sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?))
-          ${before ? "AND datetime(created_at) < datetime(?)" : ''}
-        ORDER BY created_at DESC
-        LIMIT ?
-      )
-      ORDER BY created_at ASC
-    `;
-  const binds = after
-    ? [myId, oid, oid, myId, after, limit]
-    : before
-      ? [myId, oid, oid, myId, before, limit]
-      : [myId, oid, oid, myId, limit];
-  const r = await c.env.DB.prepare(directMessagesSql).bind(...binds).all();
-  const messages = await Promise.all((r.results as any[]).map((row) => messagePayload(c, row)));
-  return c.json(messages);
+  await supabaseAdminPatchRows(c, 'app_messages', {
+    sender_id: postgrestEqFilter(oid),
+    receiver_id: postgrestEqFilter(myId),
+    is_read: 'eq.false',
+  }, { is_read: true, updated_at: now() }).catch(() => undefined);
+  return c.json(await supabaseDirectMessageRows(c, myId, oid, { limit, before, after }));
 });
 
 api.post('/group-chats', authMiddleware, async (c) => {
@@ -16278,89 +16041,50 @@ api.post('/group-chats', authMiddleware, async (c) => {
     : [];
   const uniqueMemberIds = Array.from(new Set(memberIds)).slice(0, 50);
   if (uniqueMemberIds.length < 1) return c.json({ detail: 'Select at least one person for a group chat.' }, 400);
-  if (supabasePrimaryConfigured(c)) {
-    const users = await supabaseUsersByAnyIds(c, uniqueMemberIds);
-    if (uniqueMemberIds.some((memberId) => !users.has(memberId))) {
-      return c.json({ detail: 'One or more selected people could not be found.' }, 400);
-    }
-    for (const memberId of uniqueMemberIds) {
-      if (await supabaseBlockPair(c, userId, memberId)) return c.json({ detail: 'A blocked profile cannot be added to this group.' }, 403);
-    }
-    const groupId = uuid();
-    const name = cleanText(body.name || '', 80) || 'New group';
-    const ts = now();
-    await supabaseAdminUpsert(c, 'app_group_chats', [{
-      id: groupId,
-      name,
-      created_by: userId,
-      metadata: { source: 'cloudflare_worker_primary' },
-      legacy_created_at: ts,
-      created_at: ts,
-      updated_at: ts,
-    }], 'id');
-    await supabaseAdminUpsert(c, 'app_group_chat_members', [
-      { id: uuid(), group_id: groupId, user_id: userId, role: 'owner', legacy_created_at: ts, created_at: ts, updated_at: ts },
-      ...uniqueMemberIds.map((memberId) => ({
-        id: uuid(),
-        group_id: groupId,
-        user_id: memberId,
-        role: 'member',
-        legacy_created_at: ts,
-        created_at: ts,
-        updated_at: ts,
-      })),
-    ], 'group_id,user_id');
-    const messageId = uuid();
-    await supabaseAdminUpsert(c, 'app_group_messages', [{
-      id: messageId,
-      group_id: groupId,
-      sender_id: userId,
-      body: 'Created the group',
-      media: {},
-      legacy_created_at: ts,
-      created_at: ts,
-      updated_at: ts,
-    }], 'id');
-    return c.json({ id: groupId, name, member_count: uniqueMemberIds.length + 1, created_by: userId, created_at: ts });
-  }
-  await ensureAbuseProtectionSchema(c.env.DB);
-  await ensureGroupChatSchema(c.env.DB);
-  const memberPlaceholders = uniqueMemberIds.map(() => '?').join(', ');
-  const existingMembersSql = `SELECT id FROM users WHERE id IN (${memberPlaceholders})`;
-  const existingMembers = await c.env.DB.prepare(existingMembersSql)
-    .bind(...uniqueMemberIds)
-    .all();
-  if ((existingMembers.results as any[]).length !== uniqueMemberIds.length) {
+  const users = await supabaseUsersByAnyIds(c, uniqueMemberIds);
+  if (uniqueMemberIds.some((memberId) => !users.has(memberId))) {
     return c.json({ detail: 'One or more selected people could not be found.' }, 400);
   }
-  const blockedMemberSql = `
-    SELECT id FROM blocks
-    WHERE (blocker_id = ? AND blocked_id IN (${memberPlaceholders}))
-       OR (blocked_id = ? AND blocker_id IN (${memberPlaceholders}))
-    LIMIT 1
-  `;
-  const blockedMember = await c.env.DB.prepare(blockedMemberSql).bind(userId, ...uniqueMemberIds, userId, ...uniqueMemberIds).first();
-  if (blockedMember) return c.json({ detail: 'A blocked profile cannot be added to this group.' }, 403);
-
-  const groupId = uuid();
-  const name = String(body.name || '').trim().slice(0, 80) || 'New group';
-  await c.env.DB.prepare('INSERT INTO group_chats (id, name, created_by) VALUES (?, ?, ?)').bind(groupId, name, userId).run();
-  await c.env.DB.prepare('INSERT INTO group_chat_members (id, group_id, user_id, role) VALUES (?, ?, ?, ?)')
-    .bind(uuid(), groupId, userId, 'owner')
-    .run();
-
   for (const memberId of uniqueMemberIds) {
-    await c.env.DB.prepare('INSERT OR IGNORE INTO group_chat_members (id, group_id, user_id, role) VALUES (?, ?, ?, ?)')
-      .bind(uuid(), groupId, memberId, 'member')
-      .run();
+    if (await supabaseBlockPair(c, userId, memberId)) return c.json({ detail: 'A blocked profile cannot be added to this group.' }, 403);
   }
-
+  const groupId = uuid();
+  const name = cleanText(body.name || '', 80) || 'New group';
+  const ts = now();
+  await supabaseAdminUpsert(c, 'app_group_chats', [{
+    id: groupId,
+    name,
+    created_by: userId,
+    metadata: { source: 'cloudflare_worker_primary' },
+    legacy_created_at: ts,
+    created_at: ts,
+    updated_at: ts,
+  }], 'id');
+  await supabaseAdminUpsert(c, 'app_group_chat_members', [
+    { id: uuid(), group_id: groupId, user_id: userId, role: 'owner', legacy_created_at: ts, created_at: ts, updated_at: ts },
+    ...uniqueMemberIds.map((memberId) => ({
+      id: uuid(),
+      group_id: groupId,
+      user_id: memberId,
+      role: 'member',
+      legacy_created_at: ts,
+      created_at: ts,
+      updated_at: ts,
+    })),
+  ], 'group_id,user_id');
   const messageId = uuid();
-  await c.env.DB.prepare('INSERT INTO group_messages (id, group_id, sender_id, content) VALUES (?, ?, ?, ?)')
-    .bind(messageId, groupId, userId, 'Created the group')
-    .run();
+  await supabaseAdminUpsert(c, 'app_group_messages', [{
+    id: messageId,
+    group_id: groupId,
+    sender_id: userId,
+    body: 'Created the group',
+    media: {},
+    legacy_created_at: ts,
+    created_at: ts,
+    updated_at: ts,
+  }], 'id');
 
-  return c.json({ id: groupId, name, member_count: uniqueMemberIds.length + 1, created_by: userId, created_at: now() });
+  return c.json({ id: groupId, name, member_count: uniqueMemberIds.length + 1, created_by: userId, created_at: ts });
 });
 
 api.get('/group-chats/:groupId/messages', authMiddleware, async (c) => {
@@ -16374,64 +16098,29 @@ api.get('/group-chats/:groupId/messages', authMiddleware, async (c) => {
   const limit = clampNumber(c.req.query('limit') || '80', 1, 100, 80);
   const before = cleanText(c.req.query('before') || '', 60);
   const after = cleanText(c.req.query('after') || '', 60);
-  if (supabasePrimaryConfigured(c)) {
-    const [groups, members] = await Promise.all([
-      supabaseAdminQueryRows(c, 'app_group_chats', {
-        select: '*',
-        filters: { id: postgrestEqFilter(groupId) },
-        limit: 1,
-      }),
-      supabaseAdminQueryRows(c, 'app_group_chat_members', {
-        select: 'user_id',
-        filters: { group_id: postgrestEqFilter(groupId) },
-        limit: 200,
-      }),
-    ]);
-    const group = groups[0];
-    if (!group) return c.json({ detail: 'Group not found' }, 404);
-    const messages = await supabaseGroupMessageRows(c, groupId, { limit, before, after });
-    return c.json({
-      group: {
-        ...group,
-        member_count: members.length,
-        created_at: group.legacy_created_at || group.created_at,
-      },
-      messages,
-    });
-  }
-
-  const group: any = await c.env.DB.prepare(`
-    SELECT g.*, COUNT(m.user_id) AS member_count
-    FROM group_chats g
-    LEFT JOIN group_chat_members m ON m.group_id = g.id
-    WHERE g.id = ?
-    GROUP BY g.id
-  `).bind(groupId).first();
-  const groupMessagesSql = after
-    ? `
-      SELECT gm.*, u.username, u.full_name, u.profile_image
-      FROM group_messages gm
-      JOIN users u ON u.id = gm.sender_id
-      WHERE gm.group_id = ?
-        AND datetime(gm.created_at) > datetime(?)
-      ORDER BY gm.created_at ASC
-      LIMIT ?
-    `
-    : `
-      SELECT gm.*, u.username, u.full_name, u.profile_image
-      FROM group_messages gm
-      JOIN users u ON u.id = gm.sender_id
-      WHERE gm.group_id = ?
-        ${before ? "AND datetime(gm.created_at) < datetime(?)" : ''}
-      ORDER BY gm.created_at DESC
-      LIMIT ?
-    `;
-  const binds = after ? [groupId, after, limit] : before ? [groupId, before, limit] : [groupId, limit];
-  const messages = await c.env.DB.prepare(groupMessagesSql).bind(...binds).all();
-
-  const rows = after ? (messages.results as any[]) : [...(messages.results as any[])].reverse();
-  const signedMessages = await Promise.all(rows.map((row) => messagePayload(c, row)));
-  return c.json({ group, messages: signedMessages });
+  const [groups, members] = await Promise.all([
+    supabaseAdminQueryRows(c, 'app_group_chats', {
+      select: '*',
+      filters: { id: postgrestEqFilter(groupId) },
+      limit: 1,
+    }),
+    supabaseAdminQueryRows(c, 'app_group_chat_members', {
+      select: 'user_id',
+      filters: { group_id: postgrestEqFilter(groupId) },
+      limit: 200,
+    }),
+  ]);
+  const group = groups[0];
+  if (!group) return c.json({ detail: 'Group not found' }, 404);
+  const messages = await supabaseGroupMessageRows(c, groupId, { limit, before, after });
+  return c.json({
+    group: {
+      ...group,
+      member_count: members.length,
+      created_at: group.legacy_created_at || group.created_at,
+    },
+    messages,
+  });
 });
 
 api.post('/group-chats/:groupId/messages', authMiddleware, async (c) => {
@@ -16460,60 +16149,41 @@ api.post('/group-chats/:groupId/messages', authMiddleware, async (c) => {
         ? 'file'
         : mediaUrl ? 'image' : null;
   if (!content && !mediaUrl) return c.json({ detail: 'Message is empty' }, 400);
-  if (supabasePrimaryConfigured(c)) {
-    if (content && !mediaUrl) {
-      const recentDuplicate = await supabaseAdminQueryRows(c, 'app_group_messages', {
-        select: 'id',
-        filters: {
-          group_id: postgrestEqFilter(groupId),
-          sender_id: postgrestEqFilter(userId),
-          body: postgrestEqFilter(content),
-          created_at: `gt.${new Date(Date.now() - 30_000).toISOString()}`,
-        },
-        limit: 1,
-      });
-      if (recentDuplicate[0]) {
-        await logSecurityEvent(c, 'duplicate_group_message_blocked', userId, { group_id: groupId });
-        return c.json({ detail: 'You already sent that message. Try again in a moment.' }, 429);
-      }
-    }
-    const id = uuid();
-    const ts = now();
-    const media: Record<string, unknown> = {};
-    if (mediaUrl) media.url = mediaUrl;
-    if (mediaType) media.type = mediaType;
-    await supabaseAdminUpsert(c, 'app_group_messages', [{
-      id,
-      group_id: groupId,
-      sender_id: userId,
-      body: content,
-      media_url: mediaUrl || null,
-      media_type: mediaType,
-      media,
-      legacy_created_at: ts,
-      created_at: ts,
-      updated_at: ts,
-    }], 'id');
-    await supabaseAdminPatchRows(c, 'app_group_chats', { id: postgrestEqFilter(groupId) }, { updated_at: ts }).catch(() => undefined);
-    return c.json(await messagePayload(c, supabaseMessageToLegacy({ id, group_id: groupId, sender_id: userId, body: content, media_url: mediaUrl || null, media_type: mediaType, media, created_at: ts, updated_at: ts, status: 'sent' })));
-  }
   if (content && !mediaUrl) {
-    const recentDuplicate: any = await c.env.DB.prepare(
-      "SELECT id FROM group_messages WHERE group_id = ? AND sender_id = ? AND content = ? AND created_at > datetime('now', '-30 seconds') LIMIT 1"
-    ).bind(groupId, userId, content).first();
-    if (recentDuplicate) {
+    const recentDuplicate = await supabaseAdminQueryRows(c, 'app_group_messages', {
+      select: 'id',
+      filters: {
+        group_id: postgrestEqFilter(groupId),
+        sender_id: postgrestEqFilter(userId),
+        body: postgrestEqFilter(content),
+        created_at: `gt.${new Date(Date.now() - 30_000).toISOString()}`,
+      },
+      limit: 1,
+    });
+    if (recentDuplicate[0]) {
       await logSecurityEvent(c, 'duplicate_group_message_blocked', userId, { group_id: groupId });
       return c.json({ detail: 'You already sent that message. Try again in a moment.' }, 429);
     }
   }
-
   const id = uuid();
-  await c.env.DB.prepare('INSERT INTO group_messages (id, group_id, sender_id, content, media_url, media_type) VALUES (?, ?, ?, ?, ?, ?)')
-    .bind(id, groupId, userId, content, mediaUrl || null, mediaType)
-    .run();
-  await attachMediaBackupToMessage(c.env.DB, userId, id, mediaUrl, 'group_message_id');
-  await c.env.DB.prepare('UPDATE group_chats SET updated_at = datetime(\'now\') WHERE id = ?').bind(groupId).run();
-  return c.json(await messagePayload(c, { id, group_id: groupId, sender_id: userId, content, media_url: mediaUrl || null, media_type: mediaType, created_at: now() }));
+  const ts = now();
+  const media: Record<string, unknown> = {};
+  if (mediaUrl) media.url = mediaUrl;
+  if (mediaType) media.type = mediaType;
+  await supabaseAdminUpsert(c, 'app_group_messages', [{
+    id,
+    group_id: groupId,
+    sender_id: userId,
+    body: content,
+    media_url: mediaUrl || null,
+    media_type: mediaType,
+    media,
+    legacy_created_at: ts,
+    created_at: ts,
+    updated_at: ts,
+  }], 'id');
+  await supabaseAdminPatchRows(c, 'app_group_chats', { id: postgrestEqFilter(groupId) }, { updated_at: ts }).catch(() => undefined);
+  return c.json(await messagePayload(c, supabaseMessageToLegacy({ id, group_id: groupId, sender_id: userId, body: content, media_url: mediaUrl || null, media_type: mediaType, media, created_at: ts, updated_at: ts, status: 'sent' })));
 });
 
 // Calls
