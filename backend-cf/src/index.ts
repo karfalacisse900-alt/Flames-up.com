@@ -21526,6 +21526,22 @@ async function getAdminReportRow(c: any, reportId: string) {
   `).bind(reportId).first();
 }
 
+function adminReportedMessageContextPayload(row: any, reportedMessageId = '') {
+  const id = publicId(row?.id, 160);
+  return {
+    id,
+    sender_id: publicId(row?.sender_id, 120),
+    receiver_id: publicId(row?.receiver_id, 120),
+    content: cleanMultilineText(row?.body || row?.content, 2000),
+    media_url: safeMediaReference(row?.media_url),
+    media_type: cleanText(row?.media_type, 40),
+    media: parseJsonObject(row?.media),
+    status: cleanText(row?.status || 'active', 40),
+    created_at: row?.legacy_created_at || row?.created_at,
+    is_reported: !!reportedMessageId && id === reportedMessageId,
+  };
+}
+
 async function reportTargetPreview(c: any, report: any) {
   const type = reportTargetType(report);
   if (type === 'post' && (report.post_id || report.reported_id)) {
@@ -23414,8 +23430,22 @@ api.post('/admin/comments/:commentId/restore', authMiddleware, async (c) => {
 api.get('/admin/messages/reported', authMiddleware, async (c) => {
   try {
     await requireAdminRole(c, 'messages:reported:read');
-    await ensureAdminModerationSchema(c.env.DB);
     const { limit, offset } = adminPageParams(c);
+    if (supabasePrimaryConfigured(c)) {
+      const rows = await supabaseAdminQueryRows(c, 'app_reports', {
+        select: '*',
+        filters: { target_type: postgrestEqFilter('message') },
+        order: 'created_at.desc',
+        limit,
+        offset,
+      });
+      const enriched = await supabaseEnrichAdminReportRows(c, rows);
+      return c.json({
+        results: enriched.map((row) => adminReportSummary(row, c.env)),
+        pagination: { limit, offset, next_offset: offset + limit },
+      });
+    }
+    await ensureAdminModerationSchema(c.env.DB);
     const rows = await c.env.DB.prepare(`
       SELECT r.*, m.sender_id AS message_sender_id, m.receiver_id AS message_receiver_id, m.content AS message_content,
              m.media_type AS message_media_type, m.status AS message_status,
@@ -23439,11 +23469,59 @@ api.get('/admin/messages/reported', authMiddleware, async (c) => {
 api.get('/admin/messages/reported/:reportId', authMiddleware, async (c) => {
   try {
     const admin = await requireAdminRole(c, 'messages:reported:read');
-    await ensureAdminModerationSchema(c.env.DB);
     const reportId = publicId(c.req.param('reportId'), 120);
     const report = await getAdminReportRow(c, reportId);
     if (!report || reportTargetType(report) !== 'message') return c.json({ detail: 'Reported message not found.' }, 404);
     const messageId = report.message_id || report.reported_id;
+    if (supabasePrimaryConfigured(c)) {
+      const messageRows = await supabaseAdminQueryRows(c, 'app_messages', {
+        select: 'id,sender_id,receiver_id,conversation_id,body,media_url,media_type,media,status,created_at,legacy_created_at',
+        filters: { id: postgrestEqFilter(messageId) },
+        limit: 1,
+      });
+      const message = messageRows[0];
+      if (!message) return c.json({ detail: 'Message not found.' }, 404);
+      const senderId = publicId(message.sender_id, 120);
+      const receiverId = publicId(message.receiver_id, 120);
+      const conversationId = publicId(message.conversation_id, 160);
+      const contextFilters: Record<string, string> = {};
+      if (conversationId) {
+        contextFilters.conversation_id = postgrestEqFilter(conversationId);
+      } else if (senderId && receiverId) {
+        contextFilters.or = `(and(sender_id.eq.${senderId},receiver_id.eq.${receiverId}),and(sender_id.eq.${receiverId},receiver_id.eq.${senderId}))`;
+      }
+      let rawContext: any[] = [message];
+      if (conversationId || (senderId && receiverId)) {
+        rawContext = await supabaseAdminQueryRows(c, 'app_messages', {
+          select: 'id,sender_id,receiver_id,conversation_id,body,media_url,media_type,media,status,created_at,legacy_created_at',
+          filters: contextFilters,
+          order: 'created_at.desc',
+          limit: 50,
+        }).catch((error: any) => {
+          console.warn(JSON.stringify({ event: 'supabase_reported_message_context_failed', code: getErrorCode(error).slice(0, 180) }));
+          return [message];
+        });
+      }
+      const centerMs = Date.parse(cleanText(message.legacy_created_at || message.created_at, 80));
+      const boundedContext = rawContext
+        .filter((row) => {
+          if (!Number.isFinite(centerMs)) return true;
+          const rowMs = Date.parse(cleanText(row?.legacy_created_at || row?.created_at, 80));
+          return Number.isFinite(rowMs) && Math.abs(rowMs - centerMs) <= 10 * 60 * 1000;
+        })
+        .sort((a, b) => Date.parse(cleanText(a?.legacy_created_at || a?.created_at, 80)) - Date.parse(cleanText(b?.legacy_created_at || b?.created_at, 80)))
+        .slice(0, 12);
+      const contextRows = boundedContext.some((row) => publicId(row?.id, 160) === messageId)
+        ? boundedContext
+        : [message, ...boundedContext.filter((row) => publicId(row?.id, 160) !== messageId)].slice(0, 12);
+      await writeAdminAuditLog(c, admin, { actionType: 'reported_message_viewed', targetType: 'message', targetId: messageId, targetUserId: senderId, reason: 'Safety review', note: `Report ${reportId}` });
+      return c.json({
+        report: await adminReportDetail(c, report),
+        privacy_warning: 'Reported message access is audit logged and limited to nearby context needed for safety review.',
+        context: contextRows.map((row) => adminReportedMessageContextPayload(row, messageId)),
+      });
+    }
+    await ensureAdminModerationSchema(c.env.DB);
     const message: any = await c.env.DB.prepare('SELECT * FROM messages WHERE id = ?').bind(messageId).first();
     if (!message) return c.json({ detail: 'Message not found.' }, 404);
     const context = await c.env.DB.prepare(`
@@ -23487,6 +23565,30 @@ api.post('/admin/messages/reported/:reportId/action', authMiddleware, async (c) 
     const report = await getAdminReportRow(c, reportId);
     if (!report || reportTargetType(report) !== 'message') return c.json({ detail: 'Reported message not found.' }, 404);
     const messageId = report.message_id || report.reported_id;
+    if (supabasePrimaryConfigured(c)) {
+      if (action === 'remove_message' || action === 'remove') {
+        const messageRows = await supabaseAdminQueryRows(c, 'app_messages', {
+          select: 'id,sender_id,media,status',
+          filters: { id: postgrestEqFilter(messageId) },
+          limit: 1,
+        });
+        const message = messageRows[0];
+        if (!message) return c.json({ detail: 'Message not found.' }, 404);
+        await supabaseAdminPatchRows(c, 'app_messages', { id: postgrestEqFilter(messageId) }, {
+          status: 'removed',
+          media: {
+            ...parseJsonObject(message.media),
+            removed_at: now(),
+            removed_by: admin.userId,
+            removal_reason: reason,
+          },
+          updated_at: now(),
+        });
+        await writeAdminAuditLog(c, admin, { actionType: 'reported_message_removed', targetType: 'message', targetId: messageId, targetUserId: publicId(message.sender_id || report.message_sender_id, 120), reason, note: body.note });
+        return setReportStatus(c, admin, reportId, 'action_taken', reason, body.note || '');
+      }
+      return setReportStatus(c, admin, reportId, action === 'dismiss' ? 'dismissed' : 'under_review', reason, body.note || '');
+    }
     if (action === 'remove_message' || action === 'remove') {
       await c.env.DB.prepare("UPDATE messages SET status = 'removed', removed_at = ?, removed_by = ?, removed_reason = ? WHERE id = ?")
         .bind(now(), admin.userId, reason, messageId).run();
