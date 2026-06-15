@@ -16465,29 +16465,18 @@ api.get('/notifications', authMiddleware, async (c) => {
     if (limited) return limited;
     const limit = clampNumber(c.req.query('limit') || '50', 1, 80, 50);
     const before = cleanText(c.req.query('before') || '', 60);
-    if (supabasePrimaryConfigured(c)) {
-      const filters: Record<string, string> = { user_id: postgrestEqFilter(userId) };
-      if (before) filters.created_at = `lt.${toPgTime(before) || before}`;
-      const rows = await supabaseAdminQueryRows(c, 'app_notifications', {
-        select: 'id,user_id,from_user_id,type,title,body,content,reference_id,data,is_read,created_at,updated_at',
-        filters,
-        order: 'created_at.desc',
-        limit,
-      });
-      return c.json(rows.map(safeNotificationPayload));
-    }
-    await ensureAbuseProtectionSchema(c.env.DB);
-    const notificationsSql = `SELECT * FROM notifications WHERE user_id = ? ${before ? 'AND datetime(created_at) < datetime(?)' : ''} ORDER BY created_at DESC LIMIT ?`;
-    const r = await c.env.DB.prepare(notificationsSql).bind(...(before ? [userId, before, limit] : [userId, limit])).all();
-    return c.json((r.results as any[]).map(safeNotificationPayload));
+    const filters: Record<string, string> = { user_id: postgrestEqFilter(userId) };
+    if (before) filters.created_at = `lt.${toPgTime(before) || before}`;
+    const rows = await supabaseAdminQueryRows(c, 'app_notifications', {
+      select: 'id,user_id,from_user_id,type,title,body,content,reference_id,data,is_read,created_at,updated_at',
+      filters,
+      order: 'created_at.desc',
+      limit,
+    });
+    return c.json(rows.map(safeNotificationPayload));
   } catch (error: any) {
-    if (supabasePrimaryConfigured(c)) {
-      console.warn(JSON.stringify({ event: 'notifications_read_failed', code: getErrorCode(error).slice(0, 180) }));
-      return c.json({ detail: 'Could not load notifications.' }, 500);
-    }
-    // Auto-create table if missing
-    await c.env.DB.prepare('CREATE TABLE IF NOT EXISTS notifications (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, type TEXT DEFAULT \'general\', title TEXT DEFAULT \'\', body TEXT DEFAULT \'\', data TEXT DEFAULT \'{}\', is_read INTEGER DEFAULT 0, created_at TEXT DEFAULT (datetime(\'now\')))').run();
-    return c.json([]);
+    console.warn(JSON.stringify({ event: 'notifications_read_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not load notifications.' }, 500);
   }
 });
 api.get('/notifications/unread-count', authMiddleware, async (c) => {
@@ -16495,32 +16484,21 @@ api.get('/notifications/unread-count', authMiddleware, async (c) => {
     const userId = getUserId(c);
     const supabaseRequired = requireSupabasePrimaryDatabase(c, 'notifications_unread_count');
     if (supabaseRequired) return supabaseRequired;
-    if (supabasePrimaryConfigured(c)) {
-      const count = await supabaseAdminCountRows(c, 'app_notifications', {
-        user_id: postgrestEqFilter(userId),
-        is_read: 'eq.false',
-      });
-      return c.json({ count });
-    }
-    const r = await c.env.DB.prepare('SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND is_read = 0').bind(getUserId(c)).first();
-    return c.json({ count: (r as any)?.count || 0 });
+    const count = await supabaseAdminCountRows(c, 'app_notifications', {
+      user_id: postgrestEqFilter(userId),
+      is_read: 'eq.false',
+    });
+    return c.json({ count });
   } catch (error: any) {
-    if (supabasePrimaryConfigured(c)) {
-      console.warn(JSON.stringify({ event: 'notifications_unread_count_failed', code: getErrorCode(error).slice(0, 180) }));
-      return c.json({ detail: 'Could not load notification count.' }, 500);
-    }
-    return c.json({ count: 0 });
+    console.warn(JSON.stringify({ event: 'notifications_unread_count_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not load notification count.' }, 500);
   }
 });
 api.post('/notifications/mark-read', authMiddleware, async (c) => {
   const userId = getUserId(c);
   const supabaseRequired = requireSupabasePrimaryDatabase(c, 'notifications_mark_read');
   if (supabaseRequired) return supabaseRequired;
-  if (supabasePrimaryConfigured(c)) {
-    await supabaseAdminPatchRows(c, 'app_notifications', { user_id: postgrestEqFilter(userId) }, { is_read: true, updated_at: now() });
-    return c.json({ marked: true });
-  }
-  await c.env.DB.prepare('UPDATE notifications SET is_read = 1 WHERE user_id = ?').bind(userId).run();
+  await supabaseAdminPatchRows(c, 'app_notifications', { user_id: postgrestEqFilter(userId) }, { is_read: true, updated_at: now() });
   return c.json({ marked: true });
 });
 
@@ -16536,46 +16514,21 @@ api.post('/notifications/device-token', authMiddleware, async (c) => {
   const token = String(body.token || '').trim().replace(/[^a-fA-F0-9]/g, '');
   if (token.length < 32 || token.length > 512) return c.json({ detail: 'Invalid device token.' }, 400);
   const timestamp = now();
-  if (supabasePrimaryConfigured(c)) {
-    const normalizedToken = token.toLowerCase();
-    const tokenHash = await sha256Hex(normalizedToken);
-    await supabaseAdminUpsert(c, 'app_push_tokens', [{
-      id: await sha256Hex(`${userId}:${tokenHash}`),
-      user_id: userId,
-      token_hash: tokenHash,
-      token: normalizedToken,
-      device_id: cleanText(body.device_id || body.deviceId || '', 160),
-      bundle_id: cleanText(body.bundle_id || body.bundleId || c.env.APNS_BUNDLE_ID || '', 160),
-      environment: cleanText(body.environment || c.env.APNS_ENVIRONMENT || 'production', 32),
-      platform: 'ios',
-      is_active: true,
-      last_seen_at: timestamp,
-      updated_at: timestamp,
-    }], 'user_id,token_hash');
-    return c.json({ ok: true });
-  }
-  await ensureProductionReadinessSchema(c.env.DB);
-  await c.env.DB.prepare(
-    `INSERT INTO push_tokens (id, user_id, token, device_id, bundle_id, environment, platform, is_active, last_seen_at, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, 'ios', 1, ?, ?, ?)
-     ON CONFLICT(user_id, token) DO UPDATE SET
-       device_id = excluded.device_id,
-       bundle_id = excluded.bundle_id,
-       environment = excluded.environment,
-       is_active = 1,
-       last_seen_at = excluded.last_seen_at,
-       updated_at = excluded.updated_at`
-  ).bind(
-    uuid(),
-    userId,
-    token.toLowerCase(),
-    cleanText(body.device_id || body.deviceId || '', 160),
-    cleanText(body.bundle_id || body.bundleId || c.env.APNS_BUNDLE_ID || '', 160),
-    cleanText(body.environment || c.env.APNS_ENVIRONMENT || 'production', 32),
-    timestamp,
-    timestamp,
-    timestamp
-  ).run();
+  const normalizedToken = token.toLowerCase();
+  const tokenHash = await sha256Hex(normalizedToken);
+  await supabaseAdminUpsert(c, 'app_push_tokens', [{
+    id: await sha256Hex(`${userId}:${tokenHash}`),
+    user_id: userId,
+    token_hash: tokenHash,
+    token: normalizedToken,
+    device_id: cleanText(body.device_id || body.deviceId || '', 160),
+    bundle_id: cleanText(body.bundle_id || body.bundleId || c.env.APNS_BUNDLE_ID || '', 160),
+    environment: cleanText(body.environment || c.env.APNS_ENVIRONMENT || 'production', 32),
+    platform: 'ios',
+    is_active: true,
+    last_seen_at: timestamp,
+    updated_at: timestamp,
+  }], 'user_id,token_hash');
   return c.json({ ok: true });
 });
 
@@ -16586,18 +16539,11 @@ api.delete('/notifications/device-token', authMiddleware, async (c) => {
   const body: any = await c.req.json().catch(() => ({}));
   const token = String(body.token || '').trim().replace(/[^a-fA-F0-9]/g, '').toLowerCase();
   if (!token) return c.json({ ok: true });
-  if (supabasePrimaryConfigured(c)) {
-    const tokenHash = await sha256Hex(token);
-    await supabaseAdminPatchRows(c, 'app_push_tokens', {
-      user_id: postgrestEqFilter(userId),
-      token_hash: postgrestEqFilter(tokenHash),
-    }, { is_active: false, updated_at: now() });
-    return c.json({ ok: true });
-  }
-  await ensureProductionReadinessSchema(c.env.DB);
-  await c.env.DB.prepare('UPDATE push_tokens SET is_active = 0, updated_at = ? WHERE user_id = ? AND token = ?')
-    .bind(now(), userId, token)
-    .run();
+  const tokenHash = await sha256Hex(token);
+  await supabaseAdminPatchRows(c, 'app_push_tokens', {
+    user_id: postgrestEqFilter(userId),
+    token_hash: postgrestEqFilter(tokenHash),
+  }, { is_active: false, updated_at: now() });
   return c.json({ ok: true });
 });
 
@@ -16614,37 +16560,18 @@ api.post('/client/events', async (c) => {
   const eventName = cleanText(body.event_name || body.eventName || body.name, 80);
   if (!eventName || !/^[a-z0-9_.:-]{2,80}$/i.test(eventName)) return c.json({ detail: 'Invalid event name.' }, 400);
   const metadata = sanitizeClientEventMetadata(body.metadata || {});
-  if (supabasePrimaryConfigured(c)) {
-    await supabaseAdminUpsert(c, 'app_client_events', [{
-      id: uuid(),
-      user_id: userId || null,
-      event_name: eventName,
-      category: cleanText(body.category || '', 40),
-      status: cleanText(body.status || '', 40),
-      duration_ms: clampNumber(body.duration_ms || body.durationMs || 0, 0, 600_000, 0),
-      metadata,
-      app_version: cleanText(body.app_version || body.appVersion || '', 40),
-      platform: cleanText(body.platform || 'ios', 20),
-      created_at: now(),
-    }], 'id');
-    return c.json({ accepted: true }, 202);
-  }
-  await ensureProductionReadinessSchema(c.env.DB);
-  await c.env.DB.prepare(
-    `INSERT INTO client_events (id, user_id, event_name, category, status, duration_ms, metadata, app_version, platform, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).bind(
-    uuid(),
-    userId || '',
-    eventName,
-    cleanText(body.category || '', 40),
-    cleanText(body.status || '', 40),
-    clampNumber(body.duration_ms || body.durationMs || 0, 0, 600_000, 0),
-    JSON.stringify(metadata),
-    cleanText(body.app_version || body.appVersion || '', 40),
-    cleanText(body.platform || 'ios', 20),
-    now()
-  ).run();
+  await supabaseAdminUpsert(c, 'app_client_events', [{
+    id: uuid(),
+    user_id: userId || null,
+    event_name: eventName,
+    category: cleanText(body.category || '', 40),
+    status: cleanText(body.status || '', 40),
+    duration_ms: clampNumber(body.duration_ms || body.durationMs || 0, 0, 600_000, 0),
+    metadata,
+    app_version: cleanText(body.app_version || body.appVersion || '', 40),
+    platform: cleanText(body.platform || 'ios', 20),
+    created_at: now(),
+  }], 'id');
   return c.json({ accepted: true }, 202);
 });
 
