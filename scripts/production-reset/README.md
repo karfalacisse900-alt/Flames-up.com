@@ -86,11 +86,15 @@ R2 objects may require manual deletion or a dedicated R2 S3 credential flow if m
 
 ## Legacy D1 Reset
 
-Run only if D1 still contains old test data that the Worker can serve:
+Run only if D1 still contains old test data that the Worker can serve. The protected GitHub workflow generates a D1 reset file from the tables that actually exist, using `build-d1-legacy-reset.mjs`, then deletes rows from those legacy tables.
+
+Manual fallback:
 
 ```powershell
 cd backend-cf
-npx.cmd wrangler d1 execute DB --env production --remote --yes --file=../scripts/production-reset/d1-legacy-data-reset.sql
+npx.cmd wrangler d1 execute DB --env production --remote --json --command "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;" > ..\legacy-d1-tables.json
+node ..\scripts\production-reset\build-d1-legacy-reset.mjs ..\legacy-d1-tables.json ..\legacy-d1-reset.sql
+npx.cmd wrangler d1 execute DB --env production --remote --yes --file=..\legacy-d1-reset.sql
 ```
 
 ## Do Not Run Until
