@@ -246,6 +246,13 @@ api.all('/premium', retiredFeature('Premium checkout'));
 api.all('/premium/*', retiredFeature('Premium checkout'));
 api.all('/discover/posts', retiredFeature('Legacy Discover posts'));
 api.all('/discover/posts/*', retiredFeature('Legacy Discover posts'));
+api.all('/admin/governance', retiredFeature('Legacy governance admin tools'));
+api.all('/admin/governance/*', retiredFeature('Legacy governance admin tools'));
+api.all('/admin/init-governance', retiredFeature('Legacy governance initialization'));
+api.all('/admin/applications', retiredFeature('Creator and publisher applications'));
+api.all('/admin/applications/*', retiredFeature('Creator and publisher applications'));
+api.all('/admin/media-backups', retiredFeature('Legacy media backups'));
+api.all('/admin/media-backups/*', retiredFeature('Legacy media backups'));
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 const uuid = () => crypto.randomUUID();
 const now = () => new Date().toISOString();
@@ -7170,7 +7177,7 @@ async function supabaseUpsertPostInteraction(c: any, postId: string, userId: str
   const requestedUserId = cleanText(userId, 120);
   const keys = await supabaseInteractionActorKeys(c, [requestedUserId]);
   const canonicalAppUserId = cleanText(keys.appUserIds.find((id) => !isUuidText(id)) || keys.appUserIds[0] || requestedUserId, 120);
-  const authUserId = keys.authUserIds[0] || isUuidText(requestedUserId);
+  const authUserId = keys.authUserIds[0] || '';
   const actorKey = cleanText(keys.actorKeys[0] || supabaseInteractionActorKey(authUserId || '', '', canonicalAppUserId), 220);
   await supabaseDeletePostInteractionsForUsers(c, postId, [requestedUserId, canonicalAppUserId, ...(authUserId ? [authUserId] : []), ...keys.appUserIds, ...keys.authUserIds], kind);
   const baseRow: any = {
@@ -7335,10 +7342,7 @@ async function supabaseInteractionIdentityKeys(c: any, userIds: string[]) {
   }
   const related = Array.from(relatedUserIds);
   const mappedAuthUserIds = await supabaseAuthUserIdsForAppUserIds(c, related);
-  const authUserIds = Array.from(new Set([
-    ...related.map((value) => isUuidText(value)).filter((value): value is string => !!value),
-    ...mappedAuthUserIds,
-  ]));
+  const authUserIds = Array.from(new Set(mappedAuthUserIds));
   const appUserIdsFromAuth = await supabaseAppUserIdsForAuthUserIds(c, [...related, ...authUserIds]);
   return {
     appUserIds: Array.from(new Set([...related, ...appUserIdsFromAuth])).filter(Boolean),

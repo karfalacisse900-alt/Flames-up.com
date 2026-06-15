@@ -293,9 +293,7 @@ actor MIRAAppCacheStore {
   private func preferredPost(_ lhs: MIRAPost?, _ rhs: MIRAPost?) -> MIRAPost? {
     guard let lhs else { return rhs }
     guard let rhs else { return lhs }
-    let lhsScore = (lhs.likesCount ?? 0) + (lhs.commentsCount ?? 0) + (lhs.savesCount ?? 0)
-    let rhsScore = (rhs.likesCount ?? 0) + (rhs.commentsCount ?? 0) + (rhs.savesCount ?? 0)
-    return rhsScore >= lhsScore ? rhs : lhs
+    return mergedPostPreservingViewerState(cached: lhs, fresh: rhs)
   }
 
   private func mergedPostPreservingViewerState(cached: MIRAPost, fresh: MIRAPost) -> MIRAPost {
