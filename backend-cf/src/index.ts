@@ -6870,49 +6870,6 @@ async function supabaseReadVisiblePosts(c: any, viewerId: string, options: Supab
   return overlaySupabaseViewerEngagement(c, feedPhotoPostsOnly(ordered), viewerId);
 }
 
-async function getPostEngagementState(db: D1Database, postId: string, userId: string) {
-  await ensureLikeUniquenessSchema(db);
-  await reconcileLegacyDiscoverLikes(db, postId);
-  await coalesceViewerPostInteractions(db, postId, userId);
-  const relatedUserIds = await relatedInteractionUserIds(db, userId);
-  const relatedPlaceholders = inPlaceholders(relatedUserIds);
-  const row: any = await db.prepare(
-    `SELECT
-       COALESCE(p.likes_count, 0) AS stored_likes_count,
-       COALESCE(p.comments_count, 0) AS stored_comments_count,
-       COALESCE(p.saves_count, 0) AS stored_saves_count,
-       (SELECT COUNT(*) FROM likes WHERE post_id = p.id) AS counted_likes_count,
-       (SELECT COUNT(*) FROM comments WHERE post_id = p.id AND COALESCE(status, 'active') NOT IN ('removed', 'hidden')) AS counted_comments_count,
-       (SELECT COUNT(*) FROM saved_posts WHERE post_id = p.id) AS counted_saves_count,
-       EXISTS (SELECT 1 FROM likes WHERE post_id = ? AND user_id IN (${relatedPlaceholders})) AS is_liked,
-       EXISTS (SELECT 1 FROM saved_posts WHERE post_id = ? AND user_id IN (${relatedPlaceholders})) AS saved`
-  + ' FROM posts p WHERE p.id = ?'
-  ).bind(postId, ...relatedUserIds, postId, ...relatedUserIds, postId).first();
-
-  const state = {
-    likes_count: Math.max(0, Number(row?.counted_likes_count || 0)),
-    comments_count: Math.max(0, Number(row?.counted_comments_count || 0)),
-    saves_count: Math.max(0, Number(row?.counted_saves_count || 0)),
-    liked: row?.is_liked === true || row?.is_liked === 1 || row?.is_liked === '1',
-    saved: row?.saved === true || row?.saved === 1 || row?.saved === '1',
-  };
-
-  // Keep denormalized counters repaired from canonical interaction rows so old
-  // duplicate/stale counters cannot make a post look liked more than once.
-  try {
-    await db.prepare(
-      `UPDATE posts
-       SET likes_count = ?,
-           comments_count = ?,
-           saves_count = ?
-       WHERE id = ?`
-    )
-      .bind(state.likes_count, state.comments_count, state.saves_count, postId)
-      .run();
-  } catch {}
-  return state;
-}
-
 function postgrestInFilter(values: string[]): string {
   const safeValues = values
     .map((value) => cleanText(value, 240))
@@ -7871,127 +7828,8 @@ function postEngagementResponse(state: any, extra: Record<string, unknown> = {})
   };
 }
 
-async function relatedInteractionUserIds(db: D1Database, userId: string): Promise<string[]> {
-  const cleanUserId = publicId(userId, 120);
-  if (!cleanUserId) return [];
-  const ids = new Set<string>([cleanUserId]);
-
-  try {
-    const user: any = await db.prepare(
-      'SELECT id, email, supabase_user_id, oauth_provider, oauth_subject FROM users WHERE id = ? OR supabase_user_id = ? LIMIT 1'
-    ).bind(cleanUserId, cleanUserId).first();
-    const primaryId = publicId(user?.id, 120);
-    if (primaryId) ids.add(primaryId);
-    const email = normalizeOptionalEmail(user?.email);
-    const supabaseUserId = cleanText(user?.supabase_user_id, 120);
-    const oauthProvider = normalizeAuthProvider(user?.oauth_provider);
-    const oauthSubject = cleanText(user?.oauth_subject, 240);
-    const conditions = ['id = ?', 'supabase_user_id = ?'];
-    const binds: any[] = [cleanUserId, cleanUserId];
-    if (supabaseUserId) {
-      conditions.push('supabase_user_id = ?');
-      binds.push(supabaseUserId);
-    }
-    if (email && !isInternalOAuthEmail(email)) {
-      conditions.push('LOWER(email) = ?');
-      binds.push(email);
-    }
-    if (oauthSubject) {
-      conditions.push('(oauth_provider = ? AND oauth_subject = ?)');
-      binds.push(oauthProvider, oauthSubject);
-    }
-    const rows = await db.prepare(`SELECT id FROM users WHERE ${conditions.join(' OR ')} LIMIT 20`)
-      .bind(...binds)
-      .all();
-    for (const row of rows.results as any[]) {
-      const id = publicId(row?.id, 120);
-      if (id) ids.add(id);
-    }
-  } catch {}
-
-  try {
-    const rows = await db.prepare(
-      `SELECT DISTINCT ai2.user_id
-       FROM account_identities ai1
-       JOIN account_identities ai2
-         ON ai2.provider = ai1.provider
-        AND ai2.provider_user_id = ai1.provider_user_id
-       WHERE ai1.user_id = ?
-       LIMIT 20`
-    ).bind(cleanUserId).all();
-    for (const row of rows.results as any[]) {
-      const id = publicId(row?.user_id, 120);
-      if (id) ids.add(id);
-    }
-  } catch {}
-
-  return Array.from(ids).slice(0, 20);
-}
-
 function inPlaceholders(values: unknown[]): string {
   return values.map(() => '?').join(', ');
-}
-
-async function deletePostLikesForUsers(db: D1Database, postId: string, userIds: string[]) {
-  if (!userIds.length) return;
-  const placeholders = inPlaceholders(userIds);
-  await db.batch([
-    db.prepare(`DELETE FROM likes WHERE post_id = ? AND user_id IN (${placeholders})`).bind(postId, ...userIds),
-    db.prepare(`DELETE FROM discover_likes WHERE post_id = ? AND user_id IN (${placeholders})`).bind(postId, ...userIds),
-  ]);
-}
-
-async function deletePostSavesForUsers(db: D1Database, postId: string, userIds: string[]) {
-  if (!userIds.length) return;
-  const placeholders = inPlaceholders(userIds);
-  await db.prepare(`DELETE FROM saved_posts WHERE post_id = ? AND user_id IN (${placeholders})`)
-    .bind(postId, ...userIds)
-    .run();
-  try {
-    await db.prepare(`DELETE FROM bookmarks WHERE post_id = ? AND user_id IN (${placeholders})`)
-      .bind(postId, ...userIds)
-      .run();
-  } catch {}
-}
-
-async function coalesceViewerPostInteractions(db: D1Database, postId: string, userId: string): Promise<string[]> {
-  const userIds = await relatedInteractionUserIds(db, userId);
-  if (userIds.length <= 1) return userIds;
-  const placeholders = inPlaceholders(userIds);
-
-  const likeRow: any = await db.prepare(
-    `SELECT 1 AS found FROM likes WHERE post_id = ? AND user_id IN (${placeholders}) LIMIT 1`
-  ).bind(postId, ...userIds).first();
-  if (likeRow) {
-    await deletePostLikesForUsers(db, postId, userIds);
-    await db.prepare('INSERT OR IGNORE INTO likes (id, user_id, post_id) VALUES (?, ?, ?)')
-      .bind(uuid(), userId, postId)
-      .run();
-    await db.prepare(
-      `INSERT OR IGNORE INTO discover_likes (id, user_id, post_id)
-       SELECT ?, ?, ?
-       WHERE EXISTS (SELECT 1 FROM discover_posts WHERE id = ?)`
-    ).bind(uuid(), userId, postId, postId).run().catch(() => {});
-  }
-
-  const saveRow: any = await db.prepare(
-    `SELECT collection FROM saved_posts
-     WHERE post_id = ? AND user_id IN (${placeholders})
-     ORDER BY COALESCE(created_at, '') DESC
-     LIMIT 1`
-  ).bind(postId, ...userIds).first();
-  if (saveRow) {
-    const collection = cleanText(saveRow.collection || 'saved', 80) || 'saved';
-    await deletePostSavesForUsers(db, postId, userIds);
-    await db.prepare('INSERT OR IGNORE INTO saved_posts (id, user_id, post_id, collection) VALUES (?, ?, ?, ?)')
-      .bind(uuid(), userId, postId, collection)
-      .run();
-    await db.prepare(
-      'INSERT INTO bookmarks (id, user_id, post_id, collection) VALUES (?, ?, ?, ?) ON CONFLICT(user_id, post_id) DO UPDATE SET collection = ?'
-    ).bind(uuid(), userId, postId, collection, collection).run().catch(() => {});
-  }
-
-  return userIds;
 }
 
 async function isFriend(db: D1Database, userId: string, targetId: string): Promise<boolean> {
@@ -11279,15 +11117,6 @@ function mediaAssetPreviewUrl(env: Env, asset: any): string {
   return safeMediaReference(asset?.public_url) || safeMediaReference(asset?.private_url);
 }
 
-function allCaptroOwnedCloudflareImageUrls(env: Env, imageUrls: string[]): boolean {
-  const cleanUrls = imageUrls.map((url) => safeMediaReference(url)).filter(Boolean);
-  if (!cleanUrls.length) return false;
-  return cleanUrls.every((url) => {
-    if (isVideoMediaUrl(url)) return false;
-    return !!cloudflareImageIdFromDeliveryUrl(env, url);
-  });
-}
-
 function moderationSampleUrls(env: Env, asset: any): string[] {
   if (asset.media_type === 'video' && cleanText(asset.storage_provider, 40) === 'stream') {
     const key = cleanText(asset.storage_key, 220);
@@ -11594,92 +11423,7 @@ async function processMediaModerationJob(env: Env, message: MediaModerationJobMe
     await processSupabaseMediaModerationJob(env, message, requestId);
     return;
   }
-  if (supabasePrimaryRequestedForEnv(env)) {
-    throw new Error('SUPABASE_PRIMARY_REQUIRED:media_moderation');
-  }
-  await ensureMediaModerationSchema(env.DB);
-  const mediaId = publicId(message.mediaId, 160);
-  const jobId = publicId(message.jobId, 160);
-  const startedAt = now();
-  await env.DB.prepare("UPDATE moderation_jobs SET status = 'running', attempts = attempts + 1, started_at = ?, updated_at = ? WHERE id = ?")
-    .bind(startedAt, startedAt, jobId)
-    .run();
-
-  const asset: any = await env.DB.prepare('SELECT * FROM media_assets WHERE id = ? LIMIT 1').bind(mediaId).first();
-  if (!asset) throw new Error('MEDIA_ASSET_NOT_FOUND');
-  const existingStatus = normalizeMediaModerationStatus(asset.moderation_status);
-  if (['approved', 'review_required', 'rejected'].includes(existingStatus) && cleanText(asset.upload_status, 40) === 'uploaded') {
-    const ts = now();
-    await env.DB.prepare("UPDATE moderation_jobs SET status = 'completed', completed_at = COALESCE(completed_at, ?), updated_at = ? WHERE id = ?")
-      .bind(ts, ts, jobId)
-      .run();
-    return;
-  }
-
-  try {
-    const malwareStatus = await scanMalwareInterface(env, asset);
-    const caption = cleanMultilineText(message.caption || '', 1000);
-    const sampleScores: MediaModerationScores[] = [];
-    const rawSamples: any[] = [];
-    let modelName = 'heuristic';
-    for (const sampleUrl of moderationSampleUrls(env, asset)) {
-      const result = await runWorkersAiImageModeration(env, sampleUrl, caption);
-      modelName = result.modelName;
-      sampleScores.push(result.scores);
-      rawSamples.push({ sample_url: sampleUrl.replace(/\?.*/, ''), result: scrubLogMetadata(result.raw) });
-    }
-    if (!sampleScores.length) {
-      sampleScores.push(defaultModerationScores({ ...textSafetyHeuristics(caption), confidence: 0.55 }));
-      rawSamples.push({ fallback: 'no_sample_available' });
-    }
-    const scores = maxModerationScores(sampleScores);
-    scores.malware_status = malwareStatus === 'clean' || malwareStatus === 'malicious' ? malwareStatus : scores.malware_status;
-    const decision = decideMediaModeration(scores, normalizeMediaAssetType(asset.media_type) || 'image', env.AI_GENERATED_MEDIA_POLICY || '');
-    const publicUrl = decision.decision === 'approved' ? mediaAssetPublicUrl(env, asset) : '';
-    const ts = now();
-    await env.DB.batch([
-      env.DB.prepare(
-        `INSERT INTO moderation_results (
-          id, media_id, model_name, adult_explicit_score, nudity_score, sexual_context_score,
-          sexual_solicitation_score, minor_safety_risk_score, violence_score, gore_score, weapon_score,
-          hate_symbol_score, ai_generated_likelihood, spam_scam_score, malware_status, link_risk_score,
-          confidence, decision, reasons, raw_result, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      ).bind(
-        uuid(), mediaId, modelName,
-        scores.adult_explicit_score, scores.nudity_score, scores.sexual_context_score,
-        scores.sexual_solicitation_score, scores.minor_safety_risk_score, scores.violence_score,
-        scores.gore_score, scores.weapon_score, scores.hate_symbol_score, scores.ai_generated_likelihood,
-        scores.spam_scam_score, scores.malware_status, scores.link_risk_score, scores.confidence,
-        decision.decision, JSON.stringify(decision.reasons), JSON.stringify({ samples: rawSamples }), ts,
-      ),
-      env.DB.prepare(
-        `UPDATE media_assets
-         SET moderation_status = ?, public_url = COALESCE(NULLIF(?, ''), public_url),
-             rejection_code = ?, rejection_message = ?, updated_at = ?
-         WHERE id = ?`
-      ).bind(decision.decision, publicUrl, decision.rejectionCode, decision.userMessage, ts, mediaId),
-      env.DB.prepare("UPDATE moderation_jobs SET status = 'completed', completed_at = ?, updated_at = ? WHERE id = ?")
-        .bind(ts, ts, jobId),
-    ]);
-    await insertModerationEvent(env.DB, mediaId, `moderation_${decision.decision}`, {
-      decision: decision.decision,
-      reason: decision.reasons.join(','),
-      afterState: { moderation_status: decision.decision, scores },
-      requestId,
-    });
-  } catch (error: any) {
-    const ts = now();
-    const code = getErrorCode(error).slice(0, 180);
-    await env.DB.batch([
-      env.DB.prepare("UPDATE moderation_jobs SET status = 'failed', last_error = ?, completed_at = ?, updated_at = ? WHERE id = ?")
-        .bind(code, ts, ts, jobId),
-      env.DB.prepare("UPDATE media_assets SET moderation_status = 'failed', rejection_code = 'moderation_failed', rejection_message = 'This upload could not be checked. Please try again.', updated_at = ? WHERE id = ?")
-        .bind(ts, mediaId),
-    ]);
-    await insertModerationEvent(env.DB, mediaId, 'moderation_failed', { reason: code, requestId });
-    throw error;
-  }
+  throw new Error('SUPABASE_PRIMARY_REQUIRED:media_moderation');
 }
 
 async function createMediaModerationJob(c: any, mediaId: string, userId: string, caption = '', options: { enqueue?: boolean } = {}): Promise<string> {
@@ -11709,23 +11453,7 @@ async function createMediaModerationJob(c: any, mediaId: string, userId: string,
     }
     return jobId;
   }
-  await ensureMediaModerationSchema(c.env.DB);
-  const jobId = uuid();
-  const ts = now();
-  await c.env.DB.prepare(
-    `INSERT INTO moderation_jobs (id, media_id, user_id, job_type, status, queued_at, created_at, updated_at)
-     VALUES (?, ?, ?, 'media_pre_publish', 'pending', ?, ?, ?)`
-  ).bind(jobId, mediaId, userId, ts, ts, ts).run();
-  const body: MediaModerationJobMessage = { jobId, mediaId, userId, reason: 'upload_complete', caption: cleanMultilineText(caption, 1000) };
-  const shouldEnqueue = options.enqueue !== false;
-  if (shouldEnqueue && c.env.MEDIA_MODERATION_QUEUE) {
-    await c.env.MEDIA_MODERATION_QUEUE.send(body);
-  } else if (shouldEnqueue) {
-    runBackgroundTask(c, 'media_moderation_inline_failed', async () => {
-      await processMediaModerationJob(c.env, body, c.get?.('requestId') || '');
-    });
-  }
-  return jobId;
+  throw new Error('SUPABASE_PRIMARY_REQUIRED:media_moderation_job');
 }
 
 function parseMediaAssetIds(body: any): string[] {
@@ -11805,136 +11533,13 @@ async function approvedMediaAssetsForPost(c: any, userId: string, requestedMedia
     return { ok: true, status: 200, detail: '', code: '', assets };
   }
 
-  if (!requestedMediaIds.length && imageUrls.length) {
-    if (allCaptroOwnedCloudflareImageUrls(c.env, imageUrls)) {
-      return {
-        ok: true,
-        status: 200,
-        detail: '',
-        code: '',
-        assets: [] as any[],
-      };
-    }
-    return {
-      ok: false,
-      status: 409,
-      detail: 'Checking your upload before posting...',
-      code: 'MEDIA_MODERATION_REQUIRED',
-      assets: [] as any[],
-    };
-  }
-  if (!requestedMediaIds.length) return { ok: true, status: 200, detail: '', code: '', assets: [] as any[] };
-
-  await ensureMediaModerationSchema(c.env.DB);
-  const placeholders = requestedMediaIds.map(() => '?').join(', ');
-  const rows = await c.env.DB.prepare(`SELECT * FROM media_assets WHERE user_id = ? AND id IN (${placeholders})`)
-    .bind(userId, ...requestedMediaIds)
-    .all();
-  const assets = rows.results as any[];
-  if (assets.length !== requestedMediaIds.length) {
-    return { ok: false, status: 404, detail: 'One upload was not found. Please upload again.', code: 'MEDIA_NOT_FOUND', assets };
-  }
-  const blocking = assets.find((asset) => normalizeMediaModerationStatus(asset.moderation_status) !== 'approved' || cleanText(asset.upload_status, 40) !== 'uploaded');
-  if (blocking) {
-    const status = normalizeMediaModerationStatus(blocking.moderation_status);
-    const detail = status === 'rejected'
-      ? "This upload can't be posted because it may break Captro's safety rules."
-      : status === 'review_required'
-        ? 'This upload needs a quick safety review before it can be posted.'
-        : 'Checking your upload before posting...';
-    return { ok: false, status: 409, detail, code: `MEDIA_${status.toUpperCase()}`, assets };
-  }
-  return { ok: true, status: 200, detail: '', code: '', assets };
-}
-
-async function refinePostCategoryWithBackendAi(c: any, postId: string) {
-  if (!c.env.AI) return;
-  await ensureAutoCategorySchema(c.env.DB);
-  const row: any = await c.env.DB.prepare(
-    `SELECT id, content, title, image, images, media_types, media_dimensions, location, place_name, place_category, post_type,
-            primary_category, category_confidence, category_source, category_signals_json, tags_json,
-            user_selected_category, detected_objects_json, detected_scene, place_type, caption_keywords_json
-     FROM posts
-     WHERE id = ?
-     LIMIT 1`
-  ).bind(postId).first();
-  if (!row) return;
-
-  const currentSource = normalizeCategorySource(row.category_source);
-  if (currentSource === 'user_changed_optional' || currentSource === 'admin_changed') {
-    return;
-  }
-
-  const currentConfidence = clampFloat(row.category_confidence, 0, 1, 0);
-  const mediaUrls = sanitizeMediaReferences(row.images, row.image);
-  const mediaTypes = sanitizeMediaTypes(row.media_types, mediaUrls.length || 1);
-  const primaryUrl = mediaUrls[0] || safeMediaReference(row.image);
-  const primaryType = mediaTypes[0] || (isVideoMediaUrl(primaryUrl) ? 'video' : 'image');
-  if (currentConfidence >= 0.75 && primaryType !== 'video') return;
-
-  const thumbnailVariant = c.env.CLOUDFLARE_IMAGES_THUMBNAIL_VARIANT || '';
-  const feedVariant = c.env.CLOUDFLARE_IMAGES_FEED_VARIANT || '';
-  const mediaPreviewUrl = primaryType === 'video'
-    ? streamThumbnailUrl(primaryUrl)
-    : posterDeliveryUrl(primaryUrl, primaryType, thumbnailVariant, c.env) || feedDeliveryUrl(primaryUrl, primaryType, feedVariant, c.env);
-  const backendLabels = await classifyImageWithWorkersAi(c.env, mediaPreviewUrl);
-  const currentSignals = parseJsonObject(row.category_signals_json);
-  const aiInput: AutoCategoryInput = {
-    caption: [row.title, row.content].filter(Boolean).join('\n\n'),
-    mediaType: primaryType,
-    postType: row.post_type,
-    hashtags: sanitizeAutoCategoryTags(row.tags_json),
-    location: row.location,
-    placeName: row.place_name,
-    placeType: row.place_type || row.place_category,
-    userSelectedCategory: row.user_selected_category || (currentSignals as any).user_selected_category,
-    detectedObjects: sanitizeAutoCategoryTags(row.detected_objects_json),
-    detectedScene: cleanText(row.detected_scene, 80),
-    captionKeywords: sanitizeAutoCategoryTags(row.caption_keywords_json),
-    appleLabels: sanitizeAutoCategoryLabels((currentSignals as any).apple_labels),
-    appleCategoryGuess: cleanText((currentSignals as any).apple_category_guess, 40),
-    appleConfidence: clampFloat((currentSignals as any).apple_confidence, 0, 1, 0),
+  return {
+    ok: false,
+    status: 503,
+    detail: 'Captro production database is not configured. Please try again later.',
+    code: 'SUPABASE_PRIMARY_REQUIRED',
+    assets: [] as any[],
   };
-  const backendCategory = categoryFromLabels(backendLabels);
-  let textAiCategory: { category: DiscoverCategory | ''; confidence: number; labels: AutoCategoryLabel[] } = { category: '', confidence: 0, labels: [] };
-  try {
-    textAiCategory = await classifyPostMetadataWithWorkersAi(c.env, { ...aiInput, backendLabels, backendCategoryGuess: backendCategory.category, backendConfidence: backendCategory.confidence });
-  } catch (error: any) {
-    console.warn(JSON.stringify({ event: 'post_category_text_ai_failed', code: getErrorCode(error).slice(0, 160) }));
-  }
-  const combinedBackendLabels = [...backendLabels, ...textAiCategory.labels].slice(0, 24);
-  if (!combinedBackendLabels.length && !backendCategory.category && !textAiCategory.category) return;
-
-  const result = autoCategoryEngine({
-    ...aiInput,
-    backendLabels: combinedBackendLabels,
-    backendCategoryGuess: textAiCategory.category || backendCategory.category,
-    backendConfidence: Math.max(textAiCategory.confidence, backendCategory.confidence),
-  });
-  await c.env.DB.prepare(
-    `UPDATE posts
-     SET primary_category = ?, category_confidence = ?, category_source = ?, category_status = ?,
-         category_signals_json = ?, tags_json = ?,
-         secondary_categories_json = ?, category_scores_json = ?, detected_objects_json = ?,
-         detected_scene = ?, place_type = ?, user_selected_category = ?, caption_keywords_json = ?,
-         updated_at = datetime('now')
-     WHERE id = ?`
-  ).bind(
-    result.primary_category,
-    result.category_confidence,
-    result.category_source,
-    result.category_status,
-    JSON.stringify(result.signals),
-    JSON.stringify(result.tags),
-    JSON.stringify(result.secondary_categories),
-    JSON.stringify(result.category_scores),
-    JSON.stringify(result.detected_objects),
-    result.detected_scene,
-    result.place_type,
-    result.user_selected_category,
-    JSON.stringify(result.caption_keywords),
-    postId
-  ).run();
 }
 
 async function supabaseAdminDeleteSafe(c: any, table: string, filters: Record<string, string>) {
