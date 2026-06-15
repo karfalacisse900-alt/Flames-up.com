@@ -16467,104 +16467,6 @@ api.post('/stripe/checkout/sessions', authMiddleware, async (c) => {
   }
 });
 
-api.get('/premium', authMiddleware, async (c) => {
-  try {
-    const userId = getUserId(c);
-    const user = await getPremiumUser(c, userId);
-    if (!user) return c.json({ detail: 'User not found' }, 404);
-    const stripe = getStripeConfig(c);
-    return c.json({
-      ...premiumPayloadFromUser(user),
-      stripe_connected: stripe.configured,
-      price_configured: !!getPremiumPriceId(c),
-    });
-  } catch (error: any) {
-    console.error('Premium load failed:', getErrorCode(error), error?.message || error);
-    return c.json({ detail: 'Could not load Premium.', code: 'PREMIUM_LOAD_FAILED' }, 500);
-  }
-});
-
-api.post('/premium/checkout', authMiddleware, async (c) => {
-  try {
-    const bodyTooLarge = rejectLargeRequest(c, 20_000);
-    if (bodyTooLarge) return bodyTooLarge;
-    const userId = getUserId(c);
-    const limited = await enforceRateLimit(c, 'premium_checkout', userId, 8, 60);
-    if (limited) return limited;
-
-    await ensurePremiumSchema(c.env.DB);
-    const body: any = await c.req.json().catch(() => ({}));
-    const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
-    if (!user) return c.json({ detail: 'User not found' }, 404);
-    if (userHasActivePremium(user)) {
-      return c.json({ detail: 'Premium is already active on this account.', code: 'PREMIUM_ALREADY_ACTIVE' }, 409);
-    }
-
-    const stripe = getStripeConfig(c);
-    if (!stripe.configured) {
-      return c.json({ detail: 'Stripe is not configured yet.', code: 'STRIPE_NOT_CONFIGURED' }, 503);
-    }
-
-    const priceId = getPremiumPriceId(c);
-    const successUrl = allowedStripeReturnUrl(c, body.success_url || c.env.STRIPE_SUCCESS_URL, '/profile?premium=success&session_id={CHECKOUT_SESSION_ID}');
-    const cancelUrl = allowedStripeReturnUrl(c, body.cancel_url || c.env.STRIPE_CANCEL_URL, '/profile?premium=cancelled');
-    const requestId = getClientRequestId(c, body) || `premium_${userId}_${Date.now()}`;
-    const existingCustomer = cleanText(user.premium_stripe_customer_id, 140);
-    const publicEmail = publicUserEmail(user.email);
-    const checkoutParams: Record<string, string | number | boolean> = {
-      mode: 'subscription',
-      success_url: successUrl,
-      cancel_url: cancelUrl,
-      client_reference_id: userId,
-      'line_items[0][quantity]': 1,
-      'metadata[source]': 'captro-premium',
-      'metadata[user_id]': userId,
-      'metadata[plan]': PREMIUM_PLAN.id,
-      'metadata[price_id]': priceId,
-      'subscription_data[metadata][source]': 'captro-premium',
-      'subscription_data[metadata][user_id]': userId,
-      'subscription_data[metadata][plan]': PREMIUM_PLAN.id,
-    };
-    if (existingCustomer) checkoutParams.customer = existingCustomer;
-    else if (publicEmail) checkoutParams.customer_email = publicEmail;
-    if (priceId && priceId.startsWith('price_')) {
-      checkoutParams['line_items[0][price]'] = priceId;
-    } else {
-      checkoutParams['line_items[0][price_data][currency]'] = PREMIUM_PLAN.currency;
-      checkoutParams['line_items[0][price_data][unit_amount]'] = PREMIUM_PLAN.amount_cents;
-      checkoutParams['line_items[0][price_data][recurring][interval]'] = PREMIUM_PLAN.interval;
-      checkoutParams['line_items[0][price_data][product_data][name]'] = PREMIUM_PLAN.label;
-      checkoutParams['line_items[0][price_data][product_data][metadata][source]'] = 'captro-premium';
-    }
-
-    const session = await stripeApiRequest(c, '/checkout/sessions', checkoutParams, requestId);
-    if (!session.ok) {
-      const message = session.data?.error?.message || session.data?.detail || 'Could not start Premium checkout.';
-      return c.json({ detail: message, code: session.data?.error?.code || 'PREMIUM_CHECKOUT_FAILED' }, session.status as any);
-    }
-
-    await upsertPremiumSubscription(c, {
-      userId,
-      stripeCustomerId: cleanText(session.data.customer, 140),
-      stripeCheckoutSessionId: cleanText(session.data.id, 140),
-      priceId,
-      status: 'pending',
-    });
-
-    return c.json({
-      id: session.data.id,
-      url: session.data.url,
-      mode: session.data.mode,
-      status: session.data.status,
-      plan: PREMIUM_PLAN.id,
-      amount_cents: PREMIUM_PLAN.amount_cents,
-    });
-  } catch (error: any) {
-    console.error('Premium checkout failed:', getErrorCode(error), error?.message || error);
-    return c.json({ detail: 'Could not start Premium checkout.', code: 'PREMIUM_CHECKOUT_FAILED' }, 500);
-  }
-});
-
 api.post('/stripe/webhook', async (c) => {
   const bodyTooLarge = rejectLargeRequest(c, 500_000);
   if (bodyTooLarge) return bodyTooLarge;
@@ -16619,51 +16521,7 @@ api.post('/reports', authMiddleware, async (c) => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// PUBLISHER
-// ═══════════════════════════════════════════════════════════════════════════════
-api.post('/publisher/apply', authMiddleware, async (c) => {
-  try {
-    const userId = getUserId(c); const b = await c.req.json();
-    if (!b.business_name || !b.category || !b.about || !b.phone || !b.why_publish) {
-      return c.json({ detail: 'Missing required fields' }, 400);
-    }
-    const existing: any = await c.env.DB.prepare('SELECT id, status FROM publisher_applications WHERE user_id = ?').bind(userId).first();
-    if (existing) return c.json({ detail: 'Application already exists', status: existing.status });
-    const user: any = await c.env.DB.prepare('SELECT username, full_name, profile_image FROM users WHERE id = ?').bind(userId).first();
-    const id = uuid();
-    await c.env.DB.prepare(
-      `INSERT INTO publisher_applications (id, user_id, user_username, user_full_name, user_profile_image, business_name, category, about, phone, website, social_instagram, social_twitter, social_tiktok, address, city, why_publish)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(id, userId, user?.username || '', user?.full_name || '', user?.profile_image || '', b.business_name || '', b.category || '', b.about || '', b.phone || '', b.website || '', b.social_instagram || '', b.social_twitter || '', b.social_tiktok || '', b.address || '', b.city || '', b.why_publish || '').run();
-    return c.json({ id, status: 'pending', submitted: true });
-  } catch (e: any) {
-    return c.json({ detail: 'Application failed: ' + (e.message || 'unknown error') }, 500);
-  }
-});
-
-api.get('/publisher/status', authMiddleware, async (c) => {
-  const app: any = await c.env.DB.prepare('SELECT status FROM publisher_applications WHERE user_id = ? ORDER BY created_at DESC LIMIT 1').bind(getUserId(c)).first();
-  return c.json({ status: app?.status || 'none' });
-});
-
 // Discover posts (publisher content)
-api.post('/discover/posts', authMiddleware, async (c) => {
-  if (supabasePrimaryConfigured(c)) return retiredFeature('Legacy publisher Discover posts')(c);
-  const bodyTooLarge = rejectLargeRequest(c, 1_000_000);
-  if (bodyTooLarge) return bodyTooLarge;
-  const userId = getUserId(c);
-  const limited = await enforceRateLimit(c, 'discover_post_create', userId, 30, 60);
-  if (limited) return limited;
-  const restricted = await enforceUserRestriction(c, userId, 'posting');
-  if (restricted) return restricted;
-  const b = await c.req.json().catch(() => ({}));
-  const user: any = await c.env.DB.prepare('SELECT username, full_name, profile_image, is_publisher FROM users WHERE id = ?').bind(userId).first();
-  if (!user?.is_publisher) return c.json({ detail: 'Publishers only' }, 403);
-  const id = uuid();
-  await c.env.DB.prepare('INSERT INTO discover_posts (id, user_id, content, image, images, category, location) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(id, userId, b.content || '', b.image || null, JSON.stringify(b.images || []), b.category || 'culture', b.location || '').run();
-  return c.json({ id, user_id: userId, user_username: user.username, user_full_name: user.full_name, user_profile_image: safeMediaReference(user.profile_image), content: b.content, category: b.category, created_at: now() });
-});
-
 api.get('/discover/feed', authMiddleware, async (c) => {
   const supabaseRequired = requireSupabasePrimaryDatabase(c, 'discover_feed_read');
   if (supabaseRequired) return supabaseRequired;
@@ -16682,39 +16540,6 @@ api.get('/discover/feed', authMiddleware, async (c) => {
   }
 });
 
-api.post('/discover/posts/:postId/like', authMiddleware, async (c) => {
-  const userId = getUserId(c); const postId = c.req.param('postId');
-  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'discover_like');
-  if (supabaseRequired) return supabaseRequired;
-  const body: any = await c.req.json().catch(() => ({}));
-  const requested = optionalBoolean(body.liked ?? body.like ?? body.value);
-  const limited = await enforceRateLimit(c, 'discover_like', userId, 300, 60);
-  if (limited) return limited;
-  try {
-    const [visiblePost] = await supabaseReadVisiblePosts(c, userId, { postId, limit: 1 });
-    if (!visiblePost) return c.json({ detail: 'Post not found' }, 404);
-    const { state, changed } = await setCanonicalPostLikeState(c, postId, userId, requested);
-    if (state.liked && changed && publicId((visiblePost as any).user_id, 120) !== userId) {
-      runBackgroundTask(c, 'supabase_discover_like_notification_failed', async () => {
-        const me = await supabaseUserByAnyId(c, userId).catch(() => null);
-        await insertNotificationOnce(c, {
-          userId: publicId((visiblePost as any).user_id, 120),
-          type: 'like',
-          title: 'New Like',
-          body: `${cleanText(me?.full_name || me?.username || 'Someone', 80)} liked your post`,
-          data: { post_id: postId, from_user_id: userId, actor_name: cleanText(me?.full_name || me?.username || 'Someone', 80) },
-          dedupeKey: `like:${userId}:${postId}`,
-          dedupeSeconds: 86400,
-        });
-      });
-    }
-    return c.json(postEngagementResponse(state));
-  } catch (error: any) {
-    console.warn(JSON.stringify({ event: 'supabase_discover_like_failed', code: getErrorCode(error).slice(0, 180) }));
-    return c.json({ detail: 'Could not update like.' }, 500);
-  }
-});
-
 api.get('/discover/categories', async (c) => {
   return c.json([
     { id: 'all', name: 'All', icon: 'square.grid.2x2' },
@@ -16727,42 +16552,6 @@ api.get('/discover/categories', async (c) => {
   ]);
 });
 
-// Places (user-created)
-api.post('/places', authMiddleware, async (c) => {
-  if (supabasePrimaryConfigured(c)) {
-    return c.json({ detail: 'Legacy place creation is disabled. Use post place tagging instead.' }, 410);
-  }
-  const userId = getUserId(c); const b = await c.req.json(); const id = uuid();
-  await c.env.DB.prepare('INSERT INTO places (id, name, description, category, lat, lng, address, image, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(id, b.name, b.description || '', b.category || '', b.lat || null, b.lng || null, b.address || '', b.image || null, userId).run();
-  return c.json({ id, name: b.name, created_at: now() });
-});
-
-api.get('/places', authMiddleware, async (c) => {
-  if (supabasePrimaryConfigured(c)) return c.json([]);
-  const r = await c.env.DB.prepare('SELECT * FROM places ORDER BY created_at DESC LIMIT 50').all();
-  return c.json(r.results);
-});
-
-api.get('/places/nearby', authMiddleware, async (c) => {
-  if (supabasePrimaryConfigured(c)) return c.json([]);
-  const r = await c.env.DB.prepare('SELECT * FROM places ORDER BY created_at DESC LIMIT 50').all();
-  return c.json(r.results);
-});
-
-api.get('/places/:placeId', authMiddleware, async (c) => {
-  if (supabasePrimaryConfigured(c)) return c.json({ detail: 'Not found' }, 404);
-  const p = await c.env.DB.prepare('SELECT * FROM places WHERE id = ?').bind(c.req.param('placeId')).first();
-  if (!p) return c.json({ detail: 'Not found' }, 404);
-  return c.json(p);
-});
-
-api.post('/places/verify-proximity', authMiddleware, async (c) => {
-  const b = await c.req.json();
-  const distance = Math.sqrt(Math.pow((b.user_lat - b.place_lat) * 111320, 2) + Math.pow((b.user_lng - b.place_lng) * 111320 * Math.cos(b.user_lat * Math.PI / 180), 2));
-  return c.json({ verified: distance <= 200, distance: Math.round(distance) });
-});
-
-// ═══════════════════════════════════════════════════════════════════════════════
 // ADMIN
 // ═══════════════════════════════════════════════════════════════════════════════
 type AdminRole = 'owner' | 'admin' | 'moderator' | 'support' | 'viewer';
