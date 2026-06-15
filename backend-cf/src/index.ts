@@ -7037,6 +7037,15 @@ function requireSupabasePrimaryDatabase(c: any, feature = 'app data') {
   }, 503);
 }
 
+function rejectLegacyUploadWhenSupabasePrimary(c: any, route: string) {
+  if (!supabasePrimaryRequested(c)) return null;
+  return c.json({
+    detail: 'This upload path has moved. Please update the app and try again.',
+    code: 'LEGACY_UPLOAD_DISABLED',
+    route,
+  }, 410);
+}
+
 async function supabaseAdminSelectRows(c: any, table: string, filters: Record<string, string>, select = '*', limit = 1000): Promise<any[]> {
   const url = new URL(`${getSupabaseUrl(c)}/rest/v1/${table}`);
   url.searchParams.set('select', select);
@@ -24195,6 +24204,8 @@ api.on('HEAD', '/media/:backupId', serveMediaBackup);
 // Upload (Cloudflare Images)
 api.post('/upload/image', authMiddleware, async (c) => {
   try {
+    const legacyDisabled = rejectLegacyUploadWhenSupabasePrimary(c, '/upload/image');
+    if (legacyDisabled) return legacyDisabled;
     const bodyTooLarge = rejectLargeRequest(c, 18_000_000);
     if (bodyTooLarge) return bodyTooLarge;
     const userId = getUserId(c);
@@ -24291,6 +24302,8 @@ api.post('/upload/image', authMiddleware, async (c) => {
 });
 
 api.post('/upload/base64-image', authMiddleware, async (c) => {
+  const legacyDisabled = rejectLegacyUploadWhenSupabasePrimary(c, '/upload/base64-image');
+  if (legacyDisabled) return legacyDisabled;
   // Alias for /upload/image
   const bodyTooLarge = rejectLargeRequest(c, 18_000_000);
   if (bodyTooLarge) return bodyTooLarge;
@@ -24420,6 +24433,8 @@ api.post('/upload/audio', authMiddleware, async (c) => {
 
 api.post('/upload/video', authMiddleware, async (c) => {
   try {
+    const legacyDisabled = rejectLegacyUploadWhenSupabasePrimary(c, '/upload/video');
+    if (legacyDisabled) return legacyDisabled;
     const userId = getUserId(c);
     const limited = await enforceRateLimit(c, 'upload_video_direct', userId, 40, 60);
     if (limited) return limited;
@@ -24450,6 +24465,8 @@ api.post('/upload/video', authMiddleware, async (c) => {
 
 api.post('/upload/video-with-backup', authMiddleware, async (c) => {
   try {
+    const legacyDisabled = rejectLegacyUploadWhenSupabasePrimary(c, '/upload/video-with-backup');
+    if (legacyDisabled) return legacyDisabled;
     const userId = getUserId(c);
     const maxBytes = maxBackupVideoBytes(c);
     const bodyTooLarge = rejectLargeRequest(c, maxBytes + 2_000_000);
