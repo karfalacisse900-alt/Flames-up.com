@@ -109,7 +109,6 @@ const summary = {
   executeDelete,
   total: assets.length,
   supabaseAssets: supabaseAssets.length,
-  legacyAssets: legacyAssets.length,
   images: 0,
   stream: 0,
   r2OrUnknown: 0,
