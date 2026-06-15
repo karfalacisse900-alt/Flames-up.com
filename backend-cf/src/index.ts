@@ -7036,6 +7036,10 @@ function supabasePrimaryConfigured(c: any): boolean {
   return supabasePrimaryRequested(c) && supabaseEngagementConfigured(c);
 }
 
+function supabasePrimaryRequestedForEnv(env: Env): boolean {
+  return databasePrimary({ env }) === 'supabase_postgres';
+}
+
 function requireSupabasePrimaryDatabase(c: any, feature = 'app data') {
   if (supabasePrimaryConfigured(c)) return null;
   return c.json({
@@ -11522,7 +11526,7 @@ function supabaseCtxFromEnv(env: Env): any {
 }
 
 function supabasePrimaryConfiguredForEnv(env: Env): boolean {
-  return databasePrimary({ env }) === 'supabase_postgres'
+  return supabasePrimaryRequestedForEnv(env)
     && !!String(env.SUPABASE_URL || '').trim()
     && !!String(env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
 }
@@ -11724,6 +11728,9 @@ async function processMediaModerationJob(env: Env, message: MediaModerationJobMe
   if (supabasePrimaryConfiguredForEnv(env)) {
     await processSupabaseMediaModerationJob(env, message, requestId);
     return;
+  }
+  if (supabasePrimaryRequestedForEnv(env)) {
+    throw new Error('SUPABASE_PRIMARY_REQUIRED:media_moderation');
   }
   await ensureMediaModerationSchema(env.DB);
   const mediaId = publicId(message.mediaId, 160);
@@ -14655,6 +14662,8 @@ function audiusFavoriteTrackPayload(row: any) {
 // Music proxy: Audius powers the post creation sound picker without exposing provider internals.
 api.get('/music/audius/trending', async (c) => {
   try {
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'music_audius_trending');
+    if (supabaseRequired) return supabaseRequired;
     if (!supabasePrimaryConfigured(c)) await ensureAudioSchema(c.env.DB);
     const limited = await enforceRateLimit(c, 'audius_trending', (await getOptionalUserId(c)) || clientIp(c), 120, 60);
     if (limited) return limited;
@@ -14680,6 +14689,8 @@ api.get('/music/audius/trending', async (c) => {
 
 api.get('/music/audius/search', async (c) => {
   try {
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'music_audius_search');
+    if (supabaseRequired) return supabaseRequired;
     if (!supabasePrimaryConfigured(c)) await ensureAudioSchema(c.env.DB);
     const limited = await enforceRateLimit(c, 'audius_search', (await getOptionalUserId(c)) || clientIp(c), 90, 60);
     if (limited) return limited;
@@ -14705,6 +14716,8 @@ api.get('/music/audius/search', async (c) => {
 
 api.get('/music/audius/stream/:trackId', async (c) => {
   try {
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'music_audius_stream');
+    if (supabaseRequired) return supabaseRequired;
     if (!supabasePrimaryConfigured(c)) await ensureAudioSchema(c.env.DB);
     const limited = await enforceRateLimit(c, 'audius_stream_lookup', (await getOptionalUserId(c)) || clientIp(c), 180, 60);
     if (limited) return limited;
@@ -14733,6 +14746,8 @@ api.get('/music/audius/stream/:trackId', async (c) => {
 
 api.get('/music/audius/favorites', authMiddleware, async (c) => {
   try {
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'music_audius_favorites_read');
+    if (supabaseRequired) return supabaseRequired;
     const userId = getUserId(c);
     if (supabasePrimaryConfigured(c)) {
       const rows = await supabaseAdminQueryRows(c, 'app_favorite_sounds', {
@@ -14778,6 +14793,8 @@ api.get('/music/audius/favorites', authMiddleware, async (c) => {
 
 api.post('/music/audius/favorites', authMiddleware, async (c) => {
   try {
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'music_audius_favorite_write');
+    if (supabaseRequired) return supabaseRequired;
     const userId = getUserId(c);
     const body: any = await c.req.json().catch(() => ({}));
     const trackId = cleanText(body.track_id || body.id || body.audio_track_id, 80);
@@ -14871,6 +14888,8 @@ api.post('/music/audius/favorites', authMiddleware, async (c) => {
 
 api.delete('/music/audius/favorites/:trackId', authMiddleware, async (c) => {
   try {
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'music_audius_favorite_delete');
+    if (supabaseRequired) return supabaseRequired;
     const userId = getUserId(c);
     const trackId = cleanText(c.req.param('trackId'), 80);
     if (!trackId) return c.json({ detail: 'Track id is required.' }, 400);
@@ -18508,6 +18527,8 @@ api.get('/library/collections', authMiddleware, async (c) => {
 api.post('/friends/request/:userId', authMiddleware, async (c) => {
   const fid = getUserId(c);
   const tid = publicId(c.req.param('userId'), 120);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'friend_request');
+  if (supabaseRequired) return supabaseRequired;
   if (fid === tid) return c.json({ detail: 'Cannot friend yourself' }, 400);
   const limited = await enforceRateLimit(c, 'friend_request', fid, 60, 60);
   if (limited) return limited;
@@ -18526,6 +18547,8 @@ api.post('/friends/request/:userId', authMiddleware, async (c) => {
 api.post('/friends/accept/:requestId', authMiddleware, async (c) => {
   const uid = getUserId(c);
   const rid = c.req.param('requestId');
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'friend_accept');
+  if (supabaseRequired) return supabaseRequired;
   if (supabasePrimaryConfigured(c)) {
     const result = await supabaseAcceptFriendRequest(c, uid, rid);
     return c.json(result.body, result.status);
@@ -18540,6 +18563,8 @@ api.post('/friends/accept/:requestId', authMiddleware, async (c) => {
 api.post('/friends/reject/:requestId', authMiddleware, async (c) => {
   const userId = getUserId(c);
   const requestId = publicId(c.req.param('requestId'), 120);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'friend_reject');
+  if (supabaseRequired) return supabaseRequired;
   const limited = await enforceRateLimit(c, 'friend_reject', userId, 120, 60);
   if (limited) return limited;
   if (supabasePrimaryConfigured(c)) {
@@ -18554,12 +18579,16 @@ api.post('/friends/reject/:requestId', authMiddleware, async (c) => {
 });
 api.get('/friends/requests', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'friend_requests_read');
+  if (supabaseRequired) return supabaseRequired;
   if (supabasePrimaryConfigured(c)) return c.json(await supabaseFriendRequestsPayload(c, userId));
   const r = await c.env.DB.prepare(`SELECT fr.*, u.username, u.full_name, u.profile_image FROM friend_requests fr JOIN users u ON fr.from_user_id = u.id WHERE fr.to_user_id = ? AND fr.status = 'pending'`).bind(userId).all();
   return c.json(r.results);
 });
 api.get('/friends', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'friends_read');
+  if (supabaseRequired) return supabaseRequired;
   if (supabasePrimaryConfigured(c)) return c.json(await supabaseFriendsPayload(c, userId));
   const r = await c.env.DB.prepare('SELECT u.id, u.username, u.full_name, u.profile_image, u.bio FROM friendships f JOIN users u ON f.friend_id = u.id WHERE f.user_id = ?').bind(userId).all();
   return c.json(r.results);
@@ -18567,6 +18596,8 @@ api.get('/friends', authMiddleware, async (c) => {
 api.get('/friends/status/:userId', authMiddleware, async (c) => {
   const mid = getUserId(c);
   const oid = c.req.param('userId');
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'friend_status_read');
+  if (supabaseRequired) return supabaseRequired;
   if (supabasePrimaryConfigured(c)) return c.json(await supabaseFriendStatus(c, mid, oid));
   const f = await c.env.DB.prepare('SELECT id FROM friendships WHERE user_id = ? AND friend_id = ?').bind(mid, oid).first();
   if (f) return c.json({ status: 'friends' });
@@ -18579,6 +18610,8 @@ api.get('/friends/status/:userId', authMiddleware, async (c) => {
 api.delete('/friends/:userId', authMiddleware, async (c) => {
   const mid = getUserId(c);
   const oid = c.req.param('userId');
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'friend_remove');
+  if (supabaseRequired) return supabaseRequired;
   if (supabasePrimaryConfigured(c)) return c.json(await supabaseRemoveFriend(c, mid, oid));
   await c.env.DB.prepare('DELETE FROM friendships WHERE (user_id = ? AND friend_id = ?) OR (user_id = ? AND friend_id = ?)').bind(mid, oid, oid, mid).run();
   return c.json({ removed: true });
@@ -20155,6 +20188,7 @@ function adminPermissionList(role: AdminRole): string[] {
 async function getAdminContext(c: any): Promise<AdminContext | null> {
   const userId = getUserId(c);
   if (!userId) return null;
+  if (supabasePrimaryRequested(c) && !supabasePrimaryConfigured(c)) return null;
 
   if (supabasePrimaryConfigured(c)) {
     const row = await getSupabaseAppUserRowByAnyId(c, userId);
