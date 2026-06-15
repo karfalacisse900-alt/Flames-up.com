@@ -11868,6 +11868,71 @@ function parseMediaAssetIds(body: any): string[] {
 }
 
 async function approvedMediaAssetsForPost(c: any, userId: string, requestedMediaIds: string[], imageUrls: string[]) {
+  if (supabasePrimaryConfigured(c)) {
+    let assets: any[] = [];
+    if (requestedMediaIds.length) {
+      assets = (await supabaseAdminQueryRows(c, 'app_media_assets', {
+        select: '*',
+        filters: {
+          user_id: postgrestEqFilter(userId),
+          id: postgrestInFilter(requestedMediaIds),
+        },
+        limit: requestedMediaIds.length,
+      })).map(supabaseMediaAssetToLegacy);
+      if (assets.length !== requestedMediaIds.length) {
+        return { ok: false, status: 404, detail: 'One upload was not found. Please upload again.', code: 'MEDIA_NOT_FOUND', assets };
+      }
+    } else if (imageUrls.length) {
+      const imageIds = imageUrls
+        .map((url) => cloudflareImageIdFromDeliveryUrl(c.env, safeMediaReference(url)))
+        .filter(Boolean);
+      const uniqueImageIds = Array.from(new Set(imageIds));
+      if (imageIds.length !== imageUrls.length) {
+        return {
+          ok: false,
+          status: 409,
+          detail: 'Checking your upload before posting...',
+          code: 'MEDIA_MODERATION_REQUIRED',
+          assets: [] as any[],
+        };
+      }
+      const rows = (await supabaseAdminQueryRows(c, 'app_media_assets', {
+        select: '*',
+        filters: {
+          user_id: postgrestEqFilter(userId),
+          storage_provider: postgrestEqFilter('images'),
+          storage_key: postgrestInFilter(uniqueImageIds),
+        },
+        limit: uniqueImageIds.length,
+      })).map(supabaseMediaAssetToLegacy);
+      const byStorageKey = new Map(rows.map((row: any) => [cleanText(row?.storage_key, 220), row]));
+      assets = imageIds.map((imageId) => byStorageKey.get(imageId)).filter(Boolean);
+      if (rows.length !== uniqueImageIds.length || assets.length !== imageIds.length) {
+        return {
+          ok: false,
+          status: 409,
+          detail: 'Checking your upload before posting...',
+          code: 'MEDIA_MODERATION_REQUIRED',
+          assets,
+        };
+      }
+    } else {
+      return { ok: true, status: 200, detail: '', code: '', assets: [] as any[] };
+    }
+
+    const blocking = assets.find((asset) => normalizeMediaModerationStatus(asset.moderation_status) !== 'approved' || cleanText(asset.upload_status, 40) !== 'uploaded');
+    if (blocking) {
+      const status = normalizeMediaModerationStatus(blocking.moderation_status);
+      const detail = status === 'rejected'
+        ? "This upload can't be posted because it may break Captro's safety rules."
+        : status === 'review_required'
+          ? 'This upload needs a quick safety review before it can be posted.'
+          : 'Checking your upload before posting...';
+      return { ok: false, status: 409, detail, code: `MEDIA_${status.toUpperCase()}`, assets };
+    }
+    return { ok: true, status: 200, detail: '', code: '', assets };
+  }
+
   if (!requestedMediaIds.length && imageUrls.length) {
     if (allCaptroOwnedCloudflareImageUrls(c.env, imageUrls)) {
       return {
@@ -11888,24 +11953,12 @@ async function approvedMediaAssetsForPost(c: any, userId: string, requestedMedia
   }
   if (!requestedMediaIds.length) return { ok: true, status: 200, detail: '', code: '', assets: [] as any[] };
 
-  let assets: any[] = [];
-  if (supabasePrimaryConfigured(c)) {
-    assets = (await supabaseAdminQueryRows(c, 'app_media_assets', {
-      select: '*',
-      filters: {
-        user_id: postgrestEqFilter(userId),
-        id: postgrestInFilter(requestedMediaIds),
-      },
-      limit: requestedMediaIds.length,
-    })).map(supabaseMediaAssetToLegacy);
-  } else {
-    await ensureMediaModerationSchema(c.env.DB);
-    const placeholders = requestedMediaIds.map(() => '?').join(', ');
-    const rows = await c.env.DB.prepare(`SELECT * FROM media_assets WHERE user_id = ? AND id IN (${placeholders})`)
-      .bind(userId, ...requestedMediaIds)
-      .all();
-    assets = rows.results as any[];
-  }
+  await ensureMediaModerationSchema(c.env.DB);
+  const placeholders = requestedMediaIds.map(() => '?').join(', ');
+  const rows = await c.env.DB.prepare(`SELECT * FROM media_assets WHERE user_id = ? AND id IN (${placeholders})`)
+    .bind(userId, ...requestedMediaIds)
+    .all();
+  const assets = rows.results as any[];
   if (assets.length !== requestedMediaIds.length) {
     return { ok: false, status: 404, detail: 'One upload was not found. Please upload again.', code: 'MEDIA_NOT_FOUND', assets };
   }
@@ -15408,6 +15461,10 @@ api.post('/posts', authMiddleware, async (c) => {
       code: 'FEED_POSTS_PHOTO_ONLY',
     }, 400);
   }
+  const approvedMediaAssetIds = Array.from(new Set([
+    ...mediaAssetIds,
+    ...mediaApproval.assets.map((asset: any) => publicId(asset?.id, 160)).filter(Boolean),
+  ]));
   const moderatedImageUrls = mediaApproval.assets
     .map((asset: any) => safeMediaReference(asset.public_url) || mediaAssetPublicUrl(c.env, asset))
     .filter(Boolean);
@@ -15498,7 +15555,7 @@ api.post('/posts', authMiddleware, async (c) => {
       placeLng,
       isCheckin,
       visibility,
-      mediaAssetIds,
+      mediaAssetIds: approvedMediaAssetIds,
       editorOverlays,
       taggedUsers,
       autoCategory,
@@ -15516,10 +15573,10 @@ api.post('/posts', authMiddleware, async (c) => {
     const supabasePostRow = supabaseCreatePostTransferPayload(supabaseInput);
     try {
       await supabaseAdminUpsert(c, 'app_posts', [supabasePostRow], 'legacy_post_id');
-      if (mediaAssetIds.length) {
+      if (approvedMediaAssetIds.length) {
         await supabaseAdminPatchRows(c, 'app_media_assets', {
           user_id: postgrestEqFilter(userId),
-          id: postgrestInFilter(mediaAssetIds),
+          id: postgrestInFilter(approvedMediaAssetIds),
         }, {
           legacy_post_id: id,
           updated_at: createdAt,
@@ -15555,7 +15612,7 @@ api.post('/posts', authMiddleware, async (c) => {
       ...supabaseAppPostToLegacy(supabasePostRow, supabaseAuthorRow, false, 0),
       client_request_id: clientRequestId,
       moderation_status: 'approved',
-      moderation_media_ids: JSON.stringify(mediaAssetIds),
+      moderation_media_ids: JSON.stringify(approvedMediaAssetIds),
     };
     return c.json(postPayload(createdPost, [], c.env));
   }
