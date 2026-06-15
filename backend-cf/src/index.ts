@@ -7674,75 +7674,30 @@ async function getSupabasePostEngagementState(c: any, postId: string, userId: st
   } catch (error: any) {
     console.warn(JSON.stringify({ event: 'supabase_post_counter_repair_failed', code: getErrorCode(error).slice(0, 180) }));
   }
-  if (!supabasePrimaryRequested(c)) {
-    try {
-      await c.env.DB.prepare(
-        `UPDATE posts
-         SET likes_count = ?,
-             comments_count = ?,
-             saves_count = ?
-         WHERE id = ?`
-      ).bind(state.likes_count, state.comments_count, state.saves_count, legacyPostId || postId).run();
-      await c.env.DB.prepare('UPDATE discover_posts SET likes_count = ? WHERE id = ?')
-        .bind(state.likes_count, legacyPostId || postId)
-        .run()
-        .catch(() => {});
-    } catch {}
-  }
   return state;
 }
 
 async function getCanonicalPostEngagementState(c: any, postId: string, userId: string) {
-  if (supabaseEngagementConfigured(c)) {
-    try {
-      return await getSupabasePostEngagementState(c, postId, userId);
-    } catch (error: any) {
-      console.warn(JSON.stringify({ event: 'supabase_engagement_state_failed', code: getErrorCode(error).slice(0, 180) }));
-      if (supabasePrimaryRequested(c)) throw error;
-    }
+  if (!supabasePrimaryConfigured(c)) throw new Error('SUPABASE_PRIMARY_REQUIRED:engagement_state');
+  try {
+    return await getSupabasePostEngagementState(c, postId, userId);
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_engagement_state_failed', code: getErrorCode(error).slice(0, 180) }));
+    throw error;
   }
-  return getPostEngagementState(c.env.DB, postId, userId);
 }
 
 async function setCanonicalPostLikeState(c: any, postId: string, userId: string, requested: boolean | null) {
-  const useSupabase = supabaseEngagementConfigured(c);
-  const identity = useSupabase ? await supabaseResolvePostIdentity(c, postId) : null;
-  const canonicalPostId = identity ? (identity.legacyPostId || identity.postUuid || identity.requestedPostId || postId) : postId;
-  const relatedUserIds = useSupabase
-    ? await supabaseRelatedInteractionUserIds(c, userId)
-    : await coalesceViewerPostInteractions(c.env.DB, postId, userId);
-  let d1WasLiked = false;
-  if (!useSupabase) {
-    const placeholders = inPlaceholders(relatedUserIds);
-    const d1LikedRow = await c.env.DB.prepare(
-      `SELECT 1 AS found FROM likes WHERE post_id = ? AND user_id IN (${placeholders}) LIMIT 1`
-    ).bind(postId, ...relatedUserIds).first();
-    d1WasLiked = !!d1LikedRow;
-  }
-  const wasLiked = useSupabase
-    ? await supabaseViewerPostInteractionExists(c, canonicalPostId, relatedUserIds, 'like')
-    : d1WasLiked;
+  if (!supabasePrimaryConfigured(c)) throw new Error('SUPABASE_PRIMARY_REQUIRED:engagement_like');
+  const identity = await supabaseResolvePostIdentity(c, postId);
+  const canonicalPostId = identity.legacyPostId || identity.postUuid || identity.requestedPostId || postId;
+  const relatedUserIds = await supabaseRelatedInteractionUserIds(c, userId);
+  const wasLiked = await supabaseViewerPostInteractionExists(c, canonicalPostId, relatedUserIds, 'like');
   const nextLiked = requested === null ? !wasLiked : requested;
 
-  if (useSupabase) {
-    await supabaseDeletePostInteractionsForUsers(c, canonicalPostId, relatedUserIds, 'like');
-    if (nextLiked) {
-      await supabaseUpsertPostInteraction(c, canonicalPostId, userId, 'like');
-    }
-  }
-
-  if (!useSupabase) {
-    await deletePostLikesForUsers(c.env.DB, postId, relatedUserIds);
-    if (nextLiked) {
-      await c.env.DB.prepare('INSERT OR IGNORE INTO likes (id, user_id, post_id) VALUES (?, ?, ?)')
-        .bind(uuid(), userId, postId)
-        .run();
-      await c.env.DB.prepare(
-        `INSERT OR IGNORE INTO discover_likes (id, user_id, post_id)
-         SELECT ?, ?, ?
-         WHERE EXISTS (SELECT 1 FROM discover_posts WHERE id = ?)`
-      ).bind(uuid(), userId, postId, postId).run().catch(() => {});
-    }
+  await supabaseDeletePostInteractionsForUsers(c, canonicalPostId, relatedUserIds, 'like');
+  if (nextLiked) {
+    await supabaseUpsertPostInteraction(c, canonicalPostId, userId, 'like');
   }
 
   const state = await getCanonicalPostEngagementState(c, canonicalPostId, userId);
@@ -7752,41 +7707,15 @@ async function setCanonicalPostLikeState(c: any, postId: string, userId: string,
 
 async function setCanonicalPostSaveState(c: any, postId: string, userId: string, saved: boolean, collection = 'saved') {
   const collectionName = cleanText(collection, 80) || 'saved';
-  const useSupabase = supabaseEngagementConfigured(c);
-  const identity = useSupabase ? await supabaseResolvePostIdentity(c, postId) : null;
-  const canonicalPostId = identity ? (identity.legacyPostId || identity.postUuid || identity.requestedPostId || postId) : postId;
-  const relatedUserIds = useSupabase
-    ? await supabaseRelatedInteractionUserIds(c, userId)
-    : await coalesceViewerPostInteractions(c.env.DB, postId, userId);
-  let d1WasSaved = false;
-  if (!useSupabase) {
-    const placeholders = inPlaceholders(relatedUserIds);
-    const d1SavedRow = await c.env.DB.prepare(
-      `SELECT 1 AS found FROM saved_posts WHERE post_id = ? AND user_id IN (${placeholders}) LIMIT 1`
-    ).bind(postId, ...relatedUserIds).first();
-    d1WasSaved = !!d1SavedRow;
-  }
-  const wasSaved = useSupabase
-    ? await supabaseViewerPostInteractionExists(c, canonicalPostId, relatedUserIds, 'save')
-    : d1WasSaved;
+  if (!supabasePrimaryConfigured(c)) throw new Error('SUPABASE_PRIMARY_REQUIRED:engagement_save');
+  const identity = await supabaseResolvePostIdentity(c, postId);
+  const canonicalPostId = identity.legacyPostId || identity.postUuid || identity.requestedPostId || postId;
+  const relatedUserIds = await supabaseRelatedInteractionUserIds(c, userId);
+  const wasSaved = await supabaseViewerPostInteractionExists(c, canonicalPostId, relatedUserIds, 'save');
 
-  if (useSupabase) {
-    await supabaseDeletePostInteractionsForUsers(c, canonicalPostId, relatedUserIds, 'save');
-    if (saved) {
-      await supabaseUpsertPostInteraction(c, canonicalPostId, userId, 'save', collectionName);
-    }
-  }
-
-  if (!useSupabase) {
-    await deletePostSavesForUsers(c.env.DB, postId, relatedUserIds);
-    if (saved) {
-      await c.env.DB.prepare('INSERT OR IGNORE INTO saved_posts (id, user_id, post_id, collection) VALUES (?, ?, ?, ?)')
-        .bind(uuid(), userId, postId, collectionName)
-        .run();
-      await c.env.DB.prepare(
-        'INSERT INTO bookmarks (id, user_id, post_id, collection) VALUES (?, ?, ?, ?) ON CONFLICT(user_id, post_id) DO UPDATE SET collection = ?'
-      ).bind(uuid(), userId, postId, collectionName, collectionName).run().catch(() => {});
-    }
+  await supabaseDeletePostInteractionsForUsers(c, canonicalPostId, relatedUserIds, 'save');
+  if (saved) {
+    await supabaseUpsertPostInteraction(c, canonicalPostId, userId, 'save', collectionName);
   }
 
   const state = await getCanonicalPostEngagementState(c, canonicalPostId, userId);
