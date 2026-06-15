@@ -13191,131 +13191,81 @@ api.put('/users/me', authMiddleware, async (c) => {
   if (body.socialInstagram !== undefined && body.social_instagram === undefined) body.social_instagram = body.socialInstagram;
   if (body.isPrivate !== undefined && body.is_private === undefined) body.is_private = body.isPrivate;
 
-  if (supabasePrimaryConfigured(c)) {
-    const currentRow = await getSupabaseAppUserRowByAnyId(c, userId);
-    if (!currentRow) return c.json({ detail: 'User not found' }, 404);
+  const currentRow = await getSupabaseAppUserRowByAnyId(c, userId);
+  if (!currentRow) return c.json({ detail: 'User not found' }, 404);
 
-    const appUserId = publicId(currentRow.id, 120);
-    const profile = parseJsonObject(currentRow.profile);
-    const patch: Record<string, unknown> = {};
-    let usernameChanged = false;
+  const appUserId = publicId(currentRow.id, 120);
+  const profile = parseJsonObject(currentRow.profile);
+  const patch: Record<string, unknown> = {};
+  let usernameChanged = false;
 
-    if (body.full_name !== undefined) patch.full_name = cleanText(body.full_name, 160);
-    if (body.bio !== undefined) patch.bio = cleanMultilineText(body.bio, 500);
-    if (body.profile_image !== undefined) patch.avatar_url = safeMediaReference(body.profile_image) || null;
-    if (body.cover_image !== undefined) patch.cover_url = safeMediaReference(body.cover_image) || null;
-    if (body.city !== undefined) patch.city = cleanText(body.city, 160);
-    if (body.is_private !== undefined) patch.is_private = normalizeSqlBoolean(body.is_private) === 1;
+  if (body.full_name !== undefined) patch.full_name = cleanText(body.full_name, 160);
+  if (body.bio !== undefined) patch.bio = cleanMultilineText(body.bio, 500);
+  if (body.profile_image !== undefined) patch.avatar_url = safeMediaReference(body.profile_image) || null;
+  if (body.cover_image !== undefined) patch.cover_url = safeMediaReference(body.cover_image) || null;
+  if (body.city !== undefined) patch.city = cleanText(body.city, 160);
+  if (body.is_private !== undefined) patch.is_private = normalizeSqlBoolean(body.is_private) === 1;
 
-    if (body.username !== undefined) {
-      const usernameCheck = validateUsernameForAccount(body.username);
-      if (!usernameCheck.ok) return c.json({ detail: usernameCheck.detail }, 400);
-      const existing = await supabaseAdminQueryRows(c, 'app_users', {
-        select: 'id',
-        filters: {
-          username: postgrestEqFilter(usernameCheck.username),
-          id: `neq.${cleanText(appUserId, 120)}`,
-        },
-        limit: 1,
-      });
-      if (existing.length) return c.json({ detail: 'Username is not available.' }, 409);
-      patch.username = usernameCheck.username;
-      usernameChanged = strictUsernameSlug(currentRow.username) !== strictUsernameSlug(usernameCheck.username);
-    }
-
-    if (body.language !== undefined) profile.language = normalizeLanguage(body.language);
-    if (body.age !== undefined) profile.age = clampNumber(body.age, 13, 120, 0);
-    if (body.looking_for !== undefined) profile.looking_for = cleanText(body.looking_for, 120);
-    if (body.interests !== undefined) {
-      const rawInterests = Array.isArray(body.interests)
-        ? body.interests
-        : String(body.interests || '').split(',');
-      profile.interests = rawInterests
-        .map((item: unknown) => cleanText(item, 60))
-        .filter(Boolean)
-        .slice(0, 24);
-    }
-    if (body.social_website !== undefined) profile.social_website = safeExternalUrl(body.social_website);
-    if (body.social_tiktok !== undefined) profile.social_tiktok = cleanText(body.social_tiktok, 120);
-    if (body.social_instagram !== undefined) profile.social_instagram = cleanText(body.social_instagram, 120);
-    if (body.profile_background_image !== undefined) {
-      profile.profile_background_image = safeMediaReference(body.profile_background_image);
-    }
-
-    const profileFields = ['language', 'age', 'looking_for', 'interests', 'social_website', 'social_tiktok', 'social_instagram', 'profile_background_image'];
-    const profileChanged = profileFields.some((field) => body[field] !== undefined);
-    if (profileChanged) patch.profile = profile;
-    if (Object.keys(patch).length === 0) return c.json({ detail: 'Nothing to update' }, 400);
-    patch.updated_at = now();
-
-    await supabaseAdminPatchRows(c, 'app_users', { id: postgrestEqFilter(appUserId) }, patch);
-    const refreshedRows = await supabaseAdminQueryRows(c, 'app_users', {
-      select: SUPABASE_APP_USER_SELECT,
-      filters: { id: postgrestEqFilter(appUserId) },
+  if (body.username !== undefined) {
+    const usernameCheck = validateUsernameForAccount(body.username);
+    if (!usernameCheck.ok) return c.json({ detail: usernameCheck.detail }, 400);
+    const existing = await supabaseAdminQueryRows(c, 'app_users', {
+      select: 'id',
+      filters: {
+        username: postgrestEqFilter(usernameCheck.username),
+        id: `neq.${cleanText(appUserId, 120)}`,
+      },
       limit: 1,
     });
-    const user = refreshedRows[0] ? supabaseAppUserToLegacyUser(refreshedRows[0]) : supabaseAppUserToLegacyUser({ ...currentRow, ...patch });
-    if (usernameChanged) {
-      runBackgroundTask(c, 'username_change_security_log_failed', async () => {
-        await logSecurityEvent(c, 'username_changed', appUserId, { previous_username: currentRow.username || '', new_username: user.username || '' });
-      });
-    }
-    runBackgroundTask(c, 'profile_update_abuse_signal_failed', async () => {
-      await recordAbuseSignals(c, appUserId, 'profile_update', {
-        username: user.username,
-        display_name: user.full_name,
-        bio: user.bio,
-        links: [user.social_website, user.social_tiktok, user.social_instagram].filter(Boolean),
-      });
-    });
-    runBackgroundTask(c, 'supabase_profile_metadata_sync_failed', async () => {
-      await syncSupabaseAuthMetadataForUser(c, user);
-    });
-    return c.json(safeUserPayload(user, { includePrivate: true }));
+    if (existing.length) return c.json({ detail: 'Username is not available.' }, 409);
+    patch.username = usernameCheck.username;
+    usernameChanged = strictUsernameSlug(currentRow.username) !== strictUsernameSlug(usernameCheck.username);
   }
 
-  await ensurePremiumSchema(c.env.DB);
-  const currentUser: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
-  const wantsCustomBackground = body.profile_background_image !== undefined || body.cover_image !== undefined;
-  if (wantsCustomBackground && !userHasActivePremium(currentUser)) {
-    return c.json({ detail: 'Custom profile background is a Premium feature.', code: 'PREMIUM_REQUIRED' }, 403);
+  if (body.language !== undefined) profile.language = normalizeLanguage(body.language);
+  if (body.age !== undefined) profile.age = clampNumber(body.age, 13, 120, 0);
+  if (body.looking_for !== undefined) profile.looking_for = cleanText(body.looking_for, 120);
+  if (body.interests !== undefined) {
+    const rawInterests = Array.isArray(body.interests)
+      ? body.interests
+      : String(body.interests || '').split(',');
+    profile.interests = rawInterests
+      .map((item: unknown) => cleanText(item, 60))
+      .filter(Boolean)
+      .slice(0, 24);
   }
-  const fields = ['full_name', 'bio', 'profile_image', 'cover_image', 'profile_background_image', 'city', 'username', 'age', 'looking_for', 'interests', 'social_website', 'social_tiktok', 'social_instagram', 'is_private', 'language'];
-  const updates: string[] = []; const values: any[] = [];
-  for (const f of fields) {
-    if (body[f] !== undefined) {
-      updates.push(`${f} = ?`);
-      if (f === 'is_private') values.push(normalizeSqlBoolean(body[f]));
-      else if (f === 'language') values.push(normalizeLanguage(body[f]));
-      else if (f === 'profile_image' || f === 'cover_image' || f === 'profile_background_image') values.push(safeMediaReference(body[f]));
-      else if (f === 'social_website') values.push(safeExternalUrl(body[f]));
-      else if (f === 'bio') values.push(cleanMultilineText(body[f], 500));
-      else if (f === 'age') values.push(clampNumber(body[f], 13, 120, 0));
-      else if (f === 'username') {
-        const usernameCheck = validateUsernameForAccount(body[f]);
-        if (!usernameCheck.ok) return c.json({ detail: usernameCheck.detail }, 400);
-        const existing: any = await c.env.DB.prepare('SELECT id FROM users WHERE LOWER(username) = ? AND id != ?')
-          .bind(usernameCheck.username.toLowerCase(), userId)
-          .first();
-        if (existing) return c.json({ detail: 'Username is not available.' }, 409);
-        values.push(usernameCheck.username);
-      }
-      else values.push(cleanText(body[f], 240));
-    }
+  if (body.social_website !== undefined) profile.social_website = safeExternalUrl(body.social_website);
+  if (body.social_tiktok !== undefined) profile.social_tiktok = cleanText(body.social_tiktok, 120);
+  if (body.social_instagram !== undefined) profile.social_instagram = cleanText(body.social_instagram, 120);
+  if (body.profile_background_image !== undefined) {
+    profile.profile_background_image = safeMediaReference(body.profile_background_image);
   }
-  if (updates.length === 0) return c.json({ detail: 'Nothing to update' }, 400);
-  values.push(userId);
-  const updateUserSql = `UPDATE users SET ${updates.join(', ')}, updated_at = datetime('now') WHERE id = ?`;
-  await c.env.DB.prepare(updateUserSql).bind(...values).run();
-  const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
-  if (body.username !== undefined && strictUsernameSlug(currentUser?.username) !== strictUsernameSlug(user?.username)) {
-    await logSecurityEvent(c, 'username_changed', userId, { previous_username: currentUser?.username || '', new_username: user?.username || '' });
+
+  const profileFields = ['language', 'age', 'looking_for', 'interests', 'social_website', 'social_tiktok', 'social_instagram', 'profile_background_image'];
+  const profileChanged = profileFields.some((field) => body[field] !== undefined);
+  if (profileChanged) patch.profile = profile;
+  if (Object.keys(patch).length === 0) return c.json({ detail: 'Nothing to update' }, 400);
+  patch.updated_at = now();
+
+  await supabaseAdminPatchRows(c, 'app_users', { id: postgrestEqFilter(appUserId) }, patch);
+  const refreshedRows = await supabaseAdminQueryRows(c, 'app_users', {
+    select: SUPABASE_APP_USER_SELECT,
+    filters: { id: postgrestEqFilter(appUserId) },
+    limit: 1,
+  });
+  const user = refreshedRows[0] ? supabaseAppUserToLegacyUser(refreshedRows[0]) : supabaseAppUserToLegacyUser({ ...currentRow, ...patch });
+  if (usernameChanged) {
+    runBackgroundTask(c, 'username_change_security_log_failed', async () => {
+      await logSecurityEvent(c, 'username_changed', appUserId, { previous_username: currentRow.username || '', new_username: user.username || '' });
+    });
   }
-  await recordAbuseSignals(c, userId, 'profile_update', {
-    username: user.username,
-    display_name: user.full_name,
-    bio: user.bio,
-    links: [user.social_website, user.social_tiktok, user.social_instagram].filter(Boolean),
+  runBackgroundTask(c, 'profile_update_abuse_signal_failed', async () => {
+    await recordAbuseSignals(c, appUserId, 'profile_update', {
+      username: user.username,
+      display_name: user.full_name,
+      bio: user.bio,
+      links: [user.social_website, user.social_tiktok, user.social_instagram].filter(Boolean),
+    });
   });
   runBackgroundTask(c, 'supabase_profile_metadata_sync_failed', async () => {
     await syncSupabaseAuthMetadataForUser(c, user);
@@ -13344,81 +13294,50 @@ api.put('/users/me/email', authMiddleware, async (c) => {
 
     if (!email) return c.json({ detail: 'Enter a valid email address.' }, 400);
 
-    if (supabasePrimaryConfigured(c)) {
-      const currentRow = await getSupabaseAppUserRowByAnyId(c, userId);
-      if (!currentRow) return c.json({ detail: 'User not found' }, 404);
-      const appUserId = publicId(currentRow.id, 120);
-      const owner = await supabaseAdminQueryRows(c, 'app_users', {
-        select: 'id',
-        filters: {
-          email: postgrestEqFilter(email),
-          id: `neq.${cleanText(appUserId, 120)}`,
-        },
-        limit: 1,
-      });
-      if (owner.length) return c.json({ detail: 'That email is already used by another account.' }, 409);
+    const currentRow = await getSupabaseAppUserRowByAnyId(c, userId);
+    if (!currentRow) return c.json({ detail: 'User not found' }, 404);
+    const appUserId = publicId(currentRow.id, 120);
+    const owner = await supabaseAdminQueryRows(c, 'app_users', {
+      select: 'id',
+      filters: {
+        email: postgrestEqFilter(email),
+        id: `neq.${cleanText(appUserId, 120)}`,
+      },
+      limit: 1,
+    });
+    if (owner.length) return c.json({ detail: 'That email is already used by another account.' }, 409);
 
-      let supabaseUserId = isUuidText(currentRow.supabase_user_id);
-      if (supabaseUserId) {
-        await updateSupabaseAuthUser(c, supabaseUserId, { email });
-      } else {
-        const user = supabaseAppUserToLegacyUser(currentRow);
-        const result = await createOrFindSupabaseAuthUser(c, {
-          email,
-          username: publicUsernameFor(user),
-          fullName: user.full_name,
-          profileImage: user.profile_image,
-          provider: 'email',
-          appUserId,
-        });
-        supabaseUserId = isUuidText(result.user?.id);
-      }
-
-      await supabaseAdminPatchRows(c, 'app_users', { id: postgrestEqFilter(appUserId) }, {
-        email,
-        email_verified: false,
-        ...(supabaseUserId ? { supabase_user_id: supabaseUserId } : {}),
-        updated_at: now(),
-      });
-      const refreshedRows = await supabaseAdminQueryRows(c, 'app_users', {
-        select: SUPABASE_APP_USER_SELECT,
-        filters: { id: postgrestEqFilter(appUserId) },
-        limit: 1,
-      });
-      const user = refreshedRows[0] ? supabaseAppUserToLegacyUser(refreshedRows[0]) : supabaseAppUserToLegacyUser({ ...currentRow, email, supabase_user_id: supabaseUserId });
-      runBackgroundTask(c, 'email_update_security_log_failed', async () => {
-        await logSecurityEvent(c, 'email_updated', appUserId, {});
-      });
-      return c.json(authUserPayload(user));
-    }
-
-    const currentUser: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
-    if (!currentUser) return c.json({ detail: 'User not found' }, 404);
-
-    const owner: any = await c.env.DB.prepare('SELECT id FROM users WHERE LOWER(email) = ? AND id != ?')
-      .bind(email, userId)
-      .first();
-    if (owner) return c.json({ detail: 'That email is already used by another account.' }, 409);
-
-    if (currentUser.supabase_user_id) {
-      await updateSupabaseAuthUser(c, currentUser.supabase_user_id, { email });
+    let supabaseUserId = isUuidText(currentRow.supabase_user_id);
+    if (supabaseUserId) {
+      await updateSupabaseAuthUser(c, supabaseUserId, { email });
     } else {
+      const user = supabaseAppUserToLegacyUser(currentRow);
       const result = await createOrFindSupabaseAuthUser(c, {
         email,
-        username: publicUsernameFor(currentUser),
-        fullName: currentUser.full_name,
-        profileImage: currentUser.profile_image,
+        username: publicUsernameFor(user),
+        fullName: user.full_name,
+        profileImage: user.profile_image,
         provider: 'email',
-        appUserId: currentUser.id,
+        appUserId,
       });
-      if (result.user?.id) await linkSupabaseAuthUser(c, currentUser.id, result.user.id);
+      supabaseUserId = isUuidText(result.user?.id);
     }
 
-    await c.env.DB.prepare('UPDATE users SET email = ?, updated_at = datetime(\'now\') WHERE id = ?')
-      .bind(email, userId)
-      .run();
-    const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
-    await logSecurityEvent(c, 'email_updated', userId, {});
+    await supabaseAdminPatchRows(c, 'app_users', { id: postgrestEqFilter(appUserId) }, {
+      email,
+      email_verified: false,
+      ...(supabaseUserId ? { supabase_user_id: supabaseUserId } : {}),
+      updated_at: now(),
+    });
+    const refreshedRows = await supabaseAdminQueryRows(c, 'app_users', {
+      select: SUPABASE_APP_USER_SELECT,
+      filters: { id: postgrestEqFilter(appUserId) },
+      limit: 1,
+    });
+    const user = refreshedRows[0] ? supabaseAppUserToLegacyUser(refreshedRows[0]) : supabaseAppUserToLegacyUser({ ...currentRow, email, supabase_user_id: supabaseUserId });
+    runBackgroundTask(c, 'email_update_security_log_failed', async () => {
+      await logSecurityEvent(c, 'email_updated', appUserId, {});
+    });
     return c.json(authUserPayload(user));
   } catch (error: any) {
     const code = getErrorCode(error);
@@ -13444,67 +13363,40 @@ api.put('/users/me/password', authMiddleware, async (c) => {
     if (!newPassword) return c.json({ detail: 'New password is required.' }, 400);
     if (newPassword.length < 8) return c.json({ detail: 'New password must be at least 8 characters.' }, 400);
 
-    if (supabasePrimaryConfigured(c)) {
-      const currentRow = await getSupabaseAppUserRowByAnyId(c, userId);
-      if (!currentRow) return c.json({ detail: 'User not found' }, 404);
-      const appUserId = publicId(currentRow.id, 120);
-      let supabaseUserId = isUuidText(currentRow.supabase_user_id);
+    const currentRow = await getSupabaseAppUserRowByAnyId(c, userId);
+    if (!currentRow) return c.json({ detail: 'User not found' }, 404);
+    const appUserId = publicId(currentRow.id, 120);
+    let supabaseUserId = isUuidText(currentRow.supabase_user_id);
 
-      if (!supabaseUserId) {
-        const user = supabaseAppUserToLegacyUser(currentRow);
-        const email = normalizeOptionalEmail(user.email);
-        if (!email || isInternalOAuthEmail(email)) {
-          return c.json({ detail: 'Add a real email address before setting a password.', code: 'EMAIL_REQUIRED' }, 400);
-        }
-        const result = await createOrFindSupabaseAuthUser(c, {
-          email,
-          password: newPassword,
-          username: publicUsernameFor(user),
-          fullName: user.full_name,
-          profileImage: user.profile_image,
-          provider: 'email',
-          appUserId,
-        });
-        supabaseUserId = isUuidText(result.user?.id);
-        if (supabaseUserId) {
-          await supabaseAdminPatchRows(c, 'app_users', { id: postgrestEqFilter(appUserId) }, {
-            supabase_user_id: supabaseUserId,
-            updated_at: now(),
-          });
-        }
+    if (!supabaseUserId) {
+      const user = supabaseAppUserToLegacyUser(currentRow);
+      const email = normalizeOptionalEmail(user.email);
+      if (!email || isInternalOAuthEmail(email)) {
+        return c.json({ detail: 'Add a real email address before setting a password.', code: 'EMAIL_REQUIRED' }, 400);
       }
-
-      if (!supabaseUserId) return c.json({ detail: 'Could not update the login password right now.' }, 503);
-      await updateSupabaseAuthUser(c, supabaseUserId, { password: newPassword });
-      runBackgroundTask(c, 'password_update_security_log_failed', async () => {
-        await logSecurityEvent(c, 'password_updated', appUserId, {});
-      });
-      return c.json({ detail: 'Password updated.' });
-    }
-
-    const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
-    if (!user) return c.json({ detail: 'User not found' }, 404);
-
-    if (user.supabase_user_id) {
-      await updateSupabaseAuthUser(c, user.supabase_user_id, { password: newPassword });
-    } else if (normalizeOptionalEmail(user.email) && !isInternalOAuthEmail(user.email)) {
       const result = await createOrFindSupabaseAuthUser(c, {
-        email: user.email,
+        email,
         password: newPassword,
         username: publicUsernameFor(user),
         fullName: user.full_name,
         profileImage: user.profile_image,
         provider: 'email',
-        appUserId: user.id,
+        appUserId,
       });
-      if (result.user?.id) await linkSupabaseAuthUser(c, user.id, result.user.id);
+      supabaseUserId = isUuidText(result.user?.id);
+      if (supabaseUserId) {
+        await supabaseAdminPatchRows(c, 'app_users', { id: postgrestEqFilter(appUserId) }, {
+          supabase_user_id: supabaseUserId,
+          updated_at: now(),
+        });
+      }
     }
 
-    const newHash = await hashPassword(newPassword);
-    await c.env.DB.prepare('UPDATE users SET password_hash = ?, updated_at = datetime(\'now\') WHERE id = ?')
-      .bind(newHash, userId)
-      .run();
-    await logSecurityEvent(c, 'password_updated', userId, {});
+    if (!supabaseUserId) return c.json({ detail: 'Could not update the login password right now.' }, 503);
+    await updateSupabaseAuthUser(c, supabaseUserId, { password: newPassword });
+    runBackgroundTask(c, 'password_update_security_log_failed', async () => {
+      await logSecurityEvent(c, 'password_updated', appUserId, {});
+    });
     return c.json({ detail: 'Password updated.' });
   } catch (error: any) {
     const code = getErrorCode(error);
@@ -13527,16 +13419,8 @@ api.post('/users/me/phone/start', authMiddleware, async (c) => {
     const limited = await enforceRateLimit(c, 'account_phone_start', `${userId}:${normalizedPhone || clientIp(c)}`, 5, 600);
     if (limited) return limited;
 
-    if (supabasePrimaryConfigured(c)) {
-      const ownerId = await supabasePhoneOwnerId(c, normalizedPhone);
-      if (ownerId && ownerId !== userId) return c.json({ detail: 'That phone number is already verified on another account.' }, 409);
-    } else {
-      await ensurePhoneAuthSchema(c.env.DB);
-      const owner: any = await c.env.DB.prepare('SELECT id FROM users WHERE phone = ? AND id != ?')
-        .bind(normalizedPhone, userId)
-        .first();
-      if (owner) return c.json({ detail: 'That phone number is already verified on another account.' }, 409);
-    }
+    const ownerId = await supabasePhoneOwnerId(c, normalizedPhone);
+    if (ownerId && ownerId !== userId) return c.json({ detail: 'That phone number is already verified on another account.' }, 409);
 
     const startedWithVerify = await startTwilioVerification(c, normalizedPhone);
     if (startedWithVerify) {
@@ -13551,21 +13435,14 @@ api.post('/users/me/phone/start', authMiddleware, async (c) => {
     const codeHash = await sha256Hex(`${normalizedPhone}:${code}:${jwtSecret}`);
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
 
-    if (supabasePrimaryConfigured(c)) {
-      await supabaseExpireAccountVerificationTokens(c, userId, 'phone', normalizedPhone).catch(() => undefined);
-      await supabaseCreateAccountVerificationToken(c, {
-        userId,
-        tokenType: 'phone',
-        target: normalizedPhone,
-        tokenHash: codeHash,
-        expiresAt,
-      });
-    } else {
-      await ensurePhoneAuthSchema(c.env.DB);
-      await c.env.DB.prepare(
-        'INSERT INTO phone_login_codes (id, phone, code_hash, expires_at) VALUES (?, ?, ?, ?)'
-      ).bind(uuid(), normalizedPhone, codeHash, expiresAt).run();
-    }
+    await supabaseExpireAccountVerificationTokens(c, userId, 'phone', normalizedPhone).catch(() => undefined);
+    await supabaseCreateAccountVerificationToken(c, {
+      userId,
+      tokenType: 'phone',
+      target: normalizedPhone,
+      tokenHash: codeHash,
+      expiresAt,
+    });
 
     const delivery = await sendLegacyPhoneCode(c, normalizedPhone, code);
     if (delivery === 'development') {
@@ -13604,25 +13481,17 @@ api.post('/users/me/phone/verify', authMiddleware, async (c) => {
       return c.json({ detail: 'Enter the 6-digit verification code.' }, 400);
     }
 
-    const currentSupabaseRow = supabasePrimaryConfigured(c) ? await getSupabaseAppUserRowByAnyId(c, userId) : null;
-    if (supabasePrimaryConfigured(c)) {
-      if (!currentSupabaseRow) return c.json({ detail: 'User not found' }, 404);
-      const ownerId = await supabasePhoneOwnerId(c, normalizedPhone);
-      if (ownerId && ownerId !== publicId(currentSupabaseRow.id, 120)) {
-        return c.json({ detail: 'That phone number is already verified on another account.' }, 409);
-      }
-    } else {
-      await ensurePhoneAuthSchema(c.env.DB);
-      const owner: any = await c.env.DB.prepare('SELECT id FROM users WHERE phone = ? AND id != ?')
-        .bind(normalizedPhone, userId)
-        .first();
-      if (owner) return c.json({ detail: 'That phone number is already verified on another account.' }, 409);
+    const currentSupabaseRow = await getSupabaseAppUserRowByAnyId(c, userId);
+    if (!currentSupabaseRow) return c.json({ detail: 'User not found' }, 404);
+    const ownerId = await supabasePhoneOwnerId(c, normalizedPhone);
+    if (ownerId && ownerId !== publicId(currentSupabaseRow.id, 120)) {
+      return c.json({ detail: 'That phone number is already verified on another account.' }, 409);
     }
 
     if (getTwilioVerifyConfig(c)) {
       const verified = await checkTwilioVerification(c, normalizedPhone, normalizedCode);
       if (!verified) return c.json({ detail: 'Invalid or expired verification code.' }, 401);
-    } else if (supabasePrimaryConfigured(c)) {
+    } else {
       const phoneCode = await supabaseLatestAccountVerificationToken(c, 'phone', normalizedPhone);
       if (!phoneCode) return c.json({ detail: 'No active code for this phone number.' }, 401);
       if (publicId(phoneCode.user_id, 120) !== publicId(currentSupabaseRow?.id, 120)) return c.json({ detail: 'Invalid verification code.' }, 401);
@@ -13643,77 +13512,23 @@ api.post('/users/me/phone/verify', authMiddleware, async (c) => {
         used_at: now(),
         updated_at: now(),
       });
-    } else {
-      await ensurePhoneAuthSchema(c.env.DB);
-      const phoneCode: any = await c.env.DB.prepare(
-        'SELECT * FROM phone_login_codes WHERE phone = ? AND consumed_at IS NULL ORDER BY created_at DESC LIMIT 1'
-      ).bind(normalizedPhone).first();
-
-      if (!phoneCode) return c.json({ detail: 'No active code for this phone number.' }, 401);
-      if ((phoneCode.attempts || 0) >= 5) return c.json({ detail: 'Too many attempts. Request a new code.' }, 429);
-      if (Date.parse(phoneCode.expires_at) < Date.now()) return c.json({ detail: 'Code expired. Request a new code.' }, 401);
-
-      const jwtSecret = getJwtSecret(c);
-      const expectedHash = await sha256Hex(`${normalizedPhone}:${normalizedCode}:${jwtSecret}`);
-      if (expectedHash !== phoneCode.code_hash) {
-        await c.env.DB.prepare('UPDATE phone_login_codes SET attempts = attempts + 1 WHERE id = ?').bind(phoneCode.id).run();
-        return c.json({ detail: 'Invalid verification code.' }, 401);
-      }
-
-      await c.env.DB.prepare('UPDATE phone_login_codes SET consumed_at = datetime(\'now\') WHERE id = ?').bind(phoneCode.id).run();
     }
 
-    if (supabasePrimaryConfigured(c)) {
-      const appUserId = publicId(currentSupabaseRow.id, 120);
-      await supabaseAdminPatchRows(c, 'app_users', { id: postgrestEqFilter(appUserId) }, {
-        phone: normalizedPhone,
-        phone_verified: true,
-        updated_at: now(),
-      });
-      const refreshed = await getSupabaseAppUserRowByAnyId(c, appUserId);
-      const user = supabaseAppUserToLegacyUser(refreshed || { ...currentSupabaseRow, phone: normalizedPhone, phone_verified: true });
-      runBackgroundTask(c, 'supabase_phone_auth_metadata_update_failed', async () => {
-        const supabaseUserId = isUuidText(currentSupabaseRow.supabase_user_id);
-        if (supabaseUserId) {
-          await updateSupabaseAuthUser(c, supabaseUserId, {
-            phone: normalizedPhone,
-            user_metadata: supabaseProfileMetadata({
-              appUserId,
-              username: publicUsernameFor(user),
-              fullName: user.full_name,
-              profileImage: user.profile_image,
-              language: user.language,
-              phone: normalizedPhone,
-            }),
-          });
-        } else {
-          const result = await createOrFindSupabaseAuthUser(c, {
-            phone: normalizedPhone,
-            username: publicUsernameFor(user),
-            fullName: user.full_name,
-            profileImage: user.profile_image,
-            provider: 'phone',
-            appUserId,
-          });
-          if (result.user?.id) await supabaseAdminPatchRows(c, 'app_users', { id: postgrestEqFilter(appUserId) }, { supabase_user_id: result.user.id, updated_at: now() });
-        }
-      });
-      return c.json(authUserPayload(user));
-    }
-
-    await ensureSupabaseAuthSchema(c.env.DB);
-    const currentUser: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
-
-    await c.env.DB.prepare('UPDATE users SET phone = ?, phone_verified = 1, updated_at = datetime(\'now\') WHERE id = ?')
-      .bind(normalizedPhone, userId)
-      .run();
-    const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
-    runBackgroundTask(c, 'supabase_phone_update_sync_failed', async () => {
-      if (currentUser?.supabase_user_id) {
-        await updateSupabaseAuthUser(c, currentUser.supabase_user_id, {
+    const appUserId = publicId(currentSupabaseRow.id, 120);
+    await supabaseAdminPatchRows(c, 'app_users', { id: postgrestEqFilter(appUserId) }, {
+      phone: normalizedPhone,
+      phone_verified: true,
+      updated_at: now(),
+    });
+    const refreshed = await getSupabaseAppUserRowByAnyId(c, appUserId);
+    const user = supabaseAppUserToLegacyUser(refreshed || { ...currentSupabaseRow, phone: normalizedPhone, phone_verified: true });
+    runBackgroundTask(c, 'supabase_phone_auth_metadata_update_failed', async () => {
+      const supabaseUserId = isUuidText(currentSupabaseRow.supabase_user_id);
+      if (supabaseUserId) {
+        await updateSupabaseAuthUser(c, supabaseUserId, {
           phone: normalizedPhone,
           user_metadata: supabaseProfileMetadata({
-            appUserId: user.id,
+            appUserId,
             username: publicUsernameFor(user),
             fullName: user.full_name,
             profileImage: user.profile_image,
@@ -13728,9 +13543,9 @@ api.post('/users/me/phone/verify', authMiddleware, async (c) => {
           fullName: user.full_name,
           profileImage: user.profile_image,
           provider: 'phone',
-          appUserId: user.id,
+          appUserId,
         });
-        if (result.user?.id) await linkSupabaseAuthUser(c, user.id, result.user.id);
+        if (result.user?.id) await supabaseAdminPatchRows(c, 'app_users', { id: postgrestEqFilter(appUserId) }, { supabase_user_id: result.user.id, updated_at: now() });
       }
     });
     return c.json(authUserPayload(user));
@@ -13752,12 +13567,8 @@ api.post('/users/me/email/link/start', authMiddleware, async (c) => {
 
   try {
     const body: any = await c.req.json().catch(() => ({}));
-    const currentSupabaseRow = supabasePrimaryConfigured(c) ? await getSupabaseAppUserRowByAnyId(c, userId) : null;
-    const currentUser: any = currentSupabaseRow
-      ? supabaseAppUserToLegacyUser(currentSupabaseRow)
-      : await c.env.DB.prepare('SELECT id, email, email_verified FROM users WHERE id = ?')
-        .bind(userId)
-        .first();
+    const currentSupabaseRow = await getSupabaseAppUserRowByAnyId(c, userId);
+    const currentUser: any = currentSupabaseRow ? supabaseAppUserToLegacyUser(currentSupabaseRow) : null;
     const accountEmail = normalizeOptionalEmail(currentUser?.email);
     const requestedEmail = normalizeOptionalEmail(body.email);
     if (!accountEmail) {
@@ -13773,26 +13584,14 @@ api.post('/users/me/email/link/start', authMiddleware, async (c) => {
     const token = randomUrlToken(32);
     const tokenHash = await sha256Hex(`${token}:${c.env.JWT_SECRET}`);
     const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString();
-    if (supabasePrimaryConfigured(c)) {
-      await supabaseExpireAccountVerificationTokens(c, publicId(currentUser.id, 120), 'email_link', accountEmail).catch(() => undefined);
-      await supabaseCreateAccountVerificationToken(c, {
-        userId: publicId(currentUser.id, 120),
-        tokenType: 'email_link',
-        target: accountEmail,
-        tokenHash,
-        expiresAt,
-      });
-    } else {
-      await ensureAccountVerificationSchema(c.env.DB);
-      await c.env.DB.batch([
-        c.env.DB.prepare('UPDATE email_verification_links SET used_at = datetime(\'now\') WHERE user_id = ? AND used_at IS NULL')
-          .bind(userId),
-        c.env.DB.prepare(
-          `INSERT INTO email_verification_links (id, user_id, email, token_hash, expires_at)
-           VALUES (?, ?, ?, ?, ?)`
-        ).bind(uuid(), userId, accountEmail, tokenHash, expiresAt),
-      ]);
-    }
+    await supabaseExpireAccountVerificationTokens(c, publicId(currentUser.id, 120), 'email_link', accountEmail).catch(() => undefined);
+    await supabaseCreateAccountVerificationToken(c, {
+      userId: publicId(currentUser.id, 120),
+      tokenType: 'email_link',
+      target: accountEmail,
+      tokenHash,
+      expiresAt,
+    });
 
     const sent = await sendEmailVerificationLink(c, accountEmail, emailVerificationLink(c, token));
     if (!sent) {
@@ -13870,12 +13669,8 @@ api.post('/users/me/email/start', authMiddleware, async (c) => {
     if (bodyTooLarge) return bodyTooLarge;
     const body: any = await c.req.json().catch(() => ({}));
 
-    const currentSupabaseRow = supabasePrimaryConfigured(c) ? await getSupabaseAppUserRowByAnyId(c, userId) : null;
-    const currentUser: any = currentSupabaseRow
-      ? supabaseAppUserToLegacyUser(currentSupabaseRow)
-      : await c.env.DB.prepare('SELECT id, email, email_verified FROM users WHERE id = ?')
-        .bind(userId)
-        .first();
+    const currentSupabaseRow = await getSupabaseAppUserRowByAnyId(c, userId);
+    const currentUser: any = currentSupabaseRow ? supabaseAppUserToLegacyUser(currentSupabaseRow) : null;
     const accountEmail = normalizeOptionalEmail(currentUser?.email);
     const requestedEmail = normalizeOptionalEmail(body.email || accountEmail);
     if (!accountEmail || isInternalOAuthEmail(accountEmail)) {
@@ -13916,12 +13711,8 @@ api.post('/users/me/email/verify', authMiddleware, async (c) => {
     if (bodyTooLarge) return bodyTooLarge;
     const body: any = await c.req.json().catch(() => ({}));
 
-    const currentSupabaseRow = supabasePrimaryConfigured(c) ? await getSupabaseAppUserRowByAnyId(c, userId) : null;
-    const currentUser: any = currentSupabaseRow
-      ? supabaseAppUserToLegacyUser(currentSupabaseRow)
-      : await c.env.DB.prepare('SELECT * FROM users WHERE id = ?')
-        .bind(userId)
-        .first();
+    const currentSupabaseRow = await getSupabaseAppUserRowByAnyId(c, userId);
+    const currentUser: any = currentSupabaseRow ? supabaseAppUserToLegacyUser(currentSupabaseRow) : null;
     const accountEmail = normalizeOptionalEmail(currentUser?.email);
     const requestedEmail = normalizeOptionalEmail(body.email || accountEmail);
     if (!accountEmail || isInternalOAuthEmail(accountEmail)) {
@@ -13944,39 +13735,16 @@ api.post('/users/me/email/verify', authMiddleware, async (c) => {
     const verified = await checkTwilioChannelVerification(c, accountEmail, normalizedCode);
     if (!verified) return c.json({ detail: 'Invalid or expired verification code.' }, 401);
 
-    if (supabasePrimaryConfigured(c)) {
-      const appUserId = publicId(currentUser.id, 120);
-      await supabaseAdminPatchRows(c, 'app_users', { id: postgrestEqFilter(appUserId) }, {
-        email_verified: true,
-        updated_at: now(),
-      });
-      const refreshed = await getSupabaseAppUserRowByAnyId(c, appUserId);
-      const user = supabaseAppUserToLegacyUser(refreshed || { ...currentSupabaseRow, email_verified: true });
-      runBackgroundTask(c, 'supabase_email_verify_metadata_sync_failed', async () => {
-        const supabaseUserId = isUuidText(currentSupabaseRow?.supabase_user_id);
-        if (supabaseUserId) await updateSupabaseAuthUser(c, supabaseUserId, { user_metadata: { email_verified: true } });
-      });
-      return c.json(authUserPayload(user));
-    }
-
-    await ensureAccountVerificationSchema(c.env.DB);
-    await c.env.DB.prepare('UPDATE users SET email_verified = 1, updated_at = datetime(\'now\') WHERE id = ?')
-      .bind(userId)
-      .run();
-    const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
+    const appUserId = publicId(currentUser.id, 120);
+    await supabaseAdminPatchRows(c, 'app_users', { id: postgrestEqFilter(appUserId) }, {
+      email_verified: true,
+      updated_at: now(),
+    });
+    const refreshed = await getSupabaseAppUserRowByAnyId(c, appUserId);
+    const user = supabaseAppUserToLegacyUser(refreshed || { ...currentSupabaseRow, email_verified: true });
     runBackgroundTask(c, 'supabase_email_verify_metadata_sync_failed', async () => {
-      if (user?.supabase_user_id) {
-        await updateSupabaseAuthUser(c, user.supabase_user_id, {
-          user_metadata: supabaseProfileMetadata({
-            appUserId: user.id,
-            username: publicUsernameFor(user),
-            fullName: user.full_name,
-            profileImage: user.profile_image,
-            language: user.language,
-            emailVerified: true,
-          }),
-        });
-      }
+      const supabaseUserId = isUuidText(currentSupabaseRow?.supabase_user_id);
+      if (supabaseUserId) await updateSupabaseAuthUser(c, supabaseUserId, { user_metadata: { email_verified: true } });
     });
     return c.json(authUserPayload(user));
   } catch (error: any) {
@@ -14007,42 +13775,15 @@ api.put('/users/me/username', authMiddleware, async (c) => {
         reason: usernameCheck.detail,
       }, 400);
     }
-    if (supabasePrimaryConfigured(c)) {
-      const currentRow = await getSupabaseAppUserRowByAnyId(c, userId);
-      if (!currentRow) return c.json({ detail: 'User not found' }, 404);
-      const appUserId = publicId(currentRow.id, 120);
-      const existing = await supabaseAdminQueryRows(c, 'app_users', {
-        select: 'id',
-        filters: { username: postgrestEqFilter(usernameCheck.username) },
-        limit: 2,
-      });
-      if (existing.some((row) => publicId(row.id, 120) !== appUserId)) {
-        return c.json({
-          available: false,
-          username: usernameCheck.username,
-          code: 'taken',
-          reason: 'Username is already taken.',
-        }, 409);
-      }
-
-      await supabaseAdminPatchRows(c, 'app_users', { id: postgrestEqFilter(appUserId) }, {
-        username: usernameCheck.username,
-        updated_at: now(),
-      });
-      const refreshed = await getSupabaseAppUserRowByAnyId(c, appUserId);
-      const user = supabaseAppUserToLegacyUser(refreshed || { ...currentRow, username: usernameCheck.username });
-      runBackgroundTask(c, 'username_security_log_failed', async () => {
-        await recordAbuseSignals(c, appUserId, 'username_claim', { username: usernameCheck.username });
-        await logSecurityEvent(c, 'username_changed', appUserId, { previous_username: currentRow?.username || '', new_username: usernameCheck.username });
-        await syncSupabaseAuthMetadataForUser(c, user);
-      });
-      return c.json(authUserPayload(user));
-    }
-    const currentUser: any = await c.env.DB.prepare('SELECT username FROM users WHERE id = ?').bind(userId).first();
-    const existing: any = await c.env.DB.prepare('SELECT id FROM users WHERE LOWER(username) = ? AND id != ?')
-      .bind(usernameCheck.username.toLowerCase(), userId)
-      .first();
-    if (existing) {
+    const currentRow = await getSupabaseAppUserRowByAnyId(c, userId);
+    if (!currentRow) return c.json({ detail: 'User not found' }, 404);
+    const appUserId = publicId(currentRow.id, 120);
+    const existing = await supabaseAdminQueryRows(c, 'app_users', {
+      select: 'id',
+      filters: { username: postgrestEqFilter(usernameCheck.username) },
+      limit: 2,
+    });
+    if (existing.some((row) => publicId(row.id, 120) !== appUserId)) {
       return c.json({
         available: false,
         username: usernameCheck.username,
@@ -14051,13 +13792,15 @@ api.put('/users/me/username', authMiddleware, async (c) => {
       }, 409);
     }
 
-    await c.env.DB.prepare('UPDATE users SET username = ?, updated_at = datetime(\'now\') WHERE id = ?')
-      .bind(usernameCheck.username, userId)
-      .run();
-    const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
-    await recordAbuseSignals(c, userId, 'username_claim', { username: usernameCheck.username });
-    await logSecurityEvent(c, 'username_changed', userId, { previous_username: currentUser?.username || '', new_username: usernameCheck.username });
-    runBackgroundTask(c, 'supabase_username_metadata_sync_failed', async () => {
+    await supabaseAdminPatchRows(c, 'app_users', { id: postgrestEqFilter(appUserId) }, {
+      username: usernameCheck.username,
+      updated_at: now(),
+    });
+    const refreshed = await getSupabaseAppUserRowByAnyId(c, appUserId);
+    const user = supabaseAppUserToLegacyUser(refreshed || { ...currentRow, username: usernameCheck.username });
+    runBackgroundTask(c, 'username_security_log_failed', async () => {
+      await recordAbuseSignals(c, appUserId, 'username_claim', { username: usernameCheck.username });
+      await logSecurityEvent(c, 'username_changed', appUserId, { previous_username: currentRow?.username || '', new_username: usernameCheck.username });
       await syncSupabaseAuthMetadataForUser(c, user);
     });
     return c.json(authUserPayload(user));
@@ -14074,23 +13817,17 @@ api.get('/users/search/:query', authMiddleware, async (c) => {
   if (limited) return limited;
   const q = cleanText(c.req.param('query'), 80);
   if (q.length < 2) return c.json([]);
-  if (supabasePrimaryConfigured(c)) {
-    const search = q.replace(/[%*,()]/g, '').slice(0, 80);
-    if (search.length < 2) return c.json([]);
-    const rows = await supabaseAdminQueryRows(c, 'app_users', {
-      select: SUPABASE_APP_USER_SELECT,
-      filters: { or: `(username.ilike.*${search}*,full_name.ilike.*${search}*)` },
-      limit: 20,
-    });
-    return c.json(rows
-      .map(supabaseAppUserToLegacyUser)
-      .filter((user) => String(user.status || 'active') === 'active')
-      .map((user) => safeUserPayload(user)));
-  }
-  const r = await c.env.DB.prepare(
-    "SELECT id, username, full_name, profile_image, bio FROM users WHERE COALESCE(status, 'active') = 'active' AND (username LIKE ? OR full_name LIKE ?) LIMIT 20"
-  ).bind(`%${q}%`, `%${q}%`).all();
-  return c.json((r.results as any[]).map((user) => safeUserPayload(user)));
+  const search = q.replace(/[%*,()]/g, '').slice(0, 80);
+  if (search.length < 2) return c.json([]);
+  const rows = await supabaseAdminQueryRows(c, 'app_users', {
+    select: SUPABASE_APP_USER_SELECT,
+    filters: { or: `(username.ilike.*${search}*,full_name.ilike.*${search}*)` },
+    limit: 20,
+  });
+  return c.json(rows
+    .map(supabaseAppUserToLegacyUser)
+    .filter((user) => String(user.status || 'active') === 'active')
+    .map((user) => safeUserPayload(user)));
 });
 
 // Exact username check (no auth required for registration flow)
@@ -14109,13 +13846,11 @@ api.get('/users/check-username/:username', async (c) => {
       reason: usernameCheck.detail,
     });
   }
-  const user: any = supabasePrimaryConfigured(c)
-    ? (await supabaseAdminQueryRows(c, 'app_users', {
-      select: 'id',
-      filters: { username: postgrestEqFilter(username) },
-      limit: 1,
-    }))[0]
-    : await c.env.DB.prepare('SELECT id FROM users WHERE LOWER(username) = ?').bind(username.toLowerCase()).first();
+  const user: any = (await supabaseAdminQueryRows(c, 'app_users', {
+    select: 'id',
+    filters: { username: postgrestEqFilter(username) },
+    limit: 1,
+  }))[0];
   return c.json({
     available: !user,
     username,
@@ -14129,43 +13864,8 @@ api.get('/users/:userId', authMiddleware, async (c) => {
   const supabaseRequired = requireSupabasePrimaryDatabase(c, 'profile_read');
   if (supabaseRequired) return supabaseRequired;
   const targetUserId = c.req.param('userId');
-  if (supabasePrimaryConfigured(c)) {
-    const result = await supabasePublicUserPayload(c, viewerId, targetUserId);
-    return c.json(result.body, result.status);
-  }
-  await ensurePremiumSchema(c.env.DB);
-  const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(targetUserId).first();
-  if (!user) return c.json({ detail: 'User not found' }, 404);
-  if (String(user.status || 'active') !== 'active') return c.json({ detail: 'User not found' }, 404);
-  const safe = safeUserPayload(user);
-  const follow: any = viewerId && viewerId !== targetUserId
-    ? await c.env.DB.prepare('SELECT id FROM follows WHERE follower_id = ? AND following_id = ? LIMIT 1').bind(viewerId, targetUserId).first()
-    : null;
-  const block: any = viewerId && viewerId !== targetUserId
-    ? await c.env.DB.prepare('SELECT blocker_id, blocked_id FROM blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?) LIMIT 1')
-      .bind(viewerId, targetUserId, targetUserId, viewerId)
-      .first()
-    : null;
-  const viewerHasBlocked = block?.blocker_id === viewerId && block?.blocked_id === targetUserId;
-  const viewerBlockedBy = block?.blocker_id === targetUserId && block?.blocked_id === viewerId;
-  const canView = await canViewUserContent(c.env.DB, viewerId, user);
-  if (!canView) {
-    return c.json({
-      id: safe.id,
-      username: safe.username,
-      full_name: safe.full_name,
-      profile_image: safe.profile_image,
-      followers_count: safe.followers_count,
-      following_count: safe.following_count,
-      posts_count: safe.posts_count,
-      is_following: !!follow,
-      viewer_has_blocked: viewerHasBlocked,
-      viewer_blocked_by: viewerBlockedBy,
-      is_private: true,
-      privacy_locked: true,
-    });
-  }
-  return c.json({ ...safe, is_following: !!follow, viewer_has_blocked: viewerHasBlocked, viewer_blocked_by: viewerBlockedBy });
+  const result = await supabasePublicUserPayload(c, viewerId, targetUserId);
+  return c.json(result.body, result.status);
 });
 
 api.post('/users/:userId/follow', authMiddleware, async (c) => {
@@ -14178,73 +13878,8 @@ api.post('/users/:userId/follow', authMiddleware, async (c) => {
   if (limited) return limited;
   const body: any = await c.req.json().catch(() => ({}));
   const requested = optionalBoolean(body.following ?? body.followed ?? body.value);
-  if (supabasePrimaryConfigured(c)) {
-    const result = await supabaseSetFollowState(c, userId, targetId, requested);
-    return c.json(result.body, result.status);
-  }
-  const target: any = await c.env.DB.prepare("SELECT id FROM users WHERE id = ? AND COALESCE(status, 'active') = 'active'").bind(targetId).first();
-  if (!target) return c.json({ detail: 'User not found' }, 404);
-  await ensureAbuseProtectionSchema(c.env.DB);
-  const block: any = await c.env.DB.prepare('SELECT id FROM blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?) LIMIT 1')
-    .bind(userId, targetId, targetId, userId)
-    .first();
-  if (block) return c.json({ detail: 'You cannot follow this profile.' }, 403);
-
-  let nextFollowing = requested;
-  if (nextFollowing === null) {
-    const ex = await c.env.DB.prepare('SELECT id FROM follows WHERE follower_id = ? AND following_id = ?').bind(userId, targetId).first();
-    nextFollowing = !ex;
-  }
-
-  let changed = false;
-  if (nextFollowing) {
-    const results = await c.env.DB.batch([
-      c.env.DB.prepare('INSERT OR IGNORE INTO follows (id, follower_id, following_id) VALUES (?, ?, ?)').bind(uuid(), userId, targetId),
-      c.env.DB.prepare('UPDATE users SET following_count = COALESCE(following_count, 0) + 1 WHERE id = ? AND changes() > 0').bind(userId),
-      c.env.DB.prepare('UPDATE users SET followers_count = COALESCE(followers_count, 0) + 1 WHERE id = ? AND changes() > 0').bind(targetId),
-    ]);
-    changed = d1Changes(results?.[0]) > 0;
-  } else {
-    const results = await c.env.DB.batch([
-      c.env.DB.prepare('DELETE FROM follows WHERE follower_id = ? AND following_id = ?').bind(userId, targetId),
-      c.env.DB.prepare('UPDATE users SET following_count = MAX(0, COALESCE(following_count, 0) - 1) WHERE id = ? AND changes() > 0').bind(userId),
-      c.env.DB.prepare('UPDATE users SET followers_count = MAX(0, COALESCE(followers_count, 0) - 1) WHERE id = ? AND changes() > 0').bind(targetId),
-    ]);
-    changed = d1Changes(results?.[0]) > 0;
-  }
-
-  if (nextFollowing && changed) {
-    try {
-      const me: any = await c.env.DB.prepare('SELECT full_name FROM users WHERE id = ?').bind(userId).first();
-      await insertNotificationOnce(c, {
-        userId: targetId,
-        type: 'follow',
-        title: 'New Follower',
-        body: `${me?.full_name || 'Someone'} started following you`,
-        data: { from_user_id: userId },
-        dedupeKey: `follow:${userId}:${targetId}`,
-        dedupeSeconds: 86400,
-      });
-    } catch {}
-  }
-  if (changed) {
-    runBackgroundTask(c, 'supabase_follow_write_through_failed', async () => {
-      await mirrorLegacyUserToSupabase(c, userId);
-      await mirrorLegacyUserToSupabase(c, targetId);
-      await mirrorLegacyFollowToSupabase(c, userId, targetId, !!nextFollowing);
-    });
-  }
-
-  const counts: any = await c.env.DB.prepare(
-    `SELECT
-       (SELECT following_count FROM users WHERE id = ?) AS following_count,
-       (SELECT followers_count FROM users WHERE id = ?) AS followers_count`
-  ).bind(userId, targetId).first();
-  return c.json({
-    following: !!nextFollowing,
-    following_count: Number(counts?.following_count || 0),
-    followers_count: Number(counts?.followers_count || 0),
-  });
+  const result = await supabaseSetFollowState(c, userId, targetId, requested);
+  return c.json(result.body, result.status);
 });
 
 api.post('/users/:userId/block', authMiddleware, async (c) => {
@@ -14255,19 +13890,8 @@ api.post('/users/:userId/block', authMiddleware, async (c) => {
   if (supabaseRequired) return supabaseRequired;
   const limited = await enforceRateLimit(c, 'block_user', blockerId, 40, 60);
   if (limited) return limited;
-  if (supabasePrimaryConfigured(c)) {
-    const result = await supabaseBlockUser(c, blockerId, blockedId);
-    return c.json(result.body, result.status);
-  }
-  await ensureAbuseProtectionSchema(c.env.DB);
-  const target: any = await c.env.DB.prepare('SELECT id FROM users WHERE id = ? LIMIT 1').bind(blockedId).first();
-  if (!target) return c.json({ detail: 'User not found' }, 404);
-  await c.env.DB.batch([
-    c.env.DB.prepare('INSERT OR IGNORE INTO blocks (id, blocker_id, blocked_id, created_at) VALUES (?, ?, ?, datetime(\'now\'))').bind(uuid(), blockerId, blockedId),
-    c.env.DB.prepare('DELETE FROM follows WHERE (follower_id = ? AND following_id = ?) OR (follower_id = ? AND following_id = ?)').bind(blockerId, blockedId, blockedId, blockerId),
-  ]);
-  await logSecurityEvent(c, 'user_blocked', blockerId, { blocked_id: blockedId });
-  return c.json({ blocked: true });
+  const result = await supabaseBlockUser(c, blockerId, blockedId);
+  return c.json(result.body, result.status);
 });
 
 api.delete('/users/:userId/block', authMiddleware, async (c) => {
@@ -14277,13 +13901,8 @@ api.delete('/users/:userId/block', authMiddleware, async (c) => {
   if (supabaseRequired) return supabaseRequired;
   const limited = await enforceRateLimit(c, 'unblock_user', blockerId, 40, 60);
   if (limited) return limited;
-  if (supabasePrimaryConfigured(c)) {
-    const result = await supabaseUnblockUser(c, blockerId, blockedId);
-    return c.json(result.body, result.status);
-  }
-  await ensureAbuseProtectionSchema(c.env.DB);
-  await c.env.DB.prepare('DELETE FROM blocks WHERE blocker_id = ? AND blocked_id = ?').bind(blockerId, blockedId).run();
-  return c.json({ blocked: false });
+  const result = await supabaseUnblockUser(c, blockerId, blockedId);
+  return c.json(result.body, result.status);
 });
 
 api.get('/blocks', authMiddleware, async (c) => {
@@ -14292,21 +13911,7 @@ api.get('/blocks', authMiddleware, async (c) => {
   if (supabaseRequired) return supabaseRequired;
   const limited = await enforceRateLimit(c, 'blocks_read', userId, 60, 60);
   if (limited) return limited;
-  if (supabasePrimaryConfigured(c)) {
-    return c.json(await supabaseListBlocks(c, userId));
-  }
-  await ensureAbuseProtectionSchema(c.env.DB);
-  const rows = await c.env.DB.prepare(
-    `SELECT b.blocked_id, b.created_at, u.username, u.full_name, u.profile_image
-     FROM blocks b JOIN users u ON u.id = b.blocked_id
-     WHERE b.blocker_id = ?
-     ORDER BY b.created_at DESC LIMIT 100`
-  ).bind(userId).all();
-  return c.json((rows.results as any[]).map((row) => ({
-    blocked_id: row.blocked_id,
-    created_at: row.created_at,
-    user: safeUserPayload({ id: row.blocked_id, username: row.username, full_name: row.full_name, profile_image: row.profile_image }),
-  })));
+  return c.json(await supabaseListBlocks(c, userId));
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
