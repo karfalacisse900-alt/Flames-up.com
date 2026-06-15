@@ -6039,21 +6039,6 @@ async function supabaseSetCommentLike(c: any, commentId: string, userId: string,
 
   const likesCount = await supabaseCommentLikeActorCount(c, identity);
   await supabasePatchCommentMetadata(c, identity, { likes_count: likesCount });
-
-  try {
-    const legacyCommentId = identity.legacyCommentId || identity.requestedCommentId;
-    if (nextLiked) {
-      await c.env.DB.prepare('INSERT OR IGNORE INTO comment_likes (id, user_id, comment_id) VALUES (?, ?, ?)')
-        .bind(uuid(), userId, legacyCommentId)
-        .run();
-    } else {
-      await c.env.DB.prepare('DELETE FROM comment_likes WHERE user_id = ? AND comment_id = ?')
-        .bind(userId, legacyCommentId)
-        .run();
-    }
-    await c.env.DB.prepare('UPDATE comments SET likes_count = ? WHERE id = ?').bind(likesCount, legacyCommentId).run();
-  } catch {}
-
   return { status: 200 as const, body: { liked: !!nextLiked, likes_count: likesCount } };
 }
 
@@ -6089,20 +6074,6 @@ async function supabaseSetCommentPinned(c: any, commentId: string, userId: strin
   } else {
     await supabasePatchCommentMetadata(c, identity, { pinned_at: null });
   }
-
-  try {
-    const legacyCommentId = identity.legacyCommentId || identity.requestedCommentId;
-    const legacyPostId = identity.legacyPostId || publicId(visiblePost?.id, 120);
-    if (shouldPin) {
-      await c.env.DB.batch([
-        c.env.DB.prepare('UPDATE comments SET pinned_at = NULL WHERE post_id = ?').bind(legacyPostId),
-        c.env.DB.prepare('UPDATE comments SET pinned_at = ? WHERE id = ?').bind(pinnedAt, legacyCommentId),
-      ]);
-    } else {
-      await c.env.DB.prepare('UPDATE comments SET pinned_at = NULL WHERE id = ?').bind(legacyCommentId).run();
-    }
-  } catch {}
-
   return { status: 200 as const, body: { pinned: shouldPin, pinned_at: pinnedAt } };
 }
 
@@ -15134,105 +15105,8 @@ api.post('/posts/:postId/comments', authMiddleware, async (c) => {
     const clientRequestId = getClientRequestId(c, body);
     if (!content) return c.json({ detail: 'Comment cannot be empty.' }, 400);
     if (content.length > 1200) return c.json({ detail: 'Comment is too long.' }, 400);
-    if (supabasePrimaryConfigured(c)) {
-      const result = await supabaseCreatePostComment(c, { postId, userId, content, parentId, clientRequestId: clientRequestId || undefined });
-      return c.json(result.body, result.status);
-    }
-
-    await ensurePrivacySchema(c.env.DB);
-    await ensureGovernanceSchema(c.env.DB);
-    await ensureCommentSchema(c.env.DB);
-    await ensureReliabilitySchema(c.env.DB);
-    await ensureMediaModerationSchema(c.env.DB);
-    const commentVisiblePostSql = [
-      'SELECT p.id, p.user_id FROM posts p JOIN users u ON p.user_id = u.id',
-    `WHERE p.id = ? AND ${visiblePostWhere('u', 'p')} AND ${feedPhotoPostWhere('p')}`,
-    ].join(' ');
-    const visiblePost: any = await c.env.DB.prepare(commentVisiblePostSql).bind(postId, ...visiblePostBindValues(userId)).first();
-    if (!visiblePost) return c.json({ detail: 'Post not found' }, 404);
-
-    let parent: any = null;
-    if (parentId) {
-      parent = await c.env.DB.prepare("SELECT id, user_id FROM comments WHERE id = ? AND post_id = ? AND COALESCE(status, 'active') NOT IN ('removed', 'hidden')")
-        .bind(parentId, postId)
-        .first();
-      if (!parent) return c.json({ detail: 'Comment to reply to was not found.' }, 404);
-    }
-
-    const recentDuplicate: any = await c.env.DB.prepare(
-      "SELECT id FROM comments WHERE user_id = ? AND post_id = ? AND content = ? AND created_at > datetime('now', '-30 seconds') LIMIT 1"
-    ).bind(userId, postId, content).first();
-    if (recentDuplicate) {
-      await logSecurityEvent(c, 'duplicate_comment_blocked', userId, { post_id: postId });
-      return c.json({ detail: 'You already posted that comment. Try again in a moment.' }, 429);
-    }
-
-    const user: any = await c.env.DB.prepare('SELECT username, full_name, profile_image FROM users WHERE id = ?').bind(userId).first();
-    const id = uuid();
-    const createdAt = now();
-    const insertResult = await c.env.DB.prepare('INSERT OR IGNORE INTO comments (id, user_id, post_id, parent_id, content, client_request_id) VALUES (?, ?, ?, ?, ?, ?)')
-      .bind(id, userId, postId, parentId, content, clientRequestId)
-      .run();
-    const inserted = d1Changes(insertResult) > 0;
-    if (!inserted && clientRequestId) {
-      const existing: any = await c.env.DB.prepare(
-        `SELECT c.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
-                CASE WHEN cl.id IS NULL THEN 0 ELSE 1 END AS liked_by_me
-         FROM comments c
-         JOIN users u ON c.user_id = u.id
-         LEFT JOIN comment_likes cl ON cl.comment_id = c.id AND cl.user_id = ?
-         WHERE c.user_id = ? AND c.client_request_id = ?
-         LIMIT 1`
-      ).bind(userId, userId, clientRequestId).first();
-      if (existing) return c.json({
-        ...existing,
-        user_username: publicUsernameFor({ username: existing.user_username }),
-        user_profile_image: safeMediaReference(existing.user_profile_image),
-        liked_by_me: !!existing.liked_by_me,
-        idempotent_replay: true,
-      });
-    }
-    if (!inserted) return c.json({ detail: 'Could not post comment. Please retry.' }, 409);
-    const engagement = await getCanonicalPostEngagementState(c, postId, userId);
-
-    try {
-      const notifyUserId = parent?.user_id && parent.user_id !== userId ? parent.user_id : visiblePost.user_id;
-      if (notifyUserId && notifyUserId !== userId) {
-        await insertNotificationOnce(c, {
-          userId: notifyUserId,
-          type: parentId ? 'comment_reply' : 'comment',
-          title: parentId ? 'New Reply' : 'New Comment',
-          body: `${user?.full_name || 'Someone'} ${parentId ? 'replied to your comment' : 'commented on your post'}`,
-          data: { post_id: postId, comment_id: id, parent_id: parentId, from_user_id: userId, actor_name: user?.full_name || 'Someone' },
-          dedupeKey: `comment:${userId}:${postId}:${parentId || 'root'}:${content.slice(0, 80)}`,
-          dedupeSeconds: 300,
-        });
-      }
-    } catch {}
-
-    runBackgroundTask(c, 'supabase_comment_write_through_failed', async () => {
-      await mirrorLegacyCommentToSupabase(c, id);
-      await mirrorLegacyPostToSupabase(c, postId);
-    });
-
-    return c.json({
-      id,
-      user_id: userId,
-      post_id: postId,
-      post_user_id: visiblePost.user_id,
-      parent_id: parentId,
-      content,
-      client_request_id: clientRequestId,
-      likes_count: 0,
-      post_comments_count: engagement.comments_count,
-      liked_by_me: false,
-      pinned_at: null,
-      is_pinned: false,
-      user_username: publicUsernameFor(user),
-      user_full_name: user?.full_name,
-      user_profile_image: safeMediaReference(user?.profile_image),
-      created_at: createdAt,
-    });
+    const result = await supabaseCreatePostComment(c, { postId, userId, content, parentId, clientRequestId: clientRequestId || undefined });
+    return c.json(result.body, result.status);
   } catch (error: any) {
     console.error('Comment create failed:', getErrorCode(error), error?.message || error);
     return c.json({ detail: 'Could not post comment.', code: 'COMMENT_CREATE_FAILED' }, 500);
@@ -15245,38 +15119,8 @@ api.get('/posts/:postId/comments', authMiddleware, async (c) => {
     const supabaseRequired = requireSupabasePrimaryDatabase(c, 'comments_read');
     if (supabaseRequired) return supabaseRequired;
     const limit = clampNumber(c.req.query('limit') || '80', 1, 100, 80);
-    if (supabasePrimaryConfigured(c)) {
-      const result = await supabaseReadPostComments(c, c.req.param('postId'), userId, limit);
-      return c.json(result.body, result.status);
-    }
-    await ensurePrivacySchema(c.env.DB);
-    await ensureGovernanceSchema(c.env.DB);
-    await ensureCommentSchema(c.env.DB);
-    await ensureLikeUniquenessSchema(c.env.DB);
-    const commentsSql = [
-      `SELECT c.*, p.user_id AS post_user_id, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
-              CASE WHEN c.pinned_at IS NULL THEN 0 ELSE 1 END AS is_pinned,
-              CASE WHEN cl.id IS NULL THEN 0 ELSE 1 END AS liked_by_me
-       FROM comments c
-       JOIN posts p ON c.post_id = p.id
-       JOIN users owner ON p.user_id = owner.id
-       JOIN users u ON c.user_id = u.id
-       LEFT JOIN comment_likes cl ON cl.comment_id = c.id AND cl.user_id = ?
-       WHERE c.post_id = ? AND COALESCE(c.status, 'active') NOT IN ('removed', 'hidden') AND ${visibleAuthorWhere('u')}`,
-      `AND ${visiblePostWhere('owner', 'p')}`,
-      'ORDER BY c.pinned_at IS NULL, c.pinned_at DESC, COALESCE(c.parent_id, c.id), c.parent_id IS NOT NULL, c.created_at ASC',
-      'LIMIT ?',
-    ].join(' ');
-    const r = await c.env.DB.prepare(commentsSql).bind(userId, c.req.param('postId'), ...visiblePostBindValues(userId), limit).all();
-
-    return c.json((r.results as any[]).map((comment) => ({
-      ...comment,
-      user_username: publicUsernameFor({ username: comment.user_username }),
-      user_profile_image: safeMediaReference(comment.user_profile_image),
-      likes_count: Number(comment.likes_count || 0),
-      is_pinned: !!comment.is_pinned,
-      liked_by_me: !!comment.liked_by_me,
-    })));
+    const result = await supabaseReadPostComments(c, c.req.param('postId'), userId, limit);
+    return c.json(result.body, result.status);
   } catch (error: any) {
     console.error('Comment load failed:', getErrorCode(error), error?.message || error);
     return c.json({ detail: 'Could not load comments.' }, 500);
@@ -15293,52 +15137,8 @@ api.post('/comments/:commentId/like', authMiddleware, async (c) => {
     const body: any = await c.req.json().catch(() => ({}));
     const requested = optionalBoolean(body.liked ?? body.like ?? body.value);
     const commentId = c.req.param('commentId');
-    if (supabasePrimaryConfigured(c)) {
-      const result = await supabaseSetCommentLike(c, commentId, userId, requested);
-      return c.json(result.body, result.status);
-    }
-    await ensurePrivacySchema(c.env.DB);
-    await ensureGovernanceSchema(c.env.DB);
-    await ensureCommentSchema(c.env.DB);
-    const visibleCommentSql = [
-      `SELECT c.id, c.likes_count
-       FROM comments c
-       JOIN posts p ON c.post_id = p.id
-       JOIN users owner ON p.user_id = owner.id
-       WHERE c.id = ? AND COALESCE(c.status, 'active') NOT IN ('removed', 'hidden')`,
-      `AND ${visiblePostWhere('owner', 'p')}`,
-    ].join(' ');
-    const comment: any = await c.env.DB.prepare(visibleCommentSql).bind(commentId, ...visiblePostBindValues(userId)).first();
-    if (!comment) return c.json({ detail: 'Comment not found' }, 404);
-
-    let nextLiked = requested;
-    if (nextLiked === null) {
-      const existing: any = await c.env.DB.prepare('SELECT id FROM comment_likes WHERE user_id = ? AND comment_id = ?')
-        .bind(userId, commentId)
-        .first();
-      nextLiked = !existing;
-    }
-
-    if (nextLiked) {
-      await c.env.DB.prepare('INSERT OR IGNORE INTO comment_likes (id, user_id, comment_id) VALUES (?, ?, ?)')
-        .bind(uuid(), userId, commentId)
-        .run();
-    } else {
-      await c.env.DB.prepare('DELETE FROM comment_likes WHERE user_id = ? AND comment_id = ?')
-        .bind(userId, commentId)
-        .run();
-    }
-
-    const likeRow: any = await c.env.DB.prepare(
-      `SELECT COUNT(*) AS likes_count,
-        EXISTS (SELECT 1 FROM comment_likes WHERE user_id = ? AND comment_id = ?) AS liked
-       FROM comment_likes WHERE comment_id = ?`
-    ).bind(userId, commentId, commentId).first();
-    const likesCount = Math.max(0, Number(likeRow?.likes_count || 0));
-    const liked = likeRow?.liked === true || likeRow?.liked === 1 || likeRow?.liked === '1';
-    await c.env.DB.prepare('UPDATE comments SET likes_count = ? WHERE id = ?').bind(likesCount, commentId).run();
-
-    return c.json({ liked, likes_count: likesCount });
+    const result = await supabaseSetCommentLike(c, commentId, userId, requested);
+    return c.json(result.body, result.status);
   } catch (error: any) {
     console.error('Comment like failed:', getErrorCode(error), error?.message || error);
     return c.json({ detail: 'Could not update comment like.' }, 500);
@@ -15354,36 +15154,11 @@ api.post('/comments/:commentId/pin', authMiddleware, async (c) => {
     const body: any = await c.req.json().catch(() => ({}));
     const requested = optionalBoolean(body.pinned ?? body.pin ?? body.value);
     const shouldPin = requested === null ? true : requested;
-    if (supabasePrimaryConfigured(c)) {
-      const result = await supabaseSetCommentPinned(c, commentId, userId, requested);
-      if (result.status === 200) {
-        await logSecurityEvent(c, shouldPin ? 'comment_pinned' : 'comment_unpinned', userId, { comment_id: commentId });
-      }
-      return c.json(result.body, result.status);
+    const result = await supabaseSetCommentPinned(c, commentId, userId, requested);
+    if (result.status === 200) {
+      await logSecurityEvent(c, shouldPin ? 'comment_pinned' : 'comment_unpinned', userId, { comment_id: commentId });
     }
-    await ensurePrivacySchema(c.env.DB);
-    await ensureGovernanceSchema(c.env.DB);
-    await ensureCommentSchema(c.env.DB);
-    const comment: any = await c.env.DB.prepare(
-      `SELECT c.id, c.post_id, c.pinned_at, p.user_id AS post_user_id
-       FROM comments c
-       JOIN posts p ON c.post_id = p.id
-       WHERE c.id = ? AND COALESCE(c.status, 'active') NOT IN ('removed', 'hidden')`
-    ).bind(commentId).first();
-    if (!comment) return c.json({ detail: 'Comment not found' }, 404);
-    if (comment.post_user_id !== userId) return c.json({ detail: 'Only the creator can pin comments.' }, 403);
-
-    const pinnedAt = shouldPin ? now() : null;
-    if (shouldPin) {
-      await c.env.DB.batch([
-        c.env.DB.prepare('UPDATE comments SET pinned_at = NULL WHERE post_id = ?').bind(comment.post_id),
-        c.env.DB.prepare('UPDATE comments SET pinned_at = ? WHERE id = ?').bind(pinnedAt, commentId),
-      ]);
-    } else {
-      await c.env.DB.prepare('UPDATE comments SET pinned_at = NULL WHERE id = ?').bind(commentId).run();
-    }
-    await logSecurityEvent(c, shouldPin ? 'comment_pinned' : 'comment_unpinned', userId, { comment_id: commentId, post_id: comment.post_id });
-    return c.json({ pinned: shouldPin, pinned_at: pinnedAt });
+    return c.json(result.body, result.status);
   } catch (error: any) {
     console.error('Comment pin failed:', getErrorCode(error), error?.message || error);
     return c.json({ detail: 'Could not update pinned comment.' }, 500);
@@ -15396,27 +15171,8 @@ api.delete('/comments/:commentId', authMiddleware, async (c) => {
     const supabaseRequired = requireSupabasePrimaryDatabase(c, 'comment_delete');
     if (supabaseRequired) return supabaseRequired;
     const commentId = c.req.param('commentId');
-    if (supabasePrimaryConfigured(c)) {
-      const result = await supabaseUpdateCommentStatus(c, commentId, userId, 'removed');
-      return c.json(result.body, result.status);
-    }
-    await ensurePrivacySchema(c.env.DB);
-    await ensureGovernanceSchema(c.env.DB);
-    await ensureCommentSchema(c.env.DB);
-    const comment: any = await c.env.DB.prepare(
-      `SELECT c.id, c.user_id, c.post_id
-       FROM comments c
-       WHERE c.id = ? AND COALESCE(c.status, 'active') NOT IN ('removed', 'hidden')`
-    ).bind(commentId).first();
-    if (!comment) return c.json({ detail: 'Comment not found' }, 404);
-    if (comment.user_id !== userId) return c.json({ detail: 'Not your comment' }, 403);
-
-    await c.env.DB.prepare("UPDATE comments SET status = 'removed', removed_at = ?, removed_reason = 'Deleted by commenter', pinned_at = NULL WHERE id = ?")
-      .bind(now(), commentId)
-      .run();
-    const engagement = await getCanonicalPostEngagementState(c, comment.post_id, userId);
-    await logSecurityEvent(c, 'comment_deleted', userId, { comment_id: commentId, post_id: comment.post_id });
-    return c.json({ deleted: true, comments_count: engagement.comments_count });
+    const result = await supabaseUpdateCommentStatus(c, commentId, userId, 'removed');
+    return c.json(result.body, result.status);
   } catch (error: any) {
     console.error('Comment delete failed:', getErrorCode(error), error?.message || error);
     return c.json({ detail: 'Could not delete comment.' }, 500);
@@ -15429,28 +15185,8 @@ api.post('/comments/:commentId/hide', authMiddleware, async (c) => {
     const supabaseRequired = requireSupabasePrimaryDatabase(c, 'comment_hide');
     if (supabaseRequired) return supabaseRequired;
     const commentId = c.req.param('commentId');
-    if (supabasePrimaryConfigured(c)) {
-      const result = await supabaseUpdateCommentStatus(c, commentId, userId, 'hidden');
-      return c.json(result.body, result.status);
-    }
-    await ensurePrivacySchema(c.env.DB);
-    await ensureGovernanceSchema(c.env.DB);
-    await ensureCommentSchema(c.env.DB);
-    const comment: any = await c.env.DB.prepare(
-      `SELECT c.id, c.post_id, p.user_id AS post_user_id
-       FROM comments c
-       JOIN posts p ON c.post_id = p.id
-       WHERE c.id = ? AND COALESCE(c.status, 'active') NOT IN ('removed', 'hidden')`
-    ).bind(commentId).first();
-    if (!comment) return c.json({ detail: 'Comment not found' }, 404);
-    if (comment.post_user_id !== userId) return c.json({ detail: 'Only the creator can hide comments.' }, 403);
-
-    await c.env.DB.prepare("UPDATE comments SET status = 'hidden', hidden_at = ?, hidden_by_user_id = ?, removed_reason = 'Hidden by creator', pinned_at = NULL WHERE id = ?")
-      .bind(now(), userId, commentId)
-      .run();
-    const engagement = await getCanonicalPostEngagementState(c, comment.post_id, userId);
-    await logSecurityEvent(c, 'comment_hidden', userId, { comment_id: commentId, post_id: comment.post_id });
-    return c.json({ hidden: true, comments_count: engagement.comments_count });
+    const result = await supabaseUpdateCommentStatus(c, commentId, userId, 'hidden');
+    return c.json(result.body, result.status);
   } catch (error: any) {
     console.error('Comment hide failed:', getErrorCode(error), error?.message || error);
     return c.json({ detail: 'Could not hide comment.' }, 500);
