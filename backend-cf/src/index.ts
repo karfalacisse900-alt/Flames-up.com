@@ -13931,7 +13931,6 @@ api.get('/music/audius/trending', async (c) => {
   try {
     const supabaseRequired = requireSupabasePrimaryDatabase(c, 'music_audius_trending');
     if (supabaseRequired) return supabaseRequired;
-    if (!supabasePrimaryConfigured(c)) await ensureAudioSchema(c.env.DB);
     const limited = await enforceRateLimit(c, 'audius_trending', (await getOptionalUserId(c)) || clientIp(c), 120, 60);
     if (limited) return limited;
     const limit = clampNumber(c.req.query('limit'), 1, 50, 50);
@@ -13944,9 +13943,7 @@ api.get('/music/audius/trending', async (c) => {
       600,
       () => fetchAudiusTracks('/tracks/trending', { time, limit })
     );
-    const hiddenIds = supabasePrimaryConfigured(c)
-      ? await supabaseAudiusHiddenTrackIds(c)
-      : new Set(((await c.env.DB.prepare("SELECT track_id FROM hidden_sounds WHERE provider = 'audius'").all()).results as any[]).map((row) => String(row.track_id)));
+    const hiddenIds = await supabaseAudiusHiddenTrackIds(c);
     return c.json({ tracks: (tracks as any[]).filter((track) => !hiddenIds.has(String(track.track_id))) });
   } catch (error: any) {
     console.log('Audius trending failed:', error?.message || error);
@@ -13958,7 +13955,6 @@ api.get('/music/audius/search', async (c) => {
   try {
     const supabaseRequired = requireSupabasePrimaryDatabase(c, 'music_audius_search');
     if (supabaseRequired) return supabaseRequired;
-    if (!supabasePrimaryConfigured(c)) await ensureAudioSchema(c.env.DB);
     const limited = await enforceRateLimit(c, 'audius_search', (await getOptionalUserId(c)) || clientIp(c), 90, 60);
     if (limited) return limited;
     const q = cleanText(c.req.query('q') || c.req.query('query'), 90);
@@ -13971,9 +13967,7 @@ api.get('/music/audius/search', async (c) => {
       300,
       () => fetchAudiusTracks('/tracks/search', { query: q, limit })
     );
-    const hiddenIds = supabasePrimaryConfigured(c)
-      ? await supabaseAudiusHiddenTrackIds(c)
-      : new Set(((await c.env.DB.prepare("SELECT track_id FROM hidden_sounds WHERE provider = 'audius'").all()).results as any[]).map((row) => String(row.track_id)));
+    const hiddenIds = await supabaseAudiusHiddenTrackIds(c);
     return c.json({ tracks: (tracks as any[]).filter((track) => !hiddenIds.has(String(track.track_id))) });
   } catch (error: any) {
     console.log('Audius search failed:', error?.message || error);
@@ -13985,16 +13979,11 @@ api.get('/music/audius/stream/:trackId', async (c) => {
   try {
     const supabaseRequired = requireSupabasePrimaryDatabase(c, 'music_audius_stream');
     if (supabaseRequired) return supabaseRequired;
-    if (!supabasePrimaryConfigured(c)) await ensureAudioSchema(c.env.DB);
     const limited = await enforceRateLimit(c, 'audius_stream_lookup', (await getOptionalUserId(c)) || clientIp(c), 180, 60);
     if (limited) return limited;
     const trackId = cleanText(c.req.param('trackId'), 80);
     if (!trackId) return c.json({ detail: 'Track id is required.' }, 400);
-    const hidden = supabasePrimaryConfigured(c)
-      ? await supabaseAudiusTrackIsHidden(c, trackId)
-      : !!(await c.env.DB.prepare("SELECT track_id FROM hidden_sounds WHERE provider = 'audius' AND track_id = ?")
-        .bind(trackId)
-        .first());
+    const hidden = await supabaseAudiusTrackIsHidden(c, trackId);
     if (hidden) return c.json({ detail: 'This sound is unavailable.' }, 404);
 
     const response = await fetch(audiusUrl(`/tracks/${encodeURIComponent(trackId)}`, {}), {
@@ -14016,42 +14005,14 @@ api.get('/music/audius/favorites', authMiddleware, async (c) => {
     const supabaseRequired = requireSupabasePrimaryDatabase(c, 'music_audius_favorites_read');
     if (supabaseRequired) return supabaseRequired;
     const userId = getUserId(c);
-    if (supabasePrimaryConfigured(c)) {
-      const rows = await supabaseAdminQueryRows(c, 'app_favorite_sounds', {
-        select: 'track_id,title,artist,artist_id,artist_handle,artist_profile_image,artwork_url,duration,genre,play_count,favorite_count',
-        filters: { user_id: postgrestEqFilter(userId), provider: postgrestEqFilter('audius') },
-        order: 'created_at.desc',
-        limit: 100,
-      });
-      const hiddenIds = await supabaseAudiusHiddenTrackIds(c, rows.map((row) => String(row.track_id || '')));
-      return c.json({ tracks: rows.map(audiusFavoriteTrackPayload).filter((track) => track.id && !hiddenIds.has(track.id)) });
-    }
-
-    await ensureAudioSchema(c.env.DB);
-    const rows = await c.env.DB.prepare(
-      `SELECT fs.track_id, fs.title, fs.artist, fs.artist_id, fs.artist_handle, fs.artist_profile_image,
-              fs.artwork_url, fs.duration, fs.genre, fs.play_count, fs.favorite_count
-       FROM favorite_sounds fs
-       LEFT JOIN hidden_sounds hs ON hs.provider = fs.provider AND hs.track_id = fs.track_id
-       WHERE fs.user_id = ? AND fs.provider = 'audius' AND hs.track_id IS NULL
-       ORDER BY fs.created_at DESC
-       LIMIT 100`
-    ).bind(userId).all();
-    const tracks = (rows.results as any[]).map((row) => ({
-      id: String(row.track_id || ''),
-      track_id: String(row.track_id || ''),
-      title: String(row.title || 'Untitled track'),
-      artist: String(row.artist || 'Audius artist'),
-      artist_id: String(row.artist_id || ''),
-      artist_handle: String(row.artist_handle || ''),
-      artist_profile_image: String(row.artist_profile_image || ''),
-      artwork_url: String(row.artwork_url || ''),
-      duration: Number(row.duration || 0),
-      genre: String(row.genre || ''),
-      play_count: Number(row.play_count || 0),
-      favorite_count: Number(row.favorite_count || 0),
-    })).filter((track) => track.id);
-    return c.json({ tracks });
+    const rows = await supabaseAdminQueryRows(c, 'app_favorite_sounds', {
+      select: 'track_id,title,artist,artist_id,artist_handle,artist_profile_image,artwork_url,duration,genre,play_count,favorite_count',
+      filters: { user_id: postgrestEqFilter(userId), provider: postgrestEqFilter('audius') },
+      order: 'created_at.desc',
+      limit: 100,
+    });
+    const hiddenIds = await supabaseAudiusHiddenTrackIds(c, rows.map((row) => String(row.track_id || '')));
+    return c.json({ tracks: rows.map(audiusFavoriteTrackPayload).filter((track) => track.id && !hiddenIds.has(track.id)) });
   } catch (error: any) {
     console.log('Audius favorites failed:', error?.message || error);
     return c.json({ detail: 'Could not load favorite sounds.', tracks: [] }, 500);
@@ -14079,65 +14040,26 @@ api.post('/music/audius/favorites', authMiddleware, async (c) => {
     const favoriteCount = clampNumber(body.favorite_count, 0, 1000000000, 0);
     const ts = now();
 
-    if (supabasePrimaryConfigured(c)) {
-      if (await supabaseAudiusTrackIsHidden(c, trackId)) return c.json({ detail: 'This sound is unavailable.' }, 400);
-      await supabaseAdminUpsert(c, 'app_favorite_sounds', [{
-        id: uuid(),
-        user_id: userId,
-        provider: 'audius',
-        track_id: trackId,
-        title,
-        artist,
-        artist_id: artistId,
-        artist_handle: artistHandle,
-        artist_profile_image: artistProfileImage,
-        artwork_url: artworkUrl,
-        duration,
-        genre,
-        play_count: playCount,
-        favorite_count: favoriteCount,
-        metadata: { source: 'worker_audius_favorite' },
-        created_at: ts,
-        updated_at: ts,
-      }], 'user_id,provider,track_id');
-      return c.json({
-        favorite: true,
-        track: {
-          id: trackId, track_id: trackId, title, artist, artist_id: artistId, artist_handle: artistHandle,
-          artist_profile_image: artistProfileImage, artwork_url: artworkUrl, duration, genre, play_count: playCount,
-          favorite_count: favoriteCount,
-        },
-      });
-    }
-
-    await ensureAudioSchema(c.env.DB);
-    const hidden = await c.env.DB.prepare("SELECT track_id FROM hidden_sounds WHERE provider = 'audius' AND track_id = ?")
-      .bind(trackId)
-      .first();
-    if (hidden) return c.json({ detail: 'This sound is unavailable.' }, 400);
-
-    await c.env.DB.prepare(
-      `INSERT INTO favorite_sounds (
-         id, user_id, provider, track_id, title, artist, artist_id, artist_handle, artist_profile_image,
-         artwork_url, duration, genre, play_count, favorite_count, created_at, updated_at
-       )
-       VALUES (?, ?, 'audius', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(user_id, provider, track_id) DO UPDATE SET
-         title = excluded.title,
-         artist = excluded.artist,
-         artist_id = excluded.artist_id,
-         artist_handle = excluded.artist_handle,
-         artist_profile_image = excluded.artist_profile_image,
-         artwork_url = excluded.artwork_url,
-         duration = excluded.duration,
-         genre = excluded.genre,
-         play_count = excluded.play_count,
-         favorite_count = excluded.favorite_count,
-         updated_at = excluded.updated_at`
-    ).bind(
-      uuid(), userId, trackId, title, artist, artistId, artistHandle, artistProfileImage,
-      artworkUrl, duration, genre, playCount, favoriteCount, ts, ts
-    ).run();
+    if (await supabaseAudiusTrackIsHidden(c, trackId)) return c.json({ detail: 'This sound is unavailable.' }, 400);
+    await supabaseAdminUpsert(c, 'app_favorite_sounds', [{
+      id: uuid(),
+      user_id: userId,
+      provider: 'audius',
+      track_id: trackId,
+      title,
+      artist,
+      artist_id: artistId,
+      artist_handle: artistHandle,
+      artist_profile_image: artistProfileImage,
+      artwork_url: artworkUrl,
+      duration,
+      genre,
+      play_count: playCount,
+      favorite_count: favoriteCount,
+      metadata: { source: 'worker_audius_favorite' },
+      created_at: ts,
+      updated_at: ts,
+    }], 'user_id,provider,track_id');
 
     return c.json({
       favorite: true,
@@ -14160,19 +14082,11 @@ api.delete('/music/audius/favorites/:trackId', authMiddleware, async (c) => {
     const userId = getUserId(c);
     const trackId = cleanText(c.req.param('trackId'), 80);
     if (!trackId) return c.json({ detail: 'Track id is required.' }, 400);
-    if (supabasePrimaryConfigured(c)) {
-      await supabaseAdminDeleteRows(c, 'app_favorite_sounds', {
-        user_id: postgrestEqFilter(userId),
-        provider: postgrestEqFilter('audius'),
-        track_id: postgrestEqFilter(trackId),
-      });
-      return c.json({ favorite: false, track_id: trackId });
-    }
-
-    await ensureAudioSchema(c.env.DB);
-    await c.env.DB.prepare("DELETE FROM favorite_sounds WHERE user_id = ? AND provider = 'audius' AND track_id = ?")
-      .bind(userId, trackId)
-      .run();
+    await supabaseAdminDeleteRows(c, 'app_favorite_sounds', {
+      user_id: postgrestEqFilter(userId),
+      provider: postgrestEqFilter('audius'),
+      track_id: postgrestEqFilter(trackId),
+    });
     return c.json({ favorite: false, track_id: trackId });
   } catch (error: any) {
     console.log('Audius favorite remove failed:', error?.message || error);
