@@ -21809,16 +21809,23 @@ async function setReportStatus(c: any, admin: AdminContext, reportId: string, st
 api.get('/admin/health', authMiddleware, async (c) => {
   try {
     await requireAdminRole(c, 'admin:read');
-    await ensureAdminModerationSchema(c.env.DB);
-    await ensureMediaModerationSchema(c.env.DB);
-    const db: any = await c.env.DB.prepare('SELECT 1 AS ok').first();
+    let database = 'unknown';
+    if (supabasePrimaryConfigured(c)) {
+      await supabaseAdminQueryRows(c, 'app_users', { select: 'id', limit: 1 });
+      database = 'supabase_postgres';
+    } else {
+      await ensureAdminModerationSchema(c.env.DB);
+      await ensureMediaModerationSchema(c.env.DB);
+      const db: any = await c.env.DB.prepare('SELECT 1 AS ok').first();
+      database = Number(db?.ok || 0) === 1 ? 'legacy_d1' : 'unknown';
+    }
     return c.json({
       status: 'ok',
       environment: c.env.ENVIRONMENT || 'production',
       timestamp: now(),
       version: c.env.WORKER_VERSION || API_VERSION,
       commit: c.env.SOURCE_COMMIT || '',
-      database: Number(db?.ok || 0) === 1 ? 'ok' : 'unknown',
+      database,
     });
   } catch (error: any) {
     return governanceError(c, error);
