@@ -16547,49 +16547,35 @@ function adminPermissionList(role: AdminRole): string[] {
 async function getAdminContext(c: any): Promise<AdminContext | null> {
   const userId = getUserId(c);
   if (!userId) return null;
-  if (supabasePrimaryRequested(c) && !supabasePrimaryConfigured(c)) return null;
+  if (!supabasePrimaryConfigured(c)) return null;
 
-  if (supabasePrimaryConfigured(c)) {
-    const row = await getSupabaseAppUserRowByAnyId(c, userId);
-    if (!row) return null;
-    const legacy = supabaseAppUserToLegacyUser(row);
-    if (['banned', 'deleted', 'deletion_pending'].includes(String(legacy.status || 'active'))) return null;
+  const row = await getSupabaseAppUserRowByAnyId(c, userId);
+  if (!row) return null;
+  const legacy = supabaseAppUserToLegacyUser(row);
+  if (['banned', 'deleted', 'deletion_pending'].includes(String(legacy.status || 'active'))) return null;
 
-    const metadata = parseJsonObject(row?.metadata);
-    let role = normalizeAdminRole((metadata as any).admin_role || (metadata as any).role);
-    const candidateIds = Array.from(new Set([
-      publicId(row?.id, 120),
-      isUuidText(row?.supabase_user_id) || '',
-      publicId(userId, 120),
-    ].filter(Boolean)));
-    if (candidateIds.length) {
-      const roleRows = await supabaseAdminQueryRows(c, 'app_admin_roles', {
-        select: 'user_id,role',
-        filters: { user_id: postgrestInFilter(candidateIds) },
-        limit: 10,
-      }).catch((error: any) => {
-        console.warn(JSON.stringify({ event: 'supabase_admin_role_lookup_failed', code: getErrorCode(error).slice(0, 180) }));
-        return [];
-      });
-      role = normalizeAdminRole(roleRows.find((roleRow: any) => normalizeAdminRole(roleRow?.role))?.role) || role;
-    }
-    if (isOwnerUsername(c, legacy.username) || isOwnerEmail(c, legacy.email)) role = 'owner';
-    if (!role && ((metadata as any).is_admin === true || Number((metadata as any).is_admin || 0) === 1)) role = 'admin';
-    if (!role) return null;
-    return { userId: publicId(row.id, 120), role, user: { ...legacy, admin_role: role } };
+  const metadata = parseJsonObject(row?.metadata);
+  let role = normalizeAdminRole((metadata as any).admin_role || (metadata as any).role);
+  const candidateIds = Array.from(new Set([
+    publicId(row?.id, 120),
+    isUuidText(row?.supabase_user_id) || '',
+    publicId(userId, 120),
+  ].filter(Boolean)));
+  if (candidateIds.length) {
+    const roleRows = await supabaseAdminQueryRows(c, 'app_admin_roles', {
+      select: 'user_id,role',
+      filters: { user_id: postgrestInFilter(candidateIds) },
+      limit: 10,
+    }).catch((error: any) => {
+      console.warn(JSON.stringify({ event: 'supabase_admin_role_lookup_failed', code: getErrorCode(error).slice(0, 180) }));
+      return [];
+    });
+    role = normalizeAdminRole(roleRows.find((roleRow: any) => normalizeAdminRole(roleRow?.role))?.role) || role;
   }
-
-  await ensureAdminModerationSchema(c.env.DB);
-  const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
-  if (!user || ['banned', 'deleted'].includes(String(user.status || 'active'))) return null;
-
-  let role = normalizeAdminRole(user.admin_role);
-  const roleRow: any = await c.env.DB.prepare('SELECT role FROM admin_roles WHERE user_id = ?').bind(userId).first();
-  role = normalizeAdminRole(roleRow?.role) || role;
-  if (isOwnerUsername(c, user.username) || isOwnerEmail(c, user.email)) role = 'owner';
-  if (!role && Number(user.is_admin || 0) === 1) role = 'admin';
+  if (isOwnerUsername(c, legacy.username) || isOwnerEmail(c, legacy.email)) role = 'owner';
+  if (!role && ((metadata as any).is_admin === true || Number((metadata as any).is_admin || 0) === 1)) role = 'admin';
   if (!role) return null;
-  return { userId, role, user };
+  return { userId: publicId(row.id, 120), role, user: { ...legacy, admin_role: role } };
 }
 
 async function requireAdminRole(c: any, permission = 'admin:read'): Promise<AdminContext> {
@@ -16619,37 +16605,52 @@ function governanceError(c: any, error: any) {
 }
 
 async function logGovernanceAction(c: any, adminId: string, actionType: string, targetType: string, targetId: string, details: any = {}) {
-  await ensureGovernanceSchema(c.env.DB);
   const ts = now();
-  await c.env.DB.prepare(
-    'INSERT INTO admin_actions (id, admin_id, action_type, target_type, target_id, details, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
-  ).bind(uuid(), adminId, actionType, targetType, targetId, JSON.stringify(scrubLogMetadata(details || {})), ts).run();
-  try {
-    const admin = await getAdminContext(c);
-    if (admin && admin.userId === adminId) {
-      await c.env.DB.batch([
-        c.env.DB.prepare(
-          `INSERT INTO audit_logs (
-             id, actor_admin_user_id, actor_role, action_type, target_type, target_id, target_user_id,
-             reason, internal_note, before_state, after_state, ip_hash, request_id, created_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '{}', '{}', ?, ?, ?)`
-        ).bind(uuid(), adminId, admin.role, cleanText(actionType, 80), cleanText(targetType, 60), publicId(targetId, 160), cleanText((details || {}).target_user_id || '', 120), cleanMultilineText((details || {}).reason || '', 800), cleanMultilineText((details || {}).note || (details || {}).admin_notes || '', 1000), await safeRequestIpHash(c), cleanText(c.get?.('requestId') || '', 120), ts),
-        c.env.DB.prepare(
-          `INSERT INTO moderation_actions (
-             id, actor_admin_user_id, actor_role, action_type, target_type, target_id, target_user_id, reason, note, created_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        ).bind(uuid(), adminId, admin.role, cleanText(actionType, 80), cleanText(targetType, 60), publicId(targetId, 160), cleanText((details || {}).target_user_id || '', 120), cleanMultilineText((details || {}).reason || '', 800), cleanMultilineText((details || {}).note || (details || {}).admin_notes || '', 1000), ts),
-      ]);
-    }
-  } catch {
-    // Legacy governance routes still keep admin_actions if the richer audit schema is not ready yet.
-  }
-}
-
-async function safeRequestIpHash(c: any): Promise<string> {
-  const ip = clientIp(c);
-  const secret = String(c.env.ABUSE_SIGNAL_SECRET || c.env.JWT_SECRET || 'captro-admin-audit');
-  return sha256Hex(`${secret}:admin:${ip}`);
+  if (!supabasePrimaryConfigured(c)) throw new Error('SUPABASE_PRIMARY_REQUIRED');
+  const admin = await getAdminContext(c);
+  const actorId = publicId(admin?.userId || adminId, 120);
+  const actorRole = normalizeAdminRole(admin?.role) || 'admin';
+  const requestId = cleanText(c.get?.('requestId') || c.req.header('X-Request-ID') || '', 120);
+  const cleanActionType = cleanText(actionType, 80);
+  const cleanTargetType = cleanText(targetType, 60);
+  const cleanTargetId = publicId(targetId, 160);
+  const targetUserId = cleanText((details || {}).target_user_id || '', 120);
+  const reason = cleanMultilineText((details || {}).reason || '', 800);
+  const note = cleanMultilineText((details || {}).note || (details || {}).admin_notes || '', 1000);
+  await Promise.all([
+    supabaseAdminUpsert(c, 'app_audit_logs', [{
+      id: uuid(),
+      actor_admin_user_id: actorId,
+      actor_role: actorRole,
+      action_type: cleanActionType,
+      target_type: cleanTargetType,
+      target_id: cleanTargetId,
+      target_user_id: targetUserId,
+      reason,
+      internal_note: note,
+      before_state: {},
+      after_state: scrubLogMetadata(details || {}),
+      request_id: requestId,
+      metadata: { source: 'cloudflare_worker_governance' },
+      legacy_created_at: ts,
+      created_at: ts,
+    }], 'id'),
+    supabaseAdminUpsert(c, 'app_moderation_actions', [{
+      id: uuid(),
+      actor_admin_user_id: actorId,
+      actor_role: actorRole,
+      action_type: cleanActionType,
+      target_type: cleanTargetType,
+      target_id: cleanTargetId,
+      target_user_id: targetUserId,
+      reason,
+      note,
+      metadata: { request_id: requestId, source: 'cloudflare_worker_governance' },
+      legacy_created_at: ts,
+      created_at: ts,
+      updated_at: ts,
+    }], 'id'),
+  ]);
 }
 
 function safeJsonState(value: any): string {
@@ -16676,62 +16677,40 @@ async function writeAdminAuditLog(c: any, admin: AdminContext, input: {
   const targetType = cleanText(input.targetType, 60);
   const targetId = publicId(input.targetId, 160);
 
-  if (supabasePrimaryConfigured(c)) {
-    await Promise.all([
-      supabaseAdminUpsert(c, 'app_audit_logs', [{
-        id: uuid(),
-        actor_admin_user_id: admin.userId,
-        actor_role: admin.role,
-        action_type: actionType,
-        target_type: targetType,
-        target_id: targetId,
-        target_user_id: targetUserId,
-        reason,
-        internal_note: note,
-        before_state: scrubLogMetadata(input.beforeState || {}),
-        after_state: scrubLogMetadata(input.afterState || {}),
-        request_id: requestId,
-        metadata: { source: 'cloudflare_worker_primary' },
-        legacy_created_at: ts,
-        created_at: ts,
-      }], 'id'),
-      supabaseAdminUpsert(c, 'app_moderation_actions', [{
-        id: uuid(),
-        actor_admin_user_id: admin.userId,
-        actor_role: admin.role,
-        action_type: actionType,
-        target_type: targetType,
-        target_id: targetId,
-        target_user_id: targetUserId,
-        reason,
-        note,
-        metadata: { request_id: requestId, source: 'cloudflare_worker_primary' },
-        legacy_created_at: ts,
-        created_at: ts,
-        updated_at: ts,
-      }], 'id'),
-    ]);
-    return;
-  }
-
-  await ensureAdminModerationSchema(c.env.DB);
-  const ipHash = await safeRequestIpHash(c);
-  await c.env.DB.batch([
-    c.env.DB.prepare(
-      `INSERT INTO audit_logs (
-         id, actor_admin_user_id, actor_role, action_type, target_type, target_id, target_user_id,
-         reason, internal_note, before_state, after_state, ip_hash, request_id, created_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(uuid(), admin.userId, admin.role, actionType, targetType, targetId, targetUserId, reason, note, safeJsonState(input.beforeState), safeJsonState(input.afterState), ipHash, requestId, ts),
-    c.env.DB.prepare(
-      `INSERT INTO moderation_actions (
-         id, actor_admin_user_id, actor_role, action_type, target_type, target_id,
-         target_user_id, reason, note, created_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(uuid(), admin.userId, admin.role, actionType, targetType, targetId, targetUserId, reason, note, ts),
-    c.env.DB.prepare(
-      'INSERT INTO admin_actions (id, admin_id, action_type, target_type, target_id, details, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
-    ).bind(uuid(), admin.userId, actionType, targetType, targetId, JSON.stringify(scrubLogMetadata({ target_user_id: targetUserId, reason, note })), ts),
+  if (!supabasePrimaryConfigured(c)) throw new Error('SUPABASE_PRIMARY_REQUIRED');
+  await Promise.all([
+    supabaseAdminUpsert(c, 'app_audit_logs', [{
+      id: uuid(),
+      actor_admin_user_id: admin.userId,
+      actor_role: admin.role,
+      action_type: actionType,
+      target_type: targetType,
+      target_id: targetId,
+      target_user_id: targetUserId,
+      reason,
+      internal_note: note,
+      before_state: scrubLogMetadata(input.beforeState || {}),
+      after_state: scrubLogMetadata(input.afterState || {}),
+      request_id: requestId,
+      metadata: { source: 'cloudflare_worker_primary' },
+      legacy_created_at: ts,
+      created_at: ts,
+    }], 'id'),
+    supabaseAdminUpsert(c, 'app_moderation_actions', [{
+      id: uuid(),
+      actor_admin_user_id: admin.userId,
+      actor_role: admin.role,
+      action_type: actionType,
+      target_type: targetType,
+      target_id: targetId,
+      target_user_id: targetUserId,
+      reason,
+      note,
+      metadata: { request_id: requestId, source: 'cloudflare_worker_primary' },
+      legacy_created_at: ts,
+      created_at: ts,
+      updated_at: ts,
+    }], 'id'),
   ]);
 }
 
