@@ -471,9 +471,9 @@ async function getOptionalUserId(c: any): Promise<string> {
   }
 }
 
-async function createToken(userId: string, secret: string): Promise<string> {
+async function createToken(userId: string, secret: string, claims: Record<string, unknown> = {}): Promise<string> {
   const { SignJWT } = await import('jose');
-  return new SignJWT({ sub: userId })
+  return new SignJWT({ ...claims, sub: userId, userId })
     .setProtectedHeader({ alg: 'HS256' })
     .setIssuedAt()
     .setExpirationTime('30d')
@@ -10699,7 +10699,9 @@ async function issueCaptroTokenForSupabaseAccessToken(c: any, supabaseAccessToke
     providerUserId: extras.oauth_subject || extras.provider_user_id || user.oauth_subject || payload.sub,
     email: payload.email || user.email,
   });
-  const token = await createToken(user.id, getJwtSecret(c));
+  const token = await createToken(user.id, getJwtSecret(c), {
+    supabase_sub: payload.sub,
+  });
   runBackgroundTask(c, 'supabase_login_profile_write_through_failed', async () => {
     await syncSupabaseAuthMetadataForUser(c, user);
     if (!supabasePrimaryConfigured(c)) await mirrorLegacyUserToSupabase(c, user.id);
@@ -12650,92 +12652,32 @@ api.post('/auth/register', async (c) => {
     const usernameCheck = validateUsernameForAccount(username);
     if (!usernameCheck.ok) return c.json({ detail: usernameCheck.detail }, 400);
     const safeUsername = usernameCheck.username;
-    if (supabasePrimaryConfigured(c)) {
-      const [emailMatches, usernameMatches] = await Promise.all([
-        supabaseAdminQueryRows(c, 'app_users', {
-          select: SUPABASE_APP_USER_SELECT,
-          filters: { email: postgrestEqFilter(email) },
-          limit: 1,
-        }),
-        supabaseAdminQueryRows(c, 'app_users', {
-          select: SUPABASE_APP_USER_SELECT,
-          filters: { username: postgrestEqFilter(safeUsername) },
-          limit: 1,
-        }),
-      ]);
-      const existing = emailMatches[0] || usernameMatches[0];
-      if (existing) {
-        const existingUser = supabaseAppUserToLegacyUser(existing);
-        await logSecurityEvent(c, 'signup_duplicate_blocked', '', { username: safeUsername });
-        if (String(existingUser.status || 'active') === 'deletion_pending') {
-          return c.json({
-            detail: 'This account is scheduled for deletion. Sign in to restore it.',
-            code: 'ACCOUNT_DELETION_PENDING',
-            deletion_scheduled_at: existingUser.deletion_scheduled_at || null,
-          }, 409);
-        }
-        return c.json({ detail: 'Email or username already exists' }, 400);
-      }
-
-      const authResult = await createOrFindSupabaseAuthUser(c, {
-        email,
-        password,
-        username: safeUsername,
-        fullName,
-        provider: 'email',
-      });
-      if (!authResult.user?.id) throw new Error('SUPABASE_AUTH_CREATE_EMPTY');
-
-      let appUser: any;
-      try {
-        appUser = await findOrCreateSupabaseAppUser(c, {
-          sub: authResult.user.id,
-          email,
-          user_metadata: {
-            username: safeUsername,
-            full_name: fullName,
-          },
-          app_metadata: {
-            provider: 'email',
-          },
-        }, {
-          email,
-          username: safeUsername,
-          full_name: fullName,
-          provider: 'email',
-          provider_user_id: authResult.user.id,
-        });
-      } catch (insertError) {
-        if (authResult.created) await deleteSupabaseAuthUser(c, authResult.user.id);
-        throw insertError;
-      }
-
-      await recordAbuseSignals(c, appUser.id, 'signup', { username: safeUsername, display_name: fullName });
-      await upsertAccountIdentity(c, { userId: appUser.id, provider: 'email', providerUserId: authResult.user.id, email });
-      await logSecurityEvent(c, 'signup_created', appUser.id, { username: safeUsername });
-      runBackgroundTask(c, 'supabase_signup_metadata_sync_failed', async () => {
-        await syncSupabaseAuthMetadataForUser(c, appUser);
-      });
-      const token = await createToken(appUser.id, jwtSecret);
-      return c.json({ access_token: token, token_type: 'bearer', user: authUserPayload(appUser) });
-    }
-    await ensureAccountDeletionSchema(c.env.DB);
-    const existing: any = await c.env.DB.prepare('SELECT id, status, deletion_scheduled_at FROM users WHERE LOWER(email) = ? OR LOWER(username) = ?')
-      .bind(email, safeUsername.toLowerCase()).first();
+    const [emailMatches, usernameMatches] = await Promise.all([
+      supabaseAdminQueryRows(c, 'app_users', {
+        select: SUPABASE_APP_USER_SELECT,
+        filters: { email: postgrestEqFilter(email) },
+        limit: 1,
+      }),
+      supabaseAdminQueryRows(c, 'app_users', {
+        select: SUPABASE_APP_USER_SELECT,
+        filters: { username: postgrestEqFilter(safeUsername) },
+        limit: 1,
+      }),
+    ]);
+    const existing = emailMatches[0] || usernameMatches[0];
     if (existing) {
+      const existingUser = supabaseAppUserToLegacyUser(existing);
       await logSecurityEvent(c, 'signup_duplicate_blocked', '', { username: safeUsername });
-      if (String(existing.status || 'active') === 'deletion_pending') {
+      if (String(existingUser.status || 'active') === 'deletion_pending') {
         return c.json({
           detail: 'This account is scheduled for deletion. Sign in to restore it.',
           code: 'ACCOUNT_DELETION_PENDING',
-          deletion_scheduled_at: existing.deletion_scheduled_at || null,
+          deletion_scheduled_at: existingUser.deletion_scheduled_at || null,
         }, 409);
       }
       return c.json({ detail: 'Email or username already exists' }, 400);
     }
 
-    await ensureOAuthSchema(c.env.DB);
-    await ensureSupabaseAuthSchema(c.env.DB);
     const authResult = await createOrFindSupabaseAuthUser(c, {
       email,
       password,
@@ -12744,29 +12686,38 @@ api.post('/auth/register', async (c) => {
       provider: 'email',
     });
     if (!authResult.user?.id) throw new Error('SUPABASE_AUTH_CREATE_EMPTY');
-    const preferredId = isUuidText(authResult.user.id);
-    const idOwner = preferredId ? await c.env.DB.prepare('SELECT id FROM users WHERE id = ?').bind(preferredId).first() : null;
-    const id = preferredId && !idOwner ? preferredId : uuid();
-    const hash = await hashPassword(password);
+    let appUser: any;
     try {
-      await c.env.DB.prepare(
-        'INSERT INTO users (id, email, username, full_name, password_hash, supabase_user_id, oauth_provider, oauth_subject) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-      ).bind(id, email, safeUsername, fullName, hash, authResult.user.id, 'supabase', authResult.user.id).run();
+      appUser = await findOrCreateSupabaseAppUser(c, {
+        sub: authResult.user.id,
+        email,
+        user_metadata: {
+          username: safeUsername,
+          full_name: fullName,
+        },
+        app_metadata: {
+          provider: 'email',
+        },
+      }, {
+        email,
+        username: safeUsername,
+        full_name: fullName,
+        provider: 'email',
+        provider_user_id: authResult.user.id,
+      });
     } catch (insertError) {
       if (authResult.created) await deleteSupabaseAuthUser(c, authResult.user.id);
       throw insertError;
     }
-    // Security-sensitive: store only hashed abuse signals for admin review of possible ban evasion.
-    await recordAbuseSignals(c, id, 'signup', { username: safeUsername, display_name: fullName });
-    await upsertAccountIdentity(c, { userId: id, provider: 'email', email });
-    await logSecurityEvent(c, 'signup_created', id, { username: safeUsername });
-    const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(id).first();
+
+    await recordAbuseSignals(c, appUser.id, 'signup', { username: safeUsername, display_name: fullName });
+    await upsertAccountIdentity(c, { userId: appUser.id, provider: 'email', providerUserId: authResult.user.id, email });
+    await logSecurityEvent(c, 'signup_created', appUser.id, { username: safeUsername });
     runBackgroundTask(c, 'supabase_signup_metadata_sync_failed', async () => {
-      await syncSupabaseAuthMetadataForUser(c, user);
-      await mirrorLegacyUserToSupabase(c, user.id);
+      await syncSupabaseAuthMetadataForUser(c, appUser);
     });
-    const token = await createToken(id, jwtSecret);
-    return c.json({ access_token: token, token_type: 'bearer', user: authUserPayload(user) });
+    const token = await createToken(appUser.id, jwtSecret, { supabase_sub: authResult.user.id });
+    return c.json({ access_token: token, token_type: 'bearer', user: authUserPayload(appUser) });
   } catch (error: any) {
     const code = getErrorCode(error);
     if (code === 'JWT_SECRET_MISSING') return c.json({ detail: 'Auth service is not configured.' }, 503);
@@ -12801,7 +12752,6 @@ api.post('/auth/login', async (c) => {
     const ipLimited = await enforceRateLimit(c, 'auth_login_ip', clientIp(c), 80, 300);
     if (ipLimited) return ipLimited;
 
-    const jwtSecret = getJwtSecret(c);
     try {
       const supabaseSession = await signInSupabasePassword(c, email, password);
       const session = await issueCaptroTokenForSupabaseAccessToken(c, supabaseSession.access_token, {
@@ -12813,62 +12763,16 @@ api.post('/auth/login', async (c) => {
     } catch (error: any) {
       const code = getErrorCode(error);
       if (code === 'ACCOUNT_DISABLED') return c.json({ detail: 'This account cannot be used.' }, 403);
-      if (supabasePrimaryConfigured(c)) {
-        await logSecurityEvent(c, 'login_failed', '', { reason: 'supabase_password' });
-        if (code === 'SUPABASE_AUTH_KEY_MISSING' || code === 'SUPABASE_NOT_CONFIGURED' || code === 'SUPABASE_SERVICE_ROLE_MISSING') {
-          return c.json({ detail: 'Auth service is not configured.' }, 503);
-        }
-        if (code.startsWith('SUPABASE_PASSWORD_SIGN_IN_FAILED')) {
-          return c.json({ detail: 'Invalid email or password.' }, 401);
-        }
-        console.warn(JSON.stringify({ event: 'supabase_password_login_failed', code: code.slice(0, 160) }));
-        return c.json({ detail: 'Could not sign in right now.' }, 502);
+      await logSecurityEvent(c, 'login_failed', '', { reason: 'supabase_password' });
+      if (code === 'SUPABASE_AUTH_KEY_MISSING' || code === 'SUPABASE_NOT_CONFIGURED' || code === 'SUPABASE_SERVICE_ROLE_MISSING') {
+        return c.json({ detail: 'Auth service is not configured.' }, 503);
       }
-      if (!code.startsWith('SUPABASE_PASSWORD_SIGN_IN_FAILED') && code !== 'SUPABASE_AUTH_KEY_MISSING' && code !== 'SUPABASE_NOT_CONFIGURED' && code !== 'SUPABASE_SERVICE_ROLE_MISSING') {
-        console.warn(JSON.stringify({ event: 'supabase_password_login_bridge_failed', code: code.slice(0, 160) }));
+      if (code.startsWith('SUPABASE_PASSWORD_SIGN_IN_FAILED')) {
+        return c.json({ detail: 'Invalid email or password.' }, 401);
       }
+      console.warn(JSON.stringify({ event: 'supabase_password_login_failed', code: code.slice(0, 160) }));
+      return c.json({ detail: 'Could not sign in right now.' }, 502);
     }
-
-    let user: any = await c.env.DB.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
-    if (!user || !(await verifyPassword(password, user.password_hash))) {
-      if (user?.id) await recordAbuseSignals(c, user.id, 'failed_login', {});
-      await logSecurityEvent(c, 'login_failed', user?.id || '', { reason: user ? 'password' : 'credentials' });
-      return c.json({ detail: 'Invalid email or password.' }, 401);
-    }
-    if (['banned', 'suspended', 'deleted'].includes(String(user.status || 'active'))) {
-      await recordAbuseSignals(c, user.id, 'banned_login', {});
-      await logSecurityEvent(c, 'login_banned_blocked', user.id, {});
-      return c.json({ detail: 'This account cannot be used.' }, 403);
-    }
-    await upsertAccountIdentity(c, { userId: user.id, provider: 'email', email });
-    // Auto-migrate legacy SHA-256 hash to bcrypt on successful login
-    if (user.password_hash && !user.password_hash.startsWith('$2')) {
-      try {
-        const bcryptHash = await hashPassword(password);
-        await c.env.DB.prepare('UPDATE users SET password_hash = ? WHERE id = ?').bind(bcryptHash, user.id).run();
-      } catch {}
-    }
-    if (!user.supabase_user_id) {
-      try {
-        const authResult = await createOrFindSupabaseAuthUser(c, {
-          email,
-          password,
-          username: publicUsernameFor(user),
-          fullName: user.full_name,
-          profileImage: user.profile_image,
-          provider: 'email',
-          appUserId: user.id,
-        });
-        if (authResult.user?.id) {
-          await linkSupabaseAuthUser(c, user.id, authResult.user.id);
-          user = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(user.id).first();
-        }
-      } catch (error: any) {
-        console.warn(JSON.stringify({ event: 'legacy_user_supabase_auth_link_failed', user_id: user.id, code: getErrorCode(error).slice(0, 160) }));
-      }
-    }
-    const token = await createToken(user.id, jwtSecret);
-    return c.json({ access_token: token, token_type: 'bearer', user: authUserPayload(user) });
   } catch (error: any) {
     if (getErrorCode(error) === 'JWT_SECRET_MISSING') return c.json({ detail: 'Auth service is not configured.' }, 503);
     return c.json({ detail: 'Could not log in' }, 500);
@@ -12879,57 +12783,12 @@ api.post('/auth/phone/start', async (c) => {
   try {
     const supabaseRequired = requireSupabasePrimaryDatabase(c, 'phone_sign_in_start');
     if (supabaseRequired) return supabaseRequired;
-    if (supabasePrimaryConfigured(c)) {
-      return c.json({
-        detail: 'Phone sign in is not available. Use email, Google, or Apple sign in.',
-        code: 'PHONE_SIGN_IN_DISABLED',
-      }, 410);
-    }
-    const bodyTooLarge = rejectLargeRequest(c, 40_000);
-    if (bodyTooLarge) return bodyTooLarge;
-    const body: any = await c.req.json().catch(() => ({}));
-    const normalizedPhone = normalizePhone(body.phone);
-    if (!normalizedPhone) return c.json({ detail: 'Enter a valid phone number with country code.' }, 400);
-    const limited = await enforceRateLimit(c, 'phone_start', `${clientIp(c)}:${normalizedPhone}`, 5, 600);
-    if (limited) return limited;
-    await ensurePhoneAuthSchema(c.env.DB);
-
-    const startedWithVerify = await startTwilioVerification(c, normalizedPhone);
-    if (startedWithVerify) {
-      return c.json({
-        detail: 'We sent a sign-in code to your phone.',
-        delivery: 'twilio_verify',
-      });
-    }
-
-    const code = createPhoneCode();
-    const jwtSecret = getJwtSecret(c);
-    const codeHash = await sha256Hex(`${normalizedPhone}:${code}:${jwtSecret}`);
-    const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
-
-    await c.env.DB.prepare(
-      'INSERT INTO phone_login_codes (id, phone, code_hash, expires_at) VALUES (?, ?, ?, ?)'
-    ).bind(uuid(), normalizedPhone, codeHash, expiresAt).run();
-
-    const delivery = await sendLegacyPhoneCode(c, normalizedPhone, code);
-    const payload: any = {
-      detail: delivery === 'legacy_sms'
-        ? 'We sent a sign-in code to your phone.'
-        : 'Twilio Verify is not configured yet, so use the development code shown here.',
-      delivery,
-    };
-
-    if (delivery === 'development') {
-      payload.dev_code = code;
-    }
-
-    return c.json(payload);
+    return c.json({
+      detail: 'Phone sign in is not available. Use email, Google, or Apple sign in.',
+      code: 'PHONE_SIGN_IN_DISABLED',
+    }, 410);
   } catch (error: any) {
     const code = String(error?.message || '');
-    if (code === 'PHONE_INVALID') return c.json({ detail: 'Enter a valid phone number with country code.' }, 400);
-    if (code === 'JWT_SECRET_MISSING') return c.json({ detail: 'Auth service is not configured.' }, 503);
-    if (code.startsWith('PHONE_VERIFY_START_FAILED')) return twilioVerifyStartErrorResponse(c, code);
-    if (code === 'PHONE_SMS_FAILED') return c.json({ detail: 'Could not send SMS code. Check Twilio settings.' }, 502);
     console.error(JSON.stringify({ event: 'phone_login_start_failed', error: code.slice(0, 180) }));
     return c.json({ detail: 'Could not start phone sign in. Please try again in a moment.', code: 'PHONE_START_FAILED' }, 500);
   }
@@ -12939,63 +12798,12 @@ api.post('/auth/phone/verify', async (c) => {
   try {
     const supabaseRequired = requireSupabasePrimaryDatabase(c, 'phone_sign_in_verify');
     if (supabaseRequired) return supabaseRequired;
-    if (supabasePrimaryConfigured(c)) {
-      return c.json({
-        detail: 'Phone sign in is not available. Use email, Google, or Apple sign in.',
-        code: 'PHONE_SIGN_IN_DISABLED',
-      }, 410);
-    }
-    const bodyTooLarge = rejectLargeRequest(c, 40_000);
-    if (bodyTooLarge) return bodyTooLarge;
-    const body: any = await c.req.json().catch(() => ({}));
-    const normalizedPhone = normalizePhone(body.phone);
-    if (!normalizedPhone) return c.json({ detail: 'Enter a valid phone number with country code.' }, 400);
-    const limited = await enforceRateLimit(c, 'phone_verify', `${clientIp(c)}:${normalizedPhone}`, 12, 600);
-    if (limited) return limited;
-    const code = body.code;
-    const normalizedCode = String(code || '').replace(/\D/g, '');
-    if (normalizedCode.length !== 6) {
-      return c.json({ detail: 'Enter the 6-digit verification code.' }, 400);
-    }
-    await ensurePhoneAuthSchema(c.env.DB);
-
-    if (getTwilioVerifyConfig(c)) {
-      const verified = await checkTwilioVerification(c, normalizedPhone, normalizedCode);
-      if (!verified) {
-        return c.json({ detail: 'Invalid or expired verification code.' }, 401);
-      }
-
-      const user = await findOrCreatePhoneUser(c, normalizedPhone, body.full_name);
-      const token = await createToken(user.id, getJwtSecret(c));
-      return c.json({ access_token: token, token_type: 'bearer', user: authUserPayload(user) });
-    }
-
-    const phoneCode: any = await c.env.DB.prepare(
-      'SELECT * FROM phone_login_codes WHERE phone = ? AND consumed_at IS NULL ORDER BY created_at DESC LIMIT 1'
-    ).bind(normalizedPhone).first();
-
-    if (!phoneCode) return c.json({ detail: 'No active code for this phone number.' }, 401);
-    if ((phoneCode.attempts || 0) >= 5) return c.json({ detail: 'Too many attempts. Request a new code.' }, 429);
-    if (Date.parse(phoneCode.expires_at) < Date.now()) return c.json({ detail: 'Code expired. Request a new code.' }, 401);
-
-    const jwtSecret = getJwtSecret(c);
-    const expectedHash = await sha256Hex(`${normalizedPhone}:${normalizedCode}:${jwtSecret}`);
-    if (expectedHash !== phoneCode.code_hash) {
-      await c.env.DB.prepare('UPDATE phone_login_codes SET attempts = attempts + 1 WHERE id = ?').bind(phoneCode.id).run();
-      return c.json({ detail: 'Invalid verification code.' }, 401);
-    }
-
-    await c.env.DB.prepare('UPDATE phone_login_codes SET consumed_at = datetime(\'now\') WHERE id = ?').bind(phoneCode.id).run();
-
-    const user = await findOrCreatePhoneUser(c, normalizedPhone, body.full_name);
-
-    const token = await createToken(user.id, jwtSecret);
-    return c.json({ access_token: token, token_type: 'bearer', user: authUserPayload(user) });
+    return c.json({
+      detail: 'Phone sign in is not available. Use email, Google, or Apple sign in.',
+      code: 'PHONE_SIGN_IN_DISABLED',
+    }, 410);
   } catch (error: any) {
     const code = String(error?.message || '');
-    if (code === 'PHONE_INVALID') return c.json({ detail: 'Enter a valid phone number with country code.' }, 400);
-    if (code === 'JWT_SECRET_MISSING') return c.json({ detail: 'Auth service is not configured.' }, 503);
-    if (code.startsWith('PHONE_VERIFY_CHECK_FAILED')) return c.json({ detail: 'Could not check verification code. Try again.', code }, 502);
     return c.json({ detail: 'Could not verify phone sign in.' }, 500);
   }
 });
@@ -13023,7 +12831,6 @@ api.post('/auth/oauth/google', async (c) => {
     if (supabaseRequired) return supabaseRequired;
     const limited = await enforceRateLimit(c, 'oauth_google', clientIp(c), 30, 300);
     if (limited) return limited;
-    if (!supabasePrimaryConfigured(c)) await ensureOAuthSchema(c.env.DB);
     const body: any = await c.req.json().catch(() => ({}));
     const unknown = rejectUnknownFields(c, body, ['id_token', 'idToken', 'nonce', 'raw_nonce', 'rawNonce']);
     if (unknown) return unknown;
@@ -13045,36 +12852,14 @@ api.post('/auth/oauth/google', async (c) => {
       const code = getErrorCode(error);
       if (code === 'ACCOUNT_DISABLED') throw error;
       console.warn(JSON.stringify({ event: 'supabase_google_id_token_failed', code: code.slice(0, 160) }));
-      if (supabasePrimaryConfigured(c)) {
-        if (code === 'SUPABASE_AUTH_KEY_MISSING' || code === 'SUPABASE_NOT_CONFIGURED' || code === 'SUPABASE_SERVICE_ROLE_MISSING') {
-          return c.json({ detail: 'Google sign in is not configured.' }, 503);
-        }
-        if (code.startsWith('SUPABASE_ID_TOKEN_SIGN_IN_FAILED')) {
-          return c.json({ detail: 'Google OAuth login failed' }, 401);
-        }
-        return c.json({ detail: 'Could not finish Google sign in right now.' }, 502);
+      if (code === 'SUPABASE_AUTH_KEY_MISSING' || code === 'SUPABASE_NOT_CONFIGURED' || code === 'SUPABASE_SERVICE_ROLE_MISSING') {
+        return c.json({ detail: 'Google sign in is not configured.' }, 503);
       }
+      if (code.startsWith('SUPABASE_ID_TOKEN_SIGN_IN_FAILED')) {
+        return c.json({ detail: 'Google OAuth login failed' }, 401);
+      }
+      return c.json({ detail: 'Could not finish Google sign in right now.' }, 502);
     }
-
-    let user = await findOrCreateOAuthUser(
-      c,
-      'google',
-      googleProfile.subject,
-      googleProfile.email,
-      googleProfile.fullName,
-      googleProfile.profileImage
-    );
-    try {
-      user = await mirrorOAuthUserToSupabaseAuth(c, user, 'google', googleProfile.subject);
-    } catch (error: any) {
-      console.warn(JSON.stringify({ event: 'supabase_google_auth_mirror_failed', code: getErrorCode(error).slice(0, 160) }));
-    }
-    if (['banned', 'suspended', 'deleted'].includes(String(user.status || 'active'))) {
-      await logSecurityEvent(c, 'login_banned_blocked', user.id, { provider: 'google' });
-      return c.json({ detail: 'This account cannot be used.' }, 403);
-    }
-    const token = await createToken(user.id, getJwtSecret(c));
-    return c.json({ access_token: token, token_type: 'bearer', user: authUserPayload(user) });
   } catch (error: any) {
     const code = String(error?.message || '');
     if (code === 'GOOGLE_OAUTH_NOT_CONFIGURED') {
@@ -13098,7 +12883,6 @@ api.post('/auth/oauth/apple', async (c) => {
     if (supabaseRequired) return supabaseRequired;
     const limited = await enforceRateLimit(c, 'oauth_apple', clientIp(c), 30, 300);
     if (limited) return limited;
-    if (!supabasePrimaryConfigured(c)) await ensureOAuthSchema(c.env.DB);
     const body: any = await c.req.json().catch(() => ({}));
     const unknown = rejectUnknownFields(c, body, ['id_token', 'idToken', 'email', 'full_name', 'fullName', 'apple_user', 'appleUser', 'nonce', 'raw_nonce', 'rawNonce']);
     if (unknown) return unknown;
@@ -13122,36 +12906,14 @@ api.post('/auth/oauth/apple', async (c) => {
       const code = getErrorCode(error);
       if (code === 'ACCOUNT_DISABLED') throw error;
       console.warn(JSON.stringify({ event: 'supabase_apple_id_token_failed', code: code.slice(0, 160) }));
-      if (supabasePrimaryConfigured(c)) {
-        if (code === 'SUPABASE_AUTH_KEY_MISSING' || code === 'SUPABASE_NOT_CONFIGURED' || code === 'SUPABASE_SERVICE_ROLE_MISSING') {
-          return c.json({ detail: 'Apple sign in is not configured.' }, 503);
-        }
-        if (code.startsWith('SUPABASE_ID_TOKEN_SIGN_IN_FAILED')) {
-          return c.json({ detail: 'Apple OAuth login failed' }, 401);
-        }
-        return c.json({ detail: 'Could not finish Apple sign in right now.' }, 502);
+      if (code === 'SUPABASE_AUTH_KEY_MISSING' || code === 'SUPABASE_NOT_CONFIGURED' || code === 'SUPABASE_SERVICE_ROLE_MISSING') {
+        return c.json({ detail: 'Apple sign in is not configured.' }, 503);
       }
+      if (code.startsWith('SUPABASE_ID_TOKEN_SIGN_IN_FAILED')) {
+        return c.json({ detail: 'Apple OAuth login failed' }, 401);
+      }
+      return c.json({ detail: 'Could not finish Apple sign in right now.' }, 502);
     }
-
-    let user = await findOrCreateOAuthUser(
-      c,
-      'apple',
-      appleSubject,
-      appleProfile.email || clientEmail,
-      clientFullName || appleProfile.fullName || 'Apple User',
-      appleProfile.profileImage
-    );
-    try {
-      user = await mirrorOAuthUserToSupabaseAuth(c, user, 'apple', appleSubject);
-    } catch (error: any) {
-      console.warn(JSON.stringify({ event: 'supabase_apple_auth_mirror_failed', code: getErrorCode(error).slice(0, 160) }));
-    }
-    if (['banned', 'suspended', 'deleted'].includes(String(user.status || 'active'))) {
-      await logSecurityEvent(c, 'login_banned_blocked', user.id, { provider: 'apple' });
-      return c.json({ detail: 'This account cannot be used.' }, 403);
-    }
-    const token = await createToken(user.id, getJwtSecret(c));
-    return c.json({ access_token: token, token_type: 'bearer', user: authUserPayload(user) });
   } catch (error: any) {
     const code = getErrorCode(error);
     if (code === 'EMAIL_REQUIRED') return c.json({ detail: 'Apple account email is required on first sign-in' }, 400);
@@ -13174,13 +12936,7 @@ api.get('/auth/me', authMiddleware, async (c) => {
   const userId = getUserId(c);
   const supabaseRequired = requireSupabasePrimaryDatabase(c, 'auth_me');
   if (supabaseRequired) return supabaseRequired;
-  if (supabasePrimaryConfigured(c)) {
-    const user = await getSupabaseSessionUserByAnyId(c, userId);
-    if (!user) return c.json({ detail: 'User not found' }, 404);
-    return c.json(authUserPayload(user));
-  }
-  await ensurePremiumSchema(c.env.DB);
-  const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
+  const user = await getSupabaseSessionUserByAnyId(c, userId);
   if (!user) return c.json({ detail: 'User not found' }, 404);
   return c.json(authUserPayload(user));
 });
@@ -13190,23 +12946,16 @@ async function accountIdentityMatches(c: any, user: any, provider: string, provi
   const cleanProviderUserId = cleanText(providerUserId, 240);
   if (!cleanProviderUserId) return false;
   if (normalizeAuthProvider(user.oauth_provider) === cleanProvider && cleanText(user.oauth_subject, 240) === cleanProviderUserId) return true;
-  if (supabasePrimaryConfigured(c)) {
-    const rows = await supabaseAdminQueryRows(c, 'app_account_identities', {
-      select: 'id',
-      filters: {
-        user_id: postgrestEqFilter(publicId(user.id, 120)),
-        provider: postgrestEqFilter(cleanProvider),
-        provider_user_id: postgrestEqFilter(cleanProviderUserId),
-      },
-      limit: 1,
-    });
-    return rows.length > 0;
-  }
-  await ensureAccountDeletionSchema(c.env.DB);
-  const identity: any = await c.env.DB.prepare(
-    'SELECT id FROM account_identities WHERE user_id = ? AND provider = ? AND provider_user_id = ? LIMIT 1'
-  ).bind(user.id, cleanProvider, cleanProviderUserId).first();
-  return !!identity;
+  const rows = await supabaseAdminQueryRows(c, 'app_account_identities', {
+    select: 'id',
+    filters: {
+      user_id: postgrestEqFilter(publicId(user.id, 120)),
+      provider: postgrestEqFilter(cleanProvider),
+      provider_user_id: postgrestEqFilter(cleanProviderUserId),
+    },
+    limit: 1,
+  });
+  return rows.length > 0;
 }
 
 async function verifyAccountDeletionReauth(c: any, user: any, body: any): Promise<{ ok: boolean; detail?: string; provider: string }> {
@@ -13235,7 +12984,7 @@ async function verifyAccountDeletionReauth(c: any, user: any, body: any): Promis
   }
 
   if (!password) return { ok: false, detail: 'Enter your password to delete this account.', provider: 'email' };
-  if (supabasePrimaryConfigured(c) && user.supabase_user_id) {
+  if (user.supabase_user_id) {
     const email = normalizeOptionalEmail(user.email);
     if (!email || isInternalOAuthEmail(email)) return { ok: false, detail: 'Add a real email address before deleting this account.', provider: 'email' };
     try {
@@ -13249,10 +12998,7 @@ async function verifyAccountDeletionReauth(c: any, user: any, body: any): Promis
       return { ok: false, detail: 'Password confirmation failed.', provider: 'email' };
     }
   }
-  const verified = await verifyPassword(password, String(user.password_hash || ''));
-  if (!verified) return { ok: false, detail: 'Password confirmation failed.', provider: 'email' };
-  await upsertAccountIdentity(c, { userId: user.id, provider: 'email', email: user.email });
-  return { ok: true, provider: 'email' };
+  return { ok: false, detail: 'Supabase Auth identity is required before deleting this account.', provider: 'email' };
 }
 
 async function revokeProviderAccessBestEffort(c: any, user: any, provider: string, body: any) {
@@ -13311,73 +13057,10 @@ async function requestAccountDeletion(c: any) {
     return c.json({ detail: 'Type DELETE to confirm account deletion.', code: 'confirmation_required' }, 400);
   }
 
-  if (supabasePrimaryConfigured(c)) {
-    const currentRow = await getSupabaseAppUserRowByAnyId(c, userId);
-    if (!currentRow) return c.json({ detail: 'User not found.' }, 404);
-    const user = supabaseAppUserToLegacyUser(currentRow);
-    const appUserId = publicId(user.id, 120);
-    if (user.is_admin) return c.json({ detail: 'Admin accounts must be removed by another admin.' }, 403);
-    if (String(user.status || 'active') === 'deletion_pending') {
-      return c.json({
-        deletion_pending: true,
-        deletion_requested_at: user.deletion_requested_at || null,
-        deletion_scheduled_at: user.deletion_scheduled_at || null,
-      });
-    }
-    if (String(user.status || 'active') === 'deleted') {
-      return c.json({ detail: 'This account has already been deleted.', code: 'account_deleted' }, 410);
-    }
-
-    const reauth = await verifyAccountDeletionReauth(c, user, body);
-    if (!reauth.ok) return c.json({ detail: reauth.detail || 'Re-authentication is required.', code: 'reauth_required' }, 401);
-
-    const requestedAt = now();
-    const scheduledAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
-    const metadata = parseJsonObject(currentRow.metadata);
-    metadata.status = 'deletion_pending';
-    metadata.deletion_requested_at = requestedAt;
-    metadata.deletion_scheduled_at = scheduledAt;
-    metadata.session_revoked_at = requestedAt;
-    await supabaseAdminPatchRows(c, 'app_users', { id: postgrestEqFilter(appUserId) }, {
-      metadata,
-      updated_at: requestedAt,
-    });
-    await Promise.all([
-      supabaseAdminPatchRows(c, 'app_push_tokens', { user_id: postgrestEqFilter(appUserId) }, { is_active: false, updated_at: requestedAt }).catch(() => undefined),
-      supabaseAdminDeleteRowsIfShapeExists(c, 'app_notifications', { user_id: postgrestEqFilter(appUserId) }).catch(() => undefined),
-      supabaseAdminDeleteRowsIfShapeExists(c, 'app_notifications', { from_user_id: postgrestEqFilter(appUserId) }).catch(() => undefined),
-      supabaseAdminDeleteRowsIfShapeExists(c, 'app_post_interactions', { app_user_id: postgrestEqFilter(appUserId) }).catch(() => undefined),
-      supabaseAdminDeleteRowsIfShapeExists(c, 'app_follows', { app_follower_id: postgrestEqFilter(appUserId) }).catch(() => undefined),
-      supabaseAdminDeleteRowsIfShapeExists(c, 'app_follows', { app_following_id: postgrestEqFilter(appUserId) }).catch(() => undefined),
-      supabaseAdminPatchRows(c, 'post_comments', { app_user_id: postgrestEqFilter(appUserId) }, { status: 'hidden', updated_at: requestedAt }).catch(() => undefined),
-    ]);
-    await updateSupabaseAuthUser(c, user.supabase_user_id, {
-      user_metadata: { captro_user_id: appUserId, account_status: 'deletion_pending' },
-      app_metadata: { captro_account_status: 'deletion_pending' },
-    }).catch(() => {});
-    runBackgroundTask(c, 'account_deletion_audit_failed', async () => {
-      await writeAccountDeletionEvent(c, appUserId, 'deletion_requested', {
-        provider: reauth.provider,
-        deletion_scheduled_at: scheduledAt,
-      });
-      await logSecurityEvent(c, 'account_deletion_requested', appUserId, { provider: reauth.provider });
-    });
-    runBackgroundTask(c, 'provider_revoke_best_effort_failed', async () => {
-      await revokeProviderAccessBestEffort(c, user, reauth.provider, body);
-    });
-    return c.json({
-      deletion_pending: true,
-      deletion_requested_at: requestedAt,
-      deletion_scheduled_at: scheduledAt,
-      detail: 'Account deletion is scheduled. Your public profile and content are hidden now.',
-    });
-  }
-
-  await ensureAccountDeletionSchema(c.env.DB);
-  await ensurePremiumSchema(c.env.DB);
-  await ensureCommentSchema(c.env.DB);
-  const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
-  if (!user) return c.json({ detail: 'User not found.' }, 404);
+  const currentRow = await getSupabaseAppUserRowByAnyId(c, userId);
+  if (!currentRow) return c.json({ detail: 'User not found.' }, 404);
+  const user = supabaseAppUserToLegacyUser(currentRow);
+  const appUserId = publicId(user.id, 120);
   if (user.is_admin) return c.json({ detail: 'Admin accounts must be removed by another admin.' }, 403);
   if (String(user.status || 'active') === 'deletion_pending') {
     return c.json({
@@ -13395,35 +13078,35 @@ async function requestAccountDeletion(c: any) {
 
   const requestedAt = now();
   const scheduledAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
-  await c.env.DB.batch([
-    c.env.DB.prepare(
-      `UPDATE users SET
-         status = 'deletion_pending',
-         deletion_requested_at = ?,
-         deletion_scheduled_at = ?,
-         session_revoked_at = ?,
-         updated_at = datetime('now')
-       WHERE id = ?`
-    ).bind(requestedAt, scheduledAt, requestedAt, userId),
-    c.env.DB.prepare('UPDATE push_tokens SET is_active = 0, updated_at = ? WHERE user_id = ?').bind(requestedAt, userId),
-    c.env.DB.prepare('DELETE FROM notifications WHERE user_id = ? OR from_user_id = ?').bind(userId, userId),
-    c.env.DB.prepare('DELETE FROM likes WHERE user_id = ?').bind(userId),
-    c.env.DB.prepare('DELETE FROM saved_posts WHERE user_id = ?').bind(userId),
-    c.env.DB.prepare('DELETE FROM follows WHERE follower_id = ? OR following_id = ?').bind(userId, userId),
-    c.env.DB.prepare('DELETE FROM comment_likes WHERE user_id = ?').bind(userId),
-    c.env.DB.prepare("UPDATE comments SET status = 'hidden', hidden_at = ?, hidden_by_user_id = ?, removed_reason = 'Account deletion pending' WHERE user_id = ? AND COALESCE(status, 'active') NOT IN ('removed', 'hidden')")
-      .bind(requestedAt, userId, userId),
-  ]);
-  await Promise.all([
-    runDeletionStatement(c.env, 'DELETE FROM note_interactions WHERE user_id = ?', [userId]),
-    runDeletionStatement(c.env, 'DELETE FROM note_comment_likes WHERE user_id = ?', [userId]),
-    runDeletionStatement(c.env, "UPDATE notes SET status = 'hidden', updated_at = ? WHERE user_id = ? AND COALESCE(status, 'active') NOT IN ('removed', 'hidden')", [requestedAt, userId]),
-  ]);
-  await writeAccountDeletionEvent(c, userId, 'deletion_requested', {
-    provider: reauth.provider,
-    deletion_scheduled_at: scheduledAt,
+  const metadata = parseJsonObject(currentRow.metadata);
+  metadata.status = 'deletion_pending';
+  metadata.deletion_requested_at = requestedAt;
+  metadata.deletion_scheduled_at = scheduledAt;
+  metadata.session_revoked_at = requestedAt;
+  await supabaseAdminPatchRows(c, 'app_users', { id: postgrestEqFilter(appUserId) }, {
+    metadata,
+    updated_at: requestedAt,
   });
-  await logSecurityEvent(c, 'account_deletion_requested', userId, { provider: reauth.provider });
+  await Promise.all([
+    supabaseAdminPatchRows(c, 'app_push_tokens', { user_id: postgrestEqFilter(appUserId) }, { is_active: false, updated_at: requestedAt }).catch(() => undefined),
+    supabaseAdminDeleteRowsIfShapeExists(c, 'app_notifications', { user_id: postgrestEqFilter(appUserId) }).catch(() => undefined),
+    supabaseAdminDeleteRowsIfShapeExists(c, 'app_notifications', { from_user_id: postgrestEqFilter(appUserId) }).catch(() => undefined),
+    supabaseAdminDeleteRowsIfShapeExists(c, 'app_post_interactions', { app_user_id: postgrestEqFilter(appUserId) }).catch(() => undefined),
+    supabaseAdminDeleteRowsIfShapeExists(c, 'app_follows', { app_follower_id: postgrestEqFilter(appUserId) }).catch(() => undefined),
+    supabaseAdminDeleteRowsIfShapeExists(c, 'app_follows', { app_following_id: postgrestEqFilter(appUserId) }).catch(() => undefined),
+    supabaseAdminPatchRows(c, 'post_comments', { app_user_id: postgrestEqFilter(appUserId) }, { status: 'hidden', updated_at: requestedAt }).catch(() => undefined),
+  ]);
+  await updateSupabaseAuthUser(c, user.supabase_user_id, {
+    user_metadata: { captro_user_id: appUserId, account_status: 'deletion_pending' },
+    app_metadata: { captro_account_status: 'deletion_pending' },
+  }).catch(() => {});
+  runBackgroundTask(c, 'account_deletion_audit_failed', async () => {
+    await writeAccountDeletionEvent(c, appUserId, 'deletion_requested', {
+      provider: reauth.provider,
+      deletion_scheduled_at: scheduledAt,
+    });
+    await logSecurityEvent(c, 'account_deletion_requested', appUserId, { provider: reauth.provider });
+  });
   runBackgroundTask(c, 'provider_revoke_best_effort_failed', async () => {
     await revokeProviderAccessBestEffort(c, user, reauth.provider, body);
   });
@@ -13439,52 +13122,31 @@ async function restorePendingAccount(c: any) {
   const userId = getUserId(c);
   const supabaseRequired = requireSupabasePrimaryDatabase(c, 'account_restore');
   if (supabaseRequired) return supabaseRequired;
-  if (supabasePrimaryConfigured(c)) {
-    const currentRow = await getSupabaseAppUserRowByAnyId(c, userId);
-    if (!currentRow) return c.json({ detail: 'User not found.' }, 404);
-    const user = supabaseAppUserToLegacyUser(currentRow);
-    if (String(user.status || 'active') !== 'deletion_pending') {
-      return c.json({ restored: false, user: authUserPayload(user) });
-    }
-    const metadata = parseJsonObject(currentRow.metadata);
-    metadata.status = 'active';
-    delete metadata.deletion_requested_at;
-    delete metadata.deletion_scheduled_at;
-    delete metadata.session_revoked_at;
-    await supabaseAdminPatchRows(c, 'app_users', { id: postgrestEqFilter(publicId(user.id, 120)) }, {
-      metadata,
-      updated_at: now(),
-    });
-    await updateSupabaseAuthUser(c, user.supabase_user_id, {
-      user_metadata: { captro_user_id: user.id, account_status: 'active' },
-      app_metadata: { captro_account_status: 'active' },
-    }).catch(() => {});
-    const refreshed = await getSupabaseAppUserRowByAnyId(c, user.id);
-    const restored = refreshed ? supabaseAppUserToLegacyUser(refreshed) : { ...user, status: 'active', deletion_requested_at: null, deletion_scheduled_at: null };
-    runBackgroundTask(c, 'account_restore_audit_failed', async () => {
-      await writeAccountDeletionEvent(c, user.id, 'deletion_restored', {});
-      await logSecurityEvent(c, 'account_deletion_restored', user.id, {});
-    });
-    return c.json({ restored: true, user: authUserPayload(restored) });
-  }
-  await ensureAccountDeletionSchema(c.env.DB);
-  const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
-  if (!user) return c.json({ detail: 'User not found.' }, 404);
+  const currentRow = await getSupabaseAppUserRowByAnyId(c, userId);
+  if (!currentRow) return c.json({ detail: 'User not found.' }, 404);
+  const user = supabaseAppUserToLegacyUser(currentRow);
   if (String(user.status || 'active') !== 'deletion_pending') {
     return c.json({ restored: false, user: authUserPayload(user) });
   }
-  await c.env.DB.prepare(
-    `UPDATE users SET
-       status = 'active',
-       deletion_requested_at = NULL,
-       deletion_scheduled_at = NULL,
-       session_revoked_at = NULL,
-       updated_at = datetime('now')
-     WHERE id = ? AND status = 'deletion_pending'`
-  ).bind(userId).run();
-  const restored: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
-  await writeAccountDeletionEvent(c, userId, 'deletion_restored', {});
-  await logSecurityEvent(c, 'account_deletion_restored', userId, {});
+  const metadata = parseJsonObject(currentRow.metadata);
+  metadata.status = 'active';
+  delete metadata.deletion_requested_at;
+  delete metadata.deletion_scheduled_at;
+  delete metadata.session_revoked_at;
+  await supabaseAdminPatchRows(c, 'app_users', { id: postgrestEqFilter(publicId(user.id, 120)) }, {
+    metadata,
+    updated_at: now(),
+  });
+  await updateSupabaseAuthUser(c, user.supabase_user_id, {
+    user_metadata: { captro_user_id: user.id, account_status: 'active' },
+    app_metadata: { captro_account_status: 'active' },
+  }).catch(() => {});
+  const refreshed = await getSupabaseAppUserRowByAnyId(c, user.id);
+  const restored = refreshed ? supabaseAppUserToLegacyUser(refreshed) : { ...user, status: 'active', deletion_requested_at: null, deletion_scheduled_at: null };
+  runBackgroundTask(c, 'account_restore_audit_failed', async () => {
+    await writeAccountDeletionEvent(c, user.id, 'deletion_restored', {});
+    await logSecurityEvent(c, 'account_deletion_restored', user.id, {});
+  });
   return c.json({ restored: true, user: authUserPayload(restored) });
 }
 
@@ -13492,23 +13154,13 @@ api.get('/account/deletion-status', authMiddleware, async (c) => {
   const userId = getUserId(c);
   const supabaseRequired = requireSupabasePrimaryDatabase(c, 'account_deletion_status');
   if (supabaseRequired) return supabaseRequired;
-  if (supabasePrimaryConfigured(c)) {
-    const row = await getSupabaseAppUserRowByAnyId(c, userId);
-    const user = row ? supabaseAppUserToLegacyUser(row) : null;
-    return c.json({
-      status: user?.status || 'active',
-      deletion_pending: user?.status === 'deletion_pending',
-      deletion_requested_at: user?.deletion_requested_at || null,
-      deletion_scheduled_at: user?.deletion_scheduled_at || null,
-    });
-  }
-  await ensureAccountDeletionSchema(c.env.DB);
-  const row: any = await c.env.DB.prepare('SELECT status, deletion_requested_at, deletion_scheduled_at FROM users WHERE id = ?').bind(userId).first();
+  const row = await getSupabaseAppUserRowByAnyId(c, userId);
+  const user = row ? supabaseAppUserToLegacyUser(row) : null;
   return c.json({
-    status: row?.status || 'active',
-    deletion_pending: row?.status === 'deletion_pending',
-    deletion_requested_at: row?.deletion_requested_at || null,
-    deletion_scheduled_at: row?.deletion_scheduled_at || null,
+    status: user?.status || 'active',
+    deletion_pending: user?.status === 'deletion_pending',
+    deletion_requested_at: user?.deletion_requested_at || null,
+    deletion_scheduled_at: user?.deletion_scheduled_at || null,
   });
 });
 
