@@ -32,6 +32,7 @@ interface Env {
   CLOUDFLARE_IMAGES_FEED_VARIANT?: string;
   CLOUDFLARE_IMAGES_THUMBNAIL_VARIANT?: string;
   CLOUDFLARE_IMAGES_REQUIRE_SIGNED_URLS?: string;
+  CLOUDFLARE_IMAGES_PRESERVE_CONTENT_CREDENTIALS?: string;
   CLOUDFLARE_IMAGE_TRANSFORMS_ENABLED?: string;
   CLOUDFLARE_IMAGE_TRANSFORM_BASE_URL?: string;
   CLOUDFLARE_STREAM_TOKEN?: string;
@@ -46,6 +47,8 @@ interface Env {
   MALWARE_SCANNER_TOKEN?: string;
   MEDIA_MAX_IMAGE_BYTES?: string;
   MEDIA_MAX_VIDEO_BYTES?: string;
+  C2PA_VERIFIER_URL?: string;
+  C2PA_VERIFIER_TOKEN?: string;
   POST_ASSIST_MODEL?: string;
   MAPBOX_ACCESS_TOKEN?: string;
   ENVIRONMENT?: string;
@@ -82,6 +85,8 @@ interface Env {
   PUBLIC_API_BASE_URL?: string;
   SOURCE_COMMIT?: string;
   WORKER_VERSION?: string;
+  DATA_RESET_VERSION?: string;
+  DATA_RESET_AT?: string;
   STRIPE_SECRET_KEY?: string;
   STRIPE_PUBLISHABLE_KEY?: string;
   STRIPE_DEFAULT_PRICE_ID?: string;
@@ -218,6 +223,22 @@ api.all('/admin/publisher-applications', retiredFeature('Publisher applications'
 api.all('/admin/publisher-applications/*', retiredFeature('Publisher applications'));
 api.all('/creators', retiredFeature('Creator Hub'));
 api.all('/creators/*', retiredFeature('Creator Hub'));
+
+function appDataGeneration(env: Env): string {
+  return cleanText(env.DATA_RESET_VERSION || env.WORKER_VERSION || env.SOURCE_COMMIT || '2026-06-15-production-reset-v1', 120)
+    || '2026-06-15-production-reset-v1';
+}
+
+api.get('/system/data-state', (c) => {
+  c.header('Cache-Control', 'no-store');
+  return c.json({
+    database: 'supabase_postgres',
+    media_storage: 'cloudflare_images_stream',
+    data_generation: appDataGeneration(c.env),
+    data_reset_at: cleanText(c.env.DATA_RESET_AT || '2026-06-15T21:44:27Z', 80),
+    app_data_cleared: true,
+  });
+});
 api.all('/admin/creator-applications', retiredFeature('Creator applications'));
 api.all('/admin/creator-applications/*', retiredFeature('Creator applications'));
 api.all('/admin/creators/*', retiredFeature('Creator admin tools'));
@@ -2410,10 +2431,11 @@ function cloudflareImageTransformBaseUrl(env?: Env): string {
 }
 
 function cloudflareImageTransformOptions(preset: 'feed' | 'thumbnail'): string {
+  const metadata = 'metadata=copyright';
   if (preset === 'thumbnail') {
-    return 'width=480,quality=84,format=auto,metadata=none';
+    return `width=480,quality=84,format=auto,${metadata}`;
   }
-  return 'width=1080,quality=92,format=auto,metadata=none';
+  return `width=1080,quality=92,format=auto,${metadata}`;
 }
 
 function canProxyThroughCloudflareImageTransform(url: URL): boolean {
@@ -10903,6 +10925,15 @@ type CaptroMediaType = 'image' | 'video';
 type MediaModerationStatus = 'uploading' | 'pending_moderation' | 'approved' | 'review_required' | 'rejected' | 'failed';
 type MalwareStatus = 'clean' | 'malicious' | 'unknown' | 'not_scanned';
 type ModerationDecision = 'approved' | 'review_required' | 'rejected';
+type MediaOriginStatus =
+  | 'not_checked'
+  | 'not_applicable'
+  | 'missing_credentials'
+  | 'verified_original'
+  | 'verified_edited'
+  | 'ai_generated'
+  | 'invalid'
+  | 'verifier_unavailable';
 
 type MediaModerationScores = {
   adult_explicit_score: number;
@@ -10919,6 +10950,17 @@ type MediaModerationScores = {
   malware_status: MalwareStatus;
   link_risk_score: number;
   confidence: number;
+};
+
+type C2paContentCredentialsSummary = {
+  hasContentCredentials: boolean;
+  verified: boolean;
+  creator: string;
+  createdAt: string | null;
+  aiUsed: boolean;
+  editHistorySummary: string;
+  mediaOriginStatus: MediaOriginStatus;
+  metadata: Record<string, unknown>;
 };
 
 const MEDIA_MODERATION_STATUS_VALUES = new Set<MediaModerationStatus>([
@@ -10997,6 +11039,112 @@ function defaultModerationScores(overrides: Partial<MediaModerationScores> = {})
     confidence: 0.7,
     ...overrides,
   };
+}
+
+function normalizeMediaOriginStatus(value: unknown): MediaOriginStatus {
+  const status = cleanText(value, 60).toLowerCase();
+  const allowed = new Set<MediaOriginStatus>([
+    'not_checked',
+    'not_applicable',
+    'missing_credentials',
+    'verified_original',
+    'verified_edited',
+    'ai_generated',
+    'invalid',
+    'verifier_unavailable',
+  ]);
+  return allowed.has(status as MediaOriginStatus) ? status as MediaOriginStatus : 'not_checked';
+}
+
+function defaultC2paSummary(mediaOriginStatus: MediaOriginStatus): C2paContentCredentialsSummary {
+  return {
+    hasContentCredentials: false,
+    verified: false,
+    creator: '',
+    createdAt: null,
+    aiUsed: false,
+    editHistorySummary: '',
+    mediaOriginStatus,
+    metadata: {},
+  };
+}
+
+function sanitizeC2paSummary(raw: any): C2paContentCredentialsSummary {
+  const metadata = parseJsonObject(raw?.metadata || raw?.summary || raw);
+  const aiUsed = raw?.ai_used === true
+    || raw?.aiUsed === true
+    || raw?.generated_by_ai === true
+    || raw?.synthetic_media === true
+    || /(^|[_ -])(ai|synthetic|generated)([_ -]|$)/i.test(String(raw?.media_origin_status || raw?.origin_status || ''));
+  const verified = raw?.verified === true || raw?.c2pa_verified === true;
+  const hasContentCredentials = raw?.has_content_credentials === true
+    || raw?.hasContentCredentials === true
+    || raw?.manifest_present === true
+    || verified;
+  const createdAt = cleanText(raw?.created_at || raw?.createdAt || raw?.claim_created_at || '', 80);
+  const mediaOriginStatus = aiUsed
+    ? 'ai_generated'
+    : normalizeMediaOriginStatus(raw?.media_origin_status || raw?.origin_status || (verified ? 'verified_original' : hasContentCredentials ? 'invalid' : 'missing_credentials'));
+  return {
+    hasContentCredentials,
+    verified,
+    creator: cleanText(raw?.creator || raw?.c2pa_creator || raw?.claim_generator || '', 180),
+    createdAt: createdAt && !Number.isNaN(Date.parse(createdAt)) ? new Date(createdAt).toISOString() : null,
+    aiUsed,
+    editHistorySummary: cleanMultilineText(raw?.edit_history_summary || raw?.editHistorySummary || raw?.history || '', 500),
+    mediaOriginStatus,
+    metadata: scrubLogMetadata({
+      claim_generator: cleanText(raw?.claim_generator || raw?.claimGenerator || '', 160),
+      ingredients_count: Math.max(0, Math.min(200, Number(raw?.ingredients_count || raw?.ingredientsCount || 0))),
+      assertions: Array.isArray(raw?.assertions) ? raw.assertions.slice(0, 20).map((item: any) => cleanText(item, 120)) : [],
+      raw_status: cleanText(raw?.status || raw?.verification_status || '', 80),
+      ...metadata,
+    }),
+  };
+}
+
+async function fetchCloudflareImageBlobForVerification(env: Env, imageId: string): Promise<Blob | null> {
+  const accountId = cloudflareAccountId(env);
+  const token = cloudflareImagesToken(env);
+  if (!accountId || !token || !imageId) return null;
+  const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/images/v1/${encodeURIComponent(imageId)}/blob`, {
+    headers: { Authorization: `Bearer ${token}`, accept: 'image/*' },
+  });
+  if (!response.ok) return null;
+  const contentLength = Number(response.headers.get('content-length') || 0);
+  if (contentLength > 16_000_000) return null;
+  const buffer = await response.arrayBuffer();
+  if (!buffer.byteLength || buffer.byteLength > 16_000_000) return null;
+  const type = response.headers.get('content-type') || 'application/octet-stream';
+  return new Blob([buffer], { type });
+}
+
+async function inspectC2paContentCredentials(env: Env, asset: any): Promise<C2paContentCredentialsSummary> {
+  if (normalizeMediaAssetType(asset?.media_type) !== 'image') return defaultC2paSummary('not_applicable');
+  if (cleanText(asset?.storage_provider, 40) !== 'images') return defaultC2paSummary('not_applicable');
+  const verifierUrl = cleanText(env.C2PA_VERIFIER_URL || '', 500);
+  if (!verifierUrl || !/^https:\/\//i.test(verifierUrl)) return defaultC2paSummary('not_checked');
+  try {
+    const imageId = cleanText(asset?.storage_key, 220);
+    const blob = await fetchCloudflareImageBlobForVerification(env, imageId);
+    if (!blob) return defaultC2paSummary('verifier_unavailable');
+    const formData = new FormData();
+    formData.append('file', blob, `${imageId || 'captro-image'}.jpg`);
+    formData.append('media_id', cleanText(asset?.id, 160));
+    formData.append('storage_provider', 'cloudflare_images');
+    const response = await fetch(verifierUrl, {
+      method: 'POST',
+      headers: {
+        ...(env.C2PA_VERIFIER_TOKEN ? { Authorization: `Bearer ${env.C2PA_VERIFIER_TOKEN}` } : {}),
+      },
+      body: formData,
+    });
+    if (!response.ok) return defaultC2paSummary(response.status === 404 ? 'missing_credentials' : 'verifier_unavailable');
+    const raw = await response.json().catch(() => ({}));
+    return sanitizeC2paSummary(raw);
+  } catch {
+    return defaultC2paSummary('verifier_unavailable');
+  }
 }
 
 function moderationDelay(ms: number): Promise<void> {
@@ -11320,6 +11468,14 @@ async function supabaseInsertMediaAsset(c: any, input: {
     moderation_status: 'uploading',
     rejection_code: null,
     rejection_message: null,
+    has_content_credentials: false,
+    c2pa_verified: false,
+    c2pa_creator: null,
+    c2pa_created_at: null,
+    c2pa_ai_used: false,
+    c2pa_edit_history_summary: null,
+    media_origin_status: input.mediaType === 'image' && input.storageProvider === 'images' ? 'not_checked' : 'not_applicable',
+    c2pa_metadata: {},
     metadata: input.metadata || {},
     created_at: ts,
     updated_at: ts,
@@ -11375,6 +11531,7 @@ async function processSupabaseMediaModerationJob(env: Env, message: MediaModerat
   }
 
   try {
+    const c2paSummary = await inspectC2paContentCredentials(env, asset);
     const malwareStatus = await scanMalwareInterface(env, asset);
     const caption = cleanMultilineText(message.caption || '', 1000);
     const sampleScores: MediaModerationScores[] = [];
@@ -11392,6 +11549,10 @@ async function processSupabaseMediaModerationJob(env: Env, message: MediaModerat
     }
     const scores = maxModerationScores(sampleScores);
     scores.malware_status = malwareStatus === 'clean' || malwareStatus === 'malicious' ? malwareStatus : scores.malware_status;
+    if (c2paSummary.aiUsed) {
+      scores.ai_generated_likelihood = Math.max(scores.ai_generated_likelihood, 0.9);
+      scores.confidence = Math.max(scores.confidence, 0.82);
+    }
     const decision = decideMediaModeration(scores, normalizeMediaAssetType(asset.media_type) || 'image', env.AI_GENERATED_MEDIA_POLICY || '');
     const publicUrl = decision.decision === 'approved' ? mediaAssetPublicUrl(env, asset) : '';
     const ts = now();
@@ -11415,7 +11576,7 @@ async function processSupabaseMediaModerationJob(env: Env, message: MediaModerat
       confidence: scores.confidence,
       decision: decision.decision,
       reasons: decision.reasons,
-      raw_result: { samples: rawSamples },
+      raw_result: { samples: rawSamples, content_credentials: c2paSummary },
       created_at: ts,
     }], 'id');
     await supabaseAdminPatchRows(c, 'app_media_assets', { id: postgrestEqFilter(mediaId) }, {
@@ -11423,6 +11584,14 @@ async function processSupabaseMediaModerationJob(env: Env, message: MediaModerat
       ...(publicUrl ? { public_url: publicUrl } : {}),
       rejection_code: decision.rejectionCode || null,
       rejection_message: decision.userMessage || null,
+      has_content_credentials: c2paSummary.hasContentCredentials,
+      c2pa_verified: c2paSummary.verified,
+      c2pa_creator: c2paSummary.creator || null,
+      c2pa_created_at: c2paSummary.createdAt,
+      c2pa_ai_used: c2paSummary.aiUsed,
+      c2pa_edit_history_summary: c2paSummary.editHistorySummary || null,
+      media_origin_status: c2paSummary.mediaOriginStatus,
+      c2pa_metadata: c2paSummary.metadata,
       updated_at: ts,
     });
     await supabaseAdminPatchRows(c, 'app_moderation_jobs', { id: postgrestEqFilter(jobId) }, {
@@ -16624,6 +16793,16 @@ function adminMediaModerationPayload(row: any, env: Env) {
     duration_seconds: row.duration_seconds == null ? null : Number(row.duration_seconds),
     upload_status: cleanText(row.upload_status, 40),
     moderation_status: normalizeMediaModerationStatus(row.moderation_status),
+    content_credentials: {
+      has_content_credentials: row.has_content_credentials === true || Number(row.has_content_credentials || 0) === 1,
+      c2pa_verified: row.c2pa_verified === true || Number(row.c2pa_verified || 0) === 1,
+      c2pa_creator: cleanText(row.c2pa_creator, 180),
+      c2pa_created_at: row.c2pa_created_at || null,
+      c2pa_ai_used: row.c2pa_ai_used === true || Number(row.c2pa_ai_used || 0) === 1,
+      c2pa_edit_history_summary: cleanMultilineText(row.c2pa_edit_history_summary, 500),
+      media_origin_status: normalizeMediaOriginStatus(row.media_origin_status),
+      metadata: scrubLogMetadata(parseJsonObject(row.c2pa_metadata)),
+    },
     rejection_code: cleanText(row.rejection_code, 120),
     rejection_message: cleanMultilineText(row.rejection_message, 500),
     scores: {

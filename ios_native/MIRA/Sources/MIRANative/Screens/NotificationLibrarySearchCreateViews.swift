@@ -157,7 +157,7 @@ final class LibraryNativeModel: ObservableObject {
   @Published var errorMessage: String?
   let api: MIRAAPIClient
   private var postsBySection: [Section: [MIRAPost]] = [:]
-  private let countsCacheKey = "native.library.counts.v1.cache_first"
+  private let countsCacheKey = "native.library.counts.v3.cache_first"
 
   init(api: MIRAAPIClient) {
     self.api = api
@@ -264,7 +264,7 @@ final class LibraryNativeModel: ObservableObject {
   }
 
   private func sectionCacheKey(_ section: Section) -> String {
-    "native.library.section.v1.cache_first.\(section.rawValue.lowercased())"
+    "native.library.section.v3.cache_first.\(section.rawValue.lowercased())"
   }
 }
 

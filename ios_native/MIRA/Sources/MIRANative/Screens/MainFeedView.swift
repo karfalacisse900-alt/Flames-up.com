@@ -34,7 +34,7 @@ final class MainFeedModel: ObservableObject {
   @Published var currentUsername: String?
 
   let api: MIRAAPIClient
-  private let feedCacheKey = "native.main.feed.v4"
+  private let feedCacheKey = "native.main.feed.v7"
   private var hasLoadedFreshFeed = false
   private var isLoadingFreshFeed = false
   private var canLoadMore = true

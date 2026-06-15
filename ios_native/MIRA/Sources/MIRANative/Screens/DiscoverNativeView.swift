@@ -11,8 +11,8 @@ final class DiscoverNativeModel: ObservableObject {
   @Published var isLoadingPosts = true
   @Published var errorMessage: String?
   let api: MIRAAPIClient
-  private let storiesCacheKey = "native.discover.stories.v3"
-  private let postsCacheKeyPrefix = "native.discover.posts.v4"
+  private let storiesCacheKey = "native.discover.stories.v6"
+  private let postsCacheKeyPrefix = "native.discover.posts.v7"
   private var activePostsCategory = "all"
   private var hasLoadedFreshStories = false
   private var hasLoadedFreshPosts = false

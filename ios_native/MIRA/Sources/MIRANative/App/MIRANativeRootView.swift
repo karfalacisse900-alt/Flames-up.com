@@ -80,6 +80,7 @@ final class MIRAStartupCoordinator: ObservableObject {
     beginSlowMessageTimer()
 
     phase = .checkingSession
+    await MIRAAppCacheStore.shared.reconcileServerDataState(api: api)
     await authSession.bootstrap(api: api)
 
     guard !Task.isCancelled else { return }

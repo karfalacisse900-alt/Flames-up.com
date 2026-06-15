@@ -2,28 +2,23 @@
 
 Backend stack: Hono + Cloudflare Workers + Supabase Auth/Postgres as the canonical production database + Cloudflare Images/R2/Stream for media storage and delivery.
 
-Cloudflare D1 remains bound only for legacy compatibility/cache while old routes are migrated. Do not treat D1 as the production source of truth for Captro app data.
+Cloudflare D1 is not the production source of truth for Captro app data. Supabase Auth/Postgres owns application data; Cloudflare is the API/media/security edge.
 
 ## Setup
 
 1. Install dependencies:
    `npm install`
 
-2. Run legacy D1 compatibility migrations only when maintaining the D1 cache/fallback:
-   `wrangler d1 execute flames-up-db --file=./migrations/0001_init.sql --remote`
-   `wrangler d1 execute flames-up-db --file=./migrations/0002_additions.sql --remote`
-   `wrangler d1 execute flames-up-db --file=./migrations/0003_creators.sql --remote`
-   `wrangler d1 execute flames-up-db --file=./migrations/0004_oauth.sql --remote`
-   `wrangler d1 execute flames-up-db --file=./migrations/0005_phone_auth.sql --remote`
-   `wrangler d1 execute flames-up-db --file=./migrations/0019_production_performance_indexes.sql --remote`
-   `wrangler d1 execute DB --env production --remote --yes --file=./migrations/0020_production_readiness.sql`
-   `wrangler d1 execute DB --env production --remote --yes --file=./migrations/0021_admin_moderation.sql`
+2. Push Supabase migrations from the repository root:
+   `npx supabase db push`
 
 3. Configure vars:
    - `JWT_SECRET`
    - `CLOUDFLARE_ACCOUNT_ID`
    - `CLOUDFLARE_IMAGES_TOKEN` and `CLOUDFLARE_STREAM_TOKEN` as Worker secrets, or a shared `CLOUDFLARE_API_TOKEN` that has Cloudflare Images and Stream permissions
    - `CLOUDFLARE_IMAGES_ACCOUNT_HASH` for `https://imagedelivery.net/...` delivery URLs
+   - `CLOUDFLARE_IMAGES_PRESERVE_CONTENT_CREDENTIALS=true` and the Cloudflare Images dashboard setting to preserve Content Credentials through transformations
+   - Optional `C2PA_VERIFIER_URL` and `C2PA_VERIFIER_TOKEN` for server-side C2PA summary verification
    - Workers AI is enabled with the `AI` binding in `wrangler.toml`; optional `POST_ASSIST_MODEL` controls the caption/headline/category helper model
    - `MAPBOX_ACCESS_TOKEN`
    - `OWNER_EMAILS` (comma-separated verified account emails that receive owner admin role)

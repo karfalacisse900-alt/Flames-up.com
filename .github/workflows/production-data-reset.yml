@@ -20,11 +20,6 @@ on:
         required: true
         default: true
         type: boolean
-      reset_legacy_d1:
-        description: "Execute legacy D1 cleanup after Supabase reset. Ignored for dry_run."
-        required: true
-        default: false
-        type: boolean
       backup_confirmed:
         description: "Required true for execute mode after Supabase backup/export exists"
         required: true
@@ -109,14 +104,6 @@ jobs:
           CONFIRM_PRODUCTION_RESET: ${{ inputs.confirmation }}
         run: |
           set -euo pipefail
-          if [ "${{ inputs.reset_legacy_d1 }}" = "true" ]; then
-            cd backend-cf
-            npx wrangler d1 execute DB --env production --remote --json --command \
-              "SELECT id, media_type, storage_provider, storage_key, public_url FROM media_assets;" \
-              > /tmp/captro-legacy-d1-media-assets.json
-            cd ..
-            export CLOUDFLARE_MEDIA_ASSETS_FILE=/tmp/captro-legacy-d1-media-assets.json
-          fi
           node scripts/production-reset/cloudflare-media-cleanup.mjs
 
       - name: Build Supabase reset SQL
@@ -138,37 +125,3 @@ jobs:
         run: |
           set -euo pipefail
           supabase db query --linked --file /tmp/captro-production-reset.sql --output table
-
-      - name: Legacy D1 dry-run counts
-        if: ${{ inputs.reset_mode == 'dry_run' && inputs.reset_legacy_d1 == true }}
-        working-directory: ./backend-cf
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: >
-          npx wrangler d1 execute DB --env production --remote --command
-          "SELECT
-          (SELECT COUNT(*) FROM users) AS users_count,
-          (SELECT COUNT(*) FROM posts) AS posts_count,
-          (SELECT COUNT(*) FROM likes) AS likes_count,
-          (SELECT COUNT(*) FROM saved_posts) AS saved_posts_count,
-          (SELECT COUNT(*) FROM comments) AS comments_count,
-          (SELECT COUNT(*) FROM messages) AS messages_count,
-          (SELECT COUNT(*) FROM statuses) AS statuses_count,
-          (SELECT COUNT(*) FROM media_assets) AS media_assets_count;"
-
-      - name: Legacy D1 execute reset
-        if: ${{ inputs.reset_mode == 'execute' && inputs.reset_legacy_d1 == true }}
-        working-directory: ./backend-cf
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: |
-          set -euo pipefail
-          npx wrangler d1 execute DB --env production --remote --json --command \
-            "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;" \
-            > /tmp/captro-legacy-d1-tables.json
-          node ../scripts/production-reset/build-d1-legacy-reset.mjs \
-            /tmp/captro-legacy-d1-tables.json \
-            /tmp/captro-legacy-d1-reset.sql
-          npx wrangler d1 execute DB --env production --remote --yes --file=/tmp/captro-legacy-d1-reset.sql

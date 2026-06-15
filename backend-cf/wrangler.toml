@@ -14,9 +14,12 @@ GOOGLE_OAUTH_CLIENT_IDS = "702354172189-dcg22qr9dqln7mqd1gi3q3bdbl9dajcd.apps.go
 APPLE_OAUTH_AUDIENCES = "com.captro.app"
 CLOUDFLARE_IMAGES_ACCOUNT_HASH = "DY-IgVdOm-0zb0K5ZFnpKA"
 CLOUDFLARE_IMAGE_TRANSFORMS_ENABLED = "true"
+CLOUDFLARE_IMAGES_PRESERVE_CONTENT_CREDENTIALS = "true"
 CLOUDFLARE_IMAGE_TRANSFORM_BASE_URL = "https://api.flames-up.com"
 CLOUDFLARE_STREAM_REQUIRE_SIGNED_URLS = "false"
 MEDIA_BACKUP_MAX_VIDEO_BYTES = "95000000"
+DATA_RESET_VERSION = "2026-06-15-production-reset-v1"
+DATA_RESET_AT = "2026-06-15T21:44:27Z"
 
 [observability]
 enabled = true
@@ -28,6 +31,7 @@ crons = ["17 5 * * *"]
 [ai]
 binding = "AI"
 
+# Legacy runtime compatibility only. Supabase Postgres is Captro's app database.
 [[d1_databases]]
 binding = "DB"
 database_name = "flames-up"
@@ -63,9 +67,12 @@ GOOGLE_OAUTH_CLIENT_IDS = "702354172189-dcg22qr9dqln7mqd1gi3q3bdbl9dajcd.apps.go
 APPLE_OAUTH_AUDIENCES = "com.captro.app"
 CLOUDFLARE_IMAGES_ACCOUNT_HASH = "DY-IgVdOm-0zb0K5ZFnpKA"
 CLOUDFLARE_IMAGE_TRANSFORMS_ENABLED = "true"
+CLOUDFLARE_IMAGES_PRESERVE_CONTENT_CREDENTIALS = "true"
 CLOUDFLARE_IMAGE_TRANSFORM_BASE_URL = "https://api.flames-up.com"
 CLOUDFLARE_STREAM_REQUIRE_SIGNED_URLS = "false"
 MEDIA_BACKUP_MAX_VIDEO_BYTES = "95000000"
+DATA_RESET_VERSION = "2026-06-15-production-reset-v1"
+DATA_RESET_AT = "2026-06-15T21:44:27Z"
 
 [env.production.observability]
 enabled = true
@@ -77,6 +84,7 @@ crons = ["17 5 * * *"]
 [env.production.ai]
 binding = "AI"
 
+# Legacy runtime compatibility only. Supabase Postgres is Captro's app database.
 [[env.production.d1_databases]]
 binding = "DB"
 database_name = "flames-up"

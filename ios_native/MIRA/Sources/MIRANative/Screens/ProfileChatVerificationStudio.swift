@@ -15,7 +15,7 @@ final class ProfileNativeModel: ObservableObject {
   @Published var posts: [MIRAPost] = []
   @Published var profileError: String?
   let api: MIRAAPIClient
-  private let userCacheKey = "native.profile.me.v2"
+  private let userCacheKey = "native.profile.me.v5"
   private var isLoadingFreshProfile = false
 
   init(api: MIRAAPIClient) {
@@ -163,7 +163,7 @@ final class ProfileNativeModel: ObservableObject {
   }
 
   private func postsCacheKey(for userID: String) -> String {
-    "native.profile.posts.\(userID).v3"
+    "native.profile.posts.\(userID).v6"
   }
 }
 
@@ -538,8 +538,8 @@ final class UserProfileNativeModel: ObservableObject {
   @Published var errorMessage: String?
   let userId: String
   let api: MIRAAPIClient
-  private var userCacheKey: String { "native.profile.user.\(userId).v2" }
-  private var postsCacheKey: String { "native.profile.posts.\(userId).v3" }
+  private var userCacheKey: String { "native.profile.user.\(userId).v5" }
+  private var postsCacheKey: String { "native.profile.posts.\(userId).v6" }
 
   init(userId: String, api: MIRAAPIClient) {
     self.userId = userId

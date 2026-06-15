@@ -52,8 +52,18 @@ struct MIRAPostDraftSnapshot: Codable, Hashable {
   let savedAt: String
 }
 
+private struct MIRAAppDataStateSnapshot: Codable, Hashable {
+  let database: String?
+  let mediaStorage: String?
+  let dataGeneration: String?
+  let dataResetAt: String?
+  let appDataCleared: Bool?
+}
+
 actor MIRAAppCacheStore {
   static let shared = MIRAAppCacheStore()
+
+  private static let dataGenerationDefaultsKey = "native.app.data_generation.v1"
 
   private let shortCacheAge: TimeInterval = 60 * 60 * 24 * 7
   private let contentCacheAge: TimeInterval = 60 * 60 * 24 * 30
@@ -63,6 +73,32 @@ actor MIRAAppCacheStore {
   private let maxProfilePosts = 120
   private let maxCachedComments = 80
   private let maxNotifications = 120
+
+  func reconcileServerDataState(api: MIRAAPIClient) async {
+    do {
+      let snapshot: MIRAAppDataStateSnapshot = try await api.get("system/data-state")
+      guard let generation = snapshot.dataGeneration?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !generation.isEmpty
+      else { return }
+
+      let defaults = UserDefaults.standard
+      let stored = defaults.string(forKey: Self.dataGenerationDefaultsKey)
+      guard stored != generation else { return }
+
+      await purgeContentCaches()
+      defaults.set(generation, forKey: Self.dataGenerationDefaultsKey)
+      MIRAPerformanceTimeline.mark("app_data_generation_reconciled", detail: snapshot.dataResetAt ?? "unknown")
+    } catch {
+      MIRAPerformanceTimeline.mark("app_data_generation_check_failed", detail: "will_keep_existing_cache")
+    }
+  }
+
+  func purgeContentCaches() async {
+    await clearPostDraft()
+    await MIRALocalJSONCache.removeAll()
+    await MIRAImageDiskCache.clear()
+    MIRAAPIClient.productionSession.configuration.urlCache?.removeAllCachedResponses()
+  }
 
   func loadFeed() async -> [MIRAPost]? {
     guard let posts = await MIRALocalJSONCache.load([MIRAPost].self, key: CacheKey.feed, maxAge: contentCacheAge) else {
@@ -320,10 +356,10 @@ actor MIRAAppCacheStore {
 }
 
 private enum CacheKey {
-  static let feed = "native.main.feed.v5.cache_first"
-  static let discoverStories = "native.discover.stories.v4.cache_first"
-  static let currentProfile = "native.profile.me.v3.cache_first"
-  static let notifications = "native.notifications.v2.cache_first"
+  static let feed = "native.main.feed.v7.cache_first"
+  static let discoverStories = "native.discover.stories.v6.cache_first"
+  static let currentProfile = "native.profile.me.v5.cache_first"
+  static let notifications = "native.notifications.v4.cache_first"
   static let settings = "native.settings.v1.cache_first"
   static let postDraft = "native.post_draft.v1.cache_first"
   static let discoverCategoryIds = [
@@ -337,19 +373,19 @@ private enum CacheKey {
   ]
 
   static func discoverPosts(_ category: String) -> String {
-    "native.discover.posts.v5.cache_first.\(category)"
+    "native.discover.posts.v7.cache_first.\(category)"
   }
 
   static func profilePosts(_ userId: String) -> String {
-    "native.profile.posts.v4.cache_first.\(userId)"
+    "native.profile.posts.v6.cache_first.\(userId)"
   }
 
   static func viewedProfile(_ userId: String) -> String {
-    "native.profile.user.v3.cache_first.\(userId)"
+    "native.profile.user.v5.cache_first.\(userId)"
   }
 
   static func comments(_ postId: String) -> String {
-    "native.comments.v1.cache_first.\(postId)"
+    "native.comments.v3.cache_first.\(postId)"
   }
 }
 

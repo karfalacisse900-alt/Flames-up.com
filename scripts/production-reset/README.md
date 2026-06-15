@@ -10,9 +10,7 @@ It must not delete infrastructure:
 
 ## Production Data Source
 
-Supabase Postgres is the source of truth for Captro app data. Cloudflare cleanup uses Supabase `app_media_assets` records to find Cloudflare Images and Stream assets that belong to reset data.
-
-Legacy D1 cleanup is optional and must be explicitly enabled only for old compatibility data. Do not use D1 as the app database for new production data.
+Supabase Postgres is the source of truth for Captro app data. Cloudflare cleanup uses Supabase `app_media_assets` records to find Cloudflare Images and Stream assets that belong to reset data. Cloudflare D1 is not part of the production reset path.
 
 ## Safe Order
 
@@ -24,9 +22,8 @@ Legacy D1 cleanup is optional and must be explicitly enabled only for old compat
 6. Confirm the exact project/account and keep-list.
 7. Run Supabase reset with `app.reset_mode = 'execute'`.
 8. Run Cloudflare media cleanup with `EXECUTE_DELETE=true`.
-9. Run legacy D1 reset only if old compatibility data still exists and you explicitly choose to clear it.
-10. Deploy the Worker and upload a fresh TestFlight build.
-11. Smoke test login, upload, feed, Discover, report/block, delete account, and legal links.
+9. Deploy the Worker and upload a fresh TestFlight build.
+10. Smoke test login, upload, feed, Discover, report/block, delete account, and legal links.
 
 ## Supabase Dry Run
 
@@ -64,16 +61,6 @@ $env:CLOUDFLARE_API_TOKEN="<api-token>"
 node scripts/production-reset/cloudflare-media-cleanup.mjs
 ```
 
-To include legacy D1 media rows during a one-time compatibility cleanup:
-
-```powershell
-cd backend-cf
-npx.cmd wrangler d1 execute DB --env production --remote --json --command "SELECT id, media_type, storage_provider, storage_key, public_url FROM media_assets;" > ..\legacy-d1-media-assets.json
-cd ..
-$env:CLOUDFLARE_MEDIA_ASSETS_FILE="legacy-d1-media-assets.json"
-node scripts/production-reset/cloudflare-media-cleanup.mjs
-```
-
 ## Cloudflare Media Execute
 
 ```powershell
@@ -83,19 +70,6 @@ node scripts/production-reset/cloudflare-media-cleanup.mjs
 ```
 
 R2 objects may require manual deletion or a dedicated R2 S3 credential flow if media rows use `storage_provider = r2`.
-
-## Legacy D1 Reset
-
-Run only if D1 still contains old test data that the Worker can serve. The protected GitHub workflow generates a D1 reset file from the tables that actually exist, using `build-d1-legacy-reset.mjs`, then deletes rows from those legacy tables.
-
-Manual fallback:
-
-```powershell
-cd backend-cf
-npx.cmd wrangler d1 execute DB --env production --remote --json --command "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;" > ..\legacy-d1-tables.json
-node ..\scripts\production-reset\build-d1-legacy-reset.mjs ..\legacy-d1-tables.json ..\legacy-d1-reset.sql
-npx.cmd wrangler d1 execute DB --env production --remote --yes --file=..\legacy-d1-reset.sql
-```
 
 ## Do Not Run Until
 

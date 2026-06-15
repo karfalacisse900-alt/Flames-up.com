@@ -277,6 +277,14 @@ public enum MIRALocalJSONCache {
     }.value
   }
 
+  public static func removeAll() async {
+    await Task.detached(priority: .utility) {
+      guard let directory = cacheDirectory() else { return }
+      try? FileManager.default.removeItem(at: directory)
+      try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    }.value
+  }
+
   public static func trim(maxAge: TimeInterval = 60 * 60 * 24 * 7) async {
     await Task.detached(priority: .utility) {
       guard let directory = cacheDirectory(),
