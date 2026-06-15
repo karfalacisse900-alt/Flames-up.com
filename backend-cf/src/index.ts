@@ -13181,6 +13181,8 @@ async function revokeProviderAccessBestEffort(c: any, user: any, provider: strin
 
 async function requestAccountDeletion(c: any) {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'account_delete');
+  if (supabaseRequired) return supabaseRequired;
   const limited = await enforceRateLimit(c, 'account_delete', userId, 5, 86400);
   if (limited) return limited;
   const bodyTooLarge = rejectLargeRequest(c, 80_000);
@@ -13316,6 +13318,8 @@ async function requestAccountDeletion(c: any) {
 
 async function restorePendingAccount(c: any) {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'account_restore');
+  if (supabaseRequired) return supabaseRequired;
   if (supabasePrimaryConfigured(c)) {
     const currentRow = await getSupabaseAppUserRowByAnyId(c, userId);
     if (!currentRow) return c.json({ detail: 'User not found.' }, 404);
@@ -13367,6 +13371,8 @@ async function restorePendingAccount(c: any) {
 
 api.get('/account/deletion-status', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'account_deletion_status');
+  if (supabaseRequired) return supabaseRequired;
   if (supabasePrimaryConfigured(c)) {
     const row = await getSupabaseAppUserRowByAnyId(c, userId);
     const user = row ? supabaseAppUserToLegacyUser(row) : null;
@@ -13395,6 +13401,8 @@ api.post('/account/restore', authMiddleware, restorePendingAccount);
 // ═══════════════════════════════════════════════════════════════════════════════
 api.put('/users/me', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'profile_update');
+  if (supabaseRequired) return supabaseRequired;
   const bodyTooLarge = rejectLargeRequest(c, 200_000);
   if (bodyTooLarge) return bodyTooLarge;
   const limited = await enforceRateLimit(c, 'account_update', userId, 60, 60);
@@ -13554,6 +13562,8 @@ api.delete('/users/me', authMiddleware, async (c) => {
 api.put('/users/me/email', authMiddleware, async (c) => {
   try {
     const userId = getUserId(c);
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'account_email_update');
+    if (supabaseRequired) return supabaseRequired;
     const bodyTooLarge = rejectLargeRequest(c, 60_000);
     if (bodyTooLarge) return bodyTooLarge;
     const limited = await enforceRateLimit(c, 'account_email', userId, 10, 600);
@@ -13651,6 +13661,8 @@ api.put('/users/me/email', authMiddleware, async (c) => {
 api.put('/users/me/password', authMiddleware, async (c) => {
   try {
     const userId = getUserId(c);
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'account_password_update');
+    if (supabaseRequired) return supabaseRequired;
     const bodyTooLarge = rejectLargeRequest(c, 60_000);
     if (bodyTooLarge) return bodyTooLarge;
     const limited = await enforceRateLimit(c, 'account_password', userId, 8, 600);
@@ -13735,6 +13747,8 @@ api.put('/users/me/password', authMiddleware, async (c) => {
 api.post('/users/me/phone/start', authMiddleware, async (c) => {
   try {
     const userId = getUserId(c);
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'account_phone_start');
+    if (supabaseRequired) return supabaseRequired;
     const bodyTooLarge = rejectLargeRequest(c, 40_000);
     if (bodyTooLarge) return bodyTooLarge;
     const body: any = await c.req.json().catch(() => ({}));
@@ -13806,6 +13820,8 @@ api.post('/users/me/phone/start', authMiddleware, async (c) => {
 api.post('/users/me/phone/verify', authMiddleware, async (c) => {
   try {
     const userId = getUserId(c);
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'account_phone_verify');
+    if (supabaseRequired) return supabaseRequired;
     const bodyTooLarge = rejectLargeRequest(c, 40_000);
     if (bodyTooLarge) return bodyTooLarge;
     const body: any = await c.req.json().catch(() => ({}));
@@ -13958,6 +13974,8 @@ api.post('/users/me/phone/verify', authMiddleware, async (c) => {
 
 api.post('/users/me/email/link/start', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'account_email_link_start');
+  if (supabaseRequired) return supabaseRequired;
   const limited = await enforceRateLimit(c, 'email_verify_link', userId, 8, 60);
   if (limited) return limited;
 
@@ -14098,6 +14116,8 @@ api.get('/users/me/email/verify-link', async (c) => {
 api.post('/users/me/email/start', authMiddleware, async (c) => {
   try {
     const userId = getUserId(c);
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'account_email_start');
+    if (supabaseRequired) return supabaseRequired;
     const bodyTooLarge = rejectLargeRequest(c, 20_000);
     if (bodyTooLarge) return bodyTooLarge;
     const body: any = await c.req.json().catch(() => ({}));
@@ -14142,6 +14162,8 @@ api.post('/users/me/email/start', authMiddleware, async (c) => {
 api.post('/users/me/email/verify', authMiddleware, async (c) => {
   try {
     const userId = getUserId(c);
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'account_email_verify');
+    if (supabaseRequired) return supabaseRequired;
     const bodyTooLarge = rejectLargeRequest(c, 20_000);
     if (bodyTooLarge) return bodyTooLarge;
     const body: any = await c.req.json().catch(() => ({}));
@@ -14219,6 +14241,8 @@ api.post('/users/me/email/verify', authMiddleware, async (c) => {
 api.put('/users/me/username', authMiddleware, async (c) => {
   try {
     const userId = getUserId(c);
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'username_claim');
+    if (supabaseRequired) return supabaseRequired;
     const bodyTooLarge = rejectLargeRequest(c, 20_000);
     if (bodyTooLarge) return bodyTooLarge;
     const limited = await enforceRateLimit(c, 'username_claim', userId, 30, 300);
@@ -14296,6 +14320,8 @@ api.put('/users/me/username', authMiddleware, async (c) => {
 });
 
 api.get('/users/search/:query', authMiddleware, async (c) => {
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'user_search');
+  if (supabaseRequired) return supabaseRequired;
   const limited = await enforceRateLimit(c, 'user_search', getUserId(c), 120, 60);
   if (limited) return limited;
   const q = cleanText(c.req.param('query'), 80);
@@ -14321,6 +14347,8 @@ api.get('/users/search/:query', authMiddleware, async (c) => {
 
 // Exact username check (no auth required for registration flow)
 api.get('/users/check-username/:username', async (c) => {
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'username_check');
+  if (supabaseRequired) return supabaseRequired;
   const limited = await enforceRateLimit(c, 'username_check', clientIp(c), 80, 60);
   if (limited) return limited;
   const usernameCheck = validateUsernameForAccount(c.req.param('username'));
@@ -14350,6 +14378,8 @@ api.get('/users/check-username/:username', async (c) => {
 
 api.get('/users/:userId', authMiddleware, async (c) => {
   const viewerId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'profile_read');
+  if (supabaseRequired) return supabaseRequired;
   const targetUserId = c.req.param('userId');
   if (supabasePrimaryConfigured(c)) {
     const result = await supabasePublicUserPayload(c, viewerId, targetUserId);
@@ -16489,6 +16519,8 @@ api.post('/statuses', authMiddleware, async (c) => {
   const phoneGate = await requirePhoneVerified(c, 'share stories');
   if (phoneGate) return phoneGate;
   const userId = getUserId(c); const b = await c.req.json();
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'story_create');
+  if (supabaseRequired) return supabaseRequired;
   const storyLifetimeMs = 7 * 24 * 60 * 60 * 1000;
   const id = uuid(); const expiresAt = new Date(Date.now() + storyLifetimeMs).toISOString();
   const visibility = normalizeVisibility(b.visibility);
@@ -16597,6 +16629,8 @@ api.post('/statuses', authMiddleware, async (c) => {
 
 api.get('/statuses', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'stories_read');
+  if (supabaseRequired) return supabaseRequired;
   if (supabasePrimaryConfigured(c)) {
     const rows = await supabaseReadVisibleStories(c, userId);
     return c.json(groupStatusRows(rows, userId));
@@ -16616,6 +16650,8 @@ api.get('/statuses', authMiddleware, async (c) => {
 
 api.get('/statuses/friends', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'friends_stories_read');
+  if (supabaseRequired) return supabaseRequired;
   if (supabasePrimaryConfigured(c)) {
     const rows = await supabaseReadVisibleStories(c, userId, true);
     return c.json(groupStatusRows(rows, userId));
@@ -16637,6 +16673,8 @@ api.get('/statuses/friends', authMiddleware, async (c) => {
 
 api.post('/statuses/:statusId/like', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'story_like');
+  if (supabaseRequired) return supabaseRequired;
   const limited = await enforceRateLimit(c, 'story_like', userId, 300, 60);
   if (limited) return limited;
   const statusId = publicId(c.req.param('statusId'), 120);
@@ -16728,6 +16766,8 @@ api.post('/statuses/:statusId/like', authMiddleware, async (c) => {
 
 api.post('/statuses/:statusId/view', authMiddleware, async (c) => {
   const userId = getUserId(c); const statusId = c.req.param('statusId');
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'story_view');
+  if (supabaseRequired) return supabaseRequired;
   if (supabasePrimaryConfigured(c)) {
     const cleanStatusId = publicId(statusId, 120);
     const story = await supabaseGetVisibleStory(c, cleanStatusId, userId);
@@ -16752,6 +16792,8 @@ api.post('/statuses/:statusId/view', authMiddleware, async (c) => {
 
 api.get('/statuses/:statusId/thoughts', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'story_thoughts_read');
+  if (supabaseRequired) return supabaseRequired;
   const statusId = publicId(c.req.param('statusId'), 120);
   const limit = clampNumber(c.req.query('limit') || '24', 1, 40, 24);
   if (supabasePrimaryConfigured(c)) {
@@ -16818,6 +16860,8 @@ api.get('/statuses/:statusId/thoughts', authMiddleware, async (c) => {
 
 api.post('/statuses/:statusId/thoughts', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'story_thought_create');
+  if (supabaseRequired) return supabaseRequired;
   const limited = await enforceRateLimit(c, 'story_thought_create', userId, 40, 60);
   if (limited) return limited;
   const statusId = publicId(c.req.param('statusId'), 120);
@@ -16891,6 +16935,8 @@ api.post('/statuses/:statusId/thoughts', authMiddleware, async (c) => {
 
 api.delete('/statuses/:statusId', authMiddleware, async (c) => {
   const userId = getUserId(c); const statusId = c.req.param('statusId');
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'story_delete');
+  if (supabaseRequired) return supabaseRequired;
   if (supabasePrimaryConfigured(c)) {
     const cleanStatusId = publicId(statusId, 120);
     const rows = await supabaseAdminQueryRows(c, 'app_stories', {
@@ -17005,6 +17051,8 @@ async function supabaseGroupMessageRows(c: any, groupId: string, input: { limit:
 
 api.get('/conversations', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'conversations_read');
+  if (supabaseRequired) return supabaseRequired;
   if (supabasePrimaryConfigured(c)) {
     const limit = clampNumber(c.req.query('limit') || '60', 1, 100, 60);
     const blockedIds = await supabaseBlockedUserIds(c, userId);
@@ -17266,6 +17314,8 @@ api.get('/conversations', authMiddleware, async (c) => {
 
 api.post('/presence/touch', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'presence_touch');
+  if (supabaseRequired) return supabaseRequired;
   const touchedAt = supabasePrimaryConfigured(c)
     ? await touchSupabasePrimaryPresence(c, userId)
     : (await touchUserPresence(c.env.DB, userId), now());
@@ -17274,6 +17324,8 @@ api.post('/presence/touch', authMiddleware, async (c) => {
 
 api.post('/messages', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'message_send');
+  if (supabaseRequired) return supabaseRequired;
   if (!supabasePrimaryConfigured(c)) await touchUserPresence(c.env.DB, userId);
   const limited = await enforceRateLimit(c, 'message_send', userId, 45, 60);
   if (limited) return limited;
@@ -17404,6 +17456,8 @@ api.post('/messages', authMiddleware, async (c) => {
 
 api.get('/messages/presence/:userId', authMiddleware, async (c) => {
   const myId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'message_presence');
+  if (supabaseRequired) return supabaseRequired;
   const peerId = publicId(c.req.param('userId'), 120);
   if (supabasePrimaryConfigured(c)) await touchSupabasePrimaryPresence(c, myId);
   else await touchUserPresence(c.env.DB, myId);
@@ -17438,6 +17492,8 @@ api.get('/messages/presence/:userId', authMiddleware, async (c) => {
 
 api.post('/messages/typing', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'message_typing');
+  if (supabaseRequired) return supabaseRequired;
   if (supabasePrimaryConfigured(c)) await touchSupabasePrimaryPresence(c, userId);
   else await touchUserPresence(c.env.DB, userId);
   const limited = await enforceRateLimit(c, 'message_typing', userId, 120, 60);
@@ -17469,6 +17525,8 @@ api.post('/messages/typing', authMiddleware, async (c) => {
 
 api.get('/messages/:userId', authMiddleware, async (c) => {
   const myId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'message_read');
+  if (supabaseRequired) return supabaseRequired;
   const oid = publicId(c.req.param('userId'), 120);
   if (!supabasePrimaryConfigured(c)) await touchUserPresence(c.env.DB, myId);
   const limited = await enforceRateLimit(c, 'message_read', myId, 160, 60);
@@ -17517,6 +17575,8 @@ api.get('/messages/:userId', authMiddleware, async (c) => {
 
 api.post('/group-chats', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'group_chat_create');
+  if (supabaseRequired) return supabaseRequired;
   const limited = await enforceRateLimit(c, 'group_chat_create', userId, 20, 60);
   if (limited) return limited;
   const dailyLimited = await enforceRateLimit(c, 'group_chat_create_daily', userId, 80, 86400);
@@ -17619,6 +17679,8 @@ api.post('/group-chats', authMiddleware, async (c) => {
 
 api.get('/group-chats/:groupId/messages', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'group_messages_read');
+  if (supabaseRequired) return supabaseRequired;
   const groupId = publicId(c.req.param('groupId'), 120);
   const limited = await enforceRateLimit(c, 'group_message_read', userId, 160, 60);
   if (limited) return limited;
@@ -17688,6 +17750,8 @@ api.get('/group-chats/:groupId/messages', authMiddleware, async (c) => {
 
 api.post('/group-chats/:groupId/messages', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'group_message_send');
+  if (supabaseRequired) return supabaseRequired;
   const groupId = publicId(c.req.param('groupId'), 120);
   const limited = await enforceRateLimit(c, 'group_message_send', userId, 60, 60);
   if (limited) return limited;
@@ -18039,6 +18103,8 @@ api.post('/calls/agora/token', authMiddleware, async (c) => {
 api.get('/notifications', authMiddleware, async (c) => {
   try {
     const userId = getUserId(c);
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'notifications_read');
+    if (supabaseRequired) return supabaseRequired;
     const limited = await enforceRateLimit(c, 'notifications_read', userId, 180, 60);
     if (limited) return limited;
     const limit = clampNumber(c.req.query('limit') || '50', 1, 80, 50);
@@ -18058,7 +18124,11 @@ api.get('/notifications', authMiddleware, async (c) => {
     const notificationsSql = `SELECT * FROM notifications WHERE user_id = ? ${before ? 'AND datetime(created_at) < datetime(?)' : ''} ORDER BY created_at DESC LIMIT ?`;
     const r = await c.env.DB.prepare(notificationsSql).bind(...(before ? [userId, before, limit] : [userId, limit])).all();
     return c.json((r.results as any[]).map(safeNotificationPayload));
-  } catch {
+  } catch (error: any) {
+    if (supabasePrimaryConfigured(c)) {
+      console.warn(JSON.stringify({ event: 'notifications_read_failed', code: getErrorCode(error).slice(0, 180) }));
+      return c.json({ detail: 'Could not load notifications.' }, 500);
+    }
     // Auto-create table if missing
     await c.env.DB.prepare('CREATE TABLE IF NOT EXISTS notifications (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, type TEXT DEFAULT \'general\', title TEXT DEFAULT \'\', body TEXT DEFAULT \'\', data TEXT DEFAULT \'{}\', is_read INTEGER DEFAULT 0, created_at TEXT DEFAULT (datetime(\'now\')))').run();
     return c.json([]);
@@ -18067,6 +18137,8 @@ api.get('/notifications', authMiddleware, async (c) => {
 api.get('/notifications/unread-count', authMiddleware, async (c) => {
   try {
     const userId = getUserId(c);
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'notifications_unread_count');
+    if (supabaseRequired) return supabaseRequired;
     if (supabasePrimaryConfigured(c)) {
       const count = await supabaseAdminCountRows(c, 'app_notifications', {
         user_id: postgrestEqFilter(userId),
@@ -18076,10 +18148,18 @@ api.get('/notifications/unread-count', authMiddleware, async (c) => {
     }
     const r = await c.env.DB.prepare('SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND is_read = 0').bind(getUserId(c)).first();
     return c.json({ count: (r as any)?.count || 0 });
-  } catch { return c.json({ count: 0 }); }
+  } catch (error: any) {
+    if (supabasePrimaryConfigured(c)) {
+      console.warn(JSON.stringify({ event: 'notifications_unread_count_failed', code: getErrorCode(error).slice(0, 180) }));
+      return c.json({ detail: 'Could not load notification count.' }, 500);
+    }
+    return c.json({ count: 0 });
+  }
 });
 api.post('/notifications/mark-read', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'notifications_mark_read');
+  if (supabaseRequired) return supabaseRequired;
   if (supabasePrimaryConfigured(c)) {
     await supabaseAdminPatchRows(c, 'app_notifications', { user_id: postgrestEqFilter(userId) }, { is_read: true, updated_at: now() });
     return c.json({ marked: true });
@@ -18090,6 +18170,8 @@ api.post('/notifications/mark-read', authMiddleware, async (c) => {
 
 api.post('/notifications/device-token', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'push_token_register');
+  if (supabaseRequired) return supabaseRequired;
   const limited = await enforceRateLimit(c, 'push_token_register', userId, 30, 60);
   if (limited) return limited;
   const bodyTooLarge = rejectLargeRequest(c, 20_000);
@@ -18143,6 +18225,8 @@ api.post('/notifications/device-token', authMiddleware, async (c) => {
 
 api.delete('/notifications/device-token', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'push_token_delete');
+  if (supabaseRequired) return supabaseRequired;
   const body: any = await c.req.json().catch(() => ({}));
   const token = String(body.token || '').trim().replace(/[^a-fA-F0-9]/g, '').toLowerCase();
   if (!token) return c.json({ ok: true });
@@ -18163,6 +18247,8 @@ api.delete('/notifications/device-token', authMiddleware, async (c) => {
 
 api.post('/client/events', async (c) => {
   const userId = await getOptionalUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'client_events');
+  if (supabaseRequired) return supabaseRequired;
   const key = userId || clientIp(c);
   const limited = await enforceRateLimit(c, 'client_events', key, 80, 60);
   if (limited) return limited;
