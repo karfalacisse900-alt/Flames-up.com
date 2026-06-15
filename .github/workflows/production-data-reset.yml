@@ -79,6 +79,24 @@ jobs:
           set -euo pipefail
           supabase link --project-ref "$SUPABASE_PROJECT_REF"
 
+      - name: Create Supabase pre-reset data backup
+        if: ${{ inputs.reset_mode == 'execute' }}
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          supabase db dump --linked --data-only --use-copy --schema public,auth --file /tmp/captro-supabase-pre-reset-data.sql
+          gzip -9 /tmp/captro-supabase-pre-reset-data.sql
+
+      - name: Upload Supabase pre-reset data backup artifact
+        if: ${{ inputs.reset_mode == 'execute' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: captro-supabase-pre-reset-data-${{ github.run_id }}
+          path: /tmp/captro-supabase-pre-reset-data.sql.gz
+          retention-days: 14
+
       - name: Cloudflare media cleanup dry-run / execute
         if: ${{ inputs.cleanup_media == true }}
         shell: bash
@@ -91,12 +109,14 @@ jobs:
           CONFIRM_PRODUCTION_RESET: ${{ inputs.confirmation }}
         run: |
           set -euo pipefail
-          cd backend-cf
-          npx wrangler d1 execute DB --env production --remote --json --command \
-            "SELECT id, media_type, storage_provider, storage_key, public_url FROM media_assets;" \
-            > /tmp/captro-legacy-d1-media-assets.json
-          cd ..
-          export CLOUDFLARE_MEDIA_ASSETS_FILE=/tmp/captro-legacy-d1-media-assets.json
+          if [ "${{ inputs.reset_legacy_d1 }}" = "true" ]; then
+            cd backend-cf
+            npx wrangler d1 execute DB --env production --remote --json --command \
+              "SELECT id, media_type, storage_provider, storage_key, public_url FROM media_assets;" \
+              > /tmp/captro-legacy-d1-media-assets.json
+            cd ..
+            export CLOUDFLARE_MEDIA_ASSETS_FILE=/tmp/captro-legacy-d1-media-assets.json
+          fi
           node scripts/production-reset/cloudflare-media-cleanup.mjs
 
       - name: Build Supabase reset SQL
