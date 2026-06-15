@@ -18079,6 +18079,21 @@ api.post('/client/events', async (c) => {
   const eventName = cleanText(body.event_name || body.eventName || body.name, 80);
   if (!eventName || !/^[a-z0-9_.:-]{2,80}$/i.test(eventName)) return c.json({ detail: 'Invalid event name.' }, 400);
   const metadata = sanitizeClientEventMetadata(body.metadata || {});
+  if (supabasePrimaryConfigured(c)) {
+    await supabaseAdminUpsert(c, 'app_client_events', [{
+      id: uuid(),
+      user_id: userId || null,
+      event_name: eventName,
+      category: cleanText(body.category || '', 40),
+      status: cleanText(body.status || '', 40),
+      duration_ms: clampNumber(body.duration_ms || body.durationMs || 0, 0, 600_000, 0),
+      metadata,
+      app_version: cleanText(body.app_version || body.appVersion || '', 40),
+      platform: cleanText(body.platform || 'ios', 20),
+      created_at: now(),
+    }], 'id');
+    return c.json({ accepted: true }, 202);
+  }
   await ensureProductionReadinessSchema(c.env.DB);
   await c.env.DB.prepare(
     `INSERT INTO client_events (id, user_id, event_name, category, status, duration_ms, metadata, app_version, platform, created_at)
@@ -21788,6 +21803,46 @@ api.get('/admin/me', authMiddleware, async (c) => {
 api.get('/admin/dashboard', authMiddleware, async (c) => {
   try {
     await requireAdminRole(c, 'admin:read');
+    if (supabasePrimaryConfigured(c)) {
+      const todayStart = new Date();
+      todayStart.setUTCHours(0, 0, 0, 0);
+      const todayIso = todayStart.toISOString();
+      const dayAgoIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+      const openStatuses = ['open', 'pending', 'under_review', 'in_review', 'escalated'];
+      const [openReports, urgentReports, reportsToday, postsRemovedToday, usersSuspendedToday, newAccountsToday, uploadFailures, quickRows] = await Promise.all([
+        supabaseAdminCountRows(c, 'app_reports', { status: postgrestInFilter(openStatuses) }),
+        supabaseAdminCountRows(c, 'app_reports', { status: postgrestInFilter(openStatuses), priority: postgrestInFilter(['urgent', 'high']) }),
+        supabaseAdminCountRows(c, 'app_reports', { created_at: `gte.${todayIso}` }),
+        supabaseAdminCountRows(c, 'app_posts', { status: postgrestInFilter(['removed', 'deleted']), updated_at: `gte.${todayIso}` }),
+        supabaseAdminCountRows(c, 'app_users', { status: postgrestEqFilter('suspended'), updated_at: `gte.${todayIso}` }),
+        supabaseAdminCountRows(c, 'app_users', { created_at: `gte.${todayIso}` }),
+        supabaseAdminCountRows(c, 'app_media_assets', { or: '(moderation_status.eq.failed,upload_status.eq.failed)', updated_at: `gte.${dayAgoIso}` }),
+        supabaseAdminQueryRows(c, 'app_reports', {
+          select: '*',
+          filters: { status: postgrestInFilter(openStatuses) },
+          order: 'created_at.desc',
+          limit: 40,
+        }),
+      ]);
+      const rank: Record<string, number> = { urgent: 0, high: 1, medium: 2, normal: 3 };
+      const quick = (await supabaseEnrichAdminReportRows(c, quickRows))
+        .sort((a, b) => (rank[cleanText(a.priority || 'normal', 20)] ?? 4) - (rank[cleanText(b.priority || 'normal', 20)] ?? 4))
+        .slice(0, 8);
+      return c.json({
+        cards: {
+          open_reports: openReports,
+          urgent_reports: urgentReports,
+          reports_today: reportsToday,
+          posts_removed_today: postsRemovedToday,
+          users_suspended_today: usersSuspendedToday,
+          new_accounts_today: newAccountsToday,
+          upload_failures_24h: uploadFailures,
+        },
+        queues: {
+          new_reports: quick.map((row) => adminReportSummary(row, c.env)),
+        },
+      });
+    }
     await ensureAdminModerationSchema(c.env.DB);
     const [openReports, urgentReports, reportsToday, postsRemovedToday, usersSuspendedToday, newAccountsToday, uploadFailures] = await Promise.all([
       c.env.DB.prepare("SELECT COUNT(*) AS count FROM reports WHERE COALESCE(status, 'open') IN ('open', 'pending', 'under_review', 'escalated')").first(),
