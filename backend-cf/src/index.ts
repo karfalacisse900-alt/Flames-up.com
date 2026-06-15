@@ -292,6 +292,18 @@ function getUserId(c: any): string {
   return payload?.sub || payload?.userId || '';
 }
 
+function canonicalSupabaseRequestPayload(payload: any, user: any): any {
+  const appUserId = publicId(user?.id, 120);
+  if (!appUserId) return payload || {};
+  const supabaseSub = isUuidText(user?.supabase_user_id || (payload as any)?.supabase_sub || (payload as any)?.supabaseSub);
+  return {
+    ...(payload || {}),
+    sub: appUserId,
+    userId: appUserId,
+    supabase_sub: supabaseSub || undefined,
+  };
+}
+
 // ─── Auth Middleware ──────────────────────────────────────────────────────────
 const authMiddleware = async (c: any, next: () => Promise<void>) => {
   const authHeader = c.req.header('Authorization');
@@ -385,6 +397,11 @@ const authMiddleware = async (c: any, next: () => Promise<void>) => {
     } else if (accountStatus === 'banned' || accountStatus === 'deleted') {
       return c.json({ detail: 'This account cannot be used.' }, 403);
     }
+    if (supabasePrimaryConfigured(c)) {
+      payload = canonicalSupabaseRequestPayload(payload, user);
+      userId = String(payload?.sub || userId);
+      c.set('jwtPayload', payload);
+    }
     await next();
   } catch (error: any) {
     console.error(JSON.stringify({
@@ -439,8 +456,9 @@ async function getOptionalUserId(c: any): Promise<string> {
           .catch(() => {});
       }
     }
-    c.set('jwtPayload', payload);
-    return userId;
+    const canonicalPayload = supabasePrimaryConfigured(c) ? canonicalSupabaseRequestPayload(payload, user) : payload;
+    c.set('jwtPayload', canonicalPayload);
+    return String(canonicalPayload?.sub || userId);
   } catch {
     try {
       const resolved = await resolveSupabaseSessionUser(c, token);
