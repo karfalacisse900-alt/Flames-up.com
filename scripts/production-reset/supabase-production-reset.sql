@@ -18,6 +18,13 @@
 
 begin;
 
+create temporary table if not exists captro_reset_context (
+  started_at timestamptz not null
+) on commit drop;
+
+truncate table captro_reset_context;
+insert into captro_reset_context(started_at) values (transaction_timestamp());
+
 create table if not exists public.production_reset_events (
   id uuid primary key default gen_random_uuid(),
   mode text not null,
@@ -197,6 +204,7 @@ end $$;
 
 select mode, table_name, rows_affected, created_at
 from public.production_reset_events
+where created_at >= (select started_at from captro_reset_context)
 order by created_at desc, table_name asc
 limit 100;
 

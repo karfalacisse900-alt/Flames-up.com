@@ -140,7 +140,7 @@ jobs:
           supabase db query --linked --file /tmp/captro-production-reset.sql --output table
 
       - name: Legacy D1 dry-run counts
-        if: ${{ inputs.reset_mode == 'dry_run' }}
+        if: ${{ inputs.reset_mode == 'dry_run' && inputs.reset_legacy_d1 == true }}
         working-directory: ./backend-cf
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
