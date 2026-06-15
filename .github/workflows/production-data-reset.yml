@@ -68,7 +68,7 @@ jobs:
       - name: Install Supabase CLI
         uses: supabase/setup-cli@v1
         with:
-          version: latest
+          version: v2.106.0
 
       - name: Link Supabase production project
         shell: bash
