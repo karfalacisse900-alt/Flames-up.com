@@ -1420,10 +1420,12 @@ public struct MIRAAppleOAuthBody: Encodable {
   public let email: String?
   public let fullName: String?
   public let appleUser: String?
+  public let nonce: String?
 }
 
 public struct MIRAGoogleOAuthBody: Encodable {
   public let idToken: String
+  public let accessToken: String?
 }
 
 public struct MIRAMediaUploadResponse: Decodable, Hashable {

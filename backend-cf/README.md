@@ -133,12 +133,14 @@ Google OAuth setup:
 - Google Cloud authorized redirect URI should be the Supabase callback: `https://your-project-ref.supabase.co/auth/v1/callback`
 - Supabase Auth redirect URLs should include both `https://flames-up.com/auth/callback` and `captro://auth/callback`
 - Use the Web OAuth client ID and client secret in the Supabase Google provider. Native iOS/Android IDs can be used by the mobile app, but Supabase's provider secret belongs to the Web client.
+- Set the iOS build setting `GOOGLE_SERVER_CLIENT_ID` to the same Web OAuth client ID used by Supabase. The app keeps `GIDClientID` as the iOS client ID for URL handling, and uses `GIDServerClientID` to request an ID token that Supabase can validate.
 - If the Google account chooser says `continue with MIRA`, update the Google Cloud OAuth consent screen / branding app name to `Captro` and make sure Supabase's Google provider uses the Captro Web OAuth client. This wording is controlled by Google's OAuth app branding, not by a SwiftUI label.
 
 Apple native sign-in:
 - Enable Sign in with Apple on the iOS App ID `com.captro.app`.
 - Configure the Apple Services ID in Supabase for web OAuth.
-- Set `APPLE_OAUTH_AUDIENCES` on the Worker to include both the iOS bundle ID and the Services ID, for example `com.captro.app,com.captro.app.auth`.
+- The iOS app sends a raw Apple nonce through the Worker; Supabase Auth validates the native Apple identity token.
+- Set `APPLE_OAUTH_AUDIENCES` on the Worker only for optional local diagnostics; Supabase Auth is the source of truth for Apple token validation.
 
 ## Admin Moderation API
 

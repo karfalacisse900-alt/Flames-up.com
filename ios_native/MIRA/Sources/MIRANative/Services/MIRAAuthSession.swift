@@ -107,19 +107,19 @@ public final class MIRAAuthSession: ObservableObject, MIRASessionProviding {
   }
 
   @MainActor
-  public func signInWithApple(idToken: String, email: String?, fullName: String?, appleUser: String?, api: MIRAAPIClient) async {
+  public func signInWithApple(idToken: String, email: String?, fullName: String?, appleUser: String?, nonce: String?, api: MIRAAPIClient) async {
     await authenticate {
       try await api.post(
         "/auth/oauth/apple",
-        body: MIRAAppleOAuthBody(idToken: idToken, email: email, fullName: fullName, appleUser: appleUser)
+        body: MIRAAppleOAuthBody(idToken: idToken, email: email, fullName: fullName, appleUser: appleUser, nonce: nonce)
       )
     }
   }
 
   @MainActor
-  public func signInWithGoogle(idToken: String, api: MIRAAPIClient) async {
+  public func signInWithGoogle(idToken: String, accessToken: String?, api: MIRAAPIClient) async {
     await authenticate {
-      try await api.post("/auth/oauth/google", body: MIRAGoogleOAuthBody(idToken: idToken))
+      try await api.post("/auth/oauth/google", body: MIRAGoogleOAuthBody(idToken: idToken, accessToken: accessToken))
     }
   }
 

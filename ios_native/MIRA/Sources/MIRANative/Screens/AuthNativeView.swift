@@ -1,5 +1,7 @@
 import AuthenticationServices
+import CryptoKit
 import GoogleSignIn
+import Security
 import SwiftUI
 import UIKit
 
@@ -14,6 +16,7 @@ public struct AuthNativeView: View {
   @State private var isCreatingAccount = false
   @State private var selectedWelcomePage = 0
   @State private var isAuthPanelVisible = false
+  @State private var appleSignInNonce: String?
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   public init(session: MIRAAuthSession, api: MIRAAPIClient) {
@@ -240,6 +243,9 @@ public struct AuthNativeView: View {
   private var appleButton: some View {
     SignInWithAppleButton(.continue) { request in
       request.requestedScopes = [.fullName, .email]
+      let nonce = randomNonceString()
+      appleSignInNonce = nonce
+      request.nonce = sha256(nonce)
     } onCompletion: { result in
       guard case .success(let authorization) = result,
             let credential = authorization.credential as? ASAuthorizationAppleIDCredential,
@@ -249,12 +255,15 @@ public struct AuthNativeView: View {
         return
       }
       let fullName = PersonNameComponentsFormatter().string(from: credential.fullName ?? PersonNameComponents())
+      let nonce = appleSignInNonce
+      appleSignInNonce = nil
       Task {
         await session.signInWithApple(
           idToken: idToken,
           email: credential.email,
           fullName: fullName.isEmpty ? nil : fullName,
           appleUser: credential.user,
+          nonce: nonce,
           api: api
         )
       }
@@ -360,11 +369,26 @@ public struct AuthNativeView: View {
       ?? "702354172189-9gg83vd92n3s217n5pb4ddqqsnme8ocb.apps.googleusercontent.com"
   }
 
+  private var googleServerClientID: String? {
+    guard let value = Bundle.main.object(forInfoDictionaryKey: "GIDServerClientID") as? String else {
+      return nil
+    }
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    if trimmed.isEmpty || trimmed.contains("$(") {
+      return nil
+    }
+    return trimmed
+  }
+
   @MainActor
   private func startGoogleSignIn() {
     CaptroHaptics.light()
     session.errorMessage = nil
-    GIDSignIn.sharedInstance.configuration = GIDConfiguration(clientID: googleClientID)
+    if let googleServerClientID {
+      GIDSignIn.sharedInstance.configuration = GIDConfiguration(clientID: googleClientID, serverClientID: googleServerClientID)
+    } else {
+      GIDSignIn.sharedInstance.configuration = GIDConfiguration(clientID: googleClientID)
+    }
 
     guard let presenter = UIApplication.shared.miraTopPresentedViewController() else {
       session.errorMessage = "Google sign in is not ready. Please try again."
@@ -387,9 +411,46 @@ public struct AuthNativeView: View {
       }
 
       Task {
-        await session.signInWithGoogle(idToken: idToken, api: api)
+        await session.signInWithGoogle(
+          idToken: idToken,
+          accessToken: result?.user.accessToken.tokenString,
+          api: api
+        )
       }
     }
+  }
+
+  private func randomNonceString(length: Int = 32) -> String {
+    precondition(length > 0)
+    let charset = Array("0123456789ABCDEFGHIJKLMNOPQRSTUVXYZabcdefghijklmnopqrstuvwxyz-._")
+    var result = ""
+    var remainingLength = length
+
+    while remainingLength > 0 {
+      var randoms = [UInt8](repeating: 0, count: 16)
+      let status = SecRandomCopyBytes(kSecRandomDefault, randoms.count, &randoms)
+      if status != errSecSuccess {
+        return UUID().uuidString.replacingOccurrences(of: "-", with: "")
+      }
+
+      randoms.forEach { random in
+        if remainingLength == 0 {
+          return
+        }
+        if Int(random) < charset.count {
+          result.append(charset[Int(random)])
+          remainingLength -= 1
+        }
+      }
+    }
+
+    return result
+  }
+
+  private func sha256(_ input: String) -> String {
+    let inputData = Data(input.utf8)
+    let hashedData = SHA256.hash(data: inputData)
+    return hashedData.compactMap { String(format: "%02x", $0) }.joined()
   }
 }
 

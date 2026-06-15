@@ -10097,6 +10097,43 @@ function supabaseAuthUserFromResponse(data: any): any {
   return null;
 }
 
+function decodeJwtPayloadUnsafe(token: unknown): any {
+  const raw = String(token || '').trim();
+  const payload = raw.split('.')[1] || '';
+  if (!payload) return {};
+  try {
+    const padded = payload.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(payload.length / 4) * 4, '=');
+    return JSON.parse(atob(padded));
+  } catch {
+    return {};
+  }
+}
+
+function supabaseOAuthSubjectFromSession(session: any, provider: 'google' | 'apple', idToken: unknown): string {
+  const user = session?.user || {};
+  const identities = Array.isArray(user?.identities) ? user.identities : [];
+  for (const identity of identities) {
+    if (String(identity?.provider || '').toLowerCase() !== provider) continue;
+    const data = identity?.identity_data && typeof identity.identity_data === 'object' ? identity.identity_data : {};
+    const subject = cleanText(data.sub || identity?.id || identity?.identity_id || '', 240);
+    if (subject) return subject;
+  }
+  const payload = decodeJwtPayloadUnsafe(idToken);
+  return cleanText(payload?.sub || user?.id || '', 240);
+}
+
+function supabaseOAuthProfileFromSession(session: any, idToken: unknown): { email: string; fullName: string; profileImage: string } {
+  const user = session?.user || {};
+  const metadata = user?.user_metadata && typeof user.user_metadata === 'object' ? user.user_metadata : {};
+  const payload = decodeJwtPayloadUnsafe(idToken);
+  const email = normalizeOptionalEmail(user?.email || payload?.email);
+  return {
+    email,
+    fullName: normalizeOptionalName(metadata.full_name || metadata.name || metadata.display_name || payload?.name || safeDisplayNameFromEmail(email)),
+    profileImage: safeMediaReference(metadata.avatar_url || metadata.picture || payload?.picture || ''),
+  };
+}
+
 function supabaseProfileMetadata(input: {
   appUserId?: unknown;
   username?: unknown;
@@ -10322,9 +10359,12 @@ async function signInSupabasePassword(c: any, email: string, password: string) {
   return data;
 }
 
-async function signInSupabaseIdToken(c: any, provider: 'google' | 'apple', idToken: string, nonce?: string) {
+async function signInSupabaseIdToken(c: any, provider: 'google' | 'apple', idToken: string, options: { nonce?: string; accessToken?: string } = {}) {
   const body: any = { provider, token: idToken };
+  const nonce = cleanText(options.nonce, 512);
+  const accessToken = cleanText(options.accessToken, 4096);
   if (nonce) body.nonce = nonce;
+  if (provider === 'google' && accessToken) body.access_token = accessToken;
   const response = await fetch(`${getSupabaseUrl(c)}/auth/v1/token?grant_type=id_token`, {
     method: 'POST',
     headers: supabasePublicAuthHeaders(c),
@@ -12261,20 +12301,25 @@ api.post('/auth/oauth/google', async (c) => {
     const limited = await enforceRateLimit(c, 'oauth_google', clientIp(c), 30, 300);
     if (limited) return limited;
     const body: any = await c.req.json().catch(() => ({}));
-    const unknown = rejectUnknownFields(c, body, ['id_token', 'idToken', 'nonce', 'raw_nonce', 'rawNonce']);
+    const unknown = rejectUnknownFields(c, body, ['id_token', 'idToken', 'access_token', 'accessToken', 'nonce', 'raw_nonce', 'rawNonce']);
     if (unknown) return unknown;
     const id_token = String(body.id_token || body.idToken || '');
     if (!id_token) return c.json({ detail: 'id_token is required' }, 400);
 
-    const googleProfile = await verifyGoogleIdToken(c, id_token);
     try {
-      const supabaseSession = await signInSupabaseIdToken(c, 'google', id_token, String(body.nonce || body.raw_nonce || body.rawNonce || ''));
+      const accessToken = cleanText(body.access_token || body.accessToken, 4096);
+      const supabaseSession = await signInSupabaseIdToken(c, 'google', id_token, {
+        accessToken,
+        nonce: String(body.nonce || body.raw_nonce || body.rawNonce || ''),
+      });
+      const sessionProfile = supabaseOAuthProfileFromSession(supabaseSession, id_token);
+      const oauthSubject = supabaseOAuthSubjectFromSession(supabaseSession, 'google', id_token);
       const session = await issueCaptroTokenForSupabaseAccessToken(c, supabaseSession.access_token, {
-        email: googleProfile.email,
-        full_name: googleProfile.fullName,
-        profile_image: googleProfile.profileImage,
+        email: sessionProfile.email,
+        full_name: sessionProfile.fullName,
+        profile_image: sessionProfile.profileImage,
         auth_provider: 'google',
-        oauth_subject: googleProfile.subject,
+        oauth_subject: oauthSubject,
       });
       return c.json(supabaseAuthSessionResponse(supabaseSession, session.user));
     } catch (error: any) {
@@ -12285,7 +12330,7 @@ api.post('/auth/oauth/google', async (c) => {
         return c.json({ detail: 'Google sign in is not configured.' }, 503);
       }
       if (code.startsWith('SUPABASE_ID_TOKEN_SIGN_IN_FAILED')) {
-        return c.json({ detail: 'Google OAuth login failed' }, 401);
+        return c.json({ detail: 'Google sign in is not connected to Supabase correctly. Please check the Google OAuth client configuration.' }, 401);
       }
       return c.json({ detail: 'Could not finish Google sign in right now.' }, 502);
     }
@@ -12318,15 +12363,17 @@ api.post('/auth/oauth/apple', async (c) => {
     const idToken = String(body.id_token || body.idToken || '');
     if (!idToken) return c.json({ detail: 'id_token is required' }, 400);
 
-    const appleProfile = await verifyAppleIdToken(c, idToken);
     const clientEmail = normalizeOptionalEmail(body.email);
     const clientFullName = normalizeOptionalName(body.full_name || body.fullName);
-    const appleSubject = String(appleProfile.subject || body.apple_user || body.appleUser || '').trim();
     try {
-      const supabaseSession = await signInSupabaseIdToken(c, 'apple', idToken, String(body.nonce || body.raw_nonce || body.rawNonce || ''));
+      const supabaseSession = await signInSupabaseIdToken(c, 'apple', idToken, {
+        nonce: String(body.nonce || body.raw_nonce || body.rawNonce || ''),
+      });
+      const sessionProfile = supabaseOAuthProfileFromSession(supabaseSession, idToken);
+      const appleSubject = supabaseOAuthSubjectFromSession(supabaseSession, 'apple', idToken) || cleanText(body.apple_user || body.appleUser, 240);
       const session = await issueCaptroTokenForSupabaseAccessToken(c, supabaseSession.access_token, {
-        email: appleProfile.email || clientEmail || internalOAuthEmail('apple', appleSubject),
-        full_name: clientFullName || appleProfile.fullName || 'Apple User',
+        email: sessionProfile.email || clientEmail || internalOAuthEmail('apple', appleSubject),
+        full_name: clientFullName || sessionProfile.fullName || 'Apple User',
         auth_provider: 'apple',
         oauth_subject: appleSubject,
       });
@@ -12339,7 +12386,7 @@ api.post('/auth/oauth/apple', async (c) => {
         return c.json({ detail: 'Apple sign in is not configured.' }, 503);
       }
       if (code.startsWith('SUPABASE_ID_TOKEN_SIGN_IN_FAILED')) {
-        return c.json({ detail: 'Apple OAuth login failed' }, 401);
+        return c.json({ detail: 'Apple sign in is not connected to Supabase correctly. Please check the Apple OAuth configuration.' }, 401);
       }
       return c.json({ detail: 'Could not finish Apple sign in right now.' }, 502);
     }
