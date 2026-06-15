@@ -311,60 +311,27 @@ const authMiddleware = async (c: any, next: () => Promise<void>) => {
   const token = authHeader.slice(7);
   let payload: any;
   let userId = '';
+  let user: any = null;
 
   try {
-    const { jwtVerify } = await import('jose');
-    const verified = await jwtVerify(token, new TextEncoder().encode(getJwtSecret(c)));
-    payload = verified.payload;
-    userId = String(payload?.sub || payload?.userId || '');
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'auth_context');
+    if (supabaseRequired) return supabaseRequired;
+    const resolved = await resolveSupabaseSessionUser(c, token);
+    payload = resolved.payload;
+    userId = resolved.userId;
+    user = resolved.user;
     c.set('jwtPayload', payload);
   } catch (error: any) {
-    try {
-      const resolved = await resolveSupabaseSessionUser(c, token);
-      payload = resolved.payload;
-      userId = resolved.userId;
-      c.set('jwtPayload', payload);
-    } catch {
-      if (getErrorCode(error).includes('JWT_SECRET_MISSING')) {
-        return c.json({ detail: 'Auth service is not configured.', code: 'JWT_SECRET_MISSING' }, 503);
-      }
-      return c.json({ detail: 'Invalid token', code: 'INVALID_TOKEN' }, 401);
+    const code = getErrorCode(error);
+    if (code === 'SUPABASE_NOT_CONFIGURED' || code === 'SUPABASE_SERVICE_ROLE_MISSING' || code === 'SUPABASE_AUTH_KEY_MISSING') {
+      return c.json({ detail: 'Captro production database is not configured. Please try again later.', code: 'SUPABASE_PRIMARY_REQUIRED' }, 503);
     }
+    return c.json({ detail: 'Invalid session. Please sign in again.', code: 'INVALID_TOKEN' }, 401);
   }
 
   if (!userId) return c.json({ detail: 'Invalid token', code: 'INVALID_TOKEN' }, 401);
 
   try {
-    if (supabasePrimaryRequested(c) && !supabaseEngagementConfigured(c)) {
-      return c.json({
-        detail: 'Captro production database is not configured. Please try again later.',
-        code: 'SUPABASE_PRIMARY_REQUIRED',
-        feature: 'auth_context',
-      }, 503);
-    }
-    let user: any = null;
-    if (supabasePrimaryConfigured(c)) {
-      user = await getSupabaseSessionUserByAnyId(c, userId);
-    }
-    if (!user && supabasePrimaryConfigured(c)) {
-      return c.json({ detail: 'Session user was not found.', code: 'USER_NOT_FOUND' }, 401);
-    }
-    if (!user) {
-      await ensureAccountDeletionSchema(c.env.DB);
-      try {
-        user = await c.env.DB.prepare('SELECT id, status, suspended_until, session_revoked_at FROM users WHERE id = ?').bind(userId).first();
-      } catch (error: any) {
-        const message = String(error?.message || '');
-        if (message.includes('no such column: suspended_until')) {
-          user = await c.env.DB.prepare('SELECT id, status, NULL AS suspended_until, NULL AS session_revoked_at FROM users WHERE id = ?').bind(userId).first();
-        } else if (message.includes('no such column: status')) {
-          user = await c.env.DB.prepare("SELECT id, 'active' AS status, NULL AS suspended_until, NULL AS session_revoked_at FROM users WHERE id = ?").bind(userId).first();
-        } else {
-          throw error;
-        }
-      }
-    }
-
     if (!user) return c.json({ detail: 'Session user was not found.', code: 'USER_NOT_FOUND' }, 401);
 
     const accountStatus = String(user?.status || 'active');
@@ -383,25 +350,16 @@ const authMiddleware = async (c: any, next: () => Promise<void>) => {
     if (accountStatus === 'suspended') {
       const suspendedUntil = Date.parse(String(user?.suspended_until || ''));
       if (Number.isFinite(suspendedUntil) && suspendedUntil <= Date.now()) {
-        if (supabasePrimaryConfigured(c)) {
-          await supabaseClearExpiredSuspension(c, userId).catch(() => {});
-        } else {
-          await c.env.DB.prepare("UPDATE users SET status = 'active', suspended_until = NULL, updated_at = datetime('now') WHERE id = ? AND status = 'suspended'")
-            .bind(userId)
-            .run()
-            .catch(() => {});
-        }
+        await supabaseClearExpiredSuspension(c, userId).catch(() => {});
       } else {
         return c.json({ detail: 'This account is suspended.' }, 403);
       }
     } else if (accountStatus === 'banned' || accountStatus === 'deleted') {
       return c.json({ detail: 'This account cannot be used.' }, 403);
     }
-    if (supabasePrimaryConfigured(c)) {
-      payload = canonicalSupabaseRequestPayload(payload, user);
-      userId = String(payload?.sub || userId);
-      c.set('jwtPayload', payload);
-    }
+    payload = canonicalSupabaseRequestPayload(payload, user);
+    userId = String(payload?.sub || userId);
+    c.set('jwtPayload', payload);
     await next();
   } catch (error: any) {
     console.error(JSON.stringify({
@@ -419,65 +377,24 @@ async function getOptionalUserId(c: any): Promise<string> {
 
   const token = authHeader.slice(7);
   try {
-    const { jwtVerify } = await import('jose');
-    const verified = await jwtVerify(token, new TextEncoder().encode(getJwtSecret(c)));
-    const payload: any = verified.payload;
-    const userId = String(payload?.sub || payload?.userId || '');
-    if (!userId) return '';
-    if (supabasePrimaryRequested(c) && !supabaseEngagementConfigured(c)) return '';
-
-    let user: any;
-    try {
-      user = supabasePrimaryConfigured(c) ? await getSupabaseSessionUserByAnyId(c, userId) : null;
-      if (!user && supabasePrimaryConfigured(c)) return '';
-      if (!user) user = await c.env.DB.prepare('SELECT id, status, suspended_until FROM users WHERE id = ?').bind(userId).first();
-    } catch (error: any) {
-      const message = String(error?.message || '');
-      if (message.includes('no such column: suspended_until')) {
-        user = await c.env.DB.prepare('SELECT id, status, NULL AS suspended_until FROM users WHERE id = ?').bind(userId).first();
-      } else if (message.includes('no such column: status')) {
-        user = await c.env.DB.prepare("SELECT id, 'active' AS status, NULL AS suspended_until FROM users WHERE id = ?").bind(userId).first();
-      } else {
-        throw error;
-      }
-    }
+    if (!supabasePrimaryConfigured(c)) return '';
+    const resolved = await resolveSupabaseSessionUser(c, token);
+    const userId = resolved.userId;
+    const user = resolved.user;
 
     const optionalStatus = String(user?.status || 'active');
     if (!user || optionalStatus === 'banned' || optionalStatus === 'deleted' || optionalStatus === 'deletion_pending') return '';
     if (optionalStatus === 'suspended') {
       const suspendedUntil = Date.parse(String(user?.suspended_until || ''));
       if (!Number.isFinite(suspendedUntil) || suspendedUntil > Date.now()) return '';
-      if (supabasePrimaryConfigured(c)) {
-        await supabaseClearExpiredSuspension(c, userId).catch(() => {});
-      } else {
-        await c.env.DB.prepare("UPDATE users SET status = 'active', suspended_until = NULL, updated_at = datetime('now') WHERE id = ? AND status = 'suspended'")
-          .bind(userId)
-          .run()
-          .catch(() => {});
-      }
+      await supabaseClearExpiredSuspension(c, userId).catch(() => {});
     }
-    const canonicalPayload = supabasePrimaryConfigured(c) ? canonicalSupabaseRequestPayload(payload, user) : payload;
+    const canonicalPayload = canonicalSupabaseRequestPayload(resolved.payload, user);
     c.set('jwtPayload', canonicalPayload);
     return String(canonicalPayload?.sub || userId);
   } catch {
-    try {
-      const resolved = await resolveSupabaseSessionUser(c, token);
-      if (['banned', 'deleted', 'deletion_pending'].includes(String(resolved.user?.status || 'active'))) return '';
-      c.set('jwtPayload', resolved.payload);
-      return resolved.userId;
-    } catch {
-      return '';
-    }
+    return '';
   }
-}
-
-async function createToken(userId: string, secret: string, claims: Record<string, unknown> = {}): Promise<string> {
-  const { SignJWT } = await import('jose');
-  return new SignJWT({ ...claims, sub: userId, userId })
-    .setProtectedHeader({ alg: 'HS256' })
-    .setIssuedAt()
-    .setExpirationTime('30d')
-    .sign(new TextEncoder().encode(secret));
 }
 
 function parseAudiences(...values: Array<string | undefined>): string[] {
@@ -10353,9 +10270,7 @@ async function findOrCreateSupabaseAppUser(c: any, payload: any, extras: any = {
 
 async function resolveSupabaseSessionUser(c: any, token: string) {
   const supabasePayload = await verifySupabaseAccessToken(c, token);
-  const user = supabasePrimaryConfigured(c)
-    ? await findOrCreateSupabaseAppUser(c, supabasePayload, { email: supabasePayload.email })
-    : await findOrCreateSupabaseUser(c, supabasePayload, { email: supabasePayload.email });
+  const user = await findOrCreateSupabaseAppUser(c, supabasePayload, { email: supabasePayload.email });
   const userId = String(user?.id || '');
   if (!userId) throw new Error('USER_NOT_FOUND');
 
@@ -10659,9 +10574,7 @@ async function signInSupabaseIdToken(c: any, provider: 'google' | 'apple', idTok
 
 async function issueCaptroTokenForSupabaseAccessToken(c: any, supabaseAccessToken: string, extras: any = {}) {
   const payload = await verifySupabaseAccessToken(c, supabaseAccessToken);
-  const user = supabasePrimaryConfigured(c)
-    ? await findOrCreateSupabaseAppUser(c, payload, extras)
-    : await findOrCreateSupabaseUser(c, payload, extras);
+  const user = await findOrCreateSupabaseAppUser(c, payload, extras);
   if (['banned', 'suspended', 'deleted'].includes(String(user.status || 'active'))) {
     await logSecurityEvent(c, 'login_banned_blocked', user.id, { provider: 'supabase' });
     throw new Error('ACCOUNT_DISABLED');
@@ -10672,14 +10585,25 @@ async function issueCaptroTokenForSupabaseAccessToken(c: any, supabaseAccessToke
     providerUserId: extras.oauth_subject || extras.provider_user_id || user.oauth_subject || payload.sub,
     email: payload.email || user.email,
   });
-  const token = await createToken(user.id, getJwtSecret(c), {
-    supabase_sub: payload.sub,
-  });
   runBackgroundTask(c, 'supabase_login_profile_write_through_failed', async () => {
     await syncSupabaseAuthMetadataForUser(c, user);
-    if (!supabasePrimaryConfigured(c)) await mirrorLegacyUserToSupabase(c, user.id);
   });
-  return { token, user };
+  return { token: supabaseAccessToken, user };
+}
+
+function supabaseAuthSessionResponse(session: any, user: any) {
+  const accessToken = String(session?.access_token || session?.token || '').trim();
+  const refreshToken = String(session?.refresh_token || '').trim();
+  const response: Record<string, unknown> = {
+    access_token: accessToken,
+    token: accessToken,
+    token_type: String(session?.token_type || 'bearer').toLowerCase(),
+    user: authUserPayload(user),
+  };
+  if (refreshToken) response.refresh_token = refreshToken;
+  if (Number.isFinite(Number(session?.expires_in))) response.expires_in = Number(session.expires_in);
+  if (Number.isFinite(Number(session?.expires_at))) response.expires_at = Number(session.expires_at);
+  return response;
 }
 
 async function updateSupabaseAuthUser(c: any, supabaseUserId: unknown, payload: { email?: string; password?: string; phone?: string; user_metadata?: Record<string, unknown>; app_metadata?: Record<string, unknown> }) {
@@ -12580,10 +12504,9 @@ api.post('/auth/supabase', async (c) => {
     const limited = await enforceRateLimit(c, 'auth_supabase', clientIp(c), 60, 300);
     if (limited) return limited;
     const body: any = await c.req.json().catch(() => ({}));
-    const session = await issueCaptroTokenForSupabaseAccessToken(c, body.access_token || body.token, body);
-    const token = session.token;
-    const user = session.user;
-    return c.json({ access_token: token, token_type: 'bearer', user: authUserPayload(user) });
+    const rawAccessToken = body.access_token || body.token;
+    const session = await issueCaptroTokenForSupabaseAccessToken(c, rawAccessToken, body);
+    return c.json(supabaseAuthSessionResponse({ access_token: rawAccessToken, token_type: 'bearer' }, session.user));
   } catch (error: any) {
     const code = getErrorCode(error);
     if (code === 'SUPABASE_NOT_CONFIGURED') return c.json({ detail: 'Supabase auth is not configured on the backend.' }, 503);
@@ -12609,7 +12532,6 @@ api.post('/auth/register', async (c) => {
     if (limited) return limited;
     const dailyLimited = await enforceRateLimit(c, 'auth_register_daily', clientIp(c), 20, 86400);
     if (dailyLimited) return dailyLimited;
-    const jwtSecret = getJwtSecret(c);
     const body: any = await c.req.json().catch(() => ({}));
     const unknown = rejectUnknownFields(c, body, ['email', 'password', 'username', 'full_name', 'fullName']);
     if (unknown) return unknown;
@@ -12689,8 +12611,8 @@ api.post('/auth/register', async (c) => {
     runBackgroundTask(c, 'supabase_signup_metadata_sync_failed', async () => {
       await syncSupabaseAuthMetadataForUser(c, appUser);
     });
-    const token = await createToken(appUser.id, jwtSecret, { supabase_sub: authResult.user.id });
-    return c.json({ access_token: token, token_type: 'bearer', user: authUserPayload(appUser) });
+    const supabaseSession = await signInSupabasePassword(c, email, password);
+    return c.json(supabaseAuthSessionResponse(supabaseSession, appUser));
   } catch (error: any) {
     const code = getErrorCode(error);
     if (code === 'JWT_SECRET_MISSING') return c.json({ detail: 'Auth service is not configured.' }, 503);
@@ -12732,7 +12654,7 @@ api.post('/auth/login', async (c) => {
         full_name: supabaseSession.user?.user_metadata?.full_name || supabaseSession.user?.user_metadata?.name || '',
         profile_image: supabaseSession.user?.user_metadata?.avatar_url || supabaseSession.user?.user_metadata?.picture || '',
       });
-      return c.json({ access_token: session.token, token_type: 'bearer', user: authUserPayload(session.user) });
+      return c.json(supabaseAuthSessionResponse(supabaseSession, session.user));
     } catch (error: any) {
       const code = getErrorCode(error);
       if (code === 'ACCOUNT_DISABLED') return c.json({ detail: 'This account cannot be used.' }, 403);
@@ -12820,7 +12742,7 @@ api.post('/auth/oauth/google', async (c) => {
         auth_provider: 'google',
         oauth_subject: googleProfile.subject,
       });
-      return c.json({ access_token: session.token, token_type: 'bearer', user: authUserPayload(session.user) });
+      return c.json(supabaseAuthSessionResponse(supabaseSession, session.user));
     } catch (error: any) {
       const code = getErrorCode(error);
       if (code === 'ACCOUNT_DISABLED') throw error;
@@ -12874,7 +12796,7 @@ api.post('/auth/oauth/apple', async (c) => {
         auth_provider: 'apple',
         oauth_subject: appleSubject,
       });
-      return c.json({ access_token: session.token, token_type: 'bearer', user: authUserPayload(session.user) });
+      return c.json(supabaseAuthSessionResponse(supabaseSession, session.user));
     } catch (error: any) {
       const code = getErrorCode(error);
       if (code === 'ACCOUNT_DISABLED') throw error;
