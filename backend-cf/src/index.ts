@@ -7843,7 +7843,7 @@ async function setCanonicalPostLikeState(c: any, postId: string, userId: string,
     }
   }
 
-  const syncLegacyD1LikeCache = async () => {
+  if (!useSupabase) {
     await deletePostLikesForUsers(c.env.DB, postId, relatedUserIds);
     if (nextLiked) {
       await c.env.DB.prepare('INSERT OR IGNORE INTO likes (id, user_id, post_id) VALUES (?, ?, ?)')
@@ -7855,11 +7855,6 @@ async function setCanonicalPostLikeState(c: any, postId: string, userId: string,
          WHERE EXISTS (SELECT 1 FROM discover_posts WHERE id = ?)`
       ).bind(uuid(), userId, postId, postId).run().catch(() => {});
     }
-  };
-  if (useSupabase) {
-    if (!supabasePrimaryRequested(c)) await syncLegacyD1LikeCache().catch(() => undefined);
-  } else {
-    await syncLegacyD1LikeCache();
   }
 
   const state = await getCanonicalPostEngagementState(c, postId, userId);
@@ -7892,7 +7887,7 @@ async function setCanonicalPostSaveState(c: any, postId: string, userId: string,
     }
   }
 
-  const syncLegacyD1SaveCache = async () => {
+  if (!useSupabase) {
     await deletePostSavesForUsers(c.env.DB, postId, relatedUserIds);
     if (saved) {
       await c.env.DB.prepare('INSERT OR IGNORE INTO saved_posts (id, user_id, post_id, collection) VALUES (?, ?, ?, ?)')
@@ -7902,11 +7897,6 @@ async function setCanonicalPostSaveState(c: any, postId: string, userId: string,
         'INSERT INTO bookmarks (id, user_id, post_id, collection) VALUES (?, ?, ?, ?) ON CONFLICT(user_id, post_id) DO UPDATE SET collection = ?'
       ).bind(uuid(), userId, postId, collectionName, collectionName).run().catch(() => {});
     }
-  };
-  if (useSupabase) {
-    if (!supabasePrimaryRequested(c)) await syncLegacyD1SaveCache().catch(() => undefined);
-  } else {
-    await syncLegacyD1SaveCache();
   }
 
   const state = await getCanonicalPostEngagementState(c, postId, userId);
