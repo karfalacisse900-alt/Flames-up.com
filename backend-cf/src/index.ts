@@ -6875,7 +6875,13 @@ async function supabaseReadVisiblePosts(c: any, viewerId: string, options: Supab
     offset: postIds.length || postId || ownerId || search || (options.category && options.category !== 'all') ? 0 : offset,
   });
 
-  const candidateRows = rows.filter((row) => supabaseAppPostHasRenderablePhotoMedia(row) && supabaseAppPostMatchesCategory(row, options.category));
+  const isDiscoverQuery = options.category !== undefined;
+  const candidateRows = rows.filter((row) => {
+    if (!supabaseAppPostHasRenderablePhotoMedia(row) || !supabaseAppPostMatchesCategory(row, options.category)) return false;
+    if (!isDiscoverQuery) return true;
+    const metadata = parseJsonObject(row?.metadata);
+    return !cleanText((metadata as any).discover_blocked_at, 80);
+  });
   const authorIds = candidateRows.flatMap((row) => [publicId(row?.app_user_id, 120), isUuidText(row?.user_id) || '']).filter(Boolean);
   const [viewerAliases, blockedIds, authorMap, commentCounts] = await Promise.all([
     supabaseRelatedInteractionUserIds(c, viewerId),
@@ -7508,6 +7514,21 @@ async function supabaseOwnedAppPost(c: any, postId: string, userId: string): Pro
     return { status: 403, body: { detail: 'Not your post' } };
   }
   return { status: 200, row, identity };
+}
+
+async function supabaseAdminPostForModeration(c: any, postId: string): Promise<{ row: any; identity: SupabasePostIdentity } | null> {
+  const identity = await supabaseResolvePostIdentity(c, postId);
+  const rows = await supabaseAdminQueryRows(c, 'app_posts', {
+    select: 'id,legacy_post_id,app_user_id,user_id,status,metadata',
+    filters: { or: supabaseAppPostIdentityOrFilter(identity) },
+    limit: 1,
+  });
+  const row = rows[0];
+  return row ? { row, identity } : null;
+}
+
+function supabasePostModerationTargetUserId(row: any): string {
+  return publicId(row?.app_user_id, 120) || isUuidText(row?.user_id) || '';
 }
 
 async function supabasePostInteractionActorCounts(c: any, postIds: string[]) {
@@ -22730,6 +22751,25 @@ api.post('/admin/posts/:postId/remove', authMiddleware, async (c) => {
     const body: any = await c.req.json().catch(() => ({}));
     const reason = cleanMultilineText(body.reason, 500);
     if (!reason) return c.json({ detail: 'Reason is required.' }, 400);
+    if (supabasePrimaryConfigured(c)) {
+      const target = await supabaseAdminPostForModeration(c, postId);
+      if (!target) return c.json({ detail: 'Post not found.' }, 404);
+      const before = target.row;
+      const metadata = parseJsonObject(before?.metadata);
+      const removedAt = now();
+      await supabaseAdminPatchRows(c, 'app_posts', { or: supabaseAppPostIdentityOrFilter(target.identity) }, {
+        status: 'removed',
+        metadata: {
+          ...metadata,
+          removed_at: removedAt,
+          removed_reason: reason,
+          removed_by: admin.userId,
+        },
+        updated_at: removedAt,
+      });
+      await writeAdminAuditLog(c, admin, { actionType: 'post_removed', targetType: 'post', targetId: postId, targetUserId: supabasePostModerationTargetUserId(before), reason, note: body.note, beforeState: before, afterState: { status: 'removed' } });
+      return c.json({ removed: true });
+    }
     const before: any = await c.env.DB.prepare('SELECT id, user_id, status FROM posts WHERE id = ?').bind(postId).first();
     if (!before) return c.json({ detail: 'Post not found.' }, 404);
     await c.env.DB.prepare("UPDATE posts SET status = 'removed', removed_at = ?, removed_reason = ? WHERE id = ?").bind(now(), reason, postId).run();
@@ -22750,6 +22790,22 @@ api.post('/admin/posts/:postId/restore', authMiddleware, async (c) => {
     const body: any = await c.req.json().catch(() => ({}));
     const reason = cleanMultilineText(body.reason, 500);
     if (!reason) return c.json({ detail: 'Reason is required.' }, 400);
+    if (supabasePrimaryConfigured(c)) {
+      const target = await supabaseAdminPostForModeration(c, postId);
+      if (!target) return c.json({ detail: 'Post not found.' }, 404);
+      const before = target.row;
+      const metadata = parseJsonObject(before?.metadata);
+      delete (metadata as any).removed_at;
+      delete (metadata as any).removed_reason;
+      delete (metadata as any).removed_by;
+      await supabaseAdminPatchRows(c, 'app_posts', { or: supabaseAppPostIdentityOrFilter(target.identity) }, {
+        status: 'active',
+        metadata,
+        updated_at: now(),
+      });
+      await writeAdminAuditLog(c, admin, { actionType: 'post_restored', targetType: 'post', targetId: postId, targetUserId: supabasePostModerationTargetUserId(before), reason, note: body.note, beforeState: before, afterState: { status: 'active' } });
+      return c.json({ restored: true });
+    }
     const before: any = await c.env.DB.prepare('SELECT id, user_id, status FROM posts WHERE id = ?').bind(postId).first();
     if (!before) return c.json({ detail: 'Post not found.' }, 404);
     await c.env.DB.prepare("UPDATE posts SET status = 'active', removed_at = NULL, removed_reason = '' WHERE id = ?").bind(postId).run();
@@ -22772,6 +22828,22 @@ api.post('/admin/posts/:postId/mark-safe', authMiddleware, async (c) => {
     if (unknown) return unknown;
     const reason = cleanMultilineText(body.reason, 500);
     if (!reason) return c.json({ detail: 'Reason is required.' }, 400);
+    if (supabasePrimaryConfigured(c)) {
+      const target = await supabaseAdminPostForModeration(c, postId);
+      if (!target) return c.json({ detail: 'Post not found.' }, 404);
+      const before = target.row;
+      const metadata = parseJsonObject(before?.metadata);
+      for (const key of ['removed_at', 'removed_reason', 'removed_by', 'discover_blocked_at', 'discover_blocked_by', 'discover_blocked_reason']) {
+        delete (metadata as any)[key];
+      }
+      await supabaseAdminPatchRows(c, 'app_posts', { or: supabaseAppPostIdentityOrFilter(target.identity) }, {
+        status: 'active',
+        metadata,
+        updated_at: now(),
+      });
+      await writeAdminAuditLog(c, admin, { actionType: 'post_marked_safe', targetType: 'post', targetId: postId, targetUserId: supabasePostModerationTargetUserId(before), reason, note: body.note, beforeState: before, afterState: { status: 'active', discover_blocked: false } });
+      return c.json({ marked_safe: true });
+    }
     const before: any = await c.env.DB.prepare('SELECT id, user_id, status, discover_blocked_at FROM posts WHERE id = ?').bind(postId).first();
     if (!before) return c.json({ detail: 'Post not found.' }, 404);
     await c.env.DB.prepare("UPDATE posts SET status = 'active', removed_at = NULL, removed_reason = '', discover_blocked_at = NULL, discover_blocked_by = '', discover_blocked_reason = '', updated_at = datetime('now') WHERE id = ?")
@@ -22793,6 +22865,23 @@ api.post('/admin/posts/:postId/remove-from-discover', authMiddleware, async (c) 
     const body: any = await c.req.json().catch(() => ({}));
     const reason = cleanMultilineText(body.reason, 500);
     if (!reason) return c.json({ detail: 'Reason is required.' }, 400);
+    if (supabasePrimaryConfigured(c)) {
+      const target = await supabaseAdminPostForModeration(c, postId);
+      if (!target) return c.json({ detail: 'Post not found.' }, 404);
+      const before = target.row;
+      const metadata = parseJsonObject(before?.metadata);
+      await supabaseAdminPatchRows(c, 'app_posts', { or: supabaseAppPostIdentityOrFilter(target.identity) }, {
+        metadata: {
+          ...metadata,
+          discover_blocked_at: now(),
+          discover_blocked_by: admin.userId,
+          discover_blocked_reason: reason,
+        },
+        updated_at: now(),
+      });
+      await writeAdminAuditLog(c, admin, { actionType: 'post_removed_from_discover', targetType: 'post', targetId: postId, targetUserId: supabasePostModerationTargetUserId(before), reason, note: body.note, beforeState: before, afterState: { discover_blocked: true } });
+      return c.json({ removed_from_discover: true });
+    }
     const before: any = await c.env.DB.prepare('SELECT id, user_id, discover_blocked_at FROM posts WHERE id = ?').bind(postId).first();
     if (!before) return c.json({ detail: 'Post not found.' }, 404);
     await c.env.DB.prepare('UPDATE posts SET discover_blocked_at = ?, discover_blocked_by = ?, discover_blocked_reason = ? WHERE id = ?')
@@ -24984,6 +25073,27 @@ api.delete('/admin/posts/:postId', authMiddleware, async (c) => {
     const postId = c.req.param('postId');
     const ts = now();
     await ensureGovernanceSchema(c.env.DB);
+    if (supabasePrimaryConfigured(c)) {
+      const target = await supabaseAdminPostForModeration(c, postId);
+      if (!target) return c.json({ detail: 'Post not found.' }, 404);
+      const metadata = parseJsonObject(target.row?.metadata);
+      await supabaseAdminPatchRows(c, 'app_posts', { or: supabaseAppPostIdentityOrFilter(target.identity) }, {
+        status: 'removed',
+        metadata: {
+          ...metadata,
+          removed_at: ts,
+          removed_reason: 'Removed by admin',
+          removed_by: adminId,
+        },
+        updated_at: ts,
+      });
+
+      await c.env.DB.prepare(
+        'INSERT INTO admin_actions (id, admin_id, action_type, target_type, target_id, details, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      ).bind(crypto.randomUUID(), adminId, 'remove_post', 'post', postId, JSON.stringify({ soft_deleted: true, supabase_primary: true }), ts).run();
+
+      return c.json({ message: 'Post removed', soft_deleted: true });
+    }
     await c.env.DB.prepare("UPDATE posts SET status = 'removed', removed_at = ?, removed_reason = 'Removed by admin' WHERE id = ?")
       .bind(ts, postId).run();
 
