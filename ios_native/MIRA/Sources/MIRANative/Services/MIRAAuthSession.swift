@@ -158,7 +158,13 @@ public final class MIRAAuthSession: ObservableObject, MIRASessionProviding {
       await MIRAAppCacheStore.shared.saveCurrentProfile(response.user)
       await MIRALocalJSONCache.save(response.user, key: cachedUserKey)
     } catch {
-      errorMessage = "Could not sign in. Check your account and try again."
+      if let apiError = error as? MIRAAPIError,
+         let message = apiError.errorDescription,
+         !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        errorMessage = message
+      } else {
+        errorMessage = "Could not sign in. Check your account and try again."
+      }
     }
   }
 }

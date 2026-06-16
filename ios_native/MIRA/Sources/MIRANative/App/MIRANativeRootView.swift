@@ -278,6 +278,9 @@ public struct MIRANativeRootView: View {
         }
       } else {
         MIRAPlaybackCoordinator.pauseAll(reason: "app_inactive")
+        if phase == .background {
+          Task { await MIRAAppCacheStore.shared.clearPostDraft() }
+        }
       }
     }
     .onReceive(NotificationCenter.default.publisher(for: .miraRemotePushTokenReceived)) { notification in

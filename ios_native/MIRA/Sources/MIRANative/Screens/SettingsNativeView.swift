@@ -785,9 +785,24 @@ private struct DeleteAccountNativeView: View {
       ?? "702354172189-9gg83vd92n3s217n5pb4ddqqsnme8ocb.apps.googleusercontent.com"
   }
 
+  private var googleServerClientID: String? {
+    guard let value = Bundle.main.object(forInfoDictionaryKey: "GIDServerClientID") as? String else {
+      return nil
+    }
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    if trimmed.isEmpty || trimmed.contains("$(") {
+      return nil
+    }
+    return trimmed
+  }
+
   @MainActor
   private func startGoogleReauth() {
-    GIDSignIn.sharedInstance.configuration = GIDConfiguration(clientID: googleClientID)
+    if let googleServerClientID {
+      GIDSignIn.sharedInstance.configuration = GIDConfiguration(clientID: googleClientID, serverClientID: googleServerClientID)
+    } else {
+      GIDSignIn.sharedInstance.configuration = GIDConfiguration(clientID: googleClientID)
+    }
     guard let presenter = UIApplication.shared.miraSettingsTopPresentedViewController() else {
       localError = "Google sign in is not ready. Please try again."
       return
