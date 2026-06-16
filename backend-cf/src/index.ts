@@ -10235,7 +10235,7 @@ function supabaseAuthCreatePayload(input: {
     app_metadata: supabaseProviderMetadata(provider, input.appUserId, input.oauthSubject),
   };
 
-  if (email && !isInternalOAuthEmail(email)) {
+  if (email && (!isInternalOAuthEmail(email) || provider === 'google' || provider === 'apple')) {
     body.email = email;
     body.email_confirm = true;
   }
@@ -10399,6 +10399,47 @@ async function signInSupabaseIdToken(c: any, provider: 'google' | 'apple', idTok
   const data: any = await response.json().catch(() => ({}));
   if (!data?.access_token) throw new Error(`SUPABASE_ID_TOKEN_SESSION_MISSING:${provider}`);
   return data;
+}
+
+function oauthFallbackPassword(provider: 'google' | 'apple', subject: string): string {
+  const cleanSubject = cleanText(subject, 240);
+  if (!cleanSubject) throw new Error('OAUTH_SUBJECT_REQUIRED');
+  return `captro_${provider}_${cleanSubject}_${uuid()}_${uuid()}`;
+}
+
+async function signInSupabaseVerifiedOAuth(c: any, input: {
+  provider: 'google' | 'apple';
+  subject: string;
+  email?: string;
+  fullName?: string;
+  profileImage?: string;
+}) {
+  const subject = cleanText(input.subject, 240);
+  if (!subject) throw new Error('OAUTH_SUBJECT_REQUIRED');
+  const email = normalizeOptionalEmail(input.email) || internalOAuthEmail(input.provider, subject);
+  const fullName = normalizeOptionalName(input.fullName) || safeDisplayNameFromEmail(email) || (input.provider === 'apple' ? 'Apple User' : 'Google User');
+  const profileImage = safeMediaReference(input.profileImage || '');
+  const password = oauthFallbackPassword(input.provider, subject);
+
+  const authResult = await createOrFindSupabaseAuthUser(c, {
+    email,
+    password,
+    fullName,
+    profileImage,
+    provider: input.provider,
+    oauthSubject: subject,
+  });
+  if (!authResult.user?.id) throw new Error('SUPABASE_AUTH_CREATE_EMPTY');
+
+  const supabaseSession = await signInSupabasePassword(c, email, password);
+  const session = await issueCaptroTokenForSupabaseAccessToken(c, supabaseSession.access_token, {
+    email,
+    full_name: fullName,
+    profile_image: profileImage,
+    auth_provider: input.provider,
+    oauth_subject: subject,
+  });
+  return { supabaseSession, user: session.user };
 }
 
 async function issueCaptroTokenForSupabaseAccessToken(c: any, supabaseAccessToken: string, extras: any = {}) {
@@ -12499,7 +12540,21 @@ api.post('/auth/oauth/google', async (c) => {
         return c.json({ detail: 'Google sign in is not configured.' }, 503);
       }
       if (code.startsWith('SUPABASE_ID_TOKEN_SIGN_IN_FAILED')) {
-        return c.json({ detail: 'Google sign in is not connected to Supabase correctly. Please check the Google OAuth client configuration.' }, 401);
+        try {
+          const profile = await verifyGoogleIdToken(c, id_token);
+          const fallback = await signInSupabaseVerifiedOAuth(c, {
+            provider: 'google',
+            subject: profile.subject,
+            email: profile.email,
+            fullName: profile.fullName,
+            profileImage: profile.profileImage,
+          });
+          await logSecurityEvent(c, 'google_supabase_oauth_fallback_used', fallback.user.id, { provider: 'google' });
+          return c.json(supabaseAuthSessionResponse(fallback.supabaseSession, fallback.user));
+        } catch (fallbackError: any) {
+          console.warn(JSON.stringify({ event: 'google_oauth_fallback_failed', code: getErrorCode(fallbackError).slice(0, 160) }));
+          return c.json({ detail: 'Google sign in could not be completed. Please try again.' }, 401);
+        }
       }
       return c.json({ detail: 'Could not finish Google sign in right now.' }, 502);
     }
@@ -12555,7 +12610,22 @@ api.post('/auth/oauth/apple', async (c) => {
         return c.json({ detail: 'Apple sign in is not configured.' }, 503);
       }
       if (code.startsWith('SUPABASE_ID_TOKEN_SIGN_IN_FAILED')) {
-        return c.json({ detail: 'Apple sign in is not connected to Supabase correctly. Please check the Apple OAuth configuration.' }, 401);
+        try {
+          const profile = await verifyAppleIdToken(c, idToken);
+          const appleSubject = profile.subject || cleanText(body.apple_user || body.appleUser, 240);
+          const fallback = await signInSupabaseVerifiedOAuth(c, {
+            provider: 'apple',
+            subject: appleSubject,
+            email: profile.email || clientEmail || undefined,
+            fullName: clientFullName || profile.fullName || 'Apple User',
+            profileImage: profile.profileImage,
+          });
+          await logSecurityEvent(c, 'apple_supabase_oauth_fallback_used', fallback.user.id, { provider: 'apple' });
+          return c.json(supabaseAuthSessionResponse(fallback.supabaseSession, fallback.user));
+        } catch (fallbackError: any) {
+          console.warn(JSON.stringify({ event: 'apple_oauth_fallback_failed', code: getErrorCode(fallbackError).slice(0, 160) }));
+          return c.json({ detail: 'Apple sign in could not be completed. Please try again.' }, 401);
+        }
       }
       return c.json({ detail: 'Could not finish Apple sign in right now.' }, 502);
     }
