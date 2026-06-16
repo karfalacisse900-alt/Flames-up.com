@@ -59,6 +59,7 @@ interface Env {
   GOOGLE_OAUTH_CLIENT_IDS?: string;
   SUPABASE_URL?: string;
   SUPABASE_ANON_KEY?: string;
+  SUPABASE_PUBLISHABLE_KEY?: string;
   SUPABASE_JWT_ISSUER?: string;
   SUPABASE_SERVICE_ROLE_KEY?: string;
   DATABASE_PRIMARY?: string;
@@ -10085,7 +10086,7 @@ function getSupabaseServiceRoleKey(c: any): string {
 }
 
 function getSupabaseAuthClientKey(c: any): string {
-  const key = String(c.env.SUPABASE_ANON_KEY || c.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+  const key = String(c.env.SUPABASE_ANON_KEY || c.env.SUPABASE_PUBLISHABLE_KEY || '').trim();
   if (!key) throw new Error('SUPABASE_AUTH_KEY_MISSING');
   return key;
 }
