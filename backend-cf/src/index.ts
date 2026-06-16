@@ -7952,11 +7952,12 @@ function normalizeOptionalName(value: unknown): string {
 
 function internalOAuthEmail(provider: 'google' | 'apple', subject: string): string {
   const safeSubject = subject.replace(/[^a-z0-9]/gi, '').toLowerCase().slice(0, 48) || 'user';
-  return `${provider}_${safeSubject}@oauth.flames-up.local`;
+  return `${provider}_${safeSubject}@oauth.flames-up.com`;
 }
 
 function isInternalOAuthEmail(email: unknown): boolean {
-  return String(email || '').toLowerCase().endsWith('@oauth.flames-up.local');
+  const clean = String(email || '').toLowerCase();
+  return clean.endsWith('@oauth.flames-up.com') || clean.endsWith('@oauth.flames-up.local');
 }
 
 function isApplePrivateRelayEmail(email: unknown): boolean {
@@ -10315,6 +10316,7 @@ async function createOrFindSupabaseAuthUser(c: any, input: {
           profileImage: input.profileImage,
           phone: input.phone,
         }),
+        app_metadata: supabaseProviderMetadata(input.provider, input.appUserId, input.oauthSubject),
       };
       if (input.password) updatePayload.password = String(input.password);
       await updateSupabaseAuthUser(c, existing.id, updatePayload);
@@ -10401,10 +10403,13 @@ async function signInSupabaseIdToken(c: any, provider: 'google' | 'apple', idTok
   return data;
 }
 
-function oauthFallbackPassword(provider: 'google' | 'apple', subject: string): string {
+async function oauthFallbackPassword(c: any, provider: 'google' | 'apple', subject: string): Promise<string> {
   const cleanSubject = cleanText(subject, 240);
   if (!cleanSubject) throw new Error('OAUTH_SUBJECT_REQUIRED');
-  return `captro_${provider}_${cleanSubject}_${uuid()}_${uuid()}`;
+  const secret = String(c.env.OAUTH_FALLBACK_SECRET || c.env.JWT_SECRET || c.env.ABUSE_SIGNAL_SECRET || '').trim();
+  if (!secret) throw new Error('OAUTH_FALLBACK_SECRET_MISSING');
+  const digest = await sha256Hex(`${secret}:${provider}:${cleanSubject}:captro_supabase_oauth_v1`);
+  return `Captro-${provider}-${digest.slice(0, 48)}!`;
 }
 
 async function signInSupabaseVerifiedOAuth(c: any, input: {
@@ -10419,7 +10424,7 @@ async function signInSupabaseVerifiedOAuth(c: any, input: {
   const email = normalizeOptionalEmail(input.email) || internalOAuthEmail(input.provider, subject);
   const fullName = normalizeOptionalName(input.fullName) || safeDisplayNameFromEmail(email) || (input.provider === 'apple' ? 'Apple User' : 'Google User');
   const profileImage = safeMediaReference(input.profileImage || '');
-  const password = oauthFallbackPassword(input.provider, subject);
+  const password = await oauthFallbackPassword(c, input.provider, subject);
 
   const authResult = await createOrFindSupabaseAuthUser(c, {
     email,
