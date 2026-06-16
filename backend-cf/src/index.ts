@@ -9778,9 +9778,38 @@ async function verifySupabaseAccessToken(c: any, accessToken: string) {
   const supabaseUrl = getSupabaseUrl(c);
   const issuer = String(c.env.SUPABASE_JWT_ISSUER || `${supabaseUrl}/auth/v1`).replace(/\/+$/, '');
   const jwks = createRemoteJWKSet(new URL(`${supabaseUrl}/auth/v1/.well-known/jwks.json`));
-  const { payload } = await jwtVerify(token, jwks, { issuer });
-  if (!payload.sub) throw new Error('SUPABASE_SUBJECT_MISSING');
-  return payload as any;
+  try {
+    const { payload } = await jwtVerify(token, jwks, { issuer });
+    if (!payload.sub) throw new Error('SUPABASE_SUBJECT_MISSING');
+    return payload as any;
+  } catch (localVerifyError: any) {
+    const response = await fetch(`${supabaseUrl}/auth/v1/user`, {
+      headers: {
+        apikey: getSupabaseAuthClientKey(c),
+        Authorization: `Bearer ${token}`,
+      },
+    });
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      throw new Error(`SUPABASE_TOKEN_USER_LOOKUP_FAILED:${response.status}:${text.slice(0, 160)}:${getErrorCode(localVerifyError).slice(0, 120)}`);
+    }
+    const user: any = await response.json().catch(() => ({}));
+    const userId = isUuidText(user?.id);
+    if (!userId) throw new Error('SUPABASE_SUBJECT_MISSING');
+    const unsafePayload = decodeJwtPayloadUnsafe(token);
+    return {
+      ...unsafePayload,
+      sub: userId,
+      email: normalizeOptionalEmail(user?.email || unsafePayload?.email),
+      phone: normalizeOptionalPhone(user?.phone || unsafePayload?.phone),
+      app_metadata: user?.app_metadata && typeof user.app_metadata === 'object'
+        ? user.app_metadata
+        : (unsafePayload?.app_metadata || {}),
+      user_metadata: user?.user_metadata && typeof user.user_metadata === 'object'
+        ? user.user_metadata
+        : (unsafePayload?.user_metadata || {}),
+    };
+  }
 }
 
 async function findOrCreateSupabaseUser(c: any, payload: any, extras: any = {}) {
