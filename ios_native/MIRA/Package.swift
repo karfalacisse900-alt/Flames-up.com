@@ -12,7 +12,7 @@ let package = Package(
   ],
   dependencies: [
     .package(url: "https://github.com/AgoraIO/AgoraRtcEngine_iOS.git", exact: "4.6.2"),
-    .package(url: "https://github.com/google/GoogleSignIn-iOS.git", exact: "9.1.0")
+    .package(url: "https://github.com/google/GoogleSignIn-iOS.git", exact: "9.2.0")
   ],
   targets: [
     .target(
