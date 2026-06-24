@@ -42,10 +42,12 @@ struct MIRAPostDraftSnapshot: Codable, Hashable {
   let title: String
   let bodyText: String
   let hashtags: [String]
+  let selectedDiscoverCategory: String?
   let selectedAudioTrack: MIRAAudiusTrack?
   let place: MIRADraftPlaceSnapshot?
   let broadLocation: MIRADraftBroadLocationSnapshot?
   let showBroadLocation: Bool
+  let isEditingPostDetails: Bool?
   let media: [MIRAPostDraftMediaSnapshot]
   let uploadStatus: String
   let errorMessage: String?
@@ -64,6 +66,8 @@ actor MIRAAppCacheStore {
   static let shared = MIRAAppCacheStore()
 
   private static let dataGenerationDefaultsKey = "native.app.data_generation.v1"
+
+  private var didClearPostDraftFromPreviousProcess = false
 
   private let shortCacheAge: TimeInterval = 60 * 60 * 24 * 7
   private let contentCacheAge: TimeInterval = 60 * 60 * 24 * 30
@@ -94,8 +98,11 @@ actor MIRAAppCacheStore {
   }
 
   func purgeContentCaches() async {
-    await clearPostDraft()
+    let preservedDraft = await loadPostDraft()
     await MIRALocalJSONCache.removeAll()
+    if let preservedDraft {
+      await savePostDraft(preservedDraft)
+    }
     await MIRAImageDiskCache.clear()
     MIRAAPIClient.productionSession.configuration.urlCache?.removeAllCachedResponses()
   }
@@ -267,6 +274,12 @@ actor MIRAAppCacheStore {
 
   func savePostDraft(_ draft: MIRAPostDraftSnapshot) async {
     await MIRALocalJSONCache.save(draft, key: CacheKey.postDraft)
+  }
+
+  func clearPostDraftFromPreviousProcessIfNeeded() async {
+    guard !didClearPostDraftFromPreviousProcess else { return }
+    didClearPostDraftFromPreviousProcess = true
+    await clearPostDraft()
   }
 
   func storePostDraftMedia(_ mediaItems: [MIRAPickedMedia]) async -> [MIRAPostDraftMediaSnapshot] {

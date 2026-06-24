@@ -841,6 +841,21 @@ private struct MIRAExactPostPlace: Identifiable, Hashable {
       country: placemark.country
     )
   }
+
+  init(snapshot: MIRADraftPlaceSnapshot) {
+    self.init(
+      provider: snapshot.provider,
+      providerPlaceId: snapshot.providerPlaceId,
+      name: snapshot.name,
+      formattedAddress: snapshot.formattedAddress,
+      latitude: snapshot.latitude,
+      longitude: snapshot.longitude,
+      category: snapshot.category,
+      city: snapshot.city,
+      region: snapshot.region,
+      country: snapshot.country
+    )
+  }
 }
 
 @MainActor
@@ -939,6 +954,7 @@ public struct CreatePostNativeView: View {
   @State private var isGeneratingPostAssist = false
   @State private var postAssistError: String?
   @State private var hasRestoredPostDraft = false
+  @State private var isRestoringPostDraft = false
   @State private var draftMediaSnapshots: [MIRAPostDraftMediaSnapshot] = []
   @State private var isCameraReviewingMedia = false
   @FocusState private var focusedPostDetailsField: PostDetailsFocusField?
@@ -978,7 +994,17 @@ public struct CreatePostNativeView: View {
     .onChange(of: pickerItems) { _, newItems in
       Task { await loadPickerItems(newItems) }
     }
+    .onChange(of: title) { _, _ in cacheComposerDraft() }
+    .onChange(of: bodyText) { _, _ in cacheComposerDraft() }
+    .onChange(of: mediaItems) { _, _ in cacheComposerDraft(includeMedia: true) }
+    .onChange(of: selectedPlace) { _, _ in cacheComposerDraft() }
+    .onChange(of: broadLocation) { _, _ in cacheComposerDraft() }
+    .onChange(of: hashtags) { _, _ in cacheComposerDraft() }
+    .onChange(of: selectedDiscoverCategory) { _, _ in cacheComposerDraft() }
+    .onChange(of: selectedAudioTrack) { _, _ in cacheComposerDraft() }
     .onChange(of: showBroadLocation) { _, isOn in
+      guard !isRestoringPostDraft else { return }
+      cacheComposerDraft()
       guard isOn else { return }
       Task { await resolveCurrentBroadLocationForPost() }
     }
@@ -1692,8 +1718,7 @@ public struct CreatePostNativeView: View {
   @MainActor
   private func handleComposerScenePhaseChange(_ phase: ScenePhase) {
     guard phase == .background, !isPosting else { return }
-    resetComposerAfterAbandoningDraft()
-    Task { await MIRAAppCacheStore.shared.clearPostDraft() }
+    cacheComposerDraft(includeMedia: true)
   }
 
   @MainActor
@@ -1788,21 +1813,76 @@ public struct CreatePostNativeView: View {
   @MainActor
   private func restorePostDraftIfNeeded() async {
     guard !hasRestoredPostDraft else { return }
-    await MIRAAppCacheStore.shared.clearPostDraft()
-    draftMediaSnapshots = []
     hasRestoredPostDraft = true
+    guard let draft = await MIRAAppCacheStore.shared.loadPostDraft() else { return }
+    let restoredMedia = await MIRAAppCacheStore.shared.loadPostDraftMedia(draft)
+    isRestoringPostDraft = true
+    defer { isRestoringPostDraft = false }
+    title = draft.title
+    bodyText = draft.bodyText
+    hashtags = draft.hashtags
+    selectedAudioTrack = draft.selectedAudioTrack
+    selectedPlace = draft.place.map(MIRAExactPostPlace.init(snapshot:))
+    if let broad = draft.broadLocation {
+      broadLocation = MIRABroadDisplayLocation(
+        city: broad.city,
+        region: broad.region,
+        country: broad.country,
+        label: broad.label,
+        source: broad.source,
+        visibility: broad.visibility
+      )
+    }
+    showBroadLocation = draft.showBroadLocation
+    selectedDiscoverCategory = draft.selectedDiscoverCategory
+    mediaItems = restoredMedia
+    draftMediaSnapshots = draft.media
+    if draft.isEditingPostDetails == true || !restoredMedia.isEmpty {
+      isEditingPostDetails = true
+    }
+    if let message = draft.errorMessage?.trimmingCharacters(in: .whitespacesAndNewlines), !message.isEmpty {
+      errorMessage = message
+    }
   }
 
-  private func cacheComposerDraft() {
-    guard hasRestoredPostDraft else { return }
-    Task { await MIRAAppCacheStore.shared.clearPostDraft() }
+  private func cacheComposerDraft(includeMedia: Bool = false) {
+    guard hasRestoredPostDraft, !isRestoringPostDraft else { return }
+    let needsMediaSnapshot = includeMedia || (!mediaItems.isEmpty && draftMediaSnapshots.count != mediaItems.count)
+    Task { await persistComposerDraft(uploadStatus: "draft", errorMessage: errorMessage, includeMedia: needsMediaSnapshot) }
   }
 
   @MainActor
   private func persistComposerDraft(uploadStatus: String, errorMessage: String?, includeMedia: Bool) async {
     guard hasRestoredPostDraft else { return }
-    await MIRAAppCacheStore.shared.clearPostDraft()
-    draftMediaSnapshots = []
+    guard hasDraftContent else {
+      await MIRAAppCacheStore.shared.clearPostDraft()
+      draftMediaSnapshots = []
+      return
+    }
+
+    let mediaSnapshots: [MIRAPostDraftMediaSnapshot]
+    if includeMedia {
+      mediaSnapshots = await MIRAAppCacheStore.shared.storePostDraftMedia(mediaItems)
+      draftMediaSnapshots = mediaSnapshots
+    } else {
+      mediaSnapshots = draftMediaSnapshots
+    }
+    let snapshot = MIRAPostDraftSnapshot(
+      title: title,
+      bodyText: bodyText,
+      hashtags: hashtags,
+      selectedDiscoverCategory: selectedDiscoverCategory,
+      selectedAudioTrack: selectedAudioTrack,
+      place: draftPlaceSnapshot,
+      broadLocation: draftBroadLocationSnapshot,
+      showBroadLocation: showBroadLocation,
+      isEditingPostDetails: isEditingPostDetails,
+      media: mediaSnapshots,
+      uploadStatus: uploadStatus,
+      errorMessage: errorMessage,
+      savedAt: ISO8601DateFormatter.miraPostDraft.string(from: Date())
+    )
+    await MIRAAppCacheStore.shared.savePostDraft(snapshot)
   }
 
   @MainActor

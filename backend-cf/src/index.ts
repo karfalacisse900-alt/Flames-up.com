@@ -6687,7 +6687,12 @@ function supabaseAppPostMedia(row: any) {
 
 function supabaseUserStatus(row: any): string {
   const metadata = parseJsonObject(row?.metadata);
-  return cleanText((metadata as any).status || 'active', 40) || 'active';
+  const status = (cleanText((metadata as any).status || row?.status || 'active', 40) || 'active').toLowerCase();
+  if (status === 'suspended') {
+    const suspendedUntil = Date.parse(String((metadata as any).suspended_until || row?.suspended_until || ''));
+    if (Number.isFinite(suspendedUntil) && suspendedUntil <= Date.now()) return 'active';
+  }
+  return status;
 }
 
 function supabaseAppPostMatchesCategory(row: any, category: DiscoverCategory | 'all' | undefined): boolean {
@@ -14169,7 +14174,7 @@ api.get('/posts/feed', authMiddleware, async (c) => {
   try {
     const feedRows = await supabaseReadVisiblePosts(c, userId, { limit, offset: skip, order: 'newest' });
     const response = c.json(feedRows.map((p) => feedPostPayload(p, [], c.env)));
-    response.headers.set('cache-control', 'private, max-age=6');
+    response.headers.set('cache-control', 'no-store');
     return response;
   } catch (error: any) {
     console.warn(JSON.stringify({ event: 'supabase_feed_read_failed', code: getErrorCode(error).slice(0, 180) }));
@@ -14188,7 +14193,7 @@ api.get('/posts/world-board', async (c) => {
     const viewerId = await getOptionalUserId(c);
     const posts = await supabaseReadVisiblePosts(c, viewerId, { limit, offset: skip, order: 'newest' });
     const response = c.json(posts.map((p) => feedPostPayload(p, [], c.env)));
-    response.headers.set('cache-control', viewerId ? 'private, max-age=6' : 'public, max-age=4, s-maxage=8');
+    response.headers.set('cache-control', 'no-store');
     return response;
   } catch {
     return c.json({ detail: 'Could not load world board.' }, 500);
@@ -14206,7 +14211,7 @@ api.get('/posts/nearby-feed', authMiddleware, async (c) => {
   try {
     const posts = await supabaseReadVisiblePosts(c, userId, { limit, offset: skip, order: 'newest' });
     const response = c.json(posts.map((p) => feedPostPayload(p, [], c.env)));
-    response.headers.set('cache-control', 'private, max-age=6');
+    response.headers.set('cache-control', 'no-store');
     return response;
   } catch (error: any) {
     console.warn(JSON.stringify({ event: 'supabase_nearby_feed_read_failed', code: getErrorCode(error).slice(0, 180) }));
@@ -14222,7 +14227,9 @@ api.get('/posts/:postId', authMiddleware, async (c) => {
   try {
     const [post] = await supabaseReadVisiblePosts(c, userId, { postId, limit: 1 });
     if (!post) return c.json({ detail: 'Post not found' }, 404);
-    return c.json(postPayload(post, [], c.env));
+    const response = c.json(postPayload(post, [], c.env));
+    response.headers.set('cache-control', 'no-store');
+    return response;
   } catch (error: any) {
     console.warn(JSON.stringify({ event: 'supabase_post_read_failed', code: getErrorCode(error).slice(0, 180) }));
     return c.json({ detail: 'Could not load post.' }, 500);
@@ -14356,7 +14363,9 @@ api.get('/users/:userId/posts', authMiddleware, async (c) => {
   const limit = clampNumber(c.req.query('limit') || '60', 1, 100, 60);
   try {
     const rows = await supabaseReadVisiblePosts(c, viewerId, { ownerId: targetId, limit, offset: skip, order: 'newest' });
-    return c.json(rows.map((p) => feedPostPayload(p, [], c.env)));
+    const response = c.json(rows.map((p) => feedPostPayload(p, [], c.env)));
+    response.headers.set('cache-control', 'no-store');
+    return response;
   } catch (error: any) {
     console.warn(JSON.stringify({ event: 'supabase_user_posts_read_failed', code: getErrorCode(error).slice(0, 180) }));
     return c.json({ detail: 'Could not load profile posts.' }, 500);
@@ -15733,7 +15742,7 @@ api.get('/discover', authMiddleware, async (c) => {
   try {
     const discoverRows = await supabaseReadVisiblePosts(c, userId, { category, limit, offset: skip, order: 'newest' });
     const response = c.json(discoverRows.map((post) => feedPostPayload(post, [], c.env)));
-    response.headers.set('cache-control', 'private, max-age=8');
+    response.headers.set('cache-control', 'no-store');
     return response;
   } catch (error: any) {
     console.warn(JSON.stringify({ event: 'supabase_discover_read_failed', code: getErrorCode(error).slice(0, 180) }));
@@ -15748,7 +15757,9 @@ api.get('/discover/trending', authMiddleware, async (c) => {
   const limit = clampNumber(c.req.query('limit') || '20', 1, 40, 20);
   try {
     const rows = await supabaseReadVisiblePosts(c, userId, { limit, order: 'trending' });
-    return c.json(rows.map((p) => feedPostPayload(p, [], c.env)));
+    const response = c.json(rows.map((p) => feedPostPayload(p, [], c.env)));
+    response.headers.set('cache-control', 'no-store');
+    return response;
   } catch (error: any) {
     console.warn(JSON.stringify({ event: 'supabase_discover_trending_failed', code: getErrorCode(error).slice(0, 180) }));
     return c.json({ detail: 'Could not load trending posts.' }, 500);
@@ -16310,7 +16321,9 @@ api.get('/discover/feed', authMiddleware, async (c) => {
   try {
     const userId = getUserId(c);
     const rows = await supabaseReadVisiblePosts(c, userId, { category: normalizedCategory, limit, offset: skip, order: 'newest' });
-    return c.json(rows.map((p) => feedPostPayload(p, [], c.env)));
+    const response = c.json(rows.map((p) => feedPostPayload(p, [], c.env)));
+    response.headers.set('cache-control', 'no-store');
+    return response;
   } catch (error: any) {
     console.warn(JSON.stringify({ event: 'supabase_discover_feed_failed', code: getErrorCode(error).slice(0, 180) }));
     return c.json({ detail: 'Could not load Discover.' }, 500);

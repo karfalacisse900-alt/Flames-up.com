@@ -253,6 +253,7 @@ public struct MIRANativeRootView: View {
       MIRAPerformanceTimeline.markOnce("time_to_first_screen")
     }
     .task {
+      await MIRAAppCacheStore.shared.clearPostDraftFromPreviousProcessIfNeeded()
       await startup.start(authSession: authSession)
       callCoordinator.configure(api: api, currentUserId: authSession.user?.id)
       registerCachedPushTokenIfPossible()
@@ -278,9 +279,6 @@ public struct MIRANativeRootView: View {
         }
       } else {
         MIRAPlaybackCoordinator.pauseAll(reason: "app_inactive")
-        if phase == .background {
-          Task { await MIRAAppCacheStore.shared.clearPostDraft() }
-        }
       }
     }
     .onReceive(NotificationCenter.default.publisher(for: .miraRemotePushTokenReceived)) { notification in
