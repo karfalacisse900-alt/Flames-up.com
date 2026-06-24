@@ -1399,6 +1399,7 @@ public struct MIRANotification: Codable, Identifiable, Hashable {
 
 public struct MIRAAuthResponse: Decodable, Hashable {
   public let accessToken: String
+  public let refreshToken: String?
   public let tokenType: String?
   public let user: MIRAUser
 }
@@ -1426,6 +1427,10 @@ public struct MIRAAppleOAuthBody: Encodable {
 public struct MIRAGoogleOAuthBody: Encodable {
   public let idToken: String
   public let accessToken: String?
+}
+
+public struct MIRARefreshSessionBody: Encodable {
+  public let refreshToken: String
 }
 
 public struct MIRAMediaUploadResponse: Decodable, Hashable {

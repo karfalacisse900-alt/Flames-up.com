@@ -1,6 +1,6 @@
 import Foundation
 
-public final class MIRAAuthSession: ObservableObject, MIRASessionProviding {
+public final class MIRAAuthSession: ObservableObject, MIRARefreshableSessionProviding {
   @Published public private(set) var user: MIRAUser?
   @Published public private(set) var isBootstrapping = true
   @Published public private(set) var isWorking = false
@@ -8,6 +8,7 @@ public final class MIRAAuthSession: ObservableObject, MIRASessionProviding {
 
   private let keychain: MIRAKeychainSessionProvider
   private var token: String?
+  private var refreshToken: String?
   private let cachedUserKey = "native.auth.user.v2"
 
   public init(keychain: MIRAKeychainSessionProvider = MIRAKeychainSessionProvider()) {
@@ -21,12 +22,48 @@ public final class MIRAAuthSession: ObservableObject, MIRASessionProviding {
     return await keychain.accessToken()
   }
 
+  public func refreshAccessTokenIfNeeded(api: MIRAAPIClient) async -> Bool {
+    if isWorking { return false }
+    let storedRefreshToken = refreshToken ?? await keychain.refreshToken()
+    guard let storedRefreshToken, !storedRefreshToken.isEmpty else { return false }
+
+    do {
+      let response: MIRAAuthResponse = try await api.post(
+        "/auth/refresh",
+        body: MIRARefreshSessionBody(refreshToken: storedRefreshToken)
+      )
+      await MainActor.run {
+        token = response.accessToken
+        refreshToken = response.refreshToken ?? storedRefreshToken
+        user = response.user
+        keychain.saveSession(accessToken: response.accessToken, refreshToken: response.refreshToken ?? storedRefreshToken)
+      }
+      await MIRAAppCacheStore.shared.saveCurrentProfile(response.user)
+      await MIRALocalJSONCache.save(response.user, key: cachedUserKey)
+      await MainActor.run {
+        errorMessage = nil
+      }
+      return true
+    } catch {
+      await MainActor.run {
+        token = nil
+        refreshToken = nil
+        user = nil
+        errorMessage = nil
+        keychain.clearSession()
+      }
+      await MIRALocalJSONCache.remove(key: cachedUserKey)
+      return false
+    }
+  }
+
   @MainActor
   public func bootstrap(api: MIRAAPIClient) async {
     MIRAPerformanceTimeline.mark("auth_bootstrap_start")
     isBootstrapping = true
     guard let storedToken = await keychain.accessToken(), !storedToken.isEmpty else {
       token = nil
+      refreshToken = nil
       user = nil
       isBootstrapping = false
       MIRAPerformanceTimeline.mark("auth_bootstrap_no_token")
@@ -34,6 +71,7 @@ public final class MIRAAuthSession: ObservableObject, MIRASessionProviding {
     }
 
     token = storedToken
+    refreshToken = await keychain.refreshToken()
 
     var cachedUser = await MIRAAppCacheStore.shared.loadCurrentProfile()
     if cachedUser == nil {
@@ -54,14 +92,30 @@ public final class MIRAAuthSession: ObservableObject, MIRASessionProviding {
       await MIRALocalJSONCache.save(freshUser, key: cachedUserKey)
       errorMessage = nil
     } catch {
-      if case MIRAAPIError.badStatus(let status) = error, status == 401 || status == 403 {
+      if (error.isUnauthorizedAPIError || error.isForbiddenAPIError), await refreshAccessTokenIfNeeded(api: api) {
+        do {
+          let refreshedUser: MIRAUser = try await api.get("/auth/me")
+          user = refreshedUser
+          await MIRAAppCacheStore.shared.saveCurrentProfile(refreshedUser)
+          await MIRALocalJSONCache.save(refreshedUser, key: cachedUserKey)
+          errorMessage = nil
+        } catch {
+          token = nil
+          refreshToken = nil
+          user = nil
+          keychain.clearSession()
+          await MIRALocalJSONCache.remove(key: cachedUserKey)
+        }
+      } else if error.isUnauthorizedAPIError || error.isForbiddenAPIError {
         token = nil
+        refreshToken = nil
         user = nil
-        keychain.clearAccessToken()
+        keychain.clearSession()
         await MIRALocalJSONCache.remove(key: cachedUserKey)
       } else if user == nil {
         token = nil
-        keychain.clearAccessToken()
+        refreshToken = nil
+        keychain.clearSession()
         await MIRALocalJSONCache.remove(key: cachedUserKey)
       }
     }
@@ -79,10 +133,27 @@ public final class MIRAAuthSession: ObservableObject, MIRASessionProviding {
       errorMessage = nil
       MIRAPerformanceTimeline.mark("auth_cached_user_refreshed")
     } catch {
-      if case MIRAAPIError.badStatus(let status) = error, status == 401 || status == 403 {
+      if (error.isUnauthorizedAPIError || error.isForbiddenAPIError), await refreshAccessTokenIfNeeded(api: api) {
+        do {
+          let refreshedUser: MIRAUser = try await api.get("/auth/me")
+          user = refreshedUser
+          await MIRAAppCacheStore.shared.saveCurrentProfile(refreshedUser)
+          await MIRALocalJSONCache.save(refreshedUser, key: cachedUserKey)
+          errorMessage = nil
+          MIRAPerformanceTimeline.mark("auth_cached_user_recovered")
+        } catch {
+          token = nil
+          refreshToken = nil
+          user = nil
+          keychain.clearSession()
+          await MIRALocalJSONCache.remove(key: cachedUserKey)
+          MIRAPerformanceTimeline.mark("auth_cached_user_rejected")
+        }
+      } else if error.isUnauthorizedAPIError || error.isForbiddenAPIError {
         token = nil
+        refreshToken = nil
         user = nil
-        keychain.clearAccessToken()
+        keychain.clearSession()
         await MIRALocalJSONCache.remove(key: cachedUserKey)
         MIRAPerformanceTimeline.mark("auth_cached_user_rejected")
       }
@@ -126,9 +197,10 @@ public final class MIRAAuthSession: ObservableObject, MIRASessionProviding {
   @MainActor
   public func logout() {
     token = nil
+    refreshToken = nil
     user = nil
     errorMessage = nil
-    keychain.clearAccessToken()
+    keychain.clearSession()
     MIRAAPIClient.productionSession.configuration.urlCache?.removeAllCachedResponses()
     Task {
       await MIRALocalJSONCache.remove(key: cachedUserKey)
@@ -153,8 +225,9 @@ public final class MIRAAuthSession: ObservableObject, MIRASessionProviding {
     do {
       let response = try await operation()
       token = response.accessToken
+      refreshToken = response.refreshToken
       user = response.user
-      keychain.saveAccessToken(response.accessToken)
+      keychain.saveSession(accessToken: response.accessToken, refreshToken: response.refreshToken)
       await MIRAAppCacheStore.shared.saveCurrentProfile(response.user)
       await MIRALocalJSONCache.save(response.user, key: cachedUserKey)
     } catch {
@@ -166,5 +239,19 @@ public final class MIRAAuthSession: ObservableObject, MIRASessionProviding {
         errorMessage = "Could not sign in. Check your account and try again."
       }
     }
+  }
+}
+
+private extension Error {
+  var isUnauthorizedAPIError: Bool {
+    if case MIRAAPIError.badStatus(let status) = self, status == 401 { return true }
+    if case MIRAAPIError.server(let status, _, _) = self, status == 401 { return true }
+    return false
+  }
+
+  var isForbiddenAPIError: Bool {
+    if case MIRAAPIError.badStatus(let status) = self, status == 403 { return true }
+    if case MIRAAPIError.server(let status, _, _) = self, status == 403 { return true }
+    return false
   }
 }

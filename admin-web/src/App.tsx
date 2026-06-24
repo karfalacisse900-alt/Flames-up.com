@@ -1,5 +1,5 @@
 import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
-import { AdminApi, ApiError, API_BASE, login } from './api';
+import { ADMIN_REFRESH_TOKEN_KEY, ADMIN_TOKEN_KEY, AdminApi, ApiError, API_BASE, login } from './api';
 import type {
   AdminComment,
   AdminMedia,
@@ -35,8 +35,6 @@ type MediaPreviewModel = {
   iframeUrl: string;
   aspectRatio: number;
 };
-
-const TOKEN_KEY = 'captro_admin_token';
 
 const navItems: Array<{ key: ViewKey; label: string }> = [
   { key: 'dashboard', label: 'Dashboard' },
@@ -307,7 +305,7 @@ function Avatar({ src, label }: { src?: string; label: string }) {
   return <span className="avatar fallback">{label.slice(0, 1).toUpperCase()}</span>;
 }
 
-function LoginScreen({ onLogin }: { onLogin: (token: string) => void }) {
+function LoginScreen({ onLogin }: { onLogin: (session: { accessToken: string; refreshToken?: string }) => void }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -319,7 +317,7 @@ function LoginScreen({ onLogin }: { onLogin: (token: string) => void }) {
     setSubmitting(true);
     try {
       const payload = await login(email, password);
-      onLogin(payload.access_token);
+      onLogin({ accessToken: payload.access_token, refreshToken: payload.refresh_token });
     } catch (error) {
       const message = error instanceof ApiError && error.status === 403
         ? 'This account is not allowed to access Captro Admin.'
@@ -1437,7 +1435,7 @@ function SettingsPage({ session }: { session: AdminSession }) {
 }
 
 function App() {
-  const [token, setToken] = useState(() => sessionStorage.getItem(TOKEN_KEY) || '');
+  const [token, setToken] = useState(() => sessionStorage.getItem(ADMIN_TOKEN_KEY) || '');
   const [session, setSession] = useState<AdminSession | null>(null);
   const [booting, setBooting] = useState(true);
   const [accessError, setAccessError] = useState('');
@@ -1447,16 +1445,18 @@ function App() {
   const [dialog, setDialog] = useState<ActionDialogState | null>(null);
   const [toast, setToast] = useState('');
 
-  const loadSession = useCallback(async (nextToken: string) => {
+  const loadSession = useCallback(async (nextToken: string, nextRefreshToken?: string) => {
     setBooting(true);
     setAccessError('');
     try {
       const next = await AdminApi.me(nextToken);
       setSession(next);
-      sessionStorage.setItem(TOKEN_KEY, nextToken);
+      sessionStorage.setItem(ADMIN_TOKEN_KEY, nextToken);
+      if (nextRefreshToken) sessionStorage.setItem(ADMIN_REFRESH_TOKEN_KEY, nextRefreshToken);
       setToken(nextToken);
     } catch (error) {
-      sessionStorage.removeItem(TOKEN_KEY);
+      sessionStorage.removeItem(ADMIN_TOKEN_KEY);
+      sessionStorage.removeItem(ADMIN_REFRESH_TOKEN_KEY);
       setToken('');
       setSession(null);
       setAccessError(error instanceof Error ? error.message : 'Access denied');
@@ -1471,7 +1471,8 @@ function App() {
   }, []);
 
   function logout() {
-    sessionStorage.removeItem(TOKEN_KEY);
+    sessionStorage.removeItem(ADMIN_TOKEN_KEY);
+    sessionStorage.removeItem(ADMIN_REFRESH_TOKEN_KEY);
     setToken('');
     setSession(null);
   }
@@ -1494,7 +1495,13 @@ function App() {
   }
 
   if (booting) return <main className="login-shell"><div className="loading-card">Checking admin access...</div></main>;
-  if (!session || !token) return <LoginScreen onLogin={(nextToken) => void loadSession(nextToken)} />;
+  if (!session || !token) {
+    return (
+      <LoginScreen
+        onLogin={({ accessToken, refreshToken }) => void loadSession(accessToken, refreshToken)}
+      />
+    );
+  }
 
   const content = (() => {
     if (active === 'dashboard') return <DashboardPage token={token} openReport={(id) => { setSelectedReportId(id); setActive('reports'); }} />;

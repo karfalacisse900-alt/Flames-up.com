@@ -10418,6 +10418,23 @@ async function signInSupabasePassword(c: any, email: string, password: string) {
   return data;
 }
 
+async function refreshSupabaseSession(c: any, refreshToken: string) {
+  const token = cleanText(refreshToken, 4096);
+  if (!token) throw new Error('SUPABASE_REFRESH_TOKEN_REQUIRED');
+  const response = await fetch(`${getSupabaseUrl(c)}/auth/v1/token?grant_type=refresh_token`, {
+    method: 'POST',
+    headers: supabasePublicAuthHeaders(c),
+    body: JSON.stringify({ refresh_token: token }),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`SUPABASE_REFRESH_FAILED:${response.status}:${text.slice(0, 180)}`);
+  }
+  const data: any = await response.json().catch(() => ({}));
+  if (!data?.access_token) throw new Error('SUPABASE_REFRESH_SESSION_MISSING');
+  return data;
+}
+
 async function signInSupabaseIdToken(c: any, provider: 'google' | 'apple', idToken: string, options: { nonce?: string; accessToken?: string } = {}) {
   const body: any = { provider, token: idToken };
   const nonce = cleanText(options.nonce, 512);
@@ -12540,6 +12557,32 @@ api.get('/auth/oauth/config', async (c) => {
       required_secret: 'APPLE_OAUTH_AUDIENCES',
     },
   });
+});
+
+api.post('/auth/refresh', async (c) => {
+  try {
+    const bodyTooLarge = rejectLargeRequest(c, 40_000);
+    if (bodyTooLarge) return bodyTooLarge;
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'auth_refresh');
+    if (supabaseRequired) return supabaseRequired;
+    const limited = await enforceRateLimit(c, 'auth_refresh', clientIp(c), 60, 300);
+    if (limited) return limited;
+    const body: any = await c.req.json().catch(() => ({}));
+    const refreshToken = cleanText(body.refresh_token || body.refreshToken || '', 4096);
+    if (!refreshToken) return c.json({ detail: 'refresh_token is required' }, 400);
+
+    const session = await refreshSupabaseSession(c, refreshToken);
+    const issued = await issueCaptroTokenForSupabaseAccessToken(c, session.access_token);
+    return c.json(supabaseAuthSessionResponse(session, issued.user));
+  } catch (error: any) {
+    const code = getErrorCode(error);
+    if (code === 'SUPABASE_REFRESH_TOKEN_REQUIRED') return c.json({ detail: 'refresh_token is required' }, 400);
+    if (code.startsWith('SUPABASE_REFRESH_FAILED:400') || code.startsWith('SUPABASE_REFRESH_FAILED:401') || code.startsWith('SUPABASE_REFRESH_FAILED:403')) {
+      return c.json({ detail: 'Invalid session. Please sign in again.', code: 'INVALID_TOKEN' }, 401);
+    }
+    if (code === 'ACCOUNT_DISABLED') return c.json({ detail: 'This account cannot be used.' }, 403);
+    return c.json({ detail: 'Session refresh failed. Please sign in again.', code: 'SESSION_REFRESH_FAILED' }, 401);
+  }
 });
 
 api.post('/auth/oauth/google', async (c) => {

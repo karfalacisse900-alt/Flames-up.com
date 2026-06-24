@@ -14,6 +14,9 @@ import type {
 const DEFAULT_API_BASE = 'https://api.flames-up.com/api';
 const DEFAULT_TIMEOUT_MS = 12000;
 
+export const ADMIN_TOKEN_KEY = 'captro.admin.token';
+export const ADMIN_REFRESH_TOKEN_KEY = 'captro.admin.refresh-token';
+
 export const API_BASE = (import.meta.env.VITE_CAPTRO_API_BASE || DEFAULT_API_BASE).replace(/\/+$/, '');
 const API_TIMEOUT_MS = Number(import.meta.env.VITE_CAPTRO_API_TIMEOUT_MS || DEFAULT_TIMEOUT_MS);
 
@@ -60,16 +63,49 @@ async function readPayload(response: Response) {
   }
 }
 
-async function request<T>(path: string, token: string, options: RequestInit = {}): Promise<T> {
-  const response = await fetchWithTimeout(`${API_BASE}${path}`, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-      'X-Request-ID': requestId(),
-      ...(options.headers || {}),
-    },
+async function refreshAdminSession(refreshToken: string) {
+  const response = await fetchWithTimeout(`${API_BASE}/auth/refresh`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Request-ID': requestId() },
+    body: JSON.stringify({ refresh_token: refreshToken }),
   });
+  const payload = await readPayload(response);
+  if (!response.ok) throw new ApiError(payload?.detail || 'Session refresh failed', response.status);
+  return payload as { access_token: string; refresh_token?: string };
+}
+
+async function request<T>(path: string, token: string, options: RequestInit = {}): Promise<T> {
+  const makeHeaders = (accessToken: string) => ({
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${accessToken}`,
+    'X-Request-ID': requestId(),
+    ...(options.headers || {}),
+  });
+
+  let response = await fetchWithTimeout(`${API_BASE}${path}`, {
+    ...options,
+    headers: makeHeaders(token),
+  });
+
+  if ((response.status === 401 || response.status === 403) && !path.endsWith('/auth/refresh')) {
+    const refreshToken = sessionStorage.getItem(ADMIN_REFRESH_TOKEN_KEY) || '';
+    if (refreshToken) {
+      try {
+        const refreshed = await refreshAdminSession(refreshToken);
+        const nextAccessToken = refreshed.access_token || token;
+        const nextRefreshToken = refreshed.refresh_token || refreshToken;
+        sessionStorage.setItem(ADMIN_TOKEN_KEY, nextAccessToken);
+        sessionStorage.setItem(ADMIN_REFRESH_TOKEN_KEY, nextRefreshToken);
+        response = await fetchWithTimeout(`${API_BASE}${path}`, {
+          ...options,
+          headers: makeHeaders(nextAccessToken),
+        });
+      } catch {
+        sessionStorage.removeItem(ADMIN_TOKEN_KEY);
+        sessionStorage.removeItem(ADMIN_REFRESH_TOKEN_KEY);
+      }
+    }
+  }
 
   const payload = await readPayload(response);
   if (!response.ok) {
@@ -86,7 +122,7 @@ export async function login(email: string, password: string) {
   });
   const payload = await readPayload(response);
   if (!response.ok) throw new ApiError(payload?.detail || 'Login failed', response.status);
-  return payload as { access_token: string };
+  return payload as { access_token: string; refresh_token?: string };
 }
 
 export const AdminApi = {

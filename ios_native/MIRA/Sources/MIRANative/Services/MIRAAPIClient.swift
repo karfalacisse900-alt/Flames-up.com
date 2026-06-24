@@ -24,6 +24,10 @@ public protocol MIRASessionProviding: AnyObject {
   func accessToken() async -> String?
 }
 
+public protocol MIRARefreshableSessionProviding: MIRASessionProviding {
+  func refreshAccessTokenIfNeeded(api: MIRAAPIClient) async -> Bool
+}
+
 public final class StaticSessionProvider: MIRASessionProviding {
   private let token: String?
 
@@ -311,6 +315,29 @@ public final class MIRAAPIClient {
     }
     let status = (response as? HTTPURLResponse)?.statusCode ?? 0
     await metric.finish(status: "\(status)", bytes: data.count)
+    let isRefreshRequest = request.url?.path.hasSuffix("/auth/refresh") == true
+    if !isRefreshRequest,
+       (status == 401 || status == 403),
+       let refreshable = sessionProvider as? MIRARefreshableSessionProviding,
+       await refreshable.refreshAccessTokenIfNeeded(api: self) {
+      var retry = request
+      if let refreshedToken = await sessionProvider?.accessToken(), !refreshedToken.isEmpty {
+        retry.setValue("Bearer \(refreshedToken)", forHTTPHeaderField: "Authorization")
+      }
+      let retryMetric = await MIRAPerformanceMetric.begin(category: "network", label: "\(metricLabel) retry")
+      let retryResponse: URLResponse
+      let retryData: Data
+      do {
+        (retryData, retryResponse) = try await session.data(for: retry)
+      } catch {
+        await retryMetric.finish(status: "error")
+        throw error
+      }
+      let retryStatus = (retryResponse as? HTTPURLResponse)?.statusCode ?? 0
+      await retryMetric.finish(status: "\(retryStatus)", bytes: retryData.count)
+      guard (200..<300).contains(retryStatus) else { throw apiError(status: retryStatus, data: retryData) }
+      return retryData
+    }
     guard (200..<300).contains(status) else { throw apiError(status: status, data: data) }
     return data
   }
