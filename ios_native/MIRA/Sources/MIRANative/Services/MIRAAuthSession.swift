@@ -24,7 +24,8 @@ public final class MIRAAuthSession: ObservableObject, MIRARefreshableSessionProv
 
   public func refreshAccessTokenIfNeeded(api: MIRAAPIClient) async -> Bool {
     if isWorking { return false }
-    let storedRefreshToken = refreshToken ?? await keychain.refreshToken()
+    let keychainRefreshToken = await keychain.refreshToken()
+    let storedRefreshToken = refreshToken ?? keychainRefreshToken
     guard let storedRefreshToken, !storedRefreshToken.isEmpty else { return false }
 
     do {
@@ -251,14 +252,16 @@ public final class MIRAAuthSession: ObservableObject, MIRARefreshableSessionProv
 
 private extension Error {
   var isUnauthorizedAPIError: Bool {
-    if case MIRAAPIError.badStatus(let status) = self, status == 401 { return true }
-    if case MIRAAPIError.server(let status, _, _) = self, status == 401 { return true }
+    guard let apiError = self as? MIRAAPIError else { return false }
+    if case .badStatus(let status) = apiError, status == 401 { return true }
+    if case .server(let status, _, _) = apiError, status == 401 { return true }
     return false
   }
 
   var isForbiddenAPIError: Bool {
-    if case MIRAAPIError.badStatus(let status) = self, status == 403 { return true }
-    if case MIRAAPIError.server(let status, _, _) = self, status == 403 { return true }
+    guard let apiError = self as? MIRAAPIError else { return false }
+    if case .badStatus(let status) = apiError, status == 403 { return true }
+    if case .server(let status, _, _) = apiError, status == 403 { return true }
     return false
   }
 }
