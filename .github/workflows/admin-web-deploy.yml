@@ -1,0 +1,42 @@
+name: Deploy Admin Web
+
+on:
+  push:
+    branches:
+      - main
+      - codex/supabase-primary-architecture
+    paths:
+      - "admin-web/**"
+      - ".github/workflows/admin-web-deploy.yml"
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      VITE_CAPTRO_API_BASE: https://api.flames-up.com/api
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: admin-web/package-lock.json
+
+      - name: Install dependencies
+        working-directory: ./admin-web
+        run: npm ci
+
+      - name: Build admin web
+        working-directory: ./admin-web
+        run: npm run build
+
+      - name: Deploy to Cloudflare Pages
+        working-directory: ./admin-web
+        run: npx wrangler pages deploy dist --project-name captro-admin --branch production
