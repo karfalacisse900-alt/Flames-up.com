@@ -45,6 +45,13 @@ public final class MIRAAuthSession: ObservableObject, MIRARefreshableSessionProv
       }
       return true
     } catch {
+      let shouldInvalidateSession = error.isUnauthorizedAPIError || error.isForbiddenAPIError
+      guard shouldInvalidateSession else {
+        await MainActor.run {
+          errorMessage = nil
+        }
+        return false
+      }
       await MainActor.run {
         token = nil
         refreshToken = nil

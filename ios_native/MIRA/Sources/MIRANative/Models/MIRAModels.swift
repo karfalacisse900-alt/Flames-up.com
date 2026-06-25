@@ -403,7 +403,7 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
       liked: liked ?? self.liked,
       savedByMe: saved ?? savedByMe,
       isFollowing: following ?? isFollowing,
-      saved: self.saved,
+      saved: saved ?? self.saved,
       following: self.following,
       followed: self.followed
     )

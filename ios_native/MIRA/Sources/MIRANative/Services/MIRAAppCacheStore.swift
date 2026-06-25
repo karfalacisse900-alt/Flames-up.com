@@ -355,7 +355,14 @@ actor MIRAAppCacheStore {
     )
   }
 
-  private func mergedViewerFlag(cached: Bool?, fresh: Bool?, cachedCount _: Int?, freshCount _: Int?) -> Bool? {
+  private func mergedViewerFlag(cached: Bool?, fresh: Bool?, cachedCount: Int?, freshCount: Int?) -> Bool? {
+    if cached == true, fresh == false {
+      let normalizedCachedCount = max(0, cachedCount ?? 0)
+      let normalizedFreshCount = freshCount.map { max(0, $0) }
+      if normalizedFreshCount == nil || (normalizedFreshCount ?? 0) >= max(1, normalizedCachedCount) {
+        return true
+      }
+    }
     if let fresh { return fresh }
     return cached
   }

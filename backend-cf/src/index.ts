@@ -549,7 +549,8 @@ function validateUsernameForAccount(
 }
 
 function pendingUsernameForUser(id: string): string {
-  return `pending_${String(id || uuid()).replace(/[^a-z0-9]/gi, '').slice(0, 18).toLowerCase()}`;
+  const suffix = String(id || uuid()).replace(/[^a-z0-9]/gi, '').toLowerCase();
+  return `pending_${suffix.slice(0, 12)}`;
 }
 
 async function ensureUniqueUsername(db: D1Database, desired: string): Promise<string> {
@@ -566,6 +567,32 @@ async function ensureUniqueUsername(db: D1Database, desired: string): Promise<st
   }
 
   return pendingUsernameForUser(uuid());
+}
+
+async function ensureUniqueSupabaseUsername(c: any, desired: string, fallbackId: string): Promise<string> {
+  const desiredSlug = strictUsernameSlug(desired);
+  let base = (desiredSlug || usernameSlug(desired)).slice(0, 16).replace(/^\.+|\.+$/g, '');
+  if (!validateUsernameForAccount(base, { allowGenerated: true }).ok || isReservedOrStaffUsername(base)) {
+    return pendingUsernameForUser(fallbackId);
+  }
+
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const suffix = attempt === 0 ? '' : String(attempt).padStart(2, '0');
+    const candidate = `${base.slice(0, Math.max(3, 20 - suffix.length))}${suffix}`;
+    try {
+      const rows = await supabaseAdminQueryRows(c, 'app_users', {
+        select: 'id,username',
+        filters: { username: postgrestEqFilter(candidate) },
+        limit: 1,
+      });
+      if (!rows.length) return candidate;
+    } catch (error: any) {
+      console.warn(JSON.stringify({ event: 'supabase_username_lookup_failed', code: getErrorCode(error).slice(0, 180) }));
+      break;
+    }
+  }
+
+  return pendingUsernameForUser(fallbackId);
 }
 
 let phoneAuthSchemaReady = false;
@@ -7296,6 +7323,31 @@ function supabaseInteractionActorKey(authUserId: string, identityActor: string, 
   return appId ? `app:${appId}` : '';
 }
 
+function normalizeLegacyInteractionActorKey(raw: unknown): string {
+  const clean = cleanText(raw, 220);
+  if (!clean) return '';
+  if (clean.startsWith('app:')) {
+    const legacyAppId = isUuidText(clean.slice(4));
+    if (legacyAppId) return `auth:${legacyAppId}`;
+  }
+  return clean;
+}
+
+function canonicalSupabaseInteractionActor(
+  row: any,
+  appToAuth: Map<string, string>,
+  appToIdentityActor: Map<string, string>
+): string {
+  const appUserId = publicId(row?.app_user_id, 120);
+  const authUserId = isUuidText(row?.user_id) || appToAuth.get(appUserId) || '';
+  if (authUserId) return `auth:${authUserId}`;
+  const identityActor = normalizeLegacyInteractionActorKey(appToIdentityActor.get(appUserId) || '');
+  if (identityActor) return identityActor;
+  const storedActor = normalizeLegacyInteractionActorKey(row?.actor_key);
+  if (storedActor) return storedActor;
+  return supabaseInteractionActorKey('', '', appUserId);
+}
+
 async function supabaseInteractionActorKeys(c: any, userIds: string[]) {
   const keys = await supabaseInteractionIdentityKeys(c, userIds);
   const appToAuth = await supabaseAuthUserIdMapForAppUserIds(c, keys.appUserIds);
@@ -7308,6 +7360,8 @@ async function supabaseInteractionActorKeys(c: any, userIds: string[]) {
   for (const appUserId of keys.appUserIds) {
     const actorKey = supabaseInteractionActorKey(appToAuth.get(appUserId) || '', appToIdentityActor.get(appUserId) || '', appUserId);
     if (actorKey) actorKeys.add(actorKey);
+    const rawLegacyAppKey = cleanText(`app:${appUserId}`, 220);
+    if (rawLegacyAppKey) actorKeys.add(rawLegacyAppKey);
   }
   return {
     ...keys,
@@ -7442,9 +7496,7 @@ async function supabasePostInteractionActorCount(c: any, postId: string, kind: '
   const appToIdentityActor = await supabaseAccountIdentityActorKeyMap(c, appUserIds);
   const actors = new Set<string>();
   for (const row of rows) {
-    const appUserId = publicId(row?.app_user_id, 120);
-    const authUserId = isUuidText(row?.user_id) || appToAuth.get(appUserId) || '';
-    const actor = cleanText(row?.actor_key, 220) || supabaseInteractionActorKey(authUserId, appToIdentityActor.get(appUserId) || '', appUserId);
+    const actor = canonicalSupabaseInteractionActor(row, appToAuth, appToIdentityActor);
     if (actor) actors.add(actor);
   }
   return actors.size;
@@ -7584,9 +7636,7 @@ async function supabasePostInteractionActorCounts(c: any, postIds: string[]) {
     ].filter(Boolean)));
     const kind = cleanText(row?.kind, 20);
     if (!rowPostKeys.length || (kind !== 'like' && kind !== 'save')) continue;
-    const appUserId = publicId(row?.app_user_id, 120);
-    const authUserId = isUuidText(row?.user_id) || appToAuth.get(appUserId) || '';
-    const actor = cleanText(row?.actor_key, 220) || supabaseInteractionActorKey(authUserId, appToIdentityActor.get(appUserId) || '', appUserId);
+    const actor = canonicalSupabaseInteractionActor(row, appToAuth, appToIdentityActor);
     if (!actor) continue;
     const targetKeys = new Set<string>();
     for (const rowPostKey of rowPostKeys) {
@@ -10065,7 +10115,8 @@ async function findOrCreateSupabaseAppUser(c: any, payload: any, extras: any = {
   if (rows[0]) return supabaseAppUserToLegacyUser(rows[0]);
 
   const appUserId = supabaseUserId;
-  const username = requestedUsernameCheck.ok ? requestedUsernameCheck.username : pendingUsernameForUser(appUserId);
+  const desiredUsername = requestedUsernameCheck.ok ? requestedUsernameCheck.username : pendingUsernameForUser(appUserId);
+  const username = await ensureUniqueSupabaseUsername(c, desiredUsername, appUserId);
   const row = {
     id: appUserId,
     supabase_user_id: supabaseUserId,
@@ -12622,20 +12673,23 @@ api.post('/auth/oauth/google', async (c) => {
       if (code === 'SUPABASE_AUTH_KEY_MISSING' || code === 'SUPABASE_NOT_CONFIGURED' || code === 'SUPABASE_SERVICE_ROLE_MISSING') {
         return c.json({ detail: 'Google sign in is not configured.' }, 503);
       }
-      if (code.startsWith('SUPABASE_ID_TOKEN_SIGN_IN_FAILED')) {
-        try {
-          const profile = await verifyGoogleIdToken(c, id_token);
-          const fallback = await signInSupabaseVerifiedOAuth(c, {
-            provider: 'google',
-            subject: profile.subject,
-            email: profile.email,
-            fullName: profile.fullName,
-            profileImage: profile.profileImage,
-          });
-          await logSecurityEvent(c, 'google_supabase_oauth_fallback_used', fallback.user.id, { provider: 'google' });
-          return c.json(supabaseAuthSessionResponse(fallback.supabaseSession, fallback.user));
-        } catch (fallbackError: any) {
-          console.warn(JSON.stringify({ event: 'google_oauth_fallback_failed', code: getErrorCode(fallbackError).slice(0, 160) }));
+      try {
+        const profile = await verifyGoogleIdToken(c, id_token);
+        const fallback = await signInSupabaseVerifiedOAuth(c, {
+          provider: 'google',
+          subject: profile.subject,
+          email: profile.email,
+          fullName: profile.fullName,
+          profileImage: profile.profileImage,
+        });
+        await logSecurityEvent(c, 'google_supabase_oauth_fallback_used', fallback.user.id, {
+          provider: 'google',
+          source_error: code.slice(0, 120),
+        });
+        return c.json(supabaseAuthSessionResponse(fallback.supabaseSession, fallback.user));
+      } catch (fallbackError: any) {
+        console.warn(JSON.stringify({ event: 'google_oauth_fallback_failed', code: getErrorCode(fallbackError).slice(0, 160) }));
+        if (code.startsWith('SUPABASE_ID_TOKEN_SIGN_IN_FAILED')) {
           return c.json({ detail: 'Google sign in could not be completed. Please try again.' }, 401);
         }
       }
@@ -12692,21 +12746,24 @@ api.post('/auth/oauth/apple', async (c) => {
       if (code === 'SUPABASE_AUTH_KEY_MISSING' || code === 'SUPABASE_NOT_CONFIGURED' || code === 'SUPABASE_SERVICE_ROLE_MISSING') {
         return c.json({ detail: 'Apple sign in is not configured.' }, 503);
       }
-      if (code.startsWith('SUPABASE_ID_TOKEN_SIGN_IN_FAILED')) {
-        try {
-          const profile = await verifyAppleIdToken(c, idToken);
-          const appleSubject = profile.subject || cleanText(body.apple_user || body.appleUser, 240);
-          const fallback = await signInSupabaseVerifiedOAuth(c, {
-            provider: 'apple',
-            subject: appleSubject,
-            email: profile.email || clientEmail || undefined,
-            fullName: clientFullName || profile.fullName || 'Apple User',
-            profileImage: profile.profileImage,
-          });
-          await logSecurityEvent(c, 'apple_supabase_oauth_fallback_used', fallback.user.id, { provider: 'apple' });
-          return c.json(supabaseAuthSessionResponse(fallback.supabaseSession, fallback.user));
-        } catch (fallbackError: any) {
-          console.warn(JSON.stringify({ event: 'apple_oauth_fallback_failed', code: getErrorCode(fallbackError).slice(0, 160) }));
+      try {
+        const profile = await verifyAppleIdToken(c, idToken);
+        const appleSubject = profile.subject || cleanText(body.apple_user || body.appleUser, 240);
+        const fallback = await signInSupabaseVerifiedOAuth(c, {
+          provider: 'apple',
+          subject: appleSubject,
+          email: profile.email || clientEmail || undefined,
+          fullName: clientFullName || profile.fullName || 'Apple User',
+          profileImage: profile.profileImage,
+        });
+        await logSecurityEvent(c, 'apple_supabase_oauth_fallback_used', fallback.user.id, {
+          provider: 'apple',
+          source_error: code.slice(0, 120),
+        });
+        return c.json(supabaseAuthSessionResponse(fallback.supabaseSession, fallback.user));
+      } catch (fallbackError: any) {
+        console.warn(JSON.stringify({ event: 'apple_oauth_fallback_failed', code: getErrorCode(fallbackError).slice(0, 160) }));
+        if (code.startsWith('SUPABASE_ID_TOKEN_SIGN_IN_FAILED')) {
           return c.json({ detail: 'Apple sign in could not be completed. Please try again.' }, 401);
         }
       }

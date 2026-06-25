@@ -331,21 +331,35 @@ function LoginScreen({ onLogin }: { onLogin: (session: { accessToken: string; re
   return (
     <main className="login-shell">
       <form className="login-card" onSubmit={submit}>
-        <div className="brand-mark">C</div>
-        <span className="eyebrow">Production access</span>
-        <h1>Captro Admin</h1>
-        <p>Private moderation access for approved Captro staff only.</p>
+        <div className="login-hero">
+          <div className="brand-mark">C</div>
+          <div>
+            <span className="eyebrow">Production moderation access</span>
+            <h1>Captro Admin</h1>
+            <p>Private moderation workspace for approved Captro staff only.</p>
+          </div>
+        </div>
+        <div className="login-security-panel">
+          <strong>Admin-only access</strong>
+          <ul className="login-check-list">
+            <li>Backend role checks run before any queue, post, message, or audit data loads</li>
+            <li>Only approved owner, admin, moderator, support, or viewer accounts can continue</li>
+            <li>No public signup, no demo mode, and no frontend-only admin bypass</li>
+          </ul>
+        </div>
         <ErrorBanner message={error} />
-        <label>
-          Email
-          <input autoComplete="email" inputMode="email" value={email} onChange={(event) => setEmail(event.target.value)} required />
-        </label>
-        <label>
-          Password
-          <input autoComplete="current-password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} required />
-        </label>
-        <button className="primary-button full-width" disabled={submitting}>{submitting ? 'Checking access...' : 'Sign in'}</button>
-        <small>No public signup. Backend role checks run before any admin data loads.</small>
+        <div className="login-form-grid">
+          <label>
+            Email
+            <input autoComplete="email" inputMode="email" value={email} onChange={(event) => setEmail(event.target.value)} required />
+          </label>
+          <label>
+            Password
+            <input autoComplete="current-password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} required />
+          </label>
+        </div>
+        <button className="primary-button full-width login-submit" disabled={submitting}>{submitting ? 'Checking access...' : 'Sign in to production'}</button>
+        <small>Use your real Captro staff account. Admin data stays blocked until the backend confirms your role.</small>
       </form>
     </main>
   );
@@ -1450,16 +1464,22 @@ function App() {
     setAccessError('');
     try {
       const next = await AdminApi.me(nextToken);
+      const resolvedAccessToken = sessionStorage.getItem(ADMIN_TOKEN_KEY) || nextToken;
+      const resolvedRefreshToken = sessionStorage.getItem(ADMIN_REFRESH_TOKEN_KEY) || nextRefreshToken || '';
       setSession(next);
-      sessionStorage.setItem(ADMIN_TOKEN_KEY, nextToken);
-      if (nextRefreshToken) sessionStorage.setItem(ADMIN_REFRESH_TOKEN_KEY, nextRefreshToken);
-      setToken(nextToken);
+      sessionStorage.setItem(ADMIN_TOKEN_KEY, resolvedAccessToken);
+      if (resolvedRefreshToken) sessionStorage.setItem(ADMIN_REFRESH_TOKEN_KEY, resolvedRefreshToken);
+      setToken(resolvedAccessToken);
     } catch (error) {
       sessionStorage.removeItem(ADMIN_TOKEN_KEY);
       sessionStorage.removeItem(ADMIN_REFRESH_TOKEN_KEY);
       setToken('');
       setSession(null);
-      setAccessError(error instanceof Error ? error.message : 'Access denied');
+      if (error instanceof ApiError && error.status === 403) {
+        setAccessError('This account signed in, but it is not approved for Captro Admin yet.');
+      } else {
+        setAccessError(error instanceof Error ? error.message : 'Access denied');
+      }
     } finally {
       setBooting(false);
     }
