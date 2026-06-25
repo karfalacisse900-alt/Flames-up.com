@@ -305,11 +305,21 @@ function Avatar({ src, label }: { src?: string; label: string }) {
   return <span className="avatar fallback">{label.slice(0, 1).toUpperCase()}</span>;
 }
 
-function LoginScreen({ onLogin }: { onLogin: (session: { accessToken: string; refreshToken?: string }) => void }) {
+function LoginScreen({
+  onLogin,
+  initialError = '',
+}: {
+  onLogin: (session: { accessToken: string; refreshToken?: string }) => void;
+  initialError?: string;
+}) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
+  const [error, setError] = useState(initialError);
   const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    setError(initialError);
+  }, [initialError]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -1518,6 +1528,7 @@ function App() {
   if (!session || !token) {
     return (
       <LoginScreen
+        initialError={accessError}
         onLogin={({ accessToken, refreshToken }) => void loadSession(accessToken, refreshToken)}
       />
     );
