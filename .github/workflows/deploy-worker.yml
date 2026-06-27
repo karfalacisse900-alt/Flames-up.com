@@ -61,7 +61,7 @@ jobs:
         run: |
           set -euo pipefail
           supabase link --project-ref "$SUPABASE_PROJECT_REF"
-          supabase db push
+          supabase db push --include-all
 
       - name: Sync Supabase service-role Worker secret
         working-directory: ./backend-cf
