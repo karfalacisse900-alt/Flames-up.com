@@ -228,7 +228,7 @@ final class DiscoverNativeModel: ObservableObject {
       let statuses = (group.statuses ?? []).filter { status in
         !(status.mediaURL?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
       }
-      guard !statuses.isEmpty else { return [] }
+      guard !statuses.isEmpty else { return [MIRAStoryGroup]() }
       if statuses.count == 1 {
         return [
           MIRAStoryGroup(
