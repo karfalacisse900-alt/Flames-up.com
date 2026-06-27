@@ -43,6 +43,7 @@ These should open in the browser before using them in App Store Connect:
 
 - `https://captro.app`
 - `https://captro.app/legal/privacy`
+- `https://captro.app/privacy-choices`
 - `https://captro.app/legal/terms`
 - `https://captro.app/legal/community-guidelines`
 - `https://captro.app/legal/safety`
@@ -53,3 +54,4 @@ These should open in the browser before using them in App Store Connect:
 - Support URL: `https://captro.app`
 - Marketing URL: `https://captro.app`
 - Privacy Policy URL: `https://captro.app/legal/privacy`
+- User Privacy Choices URL: `https://captro.app/privacy-choices`

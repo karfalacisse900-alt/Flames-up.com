@@ -4,6 +4,7 @@ Static Cloudflare Pages site for:
 
 - `https://captro.app`
 - `https://captro.app/legal/privacy`
+- `https://captro.app/privacy-choices`
 - `https://captro.app/legal/terms`
 - `https://captro.app/legal/community-guidelines`
 - `https://captro.app/legal/safety`
