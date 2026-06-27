@@ -3,7 +3,7 @@ import Foundation
 
 public enum MIRAProductionBackend {
   public static let apiBaseURL = URL(string: "https://api.flames-up.com/api")!
-  public static let siteBaseURL = URL(string: "https://flames-up.com")!
+  public static let siteBaseURL = URL(string: "https://captro.app")!
 
   public static func apiURL(_ path: String) -> URL {
     makeURL(baseURL: apiBaseURL, path: path)
@@ -77,6 +77,7 @@ private struct MIRAAPIErrorPayload: Decodable {
 public enum MIRANetworkSecurityPolicy {
   private static let apiHosts: Set<String> = [
     "api.flames-up.com",
+    "api.captro.app",
     "flames-up-api.karfalacisse900.workers.dev"
   ]
 

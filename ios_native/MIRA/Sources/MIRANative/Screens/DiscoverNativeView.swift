@@ -57,9 +57,10 @@ final class DiscoverNativeModel: ObservableObject {
       MIRAPerformanceTimeline.markOnce("discover_first_content", detail: "posts_cache")
     }
     if stories.isEmpty, let cachedStories = await cachedDiscoverStories() {
-      stories = cachedStories
+      let expandedStories = expandedStoryGroups(cachedStories)
+      stories = expandedStories
       isLoadingStories = false
-      prewarmStoryRailMedia(cachedStories)
+      prewarmStoryRailMedia(expandedStories)
       MIRAPerformanceTimeline.markOnce("discover_first_content", detail: "stories_cache")
     }
   }
@@ -160,7 +161,7 @@ final class DiscoverNativeModel: ObservableObject {
     }
     do {
       let loadedStories: [MIRAStoryGroup] = try await api.get("/statuses")
-      let visibleStories = loadedStories.filter { ($0.statuses?.isEmpty == false) }
+      let visibleStories = expandedStoryGroups(loadedStories.filter { ($0.statuses?.isEmpty == false) })
       if stories != visibleStories {
         stories = visibleStories
       }
@@ -219,6 +220,37 @@ final class DiscoverNativeModel: ObservableObject {
     MIRAVideoPrewarmManager.shared.prewarm(urls: urls, keepOnly: Set(urls.filter(\.isVideoURL).prefix(5)))
     Task.detached(priority: .utility) {
       await MIRAImagePrefetcher.prefetch(urls: urls, maxPixelSize: 1920, limit: 24)
+    }
+  }
+
+  private func expandedStoryGroups(_ groups: [MIRAStoryGroup]) -> [MIRAStoryGroup] {
+    groups.flatMap { group in
+      let statuses = (group.statuses ?? []).filter { status in
+        !(status.mediaURL?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+      }
+      guard !statuses.isEmpty else { return [] }
+      if statuses.count == 1 {
+        return [
+          MIRAStoryGroup(
+            userId: group.userId,
+            userUsername: group.userUsername,
+            userFullName: group.userFullName,
+            userProfileImage: group.userProfileImage,
+            hasUnviewed: group.hasUnviewed,
+            statuses: statuses
+          )
+        ]
+      }
+      return statuses.map { status in
+        MIRAStoryGroup(
+          userId: group.userId,
+          userUsername: group.userUsername,
+          userFullName: group.userFullName,
+          userProfileImage: group.userProfileImage,
+          hasUnviewed: group.hasUnviewed,
+          statuses: [status]
+        )
+      }
     }
   }
 

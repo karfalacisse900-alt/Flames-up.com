@@ -5,16 +5,16 @@ Use this as the submission checklist and copy source for App Store Connect.
 ## Required before "Add for Review"
 
 1. Privacy Policy URL
-   - `https://flames-up.com/legal/privacy`
+   - `https://captro.app/legal/privacy`
 
 2. Terms of Service URL
-   - `https://flames-up.com/legal/terms`
+   - `https://captro.app/legal/terms`
 
 3. Community Guidelines URL
-   - `https://flames-up.com/legal/community-guidelines`
+   - `https://captro.app/legal/community-guidelines`
 
 4. Safety & Reporting URL
-   - `https://flames-up.com/legal/safety`
+   - `https://captro.app/legal/safety`
 
 5. Build
    - Choose the newest processed TestFlight/App Store build for `com.captro.app`
@@ -74,11 +74,11 @@ Captro is designed to feel simple, visual, and human. We use moderation and repo
 
 ### Support URL
 
-`https://flames-up.com`
+`https://captro.app`
 
 ### Marketing URL
 
-`https://flames-up.com`
+`https://captro.app`
 
 ### Copyright
 
@@ -124,10 +124,10 @@ Important review notes:
 - Please use the reviewer account credentials provided above.
 - Delete Account is available in Settings > Account > Delete Account.
 - Report and Block are available from post/profile/comment/story actions.
-- Privacy Policy: https://flames-up.com/legal/privacy
-- Terms: https://flames-up.com/legal/terms
-- Community Guidelines: https://flames-up.com/legal/community-guidelines
-- Safety & Reporting: https://flames-up.com/legal/safety
+- Privacy Policy: https://captro.app/legal/privacy
+- Terms: https://captro.app/legal/terms
+- Community Guidelines: https://captro.app/legal/community-guidelines
+- Safety & Reporting: https://captro.app/legal/safety
 ```
 
 ## Screenshots checklist

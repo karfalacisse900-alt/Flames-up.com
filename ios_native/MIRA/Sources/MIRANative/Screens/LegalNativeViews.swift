@@ -2,7 +2,7 @@ import SwiftUI
 
 private let captroLegalLastUpdated = "June 8, 2026"
 private let captroSupportEmail = "karfalacisse900@gmail.com"
-private let captroWebsiteDomain = "https://flames-up.com"
+private let captroWebsiteDomain = "https://captro.app"
 private let captroLegalDisclaimer = "Captro may update these pages as the app, safety tools, or legal requirements change."
 
 private struct LegalSection: Identifiable {

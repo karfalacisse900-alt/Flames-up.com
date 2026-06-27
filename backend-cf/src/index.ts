@@ -120,6 +120,9 @@ const api = new Hono<HonoApp>();
 
 // ─── CORS ────────────────────────────────────────────────────────────────────
 const DEFAULT_ALLOWED_ORIGINS = [
+  'https://captro.app',
+  'https://www.captro.app',
+  'https://admin.captro.app',
   'https://flames-up.com',
   'https://www.flames-up.com',
   'https://admin.flames-up.com',

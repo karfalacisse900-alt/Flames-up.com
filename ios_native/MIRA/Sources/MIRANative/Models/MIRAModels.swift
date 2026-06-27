@@ -821,7 +821,7 @@ public struct MIRAStatusPreview: Codable, Identifiable, Hashable {
 }
 
 public struct MIRAStoryGroup: Codable, Identifiable, Hashable {
-  public var id: String { userId }
+  public var id: String { statuses?.first?.id ?? userId }
   public let userId: String
   public let userUsername: String?
   public let userFullName: String?

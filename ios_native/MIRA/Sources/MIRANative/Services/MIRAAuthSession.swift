@@ -120,11 +120,10 @@ public final class MIRAAuthSession: ObservableObject, MIRARefreshableSessionProv
         user = nil
         keychain.clearSession()
         await MIRALocalJSONCache.remove(key: cachedUserKey)
-      } else if user == nil {
-        token = nil
-        refreshToken = nil
-        keychain.clearSession()
-        await MIRALocalJSONCache.remove(key: cachedUserKey)
+      } else {
+        // Keep the stored session intact on transient/network failures so the
+        // user is not signed out unexpectedly during bootstrap.
+        errorMessage = nil
       }
     }
     isBootstrapping = false
