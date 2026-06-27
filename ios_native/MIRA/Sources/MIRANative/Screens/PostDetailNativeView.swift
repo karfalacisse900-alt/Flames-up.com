@@ -30,10 +30,20 @@ final class PostDetailModel: ObservableObject {
       let current = post
       let merged = refreshed.updating(
         liked: mergedViewerFlag(cached: current.viewerLikedValue, fresh: refreshed.viewerLikedValue, cachedCount: current.likesCount, freshCount: refreshed.likesCount),
-        likesCount: refreshed.likesCount ?? current.likesCount,
+        likesCount: mergedEngagementCount(
+          cached: current.likesCount,
+          fresh: refreshed.likesCount,
+          cachedFlag: current.viewerLikedValue,
+          freshFlag: refreshed.viewerLikedValue
+        ),
         commentsCount: bestCount(current.commentsCount, refreshed.commentsCount),
         saved: mergedViewerFlag(cached: current.viewerSavedValue, fresh: refreshed.viewerSavedValue, cachedCount: current.savesCount, freshCount: refreshed.savesCount),
-        savesCount: bestCount(current.savesCount, refreshed.savesCount),
+        savesCount: mergedEngagementCount(
+          cached: current.savesCount,
+          fresh: refreshed.savesCount,
+          cachedFlag: current.viewerSavedValue,
+          freshFlag: refreshed.viewerSavedValue
+        ),
         following: refreshed.isFollowing ?? refreshed.following?.value ?? refreshed.followed?.value ?? current.viewerFollowing
       )
       var transaction = Transaction()
@@ -350,8 +360,17 @@ final class PostDetailModel: ObservableObject {
   }
 
   private func mergedViewerFlag(cached: Bool?, fresh: Bool?, cachedCount _: Int?, freshCount _: Int?) -> Bool? {
-    if let fresh { return fresh }
-    return cached
+    if let cached { return cached }
+    return fresh
+  }
+
+  private func mergedEngagementCount(cached: Int?, fresh: Int?, cachedFlag: Bool?, freshFlag: Bool?) -> Int? {
+    guard cached != nil || fresh != nil else { return nil }
+    if let cachedFlag, let freshFlag, cachedFlag != freshFlag {
+      return max(0, cached ?? fresh ?? 0)
+    }
+    if let fresh { return max(0, fresh) }
+    return max(0, cached ?? 0)
   }
 
   private func loadCurrentUserIfNeeded() async {

@@ -348,16 +348,35 @@ actor MIRAAppCacheStore {
   private func mergedPostPreservingViewerState(cached: MIRAPost, fresh: MIRAPost) -> MIRAPost {
     fresh.updating(
       liked: mergedViewerFlag(cached: cached.viewerLikedValue, fresh: fresh.viewerLikedValue, cachedCount: cached.likesCount, freshCount: fresh.likesCount),
-      likesCount: fresh.likesCount ?? cached.likesCount,
+      likesCount: mergedEngagementCount(
+        cached: cached.likesCount,
+        fresh: fresh.likesCount,
+        cachedFlag: cached.viewerLikedValue,
+        freshFlag: fresh.viewerLikedValue
+      ),
       commentsCount: fresh.commentsCount ?? cached.commentsCount,
       saved: mergedViewerFlag(cached: cached.viewerSavedValue, fresh: fresh.viewerSavedValue, cachedCount: cached.savesCount, freshCount: fresh.savesCount),
-      savesCount: fresh.savesCount ?? cached.savesCount
+      savesCount: mergedEngagementCount(
+        cached: cached.savesCount,
+        fresh: fresh.savesCount,
+        cachedFlag: cached.viewerSavedValue,
+        freshFlag: fresh.viewerSavedValue
+      )
     )
   }
 
   private func mergedViewerFlag(cached: Bool?, fresh: Bool?, cachedCount _: Int?, freshCount _: Int?) -> Bool? {
-    if let fresh { return fresh }
-    return cached
+    if let cached { return cached }
+    return fresh
+  }
+
+  private func mergedEngagementCount(cached: Int?, fresh: Int?, cachedFlag: Bool?, freshFlag: Bool?) -> Int? {
+    guard cached != nil || fresh != nil else { return nil }
+    if let cachedFlag, let freshFlag, cachedFlag != freshFlag {
+      return max(0, cached ?? fresh ?? 0)
+    }
+    if let fresh { return max(0, fresh) }
+    return max(0, cached ?? 0)
   }
 
   private func nowISO() -> String {
