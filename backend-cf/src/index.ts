@@ -10518,7 +10518,7 @@ async function refreshSupabaseSession(c: any, refreshToken: string) {
 }
 
 function passwordResetRedirectTarget(rawValue: unknown): string {
-  const fallback = 'https://captro.app/auth/reset-password';
+  const fallback = 'https://captro-site.pages.dev/auth/reset-password/';
   const clean = cleanText(rawValue, 2048);
   if (!clean) return fallback;
   try {
@@ -10527,7 +10527,13 @@ function passwordResetRedirectTarget(rawValue: unknown): string {
     const host = String(url.hostname || '').toLowerCase();
     const path = String(url.pathname || '');
     if (scheme === 'captro:' && host === 'auth' && path === '/reset-password') return clean;
-    if (scheme === 'https:' && (host === 'captro.app' || host === 'www.captro.app') && path === '/auth/reset-password') return clean;
+    if (scheme === 'https:' && host === 'captro-site.pages.dev' && (path === '/auth/reset-password' || path === '/auth/reset-password/')) return clean;
+    if (scheme === 'https:' && (host === 'captro.app' || host === 'www.captro.app') && path === '/auth/reset-password') {
+      const canonical = new URL(fallback);
+      canonical.search = url.search;
+      canonical.hash = url.hash;
+      return canonical.toString();
+    }
   } catch {}
   return fallback;
 }
