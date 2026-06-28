@@ -21,6 +21,11 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Ensure Cloudflare Pages project exists
+        working-directory: ./captro-site
+        run: |
+          npx wrangler pages project create captro-site --production-branch production || true
+
       - name: Deploy to Cloudflare Pages
         working-directory: ./captro-site
         run: npx wrangler pages deploy . --project-name captro-site --branch production
