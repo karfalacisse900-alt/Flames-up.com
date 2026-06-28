@@ -1,10 +1,17 @@
 import Foundation
 
+public struct MIRAPasswordResetContext: Equatable {
+  public let accessToken: String
+  public let refreshToken: String?
+  public let email: String?
+}
+
 public final class MIRAAuthSession: ObservableObject, MIRARefreshableSessionProviding {
   @Published public private(set) var user: MIRAUser?
   @Published public private(set) var isBootstrapping = true
   @Published public private(set) var isWorking = false
   @Published public var errorMessage: String?
+  @Published public var passwordResetContext: MIRAPasswordResetContext?
 
   private let keychain: MIRAKeychainSessionProvider
   private var token: String?
@@ -202,6 +209,80 @@ public final class MIRAAuthSession: ObservableObject, MIRARefreshableSessionProv
   }
 
   @MainActor
+  public func requestPasswordReset(email: String, api: MIRAAPIClient) async -> Bool {
+    isWorking = true
+    errorMessage = nil
+    defer { isWorking = false }
+    do {
+      let _: MIRAPasswordResetRequestResponse = try await api.post(
+        "/auth/password/reset/request",
+        body: MIRAPasswordResetRequestBody(email: email, redirectTo: "captro://auth/reset-password")
+      )
+      return true
+    } catch {
+      if let apiError = error as? MIRAAPIError,
+         let message = apiError.errorDescription,
+         !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        errorMessage = message
+      } else {
+        errorMessage = "Could not send the reset email right now."
+      }
+      return false
+    }
+  }
+
+  @MainActor
+  public func completePasswordReset(password: String, api: MIRAAPIClient) async -> Bool {
+    guard let passwordResetContext else {
+      errorMessage = "Reset session is missing. Open the email link again."
+      return false
+    }
+    isWorking = true
+    errorMessage = nil
+    defer { isWorking = false }
+    do {
+      let response: MIRAAuthResponse = try await api.post(
+        "/auth/password/reset/confirm",
+        body: MIRAPasswordResetConfirmBody(
+          accessToken: passwordResetContext.accessToken,
+          refreshToken: passwordResetContext.refreshToken,
+          password: password
+        )
+      )
+      token = response.accessToken
+      refreshToken = response.refreshToken
+      user = response.user
+      self.passwordResetContext = nil
+      keychain.saveSession(accessToken: response.accessToken, refreshToken: response.refreshToken)
+      await MIRAAppCacheStore.shared.saveCurrentProfile(response.user)
+      await MIRALocalJSONCache.save(response.user, key: cachedUserKey)
+      return true
+    } catch {
+      if let apiError = error as? MIRAAPIError,
+         let message = apiError.errorDescription,
+         !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        errorMessage = message
+      } else {
+        errorMessage = "Could not reset the password right now."
+      }
+      return false
+    }
+  }
+
+  @MainActor
+  public func clearPasswordResetContext() {
+    passwordResetContext = nil
+    errorMessage = nil
+  }
+
+  @MainActor
+  public func handleIncomingURL(_ url: URL) {
+    guard let context = passwordResetContext(from: url) else { return }
+    passwordResetContext = context
+    errorMessage = nil
+  }
+
+  @MainActor
   public func logout() {
     token = nil
     refreshToken = nil
@@ -246,6 +327,39 @@ public final class MIRAAuthSession: ObservableObject, MIRARefreshableSessionProv
         errorMessage = "Could not sign in. Check your account and try again."
       }
     }
+  }
+
+  private func passwordResetContext(from url: URL) -> MIRAPasswordResetContext? {
+    let scheme = (url.scheme ?? "").lowercased()
+    let host = (url.host ?? "").lowercased()
+    guard scheme == "captro", host == "auth", url.path == "/reset-password" else { return nil }
+
+    var values: [String: String] = [:]
+    if let components = URLComponents(url: url, resolvingAgainstBaseURL: false) {
+      for item in components.queryItems ?? [] {
+        values[item.name] = item.value ?? ""
+      }
+    }
+    if let fragment = url.fragment, !fragment.isEmpty {
+      let fragmentItems = fragment.split(separator: "&")
+      for entry in fragmentItems {
+        let parts = entry.split(separator: "=", maxSplits: 1).map(String.init)
+        guard let name = parts.first, !name.isEmpty else { continue }
+        let rawValue = parts.count > 1 ? parts[1] : ""
+        values[name.removingPercentEncoding ?? name] = rawValue.removingPercentEncoding ?? rawValue
+      }
+    }
+
+    let resetType = (values["type"] ?? "").lowercased()
+    let accessToken = values["access_token"] ?? values["accessToken"] ?? ""
+    if !resetType.isEmpty && resetType != "recovery" { return nil }
+    guard !accessToken.isEmpty else { return nil }
+
+    return MIRAPasswordResetContext(
+      accessToken: accessToken,
+      refreshToken: values["refresh_token"] ?? values["refreshToken"],
+      email: values["email"]
+    )
   }
 }
 

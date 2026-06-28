@@ -16,6 +16,11 @@ public struct AuthNativeView: View {
   @State private var isCreatingAccount = false
   @State private var selectedWelcomePage = 0
   @State private var isAuthPanelVisible = false
+  @State private var isForgotPasswordVisible = false
+  @State private var forgotPasswordEmail = ""
+  @State private var forgotPasswordNotice = ""
+  @State private var resetPassword = ""
+  @State private var confirmResetPassword = ""
   @State private var appleSignInNonce: String?
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -46,12 +51,26 @@ public struct AuthNativeView: View {
             .transition(.move(edge: .bottom).combined(with: .opacity))
             .zIndex(2)
         }
+
+        if isForgotPasswordVisible || session.passwordResetContext != nil {
+          Color.black.opacity(0.26)
+            .ignoresSafeArea()
+            .transition(.opacity)
+            .zIndex(3)
+
+          passwordResetOverlay
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+            .zIndex(4)
+        }
       }
       .animation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion), value: isAuthPanelVisible)
+      .animation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion), value: isForgotPasswordVisible)
+      .animation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion), value: session.passwordResetContext != nil)
       .toolbar(.hidden, for: .navigationBar)
     }
     .onOpenURL { url in
       _ = GIDSignIn.sharedInstance.handle(url)
+      session.handleIncomingURL(url)
     }
   }
 
@@ -181,7 +200,216 @@ public struct AuthNativeView: View {
           .frame(height: 44)
       }
       .buttonStyle(.plain)
+
+      if !isCreatingAccount {
+        Button {
+          forgotPasswordEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
+          forgotPasswordNotice = ""
+          session.errorMessage = nil
+          CaptroHaptics.light()
+          withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
+            isForgotPasswordVisible = true
+          }
+        } label: {
+          Text("Forgot password?")
+            .font(.system(size: 14, weight: .semibold))
+            .foregroundStyle(MIRATheme.Color.forest)
+            .frame(maxWidth: .infinity)
+            .frame(height: 40)
+        }
+        .buttonStyle(.plain)
+      }
     }
+  }
+
+  @ViewBuilder
+  private var passwordResetOverlay: some View {
+    if session.passwordResetContext != nil {
+      resetPasswordPanel
+    } else if isForgotPasswordVisible {
+      forgotPasswordPanel
+    }
+  }
+
+  private var forgotPasswordPanel: some View {
+    VStack(spacing: 0) {
+      Capsule()
+        .fill(MIRATheme.Color.textMuted.opacity(0.28))
+        .frame(width: 42, height: 5)
+        .padding(.top, 10)
+        .padding(.bottom, MIRATheme.Space.md)
+
+      HStack {
+        VStack(alignment: .leading, spacing: 4) {
+          Text("Reset password")
+            .font(.system(size: 26, weight: .black, design: .rounded))
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+          Text("We’ll send a reset link to your email.")
+            .font(.system(size: 14.5, weight: .medium))
+            .foregroundStyle(MIRATheme.Color.textSecondary)
+        }
+        Spacer()
+        Button {
+          withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
+            isForgotPasswordVisible = false
+          }
+          forgotPasswordNotice = ""
+          session.errorMessage = nil
+        } label: {
+          Image(systemName: "xmark")
+            .font(.system(size: 15, weight: .bold))
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+            .frame(width: 44, height: 44)
+            .background(MIRATheme.Color.surfaceSoft)
+            .clipShape(Circle())
+        }
+        .buttonStyle(.miraPress)
+      }
+      .padding(.horizontal, MIRATheme.Space.xl)
+
+      VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
+        authField("Email", text: $forgotPasswordEmail, systemImage: "envelope", keyboard: .emailAddress)
+
+        if !forgotPasswordNotice.isEmpty {
+          Text(forgotPasswordNotice)
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(MIRATheme.Color.forest)
+        }
+
+        if let error = session.errorMessage {
+          Text(error)
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(.red.opacity(0.82))
+        }
+
+        Button {
+          Task {
+            let ok = await session.requestPasswordReset(email: forgotPasswordEmail, api: api)
+            if ok {
+              forgotPasswordNotice = "Check your email for a reset link."
+            }
+          }
+        } label: {
+          HStack {
+            Spacer()
+            if session.isWorking {
+              ProgressView().tint(.white)
+            } else {
+              Text("Send reset link")
+                .font(.system(size: 16, weight: .semibold))
+            }
+            Spacer()
+          }
+          .foregroundStyle(.white)
+          .frame(height: 50)
+          .background(MIRATheme.Color.forest)
+          .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .disabled(session.isWorking || !forgotPasswordEmail.contains("@"))
+      }
+      .padding(.horizontal, MIRATheme.Space.xl)
+      .padding(.top, MIRATheme.Space.lg)
+      .padding(.bottom, MIRATheme.Space.xxl)
+    }
+    .frame(maxWidth: .infinity)
+    .background(MIRATheme.Color.launchBackground)
+    .clipShape(RoundedRectangle(cornerRadius: 34, style: .continuous))
+    .modifier(MIRATheme.floatingShadow())
+    .frame(maxHeight: .infinity, alignment: .bottom)
+    .ignoresSafeArea(edges: .bottom)
+  }
+
+  private var resetPasswordPanel: some View {
+    VStack(spacing: 0) {
+      Capsule()
+        .fill(MIRATheme.Color.textMuted.opacity(0.28))
+        .frame(width: 42, height: 5)
+        .padding(.top, 10)
+        .padding(.bottom, MIRATheme.Space.md)
+
+      HStack {
+        VStack(alignment: .leading, spacing: 4) {
+          Text("Create a new password")
+            .font(.system(size: 26, weight: .black, design: .rounded))
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+          Text("Use the reset link email to finish signing back in.")
+            .font(.system(size: 14.5, weight: .medium))
+            .foregroundStyle(MIRATheme.Color.textSecondary)
+        }
+        Spacer()
+        Button {
+          session.clearPasswordResetContext()
+          resetPassword = ""
+          confirmResetPassword = ""
+        } label: {
+          Image(systemName: "xmark")
+            .font(.system(size: 15, weight: .bold))
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+            .frame(width: 44, height: 44)
+            .background(MIRATheme.Color.surfaceSoft)
+            .clipShape(Circle())
+        }
+        .buttonStyle(.miraPress)
+      }
+      .padding(.horizontal, MIRATheme.Space.xl)
+
+      VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
+        secureResetField("New password", text: $resetPassword)
+        secureResetField("Confirm password", text: $confirmResetPassword)
+
+        if let error = session.errorMessage {
+          Text(error)
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(.red.opacity(0.82))
+        }
+
+        Button {
+          guard resetPassword == confirmResetPassword else {
+            session.errorMessage = "Passwords do not match."
+            return
+          }
+          Task {
+            let ok = await session.completePasswordReset(password: resetPassword, api: api)
+            if ok {
+              resetPassword = ""
+              confirmResetPassword = ""
+              session.clearPasswordResetContext()
+              withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
+                isAuthPanelVisible = false
+                isForgotPasswordVisible = false
+              }
+            }
+          }
+        } label: {
+          HStack {
+            Spacer()
+            if session.isWorking {
+              ProgressView().tint(.white)
+            } else {
+              Text("Save new password")
+                .font(.system(size: 16, weight: .semibold))
+            }
+            Spacer()
+          }
+          .foregroundStyle(.white)
+          .frame(height: 50)
+          .background(MIRATheme.Color.forest)
+          .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .disabled(session.isWorking || resetPassword.count < 6 || confirmResetPassword.count < 6)
+      }
+      .padding(.horizontal, MIRATheme.Space.xl)
+      .padding(.top, MIRATheme.Space.lg)
+      .padding(.bottom, MIRATheme.Space.xxl)
+    }
+    .frame(maxWidth: .infinity)
+    .background(MIRATheme.Color.launchBackground)
+    .clipShape(RoundedRectangle(cornerRadius: 34, style: .continuous))
+    .modifier(MIRATheme.floatingShadow())
+    .frame(maxHeight: .infinity, alignment: .bottom)
+    .ignoresSafeArea(edges: .bottom)
   }
 
   private var socialAuthBlock: some View {
@@ -367,6 +595,21 @@ public struct AuthNativeView: View {
   private var googleClientID: String {
     Bundle.main.object(forInfoDictionaryKey: "GIDClientID") as? String
       ?? "702354172189-9gg83vd92n3s217n5pb4ddqqsnme8ocb.apps.googleusercontent.com"
+  }
+
+  private func secureResetField(_ placeholder: String, text: Binding<String>) -> some View {
+    HStack(spacing: MIRATheme.Space.sm) {
+      Image(systemName: "lock")
+        .foregroundStyle(MIRATheme.Color.textMuted)
+        .frame(width: 22)
+      SecureField(placeholder, text: text)
+        .font(.system(size: 16, weight: .medium))
+        .foregroundStyle(MIRATheme.Color.textPrimary)
+    }
+    .padding(.horizontal, MIRATheme.Space.md)
+    .frame(height: 50)
+    .background(MIRATheme.Color.surfaceSoft)
+    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
   }
 
   private var googleServerClientID: String? {

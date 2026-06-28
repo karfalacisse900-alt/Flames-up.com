@@ -1433,6 +1433,23 @@ public struct MIRARefreshSessionBody: Encodable {
   public let refreshToken: String
 }
 
+public struct MIRAPasswordResetRequestBody: Encodable {
+  public let email: String
+  public let redirectTo: String
+}
+
+public struct MIRAPasswordResetConfirmBody: Encodable {
+  public let accessToken: String
+  public let refreshToken: String?
+  public let password: String
+}
+
+public struct MIRAPasswordResetRequestResponse: Decodable, Hashable {
+  public let sent: Bool?
+  public let detail: String?
+  public let redirectTo: String?
+}
+
 public struct MIRAMediaUploadResponse: Decodable, Hashable {
   public let url: String?
   public let id: String?

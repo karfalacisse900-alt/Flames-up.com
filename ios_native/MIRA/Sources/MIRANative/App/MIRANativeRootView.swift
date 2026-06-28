@@ -287,6 +287,7 @@ public struct MIRANativeRootView: View {
     }
     .onOpenURL { url in
       _ = GIDSignIn.sharedInstance.handle(url)
+      authSession.handleIncomingURL(url)
     }
   }
 

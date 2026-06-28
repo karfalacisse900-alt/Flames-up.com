@@ -31,6 +31,14 @@
       <string>Editor</string>
       <key>CFBundleURLSchemes</key>
       <array>
+        <string>captro</string>
+      </array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeRole</key>
+      <string>Editor</string>
+      <key>CFBundleURLSchemes</key>
+      <array>
         <string>com.googleusercontent.apps.702354172189-9gg83vd92n3s217n5pb4ddqqsnme8ocb</string>
       </array>
     </dict>

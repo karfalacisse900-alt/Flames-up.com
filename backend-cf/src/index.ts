@@ -10517,6 +10517,57 @@ async function refreshSupabaseSession(c: any, refreshToken: string) {
   return data;
 }
 
+function passwordResetRedirectTarget(rawValue: unknown): string {
+  const fallback = 'captro://auth/reset-password';
+  const clean = cleanText(rawValue, 2048);
+  if (!clean) return fallback;
+  try {
+    const url = new URL(clean);
+    const scheme = String(url.protocol || '').toLowerCase();
+    const host = String(url.hostname || '').toLowerCase();
+    const path = String(url.pathname || '');
+    if (scheme === 'captro:' && host === 'auth' && path === '/reset-password') return clean;
+    if (scheme === 'https:' && host === 'captro.app' && path === '/reset-password') return clean;
+  } catch {}
+  return fallback;
+}
+
+async function sendSupabasePasswordRecovery(c: any, email: string, redirectTo: string) {
+  const url = new URL(`${getSupabaseUrl(c)}/auth/v1/recover`);
+  url.searchParams.set('redirect_to', redirectTo);
+  const response = await fetch(url.toString(), {
+    method: 'POST',
+    headers: supabasePublicAuthHeaders(c),
+    body: JSON.stringify({ email }),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`SUPABASE_PASSWORD_RECOVERY_FAILED:${response.status}:${text.slice(0, 180)}`);
+  }
+  return await response.json().catch(() => ({}));
+}
+
+async function updateSupabasePassword(c: any, accessToken: string, password: string) {
+  const token = cleanText(accessToken, 8192);
+  if (!token) throw new Error('SUPABASE_PASSWORD_RESET_TOKEN_REQUIRED');
+  const nextPassword = String(password || '');
+  if (nextPassword.length < 6) throw new Error('SUPABASE_PASSWORD_RESET_PASSWORD_TOO_SHORT');
+  const response = await fetch(`${getSupabaseUrl(c)}/auth/v1/user`, {
+    method: 'PUT',
+    headers: {
+      apikey: getSupabaseAuthClientKey(c),
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ password: nextPassword }),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`SUPABASE_PASSWORD_UPDATE_FAILED:${response.status}:${text.slice(0, 180)}`);
+  }
+  return await response.json().catch(() => ({}));
+}
+
 async function signInSupabaseIdToken(c: any, provider: 'google' | 'apple', idToken: string, options: { nonce?: string; accessToken?: string } = {}) {
   const body: any = { provider, token: idToken };
   const nonce = cleanText(options.nonce, 512);
@@ -12664,6 +12715,88 @@ api.post('/auth/refresh', async (c) => {
     }
     if (code === 'ACCOUNT_DISABLED') return c.json({ detail: 'This account cannot be used.' }, 403);
     return c.json({ detail: 'Session refresh failed. Please sign in again.', code: 'SESSION_REFRESH_FAILED' }, 401);
+  }
+});
+
+api.post('/auth/password/reset/request', async (c) => {
+  try {
+    const bodyTooLarge = rejectLargeRequest(c, 20_000);
+    if (bodyTooLarge) return bodyTooLarge;
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'password_reset_request');
+    if (supabaseRequired) return supabaseRequired;
+    const limited = await enforceRateLimit(c, 'password_reset_request', clientIp(c), 12, 600);
+    if (limited) return limited;
+    const body: any = await c.req.json().catch(() => ({}));
+    const unknown = rejectUnknownFields(c, body, ['email', 'redirect_to', 'redirectTo']);
+    if (unknown) return unknown;
+    const email = normalizeOptionalEmail(body.email);
+    if (!email) return c.json({ detail: 'A valid email is required.', code: 'EMAIL_REQUIRED' }, 400);
+    const redirectTo = passwordResetRedirectTarget(body.redirect_to || body.redirectTo);
+    await sendSupabasePasswordRecovery(c, email, redirectTo);
+    await logSecurityEvent(c, 'password_reset_requested', '', { email_hash_hint: (await sha256Hex(email)).slice(0, 16), redirect_to: redirectTo.slice(0, 120) });
+    return c.json({
+      sent: true,
+      detail: 'If that email belongs to a Captro account, we sent a password reset link.',
+      redirect_to: redirectTo,
+    });
+  } catch (error: any) {
+    const code = getErrorCode(error);
+    if (code === 'SUPABASE_AUTH_KEY_MISSING' || code === 'SUPABASE_NOT_CONFIGURED') {
+      return c.json({ detail: 'Password reset is not configured right now.' }, 503);
+    }
+    if (code.startsWith('SUPABASE_PASSWORD_RECOVERY_FAILED:429')) {
+      return c.json({ detail: 'Too many reset attempts. Please wait a bit and try again.', code: 'RATE_LIMITED' }, 429);
+    }
+    console.warn(JSON.stringify({ event: 'password_reset_request_failed', code: code.slice(0, 180) }));
+    return c.json({ detail: 'Could not send the reset email right now. Please try again later.', code: 'PASSWORD_RESET_REQUEST_FAILED' }, 502);
+  }
+});
+
+api.post('/auth/password/reset/confirm', async (c) => {
+  try {
+    const bodyTooLarge = rejectLargeRequest(c, 40_000);
+    if (bodyTooLarge) return bodyTooLarge;
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'password_reset_confirm');
+    if (supabaseRequired) return supabaseRequired;
+    const limited = await enforceRateLimit(c, 'password_reset_confirm', clientIp(c), 12, 600);
+    if (limited) return limited;
+    const body: any = await c.req.json().catch(() => ({}));
+    const unknown = rejectUnknownFields(c, body, ['access_token', 'accessToken', 'refresh_token', 'refreshToken', 'password']);
+    if (unknown) return unknown;
+    const accessToken = cleanText(body.access_token || body.accessToken || '', 8192);
+    const refreshToken = cleanText(body.refresh_token || body.refreshToken || '', 8192);
+    const password = String(body.password || '');
+    if (!accessToken) return c.json({ detail: 'Reset session is missing. Open the email link again.', code: 'RESET_TOKEN_REQUIRED' }, 400);
+    if (password.length < 6) return c.json({ detail: 'Password must be at least 6 characters.', code: 'PASSWORD_TOO_SHORT' }, 400);
+
+    await updateSupabasePassword(c, accessToken, password);
+    let supabaseSession: any = { access_token: accessToken, refresh_token: refreshToken || undefined, token_type: 'bearer' };
+    if (refreshToken) {
+      try {
+        supabaseSession = await refreshSupabaseSession(c, refreshToken);
+      } catch (error: any) {
+        console.warn(JSON.stringify({ event: 'password_reset_refresh_after_update_failed', code: getErrorCode(error).slice(0, 180) }));
+      }
+    }
+    const session = await issueCaptroTokenForSupabaseAccessToken(c, supabaseSession.access_token, {
+      password_reset_completed: true,
+    });
+    await logSecurityEvent(c, 'password_reset_completed', session.user.id, {});
+    return c.json(supabaseAuthSessionResponse(supabaseSession, session.user));
+  } catch (error: any) {
+    const code = getErrorCode(error);
+    if (code === 'SUPABASE_PASSWORD_RESET_TOKEN_REQUIRED') {
+      return c.json({ detail: 'Reset session is missing. Open the email link again.', code: 'RESET_TOKEN_REQUIRED' }, 400);
+    }
+    if (code === 'SUPABASE_PASSWORD_RESET_PASSWORD_TOO_SHORT') {
+      return c.json({ detail: 'Password must be at least 6 characters.', code: 'PASSWORD_TOO_SHORT' }, 400);
+    }
+    if (code.startsWith('SUPABASE_PASSWORD_UPDATE_FAILED:400') || code.startsWith('SUPABASE_PASSWORD_UPDATE_FAILED:401') || code.startsWith('SUPABASE_PASSWORD_UPDATE_FAILED:403')) {
+      return c.json({ detail: 'This reset link is no longer valid. Request a new one and try again.', code: 'RESET_LINK_INVALID' }, 401);
+    }
+    if (code === 'ACCOUNT_DISABLED') return c.json({ detail: 'This account cannot be used.' }, 403);
+    console.warn(JSON.stringify({ event: 'password_reset_confirm_failed', code: code.slice(0, 180) }));
+    return c.json({ detail: 'Could not reset the password right now. Please try again later.', code: 'PASSWORD_RESET_CONFIRM_FAILED' }, 502);
   }
 });
 
