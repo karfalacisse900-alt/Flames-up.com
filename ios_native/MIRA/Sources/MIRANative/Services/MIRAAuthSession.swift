@@ -216,7 +216,7 @@ public final class MIRAAuthSession: ObservableObject, MIRARefreshableSessionProv
     do {
       let _: MIRAPasswordResetRequestResponse = try await api.post(
         "/auth/password/reset/request",
-        body: MIRAPasswordResetRequestBody(email: email, redirectTo: "captro://auth/reset-password")
+        body: MIRAPasswordResetRequestBody(email: email, redirectTo: "https://captro.app/auth/reset-password")
       )
       return true
     } catch {
@@ -332,7 +332,9 @@ public final class MIRAAuthSession: ObservableObject, MIRARefreshableSessionProv
   private func passwordResetContext(from url: URL) -> MIRAPasswordResetContext? {
     let scheme = (url.scheme ?? "").lowercased()
     let host = (url.host ?? "").lowercased()
-    guard scheme == "captro", host == "auth", url.path == "/reset-password" else { return nil }
+    let isCaptroScheme = scheme == "captro" && host == "auth" && url.path == "/reset-password"
+    let isCaptroWebReset = scheme == "https" && (host == "captro.app" || host == "www.captro.app") && url.path == "/auth/reset-password"
+    guard isCaptroScheme || isCaptroWebReset else { return nil }
 
     var values: [String: String] = [:]
     if let components = URLComponents(url: url, resolvingAgainstBaseURL: false) {
