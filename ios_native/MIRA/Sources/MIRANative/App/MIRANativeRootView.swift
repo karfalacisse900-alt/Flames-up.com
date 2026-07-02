@@ -197,7 +197,6 @@ public struct MIRANativeRootView: View {
   @AppStorage(MIRAAppearanceResolver.preferenceKey) private var appearancePreference = MIRAAppearance.system.rawValue
   @StateObject private var authSession: MIRAAuthSession
   @StateObject private var startup: MIRAStartupCoordinator
-  @StateObject private var callCoordinator: MIRAAppCallCoordinator
   @StateObject private var localization: MIRALocalization
   private let api: MIRAAPIClient
 
@@ -206,7 +205,6 @@ public struct MIRANativeRootView: View {
     let client = MIRAAPIClient(sessionProvider: session)
     _authSession = StateObject(wrappedValue: session)
     _startup = StateObject(wrappedValue: MIRAStartupCoordinator(api: client))
-    _callCoordinator = StateObject(wrappedValue: MIRAAppCallCoordinator.shared)
     _localization = StateObject(wrappedValue: MIRALocalization.shared)
     self.api = client
     MIRAPerformanceTimeline.mark("native_root_init")
@@ -226,19 +224,10 @@ public struct MIRANativeRootView: View {
           .zIndex(10)
       }
 
-      MIRACallOverlays(coordinator: callCoordinator)
-        .zIndex(30)
-
       if isPrivacyShieldVisible {
         MIRAPrivacyShieldView()
           .transition(.opacity)
           .zIndex(100)
-      }
-    }
-    .miraFullScreenOverlay(item: activeCallBinding, background: .black) { presentation, dismissCall in
-      MIRAAgoraCallView(presentation: presentation, api: api) {
-        Task { await callCoordinator.endActiveCall() }
-        dismissCall()
       }
     }
     .background(MIRATheme.Color.launchBackground.ignoresSafeArea())
@@ -255,7 +244,6 @@ public struct MIRANativeRootView: View {
     .task {
       await MIRAAppCacheStore.shared.clearPostDraftFromPreviousProcessIfNeeded()
       await startup.start(authSession: authSession)
-      callCoordinator.configure(api: api, currentUserId: authSession.user?.id)
       registerCachedPushTokenIfPossible()
     }
     .onChange(of: authSession.user?.id) { _, userID in
@@ -265,7 +253,6 @@ public struct MIRANativeRootView: View {
       } else {
         loadedTabs.formUnion([.main, .discover, .profile])
       }
-      callCoordinator.configure(api: api, currentUserId: userID)
       registerCachedPushTokenIfPossible()
     }
     .onChange(of: scenePhase) { _, phase in
@@ -289,13 +276,6 @@ public struct MIRANativeRootView: View {
       _ = GIDSignIn.sharedInstance.handle(url)
       authSession.handleIncomingURL(url)
     }
-  }
-
-  private var activeCallBinding: Binding<MIRAAgoraCallPresentation?> {
-    Binding(
-      get: { callCoordinator.activeCall },
-      set: { callCoordinator.activeCall = $0 }
-    )
   }
 
   private var shouldHideStatusBar: Bool {

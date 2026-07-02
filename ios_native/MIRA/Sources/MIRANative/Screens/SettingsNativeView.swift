@@ -511,7 +511,7 @@ private struct NotificationSettingsNativeView: View {
         SettingsToggleRow(title: "Likes", subtitle: "When someone likes your post.", systemImage: "heart", isOn: $notifyLikes)
         SettingsToggleRow(title: "Comments and replies", subtitle: "When someone comments or replies.", systemImage: "bubble.left", isOn: $notifyComments)
         SettingsToggleRow(title: "Follows", subtitle: "When someone follows you.", systemImage: "person.badge.plus", isOn: $notifyFollows)
-        SettingsToggleRow(title: "Messages", subtitle: "New chat messages and calls.", systemImage: "message", isOn: $notifyMessages)
+        SettingsToggleRow(title: "Messages", subtitle: "New chat messages.", systemImage: "message", isOn: $notifyMessages)
         SettingsToggleRow(title: "New posts", subtitle: "When people you follow post.", systemImage: "photo.on.rectangle", isOn: $notifyPosts)
         SettingsToggleRow(title: "Email updates", subtitle: "Occasional account and safety emails.", systemImage: "envelope", isOn: $emailUpdates)
       }

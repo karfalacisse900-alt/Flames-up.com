@@ -26,5 +26,5 @@ xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug -destin
 
 - Auth/session tokens are stored through the Keychain session provider.
 - The iOS app should only receive public configuration values and short-lived backend-generated tokens.
-- Apple/Google/Agora secrets stay in provider dashboards, GitHub secrets, or Cloudflare Worker secrets.
+- Apple and Google secrets stay in provider dashboards, GitHub secrets, or Cloudflare Worker secrets.
 - Keep generated Xcode projects, build output, Rust target directories, and local `.env` files out of git.

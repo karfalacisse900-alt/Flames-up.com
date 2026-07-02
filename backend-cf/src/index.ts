@@ -3,7 +3,6 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import bcrypt from 'bcryptjs';
-import { RtcRole, RtcTokenBuilder } from 'agora-token';
 
 type MediaModerationJobMessage = {
   jobId: string;
@@ -73,14 +72,10 @@ interface Env {
   TWILIO_VERIFY_SERVICE_SID?: string;
   TWILIO_SERVICE_SID?: string;
   TWILIO_FROM_PHONE?: string;
-  AGORA_APP_ID?: string;
-  AGORA_APP_CERTIFICATE?: string;
-  AGORA_TOKEN_TTL_SECONDS?: string;
   APNS_TEAM_ID?: string;
   APNS_KEY_ID?: string;
   APNS_BUNDLE_ID?: string;
   APNS_PRIVATE_KEY?: string;
-  APNS_VOIP_PRIVATE_KEY?: string;
   APNS_ENVIRONMENT?: string;
   MEDIA_BACKUP_MAX_VIDEO_BYTES?: string;
   PUBLIC_API_BASE_URL?: string;
@@ -269,8 +264,6 @@ api.all('/people/*', retiredFeature('People profiles'));
 api.all('/admin/people/*', retiredFeature('People profile admin tools'));
 api.all('/premium', retiredFeature('Premium checkout'));
 api.all('/premium/*', retiredFeature('Premium checkout'));
-api.all('/calls', retiredFeature('Calls'));
-api.all('/calls/*', retiredFeature('Calls'));
 api.all('/places', retiredFeature('Legacy custom places'));
 api.all('/places/*', retiredFeature('Legacy custom places'));
 api.all('/saved-places', retiredFeature('Legacy saved places'));
@@ -1888,38 +1881,6 @@ async function ensureAbuseProtectionSchema(db: D1Database) {
       created_at TEXT DEFAULT (datetime('now')),
       UNIQUE(blocker_id, blocked_id)
     )`,
-    `CREATE TABLE IF NOT EXISTS call_sessions (
-      id TEXT PRIMARY KEY,
-      caller_id TEXT NOT NULL,
-      callee_id TEXT NOT NULL,
-      caller_name TEXT DEFAULT '',
-      caller_avatar TEXT DEFAULT '',
-      callee_name TEXT DEFAULT '',
-      callee_avatar TEXT DEFAULT '',
-      call_type TEXT DEFAULT 'video',
-      status TEXT DEFAULT 'ringing',
-      room_id TEXT NOT NULL,
-      channel_name TEXT NOT NULL,
-      push_delivery_status TEXT DEFAULT '',
-      created_at TEXT NOT NULL,
-      answered_at TEXT DEFAULT '',
-      ended_at TEXT DEFAULT '',
-      timeout_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    )`,
-    `CREATE TABLE IF NOT EXISTS voip_push_tokens (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      token TEXT NOT NULL,
-      device_id TEXT DEFAULT '',
-      bundle_id TEXT DEFAULT '',
-      environment TEXT DEFAULT 'production',
-      platform TEXT DEFAULT 'ios',
-      is_active INTEGER DEFAULT 1,
-      last_seen_at TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      UNIQUE(user_id, token)
-    )`,
     `CREATE TABLE IF NOT EXISTS abuse_signals (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
@@ -1949,9 +1910,6 @@ async function ensureAbuseProtectionSchema(db: D1Database) {
     'CREATE INDEX IF NOT EXISTS idx_security_events_user_created ON security_events(user_id, created_at)',
     'CREATE INDEX IF NOT EXISTS idx_notifications_user_type_created ON notifications(user_id, type, created_at)',
     'CREATE INDEX IF NOT EXISTS idx_blocks_blocker ON blocks(blocker_id, blocked_id)',
-    'CREATE INDEX IF NOT EXISTS idx_call_sessions_callee_status ON call_sessions(callee_id, status, timeout_at)',
-    'CREATE INDEX IF NOT EXISTS idx_call_sessions_caller_status ON call_sessions(caller_id, status, timeout_at)',
-    'CREATE INDEX IF NOT EXISTS idx_voip_push_tokens_user ON voip_push_tokens(user_id, is_active, last_seen_at)',
     'CREATE INDEX IF NOT EXISTS idx_abuse_signals_hash ON abuse_signals(signal_type, signal_hash, user_id)',
     'CREATE INDEX IF NOT EXISTS idx_abuse_signals_user ON abuse_signals(user_id, last_seen_at)',
     'CREATE INDEX IF NOT EXISTS idx_ban_evasion_flags_status ON ban_evasion_flags(status, created_at)',
@@ -8159,15 +8117,6 @@ function getJwtSecret(c: any): string {
   return secret;
 }
 
-function getAgoraConfig(c: any) {
-  const appId = String(c.env.AGORA_APP_ID || '').trim();
-  const appCertificate = String(c.env.AGORA_APP_CERTIFICATE || '').trim();
-  if (!appId || !appCertificate) {
-    throw new Error('AGORA_NOT_CONFIGURED');
-  }
-  return { appId, appCertificate };
-}
-
 function getStripeConfig(c: any) {
   const secretKey = String(c.env.STRIPE_SECRET_KEY || '').trim();
   const publishableKey = String(c.env.STRIPE_PUBLISHABLE_KEY || '').trim();
@@ -8829,105 +8778,11 @@ async function refundCoinPurchase(c: any, payload: any) {
   return { processed: true, result };
 }
 
-function normalizeAgoraChannel(value: unknown): string {
-  const channel = String(value || '')
-    .trim()
-    .replace(/[^a-zA-Z0-9_ -]/g, '_')
-    .replace(/\s+/g, '_')
-    .slice(0, 63);
-
-  if (!channel || new TextEncoder().encode(channel).length >= 64) {
-    throw new Error('AGORA_INVALID_CHANNEL');
-  }
-  return channel;
-}
-
-function normalizeAgoraRole(value: unknown): { label: 'host' | 'audience'; rtcRole: number } {
-  const role = String(value || '').trim().toLowerCase();
-  if (role === 'audience' || role === 'subscriber') {
-    return { label: 'audience', rtcRole: RtcRole.SUBSCRIBER };
-  }
-  return { label: 'host', rtcRole: RtcRole.PUBLISHER };
-}
-
-function getAgoraTokenTtl(c: any): number {
-  const raw = Number.parseInt(String(c.env.AGORA_TOKEN_TTL_SECONDS || '3600'), 10);
-  if (!Number.isFinite(raw)) return 3600;
-  return Math.min(Math.max(raw, 60), 24 * 60 * 60);
-}
-
-async function numericAgoraUid(userId: string): Promise<number> {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(userId));
-  const view = new DataView(digest);
-  return (view.getUint32(0) % 2147483646) + 1;
-}
-
-const ACTIVE_CALL_STATUSES = ['ringing', 'accepted', 'connecting', 'active'];
-
-function buildCaptroCallChannel(callId: string): string {
-  return normalizeAgoraChannel(`captro_${callId.replace(/-/g, '_').slice(0, 48)}`);
-}
-
-function callTimeoutAt(seconds = 42): string {
-  return new Date(Date.now() + seconds * 1000).toISOString();
-}
-
-function safeCallPayload(row: any) {
-  if (!row) return null;
-  return {
-    id: row.id,
-    call_id: row.id,
-    caller_user_id: row.caller_id,
-    callee_user_id: row.callee_id,
-    caller_name: row.caller_name || '',
-    caller_avatar: row.caller_avatar || '',
-    callee_name: row.callee_name || '',
-    callee_avatar: row.callee_avatar || '',
-    call_type: row.call_type || 'video',
-    status: row.status || 'failed',
-    room_id: row.room_id || row.channel_name || row.id,
-    channel_name: row.channel_name || row.room_id || row.id,
-    push_delivery_status: row.push_delivery_status || '',
-    created_at: row.created_at || '',
-    answered_at: row.answered_at || '',
-    ended_at: row.ended_at || '',
-    timeout_at: row.timeout_at || '',
-  };
-}
-
-async function expireRingingCalls(db: D1Database) {
-  const timestamp = now();
-  await db.prepare(
-    `UPDATE call_sessions
-     SET status = 'missed', ended_at = ?, updated_at = ?
-     WHERE status = 'ringing' AND timeout_at <= ?`
-  ).bind(timestamp, timestamp, timestamp).run();
-}
-
-async function getVisibleCallForUser(db: D1Database, callId: string, userId: string) {
-  await expireRingingCalls(db);
-  return db.prepare('SELECT * FROM call_sessions WHERE id = ? AND (caller_id = ? OR callee_id = ?) LIMIT 1')
-    .bind(publicId(callId, 120), userId, userId)
-    .first();
-}
-
-async function hasActiveCallForUser(db: D1Database, userId: string): Promise<boolean> {
-  await expireRingingCalls(db);
-  const placeholders = ACTIVE_CALL_STATUSES.map(() => '?').join(', ');
-  const activeCallSql = [
-    'SELECT id FROM call_sessions',
-    `WHERE (caller_id = ? OR callee_id = ?) AND status IN (${placeholders})`,
-    'LIMIT 1',
-  ].join(' ');
-  const row: any = await db.prepare(activeCallSql).bind(userId, userId, ...ACTIVE_CALL_STATUSES).first();
-  return !!row;
-}
-
 function getApnsConfig(c: any) {
   const teamId = String(c.env.APNS_TEAM_ID || '').trim();
   const keyId = String(c.env.APNS_KEY_ID || '').trim();
   const bundleId = String(c.env.APNS_BUNDLE_ID || '').trim();
-  const privateKey = String(c.env.APNS_PRIVATE_KEY || c.env.APNS_VOIP_PRIVATE_KEY || '').replace(/\\n/g, '\n').trim();
+  const privateKey = String(c.env.APNS_PRIVATE_KEY || '').replace(/\\n/g, '\n').trim();
   const environment = String(c.env.APNS_ENVIRONMENT || c.env.ENVIRONMENT || 'production').toLowerCase();
   if (!teamId || !keyId || !bundleId || !privateKey) return null;
   return { teamId, keyId, bundleId, privateKey, environment };
@@ -8941,69 +8796,6 @@ async function signApnsJwt(config: { teamId: string; keyId: string; privateKey: 
     .setIssuer(config.teamId)
     .setIssuedAt()
     .sign(key);
-}
-
-async function sendVoipPushForCall(c: any, call: any): Promise<string> {
-  const config = getApnsConfig(c);
-  if (!config) return 'voip_not_configured';
-
-  const tokens = await c.env.DB.prepare(
-    `SELECT token, bundle_id, environment
-     FROM voip_push_tokens
-     WHERE user_id = ? AND is_active = 1
-     ORDER BY last_seen_at DESC
-     LIMIT 8`
-  ).bind(call.callee_id).all();
-  const rows = (tokens.results || []) as any[];
-  if (!rows.length) return 'no_voip_tokens';
-
-  const jwt = await signApnsJwt(config);
-  const isSandbox = config.environment === 'development' || config.environment === 'sandbox';
-  const baseURL = isSandbox ? 'https://api.sandbox.push.apple.com' : 'https://api.push.apple.com';
-  const payloadCall = safeCallPayload(call) || {};
-  const isRinging = String(call.status || 'ringing') === 'ringing';
-  const payload = {
-    aps: {
-      alert: {
-        title: isRinging ? 'Captro Video Call' : 'Captro Call Update',
-        body: isRinging ? `${call.caller_name || 'Someone'} is calling you` : 'Call ended',
-      },
-      sound: 'default',
-    },
-    ...payloadCall,
-  };
-
-  let sent = 0;
-  let failed = 0;
-  for (const row of rows) {
-    const token = String(row.token || '').trim();
-    if (!token) continue;
-    const topic = String(row.bundle_id || config.bundleId).trim() || config.bundleId;
-    const response = await fetch(`${baseURL}/3/device/${token}`, {
-      method: 'POST',
-      headers: {
-        authorization: `bearer ${jwt}`,
-        'apns-topic': `${topic}.voip`,
-        'apns-push-type': 'voip',
-        'apns-priority': '10',
-        'apns-expiration': '0',
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify(payload),
-    });
-    if (response.ok) {
-      sent += 1;
-    } else {
-      failed += 1;
-      if (response.status === 400 || response.status === 410) {
-        await c.env.DB.prepare('UPDATE voip_push_tokens SET is_active = 0 WHERE token = ?').bind(token).run();
-      }
-    }
-  }
-
-  if (sent > 0 && failed === 0) return `voip_sent:${sent}`;
-  if (sent > 0) return `voip_partial:${sent}/${sent + failed}`;
-  return 'voip_failed';
 }
 
 async function sendAlertPushForNotification(c: any, input: {

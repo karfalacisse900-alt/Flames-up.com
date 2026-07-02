@@ -11,7 +11,6 @@ let package = Package(
     .library(name: "MIRACoreCpp", targets: ["MIRACoreCpp"])
   ],
   dependencies: [
-    .package(url: "https://github.com/AgoraIO/AgoraRtcEngine_iOS.git", exact: "4.6.2"),
     .package(url: "https://github.com/google/GoogleSignIn-iOS.git", exact: "9.1.0")
   ],
   targets: [
@@ -23,7 +22,6 @@ let package = Package(
       name: "MIRANative",
       dependencies: [
         "MIRACoreCpp",
-        .product(name: "RtcBasic", package: "AgoraRtcEngine_iOS"),
         .product(name: "GoogleSignIn", package: "GoogleSignIn-iOS")
       ]
     )
