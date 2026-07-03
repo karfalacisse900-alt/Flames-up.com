@@ -347,7 +347,7 @@ private let termsSections: [LegalSection] = [
   LegalSection(
     title: "Not Allowed",
     paragraphs: [
-      "You may not use Captro to harm people, abuse the service, or break the law. Captro may remove content, limit features, suspend accounts, ban accounts, or preserve safety records when rules are broken."
+      "You may not use Captro to harm people, abuse the service, or break the law. Captro has zero tolerance for objectionable content or abusive users. Captro may remove content, limit features, suspend accounts, ban accounts, or preserve safety records when rules are broken."
     ],
     bullets: [
       "No harassment, bullying, threats, hate speech, violence, gore, sexual exploitation, sexual content involving minors, doxxing, stalking, or private information abuse.",

@@ -489,7 +489,7 @@ private struct NotificationSettingsNativeView: View {
       SettingsCard(title: "Device") {
         SettingsToggleRow(
           title: "Push notifications",
-          subtitle: "Use iPhone notifications for important activity.",
+          subtitle: "Captro sends notifications about activity on your posts, comments, follows, messages, and important account updates.",
           systemImage: "bell.badge",
           isOn: Binding(
             get: { pushEnabled },

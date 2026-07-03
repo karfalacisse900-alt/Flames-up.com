@@ -3199,6 +3199,7 @@ const REPORT_REASONS = new Set([
   'sexual_content',
   'sexual_exploitation',
   'sexual_content_or_exploitation',
+  'blocked_user',
   'minor_safety',
   'self_harm_concern',
   'false_or_misleading_content',
@@ -3328,6 +3329,10 @@ function normalizeReportReason(value: unknown): string {
     copyright: 'stolen_content_or_copyright',
     sexual_content_exploitation: 'sexual_content_or_exploitation',
     sexual_content_or_exploitation: 'sexual_content_or_exploitation',
+    nudity: 'sexual_content',
+    nudity_or_sexual_content: 'sexual_content',
+    child_safety: 'minor_safety',
+    child_safety_concern: 'minor_safety',
     illegal_dangerous_activity: 'illegal_or_dangerous_activity',
     illegal_or_dangerous_activity: 'illegal_or_dangerous_activity',
     self_harm: 'self_harm_concern',
@@ -3454,6 +3459,52 @@ async function writeSupabaseAuditLog(c: any, input: {
     metadata: scrubLogMetadata(input.metadata || {}),
     created_at: ts,
   }], 'id');
+}
+
+async function recordTermsAcceptance(
+  c: any,
+  user: any,
+  supabaseUserId: unknown,
+  acceptance: { version: string; acceptedAt: string } | null,
+  source: string
+) {
+  if (!acceptance) return;
+  const userId = publicId(user?.id || '', 120);
+  const authUserId = cleanText(supabaseUserId || user?.supabase_user_id, 160);
+  if (!userId) return;
+  if (authUserId) {
+    try {
+      const existing = await findSupabaseAuthUser(c, { id: authUserId });
+      const currentMetadata = existing?.user_metadata && typeof existing.user_metadata === 'object' ? existing.user_metadata : {};
+      await updateSupabaseAuthUser(c, authUserId, {
+        user_metadata: {
+          ...currentMetadata,
+          ...termsAcceptanceMetadata(acceptance),
+        },
+      });
+    } catch (error: any) {
+      console.warn(JSON.stringify({
+        event: 'terms_acceptance_auth_metadata_failed',
+        user_id: userId,
+        code: getErrorCode(error).slice(0, 160),
+      }));
+    }
+  }
+  await writeSupabaseAuditLog(c, {
+    actionType: 'terms_accepted',
+    actorUserId: userId,
+    actorRole: 'user',
+    targetType: 'user',
+    targetId: userId,
+    targetUserId: userId,
+    reason: 'terms_acceptance',
+    metadata: {
+      terms_version: acceptance.version,
+      terms_accepted_at: acceptance.acceptedAt,
+      source: cleanText(source, 80),
+      supabase_user_id: authUserId || null,
+    },
+  });
 }
 
 function abuseSignalSalt(c: any): string {
@@ -6519,6 +6570,29 @@ async function supabaseBlockUser(c: any, blockerId: string, blockedId: string) {
     legacy_created_at: now(),
     updated_at: now(),
   }], 'id');
+  const safetyReportCreatedAt = now();
+  await supabaseAdminUpsert(c, 'app_reports', [{
+    id: `block:${blocker}:${blocked}`,
+    reporter_id: blocker,
+    target_type: 'user',
+    target_id: blocked,
+    target_owner_user_id: blocked,
+    reason: 'blocked_user',
+    details: 'User blocked from a Captro safety control.',
+    status: 'open',
+    priority: 'normal',
+    metadata: {
+      source: 'captro_block_user_flow',
+      block_id: `${blocker}:${blocked}`,
+      reviewer_note: 'Created automatically so developer moderation staff can review block-only abuse signals.',
+    },
+    legacy_created_at: safetyReportCreatedAt,
+    legacy_updated_at: safetyReportCreatedAt,
+    created_at: safetyReportCreatedAt,
+    updated_at: safetyReportCreatedAt,
+  }], 'id').catch((error) => {
+    console.warn(JSON.stringify({ event: 'supabase_block_report_enqueue_failed', code: getErrorCode(error).slice(0, 180) }));
+  });
   await Promise.all([
     supabaseAdminDeleteRows(c, 'app_follows', { app_follower_id: postgrestEqFilter(blocker), app_following_id: postgrestEqFilter(blocked) }).catch(() => undefined),
     supabaseAdminDeleteRows(c, 'app_follows', { app_follower_id: postgrestEqFilter(blocked), app_following_id: postgrestEqFilter(blocker) }).catch(() => undefined),
@@ -10074,6 +10148,8 @@ function supabaseProfileMetadata(input: {
   language?: unknown;
   phone?: unknown;
   emailVerified?: unknown;
+  termsVersion?: unknown;
+  termsAcceptedAt?: unknown;
 }) {
   const metadata: Record<string, string> = {};
   const appUserId = cleanText(input.appUserId, 120);
@@ -10102,6 +10178,11 @@ function supabaseProfileMetadata(input: {
   if (input.emailVerified === true || input.emailVerified === 1 || input.emailVerified === '1') {
     metadata.email_verified = 'true';
   }
+  const terms = termsAcceptanceFromBody({
+    termsVersion: input.termsVersion,
+    termsAcceptedAt: input.termsAcceptedAt,
+  });
+  Object.assign(metadata, termsAcceptanceMetadata(terms));
   return metadata;
 }
 
@@ -10129,6 +10210,8 @@ function supabaseAuthCreatePayload(input: {
   provider?: 'email' | 'phone' | 'google' | 'apple' | 'supabase';
   oauthSubject?: unknown;
   appUserId?: unknown;
+  termsVersion?: unknown;
+  termsAcceptedAt?: unknown;
 }) {
   const provider = supabaseAuthProvider(input.provider);
   const email = normalizeOptionalEmail(input.email);
@@ -10141,6 +10224,8 @@ function supabaseAuthCreatePayload(input: {
       fullName: input.fullName,
       profileImage: input.profileImage,
       phone,
+      termsVersion: input.termsVersion,
+      termsAcceptedAt: input.termsAcceptedAt,
     }),
     app_metadata: supabaseProviderMetadata(provider, input.appUserId, input.oauthSubject),
   };
@@ -10201,6 +10286,8 @@ async function createOrFindSupabaseAuthUser(c: any, input: {
   provider?: 'email' | 'phone' | 'google' | 'apple' | 'supabase';
   oauthSubject?: unknown;
   appUserId?: unknown;
+  termsVersion?: unknown;
+  termsAcceptedAt?: unknown;
 }) {
   const body = supabaseAuthCreatePayload(input);
   const response = await fetch(`${getSupabaseUrl(c)}/auth/v1/admin/users`, {
@@ -10224,6 +10311,8 @@ async function createOrFindSupabaseAuthUser(c: any, input: {
           fullName: input.fullName,
           profileImage: input.profileImage,
           phone: input.phone,
+          termsVersion: input.termsVersion,
+          termsAcceptedAt: input.termsAcceptedAt,
         }),
         app_metadata: supabaseProviderMetadata(input.provider, input.appUserId, input.oauthSubject),
       };
@@ -10265,15 +10354,20 @@ async function linkSupabaseAuthUser(c: any, appUserId: string, supabaseUserId: u
 
 async function syncSupabaseAuthMetadataForUser(c: any, user: any) {
   if (!user?.supabase_user_id) return;
+  const existing = await findSupabaseAuthUser(c, { id: user.supabase_user_id }).catch(() => null);
+  const currentMetadata = existing?.user_metadata && typeof existing.user_metadata === 'object' ? existing.user_metadata : {};
   await updateSupabaseAuthUser(c, user.supabase_user_id, {
-    user_metadata: supabaseProfileMetadata({
-      appUserId: user.id,
-      username: publicUsernameFor(user),
-      fullName: user.full_name,
-      profileImage: user.profile_image,
-      language: user.language,
-      phone: user.phone,
-    }),
+    user_metadata: {
+      ...currentMetadata,
+      ...supabaseProfileMetadata({
+        appUserId: user.id,
+        username: publicUsernameFor(user),
+        fullName: user.full_name,
+        profileImage: user.profile_image,
+        language: user.language,
+        phone: user.phone,
+      }),
+    },
   });
 }
 
@@ -10401,6 +10495,8 @@ async function signInSupabaseVerifiedOAuth(c: any, input: {
   email?: string;
   fullName?: string;
   profileImage?: string;
+  termsVersion?: unknown;
+  termsAcceptedAt?: unknown;
 }) {
   const subject = cleanText(input.subject, 240);
   if (!subject) throw new Error('OAUTH_SUBJECT_REQUIRED');
@@ -10416,6 +10512,8 @@ async function signInSupabaseVerifiedOAuth(c: any, input: {
     profileImage,
     provider: input.provider,
     oauthSubject: subject,
+    termsVersion: input.termsVersion,
+    termsAcceptedAt: input.termsAcceptedAt,
   });
   if (!authResult.user?.id) throw new Error('SUPABASE_AUTH_CREATE_EMPTY');
 
@@ -10427,6 +10525,7 @@ async function signInSupabaseVerifiedOAuth(c: any, input: {
     auth_provider: input.provider,
     oauth_subject: subject,
   });
+  await recordTermsAcceptance(c, session.user, authResult.user.id, termsAcceptanceFromBody(input), `${input.provider}_oauth_fallback`);
   return { supabaseSession, user: session.user };
 }
 
@@ -10495,6 +10594,22 @@ function toPgTime(value: unknown): string | null {
   if (!text) return null;
   const parsed = new Date(text.replace(' ', 'T'));
   return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
+function termsAcceptanceFromBody(body: any): { version: string; acceptedAt: string } | null {
+  const version = cleanText(body?.terms_version || body?.termsVersion, 60);
+  const acceptedAt = toPgTime(body?.terms_accepted_at || body?.termsAcceptedAt);
+  if (!version || !acceptedAt) return null;
+  return { version, acceptedAt };
+}
+
+function termsAcceptanceMetadata(acceptance: { version: string; acceptedAt: string } | null): Record<string, string> {
+  if (!acceptance) return {};
+  return {
+    captro_terms_version: acceptance.version,
+    captro_terms_accepted_at: acceptance.acceptedAt,
+    captro_terms_source: 'ios_auth_gate',
+  };
 }
 
 function parseJsonObject(value: unknown): Record<string, unknown> {
@@ -12305,8 +12420,9 @@ api.post('/auth/register', async (c) => {
     const dailyLimited = await enforceRateLimit(c, 'auth_register_daily', clientIp(c), 20, 86400);
     if (dailyLimited) return dailyLimited;
     const body: any = await c.req.json().catch(() => ({}));
-    const unknown = rejectUnknownFields(c, body, ['email', 'password', 'username', 'full_name', 'fullName']);
+    const unknown = rejectUnknownFields(c, body, ['email', 'password', 'username', 'full_name', 'fullName', 'terms_version', 'termsVersion', 'terms_accepted_at', 'termsAcceptedAt']);
     if (unknown) return unknown;
+    const termsAcceptance = termsAcceptanceFromBody(body);
     const email = normalizeOptionalEmail(body.email);
     const password = String(body.password || '');
     const username = normalizeOptionalName(body.username);
@@ -12351,6 +12467,8 @@ api.post('/auth/register', async (c) => {
       username: safeUsername,
       fullName,
       provider: 'email',
+      termsVersion: termsAcceptance?.version,
+      termsAcceptedAt: termsAcceptance?.acceptedAt,
     });
     if (!authResult.user?.id) throw new Error('SUPABASE_AUTH_CREATE_EMPTY');
     let appUser: any;
@@ -12361,6 +12479,7 @@ api.post('/auth/register', async (c) => {
         user_metadata: {
           username: safeUsername,
           full_name: fullName,
+          ...termsAcceptanceMetadata(termsAcceptance),
         },
         app_metadata: {
           provider: 'email',
@@ -12379,6 +12498,7 @@ api.post('/auth/register', async (c) => {
 
     await recordAbuseSignals(c, appUser.id, 'signup', { username: safeUsername, display_name: fullName });
     await upsertAccountIdentity(c, { userId: appUser.id, provider: 'email', providerUserId: authResult.user.id, email });
+    await recordTermsAcceptance(c, appUser, authResult.user.id, termsAcceptance, 'email_register');
     await logSecurityEvent(c, 'signup_created', appUser.id, { username: safeUsername });
     runBackgroundTask(c, 'supabase_signup_metadata_sync_failed', async () => {
       await syncSupabaseAuthMetadataForUser(c, appUser);
@@ -12409,8 +12529,9 @@ api.post('/auth/login', async (c) => {
     const supabaseRequired = requireSupabasePrimaryDatabase(c, 'auth_login');
     if (supabaseRequired) return supabaseRequired;
     const body: any = await c.req.json().catch(() => ({}));
-    const unknown = rejectUnknownFields(c, body, ['email', 'password']);
+    const unknown = rejectUnknownFields(c, body, ['email', 'password', 'terms_version', 'termsVersion', 'terms_accepted_at', 'termsAcceptedAt']);
     if (unknown) return unknown;
+    const termsAcceptance = termsAcceptanceFromBody(body);
     const email = normalizeOptionalEmail(body.email);
     const password = String(body.password || '');
     if (!email || !password) return c.json({ detail: 'Invalid email or password.' }, 401);
@@ -12426,6 +12547,7 @@ api.post('/auth/login', async (c) => {
         full_name: supabaseSession.user?.user_metadata?.full_name || supabaseSession.user?.user_metadata?.name || '',
         profile_image: supabaseSession.user?.user_metadata?.avatar_url || supabaseSession.user?.user_metadata?.picture || '',
       });
+      await recordTermsAcceptance(c, session.user, supabaseSession.user?.id, termsAcceptance, 'email_login');
       return c.json(supabaseAuthSessionResponse(supabaseSession, session.user));
     } catch (error: any) {
       const code = getErrorCode(error);
@@ -12607,8 +12729,9 @@ api.post('/auth/oauth/google', async (c) => {
     const limited = await enforceRateLimit(c, 'oauth_google', clientIp(c), 30, 300);
     if (limited) return limited;
     const body: any = await c.req.json().catch(() => ({}));
-    const unknown = rejectUnknownFields(c, body, ['id_token', 'idToken', 'access_token', 'accessToken', 'nonce', 'raw_nonce', 'rawNonce']);
+    const unknown = rejectUnknownFields(c, body, ['id_token', 'idToken', 'access_token', 'accessToken', 'nonce', 'raw_nonce', 'rawNonce', 'terms_version', 'termsVersion', 'terms_accepted_at', 'termsAcceptedAt']);
     if (unknown) return unknown;
+    const termsAcceptance = termsAcceptanceFromBody(body);
     const id_token = String(body.id_token || body.idToken || '');
     if (!id_token) return c.json({ detail: 'id_token is required' }, 400);
 
@@ -12627,6 +12750,7 @@ api.post('/auth/oauth/google', async (c) => {
         auth_provider: 'google',
         oauth_subject: oauthSubject,
       });
+      await recordTermsAcceptance(c, session.user, supabaseSession.user?.id, termsAcceptance, 'google_oauth');
       return c.json(supabaseAuthSessionResponse(supabaseSession, session.user));
     } catch (error: any) {
       const code = getErrorCode(error);
@@ -12643,6 +12767,8 @@ api.post('/auth/oauth/google', async (c) => {
           email: profile.email,
           fullName: profile.fullName,
           profileImage: profile.profileImage,
+          termsVersion: termsAcceptance?.version,
+          termsAcceptedAt: termsAcceptance?.acceptedAt,
         });
         await logSecurityEvent(c, 'google_supabase_oauth_fallback_used', fallback.user.id, {
           provider: 'google',
@@ -12681,8 +12807,9 @@ api.post('/auth/oauth/apple', async (c) => {
     const limited = await enforceRateLimit(c, 'oauth_apple', clientIp(c), 30, 300);
     if (limited) return limited;
     const body: any = await c.req.json().catch(() => ({}));
-    const unknown = rejectUnknownFields(c, body, ['id_token', 'idToken', 'email', 'full_name', 'fullName', 'apple_user', 'appleUser', 'nonce', 'raw_nonce', 'rawNonce']);
+    const unknown = rejectUnknownFields(c, body, ['id_token', 'idToken', 'email', 'full_name', 'fullName', 'apple_user', 'appleUser', 'nonce', 'raw_nonce', 'rawNonce', 'terms_version', 'termsVersion', 'terms_accepted_at', 'termsAcceptedAt']);
     if (unknown) return unknown;
+    const termsAcceptance = termsAcceptanceFromBody(body);
     const idToken = String(body.id_token || body.idToken || '');
     if (!idToken) return c.json({ detail: 'id_token is required' }, 400);
 
@@ -12700,6 +12827,7 @@ api.post('/auth/oauth/apple', async (c) => {
         auth_provider: 'apple',
         oauth_subject: appleSubject,
       });
+      await recordTermsAcceptance(c, session.user, supabaseSession.user?.id, termsAcceptance, 'apple_oauth');
       return c.json(supabaseAuthSessionResponse(supabaseSession, session.user));
     } catch (error: any) {
       const code = getErrorCode(error);
@@ -12717,6 +12845,8 @@ api.post('/auth/oauth/apple', async (c) => {
           email: profile.email || clientEmail || undefined,
           fullName: clientFullName || profile.fullName || 'Apple User',
           profileImage: profile.profileImage,
+          termsVersion: termsAcceptance?.version,
+          termsAcceptedAt: termsAcceptance?.acceptedAt,
         });
         await logSecurityEvent(c, 'apple_supabase_oauth_fallback_used', fallback.user.id, {
           provider: 'apple',

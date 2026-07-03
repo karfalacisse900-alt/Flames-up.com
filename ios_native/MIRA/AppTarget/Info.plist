@@ -46,15 +46,15 @@
   <key>LSRequiresIPhoneOS</key>
   <true/>
   <key>NSCameraUsageDescription</key>
-  <string>Take photos for posts and record story videos in Captro.</string>
+  <string>Captro uses your camera so you can take photos and videos to share as posts, stories, or profile pictures. For example, you can take a photo and upload it to your Captro feed.</string>
   <key>NSMicrophoneUsageDescription</key>
-  <string>Record audio when you create story videos.</string>
+  <string>Captro uses your microphone so you can record audio when creating videos for posts or stories.</string>
   <key>NSPhotoLibraryUsageDescription</key>
-  <string>Choose photos for posts and videos for stories or chat.</string>
+  <string>Captro uses your photo library so you can choose photos and videos to share as posts, stories, or profile pictures.</string>
   <key>NSPhotoLibraryAddUsageDescription</key>
   <string>Save edited media from Captro to your photo library.</string>
   <key>NSLocationWhenInUseUsageDescription</key>
-  <string>Add optional place tags or city and country labels to posts.</string>
+  <string>Captro uses your location to help you tag nearby places and show local content near you. For example, you can tag a nearby place when creating a post.</string>
   <key>NSAppTransportSecurity</key>
   <dict>
     <key>NSAllowsArbitraryLoads</key>

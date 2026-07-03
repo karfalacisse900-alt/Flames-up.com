@@ -1316,6 +1316,8 @@ public struct MIRAAuthResponse: Decodable, Hashable {
 public struct MIRAAuthLoginBody: Encodable {
   public let email: String
   public let password: String
+  public let termsVersion: String?
+  public let termsAcceptedAt: String?
 }
 
 public struct MIRAAuthRegisterBody: Encodable {
@@ -1323,6 +1325,8 @@ public struct MIRAAuthRegisterBody: Encodable {
   public let password: String
   public let username: String
   public let fullName: String
+  public let termsVersion: String?
+  public let termsAcceptedAt: String?
 }
 
 public struct MIRAAppleOAuthBody: Encodable {
@@ -1331,11 +1335,15 @@ public struct MIRAAppleOAuthBody: Encodable {
   public let fullName: String?
   public let appleUser: String?
   public let nonce: String?
+  public let termsVersion: String?
+  public let termsAcceptedAt: String?
 }
 
 public struct MIRAGoogleOAuthBody: Encodable {
   public let idToken: String
   public let accessToken: String?
+  public let termsVersion: String?
+  public let termsAcceptedAt: String?
 }
 
 public struct MIRARefreshSessionBody: Encodable {

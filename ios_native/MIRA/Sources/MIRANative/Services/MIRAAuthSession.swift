@@ -175,36 +175,36 @@ public final class MIRAAuthSession: ObservableObject, MIRARefreshableSessionProv
   }
 
   @MainActor
-  public func login(email: String, password: String, api: MIRAAPIClient) async {
+  public func login(email: String, password: String, termsVersion: String? = nil, termsAcceptedAt: String? = nil, api: MIRAAPIClient) async {
     await authenticate {
-      try await api.post("/auth/login", body: MIRAAuthLoginBody(email: email, password: password))
+      try await api.post("/auth/login", body: MIRAAuthLoginBody(email: email, password: password, termsVersion: termsVersion, termsAcceptedAt: termsAcceptedAt))
     }
   }
 
   @MainActor
-  public func register(email: String, password: String, username: String, fullName: String, api: MIRAAPIClient) async {
+  public func register(email: String, password: String, username: String, fullName: String, termsVersion: String? = nil, termsAcceptedAt: String? = nil, api: MIRAAPIClient) async {
     await authenticate {
       try await api.post(
         "/auth/register",
-        body: MIRAAuthRegisterBody(email: email, password: password, username: username, fullName: fullName)
+        body: MIRAAuthRegisterBody(email: email, password: password, username: username, fullName: fullName, termsVersion: termsVersion, termsAcceptedAt: termsAcceptedAt)
       )
     }
   }
 
   @MainActor
-  public func signInWithApple(idToken: String, email: String?, fullName: String?, appleUser: String?, nonce: String?, api: MIRAAPIClient) async {
+  public func signInWithApple(idToken: String, email: String?, fullName: String?, appleUser: String?, nonce: String?, termsVersion: String? = nil, termsAcceptedAt: String? = nil, api: MIRAAPIClient) async {
     await authenticate {
       try await api.post(
         "/auth/oauth/apple",
-        body: MIRAAppleOAuthBody(idToken: idToken, email: email, fullName: fullName, appleUser: appleUser, nonce: nonce)
+        body: MIRAAppleOAuthBody(idToken: idToken, email: email, fullName: fullName, appleUser: appleUser, nonce: nonce, termsVersion: termsVersion, termsAcceptedAt: termsAcceptedAt)
       )
     }
   }
 
   @MainActor
-  public func signInWithGoogle(idToken: String, accessToken: String?, api: MIRAAPIClient) async {
+  public func signInWithGoogle(idToken: String, accessToken: String?, termsVersion: String? = nil, termsAcceptedAt: String? = nil, api: MIRAAPIClient) async {
     await authenticate {
-      try await api.post("/auth/oauth/google", body: MIRAGoogleOAuthBody(idToken: idToken, accessToken: accessToken))
+      try await api.post("/auth/oauth/google", body: MIRAGoogleOAuthBody(idToken: idToken, accessToken: accessToken, termsVersion: termsVersion, termsAcceptedAt: termsAcceptedAt))
     }
   }
 

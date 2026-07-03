@@ -1,9 +1,12 @@
 import AuthenticationServices
 import CryptoKit
+import Foundation
 import GoogleSignIn
 import Security
 import SwiftUI
 import UIKit
+
+private let captroTermsVersion = "2026-07-03"
 
 public struct AuthNativeView: View {
   @ObservedObject var session: MIRAAuthSession
@@ -22,6 +25,8 @@ public struct AuthNativeView: View {
   @State private var resetPassword = ""
   @State private var confirmResetPassword = ""
   @State private var appleSignInNonce: String?
+  @AppStorage("captro.terms.accepted.version") private var acceptedTermsVersion = ""
+  @AppStorage("captro.terms.accepted.at") private var acceptedTermsAt = ""
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   public init(session: MIRAAuthSession, api: MIRAAPIClient) {
@@ -111,6 +116,7 @@ public struct AuthNativeView: View {
 
       ScrollView {
         VStack(alignment: .leading, spacing: MIRATheme.Space.lg) {
+          termsAcceptanceBlock
           socialAuthBlock
           authDivider
           formBlock
@@ -449,7 +455,8 @@ public struct AuthNativeView: View {
       .overlay(Capsule().stroke(Color.black.opacity(0.12), lineWidth: 1))
     }
     .buttonStyle(.miraPress)
-    .disabled(session.isWorking)
+    .disabled(session.isWorking || !hasAcceptedCurrentTerms)
+    .opacity(hasAcceptedCurrentTerms ? 1 : 0.56)
     .accessibilityLabel("Continue with Google")
   }
 
@@ -475,6 +482,10 @@ public struct AuthNativeView: View {
       appleSignInNonce = nonce
       request.nonce = sha256(nonce)
     } onCompletion: { result in
+      guard hasAcceptedCurrentTerms else {
+        session.errorMessage = termsRequiredMessage
+        return
+      }
       guard case .success(let authorization) = result,
             let credential = authorization.credential as? ASAuthorizationAppleIDCredential,
             let tokenData = credential.identityToken,
@@ -492,6 +503,8 @@ public struct AuthNativeView: View {
           fullName: fullName.isEmpty ? nil : fullName,
           appleUser: credential.user,
           nonce: nonce,
+          termsVersion: acceptedTermsVersion,
+          termsAcceptedAt: acceptedTermsAt,
           api: api
         )
       }
@@ -499,6 +512,59 @@ public struct AuthNativeView: View {
     .signInWithAppleButtonStyle(.black)
     .frame(height: 50)
     .clipShape(Capsule())
+    .disabled(session.isWorking || !hasAcceptedCurrentTerms)
+    .opacity(hasAcceptedCurrentTerms ? 1 : 0.56)
+  }
+
+  private var termsAcceptanceBlock: some View {
+    VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
+      Button {
+        CaptroHaptics.light()
+        if hasAcceptedCurrentTerms {
+          acceptedTermsVersion = ""
+          acceptedTermsAt = ""
+        } else {
+          acceptedTermsVersion = captroTermsVersion
+          acceptedTermsAt = ISO8601DateFormatter().string(from: Date())
+        }
+        session.errorMessage = nil
+      } label: {
+        HStack(alignment: .top, spacing: MIRATheme.Space.sm) {
+          Image(systemName: hasAcceptedCurrentTerms ? "checkmark.circle.fill" : "circle")
+            .font(.system(size: 22, weight: .semibold))
+            .foregroundStyle(hasAcceptedCurrentTerms ? MIRATheme.Color.forest : MIRATheme.Color.textMuted)
+            .frame(width: 28)
+
+          VStack(alignment: .leading, spacing: 6) {
+            Text("I am 16 or older and accept Captro's Terms and Community Rules.")
+              .font(.system(size: 14.5, weight: .semibold))
+              .foregroundStyle(MIRATheme.Color.textPrimary)
+              .fixedSize(horizontal: false, vertical: true)
+            Text("Captro has zero tolerance for objectionable content or abusive users. You can report posts, stories, comments, profiles, and messages, and you can block users at any time.")
+              .font(.system(size: 12.5, weight: .medium))
+              .foregroundStyle(MIRATheme.Color.textSecondary)
+              .lineSpacing(2)
+              .fixedSize(horizontal: false, vertical: true)
+          }
+          Spacer(minLength: 0)
+        }
+        .padding(MIRATheme.Space.md)
+        .background(MIRATheme.Color.surfaceSoft)
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+      }
+      .buttonStyle(.plain)
+      .accessibilityLabel("Accept Captro Terms and Community Rules")
+      .accessibilityValue(hasAcceptedCurrentTerms ? "Accepted" : "Not accepted")
+
+      HStack(spacing: MIRATheme.Space.sm) {
+        NavigationLink(destination: TermsOfServiceView()) {
+          legalFooterPill("Terms")
+        }
+        NavigationLink(destination: CommunityGuidelinesView()) {
+          legalFooterPill("Community Rules")
+        }
+      }
+    }
   }
 
   private var legalFooter: some View {
@@ -580,15 +646,16 @@ public struct AuthNativeView: View {
   }
 
   private var canSubmit: Bool {
-    email.contains("@") && password.count >= 6 && (!isCreatingAccount || username.trimmingCharacters(in: .whitespacesAndNewlines).count >= 3)
+    hasAcceptedCurrentTerms && email.contains("@") && password.count >= 6 && (!isCreatingAccount || username.trimmingCharacters(in: .whitespacesAndNewlines).count >= 3)
   }
 
   @MainActor
   private func submit() async {
+    guard requireTermsAcceptance() else { return }
     if isCreatingAccount {
-      await session.register(email: email, password: password, username: username, fullName: fullName, api: api)
+      await session.register(email: email, password: password, username: username, fullName: fullName, termsVersion: acceptedTermsVersion, termsAcceptedAt: acceptedTermsAt, api: api)
     } else {
-      await session.login(email: email, password: password, api: api)
+      await session.login(email: email, password: password, termsVersion: acceptedTermsVersion, termsAcceptedAt: acceptedTermsAt, api: api)
     }
   }
 
@@ -627,6 +694,7 @@ public struct AuthNativeView: View {
   private func startGoogleSignIn() {
     CaptroHaptics.light()
     session.errorMessage = nil
+    guard requireTermsAcceptance() else { return }
     if let googleServerClientID {
       GIDSignIn.sharedInstance.configuration = GIDConfiguration(clientID: googleClientID, serverClientID: googleServerClientID)
     } else {
@@ -657,10 +725,30 @@ public struct AuthNativeView: View {
         await session.signInWithGoogle(
           idToken: idToken,
           accessToken: result?.user.accessToken.tokenString,
+          termsVersion: acceptedTermsVersion,
+          termsAcceptedAt: acceptedTermsAt,
           api: api
         )
       }
     }
+  }
+
+  private var hasAcceptedCurrentTerms: Bool {
+    acceptedTermsVersion == captroTermsVersion && !acceptedTermsAt.isEmpty
+  }
+
+  private var termsRequiredMessage: String {
+    "Please accept Captro's Terms and Community Rules before continuing."
+  }
+
+  @MainActor
+  private func requireTermsAcceptance() -> Bool {
+    guard hasAcceptedCurrentTerms else {
+      session.errorMessage = termsRequiredMessage
+      CaptroHaptics.error()
+      return false
+    }
+    return true
   }
 
   private func randomNonceString(length: Int = 32) -> String {

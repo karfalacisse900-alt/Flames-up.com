@@ -49,18 +49,15 @@ private struct MIRAReportReasonChoice: Identifiable, Hashable {
 }
 
 private let miraReportReasons: [MIRAReportReasonChoice] = [
+  .init(id: "sexual_content", systemImage: "exclamationmark.shield"),
   .init(id: "harassment", systemImage: "person.crop.circle.badge.exclamationmark"),
   .init(id: "hate_speech", systemImage: "exclamationmark.bubble"),
   .init(id: "threats_violence", systemImage: "bolt.trianglebadge.exclamationmark"),
-  .init(id: "doxxing_private_info", systemImage: "lock.trianglebadge.exclamationmark"),
   .init(id: "spam_scam", systemImage: "shield.lefthalf.filled.badge.checkmark"),
+  .init(id: "doxxing_private_info", systemImage: "lock.trianglebadge.exclamationmark"),
   .init(id: "impersonation", systemImage: "person.text.rectangle"),
-  .init(id: "stolen_content", systemImage: "doc.on.doc"),
-  .init(id: "sexual_exploitation", systemImage: "exclamationmark.shield"),
+  .init(id: "minor_safety", systemImage: "figure.and.child.holdinghands"),
   .init(id: "illegal_dangerous_activity", systemImage: "flame"),
-  .init(id: "self_harm", systemImage: "heart.text.square"),
-  .init(id: "misleading_content", systemImage: "questionmark.diamond"),
-  .init(id: "dont_want_to_see", systemImage: "eye.slash"),
   .init(id: "other", systemImage: "ellipsis.circle")
 ]
 
