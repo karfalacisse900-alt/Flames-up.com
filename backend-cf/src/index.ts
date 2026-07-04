@@ -3836,7 +3836,7 @@ async function resolveReportTarget(c: any, reporterId: string, type: string, rep
     if (type === 'story') {
       const storySql = [
         'SELECT s.id, s.user_id FROM statuses s JOIN users u ON s.user_id = u.id',
-        `WHERE s.id = ? AND s.created_at >= datetime('now', '-7 days') AND ${visibleStatusWhere('u', 's')} LIMIT 1`,
+        `WHERE s.id = ? AND s.created_at >= datetime('now', '-14 days') AND ${visibleStatusWhere('u', 's')} LIMIT 1`,
       ].join(' ');
       const row: any = await c.env.DB.prepare(storySql).bind(reportedId, reporterId, reporterId).first();
       if (!row) return { ok: false, status: 404, detail: 'Reported story was not found.' };
@@ -14867,7 +14867,7 @@ api.post('/statuses', authMiddleware, async (c) => {
   const userId = getUserId(c); const b = await c.req.json();
   const supabaseRequired = requireSupabasePrimaryDatabase(c, 'story_create');
   if (supabaseRequired) return supabaseRequired;
-  const storyLifetimeMs = 7 * 24 * 60 * 60 * 1000;
+  const storyLifetimeMs = 14 * 24 * 60 * 60 * 1000;
   const id = uuid(); const expiresAt = new Date(Date.now() + storyLifetimeMs).toISOString();
   const visibility = normalizeVisibility(b.visibility);
   const audioProvider = b.audio_provider === 'audius' ? 'audius' : '';
