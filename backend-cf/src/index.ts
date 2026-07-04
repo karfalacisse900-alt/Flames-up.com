@@ -7403,6 +7403,8 @@ function canonicalSupabaseInteractionActor(
   if (identityActor) return identityActor;
   const storedActor = normalizeLegacyInteractionActorKey(row?.actor_key);
   if (storedActor) return storedActor;
+  const legacyAuthLikeAppId = isUuidText(appUserId);
+  if (legacyAuthLikeAppId) return `auth:${legacyAuthLikeAppId}`;
   return supabaseInteractionActorKey('', '', appUserId);
 }
 
@@ -7799,7 +7801,8 @@ async function setCanonicalPostLikeState(c: any, postId: string, userId: string,
   }
 
   const state = await getCanonicalPostEngagementState(c, canonicalPostId, userId);
-  const changed = state.liked !== wasLiked;
+  state.liked = nextLiked;
+  const changed = nextLiked !== wasLiked;
   return { state, wasLiked, changed };
 }
 
@@ -7817,7 +7820,8 @@ async function setCanonicalPostSaveState(c: any, postId: string, userId: string,
   }
 
   const state = await getCanonicalPostEngagementState(c, canonicalPostId, userId);
-  const changed = state.saved !== wasSaved;
+  state.saved = saved;
+  const changed = saved !== wasSaved;
   return { state, wasSaved, changed, collection: collectionName };
 }
 

@@ -41,7 +41,7 @@ final class MainFeedModel: ObservableObject {
   private var isLoadingCurrentUser = false
   private var mediaPrefetchTask: Task<Void, Never>?
   private var followingAuthorIds = Set<String>()
-  private var likingPostIds = Set<String>()
+  private var likeMutationVersions: [String: Int] = [:]
   private let firstPageLimit = 12
   private let paginationTriggerRatio = 0.70
   private let paginationTriggerWindow = 4
@@ -275,17 +275,17 @@ final class MainFeedModel: ObservableObject {
 
   func toggleLike(_ post: MIRAPost) async {
     guard let index = posts.firstIndex(where: { $0.id == post.id }) else { return }
-    guard !likingPostIds.contains(post.id) else { return }
-    likingPostIds.insert(post.id)
-    defer { likingPostIds.remove(post.id) }
-
+    let mutationVersion = beginLikeMutation(for: post.id)
     let previous = posts[index]
     let nextLiked = !previous.viewerLiked
     let nextCount = max(0, (previous.likesCount ?? 0) + (nextLiked ? 1 : -1))
     posts[index] = previous.updating(liked: nextLiked, likesCount: nextCount)
+    publishEngagement(for: posts[index])
+    cacheCurrentPosts()
 
     do {
       let response: PostLikeResponse = try await api.post("/posts/\(post.id)/like", body: LikeBody(liked: nextLiked))
+      guard isCurrentLikeMutation(mutationVersion, for: post.id) else { return }
       if let currentIndex = posts.firstIndex(where: { $0.id == post.id }) {
         let reconciledLikesCount = stableEngagementCount(
           current: previous.likesCount,
@@ -304,10 +304,15 @@ final class MainFeedModel: ObservableObject {
         cacheCurrentPosts()
       }
     } catch {
+      guard isCurrentLikeMutation(mutationVersion, for: post.id) else { return }
       if let currentIndex = posts.firstIndex(where: { $0.id == post.id }) {
         posts[currentIndex] = previous
+        publishEngagement(for: previous)
+        cacheCurrentPosts()
       }
     }
+
+    finishLikeMutation(mutationVersion, for: post.id)
   }
 
   func save(_ post: MIRAPost, to collection: String) async {
@@ -315,6 +320,8 @@ final class MainFeedModel: ObservableObject {
     let previous = posts[index]
     let nextCount = max(0, (previous.savesCount ?? 0) + (previous.viewerSaved ? 0 : 1))
     posts[index] = previous.updating(saved: true, savesCount: nextCount)
+    publishEngagement(for: posts[index])
+    cacheCurrentPosts()
 
     do {
       let response: PostSaveResponse = try await api.post("/library/save/\(post.id)", body: SaveCollectionBody(collection: collection))
@@ -338,6 +345,8 @@ final class MainFeedModel: ObservableObject {
     } catch {
       if let currentIndex = posts.firstIndex(where: { $0.id == post.id }) {
         posts[currentIndex] = previous
+        publishEngagement(for: previous)
+        cacheCurrentPosts()
       }
     }
   }
@@ -348,6 +357,8 @@ final class MainFeedModel: ObservableObject {
     guard previous.viewerSaved else { return }
     let nextCount = max(0, (previous.savesCount ?? 0) - 1)
     posts[index] = previous.updating(saved: false, savesCount: nextCount)
+    publishEngagement(for: posts[index])
+    cacheCurrentPosts()
 
     do {
       let response: PostSaveResponse = try await api.delete("/library/save/\(post.id)")
@@ -371,6 +382,8 @@ final class MainFeedModel: ObservableObject {
     } catch {
       if let currentIndex = posts.firstIndex(where: { $0.id == post.id }) {
         posts[currentIndex] = previous
+        publishEngagement(for: previous)
+        cacheCurrentPosts()
       }
     }
   }
@@ -607,6 +620,22 @@ final class MainFeedModel: ObservableObject {
     let fallback = optimistic ?? current
     guard let incoming else { return fallback }
     return max(0, incoming)
+  }
+
+  private func beginLikeMutation(for postId: String) -> Int {
+    let next = (likeMutationVersions[postId] ?? 0) + 1
+    likeMutationVersions[postId] = next
+    return next
+  }
+
+  private func isCurrentLikeMutation(_ version: Int, for postId: String) -> Bool {
+    likeMutationVersions[postId] == version
+  }
+
+  private func finishLikeMutation(_ version: Int, for postId: String) {
+    if likeMutationVersions[postId] == version {
+      likeMutationVersions[postId] = nil
+    }
   }
 
   private func sortedByNativeScore(_ posts: [MIRAPost]) async -> [MIRAPost] {

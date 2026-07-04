@@ -1129,7 +1129,6 @@ private struct StoryViewerNativeView: View {
   @State private var showStoryMenu = false
   @State private var isCanvasVisible = false
   @State private var isStoryPlaybackArmed = false
-  @State private var storyPlaybackToken = 0
   @State private var isClosing = false
   @State private var replyText = ""
   @State private var storyThoughts: [StoryThought] = []
@@ -1416,27 +1415,16 @@ private struct StoryViewerNativeView: View {
   }
 
   private func storyPlaybackIdentity(for mediaURL: String) -> String {
-    "\(activeGroup.userId)|\(currentStory?.id ?? "story")|\(mediaURL)|\(storyPlaybackToken)"
+    "\(activeGroup.userId)|\(currentStory?.id ?? "story")|\(mediaURL)"
   }
 
   @MainActor
   private func armStoryPlaybackForCurrentStory(reason: String) {
     guard !isClosing else { return }
-    isStoryPlaybackArmed = false
-    let urls = storyMediaWindowURLs()
-    if !urls.isEmpty {
-      MIRAVideoPrewarmManager.shared.prewarm(urls: urls, keepOnly: Set(urls.filter(\.isVideoURL).prefix(5)))
-      Task.detached(priority: .utility) {
-        await MIRAImagePrefetcher.prefetch(urls: urls, maxPixelSize: 1920, limit: 12)
-      }
-    }
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.035) {
-      guard !isClosing, scenePhase == .active else { return }
-      isStoryPlaybackArmed = true
-      storyPlaybackToken += 1
-      MIRAPlaybackCoordinator.resumeVisible(reason: reason)
-      MIRAApplePerformanceLogger.event("story_playback_armed", detail: reason)
-    }
+    isStoryPlaybackArmed = scenePhase == .active
+    guard isStoryPlaybackArmed else { return }
+    MIRAPlaybackCoordinator.resumeVisible(reason: reason)
+    MIRAApplePerformanceLogger.event("story_playback_armed", detail: reason)
   }
 
   private func storyMediaTopInset(safeTop: CGFloat) -> CGFloat {
@@ -1483,9 +1471,11 @@ private struct StoryViewerNativeView: View {
 
   @MainActor
   private func prewarmStoryMediaWindow() async {
+    try? await Task.sleep(nanoseconds: 120_000_000)
+    guard !Task.isCancelled, !isClosing else { return }
     let urls = storyMediaWindowURLs()
     guard !urls.isEmpty else { return }
-    MIRAVideoPrewarmManager.shared.prewarm(urls: urls, keepOnly: Set(urls.filter(\.isVideoURL).prefix(5)))
+    MIRAVideoPrewarmManager.shared.prewarm(urls: urls, keepOnly: Set(urls.filter(\.isVideoURL).prefix(2)))
     Task.detached(priority: .utility) {
       await MIRAImagePrefetcher.prefetch(urls: urls, maxPixelSize: 1920, limit: 10)
     }
@@ -1521,7 +1511,7 @@ private struct StoryViewerNativeView: View {
     let upper = min(stories.count - 1, index + 5)
     let urls = orderedUniqueStoryURLs((index...upper).compactMap { stories[$0].mediaURL })
     guard !urls.isEmpty else { return }
-    MIRAVideoPrewarmManager.shared.prewarm(urls: urls, keepOnly: Set(urls.filter(\.isVideoURL).prefix(5)))
+    MIRAVideoPrewarmManager.shared.prewarm(urls: urls, keepOnly: Set(urls.filter(\.isVideoURL).prefix(2)))
     Task.detached(priority: .utility) {
       await MIRAImagePrefetcher.prefetch(urls: urls, maxPixelSize: 1920, limit: 6)
     }
@@ -1992,7 +1982,6 @@ private struct StoryViewerNativeView: View {
   private func goToPreviousStory() {
     if selectedIndex > 0 {
       prewarmStoriesStarting(at: selectedIndex - 1)
-      isStoryPlaybackArmed = false
       withAnimation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion)) {
         selectedIndex -= 1
       }
@@ -2004,7 +1993,6 @@ private struct StoryViewerNativeView: View {
       return
     }
     prewarmStoriesStarting(at: selectedIndex + 1)
-    isStoryPlaybackArmed = false
     withAnimation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion)) {
       selectedIndex += 1
     }

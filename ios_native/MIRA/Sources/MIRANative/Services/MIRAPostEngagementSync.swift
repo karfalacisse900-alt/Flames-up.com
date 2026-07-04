@@ -165,15 +165,12 @@ public enum MIRAPostEngagementSync {
   }
 
   private static func mergedViewerFlag(cached: Bool?, fresh: Bool?, cachedCount _: Int?, freshCount _: Int?) -> Bool? {
-    if let cached { return cached }
-    return fresh
+    if let fresh { return fresh }
+    return cached
   }
 
-  private static func mergedCount(cached: Int?, fresh: Int?, cachedFlag: Bool?, freshFlag: Bool?) -> Int? {
+  private static func mergedCount(cached: Int?, fresh: Int?, cachedFlag _: Bool?, freshFlag _: Bool?) -> Int? {
     guard cached != nil || fresh != nil else { return nil }
-    if let cachedFlag, let freshFlag, cachedFlag != freshFlag {
-      return max(0, cached ?? fresh ?? 0)
-    }
     if let fresh { return max(0, fresh) }
     return max(0, cached ?? 0)
   }

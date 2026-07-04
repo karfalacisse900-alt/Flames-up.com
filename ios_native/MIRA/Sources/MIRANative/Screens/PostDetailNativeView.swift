@@ -9,7 +9,7 @@ final class PostDetailModel: ObservableObject {
   @Published var currentUserId: String?
 
   let api: MIRAAPIClient
-  private var likingPostIds = Set<String>()
+  private var likeMutationVersions: [String: Int] = [:]
   private var likingCommentIds = Set<String>()
 
   init(post: MIRAPost, api: MIRAAPIClient) {
@@ -29,21 +29,11 @@ final class PostDetailModel: ObservableObject {
       let refreshed = await MIRAPostEngagementSync.apply(to: apiPost)
       let current = post
       let merged = refreshed.updating(
-        liked: mergedViewerFlag(cached: current.viewerLikedValue, fresh: refreshed.viewerLikedValue, cachedCount: current.likesCount, freshCount: refreshed.likesCount),
-        likesCount: mergedEngagementCount(
-          cached: current.likesCount,
-          fresh: refreshed.likesCount,
-          cachedFlag: current.viewerLikedValue,
-          freshFlag: refreshed.viewerLikedValue
-        ),
-        commentsCount: bestCount(current.commentsCount, refreshed.commentsCount),
-        saved: mergedViewerFlag(cached: current.viewerSavedValue, fresh: refreshed.viewerSavedValue, cachedCount: current.savesCount, freshCount: refreshed.savesCount),
-        savesCount: mergedEngagementCount(
-          cached: current.savesCount,
-          fresh: refreshed.savesCount,
-          cachedFlag: current.viewerSavedValue,
-          freshFlag: refreshed.viewerSavedValue
-        ),
+        liked: refreshed.viewerLikedValue ?? current.viewerLikedValue,
+        likesCount: refreshed.likesCount ?? current.likesCount,
+        commentsCount: refreshed.commentsCount ?? current.commentsCount,
+        saved: refreshed.viewerSavedValue ?? current.viewerSavedValue,
+        savesCount: refreshed.savesCount ?? current.savesCount,
         following: refreshed.isFollowing ?? refreshed.following?.value ?? refreshed.followed?.value ?? current.viewerFollowing
       )
       var transaction = Transaction()
@@ -223,16 +213,15 @@ final class PostDetailModel: ObservableObject {
   }
 
   func toggleLike() async {
-    guard !likingPostIds.contains(post.id) else { return }
-    likingPostIds.insert(post.id)
-    defer { likingPostIds.remove(post.id) }
-
+    let mutationVersion = beginLikeMutation(for: post.id)
     let previous = post
     let nextLiked = !post.viewerLiked
     let nextCount = max(0, (post.likesCount ?? 0) + (nextLiked ? 1 : -1))
     post = post.updating(liked: nextLiked, likesCount: nextCount)
+    publishEngagement()
     do {
       let response: PostLikeResponse = try await api.post("/posts/\(post.id)/like", body: LikeBody(liked: nextLiked))
+      guard isCurrentLikeMutation(mutationVersion, for: post.id) else { return }
       let reconciledLikesCount = stableEngagementCount(
         current: previous.likesCount,
         incoming: response.likesCount,
@@ -248,14 +237,18 @@ final class PostDetailModel: ObservableObject {
       )
       publishEngagement()
     } catch {
+      guard isCurrentLikeMutation(mutationVersion, for: post.id) else { return }
       post = previous
+      publishEngagement()
     }
+    finishLikeMutation(mutationVersion, for: post.id)
   }
 
   func save(to collection: String) async {
     let previous = post
     let nextCount = max(0, (post.savesCount ?? 0) + (post.viewerSaved ? 0 : 1))
     post = post.updating(saved: true, savesCount: nextCount)
+    publishEngagement()
     do {
       let response: PostSaveResponse = try await api.post("/library/save/\(post.id)", body: SaveCollectionBody(collection: collection))
       let reconciledSavesCount = stableEngagementCount(
@@ -274,6 +267,7 @@ final class PostDetailModel: ObservableObject {
       publishEngagement()
     } catch {
       post = previous
+      publishEngagement()
     }
   }
 
@@ -282,6 +276,7 @@ final class PostDetailModel: ObservableObject {
     let previous = post
     let nextCount = max(0, (post.savesCount ?? 0) - 1)
     post = post.updating(saved: false, savesCount: nextCount)
+    publishEngagement()
     do {
       let response: PostSaveResponse = try await api.delete("/library/save/\(post.id)")
       let reconciledSavesCount = stableEngagementCount(
@@ -300,6 +295,7 @@ final class PostDetailModel: ObservableObject {
       publishEngagement()
     } catch {
       post = previous
+      publishEngagement()
     }
   }
 
@@ -339,18 +335,12 @@ final class PostDetailModel: ObservableObject {
 
   private func applyCachedEngagement(from cached: MIRAPost) {
     post = post.updating(
-      liked: cached.viewerLikedValue,
-      likesCount: bestCount(post.likesCount, cached.likesCount),
-      commentsCount: bestCount(post.commentsCount, cached.commentsCount),
-      saved: cached.viewerSavedValue,
-      savesCount: bestCount(post.savesCount, cached.savesCount)
+      liked: post.viewerLikedValue ?? cached.viewerLikedValue,
+      likesCount: post.likesCount ?? cached.likesCount,
+      commentsCount: post.commentsCount ?? cached.commentsCount,
+      saved: post.viewerSavedValue ?? cached.viewerSavedValue,
+      savesCount: post.savesCount ?? cached.savesCount
     )
-  }
-
-  private func bestCount(_ current: Int?, _ cached: Int?) -> Int? {
-    guard current != nil || cached != nil else { return nil }
-    if let current { return max(0, current) }
-    return max(0, cached ?? 0)
   }
 
   private func stableEngagementCount(current: Int?, incoming: Int?, optimistic: Int? = nil, toggledOn: Bool? = nil) -> Int? {
@@ -359,18 +349,20 @@ final class PostDetailModel: ObservableObject {
     return max(0, incoming)
   }
 
-  private func mergedViewerFlag(cached: Bool?, fresh: Bool?, cachedCount _: Int?, freshCount _: Int?) -> Bool? {
-    if let cached { return cached }
-    return fresh
+  private func beginLikeMutation(for postId: String) -> Int {
+    let next = (likeMutationVersions[postId] ?? 0) + 1
+    likeMutationVersions[postId] = next
+    return next
   }
 
-  private func mergedEngagementCount(cached: Int?, fresh: Int?, cachedFlag: Bool?, freshFlag: Bool?) -> Int? {
-    guard cached != nil || fresh != nil else { return nil }
-    if let cachedFlag, let freshFlag, cachedFlag != freshFlag {
-      return max(0, cached ?? fresh ?? 0)
+  private func isCurrentLikeMutation(_ version: Int, for postId: String) -> Bool {
+    likeMutationVersions[postId] == version
+  }
+
+  private func finishLikeMutation(_ version: Int, for postId: String) {
+    if likeMutationVersions[postId] == version {
+      likeMutationVersions[postId] = nil
     }
-    if let fresh { return max(0, fresh) }
-    return max(0, cached ?? 0)
   }
 
   private func loadCurrentUserIfNeeded() async {

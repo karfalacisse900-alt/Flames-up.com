@@ -750,6 +750,16 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
         self.currentInput = input
       }
 
+      guard self.currentInput != nil else {
+        self.session.commitConfiguration()
+        DispatchQueue.main.async {
+          self.isConfigured = false
+          self.showCameraUnavailableMessage()
+        }
+        MIRAApplePerformanceLogger.event("camera_config_failed", detail: "no_camera_input")
+        return
+      }
+
       if self.captureMode.usesVideoCapture,
          AVCaptureDevice.authorizationStatus(for: .audio) == .authorized,
          let audioDevice = AVCaptureDevice.default(for: .audio),
