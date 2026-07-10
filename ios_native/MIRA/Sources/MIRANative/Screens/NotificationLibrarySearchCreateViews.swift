@@ -25,7 +25,9 @@ final class NotificationNativeModel: ObservableObject {
     do {
       let fresh: [MIRANotification] = try await api.get("/notifications?limit=60")
       if notifications != fresh {
-        notifications = fresh
+        withAnimation(CaptroMotion.feedChromeAnimation(reduceMotion: false)) {
+          notifications = fresh
+        }
       }
       await MIRAAppCacheStore.shared.saveNotifications(fresh)
       let _: EmptyResponse = try await api.post("/notifications/mark-read", body: EmptyBody())
@@ -52,7 +54,7 @@ public struct NotificationNativeView: View {
         if model.isLoading && model.notifications.isEmpty {
           ForEach(0..<6, id: \.self) { _ in notificationSkeleton }
         } else if model.notifications.isEmpty {
-          MIRAEmptyState(title: "No notifications yet", message: "Likes, replies, follows, gifts, and posts will appear here.", systemImage: "bell")
+          MIRAEmptyState(title: "No notifications yet", message: "Likes, comments, connections, messages, and new posts will appear here.", systemImage: "bell")
         } else {
           ForEach(model.notifications) { item in
             notificationRow(item)
@@ -66,6 +68,7 @@ public struct NotificationNativeView: View {
     .navigationTitle("Notifications")
     .miraHideTabBarOnAppear()
     .task { await model.load() }
+    .refreshable { await model.load() }
   }
 
   private func notificationRow(_ item: MIRANotification) -> some View {

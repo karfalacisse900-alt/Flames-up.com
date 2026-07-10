@@ -3777,6 +3777,11 @@ function localizedNotificationCopy(language: 'en' | 'fr' | 'es', type: string, t
     if (language === 'es') return { title: 'Nuevo mensaje', body: `Nuevo mensaje de ${actorName}` };
     return { title: 'New message', body: `New message from ${actorName}` };
   }
+  if (type === 'follow') {
+    if (language === 'fr') return { title: 'Nouvelle connexion', body: `${actorName} vous suit.` };
+    if (language === 'es') return { title: 'Nueva conexión', body: `${actorName} te sigue.` };
+    return { title: 'New Connection', body: `${actorName} connected with you.` };
+  }
   return { title, body };
 }
 
@@ -6145,6 +6150,34 @@ async function supabaseCreatePostComment(c: any, input: {
   };
   await supabaseAdminUpsert(c, 'post_comments', [row], 'legacy_comment_id');
   const engagement = await getSupabasePostEngagementState(c, input.postId, input.userId);
+  const actorName = cleanText(user?.full_name || user?.username || 'Someone', 80);
+  const postOwnerId = publicId(visiblePost?.user_id, 120);
+  const parentOwnerId = publicId(parent?.app_user_id || parent?.user_id, 120);
+  const notificationTargetId = parentOwnerId && parentOwnerId !== input.userId
+    ? parentOwnerId
+    : (postOwnerId && postOwnerId !== input.userId ? postOwnerId : '');
+  if (notificationTargetId) {
+    const notificationType = parentOwnerId && parentOwnerId !== input.userId ? 'comment_reply' : 'comment';
+    runBackgroundTask(c, 'supabase_comment_notification_failed', async () => {
+      await insertNotificationOnce(c, {
+        userId: notificationTargetId,
+        type: notificationType,
+        title: notificationType === 'comment_reply' ? 'New Reply' : 'New Comment',
+        body: notificationType === 'comment_reply'
+          ? `${actorName} replied to your comment.`
+          : `${actorName} commented on your post.`,
+        data: {
+          post_id: input.postId,
+          comment_id: id,
+          parent_comment_id: publicId(input.parentId, 120),
+          from_user_id: input.userId,
+          actor_name: actorName,
+        },
+        dedupeKey: `${notificationType}:${input.userId}:${id}`,
+        dedupeSeconds: 60,
+      });
+    });
+  }
   return {
     status: 200 as const,
     body: {
@@ -6373,6 +6406,22 @@ async function supabaseSetFollowState(c: any, followerId: string, followingId: s
     supabaseFollowStats(c, follower),
     supabaseFollowStats(c, following),
   ]);
+  if (nextFollowing && !wasFollowing) {
+    runBackgroundTask(c, 'supabase_follow_notification_failed', async () => {
+      await insertNotificationOnce(c, {
+        userId: following,
+        type: 'follow',
+        title: 'New Connection',
+        body: `${cleanText(followerRow?.full_name || followerRow?.username || 'Someone', 80)} connected with you.`,
+        data: {
+          from_user_id: follower,
+          actor_name: cleanText(followerRow?.full_name || followerRow?.username || 'Someone', 80),
+        },
+        dedupeKey: `follow:${follower}:${following}`,
+        dedupeSeconds: 86400,
+      });
+    });
+  }
   return {
     status: 200 as const,
     body: {
