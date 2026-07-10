@@ -6809,6 +6809,7 @@ function supabaseAppPostToLegacy(row: any, author: any, isFollowing: boolean, co
   const raw = parseJsonObject((metadata as any).raw);
   const place = parseJsonObject((metadata as any).place);
   const audio = parseJsonObject((metadata as any).audio);
+  const authorProfile = parseJsonObject(author?.profile);
   const pinnedAt = cleanText((metadata as any).pinned_at, 80) || null;
   const { mediaUrls, mediaTypes, mediaDimensions } = supabaseAppPostMedia(row);
   const primaryCategory = (normalizeDiscoverCategory(row?.category || (discover as any).primary_category || row?.post_type, false) || DEFAULT_DISCOVER_CATEGORY) as DiscoverCategory;
@@ -6820,6 +6821,11 @@ function supabaseAppPostToLegacy(row: any, author: any, isFollowing: boolean, co
     user_username: author?.username,
     user_full_name: author?.full_name,
     user_profile_image: author?.avatar_url,
+    user_profile_headline: cleanText(author?.headline || (authorProfile as any).headline || author?.bio, 120),
+    user_looking_for: cleanText(author?.looking_for || (authorProfile as any).looking_for, 120),
+    user_availability_text: cleanText(author?.availability_text || (authorProfile as any).availability_text, 80),
+    user_social_preference: cleanText(author?.social_preference || (authorProfile as any).social_preference, 80),
+    user_interests: parseJsonArray(author?.interests || (authorProfile as any).interests).map((item) => cleanText(item, 60)).filter(Boolean).slice(0, 8),
     title: cleanText(row?.title, 180),
     content: cleanMultilineText(row?.content, 4000),
     image: mediaUrls[0] || '',

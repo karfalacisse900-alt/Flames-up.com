@@ -748,7 +748,7 @@ public struct MainFeedView: View {
               }
             }
           }
-          .padding(.bottom, MIRATheme.Space.xxl)
+          .padding(.bottom, 118)
         }
         .coordinateSpace(name: "mainFeedScroll")
         .scrollIndicators(.hidden)
@@ -1199,12 +1199,6 @@ private struct MainNativePostCard: View {
     .overlay(alignment: .bottom) {
       Rectangle().fill(MIRATheme.Color.hairline).frame(height: 0.75).allowsHitTesting(false)
     }
-    .overlay(alignment: .topLeading) {
-      followingConfirmationBadge
-        .padding(.leading, 58)
-        .padding(.top, 50)
-        .zIndex(8)
-    }
     .onChange(of: post.id) { _, _ in
       selectedMediaIndex = 0
       isSubmittingFollow = false
@@ -1387,10 +1381,10 @@ private struct MainNativePostCard: View {
   }
 
   private var actionRow: some View {
-    HStack(spacing: 4) {
+    HStack(spacing: 8) {
       engagementButtons
-      Spacer(minLength: 4)
-      captionExpansionButton
+      connectionAction
+      Spacer(minLength: 2)
     }
     .lineLimit(1)
     .padding(.horizontal, MIRATheme.Space.md)
@@ -1421,11 +1415,26 @@ private struct MainNativePostCard: View {
   }
 
   @ViewBuilder
-  private var captionExpansionButton: some View {
-    if captionNeedsExpansion {
-      CompactTextAction(isShowingCaption ? "Less" : "More", action: toggleCaption)
-        .layoutPriority(1)
+  private var connectionAction: some View {
+    if canShowConnectionAction {
+      CompactConnectionAction(
+        title: connectionActionTitle,
+        isActive: post.viewerFollowing || isFollowConfirmationVisible,
+        isLoading: isSubmittingFollow,
+        action: connectToAuthor
+      )
+      .transition(.opacity.combined(with: .scale(scale: 0.98)))
     }
+  }
+
+  private var canShowConnectionAction: Bool {
+    canFollowAuthor || post.viewerFollowing || isSubmittingFollow || isFollowConfirmationVisible
+  }
+
+  private var connectionActionTitle: String {
+    if post.viewerFollowing { return "Connected" }
+    if isSubmittingFollow || isFollowConfirmationVisible { return "Sent" }
+    return "Connect"
   }
 
   private var captionBlock: some View {
@@ -1447,6 +1456,17 @@ private struct MainNativePostCard: View {
           .lineLimit(isShowingCaption ? nil : 2)
           .truncationMode(.tail)
           .fixedSize(horizontal: false, vertical: true)
+      }
+
+      if captionNeedsExpansion {
+        Button(action: toggleCaption) {
+          Text(isShowingCaption ? "Less" : "More")
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(MIRATheme.Color.forest)
+            .padding(.top, 1)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(isShowingCaption ? "Show less caption" : "Show more caption")
       }
 
       if let placeText {
@@ -1568,24 +1588,7 @@ private struct MainNativePostCard: View {
 
   @ViewBuilder
   private var authorAvatar: some View {
-    if canFollowAuthor || isSubmittingFollow || isFollowConfirmationVisible {
-      Button {
-        debugTap("tap_follow_avatar")
-        followWithConfirmation()
-      } label: {
-        MIRAFollowAvatar(
-          url: post.userProfileImage,
-          size: 42,
-          isFollowing: post.viewerFollowing || isSubmittingFollow || isFollowConfirmationVisible
-        )
-        .scaleEffect(isFollowConfirmationVisible ? 1.08 : 1)
-      }
-      .buttonStyle(.plain)
-      .disabled(isSubmittingFollow)
-      .accessibilityLabel(isSubmittingFollow || isFollowConfirmationVisible ? "Following" : "Follow")
-      .frame(minWidth: 44, minHeight: 44)
-      .contentShape(Rectangle())
-    } else if let userId = post.userId, !userId.isEmpty {
+    if let userId = post.userId, !userId.isEmpty {
       NavigationLink(destination: UserProfileNativeView(userId: userId, api: api).miraHideTabBarOnAppear()) {
         RemoteAvatar(url: post.userProfileImage, size: 42)
       }
@@ -1629,6 +1632,13 @@ private struct MainNativePostCard: View {
           .lineLimit(1)
           .truncationMode(.tail)
       }
+      if let context = authorContextText {
+        Text(context)
+          .font(.system(size: 12, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textSecondary)
+          .lineLimit(1)
+          .truncationMode(.tail)
+      }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
     .contentShape(Rectangle())
@@ -1653,7 +1663,7 @@ private struct MainNativePostCard: View {
     .accessibilityLabel("Post options")
   }
 
-  private func followWithConfirmation() {
+  private func connectToAuthor() {
     guard !isSubmittingFollow, canFollowAuthor else { return }
     CaptroHaptics.light()
     isSubmittingFollow = true
@@ -1674,44 +1684,107 @@ private struct MainNativePostCard: View {
     }
   }
 
-  @ViewBuilder
-  private var followingConfirmationBadge: some View {
-    if isFollowConfirmationVisible {
-      HStack(spacing: 7) {
-        Image(systemName: "checkmark")
-          .font(.system(size: 11, weight: .bold))
-        Text("Following")
-          .font(.system(size: 12, weight: .semibold))
-      }
-      .foregroundStyle(.white)
-      .padding(.horizontal, 11)
-      .frame(height: 28)
-      .background(MIRATheme.Color.forest.opacity(0.94))
-      .clipShape(Capsule())
-      .shadow(color: .black.opacity(0.12), radius: 10, x: 0, y: 5)
-      .transition(.opacity.combined(with: .scale(scale: 0.92, anchor: .leading)))
-      .allowsHitTesting(false)
-    }
-  }
-
   private var authorNameLabel: some View {
-    Text(post.authorDisplayName)
+    Text(feedAuthorDisplayName)
       .font(.system(size: 15, weight: .semibold))
       .foregroundStyle(MIRATheme.Color.textPrimary)
       .lineLimit(1)
       .truncationMode(.tail)
   }
 
+  private var feedAuthorDisplayName: String {
+    let fullName = post.userFullName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    if !fullName.isEmpty { return fullName }
+    let username = post.userUsername?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    if !username.isEmpty { return MIRAUsernameRules.normalized(username) }
+    return "Captro"
+  }
+
   private var authorSubtitle: String? {
-    cleanedLocation(post.displayLocationText)
+    let username = authorUsernameText
+    let location = broadLocationText
+    if let username, let location { return "\(username) - \(location)" }
+    return username ?? location
+  }
+
+  private var authorUsernameText: String? {
+    let raw = post.userUsername?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    guard !raw.isEmpty else { return nil }
+    let normalized = MIRAUsernameRules.normalized(raw)
+    return normalized.hasPrefix("@") ? normalized : "@\(normalized)"
+  }
+
+  private var broadLocationText: String? {
+    if let label = cleanedLocation(post.displayLocationLabel), !isGenericCountryLocation(label) {
+      return label
+    }
+    if let city = cleanedLocation(post.displayCity) {
+      return city
+    }
+    return cleanedLocation(post.displayLocationText)
   }
 
   private func cleanedLocation(_ value: String?) -> String? {
-    let clean = value?
+    var clean = value?
       .trimmingCharacters(in: .whitespacesAndNewlines)
       .replacingOccurrences(of: #"\s*,\s*"#, with: ", ", options: .regularExpression) ?? ""
+    clean = clean
+      .replacingOccurrences(of: ", United States", with: "", options: [.caseInsensitive])
+      .replacingOccurrences(of: ", USA", with: "", options: [.caseInsensitive])
+      .replacingOccurrences(of: "United States", with: "", options: [.caseInsensitive])
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+      .trimmingCharacters(in: CharacterSet(charactersIn: " ,"))
     guard !clean.isEmpty else { return nil }
     return clean
+  }
+
+  private func isGenericCountryLocation(_ value: String) -> Bool {
+    let lower = value.lowercased()
+    return lower == "united states" || lower == "usa"
+  }
+
+  private var authorContextText: String? {
+    let values = authorContextItems
+    guard !values.isEmpty else { return nil }
+    return values.joined(separator: " - ")
+  }
+
+  private var authorContextItems: [String] {
+    var result: [String] = []
+    appendContext(&result, normalizedConnectionIntent(post.userLookingFor))
+    appendContext(&result, post.userProfileHeadline)
+    appendContext(&result, post.userAvailabilityText)
+    appendContext(&result, post.userSocialPreference)
+    for interest in post.userInterests?.values ?? [] {
+      appendContext(&result, interest)
+    }
+    return Array(result.prefix(3))
+  }
+
+  private func appendContext(_ result: inout [String], _ value: String?) {
+    guard result.count < 3 else { return }
+    let clean = value?
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+      .replacingOccurrences(of: "_", with: " ") ?? ""
+    guard clean.count >= 2 else { return }
+    let title = clean
+      .split(separator: " ")
+      .map { word -> String in
+        let lower = word.lowercased()
+        guard lower.count > 2 else { return lower }
+        return lower.prefix(1).uppercased() + String(lower.dropFirst())
+      }
+      .joined(separator: " ")
+    guard !result.contains(where: { $0.caseInsensitiveCompare(title) == .orderedSame }) else { return }
+    result.append(title)
+  }
+
+  private func normalizedConnectionIntent(_ value: String?) -> String? {
+    let clean = value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+    guard !clean.isEmpty else { return nil }
+    if clean.contains("friend") { return "Open to friends" }
+    if clean.contains("connect") { return "Open to connect" }
+    return value
   }
 
   private func debugTap(_ action: String) {
@@ -2263,6 +2336,41 @@ private struct CompactTextAction: View {
       .contentShape(Rectangle())
     }
     .buttonStyle(.miraPress)
+  }
+}
+
+private struct CompactConnectionAction: View {
+  let title: String
+  let isActive: Bool
+  let isLoading: Bool
+  let action: () -> Void
+
+  var body: some View {
+    Button {
+      action()
+    } label: {
+      HStack(spacing: 5) {
+        Image(systemName: isActive ? "checkmark" : "person.badge.plus")
+          .font(.system(size: 12, weight: .semibold))
+        Text(title)
+          .font(.system(size: 12, weight: .semibold))
+          .lineLimit(1)
+          .minimumScaleFactor(0.82)
+      }
+      .foregroundStyle(isActive ? MIRATheme.Color.textSecondary : MIRATheme.Color.forest)
+      .frame(minHeight: 34)
+      .padding(.horizontal, 10)
+      .background(MIRATheme.Color.surfaceSoft)
+      .clipShape(Capsule())
+      .overlay(
+        Capsule()
+          .stroke(isActive ? MIRATheme.Color.hairline : MIRATheme.Color.forest.opacity(0.12), lineWidth: 1)
+      )
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.miraPress)
+    .disabled(isLoading || isActive)
+    .accessibilityLabel(title)
   }
 }
 

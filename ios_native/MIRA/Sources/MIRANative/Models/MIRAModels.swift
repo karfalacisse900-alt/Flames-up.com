@@ -113,6 +113,11 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
   public let userUsername: String?
   public let userFullName: String?
   public let userProfileImage: String?
+  public let userProfileHeadline: String?
+  public let userLookingFor: String?
+  public let userAvailabilityText: String?
+  public let userSocialPreference: String?
+  public let userInterests: FlexibleStringArray?
   public let title: String?
   public let content: String?
   public let caption: String?
@@ -337,6 +342,11 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
       userUsername: userUsername,
       userFullName: userFullName,
       userProfileImage: userProfileImage,
+      userProfileHeadline: userProfileHeadline,
+      userLookingFor: userLookingFor,
+      userAvailabilityText: userAvailabilityText,
+      userSocialPreference: userSocialPreference,
+      userInterests: userInterests,
       title: title,
       content: content,
       caption: caption,
@@ -416,6 +426,11 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
       userUsername: userUsername,
       userFullName: userFullName,
       userProfileImage: userProfileImage,
+      userProfileHeadline: userProfileHeadline,
+      userLookingFor: userLookingFor,
+      userAvailabilityText: userAvailabilityText,
+      userSocialPreference: userSocialPreference,
+      userInterests: userInterests,
       title: title,
       content: content,
       caption: caption,
