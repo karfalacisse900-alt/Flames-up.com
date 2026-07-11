@@ -9,6 +9,119 @@ private func profileVisiblePosts(_ posts: [MIRAPost]) -> [MIRAPost] {
   }
 }
 
+private func cleanProfileNeighborhood(_ value: String?) -> String? {
+  let trimmed = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+  guard !trimmed.isEmpty else { return nil }
+  let withoutCountry = trimmed
+    .replacingOccurrences(of: ", United States", with: "", options: [.caseInsensitive])
+    .replacingOccurrences(of: ", USA", with: "", options: [.caseInsensitive])
+    .replacingOccurrences(of: ", U.S.A.", with: "", options: [.caseInsensitive])
+    .trimmingCharacters(in: .whitespacesAndNewlines)
+  let firstPart = withoutCountry.split(separator: ",").first.map(String.init) ?? withoutCountry
+  let clean = firstPart.trimmingCharacters(in: .whitespacesAndNewlines)
+  return clean.isEmpty ? nil : clean
+}
+
+private func profileMetaLine(username: String?, city: String?) -> String? {
+  let cleanUsername = MIRAUsernameRules.normalized(username)
+  let usernamePart = cleanUsername.isEmpty ? nil : "@\(cleanUsername)"
+  let locationPart = cleanProfileNeighborhood(city)
+  let parts = [usernamePart, locationPart].compactMap { $0 }
+  return parts.isEmpty ? nil : parts.joined(separator: " · ")
+}
+
+private func compactProfileInterests(_ user: MIRAUser?) -> [String] {
+  uniqueProfileInterests((user?.interests?.values ?? [])
+    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+    .filter { !$0.isEmpty })
+}
+
+private func uniqueProfileInterests(_ values: [String]) -> [String] {
+  var seen = Set<String>()
+  var unique: [String] = []
+  for value in values {
+    let clean = String(value.trimmingCharacters(in: .whitespacesAndNewlines).prefix(32))
+    let key = clean.lowercased()
+    guard !clean.isEmpty, !seen.contains(key) else { continue }
+    seen.insert(key)
+    unique.append(clean)
+    if unique.count == 3 { break }
+  }
+  return unique
+}
+
+private func parseProfileInterests(_ text: String) -> [String] {
+  uniqueProfileInterests(text
+    .split(whereSeparator: { $0 == "," || $0 == "\n" || $0 == "·" })
+    .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+    .filter { !$0.isEmpty })
+}
+
+private struct ProfileIdentitySummary: View {
+  let user: MIRAUser?
+  let title: String
+  let postCount: Int
+
+  var body: some View {
+    VStack(spacing: MIRATheme.Space.sm) {
+      HStack(spacing: 6) {
+        Text(title)
+          .font(.system(size: 24, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .lineLimit(1)
+          .minimumScaleFactor(0.82)
+        if user?.isVerified == true {
+          Image(systemName: "checkmark.seal.fill")
+            .font(.system(size: 16, weight: .semibold))
+            .foregroundStyle(MIRATheme.Color.forest)
+            .accessibilityLabel("Verified")
+        }
+      }
+
+      if let meta = profileMetaLine(username: user?.username, city: user?.city) {
+        Text(meta)
+          .font(.system(size: 14, weight: .medium))
+          .foregroundStyle(MIRATheme.Color.textMuted)
+          .lineLimit(1)
+          .minimumScaleFactor(0.82)
+      }
+
+      if let bio = user?.bio?.trimmingCharacters(in: .whitespacesAndNewlines), !bio.isEmpty {
+        Text(bio)
+          .font(.system(size: 14, weight: .regular))
+          .foregroundStyle(MIRATheme.Color.textSecondary)
+          .multilineTextAlignment(.center)
+          .lineLimit(3)
+          .fixedSize(horizontal: false, vertical: true)
+          .padding(.top, 2)
+      }
+
+      if !interestText.isEmpty {
+        Text(interestText)
+          .font(.system(size: 13, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textMuted)
+          .lineLimit(1)
+          .minimumScaleFactor(0.82)
+      }
+
+      VStack(spacing: 4) {
+        Text("\(postCount)")
+          .font(.system(size: 20, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+        Text(postCount == 1 ? "Post" : "Posts")
+          .font(.system(size: 12, weight: .medium))
+          .foregroundStyle(MIRATheme.Color.textMuted)
+      }
+      .padding(.top, MIRATheme.Space.xs)
+    }
+    .frame(maxWidth: .infinity)
+  }
+
+  private var interestText: String {
+    compactProfileInterests(user).joined(separator: " · ")
+  }
+}
+
 @MainActor
 final class ProfileNativeModel: ObservableObject {
   @Published var user: MIRAUser?
@@ -174,6 +287,9 @@ private struct PostVisibilityUpdateBody: Encodable {
 private struct ProfileUpdateBody: Encodable {
   let fullName: String?
   let username: String?
+  let bio: String
+  let city: String
+  let interests: [String]
   let profileImage: String?
 }
 
@@ -452,22 +568,11 @@ public struct ProfileNativeView: View {
   private var profileHeader: some View {
     VStack(spacing: MIRATheme.Space.md) {
       RemoteAvatar(url: model.user?.profileImage, size: 92)
-      VStack(spacing: 4) {
-        Text(profileTitle)
-          .font(.system(size: 24, weight: .semibold))
-          .foregroundStyle(MIRATheme.Color.textPrimary)
-          .lineLimit(1)
-        if let username = model.user?.username, !username.isEmpty {
-          Text("@\(username)")
-            .font(.system(size: 14, weight: .medium))
-            .foregroundStyle(MIRATheme.Color.textMuted)
-            .lineLimit(1)
-        }
-      }
-      HStack(spacing: MIRATheme.Space.xl) {
-        profileMetric("Posts", model.user?.postsCount ?? model.posts.count)
-        profileMetric("Connections", model.user?.followersCount ?? 0)
-      }
+      ProfileIdentitySummary(
+        user: model.user,
+        title: profileTitle,
+        postCount: model.user?.postsCount ?? model.posts.count
+      )
       MIRAPrimaryButton("Edit profile", systemImage: "pencil") {
         CaptroHaptics.light()
         withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
@@ -479,13 +584,6 @@ public struct ProfileNativeView: View {
     .frame(maxWidth: .infinity)
     .miraCardSurface()
     .padding(.horizontal, MIRATheme.Space.md)
-  }
-
-  private func profileMetric(_ label: String, _ value: Int) -> some View {
-    VStack(spacing: 4) {
-      Text("\(value)").font(.system(size: 18, weight: .semibold))
-      Text(label).font(.system(size: 12, weight: .medium)).foregroundStyle(MIRATheme.Color.textMuted)
-    }
   }
 
   private var profileTitle: String {
@@ -885,23 +983,11 @@ public struct UserProfileNativeView: View {
           .frame(maxWidth: .infinity)
         profileSafetyMenu
       }
-      VStack(spacing: 4) {
-        Text(profileTitle)
-          .font(.system(size: 24, weight: .semibold))
-          .foregroundStyle(MIRATheme.Color.textPrimary)
-          .lineLimit(1)
-        if let username = model.user?.username, !username.isEmpty {
-          Text("@\(username)")
-            .font(.system(size: 14, weight: .medium))
-            .foregroundStyle(MIRATheme.Color.textMuted)
-            .lineLimit(1)
-        }
-      }
-
-      HStack(spacing: MIRATheme.Space.xl) {
-        profileMetric("Posts", model.user?.postsCount ?? model.posts.count)
-        profileMetric("Connections", model.followersCount)
-      }
+      ProfileIdentitySummary(
+        user: model.user,
+        title: profileTitle,
+        postCount: model.user?.postsCount ?? model.posts.count
+      )
 
       if model.isBlocked {
         profileStatusNotice("You blocked this user. Unblock them to message or connect again.")
@@ -923,7 +1009,11 @@ public struct UserProfileNativeView: View {
           .disabled(connectionButtonIsActive)
 
           Button {
-            Task { await openMessageChat() }
+            if model.connectionStatus == "connected" {
+              Task { await openMessageChat() }
+            } else {
+              model.errorMessage = "Connect first to start a conversation."
+            }
           } label: {
             Label(isOpeningMessage ? "Opening" : "Message", systemImage: isOpeningMessage ? "hourglass" : "message")
               .font(.system(size: 15, weight: .semibold))
@@ -933,7 +1023,15 @@ public struct UserProfileNativeView: View {
               .clipShape(Capsule())
           }
           .buttonStyle(.plain)
-          .disabled(isOpeningMessage || model.connectionStatus != "connected")
+          .opacity(model.connectionStatus == "connected" ? 1 : 0.58)
+          .disabled(isOpeningMessage)
+        }
+
+        if let errorMessage = model.errorMessage, !errorMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+          Text(errorMessage)
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(MIRATheme.Color.textMuted)
+            .multilineTextAlignment(.center)
         }
       }
     }
@@ -1034,13 +1132,6 @@ public struct UserProfileNativeView: View {
       .padding(.vertical, 12)
       .background(MIRATheme.Color.surfaceSoft)
       .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-  }
-
-  private func profileMetric(_ label: String, _ value: Int) -> some View {
-    VStack(spacing: 4) {
-      Text("\(value)").font(.system(size: 18, weight: .semibold))
-      Text(label).font(.system(size: 12, weight: .medium)).foregroundStyle(MIRATheme.Color.textMuted)
-    }
   }
 
   private var profileTitle: String {
@@ -1297,6 +1388,9 @@ private struct EditProfileNativeView: View {
   @Environment(\.dismiss) private var dismiss
   @State private var fullName: String
   @State private var username: String
+  @State private var city: String
+  @State private var bio: String
+  @State private var interestsText: String
   @State private var profileImage: String?
   @State private var originalUsername: String
   @State private var pickerItem: PhotosPickerItem?
@@ -1313,6 +1407,9 @@ private struct EditProfileNativeView: View {
     self.onSaved = onSaved
     _fullName = State(initialValue: user?.fullName ?? "")
     _username = State(initialValue: user?.username ?? "")
+    _city = State(initialValue: cleanProfileNeighborhood(user?.city) ?? "")
+    _bio = State(initialValue: String((user?.bio ?? "").prefix(220)))
+    _interestsText = State(initialValue: compactProfileInterests(user).joined(separator: ", "))
     _profileImage = State(initialValue: user?.profileImage)
     _originalUsername = State(initialValue: MIRAUsernameRules.normalized(user?.username))
   }
@@ -1339,6 +1436,13 @@ private struct EditProfileNativeView: View {
             editField(title: "Name", text: $fullName, placeholder: "Your name")
             editField(title: "Username", text: $username, placeholder: "username")
             Text("Use 3-20 lowercase letters, numbers, underscores, or periods. Do not include @.")
+              .font(.system(size: 12, weight: .medium))
+              .foregroundStyle(MIRATheme.Color.textMuted)
+              .frame(maxWidth: .infinity, alignment: .leading)
+            editField(title: "Neighborhood", text: $city, placeholder: "Bronx")
+            editMultilineField(title: "Bio", text: $bio, placeholder: "Tell people a little about you", limit: 220)
+            editField(title: "Interests", text: $interestsText, placeholder: "Music, Hiking, Coffee")
+            Text("Shown on your profile. Keep location broad, like a neighborhood or city. Interests are limited to three.")
               .font(.system(size: 12, weight: .medium))
               .foregroundStyle(MIRATheme.Color.textMuted)
               .frame(maxWidth: .infinity, alignment: .leading)
@@ -1438,10 +1542,52 @@ private struct EditProfileNativeView: View {
     }
   }
 
+  private func editMultilineField(title: String, text: Binding<String>, placeholder: String, limit: Int) -> some View {
+    VStack(alignment: .leading, spacing: 8) {
+      HStack {
+        Text(title)
+          .font(.system(size: 13, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textMuted)
+        Spacer()
+        Text("\(min(text.wrappedValue.count, limit))/\(limit)")
+          .font(.system(size: 11, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textMuted)
+      }
+      ZStack(alignment: .topLeading) {
+        if text.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+          Text(placeholder)
+            .font(.system(size: 16, weight: .medium))
+            .foregroundStyle(MIRATheme.Color.textMuted.opacity(0.65))
+            .padding(.horizontal, MIRATheme.Space.md + 4)
+            .padding(.vertical, 14)
+        }
+        TextEditor(text: text)
+          .font(.system(size: 16, weight: .medium))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .scrollContentBackground(.hidden)
+          .frame(minHeight: 104, maxHeight: 132)
+          .padding(.horizontal, MIRATheme.Space.sm)
+          .padding(.vertical, 6)
+          .background(Color.clear)
+          .onChange(of: text.wrappedValue) { newValue in
+            if newValue.count > limit {
+              text.wrappedValue = String(newValue.prefix(limit))
+            }
+          }
+      }
+      .background(MIRATheme.Color.surface)
+      .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+      .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(MIRATheme.Color.hairline, lineWidth: 1))
+    }
+  }
+
   private func save() async {
     guard !isSaving else { return }
     let cleanName = fullName.trimmingCharacters(in: .whitespacesAndNewlines)
     let cleanUsername = MIRAUsernameRules.normalized(username)
+    let cleanBio = cleanMultilineProfileInput(bio, limit: 220)
+    let cleanCity = cleanProfileNeighborhood(city)
+    let cleanInterests = parseProfileInterests(interestsText)
     let usernameToSave = cleanUsername.isEmpty ? nil : cleanUsername
     if let usernameToSave, !MIRAUsernameRules.isValidPublicUsername(usernameToSave) {
       errorMessage = "Choose a username with 3-20 letters, numbers, underscores, or periods."
@@ -1473,6 +1619,9 @@ private struct EditProfileNativeView: View {
         body: ProfileUpdateBody(
           fullName: cleanName.isEmpty ? nil : cleanName,
           username: usernameToSave,
+          bio: cleanBio,
+          city: cleanCity ?? "",
+          interests: cleanInterests,
           profileImage: uploadedImage
         )
       )
@@ -1484,6 +1633,13 @@ private struct EditProfileNativeView: View {
     } catch {
       errorMessage = profileSaveErrorMessage(for: error)
     }
+  }
+
+  private func cleanMultilineProfileInput(_ value: String, limit: Int) -> String {
+    let clean = value
+      .replacingOccurrences(of: "\r\n", with: "\n")
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    return String(clean.prefix(limit))
   }
 
   private func verifyUsernameAvailability(_ username: String) async throws {
@@ -1551,6 +1707,15 @@ private struct EditProfileNativeView: View {
     }
     if username.isEmpty {
       username = me.username ?? ""
+    }
+    if city.isEmpty {
+      city = cleanProfileNeighborhood(me.city) ?? ""
+    }
+    if bio.isEmpty {
+      bio = String((me.bio ?? "").prefix(220))
+    }
+    if interestsText.isEmpty {
+      interestsText = compactProfileInterests(me).joined(separator: ", ")
     }
     if originalUsername.isEmpty {
       originalUsername = MIRAUsernameRules.normalized(me.username)

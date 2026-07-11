@@ -8200,6 +8200,10 @@ function safeUserPayload(user: any, opts: { includePrivate?: boolean } = {}) {
     social_website: safeExternalUrl(user.social_website),
     social_tiktok: cleanText(user.social_tiktok, 120),
     social_instagram: cleanText(user.social_instagram, 120),
+    interests: parseJsonArray(user.interests)
+      .map((item) => cleanText(item, 60))
+      .filter(Boolean)
+      .slice(0, 3),
     followers_count: Number(user.followers_count || 0),
     following_count: Number(user.following_count || 0),
     posts_count: Number(user.posts_count || 0),

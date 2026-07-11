@@ -65,6 +65,7 @@ public struct MIRAUser: Codable, Identifiable, Hashable {
   public let profileImage: String?
   public let bio: String?
   public let city: String?
+  public let interests: FlexibleStringArray?
   public let email: String?
   public let emailVerified: Bool?
   public let phone: String?
@@ -79,6 +80,7 @@ public struct MIRAUser: Codable, Identifiable, Hashable {
   public let viewerBlockedBy: Bool?
   public let privacyLocked: Bool?
   public let isPrivate: Bool?
+  public let isVerified: Bool?
   public let isPremium: Bool?
   public let language: String?
   public let status: String?
@@ -979,6 +981,7 @@ public struct MIRAComment: Codable, Identifiable, Hashable {
           profileImage: profileImage,
           bio: nil,
           city: nil,
+          interests: nil,
           email: nil,
           emailVerified: nil,
           phone: nil,
@@ -993,6 +996,7 @@ public struct MIRAComment: Codable, Identifiable, Hashable {
           viewerBlockedBy: nil,
           privacyLocked: nil,
           isPrivate: nil,
+          isVerified: nil,
           isPremium: nil,
           language: nil,
           status: nil,
