@@ -466,8 +466,7 @@ public struct ProfileNativeView: View {
       }
       HStack(spacing: MIRATheme.Space.xl) {
         profileMetric("Posts", model.user?.postsCount ?? model.posts.count)
-        profileMetric("Followers", model.user?.followersCount ?? 0)
-        profileMetric("Following", model.user?.followingCount ?? 0)
+        profileMetric("Connections", model.user?.followersCount ?? 0)
       }
       MIRAPrimaryButton("Edit profile", systemImage: "pencil") {
         CaptroHaptics.light()
@@ -531,6 +530,7 @@ final class UserProfileNativeModel: ObservableObject {
   @Published var user: MIRAUser?
   @Published var posts: [MIRAPost] = []
   @Published var isFollowing = false
+  @Published var connectionStatus = "none"
   @Published var followersCount = 0
   @Published var isBlocked = false
   @Published var isBlockedBy = false
@@ -605,17 +605,19 @@ final class UserProfileNativeModel: ObservableObject {
 
   func toggleFollow() async {
     let previousFollowing = isFollowing
+    let previousStatus = connectionStatus
     let previousFollowers = followersCount
-    let nextFollowing = !isFollowing
-    isFollowing = nextFollowing
-    followersCount = max(0, followersCount + (nextFollowing ? 1 : -1))
+    guard !["connected", "request_sent", "request_received", "blocked", "self"].contains(connectionStatus) else { return }
+    isFollowing = false
+    connectionStatus = "request_sent"
     do {
-      let response: FollowResponse = try await api.post("/users/\(userId)/follow", body: FollowBody(following: nextFollowing))
-      isFollowing = response.following ?? nextFollowing
-      followersCount = response.followersCount ?? followersCount
+      let response: ConnectionRequestResponse = try await api.post("/friends/request/\(userId)", body: ConnectionRequestBody(note: nil))
+      connectionStatus = response.normalizedStatus
+      isFollowing = connectionStatus == "connected"
       MIRAUserFollowSync.publish(MIRAUserFollowUpdate(userId: userId, following: isFollowing, followersCount: followersCount))
     } catch {
       isFollowing = previousFollowing
+      connectionStatus = previousStatus
       followersCount = previousFollowers
     }
   }
@@ -625,6 +627,7 @@ final class UserProfileNativeModel: ObservableObject {
       let _: EmptyResponse? = try await api.post("/users/\(userId)/block", body: EmptyBody())
       isBlocked = true
       isFollowing = false
+      connectionStatus = "blocked"
       posts = []
       MIRAUserFollowSync.publish(MIRAUserFollowUpdate(userId: userId, following: false))
       errorMessage = nil
@@ -648,9 +651,25 @@ final class UserProfileNativeModel: ObservableObject {
     }
   }
 
+  func removeConnection() async {
+    let previousFollowing = isFollowing
+    let previousStatus = connectionStatus
+    isFollowing = false
+    connectionStatus = "none"
+    do {
+      let _: EmptyResponse? = try await api.delete("/friends/\(userId)")
+      MIRAUserFollowSync.publish(MIRAUserFollowUpdate(userId: userId, following: false, followersCount: followersCount))
+    } catch {
+      isFollowing = previousFollowing
+      connectionStatus = previousStatus
+      errorMessage = "Could not remove this connection. Try again in a moment."
+    }
+  }
+
   private func apply(user freshUser: MIRAUser) {
     user = freshUser
     isFollowing = freshUser.viewerFollowing
+    connectionStatus = freshUser.viewerConnectionStatus
     followersCount = freshUser.followersCount ?? followersCount
     isBlocked = freshUser.viewerHasBlocked == true
     isBlockedBy = freshUser.viewerBlockedBy == true
@@ -805,14 +824,14 @@ public struct UserProfileNativeView: View {
           }
         }
 
-        if model.isFollowing {
+        if model.connectionStatus == "connected" {
           MIRAActionModalButton(
-            title: "Unfollow",
+            title: "Remove connection",
             systemImage: "person.badge.minus",
             staggerIndex: 2
           ) {
             dismissOptions()
-            Task { await model.toggleFollow() }
+            Task { await model.removeConnection() }
           }
         }
       }
@@ -881,12 +900,11 @@ public struct UserProfileNativeView: View {
 
       HStack(spacing: MIRATheme.Space.xl) {
         profileMetric("Posts", model.user?.postsCount ?? model.posts.count)
-        profileMetric("Followers", model.followersCount)
-        profileMetric("Following", model.user?.followingCount ?? 0)
+        profileMetric("Connections", model.followersCount)
       }
 
       if model.isBlocked {
-        profileStatusNotice("You blocked this user. Unblock them to message or follow again.")
+        profileStatusNotice("You blocked this user. Unblock them to message or connect again.")
       } else if model.isBlockedBy {
         profileStatusNotice("This profile is unavailable.")
       } else {
@@ -894,14 +912,15 @@ public struct UserProfileNativeView: View {
           Button {
             Task { await model.toggleFollow() }
           } label: {
-            Label(model.isFollowing ? "Following" : "Follow", systemImage: model.isFollowing ? "checkmark" : "plus")
+            Label(connectionButtonTitle, systemImage: connectionButtonIcon)
               .font(.system(size: 15, weight: .semibold))
-              .foregroundStyle(model.isFollowing ? MIRATheme.Color.textPrimary : .white)
+              .foregroundStyle(connectionButtonIsActive ? MIRATheme.Color.textPrimary : .white)
               .frame(maxWidth: .infinity, minHeight: 46)
-              .background(model.isFollowing ? MIRATheme.Color.surfaceSoft : MIRATheme.Color.forest)
+              .background(connectionButtonIsActive ? MIRATheme.Color.surfaceSoft : MIRATheme.Color.forest)
               .clipShape(Capsule())
           }
           .buttonStyle(.plain)
+          .disabled(connectionButtonIsActive)
 
           Button {
             Task { await openMessageChat() }
@@ -914,7 +933,7 @@ public struct UserProfileNativeView: View {
               .clipShape(Capsule())
           }
           .buttonStyle(.plain)
-          .disabled(isOpeningMessage)
+          .disabled(isOpeningMessage || model.connectionStatus != "connected")
         }
       }
     }
@@ -922,6 +941,36 @@ public struct UserProfileNativeView: View {
     .frame(maxWidth: .infinity)
     .miraCardSurface()
     .padding(.horizontal, MIRATheme.Space.md)
+  }
+
+  private var connectionButtonTitle: String {
+    switch model.connectionStatus {
+    case "connected":
+      return "Connected"
+    case "request_sent":
+      return "Sent"
+    case "request_received":
+      return "Respond"
+    default:
+      return "Connect"
+    }
+  }
+
+  private var connectionButtonIcon: String {
+    switch model.connectionStatus {
+    case "connected":
+      return "checkmark"
+    case "request_sent":
+      return "paperplane"
+    case "request_received":
+      return "person.crop.circle.badge.exclamationmark"
+    default:
+      return "plus"
+    }
+  }
+
+  private var connectionButtonIsActive: Bool {
+    ["connected", "request_sent", "request_received"].contains(model.connectionStatus)
   }
 
   private var profileSafetyMenu: some View {

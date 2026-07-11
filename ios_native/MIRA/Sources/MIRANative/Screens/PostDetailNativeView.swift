@@ -309,12 +309,13 @@ final class PostDetailModel: ObservableObject {
 
   func toggleFollowAuthor() async {
     guard let userId = post.userId, !userId.isEmpty else { return }
+    guard !["connected", "request_sent", "request_received", "blocked", "self"].contains(post.viewerConnectionStatus) else { return }
     let previous = post
-    let nextFollowing = !post.viewerFollowing
-    post = post.updating(following: nextFollowing)
+    post = post.updating(following: false, connectionStatus: "request_sent")
     do {
-      let response: FollowResponse = try await api.post("/users/\(userId)/follow", body: FollowBody(following: nextFollowing))
-      post = post.updating(following: response.following ?? nextFollowing)
+      let response: ConnectionRequestResponse = try await api.post("/friends/request/\(userId)", body: ConnectionRequestBody(note: nil))
+      let status = response.normalizedStatus
+      post = post.updating(following: status == "connected", connectionStatus: status)
     } catch {
       post = previous
     }

@@ -427,24 +427,25 @@ final class MainFeedModel: ObservableObject {
     defer { followingAuthorIds.remove(userId) }
 
     let previous = posts
-    posts = posts.map { $0.userId == userId ? $0.updating(following: true) : $0 }
+    posts = posts.map { $0.userId == userId ? $0.updating(following: false, connectionStatus: "request_sent") : $0 }
 
     do {
-      let response: FollowResponse = try await api.post("/users/\(userId)/follow", body: FollowBody(following: true))
-      let serverFollowing = response.following ?? true
-      posts = posts.map { $0.userId == userId ? $0.updating(following: serverFollowing) : $0 }
+      let response: ConnectionRequestResponse = try await api.post("/friends/request/\(userId)", body: ConnectionRequestBody(note: nil))
+      let status = response.normalizedStatus
+      let serverFollowing = status == "connected"
+      posts = posts.map { $0.userId == userId ? $0.updating(following: serverFollowing, connectionStatus: status) : $0 }
       cacheCurrentPosts()
-      MIRAUserFollowSync.publish(MIRAUserFollowUpdate(userId: userId, following: serverFollowing, followersCount: response.followersCount ?? response.followingCount))
-      return serverFollowing
+      MIRAUserFollowSync.publish(MIRAUserFollowUpdate(userId: userId, following: serverFollowing, followersCount: nil))
+      return status == "request_sent" || status == "connected"
     } catch {
       posts = previous
-      errorMessage = "Could not follow this user. Try again in a moment."
+      errorMessage = "Could not send connection request. Try again in a moment."
       return false
     }
   }
 
   func canFollowAuthor(_ post: MIRAPost) -> Bool {
-    if post.viewerFollowing { return false }
+    if ["connected", "request_sent", "request_received", "blocked", "self"].contains(post.viewerConnectionStatus) { return false }
 
     if currentUserId == nil && currentUsername == nil {
       Task { await loadCurrentUserIfNeeded() }
@@ -1419,7 +1420,7 @@ private struct MainNativePostCard: View {
     if canShowConnectionAction {
       CompactConnectionAction(
         title: connectionActionTitle,
-        isActive: post.viewerFollowing || isFollowConfirmationVisible,
+        isActive: connectionActionIsActive,
         isLoading: isSubmittingFollow,
         action: connectToAuthor
       )
@@ -1428,13 +1429,26 @@ private struct MainNativePostCard: View {
   }
 
   private var canShowConnectionAction: Bool {
-    canFollowAuthor || post.viewerFollowing || isSubmittingFollow || isFollowConfirmationVisible
+    canFollowAuthor || connectionActionTitle != "Connect" || isSubmittingFollow || isFollowConfirmationVisible
   }
 
   private var connectionActionTitle: String {
-    if post.viewerFollowing { return "Connected" }
+    switch post.viewerConnectionStatus {
+    case "connected":
+      return "Connected"
+    case "request_sent":
+      return "Sent"
+    case "request_received":
+      return "Respond"
+    default:
+      break
+    }
     if isSubmittingFollow || isFollowConfirmationVisible { return "Sent" }
     return "Connect"
+  }
+
+  private var connectionActionIsActive: Bool {
+    ["connected", "request_sent", "request_received"].contains(post.viewerConnectionStatus) || isFollowConfirmationVisible
   }
 
   private var captionBlock: some View {

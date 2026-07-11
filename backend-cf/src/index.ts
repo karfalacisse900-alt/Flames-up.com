@@ -3782,6 +3782,16 @@ function localizedNotificationCopy(language: 'en' | 'fr' | 'es', type: string, t
     if (language === 'es') return { title: 'Nueva conexión', body: `${actorName} te sigue.` };
     return { title: 'New Connection', body: `${actorName} connected with you.` };
   }
+  if (type === 'connection_request') {
+    if (language === 'fr') return { title: 'Demande de connexion', body: `${actorName} veut se connecter avec vous.` };
+    if (language === 'es') return { title: 'Solicitud de conexion', body: `${actorName} quiere conectar contigo.` };
+    return { title: 'Connection Request', body: `${actorName} wants to connect with you.` };
+  }
+  if (type === 'connection_accepted') {
+    if (language === 'fr') return { title: 'Connexion acceptee', body: `${actorName} a accepte votre demande.` };
+    if (language === 'es') return { title: 'Conexion aceptada', body: `${actorName} acepto tu solicitud.` };
+    return { title: 'Connection Accepted', body: `${actorName} accepted your request.` };
+  }
   return { title, body };
 }
 
@@ -6320,11 +6330,14 @@ async function supabasePublicUserPayload(c: any, viewerId: string, targetId: str
   const target = await supabaseUserByAnyId(c, targetId);
   if (!target || supabaseUserStatus(target) !== 'active') return { status: 404 as const, body: { detail: 'User not found' } };
   const targetAppId = publicId(target.id, 120);
-  const [followStats, isFollowing, block] = await Promise.all([
+  const [followStats, isFollowing, friendStatus, block] = await Promise.all([
     supabaseFollowStats(c, targetAppId),
     viewerId && viewerId !== targetAppId ? supabaseIsFollowing(c, viewerId, targetAppId) : Promise.resolve(false),
+    viewerId && viewerId !== targetAppId ? supabaseFriendStatus(c, viewerId, targetAppId) : Promise.resolve({ status: 'self' }),
     viewerId && viewerId !== targetAppId ? supabaseBlockPair(c, viewerId, targetAppId) : Promise.resolve(null),
   ]);
+  const connectionStatus = cleanText((friendStatus as any).status, 40) || (isFollowing ? 'connected' : 'none');
+  const connected = connectionStatus === 'connected' || connectionStatus === 'friends';
   const viewerHasBlocked = publicId(block?.blocker_id, 120) === viewerId && publicId(block?.blocked_id, 120) === targetAppId;
   const viewerBlockedBy = publicId(block?.blocker_id, 120) === targetAppId && publicId(block?.blocked_id, 120) === viewerId;
   const counts = parseJsonObject(target.counts);
@@ -6342,7 +6355,7 @@ async function supabasePublicUserPayload(c: any, viewerId: string, targetId: str
     following_count: followStats.following_count,
     posts_count: Number((counts as any).posts_count || 0),
   });
-  const privacyLocked = !!target.is_private && viewerId !== targetAppId && !isFollowing;
+  const privacyLocked = !!target.is_private && viewerId !== targetAppId && !connected;
   if (viewerBlockedBy || privacyLocked) {
     return {
       status: 200 as const,
@@ -6354,7 +6367,9 @@ async function supabasePublicUserPayload(c: any, viewerId: string, targetId: str
         followers_count: safe.followers_count,
         following_count: safe.following_count,
         posts_count: safe.posts_count,
-        is_following: isFollowing,
+        is_following: connected,
+        connection_status: connectionStatus,
+        connection_request_id: cleanText((friendStatus as any).request_id, 120),
         viewer_has_blocked: viewerHasBlocked,
         viewer_blocked_by: viewerBlockedBy,
         is_private: true,
@@ -6362,7 +6377,7 @@ async function supabasePublicUserPayload(c: any, viewerId: string, targetId: str
       },
     };
   }
-  return { status: 200 as const, body: { ...safe, is_following: isFollowing, viewer_has_blocked: viewerHasBlocked, viewer_blocked_by: viewerBlockedBy } };
+  return { status: 200 as const, body: { ...safe, is_following: connected, connection_status: connectionStatus, connection_request_id: cleanText((friendStatus as any).request_id, 120), viewer_has_blocked: viewerHasBlocked, viewer_blocked_by: viewerBlockedBy } };
 }
 
 async function supabaseSetFollowState(c: any, followerId: string, followingId: string, requested: boolean | null) {
@@ -6456,39 +6471,84 @@ async function supabaseFriendRequestRows(c: any, filters: Record<string, string>
   }).catch(() => []);
 }
 
-async function supabaseCreateFriendRequest(c: any, fromUserId: string, toUserId: string) {
+function sanitizeConnectionNote(value: unknown): string {
+  const note = cleanMultilineText(value, 140).trim();
+  if (!note) return '';
+  const compact = note.replace(/\s+/g, ' ');
+  if (compact.length > 120) return compact.slice(0, 120).trim();
+  return compact;
+}
+
+async function markConnectionRequestNotificationRead(c: any, userId: string, requestId: string) {
+  const uid = publicId(userId, 120);
+  const rid = publicId(requestId, 120);
+  if (!uid || !rid) return;
+  await supabaseAdminPatchRows(c, 'app_notifications', {
+    user_id: postgrestEqFilter(uid),
+    type: postgrestEqFilter('connection_request'),
+    reference_id: postgrestEqFilter(rid),
+  }, { is_read: true, updated_at: now() }).catch(() => undefined);
+}
+
+async function supabaseCreateFriendRequest(c: any, fromUserId: string, toUserId: string, input: { note?: string } = {}) {
   const [fromRow, toRow] = await Promise.all([
     supabaseUserByAnyId(c, fromUserId),
     supabaseUserByAnyId(c, toUserId),
   ]);
   const from = publicId(fromRow?.id || fromUserId, 120);
   const to = publicId(toRow?.id || toUserId, 120);
-  if (!from || !to || from === to) return { status: 400 as const, body: { detail: 'Cannot friend yourself' } };
-  if (!fromRow || supabaseUserStatus(fromRow) !== 'active') return { status: 403 as const, body: { detail: 'Your account cannot add friends right now.' } };
+  if (!from || !to || from === to) return { status: 400 as const, body: { detail: 'Cannot connect with yourself' } };
+  if (!fromRow || supabaseUserStatus(fromRow) !== 'active') return { status: 403 as const, body: { detail: 'Your account cannot send connection requests right now.' } };
   if (!toRow || supabaseUserStatus(toRow) !== 'active') return { status: 404 as const, body: { detail: 'User not found' } };
-  if (await supabaseBlockPair(c, from, to)) return { status: 403 as const, body: { detail: 'You cannot add this profile.' } };
-  if (await supabaseFriendshipExists(c, from, to)) return { status: 400 as const, body: { detail: 'Already friends', status: 'friends' } };
+  if (await supabaseBlockPair(c, from, to)) return { status: 403 as const, body: { detail: 'You cannot connect with this profile.' } };
+  if (await supabaseFriendshipExists(c, from, to)) return { status: 200 as const, body: { detail: 'Already connected', status: 'connected' } };
 
   const [outgoing, incoming] = await Promise.all([
     supabaseFriendRequestRows(c, { from_user_id: postgrestEqFilter(from), to_user_id: postgrestEqFilter(to) }, 1),
     supabaseFriendRequestRows(c, { from_user_id: postgrestEqFilter(to), to_user_id: postgrestEqFilter(from), status: postgrestEqFilter('pending') }, 1),
   ]);
-  if (incoming[0]) return { status: 400 as const, body: { detail: 'This user already sent you a request.', status: 'request_received', request_id: publicId(incoming[0].id, 120) } };
+  if (incoming[0]) return { status: 200 as const, body: { detail: 'This profile already sent you a request.', status: 'request_received', request_id: publicId(incoming[0].id, 120) } };
   const existing = outgoing[0];
-  if (existing?.status === 'pending') return { status: 400 as const, body: { detail: 'Already sent', status: 'pending', request_id: publicId(existing.id, 120) } };
+  if (existing?.status === 'pending') return { status: 200 as const, body: { detail: 'Request already sent', status: 'request_sent', request_id: publicId(existing.id, 120) } };
+  if (existing?.status === 'accepted') return { status: 200 as const, body: { detail: 'Already connected', status: 'connected', request_id: publicId(existing.id, 120) } };
 
   const id = publicId(existing?.id, 120) || uuid();
   const ts = now();
+  const note = sanitizeConnectionNote(input.note);
+  const actorName = cleanText(fromRow?.full_name || fromRow?.username, 120) || publicUsernameFor({ username: fromRow?.username }) || 'Someone';
   await supabaseAdminUpsert(c, 'app_friend_requests', [{
     id,
     from_user_id: from,
     to_user_id: to,
     status: 'pending',
-    metadata: { source: 'cloudflare_worker_primary' },
+    note,
+    accepted_at: null,
+    responded_at: null,
+    expired_at: null,
+    cancelled_at: null,
+    metadata: { source: 'cloudflare_worker_primary', connection: true },
     updated_at: ts,
     created_at: existing?.created_at || ts,
   }], 'from_user_id,to_user_id');
-  return { status: 200 as const, body: { id, status: 'pending' } };
+  await insertNotificationOnce(c, {
+    userId: to,
+    type: 'connection_request',
+    title: 'Connection Request',
+    body: `${actorName} wants to connect with you.`,
+    data: {
+      from_user_id: from,
+      actor_name: actorName,
+      connection_id: id,
+      request_id: id,
+      reference_id: id,
+      note,
+    },
+    dedupeKey: `connection_request:${from}:${to}:${id}`,
+    dedupeSeconds: 30 * 86400,
+  }).catch((error: any) => {
+    console.warn(JSON.stringify({ event: 'connection_request_notification_failed', code: getErrorCode(error).slice(0, 180) }));
+  });
+  return { status: 200 as const, body: { id, request_id: id, status: 'request_sent' } };
 }
 
 async function supabaseAcceptFriendRequest(c: any, userId: string, requestId: string) {
@@ -6502,13 +6562,34 @@ async function supabaseAcceptFriendRequest(c: any, userId: string, requestId: st
   const request = rows[0];
   if (!request) return { status: 404 as const, body: { detail: 'Not found' } };
   const from = publicId(request.from_user_id, 120);
+  if (!from) return { status: 404 as const, body: { detail: 'Not found' } };
   const ts = now();
-  await supabaseAdminPatchRows(c, 'app_friend_requests', { id: postgrestEqFilter(rid) }, { status: 'accepted', updated_at: ts });
+  await supabaseAdminPatchRows(c, 'app_friend_requests', { id: postgrestEqFilter(rid) }, { status: 'accepted', accepted_at: ts, responded_at: ts, updated_at: ts });
   await supabaseAdminUpsert(c, 'app_friendships', [
     { user_id: uid, friend_id: from, metadata: { source: 'friend_request', request_id: rid }, created_at: ts, updated_at: ts },
     { user_id: from, friend_id: uid, metadata: { source: 'friend_request', request_id: rid }, created_at: ts, updated_at: ts },
   ], 'user_id,friend_id');
-  return { status: 200 as const, body: { accepted: true } };
+  await markConnectionRequestNotificationRead(c, uid, rid);
+  const accepter = await supabaseUserByAnyId(c, uid).catch(() => null);
+  const actorName = cleanText(accepter?.full_name || accepter?.username, 120) || publicUsernameFor({ username: accepter?.username }) || 'Someone';
+  await insertNotificationOnce(c, {
+    userId: from,
+    type: 'connection_accepted',
+    title: 'Connection Accepted',
+    body: `${actorName} accepted your request.`,
+    data: {
+      from_user_id: uid,
+      actor_name: actorName,
+      connection_id: rid,
+      request_id: rid,
+      reference_id: rid,
+    },
+    dedupeKey: `connection_accepted:${uid}:${from}:${rid}`,
+    dedupeSeconds: 30 * 86400,
+  }).catch((error: any) => {
+    console.warn(JSON.stringify({ event: 'connection_accepted_notification_failed', code: getErrorCode(error).slice(0, 180) }));
+  });
+  return { status: 200 as const, body: { accepted: true, status: 'connected', connection_id: rid } };
 }
 
 async function supabaseRejectFriendRequest(c: any, userId: string, requestId: string) {
@@ -6520,8 +6601,26 @@ async function supabaseRejectFriendRequest(c: any, userId: string, requestId: st
     status: postgrestEqFilter('pending'),
   }, 1);
   if (!rows[0]) return { status: 404 as const, body: { detail: 'Request not found' } };
-  await supabaseAdminPatchRows(c, 'app_friend_requests', { id: postgrestEqFilter(rid) }, { status: 'rejected', updated_at: now() });
-  return { status: 200 as const, body: { rejected: true } };
+  const ts = now();
+  await supabaseAdminPatchRows(c, 'app_friend_requests', { id: postgrestEqFilter(rid) }, { status: 'declined', responded_at: ts, updated_at: ts });
+  await markConnectionRequestNotificationRead(c, uid, rid);
+  return { status: 200 as const, body: { declined: true, status: 'declined' } };
+}
+
+async function supabaseCancelFriendRequest(c: any, userId: string, requestId: string) {
+  const uid = publicId(userId, 120);
+  const rid = publicId(requestId, 120);
+  const rows = await supabaseFriendRequestRows(c, {
+    id: postgrestEqFilter(rid),
+    from_user_id: postgrestEqFilter(uid),
+    status: postgrestEqFilter('pending'),
+  }, 1);
+  const request = rows[0];
+  if (!request) return { status: 404 as const, body: { detail: 'Request not found' } };
+  const ts = now();
+  await supabaseAdminPatchRows(c, 'app_friend_requests', { id: postgrestEqFilter(rid) }, { status: 'cancelled', cancelled_at: ts, updated_at: ts });
+  await markConnectionRequestNotificationRead(c, publicId(request.to_user_id, 120), rid);
+  return { status: 200 as const, body: { cancelled: true, status: 'cancelled' } };
 }
 
 async function supabaseFriendRequestsPayload(c: any, userId: string) {
@@ -6539,6 +6638,7 @@ async function supabaseFriendRequestsPayload(c: any, userId: string) {
       from_user_id: publicId(row.from_user_id, 120),
       to_user_id: publicId(row.to_user_id, 120),
       status: cleanText(row.status, 40) || 'pending',
+      note: sanitizeConnectionNote(row.note),
       created_at: row.created_at,
       username: publicUsernameFor({ username: sender?.username }),
       full_name: cleanText(sender?.full_name, 160),
@@ -6574,8 +6674,9 @@ async function supabaseFriendStatus(c: any, viewerId: string, otherUserId: strin
   const otherRow = await supabaseUserByAnyId(c, otherUserId);
   const viewer = publicId(viewerRow?.id || viewerId, 120);
   const other = publicId(otherRow?.id || otherUserId, 120);
-  if (!viewer || !other || viewer === other || !otherRow) return { status: 'none' };
-  if (await supabaseFriendshipExists(c, viewer, other)) return { status: 'friends' };
+  if (!viewer || !other || viewer === other || !otherRow) return { status: viewer === other ? 'self' : 'none' };
+  if (await supabaseBlockPair(c, viewer, other)) return { status: 'blocked' };
+  if (await supabaseFriendshipExists(c, viewer, other)) return { status: 'connected' };
   const [sent, received] = await Promise.all([
     supabaseFriendRequestRows(c, { from_user_id: postgrestEqFilter(viewer), to_user_id: postgrestEqFilter(other), status: postgrestEqFilter('pending') }, 1),
     supabaseFriendRequestRows(c, { from_user_id: postgrestEqFilter(other), to_user_id: postgrestEqFilter(viewer), status: postgrestEqFilter('pending') }, 1),
@@ -6852,7 +6953,7 @@ function supabaseAppPostVisibleToViewer(row: any, author: any, viewerIds: Set<st
   return true;
 }
 
-function supabaseAppPostToLegacy(row: any, author: any, isFollowing: boolean, commentCount: number): any {
+function supabaseAppPostToLegacy(row: any, author: any, isFollowing: boolean, commentCount: number, connectionStatus = ''): any {
   const metadata = parseJsonObject(row?.metadata);
   const discover = parseJsonObject((metadata as any).discover_category);
   const raw = parseJsonObject((metadata as any).raw);
@@ -6938,6 +7039,7 @@ function supabaseAppPostToLegacy(row: any, author: any, isFollowing: boolean, co
     saves_count: Math.max(0, Number(row?.saves_count || 0)),
     liked_by: [],
     is_following: isFollowing,
+    connection_status: cleanText(connectionStatus, 40) || (isFollowing ? 'connected' : 'none'),
     created_at: row?.legacy_created_at || row?.created_at,
     updated_at: row?.legacy_updated_at || row?.updated_at,
   };
@@ -6996,12 +7098,36 @@ async function supabaseReadVisiblePosts(c: any, viewerId: string, options: Supab
     supabaseUsersByAnyIds(c, authorIds),
     supabasePostCommentCounts(c, candidateRows),
   ]);
-  const followingIds = await supabaseFollowingUserIds(c, viewerId, Array.from(new Set(authorIds.map((id) => publicId(id, 120)).filter(Boolean))));
+  const cleanAuthorIds = Array.from(new Set(authorIds.map((id) => publicId(id, 120)).filter(Boolean)));
+  const [followingIds, friendRows, outgoingRequests, incomingRequests] = cleanAuthorIds.length
+    ? await Promise.all([
+      supabaseFollowingUserIds(c, viewerId, cleanAuthorIds),
+      supabaseAdminQueryRows(c, 'app_friendships', {
+        select: 'friend_id',
+        filters: { user_id: postgrestEqFilter(publicId(viewerId, 120)), friend_id: postgrestInFilter(cleanAuthorIds) },
+        limit: Math.max(1, cleanAuthorIds.length),
+      }).catch(() => []),
+      supabaseAdminQueryRows(c, 'app_friend_requests', {
+        select: 'id,to_user_id',
+        filters: { from_user_id: postgrestEqFilter(publicId(viewerId, 120)), to_user_id: postgrestInFilter(cleanAuthorIds), status: postgrestEqFilter('pending') },
+        limit: Math.max(1, cleanAuthorIds.length),
+      }).catch(() => []),
+      supabaseAdminQueryRows(c, 'app_friend_requests', {
+        select: 'id,from_user_id',
+        filters: { to_user_id: postgrestEqFilter(publicId(viewerId, 120)), from_user_id: postgrestInFilter(cleanAuthorIds), status: postgrestEqFilter('pending') },
+        limit: Math.max(1, cleanAuthorIds.length),
+      }).catch(() => []),
+    ])
+    : [new Set<string>(), [], [], []];
+  const connectedIds = new Set(friendRows.map((row) => publicId(row.friend_id, 120)).filter(Boolean));
+  const outgoingRequestIds = new Set(outgoingRequests.map((row) => publicId(row.to_user_id, 120)).filter(Boolean));
+  const incomingRequestIds = new Set(incomingRequests.map((row) => publicId(row.from_user_id, 120)).filter(Boolean));
+  const connectedOrFollowingIds = new Set<string>([...Array.from(followingIds), ...Array.from(connectedIds)]);
   const viewerSet = new Set(viewerAliases);
   const rowsVisibleToViewer = candidateRows
     .filter((row) => {
       const author = authorMap.get(publicId(row?.app_user_id, 120)) || authorMap.get(isUuidText(row?.user_id) || '');
-      return supabaseAppPostVisibleToViewer(row, author, viewerSet, followingIds, blockedIds);
+      return supabaseAppPostVisibleToViewer(row, author, viewerSet, connectedOrFollowingIds, blockedIds);
     });
   if (ownerId) {
     rowsVisibleToViewer.sort((a, b) => {
@@ -7019,7 +7145,15 @@ async function supabaseReadVisiblePosts(c: any, viewerId: string, options: Supab
   const mapped = visibleRows.map((row) => {
     const author = authorMap.get(publicId(row?.app_user_id, 120)) || authorMap.get(isUuidText(row?.user_id) || '');
     const id = publicId(row?.legacy_post_id || row?.id, 120);
-    return supabaseAppPostToLegacy(row, author, followingIds.has(publicId(row?.app_user_id, 120)), commentCounts.get(id) || Number(row?.comments_count || 0));
+    const authorId = publicId(row?.app_user_id, 120);
+    const connectionStatus = connectedIds.has(authorId)
+      ? 'connected'
+      : outgoingRequestIds.has(authorId)
+        ? 'request_sent'
+        : incomingRequestIds.has(authorId)
+          ? 'request_received'
+          : 'none';
+    return supabaseAppPostToLegacy(row, author, connectedOrFollowingIds.has(authorId), commentCounts.get(id) || Number(row?.comments_count || 0), connectionStatus);
   });
   const ordered = postIds.length
     ? mapped.sort((a, b) => postIds.indexOf(publicId(a?.id, 120)) - postIds.indexOf(publicId(b?.id, 120)))
@@ -15224,6 +15358,9 @@ async function supabaseValidateDirectMessagePeer(c: any, currentUserId: string, 
     await logSecurityEvent(c, 'blocked_message_access_denied', currentUserId, { peer_id: peerId });
     return c.json({ detail: 'You cannot message this profile.' }, 403);
   }
+  if (!(await supabaseFriendshipExists(c, currentUserId, peerId))) {
+    return c.json({ detail: 'You can message this profile after they accept your connection request.' }, 403);
+  }
   return null;
 }
 
@@ -15766,7 +15903,10 @@ api.post('/notifications/mark-read', authMiddleware, async (c) => {
   const userId = getUserId(c);
   const supabaseRequired = requireSupabasePrimaryDatabase(c, 'notifications_mark_read');
   if (supabaseRequired) return supabaseRequired;
-  await supabaseAdminPatchRows(c, 'app_notifications', { user_id: postgrestEqFilter(userId) }, { is_read: true, updated_at: now() });
+  await supabaseAdminPatchRows(c, 'app_notifications', {
+    user_id: postgrestEqFilter(userId),
+    type: 'not.eq.connection_request',
+  }, { is_read: true, updated_at: now() });
   return c.json({ marked: true });
 });
 
@@ -15927,10 +16067,13 @@ api.post('/friends/request/:userId', authMiddleware, async (c) => {
   const tid = publicId(c.req.param('userId'), 120);
   const supabaseRequired = requireSupabasePrimaryDatabase(c, 'friend_request');
   if (supabaseRequired) return supabaseRequired;
-  if (fid === tid) return c.json({ detail: 'Cannot friend yourself' }, 400);
+  if (fid === tid) return c.json({ detail: 'Cannot connect with yourself' }, 400);
   const limited = await enforceRateLimit(c, 'friend_request', fid, 60, 60);
   if (limited) return limited;
-  const result = await supabaseCreateFriendRequest(c, fid, tid);
+  const bodyTooLarge = rejectLargeRequest(c, 10_000);
+  if (bodyTooLarge) return bodyTooLarge;
+  const body: any = await c.req.json().catch(() => ({}));
+  const result = await supabaseCreateFriendRequest(c, fid, tid, { note: body.note });
   return c.json(result.body, result.status);
 });
 api.post('/friends/accept/:requestId', authMiddleware, async (c) => {
@@ -15949,6 +16092,14 @@ api.post('/friends/reject/:requestId', authMiddleware, async (c) => {
   const limited = await enforceRateLimit(c, 'friend_reject', userId, 120, 60);
   if (limited) return limited;
   const result = await supabaseRejectFriendRequest(c, userId, requestId);
+  return c.json(result.body, result.status);
+});
+api.delete('/friends/request/:requestId', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const requestId = publicId(c.req.param('requestId'), 120);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'friend_request_cancel');
+  if (supabaseRequired) return supabaseRequired;
+  const result = await supabaseCancelFriendRequest(c, userId, requestId);
   return c.json(result.body, result.status);
 });
 api.get('/friends/requests', authMiddleware, async (c) => {

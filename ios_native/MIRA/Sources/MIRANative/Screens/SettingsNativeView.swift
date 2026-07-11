@@ -489,7 +489,7 @@ private struct NotificationSettingsNativeView: View {
       SettingsCard(title: "Device") {
         SettingsToggleRow(
           title: "Push notifications",
-          subtitle: "Captro sends notifications about activity on your posts, comments, follows, messages, and important account updates.",
+          subtitle: "Captro sends notifications about activity on your posts, comments, connections, messages, and important account updates.",
           systemImage: "bell.badge",
           isOn: Binding(
             get: { pushEnabled },
@@ -510,9 +510,9 @@ private struct NotificationSettingsNativeView: View {
       SettingsCard(title: "Activity") {
         SettingsToggleRow(title: "Likes", subtitle: "When someone likes your post.", systemImage: "heart", isOn: $notifyLikes)
         SettingsToggleRow(title: "Comments and replies", subtitle: "When someone comments or replies.", systemImage: "bubble.left", isOn: $notifyComments)
-        SettingsToggleRow(title: "Follows", subtitle: "When someone follows you.", systemImage: "person.badge.plus", isOn: $notifyFollows)
+        SettingsToggleRow(title: "Connections", subtitle: "When someone sends or accepts a connection request.", systemImage: "person.badge.plus", isOn: $notifyFollows)
         SettingsToggleRow(title: "Messages", subtitle: "New chat messages.", systemImage: "message", isOn: $notifyMessages)
-        SettingsToggleRow(title: "New posts", subtitle: "When people you follow post.", systemImage: "photo.on.rectangle", isOn: $notifyPosts)
+        SettingsToggleRow(title: "New posts", subtitle: "When connected people post.", systemImage: "photo.on.rectangle", isOn: $notifyPosts)
         SettingsToggleRow(title: "Email updates", subtitle: "Occasional account and safety emails.", systemImage: "envelope", isOn: $emailUpdates)
       }
     }
@@ -645,10 +645,10 @@ private struct DeleteAccountNativeView: View {
     SettingsDetailScaffold(title: "Delete account") {
       SettingsCard(title: "What happens") {
         VStack(alignment: .leading, spacing: 12) {
-          warningRow("Your profile, posts, comments, likes, follows, saved items, and push tokens are hidden immediately.")
+          warningRow("Your profile, posts, comments, likes, connections, saved items, and push tokens are hidden immediately.")
           warningRow("Captro schedules permanent deletion for 30 days from now.")
           warningRow("Signing in during that window lets you restore the account.")
-          warningRow("After permanent deletion, old posts, followers, likes, messages, username, and media are not restored.")
+          warningRow("After permanent deletion, old posts, connections, likes, messages, username, and media are not restored.")
         }
         .padding(16)
         .settingsPillSurface(cornerRadius: 28)

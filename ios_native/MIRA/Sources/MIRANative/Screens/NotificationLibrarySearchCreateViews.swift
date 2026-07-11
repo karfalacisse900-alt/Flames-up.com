@@ -8,6 +8,7 @@ import UIKit
 @MainActor
 final class NotificationNativeModel: ObservableObject {
   @Published var notifications: [MIRANotification] = []
+  @Published var connectionRequests: [MIRAConnectionRequest] = []
   @Published var isLoading = false
   @Published var errorMessage: String?
   let api: MIRAAPIClient
@@ -23,20 +24,55 @@ final class NotificationNativeModel: ObservableObject {
     isLoading = notifications.isEmpty
     defer { isLoading = false }
     do {
-      let fresh: [MIRANotification] = try await api.get("/notifications?limit=60")
+      async let freshNotifications: [MIRANotification] = api.get("/notifications?limit=60")
+      async let freshRequests: [MIRAConnectionRequest] = api.get("/friends/requests")
+      let (fresh, requests) = try await (freshNotifications, freshRequests)
       if notifications != fresh {
         withAnimation(CaptroMotion.feedChromeAnimation(reduceMotion: false)) {
           notifications = fresh
         }
       }
+      connectionRequests = requests
       await MIRAAppCacheStore.shared.saveNotifications(fresh)
       let _: EmptyResponse = try await api.post("/notifications/mark-read", body: EmptyBody())
-      notifications = await MIRAAppCacheStore.shared.markNotificationsRead(notifications)
+      notifications = notifications.map { item in
+        item.type == "connection_request" ? item : item.updatingRead(true)
+      }
       errorMessage = nil
     } catch {
-      if notifications.isEmpty {
+      if notifications.isEmpty && connectionRequests.isEmpty {
         errorMessage = "Notifications could not load."
       }
+    }
+  }
+
+  func accept(_ request: MIRAConnectionRequest) async {
+    guard !request.id.isEmpty else { return }
+    do {
+      let _: ConnectionRequestResponse = try await api.post("/friends/accept/\(request.id)", body: EmptyBody())
+      withAnimation(CaptroMotion.feedChromeAnimation(reduceMotion: false)) {
+        connectionRequests.removeAll { $0.id == request.id }
+        notifications.removeAll { notification in
+          notification.type == "connection_request" && (notification.data?.raw.contains(request.id) == true)
+        }
+      }
+    } catch {
+      errorMessage = "Could not accept this request."
+    }
+  }
+
+  func decline(_ request: MIRAConnectionRequest) async {
+    guard !request.id.isEmpty else { return }
+    do {
+      let _: EmptyResponse? = try await api.post("/friends/reject/\(request.id)", body: EmptyBody())
+      withAnimation(CaptroMotion.feedChromeAnimation(reduceMotion: false)) {
+        connectionRequests.removeAll { $0.id == request.id }
+        notifications.removeAll { notification in
+          notification.type == "connection_request" && (notification.data?.raw.contains(request.id) == true)
+        }
+      }
+    } catch {
+      errorMessage = "Could not decline this request."
     }
   }
 }
@@ -51,12 +87,15 @@ public struct NotificationNativeView: View {
   public var body: some View {
     ScrollView {
       LazyVStack(spacing: MIRATheme.Space.sm) {
-        if model.isLoading && model.notifications.isEmpty {
+        if model.isLoading && model.notifications.isEmpty && model.connectionRequests.isEmpty {
           ForEach(0..<6, id: \.self) { _ in notificationSkeleton }
-        } else if model.notifications.isEmpty {
+        } else if model.notifications.isEmpty && model.connectionRequests.isEmpty {
           MIRAEmptyState(title: "No notifications yet", message: "Likes, comments, connections, messages, and new posts will appear here.", systemImage: "bell")
         } else {
-          ForEach(model.notifications) { item in
+          if !model.connectionRequests.isEmpty {
+            connectionRequestSection
+          }
+          ForEach(model.notifications.filter { $0.type != "connection_request" }) { item in
             notificationRow(item)
           }
         }
@@ -69,6 +108,75 @@ public struct NotificationNativeView: View {
     .miraHideTabBarOnAppear()
     .task { await model.load() }
     .refreshable { await model.load() }
+  }
+
+  private var connectionRequestSection: some View {
+    VStack(alignment: .leading, spacing: MIRATheme.Space.sm) {
+      Text("Connection requests")
+        .font(.system(size: 18, weight: .semibold))
+        .foregroundStyle(MIRATheme.Color.textPrimary)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 2)
+
+      ForEach(model.connectionRequests) { request in
+        connectionRequestCard(request)
+      }
+    }
+  }
+
+  private func connectionRequestCard(_ request: MIRAConnectionRequest) -> some View {
+    VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
+      HStack(spacing: MIRATheme.Space.md) {
+        RemoteAvatar(url: request.profileImage, size: 46)
+        VStack(alignment: .leading, spacing: 3) {
+          Text(request.displayName)
+            .font(.system(size: 16, weight: .semibold))
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+          Text("wants to connect with you")
+            .font(.system(size: 14, weight: .regular))
+            .foregroundStyle(MIRATheme.Color.textSecondary)
+        }
+        Spacer()
+      }
+
+      if let note = request.note?.trimmingCharacters(in: .whitespacesAndNewlines), !note.isEmpty {
+        Text(note)
+          .font(.system(size: 14, weight: .medium))
+          .foregroundStyle(MIRATheme.Color.textSecondary)
+          .lineLimit(3)
+          .padding(MIRATheme.Space.sm)
+          .background(MIRATheme.Color.surfaceSoft)
+          .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+      }
+
+      HStack(spacing: MIRATheme.Space.sm) {
+        Button {
+          Task { await model.decline(request) }
+        } label: {
+          Text("Decline")
+            .font(.system(size: 15, weight: .semibold))
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+            .frame(maxWidth: .infinity, minHeight: 42)
+            .background(MIRATheme.Color.surfaceSoft)
+            .clipShape(Capsule())
+        }
+        .buttonStyle(.miraPress)
+
+        Button {
+          Task { await model.accept(request) }
+        } label: {
+          Text("Accept")
+            .font(.system(size: 15, weight: .semibold))
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity, minHeight: 42)
+            .background(MIRATheme.Color.forest)
+            .clipShape(Capsule())
+        }
+        .buttonStyle(.miraPress)
+      }
+    }
+    .padding(MIRATheme.Space.md)
+    .miraCardSurface()
   }
 
   private func notificationRow(_ item: MIRANotification) -> some View {
@@ -114,7 +222,7 @@ public struct NotificationNativeView: View {
     switch type {
     case "like": return "heart.fill"
     case "comment", "comment_reply": return "bubble.left.fill"
-    case "follow": return "person.badge.plus"
+    case "follow", "connection_request", "connection_accepted": return "person.badge.plus"
     case "message": return "message.fill"
     case "coin_gift": return "gift.fill"
     case "new_post": return "sparkles"

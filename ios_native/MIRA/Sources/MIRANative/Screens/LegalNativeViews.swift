@@ -408,7 +408,7 @@ private let privacySections: [LegalSection] = [
       "Captro collects and processes content you create or choose to share so the app can work."
     ],
     bullets: [
-      "Photos, story videos, captions, comments, profile details, bookmarks, saves, likes, follows, reports, moderation notes, and support requests.",
+      "Photos, story videos, captions, comments, profile details, bookmarks, saves, likes, connections, reports, moderation notes, and support requests.",
       "Messages and attachments you send in chat, including metadata such as sender, receiver, timestamps, delivery status, read status if used, and safety signals.",
       "Photos, videos, avatars, thumbnails, posters, and media processing records may be stored, optimized, resized, transcoded, scanned for safety, and delivered through Cloudflare services such as Cloudflare Workers, Cloudflare Images, R2, Stream, Queues, CDN, and Workers AI where configured."
     ]
@@ -444,7 +444,7 @@ private let privacySections: [LegalSection] = [
     ],
     bullets: [
       "Device type, operating system, app version, IP address, approximate network location, crash data, performance data, diagnostics, logs, security signals, and interaction data.",
-      "Notification tokens and notification settings so Captro can send alerts for messages, comments, follows, reports, safety events, or other app activity if you allow notifications.",
+      "Notification tokens and notification settings so Captro can send alerts for messages, comments, connections, reports, safety events, or other app activity if you allow notifications.",
       "Cache data may be stored on your device so Feed, Discover, profiles, chat, media previews, and settings can load faster."
     ]
   ),
@@ -468,7 +468,7 @@ private let privacySections: [LegalSection] = [
       "Captro may share information only as needed to operate the app, protect users, comply with law, or support the service."
     ],
     bullets: [
-      "With other users when you post, comment, share a profile, appear in Discover, send messages, like, save, follow, or use public app features.",
+      "With other users when you post, comment, share a profile, appear in Discover, send messages, like, save, connect, or use public app features.",
       "With service providers such as Supabase for authentication and structured Postgres data, Cloudflare for Worker API, media storage, media processing, CDN delivery, and safety jobs, Apple, Google, Mapbox, notification providers, analytics/diagnostics providers, moderation tools, and support tools where configured.",
       "With law enforcement, courts, regulators, or safety partners when required by law, legal process, emergency, abuse prevention, or protection of users and the public.",
       "If Captro is involved in a merger, sale, financing, acquisition, restructuring, or transfer of assets, information may transfer as part of that transaction."
@@ -481,7 +481,7 @@ private let privacySections: [LegalSection] = [
     ],
     bullets: [
       "Update profile details, username, profile photo, privacy settings, and notification preferences where available.",
-      "Use block, report, delete, hide, unsave, unfollow, or remove-place controls where available.",
+      "Use block, report, delete, hide, unsave, remove connection, or remove-place controls where available.",
       "Turn off camera, microphone, photos, notifications, or location permissions in iOS Settings.",
       "Clear local cache where the app provides a cache clearing control.",
       "Request account deletion in Settings or by contacting support."

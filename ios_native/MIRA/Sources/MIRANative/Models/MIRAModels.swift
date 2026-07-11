@@ -73,6 +73,8 @@ public struct MIRAUser: Codable, Identifiable, Hashable {
   public let followingCount: Int?
   public let postsCount: Int?
   public let isFollowing: Bool?
+  public let connectionStatus: String?
+  public let connectionRequestId: String?
   public let viewerHasBlocked: Bool?
   public let viewerBlockedBy: Bool?
   public let privacyLocked: Bool?
@@ -99,7 +101,12 @@ public struct MIRAUser: Codable, Identifiable, Hashable {
   }
 
   public var viewerFollowing: Bool {
-    isFollowing == true
+    connectionStatus?.lowercased() == "connected" || isFollowing == true
+  }
+
+  public var viewerConnectionStatus: String {
+    let clean = connectionStatus?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+    return clean.isEmpty ? (viewerFollowing ? "connected" : "none") : clean
   }
 
   public var isDeletionPending: Bool {
@@ -184,6 +191,7 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
   public let liked: Bool?
   public let savedByMe: Bool?
   public let isFollowing: Bool?
+  public let connectionStatus: String?
   public let saved: FlexibleBool?
   public let following: FlexibleBool?
   public let followed: FlexibleBool?
@@ -320,8 +328,14 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
   }
 
   public var viewerFollowing: Bool {
+    if connectionStatus?.lowercased() == "connected" { return true }
     if let isFollowing { return isFollowing }
     return following?.value == true || followed?.value == true
+  }
+
+  public var viewerConnectionStatus: String {
+    let clean = connectionStatus?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+    return clean.isEmpty ? (viewerFollowing ? "connected" : "none") : clean
   }
 
   public var isPinned: Bool {
@@ -334,7 +348,8 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
     commentsCount: Int? = nil,
     saved: Bool? = nil,
     savesCount: Int? = nil,
-    following: Bool? = nil
+    following: Bool? = nil,
+    connectionStatus: String? = nil
   ) -> MIRAPost {
     MIRAPost(
       id: id,
@@ -413,6 +428,7 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
       liked: liked ?? self.liked,
       savedByMe: saved ?? savedByMe,
       isFollowing: following ?? isFollowing,
+      connectionStatus: connectionStatus ?? self.connectionStatus,
       saved: saved.map(FlexibleBool.init) ?? self.saved,
       following: self.following,
       followed: self.followed
@@ -497,6 +513,7 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
       liked: liked,
       savedByMe: savedByMe,
       isFollowing: isFollowing,
+      connectionStatus: connectionStatus,
       saved: saved,
       following: following,
       followed: followed
@@ -970,6 +987,8 @@ public struct MIRAComment: Codable, Identifiable, Hashable {
           followingCount: nil,
           postsCount: nil,
           isFollowing: nil,
+          connectionStatus: nil,
+          connectionRequestId: nil,
           viewerHasBlocked: nil,
           viewerBlockedBy: nil,
           privacyLocked: nil,
@@ -1725,6 +1744,46 @@ public struct PostReportBody: Encodable {
 
 public struct FollowBody: Encodable {
   public let following: Bool
+}
+
+public struct ConnectionRequestBody: Encodable {
+  public let note: String?
+}
+
+public struct ConnectionRequestResponse: Decodable {
+  public let id: String?
+  public let requestId: String?
+  public let connectionId: String?
+  public let status: String?
+  public let detail: String?
+
+  public var normalizedStatus: String {
+    let clean = status?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+    if clean == "friends" { return "connected" }
+    return clean.isEmpty ? "request_sent" : clean
+  }
+}
+
+public struct MIRAConnectionRequest: Codable, Identifiable, Hashable {
+  public let id: String
+  public let fromUserId: String?
+  public let toUserId: String?
+  public let status: String?
+  public let note: String?
+  public let createdAt: String?
+  public let username: String?
+  public let fullName: String?
+  public let profileImage: String?
+
+  public var displayName: String {
+    if MIRAUsernameRules.isValidPublicUsername(username) {
+      return MIRAUsernameRules.normalized(username)
+    }
+    if let fullName, !fullName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      return fullName.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    return "Captro"
+  }
 }
 
 public struct LikeBody: Encodable {
