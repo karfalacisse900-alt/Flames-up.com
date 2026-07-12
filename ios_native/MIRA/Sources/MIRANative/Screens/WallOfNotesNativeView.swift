@@ -3,6 +3,8 @@ import SwiftUI
 @MainActor
 final class MIRAWallNotesModel: ObservableObject {
   @Published private(set) var notes: [MIRAWallNote] = []
+  @Published private(set) var overview: MIRAWallOverview?
+  @Published private(set) var currentWallID = MIRAWallDestination.global.rawValue
   @Published private(set) var isLoading = false
   @Published private(set) var errorMessage: String?
 
@@ -10,6 +12,7 @@ final class MIRAWallNotesModel: ObservableObject {
   private var spatialIndex = MIRAWallSpatialIndex()
   private var inFlightSignature: String?
   private var lastLoadedSignature: String?
+  private var activeViewSignature: String?
 
   init(api: MIRAAPIClient) {
     self.api = api
@@ -23,12 +26,50 @@ final class MIRAWallNotesModel: ObservableObject {
     spatialIndex.note(at: point)
   }
 
-  func load(bounds: CGRect, zoom: CGFloat, filter: String, query: String, force: Bool = false) async {
+  func selectWall(_ wallID: String) {
+    guard wallID != currentWallID else { return }
+    currentWallID = wallID
+    notes = []
+    overview = nil
+    spatialIndex.rebuild(with: [])
+    inFlightSignature = nil
+    lastLoadedSignature = nil
+    activeViewSignature = nil
+    errorMessage = nil
+  }
+
+  func loadOverview(wallID: String, force: Bool = false) async {
+    guard force || overview?.wallId != wallID else { return }
+    var components = URLComponents()
+    components.path = "/wall/overview"
+    components.queryItems = [URLQueryItem(name: "wall_id", value: wallID)]
+    do {
+      let response: MIRAWallOverview = try await api.get(components.string ?? "/wall/overview")
+      guard currentWallID == wallID else { return }
+      overview = response
+    } catch is CancellationError {
+      return
+    } catch {
+      if notes.isEmpty { errorMessage = error.localizedDescription }
+    }
+  }
+
+  func load(bounds: CGRect, zoom: CGFloat, wallID: String, filter: String, query: String, force: Bool = false) async {
     let expanded = bounds.insetBy(dx: -max(420, bounds.width * 0.35), dy: -max(600, bounds.height * 0.35))
+    let cleanQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+    let viewSignature = "\(wallID):\(filter):\(cleanQuery)"
+    if activeViewSignature != viewSignature {
+      notes = []
+      spatialIndex.rebuild(with: [])
+      lastLoadedSignature = nil
+      inFlightSignature = nil
+      activeViewSignature = viewSignature
+    }
     let signature = [
+      wallID,
       String(Int(expanded.minX / 320)), String(Int(expanded.maxX / 320)),
       String(Int(expanded.minY / 320)), String(Int(expanded.maxY / 320)),
-      String(format: "%.1f", zoom), filter, query.trimmingCharacters(in: .whitespacesAndNewlines),
+      String(format: "%.1f", zoom), filter, cleanQuery,
     ].joined(separator: ":")
     guard force || (signature != lastLoadedSignature && signature != inFlightSignature) else { return }
     inFlightSignature = signature
@@ -42,7 +83,7 @@ final class MIRAWallNotesModel: ObservableObject {
     var components = URLComponents()
     components.path = "/wall/notes"
     components.queryItems = [
-      URLQueryItem(name: "wall_id", value: "global"),
+      URLQueryItem(name: "wall_id", value: wallID),
       URLQueryItem(name: "min_x", value: String(Double(expanded.minX))),
       URLQueryItem(name: "max_x", value: String(Double(expanded.maxX))),
       URLQueryItem(name: "min_y", value: String(Double(expanded.minY))),
@@ -54,6 +95,7 @@ final class MIRAWallNotesModel: ObservableObject {
     ]
     do {
       let response: MIRAWallNotesResponse = try await api.get(components.string ?? "/wall/notes")
+      guard currentWallID == wallID, activeViewSignature == viewSignature else { return }
       merge(response.notes, around: bounds)
       lastLoadedSignature = signature
     } catch is CancellationError {
@@ -66,6 +108,7 @@ final class MIRAWallNotesModel: ObservableObject {
   func create(_ body: MIRACreateWallNoteBody) async throws -> MIRAWallNote {
     let response: MIRAWallNoteResponse = try await api.post("/wall/notes", body: body)
     merge([response.note], around: CGRect(x: response.note.worldX - 900, y: response.note.worldY - 900, width: 1800, height: 1800))
+    await loadOverview(wallID: response.note.wallId, force: true)
     return response.note
   }
 
@@ -142,6 +185,10 @@ public struct WallOfNotesNativeView: View {
   @State private var query = ""
   @State private var selectedFilter = "all"
   @State private var showFilters = false
+  @State private var selectedWall = MIRAWallDestination.global
+  @State private var showWallSelector = false
+  @State private var showOverview = false
+  @State private var initialFrameWallID: String?
   @State private var placementNoteID: String?
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -160,11 +207,13 @@ public struct WallOfNotesNativeView: View {
 
         wallNotes(bounds: bounds, viewport: viewport)
 
-        chrome(viewport: viewport)
-
-        if model.notes.isEmpty, !model.isLoading, model.errorMessage == nil {
-          emptyState
+        if shouldShowWallStartSign {
+          wallStartSign(viewport: viewport)
+        } else if shouldShowFilteredEmptySign {
+          filteredEmptySign(viewport: viewport)
         }
+
+        chrome(viewport: viewport)
 
         if let message = model.errorMessage, model.notes.isEmpty {
           errorState(message: message, bounds: bounds)
@@ -191,13 +240,48 @@ public struct WallOfNotesNativeView: View {
       )
       .task(id: loadKey(bounds: bounds)) {
         try? await Task.sleep(for: .milliseconds(180))
+        guard !Task.isCancelled, initialFrameWallID == selectedWall.id else { return }
+        await model.load(
+          bounds: bounds,
+          zoom: camera.scale,
+          wallID: selectedWall.id,
+          filter: selectedFilter,
+          query: query
+        )
+      }
+      .task(id: selectedWall.id) {
+        initialFrameWallID = nil
+        model.selectWall(selectedWall.id)
+        await model.loadOverview(wallID: selectedWall.id, force: true)
         guard !Task.isCancelled else { return }
-        await model.load(bounds: bounds, zoom: camera.scale, filter: selectedFilter, query: query)
+        if let overview = model.overview {
+          camera = MIRAWallLayout.initialCamera(
+            noteBounds: overview.noteBounds,
+            noteCount: overview.totalCount,
+            viewport: viewport,
+            includeStartSign: overview.totalCount < 5
+          )
+        } else {
+          camera = MIRAWallCamera(scale: 0.92)
+        }
+        initialFrameWallID = selectedWall.id
+        await model.load(
+          bounds: camera.worldBounds(viewport: viewport),
+          zoom: camera.scale,
+          wallID: selectedWall.id,
+          filter: selectedFilter,
+          query: query,
+          force: true
+        )
       }
       .sheet(isPresented: $isCreating) {
-        MIRACreateWallNoteView(camera: camera, api: api) { body in
+        MIRACreateWallNoteView(camera: camera, wall: selectedWall, api: api) { body in
           let note = try await model.create(body)
           placementNoteID = note.id
+          withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
+            camera.center = CGPoint(x: note.worldX + note.width * 0.5, y: note.worldY + note.height * 0.5)
+            camera.scale = max(camera.scale, 0.72)
+          }
           Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(800))
             placementNoteID = nil
@@ -238,6 +322,36 @@ public struct WallOfNotesNativeView: View {
           .frame(maxHeight: 470)
         }
       }
+      .miraActionModal(isPresented: $showWallSelector) { dismiss in
+        MIRAActionModalCard {
+          VStack(spacing: 7) {
+            ForEach(MIRAWallDestination.allCases) { wall in
+              MIRAActionModalButton(
+                title: wall.title,
+                systemImage: wall.systemImage,
+                staggerIndex: MIRAWallDestination.allCases.firstIndex(of: wall) ?? 0
+              ) {
+                selectedFilter = "all"
+                query = ""
+                selectedWall = wall
+                dismiss()
+              }
+            }
+          }
+        }
+      }
+      .miraActionModal(isPresented: $showOverview) { dismiss in
+        MIRAActionModalCard {
+          MIRAWallOverviewPanel(
+            wall: selectedWall,
+            overview: model.overview,
+            notes: model.notes
+          ) {
+            recenter(viewport: viewport)
+            dismiss()
+          }
+        }
+      }
     }
     .background(MIRATheme.Color.launchBackground)
   }
@@ -256,7 +370,8 @@ public struct WallOfNotesNativeView: View {
           .frame(width: note.width * camera.scale, height: note.height * camera.scale)
           .position(center)
           .rotationEffect(.degrees(note.rotation))
-          .scaleEffect(placementNoteID == note.id ? 1 : 1)
+          .scaleEffect(placementNoteID == note.id && !reduceMotion ? 1.06 : 1)
+          .offset(y: placementNoteID == note.id && !reduceMotion ? -7 : 0)
           .transition(.scale(scale: reduceMotion ? 1 : 1.18).combined(with: .opacity))
           .allowsHitTesting(false)
           .zIndex(Double(note.zIndex))
@@ -273,12 +388,18 @@ public struct WallOfNotesNativeView: View {
             .font(.system(size: 25, weight: .bold, design: .serif))
             .foregroundStyle(MIRATheme.Color.textPrimary)
 
-          Label("Global", systemImage: "globe.americas.fill")
-            .font(.system(size: 12, weight: .semibold))
-            .padding(.horizontal, 11)
-            .frame(height: 32)
-            .background(MIRATheme.Color.surface.opacity(0.94), in: Capsule())
-            .overlay(Capsule().stroke(MIRATheme.Color.hairline, lineWidth: 1))
+          Button {
+            showWallSelector = true
+          } label: {
+            Label(selectedWall.title, systemImage: selectedWall.systemImage)
+              .font(.system(size: 12, weight: .semibold))
+              .padding(.horizontal, 11)
+              .frame(height: 30)
+              .background(MIRATheme.Color.surface.opacity(0.94), in: Capsule())
+              .overlay(Capsule().stroke(MIRATheme.Color.hairline, lineWidth: 1))
+          }
+          .buttonStyle(.miraPress)
+          .accessibilityLabel("Choose wall. Current wall: \(selectedWall.title)")
         }
 
         Spacer(minLength: 8)
@@ -288,7 +409,7 @@ public struct WallOfNotesNativeView: View {
             .textFieldStyle(.plain)
             .font(.system(size: 14, weight: .medium))
             .padding(.horizontal, 13)
-            .frame(height: 40)
+            .frame(height: 38)
             .background(MIRATheme.Color.surface.opacity(0.96), in: Capsule())
             .frame(maxWidth: 190)
             .submitLabel(.search)
@@ -312,9 +433,7 @@ public struct WallOfNotesNativeView: View {
 
       HStack {
         wallIconButton(systemImage: "location.north.fill") {
-          withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
-            camera = MIRAWallCamera()
-          }
+          recenter(viewport: viewport)
         }
 
         Spacer()
@@ -334,10 +453,8 @@ public struct WallOfNotesNativeView: View {
 
         Spacer()
 
-        wallIconButton(systemImage: camera.scale < 0.6 ? "plus.magnifyingglass" : "minus.magnifyingglass") {
-          withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
-            camera.scale = camera.scale < 0.6 ? 0.92 : 0.38
-          }
+        wallIconButton(systemImage: "map.fill") {
+          showOverview = true
         }
       }
       .padding(.horizontal, 18)
@@ -349,30 +466,15 @@ public struct WallOfNotesNativeView: View {
   private func wallIconButton(systemImage: String, action: @escaping () -> Void) -> some View {
     Button(action: action) {
       Image(systemName: systemImage)
-        .font(.system(size: 17, weight: .semibold))
+        .font(.system(size: 15, weight: .semibold))
         .foregroundStyle(MIRATheme.Color.textPrimary)
-        .frame(width: 44, height: 44)
+        .frame(width: 38, height: 38)
         .background(MIRATheme.Color.surface.opacity(0.94), in: Circle())
         .overlay(Circle().stroke(MIRATheme.Color.hairline, lineWidth: 1))
         .shadow(color: .black.opacity(0.07), radius: 10, y: 4)
     }
+    .frame(width: 44, height: 44)
     .buttonStyle(.miraPress)
-  }
-
-  private var emptyState: some View {
-    VStack(spacing: 10) {
-      Image(systemName: "note.text")
-        .font(.system(size: 30, weight: .light))
-      Text(selectedFilter == "all" ? "This part of the wall is open." : "No matching notes here yet.")
-        .font(.system(size: 16, weight: .semibold, design: .serif))
-      Text("Move around or place the first note.")
-        .font(.system(size: 13))
-        .foregroundStyle(MIRATheme.Color.textSecondary)
-    }
-    .foregroundStyle(MIRATheme.Color.textPrimary)
-    .padding(24)
-    .background(MIRATheme.Color.surface.opacity(0.88), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-    .allowsHitTesting(false)
   }
 
   private func errorState(message: String, bounds: CGRect) -> some View {
@@ -384,7 +486,16 @@ public struct WallOfNotesNativeView: View {
         .foregroundStyle(MIRATheme.Color.textSecondary)
         .multilineTextAlignment(.center)
       Button("Retry") {
-        Task { await model.load(bounds: bounds, zoom: camera.scale, filter: selectedFilter, query: query, force: true) }
+        Task {
+          await model.load(
+            bounds: bounds,
+            zoom: camera.scale,
+            wallID: selectedWall.id,
+            filter: selectedFilter,
+            query: query,
+            force: true
+          )
+        }
       }
       .buttonStyle(.borderedProminent)
       .tint(MIRATheme.Color.forest)
@@ -433,7 +544,185 @@ public struct WallOfNotesNativeView: View {
   private func loadKey(bounds: CGRect) -> String {
     [
       Int(bounds.midX / 260), Int(bounds.midY / 260), Int(camera.scale * 10),
-    ].map(String.init).joined(separator: ":") + ":\(selectedFilter):\(query)"
+    ].map(String.init).joined(separator: ":") + ":\(selectedWall.id):\(selectedFilter):\(query)"
+  }
+
+  private var wallNoteCount: Int { model.overview?.totalCount ?? model.notes.count }
+
+  private var shouldShowWallStartSign: Bool {
+    initialFrameWallID == selectedWall.id && wallNoteCount < 5 && selectedFilter == "all" && query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !model.isLoading
+  }
+
+  private var shouldShowFilteredEmptySign: Bool {
+    initialFrameWallID == selectedWall.id && model.notes.isEmpty && !model.isLoading && model.errorMessage == nil && !shouldShowWallStartSign
+  }
+
+  private func recenter(viewport: CGSize) {
+    let overview = model.overview
+    withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
+      camera = MIRAWallLayout.initialCamera(
+        noteBounds: overview?.noteBounds,
+        noteCount: overview?.totalCount ?? model.notes.count,
+        viewport: viewport,
+        includeStartSign: (overview?.totalCount ?? model.notes.count) < 5
+      )
+    }
+  }
+
+  private func wallStartSign(viewport: CGSize) -> some View {
+    let rect = MIRAWallLayout.startSignRect(noteBounds: model.overview?.noteBounds, noteCount: wallNoteCount)
+    let center = camera.screenPoint(forWorld: CGPoint(x: rect.midX, y: rect.midY), viewport: viewport)
+    return MIRAWallStartSign(
+      isLocalWall: selectedWall != .global,
+      onAdd: { isCreating = true },
+      onViewGlobal: {
+        selectedFilter = "all"
+        query = ""
+        selectedWall = .global
+      }
+    )
+    .frame(width: rect.width, height: rect.height)
+    .scaleEffect(camera.scale)
+    .position(center)
+    .zIndex(20_000)
+  }
+
+  private func filteredEmptySign(viewport: CGSize) -> some View {
+    let center = camera.screenPoint(forWorld: camera.center, viewport: viewport)
+    return MIRAWallFilteredEmptySign {
+      selectedFilter = "all"
+      query = ""
+    }
+    .frame(width: 260, height: 150)
+    .scaleEffect(max(0.72, min(1, camera.scale)))
+    .position(center)
+    .zIndex(20_000)
+  }
+}
+
+private struct MIRAWallStartSign: View {
+  let isLocalWall: Bool
+  let onAdd: () -> Void
+  let onViewGlobal: () -> Void
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      Text("THE WALL IS JUST BEGINNING")
+        .font(.system(size: 15, weight: .semibold, design: .serif))
+        .tracking(0.8)
+
+      Text(isLocalWall
+        ? "Only a few notes have reached this wall. Leave one here, or explore Global."
+        : "Leave a thought, recommendation, confession, question, or something worth remembering.")
+        .font(.system(size: 13, weight: .regular, design: .serif))
+        .lineSpacing(3)
+        .fixedSize(horizontal: false, vertical: true)
+
+      HStack(spacing: 18) {
+        Button("Place the next note", action: onAdd)
+        if isLocalWall {
+          Button("View Global", action: onViewGlobal)
+        }
+      }
+      .font(.system(size: 12, weight: .bold))
+      .underline()
+    }
+    .foregroundStyle(Color(red: 0.11, green: 0.10, blue: 0.08))
+    .padding(.horizontal, 22)
+    .padding(.vertical, 20)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+    .background(Color(red: 0.975, green: 0.955, blue: 0.90))
+    .overlay(Rectangle().stroke(Color.black.opacity(0.08), lineWidth: 0.8))
+    .overlay(alignment: .top) {
+      Capsule()
+        .fill(Color.white.opacity(0.58))
+        .frame(width: 68, height: 13)
+        .offset(y: -7)
+        .rotationEffect(.degrees(-1.2))
+    }
+    .shadow(color: .black.opacity(0.14), radius: 5, x: 1, y: 4)
+    .rotationEffect(.degrees(0.7))
+    .accessibilityElement(children: .contain)
+  }
+}
+
+private struct MIRAWallFilteredEmptySign: View {
+  let onClear: () -> Void
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      Text("A QUIET CORNER")
+        .font(.system(size: 14, weight: .semibold, design: .serif))
+        .tracking(0.7)
+      Text("No real notes match this view yet.")
+        .font(.system(size: 13, design: .serif))
+      Button("Show all notes", action: onClear)
+        .font(.system(size: 12, weight: .bold))
+        .underline()
+    }
+    .foregroundStyle(Color(red: 0.11, green: 0.10, blue: 0.08))
+    .padding(20)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+    .background(Color(red: 0.965, green: 0.945, blue: 0.89))
+    .overlay(Rectangle().stroke(Color.black.opacity(0.08), lineWidth: 0.8))
+    .shadow(color: .black.opacity(0.12), radius: 4, x: 1, y: 3)
+    .rotationEffect(.degrees(-0.8))
+  }
+}
+
+private struct MIRAWallOverviewPanel: View {
+  let wall: MIRAWallDestination
+  let overview: MIRAWallOverview?
+  let notes: [MIRAWallNote]
+  let onRecenter: () -> Void
+
+  var body: some View {
+    VStack(spacing: 16) {
+      HStack {
+        VStack(alignment: .leading, spacing: 3) {
+          Text(wall.title)
+            .font(.system(size: 19, weight: .bold, design: .serif))
+          Text("\(overview?.totalCount ?? notes.count) real notes")
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(MIRATheme.Color.textSecondary)
+        }
+        Spacer()
+        Image(systemName: "map.fill")
+          .font(.system(size: 18, weight: .semibold))
+      }
+
+      Canvas { context, size in
+        let inset = CGRect(origin: .zero, size: size).insetBy(dx: 12, dy: 12)
+        context.fill(Path(roundedRect: inset, cornerRadius: 12), with: .color(Color(red: 0.90, green: 0.87, blue: 0.78)))
+        guard let bounds = overview?.noteBounds, bounds.width > 0, bounds.height > 0 else { return }
+        let scale = min(inset.width / max(bounds.width, 1), inset.height / max(bounds.height, 1)) * 0.82
+        let center = CGPoint(x: inset.midX, y: inset.midY)
+        for note in notes.prefix(500) {
+          let noteCenter = CGPoint(x: note.worldX + note.width * 0.5, y: note.worldY + note.height * 0.5)
+          let point = CGPoint(
+            x: center.x + (noteCenter.x - bounds.midX) * scale,
+            y: center.y + (noteCenter.y - bounds.midY) * scale
+          )
+          let width = max(3, min(13, note.width * scale))
+          let height = max(3, min(13, note.height * scale))
+          context.fill(
+            Path(roundedRect: CGRect(x: point.x - width * 0.5, y: point.y - height * 0.5, width: width, height: height), cornerRadius: 1),
+            with: .color(MIRAWallPaperColor.color(for: note.colorToken))
+          )
+        }
+      }
+      .frame(height: 180)
+      .overlay(RoundedRectangle(cornerRadius: 14).stroke(MIRATheme.Color.hairline, lineWidth: 1))
+
+      Button(action: onRecenter) {
+        Label("Center this wall", systemImage: "location.north.fill")
+          .font(.system(size: 15, weight: .bold))
+          .foregroundStyle(.white)
+          .frame(maxWidth: .infinity, minHeight: 48)
+          .background(MIRATheme.Color.forest, in: Capsule())
+      }
+      .buttonStyle(.miraPress)
+    }
   }
 }
 
@@ -482,21 +771,42 @@ private struct MIRAWallBackground: View {
 
   var body: some View {
     Canvas { context, size in
-      context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(Color(red: 0.925, green: 0.900, blue: 0.835)))
-      let spacing = max(26, 72 * camera.scale)
-      let offsetX = (-camera.center.x * camera.scale).truncatingRemainder(dividingBy: spacing)
-      let offsetY = (-camera.center.y * camera.scale).truncatingRemainder(dividingBy: spacing)
-      var dots = Path()
-      var x = offsetX
-      while x < size.width {
-        var y = offsetY
-        while y < size.height {
-          dots.addEllipse(in: CGRect(x: x, y: y, width: 1.2, height: 1.2))
-          y += spacing
+      let base = Color(red: 0.925, green: 0.900, blue: 0.835)
+      context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(base))
+
+      let tileWorldSize: CGFloat = 178
+      let bounds = camera.worldBounds(viewport: size, preload: tileWorldSize)
+      let minTileX = Int(floor(bounds.minX / tileWorldSize))
+      let maxTileX = Int(ceil(bounds.maxX / tileWorldSize))
+      let minTileY = Int(floor(bounds.minY / tileWorldSize))
+      let maxTileY = Int(ceil(bounds.maxY / tileWorldSize))
+      for tileY in minTileY...maxTileY {
+        for tileX in minTileX...maxTileX {
+          let seed = abs((tileX &* 73_856_093) ^ (tileY &* 19_349_663))
+          let world = CGPoint(
+            x: CGFloat(tileX) * tileWorldSize + CGFloat(seed % 91),
+            y: CGFloat(tileY) * tileWorldSize + CGFloat((seed / 97) % 83)
+          )
+          let point = camera.screenPoint(forWorld: world, viewport: size)
+          let patchSize = CGFloat(34 + seed % 74) * max(0.55, camera.scale)
+          let patch = CGRect(x: point.x - patchSize * 0.5, y: point.y - patchSize * 0.32, width: patchSize, height: patchSize * 0.64)
+          let shade = seed.isMultiple(of: 2) ? Color.white.opacity(0.018) : Color.black.opacity(0.015)
+          context.fill(Path(ellipseIn: patch), with: .color(shade))
         }
-        x += spacing
       }
-      context.fill(dots, with: .color(Color.black.opacity(0.045)))
+
+      let grainSpacing: CGFloat = 23
+      var grain = Path()
+      var y: CGFloat = 4
+      while y < size.height {
+        var x = (Int(y) % 41 == 0 ? 9 : 3)
+        while CGFloat(x) < size.width {
+          grain.addEllipse(in: CGRect(x: CGFloat(x), y: y, width: 0.75, height: 0.75))
+          x += Int(grainSpacing)
+        }
+        y += grainSpacing
+      }
+      context.fill(grain, with: .color(Color.black.opacity(0.025)))
     }
     .allowsHitTesting(false)
   }
@@ -508,9 +818,15 @@ struct MIRAWallNoteSurface: View {
 
   var body: some View {
     let color = MIRAWallPaperColor.color(for: note.colorToken)
+    let attachment = deterministicAttachment
     ZStack {
       RoundedRectangle(cornerRadius: zoom > 1.1 ? 3 : 1, style: .continuous)
         .fill(color)
+
+      if zoom > 0.72 {
+        MIRAWallPaperFiber()
+          .opacity(0.16)
+      }
 
       if zoom >= 0.48 {
         Text(displayText)
@@ -542,12 +858,33 @@ struct MIRAWallNoteSurface: View {
         }
       }
     }
-    .overlay(alignment: .top) {
-      if zoom > 0.85 {
+    .overlay {
+      RoundedRectangle(cornerRadius: zoom > 1.1 ? 3 : 1, style: .continuous)
+        .stroke(Color.black.opacity(0.075), lineWidth: max(0.45, zoom * 0.7))
+    }
+    .overlay(alignment: .bottom) {
+      Rectangle()
+        .fill(Color.black.opacity(0.045))
+        .frame(height: max(0.7, zoom * 1.7))
+    }
+    .overlay(alignment: attachment == 2 ? .topTrailing : .top) {
+      if zoom > 0.78, attachment == 0 {
         Capsule()
           .fill(Color.white.opacity(0.44))
           .frame(width: max(20, 40 * zoom), height: max(4, 8 * zoom))
           .offset(y: -max(2, 4 * zoom))
+          .rotationEffect(.degrees(-1.4))
+      } else if zoom > 0.78, attachment == 1 {
+        Circle()
+          .fill(Color(red: 0.51, green: 0.16, blue: 0.12))
+          .frame(width: max(5, 9 * zoom), height: max(5, 9 * zoom))
+          .overlay(Circle().stroke(Color.white.opacity(0.35), lineWidth: 0.8))
+          .shadow(color: .black.opacity(0.22), radius: 1.5, y: 1)
+          .offset(y: -max(1, 3 * zoom))
+      } else if zoom > 0.78 {
+        TriangleFold()
+          .fill(Color.white.opacity(0.28))
+          .frame(width: max(10, 19 * zoom), height: max(10, 19 * zoom))
       }
     }
     .shadow(color: .black.opacity(zoom < 0.45 ? 0.07 : 0.16), radius: zoom < 0.45 ? 1 : 5 * zoom, x: 0, y: max(1, 3 * zoom))
@@ -567,6 +904,36 @@ struct MIRAWallNoteSurface: View {
     default: return .system(size: size, weight: .semibold, design: .rounded)
     }
   }
+
+  private var deterministicAttachment: Int {
+    note.id.utf8.reduce(0) { (($0 &* 31) &+ Int($1)) % 10_007 } % 3
+  }
+}
+
+private struct MIRAWallPaperFiber: View {
+  var body: some View {
+    Canvas { context, size in
+      for index in 0..<11 {
+        let y = size.height * CGFloat(index + 1) / 12
+        var line = Path()
+        line.move(to: CGPoint(x: 0, y: y))
+        line.addLine(to: CGPoint(x: size.width, y: y + (index.isMultiple(of: 2) ? 0.6 : -0.5)))
+        context.stroke(line, with: .color(Color.black.opacity(0.10)), lineWidth: 0.35)
+      }
+    }
+    .allowsHitTesting(false)
+  }
+}
+
+private struct TriangleFold: Shape {
+  func path(in rect: CGRect) -> Path {
+    var path = Path()
+    path.move(to: CGPoint(x: rect.maxX, y: rect.minY))
+    path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+    path.addLine(to: CGPoint(x: rect.minX, y: rect.minY))
+    path.closeSubpath()
+    return path
+  }
 }
 
 private enum MIRAWallPaperColor {
@@ -585,6 +952,7 @@ private enum MIRAWallPaperColor {
 
 private struct MIRACreateWallNoteView: View {
   let camera: MIRAWallCamera
+  let wall: MIRAWallDestination
   let api: MIRAAPIClient
   let onPublish: (MIRACreateWallNoteBody) async throws -> MIRAWallNote
 
@@ -748,7 +1116,7 @@ private struct MIRACreateWallNoteView: View {
 
   private var livePreview: some View {
     let preview = MIRAWallNote(
-      id: "preview", wallId: "global", publishingIdentity: identity,
+      id: "preview", wallId: wall.id, publishingIdentity: identity,
       body: cleanBody.isEmpty ? "What do you want to leave on the wall?" : cleanBody,
       category: category.isEmpty ? nil : category, colorToken: colorToken, styleToken: styleToken,
       worldX: 0, worldY: 0, width: 220, height: styleToken == "vertical_card" ? 270 : 220,
@@ -815,14 +1183,12 @@ private struct MIRACreateWallNoteView: View {
     errorMessage = nil
     let noteWidth = styleToken == "vertical_card" ? 176.0 : 190.0
     let noteHeight = styleToken == "vertical_card" ? 236.0 : 190.0
-    let jitterX = Double.random(in: -90...90)
-    let jitterY = Double.random(in: -120...120)
     let body = MIRACreateWallNoteBody(
-      wallId: "global", publishingIdentity: identity, body: text,
+      wallId: wall.id, publishingIdentity: identity, body: text,
       category: category.isEmpty ? nil : category, colorToken: colorToken, styleToken: styleToken,
-      worldX: Double(camera.center.x) - noteWidth * 0.5 + jitterX,
-      worldY: Double(camera.center.y) - noteHeight * 0.5 + jitterY,
-      width: noteWidth, height: noteHeight, rotation: Double.random(in: -2.4...2.4),
+      worldX: Double(camera.center.x) - noteWidth * 0.5,
+      worldY: Double(camera.center.y) - noteHeight * 0.5,
+      width: noteWidth, height: noteHeight, rotation: 0,
       approximateLocation: approximateLocation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : approximateLocation
     )
     Task {

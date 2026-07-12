@@ -1,4 +1,62 @@
+import CoreGraphics
 import Foundation
+
+public enum MIRAWallDestination: String, CaseIterable, Codable, Identifiable {
+  case global
+  case nearby
+  case newYorkCity = "new_york_city"
+  case brooklyn
+  case upperManhattan = "upper_manhattan"
+
+  public var id: String { rawValue }
+
+  public var title: String {
+    switch self {
+    case .global: "Global"
+    case .nearby: "Nearby"
+    case .newYorkCity: "New York City"
+    case .brooklyn: "Brooklyn"
+    case .upperManhattan: "Upper Manhattan"
+    }
+  }
+
+  public var subtitle: String {
+    switch self {
+    case .global: "Notes from across Captro"
+    case .nearby: "Your broad local area"
+    case .newYorkCity: "Across New York City"
+    case .brooklyn: "Brooklyn wall"
+    case .upperManhattan: "Upper Manhattan wall"
+    }
+  }
+
+  public var systemImage: String {
+    switch self {
+    case .global: "globe.americas.fill"
+    case .nearby: "location.fill"
+    case .newYorkCity: "building.2.fill"
+    case .brooklyn: "building.columns.fill"
+    case .upperManhattan: "building.fill"
+    }
+  }
+}
+
+public struct MIRAWallOverview: Decodable, Equatable {
+  public let wallId: String
+  public let displayName: String
+  public let totalCount: Int
+  public let minX: Double?
+  public let maxX: Double?
+  public let minY: Double?
+  public let maxY: Double?
+
+  public var noteBounds: CGRect? {
+    guard totalCount > 0,
+          let minX, let maxX, let minY, let maxY,
+          maxX > minX, maxY > minY else { return nil }
+    return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+  }
+}
 
 public struct MIRAWallAuthorPreview: Codable, Hashable {
   public let userId: String?

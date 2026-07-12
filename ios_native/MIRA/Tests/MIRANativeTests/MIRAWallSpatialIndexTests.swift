@@ -36,6 +36,41 @@ final class MIRAWallSpatialIndexTests: XCTestCase {
     XCTAssertNil(index.note(at: CGPoint(x: 520, y: 520)))
   }
 
+  func testSparseWallCameraFramesNotesAndStartSign() {
+    let notes = CGRect(x: -220, y: -150, width: 540, height: 465)
+    let sign = MIRAWallLayout.startSignRect(noteBounds: notes, noteCount: 3)
+    let camera = MIRAWallLayout.initialCamera(
+      noteBounds: notes,
+      noteCount: 3,
+      viewport: CGSize(width: 390, height: 844),
+      includeStartSign: true
+    )
+    let visible = camera.worldBounds(viewport: CGSize(width: 390, height: 844))
+
+    XCTAssertTrue(visible.intersects(notes))
+    XCTAssertTrue(visible.intersects(sign))
+    XCTAssertGreaterThanOrEqual(camera.scale, 0.62)
+  }
+
+  func testDenseWallStartsWiderThanSparseWall() {
+    let bounds = CGRect(x: -900, y: -700, width: 1800, height: 1400)
+    let sparse = MIRAWallLayout.initialCamera(
+      noteBounds: bounds,
+      noteCount: 3,
+      viewport: CGSize(width: 430, height: 932),
+      includeStartSign: false
+    )
+    let dense = MIRAWallLayout.initialCamera(
+      noteBounds: bounds,
+      noteCount: 40,
+      viewport: CGSize(width: 430, height: 932),
+      includeStartSign: false
+    )
+
+    XCTAssertLessThanOrEqual(dense.scale, sparse.scale)
+    XCTAssertLessThanOrEqual(dense.scale, 0.58)
+  }
+
   private func makeNote(id: String, x: Double, y: Double, z: Int) -> MIRAWallNote {
     MIRAWallNote(
       id: id, wallId: "global", publishingIdentity: "ghost", body: "A real note",

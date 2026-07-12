@@ -16726,6 +16726,154 @@ api.post('/stripe/webhook', async (c) => {
 const WALL_NOTE_COLORS = new Set(['butter', 'cream', 'rose', 'sky', 'mint', 'peach', 'paper']);
 const WALL_NOTE_STYLES = new Set(['sticky_square', 'vertical_card', 'torn_paper', 'editorial', 'question', 'confession', 'recommendation']);
 const WALL_NOTE_CATEGORIES = new Set(['question', 'confession', 'food', 'advice', 'life', 'local_recommendation']);
+const WALLS = new Map([
+  ['global', 'Global'],
+  ['nearby', 'Nearby'],
+  ['new_york_city', 'New York City'],
+  ['brooklyn', 'Brooklyn'],
+  ['upper_manhattan', 'Upper Manhattan'],
+]);
+
+type WallOverview = {
+  wallId: string;
+  displayName: string;
+  totalCount: number;
+  minX: number | null;
+  maxX: number | null;
+  minY: number | null;
+  maxY: number | null;
+};
+
+function normalizedWallId(value: unknown): string | null {
+  const wallId = cleanText(value || 'global', 80).toLowerCase().replace(/[^a-z0-9_-]/g, '') || 'global';
+  return WALLS.has(wallId) ? wallId : null;
+}
+
+async function supabaseWallOverview(c: any, wallId: string): Promise<WallOverview> {
+  const url = new URL(`${getSupabaseUrl(c)}/rest/v1/rpc/captro_wall_overview`);
+  const response = await fetch(url.toString(), {
+    method: 'POST',
+    headers: { ...supabaseAdminAuthHeaders(c), 'content-type': 'application/json' },
+    body: JSON.stringify({ p_wall_id: wallId }),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`SUPABASE_WALL_OVERVIEW_FAILED:${response.status}:${text.slice(0, 240)}`);
+  }
+  const data: any = await response.json().catch(() => []);
+  const row = Array.isArray(data) ? data[0] : data;
+  return {
+    wallId,
+    displayName: WALLS.get(wallId) || 'Wall',
+    totalCount: Math.max(0, Number(row?.total_count || 0)),
+    minX: row?.min_x != null && Number.isFinite(Number(row.min_x)) ? Number(row.min_x) : null,
+    maxX: row?.max_x != null && Number.isFinite(Number(row.max_x)) ? Number(row.max_x) : null,
+    minY: row?.min_y != null && Number.isFinite(Number(row.min_y)) ? Number(row.min_y) : null,
+    maxY: row?.max_y != null && Number.isFinite(Number(row.max_y)) ? Number(row.max_y) : null,
+  };
+}
+
+async function claimWallPlacementSlot(c: any, wallId: string): Promise<number> {
+  const url = new URL(`${getSupabaseUrl(c)}/rest/v1/rpc/captro_claim_wall_slot`);
+  const response = await fetch(url.toString(), {
+    method: 'POST',
+    headers: { ...supabaseAdminAuthHeaders(c), 'content-type': 'application/json' },
+    body: JSON.stringify({ p_wall_id: wallId }),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`SUPABASE_WALL_SLOT_FAILED:${response.status}:${text.slice(0, 240)}`);
+  }
+  const data: any = await response.json().catch(() => 0);
+  const value = Array.isArray(data) ? data[0] : data;
+  return Math.max(0, Number(value || 0));
+}
+
+function wallOverlapRatio(candidate: { x: number; y: number; width: number; height: number }, existing: any): number {
+  const left = Math.max(candidate.x, Number(existing?.world_x || 0));
+  const top = Math.max(candidate.y, Number(existing?.world_y || 0));
+  const right = Math.min(candidate.x + candidate.width, Number(existing?.world_x || 0) + Number(existing?.width || 184));
+  const bottom = Math.min(candidate.y + candidate.height, Number(existing?.world_y || 0) + Number(existing?.height || 184));
+  if (right <= left || bottom <= top) return 0;
+  const intersection = (right - left) * (bottom - top);
+  const existingArea = Math.max(1, Number(existing?.width || 184) * Number(existing?.height || 184));
+  return intersection / Math.max(1, Math.min(candidate.width * candidate.height, existingArea));
+}
+
+function stableWallHash(value: string): number {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+async function resolveWallNotePlacement(
+  c: any,
+  wallId: string,
+  width: number,
+  height: number,
+  noteId: string,
+): Promise<{ x: number; y: number; rotation: number; totalBefore: number }> {
+  const claimedSlot = await claimWallPlacementSlot(c, wallId);
+  const [overview, existing] = await Promise.all([
+    supabaseWallOverview(c, wallId),
+    supabaseAdminQueryRows(c, 'wall_notes', {
+      select: 'id,world_x,world_y,width,height,created_at',
+      filters: {
+        wall_id: postgrestEqFilter(wallId),
+        status: postgrestEqFilter('active'),
+        moderation_status: postgrestEqFilter('approved'),
+      },
+      order: 'created_at.desc',
+      limit: 750,
+    }),
+  ]);
+  const count = Math.max(claimedSlot, overview.totalCount);
+  const earlySlots = [
+    { x: -95, y: -85 },
+    { x: 125, y: -150 },
+    { x: -220, y: 125 },
+    { x: 65, y: 105 },
+    { x: 295, y: -5 },
+  ];
+  const hash = stableWallHash(noteId);
+  const rotation = Number((((hash % 401) / 100) - 2).toFixed(2));
+  if (count < earlySlots.length) {
+    const slot = earlySlots[count];
+    return { x: slot.x, y: slot.y, rotation, totalBefore: count };
+  }
+
+  const minX = overview.minX ?? -width * 0.5;
+  const maxX = overview.maxX ?? width * 0.5;
+  const minY = overview.minY ?? -height * 0.5;
+  const maxY = overview.maxY ?? height * 0.5;
+  const centerX = (minX + maxX) * 0.5;
+  const centerY = (minY + maxY) * 0.5;
+  const clusterRadius = Math.max(180, Math.hypot(maxX - minX, maxY - minY) * 0.42);
+  const seedAngle = (hash % 6283) / 1000;
+  const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+  let best = { x: centerX - width * 0.5, y: centerY - height * 0.5, score: Number.POSITIVE_INFINITY };
+
+  for (let attempt = 0; attempt < 220; attempt += 1) {
+    const layer = Math.floor(attempt / 18);
+    const radius = clusterRadius + 42 + layer * 58 + (attempt % 3) * 15;
+    const angle = seedAngle + (count + attempt) * goldenAngle;
+    const candidate = {
+      x: centerX + Math.cos(angle) * radius - width * 0.5,
+      y: centerY + Math.sin(angle) * radius - height * 0.5,
+      width,
+      height,
+    };
+    const overlap = existing.reduce((highest, note) => Math.max(highest, wallOverlapRatio(candidate, note)), 0);
+    const gapPenalty = Math.abs(radius - (clusterRadius + 70));
+    const score = overlap * 10_000 + gapPenalty;
+    if (score < best.score) best = { x: candidate.x, y: candidate.y, score };
+    if (overlap <= 0.22) return { x: candidate.x, y: candidate.y, rotation, totalBefore: count };
+  }
+  return { x: best.x, y: best.y, rotation, totalBefore: count };
+}
 
 function wallNotePayload(row: any, author: any, reactedByViewer = false, savedByViewer = false) {
   const identity = cleanText(row?.publishing_identity || 'ghost', 20) === 'author' ? 'author' : 'ghost';
@@ -16825,7 +16973,8 @@ api.get('/wall/notes', authMiddleware, async (c) => {
   const limited = await enforceRateLimit(c, 'wall_notes_read', viewerId, 180, 60);
   if (limited) return limited;
 
-  const wallId = cleanText(c.req.query('wall_id') || 'global', 80).toLowerCase().replace(/[^a-z0-9_-]/g, '') || 'global';
+  const wallId = normalizedWallId(c.req.query('wall_id'));
+  if (!wallId) return c.json({ detail: 'Unknown wall.' }, 400);
   const minX = clampFloat(c.req.query('min_x'), -200000, 200000, -1400);
   const maxX = clampFloat(c.req.query('max_x'), -200000, 200000, 1400);
   const minY = clampFloat(c.req.query('min_y'), -200000, 200000, -2200);
@@ -16882,6 +17031,28 @@ api.get('/wall/notes', authMiddleware, async (c) => {
   return response;
 });
 
+api.get('/wall/overview', authMiddleware, async (c) => {
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'wall_overview_read');
+  if (supabaseRequired) return supabaseRequired;
+  const viewerId = getUserId(c);
+  const limited = await enforceRateLimit(c, 'wall_overview_read', viewerId, 90, 60);
+  if (limited) return limited;
+  const wallId = normalizedWallId(c.req.query('wall_id'));
+  if (!wallId) return c.json({ detail: 'Unknown wall.' }, 400);
+  const overview = await supabaseWallOverview(c, wallId);
+  const response = c.json({
+    wall_id: overview.wallId,
+    display_name: overview.displayName,
+    total_count: overview.totalCount,
+    min_x: overview.minX,
+    max_x: overview.maxX,
+    min_y: overview.minY,
+    max_y: overview.maxY,
+  });
+  response.headers.set('cache-control', 'private, max-age=20, stale-while-revalidate=60');
+  return response;
+});
+
 api.post('/wall/notes', authMiddleware, async (c) => {
   const supabaseRequired = requireSupabasePrimaryDatabase(c, 'wall_note_create');
   if (supabaseRequired) return supabaseRequired;
@@ -16903,29 +17074,35 @@ api.post('/wall/notes', authMiddleware, async (c) => {
   const colorToken = cleanText(b.color_token, 30);
   const styleToken = cleanText(b.style_token, 40);
   const category = cleanText(b.category, 50).toLowerCase();
+  const wallId = normalizedWallId(b.wall_id);
+  if (!wallId) return c.json({ detail: 'Unknown wall.' }, 400);
   const approximateLocation = cleanText(b.approximate_location, 80);
   if (approximateLocation && looksLikePrivatePlace(approximateLocation, approximateLocation, 'address')) {
     return c.json({ detail: 'Use a neighborhood or city, not a private address.' }, 400);
   }
+  const noteId = uuid();
+  const width = clampFloat(b.width, 96, 360, 184);
+  const height = clampFloat(b.height, 96, 420, 184);
+  const placement = await resolveWallNotePlacement(c, wallId, width, height, noteId);
   const row = {
-    id: uuid(),
-    wall_id: cleanText(b.wall_id || 'global', 80).toLowerCase().replace(/[^a-z0-9_-]/g, '') || 'global',
+    id: noteId,
+    wall_id: wallId,
     author_account_id: userId,
     publishing_identity: identity,
     body,
     category: WALL_NOTE_CATEGORIES.has(category) ? category : null,
     color_token: WALL_NOTE_COLORS.has(colorToken) ? colorToken : 'butter',
     style_token: WALL_NOTE_STYLES.has(styleToken) ? styleToken : 'sticky_square',
-    world_x: clampFloat(b.world_x, -200000, 200000, 0),
-    world_y: clampFloat(b.world_y, -200000, 200000, 0),
-    width: clampFloat(b.width, 96, 360, 184),
-    height: clampFloat(b.height, 96, 420, 184),
-    rotation: clampFloat(b.rotation, -3, 3, 0),
+    world_x: placement.x,
+    world_y: placement.y,
+    width,
+    height,
+    rotation: placement.rotation,
     z_index: clampNumber(b.z_index, -100000, 100000, Math.floor(Date.now() / 1000)),
     approximate_location: approximateLocation || null,
     moderation_status: 'approved',
     status: 'active',
-    metadata: { source: 'captro_native_wall' },
+    metadata: { source: 'captro_native_wall', layout_version: 'growing_cluster_v1', placed_after: placement.totalBefore },
   };
   const inserted = await supabaseAdminInsertRows(c, 'wall_notes', [row], '*');
   const author = await supabaseUserByAnyId(c, userId);

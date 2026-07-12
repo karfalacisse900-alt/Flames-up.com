@@ -41,6 +41,53 @@ public struct MIRAWallCamera: Equatable {
   }
 }
 
+public enum MIRAWallLayout {
+  public static func startSignRect(noteBounds: CGRect?, noteCount: Int) -> CGRect {
+    guard noteCount > 0, let noteBounds else {
+      return CGRect(x: -145, y: -105, width: 290, height: 210)
+    }
+    let signSize = CGSize(width: 278, height: 196)
+    if noteBounds.width < 430 {
+      return CGRect(
+        x: noteBounds.maxX + 46,
+        y: noteBounds.midY - signSize.height * 0.52,
+        width: signSize.width,
+        height: signSize.height
+      )
+    }
+    return CGRect(
+      x: noteBounds.minX + 24,
+      y: noteBounds.maxY + 42,
+      width: signSize.width,
+      height: signSize.height
+    )
+  }
+
+  public static func initialCamera(
+    noteBounds: CGRect?,
+    noteCount: Int,
+    viewport: CGSize,
+    includeStartSign: Bool
+  ) -> MIRAWallCamera {
+    var content = noteBounds ?? CGRect(x: -110, y: -90, width: 220, height: 180)
+    if includeStartSign {
+      content = content.union(startSignRect(noteBounds: noteBounds, noteCount: noteCount))
+    }
+    let horizontalSpace = max(220, viewport.width - 34)
+    let verticalSpace = max(300, viewport.height - 220)
+    let fitScale = min(horizontalSpace / max(content.width, 1), verticalSpace / max(content.height, 1))
+    let range: ClosedRange<CGFloat>
+    switch noteCount {
+    case 0: range = 0.78...1.02
+    case 1...3: range = 0.62...1.02
+    case 4...12: range = 0.46...0.88
+    default: range = 0.28...0.58
+    }
+    let scale = min(max(fitScale * 0.92, range.lowerBound), range.upperBound)
+    return MIRAWallCamera(center: CGPoint(x: content.midX, y: content.midY), scale: scale)
+  }
+}
+
 public struct MIRAWallSpatialIndex {
   private struct Cell: Hashable {
     let x: Int
