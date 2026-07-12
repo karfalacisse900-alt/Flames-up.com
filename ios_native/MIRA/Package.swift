@@ -24,6 +24,10 @@ let package = Package(
         "MIRACoreCpp",
         .product(name: "GoogleSignIn", package: "GoogleSignIn-iOS")
       ]
+    ),
+    .testTarget(
+      name: "MIRANativeTests",
+      dependencies: ["MIRANative"]
     )
   ],
   cxxLanguageStandard: .cxx17

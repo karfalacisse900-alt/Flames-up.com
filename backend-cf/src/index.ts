@@ -3248,6 +3248,7 @@ const REPORT_TARGET_TYPES = new Set([
   'handshake_request',
   'story',
   'note',
+  'wall_note',
   'music',
   'sound',
   'recommendation',
@@ -3369,6 +3370,7 @@ function normalizeReportTargetType(value: unknown): string {
   if (type === 'user_profile') return 'profile';
   if (type === 'discover' || type === 'discover_item') return 'discover_post';
   if (type === 'status') return 'story';
+  if (type === 'wall' || type === 'wallnote' || type === 'wall_note') return 'wall_note';
   if (type === 'handshake') return 'handshake_request';
   return REPORT_TARGET_TYPES.has(type) ? type : 'other';
 }
@@ -3955,6 +3957,21 @@ async function supabaseResolveReportTarget(
       const targetOwnerUserId = isReporter(senderId) ? receiverId : senderId;
       if (!targetOwnerUserId || isReporter(targetOwnerUserId)) return { ok: false, status: 400, detail: 'You cannot report your own message.' };
       return { ok: true, contentId: publicId(message.id || reportedId, 120), targetOwnerUserId };
+    }
+
+    if (type === 'wall_note') {
+      const rows = await supabaseAdminQueryRows(c, 'wall_notes', {
+        select: 'id,author_account_id,status,moderation_status',
+        filters: { id: postgrestEqFilter(reportedId) },
+        limit: 1,
+      });
+      const note = rows[0];
+      if (!note || cleanText(note.status, 40) !== 'active' || cleanText(note.moderation_status, 40) !== 'approved') {
+        return { ok: false, status: 404, detail: 'Reported note was not found.' };
+      }
+      const ownerId = publicId(note.author_account_id, 120);
+      if (isReporter(ownerId)) return { ok: false, status: 400, detail: 'You cannot report your own note.' };
+      return { ok: true, contentId: publicId(note.id || reportedId, 120), targetOwnerUserId: ownerId };
     }
   } catch (error: any) {
     console.warn(JSON.stringify({ event: 'supabase_report_target_check_failed', type, code: getErrorCode(error).slice(0, 180) }));
@@ -16703,6 +16720,316 @@ api.post('/stripe/webhook', async (c) => {
     console.error('Stripe webhook failed:', getErrorCode(error), error?.message || error);
     return c.json({ detail: 'Webhook processing failed.', code: 'STRIPE_WEBHOOK_FAILED' }, 500);
   }
+});
+
+// Wall of Notes
+const WALL_NOTE_COLORS = new Set(['butter', 'cream', 'rose', 'sky', 'mint', 'peach', 'paper']);
+const WALL_NOTE_STYLES = new Set(['sticky_square', 'vertical_card', 'torn_paper', 'editorial', 'question', 'confession', 'recommendation']);
+const WALL_NOTE_CATEGORIES = new Set(['question', 'confession', 'food', 'advice', 'life', 'local_recommendation']);
+
+function wallNotePayload(row: any, author: any, reactedByViewer = false, savedByViewer = false) {
+  const identity = cleanText(row?.publishing_identity || 'ghost', 20) === 'author' ? 'author' : 'ghost';
+  return {
+    id: publicId(row?.id, 120),
+    wall_id: cleanText(row?.wall_id || 'global', 80) || 'global',
+    publishing_identity: identity,
+    body: cleanMultilineText(row?.body, 300),
+    category: cleanText(row?.category, 50) || null,
+    color_token: WALL_NOTE_COLORS.has(cleanText(row?.color_token, 30)) ? cleanText(row?.color_token, 30) : 'butter',
+    style_token: WALL_NOTE_STYLES.has(cleanText(row?.style_token, 40)) ? cleanText(row?.style_token, 40) : 'sticky_square',
+    world_x: Number(row?.world_x || 0),
+    world_y: Number(row?.world_y || 0),
+    width: Number(row?.width || 184),
+    height: Number(row?.height || 184),
+    rotation: Number(row?.rotation || 0),
+    z_index: Number(row?.z_index || 0),
+    approximate_location: cleanText(row?.approximate_location, 80) || null,
+    created_at: row?.created_at || now(),
+    updated_at: row?.updated_at || row?.created_at || now(),
+    save_count: Math.max(0, Number(row?.save_count || 0)),
+    reaction_count: Math.max(0, Number(row?.reaction_count || 0)),
+    reply_count: Math.max(0, Number(row?.reply_count || 0)),
+    reacted_by_viewer: reactedByViewer,
+    saved_by_viewer: savedByViewer,
+    author_preview: identity === 'author' ? {
+      user_id: publicId(author?.id, 120),
+      username: cleanText(author?.username, 80),
+      display_name: cleanText(author?.full_name, 120),
+      avatar_url: cleanText(author?.avatar_url, 1200),
+    } : null,
+  };
+}
+
+function wallReplyPayload(row: any, author: any) {
+  const identity = cleanText(row?.publishing_identity || 'author', 20) === 'ghost' ? 'ghost' : 'author';
+  return {
+    id: publicId(row?.id, 120),
+    note_id: publicId(row?.note_id, 120),
+    body: cleanMultilineText(row?.body, 300),
+    publishing_identity: identity,
+    created_at: row?.created_at || now(),
+    author_preview: identity === 'author' ? {
+      user_id: publicId(author?.id, 120),
+      username: cleanText(author?.username, 80),
+      display_name: cleanText(author?.full_name, 120),
+      avatar_url: cleanText(author?.avatar_url, 1200),
+    } : null,
+  };
+}
+
+async function visibleWallNote(c: any, viewerId: string, noteId: string) {
+  const rows = await supabaseAdminQueryRows(c, 'wall_notes', {
+    filters: {
+      id: postgrestEqFilter(noteId),
+      status: postgrestEqFilter('active'),
+      moderation_status: postgrestEqFilter('approved'),
+    },
+    limit: 1,
+  });
+  const note = rows[0];
+  if (!note) return null;
+  const ownerId = publicId(note.author_account_id, 120);
+  const blocked = ownerId && viewerId !== ownerId ? await supabaseUserIdsAreBlocked(c, viewerId, ownerId) : false;
+  if (blocked) return null;
+  const author = await supabaseUserByAnyId(c, ownerId);
+  if (!author || supabaseUserStatus(author) !== 'active') return null;
+  return { note, author };
+}
+
+async function wallNoteViewerState(c: any, viewerId: string, noteIds: string[]) {
+  const reacted = new Set<string>();
+  const saved = new Set<string>();
+  if (!viewerId || !noteIds.length) return { reacted, saved };
+  const noteFilter = postgrestInFilter(noteIds);
+  const [reactions, saves] = await Promise.all([
+    supabaseAdminQueryRows(c, 'wall_note_reactions', {
+      select: 'note_id',
+      filters: { note_id: noteFilter, app_user_id: postgrestEqFilter(viewerId) },
+      limit: Math.min(1000, noteIds.length),
+    }),
+    supabaseAdminQueryRows(c, 'wall_note_saves', {
+      select: 'note_id',
+      filters: { note_id: noteFilter, app_user_id: postgrestEqFilter(viewerId) },
+      limit: Math.min(1000, noteIds.length),
+    }),
+  ]);
+  reactions.forEach((row) => reacted.add(publicId(row?.note_id, 120)));
+  saves.forEach((row) => saved.add(publicId(row?.note_id, 120)));
+  return { reacted, saved };
+}
+
+api.get('/wall/notes', authMiddleware, async (c) => {
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'wall_notes_read');
+  if (supabaseRequired) return supabaseRequired;
+  const viewerId = getUserId(c);
+  const limited = await enforceRateLimit(c, 'wall_notes_read', viewerId, 180, 60);
+  if (limited) return limited;
+
+  const wallId = cleanText(c.req.query('wall_id') || 'global', 80).toLowerCase().replace(/[^a-z0-9_-]/g, '') || 'global';
+  const minX = clampFloat(c.req.query('min_x'), -200000, 200000, -1400);
+  const maxX = clampFloat(c.req.query('max_x'), -200000, 200000, 1400);
+  const minY = clampFloat(c.req.query('min_y'), -200000, 200000, -2200);
+  const maxY = clampFloat(c.req.query('max_y'), -200000, 200000, 2200);
+  if (minX >= maxX || minY >= maxY) return c.json({ detail: 'Invalid wall region.' }, 400);
+  const zoom = clampFloat(c.req.query('zoom'), 0.15, 3, 1);
+  const limit = clampNumber(c.req.query('limit') || (zoom < 0.45 ? '600' : '320'), 1, 750, 320);
+  const filter = cleanText(c.req.query('filter') || 'all', 40).toLowerCase();
+  const query = cleanText(c.req.query('query'), 80).replace(/[%*_(),]/g, ' ').trim();
+
+  const filters: Record<string, string> = {
+    wall_id: postgrestEqFilter(wallId),
+    status: postgrestEqFilter('active'),
+    moderation_status: postgrestEqFilter('approved'),
+    and: `(world_x.gte.${minX},world_x.lte.${maxX},world_y.gte.${minY},world_y.lte.${maxY})`,
+  };
+  if (filter === 'ghost' || filter === 'author') filters.publishing_identity = postgrestEqFilter(filter);
+  if (WALL_NOTE_CATEGORIES.has(filter)) filters.category = postgrestEqFilter(filter);
+  if (query) filters.body = `ilike.*${query}*`;
+  if (filter === 'saved') {
+    const savedRows = await supabaseAdminQueryRows(c, 'wall_note_saves', {
+      select: 'note_id',
+      filters: { app_user_id: postgrestEqFilter(viewerId) },
+      order: 'created_at.desc',
+      limit: 750,
+    });
+    const savedIds = savedRows.map((row) => publicId(row?.note_id, 120)).filter(Boolean);
+    if (!savedIds.length) return c.json({ notes: [], wall_id: wallId, zoom });
+    filters.id = postgrestInFilter(savedIds);
+  }
+
+  const order = filter === 'popular'
+    ? 'reaction_count.desc,save_count.desc,created_at.desc'
+    : 'z_index.asc,created_at.desc';
+  const rows = await supabaseAdminQueryRows(c, 'wall_notes', { filters, order, limit });
+  const ownerIds = Array.from(new Set(rows.map((row) => publicId(row?.author_account_id, 120)).filter(Boolean)));
+  const [authors, blockedIds] = await Promise.all([
+    supabaseUsersByAnyIds(c, ownerIds),
+    supabaseBlockedUserIds(c, viewerId),
+  ]);
+  const visibleRows = rows.filter((row) => {
+    const ownerId = publicId(row?.author_account_id, 120);
+    const author = authors.get(ownerId);
+    return ownerId && !blockedIds.has(ownerId) && !!author && supabaseUserStatus(author) === 'active';
+  });
+  const noteIds = visibleRows.map((row) => publicId(row?.id, 120)).filter(Boolean);
+  const state = await wallNoteViewerState(c, viewerId, noteIds);
+  const notes = visibleRows.map((row) => {
+    const id = publicId(row?.id, 120);
+    return wallNotePayload(row, authors.get(publicId(row?.author_account_id, 120)), state.reacted.has(id), state.saved.has(id));
+  });
+  const response = c.json({ notes, wall_id: wallId, zoom });
+  response.headers.set('cache-control', 'private, max-age=15, stale-while-revalidate=45');
+  return response;
+});
+
+api.post('/wall/notes', authMiddleware, async (c) => {
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'wall_note_create');
+  if (supabaseRequired) return supabaseRequired;
+  const userId = getUserId(c);
+  const shortLimit = await enforceRateLimit(c, 'wall_note_create', userId, 8, 60);
+  if (shortLimit) return shortLimit;
+  const dailyLimit = await enforceRateLimit(c, 'wall_note_create_daily', userId, 40, 86400);
+  if (dailyLimit) return dailyLimit;
+  const restricted = await enforceUserRestriction(c, userId, 'posting');
+  if (restricted) return restricted;
+  const bodyTooLarge = rejectLargeRequest(c, 24_000);
+  if (bodyTooLarge) return bodyTooLarge;
+  const b: any = await c.req.json().catch(() => ({}));
+  const body = cleanMultilineText(b.body || b.text, 300);
+  const moderation = moderateCommunityText(body);
+  if (!moderation.ok) return c.json({ detail: moderation.detail || 'This note cannot be published.' }, 400);
+
+  const identity = cleanText(b.publishing_identity, 20) === 'author' ? 'author' : 'ghost';
+  const colorToken = cleanText(b.color_token, 30);
+  const styleToken = cleanText(b.style_token, 40);
+  const category = cleanText(b.category, 50).toLowerCase();
+  const approximateLocation = cleanText(b.approximate_location, 80);
+  if (approximateLocation && looksLikePrivatePlace(approximateLocation, approximateLocation, 'address')) {
+    return c.json({ detail: 'Use a neighborhood or city, not a private address.' }, 400);
+  }
+  const row = {
+    id: uuid(),
+    wall_id: cleanText(b.wall_id || 'global', 80).toLowerCase().replace(/[^a-z0-9_-]/g, '') || 'global',
+    author_account_id: userId,
+    publishing_identity: identity,
+    body,
+    category: WALL_NOTE_CATEGORIES.has(category) ? category : null,
+    color_token: WALL_NOTE_COLORS.has(colorToken) ? colorToken : 'butter',
+    style_token: WALL_NOTE_STYLES.has(styleToken) ? styleToken : 'sticky_square',
+    world_x: clampFloat(b.world_x, -200000, 200000, 0),
+    world_y: clampFloat(b.world_y, -200000, 200000, 0),
+    width: clampFloat(b.width, 96, 360, 184),
+    height: clampFloat(b.height, 96, 420, 184),
+    rotation: clampFloat(b.rotation, -3, 3, 0),
+    z_index: clampNumber(b.z_index, -100000, 100000, Math.floor(Date.now() / 1000)),
+    approximate_location: approximateLocation || null,
+    moderation_status: 'approved',
+    status: 'active',
+    metadata: { source: 'captro_native_wall' },
+  };
+  const inserted = await supabaseAdminInsertRows(c, 'wall_notes', [row], '*');
+  const author = await supabaseUserByAnyId(c, userId);
+  return c.json({ note: wallNotePayload(inserted[0] || row, author, false, false) }, 201);
+});
+
+api.post('/wall/notes/:noteId/reaction', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const noteId = publicId(c.req.param('noteId'), 120);
+  const visible = await visibleWallNote(c, userId, noteId);
+  if (!visible) return c.json({ detail: 'Note not found.' }, 404);
+  const b: any = await c.req.json().catch(() => ({}));
+  const existing = await supabaseAdminQueryRows(c, 'wall_note_reactions', {
+    select: 'note_id',
+    filters: { note_id: postgrestEqFilter(noteId), app_user_id: postgrestEqFilter(userId) },
+    limit: 1,
+  });
+  const reacted = typeof b.reacted === 'boolean' ? b.reacted : !existing.length;
+  await supabaseAdminDeleteRows(c, 'wall_note_reactions', {
+    note_id: postgrestEqFilter(noteId), app_user_id: postgrestEqFilter(userId),
+  });
+  if (reacted) {
+    await supabaseAdminUpsert(c, 'wall_note_reactions', [{ note_id: noteId, app_user_id: userId, reaction_type: 'felt_this' }], 'note_id,app_user_id');
+  }
+  const count = await supabaseAdminCountRows(c, 'wall_note_reactions', { note_id: postgrestEqFilter(noteId) });
+  await supabaseAdminPatchRows(c, 'wall_notes', { id: postgrestEqFilter(noteId) }, { reaction_count: count });
+  return c.json({ reacted, reaction_count: count });
+});
+
+api.post('/wall/notes/:noteId/save', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const noteId = publicId(c.req.param('noteId'), 120);
+  const visible = await visibleWallNote(c, userId, noteId);
+  if (!visible) return c.json({ detail: 'Note not found.' }, 404);
+  const b: any = await c.req.json().catch(() => ({}));
+  const existing = await supabaseAdminQueryRows(c, 'wall_note_saves', {
+    select: 'note_id',
+    filters: { note_id: postgrestEqFilter(noteId), app_user_id: postgrestEqFilter(userId) },
+    limit: 1,
+  });
+  const saved = typeof b.saved === 'boolean' ? b.saved : !existing.length;
+  await supabaseAdminDeleteRows(c, 'wall_note_saves', {
+    note_id: postgrestEqFilter(noteId), app_user_id: postgrestEqFilter(userId),
+  });
+  if (saved) await supabaseAdminUpsert(c, 'wall_note_saves', [{ note_id: noteId, app_user_id: userId }], 'note_id,app_user_id');
+  const count = await supabaseAdminCountRows(c, 'wall_note_saves', { note_id: postgrestEqFilter(noteId) });
+  await supabaseAdminPatchRows(c, 'wall_notes', { id: postgrestEqFilter(noteId) }, { save_count: count });
+  return c.json({ saved, save_count: count });
+});
+
+api.get('/wall/notes/:noteId/replies', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const noteId = publicId(c.req.param('noteId'), 120);
+  if (!(await visibleWallNote(c, userId, noteId))) return c.json({ detail: 'Note not found.' }, 404);
+  const rows = await supabaseAdminQueryRows(c, 'wall_note_replies', {
+    filters: {
+      note_id: postgrestEqFilter(noteId),
+      status: postgrestEqFilter('active'),
+      moderation_status: postgrestEqFilter('approved'),
+    },
+    order: 'created_at.asc',
+    limit: 100,
+  });
+  const authorIds = Array.from(new Set(rows.map((row) => publicId(row?.author_account_id, 120)).filter(Boolean)));
+  const authors = await supabaseUsersByAnyIds(c, authorIds);
+  return c.json({ replies: rows.map((row) => wallReplyPayload(row, authors.get(publicId(row?.author_account_id, 120)))) });
+});
+
+api.post('/wall/notes/:noteId/replies', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const noteId = publicId(c.req.param('noteId'), 120);
+  if (!(await visibleWallNote(c, userId, noteId))) return c.json({ detail: 'Note not found.' }, 404);
+  const limited = await enforceRateLimit(c, 'wall_note_reply', userId, 16, 60);
+  if (limited) return limited;
+  const restricted = await enforceUserRestriction(c, userId, 'commenting');
+  if (restricted) return restricted;
+  const b: any = await c.req.json().catch(() => ({}));
+  const body = cleanMultilineText(b.body || b.text, 300);
+  const moderation = moderateCommunityText(body);
+  if (!moderation.ok) return c.json({ detail: moderation.detail || 'This reply cannot be published.' }, 400);
+  const identity = cleanText(b.publishing_identity, 20) === 'ghost' ? 'ghost' : 'author';
+  const row = {
+    id: uuid(), note_id: noteId, author_account_id: userId, body,
+    publishing_identity: identity, moderation_status: 'approved', status: 'active',
+  };
+  const inserted = await supabaseAdminInsertRows(c, 'wall_note_replies', [row], '*');
+  const count = await supabaseAdminCountRows(c, 'wall_note_replies', {
+    note_id: postgrestEqFilter(noteId), status: postgrestEqFilter('active'), moderation_status: postgrestEqFilter('approved'),
+  });
+  await supabaseAdminPatchRows(c, 'wall_notes', { id: postgrestEqFilter(noteId) }, { reply_count: count });
+  const author = await supabaseUserByAnyId(c, userId);
+  return c.json({ reply: wallReplyPayload(inserted[0] || row, author), reply_count: count }, 201);
+});
+
+api.delete('/wall/notes/:noteId', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const noteId = publicId(c.req.param('noteId'), 120);
+  const rows = await supabaseAdminQueryRows(c, 'wall_notes', {
+    select: 'id,author_account_id', filters: { id: postgrestEqFilter(noteId) }, limit: 1,
+  });
+  if (!rows[0]) return c.json({ detail: 'Note not found.' }, 404);
+  if (publicId(rows[0].author_account_id, 120) !== userId) return c.json({ detail: 'You cannot remove this note.' }, 403);
+  await supabaseAdminPatchRows(c, 'wall_notes', { id: postgrestEqFilter(noteId) }, { status: 'deleted' });
+  return c.json({ deleted: true });
 });
 
 // Reports

@@ -6,6 +6,7 @@ import GoogleSignIn
 public enum MIRATab: Hashable {
   case main
   case discover
+  case wall
   case chat
   case profile
 }
@@ -251,7 +252,7 @@ public struct MIRANativeRootView: View {
         selectedTab = .main
         loadedTabs = [.main]
       } else {
-        loadedTabs.formUnion([.main, .discover, .profile])
+        loadedTabs.formUnion([.main, .discover, .wall, .profile])
       }
       registerCachedPushTokenIfPossible()
     }
@@ -312,6 +313,12 @@ public struct MIRANativeRootView: View {
       }
         .tag(MIRATab.discover)
         .tabItem { Label("Discover", systemImage: "safari.fill") }
+
+      lazyTab(.wall) {
+        WallOfNotesNativeView(api: api)
+      }
+        .tag(MIRATab.wall)
+        .tabItem { Label("Notes", systemImage: "note.text") }
 
       lazyTab(.chat) {
         ChatNativeView(api: api, currentUserId: authSession.user?.id ?? "", model: startup.chatModel)
