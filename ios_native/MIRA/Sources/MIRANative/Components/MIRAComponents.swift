@@ -1143,7 +1143,7 @@ private struct MIRAResolvedVideoPlayer: View {
   }
 
   private var playbackTaskID: String {
-    "\(url)|\(shouldPlay ? "play" : "poster")|\(isMuted ? "muted" : "sound")"
+    "\(url)|\(isMuted ? "muted" : "sound")"
   }
 
   private var placeholder: some View {

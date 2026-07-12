@@ -218,8 +218,9 @@ final class DiscoverNativeModel: ObservableObject {
     )
     guard !urls.isEmpty else { return }
     MIRAVideoPrewarmManager.shared.prewarm(urls: urls, keepOnly: Set(urls.filter(\.isVideoURL).prefix(5)))
+    let previewURLs = storyImagePrefetchURLs(from: urls)
     Task.detached(priority: .utility) {
-      await MIRAImagePrefetcher.prefetch(urls: urls, maxPixelSize: 1920, limit: 24)
+      await MIRAImagePrefetcher.prefetch(urls: previewURLs, maxPixelSize: 1280, limit: 24)
     }
   }
 
@@ -616,8 +617,9 @@ public struct DiscoverNativeView: View {
     let urls = orderedUniqueStoryMediaURLs((group.statuses ?? []).prefix(5).compactMap(\.mediaURL))
     guard !urls.isEmpty else { return }
     MIRAVideoPrewarmManager.shared.prewarm(urls: urls, keepOnly: Set(urls.filter(\.isVideoURL).prefix(5)))
+    let previewURLs = storyImagePrefetchURLs(from: urls)
     Task.detached(priority: .utility) {
-      await MIRAImagePrefetcher.prefetch(urls: urls, maxPixelSize: 1920, limit: 5)
+      await MIRAImagePrefetcher.prefetch(urls: previewURLs, maxPixelSize: 1280, limit: 10)
     }
   }
 
@@ -1116,6 +1118,40 @@ private struct StoryThoughtBubbleState: Identifiable, Hashable {
   let thought: StoryThought
 }
 
+private func storyImagePrefetchURLs(from mediaURLs: [String]) -> [String] {
+  var seen = Set<String>()
+  var result: [String] = []
+  for value in mediaURLs {
+    let clean = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !clean.isEmpty else { continue }
+    let preview = clean.isVideoURL ? storyDerivedPosterURL(for: clean) : clean
+    guard let preview, !preview.isEmpty, seen.insert(preview).inserted else { continue }
+    result.append(preview)
+  }
+  return result
+}
+
+private func storyDerivedPosterURL(for mediaURL: String) -> String? {
+  let clean = mediaURL.trimmingCharacters(in: .whitespacesAndNewlines)
+  guard clean.isVideoURL, let uid = storyCloudflareStreamUID(from: clean) else { return nil }
+  return "https://videodelivery.net/\(uid)/thumbnails/thumbnail.jpg?time=0.2s&height=1280"
+}
+
+private func storyCloudflareStreamUID(from value: String) -> String? {
+  let clean = value.trimmingCharacters(in: .whitespacesAndNewlines)
+  if clean.lowercased().hasPrefix("cfstream:") {
+    let uid = String(clean.dropFirst("cfstream:".count))
+      .filter { $0.isLetter || $0.isNumber || $0 == "_" || $0 == "-" }
+    return uid.isEmpty ? nil : uid
+  }
+  guard let url = URL(string: clean), url.host?.lowercased().contains("videodelivery.net") == true else {
+    return nil
+  }
+  let segments = url.pathComponents.filter { $0 != "/" }
+  guard let uid = segments.first, !uid.isEmpty else { return nil }
+  return uid
+}
+
 private struct StoryViewerNativeView: View {
   let group: MIRAStoryGroup
   let allGroups: [MIRAStoryGroup]
@@ -1241,6 +1277,7 @@ private struct StoryViewerNativeView: View {
     .animation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion), value: isCanvasVisible)
     .miraStatusBarHidden(true)
     .onAppear {
+      prewarmStoryMediaNow(reason: "story_view_open")
       armStoryPlaybackForCurrentStory(reason: "story_view_open")
       withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
         isCanvasVisible = true
@@ -1471,13 +1508,21 @@ private struct StoryViewerNativeView: View {
 
   @MainActor
   private func prewarmStoryMediaWindow() async {
-    try? await Task.sleep(nanoseconds: 120_000_000)
     guard !Task.isCancelled, !isClosing else { return }
+    prewarmStoryMediaNow(reason: "story_window")
+  }
+
+  @MainActor
+  private func prewarmStoryMediaNow(reason: String) {
     let urls = storyMediaWindowURLs()
     guard !urls.isEmpty else { return }
-    MIRAVideoPrewarmManager.shared.prewarm(urls: urls, keepOnly: Set(urls.filter(\.isVideoURL).prefix(2)))
+    let videoURLs = urls.filter(\.isVideoURL)
+    let keepReady = Set(videoURLs.prefix(5))
+    MIRAVideoPrewarmManager.shared.prewarm(urls: urls, keepOnly: keepReady)
+    MIRAApplePerformanceLogger.event("story_media_prewarm", detail: reason)
+    let previewURLs = storyImagePrefetchURLs(from: urls)
     Task.detached(priority: .utility) {
-      await MIRAImagePrefetcher.prefetch(urls: urls, maxPixelSize: 1920, limit: 10)
+      await MIRAImagePrefetcher.prefetch(urls: previewURLs, maxPixelSize: 1280, limit: 16)
     }
   }
 
@@ -1511,9 +1556,10 @@ private struct StoryViewerNativeView: View {
     let upper = min(stories.count - 1, index + 5)
     let urls = orderedUniqueStoryURLs((index...upper).compactMap { stories[$0].mediaURL })
     guard !urls.isEmpty else { return }
-    MIRAVideoPrewarmManager.shared.prewarm(urls: urls, keepOnly: Set(urls.filter(\.isVideoURL).prefix(2)))
+    MIRAVideoPrewarmManager.shared.prewarm(urls: urls, keepOnly: Set(urls.filter(\.isVideoURL).prefix(5)))
+    let previewURLs = storyImagePrefetchURLs(from: urls)
     Task.detached(priority: .utility) {
-      await MIRAImagePrefetcher.prefetch(urls: urls, maxPixelSize: 1920, limit: 6)
+      await MIRAImagePrefetcher.prefetch(urls: previewURLs, maxPixelSize: 1280, limit: 10)
     }
   }
 
@@ -1529,24 +1575,7 @@ private struct StoryViewerNativeView: View {
   }
 
   private func storyPosterURL(for mediaURL: String) -> String? {
-    let clean = mediaURL.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard clean.isVideoURL, let uid = cloudflareStreamUID(from: clean) else { return nil }
-    return "https://videodelivery.net/\(uid)/thumbnails/thumbnail.jpg?time=1s&height=720"
-  }
-
-  private func cloudflareStreamUID(from value: String) -> String? {
-    let clean = value.trimmingCharacters(in: .whitespacesAndNewlines)
-    if clean.lowercased().hasPrefix("cfstream:") {
-      let uid = String(clean.dropFirst("cfstream:".count))
-        .filter { $0.isLetter || $0.isNumber || $0 == "_" || $0 == "-" }
-      return uid.isEmpty ? nil : uid
-    }
-    guard let url = URL(string: clean), url.host?.lowercased().contains("videodelivery.net") == true else {
-      return nil
-    }
-    let segments = url.pathComponents.filter { $0 != "/" }
-    guard let uid = segments.first, !uid.isEmpty else { return nil }
-    return uid
+    storyDerivedPosterURL(for: mediaURL)
   }
 
   private func storyHandleLabel(for railGroup: MIRAStoryGroup) -> String {
@@ -1560,8 +1589,9 @@ private struct StoryViewerNativeView: View {
     let urls = orderedUniqueStoryURLs((railGroup.statuses ?? []).prefix(5).compactMap(\.mediaURL))
     if !urls.isEmpty {
       MIRAVideoPrewarmManager.shared.prewarm(urls: urls, keepOnly: Set(urls.filter(\.isVideoURL).prefix(5)))
+      let previewURLs = storyImagePrefetchURLs(from: urls)
       Task.detached(priority: .utility) {
-        await MIRAImagePrefetcher.prefetch(urls: urls, maxPixelSize: 1920, limit: 5)
+        await MIRAImagePrefetcher.prefetch(urls: previewURLs, maxPixelSize: 1280, limit: 10)
       }
     }
     withAnimation(storyRailAnimation) {
