@@ -684,6 +684,7 @@ public struct MainFeedView: View {
   @State private var isHeaderHidden = false
   @State private var isShowingCreatePost = false
   @State private var activeCommentsPost: MIRAPost?
+  @State private var conversationStarterDraft = ""
   @State private var isCommentsPresented = false
   @State private var saveTargetPost: MIRAPost?
   @State private var isSaveSheetPresented = false
@@ -723,10 +724,23 @@ public struct MainFeedView: View {
                 MainNativePostCard(
                   post: post,
                   api: model.api,
+                  viewerID: model.currentUserId,
                   isVideoActive: post.id == activeVideoPostID && !isMediaPlaybackSuppressed,
                   onLike: { Task { await model.toggleLike(post) } },
                   onSave: { presentSaveSheet(for: post) },
                   onComment: { presentComments(for: post) },
+                  onConversationStarter: { starter in
+                    Task {
+                      await MIRAObservability.recordConversationStarterSelection(
+                        starterID: starter.id,
+                        category: starter.category,
+                        source: starter.source,
+                        surface: "feed",
+                        api: model.api
+                      )
+                    }
+                    presentComments(for: post, initialDraft: starter.text)
+                  },
                   onFollow: { await model.followAuthor(post) },
                   onOpenOptions: { presentPostOptions(for: post) },
                   canFollowAuthor: model.canFollowAuthor(post)
@@ -773,12 +787,16 @@ public struct MainFeedView: View {
       .statusBarHidden(true)
       .miraBottomSheet(
         isPresented: $isCommentsPresented,
-        onDismissed: { activeCommentsPost = nil }
+        onDismissed: {
+          activeCommentsPost = nil
+          conversationStarterDraft = ""
+        }
       ) { dismiss in
         if let post = activeCommentsPost {
           MainFeedCommentsSheet(
             post: post,
             api: model.api,
+            initialDraft: conversationStarterDraft,
             onClose: dismiss,
             onReportComment: { comment in
               dismiss()
@@ -994,10 +1012,11 @@ public struct MainFeedView: View {
     }
   }
 
-  private func presentComments(for post: MIRAPost) {
+  private func presentComments(for post: MIRAPost, initialDraft: String = "") {
     CaptroHaptics.light()
     MIRAPerformanceTimeline.mark("comments_open", detail: "post")
     activeCommentsPost = post
+    conversationStarterDraft = initialDraft
     DispatchQueue.main.async {
       withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
         isCommentsPresented = true
@@ -1133,10 +1152,12 @@ public struct MainFeedView: View {
 private struct MainNativePostCard: View {
   let post: MIRAPost
   let api: MIRAAPIClient
+  let viewerID: String?
   let isVideoActive: Bool
   let onLike: () -> Void
   let onSave: () -> Void
   let onComment: () -> Void
+  let onConversationStarter: (MIRAConversationStarter) -> Void
   let onFollow: () async -> Bool
   let onOpenOptions: () -> Void
   let canFollowAuthor: Bool
@@ -1167,6 +1188,14 @@ private struct MainNativePostCard: View {
 
       actionRow
         .zIndex(3)
+
+      MIRAConversationStartersRow(
+        starters: MIRAConversationStarterEngine.starters(for: post, viewerID: viewerID),
+        onSelect: onConversationStarter
+      )
+      .padding(.horizontal, MIRATheme.Space.md)
+      .padding(.top, 4)
+      .padding(.bottom, hasCaptionContent ? 2 : 7)
 
       if hasCaptionContent {
         captionBlock
@@ -1899,11 +1928,13 @@ private struct MainFeedCommentsSheet: View {
   init(
     post: MIRAPost,
     api: MIRAAPIClient,
+    initialDraft: String = "",
     onClose: @escaping () -> Void,
     onReportComment: @escaping (MIRAComment) -> Void,
     onBlockCommentUser: @escaping (MIRAComment) -> Void
   ) {
     _model = StateObject(wrappedValue: PostDetailModel(post: post, api: api))
+    _draft = State(initialValue: initialDraft)
     self.onClose = onClose
     self.onReportComment = onReportComment
     self.onBlockCommentUser = onBlockCommentUser

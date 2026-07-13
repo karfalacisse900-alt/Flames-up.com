@@ -366,7 +366,7 @@ final class PostDetailModel: ObservableObject {
     }
   }
 
-  private func loadCurrentUserIfNeeded() async {
+  func loadCurrentUserIfNeeded() async {
     guard currentUserId == nil else { return }
     let me: MIRAUser? = try? await api.get("/auth/me")
     currentUserId = me?.id
@@ -417,6 +417,13 @@ public struct PostDetailNativeView: View {
             )
             .frame(maxWidth: .infinity, minHeight: mediaHeight, maxHeight: mediaHeight)
           }
+
+          MIRAConversationStartersRow(
+            starters: MIRAConversationStarterEngine.starters(for: model.post, viewerID: model.currentUserId),
+            onSelect: selectConversationStarter
+          )
+          .padding(.horizontal, MIRATheme.Space.md)
+          .padding(.top, MIRATheme.Space.sm)
 
           VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
             VStack(alignment: .leading, spacing: MIRATheme.Space.sm) {
@@ -571,6 +578,20 @@ public struct PostDetailNativeView: View {
       guard let update = MIRAPostEngagementSync.update(from: notification) else { return }
       model.applyEngagementUpdate(update)
     }
+  }
+
+  private func selectConversationStarter(_ starter: MIRAConversationStarter) {
+    Task {
+      await MIRAObservability.recordConversationStarterSelection(
+        starterID: starter.id,
+        category: starter.category,
+        source: starter.source,
+        surface: "post_detail",
+        api: model.api
+      )
+    }
+    draft = starter.text
+    isCommentFocused = true
   }
 
   private func presentReport(for comment: MIRAComment) {
@@ -858,6 +879,7 @@ public struct DiscoverPostDetailNativeView: View {
   @StateObject private var model: PostDetailModel
   @State private var isCaptionExpanded = false
   @State private var isCommentsPresented = false
+  @State private var conversationStarterDraft = ""
   @State private var reportTarget: MIRAReportTarget?
   @State private var reportComment: MIRAComment?
   @State private var isReportSheetPresented = false
@@ -883,6 +905,11 @@ public struct DiscoverPostDetailNativeView: View {
           }
           mediaCarousel
           actionRow
+          MIRAConversationStartersRow(
+            starters: MIRAConversationStarterEngine.starters(for: model.post, viewerID: model.currentUserId),
+            onSelect: selectConversationStarter
+          )
+          .padding(.horizontal, MIRATheme.Space.md)
           postContext
         }
         .padding(.bottom, 32)
@@ -896,10 +923,12 @@ public struct DiscoverPostDetailNativeView: View {
     .miraBottomSheet(
       isPresented: $isCommentsPresented,
       preferredHeightFraction: 0.72,
-      maxHeight: 640
+      maxHeight: 640,
+      onDismissed: { conversationStarterDraft = "" }
     ) { dismissComments in
       DiscoverDetailCommentsSheet(
         model: model,
+        initialDraft: conversationStarterDraft,
         onClose: dismissComments,
         onReportComment: { comment in
           dismissComments()
@@ -936,11 +965,26 @@ public struct DiscoverPostDetailNativeView: View {
     .task {
       await model.hydrateFromLocalCache()
       await model.refreshPost()
+      await model.loadCurrentUserIfNeeded()
     }
     .onReceive(NotificationCenter.default.publisher(for: .miraPostEngagementDidChange)) { notification in
       guard let update = MIRAPostEngagementSync.update(from: notification) else { return }
       model.applyEngagementUpdate(update)
     }
+  }
+
+  private func selectConversationStarter(_ starter: MIRAConversationStarter) {
+    Task {
+      await MIRAObservability.recordConversationStarterSelection(
+        starterID: starter.id,
+        category: starter.category,
+        source: starter.source,
+        surface: "discover_detail",
+        api: model.api
+      )
+    }
+    conversationStarterDraft = starter.text
+    isCommentsPresented = true
   }
 
   private var topBar: some View {
@@ -1261,6 +1305,20 @@ struct DiscoverDetailCommentsSheet: View {
   let onClose: () -> Void
   let onReportComment: (MIRAComment) -> Void
   let onBlockCommentUser: (MIRAComment) -> Void
+
+  init(
+    model: PostDetailModel,
+    initialDraft: String = "",
+    onClose: @escaping () -> Void,
+    onReportComment: @escaping (MIRAComment) -> Void,
+    onBlockCommentUser: @escaping (MIRAComment) -> Void
+  ) {
+    self.model = model
+    _draft = State(initialValue: initialDraft)
+    self.onClose = onClose
+    self.onReportComment = onReportComment
+    self.onBlockCommentUser = onBlockCommentUser
+  }
 
   var body: some View {
     VStack(spacing: 0) {

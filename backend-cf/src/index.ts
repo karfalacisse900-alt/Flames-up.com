@@ -16004,6 +16004,41 @@ api.post('/client/events', async (c) => {
   return c.json({ accepted: true }, 202);
 });
 
+// Conversation starters are aggregate product analytics only. Do not store post IDs, viewer IDs,
+// or the editable comment text; the Worker owns the anonymous event shape.
+api.post('/analytics/conversation-starters', authMiddleware, async (c) => {
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'conversation_starter_analytics');
+  if (supabaseRequired) return supabaseRequired;
+  const limited = await enforceRateLimit(c, 'conversation_starter_analytics', clientIp(c), 30, 60);
+  if (limited) return limited;
+  const bodyTooLarge = rejectLargeRequest(c, 4_000);
+  if (bodyTooLarge) return bodyTooLarge;
+
+  const body: any = await c.req.json().catch(() => ({}));
+  const starterId = cleanText(body.starter_id || body.starterId, 80).toLowerCase();
+  const category = cleanText(body.category, 40).toLowerCase();
+  const source = cleanText(body.source || 'template', 32).toLowerCase();
+  const surface = cleanText(body.surface || 'feed', 32).toLowerCase();
+  if (!/^[a-z0-9_.:-]{3,80}$/.test(starterId)) return c.json({ detail: 'Invalid conversation starter.' }, 400);
+  if (!/^[a-z0-9_-]{2,40}$/.test(category) || !/^[a-z0-9_-]{2,32}$/.test(source) || !/^[a-z0-9_-]{2,32}$/.test(surface)) {
+    return c.json({ detail: 'Invalid analytics event.' }, 400);
+  }
+
+  await supabaseAdminUpsert(c, 'app_client_events', [{
+    id: uuid(),
+    user_id: null,
+    event_name: 'conversation_starter_selected',
+    category,
+    status: source,
+    duration_ms: 0,
+    metadata: { starter_id: starterId, surface },
+    app_version: '',
+    platform: 'ios',
+    created_at: now(),
+  }], 'id');
+  return c.json({ accepted: true }, 202);
+});
+
 // Library
 api.get('/library/liked', authMiddleware, async (c) => {
   const userId = getUserId(c);

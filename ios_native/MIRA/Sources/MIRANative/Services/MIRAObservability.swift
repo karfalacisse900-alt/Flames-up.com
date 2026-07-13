@@ -14,6 +14,13 @@ private struct MIRAClientEventResponse: Decodable {
   let accepted: Bool?
 }
 
+private struct MIRAConversationStarterEventBody: Encodable {
+  let starterID: String
+  let category: String
+  let source: String
+  let surface: String
+}
+
 public enum MIRAObservability {
   public static func record(
     _ eventName: String,
@@ -37,6 +44,28 @@ public enum MIRAObservability {
       let _: MIRAClientEventResponse = try await api.post("/client/events", body: body)
     } catch {
       // Telemetry must never block the user flow.
+    }
+  }
+
+  /// This endpoint deliberately does not attach the viewer identity or comment text.
+  /// It is aggregate product feedback only, not engagement profiling.
+  public static func recordConversationStarterSelection(
+    starterID: String,
+    category: String,
+    source: String,
+    surface: String,
+    api: MIRAAPIClient
+  ) async {
+    let body = MIRAConversationStarterEventBody(
+      starterID: String(starterID.prefix(80)),
+      category: String(category.prefix(40)),
+      source: String(source.prefix(32)),
+      surface: String(surface.prefix(32))
+    )
+    do {
+      let _: MIRAClientEventResponse = try await api.post("/analytics/conversation-starters", body: body)
+    } catch {
+      // Analytics must never interfere with opening the comment composer.
     }
   }
 

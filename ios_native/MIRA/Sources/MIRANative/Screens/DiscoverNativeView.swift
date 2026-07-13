@@ -889,6 +889,7 @@ private struct DiscoverPostActionModal: View {
 struct DiscoverSinglePhotoPreviewSheet: View {
   @StateObject private var model: PostDetailModel
   @State private var isCommentsPresented = false
+  @State private var conversationStarterDraft = ""
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   let onReportComment: (MIRAComment) -> Void
 
@@ -923,6 +924,11 @@ struct DiscoverSinglePhotoPreviewSheet: View {
 
           previewActions
 
+          MIRAConversationStartersRow(
+            starters: MIRAConversationStarterEngine.starters(for: model.post, viewerID: model.currentUserId),
+            onSelect: selectConversationStarter
+          )
+
           if !headlineText.isEmpty {
             Text(headlineText)
               .font(.system(size: 22, weight: .semibold))
@@ -947,10 +953,12 @@ struct DiscoverSinglePhotoPreviewSheet: View {
       .miraBottomSheet(
         isPresented: $isCommentsPresented,
         preferredHeightFraction: 0.72,
-        maxHeight: 640
+        maxHeight: 640,
+        onDismissed: { conversationStarterDraft = "" }
       ) { dismissComments in
         DiscoverDetailCommentsSheet(
           model: model,
+          initialDraft: conversationStarterDraft,
           onClose: dismissComments,
           onReportComment: { comment in
             dismissComments()
@@ -967,12 +975,27 @@ struct DiscoverSinglePhotoPreviewSheet: View {
       .task {
         await model.hydrateFromLocalCache()
         await model.refreshPost()
+        await model.loadCurrentUserIfNeeded()
       }
       .onReceive(NotificationCenter.default.publisher(for: .miraPostEngagementDidChange)) { notification in
         guard let update = MIRAPostEngagementSync.update(from: notification) else { return }
         model.applyEngagementUpdate(update)
       }
     }
+  }
+
+  private func selectConversationStarter(_ starter: MIRAConversationStarter) {
+    Task {
+      await MIRAObservability.recordConversationStarterSelection(
+        starterID: starter.id,
+        category: starter.category,
+        source: starter.source,
+        surface: "discover_preview",
+        api: model.api
+      )
+    }
+    conversationStarterDraft = starter.text
+    isCommentsPresented = true
   }
 
   private var previewActions: some View {
