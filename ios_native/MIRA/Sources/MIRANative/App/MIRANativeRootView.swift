@@ -5,7 +5,6 @@ import GoogleSignIn
 
 public enum MIRATab: Hashable {
   case main
-  case discover
   case wall
   case chat
   case profile
@@ -16,7 +15,7 @@ public enum MIRAStartupPhase: Equatable {
   case checkingSession
   case loadingUser
   case preparingFeed
-  case preparingDiscover
+  case preparingStories
   case preparingProfile
   case preparingMainTabs
   case readyAuthenticated
@@ -33,8 +32,8 @@ public enum MIRAStartupPhase: Equatable {
       return "Loading your profile"
     case .preparingFeed:
       return "Preparing your feed"
-    case .preparingDiscover:
-      return "Preparing Discover"
+    case .preparingStories:
+      return "Preparing Stories"
     case .preparingProfile:
       return "Preparing your profile"
     case .preparingMainTabs:
@@ -111,15 +110,15 @@ final class MIRAStartupCoordinator: ObservableObject {
     phase = .preparingFeed
     let feedTask = Task { await feedModel.prepareForStartup() }
 
-    phase = .preparingDiscover
-    let discoverTask = Task { await discoverModel.prepareForStartup() }
+    phase = .preparingStories
+    let storiesTask = Task { await discoverModel.prepareStoriesForStartup() }
 
     phase = .preparingProfile
     let profileTask = Task { await profileModel.prepareForStartup(signedInUser: authSession.user) }
 
     let chatTask = Task { await chatModel.prepareForStartup() }
 
-    _ = await (feedTask.value, discoverTask.value, profileTask.value, chatTask.value)
+    _ = await (feedTask.value, storiesTask.value, profileTask.value, chatTask.value)
     startInitialMediaPrewarm()
 
     phase = .readyAuthenticated
@@ -163,7 +162,7 @@ final class MIRAStartupCoordinator: ObservableObject {
   }
 
   private func startInitialMediaPrewarm() {
-    let posts = Array(feedModel.posts.prefix(4)) + Array(discoverModel.posts.prefix(9)) + Array(profileModel.posts.prefix(6))
+    let posts = Array(feedModel.posts.prefix(6)) + Array(profileModel.posts.prefix(6))
     let previewURLs = posts.flatMap { post in
       post.posterMediaURLs + post.thumbnailMediaURLs
     }
@@ -252,7 +251,7 @@ public struct MIRANativeRootView: View {
         selectedTab = .main
         loadedTabs = [.main]
       } else {
-        loadedTabs.formUnion([.main, .discover, .wall, .profile])
+        loadedTabs.formUnion([.main, .wall, .profile])
       }
       registerCachedPushTokenIfPossible()
     }
@@ -308,14 +307,11 @@ public struct MIRANativeRootView: View {
         .tag(MIRATab.main)
         .tabItem { Label("Home", systemImage: "house.fill") }
 
-      lazyTab(.discover) {
-        DiscoverNativeView(api: api, model: startup.discoverModel)
-      }
-        .tag(MIRATab.discover)
-        .tabItem { Label("Discover", systemImage: "safari.fill") }
-
       lazyTab(.wall) {
-        WallOfNotesNativeView(api: api)
+        NavigationStack {
+          WallOfNotesNativeView(api: api, storiesModel: startup.discoverModel)
+            .toolbar(.hidden, for: .navigationBar)
+        }
       }
         .tag(MIRATab.wall)
         .tabItem { Label("Notes", systemImage: "note.text") }

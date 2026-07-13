@@ -32,6 +32,16 @@ final class DiscoverNativeModel: ObservableObject {
     await load()
   }
 
+  func prepareStoriesForStartup() async {
+    MIRAPerformanceTimeline.mark("stories_startup_prepare")
+    await hydrateCachedStoriesIfNeeded()
+    if stories.isEmpty { isLoadingStories = true }
+    if !hasScheduledStoriesLoad {
+      hasScheduledStoriesLoad = true
+      await loadStories()
+    }
+  }
+
   func load() async {
     MIRAPerformanceTimeline.mark("discover_load_start")
     await hydrateCachedContentIfNeeded()
@@ -56,6 +66,10 @@ final class DiscoverNativeModel: ObservableObject {
       prefetchVisibleMedia(posts)
       MIRAPerformanceTimeline.markOnce("discover_first_content", detail: "posts_cache")
     }
+    await hydrateCachedStoriesIfNeeded()
+  }
+
+  private func hydrateCachedStoriesIfNeeded() async {
     if stories.isEmpty, let cachedStories = await cachedDiscoverStories() {
       let expandedStories = expandedStoryGroups(cachedStories)
       stories = expandedStories
@@ -453,6 +467,117 @@ private let discoverCategoryKeywords: [String: [String]] = [
 
 private struct DiscoverGalleryFilter: Identifiable {
   let id: String
+}
+
+struct MIRAStoriesRailNativeView: View {
+  @ObservedObject var model: DiscoverNativeModel
+  @State private var selectedStoryGroup: MIRAStoryGroup?
+  @State private var reportTarget: MIRAReportTarget?
+  @State private var isReportSheetPresented = false
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+  var body: some View {
+    ScrollView(.horizontal, showsIndicators: false) {
+      HStack(spacing: 10) {
+        NavigationLink(destination: CreateStoryNativeView(api: model.api).miraHideTabBarOnAppear()) {
+          StoryBubbleNative(name: "Your Story", avatarURL: nil, hasUnviewed: false, isAdd: true)
+        }
+        .buttonStyle(.miraPress)
+
+        if model.isLoadingStories && model.stories.isEmpty {
+          ForEach(0..<5, id: \.self) { index in
+            StoryBubblePlaceholder(index: index)
+          }
+        } else if model.stories.isEmpty {
+          StoryEmptyBubble()
+        } else {
+          ForEach(model.stories) { group in
+            Button {
+              openStoryViewer(group)
+            } label: {
+              StoryBubbleNative(
+                name: group.displayName,
+                avatarURL: group.userProfileImage,
+                hasUnviewed: group.hasUnviewed == true,
+                isAdd: false
+              )
+            }
+            .buttonStyle(.miraPress)
+          }
+        }
+      }
+      .padding(.horizontal, MIRATheme.Space.md)
+      .padding(.top, 8)
+      .padding(.bottom, 8)
+    }
+    .frame(height: 112)
+    .background(MIRATheme.Color.surface)
+    .overlay(alignment: .bottom) {
+      Rectangle().fill(MIRATheme.Color.hairline).frame(height: 0.5)
+    }
+    .task { await model.prepareStoriesForStartup() }
+    .miraStatusBarHidden(selectedStoryGroup != nil)
+    .toolbar(storyTabBarVisibility, for: .tabBar)
+    .miraFullScreenOverlay(item: $selectedStoryGroup, background: .black) { group, dismissStory in
+      StoryViewerNativeView(
+        group: group,
+        allGroups: model.stories,
+        api: model.api,
+        onClose: dismissStory,
+        onReportStory: { target in
+          dismissStory()
+          DispatchQueue.main.asyncAfter(deadline: .now() + MIRATransitionTiming.fullScreenClose) {
+            reportTarget = target
+            withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
+              isReportSheetPresented = true
+            }
+          }
+        }
+      )
+    }
+    .miraBottomSheet(
+      isPresented: $isReportSheetPresented,
+      preferredHeightFraction: 0.72,
+      maxHeight: 640,
+      onDismissed: { reportTarget = nil }
+    ) { dismissReport in
+      if let reportTarget {
+        MIRAReportSheet(
+          target: reportTarget,
+          api: model.api,
+          onSubmitted: { _ in },
+          onClose: dismissReport
+        )
+      } else {
+        Color.clear
+      }
+    }
+  }
+
+  private var storyTabBarVisibility: Visibility {
+    selectedStoryGroup == nil && !isReportSheetPresented ? .visible : .hidden
+  }
+
+  private func openStoryViewer(_ group: MIRAStoryGroup) {
+    let urls = orderedUniqueStoryMediaURLs((group.statuses ?? []).prefix(5).compactMap(\.mediaURL))
+    if !urls.isEmpty {
+      MIRAVideoPrewarmManager.shared.prewarm(urls: urls, keepOnly: Set(urls.filter(\.isVideoURL).prefix(5)))
+      let previewURLs = storyImagePrefetchURLs(from: urls)
+      Task.detached(priority: .utility) {
+        await MIRAImagePrefetcher.prefetch(urls: previewURLs, maxPixelSize: 1280, limit: 10)
+      }
+    }
+    selectedStoryGroup = group
+  }
+
+  private func orderedUniqueStoryMediaURLs(_ urls: [String]) -> [String] {
+    var seen = Set<String>()
+    return urls.compactMap { value in
+      let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !trimmed.isEmpty, seen.insert(trimmed).inserted else { return nil }
+      return trimmed
+    }
+  }
 }
 
 public struct DiscoverNativeView: View {

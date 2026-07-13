@@ -175,10 +175,13 @@ final class MIRAWallNotesModel: ObservableObject {
 
 public struct WallOfNotesNativeView: View {
   private let api: MIRAAPIClient
+  private let storiesModel: DiscoverNativeModel
   @StateObject private var model: MIRAWallNotesModel
   @State private var camera = MIRAWallCamera()
   @State private var panStart: MIRAWallCamera?
   @State private var magnifyStart: MIRAWallCamera?
+  @State private var liveMagnification: CGFloat = 1
+  @State private var liveMagnificationAnchor = UnitPoint.center
   @State private var selectedNote: MIRAWallNote?
   @State private var isCreating = false
   @State private var isSearching = false
@@ -192,168 +195,179 @@ public struct WallOfNotesNativeView: View {
   @State private var placementNoteID: String?
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-  public init(api: MIRAAPIClient) {
+  init(api: MIRAAPIClient, storiesModel: DiscoverNativeModel) {
     self.api = api
+    self.storiesModel = storiesModel
     _model = StateObject(wrappedValue: MIRAWallNotesModel(api: api))
   }
 
   public var body: some View {
-    GeometryReader { proxy in
-      let viewport = proxy.size
-      let bounds = camera.worldBounds(viewport: viewport)
-      ZStack {
-        MIRAWallBackground(camera: camera, viewport: viewport)
-          .ignoresSafeArea()
+    VStack(spacing: 0) {
+      wallHeader
+      MIRAStoriesRailNativeView(model: storiesModel)
 
-        wallNotes(bounds: bounds, viewport: viewport)
+      GeometryReader { proxy in
+        let viewport = proxy.size
+        let bounds = camera.worldBounds(viewport: viewport)
+        ZStack {
+          MIRAWallBackground(camera: camera, viewport: viewport)
+            .ignoresSafeArea()
 
-        if shouldShowWallStartSign {
-          wallStartSign(viewport: viewport)
-        } else if shouldShowFilteredEmptySign {
-          filteredEmptySign(viewport: viewport)
-        }
+          ZStack {
+            wallNotes(bounds: bounds, viewport: viewport)
 
-        chrome(viewport: viewport)
+            if shouldShowWallStartSign {
+              wallStartSign(viewport: viewport)
+            } else if shouldShowFilteredEmptySign {
+              filteredEmptySign(viewport: viewport)
+            }
+          }
+          .scaleEffect(liveMagnification, anchor: liveMagnificationAnchor)
+          .animation(nil, value: liveMagnification)
 
-        if let message = model.errorMessage, model.notes.isEmpty {
-          errorState(message: message, bounds: bounds)
-        }
-      }
-      .contentShape(Rectangle())
-      .clipped()
-      .gesture(panGesture(viewport: viewport).simultaneously(with: magnifyGesture(viewport: viewport)))
-      .simultaneousGesture(SpatialTapGesture().onEnded { value in
-        guard panStart == nil, magnifyStart == nil else { return }
-        let world = camera.worldPoint(forScreen: value.location, viewport: viewport)
-        if let note = model.note(at: world) {
-          withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
-            selectedNote = note
+          chrome(viewport: viewport)
+
+          if let message = model.errorMessage, model.notes.isEmpty {
+            errorState(message: message, bounds: bounds)
           }
         }
-      })
-      .simultaneousGesture(
-        SpatialTapGesture(count: 2).onEnded { value in
-          withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
-            camera = camera.zoomed(to: camera.scale < 1.25 ? min(1.55, camera.scale * 1.8) : 0.62, around: value.location, viewport: viewport)
+        .contentShape(Rectangle())
+        .clipped()
+        .gesture(panGesture(viewport: viewport).simultaneously(with: magnifyGesture(viewport: viewport)))
+        .simultaneousGesture(SpatialTapGesture().onEnded { value in
+          guard panStart == nil, magnifyStart == nil else { return }
+          let world = camera.worldPoint(forScreen: value.location, viewport: viewport)
+          if let note = model.note(at: world) {
+            withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
+              selectedNote = note
+            }
           }
-        }
-      )
-      .task(id: loadKey(bounds: bounds)) {
-        try? await Task.sleep(for: .milliseconds(180))
-        guard !Task.isCancelled, initialFrameWallID == selectedWall.id else { return }
-        await model.load(
-          bounds: bounds,
-          zoom: camera.scale,
-          wallID: selectedWall.id,
-          filter: selectedFilter,
-          query: query
+        })
+        .simultaneousGesture(
+          SpatialTapGesture(count: 2).onEnded { value in
+            withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
+              camera = camera.zoomed(to: camera.scale < 1.25 ? min(1.55, camera.scale * 1.8) : 0.62, around: value.location, viewport: viewport)
+            }
+          }
         )
-      }
-      .task(id: selectedWall.id) {
-        initialFrameWallID = nil
-        model.selectWall(selectedWall.id)
-        await model.loadOverview(wallID: selectedWall.id, force: true)
-        guard !Task.isCancelled else { return }
-        if let overview = model.overview {
-          camera = MIRAWallLayout.initialCamera(
-            noteBounds: overview.noteBounds,
-            noteCount: overview.totalCount,
-            viewport: viewport,
-            includeStartSign: overview.totalCount < 5
+        .task(id: loadKey(bounds: bounds)) {
+          try? await Task.sleep(for: .milliseconds(180))
+          guard !Task.isCancelled, initialFrameWallID == selectedWall.id else { return }
+          await model.load(
+            bounds: bounds,
+            zoom: camera.scale,
+            wallID: selectedWall.id,
+            filter: selectedFilter,
+            query: query
           )
-        } else {
-          camera = MIRAWallCamera(scale: 0.92)
         }
-        initialFrameWallID = selectedWall.id
-        await model.load(
-          bounds: camera.worldBounds(viewport: viewport),
-          zoom: camera.scale,
-          wallID: selectedWall.id,
-          filter: selectedFilter,
-          query: query,
-          force: true
-        )
-      }
-      .sheet(isPresented: $isCreating) {
-        MIRACreateWallNoteView(camera: camera, wall: selectedWall, api: api) { body in
-          let note = try await model.create(body)
-          placementNoteID = note.id
-          withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
-            camera.center = CGPoint(x: note.worldX + note.width * 0.5, y: note.worldY + note.height * 0.5)
-            camera.scale = max(camera.scale, 0.72)
+        .task(id: selectedWall.id) {
+          initialFrameWallID = nil
+          model.selectWall(selectedWall.id)
+          await model.loadOverview(wallID: selectedWall.id, force: true)
+          guard !Task.isCancelled else { return }
+          if let overview = model.overview {
+            camera = MIRAWallLayout.initialCamera(
+              noteBounds: overview.noteBounds,
+              noteCount: overview.totalCount,
+              viewport: viewport,
+              includeStartSign: overview.totalCount < 5
+            )
+          } else {
+            camera = MIRAWallCamera(scale: 0.92)
           }
-          Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(800))
-            placementNoteID = nil
-          }
-          return note
+          initialFrameWallID = selectedWall.id
+          await model.load(
+            bounds: camera.worldBounds(viewport: viewport),
+            zoom: camera.scale,
+            wallID: selectedWall.id,
+            filter: selectedFilter,
+            query: query,
+            force: true
+          )
         }
-        .presentationDetents([.large])
-        .presentationCornerRadius(30)
-      }
-      .miraFadeScaleOverlay(isPresented: Binding(
-        get: { selectedNote != nil },
-        set: { if !$0 { selectedNote = nil } }
-      )) { dismiss in
-        if let note = selectedNote {
-          MIRAWallNoteDetailView(note: note, api: api, model: model) { updated in
-            selectedNote = updated
-          } onClose: {
-            dismiss()
+        .sheet(isPresented: $isCreating) {
+          MIRACreateWallNoteView(camera: camera, wall: selectedWall, api: api) { body in
+            let note = try await model.create(body)
+            placementNoteID = note.id
+            withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
+              camera.center = CGPoint(x: note.worldX + note.width * 0.5, y: note.worldY + note.height * 0.5)
+              camera.scale = max(camera.scale, 0.72)
+            }
+            Task { @MainActor in
+              try? await Task.sleep(for: .milliseconds(800))
+              placementNoteID = nil
+            }
+            return note
+          }
+          .presentationDetents([.large])
+          .presentationCornerRadius(30)
+        }
+        .miraFadeScaleOverlay(isPresented: Binding(
+          get: { selectedNote != nil },
+          set: { if !$0 { selectedNote = nil } }
+        )) { dismiss in
+          if let note = selectedNote {
+            MIRAWallNoteDetailView(note: note, api: api, model: model) { updated in
+              selectedNote = updated
+            } onClose: {
+              dismiss()
+            }
           }
         }
-      }
-      .miraActionModal(isPresented: $showFilters) { dismiss in
-        MIRAActionModalCard {
-          ScrollView(showsIndicators: false) {
+        .miraActionModal(isPresented: $showFilters) { dismiss in
+          MIRAActionModalCard {
+            ScrollView(showsIndicators: false) {
+              VStack(spacing: 7) {
+                ForEach(MIRAWallFilter.allCases) { filter in
+                  MIRAActionModalButton(
+                    title: filter.title,
+                    systemImage: filter.icon,
+                    staggerIndex: filter.staggerIndex
+                  ) {
+                    selectedFilter = filter.rawValue
+                    dismiss()
+                  }
+                }
+              }
+              .frame(maxHeight: 470)
+            }
+          }
+        }
+        .miraActionModal(isPresented: $showWallSelector) { dismiss in
+          MIRAActionModalCard {
             VStack(spacing: 7) {
-              ForEach(MIRAWallFilter.allCases) { filter in
+              ForEach(MIRAWallDestination.allCases) { wall in
                 MIRAActionModalButton(
-                  title: filter.title,
-                  systemImage: filter.icon,
-                  staggerIndex: filter.staggerIndex
+                  title: wall.title,
+                  systemImage: wall.systemImage,
+                  staggerIndex: MIRAWallDestination.allCases.firstIndex(of: wall) ?? 0
                 ) {
-                  selectedFilter = filter.rawValue
+                  selectedFilter = "all"
+                  query = ""
+                  selectedWall = wall
                   dismiss()
                 }
               }
             }
           }
-          .frame(maxHeight: 470)
         }
-      }
-      .miraActionModal(isPresented: $showWallSelector) { dismiss in
-        MIRAActionModalCard {
-          VStack(spacing: 7) {
-            ForEach(MIRAWallDestination.allCases) { wall in
-              MIRAActionModalButton(
-                title: wall.title,
-                systemImage: wall.systemImage,
-                staggerIndex: MIRAWallDestination.allCases.firstIndex(of: wall) ?? 0
-              ) {
-                selectedFilter = "all"
-                query = ""
-                selectedWall = wall
-                dismiss()
-              }
+        .miraActionModal(isPresented: $showOverview) { dismiss in
+          MIRAActionModalCard {
+            MIRAWallOverviewPanel(
+              wall: selectedWall,
+              overview: model.overview,
+              notes: model.notes
+            ) {
+              recenter(viewport: viewport)
+              dismiss()
             }
           }
         }
       }
-      .miraActionModal(isPresented: $showOverview) { dismiss in
-        MIRAActionModalCard {
-          MIRAWallOverviewPanel(
-            wall: selectedWall,
-            overview: model.overview,
-            notes: model.notes
-          ) {
-            recenter(viewport: viewport)
-            dismiss()
-          }
-        }
-      }
+      .background(MIRATheme.Color.launchBackground)
     }
-    .background(MIRATheme.Color.launchBackground)
+    .background(MIRATheme.Color.surface)
   }
 
   @ViewBuilder
@@ -380,51 +394,63 @@ public struct WallOfNotesNativeView: View {
     .animation(reduceMotion ? .easeOut(duration: 0.08) : .spring(response: 0.58, dampingFraction: 0.78), value: placementNoteID)
   }
 
-  private func chrome(viewport: CGSize) -> some View {
-    VStack(spacing: 0) {
-      HStack(alignment: .top, spacing: 12) {
-        VStack(alignment: .leading, spacing: 7) {
-          Text("Wall of Notes")
-            .font(.system(size: 25, weight: .bold, design: .serif))
-            .foregroundStyle(MIRATheme.Color.textPrimary)
-
-          Button {
-            showWallSelector = true
-          } label: {
-            Label(selectedWall.title, systemImage: selectedWall.systemImage)
-              .font(.system(size: 12, weight: .semibold))
-              .padding(.horizontal, 11)
-              .frame(height: 30)
-              .background(MIRATheme.Color.surface.opacity(0.94), in: Capsule())
-              .overlay(Capsule().stroke(MIRATheme.Color.hairline, lineWidth: 1))
-          }
-          .buttonStyle(.miraPress)
-          .accessibilityLabel("Choose wall. Current wall: \(selectedWall.title)")
-        }
+  private var wallHeader: some View {
+    HStack(spacing: 10) {
+      if isSearching {
+        TextField("Search notes", text: $query)
+          .textFieldStyle(.plain)
+          .font(.system(size: 15, weight: .medium))
+          .padding(.horizontal, 14)
+          .frame(height: 40)
+          .background(MIRATheme.Color.appBackground, in: Capsule())
+          .submitLabel(.search)
+          .transition(.opacity.combined(with: .move(edge: .trailing)))
+      } else {
+        Text("Wall of Notes")
+          .font(.system(size: 25, weight: .bold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .transition(.opacity)
 
         Spacer(minLength: 8)
+      }
 
-        if isSearching {
-          TextField("Search notes", text: $query)
-            .textFieldStyle(.plain)
-            .font(.system(size: 14, weight: .medium))
-            .padding(.horizontal, 13)
-            .frame(height: 38)
-            .background(MIRATheme.Color.surface.opacity(0.96), in: Capsule())
-            .frame(maxWidth: 190)
-            .submitLabel(.search)
+      wallIconButton(systemImage: isSearching ? "xmark" : "magnifyingglass") {
+        withAnimation(CaptroMotion.smallMenuAnimation(reduceMotion: reduceMotion)) {
+          isSearching.toggle()
+          if !isSearching { query = "" }
         }
+      }
 
-        wallIconButton(systemImage: isSearching ? "xmark" : "magnifyingglass") {
-          withAnimation(CaptroMotion.smallMenuAnimation(reduceMotion: reduceMotion)) {
-            isSearching.toggle()
-            if !isSearching { query = "" }
-          }
-        }
+      wallIconButton(systemImage: "line.3.horizontal.decrease") {
+        showFilters = true
+      }
+    }
+    .padding(.horizontal, 16)
+    .padding(.vertical, 8)
+    .frame(minHeight: 58)
+    .background(MIRATheme.Color.surface)
+    .overlay(alignment: .bottom) {
+      Rectangle().fill(MIRATheme.Color.hairline).frame(height: 0.5)
+    }
+  }
 
-        wallIconButton(systemImage: "line.3.horizontal.decrease") {
-          showFilters = true
+  private func chrome(viewport: CGSize) -> some View {
+    VStack(spacing: 0) {
+      HStack {
+        Button {
+          showWallSelector = true
+        } label: {
+          Label(selectedWall.title, systemImage: selectedWall.systemImage)
+            .font(.system(size: 12, weight: .semibold))
+            .padding(.horizontal, 11)
+            .frame(height: 30)
+            .background(MIRATheme.Color.surface.opacity(0.94), in: Capsule())
+            .overlay(Capsule().stroke(MIRATheme.Color.hairline, lineWidth: 1))
         }
+        .buttonStyle(.miraPress)
+        .accessibilityLabel("Choose wall. Current wall: \(selectedWall.title)")
+
+        Spacer()
       }
       .padding(.horizontal, 16)
       .padding(.top, 12)
@@ -508,6 +534,7 @@ public struct WallOfNotesNativeView: View {
   private func panGesture(viewport: CGSize) -> some Gesture {
     DragGesture(minimumDistance: 5, coordinateSpace: .local)
       .onChanged { value in
+        guard magnifyStart == nil else { return }
         if panStart == nil { panStart = camera }
         guard let start = panStart else { return }
         camera.center = CGPoint(
@@ -533,12 +560,31 @@ public struct WallOfNotesNativeView: View {
   private func magnifyGesture(viewport: CGSize) -> some Gesture {
     MagnifyGesture(minimumScaleDelta: 0.005)
       .onChanged { value in
-        if magnifyStart == nil { magnifyStart = camera }
+        if magnifyStart == nil {
+          magnifyStart = camera
+          panStart = nil
+        }
+        guard let start = magnifyStart else { return }
+        let targetScale = min(max(start.scale * value.magnification, 0.20), 2.50)
+        liveMagnification = targetScale / max(start.scale, 0.001)
+        liveMagnificationAnchor = value.startAnchor
+      }
+      .onEnded { value in
         guard let start = magnifyStart else { return }
         let anchor = CGPoint(x: value.startAnchor.x * viewport.width, y: value.startAnchor.y * viewport.height)
-        camera = start.zoomed(to: start.scale * value.magnification, around: anchor, viewport: viewport)
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+          camera = start.zoomed(
+            to: start.scale * value.magnification,
+            around: anchor,
+            viewport: viewport
+          )
+          liveMagnification = 1
+          liveMagnificationAnchor = .center
+          magnifyStart = nil
+        }
       }
-      .onEnded { _ in magnifyStart = nil }
   }
 
   private func loadKey(bounds: CGRect) -> String {
