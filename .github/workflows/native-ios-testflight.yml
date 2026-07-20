@@ -16,7 +16,7 @@ env:
 jobs:
   build-testflight:
     name: Build native SwiftUI iOS app and upload to TestFlight
-    runs-on: macos-26
+    runs-on: macos-15
     timeout-minutes: 60
 
     steps:
@@ -27,7 +27,7 @@ jobs:
         run: xcodebuild -version
 
       - name: Install XcodeGen
-        run: arch -arm64 brew install xcodegen
+        run: brew install xcodegen
 
       - name: Check Rust native core
         run: |
