@@ -193,6 +193,9 @@ public struct WallOfNotesNativeView: View {
   @State private var showOverview = false
   @State private var initialFrameWallID: String?
   @State private var placementNoteID: String?
+  @State private var selectedStoryGroup: MIRAStoryGroup?
+  @State private var storyReportTarget: MIRAReportTarget?
+  @State private var isStoryReportSheetPresented = false
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   init(api: MIRAAPIClient, storiesModel: DiscoverNativeModel) {
@@ -204,7 +207,9 @@ public struct WallOfNotesNativeView: View {
   public var body: some View {
     VStack(spacing: 0) {
       wallHeader
-      MIRAStoriesRailNativeView(model: storiesModel)
+      MIRAStoriesRailNativeView(model: storiesModel) { group in
+        selectedStoryGroup = group
+      }
 
       GeometryReader { proxy in
         let viewport = proxy.size
@@ -368,6 +373,46 @@ public struct WallOfNotesNativeView: View {
       .background(MIRATheme.Color.launchBackground)
     }
     .background(MIRATheme.Color.surface)
+    .miraStatusBarHidden(selectedStoryGroup != nil)
+    .toolbar(storyTabBarVisibility, for: .tabBar)
+    .miraFullScreenOverlay(item: $selectedStoryGroup, background: .black) { group, dismissStory in
+      StoryViewerNativeView(
+        group: group,
+        allGroups: storiesModel.stories,
+        api: api,
+        onClose: dismissStory,
+        onReportStory: { target in
+          dismissStory()
+          DispatchQueue.main.asyncAfter(deadline: .now() + MIRATransitionTiming.fullScreenClose) {
+            storyReportTarget = target
+            withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
+              isStoryReportSheetPresented = true
+            }
+          }
+        }
+      )
+    }
+    .miraBottomSheet(
+      isPresented: $isStoryReportSheetPresented,
+      preferredHeightFraction: 0.72,
+      maxHeight: 640,
+      onDismissed: { storyReportTarget = nil }
+    ) { dismissReport in
+      if let storyReportTarget {
+        MIRAReportSheet(
+          target: storyReportTarget,
+          api: api,
+          onSubmitted: { _ in },
+          onClose: dismissReport
+        )
+      } else {
+        Color.clear
+      }
+    }
+  }
+
+  private var storyTabBarVisibility: Visibility {
+    selectedStoryGroup == nil && !isStoryReportSheetPresented ? .visible : .hidden
   }
 
   @ViewBuilder
@@ -380,12 +425,12 @@ public struct WallOfNotesNativeView: View {
           forWorld: CGPoint(x: note.worldX + note.width * 0.5, y: note.worldY + note.height * 0.5),
           viewport: viewport
         )
-        MIRAWallNoteSurface(note: note, zoom: camera.scale)
-          .frame(width: note.width * camera.scale, height: note.height * camera.scale)
-          .position(center)
+        MIRAWallNoteSurface(note: note, zoom: 1)
+          .frame(width: note.width, height: note.height)
           .rotationEffect(.degrees(note.rotation))
-          .scaleEffect(placementNoteID == note.id && !reduceMotion ? 1.06 : 1)
-          .offset(y: placementNoteID == note.id && !reduceMotion ? -7 : 0)
+          .scaleEffect(camera.scale * (placementNoteID == note.id && !reduceMotion ? 1.06 : 1))
+          .position(center)
+          .offset(y: placementNoteID == note.id && !reduceMotion ? -7 * camera.scale : 0)
           .transition(.scale(scale: reduceMotion ? 1 : 1.18).combined(with: .opacity))
           .allowsHitTesting(false)
           .zIndex(Double(note.zIndex))

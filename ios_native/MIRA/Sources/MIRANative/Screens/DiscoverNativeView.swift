@@ -471,10 +471,7 @@ private struct DiscoverGalleryFilter: Identifiable {
 
 struct MIRAStoriesRailNativeView: View {
   @ObservedObject var model: DiscoverNativeModel
-  @State private var selectedStoryGroup: MIRAStoryGroup?
-  @State private var reportTarget: MIRAReportTarget?
-  @State private var isReportSheetPresented = false
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  let onSelectStory: (MIRAStoryGroup) -> Void
 
   var body: some View {
     ScrollView(.horizontal, showsIndicators: false) {
@@ -516,46 +513,6 @@ struct MIRAStoriesRailNativeView: View {
       Rectangle().fill(MIRATheme.Color.hairline).frame(height: 0.5)
     }
     .task { await model.prepareStoriesForStartup() }
-    .miraStatusBarHidden(selectedStoryGroup != nil)
-    .toolbar(storyTabBarVisibility, for: .tabBar)
-    .miraFullScreenOverlay(item: $selectedStoryGroup, background: .black) { group, dismissStory in
-      StoryViewerNativeView(
-        group: group,
-        allGroups: model.stories,
-        api: model.api,
-        onClose: dismissStory,
-        onReportStory: { target in
-          dismissStory()
-          DispatchQueue.main.asyncAfter(deadline: .now() + MIRATransitionTiming.fullScreenClose) {
-            reportTarget = target
-            withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
-              isReportSheetPresented = true
-            }
-          }
-        }
-      )
-    }
-    .miraBottomSheet(
-      isPresented: $isReportSheetPresented,
-      preferredHeightFraction: 0.72,
-      maxHeight: 640,
-      onDismissed: { reportTarget = nil }
-    ) { dismissReport in
-      if let reportTarget {
-        MIRAReportSheet(
-          target: reportTarget,
-          api: model.api,
-          onSubmitted: { _ in },
-          onClose: dismissReport
-        )
-      } else {
-        Color.clear
-      }
-    }
-  }
-
-  private var storyTabBarVisibility: Visibility {
-    selectedStoryGroup == nil && !isReportSheetPresented ? .visible : .hidden
   }
 
   private func openStoryViewer(_ group: MIRAStoryGroup) {
@@ -567,7 +524,7 @@ struct MIRAStoriesRailNativeView: View {
         await MIRAImagePrefetcher.prefetch(urls: previewURLs, maxPixelSize: 1280, limit: 10)
       }
     }
-    selectedStoryGroup = group
+    onSelectStory(group)
   }
 
   private func orderedUniqueStoryMediaURLs(_ urls: [String]) -> [String] {
@@ -1300,7 +1257,7 @@ private func storyCloudflareStreamUID(from value: String) -> String? {
   return uid
 }
 
-private struct StoryViewerNativeView: View {
+struct StoryViewerNativeView: View {
   let group: MIRAStoryGroup
   let allGroups: [MIRAStoryGroup]
   let api: MIRAAPIClient
@@ -1311,7 +1268,6 @@ private struct StoryViewerNativeView: View {
   @State private var activeGroupOverride: MIRAStoryGroup?
   @State private var currentUserId: String?
   @State private var showStoryMenu = false
-  @State private var isCanvasVisible = false
   @State private var isStoryPlaybackArmed = false
   @State private var isClosing = false
   @State private var replyText = ""
@@ -1420,16 +1376,10 @@ private struct StoryViewerNativeView: View {
         .frame(width: proxy.size.width, height: proxy.size.height)
       }
     }
-    .opacity(isCanvasVisible ? 1 : 0.001)
-    .scaleEffect(reduceMotion || isCanvasVisible ? 1 : 0.992)
-    .animation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion), value: isCanvasVisible)
     .miraStatusBarHidden(true)
     .onAppear {
       prewarmStoryMediaNow(reason: "story_view_open")
       armStoryPlaybackForCurrentStory(reason: "story_view_open")
-      withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
-        isCanvasVisible = true
-      }
     }
     .task(id: currentStory?.id) {
       guard let id = currentStory?.id else { return }
@@ -1596,7 +1546,7 @@ private struct StoryViewerNativeView: View {
   }
 
   private var shouldPlayCurrentStory: Bool {
-    isStoryPlaybackArmed && isCanvasVisible && !isClosing && scenePhase == .active
+    isStoryPlaybackArmed && !isClosing && scenePhase == .active
   }
 
   private func storyPlaybackIdentity(for mediaURL: String) -> String {
@@ -2148,13 +2098,7 @@ private struct StoryViewerNativeView: View {
     guard !isClosing else { return }
     isClosing = true
     MIRAApplePerformanceLogger.event("story_viewer_close")
-    let duration = reduceMotion ? CaptroMotion.Duration.reduced : CaptroMotion.Duration.fullScreenClose
-    withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
-      isCanvasVisible = false
-    }
-    DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
-      onClose()
-    }
+    onClose()
   }
 
   private func goToPreviousStory() {
