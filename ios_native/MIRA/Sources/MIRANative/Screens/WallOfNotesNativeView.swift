@@ -190,7 +190,6 @@ public struct WallOfNotesNativeView: View {
   @State private var showFilters = false
   @State private var selectedWall = MIRAWallDestination.global
   @State private var showWallSelector = false
-  @State private var showOverview = false
   @State private var initialFrameWallID: String?
   @State private var placementNoteID: String?
   @State private var selectedStoryGroup: MIRAStoryGroup?
@@ -308,18 +307,6 @@ public struct WallOfNotesNativeView: View {
           .presentationDetents([.large])
           .presentationCornerRadius(30)
         }
-        .miraFadeScaleOverlay(isPresented: Binding(
-          get: { selectedNote != nil },
-          set: { if !$0 { selectedNote = nil } }
-        )) { dismiss in
-          if let note = selectedNote {
-            MIRAWallNoteDetailView(note: note, api: api, model: model) { updated in
-              selectedNote = updated
-            } onClose: {
-              dismiss()
-            }
-          }
-        }
         .miraActionModal(isPresented: $showFilters) { dismiss in
           MIRAActionModalCard {
             ScrollView(showsIndicators: false) {
@@ -357,22 +344,31 @@ public struct WallOfNotesNativeView: View {
             }
           }
         }
-        .miraActionModal(isPresented: $showOverview) { dismiss in
-          MIRAActionModalCard {
-            MIRAWallOverviewPanel(
-              wall: selectedWall,
-              overview: model.overview,
-              notes: model.notes
-            ) {
-              recenter(viewport: viewport)
-              dismiss()
-            }
-          }
-        }
       }
       .background(MIRATheme.Color.launchBackground)
     }
     .background(MIRATheme.Color.surface)
+    .miraFadeScaleOverlay(
+      isPresented: Binding(
+        get: { selectedNote != nil },
+        set: { if !$0 { selectedNote = nil } }
+      ),
+      scrimOpacity: 0.18
+    ) { dismiss in
+      if let note = selectedNote {
+        MIRAWallNoteDetailView(
+          note: note,
+          api: api,
+          model: model,
+          onChanged: { updated in
+            selectedNote = updated
+          },
+          onClose: dismiss
+        )
+        .padding(.horizontal, 16)
+        .padding(.vertical, 20)
+      }
+    }
     .miraStatusBarHidden(selectedStoryGroup != nil)
     .toolbar(storyTabBarVisibility, for: .tabBar)
     .miraFullScreenOverlay(item: $selectedStoryGroup, background: .black) { group, dismissStory in
@@ -412,7 +408,7 @@ public struct WallOfNotesNativeView: View {
   }
 
   private var storyTabBarVisibility: Visibility {
-    selectedStoryGroup == nil && !isStoryReportSheetPresented ? .visible : .hidden
+    selectedStoryGroup == nil && !isStoryReportSheetPresented && selectedNote == nil ? .visible : .hidden
   }
 
   @ViewBuilder
@@ -524,9 +520,9 @@ public struct WallOfNotesNativeView: View {
 
         Spacer()
 
-        wallIconButton(systemImage: "map.fill") {
-          showOverview = true
-        }
+        Color.clear
+          .frame(width: 44, height: 44)
+          .accessibilityHidden(true)
       }
       .padding(.horizontal, 18)
       .padding(.bottom, 16)
@@ -758,62 +754,6 @@ private struct MIRAWallFilteredEmptySign: View {
     .overlay(Rectangle().stroke(Color.black.opacity(0.08), lineWidth: 0.8))
     .shadow(color: .black.opacity(0.12), radius: 4, x: 1, y: 3)
     .rotationEffect(.degrees(-0.8))
-  }
-}
-
-private struct MIRAWallOverviewPanel: View {
-  let wall: MIRAWallDestination
-  let overview: MIRAWallOverview?
-  let notes: [MIRAWallNote]
-  let onRecenter: () -> Void
-
-  var body: some View {
-    VStack(spacing: 16) {
-      HStack {
-        VStack(alignment: .leading, spacing: 3) {
-          Text(wall.title)
-            .font(.system(size: 19, weight: .bold, design: .serif))
-          Text("\(overview?.totalCount ?? notes.count) real notes")
-            .font(.system(size: 12, weight: .medium))
-            .foregroundStyle(MIRATheme.Color.textSecondary)
-        }
-        Spacer()
-        Image(systemName: "map.fill")
-          .font(.system(size: 18, weight: .semibold))
-      }
-
-      Canvas { context, size in
-        let inset = CGRect(origin: .zero, size: size).insetBy(dx: 12, dy: 12)
-        context.fill(Path(roundedRect: inset, cornerRadius: 12), with: .color(Color(red: 0.90, green: 0.87, blue: 0.78)))
-        guard let bounds = overview?.noteBounds, bounds.width > 0, bounds.height > 0 else { return }
-        let scale = min(inset.width / max(bounds.width, 1), inset.height / max(bounds.height, 1)) * 0.82
-        let center = CGPoint(x: inset.midX, y: inset.midY)
-        for note in notes.prefix(500) {
-          let noteCenter = CGPoint(x: note.worldX + note.width * 0.5, y: note.worldY + note.height * 0.5)
-          let point = CGPoint(
-            x: center.x + (noteCenter.x - bounds.midX) * scale,
-            y: center.y + (noteCenter.y - bounds.midY) * scale
-          )
-          let width = max(3, min(13, note.width * scale))
-          let height = max(3, min(13, note.height * scale))
-          context.fill(
-            Path(roundedRect: CGRect(x: point.x - width * 0.5, y: point.y - height * 0.5, width: width, height: height), cornerRadius: 1),
-            with: .color(MIRAWallPaperColor.color(for: note.colorToken))
-          )
-        }
-      }
-      .frame(height: 180)
-      .overlay(RoundedRectangle(cornerRadius: 14).stroke(MIRATheme.Color.hairline, lineWidth: 1))
-
-      Button(action: onRecenter) {
-        Label("Center this wall", systemImage: "location.north.fill")
-          .font(.system(size: 15, weight: .bold))
-          .foregroundStyle(.white)
-          .frame(maxWidth: .infinity, minHeight: 48)
-          .background(MIRATheme.Color.forest, in: Capsule())
-      }
-      .buttonStyle(.miraPress)
-    }
   }
 }
 
@@ -1328,52 +1268,39 @@ private struct MIRAWallNoteDetailView: View {
 
   var body: some View {
     NavigationStack {
-      ScrollView {
-        VStack(spacing: 18) {
-          MIRAWallNoteSurface(note: note, zoom: 1.15)
-            .frame(maxWidth: 330)
-            .aspectRatio(note.width / max(note.height, 1), contentMode: .fit)
-            .rotationEffect(.degrees(note.rotation * 0.16))
+      VStack(spacing: 0) {
+        detailHeader
 
-          authorMetadata
-          actionRow
+        Divider().opacity(0.35)
 
-          if let errorMessage {
-            Text(errorMessage)
-              .font(.system(size: 12, weight: .medium))
-              .foregroundStyle(Color.red)
-              .frame(maxWidth: .infinity, alignment: .leading)
+        ScrollView {
+          VStack(spacing: 18) {
+            MIRAWallNoteSurface(note: note, zoom: 1.15)
+              .frame(maxWidth: 330)
+              .aspectRatio(note.width / max(note.height, 1), contentMode: .fit)
+              .rotationEffect(.degrees(note.rotation * 0.16))
+
+            authorMetadata
+            actionRow
+
+            if let errorMessage {
+              Text(errorMessage)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(Color.red)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            Divider().opacity(0.45)
+            replyComposer
+            repliesSection
           }
-
-          Divider().opacity(0.45)
-          replyComposer
-          repliesSection
+          .padding(18)
         }
-        .padding(18)
+        .scrollDismissesKeyboard(.interactively)
       }
-      .scrollDismissesKeyboard(.interactively)
       .background(MIRATheme.Color.surface)
+      .toolbar(.hidden, for: .navigationBar)
       .toolbar {
-        ToolbarItem(placement: .topBarLeading) {
-          Button(action: onClose) {
-            Image(systemName: "xmark")
-              .font(.system(size: 14, weight: .bold))
-              .frame(width: 38, height: 38)
-              .background(MIRATheme.Color.surfaceSoft, in: Circle())
-          }
-          .buttonStyle(.plain)
-          .accessibilityLabel("Close note")
-        }
-        ToolbarItem(placement: .topBarTrailing) {
-          Menu {
-            Button("Report", systemImage: "exclamationmark.triangle") { showReport = true }
-          } label: {
-            Image(systemName: "ellipsis")
-              .font(.system(size: 16, weight: .bold))
-              .frame(width: 38, height: 38)
-              .background(MIRATheme.Color.surfaceSoft, in: Circle())
-          }
-        }
         ToolbarItemGroup(placement: .keyboard) {
           Spacer()
           Button("Done") { replyFocused = false }
@@ -1395,7 +1322,51 @@ private struct MIRAWallNoteDetailView: View {
       }
     }
     .frame(maxWidth: 390, maxHeight: 720)
+    .background(MIRATheme.Color.surface)
     .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+    .overlay {
+      RoundedRectangle(cornerRadius: 28, style: .continuous)
+        .stroke(Color.white.opacity(0.48), lineWidth: 1)
+    }
+    .shadow(color: .black.opacity(0.18), radius: 26, y: 12)
+  }
+
+  private var detailHeader: some View {
+    HStack(spacing: 12) {
+      Button(action: onClose) {
+        Image(systemName: "xmark")
+          .font(.system(size: 14, weight: .bold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .frame(width: 44, height: 44)
+          .background(MIRATheme.Color.surfaceSoft, in: Circle())
+      }
+      .buttonStyle(.miraPress)
+      .accessibilityLabel("Close note")
+
+      Spacer()
+
+      Text("Note")
+        .font(.system(size: 16, weight: .bold))
+        .foregroundStyle(MIRATheme.Color.textPrimary)
+
+      Spacer()
+
+      Menu {
+        Button("Report", systemImage: "exclamationmark.triangle") {
+          showReport = true
+        }
+      } label: {
+        Image(systemName: "ellipsis")
+          .font(.system(size: 16, weight: .bold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .frame(width: 44, height: 44)
+          .background(MIRATheme.Color.surfaceSoft, in: Circle())
+      }
+      .buttonStyle(.plain)
+      .accessibilityLabel("Note options")
+    }
+    .padding(.horizontal, 14)
+    .padding(.vertical, 10)
   }
 
   @ViewBuilder
