@@ -228,6 +228,7 @@ public struct WallOfNotesNativeView: View {
   @State private var liveMagnificationAnchor = UnitPoint.center
   @State private var selectedNote: MIRAWallNote?
   @State private var liftedNoteID: String?
+  @State private var pressedNoteID: String?
   @State private var isCreating = false
   @State private var isSearching = false
   @State private var query = ""
@@ -400,6 +401,7 @@ public struct WallOfNotesNativeView: View {
           if !$0 {
             selectedNote = nil
             liftedNoteID = nil
+            pressedNoteID = nil
           }
         }
       ),
@@ -476,7 +478,8 @@ public struct WallOfNotesNativeView: View {
           namespace: noteTransitionNamespace,
           isNew: placementNoteID == note.id,
           wallScale: camera.scale,
-          isLifted: liftedNoteID == note.id || selectedNote?.id == note.id
+          isLifted: liftedNoteID == note.id || selectedNote?.id == note.id,
+          isPressed: pressedNoteID == note.id
         )
         .frame(width: presentation.size.width, height: presentation.size.height)
         .rotationEffect(.degrees(note.rotation + presentation.microRotation))
@@ -490,6 +493,7 @@ public struct WallOfNotesNativeView: View {
 
   private func openNote(_ note: MIRAWallNote) {
     guard selectedNote == nil, liftedNoteID == nil else { return }
+    pressedNoteID = nil
     withAnimation(CaptroMotion.buttonPressAnimation(reduceMotion: reduceMotion)) {
       liftedNoteID = note.id
     }
@@ -633,27 +637,38 @@ public struct WallOfNotesNativeView: View {
   }
 
   private func panGesture(viewport: CGSize) -> some Gesture {
-    DragGesture(minimumDistance: 5, coordinateSpace: .local)
+    DragGesture(minimumDistance: 0, coordinateSpace: .local)
       .onChanged { value in
         guard magnifyStart == nil else { return }
-        if panStart == nil { panStart = camera }
-        guard let start = panStart else { return }
+        if panStart == nil {
+          panStart = camera
+          let world = camera.worldPoint(forScreen: value.startLocation, viewport: viewport)
+          pressedNoteID = model.note(at: world)?.id
+        }
+
+        let distance = hypot(value.translation.width, value.translation.height)
+        guard distance > 4, let start = panStart else { return }
+        pressedNoteID = nil
         camera.center = CGPoint(
           x: start.center.x - value.translation.width / max(start.scale, 0.2),
           y: start.center.y - value.translation.height / max(start.scale, 0.2)
         )
       }
       .onEnded { value in
+        let distance = hypot(value.translation.width, value.translation.height)
+        pressedNoteID = nil
         guard let start = panStart else { return }
+        panStart = nil
+        guard distance > 4 else { return }
+
         let projected = CGSize(
           width: value.predictedEndTranslation.width - value.translation.width,
           height: value.predictedEndTranslation.height - value.translation.height
         )
-        panStart = nil
         guard !reduceMotion else { return }
-        withAnimation(.easeOut(duration: 0.34)) {
-          camera.center.x -= projected.width * 0.22 / max(start.scale, 0.2)
-          camera.center.y -= projected.height * 0.22 / max(start.scale, 0.2)
+        withAnimation(.spring(response: 0.36, dampingFraction: 0.91)) {
+          camera.center.x -= projected.width * 0.18 / max(start.scale, 0.2)
+          camera.center.y -= projected.height * 0.18 / max(start.scale, 0.2)
         }
       }
   }
@@ -664,6 +679,7 @@ public struct WallOfNotesNativeView: View {
         if magnifyStart == nil {
           magnifyStart = camera
           panStart = nil
+          pressedNoteID = nil
         }
         guard let start = magnifyStart else { return }
         let targetScale = min(max(start.scale * value.magnification, 0.20), 2.50)
@@ -851,47 +867,90 @@ private struct MIRAWallBackground: View {
 
   var body: some View {
     Canvas { context, size in
-      let base = Color(red: 0.925, green: 0.900, blue: 0.835)
-      context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(base))
+      context.fill(
+        Path(CGRect(origin: .zero, size: size)),
+        with: .color(Color(red: 0.932, green: 0.913, blue: 0.868))
+      )
 
-      let tileWorldSize: CGFloat = 178
+      let tileWorldSize: CGFloat = 212
       let bounds = camera.worldBounds(viewport: size, preload: tileWorldSize)
       let minTileX = Int(floor(bounds.minX / tileWorldSize))
       let maxTileX = Int(ceil(bounds.maxX / tileWorldSize))
       let minTileY = Int(floor(bounds.minY / tileWorldSize))
       let maxTileY = Int(ceil(bounds.maxY / tileWorldSize))
+      let fiberCount = camera.scale < 0.34 ? 1 : 2
+      let materialScale = min(1.18, max(0.62, camera.scale))
+
       for tileY in minTileY...maxTileY {
         for tileX in minTileX...maxTileX {
-          let seed = abs((tileX &* 73_856_093) ^ (tileY &* 19_349_663))
-          let world = CGPoint(
-            x: CGFloat(tileX) * tileWorldSize + CGFloat(seed % 91),
-            y: CGFloat(tileY) * tileWorldSize + CGFloat((seed / 97) % 83)
-          )
-          let point = camera.screenPoint(forWorld: world, viewport: size)
-          let patchSize = CGFloat(34 + seed % 74) * max(0.55, camera.scale)
-          let patch = CGRect(x: point.x - patchSize * 0.5, y: point.y - patchSize * 0.32, width: patchSize, height: patchSize * 0.64)
-          let shade = seed.isMultiple(of: 2) ? Color.white.opacity(0.018) : Color.black.opacity(0.015)
-          context.fill(Path(ellipseIn: patch), with: .color(shade))
-        }
-      }
+          let signedSeed = (tileX &* 73_856_093) ^ (tileY &* 19_349_663)
+          let seed = UInt64(bitPattern: Int64(signedSeed))
 
-      let grainSpacing: CGFloat = 23
-      var grain = Path()
-      var y: CGFloat = 4
-      while y < size.height {
-        var x = (Int(y) % 41 == 0 ? 9 : 3)
-        while CGFloat(x) < size.width {
-          grain.addEllipse(in: CGRect(x: CGFloat(x), y: y, width: 0.75, height: 0.75))
-          x += Int(grainSpacing)
+          for index in 0..<fiberCount {
+            let world = CGPoint(
+              x: CGFloat(tileX) * tileWorldSize + tileWorldSize * MIRAWallBackgroundNoise.unit(seed, index * 5 + 1),
+              y: CGFloat(tileY) * tileWorldSize + tileWorldSize * MIRAWallBackgroundNoise.unit(seed, index * 5 + 2)
+            )
+            let point = camera.screenPoint(forWorld: world, viewport: size)
+            let length = (2.2 + 4.8 * MIRAWallBackgroundNoise.unit(seed, index * 5 + 3)) * materialScale
+            let angle = (MIRAWallBackgroundNoise.unit(seed, index * 5 + 4) - 0.5) * 0.72
+            var fiber = Path()
+            fiber.move(to: point)
+            fiber.addLine(to: CGPoint(
+              x: point.x + cos(angle) * length,
+              y: point.y + sin(angle) * length
+            ))
+            let fiberColor = index.isMultiple(of: 2)
+              ? Color(red: 0.42, green: 0.31, blue: 0.18).opacity(0.022)
+              : Color(red: 0.34, green: 0.40, blue: 0.38).opacity(0.016)
+            context.stroke(
+              fiber,
+              with: .color(fiberColor),
+              style: StrokeStyle(lineWidth: 0.42, lineCap: .round)
+            )
+          }
+
+          if seed % 17 == 0 {
+            let world = CGPoint(
+              x: CGFloat(tileX) * tileWorldSize + tileWorldSize * MIRAWallBackgroundNoise.unit(seed, 31),
+              y: CGFloat(tileY) * tileWorldSize + tileWorldSize * MIRAWallBackgroundNoise.unit(seed, 32)
+            )
+            let point = camera.screenPoint(forWorld: world, viewport: size)
+            let radius = (1.3 + MIRAWallBackgroundNoise.unit(seed, 33) * 2.1) * materialScale
+            var imperfection = Path()
+            imperfection.move(to: CGPoint(x: point.x - radius, y: point.y))
+            imperfection.addQuadCurve(
+              to: CGPoint(x: point.x + radius, y: point.y + radius * 0.18),
+              control: CGPoint(x: point.x, y: point.y - radius * 0.52)
+            )
+            imperfection.addQuadCurve(
+              to: CGPoint(x: point.x - radius, y: point.y),
+              control: CGPoint(x: point.x, y: point.y + radius * 0.44)
+            )
+            context.fill(
+              imperfection,
+              with: .color(Color(red: 0.48, green: 0.34, blue: 0.20).opacity(0.010))
+            )
+          }
         }
-        y += grainSpacing
       }
-      context.fill(grain, with: .color(Color.black.opacity(0.025)))
     }
     .allowsHitTesting(false)
+    .accessibilityHidden(true)
   }
 }
 
+private enum MIRAWallBackgroundNoise {
+  static func unit(_ seed: UInt64, _ salt: Int) -> CGFloat {
+    var mixed = seed &+ UInt64(max(0, salt) + 1) &* 0x9E3779B97F4A7C15
+    mixed ^= mixed >> 30
+    mixed &*= 0xBF58476D1CE4E5B9
+    mixed ^= mixed >> 27
+    mixed &*= 0x94D049BB133111EB
+    mixed ^= mixed >> 31
+    return CGFloat(mixed % 10_000) / 10_000
+  }
+}
 private struct MIRACreateWallNoteView: View {
   let camera: MIRAWallCamera
   let wall: MIRAWallDestination
@@ -1143,30 +1202,31 @@ private struct MIRACreateWallNoteView: View {
     let previewText = cleanBody.isEmpty
       ? (hasPhoto ? "Add a thought below your photo." : "What do you want to leave on the wall?")
       : cleanBody
-    let size = MIRAWallNotePresentationResolver.recommendedSize(
+    let baseSize = MIRAWallNotePresentationResolver.recommendedSize(
       styleToken: previewStyleToken,
       text: previewText,
       hasMedia: hasPhoto
     )
-    let previewScale = min(1.08, min(258 / size.width, 286 / size.height))
     let preview = MIRAWallNote(
       id: "preview-\(previewStyleToken)", wallId: wall.id, publishingIdentity: identity,
       body: previewText,
       category: category.isEmpty ? nil : category, colorToken: colorToken, styleToken: previewStyleToken,
       mediaUrl: nil, mediaThumbnailUrl: nil,
-      worldX: 0, worldY: 0, width: size.width, height: size.height,
+      worldX: 0, worldY: 0, width: baseSize.width, height: baseSize.height,
       rotation: 0, zIndex: 0, approximateLocation: nil, createdAt: "", updatedAt: nil,
       saveCount: 0, reactionCount: 0, replyCount: 0, reactedByViewer: false, savedByViewer: false, authorPreview: nil
     )
+    let renderedSize = MIRAWallNotePresentationResolver.resolve(preview, hasLocalMedia: hasPhoto).size
+    let previewScale = min(1.08, min(258 / renderedSize.width, 286 / renderedSize.height))
     return MIRAWallNoteRenderer(
       note: preview,
       zoom: 1,
       isFocused: true,
       localMediaImage: selectedPhotoImage
     )
-      .frame(width: size.width, height: size.height)
+      .frame(width: renderedSize.width, height: renderedSize.height)
       .scaleEffect(previewScale)
-      .frame(width: size.width * previewScale, height: size.height * previewScale)
+      .frame(width: renderedSize.width * previewScale, height: renderedSize.height * previewScale)
       .opacity(cleanBody.isEmpty ? 0.72 : 1)
       .animation(CaptroMotion.smallMenuAnimation(reduceMotion: false), value: previewStyleToken)
       .animation(CaptroMotion.mediaFadeAnimation(reduceMotion: false), value: hasPhoto)

@@ -7,6 +7,7 @@ struct MIRAWallNoteTile: View {
   let isNew: Bool
   let wallScale: CGFloat
   let isLifted: Bool
+  let isPressed: Bool
 
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var hasEntered = false
@@ -26,9 +27,22 @@ struct MIRAWallNoteTile: View {
       )
       .offset(hasEntered ? .zero : initialOffset)
       .rotationEffect(.degrees(hasEntered ? 0 : initialEntranceRotation))
-      .scaleEffect(isLifted ? 1.035 : 1)
-      .offset(y: isLifted ? -6 : 0)
-      .animation(CaptroMotion.buttonPressAnimation(reduceMotion: reduceMotion), value: isLifted)
+      .rotation3DEffect(
+        .degrees(isLifted ? 0 : warpX),
+        axis: (x: 1, y: 0, z: 0),
+        anchor: warpAnchor,
+        perspective: 0.22
+      )
+      .rotation3DEffect(
+        .degrees(isLifted ? 0 : warpY),
+        axis: (x: 0, y: 1, z: 0),
+        anchor: warpAnchor,
+        perspective: 0.22
+      )
+      .scaleEffect(interactionScale)
+      .offset(x: isLifted ? -1.5 : 0, y: isLifted ? -8 : 0)
+      .animation(CaptroMotion.buttonPressAnimation(reduceMotion: reduceMotion), value: isPressed)
+      .animation(.spring(response: 0.34, dampingFraction: 0.82), value: isLifted)
       .onAppear {
         guard !hasEntered else { return }
         if reduceMotion {
@@ -50,6 +64,39 @@ struct MIRAWallNoteTile: View {
           }
         }
       }
+  }
+
+  private var interactionScale: CGFloat {
+    if isPressed { return 0.985 }
+    return isLifted ? 1.045 : 1
+  }
+
+  private var warpX: Double {
+    switch presentation.warp {
+    case .topLeftLifted: -0.42
+    case .bottomRightLifted: 0.46
+    case .curledBottom: 0.72
+    case .centerBend: 0.18
+    case .flat: 0
+    }
+  }
+
+  private var warpY: Double {
+    switch presentation.warp {
+    case .topLeftLifted: 0.48
+    case .bottomRightLifted: -0.44
+    case .centerBend: -0.20
+    case .curledBottom, .flat: 0
+    }
+  }
+
+  private var warpAnchor: UnitPoint {
+    switch presentation.warp {
+    case .topLeftLifted: .bottomTrailing
+    case .bottomRightLifted: .topLeading
+    case .curledBottom: .top
+    case .centerBend, .flat: .center
+    }
   }
 
   private var initialOpacity: Double {
@@ -124,7 +171,7 @@ struct MIRAWallNoteRenderer: View {
   var body: some View {
     GeometryReader { proxy in
       ZStack {
-        MIRAWallPaperBackground(note: note, presentation: presentation)
+        MIRAWallPaperBackground(note: note, presentation: presentation, renderDetail: renderDetail)
 
         if presentation.style == .polaroid, localMediaImage != nil || note.mediaThumbnailUrl != nil || note.mediaUrl != nil {
           MIRAWallPolaroidContent(
@@ -139,6 +186,8 @@ struct MIRAWallNoteRenderer: View {
         }
 
         if renderDetail != .distant {
+          MIRAWallWarpCue(warp: presentation.warp, darkPaper: presentation.usesDarkPaper)
+            .transition(.opacity)
           MIRAWallPhysicalDetails(note: note, presentation: presentation, zoom: zoom)
             .transition(.opacity)
         }
@@ -152,10 +201,16 @@ struct MIRAWallNoteRenderer: View {
       .contentShape(Rectangle())
       .animation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion), value: renderDetail)
       .shadow(
-        color: .black.opacity(isFocused ? 0.24 : shadowOpacity),
-        radius: isFocused ? 18 : shadowRadius,
-        x: 0,
-        y: isFocused ? 11 : shadowY
+        color: .black.opacity(isFocused ? 0.18 : depth.contactOpacity),
+        radius: isFocused ? 2.8 : depth.contactRadius,
+        x: isFocused ? 1.2 : depth.contactX,
+        y: isFocused ? 3.2 : depth.contactY
+      )
+      .shadow(
+        color: .black.opacity(isFocused ? 0.25 : depth.castOpacity),
+        radius: isFocused ? 20 : depth.castRadius,
+        x: isFocused ? 6 : depth.castX,
+        y: isFocused ? 15 : depth.castY
       )
     }
     .accessibilityElement(children: .ignore)
@@ -163,72 +218,203 @@ struct MIRAWallNoteRenderer: View {
     .accessibilityValue(note.body)
   }
 
-  private var shadowOpacity: Double {
-    presentation.style == .minimal ? 0.06 : 0.15
-  }
-
-  private var shadowRadius: CGFloat {
-    presentation.style == .minimal ? 2 : max(2.5, 5 * zoom)
-  }
-
-  private var shadowY: CGFloat {
-    presentation.style == .minimal ? 1 : max(1.5, 3.5 * zoom)
+  private var depth: MIRAWallDepthProfile {
+    MIRAWallDepthProfile.resolve(
+      style: presentation.style,
+      warp: presentation.warp,
+      zoom: zoom
+    )
   }
 }
 
+private enum MIRAWallLight {
+  static let contactX: CGFloat = 0.7
+  static let contactY: CGFloat = 1.4
+  static let castX: CGFloat = 2.6
+  static let castY: CGFloat = 4.8
+}
+
+private struct MIRAWallDepthProfile {
+  let contactOpacity: Double
+  let contactRadius: CGFloat
+  let contactX: CGFloat
+  let contactY: CGFloat
+  let castOpacity: Double
+  let castRadius: CGFloat
+  let castX: CGFloat
+  let castY: CGFloat
+
+  static func resolve(
+    style: MIRAWallNoteVisualStyle,
+    warp: MIRAWallPaperWarp,
+    zoom: CGFloat
+  ) -> MIRAWallDepthProfile {
+    let thickness: CGFloat
+    switch style {
+    case .polaroid: thickness = 1.55
+    case .postcard, .poster: thickness = 1.22
+    case .receipt, .minimal: thickness = 0.70
+    default: thickness = 1
+    }
+    let lift: CGFloat = warp == .flat ? 1 : (warp == .curledBottom ? 1.42 : 1.22)
+    let scale = max(0.74, zoom)
+    return MIRAWallDepthProfile(
+      contactOpacity: style == .minimal ? 0.08 : 0.13,
+      contactRadius: max(0.7, 1.15 * thickness * scale),
+      contactX: MIRAWallLight.contactX * lift,
+      contactY: MIRAWallLight.contactY * lift,
+      castOpacity: style == .minimal ? 0.055 : 0.12 + Double((thickness - 1) * 0.035),
+      castRadius: max(2, 4.4 * thickness * lift * scale),
+      castX: MIRAWallLight.castX * lift,
+      castY: MIRAWallLight.castY * lift
+    )
+  }
+}
+
+private struct MIRAWallWarpCue: View {
+  let warp: MIRAWallPaperWarp
+  let darkPaper: Bool
+
+  var body: some View {
+    GeometryReader { proxy in
+      ZStack {
+        switch warp {
+        case .topLeftLifted:
+          cornerLift(size: proxy.size, alignment: .topLeading, angle: 135)
+        case .bottomRightLifted:
+          cornerLift(size: proxy.size, alignment: .bottomTrailing, angle: -45)
+        case .curledBottom:
+          VStack(spacing: 0) {
+            Spacer()
+            LinearGradient(
+              colors: [Color.clear, shadowColor.opacity(0.08), highlightColor.opacity(0.09)],
+              startPoint: .top,
+              endPoint: .bottom
+            )
+            .frame(height: min(13, proxy.size.height * 0.08))
+          }
+        case .centerBend:
+          LinearGradient(
+            colors: [Color.clear, highlightColor.opacity(0.045), shadowColor.opacity(0.035), Color.clear],
+            startPoint: .leading,
+            endPoint: .trailing
+          )
+        case .flat:
+          Color.clear
+        }
+      }
+    }
+    .allowsHitTesting(false)
+  }
+
+  private func cornerLift(size: CGSize, alignment: Alignment, angle: Double) -> some View {
+    LinearGradient(
+      colors: [highlightColor.opacity(0.13), Color.clear, shadowColor.opacity(0.08)],
+      startPoint: .topLeading,
+      endPoint: .bottomTrailing
+    )
+    .frame(width: min(42, size.width * 0.24), height: min(42, size.height * 0.24))
+    .rotationEffect(.degrees(angle))
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: alignment)
+  }
+
+  private var shadowColor: Color { darkPaper ? .white : .black }
+  private var highlightColor: Color { darkPaper ? .black : .white }
+}
 private struct MIRAWallPaperBackground: View {
   let note: MIRAWallNote
   let presentation: MIRAWallNotePresentation
+  let renderDetail: MIRAWallNoteRenderDetail
 
   @ViewBuilder
   var body: some View {
     switch presentation.style {
     case .sticky:
-      Rectangle()
+      MIRAWallImperfectPaperShape(seed: note.id, roughness: 0.48)
         .fill(MIRAWallPaperColor.color(for: presentation.usesAccentColor ? note.colorToken : "cream"))
-        .overlay(MIRAWallPaperGrain(seed: note.id, opacity: 0.13))
+        .overlay {
+          materialLayer.clipShape(MIRAWallImperfectPaperShape(seed: note.id, roughness: 0.48))
+        }
     case .editorial:
-      Rectangle()
+      MIRAWallImperfectPaperShape(seed: note.id, roughness: 0.42)
         .fill(MIRAWallPaperColor.color(for: "cream"))
-        .overlay(alignment: .leading) { Rectangle().fill(Color.black.opacity(0.16)).frame(width: 2) }
-        .overlay(MIRAWallPaperGrain(seed: note.id, opacity: 0.10))
+        .overlay(alignment: .leading) {
+          Rectangle().fill(Color.black.opacity(0.13)).frame(width: 1.5).padding(.vertical, 3)
+        }
+        .overlay {
+          materialLayer.clipShape(MIRAWallImperfectPaperShape(seed: note.id, roughness: 0.42))
+        }
     case .handwritten:
       MIRAWallSoftScrapShape(seed: note.id)
         .fill(MIRAWallPaperColor.color(for: presentation.usesAccentColor ? note.colorToken : "paper"))
-        .overlay(MIRAWallPaperGrain(seed: note.id, opacity: 0.14).clipShape(MIRAWallSoftScrapShape(seed: note.id)))
+        .overlay { materialLayer.clipShape(MIRAWallSoftScrapShape(seed: note.id)) }
     case .poster:
-      Rectangle()
-        .fill(presentation.usesDarkPaper ? Color(red: 0.075, green: 0.07, blue: 0.06) : MIRAWallPaperColor.color(for: presentation.usesAccentColor ? note.colorToken : "paper"))
-        .overlay(Rectangle().stroke(presentation.usesDarkPaper ? Color.white.opacity(0.24) : Color.black.opacity(0.18), lineWidth: 1.2).padding(7))
+      MIRAWallImperfectPaperShape(seed: note.id, roughness: 0.36)
+        .fill(presentation.usesDarkPaper
+          ? Color(red: 0.075, green: 0.07, blue: 0.06)
+          : MIRAWallPaperColor.color(for: presentation.usesAccentColor ? note.colorToken : "paper"))
+        .overlay {
+          materialLayer.clipShape(MIRAWallImperfectPaperShape(seed: note.id, roughness: 0.36))
+        }
+        .overlay {
+          MIRAWallImperfectPaperShape(seed: note.id, roughness: 0.30)
+            .stroke(presentation.usesDarkPaper ? Color.white.opacity(0.20) : Color.black.opacity(0.14), lineWidth: 1)
+            .padding(7)
+        }
     case .polaroid:
-      Rectangle()
-        .fill(Color(red: 0.97, green: 0.965, blue: 0.935))
-        .overlay(MIRAWallPaperGrain(seed: note.id, opacity: 0.08))
+      MIRAWallImperfectPaperShape(seed: note.id, roughness: 0.28)
+        .fill(Color(red: 0.968, green: 0.956, blue: 0.915))
+        .overlay {
+          materialLayer.clipShape(MIRAWallImperfectPaperShape(seed: note.id, roughness: 0.28))
+        }
     case .receipt:
       MIRAWallReceiptShape()
-        .fill(Color(red: 0.965, green: 0.955, blue: 0.90))
-        .overlay(MIRAWallPaperGrain(seed: note.id, opacity: 0.10).clipShape(MIRAWallReceiptShape()))
+        .fill(Color(red: 0.955, green: 0.944, blue: 0.892))
+        .overlay { materialLayer.clipShape(MIRAWallReceiptShape()) }
     case .tornPaper:
       MIRAWallTornPaperShape(seed: note.id)
-        .fill(MIRAWallPaperColor.color(for: "paper"))
-        .overlay(MIRAWallPaperGrain(seed: note.id, opacity: 0.15).clipShape(MIRAWallTornPaperShape(seed: note.id)))
+        .fill(presentation.material == .kraft
+          ? Color(red: 0.76, green: 0.66, blue: 0.49)
+          : MIRAWallPaperColor.color(for: "paper"))
+        .overlay { materialLayer.clipShape(MIRAWallTornPaperShape(seed: note.id)) }
     case .notebook:
-      Rectangle()
-        .fill(Color(red: 0.975, green: 0.965, blue: 0.91))
-        .overlay(MIRAWallNotebookLines())
-        .overlay(MIRAWallPaperGrain(seed: note.id, opacity: 0.07))
+      MIRAWallImperfectPaperShape(seed: note.id, roughness: 0.38)
+        .fill(Color(red: 0.966, green: 0.957, blue: 0.914))
+        .overlay {
+          materialLayer.clipShape(MIRAWallImperfectPaperShape(seed: note.id, roughness: 0.38))
+        }
     case .postcard:
-      Rectangle()
-        .fill(Color(red: 0.92, green: 0.865, blue: 0.735))
-        .overlay(MIRAWallPostcardMarks())
-        .overlay(MIRAWallPaperGrain(seed: note.id, opacity: 0.17))
+      MIRAWallImperfectPaperShape(seed: note.id, roughness: 0.46)
+        .fill(presentation.material == .kraft
+          ? Color(red: 0.79, green: 0.69, blue: 0.52)
+          : Color(red: 0.90, green: 0.842, blue: 0.716))
+        .overlay {
+          MIRAWallPostcardMarks()
+            .clipShape(MIRAWallImperfectPaperShape(seed: note.id, roughness: 0.46))
+        }
+        .overlay {
+          materialLayer.clipShape(MIRAWallImperfectPaperShape(seed: note.id, roughness: 0.46))
+        }
     case .minimal:
-      Rectangle()
-        .fill(Color(red: 0.965, green: 0.945, blue: 0.875).opacity(0.72))
+      MIRAWallImperfectPaperShape(seed: note.id, roughness: 0.24)
+        .fill(Color(red: 0.958, green: 0.937, blue: 0.866).opacity(0.94))
+        .overlay {
+          materialLayer.clipShape(MIRAWallImperfectPaperShape(seed: note.id, roughness: 0.24))
+        }
         .overlay(alignment: .bottomLeading) {
-          Rectangle().fill(Color.black.opacity(0.24)).frame(width: 42, height: 2).padding(.leading, 18).padding(.bottom, 13)
+          Rectangle().fill(Color.black.opacity(0.22)).frame(width: 42, height: 1.5)
+            .padding(.leading, 18).padding(.bottom, 13)
         }
     }
+  }
+
+  private var materialLayer: some View {
+    MIRAWallPaperMaterialLayer(
+      seed: note.id,
+      material: presentation.material,
+      darkPaper: presentation.usesDarkPaper,
+      detail: renderDetail
+    )
   }
 }
 
@@ -255,6 +441,7 @@ private struct MIRAWallTypographyView: View {
       }
     }
     .foregroundStyle(inkColor)
+    .shadow(color: inkColor.opacity(inkBleedOpacity), radius: inkBleedRadius, x: 0.16, y: 0.12)
     .padding(contentInsets)
   }
 
@@ -275,6 +462,7 @@ private struct MIRAWallTypographyView: View {
       + Text(pieces.1)
       .font(.system(size: max(12, adaptiveSize * 0.88), weight: .regular, design: .serif))
       .italic())
+      .tracking(inkTracking)
       .multilineTextAlignment(styleAlignment)
       .lineLimit(maxLineCount)
       .minimumScaleFactor(0.62)
@@ -285,6 +473,7 @@ private struct MIRAWallTypographyView: View {
   private func standardTypography(font: Font, alignment: TextAlignment) -> some View {
     Text(note.body)
       .font(font)
+      .tracking(inkTracking)
       .multilineTextAlignment(alignment)
       .lineLimit(maxLineCount)
       .minimumScaleFactor(0.58)
@@ -302,7 +491,12 @@ private struct MIRAWallTypographyView: View {
             weight: index.isMultiple(of: 2) ? .black : .bold,
             design: presentation.typography == .chaos ? .monospaced : .rounded
           ))
+          .tracking(inkTracking)
           .rotationEffect(.degrees(presentation.typography == .chaos && index == 1 ? -1.4 : 0))
+          .offset(
+            x: presentation.typography == .thought ? handwritingOffset(index, salt: 1) : 0,
+            y: presentation.typography == .thought ? handwritingOffset(index, salt: 2) * 0.45 : 0
+          )
           .lineLimit(2)
           .minimumScaleFactor(0.70)
       }
@@ -371,6 +565,38 @@ private struct MIRAWallTypographyView: View {
   private var inkColor: Color {
     presentation.usesDarkPaper ? Color(red: 0.98, green: 0.95, blue: 0.84) : Color(red: 0.105, green: 0.095, blue: 0.075)
   }
+
+  private var inkTracking: CGFloat {
+    let hash = MIRAWallNotePresentationResolver.stableHash(note.id)
+    let variation = CGFloat(Int((hash / 43) % 5) - 2) * 0.035
+    switch presentation.typography {
+    case .thought, .chaos: return 0.12 + variation
+    case .loud: return 0.04 + variation
+    case .confession, .editorial: return variation
+    }
+  }
+
+  private var inkBleedOpacity: Double {
+    switch presentation.typography {
+    case .loud, .thought: 0.12
+    case .chaos: 0.08
+    case .confession, .editorial: 0.045
+    }
+  }
+
+  private var inkBleedRadius: CGFloat {
+    switch presentation.typography {
+    case .loud: 0.34
+    case .thought: 0.24
+    case .chaos: 0.18
+    case .confession, .editorial: 0.10
+    }
+  }
+
+  private func handwritingOffset(_ index: Int, salt: Int) -> CGFloat {
+    let hash = MIRAWallNotePresentationResolver.stableHash(note.id)
+    return (MIRAWallMaterialNoise.unit(hash, 800 + index * 7 + salt) - 0.5) * 1.2
+  }
 }
 
 private struct MIRAWallPolaroidContent: View {
@@ -400,7 +626,17 @@ private struct MIRAWallPolaroidContent: View {
         }
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
-      .clipped()
+      .scaleEffect(1.006)
+      .rotationEffect(.degrees(photoCropRotation))
+      .clipShape(MIRAWallPhotoCropShape(seed: note.id))
+      .overlay {
+        MIRAWallPhotoPrintTexture(seed: note.id)
+          .clipShape(MIRAWallPhotoCropShape(seed: note.id))
+      }
+      .overlay {
+        MIRAWallPhotoCropShape(seed: note.id)
+          .stroke(Color.black.opacity(0.10), lineWidth: 0.65)
+      }
 
       Text(note.body)
         .font(.custom("Noteworthy", size: max(11, min(19, 16 * zoom))))
@@ -411,7 +647,12 @@ private struct MIRAWallPolaroidContent: View {
         .padding(.horizontal, 3)
     }
     .padding(11)
-    .padding(.bottom, 5)
+    .padding(.bottom, 10)
+  }
+
+  private var photoCropRotation: Double {
+    let hash = MIRAWallNotePresentationResolver.stableHash(note.id)
+    return Double(Int((hash / 31) % 5) - 2) * 0.08
   }
 
   private var mediaDecodeSize: CGFloat {
@@ -440,43 +681,37 @@ private struct MIRAWallPhysicalDetails: View {
     switch presentation.attachment {
     case .tape:
       VStack {
-        Rectangle()
-          .fill(Color.white.opacity(presentation.usesDarkPaper ? 0.30 : 0.52))
-          .frame(width: max(30, 50 * zoom), height: max(7, 10 * zoom))
-          .rotationEffect(.degrees(presentation.microRotation * -0.7))
-          .offset(y: -4)
+        MIRAWallMaskingTape(seed: note.id, darkPaper: presentation.usesDarkPaper)
+          .frame(width: max(40, 58 * zoom), height: max(10, 14 * zoom))
+          .rotationEffect(.degrees(presentation.microRotation * -0.58))
+          .offset(x: -MIRAWallLight.castX * 0.25, y: -6)
         Spacer()
       }
     case .pin:
       VStack {
-        Circle()
-          .fill(pinColor)
-          .frame(width: max(7, 11 * zoom), height: max(7, 11 * zoom))
-          .overlay(Circle().stroke(Color.white.opacity(0.42), lineWidth: 0.8))
-          .shadow(color: .black.opacity(0.24), radius: 1.5, y: 1.5)
-          .offset(y: -4)
+        MIRAWallPushPin(color: pinColor)
+          .frame(width: max(13, 18 * zoom), height: max(15, 21 * zoom))
+          .offset(x: -MIRAWallLight.castX * 0.35, y: -8)
         Spacer()
       }
     case .paperclip:
       VStack {
         HStack {
-          Image(systemName: "paperclip")
-            .font(.system(size: max(12, 19 * zoom), weight: .medium))
-            .foregroundStyle(Color.black.opacity(0.50))
-            .rotationEffect(.degrees(-18))
+          MIRAWallPaperClip(seed: note.id)
+            .frame(width: max(21, 28 * zoom), height: max(31, 42 * zoom))
+            .rotationEffect(.degrees(-12 + presentation.microRotation * 0.4))
+            .offset(y: -10)
           Spacer()
         }
         Spacer()
       }
       .padding(.leading, 8)
-      .offset(y: -5)
     case .foldedCorner:
       VStack {
         HStack {
           Spacer()
-          MIRAWallFoldShape()
-            .fill(Color.white.opacity(0.34))
-            .frame(width: max(14, 24 * zoom), height: max(14, 24 * zoom))
+          MIRAWallFoldedCorner(darkPaper: presentation.usesDarkPaper)
+            .frame(width: max(17, 27 * zoom), height: max(17, 27 * zoom))
         }
         Spacer()
       }
@@ -534,6 +769,141 @@ private struct MIRAWallPhysicalDetails: View {
   }
 }
 
+private struct MIRAWallMaskingTape: View {
+  let seed: String
+  let darkPaper: Bool
+
+  var body: some View {
+    MIRAWallTapeShape(seed: seed)
+      .fill(darkPaper ? Color.white.opacity(0.28) : Color(red: 0.97, green: 0.95, blue: 0.83).opacity(0.58))
+      .overlay {
+        Canvas { context, size in
+          let hash = MIRAWallNotePresentationResolver.stableHash("tape:\(seed)")
+          for index in 0..<3 {
+            let y = size.height * (0.28 + CGFloat(index) * 0.22)
+            var wrinkle = Path()
+            wrinkle.move(to: CGPoint(x: size.width * 0.08, y: y))
+            wrinkle.addCurve(
+              to: CGPoint(x: size.width * 0.92, y: y + MIRAWallMaterialNoise.unit(hash, index) * 1.2),
+              control1: CGPoint(x: size.width * 0.34, y: y - 0.8),
+              control2: CGPoint(x: size.width * 0.64, y: y + 0.9)
+            )
+            context.stroke(wrinkle, with: .color(Color.white.opacity(0.16)), lineWidth: 0.45)
+          }
+        }
+        .clipShape(MIRAWallTapeShape(seed: seed))
+      }
+      .overlay {
+        MIRAWallTapeShape(seed: seed)
+          .stroke(Color.white.opacity(0.18), lineWidth: 0.45)
+      }
+      .shadow(
+        color: .black.opacity(0.12),
+        radius: 1.2,
+        x: MIRAWallLight.contactX,
+        y: MIRAWallLight.contactY
+      )
+  }
+}
+
+private struct MIRAWallPushPin: View {
+  let color: Color
+
+  var body: some View {
+    ZStack {
+      Ellipse()
+        .fill(Color.black.opacity(0.12))
+        .frame(width: 13, height: 6)
+        .offset(x: MIRAWallLight.castX * 0.45, y: 6)
+
+      Capsule()
+        .fill(Color.black.opacity(0.38))
+        .frame(width: 2, height: 9)
+        .rotationEffect(.degrees(-15))
+        .offset(x: 2.5, y: 5)
+
+      Circle()
+        .fill(
+          RadialGradient(
+            colors: [Color.white.opacity(0.72), color, color.opacity(0.72)],
+            center: .topLeading,
+            startRadius: 0,
+            endRadius: 10
+          )
+        )
+        .frame(width: 13, height: 13)
+        .overlay(alignment: .topLeading) {
+          Circle().fill(Color.white.opacity(0.48)).frame(width: 3.2, height: 3.2).padding(2.2)
+        }
+        .shadow(
+          color: .black.opacity(0.27),
+          radius: 1.5,
+          x: MIRAWallLight.contactX,
+          y: MIRAWallLight.contactY
+        )
+    }
+  }
+}
+
+private struct MIRAWallPaperClip: View {
+  let seed: String
+
+  var body: some View {
+    Canvas { context, size in
+      let inset = max(2, size.width * 0.16)
+      var outer = Path()
+      outer.move(to: CGPoint(x: size.width * 0.68, y: 0))
+      outer.addCurve(
+        to: CGPoint(x: inset, y: size.height * 0.64),
+        control1: CGPoint(x: size.width * 0.96, y: size.height * 0.18),
+        control2: CGPoint(x: size.width * 0.80, y: size.height * 0.68)
+      )
+      outer.addCurve(
+        to: CGPoint(x: size.width * 0.52, y: size.height * 0.88),
+        control1: CGPoint(x: 0, y: size.height * 0.80),
+        control2: CGPoint(x: size.width * 0.22, y: size.height)
+      )
+      outer.addLine(to: CGPoint(x: size.width * 0.72, y: size.height * 0.43))
+
+      context.stroke(
+        outer,
+        with: .color(Color.black.opacity(0.20)),
+        style: StrokeStyle(lineWidth: 3.2, lineCap: .round, lineJoin: .round)
+      )
+      context.stroke(
+        outer,
+        with: .linearGradient(
+          Gradient(colors: [Color.white.opacity(0.82), Color.gray.opacity(0.72), Color.white.opacity(0.52)]),
+          startPoint: .zero,
+          endPoint: CGPoint(x: size.width, y: size.height)
+        ),
+        style: StrokeStyle(lineWidth: 1.65, lineCap: .round, lineJoin: .round)
+      )
+
+      var edgeWrap = Path()
+      edgeWrap.move(to: CGPoint(x: size.width * 0.10, y: size.height * 0.24))
+      edgeWrap.addLine(to: CGPoint(x: size.width * 0.78, y: size.height * 0.24))
+      context.stroke(edgeWrap, with: .color(Color.black.opacity(0.18)), lineWidth: 0.8)
+    }
+    .allowsHitTesting(false)
+  }
+}
+
+private struct MIRAWallFoldedCorner: View {
+  let darkPaper: Bool
+
+  var body: some View {
+    ZStack(alignment: .topTrailing) {
+      MIRAWallFoldShape()
+        .fill(Color.black.opacity(0.10))
+        .offset(x: MIRAWallLight.castX * 0.5, y: MIRAWallLight.castY * 0.45)
+      MIRAWallFoldShape()
+        .fill(darkPaper ? Color.white.opacity(0.16) : Color.white.opacity(0.46))
+      MIRAWallFoldShape()
+        .stroke(darkPaper ? Color.white.opacity(0.16) : Color.black.opacity(0.09), lineWidth: 0.55)
+    }
+  }
+}
 private struct MIRAWallIdentityMark: View {
   let note: MIRAWallNote
   let style: MIRAWallNoteVisualStyle
@@ -557,30 +927,178 @@ private struct MIRAWallIdentityMark: View {
   }
 }
 
-private struct MIRAWallPaperGrain: View {
+private struct MIRAWallPaperMaterialLayer: View {
   let seed: String
-  let opacity: Double
+  let material: MIRAWallPaperMaterial
+  let darkPaper: Bool
+  let detail: MIRAWallNoteRenderDetail
 
   var body: some View {
     Canvas { context, size in
       let hash = MIRAWallNotePresentationResolver.stableHash(seed)
-      for index in 0..<14 {
-        let xSeed = (hash &+ UInt64(index * 7919)) % 10_000
-        let ySeed = (hash &+ UInt64(index * 3571)) % 10_000
-        let x = size.width * CGFloat(xSeed) / 10_000
-        let y = size.height * CGFloat(ySeed) / 10_000
-        let radius = CGFloat(0.45 + Double((hash &+ UInt64(index)) % 7) * 0.10)
-        context.fill(Path(ellipseIn: CGRect(x: x, y: y, width: radius, height: radius)), with: .color(Color.black.opacity(opacity)))
-      }
-      for index in 0..<7 {
-        let y = size.height * CGFloat(index + 1) / 8
-        var line = Path()
-        line.move(to: CGPoint(x: 0, y: y))
-        line.addLine(to: CGPoint(x: size.width, y: y + (index.isMultiple(of: 2) ? 0.5 : -0.4)))
-        context.stroke(line, with: .color(Color.black.opacity(opacity * 0.30)), lineWidth: 0.35)
-      }
+      drawTonalVariation(context: &context, size: size, hash: hash)
+      drawFibers(context: &context, size: size, hash: hash)
+      drawMaterialMarks(context: &context, size: size, hash: hash)
+      drawEdgeAge(context: &context, size: size)
     }
     .allowsHitTesting(false)
+    .accessibilityHidden(true)
+  }
+
+  private func drawTonalVariation(context: inout GraphicsContext, size: CGSize, hash: UInt64) {
+    let count = detail == .distant ? 2 : 5
+    for index in 0..<count {
+      let x = size.width * MIRAWallMaterialNoise.unit(hash, index * 5 + 1)
+      let y = size.height * MIRAWallMaterialNoise.unit(hash, index * 5 + 2)
+      let width = size.width * (0.16 + MIRAWallMaterialNoise.unit(hash, index * 5 + 3) * 0.30)
+      let height = size.height * (0.10 + MIRAWallMaterialNoise.unit(hash, index * 5 + 4) * 0.22)
+      let color = index.isMultiple(of: 2) ? warmTone : coolTone
+      context.fill(
+        Path(ellipseIn: CGRect(x: x - width * 0.5, y: y - height * 0.5, width: width, height: height)),
+        with: .color(color)
+      )
+    }
+  }
+
+  private func drawFibers(context: inout GraphicsContext, size: CGSize, hash: UInt64) {
+    let baseCount: Int
+    switch material {
+    case .kraft, .aged: baseCount = 34
+    case .notebook, .graph, .ivory: baseCount = 24
+    case .photographic, .coated: baseCount = 12
+    }
+    let count = detail == .distant ? max(7, baseCount / 3) : baseCount
+    for index in 0..<count {
+      let x = size.width * MIRAWallMaterialNoise.unit(hash, 100 + index * 4)
+      let y = size.height * MIRAWallMaterialNoise.unit(hash, 101 + index * 4)
+      let length = 2.5 + MIRAWallMaterialNoise.unit(hash, 102 + index * 4) * (material == .kraft ? 13 : 8)
+      let angle = (MIRAWallMaterialNoise.unit(hash, 103 + index * 4) - 0.5) * 0.55
+      var fiber = Path()
+      fiber.move(to: CGPoint(x: x, y: y))
+      fiber.addLine(to: CGPoint(x: x + cos(angle) * length, y: y + sin(angle) * length))
+      context.stroke(
+        fiber,
+        with: .color(fiberColor.opacity(material == .kraft ? 0.085 : 0.045)),
+        style: StrokeStyle(lineWidth: material == .kraft ? 0.55 : 0.36, lineCap: .round)
+      )
+    }
+  }
+
+  private func drawMaterialMarks(context: inout GraphicsContext, size: CGSize, hash: UInt64) {
+    switch material {
+    case .notebook:
+      var y: CGFloat = 28
+      while y < size.height {
+        var line = Path()
+        line.move(to: CGPoint(x: 0, y: y))
+        line.addLine(to: CGPoint(x: size.width, y: y + 0.15))
+        context.stroke(line, with: .color(Color.blue.opacity(0.105)), lineWidth: 0.55)
+        y += 22
+      }
+      var margin = Path()
+      margin.move(to: CGPoint(x: min(29, size.width * 0.14), y: 0))
+      margin.addLine(to: CGPoint(x: min(29, size.width * 0.14), y: size.height))
+      context.stroke(margin, with: .color(Color.red.opacity(0.15)), lineWidth: 0.7)
+    case .graph:
+      let spacing: CGFloat = 18
+      var x: CGFloat = spacing
+      while x < size.width {
+        var line = Path()
+        line.move(to: CGPoint(x: x, y: 0))
+        line.addLine(to: CGPoint(x: x, y: size.height))
+        context.stroke(line, with: .color(Color.blue.opacity(0.075)), lineWidth: 0.45)
+        x += spacing
+      }
+      var y: CGFloat = spacing
+      while y < size.height {
+        var line = Path()
+        line.move(to: CGPoint(x: 0, y: y))
+        line.addLine(to: CGPoint(x: size.width, y: y))
+        context.stroke(line, with: .color(Color.blue.opacity(0.075)), lineWidth: 0.45)
+        y += spacing
+      }
+    case .kraft:
+      let speckleCount = detail == .distant ? 10 : 28
+      for index in 0..<speckleCount {
+        let x = size.width * MIRAWallMaterialNoise.unit(hash, 400 + index * 3)
+        let y = size.height * MIRAWallMaterialNoise.unit(hash, 401 + index * 3)
+        let radius = 0.35 + MIRAWallMaterialNoise.unit(hash, 402 + index * 3) * 0.75
+        context.fill(
+          Path(ellipseIn: CGRect(x: x, y: y, width: radius, height: radius * 0.72)),
+          with: .color(Color.black.opacity(0.10))
+        )
+      }
+    case .photographic:
+      context.fill(
+        Path(CGRect(x: 0, y: 0, width: size.width, height: max(1, size.height * 0.018))),
+        with: .color(Color.white.opacity(0.16))
+      )
+    case .aged, .ivory, .coated:
+      break
+    }
+  }
+
+  private func drawEdgeAge(context: inout GraphicsContext, size: CGSize) {
+    let opacity: Double
+    switch material {
+    case .aged: opacity = 0.075
+    case .kraft: opacity = 0.045
+    case .ivory, .notebook, .graph: opacity = 0.024
+    case .photographic, .coated: opacity = 0.014
+    }
+    let edge = darkPaper ? Color.white.opacity(opacity * 0.45) : Color(red: 0.38, green: 0.24, blue: 0.12).opacity(opacity)
+    context.fill(Path(CGRect(x: 0, y: 0, width: size.width, height: 1.2)), with: .color(edge))
+    context.fill(Path(CGRect(x: 0, y: size.height - 1.8, width: size.width, height: 1.8)), with: .color(edge))
+    context.fill(Path(CGRect(x: 0, y: 0, width: 1.2, height: size.height)), with: .color(edge))
+    context.fill(Path(CGRect(x: size.width - 1.6, y: 0, width: 1.6, height: size.height)), with: .color(edge))
+  }
+
+  private var fiberColor: Color {
+    darkPaper ? Color.white : Color(red: 0.24, green: 0.18, blue: 0.11)
+  }
+
+  private var warmTone: Color {
+    darkPaper ? Color.white.opacity(0.008) : Color(red: 0.57, green: 0.38, blue: 0.16).opacity(material == .aged ? 0.032 : 0.014)
+  }
+
+  private var coolTone: Color {
+    darkPaper ? Color.black.opacity(0.018) : Color(red: 0.30, green: 0.39, blue: 0.43).opacity(0.010)
+  }
+}
+
+private struct MIRAWallPhotoPrintTexture: View {
+  let seed: String
+
+  var body: some View {
+    Canvas { context, size in
+      let hash = MIRAWallNotePresentationResolver.stableHash("photo:\(seed)")
+      for index in 0..<22 {
+        let x = size.width * MIRAWallMaterialNoise.unit(hash, index * 3)
+        let y = size.height * MIRAWallMaterialNoise.unit(hash, index * 3 + 1)
+        let radius = 0.35 + MIRAWallMaterialNoise.unit(hash, index * 3 + 2) * 0.45
+        context.fill(
+          Path(ellipseIn: CGRect(x: x, y: y, width: radius, height: radius)),
+          with: .color((index.isMultiple(of: 2) ? Color.white : Color.black).opacity(0.025))
+        )
+      }
+      context.fill(
+        Path(CGRect(x: 0, y: 0, width: size.width, height: size.height)),
+        with: .color(Color(red: 0.98, green: 0.94, blue: 0.84).opacity(0.018))
+      )
+    }
+    .allowsHitTesting(false)
+  }
+}
+
+private enum MIRAWallMaterialNoise {
+  static func unit(_ seed: UInt64, _ salt: Int) -> CGFloat {
+    var mixed = seed &+ UInt64(max(0, salt) + 1) &* 0x9E3779B97F4A7C15
+    mixed ^= mixed >> 30
+    mixed &*= 0xBF58476D1CE4E5B9
+    mixed ^= mixed >> 27
+    mixed &*= 0x94D049BB133111EB
+    mixed ^= mixed >> 31
+    return CGFloat(mixed % 10_000) / 10_000
   }
 }
 
@@ -630,16 +1148,114 @@ private struct MIRAWallPostcardMarks: View {
   }
 }
 
+private struct MIRAWallImperfectPaperShape: Shape {
+  let seed: String
+  let roughness: CGFloat
+
+  func path(in rect: CGRect) -> Path {
+    let hash = MIRAWallNotePresentationResolver.stableHash("edge:\(seed)")
+    let segments = 14
+    var points: [CGPoint] = []
+    points.reserveCapacity((segments + 1) * 4)
+
+    for index in 0...segments {
+      let progress = CGFloat(index) / CGFloat(segments)
+      points.append(CGPoint(
+        x: rect.minX + rect.width * progress,
+        y: rect.minY + 0.8 + jitter(hash, index, roughness)
+      ))
+    }
+    for index in 1...segments {
+      let progress = CGFloat(index) / CGFloat(segments)
+      points.append(CGPoint(
+        x: rect.maxX - 0.8 + jitter(hash, 100 + index, roughness),
+        y: rect.minY + rect.height * progress
+      ))
+    }
+    for index in (0..<segments).reversed() {
+      let progress = CGFloat(index) / CGFloat(segments)
+      points.append(CGPoint(
+        x: rect.minX + rect.width * progress,
+        y: rect.maxY - 0.8 + jitter(hash, 200 + index, roughness)
+      ))
+    }
+    for index in (1..<segments).reversed() {
+      let progress = CGFloat(index) / CGFloat(segments)
+      points.append(CGPoint(
+        x: rect.minX + 0.8 + jitter(hash, 300 + index, roughness),
+        y: rect.minY + rect.height * progress
+      ))
+    }
+
+    var path = Path()
+    if let first = points.first { path.move(to: first) }
+    for point in points.dropFirst() { path.addLine(to: point) }
+    path.closeSubpath()
+    return path
+  }
+
+  private func jitter(_ hash: UInt64, _ salt: Int, _ amount: CGFloat) -> CGFloat {
+    (MIRAWallMaterialNoise.unit(hash, salt) - 0.5) * amount * 2
+  }
+}
+
+private struct MIRAWallPhotoCropShape: Shape {
+  let seed: String
+
+  func path(in rect: CGRect) -> Path {
+    MIRAWallImperfectPaperShape(seed: "photo:\(seed)", roughness: 0.24).path(in: rect)
+  }
+}
+
+private struct MIRAWallTapeShape: Shape {
+  let seed: String
+
+  func path(in rect: CGRect) -> Path {
+    let hash = MIRAWallNotePresentationResolver.stableHash("tape-edge:\(seed)")
+    let teeth = 8
+    var path = Path()
+    path.move(to: CGPoint(x: rect.minX, y: rect.minY + 1))
+    for index in 0...teeth {
+      let y = rect.minY + rect.height * CGFloat(index) / CGFloat(teeth)
+      let x = rect.minX + (MIRAWallMaterialNoise.unit(hash, index) - 0.5) * 2.4
+      path.addLine(to: CGPoint(x: x, y: y))
+    }
+    for index in 0...teeth {
+      let y = rect.maxY - rect.height * CGFloat(index) / CGFloat(teeth)
+      let x = rect.maxX + (MIRAWallMaterialNoise.unit(hash, 100 + index) - 0.5) * 2.4
+      path.addLine(to: CGPoint(x: x, y: y))
+    }
+    path.closeSubpath()
+    return path
+  }
+}
 private struct MIRAWallSoftScrapShape: Shape {
   let seed: String
 
   func path(in rect: CGRect) -> Path {
+    let hash = MIRAWallNotePresentationResolver.stableHash("scrap:\(seed)")
+    let top = 1.4 + MIRAWallMaterialNoise.unit(hash, 1) * 1.2
+    let right = 1.2 + MIRAWallMaterialNoise.unit(hash, 2) * 1.1
+    let bottom = 1.2 + MIRAWallMaterialNoise.unit(hash, 3) * 1.3
+    let left = 1.2 + MIRAWallMaterialNoise.unit(hash, 4) * 1.1
     var path = Path()
-    path.move(to: CGPoint(x: rect.minX + 2, y: rect.minY + 4))
-    path.addQuadCurve(to: CGPoint(x: rect.maxX - 4, y: rect.minY + 2), control: CGPoint(x: rect.midX, y: rect.minY - 2))
-    path.addQuadCurve(to: CGPoint(x: rect.maxX - 2, y: rect.maxY - 3), control: CGPoint(x: rect.maxX + 2, y: rect.midY))
-    path.addQuadCurve(to: CGPoint(x: rect.minX + 4, y: rect.maxY - 1), control: CGPoint(x: rect.midX, y: rect.maxY + 3))
-    path.addQuadCurve(to: CGPoint(x: rect.minX + 2, y: rect.minY + 4), control: CGPoint(x: rect.minX - 2, y: rect.midY))
+    path.move(to: CGPoint(x: rect.minX + 2, y: rect.minY + top))
+    path.addQuadCurve(
+      to: CGPoint(x: rect.maxX - 3, y: rect.minY + top * 0.7),
+      control: CGPoint(x: rect.midX, y: rect.minY - top * 0.35)
+    )
+    path.addQuadCurve(
+      to: CGPoint(x: rect.maxX - right, y: rect.maxY - 2),
+      control: CGPoint(x: rect.maxX + right * 0.45, y: rect.midY)
+    )
+    path.addQuadCurve(
+      to: CGPoint(x: rect.minX + 3, y: rect.maxY - bottom),
+      control: CGPoint(x: rect.midX, y: rect.maxY + bottom * 0.55)
+    )
+    path.addQuadCurve(
+      to: CGPoint(x: rect.minX + 2, y: rect.minY + top),
+      control: CGPoint(x: rect.minX - left * 0.45, y: rect.midY)
+    )
     path.closeSubpath()
     return path
   }

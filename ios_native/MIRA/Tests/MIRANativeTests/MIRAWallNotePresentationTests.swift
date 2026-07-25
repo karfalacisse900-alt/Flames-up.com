@@ -21,9 +21,9 @@ final class MIRAWallNotePresentationTests: XCTestCase {
 
       XCTAssertEqual(presentation.style, style)
       XCTAssertGreaterThanOrEqual(presentation.size.width, 96)
-      XCTAssertLessThanOrEqual(presentation.size.width, 360)
+      XCTAssertLessThanOrEqual(presentation.size.width, 470)
       XCTAssertGreaterThanOrEqual(presentation.size.height, 96)
-      XCTAssertLessThanOrEqual(presentation.size.height, 420)
+      XCTAssertLessThanOrEqual(presentation.size.height, 540)
     }
   }
 
@@ -47,6 +47,69 @@ final class MIRAWallNotePresentationTests: XCTestCase {
     XCTAssertEqual(
       MIRAWallNotePresentationResolver.resolve(note, hasLocalMedia: true).style,
       .polaroid
+    )
+  }
+
+  func testPhotoNotesUsePhotographicStockAndHeroScale() {
+    let note = makeNote(
+      id: "photo-material",
+      style: "polaroid",
+      mediaURL: "https://media.captro.app/notes/photo.jpg"
+    )
+    let presentation = MIRAWallNotePresentationResolver.resolve(note)
+
+    XCTAssertEqual(presentation.material, .photographic)
+    XCTAssertEqual(presentation.visualScale, .hero)
+    XCTAssertGreaterThan(presentation.size.width, 224)
+    XCTAssertGreaterThan(presentation.size.height, 272)
+  }
+
+  func testNotebookUsesRuledOrGraphPaperMaterial() {
+    let presentation = MIRAWallNotePresentationResolver.resolve(
+      makeNote(id: "notebook-material", style: "notebook")
+    )
+
+    XCTAssertTrue([MIRAWallPaperMaterial.notebook, .graph].contains(presentation.material))
+  }
+
+  func testPrimaryNotesAreApproximatelyTwentyFiveToThirtyFivePercentLarger() {
+    let note = makeNote(id: "standard-scale", style: "sticky")
+    let presentation = MIRAWallNotePresentationResolver.resolve(note)
+
+    XCTAssertEqual(presentation.visualScale, .standard)
+    XCTAssertEqual(presentation.size.width, 188 * 1.27, accuracy: 0.001)
+    XCTAssertEqual(presentation.size.height, 184 * 1.27, accuracy: 0.001)
+  }
+
+  func testWallFrameExpandsAroundOriginalNoteCenter() {
+    let note = makeNote(id: "expanded-frame", style: "sticky")
+    let presentation = MIRAWallNotePresentationResolver.resolve(note)
+    let frame = MIRAWallNotePresentationResolver.wallFrame(for: note)
+
+    XCTAssertEqual(frame.midX, note.worldX + note.width * 0.5, accuracy: 0.001)
+    XCTAssertEqual(frame.midY, note.worldY + note.height * 0.5, accuracy: 0.001)
+    XCTAssertEqual(frame.width, presentation.size.width, accuracy: 0.001)
+    XCTAssertEqual(frame.height, presentation.size.height, accuracy: 0.001)
+  }
+
+  func testScaleClassesRemainDeterministicAndCompositionIncludesHierarchy() {
+    let presentations = (0..<320).map { index in
+      MIRAWallNotePresentationResolver.resolve(
+        makeNote(id: "scale-class-\(index)", style: "sticky_square")
+      )
+    }
+    let scales = Set(presentations.map(\.visualScale))
+
+    XCTAssertTrue(scales.contains(.hero))
+    XCTAssertTrue(scales.contains(.standard))
+    XCTAssertTrue(scales.contains(.tiny))
+    XCTAssertEqual(
+      presentations,
+      (0..<320).map { index in
+        MIRAWallNotePresentationResolver.resolve(
+          makeNote(id: "scale-class-\(index)", style: "sticky_square")
+        )
+      }
     )
   }
 

@@ -48,11 +48,46 @@ public enum MIRAWallNoteRenderDetail: Equatable {
   case full
 }
 
+public enum MIRAWallPaperMaterial: String, CaseIterable {
+  case ivory
+  case notebook
+  case kraft
+  case graph
+  case aged
+  case photographic
+  case coated
+}
+
+public enum MIRAWallPaperWarp: String, CaseIterable {
+  case flat
+  case topLeftLifted
+  case bottomRightLifted
+  case curledBottom
+  case centerBend
+}
+
+public enum MIRAWallNoteVisualScale: String, CaseIterable {
+  case hero
+  case standard
+  case tiny
+
+  public var factor: CGFloat {
+    switch self {
+    case .hero: 1.34
+    case .standard: 1.27
+    case .tiny: 0.84
+    }
+  }
+}
+
 public struct MIRAWallNotePresentation: Equatable {
   public let style: MIRAWallNoteVisualStyle
   public let typography: MIRAWallTypographyPersonality
   public let attachment: MIRAWallNoteAttachment
   public let entrance: MIRAWallNoteEntrance
+  public let material: MIRAWallPaperMaterial
+  public let warp: MIRAWallPaperWarp
+  public let visualScale: MIRAWallNoteVisualScale
   public let size: CGSize
   public let microRotation: Double
   public let usesAccentColor: Bool
@@ -74,7 +109,14 @@ public enum MIRAWallNotePresentationResolver {
     let style = resolvedStyle(token: note.styleToken, hash: hash, hasMedia: hasMedia)
     let typography = typography(for: style, hash: hash, category: note.category)
     let attachment = attachment(for: style, hash: hash)
-    let size = resolvedSize(note: note, style: style)
+    let material = material(for: style, hash: hash)
+    let warp = warp(for: style, hash: hash)
+    let visualScale = visualScale(for: style, hash: hash, hasMedia: hasMedia)
+    let baseSize = resolvedSize(note: note, style: style)
+    let size = CGSize(
+      width: min(470, baseSize.width * visualScale.factor),
+      height: min(540, baseSize.height * visualScale.factor)
+    )
     let rotationStep = Double(Int(hash % 23) - 11) / 10
     let microRotation = style == .receipt ? rotationStep * 0.35 : rotationStep
     let usesAccentColor = [MIRAWallNoteVisualStyle.sticky, .handwritten, .poster].contains(style)
@@ -86,6 +128,9 @@ public enum MIRAWallNotePresentationResolver {
       typography: typography,
       attachment: attachment,
       entrance: entrance(for: style),
+      material: material,
+      warp: warp,
+      visualScale: visualScale,
       size: size,
       microRotation: microRotation,
       usesAccentColor: usesAccentColor,
@@ -180,6 +225,59 @@ public enum MIRAWallNotePresentationResolver {
     case .editorial: return hash.isMultiple(of: 3) ? .paperclip : .tape
     case .handwritten, .sticky: return hash.isMultiple(of: 2) ? .pin : .tape
     }
+  }
+
+  private static func material(for style: MIRAWallNoteVisualStyle, hash: UInt64) -> MIRAWallPaperMaterial {
+    switch style {
+    case .polaroid:
+      return .photographic
+    case .notebook:
+      return hash.isMultiple(of: 4) ? .graph : .notebook
+    case .receipt, .minimal:
+      return .ivory
+    case .postcard:
+      return hash.isMultiple(of: 3) ? .kraft : .aged
+    case .tornPaper:
+      return hash.isMultiple(of: 2) ? .kraft : .aged
+    case .poster:
+      return hash.isMultiple(of: 7) ? .coated : (hash.isMultiple(of: 3) ? .kraft : .ivory)
+    case .editorial:
+      return hash.isMultiple(of: 5) ? .aged : .ivory
+    case .handwritten:
+      return hash.isMultiple(of: 3) ? .aged : .ivory
+    case .sticky:
+      return .ivory
+    }
+  }
+
+  private static func warp(for style: MIRAWallNoteVisualStyle, hash: UInt64) -> MIRAWallPaperWarp {
+    let options: [MIRAWallPaperWarp]
+    switch style {
+    case .polaroid:
+      options = [.flat, .flat, .bottomRightLifted, .centerBend]
+    case .receipt:
+      options = [.curledBottom, .curledBottom, .centerBend]
+    case .postcard, .minimal:
+      options = [.flat, .bottomRightLifted, .topLeftLifted]
+    default:
+      options = [.flat, .topLeftLifted, .bottomRightLifted, .curledBottom, .centerBend]
+    }
+    return options[Int((hash / 17) % UInt64(options.count))]
+  }
+
+  private static func visualScale(
+    for style: MIRAWallNoteVisualStyle,
+    hash: UInt64,
+    hasMedia: Bool
+  ) -> MIRAWallNoteVisualScale {
+    if hasMedia || style == .polaroid { return .hero }
+    if [MIRAWallNoteVisualStyle.poster, .editorial].contains(style), hash % 4 == 0 {
+      return .hero
+    }
+    if [MIRAWallNoteVisualStyle.receipt, .minimal, .handwritten].contains(style), hash % 11 == 0 {
+      return .tiny
+    }
+    return .standard
   }
 
   private static func entrance(for style: MIRAWallNoteVisualStyle) -> MIRAWallNoteEntrance {
