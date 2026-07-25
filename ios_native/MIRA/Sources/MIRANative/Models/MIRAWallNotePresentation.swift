@@ -42,6 +42,12 @@ public enum MIRAWallNoteEntrance: String {
   case settle
 }
 
+public enum MIRAWallNoteRenderDetail: Equatable {
+  case distant
+  case compact
+  case full
+}
+
 public struct MIRAWallNotePresentation: Equatable {
   public let style: MIRAWallNoteVisualStyle
   public let typography: MIRAWallTypographyPersonality
@@ -55,6 +61,12 @@ public struct MIRAWallNotePresentation: Equatable {
 
 public enum MIRAWallNotePresentationResolver {
   public static let supportedStyleTokens = Set(MIRAWallNoteVisualStyle.allCases.map(\.rawValue))
+
+  public static func renderDetail(forWallScale scale: CGFloat, isFocused: Bool = false) -> MIRAWallNoteRenderDetail {
+    if isFocused || scale >= 0.72 { return .full }
+    if scale >= 0.42 { return .compact }
+    return .distant
+  }
 
   public static func resolve(_ note: MIRAWallNote, hasLocalMedia: Bool = false) -> MIRAWallNotePresentation {
     let hash = stableHash(note.id)

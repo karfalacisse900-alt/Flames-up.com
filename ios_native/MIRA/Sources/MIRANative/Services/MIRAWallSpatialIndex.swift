@@ -111,6 +111,20 @@ public struct MIRAWallSpatialIndex {
     }
   }
 
+  @discardableResult
+  public mutating func replace(_ note: MIRAWallNote) -> Bool {
+    var replaced = false
+    for cell in coveredCells(for: worldRect(for: note)) {
+      guard var notes = cells[cell],
+            let index = notes.firstIndex(where: { $0.id == note.id })
+      else { continue }
+      notes[index] = note
+      cells[cell] = notes
+      replaced = true
+    }
+    return replaced
+  }
+
   public func notes(in bounds: CGRect) -> [MIRAWallNote] {
     var seen = Set<String>()
     var result: [MIRAWallNote] = []

@@ -5,6 +5,8 @@ struct MIRAWallNoteTile: View {
   let note: MIRAWallNote
   let namespace: Namespace.ID
   let isNew: Bool
+  let wallScale: CGFloat
+  let isLifted: Bool
 
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var hasEntered = false
@@ -14,7 +16,7 @@ struct MIRAWallNoteTile: View {
   }
 
   var body: some View {
-    MIRAWallNoteRenderer(note: note, zoom: 1, isFocused: false)
+    MIRAWallNoteRenderer(note: note, zoom: 1, isFocused: isLifted, wallScale: wallScale)
       .matchedGeometryEffect(id: "wall-note-\(note.id)", in: namespace, isSource: true)
       .opacity(hasEntered ? 1 : initialOpacity)
       .scaleEffect(
@@ -24,6 +26,9 @@ struct MIRAWallNoteTile: View {
       )
       .offset(hasEntered ? .zero : initialOffset)
       .rotationEffect(.degrees(hasEntered ? 0 : initialEntranceRotation))
+      .scaleEffect(isLifted ? 1.035 : 1)
+      .offset(y: isLifted ? -6 : 0)
+      .animation(CaptroMotion.buttonPressAnimation(reduceMotion: reduceMotion), value: isLifted)
       .onAppear {
         guard !hasEntered else { return }
         if reduceMotion {
@@ -100,13 +105,20 @@ struct MIRAWallNoteTile: View {
 }
 
 struct MIRAWallNoteRenderer: View {
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
   let note: MIRAWallNote
   let zoom: CGFloat
   let isFocused: Bool
   var localMediaImage: UIImage? = nil
+  var wallScale: CGFloat = 1
 
   private var presentation: MIRAWallNotePresentation {
     MIRAWallNotePresentationResolver.resolve(note, hasLocalMedia: localMediaImage != nil)
+  }
+
+  private var renderDetail: MIRAWallNoteRenderDetail {
+    MIRAWallNotePresentationResolver.renderDetail(forWallScale: wallScale, isFocused: isFocused)
   }
 
   var body: some View {
@@ -119,20 +131,26 @@ struct MIRAWallNoteRenderer: View {
             note: note,
             mediaURL: note.mediaThumbnailUrl ?? note.mediaUrl,
             localImage: localMediaImage,
-            zoom: zoom
+            zoom: zoom,
+            wallScale: wallScale
           )
         } else {
           MIRAWallTypographyView(note: note, presentation: presentation, zoom: zoom)
         }
 
-        MIRAWallPhysicalDetails(note: note, presentation: presentation, zoom: zoom)
+        if renderDetail != .distant {
+          MIRAWallPhysicalDetails(note: note, presentation: presentation, zoom: zoom)
+            .transition(.opacity)
+        }
 
-        if zoom >= 0.74 {
+        if renderDetail == .full, zoom >= 0.74 {
           MIRAWallIdentityMark(note: note, style: presentation.style, zoom: zoom)
+            .transition(.opacity)
         }
       }
       .frame(width: proxy.size.width, height: proxy.size.height)
       .contentShape(Rectangle())
+      .animation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion), value: renderDetail)
       .shadow(
         color: .black.opacity(isFocused ? 0.24 : shadowOpacity),
         radius: isFocused ? 18 : shadowRadius,
@@ -360,6 +378,7 @@ private struct MIRAWallPolaroidContent: View {
   let mediaURL: String?
   let localImage: UIImage?
   let zoom: CGFloat
+  let wallScale: CGFloat
 
   var body: some View {
     VStack(spacing: 8) {
@@ -369,7 +388,7 @@ private struct MIRAWallPolaroidContent: View {
             .resizable()
             .scaledToFill()
         } else if let mediaURL {
-          MIRACachedImage(url: mediaURL, maxPixelSize: 720) { image in
+          MIRACachedImage(url: mediaURL, maxPixelSize: mediaDecodeSize) { image in
             image.resizable().scaledToFill()
           } placeholder: {
             MIRAWallPaperColor.color(for: "paper")
@@ -393,6 +412,12 @@ private struct MIRAWallPolaroidContent: View {
     }
     .padding(11)
     .padding(.bottom, 5)
+  }
+
+  private var mediaDecodeSize: CGFloat {
+    if wallScale < 0.42 { return 280 }
+    if wallScale < 0.72 { return 480 }
+    return 720
   }
 }
 

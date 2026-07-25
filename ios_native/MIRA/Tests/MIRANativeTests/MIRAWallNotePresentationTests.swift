@@ -98,6 +98,13 @@ final class MIRAWallNotePresentationTests: XCTestCase {
     XCTAssertFalse(lines.contains(where: { $0.count == 1 }))
   }
 
+  func testRenderDetailReducesDecorationWithoutChangingNotePresentation() {
+    XCTAssertEqual(MIRAWallNotePresentationResolver.renderDetail(forWallScale: 0.24), .distant)
+    XCTAssertEqual(MIRAWallNotePresentationResolver.renderDetail(forWallScale: 0.54), .compact)
+    XCTAssertEqual(MIRAWallNotePresentationResolver.renderDetail(forWallScale: 0.92), .full)
+    XCTAssertEqual(MIRAWallNotePresentationResolver.renderDetail(forWallScale: 0.24, isFocused: true), .full)
+  }
+
   private func makeNote(
     id: String,
     style: String,

@@ -91,6 +91,19 @@ final class MIRAWallSpatialIndexTests: XCTestCase {
     })
   }
 
+  func testReplacingInteractionStateDoesNotRebuildOrLoseSpatialMembership() {
+    let original = makeNote(id: "stable-interaction", x: 120, y: 80, z: 4)
+    var index = MIRAWallSpatialIndex(notes: [original], cellSize: 256)
+    let updated = original.updating(reacted: true, reactionCount: 1, saved: true, saveCount: 1)
+
+    XCTAssertTrue(index.replace(updated))
+    let hit = index.note(at: CGPoint(x: 160, y: 120))
+    XCTAssertEqual(hit?.id, original.id)
+    XCTAssertEqual(hit?.reactionCount, 1)
+    XCTAssertEqual(hit?.saveCount, 1)
+    XCTAssertEqual(index.notes(in: CGRect(x: 0, y: 0, width: 400, height: 400)).count, 1)
+  }
+
   private func makeNote(id: String, x: Double, y: Double, z: Int) -> MIRAWallNote {
     MIRAWallNote(
       id: id, wallId: "global", publishingIdentity: "ghost", body: "A real note",

@@ -116,10 +116,17 @@ final class MIRAWallNotesModel: ObservableObject {
   }
 
   func setReaction(note: MIRAWallNote, reacted: Bool) async throws -> MIRAWallNote {
-    update(note.updating(reacted: reacted, reactionCount: max(0, note.reactionCount + (reacted ? 1 : -1))))
+    let optimistic = note.updating(
+      reacted: reacted,
+      reactionCount: max(0, note.reactionCount + (reacted ? 1 : -1))
+    )
+    update(optimistic)
     do {
       let response: MIRAWallToggleResponse = try await api.post("/wall/notes/\(note.id)/reaction", body: MIRAWallReactionBody(reacted: reacted))
-      let reconciled = note.updating(reacted: response.reacted ?? reacted, reactionCount: response.reactionCount ?? note.reactionCount)
+      let reconciled = note.updating(
+        reacted: response.reacted ?? reacted,
+        reactionCount: response.reactionCount ?? optimistic.reactionCount
+      )
       update(reconciled)
       return reconciled
     } catch {
@@ -129,10 +136,17 @@ final class MIRAWallNotesModel: ObservableObject {
   }
 
   func setSaved(note: MIRAWallNote, saved: Bool) async throws -> MIRAWallNote {
-    update(note.updating(saved: saved, saveCount: max(0, note.saveCount + (saved ? 1 : -1))))
+    let optimistic = note.updating(
+      saved: saved,
+      saveCount: max(0, note.saveCount + (saved ? 1 : -1))
+    )
+    update(optimistic)
     do {
       let response: MIRAWallToggleResponse = try await api.post("/wall/notes/\(note.id)/save", body: MIRAWallSaveBody(saved: saved))
-      let reconciled = note.updating(saved: response.saved ?? saved, saveCount: response.saveCount ?? note.saveCount)
+      let reconciled = note.updating(
+        saved: response.saved ?? saved,
+        saveCount: response.saveCount ?? optimistic.saveCount
+      )
       update(reconciled)
       return reconciled
     } catch {
@@ -159,20 +173,47 @@ final class MIRAWallNotesModel: ObservableObject {
     var byID = Dictionary(uniqueKeysWithValues: notes.map { ($0.id, $0) })
     incoming.forEach { byID[$0.id] = $0 }
     let retention = bounds.insetBy(dx: -max(5000, bounds.width * 2.5), dy: -max(5000, bounds.height * 2.5))
-    let retained = byID.values.filter { note in
-      retention.intersects(MIRAWallNotePresentationResolver.wallFrame(for: note))
-    }
+    let viewportCenter = CGPoint(x: bounds.midX, y: bounds.midY)
+    let retained = byID.values
+      .filter { note in
+        retention.intersects(MIRAWallNotePresentationResolver.wallFrame(for: note))
+      }
+      .sorted { left, right in
+        let leftFrame = MIRAWallNotePresentationResolver.wallFrame(for: left)
+        let rightFrame = MIRAWallNotePresentationResolver.wallFrame(for: right)
+        let leftVisible = bounds.intersects(leftFrame)
+        let rightVisible = bounds.intersects(rightFrame)
+        if leftVisible != rightVisible { return leftVisible }
+
+        let leftDistance = squaredDistance(from: leftFrame, to: viewportCenter)
+        let rightDistance = squaredDistance(from: rightFrame, to: viewportCenter)
+        if leftDistance != rightDistance { return leftDistance < rightDistance }
+        if left.zIndex != right.zIndex { return left.zIndex < right.zIndex }
+        if left.createdAt != right.createdAt { return left.createdAt < right.createdAt }
+        return left.id < right.id
+      }
     notes = Array(retained.prefix(3000))
     spatialIndex.rebuild(with: notes)
   }
 
   private func update(_ note: MIRAWallNote) {
     if let index = notes.firstIndex(where: { $0.id == note.id }) {
+      let previousFrame = MIRAWallNotePresentationResolver.wallFrame(for: notes[index])
       notes[index] = note
+      let nextFrame = MIRAWallNotePresentationResolver.wallFrame(for: note)
+      if previousFrame == nextFrame, spatialIndex.replace(note) {
+        return
+      }
     } else {
       notes.append(note)
     }
     spatialIndex.rebuild(with: notes)
+  }
+
+  private func squaredDistance(from frame: CGRect, to point: CGPoint) -> CGFloat {
+    let dx = frame.midX - point.x
+    let dy = frame.midY - point.y
+    return dx * dx + dy * dy
   }
 }
 
@@ -186,6 +227,7 @@ public struct WallOfNotesNativeView: View {
   @State private var liveMagnification: CGFloat = 1
   @State private var liveMagnificationAnchor = UnitPoint.center
   @State private var selectedNote: MIRAWallNote?
+  @State private var liftedNoteID: String?
   @State private var isCreating = false
   @State private var isSearching = false
   @State private var query = ""
@@ -246,9 +288,7 @@ public struct WallOfNotesNativeView: View {
           guard panStart == nil, magnifyStart == nil else { return }
           let world = camera.worldPoint(forScreen: value.location, viewport: viewport)
           if let note = model.note(at: world) {
-            withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
-              selectedNote = note
-            }
+            openNote(note)
           }
         })
         .simultaneousGesture(
@@ -356,7 +396,12 @@ public struct WallOfNotesNativeView: View {
     .miraFadeScaleOverlay(
       isPresented: Binding(
         get: { selectedNote != nil },
-        set: { if !$0 { selectedNote = nil } }
+        set: {
+          if !$0 {
+            selectedNote = nil
+            liftedNoteID = nil
+          }
+        }
       ),
       scrimOpacity: 0.18
     ) { dismiss in
@@ -429,14 +474,31 @@ public struct WallOfNotesNativeView: View {
         MIRAWallNoteTile(
           note: note,
           namespace: noteTransitionNamespace,
-          isNew: placementNoteID == note.id
+          isNew: placementNoteID == note.id,
+          wallScale: camera.scale,
+          isLifted: liftedNoteID == note.id || selectedNote?.id == note.id
         )
         .frame(width: presentation.size.width, height: presentation.size.height)
         .rotationEffect(.degrees(note.rotation + presentation.microRotation))
         .scaleEffect(camera.scale)
         .position(center)
         .allowsHitTesting(false)
-        .zIndex(Double(note.zIndex) + (selectedNote?.id == note.id ? 10_000 : 0))
+        .zIndex(Double(note.zIndex) + (liftedNoteID == note.id || selectedNote?.id == note.id ? 10_000 : 0))
+      }
+    }
+  }
+
+  private func openNote(_ note: MIRAWallNote) {
+    guard selectedNote == nil, liftedNoteID == nil else { return }
+    withAnimation(CaptroMotion.buttonPressAnimation(reduceMotion: reduceMotion)) {
+      liftedNoteID = note.id
+    }
+
+    Task { @MainActor in
+      try? await Task.sleep(for: .milliseconds(reduceMotion ? 0 : 90))
+      guard liftedNoteID == note.id, selectedNote == nil else { return }
+      withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
+        selectedNote = note
       }
     }
   }
@@ -1586,13 +1648,25 @@ private struct MIRAWallNoteDetailView: View {
   private func toggleReaction() {
     guard !isMutating else { return }
     isMutating = true
-    let requested = !note.reactedByViewer
+    let original = note
+    let requested = !original.reactedByViewer
+    let optimistic = original.updating(
+      reacted: requested,
+      reactionCount: max(0, original.reactionCount + (requested ? 1 : -1))
+    )
+    note = optimistic
+    onChanged(optimistic)
     Task {
       do {
-        let updated = try await model.setReaction(note: note, reacted: requested)
+        let updated = try await model.setReaction(note: original, reacted: requested)
         await MainActor.run { note = updated; onChanged(updated); isMutating = false }
       } catch {
-        await MainActor.run { errorMessage = error.localizedDescription; isMutating = false }
+        await MainActor.run {
+          note = original
+          onChanged(original)
+          errorMessage = error.localizedDescription
+          isMutating = false
+        }
       }
     }
   }
@@ -1600,13 +1674,25 @@ private struct MIRAWallNoteDetailView: View {
   private func toggleSaved() {
     guard !isMutating else { return }
     isMutating = true
-    let requested = !note.savedByViewer
+    let original = note
+    let requested = !original.savedByViewer
+    let optimistic = original.updating(
+      saved: requested,
+      saveCount: max(0, original.saveCount + (requested ? 1 : -1))
+    )
+    note = optimistic
+    onChanged(optimistic)
     Task {
       do {
-        let updated = try await model.setSaved(note: note, saved: requested)
+        let updated = try await model.setSaved(note: original, saved: requested)
         await MainActor.run { note = updated; onChanged(updated); isMutating = false }
       } catch {
-        await MainActor.run { errorMessage = error.localizedDescription; isMutating = false }
+        await MainActor.run {
+          note = original
+          onChanged(original)
+          errorMessage = error.localizedDescription
+          isMutating = false
+        }
       }
     }
   }
