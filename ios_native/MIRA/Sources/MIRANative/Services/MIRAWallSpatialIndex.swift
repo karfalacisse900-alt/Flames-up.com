@@ -132,7 +132,7 @@ public struct MIRAWallSpatialIndex {
   }
 
   public func worldRect(for note: MIRAWallNote) -> CGRect {
-    CGRect(x: note.worldX, y: note.worldY, width: note.width, height: note.height)
+    MIRAWallNotePresentationResolver.wallFrame(for: note)
   }
 
   private func coveredCells(for rect: CGRect) -> [Cell] {

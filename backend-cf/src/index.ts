@@ -16759,7 +16759,10 @@ api.post('/stripe/webhook', async (c) => {
 
 // Wall of Notes
 const WALL_NOTE_COLORS = new Set(['butter', 'cream', 'rose', 'sky', 'mint', 'peach', 'paper']);
-const WALL_NOTE_STYLES = new Set(['sticky_square', 'vertical_card', 'torn_paper', 'editorial', 'question', 'confession', 'recommendation']);
+const WALL_NOTE_STYLES = new Set([
+  'sticky', 'editorial', 'handwritten', 'poster', 'polaroid', 'receipt', 'torn_paper', 'notebook', 'postcard', 'minimal',
+  'sticky_square', 'vertical_card', 'question', 'confession', 'recommendation',
+]);
 const WALL_NOTE_CATEGORIES = new Set(['question', 'confession', 'food', 'advice', 'life', 'local_recommendation']);
 const WALLS = new Map([
   ['global', 'Global'],
@@ -16919,7 +16922,9 @@ function wallNotePayload(row: any, author: any, reactedByViewer = false, savedBy
     body: cleanMultilineText(row?.body, 300),
     category: cleanText(row?.category, 50) || null,
     color_token: WALL_NOTE_COLORS.has(cleanText(row?.color_token, 30)) ? cleanText(row?.color_token, 30) : 'butter',
-    style_token: WALL_NOTE_STYLES.has(cleanText(row?.style_token, 40)) ? cleanText(row?.style_token, 40) : 'sticky_square',
+    style_token: WALL_NOTE_STYLES.has(cleanText(row?.style_token, 40)) ? cleanText(row?.style_token, 40) : 'sticky',
+    media_url: cleanText(row?.metadata?.media_url, 1200) || null,
+    media_thumbnail_url: cleanText(row?.metadata?.media_thumbnail_url || row?.metadata?.media_url, 1200) || null,
     world_x: Number(row?.world_x || 0),
     world_y: Number(row?.world_y || 0),
     width: Number(row?.width || 184),
@@ -17127,7 +17132,7 @@ api.post('/wall/notes', authMiddleware, async (c) => {
     body,
     category: WALL_NOTE_CATEGORIES.has(category) ? category : null,
     color_token: WALL_NOTE_COLORS.has(colorToken) ? colorToken : 'butter',
-    style_token: WALL_NOTE_STYLES.has(styleToken) ? styleToken : 'sticky_square',
+    style_token: WALL_NOTE_STYLES.has(styleToken) ? styleToken : 'sticky',
     world_x: placement.x,
     world_y: placement.y,
     width,
@@ -17137,7 +17142,7 @@ api.post('/wall/notes', authMiddleware, async (c) => {
     approximate_location: approximateLocation || null,
     moderation_status: 'approved',
     status: 'active',
-    metadata: { source: 'captro_native_wall', layout_version: 'growing_cluster_v1', placed_after: placement.totalBefore },
+    metadata: { source: 'captro_native_wall', layout_version: 'mixed_media_v2', placed_after: placement.totalBefore },
   };
   const inserted = await supabaseAdminInsertRows(c, 'wall_notes', [row], '*');
   const author = await supabaseUserByAnyId(c, userId);

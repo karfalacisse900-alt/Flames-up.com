@@ -80,6 +80,8 @@ public struct MIRAWallNote: Codable, Identifiable, Hashable {
   public let category: String?
   public let colorToken: String
   public let styleToken: String
+  public let mediaUrl: String?
+  public let mediaThumbnailUrl: String?
   public let worldX: Double
   public let worldY: Double
   public let width: Double
@@ -113,6 +115,8 @@ public struct MIRAWallNote: Codable, Identifiable, Hashable {
       category: category,
       colorToken: colorToken,
       styleToken: styleToken,
+      mediaUrl: mediaUrl,
+      mediaThumbnailUrl: mediaThumbnailUrl,
       worldX: worldX,
       worldY: worldY,
       width: width,

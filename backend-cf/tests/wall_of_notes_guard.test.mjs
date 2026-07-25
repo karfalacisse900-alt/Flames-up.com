@@ -48,3 +48,14 @@ test('wall layout migration preserves history and exposes aggregate framing only
   assert.match(migration, /grant execute on function public\.captro_wall_overview\(text\) to service_role/i);
   assert.match(migration, /revoke all on function public\.captro_wall_overview\(text\) from public, anon, authenticated/i);
 });
+test('wall API preserves stable mixed-media presentation metadata', async () => {
+  const worker = await read('backend-cf/src/index.ts');
+
+  for (const style of ['sticky', 'editorial', 'handwritten', 'poster', 'polaroid', 'receipt', 'torn_paper', 'notebook', 'postcard', 'minimal']) {
+    assert.match(worker, new RegExp(`'${style}'`));
+  }
+  assert.match(worker, /media_url: cleanText\(row\?\.metadata\?\.media_url/);
+  assert.match(worker, /media_thumbnail_url: cleanText\(row\?\.metadata\?\.media_thumbnail_url/);
+  assert.match(worker, /layout_version: 'mixed_media_v2'/);
+  assert.doesNotMatch(worker, /media_url:\s*['"]https?:\/\//);
+});

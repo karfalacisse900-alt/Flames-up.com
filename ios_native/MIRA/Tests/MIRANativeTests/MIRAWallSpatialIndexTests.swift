@@ -71,10 +71,31 @@ final class MIRAWallSpatialIndexTests: XCTestCase {
     XCTAssertLessThanOrEqual(dense.scale, 0.58)
   }
 
+  func testThousandNoteWallReturnsOnlyViewportCandidates() {
+    let notes = (0..<1_000).map { index in
+      makeNote(
+        id: "bulk-\(index)",
+        x: Double((index % 40) * 260),
+        y: Double((index / 40) * 280),
+        z: index
+      )
+    }
+    let index = MIRAWallSpatialIndex(notes: notes, cellSize: 384)
+    let visible = index.notes(in: CGRect(x: 0, y: 0, width: 620, height: 680))
+
+    XCTAssertFalse(visible.isEmpty)
+    XCTAssertLessThan(visible.count, 30)
+    XCTAssertTrue(visible.allSatisfy { note in
+      MIRAWallNotePresentationResolver.wallFrame(for: note)
+        .intersects(CGRect(x: 0, y: 0, width: 620, height: 680))
+    })
+  }
+
   private func makeNote(id: String, x: Double, y: Double, z: Int) -> MIRAWallNote {
     MIRAWallNote(
       id: id, wallId: "global", publishingIdentity: "ghost", body: "A real note",
       category: nil, colorToken: "butter", styleToken: "sticky_square",
+      mediaUrl: nil, mediaThumbnailUrl: nil,
       worldX: x, worldY: y, width: 180, height: 180, rotation: 0, zIndex: z,
       approximateLocation: nil, createdAt: "2026-07-11T00:00:00Z", updatedAt: nil,
       saveCount: 0, reactionCount: 0, replyCount: 0,

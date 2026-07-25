@@ -157,7 +157,7 @@ final class MIRAWallNotesModel: ObservableObject {
     incoming.forEach { byID[$0.id] = $0 }
     let retention = bounds.insetBy(dx: -max(5000, bounds.width * 2.5), dy: -max(5000, bounds.height * 2.5))
     let retained = byID.values.filter { note in
-      retention.intersects(CGRect(x: note.worldX, y: note.worldY, width: note.width, height: note.height))
+      retention.intersects(MIRAWallNotePresentationResolver.wallFrame(for: note))
     }
     notes = Array(retained.prefix(3000))
     spatialIndex.rebuild(with: notes)
@@ -196,6 +196,7 @@ public struct WallOfNotesNativeView: View {
   @State private var storyReportTarget: MIRAReportTarget?
   @State private var isStoryReportSheetPresented = false
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Namespace private var noteTransitionNamespace
 
   init(api: MIRAAPIClient, storiesModel: DiscoverNativeModel) {
     self.api = api
@@ -229,7 +230,7 @@ public struct WallOfNotesNativeView: View {
           .scaleEffect(liveMagnification, anchor: liveMagnificationAnchor)
           .animation(nil, value: liveMagnification)
 
-          chrome(viewport: viewport)
+          chrome
 
           if let message = model.errorMessage, model.notes.isEmpty {
             errorState(message: message, bounds: bounds)
@@ -295,7 +296,8 @@ public struct WallOfNotesNativeView: View {
             let note = try await model.create(body)
             placementNoteID = note.id
             withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
-              camera.center = CGPoint(x: note.worldX + note.width * 0.5, y: note.worldY + note.height * 0.5)
+              let frame = MIRAWallNotePresentationResolver.wallFrame(for: note)
+              camera.center = CGPoint(x: frame.midX, y: frame.midY)
               camera.scale = max(camera.scale, 0.72)
             }
             Task { @MainActor in
@@ -360,6 +362,7 @@ public struct WallOfNotesNativeView: View {
           note: note,
           api: api,
           model: model,
+          transitionNamespace: noteTransitionNamespace,
           onChanged: { updated in
             selectedNote = updated
           },
@@ -417,22 +420,22 @@ public struct WallOfNotesNativeView: View {
     let visible = model.visibleNotes(in: bounds.insetBy(dx: -preload, dy: -preload))
     ZStack {
       ForEach(visible) { note in
-        let center = camera.screenPoint(
-          forWorld: CGPoint(x: note.worldX + note.width * 0.5, y: note.worldY + note.height * 0.5),
-          viewport: viewport
+        let presentation = MIRAWallNotePresentationResolver.resolve(note)
+        let frame = MIRAWallNotePresentationResolver.wallFrame(for: note)
+        let center = camera.screenPoint(forWorld: CGPoint(x: frame.midX, y: frame.midY), viewport: viewport)
+        MIRAWallNoteTile(
+          note: note,
+          namespace: noteTransitionNamespace,
+          isNew: placementNoteID == note.id
         )
-        MIRAWallNoteSurface(note: note, zoom: 1)
-          .frame(width: note.width, height: note.height)
-          .rotationEffect(.degrees(note.rotation))
-          .scaleEffect(camera.scale * (placementNoteID == note.id && !reduceMotion ? 1.06 : 1))
-          .position(center)
-          .offset(y: placementNoteID == note.id && !reduceMotion ? -7 * camera.scale : 0)
-          .transition(.scale(scale: reduceMotion ? 1 : 1.18).combined(with: .opacity))
-          .allowsHitTesting(false)
-          .zIndex(Double(note.zIndex))
+        .frame(width: presentation.size.width, height: presentation.size.height)
+        .rotationEffect(.degrees(note.rotation + presentation.microRotation))
+        .scaleEffect(camera.scale)
+        .position(center)
+        .allowsHitTesting(false)
+        .zIndex(Double(note.zIndex) + (selectedNote?.id == note.id ? 10_000 : 0))
       }
     }
-    .animation(reduceMotion ? .easeOut(duration: 0.08) : .spring(response: 0.58, dampingFraction: 0.78), value: placementNoteID)
   }
 
   private var wallHeader: some View {
@@ -475,7 +478,7 @@ public struct WallOfNotesNativeView: View {
     }
   }
 
-  private func chrome(viewport: CGSize) -> some View {
+  private var chrome: some View {
     VStack(spacing: 0) {
       HStack {
         Button {
@@ -499,10 +502,6 @@ public struct WallOfNotesNativeView: View {
       Spacer()
 
       HStack {
-        wallIconButton(systemImage: "location.north.fill") {
-          recenter(viewport: viewport)
-        }
-
         Spacer()
 
         Button {
@@ -519,10 +518,6 @@ public struct WallOfNotesNativeView: View {
         .accessibilityLabel("Add note")
 
         Spacer()
-
-        Color.clear
-          .frame(width: 44, height: 44)
-          .accessibilityHidden(true)
       }
       .padding(.horizontal, 18)
       .padding(.bottom, 16)
@@ -546,7 +541,7 @@ public struct WallOfNotesNativeView: View {
 
   private func errorState(message: String, bounds: CGRect) -> some View {
     VStack(spacing: 12) {
-      Text("Couldn’t load this part of the wall.")
+      Text("Couldn't load this part of the wall.")
         .font(.system(size: 16, weight: .semibold))
       Text(message)
         .font(.system(size: 13))
@@ -644,17 +639,6 @@ public struct WallOfNotesNativeView: View {
     initialFrameWallID == selectedWall.id && model.notes.isEmpty && !model.isLoading && model.errorMessage == nil && !shouldShowWallStartSign
   }
 
-  private func recenter(viewport: CGSize) {
-    let overview = model.overview
-    withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
-      camera = MIRAWallLayout.initialCamera(
-        noteBounds: overview?.noteBounds,
-        noteCount: overview?.totalCount ?? model.notes.count,
-        viewport: viewport,
-        includeStartSign: (overview?.totalCount ?? model.notes.count) < 5
-      )
-    }
-  }
 
   private func wallStartSign(viewport: CGSize) -> some View {
     let rect = MIRAWallLayout.startSignRect(noteBounds: model.overview?.noteBounds, noteCount: wallNoteCount)
@@ -843,144 +827,6 @@ private struct MIRAWallBackground: View {
   }
 }
 
-struct MIRAWallNoteSurface: View {
-  let note: MIRAWallNote
-  let zoom: CGFloat
-
-  var body: some View {
-    let color = MIRAWallPaperColor.color(for: note.colorToken)
-    let attachment = deterministicAttachment
-    ZStack {
-      RoundedRectangle(cornerRadius: zoom > 1.1 ? 3 : 1, style: .continuous)
-        .fill(color)
-
-      if zoom > 0.72 {
-        MIRAWallPaperFiber()
-          .opacity(0.16)
-      }
-
-      if zoom >= 0.48 {
-        Text(displayText)
-          .font(noteFont)
-          .foregroundStyle(Color(red: 0.10, green: 0.095, blue: 0.075))
-          .multilineTextAlignment(note.styleToken == "editorial" ? .leading : .center)
-          .lineLimit(zoom >= 0.95 ? 12 : 5)
-          .minimumScaleFactor(0.55)
-          .padding(max(8, 18 * zoom))
-      }
-
-      if zoom >= 0.72 {
-        VStack {
-          HStack {
-            Image(systemName: note.isGhost ? "theatermask.and.paintbrush" : "person.crop.circle")
-              .font(.system(size: max(8, 11 * zoom), weight: .semibold))
-              .foregroundStyle(.black.opacity(0.45))
-            Spacer()
-          }
-          Spacer()
-        }
-        .padding(max(5, 8 * zoom))
-      }
-
-      if note.styleToken == "torn_paper", zoom > 0.55 {
-        VStack {
-          Spacer()
-          Rectangle().fill(.black.opacity(0.05)).frame(height: max(2, 4 * zoom))
-        }
-      }
-    }
-    .overlay {
-      RoundedRectangle(cornerRadius: zoom > 1.1 ? 3 : 1, style: .continuous)
-        .stroke(Color.black.opacity(0.075), lineWidth: max(0.45, zoom * 0.7))
-    }
-    .overlay(alignment: .bottom) {
-      Rectangle()
-        .fill(Color.black.opacity(0.045))
-        .frame(height: max(0.7, zoom * 1.7))
-    }
-    .overlay(alignment: attachment == 2 ? .topTrailing : .top) {
-      if zoom > 0.78, attachment == 0 {
-        Capsule()
-          .fill(Color.white.opacity(0.44))
-          .frame(width: max(20, 40 * zoom), height: max(4, 8 * zoom))
-          .offset(y: -max(2, 4 * zoom))
-          .rotationEffect(.degrees(-1.4))
-      } else if zoom > 0.78, attachment == 1 {
-        Circle()
-          .fill(Color(red: 0.51, green: 0.16, blue: 0.12))
-          .frame(width: max(5, 9 * zoom), height: max(5, 9 * zoom))
-          .overlay(Circle().stroke(Color.white.opacity(0.35), lineWidth: 0.8))
-          .shadow(color: .black.opacity(0.22), radius: 1.5, y: 1)
-          .offset(y: -max(1, 3 * zoom))
-      } else if zoom > 0.78 {
-        TriangleFold()
-          .fill(Color.white.opacity(0.28))
-          .frame(width: max(10, 19 * zoom), height: max(10, 19 * zoom))
-      }
-    }
-    .shadow(color: .black.opacity(zoom < 0.45 ? 0.07 : 0.16), radius: zoom < 0.45 ? 1 : 5 * zoom, x: 0, y: max(1, 3 * zoom))
-  }
-
-  private var displayText: String {
-    guard zoom < 0.78, note.body.count > 72 else { return note.body }
-    return String(note.body.prefix(69)) + "…"
-  }
-
-  private var noteFont: Font {
-    let size = max(7, min(25, 20 * zoom))
-    switch note.styleToken {
-    case "editorial": return .system(size: size, weight: .bold, design: .serif)
-    case "question": return .system(size: size, weight: .semibold, design: .rounded)
-    case "confession": return .system(size: size, weight: .medium, design: .serif)
-    default: return .system(size: size, weight: .semibold, design: .rounded)
-    }
-  }
-
-  private var deterministicAttachment: Int {
-    note.id.utf8.reduce(0) { (($0 &* 31) &+ Int($1)) % 10_007 } % 3
-  }
-}
-
-private struct MIRAWallPaperFiber: View {
-  var body: some View {
-    Canvas { context, size in
-      for index in 0..<11 {
-        let y = size.height * CGFloat(index + 1) / 12
-        var line = Path()
-        line.move(to: CGPoint(x: 0, y: y))
-        line.addLine(to: CGPoint(x: size.width, y: y + (index.isMultiple(of: 2) ? 0.6 : -0.5)))
-        context.stroke(line, with: .color(Color.black.opacity(0.10)), lineWidth: 0.35)
-      }
-    }
-    .allowsHitTesting(false)
-  }
-}
-
-private struct TriangleFold: Shape {
-  func path(in rect: CGRect) -> Path {
-    var path = Path()
-    path.move(to: CGPoint(x: rect.maxX, y: rect.minY))
-    path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
-    path.addLine(to: CGPoint(x: rect.minX, y: rect.minY))
-    path.closeSubpath()
-    return path
-  }
-}
-
-private enum MIRAWallPaperColor {
-  static func color(for token: String) -> Color {
-    switch token {
-    case "cream": Color(red: 0.96, green: 0.93, blue: 0.84)
-    case "rose": Color(red: 0.95, green: 0.67, blue: 0.71)
-    case "sky": Color(red: 0.63, green: 0.83, blue: 0.84)
-    case "mint": Color(red: 0.70, green: 0.84, blue: 0.65)
-    case "peach": Color(red: 0.96, green: 0.73, blue: 0.55)
-    case "paper": Color(red: 0.94, green: 0.93, blue: 0.87)
-    default: Color(red: 0.94, green: 0.82, blue: 0.34)
-    }
-  }
-}
-
 private struct MIRACreateWallNoteView: View {
   let camera: MIRAWallCamera
   let wall: MIRAWallDestination
@@ -991,7 +837,7 @@ private struct MIRACreateWallNoteView: View {
   @State private var bodyText = ""
   @State private var identity = "ghost"
   @State private var colorToken = "butter"
-  @State private var styleToken = "sticky_square"
+  @State private var styleToken = "sticky"
   @State private var category = ""
   @State private var approximateLocation = ""
   @State private var isPublishing = false
@@ -1000,9 +846,9 @@ private struct MIRACreateWallNoteView: View {
 
   private let colors = ["butter", "cream", "rose", "sky", "mint", "peach", "paper"]
   private let styles: [(String, String)] = [
-    ("sticky_square", "Sticky"), ("vertical_card", "Vertical"), ("torn_paper", "Torn"),
-    ("editorial", "Editorial"), ("question", "Question"), ("confession", "Confession"),
-    ("recommendation", "Recommendation"),
+    ("sticky", "Sticky"), ("editorial", "Editorial"), ("handwritten", "Handwritten"),
+    ("poster", "Poster"), ("receipt", "Receipt"), ("torn_paper", "Torn"),
+    ("notebook", "Notebook"), ("postcard", "Postcard"), ("minimal", "Minimal"),
   ]
   private let categories: [(String, String)] = [
     ("", "None"), ("question", "Question"), ("confession", "Confession"),
@@ -1029,7 +875,7 @@ private struct MIRACreateWallNoteView: View {
 
             ZStack(alignment: .topLeading) {
               if bodyText.isEmpty {
-                Text("Write your note…")
+                Text("Write your note...")
                   .foregroundStyle(MIRATheme.Color.textMuted)
                   .padding(.horizontal, 5)
                   .padding(.vertical, 8)
@@ -1115,7 +961,7 @@ private struct MIRACreateWallNoteView: View {
           } label: {
             HStack(spacing: 9) {
               if isPublishing { ProgressView().tint(.white) }
-              Text(isPublishing ? "Placing…" : "Place on Wall")
+              Text(isPublishing ? "Placing..." : "Place on Wall")
                 .font(.system(size: 17, weight: .bold))
             }
             .foregroundStyle(.white)
@@ -1146,17 +992,24 @@ private struct MIRACreateWallNoteView: View {
   }
 
   private var livePreview: some View {
+    let previewText = cleanBody.isEmpty ? "What do you want to leave on the wall?" : cleanBody
+    let size = MIRAWallNotePresentationResolver.recommendedSize(styleToken: styleToken, text: previewText)
+    let previewScale = min(1.08, min(258 / size.width, 286 / size.height))
     let preview = MIRAWallNote(
-      id: "preview", wallId: wall.id, publishingIdentity: identity,
-      body: cleanBody.isEmpty ? "What do you want to leave on the wall?" : cleanBody,
+      id: "preview-\(styleToken)", wallId: wall.id, publishingIdentity: identity,
+      body: previewText,
       category: category.isEmpty ? nil : category, colorToken: colorToken, styleToken: styleToken,
-      worldX: 0, worldY: 0, width: 220, height: styleToken == "vertical_card" ? 270 : 220,
+      mediaUrl: nil, mediaThumbnailUrl: nil,
+      worldX: 0, worldY: 0, width: size.width, height: size.height,
       rotation: 0, zIndex: 0, approximateLocation: nil, createdAt: "", updatedAt: nil,
       saveCount: 0, reactionCount: 0, replyCount: 0, reactedByViewer: false, savedByViewer: false, authorPreview: nil
     )
-    return MIRAWallNoteSurface(note: preview, zoom: 1)
-      .frame(width: 220, height: styleToken == "vertical_card" ? 270 : 220)
-      .opacity(cleanBody.isEmpty ? 0.60 : 1)
+    return MIRAWallNoteRenderer(note: preview, zoom: 1, isFocused: true)
+      .frame(width: size.width, height: size.height)
+      .scaleEffect(previewScale)
+      .frame(width: size.width * previewScale, height: size.height * previewScale)
+      .opacity(cleanBody.isEmpty ? 0.62 : 1)
+      .animation(CaptroMotion.smallMenuAnimation(reduceMotion: false), value: styleToken)
       .padding(.vertical, 8)
   }
 
@@ -1212,8 +1065,9 @@ private struct MIRACreateWallNoteView: View {
     guard !text.isEmpty, !isPublishing else { return }
     isPublishing = true
     errorMessage = nil
-    let noteWidth = styleToken == "vertical_card" ? 176.0 : 190.0
-    let noteHeight = styleToken == "vertical_card" ? 236.0 : 190.0
+    let noteSize = MIRAWallNotePresentationResolver.recommendedSize(styleToken: styleToken, text: text)
+    let noteWidth = Double(noteSize.width)
+    let noteHeight = Double(noteSize.height)
     let body = MIRACreateWallNoteBody(
       wallId: wall.id, publishingIdentity: identity, body: text,
       category: category.isEmpty ? nil : category, colorToken: colorToken, styleToken: styleToken,
@@ -1240,6 +1094,7 @@ private struct MIRAWallNoteDetailView: View {
   @State private var note: MIRAWallNote
   let api: MIRAAPIClient
   @ObservedObject var model: MIRAWallNotesModel
+  let transitionNamespace: Namespace.ID
   let onChanged: (MIRAWallNote) -> Void
   let onClose: () -> Void
 
@@ -1256,12 +1111,14 @@ private struct MIRAWallNoteDetailView: View {
     note: MIRAWallNote,
     api: MIRAAPIClient,
     model: MIRAWallNotesModel,
+    transitionNamespace: Namespace.ID,
     onChanged: @escaping (MIRAWallNote) -> Void,
     onClose: @escaping () -> Void
   ) {
     _note = State(initialValue: note)
     self.api = api
     self.model = model
+    self.transitionNamespace = transitionNamespace
     self.onChanged = onChanged
     self.onClose = onClose
   }
@@ -1275,10 +1132,14 @@ private struct MIRAWallNoteDetailView: View {
 
         ScrollView {
           VStack(spacing: 18) {
-            MIRAWallNoteSurface(note: note, zoom: 1.15)
-              .frame(maxWidth: 330)
-              .aspectRatio(note.width / max(note.height, 1), contentMode: .fit)
-              .rotationEffect(.degrees(note.rotation * 0.16))
+            MIRAWallNoteRenderer(note: note, zoom: 1.12, isFocused: true)
+              .frame(width: detailVisualSize.width, height: detailVisualSize.height)
+              .matchedGeometryEffect(
+                id: "wall-note-\(note.id)",
+                in: transitionNamespace,
+                isSource: false
+              )
+              .rotationEffect(.degrees(detailRotation))
 
             authorMetadata
             actionRow
@@ -1329,6 +1190,17 @@ private struct MIRAWallNoteDetailView: View {
         .stroke(Color.white.opacity(0.48), lineWidth: 1)
     }
     .shadow(color: .black.opacity(0.18), radius: 26, y: 12)
+  }
+
+  private var detailVisualSize: CGSize {
+    let source = MIRAWallNotePresentationResolver.resolve(note).size
+    let scale = min(330 / source.width, 390 / source.height, 1.45)
+    return CGSize(width: source.width * scale, height: source.height * scale)
+  }
+
+  private var detailRotation: Double {
+    let presentation = MIRAWallNotePresentationResolver.resolve(note)
+    return (note.rotation + presentation.microRotation) * 0.10
   }
 
   private var detailHeader: some View {
@@ -1412,7 +1284,7 @@ private struct MIRAWallNoteDetailView: View {
     [note.approximateLocation, relativeTime(note.createdAt)].compactMap { value in
       let clean = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
       return clean.isEmpty ? nil : clean
-    }.joined(separator: " · ")
+    }.joined(separator: " / ")
   }
 
   private var actionRow: some View {
