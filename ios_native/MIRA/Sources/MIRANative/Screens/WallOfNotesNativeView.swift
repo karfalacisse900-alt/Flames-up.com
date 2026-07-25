@@ -1,4 +1,7 @@
+import PhotosUI
 import SwiftUI
+import UIKit
+import UniformTypeIdentifiers
 
 @MainActor
 final class MIRAWallNotesModel: ObservableObject {
@@ -840,7 +843,13 @@ private struct MIRACreateWallNoteView: View {
   @State private var styleToken = "sticky"
   @State private var category = ""
   @State private var approximateLocation = ""
+  @State private var selectedPhotoItem: PhotosPickerItem?
+  @State private var selectedPhotoMedia: MIRAPickedMedia?
+  @State private var selectedPhotoImage: UIImage?
+  @State private var uploadedPhotoResult: MIRAMediaUploadResult?
+  @State private var isLoadingPhoto = false
   @State private var isPublishing = false
+  @State private var publishStatus = ""
   @State private var errorMessage: String?
   @FocusState private var isTextFocused: Bool
 
@@ -862,6 +871,56 @@ private struct MIRACreateWallNoteView: View {
         VStack(spacing: 22) {
           livePreview
 
+          settingSection(title: "PHOTO (OPTIONAL)") {
+            HStack(spacing: 10) {
+              PhotosPicker(
+                selection: $selectedPhotoItem,
+                matching: .images,
+                preferredItemEncoding: .current
+              ) {
+                HStack(spacing: 10) {
+                  if isLoadingPhoto {
+                    ProgressView()
+                      .tint(MIRATheme.Color.forest)
+                  } else {
+                    Image(systemName: selectedPhotoImage == nil ? "photo.badge.plus" : "photo.on.rectangle.angled")
+                      .font(.system(size: 18, weight: .semibold))
+                  }
+                  Text(selectedPhotoImage == nil ? "Add a photo" : "Replace photo")
+                    .font(.system(size: 14, weight: .bold))
+                  Spacer()
+                }
+                .foregroundStyle(MIRATheme.Color.forest)
+                .padding(.horizontal, 14)
+                .frame(maxWidth: .infinity, minHeight: 48)
+                .background(MIRATheme.Color.surfaceSoft, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+              }
+              .disabled(isLoadingPhoto || isPublishing)
+              .buttonStyle(.plain)
+
+              if selectedPhotoImage != nil {
+                Button {
+                  removeSelectedPhoto()
+                } label: {
+                  Image(systemName: "xmark")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(MIRATheme.Color.textPrimary)
+                    .frame(width: 48, height: 48)
+                    .background(MIRATheme.Color.surfaceSoft, in: Circle())
+                }
+                .buttonStyle(.plain)
+                .disabled(isPublishing)
+                .accessibilityLabel("Remove photo")
+              }
+            }
+
+            Text(selectedPhotoImage == nil
+              ? "Choose one photo to make a photo note. Captro checks it before it appears on the wall."
+              : "Your photo will use the Polaroid note style and keep your caption underneath.")
+              .font(.system(size: 12, weight: .medium))
+              .foregroundStyle(MIRATheme.Color.textSecondary)
+          }
+
           VStack(alignment: .leading, spacing: 9) {
             HStack {
               Text("YOUR NOTE")
@@ -875,7 +934,7 @@ private struct MIRACreateWallNoteView: View {
 
             ZStack(alignment: .topLeading) {
               if bodyText.isEmpty {
-                Text("Write your note...")
+                Text(selectedPhotoImage == nil ? "Write your note..." : "Add a caption for your photo...")
                   .foregroundStyle(MIRATheme.Color.textMuted)
                   .padding(.horizontal, 5)
                   .padding(.vertical, 8)
@@ -910,10 +969,31 @@ private struct MIRACreateWallNoteView: View {
           }
 
           settingSection(title: "NOTE STYLE") {
-            ScrollView(.horizontal, showsIndicators: false) {
-              HStack(spacing: 8) {
-                ForEach(styles, id: \.0) { item in
-                  choiceChip(item.1, selected: styleToken == item.0) { styleToken = item.0 }
+            if selectedPhotoImage != nil {
+              HStack(spacing: 10) {
+                Image(systemName: "photo.artframe")
+                  .font(.system(size: 17, weight: .semibold))
+                VStack(alignment: .leading, spacing: 2) {
+                  Text("Polaroid")
+                    .font(.system(size: 14, weight: .bold))
+                  Text("Photo with a handwritten caption")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(MIRATheme.Color.textSecondary)
+                }
+                Spacer()
+                Image(systemName: "checkmark.circle.fill")
+                  .foregroundStyle(MIRATheme.Color.forest)
+              }
+              .foregroundStyle(MIRATheme.Color.textPrimary)
+              .padding(.horizontal, 14)
+              .frame(minHeight: 52)
+              .background(MIRATheme.Color.surfaceSoft, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            } else {
+              ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                  ForEach(styles, id: \.0) { item in
+                    choiceChip(item.1, selected: styleToken == item.0) { styleToken = item.0 }
+                  }
                 }
               }
             }
@@ -961,7 +1041,7 @@ private struct MIRACreateWallNoteView: View {
           } label: {
             HStack(spacing: 9) {
               if isPublishing { ProgressView().tint(.white) }
-              Text(isPublishing ? "Placing..." : "Place on Wall")
+              Text(isPublishing ? (publishStatus.isEmpty ? "Placing..." : publishStatus) : "Place on Wall")
                 .font(.system(size: 17, weight: .bold))
             }
             .foregroundStyle(.white)
@@ -969,7 +1049,7 @@ private struct MIRACreateWallNoteView: View {
             .background(MIRATheme.Color.forest, in: Capsule())
           }
           .buttonStyle(.miraPress)
-          .disabled(cleanBody.isEmpty || isPublishing)
+          .disabled(cleanBody.isEmpty || isPublishing || isLoadingPhoto)
           .opacity(cleanBody.isEmpty ? 0.45 : 1)
         }
         .padding(.horizontal, 18)
@@ -988,28 +1068,46 @@ private struct MIRACreateWallNoteView: View {
           Button("Done") { isTextFocused = false }
         }
       }
+      .onChange(of: selectedPhotoItem) { _, item in
+        guard let item else { return }
+        Task { await loadSelectedPhoto(item) }
+      }
     }
   }
 
   private var livePreview: some View {
-    let previewText = cleanBody.isEmpty ? "What do you want to leave on the wall?" : cleanBody
-    let size = MIRAWallNotePresentationResolver.recommendedSize(styleToken: styleToken, text: previewText)
+    let hasPhoto = selectedPhotoImage != nil
+    let previewStyleToken = hasPhoto ? "polaroid" : styleToken
+    let previewText = cleanBody.isEmpty
+      ? (hasPhoto ? "Add a thought below your photo." : "What do you want to leave on the wall?")
+      : cleanBody
+    let size = MIRAWallNotePresentationResolver.recommendedSize(
+      styleToken: previewStyleToken,
+      text: previewText,
+      hasMedia: hasPhoto
+    )
     let previewScale = min(1.08, min(258 / size.width, 286 / size.height))
     let preview = MIRAWallNote(
-      id: "preview-\(styleToken)", wallId: wall.id, publishingIdentity: identity,
+      id: "preview-\(previewStyleToken)", wallId: wall.id, publishingIdentity: identity,
       body: previewText,
-      category: category.isEmpty ? nil : category, colorToken: colorToken, styleToken: styleToken,
+      category: category.isEmpty ? nil : category, colorToken: colorToken, styleToken: previewStyleToken,
       mediaUrl: nil, mediaThumbnailUrl: nil,
       worldX: 0, worldY: 0, width: size.width, height: size.height,
       rotation: 0, zIndex: 0, approximateLocation: nil, createdAt: "", updatedAt: nil,
       saveCount: 0, reactionCount: 0, replyCount: 0, reactedByViewer: false, savedByViewer: false, authorPreview: nil
     )
-    return MIRAWallNoteRenderer(note: preview, zoom: 1, isFocused: true)
+    return MIRAWallNoteRenderer(
+      note: preview,
+      zoom: 1,
+      isFocused: true,
+      localMediaImage: selectedPhotoImage
+    )
       .frame(width: size.width, height: size.height)
       .scaleEffect(previewScale)
       .frame(width: size.width * previewScale, height: size.height * previewScale)
-      .opacity(cleanBody.isEmpty ? 0.62 : 1)
-      .animation(CaptroMotion.smallMenuAnimation(reduceMotion: false), value: styleToken)
+      .opacity(cleanBody.isEmpty ? 0.72 : 1)
+      .animation(CaptroMotion.smallMenuAnimation(reduceMotion: false), value: previewStyleToken)
+      .animation(CaptroMotion.mediaFadeAnimation(reduceMotion: false), value: hasPhoto)
       .padding(.vertical, 8)
   }
 
@@ -1060,29 +1158,114 @@ private struct MIRACreateWallNoteView: View {
     .buttonStyle(.plain)
   }
 
+  @MainActor
+  private func loadSelectedPhoto(_ item: PhotosPickerItem) async {
+    isLoadingPhoto = true
+    errorMessage = nil
+    defer { isLoadingPhoto = false }
+
+    do {
+      guard let data = try await item.loadTransferable(type: Data.self),
+            let image = await MIRAImageDiskCache.decode(data, maxPixelSize: 1_280)
+      else {
+        throw MIRAAPIError.server(status: 400, code: "PHOTO_READ_FAILED", detail: "Could not read this photo.")
+      }
+
+      let contentType = item.supportedContentTypes.first(where: { $0.conforms(to: .image) })
+      let fileExtension = contentType?.preferredFilenameExtension ?? "jpg"
+      let mimeType = contentType?.preferredMIMEType ?? "image/jpeg"
+      selectedPhotoMedia = MIRAPickedMedia(
+        data: data,
+        kind: .image,
+        fileName: "wall-note-\(UUID().uuidString).\(fileExtension)",
+        mimeType: mimeType
+      )
+      selectedPhotoImage = image
+      uploadedPhotoResult = nil
+      styleToken = MIRAWallNoteVisualStyle.polaroid.rawValue
+    } catch {
+      selectedPhotoItem = nil
+      selectedPhotoMedia = nil
+      selectedPhotoImage = nil
+      uploadedPhotoResult = nil
+      if styleToken == MIRAWallNoteVisualStyle.polaroid.rawValue {
+        styleToken = MIRAWallNoteVisualStyle.sticky.rawValue
+      }
+      errorMessage = error.localizedDescription
+    }
+  }
+
+  @MainActor
+  private func removeSelectedPhoto() {
+    selectedPhotoItem = nil
+    selectedPhotoMedia = nil
+    selectedPhotoImage = nil
+    uploadedPhotoResult = nil
+    if styleToken == MIRAWallNoteVisualStyle.polaroid.rawValue {
+      styleToken = MIRAWallNoteVisualStyle.sticky.rawValue
+    }
+    errorMessage = nil
+  }
+
   private func publish() {
     let text = cleanBody
-    guard !text.isEmpty, !isPublishing else { return }
+    guard !text.isEmpty, !isPublishing, !isLoadingPhoto else { return }
+
+    let selectedPhoto = selectedPhotoMedia
+    let existingUpload = uploadedPhotoResult
+    let selectedIdentity = identity
+    let selectedCategory = category
+    let selectedColor = colorToken
+    let selectedStyle = styleToken
+    let location = approximateLocation.trimmingCharacters(in: .whitespacesAndNewlines)
+
     isPublishing = true
+    publishStatus = selectedPhoto == nil ? "Placing..." : "Checking photo..."
     errorMessage = nil
-    let noteSize = MIRAWallNotePresentationResolver.recommendedSize(styleToken: styleToken, text: text)
-    let noteWidth = Double(noteSize.width)
-    let noteHeight = Double(noteSize.height)
-    let body = MIRACreateWallNoteBody(
-      wallId: wall.id, publishingIdentity: identity, body: text,
-      category: category.isEmpty ? nil : category, colorToken: colorToken, styleToken: styleToken,
-      worldX: Double(camera.center.x) - noteWidth * 0.5,
-      worldY: Double(camera.center.y) - noteHeight * 0.5,
-      width: noteWidth, height: noteHeight, rotation: 0,
-      approximateLocation: approximateLocation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : approximateLocation
-    )
+
     Task {
       do {
-        _ = try await onPublish(body)
+        var mediaResult = existingUpload
+        if mediaResult == nil, let selectedPhoto {
+          let approvedUpload = try await MIRAMediaUploadService(api: api).uploadResult(selectedPhoto)
+          mediaResult = approvedUpload
+          await MainActor.run {
+            uploadedPhotoResult = approvedUpload
+            publishStatus = "Placing..."
+          }
+        }
+
+        let hasPhoto = mediaResult != nil
+        let finalStyle = hasPhoto ? MIRAWallNoteVisualStyle.polaroid.rawValue : selectedStyle
+        let noteSize = MIRAWallNotePresentationResolver.recommendedSize(
+          styleToken: finalStyle,
+          text: text,
+          hasMedia: hasPhoto
+        )
+        let noteWidth = Double(noteSize.width)
+        let noteHeight = Double(noteSize.height)
+        let request = MIRACreateWallNoteBody(
+          wallId: wall.id,
+          publishingIdentity: selectedIdentity,
+          body: text,
+          category: selectedCategory.isEmpty ? nil : selectedCategory,
+          colorToken: selectedColor,
+          styleToken: finalStyle,
+          mediaAssetId: mediaResult?.mediaAssetId,
+          mediaUrl: mediaResult?.url,
+          worldX: Double(camera.center.x) - noteWidth * 0.5,
+          worldY: Double(camera.center.y) - noteHeight * 0.5,
+          width: noteWidth,
+          height: noteHeight,
+          rotation: 0,
+          approximateLocation: location.isEmpty ? nil : location
+        )
+        _ = try await onPublish(request)
         await MainActor.run { dismiss() }
       } catch {
         await MainActor.run {
           isPublishing = false
+          publishStatus = ""
           errorMessage = error.localizedDescription
         }
       }

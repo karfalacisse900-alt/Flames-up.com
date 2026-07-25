@@ -180,6 +180,8 @@ public struct MIRACreateWallNoteBody: Encodable {
   public let category: String?
   public let colorToken: String
   public let styleToken: String
+  public let mediaAssetId: String?
+  public let mediaUrl: String?
   public let worldX: Double
   public let worldY: Double
   public let width: Double

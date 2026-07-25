@@ -56,9 +56,9 @@ public struct MIRAWallNotePresentation: Equatable {
 public enum MIRAWallNotePresentationResolver {
   public static let supportedStyleTokens = Set(MIRAWallNoteVisualStyle.allCases.map(\.rawValue))
 
-  public static func resolve(_ note: MIRAWallNote) -> MIRAWallNotePresentation {
+  public static func resolve(_ note: MIRAWallNote, hasLocalMedia: Bool = false) -> MIRAWallNotePresentation {
     let hash = stableHash(note.id)
-    let hasMedia = cleanMediaURL(note.mediaThumbnailUrl ?? note.mediaUrl) != nil
+    let hasMedia = hasLocalMedia || cleanMediaURL(note.mediaThumbnailUrl ?? note.mediaUrl) != nil
     let style = resolvedStyle(token: note.styleToken, hash: hash, hasMedia: hasMedia)
     let typography = typography(for: style, hash: hash, category: note.category)
     let attachment = attachment(for: style, hash: hash)

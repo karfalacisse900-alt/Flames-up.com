@@ -59,3 +59,15 @@ test('wall API preserves stable mixed-media presentation metadata', async () => 
   assert.match(worker, /layout_version: 'mixed_media_v2'/);
   assert.doesNotMatch(worker, /media_url:\s*['"]https?:\/\//);
 });
+
+test('photo notes require an approved user-owned Cloudflare Images asset', async () => {
+  const worker = await read('backend-cf/src/index.ts');
+
+  assert.match(worker, /submittedMediaUrl && !mediaAssetId/);
+  assert.match(worker, /approvedMediaAssetsForPost\(c, userId, \[mediaAssetId\], \[\]\)/);
+  assert.match(worker, /normalizeMediaAssetType\(mediaAsset\?\.media_type\) !== 'image'/);
+  assert.match(worker, /storage_provider, 40\) !== 'images'/);
+  assert.match(worker, /style_token: mediaAsset \? 'polaroid'/);
+  assert.match(worker, /media_asset_id: mediaAssetId/);
+  assert.match(worker, /wall_note_id: noteId/);
+});

@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct MIRAWallNoteTile: View {
   let note: MIRAWallNote
@@ -102,9 +103,10 @@ struct MIRAWallNoteRenderer: View {
   let note: MIRAWallNote
   let zoom: CGFloat
   let isFocused: Bool
+  var localMediaImage: UIImage? = nil
 
   private var presentation: MIRAWallNotePresentation {
-    MIRAWallNotePresentationResolver.resolve(note)
+    MIRAWallNotePresentationResolver.resolve(note, hasLocalMedia: localMediaImage != nil)
   }
 
   var body: some View {
@@ -112,8 +114,13 @@ struct MIRAWallNoteRenderer: View {
       ZStack {
         MIRAWallPaperBackground(note: note, presentation: presentation)
 
-        if presentation.style == .polaroid, let mediaURL = note.mediaThumbnailUrl ?? note.mediaUrl {
-          MIRAWallPolaroidContent(note: note, mediaURL: mediaURL, zoom: zoom)
+        if presentation.style == .polaroid, localMediaImage != nil || note.mediaThumbnailUrl != nil || note.mediaUrl != nil {
+          MIRAWallPolaroidContent(
+            note: note,
+            mediaURL: note.mediaThumbnailUrl ?? note.mediaUrl,
+            localImage: localMediaImage,
+            zoom: zoom
+          )
         } else {
           MIRAWallTypographyView(note: note, presentation: presentation, zoom: zoom)
         }
@@ -350,16 +357,28 @@ private struct MIRAWallTypographyView: View {
 
 private struct MIRAWallPolaroidContent: View {
   let note: MIRAWallNote
-  let mediaURL: String
+  let mediaURL: String?
+  let localImage: UIImage?
   let zoom: CGFloat
 
   var body: some View {
     VStack(spacing: 8) {
-      MIRACachedImage(url: mediaURL, maxPixelSize: 720) { image in
-        image.resizable().scaledToFill()
-      } placeholder: {
-        MIRAWallPaperColor.color(for: "paper")
-          .overlay(Image(systemName: "photo").foregroundStyle(Color.black.opacity(0.22)))
+      Group {
+        if let localImage {
+          Image(uiImage: localImage)
+            .resizable()
+            .scaledToFill()
+        } else if let mediaURL {
+          MIRACachedImage(url: mediaURL, maxPixelSize: 720) { image in
+            image.resizable().scaledToFill()
+          } placeholder: {
+            MIRAWallPaperColor.color(for: "paper")
+              .overlay(Image(systemName: "photo").foregroundStyle(Color.black.opacity(0.22)))
+          }
+        } else {
+          MIRAWallPaperColor.color(for: "paper")
+            .overlay(Image(systemName: "photo").foregroundStyle(Color.black.opacity(0.22)))
+        }
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
       .clipped()

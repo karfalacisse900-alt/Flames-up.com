@@ -41,6 +41,15 @@ final class MIRAWallNotePresentationTests: XCTestCase {
     XCTAssertEqual(MIRAWallNotePresentationResolver.resolve(withMedia).style, .polaroid)
   }
 
+  func testLocalComposerPhotoUsesPolaroidBeforeUploadCompletes() {
+    let note = makeNote(id: "local-photo-preview", style: "polaroid")
+
+    XCTAssertEqual(
+      MIRAWallNotePresentationResolver.resolve(note, hasLocalMedia: true).style,
+      .polaroid
+    )
+  }
+
   func testLegacyNotesDistributeAcrossSeveralStableStyles() {
     let resolved = Set((0..<80).map { index in
       MIRAWallNotePresentationResolver.resolve(

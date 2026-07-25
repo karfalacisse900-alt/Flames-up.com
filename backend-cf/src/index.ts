@@ -17110,6 +17110,30 @@ api.post('/wall/notes', authMiddleware, async (c) => {
   const moderation = moderateCommunityText(body);
   if (!moderation.ok) return c.json({ detail: moderation.detail || 'This note cannot be published.' }, 400);
 
+  const mediaAssetId = publicId(b.media_asset_id || b.mediaAssetId, 160);
+  const submittedMediaUrl = safeMediaReference(b.media_url || b.mediaUrl);
+  if (submittedMediaUrl && !mediaAssetId) {
+    return c.json({ detail: 'Upload this photo through Captro before attaching it to a note.', code: 'MEDIA_ASSET_REQUIRED' }, 400);
+  }
+  let mediaAsset: any = null;
+  let mediaUrl = '';
+  let mediaThumbnailUrl = '';
+  if (mediaAssetId) {
+    const mediaApproval = await approvedMediaAssetsForPost(c, userId, [mediaAssetId], []);
+    if (!mediaApproval.ok) {
+      return c.json({ detail: mediaApproval.detail, code: mediaApproval.code }, mediaApproval.status as any);
+    }
+    mediaAsset = mediaApproval.assets[0] || null;
+    if (normalizeMediaAssetType(mediaAsset?.media_type) !== 'image' || cleanText(mediaAsset?.storage_provider, 40) !== 'images') {
+      return c.json({ detail: 'Wall notes support one photo only.', code: 'WALL_NOTE_IMAGE_REQUIRED' }, 400);
+    }
+    mediaUrl = safeMediaReference(mediaAsset?.public_url) || mediaAssetPublicUrl(c.env, mediaAsset);
+    mediaThumbnailUrl = mediaAssetPreviewUrl(c.env, mediaAsset) || mediaUrl;
+    if (!mediaUrl) {
+      return c.json({ detail: 'This photo is not ready yet. Please try again.', code: 'MEDIA_NOT_READY' }, 409);
+    }
+  }
+
   const identity = cleanText(b.publishing_identity, 20) === 'author' ? 'author' : 'ghost';
   const colorToken = cleanText(b.color_token, 30);
   const styleToken = cleanText(b.style_token, 40);
@@ -17132,7 +17156,7 @@ api.post('/wall/notes', authMiddleware, async (c) => {
     body,
     category: WALL_NOTE_CATEGORIES.has(category) ? category : null,
     color_token: WALL_NOTE_COLORS.has(colorToken) ? colorToken : 'butter',
-    style_token: WALL_NOTE_STYLES.has(styleToken) ? styleToken : 'sticky',
+    style_token: mediaAsset ? 'polaroid' : (WALL_NOTE_STYLES.has(styleToken) ? styleToken : 'sticky'),
     world_x: placement.x,
     world_y: placement.y,
     width,
@@ -17142,9 +17166,38 @@ api.post('/wall/notes', authMiddleware, async (c) => {
     approximate_location: approximateLocation || null,
     moderation_status: 'approved',
     status: 'active',
-    metadata: { source: 'captro_native_wall', layout_version: 'mixed_media_v2', placed_after: placement.totalBefore },
+    metadata: {
+      source: 'captro_native_wall',
+      layout_version: 'mixed_media_v2',
+      placed_after: placement.totalBefore,
+      ...(mediaAsset ? {
+        media_asset_id: mediaAssetId,
+        media_url: mediaUrl,
+        media_thumbnail_url: mediaThumbnailUrl,
+      } : {}),
+    },
   };
   const inserted = await supabaseAdminInsertRows(c, 'wall_notes', [row], '*');
+  if (mediaAsset) {
+    await supabaseAdminPatchRows(c, 'app_media_assets', {
+      id: postgrestEqFilter(mediaAssetId),
+      user_id: postgrestEqFilter(userId),
+    }, {
+      metadata: {
+        ...parseJsonObject(mediaAsset.metadata),
+        usage: 'wall_note',
+        wall_note_id: noteId,
+      },
+      updated_at: now(),
+    }).catch((error: any) => {
+      console.warn(JSON.stringify({
+        event: 'wall_note_media_link_failed',
+        media_id: mediaAssetId,
+        note_id: noteId,
+        code: getErrorCode(error).slice(0, 180),
+      }));
+    });
+  }
   const author = await supabaseUserByAnyId(c, userId);
   return c.json({ note: wallNotePayload(inserted[0] || row, author, false, false) }, 201);
 });
