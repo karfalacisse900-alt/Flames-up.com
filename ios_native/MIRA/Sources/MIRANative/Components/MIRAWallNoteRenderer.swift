@@ -168,15 +168,29 @@ struct MIRAWallNoteRenderer: View {
     MIRAWallNotePresentationResolver.renderDetail(forWallScale: wallScale, isFocused: isFocused)
   }
 
+  private var mediaURL: String? {
+    [note.mediaThumbnailUrl, note.mediaUrl]
+      .compactMap { value in
+        let clean = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return clean.isEmpty ? nil : clean
+      }
+      .first
+  }
+
+  private var hasMedia: Bool {
+    localMediaImage != nil || mediaURL != nil
+  }
+
   var body: some View {
     GeometryReader { proxy in
       ZStack {
         MIRAWallPaperBackground(note: note, presentation: presentation, renderDetail: renderDetail)
 
-        if presentation.style == .polaroid, localMediaImage != nil || note.mediaThumbnailUrl != nil || note.mediaUrl != nil {
-          MIRAWallPolaroidContent(
+        if hasMedia {
+          MIRAWallPhotoNoteContent(
             note: note,
-            mediaURL: note.mediaThumbnailUrl ?? note.mediaUrl,
+            presentation: presentation,
+            mediaURL: mediaURL,
             localImage: localMediaImage,
             zoom: zoom,
             wallScale: wallScale
@@ -599,60 +613,114 @@ private struct MIRAWallTypographyView: View {
   }
 }
 
-private struct MIRAWallPolaroidContent: View {
+private struct MIRAWallPhotoNoteContent: View {
   let note: MIRAWallNote
+  let presentation: MIRAWallNotePresentation
   let mediaURL: String?
   let localImage: UIImage?
   let zoom: CGFloat
   let wallScale: CGFloat
 
   var body: some View {
-    VStack(spacing: 8) {
-      Group {
-        if let localImage {
-          Image(uiImage: localImage)
-            .resizable()
-            .scaledToFill()
-        } else if let mediaURL {
-          MIRACachedImage(url: mediaURL, maxPixelSize: mediaDecodeSize) { image in
-            image.resizable().scaledToFill()
-          } placeholder: {
-            MIRAWallPaperColor.color(for: "paper")
-              .overlay(Image(systemName: "photo").foregroundStyle(Color.black.opacity(0.22)))
-          }
-        } else {
-          MIRAWallPaperColor.color(for: "paper")
-            .overlay(Image(systemName: "photo").foregroundStyle(Color.black.opacity(0.22)))
-        }
-      }
-      .frame(maxWidth: .infinity, maxHeight: .infinity)
-      .scaleEffect(1.006)
-      .rotationEffect(.degrees(photoCropRotation))
-      .clipShape(MIRAWallPhotoCropShape(seed: note.id))
-      .overlay {
-        MIRAWallPhotoPrintTexture(seed: note.id)
-          .clipShape(MIRAWallPhotoCropShape(seed: note.id))
-      }
-      .overlay {
-        MIRAWallPhotoCropShape(seed: note.id)
-          .stroke(Color.black.opacity(0.10), lineWidth: 0.65)
-      }
+    GeometryReader { proxy in
+      let layout = MIRAWallPhotoNoteLayout.resolve(
+        style: presentation.style,
+        size: proxy.size,
+        textLength: note.body.count
+      )
+      VStack(alignment: .leading, spacing: layout.spacing) {
+        photo
+          .frame(maxWidth: .infinity)
+          .frame(height: layout.imageHeight)
+          .clipped()
 
-      Text(note.body)
-        .font(.custom("Noteworthy", size: max(11, min(19, 16 * zoom))))
-        .foregroundStyle(Color(red: 0.10, green: 0.095, blue: 0.075))
-        .lineLimit(3)
-        .minimumScaleFactor(0.70)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 3)
+        Text(note.body)
+          .font(captionFont)
+          .foregroundStyle(inkColor)
+          .tracking(presentation.typography == .thought ? 0.10 : 0)
+          .multilineTextAlignment(.leading)
+          .lineLimit(layout.lineLimit)
+          .minimumScaleFactor(0.72)
+          .allowsTightening(false)
+          .frame(
+            maxWidth: .infinity,
+            maxHeight: layout.captionHeight,
+            alignment: .topLeading
+          )
+      }
+      .padding(layout.insets)
+      .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
     }
-    .padding(11)
-    .padding(.bottom, 10)
+  }
+
+  private var photo: some View {
+    Group {
+      if let localImage {
+        Image(uiImage: localImage)
+          .resizable()
+          .scaledToFill()
+      } else if let mediaURL {
+        MIRACachedImage(url: mediaURL, maxPixelSize: mediaDecodeSize) { image in
+          image.resizable().scaledToFill()
+        } placeholder: {
+          photoPlaceholder
+        }
+      } else {
+        photoPlaceholder
+      }
+    }
+    .scaleEffect(1.004)
+    .rotationEffect(.degrees(photoCropRotation))
+    .clipShape(MIRAWallPhotoCropShape(seed: note.id))
+    .overlay {
+      MIRAWallPhotoPrintTexture(seed: note.id)
+        .clipShape(MIRAWallPhotoCropShape(seed: note.id))
+    }
+    .overlay {
+      MIRAWallPhotoCropShape(seed: note.id)
+        .stroke(Color.black.opacity(0.10), lineWidth: 0.65)
+    }
+  }
+
+  private var photoPlaceholder: some View {
+    MIRAWallPaperColor.color(for: note.colorToken)
+      .overlay {
+        Image(systemName: "photo")
+          .font(.system(size: 20, weight: .medium))
+          .foregroundStyle(inkColor.opacity(0.24))
+      }
+  }
+
+  private var captionFont: Font {
+    let base: CGFloat
+    switch note.body.count {
+    case 0...42: base = 22
+    case 43...90: base = 19
+    case 91...160: base = 16.5
+    default: base = 14.5
+    }
+    let size = max(12, min(24, base * max(0.90, zoom)))
+    switch presentation.style {
+    case .handwritten, .sticky, .notebook, .polaroid:
+      return .custom("Noteworthy", size: size)
+    case .editorial, .postcard, .minimal:
+      return .system(size: size, weight: .medium, design: .serif)
+    case .receipt:
+      return .system(size: size * 0.88, weight: .medium, design: .monospaced)
+    case .poster, .tornPaper:
+      return .system(size: size, weight: .semibold, design: .rounded)
+    }
+  }
+
+  private var inkColor: Color {
+    presentation.usesDarkPaper
+      ? Color(red: 0.98, green: 0.95, blue: 0.84)
+      : Color(red: 0.10, green: 0.095, blue: 0.075)
   }
 
   private var photoCropRotation: Double {
     let hash = MIRAWallNotePresentationResolver.stableHash(note.id)
-    return Double(Int((hash / 31) % 5) - 2) * 0.08
+    return Double(Int((hash / 31) % 5) - 2) * 0.06
   }
 
   private var mediaDecodeSize: CGFloat {
@@ -662,6 +730,66 @@ private struct MIRAWallPolaroidContent: View {
   }
 }
 
+private struct MIRAWallPhotoNoteLayout {
+  let insets: EdgeInsets
+  let spacing: CGFloat
+  let imageHeight: CGFloat
+  let captionHeight: CGFloat
+  let lineLimit: Int
+
+  static func resolve(
+    style: MIRAWallNoteVisualStyle,
+    size: CGSize,
+    textLength: Int
+  ) -> MIRAWallPhotoNoteLayout {
+    let insets: EdgeInsets
+    switch style {
+    case .polaroid:
+      insets = EdgeInsets(top: 11, leading: 11, bottom: 13, trailing: 11)
+    case .receipt:
+      insets = EdgeInsets(top: 31, leading: 11, bottom: 30, trailing: 11)
+    case .notebook:
+      insets = EdgeInsets(top: 25, leading: 29, bottom: 23, trailing: 15)
+    case .postcard:
+      insets = EdgeInsets(top: 24, leading: 18, bottom: 22, trailing: 18)
+    case .poster:
+      insets = EdgeInsets(top: 27, leading: 18, bottom: 23, trailing: 18)
+    case .minimal:
+      insets = EdgeInsets(top: 17, leading: 18, bottom: 29, trailing: 18)
+    default:
+      insets = EdgeInsets(top: 23, leading: 18, bottom: 22, trailing: 18)
+    }
+
+    let spacing: CGFloat = style == .receipt ? 6 : 9
+    let availableHeight = max(88, size.height - insets.top - insets.bottom)
+    let preferredFraction: CGFloat
+    if textLength > 150 {
+      preferredFraction = 0.32
+    } else if textLength > 90 {
+      preferredFraction = 0.36
+    } else {
+      switch style {
+      case .polaroid: preferredFraction = 0.48
+      case .receipt: preferredFraction = 0.34
+      case .poster: preferredFraction = 0.42
+      default: preferredFraction = 0.40
+      }
+    }
+    let minimumCaption = min(96, max(48, availableHeight * 0.34))
+    let maximumImage = max(48, availableHeight - minimumCaption - spacing)
+    let imageHeight = max(48, min(maximumImage, availableHeight * preferredFraction))
+    let captionHeight = max(38, availableHeight - imageHeight - spacing)
+    let lineLimit = textLength > 160 ? 10 : (textLength > 90 ? 8 : 6)
+
+    return MIRAWallPhotoNoteLayout(
+      insets: insets,
+      spacing: spacing,
+      imageHeight: imageHeight,
+      captionHeight: captionHeight,
+      lineLimit: lineLimit
+    )
+  }
+}
 private struct MIRAWallPhysicalDetails: View {
   let note: MIRAWallNote
   let presentation: MIRAWallNotePresentation

@@ -20,9 +20,13 @@ test('wall routes are authenticated, regional, and Ghost-safe', async () => {
   assert.match(worker, /author_preview: identity === 'author'/);
   assert.match(worker, /enforceRateLimit\(c, 'wall_note_create'/);
   assert.match(worker, /moderateCommunityText\(body\)/);
-  assert.match(worker, /resolveWallNotePlacement\(c, wallId, width, height, noteId\)/);
+  assert.match(
+    worker,
+    /resolveWallNotePlacement\(\s*c,\s*wallId,\s*placementWidth,\s*placementHeight,\s*noteId,\s*\)/,
+  );
+  assert.match(worker, /const placementScale = mediaAsset \? 1\.34 : 1\.27/);
   assert.match(worker, /claimWallPlacementSlot\(c, wallId\)/);
-  assert.match(worker, /overlap <= 0\.22/);
+  assert.match(worker, /overlap <= 0\.10/);
   assert.match(worker, /const WALLS = new Map/);
   assert.doesNotMatch(worker, /wall_id: cleanText\(b\.wall_id/);
 });
@@ -56,7 +60,7 @@ test('wall API preserves stable mixed-media presentation metadata', async () => 
   }
   assert.match(worker, /media_url: cleanText\(row\?\.metadata\?\.media_url/);
   assert.match(worker, /media_thumbnail_url: cleanText\(row\?\.metadata\?\.media_thumbnail_url/);
-  assert.match(worker, /layout_version: 'mixed_media_v2'/);
+  assert.match(worker, /layout_version: 'readable_mixed_media_v3'/);
   assert.doesNotMatch(worker, /media_url:\s*['"]https?:\/\//);
 });
 
@@ -67,7 +71,8 @@ test('photo notes require an approved user-owned Cloudflare Images asset', async
   assert.match(worker, /approvedMediaAssetsForPost\(c, userId, \[mediaAssetId\], \[\]\)/);
   assert.match(worker, /normalizeMediaAssetType\(mediaAsset\?\.media_type\) !== 'image'/);
   assert.match(worker, /storage_provider, 40\) !== 'images'/);
-  assert.match(worker, /style_token: mediaAsset \? 'polaroid'/);
+  assert.match(worker, /const resolvedStyleToken = WALL_NOTE_STYLES\.has\(styleToken\)/);
+  assert.match(worker, /style_token: resolvedStyleToken/);
   assert.match(worker, /media_asset_id: mediaAssetId/);
   assert.match(worker, /wall_note_id: noteId/);
 });

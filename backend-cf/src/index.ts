@@ -16908,7 +16908,7 @@ async function resolveWallNotePlacement(
     const gapPenalty = Math.abs(radius - (clusterRadius + 70));
     const score = overlap * 10_000 + gapPenalty;
     if (score < best.score) best = { x: candidate.x, y: candidate.y, score };
-    if (overlap <= 0.22) return { x: candidate.x, y: candidate.y, rotation, totalBefore: count };
+    if (overlap <= 0.10) return { x: candidate.x, y: candidate.y, rotation, totalBefore: count };
   }
   return { x: best.x, y: best.y, rotation, totalBefore: count };
 }
@@ -17147,7 +17147,19 @@ api.post('/wall/notes', authMiddleware, async (c) => {
   const noteId = uuid();
   const width = clampFloat(b.width, 96, 360, 184);
   const height = clampFloat(b.height, 96, 420, 184);
-  const placement = await resolveWallNotePlacement(c, wallId, width, height, noteId);
+  const resolvedStyleToken = WALL_NOTE_STYLES.has(styleToken)
+    ? styleToken
+    : (mediaAsset ? 'polaroid' : 'sticky');
+  const placementScale = mediaAsset ? 1.34 : 1.27;
+  const placementWidth = width * placementScale;
+  const placementHeight = height * placementScale;
+  const placement = await resolveWallNotePlacement(
+    c,
+    wallId,
+    placementWidth,
+    placementHeight,
+    noteId,
+  );
   const row = {
     id: noteId,
     wall_id: wallId,
@@ -17156,9 +17168,9 @@ api.post('/wall/notes', authMiddleware, async (c) => {
     body,
     category: WALL_NOTE_CATEGORIES.has(category) ? category : null,
     color_token: WALL_NOTE_COLORS.has(colorToken) ? colorToken : 'butter',
-    style_token: mediaAsset ? 'polaroid' : (WALL_NOTE_STYLES.has(styleToken) ? styleToken : 'sticky'),
-    world_x: placement.x,
-    world_y: placement.y,
+    style_token: resolvedStyleToken,
+    world_x: placement.x + (placementWidth - width) * 0.5,
+    world_y: placement.y + (placementHeight - height) * 0.5,
     width,
     height,
     rotation: placement.rotation,
@@ -17168,7 +17180,7 @@ api.post('/wall/notes', authMiddleware, async (c) => {
     status: 'active',
     metadata: {
       source: 'captro_native_wall',
-      layout_version: 'mixed_media_v2',
+      layout_version: 'readable_mixed_media_v3',
       placed_after: placement.totalBefore,
       ...(mediaAsset ? {
         media_asset_id: mediaAssetId,

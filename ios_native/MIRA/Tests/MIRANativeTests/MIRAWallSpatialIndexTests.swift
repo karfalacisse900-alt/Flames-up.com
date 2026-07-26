@@ -91,6 +91,44 @@ final class MIRAWallSpatialIndexTests: XCTestCase {
     })
   }
 
+  func testReadableLayoutSeparatesOverlappingTextAreasDeterministically() {
+    let first = makeNote(id: "overlap-first", x: 0, y: 0, z: 1)
+    let second = makeNote(id: "overlap-second", x: 0, y: 0, z: 2)
+    let notes = [first, second]
+
+    let firstPass = MIRAWallReadableLayout.frames(for: notes)
+    let secondPass = MIRAWallReadableLayout.frames(for: notes)
+
+    XCTAssertEqual(firstPass, secondPass)
+    guard let firstFrame = firstPass[first.id], let secondFrame = firstPass[second.id] else {
+      return XCTFail("Readable layout must return every note frame")
+    }
+    let firstReadable = firstFrame.insetBy(
+      dx: max(10, firstFrame.width * 0.07),
+      dy: max(12, firstFrame.height * 0.08)
+    )
+    let secondReadable = secondFrame.insetBy(
+      dx: max(10, secondFrame.width * 0.07),
+      dy: max(12, secondFrame.height * 0.08)
+    )
+
+    XCTAssertFalse(firstReadable.intersects(secondReadable))
+  }
+
+  func testSpatialIndexUsesReadableLayoutFramesForHitTesting() {
+    let first = makeNote(id: "layout-hit-first", x: 0, y: 0, z: 1)
+    let second = makeNote(id: "layout-hit-second", x: 0, y: 0, z: 2)
+    let notes = [first, second]
+    let frames = MIRAWallReadableLayout.frames(for: notes)
+    var index = MIRAWallSpatialIndex()
+    index.rebuild(with: notes, frameOverrides: frames)
+
+    guard let secondFrame = frames[second.id] else {
+      return XCTFail("Readable layout must return the moved note frame")
+    }
+    XCTAssertEqual(index.note(at: CGPoint(x: secondFrame.midX, y: secondFrame.midY))?.id, second.id)
+  }
+
   func testReplacingInteractionStateDoesNotRebuildOrLoseSpatialMembership() {
     let original = makeNote(id: "stable-interaction", x: 120, y: 80, z: 4)
     var index = MIRAWallSpatialIndex(notes: [original], cellSize: 256)

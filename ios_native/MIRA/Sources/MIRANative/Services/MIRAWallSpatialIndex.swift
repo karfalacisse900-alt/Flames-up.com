@@ -96,13 +96,18 @@ public struct MIRAWallSpatialIndex {
 
   private let cellSize: CGFloat
   private var cells: [Cell: [MIRAWallNote]] = [:]
+  private var frameOverrides: [String: CGRect] = [:]
 
   public init(notes: [MIRAWallNote] = [], cellSize: CGFloat = 384) {
     self.cellSize = max(96, cellSize)
     rebuild(with: notes)
   }
 
-  public mutating func rebuild(with notes: [MIRAWallNote]) {
+  public mutating func rebuild(
+    with notes: [MIRAWallNote],
+    frameOverrides: [String: CGRect] = [:]
+  ) {
+    self.frameOverrides = frameOverrides
     cells.removeAll(keepingCapacity: true)
     for note in notes {
       for cell in coveredCells(for: worldRect(for: note)) {
@@ -146,7 +151,7 @@ public struct MIRAWallSpatialIndex {
   }
 
   public func worldRect(for note: MIRAWallNote) -> CGRect {
-    MIRAWallNotePresentationResolver.wallFrame(for: note)
+    frameOverrides[note.id] ?? MIRAWallNotePresentationResolver.wallFrame(for: note)
   }
 
   private func coveredCells(for rect: CGRect) -> [Cell] {
@@ -159,6 +164,180 @@ public struct MIRAWallSpatialIndex {
     result.reserveCapacity(max(1, (maxX - minX + 1) * (maxY - minY + 1)))
     for y in minY...maxY {
       for x in minX...maxX { result.append(Cell(x: x, y: y)) }
+    }
+    return result
+  }
+}
+
+public enum MIRAWallReadableLayout {
+  private struct Cell: Hashable {
+    let x: Int
+    let y: Int
+  }
+
+  private struct PlacedNote {
+    let frame: CGRect
+    let readableFrame: CGRect
+  }
+
+  private struct CandidateScore {
+    let valid: Bool
+    let value: CGFloat
+  }
+
+  public static func frames(
+    for notes: [MIRAWallNote],
+    cellSize: CGFloat = 360
+  ) -> [String: CGRect] {
+    guard !notes.isEmpty else { return [:] }
+
+    let safeCellSize = max(180, cellSize)
+    let ordered = notes.sorted { left, right in
+      if left.createdAt != right.createdAt { return left.createdAt < right.createdAt }
+      if left.zIndex != right.zIndex { return left.zIndex < right.zIndex }
+      return left.id < right.id
+    }
+    var placed: [PlacedNote] = []
+    placed.reserveCapacity(ordered.count)
+    var cells: [Cell: [Int]] = [:]
+    var result: [String: CGRect] = [:]
+    result.reserveCapacity(ordered.count)
+
+    for note in ordered {
+      let desired = MIRAWallNotePresentationResolver.wallFrame(for: note)
+      let phase = CGFloat(MIRAWallNotePresentationResolver.stableHash(note.id) % 360)
+        * .pi / 180
+      var chosen = desired
+      var best = desired
+      var bestScore = candidateScore(
+        desired,
+        desired: desired,
+        neighbors: neighborIndices(for: desired, cells: cells, cellSize: safeCellSize),
+        placed: placed
+      )
+
+      if !bestScore.valid {
+        search: for ring in 1...14 {
+          let step = max(30, min(44, min(desired.width, desired.height) * 0.17))
+          let radius = CGFloat(ring) * step
+          let slots = ring < 4 ? 10 : 14
+          for slot in 0..<slots {
+            let angle = phase + CGFloat(slot) * 2 * .pi / CGFloat(slots)
+            let candidate = desired.offsetBy(
+              dx: cos(angle) * radius,
+              dy: sin(angle) * radius
+            )
+            let score = candidateScore(
+              candidate,
+              desired: desired,
+              neighbors: neighborIndices(for: candidate, cells: cells, cellSize: safeCellSize),
+              placed: placed
+            )
+            if score.value < bestScore.value {
+              best = candidate
+              bestScore = score
+            }
+            if score.valid {
+              chosen = candidate
+              break search
+            }
+          }
+        }
+        if !bestScore.valid {
+          chosen = best
+        }
+      }
+
+      let placedNote = PlacedNote(
+        frame: chosen,
+        readableFrame: readableFrame(for: chosen)
+      )
+      let index = placed.count
+      placed.append(placedNote)
+      for cell in coveredCells(for: chosen.insetBy(dx: -10, dy: -10), cellSize: safeCellSize) {
+        cells[cell, default: []].append(index)
+      }
+      result[note.id] = chosen
+    }
+
+    return result
+  }
+
+  private static func candidateScore(
+    _ candidate: CGRect,
+    desired: CGRect,
+    neighbors: [Int],
+    placed: [PlacedNote]
+  ) -> CandidateScore {
+    let readable = readableFrame(for: candidate)
+    var fullOverlap: CGFloat = 0
+    var readableOverlap: CGFloat = 0
+    var valid = true
+
+    for index in neighbors {
+      guard placed.indices.contains(index) else { continue }
+      let other = placed[index]
+      let overlap = intersectionArea(candidate, other.frame)
+      let protectedOverlap = intersectionArea(readable, other.readableFrame)
+      fullOverlap += overlap
+      readableOverlap += protectedOverlap
+
+      let smallerArea = max(
+        1,
+        min(candidate.width * candidate.height, other.frame.width * other.frame.height)
+      )
+      if overlap / smallerArea > 0.16 || protectedOverlap > 1 {
+        valid = false
+      }
+    }
+
+    let displacement = hypot(candidate.midX - desired.midX, candidate.midY - desired.midY)
+    return CandidateScore(
+      valid: valid,
+      value: displacement + fullOverlap * 2.8 + readableOverlap * 40
+    )
+  }
+
+  private static func readableFrame(for frame: CGRect) -> CGRect {
+    frame.insetBy(
+      dx: max(10, frame.width * 0.07),
+      dy: max(12, frame.height * 0.08)
+    )
+  }
+
+  private static func intersectionArea(_ left: CGRect, _ right: CGRect) -> CGFloat {
+    let intersection = left.intersection(right)
+    guard !intersection.isNull, !intersection.isEmpty else { return 0 }
+    return intersection.width * intersection.height
+  }
+
+  private static func neighborIndices(
+    for frame: CGRect,
+    cells: [Cell: [Int]],
+    cellSize: CGFloat
+  ) -> [Int] {
+    var seen = Set<Int>()
+    var result: [Int] = []
+    for cell in coveredCells(for: frame.insetBy(dx: -12, dy: -12), cellSize: cellSize) {
+      for index in cells[cell] ?? [] where seen.insert(index).inserted {
+        result.append(index)
+      }
+    }
+    return result
+  }
+
+  private static func coveredCells(for rect: CGRect, cellSize: CGFloat) -> [Cell] {
+    guard !rect.isNull, !rect.isInfinite else { return [] }
+    let minX = Int(floor(rect.minX / cellSize))
+    let maxX = Int(floor(rect.maxX / cellSize))
+    let minY = Int(floor(rect.minY / cellSize))
+    let maxY = Int(floor(rect.maxY / cellSize))
+    var result: [Cell] = []
+    result.reserveCapacity(max(1, (maxX - minX + 1) * (maxY - minY + 1)))
+    for y in minY...maxY {
+      for x in minX...maxX {
+        result.append(Cell(x: x, y: y))
+      }
     }
     return result
   }

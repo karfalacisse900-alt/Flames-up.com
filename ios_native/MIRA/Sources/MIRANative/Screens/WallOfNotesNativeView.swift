@@ -13,6 +13,7 @@ final class MIRAWallNotesModel: ObservableObject {
 
   private let api: MIRAAPIClient
   private var spatialIndex = MIRAWallSpatialIndex()
+  private var displayFrames: [String: CGRect] = [:]
   private var inFlightSignature: String?
   private var lastLoadedSignature: String?
   private var activeViewSignature: String?
@@ -29,11 +30,16 @@ final class MIRAWallNotesModel: ObservableObject {
     spatialIndex.note(at: point)
   }
 
+  func displayFrame(for note: MIRAWallNote) -> CGRect {
+    displayFrames[note.id] ?? MIRAWallNotePresentationResolver.wallFrame(for: note)
+  }
+
   func selectWall(_ wallID: String) {
     guard wallID != currentWallID else { return }
     currentWallID = wallID
     notes = []
     overview = nil
+    displayFrames = [:]
     spatialIndex.rebuild(with: [])
     inFlightSignature = nil
     lastLoadedSignature = nil
@@ -63,6 +69,7 @@ final class MIRAWallNotesModel: ObservableObject {
     let viewSignature = "\(wallID):\(filter):\(cleanQuery)"
     if activeViewSignature != viewSignature {
       notes = []
+      displayFrames = [:]
       spatialIndex.rebuild(with: [])
       lastLoadedSignature = nil
       inFlightSignature = nil
@@ -193,7 +200,7 @@ final class MIRAWallNotesModel: ObservableObject {
         return left.id < right.id
       }
     notes = Array(retained.prefix(3000))
-    spatialIndex.rebuild(with: notes)
+    rebuildDisplayLayout()
   }
 
   private func update(_ note: MIRAWallNote) {
@@ -207,7 +214,12 @@ final class MIRAWallNotesModel: ObservableObject {
     } else {
       notes.append(note)
     }
-    spatialIndex.rebuild(with: notes)
+    rebuildDisplayLayout()
+  }
+
+  private func rebuildDisplayLayout() {
+    displayFrames = MIRAWallReadableLayout.frames(for: notes)
+    spatialIndex.rebuild(with: notes, frameOverrides: displayFrames)
   }
 
   private func squaredDistance(from frame: CGRect, to point: CGPoint) -> CGFloat {
@@ -340,7 +352,7 @@ public struct WallOfNotesNativeView: View {
             let note = try await model.create(body)
             placementNoteID = note.id
             withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
-              let frame = MIRAWallNotePresentationResolver.wallFrame(for: note)
+              let frame = model.displayFrame(for: note)
               camera.center = CGPoint(x: frame.midX, y: frame.midY)
               camera.scale = max(camera.scale, 0.72)
             }
@@ -471,7 +483,7 @@ public struct WallOfNotesNativeView: View {
     ZStack {
       ForEach(visible) { note in
         let presentation = MIRAWallNotePresentationResolver.resolve(note)
-        let frame = MIRAWallNotePresentationResolver.wallFrame(for: note)
+        let frame = model.displayFrame(for: note)
         let center = camera.screenPoint(forWorld: CGPoint(x: frame.midX, y: frame.midY), viewport: viewport)
         MIRAWallNoteTile(
           note: note,
@@ -977,8 +989,9 @@ private struct MIRACreateWallNoteView: View {
   private let colors = ["butter", "cream", "rose", "sky", "mint", "peach", "paper"]
   private let styles: [(String, String)] = [
     ("sticky", "Sticky"), ("editorial", "Editorial"), ("handwritten", "Handwritten"),
-    ("poster", "Poster"), ("receipt", "Receipt"), ("torn_paper", "Torn"),
-    ("notebook", "Notebook"), ("postcard", "Postcard"), ("minimal", "Minimal"),
+    ("poster", "Poster"), ("polaroid", "Photo print"), ("receipt", "Receipt"),
+    ("torn_paper", "Torn"), ("notebook", "Notebook"), ("postcard", "Postcard"),
+    ("minimal", "Minimal"),
   ]
   private let categories: [(String, String)] = [
     ("", "None"), ("question", "Question"), ("confession", "Confession"),
@@ -1036,8 +1049,8 @@ private struct MIRACreateWallNoteView: View {
             }
 
             Text(selectedPhotoImage == nil
-              ? "Choose one photo to make a photo note. Captro checks it before it appears on the wall."
-              : "Your photo will use the Polaroid note style and keep your caption underneath.")
+              ? "Choose one photo, then pair it with any Captro paper style."
+              : "Your photo and caption will use the paper style you choose below.")
               .font(.system(size: 12, weight: .medium))
               .foregroundStyle(MIRATheme.Color.textSecondary)
           }
@@ -1090,31 +1103,10 @@ private struct MIRACreateWallNoteView: View {
           }
 
           settingSection(title: "NOTE STYLE") {
-            if selectedPhotoImage != nil {
-              HStack(spacing: 10) {
-                Image(systemName: "photo.artframe")
-                  .font(.system(size: 17, weight: .semibold))
-                VStack(alignment: .leading, spacing: 2) {
-                  Text("Polaroid")
-                    .font(.system(size: 14, weight: .bold))
-                  Text("Photo with a handwritten caption")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(MIRATheme.Color.textSecondary)
-                }
-                Spacer()
-                Image(systemName: "checkmark.circle.fill")
-                  .foregroundStyle(MIRATheme.Color.forest)
-              }
-              .foregroundStyle(MIRATheme.Color.textPrimary)
-              .padding(.horizontal, 14)
-              .frame(minHeight: 52)
-              .background(MIRATheme.Color.surfaceSoft, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            } else {
-              ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                  ForEach(styles, id: \.0) { item in
-                    choiceChip(item.1, selected: styleToken == item.0) { styleToken = item.0 }
-                  }
+            ScrollView(.horizontal, showsIndicators: false) {
+              HStack(spacing: 8) {
+                ForEach(styles, id: \.0) { item in
+                  choiceChip(item.1, selected: styleToken == item.0) { styleToken = item.0 }
                 }
               }
             }
@@ -1198,7 +1190,7 @@ private struct MIRACreateWallNoteView: View {
 
   private var livePreview: some View {
     let hasPhoto = selectedPhotoImage != nil
-    let previewStyleToken = hasPhoto ? "polaroid" : styleToken
+    let previewStyleToken = styleToken
     let previewText = cleanBody.isEmpty
       ? (hasPhoto ? "Add a thought below your photo." : "What do you want to leave on the wall?")
       : cleanBody
@@ -1304,7 +1296,6 @@ private struct MIRACreateWallNoteView: View {
       )
       selectedPhotoImage = image
       uploadedPhotoResult = nil
-      styleToken = MIRAWallNoteVisualStyle.polaroid.rawValue
     } catch {
       selectedPhotoItem = nil
       selectedPhotoMedia = nil
@@ -1358,7 +1349,7 @@ private struct MIRACreateWallNoteView: View {
         }
 
         let hasPhoto = mediaResult != nil
-        let finalStyle = hasPhoto ? MIRAWallNoteVisualStyle.polaroid.rawValue : selectedStyle
+        let finalStyle = selectedStyle
         let noteSize = MIRAWallNotePresentationResolver.recommendedSize(
           styleToken: finalStyle,
           text: text,
@@ -1499,7 +1490,9 @@ private struct MIRAWallNoteDetailView: View {
 
   private var detailVisualSize: CGSize {
     let source = MIRAWallNotePresentationResolver.resolve(note).size
-    let scale = min(330 / source.width, 390 / source.height, 1.45)
+    let screenWidth = UIScreen.main.bounds.width
+    let maxWidth = max(210, min(286, screenWidth - 88))
+    let scale = min(maxWidth / source.width, 330 / source.height, 1.28)
     return CGSize(width: source.width * scale, height: source.height * scale)
   }
 

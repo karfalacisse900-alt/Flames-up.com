@@ -64,6 +64,18 @@ final class MIRAWallNotePresentationTests: XCTestCase {
     XCTAssertGreaterThan(presentation.size.height, 272)
   }
 
+  func testPhotoCanKeepEveryExplicitPaperStyle() {
+    for style in MIRAWallNoteVisualStyle.allCases {
+      let note = makeNote(
+        id: "photo-style-\(style.rawValue)",
+        style: style.rawValue,
+        mediaURL: "https://media.captro.app/notes/photo.jpg"
+      )
+
+      XCTAssertEqual(MIRAWallNotePresentationResolver.resolve(note).style, style)
+    }
+  }
+
   func testNotebookUsesRuledOrGraphPaperMaterial() {
     let presentation = MIRAWallNotePresentationResolver.resolve(
       makeNote(id: "notebook-material", style: "notebook")
