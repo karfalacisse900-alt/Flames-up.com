@@ -45,7 +45,7 @@ struct MIRAWallNoteTile: View {
       .animation(.spring(response: 0.34, dampingFraction: 0.82), value: isLifted)
       .onAppear {
         guard !hasEntered else { return }
-        if reduceMotion {
+        if reduceMotion || !isNew {
           hasEntered = true
         } else {
           withAnimation(entranceAnimation) { hasEntered = true }
@@ -196,7 +196,12 @@ struct MIRAWallNoteRenderer: View {
             wallScale: wallScale
           )
         } else {
-          MIRAWallTypographyView(note: note, presentation: presentation, zoom: zoom)
+          MIRAWallTypographyView(
+            note: note,
+            presentation: presentation,
+            zoom: zoom,
+            wallScale: wallScale
+          )
         }
 
         if renderDetail != .distant {
@@ -436,6 +441,7 @@ private struct MIRAWallTypographyView: View {
   let note: MIRAWallNote
   let presentation: MIRAWallNotePresentation
   let zoom: CGFloat
+  let wallScale: CGFloat
 
   var body: some View {
     Group {
@@ -537,12 +543,19 @@ private struct MIRAWallTypographyView: View {
     }
     let styleScale: CGFloat
     switch presentation.style {
-    case .receipt: styleScale = 0.72
-    case .postcard: styleScale = 0.86
+    case .receipt: styleScale = 0.82
+    case .postcard: styleScale = 0.92
     case .minimal: styleScale = 1.08
     default: styleScale = 1
     }
-    return max(8, min(34, base * styleScale * max(0.82, zoom)))
+    return max(11, min(38, base * styleScale * max(0.90, zoom) * readabilityScale))
+  }
+
+  private var readabilityScale: CGFloat {
+    if wallScale < 0.42 { return 1.34 }
+    if wallScale < 0.58 { return 1.20 }
+    if wallScale < 0.72 { return 1.10 }
+    return 1
   }
 
   private var contentInsets: EdgeInsets {
@@ -634,19 +647,21 @@ private struct MIRAWallPhotoNoteContent: View {
           .frame(height: layout.imageHeight)
           .clipped()
 
-        Text(note.body)
-          .font(captionFont)
-          .foregroundStyle(inkColor)
-          .tracking(presentation.typography == .thought ? 0.10 : 0)
-          .multilineTextAlignment(.leading)
-          .lineLimit(layout.lineLimit)
-          .minimumScaleFactor(0.72)
-          .allowsTightening(false)
-          .frame(
-            maxWidth: .infinity,
-            maxHeight: layout.captionHeight,
-            alignment: .topLeading
-          )
+        if !note.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+          Text(note.body)
+            .font(captionFont)
+            .foregroundStyle(inkColor)
+            .tracking(presentation.typography == .thought ? 0.10 : 0)
+            .multilineTextAlignment(.leading)
+            .lineLimit(layout.lineLimit)
+            .minimumScaleFactor(0.82)
+            .allowsTightening(false)
+            .frame(
+              maxWidth: .infinity,
+              maxHeight: layout.captionHeight,
+              alignment: .topLeading
+            )
+        }
       }
       .padding(layout.insets)
       .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
@@ -694,19 +709,29 @@ private struct MIRAWallPhotoNoteContent: View {
   private var captionFont: Font {
     let base: CGFloat
     switch note.body.count {
-    case 0...42: base = 22
-    case 43...90: base = 19
-    case 91...160: base = 16.5
-    default: base = 14.5
+    case 0...42: base = 24
+    case 43...90: base = 21
+    case 91...160: base = 18.5
+    default: base = 16.5
     }
-    let size = max(12, min(24, base * max(0.90, zoom)))
+    let readability: CGFloat
+    if wallScale < 0.42 {
+      readability = 1.28
+    } else if wallScale < 0.58 {
+      readability = 1.16
+    } else if wallScale < 0.72 {
+      readability = 1.08
+    } else {
+      readability = 1
+    }
+    let size = max(15, min(28, base * max(0.94, zoom) * readability))
     switch presentation.style {
     case .handwritten, .sticky, .notebook, .polaroid:
       return .custom("Noteworthy", size: size)
     case .editorial, .postcard, .minimal:
       return .system(size: size, weight: .medium, design: .serif)
     case .receipt:
-      return .system(size: size * 0.88, weight: .medium, design: .monospaced)
+      return .system(size: size * 0.94, weight: .medium, design: .monospaced)
     case .poster, .tornPaper:
       return .system(size: size, weight: .semibold, design: .rounded)
     }
@@ -760,26 +785,37 @@ private struct MIRAWallPhotoNoteLayout {
       insets = EdgeInsets(top: 23, leading: 18, bottom: 22, trailing: 18)
     }
 
-    let spacing: CGFloat = style == .receipt ? 6 : 9
+    let hasCaption = textLength > 0
+    let spacing: CGFloat = hasCaption ? (style == .receipt ? 5 : 7) : 0
     let availableHeight = max(88, size.height - insets.top - insets.bottom)
+    guard hasCaption else {
+      return MIRAWallPhotoNoteLayout(
+        insets: insets,
+        spacing: 0,
+        imageHeight: availableHeight,
+        captionHeight: 0,
+        lineLimit: 0
+      )
+    }
+
     let preferredFraction: CGFloat
-    if textLength > 150 {
-      preferredFraction = 0.32
+    if textLength > 160 {
+      preferredFraction = 0.62
     } else if textLength > 90 {
-      preferredFraction = 0.36
+      preferredFraction = 0.66
     } else {
       switch style {
-      case .polaroid: preferredFraction = 0.48
-      case .receipt: preferredFraction = 0.34
-      case .poster: preferredFraction = 0.42
-      default: preferredFraction = 0.40
+      case .polaroid: preferredFraction = 0.74
+      case .receipt: preferredFraction = 0.66
+      case .poster: preferredFraction = 0.72
+      default: preferredFraction = 0.70
       }
     }
-    let minimumCaption = min(96, max(48, availableHeight * 0.34))
-    let maximumImage = max(48, availableHeight - minimumCaption - spacing)
-    let imageHeight = max(48, min(maximumImage, availableHeight * preferredFraction))
-    let captionHeight = max(38, availableHeight - imageHeight - spacing)
-    let lineLimit = textLength > 160 ? 10 : (textLength > 90 ? 8 : 6)
+    let minimumCaption = min(78, max(42, availableHeight * 0.20))
+    let maximumImage = max(64, availableHeight - minimumCaption - spacing)
+    let imageHeight = max(64, min(maximumImage, availableHeight * preferredFraction))
+    let captionHeight = max(36, availableHeight - imageHeight - spacing)
+    let lineLimit = textLength > 160 ? 4 : 3
 
     return MIRAWallPhotoNoteLayout(
       insets: insets,

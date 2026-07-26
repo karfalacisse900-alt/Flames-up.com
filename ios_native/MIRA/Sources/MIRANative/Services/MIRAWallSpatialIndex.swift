@@ -80,8 +80,8 @@ public enum MIRAWallLayout {
     switch noteCount {
     case 0: range = 0.78...1.02
     case 1...3: range = 0.62...1.02
-    case 4...12: range = 0.46...0.88
-    default: range = 0.28...0.58
+    case 4...12: range = 0.52...0.92
+    default: range = 0.38...0.68
     }
     let scale = min(max(fitScale * 0.92, range.lowerBound), range.upperBound)
     return MIRAWallCamera(center: CGPoint(x: content.midX, y: content.midY), scale: scale)
@@ -187,6 +187,7 @@ public enum MIRAWallReadableLayout {
 
   public static func frames(
     for notes: [MIRAWallNote],
+    preserving existingFrames: [String: CGRect] = [:],
     cellSize: CGFloat = 360
   ) -> [String: CGRect] {
     guard !notes.isEmpty else { return [:] }
@@ -204,6 +205,27 @@ public enum MIRAWallReadableLayout {
     result.reserveCapacity(ordered.count)
 
     for note in ordered {
+      let desired = MIRAWallNotePresentationResolver.wallFrame(for: note)
+      guard let existing = existingFrames[note.id],
+            !existing.isNull,
+            !existing.isInfinite,
+            existing.width.isFinite,
+            existing.height.isFinite,
+            abs(existing.width - desired.width) < 0.5,
+            abs(existing.height - desired.height) < 0.5
+      else { continue }
+      append(
+        existing,
+        noteID: note.id,
+        placed: &placed,
+        cells: &cells,
+        result: &result,
+        cellSize: safeCellSize
+      )
+    }
+
+    for note in ordered {
+      guard result[note.id] == nil else { continue }
       let desired = MIRAWallNotePresentationResolver.wallFrame(for: note)
       let phase = CGFloat(MIRAWallNotePresentationResolver.stableHash(note.id) % 360)
         * .pi / 180
@@ -248,19 +270,33 @@ public enum MIRAWallReadableLayout {
         }
       }
 
-      let placedNote = PlacedNote(
-        frame: chosen,
-        readableFrame: readableFrame(for: chosen)
+      append(
+        chosen,
+        noteID: note.id,
+        placed: &placed,
+        cells: &cells,
+        result: &result,
+        cellSize: safeCellSize
       )
-      let index = placed.count
-      placed.append(placedNote)
-      for cell in coveredCells(for: chosen.insetBy(dx: -10, dy: -10), cellSize: safeCellSize) {
-        cells[cell, default: []].append(index)
-      }
-      result[note.id] = chosen
     }
 
     return result
+  }
+
+  private static func append(
+    _ frame: CGRect,
+    noteID: String,
+    placed: inout [PlacedNote],
+    cells: inout [Cell: [Int]],
+    result: inout [String: CGRect],
+    cellSize: CGFloat
+  ) {
+    let index = placed.count
+    placed.append(PlacedNote(frame: frame, readableFrame: readableFrame(for: frame)))
+    for cell in coveredCells(for: frame.insetBy(dx: -10, dy: -10), cellSize: cellSize) {
+      cells[cell, default: []].append(index)
+    }
+    result[noteID] = frame
   }
 
   private static func candidateScore(

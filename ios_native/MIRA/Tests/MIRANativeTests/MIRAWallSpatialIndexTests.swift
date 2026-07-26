@@ -68,7 +68,8 @@ final class MIRAWallSpatialIndexTests: XCTestCase {
     )
 
     XCTAssertLessThanOrEqual(dense.scale, sparse.scale)
-    XCTAssertLessThanOrEqual(dense.scale, 0.58)
+    XCTAssertGreaterThanOrEqual(dense.scale, 0.38)
+    XCTAssertLessThanOrEqual(dense.scale, 0.68)
   }
 
   func testThousandNoteWallReturnsOnlyViewportCandidates() {
@@ -113,6 +114,22 @@ final class MIRAWallSpatialIndexTests: XCTestCase {
     )
 
     XCTAssertFalse(firstReadable.intersects(secondReadable))
+  }
+
+  func testReadableLayoutPreservesExistingFramesWhenNewNotesArrive() {
+    let first = makeNote(id: "preserved-first", x: 0, y: 0, z: 1)
+    let second = makeNote(id: "preserved-second", x: 0, y: 0, z: 2)
+    let initial = MIRAWallReadableLayout.frames(for: [first, second])
+    let third = makeNote(id: "new-third", x: 0, y: 0, z: 3)
+
+    let merged = MIRAWallReadableLayout.frames(
+      for: [first, second, third],
+      preserving: initial
+    )
+
+    XCTAssertEqual(merged[first.id], initial[first.id])
+    XCTAssertEqual(merged[second.id], initial[second.id])
+    XCTAssertNotNil(merged[third.id])
   }
 
   func testSpatialIndexUsesReadableLayoutFramesForHitTesting() {

@@ -178,7 +178,14 @@ final class MIRAWallNotesModel: ObservableObject {
 
   private func merge(_ incoming: [MIRAWallNote], around bounds: CGRect) {
     var byID = Dictionary(uniqueKeysWithValues: notes.map { ($0.id, $0) })
-    incoming.forEach { byID[$0.id] = $0 }
+    incoming.forEach { note in
+      if let previous = byID[note.id],
+         MIRAWallNotePresentationResolver.wallFrame(for: previous)
+           != MIRAWallNotePresentationResolver.wallFrame(for: note) {
+        displayFrames.removeValue(forKey: note.id)
+      }
+      byID[note.id] = note
+    }
     let retention = bounds.insetBy(dx: -max(5000, bounds.width * 2.5), dy: -max(5000, bounds.height * 2.5))
     let viewportCenter = CGPoint(x: bounds.midX, y: bounds.midY)
     let retained = byID.values
@@ -199,7 +206,7 @@ final class MIRAWallNotesModel: ObservableObject {
         if left.createdAt != right.createdAt { return left.createdAt < right.createdAt }
         return left.id < right.id
       }
-    notes = Array(retained.prefix(3000))
+    notes = Array(retained.prefix(1800))
     rebuildDisplayLayout()
   }
 
@@ -211,6 +218,7 @@ final class MIRAWallNotesModel: ObservableObject {
       if previousFrame == nextFrame, spatialIndex.replace(note) {
         return
       }
+      displayFrames.removeValue(forKey: note.id)
     } else {
       notes.append(note)
     }
@@ -218,7 +226,7 @@ final class MIRAWallNotesModel: ObservableObject {
   }
 
   private func rebuildDisplayLayout() {
-    displayFrames = MIRAWallReadableLayout.frames(for: notes)
+    displayFrames = MIRAWallReadableLayout.frames(for: notes, preserving: displayFrames)
     spatialIndex.rebuild(with: notes, frameOverrides: displayFrames)
   }
 
