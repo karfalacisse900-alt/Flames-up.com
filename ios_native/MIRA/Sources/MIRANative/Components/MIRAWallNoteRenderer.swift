@@ -196,12 +196,7 @@ struct MIRAWallNoteRenderer: View {
             wallScale: wallScale
           )
         } else {
-          MIRAWallTypographyView(
-            note: note,
-            presentation: presentation,
-            zoom: zoom,
-            wallScale: wallScale
-          )
+          MIRAWallTypographyView(note: note, presentation: presentation, zoom: zoom)
         }
 
         if renderDetail != .distant {
@@ -441,7 +436,6 @@ private struct MIRAWallTypographyView: View {
   let note: MIRAWallNote
   let presentation: MIRAWallNotePresentation
   let zoom: CGFloat
-  let wallScale: CGFloat
 
   var body: some View {
     Group {
@@ -543,19 +537,12 @@ private struct MIRAWallTypographyView: View {
     }
     let styleScale: CGFloat
     switch presentation.style {
-    case .receipt: styleScale = 0.82
-    case .postcard: styleScale = 0.92
+    case .receipt: styleScale = 0.72
+    case .postcard: styleScale = 0.86
     case .minimal: styleScale = 1.08
     default: styleScale = 1
     }
-    return max(11, min(38, base * styleScale * max(0.90, zoom) * readabilityScale))
-  }
-
-  private var readabilityScale: CGFloat {
-    if wallScale < 0.42 { return 1.34 }
-    if wallScale < 0.58 { return 1.20 }
-    if wallScale < 0.72 { return 1.10 }
-    return 1
+    return max(8, min(34, base * styleScale * max(0.82, zoom)))
   }
 
   private var contentInsets: EdgeInsets {
@@ -714,17 +701,7 @@ private struct MIRAWallPhotoNoteContent: View {
     case 91...160: base = 18.5
     default: base = 16.5
     }
-    let readability: CGFloat
-    if wallScale < 0.42 {
-      readability = 1.28
-    } else if wallScale < 0.58 {
-      readability = 1.16
-    } else if wallScale < 0.72 {
-      readability = 1.08
-    } else {
-      readability = 1
-    }
-    let size = max(15, min(28, base * max(0.94, zoom) * readability))
+    let size = max(15, min(28, base * max(0.94, zoom)))
     switch presentation.style {
     case .handwritten, .sticky, .notebook, .polaroid:
       return .custom("Noteworthy", size: size)
