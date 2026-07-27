@@ -66,6 +66,7 @@ actor MIRAAppCacheStore {
   static let shared = MIRAAppCacheStore()
 
   private static let dataGenerationDefaultsKey = "native.app.data_generation.v1"
+  private static let retiredHomeCacheCleanupKey = "native.retired_home_cache_cleanup.v1"
 
   private var didClearPostDraftFromPreviousProcess = false
 
@@ -107,6 +108,17 @@ actor MIRAAppCacheStore {
     MIRAAPIClient.productionSession.configuration.urlCache?.removeAllCachedResponses()
   }
 
+  func purgeRetiredHomeCachesIfNeeded() async {
+    let defaults = UserDefaults.standard
+    guard !defaults.bool(forKey: Self.retiredHomeCacheCleanupKey) else { return }
+
+    await MIRALocalJSONCache.remove(key: CacheKey.feed)
+    for category in CacheKey.discoverCategoryIds {
+      await MIRALocalJSONCache.remove(key: CacheKey.discoverPosts(category))
+    }
+    defaults.set(true, forKey: Self.retiredHomeCacheCleanupKey)
+    MIRAPerformanceTimeline.mark("retired_home_cache_cleared")
+  }
   func loadFeed() async -> [MIRAPost]? {
     guard let posts = await MIRALocalJSONCache.load([MIRAPost].self, key: CacheKey.feed, maxAge: contentCacheAge) else {
       return nil

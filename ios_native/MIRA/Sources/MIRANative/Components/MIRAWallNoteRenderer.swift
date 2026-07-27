@@ -199,11 +199,18 @@ struct MIRAWallNoteRenderer: View {
           MIRAWallTypographyView(note: note, presentation: presentation, zoom: zoom)
         }
 
+        MIRAWallWarpCue(warp: presentation.warp, darkPaper: presentation.usesDarkPaper)
+          .opacity(renderDetail == .distant ? 0.54 : 1)
+          .transition(.opacity)
+
         if renderDetail != .distant {
-          MIRAWallWarpCue(warp: presentation.warp, darkPaper: presentation.usesDarkPaper)
-            .transition(.opacity)
           MIRAWallPhysicalDetails(note: note, presentation: presentation, zoom: zoom)
             .transition(.opacity)
+        } else {
+          MIRAWallDistantAttachmentCue(
+            attachment: presentation.attachment,
+            darkPaper: presentation.usesDarkPaper
+          )
         }
 
         if renderDetail == .full, zoom >= 0.74 {
@@ -334,6 +341,60 @@ private struct MIRAWallWarpCue: View {
 
   private var shadowColor: Color { darkPaper ? .white : .black }
   private var highlightColor: Color { darkPaper ? .black : .white }
+}
+private struct MIRAWallDistantAttachmentCue: View {
+  let attachment: MIRAWallNoteAttachment
+  let darkPaper: Bool
+
+  var body: some View {
+    VStack(spacing: 0) {
+      cue
+      Spacer(minLength: 0)
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .allowsHitTesting(false)
+    .accessibilityHidden(true)
+  }
+
+  @ViewBuilder
+  private var cue: some View {
+    switch attachment {
+    case .tape:
+      RoundedRectangle(cornerRadius: 1.8, style: .continuous)
+        .fill((darkPaper ? Color.white : Color(red: 0.91, green: 0.82, blue: 0.63)).opacity(0.72))
+        .frame(width: 54, height: 12)
+        .rotationEffect(.degrees(-2.4))
+        .offset(y: -5)
+        .shadow(color: .black.opacity(0.10), radius: 1.2, y: 1)
+    case .pin:
+      Circle()
+        .fill(Color(red: 0.76, green: 0.17, blue: 0.10))
+        .frame(width: 13, height: 13)
+        .overlay(alignment: .topLeading) {
+          Circle().fill(Color.white.opacity(0.48)).frame(width: 3.4, height: 3.4).padding(2.2)
+        }
+        .offset(y: -6)
+        .shadow(color: .black.opacity(0.20), radius: 1.5, y: 1.5)
+    case .paperclip:
+      Image(systemName: "paperclip")
+        .font(.system(size: 22, weight: .medium))
+        .foregroundStyle((darkPaper ? Color.white : Color.black).opacity(0.52))
+        .rotationEffect(.degrees(-13))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.leading, 10)
+        .offset(y: -7)
+    case .foldedCorner:
+      Image(systemName: "triangle.fill")
+        .font(.system(size: 13, weight: .regular))
+        .foregroundStyle((darkPaper ? Color.white : Color.black).opacity(0.16))
+        .rotationEffect(.degrees(45))
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        .padding(.trailing, 5)
+        .offset(y: -2)
+    case .none:
+      EmptyView()
+    }
+  }
 }
 private struct MIRAWallPaperBackground: View {
   let note: MIRAWallNote
@@ -1087,7 +1148,7 @@ private struct MIRAWallPaperMaterialLayer: View {
   }
 
   private func drawTonalVariation(context: inout GraphicsContext, size: CGSize, hash: UInt64) {
-    let count = detail == .distant ? 2 : 5
+    let count = detail == .distant ? 4 : 5
     for index in 0..<count {
       let x = size.width * MIRAWallMaterialNoise.unit(hash, index * 5 + 1)
       let y = size.height * MIRAWallMaterialNoise.unit(hash, index * 5 + 2)
@@ -1108,7 +1169,7 @@ private struct MIRAWallPaperMaterialLayer: View {
     case .notebook, .graph, .ivory: baseCount = 24
     case .photographic, .coated: baseCount = 12
     }
-    let count = detail == .distant ? max(7, baseCount / 3) : baseCount
+    let count = detail == .distant ? max(12, baseCount / 2) : baseCount
     for index in 0..<count {
       let x = size.width * MIRAWallMaterialNoise.unit(hash, 100 + index * 4)
       let y = size.height * MIRAWallMaterialNoise.unit(hash, 101 + index * 4)
@@ -1119,8 +1180,17 @@ private struct MIRAWallPaperMaterialLayer: View {
       fiber.addLine(to: CGPoint(x: x + cos(angle) * length, y: y + sin(angle) * length))
       context.stroke(
         fiber,
-        with: .color(fiberColor.opacity(material == .kraft ? 0.085 : 0.045)),
-        style: StrokeStyle(lineWidth: material == .kraft ? 0.55 : 0.36, lineCap: .round)
+        with: .color(fiberColor.opacity(
+          detail == .distant
+            ? (material == .kraft ? 0.14 : 0.085)
+            : (material == .kraft ? 0.085 : 0.045)
+        )),
+        style: StrokeStyle(
+          lineWidth: detail == .distant
+            ? (material == .kraft ? 1.15 : 0.82)
+            : (material == .kraft ? 0.55 : 0.36),
+          lineCap: .round
+        )
       )
     }
   }
@@ -1128,26 +1198,34 @@ private struct MIRAWallPaperMaterialLayer: View {
   private func drawMaterialMarks(context: inout GraphicsContext, size: CGSize, hash: UInt64) {
     switch material {
     case .notebook:
+      let lineOpacity = detail == .distant ? 0.16 : 0.105
+      let lineWidth: CGFloat = detail == .distant ? 1.15 : 0.55
       var y: CGFloat = 28
       while y < size.height {
         var line = Path()
         line.move(to: CGPoint(x: 0, y: y))
         line.addLine(to: CGPoint(x: size.width, y: y + 0.15))
-        context.stroke(line, with: .color(Color.blue.opacity(0.105)), lineWidth: 0.55)
+        context.stroke(line, with: .color(Color.blue.opacity(lineOpacity)), lineWidth: lineWidth)
         y += 22
       }
       var margin = Path()
       margin.move(to: CGPoint(x: min(29, size.width * 0.14), y: 0))
       margin.addLine(to: CGPoint(x: min(29, size.width * 0.14), y: size.height))
-      context.stroke(margin, with: .color(Color.red.opacity(0.15)), lineWidth: 0.7)
+      context.stroke(
+        margin,
+        with: .color(Color.red.opacity(detail == .distant ? 0.20 : 0.15)),
+        lineWidth: detail == .distant ? 1.35 : 0.7
+      )
     case .graph:
       let spacing: CGFloat = 18
+      let gridOpacity = detail == .distant ? 0.12 : 0.075
+      let gridWidth: CGFloat = detail == .distant ? 0.95 : 0.45
       var x: CGFloat = spacing
       while x < size.width {
         var line = Path()
         line.move(to: CGPoint(x: x, y: 0))
         line.addLine(to: CGPoint(x: x, y: size.height))
-        context.stroke(line, with: .color(Color.blue.opacity(0.075)), lineWidth: 0.45)
+        context.stroke(line, with: .color(Color.blue.opacity(gridOpacity)), lineWidth: gridWidth)
         x += spacing
       }
       var y: CGFloat = spacing
@@ -1155,15 +1233,17 @@ private struct MIRAWallPaperMaterialLayer: View {
         var line = Path()
         line.move(to: CGPoint(x: 0, y: y))
         line.addLine(to: CGPoint(x: size.width, y: y))
-        context.stroke(line, with: .color(Color.blue.opacity(0.075)), lineWidth: 0.45)
+        context.stroke(line, with: .color(Color.blue.opacity(gridOpacity)), lineWidth: gridWidth)
         y += spacing
       }
     case .kraft:
-      let speckleCount = detail == .distant ? 10 : 28
+      let speckleCount = detail == .distant ? 16 : 28
       for index in 0..<speckleCount {
         let x = size.width * MIRAWallMaterialNoise.unit(hash, 400 + index * 3)
         let y = size.height * MIRAWallMaterialNoise.unit(hash, 401 + index * 3)
-        let radius = 0.35 + MIRAWallMaterialNoise.unit(hash, 402 + index * 3) * 0.75
+        let baseRadius: CGFloat = detail == .distant ? 0.85 : 0.35
+        let radiusRange: CGFloat = detail == .distant ? 1.25 : 0.75
+        let radius = baseRadius + MIRAWallMaterialNoise.unit(hash, 402 + index * 3) * radiusRange
         context.fill(
           Path(ellipseIn: CGRect(x: x, y: y, width: radius, height: radius * 0.72)),
           with: .color(Color.black.opacity(0.10))
@@ -1171,7 +1251,12 @@ private struct MIRAWallPaperMaterialLayer: View {
       }
     case .photographic:
       context.fill(
-        Path(CGRect(x: 0, y: 0, width: size.width, height: max(1, size.height * 0.018))),
+        Path(CGRect(
+          x: 0,
+          y: 0,
+          width: size.width,
+          height: max(detail == .distant ? 3 : 1, size.height * 0.018)
+        )),
         with: .color(Color.white.opacity(0.16))
       )
     case .aged, .ivory, .coated:
@@ -1182,16 +1267,18 @@ private struct MIRAWallPaperMaterialLayer: View {
   private func drawEdgeAge(context: inout GraphicsContext, size: CGSize) {
     let opacity: Double
     switch material {
-    case .aged: opacity = 0.075
-    case .kraft: opacity = 0.045
-    case .ivory, .notebook, .graph: opacity = 0.024
-    case .photographic, .coated: opacity = 0.014
+    case .aged: opacity = detail == .distant ? 0.13 : 0.075
+    case .kraft: opacity = detail == .distant ? 0.09 : 0.045
+    case .ivory, .notebook, .graph: opacity = detail == .distant ? 0.052 : 0.024
+    case .photographic, .coated: opacity = detail == .distant ? 0.032 : 0.014
     }
     let edge = darkPaper ? Color.white.opacity(opacity * 0.45) : Color(red: 0.38, green: 0.24, blue: 0.12).opacity(opacity)
-    context.fill(Path(CGRect(x: 0, y: 0, width: size.width, height: 1.2)), with: .color(edge))
-    context.fill(Path(CGRect(x: 0, y: size.height - 1.8, width: size.width, height: 1.8)), with: .color(edge))
-    context.fill(Path(CGRect(x: 0, y: 0, width: 1.2, height: size.height)), with: .color(edge))
-    context.fill(Path(CGRect(x: size.width - 1.6, y: 0, width: 1.6, height: size.height)), with: .color(edge))
+    let narrowEdge: CGFloat = detail == .distant ? 3.2 : 1.2
+    let wideEdge: CGFloat = detail == .distant ? 3.8 : 1.8
+    context.fill(Path(CGRect(x: 0, y: 0, width: size.width, height: narrowEdge)), with: .color(edge))
+    context.fill(Path(CGRect(x: 0, y: size.height - wideEdge, width: size.width, height: wideEdge)), with: .color(edge))
+    context.fill(Path(CGRect(x: 0, y: 0, width: narrowEdge, height: size.height)), with: .color(edge))
+    context.fill(Path(CGRect(x: size.width - wideEdge, y: 0, width: wideEdge, height: size.height)), with: .color(edge))
   }
 
   private var fiberColor: Color {
@@ -1199,11 +1286,20 @@ private struct MIRAWallPaperMaterialLayer: View {
   }
 
   private var warmTone: Color {
-    darkPaper ? Color.white.opacity(0.008) : Color(red: 0.57, green: 0.38, blue: 0.16).opacity(material == .aged ? 0.032 : 0.014)
+    darkPaper
+      ? Color.white.opacity(detail == .distant ? 0.018 : 0.008)
+      : Color(red: 0.57, green: 0.38, blue: 0.16).opacity(
+        material == .aged
+          ? (detail == .distant ? 0.052 : 0.032)
+          : (detail == .distant ? 0.028 : 0.014)
+      )
   }
 
   private var coolTone: Color {
-    darkPaper ? Color.black.opacity(0.018) : Color(red: 0.30, green: 0.39, blue: 0.43).opacity(0.010)
+    darkPaper
+      ? Color.black.opacity(detail == .distant ? 0.030 : 0.018)
+      : Color(red: 0.30, green: 0.39, blue: 0.43)
+        .opacity(detail == .distant ? 0.022 : 0.010)
   }
 }
 

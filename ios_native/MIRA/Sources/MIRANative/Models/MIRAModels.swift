@@ -1610,6 +1610,8 @@ public struct MIRAEditorUploadMetadata: Encodable, Hashable {
   public let editorVersion: String
   public let appliedFilter: String
   public let hasTextOverlay: Bool
+  public let layerCount: Int?
+  public let compositionJSON: String?
 
   public init(mediaIndex: Int, metadata: MIRANativeEditedMediaMetadata) {
     self.type = "native_editor"
@@ -1618,6 +1620,8 @@ public struct MIRAEditorUploadMetadata: Encodable, Hashable {
     self.editorVersion = metadata.editorVersion
     self.appliedFilter = metadata.appliedFilter
     self.hasTextOverlay = metadata.hasTextOverlay
+    self.layerCount = metadata.layerCount
+    self.compositionJSON = metadata.compositionJSON
   }
 }
 

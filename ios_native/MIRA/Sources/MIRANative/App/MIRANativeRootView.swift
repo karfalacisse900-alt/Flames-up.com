@@ -4,7 +4,6 @@ import Foundation
 import GoogleSignIn
 
 public enum MIRATab: Hashable {
-  case main
   case wall
   case chat
   case profile
@@ -14,7 +13,6 @@ public enum MIRAStartupPhase: Equatable {
   case launching
   case checkingSession
   case loadingUser
-  case preparingFeed
   case preparingStories
   case preparingProfile
   case preparingMainTabs
@@ -30,8 +28,6 @@ public enum MIRAStartupPhase: Equatable {
       return "Checking your session"
     case .loadingUser:
       return "Loading your profile"
-    case .preparingFeed:
-      return "Preparing your feed"
     case .preparingStories:
       return "Preparing Stories"
     case .preparingProfile:
@@ -54,7 +50,6 @@ final class MIRAStartupCoordinator: ObservableObject {
   @Published private(set) var showSlowStartupCopy = false
   @Published private(set) var shouldMountAllAuthenticatedTabs = false
 
-  let feedModel: MainFeedModel
   let discoverModel: DiscoverNativeModel
   let chatModel: ChatNativeModel
   let profileModel: ProfileNativeModel
@@ -66,7 +61,6 @@ final class MIRAStartupCoordinator: ObservableObject {
 
   init(api: MIRAAPIClient) {
     self.api = api
-    self.feedModel = MainFeedModel(api: api)
     self.discoverModel = DiscoverNativeModel(api: api)
     self.chatModel = ChatNativeModel(api: api)
     self.profileModel = ProfileNativeModel(api: api)
@@ -107,9 +101,6 @@ final class MIRAStartupCoordinator: ObservableObject {
     phase = .preparingMainTabs
     await Task.yield()
 
-    phase = .preparingFeed
-    let feedTask = Task { await feedModel.prepareForStartup() }
-
     phase = .preparingStories
     let storiesTask = Task { await discoverModel.prepareStoriesForStartup() }
 
@@ -118,7 +109,7 @@ final class MIRAStartupCoordinator: ObservableObject {
 
     let chatTask = Task { await chatModel.prepareForStartup() }
 
-    _ = await (feedTask.value, storiesTask.value, profileTask.value, chatTask.value)
+    _ = await (storiesTask.value, profileTask.value, chatTask.value)
     startInitialMediaPrewarm()
 
     phase = .readyAuthenticated
@@ -162,7 +153,7 @@ final class MIRAStartupCoordinator: ObservableObject {
   }
 
   private func startInitialMediaPrewarm() {
-    let posts = Array(feedModel.posts.prefix(6)) + Array(profileModel.posts.prefix(6))
+    let posts = Array(profileModel.posts.prefix(6))
     let previewURLs = posts.flatMap { post in
       post.posterMediaURLs + post.thumbnailMediaURLs
     }
@@ -190,8 +181,8 @@ final class MIRAStartupCoordinator: ObservableObject {
 
 public struct MIRANativeRootView: View {
   @Environment(\.scenePhase) private var scenePhase
-  @State private var selectedTab: MIRATab = .main
-  @State private var loadedTabs: Set<MIRATab> = [.main]
+  @State private var selectedTab: MIRATab = .wall
+  @State private var loadedTabs: Set<MIRATab> = [.wall]
   @State private var isPrivacyShieldVisible = false
   @State private var featureStatusBarHidden = false
   @AppStorage(MIRAAppearanceResolver.preferenceKey) private var appearancePreference = MIRAAppearance.system.rawValue
@@ -243,15 +234,16 @@ public struct MIRANativeRootView: View {
     }
     .task {
       await MIRAAppCacheStore.shared.clearPostDraftFromPreviousProcessIfNeeded()
+      await MIRAAppCacheStore.shared.purgeRetiredHomeCachesIfNeeded()
       await startup.start(authSession: authSession)
       registerCachedPushTokenIfPossible()
     }
     .onChange(of: authSession.user?.id) { _, userID in
       if userID == nil {
-        selectedTab = .main
-        loadedTabs = [.main]
+        selectedTab = .wall
+        loadedTabs = [.wall]
       } else {
-        loadedTabs.formUnion([.main, .wall, .profile])
+        loadedTabs.formUnion([.wall, .profile])
       }
       registerCachedPushTokenIfPossible()
     }
@@ -261,9 +253,6 @@ public struct MIRANativeRootView: View {
       }
       if phase == .active {
         registerCachedPushTokenIfPossible()
-        if selectedTab == .main {
-          MIRAPlaybackCoordinator.resumeVisible(reason: "app_active_home")
-        }
       } else {
         MIRAPlaybackCoordinator.pauseAll(reason: "app_inactive")
       }
@@ -279,7 +268,7 @@ public struct MIRANativeRootView: View {
   }
 
   private var shouldHideStatusBar: Bool {
-    startup.isSplashMounted || featureStatusBarHidden || (authSession.user != nil && selectedTab == .main)
+    startup.isSplashMounted || featureStatusBarHidden
   }
 
   @ViewBuilder
@@ -301,12 +290,6 @@ public struct MIRANativeRootView: View {
 
   private var mainTabs: some View {
     TabView(selection: $selectedTab) {
-      lazyTab(.main) {
-        MainFeedView(api: api, model: startup.feedModel, isTabActive: selectedTab == .main)
-      }
-        .tag(MIRATab.main)
-        .tabItem { Label("Home", systemImage: "house.fill") }
-
       lazyTab(.wall) {
         NavigationStack {
           WallOfNotesNativeView(api: api, storiesModel: startup.discoverModel)
@@ -335,11 +318,7 @@ public struct MIRANativeRootView: View {
     .onChange(of: selectedTab) { _, tab in
       MIRAPerformanceTimeline.mark("tab_switch", detail: "\(tab)")
       loadedTabs.insert(tab)
-      if tab == .main {
-        MIRAPlaybackCoordinator.resumeVisible(reason: "home_tab_selected")
-      } else {
-        MIRAPlaybackCoordinator.pauseAll(reason: "tab_changed")
-      }
+      MIRAPlaybackCoordinator.pauseAll(reason: "tab_changed")
     }
   }
 

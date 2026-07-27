@@ -486,7 +486,9 @@ public struct WallOfNotesNativeView: View {
 
   @ViewBuilder
   private func wallNotes(bounds: CGRect, viewport: CGSize) -> some View {
-    let preload = max(180, 240 / max(camera.scale, 0.2))
+    // Include rotated paper edges, attachments, and cast shadows before a tile
+    // reaches the viewport so low-zoom cards never appear sliced.
+    let preload = max(320, 420 / max(camera.scale, 0.2))
     let visible = model.visibleNotes(in: bounds.insetBy(dx: -preload, dy: -preload))
     ZStack {
       ForEach(visible) { note in
