@@ -631,7 +631,7 @@ public struct WallOfNotesNativeView: View {
     }
 
     Task { @MainActor in
-      try? await Task.sleep(for: .milliseconds(reduceMotion ? 0 : 90))
+      try? await Task.sleep(for: .milliseconds(reduceMotion ? 0 : 45))
       guard liftedNoteID == note.id, selectedNote == nil else { return }
       withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
         selectedNote = note
@@ -770,7 +770,9 @@ public struct WallOfNotesNativeView: View {
   }
 
   private func panGesture(viewport: CGSize) -> some Gesture {
-    DragGesture(minimumDistance: 0, coordinateSpace: .local)
+    // Keep a real movement threshold so the wall pan recognizer does not enter
+    // its changed state on a normal note tap.
+    DragGesture(minimumDistance: 6, coordinateSpace: .local)
       .onChanged { value in
         guard magnifyStart == nil else { return }
         if panStart == nil {
@@ -1082,6 +1084,12 @@ private struct MIRAWallBackground: View {
 }
 
 private enum MIRAWallBackgroundNoise {
+  static func seed(for value: String) -> UInt64 {
+    value.utf8.reduce(UInt64(0xcbf29ce484222325)) { partial, byte in
+      (partial ^ UInt64(byte)) &* 0x100000001b3
+    }
+  }
+
   static func unit(_ seed: UInt64, _ salt: Int) -> CGFloat {
     var mixed = seed &+ UInt64(max(0, salt) + 1) &* 0x9E3779B97F4A7C15
     mixed ^= mixed >> 30
@@ -1090,6 +1098,103 @@ private enum MIRAWallBackgroundNoise {
     mixed &*= 0x94D049BB133111EB
     mixed ^= mixed >> 31
     return CGFloat(mixed % 10_000) / 10_000
+  }
+}
+
+private struct MIRAWallDetailBackdrop: View {
+  let seed: String
+
+  var body: some View {
+    Canvas { context, size in
+      context.fill(
+        Path(CGRect(origin: .zero, size: size)),
+        with: .color(Color(red: 0.944, green: 0.929, blue: 0.895))
+      )
+
+      let materialSeed = MIRAWallBackgroundNoise.seed(for: seed)
+      for index in 0..<44 {
+        let y = size.height * MIRAWallBackgroundNoise.unit(materialSeed, index * 4 + 1)
+        let startX = size.width * MIRAWallBackgroundNoise.unit(materialSeed, index * 4 + 2)
+        let length = 14 + 48 * MIRAWallBackgroundNoise.unit(materialSeed, index * 4 + 3)
+        let rise = (MIRAWallBackgroundNoise.unit(materialSeed, index * 4 + 4) - 0.5) * 4
+        var fiber = Path()
+        fiber.move(to: CGPoint(x: startX, y: y))
+        fiber.addQuadCurve(
+          to: CGPoint(x: min(size.width, startX + length), y: y + rise),
+          control: CGPoint(x: startX + length * 0.52, y: y - rise * 0.7)
+        )
+        context.stroke(
+          fiber,
+          with: .color(Color(red: 0.31, green: 0.24, blue: 0.16).opacity(index.isMultiple(of: 3) ? 0.030 : 0.016)),
+          style: StrokeStyle(lineWidth: index.isMultiple(of: 4) ? 0.6 : 0.35, lineCap: .round)
+        )
+      }
+
+      for index in 0..<13 {
+        let point = CGPoint(
+          x: size.width * MIRAWallBackgroundNoise.unit(materialSeed, 300 + index * 2),
+          y: size.height * MIRAWallBackgroundNoise.unit(materialSeed, 301 + index * 2)
+        )
+        let radius = 0.7 + MIRAWallBackgroundNoise.unit(materialSeed, 500 + index) * 1.1
+        context.fill(
+          Path(ellipseIn: CGRect(x: point.x, y: point.y, width: radius, height: radius)),
+          with: .color(Color.black.opacity(0.025))
+        )
+      }
+    }
+    .allowsHitTesting(false)
+    .accessibilityHidden(true)
+  }
+}
+
+private struct MIRAWallDetailNoteStage: View {
+  let seed: String
+
+  var body: some View {
+    Canvas { context, size in
+      context.fill(
+        Path(CGRect(origin: .zero, size: size)),
+        with: .color(Color(red: 0.884, green: 0.843, blue: 0.765))
+      )
+
+      let materialSeed = MIRAWallBackgroundNoise.seed(for: "stage-\(seed)")
+      for index in 0..<34 {
+        let point = CGPoint(
+          x: size.width * MIRAWallBackgroundNoise.unit(materialSeed, index * 3 + 1),
+          y: size.height * MIRAWallBackgroundNoise.unit(materialSeed, index * 3 + 2)
+        )
+        let length = 5 + 14 * MIRAWallBackgroundNoise.unit(materialSeed, index * 3 + 3)
+        var grain = Path()
+        grain.move(to: point)
+        grain.addLine(to: CGPoint(x: min(size.width, point.x + length), y: point.y + 0.8))
+        context.stroke(
+          grain,
+          with: .color(Color(red: 0.36, green: 0.27, blue: 0.17).opacity(index.isMultiple(of: 2) ? 0.045 : 0.025)),
+          style: StrokeStyle(lineWidth: 0.5, lineCap: .round)
+        )
+      }
+
+      for index in 0..<8 {
+        let point = CGPoint(
+          x: size.width * MIRAWallBackgroundNoise.unit(materialSeed, 180 + index * 2),
+          y: size.height * MIRAWallBackgroundNoise.unit(materialSeed, 181 + index * 2)
+        )
+        context.fill(
+          Path(ellipseIn: CGRect(x: point.x - 1, y: point.y - 1, width: 2, height: 2)),
+          with: .color(Color.black.opacity(0.055))
+        )
+      }
+    }
+    .overlay {
+      LinearGradient(
+        colors: [Color.white.opacity(0.11), .clear, Color.black.opacity(0.035)],
+        startPoint: .topLeading,
+        endPoint: .bottomTrailing
+      )
+      .allowsHitTesting(false)
+    }
+    .allowsHitTesting(false)
+    .accessibilityHidden(true)
   }
 }
 private struct MIRACreateWallNoteView: View {
@@ -1918,41 +2023,42 @@ private struct MIRAWallNoteDetailView: View {
 
   var body: some View {
     NavigationStack {
-      VStack(spacing: 0) {
-        detailHeader
+      ZStack {
+        MIRAWallDetailBackdrop(seed: note.id)
 
-        Divider().opacity(0.35)
+        VStack(spacing: 0) {
+          detailHeader
 
-        ScrollView {
-          VStack(spacing: 18) {
-            flippableNote
+          ScrollView(showsIndicators: false) {
+            LazyVStack(spacing: 16) {
+              noteStage
+              noteMetadataPanel
 
-            if note.capabilities.hasVoice {
-              voicePlaybackPanel
+              if note.capabilities.hasVoice {
+                voicePlaybackPanel
+              }
+
+              actionRow
+
+              if let errorMessage {
+                Text(errorMessage)
+                  .font(.system(size: 12, weight: .semibold))
+                  .foregroundStyle(Color.red)
+                  .padding(.horizontal, 12)
+                  .frame(maxWidth: .infinity, minHeight: 38, alignment: .leading)
+                  .background(Color.red.opacity(0.07), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+              }
+
+              if note.capabilities.canManageCollaboration || note.allowContributions == true || !contributions.isEmpty {
+                collaborationSection
+              }
             }
-
-            authorMetadata
-            locationMetadata
-            signatureSummary
-            actionRow
-
-            if let errorMessage {
-              Text(errorMessage)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(Color.red)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-
-            Divider().opacity(0.45)
-            collaborationControls
-            contributionComposer
-            contributionsSection
+            .padding(.horizontal, 16)
+            .padding(.bottom, 22)
           }
-          .padding(18)
+          .scrollDismissesKeyboard(.interactively)
         }
-        .scrollDismissesKeyboard(.interactively)
       }
-      .background(MIRATheme.Color.surface)
       .toolbar(.hidden, for: .navigationBar)
       .toolbar {
         ToolbarItemGroup(placement: .keyboard) {
@@ -1977,14 +2083,14 @@ private struct MIRAWallNoteDetailView: View {
           .presentationCornerRadius(28)
       }
     }
-    .frame(maxWidth: 390, maxHeight: 720)
+    .frame(maxWidth: 420, maxHeight: 760)
     .background(MIRATheme.Color.surface)
-    .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+    .clipShape(RoundedRectangle(cornerRadius: 30, style: .continuous))
     .overlay {
-      RoundedRectangle(cornerRadius: 28, style: .continuous)
-        .stroke(Color.white.opacity(0.48), lineWidth: 1)
+      RoundedRectangle(cornerRadius: 30, style: .continuous)
+        .stroke(Color.white.opacity(0.56), lineWidth: 1)
     }
-    .shadow(color: .black.opacity(0.18), radius: 26, y: 12)
+    .shadow(color: .black.opacity(0.20), radius: 28, y: 14)
   }
 
   private var detailVisualSize: CGSize {
@@ -2004,6 +2110,40 @@ private struct MIRAWallNoteDetailView: View {
     displaysBackSide ? note.displayingBackSide() : note
   }
 
+  private var noteStage: some View {
+    VStack(spacing: 12) {
+      flippableNote
+
+      if note.canFlip {
+        Button(action: flipNote) {
+          Label(
+            displaysBackSide ? "Show front" : "Turn note over",
+            systemImage: "arrow.triangle.2.circlepath"
+          )
+          .font(.system(size: 13, weight: .bold, design: .rounded))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .padding(.horizontal, 14)
+          .frame(minHeight: 38)
+          .background(MIRATheme.Color.surface.opacity(0.92), in: Capsule())
+          .overlay(Capsule().stroke(MIRATheme.Color.hairline, lineWidth: 1))
+        }
+        .buttonStyle(.miraPress)
+        .disabled(isFlipping)
+        .accessibilityLabel(displaysBackSide ? "Show the front of this note" : "Show the back of this note")
+      }
+    }
+    .padding(.horizontal, 12)
+    .padding(.top, 20)
+    .padding(.bottom, 16)
+    .frame(maxWidth: .infinity)
+    .background(MIRAWallDetailNoteStage(seed: note.id))
+    .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+    .overlay {
+      RoundedRectangle(cornerRadius: 22, style: .continuous)
+        .stroke(Color.black.opacity(0.06), lineWidth: 0.8)
+    }
+  }
+
   private var flippableNote: some View {
     MIRAWallNoteRenderer(note: displayedNote, zoom: 1.12, isFocused: true)
       .frame(width: detailVisualSize.width, height: detailVisualSize.height)
@@ -2019,19 +2159,7 @@ private struct MIRAWallNoteDetailView: View {
         guard note.canFlip else { return }
         flipNote()
       }
-      .overlay(alignment: .bottom) {
-        if note.canFlip {
-          Label(displaysBackSide ? "Front" : "Flip", systemImage: "arrow.triangle.2.circlepath")
-            .font(.system(size: 11, weight: .bold))
-            .foregroundStyle(MIRATheme.Color.textPrimary)
-            .padding(.horizontal, 10)
-            .frame(height: 28)
-            .background(MIRATheme.Color.surface.opacity(0.88), in: Capsule())
-            .padding(.bottom, 10)
-            .allowsHitTesting(false)
-        }
-      }
-      .accessibilityHint(note.canFlip ? "Double tap to show the other side." : "")
+      .accessibilityHint(note.canFlip ? "Tap to show the other side." : "")
   }
 
   private var voicePlaybackPanel: some View {
@@ -2081,6 +2209,50 @@ private struct MIRAWallNoteDetailView: View {
     .background(MIRATheme.Color.surfaceSoft, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
   }
 
+  private var noteMetadataPanel: some View {
+    VStack(spacing: 0) {
+      authorMetadata
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+
+      if note.location != nil {
+        metadataDivider
+        locationMetadata
+          .padding(.horizontal, 14)
+          .padding(.vertical, 10)
+      }
+
+      if note.resolvedSignatureCount > 0 {
+        metadataDivider
+        signatureSummary
+          .padding(.horizontal, 14)
+          .padding(.vertical, 8)
+      }
+    }
+    .background(MIRAWallPaperColor.color(for: "cream").opacity(0.97), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    .overlay(alignment: .top) {
+      RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+        .fill(Color(red: 0.84, green: 0.75, blue: 0.57).opacity(0.68))
+        .frame(width: 58, height: 12)
+        .rotationEffect(.degrees(-1.4))
+        .offset(y: -6)
+        .shadow(color: .black.opacity(0.08), radius: 1, y: 1)
+        .allowsHitTesting(false)
+    }
+    .overlay {
+      RoundedRectangle(cornerRadius: 16, style: .continuous)
+        .stroke(Color.black.opacity(0.07), lineWidth: 0.8)
+    }
+    .shadow(color: .black.opacity(0.08), radius: 7, x: 2, y: 5)
+  }
+
+  private var metadataDivider: some View {
+    Rectangle()
+      .fill(Color.black.opacity(0.07))
+      .frame(height: 0.7)
+      .padding(.horizontal, 14)
+  }
+
   @ViewBuilder
   private var locationMetadata: some View {
     if let location = note.location {
@@ -2088,16 +2260,14 @@ private struct MIRAWallNoteDetailView: View {
         Image(systemName: "location.fill")
         Text(location.label)
         if let distance = location.distanceLabel {
-          Text("· \(distance)")
+          Text("/ \(distance)")
             .foregroundStyle(MIRATheme.Color.textSecondary)
         }
         Spacer()
       }
       .font(.system(size: 13, weight: .semibold))
       .foregroundStyle(MIRATheme.Color.forest)
-      .padding(.horizontal, 12)
-      .frame(minHeight: 40)
-      .background(MIRATheme.Color.surfaceSoft, in: Capsule())
+      .frame(minHeight: 34)
       .accessibilityElement(children: .combine)
     }
   }
@@ -2118,9 +2288,7 @@ private struct MIRAWallNoteDetailView: View {
         }
       }
       .foregroundStyle(MIRATheme.Color.textPrimary)
-      .padding(.horizontal, 12)
-      .frame(minHeight: 42)
-      .background(MIRATheme.Color.surfaceSoft, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+      .frame(minHeight: 34)
     }
     .buttonStyle(.miraPress)
     .disabled(note.resolvedSignatureCount == 0)
@@ -2168,6 +2336,12 @@ private struct MIRAWallNoteDetailView: View {
     }
     .padding(.horizontal, 14)
     .padding(.vertical, 10)
+    .background(MIRATheme.Color.surface.opacity(0.88))
+    .overlay(alignment: .bottom) {
+      Rectangle()
+        .fill(MIRATheme.Color.hairline)
+        .frame(height: 0.7)
+    }
   }
 
   @ViewBuilder
@@ -2217,34 +2391,49 @@ private struct MIRAWallNoteDetailView: View {
   }
 
   private var actionRow: some View {
-    HStack(spacing: 6) {
-      detailAction(
-        title: "Felt this", count: note.reactionCount,
-        icon: note.reactedByViewer ? "heart.fill" : "heart",
-        tint: note.reactedByViewer ? MIRATheme.Color.like : MIRATheme.Color.textPrimary
-      ) { toggleReaction() }
-      detailAction(
-        title: "Save", count: note.saveCount,
-        icon: note.savedByViewer ? "bookmark.fill" : "bookmark",
-        tint: MIRATheme.Color.textPrimary
-      ) { toggleSaved() }
-      if note.capabilities.canSign {
+    VStack(spacing: 8) {
+      HStack(spacing: 8) {
         detailAction(
-          title: note.signedByViewer == true ? "Signed" : "Sign",
-          count: note.resolvedSignatureCount,
-          icon: note.signedByViewer == true ? "pencil.line" : "pencil",
-          tint: note.signedByViewer == true ? MIRATheme.Color.forest : MIRATheme.Color.textPrimary
-        ) {
-          toggleSignature()
-        }
+          title: "Felt this", count: note.reactionCount,
+          icon: note.reactedByViewer ? "heart.fill" : "heart",
+          tint: note.reactedByViewer ? MIRATheme.Color.like : MIRATheme.Color.textPrimary
+        ) { toggleReaction() }
+        detailAction(
+          title: "Save", count: note.saveCount,
+          icon: note.savedByViewer ? "bookmark.fill" : "bookmark",
+          tint: MIRATheme.Color.textPrimary
+        ) { toggleSaved() }
       }
-      ShareLink(item: URL(string: "https://captro.app/wall/notes/\(note.id)")!) {
-        VStack(spacing: 5) {
-          Image(systemName: "square.and.arrow.up").font(.system(size: 18, weight: .semibold))
-          Text("Share").font(.system(size: 10, weight: .semibold))
+
+      HStack(spacing: 8) {
+        if note.capabilities.canSign {
+          detailAction(
+            title: note.signedByViewer == true ? "Signed" : "Sign this note",
+            count: note.resolvedSignatureCount,
+            icon: note.signedByViewer == true ? "pencil.line" : "pencil",
+            tint: note.signedByViewer == true ? MIRATheme.Color.forest : MIRATheme.Color.textPrimary
+          ) {
+            toggleSignature()
+          }
         }
-        .foregroundStyle(MIRATheme.Color.textPrimary)
-        .frame(maxWidth: .infinity, minHeight: 52)
+        ShareLink(item: URL(string: "https://captro.app/wall/notes/\(note.id)")!) {
+          HStack(spacing: 10) {
+            Image(systemName: "square.and.arrow.up")
+              .font(.system(size: 18, weight: .semibold))
+              .frame(width: 24)
+            Text("Share")
+              .font(.system(size: 13, weight: .bold))
+            Spacer(minLength: 0)
+          }
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .padding(.horizontal, 13)
+          .frame(maxWidth: .infinity, minHeight: 50)
+          .background(MIRATheme.Color.surface.opacity(0.94), in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+          .overlay {
+            RoundedRectangle(cornerRadius: 15, style: .continuous)
+              .stroke(MIRATheme.Color.hairline, lineWidth: 1)
+          }
+        }
       }
     }
     .disabled(isMutating)
@@ -2252,18 +2441,58 @@ private struct MIRAWallNoteDetailView: View {
 
   private func detailAction(title: String, count: Int, icon: String, tint: Color, action: @escaping () -> Void) -> some View {
     Button(action: action) {
-      VStack(spacing: 4) {
-        HStack(spacing: 3) {
-          Image(systemName: icon).font(.system(size: 18, weight: .semibold))
-          if count > 0 { Text("\(count)").font(.system(size: 11, weight: .bold)) }
+      HStack(spacing: 10) {
+        Image(systemName: icon)
+          .font(.system(size: 18, weight: .semibold))
+          .frame(width: 24)
+        Text(title)
+          .font(.system(size: 13, weight: .bold))
+          .lineLimit(1)
+          .minimumScaleFactor(0.82)
+        Spacer(minLength: 0)
+        if count > 0 {
+          Text("\(count)")
+            .font(.system(size: 11, weight: .bold, design: .rounded))
+            .foregroundStyle(MIRATheme.Color.textSecondary)
         }
-        Text(title).font(.system(size: 10, weight: .semibold))
       }
       .foregroundStyle(tint)
-      .frame(maxWidth: .infinity, minHeight: 52)
+      .padding(.horizontal, 13)
+      .frame(maxWidth: .infinity, minHeight: 50)
+      .background(MIRATheme.Color.surface.opacity(0.94), in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+      .overlay {
+        RoundedRectangle(cornerRadius: 15, style: .continuous)
+          .stroke(MIRATheme.Color.hairline, lineWidth: 1)
+      }
       .contentShape(Rectangle())
     }
     .buttonStyle(.miraPress)
+  }
+
+  private var collaborationSection: some View {
+    VStack(alignment: .leading, spacing: 14) {
+      HStack {
+        Text("CONTRIBUTIONS")
+          .font(.system(size: 13, weight: .black, design: .serif))
+          .tracking(0.8)
+        Spacer()
+        if note.resolvedContributionCount > 0 {
+          Text("\(note.resolvedContributionCount)")
+            .font(.system(size: 11, weight: .bold, design: .rounded))
+            .foregroundStyle(MIRATheme.Color.textSecondary)
+        }
+      }
+
+      collaborationControls
+      contributionComposer
+      contributionsSection
+    }
+    .padding(14)
+    .background(MIRATheme.Color.surface.opacity(0.90), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    .overlay {
+      RoundedRectangle(cornerRadius: 18, style: .continuous)
+        .stroke(Color.black.opacity(0.06), lineWidth: 0.8)
+    }
   }
 
   @ViewBuilder
@@ -2335,12 +2564,6 @@ private struct MIRAWallNoteDetailView: View {
 
   private var contributionsSection: some View {
     VStack(alignment: .leading, spacing: 12) {
-      if !contributions.isEmpty {
-        Text("CONTRIBUTIONS")
-          .font(.system(size: 13, weight: .black, design: .serif))
-          .tracking(0.8)
-      }
-
       if isLoadingContributions && contributions.isEmpty {
         ProgressView().frame(maxWidth: .infinity).padding(.vertical, 18)
       } else if !contributions.isEmpty {

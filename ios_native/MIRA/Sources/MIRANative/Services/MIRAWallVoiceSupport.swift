@@ -212,6 +212,8 @@ final class MIRAWallVoicePlaybackController: ObservableObject {
   private var itemStatusObservation: NSKeyValueObservation?
   private var playbackStatusObservation: NSKeyValueObservation?
   private var lifecycleObservers: [NSObjectProtocol] = []
+  private var shouldResumeAfterForeground = false
+  private var shouldResumeAfterInterruption = false
 
   private init() {
     let center = NotificationCenter.default
@@ -219,16 +221,29 @@ final class MIRAWallVoicePlaybackController: ObservableObject {
       forName: AVAudioSession.interruptionNotification,
       object: nil,
       queue: .main
-    ) { [weak self] _ in
-      Task { @MainActor [weak self] in self?.stop() }
+    ) { [weak self] notification in
+      Task { @MainActor [weak self] in self?.handleInterruption(notification) }
     })
     lifecycleObservers.append(center.addObserver(
       forName: UIApplication.didEnterBackgroundNotification,
       object: nil,
       queue: .main
     ) { [weak self] _ in
-      Task { @MainActor [weak self] in self?.stop() }
+      Task { @MainActor [weak self] in self?.pauseForBackground() }
     })
+    lifecycleObservers.append(center.addObserver(
+      forName: UIApplication.didBecomeActiveNotification,
+      object: nil,
+      queue: .main
+    ) { [weak self] _ in
+      Task { @MainActor [weak self] in self?.resumeAfterForegroundIfNeeded() }
+    })
+  }
+
+  deinit {
+    for observer in lifecycleObservers {
+      NotificationCenter.default.removeObserver(observer)
+    }
   }
 
   func toggle(id: String, url: URL) {
@@ -236,6 +251,8 @@ final class MIRAWallVoicePlaybackController: ObservableObject {
       if isPlaying {
         player.pause()
         isPlaying = false
+        shouldResumeAfterForeground = false
+        shouldResumeAfterInterruption = false
       } else {
         guard activatePlaybackSession() else { return }
         errorMessage = nil
@@ -270,7 +287,62 @@ final class MIRAWallVoicePlaybackController: ObservableObject {
     progress = 0
     elapsed = 0
     errorMessage = nil
+    shouldResumeAfterForeground = false
+    shouldResumeAfterInterruption = false
     try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+  }
+
+  private func handleInterruption(_ notification: Notification) {
+    let value = (notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? NSNumber)?.uintValue
+    guard let value, let type = AVAudioSession.InterruptionType(rawValue: value) else {
+      shouldResumeAfterInterruption = isPlaying
+      pausePreservingPlayback()
+      return
+    }
+
+    switch type {
+    case .began:
+      shouldResumeAfterInterruption = isPlaying
+      pausePreservingPlayback()
+    case .ended:
+      let rawOptions = (notification.userInfo?[AVAudioSessionInterruptionOptionKey] as? NSNumber)?.uintValue ?? 0
+      let mayResume = AVAudioSession.InterruptionOptions(rawValue: rawOptions).contains(.shouldResume)
+      let requestedResume = shouldResumeAfterInterruption && mayResume
+      shouldResumeAfterInterruption = false
+      if requestedResume, UIApplication.shared.applicationState == .active {
+        resumePreservingPlayback()
+      } else if requestedResume {
+        shouldResumeAfterForeground = true
+      }
+    @unknown default:
+      shouldResumeAfterInterruption = false
+    }
+  }
+
+  private func pauseForBackground() {
+    guard player != nil else { return }
+    shouldResumeAfterForeground = isPlaying || shouldResumeAfterInterruption
+    pausePreservingPlayback()
+  }
+
+  private func resumeAfterForegroundIfNeeded() {
+    guard shouldResumeAfterForeground else { return }
+    shouldResumeAfterForeground = false
+    resumePreservingPlayback()
+  }
+
+  private func pausePreservingPlayback() {
+    player?.pause()
+    isPlaying = false
+    try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+  }
+
+  private func resumePreservingPlayback() {
+    guard let player else { return }
+    guard activatePlaybackSession() else { return }
+    errorMessage = nil
+    player.play()
+    isPlaying = true
   }
 
   private func observe(player: AVPlayer, item: AVPlayerItem) {
@@ -360,6 +432,8 @@ final class MIRAWallVoicePlaybackController: ObservableObject {
     progress = 0
     elapsed = 0
     errorMessage = message
+    shouldResumeAfterForeground = false
+    shouldResumeAfterInterruption = false
     try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
   }
 

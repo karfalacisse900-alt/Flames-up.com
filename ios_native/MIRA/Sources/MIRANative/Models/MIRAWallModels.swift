@@ -113,7 +113,10 @@ public struct MIRAWallNote: Codable, Identifiable, Hashable {
 
   public var isGhost: Bool { publishingIdentity.lowercased() == "ghost" }
   public var isVoiceNote: Bool { noteType == "voice" || voice != nil }
-  public var canFlip: Bool { hasBackSide == true && !(backBody?.isEmpty ?? true) }
+  public var canFlip: Bool {
+    let cleanBack = backBody?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return !cleanBack.isEmpty && hasBackSide != false
+  }
   public var resolvedSignatureCount: Int { max(0, signatureCount ?? 0) }
   public var resolvedContributionCount: Int { max(0, contributionCount ?? replyCount) }
   public var capabilities: MIRAWallNoteCapabilities {

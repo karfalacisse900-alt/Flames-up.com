@@ -128,13 +128,28 @@ test('Wall detail collections use bounded cursor pagination and deduplicate appe
   assert.match(wallView, /mergingUnique\(signers, pageSigners, id: \\.id\)/);
 });
 
-test('Wall voice playback stops across app and view lifecycle changes', async () => {
+test('Wall voice playback preserves position across app lifecycle and stops when detail closes', async () => {
   const voiceSupport = await read('ios_native/MIRA/Sources/MIRANative/Services/MIRAWallVoiceSupport.swift');
   const wallView = await read('ios_native/MIRA/Sources/MIRANative/Screens/WallOfNotesNativeView.swift');
 
   assert.match(voiceSupport, /AVAudioSession\.interruptionNotification/);
   assert.match(voiceSupport, /UIApplication\.didEnterBackgroundNotification/);
-  assert.match(voiceSupport, /self\?\.stop\(\)/);
+  assert.match(voiceSupport, /UIApplication\.didBecomeActiveNotification/);
+  assert.match(voiceSupport, /self\?\.pauseForBackground\(\)/);
+  assert.match(voiceSupport, /self\?\.resumeAfterForegroundIfNeeded\(\)/);
+  assert.match(voiceSupport, /private func pausePreservingPlayback\(\)/);
+  assert.match(voiceSupport, /private func resumePreservingPlayback\(\)/);
   assert.match(wallView, /\.onDisappear\s*\{\s*voicePlayback\.stop\(\)\s*\}/);
   assert.match(wallView, /UIApplication\.openSettingsURLString/);
+});
+
+test('Wall note taps, flipping, and signatures remain explicit and reachable', async () => {
+  const wallView = await read('ios_native/MIRA/Sources/MIRANative/Screens/WallOfNotesNativeView.swift');
+
+  assert.match(wallView, /DragGesture\(minimumDistance: 6, coordinateSpace: \.local\)/);
+  assert.doesNotMatch(wallView, /DragGesture\(minimumDistance: 0, coordinateSpace: \.local\)/);
+  assert.match(wallView, /guard panStart == nil, magnifyStart == nil else \{ return \}/);
+  assert.match(wallView, /Turn note over/);
+  assert.match(wallView, /Sign this note/);
+  assert.match(wallView, /MIRAWallDetailBackdrop\(seed: note\.id\)/);
 });

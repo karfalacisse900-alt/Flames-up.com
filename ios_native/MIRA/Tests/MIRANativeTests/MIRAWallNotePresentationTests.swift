@@ -223,6 +223,24 @@ final class MIRAWallNotePresentationTests: XCTestCase {
     XCTAssertTrue(note.capabilities.canManageCollaboration)
   }
 
+  func testLegacyBackSideRemainsFlippableWhenCapabilityFlagIsMissing() {
+    var note = makeNote(id: "legacy-two-sided", style: "notebook")
+    note.backBody = "A preserved thought on the back"
+    note.hasBackSide = nil
+
+    XCTAssertTrue(note.canFlip)
+    XCTAssertTrue(note.capabilities.hasBackSide)
+  }
+
+  func testExplicitlyDisabledBackSideCannotFlip() {
+    var note = makeNote(id: "disabled-two-sided", style: "notebook")
+    note.backBody = "A stale cached back side"
+    note.hasBackSide = false
+
+    XCTAssertFalse(note.canFlip)
+    XCTAssertFalse(note.capabilities.hasBackSide)
+  }
+
   func testBackSidePreservesSocialAndLocationStateWithoutFrontMedia() {
     var note = makeNote(
       id: "two-sided-photo",
