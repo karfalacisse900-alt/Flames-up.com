@@ -1,4 +1,4 @@
-﻿-- Captro Wall of Notes living-note capabilities.
+-- Captro Wall of Notes living-note capabilities.
 -- This migration is additive: existing notes and replies remain readable.
 
 create schema if not exists private;
