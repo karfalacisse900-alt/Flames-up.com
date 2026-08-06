@@ -2209,7 +2209,7 @@ private struct MIRAWallNoteDetailView: View {
   }
 
   private var metadataSubtitle: String {
-    relativeTime(note.createdAt)
+    relativeTime(note.createdAt) ?? ""
   }
 
   private var actionRow: some View {
