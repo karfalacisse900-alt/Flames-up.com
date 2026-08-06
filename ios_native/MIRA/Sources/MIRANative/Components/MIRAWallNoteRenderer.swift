@@ -3,7 +3,6 @@ import UIKit
 
 struct MIRAWallNoteTile: View {
   let note: MIRAWallNote
-  let namespace: Namespace.ID
   let isNew: Bool
   let wallScale: CGFloat
   let isLifted: Bool
@@ -18,7 +17,6 @@ struct MIRAWallNoteTile: View {
 
   var body: some View {
     MIRAWallNoteRenderer(note: note, zoom: 1, isFocused: isLifted, wallScale: wallScale)
-      .matchedGeometryEffect(id: "wall-note-\(note.id)", in: namespace, isSource: true)
       .opacity(hasEntered ? 1 : initialOpacity)
       .scaleEffect(
         x: hasEntered ? 1 : initialScale.width,
@@ -1413,7 +1411,7 @@ private struct MIRAWallPhotoPrintTexture: View {
   }
 }
 
-private enum MIRAWallMaterialNoise {
+enum MIRAWallMaterialNoise {
   static func unit(_ seed: UInt64, _ salt: Int) -> CGFloat {
     var mixed = seed &+ UInt64(max(0, salt) + 1) &* 0x9E3779B97F4A7C15
     mixed ^= mixed >> 30

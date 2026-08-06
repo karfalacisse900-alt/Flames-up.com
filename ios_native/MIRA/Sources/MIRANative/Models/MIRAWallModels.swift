@@ -306,8 +306,50 @@ public struct MIRAWallSignatureToggleResponse: Decodable {
   public let signatureCount: Int
 }
 
+public struct MIRAWallSignaturePoint: Codable, Hashable {
+  public let x: Double
+  public let y: Double
+
+  public init(x: Double, y: Double) {
+    self.x = x
+    self.y = y
+  }
+}
+
+public struct MIRAWallSignatureStroke: Codable, Hashable {
+  public let points: [MIRAWallSignaturePoint]
+
+  public init(points: [MIRAWallSignaturePoint]) {
+    self.points = points
+  }
+}
+
+public struct MIRAWallSignatureDrawing: Codable, Hashable {
+  public let version: Int
+  public let strokes: [MIRAWallSignatureStroke]
+
+  public init(version: Int = 1, strokes: [MIRAWallSignatureStroke]) {
+    self.version = version
+    self.strokes = strokes
+  }
+
+  public var pointCount: Int {
+    strokes.reduce(0) { $0 + $1.points.count }
+  }
+
+  public var isEmpty: Bool {
+    pointCount < 2
+  }
+}
+
 public struct MIRAWallSignatureBody: Encodable {
   public let signed: Bool
+  public let drawing: MIRAWallSignatureDrawing?
+
+  public init(signed: Bool, drawing: MIRAWallSignatureDrawing? = nil) {
+    self.signed = signed
+    self.drawing = drawing
+  }
 }
 
 public struct MIRAWallSigner: Codable, Identifiable, Hashable {
@@ -316,6 +358,7 @@ public struct MIRAWallSigner: Codable, Identifiable, Hashable {
   public let displayName: String?
   public let avatarUrl: String?
   public let signedAt: String
+  public let drawing: MIRAWallSignatureDrawing?
 
   public var id: String { userId }
   public var title: String {

@@ -17201,13 +17201,43 @@ function wallNotePayload(
   };
 }
 
-function wallSignerPayload(user: any, createdAt: unknown) {
+function normalizeWallSignatureDrawing(value: unknown) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const source: any = value;
+  if (Number(source.version) !== 1 || !Array.isArray(source.strokes)) return null;
+  if (source.strokes.length < 1 || source.strokes.length > 12) return null;
+
+  let pointCount = 0;
+  const strokes: Array<{ points: Array<{ x: number; y: number }> }> = [];
+  for (const stroke of source.strokes) {
+    if (!stroke || typeof stroke !== 'object' || !Array.isArray(stroke.points)) return null;
+    if (stroke.points.length < 2 || stroke.points.length > 180) return null;
+    const points: Array<{ x: number; y: number }> = [];
+    for (const point of stroke.points) {
+      const x = Number(point?.x);
+      const y = Number(point?.y);
+      if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || x > 1 || y < 0 || y > 1) return null;
+      points.push({
+        x: Math.round(x * 10_000) / 10_000,
+        y: Math.round(y * 10_000) / 10_000,
+      });
+      pointCount += 1;
+      if (pointCount > 600) return null;
+    }
+    strokes.push({ points });
+  }
+  const normalized = { version: 1, strokes };
+  return JSON.stringify(normalized).length <= 16_000 ? normalized : null;
+}
+
+function wallSignerPayload(user: any, createdAt: unknown, signatureDrawing?: unknown) {
   return {
     user_id: publicId(user?.id, 120),
     username: cleanText(user?.username, 80),
     display_name: cleanText(user?.full_name, 120),
     avatar_url: cleanText(user?.avatar_url, 1200),
     signed_at: cleanText(createdAt, 80) || now(),
+    drawing: normalizeWallSignatureDrawing(signatureDrawing),
   };
 }
 function wallReplyPayload(row: any, author: any) {
@@ -17621,6 +17651,8 @@ api.post('/wall/notes/:noteId/save', authMiddleware, async (c) => {
 });
 
 api.post('/wall/notes/:noteId/signature', authMiddleware, async (c) => {
+  const bodyTooLarge = rejectLargeRequest(c, 18_000);
+  if (bodyTooLarge) return bodyTooLarge;
   const userId = getUserId(c);
   const noteId = publicId(c.req.param('noteId'), 120);
   const visible = await visibleWallNote(c, userId, noteId);
@@ -17638,7 +17670,18 @@ api.post('/wall/notes/:noteId/signature', authMiddleware, async (c) => {
   });
   const signed = typeof b.signed === 'boolean' ? b.signed : !existing.length;
   if (signed) {
-    await supabaseAdminUpsert(c, 'wall_note_signatures', [{ note_id: noteId, app_user_id: userId }], 'note_id,app_user_id');
+    const drawing = normalizeWallSignatureDrawing(b.drawing);
+    if (!drawing) {
+      return c.json({
+        detail: 'Draw your signature before signing this note.',
+        error_code: 'SIGNATURE_DRAWING_REQUIRED',
+      }, 400);
+    }
+    await supabaseAdminUpsert(c, 'wall_note_signatures', [{
+      note_id: noteId,
+      app_user_id: userId,
+      signature_strokes: drawing,
+    }], 'note_id,app_user_id');
   } else {
     await supabaseAdminDeleteRows(c, 'wall_note_signatures', { note_id: postgrestEqFilter(noteId), app_user_id: postgrestEqFilter(userId) });
   }
@@ -17663,7 +17706,11 @@ api.get('/wall/notes/:noteId/signatures', authMiddleware, async (c) => {
     signers: page
       .filter((row) => !blocked.has(publicId(row?.app_user_id, 120)))
       .filter((row) => supabaseUserIsActive(signers.get(publicId(row?.app_user_id, 120))))
-      .map((row) => wallSignerPayload(signers.get(publicId(row?.app_user_id, 120)), row?.created_at))
+      .map((row) => wallSignerPayload(
+        signers.get(publicId(row?.app_user_id, 120)),
+        row?.created_at,
+        row?.signature_strokes,
+      ))
       .filter((row) => !!row.user_id),
     next_before: rows.length > limit ? cleanText(page[page.length - 1]?.created_at, 80) || null : null,
   });

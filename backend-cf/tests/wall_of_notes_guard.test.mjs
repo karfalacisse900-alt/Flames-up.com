@@ -145,6 +145,8 @@ test('Wall voice playback preserves position across app lifecycle and stops when
 
 test('Wall note taps, flipping, and signatures remain explicit and reachable', async () => {
   const wallView = await read('ios_native/MIRA/Sources/MIRANative/Screens/WallOfNotesNativeView.swift');
+  const renderer = await read('ios_native/MIRA/Sources/MIRANative/Components/MIRAWallNoteRenderer.swift');
+  const signatureCanvas = await read('ios_native/MIRA/Sources/MIRANative/Components/MIRAWallSignatureCanvas.swift');
 
   assert.match(wallView, /DragGesture\(minimumDistance: 6, coordinateSpace: \.local\)/);
   assert.doesNotMatch(wallView, /DragGesture\(minimumDistance: 0, coordinateSpace: \.local\)/);
@@ -152,4 +154,25 @@ test('Wall note taps, flipping, and signatures remain explicit and reachable', a
   assert.match(wallView, /Turn note over/);
   assert.match(wallView, /Sign this note/);
   assert.match(wallView, /MIRAWallDetailBackdrop\(seed: note\.id\)/);
+  assert.match(wallView, /MIRAWallSignatureCaptureView\(/);
+  assert.match(signatureCanvas, /DragGesture\(minimumDistance: 0, coordinateSpace: \.local\)/);
+  assert.match(signatureCanvas, /MIRAWallSignatureInkView\(drawing: drawing/);
+  assert.doesNotMatch(wallView, /matchedGeometryEffect/);
+  assert.doesNotMatch(renderer, /matchedGeometryEffect/);
+});
+
+test('drawn Wall signatures are bounded, validated, and migration-backed', async () => {
+  const worker = await read('backend-cf/src/index.ts');
+  const migration = await read('supabase/migrations/20260806120017_wall_note_drawn_signatures.sql');
+
+  assert.match(worker, /function normalizeWallSignatureDrawing/);
+  assert.match(worker, /source\.strokes\.length < 1 \|\| source\.strokes\.length > 12/);
+  assert.match(worker, /stroke\.points\.length < 2 \|\| stroke\.points\.length > 180/);
+  assert.match(worker, /pointCount > 600/);
+  assert.match(worker, /rejectLargeRequest\(c, 18_000\)/);
+  assert.match(worker, /signature_strokes: drawing/);
+  assert.match(worker, /SIGNATURE_DRAWING_REQUIRED/);
+  assert.match(migration, /add column if not exists signature_strokes jsonb not null/i);
+  assert.match(migration, /jsonb_array_length\(signature_strokes -> 'strokes'\) <= 12/i);
+  assert.match(migration, /octet_length\(signature_strokes::text\) <= 20000/i);
 });

@@ -332,6 +332,34 @@ final class MIRAWallNotePresentationTests: XCTestCase {
     XCTAssertEqual(updated.allowContributions, true)
   }
 
+  func testDrawnSignatureCountsPointsAcrossStrokes() {
+    let drawing = MIRAWallSignatureDrawing(strokes: [
+      MIRAWallSignatureStroke(points: [
+        MIRAWallSignaturePoint(x: 0.1, y: 0.2),
+        MIRAWallSignaturePoint(x: 0.2, y: 0.3),
+      ]),
+      MIRAWallSignatureStroke(points: [
+        MIRAWallSignaturePoint(x: 0.4, y: 0.5),
+        MIRAWallSignaturePoint(x: 0.6, y: 0.7),
+        MIRAWallSignaturePoint(x: 0.8, y: 0.9),
+      ]),
+    ])
+
+    XCTAssertEqual(drawing.version, 1)
+    XCTAssertEqual(drawing.pointCount, 5)
+    XCTAssertFalse(drawing.isEmpty)
+  }
+
+  func testDrawnSignatureNeedsAtLeastTwoPoints() {
+    let empty = MIRAWallSignatureDrawing(strokes: [])
+    let dot = MIRAWallSignatureDrawing(strokes: [
+      MIRAWallSignatureStroke(points: [MIRAWallSignaturePoint(x: 0.5, y: 0.5)]),
+    ])
+
+    XCTAssertTrue(empty.isEmpty)
+    XCTAssertTrue(dot.isEmpty)
+  }
+
   private func makeNote(
     id: String,
     style: String,

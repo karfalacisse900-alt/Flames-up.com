@@ -196,7 +196,11 @@ final class MIRAWallNotesModel: ObservableObject {
     return response.replies
   }
 
-  func setSigned(note: MIRAWallNote, signed: Bool) async throws -> MIRAWallNote {
+  func setSigned(
+    note: MIRAWallNote,
+    signed: Bool,
+    drawing: MIRAWallSignatureDrawing? = nil
+  ) async throws -> MIRAWallNote {
     let optimistic = note.updating(
       signed: signed,
       signatureCount: max(0, note.resolvedSignatureCount + (signed ? 1 : -1))
@@ -205,7 +209,7 @@ final class MIRAWallNotesModel: ObservableObject {
     do {
       let response: MIRAWallSignatureToggleResponse = try await api.post(
         "/wall/notes/\(note.id)/signature",
-        body: MIRAWallSignatureBody(signed: signed)
+        body: MIRAWallSignatureBody(signed: signed, drawing: drawing)
       )
       let reconciled = note.updating(signed: response.signed, signatureCount: response.signatureCount)
       update(reconciled)
@@ -355,7 +359,6 @@ public struct WallOfNotesNativeView: View {
   @State private var storyReportTarget: MIRAReportTarget?
   @State private var isStoryReportSheetPresented = false
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  @Namespace private var noteTransitionNamespace
 
   init(api: MIRAAPIClient, storiesModel: DiscoverNativeModel) {
     self.api = api
@@ -542,7 +545,6 @@ public struct WallOfNotesNativeView: View {
           note: note,
           api: api,
           model: model,
-          transitionNamespace: noteTransitionNamespace,
           onChanged: { updated in
             selectedNote = updated
           },
@@ -607,7 +609,6 @@ public struct WallOfNotesNativeView: View {
         let center = camera.screenPoint(forWorld: CGPoint(x: frame.midX, y: frame.midY), viewport: viewport)
         MIRAWallNoteTile(
           note: note,
-          namespace: noteTransitionNamespace,
           isNew: placementNoteID == note.id,
           wallScale: camera.scale,
           isLifted: liftedNoteID == note.id || selectedNote?.id == note.id,
@@ -1984,7 +1985,6 @@ private struct MIRAWallNoteDetailView: View {
   @ObservedObject private var voicePlayback = MIRAWallVoicePlaybackController.shared
   let api: MIRAAPIClient
   @ObservedObject var model: MIRAWallNotesModel
-  let transitionNamespace: Namespace.ID
   let onChanged: (MIRAWallNote) -> Void
   let onClose: () -> Void
 
@@ -2000,6 +2000,9 @@ private struct MIRAWallNoteDetailView: View {
   @State private var errorMessage: String?
   @State private var reportTarget: MIRAReportTarget?
   @State private var showSigners = false
+  @State private var showSignatureCapture = false
+  @State private var showSignatureRemoval = false
+  @State private var signatureError: String?
   @State private var displaysBackSide = false
   @State private var flipAngle: Double = 0
   @State private var isFlipping = false
@@ -2009,14 +2012,12 @@ private struct MIRAWallNoteDetailView: View {
     note: MIRAWallNote,
     api: MIRAAPIClient,
     model: MIRAWallNotesModel,
-    transitionNamespace: Namespace.ID,
     onChanged: @escaping (MIRAWallNote) -> Void,
     onClose: @escaping () -> Void
   ) {
     _note = State(initialValue: note)
     self.api = api
     self.model = model
-    self.transitionNamespace = transitionNamespace
     self.onChanged = onChanged
     self.onClose = onClose
   }
@@ -2082,6 +2083,27 @@ private struct MIRAWallNoteDetailView: View {
           .presentationDetents([.medium, .large])
           .presentationCornerRadius(28)
       }
+      .sheet(isPresented: $showSignatureCapture) {
+        MIRAWallSignatureCaptureView(
+          isSaving: isMutating,
+          errorMessage: signatureError,
+          onCancel: { showSignatureCapture = false },
+          onSubmit: submitSignature
+        )
+        .presentationDetents([.height(520)])
+        .presentationCornerRadius(28)
+        .interactiveDismissDisabled(isMutating)
+      }
+      .confirmationDialog(
+        "Remove your signature?",
+        isPresented: $showSignatureRemoval,
+        titleVisibility: .visible
+      ) {
+        Button("Remove signature", role: .destructive, action: removeSignature)
+        Button("Cancel", role: .cancel) {}
+      } message: {
+        Text("You can draw a new signature later.")
+      }
     }
     .frame(maxWidth: 420, maxHeight: 760)
     .background(MIRATheme.Color.surface)
@@ -2096,8 +2118,9 @@ private struct MIRAWallNoteDetailView: View {
   private var detailVisualSize: CGSize {
     let source = MIRAWallNotePresentationResolver.resolve(note).size
     let screenWidth = UIScreen.main.bounds.width
-    let maxWidth = max(210, min(286, screenWidth - 88))
-    let scale = min(maxWidth / source.width, 330 / source.height, 1.28)
+    let maxWidth = max(190, min(300, screenWidth - 104))
+    let maxHeight: CGFloat = 350
+    let scale = min(maxWidth / source.width, maxHeight / source.height, 1.22)
     return CGSize(width: source.width * scale, height: source.height * scale)
   }
 
@@ -2145,21 +2168,20 @@ private struct MIRAWallNoteDetailView: View {
   }
 
   private var flippableNote: some View {
-    MIRAWallNoteRenderer(note: displayedNote, zoom: 1.12, isFocused: true)
-      .frame(width: detailVisualSize.width, height: detailVisualSize.height)
-      .matchedGeometryEffect(
-        id: "wall-note-\(note.id)",
-        in: transitionNamespace,
-        isSource: false
-      )
-      .rotationEffect(.degrees(detailRotation))
-      .rotation3DEffect(.degrees(flipAngle), axis: (x: 0, y: 1, z: 0), perspective: 0.72)
-      .contentShape(Rectangle())
-      .onTapGesture {
-        guard note.canFlip else { return }
-        flipNote()
-      }
-      .accessibilityHint(note.canFlip ? "Tap to show the other side." : "")
+    ZStack {
+      MIRAWallNoteRenderer(note: displayedNote, zoom: 1.06, isFocused: true, wallScale: 1)
+        .frame(width: detailVisualSize.width, height: detailVisualSize.height)
+        .rotationEffect(.degrees(detailRotation))
+        .rotation3DEffect(.degrees(flipAngle), axis: (x: 0, y: 1, z: 0), perspective: 0.72)
+        .contentShape(Rectangle())
+        .onTapGesture {
+          guard note.canFlip else { return }
+          flipNote()
+        }
+        .accessibilityHint(note.canFlip ? "Tap to show the other side." : "")
+    }
+    .frame(maxWidth: .infinity)
+    .frame(height: detailVisualSize.height + 24)
   }
 
   private var voicePlaybackPanel: some View {
@@ -2413,7 +2435,12 @@ private struct MIRAWallNoteDetailView: View {
             icon: note.signedByViewer == true ? "pencil.line" : "pencil",
             tint: note.signedByViewer == true ? MIRATheme.Color.forest : MIRATheme.Color.textPrimary
           ) {
-            toggleSignature()
+            if note.signedByViewer == true {
+              showSignatureRemoval = true
+            } else {
+              signatureError = nil
+              showSignatureCapture = true
+            }
           }
         }
         ShareLink(item: URL(string: "https://captro.app/wall/notes/\(note.id)")!) {
@@ -2646,20 +2673,52 @@ private struct MIRAWallNoteDetailView: View {
     }
   }
 
-  private func toggleSignature() {
-    guard !isMutating, note.capabilities.canSign else { return }
+  private func submitSignature(_ drawing: MIRAWallSignatureDrawing) {
+    guard !isMutating, note.capabilities.canSign, !drawing.isEmpty else { return }
     isMutating = true
     let original = note
-    let requested = original.signedByViewer != true
     let optimistic = original.updating(
-      signed: requested,
-      signatureCount: max(0, original.resolvedSignatureCount + (requested ? 1 : -1))
+      signed: true,
+      signatureCount: max(0, original.resolvedSignatureCount + (original.signedByViewer == true ? 0 : 1))
     )
     note = optimistic
     onChanged(optimistic)
     Task {
       do {
-        let updated = try await model.setSigned(note: original, signed: requested)
+        let updated = try await model.setSigned(note: original, signed: true, drawing: drawing)
+        await MainActor.run {
+          note = updated
+          onChanged(updated)
+          signers = []
+          signersNextBefore = nil
+          signatureError = nil
+          showSignatureCapture = false
+          isMutating = false
+        }
+      } catch {
+        await MainActor.run {
+          note = original
+          onChanged(original)
+          signatureError = error.localizedDescription
+          isMutating = false
+        }
+      }
+    }
+  }
+
+  private func removeSignature() {
+    guard !isMutating, note.capabilities.canSign, note.signedByViewer == true else { return }
+    isMutating = true
+    let original = note
+    let optimistic = original.updating(
+      signed: false,
+      signatureCount: max(0, original.resolvedSignatureCount - 1)
+    )
+    note = optimistic
+    onChanged(optimistic)
+    Task {
+      do {
+        let updated = try await model.setSigned(note: original, signed: false)
         await MainActor.run {
           note = updated
           onChanged(updated)
@@ -2792,6 +2851,20 @@ private struct MIRAWallNoteDetailView: View {
               Text(signer.title)
                 .font(.system(size: 15, weight: .semibold))
               Spacer()
+              if let drawing = signer.drawing, !drawing.isEmpty {
+                MIRAWallSignatureInkView(drawing: drawing, lineWidth: 1.55)
+                  .frame(width: 86, height: 34)
+                  .padding(.horizontal, 7)
+                  .padding(.vertical, 4)
+                  .background(
+                    MIRAWallPaperColor.color(for: "cream"),
+                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                  )
+                  .overlay {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                      .stroke(Color.black.opacity(0.07), lineWidth: 0.7)
+                  }
+              }
             }
             .listRowBackground(MIRATheme.Color.surface)
             .task {
