@@ -3249,6 +3249,7 @@ const REPORT_TARGET_TYPES = new Set([
   'story',
   'note',
   'wall_note',
+  'wall_note_contribution',
   'music',
   'sound',
   'recommendation',
@@ -3972,6 +3973,21 @@ async function supabaseResolveReportTarget(
       const ownerId = publicId(note.author_account_id, 120);
       if (isReporter(ownerId)) return { ok: false, status: 400, detail: 'You cannot report your own note.' };
       return { ok: true, contentId: publicId(note.id || reportedId, 120), targetOwnerUserId: ownerId };
+    }
+
+    if (type === 'wall_note_contribution') {
+      const rows = await supabaseAdminQueryRows(c, 'wall_note_contributions', {
+        select: 'id,author_account_id,status,moderation_status',
+        filters: { id: postgrestEqFilter(reportedId) },
+        limit: 1,
+      });
+      const contribution = rows[0];
+      if (!contribution || cleanText(contribution.status, 40) !== 'active' || cleanText(contribution.moderation_status, 40) !== 'approved') {
+        return { ok: false, status: 404, detail: 'Reported contribution was not found.' };
+      }
+      const ownerId = publicId(contribution.author_account_id, 120);
+      if (isReporter(ownerId)) return { ok: false, status: 400, detail: 'You cannot report your own contribution.' };
+      return { ok: true, contentId: publicId(contribution.id || reportedId, 120), targetOwnerUserId: ownerId };
     }
   } catch (error: any) {
     console.warn(JSON.stringify({ event: 'supabase_report_target_check_failed', type, code: getErrorCode(error).slice(0, 180) }));
@@ -4778,6 +4794,25 @@ function detectImageContentType(bytes: Uint8Array): string {
   return '';
 }
 
+function detectAudioContentType(bytes: Uint8Array): string {
+  if (bytes.length >= 12
+    && bytes[4] === 0x66 && bytes[5] === 0x74 && bytes[6] === 0x79 && bytes[7] === 0x70) return 'audio/mp4';
+  if (bytes.length >= 12
+    && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46
+    && bytes[8] === 0x57 && bytes[9] === 0x41 && bytes[10] === 0x56 && bytes[11] === 0x45) return 'audio/wav';
+  if (bytes.length >= 4
+    && bytes[0] === 0x1a && bytes[1] === 0x45 && bytes[2] === 0xdf && bytes[3] === 0xa3) return 'audio/webm';
+  if (bytes.length >= 3 && bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x33) return 'audio/mpeg';
+  if (bytes.length >= 2 && bytes[0] === 0xff && (bytes[1] & 0xf6) === 0xf0) return 'audio/aac';
+  if (bytes.length >= 2 && bytes[0] === 0xff && (bytes[1] & 0xe0) === 0xe0) return 'audio/mpeg';
+  return '';
+}
+
+function audioContentMatches(declaredType: string, detectedType: string): boolean {
+  if (declaredType === detectedType) return true;
+  return detectedType === 'audio/mp4' && (declaredType === 'audio/m4a' || declaredType === 'audio/mp4');
+}
+
 function looksLikePlainText(bytes: Uint8Array): boolean {
   const sample = bytes.slice(0, Math.min(bytes.length, 4096));
   if (sample.length === 0) return true;
@@ -5016,9 +5051,11 @@ async function storeMediaBackup(c: any, opts: {
   contentType: string;
   bytes: ArrayBuffer | Uint8Array;
   originalFilename?: string;
+  persistLegacyMetadata?: boolean;
 }) {
   if (!c.env.MEDIA_BACKUP) return null;
-  await ensureMediaBackupSchema(c.env.DB);
+  const persistLegacyMetadata = opts.persistLegacyMetadata !== false;
+  if (persistLegacyMetadata) await ensureMediaBackupSchema(c.env.DB);
 
   const id = uuid();
   const date = new Date().toISOString().slice(0, 10);
@@ -5040,25 +5077,27 @@ async function storeMediaBackup(c: any, opts: {
     },
   });
 
-  await c.env.DB.prepare(
-    `INSERT INTO media_backups (id, user_id, post_id, media_kind, provider, provider_id, delivery_url, r2_key, content_type, size_bytes, checksum_sha256, original_filename, backup_status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'stored', ?, ?)`
-  ).bind(
-    id,
-    opts.userId,
-    opts.postId || null,
-    opts.mediaKind,
-    opts.provider,
-    opts.providerId || '',
-    deliveryUrl,
-    key,
-    opts.contentType,
-    buffer.byteLength,
-    checksum,
-    opts.originalFilename || '',
-    createdAt,
-    createdAt,
-  ).run();
+  if (persistLegacyMetadata) {
+    await c.env.DB.prepare(
+      `INSERT INTO media_backups (id, user_id, post_id, media_kind, provider, provider_id, delivery_url, r2_key, content_type, size_bytes, checksum_sha256, original_filename, backup_status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'stored', ?, ?)`
+    ).bind(
+      id,
+      opts.userId,
+      opts.postId || null,
+      opts.mediaKind,
+      opts.provider,
+      opts.providerId || '',
+      deliveryUrl,
+      key,
+      opts.contentType,
+      buffer.byteLength,
+      checksum,
+      opts.originalFilename || '',
+      createdAt,
+      createdAt,
+    ).run();
+  }
 
   return { id, r2_key: key, delivery_url: deliveryUrl, size_bytes: buffer.byteLength, checksum_sha256: checksum };
 }
@@ -11645,6 +11684,78 @@ function sanitizeModerationScores(raw: any, fallback: MediaModerationScores): Me
   });
 }
 
+type WallVoiceModerationResult =
+  | {
+    ok: true;
+    modelName: string;
+    scores: MediaModerationScores;
+    reasons: string[];
+    transcriptHash: string;
+    transcriptLength: number;
+  }
+  | { ok: false; status: number; code: string; detail: string };
+
+async function moderateWallVoiceUpload(env: Env, bytes: Uint8Array): Promise<WallVoiceModerationResult> {
+  if (!env.AI) {
+    return { ok: false, status: 503, code: 'VOICE_SAFETY_UNAVAILABLE', detail: 'Voice safety checks are unavailable right now. Please try again.' };
+  }
+
+  try {
+    const transcription = await env.AI.run('@cf/openai/whisper', { audio: Array.from(bytes) });
+    const transcript = cleanMultilineText(workersAiText(transcription), 3000);
+    if (!transcript) {
+      return { ok: false, status: 422, code: 'VOICE_SPEECH_NOT_FOUND', detail: 'We could not hear enough speech in this recording. Please record it again.' };
+    }
+
+    const localModeration = moderateCommunityText(transcript);
+    if (!localModeration.ok) {
+      return { ok: false, status: 400, code: 'VOICE_SAFETY_REJECTED', detail: "This voice note can't be posted because it may break Captro's safety rules." };
+    }
+
+    const fallback = textSafetyHeuristics(transcript);
+    const modelName = cleanText(env.AI_TEXT_MODERATION_MODEL || postAssistModel(env), 160);
+    const classification = await env.AI.run(modelName, {
+      messages: [
+        {
+          role: 'system',
+          content: [
+            'You are Captro voice-note safety classification.',
+            'Return strict JSON only with numbers from 0 to 1 for adult_explicit_score, nudity_score, sexual_context_score, sexual_solicitation_score, minor_safety_risk_score, violence_score, gore_score, weapon_score, hate_symbol_score, ai_generated_likelihood, spam_scam_score, link_risk_score, confidence, and malware_status set to not_scanned.',
+            'Assess only safety risk in the supplied transcript. Do not repeat or quote the transcript.',
+          ].join(' '),
+        },
+        { role: 'user', content: JSON.stringify({ transcript }) },
+      ],
+      max_tokens: 380,
+      response_format: { type: 'json_object' },
+    });
+    const raw = parseJsonObjectFromAi(classification);
+    if (!Object.keys(raw).length) {
+      return { ok: false, status: 503, code: 'VOICE_SAFETY_UNAVAILABLE', detail: 'Voice safety checks are unavailable right now. Please try again.' };
+    }
+    const scores = sanitizeModerationScores(raw, fallback);
+    const decision = decideMediaModeration(scores, 'image', '');
+    if (decision.decision !== 'approved') {
+      return {
+        ok: false,
+        status: decision.decision === 'review_required' ? 409 : 400,
+        code: decision.decision === 'review_required' ? 'VOICE_REVIEW_REQUIRED' : 'VOICE_SAFETY_REJECTED',
+        detail: decision.userMessage || "This voice note can't be posted because it may break Captro's safety rules.",
+      };
+    }
+    return {
+      ok: true,
+      modelName: `@cf/openai/whisper + ${modelName}`,
+      scores,
+      reasons: decision.reasons,
+      transcriptHash: await sha256Hex(transcript),
+      transcriptLength: transcript.length,
+    };
+  } catch {
+    return { ok: false, status: 503, code: 'VOICE_SAFETY_UNAVAILABLE', detail: 'Voice safety checks are unavailable right now. Please try again.' };
+  }
+}
+
 function mediaAssetPublicUrl(env: Env, asset: any): string {
   const provider = cleanText(asset?.storage_provider, 40);
   const key = cleanText(asset?.storage_key, 220);
@@ -11838,6 +11949,88 @@ async function supabaseInsertMediaAsset(c: any, input: {
     created_at: ts,
     updated_at: ts,
   }], 'id');
+}
+
+async function supabaseInsertStoredAudioAsset(c: any, input: {
+  id: string;
+  userId: string;
+  storageKey: string;
+  publicUrl: string;
+  mimeType: string;
+  fileSize: number;
+  sha256Hash: string;
+  originalFilename: string;
+  moderation: Extract<WallVoiceModerationResult, { ok: true }>;
+}) {
+  const ts = now();
+  await supabaseAdminUpsert(c, 'app_media_assets', [{
+    id: input.id,
+    user_id: input.userId,
+    legacy_post_id: null,
+    media_type: 'audio',
+    storage_provider: 'r2_audio',
+    storage_key: input.storageKey,
+    public_url: input.publicUrl,
+    private_url: null,
+    mime_type: input.mimeType,
+    file_size: Math.max(0, Math.round(input.fileSize)),
+    sha256_hash: cleanText(input.sha256Hash, 80).toLowerCase(),
+    width: null,
+    height: null,
+    duration_seconds: null,
+    upload_status: 'uploaded',
+    moderation_status: 'approved',
+    rejection_code: null,
+    rejection_message: null,
+    has_content_credentials: false,
+    c2pa_verified: false,
+    c2pa_creator: null,
+    c2pa_created_at: null,
+    c2pa_ai_used: false,
+    c2pa_edit_history_summary: null,
+    media_origin_status: 'not_applicable',
+    c2pa_metadata: {},
+    metadata: {
+      usage: 'wall_voice_candidate',
+      original_filename: input.originalFilename,
+      delivery_url: input.publicUrl,
+    },
+    created_at: ts,
+    updated_at: ts,
+  }], 'id');
+  await supabaseAdminUpsert(c, 'app_moderation_results', [{
+    id: uuid(),
+    media_id: input.id,
+    model_name: input.moderation.modelName,
+    adult_explicit_score: input.moderation.scores.adult_explicit_score,
+    nudity_score: input.moderation.scores.nudity_score,
+    sexual_context_score: input.moderation.scores.sexual_context_score,
+    sexual_solicitation_score: input.moderation.scores.sexual_solicitation_score,
+    minor_safety_risk_score: input.moderation.scores.minor_safety_risk_score,
+    violence_score: input.moderation.scores.violence_score,
+    gore_score: input.moderation.scores.gore_score,
+    weapon_score: input.moderation.scores.weapon_score,
+    hate_symbol_score: input.moderation.scores.hate_symbol_score,
+    ai_generated_likelihood: 0,
+    spam_scam_score: input.moderation.scores.spam_scam_score,
+    malware_status: 'not_scanned',
+    link_risk_score: input.moderation.scores.link_risk_score,
+    confidence: input.moderation.scores.confidence,
+    decision: 'approved',
+    reasons: input.moderation.reasons,
+    raw_result: {
+      transcript_sha256: input.moderation.transcriptHash,
+      transcript_length: input.moderation.transcriptLength,
+      transcript_retained: false,
+    },
+    created_at: ts,
+  }], 'id');
+  await supabaseInsertModerationEvent(c, input.id, 'voice_moderation_completed', {
+    actorRole: 'system',
+    decision: 'approved',
+    reason: 'voice_transcript_safety_passed',
+    afterState: { transcript_retained: false, model_name: input.moderation.modelName },
+  });
 }
 
 async function supabaseInsertModerationEvent(cOrEnv: any, mediaId: string, eventType: string, input: { actorUserId?: string; actorRole?: string; decision?: string; reason?: string; note?: string; beforeState?: any; afterState?: any; requestId?: string } = {}) {
@@ -16913,32 +17106,92 @@ async function resolveWallNotePlacement(
   return { x: best.x, y: best.y, rotation, totalBefore: count };
 }
 
-function wallNotePayload(row: any, author: any, reactedByViewer = false, savedByViewer = false) {
+function normalizedWallNoteType(value: unknown, hasPhoto = false, hasVoice = false): 'text' | 'photo' | 'voice' {
+  const clean = cleanText(value, 20).toLowerCase();
+  if (hasVoice || clean === 'voice') return 'voice';
+  if (hasPhoto || clean === 'photo') return 'photo';
+  return 'text';
+}
+
+function wallNoteWaveform(value: unknown): number[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .slice(0, 48)
+    .map((sample) => Number(sample))
+    .filter((sample) => Number.isFinite(sample))
+    .map((sample) => Number(Math.min(1, Math.max(0, sample)).toFixed(4)));
+}
+
+function approximateDistanceKm(latA: number, lngA: number, latB: number, lngB: number): number {
+  const radiusKm = 6371;
+  const toRadians = (value: number) => value * Math.PI / 180;
+  const dLat = toRadians(latB - latA);
+  const dLng = toRadians(lngB - lngA);
+  const a = Math.sin(dLat / 2) ** 2
+    + Math.cos(toRadians(latA)) * Math.cos(toRadians(latB)) * Math.sin(dLng / 2) ** 2;
+  return radiusKm * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(Math.max(0, 1 - a)));
+}
+function wallNotePayload(
+  row: any,
+  author: any,
+  reactedByViewer = false,
+  savedByViewer = false,
+  signedByViewer = false,
+  viewerId = '',
+) {
   const identity = cleanText(row?.publishing_identity || 'ghost', 20) === 'author' ? 'author' : 'ghost';
+  const metadata = parseJsonObject(row?.metadata);
+  const voiceMediaId = publicId(row?.voice_media_id, 160);
+  const locationVisible = !!row?.location_visibility && !!cleanText(row?.location_label, 100);
+  const noteType = normalizedWallNoteType(row?.note_type, !!metadata.media_url, !!voiceMediaId);
   return {
     id: publicId(row?.id, 120),
     wall_id: cleanText(row?.wall_id || 'global', 80) || 'global',
     publishing_identity: identity,
+    note_type: noteType,
     body: cleanMultilineText(row?.body, 300),
+    back_body: cleanMultilineText(row?.back_body, 300) || null,
+    back_color_token: WALL_NOTE_COLORS.has(cleanText(row?.back_color_token, 30)) ? cleanText(row?.back_color_token, 30) : null,
+    back_style_token: WALL_NOTE_STYLES.has(cleanText(row?.back_style_token, 40)) ? cleanText(row?.back_style_token, 40) : null,
+    has_back_side: !!cleanMultilineText(row?.back_body, 300),
+    allow_contributions: !!row?.allow_contributions,
     category: cleanText(row?.category, 50) || null,
     color_token: WALL_NOTE_COLORS.has(cleanText(row?.color_token, 30)) ? cleanText(row?.color_token, 30) : 'butter',
     style_token: WALL_NOTE_STYLES.has(cleanText(row?.style_token, 40)) ? cleanText(row?.style_token, 40) : 'sticky',
-    media_url: cleanText(row?.metadata?.media_url, 1200) || null,
-    media_thumbnail_url: cleanText(row?.metadata?.media_thumbnail_url || row?.metadata?.media_url, 1200) || null,
+    media_url: cleanText(metadata.media_url, 1200) || null,
+    media_thumbnail_url: cleanText(metadata.media_thumbnail_url || metadata.media_url, 1200) || null,
+    voice: voiceMediaId ? {
+      media_id: voiceMediaId,
+      url: cleanText(metadata.voice_url, 1200) || null,
+      duration_seconds: Math.max(0, Number(row?.voice_duration_seconds || 0)),
+      waveform: wallNoteWaveform(row?.voice_waveform),
+    } : null,
+    location: locationVisible ? {
+      label: cleanText(row?.location_label, 100),
+      city: cleanText(row?.location_city, 80) || null,
+      country: cleanText(row?.location_country, 80) || null,
+      distance_km: Number.isFinite(Number(row?.distance_km)) ? Number(Number(row.distance_km).toFixed(1)) : null,
+    } : null,
     world_x: Number(row?.world_x || 0),
     world_y: Number(row?.world_y || 0),
     width: Number(row?.width || 184),
     height: Number(row?.height || 184),
     rotation: Number(row?.rotation || 0),
     z_index: Number(row?.z_index || 0),
-    approximate_location: cleanText(row?.approximate_location, 80) || null,
+    approximate_location: locationVisible
+      ? cleanText(row?.location_label, 100)
+      : null,
     created_at: row?.created_at || now(),
     updated_at: row?.updated_at || row?.created_at || now(),
     save_count: Math.max(0, Number(row?.save_count || 0)),
     reaction_count: Math.max(0, Number(row?.reaction_count || 0)),
-    reply_count: Math.max(0, Number(row?.reply_count || 0)),
+    reply_count: Math.max(0, Number(row?.reply_count || row?.contribution_count || 0)),
+    signature_count: Math.max(0, Number(row?.signature_count || 0)),
+    contribution_count: Math.max(0, Number(row?.contribution_count || row?.reply_count || 0)),
     reacted_by_viewer: reactedByViewer,
     saved_by_viewer: savedByViewer,
+    signed_by_viewer: signedByViewer,
+    viewer_is_author: !!viewerId && publicId(row?.author_account_id, 120) === viewerId,
     author_preview: identity === 'author' ? {
       user_id: publicId(author?.id, 120),
       username: cleanText(author?.username, 80),
@@ -16948,6 +17201,15 @@ function wallNotePayload(row: any, author: any, reactedByViewer = false, savedBy
   };
 }
 
+function wallSignerPayload(user: any, createdAt: unknown) {
+  return {
+    user_id: publicId(user?.id, 120),
+    username: cleanText(user?.username, 80),
+    display_name: cleanText(user?.full_name, 120),
+    avatar_url: cleanText(user?.avatar_url, 1200),
+    signed_at: cleanText(createdAt, 80) || now(),
+  };
+}
 function wallReplyPayload(row: any, author: any) {
   const identity = cleanText(row?.publishing_identity || 'author', 20) === 'ghost' ? 'ghost' : 'author';
   return {
@@ -16987,9 +17249,10 @@ async function visibleWallNote(c: any, viewerId: string, noteId: string) {
 async function wallNoteViewerState(c: any, viewerId: string, noteIds: string[]) {
   const reacted = new Set<string>();
   const saved = new Set<string>();
-  if (!viewerId || !noteIds.length) return { reacted, saved };
+  const signed = new Set<string>();
+  if (!viewerId || !noteIds.length) return { reacted, saved, signed };
   const noteFilter = postgrestInFilter(noteIds);
-  const [reactions, saves] = await Promise.all([
+  const [reactions, saves, signatures] = await Promise.all([
     supabaseAdminQueryRows(c, 'wall_note_reactions', {
       select: 'note_id',
       filters: { note_id: noteFilter, app_user_id: postgrestEqFilter(viewerId) },
@@ -17000,12 +17263,17 @@ async function wallNoteViewerState(c: any, viewerId: string, noteIds: string[]) 
       filters: { note_id: noteFilter, app_user_id: postgrestEqFilter(viewerId) },
       limit: Math.min(1000, noteIds.length),
     }),
+    supabaseAdminQueryRows(c, 'wall_note_signatures', {
+      select: 'note_id',
+      filters: { note_id: noteFilter, app_user_id: postgrestEqFilter(viewerId) },
+      limit: Math.min(1000, noteIds.length),
+    }),
   ]);
   reactions.forEach((row) => reacted.add(publicId(row?.note_id, 120)));
   saves.forEach((row) => saved.add(publicId(row?.note_id, 120)));
-  return { reacted, saved };
+  signatures.forEach((row) => signed.add(publicId(row?.note_id, 120)));
+  return { reacted, saved, signed };
 }
-
 api.get('/wall/notes', authMiddleware, async (c) => {
   const supabaseRequired = requireSupabasePrimaryDatabase(c, 'wall_notes_read');
   if (supabaseRequired) return supabaseRequired;
@@ -17024,13 +17292,37 @@ api.get('/wall/notes', authMiddleware, async (c) => {
   const limit = clampNumber(c.req.query('limit') || (zoom < 0.45 ? '600' : '320'), 1, 750, 320);
   const filter = cleanText(c.req.query('filter') || 'all', 40).toLowerCase();
   const query = cleanText(c.req.query('query'), 80).replace(/[%*_(),]/g, ' ').trim();
+  const viewerLat = Number(c.req.query('lat'));
+  const viewerLng = Number(c.req.query('lng'));
+  const hasNearbyLocation = Number.isFinite(viewerLat) && Number.isFinite(viewerLng)
+    && viewerLat >= -90 && viewerLat <= 90 && viewerLng >= -180 && viewerLng <= 180;
+  if (wallId === 'nearby' && !hasNearbyLocation) {
+    return c.json({ notes: [], wall_id: wallId, zoom, location_required: true });
+  }
 
+  const regionConditions = [
+    `world_x.gte.${minX}`,
+    `world_x.lte.${maxX}`,
+    `world_y.gte.${minY}`,
+    `world_y.lte.${maxY}`,
+  ];
   const filters: Record<string, string> = {
-    wall_id: postgrestEqFilter(wallId),
     status: postgrestEqFilter('active'),
     moderation_status: postgrestEqFilter('approved'),
-    and: `(world_x.gte.${minX},world_x.lte.${maxX},world_y.gte.${minY},world_y.lte.${maxY})`,
   };
+  if (wallId === 'nearby') {
+    filters.location_visibility = postgrestEqFilter('true');
+    const nearbyConditions = [
+      `location_lat_bucket.gte.${(viewerLat - 0.75).toFixed(4)}`,
+      `location_lat_bucket.lte.${(viewerLat + 0.75).toFixed(4)}`,
+      `location_lng_bucket.gte.${(viewerLng - 1).toFixed(4)}`,
+      `location_lng_bucket.lte.${(viewerLng + 1).toFixed(4)}`,
+    ];
+    filters.and = `(${nearbyConditions.join(',')})`;
+  } else {
+    filters.and = `(${regionConditions.join(',')})`;
+    filters.wall_id = postgrestEqFilter(wallId);
+  }
   if (filter === 'ghost' || filter === 'author') filters.publishing_identity = postgrestEqFilter(filter);
   if (WALL_NOTE_CATEGORIES.has(filter)) filters.category = postgrestEqFilter(filter);
   if (query) filters.body = `ilike.*${query}*`;
@@ -17049,7 +17341,21 @@ api.get('/wall/notes', authMiddleware, async (c) => {
   const order = filter === 'popular'
     ? 'reaction_count.desc,save_count.desc,created_at.desc'
     : 'z_index.asc,created_at.desc';
-  const rows = await supabaseAdminQueryRows(c, 'wall_notes', { filters, order, limit });
+  const queriedRows = await supabaseAdminQueryRows(c, 'wall_notes', { filters, order, limit });
+  const rows = wallId === 'nearby'
+    ? queriedRows
+      .map((row) => ({
+        ...row,
+        distance_km: approximateDistanceKm(
+          viewerLat,
+          viewerLng,
+          Number(row?.location_lat_bucket),
+          Number(row?.location_lng_bucket),
+        ),
+      }))
+      .filter((row) => Number.isFinite(row.distance_km) && row.distance_km <= 75)
+      .sort((left, right) => left.distance_km - right.distance_km)
+    : queriedRows;
   const ownerIds = Array.from(new Set(rows.map((row) => publicId(row?.author_account_id, 120)).filter(Boolean)));
   const [authors, blockedIds] = await Promise.all([
     supabaseUsersByAnyIds(c, ownerIds),
@@ -17064,7 +17370,7 @@ api.get('/wall/notes', authMiddleware, async (c) => {
   const state = await wallNoteViewerState(c, viewerId, noteIds);
   const notes = visibleRows.map((row) => {
     const id = publicId(row?.id, 120);
-    return wallNotePayload(row, authors.get(publicId(row?.author_account_id, 120)), state.reacted.has(id), state.saved.has(id));
+    return wallNotePayload(row, authors.get(publicId(row?.author_account_id, 120)), state.reacted.has(id), state.saved.has(id), state.signed.has(id), viewerId);
   });
   const response = c.json({ notes, wall_id: wallId, zoom });
   response.headers.set('cache-control', 'private, max-age=15, stale-while-revalidate=45');
@@ -17105,67 +17411,134 @@ api.post('/wall/notes', authMiddleware, async (c) => {
   if (restricted) return restricted;
   const bodyTooLarge = rejectLargeRequest(c, 24_000);
   if (bodyTooLarge) return bodyTooLarge;
+
   const b: any = await c.req.json().catch(() => ({}));
   const body = cleanMultilineText(b.body || b.text, 300);
-  const moderation = moderateCommunityText(body);
-  if (!moderation.ok) return c.json({ detail: moderation.detail || 'This note cannot be published.' }, 400);
-
   const mediaAssetId = publicId(b.media_asset_id || b.mediaAssetId, 160);
+  const voiceMediaId = publicId(b.voice_media_id || b.voiceMediaId, 160);
+  const requestedType = normalizedWallNoteType(b.note_type || b.noteType, !!mediaAssetId, !!voiceMediaId);
+  if (mediaAssetId && voiceMediaId) {
+    return c.json({ detail: 'A Wall note can contain one photo or one voice recording, not both.', code: 'WALL_NOTE_MEDIA_CONFLICT' }, 400);
+  }
+  if (requestedType !== 'voice' && !body) {
+    return c.json({ detail: 'Write something before releasing this note.', code: 'WALL_NOTE_BODY_REQUIRED' }, 400);
+  }
+  if (body) {
+    const moderation = moderateCommunityText(body);
+    if (!moderation.ok) return c.json({ detail: moderation.detail || 'This note cannot be published.' }, 400);
+  }
+
+  const backBody = cleanMultilineText(b.back_body || b.backBody, 300);
+  if (backBody) {
+    const backModeration = moderateCommunityText(backBody);
+    if (!backModeration.ok) return c.json({ detail: backModeration.detail || 'This back side cannot be published.' }, 400);
+  }
+
   const submittedMediaUrl = safeMediaReference(b.media_url || b.mediaUrl);
   if (submittedMediaUrl && !mediaAssetId) {
     return c.json({ detail: 'Upload this photo through Captro before attaching it to a note.', code: 'MEDIA_ASSET_REQUIRED' }, 400);
   }
+
   let mediaAsset: any = null;
   let mediaUrl = '';
   let mediaThumbnailUrl = '';
   if (mediaAssetId) {
     const mediaApproval = await approvedMediaAssetsForPost(c, userId, [mediaAssetId], []);
-    if (!mediaApproval.ok) {
-      return c.json({ detail: mediaApproval.detail, code: mediaApproval.code }, mediaApproval.status as any);
-    }
+    if (!mediaApproval.ok) return c.json({ detail: mediaApproval.detail, code: mediaApproval.code }, mediaApproval.status as any);
     mediaAsset = mediaApproval.assets[0] || null;
-    if (normalizeMediaAssetType(mediaAsset?.media_type) !== 'image' || cleanText(mediaAsset?.storage_provider, 40) !== 'images') {
-      return c.json({ detail: 'Wall notes support one photo only.', code: 'WALL_NOTE_IMAGE_REQUIRED' }, 400);
+    if (requestedType !== 'photo' || normalizeMediaAssetType(mediaAsset?.media_type) !== 'image' || cleanText(mediaAsset?.storage_provider, 40) !== 'images') {
+      return c.json({ detail: 'Wall photo notes support one approved image.', code: 'WALL_NOTE_IMAGE_REQUIRED' }, 400);
     }
     mediaUrl = safeMediaReference(mediaAsset?.public_url) || mediaAssetPublicUrl(c.env, mediaAsset);
     mediaThumbnailUrl = mediaAssetPreviewUrl(c.env, mediaAsset) || mediaUrl;
-    if (!mediaUrl) {
-      return c.json({ detail: 'This photo is not ready yet. Please try again.', code: 'MEDIA_NOT_READY' }, 409);
+    if (!mediaUrl) return c.json({ detail: 'This photo is not ready yet. Please try again.', code: 'MEDIA_NOT_READY' }, 409);
+  }
+
+  let voiceAsset: any = null;
+  let voiceDuration = 0;
+  const voiceWaveform = wallNoteWaveform(b.voice_waveform || b.voiceWaveform);
+  if (voiceMediaId) {
+    const voiceRows = await supabaseAdminQueryRows(c, 'app_media_assets', {
+      select: '*',
+      filters: { id: postgrestEqFilter(voiceMediaId), user_id: postgrestEqFilter(userId) },
+      limit: 1,
+    });
+    voiceAsset = voiceRows[0] || null;
+    if (!voiceAsset
+      || cleanText(voiceAsset.media_type, 40) !== 'audio'
+      || cleanText(voiceAsset.storage_provider, 40) !== 'r2_audio'
+      || cleanText(voiceAsset.upload_status, 40) !== 'uploaded'
+      || cleanText(voiceAsset.moderation_status, 40) !== 'approved') {
+      return c.json({ detail: 'This voice recording is not ready yet. Please record it again.', code: 'VOICE_NOT_READY' }, 409);
     }
+    voiceDuration = clampFloat(b.voice_duration_seconds || b.voiceDurationSeconds, 0.25, 60, 0);
+    if (!voiceDuration || requestedType !== 'voice') {
+      return c.json({ detail: 'Voice notes must be between one second and one minute.', code: 'VOICE_DURATION_INVALID' }, 400);
+    }
+  } else if (requestedType === 'voice') {
+    return c.json({ detail: 'Record a voice note before releasing it.', code: 'VOICE_REQUIRED' }, 400);
   }
 
   const identity = cleanText(b.publishing_identity, 20) === 'author' ? 'author' : 'ghost';
   const colorToken = cleanText(b.color_token, 30);
   const styleToken = cleanText(b.style_token, 40);
+  const backColorToken = cleanText(b.back_color_token || b.backColorToken, 30);
+  const backStyleToken = cleanText(b.back_style_token || b.backStyleToken, 40);
   const category = cleanText(b.category, 50).toLowerCase();
   const wallId = normalizedWallId(b.wall_id);
   if (!wallId) return c.json({ detail: 'Unknown wall.' }, 400);
-  const approximateLocation = cleanText(b.approximate_location, 80);
-  if (approximateLocation && looksLikePrivatePlace(approximateLocation, approximateLocation, 'address')) {
-    return c.json({ detail: 'Use a neighborhood or city, not a private address.' }, 400);
+
+  const locationInput = b.location && typeof b.location === 'object' ? b.location : {};
+  const legacyLocation = cleanText(b.approximate_location, 80);
+  const locationLabel = cleanText(locationInput.label || locationInput.location_label || legacyLocation, 100);
+  const locationCity = cleanText(locationInput.city || locationInput.location_city, 80);
+  const locationCountry = cleanText(locationInput.country || locationInput.location_country, 80);
+  const rawLat = Number(locationInput.latitude ?? locationInput.lat);
+  const rawLng = Number(locationInput.longitude ?? locationInput.lng);
+  const locationRequested = locationInput.enabled === true || locationInput.visibility === 'public';
+  if (locationLabel && looksLikePrivatePlace(locationLabel, locationLabel, 'address')) {
+    return c.json({ detail: 'Use a neighborhood or city, not a private address.', code: 'PRIVATE_LOCATION' }, 400);
   }
+  const hasCoarseLocation = locationRequested
+    && Number.isFinite(rawLat) && rawLat >= -90 && rawLat <= 90
+    && Number.isFinite(rawLng) && rawLng >= -180 && rawLng <= 180
+    && !!locationLabel;
+  const locationLatBucket = hasCoarseLocation ? Number((Math.round(rawLat * 20) / 20).toFixed(2)) : null;
+  const locationLngBucket = hasCoarseLocation ? Number((Math.round(rawLng * 20) / 20).toFixed(2)) : null;
+  const locationCell = hasCoarseLocation ? `${locationLatBucket!.toFixed(2)}:${locationLngBucket!.toFixed(2)}` : null;
+
   const noteId = uuid();
-  const width = clampFloat(b.width, 96, 360, 184);
-  const height = clampFloat(b.height, 96, 420, 184);
+  const width = clampFloat(b.width, 96, 360, requestedType === 'voice' ? 196 : 184);
+  const height = clampFloat(b.height, 96, 420, requestedType === 'voice' ? 156 : 184);
   const resolvedStyleToken = WALL_NOTE_STYLES.has(styleToken)
     ? styleToken
-    : (mediaAsset ? 'polaroid' : 'sticky');
-  const placementScale = mediaAsset ? 1.34 : 1.27;
+    : (mediaAsset ? 'polaroid' : requestedType === 'voice' ? 'receipt' : 'sticky');
+  const placementScale = mediaAsset ? 1.34 : requestedType === 'voice' ? 1.18 : 1.27;
   const placementWidth = width * placementScale;
   const placementHeight = height * placementScale;
-  const placement = await resolveWallNotePlacement(
-    c,
-    wallId,
-    placementWidth,
-    placementHeight,
-    noteId,
-  );
+  const placement = await resolveWallNotePlacement(c, wallId, placementWidth, placementHeight, noteId);
+  const voiceUrl = voiceAsset ? safeMediaReference(voiceAsset.public_url || voiceAsset.private_url) : '';
   const row = {
     id: noteId,
     wall_id: wallId,
     author_account_id: userId,
     publishing_identity: identity,
+    note_type: requestedType,
     body,
+    back_body: backBody || null,
+    back_color_token: backBody && WALL_NOTE_COLORS.has(backColorToken) ? backColorToken : null,
+    back_style_token: backBody && WALL_NOTE_STYLES.has(backStyleToken) ? backStyleToken : null,
+    allow_contributions: b.allow_contributions === true || b.allowContributions === true,
+    voice_media_id: voiceMediaId || null,
+    voice_duration_seconds: voiceMediaId ? voiceDuration : null,
+    voice_waveform: voiceMediaId ? voiceWaveform : [],
+    location_label: hasCoarseLocation ? locationLabel : null,
+    location_city: hasCoarseLocation ? locationCity || null : null,
+    location_country: hasCoarseLocation ? locationCountry || null : null,
+    location_cell: locationCell,
+    location_lat_bucket: locationLatBucket,
+    location_lng_bucket: locationLngBucket,
+    location_visibility: hasCoarseLocation,
     category: WALL_NOTE_CATEGORIES.has(category) ? category : null,
     color_token: WALL_NOTE_COLORS.has(colorToken) ? colorToken : 'butter',
     style_token: resolvedStyleToken,
@@ -17175,45 +17548,34 @@ api.post('/wall/notes', authMiddleware, async (c) => {
     height,
     rotation: placement.rotation,
     z_index: clampNumber(b.z_index, -100000, 100000, Math.floor(Date.now() / 1000)),
-    approximate_location: approximateLocation || null,
+    approximate_location: hasCoarseLocation ? locationLabel : null,
     moderation_status: 'approved',
     status: 'active',
     metadata: {
       source: 'captro_native_wall',
-      layout_version: 'readable_mixed_media_v3',
+      layout_version: 'living_wall_v1',
       placed_after: placement.totalBefore,
-      ...(mediaAsset ? {
-        media_asset_id: mediaAssetId,
-        media_url: mediaUrl,
-        media_thumbnail_url: mediaThumbnailUrl,
-      } : {}),
+      ...(mediaAsset ? { media_asset_id: mediaAssetId, media_url: mediaUrl, media_thumbnail_url: mediaThumbnailUrl } : {}),
+      ...(voiceAsset ? { voice_url: voiceUrl } : {}),
     },
   };
   const inserted = await supabaseAdminInsertRows(c, 'wall_notes', [row], '*');
-  if (mediaAsset) {
+  if (mediaAsset || voiceAsset) {
+    const linkedAsset = mediaAsset || voiceAsset;
+    const linkedAssetId = mediaAssetId || voiceMediaId;
     await supabaseAdminPatchRows(c, 'app_media_assets', {
-      id: postgrestEqFilter(mediaAssetId),
+      id: postgrestEqFilter(linkedAssetId),
       user_id: postgrestEqFilter(userId),
     }, {
-      metadata: {
-        ...parseJsonObject(mediaAsset.metadata),
-        usage: 'wall_note',
-        wall_note_id: noteId,
-      },
+      metadata: { ...parseJsonObject(linkedAsset.metadata), usage: requestedType === 'voice' ? 'wall_voice' : 'wall_note', wall_note_id: noteId },
       updated_at: now(),
     }).catch((error: any) => {
-      console.warn(JSON.stringify({
-        event: 'wall_note_media_link_failed',
-        media_id: mediaAssetId,
-        note_id: noteId,
-        code: getErrorCode(error).slice(0, 180),
-      }));
+      console.warn(JSON.stringify({ event: 'wall_note_media_link_failed', media_id: linkedAssetId, note_id: noteId, code: getErrorCode(error).slice(0, 180) }));
     });
   }
   const author = await supabaseUserByAnyId(c, userId);
-  return c.json({ note: wallNotePayload(inserted[0] || row, author, false, false) }, 201);
+  return c.json({ note: wallNotePayload(inserted[0] || row, author, false, false, false, userId) }, 201);
 });
-
 api.post('/wall/notes/:noteId/reaction', authMiddleware, async (c) => {
   const userId = getUserId(c);
   const noteId = publicId(c.req.param('noteId'), 120);
@@ -17258,50 +17620,165 @@ api.post('/wall/notes/:noteId/save', authMiddleware, async (c) => {
   return c.json({ saved, save_count: count });
 });
 
-api.get('/wall/notes/:noteId/replies', authMiddleware, async (c) => {
+api.post('/wall/notes/:noteId/signature', authMiddleware, async (c) => {
   const userId = getUserId(c);
   const noteId = publicId(c.req.param('noteId'), 120);
-  if (!(await visibleWallNote(c, userId, noteId))) return c.json({ detail: 'Note not found.' }, 404);
-  const rows = await supabaseAdminQueryRows(c, 'wall_note_replies', {
-    filters: {
-      note_id: postgrestEqFilter(noteId),
-      status: postgrestEqFilter('active'),
-      moderation_status: postgrestEqFilter('approved'),
-    },
-    order: 'created_at.asc',
-    limit: 100,
+  const visible = await visibleWallNote(c, userId, noteId);
+  if (!visible) return c.json({ detail: 'Note not found.' }, 404);
+  if (publicId(visible.note.author_account_id, 120) === userId) {
+    return c.json({ detail: 'You cannot sign your own note.' }, 400);
+  }
+  const limited = await enforceRateLimit(c, 'wall_note_signature', userId, 30, 60);
+  if (limited) return limited;
+  const b: any = await c.req.json().catch(() => ({}));
+  const existing = await supabaseAdminQueryRows(c, 'wall_note_signatures', {
+    select: 'note_id',
+    filters: { note_id: postgrestEqFilter(noteId), app_user_id: postgrestEqFilter(userId) },
+    limit: 1,
   });
-  const authorIds = Array.from(new Set(rows.map((row) => publicId(row?.author_account_id, 120)).filter(Boolean)));
-  const authors = await supabaseUsersByAnyIds(c, authorIds);
-  return c.json({ replies: rows.map((row) => wallReplyPayload(row, authors.get(publicId(row?.author_account_id, 120)))) });
+  const signed = typeof b.signed === 'boolean' ? b.signed : !existing.length;
+  if (signed) {
+    await supabaseAdminUpsert(c, 'wall_note_signatures', [{ note_id: noteId, app_user_id: userId }], 'note_id,app_user_id');
+  } else {
+    await supabaseAdminDeleteRows(c, 'wall_note_signatures', { note_id: postgrestEqFilter(noteId), app_user_id: postgrestEqFilter(userId) });
+  }
+  const signatureCount = await supabaseAdminCountRows(c, 'wall_note_signatures', { note_id: postgrestEqFilter(noteId) });
+  await supabaseAdminPatchRows(c, 'wall_notes', { id: postgrestEqFilter(noteId) }, { signature_count: signatureCount });
+  return c.json({ signed, signature_count: signatureCount });
 });
 
-api.post('/wall/notes/:noteId/replies', authMiddleware, async (c) => {
+api.get('/wall/notes/:noteId/signatures', authMiddleware, async (c) => {
   const userId = getUserId(c);
   const noteId = publicId(c.req.param('noteId'), 120);
   if (!(await visibleWallNote(c, userId, noteId))) return c.json({ detail: 'Note not found.' }, 404);
-  const limited = await enforceRateLimit(c, 'wall_note_reply', userId, 16, 60);
+  const limit = clampNumber(c.req.query('limit') || '30', 1, 100, 30);
+  const before = cleanText(c.req.query('before'), 80);
+  const filters: Record<string, string> = { note_id: postgrestEqFilter(noteId) };
+  if (before && Number.isFinite(Date.parse(before))) filters.created_at = `lt.${encodeURIComponent(before)}`;
+  const rows = await supabaseAdminQueryRows(c, 'wall_note_signatures', { filters, order: 'created_at.desc', limit: limit + 1 });
+  const page = rows.slice(0, limit);
+  const signerIds = Array.from(new Set(page.map((row) => publicId(row?.app_user_id, 120)).filter(Boolean)));
+  const [signers, blocked] = await Promise.all([supabaseUsersByAnyIds(c, signerIds), supabaseBlockedUserIds(c, userId)]);
+  return c.json({
+    signers: page
+      .filter((row) => !blocked.has(publicId(row?.app_user_id, 120)))
+      .filter((row) => supabaseUserIsActive(signers.get(publicId(row?.app_user_id, 120))))
+      .map((row) => wallSignerPayload(signers.get(publicId(row?.app_user_id, 120)), row?.created_at))
+      .filter((row) => !!row.user_id),
+    next_before: rows.length > limit ? cleanText(page[page.length - 1]?.created_at, 80) || null : null,
+  });
+});
+
+api.patch('/wall/notes/:noteId/collaboration', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const noteId = publicId(c.req.param('noteId'), 120);
+  const noteRows = await supabaseAdminQueryRows(c, 'wall_notes', { select: 'id,author_account_id,status,moderation_status', filters: { id: postgrestEqFilter(noteId) }, limit: 1 });
+  const note = noteRows[0];
+  if (!note || cleanText(note.status, 40) !== 'active' || cleanText(note.moderation_status, 40) !== 'approved') return c.json({ detail: 'Note not found.' }, 404);
+  if (publicId(note.author_account_id, 120) !== userId) return c.json({ detail: 'Only the note author can change contributions.' }, 403);
+  const b: any = await c.req.json().catch(() => ({}));
+  if (typeof b.allow_contributions !== 'boolean' && typeof b.allowContributions !== 'boolean') {
+    return c.json({ detail: 'Choose whether this note accepts contributions.' }, 400);
+  }
+  const allowContributions = b.allow_contributions === true || b.allowContributions === true;
+  await supabaseAdminPatchRows(c, 'wall_notes', { id: postgrestEqFilter(noteId) }, { allow_contributions: allowContributions, updated_at: now() });
+  return c.json({ allow_contributions: allowContributions });
+});
+
+async function listWallNoteContributions(c: any, noteId: string, userId: string) {
+  const visible = await visibleWallNote(c, userId, noteId);
+  if (!visible) return { error: c.json({ detail: 'Note not found.' }, 404) };
+  const limit = clampNumber(c.req.query('limit') || '80', 1, 100, 80);
+  const after = cleanText(c.req.query('after'), 80);
+  const filters: Record<string, string> = {
+    note_id: postgrestEqFilter(noteId),
+    status: postgrestEqFilter('active'),
+    moderation_status: postgrestEqFilter('approved'),
+  };
+  if (after && Number.isFinite(Date.parse(after))) filters.created_at = `gt.${encodeURIComponent(after)}`;
+  const rows = await supabaseAdminQueryRows(c, 'wall_note_contributions', { filters, order: 'created_at.asc', limit: limit + 1 });
+  const page = rows.slice(0, limit);
+  const authorIds = Array.from(new Set(page.map((row) => publicId(row?.author_account_id, 120)).filter(Boolean)));
+  const [authors, blocked] = await Promise.all([supabaseUsersByAnyIds(c, authorIds), supabaseBlockedUserIds(c, userId)]);
+  const contributions = page
+    .filter((row) => !blocked.has(publicId(row?.author_account_id, 120)))
+    .filter((row) => supabaseUserIsActive(authors.get(publicId(row?.author_account_id, 120))))
+    .map((row) => wallReplyPayload(row, authors.get(publicId(row?.author_account_id, 120))));
+  return {
+    data: {
+      contributions,
+      next_after: rows.length > limit ? cleanText(page[page.length - 1]?.created_at, 80) || null : null,
+      allow_contributions: !!visible.note.allow_contributions,
+    },
+  };
+}
+
+api.get('/wall/notes/:noteId/contributions', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const noteId = publicId(c.req.param('noteId'), 120);
+  const result = await listWallNoteContributions(c, noteId, userId);
+  return result.error || c.json(result.data);
+});
+
+api.post('/wall/notes/:noteId/contributions', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const noteId = publicId(c.req.param('noteId'), 120);
+  const visible = await visibleWallNote(c, userId, noteId);
+  if (!visible) return c.json({ detail: 'Note not found.' }, 404);
+  if (!visible.note.allow_contributions) return c.json({ detail: 'This note is no longer accepting contributions.' }, 409);
+  const limited = await enforceRateLimit(c, 'wall_note_contribution', userId, 16, 60);
   if (limited) return limited;
   const restricted = await enforceUserRestriction(c, userId, 'commenting');
   if (restricted) return restricted;
   const b: any = await c.req.json().catch(() => ({}));
   const body = cleanMultilineText(b.body || b.text, 300);
   const moderation = moderateCommunityText(body);
-  if (!moderation.ok) return c.json({ detail: moderation.detail || 'This reply cannot be published.' }, 400);
+  if (!body || !moderation.ok) return c.json({ detail: moderation.detail || 'This contribution cannot be published.' }, 400);
   const identity = cleanText(b.publishing_identity, 20) === 'ghost' ? 'ghost' : 'author';
   const row = {
     id: uuid(), note_id: noteId, author_account_id: userId, body,
     publishing_identity: identity, moderation_status: 'approved', status: 'active',
   };
-  const inserted = await supabaseAdminInsertRows(c, 'wall_note_replies', [row], '*');
-  const count = await supabaseAdminCountRows(c, 'wall_note_replies', {
+  const inserted = await supabaseAdminInsertRows(c, 'wall_note_contributions', [row], '*');
+  const contributionCount = await supabaseAdminCountRows(c, 'wall_note_contributions', {
     note_id: postgrestEqFilter(noteId), status: postgrestEqFilter('active'), moderation_status: postgrestEqFilter('approved'),
   });
-  await supabaseAdminPatchRows(c, 'wall_notes', { id: postgrestEqFilter(noteId) }, { reply_count: count });
+  await supabaseAdminPatchRows(c, 'wall_notes', { id: postgrestEqFilter(noteId) }, { contribution_count: contributionCount, reply_count: contributionCount });
   const author = await supabaseUserByAnyId(c, userId);
-  return c.json({ reply: wallReplyPayload(inserted[0] || row, author), reply_count: count }, 201);
+  return c.json({ contribution: wallReplyPayload(inserted[0] || row, author), contribution_count: contributionCount }, 201);
 });
 
+// The original reply endpoints remain as a compatibility layer while existing clients migrate.
+api.get('/wall/notes/:noteId/replies', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const noteId = publicId(c.req.param('noteId'), 120);
+  const result = await listWallNoteContributions(c, noteId, userId);
+  if (result.error) return result.error;
+  return c.json({ replies: result.data!.contributions });
+});
+
+api.post('/wall/notes/:noteId/replies', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const noteId = publicId(c.req.param('noteId'), 120);
+  const visible = await visibleWallNote(c, userId, noteId);
+  if (!visible) return c.json({ detail: 'Note not found.' }, 404);
+  if (!visible.note.allow_contributions) return c.json({ detail: 'This note is no longer accepting contributions.' }, 409);
+  const limited = await enforceRateLimit(c, 'wall_note_contribution', userId, 16, 60);
+  if (limited) return limited;
+  const restricted = await enforceUserRestriction(c, userId, 'commenting');
+  if (restricted) return restricted;
+  const b: any = await c.req.json().catch(() => ({}));
+  const body = cleanMultilineText(b.body || b.text, 300);
+  const moderation = moderateCommunityText(body);
+  if (!body || !moderation.ok) return c.json({ detail: moderation.detail || 'This contribution cannot be published.' }, 400);
+  const identity = cleanText(b.publishing_identity, 20) === 'ghost' ? 'ghost' : 'author';
+  const row = { id: uuid(), note_id: noteId, author_account_id: userId, body, publishing_identity: identity, moderation_status: 'approved', status: 'active' };
+  const inserted = await supabaseAdminInsertRows(c, 'wall_note_contributions', [row], '*');
+  const contributionCount = await supabaseAdminCountRows(c, 'wall_note_contributions', { note_id: postgrestEqFilter(noteId), status: postgrestEqFilter('active'), moderation_status: postgrestEqFilter('approved') });
+  await supabaseAdminPatchRows(c, 'wall_notes', { id: postgrestEqFilter(noteId) }, { contribution_count: contributionCount, reply_count: contributionCount });
+  const author = await supabaseUserByAnyId(c, userId);
+  return c.json({ reply: wallReplyPayload(inserted[0] || row, author), reply_count: contributionCount }, 201);
+});
 api.delete('/wall/notes/:noteId', authMiddleware, async (c) => {
   const userId = getUserId(c);
   const noteId = publicId(c.req.param('noteId'), 120);
@@ -20626,70 +21103,82 @@ function parseByteRange(rangeHeader: string | undefined, size: number): { offset
 async function serveMediaBackup(c: any) {
   if (!c.env.MEDIA_BACKUP) return c.json({ detail: 'Media storage is not configured' }, 503);
   try {
-    await ensureMediaBackupSchema(c.env.DB);
-    const backup: any = await c.env.DB.prepare('SELECT * FROM media_backups WHERE id = ?')
-      .bind(c.req.param('backupId'))
-      .first();
-    if (!backup) return c.json({ detail: 'Media not found' }, 404);
-    const hasSignedAccess = await hasValidMediaAccessToken(c, backup.id);
+    const mediaId = publicId(c.req.param('backupId'), 160);
+    if (!mediaId) return c.json({ detail: 'Media not found' }, 404);
     const viewerId = await getOptionalUserId(c);
     const limited = await enforceRateLimit(c, 'media_read', viewerId || clientIp(c), 600, 60);
     if (limited) return limited;
 
-    if (hasSignedAccess) {
-      // Signed URLs are issued only from authorized message APIs so AVPlayer can stream private chat media.
-    } else if (backup.post_id) {
-      const mediaVisiblePostSql = [
-        'SELECT p.id FROM posts p JOIN users u ON p.user_id = u.id',
-        `WHERE p.id = ? AND ${visiblePostWhere('u', 'p')} LIMIT 1`,
-      ].join(' ');
-      const visiblePost: any = await c.env.DB.prepare(mediaVisiblePostSql).bind(backup.post_id, ...visiblePostBindValues(viewerId)).first();
-      if (!visiblePost) return c.json({ detail: 'Media not found' }, 404);
-    } else if (!viewerId) {
-      return c.json({ detail: 'Media not found' }, 404);
-    } else if (cleanText(backup.message_id, 120)) {
-      const visibleMessage: any = await c.env.DB.prepare(
-        'SELECT id FROM messages WHERE id = ? AND (sender_id = ? OR receiver_id = ?) LIMIT 1'
-      ).bind(cleanText(backup.message_id, 120), viewerId, viewerId).first();
-      if (!visibleMessage) return c.json({ detail: 'Media not found' }, 404);
-    } else if (cleanText(backup.group_message_id, 120)) {
-      const visibleGroupMessage: any = await c.env.DB.prepare(
-        `SELECT gm.id
-         FROM group_messages gm
-         JOIN group_chat_members m ON m.group_id = gm.group_id
-         WHERE gm.id = ? AND m.user_id = ?
-         LIMIT 1`
-      ).bind(cleanText(backup.group_message_id, 120), viewerId).first();
-      if (!visibleGroupMessage) return c.json({ detail: 'Media not found' }, 404);
-    } else if (backup.user_id !== viewerId) {
-      const viewer: any = await c.env.DB.prepare('SELECT username, email, is_admin FROM users WHERE id = ?').bind(viewerId).first();
-      if (!viewer?.is_admin && !isOwnerUsername(c, viewer?.username) && !isOwnerEmail(c, viewer?.email)) {
-        await logSecurityEvent(c, 'unattached_media_access_denied', viewerId, { backup_id: backup.id });
+    // Wall voice media is canonical in Supabase. It never needs a D1 media row.
+    const canonicalAsset = supabasePrimaryConfigured(c) ? await supabaseReadMediaAsset(c, mediaId) : null;
+    let storageKey = '';
+    let contentType = '';
+    if (canonicalAsset && cleanText(canonicalAsset.media_type, 40) === 'audio' && cleanText(canonicalAsset.storage_provider, 40) === 'r2_audio') {
+      const voiceNotes = await supabaseAdminQueryRows(c, 'wall_notes', {
+        select: 'id,author_account_id,status,moderation_status',
+        filters: {
+          voice_media_id: postgrestEqFilter(mediaId),
+          status: postgrestEqFilter('active'),
+          moderation_status: postgrestEqFilter('approved'),
+        },
+        limit: 1,
+      });
+      const voiceNote = voiceNotes[0];
+      const ownerId = publicId(canonicalAsset.user_id, 120);
+      if (!voiceNote && viewerId !== ownerId) return c.json({ detail: 'Media not found' }, 404);
+      if (voiceNote && viewerId && viewerId !== ownerId && await supabaseUserIdsAreBlocked(c, viewerId, ownerId)) {
         return c.json({ detail: 'Media not found' }, 404);
       }
+      storageKey = cleanText(canonicalAsset.storage_key, 500);
+      contentType = cleanText(canonicalAsset.mime_type, 120);
+    } else {
+      // Temporary compatibility path for pre-Supabase chat and historical media. New Wall media never enters this branch.
+      await ensureMediaBackupSchema(c.env.DB);
+      const backup: any = await c.env.DB.prepare('SELECT * FROM media_backups WHERE id = ?').bind(mediaId).first();
+      if (!backup) return c.json({ detail: 'Media not found' }, 404);
+      const hasSignedAccess = await hasValidMediaAccessToken(c, backup.id);
+      if (hasSignedAccess) {
+        // Signed URLs are issued only from authorized message APIs so AVPlayer can stream private chat media.
+      } else if (backup.post_id) {
+        const mediaVisiblePostSql = [
+          'SELECT p.id FROM posts p JOIN users u ON p.user_id = u.id',
+          `WHERE p.id = ? AND ${visiblePostWhere('u', 'p')} LIMIT 1`,
+        ].join(' ');
+        const visiblePost: any = await c.env.DB.prepare(mediaVisiblePostSql).bind(backup.post_id, ...visiblePostBindValues(viewerId)).first();
+        if (!visiblePost) return c.json({ detail: 'Media not found' }, 404);
+      } else if (!viewerId) {
+        return c.json({ detail: 'Media not found' }, 404);
+      } else if (cleanText(backup.message_id, 120)) {
+        const visibleMessage: any = await c.env.DB.prepare('SELECT id FROM messages WHERE id = ? AND (sender_id = ? OR receiver_id = ?) LIMIT 1').bind(cleanText(backup.message_id, 120), viewerId, viewerId).first();
+        if (!visibleMessage) return c.json({ detail: 'Media not found' }, 404);
+      } else if (cleanText(backup.group_message_id, 120)) {
+        const visibleGroupMessage: any = await c.env.DB.prepare(`SELECT gm.id FROM group_messages gm JOIN group_chat_members m ON m.group_id = gm.group_id WHERE gm.id = ? AND m.user_id = ? LIMIT 1`).bind(cleanText(backup.group_message_id, 120), viewerId).first();
+        if (!visibleGroupMessage) return c.json({ detail: 'Media not found' }, 404);
+      } else if (backup.user_id !== viewerId) {
+        const viewer: any = await c.env.DB.prepare('SELECT username, email, is_admin FROM users WHERE id = ?').bind(viewerId).first();
+        if (!viewer?.is_admin && !isOwnerUsername(c, viewer?.username) && !isOwnerEmail(c, viewer?.email)) {
+          await logSecurityEvent(c, 'unattached_media_access_denied', viewerId, { backup_id: backup.id });
+          return c.json({ detail: 'Media not found' }, 404);
+        }
+      }
+      storageKey = cleanText(backup.r2_key, 500);
+      contentType = cleanText(backup.content_type, 120);
     }
 
-    const head = await c.env.MEDIA_BACKUP.head(backup.r2_key);
+    if (!storageKey) return c.json({ detail: 'Media not found' }, 404);
+    const head = await c.env.MEDIA_BACKUP.head(storageKey);
     if (!head) return c.json({ detail: 'Media file not found' }, 404);
-
     const range = parseByteRange(c.req.header('range'), head.size || 0);
     if (range === 'invalid') {
-      return new Response(null, {
-        status: 416,
-        headers: {
-          'accept-ranges': 'bytes',
-          'content-range': `bytes */${head.size || 0}`,
-        },
-      });
+      return new Response(null, { status: 416, headers: { 'accept-ranges': 'bytes', 'content-range': `bytes */${head.size || 0}` } });
     }
-
     const object = range
-      ? await c.env.MEDIA_BACKUP.get(backup.r2_key, { range: { offset: range.offset, length: range.length } })
-      : await c.env.MEDIA_BACKUP.get(backup.r2_key);
+      ? await c.env.MEDIA_BACKUP.get(storageKey, { range: { offset: range.offset, length: range.length } })
+      : await c.env.MEDIA_BACKUP.get(storageKey);
     if (!object) return c.json({ detail: 'Media file not found' }, 404);
-
     const headers = new Headers();
     object.writeHttpMetadata(headers);
+    if (contentType) headers.set('content-type', contentType);
     headers.set('etag', head.httpEtag || object.httpEtag);
     headers.set('accept-ranges', 'bytes');
     headers.set('cache-control', 'public, max-age=31536000, immutable');
@@ -20698,15 +21187,12 @@ async function serveMediaBackup(c: any) {
     headers.set('x-content-type-options', 'nosniff');
     headers.set('content-length', String(range ? range.length : head.size || object.size || 0));
     if (range) headers.set('content-range', `bytes ${range.offset}-${range.end}/${head.size}`);
-
-    const body = c.req.method === 'HEAD' ? null : object.body;
-    return new Response(body, { status: range ? 206 : 200, headers });
+    return new Response(c.req.method === 'HEAD' ? null : object.body, { status: range ? 206 : 200, headers });
   } catch (error: any) {
     console.error('Media fetch failed:', getErrorCode(error), error?.message || error);
     return c.json({ detail: 'Could not load media' }, 500);
   }
 }
-
 async function serveCloudflareImageProxy(c: any) {
   const imageId = publicId(c.req.param('imageId'), 220);
   if (!imageId) return c.json({ detail: 'Media not found' }, 404);
@@ -20964,13 +21450,17 @@ api.post('/upload/file', authMiddleware, async (c) => {
 });
 
 api.post('/upload/audio', authMiddleware, async (c) => {
+  let orphanedStorageKey = '';
+  let orphanedMediaId = '';
   try {
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'wall_voice_upload');
+    if (supabaseRequired) return supabaseRequired;
     const userId = getUserId(c);
-    const bodyTooLarge = rejectLargeRequest(c, 12_000_000);
+    const bodyTooLarge = rejectLargeRequest(c, 3_000_000);
     if (bodyTooLarge) return bodyTooLarge;
-    const limited = await enforceRateLimit(c, 'upload_audio', userId, 40, 60);
+    const limited = await enforceRateLimit(c, 'upload_audio', userId, 8, 60);
     if (limited) return limited;
-    const dailyLimited = await enforceRateLimit(c, 'upload_audio_daily', userId, 180, 86400);
+    const dailyLimited = await enforceRateLimit(c, 'upload_audio_daily', userId, 40, 86400);
     if (dailyLimited) return dailyLimited;
 
     const formData = await c.req.raw.formData();
@@ -20989,11 +21479,27 @@ api.post('/upload/audio', authMiddleware, async (c) => {
     if (!ALLOWED_AUDIO_TYPES.has(fileType) || !extensionAllowed(file.name, ALLOWED_AUDIO_EXTENSIONS)) {
       return c.json({ detail: 'Unsupported audio type. Use M4A, AAC, MP3, WAV, or WebM.' }, 400);
     }
-    if (fileSize > 10_000_000) {
-      return c.json({ detail: 'Audio is too large.', max_bytes: 10_000_000 }, 413);
+    if (fileSize > 2_500_000) {
+      return c.json({ detail: 'Audio is too large.', max_bytes: 2_500_000 }, 413);
     }
 
     const bytes = await file.arrayBuffer();
+    if (!bytes.byteLength || bytes.byteLength > 2_500_000) {
+      return c.json({ detail: 'Audio is empty or too large.', max_bytes: 2_500_000 }, 413);
+    }
+    const audioBytes = new Uint8Array(bytes);
+    const detectedType = detectAudioContentType(audioBytes);
+    if (!detectedType || !audioContentMatches(fileType, detectedType)) {
+      await logSecurityEvent(c, 'audio_upload_type_mismatch', userId, {
+        declared_type: fileType,
+        detected_type: detectedType || 'unknown',
+      });
+      return c.json({ detail: 'Audio type does not match the uploaded data.' }, 400);
+    }
+    const moderation = await moderateWallVoiceUpload(c.env, audioBytes);
+    if (!moderation.ok) {
+      return c.json({ detail: moderation.detail, code: moderation.code }, moderation.status as any);
+    }
     const backup = await storeMediaBackup(c, {
       userId,
       mediaKind: 'audio',
@@ -21001,8 +21507,24 @@ api.post('/upload/audio', authMiddleware, async (c) => {
       contentType: fileType,
       bytes,
       originalFilename: file.name || `voice.${contentTypeExtension(fileType, 'm4a')}`,
+      persistLegacyMetadata: false,
     });
     if (!backup) return c.json({ detail: 'Media storage is not configured.' }, 503);
+    orphanedStorageKey = backup.r2_key;
+    orphanedMediaId = backup.id;
+    await supabaseInsertStoredAudioAsset(c, {
+      id: backup.id,
+      userId,
+      storageKey: backup.r2_key,
+      publicUrl: backup.delivery_url,
+      mimeType: fileType,
+      fileSize: backup.size_bytes,
+      sha256Hash: backup.checksum_sha256,
+      originalFilename: file.name || `voice.${contentTypeExtension(fileType, 'm4a')}`,
+      moderation,
+    });
+    orphanedStorageKey = '';
+    orphanedMediaId = '';
 
     return c.json({
       url: backup.delivery_url,
@@ -21013,6 +21535,11 @@ api.post('/upload/audio', authMiddleware, async (c) => {
       checksum_sha256: backup.checksum_sha256,
     });
   } catch (e: any) {
+    if (orphanedStorageKey) await c.env.MEDIA_BACKUP?.delete(orphanedStorageKey).catch(() => {});
+    if (orphanedMediaId) {
+      await supabaseAdminDeleteRows(c, 'app_moderation_results', { media_id: postgrestEqFilter(orphanedMediaId) }).catch(() => {});
+      await supabaseAdminDeleteRows(c, 'app_media_assets', { id: postgrestEqFilter(orphanedMediaId) }).catch(() => {});
+    }
     console.error('Audio upload failed:', getErrorCode(e));
     return c.json({ detail: 'Audio upload failed. Please try again.' }, 500);
   }

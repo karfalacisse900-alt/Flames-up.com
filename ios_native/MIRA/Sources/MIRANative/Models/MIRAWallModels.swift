@@ -98,16 +98,86 @@ public struct MIRAWallNote: Codable, Identifiable, Hashable {
   public let savedByViewer: Bool
   public let authorPreview: MIRAWallAuthorPreview?
 
+  public var noteType: String? = nil
+  public var backBody: String? = nil
+  public var backColorToken: String? = nil
+  public var backStyleToken: String? = nil
+  public var hasBackSide: Bool? = nil
+  public var allowContributions: Bool? = nil
+  public var signatureCount: Int? = nil
+  public var contributionCount: Int? = nil
+  public var signedByViewer: Bool? = nil
+  public var viewerIsAuthor: Bool? = nil
+  public var voice: MIRAWallVoiceMetadata? = nil
+  public var location: MIRAWallLocationPreview? = nil
+
   public var isGhost: Bool { publishingIdentity.lowercased() == "ghost" }
+  public var isVoiceNote: Bool { noteType == "voice" || voice != nil }
+  public var canFlip: Bool { hasBackSide == true && !(backBody?.isEmpty ?? true) }
+  public var resolvedSignatureCount: Int { max(0, signatureCount ?? 0) }
+  public var resolvedContributionCount: Int { max(0, contributionCount ?? replyCount) }
+  public var capabilities: MIRAWallNoteCapabilities {
+    MIRAWallNoteCapabilities(
+      canSign: viewerIsAuthor != true,
+      canCollaborate: allowContributions == true,
+      canManageCollaboration: viewerIsAuthor == true,
+      hasLocation: location != nil,
+      hasBackSide: canFlip,
+      hasVoice: isVoiceNote
+    )
+  }
+
+  public func displayingBackSide() -> MIRAWallNote {
+    guard canFlip, let backBody else { return self }
+    var back = MIRAWallNote(
+      id: id,
+      wallId: wallId,
+      publishingIdentity: publishingIdentity,
+      body: backBody,
+      category: category,
+      colorToken: backColorToken ?? colorToken,
+      styleToken: backStyleToken ?? styleToken,
+      mediaUrl: nil,
+      mediaThumbnailUrl: nil,
+      worldX: worldX,
+      worldY: worldY,
+      width: width,
+      height: height,
+      rotation: rotation,
+      zIndex: zIndex,
+      approximateLocation: approximateLocation,
+      createdAt: createdAt,
+      updatedAt: updatedAt,
+      saveCount: saveCount,
+      reactionCount: reactionCount,
+      replyCount: replyCount,
+      reactedByViewer: reactedByViewer,
+      savedByViewer: savedByViewer,
+      authorPreview: authorPreview
+    )
+    back.noteType = "text"
+    back.hasBackSide = false
+    back.allowContributions = allowContributions
+    back.signatureCount = signatureCount
+    back.contributionCount = contributionCount
+    back.signedByViewer = signedByViewer
+    back.viewerIsAuthor = viewerIsAuthor
+    back.location = location
+    return back
+  }
 
   public func updating(
     reacted: Bool? = nil,
     reactionCount: Int? = nil,
     saved: Bool? = nil,
     saveCount: Int? = nil,
-    replyCount: Int? = nil
+    replyCount: Int? = nil,
+    signed: Bool? = nil,
+    signatureCount: Int? = nil,
+    contributionCount: Int? = nil,
+    allowContributions: Bool? = nil
   ) -> MIRAWallNote {
-    MIRAWallNote(
+    var updated = MIRAWallNote(
       id: id,
       wallId: wallId,
       publishingIdentity: publishingIdentity,
@@ -133,6 +203,49 @@ public struct MIRAWallNote: Codable, Identifiable, Hashable {
       savedByViewer: saved ?? savedByViewer,
       authorPreview: authorPreview
     )
+    updated.noteType = noteType
+    updated.backBody = backBody
+    updated.backColorToken = backColorToken
+    updated.backStyleToken = backStyleToken
+    updated.hasBackSide = hasBackSide
+    updated.allowContributions = allowContributions ?? self.allowContributions
+    updated.signatureCount = signatureCount ?? self.signatureCount
+    updated.contributionCount = contributionCount ?? self.contributionCount
+    updated.signedByViewer = signed ?? signedByViewer
+    updated.viewerIsAuthor = viewerIsAuthor
+    updated.voice = voice
+    updated.location = location
+    return updated
+  }
+}
+
+public struct MIRAWallNoteCapabilities: Hashable {
+  public let canSign: Bool
+  public let canCollaborate: Bool
+  public let canManageCollaboration: Bool
+  public let hasLocation: Bool
+  public let hasBackSide: Bool
+  public let hasVoice: Bool
+}
+
+public struct MIRAWallVoiceMetadata: Codable, Hashable {
+  public let mediaId: String
+  public let url: String?
+  public let durationSeconds: Double
+  public let waveform: [Double]
+}
+
+public struct MIRAWallLocationPreview: Codable, Hashable {
+  public let label: String
+  public let city: String?
+  public let country: String?
+  public let distanceKm: Double?
+
+  public var distanceLabel: String? {
+    guard let distanceKm else { return nil }
+    let miles = distanceKm * 0.621371
+    if miles < 0.1 { return "Nearby" }
+    return String(format: "%.1f mi away", miles)
   }
 }
 
@@ -173,6 +286,56 @@ public struct MIRAWallReplyResponse: Decodable {
   public let replyCount: Int?
 }
 
+public typealias MIRAWallContribution = MIRAWallReply
+
+public struct MIRAWallContributionsResponse: Decodable {
+  public let contributions: [MIRAWallContribution]
+  public let nextAfter: String?
+}
+
+public struct MIRAWallContributionResponse: Decodable {
+  public let contribution: MIRAWallContribution
+  public let contributionCount: Int?
+}
+
+public struct MIRAWallSignatureToggleResponse: Decodable {
+  public let signed: Bool
+  public let signatureCount: Int
+}
+
+public struct MIRAWallSignatureBody: Encodable {
+  public let signed: Bool
+}
+
+public struct MIRAWallSigner: Codable, Identifiable, Hashable {
+  public let userId: String
+  public let username: String?
+  public let displayName: String?
+  public let avatarUrl: String?
+  public let signedAt: String
+
+  public var id: String { userId }
+  public var title: String {
+    let cleanUsername = username?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    if !cleanUsername.isEmpty { return "@\(cleanUsername)" }
+    let cleanName = displayName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return cleanName.isEmpty ? "Captro member" : cleanName
+  }
+}
+
+public struct MIRAWallSignersResponse: Decodable {
+  public let signers: [MIRAWallSigner]
+  public let nextBefore: String?
+}
+
+public struct MIRAWallCollaborationBody: Encodable {
+  public let allowContributions: Bool
+}
+
+public struct MIRAWallCollaborationResponse: Decodable {
+  public let allowContributions: Bool
+}
+
 public struct MIRACreateWallNoteBody: Encodable {
   public let wallId: String
   public let publishingIdentity: String
@@ -188,6 +351,24 @@ public struct MIRACreateWallNoteBody: Encodable {
   public let height: Double
   public let rotation: Double
   public let approximateLocation: String?
+  public let noteType: String?
+  public let backBody: String?
+  public let backColorToken: String?
+  public let backStyleToken: String?
+  public let allowContributions: Bool?
+  public let voiceMediaId: String?
+  public let voiceDurationSeconds: Double?
+  public let voiceWaveform: [Double]?
+  public let location: MIRACreateWallLocationBody?
+}
+
+public struct MIRACreateWallLocationBody: Encodable {
+  public let enabled: Bool
+  public let label: String?
+  public let city: String?
+  public let country: String?
+  public let latitude: Double?
+  public let longitude: Double?
 }
 
 public struct MIRAWallReactionBody: Encodable {

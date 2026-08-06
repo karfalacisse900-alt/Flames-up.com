@@ -1,3 +1,4 @@
+import CoreLocation
 import PhotosUI
 import SwiftUI
 import UIKit
@@ -63,9 +64,23 @@ final class MIRAWallNotesModel: ObservableObject {
     }
   }
 
-  func load(bounds: CGRect, zoom: CGFloat, wallID: String, filter: String, query: String, force: Bool = false) async {
+  func load(
+    bounds: CGRect,
+    zoom: CGFloat,
+    wallID: String,
+    filter: String,
+    query: String,
+    coordinate: CLLocationCoordinate2D? = nil,
+    force: Bool = false
+  ) async {
     let expanded = bounds.insetBy(dx: -max(420, bounds.width * 0.35), dy: -max(600, bounds.height * 0.35))
     let cleanQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+    let coarseCoordinate = coordinate.map { coordinate in
+      CLLocationCoordinate2D(
+        latitude: (coordinate.latitude * 20).rounded() / 20,
+        longitude: (coordinate.longitude * 20).rounded() / 20
+      )
+    }
     let viewSignature = "\(wallID):\(filter):\(cleanQuery)"
     if activeViewSignature != viewSignature {
       notes = []
@@ -80,6 +95,7 @@ final class MIRAWallNotesModel: ObservableObject {
       String(Int(expanded.minX / 320)), String(Int(expanded.maxX / 320)),
       String(Int(expanded.minY / 320)), String(Int(expanded.maxY / 320)),
       String(format: "%.1f", zoom), filter, cleanQuery,
+      coarseCoordinate.map { String(format: "%.2f:%.2f", $0.latitude, $0.longitude) } ?? "no-location",
     ].joined(separator: ":")
     guard force || (signature != lastLoadedSignature && signature != inFlightSignature) else { return }
     inFlightSignature = signature
@@ -103,6 +119,10 @@ final class MIRAWallNotesModel: ObservableObject {
       URLQueryItem(name: "query", value: query),
       URLQueryItem(name: "limit", value: zoom < 0.45 ? "600" : "320"),
     ]
+    if let coordinate = coarseCoordinate {
+      components.queryItems?.append(URLQueryItem(name: "lat", value: String(coordinate.latitude)))
+      components.queryItems?.append(URLQueryItem(name: "lng", value: String(coordinate.longitude)))
+    }
     do {
       let response: MIRAWallNotesResponse = try await api.get(components.string ?? "/wall/notes")
       guard currentWallID == wallID, activeViewSignature == viewSignature else { return }
@@ -176,6 +196,78 @@ final class MIRAWallNotesModel: ObservableObject {
     return response.replies
   }
 
+  func setSigned(note: MIRAWallNote, signed: Bool) async throws -> MIRAWallNote {
+    let optimistic = note.updating(
+      signed: signed,
+      signatureCount: max(0, note.resolvedSignatureCount + (signed ? 1 : -1))
+    )
+    update(optimistic)
+    do {
+      let response: MIRAWallSignatureToggleResponse = try await api.post(
+        "/wall/notes/\(note.id)/signature",
+        body: MIRAWallSignatureBody(signed: signed)
+      )
+      let reconciled = note.updating(signed: response.signed, signatureCount: response.signatureCount)
+      update(reconciled)
+      return reconciled
+    } catch {
+      update(note)
+      throw error
+    }
+  }
+
+  func signers(
+    for note: MIRAWallNote,
+    before: String? = nil,
+    limit: Int = 30
+  ) async throws -> MIRAWallSignersResponse {
+    var components = URLComponents()
+    components.path = "/wall/notes/\(note.id)/signatures"
+    components.queryItems = [
+      URLQueryItem(name: "limit", value: String(max(1, min(100, limit)))),
+    ]
+    if let before, !before.isEmpty {
+      components.queryItems?.append(URLQueryItem(name: "before", value: before))
+    }
+    return try await api.get(components.string ?? "/wall/notes/\(note.id)/signatures?limit=30")
+  }
+
+  func contributions(
+    for note: MIRAWallNote,
+    after: String? = nil,
+    limit: Int = 30
+  ) async throws -> MIRAWallContributionsResponse {
+    var components = URLComponents()
+    components.path = "/wall/notes/\(note.id)/contributions"
+    components.queryItems = [
+      URLQueryItem(name: "limit", value: String(max(1, min(100, limit)))),
+    ]
+    if let after, !after.isEmpty {
+      components.queryItems?.append(URLQueryItem(name: "after", value: after))
+    }
+    return try await api.get(components.string ?? "/wall/notes/\(note.id)/contributions?limit=30")
+  }
+
+  func addContribution(note: MIRAWallNote, body: String, identity: String) async throws -> MIRAWallContribution {
+    let response: MIRAWallContributionResponse = try await api.post(
+      "/wall/notes/\(note.id)/contributions",
+      body: MIRAWallReplyBody(body: body, publishingIdentity: identity)
+    )
+    let count = response.contributionCount ?? note.resolvedContributionCount + 1
+    update(note.updating(replyCount: count, contributionCount: count))
+    return response.contribution
+  }
+
+  func setCollaboration(note: MIRAWallNote, allowed: Bool) async throws -> MIRAWallNote {
+    let response: MIRAWallCollaborationResponse = try await api.patch(
+      "/wall/notes/\(note.id)/collaboration",
+      body: MIRAWallCollaborationBody(allowContributions: allowed)
+    )
+    let updated = note.updating(allowContributions: response.allowContributions)
+    update(updated)
+    return updated
+  }
+
   private func merge(_ incoming: [MIRAWallNote], around bounds: CGRect) {
     var byID = Dictionary(uniqueKeysWithValues: notes.map { ($0.id, $0) })
     incoming.forEach { note in
@@ -241,6 +333,7 @@ public struct WallOfNotesNativeView: View {
   private let api: MIRAAPIClient
   private let storiesModel: DiscoverNativeModel
   @StateObject private var model: MIRAWallNotesModel
+  @StateObject private var nearbyLocation = MIRAWallApproximateLocationProvider()
   @State private var camera = MIRAWallCamera()
   @State private var panStart: MIRAWallCamera?
   @State private var magnifyStart: MIRAWallCamera?
@@ -327,12 +420,16 @@ public struct WallOfNotesNativeView: View {
             zoom: camera.scale,
             wallID: selectedWall.id,
             filter: selectedFilter,
-            query: query
+            query: query,
+            coordinate: selectedWall == .nearby ? nearbyLocation.coordinate : nil
           )
         }
         .task(id: selectedWall.id) {
           initialFrameWallID = nil
           model.selectWall(selectedWall.id)
+          if selectedWall == .nearby, nearbyLocation.coordinate == nil {
+            nearbyLocation.resolve()
+          }
           await model.loadOverview(wallID: selectedWall.id, force: true)
           guard !Task.isCancelled else { return }
           if let overview = model.overview {
@@ -352,6 +449,19 @@ public struct WallOfNotesNativeView: View {
             wallID: selectedWall.id,
             filter: selectedFilter,
             query: query,
+            coordinate: selectedWall == .nearby ? nearbyLocation.coordinate : nil,
+            force: true
+          )
+        }
+        .task(id: nearbyLocationLoadKey) {
+          guard selectedWall == .nearby, nearbyLocation.coordinate != nil else { return }
+          await model.load(
+            bounds: bounds,
+            zoom: camera.scale,
+            wallID: selectedWall.id,
+            filter: selectedFilter,
+            query: query,
+            coordinate: nearbyLocation.coordinate,
             force: true
           )
         }
@@ -646,6 +756,7 @@ public struct WallOfNotesNativeView: View {
             wallID: selectedWall.id,
             filter: selectedFilter,
             query: query,
+            coordinate: selectedWall == .nearby ? nearbyLocation.coordinate : nil,
             force: true
           )
         }
@@ -729,7 +840,15 @@ public struct WallOfNotesNativeView: View {
   private func loadKey(bounds: CGRect) -> String {
     [
       Int(bounds.midX / 260), Int(bounds.midY / 260), Int(camera.scale * 10),
-    ].map(String.init).joined(separator: ":") + ":\(selectedWall.id):\(selectedFilter):\(query)"
+    ].map(String.init).joined(separator: ":")
+      + ":\(selectedWall.id):\(selectedFilter):\(query):\(nearbyLocationLoadKey)"
+  }
+
+  private var nearbyLocationLoadKey: String {
+    guard selectedWall == .nearby, let coordinate = nearbyLocation.coordinate else {
+      return selectedWall == .nearby ? "nearby-pending" : "not-nearby"
+    }
+    return String(format: "%.2f:%.2f", coordinate.latitude, coordinate.longitude)
   }
 
   private var wallNoteCount: Int { model.overview?.totalCount ?? model.notes.count }
@@ -980,21 +1099,38 @@ private struct MIRACreateWallNoteView: View {
   let onPublish: (MIRACreateWallNoteBody) async throws -> MIRAWallNote
 
   @Environment(\.dismiss) private var dismiss
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @StateObject private var voiceRecorder = MIRAWallVoiceRecorder()
+  @StateObject private var locationProvider = MIRAWallApproximateLocationProvider()
+  @ObservedObject private var voicePlayback = MIRAWallVoicePlaybackController.shared
   @State private var bodyText = ""
+  @State private var composerMode = "text"
   @State private var identity = "ghost"
   @State private var colorToken = "butter"
   @State private var styleToken = "sticky"
   @State private var category = ""
-  @State private var approximateLocation = ""
+  @State private var hasBackSide = false
+  @State private var backBodyText = ""
+  @State private var backColorToken = "cream"
+  @State private var backStyleToken = "minimal"
+  @State private var allowContributions = false
+  @State private var shareApproximateLocation = false
   @State private var selectedPhotoItem: PhotosPickerItem?
   @State private var selectedPhotoMedia: MIRAPickedMedia?
   @State private var selectedPhotoImage: UIImage?
   @State private var uploadedPhotoResult: MIRAMediaUploadResult?
+  @State private var uploadedVoiceResult: MIRAMediaUploadResult?
   @State private var isLoadingPhoto = false
   @State private var isPublishing = false
   @State private var publishStatus = ""
   @State private var errorMessage: String?
   @FocusState private var isTextFocused: Bool
+
+  private let composerModes: [(String, String, String)] = [
+    ("text", "Text", "note.text"),
+    ("photo", "Photo", "photo"),
+    ("voice", "Voice", "waveform"),
+  ]
 
   private let colors = ["butter", "cream", "rose", "sky", "mint", "peach", "paper"]
   private let styles: [(String, String)] = [
@@ -1015,8 +1151,29 @@ private struct MIRACreateWallNoteView: View {
         VStack(spacing: 22) {
           livePreview
 
-          settingSection(title: "PHOTO (OPTIONAL)") {
-            HStack(spacing: 10) {
+          settingSection(title: "NOTE TYPE") {
+            HStack(spacing: 8) {
+              ForEach(composerModes, id: \.0) { mode in
+                Button {
+                  selectComposerMode(mode.0)
+                } label: {
+                  Label(mode.1, systemImage: mode.2)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(composerMode == mode.0 ? Color.white : MIRATheme.Color.textPrimary)
+                    .frame(maxWidth: .infinity, minHeight: 42)
+                    .background(
+                      composerMode == mode.0 ? MIRATheme.Color.forest : MIRATheme.Color.surfaceSoft,
+                      in: Capsule()
+                    )
+                }
+                .buttonStyle(.plain)
+              }
+            }
+          }
+
+          if composerMode == "photo" {
+            settingSection(title: "PHOTO") {
+              HStack(spacing: 10) {
               PhotosPicker(
                 selection: $selectedPhotoItem,
                 matching: .images,
@@ -1056,13 +1213,20 @@ private struct MIRACreateWallNoteView: View {
                 .disabled(isPublishing)
                 .accessibilityLabel("Remove photo")
               }
-            }
+              }
 
-            Text(selectedPhotoImage == nil
-              ? "Choose one photo, then pair it with any Captro paper style."
-              : "Your photo and caption will use the paper style you choose below.")
-              .font(.system(size: 12, weight: .medium))
-              .foregroundStyle(MIRATheme.Color.textSecondary)
+              Text(selectedPhotoImage == nil
+                ? "Choose one photo, then pair it with any Captro paper style."
+                : "Your photo and caption will use the paper style you choose below.")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(MIRATheme.Color.textSecondary)
+            }
+          }
+
+          if composerMode == "voice" {
+            settingSection(title: "VOICE NOTE") {
+              voiceRecordingControls
+            }
           }
 
           VStack(alignment: .leading, spacing: 9) {
@@ -1078,7 +1242,7 @@ private struct MIRACreateWallNoteView: View {
 
             ZStack(alignment: .topLeading) {
               if bodyText.isEmpty {
-                Text(selectedPhotoImage == nil ? "Write your note..." : "Add a caption for your photo...")
+                Text(notePlaceholder)
                   .foregroundStyle(MIRATheme.Color.textMuted)
                   .padding(.horizontal, 5)
                   .padding(.vertical, 8)
@@ -1122,6 +1286,61 @@ private struct MIRACreateWallNoteView: View {
             }
           }
 
+          if composerMode != "voice" {
+            settingSection(title: "BACK SIDE") {
+              Toggle("Add a back side", isOn: $hasBackSide)
+                .font(.system(size: 14, weight: .semibold))
+                .tint(MIRATheme.Color.forest)
+
+              if hasBackSide {
+                VStack(alignment: .leading, spacing: 10) {
+                  ZStack(alignment: .topLeading) {
+                    if cleanBackBody.isEmpty {
+                      Text("Write what is hidden on the back...")
+                        .foregroundStyle(MIRATheme.Color.textMuted)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 8)
+                    }
+                    TextEditor(text: $backBodyText)
+                      .focused($isTextFocused)
+                      .scrollContentBackground(.hidden)
+                      .frame(minHeight: 94)
+                      .onChange(of: backBodyText) { _, value in
+                        if value.count > 300 { backBodyText = String(value.prefix(300)) }
+                      }
+                  }
+                  .padding(12)
+                  .background(MIRATheme.Color.surfaceSoft, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+
+                  ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                      ForEach(colors, id: \.self) { token in
+                        Button { backColorToken = token } label: {
+                          Circle()
+                            .fill(MIRAWallPaperColor.color(for: token))
+                            .frame(width: 28, height: 28)
+                            .overlay(Circle().stroke(Color.black.opacity(backColorToken == token ? 0.72 : 0.10), lineWidth: backColorToken == token ? 2 : 1))
+                        }
+                        .buttonStyle(.plain)
+                      }
+                    }
+                  }
+
+                  ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                      ForEach(styles, id: \.0) { item in
+                        choiceChip(item.1, selected: backStyleToken == item.0) {
+                          backStyleToken = item.0
+                        }
+                      }
+                    }
+                  }
+                }
+                .transition(.opacity.combined(with: .move(edge: .top)))
+              }
+            }
+          }
+
           settingSection(title: "CATEGORY") {
             ScrollView(.horizontal, showsIndicators: false) {
               HStack(spacing: 8) {
@@ -1143,13 +1362,39 @@ private struct MIRACreateWallNoteView: View {
             }
           }
 
-          settingSection(title: "APPROXIMATE LOCATION") {
-            TextField("Neighborhood or city (optional)", text: $approximateLocation)
-              .textContentType(.addressCity)
-              .textInputAutocapitalization(.words)
-              .padding(.horizontal, 14)
-              .frame(height: 48)
-              .background(MIRATheme.Color.surfaceSoft, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+          settingSection(title: "CONTRIBUTIONS") {
+            Toggle("Allow people to add to this note", isOn: $allowContributions)
+              .font(.system(size: 14, weight: .semibold))
+              .tint(MIRATheme.Color.forest)
+            Text("Contributions appear as small physical pieces in the note detail, not as a public comment thread.")
+              .font(.system(size: 12))
+              .foregroundStyle(MIRATheme.Color.textSecondary)
+          }
+
+          settingSection(title: "FOUND NEARBY") {
+            Toggle("Attach my approximate area", isOn: $shareApproximateLocation)
+              .font(.system(size: 14, weight: .semibold))
+              .tint(MIRATheme.Color.forest)
+              .onChange(of: shareApproximateLocation) { _, enabled in
+                if enabled { locationProvider.resolve() } else { locationProvider.clear() }
+              }
+
+            if shareApproximateLocation {
+              HStack(spacing: 9) {
+                if locationProvider.isResolving {
+                  ProgressView().controlSize(.small)
+                  Text("Finding a broad area...")
+                } else if let label = locationProvider.label {
+                  Image(systemName: "location.fill")
+                  Text(label)
+                } else {
+                  Image(systemName: "location.slash")
+                  Text(locationProvider.errorMessage ?? "No area attached. Posting still works.")
+                }
+              }
+              .font(.system(size: 12, weight: .medium))
+              .foregroundStyle(MIRATheme.Color.textSecondary)
+            }
           }
 
           if let errorMessage {
@@ -1172,8 +1417,8 @@ private struct MIRACreateWallNoteView: View {
             .background(MIRATheme.Color.forest, in: Capsule())
           }
           .buttonStyle(.miraPress)
-          .disabled(cleanBody.isEmpty || isPublishing || isLoadingPhoto)
-          .opacity(cleanBody.isEmpty ? 0.45 : 1)
+          .disabled(!canPublish || isPublishing || isLoadingPhoto)
+          .opacity(canPublish ? 1 : 0.45)
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 18)
@@ -1185,6 +1430,7 @@ private struct MIRACreateWallNoteView: View {
       .toolbar {
         ToolbarItem(placement: .cancellationAction) {
           Button("Cancel") { dismiss() }
+            .disabled(isPublishing)
         }
         ToolbarItemGroup(placement: .keyboard) {
           Spacer()
@@ -1195,21 +1441,104 @@ private struct MIRACreateWallNoteView: View {
         guard let item else { return }
         Task { await loadSelectedPhoto(item) }
       }
+      .onDisappear {
+        voicePlayback.stop()
+        if !isPublishing { voiceRecorder.cancel(removeFile: true) }
+      }
     }
+    .interactiveDismissDisabled(isPublishing)
+  }
+
+  @ViewBuilder
+  private var voiceRecordingControls: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      HStack(spacing: 12) {
+        Image(systemName: voiceStateIcon)
+          .font(.system(size: 18, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.forest)
+          .frame(width: 42, height: 42)
+          .background(MIRATheme.Color.surfaceSoft, in: Circle())
+
+        MIRAWallWaveformView(
+          samples: voiceRecorder.waveform,
+          progress: voicePreviewProgress,
+          tint: MIRATheme.Color.forest
+        )
+        .frame(height: 34)
+
+        Text(formatDuration(voiceRecorder.duration))
+          .font(.system(size: 12, weight: .bold, design: .monospaced))
+          .foregroundStyle(MIRATheme.Color.textSecondary)
+          .frame(minWidth: 38, alignment: .trailing)
+      }
+
+      HStack(spacing: 8) {
+        switch voiceRecorder.state {
+        case .idle, .denied, .failed:
+          voiceControlButton("Record", icon: "mic.fill") {
+            uploadedVoiceResult = nil
+            Task { await voiceRecorder.start() }
+          }
+        case .recording:
+          voiceControlButton("Pause", icon: "pause.fill") { voiceRecorder.pause() }
+          voiceControlButton("Finish", icon: "checkmark") { voiceRecorder.finish() }
+          voiceControlButton("Cancel", icon: "xmark", destructive: true) {
+            uploadedVoiceResult = nil
+            voiceRecorder.cancel()
+          }
+        case .paused:
+          voiceControlButton("Resume", icon: "mic.fill") { voiceRecorder.resume() }
+          voiceControlButton("Finish", icon: "checkmark") { voiceRecorder.finish() }
+          voiceControlButton("Cancel", icon: "xmark", destructive: true) {
+            uploadedVoiceResult = nil
+            voiceRecorder.cancel()
+          }
+        case .ready:
+          voiceControlButton(voicePreviewIsPlaying ? "Pause" : "Preview", icon: voicePreviewIsPlaying ? "pause.fill" : "play.fill") {
+            guard let url = voiceRecorder.previewURL() else { return }
+            voicePlayback.toggle(id: "wall-composer-preview", url: url)
+          }
+          voiceControlButton("Re-record", icon: "arrow.counterclockwise") {
+            uploadedVoiceResult = nil
+            voicePlayback.stop()
+            voiceRecorder.cancel()
+            Task { await voiceRecorder.start() }
+          }
+        }
+      }
+
+      Text(voiceStateMessage)
+        .font(.system(size: 12, weight: .medium))
+        .foregroundStyle(voiceStateIsError ? Color.red : MIRATheme.Color.textSecondary)
+
+      if case .denied = voiceRecorder.state {
+        Button("Open Settings") {
+          guard let settingsURL = URL(string: UIApplication.openSettingsURLString) else { return }
+          UIApplication.shared.open(settingsURL)
+        }
+        .font(.system(size: 13, weight: .semibold))
+        .foregroundStyle(MIRATheme.Color.forest)
+        .frame(minHeight: 44)
+        .accessibilityHint("Opens Captro settings so microphone access can be enabled.")
+      }
+    }
+    .padding(14)
+    .background(MIRATheme.Color.surfaceSoft, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
   }
 
   private var livePreview: some View {
-    let hasPhoto = selectedPhotoImage != nil
-    let previewStyleToken = styleToken
+    let hasPhoto = composerMode == "photo" && selectedPhotoImage != nil
+    let hasVoice = composerMode == "voice"
+    let previewStyleToken = hasVoice ? "receipt" : styleToken
     let previewText = cleanBody.isEmpty
-      ? (hasPhoto ? "Add a thought below your photo." : "What do you want to leave on the wall?")
+      ? (hasPhoto ? "Add a thought below your photo." : (hasVoice ? "Something I needed to say." : "What do you want to leave on the wall?"))
       : cleanBody
     let baseSize = MIRAWallNotePresentationResolver.recommendedSize(
       styleToken: previewStyleToken,
       text: previewText,
       hasMedia: hasPhoto
     )
-    let preview = MIRAWallNote(
+    var preview = MIRAWallNote(
       id: "preview-\(previewStyleToken)", wallId: wall.id, publishingIdentity: identity,
       body: previewText,
       category: category.isEmpty ? nil : category, colorToken: colorToken, styleToken: previewStyleToken,
@@ -1218,6 +1547,20 @@ private struct MIRACreateWallNoteView: View {
       rotation: 0, zIndex: 0, approximateLocation: nil, createdAt: "", updatedAt: nil,
       saveCount: 0, reactionCount: 0, replyCount: 0, reactedByViewer: false, savedByViewer: false, authorPreview: nil
     )
+    preview.noteType = hasVoice ? "voice" : (hasPhoto ? "photo" : "text")
+    preview.hasBackSide = hasBackSide && !cleanBackBody.isEmpty
+    preview.backBody = preview.hasBackSide == true ? cleanBackBody : nil
+    preview.backColorToken = preview.hasBackSide == true ? backColorToken : nil
+    preview.backStyleToken = preview.hasBackSide == true ? backStyleToken : nil
+    preview.allowContributions = allowContributions
+    if hasVoice {
+      preview.voice = MIRAWallVoiceMetadata(
+        mediaId: "preview-voice",
+        url: voiceRecorder.previewURL()?.absoluteString,
+        durationSeconds: max(voiceRecorder.duration, 0.25),
+        waveform: voiceRecorder.waveform
+      )
+    }
     let renderedSize = MIRAWallNotePresentationResolver.resolve(preview, hasLocalMedia: hasPhoto).size
     let previewScale = min(1.08, min(258 / renderedSize.width, 286 / renderedSize.height))
     return MIRAWallNoteRenderer(
@@ -1230,12 +1573,101 @@ private struct MIRACreateWallNoteView: View {
       .scaleEffect(previewScale)
       .frame(width: renderedSize.width * previewScale, height: renderedSize.height * previewScale)
       .opacity(cleanBody.isEmpty ? 0.72 : 1)
-      .animation(CaptroMotion.smallMenuAnimation(reduceMotion: false), value: previewStyleToken)
-      .animation(CaptroMotion.mediaFadeAnimation(reduceMotion: false), value: hasPhoto)
+      .animation(CaptroMotion.smallMenuAnimation(reduceMotion: reduceMotion), value: previewStyleToken)
+      .animation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion), value: hasPhoto)
       .padding(.vertical, 8)
   }
 
   private var cleanBody: String { bodyText.trimmingCharacters(in: .whitespacesAndNewlines) }
+  private var cleanBackBody: String { backBodyText.trimmingCharacters(in: .whitespacesAndNewlines) }
+  private var notePlaceholder: String {
+    switch composerMode {
+    case "photo": "Add a caption for your photo..."
+    case "voice": "Add a short written context (optional)..."
+    default: "Write your note..."
+    }
+  }
+
+  private var canPublish: Bool {
+    if hasBackSide && cleanBackBody.isEmpty { return false }
+    switch composerMode {
+    case "voice":
+      if case .ready = voiceRecorder.state { return true }
+      return false
+    case "photo":
+      return selectedPhotoMedia != nil && !cleanBody.isEmpty
+    default:
+      return !cleanBody.isEmpty
+    }
+  }
+
+  private var voicePreviewIsPlaying: Bool {
+    voicePlayback.activeID == "wall-composer-preview" && voicePlayback.isPlaying
+  }
+
+  private var voicePreviewProgress: Double {
+    voicePlayback.activeID == "wall-composer-preview" ? voicePlayback.progress : 0
+  }
+
+  private var voiceStateIcon: String {
+    switch voiceRecorder.state {
+    case .recording: "waveform.badge.mic"
+    case .paused: "pause.circle.fill"
+    case .ready: "checkmark.circle.fill"
+    case .denied, .failed: "exclamationmark.triangle.fill"
+    case .idle: "mic.fill"
+    }
+  }
+
+  private var voiceStateMessage: String {
+    switch voiceRecorder.state {
+    case .idle: "Record up to 60 seconds. You can preview before releasing it."
+    case .recording: "Recording..."
+    case .paused: "Recording paused. Resume or finish when ready."
+    case .ready: "Ready to preview or release."
+    case .denied: "Microphone access is off. Enable it in Settings to record a voice note."
+    case .failed(let message): message
+    }
+  }
+
+  private var voiceStateIsError: Bool {
+    if case .denied = voiceRecorder.state { return true }
+    if case .failed = voiceRecorder.state { return true }
+    return false
+  }
+
+  private func voiceControlButton(_ title: String, icon: String, destructive: Bool = false, action: @escaping () -> Void) -> some View {
+    Button(action: action) {
+      Label(title, systemImage: icon)
+        .font(.system(size: 12, weight: .bold))
+        .foregroundStyle(destructive ? Color.red : MIRATheme.Color.textPrimary)
+        .padding(.horizontal, 11)
+        .frame(minHeight: 36)
+        .background(MIRATheme.Color.surface, in: Capsule())
+    }
+    .buttonStyle(.miraPress)
+  }
+
+  private func formatDuration(_ seconds: TimeInterval) -> String {
+    let total = max(0, Int(seconds.rounded(.down)))
+    return String(format: "%d:%02d", total / 60, total % 60)
+  }
+
+  private func selectComposerMode(_ mode: String) {
+    guard composerMode != mode, !isPublishing else { return }
+    voicePlayback.stop()
+    if mode == "voice" {
+      removeSelectedPhoto()
+      hasBackSide = false
+      backBodyText = ""
+      styleToken = "receipt"
+    } else if composerMode == "voice" {
+      uploadedVoiceResult = nil
+      voiceRecorder.cancel()
+      if styleToken == "receipt" { styleToken = "sticky" }
+    }
+    composerMode = mode
+  }
 
   private func settingSection<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {
     VStack(alignment: .leading, spacing: 10) {
@@ -1306,6 +1738,7 @@ private struct MIRACreateWallNoteView: View {
       )
       selectedPhotoImage = image
       uploadedPhotoResult = nil
+      composerMode = "photo"
     } catch {
       selectedPhotoItem = nil
       selectedPhotoMedia = nil
@@ -1332,37 +1765,59 @@ private struct MIRACreateWallNoteView: View {
 
   private func publish() {
     let text = cleanBody
-    guard !text.isEmpty, !isPublishing, !isLoadingPhoto else { return }
+    guard canPublish, !isPublishing, !isLoadingPhoto else { return }
 
-    let selectedPhoto = selectedPhotoMedia
-    let existingUpload = uploadedPhotoResult
+    let selectedMode = composerMode
+    let selectedPhoto = selectedMode == "photo" ? selectedPhotoMedia : nil
+    let existingPhotoUpload = selectedMode == "photo" ? uploadedPhotoResult : nil
+    let existingVoiceUpload = selectedMode == "voice" ? uploadedVoiceResult : nil
     let selectedIdentity = identity
     let selectedCategory = category
     let selectedColor = colorToken
-    let selectedStyle = styleToken
-    let location = approximateLocation.trimmingCharacters(in: .whitespacesAndNewlines)
+    let selectedStyle = selectedMode == "voice" ? "receipt" : styleToken
+    let selectedBackBody = hasBackSide && selectedMode != "voice" ? cleanBackBody : ""
+    let selectedBackColor = backColorToken
+    let selectedBackStyle = backStyleToken
+    let selectedAllowContributions = allowContributions
+    let selectedLocation = shareApproximateLocation ? locationProvider.coordinate : nil
+    let selectedLocationLabel = shareApproximateLocation ? locationProvider.label : nil
+    let selectedLocationCity = shareApproximateLocation ? locationProvider.city : nil
+    let selectedLocationCountry = shareApproximateLocation ? locationProvider.country : nil
 
     isPublishing = true
-    publishStatus = selectedPhoto == nil ? "Placing..." : "Checking photo..."
+    publishStatus = selectedMode == "voice" ? "Uploading voice..." : (selectedPhoto == nil ? "Placing..." : "Checking photo...")
     errorMessage = nil
 
     Task {
       do {
-        var mediaResult = existingUpload
-        if mediaResult == nil, let selectedPhoto {
+        var photoResult = existingPhotoUpload
+        if photoResult == nil, let selectedPhoto {
           let approvedUpload = try await MIRAMediaUploadService(api: api).uploadResult(selectedPhoto)
-          mediaResult = approvedUpload
+          photoResult = approvedUpload
           await MainActor.run {
             uploadedPhotoResult = approvedUpload
             publishStatus = "Placing..."
           }
         }
 
-        let hasPhoto = mediaResult != nil
-        let finalStyle = selectedStyle
+        var voiceResult = existingVoiceUpload
+        if selectedMode == "voice", voiceResult == nil {
+          let data = try voiceRecorder.recordedData()
+          let uploaded = try await MIRAMediaUploadService(api: api).uploadAudioResult(
+            data: data,
+            fileName: "wall-voice-\(UUID().uuidString).m4a"
+          )
+          voiceResult = uploaded
+          await MainActor.run {
+            uploadedVoiceResult = uploaded
+            publishStatus = "Placing..."
+          }
+        }
+
+        let hasPhoto = photoResult != nil
         let noteSize = MIRAWallNotePresentationResolver.recommendedSize(
-          styleToken: finalStyle,
-          text: text,
+          styleToken: selectedStyle,
+          text: text.isEmpty ? "Voice note" : text,
           hasMedia: hasPhoto
         )
         let noteWidth = Double(noteSize.width)
@@ -1373,18 +1828,40 @@ private struct MIRACreateWallNoteView: View {
           body: text,
           category: selectedCategory.isEmpty ? nil : selectedCategory,
           colorToken: selectedColor,
-          styleToken: finalStyle,
-          mediaAssetId: mediaResult?.mediaAssetId,
-          mediaUrl: mediaResult?.url,
+          styleToken: selectedStyle,
+          mediaAssetId: photoResult?.mediaAssetId,
+          mediaUrl: photoResult?.url,
           worldX: Double(camera.center.x) - noteWidth * 0.5,
           worldY: Double(camera.center.y) - noteHeight * 0.5,
           width: noteWidth,
           height: noteHeight,
           rotation: 0,
-          approximateLocation: location.isEmpty ? nil : location
+          approximateLocation: selectedLocationLabel,
+          noteType: selectedMode,
+          backBody: selectedBackBody.isEmpty ? nil : selectedBackBody,
+          backColorToken: selectedBackBody.isEmpty ? nil : selectedBackColor,
+          backStyleToken: selectedBackBody.isEmpty ? nil : selectedBackStyle,
+          allowContributions: selectedAllowContributions,
+          voiceMediaId: voiceResult?.mediaAssetId,
+          voiceDurationSeconds: selectedMode == "voice" ? voiceRecorder.duration : nil,
+          voiceWaveform: selectedMode == "voice" ? voiceRecorder.waveform : nil,
+          location: selectedLocation.map { coordinate in
+            MIRACreateWallLocationBody(
+              enabled: true,
+              label: selectedLocationLabel,
+              city: selectedLocationCity,
+              country: selectedLocationCountry,
+              latitude: coordinate.latitude,
+              longitude: coordinate.longitude
+            )
+          }
         )
         _ = try await onPublish(request)
-        await MainActor.run { dismiss() }
+        await MainActor.run {
+          voicePlayback.stop()
+          voiceRecorder.cancel(removeFile: true)
+          dismiss()
+        }
       } catch {
         await MainActor.run {
           isPublishing = false
@@ -1397,20 +1874,30 @@ private struct MIRACreateWallNoteView: View {
 }
 
 private struct MIRAWallNoteDetailView: View {
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var note: MIRAWallNote
+  @ObservedObject private var voicePlayback = MIRAWallVoicePlaybackController.shared
   let api: MIRAAPIClient
   @ObservedObject var model: MIRAWallNotesModel
   let transitionNamespace: Namespace.ID
   let onChanged: (MIRAWallNote) -> Void
   let onClose: () -> Void
 
-  @State private var replies: [MIRAWallReply] = []
+  @State private var contributions: [MIRAWallContribution] = []
+  @State private var signers: [MIRAWallSigner] = []
   @State private var replyText = ""
   @State private var replyAsGhost = false
-  @State private var isLoadingReplies = false
+  @State private var isLoadingContributions = false
+  @State private var isLoadingSigners = false
+  @State private var contributionsNextAfter: String?
+  @State private var signersNextBefore: String?
   @State private var isMutating = false
   @State private var errorMessage: String?
-  @State private var showReport = false
+  @State private var reportTarget: MIRAReportTarget?
+  @State private var showSigners = false
+  @State private var displaysBackSide = false
+  @State private var flipAngle: Double = 0
+  @State private var isFlipping = false
   @FocusState private var replyFocused: Bool
 
   init(
@@ -1438,16 +1925,15 @@ private struct MIRAWallNoteDetailView: View {
 
         ScrollView {
           VStack(spacing: 18) {
-            MIRAWallNoteRenderer(note: note, zoom: 1.12, isFocused: true)
-              .frame(width: detailVisualSize.width, height: detailVisualSize.height)
-              .matchedGeometryEffect(
-                id: "wall-note-\(note.id)",
-                in: transitionNamespace,
-                isSource: false
-              )
-              .rotationEffect(.degrees(detailRotation))
+            flippableNote
+
+            if note.capabilities.hasVoice {
+              voicePlaybackPanel
+            }
 
             authorMetadata
+            locationMetadata
+            signatureSummary
             actionRow
 
             if let errorMessage {
@@ -1458,8 +1944,9 @@ private struct MIRAWallNoteDetailView: View {
             }
 
             Divider().opacity(0.45)
-            replyComposer
-            repliesSection
+            collaborationControls
+            contributionComposer
+            contributionsSection
           }
           .padding(18)
         }
@@ -1473,19 +1960,21 @@ private struct MIRAWallNoteDetailView: View {
           Button("Done") { replyFocused = false }
         }
       }
-      .task { await loadReplies() }
-      .sheet(isPresented: $showReport) {
+      .task { await loadContributions(reset: true) }
+      .onDisappear { voicePlayback.stop() }
+      .sheet(item: $reportTarget) { target in
         MIRAReportSheet(
-          target: MIRAReportTarget(
-            targetType: "wall_note", targetId: note.id,
-            ownerUserId: note.authorPreview?.userId,
-            title: "Wall note", subtitle: String(note.body.prefix(90))
-          ),
+          target: target,
           api: api,
-          onSubmitted: { _ in showReport = false },
-          onClose: { showReport = false }
+          onSubmitted: { _ in reportTarget = nil },
+          onClose: { reportTarget = nil }
         )
         .presentationDetents([.large])
+      }
+      .sheet(isPresented: $showSigners) {
+        signersSheet
+          .presentationDetents([.medium, .large])
+          .presentationCornerRadius(28)
       }
     }
     .frame(maxWidth: 390, maxHeight: 720)
@@ -1511,6 +2000,132 @@ private struct MIRAWallNoteDetailView: View {
     return (note.rotation + presentation.microRotation) * 0.10
   }
 
+  private var displayedNote: MIRAWallNote {
+    displaysBackSide ? note.displayingBackSide() : note
+  }
+
+  private var flippableNote: some View {
+    MIRAWallNoteRenderer(note: displayedNote, zoom: 1.12, isFocused: true)
+      .frame(width: detailVisualSize.width, height: detailVisualSize.height)
+      .matchedGeometryEffect(
+        id: "wall-note-\(note.id)",
+        in: transitionNamespace,
+        isSource: false
+      )
+      .rotationEffect(.degrees(detailRotation))
+      .rotation3DEffect(.degrees(flipAngle), axis: (x: 0, y: 1, z: 0), perspective: 0.72)
+      .contentShape(Rectangle())
+      .onTapGesture {
+        guard note.canFlip else { return }
+        flipNote()
+      }
+      .overlay(alignment: .bottom) {
+        if note.canFlip {
+          Label(displaysBackSide ? "Front" : "Flip", systemImage: "arrow.triangle.2.circlepath")
+            .font(.system(size: 11, weight: .bold))
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+            .padding(.horizontal, 10)
+            .frame(height: 28)
+            .background(MIRATheme.Color.surface.opacity(0.88), in: Capsule())
+            .padding(.bottom, 10)
+            .allowsHitTesting(false)
+        }
+      }
+      .accessibilityHint(note.canFlip ? "Double tap to show the other side." : "")
+  }
+
+  private var voicePlaybackPanel: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      HStack(spacing: 12) {
+        Button {
+          guard let url = resolvedVoiceURL else {
+            errorMessage = "This voice note is unavailable."
+            return
+          }
+          voicePlayback.toggle(id: note.id, url: url)
+        } label: {
+          Image(systemName: voiceIsPlaying ? "pause.fill" : "play.fill")
+            .font(.system(size: 17, weight: .bold))
+            .foregroundStyle(.white)
+            .frame(width: 44, height: 44)
+            .background(MIRATheme.Color.forest, in: Circle())
+        }
+        .buttonStyle(.miraPress)
+        .accessibilityLabel(voiceIsPlaying ? "Pause voice note" : "Play voice note")
+
+        VStack(alignment: .leading, spacing: 6) {
+          MIRAWallWaveformView(
+            samples: note.voice?.waveform ?? [],
+            progress: voicePlayback.activeID == note.id ? voicePlayback.progress : 0,
+            tint: MIRATheme.Color.forest
+          )
+          .frame(height: 30)
+          HStack {
+            Text(formatDuration(voicePlayback.activeID == note.id ? voicePlayback.elapsed : 0))
+            Spacer()
+            Text(formatDuration(note.voice?.durationSeconds ?? 0))
+          }
+          .font(.system(size: 11, weight: .semibold, design: .monospaced))
+          .foregroundStyle(MIRATheme.Color.textSecondary)
+        }
+      }
+
+      if voicePlayback.activeID == note.id, let playbackError = voicePlayback.errorMessage {
+        Text(playbackError)
+          .font(.system(size: 12, weight: .medium))
+          .foregroundStyle(Color.red)
+          .accessibilityLabel("Voice note error. \(playbackError)")
+      }
+    }
+    .padding(14)
+    .background(MIRATheme.Color.surfaceSoft, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+  }
+
+  @ViewBuilder
+  private var locationMetadata: some View {
+    if let location = note.location {
+      HStack(spacing: 8) {
+        Image(systemName: "location.fill")
+        Text(location.label)
+        if let distance = location.distanceLabel {
+          Text("· \(distance)")
+            .foregroundStyle(MIRATheme.Color.textSecondary)
+        }
+        Spacer()
+      }
+      .font(.system(size: 13, weight: .semibold))
+      .foregroundStyle(MIRATheme.Color.forest)
+      .padding(.horizontal, 12)
+      .frame(minHeight: 40)
+      .background(MIRATheme.Color.surfaceSoft, in: Capsule())
+      .accessibilityElement(children: .combine)
+    }
+  }
+
+  private var signatureSummary: some View {
+    Button {
+      guard note.resolvedSignatureCount > 0 else { return }
+      Task { await openSigners() }
+    } label: {
+      HStack(spacing: 8) {
+        Image(systemName: "pencil.line")
+        Text(note.resolvedSignatureCount == 1 ? "Signed by 1 person" : "Signed by \(note.resolvedSignatureCount) people")
+          .font(.system(size: 13, weight: .bold, design: .serif))
+        Spacer()
+        if note.resolvedSignatureCount > 0 {
+          Image(systemName: "chevron.right")
+            .font(.system(size: 11, weight: .bold))
+        }
+      }
+      .foregroundStyle(MIRATheme.Color.textPrimary)
+      .padding(.horizontal, 12)
+      .frame(minHeight: 42)
+      .background(MIRATheme.Color.surfaceSoft, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+    .buttonStyle(.miraPress)
+    .disabled(note.resolvedSignatureCount == 0)
+  }
+
   private var detailHeader: some View {
     HStack(spacing: 12) {
       Button(action: onClose) {
@@ -1533,7 +2148,13 @@ private struct MIRAWallNoteDetailView: View {
 
       Menu {
         Button("Report", systemImage: "exclamationmark.triangle") {
-          showReport = true
+          reportTarget = MIRAReportTarget(
+            targetType: "wall_note",
+            targetId: note.id,
+            ownerUserId: note.authorPreview?.userId,
+            title: "Wall note",
+            subtitle: String(note.body.prefix(90))
+          )
         }
       } label: {
         Image(systemName: "ellipsis")
@@ -1589,7 +2210,7 @@ private struct MIRAWallNoteDetailView: View {
   }
 
   private var metadataSubtitle: String {
-    [note.approximateLocation, relativeTime(note.createdAt)].compactMap { value in
+    [note.location?.city, relativeTime(note.createdAt)].compactMap { value in
       let clean = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
       return clean.isEmpty ? nil : clean
     }.joined(separator: " / ")
@@ -1607,8 +2228,15 @@ private struct MIRAWallNoteDetailView: View {
         icon: note.savedByViewer ? "bookmark.fill" : "bookmark",
         tint: MIRATheme.Color.textPrimary
       ) { toggleSaved() }
-      detailAction(title: "Reply", count: note.replyCount, icon: "bubble.left", tint: MIRATheme.Color.textPrimary) {
-        replyFocused = true
+      if note.capabilities.canSign {
+        detailAction(
+          title: note.signedByViewer == true ? "Signed" : "Sign",
+          count: note.resolvedSignatureCount,
+          icon: note.signedByViewer == true ? "pencil.line" : "pencil",
+          tint: note.signedByViewer == true ? MIRATheme.Color.forest : MIRATheme.Color.textPrimary
+        ) {
+          toggleSignature()
+        }
       }
       ShareLink(item: URL(string: "https://captro.app/wall/notes/\(note.id)")!) {
         VStack(spacing: 5) {
@@ -1638,71 +2266,106 @@ private struct MIRAWallNoteDetailView: View {
     .buttonStyle(.miraPress)
   }
 
-  private var replyComposer: some View {
-    VStack(alignment: .leading, spacing: 10) {
-      HStack {
-        Text("Replies").font(.system(size: 17, weight: .bold, design: .serif))
-        Spacer()
-        Toggle("Ghost", isOn: $replyAsGhost)
-          .labelsHidden()
-          .tint(MIRATheme.Color.forest)
-        Text(replyAsGhost ? "Reply as Ghost" : "Reply as Author")
-          .font(.system(size: 11, weight: .semibold))
-          .foregroundStyle(MIRATheme.Color.textSecondary)
-      }
-      HStack(alignment: .bottom, spacing: 9) {
-        TextField("Leave a thoughtful reply", text: $replyText, axis: .vertical)
-          .focused($replyFocused)
-          .lineLimit(1...4)
-          .padding(.horizontal, 13)
-          .padding(.vertical, 11)
-          .background(MIRATheme.Color.surfaceSoft, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-          .onChange(of: replyText) { _, value in
-            if value.count > 300 { replyText = String(value.prefix(300)) }
-          }
-        Button { sendReply() } label: {
-          Image(systemName: "arrow.up")
-            .font(.system(size: 15, weight: .bold))
-            .foregroundStyle(.white)
-            .frame(width: 40, height: 40)
-            .background(MIRATheme.Color.forest, in: Circle())
-        }
-        .buttonStyle(.miraPress)
-        .disabled(replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isMutating)
-      }
+  @ViewBuilder
+  private var collaborationControls: some View {
+    if note.capabilities.canManageCollaboration {
+      Toggle("Allow contributions", isOn: Binding(
+        get: { note.allowContributions == true },
+        set: { updateCollaboration($0) }
+      ))
+      .font(.system(size: 14, weight: .bold, design: .serif))
+      .tint(MIRATheme.Color.forest)
+      .disabled(isMutating)
+      .padding(12)
+      .background(MIRATheme.Color.surfaceSoft, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
   }
 
-  private var repliesSection: some View {
-    LazyVStack(spacing: 10) {
-      if isLoadingReplies && replies.isEmpty {
-        ProgressView().padding(.vertical, 18)
-      } else if replies.isEmpty {
-        Text("No replies yet.")
-          .font(.system(size: 13))
-          .foregroundStyle(MIRATheme.Color.textMuted)
-          .padding(.vertical, 14)
-      } else {
-        ForEach(replies) { reply in
-          HStack(alignment: .top, spacing: 10) {
-            if reply.isGhost {
-              Image(systemName: "theatermask.and.paintbrush")
-                .frame(width: 34, height: 34)
-                .background(MIRATheme.Color.surfaceSoft, in: Circle())
-            } else {
-              MIRAWallAvatar(url: reply.authorPreview?.avatarUrl, size: 34)
+  @ViewBuilder
+  private var contributionComposer: some View {
+    if note.allowContributions == true {
+      VStack(alignment: .leading, spacing: 10) {
+        HStack {
+          Text("Add to this note")
+            .font(.system(size: 17, weight: .bold, design: .serif))
+          Spacer()
+          Toggle("Ghost", isOn: $replyAsGhost)
+            .labelsHidden()
+            .tint(MIRATheme.Color.forest)
+          Text(replyAsGhost ? "Ghost" : "Author")
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(MIRATheme.Color.textSecondary)
+        }
+        HStack(alignment: .bottom, spacing: 9) {
+          TextField("Attach a thoughtful response", text: $replyText, axis: .vertical)
+            .focused($replyFocused)
+            .lineLimit(1...4)
+            .padding(.horizontal, 13)
+            .padding(.vertical, 11)
+            .background(MIRAWallPaperColor.color(for: "cream"), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .overlay(alignment: .top) {
+              RoundedRectangle(cornerRadius: 1)
+                .fill(Color(red: 0.78, green: 0.68, blue: 0.48).opacity(0.65))
+                .frame(width: 42, height: 11)
+                .rotationEffect(.degrees(-2))
+                .offset(y: -5)
             }
-            VStack(alignment: .leading, spacing: 4) {
-              Text(reply.isGhost ? "Ghost" : (reply.authorPreview?.title ?? "Captro member"))
-                .font(.system(size: 12, weight: .bold))
-              Text(reply.body)
-                .font(.system(size: 14))
-                .foregroundStyle(MIRATheme.Color.textPrimary)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            .onChange(of: replyText) { _, value in
+              if value.count > 300 { replyText = String(value.prefix(300)) }
             }
+          Button { sendContribution() } label: {
+            Image(systemName: "paperclip")
+              .font(.system(size: 16, weight: .bold))
+              .foregroundStyle(.white)
+              .frame(width: 42, height: 42)
+              .background(MIRATheme.Color.forest, in: Circle())
           }
-          .padding(12)
-          .background(MIRATheme.Color.surfaceSoft, in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+          .buttonStyle(.miraPress)
+          .disabled(replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isMutating)
+          .accessibilityLabel("Attach contribution")
+        }
+      }
+    } else if note.resolvedContributionCount == 0 {
+      Text("This note is not accepting contributions.")
+        .font(.system(size: 13, weight: .medium))
+        .foregroundStyle(MIRATheme.Color.textMuted)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+  }
+
+  private var contributionsSection: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      if !contributions.isEmpty {
+        Text("CONTRIBUTIONS")
+          .font(.system(size: 13, weight: .black, design: .serif))
+          .tracking(0.8)
+      }
+
+      if isLoadingContributions && contributions.isEmpty {
+        ProgressView().frame(maxWidth: .infinity).padding(.vertical, 18)
+      } else if !contributions.isEmpty {
+        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 13) {
+          ForEach(Array(contributions.enumerated()), id: \.element.id) { index, contribution in
+            MIRAWallContributionPaper(contribution: contribution, index: index)
+              .contextMenu {
+                Button("Report", systemImage: "exclamationmark.triangle") {
+                  reportTarget = MIRAReportTarget(
+                    targetType: "wall_note_contribution",
+                    targetId: contribution.id,
+                    ownerUserId: contribution.authorPreview?.userId,
+                    title: "Wall note contribution",
+                    subtitle: String(contribution.body.prefix(90))
+                  )
+                }
+              }
+          }
+        }
+        if contributionsNextAfter != nil {
+          ProgressView()
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+            .task { await loadContributions(reset: false) }
+            .accessibilityLabel("Loading more contributions")
         }
       }
     }
@@ -1760,23 +2423,92 @@ private struct MIRAWallNoteDetailView: View {
     }
   }
 
-  private func loadReplies() async {
-    isLoadingReplies = true
-    defer { isLoadingReplies = false }
-    do { replies = try await model.replies(for: note) }
-    catch { errorMessage = error.localizedDescription }
+  private func toggleSignature() {
+    guard !isMutating, note.capabilities.canSign else { return }
+    isMutating = true
+    let original = note
+    let requested = original.signedByViewer != true
+    let optimistic = original.updating(
+      signed: requested,
+      signatureCount: max(0, original.resolvedSignatureCount + (requested ? 1 : -1))
+    )
+    note = optimistic
+    onChanged(optimistic)
+    Task {
+      do {
+        let updated = try await model.setSigned(note: original, signed: requested)
+        await MainActor.run {
+          note = updated
+          onChanged(updated)
+          signers = []
+          signersNextBefore = nil
+          isMutating = false
+        }
+      } catch {
+        await MainActor.run {
+          note = original
+          onChanged(original)
+          errorMessage = error.localizedDescription
+          isMutating = false
+        }
+      }
+    }
   }
 
-  private func sendReply() {
+  private func updateCollaboration(_ allowed: Bool) {
+    guard !isMutating, note.capabilities.canManageCollaboration else { return }
+    isMutating = true
+    let original = note
+    let optimistic = original.updating(allowContributions: allowed)
+    note = optimistic
+    onChanged(optimistic)
+    Task {
+      do {
+        let updated = try await model.setCollaboration(note: original, allowed: allowed)
+        await MainActor.run { note = updated; onChanged(updated); isMutating = false }
+      } catch {
+        await MainActor.run {
+          note = original
+          onChanged(original)
+          errorMessage = error.localizedDescription
+          isMutating = false
+        }
+      }
+    }
+  }
+
+  private func loadContributions(reset: Bool) async {
+    guard !isLoadingContributions else { return }
+    if !reset, contributionsNextAfter == nil { return }
+    isLoadingContributions = true
+    defer { isLoadingContributions = false }
+    do {
+      let response = try await model.contributions(
+        for: note,
+        after: reset ? nil : contributionsNextAfter
+      )
+      if reset {
+        contributions = response.contributions
+      } else {
+        contributions = mergingUnique(contributions, response.contributions, id: \.id)
+      }
+      contributionsNextAfter = response.nextAfter
+    } catch {
+      errorMessage = error.localizedDescription
+    }
+  }
+
+  private func sendContribution() {
     let clean = replyText.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !clean.isEmpty, !isMutating else { return }
+    guard !clean.isEmpty, !isMutating, note.allowContributions == true else { return }
     isMutating = true
     Task {
       do {
-        let reply = try await model.addReply(note: note, body: clean, identity: replyAsGhost ? "ghost" : "author")
+        let contribution = try await model.addContribution(note: note, body: clean, identity: replyAsGhost ? "ghost" : "author")
         await MainActor.run {
-          replies.append(reply)
-          note = note.updating(replyCount: note.replyCount + 1)
+          contributions.append(contribution)
+          let count = note.resolvedContributionCount + 1
+          note = note.updating(replyCount: count, contributionCount: count)
           onChanged(note)
           replyText = ""
           isMutating = false
@@ -1787,6 +2519,132 @@ private struct MIRAWallNoteDetailView: View {
     }
   }
 
+  private func openSigners() async {
+    showSigners = true
+    guard signers.isEmpty, !isLoadingSigners else { return }
+    await loadSigners(reset: true)
+  }
+
+  private func loadSigners(reset: Bool) async {
+    guard !isLoadingSigners else { return }
+    if !reset, signersNextBefore == nil { return }
+    isLoadingSigners = true
+    defer { isLoadingSigners = false }
+    do {
+      var cursor = reset ? nil : signersNextBefore
+      var pageSigners: [MIRAWallSigner] = []
+      var nextCursor: String?
+
+      // A server page can contain only blocked or inactive accounts. Advance a
+      // few bounded pages so the sheet never gets stranded on an empty result.
+      for _ in 0..<4 {
+        let response = try await model.signers(for: note, before: cursor)
+        pageSigners = mergingUnique(pageSigners, response.signers, id: \.id)
+        nextCursor = response.nextBefore
+        guard pageSigners.isEmpty, let next = nextCursor, next != cursor else { break }
+        cursor = next
+      }
+      if reset {
+        signers = pageSigners
+      } else {
+        signers = mergingUnique(signers, pageSigners, id: \.id)
+      }
+      signersNextBefore = nextCursor
+    } catch {
+      errorMessage = error.localizedDescription
+    }
+  }
+
+  private var signersSheet: some View {
+    NavigationStack {
+      Group {
+        if isLoadingSigners && signers.isEmpty {
+          ProgressView("Loading signatures...")
+        } else if signers.isEmpty {
+          ContentUnavailableView("No signatures yet", systemImage: "pencil.line")
+        } else {
+          List(signers) { signer in
+            HStack(spacing: 12) {
+              MIRAWallAvatar(url: signer.avatarUrl, size: 40)
+              Text(signer.title)
+                .font(.system(size: 15, weight: .semibold))
+              Spacer()
+            }
+            .listRowBackground(MIRATheme.Color.surface)
+            .task {
+              guard signer.id == signers.last?.id, signersNextBefore != nil else { return }
+              await loadSigners(reset: false)
+            }
+          }
+          .listStyle(.plain)
+          .overlay(alignment: .bottom) {
+            if isLoadingSigners {
+              ProgressView()
+                .padding(10)
+                .background(.thinMaterial, in: Capsule())
+                .accessibilityLabel("Loading more signatures")
+            }
+          }
+        }
+      }
+      .background(MIRATheme.Color.surface)
+      .navigationTitle("Signed by")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .confirmationAction) {
+          Button("Done") { showSigners = false }
+        }
+      }
+    }
+  }
+
+  private func mergingUnique<Element, ID: Hashable>(
+    _ existing: [Element],
+    _ incoming: [Element],
+    id: KeyPath<Element, ID>
+  ) -> [Element] {
+    var seen = Set(existing.map { $0[keyPath: id] })
+    return existing + incoming.filter { seen.insert($0[keyPath: id]).inserted }
+  }
+
+  private func flipNote() {
+    guard note.canFlip, !isFlipping else { return }
+    if reduceMotion {
+      displaysBackSide.toggle()
+      return
+    }
+    isFlipping = true
+    withAnimation(.easeIn(duration: 0.18)) { flipAngle = 88 }
+    Task { @MainActor in
+      try? await Task.sleep(for: .milliseconds(175))
+      var transaction = Transaction()
+      transaction.disablesAnimations = true
+      withTransaction(transaction) {
+        displaysBackSide.toggle()
+        flipAngle = -88
+      }
+      withAnimation(.easeOut(duration: 0.20)) { flipAngle = 0 }
+      try? await Task.sleep(for: .milliseconds(205))
+      isFlipping = false
+    }
+  }
+
+  private var resolvedVoiceURL: URL? {
+    guard let raw = note.voice?.url?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return nil }
+    if let absolute = URL(string: raw), absolute.scheme != nil { return absolute }
+    let base = api.baseURL.absoluteString.hasSuffix("/") ? api.baseURL : URL(string: api.baseURL.absoluteString + "/")!
+    return URL(string: raw.trimmingCharacters(in: CharacterSet(charactersIn: "/")), relativeTo: base)?.absoluteURL
+  }
+
+  private var voiceIsPlaying: Bool {
+    voicePlayback.activeID == note.id && voicePlayback.isPlaying
+  }
+
+  private func formatDuration(_ seconds: TimeInterval) -> String {
+    let total = max(0, Int(seconds.rounded(.down)))
+    return String(format: "%d:%02d", total / 60, total % 60)
+  }
+
   private func relativeTime(_ value: String) -> String? {
     let formatter = ISO8601DateFormatter()
     guard let date = formatter.date(from: value) else { return nil }
@@ -1795,6 +2653,63 @@ private struct MIRAWallNoteDetailView: View {
     if seconds < 3600 { return "\(Int(seconds / 60))m ago" }
     if seconds < 86400 { return "\(Int(seconds / 3600))h ago" }
     return "\(Int(seconds / 86400))d ago"
+  }
+}
+
+private struct MIRAWallContributionPaper: View {
+  let contribution: MIRAWallContribution
+  let index: Int
+
+  private var paperColor: Color {
+    let tokens = ["cream", "sky", "butter", "rose", "mint"]
+    return MIRAWallPaperColor.color(for: tokens[index % tokens.count])
+  }
+
+  private var angle: Double {
+    [-1.8, 1.2, -0.7, 1.7, -1.1][index % 5]
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      Text(contribution.body)
+        .font(.system(size: 14, weight: .medium, design: index.isMultiple(of: 2) ? .serif : .rounded))
+        .foregroundStyle(Color.black.opacity(0.82))
+        .lineLimit(7)
+        .minimumScaleFactor(0.82)
+        .frame(maxWidth: .infinity, alignment: .leading)
+
+      Spacer(minLength: 4)
+
+      HStack(spacing: 5) {
+        Image(systemName: contribution.isGhost ? "theatermask.and.paintbrush" : "person.crop.circle")
+        Text(contribution.isGhost ? "Ghost" : (contribution.authorPreview?.title ?? "Captro member"))
+          .lineLimit(1)
+      }
+      .font(.system(size: 9, weight: .bold))
+      .foregroundStyle(Color.black.opacity(0.55))
+    }
+    .padding(12)
+    .frame(maxWidth: .infinity, minHeight: 118, alignment: .topLeading)
+    .background(paperColor)
+    .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+    .overlay(alignment: .top) {
+      if index.isMultiple(of: 2) {
+        RoundedRectangle(cornerRadius: 1)
+          .fill(Color(red: 0.80, green: 0.69, blue: 0.49).opacity(0.64))
+          .frame(width: 44, height: 10)
+          .rotationEffect(.degrees(index.isMultiple(of: 4) ? -3 : 2))
+          .offset(y: -5)
+      } else {
+        Image(systemName: "paperclip")
+          .font(.system(size: 18, weight: .medium))
+          .foregroundStyle(Color.black.opacity(0.44))
+          .rotationEffect(.degrees(-12))
+          .offset(y: -7)
+      }
+    }
+    .rotationEffect(.degrees(angle))
+    .shadow(color: .black.opacity(0.11), radius: 4, x: 1, y: 3)
+    .accessibilityElement(children: .combine)
   }
 }
 

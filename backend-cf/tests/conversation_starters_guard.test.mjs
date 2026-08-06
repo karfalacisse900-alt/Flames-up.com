@@ -28,7 +28,7 @@ test('conversation starter analytics is authenticated, rate-limited, and anonymo
 
 test('conversation starters are local templates that only prefill the existing composer', async () => {
   const component = await read('ios_native/MIRA/Sources/MIRANative/Components/MIRAConversationStarters.swift');
-  const feed = await read('ios_native/MIRA/Sources/MIRANative/Screens/MainFeedView.swift');
+  const discover = await read('ios_native/MIRA/Sources/MIRANative/Screens/DiscoverNativeView.swift');
   const detail = await read('ios_native/MIRA/Sources/MIRANative/Screens/PostDetailNativeView.swift');
 
   assert.match(component, /enum MIRAConversationStarterEngine/);
@@ -39,9 +39,10 @@ test('conversation starters are local templates that only prefill the existing c
   assert.match(component, /accessibilityLabel\("Conversation starter:/);
   assert.doesNotMatch(component, /api\.get|api\.post|URLSession|OpenAI|Workers AI/i);
 
-  assert.match(feed, /presentComments\(for: post, initialDraft: starter\.text\)/);
-  assert.match(feed, /_draft = State\(initialValue: initialDraft\)/);
+  assert.match(discover, /conversationStarterDraft = starter\.text/);
+  assert.match(discover, /isCommentsPresented = true/);
   assert.match(detail, /draft = starter\.text/);
-  assert.match(detail, /conversationStarterDraft = starter\.text/);
-  assert.doesNotMatch(feed, /sendComment\(starter\.text\)/);
+  assert.match(detail, /isCommentFocused = true/);
+  assert.doesNotMatch(discover, /sendComment\(starter\.text\)/);
+  assert.doesNotMatch(detail, /sendComment\(starter\.text\)/);
 });

@@ -48,7 +48,7 @@
   <key>NSCameraUsageDescription</key>
   <string>Captro uses your camera so you can take photos and videos to share as posts, stories, or profile pictures. For example, you can take a photo and upload it to your Captro feed.</string>
   <key>NSMicrophoneUsageDescription</key>
-  <string>Captro uses your microphone so you can record audio when creating videos for posts or stories.</string>
+  <string>Captro uses your microphone so you can record voice notes and audio for story videos you choose to share.</string>
   <key>NSPhotoLibraryUsageDescription</key>
   <string>Captro uses your photo library so you can choose photos and videos to share as posts, stories, or profile pictures.</string>
   <key>NSPhotoLibraryAddUsageDescription</key>

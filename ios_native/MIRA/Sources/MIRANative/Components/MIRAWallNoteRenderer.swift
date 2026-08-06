@@ -186,7 +186,9 @@ struct MIRAWallNoteRenderer: View {
       ZStack {
         MIRAWallPaperBackground(note: note, presentation: presentation, renderDetail: renderDetail)
 
-        if hasMedia {
+        if note.isVoiceNote {
+          MIRAWallVoiceNoteContent(note: note, presentation: presentation)
+        } else if hasMedia {
           MIRAWallPhotoNoteContent(
             note: note,
             presentation: presentation,
@@ -217,6 +219,10 @@ struct MIRAWallNoteRenderer: View {
           MIRAWallIdentityMark(note: note, style: presentation.style, zoom: zoom)
             .transition(.opacity)
         }
+
+        if renderDetail != .distant {
+          MIRAWallLivingNoteMarks(note: note, presentation: presentation)
+        }
       }
       .frame(width: proxy.size.width, height: proxy.size.height)
       .contentShape(Rectangle())
@@ -245,6 +251,86 @@ struct MIRAWallNoteRenderer: View {
       warp: presentation.warp,
       zoom: zoom
     )
+  }
+}
+
+private struct MIRAWallVoiceNoteContent: View {
+  let note: MIRAWallNote
+  let presentation: MIRAWallNotePresentation
+
+  var body: some View {
+    GeometryReader { proxy in
+      let ink = presentation.usesDarkPaper ? Color.white : Color.black
+      VStack(alignment: .leading, spacing: max(6, proxy.size.height * 0.045)) {
+        HStack(spacing: 7) {
+          Image(systemName: "waveform")
+            .font(.system(size: max(11, proxy.size.width * 0.075), weight: .bold))
+          Text("VOICE NOTE")
+            .font(.system(size: max(9, proxy.size.width * 0.054), weight: .black, design: .monospaced))
+            .tracking(0.6)
+          Spacer(minLength: 2)
+          Text(durationLabel)
+            .font(.system(size: max(8, proxy.size.width * 0.048), weight: .bold, design: .monospaced))
+        }
+
+        HStack(spacing: 9) {
+          Image(systemName: "play.fill")
+            .font(.system(size: max(11, proxy.size.width * 0.065), weight: .bold))
+            .frame(width: max(30, proxy.size.width * 0.19), height: max(30, proxy.size.width * 0.19))
+            .background(ink.opacity(0.10), in: Circle())
+
+          MIRAWallWaveformView(samples: note.voice?.waveform ?? [], tint: ink)
+            .frame(height: max(28, proxy.size.height * 0.22))
+        }
+
+        if !note.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+          Text(note.body)
+            .font(.system(size: max(10, min(18, proxy.size.width * 0.066)), weight: .semibold, design: .serif))
+            .lineLimit(3)
+            .minimumScaleFactor(0.76)
+            .multilineTextAlignment(.leading)
+        }
+      }
+      .foregroundStyle(ink.opacity(0.88))
+      .padding(.horizontal, max(13, proxy.size.width * 0.075))
+      .padding(.vertical, max(14, proxy.size.height * 0.09))
+    }
+    .allowsHitTesting(false)
+  }
+
+  private var durationLabel: String {
+    let seconds = max(0, Int((note.voice?.durationSeconds ?? 0).rounded(.down)))
+    return String(format: "%d:%02d", seconds / 60, seconds % 60)
+  }
+}
+
+private struct MIRAWallLivingNoteMarks: View {
+  let note: MIRAWallNote
+  let presentation: MIRAWallNotePresentation
+
+  var body: some View {
+    GeometryReader { proxy in
+      let ink = presentation.usesDarkPaper ? Color.white : Color.black
+      ZStack {
+        if note.canFlip {
+          Image(systemName: "arrow.triangle.2.circlepath")
+            .font(.system(size: max(8, proxy.size.width * 0.052), weight: .bold))
+            .foregroundStyle(ink.opacity(0.54))
+            .padding(max(7, proxy.size.width * 0.045))
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+        }
+
+        if note.resolvedSignatureCount > 0 {
+          Label("\(note.resolvedSignatureCount)", systemImage: "pencil.line")
+            .font(.system(size: max(7, proxy.size.width * 0.044), weight: .bold, design: .rounded))
+            .foregroundStyle(ink.opacity(0.58))
+            .padding(max(7, proxy.size.width * 0.045))
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+        }
+      }
+    }
+    .allowsHitTesting(false)
+    .accessibilityHidden(true)
   }
 }
 
