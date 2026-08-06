@@ -23,7 +23,7 @@ final class MIRACaptroStudioModelsTests: XCTestCase {
     }
   }
 
-  func testDuplicateCreatesIndependentLayerAboveOriginal() {
+  func testDuplicateCreatesIndependentLayerAboveOriginal() throws {
     var document = MIRACaptroStudioTemplate.travelJournal.makeDocument()
     let original = try XCTUnwrap(document.layers.first(where: { $0.kind == .photo }))
     let originalMaximum = document.layers.map(\.zIndex).max() ?? 0
@@ -38,7 +38,7 @@ final class MIRACaptroStudioModelsTests: XCTestCase {
     XCTAssertGreaterThan(duplicate.y, original.y)
   }
 
-  func testPaperCannotBeDuplicatedOrDeleted() {
+  func testPaperCannotBeDuplicatedOrDeleted() throws {
     var document = MIRACaptroStudioTemplate.blankPaper.makeDocument()
     let paper = try XCTUnwrap(document.layers.first(where: { $0.kind == .paper }))
 

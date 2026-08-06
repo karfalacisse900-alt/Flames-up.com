@@ -233,7 +233,7 @@ public struct MIRACaptroStudioView: View {
         isEditing: false,
         snapGuides: .constant(MIRAStudioSnapGuides())
       )
-      .aspectRatio(4 / 5, contentMode: .fit)
+      .aspectRatio(0.8, contentMode: .fit)
       .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
       .allowsHitTesting(false)
 
