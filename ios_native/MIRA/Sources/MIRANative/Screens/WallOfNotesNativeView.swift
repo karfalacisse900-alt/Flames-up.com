@@ -324,7 +324,7 @@ public struct WallOfNotesNativeView: View {
   @State private var isSearching = false
   @State private var query = ""
   @State private var selectedFilter = "all"
-  @State private var showFilters = false
+  @State private var isStudioPresented = false
   @State private var initialFrameWallID: String?
   @State private var placementNoteID: String?
   @State private var selectedStoryGroup: MIRAStoryGroup?
@@ -440,23 +440,20 @@ public struct WallOfNotesNativeView: View {
           .presentationDetents([.large])
           .presentationCornerRadius(30)
         }
-        .miraActionModal(isPresented: $showFilters) { dismiss in
-          MIRAActionModalCard {
-            ScrollView(showsIndicators: false) {
-              VStack(spacing: 7) {
-                ForEach(MIRAWallFilter.allCases) { filter in
-                  MIRAActionModalButton(
-                    title: filter.title,
-                    systemImage: filter.icon,
-                    staggerIndex: filter.staggerIndex
-                  ) {
-                    selectedFilter = filter.rawValue
-                    dismiss()
-                  }
-                }
-              }
-              .frame(maxHeight: 470)
+        .fullScreenCover(isPresented: $isStudioPresented) {
+          MIRACaptroStudioView(camera: camera, api: api) { body in
+            let note = try await model.create(body)
+            placementNoteID = note.id
+            withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
+              let frame = model.displayFrame(for: note)
+              camera.center = CGPoint(x: frame.midX, y: frame.midY)
+              camera.scale = max(camera.scale, 0.72)
             }
+            Task { @MainActor in
+              try? await Task.sleep(for: .milliseconds(800))
+              placementNoteID = nil
+            }
+            return note
           }
         }
       }
@@ -603,9 +600,10 @@ public struct WallOfNotesNativeView: View {
         }
       }
 
-      wallIconButton(systemImage: "line.3.horizontal.decrease") {
-        showFilters = true
+      wallIconButton(systemImage: "square.stack.3d.up.fill") {
+        isStudioPresented = true
       }
+      .accessibilityLabel("Open Captro Studio")
     }
     .padding(.horizontal, 16)
     .padding(.vertical, 8)
@@ -855,43 +853,6 @@ private struct MIRAWallFilteredEmptySign: View {
     .overlay(Rectangle().stroke(Color.black.opacity(0.08), lineWidth: 0.8))
     .shadow(color: .black.opacity(0.12), radius: 4, x: 1, y: 3)
     .rotationEffect(.degrees(-0.8))
-  }
-}
-
-private enum MIRAWallFilter: String, CaseIterable, Identifiable {
-  case all, ghost, author, recent, popular, saved, question, confession, food, advice, life
-
-  var id: String { rawValue }
-  var staggerIndex: Int { Self.allCases.firstIndex(of: self) ?? 0 }
-  var title: String {
-    switch self {
-    case .all: "All Notes"
-    case .ghost: "Ghost"
-    case .author: "Author"
-    case .recent: "Recent"
-    case .popular: "Popular"
-    case .saved: "Saved"
-    case .question: "Questions"
-    case .confession: "Confessions"
-    case .food: "Food"
-    case .advice: "Advice"
-    case .life: "Life"
-    }
-  }
-  var icon: String {
-    switch self {
-    case .all: "note.text"
-    case .ghost: "theatermask.and.paintbrush"
-    case .author: "person.crop.circle"
-    case .recent: "clock"
-    case .popular: "sparkles"
-    case .saved: "bookmark"
-    case .question: "questionmark.bubble"
-    case .confession: "lock"
-    case .food: "fork.knife"
-    case .advice: "lightbulb"
-    case .life: "heart.text.square"
-    }
   }
 }
 
