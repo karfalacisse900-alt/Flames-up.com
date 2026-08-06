@@ -44,6 +44,28 @@ jobs:
         working-directory: ${{ env.IOS_NATIVE_DIR }}
         run: xcodegen generate --spec project.yml
 
+      - name: Run native iOS unit tests
+        working-directory: ${{ env.IOS_NATIVE_DIR }}
+        run: |
+          set -euo pipefail
+          SIMULATOR_ID=$(xcrun simctl list devices available -j | python3 -c '
+          import json, sys
+          devices = json.load(sys.stdin).get("devices", {})
+          for runtime_devices in devices.values():
+              for device in runtime_devices:
+                  if device.get("isAvailable") and device.get("name", "").startswith("iPhone"):
+                      print(device["udid"])
+                      raise SystemExit(0)
+          raise SystemExit("No available iPhone simulator was found")
+          ')
+          xcodebuild \
+            -project Captro.xcodeproj \
+            -scheme "$SCHEME" \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
+            -only-testing:CaptroTests \
+            test
+
       - name: Prepare App Store Connect API key
         env:
           APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}

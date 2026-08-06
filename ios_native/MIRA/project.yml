@@ -63,6 +63,21 @@ targets:
           SWIFT_COMPILATION_MODE: wholemodule
           SWIFT_OPTIMIZATION_LEVEL: -O
 
+  CaptroTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: Tests/MIRANativeTests
+    dependencies:
+      - package: MIRANative
+        product: MIRANative
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.captro.app.tests
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGNING_ALLOWED: NO
+
 schemes:
   Captro:
     build:
@@ -72,5 +87,7 @@ schemes:
       config: Debug
     test:
       config: Debug
+      targets:
+        - CaptroTests
     archive:
       config: Release
