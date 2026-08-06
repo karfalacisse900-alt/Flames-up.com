@@ -9,7 +9,7 @@ async function read(relativePath) {
   return readFile(path.join(repoRoot, relativePath), 'utf8');
 }
 
-test('wall routes are authenticated, regional, and Ghost-safe', async () => {
+test('wall routes are authenticated, global-only, and Ghost-safe', async () => {
   const worker = await read('backend-cf/src/index.ts');
 
   assert.match(worker, /api\.get\('\/wall\/notes', authMiddleware/);
@@ -27,7 +27,8 @@ test('wall routes are authenticated, regional, and Ghost-safe', async () => {
   assert.match(worker, /const placementScale = mediaAsset \? 1\.34 : requestedType === 'voice' \? 1\.18 : 1\.27/);
   assert.match(worker, /claimWallPlacementSlot\(c, wallId\)/);
   assert.match(worker, /overlap <= 0\.10/);
-  assert.match(worker, /const WALLS = new Map/);
+  assert.match(worker, /const WALLS = new Map\(\[\['global', 'Global'\]\]\)/);
+  assert.match(worker, /function normalizedWallId\(_value: unknown\): string \{[\s\S]*return 'global'/);
   assert.doesNotMatch(worker, /wall_id: cleanText\(b\.wall_id/);
 });
 
@@ -105,14 +106,21 @@ test('voice notes are validated, transcribed, moderated, and never retain transc
   assert.match(worker, /next_after:/);
 });
 
-test('Wall location sharing is coarse, opt-in, and hidden from legacy response fields', async () => {
+test('Wall locations are retired end to end while legacy clients remain compatible', async () => {
   const worker = await read('backend-cf/src/index.ts');
   const wallView = await read('ios_native/MIRA/Sources/MIRANative/Screens/WallOfNotesNativeView.swift');
+  const migration = await read('supabase/migrations/20260806132124_wall_global_only.sql');
 
-  assert.match(worker, /approximate_location: hasCoarseLocation \? locationLabel : null/);
-  assert.match(worker, /approximate_location: locationVisible\s*\? cleanText\(row\?\.location_label, 100\)\s*:\s*null/);
-  assert.match(wallView, /latitude: \(coordinate\.latitude \* 20\)\.rounded\(\) \/ 20/);
-  assert.match(wallView, /longitude: \(coordinate\.longitude \* 20\)\.rounded\(\) \/ 20/);
+  assert.match(worker, /wall_id: 'global'/);
+  assert.match(worker, /location: null/);
+  assert.match(worker, /location_label: null/);
+  assert.match(worker, /approximate_location: null/);
+  assert.doesNotMatch(wallView, /MIRAWallApproximateLocationProvider/);
+  assert.doesNotMatch(wallView, /FOUND NEARBY/);
+  assert.doesNotMatch(wallView, /localRecommendation/);
+  assert.match(wallView, /Label\("More options", systemImage: "slider\.horizontal\.3"\)/);
+  assert.match(migration, /check \(wall_id = 'global'\) not valid/i);
+  assert.match(migration, /location_visibility = false/i);
 });
 
 test('Wall detail collections use bounded cursor pagination and deduplicate appended rows', async () => {

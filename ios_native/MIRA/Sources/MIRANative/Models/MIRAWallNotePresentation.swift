@@ -103,6 +103,13 @@ public enum MIRAWallNotePresentationResolver {
     return .distant
   }
 
+  public static func wallLegibilityScale(forWallScale scale: CGFloat, isFocused: Bool = false) -> CGFloat {
+    guard !isFocused, scale < 0.72 else { return 1 }
+    let clampedScale = min(0.72, max(0.24, scale))
+    let progress = (0.72 - clampedScale) / 0.48
+    return 1 + progress * 0.22
+  }
+
   public static func resolve(_ note: MIRAWallNote, hasLocalMedia: Bool = false) -> MIRAWallNotePresentation {
     let hash = stableHash(note.id)
     let hasMedia = hasLocalMedia || cleanMediaURL(note.mediaThumbnailUrl ?? note.mediaUrl) != nil

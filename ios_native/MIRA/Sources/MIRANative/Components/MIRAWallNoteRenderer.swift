@@ -196,21 +196,27 @@ struct MIRAWallNoteRenderer: View {
             wallScale: wallScale
           )
         } else {
-          MIRAWallTypographyView(note: note, presentation: presentation, zoom: zoom)
+          MIRAWallTypographyView(
+            note: note,
+            presentation: presentation,
+            zoom: zoom,
+            wallScale: wallScale,
+            isFocused: isFocused
+          )
         }
 
         MIRAWallWarpCue(warp: presentation.warp, darkPaper: presentation.usesDarkPaper)
           .opacity(renderDetail == .distant ? 0.54 : 1)
           .transition(.opacity)
 
-        if renderDetail != .distant {
-          MIRAWallPhysicalDetails(note: note, presentation: presentation, zoom: zoom)
-            .transition(.opacity)
-        } else {
+        if renderDetail == .distant {
           MIRAWallDistantAttachmentCue(
             attachment: presentation.attachment,
             darkPaper: presentation.usesDarkPaper
           )
+        } else {
+          MIRAWallPhysicalDetails(note: note, presentation: presentation, zoom: zoom)
+            .transition(.opacity)
         }
 
         if renderDetail == .full, zoom >= 0.74 {
@@ -581,6 +587,8 @@ private struct MIRAWallTypographyView: View {
   let note: MIRAWallNote
   let presentation: MIRAWallNotePresentation
   let zoom: CGFloat
+  let wallScale: CGFloat
+  let isFocused: Bool
 
   var body: some View {
     Group {
@@ -602,6 +610,7 @@ private struct MIRAWallTypographyView: View {
     .foregroundStyle(inkColor)
     .shadow(color: inkColor.opacity(inkBleedOpacity), radius: inkBleedRadius, x: 0.16, y: 0.12)
     .padding(contentInsets)
+    .scaleEffect(distanceInkScale)
   }
 
   private var loudTypography: some View {
@@ -624,7 +633,7 @@ private struct MIRAWallTypographyView: View {
       .tracking(inkTracking)
       .multilineTextAlignment(styleAlignment)
       .lineLimit(maxLineCount)
-      .minimumScaleFactor(0.62)
+      .minimumScaleFactor(0.68)
       .allowsTightening(false)
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: frameAlignment)
   }
@@ -635,7 +644,7 @@ private struct MIRAWallTypographyView: View {
       .tracking(inkTracking)
       .multilineTextAlignment(alignment)
       .lineLimit(maxLineCount)
-      .minimumScaleFactor(0.58)
+      .minimumScaleFactor(0.68)
       .allowsTightening(false)
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: frameAlignment)
   }
@@ -687,7 +696,14 @@ private struct MIRAWallTypographyView: View {
     case .minimal: styleScale = 1.08
     default: styleScale = 1
     }
-    return max(8, min(34, base * styleScale * max(0.82, zoom)))
+    return max(9, min(36, base * styleScale * max(0.82, zoom) * 1.08))
+  }
+
+  private var distanceInkScale: CGFloat {
+    MIRAWallNotePresentationResolver.wallLegibilityScale(
+      forWallScale: wallScale,
+      isFocused: isFocused
+    )
   }
 
   private var contentInsets: EdgeInsets {
@@ -736,10 +752,11 @@ private struct MIRAWallTypographyView: View {
   }
 
   private var inkBleedOpacity: Double {
+    let distanceBoost = wallScale < 0.72 && !isFocused ? 1.4 : 1
     switch presentation.typography {
-    case .loud, .thought: 0.12
-    case .chaos: 0.08
-    case .confession, .editorial: 0.045
+    case .loud, .thought: return 0.12 * distanceBoost
+    case .chaos: return 0.08 * distanceBoost
+    case .confession, .editorial: return 0.045 * distanceBoost
     }
   }
 
@@ -793,6 +810,7 @@ private struct MIRAWallPhotoNoteContent: View {
               maxHeight: layout.captionHeight,
               alignment: .topLeading
             )
+            .scaleEffect(captionLegibilityScale)
         }
       }
       .padding(layout.insets)
@@ -846,7 +864,7 @@ private struct MIRAWallPhotoNoteContent: View {
     case 91...160: base = 18.5
     default: base = 16.5
     }
-    let size = max(15, min(28, base * max(0.94, zoom)))
+    let size = max(15, min(30, base * max(0.94, zoom) * 1.08))
     switch presentation.style {
     case .handwritten, .sticky, .notebook, .polaroid:
       return .custom("Noteworthy", size: size)
@@ -863,6 +881,10 @@ private struct MIRAWallPhotoNoteContent: View {
     presentation.usesDarkPaper
       ? Color(red: 0.98, green: 0.95, blue: 0.84)
       : Color(red: 0.10, green: 0.095, blue: 0.075)
+  }
+
+  private var captionLegibilityScale: CGFloat {
+    MIRAWallNotePresentationResolver.wallLegibilityScale(forWallScale: wallScale)
   }
 
   private var photoCropRotation: Double {

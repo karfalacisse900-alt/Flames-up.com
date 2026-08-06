@@ -16956,14 +16956,8 @@ const WALL_NOTE_STYLES = new Set([
   'sticky', 'editorial', 'handwritten', 'poster', 'polaroid', 'receipt', 'torn_paper', 'notebook', 'postcard', 'minimal',
   'sticky_square', 'vertical_card', 'question', 'confession', 'recommendation',
 ]);
-const WALL_NOTE_CATEGORIES = new Set(['question', 'confession', 'food', 'advice', 'life', 'local_recommendation']);
-const WALLS = new Map([
-  ['global', 'Global'],
-  ['nearby', 'Nearby'],
-  ['new_york_city', 'New York City'],
-  ['brooklyn', 'Brooklyn'],
-  ['upper_manhattan', 'Upper Manhattan'],
-]);
+const WALL_NOTE_CATEGORIES = new Set(['question', 'confession', 'food', 'advice', 'life']);
+const WALLS = new Map([['global', 'Global']]);
 
 type WallOverview = {
   wallId: string;
@@ -16975,9 +16969,9 @@ type WallOverview = {
   maxY: number | null;
 };
 
-function normalizedWallId(value: unknown): string | null {
-  const wallId = cleanText(value || 'global', 80).toLowerCase().replace(/[^a-z0-9_-]/g, '') || 'global';
-  return WALLS.has(wallId) ? wallId : null;
+function normalizedWallId(_value: unknown): string {
+  // Legacy clients may still submit regional wall IDs. Captro now has one global Wall.
+  return 'global';
 }
 
 async function supabaseWallOverview(c: any, wallId: string): Promise<WallOverview> {
@@ -17122,15 +17116,6 @@ function wallNoteWaveform(value: unknown): number[] {
     .map((sample) => Number(Math.min(1, Math.max(0, sample)).toFixed(4)));
 }
 
-function approximateDistanceKm(latA: number, lngA: number, latB: number, lngB: number): number {
-  const radiusKm = 6371;
-  const toRadians = (value: number) => value * Math.PI / 180;
-  const dLat = toRadians(latB - latA);
-  const dLng = toRadians(lngB - lngA);
-  const a = Math.sin(dLat / 2) ** 2
-    + Math.cos(toRadians(latA)) * Math.cos(toRadians(latB)) * Math.sin(dLng / 2) ** 2;
-  return radiusKm * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(Math.max(0, 1 - a)));
-}
 function wallNotePayload(
   row: any,
   author: any,
@@ -17142,11 +17127,10 @@ function wallNotePayload(
   const identity = cleanText(row?.publishing_identity || 'ghost', 20) === 'author' ? 'author' : 'ghost';
   const metadata = parseJsonObject(row?.metadata);
   const voiceMediaId = publicId(row?.voice_media_id, 160);
-  const locationVisible = !!row?.location_visibility && !!cleanText(row?.location_label, 100);
   const noteType = normalizedWallNoteType(row?.note_type, !!metadata.media_url, !!voiceMediaId);
   return {
     id: publicId(row?.id, 120),
-    wall_id: cleanText(row?.wall_id || 'global', 80) || 'global',
+    wall_id: 'global',
     publishing_identity: identity,
     note_type: noteType,
     body: cleanMultilineText(row?.body, 300),
@@ -17166,21 +17150,14 @@ function wallNotePayload(
       duration_seconds: Math.max(0, Number(row?.voice_duration_seconds || 0)),
       waveform: wallNoteWaveform(row?.voice_waveform),
     } : null,
-    location: locationVisible ? {
-      label: cleanText(row?.location_label, 100),
-      city: cleanText(row?.location_city, 80) || null,
-      country: cleanText(row?.location_country, 80) || null,
-      distance_km: Number.isFinite(Number(row?.distance_km)) ? Number(Number(row.distance_km).toFixed(1)) : null,
-    } : null,
+    location: null,
     world_x: Number(row?.world_x || 0),
     world_y: Number(row?.world_y || 0),
     width: Number(row?.width || 184),
     height: Number(row?.height || 184),
     rotation: Number(row?.rotation || 0),
     z_index: Number(row?.z_index || 0),
-    approximate_location: locationVisible
-      ? cleanText(row?.location_label, 100)
-      : null,
+    approximate_location: null,
     created_at: row?.created_at || now(),
     updated_at: row?.updated_at || row?.created_at || now(),
     save_count: Math.max(0, Number(row?.save_count || 0)),
@@ -17312,7 +17289,6 @@ api.get('/wall/notes', authMiddleware, async (c) => {
   if (limited) return limited;
 
   const wallId = normalizedWallId(c.req.query('wall_id'));
-  if (!wallId) return c.json({ detail: 'Unknown wall.' }, 400);
   const minX = clampFloat(c.req.query('min_x'), -200000, 200000, -1400);
   const maxX = clampFloat(c.req.query('max_x'), -200000, 200000, 1400);
   const minY = clampFloat(c.req.query('min_y'), -200000, 200000, -2200);
@@ -17322,14 +17298,6 @@ api.get('/wall/notes', authMiddleware, async (c) => {
   const limit = clampNumber(c.req.query('limit') || (zoom < 0.45 ? '600' : '320'), 1, 750, 320);
   const filter = cleanText(c.req.query('filter') || 'all', 40).toLowerCase();
   const query = cleanText(c.req.query('query'), 80).replace(/[%*_(),]/g, ' ').trim();
-  const viewerLat = Number(c.req.query('lat'));
-  const viewerLng = Number(c.req.query('lng'));
-  const hasNearbyLocation = Number.isFinite(viewerLat) && Number.isFinite(viewerLng)
-    && viewerLat >= -90 && viewerLat <= 90 && viewerLng >= -180 && viewerLng <= 180;
-  if (wallId === 'nearby' && !hasNearbyLocation) {
-    return c.json({ notes: [], wall_id: wallId, zoom, location_required: true });
-  }
-
   const regionConditions = [
     `world_x.gte.${minX}`,
     `world_x.lte.${maxX}`,
@@ -17339,20 +17307,9 @@ api.get('/wall/notes', authMiddleware, async (c) => {
   const filters: Record<string, string> = {
     status: postgrestEqFilter('active'),
     moderation_status: postgrestEqFilter('approved'),
+    and: `(${regionConditions.join(',')})`,
+    wall_id: postgrestEqFilter('global'),
   };
-  if (wallId === 'nearby') {
-    filters.location_visibility = postgrestEqFilter('true');
-    const nearbyConditions = [
-      `location_lat_bucket.gte.${(viewerLat - 0.75).toFixed(4)}`,
-      `location_lat_bucket.lte.${(viewerLat + 0.75).toFixed(4)}`,
-      `location_lng_bucket.gte.${(viewerLng - 1).toFixed(4)}`,
-      `location_lng_bucket.lte.${(viewerLng + 1).toFixed(4)}`,
-    ];
-    filters.and = `(${nearbyConditions.join(',')})`;
-  } else {
-    filters.and = `(${regionConditions.join(',')})`;
-    filters.wall_id = postgrestEqFilter(wallId);
-  }
   if (filter === 'ghost' || filter === 'author') filters.publishing_identity = postgrestEqFilter(filter);
   if (WALL_NOTE_CATEGORIES.has(filter)) filters.category = postgrestEqFilter(filter);
   if (query) filters.body = `ilike.*${query}*`;
@@ -17371,21 +17328,7 @@ api.get('/wall/notes', authMiddleware, async (c) => {
   const order = filter === 'popular'
     ? 'reaction_count.desc,save_count.desc,created_at.desc'
     : 'z_index.asc,created_at.desc';
-  const queriedRows = await supabaseAdminQueryRows(c, 'wall_notes', { filters, order, limit });
-  const rows = wallId === 'nearby'
-    ? queriedRows
-      .map((row) => ({
-        ...row,
-        distance_km: approximateDistanceKm(
-          viewerLat,
-          viewerLng,
-          Number(row?.location_lat_bucket),
-          Number(row?.location_lng_bucket),
-        ),
-      }))
-      .filter((row) => Number.isFinite(row.distance_km) && row.distance_km <= 75)
-      .sort((left, right) => left.distance_km - right.distance_km)
-    : queriedRows;
+  const rows = await supabaseAdminQueryRows(c, 'wall_notes', { filters, order, limit });
   const ownerIds = Array.from(new Set(rows.map((row) => publicId(row?.author_account_id, 120)).filter(Boolean)));
   const [authors, blockedIds] = await Promise.all([
     supabaseUsersByAnyIds(c, ownerIds),
@@ -17414,7 +17357,6 @@ api.get('/wall/overview', authMiddleware, async (c) => {
   const limited = await enforceRateLimit(c, 'wall_overview_read', viewerId, 90, 60);
   if (limited) return limited;
   const wallId = normalizedWallId(c.req.query('wall_id'));
-  if (!wallId) return c.json({ detail: 'Unknown wall.' }, 400);
   const overview = await supabaseWallOverview(c, wallId);
   const response = c.json({
     wall_id: overview.wallId,
@@ -17514,28 +17456,7 @@ api.post('/wall/notes', authMiddleware, async (c) => {
   const styleToken = cleanText(b.style_token, 40);
   const backColorToken = cleanText(b.back_color_token || b.backColorToken, 30);
   const backStyleToken = cleanText(b.back_style_token || b.backStyleToken, 40);
-  const category = cleanText(b.category, 50).toLowerCase();
   const wallId = normalizedWallId(b.wall_id);
-  if (!wallId) return c.json({ detail: 'Unknown wall.' }, 400);
-
-  const locationInput = b.location && typeof b.location === 'object' ? b.location : {};
-  const legacyLocation = cleanText(b.approximate_location, 80);
-  const locationLabel = cleanText(locationInput.label || locationInput.location_label || legacyLocation, 100);
-  const locationCity = cleanText(locationInput.city || locationInput.location_city, 80);
-  const locationCountry = cleanText(locationInput.country || locationInput.location_country, 80);
-  const rawLat = Number(locationInput.latitude ?? locationInput.lat);
-  const rawLng = Number(locationInput.longitude ?? locationInput.lng);
-  const locationRequested = locationInput.enabled === true || locationInput.visibility === 'public';
-  if (locationLabel && looksLikePrivatePlace(locationLabel, locationLabel, 'address')) {
-    return c.json({ detail: 'Use a neighborhood or city, not a private address.', code: 'PRIVATE_LOCATION' }, 400);
-  }
-  const hasCoarseLocation = locationRequested
-    && Number.isFinite(rawLat) && rawLat >= -90 && rawLat <= 90
-    && Number.isFinite(rawLng) && rawLng >= -180 && rawLng <= 180
-    && !!locationLabel;
-  const locationLatBucket = hasCoarseLocation ? Number((Math.round(rawLat * 20) / 20).toFixed(2)) : null;
-  const locationLngBucket = hasCoarseLocation ? Number((Math.round(rawLng * 20) / 20).toFixed(2)) : null;
-  const locationCell = hasCoarseLocation ? `${locationLatBucket!.toFixed(2)}:${locationLngBucket!.toFixed(2)}` : null;
 
   const noteId = uuid();
   const width = clampFloat(b.width, 96, 360, requestedType === 'voice' ? 196 : 184);
@@ -17562,14 +17483,14 @@ api.post('/wall/notes', authMiddleware, async (c) => {
     voice_media_id: voiceMediaId || null,
     voice_duration_seconds: voiceMediaId ? voiceDuration : null,
     voice_waveform: voiceMediaId ? voiceWaveform : [],
-    location_label: hasCoarseLocation ? locationLabel : null,
-    location_city: hasCoarseLocation ? locationCity || null : null,
-    location_country: hasCoarseLocation ? locationCountry || null : null,
-    location_cell: locationCell,
-    location_lat_bucket: locationLatBucket,
-    location_lng_bucket: locationLngBucket,
-    location_visibility: hasCoarseLocation,
-    category: WALL_NOTE_CATEGORIES.has(category) ? category : null,
+    location_label: null,
+    location_city: null,
+    location_country: null,
+    location_cell: null,
+    location_lat_bucket: null,
+    location_lng_bucket: null,
+    location_visibility: false,
+    category: null,
     color_token: WALL_NOTE_COLORS.has(colorToken) ? colorToken : 'butter',
     style_token: resolvedStyleToken,
     world_x: placement.x + (placementWidth - width) * 0.5,
@@ -17578,7 +17499,7 @@ api.post('/wall/notes', authMiddleware, async (c) => {
     height,
     rotation: placement.rotation,
     z_index: clampNumber(b.z_index, -100000, 100000, Math.floor(Date.now() / 1000)),
-    approximate_location: hasCoarseLocation ? locationLabel : null,
+    approximate_location: null,
     moderation_status: 'approved',
     status: 'active',
     metadata: {

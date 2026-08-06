@@ -1,4 +1,3 @@
-import CoreLocation
 import PhotosUI
 import SwiftUI
 import UIKit
@@ -35,19 +34,6 @@ final class MIRAWallNotesModel: ObservableObject {
     displayFrames[note.id] ?? MIRAWallNotePresentationResolver.wallFrame(for: note)
   }
 
-  func selectWall(_ wallID: String) {
-    guard wallID != currentWallID else { return }
-    currentWallID = wallID
-    notes = []
-    overview = nil
-    displayFrames = [:]
-    spatialIndex.rebuild(with: [])
-    inFlightSignature = nil
-    lastLoadedSignature = nil
-    activeViewSignature = nil
-    errorMessage = nil
-  }
-
   func loadOverview(wallID: String, force: Bool = false) async {
     guard force || overview?.wallId != wallID else { return }
     var components = URLComponents()
@@ -70,17 +56,10 @@ final class MIRAWallNotesModel: ObservableObject {
     wallID: String,
     filter: String,
     query: String,
-    coordinate: CLLocationCoordinate2D? = nil,
     force: Bool = false
   ) async {
     let expanded = bounds.insetBy(dx: -max(420, bounds.width * 0.35), dy: -max(600, bounds.height * 0.35))
     let cleanQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
-    let coarseCoordinate = coordinate.map { coordinate in
-      CLLocationCoordinate2D(
-        latitude: (coordinate.latitude * 20).rounded() / 20,
-        longitude: (coordinate.longitude * 20).rounded() / 20
-      )
-    }
     let viewSignature = "\(wallID):\(filter):\(cleanQuery)"
     if activeViewSignature != viewSignature {
       notes = []
@@ -95,7 +74,6 @@ final class MIRAWallNotesModel: ObservableObject {
       String(Int(expanded.minX / 320)), String(Int(expanded.maxX / 320)),
       String(Int(expanded.minY / 320)), String(Int(expanded.maxY / 320)),
       String(format: "%.1f", zoom), filter, cleanQuery,
-      coarseCoordinate.map { String(format: "%.2f:%.2f", $0.latitude, $0.longitude) } ?? "no-location",
     ].joined(separator: ":")
     guard force || (signature != lastLoadedSignature && signature != inFlightSignature) else { return }
     inFlightSignature = signature
@@ -119,10 +97,6 @@ final class MIRAWallNotesModel: ObservableObject {
       URLQueryItem(name: "query", value: query),
       URLQueryItem(name: "limit", value: zoom < 0.45 ? "600" : "320"),
     ]
-    if let coordinate = coarseCoordinate {
-      components.queryItems?.append(URLQueryItem(name: "lat", value: String(coordinate.latitude)))
-      components.queryItems?.append(URLQueryItem(name: "lng", value: String(coordinate.longitude)))
-    }
     do {
       let response: MIRAWallNotesResponse = try await api.get(components.string ?? "/wall/notes")
       guard currentWallID == wallID, activeViewSignature == viewSignature else { return }
@@ -334,10 +308,10 @@ final class MIRAWallNotesModel: ObservableObject {
 }
 
 public struct WallOfNotesNativeView: View {
+  private let globalWallID = MIRAWallDestination.global.id
   private let api: MIRAAPIClient
   private let storiesModel: DiscoverNativeModel
   @StateObject private var model: MIRAWallNotesModel
-  @StateObject private var nearbyLocation = MIRAWallApproximateLocationProvider()
   @State private var camera = MIRAWallCamera()
   @State private var panStart: MIRAWallCamera?
   @State private var magnifyStart: MIRAWallCamera?
@@ -351,8 +325,6 @@ public struct WallOfNotesNativeView: View {
   @State private var query = ""
   @State private var selectedFilter = "all"
   @State private var showFilters = false
-  @State private var selectedWall = MIRAWallDestination.global
-  @State private var showWallSelector = false
   @State private var initialFrameWallID: String?
   @State private var placementNoteID: String?
   @State private var selectedStoryGroup: MIRAStoryGroup?
@@ -417,23 +389,18 @@ public struct WallOfNotesNativeView: View {
         )
         .task(id: loadKey(bounds: bounds)) {
           try? await Task.sleep(for: .milliseconds(180))
-          guard !Task.isCancelled, initialFrameWallID == selectedWall.id else { return }
+          guard !Task.isCancelled, initialFrameWallID == globalWallID else { return }
           await model.load(
             bounds: bounds,
             zoom: camera.scale,
-            wallID: selectedWall.id,
+            wallID: globalWallID,
             filter: selectedFilter,
-            query: query,
-            coordinate: selectedWall == .nearby ? nearbyLocation.coordinate : nil
+            query: query
           )
         }
-        .task(id: selectedWall.id) {
+        .task(id: globalWallID) {
           initialFrameWallID = nil
-          model.selectWall(selectedWall.id)
-          if selectedWall == .nearby, nearbyLocation.coordinate == nil {
-            nearbyLocation.resolve()
-          }
-          await model.loadOverview(wallID: selectedWall.id, force: true)
+          await model.loadOverview(wallID: globalWallID, force: true)
           guard !Task.isCancelled else { return }
           if let overview = model.overview {
             camera = MIRAWallLayout.initialCamera(
@@ -445,31 +412,18 @@ public struct WallOfNotesNativeView: View {
           } else {
             camera = MIRAWallCamera(scale: 0.92)
           }
-          initialFrameWallID = selectedWall.id
+          initialFrameWallID = globalWallID
           await model.load(
             bounds: camera.worldBounds(viewport: viewport),
             zoom: camera.scale,
-            wallID: selectedWall.id,
+            wallID: globalWallID,
             filter: selectedFilter,
             query: query,
-            coordinate: selectedWall == .nearby ? nearbyLocation.coordinate : nil,
-            force: true
-          )
-        }
-        .task(id: nearbyLocationLoadKey) {
-          guard selectedWall == .nearby, nearbyLocation.coordinate != nil else { return }
-          await model.load(
-            bounds: bounds,
-            zoom: camera.scale,
-            wallID: selectedWall.id,
-            filter: selectedFilter,
-            query: query,
-            coordinate: nearbyLocation.coordinate,
             force: true
           )
         }
         .sheet(isPresented: $isCreating) {
-          MIRACreateWallNoteView(camera: camera, wall: selectedWall, api: api) { body in
+          MIRACreateWallNoteView(camera: camera, api: api) { body in
             let note = try await model.create(body)
             placementNoteID = note.id
             withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
@@ -502,24 +456,6 @@ public struct WallOfNotesNativeView: View {
                 }
               }
               .frame(maxHeight: 470)
-            }
-          }
-        }
-        .miraActionModal(isPresented: $showWallSelector) { dismiss in
-          MIRAActionModalCard {
-            VStack(spacing: 7) {
-              ForEach(MIRAWallDestination.allCases) { wall in
-                MIRAActionModalButton(
-                  title: wall.title,
-                  systemImage: wall.systemImage,
-                  staggerIndex: MIRAWallDestination.allCases.firstIndex(of: wall) ?? 0
-                ) {
-                  selectedFilter = "all"
-                  query = ""
-                  selectedWall = wall
-                  dismiss()
-                }
-              }
             }
           }
         }
@@ -682,25 +618,6 @@ public struct WallOfNotesNativeView: View {
 
   private var chrome: some View {
     VStack(spacing: 0) {
-      HStack {
-        Button {
-          showWallSelector = true
-        } label: {
-          Label(selectedWall.title, systemImage: selectedWall.systemImage)
-            .font(.system(size: 12, weight: .semibold))
-            .padding(.horizontal, 11)
-            .frame(height: 30)
-            .background(MIRATheme.Color.surface.opacity(0.94), in: Capsule())
-            .overlay(Capsule().stroke(MIRATheme.Color.hairline, lineWidth: 1))
-        }
-        .buttonStyle(.miraPress)
-        .accessibilityLabel("Choose wall. Current wall: \(selectedWall.title)")
-
-        Spacer()
-      }
-      .padding(.horizontal, 16)
-      .padding(.top, 12)
-
       Spacer()
 
       HStack {
@@ -754,10 +671,9 @@ public struct WallOfNotesNativeView: View {
           await model.load(
             bounds: bounds,
             zoom: camera.scale,
-            wallID: selectedWall.id,
+            wallID: globalWallID,
             filter: selectedFilter,
             query: query,
-            coordinate: selectedWall == .nearby ? nearbyLocation.coordinate : nil,
             force: true
           )
         }
@@ -844,39 +760,24 @@ public struct WallOfNotesNativeView: View {
     [
       Int(bounds.midX / 260), Int(bounds.midY / 260), Int(camera.scale * 10),
     ].map(String.init).joined(separator: ":")
-      + ":\(selectedWall.id):\(selectedFilter):\(query):\(nearbyLocationLoadKey)"
-  }
-
-  private var nearbyLocationLoadKey: String {
-    guard selectedWall == .nearby, let coordinate = nearbyLocation.coordinate else {
-      return selectedWall == .nearby ? "nearby-pending" : "not-nearby"
-    }
-    return String(format: "%.2f:%.2f", coordinate.latitude, coordinate.longitude)
+      + ":\(selectedFilter):\(query)"
   }
 
   private var wallNoteCount: Int { model.overview?.totalCount ?? model.notes.count }
 
   private var shouldShowWallStartSign: Bool {
-    initialFrameWallID == selectedWall.id && wallNoteCount < 5 && selectedFilter == "all" && query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !model.isLoading
+    initialFrameWallID == globalWallID && wallNoteCount < 5 && selectedFilter == "all" && query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !model.isLoading
   }
 
   private var shouldShowFilteredEmptySign: Bool {
-    initialFrameWallID == selectedWall.id && model.notes.isEmpty && !model.isLoading && model.errorMessage == nil && !shouldShowWallStartSign
+    initialFrameWallID == globalWallID && model.notes.isEmpty && !model.isLoading && model.errorMessage == nil && !shouldShowWallStartSign
   }
 
 
   private func wallStartSign(viewport: CGSize) -> some View {
     let rect = MIRAWallLayout.startSignRect(noteBounds: model.overview?.noteBounds, noteCount: wallNoteCount)
     let center = camera.screenPoint(forWorld: CGPoint(x: rect.midX, y: rect.midY), viewport: viewport)
-    return MIRAWallStartSign(
-      isLocalWall: selectedWall != .global,
-      onAdd: { isCreating = true },
-      onViewGlobal: {
-        selectedFilter = "all"
-        query = ""
-        selectedWall = .global
-      }
-    )
+    return MIRAWallStartSign(onAdd: { isCreating = true })
     .frame(width: rect.width, height: rect.height)
     .scaleEffect(camera.scale)
     .position(center)
@@ -897,9 +798,7 @@ public struct WallOfNotesNativeView: View {
 }
 
 private struct MIRAWallStartSign: View {
-  let isLocalWall: Bool
   let onAdd: () -> Void
-  let onViewGlobal: () -> Void
 
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
@@ -907,19 +806,12 @@ private struct MIRAWallStartSign: View {
         .font(.system(size: 15, weight: .semibold, design: .serif))
         .tracking(0.8)
 
-      Text(isLocalWall
-        ? "Only a few notes have reached this wall. Leave one here, or explore Global."
-        : "Leave a thought, recommendation, confession, question, or something worth remembering.")
+      Text("Leave a thought, recommendation, confession, question, or something worth remembering.")
         .font(.system(size: 13, weight: .regular, design: .serif))
         .lineSpacing(3)
         .fixedSize(horizontal: false, vertical: true)
 
-      HStack(spacing: 18) {
-        Button("Place the next note", action: onAdd)
-        if isLocalWall {
-          Button("View Global", action: onViewGlobal)
-        }
-      }
+      Button("Place the next note", action: onAdd)
       .font(.system(size: 12, weight: .bold))
       .underline()
     }
@@ -967,7 +859,7 @@ private struct MIRAWallFilteredEmptySign: View {
 }
 
 private enum MIRAWallFilter: String, CaseIterable, Identifiable {
-  case all, ghost, author, recent, popular, saved, question, confession, food, advice, life, localRecommendation = "local_recommendation"
+  case all, ghost, author, recent, popular, saved, question, confession, food, advice, life
 
   var id: String { rawValue }
   var staggerIndex: Int { Self.allCases.firstIndex(of: self) ?? 0 }
@@ -984,7 +876,6 @@ private enum MIRAWallFilter: String, CaseIterable, Identifiable {
     case .food: "Food"
     case .advice: "Advice"
     case .life: "Life"
-    case .localRecommendation: "Local Recommendations"
     }
   }
   var icon: String {
@@ -1000,7 +891,6 @@ private enum MIRAWallFilter: String, CaseIterable, Identifiable {
     case .food: "fork.knife"
     case .advice: "lightbulb"
     case .life: "heart.text.square"
-    case .localRecommendation: "mappin.and.ellipse"
     }
   }
 }
@@ -1200,27 +1090,22 @@ private struct MIRAWallDetailNoteStage: View {
 }
 private struct MIRACreateWallNoteView: View {
   let camera: MIRAWallCamera
-  let wall: MIRAWallDestination
   let api: MIRAAPIClient
   let onPublish: (MIRACreateWallNoteBody) async throws -> MIRAWallNote
 
   @Environment(\.dismiss) private var dismiss
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @StateObject private var voiceRecorder = MIRAWallVoiceRecorder()
-  @StateObject private var locationProvider = MIRAWallApproximateLocationProvider()
   @ObservedObject private var voicePlayback = MIRAWallVoicePlaybackController.shared
   @State private var bodyText = ""
   @State private var composerMode = "text"
   @State private var identity = "ghost"
   @State private var colorToken = "butter"
   @State private var styleToken = "sticky"
-  @State private var category = ""
   @State private var hasBackSide = false
   @State private var backBodyText = ""
-  @State private var backColorToken = "cream"
-  @State private var backStyleToken = "minimal"
   @State private var allowContributions = false
-  @State private var shareApproximateLocation = false
+  @State private var showsAdvancedOptions = false
   @State private var selectedPhotoItem: PhotosPickerItem?
   @State private var selectedPhotoMedia: MIRAPickedMedia?
   @State private var selectedPhotoImage: UIImage?
@@ -1244,11 +1129,6 @@ private struct MIRACreateWallNoteView: View {
     ("poster", "Poster"), ("polaroid", "Photo print"), ("receipt", "Receipt"),
     ("torn_paper", "Torn"), ("notebook", "Notebook"), ("postcard", "Postcard"),
     ("minimal", "Minimal"),
-  ]
-  private let categories: [(String, String)] = [
-    ("", "None"), ("question", "Question"), ("confession", "Confession"),
-    ("food", "Food"), ("advice", "Advice"), ("life", "Life"),
-    ("local_recommendation", "Local"),
   ]
 
   var body: some View {
@@ -1365,41 +1245,67 @@ private struct MIRACreateWallNoteView: View {
             .background(MIRATheme.Color.surfaceSoft, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
           }
 
-          settingSection(title: "PAPER COLOR") {
-            HStack(spacing: 13) {
-              ForEach(colors, id: \.self) { token in
-                Button {
-                  colorToken = token
-                } label: {
-                  Circle()
-                    .fill(MIRAWallPaperColor.color(for: token))
-                    .frame(width: 31, height: 31)
-                    .overlay(Circle().stroke(Color.black.opacity(colorToken == token ? 0.78 : 0.10), lineWidth: colorToken == token ? 2 : 1))
+          HStack(spacing: 10) {
+            Menu {
+              Section("Paper color") {
+                ForEach(colors, id: \.self) { token in
+                  Button {
+                    colorToken = token
+                  } label: {
+                    Label(colorTitle(token), systemImage: colorToken == token ? "checkmark.circle.fill" : "circle.fill")
+                  }
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("\(token) note color")
               }
-            }
-          }
-
-          settingSection(title: "NOTE STYLE") {
-            ScrollView(.horizontal, showsIndicators: false) {
-              HStack(spacing: 8) {
+              Section("Note style") {
                 ForEach(styles, id: \.0) { item in
-                  choiceChip(item.1, selected: styleToken == item.0) { styleToken = item.0 }
+                  Button {
+                    styleToken = item.0
+                  } label: {
+                    if styleToken == item.0 {
+                      Label(item.1, systemImage: "checkmark")
+                    } else {
+                      Text(item.1)
+                    }
+                  }
                 }
               }
+            } label: {
+              composerMenuLabel(
+                title: "Appearance",
+                detail: currentStyleTitle,
+                icon: "paintpalette.fill",
+                swatch: MIRAWallPaperColor.color(for: colorToken)
+              )
+            }
+
+            Menu {
+              Button {
+                identity = "ghost"
+              } label: {
+                Label("Ghost", systemImage: identity == "ghost" ? "checkmark" : "theatermask.and.paintbrush")
+              }
+              Button {
+                identity = "author"
+              } label: {
+                Label("Author", systemImage: identity == "author" ? "checkmark" : "person.crop.circle")
+              }
+            } label: {
+              composerMenuLabel(
+                title: "Identity",
+                detail: identity == "author" ? "Author" : "Ghost",
+                icon: identity == "author" ? "person.crop.circle" : "theatermask.and.paintbrush"
+              )
             }
           }
 
-          if composerMode != "voice" {
-            settingSection(title: "BACK SIDE") {
-              Toggle("Add a back side", isOn: $hasBackSide)
-                .font(.system(size: 14, weight: .semibold))
-                .tint(MIRATheme.Color.forest)
+          DisclosureGroup(isExpanded: $showsAdvancedOptions) {
+            VStack(alignment: .leading, spacing: 18) {
+              if composerMode != "voice" {
+                Toggle("Add a back side", isOn: $hasBackSide)
+                  .font(.system(size: 14, weight: .semibold))
+                  .tint(MIRATheme.Color.forest)
 
-              if hasBackSide {
-                VStack(alignment: .leading, spacing: 10) {
+                if hasBackSide {
                   ZStack(alignment: .topLeading) {
                     if cleanBackBody.isEmpty {
                       Text("Write what is hidden on the back...")
@@ -1417,91 +1323,22 @@ private struct MIRACreateWallNoteView: View {
                   }
                   .padding(12)
                   .background(MIRATheme.Color.surfaceSoft, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-
-                  ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                      ForEach(colors, id: \.self) { token in
-                        Button { backColorToken = token } label: {
-                          Circle()
-                            .fill(MIRAWallPaperColor.color(for: token))
-                            .frame(width: 28, height: 28)
-                            .overlay(Circle().stroke(Color.black.opacity(backColorToken == token ? 0.72 : 0.10), lineWidth: backColorToken == token ? 2 : 1))
-                        }
-                        .buttonStyle(.plain)
-                      }
-                    }
-                  }
-
-                  ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                      ForEach(styles, id: \.0) { item in
-                        choiceChip(item.1, selected: backStyleToken == item.0) {
-                          backStyleToken = item.0
-                        }
-                      }
-                    }
-                  }
-                }
-                .transition(.opacity.combined(with: .move(edge: .top)))
-              }
-            }
-          }
-
-          settingSection(title: "CATEGORY") {
-            ScrollView(.horizontal, showsIndicators: false) {
-              HStack(spacing: 8) {
-                ForEach(categories, id: \.0) { item in
-                  choiceChip(item.1, selected: category == item.0) { category = item.0 }
+                  .transition(.opacity.combined(with: .move(edge: .top)))
                 }
               }
-            }
-          }
 
-          settingSection(title: "PUBLISH AS") {
-            VStack(spacing: 10) {
-              identityChoice(
-                value: "ghost", title: "Ghost", subtitle: "Anonymous. Your profile will not be shown.", icon: "theatermask.and.paintbrush"
-              )
-              identityChoice(
-                value: "author", title: "Author", subtitle: "Show your profile and username.", icon: "person.crop.circle"
-              )
+              Toggle("Allow contributions", isOn: $allowContributions)
+                .font(.system(size: 14, weight: .semibold))
+                .tint(MIRATheme.Color.forest)
             }
-          }
-
-          settingSection(title: "CONTRIBUTIONS") {
-            Toggle("Allow people to add to this note", isOn: $allowContributions)
+            .padding(.top, 14)
+          } label: {
+            Label("More options", systemImage: "slider.horizontal.3")
               .font(.system(size: 14, weight: .semibold))
-              .tint(MIRATheme.Color.forest)
-            Text("Contributions appear as small physical pieces in the note detail, not as a public comment thread.")
-              .font(.system(size: 12))
-              .foregroundStyle(MIRATheme.Color.textSecondary)
+              .foregroundStyle(MIRATheme.Color.textPrimary)
           }
-
-          settingSection(title: "FOUND NEARBY") {
-            Toggle("Attach my approximate area", isOn: $shareApproximateLocation)
-              .font(.system(size: 14, weight: .semibold))
-              .tint(MIRATheme.Color.forest)
-              .onChange(of: shareApproximateLocation) { _, enabled in
-                if enabled { locationProvider.resolve() } else { locationProvider.clear() }
-              }
-
-            if shareApproximateLocation {
-              HStack(spacing: 9) {
-                if locationProvider.isResolving {
-                  ProgressView().controlSize(.small)
-                  Text("Finding a broad area...")
-                } else if let label = locationProvider.label {
-                  Image(systemName: "location.fill")
-                  Text(label)
-                } else {
-                  Image(systemName: "location.slash")
-                  Text(locationProvider.errorMessage ?? "No area attached. Posting still works.")
-                }
-              }
-              .font(.system(size: 12, weight: .medium))
-              .foregroundStyle(MIRATheme.Color.textSecondary)
-            }
-          }
+          .padding(14)
+          .background(MIRATheme.Color.surfaceSoft, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
 
           if let errorMessage {
             Text(errorMessage)
@@ -1645,9 +1482,9 @@ private struct MIRACreateWallNoteView: View {
       hasMedia: hasPhoto
     )
     var preview = MIRAWallNote(
-      id: "preview-\(previewStyleToken)", wallId: wall.id, publishingIdentity: identity,
+      id: "preview-\(previewStyleToken)", wallId: MIRAWallDestination.global.id, publishingIdentity: identity,
       body: previewText,
-      category: category.isEmpty ? nil : category, colorToken: colorToken, styleToken: previewStyleToken,
+      category: nil, colorToken: colorToken, styleToken: previewStyleToken,
       mediaUrl: nil, mediaThumbnailUrl: nil,
       worldX: 0, worldY: 0, width: baseSize.width, height: baseSize.height,
       rotation: 0, zIndex: 0, approximateLocation: nil, createdAt: "", updatedAt: nil,
@@ -1656,8 +1493,8 @@ private struct MIRACreateWallNoteView: View {
     preview.noteType = hasVoice ? "voice" : (hasPhoto ? "photo" : "text")
     preview.hasBackSide = hasBackSide && !cleanBackBody.isEmpty
     preview.backBody = preview.hasBackSide == true ? cleanBackBody : nil
-    preview.backColorToken = preview.hasBackSide == true ? backColorToken : nil
-    preview.backStyleToken = preview.hasBackSide == true ? backStyleToken : nil
+    preview.backColorToken = preview.hasBackSide == true ? colorToken : nil
+    preview.backStyleToken = preview.hasBackSide == true ? previewStyleToken : nil
     preview.allowContributions = allowContributions
     if hasVoice {
       preview.voice = MIRAWallVoiceMetadata(
@@ -1686,6 +1523,13 @@ private struct MIRACreateWallNoteView: View {
 
   private var cleanBody: String { bodyText.trimmingCharacters(in: .whitespacesAndNewlines) }
   private var cleanBackBody: String { backBodyText.trimmingCharacters(in: .whitespacesAndNewlines) }
+  private var currentStyleTitle: String {
+    styles.first(where: { $0.0 == styleToken })?.1 ?? "Style"
+  }
+
+  private func colorTitle(_ token: String) -> String {
+    token.replacingOccurrences(of: "_", with: " ").capitalized
+  }
   private var notePlaceholder: String {
     switch composerMode {
     case "photo": "Add a caption for your photo..."
@@ -1785,39 +1629,40 @@ private struct MIRACreateWallNoteView: View {
     .frame(maxWidth: .infinity, alignment: .leading)
   }
 
-  private func choiceChip(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
-    Button(action: action) {
-      Text(title)
-        .font(.system(size: 13, weight: .semibold))
-        .foregroundStyle(selected ? Color.white : MIRATheme.Color.textPrimary)
-        .padding(.horizontal, 13)
-        .frame(height: 38)
-        .background(selected ? MIRATheme.Color.forest : MIRATheme.Color.surfaceSoft, in: Capsule())
-    }
-    .buttonStyle(.plain)
-  }
-
-  private func identityChoice(value: String, title: String, subtitle: String, icon: String) -> some View {
-    Button {
-      identity = value
-    } label: {
-      HStack(spacing: 13) {
+  private func composerMenuLabel(
+    title: String,
+    detail: String,
+    icon: String,
+    swatch: Color? = nil
+  ) -> some View {
+    HStack(spacing: 10) {
+      if let swatch {
+        Circle()
+          .fill(swatch)
+          .frame(width: 25, height: 25)
+          .overlay(Circle().stroke(Color.black.opacity(0.10), lineWidth: 1))
+      } else {
         Image(systemName: icon)
-          .font(.system(size: 19, weight: .semibold))
-          .frame(width: 30)
-        VStack(alignment: .leading, spacing: 3) {
-          Text(title).font(.system(size: 15, weight: .bold))
-          Text(subtitle).font(.system(size: 12)).foregroundStyle(MIRATheme.Color.textSecondary)
-        }
-        Spacer()
-        Image(systemName: identity == value ? "checkmark.circle.fill" : "circle")
-          .foregroundStyle(identity == value ? MIRATheme.Color.forest : MIRATheme.Color.textMuted)
+          .font(.system(size: 16, weight: .semibold))
+          .frame(width: 25)
       }
-      .foregroundStyle(MIRATheme.Color.textPrimary)
-      .padding(14)
-      .background(MIRATheme.Color.surfaceSoft, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+      VStack(alignment: .leading, spacing: 1) {
+        Text(title)
+          .font(.system(size: 12, weight: .bold))
+        Text(detail)
+          .font(.system(size: 11, weight: .medium))
+          .foregroundStyle(MIRATheme.Color.textSecondary)
+          .lineLimit(1)
+      }
+      Spacer(minLength: 2)
+      Image(systemName: "chevron.up.chevron.down")
+        .font(.system(size: 10, weight: .bold))
+        .foregroundStyle(MIRATheme.Color.textMuted)
     }
-    .buttonStyle(.plain)
+    .foregroundStyle(MIRATheme.Color.textPrimary)
+    .padding(.horizontal, 13)
+    .frame(maxWidth: .infinity, minHeight: 52)
+    .background(MIRATheme.Color.surfaceSoft, in: RoundedRectangle(cornerRadius: 15, style: .continuous))
   }
 
   @MainActor
@@ -1878,17 +1723,10 @@ private struct MIRACreateWallNoteView: View {
     let existingPhotoUpload = selectedMode == "photo" ? uploadedPhotoResult : nil
     let existingVoiceUpload = selectedMode == "voice" ? uploadedVoiceResult : nil
     let selectedIdentity = identity
-    let selectedCategory = category
     let selectedColor = colorToken
     let selectedStyle = selectedMode == "voice" ? "receipt" : styleToken
     let selectedBackBody = hasBackSide && selectedMode != "voice" ? cleanBackBody : ""
-    let selectedBackColor = backColorToken
-    let selectedBackStyle = backStyleToken
     let selectedAllowContributions = allowContributions
-    let selectedLocation = shareApproximateLocation ? locationProvider.coordinate : nil
-    let selectedLocationLabel = shareApproximateLocation ? locationProvider.label : nil
-    let selectedLocationCity = shareApproximateLocation ? locationProvider.city : nil
-    let selectedLocationCountry = shareApproximateLocation ? locationProvider.country : nil
 
     isPublishing = true
     publishStatus = selectedMode == "voice" ? "Uploading voice..." : (selectedPhoto == nil ? "Placing..." : "Checking photo...")
@@ -1929,10 +1767,10 @@ private struct MIRACreateWallNoteView: View {
         let noteWidth = Double(noteSize.width)
         let noteHeight = Double(noteSize.height)
         let request = MIRACreateWallNoteBody(
-          wallId: wall.id,
+          wallId: MIRAWallDestination.global.id,
           publishingIdentity: selectedIdentity,
           body: text,
-          category: selectedCategory.isEmpty ? nil : selectedCategory,
+          category: nil,
           colorToken: selectedColor,
           styleToken: selectedStyle,
           mediaAssetId: photoResult?.mediaAssetId,
@@ -1942,25 +1780,16 @@ private struct MIRACreateWallNoteView: View {
           width: noteWidth,
           height: noteHeight,
           rotation: 0,
-          approximateLocation: selectedLocationLabel,
+          approximateLocation: nil,
           noteType: selectedMode,
           backBody: selectedBackBody.isEmpty ? nil : selectedBackBody,
-          backColorToken: selectedBackBody.isEmpty ? nil : selectedBackColor,
-          backStyleToken: selectedBackBody.isEmpty ? nil : selectedBackStyle,
+          backColorToken: selectedBackBody.isEmpty ? nil : selectedColor,
+          backStyleToken: selectedBackBody.isEmpty ? nil : selectedStyle,
           allowContributions: selectedAllowContributions,
           voiceMediaId: voiceResult?.mediaAssetId,
           voiceDurationSeconds: selectedMode == "voice" ? voiceRecorder.duration : nil,
           voiceWaveform: selectedMode == "voice" ? voiceRecorder.waveform : nil,
-          location: selectedLocation.map { coordinate in
-            MIRACreateWallLocationBody(
-              enabled: true,
-              label: selectedLocationLabel,
-              city: selectedLocationCity,
-              country: selectedLocationCountry,
-              latitude: coordinate.latitude,
-              longitude: coordinate.longitude
-            )
-          }
+          location: nil
         )
         _ = try await onPublish(request)
         await MainActor.run {
@@ -2237,13 +2066,6 @@ private struct MIRAWallNoteDetailView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
 
-      if note.location != nil {
-        metadataDivider
-        locationMetadata
-          .padding(.horizontal, 14)
-          .padding(.vertical, 10)
-      }
-
       if note.resolvedSignatureCount > 0 {
         metadataDivider
         signatureSummary
@@ -2273,25 +2095,6 @@ private struct MIRAWallNoteDetailView: View {
       .fill(Color.black.opacity(0.07))
       .frame(height: 0.7)
       .padding(.horizontal, 14)
-  }
-
-  @ViewBuilder
-  private var locationMetadata: some View {
-    if let location = note.location {
-      HStack(spacing: 8) {
-        Image(systemName: "location.fill")
-        Text(location.label)
-        if let distance = location.distanceLabel {
-          Text("/ \(distance)")
-            .foregroundStyle(MIRATheme.Color.textSecondary)
-        }
-        Spacer()
-      }
-      .font(.system(size: 13, weight: .semibold))
-      .foregroundStyle(MIRATheme.Color.forest)
-      .frame(minHeight: 34)
-      .accessibilityElement(children: .combine)
-    }
   }
 
   private var signatureSummary: some View {
@@ -2406,10 +2209,7 @@ private struct MIRAWallNoteDetailView: View {
   }
 
   private var metadataSubtitle: String {
-    [note.location?.city, relativeTime(note.createdAt)].compactMap { value in
-      let clean = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-      return clean.isEmpty ? nil : clean
-    }.joined(separator: " / ")
+    relativeTime(note.createdAt)
   }
 
   private var actionRow: some View {
