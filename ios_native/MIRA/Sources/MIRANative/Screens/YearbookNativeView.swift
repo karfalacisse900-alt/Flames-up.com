@@ -1614,12 +1614,12 @@ private struct YearbookEditorView: View {
     .frame(minHeight: 40)
   }
 
-  private func splitList(_ value: String, max: Int) -> [String] {
+  private func splitList(_ value: String, max limit: Int) -> [String] {
     var seen = Set<String>()
     return value.split(separator: ",")
       .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
       .filter { !$0.isEmpty && seen.insert($0.lowercased()).inserted }
-      .prefix(max)
+      .prefix(limit)
       .map(String.init)
   }
 
