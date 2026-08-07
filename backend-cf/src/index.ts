@@ -17392,7 +17392,7 @@ api.post('/wall/notes', authMiddleware, async (c) => {
   if (mediaAssetId && voiceMediaId) {
     return c.json({ detail: 'A Wall note can contain one photo or one voice recording, not both.', code: 'WALL_NOTE_MEDIA_CONFLICT' }, 400);
   }
-  if (requestedType !== 'voice' && !body) {
+  if (requestedType === 'text' && !body) {
     return c.json({ detail: 'Write something before releasing this note.', code: 'WALL_NOTE_BODY_REQUIRED' }, 400);
   }
   if (body) {

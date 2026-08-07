@@ -610,7 +610,7 @@ private struct MIRAWallTypographyView: View {
     .foregroundStyle(inkColor)
     .shadow(color: inkColor.opacity(inkBleedOpacity), radius: inkBleedRadius, x: 0.16, y: 0.12)
     .padding(contentInsets)
-    .scaleEffect(distanceInkScale)
+    .clipped()
   }
 
   private var loudTypography: some View {
@@ -697,13 +697,6 @@ private struct MIRAWallTypographyView: View {
     default: styleScale = 1
     }
     return max(9, min(36, base * styleScale * max(0.82, zoom) * 1.08))
-  }
-
-  private var distanceInkScale: CGFloat {
-    MIRAWallNotePresentationResolver.wallLegibilityScale(
-      forWallScale: wallScale,
-      isFocused: isFocused
-    )
   }
 
   private var contentInsets: EdgeInsets {
@@ -810,7 +803,7 @@ private struct MIRAWallPhotoNoteContent: View {
               maxHeight: layout.captionHeight,
               alignment: .topLeading
             )
-            .scaleEffect(captionLegibilityScale)
+            .clipped()
         }
       }
       .padding(layout.insets)
@@ -881,10 +874,6 @@ private struct MIRAWallPhotoNoteContent: View {
     presentation.usesDarkPaper
       ? Color(red: 0.98, green: 0.95, blue: 0.84)
       : Color(red: 0.10, green: 0.095, blue: 0.075)
-  }
-
-  private var captionLegibilityScale: CGFloat {
-    MIRAWallNotePresentationResolver.wallLegibilityScale(forWallScale: wallScale)
   }
 
   private var photoCropRotation: Double {

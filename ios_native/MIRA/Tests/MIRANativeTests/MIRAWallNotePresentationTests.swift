@@ -180,10 +180,14 @@ final class MIRAWallNotePresentationTests: XCTestCase {
     XCTAssertEqual(MIRAWallNotePresentationResolver.renderDetail(forWallScale: 0.24, isFocused: true), .full)
   }
 
-  func testDistantInkLegibilityScalesContinuouslyWithoutChangingFocusedNotes() {
-    XCTAssertEqual(MIRAWallNotePresentationResolver.wallLegibilityScale(forWallScale: 0.72), 1, accuracy: 0.001)
-    XCTAssertEqual(MIRAWallNotePresentationResolver.wallLegibilityScale(forWallScale: 0.48), 1.11, accuracy: 0.001)
-    XCTAssertEqual(MIRAWallNotePresentationResolver.wallLegibilityScale(forWallScale: 0.24), 1.22, accuracy: 0.001)
+  func testWallZoomKeepsTypographyCompositionStable() {
+    for scale: CGFloat in [0.24, 0.48, 0.72, 1.4] {
+      XCTAssertEqual(
+        MIRAWallNotePresentationResolver.wallLegibilityScale(forWallScale: scale),
+        1,
+        accuracy: 0.001
+      )
+    }
     XCTAssertEqual(
       MIRAWallNotePresentationResolver.wallLegibilityScale(forWallScale: 0.24, isFocused: true),
       1,

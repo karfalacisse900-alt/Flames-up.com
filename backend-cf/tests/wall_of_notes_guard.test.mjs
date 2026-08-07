@@ -68,7 +68,11 @@ test('wall API preserves stable mixed-media presentation metadata', async () => 
 
 test('photo notes require an approved user-owned Cloudflare Images asset', async () => {
   const worker = await read('backend-cf/src/index.ts');
+  const migration = await read('supabase/migrations/20260807180630_allow_media_only_wall_notes.sql');
 
+  assert.match(worker, /requestedType === 'text' && !body/);
+  assert.doesNotMatch(worker, /requestedType !== 'voice' && !body/);
+  assert.match(migration, /note_type <> 'text' or char_length\(body\) >= 1/i);
   assert.match(worker, /submittedMediaUrl && !mediaAssetId/);
   assert.match(worker, /approvedMediaAssetsForPost\(c, userId, \[mediaAssetId\], \[\]\)/);
   assert.match(worker, /normalizeMediaAssetType\(mediaAsset\?\.media_type\) !== 'image'/);
@@ -77,6 +81,18 @@ test('photo notes require an approved user-owned Cloudflare Images asset', async
   assert.match(worker, /style_token: resolvedStyleToken/);
   assert.match(worker, /media_asset_id: mediaAssetId/);
   assert.match(worker, /wall_note_id: noteId/);
+});
+
+test('Captro Studio publishes its rendered image through the canonical Wall create path', async () => {
+  const studio = await read('ios_native/MIRA/Sources/MIRANative/Screens/MIRACaptroStudioView.swift');
+  const wallView = await read('ios_native/MIRA/Sources/MIRANative/Screens/WallOfNotesNativeView.swift');
+
+  assert.match(studio, /MIRAMediaUploadService\(api: api\)\.uploadResult\(picked\)/);
+  assert.match(studio, /body: ""/);
+  assert.match(studio, /noteType: "photo"/);
+  assert.match(studio, /_ = try await onPublish\(request\)/);
+  assert.match(wallView, /MIRACaptroStudioView\(camera: camera, api: api\)[\s\S]*?let note = try await model\.create\(body\)/);
+  assert.match(wallView, /func create\(_ body: MIRACreateWallNoteBody\)[\s\S]*?merge\(\[response\.note\]/);
 });
 
 test('living Wall features are migration-backed and cannot bypass Worker moderation', async () => {

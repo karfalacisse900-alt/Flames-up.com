@@ -104,10 +104,12 @@ public enum MIRAWallNotePresentationResolver {
   }
 
   public static func wallLegibilityScale(forWallScale scale: CGFloat, isFocused: Bool = false) -> CGFloat {
-    guard !isFocused, scale < 0.72 else { return 1 }
-    let clampedScale = min(0.72, max(0.24, scale))
-    let progress = (0.72 - clampedScale) / 0.48
-    return 1 + progress * 0.22
+    // A note's typography must remain part of one fixed physical composition.
+    // The wall camera scales the complete card; scaling ink independently causes
+    // text to jump and escape its paper bounds at pinch-gesture thresholds.
+    _ = scale
+    _ = isFocused
+    return 1
   }
 
   public static func resolve(_ note: MIRAWallNote, hasLocalMedia: Bool = false) -> MIRAWallNotePresentation {
