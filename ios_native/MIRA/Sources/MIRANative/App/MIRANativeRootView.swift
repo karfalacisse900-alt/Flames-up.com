@@ -5,6 +5,7 @@ import GoogleSignIn
 
 public enum MIRATab: Hashable {
   case wall
+  case yearbook
   case chat
   case profile
 }
@@ -298,6 +299,14 @@ public struct MIRANativeRootView: View {
       }
         .tag(MIRATab.wall)
         .tabItem { Label("Notes", systemImage: "note.text") }
+
+      lazyTab(.yearbook) {
+        NavigationStack {
+          MIRAYearbookNativeView(api: api, currentUser: authSession.user)
+        }
+      }
+        .tag(MIRATab.yearbook)
+        .tabItem { Label("Yearbook", systemImage: "book.closed.fill") }
 
       lazyTab(.chat) {
         ChatNativeView(api: api, currentUserId: authSession.user?.id ?? "", model: startup.chatModel)

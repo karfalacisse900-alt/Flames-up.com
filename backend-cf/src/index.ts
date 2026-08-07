@@ -5732,7 +5732,7 @@ async function supabaseUsersByAnyIds(c: any, ids: string[]): Promise<Map<string,
   try {
     if (appIds.length) {
       const rows = await supabaseAdminQueryRows(c, 'app_users', {
-        select: 'id,supabase_user_id,username,full_name,avatar_url,cover_url,bio,city,is_private,is_verified,counts,profile,metadata',
+        select: 'id,supabase_user_id,username,full_name,avatar_url,cover_url,bio,city,is_private,is_verified,status,counts,profile,metadata',
         filters: { id: postgrestInFilter(appIds) },
         limit: Math.max(1, appIds.length),
       });
@@ -5745,7 +5745,7 @@ async function supabaseUsersByAnyIds(c: any, ids: string[]): Promise<Map<string,
     }
     if (authIds.length) {
       const rows = await supabaseAdminQueryRows(c, 'app_users', {
-        select: 'id,supabase_user_id,username,full_name,avatar_url,cover_url,bio,city,is_private,is_verified,counts,profile,metadata',
+        select: 'id,supabase_user_id,username,full_name,avatar_url,cover_url,bio,city,is_private,is_verified,status,counts,profile,metadata',
         filters: { supabase_user_id: postgrestInFilter(authIds) },
         limit: Math.max(1, authIds.length),
       });
@@ -6753,6 +6753,443 @@ async function supabaseRemoveFriend(c: any, userId: string, otherUserId: string)
     supabaseAdminDeleteRows(c, 'app_friendships', { user_id: postgrestEqFilter(other), friend_id: postgrestEqFilter(viewer) }).catch(() => undefined),
   ]);
   return { removed: true };
+}
+
+const YEARBOOK_INTENTS = new Set(['friends', 'dating', 'friends_and_dating', 'creative_networking', 'just_browsing']);
+const YEARBOOK_THEMES = new Set(['classic_yearbook', 'notebook', 'y2k', 'film', 'minimal', 'vintage', 'scrapbook']);
+const YEARBOOK_VISIBILITIES = new Set(['public', 'friends', 'private']);
+const YEARBOOK_VISIBLE_FIELDS = [
+  'display_name', 'profile_photo', 'age', 'height_cm', 'city', 'country', 'job', 'school',
+  'short_bio', 'current_mood', 'languages', 'interests', 'hobbies', 'favorites', 'prompts',
+] as const;
+
+function yearbookEnum(value: unknown, allowed: Set<string>, fallback: string): string {
+  const normalized = cleanText(value, 80).trim().toLowerCase().replace(/[\s-]+/g, '_');
+  return allowed.has(normalized) ? normalized : fallback;
+}
+
+function yearbookStringList(value: unknown, maxItems: number, maxLength = 60): string[] {
+  const source = Array.isArray(value) ? value : parseJsonArray(value);
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const item of source) {
+    const text = cleanText(item, maxLength).trim();
+    const key = text.toLowerCase();
+    if (!text || seen.has(key)) continue;
+    seen.add(key);
+    result.push(text);
+    if (result.length >= maxItems) break;
+  }
+  return result;
+}
+
+function yearbookVisibilityMap(value: unknown): Record<string, string> {
+  const input = parseJsonObject(value);
+  const defaults: Record<string, string> = {
+    display_name: 'public',
+    profile_photo: 'public',
+    age: 'friends',
+    height_cm: 'friends',
+    city: 'public',
+    country: 'public',
+    job: 'friends',
+    school: 'friends',
+    short_bio: 'public',
+    current_mood: 'public',
+    languages: 'friends',
+    interests: 'public',
+    hobbies: 'public',
+    favorites: 'public',
+    prompts: 'public',
+  };
+  for (const field of YEARBOOK_VISIBLE_FIELDS) {
+    defaults[field] = yearbookEnum((input as any)[field], YEARBOOK_VISIBILITIES, defaults[field]);
+  }
+  return defaults;
+}
+
+function yearbookFavorites(value: unknown): Record<string, string> {
+  const input = parseJsonObject(value);
+  const output: Record<string, string> = {};
+  const keys = ['song', 'movie', 'food', 'place', 'quote', 'dream_job', 'fun_fact', 'most_likely_to'];
+  for (const key of keys) {
+    const text = cleanText((input as any)[key], key === 'quote' || key === 'fun_fact' ? 240 : 140).trim();
+    if (text) output[key] = text;
+  }
+  return output;
+}
+
+function yearbookCanSeeField(visibility: Record<string, string>, field: string, isOwner: boolean, isFriend: boolean): boolean {
+  if (isOwner) return true;
+  const rule = yearbookEnum(visibility[field], YEARBOOK_VISIBILITIES, 'private');
+  return rule === 'public' || (rule === 'friends' && isFriend);
+}
+
+function yearbookRawProfilePayload(row: any) {
+  return {
+    discovery_intent: yearbookEnum(row?.discovery_intent, YEARBOOK_INTENTS, 'friends'),
+    dating_enabled: !!row?.dating_enabled,
+    age: Number(row?.age || 0) || null,
+    height_cm: Number(row?.height_cm || 0) || null,
+    city: cleanText(row?.city, 120),
+    country: cleanText(row?.country, 120),
+    job: cleanText(row?.job, 120),
+    school: cleanText(row?.school, 160),
+    short_bio: cleanMultilineText(row?.short_bio, 320),
+    current_mood: cleanText(row?.current_mood, 80),
+    languages: yearbookStringList(row?.languages, 12),
+    interests: yearbookStringList(row?.interests, 20),
+    hobbies: yearbookStringList(row?.hobbies, 20),
+    favorites: yearbookFavorites(row?.favorites),
+    field_visibility: yearbookVisibilityMap(row?.field_visibility),
+    section_order: yearbookStringList(row?.section_order, 8, 40),
+    theme_id: yearbookEnum(row?.theme_id, YEARBOOK_THEMES, 'classic_yearbook'),
+    status: cleanText(row?.status, 20) === 'hidden' ? 'hidden' : 'active',
+    updated_at: row?.updated_at || row?.created_at || now(),
+  };
+}
+
+async function supabaseYearbookPrompts(c: any, userId: string): Promise<any[]> {
+  return supabaseAdminQueryRows(c, 'yearbook_prompt_answers', {
+    select: 'id,prompt_key,answer,position,created_at,updated_at',
+    filters: { user_id: postgrestEqFilter(userId) },
+    order: 'position.asc,created_at.asc',
+    limit: 5,
+  }).catch(() => []);
+}
+
+async function supabaseYearbookInterestState(c: any, viewerId: string, targetId: string) {
+  if (!viewerId || !targetId || viewerId === targetId) return { sent: false, mutual: false };
+  const [sentRows, reverseRows] = await Promise.all([
+    supabaseAdminQueryRows(c, 'yearbook_interest_signals', {
+      select: 'from_user_id',
+      filters: { from_user_id: postgrestEqFilter(viewerId), to_user_id: postgrestEqFilter(targetId) },
+      limit: 1,
+    }).catch(() => []),
+    supabaseAdminQueryRows(c, 'yearbook_interest_signals', {
+      select: 'from_user_id',
+      filters: { from_user_id: postgrestEqFilter(targetId), to_user_id: postgrestEqFilter(viewerId) },
+      limit: 1,
+    }).catch(() => []),
+  ]);
+  const sent = sentRows.length > 0;
+  return { sent, mutual: sent && reverseRows.length > 0 };
+}
+
+async function supabaseYearbookSignatureSummary(c: any, profileUserId: string) {
+  const rows = await supabaseAdminQueryRows(c, 'yearbook_signatures', {
+    select: 'id,signer_user_id,message,created_at,updated_at',
+    filters: { profile_user_id: postgrestEqFilter(profileUserId), status: postgrestEqFilter('visible') },
+    order: 'created_at.desc',
+    limit: 60,
+  }).catch(() => []);
+  const users = await supabaseUsersByAnyIds(c, rows.map((row) => publicId(row?.signer_user_id, 120)).filter(Boolean));
+  return {
+    count: rows.length,
+    signatures: rows.map((row) => {
+      const signerId = publicId(row?.signer_user_id, 120);
+      const user = users.get(signerId) || {};
+      return {
+        id: publicId(row?.id, 120),
+        signer_user_id: signerId,
+        username: publicUsernameFor({ username: user?.username }),
+        display_name: cleanText(user?.full_name, 120),
+        profile_photo: safeMediaReference(user?.avatar_url),
+        message: cleanMultilineText(row?.message, 160),
+        created_at: row?.created_at,
+      };
+    }),
+  };
+}
+
+async function supabaseYearbookProfilePayload(c: any, viewerId: string, targetId: string, includeSignatures = false) {
+  const target = await supabaseUserByAnyId(c, targetId);
+  const targetUserId = publicId(target?.id || targetId, 120);
+  if (!target || !targetUserId || supabaseUserStatus(target) !== 'active') return null;
+  if (viewerId !== targetUserId && await supabaseBlockPair(c, viewerId, targetUserId)) return null;
+  const rows = await supabaseAdminQueryRows(c, 'yearbook_profiles', {
+    select: '*',
+    filters: { user_id: postgrestEqFilter(targetUserId) },
+    limit: 1,
+  }).catch(() => []);
+  const row = rows[0];
+  if (!row) return null;
+  const raw = yearbookRawProfilePayload(row);
+  const isOwner = viewerId === targetUserId;
+  if (raw.status !== 'active' && !isOwner) return null;
+  const friendStatus = isOwner ? { status: 'self' } : await supabaseFriendStatus(c, viewerId, targetUserId);
+  const isFriend = cleanText((friendStatus as any)?.status, 40) === 'connected';
+  const visibility = raw.field_visibility;
+  const prompts = await supabaseYearbookPrompts(c, targetUserId);
+  const interest = await supabaseYearbookInterestState(c, viewerId, targetUserId);
+  const signatures = includeSignatures ? await supabaseYearbookSignatureSummary(c, targetUserId) : { count: 0, signatures: [] };
+  let interestAvailable = false;
+  if (!isOwner && raw.dating_enabled && Number(raw.age || 0) >= 18) {
+    const viewerRows = await supabaseAdminQueryRows(c, 'yearbook_profiles', {
+      select: 'age,dating_enabled,status',
+      filters: { user_id: postgrestEqFilter(viewerId) },
+      limit: 1,
+    }).catch(() => []);
+    const viewerProfile = viewerRows[0];
+    interestAvailable = viewerProfile?.status === 'active'
+      && viewerProfile?.dating_enabled === true
+      && Number(viewerProfile?.age || 0) >= 18;
+  }
+  const safe: any = {
+    user_id: targetUserId,
+    username: publicUsernameFor({ username: target?.username }),
+    discovery_intent: raw.discovery_intent,
+    dating_enabled: raw.dating_enabled && Number(raw.age || 0) >= 18,
+    theme_id: raw.theme_id,
+    status: raw.status,
+    viewer_is_owner: isOwner,
+    connection_status: cleanText((friendStatus as any)?.status, 40) || 'none',
+    connection_request_id: publicId((friendStatus as any)?.request_id, 120) || null,
+    interest_sent: interest.sent,
+    interest_mutual: interest.mutual,
+    interest_available: interestAvailable,
+    signature_count: signatures.count,
+    signatures: signatures.signatures,
+    field_visibility: isOwner ? visibility : undefined,
+    section_order: raw.section_order,
+    updated_at: raw.updated_at,
+  };
+  if (yearbookCanSeeField(visibility, 'display_name', isOwner, isFriend)) safe.display_name = cleanText(target?.full_name, 120);
+  if (yearbookCanSeeField(visibility, 'profile_photo', isOwner, isFriend)) safe.profile_photo = safeMediaReference(target?.avatar_url);
+  const copyIfVisible = (field: string, value: unknown) => {
+    if (yearbookCanSeeField(visibility, field, isOwner, isFriend)) safe[field] = value;
+  };
+  copyIfVisible('age', raw.age);
+  copyIfVisible('height_cm', raw.height_cm);
+  copyIfVisible('city', raw.city);
+  copyIfVisible('country', raw.country);
+  copyIfVisible('job', raw.job);
+  copyIfVisible('school', raw.school);
+  copyIfVisible('short_bio', raw.short_bio);
+  copyIfVisible('current_mood', raw.current_mood);
+  copyIfVisible('languages', raw.languages);
+  copyIfVisible('interests', raw.interests);
+  copyIfVisible('hobbies', raw.hobbies);
+  copyIfVisible('favorites', raw.favorites);
+  copyIfVisible('prompts', prompts.map((prompt) => ({
+    id: publicId(prompt?.id, 120),
+    prompt_key: cleanText(prompt?.prompt_key, 80),
+    answer: cleanMultilineText(prompt?.answer, 240),
+    position: clampNumber(prompt?.position, 0, 4, 0),
+  })));
+  return safe;
+}
+
+function yearbookDiscoverCardPayload(input: {
+  row: any;
+  user: any;
+  isFriend: boolean;
+  connectionStatus: string;
+  connectionRequestId?: string;
+  interestAvailable: boolean;
+}) {
+  const { row, user, isFriend, connectionStatus, connectionRequestId, interestAvailable } = input;
+  const raw = yearbookRawProfilePayload(row);
+  const visibility = raw.field_visibility;
+  const safe: any = {
+    user_id: publicId(row?.user_id, 120),
+    username: publicUsernameFor({ username: user?.username }),
+    discovery_intent: raw.discovery_intent,
+    dating_enabled: raw.dating_enabled && Number(raw.age || 0) >= 18,
+    theme_id: raw.theme_id,
+    status: raw.status,
+    viewer_is_owner: false,
+    connection_status: connectionStatus,
+    connection_request_id: connectionRequestId || null,
+    interest_sent: false,
+    interest_mutual: false,
+    interest_available: interestAvailable,
+    signature_count: 0,
+    signatures: [],
+    section_order: raw.section_order,
+    updated_at: raw.updated_at,
+  };
+  if (yearbookCanSeeField(visibility, 'display_name', false, isFriend)) safe.display_name = cleanText(user?.full_name, 120);
+  if (yearbookCanSeeField(visibility, 'profile_photo', false, isFriend)) safe.profile_photo = safeMediaReference(user?.avatar_url);
+  const copyIfVisible = (field: string, value: unknown) => {
+    if (yearbookCanSeeField(visibility, field, false, isFriend)) safe[field] = value;
+  };
+  copyIfVisible('age', raw.age);
+  copyIfVisible('height_cm', raw.height_cm);
+  copyIfVisible('city', raw.city);
+  copyIfVisible('country', raw.country);
+  copyIfVisible('job', raw.job);
+  copyIfVisible('school', raw.school);
+  copyIfVisible('short_bio', raw.short_bio);
+  copyIfVisible('current_mood', raw.current_mood);
+  copyIfVisible('languages', raw.languages);
+  copyIfVisible('interests', raw.interests);
+  copyIfVisible('hobbies', raw.hobbies);
+  copyIfVisible('favorites', raw.favorites);
+  return safe;
+}
+
+async function supabaseYearbookDiscover(c: any, viewerId: string, input: {
+  intent?: string;
+  query?: string;
+  city?: string;
+  language?: string;
+  interest?: string;
+  ageMin?: number;
+  ageMax?: number;
+  limit?: number;
+  offset?: number;
+}) {
+  const limit = clampNumber(input.limit, 1, 40, 24);
+  const offset = Math.max(0, Number(input.offset || 0));
+  const viewerUser = await supabaseUserByAnyId(c, viewerId);
+  const canonicalViewerId = publicId(viewerUser?.id || viewerId, 120);
+  if (!viewerUser || !canonicalViewerId || supabaseUserStatus(viewerUser) !== 'active') {
+    return { profiles: [], has_more: false, next_offset: offset };
+  }
+  const filters: Record<string, string> = { status: postgrestEqFilter('active') };
+  const intent = yearbookEnum(input.intent, YEARBOOK_INTENTS, '');
+  let viewerDatingEligible = false;
+  let viewerYearbookProfile: any = null;
+  if (intent === 'dating') {
+    const viewerRows = await supabaseAdminQueryRows(c, 'yearbook_profiles', {
+      select: 'age,dating_enabled,status',
+      filters: { user_id: postgrestEqFilter(canonicalViewerId) },
+      limit: 1,
+    }).catch(() => []);
+    viewerYearbookProfile = viewerRows[0];
+    viewerDatingEligible = viewerYearbookProfile?.status === 'active'
+      && viewerYearbookProfile?.dating_enabled === true
+      && Number(viewerYearbookProfile?.age || 0) >= 18;
+  }
+  if (intent === 'dating') {
+    if (!viewerDatingEligible) {
+      return { profiles: [], has_more: false, next_offset: offset, dating_unavailable: true };
+    }
+  }
+  if (intent) filters.discovery_intent = intent === 'dating'
+    ? postgrestInFilter(['dating', 'friends_and_dating'])
+    : postgrestEqFilter(intent);
+  const readLimit = Math.min(120, Math.max((limit + 1) * 4, 48));
+  const candidateRows = await supabaseAdminQueryRows(c, 'yearbook_profiles', {
+    select: '*',
+    filters,
+    order: 'updated_at.desc',
+    limit: readLimit,
+    offset,
+  });
+  const candidateIds = Array.from(new Set(candidateRows.map((row) => publicId(row?.user_id, 120)).filter(Boolean)));
+  const [blocked, users, friendships, outgoingRequests, incomingRequests] = await Promise.all([
+    supabaseBlockedUserIds(c, canonicalViewerId),
+    supabaseUsersByAnyIds(c, candidateIds),
+    candidateIds.length ? supabaseAdminQueryRows(c, 'app_friendships', {
+      select: 'friend_id',
+      filters: { user_id: postgrestEqFilter(canonicalViewerId), friend_id: postgrestInFilter(candidateIds) },
+      limit: candidateIds.length,
+    }).catch(() => []) : Promise.resolve([]),
+    candidateIds.length ? supabaseAdminQueryRows(c, 'app_friend_requests', {
+      select: 'id,to_user_id',
+      filters: { from_user_id: postgrestEqFilter(canonicalViewerId), to_user_id: postgrestInFilter(candidateIds), status: postgrestEqFilter('pending') },
+      limit: candidateIds.length,
+    }).catch(() => []) : Promise.resolve([]),
+    candidateIds.length ? supabaseAdminQueryRows(c, 'app_friend_requests', {
+      select: 'id,from_user_id',
+      filters: { to_user_id: postgrestEqFilter(canonicalViewerId), from_user_id: postgrestInFilter(candidateIds), status: postgrestEqFilter('pending') },
+      limit: candidateIds.length,
+    }).catch(() => []) : Promise.resolve([]),
+  ]);
+  const connectedIds = new Set(friendships.map((row) => publicId(row?.friend_id, 120)).filter(Boolean));
+  const outgoingByUser = new Map(outgoingRequests.map((row) => [publicId(row?.to_user_id, 120), publicId(row?.id, 120)]));
+  const incomingByUser = new Map(incomingRequests.map((row) => [publicId(row?.from_user_id, 120), publicId(row?.id, 120)]));
+  const query = cleanText(input.query, 100).toLowerCase();
+  const city = cleanText(input.city, 100).toLowerCase();
+  const language = cleanText(input.language, 60).toLowerCase();
+  const interest = cleanText(input.interest, 60).toLowerCase();
+  const hasAgeFilter = input.ageMin != null || input.ageMax != null;
+  const minAge = clampNumber(input.ageMin, 16, 120, 16);
+  const maxAge = clampNumber(input.ageMax, minAge, 120, 120);
+  const cards = candidateRows.flatMap((row) => {
+    const uid = publicId(row?.user_id, 120);
+    const user = users.get(uid);
+    if (!uid || uid === canonicalViewerId || blocked.has(uid) || !user || supabaseUserStatus(user) !== 'active') return [];
+    const raw = yearbookRawProfilePayload(row);
+    if (intent === 'dating' && (!raw.dating_enabled || Number(raw.age || 0) < 18)) return [];
+    const isFriend = connectedIds.has(uid);
+    const connectionStatus = isFriend
+      ? 'connected'
+      : outgoingByUser.has(uid)
+        ? 'request_sent'
+        : incomingByUser.has(uid)
+          ? 'request_received'
+          : 'none';
+    const card = yearbookDiscoverCardPayload({
+      row,
+      user,
+      isFriend,
+      connectionStatus,
+      connectionRequestId: outgoingByUser.get(uid) || incomingByUser.get(uid),
+      interestAvailable: viewerDatingEligible && raw.dating_enabled && Number(raw.age || 0) >= 18,
+    });
+    if (hasAgeFilter && (typeof card.age !== 'number' || card.age < minAge || card.age > maxAge)) return [];
+    if (city && !cleanText(card.city, 120).toLowerCase().includes(city)) return [];
+    if (language && !yearbookStringList(card.languages, 12).some((item) => item.toLowerCase().includes(language))) return [];
+    if (interest && ![...yearbookStringList(card.interests, 20), ...yearbookStringList(card.hobbies, 20)].some((item) => item.toLowerCase().includes(interest))) return [];
+    if (query) {
+      const haystack = [card.display_name, card.username, card.city, card.country, card.job, card.school, card.short_bio,
+        ...yearbookStringList(card.interests, 20), ...yearbookStringList(card.hobbies, 20)].filter(Boolean).join(' ').toLowerCase();
+      if (!haystack.includes(query)) return [];
+    }
+    return [card];
+  });
+  return {
+    profiles: cards.slice(0, limit),
+    has_more: cards.length > limit || candidateRows.length === readLimit,
+    next_offset: offset + candidateRows.length,
+  };
+}
+
+async function supabaseUpsertYearbookProfile(c: any, userId: string, input: any) {
+  const user = await supabaseUserByAnyId(c, userId);
+  const uid = publicId(user?.id || userId, 120);
+  if (!user || !uid || supabaseUserStatus(user) !== 'active') throw new Error('YEARBOOK_USER_NOT_ACTIVE');
+  const ageValue = input.age == null || input.age === '' ? null : clampNumber(input.age, 16, 120, 16);
+  const intent = yearbookEnum(input.discoveryIntent ?? input.discovery_intent, YEARBOOK_INTENTS, 'friends');
+  const datingCompatible = intent === 'dating' || intent === 'friends_and_dating';
+  const datingEnabled = optionalBoolean(input.datingEnabled ?? input.dating_enabled) === true && datingCompatible && Number(ageValue || 0) >= 18;
+  const profile = {
+    user_id: uid,
+    discovery_intent: intent,
+    dating_enabled: datingEnabled,
+    age: ageValue,
+    height_cm: input.heightCm == null && input.height_cm == null ? null : clampNumber(input.heightCm ?? input.height_cm, 90, 250, 165),
+    city: cleanText(input.city, 120),
+    country: cleanText(input.country, 120),
+    job: cleanText(input.job, 120),
+    school: cleanText(input.school, 160),
+    short_bio: cleanMultilineText(input.shortBio ?? input.short_bio, 320),
+    current_mood: cleanText(input.currentMood ?? input.current_mood, 80),
+    languages: yearbookStringList(input.languages, 12),
+    interests: yearbookStringList(input.interests, 20),
+    hobbies: yearbookStringList(input.hobbies, 20),
+    favorites: yearbookFavorites(input.favorites),
+    field_visibility: yearbookVisibilityMap(input.fieldVisibility ?? input.field_visibility),
+    section_order: yearbookStringList(input.sectionOrder ?? input.section_order, 8, 40),
+    theme_id: yearbookEnum(input.themeId ?? input.theme_id, YEARBOOK_THEMES, 'classic_yearbook'),
+    status: cleanText(input.status, 20) === 'hidden' ? 'hidden' : 'active',
+    updated_at: now(),
+  };
+  await supabaseAdminUpsert(c, 'yearbook_profiles', [profile], 'user_id');
+
+  const prompts = (Array.isArray(input.prompts) ? input.prompts : []).slice(0, 5).map((prompt: any, index: number) => ({
+    user_id: uid,
+    prompt_key: cleanText(prompt?.promptKey ?? prompt?.prompt_key, 80),
+    answer: cleanMultilineText(prompt?.answer, 240),
+    position: clampNumber(prompt?.position, 0, 4, index),
+    updated_at: now(),
+  })).filter((prompt: any) => prompt.prompt_key && prompt.answer);
+  await supabaseAdminDeleteRows(c, 'yearbook_prompt_answers', { user_id: postgrestEqFilter(uid) }).catch(() => undefined);
+  if (prompts.length) await supabaseAdminUpsert(c, 'yearbook_prompt_answers', prompts, 'user_id,prompt_key');
+  return supabaseYearbookProfilePayload(c, uid, uid, true);
 }
 
 async function supabaseBlockUser(c: any, blockerId: string, blockedId: string) {
@@ -16376,6 +16813,254 @@ api.delete('/friends/:userId', authMiddleware, async (c) => {
   const supabaseRequired = requireSupabasePrimaryDatabase(c, 'friend_remove');
   if (supabaseRequired) return supabaseRequired;
   return c.json(await supabaseRemoveFriend(c, mid, oid));
+});
+
+// Yearbook social discovery
+api.get('/yearbook/discover', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'yearbook_discover_read');
+  if (supabaseRequired) return supabaseRequired;
+  const limited = await enforceRateLimit(c, 'yearbook_discover_read', userId, 180, 60);
+  if (limited) return limited;
+  try {
+    const result = await supabaseYearbookDiscover(c, userId, {
+      intent: c.req.query('intent') || '',
+      query: c.req.query('query') || '',
+      city: c.req.query('city') || '',
+      language: c.req.query('language') || '',
+      interest: c.req.query('interest') || '',
+      ageMin: Number(c.req.query('age_min') || 0),
+      ageMax: Number(c.req.query('age_max') || 0),
+      limit: Number(c.req.query('limit') || 24),
+      offset: Number(c.req.query('offset') || 0),
+    });
+    const response = c.json(result);
+    response.headers.set('cache-control', 'private, max-age=15');
+    return response;
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'yearbook_discover_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not load the Yearbook right now.' }, 500);
+  }
+});
+
+api.get('/yearbook/me', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'yearbook_profile_read');
+  if (supabaseRequired) return supabaseRequired;
+  try {
+    const profile = await supabaseYearbookProfilePayload(c, userId, userId, true);
+    return c.json({ profile });
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'yearbook_profile_read_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not load your Yearbook profile.' }, 500);
+  }
+});
+
+api.put('/yearbook/me', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'yearbook_profile_write');
+  if (supabaseRequired) return supabaseRequired;
+  const limited = await enforceRateLimit(c, 'yearbook_profile_write', userId, 20, 60);
+  if (limited) return limited;
+  const bodyTooLarge = rejectLargeRequest(c, 40_000);
+  if (bodyTooLarge) return bodyTooLarge;
+  const body = await c.req.json().catch(() => ({}));
+  try {
+    const profile = await supabaseUpsertYearbookProfile(c, userId, body);
+    return c.json({ profile, saved: true });
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'yearbook_profile_write_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not save your Yearbook profile.' }, 500);
+  }
+});
+
+api.get('/yearbook/profiles/:userId', authMiddleware, async (c) => {
+  const viewerId = getUserId(c);
+  const targetId = publicId(c.req.param('userId'), 120);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'yearbook_public_profile_read');
+  if (supabaseRequired) return supabaseRequired;
+  try {
+    const profile = await supabaseYearbookProfilePayload(c, viewerId, targetId, true);
+    if (!profile) return c.json({ detail: 'Yearbook profile not found.' }, 404);
+    return c.json({ profile });
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'yearbook_public_profile_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not load this Yearbook profile.' }, 500);
+  }
+});
+
+api.get('/yearbook/profiles/:userId/signatures', authMiddleware, async (c) => {
+  const viewerId = getUserId(c);
+  const targetId = publicId(c.req.param('userId'), 120);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'yearbook_signatures_read');
+  if (supabaseRequired) return supabaseRequired;
+  if (await supabaseBlockPair(c, viewerId, targetId)) return c.json({ detail: 'Yearbook profile not found.' }, 404);
+  const profile = await supabaseYearbookProfilePayload(c, viewerId, targetId, false);
+  if (!profile) return c.json({ detail: 'Yearbook profile not found.' }, 404);
+  return c.json(await supabaseYearbookSignatureSummary(c, publicId(profile.user_id, 120)));
+});
+
+api.post('/yearbook/profiles/:userId/signatures', authMiddleware, async (c) => {
+  const signerId = getUserId(c);
+  const targetId = publicId(c.req.param('userId'), 120);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'yearbook_signature_write');
+  if (supabaseRequired) return supabaseRequired;
+  const limited = await enforceRateLimit(c, 'yearbook_signature_write', signerId, 12, 3600);
+  if (limited) return limited;
+  const bodyTooLarge = rejectLargeRequest(c, 8_000);
+  if (bodyTooLarge) return bodyTooLarge;
+  if (!targetId || signerId === targetId) return c.json({ detail: 'You cannot sign your own Yearbook.' }, 400);
+  if (await supabaseBlockPair(c, signerId, targetId)) return c.json({ detail: 'This Yearbook is unavailable.' }, 403);
+  const target = await supabaseYearbookProfilePayload(c, signerId, targetId, false);
+  if (!target) return c.json({ detail: 'Yearbook profile not found.' }, 404);
+  const body: any = await c.req.json().catch(() => ({}));
+  const message = cleanMultilineText(body.message, 160).trim();
+  try {
+    const existingRows = await supabaseAdminQueryRows(c, 'yearbook_signatures', {
+      select: 'id,created_at',
+      filters: {
+        profile_user_id: postgrestEqFilter(targetId),
+        signer_user_id: postgrestEqFilter(signerId),
+      },
+      limit: 1,
+    }).catch(() => []);
+    const id = publicId(existingRows[0]?.id, 120) || uuid();
+    await supabaseAdminUpsert(c, 'yearbook_signatures', [{
+      id,
+      profile_user_id: targetId,
+      signer_user_id: signerId,
+      message,
+      status: 'visible',
+      created_at: existingRows[0]?.created_at || now(),
+      updated_at: now(),
+    }], 'profile_user_id,signer_user_id');
+    const signer = await supabaseUserByAnyId(c, signerId);
+    await insertNotificationOnce(c, {
+      userId: targetId,
+      type: 'yearbook_signature',
+      title: 'Your Yearbook was signed',
+      body: `${cleanText(signer?.full_name || signer?.username, 80) || 'Someone'} left a mark in your Yearbook.`,
+      data: { from_user_id: signerId, signature_id: id, reference_id: targetId },
+      dedupeKey: `yearbook_signature:${signerId}:${targetId}`,
+      dedupeSeconds: 300,
+    }).catch(() => undefined);
+    return c.json({ signed: true, signature_id: id });
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'yearbook_signature_write_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not sign this Yearbook.' }, 500);
+  }
+});
+
+api.delete('/yearbook/profiles/:userId/signatures/me', authMiddleware, async (c) => {
+  const signerId = getUserId(c);
+  const targetId = publicId(c.req.param('userId'), 120);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'yearbook_signature_remove');
+  if (supabaseRequired) return supabaseRequired;
+  await supabaseAdminDeleteRows(c, 'yearbook_signatures', {
+    profile_user_id: postgrestEqFilter(targetId),
+    signer_user_id: postgrestEqFilter(signerId),
+  }).catch(() => undefined);
+  return c.json({ removed: true });
+});
+
+api.patch('/yearbook/signatures/:signatureId', authMiddleware, async (c) => {
+  const ownerId = getUserId(c);
+  const signatureId = publicId(c.req.param('signatureId'), 120);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'yearbook_signature_moderate');
+  if (supabaseRequired) return supabaseRequired;
+  const rows = await supabaseAdminQueryRows(c, 'yearbook_signatures', {
+    select: 'id,profile_user_id', filters: { id: postgrestEqFilter(signatureId) }, limit: 1,
+  }).catch(() => []);
+  if (!rows[0] || publicId(rows[0].profile_user_id, 120) !== ownerId) return c.json({ detail: 'Signature not found.' }, 404);
+  const body: any = await c.req.json().catch(() => ({}));
+  const status = cleanText(body.status, 20) === 'visible' ? 'visible' : 'hidden';
+  await supabaseAdminPatchRows(c, 'yearbook_signatures', { id: postgrestEqFilter(signatureId) }, { status, updated_at: now() });
+  return c.json({ updated: true, status });
+});
+
+api.post('/yearbook/signatures/:signatureId/report', authMiddleware, async (c) => {
+  const reporterId = getUserId(c);
+  const signatureId = publicId(c.req.param('signatureId'), 120);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'yearbook_signature_report');
+  if (supabaseRequired) return supabaseRequired;
+  const limited = await enforceRateLimit(c, 'yearbook_signature_report', reporterId, 20, 86400);
+  if (limited) return limited;
+  const rows = await supabaseAdminQueryRows(c, 'yearbook_signatures', {
+    select: 'id,profile_user_id,signer_user_id,message', filters: { id: postgrestEqFilter(signatureId) }, limit: 1,
+  }).catch(() => []);
+  const signature = rows[0];
+  if (!signature) return c.json({ detail: 'Signature not found.' }, 404);
+  const body: any = await c.req.json().catch(() => ({}));
+  const reportId = uuid();
+  await supabaseAdminInsertRows(c, 'app_reports', [{
+    id: reportId,
+    reporter_id: reporterId,
+    target_type: 'yearbook_signature',
+    target_id: signatureId,
+    target_owner_user_id: publicId(signature.signer_user_id, 120),
+    reason: normalizeReportReason(body.reason || 'harassment'),
+    details: cleanMultilineText(body.details, 500),
+    status: 'open',
+    priority: priorityForReportReason(body.reason || 'harassment'),
+    metadata: { profile_user_id: publicId(signature.profile_user_id, 120), source: 'yearbook_signature_report' },
+    created_at: now(),
+    updated_at: now(),
+  }]);
+  if (publicId(signature.profile_user_id, 120) === reporterId) {
+    await supabaseAdminPatchRows(c, 'yearbook_signatures', { id: postgrestEqFilter(signatureId) }, { status: 'hidden', updated_at: now() });
+  }
+  return c.json({ reported: true, id: reportId });
+});
+
+api.post('/yearbook/profiles/:userId/interest', authMiddleware, async (c) => {
+  const viewerId = getUserId(c);
+  const targetId = publicId(c.req.param('userId'), 120);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'yearbook_interest_write');
+  if (supabaseRequired) return supabaseRequired;
+  const limited = await enforceRateLimit(c, 'yearbook_interest_write', viewerId, 40, 86400);
+  if (limited) return limited;
+  if (!targetId || viewerId === targetId) return c.json({ detail: 'This action is not available.' }, 400);
+  if (await supabaseBlockPair(c, viewerId, targetId)) return c.json({ detail: 'This profile is unavailable.' }, 403);
+  const [viewerRows, targetRows] = await Promise.all([
+    supabaseAdminQueryRows(c, 'yearbook_profiles', { select: 'age,dating_enabled,discovery_intent', filters: { user_id: postgrestEqFilter(viewerId) }, limit: 1 }),
+    supabaseAdminQueryRows(c, 'yearbook_profiles', { select: 'age,dating_enabled,discovery_intent', filters: { user_id: postgrestEqFilter(targetId) }, limit: 1 }),
+  ]);
+  const viewer = viewerRows[0];
+  const target = targetRows[0];
+  if (!viewer?.dating_enabled || Number(viewer?.age || 0) < 18 || !target?.dating_enabled || Number(target?.age || 0) < 18) {
+    return c.json({ detail: 'Interested is available only when both adults enable Dating.' }, 403);
+  }
+  await supabaseAdminUpsert(c, 'yearbook_interest_signals', [{
+    from_user_id: viewerId, to_user_id: targetId, updated_at: now(),
+  }], 'from_user_id,to_user_id');
+  const state = await supabaseYearbookInterestState(c, viewerId, targetId);
+  if (state.mutual) {
+    const [viewerUser, targetUser] = await Promise.all([supabaseUserByAnyId(c, viewerId), supabaseUserByAnyId(c, targetId)]);
+    await Promise.all([
+      insertNotificationOnce(c, {
+        userId: viewerId, type: 'yearbook_match', title: 'You found each other',
+        body: `You and ${cleanText(targetUser?.full_name || targetUser?.username, 80) || 'this person'} are both interested.`,
+        data: { from_user_id: targetId, reference_id: targetId }, dedupeKey: `yearbook_match:${[viewerId, targetId].sort().join(':')}:viewer`, dedupeSeconds: 365 * 86400,
+      }),
+      insertNotificationOnce(c, {
+        userId: targetId, type: 'yearbook_match', title: 'You found each other',
+        body: `You and ${cleanText(viewerUser?.full_name || viewerUser?.username, 80) || 'this person'} are both interested.`,
+        data: { from_user_id: viewerId, reference_id: viewerId }, dedupeKey: `yearbook_match:${[viewerId, targetId].sort().join(':')}:target`, dedupeSeconds: 365 * 86400,
+      }),
+    ]).catch(() => undefined);
+  }
+  return c.json({ interested: true, mutual: state.mutual });
+});
+
+api.delete('/yearbook/profiles/:userId/interest', authMiddleware, async (c) => {
+  const viewerId = getUserId(c);
+  const targetId = publicId(c.req.param('userId'), 120);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'yearbook_interest_remove');
+  if (supabaseRequired) return supabaseRequired;
+  await supabaseAdminDeleteRows(c, 'yearbook_interest_signals', {
+    from_user_id: postgrestEqFilter(viewerId), to_user_id: postgrestEqFilter(targetId),
+  }).catch(() => undefined);
+  return c.json({ interested: false, mutual: false });
 });
 
 // Discover
