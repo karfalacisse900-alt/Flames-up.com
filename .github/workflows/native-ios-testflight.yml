@@ -209,7 +209,48 @@ jobs:
             sleep "$delay"
           done
 
-      - name: Confirm uploaded build can be processed for distribution
+      - name: Install fastlane
+        run: brew install fastlane
+
+      - name: Wait for processing and distribute to Captro Public Beta
+        env:
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
         run: |
-          echo "Uploaded Captro ${BUILD_NUMBER}."
-          echo "Run the Native iOS TestFlight Distribution workflow for group assignment and external beta review."
+          set -euo pipefail
+          API_KEY_JSON="$RUNNER_TEMP/app-store-connect-api-key.json"
+          KEY_PATH="$HOME/.appstoreconnect/private_keys/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8"
+
+          python3 - "$API_KEY_JSON" "$KEY_PATH" <<'PY'
+          import json
+          import os
+          import sys
+
+          output_path, key_path = sys.argv[1:]
+          payload = {
+              "key_id": os.environ["APP_STORE_CONNECT_API_KEY_ID"],
+              "issuer_id": os.environ["APP_STORE_CONNECT_API_ISSUER_ID"],
+              "key_filepath": key_path,
+              "in_house": False,
+          }
+          with open(output_path, "w", encoding="utf-8") as handle:
+              json.dump(payload, handle)
+          PY
+
+          fastlane pilot distribute \
+            --api_key_path "$API_KEY_JSON" \
+            --app_identifier "$BUNDLE_ID" \
+            --apple_id "6777888591" \
+            --app_version "1.0.1" \
+            --build_number "$BUILD_NUMBER" \
+            --groups "Captro Public Beta" \
+            --distribute_external true \
+            --notify_external_testers true \
+            --submit_beta_review true \
+            --wait_processing_interval 30 \
+            --wait_processing_timeout_duration 1800 \
+            --changelog "Polished Yearbook browsing, responsive book spreads, clearer profiles, filters, and smoother page turns."
+
+      - name: Confirm TestFlight distribution
+        run: |
+          echo "Captro ${BUILD_NUMBER} was uploaded, processed, and assigned to Captro Public Beta."
