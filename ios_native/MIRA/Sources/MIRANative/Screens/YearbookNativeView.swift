@@ -145,14 +145,12 @@ public struct MIRAYearbookNativeView: View {
       YearbookPaperBackground()
         .ignoresSafeArea()
 
-      ScrollView {
-        LazyVStack(spacing: 0) {
-          header
-          content
-        }
-      }
-      .scrollIndicators(.hidden)
-      .refreshable { await model.prepare() }
+      content
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+      header
+        .frame(maxHeight: .infinity, alignment: .top)
+        .zIndex(20)
     }
     .navigationBarHidden(true)
     .task { await model.prepare() }
@@ -243,58 +241,44 @@ public struct MIRAYearbookNativeView: View {
       )
       .padding(.top, 38)
     } else {
-      VStack(spacing: 12) {
-        TabView(selection: $selectedSpread) {
-          ForEach(Array(profileSpreads.enumerated()), id: \.offset) { index, profiles in
-            YearbookOpenSpread(
-              profiles: profiles,
-              loadedProfileCount: model.profiles.count,
-              pageNumber: index + 1,
-              pageCount: profileSpreads.count,
-              selectedIntent: model.selectedIntent,
-              api: api,
-              currentUserID: currentUser?.id ?? "",
-              onSearch: {
-                withAnimation(.easeOut(duration: 0.2)) { isSearchVisible.toggle() }
-              },
-              onFilter: { showFilters = true },
-              onSelectIntent: { intent in
-                selectedSpread = 0
-                model.selectedIntent = intent
-                Task { await model.reload() }
-              },
-              onEdit: { showEditor = true }
-            )
-            .tag(index)
-            .task {
-              if let last = profiles.last {
-                await model.loadMoreIfNeeded(current: last)
-              }
+      TabView(selection: $selectedSpread) {
+        ForEach(Array(profileSpreads.enumerated()), id: \.offset) { index, profiles in
+          YearbookOpenSpread(
+            profiles: profiles,
+            loadedProfileCount: model.profiles.count,
+            pageNumber: index + 1,
+            pageCount: profileSpreads.count,
+            selectedIntent: model.selectedIntent,
+            api: api,
+            currentUserID: currentUser?.id ?? "",
+            onSearch: {
+              withAnimation(.easeOut(duration: 0.2)) { isSearchVisible.toggle() }
+            },
+            onFilter: { showFilters = true },
+            onSelectIntent: { intent in
+              selectedSpread = 0
+              model.selectedIntent = intent
+              Task { await model.reload() }
+            },
+            onEdit: { showEditor = true }
+          )
+          .tag(index)
+          .task {
+            if let last = profiles.last {
+              await model.loadMoreIfNeeded(current: last)
             }
           }
         }
-        .tabViewStyle(.page(indexDisplayMode: .never))
-        .frame(maxWidth: 680)
-        .aspectRatio(0.72, contentMode: .fit)
-
-        HStack(spacing: 7) {
-          ForEach(profileSpreads.indices, id: \.self) { index in
-            Capsule()
-              .fill(index == selectedSpread ? MIRATheme.Color.forest : Color.black.opacity(0.18))
-              .frame(width: index == selectedSpread ? 20 : 7, height: 7)
-          }
-        }
-        .animation(.easeOut(duration: 0.18), value: selectedSpread)
-        .accessibilityHidden(true)
       }
-      .padding(.horizontal, 8)
-      .padding(.top, 12)
-      .padding(.bottom, 30)
-
-      if model.isLoadingMore {
-        ProgressView()
-          .tint(MIRATheme.Color.forest)
-          .padding(.bottom, 28)
+      .tabViewStyle(.page(indexDisplayMode: .never))
+      .padding(.horizontal, 2)
+      .padding(.vertical, 2)
+      .overlay(alignment: .bottom) {
+        if model.isLoadingMore {
+          ProgressView()
+            .tint(Color.black.opacity(0.64))
+            .padding(.bottom, 44)
+        }
       }
     }
   }
@@ -325,23 +309,21 @@ private struct YearbookOpenSpread: View {
   var body: some View {
     GeometryReader { proxy in
       let size = proxy.size
-      let outerInset = max(9.0, size.width * 0.025)
-      let headerHeight = max(38.0, size.height * 0.075)
-      let footerHeight = max(31.0, size.height * 0.06)
+      let outerInset = max(4.0, size.width * 0.012)
+      let headerHeight = max(40.0, size.height * 0.068)
+      let footerHeight = max(36.0, size.height * 0.058)
 
       ZStack {
-        RoundedRectangle(cornerRadius: 17, style: .continuous)
-          .fill(Color(red: 0.18, green: 0.145, blue: 0.105))
-          .overlay {
-            RoundedRectangle(cornerRadius: 17, style: .continuous)
-              .stroke(Color.black.opacity(0.66), lineWidth: 2)
-          }
-          .shadow(color: Color.black.opacity(0.48), radius: 20, y: 12)
+        YearbookBookCoverSurface()
+          .shadow(color: Color.black.opacity(0.58), radius: 24, y: 14)
 
-        RoundedRectangle(cornerRadius: 13, style: .continuous)
-          .fill(Color(red: 0.69, green: 0.62, blue: 0.48))
-          .padding(outerInset - 3)
-          .offset(y: 4)
+        ForEach(0..<4, id: \.self) { layer in
+          RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .fill(Color(red: 0.77, green: 0.71, blue: 0.59).opacity(0.96 - Double(layer) * 0.08))
+            .padding(outerInset + CGFloat(layer) * 1.2)
+            .offset(x: CGFloat(layer) * 0.45, y: 6 + CGFloat(layer) * 1.4)
+            .allowsHitTesting(false)
+        }
 
         VStack(spacing: 0) {
           HStack(spacing: 10) {
@@ -371,16 +353,21 @@ private struct YearbookOpenSpread: View {
           HStack(spacing: 0) {
             pageLeaf(startIndex: 0, side: .left)
             YearbookCenterBinding()
-              .frame(width: max(10, size.width * 0.035))
+              .frame(width: max(14, size.width * 0.042))
             pageLeaf(startIndex: 2, side: .right)
           }
 
           HStack {
             Text("\(loadedProfileCount) \(loadedProfileCount == 1 ? "person" : "people")")
             Spacer()
-            Text("PAGE \(pageNumber) OF \(max(pageCount, 1))")
-              .tracking(0.8)
+            Text("Class of 2026")
+              .font(.custom("Noteworthy-Bold", size: max(12, size.width * 0.036), relativeTo: .headline))
+            Image(systemName: "heart")
+              .font(.system(size: 11, weight: .medium))
+              .foregroundStyle(Color(red: 0.72, green: 0.31, blue: 0.34))
             Spacer()
+            Text("\(pageNumber)/\(max(pageCount, 1))")
+              .font(.system(size: 9, weight: .bold, design: .serif))
             Button(action: onSearch) {
               Image(systemName: "magnifyingglass")
                 .frame(width: 28, height: 28)
@@ -396,7 +383,7 @@ private struct YearbookOpenSpread: View {
           }
           .font(.system(size: max(10, size.width * 0.029), weight: .semibold, design: .serif))
           .foregroundStyle(Color.black.opacity(0.72))
-          .padding(.horizontal, 15)
+          .padding(.horizontal, 11)
           .frame(height: footerHeight)
           .background(YearbookPageTexture(base: pageColor.opacity(0.98), ruled: false))
         }
@@ -405,9 +392,9 @@ private struct YearbookOpenSpread: View {
 
         bookTabs
           .frame(maxWidth: .infinity, alignment: .trailing)
-          .padding(.top, headerHeight + outerInset + 6)
-          .padding(.bottom, footerHeight + outerInset + 8)
-          .offset(x: 5)
+          .padding(.top, headerHeight + outerInset + 8)
+          .padding(.bottom, footerHeight + outerInset + 10)
+          .offset(x: 3)
       }
     }
     .accessibilityElement(children: .contain)
@@ -416,10 +403,27 @@ private struct YearbookOpenSpread: View {
   private enum PageSide { case left, right }
 
   private func pageLeaf(startIndex: Int, side: PageSide) -> some View {
-    ZStack {
+    let pageShape = UnevenRoundedRectangle(
+      topLeadingRadius: side == .left ? 10 : 1,
+      bottomLeadingRadius: side == .left ? 10 : 1,
+      bottomTrailingRadius: side == .right ? 10 : 1,
+      topTrailingRadius: side == .right ? 10 : 1,
+      style: .continuous
+    )
+
+    return ZStack {
       YearbookPageTexture(base: pageColor, ruled: false)
 
-      VStack(spacing: 10) {
+      LinearGradient(
+        colors: side == .left
+          ? [Color.white.opacity(0.24), Color.clear, Color.black.opacity(0.15)]
+          : [Color.black.opacity(0.15), Color.clear, Color.white.opacity(0.24)],
+        startPoint: .leading,
+        endPoint: .trailing
+      )
+      .allowsHitTesting(false)
+
+      VStack(spacing: 13) {
         ForEach(0..<2, id: \.self) { slot in
           let profileIndex = startIndex + slot
           if profiles.indices.contains(profileIndex) {
@@ -437,8 +441,8 @@ private struct YearbookOpenSpread: View {
           }
         }
       }
-      .padding(.horizontal, 10)
-      .padding(.vertical, 10)
+      .padding(.horizontal, 12)
+      .padding(.vertical, 12)
 
       if side == .left {
         YearbookPageHoles()
@@ -447,11 +451,23 @@ private struct YearbookOpenSpread: View {
           .allowsHitTesting(false)
       }
     }
-    .overlay(alignment: side == .left ? .trailing : .leading) {
-      Rectangle()
-        .fill(Color.black.opacity(0.08))
-        .frame(width: 1)
+    .clipShape(pageShape)
+    .overlay {
+      pageShape
+        .stroke(Color.black.opacity(0.17), lineWidth: 0.8)
     }
+    .overlay(alignment: side == .left ? .trailing : .leading) {
+      LinearGradient(
+        colors: side == .left
+          ? [Color.clear, Color.black.opacity(0.20)]
+          : [Color.black.opacity(0.20), Color.clear],
+        startPoint: .leading,
+        endPoint: .trailing
+      )
+      .frame(width: 12)
+      .allowsHitTesting(false)
+    }
+    .shadow(color: Color.black.opacity(0.24), radius: 5, x: side == .left ? -2 : 2, y: 3)
   }
 
   private var bookTabs: some View {
@@ -508,7 +524,7 @@ private struct YearbookPortraitCard: View {
           }
         }
         .frame(maxWidth: .infinity)
-        .aspectRatio(0.94, contentMode: .fit)
+        .aspectRatio(0.82, contentMode: .fit)
         .clipped()
 
         Image(systemName: profile.intent == .dating || profile.intent == .friendsAndDating ? "heart" : "star")
@@ -566,6 +582,51 @@ private struct YearbookHeaderPaper: View {
   }
 }
 
+private struct YearbookBookCoverSurface: View {
+  private let coverShape = RoundedRectangle(cornerRadius: 18, style: .continuous)
+
+  var body: some View {
+    ZStack {
+      coverShape
+        .fill(Color(red: 0.20, green: 0.15, blue: 0.105))
+
+      LinearGradient(
+        colors: [
+          Color.white.opacity(0.12),
+          Color.clear,
+          Color.black.opacity(0.26),
+        ],
+        startPoint: .topLeading,
+        endPoint: .bottomTrailing
+      )
+
+      Canvas { context, size in
+        for index in 0..<96 {
+          let x = CGFloat((index * 37 + 11) % 101) / 101 * max(size.width, 1)
+          let y = CGFloat((index * 71 + 23) % 103) / 103 * max(size.height, 1)
+          var grain = Path()
+          grain.move(to: CGPoint(x: x, y: y))
+          grain.addLine(to: CGPoint(x: min(size.width, x + CGFloat(3 + index % 8)), y: y + 0.7))
+          context.stroke(grain, with: .color(Color.white.opacity(0.035)), lineWidth: 0.7)
+        }
+      }
+      .allowsHitTesting(false)
+
+      coverShape
+        .stroke(Color.black.opacity(0.72), lineWidth: 2.2)
+
+      RoundedRectangle(cornerRadius: 14, style: .continuous)
+        .stroke(
+          Color(red: 0.73, green: 0.61, blue: 0.43).opacity(0.46),
+          style: StrokeStyle(lineWidth: 1, dash: [3, 3])
+        )
+        .padding(5)
+    }
+    .clipShape(coverShape)
+    .allowsHitTesting(false)
+  }
+}
+
 private struct YearbookPageTexture: View {
   let base: Color
   var ruled = false
@@ -615,14 +676,29 @@ private struct YearbookCenterBinding: View {
   var body: some View {
     ZStack {
       LinearGradient(
-        colors: [Color.black.opacity(0.16), Color.white.opacity(0.16), Color.black.opacity(0.20)],
+        colors: [
+          Color.black.opacity(0.32),
+          Color.black.opacity(0.10),
+          Color.white.opacity(0.22),
+          Color.black.opacity(0.13),
+          Color.black.opacity(0.36),
+        ],
         startPoint: .leading,
         endPoint: .trailing
       )
+
       Rectangle()
-        .fill(Color.white.opacity(0.32))
+        .fill(Color.black.opacity(0.24))
         .frame(width: 1)
+
+      HStack {
+        Rectangle().fill(Color.white.opacity(0.24)).frame(width: 1)
+        Spacer(minLength: 0)
+        Rectangle().fill(Color.white.opacity(0.16)).frame(width: 1)
+      }
+      .padding(.horizontal, 2)
     }
+    .shadow(color: Color.black.opacity(0.28), radius: 5)
     .allowsHitTesting(false)
   }
 }
@@ -1057,23 +1133,15 @@ private struct YearbookProfileDetailView: View {
       YearbookPaperBackground().ignoresSafeArea()
       ScrollView {
         profilePage
-        .padding(.horizontal, 14)
-        .padding(.top, 12)
-        .padding(.bottom, 34)
+          .frame(maxWidth: .infinity)
+          .padding(.horizontal, 2)
+          .padding(.top, 2)
+          .padding(.bottom, 12)
       }
       .scrollIndicators(.hidden)
     }
-    .navigationTitle("Yearbook")
-    .navigationBarTitleDisplayMode(.inline)
+    .toolbar(.hidden, for: .navigationBar)
     .toolbar(.hidden, for: .tabBar)
-    .toolbar {
-      if !model.profile.viewerIsOwner {
-        ToolbarItem(placement: .topBarTrailing) {
-          Button { showOptions = true } label: { Image(systemName: "ellipsis") }
-            .accessibilityLabel("Profile options")
-        }
-      }
-    }
     .task { await model.refresh() }
     .sheet(isPresented: $showSignatureComposer) {
       YearbookSignatureComposer(name: model.profile.name, isWorking: model.isWorking) { message in
@@ -1136,12 +1204,35 @@ private struct YearbookProfileDetailView: View {
 
       VStack(spacing: 18) {
         HStack {
+          Button { dismiss() } label: {
+            Image(systemName: "chevron.left")
+              .font(.system(size: 16, weight: .bold))
+              .frame(width: 44, height: 44)
+          }
+          .buttonStyle(.miraPress)
+          .accessibilityLabel("Back")
+
+          Spacer()
+
           Text("CAPTRO YEARBOOK")
             .font(.system(size: 13, weight: .bold, design: .serif))
             .tracking(1.2)
+
           Spacer()
-          Image(systemName: "heart")
-            .foregroundStyle(Color(red: 0.73, green: 0.31, blue: 0.34))
+
+          if model.profile.viewerIsOwner {
+            Image(systemName: "heart")
+              .foregroundStyle(Color(red: 0.73, green: 0.31, blue: 0.34))
+              .frame(width: 44, height: 44)
+          } else {
+            Button { showOptions = true } label: {
+              Image(systemName: "ellipsis")
+                .font(.system(size: 17, weight: .bold))
+                .frame(width: 44, height: 44)
+            }
+            .buttonStyle(.miraPress)
+            .accessibilityLabel("Profile options")
+          }
         }
         .foregroundStyle(Color.black.opacity(0.78))
 
@@ -1163,9 +1254,9 @@ private struct YearbookProfileDetailView: View {
 
         actionPanel
       }
-      .padding(.leading, 36)
-      .padding(.trailing, 18)
-      .padding(.top, 18)
+      .padding(.leading, 34)
+      .padding(.trailing, 14)
+      .padding(.top, 8)
       .padding(.bottom, 24)
       .background(
         YearbookPageTexture(
@@ -1186,7 +1277,7 @@ private struct YearbookProfileDetailView: View {
           .stroke(Color.black.opacity(0.22), lineWidth: 1)
       }
     }
-    .padding(5)
+    .padding(2)
     .shadow(color: Color.black.opacity(0.40), radius: 20, x: 3, y: 12)
   }
 
