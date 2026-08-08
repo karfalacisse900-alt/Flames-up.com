@@ -1,0 +1,98 @@
+name: Native iOS TestFlight Distribution
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_number:
+        description: App Store Connect build number to distribute
+        required: true
+      app_version:
+        description: Marketing version containing the build
+        required: true
+        default: "1.0.1"
+      beta_group:
+        description: External TestFlight group
+        required: true
+        default: Captro Public Beta
+
+permissions:
+  contents: read
+
+env:
+  APPLE_APP_ID: "6777888591"
+  BUNDLE_ID: com.captro.app
+
+jobs:
+  distribute-testflight:
+    name: Wait for processing and distribute to testers
+    runs-on: macos-26
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install fastlane
+        run: brew install fastlane
+
+      - name: Prepare App Store Connect API key
+        env:
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+          APP_STORE_CONNECT_API_KEY_BASE64: ${{ secrets.APP_STORE_CONNECT_API_KEY_BASE64 }}
+        run: |
+          set -euo pipefail
+          KEY_DIR="$HOME/.appstoreconnect/private_keys"
+          KEY_PATH="$KEY_DIR/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8"
+          API_KEY_JSON="$RUNNER_TEMP/app-store-connect-api-key.json"
+
+          mkdir -p "$KEY_DIR"
+          echo -n "$APP_STORE_CONNECT_API_KEY_BASE64" | base64 -D > "$KEY_PATH"
+          chmod 600 "$KEY_PATH"
+
+          python3 - "$API_KEY_JSON" "$KEY_PATH" <<'PY'
+          import json
+          import os
+          import sys
+
+          output_path, key_path = sys.argv[1:]
+          payload = {
+              "key_id": os.environ["APP_STORE_CONNECT_API_KEY_ID"],
+              "issuer_id": os.environ["APP_STORE_CONNECT_API_ISSUER_ID"],
+              "key_filepath": key_path,
+              "in_house": False,
+          }
+          with open(output_path, "w", encoding="utf-8") as handle:
+              json.dump(payload, handle)
+          PY
+
+          echo "API_KEY_JSON=$API_KEY_JSON" >> "$GITHUB_ENV"
+
+      - name: Distribute processed build to TestFlight group
+        env:
+          BUILD_NUMBER: ${{ inputs.build_number }}
+          APP_VERSION: ${{ inputs.app_version }}
+          BETA_GROUP: ${{ inputs.beta_group }}
+        run: |
+          set -euo pipefail
+          fastlane pilot distribute \
+            --api_key_path "$API_KEY_JSON" \
+            --app_identifier "$BUNDLE_ID" \
+            --apple_id "$APPLE_APP_ID" \
+            --app_version "$APP_VERSION" \
+            --build_number "$BUILD_NUMBER" \
+            --groups "$BETA_GROUP" \
+            --distribute_external true \
+            --notify_external_testers true \
+            --submit_beta_review true \
+            --wait_processing_interval 30 \
+            --wait_processing_timeout_duration 1800 \
+            --changelog "Polished Yearbook browsing, responsive book spreads, clearer profiles, filters, and smoother page turns."
+
+      - name: Remove temporary App Store Connect key
+        if: always()
+        env:
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+        run: |
+          rm -f "$RUNNER_TEMP/app-store-connect-api-key.json"
+          rm -f "$HOME/.appstoreconnect/private_keys/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8"

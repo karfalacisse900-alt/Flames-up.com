@@ -208,3 +208,8 @@ jobs:
             echo "App Store Connect upload failed on attempt $attempt; retrying in ${delay}s."
             sleep "$delay"
           done
+
+      - name: Confirm uploaded build can be processed for distribution
+        run: |
+          echo "Uploaded Captro ${BUILD_NUMBER}."
+          echo "Run the Native iOS TestFlight Distribution workflow for group assignment and external beta review."
