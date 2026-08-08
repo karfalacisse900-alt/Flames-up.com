@@ -79,6 +79,7 @@ jobs:
           set -euo pipefail
           fastlane pilot distribute \
             --api_key_path "$API_KEY_JSON" \
+            --platform ios \
             --app_identifier "$BUNDLE_ID" \
             --apple_id "$APPLE_APP_ID" \
             --app_version "$APP_VERSION" \
