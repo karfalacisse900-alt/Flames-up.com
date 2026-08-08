@@ -46,11 +46,12 @@ public final class MIRAYearbookNativeModel: ObservableObject {
       do {
         let response: MIRAYearbookDiscoverResponse = try await api.get(discoverPath(offset: 0))
         guard !Task.isCancelled else { return }
-        profiles = response.profiles
+        let uniqueProfiles = deduplicatedProfiles(response.profiles)
+        profiles = uniqueProfiles
         hasMore = response.hasMore
         nextOffset = response.nextOffset
         datingUnavailable = response.datingUnavailable == true
-        prefetchPortraits(response.profiles)
+        prefetchPortraits(uniqueProfiles)
       } catch is CancellationError {
         return
       } catch {
@@ -67,11 +68,12 @@ public final class MIRAYearbookNativeModel: ObservableObject {
     defer { isLoadingMore = false }
     do {
       let response: MIRAYearbookDiscoverResponse = try await api.get(discoverPath(offset: nextOffset))
-      let known = Set(profiles.map(\.id))
-      profiles.append(contentsOf: response.profiles.filter { !known.contains($0.id) })
+      let known = Set(profiles.map(\.userId))
+      let uniqueProfiles = deduplicatedProfiles(response.profiles).filter { !known.contains($0.userId) }
+      profiles.append(contentsOf: uniqueProfiles)
       hasMore = response.hasMore
       nextOffset = response.nextOffset
-      prefetchPortraits(response.profiles)
+      prefetchPortraits(uniqueProfiles)
     } catch {
       errorMessage = error.localizedDescription
     }
@@ -122,6 +124,16 @@ public final class MIRAYearbookNativeModel: ObservableObject {
       await MIRAImagePrefetcher.prefetch(urls: urls, maxPixelSize: 720, limit: 24)
     }
   }
+
+  private func deduplicatedProfiles(_ incoming: [MIRAYearbookProfile]) -> [MIRAYearbookProfile] {
+    var seenUserIDs = Set<String>()
+    return incoming.filter { profile in
+      let userID = profile.userId.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !userID.isEmpty, !seenUserIDs.contains(userID) else { return false }
+      seenUserIDs.insert(userID)
+      return true
+    }
+  }
 }
 
 public struct MIRAYearbookNativeView: View {
@@ -130,7 +142,10 @@ public struct MIRAYearbookNativeView: View {
   @State private var showEditor = false
   @State private var isSearchVisible = false
   @State private var searchDraft = ""
-  @State private var selectedSpread = 0
+  @State private var selectedSpread: Int? = 0
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+  @Environment(\.verticalSizeClass) private var verticalSizeClass
   private let api: MIRAAPIClient
   private let currentUser: MIRAUser?
 
@@ -163,10 +178,18 @@ public struct MIRAYearbookNativeView: View {
         ageMinimum: $model.ageMinimum,
         ageMaximum: $model.ageMaximum
       ) {
+        selectedSpread = 0
         Task { await model.reload() }
       }
-      .presentationDetents([.large])
+      .presentationDetents([.fraction(0.88)])
       .presentationDragIndicator(.visible)
+      .presentationCornerRadius(28)
+      .presentationBackground {
+        YearbookPageTexture(
+          base: Color(red: 0.965, green: 0.945, blue: 0.895),
+          ruled: false
+        )
+      }
     }
     .fullScreenCover(isPresented: $showEditor) {
       YearbookEditorView(api: api, currentUser: currentUser, existingProfile: model.myProfile) { profile in
@@ -186,6 +209,7 @@ public struct MIRAYearbookNativeView: View {
             .textInputAutocapitalization(.never)
             .submitLabel(.search)
             .onSubmit {
+              selectedSpread = 0
               model.searchText = searchDraft
               Task { await model.reload() }
             }
@@ -195,6 +219,7 @@ public struct MIRAYearbookNativeView: View {
             } else {
               searchDraft = ""
               model.searchText = ""
+              selectedSpread = 0
               Task { await model.reload() }
             }
           } label: {
@@ -241,38 +266,66 @@ public struct MIRAYearbookNativeView: View {
       )
       .padding(.top, 38)
     } else {
-      TabView(selection: $selectedSpread) {
-        ForEach(Array(profileSpreads.enumerated()), id: \.offset) { index, profiles in
-          YearbookOpenSpread(
-            profiles: profiles,
-            loadedProfileCount: model.profiles.count,
-            pageNumber: index + 1,
-            pageCount: profileSpreads.count,
-            selectedIntent: model.selectedIntent,
-            api: api,
-            currentUserID: currentUser?.id ?? "",
-            onSearch: {
-              withAnimation(.easeOut(duration: 0.2)) { isSearchVisible.toggle() }
-            },
-            onFilter: { showFilters = true },
-            onSelectIntent: { intent in
-              selectedSpread = 0
-              model.selectedIntent = intent
-              Task { await model.reload() }
-            },
-            onEdit: { showEditor = true }
-          )
-          .tag(index)
-          .task {
-            if let last = profiles.last {
-              await model.loadMoreIfNeeded(current: last)
+      ScrollView(.horizontal) {
+        LazyHStack(spacing: 0) {
+          ForEach(Array(profileSpreads.enumerated()), id: \.offset) { index, profiles in
+            YearbookOpenSpread(
+              profiles: profiles,
+              loadedProfileCount: model.profiles.count,
+              pageNumber: index + 1,
+              pageCount: profileSpreads.count,
+              profilesPerLeaf: profilesPerLeaf,
+              selectedIntent: model.selectedIntent,
+              api: api,
+              currentUserID: currentUser?.id ?? "",
+              onSearch: {
+                withAnimation(.easeOut(duration: 0.2)) { isSearchVisible.toggle() }
+              },
+              onFilter: { showFilters = true },
+              onSelectIntent: { intent in
+                selectedSpread = 0
+                model.selectedIntent = intent
+                Task { await model.reload() }
+              },
+              onEdit: { showEditor = true }
+            )
+            .containerRelativeFrame(.horizontal)
+            .scrollTransition(axis: .horizontal) { content, phase in
+              content
+                .rotation3DEffect(
+                  .degrees(reduceMotion ? 0 : phase.value * -3.2),
+                  axis: (x: 0, y: 1, z: 0),
+                  anchor: phase.value > 0 ? .leading : .trailing,
+                  perspective: 0.28
+                )
+                .scaleEffect(reduceMotion ? 1 : 1 - abs(phase.value) * 0.012)
+                .opacity(reduceMotion ? (phase.isIdentity ? 1 : 0.88) : 1)
+            }
+            .id(index)
+            .task {
+              if let last = profiles.last {
+                await model.loadMoreIfNeeded(current: last)
+              }
             }
           }
         }
+        .scrollTargetLayout()
       }
-      .tabViewStyle(.page(indexDisplayMode: .never))
+      .scrollTargetBehavior(.paging)
+      .scrollPosition(id: $selectedSpread)
+      .scrollIndicators(.hidden)
+      .scrollDisabled(profileSpreads.count <= 1)
       .padding(.horizontal, 2)
       .padding(.vertical, 2)
+      .onChange(of: profileSpreads.count) { _, count in
+        guard count > 0 else {
+          selectedSpread = nil
+          return
+        }
+        if let selectedSpread, selectedSpread >= count {
+          self.selectedSpread = count - 1
+        }
+      }
       .overlay(alignment: .bottom) {
         if model.isLoadingMore {
           ProgressView()
@@ -284,11 +337,17 @@ public struct MIRAYearbookNativeView: View {
   }
 
   private var profileSpreads: [[MIRAYearbookProfile]] {
-    stride(from: 0, to: model.profiles.count, by: 4).map { start in
-      let end = min(start + 4, model.profiles.count)
+    stride(from: 0, to: model.profiles.count, by: profilesPerSpread).map { start in
+      let end = min(start + profilesPerSpread, model.profiles.count)
       return Array(model.profiles[start..<end])
     }
   }
+
+  private var profilesPerLeaf: Int {
+    horizontalSizeClass == .regular && verticalSizeClass == .regular ? 4 : 3
+  }
+
+  private var profilesPerSpread: Int { profilesPerLeaf * 2 }
 }
 
 private struct YearbookOpenSpread: View {
@@ -296,6 +355,7 @@ private struct YearbookOpenSpread: View {
   let loadedProfileCount: Int
   let pageNumber: Int
   let pageCount: Int
+  let profilesPerLeaf: Int
   let selectedIntent: MIRAYearbookIntent?
   let api: MIRAAPIClient
   let currentUserID: String
@@ -312,6 +372,7 @@ private struct YearbookOpenSpread: View {
       let outerInset = max(4.0, size.width * 0.012)
       let headerHeight = max(40.0, size.height * 0.068)
       let footerHeight = max(36.0, size.height * 0.058)
+      let tabRailWidth = min(58.0, max(50.0, size.width * 0.135))
 
       ZStack {
         YearbookBookCoverSurface()
@@ -354,8 +415,9 @@ private struct YearbookOpenSpread: View {
             pageLeaf(startIndex: 0, side: .left)
             YearbookCenterBinding()
               .frame(width: max(14, size.width * 0.042))
-            pageLeaf(startIndex: 2, side: .right)
+            pageLeaf(startIndex: profilesPerLeaf, side: .right)
           }
+          .padding(.trailing, tabRailWidth - 7)
 
           HStack {
             Text("\(loadedProfileCount) \(loadedProfileCount == 1 ? "person" : "people")")
@@ -391,10 +453,11 @@ private struct YearbookOpenSpread: View {
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
         bookTabs
+          .frame(width: tabRailWidth)
           .frame(maxWidth: .infinity, alignment: .trailing)
           .padding(.top, headerHeight + outerInset + 8)
           .padding(.bottom, footerHeight + outerInset + 10)
-          .offset(x: 3)
+          .padding(.trailing, outerInset - 1)
       }
     }
     .accessibilityElement(children: .contain)
@@ -411,74 +474,98 @@ private struct YearbookOpenSpread: View {
       style: .continuous
     )
 
-    return ZStack {
-      YearbookPageTexture(base: pageColor, ruled: false)
+    let profilesPerSpread = profilesPerLeaf * 2
+    let availableProfiles = Array(profiles.dropFirst(startIndex).prefix(profilesPerLeaf))
+    let shouldShowComingSoon = profiles.count < profilesPerSpread
+      && ((startIndex == 0 && profiles.count <= profilesPerLeaf)
+        || (startIndex == profilesPerLeaf && profiles.count > profilesPerLeaf))
 
-      LinearGradient(
-        colors: side == .left
-          ? [Color.white.opacity(0.24), Color.clear, Color.black.opacity(0.15)]
-          : [Color.black.opacity(0.15), Color.clear, Color.white.opacity(0.24)],
-        startPoint: .leading,
-        endPoint: .trailing
+    return GeometryReader { proxy in
+      let verticalPadding = 10.0
+      let cardSpacing = 8.0
+      let columnCount = profilesPerLeaf >= 4 ? 2 : 1
+      let rowCount = Int(ceil(Double(profilesPerLeaf) / Double(columnCount)))
+      let totalSpacing = cardSpacing * CGFloat(max(rowCount - 1, 0))
+      let cardHeight = max(108.0, (proxy.size.height - verticalPadding * 2 - totalSpacing) / CGFloat(rowCount))
+      let columns = Array(
+        repeating: GridItem(.flexible(minimum: 0), spacing: cardSpacing, alignment: .top),
+        count: columnCount
       )
-      .allowsHitTesting(false)
 
-      VStack(spacing: 13) {
-        ForEach(0..<2, id: \.self) { slot in
-          let profileIndex = startIndex + slot
-          if profiles.indices.contains(profileIndex) {
-            let profile = profiles[profileIndex]
-            NavigationLink {
-              YearbookProfileDetailView(api: api, initialProfile: profile, currentUserID: currentUserID)
-            } label: {
-              YearbookPortraitCard(profile: profile, placement: profileIndex + (pageNumber * 4))
+      ZStack {
+        YearbookPageTexture(base: pageColor, ruled: false)
+
+        LinearGradient(
+          colors: side == .left
+            ? [Color.white.opacity(0.24), Color.clear, Color.black.opacity(0.15)]
+            : [Color.black.opacity(0.15), Color.clear, Color.white.opacity(0.24)],
+          startPoint: .leading,
+          endPoint: .trailing
+        )
+        .allowsHitTesting(false)
+
+        VStack(spacing: cardSpacing) {
+          LazyVGrid(columns: columns, alignment: .leading, spacing: cardSpacing) {
+            ForEach(Array(availableProfiles.enumerated()), id: \.element.userId) { slot, profile in
+              let profileIndex = startIndex + slot
+              NavigationLink {
+                YearbookProfileDetailView(api: api, initialProfile: profile, currentUserID: currentUserID)
+              } label: {
+                YearbookPortraitCard(profile: profile, placement: profileIndex + (pageNumber * profilesPerSpread))
+              }
+              .buttonStyle(.miraPress)
+              .frame(height: cardHeight)
+              .accessibilityHint("Opens \(profile.name)'s complete Yearbook page")
             }
-            .buttonStyle(.miraPress)
-            .frame(maxHeight: .infinity)
-          } else {
-            YearbookEmptyPortraitSlot()
-              .frame(maxHeight: .infinity)
           }
+
+          if shouldShowComingSoon {
+            YearbookMoreComingSoon()
+              .frame(height: max(46, min(70, cardHeight * 0.42)))
+          }
+
+          Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, verticalPadding)
+
+        if side == .left {
+          YearbookPageHoles()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.leading, 1)
+            .allowsHitTesting(false)
         }
       }
-      .padding(.horizontal, 12)
-      .padding(.vertical, 12)
-
-      if side == .left {
-        YearbookPageHoles()
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .padding(.leading, 2)
-          .allowsHitTesting(false)
+      .clipShape(pageShape)
+      .overlay {
+        pageShape
+          .stroke(Color.black.opacity(0.17), lineWidth: 0.8)
       }
+      .overlay(alignment: side == .left ? .trailing : .leading) {
+        LinearGradient(
+          colors: side == .left
+            ? [Color.clear, Color.black.opacity(0.20)]
+            : [Color.black.opacity(0.20), Color.clear],
+          startPoint: .leading,
+          endPoint: .trailing
+        )
+        .frame(width: 12)
+        .allowsHitTesting(false)
+      }
+      .shadow(color: Color.black.opacity(0.24), radius: 5, x: side == .left ? -2 : 2, y: 3)
     }
-    .clipShape(pageShape)
-    .overlay {
-      pageShape
-        .stroke(Color.black.opacity(0.17), lineWidth: 0.8)
-    }
-    .overlay(alignment: side == .left ? .trailing : .leading) {
-      LinearGradient(
-        colors: side == .left
-          ? [Color.clear, Color.black.opacity(0.20)]
-          : [Color.black.opacity(0.20), Color.clear],
-        startPoint: .leading,
-        endPoint: .trailing
-      )
-      .frame(width: 12)
-      .allowsHitTesting(false)
-    }
-    .shadow(color: Color.black.opacity(0.24), radius: 5, x: side == .left ? -2 : 2, y: 3)
   }
 
   private var bookTabs: some View {
-    VStack(spacing: 3) {
+    VStack(spacing: 4) {
       bookTab(title: "All", intent: nil, color: Color(red: 0.79, green: 0.48, blue: 0.49))
       bookTab(title: "Friends", intent: .friends, color: Color(red: 0.59, green: 0.70, blue: 0.52))
       bookTab(title: "Dating", intent: .dating, color: Color(red: 0.49, green: 0.61, blue: 0.76))
       bookTab(title: "Both", intent: .friendsAndDating, color: Color(red: 0.67, green: 0.56, blue: 0.74))
-      bookTab(title: "Network", intent: .creativeNetworking, color: Color(red: 0.86, green: 0.67, blue: 0.34))
+      bookTab(title: "Creative", intent: .creativeNetworking, color: Color(red: 0.86, green: 0.67, blue: 0.34))
       bookTab(title: "Browse", intent: .justBrowsing, color: Color(red: 0.76, green: 0.70, blue: 0.57))
     }
+    .frame(maxHeight: .infinity, alignment: .center)
   }
 
   private func bookTab(title: String, intent: MIRAYearbookIntent?, color: Color) -> some View {
@@ -487,18 +574,20 @@ private struct YearbookOpenSpread: View {
       onSelectIntent(intent)
     } label: {
       Text(title)
-        .font(.system(size: 9, weight: selected ? .bold : .semibold, design: .serif))
+        .font(.system(size: 9.5, weight: selected ? .bold : .semibold, design: .serif))
         .foregroundStyle(Color.black.opacity(0.78))
         .lineLimit(1)
-        .minimumScaleFactor(0.72)
-        .rotationEffect(.degrees(90))
-        .frame(width: 45, height: 31)
+        .minimumScaleFactor(0.68)
+        .frame(maxWidth: .infinity)
+        .frame(height: 42)
         .background(color.opacity(selected ? 1 : 0.82))
         .overlay(alignment: .leading) {
           Rectangle().fill(selected ? Color.black.opacity(0.35) : Color.clear).frame(width: 2)
         }
         .clipShape(UnevenRoundedRectangle(topLeadingRadius: 0, bottomLeadingRadius: 0, bottomTrailingRadius: 5, topTrailingRadius: 5))
         .shadow(color: Color.black.opacity(selected ? 0.22 : 0.12), radius: 2, x: 1, y: 1)
+        .offset(x: selected ? -5 : 0)
+        .animation(.snappy(duration: 0.24), value: selected)
     }
     .buttonStyle(.plain)
     .accessibilityLabel("Show \(title) pages")
@@ -511,62 +600,196 @@ private struct YearbookPortraitCard: View {
   var placement = 0
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 5) {
-      ZStack(alignment: .topTrailing) {
-        MIRACachedImage(url: profile.profilePhoto, maxPixelSize: 720) { image in
-          image.resizable().scaledToFill()
-        } placeholder: {
-          ZStack {
-            MIRATheme.Color.mediaPlaceholderRaised
-            Image(systemName: "person.crop.square")
-              .font(.system(size: 34, weight: .light))
-              .foregroundStyle(MIRATheme.Color.textMuted)
+    GeometryReader { proxy in
+      let compact = proxy.size.height < 165
+      let imageHeight = max(68.0, min(132.0, proxy.size.height * (compact ? 0.50 : 0.54)))
+
+      VStack(alignment: .leading, spacing: compact ? 2.5 : 4) {
+        ZStack(alignment: .topTrailing) {
+          MIRACachedImage(url: profile.profilePhoto, maxPixelSize: 640) { image in
+            image.resizable().scaledToFill()
+          } placeholder: {
+            ZStack {
+              MIRATheme.Color.mediaPlaceholderRaised
+              Image(systemName: "person.crop.square")
+                .font(.system(size: 27, weight: .light))
+                .foregroundStyle(MIRATheme.Color.textMuted)
+            }
+          }
+          .frame(maxWidth: .infinity)
+          .frame(height: imageHeight)
+          .clipShape(RoundedRectangle(cornerRadius: photoCornerRadius, style: .continuous))
+          .overlay {
+            RoundedRectangle(cornerRadius: photoCornerRadius, style: .continuous)
+              .stroke(photoBorderColor, lineWidth: photoBorderWidth)
+          }
+          .clipped()
+
+          if let personalitySymbol {
+            Image(systemName: personalitySymbol)
+              .font(.system(size: compact ? 9 : 11, weight: .bold))
+              .foregroundStyle(personalityColor)
+              .padding(compact ? 4 : 5)
+              .background(Color.white.opacity(0.72))
+              .clipShape(Circle())
+              .padding(4)
           }
         }
-        .frame(maxWidth: .infinity)
-        .aspectRatio(0.82, contentMode: .fit)
-        .clipped()
 
-        Image(systemName: profile.intent == .dating || profile.intent == .friendsAndDating ? "heart" : "star")
-          .font(.system(size: 13, weight: .bold))
-          .foregroundStyle(profile.intent == .dating || profile.intent == .friendsAndDating ? Color.pink : MIRATheme.Color.forest)
-          .padding(6)
+        Text(profile.name)
+          .font(.custom("Noteworthy-Bold", size: compact ? 13 : 15, relativeTo: .headline))
+          .foregroundStyle(Color.black.opacity(0.88))
+          .lineLimit(1)
+          .minimumScaleFactor(0.76)
+
+        if profile.age != nil || !profile.locationLine.isEmpty {
+          HStack(spacing: 4) {
+            if let age = profile.age { Text("\(age)") }
+            if profile.age != nil && !profile.locationLine.isEmpty { Text("·") }
+            if !profile.locationLine.isEmpty { Text(profile.locationLine) }
+          }
+          .font(.system(size: compact ? 8.5 : 9.5, weight: .semibold, design: .serif))
+          .foregroundStyle(Color.black.opacity(0.65))
+          .lineLimit(1)
+          .minimumScaleFactor(0.72)
+        }
+
+        if !interestLine.isEmpty {
+          Text(interestLine)
+            .font(.system(size: compact ? 7.5 : 8.5, weight: .semibold))
+            .foregroundStyle(Color.black.opacity(0.70))
+            .lineLimit(1)
+            .minimumScaleFactor(0.72)
+        }
+
+        HStack(alignment: .firstTextBaseline, spacing: 4) {
+          Text(intentPreview)
+            .font(.system(size: compact ? 7.3 : 8.2, weight: .bold))
+            .foregroundStyle(Color(red: 0.25, green: 0.32, blue: 0.19))
+            .lineLimit(1)
+
+          if !compact, !personalityLine.isEmpty {
+            Text("\"\(personalityLine)\"")
+              .font(.system(size: 8.2, weight: .medium, design: .serif).italic())
+              .foregroundStyle(Color.black.opacity(0.60))
+              .lineLimit(1)
+              .minimumScaleFactor(0.72)
+          }
+        }
+
+        Spacer(minLength: 0)
       }
+      .padding(compact ? 5 : 6)
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+      .background(YearbookPolaroidPaper())
       .clipShape(Rectangle())
+      .overlay {
+        Rectangle().stroke(Color.black.opacity(0.13), lineWidth: 0.7)
+      }
+      .overlay(alignment: .top) {
+        if placement.isMultiple(of: 2) {
+          YearbookTapeStrip(color: Color(red: 0.76, green: 0.67, blue: 0.49))
+            .frame(width: 36, height: 13)
+            .offset(y: -7)
+        } else {
+          YearbookPushpin(color: placement.isMultiple(of: 3) ? .green : .blue)
+            .scaleEffect(0.78)
+            .offset(y: -7)
+        }
+      }
+      .rotationEffect(.degrees(stableYearbookRotation(profile.id, placement: placement)))
+      .shadow(color: Color.black.opacity(0.18), radius: 3.5, x: 1, y: 2.5)
+      .contentShape(Rectangle())
+    }
+  }
 
-      Text(profile.name)
-        .font(.custom("Noteworthy-Bold", size: 17, relativeTo: .headline))
-        .foregroundStyle(Color.black.opacity(0.86))
-        .lineLimit(1)
-      HStack(spacing: 5) {
-        if let age = profile.age { Text("\(age)") }
-        if profile.age != nil && !profile.locationLine.isEmpty { Text("·") }
-        if !profile.locationLine.isEmpty { Text(profile.locationLine) }
-      }
-      .font(.system(size: 10, weight: .medium, design: .serif))
-      .foregroundStyle(Color.black.opacity(0.68))
-      .lineLimit(1)
+  private var interestLine: String {
+    Array((profile.interests ?? profile.hobbies ?? []).prefix(3)).joined(separator: " · ")
+  }
+
+  private var personalityLine: String {
+    let prompt = profile.prompts?.first?.answer.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    if !prompt.isEmpty { return prompt }
+    let mood = profile.currentMood?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    if !mood.isEmpty { return mood }
+    return profile.shortBio?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+  }
+
+  private var intentPreview: String {
+    switch profile.intent {
+    case .friends: return "Friends"
+    case .dating: return "Dating"
+    case .friendsAndDating: return "Friends + Dating"
+    case .creativeNetworking: return "Creative"
+    case .justBrowsing: return "Browsing"
     }
-    .padding(7)
-    .background(YearbookPolaroidPaper())
-    .clipShape(Rectangle())
-    .overlay {
-      Rectangle().stroke(Color.black.opacity(0.13), lineWidth: 0.7)
+  }
+
+  private var personalitySelector: Int {
+    let checksum = profile.userId.utf8.reduce(UInt64(max(placement, 0) + 1)) {
+      ($0 &* 31) &+ UInt64($1)
     }
-    .overlay(alignment: .top) {
-      if placement.isMultiple(of: 2) {
-        YearbookTapeStrip(color: Color(red: 0.76, green: 0.67, blue: 0.49))
-          .frame(width: 42, height: 16)
-          .offset(y: -9)
-      } else {
-        YearbookPushpin(color: placement.isMultiple(of: 3) ? .green : .blue)
-          .offset(y: -8)
-      }
+    return Int(checksum % 6)
+  }
+
+  private var personalitySymbol: String? {
+    switch personalitySelector {
+    case 2: return "camera.fill"
+    case 3: return "music.note"
+    case 4: return "cup.and.saucer.fill"
+    case 5: return "sparkles"
+    default: return nil
     }
-    .rotationEffect(.degrees(stableYearbookRotation(profile.id, placement: placement)))
-    .shadow(color: Color.black.opacity(0.18), radius: 4, x: 1, y: 3)
-    .contentShape(Rectangle())
-    .frame(maxWidth: 220)
+  }
+
+  private var personalityColor: Color {
+    switch personalitySelector {
+    case 2: return Color(red: 0.22, green: 0.37, blue: 0.55)
+    case 3: return Color(red: 0.58, green: 0.26, blue: 0.38)
+    case 4: return Color(red: 0.45, green: 0.29, blue: 0.18)
+    default: return Color(red: 0.28, green: 0.42, blue: 0.22)
+    }
+  }
+
+  private var photoCornerRadius: CGFloat {
+    switch personalitySelector % 3 {
+    case 1: return 3
+    case 2: return 6
+    default: return 0
+    }
+  }
+
+  private var photoBorderColor: Color {
+    personalitySelector == 3 ? Color.black.opacity(0.52) : Color.white.opacity(0.56)
+  }
+
+  private var photoBorderWidth: CGFloat {
+    personalitySelector == 3 ? 2 : 1
+  }
+}
+
+private struct YearbookMoreComingSoon: View {
+  var body: some View {
+    HStack(spacing: 8) {
+      RoundedRectangle(cornerRadius: 2)
+        .stroke(Color.black.opacity(0.15), style: StrokeStyle(lineWidth: 0.8, dash: [3, 3]))
+        .frame(width: 30, height: 37)
+        .overlay {
+          Image(systemName: "person.crop.square")
+            .font(.system(size: 13, weight: .light))
+            .foregroundStyle(Color.black.opacity(0.24))
+        }
+      Text("More people coming soon")
+        .font(.system(size: 9.5, weight: .semibold, design: .serif))
+        .foregroundStyle(Color.black.opacity(0.32))
+        .lineLimit(2)
+        .minimumScaleFactor(0.78)
+      Spacer(minLength: 0)
+    }
+    .padding(.horizontal, 8)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(Color.white.opacity(0.08))
+    .accessibilityElement(children: .combine)
   }
 }
 
@@ -818,27 +1041,11 @@ private struct YearbookPressedFlowers: View {
   }
 }
 
-private struct YearbookEmptyPortraitSlot: View {
-  var body: some View {
-    ZStack {
-      YearbookPageTexture(base: Color.white.opacity(0.15), ruled: true)
-      VStack(spacing: 6) {
-        Image(systemName: "photo")
-          .font(.system(size: 24, weight: .light))
-        Text("A page is waiting")
-          .font(.system(size: 11, weight: .semibold, design: .serif))
-      }
-      .foregroundStyle(Color.black.opacity(0.28))
-    }
-    .padding(8)
-    .overlay { Rectangle().stroke(Color.black.opacity(0.08), style: StrokeStyle(lineWidth: 1, dash: [4, 4])) }
-    .rotationEffect(.degrees(0.7))
-  }
-}
-
 private func stableYearbookRotation(_ identifier: String, placement: Int) -> Double {
-  let checksum = identifier.utf8.reduce(placement * 17) { ($0 &* 31) &+ Int($1) }
-  return Double((abs(checksum) % 7) - 3) * 0.42
+  let checksum = identifier.utf8.reduce(UInt64(max(placement, 0) + 1)) {
+    ($0 &* 31) &+ UInt64($1)
+  }
+  return Double(Int(checksum % 7) - 3) * 0.42
 }
 
 private struct YearbookPaperBackground: View {
@@ -903,7 +1110,7 @@ private struct YearbookFilterSheet: View {
   @Environment(\.dismiss) private var dismiss
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 20) {
+    VStack(alignment: .leading, spacing: 16) {
       HStack {
         Text("Browse Yearbook")
           .font(.system(size: 25, weight: .bold, design: .serif))
@@ -917,12 +1124,16 @@ private struct YearbookFilterSheet: View {
       ScrollView {
         VStack(alignment: .leading, spacing: 20) {
           filterLabel("Show me")
-          VStack(spacing: 8) {
+          VStack(spacing: 2) {
             filterRow(title: "Everyone", icon: "person.2", intent: nil)
             ForEach(MIRAYearbookIntent.allCases) { intent in
               filterRow(title: intent.title, icon: intent == .dating ? "heart" : "person.crop.square", intent: intent)
             }
           }
+          .padding(12)
+          .background(YearbookFilterPaper(ruled: true))
+          .rotationEffect(.degrees(-0.35))
+          .shadow(color: Color.black.opacity(0.12), radius: 5, x: 1, y: 3)
 
           filterLabel("Optional details")
           VStack(spacing: 10) {
@@ -935,6 +1146,10 @@ private struct YearbookFilterSheet: View {
               filterField("Max age", icon: "person", text: $ageMaximum, keyboard: .numberPad)
             }
           }
+          .padding(12)
+          .background(YearbookFilterPaper(ruled: false))
+          .rotationEffect(.degrees(0.25))
+          .shadow(color: Color.black.opacity(0.10), radius: 5, x: -1, y: 3)
 
           Button("Clear all filters") {
             selectedIntent = nil
@@ -965,14 +1180,21 @@ private struct YearbookFilterSheet: View {
       .buttonStyle(.miraPress)
     }
     .padding(22)
-    .background(MIRATheme.Color.surface)
+    .background {
+      YearbookPageTexture(
+        base: Color(red: 0.965, green: 0.945, blue: 0.895),
+        ruled: false
+      )
+      .ignoresSafeArea()
+    }
   }
 
   private func filterLabel(_ title: String) -> some View {
     Text(title)
       .font(.system(size: 13, weight: .bold))
-      .foregroundStyle(MIRATheme.Color.textSecondary)
+      .foregroundStyle(Color.black.opacity(0.62))
       .textCase(.uppercase)
+      .tracking(0.7)
   }
 
   private func filterField(
@@ -991,8 +1213,12 @@ private struct YearbookFilterSheet: View {
     }
     .padding(.horizontal, 13)
     .frame(minHeight: 46)
-    .background(MIRATheme.Color.surfaceRaised)
-    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    .background(Color.white.opacity(0.48))
+    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+    .overlay {
+      RoundedRectangle(cornerRadius: 7, style: .continuous)
+        .stroke(Color.black.opacity(0.09), lineWidth: 0.7)
+    }
   }
 
   private func filterRow(title: String, icon: String, intent: MIRAYearbookIntent?) -> some View {
@@ -1006,10 +1232,31 @@ private struct YearbookFilterSheet: View {
         Image(systemName: selectedIntent == intent ? "checkmark.circle.fill" : "circle")
           .foregroundStyle(selectedIntent == intent ? MIRATheme.Color.forest : MIRATheme.Color.textMuted)
       }
-      .foregroundStyle(MIRATheme.Color.textPrimary)
+      .foregroundStyle(Color.black.opacity(0.82))
       .frame(height: 44)
     }
     .buttonStyle(.miraPress)
+  }
+}
+
+private struct YearbookFilterPaper: View {
+  let ruled: Bool
+
+  var body: some View {
+    YearbookPageTexture(
+      base: Color(red: 0.985, green: 0.972, blue: 0.928),
+      ruled: ruled
+    )
+    .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+    .overlay {
+      RoundedRectangle(cornerRadius: 5, style: .continuous)
+        .stroke(Color.black.opacity(0.10), lineWidth: 0.7)
+    }
+    .overlay(alignment: .top) {
+      YearbookTapeStrip(color: Color(red: 0.76, green: 0.67, blue: 0.49))
+        .frame(width: 54, height: 14)
+        .offset(y: -7)
+    }
   }
 }
 

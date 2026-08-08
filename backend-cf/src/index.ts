@@ -6983,12 +6983,13 @@ async function supabaseYearbookProfilePayload(c: any, viewerId: string, targetId
 function yearbookDiscoverCardPayload(input: {
   row: any;
   user: any;
+  prompts: any[];
   isFriend: boolean;
   connectionStatus: string;
   connectionRequestId?: string;
   interestAvailable: boolean;
 }) {
-  const { row, user, isFriend, connectionStatus, connectionRequestId, interestAvailable } = input;
+  const { row, user, prompts, isFriend, connectionStatus, connectionRequestId, interestAvailable } = input;
   const raw = yearbookRawProfilePayload(row);
   const visibility = raw.field_visibility;
   const safe: any = {
@@ -7026,6 +7027,12 @@ function yearbookDiscoverCardPayload(input: {
   copyIfVisible('interests', raw.interests);
   copyIfVisible('hobbies', raw.hobbies);
   copyIfVisible('favorites', raw.favorites);
+  copyIfVisible('prompts', prompts.slice(0, 2).map((prompt) => ({
+    id: publicId(prompt?.id, 120),
+    prompt_key: cleanText(prompt?.prompt_key, 80),
+    answer: cleanMultilineText(prompt?.answer, 240),
+    position: clampNumber(prompt?.position, 0, 4, 0),
+  })));
   return safe;
 }
 
@@ -7079,7 +7086,7 @@ async function supabaseYearbookDiscover(c: any, viewerId: string, input: {
     offset,
   });
   const candidateIds = Array.from(new Set(candidateRows.map((row) => publicId(row?.user_id, 120)).filter(Boolean)));
-  const [blocked, users, friendships, outgoingRequests, incomingRequests] = await Promise.all([
+  const [blocked, users, friendships, outgoingRequests, incomingRequests, promptRows] = await Promise.all([
     supabaseBlockedUserIds(c, canonicalViewerId),
     supabaseUsersByAnyIds(c, candidateIds),
     candidateIds.length ? supabaseAdminQueryRows(c, 'app_friendships', {
@@ -7097,10 +7104,24 @@ async function supabaseYearbookDiscover(c: any, viewerId: string, input: {
       filters: { to_user_id: postgrestEqFilter(canonicalViewerId), from_user_id: postgrestInFilter(candidateIds), status: postgrestEqFilter('pending') },
       limit: candidateIds.length,
     }).catch(() => []) : Promise.resolve([]),
+    candidateIds.length ? supabaseAdminQueryRows(c, 'yearbook_prompt_answers', {
+      select: 'id,user_id,prompt_key,answer,position',
+      filters: { user_id: postgrestInFilter(candidateIds) },
+      order: 'position.asc',
+      limit: Math.min(600, candidateIds.length * 5),
+    }).catch(() => []) : Promise.resolve([]),
   ]);
   const connectedIds = new Set(friendships.map((row) => publicId(row?.friend_id, 120)).filter(Boolean));
   const outgoingByUser = new Map(outgoingRequests.map((row) => [publicId(row?.to_user_id, 120), publicId(row?.id, 120)]));
   const incomingByUser = new Map(incomingRequests.map((row) => [publicId(row?.from_user_id, 120), publicId(row?.id, 120)]));
+  const promptsByUser = new Map<string, any[]>();
+  for (const prompt of promptRows) {
+    const uid = publicId(prompt?.user_id, 120);
+    if (!uid) continue;
+    const existing = promptsByUser.get(uid) || [];
+    if (existing.length < 2) existing.push(prompt);
+    promptsByUser.set(uid, existing);
+  }
   const query = cleanText(input.query, 100).toLowerCase();
   const city = cleanText(input.city, 100).toLowerCase();
   const language = cleanText(input.language, 60).toLowerCase();
@@ -7129,6 +7150,7 @@ async function supabaseYearbookDiscover(c: any, viewerId: string, input: {
     const card = yearbookDiscoverCardPayload({
       row,
       user,
+      prompts: promptsByUser.get(uid) || [],
       isFriend,
       connectionStatus,
       connectionRequestId: outgoingByUser.get(uid) || incomingByUser.get(uid),

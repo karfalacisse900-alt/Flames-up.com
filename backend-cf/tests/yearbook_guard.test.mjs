@@ -129,3 +129,24 @@ test('native Yearbook is a real tab with editor, privacy controls, and non-swipe
   assert.match(screen, /NavigationLink[\s\S]*YearbookProfileDetailView/);
   assert.doesNotMatch(screen, /swipeToReject|swipeToMatch/i);
 });
+
+test('Yearbook browse spreads are compact, deduplicated, and use privacy-filtered prompt previews', async () => {
+  const worker = await read('backend-cf/src/index.ts');
+  const screen = await read('ios_native/MIRA/Sources/MIRANative/Screens/YearbookNativeView.swift');
+  const helperStart = worker.indexOf('function yearbookDiscoverCardPayload');
+  const helperEnd = worker.indexOf('async function supabaseUpsertYearbookProfile', helperStart);
+  const helper = worker.slice(helperStart, helperEnd);
+
+  assert.match(screen, /deduplicatedProfiles/);
+  assert.match(screen, /Set<String>\(\)/);
+  assert.match(screen, /profilesPerSpread: Int \{ profilesPerLeaf \* 2 \}/);
+  assert.match(screen, /horizontalSizeClass == \.regular && verticalSizeClass == \.regular \? 4 : 3/);
+  assert.match(screen, /let columnCount = profilesPerLeaf >= 4 \? 2 : 1/);
+  assert.match(screen, /LazyVGrid\(columns: columns/);
+  assert.match(screen, /prefix\(profilesPerLeaf\)/);
+  assert.doesNotMatch(screen, /YearbookEmptyPortraitSlot|A page is waiting/);
+  assert.match(helper, /'yearbook_prompt_answers'/);
+  assert.match(helper, /const promptsByUser = new Map<string, any\[\]>/);
+  assert.match(helper, /copyIfVisible\('prompts'/);
+  assert.match(helper, /prompts: promptsByUser\.get\(uid\) \|\| \[\]/);
+});
