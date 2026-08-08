@@ -5732,7 +5732,7 @@ async function supabaseUsersByAnyIds(c: any, ids: string[]): Promise<Map<string,
   try {
     if (appIds.length) {
       const rows = await supabaseAdminQueryRows(c, 'app_users', {
-        select: 'id,supabase_user_id,username,full_name,avatar_url,cover_url,bio,city,is_private,is_verified,status,counts,profile,metadata',
+        select: 'id,supabase_user_id,username,full_name,avatar_url,cover_url,bio,city,is_private,is_verified,counts,profile,metadata',
         filters: { id: postgrestInFilter(appIds) },
         limit: Math.max(1, appIds.length),
       });
@@ -5745,7 +5745,7 @@ async function supabaseUsersByAnyIds(c: any, ids: string[]): Promise<Map<string,
     }
     if (authIds.length) {
       const rows = await supabaseAdminQueryRows(c, 'app_users', {
-        select: 'id,supabase_user_id,username,full_name,avatar_url,cover_url,bio,city,is_private,is_verified,status,counts,profile,metadata',
+        select: 'id,supabase_user_id,username,full_name,avatar_url,cover_url,bio,city,is_private,is_verified,counts,profile,metadata',
         filters: { supabase_user_id: postgrestInFilter(authIds) },
         limit: Math.max(1, authIds.length),
       });
@@ -19990,7 +19990,7 @@ api.get('/admin/dashboard', authMiddleware, async (c) => {
         supabaseAdminCountRows(c, 'app_reports', { status: postgrestInFilter(openStatuses), priority: postgrestInFilter(['urgent', 'high']) }),
         supabaseAdminCountRows(c, 'app_reports', { created_at: `gte.${todayIso}` }),
         supabaseAdminCountRows(c, 'app_posts', { status: postgrestInFilter(['removed', 'deleted']), updated_at: `gte.${todayIso}` }),
-        supabaseAdminCountRows(c, 'app_users', { status: postgrestEqFilter('suspended'), updated_at: `gte.${todayIso}` }),
+        supabaseAdminCountRows(c, 'app_users', { 'metadata->>status': postgrestEqFilter('suspended'), updated_at: `gte.${todayIso}` }),
         supabaseAdminCountRows(c, 'app_users', { created_at: `gte.${todayIso}` }),
         supabaseAdminCountRows(c, 'app_media_assets', { or: '(moderation_status.eq.failed,upload_status.eq.failed)', updated_at: `gte.${dayAgoIso}` }),
         supabaseAdminQueryRows(c, 'app_reports', {

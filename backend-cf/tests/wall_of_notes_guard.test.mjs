@@ -32,6 +32,21 @@ test('wall routes are authenticated, global-only, and Ghost-safe', async () => {
   assert.doesNotMatch(worker, /wall_id: cleanText\(b\.wall_id/);
 });
 
+test('Wall author hydration cannot query the removed app_users status column', async () => {
+  const worker = await read('backend-cf/src/index.ts');
+  const start = worker.indexOf('async function supabaseUsersByAnyIds');
+  const end = worker.indexOf('async function supabaseBlockedUserIds', start);
+  const helper = worker.slice(start, end);
+  const wallStart = worker.indexOf("api.get('/wall/notes'");
+  const wallEnd = worker.indexOf("api.get('/wall/overview'", wallStart);
+  const wallRoute = worker.slice(wallStart, wallEnd);
+
+  assert.doesNotMatch(helper, /is_verified,status,counts/);
+  assert.match(helper, /is_verified,counts,profile,metadata/);
+  assert.match(wallRoute, /supabaseUsersByAnyIds\(c, ownerIds\)/);
+  assert.match(wallRoute, /supabaseUserStatus\(author\) === 'active'/);
+});
+
 test('wall migration has RLS, spatial indexes, and unique interaction keys', async () => {
   const migration = await read('supabase/migrations/20260712025734_wall_of_notes.sql');
 

@@ -55,6 +55,18 @@ test('Yearbook Worker routes require auth, Supabase primary storage, and block c
   assert.doesNotMatch(routes, /c\.env\.DB|prepare\(|D1Database|KVNamespace/);
 });
 
+test('shared user hydration only selects real app_users columns', async () => {
+  const worker = await read('backend-cf/src/index.ts');
+  const start = worker.indexOf('async function supabaseUsersByAnyIds');
+  const end = worker.indexOf('async function supabaseBlockedUserIds', start);
+  const helper = worker.slice(start, end);
+
+  assert.ok(start >= 0 && end > start, 'shared user hydration helper must exist');
+  assert.match(helper, /is_verified,counts,profile,metadata/);
+  assert.doesNotMatch(helper, /is_verified,status,counts/);
+  assert.match(worker, /'metadata->>status': postgrestEqFilter\('suspended'\)/);
+});
+
 test('Yearbook signatures are one-per-pair and preserve their moderation identity', async () => {
   const worker = await read('backend-cf/src/index.ts');
   const start = worker.indexOf("api.post('/yearbook/profiles/:userId/signatures'");
