@@ -189,9 +189,22 @@ jobs:
         run: |
           set -euo pipefail
           IPA_PATH=$(find "$RUNNER_TEMP/export" -type f -name "*.ipa" | head -n 1)
-          xcrun altool \
-            --upload-app \
-            --type ios \
-            --file "$IPA_PATH" \
-            --apiKey "$APP_STORE_CONNECT_API_KEY_ID" \
-            --apiIssuer "$APP_STORE_CONNECT_API_ISSUER_ID"
+          for attempt in 1 2 3 4; do
+            if xcrun altool \
+              --upload-app \
+              --type ios \
+              --file "$IPA_PATH" \
+              --apiKey "$APP_STORE_CONNECT_API_KEY_ID" \
+              --apiIssuer "$APP_STORE_CONNECT_API_ISSUER_ID"; then
+              exit 0
+            fi
+
+            if [ "$attempt" -eq 4 ]; then
+              echo "TestFlight upload failed after $attempt attempts."
+              exit 1
+            fi
+
+            delay=$((attempt * 30))
+            echo "App Store Connect upload failed on attempt $attempt; retrying in ${delay}s."
+            sleep "$delay"
+          done
