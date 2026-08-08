@@ -56,10 +56,12 @@ jobs:
           import sys
 
           output_path, key_path = sys.argv[1:]
+          with open(key_path, "r", encoding="utf-8") as handle:
+              private_key = handle.read()
           payload = {
               "key_id": os.environ["APP_STORE_CONNECT_API_KEY_ID"],
               "issuer_id": os.environ["APP_STORE_CONNECT_API_ISSUER_ID"],
-              "key_filepath": key_path,
+              "key": private_key,
               "in_house": False,
           }
           with open(output_path, "w", encoding="utf-8") as handle:
