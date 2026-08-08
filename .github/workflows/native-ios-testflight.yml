@@ -2,6 +2,12 @@ name: Native iOS TestFlight
 
 on:
   workflow_dispatch:
+    inputs:
+      existing_build_number:
+        description: "Distribute an already uploaded build without rebuilding"
+        required: false
+        type: string
+        default: ""
   push:
     branches: [main]
     paths:
@@ -23,13 +29,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Select existing TestFlight build
+        if: inputs.existing_build_number != ''
+        run: echo "BUILD_NUMBER=${{ inputs.existing_build_number }}" >> "$GITHUB_ENV"
+
       - name: Show Xcode version
+        if: inputs.existing_build_number == ''
         run: xcodebuild -version
 
       - name: Install XcodeGen
+        if: inputs.existing_build_number == ''
         run: brew install xcodegen
 
       - name: Check Rust native core
+        if: inputs.existing_build_number == ''
         run: |
           set -euo pipefail
           RUST_CORE_DIR="${IOS_NATIVE_DIR}/rust/mira_core"
@@ -41,10 +54,12 @@ jobs:
           cargo build --manifest-path "$RUST_CORE_DIR/Cargo.toml" --release --target aarch64-apple-ios
 
       - name: Generate Xcode project
+        if: inputs.existing_build_number == ''
         working-directory: ${{ env.IOS_NATIVE_DIR }}
         run: xcodegen generate --spec project.yml
 
       - name: Run native iOS unit tests
+        if: inputs.existing_build_number == ''
         working-directory: ${{ env.IOS_NATIVE_DIR }}
         run: |
           set -euo pipefail
@@ -76,6 +91,7 @@ jobs:
           chmod 600 "$HOME/.appstoreconnect/private_keys/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8"
 
       - name: Install signing certificate and provisioning profile
+        if: inputs.existing_build_number == ''
         id: signing
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -117,6 +133,7 @@ jobs:
           echo "profile-name=$PROFILE_NAME" >> "$GITHUB_OUTPUT"
 
       - name: Archive native iOS app
+        if: inputs.existing_build_number == ''
         working-directory: ${{ env.IOS_NATIVE_DIR }}
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -138,6 +155,7 @@ jobs:
             clean archive
 
       - name: Export IPA
+        if: inputs.existing_build_number == ''
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           PROFILE_NAME: ${{ steps.signing.outputs.profile-name }}
@@ -176,6 +194,7 @@ jobs:
             -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist"
 
       - name: Upload IPA artifact
+        if: inputs.existing_build_number == ''
         uses: actions/upload-artifact@v7
         with:
           name: Captro-native-ios-ipa
@@ -183,6 +202,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload to TestFlight
+        if: inputs.existing_build_number == ''
         env:
           APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
           APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
@@ -239,20 +259,39 @@ jobs:
               json.dump(payload, handle)
           PY
 
-          fastlane pilot distribute \
-            --api_key_path "$API_KEY_JSON" \
-            --app_platform ios \
-            --app_identifier "$BUNDLE_ID" \
-            --apple_id "6777888591" \
-            --app_version "1.0.1" \
-            --build_number "$BUILD_NUMBER" \
-            --groups "Captro Public Beta" \
-            --distribute_external true \
-            --notify_external_testers true \
-            --submit_beta_review true \
-            --wait_processing_interval 30 \
-            --wait_processing_timeout_duration 1800 \
-            --changelog "Polished Yearbook browsing, responsive book spreads, clearer profiles, filters, and smoother page turns."
+          for attempt in {1..60}; do
+            LOG_PATH="$RUNNER_TEMP/testflight-distribution-${attempt}.log"
+            set +e
+            fastlane pilot distribute \
+              --api_key_path "$API_KEY_JSON" \
+              --app_platform ios \
+              --app_identifier "$BUNDLE_ID" \
+              --apple_id "6777888591" \
+              --app_version "1.0.1" \
+              --build_number "$BUILD_NUMBER" \
+              --groups "Captro Public Beta" \
+              --distribute_external true \
+              --notify_external_testers true \
+              --submit_beta_review true \
+              --wait_processing_interval 30 \
+              --wait_processing_timeout_duration 1800 \
+              --changelog "Polished Yearbook browsing, responsive book spreads, clearer profiles, filters, and smoother page turns." \
+              2>&1 | tee "$LOG_PATH"
+            status=${PIPESTATUS[0]}
+            set -e
+
+            if [ "$status" -eq 0 ]; then
+              exit 0
+            fi
+
+            if grep -q "No build to distribute" "$LOG_PATH" && [ "$attempt" -lt 60 ]; then
+              echo "Build $BUILD_NUMBER is still processing in App Store Connect; retrying in 30 seconds."
+              sleep 30
+              continue
+            fi
+
+            exit "$status"
+          done
 
       - name: Confirm TestFlight distribution
         run: |
