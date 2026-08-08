@@ -91,6 +91,23 @@ test('Dating interest is private, adult-only, opted-in, and revealed only when m
   assert.match(worker, /interest_available: interestAvailable/);
 });
 
+test('Yearbook discovery does not turn missing age filters into an age-16-only query', async () => {
+  const worker = await read('backend-cf/src/index.ts');
+  const helperStart = worker.indexOf('async function supabaseYearbookDiscover');
+  const helperEnd = worker.indexOf('async function supabaseUpsertYearbookProfile', helperStart);
+  const helper = worker.slice(helperStart, helperEnd);
+  const routeStart = worker.indexOf("api.get('/yearbook/discover'");
+  const routeEnd = worker.indexOf("api.get('/yearbook/me'", routeStart);
+  const route = worker.slice(routeStart, routeEnd);
+
+  assert.match(helper, /const hasAgeMin = Number\.isFinite\(rawAgeMin\) && rawAgeMin > 0/);
+  assert.match(helper, /const hasAgeMax = Number\.isFinite\(rawAgeMax\) && rawAgeMax > 0/);
+  assert.match(helper, /const hasAgeFilter = hasAgeMin \|\| hasAgeMax/);
+  assert.match(route, /ageMin: ageMinQuery \? Number\(ageMinQuery\) : undefined/);
+  assert.match(route, /ageMax: ageMaxQuery \? Number\(ageMaxQuery\) : undefined/);
+  assert.doesNotMatch(route, /Number\(c\.req\.query\('age_(?:min|max)'\) \|\| 0\)/);
+});
+
 test('native Yearbook is a real tab with editor, privacy controls, and non-swipe discovery', async () => {
   const root = await read('ios_native/MIRA/Sources/MIRANative/App/MIRANativeRootView.swift');
   const screen = await read('ios_native/MIRA/Sources/MIRANative/Screens/YearbookNativeView.swift');

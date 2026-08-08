@@ -7105,9 +7105,13 @@ async function supabaseYearbookDiscover(c: any, viewerId: string, input: {
   const city = cleanText(input.city, 100).toLowerCase();
   const language = cleanText(input.language, 60).toLowerCase();
   const interest = cleanText(input.interest, 60).toLowerCase();
-  const hasAgeFilter = input.ageMin != null || input.ageMax != null;
-  const minAge = clampNumber(input.ageMin, 16, 120, 16);
-  const maxAge = clampNumber(input.ageMax, minAge, 120, 120);
+  const rawAgeMin = Number(input.ageMin);
+  const rawAgeMax = Number(input.ageMax);
+  const hasAgeMin = Number.isFinite(rawAgeMin) && rawAgeMin > 0;
+  const hasAgeMax = Number.isFinite(rawAgeMax) && rawAgeMax > 0;
+  const hasAgeFilter = hasAgeMin || hasAgeMax;
+  const minAge = hasAgeMin ? clampNumber(rawAgeMin, 16, 120, 16) : 16;
+  const maxAge = hasAgeMax ? clampNumber(rawAgeMax, minAge, 120, 120) : 120;
   const cards = candidateRows.flatMap((row) => {
     const uid = publicId(row?.user_id, 120);
     const user = users.get(uid);
@@ -16823,14 +16827,16 @@ api.get('/yearbook/discover', authMiddleware, async (c) => {
   const limited = await enforceRateLimit(c, 'yearbook_discover_read', userId, 180, 60);
   if (limited) return limited;
   try {
+    const ageMinQuery = c.req.query('age_min');
+    const ageMaxQuery = c.req.query('age_max');
     const result = await supabaseYearbookDiscover(c, userId, {
       intent: c.req.query('intent') || '',
       query: c.req.query('query') || '',
       city: c.req.query('city') || '',
       language: c.req.query('language') || '',
       interest: c.req.query('interest') || '',
-      ageMin: Number(c.req.query('age_min') || 0),
-      ageMax: Number(c.req.query('age_max') || 0),
+      ageMin: ageMinQuery ? Number(ageMinQuery) : undefined,
+      ageMax: ageMaxQuery ? Number(ageMaxQuery) : undefined,
       limit: Number(c.req.query('limit') || 24),
       offset: Number(c.req.query('offset') || 0),
     });
