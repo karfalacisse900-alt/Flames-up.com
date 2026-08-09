@@ -1091,9 +1091,16 @@ private struct YearbookPageTexture: View {
       base
 
       LinearGradient(
-        colors: [Color.white.opacity(0.24), Color.clear, Color.black.opacity(0.055)],
+        colors: [Color.white.opacity(0.30), Color.clear, Color.black.opacity(0.065)],
         startPoint: .topLeading,
         endPoint: .bottomTrailing
+      )
+
+      RadialGradient(
+        colors: [Color.clear, Color(red: 0.38, green: 0.24, blue: 0.10).opacity(0.035)],
+        center: .center,
+        startRadius: 45,
+        endRadius: 270
       )
 
       Canvas { context, size in
@@ -1106,14 +1113,14 @@ private struct YearbookPageTexture: View {
           }
         }
 
-        for index in 0..<48 {
+        for index in 0..<64 {
           let x = CGFloat((index * 47 + 13) % 211) / 211 * max(size.width, 1)
           let y = CGFloat((index * 79 + 29) % 223) / 223 * max(size.height, 1)
           let length = CGFloat(4 + (index % 9))
           var fiber = Path()
           fiber.move(to: CGPoint(x: x, y: y))
           fiber.addLine(to: CGPoint(x: min(x + length, size.width), y: y + CGFloat((index % 3) - 1)))
-          context.stroke(fiber, with: .color(Color.black.opacity(0.022)), lineWidth: 0.6)
+          context.stroke(fiber, with: .color(Color.black.opacity(0.028)), lineWidth: 0.62)
         }
       }
       .allowsHitTesting(false)
@@ -1123,7 +1130,17 @@ private struct YearbookPageTexture: View {
 
 private struct YearbookPolaroidPaper: View {
   var body: some View {
-    YearbookPageTexture(base: Color(red: 0.975, green: 0.958, blue: 0.91), ruled: false)
+    ZStack {
+      YearbookPageTexture(base: Color(red: 0.982, green: 0.958, blue: 0.898), ruled: false)
+      LinearGradient(
+        colors: [Color.white.opacity(0.30), Color.clear, Color.black.opacity(0.035)],
+        startPoint: .topLeading,
+        endPoint: .bottomTrailing
+      )
+      Rectangle()
+        .strokeBorder(Color(red: 0.40, green: 0.30, blue: 0.19).opacity(0.16), lineWidth: 0.8)
+        .padding(1.5)
+    }
   }
 }
 
@@ -1183,7 +1200,7 @@ private struct YearbookTapeStrip: View {
 
   var body: some View {
     Rectangle()
-      .fill(color.opacity(0.76))
+      .fill(color.opacity(0.86))
       .overlay {
         Canvas { context, size in
           for index in 0..<8 {
@@ -1191,7 +1208,7 @@ private struct YearbookTapeStrip: View {
             var line = Path()
             line.move(to: CGPoint(x: x, y: 0))
             line.addLine(to: CGPoint(x: min(size.width, x + 5), y: size.height))
-            context.stroke(line, with: .color(Color.white.opacity(0.09)), lineWidth: 0.7)
+            context.stroke(line, with: .color(Color.white.opacity(0.14)), lineWidth: 0.7)
           }
         }
       }
@@ -1224,8 +1241,18 @@ private struct YearbookPushpin: View {
 private struct YearbookPaperclip: View {
   var body: some View {
     Image(systemName: "paperclip")
-      .font(.system(size: 31, weight: .medium))
-      .foregroundStyle(Color(red: 0.30, green: 0.29, blue: 0.25))
+      .font(.system(size: 34, weight: .semibold))
+      .foregroundStyle(
+        LinearGradient(
+          colors: [
+            Color(red: 0.66, green: 0.64, blue: 0.56),
+            Color(red: 0.24, green: 0.23, blue: 0.20),
+            Color(red: 0.50, green: 0.48, blue: 0.42),
+          ],
+          startPoint: .topLeading,
+          endPoint: .bottomTrailing
+        )
+      )
       .rotationEffect(.degrees(-13))
       .shadow(color: Color.white.opacity(0.55), radius: 0.5, x: -1, y: -1)
       .shadow(color: Color.black.opacity(0.24), radius: 1.2, x: 1, y: 2)
@@ -1246,13 +1273,23 @@ private struct YearbookPressedFlowers: View {
         .frame(width: 2, height: 56)
         .rotationEffect(.degrees(-12))
         .offset(x: -8)
+      Ellipse()
+        .fill(Color(red: 0.34, green: 0.45, blue: 0.22).opacity(0.46))
+        .frame(width: 9, height: 22)
+        .rotationEffect(.degrees(49))
+        .offset(x: 3, y: -18)
+      Ellipse()
+        .fill(Color(red: 0.34, green: 0.45, blue: 0.22).opacity(0.42))
+        .frame(width: 8, height: 19)
+        .rotationEffect(.degrees(-48))
+        .offset(x: -7, y: -10)
       pressedFlower(color: Color(red: 0.74, green: 0.43, blue: 0.47))
         .offset(x: 15, y: -43)
       pressedFlower(color: Color(red: 0.84, green: 0.58, blue: 0.55))
         .scaleEffect(0.82)
         .offset(x: -12, y: -29)
     }
-    .opacity(0.78)
+    .opacity(0.88)
     .rotationEffect(.degrees(4))
     .allowsHitTesting(false)
   }
@@ -1713,7 +1750,7 @@ private struct YearbookProfileDetailView: View {
         .offset(x: -4, y: 7)
 
       YearbookPageTexture(
-        base: Color(red: 0.956, green: 0.925, blue: 0.844),
+        base: Color(red: 0.954, green: 0.906, blue: 0.803),
         ruled: false
       )
 
@@ -1721,52 +1758,54 @@ private struct YearbookProfileDetailView: View {
 
       YearbookScrapbookPatinaLayer()
 
+      YearbookScrapbookDepthLayer()
+
       scrapbookProfilePhoto
-        .frame(width: 140, height: 164)
+        .frame(width: 142, height: 169)
         .rotationEffect(.degrees(-2.1))
-        .position(x: 116, y: 92)
+        .position(x: 112, y: 96)
 
       scrapbookIdentityPanel
-        .frame(width: 174, height: 143, alignment: .topLeading)
-        .position(x: 286, y: 95)
+        .frame(width: 181, height: 145, alignment: .topLeading)
+        .position(x: 284, y: 94)
 
       YearbookPressedFlowers()
-        .frame(width: 55, height: 66)
-        .position(x: 354, y: 145)
+        .frame(width: 58, height: 72)
+        .position(x: 350, y: 146)
 
       scrapbookAboutPanel
-        .frame(width: 142, height: 120)
+        .frame(width: 139, height: 119)
         .rotationEffect(.degrees(-1.25))
-        .position(x: 114, y: 247)
+        .position(x: 110, y: 247)
 
       scrapbookDetailsPanel
-        .frame(width: 167, height: 125)
+        .frame(width: 169, height: 121)
         .rotationEffect(.degrees(0.65))
-        .position(x: 276, y: 250)
+        .position(x: 277, y: 247)
 
       scrapbookInterestsPanel
-        .frame(width: 145, height: 80)
+        .frame(width: 154, height: 78)
         .rotationEffect(.degrees(-0.55))
-        .position(x: 114, y: 366)
+        .position(x: 113, y: 365)
 
       scrapbookPromptPanel
-        .frame(width: 146, height: 66)
+        .frame(width: 141, height: 70)
         .rotationEffect(.degrees(1.05))
-        .position(x: 287, y: 372)
+        .position(x: 287, y: 369)
 
       scrapbookSongPanel
-        .frame(width: 153, height: 84)
+        .frame(width: 154, height: 81)
         .rotationEffect(.degrees(0.45))
-        .position(x: 119, y: 467)
+        .position(x: 113, y: 458)
 
       scrapbookPlacePanel
-        .frame(width: 141, height: 82)
+        .frame(width: 146, height: 81)
         .rotationEffect(.degrees(-0.85))
-        .position(x: 287, y: 466)
+        .position(x: 287, y: 458)
 
       referenceActions
-        .frame(width: 320, height: 61)
-        .position(x: 201, y: 557)
+        .frame(width: 324, height: 60)
+        .position(x: 199, y: 549)
 
       YearbookPageHoles()
         .frame(width: 18, height: 548)
@@ -1814,7 +1853,11 @@ private struct YearbookProfileDetailView: View {
       YearbookPolaroidPaper()
 
       MIRACachedImage(url: model.profile.profilePhoto, maxPixelSize: 1600) { image in
-        image.resizable().scaledToFill()
+        image
+          .resizable()
+          .scaledToFill()
+          .saturation(0.96)
+          .contrast(1.035)
       } placeholder: {
         ZStack {
           Color(red: 0.84, green: 0.81, blue: 0.73)
@@ -1823,7 +1866,7 @@ private struct YearbookProfileDetailView: View {
             .foregroundStyle(Color.black.opacity(0.28))
         }
       }
-      .frame(width: 122, height: 129)
+      .frame(width: 124, height: 133)
       .clipped()
       .overlay {
         Rectangle().stroke(Color.black.opacity(0.18), lineWidth: 0.8)
@@ -1836,17 +1879,19 @@ private struct YearbookProfileDetailView: View {
     .overlay {
       Rectangle().stroke(Color.black.opacity(0.14), lineWidth: 0.8)
     }
-    .shadow(color: Color.black.opacity(0.24), radius: 5, x: 3, y: 5)
+    .shadow(color: Color.black.opacity(0.12), radius: 1, x: 0, y: 1)
+    .shadow(color: Color(red: 0.22, green: 0.14, blue: 0.07).opacity(0.30), radius: 6, x: 3, y: 6)
   }
 
   private var scrapbookIdentityPanel: some View {
     VStack(alignment: .leading, spacing: 5) {
       HStack(alignment: .firstTextBaseline, spacing: 5) {
         Text(model.profile.name)
-          .font(.custom("Noteworthy-Bold", size: 31, relativeTo: .largeTitle))
-          .foregroundStyle(Color.black.opacity(0.88))
-          .lineLimit(2)
-          .minimumScaleFactor(0.62)
+          .font(.custom("Noteworthy-Bold", fixedSize: 32))
+          .foregroundStyle(Color(red: 0.12, green: 0.095, blue: 0.075))
+          .lineLimit(1)
+          .minimumScaleFactor(0.54)
+          .rotationEffect(.degrees(-0.6))
         Image(systemName: "heart")
           .font(.system(size: 19, weight: .medium))
           .foregroundStyle(Color(red: 0.79, green: 0.37, blue: 0.42))
@@ -1854,24 +1899,24 @@ private struct YearbookProfileDetailView: View {
 
       if !model.profile.handle.isEmpty {
         Text(model.profile.handle)
-          .font(.system(size: 12, weight: .semibold))
-          .foregroundStyle(Color.black.opacity(0.72))
+          .font(.system(size: 12.5, weight: .semibold))
+          .foregroundStyle(Color.black.opacity(0.78))
           .lineLimit(1)
       }
 
       scrapbookAgeLocation
-        .font(.system(size: 11.5, weight: .medium))
-        .foregroundStyle(Color.black.opacity(0.72))
+        .font(.system(size: 12, weight: .semibold))
+        .foregroundStyle(Color.black.opacity(0.76))
         .lineLimit(2)
         .minimumScaleFactor(0.72)
 
       Text(model.profile.intent.title)
-        .font(.system(size: 10, weight: .bold))
+        .font(.system(size: 10.5, weight: .bold))
         .lineLimit(1)
         .minimumScaleFactor(0.70)
         .padding(.horizontal, 9)
         .frame(height: 23)
-        .background(Color(red: 0.70, green: 0.78, blue: 0.58).opacity(0.90))
+        .background(Color(red: 0.63, green: 0.73, blue: 0.48).opacity(0.92))
         .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
 
       Spacer(minLength: 0)
@@ -1892,12 +1937,12 @@ private struct YearbookProfileDetailView: View {
   }
 
   private var scrapbookAboutPanel: some View {
-    YearbookTornScrap(base: Color(red: 0.955, green: 0.913, blue: 0.790)) {
+    YearbookTornScrap(base: Color(red: 0.963, green: 0.904, blue: 0.745)) {
       VStack(alignment: .leading, spacing: 9) {
         YearbookTapeLabel(title: "ABOUT ME", color: Color(red: 0.86, green: 0.72, blue: 0.44))
         Text(aboutMeText)
-          .font(.custom("Noteworthy-Bold", size: 14, relativeTo: .body))
-          .foregroundStyle(Color.black.opacity(0.82))
+          .font(.custom("Noteworthy-Bold", fixedSize: 14.5))
+          .foregroundStyle(Color.black.opacity(0.88))
           .lineLimit(5)
           .minimumScaleFactor(0.70)
           .frame(maxWidth: .infinity, alignment: .leading)
@@ -1911,17 +1956,17 @@ private struct YearbookProfileDetailView: View {
   }
 
   private var scrapbookDetailsPanel: some View {
-    YearbookGraphScrap(base: Color(red: 0.958, green: 0.941, blue: 0.892)) {
+    YearbookGraphScrap(base: Color(red: 0.965, green: 0.940, blue: 0.865)) {
       VStack(alignment: .leading, spacing: 6) {
         YearbookTapeLabel(title: "DETAILS", color: Color(red: 0.82, green: 0.69, blue: 0.51))
         VStack(alignment: .leading, spacing: 3) {
           ForEach(referenceDetails.prefix(5)) { item in
             HStack(alignment: .firstTextBaseline, spacing: 4) {
               Text(item.label)
-                .font(.system(size: 8.5, weight: .medium, design: .serif))
-                .frame(width: 43, alignment: .leading)
+                .font(.system(size: 9.2, weight: .medium, design: .serif))
+                .frame(width: 45, alignment: .leading)
               Text(item.value)
-                .font(.system(size: 9.5, weight: .semibold, design: .serif))
+                .font(.system(size: 10.2, weight: .semibold, design: .serif))
                 .lineLimit(1)
                 .minimumScaleFactor(0.62)
             }
@@ -1933,16 +1978,16 @@ private struct YearbookProfileDetailView: View {
   }
 
   private var scrapbookInterestsPanel: some View {
-    YearbookPaperScrap(base: Color(red: 0.950, green: 0.932, blue: 0.874), ruled: false) {
+    YearbookPaperScrap(base: Color(red: 0.915, green: 0.925, blue: 0.858), ruled: false) {
       VStack(alignment: .leading, spacing: 7) {
         YearbookTapeLabel(title: "INTERESTS", color: Color(red: 0.55, green: 0.70, blue: 0.82))
         HStack(spacing: 7) {
           ForEach(referenceInterests, id: \.self) { interest in
             VStack(spacing: 2) {
               Image(systemName: yearbookInterestIcon(interest))
-                .font(.system(size: 14, weight: .medium))
+                .font(.system(size: 15.5, weight: .semibold))
               Text(interest)
-                .font(.system(size: 7.2, weight: .semibold))
+                .font(.system(size: 7.9, weight: .bold))
                 .lineLimit(1)
                 .minimumScaleFactor(0.58)
             }
@@ -1955,13 +2000,13 @@ private struct YearbookProfileDetailView: View {
   }
 
   private var scrapbookPromptPanel: some View {
-    YearbookPaperScrap(base: Color(red: 0.950, green: 0.856, blue: 0.842), ruled: true) {
+    YearbookPaperScrap(base: Color(red: 0.958, green: 0.820, blue: 0.805), ruled: true) {
       VStack(alignment: .leading, spacing: 6) {
         YearbookTapeLabel(title: promptTitle, color: Color(red: 0.87, green: 0.66, blue: 0.68))
         HStack(alignment: .bottom, spacing: 4) {
           Text(promptAnswer)
-            .font(.system(size: 10.5, weight: .medium, design: .serif))
-            .foregroundStyle(Color.black.opacity(0.82))
+            .font(.system(size: 11.2, weight: .semibold, design: .serif))
+            .foregroundStyle(Color.black.opacity(0.86))
             .lineLimit(3)
             .minimumScaleFactor(0.68)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1969,11 +2014,18 @@ private struct YearbookProfileDetailView: View {
             .font(.system(size: 12, weight: .medium))
         }
       }
+      .overlay(alignment: .topTrailing) {
+        Circle()
+          .fill(Color(red: 0.78, green: 0.13, blue: 0.13))
+          .frame(width: 4.5, height: 4.5)
+          .padding(.top, 12)
+          .padding(.trailing, 6)
+      }
     }
   }
 
   private var scrapbookSongPanel: some View {
-    YearbookPaperScrap(base: Color(red: 0.952, green: 0.925, blue: 0.858), ruled: false) {
+    YearbookPaperScrap(base: Color(red: 0.904, green: 0.920, blue: 0.818), ruled: false) {
       VStack(alignment: .leading, spacing: 6) {
         YearbookTapeLabel(title: "FAVORITE SONG", color: Color(red: 0.59, green: 0.70, blue: 0.48))
         HStack(spacing: 8) {
@@ -1987,7 +2039,7 @@ private struct YearbookProfileDetailView: View {
 
           VStack(alignment: .leading, spacing: 3) {
             Text(favoriteSong)
-              .font(.system(size: 9.5, weight: .semibold, design: .serif))
+              .font(.system(size: 10.3, weight: .bold, design: .serif))
               .lineLimit(2)
               .minimumScaleFactor(0.64)
             YearbookWaveform()
@@ -2000,14 +2052,14 @@ private struct YearbookProfileDetailView: View {
   }
 
   private var scrapbookPlacePanel: some View {
-    YearbookPaperScrap(base: Color(red: 0.950, green: 0.932, blue: 0.876), ruled: false) {
+    YearbookPaperScrap(base: Color(red: 0.907, green: 0.890, blue: 0.930), ruled: false) {
       VStack(alignment: .leading, spacing: 6) {
         YearbookTapeLabel(title: "FAVORITE PLACE", color: Color(red: 0.64, green: 0.61, blue: 0.73))
         HStack(spacing: 7) {
           YearbookMiniPlaceArtwork()
             .frame(width: 53, height: 37)
           Text(favoritePlace)
-            .font(.custom("Noteworthy-Bold", size: 11, relativeTo: .caption))
+            .font(.custom("Noteworthy-Bold", fixedSize: 12))
             .lineLimit(2)
             .minimumScaleFactor(0.64)
             .foregroundStyle(Color.black.opacity(0.82))
@@ -2120,17 +2172,18 @@ private struct YearbookProfileDetailView: View {
   }
 
   private var aboutMeText: String {
-    model.profile.shortBio?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    let value = model.profile.shortBio?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return value.isEmpty ? "Not shared yet." : value
   }
 
   private var referenceDetails: [YearbookDetailItem] {
     [
-      YearbookDetailItem(label: "Height", value: model.profile.heightCm.map { "\($0) cm" } ?? ""),
-      YearbookDetailItem(label: "Job", value: model.profile.job ?? ""),
-      YearbookDetailItem(label: "Languages", value: (model.profile.languages ?? []).joined(separator: " · ")),
-      YearbookDetailItem(label: "School", value: model.profile.school ?? ""),
-      YearbookDetailItem(label: "From", value: model.profile.locationLine),
-    ].filter { !$0.value.isEmpty }
+      YearbookDetailItem(label: "Height", value: model.profile.heightCm.map { "\($0) cm" } ?? "Not shared"),
+      YearbookDetailItem(label: "Job", value: yearbookValue(model.profile.job)),
+      YearbookDetailItem(label: "Languages", value: yearbookValue((model.profile.languages ?? []).joined(separator: " / "))),
+      YearbookDetailItem(label: "School", value: yearbookValue(model.profile.school)),
+      YearbookDetailItem(label: "From", value: yearbookValue(model.profile.locationLine)),
+    ]
   }
 
   private var referenceInterests: [String] {
@@ -2147,15 +2200,20 @@ private struct YearbookProfileDetailView: View {
   }
 
   private var promptAnswer: String {
-    referencePrompt?.answer.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    yearbookValue(referencePrompt?.answer, fallback: "Not shared yet.")
   }
 
   private var favoriteSong: String {
-    model.profile.favorites?["song"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    yearbookValue(model.profile.favorites?["song"], fallback: "Not added yet")
   }
 
   private var favoritePlace: String {
-    model.profile.favorites?["place"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    yearbookValue(model.profile.favorites?["place"], fallback: "Not added yet")
+  }
+
+  private func yearbookValue(_ value: String?, fallback: String = "Not shared") -> String {
+    let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return trimmed.isEmpty ? fallback : trimmed
   }
 
   private func yearbookInterestIcon(_ interest: String) -> String {
@@ -2448,23 +2506,83 @@ private struct YearbookScrapbookPatinaLayer: View {
   }
 }
 
+private struct YearbookScrapbookDepthLayer: View {
+  var body: some View {
+    ZStack {
+      LinearGradient(
+        colors: [
+          Color.white.opacity(0.20),
+          Color.clear,
+          Color(red: 0.32, green: 0.20, blue: 0.09).opacity(0.055),
+        ],
+        startPoint: .topLeading,
+        endPoint: .bottomTrailing
+      )
+
+      Canvas { context, size in
+        let edgeColor = Color(red: 0.35, green: 0.23, blue: 0.11).opacity(0.085)
+        let cornerSize = min(size.width, size.height) * 0.30
+
+        context.fill(
+          Path(ellipseIn: CGRect(x: -cornerSize * 0.55, y: -cornerSize * 0.52, width: cornerSize, height: cornerSize)),
+          with: .radialGradient(
+            Gradient(colors: [edgeColor, Color.clear]),
+            center: CGPoint(x: 0, y: 0),
+            startRadius: 1,
+            endRadius: cornerSize * 0.55
+          )
+        )
+        context.fill(
+          Path(ellipseIn: CGRect(x: size.width - cornerSize * 0.45, y: size.height - cornerSize * 0.48, width: cornerSize, height: cornerSize)),
+          with: .radialGradient(
+            Gradient(colors: [edgeColor, Color.clear]),
+            center: CGPoint(x: size.width, y: size.height),
+            startRadius: 1,
+            endRadius: cornerSize * 0.55
+          )
+        )
+
+        for index in 0..<34 {
+          let x = CGFloat((index * 113 + 23) % 397) / 397 * size.width
+          let y = CGFloat((index * 71 + 17) % 613) / 613 * size.height
+          let diameter = CGFloat(0.7 + Double(index % 3) * 0.45)
+          context.fill(
+            Path(ellipseIn: CGRect(x: x, y: y, width: diameter, height: diameter)),
+            with: .color(Color(red: 0.30, green: 0.20, blue: 0.11).opacity(0.065))
+          )
+        }
+      }
+
+      RoundedRectangle(cornerRadius: 8, style: .continuous)
+        .strokeBorder(Color.white.opacity(0.28), lineWidth: 1)
+        .padding(2)
+      RoundedRectangle(cornerRadius: 8, style: .continuous)
+        .strokeBorder(Color(red: 0.33, green: 0.22, blue: 0.12).opacity(0.20), lineWidth: 1)
+        .padding(5)
+    }
+    .allowsHitTesting(false)
+  }
+}
+
 private struct YearbookTapeLabel: View {
   let title: String
   let color: Color
 
   var body: some View {
     Text(title)
-      .font(.system(size: 8.5, weight: .bold, design: .serif))
-      .tracking(0.45)
+      .font(.system(size: 9.2, weight: .bold, design: .serif))
+      .tracking(0.52)
       .lineLimit(1)
       .minimumScaleFactor(0.58)
-      .foregroundStyle(Color.black.opacity(0.78))
-      .padding(.horizontal, 7)
-      .frame(height: 18)
+      .foregroundStyle(Color(red: 0.17, green: 0.13, blue: 0.10).opacity(0.90))
+      .padding(.horizontal, 7.5)
+      .frame(height: 19)
       .background {
         YearbookTapeStrip(color: color)
       }
       .rotationEffect(.degrees(-1.2))
+      .shadow(color: Color.white.opacity(0.26), radius: 0.4, x: -0.5, y: -0.5)
+      .shadow(color: Color.black.opacity(0.10), radius: 1, x: 0.8, y: 1.2)
   }
 }
 
@@ -2491,7 +2609,8 @@ private struct YearbookTornScrap<Content: View>: View {
         YearbookTornPaperShape()
           .stroke(Color.black.opacity(0.13), lineWidth: 0.75)
       }
-      .shadow(color: Color.black.opacity(0.18), radius: 4, x: 2, y: 4)
+      .shadow(color: Color.black.opacity(0.10), radius: 1, x: 0, y: 1)
+      .shadow(color: Color(red: 0.28, green: 0.18, blue: 0.09).opacity(0.22), radius: 5, x: 2, y: 5)
   }
 }
 
@@ -2518,7 +2637,11 @@ private struct YearbookGraphScrap<Content: View>: View {
       .overlay {
         Rectangle().stroke(Color.black.opacity(0.14), lineWidth: 0.75)
       }
-      .shadow(color: Color.black.opacity(0.17), radius: 4, x: 2, y: 4)
+      .overlay(alignment: .top) {
+        Rectangle().fill(Color.white.opacity(0.20)).frame(height: 1)
+      }
+      .shadow(color: Color.black.opacity(0.09), radius: 1, x: 0, y: 1)
+      .shadow(color: Color(red: 0.28, green: 0.18, blue: 0.09).opacity(0.20), radius: 5, x: 2, y: 5)
   }
 }
 
@@ -2544,7 +2667,11 @@ private struct YearbookPaperScrap<Content: View>: View {
       .overlay {
         Rectangle().stroke(Color.black.opacity(0.13), lineWidth: 0.75)
       }
-      .shadow(color: Color.black.opacity(0.17), radius: 4, x: 2, y: 4)
+      .overlay(alignment: .top) {
+        Rectangle().fill(Color.white.opacity(0.20)).frame(height: 1)
+      }
+      .shadow(color: Color.black.opacity(0.09), radius: 1, x: 0, y: 1)
+      .shadow(color: Color(red: 0.28, green: 0.18, blue: 0.09).opacity(0.20), radius: 5, x: 2, y: 5)
   }
 }
 
@@ -2584,13 +2711,13 @@ private struct YearbookGraphPaperLayer: View {
         var line = Path()
         line.move(to: CGPoint(x: x, y: 0))
         line.addLine(to: CGPoint(x: x, y: size.height))
-        context.stroke(line, with: .color(Color.blue.opacity(0.075)), lineWidth: 0.55)
+        context.stroke(line, with: .color(Color.blue.opacity(0.105)), lineWidth: 0.6)
       }
       for y in stride(from: 0.0, through: size.height, by: 12.0) {
         var line = Path()
         line.move(to: CGPoint(x: 0, y: y))
         line.addLine(to: CGPoint(x: size.width, y: y))
-        context.stroke(line, with: .color(Color.blue.opacity(0.075)), lineWidth: 0.55)
+        context.stroke(line, with: .color(Color.blue.opacity(0.105)), lineWidth: 0.6)
       }
     }
     .allowsHitTesting(false)
@@ -2604,7 +2731,7 @@ private struct YearbookWaveform: View {
     HStack(alignment: .center, spacing: 1.5) {
       ForEach(Array(heights.enumerated()), id: \.offset) { item in
         Capsule()
-          .fill(Color.black.opacity(0.58))
+          .fill(Color.black.opacity(0.70))
           .frame(width: 1.7, height: item.element)
       }
     }
@@ -2818,20 +2945,25 @@ private struct YearbookActionButton: View {
       }
       .padding(.horizontal, 13)
       .frame(maxWidth: .infinity)
-      .frame(height: 62)
+      .frame(height: 60)
       .foregroundStyle(filled ? Color.white : Color.black.opacity(0.84))
       .background {
         if filled {
-          Color(red: 0.16, green: 0.15, blue: 0.13)
+          LinearGradient(
+            colors: [Color(red: 0.16, green: 0.15, blue: 0.13), Color(red: 0.10, green: 0.095, blue: 0.08)],
+            startPoint: .top,
+            endPoint: .bottom
+          )
         } else {
-          YearbookPageTexture(base: Color(red: 0.965, green: 0.935, blue: 0.86), ruled: false)
+          YearbookPageTexture(base: Color(red: 0.977, green: 0.947, blue: 0.875), ruled: false)
         }
       }
-      .clipShape(RoundedRectangle(cornerRadius: 4))
+      .clipShape(RoundedRectangle(cornerRadius: 3))
       .overlay {
-        RoundedRectangle(cornerRadius: 4).stroke(filled ? Color.clear : Color.black.opacity(0.14), lineWidth: 1)
+        RoundedRectangle(cornerRadius: 3).stroke(filled ? Color.white.opacity(0.05) : Color.black.opacity(0.18), lineWidth: 0.9)
       }
-      .shadow(color: Color.black.opacity(0.12), radius: 4, y: 2)
+      .shadow(color: Color.black.opacity(0.10), radius: 1, y: 1)
+      .shadow(color: Color.black.opacity(0.18), radius: 5, x: 2, y: 4)
     }
     .buttonStyle(.miraPress)
   }
