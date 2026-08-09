@@ -1419,118 +1419,87 @@ private struct YearbookProfileDetailView: View {
   }
 
   private func profilePage(pageWidth: CGFloat) -> some View {
-    let pageHeight = max(606, pageWidth * 1.54)
+    let designWidth: CGFloat = 390
+    let designHeight: CGFloat = 604
+    let scale = pageWidth / designWidth
 
-    return ZStack(alignment: .topLeading) {
-      RoundedRectangle(cornerRadius: 10, style: .continuous)
-        .fill(Color(red: 0.15, green: 0.115, blue: 0.075))
+    return scrapbookProfileCanvas
+      .frame(width: designWidth, height: designHeight, alignment: .topLeading)
+      .scaleEffect(scale, anchor: .topLeading)
+      .frame(width: pageWidth, height: designHeight * scale, alignment: .topLeading)
+  }
+
+  private var scrapbookProfileCanvas: some View {
+    ZStack(alignment: .topLeading) {
+      RoundedRectangle(cornerRadius: 9, style: .continuous)
+        .fill(Color(red: 0.13, green: 0.10, blue: 0.07))
         .offset(x: -4, y: 7)
 
-      YearbookPageTexture(base: yearbookCardColor(model.profile.theme), ruled: false)
+      YearbookPageTexture(
+        base: Color(red: 0.956, green: 0.925, blue: 0.844),
+        ruled: false
+      )
 
-      VStack(spacing: 9) {
-        referenceIdentityHeader
-          .frame(height: 176)
+      YearbookScrapbookFiberLayer()
 
-        HStack(alignment: .top, spacing: 9) {
-          YearbookReferenceSection(title: "ABOUT ME", tapeColor: Color(red: 0.86, green: 0.72, blue: 0.44)) {
-            Text(aboutMeText)
-              .font(.custom("Noteworthy-Bold", size: 15, relativeTo: .body))
-              .foregroundStyle(Color.black.opacity(0.82))
-              .lineLimit(5)
-              .minimumScaleFactor(0.78)
-              .frame(maxWidth: .infinity, alignment: .leading)
-          }
+      scrapbookProfilePhoto
+        .frame(width: 136, height: 174)
+        .rotationEffect(.degrees(-2.1))
+        .position(x: 111, y: 107)
 
-          YearbookReferenceSection(title: "DETAILS", tapeColor: Color(red: 0.82, green: 0.69, blue: 0.51)) {
-            VStack(alignment: .leading, spacing: 3) {
-              ForEach(referenceDetails.prefix(5)) { item in
-                HStack(alignment: .firstTextBaseline, spacing: 5) {
-                  Text(item.label)
-                    .font(.system(size: 9, weight: .medium, design: .serif))
-                    .frame(width: 43, alignment: .leading)
-                  Text(item.value)
-                    .font(.system(size: 10, weight: .semibold, design: .serif))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.68)
-                }
-                .foregroundStyle(Color.black.opacity(0.79))
-              }
-            }
-          }
-        }
-        .frame(height: 105)
+      scrapbookIdentityPanel
+        .frame(width: 177, height: 148, alignment: .topLeading)
+        .position(x: 288, y: 108)
 
-        HStack(alignment: .top, spacing: 9) {
-          YearbookReferenceSection(title: "INTERESTS", tapeColor: Color(red: 0.55, green: 0.70, blue: 0.82)) {
-            HStack(spacing: 8) {
-              ForEach(referenceInterests, id: \.self) { interest in
-                VStack(spacing: 2) {
-                  Image(systemName: yearbookInterestIcon(interest))
-                    .font(.system(size: 14, weight: .medium))
-                  Text(interest)
-                    .font(.system(size: 7.5, weight: .semibold))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.64)
-                }
-                .frame(maxWidth: .infinity)
-              }
-            }
-            .foregroundStyle(Color.black.opacity(0.78))
-          }
+      YearbookPressedFlowers()
+        .frame(width: 55, height: 66)
+        .position(x: 356, y: 154)
 
-          YearbookReferenceSection(title: promptTitle, tapeColor: Color(red: 0.87, green: 0.66, blue: 0.68)) {
-            HStack(alignment: .bottom, spacing: 4) {
-              Text(promptAnswer)
-                .font(.system(size: 11, weight: .medium, design: .serif))
-                .foregroundStyle(Color.black.opacity(0.82))
-                .lineLimit(3)
-                .minimumScaleFactor(0.72)
-                .frame(maxWidth: .infinity, alignment: .leading)
-              Image(systemName: "cup.and.saucer")
-                .font(.system(size: 13, weight: .medium))
-            }
-          }
-        }
-        .frame(height: 78)
+      scrapbookAboutPanel
+        .frame(width: 145, height: 112)
+        .rotationEffect(.degrees(-1.25))
+        .position(x: 115, y: 278)
 
-        HStack(alignment: .top, spacing: 9) {
-          YearbookReferenceFavoriteCard(
-            title: "FAVORITE SONG",
-            value: favoriteSong,
-            icon: "music.note",
-            tapeColor: Color(red: 0.59, green: 0.70, blue: 0.48)
-          )
-          YearbookReferenceFavoriteCard(
-            title: "FAVORITE PLACE",
-            value: favoritePlace,
-            icon: "mappin.and.ellipse",
-            tapeColor: Color(red: 0.64, green: 0.61, blue: 0.73)
-          )
-        }
-        .frame(height: 82)
+      scrapbookDetailsPanel
+        .frame(width: 165, height: 116)
+        .rotationEffect(.degrees(0.65))
+        .position(x: 289, y: 279)
 
-        referenceActions
-          .frame(height: 58)
-      }
-      .padding(.leading, 42)
-      .padding(.trailing, 14)
-      .padding(.top, 15)
-      .padding(.bottom, 15)
+      scrapbookInterestsPanel
+        .frame(width: 181, height: 77)
+        .rotationEffect(.degrees(-0.55))
+        .position(x: 122, y: 385)
+
+      scrapbookPromptPanel
+        .frame(width: 147, height: 79)
+        .rotationEffect(.degrees(1.05))
+        .position(x: 294, y: 390)
+
+      scrapbookSongPanel
+        .frame(width: 166, height: 78)
+        .rotationEffect(.degrees(0.45))
+        .position(x: 122, y: 476)
+
+      scrapbookPlacePanel
+        .frame(width: 154, height: 78)
+        .rotationEffect(.degrees(-0.85))
+        .position(x: 292, y: 475)
+
+      referenceActions
+        .frame(width: 332, height: 58)
+        .position(x: 211, y: 559)
 
       YearbookPageHoles()
-        .frame(width: 18)
-        .padding(.vertical, 18)
-        .padding(.leading, 4)
+        .frame(width: 18, height: 548)
+        .offset(x: 4, y: 28)
         .allowsHitTesting(false)
 
       Button { dismiss() } label: {
         Image(systemName: "chevron.left")
           .font(.system(size: 14, weight: .bold))
-          .foregroundStyle(Color.black.opacity(0.74))
+          .foregroundStyle(Color.black.opacity(0.73))
           .frame(width: 34, height: 34)
-          .background(Color.white.opacity(0.38))
-          .clipShape(Circle())
+          .contentShape(Circle())
       }
       .buttonStyle(.miraPress)
       .offset(x: 5, y: 7)
@@ -1540,27 +1509,235 @@ private struct YearbookProfileDetailView: View {
         Image(systemName: "ellipsis")
           .font(.system(size: 14, weight: .bold))
           .foregroundStyle(Color.black.opacity(0.76))
-          .frame(width: 36, height: 29)
-          .background(Color.white.opacity(0.40))
+          .frame(width: 36, height: 28)
+          .background(Color.white.opacity(0.38))
           .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
           .overlay {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-              .stroke(Color.black.opacity(0.13), lineWidth: 0.8)
+              .stroke(Color.black.opacity(0.15), lineWidth: 0.8)
           }
       }
       .buttonStyle(.miraPress)
-      .frame(maxWidth: .infinity, alignment: .trailing)
-      .padding(.trailing, 13)
-      .padding(.top, 10)
+      .offset(x: 340, y: 10)
       .accessibilityLabel("Profile options")
     }
-    .frame(width: pageWidth, height: pageHeight)
-    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+    .frame(width: 390, height: 604, alignment: .topLeading)
+    .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
     .overlay {
-      RoundedRectangle(cornerRadius: 10, style: .continuous)
-        .stroke(Color.black.opacity(0.28), lineWidth: 1.1)
+      RoundedRectangle(cornerRadius: 9, style: .continuous)
+        .stroke(Color.black.opacity(0.30), lineWidth: 1.1)
     }
-    .shadow(color: Color.black.opacity(0.44), radius: 20, x: 3, y: 12)
+    .shadow(color: Color.black.opacity(0.46), radius: 20, x: 3, y: 12)
+  }
+
+  private var scrapbookProfilePhoto: some View {
+    ZStack(alignment: .topLeading) {
+      YearbookPolaroidPaper()
+
+      MIRACachedImage(url: model.profile.profilePhoto, maxPixelSize: 900) { image in
+        image.resizable().scaledToFill()
+      } placeholder: {
+        ZStack {
+          Color(red: 0.84, green: 0.81, blue: 0.73)
+          Image(systemName: "person.crop.square")
+            .font(.system(size: 37, weight: .light))
+            .foregroundStyle(Color.black.opacity(0.28))
+        }
+      }
+      .frame(width: 118, height: 138)
+      .clipped()
+      .overlay {
+        Rectangle().stroke(Color.black.opacity(0.18), lineWidth: 0.8)
+      }
+      .offset(x: 9, y: 9)
+
+      YearbookPaperclip()
+        .offset(x: 0, y: -13)
+    }
+    .overlay {
+      Rectangle().stroke(Color.black.opacity(0.14), lineWidth: 0.8)
+    }
+    .shadow(color: Color.black.opacity(0.24), radius: 5, x: 3, y: 5)
+  }
+
+  private var scrapbookIdentityPanel: some View {
+    VStack(alignment: .leading, spacing: 5) {
+      HStack(alignment: .firstTextBaseline, spacing: 5) {
+        Text(model.profile.name)
+          .font(.custom("Noteworthy-Bold", size: 32, relativeTo: .largeTitle))
+          .foregroundStyle(Color.black.opacity(0.88))
+          .lineLimit(2)
+          .minimumScaleFactor(0.62)
+        Image(systemName: "heart")
+          .font(.system(size: 19, weight: .medium))
+          .foregroundStyle(Color(red: 0.79, green: 0.37, blue: 0.42))
+      }
+
+      if !model.profile.handle.isEmpty {
+        Text(model.profile.handle)
+          .font(.system(size: 12, weight: .semibold))
+          .foregroundStyle(Color.black.opacity(0.72))
+          .lineLimit(1)
+      }
+
+      scrapbookAgeLocation
+        .font(.system(size: 11.5, weight: .medium))
+        .foregroundStyle(Color.black.opacity(0.72))
+        .lineLimit(2)
+        .minimumScaleFactor(0.72)
+
+      Text(model.profile.intent.title)
+        .font(.system(size: 10, weight: .bold))
+        .lineLimit(1)
+        .minimumScaleFactor(0.70)
+        .padding(.horizontal, 9)
+        .frame(height: 23)
+        .background(Color(red: 0.70, green: 0.78, blue: 0.58).opacity(0.90))
+        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+
+      Spacer(minLength: 0)
+    }
+    .padding(.top, 4)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+  }
+
+  @ViewBuilder
+  private var scrapbookAgeLocation: some View {
+    if model.profile.age != nil || !model.profile.locationLine.isEmpty {
+      HStack(spacing: 4) {
+        if let age = model.profile.age { Text("\(age)") }
+        if model.profile.age != nil && !model.profile.locationLine.isEmpty { Text("·") }
+        if !model.profile.locationLine.isEmpty { Text(model.profile.locationLine) }
+      }
+    }
+  }
+
+  private var scrapbookAboutPanel: some View {
+    YearbookTornScrap(base: Color(red: 0.955, green: 0.913, blue: 0.790)) {
+      VStack(alignment: .leading, spacing: 9) {
+        YearbookTapeLabel(title: "ABOUT ME", color: Color(red: 0.86, green: 0.72, blue: 0.44))
+        Text(aboutMeText)
+          .font(.custom("Noteworthy-Bold", size: 14, relativeTo: .body))
+          .foregroundStyle(Color.black.opacity(0.82))
+          .lineLimit(5)
+          .minimumScaleFactor(0.70)
+          .frame(maxWidth: .infinity, alignment: .leading)
+        Spacer(minLength: 0)
+        Image(systemName: "face.smiling")
+          .font(.system(size: 12, weight: .medium))
+          .frame(maxWidth: .infinity, alignment: .trailing)
+          .foregroundStyle(Color.black.opacity(0.65))
+      }
+    }
+  }
+
+  private var scrapbookDetailsPanel: some View {
+    YearbookGraphScrap(base: Color(red: 0.958, green: 0.941, blue: 0.892)) {
+      VStack(alignment: .leading, spacing: 6) {
+        YearbookTapeLabel(title: "DETAILS", color: Color(red: 0.82, green: 0.69, blue: 0.51))
+        VStack(alignment: .leading, spacing: 3) {
+          ForEach(referenceDetails.prefix(5)) { item in
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+              Text(item.label)
+                .font(.system(size: 8.5, weight: .medium, design: .serif))
+                .frame(width: 43, alignment: .leading)
+              Text(item.value)
+                .font(.system(size: 9.5, weight: .semibold, design: .serif))
+                .lineLimit(1)
+                .minimumScaleFactor(0.62)
+            }
+            .foregroundStyle(Color.black.opacity(0.80))
+          }
+        }
+      }
+    }
+  }
+
+  private var scrapbookInterestsPanel: some View {
+    YearbookPaperScrap(base: Color(red: 0.950, green: 0.932, blue: 0.874), ruled: false) {
+      VStack(alignment: .leading, spacing: 7) {
+        YearbookTapeLabel(title: "INTERESTS", color: Color(red: 0.55, green: 0.70, blue: 0.82))
+        HStack(spacing: 7) {
+          ForEach(referenceInterests, id: \.self) { interest in
+            VStack(spacing: 2) {
+              Image(systemName: yearbookInterestIcon(interest))
+                .font(.system(size: 14, weight: .medium))
+              Text(interest)
+                .font(.system(size: 7.2, weight: .semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.58)
+            }
+            .frame(maxWidth: .infinity)
+          }
+        }
+        .foregroundStyle(Color.black.opacity(0.80))
+      }
+    }
+  }
+
+  private var scrapbookPromptPanel: some View {
+    YearbookPaperScrap(base: Color(red: 0.950, green: 0.856, blue: 0.842), ruled: true) {
+      VStack(alignment: .leading, spacing: 6) {
+        YearbookTapeLabel(title: promptTitle, color: Color(red: 0.87, green: 0.66, blue: 0.68))
+        HStack(alignment: .bottom, spacing: 4) {
+          Text(promptAnswer)
+            .font(.system(size: 10.5, weight: .medium, design: .serif))
+            .foregroundStyle(Color.black.opacity(0.82))
+            .lineLimit(3)
+            .minimumScaleFactor(0.68)
+            .frame(maxWidth: .infinity, alignment: .leading)
+          Image(systemName: "cup.and.saucer")
+            .font(.system(size: 12, weight: .medium))
+        }
+      }
+    }
+  }
+
+  private var scrapbookSongPanel: some View {
+    YearbookPaperScrap(base: Color(red: 0.952, green: 0.925, blue: 0.858), ruled: false) {
+      VStack(alignment: .leading, spacing: 6) {
+        YearbookTapeLabel(title: "FAVORITE SONG", color: Color(red: 0.59, green: 0.70, blue: 0.48))
+        HStack(spacing: 8) {
+          ZStack {
+            Rectangle().fill(Color.black.opacity(0.82))
+            Image(systemName: "music.note")
+              .font(.system(size: 13, weight: .medium))
+              .foregroundStyle(Color.white.opacity(0.90))
+          }
+          .frame(width: 39, height: 39)
+
+          VStack(alignment: .leading, spacing: 3) {
+            Text(favoriteSong)
+              .font(.system(size: 9.5, weight: .semibold, design: .serif))
+              .lineLimit(2)
+              .minimumScaleFactor(0.64)
+            YearbookWaveform()
+              .frame(width: 76, height: 13)
+          }
+          .foregroundStyle(Color.black.opacity(0.82))
+        }
+      }
+    }
+  }
+
+  private var scrapbookPlacePanel: some View {
+    YearbookPaperScrap(base: Color(red: 0.950, green: 0.932, blue: 0.876), ruled: false) {
+      VStack(alignment: .leading, spacing: 6) {
+        YearbookTapeLabel(title: "FAVORITE PLACE", color: Color(red: 0.64, green: 0.61, blue: 0.73))
+        HStack(spacing: 7) {
+          YearbookMiniPlaceArtwork()
+            .frame(width: 53, height: 37)
+          Text(favoritePlace)
+            .font(.custom("Noteworthy-Bold", size: 11, relativeTo: .caption))
+            .lineLimit(2)
+            .minimumScaleFactor(0.64)
+            .foregroundStyle(Color.black.opacity(0.82))
+          Spacer(minLength: 0)
+          Image(systemName: "heart")
+            .font(.system(size: 11, weight: .medium))
+        }
+      }
+    }
   }
 
   private var referenceIdentityHeader: some View {
@@ -1921,6 +2098,219 @@ private struct YearbookProfileDetailView: View {
     case "request_received": return "Accept their request"
     default: return "Send a friend request"
     }
+  }
+}
+
+private struct YearbookScrapbookFiberLayer: View {
+  var body: some View {
+    Canvas { context, size in
+      for index in 0..<84 {
+        let x = CGFloat((index * 73 + 17) % 397) / 397 * size.width
+        let y = CGFloat((index * 101 + 31) % 607) / 607 * size.height
+        let length = CGFloat(5 + (index % 12))
+        var fiber = Path()
+        fiber.move(to: CGPoint(x: x, y: y))
+        fiber.addLine(to: CGPoint(x: min(size.width, x + length), y: y + CGFloat((index % 3) - 1)))
+        context.stroke(fiber, with: .color(Color.black.opacity(0.022)), lineWidth: 0.65)
+      }
+
+      for index in 0..<18 {
+        let x = CGFloat((index * 97 + 43) % 383) / 383 * size.width
+        let y = CGFloat((index * 61 + 19) % 599) / 599 * size.height
+        context.fill(
+          Path(ellipseIn: CGRect(x: x, y: y, width: 1.4, height: 1.4)),
+          with: .color(Color.black.opacity(0.045))
+        )
+      }
+    }
+    .allowsHitTesting(false)
+  }
+}
+
+private struct YearbookTapeLabel: View {
+  let title: String
+  let color: Color
+
+  var body: some View {
+    Text(title)
+      .font(.system(size: 8.5, weight: .bold, design: .serif))
+      .tracking(0.45)
+      .lineLimit(1)
+      .minimumScaleFactor(0.58)
+      .foregroundStyle(Color.black.opacity(0.78))
+      .padding(.horizontal, 7)
+      .frame(height: 18)
+      .background {
+        YearbookTapeStrip(color: color)
+      }
+      .rotationEffect(.degrees(-1.2))
+  }
+}
+
+private struct YearbookTornScrap<Content: View>: View {
+  let base: Color
+  let content: Content
+
+  init(base: Color, @ViewBuilder content: () -> Content) {
+    self.base = base
+    self.content = content()
+  }
+
+  var body: some View {
+    content
+      .padding(.horizontal, 10)
+      .padding(.vertical, 9)
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+      .background {
+        YearbookPageTexture(base: base, ruled: true)
+          .clipShape(YearbookTornPaperShape())
+      }
+      .clipShape(YearbookTornPaperShape())
+      .overlay {
+        YearbookTornPaperShape()
+          .stroke(Color.black.opacity(0.13), lineWidth: 0.75)
+      }
+      .shadow(color: Color.black.opacity(0.18), radius: 4, x: 2, y: 4)
+  }
+}
+
+private struct YearbookGraphScrap<Content: View>: View {
+  let base: Color
+  let content: Content
+
+  init(base: Color, @ViewBuilder content: () -> Content) {
+    self.base = base
+    self.content = content()
+  }
+
+  var body: some View {
+    content
+      .padding(.horizontal, 10)
+      .padding(.vertical, 9)
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+      .background {
+        ZStack {
+          YearbookPageTexture(base: base, ruled: false)
+          YearbookGraphPaperLayer()
+        }
+      }
+      .overlay {
+        Rectangle().stroke(Color.black.opacity(0.14), lineWidth: 0.75)
+      }
+      .shadow(color: Color.black.opacity(0.17), radius: 4, x: 2, y: 4)
+  }
+}
+
+private struct YearbookPaperScrap<Content: View>: View {
+  let base: Color
+  let ruled: Bool
+  let content: Content
+
+  init(base: Color, ruled: Bool, @ViewBuilder content: () -> Content) {
+    self.base = base
+    self.ruled = ruled
+    self.content = content()
+  }
+
+  var body: some View {
+    content
+      .padding(.horizontal, 9)
+      .padding(.vertical, 7)
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+      .background {
+        YearbookPageTexture(base: base, ruled: ruled)
+      }
+      .overlay {
+        Rectangle().stroke(Color.black.opacity(0.13), lineWidth: 0.75)
+      }
+      .shadow(color: Color.black.opacity(0.17), radius: 4, x: 2, y: 4)
+  }
+}
+
+private struct YearbookTornPaperShape: Shape {
+  func path(in rect: CGRect) -> Path {
+    var path = Path()
+    path.move(to: CGPoint(x: rect.minX + 4, y: rect.minY + 2))
+    path.addLine(to: CGPoint(x: rect.minX + rect.width * 0.12, y: rect.minY))
+    path.addLine(to: CGPoint(x: rect.minX + rect.width * 0.24, y: rect.minY + 3))
+    path.addLine(to: CGPoint(x: rect.minX + rect.width * 0.37, y: rect.minY + 1))
+    path.addLine(to: CGPoint(x: rect.minX + rect.width * 0.51, y: rect.minY + 4))
+    path.addLine(to: CGPoint(x: rect.minX + rect.width * 0.65, y: rect.minY + 1))
+    path.addLine(to: CGPoint(x: rect.minX + rect.width * 0.80, y: rect.minY + 3))
+    path.addLine(to: CGPoint(x: rect.maxX - 3, y: rect.minY + 1))
+    path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY + rect.height * 0.20))
+    path.addLine(to: CGPoint(x: rect.maxX - 2, y: rect.minY + rect.height * 0.42))
+    path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY + rect.height * 0.67))
+    path.addLine(to: CGPoint(x: rect.maxX - 3, y: rect.maxY - 2))
+    path.addLine(to: CGPoint(x: rect.minX + rect.width * 0.84, y: rect.maxY))
+    path.addLine(to: CGPoint(x: rect.minX + rect.width * 0.69, y: rect.maxY - 3))
+    path.addLine(to: CGPoint(x: rect.minX + rect.width * 0.54, y: rect.maxY))
+    path.addLine(to: CGPoint(x: rect.minX + rect.width * 0.39, y: rect.maxY - 2))
+    path.addLine(to: CGPoint(x: rect.minX + rect.width * 0.23, y: rect.maxY))
+    path.addLine(to: CGPoint(x: rect.minX + 3, y: rect.maxY - 3))
+    path.addLine(to: CGPoint(x: rect.minX, y: rect.minY + rect.height * 0.76))
+    path.addLine(to: CGPoint(x: rect.minX + 2, y: rect.minY + rect.height * 0.51))
+    path.addLine(to: CGPoint(x: rect.minX, y: rect.minY + rect.height * 0.28))
+    path.closeSubpath()
+    return path
+  }
+}
+
+private struct YearbookGraphPaperLayer: View {
+  var body: some View {
+    Canvas { context, size in
+      for x in stride(from: 0.0, through: size.width, by: 12.0) {
+        var line = Path()
+        line.move(to: CGPoint(x: x, y: 0))
+        line.addLine(to: CGPoint(x: x, y: size.height))
+        context.stroke(line, with: .color(Color.blue.opacity(0.075)), lineWidth: 0.55)
+      }
+      for y in stride(from: 0.0, through: size.height, by: 12.0) {
+        var line = Path()
+        line.move(to: CGPoint(x: 0, y: y))
+        line.addLine(to: CGPoint(x: size.width, y: y))
+        context.stroke(line, with: .color(Color.blue.opacity(0.075)), lineWidth: 0.55)
+      }
+    }
+    .allowsHitTesting(false)
+  }
+}
+
+private struct YearbookWaveform: View {
+  private let heights: [CGFloat] = [4, 8, 12, 6, 10, 5, 13, 8, 4, 11, 7, 13, 5, 9, 4, 12, 7, 10]
+
+  var body: some View {
+    HStack(alignment: .center, spacing: 1.5) {
+      ForEach(Array(heights.enumerated()), id: \.offset) { item in
+        Capsule()
+          .fill(Color.black.opacity(0.58))
+          .frame(width: 1.7, height: item.element)
+      }
+    }
+  }
+}
+
+private struct YearbookMiniPlaceArtwork: View {
+  var body: some View {
+    ZStack(alignment: .bottom) {
+      LinearGradient(
+        colors: [
+          Color(red: 0.66, green: 0.78, blue: 0.84),
+          Color(red: 0.92, green: 0.79, blue: 0.55),
+        ],
+        startPoint: .top,
+        endPoint: .bottom
+      )
+      HStack(alignment: .bottom, spacing: 2) {
+        Rectangle().fill(Color.black.opacity(0.62)).frame(width: 7, height: 21)
+        Rectangle().fill(Color.black.opacity(0.54)).frame(width: 9, height: 29)
+        Rectangle().fill(Color.black.opacity(0.65)).frame(width: 8, height: 18)
+        Rectangle().fill(Color.black.opacity(0.50)).frame(width: 11, height: 25)
+      }
+      .padding(.bottom, 3)
+    }
+    .overlay { Rectangle().stroke(Color.white.opacity(0.65), lineWidth: 2) }
+    .shadow(color: Color.black.opacity(0.15), radius: 2, x: 1, y: 2)
   }
 }
 
