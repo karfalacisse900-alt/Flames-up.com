@@ -506,7 +506,10 @@ private struct YearbookOpenSpread: View {
               NavigationLink {
                 YearbookProfileDetailView(api: api, initialProfile: profile, currentUserID: currentUserID)
               } label: {
-                YearbookPortraitCard(profile: profile, placement: profileIndex + (pageNumber * profilesPerSpread))
+                YearbookPortraitCard(
+                  profile: profile,
+                  placement: profileIndex + (pageNumber * profilesPerLeaf * 2)
+                )
               }
               .buttonStyle(.miraPress)
               .frame(height: cardHeight)
