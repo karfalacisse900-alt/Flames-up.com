@@ -136,6 +136,14 @@ public final class MIRAYearbookNativeModel: ObservableObject {
   }
 }
 
+private enum YearbookBrowseTab: String {
+  case all
+  case friends
+  case dating
+  case nearby
+  case new
+}
+
 public struct MIRAYearbookNativeView: View {
   @StateObject private var model: MIRAYearbookNativeModel
   @State private var showFilters = false
@@ -143,6 +151,7 @@ public struct MIRAYearbookNativeView: View {
   @State private var isSearchVisible = false
   @State private var searchDraft = ""
   @State private var selectedSpread: Int? = 0
+  @State private var selectedBookTab: YearbookBrowseTab = .all
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   private let api: MIRAAPIClient
   private let currentUser: MIRAUser?
@@ -273,18 +282,14 @@ public struct MIRAYearbookNativeView: View {
               pageNumber: index + 1,
               pageCount: profileSpreads.count,
               profilesPerLeaf: profilesPerLeaf,
-              selectedIntent: model.selectedIntent,
+              selectedTab: selectedBookTab,
               api: api,
               currentUserID: currentUser?.id ?? "",
               onSearch: {
                 withAnimation(.easeOut(duration: 0.2)) { isSearchVisible.toggle() }
               },
               onFilter: { showFilters = true },
-              onSelectIntent: { intent in
-                selectedSpread = 0
-                model.selectedIntent = intent
-                Task { await model.reload() }
-              },
+              onSelectTab: selectBookTab,
               onEdit: { showEditor = true }
             )
             .containerRelativeFrame(.horizontal)
@@ -346,6 +351,41 @@ public struct MIRAYearbookNativeView: View {
   }
 
   private var profilesPerSpread: Int { profilesPerLeaf * 2 }
+
+  private func selectBookTab(_ tab: YearbookBrowseTab) {
+    selectedSpread = 0
+    selectedBookTab = tab
+
+    switch tab {
+    case .all:
+      model.selectedIntent = nil
+      model.cityFilter = ""
+    case .friends:
+      model.selectedIntent = .friends
+      model.cityFilter = ""
+    case .dating:
+      model.selectedIntent = .dating
+      model.cityFilter = ""
+    case .nearby:
+      model.selectedIntent = nil
+      let city = currentUser?.city?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+      guard !city.isEmpty else {
+        showFilters = true
+        return
+      }
+      model.cityFilter = city
+    case .new:
+      model.selectedIntent = nil
+      model.searchText = ""
+      model.cityFilter = ""
+      model.languageFilter = ""
+      model.interestFilter = ""
+      model.ageMinimum = ""
+      model.ageMaximum = ""
+    }
+
+    Task { await model.reload() }
+  }
 }
 
 private struct YearbookOpenSpread: View {
@@ -354,29 +394,31 @@ private struct YearbookOpenSpread: View {
   let pageNumber: Int
   let pageCount: Int
   let profilesPerLeaf: Int
-  let selectedIntent: MIRAYearbookIntent?
+  let selectedTab: YearbookBrowseTab
   let api: MIRAAPIClient
   let currentUserID: String
   let onSearch: () -> Void
   let onFilter: () -> Void
-  let onSelectIntent: (MIRAYearbookIntent?) -> Void
+  let onSelectTab: (YearbookBrowseTab) -> Void
   let onEdit: () -> Void
 
   private let pageColor = Color(red: 0.955, green: 0.925, blue: 0.85)
 
   var body: some View {
     GeometryReader { proxy in
-      let size = proxy.size
+      let spreadWidth = proxy.size.width
+      let spreadHeight = min(proxy.size.height, spreadWidth / 0.815)
+      let size = CGSize(width: spreadWidth, height: spreadHeight)
       let outerInset = max(4.0, size.width * 0.012)
-      let headerHeight = max(40.0, size.height * 0.068)
-      let footerHeight = max(36.0, size.height * 0.058)
-      let tabRailWidth = min(58.0, max(50.0, size.width * 0.135))
+      let headerHeight = max(48.0, size.height * 0.095)
+      let footerHeight = max(36.0, size.height * 0.075)
+      let tabRailWidth = min(56.0, max(48.0, size.width * 0.132))
 
       ZStack {
         YearbookBookCoverSurface()
-          .shadow(color: Color.black.opacity(0.58), radius: 24, y: 14)
+          .shadow(color: Color.black.opacity(0.48), radius: 18, y: 11)
 
-        ForEach(0..<4, id: \.self) { layer in
+        ForEach(0..<3, id: \.self) { layer in
           RoundedRectangle(cornerRadius: 12, style: .continuous)
             .fill(Color(red: 0.77, green: 0.71, blue: 0.59).opacity(0.96 - Double(layer) * 0.08))
             .padding(outerInset + CGFloat(layer) * 1.2)
@@ -387,20 +429,20 @@ private struct YearbookOpenSpread: View {
         VStack(spacing: 0) {
           HStack(spacing: 10) {
             Image(systemName: "chevron.left")
-              .font(.system(size: 13, weight: .bold))
+              .font(.system(size: 18, weight: .semibold))
               .foregroundStyle(Color.black.opacity(0.72))
               .accessibilityHidden(true)
             Spacer()
             Text("CAPTRO YEARBOOK")
-              .font(.system(size: max(13, size.width * 0.038), weight: .bold, design: .serif))
-              .tracking(0.7)
+              .font(.system(size: max(15, size.width * 0.045), weight: .bold, design: .serif))
+              .tracking(0.8)
               .foregroundStyle(Color.black.opacity(0.82))
             Spacer()
             Button(action: onEdit) {
               Image(systemName: "heart")
-                .font(.system(size: 17, weight: .medium))
+                .font(.system(size: 21, weight: .medium))
                 .foregroundStyle(Color(red: 0.72, green: 0.27, blue: 0.30))
-                .frame(width: 34, height: 34)
+                .frame(width: 38, height: 38)
             }
             .buttonStyle(.miraPress)
             .accessibilityLabel("Edit my Yearbook page")
@@ -421,13 +463,13 @@ private struct YearbookOpenSpread: View {
             Text("\(loadedProfileCount) \(loadedProfileCount == 1 ? "person" : "people")")
             Spacer()
             Text("Class of 2026")
-              .font(.custom("Noteworthy-Bold", size: max(12, size.width * 0.036), relativeTo: .headline))
+              .font(.custom("Noteworthy-Bold", size: max(14, size.width * 0.041), relativeTo: .headline))
             Image(systemName: "heart")
-              .font(.system(size: 11, weight: .medium))
+              .font(.system(size: 13, weight: .medium))
               .foregroundStyle(Color(red: 0.72, green: 0.31, blue: 0.34))
             Spacer()
             Text("\(pageNumber)/\(max(pageCount, 1))")
-              .font(.system(size: 9, weight: .bold, design: .serif))
+              .font(.system(size: 10, weight: .bold, design: .serif))
             Button(action: onSearch) {
               Image(systemName: "magnifyingglass")
                 .frame(width: 28, height: 28)
@@ -457,6 +499,8 @@ private struct YearbookOpenSpread: View {
           .padding(.bottom, footerHeight + outerInset + 10)
           .padding(.trailing, outerInset - 1)
       }
+      .frame(width: spreadWidth, height: spreadHeight)
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
     .accessibilityElement(children: .contain)
   }
@@ -475,8 +519,8 @@ private struct YearbookOpenSpread: View {
     let availableProfiles = Array(profiles.dropFirst(startIndex).prefix(profilesPerLeaf))
 
     return GeometryReader { proxy in
-      let verticalPadding = 10.0
-      let cardSpacing = 8.0
+      let verticalPadding = 12.0
+      let cardSpacing = 10.0
       let columnCount = 1
       let rowCount = Int(ceil(Double(profilesPerLeaf) / Double(columnCount)))
       let totalSpacing = cardSpacing * CGFloat(max(rowCount - 1, 0))
@@ -508,7 +552,7 @@ private struct YearbookOpenSpread: View {
               } label: {
                 YearbookPortraitCard(
                   profile: profile,
-                  placement: profileIndex + (pageNumber * profilesPerLeaf * 2)
+                  placement: profileIndex
                 )
               }
               .buttonStyle(.miraPress)
@@ -523,12 +567,6 @@ private struct YearbookOpenSpread: View {
         .padding(.horizontal, 8)
         .padding(.vertical, verticalPadding)
 
-        if side == .left {
-          YearbookPageHoles()
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.leading, 1)
-            .allowsHitTesting(false)
-        }
       }
       .clipShape(pageShape)
       .overlay {
@@ -551,29 +589,28 @@ private struct YearbookOpenSpread: View {
   }
 
   private var bookTabs: some View {
-    VStack(spacing: 4) {
-      bookTab(title: "All", intent: nil, color: Color(red: 0.79, green: 0.48, blue: 0.49))
-      bookTab(title: "Friends", intent: .friends, color: Color(red: 0.59, green: 0.70, blue: 0.52))
-      bookTab(title: "Dating", intent: .dating, color: Color(red: 0.49, green: 0.61, blue: 0.76))
-      bookTab(title: "Both", intent: .friendsAndDating, color: Color(red: 0.67, green: 0.56, blue: 0.74))
-      bookTab(title: "Creative", intent: .creativeNetworking, color: Color(red: 0.86, green: 0.67, blue: 0.34))
-      bookTab(title: "Browse", intent: .justBrowsing, color: Color(red: 0.76, green: 0.70, blue: 0.57))
+    VStack(spacing: 3) {
+      bookTab(title: "All", tab: .all, color: Color(red: 0.79, green: 0.48, blue: 0.49))
+      bookTab(title: "Friends", tab: .friends, color: Color(red: 0.59, green: 0.70, blue: 0.52))
+      bookTab(title: "Dating", tab: .dating, color: Color(red: 0.49, green: 0.61, blue: 0.76))
+      bookTab(title: "Nearby", tab: .nearby, color: Color(red: 0.67, green: 0.56, blue: 0.74))
+      bookTab(title: "New", tab: .new, color: Color(red: 0.86, green: 0.67, blue: 0.34))
     }
     .frame(maxHeight: .infinity, alignment: .center)
   }
 
-  private func bookTab(title: String, intent: MIRAYearbookIntent?, color: Color) -> some View {
-    let selected = selectedIntent == intent
+  private func bookTab(title: String, tab: YearbookBrowseTab, color: Color) -> some View {
+    let selected = selectedTab == tab
     return Button {
-      onSelectIntent(intent)
+      onSelectTab(tab)
     } label: {
       Text(title)
-        .font(.system(size: 9.5, weight: selected ? .bold : .semibold, design: .serif))
+        .font(.system(size: 10.5, weight: selected ? .bold : .semibold, design: .serif))
         .foregroundStyle(Color.black.opacity(0.78))
         .lineLimit(1)
         .minimumScaleFactor(0.68)
         .frame(maxWidth: .infinity)
-        .frame(height: 42)
+        .frame(height: 48)
         .background(color.opacity(selected ? 1 : 0.82))
         .overlay(alignment: .leading) {
           Rectangle().fill(selected ? Color.black.opacity(0.35) : Color.clear).frame(width: 2)
@@ -660,62 +697,89 @@ private struct YearbookPortraitCard: View {
         Rectangle().stroke(Color.black.opacity(0.13), lineWidth: 0.7)
       }
       .overlay(alignment: .top) {
-        if placement.isMultiple(of: 2) {
+        if decorationIndex == 0 || decorationIndex == 3 {
           YearbookTapeStrip(color: Color(red: 0.76, green: 0.67, blue: 0.49))
-            .frame(width: 36, height: 13)
+            .frame(width: decorationIndex == 0 ? 44 : 38, height: 13)
             .offset(y: -7)
         } else {
-          YearbookPushpin(color: placement.isMultiple(of: 3) ? .green : .blue)
+          YearbookPushpin(color: decorationIndex == 1 ? .green : .blue)
             .scaleEffect(0.78)
             .offset(y: -7)
         }
       }
-      .rotationEffect(.degrees(stableYearbookRotation(profile.id, placement: placement)))
+      .overlay(alignment: .topTrailing) {
+        if decorationIndex == 0 {
+          YearbookCardFlower()
+            .offset(x: 7, y: -4)
+        }
+      }
+      .rotationEffect(.degrees(cardRotation))
       .shadow(color: Color.black.opacity(0.18), radius: 3.5, x: 1, y: 2.5)
       .contentShape(Rectangle())
     }
   }
 
-  private var personalitySelector: Int {
-    let checksum = profile.userId.utf8.reduce(UInt64(max(placement, 0) + 1)) {
-      ($0 &* 31) &+ UInt64($1)
-    }
-    return Int(checksum % 6)
-  }
+  private var decorationIndex: Int { abs(placement) % 4 }
 
   private var personalitySymbol: String? {
-    switch personalitySelector {
-    case 2: return "camera.fill"
-    case 3: return "music.note"
-    case 4: return "cup.and.saucer.fill"
-    case 5: return "sparkles"
-    default: return nil
+    switch decorationIndex {
+    case 0: return "heart"
+    case 1: return "face.smiling"
+    case 2: return "star"
+    default: return "flame"
     }
   }
 
   private var personalityColor: Color {
-    switch personalitySelector {
-    case 2: return Color(red: 0.22, green: 0.37, blue: 0.55)
-    case 3: return Color(red: 0.58, green: 0.26, blue: 0.38)
-    case 4: return Color(red: 0.45, green: 0.29, blue: 0.18)
-    default: return Color(red: 0.28, green: 0.42, blue: 0.22)
+    switch decorationIndex {
+    case 0: return Color(red: 0.80, green: 0.38, blue: 0.43)
+    case 1: return Color(red: 0.38, green: 0.58, blue: 0.31)
+    case 2: return Color(red: 0.23, green: 0.48, blue: 0.72)
+    default: return Color(red: 0.91, green: 0.39, blue: 0.14)
     }
   }
 
-  private var photoCornerRadius: CGFloat {
-    switch personalitySelector % 3 {
-    case 1: return 3
-    case 2: return 6
-    default: return 0
+  private var cardRotation: Double {
+    switch decorationIndex {
+    case 0: return -1.2
+    case 1: return 0.7
+    case 2: return -0.6
+    default: return 0.9
     }
   }
 
-  private var photoBorderColor: Color {
-    personalitySelector == 3 ? Color.black.opacity(0.52) : Color.white.opacity(0.56)
-  }
+  private var photoCornerRadius: CGFloat { 1.5 }
 
-  private var photoBorderWidth: CGFloat {
-    personalitySelector == 3 ? 2 : 1
+  private var photoBorderColor: Color { Color.black.opacity(0.16) }
+
+  private var photoBorderWidth: CGFloat { 0.8 }
+}
+
+private struct YearbookCardFlower: View {
+  var body: some View {
+    ZStack {
+      ForEach(0..<6, id: \.self) { petal in
+        Capsule(style: .continuous)
+          .fill(Color(red: 0.90, green: 0.48, blue: 0.54))
+          .frame(width: 7, height: 15)
+          .offset(y: -7)
+          .rotationEffect(.degrees(Double(petal) * 60))
+      }
+
+      Circle()
+        .fill(Color(red: 0.94, green: 0.70, blue: 0.24))
+        .frame(width: 9, height: 9)
+        .overlay {
+          Circle().stroke(Color.black.opacity(0.35), lineWidth: 0.7)
+        }
+    }
+    .frame(width: 30, height: 30)
+    .overlay {
+      Circle().stroke(Color.black.opacity(0.20), lineWidth: 0.5)
+    }
+    .rotationEffect(.degrees(9))
+    .shadow(color: Color.black.opacity(0.18), radius: 1.2, y: 1)
+    .allowsHitTesting(false)
   }
 }
 
