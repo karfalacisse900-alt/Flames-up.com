@@ -144,8 +144,6 @@ public struct MIRAYearbookNativeView: View {
   @State private var searchDraft = ""
   @State private var selectedSpread: Int? = 0
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-  @Environment(\.verticalSizeClass) private var verticalSizeClass
   private let api: MIRAAPIClient
   private let currentUser: MIRAUser?
 
@@ -344,7 +342,7 @@ public struct MIRAYearbookNativeView: View {
   }
 
   private var profilesPerLeaf: Int {
-    horizontalSizeClass == .regular && verticalSizeClass == .regular ? 4 : 3
+    2
   }
 
   private var profilesPerSpread: Int { profilesPerLeaf * 2 }
@@ -474,16 +472,12 @@ private struct YearbookOpenSpread: View {
       style: .continuous
     )
 
-    let profilesPerSpread = profilesPerLeaf * 2
     let availableProfiles = Array(profiles.dropFirst(startIndex).prefix(profilesPerLeaf))
-    let shouldShowComingSoon = profiles.count < profilesPerSpread
-      && ((startIndex == 0 && profiles.count <= profilesPerLeaf)
-        || (startIndex == profilesPerLeaf && profiles.count > profilesPerLeaf))
 
     return GeometryReader { proxy in
       let verticalPadding = 10.0
       let cardSpacing = 8.0
-      let columnCount = profilesPerLeaf >= 4 ? 2 : 1
+      let columnCount = 1
       let rowCount = Int(ceil(Double(profilesPerLeaf) / Double(columnCount)))
       let totalSpacing = cardSpacing * CGFloat(max(rowCount - 1, 0))
       let cardHeight = max(108.0, (proxy.size.height - verticalPadding * 2 - totalSpacing) / CGFloat(rowCount))
@@ -504,9 +498,10 @@ private struct YearbookOpenSpread: View {
         )
         .allowsHitTesting(false)
 
-        VStack(spacing: cardSpacing) {
-          LazyVGrid(columns: columns, alignment: .leading, spacing: cardSpacing) {
-            ForEach(Array(availableProfiles.enumerated()), id: \.element.userId) { slot, profile in
+        LazyVGrid(columns: columns, alignment: .leading, spacing: cardSpacing) {
+          ForEach(0..<profilesPerLeaf, id: \.self) { slot in
+            if slot < availableProfiles.count {
+              let profile = availableProfiles[slot]
               let profileIndex = startIndex + slot
               NavigationLink {
                 YearbookProfileDetailView(api: api, initialProfile: profile, currentUserID: currentUserID)
@@ -516,15 +511,11 @@ private struct YearbookOpenSpread: View {
               .buttonStyle(.miraPress)
               .frame(height: cardHeight)
               .accessibilityHint("Opens \(profile.name)'s complete Yearbook page")
+            } else {
+              YearbookEmptyPortraitSlot()
+                .frame(height: cardHeight)
             }
           }
-
-          if shouldShowComingSoon {
-            YearbookMoreComingSoon()
-              .frame(height: max(46, min(70, cardHeight * 0.42)))
-          }
-
-          Spacer(minLength: 0)
         }
         .padding(.horizontal, 8)
         .padding(.vertical, verticalPadding)
@@ -601,10 +592,11 @@ private struct YearbookPortraitCard: View {
 
   var body: some View {
     GeometryReader { proxy in
-      let compact = proxy.size.height < 165
-      let imageHeight = max(68.0, min(132.0, proxy.size.height * (compact ? 0.50 : 0.54)))
+      let compact = proxy.size.height < 205
+      let footerHeight = compact ? 44.0 : 52.0
+      let imageHeight = max(82.0, proxy.size.height - footerHeight - 12)
 
-      VStack(alignment: .leading, spacing: compact ? 2.5 : 4) {
+      VStack(alignment: .leading, spacing: compact ? 2 : 3) {
         ZStack(alignment: .topTrailing) {
           MIRACachedImage(url: profile.profilePhoto, maxPixelSize: 640) { image in
             image.resizable().scaledToFill()
@@ -612,7 +604,7 @@ private struct YearbookPortraitCard: View {
             ZStack {
               MIRATheme.Color.mediaPlaceholderRaised
               Image(systemName: "person.crop.square")
-                .font(.system(size: 27, weight: .light))
+                .font(.system(size: compact ? 27 : 34, weight: .light))
                 .foregroundStyle(MIRATheme.Color.textMuted)
             }
           }
@@ -625,22 +617,23 @@ private struct YearbookPortraitCard: View {
           }
           .clipped()
 
+        }
+
+        HStack(alignment: .firstTextBaseline, spacing: 4) {
+          Text(profile.name)
+            .font(.custom("Noteworthy-Bold", size: compact ? 14 : 17, relativeTo: .headline))
+            .foregroundStyle(Color.black.opacity(0.88))
+            .lineLimit(1)
+            .minimumScaleFactor(0.70)
+
+          Spacer(minLength: 2)
+
           if let personalitySymbol {
             Image(systemName: personalitySymbol)
               .font(.system(size: compact ? 9 : 11, weight: .bold))
               .foregroundStyle(personalityColor)
-              .padding(compact ? 4 : 5)
-              .background(Color.white.opacity(0.72))
-              .clipShape(Circle())
-              .padding(4)
           }
         }
-
-        Text(profile.name)
-          .font(.custom("Noteworthy-Bold", size: compact ? 13 : 15, relativeTo: .headline))
-          .foregroundStyle(Color.black.opacity(0.88))
-          .lineLimit(1)
-          .minimumScaleFactor(0.76)
 
         if profile.age != nil || !profile.locationLine.isEmpty {
           HStack(spacing: 4) {
@@ -648,33 +641,10 @@ private struct YearbookPortraitCard: View {
             if profile.age != nil && !profile.locationLine.isEmpty { Text("·") }
             if !profile.locationLine.isEmpty { Text(profile.locationLine) }
           }
-          .font(.system(size: compact ? 8.5 : 9.5, weight: .semibold, design: .serif))
+          .font(.system(size: compact ? 8.5 : 10, weight: .semibold, design: .serif))
           .foregroundStyle(Color.black.opacity(0.65))
           .lineLimit(1)
-          .minimumScaleFactor(0.72)
-        }
-
-        if !interestLine.isEmpty {
-          Text(interestLine)
-            .font(.system(size: compact ? 7.5 : 8.5, weight: .semibold))
-            .foregroundStyle(Color.black.opacity(0.70))
-            .lineLimit(1)
-            .minimumScaleFactor(0.72)
-        }
-
-        HStack(alignment: .firstTextBaseline, spacing: 4) {
-          Text(intentPreview)
-            .font(.system(size: compact ? 7.3 : 8.2, weight: .bold))
-            .foregroundStyle(Color(red: 0.25, green: 0.32, blue: 0.19))
-            .lineLimit(1)
-
-          if !compact, !personalityLine.isEmpty {
-            Text("\"\(personalityLine)\"")
-              .font(.system(size: 8.2, weight: .medium, design: .serif).italic())
-              .foregroundStyle(Color.black.opacity(0.60))
-              .lineLimit(1)
-              .minimumScaleFactor(0.72)
-          }
+          .minimumScaleFactor(0.68)
         }
 
         Spacer(minLength: 0)
@@ -700,28 +670,6 @@ private struct YearbookPortraitCard: View {
       .rotationEffect(.degrees(stableYearbookRotation(profile.id, placement: placement)))
       .shadow(color: Color.black.opacity(0.18), radius: 3.5, x: 1, y: 2.5)
       .contentShape(Rectangle())
-    }
-  }
-
-  private var interestLine: String {
-    Array((profile.interests ?? profile.hobbies ?? []).prefix(3)).joined(separator: " · ")
-  }
-
-  private var personalityLine: String {
-    let prompt = profile.prompts?.first?.answer.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-    if !prompt.isEmpty { return prompt }
-    let mood = profile.currentMood?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-    if !mood.isEmpty { return mood }
-    return profile.shortBio?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-  }
-
-  private var intentPreview: String {
-    switch profile.intent {
-    case .friends: return "Friends"
-    case .dating: return "Dating"
-    case .friendsAndDating: return "Friends + Dating"
-    case .creativeNetworking: return "Creative"
-    case .justBrowsing: return "Browsing"
     }
   }
 
@@ -768,27 +716,31 @@ private struct YearbookPortraitCard: View {
   }
 }
 
-private struct YearbookMoreComingSoon: View {
+private struct YearbookEmptyPortraitSlot: View {
   var body: some View {
-    HStack(spacing: 8) {
-      RoundedRectangle(cornerRadius: 2)
-        .stroke(Color.black.opacity(0.15), style: StrokeStyle(lineWidth: 0.8, dash: [3, 3]))
-        .frame(width: 30, height: 37)
-        .overlay {
-          Image(systemName: "person.crop.square")
-            .font(.system(size: 13, weight: .light))
-            .foregroundStyle(Color.black.opacity(0.24))
-        }
-      Text("More people coming soon")
-        .font(.system(size: 9.5, weight: .semibold, design: .serif))
-        .foregroundStyle(Color.black.opacity(0.32))
-        .lineLimit(2)
-        .minimumScaleFactor(0.78)
-      Spacer(minLength: 0)
+    VStack(spacing: 10) {
+      Image(systemName: "person.crop.square")
+        .font(.system(size: 30, weight: .ultraLight))
+      Text("A page is waiting")
+        .font(.system(size: 12, weight: .semibold, design: .serif))
+        .lineLimit(1)
+        .minimumScaleFactor(0.75)
     }
-    .padding(.horizontal, 8)
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .background(Color.white.opacity(0.08))
+    .foregroundStyle(Color.black.opacity(0.24))
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .background(
+      YearbookPageTexture(
+        base: Color(red: 0.955, green: 0.935, blue: 0.875),
+        ruled: true
+      )
+    )
+    .overlay {
+      Rectangle()
+        .stroke(Color.black.opacity(0.13), style: StrokeStyle(lineWidth: 0.8, dash: [5, 4]))
+        .padding(6)
+    }
+    .rotationEffect(.degrees(0.35))
+    .shadow(color: Color.black.opacity(0.10), radius: 2, x: 1, y: 2)
     .accessibilityElement(children: .combine)
   }
 }
@@ -1081,7 +1033,7 @@ private struct YearbookPaperBackground: View {
 private struct YearbookSkeletonGrid: View {
   var body: some View {
     LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 16) {
-      ForEach(0..<6, id: \.self) { _ in
+      ForEach(0..<4, id: \.self) { _ in
         VStack(alignment: .leading, spacing: 10) {
           MIRATheme.Color.mediaPlaceholderRaised
             .aspectRatio(0.82, contentMode: .fit)
@@ -1378,14 +1330,18 @@ private struct YearbookProfileDetailView: View {
   var body: some View {
     ZStack {
       YearbookPaperBackground().ignoresSafeArea()
-      ScrollView {
-        profilePage
-          .frame(maxWidth: .infinity)
-          .padding(.horizontal, 2)
-          .padding(.top, 2)
-          .padding(.bottom, 12)
+      GeometryReader { proxy in
+        let pageWidth = min(max(proxy.size.width - 8, 300), 430)
+
+        ScrollView {
+          profilePage(pageWidth: pageWidth)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 4)
+            .padding(.top, 4)
+            .padding(.bottom, 14)
+        }
+        .scrollIndicators(.hidden)
       }
-      .scrollIndicators(.hidden)
     }
     .toolbar(.hidden, for: .navigationBar)
     .toolbar(.hidden, for: .tabBar)
@@ -1412,12 +1368,28 @@ private struct YearbookProfileDetailView: View {
       )
     }
     .confirmationDialog("Profile options", isPresented: $showOptions, titleVisibility: .visible) {
-      Button("Report") {
-        reportTarget = MIRAReportTarget(targetType: "user", targetId: model.profile.userId, ownerUserId: model.profile.userId, title: model.profile.name, subtitle: model.profile.handle)
-        showReport = true
-      }
-      Button("Block", role: .destructive) {
-        Task { if await model.block() { dismiss() } }
+      if model.profile.viewerIsOwner {
+        Button("View signatures") { showSignatures = true }
+      } else {
+        Button(connectionTitle) {
+          if model.profile.connectionStatus == "connected" {
+            showRemoveFriendConfirmation = true
+          } else {
+            Task { await model.updateConnection() }
+          }
+        }
+        if model.profile.interestAvailable == true {
+          Button(model.profile.interestSent ? "Remove interest" : "Interested?") {
+            Task { await model.toggleInterest() }
+          }
+        }
+        Button("Report") {
+          reportTarget = MIRAReportTarget(targetType: "user", targetId: model.profile.userId, ownerUserId: model.profile.userId, title: model.profile.name, subtitle: model.profile.handle)
+          showReport = true
+        }
+        Button("Block", role: .destructive) {
+          Task { if await model.block() { dismiss() } }
+        }
       }
       Button("Cancel", role: .cancel) {}
     }
@@ -1443,159 +1415,299 @@ private struct YearbookProfileDetailView: View {
     }
   }
 
-  private var profilePage: some View {
-    ZStack(alignment: .leading) {
-      RoundedRectangle(cornerRadius: 14, style: .continuous)
-        .fill(Color(red: 0.17, green: 0.135, blue: 0.095))
-        .offset(x: -4, y: 6)
+  private func profilePage(pageWidth: CGFloat) -> some View {
+    let pageHeight = max(606, pageWidth * 1.54)
 
-      VStack(spacing: 18) {
-        HStack {
-          Button { dismiss() } label: {
-            Image(systemName: "chevron.left")
-              .font(.system(size: 16, weight: .bold))
-              .frame(width: 44, height: 44)
+    return ZStack(alignment: .topLeading) {
+      RoundedRectangle(cornerRadius: 10, style: .continuous)
+        .fill(Color(red: 0.15, green: 0.115, blue: 0.075))
+        .offset(x: -4, y: 7)
+
+      YearbookPageTexture(base: yearbookCardColor(model.profile.theme), ruled: false)
+
+      VStack(spacing: 9) {
+        referenceIdentityHeader
+          .frame(height: 176)
+
+        HStack(alignment: .top, spacing: 9) {
+          YearbookReferenceSection(title: "ABOUT ME", tapeColor: Color(red: 0.86, green: 0.72, blue: 0.44)) {
+            Text(aboutMeText)
+              .font(.custom("Noteworthy-Bold", size: 15, relativeTo: .body))
+              .foregroundStyle(Color.black.opacity(0.82))
+              .lineLimit(5)
+              .minimumScaleFactor(0.78)
+              .frame(maxWidth: .infinity, alignment: .leading)
           }
-          .buttonStyle(.miraPress)
-          .accessibilityLabel("Back")
 
-          Spacer()
-
-          Text("CAPTRO YEARBOOK")
-            .font(.system(size: 13, weight: .bold, design: .serif))
-            .tracking(1.2)
-
-          Spacer()
-
-          if model.profile.viewerIsOwner {
-            Image(systemName: "heart")
-              .foregroundStyle(Color(red: 0.73, green: 0.31, blue: 0.34))
-              .frame(width: 44, height: 44)
-          } else {
-            Button { showOptions = true } label: {
-              Image(systemName: "ellipsis")
-                .font(.system(size: 17, weight: .bold))
-                .frame(width: 44, height: 44)
+          YearbookReferenceSection(title: "DETAILS", tapeColor: Color(red: 0.82, green: 0.69, blue: 0.51)) {
+            VStack(alignment: .leading, spacing: 3) {
+              ForEach(referenceDetails.prefix(5)) { item in
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                  Text(item.label)
+                    .font(.system(size: 9, weight: .medium, design: .serif))
+                    .frame(width: 43, alignment: .leading)
+                  Text(item.value)
+                    .font(.system(size: 10, weight: .semibold, design: .serif))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.68)
+                }
+                .foregroundStyle(Color.black.opacity(0.79))
+              }
             }
-            .buttonStyle(.miraPress)
-            .accessibilityLabel("Profile options")
           }
         }
-        .foregroundStyle(Color.black.opacity(0.78))
+        .frame(height: 105)
 
-        identityHeader
+        HStack(alignment: .top, spacing: 9) {
+          YearbookReferenceSection(title: "INTERESTS", tapeColor: Color(red: 0.55, green: 0.70, blue: 0.82)) {
+            HStack(spacing: 8) {
+              ForEach(referenceInterests, id: \.self) { interest in
+                VStack(spacing: 2) {
+                  Image(systemName: yearbookInterestIcon(interest))
+                    .font(.system(size: 14, weight: .medium))
+                  Text(interest)
+                    .font(.system(size: 7.5, weight: .semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.64)
+                }
+                .frame(maxWidth: .infinity)
+              }
+            }
+            .foregroundStyle(Color.black.opacity(0.78))
+          }
 
-        LazyVGrid(
-          columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)],
-          alignment: .leading,
-          spacing: 14
-        ) {
-          ForEach(resolvedSectionOrder, id: \.self) { section in
-            profileSection(section)
+          YearbookReferenceSection(title: promptTitle, tapeColor: Color(red: 0.87, green: 0.66, blue: 0.68)) {
+            HStack(alignment: .bottom, spacing: 4) {
+              Text(promptAnswer)
+                .font(.system(size: 11, weight: .medium, design: .serif))
+                .foregroundStyle(Color.black.opacity(0.82))
+                .lineLimit(3)
+                .minimumScaleFactor(0.72)
+                .frame(maxWidth: .infinity, alignment: .leading)
+              Image(systemName: "cup.and.saucer")
+                .font(.system(size: 13, weight: .medium))
+            }
           }
         }
+        .frame(height: 78)
 
-        if let signatures = model.profile.signatures, !signatures.isEmpty {
-          signaturePreview(signatures)
+        HStack(alignment: .top, spacing: 9) {
+          YearbookReferenceFavoriteCard(
+            title: "FAVORITE SONG",
+            value: favoriteSong,
+            icon: "music.note",
+            tapeColor: Color(red: 0.59, green: 0.70, blue: 0.48)
+          )
+          YearbookReferenceFavoriteCard(
+            title: "FAVORITE PLACE",
+            value: favoritePlace,
+            icon: "mappin.and.ellipse",
+            tapeColor: Color(red: 0.64, green: 0.61, blue: 0.73)
+          )
         }
+        .frame(height: 82)
 
-        actionPanel
+        referenceActions
+          .frame(height: 58)
       }
-      .padding(.leading, 34)
+      .padding(.leading, 42)
       .padding(.trailing, 14)
-      .padding(.top, 8)
-      .padding(.bottom, 24)
-      .background(
-        YearbookPageTexture(
-          base: yearbookCardColor(model.profile.theme),
-          ruled: false
-        )
-      )
-      .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-      .overlay(alignment: .leading) {
-        YearbookPageHoles()
-          .frame(width: 18)
-          .padding(.vertical, 24)
-          .padding(.leading, 5)
-          .allowsHitTesting(false)
+      .padding(.top, 15)
+      .padding(.bottom, 15)
+
+      YearbookPageHoles()
+        .frame(width: 18)
+        .padding(.vertical, 18)
+        .padding(.leading, 4)
+        .allowsHitTesting(false)
+
+      Button { dismiss() } label: {
+        Image(systemName: "chevron.left")
+          .font(.system(size: 14, weight: .bold))
+          .foregroundStyle(Color.black.opacity(0.74))
+          .frame(width: 34, height: 34)
+          .background(Color.white.opacity(0.38))
+          .clipShape(Circle())
       }
-      .overlay {
-        RoundedRectangle(cornerRadius: 10, style: .continuous)
-          .stroke(Color.black.opacity(0.22), lineWidth: 1)
+      .buttonStyle(.miraPress)
+      .offset(x: 5, y: 7)
+      .accessibilityLabel("Back")
+
+      Button { showOptions = true } label: {
+        Image(systemName: "ellipsis")
+          .font(.system(size: 14, weight: .bold))
+          .foregroundStyle(Color.black.opacity(0.76))
+          .frame(width: 36, height: 29)
+          .background(Color.white.opacity(0.40))
+          .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+          .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+              .stroke(Color.black.opacity(0.13), lineWidth: 0.8)
+          }
       }
+      .buttonStyle(.miraPress)
+      .frame(maxWidth: .infinity, alignment: .trailing)
+      .padding(.trailing, 13)
+      .padding(.top, 10)
+      .accessibilityLabel("Profile options")
     }
-    .padding(2)
-    .shadow(color: Color.black.opacity(0.40), radius: 20, x: 3, y: 12)
+    .frame(width: pageWidth, height: pageHeight)
+    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+    .overlay {
+      RoundedRectangle(cornerRadius: 10, style: .continuous)
+        .stroke(Color.black.opacity(0.28), lineWidth: 1.1)
+    }
+    .shadow(color: Color.black.opacity(0.44), radius: 20, x: 3, y: 12)
   }
 
-  private var identityHeader: some View {
-    HStack(alignment: .top, spacing: 16) {
+  private var referenceIdentityHeader: some View {
+    HStack(alignment: .top, spacing: 14) {
       ZStack(alignment: .topLeading) {
-        VStack(spacing: 0) {
-          MIRACachedImage(url: model.profile.profilePhoto, maxPixelSize: 900) { image in
-            image.resizable().scaledToFill()
-          } placeholder: {
-            ZStack {
-              Color(red: 0.85, green: 0.82, blue: 0.74)
-              Image(systemName: "person.crop.square").font(.system(size: 42, weight: .light))
-            }
+        MIRACachedImage(url: model.profile.profilePhoto, maxPixelSize: 900) { image in
+          image.resizable().scaledToFill()
+        } placeholder: {
+          ZStack {
+            Color(red: 0.85, green: 0.82, blue: 0.74)
+            Image(systemName: "person.crop.square")
+              .font(.system(size: 40, weight: .light))
+              .foregroundStyle(Color.black.opacity(0.30))
           }
-          .frame(height: 158)
-          .clipped()
-
-          Text(model.profile.name)
-            .font(.custom("Noteworthy-Bold", size: 17, relativeTo: .headline))
-            .foregroundStyle(Color.black.opacity(0.86))
-            .lineLimit(1)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.top, 5)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .clipped()
         .padding(8)
+        .padding(.bottom, 11)
         .background(YearbookPolaroidPaper())
-        .overlay { Rectangle().stroke(Color.black.opacity(0.12), lineWidth: 0.8) }
-        .shadow(color: Color.black.opacity(0.18), radius: 5, x: 2, y: 4)
-        .rotationEffect(.degrees(-1.4))
+        .overlay { Rectangle().stroke(Color.black.opacity(0.14), lineWidth: 0.8) }
+        .rotationEffect(.degrees(-1.8))
+        .shadow(color: Color.black.opacity(0.20), radius: 5, x: 2, y: 4)
 
         YearbookPaperclip()
-          .offset(x: 6, y: -15)
+          .offset(x: 4, y: -15)
       }
-      .frame(width: 142)
+      .frame(width: 137)
 
-      VStack(alignment: .leading, spacing: 8) {
-        Text(model.profile.name)
-          .font(.custom("Noteworthy-Bold", size: 37, relativeTo: .largeTitle))
-          .foregroundStyle(Color.black.opacity(0.86))
-          .lineLimit(2)
+      VStack(alignment: .leading, spacing: 6) {
+        HStack(alignment: .firstTextBaseline, spacing: 5) {
+          Text(model.profile.name)
+            .font(.custom("Noteworthy-Bold", size: 34, relativeTo: .largeTitle))
+            .foregroundStyle(Color.black.opacity(0.86))
+            .lineLimit(2)
+            .minimumScaleFactor(0.66)
+          Image(systemName: "heart")
+            .font(.system(size: 20, weight: .medium))
+            .foregroundStyle(Color(red: 0.78, green: 0.38, blue: 0.42))
+        }
+
         if !model.profile.handle.isEmpty {
           Text(model.profile.handle)
-            .font(.system(size: 15, weight: .semibold))
+            .font(.system(size: 13, weight: .semibold))
             .foregroundStyle(Color.black.opacity(0.72))
         }
+
         if model.profile.age != nil || !model.profile.locationLine.isEmpty {
-          HStack(spacing: 5) {
+          HStack(spacing: 4) {
             if let age = model.profile.age { Text("\(age)") }
-            if model.profile.age != nil && !model.profile.locationLine.isEmpty { Text("|") }
+            if model.profile.age != nil && !model.profile.locationLine.isEmpty { Text("·") }
             if !model.profile.locationLine.isEmpty { Text(model.profile.locationLine) }
           }
-            .font(.system(size: 14, weight: .medium))
-            .foregroundStyle(Color.black.opacity(0.68))
-            .lineLimit(2)
+          .font(.system(size: 12, weight: .medium))
+          .foregroundStyle(Color.black.opacity(0.70))
+          .lineLimit(2)
+          .minimumScaleFactor(0.72)
         }
+
         Text(model.profile.intent.title)
-          .font(.system(size: 12, weight: .bold))
-          .padding(.horizontal, 10)
-          .frame(height: 29)
+          .font(.system(size: 10, weight: .bold))
+          .lineLimit(1)
+          .minimumScaleFactor(0.72)
+          .padding(.horizontal, 9)
+          .frame(height: 24)
           .background(Color(red: 0.70, green: 0.78, blue: 0.58).opacity(0.88))
           .clipShape(RoundedRectangle(cornerRadius: 4))
 
-        Spacer(minLength: 4)
+        Spacer(minLength: 0)
 
         YearbookPressedFlowers()
-          .frame(width: 72, height: 74)
+          .frame(width: 66, height: 65)
           .frame(maxWidth: .infinity, alignment: .trailing)
       }
-      .frame(maxWidth: .infinity, alignment: .leading)
+      .padding(.top, 8)
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
+  }
+
+  @ViewBuilder
+  private var referenceActions: some View {
+    if model.profile.viewerIsOwner {
+      HStack(spacing: 9) {
+        YearbookActionButton(title: "Signatures", subtitle: "View messages", icon: "signature") {
+          showSignatures = true
+        }
+        YearbookActionButton(title: "Done", subtitle: "Close this page", icon: "checkmark", filled: true) {
+          dismiss()
+        }
+      }
+    } else {
+      HStack(spacing: 9) {
+        YearbookActionButton(title: "Sign Yearbook", subtitle: "Leave your mark", icon: "pencil.and.scribble") {
+          showSignatureComposer = true
+        }
+        YearbookActionButton(title: "Say Hi", subtitle: "Send a message", icon: "paperplane.fill", filled: true) {
+          showChat = true
+        }
+      }
+    }
+  }
+
+  private var aboutMeText: String {
+    model.profile.shortBio?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+  }
+
+  private var referenceDetails: [YearbookDetailItem] {
+    [
+      YearbookDetailItem(label: "Height", value: model.profile.heightCm.map { "\($0) cm" } ?? ""),
+      YearbookDetailItem(label: "Job", value: model.profile.job ?? ""),
+      YearbookDetailItem(label: "Languages", value: (model.profile.languages ?? []).joined(separator: " · ")),
+      YearbookDetailItem(label: "School", value: model.profile.school ?? ""),
+      YearbookDetailItem(label: "From", value: model.profile.locationLine),
+    ].filter { !$0.value.isEmpty }
+  }
+
+  private var referenceInterests: [String] {
+    Array((model.profile.interests ?? model.profile.hobbies ?? []).prefix(4))
+  }
+
+  private var referencePrompt: MIRAYearbookPrompt? {
+    let prompts = model.profile.prompts ?? []
+    return prompts.first(where: { $0.promptKey == "most_likely_to" }) ?? prompts.first
+  }
+
+  private var promptTitle: String {
+    (referencePrompt?.displayPrompt ?? "Most likely to...").uppercased()
+  }
+
+  private var promptAnswer: String {
+    referencePrompt?.answer.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+  }
+
+  private var favoriteSong: String {
+    model.profile.favorites?["song"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+  }
+
+  private var favoritePlace: String {
+    model.profile.favorites?["place"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+  }
+
+  private func yearbookInterestIcon(_ interest: String) -> String {
+    let value = interest.lowercased()
+    if value.contains("photo") || value.contains("camera") { return "camera.fill" }
+    if value.contains("travel") || value.contains("flight") { return "airplane" }
+    if value.contains("music") { return "music.note" }
+    if value.contains("coffee") || value.contains("cafe") { return "cup.and.saucer.fill" }
+    if value.contains("art") { return "paintpalette.fill" }
+    if value.contains("book") || value.contains("read") { return "book.closed.fill" }
+    return "star.fill"
   }
 
   private var resolvedSectionOrder: [String] {
@@ -1806,6 +1918,102 @@ private struct YearbookProfileDetailView: View {
     case "request_received": return "Accept their request"
     default: return "Send a friend request"
     }
+  }
+}
+
+private struct YearbookReferenceSection<Content: View>: View {
+  let title: String
+  let tapeColor: Color
+  let content: Content
+
+  init(title: String, tapeColor: Color, @ViewBuilder content: () -> Content) {
+    self.title = title
+    self.tapeColor = tapeColor
+    self.content = content()
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 7) {
+      Text(title)
+        .font(.system(size: 9, weight: .bold, design: .serif))
+        .tracking(0.5)
+        .lineLimit(1)
+        .minimumScaleFactor(0.66)
+        .padding(.horizontal, 7)
+        .frame(height: 19)
+        .background(tapeColor.opacity(0.72))
+        .rotationEffect(.degrees(-1.2))
+
+      content
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+    .padding(.horizontal, 9)
+    .padding(.vertical, 8)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    .background(YearbookPageTexture(base: Color(red: 0.968, green: 0.947, blue: 0.885), ruled: true))
+    .overlay {
+      Rectangle().stroke(Color.black.opacity(0.13), lineWidth: 0.8)
+    }
+    .rotationEffect(.degrees(stableYearbookRotation(title, placement: title.count)))
+    .shadow(color: Color.black.opacity(0.13), radius: 3, x: 1, y: 2)
+    .clipped()
+  }
+}
+
+private struct YearbookReferenceFavoriteCard: View {
+  let title: String
+  let value: String
+  let icon: String
+  let tapeColor: Color
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      Text(title)
+        .font(.system(size: 8.5, weight: .bold, design: .serif))
+        .tracking(0.4)
+        .lineLimit(1)
+        .minimumScaleFactor(0.68)
+        .padding(.horizontal, 7)
+        .frame(height: 18)
+        .background(tapeColor.opacity(0.72))
+        .rotationEffect(.degrees(-0.9))
+
+      HStack(spacing: 8) {
+        ZStack {
+          RoundedRectangle(cornerRadius: 2)
+            .fill(Color.black.opacity(0.78))
+          Image(systemName: icon)
+            .font(.system(size: 15, weight: .medium))
+            .foregroundStyle(Color.white.opacity(0.90))
+        }
+        .frame(width: 39, height: 39)
+
+        VStack(alignment: .leading, spacing: 3) {
+          Text(value)
+            .font(.system(size: 10.5, weight: .semibold, design: .serif))
+            .foregroundStyle(Color.black.opacity(0.82))
+            .lineLimit(2)
+            .minimumScaleFactor(0.70)
+
+          HStack(spacing: 2) {
+            ForEach(0..<12, id: \.self) { index in
+              Capsule()
+                .fill(Color.black.opacity(0.48))
+                .frame(width: 1.5, height: CGFloat(3 + (index * 7) % 10))
+            }
+          }
+        }
+        Spacer(minLength: 0)
+      }
+    }
+    .padding(.horizontal, 9)
+    .padding(.vertical, 7)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    .background(YearbookPageTexture(base: Color(red: 0.968, green: 0.947, blue: 0.885), ruled: false))
+    .overlay { Rectangle().stroke(Color.black.opacity(0.13), lineWidth: 0.8) }
+    .rotationEffect(.degrees(stableYearbookRotation(title, placement: value.count)))
+    .shadow(color: Color.black.opacity(0.13), radius: 3, x: 1, y: 2)
+    .clipped()
   }
 }
 
