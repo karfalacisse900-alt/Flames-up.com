@@ -162,10 +162,6 @@ struct MIRAWallNoteRenderer: View {
     MIRAWallNotePresentationResolver.resolve(note, hasLocalMedia: localMediaImage != nil)
   }
 
-  private var renderDetail: MIRAWallNoteRenderDetail {
-    MIRAWallNotePresentationResolver.renderDetail(forWallScale: wallScale, isFocused: isFocused)
-  }
-
   private var mediaURL: String? {
     [note.mediaThumbnailUrl, note.mediaUrl]
       .compactMap { value in
@@ -182,7 +178,7 @@ struct MIRAWallNoteRenderer: View {
   var body: some View {
     GeometryReader { proxy in
       ZStack {
-        MIRAWallPaperBackground(note: note, presentation: presentation, renderDetail: renderDetail)
+        MIRAWallPaperBackground(note: note, presentation: presentation, renderDetail: .full)
 
         if note.isVoiceNote {
           MIRAWallVoiceNoteContent(note: note, presentation: presentation)
@@ -206,43 +202,18 @@ struct MIRAWallNoteRenderer: View {
         }
 
         MIRAWallWarpCue(warp: presentation.warp, darkPaper: presentation.usesDarkPaper)
-          .opacity(renderDetail == .distant ? 0.54 : 1)
-          .transition(.opacity)
 
-        if renderDetail == .distant {
-          MIRAWallDistantAttachmentCue(
-            attachment: presentation.attachment,
-            darkPaper: presentation.usesDarkPaper
-          )
-        } else {
-          MIRAWallPhysicalDetails(note: note, presentation: presentation, zoom: zoom)
-            .transition(.opacity)
-        }
+        MIRAWallPhysicalDetails(note: note, presentation: presentation, zoom: zoom)
 
-        if renderDetail == .full, zoom >= 0.74 {
+        if zoom >= 0.74 {
           MIRAWallIdentityMark(note: note, style: presentation.style, zoom: zoom)
-            .transition(.opacity)
         }
 
-        if renderDetail != .distant {
-          MIRAWallLivingNoteMarks(note: note, presentation: presentation)
-        }
+        MIRAWallLivingNoteMarks(note: note, presentation: presentation)
       }
       .frame(width: proxy.size.width, height: proxy.size.height)
       .contentShape(Rectangle())
-      .animation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion), value: renderDetail)
-      .shadow(
-        color: .black.opacity(isFocused ? 0.18 : depth.contactOpacity),
-        radius: isFocused ? 2.8 : depth.contactRadius,
-        x: isFocused ? 1.2 : depth.contactX,
-        y: isFocused ? 3.2 : depth.contactY
-      )
-      .shadow(
-        color: .black.opacity(isFocused ? 0.25 : depth.castOpacity),
-        radius: isFocused ? 20 : depth.castRadius,
-        x: isFocused ? 6 : depth.castX,
-        y: isFocused ? 15 : depth.castY
-      )
+      .captroMaterialShadow(materialElevation, seed: note.id)
     }
     .accessibilityElement(children: .ignore)
     .accessibilityLabel(note.isGhost ? "Anonymous note" : "Note by \(note.authorPreview?.title ?? "Captro member")")
@@ -255,6 +226,17 @@ struct MIRAWallNoteRenderer: View {
       warp: presentation.warp,
       zoom: zoom
     )
+  }
+
+  private var materialElevation: CaptroMaterialElevation {
+    if isFocused { return .lifted }
+    if presentation.style == .polaroid { return .photograph }
+    switch presentation.attachment {
+    case .pin: return .pinned
+    case .paperclip: return .photograph
+    case .tape, .foldedCorner: return .taped
+    case .none: return .flush
+    }
   }
 }
 
@@ -1071,35 +1053,12 @@ private struct MIRAWallMaskingTape: View {
   let darkPaper: Bool
 
   var body: some View {
-    MIRAWallTapeShape(seed: seed)
-      .fill(darkPaper ? Color.white.opacity(0.28) : Color(red: 0.97, green: 0.95, blue: 0.83).opacity(0.58))
-      .overlay {
-        Canvas { context, size in
-          let hash = MIRAWallNotePresentationResolver.stableHash("tape:\(seed)")
-          for index in 0..<3 {
-            let y = size.height * (0.28 + CGFloat(index) * 0.22)
-            var wrinkle = Path()
-            wrinkle.move(to: CGPoint(x: size.width * 0.08, y: y))
-            wrinkle.addCurve(
-              to: CGPoint(x: size.width * 0.92, y: y + MIRAWallMaterialNoise.unit(hash, index) * 1.2),
-              control1: CGPoint(x: size.width * 0.34, y: y - 0.8),
-              control2: CGPoint(x: size.width * 0.64, y: y + 0.9)
-            )
-            context.stroke(wrinkle, with: .color(Color.white.opacity(0.16)), lineWidth: 0.45)
-          }
-        }
-        .clipShape(MIRAWallTapeShape(seed: seed))
-      }
-      .overlay {
-        MIRAWallTapeShape(seed: seed)
-          .stroke(Color.white.opacity(0.18), lineWidth: 0.45)
-      }
-      .shadow(
-        color: .black.opacity(0.12),
-        radius: 1.2,
-        x: MIRAWallLight.contactX,
-        y: MIRAWallLight.contactY
-      )
+    CaptroMaskingTape(
+      seed: seed,
+      color: darkPaper
+        ? Color.white.opacity(0.58)
+        : Color(red: 0.88, green: 0.81, blue: 0.64)
+    )
   }
 }
 
@@ -1231,15 +1190,44 @@ private struct MIRAWallPaperMaterialLayer: View {
   let detail: MIRAWallNoteRenderDetail
 
   var body: some View {
-    Canvas { context, size in
-      let hash = MIRAWallNotePresentationResolver.stableHash(seed)
-      drawTonalVariation(context: &context, size: size, hash: hash)
-      drawFibers(context: &context, size: size, hash: hash)
-      drawMaterialMarks(context: &context, size: size, hash: hash)
-      drawEdgeAge(context: &context, size: size)
+    ZStack {
+      CaptroPhotographedPaper(
+        seed: seed,
+        kind: physicalKind,
+        base: .clear,
+        textureOpacity: darkPaper ? 0.14 : textureOpacity,
+        directionalLight: darkPaper ? 0.06 : 0.13
+      )
+
+      Canvas { context, size in
+        let hash = MIRAWallNotePresentationResolver.stableHash(seed)
+        drawTonalVariation(context: &context, size: size, hash: hash)
+        drawFibers(context: &context, size: size, hash: hash)
+        drawMaterialMarks(context: &context, size: size, hash: hash)
+        drawEdgeAge(context: &context, size: size)
+      }
     }
     .allowsHitTesting(false)
     .accessibilityHidden(true)
+  }
+
+  private var physicalKind: CaptroPaperKind {
+    switch material {
+    case .notebook: return .notebook
+    case .graph: return .graph
+    case .kraft: return .kraft
+    case .photographic, .coated: return .photographic
+    case .ivory, .aged: return .archival
+    }
+  }
+
+  private var textureOpacity: Double {
+    switch material {
+    case .kraft, .aged: return 0.33
+    case .notebook, .graph: return 0.25
+    case .photographic, .coated: return 0.12
+    case .ivory: return 0.22
+    }
   }
 
   private func drawTonalVariation(context: inout GraphicsContext, size: CGSize, hash: UInt64) {
@@ -1402,23 +1390,7 @@ private struct MIRAWallPhotoPrintTexture: View {
   let seed: String
 
   var body: some View {
-    Canvas { context, size in
-      let hash = MIRAWallNotePresentationResolver.stableHash("photo:\(seed)")
-      for index in 0..<22 {
-        let x = size.width * MIRAWallMaterialNoise.unit(hash, index * 3)
-        let y = size.height * MIRAWallMaterialNoise.unit(hash, index * 3 + 1)
-        let radius = 0.35 + MIRAWallMaterialNoise.unit(hash, index * 3 + 2) * 0.45
-        context.fill(
-          Path(ellipseIn: CGRect(x: x, y: y, width: radius, height: radius)),
-          with: .color((index.isMultiple(of: 2) ? Color.white : Color.black).opacity(0.025))
-        )
-      }
-      context.fill(
-        Path(CGRect(x: 0, y: 0, width: size.width, height: size.height)),
-        with: .color(Color(red: 0.98, green: 0.94, blue: 0.84).opacity(0.018))
-      )
-    }
-    .allowsHitTesting(false)
+    CaptroPhotoPrintFinish(seed: seed)
   }
 }
 

@@ -318,6 +318,7 @@ public struct WallOfNotesNativeView: View {
   @State private var liveMagnification: CGFloat = 1
   @State private var liveMagnificationAnchor = UnitPoint.center
   @State private var selectedNote: MIRAWallNote?
+  @State private var isNoteDetailMounted = false
   @State private var liftedNoteID: String?
   @State private var pressedNoteID: String?
   @State private var isCreating = false
@@ -330,6 +331,7 @@ public struct WallOfNotesNativeView: View {
   @State private var selectedStoryGroup: MIRAStoryGroup?
   @State private var storyReportTarget: MIRAReportTarget?
   @State private var isStoryReportSheetPresented = false
+  @Namespace private var noteTransition
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   init(api: MIRAAPIClient, storiesModel: DiscoverNativeModel) {
@@ -460,31 +462,35 @@ public struct WallOfNotesNativeView: View {
       .background(MIRATheme.Color.launchBackground)
     }
     .background(MIRATheme.Color.surface)
-    .miraFadeScaleOverlay(
-      isPresented: Binding(
-        get: { selectedNote != nil },
-        set: {
-          if !$0 {
-            selectedNote = nil
-            liftedNoteID = nil
-            pressedNoteID = nil
-          }
+    .overlay {
+      if isNoteDetailMounted, let note = selectedNote {
+        ZStack {
+          Rectangle()
+            .fill(.ultraThinMaterial)
+            .ignoresSafeArea()
+            .transition(.opacity)
+
+          Color.black.opacity(0.16)
+            .ignoresSafeArea()
+            .contentShape(Rectangle())
+            .onTapGesture(perform: closeNote)
+            .transition(.opacity)
+
+          MIRAWallNoteDetailView(
+            note: note,
+            api: api,
+            model: model,
+            transitionNamespace: noteTransition,
+            onChanged: { updated in
+              selectedNote = updated
+            },
+            onClose: closeNote
+          )
+          .padding(.horizontal, 16)
+          .padding(.vertical, 20)
+          .transition(.opacity)
         }
-      ),
-      scrimOpacity: 0.18
-    ) { dismiss in
-      if let note = selectedNote {
-        MIRAWallNoteDetailView(
-          note: note,
-          api: api,
-          model: model,
-          onChanged: { updated in
-            selectedNote = updated
-          },
-          onClose: dismiss
-        )
-        .padding(.horizontal, 16)
-        .padding(.vertical, 20)
+        .zIndex(20_000)
       }
     }
     .miraStatusBarHidden(selectedStoryGroup != nil)
@@ -551,6 +557,14 @@ public struct WallOfNotesNativeView: View {
         .rotationEffect(.degrees(note.rotation + presentation.microRotation))
         .scaleEffect(camera.scale)
         .position(center)
+        .matchedGeometryEffect(
+          id: "wall-note-\(note.id)",
+          in: noteTransition,
+          properties: .frame,
+          anchor: .center,
+          isSource: true
+        )
+        .opacity(isNoteDetailMounted && selectedNote?.id == note.id ? 0 : 1)
         .allowsHitTesting(false)
         .zIndex(Double(note.zIndex) + (liftedNoteID == note.id || selectedNote?.id == note.id ? 10_000 : 0))
       }
@@ -569,7 +583,23 @@ public struct WallOfNotesNativeView: View {
       guard liftedNoteID == note.id, selectedNote == nil else { return }
       withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
         selectedNote = note
+        isNoteDetailMounted = true
       }
+    }
+  }
+
+  private func closeNote() {
+    guard isNoteDetailMounted, let closingID = selectedNote?.id else { return }
+    withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
+      isNoteDetailMounted = false
+    }
+
+    Task { @MainActor in
+      try? await Task.sleep(for: .milliseconds(reduceMotion ? 0 : 330))
+      guard selectedNote?.id == closingID, !isNoteDetailMounted else { return }
+      selectedNote = nil
+      liftedNoteID = nil
+      pressedNoteID = nil
     }
   }
 
@@ -861,75 +891,7 @@ private struct MIRAWallBackground: View {
   let viewport: CGSize
 
   var body: some View {
-    Canvas { context, size in
-      context.fill(
-        Path(CGRect(origin: .zero, size: size)),
-        with: .color(Color(red: 0.932, green: 0.913, blue: 0.868))
-      )
-
-      let tileWorldSize: CGFloat = 212
-      let bounds = camera.worldBounds(viewport: size, preload: tileWorldSize)
-      let minTileX = Int(floor(bounds.minX / tileWorldSize))
-      let maxTileX = Int(ceil(bounds.maxX / tileWorldSize))
-      let minTileY = Int(floor(bounds.minY / tileWorldSize))
-      let maxTileY = Int(ceil(bounds.maxY / tileWorldSize))
-      let fiberCount = camera.scale < 0.34 ? 1 : 2
-      let materialScale = min(1.18, max(0.62, camera.scale))
-
-      for tileY in minTileY...maxTileY {
-        for tileX in minTileX...maxTileX {
-          let signedSeed = (tileX &* 73_856_093) ^ (tileY &* 19_349_663)
-          let seed = UInt64(bitPattern: Int64(signedSeed))
-
-          for index in 0..<fiberCount {
-            let world = CGPoint(
-              x: CGFloat(tileX) * tileWorldSize + tileWorldSize * MIRAWallBackgroundNoise.unit(seed, index * 5 + 1),
-              y: CGFloat(tileY) * tileWorldSize + tileWorldSize * MIRAWallBackgroundNoise.unit(seed, index * 5 + 2)
-            )
-            let point = camera.screenPoint(forWorld: world, viewport: size)
-            let length = (2.2 + 4.8 * MIRAWallBackgroundNoise.unit(seed, index * 5 + 3)) * materialScale
-            let angle = (MIRAWallBackgroundNoise.unit(seed, index * 5 + 4) - 0.5) * 0.72
-            var fiber = Path()
-            fiber.move(to: point)
-            fiber.addLine(to: CGPoint(
-              x: point.x + cos(angle) * length,
-              y: point.y + sin(angle) * length
-            ))
-            let fiberColor = index.isMultiple(of: 2)
-              ? Color(red: 0.42, green: 0.31, blue: 0.18).opacity(0.022)
-              : Color(red: 0.34, green: 0.40, blue: 0.38).opacity(0.016)
-            context.stroke(
-              fiber,
-              with: .color(fiberColor),
-              style: StrokeStyle(lineWidth: 0.42, lineCap: .round)
-            )
-          }
-
-          if seed % 17 == 0 {
-            let world = CGPoint(
-              x: CGFloat(tileX) * tileWorldSize + tileWorldSize * MIRAWallBackgroundNoise.unit(seed, 31),
-              y: CGFloat(tileY) * tileWorldSize + tileWorldSize * MIRAWallBackgroundNoise.unit(seed, 32)
-            )
-            let point = camera.screenPoint(forWorld: world, viewport: size)
-            let radius = (1.3 + MIRAWallBackgroundNoise.unit(seed, 33) * 2.1) * materialScale
-            var imperfection = Path()
-            imperfection.move(to: CGPoint(x: point.x - radius, y: point.y))
-            imperfection.addQuadCurve(
-              to: CGPoint(x: point.x + radius, y: point.y + radius * 0.18),
-              control: CGPoint(x: point.x, y: point.y - radius * 0.52)
-            )
-            imperfection.addQuadCurve(
-              to: CGPoint(x: point.x - radius, y: point.y),
-              control: CGPoint(x: point.x, y: point.y + radius * 0.44)
-            )
-            context.fill(
-              imperfection,
-              with: .color(Color(red: 0.48, green: 0.34, blue: 0.20).opacity(0.010))
-            )
-          }
-        }
-      }
-    }
+    CaptroPhysicalWallSurface(seed: "captro-wall-surface")
     .allowsHitTesting(false)
     .accessibilityHidden(true)
   }
@@ -957,43 +919,13 @@ private struct MIRAWallDetailBackdrop: View {
   let seed: String
 
   var body: some View {
-    Canvas { context, size in
-      context.fill(
-        Path(CGRect(origin: .zero, size: size)),
-        with: .color(Color(red: 0.944, green: 0.929, blue: 0.895))
-      )
-
-      let materialSeed = MIRAWallBackgroundNoise.seed(for: seed)
-      for index in 0..<44 {
-        let y = size.height * MIRAWallBackgroundNoise.unit(materialSeed, index * 4 + 1)
-        let startX = size.width * MIRAWallBackgroundNoise.unit(materialSeed, index * 4 + 2)
-        let length = 14 + 48 * MIRAWallBackgroundNoise.unit(materialSeed, index * 4 + 3)
-        let rise = (MIRAWallBackgroundNoise.unit(materialSeed, index * 4 + 4) - 0.5) * 4
-        var fiber = Path()
-        fiber.move(to: CGPoint(x: startX, y: y))
-        fiber.addQuadCurve(
-          to: CGPoint(x: min(size.width, startX + length), y: y + rise),
-          control: CGPoint(x: startX + length * 0.52, y: y - rise * 0.7)
-        )
-        context.stroke(
-          fiber,
-          with: .color(Color(red: 0.31, green: 0.24, blue: 0.16).opacity(index.isMultiple(of: 3) ? 0.030 : 0.016)),
-          style: StrokeStyle(lineWidth: index.isMultiple(of: 4) ? 0.6 : 0.35, lineCap: .round)
-        )
-      }
-
-      for index in 0..<13 {
-        let point = CGPoint(
-          x: size.width * MIRAWallBackgroundNoise.unit(materialSeed, 300 + index * 2),
-          y: size.height * MIRAWallBackgroundNoise.unit(materialSeed, 301 + index * 2)
-        )
-        let radius = 0.7 + MIRAWallBackgroundNoise.unit(materialSeed, 500 + index) * 1.1
-        context.fill(
-          Path(ellipseIn: CGRect(x: point.x, y: point.y, width: radius, height: radius)),
-          with: .color(Color.black.opacity(0.025))
-        )
-      }
-    }
+    CaptroPhotographedPaper(
+      seed: "detail-backdrop-\(seed)",
+      kind: .linen,
+      base: Color(red: 0.925, green: 0.902, blue: 0.845),
+      textureOpacity: 0.42,
+      directionalLight: 0.16
+    )
     .allowsHitTesting(false)
     .accessibilityHidden(true)
   }
@@ -1003,48 +935,13 @@ private struct MIRAWallDetailNoteStage: View {
   let seed: String
 
   var body: some View {
-    Canvas { context, size in
-      context.fill(
-        Path(CGRect(origin: .zero, size: size)),
-        with: .color(Color(red: 0.884, green: 0.843, blue: 0.765))
-      )
-
-      let materialSeed = MIRAWallBackgroundNoise.seed(for: "stage-\(seed)")
-      for index in 0..<34 {
-        let point = CGPoint(
-          x: size.width * MIRAWallBackgroundNoise.unit(materialSeed, index * 3 + 1),
-          y: size.height * MIRAWallBackgroundNoise.unit(materialSeed, index * 3 + 2)
-        )
-        let length = 5 + 14 * MIRAWallBackgroundNoise.unit(materialSeed, index * 3 + 3)
-        var grain = Path()
-        grain.move(to: point)
-        grain.addLine(to: CGPoint(x: min(size.width, point.x + length), y: point.y + 0.8))
-        context.stroke(
-          grain,
-          with: .color(Color(red: 0.36, green: 0.27, blue: 0.17).opacity(index.isMultiple(of: 2) ? 0.045 : 0.025)),
-          style: StrokeStyle(lineWidth: 0.5, lineCap: .round)
-        )
-      }
-
-      for index in 0..<8 {
-        let point = CGPoint(
-          x: size.width * MIRAWallBackgroundNoise.unit(materialSeed, 180 + index * 2),
-          y: size.height * MIRAWallBackgroundNoise.unit(materialSeed, 181 + index * 2)
-        )
-        context.fill(
-          Path(ellipseIn: CGRect(x: point.x - 1, y: point.y - 1, width: 2, height: 2)),
-          with: .color(Color.black.opacity(0.055))
-        )
-      }
-    }
-    .overlay {
-      LinearGradient(
-        colors: [Color.white.opacity(0.11), .clear, Color.black.opacity(0.035)],
-        startPoint: .topLeading,
-        endPoint: .bottomTrailing
-      )
-      .allowsHitTesting(false)
-    }
+    CaptroPhotographedPaper(
+      seed: "detail-stage-\(seed)",
+      kind: .archival,
+      base: Color(red: 0.884, green: 0.843, blue: 0.765),
+      textureOpacity: 0.38,
+      directionalLight: 0.20
+    )
     .allowsHitTesting(false)
     .accessibilityHidden(true)
   }
@@ -1775,6 +1672,7 @@ private struct MIRAWallNoteDetailView: View {
   @ObservedObject private var voicePlayback = MIRAWallVoicePlaybackController.shared
   let api: MIRAAPIClient
   @ObservedObject var model: MIRAWallNotesModel
+  let transitionNamespace: Namespace.ID
   let onChanged: (MIRAWallNote) -> Void
   let onClose: () -> Void
 
@@ -1802,12 +1700,14 @@ private struct MIRAWallNoteDetailView: View {
     note: MIRAWallNote,
     api: MIRAAPIClient,
     model: MIRAWallNotesModel,
+    transitionNamespace: Namespace.ID,
     onChanged: @escaping (MIRAWallNote) -> Void,
     onClose: @escaping () -> Void
   ) {
     _note = State(initialValue: note)
     self.api = api
     self.model = model
+    self.transitionNamespace = transitionNamespace
     self.onChanged = onChanged
     self.onClose = onClose
   }
@@ -1963,6 +1863,13 @@ private struct MIRAWallNoteDetailView: View {
         .frame(width: detailVisualSize.width, height: detailVisualSize.height)
         .rotationEffect(.degrees(detailRotation))
         .rotation3DEffect(.degrees(flipAngle), axis: (x: 0, y: 1, z: 0), perspective: 0.72)
+        .matchedGeometryEffect(
+          id: "wall-note-\(note.id)",
+          in: transitionNamespace,
+          properties: .frame,
+          anchor: .center,
+          isSource: false
+        )
         .contentShape(Rectangle())
         .onTapGesture {
           guard note.canFlip else { return }

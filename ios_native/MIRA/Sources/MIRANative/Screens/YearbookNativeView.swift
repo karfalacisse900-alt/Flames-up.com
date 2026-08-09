@@ -297,12 +297,14 @@ public struct MIRAYearbookNativeView: View {
             .scrollTransition(axis: .horizontal) { content, phase in
               content
                 .rotation3DEffect(
-                  .degrees(reduceMotion ? 0 : phase.value * -3.2),
+                  .degrees(reduceMotion ? 0 : phase.value * -8.5),
                   axis: (x: 0, y: 1, z: 0),
                   anchor: phase.value > 0 ? .leading : .trailing,
-                  perspective: 0.28
+                  perspective: 0.42
                 )
-                .scaleEffect(reduceMotion ? 1 : 1 - abs(phase.value) * 0.012)
+                .scaleEffect(reduceMotion ? 1 : 1 - abs(phase.value) * 0.018)
+                .offset(x: reduceMotion ? 0 : phase.value * -8)
+                .brightness(reduceMotion ? 0 : -abs(phase.value) * 0.035)
                 .opacity(reduceMotion ? (phase.isIdentity ? 1 : 0.88) : 1)
             }
             .id(index)
@@ -453,7 +455,13 @@ private struct YearbookOpenSpread: View {
               }
               .padding(.horizontal, 14)
               .frame(height: headerHeight)
-              .background(YearbookPageTexture(base: pageColor, ruled: false))
+              .background(
+                YearbookPageTexture(
+                  base: pageColor,
+                  ruled: false,
+                  seed: "yearbook-header-\(pageNumber)"
+                )
+              )
 
               HStack(spacing: 0) {
                 pageLeaf(startIndex: 0, side: .left)
@@ -491,7 +499,13 @@ private struct YearbookOpenSpread: View {
               .foregroundStyle(Color.black.opacity(0.72))
               .padding(.horizontal, 11)
               .frame(height: footerHeight)
-              .background(YearbookPageTexture(base: pageColor.opacity(0.98), ruled: false))
+              .background(
+                YearbookPageTexture(
+                  base: pageColor.opacity(0.98),
+                  ruled: false,
+                  seed: "yearbook-footer-\(pageNumber)"
+                )
+              )
             }
             .padding(outerInset)
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -545,15 +559,13 @@ private struct YearbookOpenSpread: View {
       )
 
       ZStack {
-        YearbookPageTexture(base: pageColor, ruled: false)
-
-        LinearGradient(
-          colors: side == .left
-            ? [Color.white.opacity(0.24), Color.clear, Color.black.opacity(0.15)]
-            : [Color.black.opacity(0.15), Color.clear, Color.white.opacity(0.24)],
-          startPoint: .leading,
-          endPoint: .trailing
+        YearbookPageTexture(
+          base: pageColor,
+          ruled: false,
+          seed: "yearbook-leaf-\(pageNumber)-\(side == .left ? "left" : "right")"
         )
+
+        CaptroPageEdgeLight(leading: side == .right)
         .allowsHitTesting(false)
 
         LazyVGrid(columns: columns, alignment: .leading, spacing: cardSpacing) {
@@ -868,6 +880,10 @@ private struct YearbookPortraitCard: View {
             RoundedRectangle(cornerRadius: photoCornerRadius, style: .continuous)
               .stroke(photoBorderColor, lineWidth: photoBorderWidth)
           }
+          .overlay {
+            CaptroPhotoPrintFinish(seed: "portrait-\(profile.id)")
+              .clipShape(RoundedRectangle(cornerRadius: photoCornerRadius, style: .continuous))
+          }
           .clipped()
 
         }
@@ -904,18 +920,24 @@ private struct YearbookPortraitCard: View {
       }
       .padding(compact ? 5 : 6)
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-      .background(YearbookPolaroidPaper())
+      .background(YearbookPolaroidPaper(seed: "polaroid-\(profile.id)"))
       .clipShape(Rectangle())
       .overlay {
         Rectangle().stroke(Color.black.opacity(0.13), lineWidth: 0.7)
       }
       .overlay(alignment: .top) {
         if decorationIndex == 0 || decorationIndex == 3 {
-          YearbookTapeStrip(color: Color(red: 0.76, green: 0.67, blue: 0.49))
+          YearbookTapeStrip(
+            color: Color(red: 0.76, green: 0.67, blue: 0.49),
+            seed: "portrait-tape-\(profile.id)"
+          )
             .frame(width: decorationIndex == 0 ? 44 : 38, height: 13)
             .offset(y: -7)
         } else {
-          YearbookPushpin(color: decorationIndex == 1 ? .green : .blue)
+          YearbookPushpin(
+            color: decorationIndex == 1 ? .green : .blue,
+            seed: "portrait-pin-\(profile.id)"
+          )
             .scaleEffect(0.78)
             .offset(y: -7)
         }
@@ -927,7 +949,7 @@ private struct YearbookPortraitCard: View {
         }
       }
       .rotationEffect(.degrees(cardRotation))
-      .shadow(color: Color.black.opacity(0.18), radius: 3.5, x: 1, y: 2.5)
+      .captroMaterialShadow(.photograph, seed: "portrait-\(profile.id)")
       .contentShape(Rectangle())
     }
   }
@@ -1085,13 +1107,20 @@ private struct YearbookBookCoverSurface: View {
 private struct YearbookPageTexture: View {
   let base: Color
   var ruled = false
+  var seed = "yearbook-paper"
 
   var body: some View {
     ZStack {
-      base
+      CaptroPhotographedPaper(
+        seed: seed,
+        kind: ruled ? .notebook : .archival,
+        base: base,
+        textureOpacity: ruled ? 0.34 : 0.30,
+        directionalLight: 0.20
+      )
 
       LinearGradient(
-        colors: [Color.white.opacity(0.30), Color.clear, Color.black.opacity(0.065)],
+        colors: [Color.white.opacity(0.18), Color.clear, Color.black.opacity(0.055)],
         startPoint: .topLeading,
         endPoint: .bottomTrailing
       )
@@ -1102,36 +1131,22 @@ private struct YearbookPageTexture: View {
         startRadius: 45,
         endRadius: 270
       )
-
-      Canvas { context, size in
-        if ruled {
-          for y in stride(from: 19.0, through: size.height, by: 20.0) {
-            var line = Path()
-            line.move(to: CGPoint(x: 0, y: y))
-            line.addLine(to: CGPoint(x: size.width, y: y))
-            context.stroke(line, with: .color(Color.blue.opacity(0.075)), lineWidth: 0.55)
-          }
-        }
-
-        for index in 0..<64 {
-          let x = CGFloat((index * 47 + 13) % 211) / 211 * max(size.width, 1)
-          let y = CGFloat((index * 79 + 29) % 223) / 223 * max(size.height, 1)
-          let length = CGFloat(4 + (index % 9))
-          var fiber = Path()
-          fiber.move(to: CGPoint(x: x, y: y))
-          fiber.addLine(to: CGPoint(x: min(x + length, size.width), y: y + CGFloat((index % 3) - 1)))
-          context.stroke(fiber, with: .color(Color.black.opacity(0.028)), lineWidth: 0.62)
-        }
-      }
-      .allowsHitTesting(false)
     }
+    .allowsHitTesting(false)
+    .accessibilityHidden(true)
   }
 }
 
 private struct YearbookPolaroidPaper: View {
+  var seed = "yearbook-polaroid"
+
   var body: some View {
     ZStack {
-      YearbookPageTexture(base: Color(red: 0.982, green: 0.958, blue: 0.898), ruled: false)
+      YearbookPageTexture(
+        base: Color(red: 0.982, green: 0.958, blue: 0.898),
+        ruled: false,
+        seed: seed
+      )
       LinearGradient(
         colors: [Color.white.opacity(0.30), Color.clear, Color.black.opacity(0.035)],
         startPoint: .topLeading,
@@ -1146,32 +1161,7 @@ private struct YearbookPolaroidPaper: View {
 
 private struct YearbookCenterBinding: View {
   var body: some View {
-    ZStack {
-      LinearGradient(
-        colors: [
-          Color.black.opacity(0.32),
-          Color.black.opacity(0.10),
-          Color.white.opacity(0.22),
-          Color.black.opacity(0.13),
-          Color.black.opacity(0.36),
-        ],
-        startPoint: .leading,
-        endPoint: .trailing
-      )
-
-      Rectangle()
-        .fill(Color.black.opacity(0.24))
-        .frame(width: 1)
-
-      HStack {
-        Rectangle().fill(Color.white.opacity(0.24)).frame(width: 1)
-        Spacer(minLength: 0)
-        Rectangle().fill(Color.white.opacity(0.16)).frame(width: 1)
-      }
-      .padding(.horizontal, 2)
-    }
-    .shadow(color: Color.black.opacity(0.28), radius: 5)
-    .allowsHitTesting(false)
+    CaptroBookGutter()
   }
 }
 
@@ -1197,29 +1187,16 @@ private struct YearbookPageHoles: View {
 
 private struct YearbookTapeStrip: View {
   let color: Color
+  var seed = "yearbook-tape"
 
   var body: some View {
-    Rectangle()
-      .fill(color.opacity(0.86))
-      .overlay {
-        Canvas { context, size in
-          for index in 0..<8 {
-            let x = size.width * CGFloat(index) / 8
-            var line = Path()
-            line.move(to: CGPoint(x: x, y: 0))
-            line.addLine(to: CGPoint(x: min(size.width, x + 5), y: size.height))
-            context.stroke(line, with: .color(Color.white.opacity(0.14)), lineWidth: 0.7)
-          }
-        }
-      }
-      .rotationEffect(.degrees(-1.5))
-      .shadow(color: Color.black.opacity(0.10), radius: 1, y: 1)
-      .allowsHitTesting(false)
+    CaptroMaskingTape(seed: seed, color: color)
   }
 }
 
 private struct YearbookPushpin: View {
   let color: Color
+  var seed = "yearbook-pin"
 
   var body: some View {
     Circle()
@@ -1233,7 +1210,7 @@ private struct YearbookPushpin: View {
       )
       .frame(width: 16, height: 16)
       .overlay { Circle().stroke(Color.black.opacity(0.16), lineWidth: 0.7) }
-      .shadow(color: Color.black.opacity(0.28), radius: 2, x: 2, y: 3)
+      .captroMaterialShadow(.pinned, seed: seed)
       .allowsHitTesting(false)
   }
 }
@@ -1751,7 +1728,8 @@ private struct YearbookProfileDetailView: View {
 
       YearbookPageTexture(
         base: Color(red: 0.954, green: 0.906, blue: 0.803),
-        ruled: false
+        ruled: false,
+        seed: "profile-page-\(model.profile.id)"
       )
 
       YearbookScrapbookFiberLayer()
@@ -1850,7 +1828,7 @@ private struct YearbookProfileDetailView: View {
 
   private var scrapbookProfilePhoto: some View {
     ZStack(alignment: .topLeading) {
-      YearbookPolaroidPaper()
+      YearbookPolaroidPaper(seed: "profile-photo-paper-\(model.profile.id)")
 
       MIRACachedImage(url: model.profile.profilePhoto, maxPixelSize: 1600) { image in
         image
@@ -1869,6 +1847,9 @@ private struct YearbookProfileDetailView: View {
       .frame(width: 124, height: 133)
       .clipped()
       .overlay {
+        CaptroPhotoPrintFinish(seed: "profile-photo-print-\(model.profile.id)")
+      }
+      .overlay {
         Rectangle().stroke(Color.black.opacity(0.18), lineWidth: 0.8)
       }
       .offset(x: 9, y: 9)
@@ -1879,8 +1860,7 @@ private struct YearbookProfileDetailView: View {
     .overlay {
       Rectangle().stroke(Color.black.opacity(0.14), lineWidth: 0.8)
     }
-    .shadow(color: Color.black.opacity(0.12), radius: 1, x: 0, y: 1)
-    .shadow(color: Color(red: 0.22, green: 0.14, blue: 0.07).opacity(0.30), radius: 6, x: 3, y: 6)
+    .captroMaterialShadow(.photograph, seed: "profile-photo-\(model.profile.id)")
   }
 
   private var scrapbookIdentityPanel: some View {
@@ -1937,7 +1917,10 @@ private struct YearbookProfileDetailView: View {
   }
 
   private var scrapbookAboutPanel: some View {
-    YearbookTornScrap(base: Color(red: 0.963, green: 0.904, blue: 0.745)) {
+    YearbookTornScrap(
+      base: Color(red: 0.963, green: 0.904, blue: 0.745),
+      seed: "about-\(model.profile.id)"
+    ) {
       VStack(alignment: .leading, spacing: 9) {
         YearbookTapeLabel(title: "ABOUT ME", color: Color(red: 0.86, green: 0.72, blue: 0.44))
         Text(aboutMeText)
@@ -1956,7 +1939,10 @@ private struct YearbookProfileDetailView: View {
   }
 
   private var scrapbookDetailsPanel: some View {
-    YearbookGraphScrap(base: Color(red: 0.965, green: 0.940, blue: 0.865)) {
+    YearbookGraphScrap(
+      base: Color(red: 0.965, green: 0.940, blue: 0.865),
+      seed: "details-\(model.profile.id)"
+    ) {
       VStack(alignment: .leading, spacing: 6) {
         YearbookTapeLabel(title: "DETAILS", color: Color(red: 0.82, green: 0.69, blue: 0.51))
         VStack(alignment: .leading, spacing: 3) {
@@ -1978,7 +1964,11 @@ private struct YearbookProfileDetailView: View {
   }
 
   private var scrapbookInterestsPanel: some View {
-    YearbookPaperScrap(base: Color(red: 0.915, green: 0.925, blue: 0.858), ruled: false) {
+    YearbookPaperScrap(
+      base: Color(red: 0.915, green: 0.925, blue: 0.858),
+      ruled: false,
+      seed: "interests-\(model.profile.id)"
+    ) {
       VStack(alignment: .leading, spacing: 7) {
         YearbookTapeLabel(title: "INTERESTS", color: Color(red: 0.55, green: 0.70, blue: 0.82))
         HStack(spacing: 7) {
@@ -2000,7 +1990,11 @@ private struct YearbookProfileDetailView: View {
   }
 
   private var scrapbookPromptPanel: some View {
-    YearbookPaperScrap(base: Color(red: 0.958, green: 0.820, blue: 0.805), ruled: true) {
+    YearbookPaperScrap(
+      base: Color(red: 0.958, green: 0.820, blue: 0.805),
+      ruled: true,
+      seed: "prompt-\(model.profile.id)"
+    ) {
       VStack(alignment: .leading, spacing: 6) {
         YearbookTapeLabel(title: promptTitle, color: Color(red: 0.87, green: 0.66, blue: 0.68))
         HStack(alignment: .bottom, spacing: 4) {
@@ -2025,7 +2019,11 @@ private struct YearbookProfileDetailView: View {
   }
 
   private var scrapbookSongPanel: some View {
-    YearbookPaperScrap(base: Color(red: 0.904, green: 0.920, blue: 0.818), ruled: false) {
+    YearbookPaperScrap(
+      base: Color(red: 0.904, green: 0.920, blue: 0.818),
+      ruled: false,
+      seed: "song-\(model.profile.id)"
+    ) {
       VStack(alignment: .leading, spacing: 6) {
         YearbookTapeLabel(title: "FAVORITE SONG", color: Color(red: 0.59, green: 0.70, blue: 0.48))
         HStack(spacing: 8) {
@@ -2052,7 +2050,11 @@ private struct YearbookProfileDetailView: View {
   }
 
   private var scrapbookPlacePanel: some View {
-    YearbookPaperScrap(base: Color(red: 0.907, green: 0.890, blue: 0.930), ruled: false) {
+    YearbookPaperScrap(
+      base: Color(red: 0.907, green: 0.890, blue: 0.930),
+      ruled: false,
+      seed: "place-\(model.profile.id)"
+    ) {
       VStack(alignment: .leading, spacing: 6) {
         YearbookTapeLabel(title: "FAVORITE PLACE", color: Color(red: 0.64, green: 0.61, blue: 0.73))
         HStack(spacing: 7) {
@@ -2578,20 +2580,20 @@ private struct YearbookTapeLabel: View {
       .padding(.horizontal, 7.5)
       .frame(height: 19)
       .background {
-        YearbookTapeStrip(color: color)
+        YearbookTapeStrip(color: color, seed: "label-\(title)")
       }
       .rotationEffect(.degrees(-1.2))
-      .shadow(color: Color.white.opacity(0.26), radius: 0.4, x: -0.5, y: -0.5)
-      .shadow(color: Color.black.opacity(0.10), radius: 1, x: 0.8, y: 1.2)
   }
 }
 
 private struct YearbookTornScrap<Content: View>: View {
   let base: Color
+  let seed: String
   let content: Content
 
-  init(base: Color, @ViewBuilder content: () -> Content) {
+  init(base: Color, seed: String = "yearbook-torn-scrap", @ViewBuilder content: () -> Content) {
     self.base = base
+    self.seed = seed
     self.content = content()
   }
 
@@ -2601,7 +2603,7 @@ private struct YearbookTornScrap<Content: View>: View {
       .padding(.vertical, 9)
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
       .background {
-        YearbookPageTexture(base: base, ruled: true)
+        YearbookPageTexture(base: base, ruled: true, seed: seed)
           .clipShape(YearbookTornPaperShape())
       }
       .clipShape(YearbookTornPaperShape())
@@ -2609,17 +2611,18 @@ private struct YearbookTornScrap<Content: View>: View {
         YearbookTornPaperShape()
           .stroke(Color.black.opacity(0.13), lineWidth: 0.75)
       }
-      .shadow(color: Color.black.opacity(0.10), radius: 1, x: 0, y: 1)
-      .shadow(color: Color(red: 0.28, green: 0.18, blue: 0.09).opacity(0.22), radius: 5, x: 2, y: 5)
+      .captroMaterialShadow(.taped, seed: seed)
   }
 }
 
 private struct YearbookGraphScrap<Content: View>: View {
   let base: Color
+  let seed: String
   let content: Content
 
-  init(base: Color, @ViewBuilder content: () -> Content) {
+  init(base: Color, seed: String = "yearbook-graph-scrap", @ViewBuilder content: () -> Content) {
     self.base = base
+    self.seed = seed
     self.content = content()
   }
 
@@ -2630,7 +2633,13 @@ private struct YearbookGraphScrap<Content: View>: View {
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
       .background {
         ZStack {
-          YearbookPageTexture(base: base, ruled: false)
+          CaptroPhotographedPaper(
+            seed: seed,
+            kind: .graph,
+            base: base,
+            textureOpacity: 0.29,
+            directionalLight: 0.18
+          )
           YearbookGraphPaperLayer()
         }
       }
@@ -2640,19 +2649,25 @@ private struct YearbookGraphScrap<Content: View>: View {
       .overlay(alignment: .top) {
         Rectangle().fill(Color.white.opacity(0.20)).frame(height: 1)
       }
-      .shadow(color: Color.black.opacity(0.09), radius: 1, x: 0, y: 1)
-      .shadow(color: Color(red: 0.28, green: 0.18, blue: 0.09).opacity(0.20), radius: 5, x: 2, y: 5)
+      .captroMaterialShadow(.taped, seed: seed)
   }
 }
 
 private struct YearbookPaperScrap<Content: View>: View {
   let base: Color
   let ruled: Bool
+  let seed: String
   let content: Content
 
-  init(base: Color, ruled: Bool, @ViewBuilder content: () -> Content) {
+  init(
+    base: Color,
+    ruled: Bool,
+    seed: String = "yearbook-paper-scrap",
+    @ViewBuilder content: () -> Content
+  ) {
     self.base = base
     self.ruled = ruled
+    self.seed = seed
     self.content = content()
   }
 
@@ -2662,7 +2677,7 @@ private struct YearbookPaperScrap<Content: View>: View {
       .padding(.vertical, 7)
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
       .background {
-        YearbookPageTexture(base: base, ruled: ruled)
+        YearbookPageTexture(base: base, ruled: ruled, seed: seed)
       }
       .overlay {
         Rectangle().stroke(Color.black.opacity(0.13), lineWidth: 0.75)
@@ -2670,8 +2685,7 @@ private struct YearbookPaperScrap<Content: View>: View {
       .overlay(alignment: .top) {
         Rectangle().fill(Color.white.opacity(0.20)).frame(height: 1)
       }
-      .shadow(color: Color.black.opacity(0.09), radius: 1, x: 0, y: 1)
-      .shadow(color: Color(red: 0.28, green: 0.18, blue: 0.09).opacity(0.20), radius: 5, x: 2, y: 5)
+      .captroMaterialShadow(.taped, seed: seed)
   }
 }
 
