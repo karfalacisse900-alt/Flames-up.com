@@ -215,3 +215,19 @@ test('drawn Wall signatures are bounded, validated, and migration-backed', async
   assert.match(migration, /jsonb_array_length\(signature_strokes -> 'strokes'\) <= 12/i);
   assert.match(migration, /octet_length\(signature_strokes::text\) <= 20000/i);
 });
+
+test('photo-note detail opens at the selected print and keeps creator browsing privacy scoped', async () => {
+  const worker = await read('backend-cf/src/index.ts');
+  const wallView = await read('ios_native/MIRA/Sources/MIRANative/Screens/WallOfNotesNativeView.swift');
+
+  assert.match(worker, /const authorUserId = publicId\(c\.req\.query\('author_user_id'\)/);
+  assert.match(worker, /filters\.author_account_id = postgrestEqFilter\(authorUserId\)/);
+  assert.match(worker, /filters\.publishing_identity = postgrestEqFilter\('author'\)/);
+  assert.match(wallView, /func creatorNotes\(authorUserID:/);
+  assert.match(wallView, /photoScrapbookSpread/);
+  assert.match(wallView, /\.defaultScrollAnchor\(\.top\)/);
+  assert.match(wallView, /proxy\.scrollTo\("note-detail-top", anchor: \.top\)/);
+  assert.match(wallView, /ScrollView\(\.horizontal, showsIndicators: false\)/);
+  assert.match(wallView, /selectCreatorNote\(candidate\)/);
+  assert.doesNotMatch(wallView, /LazyVGrid\([\s\S]{0,1600}relatedPhotoNotes/);
+});

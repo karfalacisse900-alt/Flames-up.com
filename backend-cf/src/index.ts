@@ -18011,6 +18011,7 @@ api.get('/wall/notes', authMiddleware, async (c) => {
   const limit = clampNumber(c.req.query('limit') || (zoom < 0.45 ? '600' : '320'), 1, 750, 320);
   const filter = cleanText(c.req.query('filter') || 'all', 40).toLowerCase();
   const query = cleanText(c.req.query('query'), 80).replace(/[%*_(),]/g, ' ').trim();
+  const authorUserId = publicId(c.req.query('author_user_id'), 120);
   const regionConditions = [
     `world_x.gte.${minX}`,
     `world_x.lte.${maxX}`,
@@ -18020,9 +18021,17 @@ api.get('/wall/notes', authMiddleware, async (c) => {
   const filters: Record<string, string> = {
     status: postgrestEqFilter('active'),
     moderation_status: postgrestEqFilter('approved'),
-    and: `(${regionConditions.join(',')})`,
     wall_id: postgrestEqFilter('global'),
   };
+  if (authorUserId) {
+    // Creator collections are intentionally independent of the currently visible
+    // wall region. Only attributed notes are returned so a ghost note can never
+    // reveal its author through this endpoint.
+    filters.author_account_id = postgrestEqFilter(authorUserId);
+    filters.publishing_identity = postgrestEqFilter('author');
+  } else {
+    filters.and = `(${regionConditions.join(',')})`;
+  }
   if (filter === 'ghost' || filter === 'author') filters.publishing_identity = postgrestEqFilter(filter);
   if (WALL_NOTE_CATEGORIES.has(filter)) filters.category = postgrestEqFilter(filter);
   if (query) filters.body = `ilike.*${query}*`;
@@ -18038,7 +18047,9 @@ api.get('/wall/notes', authMiddleware, async (c) => {
     filters.id = postgrestInFilter(savedIds);
   }
 
-  const order = filter === 'popular'
+  const order = authorUserId
+    ? 'created_at.desc'
+    : filter === 'popular'
     ? 'reaction_count.desc,save_count.desc,created_at.desc'
     : 'z_index.asc,created_at.desc';
   const rows = await supabaseAdminQueryRows(c, 'wall_notes', { filters, order, limit });

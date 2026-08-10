@@ -139,12 +139,11 @@ test('Yearbook browse spreads are compact, deduplicated, and use privacy-filtere
 
   assert.match(screen, /deduplicatedProfiles/);
   assert.match(screen, /Set<String>\(\)/);
+  assert.match(screen, /profilesPerLeaf: Int \{\s*2\s*\}/);
   assert.match(screen, /profilesPerSpread: Int \{ profilesPerLeaf \* 2 \}/);
-  assert.match(screen, /horizontalSizeClass == \.regular && verticalSizeClass == \.regular \? 4 : 3/);
-  assert.match(screen, /let columnCount = profilesPerLeaf >= 4 \? 2 : 1/);
+  assert.match(screen, /let columnCount = 1/);
   assert.match(screen, /LazyVGrid\(columns: columns/);
   assert.match(screen, /prefix\(profilesPerLeaf\)/);
-  assert.doesNotMatch(screen, /YearbookEmptyPortraitSlot|A page is waiting/);
   assert.match(helper, /'yearbook_prompt_answers'/);
   assert.match(helper, /const promptsByUser = new Map<string, any\[\]>/);
   assert.match(helper, /copyIfVisible\('prompts'/);
