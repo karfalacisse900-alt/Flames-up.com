@@ -2172,7 +2172,8 @@ private struct MIRAWallNoteDetailView: View {
       }
       .padding(.horizontal, 10)
       .padding(.vertical, 9)
-      .frame(width: 176, minHeight: 62, alignment: .topLeading)
+      .frame(width: 176, alignment: .topLeading)
+      .frame(minHeight: 62, alignment: .topLeading)
     }
     .background {
       CaptroPhotographedPaper(
