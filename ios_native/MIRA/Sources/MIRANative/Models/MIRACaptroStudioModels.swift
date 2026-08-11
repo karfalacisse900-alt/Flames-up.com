@@ -466,6 +466,9 @@ public struct MIRACaptroStudioDocument: Identifiable, Codable, Hashable {
     guard let original = layers.first(where: { $0.id == id }), original.kind != .paper else { return nil }
     var copy = original
     copy.id = UUID().uuidString
+    if copy.kind == .photo, copy.mediaKey != nil {
+      copy.mediaKey = UUID().uuidString
+    }
     copy.x = min(0.94, copy.x + 0.045)
     copy.y = min(0.94, copy.y + 0.045)
     copy.zIndex = nextZIndex

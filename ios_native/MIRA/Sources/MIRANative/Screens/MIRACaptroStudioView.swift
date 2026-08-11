@@ -769,7 +769,15 @@ public struct MIRACaptroStudioView: View {
 
   private func duplicateSelectedLayer() {
     guard let selectedLayerID, var document else { return }
+    let originalMediaKey = document.layers.first(where: { $0.id == selectedLayerID })?.mediaKey
     guard let newID = document.duplicateLayer(id: selectedLayerID) else { return }
+    let duplicateMediaKey = document.layers.first(where: { $0.id == newID })?.mediaKey
+    if let originalMediaKey,
+       let duplicateMediaKey,
+       originalMediaKey != duplicateMediaKey,
+       let image = images[originalMediaKey] {
+      images[duplicateMediaKey] = image
+    }
     self.document = document
     self.selectedLayerID = newID
   }
