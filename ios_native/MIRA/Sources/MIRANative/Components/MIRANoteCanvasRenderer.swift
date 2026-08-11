@@ -360,7 +360,7 @@ struct MIRANoteCanvasRenderer: View {
     let drawingName = element.style.drawingName?.lowercased() ?? "scribble"
     let strokeColor = canvasColor(element.style.colorHex, fallback: .black).opacity(0.82)
 
-    Canvas { context, size in
+    return Canvas { context, size in
       var path = Path()
       switch drawingName {
       case "hand_drawn_arrow", "arrow":
