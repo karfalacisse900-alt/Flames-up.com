@@ -14,9 +14,10 @@ public struct MIRACaptroStudioView: View {
   @State private var document: MIRACaptroStudioDocument?
   @State private var images: [String: UIImage] = [:]
   @State private var selectedLayerID: String?
-  @State private var selectedPhotoItem: PhotosPickerItem?
+  @State private var selectedPhotoItems: [PhotosPickerItem] = []
   @State private var showsObjectTray = false
   @State private var showsTemplateTray = false
+  @State private var showsDocumentPreview = false
   @State private var isPublishing = false
   @State private var publishMessage = ""
   @State private var errorMessage: String?
@@ -48,15 +49,18 @@ public struct MIRACaptroStudioView: View {
       .toolbar(.hidden, for: .navigationBar)
     }
     .interactiveDismissDisabled(isPublishing)
-    .onChange(of: selectedPhotoItem) { _, item in
-      guard let item else { return }
-      Task { await loadPhoto(item) }
+    .onChange(of: selectedPhotoItems) { _, items in
+      guard !items.isEmpty else { return }
+      Task { await loadPhotos(items) }
     }
     .miraBottomSheet(isPresented: $showsObjectTray, preferredHeightFraction: 0.48, maxHeight: 470) { close in
       objectTray(close: close)
     }
     .miraBottomSheet(isPresented: $showsTemplateTray, preferredHeightFraction: 0.58, maxHeight: 600) { close in
       compactTemplateTray(close: close)
+    }
+    .fullScreenCover(isPresented: $showsDocumentPreview) {
+      documentPreview
     }
   }
 
@@ -84,7 +88,7 @@ public struct MIRACaptroStudioView: View {
           }
 
           LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 14) {
-            ForEach(MIRACaptroStudioTemplate.allCases) { template in
+            ForEach(MIRACaptroStudioTemplate.creationTemplates) { template in
               Button {
                 openTemplate(template)
               } label: {
@@ -119,14 +123,19 @@ public struct MIRACaptroStudioView: View {
             }
           }
         },
+        secondaryTrailingIcon: "eye",
+        secondaryTrailingLabel: "Preview note",
+        secondaryTrailingAction: { showsDocumentPreview = true },
         trailingTitle: isPublishing ? publishMessage : "Post",
         trailingAction: publishStudioPiece
       )
 
       GeometryReader { proxy in
         let availableHeight = max(300, proxy.size.height - 170)
-        let canvasWidth = min(proxy.size.width - 28, availableHeight * 0.8)
-        let canvasHeight = canvasWidth * 1.25
+        let draftCanvas = document.map(makeDraftNoteCanvas)
+        let canvasAspectRatio = CGFloat(draftCanvas?.aspectRatio ?? 0.8)
+        let canvasWidth = min(proxy.size.width - 28, availableHeight * canvasAspectRatio)
+        let canvasHeight = canvasWidth / max(0.25, canvasAspectRatio)
 
         VStack(spacing: 12) {
           Spacer(minLength: 8)
@@ -134,6 +143,7 @@ public struct MIRACaptroStudioView: View {
           if let documentBinding = documentBinding {
             MIRACaptroStudioCanvas(
               document: documentBinding,
+              canvas: makeDraftNoteCanvas(document: documentBinding.wrappedValue),
               images: images,
               selectedLayerID: $selectedLayerID,
               isEditing: true,
@@ -174,11 +184,57 @@ public struct MIRACaptroStudioView: View {
     }
   }
 
+  @ViewBuilder
+  private var documentPreview: some View {
+    ZStack(alignment: .topLeading) {
+      Color(red: 0.055, green: 0.052, blue: 0.048)
+        .ignoresSafeArea()
+
+      if let document {
+        GeometryReader { proxy in
+          let canvas = makeDraftNoteCanvas(document: document)
+          let width = proxy.size.width
+          let height = width * CGFloat(canvas.designHeight / max(1, canvas.designWidth))
+
+          ScrollView(showsIndicators: false) {
+            MIRANoteCanvasRenderer(
+              canvas: canvas,
+              mode: .detail,
+              localImages: images
+            )
+            .frame(width: width, height: height)
+            .accessibilityLabel("Full note preview")
+          }
+          .background(Color(red: 0.055, green: 0.052, blue: 0.048))
+        }
+      }
+
+      Button {
+        showsDocumentPreview = false
+      } label: {
+        Image(systemName: "xmark")
+          .font(.system(size: 17, weight: .bold))
+          .foregroundStyle(.white)
+          .frame(width: 46, height: 46)
+          .background(.black.opacity(0.62), in: Circle())
+          .overlay { Circle().stroke(.white.opacity(0.16), lineWidth: 0.8) }
+      }
+      .buttonStyle(.miraPress)
+      .padding(.leading, 16)
+      .padding(.top, 12)
+      .accessibilityLabel("Close preview")
+    }
+    .miraStatusBarHidden(true)
+  }
+
   private func studioHeader(
     title: String,
     leadingIcon: String,
     leadingLabel: String,
     leadingAction: @escaping () -> Void,
+    secondaryTrailingIcon: String? = nil,
+    secondaryTrailingLabel: String? = nil,
+    secondaryTrailingAction: (() -> Void)? = nil,
     trailingTitle: String?,
     trailingAction: (() -> Void)?
   ) -> some View {
@@ -199,6 +255,18 @@ public struct MIRACaptroStudioView: View {
         .lineLimit(1)
 
       Spacer(minLength: 8)
+
+      if let secondaryTrailingIcon, let secondaryTrailingAction {
+        Button(action: secondaryTrailingAction) {
+          Image(systemName: secondaryTrailingIcon)
+            .font(.system(size: 16, weight: .semibold))
+            .frame(width: 42, height: 42)
+            .background(MIRATheme.Color.surfaceSoft, in: Circle())
+        }
+        .buttonStyle(.miraPress)
+        .foregroundStyle(MIRATheme.Color.textPrimary)
+        .accessibilityLabel(secondaryTrailingLabel ?? "More")
+      }
 
       if let trailingTitle, let trailingAction {
         Button(action: trailingAction) {
@@ -228,12 +296,16 @@ public struct MIRACaptroStudioView: View {
     VStack(alignment: .leading, spacing: 10) {
       MIRACaptroStudioCanvas(
         document: .constant(template.makeDocument()),
+        canvas: makeDraftNoteCanvas(document: template.makeDocument()),
         images: [:],
         selectedLayerID: .constant(nil),
         isEditing: false,
         snapGuides: .constant(MIRAStudioSnapGuides())
       )
-      .aspectRatio(0.8, contentMode: .fit)
+      .aspectRatio(
+        CGFloat(1_080 / template.canvasDesignHeight),
+        contentMode: .fit
+      )
       .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
       .allowsHitTesting(false)
 
@@ -282,7 +354,58 @@ public struct MIRACaptroStudioView: View {
           }
         }
 
+        if selectedLayer.kind == .photo {
+          VStack(spacing: 7) {
+            Picker("Frame", selection: selectedPhotoFrameBinding) {
+              ForEach(MIRACaptroStudioPhotoFrame.allCases) { frame in
+                Text(frame.title).tag(frame)
+              }
+            }
+            .pickerStyle(.segmented)
+
+            HStack {
+              Label("Crop", systemImage: "crop")
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(MIRATheme.Color.textPrimary)
+              Spacer()
+              Button("Reset") {
+                updateSelectedLayer {
+                  $0.cropX = 0.5
+                  $0.cropY = 0.5
+                  $0.cropScale = 1
+                }
+              }
+              .font(.system(size: 11, weight: .bold))
+              .foregroundStyle(MIRATheme.Color.forest)
+            }
+
+            HStack(spacing: 9) {
+              Image(systemName: "minus.magnifyingglass")
+                .font(.system(size: 11, weight: .semibold))
+              Slider(value: selectedCropBinding(\.cropScale, default: 1), in: 1...3)
+                .tint(MIRATheme.Color.forest)
+              Image(systemName: "plus.magnifyingglass")
+                .font(.system(size: 11, weight: .semibold))
+            }
+            HStack(spacing: 9) {
+              Image(systemName: "arrow.left.and.right")
+                .font(.system(size: 11, weight: .semibold))
+              Slider(value: selectedCropBinding(\.cropX, default: 0.5), in: 0...1)
+                .tint(MIRATheme.Color.forest)
+              Image(systemName: "arrow.up.and.down")
+                .font(.system(size: 11, weight: .semibold))
+              Slider(value: selectedCropBinding(\.cropY, default: 0.5), in: 0...1)
+                .tint(MIRATheme.Color.forest)
+            }
+          }
+          .foregroundStyle(MIRATheme.Color.textSecondary)
+          .padding(.horizontal, 12)
+          .padding(.vertical, 9)
+          .background(MIRATheme.Color.surfaceSoft, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+
         HStack(spacing: 6) {
+          layerAction(title: selectedLayer.isLocked == true ? "Unlock" : "Lock", icon: selectedLayer.isLocked == true ? "lock.open" : "lock", action: toggleSelectedLayerLock)
           layerAction(title: "Duplicate", icon: "plus.square.on.square", action: duplicateSelectedLayer)
           layerAction(title: "Forward", icon: "square.2.layers.3d.top.filled", action: { moveSelectedLayer(by: 1) })
           layerAction(title: "Back", icon: "square.2.layers.3d.bottom.filled", action: { moveSelectedLayer(by: -1) })
@@ -296,7 +419,7 @@ public struct MIRACaptroStudioView: View {
 
   private var addToolbar: some View {
     HStack(spacing: 8) {
-      PhotosPicker(selection: $selectedPhotoItem, matching: .images, preferredItemEncoding: .current) {
+      PhotosPicker(selection: $selectedPhotoItems, maxSelectionCount: 12, matching: .images, preferredItemEncoding: .current) {
         studioTool(title: "Photo", icon: "photo.badge.plus")
       }
       .buttonStyle(.miraPress)
@@ -431,7 +554,7 @@ public struct MIRACaptroStudioView: View {
 
         ScrollView(showsIndicators: false) {
           LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 9) {
-            ForEach(MIRACaptroStudioTemplate.allCases) { template in
+            ForEach(MIRACaptroStudioTemplate.creationTemplates) { template in
               Button {
                 openTemplate(template)
                 close()
@@ -471,6 +594,27 @@ public struct MIRACaptroStudioView: View {
     )
   }
 
+  private var selectedPhotoFrameBinding: Binding<MIRACaptroStudioPhotoFrame> {
+    Binding(
+      get: { selectedLayer?.photoFrame ?? .polaroid },
+      set: { frame in updateSelectedLayer { $0.photoFrame = frame } }
+    )
+  }
+
+  private func selectedCropBinding(
+    _ keyPath: WritableKeyPath<MIRACaptroStudioLayer, CGFloat?>,
+    default defaultValue: CGFloat
+  ) -> Binding<CGFloat> {
+    Binding(
+      get: { selectedLayer?[keyPath: keyPath] ?? defaultValue },
+      set: { value in
+        updateSelectedLayer { layer in
+          layer[keyPath: keyPath] = value
+        }
+      }
+    )
+  }
+
   private var hasMeaningfulEdits: Bool {
     guard let document else { return false }
     return !document.layers.filter { $0.kind != .paper }.isEmpty || !images.isEmpty
@@ -486,42 +630,48 @@ public struct MIRACaptroStudioView: View {
   }
 
   @MainActor
-  private func loadPhoto(_ item: PhotosPickerItem) async {
+  private func loadPhotos(_ items: [PhotosPickerItem]) async {
     errorMessage = nil
-    defer { selectedPhotoItem = nil }
+    defer { selectedPhotoItems = [] }
     do {
-      guard
-        let data = try await item.loadTransferable(type: Data.self),
-        let image = await MIRAImageDiskCache.decode(data, maxPixelSize: 2_400)
-      else {
-        throw MIRAAPIError.server(status: 400, code: "STUDIO_PHOTO_READ_FAILED", detail: "Could not read this photo.")
-      }
+      for (offset, item) in items.prefix(12).enumerated() {
+        guard
+          let data = try await item.loadTransferable(type: Data.self),
+          let image = await MIRAImageDiskCache.decode(data, maxPixelSize: 2_400)
+        else {
+          throw MIRAAPIError.server(status: 400, code: "STUDIO_PHOTO_READ_FAILED", detail: "Could not read one of these photos.")
+        }
 
-      guard var document else { return }
-      let targetIndex: Int
-      if let selectedLayerID,
-         let selected = document.layers.firstIndex(where: { $0.id == selectedLayerID && $0.kind == .photo }) {
-        targetIndex = selected
-      } else if let empty = document.layers.firstIndex(where: { $0.kind == .photo && images[$0.mediaKey ?? ""] == nil }) {
-        targetIndex = empty
-      } else {
-        let layer = MIRACaptroStudioLayer.photo(
-          x: 0.5,
-          y: 0.5,
-          width: 0.62,
-          height: 0.48,
-          rotation: -0.02,
-          zIndex: document.nextZIndex
-        )
-        document.layers.append(layer)
-        targetIndex = document.layers.count - 1
-      }
+        guard var currentDocument = document else { return }
+        let targetIndex: Int
+        if items.count == 1,
+           let selectedLayerID,
+           let selected = currentDocument.layers.firstIndex(where: { $0.id == selectedLayerID && $0.kind == .photo }) {
+          targetIndex = selected
+        } else if let empty = currentDocument.layers.firstIndex(where: { $0.kind == .photo && images[$0.mediaKey ?? ""] == nil }) {
+          targetIndex = empty
+        } else {
+          let columnOffset = CGFloat((offset % 3) - 1) * 0.09
+          let rowOffset = CGFloat(offset % 4) * 0.055
+          let layer = MIRACaptroStudioLayer.photo(
+            x: min(0.82, max(0.18, 0.5 + columnOffset)),
+            y: min(0.82, 0.42 + rowOffset),
+            width: 0.58,
+            height: 0.43,
+            rotation: CGFloat((offset % 3) - 1) * 0.035,
+            zIndex: currentDocument.nextZIndex,
+            frame: .print
+          )
+          currentDocument.layers.append(layer)
+          targetIndex = currentDocument.layers.count - 1
+        }
 
-      let key = document.layers[targetIndex].mediaKey ?? UUID().uuidString
-      document.layers[targetIndex].mediaKey = key
-      images[key] = image
-      selectedLayerID = document.layers[targetIndex].id
-      self.document = document
+        let key = currentDocument.layers[targetIndex].mediaKey ?? UUID().uuidString
+        currentDocument.layers[targetIndex].mediaKey = key
+        images[key] = image
+        selectedLayerID = currentDocument.layers[targetIndex].id
+        document = currentDocument
+      }
     } catch {
       errorMessage = error.localizedDescription
     }
@@ -545,12 +695,29 @@ public struct MIRACaptroStudioView: View {
 
   private func addObjectLayer(_ object: MIRACaptroStudioObject) {
     guard var document else { return }
+    let objectSize: CGSize
+    switch object {
+    case .tornPaper:
+      objectSize = CGSize(width: 0.58, height: 0.24)
+    case .texturedPaper:
+      objectSize = CGSize(width: 0.60, height: 0.34)
+    case .handDrawnArrow:
+      objectSize = CGSize(width: 0.34, height: 0.17)
+    case .organicShape:
+      objectSize = CGSize(width: 0.30, height: 0.23)
+    case .television:
+      objectSize = CGSize(width: 0.55, height: 0.33)
+    case .tape:
+      objectSize = CGSize(width: 0.34, height: 0.075)
+    default:
+      objectSize = CGSize(width: 0.24, height: 0.18)
+    }
     let layer = MIRACaptroStudioLayer.object(
       object,
       x: 0.5,
       y: 0.5,
-      width: object == .television ? 0.55 : 0.24,
-      height: object == .television ? 0.33 : 0.18,
+      width: objectSize.width,
+      height: objectSize.height,
       rotation: object == .paperclip ? 0.25 : -0.035,
       zIndex: document.nextZIndex,
       color: defaultColor(for: object)
@@ -595,25 +762,20 @@ public struct MIRACaptroStudioView: View {
   }
 
   private func duplicateSelectedLayer() {
-    guard let selectedLayerID, var document,
-          let original = document.layers.first(where: { $0.id == selectedLayerID }) else { return }
-    let originalImage = original.mediaKey.flatMap { images[$0] }
+    guard let selectedLayerID, var document else { return }
     guard let newID = document.duplicateLayer(id: selectedLayerID) else { return }
-    if let originalImage,
-       let newLayer = document.layers.first(where: { $0.id == newID }),
-       let key = newLayer.mediaKey {
-      images[key] = originalImage
-    }
     self.document = document
     self.selectedLayerID = newID
   }
 
   private func deleteSelectedLayer() {
     guard let selectedLayerID, var document else { return }
-    if let key = document.layers.first(where: { $0.id == selectedLayerID })?.mediaKey {
-      images.removeValue(forKey: key)
-    }
+    let removedMediaKey = document.layers.first(where: { $0.id == selectedLayerID })?.mediaKey
     document.deleteLayer(id: selectedLayerID)
+    if let removedMediaKey,
+       !document.layers.contains(where: { $0.mediaKey == removedMediaKey }) {
+      images.removeValue(forKey: removedMediaKey)
+    }
     self.document = document
     self.selectedLayerID = nil
   }
@@ -626,6 +788,10 @@ public struct MIRACaptroStudioView: View {
 
   private func defaultColor(for object: MIRACaptroStudioObject) -> String {
     switch object {
+    case .tornPaper: return "paper"
+    case .texturedPaper: return "schoolPaper"
+    case .handDrawnArrow: return "ink"
+    case .organicShape: return "rose"
     case .tape: return "tape"
     case .paperclip: return "metal"
     case .pushPin: return "red"
@@ -645,48 +811,45 @@ public struct MIRACaptroStudioView: View {
     snapGuides = MIRAStudioSnapGuides()
     isTextEditing = false
     isPublishing = true
-    publishMessage = "Rendering..."
+    publishMessage = "Preparing..."
     errorMessage = nil
 
     Task { @MainActor in
       do {
-        let exportView = MIRACaptroStudioExportView(document: document, images: images)
-          .frame(width: 1_080, height: 1_350)
-        let renderer = ImageRenderer(content: exportView)
-        renderer.proposedSize = ProposedViewSize(width: 1_080, height: 1_350)
-        renderer.scale = 1
-        guard let renderedImage = renderer.uiImage,
-              let data = renderedImage.jpegData(compressionQuality: 0.94) else {
-          throw MIRAAPIError.server(status: 500, code: "STUDIO_RENDER_FAILED", detail: "Could not render this Studio page.")
+        let uploads = try await uploadStudioImages(document: document)
+        let canvas = makeNoteCanvas(document: document, uploads: uploads)
+        guard !canvas.elements.isEmpty else {
+          throw MIRAAPIError.server(
+            status: 422,
+            code: "EMPTY_NOTE_CANVAS",
+            detail: "Add writing, a photo, or a decoration before publishing."
+          )
         }
-
-        publishMessage = "Checking..."
-        let picked = MIRAPickedMedia(
-          data: data,
-          kind: .image,
-          fileName: "captro-studio-\(UUID().uuidString).jpg",
-          mimeType: "image/jpeg"
-        )
-        let uploaded = try await MIRAMediaUploadService(api: api).uploadResult(picked)
+        let firstUpload = uploads.values.first
+        let canvasText = canvas.elements
+          .compactMap(\.text)
+          .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+          .filter { !$0.isEmpty }
+          .joined(separator: "\n")
 
         publishMessage = "Posting..."
-        let size = MIRAWallNotePresentationResolver.recommendedSize(styleToken: "polaroid", text: "Studio piece", hasMedia: true)
+        let size = CGSize(width: 340, height: 425)
         let request = MIRACreateWallNoteBody(
           wallId: MIRAWallDestination.global.id,
           publishingIdentity: "author",
-          body: "",
+          body: canvasText,
           category: nil,
-          colorToken: "paper",
-          styleToken: "polaroid",
-          mediaAssetId: uploaded.mediaAssetId,
-          mediaUrl: uploaded.url,
+          colorToken: document.backgroundToken,
+          styleToken: "canvas",
+          mediaAssetId: firstUpload?.mediaAssetId,
+          mediaUrl: firstUpload?.url,
           worldX: Double(camera.center.x) - Double(size.width) * 0.5,
           worldY: Double(camera.center.y) - Double(size.height) * 0.5,
           width: Double(size.width),
           height: Double(size.height),
           rotation: 0,
           approximateLocation: nil,
-          noteType: "photo",
+          noteType: uploads.isEmpty ? "text" : "photo",
           backBody: nil,
           backColorToken: nil,
           backStyleToken: nil,
@@ -694,7 +857,8 @@ public struct MIRACaptroStudioView: View {
           voiceMediaId: nil,
           voiceDurationSeconds: nil,
           voiceWaveform: nil,
-          location: nil
+          location: nil,
+          canvas: canvas
         )
         _ = try await onPublish(request)
         dismiss()
@@ -705,6 +869,229 @@ public struct MIRACaptroStudioView: View {
       }
     }
   }
+
+  @MainActor
+  private func uploadStudioImages(
+    document: MIRACaptroStudioDocument
+  ) async throws -> [String: MIRAMediaUploadResult] {
+    let mediaKeys = Array(Set(
+      document.layers
+        .filter { $0.kind == .photo }
+        .compactMap(\.mediaKey)
+        .filter { images[$0] != nil }
+    )).sorted()
+    guard !mediaKeys.isEmpty else { return [:] }
+
+    let uploader = MIRAMediaUploadService(api: api)
+    var uploaded: [String: MIRAMediaUploadResult] = [:]
+    for (index, key) in mediaKeys.enumerated() {
+      guard let image = images[key],
+            let data = image.jpegData(compressionQuality: 0.94) else {
+        throw MIRAAPIError.server(
+          status: 500,
+          code: "STUDIO_IMAGE_ENCODING_FAILED",
+          detail: "One of the photos could not be prepared."
+        )
+      }
+      publishMessage = "Uploading \(index + 1) of \(mediaKeys.count)..."
+      let picked = MIRAPickedMedia(
+        data: data,
+        kind: .image,
+        fileName: "captro-canvas-\(UUID().uuidString).jpg",
+        mimeType: "image/jpeg"
+      )
+      uploaded[key] = try await uploader.uploadResult(picked)
+    }
+    return uploaded
+  }
+
+  private func makeNoteCanvas(
+    document: MIRACaptroStudioDocument,
+    uploads: [String: MIRAMediaUploadResult]
+  ) -> MIRANoteCanvas {
+    let designHeight = document.template.canvasDesignHeight
+    buildNoteCanvas(document: document) { layer in
+      makeCanvasElement(
+        layer,
+        upload: layer.mediaKey.flatMap { uploads[$0] },
+        designHeight: designHeight
+      )
+    }
+  }
+
+  private func makeDraftNoteCanvas(document: MIRACaptroStudioDocument) -> MIRANoteCanvas {
+    let designHeight = document.template.canvasDesignHeight
+    buildNoteCanvas(document: document) { layer in
+      makeCanvasElement(
+        layer,
+        upload: nil,
+        localMediaKey: layer.kind == .photo ? layer.mediaKey : nil,
+        designHeight: designHeight
+      )
+    }
+  }
+
+  private func buildNoteCanvas(
+    document: MIRACaptroStudioDocument,
+    elementBuilder: (MIRACaptroStudioLayer) -> MIRANoteCanvasElement?
+  ) -> MIRANoteCanvas {
+    MIRANoteCanvas(
+      template: document.template.noteCanvasTemplate,
+      designWidth: 1_080,
+      designHeight: document.template.canvasDesignHeight,
+      background: canvasBackground(for: document.backgroundToken),
+      elements: document.layers.compactMap(elementBuilder)
+    )
+  }
+
+  private func makeCanvasElement(
+    _ layer: MIRACaptroStudioLayer,
+    upload: MIRAMediaUploadResult?,
+    localMediaKey: String? = nil,
+    designHeight: Double
+  ) -> MIRANoteCanvasElement? {
+    guard layer.kind != .paper else { return nil }
+    let kind: MIRANoteCanvasElementKind
+    var style = MIRANoteCanvasElementStyle(
+      colorHex: canvasColorHex(layer.colorToken),
+      shadowLevel: layer.kind == .text ? 0 : 2
+    )
+    var mediaAssetID: String?
+    var mediaURL: String?
+
+    switch layer.kind {
+    case .paper:
+      return nil
+    case .photo:
+      guard upload != nil || localMediaKey != nil else { return nil }
+      let isPolaroid = (layer.photoFrame ?? .polaroid) == .polaroid
+      kind = isPolaroid ? .polaroid : .photo
+      mediaAssetID = upload?.mediaAssetId ?? localMediaKey
+      mediaURL = upload?.url
+      style.material = "photographic_print"
+      style.cornerRadius = isPolaroid ? 2 : 0
+      style.borderWidth = isPolaroid ? 14 : 0
+      style.borderColorHex = "#F8F5EC"
+    case .text:
+      kind = (layer.fontStyle == .handwritten || layer.fontStyle == .script)
+        ? .handwrittenCaption
+        : .text
+      style.fontName = canvasFontName(layer.fontStyle ?? .handwritten)
+      style.fontSize = min(180, max(22, Double(layer.height) * designHeight * 0.32))
+      style.fontWeight = layer.fontStyle == .cutout ? "heavy" : "regular"
+      style.textAlignment = .center
+    case .object:
+      switch layer.object {
+      case .tornPaper:
+        kind = .tornPaper
+        style.material = "crumpled_paper"
+        style.shadowLevel = 1
+      case .texturedPaper:
+        kind = .texturedPaper
+        style.material = "cotton_paper"
+        style.shadowLevel = 1
+      case .handDrawnArrow:
+        kind = .drawing
+        style.drawingName = "hand_drawn_arrow"
+        style.shadowLevel = 0
+      case .organicShape:
+        kind = .shape
+        style.shapeName = "organic_blob"
+        style.shadowLevel = 1
+      case .tape:
+        kind = .tape
+        style.material = "translucent_tape"
+      case .pressedFlower:
+        kind = .flower
+      default:
+        kind = .sticker
+        style.stickerName = layer.object?.rawValue
+      }
+    case .qrCode:
+      kind = .sticker
+      style.stickerName = "qrcode"
+    case .dateStamp:
+      kind = .text
+      style.fontName = "AmericanTypewriter"
+      style.fontSize = min(90, max(18, Double(layer.height) * designHeight * 0.42))
+      style.fontWeight = "semibold"
+      style.textAlignment = .center
+    }
+
+    let renderedWidth = min(1.5, max(0.02, Double(layer.width * layer.scale)))
+    let renderedHeight = min(1.5, max(0.02, Double(layer.height * layer.scale)))
+    let text: String?
+    switch layer.kind {
+    case .dateStamp:
+      text = MIRAStudioDateFormatter.displayDate(from: layer.value)
+    case .qrCode:
+      text = layer.value
+    default:
+      text = layer.text
+    }
+    return MIRANoteCanvasElement(
+      id: layer.id,
+      kind: kind,
+      x: min(1.5, max(-0.5, Double(layer.x))),
+      y: min(1.5, max(-0.5, Double(layer.y))),
+      width: renderedWidth,
+      height: renderedHeight,
+      rotation: Double(layer.rotation) * 180 / Double.pi,
+      zIndex: layer.zIndex,
+      opacity: min(1, max(0, Double(layer.opacity))),
+      isLocked: layer.isLocked == true,
+      text: text,
+      mediaAssetId: mediaAssetID,
+      mediaUrl: mediaURL,
+      thumbnailUrl: nil,
+      cropX: Double(layer.cropX ?? 0.5),
+      cropY: Double(layer.cropY ?? 0.5),
+      cropScale: Double(layer.cropScale ?? 1),
+      style: style
+    )
+  }
+
+  private func canvasBackground(for token: String) -> MIRANoteCanvasBackground {
+    switch token {
+    case "sagePaper": return MIRANoteCanvasBackground(material: "linen", colorHex: "#DCE3D3", textureAsset: "CaptroLinenBoard")
+    case "lilacPaper": return MIRANoteCanvasBackground(material: "cotton_paper", colorHex: "#E7DFEB", textureAsset: "CaptroArchivalPaper")
+    case "schoolPaper": return MIRANoteCanvasBackground(material: "notebook_paper", colorHex: "#F2EAD8", textureAsset: "CaptroArchivalPaper")
+    case "kraftPaper": return MIRANoteCanvasBackground(material: "kraft_paper", colorHex: "#C8A477", textureAsset: "CaptroArchivalPaper")
+    case "travelPaper": return MIRANoteCanvasBackground(material: "aged_paper", colorHex: "#EFE0BF", textureAsset: "CaptroArchivalPaper")
+    case "charcoalPaper": return MIRANoteCanvasBackground(material: "fabric", colorHex: "#171614", textureAsset: "CaptroLinenBoard")
+    case "recipePaper": return MIRANoteCanvasBackground(material: "cotton_paper", colorHex: "#F4EBDD", textureAsset: "CaptroArchivalPaper")
+    default: return MIRANoteCanvasBackground(material: "cotton_paper", colorHex: "#F4F0E7", textureAsset: "CaptroArchivalPaper")
+    }
+  }
+
+  private func canvasColorHex(_ token: String) -> String {
+    switch token {
+    case "paper", "ink": return "#171410"
+    case "white": return "#FFFFFF"
+    case "rust", "red": return "#9A382C"
+    case "sage": return "#61715A"
+    case "rose": return "#B65D69"
+    case "lavender": return "#7D6D91"
+    case "butter": return "#D6AC48"
+    case "charcoal": return "#24211E"
+    case "stamp": return "#4C5E72"
+    case "coffee": return "#72513B"
+    case "metal": return "#76736D"
+    case "tape": return "#E8D9AE"
+    default: return "#171410"
+    }
+  }
+
+  private func canvasFontName(_ style: MIRACaptroStudioFontStyle) -> String {
+    switch style {
+    case .modern: return "AvenirNext-Regular"
+    case .editorial: return "NewYork-Regular"
+    case .handwritten: return "Noteworthy"
+    case .typewriter: return "AmericanTypewriter"
+    case .cutout: return "AvenirNext-Heavy"
+    case .script: return "SnellRoundhand"
+    }
+  }
 }
 
 private struct MIRAStudioSnapGuides: Equatable {
@@ -712,24 +1099,9 @@ private struct MIRAStudioSnapGuides: Equatable {
   var horizontal = false
 }
 
-private struct MIRACaptroStudioExportView: View {
-  let document: MIRACaptroStudioDocument
-  let images: [String: UIImage]
-
-  var body: some View {
-    MIRACaptroStudioCanvas(
-      document: .constant(document),
-      images: images,
-      selectedLayerID: .constant(nil),
-      isEditing: false,
-      snapGuides: .constant(MIRAStudioSnapGuides())
-    )
-    .frame(width: 1_080, height: 1_350)
-  }
-}
-
 private struct MIRACaptroStudioCanvas: View {
   @Binding var document: MIRACaptroStudioDocument
+  let canvas: MIRANoteCanvas
   let images: [String: UIImage]
   @Binding var selectedLayerID: String?
   let isEditing: Bool
@@ -738,14 +1110,27 @@ private struct MIRACaptroStudioCanvas: View {
   var body: some View {
     GeometryReader { proxy in
       ZStack {
-        MIRAStudioPaperSurface(token: document.backgroundToken)
+        Color.clear
+          .contentShape(Rectangle())
+          .onTapGesture {
+            if isEditing { selectedLayerID = nil }
+          }
+
+        MIRANoteCanvasRenderer(
+          canvas: canvas,
+          mode: isEditing ? .editor : .wallPreview,
+          localImages: images
+        )
+        .frame(width: proxy.size.width, height: proxy.size.height)
+        .allowsHitTesting(false)
 
         ForEach(document.layers.sorted(by: { $0.zIndex < $1.zIndex })) { layer in
-          if let binding = binding(for: layer.id) {
+          if layer.kind != .paper, let binding = binding(for: layer.id) {
             MIRAStudioEditableLayer(
               layer: binding,
               image: layer.mediaKey.flatMap { images[$0] },
               containerSize: proxy.size,
+              rendersContent: false,
               isSelected: isEditing && selectedLayerID == layer.id,
               isEditing: isEditing && layer.kind != .paper,
               onSelect: { selectedLayerID = layer.id },
@@ -771,7 +1156,6 @@ private struct MIRACaptroStudioCanvas: View {
         }
       }
       .contentShape(Rectangle())
-      .onTapGesture { if isEditing { selectedLayerID = nil } }
     }
   }
 
@@ -791,6 +1175,7 @@ private struct MIRAStudioEditableLayer: View {
   @Binding var layer: MIRACaptroStudioLayer
   let image: UIImage?
   let containerSize: CGSize
+  let rendersContent: Bool
   let isSelected: Bool
   let isEditing: Bool
   let onSelect: () -> Void
@@ -801,7 +1186,13 @@ private struct MIRAStudioEditableLayer: View {
   @State private var rotationStart: CGFloat?
 
   var body: some View {
-    MIRAStudioLayerVisual(layer: layer, image: image, containerSize: containerSize)
+    Group {
+      if rendersContent {
+        MIRAStudioLayerVisual(layer: layer, image: image, containerSize: containerSize)
+      } else {
+        Color.clear
+      }
+    }
       .frame(
         width: max(18, layer.width * containerSize.width),
         height: max(18, layer.height * containerSize.height)
@@ -823,7 +1214,11 @@ private struct MIRAStudioEditableLayer: View {
       .simultaneousGesture(scaleGesture)
       .simultaneousGesture(rotationGesture)
       .accessibilityLabel(accessibilityLabel)
-      .accessibilityHint(isEditing ? "Drag, pinch, or rotate this layer" : "")
+      .accessibilityHint(
+        isEditing
+          ? (layer.isLocked == true ? "Unlock this layer to move or resize it" : "Drag, pinch, or rotate this layer")
+          : ""
+      )
   }
 
   private var accessibilityLabel: String {
@@ -840,7 +1235,7 @@ private struct MIRAStudioEditableLayer: View {
   private var dragGesture: some Gesture {
     DragGesture(minimumDistance: 1)
       .onChanged { value in
-        guard isEditing else { return }
+        guard isEditing, layer.isLocked != true else { return }
         if dragStart == nil { dragStart = CGPoint(x: layer.x, y: layer.y) }
         guard let dragStart else { return }
         let x = MIRACaptroStudioDocument.snappedPosition(
@@ -854,7 +1249,7 @@ private struct MIRAStudioEditableLayer: View {
         onSnapChange(x.snapped, y.snapped)
       }
       .onEnded { _ in
-        guard isEditing else { return }
+        guard isEditing, layer.isLocked != true else { return }
         dragStart = nil
         onSnapChange(false, false)
       }
@@ -863,12 +1258,12 @@ private struct MIRAStudioEditableLayer: View {
   private var scaleGesture: some Gesture {
     MagnificationGesture()
       .onChanged { value in
-        guard isEditing else { return }
+        guard isEditing, layer.isLocked != true else { return }
         if scaleStart == nil { scaleStart = layer.scale }
         layer.scale = min(max((scaleStart ?? 1) * value, 0.28), 3.5)
       }
       .onEnded { _ in
-        guard isEditing else { return }
+        guard isEditing, layer.isLocked != true else { return }
         scaleStart = nil
       }
   }
@@ -876,12 +1271,12 @@ private struct MIRAStudioEditableLayer: View {
   private var rotationGesture: some Gesture {
     RotationGesture()
       .onChanged { value in
-        guard isEditing else { return }
+        guard isEditing, layer.isLocked != true else { return }
         if rotationStart == nil { rotationStart = layer.rotation }
         layer.rotation = (rotationStart ?? 0) + value.radians
       }
       .onEnded { _ in
-        guard isEditing else { return }
+        guard isEditing, layer.isLocked != true else { return }
         rotationStart = nil
       }
   }
@@ -898,25 +1293,55 @@ private struct MIRAStudioLayerVisual: View {
       MIRAStudioPaperSurface(token: layer.colorToken)
 
     case .photo:
-      ZStack {
-        RoundedRectangle(cornerRadius: containerSize.width * 0.012, style: .continuous)
-          .fill(Color.white)
-          .shadow(color: .black.opacity(0.16), radius: containerSize.width * 0.012, y: containerSize.width * 0.008)
-        if let image {
-          Image(uiImage: image)
-            .resizable()
-            .scaledToFill()
-            .clipShape(RoundedRectangle(cornerRadius: containerSize.width * 0.008, style: .continuous))
-            .padding(containerSize.width * 0.012)
-        } else {
-          ZStack {
-            MIRAStudioPalette.color("photoPlaceholder")
-            Image(systemName: "photo.badge.plus")
-              .font(.system(size: max(13, containerSize.width * 0.055), weight: .medium))
-              .foregroundStyle(Color.black.opacity(0.30))
+      GeometryReader { proxy in
+        let isPolaroid = (layer.photoFrame ?? .polaroid) == .polaroid
+        let inset = isPolaroid ? max(4, containerSize.width * 0.012) : 0
+        let photoSize = CGSize(
+          width: max(1, proxy.size.width - (inset * 2)),
+          height: max(1, proxy.size.height - (inset * 2))
+        )
+        let cropOffset = CGSize(
+          width: ((layer.cropX ?? 0.5) - 0.5) * photoSize.width,
+          height: ((layer.cropY ?? 0.5) - 0.5) * photoSize.height
+        )
+
+        ZStack {
+          if isPolaroid {
+            RoundedRectangle(cornerRadius: containerSize.width * 0.012, style: .continuous)
+              .fill(Color(red: 0.975, green: 0.965, blue: 0.925))
+              .shadow(
+                color: .black.opacity(0.16),
+                radius: containerSize.width * 0.012,
+                y: containerSize.width * 0.008
+              )
           }
-          .clipShape(RoundedRectangle(cornerRadius: containerSize.width * 0.008, style: .continuous))
-          .padding(containerSize.width * 0.012)
+
+          Group {
+            if let image {
+              Image(uiImage: image)
+                .resizable()
+                .scaledToFill()
+                .frame(width: photoSize.width, height: photoSize.height)
+                .scaleEffect(max(1, layer.cropScale ?? 1))
+                .offset(cropOffset)
+            } else {
+              ZStack {
+                MIRAStudioPalette.color("photoPlaceholder")
+                Image(systemName: "photo.badge.plus")
+                  .font(.system(size: max(13, containerSize.width * 0.055), weight: .medium))
+                  .foregroundStyle(Color.black.opacity(0.30))
+              }
+              .frame(width: photoSize.width, height: photoSize.height)
+            }
+          }
+          .frame(width: photoSize.width, height: photoSize.height)
+          .clipShape(RoundedRectangle(cornerRadius: isPolaroid ? containerSize.width * 0.008 : 1, style: .continuous))
+          .overlay { CaptroPhotoPrintFinish(seed: layer.id) }
+          .shadow(
+            color: isPolaroid ? .clear : .black.opacity(0.18),
+            radius: isPolaroid ? 0 : containerSize.width * 0.012,
+            y: isPolaroid ? 0 : containerSize.width * 0.009
+          )
         }
       }
       .clipped()
@@ -990,6 +1415,62 @@ private struct MIRAStudioObjectVisual: View {
     GeometryReader { proxy in
       let size = proxy.size
       switch object {
+      case .tornPaper:
+        ZStack {
+          MIRAStudioTornPaperShape()
+            .fill(MIRAStudioPalette.color(colorToken))
+          CaptroPhotographedPaper(
+            seed: "studio-torn-\(colorToken)",
+            kind: .archival,
+            base: MIRAStudioPalette.color(colorToken),
+            textureOpacity: 0.34,
+            directionalLight: 0.13
+          )
+          .clipShape(MIRAStudioTornPaperShape())
+        }
+        .shadow(color: .black.opacity(0.13), radius: max(2, size.width * 0.025), y: max(2, size.height * 0.035))
+
+      case .texturedPaper:
+        CaptroPhotographedPaper(
+          seed: "studio-paper-\(colorToken)",
+          kind: colorToken == "schoolPaper" ? .notebook : .linen,
+          base: MIRAStudioPalette.color(colorToken),
+          textureOpacity: 0.42,
+          directionalLight: 0.16
+        )
+        .overlay {
+          Rectangle().stroke(Color.black.opacity(0.08), lineWidth: max(0.5, size.width * 0.002))
+        }
+        .shadow(color: .black.opacity(0.12), radius: max(2, size.width * 0.022), y: max(2, size.height * 0.03))
+
+      case .handDrawnArrow:
+        Canvas { context, canvasSize in
+          var stroke = Path()
+          stroke.move(to: CGPoint(x: canvasSize.width * 0.08, y: canvasSize.height * 0.76))
+          stroke.addCurve(
+            to: CGPoint(x: canvasSize.width * 0.83, y: canvasSize.height * 0.28),
+            control1: CGPoint(x: canvasSize.width * 0.34, y: canvasSize.height * 0.92),
+            control2: CGPoint(x: canvasSize.width * 0.56, y: canvasSize.height * 0.18)
+          )
+          stroke.move(to: CGPoint(x: canvasSize.width * 0.65, y: canvasSize.height * 0.20))
+          stroke.addLine(to: CGPoint(x: canvasSize.width * 0.84, y: canvasSize.height * 0.28))
+          stroke.addLine(to: CGPoint(x: canvasSize.width * 0.76, y: canvasSize.height * 0.54))
+          context.stroke(
+            stroke,
+            with: .color(MIRAStudioPalette.color(colorToken)),
+            style: StrokeStyle(lineWidth: max(2, canvasSize.width * 0.018), lineCap: .round, lineJoin: .round)
+          )
+        }
+
+      case .organicShape:
+        MIRAStudioOrganicShape()
+          .fill(MIRAStudioPalette.color(colorToken).opacity(0.88))
+          .overlay {
+            MIRAStudioOrganicShape()
+              .stroke(Color.white.opacity(0.18), lineWidth: max(0.8, size.width * 0.008))
+          }
+          .shadow(color: .black.opacity(0.10), radius: max(2, size.width * 0.025), y: max(2, size.height * 0.035))
+
       case .tape:
         RoundedRectangle(cornerRadius: max(2, size.width * 0.04), style: .continuous)
           .fill(MIRAStudioPalette.color(colorToken).opacity(0.70))
@@ -1113,6 +1594,52 @@ private struct MIRAStudioObjectVisual: View {
         .blur(radius: max(0.2, size.width * 0.006))
       }
     }
+  }
+}
+
+private struct MIRAStudioTornPaperShape: Shape {
+  func path(in rect: CGRect) -> Path {
+    var path = Path()
+    path.move(to: CGPoint(x: rect.minX, y: rect.minY + rect.height * 0.035))
+    path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+    path.addLine(to: CGPoint(x: rect.maxX - rect.width * 0.012, y: rect.maxY - rect.height * 0.05))
+    for step in stride(from: CGFloat(1), through: CGFloat(0), by: CGFloat(-0.045)) {
+      let x = rect.minX + rect.width * step
+      let wobble = CGFloat(Int(step * 1_000) % 3 - 1) * rect.height * 0.026
+      path.addLine(to: CGPoint(x: x, y: rect.maxY + wobble))
+    }
+    path.addLine(to: CGPoint(x: rect.minX + rect.width * 0.012, y: rect.minY + rect.height * 0.08))
+    path.closeSubpath()
+    return path
+  }
+}
+
+private struct MIRAStudioOrganicShape: Shape {
+  func path(in rect: CGRect) -> Path {
+    var path = Path()
+    path.move(to: CGPoint(x: rect.midX, y: rect.minY))
+    path.addCurve(
+      to: CGPoint(x: rect.maxX, y: rect.midY),
+      control1: CGPoint(x: rect.minX + rect.width * 0.82, y: rect.minY),
+      control2: CGPoint(x: rect.maxX, y: rect.minY + rect.height * 0.24)
+    )
+    path.addCurve(
+      to: CGPoint(x: rect.midX, y: rect.maxY),
+      control1: CGPoint(x: rect.maxX, y: rect.minY + rect.height * 0.84),
+      control2: CGPoint(x: rect.minX + rect.width * 0.70, y: rect.maxY)
+    )
+    path.addCurve(
+      to: CGPoint(x: rect.minX, y: rect.midY),
+      control1: CGPoint(x: rect.minX + rect.width * 0.23, y: rect.maxY),
+      control2: CGPoint(x: rect.minX, y: rect.minY + rect.height * 0.72)
+    )
+    path.addCurve(
+      to: CGPoint(x: rect.midX, y: rect.minY),
+      control1: CGPoint(x: rect.minX, y: rect.minY + rect.height * 0.16),
+      control2: CGPoint(x: rect.minX + rect.width * 0.30, y: rect.minY)
+    )
+    path.closeSubpath()
+    return path
   }
 }
 

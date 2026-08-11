@@ -175,7 +175,24 @@ struct MIRAWallNoteRenderer: View {
     localMediaImage != nil || mediaURL != nil
   }
 
+  @ViewBuilder
   var body: some View {
+    if let canvas = note.resolvedCanvas {
+      MIRANoteCanvasRenderer(
+        canvas: canvas,
+        mode: .wallPreview,
+        localImages: canvasLocalImages
+      )
+      .captroMaterialShadow(materialElevation, seed: note.id)
+      .accessibilityElement(children: .contain)
+      .accessibilityLabel(note.isGhost ? "Anonymous note" : "Note by \(note.authorPreview?.title ?? "Captro member")")
+      .accessibilityValue(note.body)
+    } else {
+      legacyNote
+    }
+  }
+
+  private var legacyNote: some View {
     GeometryReader { proxy in
       ZStack {
         MIRAWallPaperBackground(note: note, presentation: presentation, renderDetail: .full)
@@ -218,6 +235,18 @@ struct MIRAWallNoteRenderer: View {
     .accessibilityElement(children: .ignore)
     .accessibilityLabel(note.isGhost ? "Anonymous note" : "Note by \(note.authorPreview?.title ?? "Captro member")")
     .accessibilityValue(note.body)
+  }
+
+  private var canvasLocalImages: [String: UIImage] {
+    guard
+      let localMediaImage,
+      let elementID = note.resolvedCanvas?.orderedElements.first(where: {
+        $0.kind == .photo || $0.kind == .polaroid
+      })?.id
+    else {
+      return [:]
+    }
+    return [elementID: localMediaImage]
   }
 
   private var depth: MIRAWallDepthProfile {

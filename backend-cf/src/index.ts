@@ -17829,6 +17829,147 @@ function wallNoteWaveform(value: unknown): number[] {
     .map((sample) => Number(Math.min(1, Math.max(0, sample)).toFixed(4)));
 }
 
+const WALL_NOTE_CANVAS_TEMPLATES = new Set([
+  'journal', 'travel_diary', 'scrapbook', 'notebook', 'minimal', 'dark_album', 'recipe_book',
+]);
+const WALL_NOTE_CANVAS_ELEMENT_KINDS = new Set([
+  'photo', 'polaroid', 'text', 'handwritten_caption', 'torn_paper', 'textured_paper',
+  'tape', 'sticker', 'drawing', 'flower', 'shape',
+]);
+
+function noteCanvasNumber(value: unknown, minimum: number, maximum: number, fallback: number) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Number(Math.min(maximum, Math.max(minimum, number)).toFixed(5));
+}
+
+function normalizeWallNoteCanvas(value: unknown): { canvas: any | null; error: string | null } {
+  if (value == null) return { canvas: null, error: null };
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    return { canvas: null, error: 'The note canvas is invalid.' };
+  }
+
+  const source: any = value;
+  const template = cleanText(source.template, 40).toLowerCase();
+  const elementsSource = Array.isArray(source.elements) ? source.elements : null;
+  if (!WALL_NOTE_CANVAS_TEMPLATES.has(template) || !elementsSource || elementsSource.length < 1 || elementsSource.length > 80) {
+    return { canvas: null, error: 'The note canvas has an unsupported template or element count.' };
+  }
+
+  const backgroundSource = source.background && typeof source.background === 'object' && !Array.isArray(source.background)
+    ? source.background
+    : {};
+  const background = {
+    material: cleanText(backgroundSource.material, 40) || 'cotton_paper',
+    color_hex: cleanText(backgroundSource.color_hex || backgroundSource.colorHex, 12) || '#F4F0E7',
+    texture_asset: cleanText(backgroundSource.texture_asset || backgroundSource.textureAsset, 80) || null,
+  };
+
+  let totalTextLength = 0;
+  let photoCount = 0;
+  const seenIds = new Set<string>();
+  const elements: any[] = [];
+  for (let index = 0; index < elementsSource.length; index += 1) {
+    const raw = elementsSource[index];
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      return { canvas: null, error: 'The note canvas contains an invalid element.' };
+    }
+    const kind = cleanText(raw.kind, 40).toLowerCase();
+    if (!WALL_NOTE_CANVAS_ELEMENT_KINDS.has(kind)) {
+      return { canvas: null, error: 'The note canvas contains an unsupported element.' };
+    }
+    const id = publicId(raw.id, 120) || `element-${index + 1}`;
+    if (seenIds.has(id)) return { canvas: null, error: 'The note canvas contains duplicate elements.' };
+    seenIds.add(id);
+
+    const text = cleanMultilineText(raw.text, 1000) || null;
+    totalTextLength += text?.length || 0;
+    if (totalTextLength > 6000) return { canvas: null, error: 'The note contains too much text.' };
+
+    const mediaAssetId = publicId(raw.media_asset_id || raw.mediaAssetId, 160) || null;
+    if (kind === 'photo' || kind === 'polaroid') {
+      photoCount += 1;
+      if (!mediaAssetId) return { canvas: null, error: 'Upload every canvas photo through Captro first.' };
+      if (photoCount > 12) return { canvas: null, error: 'A note can contain up to 12 photos.' };
+    } else if (mediaAssetId) {
+      return { canvas: null, error: 'Only photo elements can reference uploaded media.' };
+    }
+
+    const rawStyle = raw.style && typeof raw.style === 'object' && !Array.isArray(raw.style) ? raw.style : {};
+    elements.push({
+      id,
+      kind,
+      x: noteCanvasNumber(raw.x, -0.25, 1.25, 0.5),
+      y: noteCanvasNumber(raw.y, -0.25, 1.25, 0.5),
+      width: noteCanvasNumber(raw.width, 0.02, 1.5, 0.25),
+      height: noteCanvasNumber(raw.height, 0.02, 1.5, 0.25),
+      rotation: noteCanvasNumber(raw.rotation, -180, 180, 0),
+      z_index: Math.round(noteCanvasNumber(raw.z_index ?? raw.zIndex, -1000, 1000, index)),
+      opacity: noteCanvasNumber(raw.opacity, 0.05, 1, 1),
+      is_locked: raw.is_locked === true || raw.isLocked === true,
+      text,
+      media_asset_id: mediaAssetId,
+      media_url: null,
+      thumbnail_url: null,
+      crop_x: noteCanvasNumber(raw.crop_x ?? raw.cropX, 0, 1, 0.5),
+      crop_y: noteCanvasNumber(raw.crop_y ?? raw.cropY, 0, 1, 0.5),
+      crop_scale: noteCanvasNumber(raw.crop_scale ?? raw.cropScale, 1, 8, 1),
+      style: {
+        material: cleanText(rawStyle.material, 40) || null,
+        color_hex: cleanText(rawStyle.color_hex || rawStyle.colorHex, 12) || null,
+        font_name: cleanText(rawStyle.font_name || rawStyle.fontName, 80) || null,
+        font_size: rawStyle.font_size != null || rawStyle.fontSize != null
+          ? noteCanvasNumber(rawStyle.font_size ?? rawStyle.fontSize, 10, 240, 42)
+          : null,
+        font_weight: cleanText(rawStyle.font_weight || rawStyle.fontWeight, 20) || null,
+        text_alignment: ['leading', 'center', 'trailing'].includes(cleanText(rawStyle.text_alignment || rawStyle.textAlignment, 20))
+          ? cleanText(rawStyle.text_alignment || rawStyle.textAlignment, 20)
+          : null,
+        corner_radius: rawStyle.corner_radius != null || rawStyle.cornerRadius != null
+          ? noteCanvasNumber(rawStyle.corner_radius ?? rawStyle.cornerRadius, 0, 160, 0)
+          : null,
+        border_width: rawStyle.border_width != null || rawStyle.borderWidth != null
+          ? noteCanvasNumber(rawStyle.border_width ?? rawStyle.borderWidth, 0, 24, 0)
+          : null,
+        border_color_hex: cleanText(rawStyle.border_color_hex || rawStyle.borderColorHex, 12) || null,
+        shadow_level: rawStyle.shadow_level != null || rawStyle.shadowLevel != null
+          ? Math.round(noteCanvasNumber(rawStyle.shadow_level ?? rawStyle.shadowLevel, 0, 5, 1))
+          : null,
+        sticker_name: cleanText(rawStyle.sticker_name || rawStyle.stickerName, 80) || null,
+        drawing_name: cleanText(rawStyle.drawing_name || rawStyle.drawingName, 80) || null,
+        shape_name: cleanText(rawStyle.shape_name || rawStyle.shapeName, 80) || null,
+        blend_mode: cleanText(rawStyle.blend_mode || rawStyle.blendMode, 30) || null,
+      },
+    });
+  }
+
+  return {
+    canvas: {
+      version: Math.round(noteCanvasNumber(source.version, 1, 10, 1)),
+      template,
+      design_width: Math.round(noteCanvasNumber(source.design_width ?? source.designWidth, 320, 4096, 1080)),
+      design_height: Math.round(noteCanvasNumber(source.design_height ?? source.designHeight, 480, 12288, 1620)),
+      background,
+      elements,
+    },
+    error: null,
+  };
+}
+
+function wallNoteCanvasPayload(row: any) {
+  const template = cleanText(row?.canvas_template, 40);
+  const elements = Array.isArray(row?.canvas_elements) ? row.canvas_elements : null;
+  if (!WALL_NOTE_CANVAS_TEMPLATES.has(template) || !elements?.length) return null;
+  return {
+    version: Math.max(1, Number(row?.canvas_version || 1)),
+    template,
+    design_width: Math.max(320, Number(row?.canvas_width || 1080)),
+    design_height: Math.max(480, Number(row?.canvas_height || 1620)),
+    background: parseJsonObject(row?.canvas_background),
+    elements,
+  };
+}
+
 function wallNotePayload(
   row: any,
   author: any,
@@ -17864,6 +18005,7 @@ function wallNotePayload(
       waveform: wallNoteWaveform(row?.voice_waveform),
     } : null,
     location: null,
+    canvas: wallNoteCanvasPayload(row),
     world_x: Number(row?.world_x || 0),
     world_y: Number(row?.world_y || 0),
     width: Number(row?.width || 184),
@@ -18105,22 +18247,47 @@ api.post('/wall/notes', authMiddleware, async (c) => {
   if (dailyLimit) return dailyLimit;
   const restricted = await enforceUserRestriction(c, userId, 'posting');
   if (restricted) return restricted;
-  const bodyTooLarge = rejectLargeRequest(c, 24_000);
+  const bodyTooLarge = rejectLargeRequest(c, 180_000);
   if (bodyTooLarge) return bodyTooLarge;
 
   const b: any = await c.req.json().catch(() => ({}));
   const body = cleanMultilineText(b.body || b.text, 300);
-  const mediaAssetId = publicId(b.media_asset_id || b.mediaAssetId, 160);
-  const voiceMediaId = publicId(b.voice_media_id || b.voiceMediaId, 160);
-  const requestedType = normalizedWallNoteType(b.note_type || b.noteType, !!mediaAssetId, !!voiceMediaId);
-  if (mediaAssetId && voiceMediaId) {
-    return c.json({ detail: 'A Wall note can contain one photo or one voice recording, not both.', code: 'WALL_NOTE_MEDIA_CONFLICT' }, 400);
+  const canvasResult = normalizeWallNoteCanvas(b.canvas);
+  if (canvasResult.error) {
+    return c.json({ detail: canvasResult.error, code: 'WALL_NOTE_CANVAS_INVALID' }, 400);
   }
-  if (requestedType === 'text' && !body) {
+  let noteCanvas = canvasResult.canvas;
+  const canvasElements = Array.isArray(noteCanvas?.elements) ? noteCanvas.elements : [];
+  const canvasPhotoAssetIds: string[] = Array.from(new Set<string>(
+    canvasElements
+      .filter((element: any) => element.kind === 'photo' || element.kind === 'polaroid')
+      .map((element: any) => publicId(element.media_asset_id, 160))
+      .filter((assetId: string) => !!assetId),
+  ));
+  const canvasText = canvasElements
+    .map((element: any) => cleanMultilineText(element.text, 1000))
+    .filter(Boolean);
+  const canvasHasContent = canvasPhotoAssetIds.length > 0 || canvasText.length > 0;
+  const submittedMediaAssetId = publicId(b.media_asset_id || b.mediaAssetId, 160);
+  const mediaAssetIds: string[] = Array.from(new Set<string>([
+    ...canvasPhotoAssetIds,
+    ...(submittedMediaAssetId ? [submittedMediaAssetId] : []),
+  ]));
+  const mediaAssetId = canvasPhotoAssetIds[0] || submittedMediaAssetId;
+  const voiceMediaId = publicId(b.voice_media_id || b.voiceMediaId, 160);
+  const requestedType = normalizedWallNoteType(b.note_type || b.noteType, mediaAssetIds.length > 0, !!voiceMediaId);
+  if (mediaAssetIds.length && voiceMediaId) {
+    return c.json({ detail: 'A Wall note can contain photos or a voice recording, not both.', code: 'WALL_NOTE_MEDIA_CONFLICT' }, 400);
+  }
+  if (requestedType === 'text' && !body && !canvasHasContent) {
     return c.json({ detail: 'Write something before releasing this note.', code: 'WALL_NOTE_BODY_REQUIRED' }, 400);
   }
   if (body) {
     const moderation = moderateCommunityText(body);
+    if (!moderation.ok) return c.json({ detail: moderation.detail || 'This note cannot be published.' }, 400);
+  }
+  for (const elementText of canvasText) {
+    const moderation = moderateCommunityText(elementText);
     if (!moderation.ok) return c.json({ detail: moderation.detail || 'This note cannot be published.' }, 400);
   }
 
@@ -18136,18 +18303,49 @@ api.post('/wall/notes', authMiddleware, async (c) => {
   }
 
   let mediaAsset: any = null;
+  let mediaAssets: any[] = [];
   let mediaUrl = '';
   let mediaThumbnailUrl = '';
-  if (mediaAssetId) {
-    const mediaApproval = await approvedMediaAssetsForPost(c, userId, [mediaAssetId], []);
+  if (mediaAssetIds.length) {
+    const mediaApproval = await approvedMediaAssetsForPost(c, userId, mediaAssetIds, []);
     if (!mediaApproval.ok) return c.json({ detail: mediaApproval.detail, code: mediaApproval.code }, mediaApproval.status as any);
-    mediaAsset = mediaApproval.assets[0] || null;
-    if (requestedType !== 'photo' || normalizeMediaAssetType(mediaAsset?.media_type) !== 'image' || cleanText(mediaAsset?.storage_provider, 40) !== 'images') {
-      return c.json({ detail: 'Wall photo notes support one approved image.', code: 'WALL_NOTE_IMAGE_REQUIRED' }, 400);
+    mediaAssets = mediaApproval.assets;
+    const invalidAsset = mediaAssets.find((asset: any) => (
+      normalizeMediaAssetType(asset?.media_type) !== 'image'
+      || cleanText(asset?.storage_provider, 40) !== 'images'
+    ));
+    if (requestedType !== 'photo' || invalidAsset) {
+      return c.json({ detail: 'Wall photo notes support approved Cloudflare Images uploads.', code: 'WALL_NOTE_IMAGE_REQUIRED' }, 400);
     }
+    const assetsById = new Map(mediaAssets.map((asset: any) => [publicId(asset?.id, 160), asset]));
+    mediaAsset = assetsById.get(mediaAssetId) || mediaAssets[0] || null;
     mediaUrl = safeMediaReference(mediaAsset?.public_url) || mediaAssetPublicUrl(c.env, mediaAsset);
     mediaThumbnailUrl = mediaAssetPreviewUrl(c.env, mediaAsset) || mediaUrl;
     if (!mediaUrl) return c.json({ detail: 'This photo is not ready yet. Please try again.', code: 'MEDIA_NOT_READY' }, 409);
+
+    if (noteCanvas) {
+      noteCanvas = {
+        ...noteCanvas,
+        elements: canvasElements.map((element: any) => {
+          if (element.kind !== 'photo' && element.kind !== 'polaroid') return element;
+          const asset = assetsById.get(publicId(element.media_asset_id, 160));
+          if (!asset) return element;
+          const trustedUrl = safeMediaReference(asset?.public_url) || mediaAssetPublicUrl(c.env, asset);
+          const trustedThumbnailUrl = mediaAssetPreviewUrl(c.env, asset) || trustedUrl;
+          return {
+            ...element,
+            media_url: trustedUrl || null,
+            thumbnail_url: trustedThumbnailUrl || null,
+          };
+        }),
+      };
+      const unresolvedCanvasPhoto = noteCanvas.elements.find((element: any) => (
+        (element.kind === 'photo' || element.kind === 'polaroid') && !element.media_url
+      ));
+      if (unresolvedCanvasPhoto) {
+        return c.json({ detail: 'One canvas photo is not ready yet. Please try again.', code: 'MEDIA_NOT_READY' }, 409);
+      }
+    }
   }
 
   let voiceAsset: any = null;
@@ -18217,6 +18415,12 @@ api.post('/wall/notes', authMiddleware, async (c) => {
     category: null,
     color_token: WALL_NOTE_COLORS.has(colorToken) ? colorToken : 'butter',
     style_token: resolvedStyleToken,
+    canvas_version: noteCanvas?.version ?? 1,
+    canvas_template: noteCanvas?.template ?? null,
+    canvas_width: noteCanvas?.design_width ?? null,
+    canvas_height: noteCanvas?.design_height ?? null,
+    canvas_background: noteCanvas?.background ?? null,
+    canvas_elements: noteCanvas?.elements ?? null,
     world_x: placement.x + (placementWidth - width) * 0.5,
     world_y: placement.y + (placementHeight - height) * 0.5,
     width,
@@ -18228,25 +18432,28 @@ api.post('/wall/notes', authMiddleware, async (c) => {
     status: 'active',
     metadata: {
       source: 'captro_native_wall',
-      layout_version: 'living_wall_v1',
+      layout_version: noteCanvas ? 'note_canvas_v1' : 'living_wall_v1',
       placed_after: placement.totalBefore,
+      ...(noteCanvas ? { canvas_template: noteCanvas.template, canvas_version: noteCanvas.version } : {}),
       ...(mediaAsset ? { media_asset_id: mediaAssetId, media_url: mediaUrl, media_thumbnail_url: mediaThumbnailUrl } : {}),
       ...(voiceAsset ? { voice_url: voiceUrl } : {}),
     },
   };
   const inserted = await supabaseAdminInsertRows(c, 'wall_notes', [row], '*');
-  if (mediaAsset || voiceAsset) {
-    const linkedAsset = mediaAsset || voiceAsset;
-    const linkedAssetId = mediaAssetId || voiceMediaId;
-    await supabaseAdminPatchRows(c, 'app_media_assets', {
-      id: postgrestEqFilter(linkedAssetId),
-      user_id: postgrestEqFilter(userId),
-    }, {
-      metadata: { ...parseJsonObject(linkedAsset.metadata), usage: requestedType === 'voice' ? 'wall_voice' : 'wall_note', wall_note_id: noteId },
-      updated_at: now(),
-    }).catch((error: any) => {
-      console.warn(JSON.stringify({ event: 'wall_note_media_link_failed', media_id: linkedAssetId, note_id: noteId, code: getErrorCode(error).slice(0, 180) }));
-    });
+  if (mediaAssets.length || voiceAsset) {
+    const assetsToLink = mediaAssets.length ? mediaAssets : [voiceAsset];
+    await Promise.all(assetsToLink.map(async (linkedAsset: any) => {
+      const linkedAssetId = publicId(linkedAsset?.id, 160) || voiceMediaId;
+      await supabaseAdminPatchRows(c, 'app_media_assets', {
+        id: postgrestEqFilter(linkedAssetId),
+        user_id: postgrestEqFilter(userId),
+      }, {
+        metadata: { ...parseJsonObject(linkedAsset?.metadata), usage: requestedType === 'voice' ? 'wall_voice' : 'wall_note', wall_note_id: noteId },
+        updated_at: now(),
+      }).catch((error: any) => {
+        console.warn(JSON.stringify({ event: 'wall_note_media_link_failed', media_id: linkedAssetId, note_id: noteId, code: getErrorCode(error).slice(0, 180) }));
+      });
+    }));
   }
   const author = await supabaseUserByAnyId(c, userId);
   return c.json({ note: wallNotePayload(inserted[0] || row, author, false, false, false, userId) }, 201);

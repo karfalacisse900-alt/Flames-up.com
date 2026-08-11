@@ -77,7 +77,10 @@ test('wall API preserves stable mixed-media presentation metadata', async () => 
   assert.match(worker, /const metadata = parseJsonObject\(row\?\.metadata\)/);
   assert.match(worker, /media_url: cleanText\(metadata\.media_url/);
   assert.match(worker, /media_thumbnail_url: cleanText\(metadata\.media_thumbnail_url \|\| metadata\.media_url/);
-  assert.match(worker, /layout_version: 'living_wall_v1'/);
+  assert.match(worker, /layout_version: noteCanvas \? 'note_canvas_v1' : 'living_wall_v1'/);
+  assert.match(worker, /canvas_version: noteCanvas\?\.version \?\? 1/);
+  assert.match(worker, /canvas_template: noteCanvas\?\.template \?\? null/);
+  assert.match(worker, /canvas_elements: noteCanvas\?\.elements \?\? null/);
   assert.doesNotMatch(worker, /media_url:\s*['"]https?:\/\//);
 });
 
@@ -89,12 +92,19 @@ test('photo notes require an approved user-owned Cloudflare Images asset', async
   assert.doesNotMatch(worker, /requestedType !== 'voice' && !body/);
   assert.match(migration, /note_type <> 'text' or char_length\(body\) >= 1/i);
   assert.match(worker, /submittedMediaUrl && !mediaAssetId/);
-  assert.match(worker, /approvedMediaAssetsForPost\(c, userId, \[mediaAssetId\], \[\]\)/);
-  assert.match(worker, /normalizeMediaAssetType\(mediaAsset\?\.media_type\) !== 'image'/);
-  assert.match(worker, /storage_provider, 40\) !== 'images'/);
+  assert.match(worker, /const canvasPhotoAssetIds:[\s\S]*?element\.kind === 'photo' \|\| element\.kind === 'polaroid'/);
+  assert.match(worker, /drawing_name: cleanText\(rawStyle\.drawing_name \|\| rawStyle\.drawingName/);
+  assert.match(worker, /approvedMediaAssetsForPost\(c, userId, mediaAssetIds, \[\]\)/);
+  assert.match(worker, /const invalidAsset = mediaAssets\.find/);
+  assert.match(worker, /normalizeMediaAssetType\(asset\?\.media_type\) !== 'image'/);
+  assert.match(worker, /cleanText\(asset\?\.storage_provider, 40\) !== 'images'/);
+  assert.match(worker, /const assetsById = new Map/);
+  assert.match(worker, /media_url: trustedUrl \|\| null/);
+  assert.match(worker, /const unresolvedCanvasPhoto = noteCanvas\.elements\.find/);
   assert.match(worker, /const resolvedStyleToken = WALL_NOTE_STYLES\.has\(styleToken\)/);
   assert.match(worker, /style_token: resolvedStyleToken/);
-  assert.match(worker, /media_asset_id: mediaAssetId/);
+  assert.match(worker, /canvas_elements: noteCanvas\?\.elements \?\? null/);
+  assert.match(worker, /const assetsToLink = mediaAssets\.length \? mediaAssets : \[voiceAsset\]/);
   assert.match(worker, /wall_note_id: noteId/);
 });
 
@@ -102,9 +112,13 @@ test('Captro Studio publishes its rendered image through the canonical Wall crea
   const studio = await read('ios_native/MIRA/Sources/MIRANative/Screens/MIRACaptroStudioView.swift');
   const wallView = await read('ios_native/MIRA/Sources/MIRANative/Screens/WallOfNotesNativeView.swift');
 
-  assert.match(studio, /MIRAMediaUploadService\(api: api\)\.uploadResult\(picked\)/);
-  assert.match(studio, /body: ""/);
-  assert.match(studio, /noteType: "photo"/);
+  assert.match(studio, /let uploader = MIRAMediaUploadService\(api: api\)/);
+  assert.match(studio, /for \(index, key\) in mediaKeys\.enumerated\(\)/);
+  assert.match(studio, /uploaded\[key\] = try await uploader\.uploadResult\(picked\)/);
+  assert.match(studio, /let canvas = makeNoteCanvas\(document: document, uploads: uploads\)/);
+  assert.match(studio, /body: canvasText/);
+  assert.match(studio, /noteType: uploads\.isEmpty \? "text" : "photo"/);
+  assert.match(studio, /canvas: canvas/);
   assert.match(studio, /_ = try await onPublish\(request\)/);
   assert.match(wallView, /MIRACaptroStudioView\(camera: camera, api: api\)[\s\S]*?let note = try await model\.create\(body\)/);
   assert.match(wallView, /func create\(_ body: MIRACreateWallNoteBody\)[\s\S]*?merge\(\[response\.note\]/);
@@ -182,7 +196,7 @@ test('Wall voice playback preserves position across app lifecycle and stops when
   assert.match(wallView, /UIApplication\.openSettingsURLString/);
 });
 
-test('Wall note taps, flipping, and signatures remain explicit and reachable', async () => {
+test('Wall note taps, exact-canvas lift, flipping, and signatures remain explicit and reachable', async () => {
   const wallView = await read('ios_native/MIRA/Sources/MIRANative/Screens/WallOfNotesNativeView.swift');
   const renderer = await read('ios_native/MIRA/Sources/MIRANative/Components/MIRAWallNoteRenderer.swift');
   const signatureCanvas = await read('ios_native/MIRA/Sources/MIRANative/Components/MIRAWallSignatureCanvas.swift');
@@ -196,7 +210,11 @@ test('Wall note taps, flipping, and signatures remain explicit and reachable', a
   assert.match(wallView, /MIRAWallSignatureCaptureView\(/);
   assert.match(signatureCanvas, /DragGesture\(minimumDistance: 0, coordinateSpace: \.local\)/);
   assert.match(signatureCanvas, /MIRAWallSignatureInkView\(drawing: drawing/);
-  assert.doesNotMatch(wallView, /matchedGeometryEffect/);
+  assert.match(wallView, /@Namespace private var noteCanvasTransition/);
+  assert.match(wallView, /id: "wall-note-\\\(note\.id\)"/);
+  assert.match(wallView, /transitionNamespace: noteCanvasTransition/);
+  assert.match(wallView, /isSource: true/);
+  assert.match(wallView, /isSource: false/);
   assert.doesNotMatch(renderer, /matchedGeometryEffect/);
 });
 

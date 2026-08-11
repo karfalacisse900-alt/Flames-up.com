@@ -349,6 +349,7 @@ public struct WallOfNotesNativeView: View {
   @State private var selectedStoryGroup: MIRAStoryGroup?
   @State private var storyReportTarget: MIRAReportTarget?
   @State private var isStoryReportSheetPresented = false
+  @Namespace private var noteCanvasTransition
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   init(api: MIRAAPIClient, storiesModel: DiscoverNativeModel) {
@@ -480,32 +481,36 @@ public struct WallOfNotesNativeView: View {
     }
     .background(MIRATheme.Color.surface)
     .overlay {
-      if isNoteDetailMounted, let note = selectedNote {
+      if let note = selectedNote {
         ZStack {
           Rectangle()
             .fill(.ultraThinMaterial)
             .ignoresSafeArea()
-            .transition(.opacity)
+            .opacity(isNoteDetailMounted ? 1 : 0)
 
-          Color.black.opacity(0.16)
+          Color.black.opacity(isNoteDetailMounted ? 0.16 : 0)
             .ignoresSafeArea()
             .contentShape(Rectangle())
-            .onTapGesture(perform: closeNote)
-            .transition(.opacity)
+            .onTapGesture {
+              if isNoteDetailMounted { closeNote() }
+            }
 
-          MIRAWallNoteDetailView(
-            note: note,
-            api: api,
-            model: model,
-            onChanged: { updated in
-              selectedNote = updated
-            },
-            onClose: closeNote
-          )
-          .padding(.horizontal, 10)
-          .padding(.vertical, 10)
-          .transition(.opacity)
+          if isNoteDetailMounted {
+            MIRAWallNoteDetailView(
+              note: note,
+              api: api,
+              model: model,
+              transitionNamespace: noteCanvasTransition,
+              onChanged: { updated in
+                selectedNote = updated
+              },
+              onClose: closeNote
+            )
+            .padding(note.resolvedCanvas == nil ? 10 : 0)
+          }
         }
+        .animation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion), value: isNoteDetailMounted)
+        .allowsHitTesting(isNoteDetailMounted)
         .zIndex(20_000)
       }
     }
@@ -573,7 +578,13 @@ public struct WallOfNotesNativeView: View {
         .rotationEffect(.degrees(note.rotation + presentation.microRotation))
         .scaleEffect(camera.scale)
         .position(center)
-        .opacity(isNoteDetailMounted && selectedNote?.id == note.id ? 0 : 1)
+        .matchedGeometryEffect(
+          id: "wall-note-\(note.id)",
+          in: noteCanvasTransition,
+          properties: .frame,
+          anchor: .center,
+          isSource: true
+        )
         .allowsHitTesting(false)
         .zIndex(Double(note.zIndex) + (liftedNoteID == note.id || selectedNote?.id == note.id ? 10_000 : 0))
       }
@@ -1656,7 +1667,8 @@ private struct MIRACreateWallNoteView: View {
           voiceMediaId: voiceResult?.mediaAssetId,
           voiceDurationSeconds: selectedMode == "voice" ? voiceRecorder.duration : nil,
           voiceWaveform: selectedMode == "voice" ? voiceRecorder.waveform : nil,
-          location: nil
+          location: nil,
+          canvas: nil
         )
         _ = try await onPublish(request)
         await MainActor.run {
@@ -1675,12 +1687,65 @@ private struct MIRACreateWallNoteView: View {
   }
 }
 
+private struct MIRANoteCanvasPhotoViewer: View {
+  let element: MIRANoteCanvasElement
+  let onClose: () -> Void
+
+  var body: some View {
+    ZStack {
+      Color.black.ignoresSafeArea()
+
+      MIRACachedImage(
+        url: element.mediaUrl,
+        fallbackURLs: [element.thumbnailUrl].compactMap { $0 },
+        maxPixelSize: 3_200,
+        animatesNetworkLoad: true,
+        keepsPreviousImageWhileLoading: true
+      ) { image in
+        image
+          .resizable()
+          .scaledToFit()
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+      } placeholder: {
+        ZStack {
+          Color.black
+          ProgressView()
+            .tint(.white)
+        }
+      }
+      .padding(.vertical, 54)
+
+      VStack {
+        HStack {
+          Spacer()
+          Button(action: onClose) {
+            Image(systemName: "xmark")
+              .font(.system(size: 16, weight: .bold))
+              .foregroundStyle(Color.white)
+              .frame(width: 44, height: 44)
+              .background(.black.opacity(0.58), in: Circle())
+              .overlay { Circle().stroke(Color.white.opacity(0.22), lineWidth: 0.8) }
+          }
+          .buttonStyle(.miraPress)
+          .accessibilityLabel("Close photo")
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 8)
+
+        Spacer()
+      }
+    }
+    .statusBarHidden(true)
+  }
+}
+
 private struct MIRAWallNoteDetailView: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var note: MIRAWallNote
   @ObservedObject private var voicePlayback = MIRAWallVoicePlaybackController.shared
   let api: MIRAAPIClient
   @ObservedObject var model: MIRAWallNotesModel
+  let transitionNamespace: Namespace.ID
   let onChanged: (MIRAWallNote) -> Void
   let onClose: () -> Void
 
@@ -1706,18 +1771,21 @@ private struct MIRAWallNoteDetailView: View {
   @State private var loadedCreatorID: String?
   @State private var isLoadingCreatorNotes = false
   @State private var creatorNotesError: String?
+  @State private var selectedCanvasPhoto: MIRANoteCanvasElement?
   @FocusState private var replyFocused: Bool
 
   init(
     note: MIRAWallNote,
     api: MIRAAPIClient,
     model: MIRAWallNotesModel,
+    transitionNamespace: Namespace.ID,
     onChanged: @escaping (MIRAWallNote) -> Void,
     onClose: @escaping () -> Void
   ) {
     _note = State(initialValue: note)
     self.api = api
     self.model = model
+    self.transitionNamespace = transitionNamespace
     self.onChanged = onChanged
     self.onClose = onClose
   }
@@ -1725,64 +1793,68 @@ private struct MIRAWallNoteDetailView: View {
   var body: some View {
     NavigationStack {
       ZStack {
-        MIRAWallDetailBackdrop(seed: note.id)
+        if let canvas = note.resolvedCanvas {
+          canvasDocumentDetail(canvas)
+        } else {
+          MIRAWallDetailBackdrop(seed: note.id)
 
-        VStack(spacing: 0) {
-          detailHeader
+          VStack(spacing: 0) {
+            detailHeader
 
-          ScrollViewReader { proxy in
-            ScrollView(showsIndicators: false) {
-              LazyVStack(spacing: 16) {
-                Group {
+            ScrollViewReader { proxy in
+              ScrollView(showsIndicators: false) {
+                LazyVStack(spacing: 16) {
+                  Group {
+                    if isPhotoNote {
+                      photoScrapbookSpread
+                    } else {
+                      noteStage
+                    }
+                  }
+                  .id("note-detail-top")
+
+                  noteMetadataPanel
+
+                  if note.capabilities.hasVoice {
+                    voicePlaybackPanel
+                  }
+
+                  actionRow
+
+                  if let errorMessage {
+                    Text(errorMessage)
+                      .font(.system(size: 12, weight: .semibold))
+                      .foregroundStyle(Color.red)
+                      .padding(.horizontal, 12)
+                      .frame(maxWidth: .infinity, minHeight: 38, alignment: .leading)
+                      .background(Color.red.opacity(0.07), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                  }
+
                   if isPhotoNote {
-                    photoScrapbookSpread
-                  } else {
-                    noteStage
+                    creatorScrapbookSection
+                  }
+
+                  if note.capabilities.canManageCollaboration || note.allowContributions == true || !contributions.isEmpty {
+                    collaborationSection
                   }
                 }
-                .id("note-detail-top")
-
-                noteMetadataPanel
-
-                if note.capabilities.hasVoice {
-                  voicePlaybackPanel
-                }
-
-                actionRow
-
-                if let errorMessage {
-                  Text(errorMessage)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Color.red)
-                    .padding(.horizontal, 12)
-                    .frame(maxWidth: .infinity, minHeight: 38, alignment: .leading)
-                    .background(Color.red.opacity(0.07), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                }
-
-                if isPhotoNote {
-                  creatorScrapbookSection
-                }
-
-                if note.capabilities.canManageCollaboration || note.allowContributions == true || !contributions.isEmpty {
-                  collaborationSection
+                .padding(.horizontal, 14)
+                .padding(.top, 12)
+                .padding(.bottom, 22)
+              }
+              .defaultScrollAnchor(.top)
+              .scrollDismissesKeyboard(.interactively)
+              .onAppear {
+                Task { @MainActor in
+                  await Task.yield()
+                  proxy.scrollTo("note-detail-top", anchor: .top)
                 }
               }
-              .padding(.horizontal, 14)
-              .padding(.top, 12)
-              .padding(.bottom, 22)
-            }
-            .defaultScrollAnchor(.top)
-            .scrollDismissesKeyboard(.interactively)
-            .onAppear {
-              Task { @MainActor in
-                await Task.yield()
-                proxy.scrollTo("note-detail-top", anchor: .top)
-              }
-            }
-            .onChange(of: note.id) { _, _ in
-              Task { @MainActor in
-                await Task.yield()
-                proxy.scrollTo("note-detail-top", anchor: .top)
+              .onChange(of: note.id) { _, _ in
+                Task { @MainActor in
+                  await Task.yield()
+                  proxy.scrollTo("note-detail-top", anchor: .top)
+                }
               }
             }
           }
@@ -1834,15 +1906,276 @@ private struct MIRAWallNoteDetailView: View {
       } message: {
         Text("You can draw a new signature later.")
       }
+      .fullScreenCover(item: $selectedCanvasPhoto) { element in
+        MIRANoteCanvasPhotoViewer(element: element) {
+          selectedCanvasPhoto = nil
+        }
+      }
     }
-    .frame(maxWidth: 420, maxHeight: .infinity, alignment: .top)
-    .background(MIRATheme.Color.surface)
-    .clipShape(RoundedRectangle(cornerRadius: 30, style: .continuous))
+    .frame(maxWidth: note.resolvedCanvas == nil ? 420 : .infinity, maxHeight: .infinity, alignment: .top)
+    .background(note.resolvedCanvas == nil ? MIRATheme.Color.surface : Color.clear)
+    .clipShape(RoundedRectangle(cornerRadius: note.resolvedCanvas == nil ? 30 : 0, style: .continuous))
     .overlay {
-      RoundedRectangle(cornerRadius: 30, style: .continuous)
-        .stroke(Color.white.opacity(0.56), lineWidth: 1)
+      if note.resolvedCanvas == nil {
+        RoundedRectangle(cornerRadius: 30, style: .continuous)
+          .stroke(Color.white.opacity(0.56), lineWidth: 1)
+      }
     }
-    .shadow(color: .black.opacity(0.20), radius: 28, y: 14)
+    .shadow(color: .black.opacity(note.resolvedCanvas == nil ? 0.20 : 0), radius: 28, y: 14)
+  }
+
+  private func canvasDocumentDetail(_ canvas: MIRANoteCanvas) -> some View {
+    GeometryReader { proxy in
+      let pageWidth = max(1, proxy.size.width - 10)
+      let pageHeight = pageWidth / CGFloat(max(0.25, canvas.aspectRatio))
+
+      ZStack(alignment: .top) {
+        CaptroPhotographedPaper(
+          seed: "note-detail-stage-\(note.id)",
+          kind: .linen,
+          base: Color(red: 0.155, green: 0.145, blue: 0.128),
+          textureOpacity: 0.58,
+          directionalLight: 0.10
+        )
+          .ignoresSafeArea()
+          .overlay {
+            LinearGradient(
+              colors: [Color.white.opacity(0.025), Color.clear, Color.black.opacity(0.12)],
+              startPoint: .topLeading,
+              endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
+            .allowsHitTesting(false)
+          }
+
+        ScrollView(showsIndicators: false) {
+          VStack(spacing: 0) {
+            MIRANoteCanvasRenderer(
+              canvas: canvas,
+              mode: .detail,
+              onOpenPhoto: { element in
+                selectedCanvasPhoto = element
+              }
+            )
+            .frame(width: pageWidth, height: pageHeight)
+            .background(Color.clear)
+            .overlay {
+              Rectangle()
+                .stroke(Color.white.opacity(0.12), lineWidth: 0.7)
+                .allowsHitTesting(false)
+            }
+            .captroMaterialShadow(.lifted, seed: "opened-note-\(note.id)")
+            .matchedGeometryEffect(
+              id: "wall-note-\(note.id)",
+              in: transitionNamespace,
+              properties: .frame,
+              anchor: .center,
+              isSource: false
+            )
+            .accessibilityLabel("Designed note canvas")
+
+            canvasDocumentFooter
+              .frame(width: max(1, pageWidth - 16))
+              .padding(.top, 12)
+              .padding(.bottom, 8)
+          }
+          .frame(maxWidth: .infinity)
+          .padding(.bottom, max(24, proxy.safeAreaInsets.bottom + 14))
+        }
+        .scrollDismissesKeyboard(.immediately)
+
+        canvasFloatingHeader
+          .padding(.horizontal, 12)
+          .padding(.top, max(8, proxy.safeAreaInsets.top + 2))
+      }
+    }
+  }
+
+  private var canvasFloatingHeader: some View {
+    HStack(spacing: 12) {
+      Button(action: onClose) {
+        Image(systemName: "xmark")
+          .font(.system(size: 15, weight: .bold))
+          .foregroundStyle(canvasInk)
+          .frame(width: 44, height: 44)
+          .background {
+            CaptroPhotographedPaper(
+              seed: "note-close-\(note.id)",
+              kind: .archival,
+              base: canvasPaper,
+              textureOpacity: 0.40,
+              directionalLight: 0.18
+            )
+            .clipShape(Circle())
+          }
+          .overlay { Circle().stroke(canvasInk.opacity(0.10), lineWidth: 0.7) }
+          .captroMaterialShadow(.lifted, seed: "note-close-\(note.id)")
+      }
+      .buttonStyle(.miraPress)
+      .accessibilityLabel("Close note")
+
+      Spacer(minLength: 0)
+
+      Menu {
+        Button("Report", systemImage: "exclamationmark.triangle") {
+          reportTarget = MIRAReportTarget(
+            targetType: "wall_note",
+            targetId: note.id,
+            ownerUserId: note.authorPreview?.userId,
+            title: "Wall note",
+            subtitle: String(note.body.prefix(90))
+          )
+        }
+      } label: {
+        Image(systemName: "ellipsis")
+          .font(.system(size: 16, weight: .bold))
+          .foregroundStyle(canvasInk)
+          .frame(width: 44, height: 44)
+          .background {
+            CaptroPhotographedPaper(
+              seed: "note-options-\(note.id)",
+              kind: .archival,
+              base: canvasPaper,
+              textureOpacity: 0.40,
+              directionalLight: 0.18
+            )
+            .clipShape(Circle())
+          }
+          .overlay { Circle().stroke(canvasInk.opacity(0.10), lineWidth: 0.7) }
+          .captroMaterialShadow(.lifted, seed: "note-options-\(note.id)")
+      }
+      .buttonStyle(.plain)
+      .accessibilityLabel("Note options")
+    }
+  }
+
+  private var canvasDocumentFooter: some View {
+    VStack(spacing: 12) {
+      HStack(spacing: 10) {
+        if note.isGhost {
+          Image(systemName: "theatermask.and.paintbrush")
+            .font(.system(size: 16, weight: .semibold))
+            .frame(width: 38, height: 38)
+            .background(canvasInk.opacity(0.06), in: Circle())
+          Text("Ghost Note")
+            .font(.system(size: 14, weight: .semibold))
+        } else if let author = note.authorPreview {
+          MIRAWallAvatar(url: author.avatarUrl)
+          VStack(alignment: .leading, spacing: 2) {
+            Text(author.title)
+              .font(.system(size: 14, weight: .semibold))
+            if let time = relativeTime(note.createdAt), !time.isEmpty {
+              Text(time)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(canvasInk.opacity(0.58))
+            }
+          }
+        }
+
+        Spacer(minLength: 0)
+      }
+      .foregroundStyle(canvasInk)
+
+      Rectangle()
+        .fill(canvasInk.opacity(0.10))
+        .frame(height: 0.6)
+
+      HStack(spacing: 2) {
+        canvasAction(
+          title: "Felt this",
+          icon: note.reactedByViewer ? "heart.fill" : "heart",
+          tint: note.reactedByViewer ? MIRATheme.Color.like : canvasInk,
+          action: toggleReaction
+        )
+
+        if note.capabilities.canSign {
+          canvasAction(
+            title: note.signedByViewer == true ? "Signed" : "Sign note",
+            icon: "pencil.line",
+            tint: canvasInk
+          ) {
+            if note.signedByViewer == true {
+              showSignatureRemoval = true
+            } else {
+              signatureError = nil
+              showSignatureCapture = true
+            }
+          }
+        }
+
+        canvasAction(
+          title: note.savedByViewer ? "Saved" : "Save",
+          icon: note.savedByViewer ? "bookmark.fill" : "bookmark",
+          tint: canvasInk,
+          action: toggleSaved
+        )
+
+        ShareLink(item: URL(string: "https://captro.app/wall/notes/\(note.id)")!) {
+          canvasActionLabel(title: "Share", icon: "square.and.arrow.up", tint: canvasInk)
+        }
+        .accessibilityLabel("Share note")
+      }
+
+      if let errorMessage {
+        Text(errorMessage)
+          .font(.system(size: 11, weight: .semibold))
+          .foregroundStyle(Color(red: 0.56, green: 0.16, blue: 0.14))
+          .frame(maxWidth: .infinity, alignment: .leading)
+      }
+    }
+    .padding(.horizontal, 14)
+    .padding(.vertical, 12)
+    .background {
+      CaptroPhotographedPaper(
+        seed: "note-footer-\(note.id)",
+        kind: .archival,
+        base: canvasPaper,
+        textureOpacity: 0.44,
+        directionalLight: 0.16
+      )
+      .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+    }
+    .overlay {
+      RoundedRectangle(cornerRadius: 4, style: .continuous)
+        .stroke(canvasInk.opacity(0.10), lineWidth: 0.7)
+    }
+    .captroMaterialShadow(.taped, seed: "note-footer-\(note.id)")
+  }
+
+  private func canvasAction(
+    title: String,
+    icon: String,
+    tint: Color,
+    action: @escaping () -> Void
+  ) -> some View {
+    Button(action: action) {
+      canvasActionLabel(title: title, icon: icon, tint: tint)
+    }
+    .buttonStyle(.miraPress)
+    .disabled(isMutating)
+  }
+
+  private func canvasActionLabel(title: String, icon: String, tint: Color) -> some View {
+    VStack(spacing: 4) {
+      Image(systemName: icon)
+        .font(.system(size: 17, weight: .semibold))
+        .foregroundStyle(tint)
+      Text(title)
+        .font(.system(size: 9, weight: .semibold))
+        .foregroundStyle(canvasInk.opacity(0.78))
+        .lineLimit(1)
+        .minimumScaleFactor(0.8)
+    }
+    .frame(maxWidth: .infinity, minHeight: 44)
+    .contentShape(Rectangle())
+  }
+
+  private var canvasInk: Color {
+    Color(red: 0.16, green: 0.135, blue: 0.105)
+  }
+
+  private var canvasPaper: Color {
+    Color(red: 0.94, green: 0.91, blue: 0.83)
   }
 
   private var detailVisualSize: CGSize {

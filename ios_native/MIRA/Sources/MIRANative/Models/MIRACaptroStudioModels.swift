@@ -32,7 +32,25 @@ public enum MIRACaptroStudioFontStyle: String, Codable, CaseIterable, Identifiab
   }
 }
 
+public enum MIRACaptroStudioPhotoFrame: String, Codable, CaseIterable, Identifiable {
+  case print
+  case polaroid
+
+  public var id: String { rawValue }
+
+  public var title: String {
+    switch self {
+    case .print: return "Photo"
+    case .polaroid: return "Polaroid"
+    }
+  }
+}
+
 public enum MIRACaptroStudioObject: String, Codable, CaseIterable, Identifiable {
+  case tornPaper
+  case texturedPaper
+  case handDrawnArrow
+  case organicShape
   case tape
   case paperclip
   case pushPin
@@ -48,6 +66,10 @@ public enum MIRACaptroStudioObject: String, Codable, CaseIterable, Identifiable 
 
   public var title: String {
     switch self {
+    case .tornPaper: return "Torn paper"
+    case .texturedPaper: return "Paper scrap"
+    case .handDrawnArrow: return "Drawing"
+    case .organicShape: return "Shape"
     case .tape: return "Tape"
     case .paperclip: return "Paperclip"
     case .pushPin: return "Push pin"
@@ -63,6 +85,10 @@ public enum MIRACaptroStudioObject: String, Codable, CaseIterable, Identifiable 
 
   public var systemImage: String {
     switch self {
+    case .tornPaper: return "doc.text.image"
+    case .texturedPaper: return "rectangle.on.rectangle"
+    case .handDrawnArrow: return "scribble.variable"
+    case .organicShape: return "seal"
     case .tape: return "rectangle.fill"
     case .paperclip: return "paperclip"
     case .pushPin: return "pin.fill"
@@ -92,9 +118,14 @@ public struct MIRACaptroStudioLayer: Identifiable, Codable, Hashable {
   public var colorToken: String
   public var secondaryColorToken: String?
   public var object: MIRACaptroStudioObject?
+  public var photoFrame: MIRACaptroStudioPhotoFrame?
   public var mediaKey: String?
   public var value: String?
   public var opacity: CGFloat
+  public var isLocked: Bool?
+  public var cropX: CGFloat?
+  public var cropY: CGFloat?
+  public var cropScale: CGFloat?
 
   public init(
     id: String = UUID().uuidString,
@@ -111,9 +142,14 @@ public struct MIRACaptroStudioLayer: Identifiable, Codable, Hashable {
     colorToken: String = "ink",
     secondaryColorToken: String? = nil,
     object: MIRACaptroStudioObject? = nil,
+    photoFrame: MIRACaptroStudioPhotoFrame? = nil,
     mediaKey: String? = nil,
     value: String? = nil,
-    opacity: CGFloat = 1
+    opacity: CGFloat = 1,
+    isLocked: Bool? = false,
+    cropX: CGFloat? = nil,
+    cropY: CGFloat? = nil,
+    cropScale: CGFloat? = nil
   ) {
     self.id = id
     self.kind = kind
@@ -129,9 +165,14 @@ public struct MIRACaptroStudioLayer: Identifiable, Codable, Hashable {
     self.colorToken = colorToken
     self.secondaryColorToken = secondaryColorToken
     self.object = object
+    self.photoFrame = photoFrame
     self.mediaKey = mediaKey
     self.value = value
     self.opacity = opacity
+    self.isLocked = isLocked
+    self.cropX = cropX
+    self.cropY = cropY
+    self.cropScale = cropScale
   }
 
   public static func paper(color: String, zIndex: Int = 0) -> Self {
@@ -145,6 +186,7 @@ public struct MIRACaptroStudioLayer: Identifiable, Codable, Hashable {
     height: CGFloat,
     rotation: CGFloat = 0,
     zIndex: Int,
+    frame: MIRACaptroStudioPhotoFrame = .polaroid,
     mediaKey: String = UUID().uuidString
   ) -> Self {
     Self(
@@ -156,6 +198,7 @@ public struct MIRACaptroStudioLayer: Identifiable, Codable, Hashable {
       rotation: rotation,
       zIndex: zIndex,
       colorToken: "photoPaper",
+      photoFrame: frame,
       mediaKey: mediaKey
     )
   }
@@ -245,19 +288,25 @@ public enum MIRACaptroStudioTemplate: String, Codable, CaseIterable, Identifiabl
   case travelJournal
   case filmStrip
   case letter
+  case recipeBook
+
+  public static var creationTemplates: [Self] {
+    [.yearbook, .travelJournal, .memoryBox, .letter, .blankPaper, .filmStrip, .recipeBook]
+  }
 
   public var id: String { rawValue }
 
   public var title: String {
     switch self {
-    case .blankPaper: return "Blank Paper"
+    case .blankPaper: return "Minimal"
     case .vintageBroadcast: return "Vintage Broadcast"
     case .musicPocket: return "Music Pocket"
-    case .yearbook: return "Yearbook"
-    case .memoryBox: return "Memory Box"
-    case .travelJournal: return "Travel Journal"
-    case .filmStrip: return "Film Strip"
-    case .letter: return "Letter"
+    case .yearbook: return "Journal"
+    case .memoryBox: return "Scrapbook"
+    case .travelJournal: return "Travel Diary"
+    case .filmStrip: return "Dark Album"
+    case .letter: return "Notebook"
+    case .recipeBook: return "Recipe Book"
     }
   }
 
@@ -271,6 +320,7 @@ public enum MIRACaptroStudioTemplate: String, Codable, CaseIterable, Identifiabl
     case .travelJournal: return "Photos, tickets, and stamps"
     case .filmStrip: return "A sequence of three frames"
     case .letter: return "Write something worth keeping"
+    case .recipeBook: return "Recipes, photos, and kitchen notes"
     }
   }
 
@@ -284,6 +334,19 @@ public enum MIRACaptroStudioTemplate: String, Codable, CaseIterable, Identifiabl
     case .travelJournal: return "airplane"
     case .filmStrip: return "film.stack"
     case .letter: return "envelope"
+    case .recipeBook: return "fork.knife"
+    }
+  }
+
+  /// The document height is part of the authored composition. Journal-style
+  /// templates intentionally use a taller page so the Wall preview and detail
+  /// view render the exact same geometry without reflowing text or photos.
+  public var canvasDesignHeight: Double {
+    switch self {
+    case .blankPaper, .vintageBroadcast, .musicPocket, .filmStrip:
+      return 1_350
+    case .yearbook, .memoryBox, .travelJournal, .letter, .recipeBook:
+      return 1_620
     }
   }
 
@@ -339,6 +402,13 @@ public enum MIRACaptroStudioTemplate: String, Codable, CaseIterable, Identifiabl
       layers.append(.text("Write something you want to remember.", x: 0.5, y: 0.46, width: 0.72, height: 0.30, zIndex: 2, font: .handwritten))
       layers.append(.object(.passportStamp, x: 0.75, y: 0.78, width: 0.20, height: 0.15, rotation: -0.08, zIndex: 3, color: "stamp"))
       layers.append(.object(.coffeeStain, x: 0.22, y: 0.77, width: 0.24, height: 0.20, zIndex: 4, color: "coffee"))
+
+    case .recipeBook:
+      layers.append(.text("MY RECIPE BOOK", x: 0.5, y: 0.12, width: 0.78, zIndex: 1, font: .editorial, color: "rust"))
+      layers.append(.photo(x: 0.34, y: 0.43, width: 0.46, height: 0.34, rotation: -0.045, zIndex: 2, mediaKey: "recipe-1"))
+      layers.append(.photo(x: 0.70, y: 0.67, width: 0.40, height: 0.30, rotation: 0.045, zIndex: 3, mediaKey: "recipe-2"))
+      layers.append(.text("Ingredients, memories, and the little details worth making again.", x: 0.67, y: 0.37, width: 0.43, height: 0.24, zIndex: 4, font: .handwritten))
+      layers.append(.object(.pressedFlower, x: 0.20, y: 0.78, width: 0.17, height: 0.17, rotation: -0.12, zIndex: 5, color: "sage"))
     }
 
     return MIRACaptroStudioDocument(template: self, backgroundToken: backgroundToken, layers: layers)
@@ -353,6 +423,19 @@ public enum MIRACaptroStudioTemplate: String, Codable, CaseIterable, Identifiabl
     case .memoryBox: return "kraftPaper"
     case .travelJournal: return "travelPaper"
     case .filmStrip: return "charcoalPaper"
+    case .recipeBook: return "recipePaper"
+    }
+  }
+
+  public var noteCanvasTemplate: MIRANoteCanvasTemplate {
+    switch self {
+    case .yearbook: return .journal
+    case .travelJournal: return .travelDiary
+    case .memoryBox, .vintageBroadcast, .musicPocket: return .scrapbook
+    case .letter: return .notebook
+    case .blankPaper: return .minimal
+    case .filmStrip: return .darkAlbum
+    case .recipeBook: return .recipeBook
     }
   }
 }
@@ -386,9 +469,6 @@ public struct MIRACaptroStudioDocument: Identifiable, Codable, Hashable {
     copy.x = min(0.94, copy.x + 0.045)
     copy.y = min(0.94, copy.y + 0.045)
     copy.zIndex = nextZIndex
-    if copy.kind == .photo {
-      copy.mediaKey = UUID().uuidString
-    }
     layers.append(copy)
     return copy.id
   }
