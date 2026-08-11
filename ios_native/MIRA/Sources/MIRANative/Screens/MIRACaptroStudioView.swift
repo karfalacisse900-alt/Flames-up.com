@@ -916,7 +916,7 @@ public struct MIRACaptroStudioView: View {
     uploads: [String: MIRAMediaUploadResult]
   ) -> MIRANoteCanvas {
     let designHeight = document.template.canvasDesignHeight
-    buildNoteCanvas(document: document) { layer in
+    return buildNoteCanvas(document: document) { layer in
       makeCanvasElement(
         layer,
         upload: layer.mediaKey.flatMap { uploads[$0] },
@@ -927,7 +927,7 @@ public struct MIRACaptroStudioView: View {
 
   private func makeDraftNoteCanvas(document: MIRACaptroStudioDocument) -> MIRANoteCanvas {
     let designHeight = document.template.canvasDesignHeight
-    buildNoteCanvas(document: document) { layer in
+    return buildNoteCanvas(document: document) { layer in
       makeCanvasElement(
         layer,
         upload: nil,
