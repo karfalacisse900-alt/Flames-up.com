@@ -271,8 +271,8 @@ jobs:
               --build_number "$BUILD_NUMBER" \
               --groups "Captro Public Beta" \
               --distribute_external true \
-              --notify_external_testers true \
-              --submit_beta_review true \
+              --notify_external_testers false \
+              --submit_beta_review false \
               --wait_processing_interval 30 \
               --wait_processing_timeout_duration 1800 \
               --changelog "Polished Yearbook browsing, responsive book spreads, clearer profiles, filters, and smoother page turns." \
