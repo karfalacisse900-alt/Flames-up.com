@@ -761,6 +761,12 @@ public struct MIRACaptroStudioView: View {
     self.document = document
   }
 
+  private func toggleSelectedLayerLock() {
+    updateSelectedLayer { layer in
+      layer.isLocked = !(layer.isLocked ?? false)
+    }
+  }
+
   private func duplicateSelectedLayer() {
     guard let selectedLayerID, var document else { return }
     guard let newID = document.duplicateLayer(id: selectedLayerID) else { return }
