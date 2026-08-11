@@ -1166,11 +1166,18 @@ private struct YearbookCenterBinding: View {
 }
 
 private struct YearbookPageHoles: View {
+  var count = 7
+
   var body: some View {
     GeometryReader { proxy in
-      let spacing = proxy.size.height / 7
-      VStack(spacing: max(8, spacing - 12)) {
-        ForEach(0..<7, id: \.self) { _ in
+      let safeCount = max(count, 1)
+      let holesHeight = CGFloat(safeCount) * 11
+      let spacing = safeCount > 1
+        ? max(0, (proxy.size.height - holesHeight) / CGFloat(safeCount - 1))
+        : 0
+
+      VStack(spacing: spacing) {
+        ForEach(0..<safeCount, id: \.self) { _ in
           Circle()
             .fill(Color(red: 0.38, green: 0.31, blue: 0.22).opacity(0.72))
             .overlay {
@@ -1180,7 +1187,7 @@ private struct YearbookPageHoles: View {
             .shadow(color: Color.black.opacity(0.22), radius: 1, x: 1, y: 1)
         }
       }
-      .frame(maxHeight: .infinity)
+      .frame(maxHeight: .infinity, alignment: .top)
     }
   }
 }
@@ -1711,7 +1718,7 @@ private struct YearbookProfileDetailView: View {
 
   private func profilePage(pageWidth: CGFloat) -> some View {
     let designWidth: CGFloat = 390
-    let designHeight: CGFloat = 604
+    let designHeight: CGFloat = 684
     let scale = pageWidth / designWidth
 
     return scrapbookProfileCanvas
@@ -1722,7 +1729,7 @@ private struct YearbookProfileDetailView: View {
 
   private var scrapbookProfileCanvas: some View {
     ZStack(alignment: .topLeading) {
-      RoundedRectangle(cornerRadius: 9, style: .continuous)
+      RoundedRectangle(cornerRadius: 26, style: .continuous)
         .fill(Color(red: 0.13, green: 0.10, blue: 0.07))
         .offset(x: -4, y: 7)
 
@@ -1738,56 +1745,64 @@ private struct YearbookProfileDetailView: View {
 
       YearbookScrapbookDepthLayer()
 
-      scrapbookProfilePhoto
-        .frame(width: 142, height: 169)
-        .rotationEffect(.degrees(-2.1))
-        .position(x: 112, y: 96)
+      VStack(alignment: .leading, spacing: 0) {
+        HStack(alignment: .top, spacing: 14) {
+          scrapbookProfilePhoto
+            .frame(width: 137, height: 166)
+            .rotationEffect(.degrees(-3))
 
-      scrapbookIdentityPanel
-        .frame(width: 181, height: 145, alignment: .topLeading)
-        .position(x: 284, y: 94)
+          scrapbookIdentityPanel
+            .frame(width: 187, height: 154, alignment: .topLeading)
+        }
+        .frame(height: 172, alignment: .top)
+
+        HStack(alignment: .top, spacing: 12) {
+          scrapbookAboutPanel
+            .frame(width: 147, height: 132)
+            .rotationEffect(.degrees(-1.25))
+
+          scrapbookDetailsPanel
+            .frame(width: 179, height: 132)
+            .rotationEffect(.degrees(0.65))
+        }
+        .padding(.top, 26)
+
+        HStack(alignment: .top, spacing: 12) {
+          scrapbookInterestsPanel
+            .frame(width: 171, height: 88)
+            .rotationEffect(.degrees(-0.55))
+
+          scrapbookPromptPanel
+            .frame(width: 155, height: 88)
+            .rotationEffect(.degrees(1.05))
+        }
+        .padding(.top, 14)
+
+        HStack(alignment: .top, spacing: 12) {
+          scrapbookSongPanel
+            .frame(width: 163, height: 92)
+            .rotationEffect(.degrees(0.45))
+
+          scrapbookPlacePanel
+            .frame(width: 163, height: 92)
+            .rotationEffect(.degrees(-0.85))
+        }
+        .padding(.top, 14)
+
+        referenceActions
+          .frame(width: 338, height: 64)
+          .padding(.top, 18)
+      }
+      .frame(width: 338, alignment: .topLeading)
+      .offset(x: 34, y: 24)
 
       YearbookPressedFlowers()
         .frame(width: 58, height: 72)
-        .position(x: 350, y: 146)
+        .position(x: 350, y: 159)
 
-      scrapbookAboutPanel
-        .frame(width: 139, height: 119)
-        .rotationEffect(.degrees(-1.25))
-        .position(x: 110, y: 247)
-
-      scrapbookDetailsPanel
-        .frame(width: 169, height: 121)
-        .rotationEffect(.degrees(0.65))
-        .position(x: 277, y: 247)
-
-      scrapbookInterestsPanel
-        .frame(width: 154, height: 78)
-        .rotationEffect(.degrees(-0.55))
-        .position(x: 113, y: 365)
-
-      scrapbookPromptPanel
-        .frame(width: 141, height: 70)
-        .rotationEffect(.degrees(1.05))
-        .position(x: 287, y: 369)
-
-      scrapbookSongPanel
-        .frame(width: 154, height: 81)
-        .rotationEffect(.degrees(0.45))
-        .position(x: 113, y: 458)
-
-      scrapbookPlacePanel
-        .frame(width: 146, height: 81)
-        .rotationEffect(.degrees(-0.85))
-        .position(x: 287, y: 458)
-
-      referenceActions
-        .frame(width: 324, height: 60)
-        .position(x: 199, y: 549)
-
-      YearbookPageHoles()
-        .frame(width: 18, height: 548)
-        .offset(x: 4, y: 28)
+      YearbookPageHoles(count: 13)
+        .frame(width: 18, height: 640)
+        .offset(x: 4, y: 22)
         .allowsHitTesting(false)
 
       Button { dismiss() } label: {
@@ -1817,10 +1832,10 @@ private struct YearbookProfileDetailView: View {
       .offset(x: 340, y: 10)
       .accessibilityLabel("Profile options")
     }
-    .frame(width: 390, height: 604, alignment: .topLeading)
-    .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+    .frame(width: 390, height: 684, alignment: .topLeading)
+    .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
     .overlay {
-      RoundedRectangle(cornerRadius: 9, style: .continuous)
+      RoundedRectangle(cornerRadius: 26, style: .continuous)
         .stroke(Color.black.opacity(0.30), lineWidth: 1.1)
     }
     .shadow(color: Color.black.opacity(0.46), radius: 20, x: 3, y: 12)
@@ -1921,10 +1936,9 @@ private struct YearbookProfileDetailView: View {
       base: Color(red: 0.963, green: 0.904, blue: 0.745),
       seed: "about-\(model.profile.id)"
     ) {
-      VStack(alignment: .leading, spacing: 9) {
-        YearbookTapeLabel(title: "ABOUT ME", color: Color(red: 0.86, green: 0.72, blue: 0.44))
+      VStack(alignment: .leading, spacing: 6) {
         Text(aboutMeText)
-          .font(.custom("Noteworthy-Bold", fixedSize: 14.5))
+          .font(.custom("Noteworthy-Bold", fixedSize: 15.5))
           .foregroundStyle(Color.black.opacity(0.88))
           .lineLimit(5)
           .minimumScaleFactor(0.70)
@@ -1936,6 +1950,10 @@ private struct YearbookProfileDetailView: View {
           .foregroundStyle(Color.black.opacity(0.65))
       }
     }
+    .overlay(alignment: .topLeading) {
+      YearbookTapeLabel(title: "ABOUT ME", color: Color(red: 0.86, green: 0.72, blue: 0.44))
+        .offset(x: 12, y: -11)
+    }
   }
 
   private var scrapbookDetailsPanel: some View {
@@ -1943,23 +1961,25 @@ private struct YearbookProfileDetailView: View {
       base: Color(red: 0.965, green: 0.940, blue: 0.865),
       seed: "details-\(model.profile.id)"
     ) {
-      VStack(alignment: .leading, spacing: 6) {
-        YearbookTapeLabel(title: "DETAILS", color: Color(red: 0.82, green: 0.69, blue: 0.51))
-        VStack(alignment: .leading, spacing: 3) {
-          ForEach(referenceDetails.prefix(5)) { item in
-            HStack(alignment: .firstTextBaseline, spacing: 4) {
-              Text(item.label)
-                .font(.system(size: 9.2, weight: .medium, design: .serif))
-                .frame(width: 45, alignment: .leading)
-              Text(item.value)
-                .font(.system(size: 10.2, weight: .semibold, design: .serif))
-                .lineLimit(1)
-                .minimumScaleFactor(0.62)
-            }
-            .foregroundStyle(Color.black.opacity(0.80))
+      VStack(alignment: .leading, spacing: 4.5) {
+        ForEach(referenceDetails.prefix(5)) { item in
+          HStack(alignment: .firstTextBaseline, spacing: 5) {
+            Text(item.label)
+              .font(.system(size: 10, weight: .medium, design: .serif))
+              .foregroundStyle(Color.black.opacity(0.56))
+              .frame(width: 50, alignment: .leading)
+            Text(item.value)
+              .font(.system(size: 11.1, weight: .semibold, design: .serif))
+              .foregroundStyle(Color.black.opacity(0.82))
+              .lineLimit(1)
+              .minimumScaleFactor(0.60)
           }
         }
       }
+    }
+    .overlay(alignment: .topLeading) {
+      YearbookTapeLabel(title: "DETAILS", color: Color(red: 0.82, green: 0.69, blue: 0.51))
+        .offset(x: 12, y: -11)
     }
   }
 
@@ -1969,23 +1989,31 @@ private struct YearbookProfileDetailView: View {
       ruled: false,
       seed: "interests-\(model.profile.id)"
     ) {
-      VStack(alignment: .leading, spacing: 7) {
-        YearbookTapeLabel(title: "INTERESTS", color: Color(red: 0.55, green: 0.70, blue: 0.82))
-        HStack(spacing: 7) {
-          ForEach(referenceInterests, id: \.self) { interest in
-            VStack(spacing: 2) {
+      HStack(spacing: 4) {
+        ForEach(referenceInterests, id: \.self) { interest in
+          VStack(spacing: 3) {
+            ZStack {
+              Circle()
+                .fill(Color(red: 0.93, green: 0.95, blue: 0.91))
               Image(systemName: yearbookInterestIcon(interest))
-                .font(.system(size: 15.5, weight: .semibold))
-              Text(interest)
-                .font(.system(size: 7.9, weight: .bold))
-                .lineLimit(1)
-                .minimumScaleFactor(0.58)
+                .font(.system(size: 14, weight: .semibold))
             }
-            .frame(maxWidth: .infinity)
+            .frame(width: 28, height: 28)
+
+            Text(interest)
+              .font(.system(size: 8.4, weight: .semibold))
+              .foregroundStyle(Color.black.opacity(0.60))
+              .lineLimit(1)
+              .minimumScaleFactor(0.52)
           }
+          .frame(maxWidth: .infinity)
         }
-        .foregroundStyle(Color.black.opacity(0.80))
       }
+      .foregroundStyle(Color.black.opacity(0.80))
+    }
+    .overlay(alignment: .topLeading) {
+      YearbookTapeLabel(title: "INTERESTS", color: Color(red: 0.55, green: 0.70, blue: 0.82))
+        .offset(x: 12, y: -11)
     }
   }
 
@@ -1995,18 +2023,15 @@ private struct YearbookProfileDetailView: View {
       ruled: true,
       seed: "prompt-\(model.profile.id)"
     ) {
-      VStack(alignment: .leading, spacing: 6) {
-        YearbookTapeLabel(title: promptTitle, color: Color(red: 0.87, green: 0.66, blue: 0.68))
-        HStack(alignment: .bottom, spacing: 4) {
-          Text(promptAnswer)
-            .font(.system(size: 11.2, weight: .semibold, design: .serif))
-            .foregroundStyle(Color.black.opacity(0.86))
-            .lineLimit(3)
-            .minimumScaleFactor(0.68)
-            .frame(maxWidth: .infinity, alignment: .leading)
-          Image(systemName: "cup.and.saucer")
-            .font(.system(size: 12, weight: .medium))
-        }
+      HStack(alignment: .bottom, spacing: 4) {
+        Text(promptAnswer)
+          .font(.custom("Noteworthy-Bold", fixedSize: 12.3))
+          .foregroundStyle(Color.black.opacity(0.86))
+          .lineLimit(3)
+          .minimumScaleFactor(0.66)
+          .frame(maxWidth: .infinity, alignment: .leading)
+        Image(systemName: "cup.and.saucer")
+          .font(.system(size: 12, weight: .medium))
       }
       .overlay(alignment: .topTrailing) {
         Circle()
@@ -2016,6 +2041,10 @@ private struct YearbookProfileDetailView: View {
           .padding(.trailing, 6)
       }
     }
+    .overlay(alignment: .topLeading) {
+      YearbookTapeLabel(title: promptTitle, color: Color(red: 0.87, green: 0.66, blue: 0.68))
+        .offset(x: 12, y: -11)
+    }
   }
 
   private var scrapbookSongPanel: some View {
@@ -2024,28 +2053,30 @@ private struct YearbookProfileDetailView: View {
       ruled: false,
       seed: "song-\(model.profile.id)"
     ) {
-      VStack(alignment: .leading, spacing: 6) {
-        YearbookTapeLabel(title: "FAVORITE SONG", color: Color(red: 0.59, green: 0.70, blue: 0.48))
-        HStack(spacing: 8) {
-          ZStack {
-            Rectangle().fill(Color.black.opacity(0.82))
-            Image(systemName: "music.note")
-              .font(.system(size: 13, weight: .medium))
-              .foregroundStyle(Color.white.opacity(0.90))
-          }
-          .frame(width: 39, height: 39)
-
-          VStack(alignment: .leading, spacing: 3) {
-            Text(favoriteSong)
-              .font(.system(size: 10.3, weight: .bold, design: .serif))
-              .lineLimit(2)
-              .minimumScaleFactor(0.64)
-            YearbookWaveform()
-              .frame(width: 76, height: 13)
-          }
-          .foregroundStyle(Color.black.opacity(0.82))
+      HStack(spacing: 8) {
+        ZStack {
+          RoundedRectangle(cornerRadius: 3, style: .continuous)
+            .fill(Color.black.opacity(0.84))
+          Image(systemName: "music.note")
+            .font(.system(size: 14, weight: .medium))
+            .foregroundStyle(Color.white.opacity(0.92))
         }
+        .frame(width: 42, height: 42)
+
+        VStack(alignment: .leading, spacing: 4) {
+          Text(favoriteSong)
+            .font(.system(size: 11.2, weight: .bold, design: .serif))
+            .lineLimit(2)
+            .minimumScaleFactor(0.62)
+          YearbookWaveform()
+            .frame(width: 76, height: 14)
+        }
+        .foregroundStyle(Color.black.opacity(0.82))
       }
+    }
+    .overlay(alignment: .topLeading) {
+      YearbookTapeLabel(title: "FAVORITE SONG", color: Color(red: 0.59, green: 0.70, blue: 0.48))
+        .offset(x: 12, y: -11)
     }
   }
 
@@ -2055,21 +2086,22 @@ private struct YearbookProfileDetailView: View {
       ruled: false,
       seed: "place-\(model.profile.id)"
     ) {
-      VStack(alignment: .leading, spacing: 6) {
-        YearbookTapeLabel(title: "FAVORITE PLACE", color: Color(red: 0.64, green: 0.61, blue: 0.73))
-        HStack(spacing: 7) {
-          YearbookMiniPlaceArtwork()
-            .frame(width: 53, height: 37)
-          Text(favoritePlace)
-            .font(.custom("Noteworthy-Bold", fixedSize: 12))
-            .lineLimit(2)
-            .minimumScaleFactor(0.64)
-            .foregroundStyle(Color.black.opacity(0.82))
-          Spacer(minLength: 0)
-          Image(systemName: "heart")
-            .font(.system(size: 11, weight: .medium))
-        }
+      HStack(spacing: 8) {
+        YearbookMiniPlaceArtwork()
+          .frame(width: 58, height: 42)
+        Text(favoritePlace)
+          .font(.custom("Noteworthy-Bold", fixedSize: 13))
+          .lineLimit(2)
+          .minimumScaleFactor(0.62)
+          .foregroundStyle(Color.black.opacity(0.82))
+        Spacer(minLength: 0)
+        Image(systemName: "heart")
+          .font(.system(size: 11, weight: .medium))
       }
+    }
+    .overlay(alignment: .topLeading) {
+      YearbookTapeLabel(title: "FAVORITE PLACE", color: Color(red: 0.64, green: 0.61, blue: 0.73))
+        .offset(x: 12, y: -11)
     }
   }
 
@@ -2572,13 +2604,13 @@ private struct YearbookTapeLabel: View {
 
   var body: some View {
     Text(title)
-      .font(.system(size: 9.2, weight: .bold, design: .serif))
-      .tracking(0.52)
+      .font(.system(size: 10, weight: .bold, design: .serif))
+      .tracking(0.48)
       .lineLimit(1)
       .minimumScaleFactor(0.58)
       .foregroundStyle(Color(red: 0.17, green: 0.13, blue: 0.10).opacity(0.90))
-      .padding(.horizontal, 7.5)
-      .frame(height: 19)
+      .padding(.horizontal, 10)
+      .frame(height: 20)
       .background {
         YearbookTapeStrip(color: color, seed: "label-\(title)")
       }
