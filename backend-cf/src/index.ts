@@ -980,6 +980,16 @@ async function ensureNotesSchema(db: D1Database) {
       color TEXT DEFAULT '#F6E7D7',
       media_url TEXT DEFAULT '',
       media_type TEXT DEFAULT '',
+      schema_version INTEGER DEFAULT 1,
+      artwork_mode TEXT DEFAULT 'editable_canvas',
+      content_kind TEXT DEFAULT '',
+      canvas_width REAL DEFAULT 1080,
+      canvas_height REAL DEFAULT 1350,
+      document TEXT DEFAULT '',
+      detail_blocks TEXT DEFAULT '[]',
+      visibility TEXT DEFAULT 'everyone',
+      thumbnail_reference TEXT DEFAULT '',
+      alt_text TEXT DEFAULT '',
       anonymous INTEGER DEFAULT 0,
       status TEXT DEFAULT 'active',
       reactions_count INTEGER DEFAULT 0,
@@ -1026,14 +1036,52 @@ async function ensureNotesSchema(db: D1Database) {
       created_at TEXT NOT NULL,
       UNIQUE(note_id, reporter_id)
     )`,
+    `CREATE TABLE IF NOT EXISTS note_assets (
+      id TEXT PRIMARY KEY,
+      note_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      asset_type TEXT NOT NULL,
+      source_url TEXT NOT NULL,
+      original_url TEXT DEFAULT '',
+      thumbnail_url TEXT DEFAULT '',
+      width REAL,
+      height REAL,
+      status TEXT DEFAULT 'active',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
+    `CREATE TABLE IF NOT EXISTS note_signatures (
+      id TEXT PRIMARY KEY,
+      note_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      body TEXT NOT NULL,
+      doodle_url TEXT DEFAULT '',
+      status TEXT DEFAULT 'active',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
     "ALTER TABLE notes ADD COLUMN media_url TEXT DEFAULT ''",
     "ALTER TABLE notes ADD COLUMN media_type TEXT DEFAULT ''",
+    "ALTER TABLE notes ADD COLUMN schema_version INTEGER DEFAULT 1",
+    "ALTER TABLE notes ADD COLUMN artwork_mode TEXT DEFAULT 'editable_canvas'",
+    "ALTER TABLE notes ADD COLUMN content_kind TEXT DEFAULT ''",
+    "ALTER TABLE notes ADD COLUMN canvas_width REAL DEFAULT 1080",
+    "ALTER TABLE notes ADD COLUMN canvas_height REAL DEFAULT 1350",
+    "ALTER TABLE notes ADD COLUMN document TEXT DEFAULT ''",
+    "ALTER TABLE notes ADD COLUMN detail_blocks TEXT DEFAULT '[]'",
+    "ALTER TABLE notes ADD COLUMN visibility TEXT DEFAULT 'everyone'",
+    "ALTER TABLE notes ADD COLUMN thumbnail_reference TEXT DEFAULT ''",
+    "ALTER TABLE notes ADD COLUMN alt_text TEXT DEFAULT ''",
     'CREATE INDEX IF NOT EXISTS idx_notes_status_created ON notes(status, created_at)',
     'CREATE INDEX IF NOT EXISTS idx_notes_user_created ON notes(user_id, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_notes_kind_created ON notes(content_kind, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_notes_visibility_created ON notes(visibility, created_at)',
     'CREATE INDEX IF NOT EXISTS idx_note_interactions_user ON note_interactions(user_id, kind, created_at)',
     'CREATE INDEX IF NOT EXISTS idx_note_comments_note ON note_comments(note_id, created_at)',
     'CREATE INDEX IF NOT EXISTS idx_note_comment_likes_comment ON note_comment_likes(comment_id, created_at)',
     'CREATE INDEX IF NOT EXISTS idx_note_reports_note ON note_reports(note_id, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_note_assets_note ON note_assets(note_id, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_note_signatures_note ON note_signatures(note_id, created_at)',
   ];
 
   for (const statement of statements) {
@@ -1904,7 +1952,7 @@ async function resolveReportTarget(c: any, reporterId: string, type: string, rep
     }
     if (type === 'note') {
       await ensureNotesSchema(c.env.DB);
-      const row: any = await c.env.DB.prepare("SELECT id, user_id FROM notes WHERE id = ? AND COALESCE(status, 'active') = 'active' LIMIT 1").bind(reportedId).first();
+      const row: any = await c.env.DB.prepare(`SELECT id, user_id FROM notes n WHERE id = ? AND COALESCE(status, 'active') = 'active' AND ${noteVisibilityPredicate('n')} LIMIT 1`).bind(reportedId, ...noteVisibilityBinds(reporterId)).first();
       if (!row) return { ok: false, status: 404, detail: 'Reported note was not found.' };
       if (row.user_id === reporterId) return { ok: false, status: 400, detail: 'You cannot report your own note.' };
       return { ok: true, contentId: row.id };
@@ -2237,6 +2285,9 @@ function publicRecommendationPayload(recommendation: any) {
 }
 
 const NOTE_TYPES = new Set(['thought', 'feeling', 'advice', 'confession', 'question', 'quote', 'memory', 'mood', 'journal']);
+const NOTE_CONTENT_KINDS = new Set(['journal', 'collage', 'event', 'recipe', 'review', 'memory', 'link', 'poster', 'photo', 'artwork']);
+const NOTE_ARTWORK_MODES = new Set(['editable_canvas', 'imported_artwork']);
+const NOTE_VISIBILITIES = new Set(['everyone', 'friends', 'private', 'draft']);
 const NOTE_MOODS: Record<string, string> = {
   soft: '#F6E7D7',
   calm: '#E7F1DF',
@@ -2253,13 +2304,150 @@ function normalizeNoteType(value: unknown): string {
   if (clean === 'late night thoughts') return 'thought';
   if (clean === 'anonymous feelings') return 'feeling';
   if (clean === 'daily mood') return 'mood';
+  if (NOTE_CONTENT_KINDS.has(clean)) return clean;
   return NOTE_TYPES.has(clean) ? clean : 'thought';
+}
+
+function normalizeNoteContentKind(value: unknown): string {
+  const clean = String(value || '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '_').replace(/_+/g, '_');
+  return NOTE_CONTENT_KINDS.has(clean) ? clean : '';
+}
+
+function normalizeNoteArtworkMode(value: unknown, mediaUrl = ''): string {
+  const clean = String(value || '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '_').replace(/_+/g, '_');
+  if (NOTE_ARTWORK_MODES.has(clean)) return clean;
+  return mediaUrl ? 'imported_artwork' : 'editable_canvas';
+}
+
+function normalizeNoteVisibility(value: unknown): string {
+  const clean = String(value || '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '_').replace(/_+/g, '_');
+  if (clean === 'public') return 'everyone';
+  if (clean === 'friend') return 'friends';
+  return NOTE_VISIBILITIES.has(clean) ? clean : 'everyone';
+}
+
+function noteVisibilityPredicate(noteAlias = 'n'): string {
+  return `(
+    COALESCE(${noteAlias}.visibility, 'everyone') = 'everyone'
+    OR ${noteAlias}.user_id = ?
+    OR (
+      COALESCE(${noteAlias}.visibility, 'everyone') = 'friends'
+      AND EXISTS (SELECT 1 FROM friendships nf WHERE nf.user_id = ? AND nf.friend_id = ${noteAlias}.user_id)
+    )
+  )`;
+}
+
+function noteVisibilityBinds(viewerId: string): [string, string] {
+  return [viewerId, viewerId];
 }
 
 function normalizeNoteMood(value: unknown): { mood: string; color: string } {
   const clean = String(value || '').trim().toLowerCase().replace(/[^a-z0-9 _-]/g, '').replace(/\s+/g, ' ');
   const mood = NOTE_MOODS[clean] ? clean : 'soft';
   return { mood, color: NOTE_MOODS[mood] };
+}
+
+function parseJsonValue(value: unknown, fallback: any) {
+  if (value === null || value === undefined || value === '') return fallback;
+  if (typeof value === 'object') return value;
+  if (typeof value !== 'string') return fallback;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallback;
+  }
+}
+
+function cleanNoteDocument(value: unknown, opts: { id: string; userId: string; body: string; mediaUrl: string; contentKind: string; visibility: string; createdAt: string; updatedAt: string }) {
+  const raw: any = parseJsonValue(value, null);
+  const rawCanvas = raw && typeof raw === 'object' ? (raw.canvas || {}) : {};
+  const designWidth = clampNumber(rawCanvas.design_width ?? rawCanvas.designWidth, 480, 2400, 1080);
+  const designHeight = clampNumber(rawCanvas.design_height ?? rawCanvas.designHeight, 480, 4200, 1350);
+  const rawElements = Array.isArray(rawCanvas.elements) ? rawCanvas.elements.slice(0, 120) : [];
+  const elements = rawElements
+    .filter((element: any) => element && typeof element === 'object')
+    .map((element: any, index: number) => ({
+      ...element,
+      id: cleanText(element.id || uuid(), 80),
+      kind: cleanText(element.kind || 'shape', 40),
+      transform: {
+        x: clampNumber(element.transform?.x, -designWidth, designWidth * 2, 0),
+        y: clampNumber(element.transform?.y, -designHeight, designHeight * 2, 0),
+        width: clampNumber(element.transform?.width, 1, designWidth * 2, designWidth),
+        height: clampNumber(element.transform?.height, 1, designHeight * 2, designHeight),
+        rotation: clampNumber(element.transform?.rotation, -360, 360, 0),
+        scale_x: clampNumber(element.transform?.scale_x ?? element.transform?.scaleX, 0.05, 8, 1),
+        scale_y: clampNumber(element.transform?.scale_y ?? element.transform?.scaleY, 0.05, 8, 1),
+        opacity: clampNumber(element.transform?.opacity, 0, 1, 1),
+        z_index: clampNumber(element.transform?.z_index ?? element.transform?.zIndex, -1000, 1000, index),
+      },
+    }));
+
+  if (!elements.length && opts.mediaUrl) {
+    elements.push({
+      id: uuid(),
+      kind: 'photo',
+      transform: { x: 0, y: 0, width: designWidth, height: designHeight, rotation: 0, scale_x: 1, scale_y: 1, opacity: 1, z_index: 0 },
+      photo: { asset_id: uuid(), url: opts.mediaUrl, original_url: opts.mediaUrl, presentation: 'full_bleed', crop: { x: 0, y: 0, width: 1, height: 1 } },
+      accessibility_label: opts.body || 'Imported note artwork',
+    });
+  }
+
+  if (!elements.length && opts.body) {
+    elements.push({
+      id: uuid(),
+      kind: 'text',
+      transform: { x: 112, y: 210, width: designWidth - 224, height: 720, rotation: 0, scale_x: 1, scale_y: 1, opacity: 1, z_index: 1 },
+      text: { text: opts.body, role: 'body', size: 68, weight: 'semibold', alignment: 'center', line_spacing: 1.12, letter_spacing: 0, color: '#141411', uppercase: false },
+      accessibility_label: opts.body,
+    });
+  }
+
+  const background = rawCanvas.background && typeof rawCanvas.background === 'object'
+    ? rawCanvas.background
+    : { type: opts.mediaUrl ? 'solid' : 'material', value: opts.mediaUrl ? '#111111' : 'soft_neutral_poster_paper' };
+
+  const detailBlocks = cleanNoteDetailBlocks(raw?.detail_blocks ?? raw?.detailBlocks ?? []);
+  const contentKind = normalizeNoteContentKind(raw?.content_kind ?? raw?.contentKind) || opts.contentKind;
+  const artworkMode = normalizeNoteArtworkMode(raw?.artwork_mode ?? raw?.artworkMode, opts.mediaUrl);
+  return {
+    id: cleanText(raw?.id || opts.id, 80),
+    schema_version: clampNumber(raw?.schema_version ?? raw?.schemaVersion, 1, 10, 1),
+    author_id: cleanText(raw?.author_id ?? raw?.authorId ?? raw?.authorID ?? opts.userId, 80),
+    canvas: {
+      design_width: designWidth,
+      design_height: designHeight,
+      background,
+      elements,
+    },
+    artwork_mode: artworkMode,
+    content_kind: contentKind || null,
+    caption: cleanMultilineText(raw?.caption || opts.body, 600),
+    detail_blocks: detailBlocks,
+    visibility: normalizeNoteVisibility(raw?.visibility || opts.visibility),
+    thumbnail_reference: safeMediaReference(raw?.thumbnail_reference ?? raw?.thumbnailReference) || opts.mediaUrl || '',
+    alt_text: cleanMultilineText(raw?.alt_text ?? raw?.altText ?? '', 1000),
+    created_at: opts.createdAt,
+    updated_at: opts.updatedAt,
+  };
+}
+
+function cleanNoteDetailBlocks(value: unknown) {
+  const blocks = parseJsonValue(value, []);
+  if (!Array.isArray(blocks)) return [];
+  return blocks.slice(0, 20).filter((block) => block && typeof block === 'object').map((block: any) => {
+    const type = cleanText(block.type || 'text', 40).replace(/-/g, '_');
+    const payload = block.payload && typeof block.payload === 'object' ? block.payload : {};
+    return {
+      type,
+      payload,
+    };
+  });
+}
+
+function noteDocumentHasContent(document: any): boolean {
+  const elements = document?.canvas?.elements;
+  return Array.isArray(elements) && elements.length > 0;
 }
 
 function moderateCommunityText(value: string): { ok: boolean; detail?: string } {
@@ -2282,6 +2470,20 @@ function moderateCommunityText(value: string): { ok: boolean; detail?: string } 
 
 function publicNotePayload(row: any, opts: { reacted?: boolean; saved?: boolean } = {}) {
   const anonymous = Number(row.anonymous || 0) === 1;
+  const detailBlocks = cleanNoteDetailBlocks(row.detail_blocks);
+  const contentKind = normalizeNoteContentKind(row.content_kind || row.note_type);
+  const visibility = normalizeNoteVisibility(row.visibility);
+  const document = cleanNoteDocument(row.document, {
+    id: row.id,
+    userId: row.user_id,
+    body: row.body || '',
+    mediaUrl: row.media_url || '',
+    contentKind,
+    visibility,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  });
+  if (!document.detail_blocks?.length && detailBlocks.length) document.detail_blocks = detailBlocks;
   return {
     id: row.id,
     body: row.body || '',
@@ -2290,6 +2492,14 @@ function publicNotePayload(row: any, opts: { reacted?: boolean; saved?: boolean 
     color: row.color || NOTE_MOODS.soft,
     media_url: row.media_url || '',
     media_type: row.media_type || '',
+    document,
+    schema_version: Number(row.schema_version || document.schema_version || 1),
+    artwork_mode: row.artwork_mode || document.artwork_mode || 'editable_canvas',
+    content_kind: contentKind || document.content_kind || '',
+    detail_blocks: detailBlocks.length ? detailBlocks : (document.detail_blocks || []),
+    visibility,
+    thumbnail_reference: row.thumbnail_reference || document.thumbnail_reference || row.media_url || '',
+    alt_text: row.alt_text || document.alt_text || '',
     anonymous,
     status: row.status || 'active',
     reactions_count: Number(row.reactions_count || 0),
@@ -8234,8 +8444,8 @@ api.get('/notes', authMiddleware, async (c) => {
     const limit = clampNumber(c.req.query('limit'), 5, 80, 36);
     const type = normalizeNoteType(c.req.query('type') || '');
     const rawType = cleanText(c.req.query('type'), 80).toLowerCase();
-    const binds: any[] = [userId, userId];
-    let where = "WHERE COALESCE(n.status, 'active') = 'active'";
+    const binds: any[] = [userId, userId, ...noteVisibilityBinds(userId)];
+    let where = `WHERE COALESCE(n.status, 'active') = 'active' AND ${noteVisibilityPredicate('n')}`;
     if (rawType && rawType !== 'all') {
       where += ' AND n.note_type = ?';
       binds.push(type);
@@ -8269,8 +8479,8 @@ api.get('/notes/:noteId', authMiddleware, async (c) => {
         EXISTS(SELECT 1 FROM note_interactions i WHERE i.note_id = n.id AND i.user_id = ? AND i.kind = 'save') AS saved
       FROM notes n
       LEFT JOIN users u ON u.id = n.user_id
-      WHERE n.id = ? AND COALESCE(n.status, 'active') = 'active'
-    `).bind(userId, userId, noteId).first();
+      WHERE n.id = ? AND COALESCE(n.status, 'active') = 'active' AND ${noteVisibilityPredicate('n')}
+    `).bind(userId, userId, noteId, ...noteVisibilityBinds(userId)).first();
     if (!row) return c.json({ detail: 'Note not found.' }, 404);
     return c.json(publicNotePayload(row));
   } catch (error: any) {
@@ -8291,10 +8501,19 @@ api.post('/notes', authMiddleware, async (c) => {
     const noteBody = cleanText(body.body || body.text || body.content, 420);
     const mediaUrl = safeMediaReference(body.media_url || body.image_url || body.image);
     const mediaType = mediaUrl ? 'image' : '';
-    const moderation = moderateCommunityText(noteBody);
-    if (!moderation.ok) return c.json({ detail: moderation.detail || 'That note cannot be posted.' }, 400);
-    if (noteBody.length < 2 && !mediaUrl) return c.json({ detail: 'Add text or a photo first.' }, 400);
-    const noteType = normalizeNoteType(body.note_type || body.type);
+    const textForModeration = [
+      noteBody,
+      body.alt_text || body.altText || '',
+      JSON.stringify(body.detail_blocks || body.detailBlocks || []).slice(0, 4000),
+    ].join('\n').trim();
+    if (textForModeration) {
+      const moderation = moderateCommunityText(textForModeration);
+      if (!moderation.ok) return c.json({ detail: moderation.detail || 'That note cannot be posted.' }, 400);
+    }
+    const contentKind = normalizeNoteContentKind(body.content_kind || body.contentKind || body.note_type || body.type);
+    const visibility = normalizeNoteVisibility(body.visibility);
+    const artworkMode = normalizeNoteArtworkMode(body.artwork_mode || body.artworkMode, mediaUrl);
+    const noteType = normalizeNoteType(body.note_type || body.type || contentKind);
     const mood = normalizeNoteMood(body.mood || body.color);
     const color = /^#[0-9a-f]{6}$/i.test(String(body.color || '')) ? String(body.color) : mood.color;
     const anonymous = normalizeSqlBoolean(body.anonymous);
@@ -8311,11 +8530,64 @@ api.post('/notes', authMiddleware, async (c) => {
     }
     const ts = now();
     const id = uuid();
+    const document = cleanNoteDocument(body.document, {
+      id,
+      userId,
+      body: noteBody,
+      mediaUrl,
+      contentKind,
+      visibility,
+      createdAt: ts,
+      updatedAt: ts,
+    });
+    const detailBlocks = cleanNoteDetailBlocks(body.detail_blocks || body.detailBlocks || document.detail_blocks || []);
+    if (!noteDocumentHasContent(document)) return c.json({ detail: 'Add artwork, text, or a photo first.' }, 400);
+    const thumbnailReference = safeMediaReference(body.thumbnail_reference || body.thumbnailReference) || document.thumbnail_reference || mediaUrl || '';
+    const altText = cleanMultilineText(body.alt_text || body.altText || document.alt_text || '', 1000);
     await c.env.DB.prepare(
       `INSERT INTO notes
-       (id, user_id, body, note_type, mood, color, media_url, media_type, anonymous, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`
-    ).bind(id, userId, noteBody, noteType, mood.mood, color, mediaUrl, mediaType, anonymous, ts, ts).run();
+       (id, user_id, body, note_type, mood, color, media_url, media_type, schema_version, artwork_mode, content_kind,
+        canvas_width, canvas_height, document, detail_blocks, visibility, thumbnail_reference, alt_text, anonymous, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`
+    ).bind(
+      id,
+      userId,
+      noteBody,
+      noteType,
+      mood.mood,
+      color,
+      mediaUrl,
+      mediaType,
+      Number(document.schema_version || 1),
+      artworkMode || document.artwork_mode || 'editable_canvas',
+      contentKind || document.content_kind || '',
+      Number(document.canvas?.design_width || 1080),
+      Number(document.canvas?.design_height || 1350),
+      JSON.stringify(document),
+      JSON.stringify(detailBlocks),
+      visibility,
+      thumbnailReference,
+      altText,
+      anonymous,
+      ts,
+      ts
+    ).run();
+    const photoAssets = (document.canvas?.elements || []).filter((element: any) => element?.kind === 'photo' && element?.photo?.url).slice(0, 40);
+    if (photoAssets.length) {
+      await Promise.all(photoAssets.map((element: any) => c.env.DB.prepare(
+        `INSERT OR IGNORE INTO note_assets (id, note_id, user_id, asset_type, source_url, original_url, thumbnail_url, status, created_at, updated_at)
+         VALUES (?, ?, ?, 'image', ?, ?, ?, 'active', ?, ?)`
+      ).bind(
+        cleanText(element.photo.asset_id || element.photo.assetId || uuid(), 80),
+        id,
+        userId,
+        safeMediaReference(element.photo.url),
+        safeMediaReference(element.photo.original_url || element.photo.originalUrl || element.photo.originalURL || element.photo.url),
+        thumbnailReference,
+        ts,
+        ts
+      ).run()));
+    }
     const row: any = await c.env.DB.prepare(`
       SELECT n.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
       FROM notes n LEFT JOIN users u ON u.id = n.user_id WHERE n.id = ?
@@ -8337,7 +8609,7 @@ api.post('/notes/:noteId/interactions', authMiddleware, async (c) => {
     const body: any = await c.req.json().catch(() => ({}));
     const kind = ['reaction', 'save', 'share'].includes(String(body.kind)) ? String(body.kind) : 'reaction';
     const value = cleanText(body.value || (kind === 'reaction' ? 'heart' : ''), 40);
-    const note: any = await c.env.DB.prepare("SELECT id FROM notes WHERE id = ? AND COALESCE(status, 'active') = 'active'").bind(noteId).first();
+    const note: any = await c.env.DB.prepare(`SELECT id FROM notes n WHERE id = ? AND COALESCE(status, 'active') = 'active' AND ${noteVisibilityPredicate('n')}`).bind(noteId, ...noteVisibilityBinds(userId)).first();
     if (!note) return c.json({ detail: 'Note not found.' }, 404);
     const existing: any = await c.env.DB.prepare('SELECT id FROM note_interactions WHERE note_id = ? AND user_id = ? AND kind = ?')
       .bind(noteId, userId, kind)
@@ -8370,11 +8642,14 @@ api.get('/notes/:noteId/comments', authMiddleware, async (c) => {
       SELECT nc.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
              EXISTS(SELECT 1 FROM note_comment_likes ncl WHERE ncl.comment_id = nc.id AND ncl.user_id = ?) AS liked_by_me
       FROM note_comments nc
+      INNER JOIN notes n ON n.id = nc.note_id
       LEFT JOIN users u ON u.id = nc.user_id
       WHERE nc.note_id = ? AND COALESCE(nc.status, 'active') = 'active'
+        AND COALESCE(n.status, 'active') = 'active'
+        AND ${noteVisibilityPredicate('n')}
       ORDER BY nc.created_at ASC
       LIMIT 80
-    `).bind(getUserId(c), noteId).all();
+    `).bind(getUserId(c), noteId, ...noteVisibilityBinds(getUserId(c))).all();
     return c.json((rows.results as any[]).map((comment) => ({
       id: comment.id,
       body: comment.body,
@@ -8408,12 +8683,15 @@ api.post('/notes/:noteId/comments', authMiddleware, async (c) => {
     const commentBody = cleanText(body.body || body.text, 500);
     const moderation = moderateCommunityText(commentBody);
     if (!moderation.ok) return c.json({ detail: moderation.detail || 'That comment cannot be posted.' }, 400);
-    const note: any = await c.env.DB.prepare("SELECT id FROM notes WHERE id = ? AND COALESCE(status, 'active') = 'active'").bind(noteId).first();
+    const note: any = await c.env.DB.prepare(`SELECT id FROM notes n WHERE id = ? AND COALESCE(status, 'active') = 'active' AND ${noteVisibilityPredicate('n')}`).bind(noteId, ...noteVisibilityBinds(userId)).first();
     if (!note) return c.json({ detail: 'Note not found.' }, 404);
     const ts = now();
     const id = uuid();
     await c.env.DB.prepare('INSERT INTO note_comments (id, note_id, user_id, parent_id, body, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
       .bind(id, noteId, userId, cleanText(body.parent_id, 80), commentBody, 'active', ts, ts)
+      .run();
+    await c.env.DB.prepare('INSERT OR IGNORE INTO note_signatures (id, note_id, user_id, body, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .bind(id, noteId, userId, commentBody, 'active', ts, ts)
       .run();
     await c.env.DB.prepare('UPDATE notes SET comments_count = COALESCE(comments_count, 0) + 1, updated_at = ? WHERE id = ?').bind(ts, noteId).run();
     return c.json({ id, body: commentBody, created_at: ts }, 201);
@@ -8433,8 +8711,13 @@ api.post('/note-comments/:commentId/like', authMiddleware, async (c) => {
     const body: any = await c.req.json().catch(() => ({}));
     const requested = optionalBoolean(body.liked ?? body.like ?? body.value);
     const comment: any = await c.env.DB.prepare(
-      "SELECT id, likes_count FROM note_comments WHERE id = ? AND COALESCE(status, 'active') = 'active'"
-    ).bind(commentId).first();
+      `SELECT nc.id, nc.likes_count
+       FROM note_comments nc
+       INNER JOIN notes n ON n.id = nc.note_id
+       WHERE nc.id = ? AND COALESCE(nc.status, 'active') = 'active'
+         AND COALESCE(n.status, 'active') = 'active'
+         AND ${noteVisibilityPredicate('n')}`
+    ).bind(commentId, ...noteVisibilityBinds(userId)).first();
     if (!comment) return c.json({ detail: 'Comment not found.' }, 404);
 
     let nextLiked = requested;
@@ -8483,7 +8766,7 @@ api.post('/notes/:noteId/report', authMiddleware, async (c) => {
     if (limited) return limited;
     const noteId = cleanText(c.req.param('noteId'), 80);
     const body: any = await c.req.json().catch(() => ({}));
-    const note: any = await c.env.DB.prepare('SELECT id, user_id FROM notes WHERE id = ?').bind(noteId).first();
+    const note: any = await c.env.DB.prepare(`SELECT id, user_id FROM notes n WHERE id = ? AND COALESCE(status, 'active') = 'active' AND ${noteVisibilityPredicate('n')}`).bind(noteId, ...noteVisibilityBinds(userId)).first();
     if (!note) return c.json({ detail: 'Note not found.' }, 404);
     if (note.user_id === userId) return c.json({ detail: 'You cannot report your own note.' }, 400);
     const ts = now();

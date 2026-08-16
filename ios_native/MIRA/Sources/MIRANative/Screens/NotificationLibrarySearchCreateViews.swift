@@ -1292,6 +1292,7 @@ private struct PostHashtagSheet: View {
 
 public struct CreateNoteNativeView: View {
   let api: MIRAAPIClient
+  private let onClose: (() -> Void)?
   @Environment(\.dismiss) private var dismiss
   @State private var currentUser: MIRAUser?
   @State private var noteText = ""
@@ -1306,34 +1307,13 @@ public struct CreateNoteNativeView: View {
   @State private var isSearchingGIFs = false
   @State private var errorMessage: String?
 
-  public init(api: MIRAAPIClient) {
+  public init(api: MIRAAPIClient, onClose: (() -> Void)? = nil) {
     self.api = api
+    self.onClose = onClose
   }
 
   public var body: some View {
-    VStack(spacing: 0) {
-      noteComposerHeader
-      Divider().overlay(MIRATheme.Color.hairline)
-
-      ScrollView {
-        noteEditorContent
-          .padding(.horizontal, MIRATheme.Space.md)
-          .padding(.top, MIRATheme.Space.lg)
-          .padding(.bottom, 140)
-      }
-
-      noteBottomBar
-    }
-    .background(MIRATheme.Color.surface)
-    .miraScreenEnter(.modal)
-    .toolbar(.hidden, for: .navigationBar)
-    .task {
-      await loadCurrentUser()
-      restoreDraft()
-    }
-    .onChange(of: pickerItem) { _, newItem in
-      Task { await loadPickerItem(newItem) }
-    }
+    NoteCreationFlowView(api: api, onClose: onClose)
   }
 
   private var noteComposerHeader: some View {

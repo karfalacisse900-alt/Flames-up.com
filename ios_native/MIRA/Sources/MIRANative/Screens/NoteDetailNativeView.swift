@@ -19,11 +19,12 @@ final class NoteDetailNativeModel: ObservableObject {
     comments = (try? await api.get("/notes/\(note.id)/comments")) ?? []
   }
 
-  func sendReply(_ text: String) async {
+  func sendSignature(_ text: String) async {
     let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !clean.isEmpty else { return }
     if let comment: MIRAComment = try? await api.post("/notes/\(note.id)/comments", body: NoteCommentBody(body: clean, parentId: nil)) {
       comments.append(comment)
+      note = note.updating(commentsCount: (note.commentsCount ?? 0) + 1)
     }
   }
 
@@ -40,6 +41,19 @@ final class NoteDetailNativeModel: ObservableObject {
     do {
       let response: NoteInteractionResponse = try await api.post("/notes/\(note.id)/interactions", body: NoteInteractionBody(kind: "reaction", value: "heart"))
       note = note.updating(reacted: response.active ?? nextReacted)
+    } catch {
+      note = previous
+    }
+  }
+
+  func toggleSave() async {
+    let previous = note
+    let nextSaved = !(note.saved ?? false)
+    let nextCount = max(0, (note.savesCount ?? 0) + (nextSaved ? 1 : -1))
+    note = note.updating(savesCount: nextCount, saved: nextSaved)
+    do {
+      let response: NoteInteractionResponse = try await api.post("/notes/\(note.id)/interactions", body: NoteInteractionBody(kind: "save", value: nil))
+      note = note.updating(saved: response.active ?? nextSaved)
     } catch {
       note = previous
     }
@@ -63,9 +77,9 @@ final class NoteDetailNativeModel: ObservableObject {
 public struct NoteDetailNativeView: View {
   @Environment(\.dismiss) private var dismiss
   @StateObject private var model: NoteDetailNativeModel
-  @State private var draft = ""
   @State private var showMenu = false
-  @FocusState private var replyFocused: Bool
+  @State private var showSignSheet = false
+  @State private var selectedPhoto: NotePhotoViewerItem?
   private let horizontalInset: CGFloat = MIRATheme.Space.md
 
   public init(note: MIRANote, api: MIRAAPIClient) {
@@ -78,40 +92,60 @@ public struct NoteDetailNativeView: View {
       ScrollView {
         VStack(alignment: .leading, spacing: 0) {
           topBar
-          noteHeader
-            .padding(.top, 18)
-          noteBody(contentWidth: contentWidth)
+            .padding(.horizontal, horizontalInset)
+            .padding(.top, 8)
+
+          artworkStage(width: contentWidth)
+            .padding(.horizontal, horizontalInset)
+            .padding(.top, 8)
+
+          actionBar
+            .padding(.horizontal, horizontalInset)
             .padding(.top, 14)
-          noteActions
-            .padding(.top, 15)
-          Rectangle()
-            .fill(MIRATheme.Color.hairline.opacity(0.52))
-            .frame(height: 0.7)
+
+          creatorCaption
+            .padding(.horizontal, horizontalInset)
             .padding(.top, 18)
-          commentsList
+
+          detailBlocks
+            .padding(.horizontal, horizontalInset)
+            .padding(.top, 18)
+
+          signatures
+            .padding(.horizontal, horizontalInset)
             .padding(.top, 20)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, horizontalInset)
-        .padding(.top, 8)
-        .padding(.bottom, 24)
+        .padding(.bottom, 34)
       }
       .scrollIndicators(.hidden)
-      .safeAreaInset(edge: .bottom) {
-        replyBar(horizontalInset: horizontalInset)
-      }
     }
-    .background(Color.white.ignoresSafeArea())
+    .background(viewerBackground.ignoresSafeArea())
     .miraScreenEnter(.push)
     .navigationBarBackButtonHidden(true)
     .toolbar(.hidden, for: .navigationBar)
     .toolbar(.hidden, for: .tabBar)
     .confirmationDialog("Note options", isPresented: $showMenu) {
+      Button("Copy link") {
+        UIPasteboard.general.string = "\(MIRAProductionBackend.siteBaseURL.absoluteString)/note/\(model.note.id)"
+      }
       Button("Not interested", role: .destructive) {}
       Button("Report", role: .destructive) {
         Task { await model.report(reason: "other") }
       }
       Button("Cancel", role: .cancel) {}
+    }
+    .miraBottomSheet(isPresented: $showSignSheet, preferredHeightFraction: 0.44, maxHeight: 420) { dismissSheet in
+      NoteSignSheet(authorName: model.note.user?.displayName ?? model.note.user?.username ?? "Captro") { value in
+        Task {
+          await model.sendSignature(value)
+          dismissSheet()
+        }
+      } onClose: {
+        dismissSheet()
+      }
+    }
+    .miraFullScreenOverlay(item: $selectedPhoto, background: .black) { item, closeViewer in
+      NoteMediaViewer(photo: item.photo, onClose: closeViewer)
     }
     .task { await model.load() }
   }
@@ -122,11 +156,12 @@ public struct NoteDetailNativeView: View {
         dismiss()
       } label: {
         Image(systemName: "chevron.left")
-          .font(.system(size: 28, weight: .semibold))
+          .font(.system(size: 20, weight: .semibold))
           .foregroundStyle(MIRATheme.Color.textPrimary)
-          .frame(width: 48, height: 48, alignment: .leading)
+          .frame(width: 44, height: 44, alignment: .leading)
       }
       .buttonStyle(.plain)
+      .accessibilityLabel("Back")
 
       Spacer()
 
@@ -134,147 +169,387 @@ public struct NoteDetailNativeView: View {
         showMenu = true
       } label: {
         Image(systemName: "ellipsis")
-          .font(.system(size: 22, weight: .bold))
+          .font(.system(size: 20, weight: .bold))
           .foregroundStyle(MIRATheme.Color.textPrimary)
-          .frame(width: 48, height: 48, alignment: .trailing)
+          .frame(width: 44, height: 44, alignment: .trailing)
       }
       .buttonStyle(.plain)
+      .accessibilityLabel("More note actions")
     }
   }
 
-  private var noteHeader: some View {
+  private func artworkStage(width: CGFloat) -> some View {
+    let document = model.note.displayDocument
+    return NoteCanvasRenderer(document: document, mode: .detail) { photo, frame in
+      selectedPhoto = NotePhotoViewerItem(photo: photo, sourceFrame: frame)
+    }
+    .frame(width: width)
+    .shadow(color: .black.opacity(0.16), radius: 20, x: 0, y: 10)
+    .accessibilityLabel(document.altText ?? document.caption ?? "Note artwork")
+  }
+
+  private var actionBar: some View {
     HStack(spacing: 10) {
-      Button(action: { Task { await model.followAuthor() } }) {
-        MIRAFollowAvatar(url: model.note.user?.profileImage, size: 48)
-      }
-      .buttonStyle(.plain)
-
-      if let userId = model.note.user?.id, !userId.isEmpty {
-        NavigationLink(destination: UserProfileNativeView(userId: userId, api: model.api)) {
-          Text(model.note.user?.displayName ?? "mira")
-            .font(.system(size: 19, weight: .semibold))
-            .foregroundStyle(MIRATheme.Color.textPrimary)
-            .lineLimit(1)
-            .minimumScaleFactor(0.82)
-        }
-        .buttonStyle(.plain)
-      } else {
-        Text(model.note.user?.displayName ?? "mira")
-          .font(.system(size: 19, weight: .semibold))
-          .foregroundStyle(MIRATheme.Color.textPrimary)
-          .lineLimit(1)
-          .minimumScaleFactor(0.82)
-      }
-
-      Text(noteAge(model.note.createdAt))
-        .font(.system(size: 16, weight: .semibold))
-        .foregroundStyle(MIRATheme.Color.textMuted)
-
-      Spacer()
-    }
-  }
-
-  private func noteBody(contentWidth: CGFloat) -> some View {
-    VStack(alignment: .leading, spacing: 16) {
-      Text(model.note.body ?? "")
-        .font(.system(size: 21, weight: .regular))
-        .foregroundStyle(MIRATheme.Color.textPrimary)
-        .lineSpacing(5)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .fixedSize(horizontal: false, vertical: true)
-
-      if let media = model.note.mediaUrl, !media.isEmpty {
-        let mediaHeight = noteMediaHeight(for: media, width: contentWidth)
-        MIRAAdaptiveMediaView(
-          urls: [media],
-          cornerRadius: 18,
-          maxSingleImageHeight: mediaHeight,
-          carouselHeight: mediaHeight,
-          singleImageContentMode: .fill
-        )
-        .frame(width: contentWidth, height: mediaHeight)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-      }
-    }
-  }
-
-  private func noteMediaHeight(for media: String, width: CGFloat) -> CGFloat {
-    guard width > 0 else { return 0 }
-    let ideal = MIRAMediaSizing.feedHeight(for: [media], width: width)
-    let lower = width * 0.58
-    let upper = min(width * 0.78, UIScreen.main.bounds.height * 0.38)
-    return min(max(ideal, lower), upper)
-  }
-
-  private var noteActions: some View {
-    HStack(spacing: 31) {
-      NoteDetailAction(systemImage: model.note.reacted == true ? "heart.fill" : "heart", value: model.note.reactionsCount ?? 0, tint: model.note.reacted == true ? MIRATheme.Color.like : MIRATheme.Color.textSecondary) {
+      NoteCompactAction(
+        title: "Feel",
+        systemImage: model.note.reacted == true ? "heart.fill" : "heart",
+        count: model.note.reactionsCount,
+        tint: model.note.reacted == true ? MIRATheme.Color.like : MIRATheme.Color.textSecondary
+      ) {
         Task { await model.toggleReaction() }
       }
-      NoteDetailAction(systemImage: "bubble.left", value: model.note.commentsCount ?? 0, tint: MIRATheme.Color.textSecondary) {}
-      NoteDetailAction(systemImage: "paperplane", value: model.note.sharesCount ?? 0, tint: MIRATheme.Color.textSecondary) {
+
+      NoteCompactAction(title: "Sign", systemImage: "signature", count: model.note.commentsCount, tint: MIRATheme.Color.textSecondary) {
+        showSignSheet = true
+      }
+
+      NoteCompactAction(
+        title: "Save",
+        systemImage: model.note.saved == true ? "bookmark.fill" : "bookmark",
+        count: model.note.savesCount,
+        tint: model.note.saved == true ? MIRATheme.Color.forest : MIRATheme.Color.textSecondary
+      ) {
+        Task { await model.toggleSave() }
+      }
+
+      ShareLink(item: shareText) {
+        HStack(spacing: 5) {
+          Image(systemName: "square.and.arrow.up")
+          Text("Share")
+        }
+        .font(.system(size: 13, weight: .semibold))
+        .foregroundStyle(MIRATheme.Color.textSecondary)
+        .frame(maxWidth: .infinity)
+        .frame(height: 38)
+        .background(MIRATheme.Color.surfaceSoft)
+        .clipShape(Capsule())
+      }
+      .simultaneousGesture(TapGesture().onEnded {
         Task { await model.recordShare() }
-      }
-      Spacer()
+      })
     }
   }
 
-  private var commentsList: some View {
-    LazyVStack(spacing: MIRATheme.Space.lg) {
-      ForEach(model.comments) { comment in
-        NoteReplyRowNative(comment: comment)
+  private var creatorCaption: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      HStack(spacing: 10) {
+        Button(action: { Task { await model.followAuthor() } }) {
+          MIRAFollowAvatar(url: model.note.user?.profileImage, size: 42)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Follow creator")
+
+        VStack(alignment: .leading, spacing: 2) {
+          Text(model.note.user?.displayName ?? model.note.user?.username ?? "Captro")
+            .font(.system(size: 16, weight: .semibold))
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+            .lineLimit(1)
+          Text(noteAge(model.note.createdAt))
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(MIRATheme.Color.textMuted)
+        }
+        Spacer()
+      }
+
+      if let caption = model.note.displayDocument.caption, !caption.isEmpty {
+        Text(caption)
+          .font(.system(size: 16, weight: .regular))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .lineSpacing(3)
+          .fixedSize(horizontal: false, vertical: true)
       }
     }
   }
 
-  private func replyBar(horizontalInset: CGFloat) -> some View {
-    HStack(spacing: MIRATheme.Space.sm) {
-      RemoteAvatar(url: model.note.user?.profileImage, size: 34)
-      TextField("Add your reply...", text: $draft, axis: .vertical)
-        .font(.system(size: 16, weight: .semibold))
+  @ViewBuilder
+  private var detailBlocks: some View {
+    let blocks = model.note.displayDocument.detailBlocks
+    if !blocks.isEmpty {
+      VStack(alignment: .leading, spacing: 12) {
+        Text("Details")
+          .font(.system(size: 18, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+        ForEach(blocks) { block in
+          NoteDetailBlockView(block: block)
+        }
+      }
+    }
+  }
+
+  private var signatures: some View {
+    VStack(alignment: .leading, spacing: 14) {
+      HStack {
+        Text("Signatures")
+          .font(.system(size: 18, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+        Spacer()
+        Button("Sign") {
+          showSignSheet = true
+        }
+        .font(.system(size: 14, weight: .semibold))
+        .foregroundStyle(MIRATheme.Color.forest)
+      }
+
+      if commentsForDisplay.isEmpty {
+        Text("No signatures yet.")
+          .font(.system(size: 14, weight: .medium))
+          .foregroundStyle(MIRATheme.Color.textMuted)
+      } else {
+        LazyVStack(spacing: 12) {
+          ForEach(commentsForDisplay) { comment in
+            NoteSignatureRow(comment: comment)
+          }
+        }
+      }
+    }
+  }
+
+  private var commentsForDisplay: [MIRAComment] {
+    commentsSorted(model.comments)
+  }
+
+  private var viewerBackground: Color {
+    switch model.note.displayDocument.canvas.background {
+    case .material(.blackLeather), .material(.darkCardstock):
+      return Color.miraHex("#F3F0EA")
+    case .solid(let value) where value.uppercased() == "#111111":
+      return Color.miraHex("#F3F0EA")
+    default:
+      return Color.miraHex("#FAF9F5")
+    }
+  }
+
+  private var shareText: String {
+    if let caption = model.note.displayDocument.caption, !caption.isEmpty {
+      return "\(caption)\n\(MIRAProductionBackend.siteBaseURL.absoluteString)/note/\(model.note.id)"
+    }
+    return "\(MIRAProductionBackend.siteBaseURL.absoluteString)/note/\(model.note.id)"
+  }
+}
+
+private struct NotePhotoViewerItem: Identifiable {
+  let id = UUID().uuidString
+  let photo: PhotoElement
+  let sourceFrame: CGRect
+}
+
+private struct NoteCompactAction: View {
+  let title: String
+  let systemImage: String
+  let count: Int?
+  let tint: Color
+  let action: () -> Void
+
+  var body: some View {
+    Button(action: action) {
+      HStack(spacing: 5) {
+        Image(systemName: systemImage)
+        Text(title)
+        if let count {
+          Text("\(count)")
+            .foregroundStyle(MIRATheme.Color.textMuted)
+        }
+      }
+      .font(.system(size: 13, weight: .semibold))
+      .foregroundStyle(tint)
+      .frame(maxWidth: .infinity)
+      .frame(height: 38)
+      .background(MIRATheme.Color.surfaceSoft)
+      .clipShape(Capsule())
+    }
+    .buttonStyle(.plain)
+    .accessibilityLabel(title)
+  }
+}
+
+private struct NoteDetailBlockView: View {
+  let block: NoteDetailBlock
+  @Environment(\.openURL) private var openURL
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      Label(title, systemImage: icon)
+        .font(.system(size: 15, weight: .semibold))
         .foregroundStyle(MIRATheme.Color.textPrimary)
-        .focused($replyFocused)
-        .lineLimit(1...3)
-        .layoutPriority(1)
-      Button {} label: {
-        Image(systemName: "photo")
-          .font(.system(size: 22, weight: .semibold))
-          .foregroundStyle(MIRATheme.Color.textPrimary)
-          .frame(width: 36, height: 38)
+      content
+    }
+    .padding(14)
+    .background(MIRATheme.Color.surfaceSoft)
+    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+  }
+
+  @ViewBuilder
+  private var content: some View {
+    switch block {
+    case .text(let block):
+      detailText(block.body)
+      if let link = block.link { linkButton("Open link", link) }
+    case .event(let block):
+      detailText([block.date, block.startTime, block.endTime].compactMap { $0 }.joined(separator: " "))
+      detailText([block.venue, block.address].compactMap { $0 }.joined(separator: "\n"))
+      if let ticketURL = block.ticketUrl { linkButton("Tickets or RSVP", ticketURL) }
+    case .recipe(let block):
+      if let prep = block.prepTime { detailText("Prep: \(prep)") }
+      if let cook = block.cookTime { detailText("Cook: \(cook)") }
+      if let servings = block.servings { detailText("Serves: \(servings)") }
+      detailText("Ingredients\n\(block.ingredients.joined(separator: "\n"))")
+      detailText("Steps\n\(block.steps.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "\n"))")
+      if let sourceURL = block.sourceUrl { linkButton("Source", sourceURL) }
+    case .bookReview(let block):
+      if let author = block.author { detailText(author) }
+      if let rating = block.rating { detailText(String(format: "Rating: %.1f", rating)) }
+      detailText(block.review)
+      if let quote = block.favoriteQuote { detailText("Favorite quote\n\(quote)") }
+      if let link = block.link { linkButton("Book link", link) }
+    case .location(let block):
+      detailText([block.placeName, block.city].compactMap { $0 }.joined(separator: "\n"))
+      if let mapURL = block.mapUrl { linkButton("Directions", mapURL) }
+    case .link(let block):
+      if let description = block.description { detailText(description) }
+      linkButton("Open link", block.url)
+    case .credits(let block):
+      detailText([
+        block.photographer.map { "Photographer: \($0)" },
+        block.designer.map { "Designer: \($0)" },
+        block.artist.map { "Artist: \($0)" },
+        block.source.map { "Source: \($0)" },
+        block.collaborators.isEmpty ? nil : "Collaborators: \(block.collaborators.joined(separator: ", "))",
+      ].compactMap { $0 }.joined(separator: "\n"))
+    }
+  }
+
+  private var title: String {
+    switch block {
+    case .text(let block): return block.heading
+    case .event(let block): return block.title
+    case .recipe(let block): return block.title
+    case .bookReview(let block): return block.title
+    case .location(let block): return block.placeName
+    case .link(let block): return block.title
+    case .credits: return "Credits"
+    }
+  }
+
+  private var icon: String {
+    switch block {
+    case .text: return "text.alignleft"
+    case .event: return "calendar"
+    case .recipe: return "fork.knife"
+    case .bookReview: return "book"
+    case .location: return "mappin"
+    case .link: return "link"
+    case .credits: return "person.2"
+    }
+  }
+
+  private func detailText(_ value: String) -> some View {
+    Text(value)
+      .font(.system(size: 14, weight: .medium))
+      .foregroundStyle(MIRATheme.Color.textSecondary)
+      .lineSpacing(3)
+      .fixedSize(horizontal: false, vertical: true)
+  }
+
+  private func linkButton(_ label: String, _ value: String) -> some View {
+    Button {
+      if let url = URL(string: value) {
+        openURL(url)
       }
-      .buttonStyle(.plain)
-      Button {} label: {
-        Text("GIF")
-          .font(.system(size: 16, weight: .heavy))
-          .foregroundStyle(MIRATheme.Color.textPrimary)
-          .frame(width: 46, height: 38)
-          .overlay(Capsule().stroke(MIRATheme.Color.textPrimary, lineWidth: 2.5))
+    } label: {
+      Label(label, systemImage: "arrow.up.right")
+        .font(.system(size: 14, weight: .semibold))
+        .foregroundStyle(MIRATheme.Color.forest)
+    }
+    .buttonStyle(.plain)
+  }
+}
+
+private struct NoteSignSheet: View {
+  let authorName: String
+  let onSubmit: (String) -> Void
+  let onClose: () -> Void
+  @State private var draft = ""
+  @FocusState private var focused: Bool
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
+      HStack {
+        Text("Sign this Note")
+          .font(.system(size: 20, weight: .semibold))
+        Spacer()
+        Button(action: onClose) {
+          Image(systemName: "xmark")
+            .font(.system(size: 15, weight: .semibold))
+            .frame(width: 34, height: 34)
+            .background(MIRATheme.Color.surfaceSoft)
+            .clipShape(Circle())
+        }
+        .buttonStyle(.plain)
       }
-      .buttonStyle(.plain)
+
+      Text("Leave a short guestbook-style signature for \(authorName).")
+        .font(.system(size: 14, weight: .medium))
+        .foregroundStyle(MIRATheme.Color.textSecondary)
+
+      TextField("Your signature", text: $draft, axis: .vertical)
+        .focused($focused)
+        .lineLimit(3...5)
+        .font(.system(size: 16, weight: .medium))
+        .padding(14)
+        .background(MIRATheme.Color.surfaceSoft)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
       Button {
-        let text = draft
+        onSubmit(draft)
         draft = ""
-        Task { await model.sendReply(text) }
       } label: {
-        Image(systemName: "arrow.up")
-          .font(.system(size: 23, weight: .bold))
-          .foregroundStyle(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? MIRATheme.Color.textMuted.opacity(0.55) : MIRATheme.Color.forest)
-          .frame(width: 34, height: 38)
+        Text("Sign")
+          .font(.system(size: 16, weight: .semibold))
+          .foregroundStyle(.white)
+          .frame(maxWidth: .infinity)
+          .frame(height: 48)
+          .background(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? MIRATheme.Color.textMuted.opacity(0.45) : MIRATheme.Color.forest)
+          .clipShape(Capsule())
       }
       .buttonStyle(.plain)
       .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+      Spacer()
     }
-    .padding(.horizontal, 12)
-    .frame(height: 58)
-    .frame(maxWidth: .infinity)
-    .background(Color(red: 0.985, green: 0.985, blue: 0.975))
-    .clipShape(Capsule())
-    .padding(.horizontal, horizontalInset)
-    .padding(.top, 8)
-    .padding(.bottom, MIRATheme.Space.sm)
-    .background(Color.white.opacity(0.98))
+    .padding(MIRATheme.Space.md)
+    .onAppear { focused = true }
   }
+}
+
+private struct NoteSignatureRow: View {
+  let comment: MIRAComment
+
+  var body: some View {
+    HStack(alignment: .top, spacing: 12) {
+      RemoteAvatar(url: comment.user?.profileImage, size: 36)
+      VStack(alignment: .leading, spacing: 5) {
+        HStack {
+          Text(comment.user?.displayName ?? comment.user?.username ?? "user")
+            .font(.system(size: 14, weight: .semibold))
+          Text(noteAge(comment.createdAt))
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(MIRATheme.Color.textMuted)
+        }
+        Text(comment.text)
+          .font(.system(size: 15, weight: .regular))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .lineSpacing(3)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+      Spacer()
+    }
+    .padding(12)
+    .background(MIRATheme.Color.surfaceSoft.opacity(0.64))
+    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+  }
+}
+
+private func commentsSorted(_ comments: [MIRAComment]) -> [MIRAComment] {
+  comments.sorted { ($0.createdAt ?? "") < ($1.createdAt ?? "") }
 }
 
 private func noteAge(_ value: String?) -> String {
@@ -284,65 +559,4 @@ private func noteAge(_ value: String?) -> String {
   let hours = minutes / 60
   if hours < 24 { return "\(hours)h" }
   return "\(hours / 24)d"
-}
-
-private struct NoteDetailAction: View {
-  let systemImage: String
-  let value: Int
-  let tint: Color
-  let action: () -> Void
-
-  var body: some View {
-    Button(action: action) {
-      HStack(spacing: 7) {
-        Image(systemName: systemImage)
-          .font(.system(size: 25, weight: .regular))
-          .foregroundStyle(tint)
-        Text("\(value)")
-          .font(.system(size: 17, weight: .medium))
-          .foregroundStyle(MIRATheme.Color.textSecondary)
-      }
-      .frame(minHeight: 40)
-    }
-    .buttonStyle(.plain)
-  }
-}
-
-private struct NoteReplyRowNative: View {
-  let comment: MIRAComment
-
-  var body: some View {
-    HStack(alignment: .top, spacing: 12) {
-      RemoteAvatar(url: comment.user?.profileImage, size: 46)
-      VStack(alignment: .leading, spacing: 5) {
-        Text(comment.user?.displayName ?? "user")
-          .font(.system(size: 16, weight: .semibold))
-          .foregroundStyle(MIRATheme.Color.textMuted)
-          .lineLimit(1)
-        Text(comment.text)
-          .font(.system(size: 18, weight: .regular))
-          .foregroundStyle(MIRATheme.Color.textPrimary)
-          .lineSpacing(3.5)
-          .fixedSize(horizontal: false, vertical: true)
-        HStack(spacing: 26) {
-          Text(noteAge(comment.createdAt))
-          Text("Reply")
-        }
-        .font(.system(size: 15, weight: .semibold))
-        .foregroundStyle(MIRATheme.Color.textMuted)
-      }
-      .frame(maxWidth: .infinity, alignment: .leading)
-      Spacer()
-      HStack(spacing: 6) {
-        Image(systemName: comment.likedByMe == true ? "heart.fill" : "heart")
-          .font(.system(size: 24, weight: .regular))
-          .foregroundStyle(comment.likedByMe == true ? MIRATheme.Color.like : MIRATheme.Color.textSecondary)
-        Text("\(comment.likesCount ?? 0)")
-          .font(.system(size: 15, weight: .medium))
-          .foregroundStyle(MIRATheme.Color.textSecondary)
-      }
-      .frame(width: 52)
-      .frame(minHeight: 42)
-    }
-  }
 }

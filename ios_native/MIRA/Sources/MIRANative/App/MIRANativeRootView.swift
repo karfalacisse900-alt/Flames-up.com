@@ -5,6 +5,7 @@ import Foundation
 public enum MIRATab: Hashable {
   case main
   case discover
+  case notes
   case chat
   case profile
 }
@@ -55,6 +56,7 @@ final class MIRAStartupCoordinator: ObservableObject {
 
   let feedModel: MainFeedModel
   let discoverModel: DiscoverNativeModel
+  let notesModel: NotesWallNativeModel
   let chatModel: ChatNativeModel
   let profileModel: ProfileNativeModel
 
@@ -67,6 +69,7 @@ final class MIRAStartupCoordinator: ObservableObject {
     self.api = api
     self.feedModel = MainFeedModel(api: api)
     self.discoverModel = DiscoverNativeModel(api: api)
+    self.notesModel = NotesWallNativeModel(api: api)
     self.chatModel = ChatNativeModel(api: api)
     self.profileModel = ProfileNativeModel(api: api)
   }
@@ -110,13 +113,14 @@ final class MIRAStartupCoordinator: ObservableObject {
 
     phase = .preparingDiscover
     let discoverTask = Task { await discoverModel.prepareForStartup() }
+    let notesTask = Task { await notesModel.prepareForStartup() }
 
     phase = .preparingProfile
     let profileTask = Task { await profileModel.prepareForStartup(signedInUser: authSession.user) }
 
     let chatTask = Task { await chatModel.prepareForStartup() }
 
-    _ = await (feedTask.value, discoverTask.value, profileTask.value, chatTask.value)
+    _ = await (feedTask.value, discoverTask.value, notesTask.value, profileTask.value, chatTask.value)
     startInitialMediaPrewarm()
 
     phase = .readyAuthenticated
@@ -314,6 +318,12 @@ public struct MIRANativeRootView: View {
       }
         .tag(MIRATab.discover)
         .tabItem { Label("Discover", systemImage: "safari.fill") }
+
+      lazyTab(.notes) {
+        NotesWallNativeView(api: api, model: startup.notesModel)
+      }
+        .tag(MIRATab.notes)
+        .tabItem { Label("Notes", systemImage: "rectangle.grid.2x2.fill") }
 
       lazyTab(.chat) {
         ChatNativeView(api: api, currentUserId: authSession.user?.id ?? "", model: startup.chatModel)

@@ -416,24 +416,63 @@ public struct MIRANote: Codable, Identifiable, Hashable {
   public let id: String
   public let body: String?
   public let mediaUrl: String?
+  public let noteType: String?
+  public let mood: String?
+  public let color: String?
+  public let status: String?
   public let createdAt: String?
+  public let updatedAt: String?
   public let reactionsCount: Int?
   public let commentsCount: Int?
+  public let savesCount: Int?
   public let sharesCount: Int?
   public let reacted: Bool?
+  public let saved: Bool?
   public let user: MIRAUser?
+  public let document: NoteDocument?
+  public let artworkMode: NoteArtworkMode?
+  public let contentKind: NoteContentKind?
+  public let detailBlocks: [NoteDetailBlock]?
+  public let visibility: NoteVisibility?
+  public let thumbnailReference: String?
+  public let altText: String?
 
-  public func updating(reactionsCount: Int? = nil, commentsCount: Int? = nil, sharesCount: Int? = nil, reacted: Bool? = nil) -> MIRANote {
+  public var displayDocument: NoteDocument {
+    document ?? NoteLegacyConverter.document(from: self)
+  }
+
+  public func updating(
+    reactionsCount: Int? = nil,
+    commentsCount: Int? = nil,
+    savesCount: Int? = nil,
+    sharesCount: Int? = nil,
+    reacted: Bool? = nil,
+    saved: Bool? = nil
+  ) -> MIRANote {
     MIRANote(
       id: id,
       body: body,
       mediaUrl: mediaUrl,
+      noteType: noteType,
+      mood: mood,
+      color: color,
+      status: status,
       createdAt: createdAt,
+      updatedAt: updatedAt,
       reactionsCount: reactionsCount ?? self.reactionsCount,
       commentsCount: commentsCount ?? self.commentsCount,
+      savesCount: savesCount ?? self.savesCount,
       sharesCount: sharesCount ?? self.sharesCount,
       reacted: reacted ?? self.reacted,
-      user: user
+      saved: saved ?? self.saved,
+      user: user,
+      document: document,
+      artworkMode: artworkMode,
+      contentKind: contentKind,
+      detailBlocks: detailBlocks,
+      visibility: visibility,
+      thumbnailReference: thumbnailReference,
+      altText: altText
     )
   }
 }
@@ -1020,6 +1059,40 @@ public struct CreateNoteBody: Encodable {
   public let body: String
   public let mediaUrl: String?
   public let color: String?
+  public let noteType: String?
+  public let document: NoteDocument?
+  public let artworkMode: NoteArtworkMode?
+  public let contentKind: NoteContentKind?
+  public let detailBlocks: [NoteDetailBlock]?
+  public let visibility: NoteVisibility?
+  public let thumbnailReference: String?
+  public let altText: String?
+
+  public init(
+    body: String,
+    mediaUrl: String? = nil,
+    color: String? = nil,
+    noteType: String? = nil,
+    document: NoteDocument? = nil,
+    artworkMode: NoteArtworkMode? = nil,
+    contentKind: NoteContentKind? = nil,
+    detailBlocks: [NoteDetailBlock]? = nil,
+    visibility: NoteVisibility? = nil,
+    thumbnailReference: String? = nil,
+    altText: String? = nil
+  ) {
+    self.body = body
+    self.mediaUrl = mediaUrl
+    self.color = color
+    self.noteType = noteType
+    self.document = document
+    self.artworkMode = artworkMode
+    self.contentKind = contentKind
+    self.detailBlocks = detailBlocks
+    self.visibility = visibility
+    self.thumbnailReference = thumbnailReference
+    self.altText = altText
+  }
 }
 
 public struct CreateStatusBody: Encodable {
