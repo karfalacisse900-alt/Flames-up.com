@@ -10,7 +10,7 @@ on:
 
 env:
   IOS_NATIVE_DIR: ios_native/MIRA
-  BUNDLE_ID: com.karfala90.frontend
+  BUNDLE_ID: com.captro.app
   SCHEME: MIRA
 
 jobs:
@@ -102,8 +102,6 @@ jobs:
           PROFILE_NAME: ${{ steps.signing.outputs.profile-name }}
         run: |
           set -euo pipefail
-          BUILD_NUMBER="${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
-          echo "BUILD_NUMBER=$BUILD_NUMBER" >> "$GITHUB_ENV"
           xcodebuild \
             -project MIRA.xcodeproj \
             -scheme "$SCHEME" \
@@ -114,7 +112,7 @@ jobs:
             CODE_SIGN_STYLE=Manual \
             CODE_SIGN_IDENTITY="Apple Distribution" \
             PROVISIONING_PROFILE_SPECIFIER="$PROFILE_NAME" \
-            CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+            CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" \
             MARKETING_VERSION="1.0.0" \
             OTHER_CODE_SIGN_FLAGS="--keychain $KEYCHAIN_PATH" \
             clean archive
@@ -145,8 +143,6 @@ jobs:
               <key>${BUNDLE_ID}</key>
               <string>${PROFILE_NAME}</string>
             </dict>
-            <key>manageAppVersionAndBuildNumber</key>
-            <false/>
           </dict>
           </plist>
           PLIST
