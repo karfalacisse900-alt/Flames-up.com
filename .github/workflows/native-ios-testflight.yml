@@ -259,6 +259,7 @@ jobs:
               json.dump(payload, handle)
           PY
 
+          echo "TESTFLIGHT_DISTRIBUTION_STATUS=pending" >> "$GITHUB_ENV"
           for attempt in {1..60}; do
             LOG_PATH="$RUNNER_TEMP/testflight-distribution-${attempt}.log"
             set +e
@@ -281,6 +282,7 @@ jobs:
             set -e
 
             if [ "$status" -eq 0 ]; then
+              echo "TESTFLIGHT_DISTRIBUTION_STATUS=assigned" >> "$GITHUB_ENV"
               exit 0
             fi
 
@@ -290,9 +292,25 @@ jobs:
               continue
             fi
 
+            if grep -qiE "forbidden for security reasons|API key in use does not allow this request" "$LOG_PATH"; then
+              echo "::warning::Captro $BUILD_NUMBER is uploaded to TestFlight, but the App Store Connect API key cannot assign it to Captro Public Beta. Assign the build to the group manually or grant the key TestFlight distribution permissions."
+              echo "TESTFLIGHT_DISTRIBUTION_STATUS=manual_required" >> "$GITHUB_ENV"
+              exit 0
+            fi
+
             exit "$status"
           done
 
       - name: Confirm TestFlight distribution
         run: |
-          echo "Captro ${BUILD_NUMBER} was uploaded, processed, and assigned to Captro Public Beta."
+          case "${TESTFLIGHT_DISTRIBUTION_STATUS:-assigned}" in
+            assigned)
+              echo "Captro ${BUILD_NUMBER} was uploaded, processed, and assigned to Captro Public Beta."
+              ;;
+            manual_required)
+              echo "::warning::Captro ${BUILD_NUMBER} is in TestFlight. Captro Public Beta assignment still requires App Store Connect permissions or manual assignment."
+              ;;
+            *)
+              echo "Captro ${BUILD_NUMBER} completed with distribution status: ${TESTFLIGHT_DISTRIBUTION_STATUS:-unknown}."
+              ;;
+          esac
