@@ -1636,11 +1636,11 @@ public struct MIRAAdaptiveMediaView: View {
 
 public enum MIRAMediaSizing {
   public static let feedTargetWidth: CGFloat = 1080
-  public static let feedTargetHeight: CGFloat = 1440
-  public static let feedPreviewRatio: CGFloat = 4.0 / 3.0
+  public static let feedTargetHeight: CGFloat = 1920
+  public static let feedPreviewRatio: CGFloat = 5.0 / 4.0
   public static let feedShortPortraitRatio: CGFloat = 5.0 / 4.0
   public static let feedTallRatio: CGFloat = 3.0 / 2.0
-  public static let feedImmersiveRatio: CGFloat = 3.0 / 2.0
+  public static let feedImmersiveRatio: CGFloat = 16.0 / 9.0
   public static let profileGridRatio: CGFloat = 5.0 / 4.0
   public static let fullVerticalRatio: CGFloat = 16.0 / 9.0
   public static let maxMainFeedScreenHeightFraction: CGFloat = 0.78
@@ -1727,7 +1727,7 @@ public enum MIRAMediaSizing {
 
   private static func boundedHeight(_ height: CGFloat, width: CGFloat) -> CGFloat {
     let minHeight = width * feedShortPortraitRatio
-    let maxHeight = min(width * feedTallRatio, UIScreen.main.bounds.height * maxMainFeedScreenHeightFraction)
+    let maxHeight = min(width * feedImmersiveRatio, UIScreen.main.bounds.height * maxMainFeedScreenHeightFraction)
     return min(max(height, minHeight), maxHeight)
   }
 
@@ -1780,6 +1780,7 @@ public enum MIRAMediaSizing {
     if containsRatio("4", "5", in: decoded) { return 5.0 / 4.0 }
     if containsRatio("3", "4", in: decoded) { return 4.0 / 3.0 }
     if containsRatio("2", "3", in: decoded) { return 3.0 / 2.0 }
+    if containsRatio("9", "16", in: decoded) { return 16.0 / 9.0 }
     if decoded.contains("portrait") { return feedPreviewRatio }
     return nil
   }

@@ -5158,14 +5158,15 @@ async function messagePayload(c: any, row: any): Promise<any> {
 }
 
 const FEED_MEDIA_WIDTH = 1080;
-const FEED_MEDIA_HEIGHT = 1440;
+const FEED_MEDIA_HEIGHT = 1350;
 const FEED_MEDIA_ASPECT_RATIO = FEED_MEDIA_WIDTH / FEED_MEDIA_HEIGHT;
 const SUPPORTED_FEED_MEDIA_RATIOS = [
   { format: '3:4', feed_width: 1080, feed_height: 1440, feed_aspect_ratio: 1080 / 1440 },
   { format: '4:5', feed_width: 1080, feed_height: 1350, feed_aspect_ratio: 1080 / 1350 },
   { format: '2:3', feed_width: 1080, feed_height: 1620, feed_aspect_ratio: 1080 / 1620 },
+  { format: '9:16', feed_width: 1080, feed_height: 1920, feed_aspect_ratio: 1080 / 1920 },
 ];
-const DEFAULT_FEED_MEDIA_RATIO = SUPPORTED_FEED_MEDIA_RATIOS[0];
+const DEFAULT_FEED_MEDIA_RATIO = SUPPORTED_FEED_MEDIA_RATIOS.find((item) => item.format === '4:5') || SUPPORTED_FEED_MEDIA_RATIOS[0];
 
 function supportedFeedMediaVariant(source: any = {}) {
   const format = cleanText(source?.format, 16);

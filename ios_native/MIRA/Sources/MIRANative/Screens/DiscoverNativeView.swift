@@ -1166,8 +1166,12 @@ struct DiscoverSinglePhotoPreviewSheet: View {
   }
 
   private func previewHeight(for width: CGFloat) -> CGFloat {
-    let height = MIRAMediaSizing.feedHeight(for: [mediaURL ?? ""], aspectRatios: model.post.mediaHeightToWidthRatios, width: width)
-    return min(height, UIScreen.main.bounds.height * 0.66)
+    MIRAMediaSizing.mainFeedHeight(
+      for: [mediaURL ?? ""],
+      aspectRatios: model.post.mediaHeightToWidthRatios,
+      width: width,
+      screenHeight: UIScreen.main.bounds.height
+    )
   }
 
   private func fallbackURL(for media: String) -> String? {

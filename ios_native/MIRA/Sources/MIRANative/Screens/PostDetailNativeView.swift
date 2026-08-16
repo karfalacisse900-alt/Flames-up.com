@@ -816,7 +816,7 @@ private struct PostDetailOptimizedMediaCarousel: View {
           isVideo: isVideo(at: index, url: url),
           placeholderURL: placeholderURL(at: index, mediaURL: url),
           fallbackURL: fallbackURL(at: index, mediaURL: url),
-          contentMode: .fill,
+          contentMode: .fit,
           shouldPlay: false,
           maxPixelSize: MIRAMediaSizing.feedTargetHeight,
           placeholderColor: MIRATheme.Color.mediaPlaceholder
@@ -1281,7 +1281,7 @@ private struct DiscoverDetailMediaCard: View {
         isVideo: isVideo,
         placeholderURL: placeholderURL,
         fallbackURL: fallbackURL,
-        contentMode: .fill,
+        contentMode: .fit,
         shouldPlay: false,
         maxPixelSize: MIRAMediaSizing.feedTargetHeight,
         showsVideoPlaceholderIcon: isVideo

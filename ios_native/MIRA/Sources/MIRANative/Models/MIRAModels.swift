@@ -541,8 +541,9 @@ public enum MIRASupportedPostAspectRatio: String, CaseIterable, Codable, Hashabl
   case threeFour = "3:4"
   case fourFive = "4:5"
   case twoThree = "2:3"
+  case nineSixteen = "9:16"
 
-  public static let defaultRatio: MIRASupportedPostAspectRatio = .threeFour
+  public static let defaultRatio: MIRASupportedPostAspectRatio = .fourFive
 
   public var feedWidth: Double { 1080 }
 
@@ -551,6 +552,7 @@ public enum MIRASupportedPostAspectRatio: String, CaseIterable, Codable, Hashabl
     case .threeFour: return 1440
     case .fourFive: return 1350
     case .twoThree: return 1620
+    case .nineSixteen: return 1920
     }
   }
 
@@ -562,7 +564,7 @@ public enum MIRASupportedPostAspectRatio: String, CaseIterable, Codable, Hashabl
     CGFloat(feedHeight / feedWidth)
   }
 
-  public static func nearest(width: Double?, height: Double?, preferred: MIRASupportedPostAspectRatio = .threeFour) -> MIRASupportedPostAspectRatio {
+  public static func nearest(width: Double?, height: Double?, preferred: MIRASupportedPostAspectRatio = .fourFive) -> MIRASupportedPostAspectRatio {
     guard let width, let height, width > 0, height > 0 else { return preferred }
     let original = width / height
     guard original < 1 else { return preferred }
