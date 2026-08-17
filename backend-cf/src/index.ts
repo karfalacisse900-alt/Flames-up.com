@@ -17844,14 +17844,6 @@ const WALL_NOTE_CANVAS_ELEMENT_KINDS = new Set([
   'photo', 'polaroid', 'text', 'handwritten_caption', 'torn_paper', 'textured_paper',
   'tape', 'sticker', 'drawing', 'flower', 'shape',
 ]);
-const WALL_NOTE_BUNDLED_IMAGE_ASSETS = new Set([
-  'captro_demo_mountain_lake',
-  'captro_demo_editorial_portrait',
-  'captro_demo_cream_flower',
-  'captro_demo_venue_night',
-  'captro_demo_blue_telephone',
-  'captro_demo_ocean_shore',
-]);
 const WALL_NOTE_ARTWORK_MODES = new Set(['editable_canvas', 'imported_artwork']);
 const WALL_NOTE_CONTENT_KINDS = new Set([
   'journal', 'photo_collage', 'minimal_photo', 'travel_recap', 'event_poster',
@@ -18446,19 +18438,16 @@ api.post('/wall/notes', authMiddleware, async (c) => {
       .map((element: any) => publicId(element.media_asset_id, 160))
       .filter((assetId: string) => !!assetId),
   ));
-  const canvasUploadedPhotoAssetIds = canvasPhotoAssetIds.filter((assetId) => (
-    !WALL_NOTE_BUNDLED_IMAGE_ASSETS.has(assetId)
-  ));
   const canvasText = canvasElements
     .map((element: any) => cleanMultilineText(element.text, 1000))
     .filter(Boolean);
   const canvasHasContent = canvasPhotoAssetIds.length > 0 || canvasText.length > 0;
   const submittedMediaAssetId = publicId(b.media_asset_id || b.mediaAssetId, 160);
   const mediaAssetIds: string[] = Array.from(new Set<string>([
-    ...canvasUploadedPhotoAssetIds,
+    ...canvasPhotoAssetIds,
     ...(submittedMediaAssetId ? [submittedMediaAssetId] : []),
   ]));
-  const mediaAssetId = canvasUploadedPhotoAssetIds[0] || submittedMediaAssetId;
+  const mediaAssetId = canvasPhotoAssetIds[0] || submittedMediaAssetId;
   const voiceMediaId = publicId(b.voice_media_id || b.voiceMediaId, 160);
   const requestedType = normalizedWallNoteType(b.note_type || b.noteType, mediaAssetIds.length > 0, !!voiceMediaId);
   if (mediaAssetIds.length && voiceMediaId) {
@@ -18525,9 +18514,7 @@ api.post('/wall/notes', authMiddleware, async (c) => {
         }),
       };
       const unresolvedCanvasPhoto = noteCanvas.elements.find((element: any) => (
-        (element.kind === 'photo' || element.kind === 'polaroid')
-        && !element.media_url
-        && !WALL_NOTE_BUNDLED_IMAGE_ASSETS.has(publicId(element.media_asset_id, 160))
+        (element.kind === 'photo' || element.kind === 'polaroid') && !element.media_url
       ));
       if (unresolvedCanvasPhoto) {
         return c.json({ detail: 'One canvas photo is not ready yet. Please try again.', code: 'MEDIA_NOT_READY' }, 409);

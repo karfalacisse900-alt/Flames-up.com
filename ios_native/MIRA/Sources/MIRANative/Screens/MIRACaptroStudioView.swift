@@ -1250,14 +1250,15 @@ public struct MIRACaptroStudioView: View {
       document.layers
         .filter { $0.kind == .photo }
         .compactMap(\.mediaKey)
-        .filter { images[$0] != nil }
+        .filter { images[$0] != nil || CaptroNoteAsset.resolve($0) != nil }
     )).sorted()
     guard !mediaKeys.isEmpty else { return [:] }
 
     let uploader = MIRAMediaUploadService(api: api)
     var uploaded: [String: MIRAMediaUploadResult] = [:]
     for (index, key) in mediaKeys.enumerated() {
-      guard let image = images[key] else {
+      let bundledImage = CaptroNoteAsset.resolve(key).flatMap { CaptroNoteAssetImageStore.image(for: $0) }
+      guard let image = images[key] ?? bundledImage else {
         throw MIRAAPIError.server(
           status: 500,
           code: "STUDIO_IMAGE_ENCODING_FAILED",
@@ -1293,7 +1294,6 @@ public struct MIRACaptroStudioView: View {
       makeCanvasElement(
         layer,
         upload: layer.mediaKey.flatMap { uploads[$0] },
-        localMediaKey: CaptroNoteAsset.resolve(layer.mediaKey) == nil ? nil : layer.mediaKey,
         designHeight: designHeight
       )
     }

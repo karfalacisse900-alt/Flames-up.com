@@ -103,7 +103,7 @@ struct CaptroNoteAssetView: View {
   }
 }
 
-private enum CaptroNoteAssetImageStore {
+enum CaptroNoteAssetImageStore {
   private static let cache = NSCache<NSString, UIImage>()
 
   static func image(for asset: CaptroNoteAsset) -> UIImage? {

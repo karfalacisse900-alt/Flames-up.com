@@ -124,10 +124,6 @@ test('photo notes require an approved user-owned Cloudflare Images asset', async
   assert.match(worker, /const assetsById = new Map/);
   assert.match(worker, /media_url: trustedUrl \|\| null/);
   assert.match(worker, /const unresolvedCanvasPhoto = noteCanvas\.elements\.find/);
-  assert.match(worker, /const WALL_NOTE_BUNDLED_IMAGE_ASSETS = new Set/);
-  assert.match(worker, /captro_demo_mountain_lake/);
-  assert.match(worker, /canvasUploadedPhotoAssetIds = canvasPhotoAssetIds\.filter/);
-  assert.match(worker, /!WALL_NOTE_BUNDLED_IMAGE_ASSETS\.has\(publicId\(element\.media_asset_id, 160\)\)/);
   assert.match(worker, /const resolvedStyleToken = WALL_NOTE_STYLES\.has\(styleToken\)/);
   assert.match(worker, /style_token: resolvedStyleToken/);
   assert.match(worker, /canvas_elements: noteCanvas\?\.elements \?\? null/);

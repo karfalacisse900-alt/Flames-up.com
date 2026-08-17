@@ -299,7 +299,7 @@ struct MIRANoteCanvasRenderer: View {
 
   private func textElement(_ element: MIRANoteCanvasElement) -> some View {
     let metrics = MIRANoteTextMetrics.decode(element.style.shapeName)
-    Text(cleanText(element.text) ?? "")
+    return Text(cleanText(element.text) ?? "")
       .font(
         canvasFont(
           element.style,
