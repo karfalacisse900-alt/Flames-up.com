@@ -35,6 +35,12 @@ public enum MIRACaptroStudioFontStyle: String, Codable, CaseIterable, Identifiab
 public enum MIRACaptroStudioPhotoFrame: String, Codable, CaseIterable, Identifiable {
   case print
   case polaroid
+  case fullBleed
+  case rounded
+  case circle
+  case arch
+  case torn
+  case cutout
 
   public var id: String { rawValue }
 
@@ -42,6 +48,12 @@ public enum MIRACaptroStudioPhotoFrame: String, Codable, CaseIterable, Identifia
     switch self {
     case .print: return "Photo"
     case .polaroid: return "Polaroid"
+    case .fullBleed: return "Full bleed"
+    case .rounded: return "Rounded"
+    case .circle: return "Circle"
+    case .arch: return "Arch"
+    case .torn: return "Torn"
+    case .cutout: return "Cutout"
     }
   }
 }
@@ -52,6 +64,8 @@ public enum MIRACaptroStudioObject: String, Codable, CaseIterable, Identifiable 
   case handDrawnArrow
   case organicShape
   case tape
+  case coolTape
+  case pen
   case paperclip
   case pushPin
   case ticket
@@ -71,6 +85,8 @@ public enum MIRACaptroStudioObject: String, Codable, CaseIterable, Identifiable 
     case .handDrawnArrow: return "Drawing"
     case .organicShape: return "Shape"
     case .tape: return "Tape"
+    case .coolTape: return "Cool tape"
+    case .pen: return "Pen"
     case .paperclip: return "Paperclip"
     case .pushPin: return "Push pin"
     case .ticket: return "Ticket"
@@ -90,6 +106,8 @@ public enum MIRACaptroStudioObject: String, Codable, CaseIterable, Identifiable 
     case .handDrawnArrow: return "scribble.variable"
     case .organicShape: return "seal"
     case .tape: return "rectangle.fill"
+    case .coolTape: return "rectangle.fill"
+    case .pen: return "pencil"
     case .paperclip: return "paperclip"
     case .pushPin: return "pin.fill"
     case .ticket: return "ticket.fill"
@@ -126,6 +144,10 @@ public struct MIRACaptroStudioLayer: Identifiable, Codable, Hashable {
   public var cropX: CGFloat?
   public var cropY: CGFloat?
   public var cropScale: CGFloat?
+  public var fontSize: CGFloat?
+  public var textAlignment: MIRANoteCanvasTextAlignment?
+  public var letterSpacing: CGFloat?
+  public var lineSpacing: CGFloat?
 
   public init(
     id: String = UUID().uuidString,
@@ -149,7 +171,11 @@ public struct MIRACaptroStudioLayer: Identifiable, Codable, Hashable {
     isLocked: Bool? = false,
     cropX: CGFloat? = nil,
     cropY: CGFloat? = nil,
-    cropScale: CGFloat? = nil
+    cropScale: CGFloat? = nil,
+    fontSize: CGFloat? = nil,
+    textAlignment: MIRANoteCanvasTextAlignment? = nil,
+    letterSpacing: CGFloat? = nil,
+    lineSpacing: CGFloat? = nil
   ) {
     self.id = id
     self.kind = kind
@@ -173,6 +199,10 @@ public struct MIRACaptroStudioLayer: Identifiable, Codable, Hashable {
     self.cropX = cropX
     self.cropY = cropY
     self.cropScale = cropScale
+    self.fontSize = fontSize
+    self.textAlignment = textAlignment
+    self.letterSpacing = letterSpacing
+    self.lineSpacing = lineSpacing
   }
 
   public static func paper(color: String, zIndex: Int = 0) -> Self {
@@ -212,7 +242,11 @@ public struct MIRACaptroStudioLayer: Identifiable, Codable, Hashable {
     rotation: CGFloat = 0,
     zIndex: Int,
     font: MIRACaptroStudioFontStyle = .handwritten,
-    color: String = "ink"
+    color: String = "ink",
+    fontSize: CGFloat? = nil,
+    alignment: MIRANoteCanvasTextAlignment = .center,
+    letterSpacing: CGFloat? = nil,
+    lineSpacing: CGFloat? = nil
   ) -> Self {
     Self(
       kind: .text,
@@ -224,7 +258,11 @@ public struct MIRACaptroStudioLayer: Identifiable, Codable, Hashable {
       zIndex: zIndex,
       text: text,
       fontStyle: font,
-      colorToken: color
+      colorToken: color,
+      fontSize: fontSize,
+      textAlignment: alignment,
+      letterSpacing: letterSpacing,
+      lineSpacing: lineSpacing
     )
   }
 
@@ -280,6 +318,15 @@ public struct MIRACaptroStudioLayer: Identifiable, Codable, Hashable {
 }
 
 public enum MIRACaptroStudioTemplate: String, Codable, CaseIterable, Identifiable {
+  case stationeryNote
+  case landscapeQuote
+  case tornPaperMotivation
+  case photoHandwriting
+  case botanicalCollage
+  case editorialPortrait
+  case minimalTypography
+  case photoTornSection
+  case photoOnly
   case blankPaper
   case vintageBroadcast
   case musicPocket
@@ -299,20 +346,49 @@ public enum MIRACaptroStudioTemplate: String, Codable, CaseIterable, Identifiabl
 
   public static var creationTemplates: [Self] {
     [
-      .minimalPhoto,
+      .stationeryNote,
+      .landscapeQuote,
+      .tornPaperMotivation,
+      .photoHandwriting,
+      .botanicalCollage,
+      .editorialPortrait,
+      .minimalTypography,
+      .photoTornSection,
+      .photoOnly,
       .eventPoster,
       .partyInvitation,
       .bookReview,
-      .travelJournal,
       .recipeBook,
-      .memoryBox,
-      .yearbook,
-      .dailyNote,
-      .quotePoster,
-      .letter,
-      .filmStrip,
       .blankPaper,
       .importedDesign
+    ]
+  }
+
+  public static var quickNoteTemplates: [Self] {
+    [
+      .stationeryNote,
+      .tornPaperMotivation,
+      .minimalTypography,
+      .botanicalCollage,
+      .landscapeQuote,
+      .dailyNote,
+      .letter,
+      .quotePoster,
+    ]
+  }
+
+  public static var demoTemplates: [Self] {
+    [
+      .stationeryNote,
+      .landscapeQuote,
+      .tornPaperMotivation,
+      .photoHandwriting,
+      .botanicalCollage,
+      .editorialPortrait,
+      .minimalTypography,
+      .photoTornSection,
+      .photoOnly,
+      .importedDesign,
     ]
   }
 
@@ -320,6 +396,15 @@ public enum MIRACaptroStudioTemplate: String, Codable, CaseIterable, Identifiabl
 
   public var title: String {
     switch self {
+    case .stationeryNote: return "Notebook + Pen"
+    case .landscapeQuote: return "Landscape Quote"
+    case .tornPaperMotivation: return "Torn Paper"
+    case .photoHandwriting: return "Photo + Handwriting"
+    case .botanicalCollage: return "Botanical Collage"
+    case .editorialPortrait: return "Editorial Portrait"
+    case .minimalTypography: return "Minimal Type"
+    case .photoTornSection: return "Photo + Torn Section"
+    case .photoOnly: return "Photo Only"
     case .blankPaper: return "Minimal"
     case .vintageBroadcast: return "Vintage Broadcast"
     case .musicPocket: return "Music Pocket"
@@ -341,6 +426,15 @@ public enum MIRACaptroStudioTemplate: String, Codable, CaseIterable, Identifiabl
 
   public var subtitle: String {
     switch self {
+    case .stationeryNote: return "Lined paper, a real pen, and room to think"
+    case .landscapeQuote: return "A photograph with layered paper and type"
+    case .tornPaperMotivation: return "Deckled fibers, tape, and generous space"
+    case .photoHandwriting: return "One strong photograph with a personal line"
+    case .botanicalCollage: return "Pressed flowers, tickets, and paper scraps"
+    case .editorialPortrait: return "Portraiture, bold type, and a color field"
+    case .minimalTypography: return "One thought, one focal object, no clutter"
+    case .photoTornSection: return "A custom photo mask with a tactile transition"
+    case .photoOnly: return "Let a single photograph be the whole Note"
     case .blankPaper: return "Start with a clean page"
     case .vintageBroadcast: return "A memory on an old screen"
     case .musicPocket: return "Song, QR, and keepsakes"
@@ -362,6 +456,15 @@ public enum MIRACaptroStudioTemplate: String, Codable, CaseIterable, Identifiabl
 
   public var systemImage: String {
     switch self {
+    case .stationeryNote: return "pencil.and.list.clipboard"
+    case .landscapeQuote: return "photo.on.rectangle.angled"
+    case .tornPaperMotivation: return "doc.richtext"
+    case .photoHandwriting: return "signature"
+    case .botanicalCollage: return "camera.macro"
+    case .editorialPortrait: return "person.crop.rectangle"
+    case .minimalTypography: return "textformat"
+    case .photoTornSection: return "rectangle.split.2x1"
+    case .photoOnly: return "photo.fill"
     case .blankPaper: return "doc"
     case .vintageBroadcast: return "tv"
     case .musicPocket: return "recordingtape"
@@ -386,21 +489,86 @@ public enum MIRACaptroStudioTemplate: String, Codable, CaseIterable, Identifiabl
   /// view render the exact same geometry without reflowing text or photos.
   public var canvasDesignHeight: Double {
     switch self {
-    case .blankPaper, .vintageBroadcast, .musicPocket, .filmStrip, .minimalPhoto:
+    case .landscapeQuote:
+      return 810
+    case .tornPaperMotivation, .photoHandwriting, .editorialPortrait,
+         .photoTornSection, .photoOnly, .blankPaper, .vintageBroadcast,
+         .musicPocket, .filmStrip, .minimalPhoto:
       return 1_350
     case .eventPoster, .partyInvitation, .quotePoster, .importedDesign:
       return 1_920
-    case .yearbook, .memoryBox, .travelJournal, .letter, .recipeBook:
+    case .stationeryNote, .botanicalCollage, .minimalTypography,
+         .yearbook, .memoryBox, .travelJournal, .letter, .recipeBook:
       return 1_620
     case .bookReview, .dailyNote:
       return 1_620
     }
   }
 
-  public func makeDocument() -> MIRACaptroStudioDocument {
+  public func makeDocument(message: String? = nil) -> MIRACaptroStudioDocument {
     var layers: [MIRACaptroStudioLayer] = [.paper(color: backgroundToken)]
 
     switch self {
+    case .stationeryNote:
+      layers.append(.object(.texturedPaper, x: 0.50, y: 0.51, width: 0.72, height: 0.70, rotation: -0.018, zIndex: 1, color: "schoolPaper"))
+      layers.append(.text("THREE THINGS I WANT TO REMEMBER", x: 0.49, y: 0.21, width: 0.57, height: 0.12, zIndex: 2, font: .handwritten, color: "coffee", fontSize: 54, alignment: .leading, lineSpacing: 6))
+      layers.append(.text("01  Give yourself room to begin.\n\n02  Keep the part that feels honest.\n\n03  Make the next small thing.", x: 0.47, y: 0.49, width: 0.54, height: 0.32, zIndex: 3, font: .typewriter, fontSize: 34, alignment: .leading, letterSpacing: 0.8, lineSpacing: 12))
+      layers.append(.text("FOR THE DAYS THAT MOVE TOO FAST", x: 0.49, y: 0.76, width: 0.48, height: 0.06, zIndex: 4, font: .typewriter, color: "stamp", fontSize: 24, alignment: .leading, letterSpacing: 2))
+      layers.append(.object(.pen, x: 0.76, y: 0.69, width: 0.12, height: 0.33, rotation: 0.28, zIndex: 5, color: "lavender"))
+
+    case .landscapeQuote:
+      layers.append(.photo(x: 0.50, y: 0.50, width: 1.0, height: 1.0, zIndex: 1, frame: .fullBleed, mediaKey: CaptroNoteAsset.mountainLake.rawValue))
+      layers.append(.object(.texturedPaper, x: 0.38, y: 0.73, width: 0.50, height: 0.34, rotation: -0.018, zIndex: 2, color: "kraftPaper"))
+      layers.append(.object(.tornPaper, x: 0.40, y: 0.69, width: 0.52, height: 0.34, rotation: 0.012, zIndex: 3, color: "paper"))
+      layers.append(.object(.tape, x: 0.28, y: 0.52, width: 0.23, height: 0.09, rotation: -0.16, zIndex: 4, color: "tape"))
+      layers.append(.text("FIELD NOTE / 06:42", x: 0.28, y: 0.61, width: 0.30, height: 0.05, zIndex: 5, font: .modern, color: "stamp", fontSize: 22, alignment: .leading, letterSpacing: 2.4))
+      layers.append(.text("The quiet parts can carry you farther than the noise.", x: 0.41, y: 0.72, width: 0.42, height: 0.18, zIndex: 6, font: .typewriter, fontSize: 34, alignment: .leading, lineSpacing: 9))
+
+    case .tornPaperMotivation:
+      layers.append(.object(.texturedPaper, x: 0.52, y: 0.52, width: 0.72, height: 0.52, rotation: 0.035, zIndex: 1, color: "kraftPaper"))
+      layers.append(.object(.tornPaper, x: 0.50, y: 0.48, width: 0.74, height: 0.52, rotation: -0.012, zIndex: 2, color: "paper"))
+      layers.append(.object(.coolTape, x: 0.36, y: 0.22, width: 0.25, height: 0.09, rotation: -0.13, zIndex: 3, color: "metal"))
+      layers.append(.text("DAILY NOTE", x: 0.50, y: 0.34, width: 0.48, height: 0.06, zIndex: 4, font: .script, color: "coffee", fontSize: 48))
+      layers.append(.text("Pause. Take the breath. Give yourself another honest try.", x: 0.50, y: 0.52, width: 0.56, height: 0.20, zIndex: 5, font: .editorial, fontSize: 52, lineSpacing: 10))
+      layers.append(.object(.handDrawnArrow, x: 0.50, y: 0.68, width: 0.18, height: 0.06, zIndex: 6, color: "coffee"))
+
+    case .photoHandwriting:
+      layers.append(.photo(x: 0.50, y: 0.50, width: 1.0, height: 1.0, zIndex: 1, frame: .fullBleed, mediaKey: CaptroNoteAsset.editorialPortrait.rawValue))
+      layers.append(.text("STAY CLOSE TO\nWHAT FEELS TRUE", x: 0.09, y: 0.13, width: 0.70, height: 0.15, zIndex: 2, font: .modern, color: "white", fontSize: 32, alignment: .leading, letterSpacing: 3))
+      layers.append(.text("good things grow quietly", x: 0.53, y: 0.86, width: 0.76, height: 0.11, rotation: -0.035, zIndex: 3, font: .script, color: "white", fontSize: 66))
+
+    case .botanicalCollage:
+      layers.append(.object(.texturedPaper, x: 0.39, y: 0.39, width: 0.46, height: 0.36, rotation: -0.055, zIndex: 1, color: "kraftPaper"))
+      layers.append(.object(.tornPaper, x: 0.57, y: 0.46, width: 0.60, height: 0.43, rotation: 0.025, zIndex: 2, color: "paper"))
+      layers.append(.object(.ticket, x: 0.33, y: 0.70, width: 0.36, height: 0.13, rotation: -0.08, zIndex: 3, color: "butter"))
+      layers.append(.object(.pressedFlower, x: 0.72, y: 0.58, width: 0.32, height: 0.48, rotation: 0.11, zIndex: 4, color: "rose"))
+      layers.append(.object(.paperclip, x: 0.32, y: 0.23, width: 0.08, height: 0.15, rotation: -0.22, zIndex: 5, color: "metal"))
+      layers.append(.text("FOUND / KEPT / LOVED", x: 0.48, y: 0.31, width: 0.46, height: 0.08, zIndex: 6, font: .typewriter, color: "stamp", fontSize: 28, alignment: .leading, letterSpacing: 1.5))
+      layers.append(.text("Collect the small evidence that life was beautiful here.", x: 0.47, y: 0.48, width: 0.44, height: 0.20, zIndex: 7, font: .handwritten, color: "coffee", fontSize: 48, alignment: .leading, lineSpacing: 7))
+
+    case .editorialPortrait:
+      layers.append(.text("BECOME", x: 0.08, y: 0.12, width: 0.62, height: 0.12, zIndex: 1, font: .cutout, color: "white", fontSize: 96, alignment: .leading, letterSpacing: 1.5))
+      layers.append(.text("MORE\nYOURSELF", x: 0.08, y: 0.28, width: 0.78, height: 0.22, zIndex: 2, font: .editorial, color: "white", fontSize: 78, alignment: .leading, lineSpacing: 2))
+      layers.append(.photo(x: 0.54, y: 0.66, width: 0.68, height: 0.58, zIndex: 3, frame: .arch, mediaKey: CaptroNoteAsset.editorialPortrait.rawValue))
+      layers.append(.object(.pressedFlower, x: 0.76, y: 0.48, width: 0.25, height: 0.36, rotation: 0.13, zIndex: 4, color: "rose"))
+      layers.append(.text("PORTRAIT STUDY / CAPTRO", x: 0.10, y: 0.92, width: 0.60, height: 0.05, zIndex: 5, font: .modern, color: "white", fontSize: 21, alignment: .leading, letterSpacing: 2.6))
+
+    case .minimalTypography:
+      layers.append(.text("MAKE ROOM\nFOR JOY.", x: 0.50, y: 0.27, width: 0.72, height: 0.22, zIndex: 1, font: .editorial, color: "ink", fontSize: 76, alignment: .leading, lineSpacing: 1))
+      layers.append(.text("A SMALL REMINDER FOR TODAY", x: 0.50, y: 0.43, width: 0.72, height: 0.05, zIndex: 2, font: .modern, color: "stamp", fontSize: 22, alignment: .leading, letterSpacing: 3))
+      layers.append(.photo(x: 0.55, y: 0.72, width: 0.48, height: 0.38, rotation: -0.018, zIndex: 3, frame: .rounded, mediaKey: CaptroNoteAsset.creamFlower.rawValue))
+
+    case .photoTornSection:
+      layers.append(.photo(x: 0.50, y: 0.38, width: 0.84, height: 0.58, rotation: -0.018, zIndex: 1, frame: .cutout, mediaKey: CaptroNoteAsset.editorialPortrait.rawValue))
+      layers.append(.object(.tornPaper, x: 0.50, y: 0.75, width: 0.84, height: 0.38, rotation: 0.014, zIndex: 2, color: "paper"))
+      layers.append(.object(.tape, x: 0.70, y: 0.51, width: 0.23, height: 0.08, rotation: 0.14, zIndex: 3, color: "tape"))
+      layers.append(.text("CALL YOURSELF BACK", x: 0.50, y: 0.67, width: 0.66, height: 0.08, zIndex: 4, font: .typewriter, color: "stamp", fontSize: 30, alignment: .leading, letterSpacing: 1.5))
+      layers.append(.text("You are allowed to begin again from exactly where you are.", x: 0.50, y: 0.78, width: 0.66, height: 0.15, zIndex: 5, font: .handwritten, color: "ink", fontSize: 48, alignment: .leading, lineSpacing: 7))
+      layers.append(.object(.handDrawnArrow, x: 0.76, y: 0.90, width: 0.18, height: 0.07, rotation: -0.08, zIndex: 6, color: "stamp"))
+
+    case .photoOnly:
+      layers.append(.photo(x: 0.50, y: 0.50, width: 1.0, height: 1.0, zIndex: 1, frame: .fullBleed, mediaKey: CaptroNoteAsset.oceanShore.rawValue))
+
     case .blankPaper:
       layers.append(.text("Make this page yours", x: 0.5, y: 0.47, width: 0.72, zIndex: 1, font: .editorial))
 
@@ -491,7 +659,17 @@ public enum MIRACaptroStudioTemplate: String, Codable, CaseIterable, Identifiabl
       layers.append(.text("small caption", x: 0.5, y: 0.86, width: 0.62, height: 0.07, zIndex: 2, font: .modern))
 
     case .importedDesign:
-      layers.append(.photo(x: 0.5, y: 0.5, width: 1.0, height: 1.0, zIndex: 1, frame: .print, mediaKey: "imported-artwork"))
+      layers.append(.photo(x: 0.5, y: 0.5, width: 1.0, height: 1.0, zIndex: 1, frame: .fullBleed, mediaKey: CaptroNoteAsset.venueNight.rawValue))
+      layers.append(.text("NIGHT SHIFT", x: 0.10, y: 0.15, width: 0.72, height: 0.11, zIndex: 2, font: .cutout, color: "white", fontSize: 82, alignment: .leading, letterSpacing: 1.2))
+      layers.append(.text("ONE NIGHT / ONE ROOM / NO REWIND", x: 0.10, y: 0.88, width: 0.72, height: 0.06, zIndex: 3, font: .modern, color: "white", fontSize: 22, alignment: .leading, letterSpacing: 2.2))
+    }
+
+    let cleanMessage = message?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    if !cleanMessage.isEmpty,
+       let index = layers.indices
+         .filter({ layers[$0].kind == .text })
+         .max(by: { layers[$0].width * layers[$0].height < layers[$1].width * layers[$1].height }) {
+      layers[index].text = String(cleanMessage.prefix(1_000))
     }
 
     return MIRACaptroStudioDocument(template: self, backgroundToken: backgroundToken, layers: layers)
@@ -499,6 +677,15 @@ public enum MIRACaptroStudioTemplate: String, Codable, CaseIterable, Identifiabl
 
   private var backgroundToken: String {
     switch self {
+    case .stationeryNote: return "sunlitPaper"
+    case .landscapeQuote: return "bluePaper"
+    case .tornPaperMotivation: return "bluePaper"
+    case .photoHandwriting: return "charcoalPaper"
+    case .botanicalCollage: return "cottonPaper"
+    case .editorialPortrait: return "burgundy"
+    case .minimalTypography: return "cottonPaper"
+    case .photoTornSection: return "bluePaper"
+    case .photoOnly: return "charcoalPaper"
     case .blankPaper, .letter: return "warmPaper"
     case .vintageBroadcast: return "sagePaper"
     case .musicPocket: return "lilacPaper"
@@ -516,6 +703,13 @@ public enum MIRACaptroStudioTemplate: String, Codable, CaseIterable, Identifiabl
 
   public var noteCanvasTemplate: MIRANoteCanvasTemplate {
     switch self {
+    case .stationeryNote: return .notebook
+    case .landscapeQuote: return .travelDiary
+    case .tornPaperMotivation: return .minimalMotivation
+    case .photoHandwriting, .photoOnly: return .minimalPhoto
+    case .botanicalCollage, .photoTornSection: return .scrapbook
+    case .editorialPortrait: return .eventPoster
+    case .minimalTypography: return .minimal
     case .yearbook: return .journal
     case .travelJournal: return .travelDiary
     case .memoryBox, .vintageBroadcast, .musicPocket: return .scrapbook
@@ -527,23 +721,34 @@ public enum MIRACaptroStudioTemplate: String, Codable, CaseIterable, Identifiabl
     case .eventPoster, .partyInvitation, .quotePoster: return .minimal
     case .dailyNote: return .journal
     case .minimalPhoto: return .minimal
-    case .importedDesign: return .minimal
+    case .importedDesign: return .importedArtwork
     }
   }
 
   public var noteCanvasFormat: MIRANoteCanvasFormat {
     switch self {
-    case .blankPaper, .vintageBroadcast, .musicPocket, .filmStrip, .minimalPhoto:
+    case .landscapeQuote:
+      return .landscape4x3
+    case .tornPaperMotivation, .photoHandwriting, .editorialPortrait,
+         .photoTornSection, .photoOnly, .blankPaper, .vintageBroadcast,
+         .musicPocket, .filmStrip, .minimalPhoto:
       return .portrait4x5
     case .eventPoster, .partyInvitation, .quotePoster, .importedDesign:
       return .poster9x16
-    default:
+    case .stationeryNote, .botanicalCollage, .minimalTypography,
+         .yearbook, .memoryBox, .travelJournal, .letter, .recipeBook,
+         .bookReview, .dailyNote:
       return .portrait2x3
     }
   }
 
   public var noteContentKind: MIRANoteContentKind {
     switch self {
+    case .stationeryNote, .tornPaperMotivation, .minimalTypography: return .journal
+    case .landscapeQuote: return .travelRecap
+    case .photoHandwriting, .photoOnly: return .minimalPhoto
+    case .botanicalCollage, .photoTornSection: return .scrapbook
+    case .editorialPortrait: return .artwork
     case .blankPaper, .letter, .dailyNote: return .journal
     case .vintageBroadcast, .memoryBox, .yearbook: return .scrapbook
     case .musicPocket, .filmStrip: return .photoCollage
@@ -556,6 +761,14 @@ public enum MIRACaptroStudioTemplate: String, Codable, CaseIterable, Identifiabl
     case .minimalPhoto: return .minimalPhoto
     case .importedDesign: return .importedDesign
     }
+  }
+}
+
+public enum MIRACaptroStudioDemoFixtures {
+  /// Ten deliberately different documents used by previews and regression
+  /// tests to verify that the Wall can display a varied body of visual work.
+  public static var documents: [MIRACaptroStudioDocument] {
+    MIRACaptroStudioTemplate.demoTemplates.map { $0.makeDocument() }
   }
 }
 
@@ -585,7 +798,9 @@ public struct MIRACaptroStudioDocument: Identifiable, Codable, Hashable {
     guard let original = layers.first(where: { $0.id == id }), original.kind != .paper else { return nil }
     var copy = original
     copy.id = UUID().uuidString
-    if copy.kind == .photo, copy.mediaKey != nil {
+    if copy.kind == .photo,
+       let mediaKey = copy.mediaKey,
+       CaptroNoteAsset.resolve(mediaKey) == nil {
       copy.mediaKey = UUID().uuidString
     }
     copy.x = min(0.94, copy.x + 0.045)

@@ -345,6 +345,8 @@ public struct WallOfNotesNativeView: View {
   @State private var selectedFilter = "all"
   @State private var isStudioPresented = false
   @State private var studioInitialTemplate: MIRACaptroStudioTemplate?
+  @State private var studioInitialMessage: String?
+  @State private var studioPublishingIdentity = "author"
   @State private var initialFrameWallID: String?
   @State private var placementNoteID: String?
   @State private var selectedStoryGroup: MIRAStoryGroup?
@@ -450,8 +452,10 @@ public struct WallOfNotesNativeView: View {
           )
         }
         .sheet(isPresented: $isCreating) {
-          MIRANoteCreationEntryView(camera: camera, api: api) { template in
+          MIRANoteCreationEntryView(camera: camera, api: api) { template, message, identity in
             studioInitialTemplate = template
+            studioInitialMessage = message
+            studioPublishingIdentity = identity
             isCreating = false
             isStudioPresented = true
           } onPublish: { body in
@@ -473,8 +477,16 @@ public struct WallOfNotesNativeView: View {
         }
         .fullScreenCover(isPresented: $isStudioPresented, onDismiss: {
           studioInitialTemplate = nil
+          studioInitialMessage = nil
+          studioPublishingIdentity = "author"
         }) {
-          MIRACaptroStudioView(camera: camera, api: api, initialTemplate: studioInitialTemplate) { body in
+          MIRACaptroStudioView(
+            camera: camera,
+            api: api,
+            initialTemplate: studioInitialTemplate,
+            initialMessage: studioInitialMessage,
+            publishingIdentity: studioPublishingIdentity
+          ) { body in
             let note = try await model.create(body)
             placementNoteID = note.id
             withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
@@ -987,10 +999,18 @@ private struct MIRAWallDetailNoteStage: View {
   }
 }
 
+private struct MIRAPendingFinishedNoteDesign {
+  let image: UIImage
+  let mediaAssetID: String
+  let mediaURL: String
+  let canvas: MIRANoteCanvas
+  let aspect: CGFloat
+}
+
 private struct MIRANoteCreationEntryView: View {
   let camera: MIRAWallCamera
   let api: MIRAAPIClient
-  let onOpenStudio: (MIRACaptroStudioTemplate?) -> Void
+  let onOpenStudio: (MIRACaptroStudioTemplate?, String?, String) -> Void
   let onPublish: (MIRACreateWallNoteBody) async throws -> MIRAWallNote
 
   @Environment(\.dismiss) private var dismiss
@@ -998,71 +1018,136 @@ private struct MIRANoteCreationEntryView: View {
   @State private var isImporting = false
   @State private var importMessage = ""
   @State private var errorMessage: String?
+  @State private var showsQuickNote = false
+  @State private var quickNoteText = ""
+  @State private var pendingFinishedDesign: MIRAPendingFinishedNoteDesign?
+  @State private var finishedDesignCaption = ""
+  @State private var finishedDesignDetails = ""
 
   var body: some View {
     NavigationStack {
-      VStack(alignment: .leading, spacing: 18) {
-        VStack(alignment: .leading, spacing: 5) {
-          Text("Create Note")
-            .font(.system(size: 28, weight: .bold))
-            .foregroundStyle(MIRATheme.Color.textPrimary)
-          Text("Choose how this visual note starts.")
-            .font(.system(size: 14, weight: .medium))
-            .foregroundStyle(MIRATheme.Color.textSecondary)
-        }
-
-        VStack(spacing: 10) {
-          creationEntryButton(
-            title: "Blank canvas",
-            subtitle: "Open a clean editable page",
-            systemImage: "doc",
-            isDisabled: isImporting
-          ) {
-            onOpenStudio(.blankPaper)
-          }
-
-          creationEntryButton(
-            title: "Use template",
-            subtitle: "Browse posters, journals, reviews, invites",
-            systemImage: "square.grid.2x2",
-            isDisabled: isImporting
-          ) {
-            onOpenStudio(nil)
-          }
-
-          PhotosPicker(selection: $importItem, matching: .images) {
-            creationEntryButtonContent(
-              title: "Upload design",
-              subtitle: "Post finished artwork full bleed",
-              systemImage: "square.and.arrow.down.on.square",
-              isDisabled: isImporting
-            )
-          }
-          .buttonStyle(.plain)
-          .disabled(isImporting)
-        }
-
-        if isImporting {
-          HStack(spacing: 10) {
-            ProgressView()
-              .tint(MIRATheme.Color.forest)
-            Text(importMessage.isEmpty ? "Importing..." : importMessage)
-              .font(.system(size: 13, weight: .semibold))
+      ScrollView(showsIndicators: false) {
+        VStack(alignment: .leading, spacing: 18) {
+          VStack(alignment: .leading, spacing: 5) {
+            Text("Create Note")
+              .font(.system(size: 28, weight: .bold))
+              .foregroundStyle(MIRATheme.Color.textPrimary)
+            Text("Choose how this visual note starts.")
+              .font(.system(size: 14, weight: .medium))
               .foregroundStyle(MIRATheme.Color.textSecondary)
           }
-          .padding(.top, 2)
-        }
 
-        if let errorMessage {
-          Text(errorMessage)
-            .font(.system(size: 13, weight: .medium))
-            .foregroundStyle(.red)
-            .fixedSize(horizontal: false, vertical: true)
-        }
+          VStack(spacing: 9) {
+            creationEntryButton(
+              title: "Start Blank",
+              subtitle: "Open a clean, fully editable page",
+              systemImage: "doc",
+              isDisabled: isImporting
+            ) {
+              onOpenStudio(.blankPaper, nil, "author")
+            }
 
-        Spacer(minLength: 0)
+            creationEntryButton(
+              title: "Templates",
+              subtitle: "Browse tactile notes, portraits, and collages",
+              systemImage: "square.grid.2x2",
+              isDisabled: isImporting
+            ) {
+              onOpenStudio(nil, nil, "author")
+            }
+
+            PhotosPicker(selection: $importItem, matching: .images) {
+              creationEntryButtonContent(
+                title: "Upload Finished Design",
+                subtitle: "Keep completed artwork exactly as designed",
+                systemImage: "square.and.arrow.down.on.square",
+                isDisabled: isImporting
+              )
+            }
+            .buttonStyle(.plain)
+            .disabled(isImporting)
+
+            creationEntryButton(
+              title: "Quick Note",
+              subtitle: "Write once, then choose a visual treatment",
+              systemImage: "bolt.fill",
+              isDisabled: isImporting
+            ) {
+              withAnimation(.easeInOut(duration: 0.2)) {
+                showsQuickNote.toggle()
+              }
+            }
+
+            creationEntryButton(
+              title: "Ghost Note",
+              subtitle: "Design and publish without your profile",
+              systemImage: "theatermasks.fill",
+              isDisabled: isImporting
+            ) {
+              onOpenStudio(nil, nil, "ghost")
+            }
+          }
+
+          if let pendingFinishedDesign {
+            finishedDesignComposer(pendingFinishedDesign)
+              .transition(.opacity.combined(with: .move(edge: .top)))
+          }
+
+          if showsQuickNote {
+            VStack(alignment: .leading, spacing: 12) {
+              TextField("Write the note you want to keep", text: $quickNoteText, axis: .vertical)
+                .lineLimit(2...5)
+                .font(.system(size: 15, weight: .medium))
+                .padding(13)
+                .background(MIRATheme.Color.appBackground, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay {
+                  RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(MIRATheme.Color.hairline, lineWidth: 1)
+                }
+
+              if !quickNoteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Text("Choose a look")
+                  .font(.system(size: 15, weight: .bold))
+                  .foregroundStyle(MIRATheme.Color.textPrimary)
+
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+                  ForEach(MIRACaptroStudioTemplate.quickNoteTemplates) { template in
+                    Button {
+                      onOpenStudio(template, quickNoteText, "author")
+                    } label: {
+                      MIRAQuickNoteDesignPreview(template: template, message: quickNoteText)
+                    }
+                    .buttonStyle(.miraPress)
+                    .accessibilityLabel("Use \(template.title) for this Quick Note")
+                  }
+                }
+              }
+            }
+            .transition(.opacity.combined(with: .move(edge: .top)))
+          }
+
+          if isImporting {
+            HStack(spacing: 10) {
+              ProgressView()
+                .tint(MIRATheme.Color.forest)
+              Text(importMessage.isEmpty ? "Importing..." : importMessage)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(MIRATheme.Color.textSecondary)
+            }
+            .padding(.top, 2)
+          }
+
+          if let errorMessage {
+            Text(errorMessage)
+              .font(.system(size: 13, weight: .medium))
+              .foregroundStyle(.red)
+              .fixedSize(horizontal: false, vertical: true)
+          }
+
+          Spacer(minLength: 24)
+        }
+        .padding(20)
       }
-      .padding(20)
       .background(MIRATheme.Color.surface.ignoresSafeArea())
       .toolbar {
         ToolbarItem(placement: .topBarTrailing) {
@@ -1127,12 +1212,67 @@ private struct MIRANoteCreationEntryView: View {
     }
     .padding(14)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .background(MIRATheme.Color.appBackground, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    .background(MIRATheme.Color.appBackground, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     .overlay(
-      RoundedRectangle(cornerRadius: 18, style: .continuous)
+      RoundedRectangle(cornerRadius: 8, style: .continuous)
         .stroke(MIRATheme.Color.hairline, lineWidth: 1)
     )
     .opacity(isDisabled ? 0.55 : 1)
+  }
+
+  private func finishedDesignComposer(_ pending: MIRAPendingFinishedNoteDesign) -> some View {
+    VStack(alignment: .leading, spacing: 12) {
+      Image(uiImage: pending.image)
+        .resizable()
+        .scaledToFit()
+        .frame(maxWidth: .infinity)
+        .frame(maxHeight: 240)
+        .background(Color.black.opacity(0.035))
+        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+
+      TextField("Caption (optional)", text: $finishedDesignCaption, axis: .vertical)
+        .lineLimit(1...3)
+        .font(.system(size: 14, weight: .medium))
+        .padding(12)
+        .background(MIRATheme.Color.appBackground, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+      TextField("Story or details (optional)", text: $finishedDesignDetails, axis: .vertical)
+        .lineLimit(2...5)
+        .font(.system(size: 14, weight: .medium))
+        .padding(12)
+        .background(MIRATheme.Color.appBackground, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+      HStack(spacing: 10) {
+        Button("Cancel") {
+          pendingFinishedDesign = nil
+          finishedDesignCaption = ""
+          finishedDesignDetails = ""
+        }
+        .font(.system(size: 13, weight: .bold))
+        .foregroundStyle(MIRATheme.Color.textSecondary)
+        .frame(maxWidth: .infinity, minHeight: 42)
+        .background(MIRATheme.Color.appBackground, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+
+        Button {
+          Task { await publishFinishedDesign(pending) }
+        } label: {
+          HStack(spacing: 7) {
+            if isImporting { ProgressView().tint(.white) }
+            Text(isImporting ? "Posting..." : "Post design")
+          }
+          .font(.system(size: 13, weight: .bold))
+          .foregroundStyle(.white)
+          .frame(maxWidth: .infinity, minHeight: 42)
+          .background(MIRATheme.Color.forest, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        }
+        .disabled(isImporting)
+      }
+    }
+    .padding(12)
+    .overlay {
+      RoundedRectangle(cornerRadius: 8, style: .continuous)
+        .stroke(MIRATheme.Color.hairline, lineWidth: 1)
+    }
   }
 
   @MainActor
@@ -1158,12 +1298,14 @@ private struct MIRANoteCreationEntryView: View {
       }
 
       importMessage = "Uploading..."
+      let contentType = item.supportedContentTypes.first(where: { $0.conforms(to: .image) }) ?? .jpeg
+      let fileExtension = contentType.preferredFilenameExtension ?? "jpg"
       let upload = try await MIRAMediaUploadService(api: api).uploadResult(
         MIRAPickedMedia(
           data: data,
           kind: .image,
-          fileName: "finished-note-\(UUID().uuidString).jpg",
-          mimeType: "image/jpeg"
+          fileName: "finished-note-\(UUID().uuidString).\(fileExtension)",
+          mimeType: contentType.preferredMIMEType ?? "image/jpeg"
         )
       )
       guard let mediaAssetId = upload.mediaAssetId else {
@@ -1180,7 +1322,7 @@ private struct MIRANoteCreationEntryView: View {
       let designHeight = min(3_120.0, max(607.0, designWidth / Double(aspect)))
       let format = MIRANoteCanvasFormat.closest(width: designWidth, height: designHeight)
       let canvas = MIRANoteCanvas(
-        template: .minimal,
+        template: .importedArtwork,
         format: format,
         designWidth: designWidth,
         designHeight: designHeight,
@@ -1200,23 +1342,50 @@ private struct MIRANoteCreationEntryView: View {
           )
         ]
       )
-      let document = MIRANoteDocument.importedArtwork(
+      pendingFinishedDesign = MIRAPendingFinishedNoteDesign(
+        image: image,
+        mediaAssetID: mediaAssetId,
+        mediaURL: upload.url,
         canvas: canvas,
-        title: "Finished design",
-        altText: "Imported visual note",
-        thumbnailUrl: upload.url
+        aspect: aspect
       )
-      let width = 340.0
-      let height = min(520.0, max(190.0, width / Double(aspect)))
+    } catch {
+      errorMessage = error.localizedDescription
+    }
+  }
+
+  @MainActor
+  private func publishFinishedDesign(_ pending: MIRAPendingFinishedNoteDesign) async {
+    guard !isImporting else { return }
+    isImporting = true
+    errorMessage = nil
+    defer { isImporting = false }
+
+    do {
+      let caption = String(finishedDesignCaption.trimmingCharacters(in: .whitespacesAndNewlines).prefix(300))
+      let details = String(finishedDesignDetails.trimmingCharacters(in: .whitespacesAndNewlines).prefix(1_000))
+      let detailBlocks: [MIRANoteDetailBlock] = details.isEmpty
+        ? []
+        : [MIRANoteDetailBlock(kind: .text, title: caption.isEmpty ? "About this design" : nil, body: details)]
+      let document = MIRANoteDocument.importedArtwork(
+        canvas: pending.canvas,
+        title: caption.isEmpty ? "Finished design" : String(caption.prefix(80)),
+        subtitle: "Imported finished artwork",
+        altText: caption.isEmpty ? "Imported visual note" : caption,
+        thumbnailUrl: pending.mediaURL,
+        detailBlocks: detailBlocks
+      )
+      let width = pending.aspect >= 1.1 ? 420.0 : (pending.aspect <= 0.65 ? 300.0 : 340.0)
+      let height = width / Double(pending.aspect)
       let request = MIRACreateWallNoteBody(
         wallId: MIRAWallDestination.global.id,
         publishingIdentity: "author",
-        body: "",
+        body: caption,
         category: nil,
         colorToken: "white",
         styleToken: "canvas",
-        mediaAssetId: mediaAssetId,
-        mediaUrl: upload.url,
+        mediaAssetId: pending.mediaAssetID,
+        mediaUrl: pending.mediaURL,
         worldX: Double(camera.center.x) - width * 0.5,
         worldY: Double(camera.center.y) - height * 0.5,
         width: width,
@@ -1233,15 +1402,127 @@ private struct MIRANoteCreationEntryView: View {
         voiceWaveform: nil,
         location: nil,
         document: document,
-        canvas: canvas
+        canvas: pending.canvas
       )
-
-      importMessage = "Posting..."
       _ = try await onPublish(request)
       dismiss()
     } catch {
       errorMessage = error.localizedDescription
     }
+  }
+}
+
+private struct MIRAQuickNoteDesignPreview: View {
+  let template: MIRACaptroStudioTemplate
+  let message: String
+
+  var body: some View {
+    ZStack {
+      previewBackground
+
+      if template == .tornPaperMotivation || template == .landscapeQuote {
+        CaptroNoteAssetView(asset: .tornIvory, contentMode: .fill)
+          .frame(width: 124, height: 86)
+          .rotationEffect(.degrees(template == .landscapeQuote ? -2 : 1))
+          .shadow(color: .black.opacity(0.16), radius: 6, y: 4)
+      }
+
+      if template == .botanicalCollage {
+        CaptroNoteAssetView(asset: .vintageTicket)
+          .frame(width: 82, height: 42)
+          .rotationEffect(.degrees(-9))
+          .offset(x: -38, y: 38)
+        CaptroNoteAssetView(asset: .pressedWildflower)
+          .frame(width: 70, height: 104)
+          .rotationEffect(.degrees(8))
+          .offset(x: 46, y: 24)
+      }
+
+      if template == .stationeryNote || template == .letter || template == .dailyNote {
+        CaptroNoteAssetView(asset: .lavenderPen)
+          .frame(width: 30, height: 92)
+          .rotationEffect(.degrees(14))
+          .offset(x: 54, y: 36)
+      }
+
+      Text(String(message.prefix(120)))
+        .font(previewFont)
+        .foregroundStyle(previewForeground)
+        .multilineTextAlignment(previewAlignment)
+        .lineLimit(5)
+        .minimumScaleFactor(0.48)
+        .frame(maxWidth: 126, maxHeight: 94, alignment: previewFrameAlignment)
+        .padding(8)
+        .shadow(color: usesPhotoBackground ? .black.opacity(0.32) : .clear, radius: 3, y: 2)
+
+      VStack {
+        Spacer()
+        HStack {
+          Text(template.title.uppercased())
+            .font(.system(size: 8, weight: .bold))
+            .tracking(0.8)
+            .foregroundStyle(previewForeground.opacity(0.82))
+          Spacer()
+        }
+        .padding(8)
+      }
+    }
+    .frame(maxWidth: .infinity)
+    .frame(height: 158)
+    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+    .overlay {
+      RoundedRectangle(cornerRadius: 7, style: .continuous)
+        .stroke(Color.black.opacity(0.10), lineWidth: 0.8)
+    }
+  }
+
+  @ViewBuilder
+  private var previewBackground: some View {
+    switch template {
+    case .landscapeQuote:
+      CaptroNoteAssetView(asset: .mountainLake, contentMode: .fill)
+    case .stationeryNote, .dailyNote, .letter:
+      CaptroNoteAssetView(asset: .paperNotebook, contentMode: .fill)
+    case .tornPaperMotivation:
+      CaptroNoteAssetView(asset: .paperBlue, contentMode: .fill)
+    case .botanicalCollage, .minimalTypography:
+      CaptroNoteAssetView(asset: .paperCotton, contentMode: .fill)
+    case .quotePoster:
+      Color(red: 0.38, green: 0.11, blue: 0.15)
+    default:
+      CaptroNoteAssetView(asset: .paperCotton, contentMode: .fill)
+    }
+  }
+
+  private var usesPhotoBackground: Bool {
+    template == .landscapeQuote
+  }
+
+  private var previewForeground: Color {
+    if template == .quotePoster || template == .landscapeQuote { return .white }
+    if template == .tornPaperMotivation { return Color(red: 0.17, green: 0.15, blue: 0.13) }
+    return Color(red: 0.12, green: 0.10, blue: 0.08)
+  }
+
+  private var previewFont: Font {
+    switch template {
+    case .minimalTypography, .tornPaperMotivation:
+      return .custom("NewYork-Regular", size: 19)
+    case .stationeryNote, .botanicalCollage, .dailyNote, .letter:
+      return .custom("Noteworthy", size: 16)
+    case .quotePoster:
+      return .system(size: 19, weight: .black)
+    default:
+      return .custom("AmericanTypewriter", size: 14)
+    }
+  }
+
+  private var previewAlignment: TextAlignment {
+    template == .minimalTypography || template == .stationeryNote ? .leading : .center
+  }
+
+  private var previewFrameAlignment: Alignment {
+    template == .minimalTypography || template == .stationeryNote ? .leading : .center
   }
 }
 

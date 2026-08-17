@@ -78,16 +78,26 @@ struct MIRANoteCanvasRenderer: View {
 
   @ViewBuilder
   private var canvasBackground: some View {
-    CaptroPhotographedPaper(
-      seed: "canvas-\(canvas.version)-\(canvas.template.rawValue)",
-      kind: paperKind(canvas.background.material),
-      base: canvasColor(canvas.background.colorHex, fallback: backgroundFallback),
-      textureOpacity: 0.34 * mode.textureDetail,
-      directionalLight: canvas.template == .darkAlbum ? 0.08 : 0.16
-    )
-    .overlay {
-      if canvas.template == .notebook {
-        notebookMargin
+    if let asset = CaptroNoteAsset.resolve(canvas.background.textureAsset) {
+      ZStack {
+        canvasColor(canvas.background.colorHex, fallback: backgroundFallback)
+        CaptroNoteAssetView(asset: asset, contentMode: .fill)
+          .saturation(mode == .wallPreview ? 0.96 : 1)
+          .contrast(mode == .wallPreview ? 1.03 : 1)
+      }
+      .clipped()
+    } else {
+      CaptroPhotographedPaper(
+        seed: "canvas-\(canvas.version)-\(canvas.template.rawValue)",
+        kind: paperKind(canvas.background.material),
+        base: canvasColor(canvas.background.colorHex, fallback: backgroundFallback),
+        textureOpacity: 0.34 * mode.textureDetail,
+        directionalLight: canvas.template == .darkAlbum ? 0.08 : 0.16
+      )
+      .overlay {
+        if canvas.template == .notebook {
+          notebookMargin
+        }
       }
     }
   }
@@ -120,10 +130,14 @@ struct MIRANoteCanvasRenderer: View {
       case .texturedPaper:
         paperElement(element, torn: false)
       case .tape:
-        CaptroMaskingTape(
-          seed: element.id,
-          color: canvasColor(element.style.colorHex, fallback: Color(red: 0.83, green: 0.75, blue: 0.58))
-        )
+        if let asset = CaptroNoteAsset.resolve(element.style.material) {
+          CaptroNoteAssetView(asset: asset)
+        } else {
+          CaptroMaskingTape(
+            seed: element.id,
+            color: canvasColor(element.style.colorHex, fallback: Color(red: 0.83, green: 0.75, blue: 0.58))
+          )
+        }
       case .sticker:
         stickerElement(element)
       case .drawing:
@@ -197,17 +211,34 @@ struct MIRANoteCanvasRenderer: View {
         .captroMaterialShadow(elevation(for: element), seed: element.id)
       }
     } else {
-      mediaImage(element)
-        .overlay { CaptroPhotoPrintFinish(seed: element.id) }
-        .clipShape(RoundedRectangle(cornerRadius: CGFloat(max(0, element.style.cornerRadius ?? 3))))
+      Group {
+        if element.style.shapeName == "cutout" || canvas.template == .importedArtwork {
+          mediaImage(element)
+        } else {
+          mediaImage(element)
+            .overlay { CaptroPhotoPrintFinish(seed: element.id) }
+        }
+      }
+        .clipShape(MIRANotePhotoMaskShape(
+          name: element.style.shapeName,
+          seed: element.id,
+          cornerRadius: CGFloat(max(0, element.style.cornerRadius ?? 3))
+        ))
         .overlay {
-          RoundedRectangle(cornerRadius: CGFloat(max(0, element.style.cornerRadius ?? 3)))
+          MIRANotePhotoMaskShape(
+            name: element.style.shapeName,
+            seed: element.id,
+            cornerRadius: CGFloat(max(0, element.style.cornerRadius ?? 3))
+          )
             .stroke(
               canvasColor(element.style.borderColorHex, fallback: .white).opacity(element.style.borderWidth == nil ? 0 : 0.55),
               lineWidth: CGFloat(element.style.borderWidth ?? 0)
             )
         }
-        .captroMaterialShadow(elevation(for: element), seed: element.id)
+        .captroMaterialShadow(
+          element.style.material == "full_bleed" ? .flush : elevation(for: element),
+          seed: element.id
+        )
     }
   }
 
@@ -215,6 +246,7 @@ struct MIRANoteCanvasRenderer: View {
   private func mediaImage(_ element: MIRANoteCanvasElement) -> some View {
     GeometryReader { proxy in
       let localImage = element.mediaAssetId.flatMap { localImages[$0] } ?? localImages[element.id]
+      let contentMode: ContentMode = element.style.blendMode == "fit" ? .fit : .fill
       let zoom = CGFloat(max(1, element.cropScale))
       let normalizedCropX = CGFloat(min(1, max(0, element.cropX)))
       let normalizedCropY = CGFloat(min(1, max(0, element.cropY)))
@@ -229,7 +261,9 @@ struct MIRANoteCanvasRenderer: View {
         if let localImage {
           Image(uiImage: localImage)
             .resizable()
-            .scaledToFill()
+            .aspectRatio(contentMode: contentMode)
+        } else if let asset = CaptroNoteAsset.resolve(element.mediaAssetId) {
+          CaptroNoteAssetView(asset: asset, contentMode: contentMode)
         } else {
           MIRACachedImage(
             url: cleanText(element.mediaUrl),
@@ -238,7 +272,7 @@ struct MIRANoteCanvasRenderer: View {
             animatesNetworkLoad: mode != .wallPreview,
             keepsPreviousImageWhileLoading: true
           ) { image in
-            image.resizable().scaledToFill()
+            image.resizable().aspectRatio(contentMode: contentMode)
           } placeholder: {
             CaptroPhotographedPaper(
               seed: "photo-placeholder-\(element.id)",
@@ -264,6 +298,7 @@ struct MIRANoteCanvasRenderer: View {
   }
 
   private func textElement(_ element: MIRANoteCanvasElement) -> some View {
+    let metrics = MIRANoteTextMetrics.decode(element.style.shapeName)
     Text(cleanText(element.text) ?? "")
       .font(
         canvasFont(
@@ -275,7 +310,8 @@ struct MIRANoteCanvasRenderer: View {
       .fontWeight(fontWeight(element.style.fontWeight))
       .foregroundStyle(canvasColor(element.style.colorHex, fallback: textFallback))
       .multilineTextAlignment(textAlignment(element.style.textAlignment))
-      .lineSpacing(4)
+      .tracking(metrics.tracking)
+      .lineSpacing(metrics.lineSpacing)
       .lineLimit(nil)
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: frameAlignment(element.style.textAlignment))
       .padding(6)
@@ -283,20 +319,27 @@ struct MIRANoteCanvasRenderer: View {
       .clipped()
   }
 
+  @ViewBuilder
   private func paperElement(_ element: MIRANoteCanvasElement, torn: Bool) -> some View {
     let shape = MIRANoteTornPaperShape(seed: element.id, torn: torn)
-    return CaptroPhotographedPaper(
-      seed: element.id,
-      kind: paperKind(element.style.material ?? "cotton_paper"),
-      base: canvasColor(element.style.colorHex, fallback: Color(red: 0.94, green: 0.91, blue: 0.82)),
-      textureOpacity: 0.42 * mode.textureDetail,
-      directionalLight: 0.18
-    )
-    .clipShape(shape)
-    .overlay {
-      shape.stroke(Color.black.opacity(0.055), lineWidth: 1.5)
+    if let asset = CaptroNoteAsset.resolve(element.style.material) {
+      CaptroNoteAssetView(asset: asset, contentMode: .fill)
+        .clipShape(shape)
+        .captroMaterialShadow(elevation(for: element), seed: element.id)
+    } else {
+      CaptroPhotographedPaper(
+        seed: element.id,
+        kind: paperKind(element.style.material ?? "cotton_paper"),
+        base: canvasColor(element.style.colorHex, fallback: Color(red: 0.94, green: 0.91, blue: 0.82)),
+        textureOpacity: 0.42 * mode.textureDetail,
+        directionalLight: 0.18
+      )
+      .clipShape(shape)
+      .overlay {
+        shape.stroke(Color.black.opacity(0.055), lineWidth: 1.5)
+      }
+      .captroMaterialShadow(elevation(for: element), seed: element.id)
     }
-    .captroMaterialShadow(elevation(for: element), seed: element.id)
   }
 
   @ViewBuilder
@@ -305,55 +348,64 @@ struct MIRANoteCanvasRenderer: View {
       element.style.colorHex,
       fallback: Color(red: 0.78, green: 0.25, blue: 0.32)
     )
-    switch element.style.stickerName?.lowercased() {
-    case "paperclip":
-      MIRANotePaperclip(seed: element.id)
-    case "pushpin", "push_pin", "pin":
-      MIRANotePushPin(seed: element.id, color: color)
-    case "ticket":
-      MIRANoteTicket(seed: element.id, color: color)
-    case "cassette":
-      MIRANoteCassette(seed: element.id, color: color)
-    case "television", "tv":
-      MIRANoteTelevision(seed: element.id, color: color)
-    case "polaroidframe", "polaroid_frame":
-      MIRANoteEmptyPolaroid(seed: element.id)
-    case "passportstamp", "passport_stamp":
-      MIRANotePassportStamp(seed: element.id, color: color)
-    case "coffeestain", "coffee_stain":
-      MIRANoteCoffeeStain(seed: element.id, color: color)
-    case "qrcode", "qr_code":
-      MIRANoteQRCodeView(value: cleanText(element.text) ?? "https://captro.app")
-        .padding(6)
-        .background(
-          CaptroPhotographedPaper(
-            seed: "qr-\(element.id)",
-            kind: .photographic,
-            base: .white,
-            textureOpacity: 0.12,
-            directionalLight: 0.08
+    if let asset = CaptroNoteAsset.resolve(element.style.stickerName) {
+      CaptroNoteAssetView(asset: asset)
+    } else {
+      switch element.style.stickerName?.lowercased() {
+      case "paperclip":
+        MIRANotePaperclip(seed: element.id)
+      case "pushpin", "push_pin", "pin":
+        MIRANotePushPin(seed: element.id, color: color)
+      case "ticket":
+        MIRANoteTicket(seed: element.id, color: color)
+      case "cassette":
+        MIRANoteCassette(seed: element.id, color: color)
+      case "television", "tv":
+        MIRANoteTelevision(seed: element.id, color: color)
+      case "polaroidframe", "polaroid_frame":
+        MIRANoteEmptyPolaroid(seed: element.id)
+      case "passportstamp", "passport_stamp":
+        MIRANotePassportStamp(seed: element.id, color: color)
+      case "coffeestain", "coffee_stain":
+        MIRANoteCoffeeStain(seed: element.id, color: color)
+      case "qrcode", "qr_code":
+        MIRANoteQRCodeView(value: cleanText(element.text) ?? "https://captro.app")
+          .padding(6)
+          .background(
+            CaptroPhotographedPaper(
+              seed: "qr-\(element.id)",
+              kind: .photographic,
+              base: .white,
+              textureOpacity: 0.12,
+              directionalLight: 0.08
+            )
           )
-        )
-        .captroMaterialShadow(.taped, seed: element.id)
-    default:
-      Image(systemName: stickerSymbol(element.style.stickerName))
-        .resizable()
-        .scaledToFit()
-        .symbolRenderingMode(.palette)
-        .foregroundStyle(color, Color.white.opacity(0.86))
-        .padding(10)
-        .captroMaterialShadow(.taped, seed: element.id)
+          .captroMaterialShadow(.taped, seed: element.id)
+      default:
+        Image(systemName: stickerSymbol(element.style.stickerName))
+          .resizable()
+          .scaledToFit()
+          .symbolRenderingMode(.palette)
+          .foregroundStyle(color, Color.white.opacity(0.86))
+          .padding(10)
+          .captroMaterialShadow(.taped, seed: element.id)
+      }
     }
   }
 
+  @ViewBuilder
   private func flowerElement(_ element: MIRANoteCanvasElement) -> some View {
-    MIRANotePressedFlower(
-      seed: element.id,
-      color: canvasColor(
-        element.style.colorHex,
-        fallback: Color(red: 0.77, green: 0.39, blue: 0.43)
+    if let asset = CaptroNoteAsset.resolve(element.style.material) {
+      CaptroNoteAssetView(asset: asset)
+    } else {
+      MIRANotePressedFlower(
+        seed: element.id,
+        color: canvasColor(
+          element.style.colorHex,
+          fallback: Color(red: 0.77, green: 0.39, blue: 0.43)
+        )
       )
-    )
+    }
   }
 
   private func drawingElement(_ element: MIRANoteCanvasElement) -> some View {
@@ -917,6 +969,79 @@ private enum MIRANoteQRCodeGenerator {
     let context = CIContext(options: [.useSoftwareRenderer: false])
     guard let cgImage = context.createCGImage(transformed, from: transformed.extent) else { return nil }
     return UIImage(cgImage: cgImage)
+  }
+}
+
+private struct MIRANoteTextMetrics {
+  let tracking: CGFloat
+  let lineSpacing: CGFloat
+
+  static func decode(_ token: String?) -> Self {
+    guard let token, token.hasPrefix("text:") else {
+      return Self(tracking: 0, lineSpacing: 4)
+    }
+    let values = token.dropFirst(5).split(separator: ",").reduce(into: [String: CGFloat]()) { result, pair in
+      let parts = pair.split(separator: "=", maxSplits: 1)
+      guard parts.count == 2, let value = Double(parts[1]) else { return }
+      result[String(parts[0])] = CGFloat(value)
+    }
+    return Self(
+      tracking: min(24, max(-2, values["ls"] ?? 0)),
+      lineSpacing: min(40, max(0, values["lh"] ?? 4))
+    )
+  }
+}
+
+private struct MIRANotePhotoMaskShape: Shape {
+  let name: String?
+  let seed: String
+  let cornerRadius: CGFloat
+
+  func path(in rect: CGRect) -> Path {
+    switch name?.lowercased() {
+    case "circle", "oval":
+      return Path(ellipseIn: rect)
+    case "arch":
+      let radius = min(rect.width * 0.48, rect.height * 0.24)
+      return Path(
+        UIBezierPath(
+          roundedRect: rect,
+          byRoundingCorners: [.topLeft, .topRight],
+          cornerRadii: CGSize(width: radius, height: radius)
+        ).cgPath
+      )
+    case "torn", "torn_photo":
+      return MIRANoteTornPaperShape(seed: seed, torn: true).path(in: rect)
+    case "cutout":
+      var path = Path()
+      path.move(to: CGPoint(x: rect.minX + rect.width * 0.18, y: rect.minY + rect.height * 0.02))
+      path.addCurve(
+        to: CGPoint(x: rect.maxX - rect.width * 0.04, y: rect.minY + rect.height * 0.26),
+        control1: CGPoint(x: rect.midX, y: rect.minY - rect.height * 0.02),
+        control2: CGPoint(x: rect.maxX, y: rect.minY + rect.height * 0.06)
+      )
+      path.addCurve(
+        to: CGPoint(x: rect.maxX - rect.width * 0.12, y: rect.maxY - rect.height * 0.04),
+        control1: CGPoint(x: rect.maxX, y: rect.midY),
+        control2: CGPoint(x: rect.maxX, y: rect.maxY)
+      )
+      path.addCurve(
+        to: CGPoint(x: rect.minX + rect.width * 0.05, y: rect.maxY - rect.height * 0.16),
+        control1: CGPoint(x: rect.midX, y: rect.maxY),
+        control2: CGPoint(x: rect.minX, y: rect.maxY)
+      )
+      path.addCurve(
+        to: CGPoint(x: rect.minX + rect.width * 0.18, y: rect.minY + rect.height * 0.02),
+        control1: CGPoint(x: rect.minX, y: rect.midY),
+        control2: CGPoint(x: rect.minX, y: rect.minY + rect.height * 0.10)
+      )
+      path.closeSubpath()
+      return path
+    case "soft", "rounded":
+      return RoundedRectangle(cornerRadius: max(18, cornerRadius), style: .continuous).path(in: rect)
+    default:
+      return RoundedRectangle(cornerRadius: cornerRadius, style: .continuous).path(in: rect)
+    }
   }
 }
 

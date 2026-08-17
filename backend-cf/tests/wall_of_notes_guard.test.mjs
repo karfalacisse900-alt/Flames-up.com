@@ -124,6 +124,10 @@ test('photo notes require an approved user-owned Cloudflare Images asset', async
   assert.match(worker, /const assetsById = new Map/);
   assert.match(worker, /media_url: trustedUrl \|\| null/);
   assert.match(worker, /const unresolvedCanvasPhoto = noteCanvas\.elements\.find/);
+  assert.match(worker, /const WALL_NOTE_BUNDLED_IMAGE_ASSETS = new Set/);
+  assert.match(worker, /captro_demo_mountain_lake/);
+  assert.match(worker, /canvasUploadedPhotoAssetIds = canvasPhotoAssetIds\.filter/);
+  assert.match(worker, /!WALL_NOTE_BUNDLED_IMAGE_ASSETS\.has\(publicId\(element\.media_asset_id, 160\)\)/);
   assert.match(worker, /const resolvedStyleToken = WALL_NOTE_STYLES\.has\(styleToken\)/);
   assert.match(worker, /style_token: resolvedStyleToken/);
   assert.match(worker, /canvas_elements: noteCanvas\?\.elements \?\? null/);
@@ -131,7 +135,7 @@ test('photo notes require an approved user-owned Cloudflare Images asset', async
   assert.match(worker, /wall_note_id: noteId/);
 });
 
-test('Captro Studio publishes its rendered image through the canonical Wall create path', async () => {
+test('Captro Studio publishes its structured visual document through the canonical Wall create path', async () => {
   const studio = await read('ios_native/MIRA/Sources/MIRANative/Screens/MIRACaptroStudioView.swift');
   const wallView = await read('ios_native/MIRA/Sources/MIRANative/Screens/WallOfNotesNativeView.swift');
 
@@ -144,13 +148,23 @@ test('Captro Studio publishes its rendered image through the canonical Wall crea
   assert.match(studio, /noteType: uploads\.isEmpty \? "text" : "photo"/);
   assert.match(studio, /document: noteDocument/);
   assert.match(studio, /canvas: canvas/);
+  assert.match(studio, /publishingIdentity: publishingIdentity/);
+  assert.match(studio, /CaptroNoteAsset\.pressedWildflower\.rawValue/);
+  assert.match(studio, /VNGenerateForegroundInstanceMaskRequest/);
+  assert.match(studio, /image\.pngData\(\)/);
   assert.match(studio, /_ = try await onPublish\(request\)/);
   assert.match(wallView, /MIRANoteCreationEntryView\(camera: camera, api: api\)/);
-  assert.match(wallView, /Upload design/);
+  assert.match(wallView, /Start Blank/);
+  assert.match(wallView, /Upload Finished Design/);
+  assert.match(wallView, /Quick Note/);
+  assert.match(wallView, /Ghost Note/);
+  assert.match(wallView, /MIRAQuickNoteDesignPreview/);
   assert.match(wallView, /MIRANoteDocument\.importedArtwork/);
+  assert.match(wallView, /template: \.importedArtwork/);
+  assert.match(wallView, /Story or details \(optional\)/);
   assert.match(wallView, /document: document/);
   assert.match(wallView, /canvasDetailBlocks\(blocks\)/);
-  assert.match(wallView, /MIRACaptroStudioView\(camera: camera, api: api, initialTemplate: studioInitialTemplate\)[\s\S]*?let note = try await model\.create\(body\)/);
+  assert.match(wallView, /MIRACaptroStudioView\([\s\S]*?initialTemplate: studioInitialTemplate,[\s\S]*?publishingIdentity: studioPublishingIdentity[\s\S]*?let note = try await model\.create\(body\)/);
   assert.match(wallView, /func create\(_ body: MIRACreateWallNoteBody\)[\s\S]*?merge\(\[response\.note\]/);
 });
 

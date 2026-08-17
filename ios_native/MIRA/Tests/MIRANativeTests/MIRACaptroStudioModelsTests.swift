@@ -31,6 +31,56 @@ final class MIRACaptroStudioModelsTests: XCTestCase {
     }
   }
 
+  func testPremiumTemplateFamiliesAreLayeredAndVisuallyDistinct() {
+    let required: [MIRACaptroStudioTemplate] = [
+      .stationeryNote,
+      .landscapeQuote,
+      .tornPaperMotivation,
+      .photoHandwriting,
+      .botanicalCollage,
+      .editorialPortrait,
+      .minimalTypography,
+      .photoTornSection,
+    ]
+
+    for template in required {
+      let layers = template.makeDocument().layers.filter { $0.kind != .paper }
+      XCTAssertGreaterThanOrEqual(layers.count, 2, "\(template.rawValue) needs a composed visual hierarchy")
+      XCTAssertTrue(layers.contains(where: { $0.kind == .text }))
+    }
+
+    let signatures = Set(required.map { template in
+      template.makeDocument().layers
+        .map { "\($0.kind.rawValue):\($0.object?.rawValue ?? $0.photoFrame?.rawValue ?? $0.fontStyle?.rawValue ?? "none")" }
+        .joined(separator: "|")
+    })
+    XCTAssertEqual(signatures.count, required.count)
+  }
+
+  func testQuickNoteOffersEightLiveVisualTreatments() {
+    let message = "Make room for the life you are building."
+    XCTAssertEqual(MIRACaptroStudioTemplate.quickNoteTemplates.count, 8)
+
+    for template in MIRACaptroStudioTemplate.quickNoteTemplates {
+      let document = template.makeDocument(message: message)
+      XCTAssertTrue(document.layers.contains(where: { $0.text == message }))
+    }
+  }
+
+  func testTenDemoFixturesCoverEveryRequiredShowcase() {
+    let documents = MIRACaptroStudioDemoFixtures.documents
+    XCTAssertEqual(documents.count, 10)
+    XCTAssertEqual(Set(documents.map(\.template)).count, 10)
+    XCTAssertEqual(documents.first?.template, .stationeryNote)
+    XCTAssertEqual(documents.last?.template, .importedDesign)
+    XCTAssertTrue(documents.contains(where: { document in
+      document.layers.contains(where: { $0.mediaKey == CaptroNoteAsset.mountainLake.rawValue })
+    }))
+    XCTAssertTrue(documents.contains(where: { document in
+      document.layers.contains(where: { $0.object == .pressedFlower })
+    }))
+  }
+
   func testDuplicateCreatesIndependentLayerAboveOriginal() throws {
     var document = MIRACaptroStudioTemplate.travelJournal.makeDocument()
     let original = try XCTUnwrap(document.layers.first(where: { $0.kind == .photo }))
@@ -44,6 +94,16 @@ final class MIRACaptroStudioModelsTests: XCTestCase {
     XCTAssertEqual(duplicate.zIndex, originalMaximum + 1)
     XCTAssertGreaterThan(duplicate.x, original.x)
     XCTAssertGreaterThan(duplicate.y, original.y)
+  }
+
+  func testDuplicateKeepsBundledPhotoReferenceRenderable() throws {
+    var document = MIRACaptroStudioTemplate.landscapeQuote.makeDocument()
+    let original = try XCTUnwrap(document.layers.first(where: { $0.kind == .photo }))
+    let duplicateID = try XCTUnwrap(document.duplicateLayer(id: original.id))
+    let duplicate = try XCTUnwrap(document.layers.first(where: { $0.id == duplicateID }))
+
+    XCTAssertEqual(original.mediaKey, CaptroNoteAsset.mountainLake.rawValue)
+    XCTAssertEqual(duplicate.mediaKey, original.mediaKey)
   }
 
   func testPaperCannotBeDuplicatedOrDeleted() throws {
