@@ -80,6 +80,15 @@ public enum MIRACaptroStudioObject: String, Codable, CaseIterable, Identifiable 
   case purpleBud
   case tapedBotanicals
   case pressedScatter
+  case tapedYellowSprig
+  case tapedEucalyptus
+  case tapedBrownBloom
+  case tapedBillyButton
+  case tapedDryBranch
+  case ivoryHydrangea
+  case ivoryDaisy
+  case ivoryPompom
+  case ivoryAirySprig
   case driedSprig
   case pinkBabysBreath
   case whiteGerbera
@@ -110,6 +119,15 @@ public enum MIRACaptroStudioObject: String, Codable, CaseIterable, Identifiable 
     case .purpleBud: return "Purple bud"
     case .tapedBotanicals: return "Taped botanicals"
     case .pressedScatter: return "Pressed scatter"
+    case .tapedYellowSprig: return "Yellow sprig"
+    case .tapedEucalyptus: return "Eucalyptus"
+    case .tapedBrownBloom: return "Dried bloom"
+    case .tapedBillyButton: return "Billy button"
+    case .tapedDryBranch: return "Dried branch"
+    case .ivoryHydrangea: return "Pressed hydrangea"
+    case .ivoryDaisy: return "Pressed daisy"
+    case .ivoryPompom: return "Pressed pom-pom"
+    case .ivoryAirySprig: return "Airy sprig"
     case .driedSprig: return "Dried sprig"
     case .pinkBabysBreath: return "Pink bouquet"
     case .whiteGerbera: return "White gerbera"
@@ -134,7 +152,10 @@ public enum MIRACaptroStudioObject: String, Codable, CaseIterable, Identifiable 
     case .polaroidFrame: return "photo"
     case .passportStamp: return "seal"
     case .pressedFlower, .vintageRose, .carnationBouquet, .pinkRose,
-         .purpleBud, .tapedBotanicals, .pressedScatter, .driedSprig,
+         .purpleBud, .tapedBotanicals, .pressedScatter,
+         .tapedYellowSprig, .tapedEucalyptus, .tapedBrownBloom,
+         .tapedBillyButton, .tapedDryBranch, .ivoryHydrangea,
+         .ivoryDaisy, .ivoryPompom, .ivoryAirySprig, .driedSprig,
          .pinkBabysBreath, .whiteGerbera:
       return "camera.macro"
     case .coffeeStain: return "circle.dashed"

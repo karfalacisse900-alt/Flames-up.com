@@ -92,7 +92,7 @@ public enum MIRAWallLayout {
 
     let horizontalSpace = max(220, viewport.width - 18)
     let widthScale = horizontalSpace / max(content.width, 1)
-    let scale = min(max(widthScale, 0.38), noteCount <= 4 ? 0.86 : 0.62)
+    let scale = min(max(widthScale, 0.40), noteCount <= 4 ? 0.92 : 0.72)
     let visibleWorldHeight = viewport.height / max(scale, 0.001)
     let centerY = content.height <= visibleWorldHeight
       ? content.midY
@@ -187,48 +187,79 @@ public struct MIRAWallSpatialIndex {
 }
 
 public enum MIRAWallReadableLayout {
+  private struct EditorialSlot {
+    let x: CGFloat
+    let width: CGFloat
+    let row: Int
+    let yOffset: CGFloat
+  }
+
+  private static let boardWidth: CGFloat = 820
+  private static let rowOverlap: CGFloat = 44
+  private static let spreadSpacing: CGFloat = 58
+  private static let slots: [EditorialSlot] = [
+    EditorialSlot(x: 250, width: 340, row: 0, yOffset: 0),
+    EditorialSlot(x: 0, width: 290, row: 0, yOffset: 38),
+    EditorialSlot(x: 545, width: 275, row: 0, yOffset: 22),
+    EditorialSlot(x: 0, width: 310, row: 1, yOffset: 4),
+    EditorialSlot(x: 275, width: 300, row: 1, yOffset: 38),
+    EditorialSlot(x: 540, width: 280, row: 1, yOffset: 10),
+    EditorialSlot(x: 70, width: 390, row: 2, yOffset: 0),
+    EditorialSlot(x: 410, width: 350, row: 2, yOffset: 30),
+  ]
+
   public static func frames(for notes: [MIRAWallNote]) -> [String: CGRect] {
     guard !notes.isEmpty else { return [:] }
 
-    let columnCount = 3
-    let columnWidth: CGFloat = 242
-    let gutter: CGFloat = 9
-    let boardWidth = columnWidth * CGFloat(columnCount) + gutter * CGFloat(columnCount - 1)
     let boardOriginX = -boardWidth * 0.5
     let ordered = notes.sorted { left, right in
       if left.createdAt != right.createdAt { return left.createdAt > right.createdAt }
       if left.zIndex != right.zIndex { return left.zIndex > right.zIndex }
       return left.id < right.id
     }
-    var columnBottoms = Array(repeating: CGFloat.zero, count: columnCount)
     var result: [String: CGRect] = [:]
     result.reserveCapacity(ordered.count)
+    var spreadTop: CGFloat = 0
 
-    for (index, note) in ordered.enumerated() {
-      let presentation = MIRAWallNotePresentationResolver.resolve(note)
-      let aspect = max(0.32, min(1.9, presentation.size.width / max(presentation.size.height, 1)))
-      let shouldFeature = index.isMultiple(of: 9) && aspect >= 1.05
-      let span = aspect >= 1.34 || shouldFeature ? 2 : 1
-      let candidates = 0...(columnCount - span)
-      let column = candidates.min { left, right in
-        let leftBottom = columnBottoms[left..<(left + span)].max() ?? 0
-        let rightBottom = columnBottoms[right..<(right + span)].max() ?? 0
-        if abs(leftBottom - rightBottom) > 0.5 { return leftBottom < rightBottom }
-        return left < right
-      } ?? 0
-      let top = columnBottoms[column..<(column + span)].max() ?? 0
-      let width = columnWidth * CGFloat(span) + gutter * CGFloat(span - 1)
-      let height = width / aspect
-      let frame = CGRect(
-        x: boardOriginX + CGFloat(column) * (columnWidth + gutter),
-        y: top,
-        width: width,
-        height: height
-      )
-      result[note.id] = frame
-      for occupiedColumn in column..<(column + span) {
-        columnBottoms[occupiedColumn] = frame.maxY + gutter
+    for spreadStart in stride(from: 0, to: ordered.count, by: slots.count) {
+      let spreadEnd = min(spreadStart + slots.count, ordered.count)
+      let spreadNotes = ordered[spreadStart..<spreadEnd]
+      var rowTop = spreadTop
+      var spreadBottom = spreadTop
+
+      for row in 0...2 {
+        let rowEntries = spreadNotes.enumerated().filter { entry in
+          slots[entry.offset].row == row
+        }
+        guard !rowEntries.isEmpty else { continue }
+
+        var rowBottom = rowTop
+        for entry in rowEntries {
+          let note = entry.element
+          let slot = slots[entry.offset]
+          let presentation = MIRAWallNotePresentationResolver.resolve(note)
+          let aspect = max(0.32, min(1.9, presentation.size.width / max(presentation.size.height, 1)))
+          var width = slot.width
+          var height = width / aspect
+          if height > 460 {
+            height = 460
+            width = height * aspect
+          }
+          let frame = CGRect(
+            x: boardOriginX + slot.x + (slot.width - width) * 0.5,
+            y: rowTop + slot.yOffset,
+            width: width,
+            height: height
+          )
+          result[note.id] = frame
+          rowBottom = max(rowBottom, frame.maxY)
+        }
+
+        spreadBottom = max(spreadBottom, rowBottom)
+        rowTop = rowBottom - rowOverlap
       }
+
+      spreadTop = spreadBottom + spreadSpacing
     }
 
     return result

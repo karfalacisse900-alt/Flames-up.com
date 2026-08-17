@@ -582,7 +582,7 @@ public struct WallOfNotesNativeView: View {
           isPressed: pressedNoteID == note.id
         )
         .frame(width: frame.width, height: frame.height)
-        .rotationEffect(.degrees(presentation.microRotation * 0.72))
+        .rotationEffect(.degrees(presentation.microRotation * 0.92))
         .scaleEffect(camera.scale)
         .position(center)
         .matchedGeometryEffect(

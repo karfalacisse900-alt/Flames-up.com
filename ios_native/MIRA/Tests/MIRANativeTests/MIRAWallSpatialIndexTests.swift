@@ -104,7 +104,7 @@ final class MIRAWallSpatialIndexTests: XCTestCase {
     XCTAssertEqual(firstPass, secondPass)
   }
 
-  func testCollageLayoutFormsOneCompactThreeColumnBoardWithoutOverlap() {
+  func testCollageLayoutFormsCompactEditorialSpreadsWithControlledOverlap() {
     let notes = (0..<30).map { index in
       makeNote(
         id: "collage-\(index)",
@@ -119,19 +119,30 @@ final class MIRAWallSpatialIndexTests: XCTestCase {
     }
 
     XCTAssertEqual(frames.count, notes.count)
-    XCTAssertLessThanOrEqual(bounds?.width ?? CGFloat.infinity, 744.1)
-    XCTAssertGreaterThanOrEqual(bounds?.minX ?? -CGFloat.infinity, -372.1)
-    XCTAssertLessThanOrEqual(bounds?.maxX ?? CGFloat.infinity, 372.1)
+    XCTAssertLessThanOrEqual(bounds?.width ?? CGFloat.infinity, 820.1)
+    XCTAssertGreaterThanOrEqual(bounds?.minX ?? -CGFloat.infinity, -410.1)
+    XCTAssertLessThanOrEqual(bounds?.maxX ?? CGFloat.infinity, 410.1)
 
     let allFrames = Array(frames.values)
+    var overlapCount = 0
     for left in allFrames.indices {
       for right in allFrames.indices where right > left {
-        XCTAssertTrue(allFrames[left].intersection(allFrames[right]).isEmpty)
+        let intersection = allFrames[left].intersection(allFrames[right])
+        guard !intersection.isEmpty else { continue }
+        overlapCount += 1
+        let smallerArea = min(
+          allFrames[left].width * allFrames[left].height,
+          allFrames[right].width * allFrames[right].height
+        )
+        XCTAssertLessThan(intersection.width * intersection.height / smallerArea, 0.30)
+        XCTAssertFalse(allFrames[left].contains(CGPoint(x: allFrames[right].midX, y: allFrames[right].midY)))
+        XCTAssertFalse(allFrames[right].contains(CGPoint(x: allFrames[left].midX, y: allFrames[left].midY)))
       }
     }
+    XCTAssertGreaterThan(overlapCount, 0)
   }
 
-  func testCollageLayoutMakesLandscapeArtworkSpanTwoColumnsAndStartsWithNewest() {
+  func testCollageLayoutFeaturesNewestArtworkAtTopCenter() {
     let older = makeNote(
       id: "older-landscape",
       x: 0,
@@ -158,7 +169,8 @@ final class MIRAWallSpatialIndexTests: XCTestCase {
       return XCTFail("The newest artwork must be included in the collage")
     }
     XCTAssertEqual(newestFrame.minY, 0, accuracy: 0.001)
-    XCTAssertEqual(newestFrame.width, 493, accuracy: 0.001)
+    XCTAssertEqual(newestFrame.width, 340, accuracy: 0.001)
+    XCTAssertGreaterThan(newestFrame.midX, frames[older.id]?.midX ?? CGFloat.infinity)
   }
 
   func testSpatialIndexUsesReadableLayoutFramesForHitTesting() {

@@ -652,7 +652,9 @@ public struct MIRACaptroStudioView: View {
       ? [.tornPaper, .texturedPaper, .tape, .coolTape]
       : [
         .vintageRose, .carnationBouquet, .pinkRose, .purpleBud,
-        .tapedBotanicals, .pressedScatter, .driedSprig,
+        .tapedYellowSprig, .tapedEucalyptus, .tapedBrownBloom,
+        .tapedBillyButton, .tapedDryBranch, .ivoryHydrangea,
+        .ivoryDaisy, .ivoryPompom, .ivoryAirySprig, .driedSprig,
         .pinkBabysBreath, .whiteGerbera, .pressedFlower,
         .pen, .paperclip, .pushPin, .ticket, .handDrawnArrow,
         .organicShape, .polaroidFrame, .passportStamp,
@@ -1058,6 +1060,13 @@ public struct MIRACaptroStudioView: View {
     case .vintageRose, .carnationBouquet, .pinkRose, .purpleBud,
          .driedSprig, .whiteGerbera:
       objectSize = CGSize(width: 0.32, height: 0.39)
+    case .tapedYellowSprig, .tapedEucalyptus, .tapedBrownBloom,
+         .tapedBillyButton, .tapedDryBranch:
+      objectSize = CGSize(width: 0.28, height: 0.48)
+    case .ivoryHydrangea, .ivoryDaisy, .ivoryPompom:
+      objectSize = CGSize(width: 0.36, height: 0.36)
+    case .ivoryAirySprig:
+      objectSize = CGSize(width: 0.42, height: 0.30)
     case .tapedBotanicals:
       objectSize = CGSize(width: 0.46, height: 0.64)
     case .pressedScatter:
@@ -1180,7 +1189,10 @@ public struct MIRACaptroStudioView: View {
     case .polaroidFrame: return "paper"
     case .passportStamp: return "stamp"
     case .pressedFlower, .vintageRose, .carnationBouquet, .pinkRose,
-         .purpleBud, .tapedBotanicals, .pressedScatter, .driedSprig,
+         .purpleBud, .tapedBotanicals, .pressedScatter,
+         .tapedYellowSprig, .tapedEucalyptus, .tapedBrownBloom,
+         .tapedBillyButton, .tapedDryBranch, .ivoryHydrangea,
+         .ivoryDaisy, .ivoryPompom, .ivoryAirySprig, .driedSprig,
          .pinkBabysBreath, .whiteGerbera:
       return "rose"
     case .coffeeStain: return "coffee"
@@ -1576,7 +1588,10 @@ public struct MIRACaptroStudioView: View {
         kind = .flower
         style.material = CaptroNoteAsset.pressedWildflower.rawValue
       case .vintageRose, .carnationBouquet, .pinkRose, .purpleBud,
-           .tapedBotanicals, .pressedScatter, .driedSprig,
+           .tapedBotanicals, .pressedScatter,
+           .tapedYellowSprig, .tapedEucalyptus, .tapedBrownBloom,
+           .tapedBillyButton, .tapedDryBranch, .ivoryHydrangea,
+           .ivoryDaisy, .ivoryPompom, .ivoryAirySprig, .driedSprig,
            .pinkBabysBreath, .whiteGerbera:
         kind = .flower
         style.material = layer.object?.captroFlowerAsset?.rawValue
@@ -2146,7 +2161,10 @@ private struct MIRAStudioObjectVisual: View {
         .opacity(0.78)
 
       case .pressedFlower, .vintageRose, .carnationBouquet, .pinkRose,
-           .purpleBud, .tapedBotanicals, .pressedScatter, .driedSprig,
+           .purpleBud, .tapedBotanicals, .pressedScatter,
+           .tapedYellowSprig, .tapedEucalyptus, .tapedBrownBloom,
+           .tapedBillyButton, .tapedDryBranch, .ivoryHydrangea,
+           .ivoryDaisy, .ivoryPompom, .ivoryAirySprig, .driedSprig,
            .pinkBabysBreath, .whiteGerbera:
         if let asset = object.captroFlowerAsset {
           CaptroNoteAssetView(asset: asset)
@@ -2175,6 +2193,15 @@ private extension MIRACaptroStudioObject {
     case .purpleBud: return .purpleBud
     case .tapedBotanicals: return .tapedBotanicals
     case .pressedScatter: return .pressedScatter
+    case .tapedYellowSprig: return .tapedYellowSprig
+    case .tapedEucalyptus: return .tapedEucalyptus
+    case .tapedBrownBloom: return .tapedBrownBloom
+    case .tapedBillyButton: return .tapedBillyButton
+    case .tapedDryBranch: return .tapedDryBranch
+    case .ivoryHydrangea: return .ivoryHydrangea
+    case .ivoryDaisy: return .ivoryDaisy
+    case .ivoryPompom: return .ivoryPompom
+    case .ivoryAirySprig: return .ivoryAirySprig
     case .driedSprig: return .driedSprig
     case .pinkBabysBreath: return .pinkBabysBreath
     case .whiteGerbera: return .whiteGerbera

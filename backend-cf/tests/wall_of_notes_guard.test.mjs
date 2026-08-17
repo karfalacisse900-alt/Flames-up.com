@@ -64,7 +64,10 @@ test('Wall collage mode fetches one global composition instead of a random viewp
   assert.match(wallRoute, /isCollageLayout[\s\S]*?'created_at\.desc,z_index\.desc'/);
   assert.match(wallView, /URLQueryItem\(name: "layout", value: "collage"\)/);
   assert.match(wallView, /\.frame\(width: frame\.width, height: frame\.height\)/);
-  assert.match(spatialIndex, /let columnCount = 3/);
+  assert.match(spatialIndex, /private static let slots: \[EditorialSlot\]/);
+  assert.match(spatialIndex, /EditorialSlot\(x: 250, width: 340, row: 0, yOffset: 0\)/);
+  assert.match(spatialIndex, /private static let rowOverlap: CGFloat = 44/);
+  assert.doesNotMatch(spatialIndex, /let columnCount = 3/);
   assert.doesNotMatch(spatialIndex, /preserving existingFrames/);
 });
 
@@ -195,6 +198,15 @@ test('Captro Studio bundles transparent floral decor through the published canva
     ['purpleBud', 'captro_decor_purple_bud', 'captro-decor-purple-bud.png'],
     ['tapedBotanicals', 'captro_decor_taped_botanicals', 'captro-decor-taped-botanicals.png'],
     ['pressedScatter', 'captro_decor_pressed_scatter', 'captro-decor-pressed-scatter.png'],
+    ['tapedYellowSprig', 'captro_decor_taped_yellow_sprig', 'captro-decor-taped-yellow-sprig.png'],
+    ['tapedEucalyptus', 'captro_decor_taped_eucalyptus', 'captro-decor-taped-eucalyptus.png'],
+    ['tapedBrownBloom', 'captro_decor_taped_brown_bloom', 'captro-decor-taped-brown-bloom.png'],
+    ['tapedBillyButton', 'captro_decor_taped_billy_button', 'captro-decor-taped-billy-button.png'],
+    ['tapedDryBranch', 'captro_decor_taped_dry_branch', 'captro-decor-taped-dry-branch.png'],
+    ['ivoryHydrangea', 'captro_decor_ivory_hydrangea', 'captro-decor-ivory-hydrangea.png'],
+    ['ivoryDaisy', 'captro_decor_ivory_daisy', 'captro-decor-ivory-daisy.png'],
+    ['ivoryPompom', 'captro_decor_ivory_pompom', 'captro-decor-ivory-pompom.png'],
+    ['ivoryAirySprig', 'captro_decor_ivory_airy_sprig', 'captro-decor-ivory-airy-sprig.png'],
     ['driedSprig', 'captro_decor_dried_sprig', 'captro-decor-dried-sprig.png'],
     ['pinkBabysBreath', 'captro_decor_pink_babys_breath', 'captro-decor-pink-babys-breath.png'],
     ['whiteGerbera', 'captro_decor_white_gerbera', 'captro-decor-white-gerbera.png'],
@@ -210,6 +222,14 @@ test('Captro Studio bundles transparent floral decor through the published canva
     const png = await readBytes(`${directory}/${filename}`);
     assert.deepEqual([...png.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
     assert.equal(png[25], 6, `${filename} must use PNG RGBA color type`);
+  }
+
+  const tray = studio.match(/let objects: \[MIRACaptroStudioObject\][\s\S]*?: \[([\s\S]*?)\]\n    return MIRAActionModalCard/);
+  assert.ok(tray, 'Captro Studio object tray must remain discoverable');
+  assert.doesNotMatch(tray[1], /\.tapedBotanicals/);
+  assert.doesNotMatch(tray[1], /\.pressedScatter/);
+  for (const [object] of assets.slice(6, 15)) {
+    assert.match(tray[1], new RegExp(`\\.${object}`));
   }
 
   assert.match(studio, /style\.material = layer\.object\?\.captroFlowerAsset\?\.rawValue/);
@@ -305,7 +325,9 @@ test('Wall gallery taps, exact-canvas lift, flipping, and signatures remain expl
   assert.match(presentation, /layoutSeed\(for note: MIRAWallNote\)/);
   assert.match(presentation, /note\.document\?\.canvas \?\? note\.canvas/);
   assert.match(presentation, /canvasBackedSize\(note: note, canvas: canvas\)/);
-  assert.match(spatialIndex, /let columnCount = 3/);
+  assert.match(spatialIndex, /private static let slots: \[EditorialSlot\]/);
+  assert.match(spatialIndex, /spreadTop = spreadBottom \+ spreadSpacing/);
+  assert.doesNotMatch(spatialIndex, /let columnCount = 3/);
   assert.match(wallView, /Turn note over/);
   assert.match(wallView, /Sign this note/);
   assert.match(wallView, /MIRAWallDetailBackdrop\(seed: note\.id\)/);

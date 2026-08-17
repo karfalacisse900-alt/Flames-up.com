@@ -23,6 +23,15 @@ enum CaptroNoteAsset: String, CaseIterable {
   case purpleBud = "captro_decor_purple_bud"
   case tapedBotanicals = "captro_decor_taped_botanicals"
   case pressedScatter = "captro_decor_pressed_scatter"
+  case tapedYellowSprig = "captro_decor_taped_yellow_sprig"
+  case tapedEucalyptus = "captro_decor_taped_eucalyptus"
+  case tapedBrownBloom = "captro_decor_taped_brown_bloom"
+  case tapedBillyButton = "captro_decor_taped_billy_button"
+  case tapedDryBranch = "captro_decor_taped_dry_branch"
+  case ivoryHydrangea = "captro_decor_ivory_hydrangea"
+  case ivoryDaisy = "captro_decor_ivory_daisy"
+  case ivoryPompom = "captro_decor_ivory_pompom"
+  case ivoryAirySprig = "captro_decor_ivory_airy_sprig"
   case driedSprig = "captro_decor_dried_sprig"
   case pinkBabysBreath = "captro_decor_pink_babys_breath"
   case whiteGerbera = "captro_decor_white_gerbera"
@@ -50,7 +59,10 @@ enum CaptroNoteAsset: String, CaseIterable {
          .blueTelephone, .oceanShore:
       return "CaptroNotePhotoAtlas"
     case .vintageRose, .carnationBouquet, .pinkRose, .purpleBud,
-         .tapedBotanicals, .pressedScatter, .driedSprig,
+         .tapedBotanicals, .pressedScatter,
+         .tapedYellowSprig, .tapedEucalyptus, .tapedBrownBloom,
+         .tapedBillyButton, .tapedDryBranch, .ivoryHydrangea,
+         .ivoryDaisy, .ivoryPompom, .ivoryAirySprig, .driedSprig,
          .pinkBabysBreath, .whiteGerbera:
       return rawValue
     }
@@ -59,7 +71,10 @@ enum CaptroNoteAsset: String, CaseIterable {
   fileprivate var isDirectImage: Bool {
     switch self {
     case .vintageRose, .carnationBouquet, .pinkRose, .purpleBud,
-         .tapedBotanicals, .pressedScatter, .driedSprig,
+         .tapedBotanicals, .pressedScatter,
+         .tapedYellowSprig, .tapedEucalyptus, .tapedBrownBloom,
+         .tapedBillyButton, .tapedDryBranch, .ivoryHydrangea,
+         .ivoryDaisy, .ivoryPompom, .ivoryAirySprig, .driedSprig,
          .pinkBabysBreath, .whiteGerbera:
       return true
     default:
@@ -92,7 +107,10 @@ enum CaptroNoteAsset: String, CaseIterable {
     case .oceanShore: return (3, 2, 2, 1)
 
     case .vintageRose, .carnationBouquet, .pinkRose, .purpleBud,
-         .tapedBotanicals, .pressedScatter, .driedSprig,
+         .tapedBotanicals, .pressedScatter,
+         .tapedYellowSprig, .tapedEucalyptus, .tapedBrownBloom,
+         .tapedBillyButton, .tapedDryBranch, .ivoryHydrangea,
+         .ivoryDaisy, .ivoryPompom, .ivoryAirySprig, .driedSprig,
          .pinkBabysBreath, .whiteGerbera:
       return (1, 1, 0, 0)
     }

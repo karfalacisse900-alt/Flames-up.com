@@ -176,14 +176,14 @@ struct CaptroPhysicalWallSurface: View {
   var body: some View {
     CaptroPhotographedPaper(
       seed: seed,
-      kind: .linen,
-      base: Color(red: 0.945, green: 0.943, blue: 0.925),
-      textureOpacity: 0.38,
-      directionalLight: 0.16
+      kind: .archival,
+      base: Color(red: 0.956, green: 0.951, blue: 0.934),
+      textureOpacity: 0.20,
+      directionalLight: 0.11
     )
     .overlay {
       LinearGradient(
-        colors: [Color.white.opacity(0.08), Color.clear, Color.black.opacity(0.035)],
+        colors: [Color.white.opacity(0.11), Color.clear, Color.black.opacity(0.025)],
         startPoint: .top,
         endPoint: .bottom
       )
