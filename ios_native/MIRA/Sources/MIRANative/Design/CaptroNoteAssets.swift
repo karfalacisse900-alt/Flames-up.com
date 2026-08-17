@@ -17,6 +17,16 @@ enum CaptroNoteAsset: String, CaseIterable {
   case vintageTicket = "captro_prop_vintage_ticket"
   case pressedWildflower = "captro_prop_pressed_wildflower"
 
+  case vintageRose = "captro_decor_vintage_rose"
+  case carnationBouquet = "captro_decor_carnation_bouquet"
+  case pinkRose = "captro_decor_pink_rose"
+  case purpleBud = "captro_decor_purple_bud"
+  case tapedBotanicals = "captro_decor_taped_botanicals"
+  case pressedScatter = "captro_decor_pressed_scatter"
+  case driedSprig = "captro_decor_dried_sprig"
+  case pinkBabysBreath = "captro_decor_pink_babys_breath"
+  case whiteGerbera = "captro_decor_white_gerbera"
+
   case mountainLake = "captro_demo_mountain_lake"
   case editorialPortrait = "captro_demo_editorial_portrait"
   case creamFlower = "captro_demo_cream_flower"
@@ -39,6 +49,21 @@ enum CaptroNoteAsset: String, CaseIterable {
     case .mountainLake, .editorialPortrait, .creamFlower, .venueNight,
          .blueTelephone, .oceanShore:
       return "CaptroNotePhotoAtlas"
+    case .vintageRose, .carnationBouquet, .pinkRose, .purpleBud,
+         .tapedBotanicals, .pressedScatter, .driedSprig,
+         .pinkBabysBreath, .whiteGerbera:
+      return rawValue
+    }
+  }
+
+  fileprivate var isDirectImage: Bool {
+    switch self {
+    case .vintageRose, .carnationBouquet, .pinkRose, .purpleBud,
+         .tapedBotanicals, .pressedScatter, .driedSprig,
+         .pinkBabysBreath, .whiteGerbera:
+      return true
+    default:
+      return false
     }
   }
 
@@ -65,6 +90,11 @@ enum CaptroNoteAsset: String, CaseIterable {
     case .venueNight: return (3, 2, 0, 1)
     case .blueTelephone: return (3, 2, 1, 1)
     case .oceanShore: return (3, 2, 2, 1)
+
+    case .vintageRose, .carnationBouquet, .pinkRose, .purpleBud,
+         .tapedBotanicals, .pressedScatter, .driedSprig,
+         .pinkBabysBreath, .whiteGerbera:
+      return (1, 1, 0, 0)
     }
   }
 
@@ -109,6 +139,13 @@ enum CaptroNoteAssetImageStore {
   static func image(for asset: CaptroNoteAsset) -> UIImage? {
     let key = asset.rawValue as NSString
     if let cached = cache.object(forKey: key) { return cached }
+    if asset.isDirectImage {
+      guard let image = UIImage(named: asset.rawValue, in: .main, compatibleWith: nil) else {
+        return nil
+      }
+      cache.setObject(image, forKey: key)
+      return image
+    }
     guard
       let atlas = UIImage(named: asset.atlasName, in: .main, compatibleWith: nil),
       let source = atlas.cgImage

@@ -81,6 +81,28 @@ final class MIRACaptroStudioModelsTests: XCTestCase {
     }))
   }
 
+  func testFloralDecorObjectsHaveStableBundledAssetTokens() throws {
+    let pairs: [(MIRACaptroStudioObject, CaptroNoteAsset)] = [
+      (.vintageRose, .vintageRose),
+      (.carnationBouquet, .carnationBouquet),
+      (.pinkRose, .pinkRose),
+      (.purpleBud, .purpleBud),
+      (.tapedBotanicals, .tapedBotanicals),
+      (.pressedScatter, .pressedScatter),
+      (.driedSprig, .driedSprig),
+      (.pinkBabysBreath, .pinkBabysBreath),
+      (.whiteGerbera, .whiteGerbera),
+    ]
+
+    XCTAssertEqual(Set(pairs.map { $0.0.rawValue }).count, 9)
+    XCTAssertEqual(Set(pairs.map { $0.1.rawValue }).count, 9)
+    for (object, asset) in pairs {
+      XCTAssertEqual(CaptroNoteAsset.resolve(asset.rawValue), asset)
+      let encoded = try JSONEncoder().encode(object)
+      XCTAssertEqual(try JSONDecoder().decode(MIRACaptroStudioObject.self, from: encoded), object)
+    }
+  }
+
   func testDuplicateCreatesIndependentLayerAboveOriginal() throws {
     var document = MIRACaptroStudioTemplate.travelJournal.makeDocument()
     let original = try XCTUnwrap(document.layers.first(where: { $0.kind == .photo }))

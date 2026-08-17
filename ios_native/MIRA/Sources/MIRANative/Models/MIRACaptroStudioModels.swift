@@ -74,6 +74,15 @@ public enum MIRACaptroStudioObject: String, Codable, CaseIterable, Identifiable 
   case polaroidFrame
   case passportStamp
   case pressedFlower
+  case vintageRose
+  case carnationBouquet
+  case pinkRose
+  case purpleBud
+  case tapedBotanicals
+  case pressedScatter
+  case driedSprig
+  case pinkBabysBreath
+  case whiteGerbera
   case coffeeStain
 
   public var id: String { rawValue }
@@ -95,6 +104,15 @@ public enum MIRACaptroStudioObject: String, Codable, CaseIterable, Identifiable 
     case .polaroidFrame: return "Photo frame"
     case .passportStamp: return "Passport stamp"
     case .pressedFlower: return "Pressed flower"
+    case .vintageRose: return "Vintage rose"
+    case .carnationBouquet: return "Carnations"
+    case .pinkRose: return "Pink rose"
+    case .purpleBud: return "Purple bud"
+    case .tapedBotanicals: return "Taped botanicals"
+    case .pressedScatter: return "Pressed scatter"
+    case .driedSprig: return "Dried sprig"
+    case .pinkBabysBreath: return "Pink bouquet"
+    case .whiteGerbera: return "White gerbera"
     case .coffeeStain: return "Coffee stain"
     }
   }
@@ -115,7 +133,10 @@ public enum MIRACaptroStudioObject: String, Codable, CaseIterable, Identifiable 
     case .television: return "tv"
     case .polaroidFrame: return "photo"
     case .passportStamp: return "seal"
-    case .pressedFlower: return "camera.macro"
+    case .pressedFlower, .vintageRose, .carnationBouquet, .pinkRose,
+         .purpleBud, .tapedBotanicals, .pressedScatter, .driedSprig,
+         .pinkBabysBreath, .whiteGerbera:
+      return "camera.macro"
     case .coffeeStain: return "circle.dashed"
     }
   }

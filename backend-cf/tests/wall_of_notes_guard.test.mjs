@@ -9,6 +9,10 @@ async function read(relativePath) {
   return readFile(path.join(repoRoot, relativePath), 'utf8');
 }
 
+async function readBytes(relativePath) {
+  return readFile(path.join(repoRoot, relativePath));
+}
+
 test('wall routes are authenticated, global-only, and Ghost-safe', async () => {
   const worker = await read('backend-cf/src/index.ts');
 
@@ -179,6 +183,37 @@ test('Captro Studio publishes its structured visual document through the canonic
   assert.match(wallView, /canvasDetailBlocks\(blocks\)/);
   assert.match(wallView, /MIRACaptroStudioView\([\s\S]*?initialTemplate: studioInitialTemplate,[\s\S]*?publishingIdentity: studioPublishingIdentity[\s\S]*?let note = try await model\.create\(body\)/);
   assert.match(wallView, /func create\(_ body: MIRACreateWallNoteBody\)[\s\S]*?merge\(\[response\.note\]/);
+});
+
+test('Captro Studio bundles transparent floral decor through the published canvas renderer', async () => {
+  const assetsSource = await read('ios_native/MIRA/Sources/MIRANative/Design/CaptroNoteAssets.swift');
+  const studio = await read('ios_native/MIRA/Sources/MIRANative/Screens/MIRACaptroStudioView.swift');
+  const assets = [
+    ['vintageRose', 'captro_decor_vintage_rose', 'captro-decor-vintage-rose.png'],
+    ['carnationBouquet', 'captro_decor_carnation_bouquet', 'captro-decor-carnation-bouquet.png'],
+    ['pinkRose', 'captro_decor_pink_rose', 'captro-decor-pink-rose.png'],
+    ['purpleBud', 'captro_decor_purple_bud', 'captro-decor-purple-bud.png'],
+    ['tapedBotanicals', 'captro_decor_taped_botanicals', 'captro-decor-taped-botanicals.png'],
+    ['pressedScatter', 'captro_decor_pressed_scatter', 'captro-decor-pressed-scatter.png'],
+    ['driedSprig', 'captro_decor_dried_sprig', 'captro-decor-dried-sprig.png'],
+    ['pinkBabysBreath', 'captro_decor_pink_babys_breath', 'captro-decor-pink-babys-breath.png'],
+    ['whiteGerbera', 'captro_decor_white_gerbera', 'captro-decor-white-gerbera.png'],
+  ];
+
+  for (const [object, token, filename] of assets) {
+    assert.match(assetsSource, new RegExp(`case ${object} = "${token}"`));
+    assert.match(studio, new RegExp(`case \\.${object}: return \\.${object}`));
+
+    const directory = `ios_native/MIRA/AppTarget/Assets.xcassets/${token}.imageset`;
+    const contents = JSON.parse(await read(`${directory}/Contents.json`));
+    assert.equal(contents.images[0].filename, filename);
+    const png = await readBytes(`${directory}/${filename}`);
+    assert.deepEqual([...png.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
+    assert.equal(png[25], 6, `${filename} must use PNG RGBA color type`);
+  }
+
+  assert.match(studio, /style\.material = layer\.object\?\.captroFlowerAsset\?\.rawValue/);
+  assert.match(assetsSource, /if asset\.isDirectImage/);
 });
 
 test('living Wall features are migration-backed and cannot bypass Worker moderation', async () => {

@@ -650,7 +650,14 @@ public struct MIRACaptroStudioView: View {
   private func objectTray(close: @escaping () -> Void) -> some View {
     let objects: [MIRACaptroStudioObject] = objectTrayMode == .paper
       ? [.tornPaper, .texturedPaper, .tape, .coolTape]
-      : [.pen, .paperclip, .pushPin, .ticket, .pressedFlower, .handDrawnArrow, .organicShape, .polaroidFrame, .passportStamp, .coffeeStain, .cassette, .television]
+      : [
+        .vintageRose, .carnationBouquet, .pinkRose, .purpleBud,
+        .tapedBotanicals, .pressedScatter, .driedSprig,
+        .pinkBabysBreath, .whiteGerbera, .pressedFlower,
+        .pen, .paperclip, .pushPin, .ticket, .handDrawnArrow,
+        .organicShape, .polaroidFrame, .passportStamp,
+        .coffeeStain, .cassette, .television,
+      ]
     return MIRAActionModalCard {
       VStack(alignment: .leading, spacing: 14) {
         HStack {
@@ -1048,6 +1055,15 @@ public struct MIRACaptroStudioView: View {
       objectSize = CGSize(width: 0.34, height: 0.075)
     case .pen:
       objectSize = CGSize(width: 0.12, height: 0.34)
+    case .vintageRose, .carnationBouquet, .pinkRose, .purpleBud,
+         .driedSprig, .whiteGerbera:
+      objectSize = CGSize(width: 0.32, height: 0.39)
+    case .tapedBotanicals:
+      objectSize = CGSize(width: 0.46, height: 0.64)
+    case .pressedScatter:
+      objectSize = CGSize(width: 0.48, height: 0.58)
+    case .pinkBabysBreath:
+      objectSize = CGSize(width: 0.44, height: 0.52)
     default:
       objectSize = CGSize(width: 0.24, height: 0.18)
     }
@@ -1057,7 +1073,7 @@ public struct MIRACaptroStudioView: View {
       y: 0.5,
       width: objectSize.width,
       height: objectSize.height,
-      rotation: object == .paperclip ? 0.25 : -0.035,
+      rotation: object == .paperclip ? 0.25 : (object.captroFlowerAsset == nil ? -0.035 : 0),
       zIndex: document.nextZIndex,
       color: defaultColor(for: object)
     )
@@ -1163,7 +1179,10 @@ public struct MIRACaptroStudioView: View {
     case .television: return "charcoal"
     case .polaroidFrame: return "paper"
     case .passportStamp: return "stamp"
-    case .pressedFlower: return "rose"
+    case .pressedFlower, .vintageRose, .carnationBouquet, .pinkRose,
+         .purpleBud, .tapedBotanicals, .pressedScatter, .driedSprig,
+         .pinkBabysBreath, .whiteGerbera:
+      return "rose"
     case .coffeeStain: return "coffee"
     }
   }
@@ -1556,6 +1575,11 @@ public struct MIRACaptroStudioView: View {
       case .pressedFlower:
         kind = .flower
         style.material = CaptroNoteAsset.pressedWildflower.rawValue
+      case .vintageRose, .carnationBouquet, .pinkRose, .purpleBud,
+           .tapedBotanicals, .pressedScatter, .driedSprig,
+           .pinkBabysBreath, .whiteGerbera:
+        kind = .flower
+        style.material = layer.object?.captroFlowerAsset?.rawValue
       case .paperclip:
         kind = .sticker
         style.stickerName = CaptroNoteAsset.silverPaperclip.rawValue
@@ -2121,9 +2145,13 @@ private struct MIRAStudioObjectVisual: View {
         }
         .opacity(0.78)
 
-      case .pressedFlower:
-        CaptroNoteAssetView(asset: .pressedWildflower)
-          .shadow(color: .black.opacity(0.13), radius: 2, y: 2)
+      case .pressedFlower, .vintageRose, .carnationBouquet, .pinkRose,
+           .purpleBud, .tapedBotanicals, .pressedScatter, .driedSprig,
+           .pinkBabysBreath, .whiteGerbera:
+        if let asset = object.captroFlowerAsset {
+          CaptroNoteAssetView(asset: asset)
+            .shadow(color: .black.opacity(0.13), radius: 2, y: 2)
+        }
 
       case .coffeeStain:
         ZStack {
@@ -2133,6 +2161,24 @@ private struct MIRAStudioObjectVisual: View {
         }
         .blur(radius: max(0.2, size.width * 0.006))
       }
+    }
+  }
+}
+
+private extension MIRACaptroStudioObject {
+  var captroFlowerAsset: CaptroNoteAsset? {
+    switch self {
+    case .pressedFlower: return .pressedWildflower
+    case .vintageRose: return .vintageRose
+    case .carnationBouquet: return .carnationBouquet
+    case .pinkRose: return .pinkRose
+    case .purpleBud: return .purpleBud
+    case .tapedBotanicals: return .tapedBotanicals
+    case .pressedScatter: return .pressedScatter
+    case .driedSprig: return .driedSprig
+    case .pinkBabysBreath: return .pinkBabysBreath
+    case .whiteGerbera: return .whiteGerbera
+    default: return nil
     }
   }
 }
