@@ -47,6 +47,23 @@ test('Wall author hydration cannot query the removed app_users status column', a
   assert.match(wallRoute, /supabaseUserStatus\(author\) === 'active'/);
 });
 
+test('Wall collage mode fetches one global composition instead of a random viewport region', async () => {
+  const worker = await read('backend-cf/src/index.ts');
+  const wallView = await read('ios_native/MIRA/Sources/MIRANative/Screens/WallOfNotesNativeView.swift');
+  const spatialIndex = await read('ios_native/MIRA/Sources/MIRANative/Services/MIRAWallSpatialIndex.swift');
+  const wallStart = worker.indexOf("api.get('/wall/notes'");
+  const wallEnd = worker.indexOf("api.get('/wall/overview'", wallStart);
+  const wallRoute = worker.slice(wallStart, wallEnd);
+
+  assert.match(wallRoute, /const isCollageLayout = layout === 'collage'/);
+  assert.match(wallRoute, /else if \(!isCollageLayout\)/);
+  assert.match(wallRoute, /isCollageLayout[\s\S]*?'created_at\.desc,z_index\.desc'/);
+  assert.match(wallView, /URLQueryItem\(name: "layout", value: "collage"\)/);
+  assert.match(wallView, /\.frame\(width: frame\.width, height: frame\.height\)/);
+  assert.match(spatialIndex, /let columnCount = 3/);
+  assert.doesNotMatch(spatialIndex, /preserving existingFrames/);
+});
+
 test('wall migration has RLS, spatial indexes, and unique interaction keys', async () => {
   const migration = await read('supabase/migrations/20260712025734_wall_of_notes.sql');
 
@@ -253,7 +270,7 @@ test('Wall gallery taps, exact-canvas lift, flipping, and signatures remain expl
   assert.match(presentation, /layoutSeed\(for note: MIRAWallNote\)/);
   assert.match(presentation, /note\.document\?\.canvas \?\? note\.canvas/);
   assert.match(presentation, /canvasBackedSize\(note: note, canvas: canvas\)/);
-  assert.match(spatialIndex, /layoutSeed\(for: note\)/);
+  assert.match(spatialIndex, /let columnCount = 3/);
   assert.match(wallView, /Turn note over/);
   assert.match(wallView, /Sign this note/);
   assert.match(wallView, /MIRAWallDetailBackdrop\(seed: note\.id\)/);

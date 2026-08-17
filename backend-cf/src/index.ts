@@ -18313,6 +18313,8 @@ api.get('/wall/notes', authMiddleware, async (c) => {
   if (minX >= maxX || minY >= maxY) return c.json({ detail: 'Invalid wall region.' }, 400);
   const zoom = clampFloat(c.req.query('zoom'), 0.15, 3, 1);
   const limit = clampNumber(c.req.query('limit') || (zoom < 0.45 ? '600' : '320'), 1, 750, 320);
+  const layout = cleanText(c.req.query('layout'), 30).toLowerCase();
+  const isCollageLayout = layout === 'collage';
   const filter = cleanText(c.req.query('filter') || 'all', 40).toLowerCase();
   const query = cleanText(c.req.query('query'), 80).replace(/[%*_(),]/g, ' ').trim();
   const authorUserId = publicId(c.req.query('author_user_id'), 120);
@@ -18333,7 +18335,7 @@ api.get('/wall/notes', authMiddleware, async (c) => {
     // reveal its author through this endpoint.
     filters.author_account_id = postgrestEqFilter(authorUserId);
     filters.publishing_identity = postgrestEqFilter('author');
-  } else {
+  } else if (!isCollageLayout) {
     filters.and = `(${regionConditions.join(',')})`;
   }
   if (filter === 'ghost' || filter === 'author') filters.publishing_identity = postgrestEqFilter(filter);
@@ -18347,7 +18349,7 @@ api.get('/wall/notes', authMiddleware, async (c) => {
       limit: 750,
     });
     const savedIds = savedRows.map((row) => publicId(row?.note_id, 120)).filter(Boolean);
-    if (!savedIds.length) return c.json({ notes: [], wall_id: wallId, zoom });
+    if (!savedIds.length) return c.json({ notes: [], wall_id: wallId, zoom, layout: isCollageLayout ? 'collage' : 'spatial' });
     filters.id = postgrestInFilter(savedIds);
   }
 
@@ -18355,6 +18357,8 @@ api.get('/wall/notes', authMiddleware, async (c) => {
     ? 'created_at.desc'
     : filter === 'popular'
     ? 'reaction_count.desc,save_count.desc,created_at.desc'
+    : isCollageLayout
+    ? 'created_at.desc,z_index.desc'
     : 'z_index.asc,created_at.desc';
   const rows = await supabaseAdminQueryRows(c, 'wall_notes', { filters, order, limit });
   const ownerIds = Array.from(new Set(rows.map((row) => publicId(row?.author_account_id, 120)).filter(Boolean)));
@@ -18373,7 +18377,7 @@ api.get('/wall/notes', authMiddleware, async (c) => {
     const id = publicId(row?.id, 120);
     return wallNotePayload(row, authors.get(publicId(row?.author_account_id, 120)), state.reacted.has(id), state.saved.has(id), state.signed.has(id), viewerId);
   });
-  const response = c.json({ notes, wall_id: wallId, zoom });
+  const response = c.json({ notes, wall_id: wallId, zoom, layout: isCollageLayout ? 'collage' : 'spatial' });
   response.headers.set('cache-control', 'private, max-age=15, stale-while-revalidate=45');
   return response;
 });

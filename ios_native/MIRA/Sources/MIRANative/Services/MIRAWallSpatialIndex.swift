@@ -47,17 +47,9 @@ public enum MIRAWallLayout {
       return CGRect(x: -145, y: -105, width: 290, height: 210)
     }
     let signSize = CGSize(width: 278, height: 196)
-    if noteBounds.width < 430 {
-      return CGRect(
-        x: noteBounds.maxX + 46,
-        y: noteBounds.midY - signSize.height * 0.52,
-        width: signSize.width,
-        height: signSize.height
-      )
-    }
     return CGRect(
-      x: noteBounds.minX + 24,
-      y: noteBounds.maxY + 42,
+      x: noteBounds.midX - signSize.width * 0.5,
+      y: noteBounds.maxY + 28,
       width: signSize.width,
       height: signSize.height
     )
@@ -85,6 +77,31 @@ public enum MIRAWallLayout {
     }
     let scale = min(max(fitScale * 0.92, range.lowerBound), range.upperBound)
     return MIRAWallCamera(center: CGPoint(x: content.midX, y: content.midY), scale: scale)
+  }
+
+  public static func collageCamera(
+    noteBounds: CGRect?,
+    noteCount: Int,
+    viewport: CGSize,
+    includeStartSign: Bool
+  ) -> MIRAWallCamera {
+    var content = noteBounds ?? CGRect(x: -145, y: 0, width: 290, height: 210)
+    if includeStartSign {
+      content = content.union(startSignRect(noteBounds: noteBounds, noteCount: noteCount))
+    }
+
+    let horizontalSpace = max(220, viewport.width - 18)
+    let widthScale = horizontalSpace / max(content.width, 1)
+    let scale = min(max(widthScale, 0.38), noteCount <= 4 ? 0.86 : 0.62)
+    let visibleWorldHeight = viewport.height / max(scale, 0.001)
+    let centerY = content.height <= visibleWorldHeight
+      ? content.midY
+      : content.minY - 18 + visibleWorldHeight * 0.5
+
+    return MIRAWallCamera(
+      center: CGPoint(x: content.midX, y: centerY),
+      scale: scale
+    )
   }
 }
 
@@ -170,211 +187,50 @@ public struct MIRAWallSpatialIndex {
 }
 
 public enum MIRAWallReadableLayout {
-  private struct Cell: Hashable {
-    let x: Int
-    let y: Int
-  }
-
-  private struct PlacedNote {
-    let frame: CGRect
-    let readableFrame: CGRect
-  }
-
-  private struct CandidateScore {
-    let valid: Bool
-    let value: CGFloat
-  }
-
-  public static func frames(
-    for notes: [MIRAWallNote],
-    preserving existingFrames: [String: CGRect] = [:],
-    cellSize: CGFloat = 360
-  ) -> [String: CGRect] {
+  public static func frames(for notes: [MIRAWallNote]) -> [String: CGRect] {
     guard !notes.isEmpty else { return [:] }
 
-    let safeCellSize = max(180, cellSize)
+    let columnCount = 3
+    let columnWidth: CGFloat = 242
+    let gutter: CGFloat = 9
+    let boardWidth = columnWidth * CGFloat(columnCount) + gutter * CGFloat(columnCount - 1)
+    let boardOriginX = -boardWidth * 0.5
     let ordered = notes.sorted { left, right in
-      if left.createdAt != right.createdAt { return left.createdAt < right.createdAt }
-      if left.zIndex != right.zIndex { return left.zIndex < right.zIndex }
+      if left.createdAt != right.createdAt { return left.createdAt > right.createdAt }
+      if left.zIndex != right.zIndex { return left.zIndex > right.zIndex }
       return left.id < right.id
     }
-    var placed: [PlacedNote] = []
-    placed.reserveCapacity(ordered.count)
-    var cells: [Cell: [Int]] = [:]
+    var columnBottoms = Array(repeating: CGFloat.zero, count: columnCount)
     var result: [String: CGRect] = [:]
     result.reserveCapacity(ordered.count)
 
-    for note in ordered {
-      let desired = MIRAWallNotePresentationResolver.wallFrame(for: note)
-      guard let existing = existingFrames[note.id],
-            !existing.isNull,
-            !existing.isInfinite,
-            existing.width.isFinite,
-            existing.height.isFinite,
-            abs(existing.width - desired.width) < 0.5,
-            abs(existing.height - desired.height) < 0.5
-      else { continue }
-      append(
-        existing,
-        noteID: note.id,
-        placed: &placed,
-        cells: &cells,
-        result: &result,
-        cellSize: safeCellSize
+    for (index, note) in ordered.enumerated() {
+      let presentation = MIRAWallNotePresentationResolver.resolve(note)
+      let aspect = max(0.32, min(1.9, presentation.size.width / max(presentation.size.height, 1)))
+      let shouldFeature = index.isMultiple(of: 9) && aspect >= 1.05
+      let span = aspect >= 1.34 || shouldFeature ? 2 : 1
+      let candidates = 0...(columnCount - span)
+      let column = candidates.min { left, right in
+        let leftBottom = columnBottoms[left..<(left + span)].max() ?? 0
+        let rightBottom = columnBottoms[right..<(right + span)].max() ?? 0
+        if abs(leftBottom - rightBottom) > 0.5 { return leftBottom < rightBottom }
+        return left < right
+      } ?? 0
+      let top = columnBottoms[column..<(column + span)].max() ?? 0
+      let width = columnWidth * CGFloat(span) + gutter * CGFloat(span - 1)
+      let height = width / aspect
+      let frame = CGRect(
+        x: boardOriginX + CGFloat(column) * (columnWidth + gutter),
+        y: top,
+        width: width,
+        height: height
       )
-    }
-
-    for note in ordered {
-      guard result[note.id] == nil else { continue }
-      let desired = MIRAWallNotePresentationResolver.wallFrame(for: note)
-      let phase = CGFloat(MIRAWallNotePresentationResolver.stableHash(MIRAWallNotePresentationResolver.layoutSeed(for: note)) % 360)
-        * .pi / 180
-      var chosen = desired
-      var best = desired
-      var bestScore = candidateScore(
-        desired,
-        desired: desired,
-        neighbors: neighborIndices(for: desired, cells: cells, cellSize: safeCellSize),
-        placed: placed
-      )
-
-      if !bestScore.valid {
-        search: for ring in 1...14 {
-          let step = max(30, min(44, min(desired.width, desired.height) * 0.17))
-          let radius = CGFloat(ring) * step
-          let slots = ring < 4 ? 10 : 14
-          for slot in 0..<slots {
-            let angle = phase + CGFloat(slot) * 2 * .pi / CGFloat(slots)
-            let candidate = desired.offsetBy(
-              dx: cos(angle) * radius,
-              dy: sin(angle) * radius
-            )
-            let score = candidateScore(
-              candidate,
-              desired: desired,
-              neighbors: neighborIndices(for: candidate, cells: cells, cellSize: safeCellSize),
-              placed: placed
-            )
-            if score.value < bestScore.value {
-              best = candidate
-              bestScore = score
-            }
-            if score.valid {
-              chosen = candidate
-              break search
-            }
-          }
-        }
-        if !bestScore.valid {
-          chosen = best
-        }
-      }
-
-      append(
-        chosen,
-        noteID: note.id,
-        placed: &placed,
-        cells: &cells,
-        result: &result,
-        cellSize: safeCellSize
-      )
-    }
-
-    return result
-  }
-
-  private static func append(
-    _ frame: CGRect,
-    noteID: String,
-    placed: inout [PlacedNote],
-    cells: inout [Cell: [Int]],
-    result: inout [String: CGRect],
-    cellSize: CGFloat
-  ) {
-    let index = placed.count
-    placed.append(PlacedNote(frame: frame, readableFrame: readableFrame(for: frame)))
-    for cell in coveredCells(for: frame.insetBy(dx: -10, dy: -10), cellSize: cellSize) {
-      cells[cell, default: []].append(index)
-    }
-    result[noteID] = frame
-  }
-
-  private static func candidateScore(
-    _ candidate: CGRect,
-    desired: CGRect,
-    neighbors: [Int],
-    placed: [PlacedNote]
-  ) -> CandidateScore {
-    let readable = readableFrame(for: candidate)
-    var fullOverlap: CGFloat = 0
-    var readableOverlap: CGFloat = 0
-    var valid = true
-
-    for index in neighbors {
-      guard placed.indices.contains(index) else { continue }
-      let other = placed[index]
-      let overlap = intersectionArea(candidate, other.frame)
-      let protectedOverlap = intersectionArea(readable, other.readableFrame)
-      fullOverlap += overlap
-      readableOverlap += protectedOverlap
-
-      let smallerArea = max(
-        1,
-        min(candidate.width * candidate.height, other.frame.width * other.frame.height)
-      )
-      if overlap / smallerArea > 0.16 || protectedOverlap > 1 {
-        valid = false
+      result[note.id] = frame
+      for occupiedColumn in column..<(column + span) {
+        columnBottoms[occupiedColumn] = frame.maxY + gutter
       }
     }
 
-    let displacement = hypot(candidate.midX - desired.midX, candidate.midY - desired.midY)
-    return CandidateScore(
-      valid: valid,
-      value: displacement + fullOverlap * 2.8 + readableOverlap * 40
-    )
-  }
-
-  private static func readableFrame(for frame: CGRect) -> CGRect {
-    frame.insetBy(
-      dx: max(10, frame.width * 0.07),
-      dy: max(12, frame.height * 0.08)
-    )
-  }
-
-  private static func intersectionArea(_ left: CGRect, _ right: CGRect) -> CGFloat {
-    let intersection = left.intersection(right)
-    guard !intersection.isNull, !intersection.isEmpty else { return 0 }
-    return intersection.width * intersection.height
-  }
-
-  private static func neighborIndices(
-    for frame: CGRect,
-    cells: [Cell: [Int]],
-    cellSize: CGFloat
-  ) -> [Int] {
-    var seen = Set<Int>()
-    var result: [Int] = []
-    for cell in coveredCells(for: frame.insetBy(dx: -12, dy: -12), cellSize: cellSize) {
-      for index in cells[cell] ?? [] where seen.insert(index).inserted {
-        result.append(index)
-      }
-    }
-    return result
-  }
-
-  private static func coveredCells(for rect: CGRect, cellSize: CGFloat) -> [Cell] {
-    guard !rect.isNull, !rect.isInfinite else { return [] }
-    let minX = Int(floor(rect.minX / cellSize))
-    let maxX = Int(floor(rect.maxX / cellSize))
-    let minY = Int(floor(rect.minY / cellSize))
-    let maxY = Int(floor(rect.maxY / cellSize))
-    var result: [Cell] = []
-    result.reserveCapacity(max(1, (maxX - minX + 1) * (maxY - minY + 1)))
-    for y in minY...maxY {
-      for x in minX...maxX {
-        result.append(Cell(x: x, y: y))
-      }
-    }
     return result
   }
 }

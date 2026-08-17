@@ -92,44 +92,73 @@ final class MIRAWallSpatialIndexTests: XCTestCase {
     })
   }
 
-  func testReadableLayoutSeparatesOverlappingTextAreasDeterministically() {
-    let first = makeNote(id: "overlap-first", x: 0, y: 0, z: 1)
-    let second = makeNote(id: "overlap-second", x: 0, y: 0, z: 2)
-    let notes = [first, second]
+  func testCollageLayoutIsDeterministicAndIgnoresStoredWorldCoordinates() {
+    let first = makeNote(id: "first", x: -8_000, y: 11_000, z: 1)
+    let second = makeNote(id: "second", x: 14_000, y: -9_000, z: 2)
+    let relocatedFirst = makeNote(id: "first", x: 80_000, y: -61_000, z: 1)
+    let relocatedSecond = makeNote(id: "second", x: -72_000, y: 49_000, z: 2)
 
-    let firstPass = MIRAWallReadableLayout.frames(for: notes)
-    let secondPass = MIRAWallReadableLayout.frames(for: notes)
+    let firstPass = MIRAWallReadableLayout.frames(for: [first, second])
+    let secondPass = MIRAWallReadableLayout.frames(for: [relocatedFirst, relocatedSecond])
 
     XCTAssertEqual(firstPass, secondPass)
-    guard let firstFrame = firstPass[first.id], let secondFrame = firstPass[second.id] else {
-      return XCTFail("Readable layout must return every note frame")
-    }
-    let firstReadable = firstFrame.insetBy(
-      dx: max(10, firstFrame.width * 0.07),
-      dy: max(12, firstFrame.height * 0.08)
-    )
-    let secondReadable = secondFrame.insetBy(
-      dx: max(10, secondFrame.width * 0.07),
-      dy: max(12, secondFrame.height * 0.08)
-    )
-
-    XCTAssertFalse(firstReadable.intersects(secondReadable))
   }
 
-  func testReadableLayoutPreservesExistingFramesWhenNewNotesArrive() {
-    let first = makeNote(id: "preserved-first", x: 0, y: 0, z: 1)
-    let second = makeNote(id: "preserved-second", x: 0, y: 0, z: 2)
-    let initial = MIRAWallReadableLayout.frames(for: [first, second])
-    let third = makeNote(id: "new-third", x: 0, y: 0, z: 3)
+  func testCollageLayoutFormsOneCompactThreeColumnBoardWithoutOverlap() {
+    let notes = (0..<30).map { index in
+      makeNote(
+        id: "collage-\(index)",
+        x: Double(index * 4_000),
+        y: Double(index * -3_000),
+        z: index
+      )
+    }
+    let frames = MIRAWallReadableLayout.frames(for: notes)
+    let bounds = frames.values.reduce(nil as CGRect?) { partial, frame in
+      partial?.union(frame) ?? frame
+    }
 
-    let merged = MIRAWallReadableLayout.frames(
-      for: [first, second, third],
-      preserving: initial
+    XCTAssertEqual(frames.count, notes.count)
+    XCTAssertLessThanOrEqual(bounds?.width ?? CGFloat.infinity, 744.1)
+    XCTAssertGreaterThanOrEqual(bounds?.minX ?? -CGFloat.infinity, -372.1)
+    XCTAssertLessThanOrEqual(bounds?.maxX ?? CGFloat.infinity, 372.1)
+
+    let allFrames = Array(frames.values)
+    for left in allFrames.indices {
+      for right in allFrames.indices where right > left {
+        XCTAssertTrue(allFrames[left].intersection(allFrames[right]).isEmpty)
+      }
+    }
+  }
+
+  func testCollageLayoutMakesLandscapeArtworkSpanTwoColumnsAndStartsWithNewest() {
+    let older = makeNote(
+      id: "older-landscape",
+      x: 0,
+      y: 0,
+      z: 1,
+      styleToken: "postcard",
+      width: 300,
+      height: 170,
+      createdAt: "2026-07-11T00:00:00Z"
     )
+    let newest = makeNote(
+      id: "newest-landscape",
+      x: 9_000,
+      y: -9_000,
+      z: 2,
+      styleToken: "postcard",
+      width: 300,
+      height: 170,
+      createdAt: "2026-07-12T00:00:00Z"
+    )
+    let frames = MIRAWallReadableLayout.frames(for: [older, newest])
 
-    XCTAssertEqual(merged[first.id], initial[first.id])
-    XCTAssertEqual(merged[second.id], initial[second.id])
-    XCTAssertNotNil(merged[third.id])
+    guard let newestFrame = frames[newest.id] else {
+      return XCTFail("The newest artwork must be included in the collage")
+    }
+    XCTAssertEqual(newestFrame.minY, 0, accuracy: 0.001)
+    XCTAssertEqual(newestFrame.width, 493, accuracy: 0.001)
   }
 
   func testSpatialIndexUsesReadableLayoutFramesForHitTesting() {
@@ -159,13 +188,22 @@ final class MIRAWallSpatialIndexTests: XCTestCase {
     XCTAssertEqual(index.notes(in: CGRect(x: 0, y: 0, width: 400, height: 400)).count, 1)
   }
 
-  private func makeNote(id: String, x: Double, y: Double, z: Int) -> MIRAWallNote {
+  private func makeNote(
+    id: String,
+    x: Double,
+    y: Double,
+    z: Int,
+    styleToken: String = "sticky_square",
+    width: Double = 180,
+    height: Double = 180,
+    createdAt: String = "2026-07-11T00:00:00Z"
+  ) -> MIRAWallNote {
     MIRAWallNote(
       id: id, wallId: "global", publishingIdentity: "ghost", body: "A real note",
-      category: nil, colorToken: "butter", styleToken: "sticky_square",
+      category: nil, colorToken: "butter", styleToken: styleToken,
       mediaUrl: nil, mediaThumbnailUrl: nil,
-      worldX: x, worldY: y, width: 180, height: 180, rotation: 0, zIndex: z,
-      approximateLocation: nil, createdAt: "2026-07-11T00:00:00Z", updatedAt: nil,
+      worldX: x, worldY: y, width: width, height: height, rotation: 0, zIndex: z,
+      approximateLocation: nil, createdAt: createdAt, updatedAt: nil,
       saveCount: 0, reactionCount: 0, replyCount: 0,
       reactedByViewer: false, savedByViewer: false, authorPreview: nil
     )

@@ -34,6 +34,12 @@ final class MIRAWallNotesModel: ObservableObject {
     displayFrames[note.id] ?? MIRAWallNotePresentationResolver.wallFrame(for: note)
   }
 
+  var displayBounds: CGRect? {
+    displayFrames.values.reduce(nil as CGRect?) { partial, frame in
+      partial?.union(frame) ?? frame
+    }
+  }
+
   func loadOverview(wallID: String, force: Bool = false) async {
     guard force || overview?.wallId != wallID else { return }
     var components = URLComponents()
@@ -51,14 +57,11 @@ final class MIRAWallNotesModel: ObservableObject {
   }
 
   func load(
-    bounds: CGRect,
-    zoom: CGFloat,
     wallID: String,
     filter: String,
     query: String,
     force: Bool = false
   ) async {
-    let expanded = bounds.insetBy(dx: -max(420, bounds.width * 0.35), dy: -max(600, bounds.height * 0.35))
     let cleanQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
     let viewSignature = "\(wallID):\(filter):\(cleanQuery)"
     if activeViewSignature != viewSignature {
@@ -69,12 +72,7 @@ final class MIRAWallNotesModel: ObservableObject {
       inFlightSignature = nil
       activeViewSignature = viewSignature
     }
-    let signature = [
-      wallID,
-      String(Int(expanded.minX / 320)), String(Int(expanded.maxX / 320)),
-      String(Int(expanded.minY / 320)), String(Int(expanded.maxY / 320)),
-      String(format: "%.1f", zoom), filter, cleanQuery,
-    ].joined(separator: ":")
+    let signature = viewSignature
     guard force || (signature != lastLoadedSignature && signature != inFlightSignature) else { return }
     inFlightSignature = signature
     if notes.isEmpty { isLoading = true }
@@ -88,19 +86,15 @@ final class MIRAWallNotesModel: ObservableObject {
     components.path = "/wall/notes"
     components.queryItems = [
       URLQueryItem(name: "wall_id", value: wallID),
-      URLQueryItem(name: "min_x", value: String(Double(expanded.minX))),
-      URLQueryItem(name: "max_x", value: String(Double(expanded.maxX))),
-      URLQueryItem(name: "min_y", value: String(Double(expanded.minY))),
-      URLQueryItem(name: "max_y", value: String(Double(expanded.maxY))),
-      URLQueryItem(name: "zoom", value: String(Double(zoom))),
+      URLQueryItem(name: "layout", value: "collage"),
       URLQueryItem(name: "filter", value: filter),
-      URLQueryItem(name: "query", value: query),
-      URLQueryItem(name: "limit", value: zoom < 0.45 ? "600" : "320"),
+      URLQueryItem(name: "query", value: cleanQuery),
+      URLQueryItem(name: "limit", value: "750"),
     ]
     do {
       let response: MIRAWallNotesResponse = try await api.get(components.string ?? "/wall/notes")
       guard currentWallID == wallID, activeViewSignature == viewSignature else { return }
-      merge(response.notes, around: bounds)
+      replace(with: response.notes)
       lastLoadedSignature = signature
     } catch is CancellationError {
       return
@@ -129,7 +123,7 @@ final class MIRAWallNotesModel: ObservableObject {
 
   func create(_ body: MIRACreateWallNoteBody) async throws -> MIRAWallNote {
     let response: MIRAWallNoteResponse = try await api.post("/wall/notes", body: body)
-    merge([response.note], around: CGRect(x: response.note.worldX - 900, y: response.note.worldY - 900, width: 1800, height: 1800))
+    merge([response.note])
     await loadOverview(wallID: response.note.wallId, force: true)
     return response.note
   }
@@ -264,37 +258,15 @@ final class MIRAWallNotesModel: ObservableObject {
     return updated
   }
 
-  private func merge(_ incoming: [MIRAWallNote], around bounds: CGRect) {
-    var byID = Dictionary(uniqueKeysWithValues: notes.map { ($0.id, $0) })
-    incoming.forEach { note in
-      if let previous = byID[note.id],
-         MIRAWallNotePresentationResolver.wallFrame(for: previous)
-           != MIRAWallNotePresentationResolver.wallFrame(for: note) {
-        displayFrames.removeValue(forKey: note.id)
-      }
-      byID[note.id] = note
-    }
-    let retention = bounds.insetBy(dx: -max(5000, bounds.width * 2.5), dy: -max(5000, bounds.height * 2.5))
-    let viewportCenter = CGPoint(x: bounds.midX, y: bounds.midY)
-    let retained = byID.values
-      .filter { note in
-        retention.intersects(MIRAWallNotePresentationResolver.wallFrame(for: note))
-      }
-      .sorted { left, right in
-        let leftFrame = MIRAWallNotePresentationResolver.wallFrame(for: left)
-        let rightFrame = MIRAWallNotePresentationResolver.wallFrame(for: right)
-        let leftVisible = bounds.intersects(leftFrame)
-        let rightVisible = bounds.intersects(rightFrame)
-        if leftVisible != rightVisible { return leftVisible }
+  private func replace(with incoming: [MIRAWallNote]) {
+    notes = orderedNotes(incoming)
+    rebuildDisplayLayout()
+  }
 
-        let leftDistance = squaredDistance(from: leftFrame, to: viewportCenter)
-        let rightDistance = squaredDistance(from: rightFrame, to: viewportCenter)
-        if leftDistance != rightDistance { return leftDistance < rightDistance }
-        if left.zIndex != right.zIndex { return left.zIndex < right.zIndex }
-        if left.createdAt != right.createdAt { return left.createdAt < right.createdAt }
-        return left.id < right.id
-      }
-    notes = Array(retained.prefix(1800))
+  private func merge(_ incoming: [MIRAWallNote]) {
+    var byID = Dictionary(uniqueKeysWithValues: notes.map { ($0.id, $0) })
+    incoming.forEach { byID[$0.id] = $0 }
+    notes = orderedNotes(Array(byID.values))
     rebuildDisplayLayout()
   }
 
@@ -314,14 +286,16 @@ final class MIRAWallNotesModel: ObservableObject {
   }
 
   private func rebuildDisplayLayout() {
-    displayFrames = MIRAWallReadableLayout.frames(for: notes, preserving: displayFrames)
+    displayFrames = MIRAWallReadableLayout.frames(for: notes)
     spatialIndex.rebuild(with: notes, frameOverrides: displayFrames)
   }
 
-  private func squaredDistance(from frame: CGRect, to point: CGPoint) -> CGFloat {
-    let dx = frame.midX - point.x
-    let dy = frame.midY - point.y
-    return dx * dx + dy * dy
+  private func orderedNotes(_ incoming: [MIRAWallNote]) -> [MIRAWallNote] {
+    Array(incoming.sorted { left, right in
+      if left.createdAt != right.createdAt { return left.createdAt > right.createdAt }
+      if left.zIndex != right.zIndex { return left.zIndex > right.zIndex }
+      return left.id < right.id
+    }.prefix(750))
   }
 }
 
@@ -392,7 +366,7 @@ public struct WallOfNotesNativeView: View {
           chrome
 
           if let message = model.errorMessage, model.notes.isEmpty {
-            errorState(message: message, bounds: bounds)
+            errorState(message: message)
           }
         }
         .contentShape(Rectangle())
@@ -416,40 +390,43 @@ public struct WallOfNotesNativeView: View {
             }
           }
         )
-        .task(id: loadKey(bounds: bounds)) {
+        .task(id: loadKey) {
           try? await Task.sleep(for: .milliseconds(180))
           guard !Task.isCancelled, initialFrameWallID == globalWallID else { return }
           await model.load(
-            bounds: bounds,
-            zoom: camera.scale,
             wallID: globalWallID,
             filter: selectedFilter,
             query: query
           )
+          guard !Task.isCancelled else { return }
+          withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
+            camera = MIRAWallLayout.collageCamera(
+              noteBounds: model.displayBounds,
+              noteCount: model.notes.count,
+              viewport: viewport,
+              includeStartSign: shouldShowWallStartSign
+            )
+          }
         }
         .task(id: globalWallID) {
           initialFrameWallID = nil
+          camera = MIRAWallCamera(center: CGPoint(x: 0, y: 340), scale: 0.5)
           await model.loadOverview(wallID: globalWallID, force: true)
           guard !Task.isCancelled else { return }
-          if let overview = model.overview {
-            camera = MIRAWallLayout.initialCamera(
-              noteBounds: overview.noteBounds,
-              noteCount: overview.totalCount,
-              viewport: viewport,
-              includeStartSign: overview.totalCount < 5
-            )
-          } else {
-            camera = MIRAWallCamera(scale: 0.92)
-          }
-          initialFrameWallID = globalWallID
           await model.load(
-            bounds: camera.worldBounds(viewport: viewport),
-            zoom: camera.scale,
             wallID: globalWallID,
             filter: selectedFilter,
             query: query,
             force: true
           )
+          guard !Task.isCancelled else { return }
+          camera = MIRAWallLayout.collageCamera(
+            noteBounds: model.displayBounds,
+            noteCount: model.notes.count,
+            viewport: viewport,
+            includeStartSign: model.notes.count < 5
+          )
+          initialFrameWallID = globalWallID
         }
         .sheet(isPresented: $isCreating) {
           MIRANoteCreationEntryView(camera: camera, api: api) { template, message, identity in
@@ -604,8 +581,8 @@ public struct WallOfNotesNativeView: View {
           isLifted: liftedNoteID == note.id || selectedNote?.id == note.id,
           isPressed: pressedNoteID == note.id
         )
-        .frame(width: presentation.size.width, height: presentation.size.height)
-        .rotationEffect(.degrees(note.rotation + presentation.microRotation))
+        .frame(width: frame.width, height: frame.height)
+        .rotationEffect(.degrees(presentation.microRotation * 0.72))
         .scaleEffect(camera.scale)
         .position(center)
         .matchedGeometryEffect(
@@ -738,7 +715,7 @@ public struct WallOfNotesNativeView: View {
     .buttonStyle(.miraPress)
   }
 
-  private func errorState(message: String, bounds: CGRect) -> some View {
+  private func errorState(message: String) -> some View {
     VStack(spacing: 12) {
       Text("Couldn't load this part of the wall.")
         .font(.system(size: 16, weight: .semibold))
@@ -749,8 +726,6 @@ public struct WallOfNotesNativeView: View {
       Button("Retry") {
         Task {
           await model.load(
-            bounds: bounds,
-            zoom: camera.scale,
             wallID: globalWallID,
             filter: selectedFilter,
             query: query,
@@ -836,11 +811,8 @@ public struct WallOfNotesNativeView: View {
       }
   }
 
-  private func loadKey(bounds: CGRect) -> String {
-    [
-      Int(bounds.midX / 260), Int(bounds.midY / 260), Int(camera.scale * 10),
-    ].map(String.init).joined(separator: ":")
-      + ":\(selectedFilter):\(query)"
+  private var loadKey: String {
+    "\(globalWallID):\(selectedFilter):\(query.trimmingCharacters(in: .whitespacesAndNewlines))"
   }
 
   private var wallNoteCount: Int { model.overview?.totalCount ?? model.notes.count }
@@ -855,7 +827,7 @@ public struct WallOfNotesNativeView: View {
 
 
   private func wallStartSign(viewport: CGSize) -> some View {
-    let rect = MIRAWallLayout.startSignRect(noteBounds: model.overview?.noteBounds, noteCount: wallNoteCount)
+    let rect = MIRAWallLayout.startSignRect(noteBounds: model.displayBounds, noteCount: wallNoteCount)
     let center = camera.screenPoint(forWorld: CGPoint(x: rect.midX, y: rect.midY), viewport: viewport)
     return MIRAWallStartSign(onAdd: { isCreating = true })
     .frame(width: rect.width, height: rect.height)

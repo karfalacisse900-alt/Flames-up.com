@@ -177,9 +177,9 @@ struct CaptroPhysicalWallSurface: View {
     CaptroPhotographedPaper(
       seed: seed,
       kind: .linen,
-      base: Color(red: 0.89, green: 0.865, blue: 0.80),
-      textureOpacity: 0.46,
-      directionalLight: 0.20
+      base: Color(red: 0.945, green: 0.943, blue: 0.925),
+      textureOpacity: 0.38,
+      directionalLight: 0.16
     )
     .overlay {
       LinearGradient(
