@@ -27,11 +27,13 @@ public struct MIRACaptroStudioView: View {
   public init(
     camera: MIRAWallCamera,
     api: MIRAAPIClient,
+    initialTemplate: MIRACaptroStudioTemplate? = nil,
     onPublish: @escaping (MIRACreateWallNoteBody) async throws -> MIRAWallNote
   ) {
     self.camera = camera
     self.api = api
     self.onPublish = onPublish
+    _document = State(initialValue: initialTemplate?.makeDocument())
   }
 
   public var body: some View {
@@ -845,6 +847,12 @@ public struct MIRACaptroStudioView: View {
           .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
           .filter { !$0.isEmpty }
           .joined(separator: "\n")
+        let noteDocument = makeNoteDocument(
+          studioDocument: document,
+          canvas: canvas,
+          body: canvasText,
+          thumbnailURL: firstUpload?.url
+        )
 
         publishMessage = "Posting..."
         let size = CGSize(width: 340, height: 425)
@@ -872,6 +880,7 @@ public struct MIRACaptroStudioView: View {
           voiceDurationSeconds: nil,
           voiceWaveform: nil,
           location: nil,
+          document: noteDocument,
           canvas: canvas
         )
         _ = try await onPublish(request)
@@ -951,10 +960,40 @@ public struct MIRACaptroStudioView: View {
   ) -> MIRANoteCanvas {
     MIRANoteCanvas(
       template: document.template.noteCanvasTemplate,
+      format: document.template.noteCanvasFormat,
       designWidth: 1_080,
       designHeight: document.template.canvasDesignHeight,
       background: canvasBackground(for: document.backgroundToken),
       elements: document.layers.compactMap(elementBuilder)
+    )
+  }
+
+  private func makeNoteDocument(
+    studioDocument: MIRACaptroStudioDocument,
+    canvas: MIRANoteCanvas,
+    body: String,
+    thumbnailURL: String?
+  ) -> MIRANoteDocument {
+    let cleanBody = body.trimmingCharacters(in: .whitespacesAndNewlines)
+    let firstLine = cleanBody
+      .components(separatedBy: .newlines)
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .first { !$0.isEmpty }
+    let title = firstLine.map { String($0.prefix(80)) }
+    let altText = cleanBody.isEmpty
+      ? "\(studioDocument.template.title) note"
+      : String(cleanBody.prefix(500))
+    let mode: MIRANoteArtworkMode = studioDocument.template == .importedDesign
+      ? .importedArtwork
+      : .editableCanvas
+    return MIRANoteDocument(
+      artworkMode: mode,
+      contentKind: studioDocument.template.noteContentKind,
+      title: title,
+      subtitle: studioDocument.template.title,
+      altText: altText,
+      thumbnailUrl: thumbnailURL,
+      canvas: canvas
     )
   }
 

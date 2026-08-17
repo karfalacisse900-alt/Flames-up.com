@@ -289,9 +289,31 @@ public enum MIRACaptroStudioTemplate: String, Codable, CaseIterable, Identifiabl
   case filmStrip
   case letter
   case recipeBook
+  case bookReview
+  case eventPoster
+  case partyInvitation
+  case dailyNote
+  case quotePoster
+  case minimalPhoto
+  case importedDesign
 
   public static var creationTemplates: [Self] {
-    [.yearbook, .travelJournal, .memoryBox, .letter, .blankPaper, .filmStrip, .recipeBook]
+    [
+      .minimalPhoto,
+      .eventPoster,
+      .partyInvitation,
+      .bookReview,
+      .travelJournal,
+      .recipeBook,
+      .memoryBox,
+      .yearbook,
+      .dailyNote,
+      .quotePoster,
+      .letter,
+      .filmStrip,
+      .blankPaper,
+      .importedDesign
+    ]
   }
 
   public var id: String { rawValue }
@@ -307,6 +329,13 @@ public enum MIRACaptroStudioTemplate: String, Codable, CaseIterable, Identifiabl
     case .filmStrip: return "Dark Album"
     case .letter: return "Notebook"
     case .recipeBook: return "Recipe Book"
+    case .bookReview: return "Book Review"
+    case .eventPoster: return "Event Poster"
+    case .partyInvitation: return "Invitation"
+    case .dailyNote: return "Daily Note"
+    case .quotePoster: return "Quote Poster"
+    case .minimalPhoto: return "Minimal Photo"
+    case .importedDesign: return "Finished Design"
     }
   }
 
@@ -321,6 +350,13 @@ public enum MIRACaptroStudioTemplate: String, Codable, CaseIterable, Identifiabl
     case .filmStrip: return "A sequence of three frames"
     case .letter: return "Write something worth keeping"
     case .recipeBook: return "Recipes, photos, and kitchen notes"
+    case .bookReview: return "A visual review with room for notes"
+    case .eventPoster: return "Flyers, shows, launches, and pop-ups"
+    case .partyInvitation: return "A polished invite with date and place"
+    case .dailyNote: return "A quiet page for the day"
+    case .quotePoster: return "Large type and one clear idea"
+    case .minimalPhoto: return "One image, carefully framed"
+    case .importedDesign: return "Upload artwork from another app"
     }
   }
 
@@ -335,6 +371,13 @@ public enum MIRACaptroStudioTemplate: String, Codable, CaseIterable, Identifiabl
     case .filmStrip: return "film.stack"
     case .letter: return "envelope"
     case .recipeBook: return "fork.knife"
+    case .bookReview: return "book.closed"
+    case .eventPoster: return "megaphone"
+    case .partyInvitation: return "sparkles"
+    case .dailyNote: return "calendar"
+    case .quotePoster: return "quote.opening"
+    case .minimalPhoto: return "photo"
+    case .importedDesign: return "square.and.arrow.down.on.square"
     }
   }
 
@@ -343,9 +386,13 @@ public enum MIRACaptroStudioTemplate: String, Codable, CaseIterable, Identifiabl
   /// view render the exact same geometry without reflowing text or photos.
   public var canvasDesignHeight: Double {
     switch self {
-    case .blankPaper, .vintageBroadcast, .musicPocket, .filmStrip:
+    case .blankPaper, .vintageBroadcast, .musicPocket, .filmStrip, .minimalPhoto:
       return 1_350
+    case .eventPoster, .partyInvitation, .quotePoster, .importedDesign:
+      return 1_920
     case .yearbook, .memoryBox, .travelJournal, .letter, .recipeBook:
+      return 1_620
+    case .bookReview, .dailyNote:
       return 1_620
     }
   }
@@ -409,6 +456,42 @@ public enum MIRACaptroStudioTemplate: String, Codable, CaseIterable, Identifiabl
       layers.append(.photo(x: 0.70, y: 0.67, width: 0.40, height: 0.30, rotation: 0.045, zIndex: 3, mediaKey: "recipe-2"))
       layers.append(.text("Ingredients, memories, and the little details worth making again.", x: 0.67, y: 0.37, width: 0.43, height: 0.24, zIndex: 4, font: .handwritten))
       layers.append(.object(.pressedFlower, x: 0.20, y: 0.78, width: 0.17, height: 0.17, rotation: -0.12, zIndex: 5, color: "sage"))
+
+    case .bookReview:
+      layers.append(.text("BOOK NOTES", x: 0.5, y: 0.11, width: 0.70, zIndex: 1, font: .editorial))
+      layers.append(.photo(x: 0.34, y: 0.42, width: 0.42, height: 0.48, rotation: -0.025, zIndex: 2, mediaKey: "book-cover"))
+      layers.append(.text("Title / author", x: 0.70, y: 0.32, width: 0.36, height: 0.12, zIndex: 3, font: .typewriter))
+      layers.append(.text("A few lines about what stayed with you.", x: 0.67, y: 0.56, width: 0.40, height: 0.24, zIndex: 4, font: .handwritten))
+      layers.append(.object(.tornPaper, x: 0.66, y: 0.73, width: 0.42, height: 0.16, rotation: 0.03, zIndex: 5, color: "paper"))
+
+    case .eventPoster:
+      layers.append(.text("SATURDAY NIGHT", x: 0.5, y: 0.16, width: 0.78, height: 0.15, zIndex: 1, font: .cutout, color: "white"))
+      layers.append(.photo(x: 0.5, y: 0.48, width: 0.78, height: 0.42, zIndex: 2, frame: .print))
+      layers.append(.text("COMEDY / MUSIC / POP-UP", x: 0.5, y: 0.73, width: 0.76, height: 0.08, zIndex: 3, font: .modern, color: "white"))
+      layers.append(.text("8PM  -  123 MAIN", x: 0.5, y: 0.84, width: 0.62, height: 0.06, zIndex: 4, font: .typewriter, color: "white"))
+
+    case .partyInvitation:
+      layers.append(.text("YOU'RE INVITED", x: 0.5, y: 0.17, width: 0.76, height: 0.12, zIndex: 1, font: .script, color: "rose"))
+      layers.append(.photo(x: 0.5, y: 0.45, width: 0.66, height: 0.36, rotation: 0.015, zIndex: 2, frame: .print))
+      layers.append(.text("FRIDAY / 7PM", x: 0.5, y: 0.72, width: 0.56, height: 0.08, zIndex: 3, font: .editorial))
+      layers.append(.object(.pressedFlower, x: 0.25, y: 0.78, width: 0.16, height: 0.16, rotation: -0.12, zIndex: 4, color: "rose"))
+
+    case .dailyNote:
+      layers.append(.dateStamp(x: 0.28, y: 0.12, width: 0.34, rotation: -0.02, zIndex: 1))
+      layers.append(.text("TODAY FELT LIKE", x: 0.5, y: 0.24, width: 0.70, height: 0.10, zIndex: 2, font: .typewriter))
+      layers.append(.text("Write the sentence you want to keep.", x: 0.5, y: 0.48, width: 0.72, height: 0.30, zIndex: 3, font: .handwritten))
+      layers.append(.object(.coffeeStain, x: 0.72, y: 0.76, width: 0.24, height: 0.18, zIndex: 4, color: "coffee"))
+
+    case .quotePoster:
+      layers.append(.text("MAKE IT\nMEAN\nSOMETHING", x: 0.5, y: 0.43, width: 0.78, height: 0.36, zIndex: 1, font: .cutout, color: "white"))
+      layers.append(.text("- CAPTRO", x: 0.5, y: 0.74, width: 0.38, height: 0.05, zIndex: 2, font: .typewriter, color: "white"))
+
+    case .minimalPhoto:
+      layers.append(.photo(x: 0.5, y: 0.45, width: 0.90, height: 0.70, zIndex: 1, frame: .print))
+      layers.append(.text("small caption", x: 0.5, y: 0.86, width: 0.62, height: 0.07, zIndex: 2, font: .modern))
+
+    case .importedDesign:
+      layers.append(.photo(x: 0.5, y: 0.5, width: 1.0, height: 1.0, zIndex: 1, frame: .print, mediaKey: "imported-artwork"))
     }
 
     return MIRACaptroStudioDocument(template: self, backgroundToken: backgroundToken, layers: layers)
@@ -424,6 +507,10 @@ public enum MIRACaptroStudioTemplate: String, Codable, CaseIterable, Identifiabl
     case .travelJournal: return "travelPaper"
     case .filmStrip: return "charcoalPaper"
     case .recipeBook: return "recipePaper"
+    case .bookReview, .dailyNote, .minimalPhoto: return "warmPaper"
+    case .eventPoster, .quotePoster: return "charcoalPaper"
+    case .partyInvitation: return "lilacPaper"
+    case .importedDesign: return "white"
     }
   }
 
@@ -436,6 +523,40 @@ public enum MIRACaptroStudioTemplate: String, Codable, CaseIterable, Identifiabl
     case .blankPaper: return .minimal
     case .filmStrip: return .darkAlbum
     case .recipeBook: return .recipeBook
+    case .bookReview: return .bookReview
+    case .eventPoster: return .eventPoster
+    case .partyInvitation: return .partyInvitation
+    case .dailyNote: return .dailyNote
+    case .quotePoster: return .minimalMotivation
+    case .minimalPhoto: return .minimalPhoto
+    case .importedDesign: return .importedArtwork
+    }
+  }
+
+  public var noteCanvasFormat: MIRANoteCanvasFormat {
+    switch self {
+    case .blankPaper, .vintageBroadcast, .musicPocket, .filmStrip, .minimalPhoto:
+      return .portrait4x5
+    case .eventPoster, .partyInvitation, .quotePoster, .importedDesign:
+      return .poster9x16
+    default:
+      return .portrait2x3
+    }
+  }
+
+  public var noteContentKind: MIRANoteContentKind {
+    switch self {
+    case .blankPaper, .letter, .dailyNote: return .journal
+    case .vintageBroadcast, .memoryBox, .yearbook: return .scrapbook
+    case .musicPocket, .filmStrip: return .photoCollage
+    case .travelJournal: return .travelRecap
+    case .recipeBook: return .recipe
+    case .bookReview: return .bookReview
+    case .eventPoster: return .eventPoster
+    case .partyInvitation: return .partyInvitation
+    case .quotePoster: return .quote
+    case .minimalPhoto: return .minimalPhoto
+    case .importedDesign: return .importedDesign
     }
   }
 }

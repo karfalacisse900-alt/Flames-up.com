@@ -325,6 +325,15 @@ final class MIRAWallNotesModel: ObservableObject {
   }
 }
 
+private struct MIRAWallEditorialRow: Identifiable {
+  let notes: [MIRAWallNote]
+  let isFeatured: Bool
+
+  var id: String {
+    (isFeatured ? "featured:" : "row:") + notes.map(\.id).joined(separator: ":")
+  }
+}
+
 public struct WallOfNotesNativeView: View {
   private let globalWallID = MIRAWallDestination.global.id
   private let api: MIRAAPIClient
@@ -344,6 +353,7 @@ public struct WallOfNotesNativeView: View {
   @State private var query = ""
   @State private var selectedFilter = "all"
   @State private var isStudioPresented = false
+  @State private var studioInitialTemplate: MIRACaptroStudioTemplate?
   @State private var initialFrameWallID: String?
   @State private var placementNoteID: String?
   @State private var selectedStoryGroup: MIRAStoryGroup?
@@ -367,22 +377,12 @@ public struct WallOfNotesNativeView: View {
 
       GeometryReader { proxy in
         let viewport = proxy.size
-        let bounds = camera.worldBounds(viewport: viewport)
+        let bounds = editorialGalleryLoadBounds
         ZStack {
-          MIRAWallBackground(camera: camera, viewport: viewport)
+          MIRATheme.Color.appBackground
             .ignoresSafeArea()
 
-          ZStack {
-            wallNotes(bounds: bounds, viewport: viewport)
-
-            if shouldShowWallStartSign {
-              wallStartSign(viewport: viewport)
-            } else if shouldShowFilteredEmptySign {
-              filteredEmptySign(viewport: viewport)
-            }
-          }
-          .scaleEffect(liveMagnification, anchor: liveMagnificationAnchor)
-          .animation(nil, value: liveMagnification)
+          editorialWallGallery(viewport: viewport)
 
           chrome
 
@@ -390,60 +390,29 @@ public struct WallOfNotesNativeView: View {
             errorState(message: message, bounds: bounds)
           }
         }
-        .contentShape(Rectangle())
-        .clipped()
-        .gesture(panGesture(viewport: viewport).simultaneously(with: magnifyGesture(viewport: viewport)))
-        .simultaneousGesture(SpatialTapGesture().onEnded { value in
-          guard panStart == nil, magnifyStart == nil else { return }
-          let world = camera.worldPoint(forScreen: value.location, viewport: viewport)
-          if let note = model.note(at: world) {
-            openNote(note)
-          }
-        })
-        .simultaneousGesture(
-          SpatialTapGesture(count: 2).onEnded { value in
-            withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
-              camera = camera.zoomed(to: camera.scale < 1.25 ? min(1.55, camera.scale * 1.8) : 0.62, around: value.location, viewport: viewport)
-            }
-          }
-        )
-        .task(id: loadKey(bounds: bounds)) {
-          try? await Task.sleep(for: .milliseconds(180))
-          guard !Task.isCancelled, initialFrameWallID == globalWallID else { return }
-          await model.load(
-            bounds: bounds,
-            zoom: camera.scale,
-            wallID: globalWallID,
-            filter: selectedFilter,
-            query: query
-          )
-        }
-        .task(id: globalWallID) {
-          initialFrameWallID = nil
-          await model.loadOverview(wallID: globalWallID, force: true)
+        .task(id: editorialLoadKey) {
+          try? await Task.sleep(for: .milliseconds(140))
           guard !Task.isCancelled else { return }
-          if let overview = model.overview {
-            camera = MIRAWallLayout.initialCamera(
-              noteBounds: overview.noteBounds,
-              noteCount: overview.totalCount,
-              viewport: viewport,
-              includeStartSign: overview.totalCount < 5
-            )
-          } else {
-            camera = MIRAWallCamera(scale: 0.92)
-          }
           initialFrameWallID = globalWallID
           await model.load(
-            bounds: camera.worldBounds(viewport: viewport),
-            zoom: camera.scale,
+            bounds: bounds,
+            zoom: 1,
             wallID: globalWallID,
             filter: selectedFilter,
             query: query,
             force: true
           )
         }
+        .task(id: globalWallID) {
+          await model.loadOverview(wallID: globalWallID, force: true)
+          initialFrameWallID = globalWallID
+        }
         .sheet(isPresented: $isCreating) {
-          MIRACreateWallNoteView(camera: camera, api: api) { body in
+          MIRANoteCreationEntryView(camera: camera, api: api) { template in
+            studioInitialTemplate = template
+            isCreating = false
+            isStudioPresented = true
+          } onPublish: { body in
             let note = try await model.create(body)
             placementNoteID = note.id
             withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
@@ -457,11 +426,13 @@ public struct WallOfNotesNativeView: View {
             }
             return note
           }
-          .presentationDetents([.large])
-          .presentationCornerRadius(30)
+          .presentationDetents([.medium, .large])
+          .presentationCornerRadius(28)
         }
-        .fullScreenCover(isPresented: $isStudioPresented) {
-          MIRACaptroStudioView(camera: camera, api: api) { body in
+        .fullScreenCover(isPresented: $isStudioPresented, onDismiss: {
+          studioInitialTemplate = nil
+        }) {
+          MIRACaptroStudioView(camera: camera, api: api, initialTemplate: studioInitialTemplate) { body in
             let note = try await model.create(body)
             placementNoteID = note.id
             withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
@@ -554,6 +525,188 @@ public struct WallOfNotesNativeView: View {
 
   private var storyTabBarVisibility: Visibility {
     selectedStoryGroup == nil && !isStoryReportSheetPresented && selectedNote == nil ? .visible : .hidden
+  }
+
+  private var editorialGalleryLoadBounds: CGRect {
+    CGRect(x: -200_000, y: -200_000, width: 400_000, height: 400_000)
+  }
+
+  private var editorialLoadKey: String {
+    "\(globalWallID):\(selectedFilter):\(query.trimmingCharacters(in: .whitespacesAndNewlines))"
+  }
+
+  private var editorialNotes: [MIRAWallNote] {
+    model.notes.sorted {
+      if $0.createdAt != $1.createdAt { return $0.createdAt > $1.createdAt }
+      return $0.id < $1.id
+    }
+  }
+
+  private func editorialRows(for notes: [MIRAWallNote]) -> [MIRAWallEditorialRow] {
+    var rows: [MIRAWallEditorialRow] = []
+    var pair: [MIRAWallNote] = []
+
+    for (index, note) in notes.enumerated() {
+      if shouldFeatureInEditorialGallery(note: note, index: index) {
+        if !pair.isEmpty {
+          rows.append(MIRAWallEditorialRow(notes: pair, isFeatured: false))
+          pair = []
+        }
+        rows.append(MIRAWallEditorialRow(notes: [note], isFeatured: true))
+      } else {
+        pair.append(note)
+        if pair.count == 2 {
+          rows.append(MIRAWallEditorialRow(notes: pair, isFeatured: false))
+          pair = []
+        }
+      }
+    }
+
+    if !pair.isEmpty {
+      rows.append(MIRAWallEditorialRow(notes: pair, isFeatured: false))
+    }
+
+    return rows
+  }
+
+  private func shouldFeatureInEditorialGallery(note: MIRAWallNote, index: Int) -> Bool {
+    guard index > 0 else { return false }
+    if index.isMultiple(of: 9) { return true }
+    return note.reactionCount >= 20 && index.isMultiple(of: 5)
+  }
+
+  private func editorialTileHeight(width: CGFloat, note: MIRAWallNote, isFeatured: Bool) -> CGFloat {
+    let fallback = note.width > 0 && note.height > 0
+      ? max(0.42, min(1.6, note.width / note.height))
+      : 0.72
+    let aspect = CGFloat(note.resolvedCanvas?.aspectRatio ?? Double(fallback))
+    let rawHeight = width / max(0.34, min(1.65, aspect))
+    let minimum: CGFloat = isFeatured ? 260 : 170
+    let maximum: CGFloat = isFeatured ? 620 : 390
+    return min(maximum, max(minimum, rawHeight))
+  }
+
+  @ViewBuilder
+  private func editorialWallGallery(viewport: CGSize) -> some View {
+    let horizontalPadding: CGFloat = 16
+    let spacing: CGFloat = 14
+    let contentWidth = max(1, viewport.width - horizontalPadding * 2)
+    let columnWidth = max(140, (contentWidth - spacing) * 0.5)
+    let rows = editorialRows(for: editorialNotes)
+
+    ScrollView {
+      LazyVStack(spacing: 18) {
+        if model.isLoading && model.notes.isEmpty {
+          ProgressView()
+            .tint(MIRATheme.Color.forest)
+            .frame(maxWidth: .infinity)
+            .padding(.top, 72)
+        } else if shouldShowWallStartSign {
+          editorialEmptyState(title: "Start the wall", actionTitle: "Create note")
+            .padding(.top, 48)
+        } else if shouldShowFilteredEmptySign {
+          editorialEmptyState(title: "No notes found", actionTitle: "Clear search")
+            .padding(.top, 48)
+        } else {
+          ForEach(rows) { row in
+            if row.isFeatured, let note = row.notes.first {
+              editorialNoteTile(note: note, width: contentWidth, isFeatured: true)
+            } else {
+              HStack(alignment: .top, spacing: spacing) {
+                ForEach(row.notes) { note in
+                  editorialNoteTile(note: note, width: columnWidth, isFeatured: false)
+                }
+                if row.notes.count == 1 {
+                  Spacer(minLength: 0)
+                    .frame(width: columnWidth)
+                }
+              }
+              .frame(maxWidth: .infinity, alignment: .leading)
+            }
+          }
+        }
+      }
+      .padding(.horizontal, horizontalPadding)
+      .padding(.top, 18)
+      .padding(.bottom, 108)
+    }
+    .refreshable {
+      await model.load(
+        bounds: editorialGalleryLoadBounds,
+        zoom: 1,
+        wallID: globalWallID,
+        filter: selectedFilter,
+        query: query,
+        force: true
+      )
+    }
+  }
+
+  private func editorialNoteTile(note: MIRAWallNote, width: CGFloat, isFeatured: Bool) -> some View {
+    let height = editorialTileHeight(width: width, note: note, isFeatured: isFeatured)
+    let document = note.resolvedDocument
+    return VStack(alignment: .leading, spacing: 7) {
+      MIRAWallNoteTile(
+        note: note,
+        isNew: placementNoteID == note.id,
+        wallScale: 1,
+        isLifted: liftedNoteID == note.id || selectedNote?.id == note.id,
+        isPressed: pressedNoteID == note.id
+      )
+      .frame(width: width, height: height)
+      .matchedGeometryEffect(
+        id: "wall-note-\(note.id)",
+        in: noteCanvasTransition,
+        properties: .frame,
+        anchor: .center,
+        isSource: selectedNote?.id != note.id
+      )
+      .contentShape(Rectangle())
+      .onTapGesture {
+        openNote(note)
+      }
+      .shadow(
+        color: .black.opacity(document?.artworkMode == .importedArtwork ? 0.08 : 0.13),
+        radius: isFeatured ? 18 : 12,
+        y: isFeatured ? 10 : 7
+      )
+
+      HStack(spacing: 7) {
+        Text(note.authorPreview?.title ?? (note.isGhost ? "Ghost note" : "Captro member"))
+          .lineLimit(1)
+        Spacer(minLength: 6)
+        if note.reactionCount > 0 {
+          Label("\(note.reactionCount)", systemImage: "heart.fill")
+            .labelStyle(.titleAndIcon)
+        }
+      }
+      .font(.system(size: 11, weight: .semibold))
+      .foregroundStyle(MIRATheme.Color.textSecondary)
+      .padding(.horizontal, 2)
+    }
+    .frame(width: width, alignment: .topLeading)
+    .accessibilityElement(children: .combine)
+    .accessibilityLabel(document?.altText ?? "Wall note")
+  }
+
+  private func editorialEmptyState(title: String, actionTitle: String) -> some View {
+    VStack(spacing: 14) {
+      Text(title)
+        .font(.system(size: 18, weight: .semibold))
+        .foregroundStyle(MIRATheme.Color.textPrimary)
+      Button(actionTitle) {
+        if actionTitle == "Clear search" {
+          query = ""
+          selectedFilter = "all"
+        } else {
+          isStudioPresented = true
+        }
+      }
+      .buttonStyle(.borderedProminent)
+      .tint(MIRATheme.Color.forest)
+    }
+    .frame(maxWidth: .infinity)
+    .padding(28)
   }
 
   @ViewBuilder
@@ -651,6 +804,7 @@ public struct WallOfNotesNativeView: View {
       }
 
       wallIconButton(systemImage: "square.stack.3d.up.fill") {
+        studioInitialTemplate = nil
         isStudioPresented = true
       }
       .accessibilityLabel("Open Captro Studio")
@@ -966,6 +1120,265 @@ private struct MIRAWallDetailNoteStage: View {
     .accessibilityHidden(true)
   }
 }
+
+private struct MIRANoteCreationEntryView: View {
+  let camera: MIRAWallCamera
+  let api: MIRAAPIClient
+  let onOpenStudio: (MIRACaptroStudioTemplate?) -> Void
+  let onPublish: (MIRACreateWallNoteBody) async throws -> MIRAWallNote
+
+  @Environment(\.dismiss) private var dismiss
+  @State private var importItem: PhotosPickerItem?
+  @State private var isImporting = false
+  @State private var importMessage = ""
+  @State private var errorMessage: String?
+
+  var body: some View {
+    NavigationStack {
+      VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 5) {
+          Text("Create Note")
+            .font(.system(size: 28, weight: .bold))
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+          Text("Choose how this visual note starts.")
+            .font(.system(size: 14, weight: .medium))
+            .foregroundStyle(MIRATheme.Color.textSecondary)
+        }
+
+        VStack(spacing: 10) {
+          creationEntryButton(
+            title: "Blank canvas",
+            subtitle: "Open a clean editable page",
+            systemImage: "doc",
+            isDisabled: isImporting
+          ) {
+            onOpenStudio(.blankPaper)
+          }
+
+          creationEntryButton(
+            title: "Use template",
+            subtitle: "Browse posters, journals, reviews, invites",
+            systemImage: "square.grid.2x2",
+            isDisabled: isImporting
+          ) {
+            onOpenStudio(nil)
+          }
+
+          PhotosPicker(selection: $importItem, matching: .images) {
+            creationEntryButtonContent(
+              title: "Upload design",
+              subtitle: "Post finished artwork full bleed",
+              systemImage: "square.and.arrow.down.on.square",
+              isDisabled: isImporting
+            )
+          }
+          .buttonStyle(.plain)
+          .disabled(isImporting)
+        }
+
+        if isImporting {
+          HStack(spacing: 10) {
+            ProgressView()
+              .tint(MIRATheme.Color.forest)
+            Text(importMessage.isEmpty ? "Importing..." : importMessage)
+              .font(.system(size: 13, weight: .semibold))
+              .foregroundStyle(MIRATheme.Color.textSecondary)
+          }
+          .padding(.top, 2)
+        }
+
+        if let errorMessage {
+          Text(errorMessage)
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(.red)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+
+        Spacer(minLength: 0)
+      }
+      .padding(20)
+      .background(MIRATheme.Color.surface.ignoresSafeArea())
+      .toolbar {
+        ToolbarItem(placement: .topBarTrailing) {
+          Button("Close") { dismiss() }
+            .disabled(isImporting)
+        }
+      }
+    }
+    .onChange(of: importItem) { _, item in
+      guard let item else { return }
+      Task { await importFinishedDesign(item) }
+    }
+    .interactiveDismissDisabled(isImporting)
+  }
+
+  private func creationEntryButton(
+    title: String,
+    subtitle: String,
+    systemImage: String,
+    isDisabled: Bool,
+    action: @escaping () -> Void
+  ) -> some View {
+    Button(action: action) {
+      creationEntryButtonContent(
+        title: title,
+        subtitle: subtitle,
+        systemImage: systemImage,
+        isDisabled: isDisabled
+      )
+    }
+    .buttonStyle(.plain)
+    .disabled(isDisabled)
+  }
+
+  private func creationEntryButtonContent(
+    title: String,
+    subtitle: String,
+    systemImage: String,
+    isDisabled: Bool
+  ) -> some View {
+    HStack(spacing: 14) {
+      Image(systemName: systemImage)
+        .font(.system(size: 19, weight: .semibold))
+        .foregroundStyle(.white)
+        .frame(width: 42, height: 42)
+        .background(MIRATheme.Color.forest, in: Circle())
+
+      VStack(alignment: .leading, spacing: 3) {
+        Text(title)
+          .font(.system(size: 16, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+        Text(subtitle)
+          .font(.system(size: 12, weight: .medium))
+          .foregroundStyle(MIRATheme.Color.textSecondary)
+          .lineLimit(2)
+      }
+
+      Spacer(minLength: 8)
+      Image(systemName: "chevron.right")
+        .font(.system(size: 13, weight: .bold))
+        .foregroundStyle(MIRATheme.Color.textSecondary)
+    }
+    .padding(14)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(MIRATheme.Color.appBackground, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    .overlay(
+      RoundedRectangle(cornerRadius: 18, style: .continuous)
+        .stroke(MIRATheme.Color.hairline, lineWidth: 1)
+    )
+    .opacity(isDisabled ? 0.55 : 1)
+  }
+
+  @MainActor
+  private func importFinishedDesign(_ item: PhotosPickerItem) async {
+    guard !isImporting else { return }
+    isImporting = true
+    importMessage = "Preparing..."
+    errorMessage = nil
+    defer {
+      isImporting = false
+      importMessage = ""
+      importItem = nil
+    }
+
+    do {
+      guard let data = try await item.loadTransferable(type: Data.self),
+            let image = UIImage(data: data) else {
+        throw MIRAAPIError.server(
+          status: 422,
+          code: "NOTE_IMPORT_INVALID_IMAGE",
+          detail: "Choose a readable image."
+        )
+      }
+
+      importMessage = "Uploading..."
+      let upload = try await MIRAMediaUploadService(api: api).uploadResult(
+        MIRAPickedMedia(
+          data: data,
+          kind: .image,
+          fileName: "finished-note-\(UUID().uuidString).jpg",
+          mimeType: "image/jpeg"
+        )
+      )
+      guard let mediaAssetId = upload.mediaAssetId else {
+        throw MIRAAPIError.server(
+          status: 409,
+          code: "NOTE_IMPORT_MEDIA_ASSET_PENDING",
+          detail: "This artwork is still processing. Try again in a moment."
+        )
+      }
+
+      let imageSize = image.cgImage.map { CGSize(width: CGFloat($0.width), height: CGFloat($0.height)) } ?? image.size
+      let aspect = max(0.34, min(1.8, imageSize.width / max(1, imageSize.height)))
+      let designWidth = 1_080.0
+      let designHeight = min(3_120.0, max(607.0, designWidth / Double(aspect)))
+      let format = MIRANoteCanvasFormat.closest(width: designWidth, height: designHeight)
+      let canvas = MIRANoteCanvas(
+        template: .importedArtwork,
+        format: format,
+        designWidth: designWidth,
+        designHeight: designHeight,
+        background: MIRANoteCanvasBackground(material: "digital_artwork", colorHex: "#111111", textureAsset: nil),
+        elements: [
+          MIRANoteCanvasElement(
+            kind: .photo,
+            x: 0.5,
+            y: 0.5,
+            width: 1,
+            height: 1,
+            zIndex: 1,
+            mediaAssetId: mediaAssetId,
+            mediaUrl: upload.url,
+            thumbnailUrl: upload.url,
+            style: MIRANoteCanvasElementStyle(cornerRadius: 0, shadowLevel: 0)
+          )
+        ]
+      )
+      let document = MIRANoteDocument.importedArtwork(
+        canvas: canvas,
+        title: "Finished design",
+        altText: "Imported visual note",
+        thumbnailUrl: upload.url
+      )
+      let width = 340.0
+      let height = min(520.0, max(190.0, width / Double(aspect)))
+      let request = MIRACreateWallNoteBody(
+        wallId: MIRAWallDestination.global.id,
+        publishingIdentity: "author",
+        body: "",
+        category: nil,
+        colorToken: "white",
+        styleToken: "canvas",
+        mediaAssetId: mediaAssetId,
+        mediaUrl: upload.url,
+        worldX: Double(camera.center.x) - width * 0.5,
+        worldY: Double(camera.center.y) - height * 0.5,
+        width: width,
+        height: height,
+        rotation: 0,
+        approximateLocation: nil,
+        noteType: "photo",
+        backBody: nil,
+        backColorToken: nil,
+        backStyleToken: nil,
+        allowContributions: false,
+        voiceMediaId: nil,
+        voiceDurationSeconds: nil,
+        voiceWaveform: nil,
+        location: nil,
+        document: document,
+        canvas: canvas
+      )
+
+      importMessage = "Posting..."
+      _ = try await onPublish(request)
+      dismiss()
+    } catch {
+      errorMessage = error.localizedDescription
+    }
+  }
+}
+
 private struct MIRACreateWallNoteView: View {
   let camera: MIRAWallCamera
   let api: MIRAAPIClient
@@ -1668,6 +2081,7 @@ private struct MIRACreateWallNoteView: View {
           voiceDurationSeconds: selectedMode == "voice" ? voiceRecorder.duration : nil,
           voiceWaveform: selectedMode == "voice" ? voiceRecorder.waveform : nil,
           location: nil,
+          document: nil,
           canvas: nil
         )
         _ = try await onPublish(request)
@@ -1974,6 +2388,12 @@ private struct MIRAWallNoteDetailView: View {
             )
             .accessibilityLabel("Designed note canvas")
 
+            if let blocks = note.resolvedDocument?.detailBlocks, !blocks.isEmpty {
+              canvasDetailBlocks(blocks)
+                .frame(width: max(1, pageWidth - 16))
+                .padding(.top, 12)
+            }
+
             canvasDocumentFooter
               .frame(width: max(1, pageWidth - 16))
               .padding(.top, 12)
@@ -1988,6 +2408,85 @@ private struct MIRAWallNoteDetailView: View {
           .padding(.horizontal, 12)
           .padding(.top, max(8, proxy.safeAreaInsets.top + 2))
       }
+    }
+  }
+
+  private func canvasDetailBlocks(_ blocks: [MIRANoteDetailBlock]) -> some View {
+    VStack(alignment: .leading, spacing: 10) {
+      ForEach(blocks) { block in
+        canvasDetailBlock(block)
+      }
+    }
+    .padding(14)
+    .background {
+      CaptroPhotographedPaper(
+        seed: "note-detail-blocks-\(note.id)",
+        kind: .archival,
+        base: canvasPaper,
+        textureOpacity: 0.40,
+        directionalLight: 0.14
+      )
+      .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+    }
+    .overlay {
+      RoundedRectangle(cornerRadius: 4, style: .continuous)
+        .stroke(canvasInk.opacity(0.10), lineWidth: 0.7)
+    }
+    .captroMaterialShadow(.taped, seed: "note-detail-blocks-\(note.id)")
+  }
+
+  private func canvasDetailBlock(_ block: MIRANoteDetailBlock) -> some View {
+    VStack(alignment: .leading, spacing: 5) {
+      HStack(spacing: 8) {
+        Image(systemName: detailBlockIcon(block.kind))
+          .font(.system(size: 12, weight: .bold))
+          .foregroundStyle(canvasInk.opacity(0.72))
+          .frame(width: 20, height: 20)
+          .background(canvasInk.opacity(0.06), in: Circle())
+
+        if let title = block.title, !title.isEmpty {
+          Text(title)
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(canvasInk)
+            .lineLimit(2)
+        }
+
+        Spacer(minLength: 6)
+
+        if let dateText = block.dateText, !dateText.isEmpty {
+          Text(dateText)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(canvasInk.opacity(0.56))
+            .lineLimit(1)
+        }
+      }
+
+      if let body = block.body, !body.isEmpty {
+        Text(body)
+          .font(.system(size: 12, weight: .regular))
+          .foregroundStyle(canvasInk.opacity(0.76))
+          .fixedSize(horizontal: false, vertical: true)
+      }
+
+      if let url = block.url, let link = URL(string: url) {
+        Link(destination: link) {
+          Label("Open link", systemImage: "arrow.up.right")
+            .font(.system(size: 11, weight: .semibold))
+        }
+        .foregroundStyle(MIRATheme.Color.forest)
+      }
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  private func detailBlockIcon(_ kind: MIRANoteDetailBlockKind) -> String {
+    switch kind {
+    case .text: return "text.alignleft"
+    case .event: return "calendar"
+    case .recipe: return "fork.knife"
+    case .review: return "star"
+    case .memory: return "sparkles"
+    case .link: return "link"
     }
   }
 

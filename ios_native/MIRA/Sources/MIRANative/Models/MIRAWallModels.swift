@@ -88,14 +88,18 @@ public struct MIRAWallNote: Codable, Identifiable, Hashable {
   public var viewerIsAuthor: Bool? = nil
   public var voice: MIRAWallVoiceMetadata? = nil
   public var location: MIRAWallLocationPreview? = nil
+  public var document: MIRANoteDocument? = nil
   public var canvas: MIRANoteCanvas? = nil
 
   public var isGhost: Bool { publishingIdentity.lowercased() == "ghost" }
   public var isVoiceNote: Bool { noteType == "voice" || voice != nil }
-  public var resolvedCanvas: MIRANoteCanvas? {
-    if let canvas { return canvas }
+  public var resolvedDocument: MIRANoteDocument? {
+    if let document { return document }
     guard !isVoiceNote else { return nil }
-    return MIRANoteCanvas.legacyCanvas(for: self)
+    return MIRANoteDocument.legacyDocument(for: self)
+  }
+  public var resolvedCanvas: MIRANoteCanvas? {
+    resolvedDocument?.canvas
   }
   public var canFlip: Bool {
     let cleanBack = backBody?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -150,6 +154,7 @@ public struct MIRAWallNote: Codable, Identifiable, Hashable {
     back.signedByViewer = signedByViewer
     back.viewerIsAuthor = viewerIsAuthor
     back.location = location
+    back.document = nil
     back.canvas = nil
     return back
   }
@@ -203,6 +208,7 @@ public struct MIRAWallNote: Codable, Identifiable, Hashable {
     updated.viewerIsAuthor = viewerIsAuthor
     updated.voice = voice
     updated.location = location
+    updated.document = document
     updated.canvas = canvas
     return updated
   }
@@ -392,6 +398,7 @@ public struct MIRACreateWallNoteBody: Encodable {
   public let voiceDurationSeconds: Double?
   public let voiceWaveform: [Double]?
   public let location: MIRACreateWallLocationBody?
+  public let document: MIRANoteDocument?
   public let canvas: MIRANoteCanvas?
 }
 

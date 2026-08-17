@@ -23,6 +23,14 @@ final class MIRACaptroStudioModelsTests: XCTestCase {
     }
   }
 
+  func testEveryTemplateMapsToNoteDocumentMetadata() {
+    for template in MIRACaptroStudioTemplate.allCases {
+      XCTAssertTrue(MIRANoteCanvasTemplate.allCases.contains(template.noteCanvasTemplate))
+      XCTAssertTrue(MIRANoteCanvasFormat.allCases.contains(template.noteCanvasFormat))
+      XCTAssertTrue(MIRANoteContentKind.allCases.contains(template.noteContentKind))
+    }
+  }
+
   func testDuplicateCreatesIndependentLayerAboveOriginal() throws {
     var document = MIRACaptroStudioTemplate.travelJournal.makeDocument()
     let original = try XCTUnwrap(document.layers.first(where: { $0.kind == .photo }))

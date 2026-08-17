@@ -17831,17 +17831,50 @@ function wallNoteWaveform(value: unknown): number[] {
 }
 
 const WALL_NOTE_CANVAS_TEMPLATES = new Set([
-  'journal', 'travel_diary', 'scrapbook', 'notebook', 'minimal', 'dark_album', 'recipe_book',
+  'blank', 'journal', 'personal_journal', 'daily_note', 'travel_diary', 'scrapbook',
+  'moodboard', 'notebook', 'minimal', 'minimal_photo', 'minimal_motivation',
+  'dark_album', 'recipe_book', 'book_review', 'event_poster', 'party_invitation',
+  'announcement', 'imported_artwork',
+]);
+const WALL_NOTE_CANVAS_FORMATS = new Set([
+  'square', 'portrait_4x5', 'editorial_3x4', 'portrait_2x3', 'poster_9x16',
+  'landscape_4x3', 'landscape_16x9', 'long_page',
 ]);
 const WALL_NOTE_CANVAS_ELEMENT_KINDS = new Set([
   'photo', 'polaroid', 'text', 'handwritten_caption', 'torn_paper', 'textured_paper',
   'tape', 'sticker', 'drawing', 'flower', 'shape',
 ]);
+const WALL_NOTE_ARTWORK_MODES = new Set(['editable_canvas', 'imported_artwork']);
+const WALL_NOTE_CONTENT_KINDS = new Set([
+  'journal', 'photo_collage', 'minimal_photo', 'travel_recap', 'event_poster',
+  'party_invitation', 'announcement', 'recipe', 'book_review', 'moodboard',
+  'outfit_board', 'birthday_page', 'memorial_page', 'poem', 'quote', 'artwork',
+  'imported_design', 'scrapbook', 'other',
+]);
+const WALL_NOTE_VISIBILITIES = new Set(['public_wall', 'friends', 'private_draft']);
+const WALL_NOTE_DETAIL_BLOCK_KINDS = new Set(['text', 'event', 'recipe', 'review', 'memory', 'link']);
 
 function noteCanvasNumber(value: unknown, minimum: number, maximum: number, fallback: number) {
   const number = Number(value);
   if (!Number.isFinite(number)) return fallback;
   return Number(Math.min(maximum, Math.max(minimum, number)).toFixed(5));
+}
+
+function wallNoteCanvasFormatForSize(width: number, height: number): string {
+  const ratio = width / Math.max(1, height);
+  const formats = [
+    ['square', 1],
+    ['portrait_4x5', 4 / 5],
+    ['editorial_3x4', 3 / 4],
+    ['portrait_2x3', 2 / 3],
+    ['poster_9x16', 9 / 16],
+    ['landscape_4x3', 4 / 3],
+    ['landscape_16x9', 16 / 9],
+    ['long_page', 9 / 19.5],
+  ] as Array<[string, number]>;
+  return formats.reduce((best, candidate) => (
+    Math.abs(candidate[1] - ratio) < Math.abs(best[1] - ratio) ? candidate : best
+  ), formats[3])[0];
 }
 
 function normalizeWallNoteCanvas(value: unknown): { canvas: any | null; error: string | null } {
@@ -17948,6 +17981,12 @@ function normalizeWallNoteCanvas(value: unknown): { canvas: any | null; error: s
     canvas: {
       version: Math.round(noteCanvasNumber(source.version, 1, 10, 1)),
       template,
+      format: WALL_NOTE_CANVAS_FORMATS.has(cleanText(source.format, 40).toLowerCase())
+        ? cleanText(source.format, 40).toLowerCase()
+        : wallNoteCanvasFormatForSize(
+          Math.round(noteCanvasNumber(source.design_width ?? source.designWidth, 320, 4096, 1080)),
+          Math.round(noteCanvasNumber(source.design_height ?? source.designHeight, 480, 12288, 1620)),
+        ),
       design_width: Math.round(noteCanvasNumber(source.design_width ?? source.designWidth, 320, 4096, 1080)),
       design_height: Math.round(noteCanvasNumber(source.design_height ?? source.designHeight, 480, 12288, 1620)),
       background,
@@ -17957,17 +17996,137 @@ function normalizeWallNoteCanvas(value: unknown): { canvas: any | null; error: s
   };
 }
 
+function inferWallNoteContentKindFromCanvas(canvas: any | null): string {
+  const template = cleanText(canvas?.template, 40);
+  if (template === 'recipe_book') return 'recipe';
+  if (template === 'book_review') return 'book_review';
+  if (template === 'event_poster') return 'event_poster';
+  if (template === 'party_invitation') return 'party_invitation';
+  if (template === 'travel_diary') return 'travel_recap';
+  if (template === 'minimal_photo') return 'minimal_photo';
+  if (template === 'imported_artwork') return 'imported_design';
+  if (template === 'scrapbook' || template === 'moodboard') return 'scrapbook';
+  return 'journal';
+}
+
+function normalizeWallNoteDetailBlocks(value: unknown): any[] {
+  if (!Array.isArray(value)) return [];
+  const blocks: any[] = [];
+  let textBudget = 0;
+  for (const raw of value.slice(0, 24)) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+    const source: any = raw;
+    const kind = cleanText(source.kind, 30).toLowerCase();
+    if (!WALL_NOTE_DETAIL_BLOCK_KINDS.has(kind)) continue;
+    const title = cleanText(source.title, 120) || null;
+    const body = cleanMultilineText(source.body, 1200) || null;
+    const url = safeMediaReference(source.url) || cleanText(source.url, 1000) || null;
+    const dateText = cleanText(source.date_text || source.dateText, 120) || null;
+    textBudget += (title?.length || 0) + (body?.length || 0) + (url?.length || 0) + (dateText?.length || 0);
+    if (textBudget > 8000) break;
+    const metadataSource = source.metadata && typeof source.metadata === 'object' && !Array.isArray(source.metadata)
+      ? source.metadata
+      : {};
+    const metadata: Record<string, string> = {};
+    for (const [key, rawValue] of Object.entries(metadataSource).slice(0, 20)) {
+      const cleanKey = cleanText(key, 40);
+      const cleanValue = cleanText(rawValue, 240);
+      if (cleanKey && cleanValue) metadata[cleanKey] = cleanValue;
+    }
+    blocks.push({
+      id: publicId(source.id, 120) || uuid(),
+      kind,
+      title,
+      body,
+      url,
+      date_text: dateText,
+      metadata,
+    });
+  }
+  return blocks;
+}
+
+function normalizeWallNoteDocument(value: unknown, fallbackCanvas: any | null): { document: any | null; error: string | null } {
+  if (value != null && (typeof value !== 'object' || Array.isArray(value))) {
+    return { document: null, error: 'The note document is invalid.' };
+  }
+  const source: any = value || {};
+  const canvasResult = value && source.canvas != null
+    ? normalizeWallNoteCanvas(source.canvas)
+    : { canvas: fallbackCanvas, error: null };
+  if (canvasResult.error) return { document: null, error: canvasResult.error };
+  const canvas = canvasResult.canvas || fallbackCanvas;
+  if (!canvas) return { document: null, error: null };
+
+  const artworkMode = WALL_NOTE_ARTWORK_MODES.has(cleanText(source.artwork_mode || source.artworkMode, 40).toLowerCase())
+    ? cleanText(source.artwork_mode || source.artworkMode, 40).toLowerCase()
+    : (canvas.template === 'imported_artwork' ? 'imported_artwork' : 'editable_canvas');
+  const contentKind = WALL_NOTE_CONTENT_KINDS.has(cleanText(source.content_kind || source.contentKind, 50).toLowerCase())
+    ? cleanText(source.content_kind || source.contentKind, 50).toLowerCase()
+    : inferWallNoteContentKindFromCanvas(canvas);
+  const visibility = WALL_NOTE_VISIBILITIES.has(cleanText(source.visibility, 40).toLowerCase())
+    ? cleanText(source.visibility, 40).toLowerCase()
+    : 'public_wall';
+
+  return {
+    document: {
+      id: publicId(source.id, 120) || uuid(),
+      schema_version: Math.round(noteCanvasNumber(source.schema_version ?? source.schemaVersion, 1, 10, 1)),
+      artwork_mode: artworkMode,
+      content_kind: contentKind,
+      visibility,
+      title: cleanText(source.title, 160) || null,
+      subtitle: cleanText(source.subtitle, 240) || null,
+      alt_text: cleanMultilineText(source.alt_text || source.altText, 500) || null,
+      thumbnail_url: safeMediaReference(source.thumbnail_url || source.thumbnailUrl) || null,
+      canvas,
+      detail_blocks: normalizeWallNoteDetailBlocks(source.detail_blocks || source.detailBlocks),
+      created_at: cleanText(source.created_at || source.createdAt, 80) || null,
+      updated_at: cleanText(source.updated_at || source.updatedAt, 80) || null,
+    },
+    error: null,
+  };
+}
+
 function wallNoteCanvasPayload(row: any) {
   const template = cleanText(row?.canvas_template, 40);
   const elements = Array.isArray(row?.canvas_elements) ? row.canvas_elements : null;
   if (!WALL_NOTE_CANVAS_TEMPLATES.has(template) || !elements?.length) return null;
+  const width = Math.max(320, Number(row?.canvas_width || 1080));
+  const height = Math.max(480, Number(row?.canvas_height || 1620));
+  const format = cleanText(row?.canvas_format, 40);
   return {
     version: Math.max(1, Number(row?.canvas_version || 1)),
     template,
-    design_width: Math.max(320, Number(row?.canvas_width || 1080)),
-    design_height: Math.max(480, Number(row?.canvas_height || 1620)),
+    format: WALL_NOTE_CANVAS_FORMATS.has(format) ? format : wallNoteCanvasFormatForSize(width, height),
+    design_width: width,
+    design_height: height,
     background: parseJsonObject(row?.canvas_background),
     elements,
+  };
+}
+
+function wallNoteDocumentPayload(row: any, canvas: any | null) {
+  if (!canvas) return null;
+  const metadata = parseJsonObject(row?.metadata);
+  const artworkMode = cleanText(row?.artwork_mode, 40);
+  const contentKind = cleanText(row?.content_kind, 50);
+  const visibility = cleanText(row?.note_visibility, 40);
+  const detailBlocks = Array.isArray(row?.detail_blocks) ? row.detail_blocks : [];
+  return {
+    id: publicId(row?.id, 120),
+    schema_version: Math.max(1, Number(row?.note_schema_version || 1)),
+    artwork_mode: WALL_NOTE_ARTWORK_MODES.has(artworkMode) ? artworkMode : (canvas.template === 'imported_artwork' ? 'imported_artwork' : 'editable_canvas'),
+    content_kind: WALL_NOTE_CONTENT_KINDS.has(contentKind) ? contentKind : inferWallNoteContentKindFromCanvas(canvas),
+    visibility: WALL_NOTE_VISIBILITIES.has(visibility) ? visibility : 'public_wall',
+    title: cleanText(row?.document_title, 160) || null,
+    subtitle: cleanText(row?.document_subtitle, 240) || null,
+    alt_text: cleanMultilineText(row?.alt_text, 500) || null,
+    thumbnail_url: cleanText(row?.thumbnail_url || metadata.media_thumbnail_url || metadata.media_url, 1200) || null,
+    canvas,
+    detail_blocks: detailBlocks.slice(0, 24),
+    created_at: row?.created_at || now(),
+    updated_at: row?.updated_at || row?.created_at || now(),
   };
 }
 
@@ -17983,6 +18142,7 @@ function wallNotePayload(
   const metadata = parseJsonObject(row?.metadata);
   const voiceMediaId = publicId(row?.voice_media_id, 160);
   const noteType = normalizedWallNoteType(row?.note_type, !!metadata.media_url, !!voiceMediaId);
+  const canvas = wallNoteCanvasPayload(row);
   return {
     id: publicId(row?.id, 120),
     wall_id: 'global',
@@ -18006,7 +18166,8 @@ function wallNotePayload(
       waveform: wallNoteWaveform(row?.voice_waveform),
     } : null,
     location: null,
-    canvas: wallNoteCanvasPayload(row),
+    document: wallNoteDocumentPayload(row, canvas),
+    canvas,
     world_x: Number(row?.world_x || 0),
     world_y: Number(row?.world_y || 0),
     width: Number(row?.width || 184),
@@ -18253,11 +18414,23 @@ api.post('/wall/notes', authMiddleware, async (c) => {
 
   const b: any = await c.req.json().catch(() => ({}));
   const body = cleanMultilineText(b.body || b.text, 300);
-  const canvasResult = normalizeWallNoteCanvas(b.canvas);
+  const submittedDocumentResult = normalizeWallNoteDocument(b.document || b.note_document || b.noteDocument, null);
+  if (submittedDocumentResult.error) {
+    return c.json({ detail: submittedDocumentResult.error, code: 'WALL_NOTE_DOCUMENT_INVALID' }, 400);
+  }
+  let noteDocument = submittedDocumentResult.document;
+  const canvasResult = normalizeWallNoteCanvas(b.canvas ?? noteDocument?.canvas);
   if (canvasResult.error) {
     return c.json({ detail: canvasResult.error, code: 'WALL_NOTE_CANVAS_INVALID' }, 400);
   }
   let noteCanvas = canvasResult.canvas;
+  if (!noteDocument && noteCanvas) {
+    const defaultDocumentResult = normalizeWallNoteDocument(null, noteCanvas);
+    noteDocument = defaultDocumentResult.document;
+  }
+  if (noteDocument && noteCanvas) {
+    noteDocument = { ...noteDocument, canvas: noteCanvas };
+  }
   const canvasElements = Array.isArray(noteCanvas?.elements) ? noteCanvas.elements : [];
   const canvasPhotoAssetIds: string[] = Array.from(new Set<string>(
     canvasElements
@@ -18346,6 +18519,13 @@ api.post('/wall/notes', authMiddleware, async (c) => {
       if (unresolvedCanvasPhoto) {
         return c.json({ detail: 'One canvas photo is not ready yet. Please try again.', code: 'MEDIA_NOT_READY' }, 409);
       }
+      if (noteDocument) {
+        noteDocument = {
+          ...noteDocument,
+          thumbnail_url: noteDocument.thumbnail_url || mediaThumbnailUrl || mediaUrl || null,
+          canvas: noteCanvas,
+        };
+      }
     }
   }
 
@@ -18416,8 +18596,18 @@ api.post('/wall/notes', authMiddleware, async (c) => {
     category: null,
     color_token: WALL_NOTE_COLORS.has(colorToken) ? colorToken : 'butter',
     style_token: resolvedStyleToken,
+    note_schema_version: noteDocument?.schema_version ?? (noteCanvas ? 1 : null),
+    artwork_mode: noteDocument?.artwork_mode ?? null,
+    content_kind: noteDocument?.content_kind ?? null,
+    note_visibility: noteDocument?.visibility ?? null,
+    document_title: noteDocument?.title ?? null,
+    document_subtitle: noteDocument?.subtitle ?? null,
+    thumbnail_url: noteDocument?.thumbnail_url ?? (mediaThumbnailUrl || mediaUrl || null),
+    alt_text: noteDocument?.alt_text ?? null,
+    detail_blocks: noteDocument?.detail_blocks ?? null,
     canvas_version: noteCanvas?.version ?? 1,
     canvas_template: noteCanvas?.template ?? null,
+    canvas_format: noteCanvas?.format ?? null,
     canvas_width: noteCanvas?.design_width ?? null,
     canvas_height: noteCanvas?.design_height ?? null,
     canvas_background: noteCanvas?.background ?? null,
@@ -18433,9 +18623,10 @@ api.post('/wall/notes', authMiddleware, async (c) => {
     status: 'active',
     metadata: {
       source: 'captro_native_wall',
-      layout_version: noteCanvas ? 'note_canvas_v1' : 'living_wall_v1',
+      layout_version: noteDocument ? 'note_document_v1' : noteCanvas ? 'note_canvas_v1' : 'living_wall_v1',
       placed_after: placement.totalBefore,
-      ...(noteCanvas ? { canvas_template: noteCanvas.template, canvas_version: noteCanvas.version } : {}),
+      ...(noteCanvas ? { canvas_template: noteCanvas.template, canvas_format: noteCanvas.format, canvas_version: noteCanvas.version } : {}),
+      ...(noteDocument ? { note_schema_version: noteDocument.schema_version, artwork_mode: noteDocument.artwork_mode, content_kind: noteDocument.content_kind } : {}),
       ...(mediaAsset ? { media_asset_id: mediaAssetId, media_url: mediaUrl, media_thumbnail_url: mediaThumbnailUrl } : {}),
       ...(voiceAsset ? { voice_url: voiceUrl } : {}),
     },

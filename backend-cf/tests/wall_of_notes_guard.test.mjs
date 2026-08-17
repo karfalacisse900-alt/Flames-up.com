@@ -77,11 +77,34 @@ test('wall API preserves stable mixed-media presentation metadata', async () => 
   assert.match(worker, /const metadata = parseJsonObject\(row\?\.metadata\)/);
   assert.match(worker, /media_url: cleanText\(metadata\.media_url/);
   assert.match(worker, /media_thumbnail_url: cleanText\(metadata\.media_thumbnail_url \|\| metadata\.media_url/);
-  assert.match(worker, /layout_version: noteCanvas \? 'note_canvas_v1' : 'living_wall_v1'/);
+  assert.match(worker, /layout_version: noteDocument \? 'note_document_v1' : noteCanvas \? 'note_canvas_v1' : 'living_wall_v1'/);
+  assert.match(worker, /document: wallNoteDocumentPayload\(row, canvas\)/);
+  assert.match(worker, /canvas_format: noteCanvas\?\.format \?\? null/);
+  assert.match(worker, /note_schema_version: noteDocument\?\.schema_version/);
   assert.match(worker, /canvas_version: noteCanvas\?\.version \?\? 1/);
   assert.match(worker, /canvas_template: noteCanvas\?\.template \?\? null/);
   assert.match(worker, /canvas_elements: noteCanvas\?\.elements \?\? null/);
   assert.doesNotMatch(worker, /media_url:\s*['"]https?:\/\//);
+});
+
+test('NoteDocument metadata is additive, bounded, and migration-backed', async () => {
+  const worker = await read('backend-cf/src/index.ts');
+  const migration = await read('supabase/migrations/20260816143000_wall_note_document_metadata.sql');
+
+  assert.match(worker, /function normalizeWallNoteDocument/);
+  assert.match(worker, /const WALL_NOTE_ARTWORK_MODES = new Set\(\['editable_canvas', 'imported_artwork'\]\)/);
+  assert.match(worker, /const WALL_NOTE_CONTENT_KINDS = new Set/);
+  assert.match(worker, /const WALL_NOTE_DETAIL_BLOCK_KINDS = new Set/);
+  assert.match(worker, /normalizeWallNoteDetailBlocks\(source\.detail_blocks \|\| source\.detailBlocks\)/);
+  assert.match(worker, /detail_blocks: noteDocument\?\.detail_blocks \?\? null/);
+  assert.match(worker, /wallNoteCanvasFormatForSize/);
+  assert.match(migration, /add column if not exists artwork_mode text/i);
+  assert.match(migration, /add column if not exists content_kind text/i);
+  assert.match(migration, /add column if not exists detail_blocks jsonb/i);
+  assert.match(migration, /add column if not exists canvas_format text/i);
+  assert.match(migration, /'event_poster'/i);
+  assert.match(migration, /'imported_artwork'/i);
+  assert.match(migration, /jsonb_array_length\(detail_blocks\) <= 24/i);
 });
 
 test('photo notes require an approved user-owned Cloudflare Images asset', async () => {
@@ -116,11 +139,18 @@ test('Captro Studio publishes its rendered image through the canonical Wall crea
   assert.match(studio, /for \(index, key\) in mediaKeys\.enumerated\(\)/);
   assert.match(studio, /uploaded\[key\] = try await uploader\.uploadResult\(picked\)/);
   assert.match(studio, /let canvas = makeNoteCanvas\(document: document, uploads: uploads\)/);
+  assert.match(studio, /let noteDocument = makeNoteDocument/);
   assert.match(studio, /body: canvasText/);
   assert.match(studio, /noteType: uploads\.isEmpty \? "text" : "photo"/);
+  assert.match(studio, /document: noteDocument/);
   assert.match(studio, /canvas: canvas/);
   assert.match(studio, /_ = try await onPublish\(request\)/);
-  assert.match(wallView, /MIRACaptroStudioView\(camera: camera, api: api\)[\s\S]*?let note = try await model\.create\(body\)/);
+  assert.match(wallView, /MIRANoteCreationEntryView\(camera: camera, api: api\)/);
+  assert.match(wallView, /Upload design/);
+  assert.match(wallView, /template: \.importedArtwork/);
+  assert.match(wallView, /document: document/);
+  assert.match(wallView, /canvasDetailBlocks\(blocks\)/);
+  assert.match(wallView, /MIRACaptroStudioView\(camera: camera, api: api, initialTemplate: studioInitialTemplate\)[\s\S]*?let note = try await model\.create\(body\)/);
   assert.match(wallView, /func create\(_ body: MIRACreateWallNoteBody\)[\s\S]*?merge\(\[response\.note\]/);
 });
 
@@ -196,14 +226,17 @@ test('Wall voice playback preserves position across app lifecycle and stops when
   assert.match(wallView, /UIApplication\.openSettingsURLString/);
 });
 
-test('Wall note taps, exact-canvas lift, flipping, and signatures remain explicit and reachable', async () => {
+test('Wall gallery taps, exact-canvas lift, flipping, and signatures remain explicit and reachable', async () => {
   const wallView = await read('ios_native/MIRA/Sources/MIRANative/Screens/WallOfNotesNativeView.swift');
   const renderer = await read('ios_native/MIRA/Sources/MIRANative/Components/MIRAWallNoteRenderer.swift');
   const signatureCanvas = await read('ios_native/MIRA/Sources/MIRANative/Components/MIRAWallSignatureCanvas.swift');
 
+  assert.match(wallView, /private func editorialRows\(for notes: \[MIRAWallNote\]\)/);
+  assert.match(wallView, /note\.resolvedCanvas\?\.aspectRatio/);
+  assert.match(wallView, /ScrollView \{/);
+  assert.match(wallView, /onTapGesture\s*\{\s*openNote\(note\)\s*\}/);
   assert.match(wallView, /DragGesture\(minimumDistance: 6, coordinateSpace: \.local\)/);
   assert.doesNotMatch(wallView, /DragGesture\(minimumDistance: 0, coordinateSpace: \.local\)/);
-  assert.match(wallView, /guard panStart == nil, magnifyStart == nil else \{ return \}/);
   assert.match(wallView, /Turn note over/);
   assert.match(wallView, /Sign this note/);
   assert.match(wallView, /MIRAWallDetailBackdrop\(seed: note\.id\)/);

@@ -1,13 +1,247 @@
 import Foundation
 
 public enum MIRANoteCanvasTemplate: String, Codable, CaseIterable, Hashable {
+  case blank
   case journal
+  case personalJournal = "personal_journal"
+  case dailyNote = "daily_note"
   case travelDiary = "travel_diary"
   case scrapbook
+  case moodboard
   case notebook
   case minimal
+  case minimalPhoto = "minimal_photo"
+  case minimalMotivation = "minimal_motivation"
   case darkAlbum = "dark_album"
   case recipeBook = "recipe_book"
+  case bookReview = "book_review"
+  case eventPoster = "event_poster"
+  case partyInvitation = "party_invitation"
+  case announcement
+  case importedArtwork = "imported_artwork"
+}
+
+public enum MIRANoteCanvasFormat: String, Codable, CaseIterable, Hashable {
+  case square
+  case portrait4x5 = "portrait_4x5"
+  case editorial3x4 = "editorial_3x4"
+  case portrait2x3 = "portrait_2x3"
+  case poster9x16 = "poster_9x16"
+  case landscape4x3 = "landscape_4x3"
+  case landscape16x9 = "landscape_16x9"
+  case longPage = "long_page"
+
+  public var aspectRatio: Double {
+    switch self {
+    case .square: return 1
+    case .portrait4x5: return 4.0 / 5.0
+    case .editorial3x4: return 3.0 / 4.0
+    case .portrait2x3: return 2.0 / 3.0
+    case .poster9x16: return 9.0 / 16.0
+    case .landscape4x3: return 4.0 / 3.0
+    case .landscape16x9: return 16.0 / 9.0
+    case .longPage: return 9.0 / 19.5
+    }
+  }
+
+  public static func closest(width: Double, height: Double) -> Self {
+    let ratio = max(0.2, width / max(1, height))
+    return allCases.min {
+      abs($0.aspectRatio - ratio) < abs($1.aspectRatio - ratio)
+    } ?? .portrait2x3
+  }
+}
+
+public enum MIRANoteArtworkMode: String, Codable, CaseIterable, Hashable {
+  case editableCanvas = "editable_canvas"
+  case importedArtwork = "imported_artwork"
+}
+
+public enum MIRANoteContentKind: String, Codable, CaseIterable, Hashable {
+  case journal
+  case photoCollage = "photo_collage"
+  case minimalPhoto = "minimal_photo"
+  case travelRecap = "travel_recap"
+  case eventPoster = "event_poster"
+  case partyInvitation = "party_invitation"
+  case announcement
+  case recipe
+  case bookReview = "book_review"
+  case moodboard
+  case outfitBoard = "outfit_board"
+  case birthdayPage = "birthday_page"
+  case memorialPage = "memorial_page"
+  case poem
+  case quote
+  case artwork
+  case importedDesign = "imported_design"
+  case scrapbook
+  case other
+}
+
+public enum MIRANoteVisibility: String, Codable, CaseIterable, Hashable {
+  case publicWall = "public_wall"
+  case friends
+  case privateDraft = "private_draft"
+}
+
+public enum MIRANoteDetailBlockKind: String, Codable, CaseIterable, Hashable {
+  case text
+  case event
+  case recipe
+  case review
+  case memory
+  case link
+}
+
+public struct MIRANoteDetailBlock: Codable, Identifiable, Hashable {
+  public var id: String
+  public var kind: MIRANoteDetailBlockKind
+  public var title: String?
+  public var body: String?
+  public var url: String?
+  public var dateText: String?
+  public var metadata: [String: String]
+
+  public init(
+    id: String = UUID().uuidString,
+    kind: MIRANoteDetailBlockKind,
+    title: String? = nil,
+    body: String? = nil,
+    url: String? = nil,
+    dateText: String? = nil,
+    metadata: [String: String] = [:]
+  ) {
+    self.id = id
+    self.kind = kind
+    self.title = title
+    self.body = body
+    self.url = url
+    self.dateText = dateText
+    self.metadata = metadata
+  }
+}
+
+public struct MIRANoteDocument: Codable, Identifiable, Hashable {
+  public static let currentSchemaVersion = 1
+
+  public var id: String
+  public var schemaVersion: Int
+  public var artworkMode: MIRANoteArtworkMode
+  public var contentKind: MIRANoteContentKind
+  public var visibility: MIRANoteVisibility
+  public var title: String?
+  public var subtitle: String?
+  public var altText: String?
+  public var thumbnailUrl: String?
+  public var canvas: MIRANoteCanvas
+  public var detailBlocks: [MIRANoteDetailBlock]
+  public var createdAt: String?
+  public var updatedAt: String?
+
+  public init(
+    id: String = UUID().uuidString,
+    schemaVersion: Int = MIRANoteDocument.currentSchemaVersion,
+    artworkMode: MIRANoteArtworkMode = .editableCanvas,
+    contentKind: MIRANoteContentKind = .other,
+    visibility: MIRANoteVisibility = .publicWall,
+    title: String? = nil,
+    subtitle: String? = nil,
+    altText: String? = nil,
+    thumbnailUrl: String? = nil,
+    canvas: MIRANoteCanvas,
+    detailBlocks: [MIRANoteDetailBlock] = [],
+    createdAt: String? = nil,
+    updatedAt: String? = nil
+  ) {
+    self.id = id
+    self.schemaVersion = max(1, schemaVersion)
+    self.artworkMode = artworkMode
+    self.contentKind = contentKind
+    self.visibility = visibility
+    self.title = title
+    self.subtitle = subtitle
+    self.altText = altText
+    self.thumbnailUrl = thumbnailUrl
+    self.canvas = canvas
+    self.detailBlocks = Array(detailBlocks.prefix(24))
+    self.createdAt = createdAt
+    self.updatedAt = updatedAt
+  }
+
+  public static func editableCanvas(
+    id: String = UUID().uuidString,
+    canvas: MIRANoteCanvas,
+    contentKind: MIRANoteContentKind = .other,
+    title: String? = nil,
+    subtitle: String? = nil,
+    altText: String? = nil,
+    thumbnailUrl: String? = nil,
+    detailBlocks: [MIRANoteDetailBlock] = []
+  ) -> Self {
+    Self(
+      id: id,
+      artworkMode: .editableCanvas,
+      contentKind: contentKind,
+      title: title,
+      subtitle: subtitle,
+      altText: altText,
+      thumbnailUrl: thumbnailUrl,
+      canvas: canvas,
+      detailBlocks: detailBlocks
+    )
+  }
+
+  public static func importedArtwork(
+    id: String = UUID().uuidString,
+    canvas: MIRANoteCanvas,
+    title: String? = nil,
+    subtitle: String? = nil,
+    altText: String? = nil,
+    thumbnailUrl: String? = nil,
+    detailBlocks: [MIRANoteDetailBlock] = []
+  ) -> Self {
+    Self(
+      id: id,
+      artworkMode: .importedArtwork,
+      contentKind: .importedDesign,
+      title: title,
+      subtitle: subtitle,
+      altText: altText,
+      thumbnailUrl: thumbnailUrl,
+      canvas: canvas,
+      detailBlocks: detailBlocks
+    )
+  }
+
+  public static func legacyDocument(for note: MIRAWallNote) -> Self {
+    let canvas = note.canvas ?? MIRANoteCanvas.legacyCanvas(for: note)
+    let firstPhoto = canvas.elements.first { $0.kind == .photo || $0.kind == .polaroid }
+    let cleanBody = note.body.trimmingCharacters(in: .whitespacesAndNewlines)
+    let contentKind: MIRANoteContentKind
+    if canvas.template == .recipeBook {
+      contentKind = .recipe
+    } else if canvas.template == .travelDiary {
+      contentKind = .travelRecap
+    } else if firstPhoto != nil && cleanBody.isEmpty {
+      contentKind = .minimalPhoto
+    } else if firstPhoto != nil {
+      contentKind = .photoCollage
+    } else {
+      contentKind = .journal
+    }
+    return Self(
+      id: note.id,
+      artworkMode: note.canvas == nil ? .editableCanvas : .editableCanvas,
+      contentKind: contentKind,
+      title: cleanBody.isEmpty ? nil : String(cleanBody.prefix(80)),
+      altText: cleanBody.isEmpty ? "Visual note" : cleanBody,
+      thumbnailUrl: firstPhoto?.thumbnailUrl ?? firstPhoto?.mediaUrl ?? note.mediaThumbnailUrl ?? note.mediaUrl,
+      canvas: canvas,
+      createdAt: note.createdAt,
+      updatedAt: note.updatedAt
+    )
+  }
 }
 
 public enum MIRANoteCanvasElementKind: String, Codable, CaseIterable, Hashable {
@@ -286,6 +520,7 @@ public struct MIRANoteCanvas: Codable, Hashable {
 
   public var version: Int
   public var template: MIRANoteCanvasTemplate
+  public var format: MIRANoteCanvasFormat
   public var designWidth: Double
   public var designHeight: Double
   public var background: MIRANoteCanvasBackground
@@ -294,6 +529,7 @@ public struct MIRANoteCanvas: Codable, Hashable {
   public init(
     version: Int = MIRANoteCanvas.currentVersion,
     template: MIRANoteCanvasTemplate = .journal,
+    format: MIRANoteCanvasFormat = .portrait2x3,
     designWidth: Double = MIRANoteCanvas.defaultDesignWidth,
     designHeight: Double = MIRANoteCanvas.defaultDesignHeight,
     background: MIRANoteCanvasBackground = MIRANoteCanvasBackground(),
@@ -301,6 +537,7 @@ public struct MIRANoteCanvas: Codable, Hashable {
   ) {
     self.version = version
     self.template = template
+    self.format = format
     self.designWidth = designWidth
     self.designHeight = designHeight
     self.background = background
@@ -310,6 +547,7 @@ public struct MIRANoteCanvas: Codable, Hashable {
   private enum CodingKeys: String, CodingKey {
     case version
     case template
+    case format
     case designWidth
     case designHeight
     case background
@@ -319,6 +557,7 @@ public struct MIRANoteCanvas: Codable, Hashable {
   public init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     let rawTemplate = try container.decodeIfPresent(String.self, forKey: .template)
+    let rawFormat = try container.decodeIfPresent(String.self, forKey: .format)
 
     version = max(1, try container.decodeIfPresent(Int.self, forKey: .version) ?? Self.currentVersion)
     template = rawTemplate.flatMap(MIRANoteCanvasTemplate.init(rawValue:)) ?? .journal
@@ -330,6 +569,8 @@ public struct MIRANoteCanvas: Codable, Hashable {
       try container.decodeIfPresent(Double.self, forKey: .designHeight) ?? Self.defaultDesignHeight,
       320...8_192
     )
+    format = rawFormat.flatMap(MIRANoteCanvasFormat.init(rawValue:))
+      ?? MIRANoteCanvasFormat.closest(width: designWidth, height: designHeight)
     background = try container.decodeIfPresent(MIRANoteCanvasBackground.self, forKey: .background)
       ?? MIRANoteCanvasBackground()
     elements = Array(

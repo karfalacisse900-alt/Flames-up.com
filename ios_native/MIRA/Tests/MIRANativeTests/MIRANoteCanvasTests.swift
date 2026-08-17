@@ -183,4 +183,51 @@ final class MIRANoteCanvasTests: XCTestCase {
     XCTAssertEqual(replaced.elements[0].thumbnailUrl, "https://media.captro.app/new/thumb")
     XCTAssertEqual(replaced.elements[1], untouched)
   }
+
+  func testNoteDocumentRoundTripPreservesProductMetadata() throws {
+    let canvas = MIRANoteCanvas(
+      template: .eventPoster,
+      format: .poster9x16,
+      designWidth: 1080,
+      designHeight: 1920,
+      elements: [
+        MIRANoteCanvasElement(
+          id: "poster-art",
+          kind: .photo,
+          x: 0.5,
+          y: 0.5,
+          width: 1,
+          height: 1,
+          mediaAssetId: "asset-poster"
+        )
+      ]
+    )
+    let document = MIRANoteDocument(
+      id: "note-doc-1",
+      artworkMode: .importedArtwork,
+      contentKind: .eventPoster,
+      visibility: .publicWall,
+      title: "Saturday Night",
+      subtitle: "Comedy room",
+      altText: "A black event poster.",
+      thumbnailUrl: "https://media.captro.app/poster/thumb",
+      canvas: canvas,
+      detailBlocks: [
+        MIRANoteDetailBlock(
+          id: "event-details",
+          kind: .event,
+          title: "Showtime",
+          body: "Doors at 8.",
+          dateText: "Saturday"
+        )
+      ]
+    )
+
+    let encoded = try JSONEncoder().encode(document)
+    let decoded = try JSONDecoder().decode(MIRANoteDocument.self, from: encoded)
+
+    XCTAssertEqual(decoded, document)
+    XCTAssertEqual(decoded.canvas.format, .poster9x16)
+    XCTAssertEqual(decoded.detailBlocks.first?.kind, .event)
+  }
 }
