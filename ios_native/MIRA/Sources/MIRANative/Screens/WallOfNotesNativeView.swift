@@ -325,15 +325,6 @@ final class MIRAWallNotesModel: ObservableObject {
   }
 }
 
-private struct MIRAWallEditorialRow: Identifiable {
-  let notes: [MIRAWallNote]
-  let isFeatured: Bool
-
-  var id: String {
-    (isFeatured ? "featured:" : "row:") + notes.map(\.id).joined(separator: ":")
-  }
-}
-
 public struct WallOfNotesNativeView: View {
   private let globalWallID = MIRAWallDestination.global.id
   private let api: MIRAAPIClient
@@ -371,18 +362,30 @@ public struct WallOfNotesNativeView: View {
   public var body: some View {
     VStack(spacing: 0) {
       wallHeader
-      MIRAStoriesRailNativeView(model: storiesModel) { group in
-        selectedStoryGroup = group
+      if shouldShowStoriesRail {
+        MIRAStoriesRailNativeView(model: storiesModel) { group in
+          selectedStoryGroup = group
+        }
       }
 
       GeometryReader { proxy in
         let viewport = proxy.size
-        let bounds = editorialGalleryLoadBounds
+        let bounds = camera.worldBounds(viewport: viewport)
         ZStack {
-          MIRATheme.Color.appBackground
+          MIRAWallBackground(camera: camera, viewport: viewport)
             .ignoresSafeArea()
 
-          editorialWallGallery(viewport: viewport)
+          ZStack {
+            wallNotes(bounds: bounds, viewport: viewport)
+
+            if shouldShowWallStartSign {
+              wallStartSign(viewport: viewport)
+            } else if shouldShowFilteredEmptySign {
+              filteredEmptySign(viewport: viewport)
+            }
+          }
+          .scaleEffect(liveMagnification, anchor: liveMagnificationAnchor)
+          .animation(nil, value: liveMagnification)
 
           chrome
 
@@ -390,22 +393,61 @@ public struct WallOfNotesNativeView: View {
             errorState(message: message, bounds: bounds)
           }
         }
-        .task(id: editorialLoadKey) {
-          try? await Task.sleep(for: .milliseconds(140))
-          guard !Task.isCancelled else { return }
-          initialFrameWallID = globalWallID
+        .contentShape(Rectangle())
+        .clipped()
+        .gesture(panGesture(viewport: viewport).simultaneously(with: magnifyGesture(viewport: viewport)))
+        .simultaneousGesture(SpatialTapGesture().onEnded { value in
+          guard panStart == nil, magnifyStart == nil else { return }
+          let world = camera.worldPoint(forScreen: value.location, viewport: viewport)
+          if let note = model.note(at: world) {
+            openNote(note)
+          }
+        })
+        .simultaneousGesture(
+          SpatialTapGesture(count: 2).onEnded { value in
+            withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
+              camera = camera.zoomed(
+                to: camera.scale < 1.25 ? min(1.55, camera.scale * 1.8) : 0.62,
+                around: value.location,
+                viewport: viewport
+              )
+            }
+          }
+        )
+        .task(id: loadKey(bounds: bounds)) {
+          try? await Task.sleep(for: .milliseconds(180))
+          guard !Task.isCancelled, initialFrameWallID == globalWallID else { return }
           await model.load(
             bounds: bounds,
-            zoom: 1,
+            zoom: camera.scale,
+            wallID: globalWallID,
+            filter: selectedFilter,
+            query: query
+          )
+        }
+        .task(id: globalWallID) {
+          initialFrameWallID = nil
+          await model.loadOverview(wallID: globalWallID, force: true)
+          guard !Task.isCancelled else { return }
+          if let overview = model.overview {
+            camera = MIRAWallLayout.initialCamera(
+              noteBounds: overview.noteBounds,
+              noteCount: overview.totalCount,
+              viewport: viewport,
+              includeStartSign: overview.totalCount < 5
+            )
+          } else {
+            camera = MIRAWallCamera(scale: 0.92)
+          }
+          initialFrameWallID = globalWallID
+          await model.load(
+            bounds: camera.worldBounds(viewport: viewport),
+            zoom: camera.scale,
             wallID: globalWallID,
             filter: selectedFilter,
             query: query,
             force: true
           )
-        }
-        .task(id: globalWallID) {
-          await model.loadOverview(wallID: globalWallID, force: true)
-          initialFrameWallID = globalWallID
         }
         .sheet(isPresented: $isCreating) {
           MIRANoteCreationEntryView(camera: camera, api: api) { template in
@@ -451,6 +493,7 @@ public struct WallOfNotesNativeView: View {
       .background(MIRATheme.Color.launchBackground)
     }
     .background(MIRATheme.Color.surface)
+    .task { await storiesModel.prepareStoriesForStartup() }
     .overlay {
       if let note = selectedNote {
         ZStack {
@@ -527,186 +570,8 @@ public struct WallOfNotesNativeView: View {
     selectedStoryGroup == nil && !isStoryReportSheetPresented && selectedNote == nil ? .visible : .hidden
   }
 
-  private var editorialGalleryLoadBounds: CGRect {
-    CGRect(x: -200_000, y: -200_000, width: 400_000, height: 400_000)
-  }
-
-  private var editorialLoadKey: String {
-    "\(globalWallID):\(selectedFilter):\(query.trimmingCharacters(in: .whitespacesAndNewlines))"
-  }
-
-  private var editorialNotes: [MIRAWallNote] {
-    model.notes.sorted {
-      if $0.createdAt != $1.createdAt { return $0.createdAt > $1.createdAt }
-      return $0.id < $1.id
-    }
-  }
-
-  private func editorialRows(for notes: [MIRAWallNote]) -> [MIRAWallEditorialRow] {
-    var rows: [MIRAWallEditorialRow] = []
-    var pair: [MIRAWallNote] = []
-
-    for (index, note) in notes.enumerated() {
-      if shouldFeatureInEditorialGallery(note: note, index: index) {
-        if !pair.isEmpty {
-          rows.append(MIRAWallEditorialRow(notes: pair, isFeatured: false))
-          pair = []
-        }
-        rows.append(MIRAWallEditorialRow(notes: [note], isFeatured: true))
-      } else {
-        pair.append(note)
-        if pair.count == 2 {
-          rows.append(MIRAWallEditorialRow(notes: pair, isFeatured: false))
-          pair = []
-        }
-      }
-    }
-
-    if !pair.isEmpty {
-      rows.append(MIRAWallEditorialRow(notes: pair, isFeatured: false))
-    }
-
-    return rows
-  }
-
-  private func shouldFeatureInEditorialGallery(note: MIRAWallNote, index: Int) -> Bool {
-    guard index > 0 else { return false }
-    if index.isMultiple(of: 9) { return true }
-    return note.reactionCount >= 20 && index.isMultiple(of: 5)
-  }
-
-  private func editorialTileHeight(width: CGFloat, note: MIRAWallNote, isFeatured: Bool) -> CGFloat {
-    let fallback = note.width > 0 && note.height > 0
-      ? max(0.42, min(1.6, note.width / note.height))
-      : 0.72
-    let aspect = CGFloat(note.resolvedCanvas?.aspectRatio ?? Double(fallback))
-    let rawHeight = width / max(0.34, min(1.65, aspect))
-    let minimum: CGFloat = isFeatured ? 260 : 170
-    let maximum: CGFloat = isFeatured ? 620 : 390
-    return min(maximum, max(minimum, rawHeight))
-  }
-
-  @ViewBuilder
-  private func editorialWallGallery(viewport: CGSize) -> some View {
-    let horizontalPadding: CGFloat = 16
-    let spacing: CGFloat = 14
-    let contentWidth = max(1, viewport.width - horizontalPadding * 2)
-    let columnWidth = max(140, (contentWidth - spacing) * 0.5)
-    let rows = editorialRows(for: editorialNotes)
-
-    ScrollView {
-      LazyVStack(spacing: 18) {
-        if model.isLoading && model.notes.isEmpty {
-          ProgressView()
-            .tint(MIRATheme.Color.forest)
-            .frame(maxWidth: .infinity)
-            .padding(.top, 72)
-        } else if shouldShowWallStartSign {
-          editorialEmptyState(title: "Start the wall", actionTitle: "Create note")
-            .padding(.top, 48)
-        } else if shouldShowFilteredEmptySign {
-          editorialEmptyState(title: "No notes found", actionTitle: "Clear search")
-            .padding(.top, 48)
-        } else {
-          ForEach(rows) { row in
-            if row.isFeatured, let note = row.notes.first {
-              editorialNoteTile(note: note, width: contentWidth, isFeatured: true)
-            } else {
-              HStack(alignment: .top, spacing: spacing) {
-                ForEach(row.notes) { note in
-                  editorialNoteTile(note: note, width: columnWidth, isFeatured: false)
-                }
-                if row.notes.count == 1 {
-                  Spacer(minLength: 0)
-                    .frame(width: columnWidth)
-                }
-              }
-              .frame(maxWidth: .infinity, alignment: .leading)
-            }
-          }
-        }
-      }
-      .padding(.horizontal, horizontalPadding)
-      .padding(.top, 18)
-      .padding(.bottom, 108)
-    }
-    .refreshable {
-      await model.load(
-        bounds: editorialGalleryLoadBounds,
-        zoom: 1,
-        wallID: globalWallID,
-        filter: selectedFilter,
-        query: query,
-        force: true
-      )
-    }
-  }
-
-  private func editorialNoteTile(note: MIRAWallNote, width: CGFloat, isFeatured: Bool) -> some View {
-    let height = editorialTileHeight(width: width, note: note, isFeatured: isFeatured)
-    let document = note.resolvedDocument
-    return VStack(alignment: .leading, spacing: 7) {
-      MIRAWallNoteTile(
-        note: note,
-        isNew: placementNoteID == note.id,
-        wallScale: 1,
-        isLifted: liftedNoteID == note.id || selectedNote?.id == note.id,
-        isPressed: pressedNoteID == note.id
-      )
-      .frame(width: width, height: height)
-      .matchedGeometryEffect(
-        id: "wall-note-\(note.id)",
-        in: noteCanvasTransition,
-        properties: .frame,
-        anchor: .center,
-        isSource: selectedNote?.id != note.id
-      )
-      .contentShape(Rectangle())
-      .onTapGesture {
-        openNote(note)
-      }
-      .shadow(
-        color: .black.opacity(document?.artworkMode == .importedArtwork ? 0.08 : 0.13),
-        radius: isFeatured ? 18 : 12,
-        y: isFeatured ? 10 : 7
-      )
-
-      HStack(spacing: 7) {
-        Text(note.authorPreview?.title ?? (note.isGhost ? "Ghost note" : "Captro member"))
-          .lineLimit(1)
-        Spacer(minLength: 6)
-        if note.reactionCount > 0 {
-          Label("\(note.reactionCount)", systemImage: "heart.fill")
-            .labelStyle(.titleAndIcon)
-        }
-      }
-      .font(.system(size: 11, weight: .semibold))
-      .foregroundStyle(MIRATheme.Color.textSecondary)
-      .padding(.horizontal, 2)
-    }
-    .frame(width: width, alignment: .topLeading)
-    .accessibilityElement(children: .combine)
-    .accessibilityLabel(document?.altText ?? "Wall note")
-  }
-
-  private func editorialEmptyState(title: String, actionTitle: String) -> some View {
-    VStack(spacing: 14) {
-      Text(title)
-        .font(.system(size: 18, weight: .semibold))
-        .foregroundStyle(MIRATheme.Color.textPrimary)
-      Button(actionTitle) {
-        if actionTitle == "Clear search" {
-          query = ""
-          selectedFilter = "all"
-        } else {
-          isStudioPresented = true
-        }
-      }
-      .buttonStyle(.borderedProminent)
-      .tint(MIRATheme.Color.forest)
-    }
-    .frame(maxWidth: .infinity)
-    .padding(28)
+  private var shouldShowStoriesRail: Bool {
+    !storiesModel.stories.isEmpty
   }
 
   @ViewBuilder
@@ -819,29 +684,30 @@ public struct WallOfNotesNativeView: View {
   }
 
   private var chrome: some View {
-    VStack(spacing: 0) {
-      Spacer()
-
-      HStack {
+    GeometryReader { proxy in
+      VStack(spacing: 0) {
         Spacer()
 
-        Button {
-          isCreating = true
-        } label: {
-          Image(systemName: "plus")
-            .font(.system(size: 24, weight: .semibold))
-            .foregroundStyle(.white)
-            .frame(width: 58, height: 58)
-            .background(MIRATheme.Color.forest, in: Circle())
-            .shadow(color: .black.opacity(0.16), radius: 16, y: 8)
+        HStack {
+          Spacer()
+
+          Button {
+            isCreating = true
+          } label: {
+            Image(systemName: "plus")
+              .font(.system(size: 24, weight: .semibold))
+              .foregroundStyle(.white)
+              .frame(width: 58, height: 58)
+              .background(MIRATheme.Color.forest, in: Circle())
+              .shadow(color: .black.opacity(0.18), radius: 16, y: 8)
+          }
+          .buttonStyle(.miraPress)
+          .accessibilityLabel("Add note")
+          .accessibilityHint("Opens the Note creation options")
         }
-        .buttonStyle(.miraPress)
-        .accessibilityLabel("Add note")
-
-        Spacer()
+        .padding(.trailing, 18)
+        .padding(.bottom, max(24, proxy.safeAreaInsets.bottom + 82))
       }
-      .padding(.horizontal, 18)
-      .padding(.bottom, 16)
     }
     .allowsHitTesting(true)
   }

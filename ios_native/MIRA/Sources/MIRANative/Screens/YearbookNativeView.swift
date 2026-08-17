@@ -136,12 +136,34 @@ public final class MIRAYearbookNativeModel: ObservableObject {
   }
 }
 
-private enum YearbookBrowseTab: String {
+private enum YearbookBrowseTab: String, CaseIterable, Identifiable {
   case all
   case friends
   case dating
   case nearby
   case new
+
+  var id: String { rawValue }
+
+  var title: String {
+    switch self {
+    case .all: return "All"
+    case .friends: return "Friends"
+    case .dating: return "Dating"
+    case .nearby: return "Nearby"
+    case .new: return "New"
+    }
+  }
+
+  var systemImage: String {
+    switch self {
+    case .all: return "person.2"
+    case .friends: return "person.2.fill"
+    case .dating: return "heart"
+    case .nearby: return "location"
+    case .new: return "sparkles"
+    }
+  }
 }
 
 public struct MIRAYearbookNativeView: View {
@@ -150,8 +172,8 @@ public struct MIRAYearbookNativeView: View {
   @State private var showEditor = false
   @State private var isSearchVisible = false
   @State private var searchDraft = ""
-  @State private var selectedSpread: Int? = 0
-  @State private var selectedBookTab: YearbookBrowseTab = .all
+  @State private var selectedBrowseTab: YearbookBrowseTab = .all
+  @Namespace private var yearbookCardTransition
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   private let api: MIRAAPIClient
   private let currentUser: MIRAUser?
@@ -169,10 +191,6 @@ public struct MIRAYearbookNativeView: View {
 
       content
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-      header
-        .frame(maxHeight: .infinity, alignment: .top)
-        .zIndex(20)
     }
     .navigationBarHidden(true)
     .task { await model.prepare() }
@@ -185,7 +203,6 @@ public struct MIRAYearbookNativeView: View {
         ageMinimum: $model.ageMinimum,
         ageMaximum: $model.ageMaximum
       ) {
-        selectedSpread = 0
         Task { await model.reload() }
       }
       .presentationDetents([.fraction(0.88)])
@@ -205,159 +222,246 @@ public struct MIRAYearbookNativeView: View {
     }
   }
 
-  private var header: some View {
-    Group {
-      if isSearchVisible {
-        HStack(spacing: 10) {
-          Image(systemName: "magnifyingglass")
-            .foregroundStyle(Color.black.opacity(0.52))
-          TextField("Name, city, school, or interest", text: $searchDraft)
-            .foregroundStyle(Color.black.opacity(0.84))
-            .textInputAutocapitalization(.never)
-            .submitLabel(.search)
-            .onSubmit {
-              selectedSpread = 0
-              model.searchText = searchDraft
-              Task { await model.reload() }
-            }
-          Button {
-            if searchDraft.isEmpty {
-              withAnimation(.easeOut(duration: 0.18)) { isSearchVisible = false }
-            } else {
-              searchDraft = ""
-              model.searchText = ""
-              selectedSpread = 0
-              Task { await model.reload() }
-            }
-          } label: {
-            Image(systemName: "xmark.circle.fill")
-              .foregroundStyle(Color.black.opacity(0.46))
-          }
-          .accessibilityLabel(searchDraft.isEmpty ? "Close search" : "Clear search")
-        }
-        .padding(.horizontal, 16)
-        .frame(height: 48)
-        .background(YearbookHeaderPaper())
-        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
-        .overlay(alignment: .top) {
-          YearbookTapeStrip(color: Color(red: 0.76, green: 0.66, blue: 0.49))
-            .frame(width: 54, height: 14)
-            .offset(y: -7)
-        }
-        .padding(.horizontal, 18)
-        .padding(.top, 16)
-        .transition(.move(edge: .top).combined(with: .opacity))
+  @ViewBuilder
+  private var content: some View {
+    GeometryReader { proxy in
+      VStack(spacing: 0) {
+        yearbookTopBar
+        yearbookFilterRow
+        yearbookGallery(viewport: proxy.size, safeBottom: proxy.safeAreaInsets.bottom)
       }
     }
   }
 
-  @ViewBuilder
-  private var content: some View {
-    if model.isLoading && model.profiles.isEmpty {
-      YearbookSkeletonGrid()
-    } else if let error = model.errorMessage, model.profiles.isEmpty {
-      VStack(spacing: 4) {
-        MIRAEmptyState(title: "The Yearbook could not open", message: error, systemImage: "book.closed")
-        Button("Try again") { Task { await model.prepare() } }
-          .buttonStyle(.borderedProminent)
-          .tint(MIRATheme.Color.forest)
-      }
-      .padding(.bottom, 40)
-    } else if model.profiles.isEmpty {
-      MIRAEmptyState(
-        title: model.datingUnavailable ? "Dating discovery is off" : "No pages here yet",
-        message: model.datingUnavailable
-          ? "Choose Dating on your own Yearbook page and confirm you are 18 or older before browsing dating profiles."
-          : (model.selectedIntent == nil ? "Create your page, then check back as more people join." : "Try another Yearbook section or clear a filter."),
-        systemImage: model.datingUnavailable ? "lock.heart" : "person.2.crop.square.stack"
-      )
-      .padding(.top, 38)
-    } else {
-      ScrollView(.horizontal) {
-        LazyHStack(spacing: 0) {
-          ForEach(Array(profileSpreads.enumerated()), id: \.offset) { index, profiles in
-            YearbookOpenSpread(
-              profiles: profiles,
-              myProfile: model.myProfile,
-              loadedProfileCount: model.profiles.count,
-              pageNumber: index + 1,
-              pageCount: profileSpreads.count,
-              profilesPerLeaf: profilesPerLeaf,
-              selectedTab: selectedBookTab,
-              api: api,
-              currentUserID: currentUser?.id ?? "",
-              onSearch: {
-                withAnimation(.easeOut(duration: 0.2)) { isSearchVisible.toggle() }
-              },
-              onFilter: { showFilters = true },
-              onSelectTab: selectBookTab,
-              onEdit: { showEditor = true }
-            )
-            .containerRelativeFrame(.horizontal)
-            .scrollTransition(axis: .horizontal) { content, phase in
-              content
-                .rotation3DEffect(
-                  .degrees(reduceMotion ? 0 : phase.value * -8.5),
-                  axis: (x: 0, y: 1, z: 0),
-                  anchor: phase.value > 0 ? .leading : .trailing,
-                  perspective: 0.42
-                )
-                .scaleEffect(reduceMotion ? 1 : 1 - abs(phase.value) * 0.018)
-                .offset(x: reduceMotion ? 0 : phase.value * -8)
-                .brightness(reduceMotion ? 0 : -abs(phase.value) * 0.035)
-                .opacity(reduceMotion ? (phase.isIdentity ? 1 : 0.88) : 1)
+  private var yearbookTopBar: some View {
+    HStack(spacing: 10) {
+      if isSearchVisible {
+        Image(systemName: "magnifyingglass")
+          .font(.system(size: 15, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textMuted)
+        TextField("Name, city, school, or interest", text: $searchDraft)
+          .textInputAutocapitalization(.never)
+          .submitLabel(.search)
+          .onSubmit { submitSearch() }
+        Button {
+          if searchDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            withAnimation(CaptroMotion.smallMenuAnimation(reduceMotion: reduceMotion)) {
+              isSearchVisible = false
             }
-            .id(index)
-            .task {
-              if let last = profiles.last {
-                await model.loadMoreIfNeeded(current: last)
-              }
-            }
+          } else {
+            searchDraft = ""
+            model.searchText = ""
+            Task { await model.reload() }
           }
+        } label: {
+          Image(systemName: "xmark.circle.fill")
+            .font(.system(size: 18, weight: .semibold))
+            .foregroundStyle(MIRATheme.Color.textMuted)
+            .frame(width: 34, height: 34)
         }
-        .scrollTargetLayout()
+        .accessibilityLabel(searchDraft.isEmpty ? "Close search" : "Clear search")
+      } else {
+        VStack(alignment: .leading, spacing: 1) {
+          Text("Captro Yearbook")
+            .font(.system(size: 27, weight: .bold))
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+          Text("\(model.profiles.count) \(model.profiles.count == 1 ? "person" : "people")")
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(MIRATheme.Color.textSecondary)
+        }
+
+        Spacer(minLength: 8)
+
+        Button {
+          withAnimation(CaptroMotion.smallMenuAnimation(reduceMotion: reduceMotion)) {
+            searchDraft = model.searchText
+            isSearchVisible = true
+          }
+        } label: {
+          Image(systemName: "magnifyingglass")
+            .frame(width: 40, height: 40)
+        }
+        .buttonStyle(.miraPress)
+        .accessibilityLabel("Search Yearbook")
+
+        Button { showFilters = true } label: {
+          Image(systemName: "slider.horizontal.3")
+            .frame(width: 40, height: 40)
+        }
+        .buttonStyle(.miraPress)
+        .accessibilityLabel("Yearbook filters")
       }
-      .scrollTargetBehavior(.paging)
-      .scrollPosition(id: $selectedSpread)
-      .scrollIndicators(.hidden)
-      .scrollDisabled(profileSpreads.count <= 1)
-      .padding(.horizontal, 2)
-      .padding(.vertical, 2)
-      .onChange(of: profileSpreads.count) { _, count in
-        guard count > 0 else {
-          selectedSpread = nil
+    }
+    .font(.system(size: 15, weight: .semibold))
+    .foregroundStyle(MIRATheme.Color.textPrimary)
+    .padding(.horizontal, 16)
+    .padding(.top, 10)
+    .padding(.bottom, 8)
+    .frame(minHeight: 62)
+    .background(MIRATheme.Color.surface.opacity(0.96))
+    .overlay(alignment: .bottom) {
+      Rectangle().fill(MIRATheme.Color.hairline).frame(height: 0.5)
+    }
+  }
+
+  private var yearbookFilterRow: some View {
+    ScrollView(.horizontal, showsIndicators: false) {
+      HStack(spacing: 9) {
+        ForEach(YearbookBrowseTab.allCases) { tab in
+          yearbookFilterPill(tab)
+        }
+      }
+      .padding(.horizontal, 16)
+      .padding(.vertical, 9)
+    }
+    .background(MIRATheme.Color.surface.opacity(0.90))
+    .overlay(alignment: .bottom) {
+      Rectangle().fill(MIRATheme.Color.hairline.opacity(0.75)).frame(height: 0.5)
+    }
+  }
+
+  private func yearbookFilterPill(_ tab: YearbookBrowseTab) -> some View {
+    let selected = selectedBrowseTab == tab
+    return Button {
+      selectBrowseTab(tab)
+    } label: {
+      Label(tab.title, systemImage: tab.systemImage)
+        .font(.system(size: 13, weight: selected ? .bold : .semibold))
+        .labelStyle(.titleAndIcon)
+        .foregroundStyle(selected ? Color.white : MIRATheme.Color.textPrimary)
+        .padding(.horizontal, 13)
+        .frame(height: 34)
+        .background(
+          Capsule(style: .continuous)
+            .fill(selected ? MIRATheme.Color.forest : Color.white.opacity(0.72))
+        )
+        .overlay {
+          Capsule(style: .continuous)
+            .stroke(selected ? Color.clear : MIRATheme.Color.hairline, lineWidth: 1)
+        }
+        .shadow(color: .black.opacity(selected ? 0.10 : 0.04), radius: selected ? 8 : 4, y: selected ? 4 : 2)
+    }
+    .buttonStyle(.miraPress)
+    .accessibilityLabel("Show \(tab.title) Yearbook profiles")
+    .accessibilityAddTraits(selected ? .isSelected : [])
+  }
+
+  private func yearbookGallery(viewport: CGSize, safeBottom: CGFloat) -> some View {
+    ScrollViewReader { scrollProxy in
+      ScrollView {
+        LazyVStack(spacing: 0) {
+          Color.clear.frame(height: 1).id("yearbook-gallery-top")
+          galleryBody(viewport: viewport)
+        }
+        .padding(.top, 14)
+        .padding(.bottom, max(104, safeBottom + 92))
+      }
+      .refreshable { await model.reload() }
+      .onChange(of: selectedBrowseTab) { _, _ in
+        guard !reduceMotion else {
+          scrollProxy.scrollTo("yearbook-gallery-top", anchor: .top)
           return
         }
-        if let selectedSpread, selectedSpread >= count {
-          self.selectedSpread = count - 1
+        withAnimation(.snappy(duration: 0.24)) {
+          scrollProxy.scrollTo("yearbook-gallery-top", anchor: .top)
         }
       }
       .overlay(alignment: .bottom) {
         if model.isLoadingMore {
           ProgressView()
-            .tint(Color.black.opacity(0.64))
-            .padding(.bottom, 44)
+            .tint(MIRATheme.Color.forest)
+            .padding(12)
+            .background(.thinMaterial, in: Capsule())
+            .padding(.bottom, max(22, safeBottom + 18))
         }
       }
     }
   }
 
-  private var profileSpreads: [[MIRAYearbookProfile]] {
-    stride(from: 0, to: model.profiles.count, by: profilesPerSpread).map { start in
-      let end = min(start + profilesPerSpread, model.profiles.count)
-      return Array(model.profiles[start..<end])
+  @ViewBuilder
+  private func galleryBody(viewport: CGSize) -> some View {
+    if model.isLoading && model.profiles.isEmpty {
+      YearbookSkeletonGrid()
+    } else if let error = model.errorMessage, model.profiles.isEmpty {
+      VStack(spacing: 10) {
+        MIRAEmptyState(title: "The Yearbook could not open", message: error, systemImage: "book.closed")
+        Button("Try again") { Task { await model.prepare() } }
+          .buttonStyle(.borderedProminent)
+          .tint(MIRATheme.Color.forest)
+      }
+      .padding(.horizontal, 22)
+      .padding(.top, 40)
+    } else if model.profiles.isEmpty {
+      MIRAEmptyState(
+        title: model.datingUnavailable ? "Dating discovery is off" : "No people here yet",
+        message: model.datingUnavailable
+          ? "Choose Dating on your own Yearbook page and confirm you are 18 or older before browsing dating profiles."
+          : (model.selectedIntent == nil ? "Create your page, then check back as more people join." : "Try another Yearbook section or clear a filter."),
+        systemImage: model.datingUnavailable ? "lock.heart" : "person.2.crop.square.stack"
+      )
+      .padding(.horizontal, 24)
+      .padding(.top, 48)
+    } else {
+      LazyVGrid(columns: yearbookGalleryColumns(viewport: viewport), spacing: 18) {
+        ForEach(Array(model.profiles.enumerated()), id: \.element.id) { index, profile in
+          NavigationLink {
+            yearbookProfileDestination(profile)
+          } label: {
+            yearbookProfileCard(profile: profile, placement: index)
+          }
+          .buttonStyle(.miraPress)
+          .accessibilityHint("Opens \(profile.name)'s complete Yearbook page")
+          .task {
+            await model.loadMoreIfNeeded(current: profile)
+          }
+        }
+      }
+      .padding(.horizontal, 16)
     }
   }
 
-  private var profilesPerLeaf: Int {
-    2
+  private func yearbookGalleryColumns(viewport: CGSize) -> [GridItem] {
+    let spacing: CGFloat = 12
+    let minimum = max(120, min(184, (viewport.width - 44) * 0.5))
+    return [
+      GridItem(.flexible(minimum: minimum), spacing: spacing, alignment: .top),
+      GridItem(.flexible(minimum: minimum), spacing: spacing, alignment: .top),
+    ]
   }
 
-  private var profilesPerSpread: Int { profilesPerLeaf * 2 }
+  @ViewBuilder
+  private func yearbookProfileDestination(_ profile: MIRAYearbookProfile) -> some View {
+    let destination = YearbookProfileDetailView(api: api, initialProfile: profile, currentUserID: currentUser?.id ?? "")
+    if #available(iOS 18.0, *) {
+      destination.navigationTransition(.zoom(sourceID: profile.id, in: yearbookCardTransition))
+    } else {
+      destination
+    }
+  }
 
-  private func selectBookTab(_ tab: YearbookBrowseTab) {
-    selectedSpread = 0
-    selectedBookTab = tab
+  @ViewBuilder
+  private func yearbookProfileCard(profile: MIRAYearbookProfile, placement: Int) -> some View {
+    let card = YearbookPersonGalleryCard(
+      profile: profile,
+      badge: yearbookBadge(for: profile),
+      placement: placement
+    )
+    .aspectRatio(0.76, contentMode: .fit)
+
+    if #available(iOS 18.0, *) {
+      card.matchedTransitionSource(id: profile.id, in: yearbookCardTransition)
+    } else {
+      card
+    }
+  }
+
+  private func submitSearch() {
+    model.searchText = searchDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+    Task { await model.reload() }
+  }
+
+  private func selectBrowseTab(_ tab: YearbookBrowseTab) {
+    selectedBrowseTab = tab
 
     switch tab {
     case .all:
@@ -388,6 +492,322 @@ public struct MIRAYearbookNativeView: View {
     }
 
     Task { await model.reload() }
+  }
+
+  private func yearbookBadge(for profile: MIRAYearbookProfile) -> YearbookDiscoveryBadge {
+    let connection = profile.connectionStatus?.lowercased() ?? ""
+    if connection.contains("friend") || connection == "accepted" {
+      return .friends
+    }
+    if profile.intent == .dating || profile.intent == .friendsAndDating || profile.datingEnabled {
+      return .dating
+    }
+    let viewerCity = currentUser?.city?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+    let profileCity = profile.city?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+    if !viewerCity.isEmpty && viewerCity == profileCity {
+      return .nearby
+    }
+    return .new
+  }
+}
+
+private struct YearbookDiscoveryBadge {
+  let title: String
+  let systemImage: String
+  let color: Color
+
+  static let friends = YearbookDiscoveryBadge(title: "Friends", systemImage: "person.2.fill", color: Color(red: 0.30, green: 0.52, blue: 0.32))
+  static let dating = YearbookDiscoveryBadge(title: "Dating", systemImage: "heart.fill", color: Color(red: 0.74, green: 0.24, blue: 0.34))
+  static let nearby = YearbookDiscoveryBadge(title: "Nearby", systemImage: "location.fill", color: Color(red: 0.26, green: 0.46, blue: 0.70))
+  static let new = YearbookDiscoveryBadge(title: "New", systemImage: "sparkles", color: Color(red: 0.72, green: 0.47, blue: 0.16))
+}
+
+private struct YearbookPersonGalleryCard: View {
+  let profile: MIRAYearbookProfile
+  let badge: YearbookDiscoveryBadge
+  var placement = 0
+
+  private var style: YearbookGalleryCardStyle {
+    YearbookGalleryCardStyle.resolve(profile.theme, placement: placement)
+  }
+
+  var body: some View {
+    GeometryReader { proxy in
+      let width = max(1, proxy.size.width)
+      let height = max(1, proxy.size.height)
+      let imageHeight = max(118, height * 0.64)
+      let compact = height < 225
+
+      VStack(alignment: .leading, spacing: compact ? 6 : 8) {
+        ZStack(alignment: .topLeading) {
+          MIRACachedImage(
+            url: profile.profilePhoto,
+            maxPixelSize: 720,
+            animatesNetworkLoad: false,
+            keepsPreviousImageWhileLoading: true
+          ) { image in
+            image.resizable().scaledToFill()
+          } placeholder: {
+            ZStack {
+              style.photoPlaceholder
+              Image(systemName: "person.crop.square")
+                .font(.system(size: compact ? 30 : 38, weight: .light))
+                .foregroundStyle(style.secondary.opacity(0.70))
+            }
+          }
+          .frame(width: width - 18, height: imageHeight)
+          .clipShape(RoundedRectangle(cornerRadius: style.photoRadius, style: .continuous))
+          .overlay {
+            RoundedRectangle(cornerRadius: style.photoRadius, style: .continuous)
+              .stroke(style.photoBorder, lineWidth: style.photoBorderWidth)
+          }
+          .overlay(alignment: .bottom) {
+            LinearGradient(
+              colors: [Color.clear, Color.black.opacity(style.imageShade)],
+              startPoint: .top,
+              endPoint: .bottom
+            )
+            .clipShape(RoundedRectangle(cornerRadius: style.photoRadius, style: .continuous))
+            .allowsHitTesting(false)
+          }
+          .clipped()
+
+          badgeView
+            .padding(8)
+        }
+
+        VStack(alignment: .leading, spacing: compact ? 3 : 4) {
+          HStack(alignment: .firstTextBaseline, spacing: 5) {
+            Text(nameLine)
+              .font(.system(size: compact ? 16 : 17, weight: .bold, design: style.nameDesign))
+              .foregroundStyle(style.ink)
+              .lineLimit(1)
+              .minimumScaleFactor(0.76)
+
+            Spacer(minLength: 4)
+
+            if profile.interestMutual || profile.interestSent {
+              Image(systemName: profile.interestMutual ? "heart.circle.fill" : "heart")
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(badge.color)
+                .accessibilityLabel(profile.interestMutual ? "Mutual interest" : "Interest sent")
+            }
+          }
+
+          if !locationLine.isEmpty {
+            Text(locationLine)
+              .font(.system(size: compact ? 11 : 12, weight: .semibold))
+              .foregroundStyle(style.secondary)
+              .lineLimit(1)
+              .minimumScaleFactor(0.74)
+          }
+
+          Text(promptLine)
+            .font(.system(size: compact ? 11 : 12, weight: .medium, design: style.bodyDesign))
+            .foregroundStyle(style.secondary.opacity(0.95))
+            .lineLimit(1)
+            .minimumScaleFactor(0.72)
+
+          Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 1)
+      }
+      .padding(9)
+      .frame(width: width, height: height, alignment: .topLeading)
+      .background(style.background)
+      .clipShape(RoundedRectangle(cornerRadius: style.cardRadius, style: .continuous))
+      .overlay {
+        RoundedRectangle(cornerRadius: style.cardRadius, style: .continuous)
+          .stroke(style.border, lineWidth: style.borderWidth)
+      }
+      .overlay(alignment: .topTrailing) {
+        if style.cornerMarkVisible {
+          Circle()
+            .fill(style.accent.opacity(0.85))
+            .frame(width: 8, height: 8)
+            .padding(8)
+            .accessibilityHidden(true)
+        }
+      }
+      .shadow(color: .black.opacity(style.shadowOpacity), radius: 14, x: 0, y: 7)
+      .contentShape(RoundedRectangle(cornerRadius: style.cardRadius, style: .continuous))
+      .accessibilityElement(children: .ignore)
+      .accessibilityLabel(accessibilitySummary)
+    }
+  }
+
+  private var badgeView: some View {
+    Label(badge.title, systemImage: badge.systemImage)
+      .font(.system(size: 10, weight: .bold))
+      .labelStyle(.titleAndIcon)
+      .foregroundStyle(Color.white)
+      .padding(.horizontal, 8)
+      .frame(height: 24)
+      .background(badge.color.opacity(0.94), in: Capsule(style: .continuous))
+      .shadow(color: .black.opacity(0.16), radius: 4, y: 2)
+      .accessibilityHidden(true)
+  }
+
+  private var nameLine: String {
+    if let age = profile.age {
+      return "\(profile.name), \(age)"
+    }
+    return profile.name
+  }
+
+  private var locationLine: String {
+    let clean = profile.locationLine.trimmingCharacters(in: .whitespacesAndNewlines)
+    if !clean.isEmpty { return clean }
+    let school = profile.school?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return school
+  }
+
+  private var promptLine: String {
+    let prompt = (profile.prompts ?? [])
+      .sorted { $0.position < $1.position }
+      .compactMap { $0.answer.trimmingCharacters(in: .whitespacesAndNewlines).emptyToNil }
+      .first
+    if let prompt { return prompt }
+    if let bio = profile.shortBio?.trimmingCharacters(in: .whitespacesAndNewlines).emptyToNil { return bio }
+    if let mood = profile.currentMood?.trimmingCharacters(in: .whitespacesAndNewlines).emptyToNil { return mood }
+    if let interest = (profile.interests ?? profile.hobbies ?? []).first?.trimmingCharacters(in: .whitespacesAndNewlines).emptyToNil {
+      return interest
+    }
+    return profile.intent.title
+  }
+
+  private var accessibilitySummary: String {
+    var pieces = [profile.name]
+    if let age = profile.age { pieces.append("\(age)") }
+    if !locationLine.isEmpty { pieces.append(locationLine) }
+    pieces.append(badge.title)
+    if !promptLine.isEmpty { pieces.append(promptLine) }
+    return pieces.joined(separator: ", ")
+  }
+}
+
+private struct YearbookGalleryCardStyle {
+  let background: Color
+  let photoPlaceholder: Color
+  let ink: Color
+  let secondary: Color
+  let accent: Color
+  let border: Color
+  let photoBorder: Color
+  let cardRadius: CGFloat
+  let photoRadius: CGFloat
+  let borderWidth: CGFloat
+  let photoBorderWidth: CGFloat
+  let shadowOpacity: Double
+  let imageShade: Double
+  let nameDesign: Font.Design
+  let bodyDesign: Font.Design
+  let cornerMarkVisible: Bool
+
+  static func resolve(_ theme: MIRAYearbookTheme, placement: Int) -> YearbookGalleryCardStyle {
+    switch theme {
+    case .minimal:
+      return YearbookGalleryCardStyle(
+        background: Color(red: 0.988, green: 0.985, blue: 0.968),
+        photoPlaceholder: Color(red: 0.92, green: 0.92, blue: 0.89),
+        ink: Color(red: 0.08, green: 0.08, blue: 0.075),
+        secondary: Color(red: 0.33, green: 0.32, blue: 0.29),
+        accent: Color(red: 0.12, green: 0.12, blue: 0.11),
+        border: Color.black.opacity(0.12),
+        photoBorder: Color.black.opacity(0.10),
+        cardRadius: 6,
+        photoRadius: 4,
+        borderWidth: 0.8,
+        photoBorderWidth: 0.8,
+        shadowOpacity: 0.08,
+        imageShade: 0.22,
+        nameDesign: .default,
+        bodyDesign: .default,
+        cornerMarkVisible: false
+      )
+    case .film:
+      return YearbookGalleryCardStyle(
+        background: Color(red: 0.10, green: 0.10, blue: 0.095),
+        photoPlaceholder: Color(red: 0.17, green: 0.17, blue: 0.16),
+        ink: Color(red: 0.97, green: 0.95, blue: 0.88),
+        secondary: Color(red: 0.78, green: 0.76, blue: 0.68),
+        accent: Color(red: 0.85, green: 0.56, blue: 0.30),
+        border: Color.white.opacity(0.12),
+        photoBorder: Color.white.opacity(0.15),
+        cardRadius: 6,
+        photoRadius: 3,
+        borderWidth: 0.8,
+        photoBorderWidth: 0.8,
+        shadowOpacity: 0.18,
+        imageShade: 0.38,
+        nameDesign: .serif,
+        bodyDesign: .serif,
+        cornerMarkVisible: true
+      )
+    case .notebook:
+      return YearbookGalleryCardStyle(
+        background: Color(red: 0.977, green: 0.965, blue: 0.895),
+        photoPlaceholder: Color(red: 0.90, green: 0.91, blue: 0.85),
+        ink: Color(red: 0.12, green: 0.14, blue: 0.16),
+        secondary: Color(red: 0.35, green: 0.39, blue: 0.40),
+        accent: Color(red: 0.30, green: 0.46, blue: 0.66),
+        border: Color(red: 0.30, green: 0.46, blue: 0.66).opacity(0.20),
+        photoBorder: Color.black.opacity(0.12),
+        cardRadius: 5,
+        photoRadius: 4,
+        borderWidth: 0.9,
+        photoBorderWidth: 0.8,
+        shadowOpacity: 0.10,
+        imageShade: 0.22,
+        nameDesign: .default,
+        bodyDesign: .serif,
+        cornerMarkVisible: placement.isMultiple(of: 4)
+      )
+    case .y2k, .scrapbook:
+      return YearbookGalleryCardStyle(
+        background: Color(red: 0.982, green: 0.948, blue: 0.885),
+        photoPlaceholder: Color(red: 0.91, green: 0.86, blue: 0.80),
+        ink: Color(red: 0.13, green: 0.10, blue: 0.08),
+        secondary: Color(red: 0.42, green: 0.32, blue: 0.26),
+        accent: Color(red: 0.72, green: 0.32, blue: 0.43),
+        border: Color(red: 0.72, green: 0.32, blue: 0.43).opacity(0.22),
+        photoBorder: Color.black.opacity(0.15),
+        cardRadius: 8,
+        photoRadius: 5,
+        borderWidth: 0.9,
+        photoBorderWidth: 0.8,
+        shadowOpacity: 0.12,
+        imageShade: 0.24,
+        nameDesign: .serif,
+        bodyDesign: .default,
+        cornerMarkVisible: placement.isMultiple(of: 5)
+      )
+    case .vintage, .classicYearbook:
+      return YearbookGalleryCardStyle(
+        background: Color(red: 0.968, green: 0.944, blue: 0.878),
+        photoPlaceholder: Color(red: 0.89, green: 0.86, blue: 0.78),
+        ink: Color(red: 0.15, green: 0.12, blue: 0.09),
+        secondary: Color(red: 0.42, green: 0.35, blue: 0.28),
+        accent: Color(red: 0.55, green: 0.38, blue: 0.22),
+        border: Color.black.opacity(0.13),
+        photoBorder: Color.black.opacity(0.16),
+        cardRadius: 6,
+        photoRadius: 3,
+        borderWidth: 0.8,
+        photoBorderWidth: 0.8,
+        shadowOpacity: 0.11,
+        imageShade: 0.24,
+        nameDesign: .serif,
+        bodyDesign: .serif,
+        cornerMarkVisible: false
+      )
+    }
+  }
+}
+
+private extension String {
+  var emptyToNil: String? {
+    isEmpty ? nil : self
   }
 }
 

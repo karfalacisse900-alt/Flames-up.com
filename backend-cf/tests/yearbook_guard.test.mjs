@@ -130,7 +130,7 @@ test('native Yearbook is a real tab with editor, privacy controls, and non-swipe
   assert.doesNotMatch(screen, /swipeToReject|swipeToMatch/i);
 });
 
-test('Yearbook browse spreads are compact, deduplicated, and use privacy-filtered prompt previews', async () => {
+test('Yearbook discovery is a two-column people gallery with compact filters and privacy-filtered prompt previews', async () => {
   const worker = await read('backend-cf/src/index.ts');
   const screen = await read('ios_native/MIRA/Sources/MIRANative/Screens/YearbookNativeView.swift');
   const helperStart = worker.indexOf('function yearbookDiscoverCardPayload');
@@ -139,11 +139,17 @@ test('Yearbook browse spreads are compact, deduplicated, and use privacy-filtere
 
   assert.match(screen, /deduplicatedProfiles/);
   assert.match(screen, /Set<String>\(\)/);
-  assert.match(screen, /profilesPerLeaf: Int \{\s*2\s*\}/);
-  assert.match(screen, /profilesPerSpread: Int \{ profilesPerLeaf \* 2 \}/);
-  assert.match(screen, /let columnCount = 1/);
-  assert.match(screen, /LazyVGrid\(columns: columns/);
-  assert.match(screen, /prefix\(profilesPerLeaf\)/);
+  assert.match(screen, /Text\("Captro Yearbook"\)/);
+  assert.match(screen, /ForEach\(YearbookBrowseTab\.allCases\)/);
+  assert.match(screen, /case all[\s\S]*case friends[\s\S]*case dating[\s\S]*case nearby[\s\S]*case new/);
+  assert.match(screen, /LazyVGrid\(columns: yearbookGalleryColumns\(viewport: viewport\), spacing: 18\)/);
+  assert.match(screen, /YearbookPersonGalleryCard/);
+  assert.match(screen, /MIRACachedImage\(\s*url: profile\.profilePhoto/);
+  assert.match(screen, /\.aspectRatio\(0\.76, contentMode: \.fit\)/);
+  assert.match(screen, /profile\.prompts/);
+  assert.match(screen, /navigationTransition\(\.zoom\(sourceID: profile\.id, in: yearbookCardTransition\)\)/);
+  assert.doesNotMatch(screen, /YearbookOpenSpread\([\s\S]{0,900}onSelectTab/);
+  assert.doesNotMatch(screen, /MIRAStoriesRailNativeView/);
   assert.match(helper, /'yearbook_prompt_answers'/);
   assert.match(helper, /const promptsByUser = new Map<string, any\[\]>/);
   assert.match(helper, /copyIfVisible\('prompts'/);

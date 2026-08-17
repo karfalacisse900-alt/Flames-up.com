@@ -229,14 +229,21 @@ test('Wall voice playback preserves position across app lifecycle and stops when
 test('Wall gallery taps, exact-canvas lift, flipping, and signatures remain explicit and reachable', async () => {
   const wallView = await read('ios_native/MIRA/Sources/MIRANative/Screens/WallOfNotesNativeView.swift');
   const renderer = await read('ios_native/MIRA/Sources/MIRANative/Components/MIRAWallNoteRenderer.swift');
+  const presentation = await read('ios_native/MIRA/Sources/MIRANative/Models/MIRAWallNotePresentation.swift');
+  const spatialIndex = await read('ios_native/MIRA/Sources/MIRANative/Services/MIRAWallSpatialIndex.swift');
   const signatureCanvas = await read('ios_native/MIRA/Sources/MIRANative/Components/MIRAWallSignatureCanvas.swift');
 
-  assert.match(wallView, /private func editorialRows\(for notes: \[MIRAWallNote\]\)/);
-  assert.match(wallView, /note\.resolvedCanvas\?\.aspectRatio/);
-  assert.match(wallView, /ScrollView \{/);
-  assert.match(wallView, /onTapGesture\s*\{\s*openNote\(note\)\s*\}/);
+  assert.match(wallView, /MIRAWallBackground\(camera: camera, viewport: viewport\)/);
+  assert.match(wallView, /wallNotes\(bounds: bounds, viewport: viewport\)/);
+  assert.match(wallView, /shouldShowStoriesRail[\s\S]*!storiesModel\.stories\.isEmpty/);
+  assert.match(wallView, /SpatialTapGesture\(\)\.onEnded[\s\S]*openNote\(note\)/);
   assert.match(wallView, /DragGesture\(minimumDistance: 6, coordinateSpace: \.local\)/);
   assert.doesNotMatch(wallView, /DragGesture\(minimumDistance: 0, coordinateSpace: \.local\)/);
+  assert.doesNotMatch(wallView, /editorialWallGallery|editorialRows|MIRAWallEditorialRow/);
+  assert.match(presentation, /layoutSeed\(for note: MIRAWallNote\)/);
+  assert.match(presentation, /note\.document\?\.canvas \?\? note\.canvas/);
+  assert.match(presentation, /canvasBackedSize\(note: note, canvas: canvas\)/);
+  assert.match(spatialIndex, /layoutSeed\(for: note\)/);
   assert.match(wallView, /Turn note over/);
   assert.match(wallView, /Sign this note/);
   assert.match(wallView, /MIRAWallDetailBackdrop\(seed: note\.id\)/);

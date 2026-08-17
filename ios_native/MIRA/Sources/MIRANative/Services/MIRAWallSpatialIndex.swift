@@ -227,7 +227,7 @@ public enum MIRAWallReadableLayout {
     for note in ordered {
       guard result[note.id] == nil else { continue }
       let desired = MIRAWallNotePresentationResolver.wallFrame(for: note)
-      let phase = CGFloat(MIRAWallNotePresentationResolver.stableHash(note.id) % 360)
+      let phase = CGFloat(MIRAWallNotePresentationResolver.stableHash(MIRAWallNotePresentationResolver.layoutSeed(for: note)) % 360)
         * .pi / 180
       var chosen = desired
       var best = desired

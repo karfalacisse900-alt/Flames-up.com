@@ -113,7 +113,8 @@ public enum MIRAWallNotePresentationResolver {
   }
 
   public static func resolve(_ note: MIRAWallNote, hasLocalMedia: Bool = false) -> MIRAWallNotePresentation {
-    let hash = stableHash(note.id)
+    let hash = stableHash(layoutSeed(for: note))
+    let explicitCanvas = note.document?.canvas ?? note.canvas
     let hasMedia = hasLocalMedia || cleanMediaURL(note.mediaThumbnailUrl ?? note.mediaUrl) != nil
     let style = resolvedStyle(token: note.styleToken, hash: hash, hasMedia: hasMedia)
     let typography = typography(for: style, hash: hash, category: note.category)
@@ -122,9 +123,11 @@ public enum MIRAWallNotePresentationResolver {
     let warp = warp(for: style, hash: hash)
     let visualScale = visualScale(for: style, hash: hash, hasMedia: hasMedia)
     let baseSize = resolvedSize(note: note, style: style)
+    let maxWidth: CGFloat = explicitCanvas == nil ? 470 : 520
+    let maxHeight: CGFloat = explicitCanvas == nil ? 540 : 680
     let size = CGSize(
-      width: min(470, baseSize.width * visualScale.factor),
-      height: min(540, baseSize.height * visualScale.factor)
+      width: min(maxWidth, baseSize.width * visualScale.factor),
+      height: min(maxHeight, baseSize.height * visualScale.factor)
     )
     let rotationStep = Double(Int(hash % 23) - 11) / 10
     let microRotation = style == .receipt ? rotationStep * 0.35 : rotationStep
@@ -171,6 +174,16 @@ public enum MIRAWallNotePresentationResolver {
     value.utf8.reduce(14_695_981_039_346_656_037) { partial, byte in
       (partial ^ UInt64(byte)) &* 1_099_511_628_211
     }
+  }
+
+  public static func layoutSeed(for note: MIRAWallNote) -> String {
+    var seed = note.id
+    if let canvas = note.document?.canvas ?? note.canvas {
+      seed += ":canvas-v\(canvas.version)"
+    } else if let updatedAt = note.document?.updatedAt ?? note.updatedAt {
+      seed += ":updated-\(updatedAt)"
+    }
+    return seed
   }
 
   private static func resolvedStyle(token: String, hash: UInt64, hasMedia: Bool) -> MIRAWallNoteVisualStyle {
@@ -301,6 +314,9 @@ public enum MIRAWallNotePresentationResolver {
   }
 
   private static func resolvedSize(note: MIRAWallNote, style: MIRAWallNoteVisualStyle) -> CGSize {
+    if let canvas = note.document?.canvas ?? note.canvas {
+      return canvasBackedSize(note: note, canvas: canvas)
+    }
     if note.styleToken == MIRAWallNoteVisualStyle.polaroid.rawValue, style != .polaroid {
       return recommendedSize(style: style, textLength: note.body.count)
     }
@@ -314,6 +330,35 @@ public enum MIRAWallNotePresentationResolver {
       )
     }
     return recommendedSize(style: style, textLength: note.body.count)
+  }
+
+  private static func canvasBackedSize(note: MIRAWallNote, canvas: MIRANoteCanvas) -> CGSize {
+    let aspect = CGFloat(max(0.32, min(1.9, canvas.aspectRatio)))
+    let storedWidth = CGFloat(note.width)
+    let preferredWidth: CGFloat
+    if storedWidth.isFinite, storedWidth >= 96 {
+      preferredWidth = storedWidth
+    } else if aspect < 0.70 {
+      preferredWidth = 204
+    } else if aspect > 1.25 {
+      preferredWidth = 318
+    } else {
+      preferredWidth = 244
+    }
+
+    let widthCap: CGFloat = aspect > 1.25 ? 390 : (aspect < 0.70 ? 276 : 330)
+    var width = min(widthCap, max(176, preferredWidth))
+    var height = width / aspect
+
+    if height > 620 {
+      height = 620
+      width = height * aspect
+    } else if height < 168 {
+      height = 168
+      width = height * aspect
+    }
+
+    return CGSize(width: width, height: height)
   }
 
   private static func recommendedSize(style: MIRAWallNoteVisualStyle, textLength: Int) -> CGSize {
