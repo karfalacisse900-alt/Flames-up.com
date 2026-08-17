@@ -618,7 +618,7 @@ public struct MIRACaptroStudioView: View {
         .font(.system(size: 10, weight: .bold))
     }
     .foregroundStyle(MIRATheme.Color.textPrimary)
-    .frame(width: 64, minHeight: 48)
+    .frame(width: 64, height: 48)
     .background(MIRATheme.Color.surface, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
     .overlay {
       RoundedRectangle(cornerRadius: 7, style: .continuous)
@@ -651,7 +651,7 @@ public struct MIRACaptroStudioView: View {
     let objects: [MIRACaptroStudioObject] = objectTrayMode == .paper
       ? [.tornPaper, .texturedPaper, .tape, .coolTape]
       : [.pen, .paperclip, .pushPin, .ticket, .pressedFlower, .handDrawnArrow, .organicShape, .polaroidFrame, .passportStamp, .coffeeStain, .cassette, .television]
-    MIRAActionModalCard {
+    return MIRAActionModalCard {
       VStack(alignment: .leading, spacing: 14) {
         HStack {
           VStack(alignment: .leading, spacing: 3) {
