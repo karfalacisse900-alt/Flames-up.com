@@ -42,10 +42,6 @@ database_id = "ce387f44-33eb-42ac-85cb-46b6009b49f5"
 binding = "KV"
 id = "cecde60b06c24da8abfa01a617aac9eb"
 
-[[r2_buckets]]
-binding = "MEDIA_BACKUP"
-bucket_name = "flames-up-media-backup"
-
 [[queues.producers]]
 binding = "MEDIA_MODERATION_QUEUE"
 queue = "captro-media-moderation"
@@ -57,6 +53,9 @@ max_batch_timeout = 30
 
 [env.production]
 name = "flames-up-api"
+# MEDIA_BACKUP is optional at runtime. Keep it unbound in production until R2
+# is enabled for this account so it cannot block Cloudflare Images API deploys.
+r2_buckets = []
 
 [env.production.vars]
 ENVIRONMENT = "production"
@@ -95,10 +94,6 @@ database_id = "ce387f44-33eb-42ac-85cb-46b6009b49f5"
 [[env.production.kv_namespaces]]
 binding = "KV"
 id = "cecde60b06c24da8abfa01a617aac9eb"
-
-[[env.production.r2_buckets]]
-binding = "MEDIA_BACKUP"
-bucket_name = "flames-up-media-backup"
 
 [[env.production.queues.producers]]
 binding = "MEDIA_MODERATION_QUEUE"
