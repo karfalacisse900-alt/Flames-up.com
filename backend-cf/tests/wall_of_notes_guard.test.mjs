@@ -147,7 +147,7 @@ test('Captro Studio publishes its rendered image through the canonical Wall crea
   assert.match(studio, /_ = try await onPublish\(request\)/);
   assert.match(wallView, /MIRANoteCreationEntryView\(camera: camera, api: api\)/);
   assert.match(wallView, /Upload design/);
-  assert.match(wallView, /template: \.importedArtwork/);
+  assert.match(wallView, /MIRANoteDocument\.importedArtwork/);
   assert.match(wallView, /document: document/);
   assert.match(wallView, /canvasDetailBlocks\(blocks\)/);
   assert.match(wallView, /MIRACaptroStudioView\(camera: camera, api: api, initialTemplate: studioInitialTemplate\)[\s\S]*?let note = try await model\.create\(body\)/);

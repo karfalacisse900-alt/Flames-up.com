@@ -523,13 +523,11 @@ public enum MIRACaptroStudioTemplate: String, Codable, CaseIterable, Identifiabl
     case .blankPaper: return .minimal
     case .filmStrip: return .darkAlbum
     case .recipeBook: return .recipeBook
-    case .bookReview: return .bookReview
-    case .eventPoster: return .eventPoster
-    case .partyInvitation: return .partyInvitation
-    case .dailyNote: return .dailyNote
-    case .quotePoster: return .minimalMotivation
-    case .minimalPhoto: return .minimalPhoto
-    case .importedDesign: return .importedArtwork
+    case .bookReview: return .scrapbook
+    case .eventPoster, .partyInvitation, .quotePoster: return .minimal
+    case .dailyNote: return .journal
+    case .minimalPhoto: return .minimal
+    case .importedDesign: return .minimal
     }
   }
 

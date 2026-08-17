@@ -1314,7 +1314,7 @@ private struct MIRANoteCreationEntryView: View {
       let designHeight = min(3_120.0, max(607.0, designWidth / Double(aspect)))
       let format = MIRANoteCanvasFormat.closest(width: designWidth, height: designHeight)
       let canvas = MIRANoteCanvas(
-        template: .importedArtwork,
+        template: .minimal,
         format: format,
         designWidth: designWidth,
         designHeight: designHeight,
