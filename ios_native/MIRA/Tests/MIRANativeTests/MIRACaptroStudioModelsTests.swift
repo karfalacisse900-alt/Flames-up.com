@@ -101,10 +101,19 @@ final class MIRACaptroStudioModelsTests: XCTestCase {
       (.driedSprig, .driedSprig),
       (.pinkBabysBreath, .pinkBabysBreath),
       (.whiteGerbera, .whiteGerbera),
+      (.magentaDaisy, .magentaDaisy),
+      (.tangerineDaisy, .tangerineDaisy),
+      (.sunshineDaisy, .sunshineDaisy),
+      (.limeDaisy, .limeDaisy),
+      (.cyanDaisy, .cyanDaisy),
+      (.violetDaisy, .violetDaisy),
+      (.impastoBlossom, .impastoBlossom),
+      (.peachRibbonRose, .peachRibbonRose),
+      (.berryRibbonRose, .berryRibbonRose),
     ]
 
-    XCTAssertEqual(Set(pairs.map { $0.0.rawValue }).count, 18)
-    XCTAssertEqual(Set(pairs.map { $0.1.rawValue }).count, 18)
+    XCTAssertEqual(Set(pairs.map { $0.0.rawValue }).count, pairs.count)
+    XCTAssertEqual(Set(pairs.map { $0.1.rawValue }).count, pairs.count)
     for (object, asset) in pairs {
       XCTAssertEqual(CaptroNoteAsset.resolve(asset.rawValue), asset)
       let encoded = try JSONEncoder().encode(object)

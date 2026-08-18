@@ -10,6 +10,16 @@ private enum MIRAStudioObjectTrayMode {
   case elements
 }
 
+private enum MIRAStudioElementCategory: String, CaseIterable, Identifiable {
+  case flowers = "Flowers"
+  case aesthetic = "Style"
+  case quotes = "Quotes"
+  case funny = "Funny"
+  case patterns = "Pattern"
+
+  var id: String { rawValue }
+}
+
 public struct MIRACaptroStudioView: View {
   private let camera: MIRAWallCamera
   private let api: MIRAAPIClient
@@ -27,6 +37,7 @@ public struct MIRACaptroStudioView: View {
   @State private var selectedPhotoItems: [PhotosPickerItem] = []
   @State private var showsObjectTray = false
   @State private var objectTrayMode: MIRAStudioObjectTrayMode = .elements
+  @State private var elementCategory: MIRAStudioElementCategory = .flowers
   @State private var showsTemplateTray = false
   @State private var showsBackgroundTray = false
   @State private var showsLayersTray = false
@@ -648,68 +659,109 @@ public struct MIRACaptroStudioView: View {
   }
 
   private func objectTray(close: @escaping () -> Void) -> some View {
-    let objects: [MIRACaptroStudioObject] = objectTrayMode == .paper
-      ? [.tornPaper, .texturedPaper, .tape, .coolTape]
-      : [
-        .vintageRose, .carnationBouquet, .pinkRose, .purpleBud,
-        .tapedYellowSprig, .tapedEucalyptus, .tapedBrownBloom,
-        .tapedBillyButton, .tapedDryBranch, .ivoryHydrangea,
-        .ivoryDaisy, .ivoryPompom, .ivoryAirySprig, .driedSprig,
-        .pinkBabysBreath, .whiteGerbera, .pressedFlower,
-        .pen, .paperclip, .pushPin, .ticket, .handDrawnArrow,
-        .organicShape, .polaroidFrame, .passportStamp,
-        .coffeeStain, .cassette, .television,
+    let objects: [MIRACaptroStudioObject]
+    if objectTrayMode == .paper {
+      objects = [
+        .decklePaper, .gridPaper, .newsprintPaper, .blushPaper,
+        .midnightPaper, .textilePaper, .tornPaper, .texturedPaper,
+        .tape, .coolTape,
       ]
+    } else {
+      switch elementCategory {
+      case .flowers:
+        objects = [
+          .magentaDaisy, .tangerineDaisy, .sunshineDaisy,
+          .limeDaisy, .cyanDaisy, .violetDaisy, .impastoBlossom,
+          .peachRibbonRose, .berryRibbonRose, .vintageRose,
+          .pinkRose, .purpleBud, .whiteGerbera, .tapedYellowSprig,
+          .tapedEucalyptus, .tapedBrownBloom, .tapedBillyButton,
+          .tapedDryBranch, .ivoryHydrangea, .ivoryDaisy,
+          .ivoryPompom, .ivoryAirySprig, .driedSprig, .pressedFlower,
+        ]
+      case .aesthetic:
+        objects = [
+          .sparkleCluster, .starburstFrame, .postageLabel,
+          .wavyUnderline, .archiveStamp, .pen, .paperclip, .pushPin,
+          .ticket, .polaroidFrame, .passportStamp, .coffeeStain,
+          .cassette, .television,
+        ]
+      case .quotes:
+        objects = [
+          .quoteMarks, .keepGoingBadge, .makeItCountBadge,
+          .mainCharacterBadge,
+        ]
+      case .funny:
+        objects = [
+          .plotTwistSticker, .noContextSticker, .hahaSticker,
+          .moodSticker, .beSeriousSticker,
+        ]
+      case .patterns:
+        objects = [
+          .wovenSun, .wovenBird, .diamondTotem, .textileRibbon,
+          .organicShape, .handDrawnArrow,
+        ]
+      }
+    }
     return MIRAActionModalCard {
       VStack(alignment: .leading, spacing: 14) {
         HStack {
-          VStack(alignment: .leading, spacing: 3) {
-            Text(objectTrayMode == .paper ? "Paper & tape" : "Objects & marks")
-              .font(.system(size: 20, weight: .bold, design: .serif))
-            Text("Each object becomes a movable layer.")
-              .font(.system(size: 12, weight: .medium))
-              .foregroundStyle(MIRATheme.Color.textSecondary)
-          }
+          Text(objectTrayMode == .paper ? "Paper library" : "Studio elements")
+            .font(.system(size: 20, weight: .bold, design: .serif))
           Spacer()
           Button("Done", action: close)
             .font(.system(size: 13, weight: .bold))
         }
 
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 86), spacing: 8)], spacing: 8) {
-          ForEach(objects) { object in
-            Button {
-              addObjectLayer(object)
-              close()
-            } label: {
-              VStack(spacing: 7) {
-                MIRAStudioObjectVisual(object: object, colorToken: defaultColor(for: object))
-                  .frame(width: 48, height: 42)
-                Text(object.title)
-                  .font(.system(size: 10, weight: .bold))
-                  .lineLimit(1)
-              }
-              .foregroundStyle(MIRATheme.Color.textPrimary)
-              .frame(maxWidth: .infinity, minHeight: 78)
-              .background(MIRATheme.Color.surfaceSoft, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        if objectTrayMode == .elements {
+          Picker("Element category", selection: $elementCategory) {
+            ForEach(MIRAStudioElementCategory.allCases) { category in
+              Text(category.rawValue).tag(category)
             }
-            .buttonStyle(.miraPress)
           }
+          .pickerStyle(.segmented)
+          .controlSize(.small)
+        }
 
-          if objectTrayMode == .elements { Button {
-            addQRCode()
-            close()
-          } label: {
-            VStack(spacing: 7) {
-              Image(systemName: "qrcode")
-                .font(.system(size: 30, weight: .medium))
-              Text("QR card")
-                .font(.system(size: 10, weight: .bold))
+        ScrollView(showsIndicators: false) {
+          LazyVGrid(columns: [GridItem(.adaptive(minimum: 86), spacing: 8)], spacing: 8) {
+            ForEach(objects) { object in
+              Button {
+                addObjectLayer(object)
+                close()
+              } label: {
+                VStack(spacing: 7) {
+                  MIRAStudioObjectVisual(object: object, colorToken: defaultColor(for: object))
+                    .frame(width: 48, height: 42)
+                  Text(object.title)
+                    .font(.system(size: 10, weight: .bold))
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
+                    .minimumScaleFactor(0.78)
+                }
+                .foregroundStyle(MIRATheme.Color.textPrimary)
+                .frame(maxWidth: .infinity, minHeight: 82)
+                .background(MIRATheme.Color.surfaceSoft, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+              }
+              .buttonStyle(.miraPress)
             }
-            .foregroundStyle(MIRATheme.Color.textPrimary)
-            .frame(maxWidth: .infinity, minHeight: 78)
-            .background(MIRATheme.Color.surfaceSoft, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-          }
-          .buttonStyle(.miraPress)
+
+            if objectTrayMode == .elements && elementCategory == .aesthetic {
+              Button {
+                addQRCode()
+                close()
+              } label: {
+                VStack(spacing: 7) {
+                  Image(systemName: "qrcode")
+                    .font(.system(size: 30, weight: .medium))
+                  Text("QR card")
+                    .font(.system(size: 10, weight: .bold))
+                }
+                .foregroundStyle(MIRATheme.Color.textPrimary)
+                .frame(maxWidth: .infinity, minHeight: 82)
+                .background(MIRATheme.Color.surfaceSoft, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+              }
+              .buttonStyle(.miraPress)
+            }
           }
         }
       }
@@ -781,6 +833,10 @@ public struct MIRACaptroStudioView: View {
       MIRAStudioBackgroundChoice(token: "schoolPaper", title: "Notebook", foreground: .black),
       MIRAStudioBackgroundChoice(token: "kraftPaper", title: "Kraft", foreground: .black),
       MIRAStudioBackgroundChoice(token: "bluePaper", title: "Watercolor", foreground: .white),
+      MIRAStudioBackgroundChoice(token: "sagePaper", title: "Sage linen", foreground: .black),
+      MIRAStudioBackgroundChoice(token: "lilacPaper", title: "Lilac cotton", foreground: .black),
+      MIRAStudioBackgroundChoice(token: "travelPaper", title: "Archive", foreground: .black),
+      MIRAStudioBackgroundChoice(token: "recipePaper", title: "Recipe", foreground: .black),
       MIRAStudioBackgroundChoice(token: "burgundy", title: "Burgundy", foreground: .white),
       MIRAStudioBackgroundChoice(token: "charcoalPaper", title: "Charcoal", foreground: .white),
       MIRAStudioBackgroundChoice(token: "warmPaper", title: "Warm white", foreground: .black),
@@ -1047,6 +1103,9 @@ public struct MIRACaptroStudioView: View {
       objectSize = CGSize(width: 0.58, height: 0.24)
     case .texturedPaper:
       objectSize = CGSize(width: 0.60, height: 0.34)
+    case .decklePaper, .gridPaper, .newsprintPaper, .blushPaper,
+         .midnightPaper, .textilePaper:
+      objectSize = CGSize(width: 0.62, height: 0.36)
     case .handDrawnArrow:
       objectSize = CGSize(width: 0.34, height: 0.17)
     case .organicShape:
@@ -1063,6 +1122,11 @@ public struct MIRACaptroStudioView: View {
     case .tapedYellowSprig, .tapedEucalyptus, .tapedBrownBloom,
          .tapedBillyButton, .tapedDryBranch:
       objectSize = CGSize(width: 0.28, height: 0.48)
+    case .magentaDaisy, .tangerineDaisy, .sunshineDaisy,
+         .limeDaisy, .cyanDaisy, .violetDaisy:
+      objectSize = CGSize(width: 0.27, height: 0.50)
+    case .impastoBlossom, .peachRibbonRose, .berryRibbonRose:
+      objectSize = CGSize(width: 0.35, height: 0.31)
     case .ivoryHydrangea, .ivoryDaisy, .ivoryPompom:
       objectSize = CGSize(width: 0.36, height: 0.36)
     case .ivoryAirySprig:
@@ -1073,6 +1137,23 @@ public struct MIRACaptroStudioView: View {
       objectSize = CGSize(width: 0.48, height: 0.58)
     case .pinkBabysBreath:
       objectSize = CGSize(width: 0.44, height: 0.52)
+    case .sparkleCluster:
+      objectSize = CGSize(width: 0.24, height: 0.20)
+    case .starburstFrame, .moodSticker, .plotTwistSticker, .wovenSun:
+      objectSize = CGSize(width: 0.28, height: 0.28)
+    case .postageLabel, .hahaSticker, .wovenBird:
+      objectSize = CGSize(width: 0.36, height: 0.23)
+    case .wavyUnderline:
+      objectSize = CGSize(width: 0.44, height: 0.11)
+    case .archiveStamp, .quoteMarks, .keepGoingBadge,
+         .makeItCountBadge, .mainCharacterBadge, .noContextSticker:
+      objectSize = CGSize(width: 0.40, height: 0.16)
+    case .beSeriousSticker:
+      objectSize = CGSize(width: 0.39, height: 0.21)
+    case .diamondTotem:
+      objectSize = CGSize(width: 0.22, height: 0.43)
+    case .textileRibbon:
+      objectSize = CGSize(width: 0.46, height: 0.16)
     default:
       objectSize = CGSize(width: 0.24, height: 0.18)
     }
@@ -1176,6 +1257,12 @@ public struct MIRACaptroStudioView: View {
     switch object {
     case .tornPaper: return "paper"
     case .texturedPaper: return "schoolPaper"
+    case .decklePaper: return "paper"
+    case .gridPaper: return "schoolPaper"
+    case .newsprintPaper: return "butter"
+    case .blushPaper: return "rose"
+    case .midnightPaper: return "charcoal"
+    case .textilePaper: return "butter"
     case .handDrawnArrow: return "ink"
     case .organicShape: return "rose"
     case .tape: return "tape"
@@ -1193,8 +1280,22 @@ public struct MIRACaptroStudioView: View {
          .tapedYellowSprig, .tapedEucalyptus, .tapedBrownBloom,
          .tapedBillyButton, .tapedDryBranch, .ivoryHydrangea,
          .ivoryDaisy, .ivoryPompom, .ivoryAirySprig, .driedSprig,
-         .pinkBabysBreath, .whiteGerbera:
+         .pinkBabysBreath, .whiteGerbera, .magentaDaisy,
+         .tangerineDaisy, .sunshineDaisy, .limeDaisy, .cyanDaisy,
+         .violetDaisy, .impastoBlossom, .peachRibbonRose,
+         .berryRibbonRose:
       return "rose"
+    case .sparkleCluster, .postageLabel, .archiveStamp,
+         .quoteMarks, .keepGoingBadge, .makeItCountBadge,
+         .mainCharacterBadge:
+      return "forest"
+    case .starburstFrame, .wavyUnderline:
+      return "rose"
+    case .plotTwistSticker, .noContextSticker, .hahaSticker,
+         .moodSticker, .beSeriousSticker:
+      return "rust"
+    case .wovenSun, .wovenBird, .diamondTotem, .textileRibbon:
+      return "forest"
     case .coffeeStain: return "coffee"
     }
   }
@@ -1567,6 +1668,11 @@ public struct MIRACaptroStudioView: View {
           ? CaptroNoteAsset.linedSheet.rawValue
           : (layer.colorToken == "kraftPaper" ? CaptroNoteAsset.paperKraft.rawValue : CaptroNoteAsset.paperCotton.rawValue)
         style.shadowLevel = 1
+      case .decklePaper, .gridPaper, .newsprintPaper, .blushPaper,
+           .midnightPaper, .textilePaper:
+        kind = .texturedPaper
+        style.material = layer.object?.rawValue
+        style.shadowLevel = 1
       case .handDrawnArrow:
         kind = .drawing
         style.drawingName = "hand_drawn_arrow"
@@ -1592,7 +1698,10 @@ public struct MIRACaptroStudioView: View {
            .tapedYellowSprig, .tapedEucalyptus, .tapedBrownBloom,
            .tapedBillyButton, .tapedDryBranch, .ivoryHydrangea,
            .ivoryDaisy, .ivoryPompom, .ivoryAirySprig, .driedSprig,
-           .pinkBabysBreath, .whiteGerbera:
+           .pinkBabysBreath, .whiteGerbera, .magentaDaisy,
+           .tangerineDaisy, .sunshineDaisy, .limeDaisy, .cyanDaisy,
+           .violetDaisy, .impastoBlossom, .peachRibbonRose,
+           .berryRibbonRose:
         kind = .flower
         style.material = layer.object?.captroFlowerAsset?.rawValue
       case .paperclip:
@@ -2052,6 +2161,14 @@ private struct MIRAStudioObjectVisual: View {
         }
         .shadow(color: .black.opacity(0.12), radius: max(2, size.width * 0.022), y: max(2, size.height * 0.03))
 
+      case .decklePaper, .gridPaper, .newsprintPaper, .blushPaper,
+           .midnightPaper, .textilePaper:
+        CaptroStudioProceduralObjectView(
+          object: object,
+          color: MIRAStudioPalette.color(colorToken)
+        )
+        .shadow(color: .black.opacity(0.14), radius: max(2, size.width * 0.025), y: max(2, size.height * 0.035))
+
       case .handDrawnArrow:
         Canvas { context, canvasSize in
           var stroke = Path()
@@ -2165,11 +2282,25 @@ private struct MIRAStudioObjectVisual: View {
            .tapedYellowSprig, .tapedEucalyptus, .tapedBrownBloom,
            .tapedBillyButton, .tapedDryBranch, .ivoryHydrangea,
            .ivoryDaisy, .ivoryPompom, .ivoryAirySprig, .driedSprig,
-           .pinkBabysBreath, .whiteGerbera:
+           .pinkBabysBreath, .whiteGerbera, .magentaDaisy,
+           .tangerineDaisy, .sunshineDaisy, .limeDaisy, .cyanDaisy,
+           .violetDaisy, .impastoBlossom, .peachRibbonRose,
+           .berryRibbonRose:
         if let asset = object.captroFlowerAsset {
           CaptroNoteAssetView(asset: asset)
             .shadow(color: .black.opacity(0.13), radius: 2, y: 2)
         }
+
+      case .sparkleCluster, .starburstFrame, .postageLabel,
+           .wavyUnderline, .archiveStamp, .quoteMarks,
+           .keepGoingBadge, .makeItCountBadge, .mainCharacterBadge,
+           .plotTwistSticker, .noContextSticker, .hahaSticker,
+           .moodSticker, .beSeriousSticker, .wovenSun, .wovenBird,
+           .diamondTotem, .textileRibbon:
+        CaptroStudioProceduralObjectView(
+          object: object,
+          color: MIRAStudioPalette.color(colorToken)
+        )
 
       case .coffeeStain:
         ZStack {
@@ -2205,6 +2336,15 @@ private extension MIRACaptroStudioObject {
     case .driedSprig: return .driedSprig
     case .pinkBabysBreath: return .pinkBabysBreath
     case .whiteGerbera: return .whiteGerbera
+    case .magentaDaisy: return .magentaDaisy
+    case .tangerineDaisy: return .tangerineDaisy
+    case .sunshineDaisy: return .sunshineDaisy
+    case .limeDaisy: return .limeDaisy
+    case .cyanDaisy: return .cyanDaisy
+    case .violetDaisy: return .violetDaisy
+    case .impastoBlossom: return .impastoBlossom
+    case .peachRibbonRose: return .peachRibbonRose
+    case .berryRibbonRose: return .berryRibbonRose
     default: return nil
     }
   }
@@ -2318,7 +2458,7 @@ private enum MIRAStudioDateFormatter {
 private enum MIRAStudioPalette {
   static func color(_ token: String) -> Color {
     switch token {
-    case "warmPaper", "sunlitPaper", "cottonPaper", "paper", "photoPaper": return Color(red: 0.965, green: 0.944, blue: 0.895)
+    case "warmPaper", "sunlitPaper", "cottonPaper", "paper", "photoPaper", "recipePaper": return Color(red: 0.965, green: 0.944, blue: 0.895)
     case "sagePaper": return Color(red: 0.835, green: 0.846, blue: 0.775)
     case "lilacPaper": return Color(red: 0.875, green: 0.845, blue: 0.895)
     case "schoolPaper": return Color(red: 0.930, green: 0.918, blue: 0.875)
@@ -2331,7 +2471,7 @@ private enum MIRAStudioPalette {
     case "forest": return Color(red: 0.115, green: 0.235, blue: 0.135)
     case "tape": return Color(red: 0.930, green: 0.840, blue: 0.565)
     case "metal": return Color(red: 0.650, green: 0.665, blue: 0.670)
-    case "red": return Color(red: 0.790, green: 0.190, blue: 0.125)
+    case "red", "rust": return Color(red: 0.790, green: 0.190, blue: 0.125)
     case "butter": return Color(red: 0.965, green: 0.835, blue: 0.390)
     case "lavender": return Color(red: 0.600, green: 0.565, blue: 0.740)
     case "stamp": return Color(red: 0.365, green: 0.145, blue: 0.125)

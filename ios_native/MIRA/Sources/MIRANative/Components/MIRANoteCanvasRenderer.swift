@@ -322,7 +322,15 @@ struct MIRANoteCanvasRenderer: View {
   @ViewBuilder
   private func paperElement(_ element: MIRANoteCanvasElement, torn: Bool) -> some View {
     let shape = MIRANoteTornPaperShape(seed: element.id, torn: torn)
-    if let asset = CaptroNoteAsset.resolve(element.style.material) {
+    if let material = element.style.material,
+       let object = MIRACaptroStudioObject(rawValue: material),
+       object.isCaptroProceduralPaper {
+      CaptroStudioProceduralObjectView(
+        object: object,
+        color: canvasColor(element.style.colorHex, fallback: Color(red: 0.94, green: 0.91, blue: 0.82))
+      )
+      .captroMaterialShadow(elevation(for: element), seed: element.id)
+    } else if let asset = CaptroNoteAsset.resolve(element.style.material) {
       CaptroNoteAssetView(asset: asset, contentMode: .fill)
         .clipShape(shape)
         .captroMaterialShadow(elevation(for: element), seed: element.id)
@@ -348,7 +356,11 @@ struct MIRANoteCanvasRenderer: View {
       element.style.colorHex,
       fallback: Color(red: 0.78, green: 0.25, blue: 0.32)
     )
-    if let asset = CaptroNoteAsset.resolve(element.style.stickerName) {
+    if let stickerName = element.style.stickerName,
+       let object = MIRACaptroStudioObject(rawValue: stickerName),
+       object.isCaptroProceduralDecor {
+      CaptroStudioProceduralObjectView(object: object, color: color)
+    } else if let asset = CaptroNoteAsset.resolve(element.style.stickerName) {
       CaptroNoteAssetView(asset: asset)
     } else {
       switch element.style.stickerName?.lowercased() {

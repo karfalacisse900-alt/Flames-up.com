@@ -210,6 +210,15 @@ test('Captro Studio bundles transparent floral decor through the published canva
     ['driedSprig', 'captro_decor_dried_sprig', 'captro-decor-dried-sprig.png'],
     ['pinkBabysBreath', 'captro_decor_pink_babys_breath', 'captro-decor-pink-babys-breath.png'],
     ['whiteGerbera', 'captro_decor_white_gerbera', 'captro-decor-white-gerbera.png'],
+    ['magentaDaisy', 'captro_decor_magenta_daisy', 'captro-decor-magenta-daisy.png'],
+    ['tangerineDaisy', 'captro_decor_tangerine_daisy', 'captro-decor-tangerine-daisy.png'],
+    ['sunshineDaisy', 'captro_decor_sunshine_daisy', 'captro-decor-sunshine-daisy.png'],
+    ['limeDaisy', 'captro_decor_lime_daisy', 'captro-decor-lime-daisy.png'],
+    ['cyanDaisy', 'captro_decor_cyan_daisy', 'captro-decor-cyan-daisy.png'],
+    ['violetDaisy', 'captro_decor_violet_daisy', 'captro-decor-violet-daisy.png'],
+    ['impastoBlossom', 'captro_decor_impasto_blossom', 'captro-decor-impasto-blossom.png'],
+    ['peachRibbonRose', 'captro_decor_peach_ribbon_rose', 'captro-decor-peach-ribbon-rose.png'],
+    ['berryRibbonRose', 'captro_decor_berry_ribbon_rose', 'captro-decor-berry-ribbon-rose.png'],
   ];
 
   for (const [object, token, filename] of assets) {
@@ -224,16 +233,50 @@ test('Captro Studio bundles transparent floral decor through the published canva
     assert.equal(png[25], 6, `${filename} must use PNG RGBA color type`);
   }
 
-  const tray = studio.match(/let objects: \[MIRACaptroStudioObject\][\s\S]*?: \[([\s\S]*?)\]\n    return MIRAActionModalCard/);
+  const tray = studio.match(/case \.flowers:\s+objects = \[([\s\S]*?)\]\s+case \.aesthetic:/);
   assert.ok(tray, 'Captro Studio object tray must remain discoverable');
   assert.doesNotMatch(tray[1], /\.tapedBotanicals/);
   assert.doesNotMatch(tray[1], /\.pressedScatter/);
-  for (const [object] of assets.slice(6, 15)) {
+  assert.doesNotMatch(tray[1], /\.carnationBouquet/);
+  assert.doesNotMatch(tray[1], /\.pinkBabysBreath/);
+  for (const [object] of assets.slice(18)) {
     assert.match(tray[1], new RegExp(`\\.${object}`));
   }
 
   assert.match(studio, /style\.material = layer\.object\?\.captroFlowerAsset\?\.rawValue/);
   assert.match(assetsSource, /if asset\.isDirectImage/);
+});
+
+test('Captro Studio themed papers and decor survive publishing to the Wall', async () => {
+  const model = await read('ios_native/MIRA/Sources/MIRANative/Models/MIRACaptroStudioModels.swift');
+  const studio = await read('ios_native/MIRA/Sources/MIRANative/Screens/MIRACaptroStudioView.swift');
+  const decor = await read('ios_native/MIRA/Sources/MIRANative/Components/CaptroStudioDecorVisuals.swift');
+  const renderer = await read('ios_native/MIRA/Sources/MIRANative/Components/MIRANoteCanvasRenderer.swift');
+  const papers = ['decklePaper', 'gridPaper', 'newsprintPaper', 'blushPaper', 'midnightPaper', 'textilePaper'];
+  const themedDecor = [
+    'sparkleCluster', 'starburstFrame', 'postageLabel', 'wavyUnderline', 'archiveStamp',
+    'quoteMarks', 'keepGoingBadge', 'makeItCountBadge', 'mainCharacterBadge',
+    'plotTwistSticker', 'noContextSticker', 'hahaSticker', 'moodSticker', 'beSeriousSticker',
+    'wovenSun', 'wovenBird', 'diamondTotem', 'textileRibbon',
+  ];
+
+  assert.match(studio, /enum MIRAStudioElementCategory[\s\S]*?case flowers[\s\S]*?case aesthetic[\s\S]*?case quotes[\s\S]*?case funny[\s\S]*?case patterns/);
+  for (const object of [...papers, ...themedDecor]) {
+    assert.match(model, new RegExp(`case ${object}\\b`));
+    assert.match(studio, new RegExp(`\\.${object}\\b`));
+  }
+  for (const object of papers) {
+    assert.match(decor, new RegExp(`\\.${object}\\b`));
+  }
+  for (const object of themedDecor) {
+    assert.match(decor, new RegExp(`\\.${object}\\b`));
+  }
+
+  assert.match(studio, /style\.material = layer\.object\?\.rawValue/);
+  assert.match(studio, /style\.stickerName = layer\.object\?\.rawValue/);
+  assert.match(renderer, /object\.isCaptroProceduralPaper/);
+  assert.match(renderer, /object\.isCaptroProceduralDecor/);
+  assert.match(renderer, /CaptroStudioProceduralObjectView/);
 });
 
 test('living Wall features are migration-backed and cannot bypass Worker moderation', async () => {

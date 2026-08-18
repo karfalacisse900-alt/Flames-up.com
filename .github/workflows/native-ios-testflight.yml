@@ -276,7 +276,7 @@ jobs:
               --submit_beta_review false \
               --wait_processing_interval 30 \
               --wait_processing_timeout_duration 1800 \
-              --changelog "Polished Yearbook browsing, responsive book spreads, clearer profiles, filters, and smoother page turns." \
+              --changelog "Expanded Captro Studio with individual flower cutouts, original papers, aesthetic, quote, comedy, and pattern decor, plus faithful Wall rendering." \
               2>&1 | tee "$LOG_PATH"
             status=${PIPESTATUS[0]}
             set -e

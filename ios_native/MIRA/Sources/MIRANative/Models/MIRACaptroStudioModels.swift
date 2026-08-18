@@ -61,6 +61,12 @@ public enum MIRACaptroStudioPhotoFrame: String, Codable, CaseIterable, Identifia
 public enum MIRACaptroStudioObject: String, Codable, CaseIterable, Identifiable {
   case tornPaper
   case texturedPaper
+  case decklePaper
+  case gridPaper
+  case newsprintPaper
+  case blushPaper
+  case midnightPaper
+  case textilePaper
   case handDrawnArrow
   case organicShape
   case tape
@@ -92,6 +98,33 @@ public enum MIRACaptroStudioObject: String, Codable, CaseIterable, Identifiable 
   case driedSprig
   case pinkBabysBreath
   case whiteGerbera
+  case magentaDaisy
+  case tangerineDaisy
+  case sunshineDaisy
+  case limeDaisy
+  case cyanDaisy
+  case violetDaisy
+  case impastoBlossom
+  case peachRibbonRose
+  case berryRibbonRose
+  case sparkleCluster
+  case starburstFrame
+  case postageLabel
+  case wavyUnderline
+  case archiveStamp
+  case quoteMarks
+  case keepGoingBadge
+  case makeItCountBadge
+  case mainCharacterBadge
+  case plotTwistSticker
+  case noContextSticker
+  case hahaSticker
+  case moodSticker
+  case beSeriousSticker
+  case wovenSun
+  case wovenBird
+  case diamondTotem
+  case textileRibbon
   case coffeeStain
 
   public var id: String { rawValue }
@@ -100,6 +133,12 @@ public enum MIRACaptroStudioObject: String, Codable, CaseIterable, Identifiable 
     switch self {
     case .tornPaper: return "Torn paper"
     case .texturedPaper: return "Paper scrap"
+    case .decklePaper: return "Deckle paper"
+    case .gridPaper: return "Grid paper"
+    case .newsprintPaper: return "Newsprint"
+    case .blushPaper: return "Blush paper"
+    case .midnightPaper: return "Midnight paper"
+    case .textilePaper: return "Woven paper"
     case .handDrawnArrow: return "Drawing"
     case .organicShape: return "Shape"
     case .tape: return "Tape"
@@ -131,6 +170,33 @@ public enum MIRACaptroStudioObject: String, Codable, CaseIterable, Identifiable 
     case .driedSprig: return "Dried sprig"
     case .pinkBabysBreath: return "Pink bouquet"
     case .whiteGerbera: return "White gerbera"
+    case .magentaDaisy: return "Magenta daisy"
+    case .tangerineDaisy: return "Orange daisy"
+    case .sunshineDaisy: return "Yellow daisy"
+    case .limeDaisy: return "Lime daisy"
+    case .cyanDaisy: return "Blue daisy"
+    case .violetDaisy: return "Violet daisy"
+    case .impastoBlossom: return "Painted blossom"
+    case .peachRibbonRose: return "Peach ribbon rose"
+    case .berryRibbonRose: return "Berry ribbon rose"
+    case .sparkleCluster: return "Sparkles"
+    case .starburstFrame: return "Starburst"
+    case .postageLabel: return "Postage label"
+    case .wavyUnderline: return "Wavy underline"
+    case .archiveStamp: return "Archive stamp"
+    case .quoteMarks: return "Quote marks"
+    case .keepGoingBadge: return "Keep going"
+    case .makeItCountBadge: return "Make it count"
+    case .mainCharacterBadge: return "Main character"
+    case .plotTwistSticker: return "Plot twist"
+    case .noContextSticker: return "No context"
+    case .hahaSticker: return "Ha ha"
+    case .moodSticker: return "Mood"
+    case .beSeriousSticker: return "Be serious"
+    case .wovenSun: return "Woven sun"
+    case .wovenBird: return "Woven bird"
+    case .diamondTotem: return "Diamond motif"
+    case .textileRibbon: return "Textile ribbon"
     case .coffeeStain: return "Coffee stain"
     }
   }
@@ -139,6 +205,9 @@ public enum MIRACaptroStudioObject: String, Codable, CaseIterable, Identifiable 
     switch self {
     case .tornPaper: return "doc.text.image"
     case .texturedPaper: return "rectangle.on.rectangle"
+    case .decklePaper, .gridPaper, .newsprintPaper, .blushPaper,
+         .midnightPaper, .textilePaper:
+      return "doc.text.image"
     case .handDrawnArrow: return "scribble.variable"
     case .organicShape: return "seal"
     case .tape: return "rectangle.fill"
@@ -156,8 +225,22 @@ public enum MIRACaptroStudioObject: String, Codable, CaseIterable, Identifiable 
          .tapedYellowSprig, .tapedEucalyptus, .tapedBrownBloom,
          .tapedBillyButton, .tapedDryBranch, .ivoryHydrangea,
          .ivoryDaisy, .ivoryPompom, .ivoryAirySprig, .driedSprig,
-         .pinkBabysBreath, .whiteGerbera:
+         .pinkBabysBreath, .whiteGerbera, .magentaDaisy,
+         .tangerineDaisy, .sunshineDaisy, .limeDaisy, .cyanDaisy,
+         .violetDaisy, .impastoBlossom, .peachRibbonRose,
+         .berryRibbonRose:
       return "camera.macro"
+    case .sparkleCluster, .starburstFrame, .postageLabel,
+         .wavyUnderline, .archiveStamp:
+      return "sparkles"
+    case .quoteMarks, .keepGoingBadge, .makeItCountBadge,
+         .mainCharacterBadge:
+      return "quote.opening"
+    case .plotTwistSticker, .noContextSticker, .hahaSticker,
+         .moodSticker, .beSeriousSticker:
+      return "face.smiling"
+    case .wovenSun, .wovenBird, .diamondTotem, .textileRibbon:
+      return "square.grid.3x3.fill"
     case .coffeeStain: return "circle.dashed"
     }
   }

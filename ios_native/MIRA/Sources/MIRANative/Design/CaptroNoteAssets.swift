@@ -35,6 +35,15 @@ enum CaptroNoteAsset: String, CaseIterable {
   case driedSprig = "captro_decor_dried_sprig"
   case pinkBabysBreath = "captro_decor_pink_babys_breath"
   case whiteGerbera = "captro_decor_white_gerbera"
+  case magentaDaisy = "captro_decor_magenta_daisy"
+  case tangerineDaisy = "captro_decor_tangerine_daisy"
+  case sunshineDaisy = "captro_decor_sunshine_daisy"
+  case limeDaisy = "captro_decor_lime_daisy"
+  case cyanDaisy = "captro_decor_cyan_daisy"
+  case violetDaisy = "captro_decor_violet_daisy"
+  case impastoBlossom = "captro_decor_impasto_blossom"
+  case peachRibbonRose = "captro_decor_peach_ribbon_rose"
+  case berryRibbonRose = "captro_decor_berry_ribbon_rose"
 
   case mountainLake = "captro_demo_mountain_lake"
   case editorialPortrait = "captro_demo_editorial_portrait"
@@ -63,7 +72,10 @@ enum CaptroNoteAsset: String, CaseIterable {
          .tapedYellowSprig, .tapedEucalyptus, .tapedBrownBloom,
          .tapedBillyButton, .tapedDryBranch, .ivoryHydrangea,
          .ivoryDaisy, .ivoryPompom, .ivoryAirySprig, .driedSprig,
-         .pinkBabysBreath, .whiteGerbera:
+         .pinkBabysBreath, .whiteGerbera, .magentaDaisy,
+         .tangerineDaisy, .sunshineDaisy, .limeDaisy, .cyanDaisy,
+         .violetDaisy, .impastoBlossom, .peachRibbonRose,
+         .berryRibbonRose:
       return rawValue
     }
   }
@@ -75,7 +87,10 @@ enum CaptroNoteAsset: String, CaseIterable {
          .tapedYellowSprig, .tapedEucalyptus, .tapedBrownBloom,
          .tapedBillyButton, .tapedDryBranch, .ivoryHydrangea,
          .ivoryDaisy, .ivoryPompom, .ivoryAirySprig, .driedSprig,
-         .pinkBabysBreath, .whiteGerbera:
+         .pinkBabysBreath, .whiteGerbera, .magentaDaisy,
+         .tangerineDaisy, .sunshineDaisy, .limeDaisy, .cyanDaisy,
+         .violetDaisy, .impastoBlossom, .peachRibbonRose,
+         .berryRibbonRose:
       return true
     default:
       return false
@@ -111,7 +126,10 @@ enum CaptroNoteAsset: String, CaseIterable {
          .tapedYellowSprig, .tapedEucalyptus, .tapedBrownBloom,
          .tapedBillyButton, .tapedDryBranch, .ivoryHydrangea,
          .ivoryDaisy, .ivoryPompom, .ivoryAirySprig, .driedSprig,
-         .pinkBabysBreath, .whiteGerbera:
+         .pinkBabysBreath, .whiteGerbera, .magentaDaisy,
+         .tangerineDaisy, .sunshineDaisy, .limeDaisy, .cyanDaisy,
+         .violetDaisy, .impastoBlossom, .peachRibbonRose,
+         .berryRibbonRose:
       return (1, 1, 0, 0)
     }
   }
