@@ -1,0 +1,28 @@
+# Vendored from the Aura Desktop repository (crates/aura-core) at commit
+# ed6fe302845d15fafe42c81a12e59ead966b310a, 2026-08-22. That repository has no shared git
+# remote yet, so this is a plain source copy rather than a git/path dependency. Keep this in
+# sync by hand until a proper shared crate (published, git submodule, or monorepo) exists.
+# Workspace-inherited fields from the source repo are pinned explicitly here since this crate
+# no longer lives inside that Cargo workspace.
+[package]
+name = "aura-core"
+description = "Consensus-neutral blockchain state machine and canonical Aura protocol types"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT"
+
+[dependencies]
+argon2 = { version = "=0.5.3", default-features = false, features = ["alloc"] }
+bech32 = "0.9.1"
+borsh = { version = "1.5.5", features = ["derive"] }
+ed25519-dalek = { version = "2.1.1", features = ["rand_core"] }
+hex = "0.4.3"
+primitive-types = { version = "=0.13.1", default-features = false }
+serde = { version = "1.0.217", features = ["derive"] }
+sha2 = "0.10.8"
+thiserror = "2.0.11"
+
+[dev-dependencies]
+rand = "0.8.5"
+serde_json = "1.0.137"

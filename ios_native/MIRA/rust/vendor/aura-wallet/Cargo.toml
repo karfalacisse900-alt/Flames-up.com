@@ -1,0 +1,21 @@
+# Vendored from the Aura Desktop repository (crates/aura-wallet) at commit
+# ed6fe302845d15fafe42c81a12e59ead966b310a, 2026-08-22. See ../aura-core/Cargo.toml for why
+# this is a plain source copy rather than a git/path dependency across repos.
+[package]
+name = "aura-wallet"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT"
+description = "Local encrypted Ed25519 wallet storage for Aura"
+publish = false
+
+[dependencies]
+argon2 = "=0.5.3"
+aura-core = { path = "../aura-core" }
+chacha20poly1305 = "=0.10.1"
+ed25519-dalek = { version = "=2.2.0", features = ["rand_core"] }
+rand_core = { version = "=0.6.4", features = ["getrandom"] }
+tempfile = "=3.27.0"
+thiserror = "=2.0.20"
+zeroize = "=1.9.0"

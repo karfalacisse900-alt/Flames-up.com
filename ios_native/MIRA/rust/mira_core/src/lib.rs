@@ -2,8 +2,13 @@ use std::ffi::CStr;
 use std::os::raw::c_char;
 use std::slice;
 
+mod wallet_ffi;
+pub use wallet_ffi::*;
+
+/// # Safety
+/// `bytes` must be null or point to at least `length` readable, initialized bytes.
 #[no_mangle]
-pub extern "C" fn mira_rust_hash_bytes(bytes: *const u8, length: usize) -> u64 {
+pub unsafe extern "C" fn mira_rust_hash_bytes(bytes: *const u8, length: usize) -> u64 {
     if bytes.is_null() || length == 0 {
         return 0;
     }
@@ -17,8 +22,10 @@ pub extern "C" fn mira_rust_hash_bytes(bytes: *const u8, length: usize) -> u64 {
     hash
 }
 
+/// # Safety
+/// `url` must be null or a valid, NUL-terminated C string.
 #[no_mangle]
-pub extern "C" fn mira_rust_link_risk_score(url: *const c_char) -> u32 {
+pub unsafe extern "C" fn mira_rust_link_risk_score(url: *const c_char) -> u32 {
     let value = read_c_string(url).to_ascii_lowercase();
     if value.is_empty() {
         return 0;
@@ -44,8 +51,10 @@ pub extern "C" fn mira_rust_link_risk_score(url: *const c_char) -> u32 {
     risk.min(100)
 }
 
+/// # Safety
+/// `text` must be null or a valid, NUL-terminated C string.
 #[no_mangle]
-pub extern "C" fn mira_rust_text_spam_score(text: *const c_char) -> u32 {
+pub unsafe extern "C" fn mira_rust_text_spam_score(text: *const c_char) -> u32 {
     let value = read_c_string(text).to_ascii_lowercase();
     if value.is_empty() {
         return 0;
@@ -62,7 +71,10 @@ pub extern "C" fn mira_rust_text_spam_score(text: *const c_char) -> u32 {
     score += (repeated_bang as u32).saturating_mul(8);
     score += (repeated_money as u32).saturating_mul(12);
 
-    if value.contains("free money") || value.contains("crypto giveaway") || value.contains("click now") {
+    if value.contains("free money")
+        || value.contains("crypto giveaway")
+        || value.contains("click now")
+    {
         score += 30;
     }
     score.min(100)
@@ -72,5 +84,8 @@ fn read_c_string(ptr: *const c_char) -> String {
     if ptr.is_null() {
         return String::new();
     }
-    unsafe { CStr::from_ptr(ptr) }.to_string_lossy().trim().to_string()
+    unsafe { CStr::from_ptr(ptr) }
+        .to_string_lossy()
+        .trim()
+        .to_string()
 }
