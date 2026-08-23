@@ -1,0 +1,79 @@
+name: Aura iOS CI
+
+on:
+  pull_request:
+    paths:
+      - "ios_native/MIRA/**"
+      - ".github/workflows/ios-ci.yml"
+  push:
+    paths:
+      - "ios_native/MIRA/**"
+      - ".github/workflows/ios-ci.yml"
+
+env:
+  IOS_NATIVE_DIR: ios_native/MIRA
+  SCHEME: Aura
+
+jobs:
+  build-and-test:
+    name: Build and test (no signing, no TestFlight upload)
+    runs-on: macos-26
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Build Rust native core (host target, debug)
+        working-directory: ${{ env.IOS_NATIVE_DIR }}
+        run: |
+          set -euo pipefail
+          RUST_CORE_DIR="rust/mira_core"
+          if [ -f "$RUST_CORE_DIR/Cargo.toml" ]; then
+            cargo build --manifest-path "$RUST_CORE_DIR/Cargo.toml"
+          else
+            echo "::warning::Rust native core not found at $RUST_CORE_DIR. Skipping."
+          fi
+
+      - name: Generate Xcode project
+        working-directory: ${{ env.IOS_NATIVE_DIR }}
+        run: xcodegen generate --spec project.yml
+
+      - name: Build for iOS Simulator
+        working-directory: ${{ env.IOS_NATIVE_DIR }}
+        run: |
+          xcodebuild \
+            -project Aura.xcodeproj \
+            -scheme "$SCHEME" \
+            -configuration Debug \
+            -destination "generic/platform=iOS Simulator" \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Run unit tests
+        working-directory: ${{ env.IOS_NATIVE_DIR }}
+        run: |
+          set -euo pipefail
+          SIMULATOR_ID=$(xcrun simctl list devices available -j | python3 -c '
+          import json, sys
+          devices = json.load(sys.stdin).get("devices", {})
+          for runtime_devices in devices.values():
+              for device in runtime_devices:
+                  if device.get("isAvailable") and device.get("name", "").startswith("iPhone"):
+                      print(device["udid"])
+                      raise SystemExit(0)
+          raise SystemExit("No available iPhone simulator was found")
+          ')
+          xcodebuild \
+            -project Aura.xcodeproj \
+            -scheme "$SCHEME" \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
+            -only-testing:AuraTests \
+            test

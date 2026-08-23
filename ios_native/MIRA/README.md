@@ -1,6 +1,6 @@
-# Captro Native iOS
+# Aura Mobile Native iOS
 
-This is the production native iOS app for Captro.
+This is the production native iOS app for Aura Mobile, converted from the former Captro app. It keeps the `com.captro.app` bundle identifier so the existing App Store Connect app record and TestFlight history carry over; only the display name, product name, and Xcode scheme/target changed to Aura.
 
 ## Stack
 
@@ -19,7 +19,7 @@ Local Mac build:
 cd ios_native/MIRA
 brew install xcodegen
 xcodegen generate --spec project.yml
-xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug -destination "generic/platform=iOS Simulator" CODE_SIGNING_ALLOWED=NO build
+xcodebuild -project Aura.xcodeproj -scheme Aura -configuration Debug -destination "generic/platform=iOS Simulator" CODE_SIGNING_ALLOWED=NO build
 ```
 
 ## Production Notes

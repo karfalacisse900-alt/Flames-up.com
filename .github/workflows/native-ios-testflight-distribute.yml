@@ -1,4 +1,4 @@
-name: Native iOS TestFlight Distribution
+name: Aura iOS TestFlight Distribution
 
 on:
   workflow_dispatch:
@@ -7,13 +7,17 @@ on:
         description: App Store Connect build number to distribute
         required: true
       app_version:
-        description: Marketing version containing the build
+        description: Marketing version containing the build (check ios_native/MIRA/project.yml for the current value)
         required: true
         default: "1.0.1"
       beta_group:
-        description: External TestFlight group
+        description: External TestFlight group (must already exist in App Store Connect)
         required: true
         default: Captro Public Beta
+      changelog:
+        description: TestFlight "What to Test" changelog for this build
+        required: true
+        default: Aura Mobile build.
 
 permissions:
   contents: read
@@ -75,6 +79,7 @@ jobs:
           BUILD_NUMBER: ${{ inputs.build_number }}
           APP_VERSION: ${{ inputs.app_version }}
           BETA_GROUP: ${{ inputs.beta_group }}
+          CHANGELOG: ${{ inputs.changelog }}
         run: |
           set -euo pipefail
           fastlane pilot distribute \
@@ -90,7 +95,7 @@ jobs:
             --submit_beta_review true \
             --wait_processing_interval 30 \
             --wait_processing_timeout_duration 1800 \
-            --changelog "Polished Yearbook browsing, responsive book spreads, clearer profiles, filters, and smoother page turns."
+            --changelog "$CHANGELOG"
 
       - name: Remove temporary App Store Connect key
         if: always()

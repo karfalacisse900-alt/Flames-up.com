@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
   <key>CFBundleDisplayName</key>
-  <string>Captro</string>
+  <string>Aura</string>
   <key>CFBundleDevelopmentRegion</key>
   <string>$(DEVELOPMENT_LANGUAGE)</string>
   <key>CFBundleExecutable</key>
@@ -13,7 +13,7 @@
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
-  <string>Captro</string>
+  <string>Aura</string>
   <key>GIDClientID</key>
   <string>702354172189-9gg83vd92n3s217n5pb4ddqqsnme8ocb.apps.googleusercontent.com</string>
   <key>GIDServerClientID</key>
@@ -46,15 +46,15 @@
   <key>LSRequiresIPhoneOS</key>
   <true/>
   <key>NSCameraUsageDescription</key>
-  <string>Captro uses your camera so you can take photos and videos to share as posts, stories, or profile pictures. For example, you can take a photo and upload it to your Captro feed.</string>
+  <string>Aura uses your camera so you can scan a receipt or invoice to submit as a verified proof.</string>
   <key>NSMicrophoneUsageDescription</key>
-  <string>Captro uses your microphone so you can record voice notes and audio for story videos you choose to share.</string>
+  <string>Aura does not currently record audio. This permission is unused.</string>
   <key>NSPhotoLibraryUsageDescription</key>
-  <string>Captro uses your photo library so you can choose photos and videos to share as posts, stories, or profile pictures.</string>
+  <string>Aura uses your photo library so you can import an existing photo or PDF of a receipt or invoice.</string>
   <key>NSPhotoLibraryAddUsageDescription</key>
-  <string>Save edited media from Captro to your photo library.</string>
+  <string>Save a scanned receipt or invoice image from Aura to your photo library.</string>
   <key>NSLocationWhenInUseUsageDescription</key>
-  <string>Captro uses your location to help you tag nearby places and show local content near you. For example, you can tag a nearby place when creating a post.</string>
+  <string>Aura uses your location to help match a scanned receipt or invoice to the correct business.</string>
   <key>NSAppTransportSecurity</key>
   <dict>
     <key>NSAllowsArbitraryLoads</key>

@@ -122,8 +122,8 @@ jobs:
           arch -arm64 brew install xcodegen
           xcodegen generate --spec project.yml
           xcodebuild \
-            -project Captro.xcodeproj \
-            -scheme Captro \
+            -project Aura.xcodeproj \
+            -scheme Aura \
             -configuration Debug \
             -destination "generic/platform=iOS Simulator" \
             CODE_SIGNING_ALLOWED=NO \

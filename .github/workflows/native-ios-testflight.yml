@@ -1,4 +1,4 @@
-name: Native iOS TestFlight
+name: Aura iOS TestFlight
 
 on:
   workflow_dispatch:
@@ -8,16 +8,24 @@ on:
         required: false
         type: string
         default: ""
+      release_notes:
+        description: "TestFlight 'What to Test' changelog for this build"
+        required: false
+        type: string
+        default: "Aura Mobile build."
   push:
-    branches: [main]
-    paths:
-      - "ios_native/MIRA/**"
-      - ".github/workflows/native-ios-testflight.yml"
+    tags:
+      - "ios-v*"
 
 env:
   IOS_NATIVE_DIR: ios_native/MIRA
   BUNDLE_ID: com.captro.app
-  SCHEME: Captro
+  SCHEME: Aura
+  # Must match an existing external group in App Store Connect. Renaming this string without
+  # first renaming the group in App Store Connect (or vice versa) will make `pilot distribute`
+  # fail to find the group.
+  BETA_GROUP: "Captro Public Beta"
+  APPLE_APP_ID: "6777888591"
 
 jobs:
   build-testflight:
@@ -41,6 +49,9 @@ jobs:
         if: inputs.existing_build_number == ''
         run: brew install xcodegen
 
+      - name: Install fastlane
+        run: brew install fastlane
+
       - name: Check Rust native core
         if: inputs.existing_build_number == ''
         run: |
@@ -58,6 +69,18 @@ jobs:
         working-directory: ${{ env.IOS_NATIVE_DIR }}
         run: xcodegen generate --spec project.yml
 
+      - name: Read marketing version from project.yml
+        working-directory: ${{ env.IOS_NATIVE_DIR }}
+        run: |
+          set -euo pipefail
+          MARKETING_VERSION=$(grep 'MARKETING_VERSION:' project.yml | head -n 1 | sed -E 's/.*MARKETING_VERSION:\s*"?([0-9A-Za-z.\-]+)"?.*/\1/')
+          if [ -z "$MARKETING_VERSION" ]; then
+            echo "::error::Could not read MARKETING_VERSION from project.yml"
+            exit 1
+          fi
+          echo "Marketing version: $MARKETING_VERSION"
+          echo "MARKETING_VERSION=$MARKETING_VERSION" >> "$GITHUB_ENV"
+
       - name: Run native iOS unit tests
         if: inputs.existing_build_number == ''
         working-directory: ${{ env.IOS_NATIVE_DIR }}
@@ -74,11 +97,11 @@ jobs:
           raise SystemExit("No available iPhone simulator was found")
           ')
           xcodebuild \
-            -project Captro.xcodeproj \
+            -project Aura.xcodeproj \
             -scheme "$SCHEME" \
             -configuration Debug \
             -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
-            -only-testing:CaptroTests \
+            -only-testing:AuraTests \
             test
 
       - name: Prepare App Store Connect API key
@@ -86,9 +109,45 @@ jobs:
           APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
           APP_STORE_CONNECT_API_KEY_BASE64: ${{ secrets.APP_STORE_CONNECT_API_KEY_BASE64 }}
         run: |
+          set -euo pipefail
           mkdir -p "$HOME/.appstoreconnect/private_keys"
           echo -n "$APP_STORE_CONNECT_API_KEY_BASE64" | base64 -D > "$HOME/.appstoreconnect/private_keys/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8"
           chmod 600 "$HOME/.appstoreconnect/private_keys/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8"
+
+      - name: Write App Store Connect API key JSON
+        env:
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          API_KEY_JSON="$RUNNER_TEMP/app-store-connect-api-key.json"
+          KEY_PATH="$HOME/.appstoreconnect/private_keys/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8"
+          python3 - "$API_KEY_JSON" "$KEY_PATH" <<'PY'
+          import json
+          import os
+          import sys
+
+          output_path, key_path = sys.argv[1:]
+          with open(key_path, "r", encoding="utf-8") as handle:
+              private_key = handle.read()
+          payload = {
+              "key_id": os.environ["APP_STORE_CONNECT_API_KEY_ID"],
+              "issuer_id": os.environ["APP_STORE_CONNECT_API_ISSUER_ID"],
+              "key": private_key,
+              "in_house": False,
+          }
+          with open(output_path, "w", encoding="utf-8") as handle:
+              json.dump(payload, handle)
+          PY
+          echo "ASC_API_KEY_JSON=$API_KEY_JSON" >> "$GITHUB_ENV"
+
+      - name: Determine next TestFlight build number
+        if: inputs.existing_build_number == ''
+        env:
+          ASC_API_KEY_JSON: ${{ env.ASC_API_KEY_JSON }}
+        run: |
+          set -euo pipefail
+          fastlane next_build_number
 
       - name: Install signing certificate and provisioning profile
         if: inputs.existing_build_number == ''
@@ -104,10 +163,10 @@ jobs:
           set -euo pipefail
 
           KEYCHAIN_PASSWORD="${KEYCHAIN_PASSWORD:-$(uuidgen)}"
-          KEYCHAIN_PATH="$RUNNER_TEMP/captro-signing.keychain-db"
+          KEYCHAIN_PATH="$RUNNER_TEMP/aura-signing.keychain-db"
           CERT_PATH="$RUNNER_TEMP/ios_distribution.p12"
-          PROFILE_PATH="$RUNNER_TEMP/captro.mobileprovision"
-          PROFILE_PLIST="$RUNNER_TEMP/captro-profile.plist"
+          PROFILE_PATH="$RUNNER_TEMP/aura.mobileprovision"
+          PROFILE_PLIST="$RUNNER_TEMP/aura-profile.plist"
 
           echo -n "$IOS_DISTRIBUTION_CERTIFICATE_BASE64" | base64 -D > "$CERT_PATH"
           echo -n "$IOS_PROVISIONING_PROFILE_BASE64" | base64 -D > "$PROFILE_PATH"
@@ -141,16 +200,13 @@ jobs:
           PROFILE_NAME: ${{ steps.signing.outputs.profile-name }}
         run: |
           set -euo pipefail
-          BUILD_NUMBER="${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
-          echo "BUILD_NUMBER=$BUILD_NUMBER" >> "$GITHUB_ENV"
           xcodebuild \
-            -project Captro.xcodeproj \
+            -project Aura.xcodeproj \
             -scheme "$SCHEME" \
             -configuration Release \
             -destination "generic/platform=iOS" \
-            -archivePath "$RUNNER_TEMP/Captro.xcarchive" \
+            -archivePath "$RUNNER_TEMP/Aura.xcarchive" \
             CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
-            MARKETING_VERSION="1.0.1" \
             OTHER_CODE_SIGN_FLAGS="--keychain $KEYCHAIN_PATH" \
             clean archive
 
@@ -189,7 +245,7 @@ jobs:
 
           xcodebuild \
             -exportArchive \
-            -archivePath "$RUNNER_TEMP/Captro.xcarchive" \
+            -archivePath "$RUNNER_TEMP/Aura.xcarchive" \
             -exportPath "$RUNNER_TEMP/export" \
             -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist"
 
@@ -197,7 +253,7 @@ jobs:
         if: inputs.existing_build_number == ''
         uses: actions/upload-artifact@v7
         with:
-          name: Captro-native-ios-ipa
+          name: Aura-native-ios-ipa
           path: ${{ runner.temp }}/export/*.ipa
           if-no-files-found: error
 
@@ -229,54 +285,31 @@ jobs:
             sleep "$delay"
           done
 
-      - name: Install fastlane
-        run: brew install fastlane
-
-      - name: Wait for processing and distribute to Captro Public Beta
+      - name: Wait for processing and distribute to Aura Public Beta
         env:
-          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
-          APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+          RELEASE_NOTES: ${{ inputs.release_notes }}
         run: |
           set -euo pipefail
-          API_KEY_JSON="$RUNNER_TEMP/app-store-connect-api-key.json"
-          KEY_PATH="$HOME/.appstoreconnect/private_keys/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8"
-
-          python3 - "$API_KEY_JSON" "$KEY_PATH" <<'PY'
-          import json
-          import os
-          import sys
-
-          output_path, key_path = sys.argv[1:]
-          with open(key_path, "r", encoding="utf-8") as handle:
-              private_key = handle.read()
-          payload = {
-              "key_id": os.environ["APP_STORE_CONNECT_API_KEY_ID"],
-              "issuer_id": os.environ["APP_STORE_CONNECT_API_ISSUER_ID"],
-              "key": private_key,
-              "in_house": False,
-          }
-          with open(output_path, "w", encoding="utf-8") as handle:
-              json.dump(payload, handle)
-          PY
+          CHANGELOG="${RELEASE_NOTES:-Aura Mobile build.}"
 
           echo "TESTFLIGHT_DISTRIBUTION_STATUS=pending" >> "$GITHUB_ENV"
           for attempt in {1..60}; do
             LOG_PATH="$RUNNER_TEMP/testflight-distribution-${attempt}.log"
             set +e
             fastlane pilot distribute \
-              --api_key_path "$API_KEY_JSON" \
+              --api_key_path "$ASC_API_KEY_JSON" \
               --app_platform ios \
               --app_identifier "$BUNDLE_ID" \
-              --apple_id "6777888591" \
-              --app_version "1.0.1" \
+              --apple_id "$APPLE_APP_ID" \
+              --app_version "$MARKETING_VERSION" \
               --build_number "$BUILD_NUMBER" \
-              --groups "Captro Public Beta" \
+              --groups "$BETA_GROUP" \
               --distribute_external true \
               --notify_external_testers false \
               --submit_beta_review false \
               --wait_processing_interval 30 \
               --wait_processing_timeout_duration 1800 \
-              --changelog "Expanded Captro Studio with individual flower cutouts, original papers, aesthetic, quote, comedy, and pattern decor, plus faithful Wall rendering." \
+              --changelog "$CHANGELOG" \
               2>&1 | tee "$LOG_PATH"
             status=${PIPESTATUS[0]}
             set -e
@@ -293,7 +326,7 @@ jobs:
             fi
 
             if grep -qiE "forbidden for security reasons|API key in use does not allow this request" "$LOG_PATH"; then
-              echo "::warning::Captro $BUILD_NUMBER is uploaded to TestFlight, but the App Store Connect API key cannot assign it to Captro Public Beta. Assign the build to the group manually or grant the key TestFlight distribution permissions."
+              echo "::warning::Aura $BUILD_NUMBER is uploaded to TestFlight, but the App Store Connect API key cannot assign it to $BETA_GROUP. Assign the build to the group manually or grant the key TestFlight distribution permissions."
               echo "TESTFLIGHT_DISTRIBUTION_STATUS=manual_required" >> "$GITHUB_ENV"
               exit 0
             fi
@@ -305,12 +338,12 @@ jobs:
         run: |
           case "${TESTFLIGHT_DISTRIBUTION_STATUS:-assigned}" in
             assigned)
-              echo "Captro ${BUILD_NUMBER} was uploaded, processed, and assigned to Captro Public Beta."
+              echo "Aura ${BUILD_NUMBER} was uploaded, processed, and assigned to ${BETA_GROUP}."
               ;;
             manual_required)
-              echo "::warning::Captro ${BUILD_NUMBER} is in TestFlight. Captro Public Beta assignment still requires App Store Connect permissions or manual assignment."
+              echo "::warning::Aura ${BUILD_NUMBER} is in TestFlight. ${BETA_GROUP} assignment still requires App Store Connect permissions or manual assignment."
               ;;
             *)
-              echo "Captro ${BUILD_NUMBER} completed with distribution status: ${TESTFLIGHT_DISTRIBUTION_STATUS:-unknown}."
+              echo "Aura ${BUILD_NUMBER} completed with distribution status: ${TESTFLIGHT_DISTRIBUTION_STATUS:-unknown}."
               ;;
           esac
