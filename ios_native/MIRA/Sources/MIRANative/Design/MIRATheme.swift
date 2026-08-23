@@ -1,6 +1,9 @@
 import SwiftUI
 import UIKit
 
+// Codename kept as `MIRATheme` (the module is still `MIRANative`); this is the shared design
+// token set for Aura Mobile. Renaming the type itself would ripple through every screen file
+// for no functional benefit, so only the Captro-specific values inside it are being replaced.
 public enum MIRATheme {
   public enum Color {
     public static let appBackground = adaptive(

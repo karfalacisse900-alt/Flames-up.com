@@ -4,10 +4,11 @@ import Foundation
 import GoogleSignIn
 
 public enum MIRATab: Hashable {
-  case wall
-  case yearbook
-  case chat
-  case profile
+  case home
+  case scan
+  case proofs
+  case reputation
+  case wallet
 }
 
 public enum MIRAStartupPhase: Equatable {
@@ -24,13 +25,13 @@ public enum MIRAStartupPhase: Equatable {
   var statusText: String {
     switch self {
     case .launching:
-      return "Opening Captro"
+      return "Opening Aura"
     case .checkingSession:
       return "Checking your session"
     case .loadingUser:
       return "Loading your profile"
     case .preparingStories:
-      return "Preparing Stories"
+      return "Preparing your account"
     case .preparingProfile:
       return "Preparing your profile"
     case .preparingMainTabs:
@@ -38,7 +39,7 @@ public enum MIRAStartupPhase: Equatable {
     case .readyAuthenticated, .readyUnauthenticated:
       return "Ready"
     case .failedWithRetry:
-      return "Still getting Captro ready"
+      return "Still getting Aura ready"
     }
   }
 }
@@ -182,8 +183,8 @@ final class MIRAStartupCoordinator: ObservableObject {
 
 public struct MIRANativeRootView: View {
   @Environment(\.scenePhase) private var scenePhase
-  @State private var selectedTab: MIRATab = .wall
-  @State private var loadedTabs: Set<MIRATab> = [.wall]
+  @State private var selectedTab: MIRATab = .home
+  @State private var loadedTabs: Set<MIRATab> = [.home]
   @State private var isPrivacyShieldVisible = false
   @State private var featureStatusBarHidden = false
   @AppStorage(MIRAAppearanceResolver.preferenceKey) private var appearancePreference = MIRAAppearance.system.rawValue
@@ -241,10 +242,10 @@ public struct MIRANativeRootView: View {
     }
     .onChange(of: authSession.user?.id) { _, userID in
       if userID == nil {
-        selectedTab = .wall
-        loadedTabs = [.wall]
+        selectedTab = .home
+        loadedTabs = [.home]
       } else {
-        loadedTabs.formUnion([.wall, .profile])
+        loadedTabs.formUnion([.home, .wallet])
       }
       registerCachedPushTokenIfPossible()
     }
@@ -291,34 +292,35 @@ public struct MIRANativeRootView: View {
 
   private var mainTabs: some View {
     TabView(selection: $selectedTab) {
-      lazyTab(.wall) {
-        NavigationStack {
-          WallOfNotesNativeView(api: api, storiesModel: startup.discoverModel)
-            .toolbar(.hidden, for: .navigationBar)
-        }
+      lazyTab(.home) {
+        AuraHomeView(api: api)
       }
-        .tag(MIRATab.wall)
-        .tabItem { Label("Notes", systemImage: "note.text") }
+        .tag(MIRATab.home)
+        .tabItem { Label("Home", systemImage: "house.fill") }
 
-      lazyTab(.yearbook) {
-        NavigationStack {
-          MIRAYearbookNativeView(api: api, currentUser: authSession.user)
-        }
+      lazyTab(.scan) {
+        AuraScanView(api: api)
       }
-        .tag(MIRATab.yearbook)
-        .tabItem { Label("Yearbook", systemImage: "book.closed.fill") }
+        .tag(MIRATab.scan)
+        .tabItem { Label("Scan", systemImage: "viewfinder") }
 
-      lazyTab(.chat) {
-        ChatNativeView(api: api, currentUserId: authSession.user?.id ?? "", model: startup.chatModel)
+      lazyTab(.proofs) {
+        AuraProofsView(api: api)
       }
-        .tag(MIRATab.chat)
-        .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right.fill") }
+        .tag(MIRATab.proofs)
+        .tabItem { Label("Proofs", systemImage: "checkmark.seal.fill") }
 
-      lazyTab(.profile) {
-        ProfileNativeView(api: api, authSession: authSession, model: startup.profileModel)
+      lazyTab(.reputation) {
+        AuraReputationView(api: api)
       }
-        .tag(MIRATab.profile)
-        .tabItem { Label("Profile", systemImage: "person.fill") }
+        .tag(MIRATab.reputation)
+        .tabItem { Label("Reputation", systemImage: "chart.line.uptrend.xyaxis") }
+
+      lazyTab(.wallet) {
+        AuraWalletView(api: api)
+      }
+        .tag(MIRATab.wallet)
+        .tabItem { Label("Wallet", systemImage: "wallet.pass.fill") }
     }
     .tint(MIRATheme.Color.forest)
     .toolbarBackground(MIRATheme.Color.surface, for: .tabBar)
@@ -523,7 +525,7 @@ private struct CaptroStartupView: View {
             .frame(width: 128, height: 1)
             .opacity(appeared ? 1 : 0)
 
-          Text("capture moments")
+          Text("verified purchases, real reputation")
             .font(.system(size: 12, weight: .medium))
             .foregroundStyle(Color.black.opacity(0.52))
             .opacity(appeared ? 1 : 0)
@@ -556,12 +558,15 @@ private struct CaptroStartupView: View {
 }
 
 private struct CaptroWordmarkView: View {
+  // TODO(aura-mobile): still points at the old Captro launch asset. Add an "AuraLaunchLogo"
+  // image set to AppTarget/Assets.xcassets and swap the name below once it exists -- renaming
+  // this reference without adding the asset would build fine but show a blank launch screen.
   var body: some View {
     Image("CaptroLaunchLogo", bundle: .main)
       .resizable()
       .scaledToFit()
       .frame(width: 292, height: 98)
-    .accessibilityLabel("Cap Tro")
+    .accessibilityLabel("Aura")
   }
 }
 
