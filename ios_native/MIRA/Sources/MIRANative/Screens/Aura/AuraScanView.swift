@@ -19,9 +19,9 @@ public enum AuraScanDocumentKind: String, CaseIterable, Equatable, Identifiable,
   var scanLabel: String { "Scan \(title)" }
 }
 
-/// Native receipt/invoice capture and bounded local import. A selected document remains only in
-/// memory. Provider verification and proof creation stay unavailable until an authenticated Aura
-/// verification gateway exists; local file acceptance is never represented as verification.
+/// Native receipt/invoice capture and bounded local import. Selected bytes remain only in memory
+/// and are sent only after the user taps Verify. Veryfi parsing and screening are kept distinct
+/// from independent purchase confirmation, Aura proof issuance, and blockchain submission.
 public struct AuraScanView: View {
   @Environment(\.scenePhase) private var scenePhase
   let api: MIRAAPIClient
@@ -30,6 +30,8 @@ public struct AuraScanView: View {
   @State private var showingScanner = false
   @State private var showingImporter = false
   @State private var errorMessage: String?
+  @State private var verificationResult: AuraDocumentVerificationResult?
+  @State private var isVerifying = false
 
   public init(api: MIRAAPIClient) {
     self.api = api
@@ -42,6 +44,9 @@ public struct AuraScanView: View {
           actionGrid
           if let selectedDocument {
             selectedDocumentCard(selectedDocument)
+            if let verificationResult {
+              verificationResultCard(verificationResult)
+            }
           } else {
             MIRAEmptyState(
               title: "Scan or import a document",
@@ -84,6 +89,7 @@ public struct AuraScanView: View {
       .onChange(of: scenePhase) { _, phase in
         if phase != .active {
           selectedDocument = nil
+          verificationResult = nil
         }
       }
     }
@@ -122,6 +128,7 @@ public struct AuraScanView: View {
           guard let item else { return }
           pendingKind = kind
           selectedDocument = nil
+          verificationResult = nil
           Task { await loadPhoto(item, kind: kind) }
         }
       ),
@@ -190,9 +197,14 @@ public struct AuraScanView: View {
       documentRow(label: "Local SHA-256", value: document.sha256Hex)
 
       VStack(alignment: .leading, spacing: MIRATheme.Space.xs) {
-        Label("Not verified", systemImage: "shield.slash")
+        Label(
+          verificationResult?.verificationLabel ?? "Ready for provider verification",
+          systemImage: verificationResult?.documentVerified == true ? "checkmark.shield.fill" : "shield.lefthalf.filled"
+        )
           .font(.system(size: 14, weight: .bold))
-        Text("The format was accepted locally. Nothing has been uploaded, parsed, fraud-checked, issued as a proof, or submitted to Aura consensus.")
+        Text(verificationResult == nil
+          ? "The format was accepted locally. Tap Verify to send this document through Aura's authenticated service to Veryfi."
+          : "Provider analysis finished. This does not by itself confirm payment, issue an Aura proof, change reputation, or submit anything to the blockchain.")
           .font(.system(size: 12.5, weight: .medium))
           .foregroundStyle(MIRATheme.Color.textSecondary)
       }
@@ -201,16 +213,15 @@ public struct AuraScanView: View {
       .background(MIRATheme.Color.surfaceSoft)
       .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.medium, style: .continuous))
 
-      Button("Verification Service Not Connected") {}
-        .font(.system(size: 15, weight: .bold))
-        .foregroundStyle(.white)
-        .frame(maxWidth: .infinity, minHeight: 48)
-        .background(MIRATheme.Color.textMuted)
-        .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.medium, style: .continuous))
-        .disabled(true)
+      Button(isVerifying ? "Verifying…" : "Verify \(document.kind.title)") {
+        verify(document)
+      }
+      .buttonStyle(AuraPrimaryButtonStyle())
+      .disabled(isVerifying)
 
       Button("Clear Local Selection") {
         selectedDocument = nil
+        verificationResult = nil
       }
       .font(.system(size: 14, weight: .bold))
       .foregroundStyle(MIRATheme.Color.forest)
@@ -218,6 +229,89 @@ public struct AuraScanView: View {
     }
     .padding(MIRATheme.Space.lg)
     .miraCardSurface()
+  }
+
+  private func verificationResultCard(_ result: AuraDocumentVerificationResult) -> some View {
+    VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
+      HStack {
+        Label(result.verificationLabel, systemImage: result.documentVerified ? "checkmark.shield.fill" : "doc.text.magnifyingglass")
+          .font(.system(size: 18, weight: .bold))
+          .foregroundStyle(result.documentVerified ? MIRATheme.Color.forest : MIRATheme.Color.textPrimary)
+        Spacer()
+        Text("Level \(result.verificationLevel)")
+          .font(.system(size: 12, weight: .bold))
+          .foregroundStyle(MIRATheme.Color.forest)
+      }
+
+      documentRow(label: "Provider", value: result.provider)
+      if let merchant = result.merchant.name { documentRow(label: "Merchant / issuer", value: merchant) }
+      if let total = result.total {
+        documentRow(label: "Total", value: [result.currency, total].compactMap { $0 }.joined(separator: " "))
+      }
+      if let date = result.date { documentRow(label: "Date", value: date) }
+      if let number = result.invoiceNumber ?? result.receiptNumber {
+        documentRow(label: result.submittedType == "invoice" ? "Invoice number" : "Receipt number", value: number)
+      }
+      if let store = result.merchant.storeNumber { documentRow(label: "Store number", value: store) }
+
+      VStack(alignment: .leading, spacing: MIRATheme.Space.sm) {
+        verificationSignal("Document recognized", value: result.isDocument)
+        verificationSignal("Duplicate detected", value: result.duplicate, positiveWhenTrue: false)
+        verificationSignal("Digital tampering detected", value: result.fraud.digitalTampering, positiveWhenTrue: false)
+        verificationSignal("AI-generated document detected", value: result.fraud.aiGenerated, positiveWhenTrue: false)
+        verificationSignal("Screenshot detected", value: result.fraud.screenshot, positiveWhenTrue: false)
+        verificationSignal("Vendor layout mismatch", value: result.fraud.vendorLayoutMismatch, positiveWhenTrue: false)
+        if let decision = result.fraud.decision {
+          documentRow(label: "Provider fraud decision", value: decision.uppercased())
+        }
+      }
+      .padding(MIRATheme.Space.md)
+      .background(MIRATheme.Color.surfaceSoft)
+      .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.medium, style: .continuous))
+
+      Text("Not yet completed: independent purchase/payment confirmation, merchant signature verification, Aura proof issuance, reputation standing, and blockchain commitment.")
+        .font(.system(size: 12.5, weight: .medium))
+        .foregroundStyle(MIRATheme.Color.textSecondary)
+
+      Text(result.privacy.providerAutoDeleteRequested
+        ? "Aura does not retain the document; provider auto-delete was requested."
+        : "Provider retention status unavailable.")
+        .font(.system(size: 11.5, weight: .medium))
+        .foregroundStyle(MIRATheme.Color.textMuted)
+    }
+    .padding(MIRATheme.Space.lg)
+    .miraCardSurface()
+  }
+
+  private func verificationSignal(
+    _ label: String,
+    value: Bool?,
+    positiveWhenTrue: Bool = true
+  ) -> some View {
+    let positive = value.map { positiveWhenTrue ? $0 : !$0 }
+    return HStack(spacing: MIRATheme.Space.sm) {
+      Image(systemName: positive == true ? "checkmark.circle.fill" : positive == false ? "exclamationmark.triangle.fill" : "minus.circle")
+        .foregroundStyle(positive == true ? MIRATheme.Color.forest : positive == false ? .orange : MIRATheme.Color.textMuted)
+      Text(label)
+        .font(.system(size: 12.5, weight: .semibold))
+      Spacer()
+      Text(value.map { $0 ? "Yes" : "No" } ?? "Not checked")
+        .font(.system(size: 12, weight: .medium))
+        .foregroundStyle(MIRATheme.Color.textSecondary)
+    }
+  }
+
+  private func verify(_ document: AuraLocalDocument) {
+    isVerifying = true
+    verificationResult = nil
+    Task {
+      defer { isVerifying = false }
+      do {
+        verificationResult = try await api.verifyAuraDocument(document)
+      } catch {
+        errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+      }
+    }
   }
 
   private func documentRow(label: String, value: String) -> some View {
@@ -239,12 +333,14 @@ public struct AuraScanView: View {
     }
     pendingKind = kind
     selectedDocument = nil
+    verificationResult = nil
     showingScanner = true
   }
 
   private func beginImport(_ kind: AuraScanDocumentKind) {
     pendingKind = kind
     selectedDocument = nil
+    verificationResult = nil
     showingImporter = true
   }
 

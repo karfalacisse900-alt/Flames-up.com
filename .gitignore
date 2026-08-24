@@ -87,3 +87,4 @@ ios_native/MIRA/rust/**/target/
 *.env.*
 backend-cf/node_modules/
 backend-cf/.wrangler/
+backend-cf/.dev.vars

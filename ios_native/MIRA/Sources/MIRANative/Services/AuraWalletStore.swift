@@ -117,6 +117,22 @@ public final class AuraWalletStore: ObservableObject {
     errorMessage = nil
   }
 
+  public func signTransfer(_ request: AuraUnsignedTransferRequest) throws -> AuraSignedTransfer {
+    guard let session, let identity else { throw AuraWalletNativeError.releasedSession }
+    let identityNetwork: AuraWalletNetwork? = switch identity.network {
+    case "mainnet": .mainnet
+    case "testnet": .testnet
+    case "devnet": .devnet
+    default: nil
+    }
+    guard identity.address == request.senderAddress,
+          identityNetwork?.rawValue == request.network else {
+      throw AuraWalletGatewayError.walletIdentityMismatch
+    }
+    let unsigned = try AuraWalletNative.buildUnsignedTransfer(request)
+    return try session.sign(unsignedBodyHex: unsigned.unsignedBodyHex)
+  }
+
   private func writableWalletURL() throws -> URL {
     guard let walletURL else {
       throw AuraWalletNativeError.nativeFailure(

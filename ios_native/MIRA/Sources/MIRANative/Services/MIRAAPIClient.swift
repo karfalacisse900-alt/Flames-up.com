@@ -192,7 +192,28 @@ public final class MIRAAPIClient {
 
   public func post<T: Decodable, Body: Encodable>(_ path: String, body: Body) async throws -> T {
     let data = try encoder.encode(body)
-    return try await request(path, method: "POST", body: data)
+    return try await request(path, method: "POST", body: data, additionalHeaders: [:])
+  }
+
+  /// Sends a signed Aura transaction with the gateway's bounded replay-protection headers.
+  /// Authorization still comes from the Keychain-backed session provider; callers cannot
+  /// override it or inject arbitrary transport headers.
+  public func postAuraTransaction<T: Decodable, Body: Encodable>(
+    _ path: String,
+    body: Body,
+    idempotencyKey: String,
+    timestampSeconds: UInt64
+  ) async throws -> T {
+    let data = try encoder.encode(body)
+    return try await request(
+      path,
+      method: "POST",
+      body: data,
+      additionalHeaders: [
+        "Idempotency-Key": idempotencyKey,
+        "X-Aura-Request-Timestamp": String(timestampSeconds)
+      ]
+    )
   }
 
   public func put<T: Decodable, Body: Encodable>(_ path: String, body: Body) async throws -> T {
@@ -272,7 +293,12 @@ public final class MIRAAPIClient {
     }
   }
 
-  private func request<T: Decodable>(_ path: String, method: String, body: Data?) async throws -> T {
+  private func request<T: Decodable>(
+    _ path: String,
+    method: String,
+    body: Data?,
+    additionalHeaders: [String: String] = [:]
+  ) async throws -> T {
     let url = try makeURL(path)
     var request = URLRequest(url: url)
     request.httpMethod = method
@@ -288,6 +314,12 @@ public final class MIRAAPIClient {
     }
     if let token, !token.isEmpty {
       request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+    }
+    for (name, value) in additionalHeaders {
+      guard name == "Idempotency-Key" || name == "X-Aura-Request-Timestamp" else {
+        throw MIRAAPIError.insecureURL
+      }
+      request.setValue(value, forHTTPHeaderField: name)
     }
     let trustHeaders = await MIRADeviceTrustService.shared.headers(for: method, path: url.path)
     trustHeaders.forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }

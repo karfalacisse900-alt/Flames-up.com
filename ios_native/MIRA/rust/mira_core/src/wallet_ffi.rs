@@ -19,7 +19,7 @@
 //! auditable as the wallet itself, but it does mean this phrase is Aura-specific: it will not
 //! import into a generic multi-coin BIP39/BIP32 wallet and produce the same key.
 
-use aura_core::{Address, Hash256, Network, TransactionBodyV2};
+use aura_core::{Address, Hash256, Network, TransactionBodyV2, TransactionV2};
 use aura_wallet::{PermissionStatus, Wallet, WalletPassword};
 use bip39::Mnemonic;
 use serde::{Deserialize, Serialize};
@@ -588,7 +588,8 @@ struct SignedTransferResult {
 /// Signs an unsigned v2 transfer body (as produced by
 /// `mira_aura_build_unsigned_transfer_v2_json`) with the given wallet's private key, entirely
 /// inside this process -- the private key never leaves the Rust wallet layer. Returns the
-/// signed transaction's canonical encoded bytes (hex) and its witness/intent hashes.
+/// complete canonical transaction bytes (including the transfer discriminant) and its
+/// witness/intent hashes. These bytes can be submitted directly to Aura RPC v2.
 ///
 /// # Safety
 /// `handle` must be null or a live handle from `mira_wallet_create`/`mira_wallet_restore_from_mnemonic`.
@@ -618,9 +619,11 @@ pub unsafe extern "C" fn mira_wallet_sign_transfer_v2_json(
             Ok(signed) => signed,
             Err(error) => return json_err(format!("could not sign transaction: {error}")),
         };
-        let encoded = match signed.encode() {
+        let encoded = match TransactionV2::Transfer(signed.clone()).encode() {
             Ok(bytes) => bytes,
-            Err(error) => return json_err(format!("could not encode signed transaction: {error}")),
+            Err(error) => {
+                return json_err(format!("could not encode canonical transaction: {error}"));
+            }
         };
         let witness_id = match signed.witness_id() {
             Ok(hash) => hash,
@@ -651,7 +654,7 @@ fn getrandom_fill(seed: &mut [u8; MNEMONIC_ENTROPY_BYTES]) -> Result<(), String>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aura_core::{hash_tagged, Amount, SignedTransferV2};
+    use aura_core::{hash_tagged, Amount};
 
     const DEVNET: u8 = 2;
 
@@ -892,8 +895,11 @@ mod tests {
         // FFI functions entirely, to prove the bytes it produced are a genuine, valid Aura v2
         // transfer and not merely bytes that happen to round-trip through this same code.
         let signed_bytes = hex::decode(&signed_data.signed_transfer_hex).expect("valid hex");
-        let signed_transfer =
-            SignedTransferV2::decode(&signed_bytes, 4096).expect("decodes as v2 transfer");
+        let transaction = TransactionV2::decode(&signed_bytes, 4096)
+            .expect("decodes as a complete canonical v2 transaction");
+        let TransactionV2::Transfer(signed_transfer) = transaction else {
+            panic!("mobile signing must return the transfer transaction variant");
+        };
         signed_transfer
             .verify(
                 Network::Devnet,

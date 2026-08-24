@@ -1,17 +1,20 @@
+import CoreImage.CIFilterBuiltins
 import SwiftUI
 
 /// Aura Mobile's real local-wallet surface. Key generation, restoration, encrypted persistence,
-/// address derivation, and signing stay in Rust. Network balances and transaction history remain
-/// unavailable until a real Aura Mobile Gateway is connected.
+/// address derivation, and signing stay in Rust. Public chain state comes from the authenticated
+/// Aura Mobile Gateway and every signed transaction still passes the real node mempool.
 public struct AuraWalletView: View {
   @Environment(\.scenePhase) private var scenePhase
   let api: MIRAAPIClient
   @StateObject private var wallet = AuraWalletStore()
+  @StateObject private var gateway: AuraWalletGatewayStore
   @State private var presentedSheet: WalletSheet?
   @State private var unlockPassword = ""
 
   public init(api: MIRAAPIClient) {
     self.api = api
+    _gateway = StateObject(wrappedValue: AuraWalletGatewayStore(api: api))
   }
 
   public var body: some View {
@@ -25,6 +28,11 @@ public struct AuraWalletView: View {
       }
       .background(MIRATheme.Color.appBackground.ignoresSafeArea())
       .navigationTitle("Wallet")
+      .refreshable {
+        if let identity = wallet.identity {
+          await gateway.refresh(identity: identity)
+        }
+      }
       .sheet(item: $presentedSheet) { sheet in
         switch sheet {
         case .create:
@@ -33,6 +41,12 @@ public struct AuraWalletView: View {
           AuraRestoreWalletSheet(wallet: wallet)
         case .receive:
           AuraReceiveWalletSheet(identity: wallet.identity)
+        case .send:
+          if let identity = wallet.identity {
+            AuraSendWalletSheet(wallet: wallet, gateway: gateway, identity: identity)
+          }
+        case .history:
+          AuraWalletHistorySheet(gateway: gateway)
         }
       }
       .alert(
@@ -49,6 +63,14 @@ public struct AuraWalletView: View {
       .onChange(of: scenePhase) { _, phase in
         if phase != .active, wallet.state == .unlocked {
           wallet.lock()
+          gateway.clear()
+        }
+      }
+      .task(id: wallet.identity?.address) {
+        if let identity = wallet.identity {
+          await gateway.refresh(identity: identity)
+        } else {
+          gateway.clear()
         }
       }
     }
@@ -78,7 +100,7 @@ public struct AuraWalletView: View {
       Text("AUR Balance")
         .font(.system(size: 13, weight: .semibold))
         .foregroundStyle(.white.opacity(0.8))
-      Text("Unavailable")
+      Text(gateway.availableAUR.map { "\($0) AUR" } ?? "Unavailable")
         .font(.system(size: 30, weight: .bold, design: .rounded))
         .foregroundStyle(.white)
       Text(balanceSubtitle)
@@ -99,7 +121,12 @@ public struct AuraWalletView: View {
 
   private var balanceSubtitle: String {
     switch wallet.state {
-    case .unlocked: return "Wallet unlocked · Aura Mobile Gateway not connected"
+    case .unlocked:
+      if gateway.isLoading { return "Wallet unlocked · Reading validated Devnet state" }
+      if let status = gateway.chainStatus {
+        return "Wallet unlocked · Block \(status.canonicalHeight) · \(status.connectedPeers) peers"
+      }
+      return "Wallet unlocked · Aura Mobile Gateway not connected"
     case .locked: return "Encrypted wallet locked"
     case .noWallet: return "No wallet is set up on this device"
     case .unavailable: return "Protected wallet storage unavailable"
@@ -175,12 +202,7 @@ public struct AuraWalletView: View {
         .miraCardSurface()
       }
 
-      MIRAEmptyState(
-        title: "Network data not connected",
-        message: "Balance, nonce, fees, transaction history, and confirmations will appear only after a real Aura Mobile Gateway is available.",
-        systemImage: "network.slash"
-      )
-      .miraCardSurface()
+      networkContent
 
       Button("Lock Wallet") { wallet.lock() }
         .buttonStyle(AuraSecondaryButtonStyle())
@@ -193,18 +215,18 @@ public struct AuraWalletView: View {
         presentedSheet = .receive
       }
       walletAction(label: "Send", systemImage: "arrow.up") {
-        wallet.report(
-          AuraWalletNativeError.nativeFailure(
-            "Send is unavailable until Aura Mobile can obtain a real chain ID, balance, nonce, and fee from the network."
-          )
-        )
+        if gateway.isConnected {
+          presentedSheet = .send
+        } else {
+          wallet.report(AuraWalletGatewayError.networkUnavailable)
+        }
       }
       walletAction(label: "History", systemImage: "clock.arrow.circlepath") {
-        wallet.report(
-          AuraWalletNativeError.nativeFailure(
-            "Transaction history is unavailable until Aura Mobile is connected to real chain state."
-          )
-        )
+        if gateway.history != nil {
+          presentedSheet = .history
+        } else {
+          wallet.report(AuraWalletGatewayError.networkUnavailable)
+        }
       }
     }
   }
@@ -226,12 +248,68 @@ public struct AuraWalletView: View {
     }
     .miraCardSurface()
   }
+
+  @ViewBuilder
+  private var networkContent: some View {
+    if gateway.isLoading {
+      ProgressView("Reading Aura Devnet")
+        .frame(maxWidth: .infinity, minHeight: 150)
+        .miraCardSurface()
+    } else if let status = gateway.chainStatus, let fees = gateway.fees {
+      VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
+        HStack {
+          Label("Aura node data", systemImage: "network.badge.shield.half.filled")
+            .font(.system(size: 17, weight: .bold))
+          Spacer()
+          Text("Devnet")
+            .font(.system(size: 12, weight: .bold))
+            .foregroundStyle(MIRATheme.Color.forest)
+        }
+        HStack {
+          AuraWalletMetric(label: "Block", value: status.canonicalHeight)
+          AuraWalletMetric(label: "Peers", value: status.connectedPeers)
+          AuraWalletMetric(
+            label: "Min fee",
+            value: AuraAmountCodec.aur(fromAtoms: fees.minimumFeeAtoms).map { "\($0) AUR" } ?? "Unavailable"
+          )
+        }
+        Text(status.syncStatus == "no_peers" ? "No peers" : "Connected peers · independently validating")
+          .font(.system(size: 12.5, weight: .medium))
+          .foregroundStyle(MIRATheme.Color.textSecondary)
+        if let history = gateway.history, !history.transactions.isEmpty {
+          Divider()
+          ForEach(history.transactions.prefix(3)) { transaction in
+            AuraWalletTransactionRow(transaction: transaction)
+          }
+        }
+      }
+      .padding(MIRATheme.Space.lg)
+      .miraCardSurface()
+    } else {
+      VStack(spacing: MIRATheme.Space.md) {
+        MIRAEmptyState(
+          title: "Network data not connected",
+          message: gateway.errorMessage ?? "Balance, nonce, fees, transaction history, and confirmations require the authenticated Aura Mobile Gateway.",
+          systemImage: "network.slash"
+        )
+        Button("Retry Gateway") {
+          if let identity = wallet.identity {
+            Task { await gateway.refresh(identity: identity) }
+          }
+        }
+        .buttonStyle(AuraSecondaryButtonStyle())
+      }
+      .miraCardSurface()
+    }
+  }
 }
 
 private enum WalletSheet: String, Identifiable {
   case create
   case restore
   case receive
+  case send
+  case history
 
   var id: String { rawValue }
 }
@@ -368,16 +446,24 @@ private struct AuraReceiveWalletSheet: View {
   var body: some View {
     NavigationStack {
       VStack(spacing: MIRATheme.Space.lg) {
-        Image(systemName: "qrcode")
-          .font(.system(size: 72, weight: .light))
-          .foregroundStyle(MIRATheme.Color.textMuted)
-        Text("QR rendering is not connected yet")
-          .font(.system(size: 17, weight: .bold))
         if let identity {
+          AuraAddressQRCode(address: identity.address)
+            .frame(width: 220, height: 220)
+          Text("Scan to receive AUR")
+            .font(.system(size: 17, weight: .bold))
           Text(identity.address)
             .font(.system(size: 13, weight: .medium, design: .monospaced))
             .textSelection(.enabled)
             .multilineTextAlignment(.center)
+          Button("Copy Address") {
+            UIPasteboard.general.string = identity.address
+          }
+          .buttonStyle(AuraSecondaryButtonStyle())
+        } else {
+          Image(systemName: "qrcode")
+            .font(.system(size: 72, weight: .light))
+            .foregroundStyle(MIRATheme.Color.textMuted)
+          Text("Public address unavailable")
         }
         Text("Use only the public address above on the \(identity?.network.capitalized ?? "selected") Aura network.")
           .font(.system(size: 13, weight: .medium))
@@ -396,7 +482,221 @@ private struct AuraReceiveWalletSheet: View {
   }
 }
 
-private struct AuraPrimaryButtonStyle: ButtonStyle {
+private struct AuraAddressQRCode: View {
+  let address: String
+
+  var body: some View {
+    if let image = Self.image(for: address) {
+      Image(uiImage: image)
+        .interpolation(.none)
+        .resizable()
+        .scaledToFit()
+        .accessibilityLabel("QR code for Aura receiving address")
+    } else {
+      Image(systemName: "qrcode")
+        .font(.system(size: 72, weight: .light))
+    }
+  }
+
+  private static func image(for value: String) -> UIImage? {
+    let filter = CIFilter.qrCodeGenerator()
+    filter.message = Data(value.utf8)
+    filter.correctionLevel = "M"
+    guard let output = filter.outputImage?.transformed(by: CGAffineTransform(scaleX: 10, y: 10)),
+          let cgImage = CIContext().createCGImage(output, from: output.extent) else {
+      return nil
+    }
+    return UIImage(cgImage: cgImage)
+  }
+}
+
+private struct AuraSendWalletSheet: View {
+  @ObservedObject var wallet: AuraWalletStore
+  @ObservedObject var gateway: AuraWalletGatewayStore
+  let identity: AuraWalletIdentity
+  @Environment(\.dismiss) private var dismiss
+  @State private var recipient = ""
+  @State private var amount = ""
+  @State private var isSending = false
+  @State private var errorMessage: String?
+
+  var body: some View {
+    NavigationStack {
+      Form {
+        Section("Recipient") {
+          TextField("Devnet Aura address", text: $recipient)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+        }
+        Section("Amount") {
+          TextField("0.00 AUR", text: $amount)
+            .keyboardType(.decimalPad)
+          if let fee = gateway.fees.flatMap({ AuraAmountCodec.aur(fromAtoms: $0.minimumFeeAtoms) }) {
+            LabeledContent("Network minimum fee", value: "\(fee) AUR")
+          }
+          if let available = gateway.availableAUR {
+            LabeledContent("Available", value: "\(available) AUR")
+          }
+        }
+        Section {
+          Text("Aura signs on this iPhone. Only the signed canonical transaction is sent to the gateway and validated by the node mempool.")
+            .foregroundStyle(.secondary)
+        }
+        if let intentId = gateway.lastSubmittedIntentId {
+          Section("Submitted") {
+            Text(intentId)
+              .font(.system(size: 12, design: .monospaced))
+              .textSelection(.enabled)
+            Text("Unconfirmed until a genuine Proof-of-Work block includes it.")
+              .foregroundStyle(.secondary)
+          }
+        }
+        if let errorMessage {
+          Section {
+            Text(errorMessage).foregroundStyle(.red)
+          }
+        }
+      }
+      .navigationTitle("Send AUR")
+      .toolbar {
+        ToolbarItem(placement: .cancellationAction) {
+          Button("Close") { dismiss() }
+        }
+        ToolbarItem(placement: .confirmationAction) {
+          Button(isSending ? "Sending…" : "Sign & Send") { submit() }
+            .disabled(isSending || recipient.isEmpty || amount.isEmpty)
+        }
+      }
+    }
+  }
+
+  private func submit() {
+    isSending = true
+    errorMessage = nil
+    Task {
+      defer { isSending = false }
+      do {
+        _ = try await gateway.send(
+          from: wallet,
+          identity: identity,
+          recipient: recipient,
+          amountAUR: amount
+        )
+        amount = ""
+      } catch {
+        errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+      }
+    }
+  }
+}
+
+private struct AuraWalletHistorySheet: View {
+  @ObservedObject var gateway: AuraWalletGatewayStore
+  @Environment(\.dismiss) private var dismiss
+
+  var body: some View {
+    NavigationStack {
+      List {
+        if let history = gateway.history {
+          if history.transactions.isEmpty {
+            Text("No transactions are present in the validated mempool or scanned canonical history.")
+              .foregroundStyle(.secondary)
+          } else {
+            ForEach(history.transactions) { transaction in
+              AuraWalletTransactionRow(transaction: transaction)
+            }
+          }
+          if !history.complete {
+            Text("Recent bounded history shown through block \(history.oldestScannedHeight).")
+              .font(.footnote)
+              .foregroundStyle(.secondary)
+          }
+        } else {
+          Text("Transaction history unavailable.")
+        }
+      }
+      .navigationTitle("AUR History")
+      .toolbar {
+        ToolbarItem(placement: .confirmationAction) {
+          Button("Done") { dismiss() }
+        }
+      }
+    }
+  }
+}
+
+private struct AuraWalletTransactionRow: View {
+  let transaction: AuraGatewayTransaction
+
+  var body: some View {
+    HStack(spacing: MIRATheme.Space.sm) {
+      Image(systemName: icon)
+        .foregroundStyle(transaction.direction == "sent" ? .red : MIRATheme.Color.forest)
+      VStack(alignment: .leading, spacing: 3) {
+        Text(title).font(.system(size: 14, weight: .semibold))
+        Text(status)
+          .font(.system(size: 11.5, weight: .medium))
+          .foregroundStyle(MIRATheme.Color.textSecondary)
+      }
+      Spacer()
+      Text(amount)
+        .font(.system(size: 13, weight: .bold, design: .rounded))
+        .foregroundStyle(transaction.direction == "sent" ? .red : MIRATheme.Color.forest)
+    }
+  }
+
+  private var title: String {
+    switch transaction.direction {
+    case "sent": "Sent"
+    case "received": "Received"
+    case "mining_reward": "Mining reward"
+    default: "Transaction"
+    }
+  }
+
+  private var icon: String {
+    switch transaction.direction {
+    case "sent": "arrow.up.right"
+    case "mining_reward": "hammer.fill"
+    default: "arrow.down.left"
+    }
+  }
+
+  private var amount: String {
+    let value = AuraAmountCodec.aur(fromAtoms: transaction.amountAtoms) ?? "Unavailable"
+    let prefix = transaction.direction == "sent" ? "−" : "+"
+    return "\(prefix)\(value) AUR"
+  }
+
+  private var status: String {
+    if transaction.state == "confirmed" {
+      return transaction.confirmations == "1"
+        ? "1 confirmation"
+        : "\(transaction.confirmations) confirmations"
+    }
+    return "Unconfirmed"
+  }
+}
+
+private struct AuraWalletMetric: View {
+  let label: String
+  let value: String
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 2) {
+      Text(label)
+        .font(.system(size: 10.5, weight: .semibold))
+        .foregroundStyle(MIRATheme.Color.textMuted)
+      Text(value)
+        .font(.system(size: 13, weight: .bold))
+        .lineLimit(1)
+        .minimumScaleFactor(0.7)
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
+}
+
+struct AuraPrimaryButtonStyle: ButtonStyle {
   func makeBody(configuration: Configuration) -> some View {
     configuration.label
       .font(.system(size: 15, weight: .bold))

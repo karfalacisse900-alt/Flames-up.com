@@ -109,6 +109,44 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           MAPBOX_ACCESS_TOKEN: ${{ secrets.MAPBOX_ACCESS_TOKEN }}
 
+      - name: Sync Aura document verification secrets
+        working-directory: ./backend-cf
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in VERYFI_CLIENT_ID VERYFI_CLIENT_SECRET VERYFI_USERNAME VERYFI_API_KEY; do
+            value="${!name:-}"
+            if [ -z "$value" ]; then
+              echo "$name is required for Aura receipt and invoice verification."
+              exit 1
+            fi
+            printf '%s' "$value" | npx wrangler secret put "$name" --env production
+          done
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          VERYFI_CLIENT_ID: ${{ secrets.VERYFI_CLIENT_ID }}
+          VERYFI_CLIENT_SECRET: ${{ secrets.VERYFI_CLIENT_SECRET }}
+          VERYFI_USERNAME: ${{ secrets.VERYFI_USERNAME }}
+          VERYFI_API_KEY: ${{ secrets.VERYFI_API_KEY }}
+
+      - name: Sync Aura mobile gateway secrets when configured
+        working-directory: ./backend-cf
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${AURA_MOBILE_GATEWAY_URL:-}" ] || [ -z "${AURA_MOBILE_GATEWAY_TOKEN:-}" ]; then
+            echo "Aura mobile gateway origin is not configured yet; wallet routes will return a truthful 503."
+            exit 0
+          fi
+          printf '%s' "$AURA_MOBILE_GATEWAY_URL" | npx wrangler secret put AURA_MOBILE_GATEWAY_URL --env production
+          printf '%s' "$AURA_MOBILE_GATEWAY_TOKEN" | npx wrangler secret put AURA_MOBILE_GATEWAY_TOKEN --env production
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          AURA_MOBILE_GATEWAY_URL: ${{ secrets.AURA_MOBILE_GATEWAY_URL }}
+          AURA_MOBILE_GATEWAY_TOKEN: ${{ secrets.AURA_MOBILE_GATEWAY_TOKEN }}
+
       - name: Ensure media moderation queue exists
         working-directory: ./backend-cf
         run: npx wrangler queues create captro-media-moderation || true

@@ -46,6 +46,28 @@ struct AuraLocalDocument: Identifiable {
     return UIImage(data: first)
   }
 
+  /// Produces the single bounded upload consumed by the authenticated verification service.
+  /// Multi-page camera scans are combined into an in-memory PDF; no temporary receipt file is
+  /// written to disk.
+  func verificationUpload() throws -> (filename: String, mediaType: String, data: Data) {
+    if pages.count == 1, let page = pages.first {
+      return (filename, mediaType, page)
+    }
+    let pdf = PDFDocument()
+    for (index, data) in pages.enumerated() {
+      guard let image = UIImage(data: data), let page = PDFPage(image: image) else {
+        throw AuraLocalDocumentError.corrupt
+      }
+      pdf.insert(page, at: index)
+    }
+    guard let data = pdf.dataRepresentation(), !data.isEmpty else {
+      throw AuraLocalDocumentError.corrupt
+    }
+    guard data.count <= Self.maximumBytes else { throw AuraLocalDocumentError.tooLarge }
+    let stem = (filename as NSString).deletingPathExtension
+    return ("\(stem.isEmpty ? "Aura Document" : stem).pdf", "application/pdf", data)
+  }
+
   static func scanned(kind: AuraScanDocumentKind, pages: [Data]) throws -> Self {
     try make(
       kind: kind,

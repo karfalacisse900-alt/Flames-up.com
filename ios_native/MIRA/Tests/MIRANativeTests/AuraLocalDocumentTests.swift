@@ -56,6 +56,27 @@ final class AuraLocalDocumentTests: XCTestCase {
     XCTAssertThrowsError(try AuraLocalDocument.imported(kind: .receipt, url: largeURL))
   }
 
+  func testMultiPageScanBecomesOneInMemoryPDFUpload() throws {
+    let renderer = UIGraphicsImageRenderer(size: CGSize(width: 40, height: 60))
+    let first = try XCTUnwrap(renderer.image { context in
+      UIColor.white.setFill()
+      context.fill(CGRect(x: 0, y: 0, width: 40, height: 60))
+    }.jpegData(compressionQuality: 0.9))
+    let second = try XCTUnwrap(renderer.image { context in
+      UIColor.lightGray.setFill()
+      context.fill(CGRect(x: 0, y: 0, width: 40, height: 60))
+    }.jpegData(compressionQuality: 0.9))
+
+    let document = try AuraLocalDocument.scanned(kind: .invoice, pages: [first, second])
+    let upload = try document.verificationUpload()
+    let pdf = try XCTUnwrap(PDFDocument(data: upload.data))
+
+    XCTAssertEqual(upload.mediaType, "application/pdf")
+    XCTAssertTrue(upload.filename.hasSuffix(".pdf"))
+    XCTAssertEqual(pdf.pageCount, 2)
+    XCTAssertLessThanOrEqual(upload.data.count, AuraLocalDocument.maximumBytes)
+  }
+
   private func temporaryURL(extension pathExtension: String) -> URL {
     FileManager.default.temporaryDirectory
       .appendingPathComponent(UUID().uuidString)

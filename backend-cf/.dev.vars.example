@@ -1,0 +1,9 @@
+# Copy to .dev.vars for local Worker development. Never commit values.
+VERYFI_CLIENT_ID=
+VERYFI_CLIENT_SECRET=
+VERYFI_USERNAME=
+VERYFI_API_KEY=
+
+# HTTPS origin of the Rust aura-mobile-gateway. The token must be at least 32 characters.
+AURA_MOBILE_GATEWAY_URL=
+AURA_MOBILE_GATEWAY_TOKEN=

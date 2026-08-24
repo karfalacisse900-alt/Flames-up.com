@@ -3,6 +3,7 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import bcrypt from 'bcryptjs';
+import { createAuraRoutes } from './aura';
 
 type MediaModerationJobMessage = {
   jobId: string;
@@ -100,6 +101,13 @@ interface Env {
   SOLANA_RPC_URL?: string;
   IPFS_API_URL?: string;
   ARWEAVE_GATEWAY?: string;
+  AURA_MOBILE_GATEWAY_URL?: string;
+  AURA_MOBILE_GATEWAY_TOKEN?: string;
+  VERYFI_CLIENT_ID?: string;
+  VERYFI_CLIENT_SECRET?: string;
+  VERYFI_USERNAME?: string;
+  VERYFI_API_KEY?: string;
+  VERYFI_BASE_URL?: string;
 }
 
 type HonoApp = { Bindings: Env; Variables: { userId: string; requestId: string } };
@@ -150,6 +158,7 @@ const corsOpts = {
     'Content-Type',
     'Range',
     'Idempotency-Key',
+    'X-Aura-Request-Timestamp',
     'X-Idempotency-Key',
     'X-Request-ID',
     'X-Captro-Device-Trust-Mode',
@@ -23624,6 +23633,7 @@ async function processAccountDeletionQueue(env: Env, limit = 20) {
 }
 
 // Mount API routes on app
+api.route('/aura', createAuraRoutes(authMiddleware, getUserId, enforceRateLimit));
 app.route('/api', api);
 
 async function handleMediaModerationQueue(batch: MessageBatch<MediaModerationJobMessage>, env: Env, _ctx: ExecutionContext) {
