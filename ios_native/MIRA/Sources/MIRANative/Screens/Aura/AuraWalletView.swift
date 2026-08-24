@@ -269,9 +269,17 @@ public struct AuraWalletView: View {
           AuraWalletMetric(label: "Block", value: status.canonicalHeight)
           AuraWalletMetric(label: "Peers", value: status.connectedPeers)
           AuraWalletMetric(
+            label: "Latency",
+            value: gateway.latencyMilliseconds.map { "\($0) ms" } ?? "Unavailable"
+          )
+        }
+        HStack {
+          AuraWalletMetric(
             label: "Min fee",
             value: AuraAmountCodec.aur(fromAtoms: fees.minimumFeeAtoms).map { "\($0) AUR" } ?? "Unavailable"
           )
+          AuraWalletMetric(label: "Mempool", value: status.mempoolTransactions)
+          AuraWalletMetric(label: "Sync", value: status.syncStatus.replacingOccurrences(of: "_", with: " ").capitalized)
         }
         Text(status.syncStatus == "no_peers" ? "No peers" : "Connected peers · independently validating")
           .font(.system(size: 12.5, weight: .medium))

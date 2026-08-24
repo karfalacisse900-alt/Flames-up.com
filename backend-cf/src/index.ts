@@ -102,6 +102,7 @@ interface Env {
   IPFS_API_URL?: string;
   ARWEAVE_GATEWAY?: string;
   AURA_MOBILE_GATEWAY_URL?: string;
+  AURA_MOBILE_GATEWAY_URLS?: string;
   AURA_MOBILE_GATEWAY_TOKEN?: string;
   VERYFI_CLIENT_ID?: string;
   VERYFI_CLIENT_SECRET?: string;

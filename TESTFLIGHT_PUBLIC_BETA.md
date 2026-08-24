@@ -15,20 +15,23 @@ iOS bundle ID: `com.karfala90.aura`. App Store Connect app: **Aura Proof Network
 
 ## Beta App Description
 
-> The copy below describes what Aura Mobile actually does today. As of this migration, Scan, Proofs, Reputation, and Wallet are honest not-yet-connected empty states pending an Aura Mobile Gateway/FFI bridge — update this section as those become real before advertising them to testers.
+> The copy below describes the Experimental Devnet build. Wallet and document parsing are connected to authenticated services. Proof issuance, on-chain purchase proofs, and reputation consensus remain unavailable and must still show truthful unavailable states.
 
-Aura Mobile is a native iOS app for scanning receipts and invoices, submitting them as verified proofs, building a portable Aura Reputation score from real verified purchases, and (eventually) holding an Aura wallet.
+Aura Mobile is a native iOS Devnet app with a local encrypted Rust wallet, real Aura chain-state reads, locally signed AUR transfers, and authenticated receipt/invoice parsing.
 
-This beta is focused on testing the core Aura Mobile shell before the verification and wallet backends are connected:
+This beta is focused on testing:
 
 - Creating an account and signing in
 - Navigating Home, Scan, Proofs, Reputation, and Wallet
-- Confirming that not-yet-connected features show a clear, honest empty state rather than fake data
+- Reading real Devnet balance, nonce, fee, height, peers, mempool, latency, history, and confirmations
+- Signing AUR transfers locally and broadcasting only canonical signed transaction bytes
+- Parsing receipts/invoices through the authenticated provider while keeping proof issuance unavailable
+- Confirming that unfinished proof/reputation features show a clear, honest empty state rather than fake data
 - App stability, dark mode, and general navigation
 
 Please report crashes, broken navigation, login issues, or any screen that shows data that looks invented rather than a genuine empty state.
 
-Aura Mobile is early in this beta, so most functional screens will show empty states until the backend and wallet FFI bridge are connected.
+Aura Mobile is still Experimental Devnet software. It is not Mainnet, not production-ready, and does not yet issue on-chain purchase proofs or reputation changes.
 
 ## What To Test
 
@@ -36,7 +39,10 @@ Please focus on:
 
 - Sign up, log in, and account flows
 - Tab navigation across Home, Scan, Proofs, Reputation, and Wallet
-- Empty-state screens are honest (no invented scores, balances, or history)
+- Unlock the encrypted local wallet and confirm the real Devnet balance/history loads
+- Send a small Devnet transfer, then confirm pending and mined confirmation states
+- Scan a receipt or invoice and compare extracted fields with the document
+- Empty-state screens remain honest (no invented scores, balances, proofs, or history)
 - App stability after closing/reopening the app
 - Dark mode, Settings, and cache clearing
 

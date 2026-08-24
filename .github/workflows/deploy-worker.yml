@@ -135,15 +135,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [ -z "${AURA_MOBILE_GATEWAY_URL:-}" ] || [ -z "${AURA_MOBILE_GATEWAY_TOKEN:-}" ]; then
+          if { [ -z "${AURA_MOBILE_GATEWAY_URLS:-}" ] && [ -z "${AURA_MOBILE_GATEWAY_URL:-}" ]; } || [ -z "${AURA_MOBILE_GATEWAY_TOKEN:-}" ]; then
             echo "Aura mobile gateway origin is not configured yet; wallet routes will return a truthful 503."
             exit 0
           fi
-          printf '%s' "$AURA_MOBILE_GATEWAY_URL" | npx wrangler secret put AURA_MOBILE_GATEWAY_URL --env production
+          if [ -n "${AURA_MOBILE_GATEWAY_URLS:-}" ]; then
+            printf '%s' "$AURA_MOBILE_GATEWAY_URLS" | npx wrangler secret put AURA_MOBILE_GATEWAY_URLS --env production
+          else
+            printf '%s' "$AURA_MOBILE_GATEWAY_URL" | npx wrangler secret put AURA_MOBILE_GATEWAY_URL --env production
+          fi
           printf '%s' "$AURA_MOBILE_GATEWAY_TOKEN" | npx wrangler secret put AURA_MOBILE_GATEWAY_TOKEN --env production
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          AURA_MOBILE_GATEWAY_URLS: ${{ secrets.AURA_MOBILE_GATEWAY_URLS }}
           AURA_MOBILE_GATEWAY_URL: ${{ secrets.AURA_MOBILE_GATEWAY_URL }}
           AURA_MOBILE_GATEWAY_TOKEN: ${{ secrets.AURA_MOBILE_GATEWAY_TOKEN }}
 

@@ -24,6 +24,12 @@ test('Aura wallet routes proxy only allowlisted operations to an authenticated R
   assert.match(source, /X-Aura-Request-Timestamp/);
   assert.match(source, /AURA_GATEWAY_UNAVAILABLE/);
   assert.match(source, /\/transactions\/broadcast/);
+  assert.match(source, /MAX_GATEWAY_ORIGINS = 3/);
+  assert.match(source, /AURA_MOBILE_GATEWAY_URLS/);
+  assert.match(source, /gatewayHasExpectedIdentity/);
+  assert.match(source, /matchesExpectedAuraNetwork/);
+  assert.match(source, /for \(const base of bases\)/);
+  assert.match(source, /if \(response\.status >= 500\) continue/);
 });
 
 test('deployment syncs credential names from GitHub Actions without source values', async () => {
@@ -31,5 +37,6 @@ test('deployment syncs credential names from GitHub Actions without source value
   for (const name of ['VERYFI_CLIENT_ID', 'VERYFI_CLIENT_SECRET', 'VERYFI_USERNAME', 'VERYFI_API_KEY']) {
     assert.match(workflow, new RegExp(`secrets\\.${name}`));
   }
+  assert.match(workflow, /secrets\.AURA_MOBILE_GATEWAY_URLS/);
   assert.doesNotMatch(workflow, /a5eef8|0FBr1|vrfsgsvt/);
 });

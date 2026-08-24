@@ -168,6 +168,7 @@ public final class AuraWalletGatewayStore: ObservableObject {
   @Published public private(set) var nonce: AuraGatewayNonce?
   @Published public private(set) var fees: AuraGatewayFees?
   @Published public private(set) var history: AuraGatewayHistory?
+  @Published public private(set) var latencyMilliseconds: UInt64?
   @Published public private(set) var isLoading = false
   @Published public private(set) var errorMessage: String?
   @Published public private(set) var lastSubmittedIntentId: String?
@@ -193,6 +194,7 @@ public final class AuraWalletGatewayStore: ObservableObject {
     nonce = nil
     fees = nil
     history = nil
+    latencyMilliseconds = nil
     errorMessage = nil
     lastSubmittedIntentId = nil
     isLoading = false
@@ -201,6 +203,7 @@ public final class AuraWalletGatewayStore: ObservableObject {
   public func refresh(identity: AuraWalletIdentity) async {
     isLoading = true
     errorMessage = nil
+    let startedAt = Date()
     do {
       let remoteNetwork: AuraGatewayNetwork = try await api.get("/aura/network")
       guard remoteNetwork.network == identity.network,
@@ -254,6 +257,8 @@ public final class AuraWalletGatewayStore: ObservableObject {
       nonce = remoteNonce
       fees = remoteFees
       history = remoteHistory
+      let elapsedMilliseconds = max(0, Date().timeIntervalSince(startedAt) * 1_000)
+      latencyMilliseconds = UInt64(min(elapsedMilliseconds.rounded(), Double(UInt64.max)))
     } catch {
       network = nil
       chainStatus = nil
@@ -261,6 +266,7 @@ public final class AuraWalletGatewayStore: ObservableObject {
       nonce = nil
       fees = nil
       history = nil
+      latencyMilliseconds = nil
       errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
     }
     isLoading = false

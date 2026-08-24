@@ -4,6 +4,8 @@ VERYFI_CLIENT_SECRET=
 VERYFI_USERNAME=
 VERYFI_API_KEY=
 
-# HTTPS origin of the Rust aura-mobile-gateway. The token must be at least 32 characters.
+# Comma/newline-separated HTTPS origins of up to three Rust aura-mobile-gateway instances.
+# AURA_MOBILE_GATEWAY_URL remains a backward-compatible single-origin fallback.
+AURA_MOBILE_GATEWAY_URLS=
 AURA_MOBILE_GATEWAY_URL=
 AURA_MOBILE_GATEWAY_TOKEN=

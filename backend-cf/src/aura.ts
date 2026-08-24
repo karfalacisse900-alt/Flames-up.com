@@ -3,6 +3,7 @@ import { Hono } from 'hono';
 export interface AuraWorkerEnv {
   KV?: KVNamespace;
   AURA_MOBILE_GATEWAY_URL?: string;
+  AURA_MOBILE_GATEWAY_URLS?: string;
   AURA_MOBILE_GATEWAY_TOKEN?: string;
   VERYFI_CLIENT_ID?: string;
   VERYFI_CLIENT_SECRET?: string;
@@ -23,8 +24,17 @@ type RateLimiter = (
 const MAX_DOCUMENT_BYTES = 12 * 1024 * 1024;
 const MAX_PROVIDER_RESPONSE_BYTES = 8 * 1024 * 1024;
 const MAX_GATEWAY_RESPONSE_BYTES = 1024 * 1024;
+const MAX_GATEWAY_ORIGINS = 3;
 const VERYFI_DOCUMENTS_PATH = '/api/v8/partner/documents';
 const ALLOWED_GATEWAY_PATH = /^\/(network|chain\/status|fees|address\/[a-zA-Z0-9]+\/(balance|nonce|transactions)|transactions\/broadcast|transaction\/[a-fA-F0-9]+|proof\/[a-zA-Z0-9_-]+)$/;
+const EXPECTED_AURA_NETWORK = Object.freeze({
+  protocolVersion: '2',
+  network: 'devnet',
+  chainId: 'aura-devnet-pow-v2',
+  chainIdHash: 'cd1367f5feceec31b754d7e9044443aa5df65a834ae592ed376cd7eb511c9899',
+  genesisHash: '292fd5d47d522ea52b405e1dd43ae1ccf5700ed49712bc9a45c73a1542a69b87',
+  mainnetAvailable: false,
+});
 
 function boundedText(value: unknown, maximum = 1024): string | null {
   if (value === null || value === undefined) return null;
@@ -238,32 +248,75 @@ async function readBoundedResponse(response: Response, maximum: number): Promise
   return bytes;
 }
 
-function gatewayBaseURL(env: AuraWorkerEnv): URL {
-  const base = new URL(env.AURA_MOBILE_GATEWAY_URL?.trim() || '');
+function validatedGatewayBaseURL(value: string): URL {
+  const base = new URL(value);
   if (base.protocol !== 'https:' || base.username || base.password || base.search || base.hash) {
     throw new Error('GATEWAY_CONFIGURATION_INVALID');
   }
+  base.pathname = base.pathname.replace(/\/+$/, '');
   return base;
+}
+
+function gatewayBaseURLs(env: AuraWorkerEnv): URL[] {
+  const configured = env.AURA_MOBILE_GATEWAY_URLS?.trim()
+    ? env.AURA_MOBILE_GATEWAY_URLS.split(/[\r\n,]+/)
+    : [env.AURA_MOBILE_GATEWAY_URL || ''];
+  const unique = new Map<string, URL>();
+  for (const candidate of configured) {
+    const value = candidate.trim();
+    if (!value) continue;
+    const base = validatedGatewayBaseURL(value);
+    unique.set(base.toString(), base);
+    if (unique.size >= MAX_GATEWAY_ORIGINS) break;
+  }
+  if (unique.size === 0) throw new Error('GATEWAY_CONFIGURATION_INVALID');
+  return [...unique.values()];
+}
+
+function matchesExpectedAuraNetwork(value: any): boolean {
+  return value?.protocolVersion === EXPECTED_AURA_NETWORK.protocolVersion
+    && value?.network === EXPECTED_AURA_NETWORK.network
+    && value?.chainId === EXPECTED_AURA_NETWORK.chainId
+    && value?.chainIdHash === EXPECTED_AURA_NETWORK.chainIdHash
+    && value?.genesisHash === EXPECTED_AURA_NETWORK.genesisHash
+    && value?.mainnetAvailable === EXPECTED_AURA_NETWORK.mainnetAvailable;
+}
+
+async function gatewayHasExpectedIdentity(base: URL, token: string, requestId: string): Promise<boolean> {
+  const networkURL = new URL('/v1/network', base);
+  const response = await fetch(networkURL, {
+    headers: {
+      accept: 'application/json',
+      authorization: `Bearer ${token}`,
+      'x-request-id': `${requestId}:identity`,
+    },
+  });
+  if (!response.ok) return false;
+  const bytes = await readBoundedResponse(response, 64 * 1024);
+  try {
+    return matchesExpectedAuraNetwork(JSON.parse(new TextDecoder().decode(bytes)));
+  } catch {
+    return false;
+  }
 }
 
 async function proxyGateway(c: any, gatewayPath: string): Promise<Response> {
   if (!ALLOWED_GATEWAY_PATH.test(gatewayPath)) return c.json({ detail: 'Unsupported Aura gateway operation.' }, 404);
   const token = c.env.AURA_MOBILE_GATEWAY_TOKEN?.trim();
-  if (!token || token.length < 32 || !c.env.AURA_MOBILE_GATEWAY_URL?.trim()) {
+  if (!token || token.length < 32 || (!c.env.AURA_MOBILE_GATEWAY_URLS?.trim() && !c.env.AURA_MOBILE_GATEWAY_URL?.trim())) {
     return c.json({ detail: 'Aura Devnet gateway is not configured.', code: 'AURA_GATEWAY_UNAVAILABLE' }, 503);
   }
-  let base: URL;
+  let bases: URL[];
   try {
-    base = gatewayBaseURL(c.env);
+    bases = gatewayBaseURLs(c.env);
   } catch {
     return c.json({ detail: 'Aura Devnet gateway is not configured.', code: 'AURA_GATEWAY_UNAVAILABLE' }, 503);
   }
-  const upstream = new URL(`/v1${gatewayPath}`, base);
-  upstream.search = new URL(c.req.url).search;
+  const requestId = c.get('requestId') || crypto.randomUUID();
   const headers = new Headers({
     accept: 'application/json',
     authorization: `Bearer ${token}`,
-    'x-request-id': c.get('requestId') || crypto.randomUUID(),
+    'x-request-id': requestId,
   });
   const idempotency = c.req.header('Idempotency-Key');
   const requestTimestamp = c.req.header('X-Aura-Request-Timestamp');
@@ -278,19 +331,26 @@ async function proxyGateway(c: any, gatewayPath: string): Promise<Response> {
     body = requestBody;
     headers.set('content-type', 'application/json');
   }
-  try {
-    const response = await fetch(upstream, { method: c.req.method, headers, body });
-    const bytes = await readBoundedResponse(response, MAX_GATEWAY_RESPONSE_BYTES);
-    return new Response(bytes, {
-      status: response.status,
-      headers: {
-        'content-type': 'application/json; charset=utf-8',
-        'cache-control': 'no-store',
-      },
-    });
-  } catch {
-    return c.json({ detail: 'Aura Devnet gateway is unavailable.', code: 'AURA_GATEWAY_UNAVAILABLE' }, 503);
+  for (const base of bases) {
+    try {
+      if (!await gatewayHasExpectedIdentity(base, token, requestId)) continue;
+      const upstream = new URL(`/v1${gatewayPath}`, base);
+      upstream.search = new URL(c.req.url).search;
+      const response = await fetch(upstream, { method: c.req.method, headers, body });
+      const bytes = await readBoundedResponse(response, MAX_GATEWAY_RESPONSE_BYTES);
+      if (response.status >= 500) continue;
+      return new Response(bytes, {
+        status: response.status,
+        headers: {
+          'content-type': 'application/json; charset=utf-8',
+          'cache-control': 'no-store',
+        },
+      });
+    } catch {
+      // Try the next independently configured origin. The phone still validates identity too.
+    }
   }
+  return c.json({ detail: 'Aura Devnet gateway is unavailable.', code: 'AURA_GATEWAY_UNAVAILABLE' }, 503);
 }
 
 export function createAuraRoutes(
