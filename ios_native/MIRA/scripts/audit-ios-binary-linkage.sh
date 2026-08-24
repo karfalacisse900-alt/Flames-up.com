@@ -11,8 +11,9 @@ fi
 
 LINKED_LIBRARIES=$(otool -L "${BINARY_PATH}")
 echo "${LINKED_LIBRARIES}"
+DEPENDENCY_LINES=$(awk '/^[[:space:]]+/' <<<"${LINKED_LIBRARIES}")
 
-if grep -qE 'libmira_core\.dylib|/Users/|/Volumes/|DerivedData|/target/' <<<"${LINKED_LIBRARIES}"; then
+if grep -qE 'libmira_core\.dylib|/Users/|/Volumes/|DerivedData|/target/' <<<"${DEPENDENCY_LINES}"; then
   echo "Aura contains a non-portable or dynamic Rust library load command." >&2
   exit 1
 fi
