@@ -9,7 +9,7 @@ import MetricKit
 #endif
 
 public enum MIRAApplePerformanceLogger {
-  private static let subsystem = Bundle.main.bundleIdentifier ?? "com.captro.ios"
+  private static let subsystem = Bundle.main.bundleIdentifier ?? "com.karfala90.aura"
   private static let logger = Logger(subsystem: subsystem, category: "performance")
   private static let signpostLog = OSLog(subsystem: subsystem, category: "performance")
 

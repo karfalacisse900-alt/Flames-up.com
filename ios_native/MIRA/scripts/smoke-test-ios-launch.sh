@@ -4,7 +4,7 @@ set -euo pipefail
 PROJECT_PATH="${PROJECT_PATH:-Aura.xcodeproj}"
 SCHEME="${SCHEME:-Aura}"
 CONFIGURATION="${CONFIGURATION:-Release}"
-BUNDLE_ID="${BUNDLE_ID:-com.captro.app}"
+BUNDLE_ID="${BUNDLE_ID:-com.karfala90.aura}"
 DERIVED_DATA_PATH=$(mktemp -d "${RUNNER_TEMP:-/tmp}/aura-launch-smoke.XXXXXX")
 
 SIMULATOR_ID=$(xcrun simctl list devices available -j | python3 -c '
@@ -52,7 +52,7 @@ if ! kill -0 "${APP_PID}" 2>/dev/null; then
   xcrun simctl spawn "${SIMULATOR_ID}" log show \
     --style compact \
     --last 2m \
-    --predicate 'process == "Aura" OR eventMessage CONTAINS[c] "com.captro.app"' || true
+    --predicate 'process == "Aura" OR eventMessage CONTAINS[c] "com.karfala90.aura"' || true
   exit 1
 fi
 

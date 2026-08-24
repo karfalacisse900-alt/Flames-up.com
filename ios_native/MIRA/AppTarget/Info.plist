@@ -91,8 +91,8 @@
   </array>
   <key>BGTaskSchedulerPermittedIdentifiers</key>
   <array>
-    <string>com.captro.app.background-refresh</string>
-    <string>com.captro.app.cache-cleanup</string>
+    <string>com.karfala90.aura.background-refresh</string>
+    <string>com.karfala90.aura.cache-cleanup</string>
   </array>
   <key>UILaunchScreen</key>
   <dict>

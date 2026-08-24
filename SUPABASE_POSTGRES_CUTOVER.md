@@ -188,7 +188,7 @@ Update:
 2. App name: `Captro`
 3. Support email and developer contact email
 4. OAuth clients used by Captro:
-   - iOS client for `com.captro.app`
+   - iOS client for `com.karfala90.aura`
    - Web client used by Supabase Google provider
 5. Supabase Dashboard > Authentication > Providers > Google
    - Use the Captro web OAuth client ID/secret
@@ -197,6 +197,6 @@ Update:
 The iOS bundle already uses:
 
 - Display name: `Captro`
-- Bundle ID: `com.captro.app`
+- Bundle ID: `com.karfala90.aura`
 
 Google may cache old consent branding for a while. If the chooser still says MIRA after updating branding, create fresh Captro OAuth clients and replace the old MIRA client IDs in the Worker secret and iOS `GIDClientID`.

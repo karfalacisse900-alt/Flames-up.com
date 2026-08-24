@@ -18,7 +18,7 @@ Four workflows cover Aura Mobile's iOS CI/CD, all building the SwiftUI/C++/Rust 
 7. Uploads the `.ipa` artifact.
 8. Uploads the build to TestFlight with App Store Connect API credentials, then waits for processing and assigns it to the beta group.
 
-XcodeGen is used in CI so Windows development can still produce a native iOS archive through GitHub-hosted macOS runners. The bundle identifier stays `com.captro.app` on purpose — it is what keeps this build attached to the existing App Store Connect app record and its TestFlight history; only the display name, product name, scheme, and target changed to Aura.
+XcodeGen is used in CI so Windows development can still produce a native iOS archive through GitHub-hosted macOS runners. Aura uses bundle identifier `com.karfala90.aura` and App Store Connect app ID `6804671675`; it is separate from the retired Captroo app record.
 
 ## Required GitHub Secrets
 
@@ -44,7 +44,7 @@ On a Mac with Apple Developer access:
 
 ```bash
 base64 -i Certificates.p12 | pbcopy
-base64 -i Captro_App_Store.mobileprovision | pbcopy
+base64 -i Aura_App_Store.mobileprovision | pbcopy
 base64 -i AuthKey_XXXXXXXXXX.p8 | pbcopy
 ```
 
@@ -54,7 +54,7 @@ Paste those copied values into:
 - `IOS_PROVISIONING_PROFILE_BASE64`
 - `APP_STORE_CONNECT_API_KEY_BASE64`
 
-The provisioning profile must match the bundle ID `com.captro.app` configured in `project.yml` and `.github/workflows/native-ios-testflight.yml`.
+The provisioning profile must be `Aura_App_Store` and match bundle ID `com.karfala90.aura` configured in `project.yml` and `.github/workflows/native-ios-testflight.yml`.
 
 ## Run
 

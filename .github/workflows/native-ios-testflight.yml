@@ -19,13 +19,11 @@ on:
 
 env:
   IOS_NATIVE_DIR: ios_native/MIRA
-  BUNDLE_ID: com.captro.app
+  BUNDLE_ID: com.karfala90.aura
   SCHEME: Aura
-  # Must match an existing external group in App Store Connect. Renaming this string without
-  # first renaming the group in App Store Connect (or vice versa) will make `pilot distribute`
-  # fail to find the group.
-  BETA_GROUP: "Captro Public Beta"
-  APPLE_APP_ID: "6777888591"
+  # Must match the internal TestFlight group created for the clean Aura app record.
+  BETA_GROUP: "Aura Internal Beta"
+  APPLE_APP_ID: "6804671675"
 
 jobs:
   build-testflight:
@@ -285,7 +283,7 @@ jobs:
             sleep "$delay"
           done
 
-      - name: Wait for processing and distribute to Aura Public Beta
+      - name: Wait for processing and distribute to Aura Internal Beta
         env:
           RELEASE_NOTES: ${{ inputs.release_notes }}
         run: |
@@ -304,7 +302,7 @@ jobs:
               --app_version "$MARKETING_VERSION" \
               --build_number "$BUILD_NUMBER" \
               --groups "$BETA_GROUP" \
-              --distribute_external true \
+              --distribute_external false \
               --notify_external_testers false \
               --submit_beta_review false \
               --wait_processing_interval 30 \

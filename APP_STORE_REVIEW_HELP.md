@@ -17,7 +17,7 @@ Use this as the submission checklist and copy source for App Store Connect.
    - `https://captro.app/legal/safety`
 
 5. Build
-   - Choose the newest processed TestFlight/App Store build for `com.captro.app`
+   - Choose the newest processed TestFlight/App Store build for `com.karfala90.aura`
    - Wait for the current GitHub/TestFlight run to finish before selecting it
 
 6. Primary Category

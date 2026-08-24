@@ -1,6 +1,6 @@
 # Aura Mobile Native iOS
 
-This is the native iOS app for Aura Mobile, converted from the former Captro app. It keeps the `com.captro.app` bundle identifier so the existing App Store Connect app record and TestFlight history carry over; only the display name, product name, and Xcode scheme/target changed to Aura.
+This is the native iOS app for Aura Mobile. It now uses the clean `com.karfala90.aura` bundle identifier and the separate **Aura Proof Network** App Store Connect record so installs do not inherit Captroo application storage.
 
 ## Stack
 

@@ -132,7 +132,7 @@ Google OAuth setup:
 - If the Google account chooser says `continue with MIRA`, update the Google Cloud OAuth consent screen / branding app name to `Captro` and make sure Supabase's Google provider uses the Captro Web OAuth client. This wording is controlled by Google's OAuth app branding, not by a SwiftUI label.
 
 Apple native sign-in:
-- Enable Sign in with Apple on the iOS App ID `com.captro.app`.
+- Enable Sign in with Apple on the current iOS App ID `com.karfala90.aura`. The legacy `com.captro.app` audience remains accepted only for existing Captroo clients.
 - Configure the Apple Services ID in Supabase for web OAuth.
 - The iOS app sends a raw Apple nonce through the Worker; Supabase Auth validates the native Apple identity token.
 - Set `APPLE_OAUTH_AUDIENCES` on the Worker only for optional local diagnostics; Supabase Auth is the source of truth for Apple token validation.

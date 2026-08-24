@@ -11,9 +11,9 @@ on:
         required: true
         default: "1.0.1"
       beta_group:
-        description: External TestFlight group (must already exist in App Store Connect)
+        description: Internal TestFlight group (must already exist in App Store Connect)
         required: true
-        default: Captro Public Beta
+        default: Aura Internal Beta
       changelog:
         description: TestFlight "What to Test" changelog for this build
         required: true
@@ -23,8 +23,8 @@ permissions:
   contents: read
 
 env:
-  APPLE_APP_ID: "6777888591"
-  BUNDLE_ID: com.captro.app
+  APPLE_APP_ID: "6804671675"
+  BUNDLE_ID: com.karfala90.aura
 
 jobs:
   distribute-testflight:
@@ -90,8 +90,8 @@ jobs:
             --app_version "$APP_VERSION" \
             --build_number "$BUILD_NUMBER" \
             --groups "$BETA_GROUP" \
-            --distribute_external true \
-            --notify_external_testers true \
+            --distribute_external false \
+            --notify_external_testers false \
             --submit_beta_review true \
             --wait_processing_interval 30 \
             --wait_processing_timeout_duration 1800 \

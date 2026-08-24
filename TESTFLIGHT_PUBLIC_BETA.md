@@ -4,11 +4,11 @@ Aura Mobile builds are uploaded to TestFlight by the GitHub Actions workflow `Au
 
 Apple still requires the first external TestFlight build to pass TestFlight App Review before a public link can be opened.
 
-iOS bundle ID: `com.captro.app`. This is unchanged from Captro on purpose, so the build continues to attach to the existing App Store Connect app record instead of creating a new one.
+iOS bundle ID: `com.karfala90.aura`. App Store Connect app: **Aura Proof Network** (`6804671675`). This is a clean app record separate from Captroo.
 
 ## Recommended Public Beta Group
 
-- Group name: `Captro Public Beta` (kept as-is; rename it in App Store Connect first if you want a different name, then update `BETA_GROUP` in the workflow to match)
+- Group name: `Aura Internal Beta` for immediate internal testing; create `Aura Public Beta` later for external testing.
 - Public link access: `Open to Anyone`
 - Starting tester limit: `300`
 - Increase later if crashes and feedback look healthy.
@@ -88,7 +88,7 @@ Create a dedicated non-admin test account before submitting the first external b
 
 ## App Store Connect Steps
 
-1. Go to `My Apps -> Captro -> TestFlight` (the app record's App Store Connect display name can be renamed to Aura independently of the bundle ID; that does not affect this workflow).
+1. Go to `My Apps -> Aura Proof Network -> TestFlight`.
 2. Confirm the latest GitHub Actions build is processed and available.
 3. Fill in `Test Information`:
    - Beta App Description: use the copy above.
@@ -96,7 +96,7 @@ Create a dedicated non-admin test account before submitting the first external b
    - Contact Info: use owner/developer contact info.
    - Sign-in/test account info: use the review note above.
 4. Create or verify an internal testing group.
-5. Create an external testing group named `Captro Public Beta` (or your renamed equivalent, kept in sync with `BETA_GROUP` in the workflow).
+5. After internal testing is stable, create an external testing group named `Aura Public Beta` and keep `BETA_GROUP` in the workflow synchronized with the group being targeted.
 6. Add the latest build to the group.
 7. Paste the `What To Test` copy above.
 8. Submit the build for TestFlight App Review.

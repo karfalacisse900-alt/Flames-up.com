@@ -33,7 +33,7 @@ targets:
     settings:
       base:
         PRODUCT_NAME: Aura
-        PRODUCT_BUNDLE_IDENTIFIER: com.captro.app
+        PRODUCT_BUNDLE_IDENTIFIER: com.karfala90.aura
         GOOGLE_SERVER_CLIENT_ID: "702354172189-dcg22qr9dqln7mqd1gi3q3bdbl9dajcd.apps.googleusercontent.com"
         INFOPLIST_FILE: AppTarget/Info.plist
         CODE_SIGN_ENTITLEMENTS: AppTarget/Aura.entitlements
@@ -77,7 +77,7 @@ targets:
         product: MIRANative
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.captro.app.tests
+        PRODUCT_BUNDLE_IDENTIFIER: com.karfala90.aura.tests
         GENERATE_INFOPLIST_FILE: YES
         CODE_SIGNING_ALLOWED: NO
         "LIBRARY_SEARCH_PATHS[sdk=iphoneos*]": "$(inherited) $(PROJECT_DIR)/rust/mira_core/target/aarch64-apple-ios/release"

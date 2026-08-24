@@ -1,1 +1,1 @@
-app_identifier(ENV.fetch("BUNDLE_ID", "com.captro.app"))
+app_identifier(ENV.fetch("BUNDLE_ID", "com.karfala90.aura"))
