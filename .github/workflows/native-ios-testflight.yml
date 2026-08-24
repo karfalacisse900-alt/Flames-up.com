@@ -99,6 +99,11 @@ jobs:
             -only-testing:AuraTests \
             test
 
+      - name: Launch Aura Release build in iOS Simulator
+        if: inputs.existing_build_number == ''
+        working-directory: ${{ env.IOS_NATIVE_DIR }}
+        run: bash ./scripts/smoke-test-ios-launch.sh
+
       - name: Prepare App Store Connect API key
         env:
           APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}

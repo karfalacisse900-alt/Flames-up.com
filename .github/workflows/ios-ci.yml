@@ -70,3 +70,7 @@ jobs:
             -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
             -only-testing:AuraTests \
             test
+
+      - name: Launch Aura Release build in iOS Simulator
+        working-directory: ${{ env.IOS_NATIVE_DIR }}
+        run: bash ./scripts/smoke-test-ios-launch.sh
