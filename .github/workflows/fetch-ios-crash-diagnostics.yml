@@ -1,0 +1,64 @@
+name: Fetch Aura iOS Crash Diagnostics
+
+on:
+  workflow_dispatch:
+    inputs:
+      wait_minutes:
+        description: "Maximum time to wait for Apple to publish the shared TestFlight crash"
+        required: false
+        type: number
+        default: 20
+
+permissions:
+  contents: read
+
+jobs:
+  fetch-crash:
+    name: Download privacy-bounded TestFlight crash diagnostics
+    runs-on: macos-26
+    timeout-minutes: 30
+    env:
+      APPLE_APP_ID: "6804671675"
+      EXPECTED_BUNDLE_ID: "com.karfala90.aura"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Prepare App Store Connect key
+        env:
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_API_KEY_BASE64: ${{ secrets.APP_STORE_CONNECT_API_KEY_BASE64 }}
+        run: |
+          set -euo pipefail
+          KEY_PATH="$RUNNER_TEMP/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8"
+          echo -n "$APP_STORE_CONNECT_API_KEY_BASE64" | base64 -D > "$KEY_PATH"
+          chmod 600 "$KEY_PATH"
+          echo "ASC_PRIVATE_KEY_PATH=$KEY_PATH" >> "$GITHUB_ENV"
+
+      - name: Install JWT dependency
+        run: python3 -m pip install --disable-pip-version-check --quiet cryptography
+
+      - name: Poll Apple and download shared crash log
+        env:
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+          WAIT_MINUTES: ${{ inputs.wait_minutes }}
+        run: |
+          set -euo pipefail
+          python3 scripts/fetch_testflight_crash.py \
+            --app-id "$APPLE_APP_ID" \
+            --expected-bundle-id "$EXPECTED_BUNDLE_ID" \
+            --key-id "$APP_STORE_CONNECT_API_KEY_ID" \
+            --issuer-id "$APP_STORE_CONNECT_API_ISSUER_ID" \
+            --private-key "$ASC_PRIVATE_KEY_PATH" \
+            --wait-minutes "$WAIT_MINUTES" \
+            --output "$RUNNER_TEMP/aura-testflight-crash"
+
+      - name: Upload crash diagnostic artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: aura-testflight-crash-diagnostics
+          path: ${{ runner.temp }}/aura-testflight-crash/
+          if-no-files-found: error
+          retention-days: 7
