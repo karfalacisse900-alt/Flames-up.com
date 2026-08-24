@@ -68,22 +68,7 @@ jobs:
         working-directory: ${{ env.IOS_NATIVE_DIR }}
         run: |
           set -euo pipefail
-          MARKETING_VERSION=$(python3 - <<'PY'
-          import re
-
-          with open("project.yml", "r", encoding="utf-8") as handle:
-              project = handle.read()
-
-          match = re.search(
-              r'^\s*MARKETING_VERSION:\s*["\']?([0-9A-Za-z.-]+)["\']?\s*(?:#.*)?$',
-              project,
-              re.MULTILINE,
-          )
-          if match is None:
-              raise SystemExit("Could not read MARKETING_VERSION from project.yml")
-          print(match.group(1))
-          PY
-          )
+          MARKETING_VERSION=$(sed -nE 's/^[[:space:]]*MARKETING_VERSION:[[:space:]]*"?([0-9A-Za-z.-]+)"?.*$/\1/p' project.yml | head -n 1)
           if [ -z "$MARKETING_VERSION" ]; then
             echo "::error::Could not read MARKETING_VERSION from project.yml"
             exit 1
