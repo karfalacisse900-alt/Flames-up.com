@@ -16,4 +16,12 @@ final class AuraWalletGatewayTests: XCTestCase {
     XCTAssertThrowsError(try AuraAmountCodec.atoms(fromAUR: "-1"))
     XCTAssertThrowsError(try AuraAmountCodec.atoms(fromAUR: "184467440738"))
   }
+
+  func testExpectedDevnetIdentityIsFrozenInTheLightClient() {
+    XCTAssertEqual(AuraExpectedDevnet.protocolVersion, "2")
+    XCTAssertEqual(AuraExpectedDevnet.network, "devnet")
+    XCTAssertEqual(AuraExpectedDevnet.chainId, "aura-devnet-pow-v2")
+    XCTAssertEqual(AuraExpectedDevnet.chainIdHash.count, 64)
+    XCTAssertEqual(AuraExpectedDevnet.genesisHash.count, 64)
+  }
 }

@@ -1,6 +1,14 @@
 import Combine
 import Foundation
 
+public enum AuraExpectedDevnet {
+  public static let protocolVersion = "2"
+  public static let network = "devnet"
+  public static let chainId = "aura-devnet-pow-v2"
+  public static let chainIdHash = "cd1367f5feceec31b754d7e9044443aa5df65a834ae592ed376cd7eb511c9899"
+  public static let genesisHash = "292fd5d47d522ea52b405e1dd43ae1ccf5700ed49712bc9a45c73a1542a69b87"
+}
+
 public struct AuraGatewayNetwork: Decodable, Equatable, Sendable {
   public let protocolVersion: String
   public let network: String
@@ -196,9 +204,12 @@ public final class AuraWalletGatewayStore: ObservableObject {
     do {
       let remoteNetwork: AuraGatewayNetwork = try await api.get("/aura/network")
       guard remoteNetwork.network == identity.network,
-            remoteNetwork.network == "devnet",
-            !remoteNetwork.chainIdHash.isEmpty,
-            !remoteNetwork.genesisHash.isEmpty else {
+            remoteNetwork.protocolVersion == AuraExpectedDevnet.protocolVersion,
+            remoteNetwork.network == AuraExpectedDevnet.network,
+            remoteNetwork.chainId == AuraExpectedDevnet.chainId,
+            remoteNetwork.chainIdHash == AuraExpectedDevnet.chainIdHash,
+            remoteNetwork.genesisHash == AuraExpectedDevnet.genesisHash,
+            remoteNetwork.mainnetAvailable == false else {
         throw AuraWalletGatewayError.chainIdentityMismatch
       }
 
@@ -222,6 +233,7 @@ public final class AuraWalletGatewayStore: ObservableObject {
         historyRequest
       )
       guard remoteStatus.chainIdHash == remoteNetwork.chainIdHash,
+            remoteStatus.chainId == AuraExpectedDevnet.chainId,
             remoteStatus.genesisHash == remoteNetwork.genesisHash,
             remoteBalance.address == identity.address,
             remoteNonce.address == identity.address,
