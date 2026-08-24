@@ -68,7 +68,22 @@ jobs:
         working-directory: ${{ env.IOS_NATIVE_DIR }}
         run: |
           set -euo pipefail
-          MARKETING_VERSION=$(grep 'MARKETING_VERSION:' project.yml | head -n 1 | sed -E 's/.*MARKETING_VERSION:\s*"?([0-9A-Za-z.\-]+)"?.*/\1/')
+          MARKETING_VERSION=$(python3 - <<'PY'
+          import re
+
+          with open("project.yml", "r", encoding="utf-8") as handle:
+              project = handle.read()
+
+          match = re.search(
+              r'^\s*MARKETING_VERSION:\s*["\']?([0-9A-Za-z.-]+)["\']?\s*(?:#.*)?$',
+              project,
+              re.MULTILINE,
+          )
+          if match is None:
+              raise SystemExit("Could not read MARKETING_VERSION from project.yml")
+          print(match.group(1))
+          PY
+          )
           if [ -z "$MARKETING_VERSION" ]; then
             echo "::error::Could not read MARKETING_VERSION from project.yml"
             exit 1
@@ -314,8 +329,8 @@ jobs:
               exit 0
             fi
 
-            if grep -q "No build to distribute" "$LOG_PATH" && [ "$attempt" -lt 60 ]; then
-              echo "Build $BUILD_NUMBER is still processing in App Store Connect; retrying in 30 seconds."
+            if grep -qiE "No build to distribute|Server error got 5[0-9][0-9]|temporarily unavailable|timed out" "$LOG_PATH" && [ "$attempt" -lt 60 ]; then
+              echo "Build $BUILD_NUMBER is still processing or App Store Connect returned a transient error; retrying in 30 seconds."
               sleep 30
               continue
             fi
