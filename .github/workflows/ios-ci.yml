@@ -18,7 +18,9 @@ jobs:
   build-and-test:
     name: Build and test (no signing, no TestFlight upload)
     runs-on: macos-26
-    timeout-minutes: 30
+    # Clean macOS runners compile three Rust Apple targets plus Debug/Release Swift builds.
+    # The device linkage audit added for TestFlight safety must be allowed to finish.
+    timeout-minutes: 60
 
     steps:
       - name: Checkout
