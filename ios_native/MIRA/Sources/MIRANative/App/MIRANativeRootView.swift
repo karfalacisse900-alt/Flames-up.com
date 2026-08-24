@@ -211,7 +211,7 @@ public struct MIRANativeRootView: View {
         .animation(.easeInOut(duration: 0.28), value: startup.isSplashVisible)
 
       if startup.isSplashMounted {
-        CaptroStartupView(phase: startup.phase, showSlowMessage: startup.showSlowStartupCopy)
+        AuraStartupView(phase: startup.phase, showSlowMessage: startup.showSlowStartupCopy)
           .opacity(startup.isSplashVisible ? 1 : 0)
           .scaleEffect(startup.isSplashVisible ? 1 : 0.985)
           .zIndex(10)
@@ -402,7 +402,7 @@ private struct RestoreAccountNativeView: View {
               .foregroundStyle(MIRATheme.Color.textPrimary)
               .multilineTextAlignment(.center)
 
-            Text("This Captro account is scheduled for deletion. Restore it now to keep using it, or sign out and deletion will continue.")
+            Text("This Aura account is scheduled for deletion. Restore it now to keep using it, or sign out and deletion will continue.")
               .font(.system(size: 15, weight: .semibold))
               .foregroundStyle(MIRATheme.Color.textSecondary)
               .multilineTextAlignment(.center)
@@ -496,7 +496,7 @@ private struct MIRAPrivacyShieldView: View {
   var body: some View {
     ZStack {
       MIRATheme.Color.launchBackground.ignoresSafeArea()
-      CaptroWordmarkView()
+      AuraWordmarkView()
         .scaleEffect(0.74)
         .opacity(0.92)
         .accessibilityHidden(true)
@@ -504,7 +504,7 @@ private struct MIRAPrivacyShieldView: View {
   }
 }
 
-private struct CaptroStartupView: View {
+private struct AuraStartupView: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   let phase: MIRAStartupPhase
   let showSlowMessage: Bool
@@ -516,7 +516,7 @@ private struct CaptroStartupView: View {
 
       VStack(spacing: MIRATheme.Space.xl) {
         VStack(spacing: MIRATheme.Space.sm) {
-          CaptroWordmarkView()
+          AuraWordmarkView()
             .scaleEffect(reduceMotion ? 1 : (appeared ? 1 : 0.96))
             .opacity(appeared ? 1 : 0)
 
@@ -532,7 +532,7 @@ private struct CaptroStartupView: View {
         }
 
         VStack(spacing: MIRATheme.Space.sm) {
-          CaptroStartupPulse()
+          AuraStartupPulse()
             .opacity(appeared ? 1 : 0)
 
           if showSlowMessage {
@@ -557,20 +557,29 @@ private struct CaptroStartupView: View {
   }
 }
 
-private struct CaptroWordmarkView: View {
-  // TODO(aura-mobile): still points at the old Captro launch asset. Add an "AuraLaunchLogo"
-  // image set to AppTarget/Assets.xcassets and swap the name below once it exists -- renaming
-  // this reference without adding the asset would build fine but show a blank launch screen.
+private struct AuraWordmarkView: View {
   var body: some View {
-    Image("CaptroLaunchLogo", bundle: .main)
-      .resizable()
-      .scaledToFit()
-      .frame(width: 292, height: 98)
+    HStack(spacing: 14) {
+      ZStack {
+        Image(systemName: "hexagon")
+          .font(.system(size: 48, weight: .semibold))
+        Circle()
+          .stroke(lineWidth: 3)
+          .frame(width: 20, height: 20)
+      }
+      .foregroundStyle(MIRATheme.Color.forest)
+
+      Text("AURA")
+        .font(.system(size: 44, weight: .bold, design: .rounded))
+        .tracking(4)
+        .foregroundStyle(MIRATheme.Color.textPrimary)
+    }
+    .accessibilityElement(children: .ignore)
     .accessibilityLabel("Aura")
   }
 }
 
-private struct CaptroStartupPulse: View {
+private struct AuraStartupPulse: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   var body: some View {

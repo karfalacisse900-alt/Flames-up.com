@@ -45,6 +45,15 @@ void mira_wallet_free(void* handle);
  * private key material. */
 char* mira_wallet_identity_json(void* handle);
 
+/* Encrypts and atomically saves the wallet at `path` using Aura's versioned Argon2id +
+ * XChaCha20-Poly1305 wallet envelope. The password is not retained. Returns a JSON envelope
+ * describing the save result; release it with mira_free_string. */
+char* mira_wallet_save_json(void* handle, const char* path, const char* password);
+
+/* Loads and authenticates an encrypted Aura wallet file. On failure returns NULL and writes an
+ * error string into *out_error. The password is not retained. */
+void* mira_wallet_load(const char* path, const char* password, char** out_error);
+
 /* Returns 1 if `address` is a well-formed, checksum-valid Aura address, 0 otherwise (including
  * for NULL). */
 int32_t mira_aura_validate_address(const char* address);

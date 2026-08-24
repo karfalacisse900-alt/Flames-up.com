@@ -52,17 +52,12 @@ jobs:
       - name: Install fastlane
         run: brew install fastlane
 
-      - name: Check Rust native core
+      - name: Build Rust native core for iOS device and Simulator
         if: inputs.existing_build_number == ''
+        working-directory: ${{ env.IOS_NATIVE_DIR }}
         run: |
-          set -euo pipefail
-          RUST_CORE_DIR="${IOS_NATIVE_DIR}/rust/mira_core"
-          if [ ! -f "$RUST_CORE_DIR/Cargo.toml" ]; then
-            echo "::warning::Rust native core not found at $RUST_CORE_DIR. Skipping Rust build for this branch."
-            exit 0
-          fi
-          rustup target add aarch64-apple-ios
-          cargo build --manifest-path "$RUST_CORE_DIR/Cargo.toml" --release --target aarch64-apple-ios
+          bash ./scripts/build-rust-ios.sh iphoneos
+          bash ./scripts/build-rust-ios.sh iphonesimulator
 
       - name: Generate Xcode project
         if: inputs.existing_build_number == ''

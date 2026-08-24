@@ -47,14 +47,8 @@
   <true/>
   <key>NSCameraUsageDescription</key>
   <string>Aura uses your camera so you can scan a receipt or invoice to submit as a verified proof.</string>
-  <key>NSMicrophoneUsageDescription</key>
-  <string>Aura does not currently record audio. This permission is unused.</string>
   <key>NSPhotoLibraryUsageDescription</key>
   <string>Aura uses your photo library so you can import an existing photo or PDF of a receipt or invoice.</string>
-  <key>NSPhotoLibraryAddUsageDescription</key>
-  <string>Save a scanned receipt or invoice image from Aura to your photo library.</string>
-  <key>NSLocationWhenInUseUsageDescription</key>
-  <string>Aura uses your location to help match a scanned receipt or invoice to the correct business.</string>
   <key>NSAppTransportSecurity</key>
   <dict>
     <key>NSAllowsArbitraryLoads</key>
@@ -104,10 +98,6 @@
   <dict>
     <key>UIColorName</key>
     <string>MIRALaunchBackground</string>
-    <key>UIImageName</key>
-    <string>CaptroLaunchLogo</string>
-    <key>UIImageRespectsSafeAreaInsets</key>
-    <true/>
   </dict>
   <key>UISupportedInterfaceOrientations</key>
   <array>

@@ -1,33 +1,35 @@
+import PhotosUI
 import SwiftUI
+import UniformTypeIdentifiers
+import VisionKit
 
-public enum AuraScanDocumentKind: String, CaseIterable, Identifiable {
+public enum AuraScanDocumentKind: String, CaseIterable, Equatable, Identifiable, Sendable {
   case receipt
   case invoice
 
   public var id: String { rawValue }
 
-  var label: String {
+  var title: String {
     switch self {
-    case .receipt: return "Scan Receipt"
-    case .invoice: return "Scan Invoice"
+    case .receipt: return "Receipt"
+    case .invoice: return "Invoice"
     }
   }
 
-  var systemImage: String {
-    switch self {
-    case .receipt: return "camera.fill"
-    case .invoice: return "doc.text.viewfinder"
-    }
-  }
+  var scanLabel: String { "Scan \(title)" }
 }
 
-/// Aura Mobile's Scan tab. Capture is intentionally not wired to the legacy Captro camera
-/// (`MIRAStoryLiveCameraView`) yet: that view is built around short-form story video/photo
-/// capture, not full-document capture, and needs a real edge-detection review before reuse.
-/// This screen is the entry point and honest not-yet-connected state for the capture flow.
+/// Native receipt/invoice capture and bounded local import. A selected document remains only in
+/// memory. Provider verification and proof creation stay unavailable until an authenticated Aura
+/// verification gateway exists; local file acceptance is never represented as verification.
 public struct AuraScanView: View {
+  @Environment(\.scenePhase) private var scenePhase
   let api: MIRAAPIClient
-  @State private var pendingDocumentKind: AuraScanDocumentKind?
+  @State private var selectedDocument: AuraLocalDocument?
+  @State private var pendingKind: AuraScanDocumentKind = .receipt
+  @State private var showingScanner = false
+  @State private var showingImporter = false
+  @State private var errorMessage: String?
 
   public init(api: MIRAAPIClient) {
     self.api = api
@@ -35,61 +37,253 @@ public struct AuraScanView: View {
 
   public var body: some View {
     NavigationStack {
-      VStack(spacing: MIRATheme.Space.lg) {
-        HStack(spacing: MIRATheme.Space.sm) {
-          ForEach(AuraScanDocumentKind.allCases) { kind in
-            Button {
-              pendingDocumentKind = kind
-            } label: {
-              VStack(spacing: MIRATheme.Space.xs) {
-                Image(systemName: kind.systemImage)
-                  .font(.system(size: 22, weight: .semibold))
-                Text(kind.label)
-                  .font(.system(size: 13, weight: .semibold))
-                  .multilineTextAlignment(.center)
-              }
-              .foregroundStyle(MIRATheme.Color.textPrimary)
-              .frame(maxWidth: .infinity, minHeight: 84)
-            }
+      ScrollView {
+        VStack(spacing: MIRATheme.Space.lg) {
+          actionGrid
+          if let selectedDocument {
+            selectedDocumentCard(selectedDocument)
+          } else {
+            MIRAEmptyState(
+              title: "Scan or import a document",
+              message: "Choose a receipt or invoice. Aura keeps the selected bytes only in memory and clears them when you clear the selection or leave the app.",
+              systemImage: "doc.viewfinder"
+            )
             .miraCardSurface()
           }
-
-          Button {
-          } label: {
-            VStack(spacing: MIRATheme.Space.xs) {
-              Image(systemName: "square.and.arrow.up")
-                .font(.system(size: 22, weight: .semibold))
-              Text("Import PDF/Image")
-                .font(.system(size: 13, weight: .semibold))
-                .multilineTextAlignment(.center)
-            }
-            .foregroundStyle(MIRATheme.Color.textPrimary)
-            .frame(maxWidth: .infinity, minHeight: 84)
-          }
-          .miraCardSurface()
         }
-
-        if let pendingDocumentKind {
-          MIRAEmptyState(
-            title: "Camera capture not wired up yet",
-            message: "\(pendingDocumentKind.label) needs a document-capture camera flow and a connection to a verification provider before it can produce a real result.",
-            systemImage: "camera.metering.unknown"
-          )
-          .miraCardSurface()
-        } else {
-          MIRAEmptyState(
-            title: "Choose a document type",
-            message: "Aura sends the selected type with the provider request. No document is verified until it is captured and submitted.",
-            systemImage: "doc.viewfinder"
-          )
-          .miraCardSurface()
-        }
-
-        Spacer()
+        .padding(MIRATheme.Space.lg)
       }
-      .padding(MIRATheme.Space.lg)
       .background(MIRATheme.Color.appBackground.ignoresSafeArea())
       .navigationTitle("Scan")
+      .sheet(isPresented: $showingScanner) {
+        AuraDocumentScannerView { result in
+          showingScanner = false
+          handleScannedPages(result)
+        } cancellation: {
+          showingScanner = false
+        }
+        .ignoresSafeArea()
+      }
+      .fileImporter(
+        isPresented: $showingImporter,
+        allowedContentTypes: [.pdf, .image],
+        allowsMultipleSelection: false,
+        onCompletion: handleImportedURLs
+      )
+      .alert(
+        "Document error",
+        isPresented: Binding(
+          get: { errorMessage != nil },
+          set: { if !$0 { errorMessage = nil } }
+        )
+      ) {
+        Button("OK") { errorMessage = nil }
+      } message: {
+        Text(errorMessage ?? "Aura could not inspect that document.")
+      }
+      .onChange(of: scenePhase) { _, phase in
+        if phase != .active {
+          selectedDocument = nil
+        }
+      }
     }
   }
+
+  private var actionGrid: some View {
+    VStack(spacing: MIRATheme.Space.sm) {
+      HStack(spacing: MIRATheme.Space.sm) {
+        scanButton(kind: .receipt, systemImage: "camera.viewfinder")
+        scanButton(kind: .invoice, systemImage: "doc.text.viewfinder")
+      }
+
+      HStack(spacing: MIRATheme.Space.sm) {
+        photoButton(kind: .receipt)
+        photoButton(kind: .invoice)
+      }
+
+      Menu {
+        Button("Import Receipt") { beginImport(.receipt) }
+        Button("Import Invoice") { beginImport(.invoice) }
+      } label: {
+        Label("Import PDF or Image", systemImage: "square.and.arrow.down")
+          .font(.system(size: 15, weight: .bold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .frame(maxWidth: .infinity, minHeight: 52)
+      }
+      .miraCardSurface(cornerRadius: MIRATheme.Radius.medium)
+    }
+  }
+
+  private func photoButton(kind: AuraScanDocumentKind) -> some View {
+    PhotosPicker(
+      selection: Binding<PhotosPickerItem?>(
+        get: { nil },
+        set: { item in
+          guard let item else { return }
+          pendingKind = kind
+          selectedDocument = nil
+          Task { await loadPhoto(item, kind: kind) }
+        }
+      ),
+      matching: .images
+    ) {
+      Label("\(kind.title) Photo", systemImage: "photo.on.rectangle")
+        .font(.system(size: 13.5, weight: .bold))
+        .foregroundStyle(MIRATheme.Color.textPrimary)
+        .frame(maxWidth: .infinity, minHeight: 48)
+    }
+    .miraCardSurface(cornerRadius: MIRATheme.Radius.medium)
+  }
+
+  private func scanButton(kind: AuraScanDocumentKind, systemImage: String) -> some View {
+    Button {
+      beginScan(kind)
+    } label: {
+      VStack(spacing: MIRATheme.Space.xs) {
+        Image(systemName: systemImage)
+          .font(.system(size: 24, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.forest)
+        Text(kind.scanLabel)
+          .font(.system(size: 14, weight: .bold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+      }
+      .frame(maxWidth: .infinity, minHeight: 88)
+    }
+    .miraCardSurface(cornerRadius: MIRATheme.Radius.medium)
+  }
+
+  private func selectedDocumentCard(_ document: AuraLocalDocument) -> some View {
+    VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
+      if let image = document.firstPageImage {
+        Image(uiImage: image)
+          .resizable()
+          .scaledToFit()
+          .frame(maxWidth: .infinity, maxHeight: 320)
+          .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.medium, style: .continuous))
+      } else {
+        VStack(spacing: MIRATheme.Space.sm) {
+          Image(systemName: "doc.richtext.fill")
+            .font(.system(size: 52, weight: .regular))
+            .foregroundStyle(MIRATheme.Color.forest)
+          Text("PDF selected")
+            .font(.system(size: 15, weight: .bold))
+        }
+        .frame(maxWidth: .infinity, minHeight: 150)
+        .background(MIRATheme.Color.surfaceSoft)
+        .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.medium, style: .continuous))
+      }
+
+      HStack {
+        Label("\(document.kind.title) selected", systemImage: "checkmark.circle.fill")
+          .font(.system(size: 16, weight: .bold))
+          .foregroundStyle(MIRATheme.Color.forest)
+        Spacer()
+        Text(document.source.rawValue)
+          .font(.system(size: 11.5, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textMuted)
+      }
+
+      documentRow(label: "Filename", value: document.filename)
+      documentRow(label: "Type", value: document.mediaType)
+      documentRow(label: "Pages", value: String(document.pages.count))
+      documentRow(label: "Size", value: Self.byteFormatter.string(fromByteCount: Int64(document.byteCount)))
+      documentRow(label: "Local SHA-256", value: document.sha256Hex)
+
+      VStack(alignment: .leading, spacing: MIRATheme.Space.xs) {
+        Label("Not verified", systemImage: "shield.slash")
+          .font(.system(size: 14, weight: .bold))
+        Text("The format was accepted locally. Nothing has been uploaded, parsed, fraud-checked, issued as a proof, or submitted to Aura consensus.")
+          .font(.system(size: 12.5, weight: .medium))
+          .foregroundStyle(MIRATheme.Color.textSecondary)
+      }
+      .padding(MIRATheme.Space.md)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .background(MIRATheme.Color.surfaceSoft)
+      .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.medium, style: .continuous))
+
+      Button("Verification Service Not Connected") {}
+        .font(.system(size: 15, weight: .bold))
+        .foregroundStyle(.white)
+        .frame(maxWidth: .infinity, minHeight: 48)
+        .background(MIRATheme.Color.textMuted)
+        .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.medium, style: .continuous))
+        .disabled(true)
+
+      Button("Clear Local Selection") {
+        selectedDocument = nil
+      }
+      .font(.system(size: 14, weight: .bold))
+      .foregroundStyle(MIRATheme.Color.forest)
+      .frame(maxWidth: .infinity, minHeight: 44)
+    }
+    .padding(MIRATheme.Space.lg)
+    .miraCardSurface()
+  }
+
+  private func documentRow(label: String, value: String) -> some View {
+    VStack(alignment: .leading, spacing: MIRATheme.Space.xxs) {
+      Text(label)
+        .font(.system(size: 11.5, weight: .semibold))
+        .foregroundStyle(MIRATheme.Color.textMuted)
+      Text(value)
+        .font(.system(size: 12.5, weight: .medium, design: label == "Local SHA-256" ? .monospaced : .default))
+        .foregroundStyle(MIRATheme.Color.textPrimary)
+        .textSelection(.enabled)
+    }
+  }
+
+  private func beginScan(_ kind: AuraScanDocumentKind) {
+    guard VNDocumentCameraViewController.isSupported else {
+      errorMessage = "Document scanning is unavailable on this device. Import a PDF or image instead."
+      return
+    }
+    pendingKind = kind
+    selectedDocument = nil
+    showingScanner = true
+  }
+
+  private func beginImport(_ kind: AuraScanDocumentKind) {
+    pendingKind = kind
+    selectedDocument = nil
+    showingImporter = true
+  }
+
+  private func handleScannedPages(_ result: Result<[Data], Error>) {
+    do {
+      selectedDocument = try AuraLocalDocument.scanned(
+        kind: pendingKind,
+        pages: result.get()
+      )
+    } catch {
+      errorMessage = error.localizedDescription
+    }
+  }
+
+  private func handleImportedURLs(_ result: Result<[URL], Error>) {
+    do {
+      guard let url = try result.get().first else { return }
+      selectedDocument = try AuraLocalDocument.imported(kind: pendingKind, url: url)
+    } catch {
+      errorMessage = error.localizedDescription
+    }
+  }
+
+  @MainActor
+  private func loadPhoto(_ item: PhotosPickerItem, kind: AuraScanDocumentKind) async {
+    do {
+      guard let data = try await item.loadTransferable(type: Data.self) else {
+        throw AuraLocalDocumentError.inaccessible
+      }
+      selectedDocument = try AuraLocalDocument.photoImported(kind: kind, data: data)
+    } catch {
+      errorMessage = error.localizedDescription
+    }
+  }
+
+  private static let byteFormatter: ByteCountFormatter = {
+    let formatter = ByteCountFormatter()
+    formatter.allowedUnits = [.useKB, .useMB]
+    formatter.countStyle = .file
+    return formatter
+  }()
 }

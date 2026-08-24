@@ -92,7 +92,7 @@ public struct AuthNativeView: View {
           Text(isCreatingAccount ? "Sign up" : "Log in")
             .font(.system(size: 28, weight: .black, design: .rounded))
             .foregroundStyle(MIRATheme.Color.textPrimary)
-          Text(isCreatingAccount ? "Create your Captro account." : "Welcome back to Captro.")
+          Text(isCreatingAccount ? "Create your Aura account." : "Welcome back to Aura.")
             .font(.system(size: 14.5, weight: .medium))
             .foregroundStyle(MIRATheme.Color.textSecondary)
         }
@@ -536,11 +536,11 @@ public struct AuthNativeView: View {
             .frame(width: 28)
 
           VStack(alignment: .leading, spacing: 6) {
-            Text("I am 16 or older and accept Captro's Terms and Community Rules.")
+            Text("I am 16 or older and accept Aura's Terms and Community Rules.")
               .font(.system(size: 14.5, weight: .semibold))
               .foregroundStyle(MIRATheme.Color.textPrimary)
               .fixedSize(horizontal: false, vertical: true)
-            Text("Captro has zero tolerance for objectionable content or abusive users. You can report posts, stories, comments, profiles, and messages, and you can block users at any time.")
+            Text("Aura requires accurate proof and reputation activity and has zero tolerance for abusive users. Reporting and blocking controls are available where supported.")
               .font(.system(size: 12.5, weight: .medium))
               .foregroundStyle(MIRATheme.Color.textSecondary)
               .lineSpacing(2)
@@ -553,7 +553,7 @@ public struct AuthNativeView: View {
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
       }
       .buttonStyle(.plain)
-      .accessibilityLabel("Accept Captro Terms and Community Rules")
+      .accessibilityLabel("Accept Aura Terms and Community Rules")
       .accessibilityValue(hasAcceptedCurrentTerms ? "Accepted" : "Not accepted")
 
       HStack(spacing: MIRATheme.Space.sm) {
@@ -569,7 +569,7 @@ public struct AuthNativeView: View {
 
   private var legalFooter: some View {
     VStack(spacing: MIRATheme.Space.sm) {
-      Text("By continuing, you agree to Captro's legal and safety terms.")
+      Text("By continuing, you agree to Aura's legal and safety terms.")
         .font(.system(size: 12.5, weight: .medium))
         .foregroundStyle(MIRATheme.Color.textMuted)
         .multilineTextAlignment(.center)
@@ -738,7 +738,7 @@ public struct AuthNativeView: View {
   }
 
   private var termsRequiredMessage: String {
-    "Please accept Captro's Terms and Community Rules before continuing."
+    "Please accept Aura's Terms and Community Rules before continuing."
   }
 
   @MainActor
@@ -1017,10 +1017,10 @@ private struct CaptroWelcomeWordmark: View {
   let color: Color
 
   var body: some View {
-    Text("Captro")
+    Text("Aura")
       .font(.system(size: 22, weight: .heavy, design: .serif))
       .foregroundStyle(color)
-    .accessibilityLabel("Captro")
+    .accessibilityLabel("Aura")
   }
 }
 

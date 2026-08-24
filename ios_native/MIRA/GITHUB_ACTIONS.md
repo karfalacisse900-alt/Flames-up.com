@@ -1,6 +1,6 @@
 # Native iOS GitHub Actions Build
 
-Three workflows cover Aura Mobile's iOS CI/CD, all building the SwiftUI/C++/Rust app from `ios_native/MIRA`:
+Four workflows cover Aura Mobile's iOS CI/CD, all building the SwiftUI/C++/Rust app from `ios_native/MIRA`:
 
 - **`ios-ci.yml`** — every push and pull request touching `ios_native/MIRA/**`. Builds for the simulator and runs unit tests. No signing, no upload. This is what runs on ordinary commits so TestFlight build numbers aren't spent on every push.
 - **`native-ios-testflight.yml`** ("Aura iOS TestFlight") — only on `workflow_dispatch` or a pushed `ios-v*` tag. Builds, signs, archives, exports an IPA, uploads to App Store Connect, and distributes to the TestFlight beta group once processing finishes.
@@ -10,7 +10,7 @@ Three workflows cover Aura Mobile's iOS CI/CD, all building the SwiftUI/C++/Rust
 ## What The TestFlight Workflow Does
 
 1. Checks out the repo.
-2. Builds the Rust core for `aarch64-apple-ios`.
+2. Builds and links the Rust wallet core for the required iOS device/simulator architecture.
 3. Generates `Aura.xcodeproj` from `project.yml` with XcodeGen.
 4. Builds the SwiftUI app and C++ package target, and runs unit tests.
 5. Reads the latest processed build number from App Store Connect via the ASC API key and uses `latest + 1` — it never guesses or reuses a run-number-based build number.

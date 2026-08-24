@@ -20,7 +20,7 @@
 //! import into a generic multi-coin BIP39/BIP32 wallet and produce the same key.
 
 use aura_core::{Address, Hash256, Network, TransactionBodyV2};
-use aura_wallet::Wallet;
+use aura_wallet::{PermissionStatus, Wallet, WalletPassword};
 use bip39::Mnemonic;
 use serde::{Deserialize, Serialize};
 use std::ffi::{c_void, CStr, CString};
@@ -42,6 +42,16 @@ fn read_c_str(ptr: *const c_char) -> Option<String> {
     // written through or retained past this call.
     let bytes = unsafe { CStr::from_ptr(ptr) }.to_bytes();
     std::str::from_utf8(bytes).ok().map(str::to_owned)
+}
+
+fn read_c_bytes(ptr: *const c_char) -> Option<Vec<u8>> {
+    if ptr.is_null() {
+        return None;
+    }
+    // Safety: caller-supplied pointers are read only for the duration of this call. Password
+    // bytes are copied directly into an owned buffer that is immediately transferred to
+    // `WalletPassword`, whose storage is zeroized on drop.
+    Some(unsafe { CStr::from_ptr(ptr) }.to_bytes().to_vec())
 }
 
 fn c_string_out(value: String) -> *mut c_char {
@@ -218,6 +228,7 @@ pub unsafe extern "C" fn mira_wallet_restore_from_mnemonic(
         );
         return std::ptr::null_mut();
     };
+    let phrase = Zeroizing::new(phrase);
 
     let mnemonic = match Mnemonic::parse_normalized(phrase.trim()) {
         Ok(mnemonic) => mnemonic,
@@ -295,6 +306,92 @@ pub unsafe extern "C" fn mira_wallet_identity_json(handle: *mut c_void) -> *mut 
         address: identity.address.to_string(),
         public_key_hex: hex::encode(identity.public_key),
     })
+}
+
+#[derive(Serialize)]
+#[cfg_attr(test, derive(Deserialize))]
+#[serde(rename_all = "camelCase")]
+struct WalletSaveJson {
+    bytes_written: usize,
+    permission_status: String,
+}
+
+fn wallet_password(ptr: *const c_char) -> Result<WalletPassword, String> {
+    let bytes = read_c_bytes(ptr).ok_or_else(|| "wallet password is missing".to_owned())?;
+    WalletPassword::new(bytes).map_err(|error| format!("wallet password is invalid: {error}"))
+}
+
+/// Encrypts and atomically saves a wallet using `aura-wallet`'s versioned Argon2id +
+/// XChaCha20-Poly1305 envelope. The password is consumed into zeroizing Rust storage and is
+/// never retained by the wallet handle.
+///
+/// # Safety
+/// `handle` must be a live wallet handle. `path` and `password` must be valid NUL-terminated
+/// strings for the duration of this call.
+#[no_mangle]
+pub unsafe extern "C" fn mira_wallet_save_json(
+    handle: *mut c_void,
+    path: *const c_char,
+    password: *const c_char,
+) -> *mut c_char {
+    let Some(wallet) = wallet_ref(handle) else {
+        return json_err("wallet handle is null");
+    };
+    let Some(path) = read_c_str(path) else {
+        return json_err("wallet path must be valid UTF-8 text");
+    };
+    let password = match wallet_password(password) {
+        Ok(password) => password,
+        Err(message) => return json_err(message),
+    };
+    let report = match wallet.save(path, &password) {
+        Ok(report) => report,
+        Err(error) => return json_err(format!("could not save encrypted wallet: {error}")),
+    };
+    let permission_status = match report.permission_status {
+        PermissionStatus::OwnerReadWrite => "ownerReadWrite",
+        PermissionStatus::RestrictionAttemptFailed => "restrictionAttemptFailed",
+        PermissionStatus::PlatformDefaultAcl => "platformDefaultAcl",
+    };
+    json_ok(WalletSaveJson {
+        bytes_written: report.bytes_written,
+        permission_status: permission_status.to_owned(),
+    })
+}
+
+/// Loads and authenticates an encrypted Aura wallet file. A wrong password or malformed file
+/// returns a null handle and an error message; no partially decoded wallet escapes.
+///
+/// # Safety
+/// `path` and `password` must be valid NUL-terminated strings for the duration of this call.
+/// `out_error` must be null or point to a writable string-pointer slot.
+#[no_mangle]
+pub unsafe extern "C" fn mira_wallet_load(
+    path: *const c_char,
+    password: *const c_char,
+    out_error: *mut *mut c_char,
+) -> *mut c_void {
+    let Some(path) = read_c_str(path) else {
+        write_out_string(out_error, "wallet path must be valid UTF-8 text".to_owned());
+        return std::ptr::null_mut();
+    };
+    let password = match wallet_password(password) {
+        Ok(password) => password,
+        Err(message) => {
+            write_out_string(out_error, message);
+            return std::ptr::null_mut();
+        }
+    };
+    match Wallet::load(path, &password) {
+        Ok(wallet) => Box::into_raw(Box::new(wallet)) as *mut c_void,
+        Err(error) => {
+            write_out_string(
+                out_error,
+                format!("could not unlock encrypted wallet: {error}"),
+            );
+            std::ptr::null_mut()
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -779,6 +876,66 @@ mod tests {
         let signed: JsonEnvelopeOwned<SignedTransferResult> =
             serde_json::from_str(&signed_json).expect("valid envelope even on failure");
         assert!(!signed.ok, "signing an uncontrolled sender must fail");
+    }
+
+    #[test]
+    fn encrypted_wallet_save_and_load_preserve_identity() {
+        let directory = tempfile::tempdir().expect("temporary wallet directory");
+        let path = directory.path().join("mobile-wallet.aura");
+        let path_c = CString::new(path.to_string_lossy().as_bytes()).unwrap();
+        let password_c = CString::new("correct horse battery staple").unwrap();
+
+        let (handle, _) = call_create(DEVNET);
+        let original = call_identity(handle);
+        let save_json = read_and_free(unsafe {
+            mira_wallet_save_json(handle, path_c.as_ptr(), password_c.as_ptr())
+        })
+        .expect("save response");
+        let save: JsonEnvelopeOwned<WalletSaveJson> =
+            serde_json::from_str(&save_json).expect("valid save envelope");
+        assert!(save.ok, "unexpected save failure: {save_json}");
+        assert!(save.data.expect("save payload").bytes_written > 0);
+        call_free(handle);
+
+        let mut out_error: *mut c_char = std::ptr::null_mut();
+        let loaded =
+            unsafe { mira_wallet_load(path_c.as_ptr(), password_c.as_ptr(), &mut out_error) };
+        assert!(
+            !loaded.is_null(),
+            "unlock failed: {:?}",
+            read_and_free(out_error)
+        );
+        let reopened = call_identity(loaded);
+        call_free(loaded);
+        assert_eq!(original.address, reopened.address);
+        assert_eq!(original.public_key_hex, reopened.public_key_hex);
+        assert_eq!(original.network, reopened.network);
+    }
+
+    #[test]
+    fn encrypted_wallet_load_rejects_wrong_password() {
+        let directory = tempfile::tempdir().expect("temporary wallet directory");
+        let path = directory.path().join("mobile-wallet.aura");
+        let path_c = CString::new(path.to_string_lossy().as_bytes()).unwrap();
+        let password_c = CString::new("right password").unwrap();
+        let wrong_password_c = CString::new("wrong password").unwrap();
+
+        let (handle, _) = call_create(DEVNET);
+        let save_json = read_and_free(unsafe {
+            mira_wallet_save_json(handle, path_c.as_ptr(), password_c.as_ptr())
+        })
+        .expect("save response");
+        call_free(handle);
+        let save: JsonEnvelopeOwned<WalletSaveJson> =
+            serde_json::from_str(&save_json).expect("valid save envelope");
+        assert!(save.ok, "unexpected save failure: {save_json}");
+
+        let mut out_error: *mut c_char = std::ptr::null_mut();
+        let loaded =
+            unsafe { mira_wallet_load(path_c.as_ptr(), wrong_password_c.as_ptr(), &mut out_error) };
+        assert!(loaded.is_null());
+        let error = read_and_free(out_error).expect("wrong-password error");
+        assert!(error.contains("unlock"));
     }
 
     #[test]

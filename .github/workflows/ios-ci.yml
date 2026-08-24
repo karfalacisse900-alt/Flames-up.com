@@ -30,16 +30,9 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
-      - name: Build Rust native core (host target, debug)
+      - name: Build Rust native core for iOS Simulator
         working-directory: ${{ env.IOS_NATIVE_DIR }}
-        run: |
-          set -euo pipefail
-          RUST_CORE_DIR="rust/mira_core"
-          if [ -f "$RUST_CORE_DIR/Cargo.toml" ]; then
-            cargo build --manifest-path "$RUST_CORE_DIR/Cargo.toml"
-          else
-            echo "::warning::Rust native core not found at $RUST_CORE_DIR. Skipping."
-          fi
+        run: bash ./scripts/build-rust-ios.sh iphonesimulator
 
       - name: Generate Xcode project
         working-directory: ${{ env.IOS_NATIVE_DIR }}
