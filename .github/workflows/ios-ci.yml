@@ -30,9 +30,11 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
-      - name: Build Rust native core for iOS Simulator
+      - name: Build Rust native core for iOS device and Simulator
         working-directory: ${{ env.IOS_NATIVE_DIR }}
-        run: bash ./scripts/build-rust-ios.sh iphonesimulator
+        run: |
+          bash ./scripts/build-rust-ios.sh iphoneos
+          bash ./scripts/build-rust-ios.sh iphonesimulator
 
       - name: Generate Xcode project
         working-directory: ${{ env.IOS_NATIVE_DIR }}
@@ -74,3 +76,20 @@ jobs:
       - name: Launch Aura Release build in iOS Simulator
         working-directory: ${{ env.IOS_NATIVE_DIR }}
         run: bash ./scripts/smoke-test-ios-launch.sh
+
+      - name: Build and audit unsigned Aura Release for iPhone
+        working-directory: ${{ env.IOS_NATIVE_DIR }}
+        run: |
+          set -euo pipefail
+          DEVICE_DERIVED_DATA="$RUNNER_TEMP/aura-device-release"
+          xcodebuild \
+            -project Aura.xcodeproj \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -destination "generic/platform=iOS" \
+            -derivedDataPath "$DEVICE_DERIVED_DATA" \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+          DEVICE_APP=$(find "$DEVICE_DERIVED_DATA/Build/Products" -type d -path "*Release-iphoneos/Aura.app" -print -quit)
+          test -n "$DEVICE_APP"
+          bash ./scripts/audit-ios-binary-linkage.sh "$DEVICE_APP/Aura" arm64

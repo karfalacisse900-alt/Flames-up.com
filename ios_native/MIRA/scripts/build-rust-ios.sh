@@ -11,6 +11,11 @@ build_target() {
   local target="$1"
   rustup target add "${target}"
   cargo build --manifest-path "${MANIFEST_PATH}" --locked --release --target "${target}"
+  local archive="${TARGET_ROOT}/${target}/release/libmira_core.a"
+  if [[ ! -f "${archive}" ]]; then
+    echo "Rust iOS build did not produce the required static archive: ${archive}" >&2
+    exit 1
+  fi
 }
 
 case "${PLATFORM_NAME}" in

@@ -25,6 +25,7 @@ use bip39::Mnemonic;
 use serde::{Deserialize, Serialize};
 use std::ffi::{c_void, CStr, CString};
 use std::os::raw::c_char;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::str::FromStr;
 use zeroize::Zeroizing;
 
@@ -104,6 +105,36 @@ fn json_err(message: impl Into<String>) -> *mut c_char {
     }))
 }
 
+const FFI_PANIC_MESSAGE: &str = "Rust wallet operation failed safely";
+
+fn catch_ffi_json(operation: impl FnOnce() -> *mut c_char) -> *mut c_char {
+    match catch_unwind(AssertUnwindSafe(operation)) {
+        Ok(value) => value,
+        Err(_) => json_err(FFI_PANIC_MESSAGE),
+    }
+}
+
+fn catch_ffi_handle(
+    out_error: *mut *mut c_char,
+    operation: impl FnOnce() -> *mut c_void,
+) -> *mut c_void {
+    match catch_unwind(AssertUnwindSafe(operation)) {
+        Ok(value) => value,
+        Err(_) => {
+            write_out_string(out_error, FFI_PANIC_MESSAGE.to_owned());
+            std::ptr::null_mut()
+        }
+    }
+}
+
+fn catch_ffi_i32(operation: impl FnOnce() -> i32) -> i32 {
+    catch_unwind(AssertUnwindSafe(operation)).unwrap_or(0)
+}
+
+fn catch_ffi_void(operation: impl FnOnce()) {
+    let _ = catch_unwind(AssertUnwindSafe(operation));
+}
+
 /// Frees a string returned by any `mira_wallet_*`/`mira_aura_*` function, including the
 /// mnemonic and error out-parameters. Passing null is safe and does nothing.
 ///
@@ -112,13 +143,15 @@ fn json_err(message: impl Into<String>) -> *mut c_char {
 /// freed.
 #[no_mangle]
 pub unsafe extern "C" fn mira_free_string(ptr: *mut c_char) {
-    if ptr.is_null() {
-        return;
-    }
-    // Safety: only ever called with a pointer this module itself produced via `CString::into_raw`.
-    unsafe {
-        drop(CString::from_raw(ptr));
-    }
+    catch_ffi_void(|| {
+        if ptr.is_null() {
+            return;
+        }
+        // Safety: only ever called with a pointer this module itself produced via `CString::into_raw`.
+        unsafe {
+            drop(CString::from_raw(ptr));
+        }
+    });
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -164,37 +197,39 @@ pub unsafe extern "C" fn mira_wallet_create(
     network: u8,
     out_mnemonic: *mut *mut c_char,
 ) -> *mut c_void {
-    let network = match network_from_u8(network) {
-        Ok(network) => network,
-        Err(message) => {
-            write_out_string(out_mnemonic, message);
-            return std::ptr::null_mut();
-        }
-    };
+    catch_ffi_handle(out_mnemonic, || {
+        let network = match network_from_u8(network) {
+            Ok(network) => network,
+            Err(message) => {
+                write_out_string(out_mnemonic, message);
+                return std::ptr::null_mut();
+            }
+        };
 
-    let mut seed = Zeroizing::new([0_u8; MNEMONIC_ENTROPY_BYTES]);
-    if let Err(error) = getrandom_fill(&mut seed) {
-        write_out_string(
-            out_mnemonic,
-            format!("could not generate wallet entropy: {error}"),
-        );
-        return std::ptr::null_mut();
-    }
-
-    let mnemonic = match Mnemonic::from_entropy(seed.as_slice()) {
-        Ok(mnemonic) => mnemonic,
-        Err(error) => {
+        let mut seed = Zeroizing::new([0_u8; MNEMONIC_ENTROPY_BYTES]);
+        if let Err(error) = getrandom_fill(&mut seed) {
             write_out_string(
                 out_mnemonic,
-                format!("could not encode recovery phrase: {error}"),
+                format!("could not generate wallet entropy: {error}"),
             );
             return std::ptr::null_mut();
         }
-    };
 
-    let wallet = Wallet::from_seed_bytes(network, *seed);
-    write_out_string(out_mnemonic, mnemonic.to_string());
-    Box::into_raw(Box::new(wallet)) as *mut c_void
+        let mnemonic = match Mnemonic::from_entropy(seed.as_slice()) {
+            Ok(mnemonic) => mnemonic,
+            Err(error) => {
+                write_out_string(
+                    out_mnemonic,
+                    format!("could not encode recovery phrase: {error}"),
+                );
+                return std::ptr::null_mut();
+            }
+        };
+
+        let wallet = Wallet::from_seed_bytes(network, *seed);
+        write_out_string(out_mnemonic, mnemonic.to_string());
+        Box::into_raw(Box::new(wallet)) as *mut c_void
+    })
 }
 
 /// Restores a wallet from its 24-word BIP39 recovery phrase.
@@ -213,43 +248,45 @@ pub unsafe extern "C" fn mira_wallet_restore_from_mnemonic(
     network: u8,
     out_error: *mut *mut c_char,
 ) -> *mut c_void {
-    let network = match network_from_u8(network) {
-        Ok(network) => network,
-        Err(message) => {
-            write_out_string(out_error, message);
+    catch_ffi_handle(out_error, || {
+        let network = match network_from_u8(network) {
+            Ok(network) => network,
+            Err(message) => {
+                write_out_string(out_error, message);
+                return std::ptr::null_mut();
+            }
+        };
+
+        let Some(phrase) = read_c_str(mnemonic) else {
+            write_out_string(
+                out_error,
+                "recovery phrase must be valid UTF-8 text".to_owned(),
+            );
             return std::ptr::null_mut();
-        }
-    };
+        };
+        let phrase = Zeroizing::new(phrase);
 
-    let Some(phrase) = read_c_str(mnemonic) else {
-        write_out_string(
-            out_error,
-            "recovery phrase must be valid UTF-8 text".to_owned(),
-        );
-        return std::ptr::null_mut();
-    };
-    let phrase = Zeroizing::new(phrase);
+        let mnemonic = match Mnemonic::parse_normalized(phrase.trim()) {
+            Ok(mnemonic) => mnemonic,
+            Err(error) => {
+                write_out_string(out_error, format!("recovery phrase is invalid: {error}"));
+                return std::ptr::null_mut();
+            }
+        };
 
-    let mnemonic = match Mnemonic::parse_normalized(phrase.trim()) {
-        Ok(mnemonic) => mnemonic,
-        Err(error) => {
-            write_out_string(out_error, format!("recovery phrase is invalid: {error}"));
+        let entropy = mnemonic.to_entropy();
+        let Ok(seed): Result<[u8; MNEMONIC_ENTROPY_BYTES], _> = entropy.try_into() else {
+            write_out_string(
+                out_error,
+                "recovery phrase must be the 24-word Aura format (256 bits of entropy)".to_owned(),
+            );
             return std::ptr::null_mut();
-        }
-    };
+        };
+        let seed = Zeroizing::new(seed);
 
-    let entropy = mnemonic.to_entropy();
-    let Ok(seed): Result<[u8; MNEMONIC_ENTROPY_BYTES], _> = entropy.try_into() else {
-        write_out_string(
-            out_error,
-            "recovery phrase must be the 24-word Aura format (256 bits of entropy)".to_owned(),
-        );
-        return std::ptr::null_mut();
-    };
-    let seed = Zeroizing::new(seed);
-
-    let wallet = Wallet::from_seed_bytes(network, *seed);
-    Box::into_raw(Box::new(wallet)) as *mut c_void
+        let wallet = Wallet::from_seed_bytes(network, *seed);
+        Box::into_raw(Box::new(wallet)) as *mut c_void
+    })
 }
 
 /// Releases a wallet handle, zeroizing its private key material.
@@ -262,14 +299,16 @@ pub unsafe extern "C" fn mira_wallet_restore_from_mnemonic(
 /// that has not already been freed.
 #[no_mangle]
 pub unsafe extern "C" fn mira_wallet_free(handle: *mut c_void) {
-    if handle.is_null() {
-        return;
-    }
-    // Safety: only ever called with a pointer this module produced via `Box::into_raw`, and the
-    // caller contract above forbids reuse or double-free.
-    unsafe {
-        drop(Box::from_raw(handle as *mut Wallet));
-    }
+    catch_ffi_void(|| {
+        if handle.is_null() {
+            return;
+        }
+        // Safety: only ever called with a pointer this module produced via `Box::into_raw`, and the
+        // caller contract above forbids reuse or double-free.
+        unsafe {
+            drop(Box::from_raw(handle as *mut Wallet));
+        }
+    });
 }
 
 fn wallet_ref<'a>(handle: *mut c_void) -> Option<&'a Wallet> {
@@ -297,14 +336,16 @@ struct WalletIdentityJson {
 /// `handle` must be null or a live handle from `mira_wallet_create`/`mira_wallet_restore_from_mnemonic`.
 #[no_mangle]
 pub unsafe extern "C" fn mira_wallet_identity_json(handle: *mut c_void) -> *mut c_char {
-    let Some(wallet) = wallet_ref(handle) else {
-        return json_err("wallet handle is null");
-    };
-    let identity = wallet.identity();
-    json_ok(WalletIdentityJson {
-        network: network_name(identity.network),
-        address: identity.address.to_string(),
-        public_key_hex: hex::encode(identity.public_key),
+    catch_ffi_json(|| {
+        let Some(wallet) = wallet_ref(handle) else {
+            return json_err("wallet handle is null");
+        };
+        let identity = wallet.identity();
+        json_ok(WalletIdentityJson {
+            network: network_name(identity.network),
+            address: identity.address.to_string(),
+            public_key_hex: hex::encode(identity.public_key),
+        })
     })
 }
 
@@ -334,28 +375,30 @@ pub unsafe extern "C" fn mira_wallet_save_json(
     path: *const c_char,
     password: *const c_char,
 ) -> *mut c_char {
-    let Some(wallet) = wallet_ref(handle) else {
-        return json_err("wallet handle is null");
-    };
-    let Some(path) = read_c_str(path) else {
-        return json_err("wallet path must be valid UTF-8 text");
-    };
-    let password = match wallet_password(password) {
-        Ok(password) => password,
-        Err(message) => return json_err(message),
-    };
-    let report = match wallet.save(path, &password) {
-        Ok(report) => report,
-        Err(error) => return json_err(format!("could not save encrypted wallet: {error}")),
-    };
-    let permission_status = match report.permission_status {
-        PermissionStatus::OwnerReadWrite => "ownerReadWrite",
-        PermissionStatus::RestrictionAttemptFailed => "restrictionAttemptFailed",
-        PermissionStatus::PlatformDefaultAcl => "platformDefaultAcl",
-    };
-    json_ok(WalletSaveJson {
-        bytes_written: report.bytes_written,
-        permission_status: permission_status.to_owned(),
+    catch_ffi_json(|| {
+        let Some(wallet) = wallet_ref(handle) else {
+            return json_err("wallet handle is null");
+        };
+        let Some(path) = read_c_str(path) else {
+            return json_err("wallet path must be valid UTF-8 text");
+        };
+        let password = match wallet_password(password) {
+            Ok(password) => password,
+            Err(message) => return json_err(message),
+        };
+        let report = match wallet.save(path, &password) {
+            Ok(report) => report,
+            Err(error) => return json_err(format!("could not save encrypted wallet: {error}")),
+        };
+        let permission_status = match report.permission_status {
+            PermissionStatus::OwnerReadWrite => "ownerReadWrite",
+            PermissionStatus::RestrictionAttemptFailed => "restrictionAttemptFailed",
+            PermissionStatus::PlatformDefaultAcl => "platformDefaultAcl",
+        };
+        json_ok(WalletSaveJson {
+            bytes_written: report.bytes_written,
+            permission_status: permission_status.to_owned(),
+        })
     })
 }
 
@@ -371,27 +414,29 @@ pub unsafe extern "C" fn mira_wallet_load(
     password: *const c_char,
     out_error: *mut *mut c_char,
 ) -> *mut c_void {
-    let Some(path) = read_c_str(path) else {
-        write_out_string(out_error, "wallet path must be valid UTF-8 text".to_owned());
-        return std::ptr::null_mut();
-    };
-    let password = match wallet_password(password) {
-        Ok(password) => password,
-        Err(message) => {
-            write_out_string(out_error, message);
+    catch_ffi_handle(out_error, || {
+        let Some(path) = read_c_str(path) else {
+            write_out_string(out_error, "wallet path must be valid UTF-8 text".to_owned());
             return std::ptr::null_mut();
+        };
+        let password = match wallet_password(password) {
+            Ok(password) => password,
+            Err(message) => {
+                write_out_string(out_error, message);
+                return std::ptr::null_mut();
+            }
+        };
+        match Wallet::load(path, &password) {
+            Ok(wallet) => Box::into_raw(Box::new(wallet)) as *mut c_void,
+            Err(error) => {
+                write_out_string(
+                    out_error,
+                    format!("could not unlock encrypted wallet: {error}"),
+                );
+                std::ptr::null_mut()
+            }
         }
-    };
-    match Wallet::load(path, &password) {
-        Ok(wallet) => Box::into_raw(Box::new(wallet)) as *mut c_void,
-        Err(error) => {
-            write_out_string(
-                out_error,
-                format!("could not unlock encrypted wallet: {error}"),
-            );
-            std::ptr::null_mut()
-        }
-    }
+    })
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -405,10 +450,10 @@ pub unsafe extern "C" fn mira_wallet_load(
 /// `address` must be null or a valid, NUL-terminated C string.
 #[no_mangle]
 pub unsafe extern "C" fn mira_aura_validate_address(address: *const c_char) -> i32 {
-    match read_c_str(address) {
+    catch_ffi_i32(|| match read_c_str(address) {
         Some(value) => i32::from(Address::from_str(&value).is_ok()),
         None => 0,
-    }
+    })
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -456,71 +501,74 @@ fn parse_u64_field(name: &str, value: &str) -> Result<u64, String> {
 pub unsafe extern "C" fn mira_aura_build_unsigned_transfer_v2_json(
     params_json: *const c_char,
 ) -> *mut c_char {
-    let Some(raw) = read_c_str(params_json) else {
-        return json_err("parameters must be valid UTF-8 JSON text");
-    };
-    let params: UnsignedTransferParams = match serde_json::from_str(&raw) {
-        Ok(params) => params,
-        Err(error) => return json_err(format!("could not parse parameters: {error}")),
-    };
+    catch_ffi_json(|| {
+        let Some(raw) = read_c_str(params_json) else {
+            return json_err("parameters must be valid UTF-8 JSON text");
+        };
+        let params: UnsignedTransferParams = match serde_json::from_str(&raw) {
+            Ok(params) => params,
+            Err(error) => return json_err(format!("could not parse parameters: {error}")),
+        };
 
-    let network = match network_from_u8(params.network) {
-        Ok(network) => network,
-        Err(message) => return json_err(message),
-    };
-    let chain_id_hash = match Hash256::from_str(params.chain_id_hash_hex.trim()) {
-        Ok(hash) => hash,
-        Err(error) => return json_err(format!("chainIdHashHex is invalid: {error}")),
-    };
-    let sender = match Address::from_str(params.sender_address.trim()) {
-        Ok(address) => address,
-        Err(error) => return json_err(format!("senderAddress is invalid: {error}")),
-    };
-    let recipient = match Address::from_str(params.recipient_address.trim()) {
-        Ok(address) => address,
-        Err(error) => return json_err(format!("recipientAddress is invalid: {error}")),
-    };
-    let amount = match parse_u64_field("amountAtoms", &params.amount_atoms) {
-        Ok(value) => aura_core::Amount::from_atoms(value),
-        Err(message) => return json_err(message),
-    };
-    let fee = match parse_u64_field("feeAtoms", &params.fee_atoms) {
-        Ok(value) => aura_core::Amount::from_atoms(value),
-        Err(message) => return json_err(message),
-    };
-    let nonce = match parse_u64_field("nonce", &params.nonce) {
-        Ok(value) => value,
-        Err(message) => return json_err(message),
-    };
-    let valid_until_height = match parse_u64_field("validUntilHeight", &params.valid_until_height) {
-        Ok(value) => value,
-        Err(message) => return json_err(message),
-    };
+        let network = match network_from_u8(params.network) {
+            Ok(network) => network,
+            Err(message) => return json_err(message),
+        };
+        let chain_id_hash = match Hash256::from_str(params.chain_id_hash_hex.trim()) {
+            Ok(hash) => hash,
+            Err(error) => return json_err(format!("chainIdHashHex is invalid: {error}")),
+        };
+        let sender = match Address::from_str(params.sender_address.trim()) {
+            Ok(address) => address,
+            Err(error) => return json_err(format!("senderAddress is invalid: {error}")),
+        };
+        let recipient = match Address::from_str(params.recipient_address.trim()) {
+            Ok(address) => address,
+            Err(error) => return json_err(format!("recipientAddress is invalid: {error}")),
+        };
+        let amount = match parse_u64_field("amountAtoms", &params.amount_atoms) {
+            Ok(value) => aura_core::Amount::from_atoms(value),
+            Err(message) => return json_err(message),
+        };
+        let fee = match parse_u64_field("feeAtoms", &params.fee_atoms) {
+            Ok(value) => aura_core::Amount::from_atoms(value),
+            Err(message) => return json_err(message),
+        };
+        let nonce = match parse_u64_field("nonce", &params.nonce) {
+            Ok(value) => value,
+            Err(message) => return json_err(message),
+        };
+        let valid_until_height =
+            match parse_u64_field("validUntilHeight", &params.valid_until_height) {
+                Ok(value) => value,
+                Err(message) => return json_err(message),
+            };
 
-    let body = TransactionBodyV2 {
-        version: aura_core::TRANSACTION_VERSION_V2,
-        network,
-        chain_id_hash,
-        sender,
-        recipient,
-        amount,
-        fee,
-        nonce,
-        valid_until_height,
-    };
+        let body = TransactionBodyV2 {
+            version: aura_core::TRANSACTION_VERSION_V2,
+            network,
+            chain_id_hash,
+            sender,
+            recipient,
+            amount,
+            fee,
+            nonce,
+            valid_until_height,
+        };
 
-    let encoded = match body.encode() {
-        Ok(bytes) => bytes,
-        Err(error) => return json_err(format!("could not encode transaction body: {error}")),
-    };
-    let signing_hash = match body.signing_hash() {
-        Ok(hash) => hash,
-        Err(error) => return json_err(format!("could not compute signing hash: {error}")),
-    };
+        let encoded = match body.encode() {
+            Ok(bytes) => bytes,
+            Err(error) => return json_err(format!("could not encode transaction body: {error}")),
+        };
+        let signing_hash = match body.signing_hash() {
+            Ok(hash) => hash,
+            Err(error) => return json_err(format!("could not compute signing hash: {error}")),
+        };
 
-    json_ok(UnsignedTransferResult {
-        unsigned_body_hex: hex::encode(encoded),
-        signing_hash_hex: signing_hash.to_string(),
+        json_ok(UnsignedTransferResult {
+            unsigned_body_hex: hex::encode(encoded),
+            signing_hash_hex: signing_hash.to_string(),
+        })
     })
 }
 
@@ -550,42 +598,44 @@ pub unsafe extern "C" fn mira_wallet_sign_transfer_v2_json(
     handle: *mut c_void,
     unsigned_body_hex: *const c_char,
 ) -> *mut c_char {
-    let Some(wallet) = wallet_ref(handle) else {
-        return json_err("wallet handle is null");
-    };
-    let Some(hex_body) = read_c_str(unsigned_body_hex) else {
-        return json_err("unsigned body must be valid UTF-8 hex text");
-    };
-    let bytes = match hex::decode(hex_body.trim()) {
-        Ok(bytes) => bytes,
-        Err(error) => return json_err(format!("unsigned body is not valid hex: {error}")),
-    };
-    let body = match TransactionBodyV2::decode(&bytes) {
-        Ok(body) => body,
-        Err(error) => return json_err(format!("unsigned body is invalid: {error}")),
-    };
+    catch_ffi_json(|| {
+        let Some(wallet) = wallet_ref(handle) else {
+            return json_err("wallet handle is null");
+        };
+        let Some(hex_body) = read_c_str(unsigned_body_hex) else {
+            return json_err("unsigned body must be valid UTF-8 hex text");
+        };
+        let bytes = match hex::decode(hex_body.trim()) {
+            Ok(bytes) => bytes,
+            Err(error) => return json_err(format!("unsigned body is not valid hex: {error}")),
+        };
+        let body = match TransactionBodyV2::decode(&bytes) {
+            Ok(body) => body,
+            Err(error) => return json_err(format!("unsigned body is invalid: {error}")),
+        };
 
-    let signed = match wallet.sign_transaction_body_v2(body) {
-        Ok(signed) => signed,
-        Err(error) => return json_err(format!("could not sign transaction: {error}")),
-    };
-    let encoded = match signed.encode() {
-        Ok(bytes) => bytes,
-        Err(error) => return json_err(format!("could not encode signed transaction: {error}")),
-    };
-    let witness_id = match signed.witness_id() {
-        Ok(hash) => hash,
-        Err(error) => return json_err(format!("could not compute witness id: {error}")),
-    };
-    let intent_id = match signed.intent_id() {
-        Ok(hash) => hash,
-        Err(error) => return json_err(format!("could not compute intent id: {error}")),
-    };
+        let signed = match wallet.sign_transaction_body_v2(body) {
+            Ok(signed) => signed,
+            Err(error) => return json_err(format!("could not sign transaction: {error}")),
+        };
+        let encoded = match signed.encode() {
+            Ok(bytes) => bytes,
+            Err(error) => return json_err(format!("could not encode signed transaction: {error}")),
+        };
+        let witness_id = match signed.witness_id() {
+            Ok(hash) => hash,
+            Err(error) => return json_err(format!("could not compute witness id: {error}")),
+        };
+        let intent_id = match signed.intent_id() {
+            Ok(hash) => hash,
+            Err(error) => return json_err(format!("could not compute intent id: {error}")),
+        };
 
-    json_ok(SignedTransferResult {
-        signed_transfer_hex: hex::encode(encoded),
-        witness_id_hex: witness_id.to_string(),
-        intent_id_hex: intent_id.to_string(),
+        json_ok(SignedTransferResult {
+            signed_transfer_hex: hex::encode(encoded),
+            witness_id_hex: witness_id.to_string(),
+            intent_id_hex: intent_id.to_string(),
+        })
     })
 }
 
@@ -684,9 +734,22 @@ mod tests {
     #[derive(serde::Deserialize)]
     struct JsonEnvelopeOwned<T> {
         ok: bool,
-        #[allow(dead_code)]
         error: Option<String>,
         data: Option<T>,
+    }
+
+    #[test]
+    fn wallet_ffi_panic_boundary_returns_a_bounded_error() {
+        let json = read_and_free(catch_ffi_json(|| {
+            panic!("test-only wallet FFI panic");
+        }))
+        .expect("panic boundary JSON");
+        let envelope: JsonEnvelopeOwned<serde_json::Value> =
+            serde_json::from_str(&json).expect("valid panic boundary envelope");
+
+        assert!(!envelope.ok);
+        assert_eq!(envelope.error.as_deref(), Some(FFI_PANIC_MESSAGE));
+        assert!(envelope.data.is_none());
     }
 
     impl<'de> serde::Deserialize<'de> for WalletIdentityJson {

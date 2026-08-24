@@ -208,6 +208,15 @@ jobs:
             OTHER_CODE_SIGN_FLAGS="--keychain $KEYCHAIN_PATH" \
             clean archive
 
+      - name: Audit signed iPhone archive linkage
+        if: inputs.existing_build_number == ''
+        working-directory: ${{ env.IOS_NATIVE_DIR }}
+        run: |
+          set -euo pipefail
+          APP_PATH="$RUNNER_TEMP/Aura.xcarchive/Products/Applications/Aura.app"
+          codesign --verify --deep --strict "$APP_PATH"
+          bash ./scripts/audit-ios-binary-linkage.sh "$APP_PATH/Aura" arm64
+
       - name: Export IPA
         if: inputs.existing_build_number == ''
         env:
@@ -253,6 +262,14 @@ jobs:
         with:
           name: Aura-native-ios-ipa
           path: ${{ runner.temp }}/export/*.ipa
+          if-no-files-found: error
+
+      - name: Upload device symbols
+        if: inputs.existing_build_number == ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: Aura-native-ios-dsyms
+          path: ${{ runner.temp }}/Aura.xcarchive/dSYMs/
           if-no-files-found: error
 
       - name: Upload to TestFlight

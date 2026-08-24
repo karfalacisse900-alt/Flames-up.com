@@ -45,9 +45,8 @@ targets:
         GCC_C_LANGUAGE_STANDARD: gnu17
         CLANG_CXX_LANGUAGE_STANDARD: "gnu++17"
         CLANG_CXX_LIBRARY: libc++
-        "LIBRARY_SEARCH_PATHS[sdk=iphoneos*]": "$(inherited) $(PROJECT_DIR)/rust/mira_core/target/aarch64-apple-ios/release"
-        "LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]": "$(inherited) $(PROJECT_DIR)/rust/mira_core/target/ios-simulator-universal/release"
-        OTHER_LDFLAGS: "$(inherited) -lmira_core -framework Security"
+        "OTHER_LDFLAGS[sdk=iphoneos*]": "$(inherited) $(PROJECT_DIR)/rust/mira_core/target/aarch64-apple-ios/release/libmira_core.a -framework Security"
+        "OTHER_LDFLAGS[sdk=iphonesimulator*]": "$(inherited) $(PROJECT_DIR)/rust/mira_core/target/ios-simulator-universal/release/libmira_core.a -framework Security"
       configs:
         Debug:
           CODE_SIGN_STYLE: Automatic
@@ -80,9 +79,8 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.karfala90.aura.tests
         GENERATE_INFOPLIST_FILE: YES
         CODE_SIGNING_ALLOWED: NO
-        "LIBRARY_SEARCH_PATHS[sdk=iphoneos*]": "$(inherited) $(PROJECT_DIR)/rust/mira_core/target/aarch64-apple-ios/release"
-        "LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]": "$(inherited) $(PROJECT_DIR)/rust/mira_core/target/ios-simulator-universal/release"
-        OTHER_LDFLAGS: "$(inherited) -lmira_core -framework Security"
+        "OTHER_LDFLAGS[sdk=iphoneos*]": "$(inherited) $(PROJECT_DIR)/rust/mira_core/target/aarch64-apple-ios/release/libmira_core.a -framework Security"
+        "OTHER_LDFLAGS[sdk=iphonesimulator*]": "$(inherited) $(PROJECT_DIR)/rust/mira_core/target/ios-simulator-universal/release/libmira_core.a -framework Security"
 
 schemes:
   Aura:

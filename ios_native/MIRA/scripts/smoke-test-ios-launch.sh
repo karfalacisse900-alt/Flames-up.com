@@ -36,6 +36,8 @@ if [ -z "${APP_PATH}" ]; then
   exit 1
 fi
 
+bash ./scripts/audit-ios-binary-linkage.sh "${APP_PATH}/Aura"
+
 xcrun simctl install "${SIMULATOR_ID}" "${APP_PATH}"
 LAUNCH_OUTPUT=$(xcrun simctl launch --terminate-running-process "${SIMULATOR_ID}" "${BUNDLE_ID}" 2>&1)
 echo "${LAUNCH_OUTPUT}"

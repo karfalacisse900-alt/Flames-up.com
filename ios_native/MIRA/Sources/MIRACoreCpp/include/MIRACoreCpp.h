@@ -32,6 +32,10 @@ uint64_t mira_stable_hash64(const char* value);
 
 const char* mira_native_design_profile_json(void);
 
+/* Small deterministic Rust call used to prove the statically linked mobile bridge is available.
+ * It accepts public diagnostic bytes only and returns no sensitive material. */
+uint64_t mira_rust_hash_bytes(const uint8_t* bytes, size_t length);
+
 /* Rust Aura wallet FFI. These declarations are surfaced through this Clang module so Swift can
  * call the existing `aura-wallet` implementation. Handles are opaque, returned strings must be
  * freed exactly once, and no function exposes a raw private key. */

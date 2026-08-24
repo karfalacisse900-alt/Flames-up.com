@@ -5,7 +5,10 @@ edition = "2021"
 
 [lib]
 name = "mira_core"
-crate-type = ["staticlib", "cdylib"]
+# iOS embeds this bridge into the app executable. Producing a cdylib beside the archive lets
+# Xcode's `-l` lookup prefer the dylib and record a build-machine path in LC_LOAD_DYLIB, which
+# makes the TestFlight app terminate in dyld before main. Keep the mobile bridge static-only.
+crate-type = ["staticlib"]
 
 [dependencies]
 # Vendored Aura consensus types and wallet crypto -- see rust/vendor/README.md. This FFI layer
@@ -27,5 +30,7 @@ tempfile = "3.15.0"
 [profile.release]
 codegen-units = 1
 lto = "thin"
-panic = "abort"
+# Every exported C ABI function catches Rust unwinds before returning to Swift. Keep unwinding
+# enabled so a dependency panic can be converted into a bounded error instead of aborting iOS.
+panic = "unwind"
 strip = "symbols"

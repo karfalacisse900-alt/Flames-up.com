@@ -133,6 +133,7 @@ public struct MIRANativeRootView: View {
     _startup = StateObject(wrappedValue: MIRAStartupCoordinator(api: client))
     _localization = StateObject(wrappedValue: MIRALocalization.shared)
     self.api = client
+    MIRAPerformanceTimeline.mark("backend_client_initialized")
     MIRAPerformanceTimeline.mark("native_root_init")
   }
 

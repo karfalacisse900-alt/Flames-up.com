@@ -30,6 +30,16 @@ public final class AuraWalletStore: ObservableObject {
     } else {
       state = .unavailable
     }
+    MIRAApplePerformanceLogger.event("wallet_bridge_store_initialized", detail: Self.diagnosticState(state))
+  }
+
+  private static func diagnosticState(_ state: AuraWalletLockState) -> String {
+    switch state {
+    case .unavailable: return "unavailable"
+    case .noWallet: return "no_wallet"
+    case .locked: return "locked"
+    case .unlocked: return "unlocked"
+    }
   }
 
   public func create(password: String, network: AuraWalletNetwork = .devnet) throws -> String {
