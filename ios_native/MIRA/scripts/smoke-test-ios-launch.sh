@@ -47,7 +47,7 @@ if ! [[ "${APP_PID}" =~ ^[0-9]+$ ]]; then
 fi
 
 sleep 8
-if ! xcrun simctl spawn "${SIMULATOR_ID}" kill -0 "${APP_PID}" 2>/dev/null; then
+if ! kill -0 "${APP_PID}" 2>/dev/null; then
   echo "Aura exited during the launch smoke-test window." >&2
   xcrun simctl spawn "${SIMULATOR_ID}" log show \
     --style compact \

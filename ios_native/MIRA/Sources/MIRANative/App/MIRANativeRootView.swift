@@ -14,10 +14,6 @@ public enum MIRATab: Hashable {
 public enum MIRAStartupPhase: Equatable {
   case launching
   case checkingSession
-  case loadingUser
-  case preparingStories
-  case preparingProfile
-  case preparingMainTabs
   case readyAuthenticated
   case readyUnauthenticated
   case failedWithRetry
@@ -28,14 +24,6 @@ public enum MIRAStartupPhase: Equatable {
       return "Opening Aura"
     case .checkingSession:
       return "Checking your session"
-    case .loadingUser:
-      return "Loading your profile"
-    case .preparingStories:
-      return "Preparing your account"
-    case .preparingProfile:
-      return "Preparing your profile"
-    case .preparingMainTabs:
-      return "Building your tabs"
     case .readyAuthenticated, .readyUnauthenticated:
       return "Ready"
     case .failedWithRetry:
@@ -50,11 +38,6 @@ final class MIRAStartupCoordinator: ObservableObject {
   @Published private(set) var isSplashMounted = true
   @Published private(set) var isSplashVisible = true
   @Published private(set) var showSlowStartupCopy = false
-  @Published private(set) var shouldMountAllAuthenticatedTabs = false
-
-  let discoverModel: DiscoverNativeModel
-  let chatModel: ChatNativeModel
-  let profileModel: ProfileNativeModel
 
   private let api: MIRAAPIClient
   private var didStart = false
@@ -63,9 +46,6 @@ final class MIRAStartupCoordinator: ObservableObject {
 
   init(api: MIRAAPIClient) {
     self.api = api
-    self.discoverModel = DiscoverNativeModel(api: api)
-    self.chatModel = ChatNativeModel(api: api)
-    self.profileModel = ProfileNativeModel(api: api)
   }
 
   func start(authSession: MIRAAuthSession) async {
@@ -87,36 +67,14 @@ final class MIRAStartupCoordinator: ObservableObject {
       return
     }
 
-    if authSession.user?.needsUsernameOnboarding == true {
-      phase = .readyAuthenticated
-      await waitForMinimumSplash(since: startedAt)
-      MIRAPerformanceTimeline.mark("startup_username_required")
-      dismissSplash()
-      return
-    }
-
-    shouldMountAllAuthenticatedTabs = true
-    phase = .loadingUser
-    profileModel.primeUser(authSession.user)
-    await Task.yield()
-
-    phase = .preparingMainTabs
-    await Task.yield()
-
-    phase = .preparingStories
-    let storiesTask = Task { await discoverModel.prepareStoriesForStartup() }
-
-    phase = .preparingProfile
-    let profileTask = Task { await profileModel.prepareForStartup(signedInUser: authSession.user) }
-
-    let chatTask = Task { await chatModel.prepareForStartup() }
-
-    _ = await (storiesTask.value, profileTask.value, chatTask.value)
-    startInitialMediaPrewarm()
-
     phase = .readyAuthenticated
     await waitForMinimumSplash(since: startedAt)
-    MIRAPerformanceTimeline.mark("startup_prepare_ready", detail: "authenticated")
+    MIRAPerformanceTimeline.mark(
+      authSession.user?.needsUsernameOnboarding == true
+        ? "startup_username_required"
+        : "startup_prepare_ready",
+      detail: "authenticated"
+    )
     dismissSplash()
   }
 
@@ -154,31 +112,6 @@ final class MIRAStartupCoordinator: ObservableObject {
     }
   }
 
-  private func startInitialMediaPrewarm() {
-    let posts = Array(profileModel.posts.prefix(6))
-    let previewURLs = posts.flatMap { post in
-      post.posterMediaURLs + post.thumbnailMediaURLs
-    }
-    let feedImageURLs = posts
-      .flatMap(\.feedMediaURLs)
-      .filter { !$0.isVideoURL }
-    let urls = Array(orderedMediaURLs(previewURLs + feedImageURLs).prefix(16))
-    guard !urls.isEmpty else { return }
-    Task.detached(priority: .utility) {
-      await MIRAImagePrefetcher.prefetch(urls: urls, maxPixelSize: MIRAMediaSizing.feedTargetHeight, limit: 16)
-    }
-  }
-
-  private func orderedMediaURLs(_ values: [String]) -> [String] {
-    var seen = Set<String>()
-    var result: [String] = []
-    for value in values {
-      let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-      guard !trimmed.isEmpty, !trimmed.isVideoURL, seen.insert(trimmed).inserted else { continue }
-      result.append(trimmed)
-    }
-    return result
-  }
 }
 
 public struct MIRANativeRootView: View {
@@ -245,7 +178,7 @@ public struct MIRANativeRootView: View {
         selectedTab = .home
         loadedTabs = [.home]
       } else {
-        loadedTabs.formUnion([.home, .wallet])
+        loadedTabs.insert(.home)
       }
       registerCachedPushTokenIfPossible()
     }
@@ -345,9 +278,6 @@ public struct MIRANativeRootView: View {
   }
 
   private func shouldMountTab(_ tab: MIRATab) -> Bool {
-    if authSession.user != nil && startup.shouldMountAllAuthenticatedTabs {
-      return true
-    }
     return loadedTabs.contains(tab) || selectedTab == tab
   }
 
