@@ -1,6 +1,9 @@
 name: Fetch Aura iOS Crash Diagnostics
 
 on:
+  push:
+    tags:
+      - "diagnostics-ios-*"
   workflow_dispatch:
     inputs:
       wait_minutes:
@@ -43,7 +46,7 @@ jobs:
         env:
           APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
           APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
-          WAIT_MINUTES: ${{ inputs.wait_minutes }}
+          WAIT_MINUTES: ${{ inputs.wait_minutes || 20 }}
         run: |
           set -euo pipefail
           python3 scripts/fetch_testflight_crash.py \
