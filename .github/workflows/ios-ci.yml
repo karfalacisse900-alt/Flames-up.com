@@ -15,12 +15,17 @@ env:
   SCHEME: Aura
 
 jobs:
-  build-and-test:
-    name: Build and test (no signing, no TestFlight upload)
+  ios-gate:
+    name: iOS gate (${{ matrix.gate }})
     runs-on: macos-26
-    # Clean macOS runners compile three Rust Apple targets plus Debug/Release Swift builds.
-    # The device linkage audit added for TestFlight safety must be allowed to finish.
-    timeout-minutes: 60
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        gate:
+          - unit-tests
+          - release-simulator-launch
+          - release-device-linkage
 
     steps:
       - name: Checkout
@@ -32,28 +37,21 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
-      - name: Build Rust native core for iOS device and Simulator
+      - name: Build Rust native core for required Apple platform
         working-directory: ${{ env.IOS_NATIVE_DIR }}
         run: |
-          bash ./scripts/build-rust-ios.sh iphoneos
-          bash ./scripts/build-rust-ios.sh iphonesimulator
+          if [[ "${{ matrix.gate }}" == "release-device-linkage" ]]; then
+            bash ./scripts/build-rust-ios.sh iphoneos
+          else
+            bash ./scripts/build-rust-ios.sh iphonesimulator
+          fi
 
       - name: Generate Xcode project
         working-directory: ${{ env.IOS_NATIVE_DIR }}
         run: xcodegen generate --spec project.yml
 
-      - name: Build for iOS Simulator
-        working-directory: ${{ env.IOS_NATIVE_DIR }}
-        run: |
-          xcodebuild \
-            -project Aura.xcodeproj \
-            -scheme "$SCHEME" \
-            -configuration Debug \
-            -destination "generic/platform=iOS Simulator" \
-            CODE_SIGNING_ALLOWED=NO \
-            build
-
       - name: Run unit tests
+        if: matrix.gate == 'unit-tests'
         working-directory: ${{ env.IOS_NATIVE_DIR }}
         run: |
           set -euo pipefail
@@ -76,10 +74,12 @@ jobs:
             test
 
       - name: Launch Aura Release build in iOS Simulator
+        if: matrix.gate == 'release-simulator-launch'
         working-directory: ${{ env.IOS_NATIVE_DIR }}
         run: bash ./scripts/smoke-test-ios-launch.sh
 
       - name: Build and audit unsigned Aura Release for iPhone
+        if: matrix.gate == 'release-device-linkage'
         working-directory: ${{ env.IOS_NATIVE_DIR }}
         run: |
           set -euo pipefail
