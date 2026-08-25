@@ -6,9 +6,8 @@ import GoogleSignIn
 public enum MIRATab: Hashable {
   case home
   case scan
-  case proofs
-  case reputation
   case wallet
+  case me
 }
 
 public enum MIRAStartupPhase: Equatable {
@@ -125,6 +124,7 @@ public struct MIRANativeRootView: View {
   @StateObject private var startup: MIRAStartupCoordinator
   @StateObject private var localization: MIRALocalization
   @StateObject private var auraWallet: AuraWalletStore
+  @StateObject private var auraGateway: AuraWalletGatewayStore
   @StateObject private var auraProofs: AuraProofLifecycleStore
   private let api: MIRAAPIClient
 
@@ -135,6 +135,7 @@ public struct MIRANativeRootView: View {
     _startup = StateObject(wrappedValue: MIRAStartupCoordinator(api: client))
     _localization = StateObject(wrappedValue: MIRALocalization.shared)
     _auraWallet = StateObject(wrappedValue: AuraWalletStore())
+    _auraGateway = StateObject(wrappedValue: AuraWalletGatewayStore(api: client))
     _auraProofs = StateObject(wrappedValue: AuraProofLifecycleStore(api: client))
     self.api = client
     MIRAPerformanceTimeline.mark("backend_client_initialized")
@@ -231,41 +232,64 @@ public struct MIRANativeRootView: View {
   private var mainTabs: some View {
     TabView(selection: $selectedTab) {
       lazyTab(.home) {
-        AuraHomeView(api: api)
+        AuraHomeView(
+          api: api,
+          wallet: auraWallet,
+          gateway: auraGateway,
+          proofs: auraProofs
+        )
       }
         .tag(MIRATab.home)
         .tabItem { Label("Home", systemImage: "house.fill") }
 
       lazyTab(.scan) {
-        AuraScanView(api: api, wallet: auraWallet, proofs: auraProofs)
+        AuraScanView(
+          api: api,
+          wallet: auraWallet,
+          gateway: auraGateway,
+          proofs: auraProofs
+        )
       }
         .tag(MIRATab.scan)
         .tabItem { Label("Scan", systemImage: "viewfinder") }
 
-      lazyTab(.proofs) {
-        AuraProofsView(api: api, proofs: auraProofs)
-      }
-        .tag(MIRATab.proofs)
-        .tabItem { Label("Proofs", systemImage: "checkmark.seal.fill") }
-
-      lazyTab(.reputation) {
-        AuraReputationView(api: api, wallet: auraWallet, proofs: auraProofs)
-      }
-        .tag(MIRATab.reputation)
-        .tabItem { Label("Reputation", systemImage: "chart.line.uptrend.xyaxis") }
-
       lazyTab(.wallet) {
-        AuraWalletView(api: api, wallet: auraWallet, proofs: auraProofs)
+        AuraWalletView(
+          api: api,
+          wallet: auraWallet,
+          gateway: auraGateway,
+          proofs: auraProofs
+        )
       }
         .tag(MIRATab.wallet)
         .tabItem { Label("Wallet", systemImage: "wallet.pass.fill") }
+
+      lazyTab(.me) {
+        AuraMeView(
+          api: api,
+          authSession: authSession,
+          wallet: auraWallet,
+          gateway: auraGateway,
+          proofs: auraProofs,
+          openWallet: { selectedTab = .wallet }
+        )
+      }
+        .tag(MIRATab.me)
+        .tabItem { Label("Me", systemImage: "face.smiling") }
     }
-    .tint(MIRATheme.Color.forest)
+    .tint(MIRATheme.Color.auraViolet)
     .toolbarBackground(MIRATheme.Color.surface, for: .tabBar)
     .toolbarBackground(.visible, for: .tabBar)
     .background(MIRATheme.Color.appBackground)
     .task {
       await auraProofs.observeLifecycle()
+    }
+    .task(id: auraWallet.identity?.address) {
+      if let identity = auraWallet.identity {
+        auraGateway.start(identity: identity)
+      } else {
+        auraGateway.clear()
+      }
     }
     .onChange(of: selectedTab) { _, tab in
       MIRAPerformanceTimeline.mark("tab_switch", detail: "\(tab)")

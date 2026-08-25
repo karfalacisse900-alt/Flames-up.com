@@ -6,6 +6,8 @@ const sourceURL = new URL('../src/aura.ts', import.meta.url);
 const workflowURL = new URL('../../.github/workflows/deploy-worker.yml', import.meta.url);
 const scanViewURL = new URL('../../ios_native/MIRA/Sources/MIRANative/Screens/Aura/AuraScanView.swift', import.meta.url);
 const walletViewURL = new URL('../../ios_native/MIRA/Sources/MIRANative/Screens/Aura/AuraWalletView.swift', import.meta.url);
+const rootViewURL = new URL('../../ios_native/MIRA/Sources/MIRANative/App/MIRANativeRootView.swift', import.meta.url);
+const ticketViewURL = new URL('../../ios_native/MIRA/Sources/MIRANative/Components/AuraMobileComponents.swift', import.meta.url);
 
 test('Aura document verification is authenticated, bounded, non-retaining, and only authorizes privacy-safe proof bytes', async () => {
   const source = await fs.readFile(sourceURL, 'utf8');
@@ -20,6 +22,7 @@ test('Aura document verification is authenticated, bounded, non-retaining, and o
   assert.match(source, /proof\/purchase\/verifier-signing\/v1/);
   assert.match(source, /aura-receipt-nullifier-v1/);
   assert.match(source, /const receiptHasRequiredFields = Boolean\(merchantName && documentDate && documentTotal\)/);
+  assert.match(source, /const invoiceHasRequiredFields = Boolean/);
   assert.match(source, /isDocument !== false/);
   assert.match(source, /!blockingDecision/);
   assert.match(source, /Receipt Verified/);
@@ -29,18 +32,50 @@ test('Aura document verification is authenticated, bounded, non-retaining, and o
   assert.doesNotMatch(source, /a5eef8|0FBr1|vrfsgsvt/);
 });
 
-test('Aura Mobile keeps receipt capture alive across system pickers and presents only the simple receipt result', async () => {
+test('Aura Mobile shell has exactly Home, Scan, Wallet, and Me with real-data ticket cards', async () => {
+  const [root, ticket] = await Promise.all([
+    fs.readFile(rootViewURL, 'utf8'),
+    fs.readFile(ticketViewURL, 'utf8'),
+  ]);
+  const tabEnum = root.slice(root.indexOf('public enum MIRATab'), root.indexOf('public enum MIRAStartupPhase'));
+  assert.match(tabEnum, /case home/);
+  assert.match(tabEnum, /case scan/);
+  assert.match(tabEnum, /case wallet/);
+  assert.match(tabEnum, /case me/);
+  assert.doesNotMatch(tabEnum, /proofs|reputation|yearbook/);
+  assert.match(root, /AuraHomeView\(/);
+  assert.match(root, /AuraScanView\(/);
+  assert.match(root, /AuraWalletView\(/);
+  assert.match(root, /AuraMeView\(/);
+  assert.match(root, /gateway: auraGateway/);
+  assert.match(ticket, /merchant: String\?/);
+  assert.match(ticket, /status: String/);
+  assert.doesNotMatch(`${root}\n${ticket}`, /1,248\.50|BLANK STREET|\$8\.42/);
+});
+
+test('Aura Mobile auto-recognizes document type and keeps capture alive across system pickers', async () => {
   const [scanView, walletView] = await Promise.all([
     fs.readFile(scanViewURL, 'utf8'),
     fs.readFile(walletViewURL, 'utf8'),
   ]);
   assert.match(scanView, /if phase == \.background/);
   assert.match(walletView, /if phase == \.background, wallet\.state == \.unlocked/);
-  assert.match(scanView, /RECEIPT VERIFIED/);
-  assert.match(scanView, /RECEIPT COULD NOT BE VERIFIED/);
+  assert.match(scanView, /Automatic document recognition/);
+  assert.match(scanView, /Recognize & Verify/);
+  assert.doesNotMatch(scanView, /Scan Receipt/);
+  assert.doesNotMatch(scanView, /Scan Invoice/);
+  assert.doesNotMatch(scanView, /Import Receipt/);
+  assert.doesNotMatch(scanView, /Import Invoice/);
+  assert.match(scanView, /result\.submittedType == "receipt"/);
+  assert.match(scanView, /result\.submittedType == "invoice"/);
   assert.equal(scanView.includes('Text("Level \\(result.verificationLevel)")'), false);
   assert.doesNotMatch(scanView, /Provider fraud decision/);
   assert.doesNotMatch(scanView, /AI-generated document detected/);
+
+  const source = await fs.readFile(sourceURL, 'utf8');
+  assert.match(source, /document_type: null/);
+  assert.match(source, /function auraDocumentKind/);
+  assert.match(source, /normalized\.submittedType === 'receipt'/);
 });
 
 test('Aura wallet routes proxy only allowlisted operations to an authenticated Rust gateway', async () => {

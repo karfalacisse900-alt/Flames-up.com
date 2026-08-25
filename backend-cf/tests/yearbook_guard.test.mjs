@@ -108,14 +108,13 @@ test('Yearbook discovery does not turn missing age filters into an age-16-only q
   assert.doesNotMatch(route, /Number\(c\.req\.query\('age_(?:min|max)'\) \|\| 0\)/);
 });
 
-test('native Yearbook is a real tab with editor, privacy controls, and non-swipe discovery', async () => {
+test('native Yearbook implementation remains available without violating the four-tab Aura shell', async () => {
   const root = await read('ios_native/MIRA/Sources/MIRANative/App/MIRANativeRootView.swift');
   const screen = await read('ios_native/MIRA/Sources/MIRANative/Screens/YearbookNativeView.swift');
   const models = await read('ios_native/MIRA/Sources/MIRANative/Models/MIRAYearbookModels.swift');
 
-  assert.match(root, /case yearbook/);
-  assert.match(root, /MIRAYearbookNativeView\(api: api, currentUser: authSession\.user\)/);
-  assert.match(root, /Label\("Yearbook", systemImage: "book\.closed\.fill"\)/);
+  assert.doesNotMatch(root, /case yearbook/);
+  assert.match(root, /case home[\s\S]*case scan[\s\S]*case wallet[\s\S]*case me/);
   assert.match(screen, /YearbookEditorView/);
   assert.match(screen, /YearbookSignatureComposer/);
   assert.match(screen, /MIRAReportSheet/);

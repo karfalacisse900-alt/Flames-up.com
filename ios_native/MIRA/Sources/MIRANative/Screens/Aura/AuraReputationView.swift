@@ -21,8 +21,7 @@ public struct AuraReputationView: View {
   }
 
   public var body: some View {
-    NavigationStack {
-      ScrollView {
+    ScrollView {
         VStack(spacing: MIRATheme.Space.md) {
           if proofs.records.isEmpty {
             MIRAEmptyState(
@@ -38,14 +37,13 @@ public struct AuraReputationView: View {
           }
         }
         .padding(MIRATheme.Space.lg)
-      }
-      .background(MIRATheme.Color.appBackground.ignoresSafeArea())
-      .navigationTitle("Reputation")
-      .refreshable { await proofs.refreshAll() }
-      .task { await proofs.refreshAll() }
-      .sheet(item: $selectedProof) { record in
-        AuraFeedbackSheet(record: record, wallet: wallet, proofs: proofs)
-      }
+    }
+    .background(MIRATheme.Color.appBackground.ignoresSafeArea())
+    .navigationTitle("Reputation")
+    .refreshable { await proofs.refreshAll() }
+    .task { await proofs.refreshAll() }
+    .sheet(item: $selectedProof) { record in
+      AuraFeedbackSheet(record: record, wallet: wallet, proofs: proofs)
     }
   }
 

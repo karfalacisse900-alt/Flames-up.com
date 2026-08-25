@@ -54,6 +54,14 @@ public enum MIRATheme {
       light: UIColor(red: 0.925, green: 0.965, blue: 0.905, alpha: 1),
       dark: UIColor(red: 0.055, green: 0.095, blue: 0.065, alpha: 1)
     )
+    public static let auraViolet = adaptive(
+      light: UIColor(red: 0.286, green: 0.137, blue: 0.706, alpha: 1),
+      dark: UIColor(red: 0.625, green: 0.500, blue: 1.000, alpha: 1)
+    )
+    public static let auraVioletSoft = adaptive(
+      light: UIColor(red: 0.952, green: 0.938, blue: 1.000, alpha: 1),
+      dark: UIColor(red: 0.110, green: 0.070, blue: 0.210, alpha: 1)
+    )
     public static let accent = SwiftUI.Color(red: 0.365, green: 0.785, blue: 0.500)
     public static let like = SwiftUI.Color(red: 0.875, green: 0.305, blue: 0.440)
     public static let divider = adaptive(

@@ -3,33 +3,16 @@ import SwiftUI
 import UniformTypeIdentifiers
 import VisionKit
 
-public enum AuraScanDocumentKind: String, CaseIterable, Equatable, Identifiable, Sendable {
-  case receipt
-  case invoice
-
-  public var id: String { rawValue }
-
-  var title: String {
-    switch self {
-    case .receipt: return "Receipt"
-    case .invoice: return "Invoice"
-    }
-  }
-
-  var scanLabel: String { "Scan \(title)" }
-}
-
-/// Native receipt/invoice capture and bounded local import. Selected bytes remain only in memory
-/// and are sent only after the user taps Verify. Veryfi parsing and screening are kept distinct
-/// from independent purchase confirmation, Aura proof issuance, and blockchain submission.
+/// Native document capture with provider-side receipt/invoice recognition. The user never selects
+/// a document type. Sensitive bytes remain in memory and are sent only after Verify is tapped.
 public struct AuraScanView: View {
   @Environment(\.scenePhase) private var scenePhase
   let api: MIRAAPIClient
   @ObservedObject private var wallet: AuraWalletStore
+  @ObservedObject private var gateway: AuraWalletGatewayStore
   @ObservedObject private var proofs: AuraProofLifecycleStore
-  @StateObject private var gateway: AuraWalletGatewayStore
   @State private var selectedDocument: AuraLocalDocument?
-  @State private var pendingKind: AuraScanDocumentKind = .receipt
+  @State private var selectedPhoto: PhotosPickerItem?
   @State private var showingScanner = false
   @State private var showingImporter = false
   @State private var errorMessage: String?
@@ -40,37 +23,43 @@ public struct AuraScanView: View {
   public init(
     api: MIRAAPIClient,
     wallet: AuraWalletStore,
+    gateway: AuraWalletGatewayStore,
     proofs: AuraProofLifecycleStore
   ) {
     self.api = api
     self.wallet = wallet
+    self.gateway = gateway
     self.proofs = proofs
-    _gateway = StateObject(wrappedValue: AuraWalletGatewayStore(api: api))
   }
 
   public var body: some View {
     NavigationStack {
       ScrollView {
-        VStack(spacing: MIRATheme.Space.lg) {
-          actionGrid
+        VStack(spacing: 18) {
           if let selectedDocument {
-            selectedDocumentCard(selectedDocument)
+            documentPreview(selectedDocument)
             if let verificationResult {
-              verificationResultCard(verificationResult)
+              verificationTicket(verificationResult)
             }
           } else {
-            MIRAEmptyState(
-              title: "Scan or import a document",
-              message: "Choose a receipt or invoice. Aura keeps the selected bytes only in memory and clears them when you clear the selection or leave the app.",
-              systemImage: "doc.viewfinder"
-            )
-            .miraCardSurface()
+            captureCard
+            privacyNote
           }
         }
-        .padding(MIRATheme.Space.lg)
+        .padding(.horizontal, 16)
+        .padding(.bottom, 28)
       }
       .background(MIRATheme.Color.appBackground.ignoresSafeArea())
       .navigationTitle("Scan")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .topBarTrailing) {
+          Button { errorMessage = privacyHelp } label: {
+            Image(systemName: "questionmark.circle")
+          }
+          .accessibilityLabel("Document privacy help")
+        }
+      }
       .sheet(isPresented: $showingScanner) {
         AuraDocumentScannerView { result in
           showingScanner = false
@@ -86,8 +75,13 @@ public struct AuraScanView: View {
         allowsMultipleSelection: false,
         onCompletion: handleImportedURLs
       )
+      .onChange(of: selectedPhoto) { _, item in
+        guard let item else { return }
+        resetResult()
+        Task { await loadPhoto(item) }
+      }
       .alert(
-        "Document error",
+        "Document",
         isPresented: Binding(
           get: { errorMessage != nil },
           set: { if !$0 { errorMessage = nil } }
@@ -98,257 +92,255 @@ public struct AuraScanView: View {
         Text(errorMessage ?? "Aura could not inspect that document.")
       }
       .onChange(of: scenePhase) { _, phase in
-        // System camera/photo pickers may briefly move the app through `.inactive`. Keep the
-        // in-memory selection for that transition, but clear it once Aura is truly backgrounded.
         if phase == .background {
-          selectedDocument = nil
-          verificationResult = nil
-          proofSubmission = nil
+          clearSelection()
         }
       }
     }
   }
 
-  private var actionGrid: some View {
-    VStack(spacing: MIRATheme.Space.sm) {
-      HStack(spacing: MIRATheme.Space.sm) {
-        scanButton(kind: .receipt, systemImage: "camera.viewfinder")
-        scanButton(kind: .invoice, systemImage: "doc.text.viewfinder")
-      }
+  private var captureCard: some View {
+    VStack(spacing: 0) {
+      ZStack(alignment: .top) {
+        LinearGradient(
+          colors: [MIRATheme.Color.auraViolet.opacity(0.88), MIRATheme.Color.forest.opacity(0.76)],
+          startPoint: .topLeading,
+          endPoint: .bottomTrailing
+        )
+        .frame(height: 310)
 
-      HStack(spacing: MIRATheme.Space.sm) {
-        photoButton(kind: .receipt)
-        photoButton(kind: .invoice)
-      }
+        VStack(spacing: 18) {
+          Label("Automatic document recognition", systemImage: "sparkles")
+            .font(.subheadline)
+            .fontWeight(.semibold)
+            .foregroundStyle(.white)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .background(.black.opacity(0.18), in: Capsule())
 
-      Menu {
-        Button("Import Receipt") { beginImport(.receipt) }
-        Button("Import Invoice") { beginImport(.invoice) }
-      } label: {
-        Label("Import PDF or Image", systemImage: "square.and.arrow.down")
-          .font(.system(size: 15, weight: .bold))
-          .foregroundStyle(MIRATheme.Color.textPrimary)
-          .frame(maxWidth: .infinity, minHeight: 52)
-      }
-      .miraCardSurface(cornerRadius: MIRATheme.Radius.medium)
-    }
-  }
+          Image(systemName: "doc.viewfinder")
+            .font(.system(size: 84, weight: .light))
+            .foregroundStyle(.white)
 
-  private func photoButton(kind: AuraScanDocumentKind) -> some View {
-    PhotosPicker(
-      selection: Binding<PhotosPickerItem?>(
-        get: { nil },
-        set: { item in
-          guard let item else { return }
-          pendingKind = kind
-          selectedDocument = nil
-          verificationResult = nil
-          proofSubmission = nil
-          Task { await loadPhoto(item, kind: kind) }
+          Text("Scan a receipt or invoice")
+            .font(.title2)
+            .fontWeight(.bold)
+            .foregroundStyle(.white)
+          Text("Aura asks Veryfi to recognize the document type after capture.")
+            .font(.subheadline)
+            .foregroundStyle(.white.opacity(0.82))
+            .multilineTextAlignment(.center)
+            .padding(.horizontal, 26)
         }
-      ),
-      matching: .images
-    ) {
-      Label("\(kind.title) Photo", systemImage: "photo.on.rectangle")
-        .font(.system(size: 13.5, weight: .bold))
-        .foregroundStyle(MIRATheme.Color.textPrimary)
-        .frame(maxWidth: .infinity, minHeight: 48)
-    }
-    .miraCardSurface(cornerRadius: MIRATheme.Radius.medium)
-  }
-
-  private func scanButton(kind: AuraScanDocumentKind, systemImage: String) -> some View {
-    Button {
-      beginScan(kind)
-    } label: {
-      VStack(spacing: MIRATheme.Space.xs) {
-        Image(systemName: systemImage)
-          .font(.system(size: 24, weight: .semibold))
-          .foregroundStyle(MIRATheme.Color.forest)
-        Text(kind.scanLabel)
-          .font(.system(size: 14, weight: .bold))
-          .foregroundStyle(MIRATheme.Color.textPrimary)
+        .padding(.top, 24)
       }
-      .frame(maxWidth: .infinity, minHeight: 88)
+
+      VStack(spacing: 12) {
+        Button {
+          beginScan()
+        } label: {
+          Label("Scan Document", systemImage: "camera.viewfinder")
+            .font(.headline)
+            .frame(maxWidth: .infinity, minHeight: 48)
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(MIRATheme.Color.auraViolet)
+
+        HStack(spacing: 12) {
+          PhotosPicker(selection: $selectedPhoto, matching: .images) {
+            Label("Photos", systemImage: "photo.on.rectangle")
+              .font(.subheadline)
+              .fontWeight(.semibold)
+              .frame(maxWidth: .infinity, minHeight: 44)
+          }
+          .buttonStyle(.bordered)
+          .tint(MIRATheme.Color.auraViolet)
+
+          Button {
+            beginImport()
+          } label: {
+            Label("Import", systemImage: "square.and.arrow.down")
+              .font(.subheadline)
+              .fontWeight(.semibold)
+              .frame(maxWidth: .infinity, minHeight: 44)
+          }
+          .buttonStyle(.bordered)
+          .tint(MIRATheme.Color.auraViolet)
+        }
+      }
+      .padding(16)
+      .background(MIRATheme.Color.surface)
     }
-    .miraCardSurface(cornerRadius: MIRATheme.Radius.medium)
+    .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+    .overlay {
+      RoundedRectangle(cornerRadius: 20, style: .continuous)
+        .stroke(MIRATheme.Color.textPrimary.opacity(0.75), lineWidth: 1.3)
+    }
   }
 
-  private func selectedDocumentCard(_ document: AuraLocalDocument) -> some View {
-    VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
-      if let image = document.firstPageImage {
-        Image(uiImage: image)
-          .resizable()
-          .scaledToFit()
-          .frame(maxWidth: .infinity, maxHeight: 320)
-          .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.medium, style: .continuous))
+  private var privacyNote: some View {
+    Label(
+      "Receipt or invoice is recognized automatically. Raw document bytes are not written to Aura's blockchain.",
+      systemImage: "lock.shield.fill"
+    )
+    .font(.footnote)
+    .foregroundStyle(MIRATheme.Color.textSecondary)
+    .padding(14)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(MIRATheme.Color.surfaceSoft, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+  }
+
+  private func documentPreview(_ document: AuraLocalDocument) -> some View {
+    VStack(spacing: 0) {
+      Group {
+        if let image = document.firstPageImage {
+          Image(uiImage: image)
+            .resizable()
+            .scaledToFit()
+            .frame(maxWidth: .infinity, maxHeight: 430)
+        } else {
+          VStack(spacing: 12) {
+            Image(systemName: "doc.richtext.fill")
+              .font(.system(size: 72, weight: .regular))
+              .foregroundStyle(MIRATheme.Color.auraViolet)
+            Text("PDF ready for recognition")
+              .font(.headline)
+          }
+          .frame(maxWidth: .infinity, minHeight: 260)
+          .background(MIRATheme.Color.surfaceSoft)
+        }
+      }
+
+      VStack(alignment: .leading, spacing: 12) {
+        Label(
+          verificationResult.map { detectedTypeTitle($0) } ?? "Document ready",
+          systemImage: verificationResult == nil ? "doc.badge.ellipsis" : "checkmark.circle.fill"
+        )
+        .font(.headline)
+        .foregroundStyle(verificationResult == nil ? MIRATheme.Color.textPrimary : MIRATheme.Color.forest)
+
+        Text(document.filename)
+          .font(.subheadline)
+          .foregroundStyle(MIRATheme.Color.textSecondary)
+          .lineLimit(2)
+
+        if verificationResult == nil {
+          Button(isVerifying ? "Recognizing…" : "Recognize & Verify") {
+            verify(document)
+          }
+          .buttonStyle(.borderedProminent)
+          .tint(MIRATheme.Color.auraViolet)
+          .frame(maxWidth: .infinity)
+          .disabled(isVerifying)
+        }
+
+        Button("Scan Another Document") { clearSelection() }
+          .font(.subheadline)
+          .fontWeight(.semibold)
+          .foregroundStyle(MIRATheme.Color.auraViolet)
+          .frame(maxWidth: .infinity, minHeight: 42)
+      }
+      .padding(16)
+      .background(MIRATheme.Color.surface)
+    }
+    .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+    .overlay {
+      RoundedRectangle(cornerRadius: 20, style: .continuous)
+        .stroke(MIRATheme.Color.textPrimary.opacity(0.75), lineWidth: 1.3)
+    }
+  }
+
+  private func verificationTicket(_ result: AuraDocumentVerificationResult) -> some View {
+    VStack(spacing: 14) {
+      AuraDocumentTicketCard(
+        merchant: result.merchant.name,
+        documentType: result.submittedType == "other" ? "document" : result.submittedType,
+        date: result.date,
+        currency: result.currency,
+        total: result.total,
+        status: result.documentVerified ? "Verified" : "Could not be verified",
+        statusSystemImage: result.documentVerified ? "checkmark.seal.fill" : "xmark.seal.fill",
+        statusColor: result.documentVerified ? MIRATheme.Color.forest : .red,
+        detail: result.documentVerified ? "Veryfi" : nil
+      )
+
+      if result.documentVerified {
+        Text(verificationAccuracyNote(result))
+          .font(.footnote)
+          .foregroundStyle(MIRATheme.Color.textSecondary)
+          .frame(maxWidth: .infinity, alignment: .leading)
       } else {
-        VStack(spacing: MIRATheme.Space.sm) {
-          Image(systemName: "doc.richtext.fill")
-            .font(.system(size: 52, weight: .regular))
-            .foregroundStyle(MIRATheme.Color.forest)
-          Text("PDF selected")
-            .font(.system(size: 15, weight: .bold))
+        Button("Try Again") {
+          if let selectedDocument { verify(selectedDocument) }
         }
-        .frame(maxWidth: .infinity, minHeight: 150)
-        .background(MIRATheme.Color.surfaceSoft)
-        .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.medium, style: .continuous))
+        .buttonStyle(.borderedProminent)
+        .tint(MIRATheme.Color.auraViolet)
+        .disabled(isVerifying)
       }
 
-      HStack {
-        Label("\(document.kind.title) selected", systemImage: "checkmark.circle.fill")
-          .font(.system(size: 16, weight: .bold))
-          .foregroundStyle(MIRATheme.Color.forest)
-        Spacer()
-        Text(document.source.rawValue)
-          .font(.system(size: 11.5, weight: .semibold))
-          .foregroundStyle(MIRATheme.Color.textMuted)
-      }
-
-      documentRow(label: "Filename", value: document.filename)
-      documentRow(label: "Type", value: document.mediaType)
-      documentRow(label: "Pages", value: String(document.pages.count))
-      documentRow(label: "Size", value: Self.byteFormatter.string(fromByteCount: Int64(document.byteCount)))
-      documentRow(label: "Local SHA-256", value: document.sha256Hex)
-
-      VStack(alignment: .leading, spacing: MIRATheme.Space.xs) {
-        Label(
-          selectedDocumentStatus,
-          systemImage: verificationResult?.documentVerified == true ? "checkmark.shield.fill" : "shield.lefthalf.filled"
-        )
-          .font(.system(size: 14, weight: .bold))
-        Text(selectedDocumentStatusMessage(for: document))
-          .font(.system(size: 12.5, weight: .medium))
-          .foregroundStyle(MIRATheme.Color.textSecondary)
-      }
-      .padding(MIRATheme.Space.md)
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .background(MIRATheme.Color.surfaceSoft)
-      .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.medium, style: .continuous))
-
-      Button(isVerifying ? "Verifying…" : "Verify \(document.kind.title)") {
-        verify(document)
-      }
-      .buttonStyle(AuraPrimaryButtonStyle())
-      .disabled(isVerifying || (document.kind == .receipt && wallet.state != .unlocked))
-
-      if document.kind == .receipt, wallet.state != .unlocked {
-        Text("Unlock the local Aura wallet first. A Proof of Purchase must be authorized on this iPhone before it can enter the real Devnet mempool.")
-          .font(.system(size: 12.5, weight: .medium))
-          .foregroundStyle(MIRATheme.Color.textSecondary)
-      }
-
-      Button("Clear Local Selection") {
-        selectedDocument = nil
-        verificationResult = nil
-        proofSubmission = nil
-      }
-      .font(.system(size: 14, weight: .bold))
-      .foregroundStyle(MIRATheme.Color.forest)
-      .frame(maxWidth: .infinity, minHeight: 44)
+      proofLifecycle(result)
     }
-    .padding(MIRATheme.Space.lg)
-    .miraCardSurface()
   }
 
-  private func verificationResultCard(_ result: AuraDocumentVerificationResult) -> some View {
-    VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
-      HStack {
-        Label(
-          result.submittedType == "receipt"
-            ? (result.documentVerified ? "RECEIPT VERIFIED" : "RECEIPT COULD NOT BE VERIFIED")
-            : result.verificationLabel,
-          systemImage: result.documentVerified ? "checkmark.shield.fill" : "xmark.shield.fill"
-        )
-          .font(.system(size: 18, weight: .bold))
-          .foregroundStyle(result.documentVerified ? MIRATheme.Color.forest : .red)
-        Spacer()
-      }
-
-      if let merchant = result.merchant.name { documentRow(label: "Merchant / issuer", value: merchant) }
-      if let date = result.date { documentRow(label: "Date", value: date) }
-      if let total = result.total {
-        documentRow(label: "Total", value: [result.currency, total].compactMap { $0 }.joined(separator: " "))
-      }
-
-      if result.submittedType == "receipt" {
-        Text(result.documentVerified
-          ? "Aura's document-verification checks passed. This does not claim merchant or payment confirmation."
-          : "We couldn't verify this receipt.")
-          .font(.system(size: 12.5, weight: .medium))
-          .foregroundStyle(MIRATheme.Color.textSecondary)
-
-        if !result.documentVerified, let selectedDocument {
-          Button("Try Again") { verify(selectedDocument) }
-            .buttonStyle(AuraPrimaryButtonStyle())
-            .disabled(isVerifying)
-        }
-      }
-
+  @ViewBuilder
+  private func proofLifecycle(_ result: AuraDocumentVerificationResult) -> some View {
+    if result.submittedType == "receipt" {
       if let submission = proofSubmission,
          let record = proofs.records.first(where: { $0.proofId == submission.proofId }) {
-        VStack(alignment: .leading, spacing: MIRATheme.Space.xs) {
+        VStack(alignment: .leading, spacing: 8) {
           Label(proofStateLabel(record), systemImage: proofStateIcon(record))
-            .font(.system(size: 14, weight: .bold))
-            .foregroundStyle(record.isConfirmed ? MIRATheme.Color.forest : MIRATheme.Color.textPrimary)
-          documentRow(label: "Proof ID", value: record.proofId)
-          documentRow(label: "Proof transaction", value: record.proofTransactionId)
-          if let height = record.blockHeight {
-            documentRow(label: "Included in block", value: height)
-          }
-          documentRow(
-            label: "Confirmations",
-            value: "\(record.confirmations) / \(record.requiredConfirmations)"
-          )
-          Text(record.isConfirmed
-            ? "This canonical proof can now be checked for one feedback and Devnet contribution-reward action."
-            : "The proof is in the real Aura transaction lifecycle. Confirmation status is read from the validated Devnet node.")
-            .font(.system(size: 12.5, weight: .medium))
+            .font(.headline)
+            .foregroundStyle(record.isConfirmed ? MIRATheme.Color.forest : MIRATheme.Color.auraViolet)
+          Text("Proof \(shortIdentifier(record.proofId))")
+            .font(.caption)
             .foregroundStyle(MIRATheme.Color.textSecondary)
+          if let height = record.blockHeight {
+            Text("Block #\(height) · \(record.confirmations) confirmations")
+              .font(.subheadline)
+              .foregroundStyle(MIRATheme.Color.textSecondary)
+          } else {
+            Text("Waiting for a real Aura Devnet block.")
+              .font(.subheadline)
+              .foregroundStyle(MIRATheme.Color.textSecondary)
+          }
         }
-        .padding(MIRATheme.Space.md)
-        .background(MIRATheme.Color.surfaceSoft)
-        .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.medium, style: .continuous))
-      } else if result.submittedType == "receipt" {
-        Text(result.purchaseProof == nil
-          ? "No blockchain proof was authorized. Provider parsing alone cannot create reputation standing or AUR."
-          : "The provider authorized a privacy-safe proof, but it has not reached the Aura node.")
-          .font(.system(size: 12.5, weight: .medium))
-          .foregroundStyle(MIRATheme.Color.textSecondary)
-      } else {
-        Text("Invoice issued is not invoice paid. No Proof of Purchase or reward is created without independent payment confirmation.")
-          .font(.system(size: 12.5, weight: .medium))
-          .foregroundStyle(MIRATheme.Color.textSecondary)
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(MIRATheme.Color.auraVioletSoft, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+      } else if result.documentVerified && wallet.identity == nil {
+        Label(
+          "Receipt verified. Unlock your local wallet to authorize and submit its Aura proof.",
+          systemImage: "lock.shield"
+        )
+        .font(.footnote)
+        .foregroundStyle(MIRATheme.Color.textSecondary)
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(MIRATheme.Color.surfaceSoft, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
       }
-
-      Text(result.privacy.providerAutoDeleteRequested
-        ? "Aura does not retain the document; provider auto-delete was requested."
-        : "Provider retention status unavailable.")
-        .font(.system(size: 11.5, weight: .medium))
-        .foregroundStyle(MIRATheme.Color.textMuted)
+    } else if result.submittedType == "invoice" && result.documentVerified {
+      Text("Invoice recognized and verified as a document. An issued invoice is not proof that it was paid, so no purchase proof was created.")
+        .font(.footnote)
+        .foregroundStyle(MIRATheme.Color.textSecondary)
+        .padding(14)
+        .background(MIRATheme.Color.surfaceSoft, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
-    .padding(MIRATheme.Space.lg)
-    .miraCardSurface()
   }
 
   private func verify(_ document: AuraLocalDocument) {
-    let identity = wallet.identity
-    if document.kind == .receipt, identity == nil {
-      errorMessage = "Unlock the local Aura wallet before verifying a receipt for blockchain submission."
-      return
-    }
     isVerifying = true
     verificationResult = nil
     proofSubmission = nil
     Task {
       defer { isVerifying = false }
       do {
+        let identity = wallet.identity
         let result = try await api.verifyAuraDocument(
           document,
           ownerPublicKeyHex: identity?.publicKeyHex ?? ""
         )
         verificationResult = result
-        guard document.kind == .receipt,
+        guard result.submittedType == "receipt",
               let identity,
               let attestation = result.purchaseProof else { return }
         let submission = try await gateway.submitPurchaseProof(
@@ -361,7 +353,12 @@ public struct AuraScanView: View {
         proofs.record(
           submission: submission,
           owner: identity.address,
-          submittedAtSeconds: submittedAt
+          submittedAtSeconds: submittedAt,
+          documentType: result.submittedType,
+          merchantName: result.merchant.name,
+          documentDate: result.date,
+          currency: result.currency,
+          total: result.total
         )
         proofSubmission = submission
         await proofs.refreshAll()
@@ -371,35 +368,28 @@ public struct AuraScanView: View {
     }
   }
 
+  private func detectedTypeTitle(_ result: AuraDocumentVerificationResult) -> String {
+    switch result.submittedType {
+    case "receipt": return "Receipt detected"
+    case "invoice": return "Invoice detected"
+    default: return "Document type unsupported"
+    }
+  }
+
+  private func verificationAccuracyNote(_ result: AuraDocumentVerificationResult) -> String {
+    if result.submittedType == "receipt" {
+      return "Receipt Verified means Aura's document checks passed. It does not claim merchant or bank confirmation."
+    }
+    return "Document Verified means the provider recognized and parsed this invoice. It does not mean the invoice was paid."
+  }
+
   private func proofStateLabel(_ record: AuraPrivateProofRecord) -> String {
     switch record.state {
-    case "confirmed": return "Confirmed on Aura Devnet"
-    case "included": return "Included in block #\(record.blockHeight ?? "Unavailable")"
-    case "pending": return "Pending in Aura mempool"
-    default: return "Aura proof status unavailable"
+    case "confirmed": return "Proof confirmed"
+    case "included": return "Proof included in block"
+    case "pending": return "Proof pending"
+    default: return "Proof unavailable"
     }
-  }
-
-  private var selectedDocumentStatus: String {
-    guard let verificationResult else { return "Ready for provider verification" }
-    guard verificationResult.submittedType == "receipt" else {
-      return verificationResult.verificationLabel
-    }
-    return verificationResult.documentVerified
-      ? "RECEIPT VERIFIED"
-      : "RECEIPT COULD NOT BE VERIFIED"
-  }
-
-  private func selectedDocumentStatusMessage(for document: AuraLocalDocument) -> String {
-    guard let verificationResult else {
-      return "The format was accepted locally. Tap Verify to send this document through Aura's authenticated service to Veryfi."
-    }
-    guard document.kind == .receipt else {
-      return "Provider analysis finished. An invoice is not proof of payment."
-    }
-    return verificationResult.documentVerified
-      ? "Aura's document-verification checks passed. Proof submission continues through the real Devnet transaction lifecycle."
-      : "We couldn't verify this receipt."
   }
 
   private func proofStateIcon(_ record: AuraPrivateProofRecord) -> String {
@@ -410,44 +400,39 @@ public struct AuraScanView: View {
     }
   }
 
-  private func documentRow(label: String, value: String) -> some View {
-    VStack(alignment: .leading, spacing: MIRATheme.Space.xxs) {
-      Text(label)
-        .font(.system(size: 11.5, weight: .semibold))
-        .foregroundStyle(MIRATheme.Color.textMuted)
-      Text(value)
-        .font(.system(size: 12.5, weight: .medium, design: label == "Local SHA-256" ? .monospaced : .default))
-        .foregroundStyle(MIRATheme.Color.textPrimary)
-        .textSelection(.enabled)
-    }
+  private func shortIdentifier(_ value: String) -> String {
+    guard value.count > 14 else { return value }
+    return "\(value.prefix(8))…\(value.suffix(6))"
   }
 
-  private func beginScan(_ kind: AuraScanDocumentKind) {
+  private func beginScan() {
     guard VNDocumentCameraViewController.isSupported else {
       errorMessage = "Document scanning is unavailable on this device. Import a PDF or image instead."
       return
     }
-    pendingKind = kind
-    selectedDocument = nil
-    verificationResult = nil
-    proofSubmission = nil
+    resetResult()
     showingScanner = true
   }
 
-  private func beginImport(_ kind: AuraScanDocumentKind) {
-    pendingKind = kind
+  private func beginImport() {
+    resetResult()
+    showingImporter = true
+  }
+
+  private func resetResult() {
     selectedDocument = nil
     verificationResult = nil
     proofSubmission = nil
-    showingImporter = true
+  }
+
+  private func clearSelection() {
+    resetResult()
+    selectedPhoto = nil
   }
 
   private func handleScannedPages(_ result: Result<[Data], Error>) {
     do {
-      selectedDocument = try AuraLocalDocument.scanned(
-        kind: pendingKind,
-        pages: result.get()
-      )
+      selectedDocument = try AuraLocalDocument.scanned(pages: result.get())
     } catch {
       errorMessage = error.localizedDescription
     }
@@ -456,28 +441,25 @@ public struct AuraScanView: View {
   private func handleImportedURLs(_ result: Result<[URL], Error>) {
     do {
       guard let url = try result.get().first else { return }
-      selectedDocument = try AuraLocalDocument.imported(kind: pendingKind, url: url)
+      selectedDocument = try AuraLocalDocument.imported(url: url)
     } catch {
       errorMessage = error.localizedDescription
     }
   }
 
   @MainActor
-  private func loadPhoto(_ item: PhotosPickerItem, kind: AuraScanDocumentKind) async {
+  private func loadPhoto(_ item: PhotosPickerItem) async {
     do {
       guard let data = try await item.loadTransferable(type: Data.self) else {
         throw AuraLocalDocumentError.inaccessible
       }
-      selectedDocument = try AuraLocalDocument.photoImported(kind: kind, data: data)
+      selectedDocument = try AuraLocalDocument.photoImported(data: data)
     } catch {
       errorMessage = error.localizedDescription
     }
   }
 
-  private static let byteFormatter: ByteCountFormatter = {
-    let formatter = ByteCountFormatter()
-    formatter.allowedUnits = [.useKB, .useMB]
-    formatter.countStyle = .file
-    return formatter
-  }()
+  private var privacyHelp: String {
+    "Aura sends the selected document through its authenticated service to Veryfi only after you tap Recognize & Verify. The raw document is not put on the Aura blockchain."
+  }
 }

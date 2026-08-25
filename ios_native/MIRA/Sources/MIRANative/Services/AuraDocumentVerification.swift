@@ -87,7 +87,7 @@ extension MIRAAPIClient {
   ) async throws -> AuraDocumentVerificationResult {
     let upload = try document.verificationUpload()
     return try await uploadMultipart(
-      "/aura/documents/verify?type=\(document.kind.rawValue)",
+      "/aura/documents/verify",
       fileName: upload.filename,
       mimeType: upload.mediaType,
       data: upload.data,

@@ -16,8 +16,8 @@ final class AuraLocalDocumentTests: XCTestCase {
     defer { try? FileManager.default.removeItem(at: url) }
     try data.write(to: url)
 
-    let first = try AuraLocalDocument.imported(kind: .receipt, url: url)
-    let second = try AuraLocalDocument.imported(kind: .receipt, url: url)
+    let first = try AuraLocalDocument.imported(url: url)
+    let second = try AuraLocalDocument.imported(url: url)
 
     XCTAssertEqual(first.mediaType, "image/png")
     XCTAssertEqual(first.byteCount, data.count)
@@ -38,8 +38,7 @@ final class AuraLocalDocumentTests: XCTestCase {
     defer { try? FileManager.default.removeItem(at: url) }
     try data.write(to: url)
 
-    let document = try AuraLocalDocument.imported(kind: .invoice, url: url)
-    XCTAssertEqual(document.kind, .invoice)
+    let document = try AuraLocalDocument.imported(url: url)
     XCTAssertEqual(document.mediaType, "application/pdf")
     XCTAssertNil(document.firstPageImage)
   }
@@ -48,12 +47,12 @@ final class AuraLocalDocumentTests: XCTestCase {
     let textURL = temporaryURL(extension: "txt")
     defer { try? FileManager.default.removeItem(at: textURL) }
     try Data("not a document".utf8).write(to: textURL)
-    XCTAssertThrowsError(try AuraLocalDocument.imported(kind: .receipt, url: textURL))
+    XCTAssertThrowsError(try AuraLocalDocument.imported(url: textURL))
 
     let largeURL = temporaryURL(extension: "png")
     defer { try? FileManager.default.removeItem(at: largeURL) }
     try Data(count: AuraLocalDocument.maximumBytes + 1).write(to: largeURL)
-    XCTAssertThrowsError(try AuraLocalDocument.imported(kind: .receipt, url: largeURL))
+    XCTAssertThrowsError(try AuraLocalDocument.imported(url: largeURL))
   }
 
   func testMultiPageScanBecomesOneInMemoryPDFUpload() throws {
@@ -67,7 +66,7 @@ final class AuraLocalDocumentTests: XCTestCase {
       context.fill(CGRect(x: 0, y: 0, width: 40, height: 60))
     }.jpegData(compressionQuality: 0.9))
 
-    let document = try AuraLocalDocument.scanned(kind: .invoice, pages: [first, second])
+    let document = try AuraLocalDocument.scanned(pages: [first, second])
     let upload = try document.verificationUpload()
     let pdf = try XCTUnwrap(PDFDocument(data: upload.data))
 

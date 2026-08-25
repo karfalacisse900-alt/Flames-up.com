@@ -12,8 +12,7 @@ public struct AuraProofsView: View {
   }
 
   public var body: some View {
-    NavigationStack {
-      ScrollView {
+    ScrollView {
         if proofs.records.isEmpty {
           MIRAEmptyState(
             title: "No on-chain proofs yet",
@@ -30,22 +29,21 @@ public struct AuraProofsView: View {
           }
           .padding(MIRATheme.Space.lg)
         }
-      }
-      .background(MIRATheme.Color.appBackground.ignoresSafeArea())
-      .navigationTitle("Proofs")
-      .refreshable { await proofs.refreshAll() }
-      .task { await proofs.refreshAll() }
-      .alert(
-        "Proof status error",
-        isPresented: Binding(
-          get: { proofs.errorMessage != nil },
-          set: { if !$0 { proofs.clearError() } }
-        )
-      ) {
-        Button("OK") { proofs.clearError() }
-      } message: {
-        Text(proofs.errorMessage ?? "Aura could not read proof state.")
-      }
+    }
+    .background(MIRATheme.Color.appBackground.ignoresSafeArea())
+    .navigationTitle("Proofs")
+    .refreshable { await proofs.refreshAll() }
+    .task { await proofs.refreshAll() }
+    .alert(
+      "Proof status error",
+      isPresented: Binding(
+        get: { proofs.errorMessage != nil },
+        set: { if !$0 { proofs.clearError() } }
+      )
+    ) {
+      Button("OK") { proofs.clearError() }
+    } message: {
+      Text(proofs.errorMessage ?? "Aura could not read proof state.")
     }
   }
 

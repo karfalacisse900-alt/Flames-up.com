@@ -53,6 +53,11 @@ public struct AuraPrivateProofRecord: Codable, Equatable, Identifiable, Sendable
   public let proofTransactionId: String
   public let owner: String
   public let submittedAtSeconds: UInt64
+  public let documentType: String?
+  public let merchantName: String?
+  public let documentDate: String?
+  public let currency: String?
+  public let total: String?
   public var state: String
   public var blockId: String?
   public var blockHeight: String?
@@ -90,7 +95,12 @@ public final class AuraProofLifecycleStore: ObservableObject {
   public func record(
     submission: AuraPurchaseProofSubmission,
     owner: String,
-    submittedAtSeconds: UInt64
+    submittedAtSeconds: UInt64,
+    documentType: String?,
+    merchantName: String?,
+    documentDate: String?,
+    currency: String?,
+    total: String?
   ) {
     guard records.first(where: { $0.proofId == submission.proofId }) == nil else { return }
     records.insert(
@@ -99,6 +109,11 @@ public final class AuraProofLifecycleStore: ObservableObject {
         proofTransactionId: submission.transactionId,
         owner: owner,
         submittedAtSeconds: submittedAtSeconds,
+        documentType: documentType,
+        merchantName: merchantName,
+        documentDate: documentDate,
+        currency: currency,
+        total: total,
         state: "pending",
         blockId: nil,
         blockHeight: nil,

@@ -282,6 +282,18 @@ async function veryfiSignature(secret: string, request: any, timestamp: number):
   return arrayBufferToBase64(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(canonical)));
 }
 
+function auraDocumentKind(document: any): 'receipt' | 'invoice' | 'other' {
+  const providerType = boundedText(first(document, [
+    'document_type.value',
+    'document_type',
+    'type.value',
+    'type',
+  ]), 80)?.toLowerCase().replaceAll('-', '_').replaceAll(' ', '_');
+  if (providerType === 'receipt' || providerType === 'long_receipt') return 'receipt';
+  if (providerType === 'invoice') return 'invoice';
+  return 'other';
+}
+
 async function sha256Hex(bytes: Uint8Array): Promise<string> {
   const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
   return Array.from(digest).map((byte) => byte.toString(16).padStart(2, '0')).join('');
@@ -339,7 +351,8 @@ function normalizeBarcodes(document: any): any[] {
   }));
 }
 
-async function normalizeVeryfi(document: any, submittedType: string, rawBytes: Uint8Array): Promise<any> {
+async function normalizeVeryfi(document: any, rawBytes: Uint8Array): Promise<any> {
+  const submittedType = auraDocumentKind(document);
   const fraud = fraudSignals(document);
   const duplicate = firstBool(document, ['is_duplicate', 'duplicate.is_duplicate', 'meta.is_duplicate', 'meta.duplicate']);
   const isDocument = firstBool(document, ['is_document', 'document.is_document']);
@@ -356,7 +369,6 @@ async function normalizeVeryfi(document: any, submittedType: string, rawBytes: U
     duplicate,
   ].some((value) => value === true);
   const decision = String(fraud.decision || '').trim().toLowerCase();
-  const acceptedDecision = ['green', 'approved', 'pass', 'passed', 'low_risk', 'low risk'].includes(decision);
   const blockingDecision = [
     'red',
     'declined',
@@ -377,9 +389,16 @@ async function normalizeVeryfi(document: any, submittedType: string, rawBytes: U
     && isDocument !== false
     && !blockingDecision
     && !adverse;
+  const invoiceHasRequiredFields = Boolean(
+    merchantName && documentDate && documentTotal && boundedText(document?.invoice_number, 160),
+  );
+  const invoiceVerified = invoiceHasRequiredFields
+    && isDocument !== false
+    && !blockingDecision
+    && !adverse;
   const documentVerified = submittedType === 'receipt'
     ? receiptVerified
-    : isDocument === true && acceptedDecision && !adverse;
+    : submittedType === 'invoice' ? invoiceVerified : false;
   const parsed = Boolean(first(document, ['id', 'vendor.name', 'merchant.name', 'total', 'date', 'invoice_number']));
   const verificationLabel = submittedType === 'receipt'
     ? documentVerified ? 'Receipt Verified' : 'Receipt Could Not Be Verified'
@@ -389,7 +408,12 @@ async function normalizeVeryfi(document: any, submittedType: string, rawBytes: U
     provider: 'Veryfi',
     providerDocumentId: boundedText(first(document, ['id', 'document_id']), 160),
     submittedType,
-    providerDocumentType: boundedText(first(document, ['document_type', 'type']), 80),
+    providerDocumentType: boundedText(first(document, [
+      'document_type.value',
+      'document_type',
+      'type.value',
+      'type',
+    ]), 80),
     isDocument,
     verificationLevel: documentVerified ? 2 : parsed ? 1 : 0,
     verificationLabel,
@@ -597,10 +621,6 @@ export function createAuraRoutes(
     if (limited) return limited;
     const dailyLimited = await enforceRateLimit(c, 'aura_document_verify_daily', userId, 50, 86400);
     if (dailyLimited) return dailyLimited;
-    const submittedType = new URL(c.req.url).searchParams.get('type');
-    if (submittedType !== 'receipt' && submittedType !== 'invoice') {
-      return c.json({ detail: 'Choose receipt or invoice before verification.' }, 400);
-    }
     if (!configuredVeryfi(c.env)) {
       return c.json({ detail: 'Document verification provider is unavailable.', code: 'VERYFI_NOT_CONFIGURED' }, 503);
     }
@@ -613,11 +633,8 @@ export function createAuraRoutes(
       const file = form.get('file') as File | null;
       if (!file || typeof file.arrayBuffer !== 'function') return c.json({ detail: 'No document was provided.' }, 400);
       const ownerPublicKeyHex = String(form.get('ownerPublicKeyHex') || '').trim();
-      if (submittedType === 'receipt' && !/^[a-fA-F0-9]{64}$/.test(ownerPublicKeyHex)) {
-        return c.json({ detail: 'Unlock a local Aura wallet before verifying a receipt.', code: 'AURA_WALLET_REQUIRED' }, 409);
-      }
-      if (submittedType === 'receipt' && !configuredPurchaseProof(c.env)) {
-        return c.json({ detail: 'Aura purchase-proof authorization is unavailable.', code: 'AURA_PROOF_UNAVAILABLE' }, 503);
+      if (ownerPublicKeyHex && !/^[a-fA-F0-9]{64}$/.test(ownerPublicKeyHex)) {
+        return c.json({ detail: 'The local Aura wallet identity is invalid.', code: 'AURA_WALLET_INVALID' }, 400);
       }
       const bytes = new Uint8Array(await file.arrayBuffer());
       if (bytes.byteLength < 250 || bytes.byteLength > MAX_DOCUMENT_BYTES) {
@@ -629,7 +646,9 @@ export function createAuraRoutes(
       const request = {
         file_name: fileName,
         file_data: bytesToBase64(bytes),
-        document_type: submittedType,
+        // Veryfi documents this field as nullable. Sending null deliberately asks the provider
+        // to classify the document instead of forcing the user to choose receipt or invoice.
+        document_type: null,
         boost_mode: false,
         async: false,
         auto_delete: true,
@@ -665,8 +684,14 @@ export function createAuraRoutes(
         return c.json({ detail: 'Document provider could not process this file.', code: 'VERYFI_REJECTED' }, 502);
       }
       const document = JSON.parse(new TextDecoder().decode(responseBytes));
-      const normalized = await normalizeVeryfi(document, submittedType, responseBytes);
-      if (submittedType === 'receipt' && normalized.documentVerified && normalized.duplicate !== true) {
+      const normalized = await normalizeVeryfi(document, responseBytes);
+      if (normalized.submittedType === 'receipt'
+          && normalized.documentVerified
+          && normalized.duplicate !== true
+          && ownerPublicKeyHex) {
+        if (!configuredPurchaseProof(c.env)) {
+          return c.json({ detail: 'Aura purchase-proof authorization is unavailable.', code: 'AURA_PROOF_UNAVAILABLE' }, 503);
+        }
         normalized.purchaseProof = await purchaseProofAttestation(
           c.env,
           userId,

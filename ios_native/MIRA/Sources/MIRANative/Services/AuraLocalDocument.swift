@@ -27,13 +27,12 @@ enum AuraLocalDocumentSource: String {
   case photoLibrary = "Photo Library"
 }
 
-/// In-memory receipt/invoice selected for the next verification step. Sensitive bytes are not
+/// In-memory document selected for the next verification step. Sensitive bytes are not
 /// persisted by this type and disappear when the selection is cleared or the view is released.
 struct AuraLocalDocument: Identifiable {
   static let maximumBytes = 12 * 1024 * 1024
 
   let id = UUID()
-  let kind: AuraScanDocumentKind
   let source: AuraLocalDocumentSource
   let filename: String
   let mediaType: String
@@ -68,17 +67,16 @@ struct AuraLocalDocument: Identifiable {
     return ("\(stem.isEmpty ? "Aura Document" : stem).pdf", "application/pdf", data)
   }
 
-  static func scanned(kind: AuraScanDocumentKind, pages: [Data]) throws -> Self {
+  static func scanned(pages: [Data]) throws -> Self {
     try make(
-      kind: kind,
       source: .camera,
-      filename: kind == .receipt ? "Scanned Receipt.jpg" : "Scanned Invoice.jpg",
+      filename: "Scanned Document.jpg",
       mediaType: "image/jpeg",
       pages: pages
     )
   }
 
-  static func imported(kind: AuraScanDocumentKind, url: URL) throws -> Self {
+  static func imported(url: URL) throws -> Self {
     let accessed = url.startAccessingSecurityScopedResource()
     defer {
       if accessed { url.stopAccessingSecurityScopedResource() }
@@ -97,7 +95,6 @@ struct AuraLocalDocument: Identifiable {
     }
     let mediaType = try detectAndValidate(data)
     return try make(
-      kind: kind,
       source: .fileImport,
       filename: url.lastPathComponent,
       mediaType: mediaType,
@@ -105,22 +102,20 @@ struct AuraLocalDocument: Identifiable {
     )
   }
 
-  static func photoImported(kind: AuraScanDocumentKind, data: Data) throws -> Self {
+  static func photoImported(data: Data) throws -> Self {
     guard !data.isEmpty else { throw AuraLocalDocumentError.empty }
     guard data.count <= maximumBytes else { throw AuraLocalDocumentError.tooLarge }
     let mediaType = try detectAndValidate(data)
     guard mediaType != "application/pdf" else { throw AuraLocalDocumentError.unsupported }
     return try make(
-      kind: kind,
       source: .photoLibrary,
-      filename: kind == .receipt ? "Imported Receipt Image" : "Imported Invoice Image",
+      filename: "Imported Document Image",
       mediaType: mediaType,
       pages: [data]
     )
   }
 
   private static func make(
-    kind: AuraScanDocumentKind,
     source: AuraLocalDocumentSource,
     filename: String,
     mediaType: String,
@@ -143,7 +138,6 @@ struct AuraLocalDocument: Identifiable {
     }
 
     return Self(
-      kind: kind,
       source: source,
       filename: filename,
       mediaType: mediaType,

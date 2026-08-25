@@ -9,19 +9,20 @@ public struct AuraWalletView: View {
   let api: MIRAAPIClient
   @ObservedObject private var wallet: AuraWalletStore
   @ObservedObject private var proofs: AuraProofLifecycleStore
-  @StateObject private var gateway: AuraWalletGatewayStore
+  @ObservedObject private var gateway: AuraWalletGatewayStore
   @State private var presentedSheet: WalletSheet?
   @State private var unlockPassword = ""
 
   public init(
     api: MIRAAPIClient,
     wallet: AuraWalletStore,
+    gateway: AuraWalletGatewayStore,
     proofs: AuraProofLifecycleStore
   ) {
     self.api = api
     self.wallet = wallet
+    self.gateway = gateway
     self.proofs = proofs
-    _gateway = StateObject(wrappedValue: AuraWalletGatewayStore(api: api))
   }
 
   public var body: some View {
@@ -141,7 +142,7 @@ public struct AuraWalletView: View {
     .padding(MIRATheme.Space.lg)
     .background(
       LinearGradient(
-        colors: [MIRATheme.Color.forest, MIRATheme.Color.forest.opacity(0.82)],
+        colors: [MIRATheme.Color.auraViolet, MIRATheme.Color.auraViolet.opacity(0.78)],
         startPoint: .topLeading,
         endPoint: .bottomTrailing
       )
